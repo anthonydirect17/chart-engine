@@ -125,6 +125,27 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const int MaxMessageBytes = 65536, MaxActionsPerSecond = 10;
         public const double SilenceMs = 5000, StripEveryMs = 1000, CheckEveryMs = 500;
         public const double FlatErrorEveryMs = 10000, FlatRetryMs = 3000, AcceptMinLeftMs = 5000;
+        // Review A (second round): a cancel not confirmed after 10 tries is an error and is tried every 30 s from then; while the
+        // market is shut the NOT FLAT error and the lost-trade error repeat every 60 s.
+        public const int CancelSlowAfter = 10;
+        public const double CancelSlowMs = 30000, ShutErrorEveryMs = 60000, LostTradeEveryMs = 60000;
+
+        // The market is shut (no market order is sent): 17:00 to 18:00 New York time Monday to Thursday, and Friday 17:00 to Sunday
+        // 18:00. Fixed times (lead's default: NinjaTrader's trading hours are not read; holidays are not known here).
+        public static bool MarketShut(DateTime et)
+        {
+            double h = et.TimeOfDay.TotalHours;
+            switch (et.DayOfWeek)
+            {
+                case DayOfWeek.Saturday: return true;
+                case DayOfWeek.Sunday: return h < 18;
+                case DayOfWeek.Friday: return h >= 17;
+                default: return h >= 17 && h < 18;
+            }
+        }
+
+        // Two instruments are the same contract (the same object, or the same full name).
+        public static bool SameContract(Instrument x, Instrument y) { return x != null && y != null && (x == y || x.FullName == y.FullName); }
         public const int NotesKept = 200, PlansKept = 50, StopLimitMaxTicks = 20;
         private static readonly Regex IdRx = new Regex("^[a-z][a-z0-9]{0,11}$");
 
@@ -663,7 +684,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private class FlatJob
         {
             public string Root, Why;
-            public bool Owned;   // it owned the pair at the start: close its position; else only its own orders are cancelled
+            public Instrument Inst;   // the contract (the served one, or another month the agent's own trade holds; review A5)
+            public bool Owned;   // it owned the pair: close its position; else only its own orders are cancelled (checked again: review A1)
+            public bool WasMissing;   // the account left NinjaTrader's list since the job started (checked again when it is back)
+            public int StartQty, LegQty;   // the position when the job started, and the agent's stop legs' contracts then (the cap without a ledger)
             public double StartMs, LastCancelMs = -1e18, LastCloseMs = -1e18, LastErrorMs, ApartSinceMs = -1;
             public Order Close;
         }
@@ -689,7 +713,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly Dictionary<string, int[]> Spans = new Dictionary<string, int[]>();    // trade key -> { entry contracts before it, contracts it covers }
         private readonly Dictionary<string, int> EntrySeen = new Dictionary<string, int>();     // entry tag -> its contracts seen filling this run
         private string openTag, openRoot;
+        private Instrument openInst;   // the contract of the open trade (the flatten looks at it too, any month; review A5)
         private int ledQty;
+        private readonly Dictionary<string, double> LostTrades = new Dictionary<string, double>();   // root -> last error (review A3)
+        private readonly Dictionary<string, string> LostTradeText = new Dictionary<string, string>();
         private double ledCash, ledAvg;
         private readonly HashSet<string> Sticky = new HashSet<string>();   // roots it owns until flat by both readings with no entry
         private readonly Dictionary<string, Proposal> Proposals = new Dictionary<string, Proposal>();
@@ -1697,9 +1724,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             string acct;
             bool open, stick;
             lock (Sync) { acct = account; open = openTag != null && openRoot == root; stick = Sticky.Contains(root); }
-            if (open) return true;
             Account a = FindAccount(acct);
+            if (open && LedgerAgainst(root, a) == null) return true;   // its open trade, unless the account holds the other side (review A1)
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
+            if (open) return a != null && inst != null && ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && ChartBridgeAgents.IsAgentEntry(o));
             if (a == null || inst == null) return stick;
             List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
             bool entryWorks = may.Any(o => IsMine(o) && ChartBridgeAgents.IsAgentEntry(o)), mineWorks = may.Any(o => IsMine(o)), legsWork = may.Any(o => IsMine(o) && LegRx.IsMatch(o.Name ?? ""));
@@ -1713,6 +1741,47 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         private bool IsMine(Order o) { return o != null && ChartBridgeAgents.AgentOf(o) == Id; }
+
+        // The root of another contract month of one of its roots (its master instrument's name), or null.
+        private string MonthRoot(Instrument inst)
+        {
+            if (inst == null || inst.MasterInstrument == null) return null;
+            string m = (inst.MasterInstrument.Name ?? "").ToUpperInvariant();
+            return FlatRoots().Contains(m) ? m : null;
+        }
+
+        // Its open trade on this root is against what the account holds: both readings of the trade's contract show a position on
+        // the other side (it ended where ChartBridge could not see it, and the account holds someone else's). The text, or null.
+        private string LedgerAgainst(string root, Account a)
+        {
+            Instrument li;
+            int q;
+            lock (Sync) { if (openTag == null || openRoot != root) return null; li = openInst; q = ledQty; }
+            if (a == null || q == 0) return null;
+            if (li == null) li = ChartBridgeServer.InstrumentFor(root);
+            if (li == null) return null;
+            int p1 = ChartBridgeOrders.AgentListed(a, li), p2 = ChartBridgeOrders.AgentEffective(a, li);
+            if (p1 == 0 || p2 == 0 || Math.Sign(p1) == Math.Sign(q) || Math.Sign(p2) == Math.Sign(q)) return null;
+            return "its trade holds " + q + " but " + a.Name + " " + root + " shows " + p1;
+        }
+
+        // The contract a flatten job closes: the served one by Owns, another month only while its own open trade holds it.
+        private bool OwnsContract(string root, Instrument inst, Account a)
+        {
+            Instrument served = ChartBridgeServer.InstrumentFor(root);
+            if (served == null || ChartBridgeAgents.SameContract(inst, served)) return Owns(root);
+            lock (Sync) if (!(openTag != null && openRoot == root && ChartBridgeAgents.SameContract(openInst, inst) && ledQty != 0)) return false;
+            return LedgerAgainst(root, a) == null;
+        }
+
+        // The most a flatten may close on that contract: its open trade's own quantity there; with no trade followed (after a restart
+        // before the executions are read, or none), the agent's stop legs' contracts when the job started (review A1).
+        private int CloseCap(string root, Instrument inst, FlatJob j)
+        {
+            lock (Sync)
+                if (openTag != null && openRoot == root && (openInst == null || ChartBridgeAgents.SameContract(openInst, inst)) && ledQty != 0) return Math.Abs(ledQty);
+            return j.LegQty;
+        }
         private static readonly Regex LegRx = new Regex("^CB#[0-9a-f]{8} (?:stop|target) ");
         private bool IsMyEntry(Order o) { if (o == null) return false; Match m = ChartBridgeAgents.EntryRx.Match(o.Name ?? ""); return m.Success && m.Groups[2].Value == Id; }
 
@@ -1748,6 +1817,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 AgentLog(text);
                 ChartBridgeOrders.AgentWarn(text);
             }
+            if (tries == ChartBridgeAgents.CancelSlowAfter)
+            {
+                string text = "Agent " + Id + ": the cancel of its entry " + (o.Name ?? "") + " on " + o.Account.Name + " is still not confirmed after " + tries + " tries (" + why + "); ChartBridge tries again every 30 s; cancel it in NinjaTrader now";
+                AgentLog(text);
+                ChartBridgeOrders.AgentAlarm(text);
+            }
         }
 
         // Every pass: a cancel whose order still works is sent again every 3 s.
@@ -1758,7 +1833,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (KeyValuePair<Order, CancelTry> kv in CancelSent.ToList())
                 {
                     if (!ChartBridgeOrders.AgentMayFillState(kv.Key.OrderState)) { CancelSent.Remove(kv.Key); continue; }
-                    if (now - kv.Value.LastMs >= ChartBridgeAgents.FlatRetryMs) { kv.Value.LastMs = now; kv.Value.Tries++; due.Add(kv); }
+                    // review A4: never sent while the account is not Connected (resumed when it is); from the 10th try every 30 s
+                    Account acc = kv.Key.Account;
+                    if (acc == null || acc.Connection == null || acc.Connection.Status != ConnectionStatus.Connected) continue;
+                    double every = kv.Value.Tries >= ChartBridgeAgents.CancelSlowAfter ? ChartBridgeAgents.CancelSlowMs : ChartBridgeAgents.FlatRetryMs;
+                    if (now - kv.Value.LastMs >= every) { kv.Value.LastMs = now; kv.Value.Tries++; due.Add(kv); }
                 }
             foreach (KeyValuePair<Order, CancelTry> kv in due) SendCancel(kv.Key, kv.Value.Why, kv.Value.Tries);
         }
@@ -1810,7 +1889,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public void OnExec(Instrument inst, MarketPosition side, int qty, double price, string orderId, string json)
         {
             if (inst == null || qty <= 0) return;
-            string root = ChartBridgeServer.RootFor(inst);
+            string root = ChartBridgeServer.RootFor(inst) ?? MonthRoot(inst);   // any contract month of its roots (review A5)
             if (root == null) return;
             Rules r = RulesNow();
             if (!r.Roots.Contains(root)) return;
@@ -1842,7 +1921,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     double was;
                     if (inSpan != null)
                     {
-                        if (openTag == null && Trades.TryGetValue(inSpan, out was) && double.IsNaN(was)) { openTag = inSpan; openRoot = root; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Add(root); }
+                        if (openTag == null && Trades.TryGetValue(inSpan, out was) && double.IsNaN(was)) { openTag = inSpan; openRoot = root; openInst = inst; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Add(root); }
                     }
                     else if (openTag != null && (openTag == entryTag || openTag.StartsWith(entryTag + "-", StringComparison.Ordinal)))
                     {
@@ -1854,11 +1933,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         string key = entryTag;
                         for (int n = 2; Trades.ContainsKey(key); n++) key = entryTag + "-" + n.ToString(CultureInfo.InvariantCulture);
-                        openTag = key; openRoot = root; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Add(root);
+                        openTag = key; openRoot = root; openInst = inst; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Add(root);
                         Trades[key] = double.NaN; Spans[key] = new[] { seen - qty, qty }; opened = key;
                     }
                 }
-                if (openTag != null && root == openRoot)
+                if (openTag != null && root == openRoot && (openInst == null || ChartBridgeAgents.SameContract(inst, openInst)))
                 {
                     int signed = side == MarketPosition.Long ? qty : -qty;
                     if (ledQty == 0 || Math.Sign(signed) == Math.Sign(ledQty)) ledAvg = (ledAvg * Math.Abs(ledQty) + price * qty) / (Math.Abs(ledQty) + qty);
@@ -1868,7 +1947,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         pnl = Math.Round(ledCash * inst.MasterInstrument.PointValue, 2);
                         Trades[openTag] = pnl;
-                        closedTag = openTag; openTag = null; openRoot = null; ledAvg = 0;
+                        closedTag = openTag; openTag = null; openRoot = null; openInst = null; ledAvg = 0;
                     }
                 }
                 c = helloed ? client : null;
@@ -2013,8 +2092,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             // every pass: a lock whose pair is flat by both readings, with nothing of the agent working there, clears; an open trade
             // record that nothing listed belongs to any more is dropped (once the executions have been read again after a start)
             List<string> roots = FlatRoots();
+            DropLedgerAgainst(roots);
             foreach (string root in roots) Owns(root);
-            if (ChartBridgeServer.ExecutionsReplayed(Account)) DropStaleRecords(roots);   // only once the session's executions were read again (review B)
+            if (ChartBridgeServer.ExecutionsReplayed(Account)) DropStaleRecords(roots);
+            RepeatTradeLost(now);   // only once the session's executions were read again (review B)
             // the flat time (ruling 2): from flatAt until the next entryFrom (18:00 ET included: a position held overnight is flattened
             // too), whatever the agent does or whether it is there
             bool flatHours = tod >= r.FlatAt * 60 || tod < r.EntryFrom * 60;
@@ -2059,7 +2140,61 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string text = "Agent " + Id + ": the day file's open trade " + key + " matches nothing ChartBridge sees (no order of it listed, no fill of it this session): dropped, so it never claims a position it did not place";
                 Log(text); AgentLog(text); ChartBridgeOrders.AgentWarn(text);
                 SaveDay();
+                // review A3: a position on its roots there is never left without a word: an error every 60 s until that pair is flat
+                if (a != null) foreach (string root in roots) { Instrument inst = ChartBridgeServer.InstrumentFor(root); if (inst != null && (ChartBridgeOrders.AgentListed(a, inst) != 0 || ChartBridgeOrders.AgentEffective(a, inst) != 0)) TradeLost(root); }
                 Notify();
+            }
+        }
+
+        // Review A1 and A3: its open trade ended where ChartBridge could not see it while the account holds a position: the trade is
+        // dropped (ownership is not restored: Anthony decides), and the pages get an error every 60 s until that pair is flat.
+        private void DropLedgerAgainst(List<string> roots)
+        {
+            Account a = FindAccount(Account);
+            foreach (string root in roots)
+            {
+                string why = LedgerAgainst(root, a);
+                if (why == null) continue;
+                string key;
+                lock (Sync)
+                {
+                    if (openTag == null || openRoot != root) continue;
+                    key = openTag; Trades.Remove(key); Spans.Remove(key); openTag = null; openRoot = null; openInst = null; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Remove(root);
+                }
+                string text = "Agent " + Id + ": its open trade " + key + " on " + root + " was dropped (" + why + ")";
+                Log(text); AgentLog(text);
+                SaveDay();
+                TradeLost(root);
+                Notify();
+            }
+        }
+
+        private void TradeLost(string root)
+        {
+            string text = "agent " + Id + " had an open trade on " + Account + " " + root + " and its legs are gone; ChartBridge no longer treats the position as the agent's: flatten or protect it by hand";
+            lock (Sync) { LostTrades[root] = Now(); LostTradeText[root] = text; }
+            Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
+        }
+
+        // Every pass: each lost-trade error again every 60 s until that pair is flat by both readings (lead's default: the pages have
+        // no acknowledge message for it, so it ends only when the pair is flat).
+        private void RepeatTradeLost(double now)
+        {
+            List<string> roots;
+            lock (Sync) roots = LostTrades.Keys.ToList();
+            if (roots.Count == 0) return;
+            Account a = FindAccount(Account);
+            foreach (string root in roots)
+            {
+                Instrument inst = ChartBridgeServer.InstrumentFor(root);
+                bool flat = a != null && inst != null && ChartBridgeOrders.AgentListed(a, inst) == 0 && ChartBridgeOrders.AgentEffective(a, inst) == 0;
+                string text = null;
+                lock (Sync)
+                {
+                    if (flat) { LostTrades.Remove(root); LostTradeText.Remove(root); continue; }
+                    if (now - LostTrades[root] >= ChartBridgeAgents.LostTradeEveryMs) { LostTrades[root] = now; text = LostTradeText[root]; }
+                }
+                if (text != null) { AgentLog(text); ChartBridgeOrders.AgentAlarm(text); }
             }
         }
 
@@ -2075,21 +2210,54 @@ namespace NinjaTrader.NinjaScript.AddOns
             int started = 0;
             foreach (string root in FlatRoots())
             {
-                Instrument inst = ChartBridgeServer.InstrumentFor(root);
-                if (inst == null) continue;
-                bool busy;
-                lock (Sync) busy = Flats.ContainsKey(root);
-                if (busy) continue;
-                bool mineWorking = a != null && ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o)), owned = Owns(root);
-                if (!owned && !mineWorking) continue;
-                lock (Sync) { Flats[root] = new FlatJob { Root = root, Why = why, StartMs = Now(), Owned = owned }; }
-                started++;
-                string text = byRules ? why : "Agent " + Id + ": " + why + ": " + root + " on " + acctName;
-                Log(text); AgentLog(text + " (" + root + " on " + acctName + ")");
-                ChartBridgeServer.SendToTraders(StatusJson("info", text));
+                foreach (Instrument inst in FlatContracts(root))
+                {
+                    string key = inst.FullName ?? root;
+                    bool busy;
+                    lock (Sync) busy = Flats.ContainsKey(key);
+                    if (busy) continue;
+                    List<Order> may = a != null ? ChartBridgeOrders.AgentMayFill(a, inst) : new List<Order>();
+                    bool mineWorking = may.Any(o => IsMine(o)), owned = OwnsContract(root, inst, a);
+                    if (!owned && !mineWorking) continue;
+                    int legQty = may.Where(o => IsMine(o) && StopLegRx.IsMatch(o.Name ?? "")).Sum(o => Math.Max(0, o.Quantity - o.Filled));
+                    int startQty = a != null ? ChartBridgeOrders.AgentListed(a, inst) : 0;
+                    lock (Sync)
+                    {
+                        Flats[key] = new FlatJob { Root = root, Inst = inst, Why = why, StartMs = Now(), Owned = owned, StartQty = startQty, LegQty = legQty, WasMissing = a == null };
+                        if (owned) Sticky.Add(root);   // its pair until flat: cancelling its own legs never makes it someone else's
+                    }
+                    started++;
+                    string where = root + (ChartBridgeAgents.SameContract(inst, ChartBridgeServer.InstrumentFor(root)) ? "" : " (" + inst.FullName + ")");
+                    string text = byRules ? why : "Agent " + Id + ": " + why + ": " + where + " on " + acctName;
+                    Log(text); AgentLog(text + " (" + where + " on " + acctName + ")");
+                    ChartBridgeServer.SendToTraders(StatusJson("info", text));
+                }
             }
             if (started > 0) Notify();
             return started;
+        }
+
+        private static readonly Regex StopLegRx = new Regex("^CB#[0-9a-f]{8} (?:stop|mstop) ");
+
+        // The contracts a flatten looks at on a root: the served one, and another month while its own open trade holds it (review A5).
+        private List<Instrument> FlatContracts(string root)
+        {
+            List<Instrument> list = new List<Instrument>();
+            Instrument served = ChartBridgeServer.InstrumentFor(root);
+            if (served != null) list.Add(served);
+            lock (Sync)
+                if (openTag != null && openRoot == root && openInst != null && ledQty != 0 && !ChartBridgeAgents.SameContract(openInst, served)) list.Add(openInst);
+            return list;
+        }
+
+        // Review A1: the pair is no longer the agent's: the job ends and nothing of the account's is closed.
+        private void DropJob(FlatJob j, string key, Account a)
+        {
+            lock (Sync) { Flats.Remove(key); if (!(openTag != null && openRoot == j.Root)) Sticky.Remove(j.Root); }
+            string text = (a != null ? a.Name : Account) + " " + j.Root + " is no longer agent " + Id + "'s: ChartBridge did not close it";
+            Log(text); AgentLog(text + " (its flatten: " + j.Why + ")");
+            ChartBridgeServer.SendToTraders(StatusJson("warn", text));
+            Notify();
         }
 
         private void StepFlatten(double now)
@@ -2098,14 +2266,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) jobs = Flats.Values.ToList();
             if (jobs.Count == 0) return;
             Account a = FindAccount(Account);
+            bool shut = ChartBridgeAgents.MarketShut(NowEt());
             foreach (FlatJob j in jobs)
             {
-                Instrument inst = ChartBridgeServer.InstrumentFor(j.Root);
-                if (inst == null) { lock (Sync) Flats.Remove(j.Root); continue; }
+                Instrument inst = j.Inst;
+                string key = inst != null ? inst.FullName ?? j.Root : j.Root;
+                if (inst == null) { lock (Sync) Flats.Remove(key); continue; }
+                double errEvery = shut ? ChartBridgeAgents.ShutErrorEveryMs : ChartBridgeAgents.FlatErrorEveryMs;
                 if (a == null)
                 {
                     // the account left NinjaTrader's list: the job stays (resumed when it is back, after 18:00 too), and it is loud
-                    if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)
+                    j.WasMissing = true;
+                    if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= errEvery)
                     {
                         j.LastErrorMs = now;
                         string text = "Agent " + Id + ": NOT FLAT? its flatten (" + j.Why + ") waits: " + Account + " (account not listed by NinjaTrader); it goes on when the account is back; check NinjaTrader now";
@@ -2113,9 +2285,38 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                     continue;
                 }
+                int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
+                // review A1: back from missing, or the position is not what the job started with: is the pair still the agent's?
+                if (j.Owned && (p1 != 0 || p2 != 0) && (j.WasMissing || p1 != j.StartQty))
+                {
+                    j.WasMissing = false;
+                    bool flipped = j.StartQty != 0 && p1 != 0 && Math.Sign(p1) != Math.Sign(j.StartQty);
+                    if (flipped || !OwnsContract(j.Root, inst, a)) { DropJob(j, key, a); continue; }
+                }
+                j.WasMissing = false;
+                if (shut)
+                {
+                    // review A2: no order at all while the market is shut (its stop and target stay); the job goes on at the open
+                    if ((p1 == 0 && p2 == 0) || !j.Owned)
+                    {
+                        if (ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && o != j.Close)) continue;   // its own orders wait for the open
+                        string at = Iso(now);
+                        lock (Sync) { Flats.Remove(key); flattenedAt = at; }
+                        AgentLog("flat on " + j.Root + " " + a.Name + " (" + j.Why + ")");
+                        Notify();
+                        continue;
+                    }
+                    if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= errEvery)
+                    {
+                        j.LastErrorMs = now;
+                        string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
+                                      " still shows " + p1 + "; the market is shut, so ChartBridge sends nothing until it opens (its stop and target stay); act in NinjaTrader if you need to";
+                        ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
+                    }
+                    continue;
+                }
                 string exitWhy;
                 bool up = ChartBridgeAccounts.ExitAllowed(a, out exitWhy);
-                int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
                 List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
                 List<Order> others = may.Where(o => o != j.Close && (j.Owned || IsMine(o))).ToList();   // not its pair: only its own orders
                 bool closeWorks = j.Close != null && may.Contains(j.Close);
@@ -2135,7 +2336,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if ((p1 == 0 && p2 == 0) || !j.Owned)
                     {
                         string at = Iso(now);
-                        lock (Sync) { Flats.Remove(j.Root); flattenedAt = at; }
+                        lock (Sync) { Flats.Remove(key); flattenedAt = at; }
                         AgentLog("flat on " + j.Root + " " + a.Name + " (" + j.Why + ")");
                         Notify();
                         continue;
@@ -2149,7 +2350,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (now - j.ApartSinceMs >= ChartBridgeAgents.FlatRetryMs && Math.Sign(p1) == Math.Sign(p2) && p1 != 0)
                         { qty = Math.Min(Math.Abs(p1), Math.Abs(p2)); dir = Math.Sign(p1); }
                     }
-                    if (qty > 0 && now - j.LastCloseMs >= ChartBridgeAgents.FlatRetryMs) { j.LastCloseMs = now; j.Close = SendClose(a, inst, dir, qty, j.Root, j); }
+                    if (qty > 0 && now - j.LastCloseMs >= ChartBridgeAgents.FlatRetryMs)
+                    {
+                        // review A1: asked again before every close, and never more than the agent's own trade holds
+                        if (!OwnsContract(j.Root, inst, a)) { DropJob(j, key, a); continue; }
+                        qty = Math.Min(qty, CloseCap(j.Root, inst, j));
+                        if (qty > 0) { j.LastCloseMs = now; j.Close = SendClose(a, inst, dir, qty, j.Root, j); }
+                    }
                 }
                 bool flat = (p1 == 0 && p2 == 0) || !j.Owned;
                 if (!flat && now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)

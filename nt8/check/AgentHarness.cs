@@ -1597,12 +1597,19 @@ public static class AgentHarness
             Advance(25000);
             int errs = page.Count(x => x.Contains("account not listed by NinjaTrader")) - errs0;
             Check(errs >= 2 && PosOf(sime, mnq) == 1, "RA7: its account gone from the list: NOT FLAT (account not listed by NinjaTrader) every 10 s (" + errs + ")");
-            et = new DateTime(2026, 10, 9, 18, 5, 0);   // after 18:00 too
+            et = new DateTime(2026, 10, 9, 18, 5, 0);   // Friday after 18:00: the market is shut until Sunday 18:00 (review A2)
             Account.All.Add(sime);
             Hold = null;
+            int cs = sime.Calls.Count, shutErr0 = page.Count(x => x.Contains("the market is shut"));
+            Advance(4000);
+            Check(!sime.Calls.Skip(cs).Any(), "A2: back in the list on Friday at 18:05 (the market shut): nothing is sent, its stop and target stay: " + string.Join(" | ", sime.Calls.Skip(cs)));
+            Advance(120000);
+            int shutErrs = page.Count(x => x.Contains("the market is shut")) - shutErr0;
+            Check(shutErrs >= 2 && shutErrs <= 3 && !sime.Calls.Skip(cs).Any(), "A2: while shut, NOT FLAT every 60 s only (" + shutErrs + " in 124 s), still nothing sent");
+            et = new DateTime(2026, 10, 11, 18, 5, 0);   // Sunday after 18:00: open
             foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
             Advance(4000);
-            Check(sime.Calls.Any(c => c.Contains(" ag:manrae flat ")), "RA7: back in the list (after 18:00): the flatten goes on and closes it");
+            Check(sime.Calls.Any(c => c.Contains(" ag:manrae flat ")), "RA7: back in the list (after 18:00, the market open): the flatten goes on and closes it");
             et = new DateTime(2026, 10, 9, 10, 0, 0);
         }
 
@@ -1649,7 +1656,7 @@ public static class AgentHarness
             Advance(6000);
             Check(page.Skip(s0).Any(x => x.Contains("\"level\":\"error\"") && x.Contains("Agent manrae holds a position or orders on MNQ on SIM-E since ChartBridge started")), "A-N5: a position held at a start: a status error");
             int c5 = sime.Calls.Count;
-            et = new DateTime(2026, 10, 9, 20, 0, 0);   // 20:00, after its flat time and 18:00
+            et = new DateTime(2026, 10, 8, 20, 0, 0);   // Thursday 20:00 (the same session), after its flat time and 18:00, the market open
             Advance(1000);
             Check(sime.Calls.Skip(c5).Any(c => c.StartsWith("cancel CB#")) && page.Skip(s0).Any(x => x.Contains("held a position outside its trading hours")), "A-N5: held after 18:00: the flatten rules apply");
             et = new DateTime(2026, 10, 9, 10, 0, 0);
