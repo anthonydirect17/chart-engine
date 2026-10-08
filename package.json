@@ -44,6 +44,7 @@
     "smoke:quoterows": "node test/quoterows-smoke.mjs",
     "smoke:strategies": "node test/strategies-smoke.mjs",
     "smoke:bot": "node test/bot-smoke.mjs",
+    "smoke:agent": "node test/agent-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",
     "perf:bot": "node test/perf-bot.mjs",

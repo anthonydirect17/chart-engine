@@ -377,7 +377,7 @@ function create(o) {
       props.refused(x.agent, x.id);
       const c = cards.get(keyOf(x.agent, x.id));
       if (c && !c.ended) { both(c, el => { for (const b of el.querySelectorAll('button')) b.disabled = false; }); setMsg(c, why); }
-    } else if (x.kind === 'rules') rulesWhy(why);
+    } else if (x.kind === 'rules') rulesWhy(why, 'refused');
     else if (x.kind === 'account') put(q('[data-k="acctWhy"]'), 'textContent', why);
     else if (x.kind === 'mode' || x.kind === 'kill') modeWhy(why);
     else notice({ kind: 'refused', level: 'amber', text: why });
@@ -484,9 +484,9 @@ function create(o) {
     /* why the rules cannot change now, under the button (written here: data-auto), unless ChartBridge's own words are there */
     const rw = q('[data-k="rulesWhy"]');
     if (!can.ok) {
-      if (S.rulesEdit) { S.rulesEdit = false; put(q('[data-k="rulesEdit"]'), 'hidden', true); rw.dataset.auto = '1'; }
-      if (!rw.textContent || rw.dataset.auto) { put(rw, 'textContent', can.why); rw.dataset.auto = '1'; }
-    } else if (rw.dataset.auto) { put(rw, 'textContent', ''); delete rw.dataset.auto; }
+      if (S.rulesEdit) S.rulesEdit = false, put(q('[data-k="rulesEdit"]'), 'hidden', true);
+      if (rw.dataset.kind !== 'refused') { put(rw, 'textContent', can.why); rw.dataset.kind = 'auto'; }
+    } else if (rw.dataset.kind === 'auto') { put(rw, 'textContent', ''); rw.dataset.kind = ''; }
   }
   const servedRoots = () => AC.RULE_ROOTS.filter(r => S.instruments[r] && !S.instruments[r].quoteOnly);
 
@@ -536,13 +536,16 @@ function create(o) {
     const box = q('[data-k="feed"]');
     setHtml(box, items.length ? items.map(x => x.html).join('') : '<p class="ag-empty">' + (a.connected ? 'Nothing yet. Its looks, thinking, plans and lessons show here as they come.' : 'Nothing yet today. ' + AC.agentName(a) + ' is not connected.') + '</p>');
   }
-  function rulesWhy(t) { const w = q('[data-k="rulesWhy"]'); if (!w) return; delete w.dataset.auto; put(w, 'textContent', t); }
+  /* the words under Change the rules: kind 'refused' (ChartBridge's own, kept until the next try), 'auto' (why it cannot change
+     now, written by renderPanel), or '' (this page's: an error before sending, or "Sent.") */
+  function rulesWhy(t, kind) { const w = q('[data-k="rulesWhy"]'); if (!w) return; w.dataset.kind = kind || ''; put(w, 'textContent', t); }
   function modeWhy(t) { const w = q('[data-k="modeWhy"]'); if (!w) return; w.dataset.refused = '1'; put(w, 'hidden', false); put(w, 'textContent', t); setTimeout(() => { delete w.dataset.refused; renderPanel(); }, 6000); }
 
   /* ---------------- actions */
   function sendAgent(m, kind) {
     if (!m) return false;
-    const c = cid(); m.cid = c;
+    const c = cid();
+    m = Object.assign({ type: m.type, cid: c }, m);            // the contract's order: type, cid, then the message's own keys
     if (!S.signedIn || !sendRaw(m)) { notice({ kind: 'refused', level: 'amber', text: 'Not sent: not signed in to ChartBridge.' }); return false; }
     S.pending.set(c, { kind });
     setTimeout(() => S.pending.delete(c), 15000);
