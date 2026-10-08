@@ -44,11 +44,11 @@ const SIZES = [[1366, 768], [1600, 900], [1440, 1000], [1920, 1080], [390, 844]]
 
 /* the hit test, in the page: for each button, its centre and four corners (3 px in) must find the button itself; a button out
    of its scroll box's sight is brought into sight first (a phone: the tab scrolls) */
-const hitTest = (page, sel) => page.evaluate(sel => {
+const hitTest = (page, sel, still) => page.evaluate(([sel, still]) => {
   const out = [];
   for (const b of document.querySelectorAll(sel)) {
     if (!b.offsetParent) { out.push(b.dataset.agans + ': not shown'); continue; }
-    b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (!still) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });   // still: as it shows, nothing scrolled
     const r = b.getBoundingClientRect(), card = b.closest('.ag-prop, .bt-prop');
     const name = (card ? (card.dataset.agent || 'bot') + ':' + card.dataset.id : '?') + ':' + (b.dataset.agans || b.dataset.ans);
     if (r.width < 20 || r.height < 20) { out.push(name + ': too small ' + JSON.stringify(r)); continue; }
@@ -60,7 +60,7 @@ const hitTest = (page, sel) => page.evaluate(sel => {
     }
   }
   return out;
-}, sel);
+}, [sel, !!still]);
 /* notices (as the page shows them) in the notice box, wherever the page keeps it */
 const notices = (page, n) => page.evaluate(n => {
   const box = document.querySelector('.bt-notes, .ag-notes');
@@ -200,7 +200,7 @@ try {
   await page.evaluate(id => document.querySelector('.ag-plist .ag-prop[data-id="' + id + '"] [data-agans="accept"]').scrollIntoView({ block: 'nearest' }), target);
   await sleep(200);
   const inSight = id => page.evaluate(id => {
-    const card = document.querySelector('.ag-plist .ag-prop[data-id="' + id + '"]'), box = document.querySelector('#agView .ag-pbody').getBoundingClientRect();
+    const card = document.querySelector('.ag-plist .ag-prop[data-id="' + id + '"]'), box = (document.querySelector('#agView .ag-slot') || document.querySelector('#agView .ag-pbody')).getBoundingClientRect();
     const m = card.querySelector('[data-k="msg"]').getBoundingClientRect(), a = card.querySelector('[data-agans="accept"]').getBoundingClientRect();
     const hit = document.elementFromPoint(m.left + Math.min(40, m.width / 2), m.top + m.height / 2);
     return { msg: [Math.round(m.top), Math.round(m.bottom)], accept: Math.round(a.top), box: [Math.round(box.top), Math.round(box.bottom)], ok: m.height > 0 && m.top >= box.top - 1 && m.bottom <= box.bottom + 1 && m.bottom <= a.top + 1 && !!hit && card.querySelector('[data-k="msg"]').contains(hit) };
@@ -269,19 +269,46 @@ try {
     await sleep(200);
     /* the bot's and the second agent's proposals open (new ones when the last were answered), then the agent's own arrives */
     const ids = await panelIds();
-    if (!ids.some(i => i.startsWith('bot:'))) await cross('at ' + w + ' x ' + h + ' the bot\'s proposal arrives', botNew, 1200);
+    await cross('at ' + w + ' x ' + h + ' the bot\'s proposal arrives', botNew, 1200);   // the bot may have several open
     if (!ids.some(i => i.startsWith('demotwo:'))) await cross('at ' + w + ' x ' + h + ' the second agent\'s proposal arrives', twoNew, 1200);
     await cross('at ' + w + ' x ' + h + ' the shown agent\'s proposal arrives', ownNew, 1500);
     await sleep(1100);
-    /* the top open card answered: it ends and leaves (1.2 s to 3 s later) */
-    const top = (await panelIds())[0];
+    /* the top open card of the list under the slot (another agent's or the bot's) answered: it ends and leaves (1.2 s to 3 s
+       later) while the shown agent's and the rest stay open */
+    const top = (await panelIds()).find(i => !i.startsWith('demo:'));
     const sel = top.startsWith('bot:') ? '#agView .bt-prop[data-id="' + top.split(':')[1] + '"] [data-ans="reject"]' : '#agView .ag-prop[data-agent="' + top.split(':')[0] + '"][data-id="' + top.split(':')[1] + '"]:not([hidden]) [data-agans="reject"]';
-    await cross('at ' + w + ' x ' + h + ' the top card (' + top + ') answered and gone', async () => { await page.click(sel); }, 3600, sel);
+    await cross('at ' + w + ' x ' + h + ' the list\'s top card (' + top + ') answered and gone', async () => { await page.click(sel); }, 3600, sel);
     /* the shown agent's own answered and gone */
     const own = (await panelIds()).find(i => i.startsWith('demo:'));
     const ownSel = own && '#agView .ag-plist .ag-prop[data-id="' + own.split(':')[1] + '"] [data-agans="reject"]';
     if (own) await cross('at ' + w + ' x ' + h + ' the shown agent\'s card (' + own + ') answered and gone', async () => { await page.click(ownSel); }, 3600, ownSel);
   }
+
+  /* ---------------------------------------------------------------- the shown agent's card: first, in sight */
+  console.log('the shown agent\'s proposal is first and in sight without scrolling, whatever else is open');
+  if (!(await panelIds()).some(i => i.startsWith('bot:'))) await botNew();
+  await botNew();                                                                      // more cards: two of the bot's
+  if (!(await panelIds()).some(i => i.startsWith('demotwo:'))) await twoNew();
+  const mine = await ownNew();
+  await until(() => page.isVisible('.ag-plist .ag-prop[data-id="' + mine + '"]'), 'the shown agent\'s new proposal');
+  for (const [w, h] of [[1000, 800], [1366, 768], [1920, 1080], [390, 844]]) {
+    await page.setViewportSize({ width: w, height: h }); await sleep(700);
+    /* nothing scrolled: the page, the tab and the panel at their tops (a phone: the panel's top at the window's top) */
+    await page.evaluate(phone => {
+      window.scrollTo(0, 0); for (const b of document.querySelectorAll('#agView .ag-main, #agView .ag-slot, #agView .ag-pbody')) b.scrollTop = 0;
+      if (phone) document.querySelector('#agView [data-panel="prop"]').scrollIntoView({ block: 'start' });
+    }, w < 720);
+    await sleep(200);
+    const seen = await page.evaluate(id => {
+      const ids = [...document.querySelectorAll('#agView [data-panel="prop"] .ag-prop:not([hidden]), #agView [data-panel="prop"] .bt-prop')].filter(c => c.getClientRects().length).sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+      const card = document.querySelector('.ag-plist .ag-prop[data-id="' + id + '"]');
+      return { first: ids[0] === card, others: ids.length - 1, buttons: ['accept', 'reject'].map(a => { const r = card.querySelector('[data-agans="' + a + '"]').getBoundingClientRect(); return [Math.round(r.top), Math.round(r.bottom)]; }), vh: innerHeight };
+    }, mine);
+    const inView = seen.buttons.every(([t, b]) => t >= 0 && b <= seen.vh);
+    const bad = await hitTest(page, '#agView .ag-plist .ag-prop[data-id="' + mine + '"] [data-agans]', true);
+    check(seen.first && seen.others >= 3 && inView && !bad.length, 'at ' + w + ' x ' + h + (w < 720 ? ' (the panel\'s first screen)' : '') + ' the shown agent\'s proposal is first of ' + (seen.others + 1) + ', its Accept and Reject in the window without scrolling and the buttons themselves: ' + JSON.stringify(seen) + (bad.length ? ' ' + bad.slice(0, 3).join('; ') : ''));
+  }
+  await page.click('.ag-plist .ag-prop[data-id="' + mine + '"] [data-agans="reject"]');
 
   if (!(await panelIds()).some(i => i.startsWith('demotwo:'))) await twoNew();   // the pop-out shows the second agent's
 

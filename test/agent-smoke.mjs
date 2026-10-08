@@ -325,7 +325,7 @@ try {
   for (const [w, h] of [[1440, 1000], [1366, 768]]) {
     await page.setViewportSize({ width: w, height: h });
     await sleep(500);
-    const seen = await page.evaluate(() => { const box = document.querySelector('#agView .ag-pbody').getBoundingClientRect(); return ['accept', 'reject'].every(a => { const b = document.querySelector('.ag-plist [data-agans="' + a + '"]').getBoundingClientRect(); return b.height > 30 && b.top >= box.top - 1 && b.bottom <= box.bottom + 1 && b.bottom <= innerHeight; }); });
+    const seen = await page.evaluate(() => { const box = document.querySelector('#agView .ag-slot').getBoundingClientRect(); return ['accept', 'reject'].every(a => { const b = document.querySelector('.ag-plist [data-agans="' + a + '"]').getBoundingClientRect(); return b.height > 30 && b.top >= box.top - 1 && b.bottom <= box.bottom + 1 && b.bottom <= innerHeight; }); });
     check(seen, 'at ' + w + ' x ' + h + ' Accept and Reject are fully in sight in the proposal');
   }
   await page.setViewportSize({ width: 1600, height: 900 });

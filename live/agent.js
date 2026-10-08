@@ -156,7 +156,8 @@ function create(o) {
       '<aside class="ag-col ag-right" aria-label="Proposals and his stream">' +
         '<div class="ag-panel ag-proppanel" data-panel="prop" data-no-motion>' + LIGHT_HTML +
           '<div class="ag-sechead"><span class="ag-k2">Proposal · copilot</span><span class="ag-lbl" data-k="propCount"></span></div>' +
-          '<div class="ag-pbody"><div class="ag-plist" data-k="plist"></div><p class="ag-empty" data-k="pempty">None open</p><div class="ag-others" data-k="others"></div></div></div>' +
+          '<div class="ag-slot" data-k="slot"><div class="ag-plist" data-k="plist"></div><p class="ag-empty" data-k="pempty">None open</p></div>' +
+          '<div class="ag-pbody"><div class="ag-others" data-k="others"></div></div></div>' +
         '<div class="ag-panel ag-feedwrap" data-panel="stream">' + LIGHT_HTML +
           '<div class="ag-loghead"><span class="ag-k2">His stream</span><span class="ag-lbl" data-k="feedCount"></span></div>' +
           '<div class="ag-filters" role="tablist" data-k="filters">' + FILTERS.map(f => '<button type="button" role="tab" data-filter="' + f[0] + '" aria-selected="false">' + f[1] + '</button>').join('') + '</div>' +
@@ -340,11 +341,12 @@ function create(o) {
     for (const el of [x.inline, x.corner]) el.style.setProperty('--ag-order', x.seq);
     /* what ended and has nothing open after it goes now (the new card takes its place at the end of the panel); outside the
        tab, the same agent's ended cards with no open card of it after them */
-    if (panelOn()) clearTrailing();
+    if (panelOn()) { clearTrailing(); for (const y of [...cards.values()]) if (y.p.agent === p.agent && y.ended) removeCard(y, true); }
     else for (const y of [...cards.values()]) if (y.p.agent === p.agent && y.ended && ![...cards.values()].some(z => z.p.agent === y.p.agent && z.seq > y.seq && !z.ended)) removeCard(y);
     cards.set(k, x);
     propBox.prepend(x.corner);
     placeCards();
+    if (p.agent === S.chosen && q('[data-k="slot"]')) q('[data-k="slot"]').scrollTop = 0;   // the new proposal from its top
     seenNow();
     tick();
   }
@@ -353,21 +355,21 @@ function create(o) {
      part of the proposal panel, in the page's flow (placeBox), each proposal under its own name: nothing covers the tab's
      Accept and Reject at any size. The list is written only when it or its order changed: a button taken out of the page
      loses its focus and a press held on it (review of fc3101a).
-     One order for the whole panel (review of a4fa9d9): every card, the agent's own, another agent's and the bot's, shows in
-     the order it arrived (--ag-order), so a card that arrives goes at the end and pushes no open card's Accept or Reject;
-     "None open" shows only while the panel holds nothing. A card that ends and leaves while an open card comes after it
-     leaves a placeholder of its exact height (.ag-ghost) until nothing open comes after it, so nothing slides up under the
-     pointer; the bot's cards (live/bot.js removes them) the same, watched here. */
+     No Accept or Reject ever moves under the pointer (reviews of a4fa9d9 and 60e9ddd). The shown agent's own proposal is
+     first, in a slot of a fixed height at the panel's top (agent.css): reserved whenever the tab is shown, "None open" in it
+     when it is empty, so its arrival, ending and going move nothing, and its Accept and Reject are always in sight. Under it,
+     another agent's and the bot's proposals show in the order they arrived (--ag-order): a card that arrives goes at the
+     end, and a card that ends and leaves while an open card comes after it leaves a placeholder of its exact height
+     (.ag-ghost) until nothing open comes after it; the bot's cards (live/bot.js removes them) the same, watched here. */
   let cardSeq = 0;
   const ghosts = new Set(), sizes = new WeakMap();
   const panelOn = () => !!(view && propBox.classList.contains('ag-in-tab'));
   const orderOf = el => +el.style.getPropertyValue('--ag-order') || 0;
   const mineNow = () => [...cards.values()].filter(x => x.p.agent === S.chosen).sort((a, b) => a.seq - b.seq);
-  /* the panel's cards as they show (the agent's own, the corner's cards not hidden, the bot's not cleared), each with its order */
+  /* the list's cards as they show (the corner's cards not hidden, the bot's not cleared), each with its order; the shown
+     agent's own are in the slot above it, which keeps its height */
   function panelCards() {
     const out = [];
-    const list = q('[data-k="plist"]');
-    if (list) for (const el of list.children) out.push(el);
     for (const el of propBox.children) if (!el.hidden && !el.classList.contains('ag-gone') && el.getClientRects().length) out.push(el);
     return out;
   }
@@ -413,8 +415,8 @@ function create(o) {
   }) : null;
   if (boxObs) boxObs.observe(propBox, { childList: true });
   adoptBotCards();
-  /* "None open" only while the panel holds nothing at all (so its line never comes or goes above an open card) */
-  function placeEmpty() { put(q('[data-k="pempty"]'), 'hidden', panelCards().length + ghosts.size > 0); }
+  /* "None open" in the slot while the shown agent has nothing there (the slot keeps its height either way) */
+  function placeEmpty() { put(q('[data-k="pempty"]'), 'hidden', !!q('[data-k="plist"] .ag-prop')); }
   function placeCards() {
     setTimeout(placeDrawer, 0);                                // a proposal came or went: the drawer keeps clear of it (setTimeout passes no argument)
     const list = q('[data-k="plist"]'), inTab = S.shown && !!view;
@@ -466,7 +468,7 @@ function create(o) {
   function dropProposal(agent, id) { const x = cards.get(keyOf(agent, id)); if (x) removeCard(x); }
   function removeCard(x, noGhost) {
     if (!noGhost && x.ended && panelOn()) {
-      const el = [x.inline, x.corner].find(e => e.isConnected && !e.hidden && e.getClientRects().length);
+      const el = [x.corner].find(e => e.isConnected && !e.hidden && e.getClientRects().length);
       if (el) ghostFor(orderOf(el), el.getBoundingClientRect().height);
     }
     x.inline.remove(); x.corner.remove(); cards.delete(keyOf(x.p.agent, x.p.id)); placeCards();

@@ -268,24 +268,30 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-cposwrap { display: inline-flex; gap: 10px; align-items: baseline; white-space: nowrap; }
 
 /* ---------------- the proposal panel (its card: Accept cyan, Reject purple; never animated) */
-.ag-view .ag-proppanel { flex: 0 0 auto; min-height: 110px; max-height: 74%; display: flex; flex-direction: column; padding: 12px 16px; gap: 10px; }
+/* At its top, the shown agent's own proposal in a slot of a fixed height (look F: its Accept and Reject always in sight, the
+   card Anthony is looking at): reserved whenever the tab is shown, "None open" at the same height when it is empty, the card's
+   words scrolling inside it with Accept and Reject at its foot. Its proposal arriving, ending or going moves nothing. Under it,
+   another agent's and the bot's proposals in one list in the order they arrived (--ag-order, live/agent.js): a card that
+   arrives goes at the end, and a card that leaves while an open card comes after it leaves a placeholder of its height
+   (review of a4fa9d9): no Accept or Reject ever moves under the pointer. With the panel at its height that list scrolls. */
+.ag-view .ag-proppanel { flex: 0 0 auto; min-height: 110px; max-height: calc(100% - 128px); display: flex; flex-direction: column; padding: 12px 16px; gap: 10px; }
+.ag-view .ag-slot { flex: none; height: clamp(220px, 36vh, 380px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent; }
+.ag-view .ag-slot > .ag-plist { display: grid; gap: 14px; }
+.ag-view .ag-slot > .ag-plist:empty { display: none; }
 .ag-view .ag-pbody { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent;
   display: flex; flex-direction: column; gap: 14px; }
-/* one list for the whole panel (review of a4fa9d9): the agent's own cards, another agent's and the bot's are all items of
-   the proposal box, in the order they arrived (--ag-order, live/agent.js), so a card that arrives goes at the end and a card
-   that leaves leaves a placeholder of its height while an open card comes after it: no Accept or Reject ever moves */
-.ag-view .ag-plist, .ag-view .ag-others, .ag-view .ag-others > .bt-props, .ag-view .ag-others > .ag-props { display: contents; }
-.ag-view .ag-pbody > .ag-empty { order: -1; }
-/* no scroll anchoring in the tab: the browser would scroll the box to keep a row below in place when a card goes, which
-   moves every card above it */
-.ag-view .ag-main, .ag-view .ag-pbody { overflow-anchor: none; }
+.ag-view .ag-pbody:not(:has(> * > * > :not([hidden]):not(.ag-gone))):not(:has(> .ag-ghost)) { display: none; }
+.ag-view .ag-others, .ag-view .ag-others > .bt-props, .ag-view .ag-others > .ag-props { display: contents; }
+/* no scroll anchoring in the tab: the browser would scroll a box to keep a row below in place when a card goes, which moves
+   every card above it */
+.ag-view .ag-main, .ag-view .ag-pbody, .ag-view .ag-slot { overflow-anchor: none; }
 .ag-view .ag-pbody .ag-prop, .ag-view .ag-pbody .bt-prop, .ag-view .ag-ghost { order: var(--ag-order, 0); flex: none; }
 .ag-view .ag-ghost { pointer-events: none; }
 .ag-view .ag-others .ag-gone { display: none !important; }
 /* a card keeps one line for ChartBridge's words even while it has none, so "Accept sent", "Rejected" and the like never make
-   it taller under the cards after it */
-.ag-view .ag-pbody .ag-prop .ag-prop-msg, .ag-view .ag-pbody .bt-prop .bt-prop-msg { line-height: 1.45; min-height: 1.45em; }
-.ag-view .ag-pbody .ag-prop .ag-prop-msg:empty, .ag-view .ag-pbody .bt-prop .bt-prop-msg:empty { display: block; }
+   it taller over the cards after it */
+.ag-view .ag-proppanel .ag-prop .ag-prop-msg, .ag-view .ag-pbody .bt-prop .bt-prop-msg { line-height: 1.45; min-height: 1.45em; }
+.ag-view .ag-proppanel .ag-prop .ag-prop-msg:empty, .ag-view .ag-pbody .bt-prop .bt-prop-msg:empty { display: block; }
 .ag-view .ag-empty[hidden] { display: none; }
 .ag-view .ag-prop.inline { background: transparent; border: 0; border-radius: 0; padding: 0; gap: 9px; color: var(--f-c); font: 13px/1.4 var(--f-ui); box-shadow: none; display: grid; grid-template-columns: minmax(0, 1fr); }
 .ag-view .ag-prop.inline + .ag-prop.inline { border-top: 1px solid var(--f-line2); padding-top: 14px; }
@@ -456,7 +462,11 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 @media (max-width: 1100px) {
   .ag-main { overflow-y: auto; }
   .ag-view .ag-grid { flex: none; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto; }
-  .ag-view .ag-centre { grid-column: 1 / -1; }
+  /* the controls and the proposal side by side at the top (its Accept and Reject in the window without scrolling), the chart
+     under them across both */
+  .ag-view .ag-left { grid-row: 1; grid-column: 1; }
+  .ag-view .ag-right { grid-row: 1; grid-column: 2; }
+  .ag-view .ag-centre { grid-row: 2; grid-column: 1 / -1; }
   .ag-view .ag-chartpanel { min-height: 380px; }
   .ag-view .ag-left { max-height: 640px; }
   /* the proposal panel grows with what is open (the agent's own, the other agents' and the bot's): the column grows with it,
@@ -468,6 +478,7 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 @media (max-width: 720px) {
   .ag-main { padding: 8px 8px 10px; }
   .ag-view .ag-grid { grid-template-columns: minmax(0, 1fr); }
+  .ag-view .ag-left, .ag-view .ag-right, .ag-view .ag-centre { grid-row: auto; grid-column: auto; }
   .ag-view .ag-left, .ag-view .ag-right { max-height: none; }
   .ag-view .ag-scroll { overflow: visible; }
   .ag-view .ag-feedwrap { min-height: 320px; }
