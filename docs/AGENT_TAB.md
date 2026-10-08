@@ -97,11 +97,21 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
    it says "No agents on this ChartBridge (0.5.0 or later)."; 0.5.0 or later with no agent, "none is named in its config.txt".
 2. **Kill and Auto (lead's default):** as the Bot tab: the kill switch goes on in one click (stopping is never delayed) and
    its release asks a second click within 4 s; Auto asks a second click within 4 s. The contract's "a second click within 4
-   s for Auto and for Kill, as for the bot" is read as the bot's behaviour.
-3. **One copilot key (lead's default, the brief's):** the `chart-copilot-key` event has one handler for the bot and every
-   agent (`AgentCore.copilotRouter`); it answers the oldest open proposal across all of them, oldest by the time it showed
-   on this page; a tie goes to the Bot tab. An agent proposal already answered and waiting for ChartBridge is skipped. The
-   bot's side is unchanged, so with no agent proposal open the key does exactly what 1.16.0 did (tested in both smokes).
+   s for Auto and for Kill, as for the bot" is read as the bot's behaviour. A second click under 400 ms after the first is
+   the same double-click and is ignored, so a double-click never confirms (the review's S3; the Bot tab the same, through
+   `BotCore.confirmStep`, its behaviour otherwise unchanged).
+3. **One copilot key (lead's default, after the review of 19e9ef0):** the `chart-copilot-key` event has one handler for the
+   bot and every agent (`AgentCore.copilotRouter`). Which proposal a key answers:
+   - With the Agent tab open: only the shown agent's proposals, the oldest of those (any other proposal is answered with
+     its own buttons). With none of that agent's open, the key answers nothing and says so.
+   - Anywhere else, with no agent proposal open: the bot's oldest, exactly as 1.16.0 (no rule below touches it).
+   - Anywhere else, with an agent proposal open: when exactly one proposal is open across the bot and every agent, that
+     one; when more than one is, none, and the workspace's line says "More than one proposal is open: click the one you
+     mean".
+   - For every key answer but the bot's own: the keys rest 1 s after an answer; a proposal must have been on screen 1 s; a
+     proposal in its last 5 s (or with no expiry) is never a key's; an answered proposal waiting for ChartBridge stays the
+     key's target (a second press finds it again and sends nothing). So a double press can never answer a second,
+     different proposal (the review's B1). What the key did not do is said on the workspace's line.
    `bot.html` (no AgentCore) keeps the 1.16.0 handler.
 4. **The copilot keys for agents (lead's default):** Accept and Reject keys work and show in Settings while the bot switch
    is on or ChartBridge has told of an agent. The Desk's hotkeys are still read only while a switch needs The Desk, as in
@@ -111,7 +121,8 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
    hidden window sends it when it comes to the front), as `botSeen`.
 6. **Accept in the last 5 s (lead's default):** ChartBridge refuses an accept with under 5 s left as expired, so the page
    closes Accept then and says why; Reject still goes. The countdown runs on this PC's clock against ChartBridge's
-   `expiresAt` (the same PC).
+   `expiresAt` (the same PC). A proposal with no `expiresAt` is never accepted; one with no `sim` is marked LIVE, as an
+   unknown account is everywhere. Cards and the picker show each agent's id next to its name.
 7. **Rules as `agent` carries them (lead's default):** read in any form the contract leaves open: `roots` as "NQ,MNQ" or a
    list, `maxQty` as an object or flat `maxQty<ROOT>` keys, "none" as null, 0 or "none". The fake sends `roots` "NQ,MNQ",
    `maxQty` an object and none as null.
@@ -122,7 +133,9 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
    no working entry and no open proposal (ChartBridge refuses them otherwise and says why under the button).
 10. **The account chooser (lead's default):** every account ChartBridge says is tradable, SIM first, each marked; the bot's
     account, the copier's leader and followers and another agent's account are listed but not offered, with the reason
-    (ChartBridge refuses them anyway).
+    (ChartBridge refuses them anyway). **An account change puts the agent in Shadow** (lead's default, ChartBridge is told
+    the same): the LIVE question names the mode and says so ("Demo Agent is in Auto: it will trade LIVE account EVAL-A once
+    it is back in Auto. The agent goes to Shadow when its account changes. Continue?"), and the page says it after sending.
 11. **The agent's chart (lead's default):** its root is the one picked in the chart's header, else the position's, else a
     working entry's, else an open proposal's, else the last plan's, else the first of its roots. Its trades come from
     fills claimed against its own marked orders (`BotCore.botFillLedger` with the agent's mark, as the bot's), kept in this
@@ -130,7 +143,8 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
 12. **ChartBridge's own words (lead's default):** its warnings and errors are the workspace's ChartBridge line (not
     repeated); an `info` line naming an agent (its flat time) is a corner notice too.
 13. **The feed (lead's default):** kept in memory; ChartBridge sends the last 200 notes and 50 plans again when a page signs
-    in, and repeats are dropped. A proposal's outcome shows on its plan as this window saw it ("accepted in 1.3 s");
+    in, and repeats are dropped. A refused plan never replaces a plan of the same id that was not refused (a duplicate id
+    the agent sent): it is its own line. A proposal's outcome shows on its plan as this window saw it ("accepted in 1.3 s");
     another window shows "proposed" for one that ended before it opened.
 14. **No agent strip on the Main tab (lead's default):** the bot strip stays the bot's; the Agent tab button marks a
     proposal waiting (a lavender dot) and an agent killed, stood down or lost (red).
@@ -143,8 +157,25 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
 17. **The fake's choices (lead's defaults, for the C# builder to compare):**
     - Each agent starts on Sim101 (the contract's no-file default), which is also the bot's account and the copier's
       default leader. The fake refuses an agent's plan at check 2 while its account is the bot's, the copier's leader or a
-      follower ("choose demo's own account on the Agent tab"), so an agent and the bot never share an account even at the
-      defaults. The bridge adds the made-up Sim account `SIM-AG1` for it to take.
+      follower ("choose demo's own account on the Agent tab"), and `agentAccount` refuses those accounts, whether or not
+      the bot and copier switches are on, so an agent and the bot never share an account even at the defaults. The bridge
+      adds the made-up Sim accounts `SIM-AG1` and `SIM-AG2` for agents to take.
+    - Hello first: anything an agent sends before `agentHello` is refused before it is read ("send agentHello first"), is
+      no heartbeat, never reaches the pages and never becomes `lastPlan`. A socket that never says hello, or says nothing,
+      is closed after 5 s.
+    - Every plan id seen today is used, whether its plan was refused or not. A refused duplicate never replaces the plan it
+      copies, in the pages' plans or as `lastPlan`; both are sent and kept.
+    - The 18:00 ET reset: trades, losing trades, P&L today, a stand-down and the plan ids start over (a trade still open
+      goes on). A rules change can stand the agent down now but never lifts a stand-down; only 18:00 ET does.
+    - The page's `plan` message on an agent's entry cannot take its stop or target away (null or 0: "an agent's entry always
+      has a stop and a target"); other whole numbers of 1 or more pass. Moving the entry with `change`, and moving or
+      cancelling its legs, pass (the contract's exits).
+    - Auto refuses an account that is not tradable now: unchecked, not Connected, or gone.
+    - An account change puts the agent in shadow (its new `welcome` says so).
+    - The kill switch on: the agent's unfilled entries are cancelled (each `answer` `expired`), its open proposals end
+      `not answered`, a position keeps its stop and target, and the pages get a `status` `warn`. Off: nothing else changes.
+    - Mode changes: leaving copilot ends the open proposals `not answered`; leaving auto cancels the unfilled entries (`answer`
+      `expired`); the agent gets a new `welcome`. Every start is shadow.
     - `agentSeen` counts in gate 7's rate (the contract names no exemption; `botSeen` is not counted).
     - An `agentAnswer` accept with under 5 s left ends the proposal `expired` (the agent's `answer` says so) and the page
       gets a `reject` with its cid. An accept refused at placing ends it `rejected`, the agent gets `answer` `refused`.

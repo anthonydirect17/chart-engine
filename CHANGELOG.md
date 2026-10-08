@@ -12,15 +12,20 @@ lead's default.
   agent holds the owner lock. A picker when there is more than one agent.
 - **Control:** Shadow, Copilot, Auto (Auto asks a second click within 4 s) and the kill switch (on in one click, release
   in two), as the Bot tab. Change account lists the tradable accounts, never the bot's, the copier's or another agent's, and
-  asks once in the page for a LIVE one. The rules in force, and Change the rules (only while the agent is flat with nothing
+  asks once in the page for a LIVE one, naming the mode; the agent goes to Shadow when its account changes. The rules in force, and Change the rules (only while the agent is flat with nothing
   working or proposed), checked against the contract's allowed values before `agentRules` goes out with flat keys;
   ChartBridge's refusal shows under the button.
 - **Proposals:** side, quantity, root, kind and price, stop and target, risk, setup, confidence, reason, the account, and a
   live countdown to the plan's own expiry; Accept and Reject send `agentAnswer` (`agentSeen` the moment it shows). Accept
   closes in the last 5 s, when ChartBridge would refuse it. In the tab for the agent shown, in the corner everywhere else.
-- **One copilot key for the bot and every agent:** the workspace's Accept and Reject keys answer the oldest open proposal
-  across the bot and all agents. With no agent proposal open the bot's answer is exactly as in 1.16.0 (`live/bot.js` now
-  hands its proposals to the one handler, `AgentCore.copilotRouter`).
+- **One copilot key for the bot and every agent** (`AgentCore.copilotRouter`; `live/bot.js` hands it its proposals): with
+  the Agent tab open a key answers the shown agent's proposals only; elsewhere, with an agent proposal open, it answers
+  only when exactly one proposal is open in all, and otherwise says "More than one proposal is open: click the one you
+  mean". After an answer the keys rest 1 s, a proposal must have been on screen 1 s, and none in its last 5 s is answered
+  by a key, so a double press never answers a second proposal. With no agent proposal open the bot's answer is exactly as
+  in 1.16.0.
+- **A double-click never confirms** Auto or a kill switch's release, on the Agent tab and the Bot tab (a second click under
+  400 ms after the first is ignored).
 - **Notes and plans:** the agent's looks, thinking (a collapsed block), lessons, notebook and status, and its plans with
   their results, newest first, with filters.
 - **The chart:** the agent's root with its own orders and legs (`by: "agent:<id>"`) as lines and its trades as marks; the

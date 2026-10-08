@@ -250,7 +250,7 @@ function create(o) {
     const a = agents.get(p.agent) || { agent: p.agent }, r = p.root, lp = AC.legPrices(p, tickOf(r));
     const acc = { name: p.account || AC.agentAccount(a).name, mark: AC.accountMark(p.sim) };   // no sim: LIVE, as an unknown account anywhere
     const kc = k => (k ? ' <span class="bt-keycap">' + esc(k) + '</span>' : '');
-    return '<div class="ag-prop-h"><span class="ag-ttl">Copilot · ' + esc(AC.agentName(a)) + ' <span class="ag-id">' + esc(p.agent) + '</span></span>' + markHtml(acc.mark) + '<span class="ag-fill"></span><span class="ag-lbl">expires in</span> <span class="mono ag-cd" data-k="cd">-</span></div>' +
+    return '<div class="ag-prop-h"><span class="ag-ttl" title="Copilot proposal from ' + esc(AC.agentName(a)) + '">' + esc(AC.agentName(a)) + '</span><span class="ag-lbl ag-id">' + esc(p.agent) + '</span>' + markHtml(acc.mark) + '<span class="ag-fill"></span><span class="ag-lbl" title="Open until the plan\'s own expiry">ends in</span> <span class="mono ag-cd" data-k="cd">-</span></div>' +
       '<div class="ag-prop-big mono"><span class="' + (p.side === 'buy' ? 'pos' : 'neg') + '">' + sideWord(p.side) + ' ' + esc(p.qty) + ' ' + esc(r) + '</span> <span class="ag-soft">' + esc(entryText(p)) + '</span></div>' +
       '<div class="ag-prop-setup"><span class="ag-chip">' + esc(p.setup || 'no setup name') + '</span><span class="ag-lbl">confidence</span>' + confHtml(p.confidence) + '</div>' +
       '<div class="ag-quote">' + esc(p.reason || '') + '</div>' +

@@ -129,7 +129,8 @@ try {
   const before = (await sent()).length;
   await page.selectOption('#agView [data-k="acctSel"]', 'EVAL-A');
   await page.click('#agView [data-act="acctSave"]');
-  check(await visible('#agView [data-k="acctAsk"]') && /Demo Agent will trade LIVE account EVAL-A\. Continue\?/.test(await text('#agView [data-k="acctAsk"]')), 'a LIVE account is asked once, in the page');
+  check(await visible('#agView [data-k="acctAsk"]') && /Demo Agent is in Shadow: it will trade LIVE account EVAL-A once you put it in Copilot or Auto\. The agent goes to Shadow when its account changes\. Continue\?/.test(await text('#agView [data-k="acctAsk"]')),
+    'a LIVE account is asked once, in the page, naming the mode and the move to Shadow: ' + await text('#agView [data-k="acctAsk"]'));
   check((await sent()).length === before, 'nothing sent before the answer');
   await page.screenshot({ path: path.join(SHOTS, 'agent-live-ask.png'), clip: { x: 0, y: 0, width: 640, height: 900 } });
   await page.click('#agView [data-act="acctNo"]');
@@ -158,14 +159,25 @@ try {
 
   /* ---------------------------------------------------------------- mode, kill */
   console.log('mode and kill switch');
+  const modesSent = async () => (await sent()).filter(m => m.type === 'agentMode');
   await page.click('#agView [data-mode="auto"]');
-  check((await text('#agView [data-mode="auto"]')) === 'Confirm' && !(await sent()).some(m => m.type === 'agentMode'), 'Auto asks a second click within 4 s; nothing sent yet');
+  check((await text('#agView [data-mode="auto"]')) === 'Confirm' && !(await modesSent()).length, 'Auto asks a second click within 4 s; nothing sent yet');
   await sleep(4300);
   check((await text('#agView [data-mode="auto"]')) === 'Auto', 'no second click: Auto is not asked for');
+  await page.dblclick('#agView [data-mode="auto"]');
+  await sleep(500);
+  check(!(await modesSent()).length && (await A()).agents.find(a => a.agent === 'demo').mode === 'shadow', 'a double-click on Auto never confirms it (review S3)');
+  await page.click('#agView [data-mode="auto"]');                                     // the double-click's own second click armed it: confirm now
+  await until(async () => (await A()).agents.find(a => a.agent === 'demo').mode === 'auto', 'a second click 400 ms or more after the first confirms Auto');
+  const ms = await modesSent();
+  check(ms.length === 1 && ms[0].mode === 'auto' && ms[0].agent === 'demo', 'Auto\'s second click sends agentMode auto, once: ' + JSON.stringify(ms));
   await page.click('#agView [data-k="kill"]');
   await until(async () => (await A()).agents.find(a => a.agent === 'demo').killed, 'kill on in one click');
   check(/KILLED/.test(await text('.ag-strip')), 'the strip says KILLED');
-  await page.click('#agView [data-k="kill"]');
+  await sleep(300);
+  await page.dblclick('#agView [data-k="kill"]');
+  await sleep(500);
+  check((await A()).agents.find(a => a.agent === 'demo').killed && (await sent()).filter(m => m.type === 'agentKill').length === 1, 'a double-click on Release never releases (review S3)');
   check((await text('#agView [data-k="kill"]')) === 'Release: click again', 'release asks a second click');
   await page.click('#agView [data-k="kill"]');
   await until(async () => !(await A()).agents.find(a => a.agent === 'demo').killed, 'released');
@@ -196,7 +208,7 @@ try {
   await until(() => visible('#agView [data-k="sOwns"]'), 'the owner lock badge');
   check(/OWNS SIM-AG1 MNQ/.test(await text('#agView [data-k="sOwns"]')), 'the strip: ' + await text('#agView [data-k="sOwns"]'));
   const lines = await page.evaluate(() => { const c = window.workspace.agent(); return c.chart; });
-  check(lines, 'the Agent tab\'s chart is mounted on the agent\'s root (' + (await A()).chartRoot + ')');
+  check(lines && (await A()).chartRoot === 'MNQ' && /^MNQ/.test(await text('#agView [data-k="chartName"]')), 'the Agent tab\'s chart is on the agent\'s root, MNQ (its working entry\'s, not its first root NQ): ' + await text('#agView [data-k="chartName"]'));
   await sleep(1200);
   await page.screenshot({ path: path.join(SHOTS, 'agent-tab.png') });
   await page.setViewportSize({ width: 1366, height: 768 });                             // Anthony's laptop: no page scroll
@@ -222,27 +234,85 @@ try {
   check(/EXPIRED/.test(await text('.ag-feed')) && /ACCEPTED IN \d+\.\d S/.test(await text('.ag-feed')), 'the feed says how each proposal ended (on its plan): ' + (await text('.ag-feed')).slice(0, 160));
 
   /* ---------------------------------------------------------------- one copilot key for the bot and every agent */
-  console.log('one copilot key: the oldest open proposal across the bot and the agents');
-  await page.click('#wsAgentTab');                                                       // back to the layout
+  console.log('copilot keys: never a second proposal (review B1), the tab answers its agent only, elsewhere one open only (S1)');
+  const answersSent = async () => (await sent()).filter(m => m.type === 'agentAnswer');
+  await until(async () => (await page.evaluate(() => window.workspace.bot().keys.accept)) === 'Alt+Y', 'the copilot keys from The Desk');
+  // the second agent on its own made-up account, in Copilot
+  await page.selectOption('#agView [data-k="pick"]', 'demotwo');
+  await until(async () => (await text('.ag-strip [data-k="name"]')) === 'Second Demo Agent', 'Second Demo Agent shown');
+  check(/Second Demo Agent \(demotwo\)/.test(await page.$eval('#agView [data-k="pick"]', e => e.textContent)), 'the picker shows each agent\'s id next to its name');
+  await page.click('#agView [data-act="acctOpen"]'); await page.selectOption('#agView [data-k="acctSel"]', 'SIM-AG2'); await page.click('#agView [data-act="acctSave"]');
+  await until(async () => (await agentsNow()).find(a => a.agent === 'demotwo').account === 'SIM-AG2', 'demotwo trades SIM-AG2');
+  await page.click('#agView [data-mode="copilot"]');
+  await until(async () => (await agentsNow()).find(a => a.agent === 'demotwo').mode === 'copilot', 'demotwo in Copilot');
+  await page.selectOption('#agView [data-k="pick"]', 'demo');
+  await until(async () => (await text('.ag-strip [data-k="name"]')) === 'Demo Agent', 'Demo Agent shown');
+  await page.click('#agView [data-mode="copilot"]');
+  await until(async () => (await agentsNow()).find(a => a.agent === 'demo').mode === 'copilot', 'demo in Copilot');
+  // two agents' proposals open: demotwo's (older, in the corner) and demo's (in the tab); a quick double press of Accept
+  await control('agent-plan', { agent: 'demotwo', id: 'k2', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 12, target: 24, expire: 900 });
+  await until(() => visible('.ag-prop.corner[data-id="k2"]'), 'demotwo\'s proposal in the corner');
+  check(/Second Demo Agent\s*demotwo/.test(await text('.ag-prop.corner[data-id="k2"] .ag-prop-h')), 'a card names the agent and its id');
+  await sleep(300);
+  await control('agent-plan', { agent: 'demo', id: 'k1', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 12, target: 24, expire: 900 });
+  await until(() => page.isVisible('.ag-plist .ag-prop[data-id="k1"]'), 'demo\'s proposal in the tab');
+  await sleep(1100);                                                                   // a key answers a proposal on screen 1 s or more
+  const a0 = (await answersSent()).length;
+  await page.mouse.click(800, 450);
+  await page.keyboard.press('Alt+KeyY');
+  await page.keyboard.press('Alt+KeyY');                                               // the double press
+  await sleep(900);
+  const dbl = (await answersSent()).slice(a0);
+  check(dbl.length === 1 && dbl[0].agent === 'demo' && dbl[0].id === 'k1', 'a double press answers one proposal, the shown agent\'s: ' + JSON.stringify(dbl.map(m => m.agent + ':' + m.id)));
+  await until(async () => (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'k1').state === 'accepted', 'demo\'s k1 accepted');
+  check((await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'open', 'demotwo\'s k2 (in the corner) untouched');
+  await control('agent-withdraw', { agent: 'demo', id: 'k1' });
+  // elsewhere: two open (demotwo's and the bot's): the key answers neither and says so
+  await page.click('#wsAgentTab');
   await until(async () => !(await A()).shown, 'the tab closes');
   await control('bot-connect', { name: 'Sample Lantern Fade' });
-  await until(async () => (await page.evaluate(() => window.workspace.bot().keys.accept)) === 'Alt+Y', 'the copilot keys from The Desk');
-  await control('agent-plan', { agent: 'demo', id: 'k1', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 12, target: 24, expire: 900 });
-  await until(() => visible('.ag-prop.corner[data-id="k1"]'), 'on the Main layout the agent\'s proposal is in the corner');
-  await sleep(300);
   await control('bot-proposal', { id: 'b1', side: 'sell', kind: 'market', stop: 12, target: 24, reason: 'Sample: the made-up bot\'s signal' });
   await until(() => visible('.bt-prop[data-id="b1"]'), 'the bot\'s proposal too');
+  await sleep(1100);
   await page.screenshot({ path: path.join(SHOTS, 'agent-corner.png') });
   await page.mouse.click(800, 450);
+  const a1 = (await answersSent()).length;
   await page.keyboard.press('Alt+KeyN');
-  await until(async () => (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'k1').state === 'rejected', 'the key answered the agent\'s proposal first (shown first)');
-  const v3 = await control('v3');
-  check(v3.proposals.find(p => p.id === 'b1').state === 'open', 'the bot\'s is still open');
+  await until(async () => /More than one proposal is open: click the one you mean/.test(await page.textContent('#wsNote')), 'more than one open: the key says so on the workspace\'s line');
+  await sleep(300);
+  check((await answersSent()).length === a1 && !(await sent()).some(m => m.type === 'botAnswer'), 'and answers nothing');
+  // click Reject on demotwo's card: the bot's is the only one left, and the key answers it as 1.16.0 did
+  await page.click('.ag-prop.corner[data-id="k2"] [data-agans="reject"]');
+  await until(async () => (await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'rejected', 'k2 rejected by its button');
+  await until(async () => !(await page.$('.ag-prop[data-id="k2"]')), 'its card goes', 6000);
   await page.keyboard.press('Alt+KeyN');
-  await until(async () => (await control('v3')).proposals.find(p => p.id === 'b1').state === 'rejected', 'the next key answers the bot\'s');
+  await until(async () => (await control('v3')).proposals.find(p => p.id === 'b1').state === 'rejected', 'the bot\'s alone: the key answers it (1.16.0)');
   await until(() => page.evaluate(() => !document.querySelector('.bt-prop[data-id="b1"]:not(.bt-ended)')), 'the bot\'s card shows it ended');
   await page.keyboard.press('Alt+KeyN');
   await until(async () => /no copilot proposal to answer here/.test(await page.textContent('#wsNote')), 'with none open the workspace says so (as in 1.16.0)');
+
+  /* ---------------------------------------------------------------- the Bot tab: a double-click never confirms (review S3) */
+  console.log('the Bot tab: a double-click on Auto or Release never confirms');
+  await page.click('#wsBotTab');
+  await until(async () => (await page.evaluate(() => window.workspace.bot().shown)), 'the Bot tab opens');
+  await sleep(1500);                                                                   // its entrance
+  const botModes = async () => (await sent()).filter(m => m.type === 'botMode').length;
+  const bm0 = await botModes();
+  await page.dblclick('.bt-modes [data-mode="auto"]');
+  await sleep(500);
+  check((await botModes()) === bm0 && (await control('v3')).bot.mode !== 'auto', 'a double-click on the bot\'s Auto never confirms it');
+  await page.click('.bt-modes [data-mode="auto"]');
+  await until(async () => (await control('v3')).bot.mode === 'auto', 'a later second click confirms it, as before');
+  await page.click('.bt-modes [data-mode="shadow"]');
+  await page.click('.bt-kill');
+  await until(async () => (await control('v3')).bot.killed, 'the bot\'s kill on in one click');
+  await sleep(300);
+  await page.dblclick('.bt-kill');
+  await sleep(500);
+  check((await control('v3')).bot.killed, 'a double-click on the bot\'s Release never releases');
+  await page.click('.bt-kill');
+  await until(async () => !(await control('v3')).bot.killed, 'a later second click releases, as before');
+  await page.click('#wsBotTab');
 
   /* ---------------------------------------------------------------- the pop-out */
   console.log('the pop-out window');

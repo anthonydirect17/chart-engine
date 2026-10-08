@@ -143,8 +143,8 @@
 //   proposal on demand), /test/bot-withdraw?id=, /test/account?name=EVAL-A&connection=lost|connected|disabled,
 //   /test/restart?lost=1 (managed strategies resume, or with lost=1 cannot), /test/v3 (the v3 state as JSON).
 //   --agents=demo                   (with --v3) ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1, docs/AGENT_TAB.md):
-//                                   config.txt's `agents` list; hello says fake-0.5.0. The made-up account SIM-AG1 (Sim, checked)
-//                                   is added for an agent to take; every agent starts on Sim101 (no account file) in shadow.
+//                                   config.txt's `agents` list; hello says fake-0.5.0. The made-up accounts SIM-AG1 and SIM-AG2 (Sim, checked)
+//                                   are added for agents to take; every agent starts on Sim101 (no account file) in shadow.
 //                                   The agents listen on /agent/<id> (no Origin, header X-ChartBridge-Agent: the secret).
 //   --agent-any-time                no entry window and no flat time for the agents (smokes run at any hour)
 //   With --agents and --test-controls (POST): /test/agent-secret?agent= (tests only), /test/agent-connect?agent=&name=&build=
@@ -184,7 +184,7 @@ const V3 = !!flag('v3') && !flag('v1');
 const V3_OFF = flagValue('v3-off').split(',').map(x => x.trim()).filter(Boolean);
 const QUOTE = (V3 && !V3_OFF.includes('quoteRoots')) || (!!flag('quote-roots') && !flag('v1'));
 const AGENTS = V3 ? flagValue('agents').split(',').map(x => x.trim()).filter(Boolean) : [];   // 0.5.0: config.txt `agents`
-const AGENT_ACCOUNTS = AGENTS.length ? [{ name: 'SIM-AG1', sim: true, balance: 50000 }] : [];   // a made-up Sim account for an agent to take
+const AGENT_ACCOUNTS = AGENTS.length ? [{ name: 'SIM-AG1', sim: true, balance: 50000 }, { name: 'SIM-AG2', sim: true, balance: 50000 }] : [];   // made-up Sim accounts for agents to take
 let htfFail = '';                                  // /test/htf?fail=: the error every htf request gets (none when '')
 const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
@@ -921,7 +921,7 @@ function botUpgrade(req, sock) {
 if (V3) {
   setInterval(() => { desk.everySecond(); desk.sendAccounts(); for (const c of clients) if (c.authed && c.v3 && desk.sw.bot && desk.bot.connected) send(c, desk.botMsg()); desk.agentsBeat(); }, 1000);
   desk.closeAgentConn = c => { try { c.sock.end(); } catch (e) { /* gone */ } };
-  if (AGENTS.length) { const x = desk.acct.get('SIM-AG1'); if (x) { x.trade = true; desk.refreshAccounts(); } }   // the made-up agent account is checked for trading
+  if (AGENTS.length) { for (const n of ['SIM-AG1', 'SIM-AG2']) { const x = desk.acct.get(n); if (x) x.trade = true; } desk.refreshAccounts(); }   // the made-up agent accounts are checked for trading
   if (!flag('no-v3-seed')) {                           // made-up state for the page lanes' smokes (see the header)
     const lp = r => last[r];
     desk.placeElsewhere({ account: 'EVAL-A', root: 'MNQ', side: 'buy', kind: 'market', qty: 2, price: null });

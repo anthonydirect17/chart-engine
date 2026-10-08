@@ -151,7 +151,11 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-prop[hidden] { display: none; }
 .ag-prop.corner { width: min(390px, calc(100vw - 32px)); box-sizing: border-box; max-width: 100%; box-shadow: 0 20px 50px rgba(0, 0, 0, .6), 0 0 0 4px color-mix(in srgb, var(--ag-pur) 14%, transparent); }
 .ag-prop.ag-ended { border-color: var(--ag-line); box-shadow: none; }
-.ag-prop-h { display: flex; align-items: center; gap: 8px; }
+.ag-prop { grid-template-columns: minmax(0, 1fr); }
+.ag-prop-h { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ag-prop-h .ag-ttl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ag-prop-h .ag-lbl, .ag-prop-h .ag-cd, .ag-prop-h .ag-mark { flex: none; white-space: nowrap; }
+.ag-prop-h .ag-id { margin-left: -2px; }
 .ag-id { color: var(--ag-muted); letter-spacing: .04em; text-transform: none; }
 .ag-cd { font-weight: 600; font-size: 13px; color: var(--ag-lav2); }
 .ag-cd.late { color: var(--ag-warn); }
