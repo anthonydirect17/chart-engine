@@ -154,6 +154,7 @@
 //   risk is worked out), /test/agent-proposal?... (the same, always proposed), /test/agent-skip, /test/agent-note?agent=&kind=
 //   &text=, /test/agent-withdraw?agent=&id=, /test/agent-expire?agent=&id=&ms= (an open proposal's expiresAt moved to now+ms),
 //   /test/agents (every agent's state as JSON), /test/agent-stuck-cancel?agent=&n=2 (its next cancels not confirmed),
+//   /test/agent-mode?agent=&mode=auto (another page changed its mode),
 //   /test/agent-unlist?account=&on=1 (NinjaTrader no longer lists it), /test/agent-flat-hours?agent=&on=1 (the flat hours now),
 //   /test/agent-market-shut?on=1|0|auto (the market shut, open, or by its fixed hours), /test/agent-lose-trade?agent=&restart=1
 //   (its trade record gone while the account holds the position: the lost-trade error every 60 s until flat).
@@ -1000,6 +1001,7 @@ function agentControl(p, q, req, res) {
   /* as built (agent-channel 4d4a81f): a cancel NinjaTrader leaves unconfirmed n times; an account it no longer lists; the flat
      hours now (the flatten job on demand, with --agent-any-time); the market shut (on=1), open (on=0) or by its fixed hours
      (on=auto; --agent-any-time keeps it open); the trade record lost with a position held (restart=1: after a restart) */
+  if (p === '/test/agent-mode') { a.mode = q.get('mode') || 'shadow'; desk.agentNotify(a); return json(200, { mode: a.mode }); }   // another page changed the mode (the 0.5.2 re-review)
   if (p === '/test/agent-stuck-cancel') { a.stuckCancels = +(q.get('n') || 2); return json(200, { stuckCancels: a.stuckCancels }); }
   if (p === '/test/agent-unlist') { const n = q.get('account') || a.account; if (q.get('on') === '0') desk.unlisted.delete(n); else desk.unlisted.add(n); return json(200, { unlisted: [...desk.unlisted] }); }
   if (p === '/test/agent-flat-hours') { a.forceFlatHours = q.get('on') !== '0'; return json(200, { forceFlatHours: a.forceFlatHours }); }

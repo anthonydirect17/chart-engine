@@ -2760,6 +2760,53 @@ public static class AgentHarness
             Check(e2 != null, "0.5.2 review: once flat, the new session trades as usual (18:30 is inside its window)");
             Settle(sime);
         }
+
+        // 4. (re-review LOW B) the roll while running, then a restart: the 15:55 flatten cannot finish (its cancels are held), the
+        // 18:00:30 roll carries the open trade into Friday's session, a restart at 18:30: still flattened at once (the day file's
+        // carried line), not at Friday's 15:55
+        Fresh();
+        SessionRules("18:00", "15:25", "15:55");
+        et = new DateTime(2026, 10, 8, 12, 0, 0);
+        Advance(1000);
+        e = PlacedOn(sime, Good(NewId()));
+        Check(e != null, "re-review B: a position from Thursday's session");
+        if (e != null)
+        {
+            Fill(e, 1, 24999);
+            Advance(1000);
+            Hold = (kind, o) => kind == "cancel";   // NinjaTrader never confirms the cancels: the flatten cannot finish
+            et = new DateTime(2026, 10, 8, 15, 55, 0);
+            Last2();
+            Advance(1000);
+            Check(sime.Calls.Any(c => c.StartsWith("cancel CB#")) && PosOf(sime, mnq) == 1 && Legs(sime, e).All(IsLive), "re-review B: 15:55: the flatten sends its cancels, none confirmed; still long 1");
+            et = new DateTime(2026, 10, 8, 18, 0, 30);   // the roll, while running
+            Advance(1000);
+            Check(FileText("agent-manrae-day.txt").Contains("session\t2026-10-09") && System.Text.RegularExpressions.Regex.IsMatch(FileText("agent-manrae-day.txt"), "trade\t[0-9a-f]{8}\topen") &&
+                  System.Text.RegularExpressions.Regex.IsMatch(FileText("agent-manrae-day.txt"), "carried\t[0-9a-f]{8}"),
+                  "re-review B: the roll saves the open trade under Friday's session, with its carried line: " + FileText("agent-manrae-day.txt").Replace("\n", " | "));
+            Hold = null;
+            et = new DateTime(2026, 10, 8, 18, 30, 0);
+            Restart();
+            Mode("manrae", "auto");
+            int calls = sime.Calls.Count, from = N(page);
+            Last2();
+            Advance(2000);
+            Check(sime.Calls.Skip(calls).Count(c => c.StartsWith("cancel CB#")) == 2 && Any(page, from, "held a position from an earlier session (its 15:55 flatten did not finish): flattened by its rules"),
+                  "re-review B: a roll while running, then a restart at 18:30: the position from Thursday is flattened at once, not at Friday's 15:55: " + string.Join(" | ", sime.Calls.Skip(calls)));
+            Settle(sime);
+            Advance(2000);
+            Check(!FileText("agent-manrae-day.txt").Contains("carried\t"), "re-review B: flat: the carried line is gone from the day file");
+            Restart();
+            Mode("manrae", "auto");
+            calls = sime.Calls.Count; from = N(page);
+            Last2();
+            Advance(2000);
+            Check(!sime.Calls.Skip(calls).Any(c => c.StartsWith("cancel CB#")) && !Any(page, from, "earlier session"), "re-review B: a second restart, flat: nothing to flatten");
+            Order e3 = PlacedOn(sime, Good(NewId()));
+            Check(e3 != null, "re-review B: once flat, the new session trades as usual");
+            Settle(sime);
+        }
+        Hold = null;
         et = new DateTime(2026, 10, 9, 10, 0, 0);
     }
 }

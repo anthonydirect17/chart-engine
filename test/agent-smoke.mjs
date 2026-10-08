@@ -240,7 +240,21 @@ try {
     'a LIVE account is asked once, in the page, naming the mode it keeps (ChartBridge 0.5.2): ' + await text('#agView [data-k="acctAsk"]'));
   check((await sent()).length === before, 'nothing sent before the answer');
   await page.screenshot({ path: path.join(SHOTS, 'agent-live-ask.png'), clip: { x: 0, y: 0, width: 640, height: 900 } });
+  /* the 0.5.2 re-review: another page changes the mode while the question is open: it closes with a note (never redrawn with
+     the new mode), nothing is sent, and Set asks again, naming the mode now */
+  const askedSaid = await text('#agView [data-k="acctAsk"]'), wasMode = (await agentsNow()).find(x => x.agent === 'demo').mode;
+  const otherMode = wasMode === 'auto' ? 'copilot' : 'auto', otherName = otherMode === 'auto' ? 'Auto' : 'Copilot';
+  await control('agent-mode', { agent: 'demo', mode: otherMode });
+  await until(async () => !(await visible('#agView [data-k="acctAsk"]')), 'the open question closes when the mode changes');
+  check(new RegExp('^demo went to ' + otherName + ' while the question said (Shadow|Copilot|Auto): nothing was sent\\. Choose Set to be asked again\\.$').test(await text('#agView [data-k="acctWhy"]')) && (await sent()).length === before,
+    'the mode changed under the open question (it said: ' + askedSaid + '): closed with a note, nothing sent: ' + await text('#agView [data-k="acctWhy"]'));
+  await page.click('#agView [data-act="acctSave"]');
+  check(await visible('#agView [data-k="acctAsk"]') && new RegExp('Agent demo will trade LIVE account EVAL-A in ' + otherName + '\\. Continue\\?').test(await text('#agView [data-k="acctAsk"]')),
+    'Set asks again, naming the mode now: ' + await text('#agView [data-k="acctAsk"]'));
   await page.click('#agView [data-act="acctNo"]');
+  await control('agent-mode', { agent: 'demo', mode: wasMode });
+  await until(async () => (await agentsNow()).find(x => x.agent === 'demo').mode === wasMode, 'demo back in ' + wasMode);
+  await sleep(300);
   await page.click('#agView [data-act="acctOpen"]');
   await page.selectOption('#agView [data-k="acctSel"]', 'SIM-AG1');
   await page.click('#agView [data-act="acctSave"]');

@@ -2543,7 +2543,10 @@ Where the contract left a detail open, the safest simple choice was taken and is
   a closed market (0.5.2 review: the calendar's closures and halts too, see "The market shut") the job sends nothing and
   closes the position at the next open. A position whose trade record began in an earlier session (0.5.2 review: a restart
   after 18:00 with a flatten that did not finish) is flattened at once, whatever the window says ("held a position from an
-  earlier session (its 15:55 flatten did not finish): flattened by its rules"); the closed-market rule still applies. It looks at the served contract and at any other contract month its own open trade holds (review A5: the trade
+  earlier session (its 15:55 flatten did not finish): flattened by its rules"); the closed-market rule still applies. The
+  roll keeps such a record as `carried<TAB><tag>` in the day file (a dropped stale record too, at a start), so a roll while
+  running followed by a restart still flattens it (the 0.5.2 re-review); the line goes when the agent is flat on its roots.
+  ChartBridge 0.5.1 does not know the line and treats the file as unreadable (no entries for that agent that run). It looks at the served contract and at any other contract month its own open trade holds (review A5: the trade
   follows its executions in any month of its roots). If the account is missing from NinjaTrader's list the job is kept, the
   pages get the NOT FLAT error every 10 s ("account not listed by NinjaTrader"), and the job goes on when the account is back,
   after 18:00 included (review A-S6).
@@ -2650,7 +2653,8 @@ Where the contract left a detail open, the safest simple choice was taken and is
   for a chosen root is its hard ceiling; for a root not chosen only 0 is accepted. In the rules file a key left out keeps its
   default and a root without a `maxQty` line gets its ceiling. A rules change never lifts a loss stand-down for that day; the
   18:00 ET roll resets trades, losses, the stand-down and plan ids, and drops ended proposals (at most 50 ended ones are kept
-  between rolls). The loss stand-down is kept in the day file (`standDown<TAB><why>`), so a restart keeps it.
+  between rolls). The loss stand-down is kept in the day file (`standDown<TAB><why>`), so a restart keeps it; so are the
+  trades of an earlier session not yet flat (`carried<TAB><tag>`, 0.5.2).
 - **A start with a position** (review A-N5): 5 s after a start, an agent that owns a pair (its open trade, or its legs with a
   position) gets a `status` `error` to the pages ("holds a position or orders ... since ChartBridge started ... check
   NinjaTrader"); outside its trading hours it is flattened by its rules at once. A rules file that cannot be read gives the

@@ -638,9 +638,12 @@ function create(o) {
     const can = AC.rulesChangeable(a, { workingEntry: work, openProposals: open });
     put(q('[data-k="acctOpen"]'), 'disabled', !S.signedIn || !can.ok);
     attr(q('[data-k="acctOpen"]'), 'title', can.ok ? 'Any account ChartBridge says is tradable, except the bot\'s, the copier\'s and another agent\'s; only while the agent is flat' : can.why.replace('change its rules', 'choose its account'));
+    /* the 0.5.2 re-review: the question names the mode the agent had when it opened, and is never redrawn with another one; the
+       mode changed meanwhile (another page): it closes with a note, nothing sent, and Set asks again */
+    if (S.acctAsk) { const stale = AC.askStale(S.acctAskMode, a); if (stale) { S.acctAsk = ''; S.acctAskMode = ''; put(q('[data-k="acctWhy"]'), 'textContent', stale); } }
     put(q('[data-k="acctEdit"]'), 'hidden', !S.acctEdit || !!S.acctAsk);
     put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
-    if (S.acctAsk) { S.acctAskMode = a.mode; put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(a, S.acctAsk, S.version)); }   // keepMode: the mode this question names
+    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(Object.assign({}, a, { mode: S.acctAskMode }), S.acctAsk, S.version));   // keepMode: the mode this question names
     setHtml(q('[data-k="rules"]'), AC.rulesLines(a.rules).map(([k, v]) => '<span>' + esc(k) + '</span><span class="mono">' + esc(v) + '</span>').join('') || '<span>Rules</span><span>not known yet</span>');
     const ro = q('[data-k="rulesOpen"]');
     put(ro, 'disabled', !S.signedIn || !can.ok);
@@ -978,9 +981,15 @@ function create(o) {
       const name = q('[data-k="acctSel"]').value;
       const r = AC.accountChange(a, name, AC.accountChoices(S.accounts, a, others()), ctxNow(a));
       if (r.error) { put(q('[data-k="acctWhy"]'), 'textContent', r.error); return; }
-      if (r.live) { S.acctAsk = name; renderPanel(); const y = q('[data-act="acctYes"]'); if (y) y.focus(); return; }   // asked once, in the page
+      if (r.live) { S.acctAsk = name; S.acctAskMode = a.mode; put(q('[data-k="acctWhy"]'), 'textContent', ''); renderPanel();   // the mode recorded once, as the question opens
+        const y = q('[data-act="acctYes"]'); if (y) y.focus(); return; }   // asked once, in the page
       sendAccount(name);
-    } else if (k === 'acctYes') { if (S.acctAsk) sendAccount(S.acctAsk); }
+    } else if (k === 'acctYes') {
+      if (!S.acctAsk) return;
+      const stale = AC.askStale(S.acctAskMode, a);   // checked again at the click (an agent message may not have redrawn yet)
+      if (stale) { S.acctAsk = ''; S.acctAskMode = ''; put(q('[data-k="acctWhy"]'), 'textContent', stale); renderPanel(); return; }
+      sendAccount(S.acctAsk);
+    }
     else if (k === 'rulesOpen') openRules();
     else if (k === 'rulesCancel') { S.rulesEdit = false; rulesWhy(''); renderPanel(); }
     else if (k === 'rulesSave') saveRules();
