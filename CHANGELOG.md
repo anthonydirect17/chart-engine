@@ -54,6 +54,11 @@ every lead's default in its "as built" list. The chart's own version is unchange
   market), and the error says which. The close cap counts each close; a trade the account holds the other way is ended after
   3 s with its realized part booked; unconfirmed cancels stop after 30 minutes with a final error; the protective exit's name
   is at most 43 characters; a failed execution read is not taken as the replay.
+- **Round 5.** The stop ChartBridge places again over a shut market is the agent's protective leg: after a restart the pair
+  stays the agent's, the stop stays, Anthony gets an error every minute, and at the open the flatten closes it. That stop is
+  never placed beside a market close that still works, and a pair the agent does not own never loses it while it holds a
+  position. Only the cancel step waits for a trading market; a close that cannot go puts the stop back at once. The agent
+  never gets agentState before its welcome; a trade never crosses zero, so its booked result is always from real fills.
 - **Tests.** `nt8/check/AgentHarness.cs` (inside `npm run check:orders`) runs every refusal and every timer; IntegrationHarness
   X13 where the lanes meet; `test/fake-agent.mjs` is a made-up agent client with its test; `test/nt8-agents.test.js` guards the
   source. The bot channel, the copier and every other lane behave as in 0.4.3 except where the contract requires (refusing an

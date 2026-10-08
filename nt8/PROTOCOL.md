@@ -2460,14 +2460,24 @@ Where the contract left a detail open, the safest simple choice was taken and is
   known): 17:00 to 18:00 New York time Monday to Thursday, and Friday 17:00 to Sunday 18:00. While shut the flatten sends
   nothing at all (no cancel, no close: its stop and target stay) and the NOT FLAT error repeats every 60 s; it goes on at the
   open.
-- **The market trading in fact** (review A C1): before the flatten cancels any leg of a position it owns, the root must have
+- **The market trading in fact** (review A C1, D3): before the flatten cancels any leg of a position it owns, the root must have
   traded in the last 5 s (an early close, a holiday or a halt). Otherwise its stop and target stay, NOT FLAT says "market not
-  trading: the stop and target stay" every 10 s, and it tries again each pass. When the shut hours arrive after its legs were
+  trading: the stop and target stay" every 10 s, and it tries again each pass. Only the cancel step waits for it: once its
+  cancels were sent, the market close goes whatever the feed shows. A close that ends unfilled in open hours (rejected,
+  cancelled) puts the stop back at once (as below), the error says so, and the next try waits 30 s with that stop in place. When the shut hours arrive after its legs were
   already cancelled (the close not filled), the job places the stop again (lead's default: a position is never left without a
   stop over a closed market): a stop market, GTC, `CB#<tag> ag:<id> stop p<price>` (role `stop`), at the agent's own stop price
   (the one nearest the market when the job started), for what it holds (never more than its trade), once per shut spell. If
   that price is already through the last trade it is not placed, and the NOT FLAT text says so; the text always says which.
-  At the open the job cancels it with the rest and closes.
+  It is never placed while the flatten's own market close still works (that close may fill at the open; review D2): the text
+  says so. At the open the job cancels it with the rest and closes. That stop counts as the agent's protective leg (review D1):
+  with a position it would close (a sell stop under a long, a buy stop over a short) the pair stays the agent's, also after a
+  restart; a flatten of a pair the agent does not own never cancels it while the account holds a position there, and cancels
+  it once the pair is flat (lead's default: flat, it could only open a position). A position whose only working orders are the
+  agent's own stop or legs, with no trade followed after the executions were read again (a restart lost the record), raises
+  the lost-trade error every 60 s until flat ("agent <id> holds <n> on <account> <root> with no trade record (ChartBridge
+  restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time"). A leg
+  counts for the owner only when it would close the position the account holds.
 - **The close cap counts each close** (review A C2): with no trade followed, every close's fill comes off the stop legs' count;
   when the agent's part is closed and the account still holds more, the job ends with a warning ("agent <id>'s <n> closed; the
   rest (<m>) is not agent <id>'s: ChartBridge did not close it"). Every
@@ -2492,7 +2502,9 @@ Where the contract left a detail open, the safest simple choice was taken and is
   the other side (it ended where ChartBridge could not see it, and the account holds someone else's): the pair is not the
   agent's at once (the owner lock and the flatten), and once that has held for 3 s with no fill NinjaTrader shows ahead of its
   event the trade is ended with its realized part booked (what its fills closed, at the average of its opening fills; review
-  A C4), then the error above. An unowned pair's flatten only ever cancels the agent's own entry and legs (review A-N2). The check is in `PlaceOrderLocked`
+  A C4), then the error above. A trade never crosses zero (review D5): a fill on the other side bigger than the trade closes
+  the trade at that fill's own price, and the rest is not the agent's, so a booked result always comes from its actual
+  executions. An unowned pair's flatten only ever cancels the agent's own entry and legs (review A-N2). The check is in `PlaceOrderLocked`
   right after the account and the instrument are found (the page, Order Strategies, the bot and every agent) and in the
   copier's `Eligible` (a skip labelled `agent`).
 - **A page order that only reduces** the agent's position passes the owner lock as an exit (lead's default, review A-S5): a
@@ -2548,7 +2560,8 @@ Where the contract left a detail open, the safest simple choice was taken and is
   on a pair the agent owns reaches it, ownership read before the fill is booked; a fill of the page's order there carries the
   id the pages saw (kept as its order event passes). `agentState` is built with no lock of the agent's held and a sequence
   number taken first; its lock only compares and sends, so it never holds a lock across NinjaTrader's collection locks (review
-  A C3). `welcome` is checked every pass against the caps enforced and sent again when they changed. The snapshot
+  A C3). `helloed` is set only after the welcome is queued, at every hello, so no `agentState` reaches the agent before its
+  welcome (review D4). `welcome` is checked every pass against the caps enforced and sent again when they changed. The snapshot
   sends only the agent's orders on the snapshot's roots. `orderName` is the order's name as NinjaTrader holds it (null if it has
   none). The pages' messages are unchanged (no `orderName`; their `role` stays `other` for the flat close and the protective
   exit).
