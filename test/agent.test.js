@@ -405,7 +405,7 @@ test('S2 and N5: a refused duplicate keeps its own line; Accept needs an expiry'
   assert.ok(P.answer('demo', 'p1', 'reject', T0).msg, 'Reject still goes');
 });
 
-test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the one copilot-key handler; versions 1.17.0', () => {
+test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the one copilot-key handler; versions (1.17.0, now 1.18.0)', () => {
   const idx = read('live', 'index.html'), pop = read('live', 'agent.html'), bot = read('live', 'bot.js'), ws = read('live', 'workspace.js');
   assert.ok(idx.indexOf('agent-core.js') > 0 && idx.indexOf('agent-core.js') < idx.indexOf('src="bot.js"'), 'agent-core.js before bot.js (the router exists when the Bot tab starts)');
   assert.ok(idx.indexOf('src="agent.js"') > idx.indexOf('src="bot.js"') && idx.indexOf('src="agent.js"') < idx.indexOf('src="workspace.js"'));
@@ -413,9 +413,9 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.17.0');
-  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.17\.0'/);
-  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.17\.0/);
+  assert.equal(JSON.parse(read('package.json')).version, '1.18.0');   // 1.18.0: the Account tab's Hide and Show on top of 1.17.0
+  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.18\.0'/);
+  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.18\.0/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 
