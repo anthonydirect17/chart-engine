@@ -557,6 +557,230 @@ const p2 = n => (n < 10 ? '0' : '') + n;
 const etClock = ms => { const t = etParts(ms); return p2(t.h) + ':' + p2(t.mi); };
 const etClockSec = ms => { const t = etParts(ms); return p2(t.h) + ':' + p2(t.mi) + ':' + p2(t.s); };
 
+/* ======================================================================== the light (board F, Anthony 2026-10-08) */
+/*
+ * One slow light circles the borders of the panels where the agent's attention is, in a colour that says what he is doing.
+ * Everything here comes from the messages the page already gets (contract section 7: `agent`, `agentPlan`, `agentNote`,
+ * `agentProposal`, the agent's own orders and fills, ChartBridge's refusals); nothing is guessed. The page draws it with CSS
+ * only and works it out again only when a message arrives (ChartBridge sends `agent` once a second while connected, so a
+ * state older than its hold goes back to watching on the next one).
+ */
+/** The colours of the light: a step of the tracker, or an outcome. */
+const LIGHT = Object.freeze({
+  screen: '#5df2ff',     // Screen: watching
+  eyes: '#8f7bff',       // Eyes: a look
+  judgment: '#c81fe0',   // Judgment: a plan (Anthony 2026-10-08: deeper magenta)
+  checks: '#ffd23f',     // Checks: his rules being checked
+  bridge: '#3dff9a',     // ChartBridge: placing, filled, a go, a trade in profit, a target
+  passed: '#ff8a2a',     // he passed, a plan expired or was rejected
+  no: '#ff3b5c',         // a hard no (refused), a trade under water
+});
+/** The tracker's five steps, in order: [key, label, what it does]. */
+const STEPS = Object.freeze([['screen', 'Screen', 'bars, delta, levels'], ['eyes', 'Eyes', 'worth a look?'], ['judgment', 'Judgment', 'plan or skip'], ['checks', 'Checks', 'his rules'], ['bridge', 'ChartBridge', 'places it']]);
+/** The panels the light may circle. */
+const PANELS = Object.freeze(['acct', 'pipe', 'chart', 'prop', 'stream', 'pnl']);
+/** How long a state holds with nothing newer (ms): a look, his thinking or a Shadow plan; an outcome (passed, refused, a go, an exit). */
+const LIGHT_HOLD = Object.freeze({ look: 120000, outcome: 30000 });
+/** A lap of the light: while he decides, and in a trade (Anthony 2026-10-08: 13 s and 9 s). */
+const LAP_MS = Object.freeze({ slow: 13000, fast: 9000 });
+
+const refusedResult = r => /^refused/.test(str(r));
+/** The tone of one proposal's end: accepted is a go, anything else ended it without a trade. */
+const endTone = s => (s === 'accepted' ? 'bridge' : 'passed');
+const END_WORDS = { accepted: 'Accepted', rejected: 'Rejected', withdrawn: 'Withdrawn', 'not answered': 'Not answered', expired: 'Expired' };
+
+/**
+ * What the agent is doing now, for the light. x:
+ *   agent         its `agent` message (mode, enabled, connected, killed, standDown, position)
+ *   notes, plans  its `agentNote` and `agentPlan` messages (any order)
+ *   open          its open proposals (`agentProposal` state open), each with answered ('accept', 'reject' or ''): this page's
+ *                 answer while it waits for ChartBridge
+ *   ends          proposals this window saw end: [{ id, state, at }]
+ *   workingEntry  ChartBridge works an entry of its own (by "agent:<id>")
+ *   exits         its flat exits this window saw: [{ at, pnl }] (pnl: the change in its P&L today, or null)
+ *   openPnl       its open P&L in dollars (null: not known)
+ *   now           UTC ms
+ * Returns { phase, tone, color, panels, fast, lapMs, step, said, at }: phase one of quiet, stopped, trade, placed, check,
+ * plan, look, think, passed, refused, go, exit, watch; tone a key of LIGHT; panels the ones lit (PANELS' names); step the
+ * tracker's step now (0 to 4, -1 for none); said the line under "What he is doing now"; at the event's time (or null).
+ */
+function lightState(x) {
+  const o = x || {}, a = o.agent || null, now = isNum(o.now) ? o.now : 0;
+  const out = (phase, tone, panels, step, said, at) => ({ phase, tone, color: LIGHT[tone], panels, fast: phase === 'trade', lapMs: phase === 'trade' ? LAP_MS.fast : LAP_MS.slow, step, said, at: isNum(at) ? at : null });
+  if (!a) return out('quiet', 'screen', [], -1, 'No agent to show', null);
+  const q = a.position && isNum(a.position.qty) ? a.position.qty : 0;
+  if (q) {                                             // a position: the light goes to the chart and the P&L, its colour the open P&L
+    const p = isNum(o.openPnl) ? o.openPnl : null;
+    const pos = (q > 0 ? 'long ' : 'short ') + Math.abs(q) + (a.position.root ? ' ' + a.position.root : '');
+    if (p === null) return out('trade', 'screen', ['chart', 'pnl'], 4, 'In a trade, ' + pos + ': open P&L not known yet', null);
+    return out('trade', p >= 0 ? 'bridge' : 'no', ['chart', 'pnl'], 4, 'In a trade, ' + pos + (p >= 0 ? ': in profit' : ': under water'), null);
+  }
+  if (a.enabled === false) return out('quiet', 'screen', [], -1, 'Off in ChartBridge', null);
+  if (a.killed) return out('stopped', 'no', ['acct'], -1, 'Kill switch on: no agent orders', null);
+  if (a.standDown) return out('stopped', 'no', ['acct'], -1, 'Stood down: ' + a.standDown, null);
+  if (o.workingEntry) return out('placed', 'bridge', ['prop', 'chart'], 4, 'ChartBridge placed his entry: waiting for a fill', null);
+  const open = (Array.isArray(o.open) ? o.open : []).filter(p => p && p.state === 'open');
+  const accepting = open.find(p => p.answered === 'accept');
+  if (accepting) return out('check', 'checks', ['acct', 'prop'], 3, 'Accepted: ChartBridge checks it against his rules', accepting.at);
+  if (open.length) return out('plan', 'judgment', ['pipe', 'prop'], 2, open.length > 1 ? open.length + ' plans are waiting for you' : 'A plan is waiting for you', open[0].at);
+  if (!a.connected) return out('quiet', 'screen', [], -1, 'Not connected: no agent program running', null);
+  /* the newest event still inside its hold */
+  const ev = [];
+  for (const n of Array.isArray(o.notes) ? o.notes : []) {
+    if (!n || !isNum(n.at)) continue;
+    if (n.kind === 'look') ev.push({ at: n.at, hold: LIGHT_HOLD.look, r: ['look', 'eyes', ['pipe', 'stream'], 1, 'He took a look'] });
+    else if (n.kind === 'thinking') ev.push({ at: n.at, hold: LIGHT_HOLD.look, r: ['think', 'judgment', ['pipe', 'stream'], 2, 'Judgment is weighing it'] });
+  }
+  const ends = new Map((Array.isArray(o.ends) ? o.ends : []).filter(e => e && typeof e.id === 'string').map(e => [e.id, e]));
+  for (const m of Array.isArray(o.plans) ? o.plans : []) {
+    if (!m || !isNum(m.at)) continue;
+    const res = str(m.result), what = (m.setup ? ': ' + m.setup : '');
+    if (m.action === 'skip' || res === 'skipped') ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['passed', 'passed', ['prop', 'stream'], 2, 'He passed' + what] });
+    else if (refusedResult(res)) ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['refused', 'no', ['acct', 'prop'], 3, 'Refused by ChartBridge: ' + res.replace(/^refused:?\s*/, '')] });
+    else if (res === 'shadow') ev.push({ at: m.at, hold: LIGHT_HOLD.look, r: ['plan', 'judgment', ['pipe', 'prop'], 2, 'A plan in Shadow: nothing placed'] });
+    else if (res === 'placed') ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['go', 'bridge', ['prop', 'stream'], 4, 'Placed by ChartBridge'] });
+    else if (res === 'proposed' && ends.has(m.id)) {
+      const e = ends.get(m.id), at = isNum(e.at) ? e.at : m.at;
+      ev.push({ at, hold: LIGHT_HOLD.outcome, r: [e.state === 'accepted' ? 'go' : 'passed', endTone(e.state), ['prop', 'stream'], e.state === 'accepted' ? 4 : 2, 'Plan ' + (END_WORDS[e.state] || e.state).toLowerCase()] });
+    }
+  }
+  for (const e of Array.isArray(o.exits) ? o.exits : []) {
+    if (!e || !isNum(e.at)) continue;
+    const p = isNum(e.pnl) ? e.pnl : null;
+    ev.push({ at: e.at, hold: LIGHT_HOLD.outcome, r: ['exit', p !== null && p < 0 ? 'no' : 'bridge', ['pipe', 'pnl'], 4, 'Out of the trade' + (p !== null ? ': ' + (fmtUsd(p) || '$0.00') : '')] });
+  }
+  const live = ev.filter(e => now - e.at <= e.hold).sort((p, r) => r.at - p.at);
+  if (live.length) { const r = live[0].r; return out(r[0], r[1], r[2], r[3], r[4], live[0].at); }
+  return out('watch', 'screen', ['pipe'], 0, a.mode === 'shadow' ? 'Watching (Shadow: nothing is placed)' : 'Watching', null);
+}
+
+/* ======================================================================== the stream and its decision drawer */
+/**
+ * The tone (a key of LIGHT) and the tag of one stream row. row: { type: 'note' | 'plan' | 'fill' | 'exit', m, end (a proposal's
+ * end this window saw: { state }), waiting (its proposal is open here) }.
+ */
+function rowTone(row) {
+  const r = row || {}, m = r.m || {};
+  if (r.type === 'note') return { tone: { look: 'eyes', thinking: 'judgment' }[m.kind] || 'screen', tag: (NOTE_NAME[m.kind] || 'Note').toUpperCase() };
+  if (r.type === 'fill') return { tone: 'bridge', tag: 'FILL' };
+  if (r.type === 'exit') return { tone: isNum(m.pnl) && m.pnl < 0 ? 'no' : 'bridge', tag: 'EXIT' };
+  const res = str(m.result);
+  if (m.action === 'skip' || res === 'skipped') return { tone: 'passed', tag: 'PASS' };
+  if (refusedResult(res)) return { tone: 'no', tag: 'REFUSED' };
+  if (res === 'placed') return { tone: 'bridge', tag: 'PLAN' };
+  if (res === 'proposed' && r.end) return { tone: endTone(r.end.state), tag: 'PLAN' };
+  return { tone: 'judgment', tag: 'PLAN' };
+}
+/**
+ * His full record of one decision, for the drawer: { tag, tone, time, title, words, facts: [[label, value]], words2 } with only
+ * what the channel carries (a field it does not carry is left out, never filled in). o: { fmtPx(price, root), tick(root),
+ * pointValue(root), sideWord }. The contract has no "for and against", no notebook rule cited by a plan, and no time or cost
+ * of his thinking: none of those is shown.
+ */
+function decisionRecord(row, o) {
+  const r = row || {}, m = r.m || {}, f = o || {};
+  const px = (p, root) => (isNum(p) ? (typeof f.fmtPx === 'function' ? f.fmtPx(p, root) : String(p)) : '');
+  const tk = root => (typeof f.tick === 'function' && f.tick(root) > 0 ? f.tick(root) : 0.25);
+  const t = rowTone(r), facts = [];
+  const add = (k, v) => { if (v !== '' && v !== null && v !== undefined) facts.push([k, String(v)]); };
+  const time = isNum(m.at) ? etClockSec(m.at) : isNum(m.t) ? etClockSec(m.t) : '';
+  if (r.type === 'note') {
+    add('Logged', time ? time + ' ET' : '');
+    return { tag: t.tag, tone: t.tone, time, title: { look: 'A look', thinking: 'His thinking', lesson: 'A lesson', notebook: 'His notebook', status: 'Status' }[m.kind] || 'A note', words: str(m.text), pre: m.kind === 'notebook', facts };
+  }
+  if (r.type === 'fill') {
+    add('Filled', (m.side === 'buy' ? 'Bought ' : 'Sold ') + m.qty + ' ' + str(m.root) + ' at ' + px(m.p, m.root));
+    add('Time', time ? time + ' ET' : '');
+    add('Account', str(m.account));
+    return { tag: t.tag, tone: t.tone, time, title: (m.side === 'buy' ? 'Bought ' : 'Sold ') + m.qty + ' ' + str(m.root) + ' at ' + px(m.p, m.root), words: '', facts };
+  }
+  if (r.type === 'exit') {
+    const dir = m.dir > 0 ? 'Long' : 'Short';
+    add('Trade', dir + ' ' + m.qty + ' ' + str(m.root));
+    add('In', px(m.pIn, m.root) + (isNum(m.tIn) ? ' at ' + etClockSec(m.tIn) : ''));
+    add('Out', px(m.pOut, m.root) + (isNum(m.tOut) ? ' at ' + etClockSec(m.tOut) : ''));
+    add('Result', isNum(m.pnl) ? (fmtUsd(m.pnl) || '$0.00') + ' before fees' : '');
+    if (isNum(m.tIn) && isNum(m.tOut) && m.tOut >= m.tIn) add('Held', durationText(Math.round((m.tOut - m.tIn) / 1000)));
+    return { tag: t.tag, tone: t.tone, time: isNum(m.tOut) ? etClockSec(m.tOut) : time, title: 'Out of ' + dir.toLowerCase() + ' ' + m.qty + ' ' + str(m.root) + (isNum(m.pnl) ? ', ' + (fmtUsd(m.pnl) || '$0.00') : ''), words: '', facts };
+  }
+  /* a plan or a skip */
+  const line = planLine(m), res = str(m.result), root = str(m.root);
+  if (m.action === 'skip' || res === 'skipped') {
+    add('Decision', 'skip, no trade');
+    add('Setup', str(m.setup));
+    return { tag: t.tag, tone: t.tone, time, title: 'He passed' + (m.setup ? ': ' + m.setup : ''), words: str(m.reason), facts };
+  }
+  const lp = legPrices(m, tk(root));
+  const at = m.kind === 'stopLimit' ? 'stop-limit ' + px(m.price, root) + ', limit ' + px(m.limitPrice, root) : isNum(m.price) ? 'limit ' + px(m.price, root) : '';
+  add('Entry', at ? (m.side === 'buy' ? 'Buy ' : m.side === 'sell' ? 'Sell ' : '') + (isInt(m.qty) ? m.qty + ' ' : '') + root + ', ' + at : '');
+  add('Stop', isInt(m.stopTicks) ? m.stopTicks + ' ticks' + (lp.stop !== null ? ', ' + px(lp.stop, root) : '') : '');
+  add('Target', isInt(m.targetTicks) ? m.targetTicks + ' ticks' + (lp.target !== null ? ', ' + px(lp.target, root) : '') : '');
+  add('Risk', isNum(m.riskDollars) ? fmtUsd(m.riskDollars).replace(/^\+/, '') + (isInt(m.stopTicks) && isInt(m.targetTicks) && m.stopTicks ? ', reward ' + (m.targetTicks / m.stopTicks).toFixed(2) + ' to 1' : '') : '');
+  add('Entry lives', isInt(m.expireSec) ? durationText(m.expireSec) : '');
+  add('Setup', str(m.setup));
+  add('Confidence', isNum(m.confidence) ? m.confidence.toFixed(2) : '');
+  add('His rules', refusedResult(res) ? 'refused by ChartBridge: ' + res.replace(/^refused:?\s*/, '') : res === 'shadow' ? 'passed ChartBridge\'s checks (Shadow: nothing placed)' : res === 'proposed' || res === 'placed' ? 'passed ChartBridge\'s checks' : '');
+  if (res === 'proposed' || r.proposal) {
+    const p = r.proposal || {};
+    add('Proposal', r.waiting ? 'waiting for you' : r.end ? (END_WORDS[r.end.state] || r.end.state) : 'proposed');
+    if (isNum(p.seenAt)) add('You saw it', etClockSec(p.seenAt) + ' ET');
+    if (isNum(p.answeredAt)) add('You answered', etClockSec(p.answeredAt) + ' ET' + (isNum(p.seenAt) ? ', in ' + ((p.answeredAt - p.seenAt) / 1000).toFixed(1) + ' s' : ''));
+    else if (r.end && r.end.react) add('You answered', r.end.react.replace(/^ in /, 'in '));
+    if (isNum(p.expiresAt)) add('Open until', etClockSec(p.expiresAt) + ' ET');
+  }
+  if (res === 'placed') add('ChartBridge', 'placed it (Auto)');
+  return { tag: t.tag, tone: t.tone, time, title: line.title || 'A plan', words: str(m.reason), facts };
+}
+
+/* ======================================================================== the session trail and the room */
+/**
+ * His session as a trail from the rules' entryFrom to flatAt (09:45 to 15:55 by default), New York time. now and each event
+ * in UTC ms; events [{ at, mark, tone, title }]. Returns { from, to, nowPct (0 to 100, null outside the trading day's
+ * clock), hours: [{ label, pct }], marks: [{ pct, mark, tone, title }] } (marks outside the session are left out).
+ */
+function sessionTrail(rules, now, events) {
+  const r = parseRules(rules) || {};
+  const from = minutes(r.entryFrom) !== null ? r.entryFrom : DEFAULT_RULES.entryFrom, to = minutes(r.flatAt) !== null ? r.flatAt : DEFAULT_RULES.flatAt;
+  const a = minutes(from), b = minutes(to), span = Math.max(1, b - a);
+  const minOf = ms => { const t = etParts(ms); return t.h * 60 + t.mi + t.s / 60; };
+  const pct = m => Math.round(Math.min(100, Math.max(0, (m - a) / span * 100)) * 100) / 100;
+  const hours = [{ label: from, pct: 0 }];
+  for (let h = Math.floor(a / 60) + 1; h * 60 < b; h++) if (h * 60 - a >= 30 && b - h * 60 >= 30) hours.push({ label: p2(h) + ':00', pct: pct(h * 60) });
+  hours.push({ label: to, pct: 100 });
+  const marks = [];
+  for (const e of Array.isArray(events) ? events : []) {
+    if (!e || !isNum(e.at)) continue;
+    const m = minOf(e.at);
+    if (m < a || m > b) continue;
+    marks.push({ pct: pct(m), mark: str(e.mark).slice(0, 1) || '.', tone: LIGHT[e.tone] ? e.tone : 'screen', title: str(e.title) });
+  }
+  const n = isNum(now) ? minOf(now) : null;
+  return { from, to, nowPct: n === null ? null : pct(n), hours, marks };
+}
+/**
+ * His account's room, from the Account page's limit state (AccountsCore.limitState: ChartBridge's roomDrawdown and
+ * roomDailyLoss, The Desk's limits): [{ key, label, room, limit, leftPct (0 to 100 or null), why }]. Never estimated: a room
+ * not reported has its why (ChartBridge's own words when it gives them). The channel carries no profit target, so there is
+ * no "to target" line.
+ */
+function roomLines(account, limit) {
+  const a = account || {}, s = limit || {};
+  const line = (key, label, x, why) => {
+    const room = x && isNum(x.room) ? x.room : null, lim = x && isNum(x.limit) && x.limit > 0 ? x.limit : null;
+    return { key, label, room, limit: lim, leftPct: room !== null && lim ? Math.round(Math.min(100, Math.max(0, room / lim * 100))) : null, why: room === null ? why : '' };
+  };
+  return [
+    line('dd', 'Max loss room', s.dd, str(a.roomDrawdownWhy) || 'Not reported for this account'),
+    line('dl', 'Daily limit left', s.dl, str(a.roomDailyLossWhy) || 'No daily loss limit known'),
+  ];
+}
+
+/* ======================================================================== the motion switch */
+const MOTION_KEY = 'live-agent-motion-v1';
+/** The tab's Motion switch as kept in this browser: 'full' (the default) or 'off'. storage may be null or throw. */
+function motionPref(storage) { try { return storage && storage.getItem(MOTION_KEY) === 'off' ? 'off' : 'full'; } catch (e) { return 'full'; } }
+function setMotionPref(storage, v) { try { if (storage) storage.setItem(MOTION_KEY, v === 'off' ? 'off' : 'full'); } catch (e) { /* blocked: kept for this page only */ } return v === 'off' ? 'off' : 'full'; }
+
 /* ======================================================================== copilot keys: one handler for the bot and every agent */
 /* After a key answer the keys rest this long; a proposal must have been on screen this long before a key may answer it
    (the review of 19e9ef0, B1: a double press must never answer a second, different proposal). */
@@ -650,5 +874,6 @@ return {
   agentOfOrder, isAgentMark, workingEntries, ownsText, pairOwner, pageExitPasses, lockText,
   fmtUsd, positionText, beatText, statusText, stateOf, stripModel, noticesFrom, etClock, etClockSec,
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
+  LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightState, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
 };
 });

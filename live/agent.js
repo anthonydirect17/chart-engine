@@ -1,9 +1,11 @@
 /*
  * AgentDesk: the Agent tab (chart page 1.17.0; ChartBridge 0.5.0's agent channel, contract AGENT_CHANNEL v1,
  * docs/AGENT_TAB.md). Where Anthony watches and controls his AI trading agents (Manrae is the first; the tab serves any
- * number). The logic is live/agent-core.js (AgentCore); this file draws it. The look starts from the Manrae training
- * viewer (Anthony 2026-10-08: "looks great and is a great foundation"): mono labels in lavender, purple lines, the
- * decision panel's quote blocks and confidence meter, the log's colored kinds.
+ * number). The logic is live/agent-core.js (AgentCore); this file draws it. The look is board F of Anthony's mockups
+ * (2026-10-08, "love it, lets build F into the real agent tab"): a blue-black ground, cyan panels, Chakra Petch and JetBrains
+ * Mono, purple and red only on a few buttons, chips and words, and one slow light that circles the panels where the agent's
+ * attention is, in a colour that says what he is doing (AgentCore.lightState). Every stream row is a button that opens his
+ * full record of that decision in a drawer over the right column.
  *
  *   const desk = AgentDesk.create({ v3, headers, feed, storage, els: { tab, view }, ... });
  *
@@ -16,8 +18,13 @@
  *     entry from the plan's own numbers, inside the agent's rules. The mode, the kill switch, the rules, the account and the
  *     answers are the only agent messages this page sends, and ChartBridge checks every one.
  *   - Kill: on in one click, always; release and Auto ask a second click within 4 s (as the Bot tab). A LIVE account asks once
- *     in the page, never with a browser dialog. Nothing here moves: no motion on the kill switch, the mode, Accept and Reject,
- *     the position or the P&L.
+ *     in the page, never with a browser dialog.
+ *   - Motion (docs/MOTION.md R3): only the border light and the panels' glow move or fade. The kill switch, the mode, Accept and
+ *     Reject, the position, the P&L, the price and the chart change at once (data-no-motion; no transition, no count-up). The
+ *     light is pure CSS (no per-frame script), drawn again only when a message arrives; the Motion switch (Full, Off; kept in
+ *     this browser) and the system's reduced motion stop it, and the glow stays, still. The ChartMotion kit is not used here.
+ *   - Keys: no keydown handler on the document. Escape closes the drawer only from inside it; the trading hotkeys work as
+ *     everywhere (a stream row is a button, not a box).
  */
 (function () {
 'use strict';
@@ -32,8 +39,11 @@ const attr = (el, k, v) => { if (!el) return; const s = v === null || v === unde
 const tog = (el, cls, on) => { if (el && el.classList.contains(cls) !== !!on) el.classList.toggle(cls, !!on); };
 const setHtml = (el, html) => { if (el && el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; } };
 const TF_NAMES = { s15: '15 sec', s30: '30 sec', m1: '1 min', m5: '5 min', m15: '15 min' };
-const KEYS = { chosen: 'live-agent-chosen-v1', chart: 'live-agent-chart-v1', fills: 'live-agent-fills-v1', feed: 'live-agent-feed-v1' };
+const KEYS = { chosen: 'live-agent-chosen-v1', chart: 'live-agent-chart-v1', fills: 'live-agent-fills-v1', feed: 'live-agent-feed-v1' };   // the Motion switch: AgentCore.MOTION_KEY
 const FILTERS = [['all', 'All'], ['plans', 'Plans'], ['notes', 'Notes'], ['thinking', 'Thinking'], ['lesson', 'Lessons']];
+let drawerSeq = 0;
+/* a panel the light may circle: its light (the line and its blurred halo, drawn only while the panel is lit) */
+const LIGHT_HTML = '<div class="ag-light" aria-hidden="true"><i class="ag-orb"></i><i class="ag-orb ag-halo"></i></div>';
 
 function create(o) {
   o = o || {};
@@ -49,14 +59,16 @@ function create(o) {
     chosen: String(readJson(KEYS.chosen) || ''), shown: popout, layout: '', cidSeq: 0,
     orders: new Map(), pending: new Map(), propEnds: [],
     keys: { accept: '', reject: '', notes: [], from: '' },
-    killConfirm: 0, autoConfirm: 0, rulesEdit: false, acctEdit: false, acctAsk: '', feedFilter: 'all', openThink: new Set(),
+    killConfirm: 0, autoConfirm: 0, rulesEdit: false, acctEdit: false, acctAsk: '', feedFilter: 'all', rows: null,
     chart: null, chartRoot: '', chartTf: 'm1', contract: '',
+    motion: AC.motionPref(storage), drawer: '', exits: new Map(), lightSig: '',
   };
   { const v = readJson(KEYS.chart); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; }
   { const v = readJson(KEYS.feed); if (v && FILTERS.some(f => f[0] === v.filter)) S.feedFilter = v.filter; }
 
   /* ---------------- the DOM: built once, written only where it changed */
   const view = els.view, tabBtn = els.tab;
+  const DRAWER_ID = 'agDrawer' + (++drawerSeq);
   const q = sel => (view ? view.querySelector(sel) : null);
   /* the corner proposals (wherever Anthony is) share the Bot tab's corner when it is there, so the two never overlap */
   const propBox = document.querySelector('.bt-props') || (() => { const d = document.createElement('div'); d.className = 'ag-props'; d.setAttribute('role', 'region'); d.setAttribute('aria-label', 'Agent proposals'); document.body.appendChild(d); return d; })();
@@ -69,33 +81,33 @@ function create(o) {
       '<div class="ag-off" data-k="off" hidden><div class="ag-off-card"><span class="ag-ttl">Agents</span><p data-k="offText"></p></div></div>' +
       '<div class="ag-main" data-k="main" hidden>' +
       /* the strip: who, how it is, what it holds */
-      '<div class="ag-strip" data-k="strip" data-no-motion>' +
+      '<header class="ag-strip ag-panel" data-k="strip" data-no-motion>' +
         '<span class="ag-badge" data-k="initials" aria-hidden="true"></span>' +
-        '<span class="ag-name" data-k="name"></span><span class="ag-chip ag-build" data-k="build" title="The build the agent runs, as it says in its hello"></span>' +
+        '<span class="ag-brand"><span class="ag-name" data-k="name"></span> <span class="ag-desk">// AGENT DESK</span></span><span class="ag-chip ag-build" data-k="build" title="The build the agent runs, as it says in its hello"></span>' +
         '<span class="ag-conn" data-k="conn"><i></i><span data-k="connText"></span></span>' +
         '<span class="ag-chip ag-mode" data-k="modeChip"></span>' +
         '<span class="ag-kv"><span class="ag-lbl">Account</span><span class="mono" data-k="sAccount"></span> <span class="bt-acct ag-mark" data-k="sMark"></span></span>' +
         '<span class="ag-kv"><span class="ag-lbl">Position</span><span class="mono" data-k="sPos"></span></span>' +
-        '<span class="ag-kv"><span class="ag-lbl">Today</span><span class="mono" data-k="sPnl"></span></span>' +
-        '<span class="ag-kv"><span class="ag-lbl">Trades</span><span class="mono" data-k="sTrades"></span></span>' +
-        '<span class="ag-kv"><span class="ag-lbl">Losses</span><span class="mono" data-k="sLosses"></span></span>' +
         '<span class="ag-chip ag-owns" data-k="sOwns" hidden title="The owner lock: while the agent has a position or a working entry here, ChartBridge refuses every new entry from anyone else. Your Flatten, cancels and stop or target moves always work."></span>' +
         '<span class="ag-chip ag-bad" data-k="sState" hidden></span>' +
         '<span class="ag-fill"></span>' +
         '<label class="ag-pick" data-k="pickWrap" hidden><span class="ag-lbl" data-k="pickN">Agents</span><select class="ag-sel" data-k="pick" aria-label="Agent shown"></select></label>' +
+        '<span class="ag-motion" role="group" aria-label="Motion of the light" title="The light around the panels: Full moves it, Off keeps it still (kept in this browser). Your system\'s reduced motion keeps it still too."><span class="ag-lbl">Motion</span>' +
+          '<button type="button" data-motion="full" aria-pressed="true">Full</button><button type="button" data-motion="off" aria-pressed="false">Off</button></span>' +
         (popout ? '' : '<button type="button" class="ws-btn ag-popbtn" data-act="popout" title="Open the Agent tab in its own window (for a third monitor)">Pop out</button>') +
-      '</div>' +
+      '</header>' +
       '<div class="ag-grid" data-k="grid">' +
-      /* left: control */
-      '<aside class="ag-col ag-left" aria-label="Agent controls">' +
+      /* left: control, his account, his rules */
+      '<aside class="ag-col ag-left ag-panel" data-panel="acct" aria-label="Agent controls">' + LIGHT_HTML + '<div class="ag-scroll">' +
         '<div class="ag-sec" data-no-motion><div class="ag-sechead"><span class="ag-ttl">Mode</span><span class="ag-lbl" data-k="modeAcct"></span></div>' +
           '<div class="ag-modes" role="group" aria-label="Agent mode" data-k="modes">' + AC.MODES.map(m => '<button type="button" data-mode="' + m + '" aria-pressed="false">' + AC.MODE_NAME[m] + '</button>').join('') + '</div>' +
           '<p class="ag-why" data-k="modeWhy" hidden></p>' +
           '<button type="button" class="ag-kill" data-act="kill" data-k="kill">Kill switch</button>' +
           '<div class="ag-pgrid"><span>Status</span><span data-k="status">-</span><span>Heartbeat</span><span class="mono" data-k="beat">-</span><span>Last plan</span><span data-k="last">-</span></div>' +
         '</div>' +
-        '<div class="ag-sec" data-no-motion><div class="ag-sechead"><span class="ag-ttl">Account</span><span class="ag-lbl">its own, never shared</span></div>' +
+        '<div class="ag-sec" data-no-motion><div class="ag-sechead"><span class="ag-ttl">His account</span><span class="ag-lbl">its own, never shared</span></div>' +
           '<div class="ag-pgrid"><span>Trades on</span><span><span class="mono" data-k="account">Sim101</span> <span class="bt-acct ag-mark" data-k="accountMark"></span></span></div>' +
+          '<div class="ag-room" data-k="room"></div>' +
           '<div class="ag-edit" data-k="acctEdit" hidden><select class="ag-sel" data-k="acctSel" aria-label="The agent\'s account"></select>' +
             '<button type="button" class="ag-btn primary" data-act="acctSave">Set</button><button type="button" class="ag-btn" data-act="acctCancel">Cancel</button></div>' +
           '<div class="ag-ask" data-k="acctAsk" role="alertdialog" aria-label="Trade a LIVE account" hidden><span data-k="acctAskText"></span>' +
@@ -104,7 +116,7 @@ function create(o) {
           '<p class="ag-why" data-k="acctWhy"></p>' +
         '</div>' +
         '<div class="ag-sec"><div class="ag-sechead"><span class="ag-ttl">Rules</span><span class="ag-lbl">ChartBridge enforces them</span></div>' +
-          '<div class="ag-pgrid" data-k="rules"></div>' +
+          '<div class="ag-pgrid ag-rules" data-k="rules"></div>' +
           '<div class="ag-rform" data-k="rulesEdit" hidden>' +
             '<div class="ag-rroots" data-k="rRoots"></div>' +
             '<label><span>New entries from</span><input class="ag-in" data-r="entryFrom" maxlength="5" inputmode="numeric" placeholder="09:45" aria-label="New entries from, New York time"></label>' +
@@ -119,25 +131,50 @@ function create(o) {
           '<div class="ag-row"><button type="button" class="ag-btn" data-act="rulesOpen" data-k="rulesOpen">Change the rules</button></div>' +
           '<p class="ag-why" data-k="rulesWhy"></p>' +
         '</div>' +
-      '</aside>' +
-      /* centre: the chart, a normal live chart (never animated) */
-      '<section class="ag-col ag-centre" aria-label="Agent chart">' +
-        '<div class="ag-charthead"><span class="ag-ttl" data-k="chartName">Chart</span>' +
-          '<select class="ag-sel ag-small" data-k="chartRoot" aria-label="Root"></select>' +
-          '<select class="ag-sel ag-small" data-k="tf" aria-label="Bars">' + Object.keys(TF_NAMES).map(k => '<option value="' + k + '">' + TF_NAMES[k] + '</option>').join('') + '</select>' +
-          '<span class="chart-live ws-lv" data-k="ind"></span>' +
-          '<span class="ag-fill"></span><span class="ag-legend" title="The agent\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the agent\'s orders, so your own orders on its account do not show here.">AGENT TRADES</span></div>' +
-        '<div class="ag-chart" data-k="chart" data-no-motion></div>' +
+      '</div></aside>' +
+      /* centre: what he is doing now, then the chart (a normal live chart: never animated, takes no orders) */
+      '<section class="ag-col ag-centre" aria-label="What the agent is doing, and its chart">' +
+        '<div class="ag-panel ag-pipe" data-panel="pipe">' + LIGHT_HTML +
+          '<div class="ag-pipehead"><span class="ag-k2">What he is doing now</span><span class="ag-said" data-k="said" role="status"></span></div>' +
+          '<ol class="ag-steps" data-k="steps">' + AC.STEPS.map((x, i) => '<li class="ag-step t-' + x[0] + '" data-step="' + i + '"><span class="ag-node mono">' + (i + 1) + '</span><span class="ag-stepname">' + x[1] + '</span><span class="ag-stepsub">' + x[2] + '</span></li>').join('') + '</ol>' +
+        '</div>' +
+        '<div class="ag-panel ag-chartpanel" data-panel="chart">' + LIGHT_HTML +
+          '<div class="ag-charthead"><span class="ag-ttl" data-k="chartName" title="The agent\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the agent\'s orders, so your own orders on its account do not show here.">Chart</span>' +
+            '<select class="ag-sel ag-small" data-k="chartRoot" aria-label="Root"></select>' +
+            '<select class="ag-sel ag-small" data-k="tf" aria-label="Bars">' + Object.keys(TF_NAMES).map(k => '<option value="' + k + '">' + TF_NAMES[k] + '</option>').join('') + '</select>' +
+            '<span class="chart-live ws-lv" data-k="ind"></span>' +
+            '<span class="ag-fill"></span>' +
+            '<span class="ag-cposwrap"><span class="ag-cpos mono" data-k="cPos" data-no-motion></span><span class="ag-cpnl mono" data-k="cPnl" data-no-motion title="Open P&L: NinjaTrader\'s for the agent\'s account, else from the chart\'s last price"></span></span>' +
+            '<span class="ag-legend" title="The agent\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the agent\'s orders, so your own orders on its account do not show here.">AGENT TRADES</span></div>' +
+          '<div class="ag-chart" data-k="chart" data-no-motion></div>' +
+        '</div>' +
       '</section>' +
-      /* right: proposals, then the feed */
-      '<aside class="ag-col ag-right" aria-label="Proposals, notes and plans">' +
-        '<div class="ag-sec" data-no-motion><div class="ag-sechead"><span class="ag-ttl">Proposals</span><span class="ag-lbl" data-k="propCount"></span></div>' +
-          '<div class="ag-plist" data-k="plist"></div><p class="ag-empty" data-k="pempty">None open. In Copilot each plan comes here for you to accept or reject.</p></div>' +
-        '<div class="ag-feedwrap"><div class="ag-loghead"><span class="ag-ttl">Notes and plans</span><span class="ag-lbl" data-k="feedCount"></span></div>' +
-          '<div class="ag-filters" role="tablist" data-k="filters">' + FILTERS.map(f => '<button type="button" role="tab" data-filter="' + f[0] + '" aria-selected="false">' + f[1] + '</button>').join('') + '</div>' +
+      /* right: the proposal, then his stream; his decision's drawer slides over both */
+      '<aside class="ag-col ag-right" aria-label="Proposals and his stream">' +
+        '<div class="ag-panel ag-proppanel" data-panel="prop" data-no-motion>' + LIGHT_HTML +
+          '<div class="ag-sechead"><span class="ag-k2">Proposal · copilot</span><span class="ag-lbl" data-k="propCount"></span></div>' +
+          '<div class="ag-pbody"><div class="ag-plist" data-k="plist"></div><p class="ag-empty" data-k="pempty">None open. In Copilot each plan comes here for you to accept or reject.</p></div></div>' +
+        '<div class="ag-panel ag-feedwrap" data-panel="stream">' + LIGHT_HTML +
+          '<div class="ag-loghead"><span class="ag-k2">His stream</span><span class="ag-lbl" data-k="feedCount"></span></div>' +
+          '<div class="ag-filters" role="tablist" data-k="filters">' + FILTERS.map(f => '<button type="button" role="tab" data-filter="' + f[0] + '" aria-selected="false">' + f[1] + '</button>').join('') + '<span class="ag-fill"></span><span class="ag-tap">a row opens his reasoning</span></div>' +
           '<div class="ag-feed" data-k="feed"></div></div>' +
+        '<section class="ag-drawer" data-k="drawer" id="' + DRAWER_ID + '" role="dialog" aria-label="His decision" hidden></section>' +
       '</aside>' +
-      '</div></div>';
+      '</div>' +
+      /* the footer: today's dollars, trades, losses, his session as a trail, and what the light's colours mean */
+      '<footer class="ag-panel ag-foot" data-panel="pnl">' + LIGHT_HTML +
+        '<div class="ag-footrow">' +
+          '<div class="ag-big" data-no-motion><span class="mono ag-today" data-k="sPnl">-</span><span class="ag-lbl" data-k="todayNote">Today</span></div>' +
+          '<div class="ag-big" data-no-motion><span class="mono ag-count" data-k="sTrades">0</span><span class="ag-lbl">Trades</span></div>' +
+          '<div class="ag-big" data-no-motion><span class="mono ag-count ag-losses" data-k="sLosses">0</span><span class="ag-lbl">Losses</span></div>' +
+          '<div class="ag-trail" data-k="trail" aria-label="His session"></div>' +
+        '</div>' +
+        '<div class="ag-legendrow"><span class="ag-k2">The light</span>' +
+          [['screen', 'screen: watching'], ['eyes', 'eyes: a look'], ['judgment', 'judgment: a plan'], ['checks', 'checks: his rules'], ['bridge', 'ChartBridge, a fill, or in profit'], ['no', 'under water, or a hard no'], ['passed', 'he passed, or a plan ended']]
+            .map(x => '<span class="ag-key t-' + x[0] + '"><b></b>' + x[1] + '</span>').join('') +
+          '<span class="ag-lbl">in a trade the light moves to the chart and P&amp;L</span></div>' +
+      '</footer>' +
+      '</div>';
   }
 
   /* ---------------- the window's v3 connection */
@@ -160,17 +197,17 @@ function create(o) {
         S.v3 = Array.isArray(m.features) && m.features.includes('v3');
         render(); return;
       case 'trading': S.trading = m; S.signedIn = !!m.enabled; render(); return;
-      case 'accounts': S.accounts = m; renderPanel(); return;
+      case 'accounts': S.accounts = m; renderPanel(); renderLive(); return;
       case 'bot': S.bot = m; return;
       case 'copier': S.copier = m; return;
       case 'agent': onAgent(m); return;
       case 'agentProposal': onProposal(m); return;
-      case 'agentPlan': if (feed.plan(m)) { renderFeed(); renderStrip(); } return;
-      case 'agentNote': if (feed.note(m)) renderFeed(); return;
-      case 'orders': S.orders.clear(); for (const x of m.list || []) noteOrder(x); reclaim(); renderChartLines(); renderPanel(); return;
-      case 'order': noteOrder(m); reclaim(); renderChartLines(); renderPanel(); return;
+      case 'agentPlan': if (feed.plan(m)) { renderFeed(); renderStrip(); renderLive(); } return;
+      case 'agentNote': if (feed.note(m)) { renderFeed(); renderLive(); } return;
+      case 'orders': S.orders.clear(); for (const x of m.list || []) noteOrder(x); reclaim(); renderChartLines(); renderPanel(); renderLive(); return;
+      case 'order': noteOrder(m); reclaim(); renderChartLines(); renderPanel(); renderLive(); return;
       case 'exec': onExec(m); return;
-      case 'execs': for (const x of m.list || []) onExec(x, true); renderTrips(); return;
+      case 'execs': for (const x of m.list || []) onExec(x, true); renderTrips(); renderFeed(); renderLive(); return;
       case 'reject': onReject(m); return;
       case 'status': onStatus(m); return;
     }
@@ -185,11 +222,18 @@ function create(o) {
     if (want !== S.chosen) choose(want, true);
     if (r.prev) for (const n of AC.noticesFrom(r.prev, r.next, (p, root) => fmtPx(p, root))) notice(n);
     if (r.prev && (r.prev.account !== m.account)) renderTrips();
+    /* a flat exit this window saw: the light shows how it went, then goes back to the tracker */
+    const qa = r.prev && r.prev.position && isNum(r.prev.position.qty) ? r.prev.position.qty : 0, qb = m.position && isNum(m.position.qty) ? m.position.qty : 0;
+    if (qa && !qb) {
+      const list = S.exits.get(m.agent) || [];
+      list.push({ at: Date.now(), pnl: isNum(r.prev.pnlToday) && isNum(m.pnlToday) ? Math.round((m.pnlToday - r.prev.pnlToday) * 100) / 100 : null });
+      S.exits.set(m.agent, list.slice(-20));
+    }
     render();
   }
   function choose(id, quiet) {
     if (S.chosen === id) return;
-    S.chosen = id; S.rulesEdit = false; S.acctEdit = false; S.acctAsk = ''; S.killConfirm = 0; S.autoConfirm = 0;
+    S.chosen = id; S.rulesEdit = false; S.acctEdit = false; S.acctAsk = ''; S.killConfirm = 0; S.autoConfirm = 0; S.drawer = ''; S.lightSig = '';
     for (const k of ['rulesWhy', 'acctWhy']) put(q('[data-k="' + k + '"]'), 'textContent', '');
     writeJson(KEYS.chosen, id);
     placeCards();
@@ -208,23 +252,37 @@ function create(o) {
     if (a) ledgerOf(id).order(x, a);
     if (id && (x.state === 'working' || x.state === 'partFilled')) S.orders.set(x.id, x); else S.orders.delete(x.id);
   }
-  function reclaim() { let any = false; for (const f of [...unclaimed.values()]) if (claim(f)) { unclaimed.delete(f.id); keepFill(f); any = true; } if (any) renderTrips(); }
+  function reclaim() { let any = false; for (const f of [...unclaimed.values()]) if (claim(f)) { unclaimed.delete(f.id); keepFill(f); any = true; } if (any) { renderTrips(); renderFeed(); renderLive(); } }
   function claim(f) { for (const a of agents.list()) if (ledgerOf(a.agent).claim(f)) { f.agent = a.agent; return true; } return false; }
   function onExec(f, quiet) {
     if (!f || typeof f.id !== 'string') return;
     if (!claim(f)) { unclaimed.set(f.id, f); if (unclaimed.size > 500) unclaimed.delete(unclaimed.keys().next().value); return; }
     keepFill(f);
-    if (!quiet) renderTrips();
+    if (!quiet) { renderTrips(); renderFeed(); renderLive(); }
   }
   function fillsDay() { const v = readJson(KEYS.fills), day = BC.tradeDay(Date.now()); return v && v.day === day && Array.isArray(v.list) ? v : { day, list: [] }; }
   function keepFill(f) {
     const v = fillsDay();
     if (v.list.some(x => x.id === f.id)) return;
-    v.list.push({ id: f.id, agent: f.agent, side: f.side, qty: f.qty, p: f.p, t: f.t, root: f.root, account: f.account });
+    v.list.push({ id: f.id, agent: f.agent, side: f.side, qty: f.qty, p: f.p, t: f.t, u: isNum(f.u) ? f.u : null, root: f.root, account: f.account });
     if (v.list.length > 400) v.list.splice(0, v.list.length - 400);
     writeJson(KEYS.fills, v);
   }
   function trips() { const a = cur(); if (!a) return []; return BC.trips(fillsDay().list.filter(x => x.agent === a.agent && x.root === S.chartRoot).sort((x, y) => x.t - y.t)); }
+  /* the agent's fills today and its closed trades, on the clock (each fill's `u`, UTC ms), for the stream and the trail */
+  const pointValue = r => (S.instruments[r] && +S.instruments[r].pointValue > 0 ? +S.instruments[r].pointValue : 0);
+  function dayTrades(id) {
+    const fills = fillsDay().list.filter(x => x.agent === id && isNum(x.u)), exits = [];
+    for (const r of [...new Set(fills.map(f => f.root))]) {
+      const list = fills.filter(f => f.root === r).map(f => Object.assign({}, f, { t: f.u })).sort((x, y) => x.t - y.t);
+      for (const t of BC.trips(list)) {
+        if (t.tOut === null) continue;
+        const pv = pointValue(r);
+        exits.push({ root: r, dir: t.dir, qty: t.qty, pIn: t.pIn, pOut: t.pOut, tIn: t.tIn, tOut: t.tOut, at: t.tOut, pnl: pv ? Math.round((t.pOut - t.pIn) * t.dir * t.qty * pv * 100) / 100 : null });
+      }
+    }
+    return { fills, exits };
+  }
 
   /* ---------------- proposals: in the tab for the agent shown, in the corner everywhere else */
   const cards = new Map();                     // agent|id -> { inline, corner, p, shownAt, ended }
@@ -234,7 +292,7 @@ function create(o) {
     if (r.act === 'show') { showProposal(r.p); renderChartLines(); }
     else if (r.act === 'update') { const x = cards.get(keyOf(p.agent, p.id)); if (x) x.p = p; else showProposal(p); }
     else if (r.act === 'end') endProposal(r.p, r.why);
-    renderPanel(); renderFeed();
+    renderPanel(); renderFeed(); renderLive();
   }
   const sideWord = s => (s === 'buy' ? 'Buy' : s === 'sell' ? 'Sell' : '');
   const tickOf = r => { const i = S.instruments[r]; return i && +i.tick > 0 ? +i.tick : 0.25; };
@@ -260,7 +318,7 @@ function create(o) {
         '<span>Risk</span><span>' + esc(AC.fmtUsd(p.riskDollars).replace(/^\+/, '') || '-') + (isNum(p.stopTicks) && isNum(p.targetTicks) && p.stopTicks ? ', reward ' + (p.targetTicks / p.stopTicks).toFixed(2) + ' to 1' : '') + '</span>' +
         '<span>Open until</span><span>' + (isNum(p.expiresAt) ? esc(AC.etClockSec(p.expiresAt)) + ' ET' : '-') + '</span></div>' +
       '<div class="ag-prop-note"><b class="mono">' + esc(acc.name) + '</b> ' + markHtml(acc.mark) + ' ChartBridge places it on this account from these numbers if you accept, inside ' + esc(AC.agentName(a)) + '\'s rules. Unanswered, it is never sent.</div>' +
-      '<div class="ag-prop-btns"><button type="button" class="ag-acc" data-agans="accept">Accept' + kc(S.keys.accept) + '</button><button type="button" class="ag-rej" data-agans="reject">Reject' + kc(S.keys.reject) + '</button></div>' +
+      '<div class="ag-prop-btns"><button type="button" class="ag-acc" data-agans="accept" data-no-motion>Accept' + kc(S.keys.accept) + '</button><button type="button" class="ag-rej" data-agans="reject" data-no-motion>Reject' + kc(S.keys.reject) + '</button></div>' +
       '<div class="ag-prop-msg" data-k="msg" role="status"></div>';
   }
   function makeCard(p, where) {
@@ -336,6 +394,7 @@ function create(o) {
     S.pending.set(c, { kind: 'answer', agent, id });
     both(x, el => { for (const btn of el.querySelectorAll('button')) btn.disabled = true; });
     setMsg(x, (ans === 'accept' ? 'Accept' : 'Reject') + ' sent. Waiting for ChartBridge.');
+    renderLive();
     return true;
   }
   /* the countdowns, twice a second while a proposal is shown; Accept closes 5 s before expiresAt */
@@ -382,6 +441,7 @@ function create(o) {
       props.refused(x.agent, x.id);
       const c = cards.get(keyOf(x.agent, x.id));
       if (c && !c.ended) { both(c, el => { for (const b of el.querySelectorAll('button')) b.disabled = false; }); setMsg(c, why); }
+      renderLive();
     } else if (x.kind === 'rules') rulesWhy(why, 'refused');
     else if (x.kind === 'account') put(q('[data-k="acctWhy"]'), 'textContent', why);
     else if (x.kind === 'mode' || x.kind === 'kill') modeWhy(why);
@@ -422,7 +482,7 @@ function create(o) {
       if (off) unmountChart(); else if (S.shown) mountChart();
     }
     placeCards();
-    renderStrip(); renderPanel(); renderFeed(); renderChartLines();
+    renderStrip(); renderPanel(); renderFeed(); renderChartLines(); renderLive();
   }
   const offCtx = () => ({ v3: S.v3, version: S.version, trading: S.trading, agents: agents.size() });
   function renderStrip() {
@@ -445,9 +505,6 @@ function create(o) {
     put(q('[data-k="sAccount"]'), 'textContent', m.account);
     for (const k of ['sMark', 'accountMark']) { const el = q('[data-k="' + k + '"]'); put(el, 'textContent', m.accountMark); put(el, 'className', 'bt-acct ag-mark' + (m.accountMark === 'LIVE' ? ' live' : m.accountMark ? ' sim' : '')); put(el, 'hidden', !m.accountMark); }
     put(q('[data-k="sPos"]'), 'textContent', m.position);
-    const pnl = q('[data-k="sPnl"]'); put(pnl, 'textContent', m.pnl); put(pnl, 'className', 'mono ' + m.pnlTone);
-    put(q('[data-k="sTrades"]'), 'textContent', m.trades);
-    put(q('[data-k="sLosses"]'), 'textContent', m.losses);
     const ow = q('[data-k="sOwns"]'); put(ow, 'hidden', !m.owns); put(ow, 'textContent', m.owns.toUpperCase());
     const st = q('[data-k="sState"]');
     const stText = m.killed ? 'KILLED' : m.standDown ? 'STOOD DOWN: ' + m.standDown : '';
@@ -475,6 +532,7 @@ function create(o) {
     put(q('[data-k="status"]'), 'textContent', AC.statusText(a));
     const beat = q('[data-k="beat"]'); put(beat, 'textContent', AC.beatText(a)); put(beat, 'className', 'mono ' + (!a.connected ? 'neg' : a.lastBeatMs > 2500 ? 'warn' : 'pos'));
     put(q('[data-k="account"]'), 'textContent', acc.name);
+    renderRoom(a);
     const work = AC.workingEntries(S.orders.values(), a).length > 0, open = props.open(a.agent).length;
     const can = AC.rulesChangeable(a, { workingEntry: work, openProposals: open });
     put(q('[data-k="acctOpen"]'), 'disabled', !S.signedIn || !can.ok);
@@ -497,54 +555,166 @@ function create(o) {
   }
   const servedRoots = () => AC.RULE_ROOTS.filter(r => S.instruments[r] && !S.instruments[r].quoteOnly);
 
-  /* ---------------- the feed (the training viewer's log and decision panel, newest first) */
-  function noteHtml(m, key) {
-    const t = '<span class="ag-t mono">' + esc(AC.etClockSec(m.at)) + '</span>';
-    const k = '<span class="ag-k k-' + esc(m.kind) + '">' + esc((AC.NOTE_NAME[m.kind] || m.kind).toUpperCase()) + '</span>';
-    if (m.kind === 'thinking') {
-      const open = S.openThink.has(key);
-      return '<details class="ag-item ag-think" data-key="' + esc(key) + '"' + (open ? ' open' : '') + '><summary>' + t + k + '<span class="ag-tx">' + esc(m.text.slice(0, 140)) + (m.text.length > 140 ? '...' : '') + '</span></summary>' +
-        '<div class="ag-prose ag-quote">' + esc(m.text) + '</div></details>';
+  /* ---------------- his stream: notes, plans, fills and exits, newest first; each row a button that opens his record */
+  const hashOf = t => { let h = 5381; const x = String(t); for (let i = 0; i < x.length; i++) h = ((h << 5) + h + x.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+  /* every row of the shown agent (all of them, whatever the filter), by key: { key, type, at, m, end, waiting, proposal } */
+  function streamRows(a) {
+    const rows = [];
+    for (const x of feed.items(a.agent, 'all')) {
+      if (x.type === 'note') rows.push({ key: 'n' + x.m.at + x.m.kind + hashOf(x.m.text), type: 'note', at: x.at, m: x.m });
+      else {
+        const m = x.m, card = cards.get(keyOf(m.agent, m.id)), end = S.propEnds.find(e => e.agent === m.agent && e.id === m.id) || null;
+        rows.push({ key: 'p' + hashOf(m.id + '|' + m.at + '|' + m.result), type: 'plan', at: x.at, m, end, waiting: !!(card && !card.ended), proposal: props.get(m.agent, m.id) });
+      }
     }
-    if (m.kind === 'notebook') return '<div class="ag-item">' + t + k + '<div class="ag-nb mono">' + esc(m.text) + '</div></div>';
-    return '<div class="ag-item' + (m.kind === 'status' ? ' sys' : '') + '">' + t + k + '<span class="ag-tx ag-prose">' + esc(m.text) + '</span></div>';
+    const t = dayTrades(a.agent);
+    for (const f of t.fills) rows.push({ key: 'f' + hashOf(f.id), type: 'fill', at: f.u, m: Object.assign({ at: f.u }, f) });
+    for (const e of t.exits) rows.push({ key: 'x' + e.root + e.tOut, type: 'exit', at: e.tOut, m: e });
+    return rows.sort((x, y) => y.at - x.at);
   }
-  function planHtml(m) {
-    const line = AC.planLine(m), skip = m.action === 'skip';
-    const t = '<span class="ag-t mono">' + esc(isNum(m.at) ? AC.etClockSec(m.at) : '') + '</span>';
-    const k = '<span class="ag-k ' + (skip ? 'k-skip' : 'k-plan') + '">' + (skip ? 'SKIP' : 'PLAN') + '</span>';
-    /* a proposal's outcome on its plan: waiting while open here, how it ended when this window saw it, else "proposed" */
-    let res = line.result.split(':')[0], tone = line.tone;
-    if (m.result === 'proposed') {
-      const open = cards.get(keyOf(m.agent, m.id)), end = S.propEnds.find(e => e.agent === m.agent && e.id === m.id);
-      res = end ? end.state + end.react : open && !open.ended ? 'waiting for you' : 'proposed';
-      if (end && end.state !== 'accepted') tone = 'shadow';
-    }
-    const chip = '<span class="ag-chip ag-res ' + tone + '">' + esc(res.toUpperCase()) + '</span>';
-    if (skip) return '<div class="ag-item">' + t + k + '<span class="ag-tx"><b>' + esc(line.title) + '</b> ' + chip + '<span class="ag-prose ag-sub">' + esc(m.reason || '') + '</span></span></div>';
-    const r = m.root, lp = AC.legPrices(m, tickOf(r));
-    return '<div class="ag-item ag-plan">' + t + k + '<span class="ag-tx"><b class="' + (m.side === 'buy' ? 'pos' : m.side === 'sell' ? 'neg' : '') + '">' + esc(line.title) + '</b> ' + chip +
-      (/^refused: /.test(line.result) ? '<span class="ag-sub warn">' + esc(line.result) + '</span>' : '') + '</span>' +
-      '<span class="ag-detail"><span class="ag-pgrid mono">' +
-        '<span>Entry</span><span>' + esc(entryText(m)) + '</span>' +
-        '<span>Stop</span><span>' + esc(m.stopTicks) + ' ticks' + (lp.stop !== null ? ' (' + fmtPx(lp.stop, r) + ')' : '') + '</span>' +
-        '<span>Target</span><span>' + esc(m.targetTicks) + ' ticks' + (lp.target !== null ? ' (' + fmtPx(lp.target, r) + ')' : '') + '</span>' +
-        '<span>Risk</span><span>' + esc(AC.fmtUsd(m.riskDollars).replace(/^\+/, '') || '-') + ', lives ' + esc(AC.durationText(m.expireSec)) + '</span>' +
-        '<span>Confidence</span><span>' + confHtml(m.confidence) + '</span></span>' +
-      '<span class="ag-quote ag-prose">' + esc(m.reason || '') + '</span></span></div>';
+  const inFilter = (r, f) => f === 'all' ? true : f === 'plans' ? r.type === 'plan' : f === 'notes' ? r.type === 'note' : r.type === 'note' && r.m.kind === f;
+  function rowText(r) {
+    const m = r.m;
+    if (r.type === 'note') return m.text.length > 160 ? m.text.slice(0, 160) + '...' : m.text;
+    if (r.type === 'fill') return (m.side === 'buy' ? 'Bought ' : 'Sold ') + m.qty + ' ' + m.root + ' at ' + fmtPx(m.p, m.root);
+    if (r.type === 'exit') return 'Out of ' + (m.dir > 0 ? 'long ' : 'short ') + m.qty + ' ' + m.root + (isNum(m.pnl) ? ', ' + (AC.fmtUsd(m.pnl) || '$0.00') : '');
+    const line = AC.planLine(m);
+    let res = line.result;
+    if (m.result === 'proposed') res = r.end ? r.end.state + r.end.react : r.waiting ? 'waiting for you' : 'proposed';
+    return line.title + ': ' + res;
+  }
+  function rowHtml(r) {
+    const t = AC.rowTone(r), sel = S.drawer === r.key;
+    const label = t.tag + ' at ' + AC.etClockSec(r.at) + ': ' + (sel ? 'close his record' : 'open his record');
+    return '<button type="button" class="ag-rowb t-' + t.tone + (r.type === 'note' && r.m.kind === 'status' ? ' sys' : '') + (sel ? ' sel' : '') + '" data-row="' + esc(r.key) + '" aria-expanded="' + sel + '" aria-controls="' + DRAWER_ID + '" aria-label="' + esc(label) + '">' +
+      '<span class="ag-t mono">' + esc(AC.etClockSec(r.at)) + '</span><span class="ag-tag">' + esc(t.tag) + '</span>' +
+      '<span class="ag-tx' + (r.type === 'note' && r.m.kind === 'notebook' ? ' mono' : '') + '">' + esc(rowText(r)) + '</span><span class="ag-chev" aria-hidden="true">›</span></button>';
   }
   function renderFeed() {
     if (!view) return;
     const a = cur(); if (!a) return;
-    for (const b of q('[data-k="filters"]').children) attr(b, 'aria-selected', String(b.dataset.filter === S.feedFilter));
-    const f = S.feedFilter;
-    const items = feed.items(a.agent, f === 'all' ? 'all' : f).map(x => ({ at: x.at, html: x.type === 'note' ? noteHtml(x.m, x.m.at + ':' + x.m.kind) : planHtml(x.m) }));
-    items.sort((x, y) => y.at - x.at);
+    for (const b of q('[data-k="filters"]').querySelectorAll('[data-filter]')) attr(b, 'aria-selected', String(b.dataset.filter === S.feedFilter));
+    const rows = streamRows(a), shown = rows.filter(r => inFilter(r, S.feedFilter));
+    S.rows = new Map(rows.map(r => [r.key, r]));
     const c = feed.counts(a.agent);
     put(q('[data-k="feedCount"]'), 'textContent', c.notes + (c.notes === 1 ? ' note' : ' notes') + ' · ' + c.plans + (c.plans === 1 ? ' plan' : ' plans'));
     const box = q('[data-k="feed"]');
-    setHtml(box, items.length ? items.map(x => x.html).join('') : '<p class="ag-empty">' + (a.connected ? 'Nothing yet. Its looks, thinking, plans and lessons show here as they come.' : 'Nothing yet today. ' + AC.agentName(a) + ' is not connected.') + '</p>');
+    const had = box.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.row : '';
+    setHtml(box, shown.length ? shown.map(rowHtml).join('') : '<p class="ag-empty">' + (a.connected ? 'Nothing yet. His looks, thinking, plans and lessons show here as they come.' : 'Nothing yet today. ' + esc(AC.agentName(a)) + ' is not connected.') + '</p>');
+    if (had) { const b = box.querySelector('[data-row="' + CSS.escape(had) + '"]'); if (b && document.activeElement !== b) b.focus({ preventScroll: true }); }
+    renderDrawer();
   }
+
+  /* ---------------- the decision drawer: his full record of one row, over the right column, in that decision's colour */
+  function openDrawer(key) {
+    S.drawer = S.drawer === key ? '' : key;                  // the same row again closes it
+    renderFeed();
+    if (S.drawer) { const x = q('[data-k="drawer"] [data-act="drawerClose"]'); if (x) x.focus({ preventScroll: true }); }
+  }
+  function closeDrawer() {
+    const key = S.drawer;
+    if (!key) return;
+    S.drawer = '';
+    renderFeed();
+    const b = q('[data-k="feed"] [data-row="' + CSS.escape(key) + '"]');
+    if (b) b.focus({ preventScroll: true });
+  }
+  function renderDrawer() {
+    const d = q('[data-k="drawer"]'); if (!d) return;
+    const r = S.drawer && S.rows ? S.rows.get(S.drawer) : null;
+    if (S.drawer && !r) S.drawer = '';                         // its row is gone (another agent, a new day)
+    if (!r) { put(d, 'hidden', true); setHtml(d, ''); return; }
+    const x = AC.decisionRecord(r, { fmtPx, tick: tickOf });
+    const html = '<div class="ag-dhead"><div><div class="ag-lbl">' + esc(x.time) + ' · ' + esc(x.tag) + ' · his decision</div><div class="ag-dtitle">' + esc(x.title) + '</div></div>' +
+      '<button type="button" class="ag-dclose" data-act="drawerClose" aria-label="Close his decision">Close</button></div>' +
+      (x.words ? '<div class="ag-dsec"><div class="ag-lbl">In his words</div><div class="ag-dquote' + (x.pre ? ' pre mono' : '') + '">' + esc(x.words) + '</div></div>' : '') +
+      (x.facts.length ? '<div class="ag-dsec"><div class="ag-lbl">The facts</div>' + x.facts.map(f => '<div class="ag-fact"><span>' + esc(f[0]) + '</span><span class="mono">' + esc(f[1]) + '</span></div>').join('') + '</div>' : '') +
+      '<p class="ag-dnote">Only what ChartBridge\'s agent channel carries. Esc or Close shuts this.</p>';
+    put(d, 'className', 'ag-drawer t-' + x.tone);
+    setHtml(d, html);
+    put(d, 'hidden', false);
+  }
+
+  /* ---------------- the light, the tracker, the chart's position and the footer: worked out again on each message */
+  /* the open P&L: NinjaTrader's unrealized for the agent's own account (when it holds nothing else there), else from the chart's
+     last price on the position's root; null when neither is known (never estimated further) */
+  function openPnl(a) {
+    const pos = a && a.position; if (!pos || !isNum(pos.qty) || !pos.qty) return null;
+    const accs = S.accounts && Array.isArray(S.accounts.list) ? S.accounts.list : [], acc = accs.find(x => x && x.name === AC.agentAccount(a).name);
+    if (acc && isNum(acc.unrealized) && (!Array.isArray(acc.positions) || acc.positions.every(p => p && p.root === pos.root))) return acc.unrealized;
+    const c = S.chart && S.chartRoot === pos.root && S.chart.chart && typeof S.chart.chart.bars === 'function' ? S.chart.chart.bars() : null;
+    const last = c && c.length ? c[c.length - 1].c : null, pv = pointValue(pos.root);
+    return isNum(last) && isNum(pos.avgPrice) && pv ? Math.round((last - pos.avgPrice) * pos.qty * pv * 100) / 100 : null;
+  }
+  function lightNow(a) {
+    const open = props.open(a.agent).map(p => Object.assign({}, p, { answered: props.answered(p.agent, p.id) }));
+    const items = feed.items(a.agent, 'all');
+    return AC.lightState({ agent: a, notes: items.filter(x => x.type === 'note').map(x => x.m), plans: items.filter(x => x.type === 'plan').map(x => x.m), open,
+      ends: S.propEnds.filter(e => e.agent === a.agent), workingEntry: AC.workingEntries(S.orders.values(), a).length > 0,
+      exits: S.exits.get(a.agent) || [], openPnl: openPnl(a), now: Date.now() });
+  }
+  function renderLive() {
+    if (!view) return;
+    const a = cur(); if (!a) return;
+    const L = lightNow(a), main = q('[data-k="main"]');
+    /* the light: its colour on the tab (a registered colour, so the change fades), the lit panels, its lap */
+    const sig = [L.phase, L.tone, L.panels.join(','), L.lapMs, L.step, L.said].join('|');
+    if (sig !== S.lightSig) {
+      S.lightSig = sig;
+      main.style.setProperty('--ag-pc', L.color);                // the light and the glow: fades (a registered colour)
+      main.style.setProperty('--ag-tone', L.color);              // the tracker's words: at once
+      main.style.setProperty('--ag-lap', L.lapMs + 'ms');
+      attr(main, 'data-phase', L.phase); attr(main, 'data-tone', L.tone);
+      for (const el of view.querySelectorAll('.ag-panel[data-panel]')) tog(el, 'lit', L.panels.includes(el.dataset.panel));
+      put(q('[data-k="said"]'), 'textContent', L.said);
+      for (const li of q('[data-k="steps"]').children) { const i = +li.dataset.step; tog(li, 'done', L.step >= 0 && i < L.step); tog(li, 'now', i === L.step); attr(li, 'aria-current', i === L.step ? 'step' : null); }
+    }
+    /* the chart's header: the position and its open P&L, at once (R3) */
+    const pos = a.position && isNum(a.position.qty) && a.position.qty ? a.position : null, op = pos ? openPnl(a) : null;
+    put(q('[data-k="cPos"]'), 'textContent', pos ? AC.positionText(pos, (p, r) => fmtPx(p, r)).toLowerCase() : 'flat');
+    const cp = q('[data-k="cPnl"]'); put(cp, 'textContent', pos ? (op === null ? 'open P&L not known' : AC.fmtUsd(op) || '$0.00') : '');
+    put(cp, 'className', 'ag-cpnl mono' + (op === null ? '' : op >= 0 ? ' pos' : ' neg'));
+    renderFoot(a, pos, op);
+  }
+  function renderFoot(a, pos, op) {
+    const m = AC.stripModel(a, S.orders.values(), (p, r) => fmtPx(p, r));
+    const pnl = q('[data-k="sPnl"]'); put(pnl, 'textContent', m.pnl); put(pnl, 'className', 'mono ag-today ' + m.pnlTone);
+    put(q('[data-k="todayNote"]'), 'textContent', pos ? 'Today · open ' + (op === null ? 'not known' : AC.fmtUsd(op) || '$0.00') : 'Today');
+    const of = (el, t) => { const i = String(t).indexOf(' of '); setHtml(el, i < 0 ? esc(t) : esc(t.slice(0, i)) + ' <small>of ' + esc(t.slice(i + 4)) + '</small>'); };
+    of(q('[data-k="sTrades"]'), m.trades); of(q('[data-k="sLosses"]'), m.losses);
+    renderTrail(a);
+  }
+  /* his session as a light trail, entryFrom to flatAt: his fills (F in, X out, green or red by the trade's result) */
+  function renderTrail(a) {
+    const t = dayTrades(a.agent), exitAt = new Map(t.exits.map(e => [e.tOut, e]));
+    const ev = [];
+    for (const f of t.fills) {
+      const x = exitAt.get(f.u);
+      ev.push(x ? { at: f.u, mark: 'X', tone: isNum(x.pnl) && x.pnl < 0 ? 'no' : 'bridge', title: 'Out of ' + x.qty + ' ' + x.root + ' at ' + fmtPx(x.pOut, x.root) + (isNum(x.pnl) ? ', ' + (AC.fmtUsd(x.pnl) || '$0.00') : '') }
+        : { at: f.u, mark: 'F', tone: 'bridge', title: (f.side === 'buy' ? 'Bought ' : 'Sold ') + f.qty + ' ' + f.root + ' at ' + fmtPx(f.p, f.root) });
+    }
+    const T = AC.sessionTrail(a.rules, Date.now(), ev), now = T.nowPct === null ? 0 : T.nowPct;
+    setHtml(q('[data-k="trail"]'), '<div class="ag-track"><div class="ag-base"></div><div class="ag-done" style="width:' + now + '%"></div>' +
+      T.hours.map((h, i) => '<span class="ag-hour mono' + (i && i < T.hours.length - 1 ? ' mid' : '') + '" style="left:' + h.pct + '%">' + esc(h.label) + '</span>').join('') +
+      T.marks.map(x => '<span class="ag-ev t-' + x.tone + ' mono" style="left:' + x.pct + '%" title="' + esc(x.title) + '">' + esc(x.mark) + '</span>').join('') +
+      '<span class="ag-head" style="left:' + now + '%" title="Now"></span></div>');
+  }
+  /* his account's room (the Account page's figures: ChartBridge's, else The Desk's limits; never estimated) */
+  function renderRoom(a) {
+    const name = AC.agentAccount(a).name, accs = S.accounts && Array.isArray(S.accounts.list) ? S.accounts.list : [], acc = accs.find(x => x && x.name === name) || null;
+    const lim = V3 && typeof V3.limit === 'function' ? V3.limit(name) : acc && window.AccountsCore ? window.AccountsCore.limitState(acc, null) : null;
+    const lines = AC.roomLines(acc, lim);
+    setHtml(q('[data-k="room"]'), '<div class="ag-lbl">Room left</div>' + lines.map(l => '<div class="ag-roomline" data-no-motion><div class="ag-roomrow"><span>' + esc(l.label) + '</span><span class="mono ag-hot">' +
+      (l.room !== null ? esc(AC.fmtUsd(l.room).replace(/^\+/, '')) + (l.limit ? ' <small>of ' + esc(AC.fmtUsd(l.limit).replace(/^\+/, '')) + '</small>' : '') : '-') + '</span>' + (l.room === null ? '<span class="ag-roomwhy">' + esc(l.why) + '</span>' : '') + '</div>' +
+      (l.leftPct !== null ? '<div class="ag-meter2' + (l.key === 'dl' ? ' pu' : '') + '"><i style="width:' + l.leftPct + '%"></i></div>' : '') + '</div>').join(''));
+  }
+  /* the Motion switch: Full moves the light, Off keeps it still (the glow stays); the system's reduced motion keeps it still too */
+  function renderMotion() {
+    if (!view) return;
+    tog(view, 'ag-still', S.motion === 'off');
+    for (const b of view.querySelectorAll('button[data-motion]')) attr(b, 'aria-pressed', String(b.dataset.motion === S.motion));
+  }
+
   /* the words under Change the rules: kind 'refused' (ChartBridge's own, kept until the next try), 'auto' (why it cannot change
      now, written by renderPanel), or '' (this page's: an error before sending, or "Sent.") */
   function rulesWhy(t, kind) { const w = q('[data-k="rulesWhy"]'); if (!w) return; w.dataset.kind = kind || ''; put(w, 'textContent', t); }
@@ -594,8 +764,11 @@ function create(o) {
   }
   function onViewClick(e) {
     const t = e.target, a = cur();
-    const mode = t.closest('[data-mode]'), act = t.closest('[data-act]'), flt = t.closest('[data-filter]');
+    const mode = t.closest('[data-mode]'), act = t.closest('[data-act]'), flt = t.closest('[data-filter]'), row = t.closest('button[data-row]'), mo = t.closest('button[data-motion]');
     if (flt) { S.feedFilter = flt.dataset.filter; writeJson(KEYS.feed, { filter: S.feedFilter }); renderFeed(); return; }
+    if (row) { openDrawer(row.dataset.row); return; }
+    if (mo) { S.motion = AC.setMotionPref(storage, mo.dataset.motion); renderMotion(); return; }
+    if (act && act.dataset.act === 'drawerClose') { closeDrawer(); return; }
     if (!a) return;
     if (mode && !mode.disabled) {
       const m = mode.dataset.mode;
@@ -653,7 +826,10 @@ function create(o) {
       if (e.target.closest('[data-k="tf"]')) { S.chartTf = TF_NAMES[e.target.value] ? e.target.value : 'm1'; writeJson(KEYS.chart, { tf: S.chartTf }); if (S.chart) S.chart.setView({ tf: S.chartTf }); renderChartHead(); return; }
       if (e.target.closest('[data-k="chartRoot"]')) { S.wantRoot = e.target.value; unmountChart(); if (S.shown) mountChart(); }
     });
-    view.addEventListener('toggle', e => { const d = e.target; if (d && d.matches && d.matches('details[data-key]')) { if (d.open) S.openThink.add(d.dataset.key); else S.openThink.delete(d.dataset.key); const box = q('[data-k="feed"]'); if (box) box.dataset.html = ''; } }, true);
+    /* Escape closes the drawer only while the focus is inside it: no keydown handler on the document, so the page's order
+       hotkeys and its own Escape (menus, dialogs) are never touched */
+    const dr = q('[data-k="drawer"]');
+    if (dr) dr.addEventListener('keydown', e => { if (e.key === 'Escape' && !e.defaultPrevented && !e.isComposing) { e.preventDefault(); closeDrawer(); } });
     view.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.closest('.ag-rform input')) { e.preventDefault(); saveRules(); } });
   }
 
@@ -728,6 +904,7 @@ function create(o) {
   if (tabBtn) tabBtn.addEventListener('click', () => showTab(!S.shown));
 
   if (popout) S.shown = true;
+  renderMotion();
   const unlisten = V3 ? V3.listen({ message: onMessage, closed: () => lost() }) : () => {};
   render();
   loadKeys();
@@ -761,7 +938,7 @@ function create(o) {
     /* read only, for the tests and the console */
     state: () => ({ v3: S.v3, version: S.version, signedIn: S.signedIn, shown: S.shown, chosen: S.chosen, agents: agents.list().map(a => Object.assign({}, a)),
       proposals: [...cards.values()].map(x => ({ agent: x.p.agent, id: x.p.id, ended: !!x.ended, corner: !x.corner.hidden })), offText: AC.offText(offCtx()),
-      feed: S.chosen ? feed.counts(S.chosen) : { notes: 0, plans: 0 }, chart: !!S.chart, chartRoot: S.chartRoot, orders: [...S.orders.values()].map(x => ({ id: x.id, by: x.by, role: x.role, root: x.root })), trips: trips() }),
+      feed: S.chosen ? feed.counts(S.chosen) : { notes: 0, plans: 0 }, light: cur() ? lightNow(cur()) : null, drawer: S.drawer, motion: S.motion, chart: !!S.chart, chartRoot: S.chartRoot, orders: [...S.orders.values()].map(x => ({ id: x.id, by: x.by, role: x.role, root: x.root })), trips: trips() }),
     chart: () => (S.chart ? S.chart.chart : null),
     destroy() { unlisten(); unroute(); unmountChart(); propBox.removeEventListener('click', onCardClick); for (const x of cards.values()) x.corner.remove(); clearTimeout(timer); },
   };

@@ -421,3 +421,123 @@ test('1.17.0 as built: who owns a pair, the page exit that passes, ChartBridge\'
   assert.equal(F.items('demo')[0].m.result, held);
   assert.deepEqual(AC.parseRules({ roots: ['NQ', 'MNQ'], maxQty: { NQ: 2, MNQ: 20 }, maxTrades: null }).roots, ['NQ', 'MNQ'], 'roots as a list (as built)');
 });
+
+/* ======================================================================== board F: the light, the drawer, the trail, the room */
+test('the light: watching, a look, his thinking, a plan, a rules check, placed; each on its panels, in its colour', () => {
+  const L = o => AC.lightState(Object.assign({ agent: agent({ mode: 'copilot' }), notes: [], plans: [], open: [], ends: [], workingEntry: false, exits: [], openPnl: null, now: T0 }, o));
+  let s = L({});
+  assert.deepEqual([s.phase, s.tone, s.color, s.panels, s.step, s.fast, s.lapMs], ['watch', 'screen', '#5df2ff', ['pipe'], 0, false, 13000]);
+  s = L({ notes: [{ kind: 'look', text: 'Sample look', at: T0 - 5000 }] });
+  assert.deepEqual([s.phase, s.tone, s.color, s.panels, s.step], ['look', 'eyes', '#8f7bff', ['pipe', 'stream'], 1], 'a look: the tracker and the stream, violet');
+  assert.equal(L({ notes: [{ kind: 'look', text: 'old', at: T0 - AC.LIGHT_HOLD.look - 1 }] }).phase, 'watch', 'a look older than its hold: watching again');
+  s = L({ notes: [{ kind: 'look', at: T0 - 9000, text: 'a' }, { kind: 'thinking', at: T0 - 2000, text: 'b' }] });
+  assert.deepEqual([s.phase, s.tone, s.color, s.step], ['think', 'judgment', '#c81fe0', 2], 'the newest wins: his thinking, deeper magenta');
+  assert.equal(L({ notes: [{ kind: 'lesson', at: T0 - 1000, text: 'x' }, { kind: 'status', at: T0, text: 'y' }] }).phase, 'watch', 'a lesson or a status is not a decision');
+  s = L({ open: [Object.assign(proposal(), { answered: '' })], notes: [{ kind: 'look', at: T0 + 1, text: 'later look' }] });
+  assert.deepEqual([s.phase, s.tone, s.panels, s.step, s.said], ['plan', 'judgment', ['pipe', 'prop'], 2, 'A plan is waiting for you'], 'an open proposal holds the light on the plan');
+  s = L({ open: [Object.assign(proposal(), { answered: 'accept' })] });
+  assert.deepEqual([s.phase, s.tone, s.color, s.panels, s.step], ['check', 'checks', '#ffd23f', ['acct', 'prop'], 3], 'accepted, waiting for ChartBridge: his rules being checked, on the account and the proposal');
+  s = L({ workingEntry: true });
+  assert.deepEqual([s.phase, s.tone, s.color, s.panels, s.step], ['placed', 'bridge', '#3dff9a', ['prop', 'chart'], 4]);
+  s = L({ plans: [{ action: 'plan', id: 'sh', at: T0 - 3000, result: 'shadow', setup: 'S' }] });
+  assert.deepEqual([s.phase, s.tone, s.panels], ['plan', 'judgment', ['pipe', 'prop']], 'a Shadow plan');
+});
+
+test('the light: outcomes (passed, rejected, expired, refused, a go) and a trade in profit or under water', () => {
+  const L = o => AC.lightState(Object.assign({ agent: agent({ mode: 'copilot' }), now: T0 }, o));
+  let s = L({ plans: [{ action: 'skip', id: 'k', at: T0 - 1000, result: 'skipped', setup: 'Sample breakout' }] });
+  assert.deepEqual([s.phase, s.tone, s.color, s.panels, s.said], ['passed', 'passed', '#ff8a2a', ['prop', 'stream'], 'He passed: Sample breakout']);
+  for (const st of ['rejected', 'expired', 'withdrawn', 'not answered']) {
+    s = L({ plans: [{ action: 'plan', id: 'p1', at: T0 - 9000, result: 'proposed' }], ends: [{ id: 'p1', state: st, at: T0 - 1000 }] });
+    assert.deepEqual([s.phase, s.tone], ['passed', 'passed'], st + ': orange');
+  }
+  s = L({ plans: [{ action: 'plan', id: 'p1', at: T0 - 9000, result: 'proposed' }], ends: [{ id: 'p1', state: 'accepted', at: T0 - 1000 }] });
+  assert.deepEqual([s.phase, s.tone], ['go', 'bridge'], 'accepted: a go');
+  s = L({ plans: [{ action: 'plan', id: 'r', at: T0 - 1000, result: 'refused: outside its trading hours' }] });
+  assert.deepEqual([s.phase, s.tone, s.color, s.panels, s.step, s.said], ['refused', 'no', '#ff3b5c', ['acct', 'prop'], 3, 'Refused by ChartBridge: outside its trading hours'], 'a hard no: red, on his rules');
+  assert.equal(L({ plans: [{ action: 'plan', id: 'r', at: T0 - AC.LIGHT_HOLD.outcome - 1, result: 'refused: x' }] }).phase, 'watch', 'an outcome holds 30 s');
+  const pos = { root: 'MNQ', qty: 2, avgPrice: 25390 };
+  s = L({ agent: agent({ position: pos }), openPnl: 24 });
+  assert.deepEqual([s.phase, s.tone, s.color, s.panels, s.fast, s.lapMs, s.step], ['trade', 'bridge', '#3dff9a', ['chart', 'pnl'], true, 9000, 4], 'in profit: green on the chart and the P&L, the faster lap');
+  assert.equal(L({ agent: agent({ position: pos }), openPnl: 0 }).tone, 'bridge', 'at zero: green');
+  s = L({ agent: agent({ position: pos }), openPnl: -12 });
+  assert.deepEqual([s.phase, s.tone, s.color, s.said], ['trade', 'no', '#ff3b5c', 'In a trade, long 2 MNQ: under water'], 'under water: red');
+  assert.deepEqual([L({ agent: agent({ position: pos }), openPnl: null }).tone, L({ agent: agent({ position: pos }), openPnl: null }).said], ['screen', 'In a trade, long 2 MNQ: open P&L not known yet'], 'P&L not known: never guessed');
+  assert.equal(L({ agent: agent({ position: pos, killed: true }), openPnl: -1 }).phase, 'trade', 'a position shows even with the kill switch on (its stop and target stay)');
+  s = L({ exits: [{ at: T0 - 2000, pnl: 32 }] });
+  assert.deepEqual([s.phase, s.tone, s.panels, s.said], ['exit', 'bridge', ['pipe', 'pnl'], 'Out of the trade: +$32.00'], 'a flat exit: back on the tracker, green for a gain');
+  assert.equal(L({ exits: [{ at: T0 - 2000, pnl: -16 }] }).tone, 'no', 'red for a loss');
+  assert.deepEqual([L({ agent: agent({ killed: true }) }).phase, L({ agent: agent({ killed: true }) }).panels], ['stopped', ['acct']]);
+  assert.match(L({ agent: agent({ standDown: 'two losing trades' }) }).said, /^Stood down: two losing trades/);
+  assert.deepEqual([L({ agent: agent({ connected: false }) }).phase, L({ agent: agent({ connected: false }) }).panels], ['quiet', []], 'not connected: no light');
+  assert.deepEqual(AC.lightState(null).panels, []);
+  for (const t of ['screen', 'eyes', 'judgment', 'checks', 'bridge', 'passed', 'no']) assert.match(AC.LIGHT[t], /^#[0-9a-f]{6}$/);
+  assert.deepEqual(AC.LAP_MS, { slow: 13000, fast: 9000 });
+});
+
+test('the stream\'s drawer: his record, only what the channel carries', () => {
+  const o = { fmtPx: p => p.toFixed(2), tick: () => 0.25 };
+  const plan = { agent: 'demo', id: 'cp1', at: T0, action: 'plan', root: 'MNQ', side: 'buy', kind: 'limit', price: 25390, qty: 2, stopTicks: 16, targetTicks: 32, expireSec: 600, riskDollars: 16, setup: 'Sample pullback', reason: 'Sample: a made-up reason', confidence: 0.64, result: 'proposed' };
+  let r = AC.decisionRecord({ type: 'plan', m: plan, end: { state: 'accepted', react: ' in 1.3 s' }, proposal: { seenAt: T0 + 1000, answeredAt: T0 + 2300, expiresAt: T0 + 600000 } }, o);
+  const f = Object.fromEntries(r.facts);
+  assert.equal(r.words, 'Sample: a made-up reason');
+  assert.equal(r.tone, 'bridge');
+  assert.equal(f.Entry, 'Buy 2 MNQ, limit 25390.00');
+  assert.equal(f.Stop, '16 ticks, 25386.00'); assert.equal(f.Target, '32 ticks, 25398.00');
+  assert.equal(f.Risk, '$16.00, reward 2.00 to 1'); assert.equal(f['Entry lives'], '10 min'); assert.equal(f.Confidence, '0.64');
+  assert.equal(f['His rules'], 'passed ChartBridge\'s checks'); assert.equal(f.Proposal, 'Accepted');
+  assert.match(f['You answered'], /in 1\.3 s$/);
+  for (const k of Object.keys(f)) assert.ok(!/for and against|notebook|cost|eyes|judgment/i.test(k), 'nothing the channel does not carry: ' + k);
+  r = AC.decisionRecord({ type: 'plan', m: Object.assign({}, plan, { result: 'refused: qty must be a whole number from 1 to 20 (maxQty.MNQ)' }) }, o);
+  assert.equal(r.tone, 'no'); assert.equal(Object.fromEntries(r.facts)['His rules'], 'refused by ChartBridge: qty must be a whole number from 1 to 20 (maxQty.MNQ)');
+  assert.ok(!r.facts.some(x => x[0] === 'Proposal'), 'no proposal line for a plan that never was one');
+  r = AC.decisionRecord({ type: 'plan', m: { agent: 'demo', id: 's', at: T0, action: 'skip', setup: null, reason: 'Sample: no level', root: null, side: null, result: 'skipped' } }, o);
+  assert.deepEqual([r.tag, r.tone, r.title, r.words], ['PASS', 'passed', 'He passed', 'Sample: no level']);
+  assert.ok(!r.facts.some(x => x[0] === 'Setup'), 'a field it does not carry is left out');
+  r = AC.decisionRecord({ type: 'note', m: { kind: 'notebook', text: 'line one\nline two', at: T0 } }, o);
+  assert.deepEqual([r.tag, r.pre, r.words], ['NOTEBOOK', true, 'line one\nline two']);
+  assert.equal(AC.rowTone({ type: 'note', m: { kind: 'look' } }).tone, 'eyes');
+  r = AC.decisionRecord({ type: 'exit', m: { root: 'MNQ', dir: 1, qty: 2, pIn: 25390, pOut: 25398, tIn: T0, tOut: T0 + 26 * 60000, pnl: 32 } }, o);
+  assert.deepEqual([r.tag, r.tone, Object.fromEntries(r.facts).Result, Object.fromEntries(r.facts).Held], ['EXIT', 'bridge', '+$32.00 before fees', '26 min']);
+  r = AC.decisionRecord({ type: 'fill', m: { side: 'sell', qty: 1, root: 'MNQ', p: 25400, at: T0, account: 'SIM-AG1' } }, o);
+  assert.equal(r.title, 'Sold 1 MNQ at 25400.00');
+});
+
+test('the session trail, the room and the Motion switch', () => {
+  const T = AC.sessionTrail(RULES, Date.UTC(2026, 9, 8, 16, 50, 0), [{ at: Date.UTC(2026, 9, 8, 14, 5, 0), mark: 'F', tone: 'bridge', title: 'a fill' }, { at: Date.UTC(2026, 9, 8, 21, 0, 0), mark: 'X', tone: 'no' }]);
+  assert.equal(T.from, '09:45'); assert.equal(T.to, '15:55');
+  assert.deepEqual(T.hours.map(h => h.label), ['09:45', '11:00', '12:00', '13:00', '14:00', '15:00', '15:55']);
+  assert.equal(T.nowPct, Math.round((12 * 60 + 50 - 585) / 370 * 10000) / 100, '12:50 New York');
+  assert.equal(T.marks.length, 1, 'a fill outside the session is left out');
+  assert.equal(T.marks[0].pct, Math.round(20 / 370 * 10000) / 100);
+  const lines = AC.roomLines({ roomDrawdownWhy: 'NinjaTrader does not report a trailing drawdown for this account' }, ACC.limitState({ roomDrawdown: null, roomDailyLoss: null, pnlToday: -100 }, { daily_loss_limit: 600 }));
+  assert.deepEqual(lines.map(l => [l.key, l.room, l.limit, l.leftPct]), [['dd', null, null, null], ['dl', 500, 600, 83]]);
+  assert.equal(lines[0].why, 'NinjaTrader does not report a trailing drawdown for this account', 'never estimated: ChartBridge\'s words');
+  assert.ok(!AC.roomLines({}, null).some(l => /target/i.test(l.label)), 'the channel carries no profit target');
+  const mem = new Map(), st = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, v) };
+  assert.equal(AC.motionPref(st), 'full');
+  assert.equal(AC.setMotionPref(st, 'off'), 'off'); assert.equal(AC.motionPref(st), 'off'); assert.equal(mem.get(AC.MOTION_KEY), 'off');
+  const bad = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
+  assert.equal(AC.motionPref(bad), 'full'); assert.equal(AC.setMotionPref(bad, 'off'), 'off', 'blocked storage: kept for the page only');
+  assert.equal(AC.motionPref(null), 'full');
+});
+
+test('board F wiring: fonts from this PC, the light in CSS only, no keydown on the document, no ChartMotion, no motion on figures', () => {
+  const css = read('live', 'agent.css'), js = read('live', 'agent.js'), fonts = read('live', 'fonts', 'agent-fonts.css');
+  for (const page of ['index.html', 'agent.html']) assert.match(read('live', page), /<link rel="stylesheet" href="fonts\/agent-fonts\.css">/);
+  const to = JSON.parse(read('nt8', 'install-files.json')).www.map(f => f.to);
+  for (const f of ['agent-fonts.css', 'OFL-agent.txt', 'ChakraPetch-Regular.woff2', 'ChakraPetch-Medium.woff2', 'ChakraPetch-SemiBold.woff2', 'ChakraPetch-Bold.woff2', 'JetBrainsMono-Regular.woff2', 'JetBrainsMono-SemiBold.woff2']) {
+    assert.ok(to.includes('fonts/' + f), f + ' installed');
+    if (/woff2$/.test(f)) { assert.equal(fs.readFileSync(path.join(root, 'live', 'fonts', f)).subarray(0, 4).toString('latin1'), 'wOF2'); assert.match(fonts, new RegExp(f.replace('.', '\\.'))); }
+  }
+  assert.match(read('live', 'fonts', 'OFL-agent.txt'), /SIL OPEN FONT LICENSE Version 1\.1/);
+  assert.doesNotMatch(css + fonts, /fonts\.(googleapis|gstatic)\.com/);
+  assert.match(css, /@property --ag-pc \{ syntax: '<color>'/); assert.match(css, /@keyframes ag-orbit \{ to \{ --ag-ang: 360deg; \} \}/);
+  assert.match(css, /prefers-reduced-motion: reduce/); assert.match(css, /\.ag-view\.ag-still \.ag-light \{ display: none !important; \}/);
+  assert.match(css, /#c81fe0/); assert.doesNotMatch(css + js + read('live', 'agent-core.js'), /#ff4fd8/i, 'the old Judgment pink is gone');
+  assert.doesNotMatch(js, /requestAnimationFrame|setInterval/, 'no per-frame script for the light');
+  assert.doesNotMatch(js, /document\.addEventListener\('keydown'/, 'no keydown handler on the document');
+  assert.doesNotMatch(js, /ChartMotion\.|window\.ChartMotion|data-in=|data-count=/, 'the ChartMotion kit is not used on the Agent tab');
+  assert.match(js, /data-agans="accept" data-no-motion/); assert.match(js, /data-k="sPnl"/);
+  for (const f of ['live/agent.css', 'live/fonts/agent-fonts.css', 'live/fonts/OFL-agent.txt']) assert.doesNotMatch(read(...f.split('/')), /[–—]/, f + ': no em or en dashes');
+});
