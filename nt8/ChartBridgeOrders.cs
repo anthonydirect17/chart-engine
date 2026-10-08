@@ -764,8 +764,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (copierWhy != null) return copierWhy;   // 0.4.0 copier:
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
             // 0.3.8: a resting entry is named "atm": its ticks can change before the fill (plan), and travel with it when moved.
-            string name = "CB#" + tag + (bot ? " bot" : kind == "market" ? "" : " atm") + (strat != null ? StrategyNamePart(strat) : " s" + stopTicks + " t" + targetTicks) + KindSuffix(kind);
-            if (agent != null) name = "CB#" + tag + " ag:" + agent + " s" + stopTicks + " t" + targetTicks;   // 0.5.0 agents: "CB#1a2b3c4d ag:manrae s8 t16" (any kind; recovery reads it as a v2 entry)   // 0.4.0 bot: "bot" names a bot entry   // 0.4.0 B1: sg, sl, mit   // 0.4.0 fix1 (F5): "sg s20", the stop ticks in the name
+            string name = "CB#" + tag + (bot ? " bot" : kind == "market" ? "" : " atm") + (strat != null ? StrategyNamePart(strat) : " s" + stopTicks + " t" + targetTicks) + KindSuffix(kind);   // 0.4.0 bot: "bot" names a bot entry   // 0.4.0 B1: sg, sl, mit   // 0.4.0 fix1 (F5): "sg s20", the stop ticks in the name
+            if (agent != null) name = "CB#" + tag + " ag:" + agent + " s" + stopTicks + " t" + targetTicks;   // 0.5.0 agents: "CB#1a2b3c4d ag:manrae s8 t16" (any kind; recovery reads it as a v2 entry)
             if (kind != "market" && strat == null) { SetPlan(tag, stopTicks, targetTicks); planTag = tag; }   // in memory now; PlaceOrder writes the file after PlaceLock
             OrderType type = OrderTypeOf(kind);   // 0.4.0 B1: also StopLimit and MIT
             Order order = account.CreateOrder(inst, isBuy ? OrderAction.Buy : OrderAction.Sell, type, OrderEntry.Manual, TimeInForce.Day, qty,
