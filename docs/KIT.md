@@ -20,9 +20,9 @@ The only things that fade are the light's colour and the panel glow.
 
 | Page | How |
 |---|---|
-| Chart page and workspace | `<link rel="stylesheet" href="kit.css">` and `<script src="kit.js"></script>`. Both are in `nt8/install-files.json` (with `kit.html`), so the PC updater ships them. |
-| The Desk | Vendor `kit.css` and `kit.js` next to the chart files (`public/vendor/chart-engine/`), from the same chart-engine commit, and load them with `<link>` and `<script defer>`. The script sets `window.ChartKit`. From an ES module: `import '/vendor/chart-engine/kit.js'` then use `window.ChartKit`. |
-| Markup Studio | `<link rel="stylesheet" href="kit.css">` and `<script src="kit.js">` (the Studio serves `live/`). |
+| Chart page and workspace | `<link rel="stylesheet" href="fonts/plex.css">`, `<link rel="stylesheet" href="fonts/agent-fonts.css">`, `<link rel="stylesheet" href="kit.css">` and `<script src="kit.js"></script>`. All of them, the font files and `kit.html` are in `nt8/install-files.json`, so the PC updater ships them. |
+| The Desk | Vendor `kit.css` and `kit.js` next to the chart files (`public/vendor/chart-engine/`), from the same chart-engine commit, **with the same font files beside them** in `public/vendor/chart-engine/fonts/`: `plex.css`, `agent-fonts.css`, every `.woff2` they name, `OFL.txt` and `OFL-agent.txt`. Load the two font stylesheets, then `kit.css` with `<link>`, and `kit.js` with `<script defer>`. The script sets `window.ChartKit`. From an ES module: `import '/vendor/chart-engine/kit.js'` then use `window.ChartKit`. |
+| Markup Studio | The same four lines as the chart page (the Studio serves `live/`, fonts included). |
 | Node (tests) | `require('./live/kit.js')`. Nothing touches a page at require time. |
 
 Put `class="kit kit-trading"`, `kit kit-desk` or `kit kit-agent` on the root of the screen. Every kit class works only
@@ -36,16 +36,24 @@ inside a `.kit` root, so the kit never leaks into the rest of a page.
 | `--kit-body` | IBM Plex Sans | body text |
 | `--kit-mono` | JetBrains Mono | every number, with tabular digits (`.kit-num`) |
 
-A page that may load from the internet (The Desk, the Studio) adds this link before `kit.css`:
+Every font comes from the page's own folder, never the internet: ChartBridge's pages load nothing from the internet
+(the 1.16.0 offline rule, `test/offline.test.js`, which reads every file in the www list, `kit.html` and `kit.css`
+included), and The Desk vendors the same files.
+
+| File | Faces |
+|---|---|
+| `live/fonts/plex.css` (already on every page) | IBM Plex Sans 400 500 600, IBM Plex Sans Condensed, IBM Plex Mono; licence `OFL.txt` |
+| `live/fonts/agent-fonts.css` (shared with the Agent tab) | Chakra Petch 400 500 600 700, JetBrains Mono 400 600, Latin subset; licence `OFL-agent.txt` |
 
 ```html
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="fonts/plex.css">
+<link rel="stylesheet" href="fonts/agent-fonts.css">
+<link rel="stylesheet" href="kit.css">
 ```
 
-A trading PC loads nothing from the internet (`test/offline.test.js`), so the chart page and `kit.html` use
-`fonts/plex.css` instead. The stacks fall back cleanly: titles to IBM Plex Sans Condensed, numbers to IBM Plex Mono
-(both served by the PC), then Segoe UI or Consolas, then the system's.
+The kit uses only those weights (titles 500 to 700, numbers 400 and 600). The stacks fall back cleanly for a character
+outside the Latin subset: titles to IBM Plex Sans Condensed, numbers to IBM Plex Mono, then Segoe UI or Consolas, then
+the system's.
 
 ## Surfaces
 
@@ -198,11 +206,12 @@ copier, a panel holding a ticket; a chart panel in a trade lights; outside the A
 outline with the light, the motion setting with storage that throws, reduced motion, the tokens against the chart's
 locked palette (`test/theme.test.js` LOCKED and the engine's `buildTheme()`), contrast for every text token on every
 surface, no transition or animation on numbers, chips, buttons and the rest (R3), no em or en dashes, and the files
-installed.
+installed, with the fonts it loads and no internet address.
 
 `npm run smoke:kit` (Chromium, `test/kit-smoke.mjs` on `live/kit.html`): the gallery loads with no console error and
 nothing from the internet; no horizontal scroll at 390, 1366 and 1920 px; the light circles only while lit, at 9 s in a
 trade and 13 s deciding, and fades to the locked green and red; reduced motion and motion off stop the orbit and keep the
 glow; the light refuses on the mock ticket, a ticket row, Flatten and the copier. Screenshots in `test/out/`:
 `kit-gallery-1440.png`, `kit-trading.png`, `kit-desk.png`, `kit-agent.png`, `kit-light-profit.png`, `kit-light-loss.png`,
-`kit-armed.png`. With `KIT_WEBFONTS=1` the screenshots load the web fonts first (needs the internet).
+`kit-armed.png`. The smoke also checks that all three fonts load from `live/fonts` and that the armed outline comes
+and goes at once, never fading.

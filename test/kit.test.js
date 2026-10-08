@@ -169,7 +169,9 @@ test('the armed outline: on and off, and together with the light', () => {
   assert.ok(!p.classList.contains('kit-armed') && p.classList.contains('kit-lit'));
   const css = read('live/kit.css');
   assert.match(css, /\.kit \.kit-armed \{ border-color: var\(--kit-armed-line\); box-shadow: 0 0 22px -3px rgba\(123,92,255,\.55\), 0 0 8px -2px rgba\(182,156,255,\.35\), inset 0 0 18px -8px rgba\(123,92,255,\.30\); \}/);
-  assert.match(css, /\.kit \.kit-armed\.kit-lit \{ box-shadow: 0 0 0 1px rgba\(155,123,255,\.45\), 0 0 14px -2px rgba\(123,92,255,\.80\)[^}]*, 0 0 34px -4px var\(--kit-pc\), inset 0 0 22px -12px var\(--kit-pc\); \}/, 'armed and lit: the purple ring on top, the light\'s glow under it');
+  assert.match(css, /\.kit \.kit-armed\.kit-lit::after \{ content: ""; position: absolute; inset: -1px; pointer-events: none; border: 1px solid rgba\(155,123,255,\.50\);/, 'armed and lit: the purple ring is drawn over the light');
+  // armed is trading truth: the panel, the card and the outline never fade
+  for (const r of rules(css)) if (/kit-(panel|card|armed)\b/.test(r.sel) && !/kit-halo|kit-orbit/.test(r.sel)) assert.ok(!/transition|animation/.test(r.body), r.sel + ' has motion');
 });
 
 test('motion: full by default, off remembered under kit-motion-v1, and storage that throws never breaks it', () => {
@@ -232,8 +234,8 @@ test('reduced motion: the system setting and the motion kit\'s Less motion stop 
   const css = read('live/kit.css');
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.kit \.kit-orbit \{ animation: none; transition: none; \}/);
   assert.match(css, /:root\.kit-motion-off \.kit \.kit-orbit, :root\.motion-off \.kit \.kit-orbit \{ animation: none; transition: none; \}/);
-  // the glow is on .kit-lit, which nothing turns off for reduced motion
-  assert.match(css, /\.kit \.kit-lit \{ box-shadow: 0 0 34px -4px var\(--kit-pc\), inset 0 0 22px -12px var\(--kit-pc\); \}/);
+  // the glow is on the lit panel's halo, which nothing turns off for reduced motion
+  assert.match(css, /\.kit \.kit-lit > \.kit-halo \{ box-shadow: 0 0 34px -4px var\(--kit-pc\), inset 0 0 22px -12px var\(--kit-pc\); \}/);
   for (const block of css.matchAll(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/g)) assert.ok(!/kit-lit|box-shadow|opacity/.test(block[1]), 'reduced motion leaves the glow alone');
   // the light: a registered angle and colour, a comet masked to the border, the paces
   assert.match(css, /@property --kit-ang \{ syntax: '<angle>'; inherits: false; initial-value: 0deg; \}/);
@@ -335,7 +337,7 @@ test('R3: kit.css puts no transition or animation on a number, chip, button, row
   const all = rules(css);
   assert.ok(all.length > 80, 'the rules were read: ' + all.length);
   const NEVER = /kit-num|kit-big|kit-chip|kit-tag|kit-btn|kit-row|kit-tab|kit-seg|kit-meter|kit-field|kit-step|kit-pill|kit-dot|kit-rail|kit-fact|kit-key|kit-glow|kit-profit-text|kit-loss-text|button|select|input|\*/;
-  const MAY_MOVE = /^\.kit \.kit-(?:orbit|halo > \.kit-orbit|panel|card|drawer|pace-trade > \.kit-orbit|pace-trade > \.kit-halo > \.kit-orbit|lit > \.kit-orbit|lit > \.kit-halo > \.kit-orbit)$|^:root\.(?:kit-)?motion-off \.kit \.kit-(?:orbit|panel|card|drawer)$/;
+  const MAY_MOVE = /^\.kit \.kit-(?:orbit|halo|drawer|pace-trade > \.kit-orbit|pace-trade > \.kit-halo > \.kit-orbit|lit > \.kit-orbit|lit > \.kit-halo > \.kit-orbit)$|^:root\.(?:kit-)?motion-off \.kit \.kit-(?:orbit|halo|drawer)$/;
   let moving = 0;
   for (const r of all) {
     const decls = [...r.body.matchAll(/(?:^|;)\s*(transition[a-z-]*|animation[a-z-]*)\s*:\s*([^;]+)/g)].filter(d => !/^(none|0s?|paused|running)$/.test(d[2].trim()) && !/^animation-(?:play-state|duration)$/.test(d[1]));
@@ -388,9 +390,27 @@ test('installed: kit.css, kit.js and kit.html are in the www list, and the galle
   const to = www.map(x => x.to);
   const html = read('live/kit.html');
   const refs = [...html.matchAll(/<(?:script|link)[^>]+(?:src|href)="([^"]+)"/g)].map(m => m[1]);
-  assert.deepStrictEqual(refs, ['fonts/plex.css', 'kit.css', 'kit.js']);
+  assert.deepStrictEqual(refs, ['fonts/plex.css', 'fonts/agent-fonts.css', 'kit.css', 'kit.js']);
   for (const r of refs) assert.ok(to.includes(r), r + ' is installed');
   assert.ok(!/https?:\/\//.test(html + read('live/kit.css') + read('live/kit.js')), 'nothing from the internet in the installed kit files');
+  for (const f of KIT_FILES) assert.ok(!/fonts\.(googleapis|gstatic)\.com/.test(read(f)), f + ' has a web font address');
+  // the fonts: the Agent tab's files, every face installed, and only the weights they have
+  const faces = [...read('live/fonts/agent-fonts.css').matchAll(/font-family: "([^"]+)"; font-style: normal; font-weight: (\d+);[^}]*url\("([^"]+)"\)/g)].map(m => ({ family: m[1], weight: +m[2], file: m[3] }));
+  assert.deepStrictEqual(faces.map(f => f.family + ' ' + f.weight), ['Chakra Petch 400', 'Chakra Petch 500', 'Chakra Petch 600', 'Chakra Petch 700', 'JetBrains Mono 400', 'JetBrains Mono 600']);
+  for (const f of faces) {
+    assert.strictEqual(fs.readFileSync(path.join(root, 'live', 'fonts', f.file)).subarray(0, 4).toString('latin1'), 'wOF2', f.file);
+    assert.ok(www.some(x => x.from === 'live/fonts/' + f.file && x.to === 'fonts/' + f.file), f.file + ' is installed');
+  }
+  for (const f of ['agent-fonts.css', 'OFL-agent.txt']) assert.ok(www.some(x => x.from === 'live/fonts/' + f && x.to === 'fonts/' + f), f + ' is installed');
+  assert.match(read('live/fonts/OFL-agent.txt'), /SIL OPEN FONT LICENSE Version 1\.1/);
+  const css = read('live/kit.css');
+  for (const m of css.matchAll(/font: (\d{3}) [^;]*var\(--kit-(head|mono)\)/g)) {
+    const fam = m[2] === 'head' ? 'Chakra Petch' : 'JetBrains Mono';
+    assert.ok(faces.some(f => f.family === fam && f.weight === +m[1]), fam + ' ' + m[1] + ' is used but not served');
+  }
+  assert.ok(!/font: 500 [^;]*var\(--kit-mono\)/.test(css));
+  // test/offline.test.js reads every www file: kit.html, kit.css, kit.js and the font stylesheet are among them
+  assert.match(read('test/offline.test.js'), /for \(const f of www\)/);
   // the gallery uses sample data only
   assert.match(html, /Sample data only: Sim101/);
 });
@@ -398,7 +418,7 @@ test('installed: kit.css, kit.js and kit.html are in the www list, and the galle
 test('docs/KIT.md: the tokens, the fonts link, the rules, the API and the storage key', () => {
   const md = read('docs/KIT.md');
   for (const k of Object.keys(K.TOKENS)) assert.ok(md.includes('--kit-' + k), 'KIT.md lists --kit-' + k);
-  assert.ok(md.includes('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap'));
-  assert.ok(md.includes(read('test/kit-smoke.mjs').match(/const FONTS_CSS = '([^']+)'/)[1]), 'the smoke loads the documented link');
+  assert.ok(!/fonts\.(googleapis|gstatic)\.com/.test(md), 'no web font link: the fonts are served with the page');
+  assert.match(md, /fonts\/agent-fonts\.css/); assert.match(md, /The Desk vendors the same files/);
   for (const s of ['kit-motion-v1', 'data-no-light', 'ChartKit.light', 'ChartKit.armed', 'ChartKit.setMotion', 'kit-trading', 'kit-desk', 'kit-agent', 'kit-armed', 'R3', 'npm run smoke:kit']) assert.ok(md.includes(s), s);
 });
