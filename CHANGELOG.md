@@ -1,5 +1,30 @@
 # Changelog
 
+## ChartBridge 0.5.2 and chart 1.18.1 (2026-10-08): a full-session agent window; an account change keeps the mode
+
+Anthony's rulings (2026-10-08): Manrae may trade any time after the 18:00 New York reopen, until his last entry at 15:25, and
+ChartBridge flattens him at 15:55. No locks by account, account type or account name: the window and the mode are Anthony's
+settings, on the Agent tab. `nt8/PROTOCOL.md`, "Agent channel", has the rules.
+
+- **The window in session time.** The agent's `entryFrom`, `entryUntil` and `flatAt` are read in session order, minutes since
+  the 18:00 open (18:00 is 0, midnight 360, 17:00 1380). 18:00 to 15:25, flat 15:55 is allowed, and so is the old 09:45 to
+  15:00, flat 15:55 (still the default with no rules file). A window the wrong way round (15:30 to 09:00) is refused, saying
+  so; `flatAt` stays at 15:59 at the latest. The 09:30 floor is gone.
+- **Across midnight.** Entries, the proposals' lives, the timers that cancel unfilled entries at `entryUntil`, the flat hours
+  and the flatten's words all use session time: a position held from 22:00 past midnight stays, and is flattened at 15:55.
+  The day's counters, stand-down and plan ids still start over at 18:00.
+- **Never into a closed market.** No agent entry while the market is closed: the 17:00 to 18:00 break, Friday 17:00 to Sunday
+  18:00, a CME holiday, and after the 13:00 halt on an NYSE holiday or the 13:15 halt on an early close (ChartBridge's own
+  CME calendar). A position still held then is flattened at the next open, as before over a shut market.
+- **An account change keeps the mode** (until 0.5.1 the agent went to Shadow). The page asks once before a LIVE account,
+  naming the mode: "Agent manrae will trade LIVE account EVAL-A in Auto. Continue?"; the Bot tab's question names the bot's
+  mode the same way. Not confirmed, nothing changes. The rest is as it was: never the bot's, the copier's or another agent's
+  account, the owner lock, and no change while the agent has a position, a working entry or a proposal.
+- **The page (chart 1.18.1).** The Agent tab checks the rules the same way before sending, its session trail runs across
+  midnight (an hour mark every 3 hours on a long session), and it says the mode is kept after an account change. A rules file
+  with an 18:00 window is refused by ChartBridge 0.5.1 and older (no entries for that agent until its rules are set again):
+  update ChartBridge before setting one.
+
 ## 1.18.0 (2026-10-08): the Account tab's Hide and Show; the ticket and ChartBridge 0.5.1's re-sent orders
 
 The page side of ChartBridge 0.5.1 (below). Page only, no recompile; with an older ChartBridge everything works as 1.17.0.

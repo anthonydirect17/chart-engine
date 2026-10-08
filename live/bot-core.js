@@ -193,8 +193,8 @@ function accountChoices(accountsMsg, bot) {
 }
 /**
  * The page's change of the bot's account: { error } (a plain reason) or { msg, live, confirm } where msg is the `botAccount`
- * message and confirm, for a LIVE account, the one question the page asks first ("The bot will trade LIVE account X.
- * Continue?"). ChartBridge checks every rule again (the gates, the copier, flat only).
+ * message and confirm, for a LIVE account, the one question the page asks first ("The bot will trade LIVE account X in
+ * Auto. Continue?", naming the mode it keeps). ChartBridge checks every rule again (the gates, the copier, flat only).
  */
 function botAccountChange(bot, name, choices, cid) {
   const cur = botAccount(bot).name, b = bot || {};
@@ -206,7 +206,7 @@ function botAccountChange(bot, name, choices, cid) {
   const msg = { type: 'botAccount' };
   if (cid) msg.cid = cid;
   msg.account = name;
-  return { msg, live: !c.sim, confirm: c.sim ? '' : 'The bot will trade LIVE account ' + name + '. Continue?' };
+  return { msg, live: !c.sim, confirm: c.sim ? '' : 'The bot will trade LIVE account ' + name + ' in ' + (MODE_NAME[b.mode] || 'Shadow') + '. Continue?' };   // 1.18.1: names the mode it keeps
 }
 
 /* ======================================================================== modes */

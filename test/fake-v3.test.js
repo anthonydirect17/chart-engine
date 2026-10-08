@@ -833,7 +833,7 @@ test('agents: rules from the page (sections 3 and 7): every allowed value, saved
   assert.match(r({ roots: 'NQ,MNQ', maxQtyNQ: 3 }), /maxQtyNQ must be a whole number from 1 to 2/);
   assert.match(r({ maxQtyMNQ: 21 }), /from 1 to 20/);
   assert.match(r({ roots: 'MNQ' }), /maxQtyNQ is for a root not in roots/);
-  assert.match(r({ entryFrom: '09:29' }), /09:30 or later/);
+  assert.match(r({ entryFrom: '15:00', entryUntil: '10:00', flatAt: '15:55' }), /in the session, which runs from 18:00 to 17:00 New York time \(15:00 to 10:00 goes the wrong way round\)/);   // 0.5.2
   assert.match(r({ entryFrom: '9:45' }), /HH:MM/);
   assert.match(r({ entryUntil: '09:45' }), /before entryUntil/);
   assert.match(r({ flatAt: '11:30' }), /after entryUntil/);
@@ -986,13 +986,20 @@ test('agents review S2: a refused duplicate never replaces the plan it copies; b
   assert.equal(a.proposals.get('dup1').state, 'open');
 });
 
-test('agents review S5: an account change puts the agent in shadow', async () => {
+test('ChartBridge 0.5.2: an account change keeps the agent\'s mode (until 0.5.1 it went to shadow)', async () => {
   const d = await makeAgentDesk();
   d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
   d.desk.acct.get('SIM-F2').trade = true; d.desk.refreshAccounts(); d.desk.copier.followers.delete('SIM-F2');
   assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2' })), null);
-  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).mode, 'shadow');
-  assert.equal(d.agentTake('welcome').pop().mode, 'shadow', 'the agent is told');
+  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).mode, 'auto');
+  assert.equal(d.agentTake('welcome').pop().mode, 'auto', 'the agent is told, in its mode');
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' });
+  d.desk.acct.get('SIM-F1').trade = true; d.desk.refreshAccounts(); d.desk.copier.followers.delete('SIM-F1');
+  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F1' })), null);
+  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).mode, 'copilot');
+  // still refused while it has a position (as before)
+  d.desk.agents.get('demo').trade = { root: 'MNQ', pnl: 0 };
+  assert.match(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2' })), /position/);
 });
 
 test('agents review V3: the checks run in the contract\'s order (a plan failing two gets the earlier reason); checks 2, 9, 10 and 11', async () => {
@@ -1202,4 +1209,46 @@ test('as built: only a chosen account is the agent\'s; a clash stands the agent 
   x.hello(); x.agentTake();
   x.act({ type: 'order', cid: 'own', account: 'SIM-AG1', root: 'ES', side: 'buy', kind: 'market', qty: 1 });
   assert.equal(x.agentTake('exec').length, 0, 'Anthony\'s fill on its account is not the agent\'s');
+});
+
+test('ChartBridge 0.5.2: the full-session window (18:00 to 15:25, flat 15:55) in session time; the market closed; no flatten at midnight', async () => {
+  const NY = (d, h, mi) => Date.UTC(2026, 9, d, h + 4, mi || 0);   // October: New York is UTC less 4 hours
+  const d = await makeAgentDesk({ at: NY(8, 17, 50) });            // Thursday 17:50 (the break)
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  const rules = { type: 'agentRules', cid: 'r', agent: 'demo', roots: 'NQ,MNQ', maxQtyNQ: 2, maxQtyMNQ: 20, entryFrom: '18:00', entryUntil: '15:25', flatAt: '15:55', maxExpireSec: 1800, maxTrades: 0, maxLosses: 0 };
+  assert.equal(reasonOf(d.act(rules)), null, '18:00 to 15:25, flat 15:55 is accepted');
+  assert.match(reasonOf(d.act(Object.assign({}, rules, { entryFrom: '15:30', entryUntil: '09:00' }))), /goes the wrong way round/);
+  assert.match(reasonOf(d.act(Object.assign({}, rules, { flatAt: '16:30' }))), /15:59 at the latest/);
+  d.tick(25400);
+  assert.match(d.plan({ price: 25390 }).why, /^the market is closed now/, '17:50: the break');
+  let px = 25400;
+  const at = t => { d.advance(t - d.now()); d.desk.tick('MNQ', px); d.desk.tick('NQ', 25400); };   // fresh trades, between its stop and target once held
+  at(NY(8, 23, 0));                                                // Thursday 23:00
+  assert.equal(d.plan({ price: 25390, expireSec: 1800 }).why, null, '23:00: inside, placed');
+  d.tick(25389.75); px = 25391;                                    // it fills: a position held from 23:00
+  const a = d.desk.agents.get('demo');
+  assert.ok(d.desk.agentMsg(a).position, 'held');
+  d.take('status');
+  for (const t of [NY(8, 23, 59), NY(9, 0, 0), NY(9, 0, 30), NY(9, 9, 0), NY(9, 15, 54)]) { at(t); d.desk.everySecond(); }
+  const st = d.take('status');
+  assert.ok(!st.some(x => /by its rules/.test(x.text)), 'no flatten across midnight: ' + JSON.stringify(st));
+  assert.ok(d.desk.agentMsg(a).position, 'still held at 15:54');
+  at(NY(9, 15, 55)); d.desk.everySecond();
+  assert.ok(d.take('status').some(x => x.text === 'demo flattened at 15:55 by its rules'), 'the flatten at 15:55');
+  assert.equal(d.desk.agentMsg(a).position, null);
+  // Sunday 18:00 opens; Saturday is closed
+  const sun = await makeAgentDesk({ at: NY(11, 18, 0) });
+  sun.hello(); sun.act({ type: 'agentMode', agent: 'demo', mode: 'auto' }); sun.act(rules); sun.tick(25400);
+  assert.equal(sun.plan({ price: 25390 }).why, null, 'Sunday 18:00: open');
+  const sat = await makeAgentDesk({ at: NY(10, 12, 0) });
+  sat.hello(); sat.act({ type: 'agentMode', agent: 'demo', mode: 'auto' }); sat.act(rules); sat.tick(25400);
+  assert.match(sat.plan({ price: 25390 }).why, /^the market is closed now/);
+  // Christmas Day 2026 (a CME holiday): closed; Christmas Eve 12:00 open, 13:20 (after the early close) closed
+  const NYd = (m, d2, h, mi) => Date.UTC(2026, m - 1, d2, h + 5, mi || 0);   // December: UTC less 5 hours
+  for (const [t, open] of [[NYd(12, 25, 10), false], [NYd(12, 24, 12), true], [NYd(12, 24, 13, 20), false]]) {
+    const x = await makeAgentDesk({ at: t });
+    x.hello(); x.act({ type: 'agentMode', agent: 'demo', mode: 'auto' }); x.tick(25400);
+    const why = x.plan({ price: 25390 }).why;
+    if (open) assert.equal(why, null); else assert.match(why, /^the market is closed now/);
+  }
 });

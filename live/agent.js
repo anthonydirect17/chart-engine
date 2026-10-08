@@ -786,7 +786,7 @@ function create(o) {
     const a = cur(); if (!a) return;
     const r = AC.accountChange(a, name, AC.accountChoices(S.accounts, a, others()), ctxNow(a));
     if (r.error) { put(q('[data-k="acctWhy"]'), 'textContent', r.error); return; }
-    if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; sentLine('acctWhy', 'Sent: now in Shadow.'); }
+    if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; sentLine('acctWhy', 'Sent: its mode (' + (AC.MODE_NAME[a.mode] || 'Shadow') + ') is kept.'); }
     renderPanel();
   }
   function openRules() {

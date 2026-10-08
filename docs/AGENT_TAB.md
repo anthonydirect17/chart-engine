@@ -172,7 +172,7 @@ decision in a drawer over the right column, outlined in that decision's colour:
 
 The page checks the rules against section 3 before sending (nothing ChartBridge would refuse for its values is sent):
 at least one root, each served and not quote only; a size from 1 to the ceiling (2 for NQ and ES, 20 for MNQ and MES);
-New York times `HH:MM`, entries from 09:30, `entryFrom` before `entryUntil`, `flatAt` after it and at most 15:59;
+New York times `HH:MM`, in session order from the 18:00 open (ChartBridge 0.5.2, chart 1.18.1): `entryFrom` before `entryUntil`, `flatAt` after it and at most 15:59, so 18:00 to 15:25 flat 15:55 runs across midnight;
 `maxExpireSec` 60 to 1800; `maxTrades` 0 or 1 to 50; `maxLosses` 0 or 1 to 20.
 
 ## With an older ChartBridge
@@ -234,9 +234,9 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
    no working entry and no open proposal (ChartBridge refuses them otherwise and says why under the button).
 10. **The account chooser (lead's default):** every account ChartBridge says is tradable, SIM first, each marked; the bot's
     account, the copier's leader and followers and another agent's account are listed but not offered, with the reason
-    (ChartBridge refuses them anyway). **An account change puts the agent in Shadow** (lead's default, ChartBridge is told
-    the same): the LIVE question names the mode and says so ("Demo Agent is in Auto: it will trade LIVE account EVAL-A once
-    it is back in Auto. The agent goes to Shadow when its account changes. Continue?"), and the page says it after sending.
+    (ChartBridge refuses them anyway). **An account change keeps the agent's mode** (ChartBridge 0.5.2, Anthony 2026-10-08;
+    until 1.18.0 it went to Shadow): the LIVE question names the mode ("Agent demo will trade LIVE account EVAL-A in Auto.
+    Continue?"); not confirmed, nothing is sent and the account stays; the page says the mode is kept after sending.
 11. **The agent's chart (lead's default):** its root is the one picked in the chart's header, else the position's, else a
     working entry's, else an open proposal's, else the last plan's, else the first of its roots. Its trades come from
     fills claimed against its own marked orders (`BotCore.botFillLedger` with the agent's mark, as the bot's), kept in this
