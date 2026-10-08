@@ -1773,18 +1773,35 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Its open trade on this root is against what the account holds: both readings of the trade's contract show a position on
         // the other side (it ended where ChartBridge could not see it, and the account holds someone else's). The text, or null.
-        private string LedgerAgainst(string root, Account a)
+        private string LedgerAgainst(string root, Account a) { return LedgerAgainst(root, a, false); }
+
+        // forDrop: the trade is ended only once this has held for 3 s with no unnoted fill (review A C4).
+        private string LedgerAgainst(string root, Account a, bool forDrop)
         {
             Instrument li;
             int q;
             lock (Sync) { if (openTag == null || openRoot != root) return null; li = openInst; q = ledQty; }
-            if (a == null || q == 0) return null;
+            if (a == null || q == 0) { lock (Sync) AgainstSince.Remove(root); return null; }
             if (li == null) li = ChartBridgeServer.InstrumentFor(root);
             if (li == null) return null;
             int p1 = ChartBridgeOrders.AgentListed(a, li), p2 = ChartBridgeOrders.AgentEffective(a, li);
-            if (p1 == 0 || p2 == 0 || Math.Sign(p1) == Math.Sign(q) || Math.Sign(p2) == Math.Sign(q)) return null;
-            return "its trade holds " + q + " but " + a.Name + " " + root + " shows " + p1;
+            double now = Now();
+            if (p1 == 0 || p2 == 0 || Math.Sign(p1) == Math.Sign(q) || Math.Sign(p2) == Math.Sign(q)) { lock (Sync) AgainstSince.Remove(root); return null; }
+            string text = "its trade holds " + q + " but " + a.Name + " " + root + " shows " + p1;
+            if (!forDrop) return text;   // the owner lock and the flatten: at once (never the agent's while the account holds the other side)
+            // review A C4: only once it has held for 3 s with no fill NinjaTrader shows ahead of its event (a late execution of the
+            // agent's own close would otherwise read as someone else's position for a moment)
+            bool unnoted = ChartBridgeOrders.AgentUnnotedFill(a, li, now) != null;
+            lock (Sync)
+            {
+                double since;
+                if (unnoted || !AgainstSince.TryGetValue(root, out since)) { AgainstSince[root] = now; return null; }
+                if (now - since < ChartBridgeAgents.AgainstGraceMs) return null;
+            }
+            return text;
         }
+
+        private readonly Dictionary<string, double> AgainstSince = new Dictionary<string, double>();   // root -> since when its trade is against the account
 
         // The contract a flatten job closes: the served one by Owns, another month only while its own open trade holds it.
         private bool OwnsContract(string root, Instrument inst, Account a)
@@ -2198,15 +2215,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             Account a = FindAccount(Account);
             foreach (string root in roots)
             {
-                string why = LedgerAgainst(root, a);
+                string why = LedgerAgainst(root, a, true);
                 if (why == null) continue;
                 string key;
+                double realized;
                 lock (Sync)
                 {
                     if (openTag == null || openRoot != root) continue;
-                    key = openTag; Trades.Remove(key); Spans.Remove(key); openTag = null; openRoot = null; openInst = null; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Remove(root);
+                    // the realized part is booked first (review A C4): what its fills so far closed, at the average of its opening fills
+                    Instrument li = openInst ?? ChartBridgeServer.InstrumentFor(root);
+                    double pv = li != null && li.MasterInstrument != null ? li.MasterInstrument.PointValue : 0;
+                    realized = Math.Round((ledCash + ledQty * ledAvg) * pv, 2);
+                    key = openTag; Trades[key] = realized; openTag = null; openRoot = null; openInst = null; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Remove(root); AgainstSince.Remove(root);
+                    StandDownLocked();
                 }
-                string text = "Agent " + Id + ": its open trade " + key + " on " + root + " was dropped (" + why + ")";
+                string text = "Agent " + Id + ": its open trade " + key + " on " + root + " was ended (" + why + "); its realized part, " + realized.ToString("0.##", CultureInfo.InvariantCulture) + " dollars, is booked";
                 Log(text); AgentLog(text);
                 SaveDay();
                 TradeLost(root);
