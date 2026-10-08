@@ -14,7 +14,7 @@
 //   - the kill switch (on in one click, release in two), Auto asks a second click;
 //   - the pop-out window (agent.html); an older ChartBridge (0.4.0): "No agents on this ChartBridge (0.5.0 or later)".
 //   npm run smoke:agent      (CHROMIUM_PATH=/path/to/chrome; AGENT_SMOKE_PORT and the next one; SHOTS=dir)
-// Screenshots: agent-tab, agent-proposal, agent-accepted, agent-rules, agent-corner, agent-popout, agent-none (.png in
+// Screenshots: agent-tab, agent-1366, agent-live-ask, agent-proposal, agent-accepted, agent-rules, agent-corner, agent-popout, agent-none (.png in
 // test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -199,6 +199,12 @@ try {
   check(lines, 'the Agent tab\'s chart is mounted on the agent\'s root (' + (await A()).chartRoot + ')');
   await sleep(1200);
   await page.screenshot({ path: path.join(SHOTS, 'agent-tab.png') });
+  await page.setViewportSize({ width: 1366, height: 768 });                             // Anthony's laptop: no page scroll
+  await sleep(600);
+  const fit = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, sh: document.documentElement.scrollHeight, w: innerWidth, h: innerHeight }));
+  check(fit.sw <= fit.w && fit.sh <= fit.h, 'at 1366 x 768 the Agent tab fits the window (no page scroll): ' + JSON.stringify(fit));
+  await page.screenshot({ path: path.join(SHOTS, 'agent-1366.png') });
+  await page.setViewportSize({ width: 1600, height: 900 });
 
   /* ---------------------------------------------------------------- expiry: Accept closes in the last 5 s */
   console.log('expiry');
@@ -213,7 +219,7 @@ try {
   check(!(await page.isDisabled('.ag-plist .ag-prop[data-id="cp2"] [data-agans="reject"]')), 'Reject still goes');
   await until(async () => (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'cp2').state === 'expired', 'ChartBridge expires it', 8000);
   await until(async () => !(await page.$('.ag-prop[data-id="cp2"]')), 'the expired card goes', 6000);
-  check(/expired/.test(await text('.ag-feed')), 'the feed says how it ended');
+  check(/EXPIRED/.test(await text('.ag-feed')) && /ACCEPTED IN \d+\.\d S/.test(await text('.ag-feed')), 'the feed says how each proposal ended (on its plan): ' + (await text('.ag-feed')).slice(0, 160));
 
   /* ---------------------------------------------------------------- one copilot key for the bot and every agent */
   console.log('one copilot key: the oldest open proposal across the bot and the agents');

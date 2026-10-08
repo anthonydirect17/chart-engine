@@ -70,7 +70,6 @@ function create(o) {
       '<div class="ag-main" data-k="main" hidden>' +
       /* the strip: who, how it is, what it holds */
       '<div class="ag-strip" data-k="strip" data-no-motion>' +
-        '<label class="ag-pick" data-k="pickWrap" hidden><span class="ag-lbl">Agent</span><select class="ag-sel" data-k="pick" aria-label="Agent"></select></label>' +
         '<span class="ag-badge" data-k="initials" aria-hidden="true"></span>' +
         '<span class="ag-name" data-k="name"></span><span class="ag-chip ag-build" data-k="build" title="The build the agent runs, as it says in its hello"></span>' +
         '<span class="ag-conn" data-k="conn"><i></i><span data-k="connText"></span></span>' +
@@ -83,6 +82,7 @@ function create(o) {
         '<span class="ag-chip ag-owns" data-k="sOwns" hidden title="The owner lock: while the agent has a position or a working entry here, ChartBridge refuses every new entry from anyone else. Your Flatten, cancels and stop or target moves always work."></span>' +
         '<span class="ag-chip ag-bad" data-k="sState" hidden></span>' +
         '<span class="ag-fill"></span>' +
+        '<label class="ag-pick" data-k="pickWrap" hidden><span class="ag-lbl" data-k="pickN">Agents</span><select class="ag-sel" data-k="pick" aria-label="Agent shown"></select></label>' +
         (popout ? '' : '<button type="button" class="ws-btn ag-popbtn" data-act="popout" title="Open the Agent tab in its own window (for a third monitor)">Pop out</button>') +
       '</div>' +
       '<div class="ag-grid" data-k="grid">' +
@@ -231,10 +231,10 @@ function create(o) {
   const keyOf = (a, id) => a + '|' + id;
   function onProposal(p) {
     const r = props.update(p);
-    if (r.act === 'show') showProposal(r.p);
+    if (r.act === 'show') { showProposal(r.p); renderChartLines(); }
     else if (r.act === 'update') { const x = cards.get(keyOf(p.agent, p.id)); if (x) x.p = p; else showProposal(p); }
     else if (r.act === 'end') endProposal(r.p, r.why);
-    renderPanel();
+    renderPanel(); renderFeed();
   }
   const sideWord = s => (s === 'buy' ? 'Buy' : s === 'sell' ? 'Sell' : '');
   const tickOf = r => { const i = S.instruments[r]; return i && +i.tick > 0 ? +i.tick : 0.25; };
@@ -383,7 +383,7 @@ function create(o) {
     else notice({ kind: 'refused', level: 'amber', text: why });
   }
   function onStatus(m) {
-    if (!m || typeof m.text !== 'string') return;
+    if (!m || typeof m.text !== 'string' || (m.level !== 'info' && document.getElementById('wsAlert'))) return;   // warn and error: the workspace's own line shows them
     const id = agents.ids().find(i => new RegExp('^(Agent )?' + i + '\\b').test(m.text));
     if (id) notice({ kind: 'status', level: m.level === 'error' ? 'red' : m.level === 'warn' ? 'amber' : '', text: m.text });
   }
@@ -425,6 +425,7 @@ function create(o) {
     const a = cur(); if (!a) return;
     const list = agents.list(), pick = q('[data-k="pick"]');
     put(q('[data-k="pickWrap"]'), 'hidden', list.length < 2);
+    put(q('[data-k="pickN"]'), 'textContent', list.length + ' agents');
     const opts = list.map(x => '<option value="' + esc(x.agent) + '">' + esc(AC.agentName(x)) + '</option>').join('');
     if (pick.dataset.html !== opts) { pick.dataset.html = opts; pick.innerHTML = opts; }
     put(pick, 'value', S.chosen);
@@ -487,6 +488,7 @@ function create(o) {
       if (S.rulesEdit) S.rulesEdit = false, put(q('[data-k="rulesEdit"]'), 'hidden', true);
       if (rw.dataset.kind !== 'refused') { put(rw, 'textContent', can.why); rw.dataset.kind = 'auto'; }
     } else if (rw.dataset.kind === 'auto') { put(rw, 'textContent', ''); rw.dataset.kind = ''; }
+    put(ro, 'hidden', S.rulesEdit);                             // the form has its own Set and Cancel
   }
   const servedRoots = () => AC.RULE_ROOTS.filter(r => S.instruments[r] && !S.instruments[r].quoteOnly);
 
@@ -506,12 +508,19 @@ function create(o) {
     const line = AC.planLine(m), skip = m.action === 'skip';
     const t = '<span class="ag-t mono">' + esc(isNum(m.at) ? AC.etClockSec(m.at) : '') + '</span>';
     const k = '<span class="ag-k ' + (skip ? 'k-skip' : 'k-plan') + '">' + (skip ? 'SKIP' : 'PLAN') + '</span>';
-    const chip = '<span class="ag-chip ag-res ' + line.tone + '">' + esc(line.result.split(':')[0].toUpperCase()) + '</span>';
+    /* a proposal's outcome on its plan: waiting while open here, how it ended when this window saw it, else "proposed" */
+    let res = line.result.split(':')[0], tone = line.tone;
+    if (m.result === 'proposed') {
+      const open = cards.get(keyOf(m.agent, m.id)), end = S.propEnds.find(e => e.agent === m.agent && e.id === m.id);
+      res = end ? end.state + end.react : open && !open.ended ? 'waiting for you' : 'proposed';
+      if (end && end.state !== 'accepted') tone = 'shadow';
+    }
+    const chip = '<span class="ag-chip ag-res ' + tone + '">' + esc(res.toUpperCase()) + '</span>';
     if (skip) return '<div class="ag-item">' + t + k + '<span class="ag-tx"><b>' + esc(line.title) + '</b> ' + chip + '<span class="ag-prose ag-sub">' + esc(m.reason || '') + '</span></span></div>';
     const r = m.root, lp = AC.legPrices(m, tickOf(r));
     return '<div class="ag-item ag-plan">' + t + k + '<span class="ag-tx"><b class="' + (m.side === 'buy' ? 'pos' : m.side === 'sell' ? 'neg' : '') + '">' + esc(line.title) + '</b> ' + chip +
-      (/^refused: /.test(line.result) ? '<span class="ag-sub warn">' + esc(line.result) + '</span>' : '') +
-      '<span class="ag-pgrid mono">' +
+      (/^refused: /.test(line.result) ? '<span class="ag-sub warn">' + esc(line.result) + '</span>' : '') + '</span>' +
+      '<span class="ag-detail"><span class="ag-pgrid mono">' +
         '<span>Entry</span><span>' + esc(entryText(m)) + '</span>' +
         '<span>Stop</span><span>' + esc(m.stopTicks) + ' ticks' + (lp.stop !== null ? ' (' + fmtPx(lp.stop, r) + ')' : '') + '</span>' +
         '<span>Target</span><span>' + esc(m.targetTicks) + ' ticks' + (lp.target !== null ? ' (' + fmtPx(lp.target, r) + ')' : '') + '</span>' +
@@ -519,17 +528,12 @@ function create(o) {
         '<span>Confidence</span><span>' + confHtml(m.confidence) + '</span></span>' +
       '<span class="ag-quote ag-prose">' + esc(m.reason || '') + '</span></span></div>';
   }
-  function endHtml(e) {
-    return '<div class="ag-item"><span class="ag-t mono">' + esc(AC.etClockSec(e.at)) + '</span><span class="ag-k k-copilot">COPILOT</span><span class="ag-tx">Proposal ' + esc(sideWord(e.side).toLowerCase() + ' ' + e.qty + ' ' + e.root) +
-      ': <b class="' + (e.state === 'accepted' ? 'pos' : '') + '">' + esc(e.state + e.react) + '</b></span></div>';
-  }
   function renderFeed() {
     if (!view) return;
     const a = cur(); if (!a) return;
     for (const b of q('[data-k="filters"]').children) attr(b, 'aria-selected', String(b.dataset.filter === S.feedFilter));
     const f = S.feedFilter;
     const items = feed.items(a.agent, f === 'all' ? 'all' : f).map(x => ({ at: x.at, html: x.type === 'note' ? noteHtml(x.m, x.m.at + ':' + x.m.kind) : planHtml(x.m) }));
-    if (f === 'all' || f === 'plans') for (const e of S.propEnds) if (e.agent === a.agent) items.push({ at: e.at, html: endHtml(e) });
     items.sort((x, y) => y.at - x.at);
     const c = feed.counts(a.agent);
     put(q('[data-k="feedCount"]'), 'textContent', c.notes + (c.notes === 1 ? ' note' : ' notes') + ' · ' + c.plans + (c.plans === 1 ? ' plan' : ' plans'));
@@ -649,7 +653,10 @@ function create(o) {
     if (S.wantRoot && roots.includes(S.wantRoot)) return S.wantRoot;
     if (a && a.position && a.position.root) return a.position.root;
     const w = a ? AC.workingEntries(S.orders.values(), a)[0] : null;
-    return w ? w.root : roots[0] || 'MNQ';
+    if (w) return w.root;
+    const p = a ? props.open(a.agent)[0] : null;
+    if (p && p.root) return p.root;
+    return a && a.lastPlan && roots.includes(a.lastPlan.root) ? a.lastPlan.root : roots[0] || 'MNQ';
   }
   function mountChart() {
     if (!view || S.chart || !window.ChartLive || !o.feed || !cur()) return;
