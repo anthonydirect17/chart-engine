@@ -2464,7 +2464,9 @@ Where the contract left a detail open, the safest simple choice was taken and is
   traded in the last 5 s (an early close, a holiday or a halt). Otherwise its stop and target stay, NOT FLAT says "market not
   trading: the stop and target stay" every 10 s, and it tries again each pass. Only the cancel step waits for it: once its
   cancels were sent, the market close goes whatever the feed shows. A close that ends unfilled in open hours (rejected,
-  cancelled) puts the stop back at once (as below), the error says so, and the next try waits 30 s with that stop in place. When the shut hours arrive after its legs were
+  cancelled) puts the stop back at once (as below), the error says so, and the next try waits 30 s with that stop in place.
+  A stop placed again is cancelled only once the market trades again (review E2): with no fresh trade the stop stays and NOT
+  FLAT says "market not trading: its stop placed again at <price> stays". When the shut hours arrive after its legs were
   already cancelled (the close not filled), the job places the stop again (lead's default: a position is never left without a
   stop over a closed market): a stop market, GTC, `CB#<tag> ag:<id> stop p<price>` (role `stop`), at the agent's own stop price
   (the one nearest the market when the job started), for what it holds (never more than its trade), once per shut spell. If
@@ -2504,7 +2506,11 @@ Where the contract left a detail open, the safest simple choice was taken and is
   event the trade is ended with its realized part booked (what its fills closed, at the average of its opening fills; review
   A C4), then the error above. A trade never crosses zero (review D5): a fill on the other side bigger than the trade closes
   the trade at that fill's own price, and the rest is not the agent's, so a booked result always comes from its actual
-  executions. An unowned pair's flatten only ever cancels the agent's own entry and legs (review A-N2). The check is in `PlaceOrderLocked`
+  executions. A late execution of the same entry (a lost event the poll finds) nets against that rest: the closed trade's
+  result and contracts grow by the matched part, and only a true net opens a trade again (review E1). An open trade whose pair
+  is flat by both readings, with nothing of the agent working there and no fill NinjaTrader shows ahead of its event, for 5 s,
+  is ended and booked from its executions; when those do not net to zero the pages get a warning ("its own executions leave
+  <n> open: some were not seen; check NinjaTrader's fills"). An unowned pair's flatten only ever cancels the agent's own entry and legs (review A-N2). The check is in `PlaceOrderLocked`
   right after the account and the instrument are found (the page, Order Strategies, the bot and every agent) and in the
   copier's `Eligible` (a skip labelled `agent`).
 - **A page order that only reduces** the agent's position passes the owner lock as an exit (lead's default, review A-S5): a
@@ -2560,8 +2566,9 @@ Where the contract left a detail open, the safest simple choice was taken and is
   on a pair the agent owns reaches it, ownership read before the fill is booked; a fill of the page's order there carries the
   id the pages saw (kept as its order event passes). `agentState` is built with no lock of the agent's held and a sequence
   number taken first; its lock only compares and sends, so it never holds a lock across NinjaTrader's collection locks (review
-  A C3). `helloed` is set only after the welcome is queued, at every hello, so no `agentState` reaches the agent before its
-  welcome (review D4). `welcome` is checked every pass against the caps enforced and sent again when they changed. The snapshot
+  A C3). `agentState` waits for a `welcomeSent` flag, cleared at every hello and set only after its welcome is queued, so no
+  `agentState` reaches the agent before its welcome (review D4); `helloed` is set at the hello as before, so a second hello
+  never looks like no hello to the silent-socket check and ticks keep flowing (review E3). `welcome` is checked every pass against the caps enforced and sent again when they changed. The snapshot
   sends only the agent's orders on the snapshot's roots. `orderName` is the order's name as NinjaTrader holds it (null if it has
   none). The pages' messages are unchanged (no `orderName`; their `role` stays `other` for the flat close and the protective
   exit).

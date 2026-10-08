@@ -60,6 +60,10 @@ every lead's default in its "as built" list. The chart's own version is unchange
   position. Only the cancel step waits for a trading market; a close that cannot go puts the stop back at once. The agent
   never gets agentState before its welcome; a trade never crosses zero, so its booked result is always from real fills. A
   fill of an order that is not the agent's reaches it as role `other` (a page order too), with the page's id.
+- **Round 6.** A late fill of an agent's entry nets against the close that ended its trade, so no ghost trade is left open;
+  an open trade on a pair flat by both readings for 5 s is ended from its own fills, with a warning when they do not add up.
+  A stop placed again after a rejected close waits for a trading market before it is cancelled. A second hello keeps the
+  agent connected and its ticks flowing, and agentState still follows the welcome.
 - **Tests.** `nt8/check/AgentHarness.cs` (inside `npm run check:orders`) runs every refusal and every timer; IntegrationHarness
   X13 where the lanes meet; `test/fake-agent.mjs` is a made-up agent client with its test; `test/nt8-agents.test.js` guards the
   source. The bot channel, the copier and every other lane behave as in 0.4.3 except where the contract requires (refusing an
