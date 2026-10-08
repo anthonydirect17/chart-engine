@@ -2393,7 +2393,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         j.LastErrorMs = now;
                         string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
-                                      " still shows " + p1 + "; the market is shut, so ChartBridge sends no close until it opens; " + legsSay + "; act in NinjaTrader if you need to";
+                                      " still shows " + p1 + "; the market is shut, so ChartBridge sends no close until it opens; " + legsSay + (legsSay.Contains("act in NinjaTrader") ? "" : "; act in NinjaTrader if you need to");
                         ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
                     }
                     continue;

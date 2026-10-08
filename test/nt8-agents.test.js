@@ -40,9 +40,9 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
 
 test('0.5.0 agents: order calls only where the contract allows; never a market entry, never a flatten call', () => {
   let rest = acode;
-  for (const f of ['SendCancel', 'StepFlatten', 'SendClose']) rest = rest.replace(bodies(acode, f), '');
+  for (const f of ['SendCancel', 'StepFlatten', 'SendClose', 'SendStop']) rest = rest.replace(bodies(acode, f), '');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/, /CancelAllOrders/, /\bAtm\w*\./])
-    assert.ok(!re.test(rest), 'order call outside SendCancel, StepFlatten and SendClose: ' + re);
+    assert.ok(!re.test(rest), 'order call outside SendCancel, StepFlatten, SendClose and SendStop: ' + re);
   assert.ok(!/\.Flatten\s*\(|\.Change\s*\(/.test(acode), 'never NinjaTrader\'s Flatten, never a change');
   // the one order it creates itself is the flatten's market close, under the order lock, after reading both positions again
   const close = bodies(acode, 'SendClose');
@@ -59,7 +59,16 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   // review A1 and A2: nothing sent while the market is shut; the pair asked again before every close, never more than its trade
   const step = bodies(acode, 'StepFlatten');
   assert.match(step, /bool shut = ChartBridgeAgents\.MarketShut\(NowEt\(\)\);/);
-  assert.match(step, /if \(!OwnsContract\(j\.Root, inst, a\)\) \{ DropJob\(j, key, a\); continue; \}\s*qty = Math\.Min\(qty, CloseCap\(j\.Root, inst, j\)\);/);
+  assert.match(step, /if \(!OwnsContract\(j\.Root, inst, a\)\) \{ DropJob\(j, key, a\); continue; \}\s*int cap = CloseCap\(j\.Root, inst, j\);[\s\S]*qty = Math\.Min\(qty, cap\);\s*if \(qty > 0\)/);
+  // review A C1: the stop placed again over a shut market is a stop (never a market order), under the order lock, re-read first
+  const restop = bodies(acode, 'SendStop');
+  assert.equal((restop.match(/\.CreateOrder\(/g) || []).length, 1);
+  assert.match(restop, /OrderType\.StopMarket, OrderEntry\.Manual, TimeInForce\.Gtc/);
+  assert.match(restop, /lock \(ChartBridgeOrders\.AgentPlaceLock\)[\s\S]*AgentListed[\s\S]*AgentEffective[\s\S]*\.CreateOrder\(/);
+  assert.match(step, /!ChartBridgeOrders\.AgentFreshLast\(j\.Root, ChartBridgeAgents\.TradingFreshMs, out lastPx\)/, 'no leg cancelled while the market is not trading');
+  // review A C3: agentState is built before StateLock is taken; the lock only compares and sends
+  const send = bodies(acode, 'SendState');
+  assert.ok(send.indexOf('string json = StateJson();') > 0 && send.indexOf('string json = StateJson();') < send.indexOf('lock (StateLock)'), 'the state is built outside StateLock');
   // contract section 10: an agent entry's protective exit is named for the agent; its legs keep v2's names (the entry's tag)
   assert.match(bodies(ocode, 'PlaceLegs'), /agentOf != null \? "CB#" \+ br\.Tag \+ " ag:" \+ agentOf \+ " protect f" \+ filled\.ToString\(CultureInfo\.InvariantCulture\) : "CB#" \+ br\.Tag \+ " exit" \+ mark/);
   assert.match(bodies(acode, 'SendCancel'), /try \{ o\.Account\.Cancel\(new\[\] \{ o \}\); \}\s*catch \(Exception ex\)/);
