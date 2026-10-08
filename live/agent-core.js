@@ -616,24 +616,24 @@ function lightState(x) {
   if (q) {                                             // a position: the light goes to the chart and the P&L, its colour the open P&L
     const p = isNum(o.openPnl) ? o.openPnl : null;
     const pos = (q > 0 ? 'long ' : 'short ') + Math.abs(q) + (a.position.root ? ' ' + a.position.root : '');
-    if (p === null) return out('trade', 'screen', ['chart', 'pnl'], 4, 'In a trade, ' + pos + ': open P&L not known yet', null);
-    return out('trade', p >= 0 ? 'bridge' : 'no', ['chart', 'pnl'], 4, 'In a trade, ' + pos + (p >= 0 ? ': in profit' : ': under water'), null);
+    /* plain facts only (Anthony 2026-10-08): the light's colour and the P&L figure say how it is going */
+    return out('trade', p === null ? 'screen' : p >= 0 ? 'bridge' : 'no', ['chart', 'pnl'], 4, 'In a trade, ' + pos, null);
   }
   if (a.enabled === false) return out('quiet', 'screen', [], -1, 'Off in ChartBridge', null);
   if (a.killed) return out('stopped', 'no', ['acct'], -1, 'Kill switch on: no agent orders', null);
   if (a.standDown) return out('stopped', 'no', ['acct'], -1, 'Stood down: ' + a.standDown, null);
-  if (o.workingEntry) return out('placed', 'bridge', ['prop', 'chart'], 4, 'ChartBridge placed his entry: waiting for a fill', null);
+  if (o.workingEntry) return out('placed', 'bridge', ['prop', 'chart'], 4, 'Entry placed, waiting for a fill', null);
   const open = (Array.isArray(o.open) ? o.open : []).filter(p => p && p.state === 'open');
   const accepting = open.find(p => p.answered === 'accept');
-  if (accepting) return out('check', 'checks', ['acct', 'prop'], 3, 'Accepted: ChartBridge checks it against his rules', accepting.at);
+  if (accepting) return out('check', 'checks', ['acct', 'prop'], 3, 'Accepted, checking his rules', accepting.at);
   if (open.length) return out('plan', 'judgment', ['pipe', 'prop'], 2, open.length > 1 ? open.length + ' plans are waiting for you' : 'A plan is waiting for you', open[0].at);
   if (!a.connected) return out('quiet', 'screen', [], -1, 'Not connected: no agent program running', null);
   /* the newest event still inside its hold */
   const ev = [];
   for (const n of Array.isArray(o.notes) ? o.notes : []) {
     if (!n || !isNum(n.at)) continue;
-    if (n.kind === 'look') ev.push({ at: n.at, hold: LIGHT_HOLD.look, r: ['look', 'eyes', ['pipe', 'stream'], 1, 'He took a look'] });
-    else if (n.kind === 'thinking') ev.push({ at: n.at, hold: LIGHT_HOLD.look, r: ['think', 'judgment', ['pipe', 'stream'], 2, 'Judgment is weighing it'] });
+    if (n.kind === 'look') ev.push({ at: n.at, hold: LIGHT_HOLD.look, r: ['look', 'eyes', ['pipe', 'stream'], 1, 'A look'] });
+    else if (n.kind === 'thinking') ev.push({ at: n.at, hold: LIGHT_HOLD.look, r: ['think', 'judgment', ['pipe', 'stream'], 2, 'Thinking'] });
   }
   const ends = new Map((Array.isArray(o.ends) ? o.ends : []).filter(e => e && typeof e.id === 'string').map(e => [e.id, e]));
   for (const m of Array.isArray(o.plans) ? o.plans : []) {
@@ -641,7 +641,7 @@ function lightState(x) {
     const res = str(m.result), what = (m.setup ? ': ' + m.setup : '');
     if (m.action === 'skip' || res === 'skipped') ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['passed', 'passed', ['prop', 'stream'], 2, 'He passed' + what] });
     else if (refusedResult(res)) ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['refused', 'no', ['acct', 'prop'], 3, 'Refused by ChartBridge: ' + res.replace(/^refused:?\s*/, '')] });
-    else if (res === 'shadow') ev.push({ at: m.at, hold: LIGHT_HOLD.look, r: ['plan', 'judgment', ['pipe', 'prop'], 2, 'A plan in Shadow: nothing placed'] });
+    else if (res === 'shadow') ev.push({ at: m.at, hold: LIGHT_HOLD.look, r: ['plan', 'judgment', ['pipe', 'prop'], 2, 'A plan in Shadow'] });
     else if (res === 'placed') ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['go', 'bridge', ['prop', 'stream'], 4, 'Placed by ChartBridge'] });
     else if (res === 'proposed' && ends.has(m.id)) {
       const e = ends.get(m.id), at = isNum(e.at) ? e.at : m.at;
@@ -655,7 +655,7 @@ function lightState(x) {
   }
   const live = ev.filter(e => now - e.at <= e.hold).sort((p, r) => r.at - p.at);
   if (live.length) { const r = live[0].r; return out(r[0], r[1], r[2], r[3], r[4], live[0].at); }
-  return out('watch', 'screen', ['pipe'], 0, a.mode === 'shadow' ? 'Watching (Shadow: nothing is placed)' : 'Watching', null);
+  return out('watch', 'screen', ['pipe'], 0, 'Watching', null);
 }
 
 /* ======================================================================== the stream and its decision drawer */
@@ -763,19 +763,19 @@ function sessionTrail(rules, now, events) {
 }
 /**
  * His account's room, from the Account page's limit state (AccountsCore.limitState: ChartBridge's roomDrawdown and
- * roomDailyLoss, The Desk's limits): [{ key, label, room, limit, leftPct (0 to 100 or null), why }]. Never estimated: a room
- * not reported has its why (ChartBridge's own words when it gives them). The channel carries no profit target, so there is
- * no "to target" line.
+ * roomDailyLoss, The Desk's limits): [{ key, label, room, limit, leftPct (0 to 100 or null), why, said }]. Never estimated: a
+ * room not reported shows "not reported" (why), with ChartBridge's own words (said) for its tooltip. The channel carries no
+ * profit target, so there is no "to target" line.
  */
 function roomLines(account, limit) {
   const a = account || {}, s = limit || {};
-  const line = (key, label, x, why) => {
+  const line = (key, label, x, why, said) => {
     const room = x && isNum(x.room) ? x.room : null, lim = x && isNum(x.limit) && x.limit > 0 ? x.limit : null;
-    return { key, label, room, limit: lim, leftPct: room !== null && lim ? Math.round(Math.min(100, Math.max(0, room / lim * 100))) : null, why: room === null ? why : '' };
+    return { key, label, room, limit: lim, leftPct: room !== null && lim ? Math.round(Math.min(100, Math.max(0, room / lim * 100))) : null, why: room === null ? why : '', said: room === null ? said : '' };
   };
   return [
-    line('dd', 'Max loss room', s.dd, str(a.roomDrawdownWhy) || 'Not reported for this account'),
-    line('dl', 'Daily limit left', s.dl, str(a.roomDailyLossWhy) || 'No daily loss limit known'),
+    line('dd', 'Max loss room', s.dd, 'not reported', str(a.roomDrawdownWhy)),
+    line('dl', 'Daily limit left', s.dl, 'not reported', str(a.roomDailyLossWhy)),
   ];
 }
 

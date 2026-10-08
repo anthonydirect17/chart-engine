@@ -15,8 +15,9 @@ lead's default.
 - **The layout:** left, the mode, the kill switch, status, his account with the room left (the Account page's figures:
   ChartBridge's, else The Desk's limits) and his rules; centre, "What he is doing now" (Screen, Eyes, Judgment, Checks,
   ChartBridge) above the chart; right, the proposal and his stream; bottom, today's dollars, trades and losses (of the
-  limit), his session as a trail from his rules' entryFrom to flatAt with his fills and exits, and what the light's
-  colours mean.
+  limit), and his session as a trail from his rules' entryFrom to flatAt with his fills and exits. Only what is needed to
+  understand and use the page (Anthony): no legend of the light, no step captions, no sentences explaining the page; a
+  figure not reported says "not reported".
 - **The flowing light:** one slow comet circles the borders of the panels where his attention is (13 s a lap while he
   decides, 9 s in a trade), with a blurred halo, and those panels glow. Its place and colour come from his real state
   (`AgentCore.lightState`, from the messages the page already gets): watching cyan, a look violet, a plan or his thinking

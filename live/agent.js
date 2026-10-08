@@ -105,7 +105,7 @@ function create(o) {
           '<button type="button" class="ag-kill" data-act="kill" data-k="kill">Kill switch</button>' +
           '<div class="ag-pgrid"><span>Status</span><span data-k="status">-</span><span>Heartbeat</span><span class="mono" data-k="beat">-</span><span>Last plan</span><span data-k="last">-</span></div>' +
         '</div>' +
-        '<div class="ag-sec" data-no-motion><div class="ag-sechead"><span class="ag-ttl">His account</span><span class="ag-lbl">its own, never shared</span></div>' +
+        '<div class="ag-sec" data-no-motion><div class="ag-sechead"><span class="ag-ttl">His account</span></div>' +
           '<div class="ag-pgrid"><span>Trades on</span><span><span class="mono" data-k="account">Sim101</span> <span class="bt-acct ag-mark" data-k="accountMark"></span></span></div>' +
           '<div class="ag-room" data-k="room"></div>' +
           '<div class="ag-edit" data-k="acctEdit" hidden><select class="ag-sel" data-k="acctSel" aria-label="The agent\'s account"></select>' +
@@ -115,7 +115,7 @@ function create(o) {
           '<div class="ag-row"><button type="button" class="ag-btn" data-act="acctOpen" data-k="acctOpen" title="Any account ChartBridge says is tradable, except the bot\'s, the copier\'s and another agent\'s; only while the agent is flat">Change account</button></div>' +
           '<p class="ag-why" data-k="acctWhy"></p>' +
         '</div>' +
-        '<div class="ag-sec"><div class="ag-sechead"><span class="ag-ttl">Rules</span><span class="ag-lbl">ChartBridge enforces them</span></div>' +
+        '<div class="ag-sec"><div class="ag-sechead"><span class="ag-ttl">Rules</span></div>' +
           '<div class="ag-pgrid ag-rules" data-k="rules"></div>' +
           '<div class="ag-rform" data-k="rulesEdit" hidden>' +
             '<div class="ag-rroots" data-k="rRoots"></div>' +
@@ -125,7 +125,7 @@ function create(o) {
             '<label><span>Entry lives, s</span><input class="ag-in" type="number" min="60" max="1800" step="1" data-r="maxExpireSec" aria-label="An entry lives at most, seconds (60 to 1800)"></label>' +
             '<label><span>Trades a day</span><input class="ag-in" type="number" min="0" max="50" step="1" data-r="maxTrades" aria-label="Trades a day, 0 for no limit"></label>' +
             '<label><span>Losing trades</span><input class="ag-in" type="number" min="0" max="20" step="1" data-r="maxLosses" aria-label="Losing trades before it stands down, 0 for no limit"></label>' +
-            '<p class="ag-help">New York time. 0 is no limit. Sizes up to ChartBridge\'s ceiling: 2 for NQ and ES, 20 for MNQ and MES.</p>' +
+            '<p class="ag-help">New York time · 0 = no limit</p>' +
             '<div class="ag-row"><button type="button" class="ag-btn primary" data-act="rulesSave">Set</button><button type="button" class="ag-btn" data-act="rulesCancel">Cancel</button></div>' +
           '</div>' +
           '<div class="ag-row"><button type="button" class="ag-btn" data-act="rulesOpen" data-k="rulesOpen">Change the rules</button></div>' +
@@ -136,7 +136,7 @@ function create(o) {
       '<section class="ag-col ag-centre" aria-label="What the agent is doing, and its chart">' +
         '<div class="ag-panel ag-pipe" data-panel="pipe">' + LIGHT_HTML +
           '<div class="ag-pipehead"><span class="ag-k2">What he is doing now</span><span class="ag-said" data-k="said" role="status"></span></div>' +
-          '<ol class="ag-steps" data-k="steps">' + AC.STEPS.map((x, i) => '<li class="ag-step t-' + x[0] + '" data-step="' + i + '"><span class="ag-node mono">' + (i + 1) + '</span><span class="ag-stepname">' + x[1] + '</span><span class="ag-stepsub">' + x[2] + '</span></li>').join('') + '</ol>' +
+          '<ol class="ag-steps" data-k="steps">' + AC.STEPS.map((x, i) => '<li class="ag-step t-' + x[0] + '" data-step="' + i + '"><span class="ag-node mono">' + (i + 1) + '</span><span class="ag-stepname">' + x[1] + '</span></li>').join('') + '</ol>' +
         '</div>' +
         '<div class="ag-panel ag-chartpanel" data-panel="chart">' + LIGHT_HTML +
           '<div class="ag-charthead"><span class="ag-ttl" data-k="chartName" title="The agent\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the agent\'s orders, so your own orders on its account do not show here.">Chart</span>' +
@@ -145,7 +145,7 @@ function create(o) {
             '<span class="chart-live ws-lv" data-k="ind"></span>' +
             '<span class="ag-fill"></span>' +
             '<span class="ag-cposwrap"><span class="ag-cpos mono" data-k="cPos" data-no-motion></span><span class="ag-cpnl mono" data-k="cPnl" data-no-motion title="Open P&L: NinjaTrader\'s for the agent\'s account, else from the chart\'s last price"></span></span>' +
-            '<span class="ag-legend" title="The agent\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the agent\'s orders, so your own orders on its account do not show here.">AGENT TRADES</span></div>' +
+            '</div>' +
           '<div class="ag-chart" data-k="chart" data-no-motion></div>' +
         '</div>' +
       '</section>' +
@@ -153,15 +153,15 @@ function create(o) {
       '<aside class="ag-col ag-right" aria-label="Proposals and his stream">' +
         '<div class="ag-panel ag-proppanel" data-panel="prop" data-no-motion>' + LIGHT_HTML +
           '<div class="ag-sechead"><span class="ag-k2">Proposal · copilot</span><span class="ag-lbl" data-k="propCount"></span></div>' +
-          '<div class="ag-pbody"><div class="ag-plist" data-k="plist"></div><p class="ag-empty" data-k="pempty">None open. In Copilot each plan comes here for you to accept or reject.</p></div></div>' +
+          '<div class="ag-pbody"><div class="ag-plist" data-k="plist"></div><p class="ag-empty" data-k="pempty">None open</p></div></div>' +
         '<div class="ag-panel ag-feedwrap" data-panel="stream">' + LIGHT_HTML +
           '<div class="ag-loghead"><span class="ag-k2">His stream</span><span class="ag-lbl" data-k="feedCount"></span></div>' +
-          '<div class="ag-filters" role="tablist" data-k="filters">' + FILTERS.map(f => '<button type="button" role="tab" data-filter="' + f[0] + '" aria-selected="false">' + f[1] + '</button>').join('') + '<span class="ag-fill"></span><span class="ag-tap">a row opens his reasoning</span></div>' +
+          '<div class="ag-filters" role="tablist" data-k="filters">' + FILTERS.map(f => '<button type="button" role="tab" data-filter="' + f[0] + '" aria-selected="false">' + f[1] + '</button>').join('') + '</div>' +
           '<div class="ag-feed" data-k="feed"></div></div>' +
         '<section class="ag-drawer" data-k="drawer" id="' + DRAWER_ID + '" role="dialog" aria-label="His decision" hidden></section>' +
       '</aside>' +
       '</div>' +
-      /* the footer: today's dollars, trades, losses, his session as a trail, and what the light's colours mean */
+      /* the footer: today's dollars, trades, losses, his session as a trail */
       '<footer class="ag-panel ag-foot" data-panel="pnl">' + LIGHT_HTML +
         '<div class="ag-footrow">' +
           '<div class="ag-big" data-no-motion><span class="mono ag-today" data-k="sPnl">-</span><span class="ag-lbl" data-k="todayNote">Today</span></div>' +
@@ -169,11 +169,7 @@ function create(o) {
           '<div class="ag-big" data-no-motion><span class="mono ag-count ag-losses" data-k="sLosses">0</span><span class="ag-lbl">Losses</span></div>' +
           '<div class="ag-trail" data-k="trail" aria-label="His session"></div>' +
         '</div>' +
-        '<div class="ag-legendrow"><span class="ag-k2">The light</span>' +
-          [['screen', 'screen: watching'], ['eyes', 'eyes: a look'], ['judgment', 'judgment: a plan'], ['checks', 'checks: his rules'], ['bridge', 'ChartBridge, a fill, or in profit'], ['no', 'under water, or a hard no'], ['passed', 'he passed, or a plan ended']]
-            .map(x => '<span class="ag-key t-' + x[0] + '"><b></b>' + x[1] + '</span>').join('') +
-          '<span class="ag-lbl">in a trade the light moves to the chart and P&amp;L</span></div>' +
-      '</footer>' +
+        '</footer>' +
       '</div>';
   }
 
@@ -304,7 +300,7 @@ function create(o) {
     const r = p.root;
     return p.kind === 'stopLimit' ? 'stop-limit ' + fmtPx(p.price, r) + ', limit ' + fmtPx(p.limitPrice, r) : 'limit ' + fmtPx(p.price, r);
   }
-  function propHtml(p) {
+  function propHtml(p, where) {
     const a = agents.get(p.agent) || { agent: p.agent }, r = p.root, lp = AC.legPrices(p, tickOf(r));
     const acc = { name: p.account || AC.agentAccount(a).name, mark: AC.accountMark(p.sim) };   // no sim: LIVE, as an unknown account anywhere
     const kc = k => (k ? ' <span class="bt-keycap">' + esc(k) + '</span>' : '');
@@ -316,8 +312,9 @@ function create(o) {
         '<span>Stop</span><span>' + esc(p.stopTicks) + ' ticks' + (lp.stop !== null ? ' (' + fmtPx(lp.stop, r) + ')' : '') + '</span>' +
         '<span>Target</span><span>' + esc(p.targetTicks) + ' ticks' + (lp.target !== null ? ' (' + fmtPx(lp.target, r) + ')' : '') + '</span>' +
         '<span>Risk</span><span>' + esc(AC.fmtUsd(p.riskDollars).replace(/^\+/, '') || '-') + (isNum(p.stopTicks) && isNum(p.targetTicks) && p.stopTicks ? ', reward ' + (p.targetTicks / p.stopTicks).toFixed(2) + ' to 1' : '') + '</span>' +
-        '<span>Open until</span><span>' + (isNum(p.expiresAt) ? esc(AC.etClockSec(p.expiresAt)) + ' ET' : '-') + '</span></div>' +
-      '<div class="ag-prop-note"><b class="mono">' + esc(acc.name) + '</b> ' + markHtml(acc.mark) + ' ChartBridge places it on this account from these numbers if you accept, inside ' + esc(AC.agentName(a)) + '\'s rules. Unanswered, it is never sent.</div>' +
+        '<span>Open until</span><span>' + (isNum(p.expiresAt) ? esc(AC.etClockSec(p.expiresAt)) + ' ET' : '-') + '</span>' +
+        (where === 'inline' ? '<span>Account</span><span>' + esc(acc.name) + ' ' + markHtml(acc.mark) + '</span>' : '') + '</div>' +
+      (where === 'inline' ? '' : '<div class="ag-prop-note"><b class="mono">' + esc(acc.name) + '</b> ' + markHtml(acc.mark) + ' ChartBridge places it on this account from these numbers if you accept, inside ' + esc(AC.agentName(a)) + '\'s rules. Unanswered, it is never sent.</div>') +
       '<div class="ag-prop-btns"><button type="button" class="ag-acc" data-agans="accept" data-no-motion>Accept' + kc(S.keys.accept) + '</button><button type="button" class="ag-rej" data-agans="reject" data-no-motion>Reject' + kc(S.keys.reject) + '</button></div>' +
       '<div class="ag-prop-msg" data-k="msg" role="status"></div>';
   }
@@ -328,7 +325,7 @@ function create(o) {
     el.setAttribute('role', 'alertdialog');
     el.setAttribute('data-no-motion', '');
     el.setAttribute('aria-label', 'Copilot proposal from ' + AC.agentName(agents.get(p.agent) || { agent: p.agent }) + ': ' + sideWord(p.side) + ' ' + p.qty + ' ' + p.root);
-    el.innerHTML = propHtml(p);
+    el.innerHTML = propHtml(p, where);
     return el;
   }
   function showProposal(p) {
@@ -526,7 +523,7 @@ function create(o) {
     }
     const ma = q('[data-k="modeAcct"]'); put(ma, 'textContent', acc.name + (acc.mark ? ' · ' + acc.mark : ''));
     const why = q('[data-k="modeWhy"]');
-    if (!why.dataset.refused) { put(why, 'hidden', !(S.autoConfirm > now)); put(why, 'textContent', S.autoConfirm > now ? 'Click Confirm within 4 s: Auto lets ChartBridge place ' + AC.agentName(a) + '\'s plans on ' + acc.name + (acc.mark === 'LIVE' ? ', a LIVE account.' : '.') : ''); tog(why, 'live', acc.mark === 'LIVE'); }
+    if (!why.dataset.refused) { put(why, 'hidden', !(S.autoConfirm > now)); put(why, 'textContent', S.autoConfirm > now ? 'Click Confirm within 4 s: Auto on ' + acc.name + (acc.mark === 'LIVE' ? ', a LIVE account.' : '.') : ''); tog(why, 'live', acc.mark === 'LIVE'); }
     const kill = q('[data-k="kill"]');
     put(kill, 'textContent', a.killed ? (S.killConfirm > now ? 'Release: click again' : 'Kill switch on · Release') : 'Kill switch');
     tog(kill, 'on', !!a.killed); put(kill, 'disabled', !S.signedIn); attr(kill, 'aria-pressed', String(!!a.killed));
@@ -601,7 +598,7 @@ function create(o) {
     put(q('[data-k="feedCount"]'), 'textContent', c.notes + (c.notes === 1 ? ' note' : ' notes') + ' · ' + c.plans + (c.plans === 1 ? ' plan' : ' plans'));
     const box = q('[data-k="feed"]');
     const had = box.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.row : '';
-    setHtml(box, shown.length ? shown.map(rowHtml).join('') : '<p class="ag-empty">' + (a.connected ? 'Nothing yet. His looks, thinking, plans and lessons show here as they come.' : 'Nothing yet today. ' + esc(AC.agentName(a)) + ' is not connected.') + '</p>');
+    setHtml(box, shown.length ? shown.map(rowHtml).join('') : '<p class="ag-empty">' + (a.connected ? 'Nothing yet' : 'Nothing yet · not connected') + '</p>');
     if (had) { const b = box.querySelector('[data-row="' + CSS.escape(had) + '"]'); if (b && document.activeElement !== b) b.focus({ preventScroll: true }); }
     renderDrawer();
   }
@@ -626,11 +623,11 @@ function create(o) {
     if (S.drawer && !r) S.drawer = '';                         // its row is gone (another agent, a new day)
     if (!r) { put(d, 'hidden', true); setHtml(d, ''); placeDrawer(); return; }   // closed: the stream's rows start at its top again
     const x = AC.decisionRecord(r, { fmtPx, tick: tickOf });
-    const html = '<div class="ag-dhead"><div><div class="ag-lbl">' + esc(x.time) + ' · ' + esc(x.tag) + ' · his decision</div><div class="ag-dtitle">' + esc(x.title) + '</div></div>' +
+    const html = '<div class="ag-dhead"><div><div class="ag-lbl">' + esc(x.time) + ' · ' + esc(x.tag) + '</div><div class="ag-dtitle">' + esc(x.title) + '</div></div>' +
       '<button type="button" class="ag-dclose" data-act="drawerClose" aria-label="Close his decision">Close</button></div>' +
       (x.words ? '<div class="ag-dsec"><div class="ag-lbl">In his words</div><div class="ag-dquote' + (x.pre ? ' pre mono' : '') + '">' + esc(x.words) + '</div></div>' : '') +
       (x.facts.length ? '<div class="ag-dsec"><div class="ag-lbl">The facts</div>' + x.facts.map(f => '<div class="ag-fact"><span>' + esc(f[0]) + '</span><span class="mono">' + esc(f[1]) + '</span></div>').join('') + '</div>' : '') +
-      '<p class="ag-dnote">Only what ChartBridge\'s agent channel carries. Esc or Close shuts this.</p><div class="ag-dmore" aria-hidden="true">more below</div>';
+      '<div class="ag-dmore" aria-hidden="true">more below</div>';
     put(d, 'className', 'ag-drawer t-' + x.tone + (d.classList.contains('ag-more') ? ' ag-more' : ''));
     setHtml(d, html);
     put(d, 'hidden', false);
@@ -719,14 +716,14 @@ function create(o) {
     /* the chart's header: the position and its open P&L, at once (R3) */
     const pos = a.position && isNum(a.position.qty) && a.position.qty ? a.position : null, op = pos ? openPnl(a) : null;
     put(q('[data-k="cPos"]'), 'textContent', pos ? AC.positionText(pos, (p, r) => fmtPx(p, r)).toLowerCase() : 'flat');
-    const cp = q('[data-k="cPnl"]'); put(cp, 'textContent', pos ? (op === null ? 'open P&L not known' : AC.fmtUsd(op) || '$0.00') : '');
+    const cp = q('[data-k="cPnl"]'); put(cp, 'textContent', pos ? (op === null ? '-' : AC.fmtUsd(op) || '$0.00') : '');
     put(cp, 'className', 'ag-cpnl mono' + (op === null ? '' : op >= 0 ? ' pos' : ' neg'));
     renderFoot(a, pos, op);
   }
   function renderFoot(a, pos, op) {
     const m = AC.stripModel(a, S.orders.values(), (p, r) => fmtPx(p, r));
     const pnl = q('[data-k="sPnl"]'); put(pnl, 'textContent', m.pnl); put(pnl, 'className', 'mono ag-today ' + m.pnlTone);
-    put(q('[data-k="todayNote"]'), 'textContent', pos ? 'Today · open ' + (op === null ? 'not known' : AC.fmtUsd(op) || '$0.00') : 'Today');
+    put(q('[data-k="todayNote"]'), 'textContent', pos ? 'Today · open ' + (op === null ? '-' : AC.fmtUsd(op) || '$0.00') : 'Today');
     const of = (el, t) => { const i = String(t).indexOf(' of '); setHtml(el, i < 0 ? esc(t) : esc(t.slice(0, i)) + ' <small>of ' + esc(t.slice(i + 4)) + '</small>'); };
     of(q('[data-k="sTrades"]'), m.trades); of(q('[data-k="sLosses"]'), m.losses);
     renderTrail(a);
@@ -752,7 +749,7 @@ function create(o) {
     const lim = V3 && typeof V3.limit === 'function' ? V3.limit(name) : acc && window.AccountsCore ? window.AccountsCore.limitState(acc, null) : null;
     const lines = AC.roomLines(acc, lim);
     setHtml(q('[data-k="room"]'), '<div class="ag-lbl">Room left</div>' + lines.map(l => '<div class="ag-roomline" data-no-motion><div class="ag-roomrow"><span>' + esc(l.label) + '</span><span class="mono ag-hot">' +
-      (l.room !== null ? esc(AC.fmtUsd(l.room).replace(/^\+/, '')) + (l.limit ? ' <small>of ' + esc(AC.fmtUsd(l.limit).replace(/^\+/, '')) + '</small>' : '') : '-') + '</span>' + (l.room === null ? '<span class="ag-roomwhy">' + esc(l.why) + '</span>' : '') + '</div>' +
+      (l.room !== null ? esc(AC.fmtUsd(l.room).replace(/^\+/, '')) + (l.limit ? ' <small>of ' + esc(AC.fmtUsd(l.limit).replace(/^\+/, '')) + '</small>' : '') : '<small' + (l.said ? ' title="' + esc(l.said) + '"' : '') + '>' + esc(l.why) + '</small>') + '</span></div>' +
       (l.leftPct !== null ? '<div class="ag-meter2' + (l.key === 'dl' ? ' pu' : '') + '"><i style="width:' + l.leftPct + '%"></i></div>' : '') + '</div>').join(''));
   }
   /* the Motion switch: Full moves the light, Off keeps it still (the glow stays); the system's reduced motion keeps it still too */
@@ -777,13 +774,19 @@ function create(o) {
     setTimeout(() => S.pending.delete(c), 15000);
     return true;
   }
+  /* a short "Sent." under a button, gone after a few seconds unless something else was written there since */
+  function sentLine(k, t) {
+    const el = q('[data-k="' + k + '"]'); if (!el) return;
+    put(el, 'textContent', t);
+    setTimeout(() => { if (el.textContent === t) put(el, 'textContent', ''); }, 6000);
+  }
   function others() { return { bot: S.bot, copier: S.copier, agents: agents.list() }; }
   function ctxNow(a) { return { workingEntry: AC.workingEntries(S.orders.values(), a).length > 0, openProposals: props.open(a.agent).length, roots: servedRoots() }; }
   function sendAccount(name) {
     const a = cur(); if (!a) return;
     const r = AC.accountChange(a, name, AC.accountChoices(S.accounts, a, others()), ctxNow(a));
     if (r.error) { put(q('[data-k="acctWhy"]'), 'textContent', r.error); return; }
-    if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', 'Sent. ChartBridge keeps it (agent-' + a.agent + '-account.txt) until you change it again, and puts ' + AC.agentName(a) + ' in Shadow: choose its mode again when you are ready.'); }
+    if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; sentLine('acctWhy', 'Sent: now in Shadow.'); }
     renderPanel();
   }
   function openRules() {
@@ -806,7 +809,7 @@ function create(o) {
     for (const k of ['entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses']) form[k] = q('[data-r="' + k + '"]').value;
     const r = AC.rulesChange(a, form, ctxNow(a));
     if (r.error) { rulesWhy(r.error); return; }
-    if (sendAgent(r.msg, 'rules')) { S.rulesEdit = false; rulesWhy('Sent. ChartBridge keeps them (agent-' + a.agent + '-rules.txt) and tells ' + AC.agentName(a) + '.'); }
+    if (sendAgent(r.msg, 'rules')) { S.rulesEdit = false; rulesWhy(''); sentLine('rulesWhy', 'Sent.'); }
     renderPanel();
   }
   function onViewClick(e) {
@@ -847,7 +850,7 @@ function create(o) {
       const sel = q('[data-k="acctSel"]'), list = AC.accountChoices(S.accounts, a, others());
       sel.replaceChildren(...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.why ? ', ' + c.why : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.ok && !c.current; return op; }));
       sel.value = AC.agentAccount(a).name;
-      if (!list.some(c => c.ok)) put(q('[data-k="acctWhy"]'), 'textContent', 'No other account is free and tradable in ChartBridge now: check one on the Accounts tab (never the bot\'s, the copier\'s or another agent\'s).');
+      if (!list.some(c => c.ok)) put(q('[data-k="acctWhy"]'), 'textContent', 'No other account is free and tradable: check one on the Accounts tab.');
       renderPanel(); sel.focus();
     } else if (k === 'acctCancel' || k === 'acctNo') { S.acctEdit = false; S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', ''); renderPanel(); }
     else if (k === 'acctSave') {
@@ -971,7 +974,7 @@ function create(o) {
       loadKeys();
       for (const x of cards.values()) if (!x.ended) both(x, el => {
         const n = el.querySelector('[data-k="msg"]'), t = n ? n.textContent : '';
-        el.innerHTML = propHtml(x.p);
+        el.innerHTML = propHtml(x.p, el.classList.contains('inline') ? 'inline' : 'corner');
         if (t) put(el.querySelector('[data-k="msg"]'), 'textContent', t);
         if (props.answered(x.p.agent, x.p.id)) for (const b of el.querySelectorAll('button')) b.disabled = true;   // answered: waiting for ChartBridge
       });

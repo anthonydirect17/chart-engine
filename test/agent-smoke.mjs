@@ -120,8 +120,8 @@ try {
   check(/Demo Agent/.test(strip) && /sample-build-1/.test(strip) && /CONNECTED · 0\.4 s ago/.test(strip) && /SHADOW/.test(strip) && /Sim101\s*SIM/.test(strip) && /Flat/.test(strip),
     'the strip: name, build, connected and its heartbeat, mode, account with SIM, position: "' + strip + '"');
   const foot = await text('#agView .ag-foot');
-  check(/\$0\.00/.test(foot) && /Today/.test(foot) && /0\s*Trades/.test(foot) && /0\s*Losses/.test(foot) && /09:45/.test(foot) && /15:55/.test(foot) && /The light/.test(foot),
-    'the footer: today\'s P&L, trades, losses, his session 09:45 to 15:55 and the legend: "' + foot.slice(0, 200) + '"');
+  check(/\$0\.00/.test(foot) && /Today/.test(foot) && /0\s*Trades/.test(foot) && /0\s*Losses/.test(foot) && /09:45/.test(foot) && /15:55/.test(foot) && !/The light|in profit|under water/.test(foot),
+    'the footer: today\'s P&L, trades, losses, his session 09:45 to 15:55, no legend: "' + foot.slice(0, 200) + '"');
   check(!(await visible('#agView [data-k="sOwns"]')), 'no owner lock while flat with nothing working');
 
   /* ---------------------------------------------------------------- notes and plans */
@@ -203,7 +203,9 @@ try {
   check((await lapOf()) === '13s', 'while he decides the light takes 13 s a lap: ' + await lapOf());
   check(await page.evaluate(() => [...document.querySelectorAll('#agView .ag-panel:not(.lit) > .ag-light')].every(l => getComputedStyle(l).display === 'none')), 'no light on a panel that is not lit');
   check(await page.evaluate(() => getComputedStyle(document.querySelector('#agView .ag-step[data-step="1"]')).getPropertyValue('--tc').trim() === '#8f7bff' && document.querySelector('#agView .ag-step[data-step="1"]').classList.contains('now')), 'the tracker: Eyes is the step now');
-  check((await text('#agView [data-k="room"]')).includes('Max loss room') && !/target/i.test(await text('#agView [data-k="room"]')), 'his account\'s room: ' + await text('#agView [data-k="room"]'));
+  check((await text('#agView [data-k="room"]')).includes('Max loss room') && /not reported/.test(await text('#agView [data-k="room"]')) && !/target|NinjaTrader does not/i.test(await text('#agView [data-k="room"]')), 'his account\'s room, terse: ' + await text('#agView [data-k="room"]'));
+  const words = await text('#agView');
+  check(!/The light|in a trade the light|bars, delta, levels|worth a look\?|a row opens|its own, never shared|ChartBridge enforces them|In Copilot each plan comes here|AGENT TRADES|keeps it \(agent-|his decision|Only what ChartBridge/i.test(words), 'no explanatory labels on the tab (Anthony 2026-10-08)');
 
   /* ---------------------------------------------------------------- rules */
   console.log('the rules');
@@ -266,6 +268,13 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'agent-proposal.png') });
   await lightIs('plan', 'judgment', ['pipe', 'prop'], 'a plan waiting in copilot');
   check(await page.evaluate(() => getComputedStyle(document.querySelector('#agView [data-k="main"]')).getPropertyValue('--ag-pc').trim()) !== '', 'the light\'s colour is a registered property on the tab');
+  for (const [w, h] of [[1440, 1000], [1366, 768]]) {
+    await page.setViewportSize({ width: w, height: h });
+    await sleep(500);
+    const seen = await page.evaluate(() => { const box = document.querySelector('#agView .ag-pbody').getBoundingClientRect(); return ['accept', 'reject'].every(a => { const b = document.querySelector('.ag-plist [data-agans="' + a + '"]').getBoundingClientRect(); return b.height > 30 && b.top >= box.top - 1 && b.bottom <= box.bottom + 1 && b.bottom <= innerHeight; }); });
+    check(seen, 'at ' + w + ' x ' + h + ' Accept and Reject are fully in sight in the proposal');
+  }
+  await page.setViewportSize({ width: 1600, height: 900 });
   await shotF('agent-f-plan');
   /* his rules being checked: Accept sent, ChartBridge not answered yet (the answer held a moment, as on a slow line) */
   await page.evaluate(() => { window.__holdAnswers = true; });
@@ -362,6 +371,7 @@ try {
   await until(async () => /^\+\$/.test(await text('#agView [data-k="cPnl"]')), 'the open P&L shows the gain (NinjaTrader\'s figure for the account)');
   const up = await lightIs('trade', 'bridge', ['chart', 'pnl'], 'an open trade in profit');
   check(up.fast && (await lapOf()) === '9s', 'in a trade the light takes 9 s a lap: ' + await lapOf());
+  check((await text('#agView [data-k="said"]')) === 'In a trade, long 1 MNQ', 'the tracker says the plain fact, no "in profit": ' + await text('#agView [data-k="said"]'));
   check(/\+\$/.test(await text('#agView [data-k="cPnl"]')) && (await page.getAttribute('#agView [data-k="cPnl"]', 'class')).includes('pos'), 'the chart\'s header: the open P&L in green: ' + await text('#agView [data-k="cPnl"]'));
   const still = await page.evaluate(() => ['[data-k="sPnl"]', '[data-k="cPnl"]', '[data-k="cPos"]', '[data-k="sTrades"]', '.ag-chart canvas', '.ag-chart .chart-live'].map(sel => { const e = document.querySelector('#agView ' + sel); if (!e) return sel + ' missing'; const c = getComputedStyle(e); return c.transitionDuration.split(',').every(d => parseFloat(d) === 0) && c.animationName === 'none' && !!e.closest('[data-no-motion]') ? '' : sel + ' ' + c.transitionProperty + ' ' + c.transitionDuration; }).filter(Boolean));
   check(!still.length, 'the P&L figures, the position, the price line (the chart) have no transition and sit under data-no-motion' + (still.length ? ': ' + still.join('; ') : ''));

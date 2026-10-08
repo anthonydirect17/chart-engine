@@ -47,6 +47,12 @@ tab (`.ag-view`): the top bar, the corner proposals and notices, the chart and e
   `nt8/install-files.json`). The page loads nothing from the internet (1.16.0); a missing font falls back to the
   system's own (Segoe UI, Consolas).
 - **Panels:** thin cyan borders on a dark glass; the light (below) circles the ones where his attention is.
+- **Only what is needed to understand and use the page** (Anthony 2026-10-08: "I dont need the labels in profit or under
+  water, I also dont need the light legend on the bottom or any other embedded labeling like that"): section titles,
+  field names, values and numbers, buttons, and the words that need him to act (ChartBridge's refusals, the LIVE account
+  question, the kill switch, a lost connection, Accept's last 5 s). No legend of the light's colours, no step captions, no
+  sentences that explain how the page works; a figure not reported says "not reported" (ChartBridge's own words in its
+  tooltip), a sent change says "Sent." for a few seconds. The colours below are written here, not on the page.
 
 ## The light
 
@@ -73,8 +79,9 @@ P&L. Nothing is guessed: what the channel does not say is not shown.
 | not connected, off | no light | | the `agent` message |
 
 The newest event inside its hold wins; a position, a working entry, an answer waiting for ChartBridge and an open
-proposal come first, in that order. The tracker's step (Screen, Eyes, Judgment, Checks, ChartBridge) and its line of words
-follow the same state.
+proposal come first, in that order. The tracker's step (Screen, Eyes, Judgment, Checks, ChartBridge) and its line follow the
+same state, in plain facts ("A look", "A plan is waiting for you", "In a trade, long 1 MNQ", "Out of the trade: +$32.00");
+how a trade is going is the light's colour and the P&L figure, never words.
 
 - **Pace:** about 13 s a lap while he decides, about 9 s in a trade.
 - **Open P&L** (lead's default): NinjaTrader's `unrealized` for the agent's account from ChartBridge's `accounts` message,
@@ -135,12 +142,14 @@ decision in a drawer over the right column, outlined in that decision's colour:
 - **Right, the proposal:** each open proposal: side, quantity, root, kind and price (and limit price for a stop-limit),
   the setup, the confidence, the reason, stop and target in ticks and prices, the risk in dollars and the reward ratio, the
   account and its mark, a live countdown to `expiresAt`, Accept (cyan) and Reject (purple), with The Desk's keys on them.
+  Accept and Reject never scroll out of sight: they stay at the foot of the proposal's box while its words scroll. "None
+  open" when there is none.
 - **Right, his stream:** notes (look, thinking, lesson, notebook, status), plans (with their result: shadow, waiting for
   you, accepted in 1.3 s, rejected, expired, refused and why, skipped), and his fills and exits today, newest first, with
   filters (All, Plans, Notes, Thinking, Lessons). Each row opens the drawer above.
 - **The footer:** today's P&L (ChartBridge's `pnlToday`, with the open P&L beside it in a trade), trades and losing trades
   (of the limit when the rules set one), his session as a light trail from the rules' `entryFrom` to `flatAt` (09:45 to
-  15:55 by default) with now and his fills (F) and exits (X, green or red by result), and the legend of the light's colours.
+  15:55 by default) with now and his fills (F) and exits (X, green or red by result).
 - **Corner:** a proposal of an agent not shown in the tab pops up in the corner wherever Anthony is (the Bot tab's corner,
   so the two never overlap); notices for an entry, an exit, a stand-down, the heartbeat, the kill switch, the mode, the
   account and how a proposal ended. While the Agent tab is shown the notices cover none of it: they stack in the chart
@@ -337,7 +346,9 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
   and closes (the same row, Close, Escape only from inside it); Motion Off and reduced motion stop the light and keep the
   glow; the P&L figures, the position and the chart have no transition; no sideways scroll at 1366 px and at 390 px; a
   long record scrolls inside its drawer to its last fact; at 1440 x 1000 and 1366 x 768 the corner notices sit in the
-  chart panel and cover none of the left column, its rules, the proposal, the tracker, the stream or the footer.
+  chart panel and cover none of the left column, its rules, the proposal, the tracker, the stream or the footer, and
+  Accept and Reject are fully in sight; no explanatory label is on the tab and the tracker says "In a trade, long 1 MNQ"
+  (no "in profit").
   Screenshots at 1440 x 1000: `agent-f-watching`, `agent-f-plan`, `agent-f-profit`, `agent-f-under`, `agent-f-drawer`,
   `agent-f-notices`.
   `npm run smoke:bot` is unchanged and passes with the Agent tab beside it.

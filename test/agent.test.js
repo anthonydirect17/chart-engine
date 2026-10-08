@@ -461,8 +461,9 @@ test('the light: outcomes (passed, rejected, expired, refused, a go) and a trade
   assert.deepEqual([s.phase, s.tone, s.color, s.panels, s.fast, s.lapMs, s.step], ['trade', 'bridge', '#3dff9a', ['chart', 'pnl'], true, 9000, 4], 'in profit: green on the chart and the P&L, the faster lap');
   assert.equal(L({ agent: agent({ position: pos }), openPnl: 0 }).tone, 'bridge', 'at zero: green');
   s = L({ agent: agent({ position: pos }), openPnl: -12 });
-  assert.deepEqual([s.phase, s.tone, s.color, s.said], ['trade', 'no', '#ff3b5c', 'In a trade, long 2 MNQ: under water'], 'under water: red');
-  assert.deepEqual([L({ agent: agent({ position: pos }), openPnl: null }).tone, L({ agent: agent({ position: pos }), openPnl: null }).said], ['screen', 'In a trade, long 2 MNQ: open P&L not known yet'], 'P&L not known: never guessed');
+  assert.deepEqual([s.phase, s.tone, s.color, s.said], ['trade', 'no', '#ff3b5c', 'In a trade, long 2 MNQ'], 'under water: red, and the words say only the facts (no "in profit", no "under water")');
+  assert.equal(L({ agent: agent({ position: pos }), openPnl: 24 }).said, 'In a trade, long 2 MNQ');
+  assert.deepEqual([L({ agent: agent({ position: pos }), openPnl: null }).tone, L({ agent: agent({ position: pos }), openPnl: null }).said], ['screen', 'In a trade, long 2 MNQ'], 'P&L not known: cyan, never guessed');
   assert.equal(L({ agent: agent({ position: pos, killed: true }), openPnl: -1 }).phase, 'trade', 'a position shows even with the kill switch on (its stop and target stay)');
   s = L({ exits: [{ at: T0 - 2000, pnl: 32 }] });
   assert.deepEqual([s.phase, s.tone, s.panels, s.said], ['exit', 'bridge', ['pipe', 'pnl'], 'Out of the trade: +$32.00'], 'a flat exit: back on the tracker, green for a gain');
@@ -512,7 +513,7 @@ test('the session trail, the room and the Motion switch', () => {
   assert.equal(T.marks[0].pct, Math.round(20 / 370 * 10000) / 100);
   const lines = AC.roomLines({ roomDrawdownWhy: 'NinjaTrader does not report a trailing drawdown for this account' }, ACC.limitState({ roomDrawdown: null, roomDailyLoss: null, pnlToday: -100 }, { daily_loss_limit: 600 }));
   assert.deepEqual(lines.map(l => [l.key, l.room, l.limit, l.leftPct]), [['dd', null, null, null], ['dl', 500, 600, 83]]);
-  assert.equal(lines[0].why, 'NinjaTrader does not report a trailing drawdown for this account', 'never estimated: ChartBridge\'s words');
+  assert.deepEqual([lines[0].why, lines[0].said], ['not reported', 'NinjaTrader does not report a trailing drawdown for this account'], 'never estimated: "not reported", ChartBridge\'s words kept for the tooltip');
   assert.ok(!AC.roomLines({}, null).some(l => /target/i.test(l.label)), 'the channel carries no profit target');
   const mem = new Map(), st = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, v) };
   assert.equal(AC.motionPref(st), 'full');
