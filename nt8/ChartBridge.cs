@@ -131,6 +131,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   quoteHours                    (0.3.4.1 to 0.3.6; no longer used since 0.3.7, said once in the Output window)
         //   bars = on, barsRoots, pc      (0.3.6: daily 1-minute bars to The Desk; off by default; see ChartBridgeBars.cs)
         //   bot = off, botRoot, botLibrary (0.4.0: the bot channel, on by default, on the account chosen on the Bot tab; see ChartBridgeBot.cs)
+        //   agents = manrae                (0.5.0: the agent channel, a comma list of agent ids; none: off; see ChartBridgeAgents.cs)
         public static void Load()
         {
             ChartBridgeOrders.ResetConfig();
@@ -139,6 +140,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeSwitches.Reset();   // 0.4.0 accounts: the v3 switches, all ON unless config.txt turns one off (Anthony 2026-10-07)
             ChartBridgeCopier.ResetConfig();   // 0.4.0 copier:
             ChartBridgeBot.ResetConfig();   // 0.4.0 bot: on by default
+            ChartBridgeAgents.ResetConfig();   // 0.5.0 agents: off until config.txt names one
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -166,6 +168,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key == "quoteHours") ChartBridgeServer.Log("config.txt: quoteHours is no longer used (its by-date tick load was replaced by the served window in 0.3.5 and removed in 0.3.7); the line can go");
                 else if (ChartBridgeCopier.ReadConfig(key, val)) { }   // 0.4.0 copier: copier = off turns it off (on by default; ChartBridgeCopier.cs)
                 else if (ChartBridgeBot.ReadConfig(key, val)) { }    // 0.4.0 bot: bot, botRoot, botLibrary (ChartBridgeBot.cs)
+                else if (ChartBridgeAgents.ReadConfig(key, val)) { }   // 0.5.0 agents: agents = manrae (ChartBridgeAgents.cs)
                 else if (ChartBridgeBars.ReadConfig(key, val)) { }   // bars, barsRoots, pc (ChartBridgeBars.cs)
                 else ChartBridgeOrders.ReadConfig(key, val);   // trading, tradeAccounts, maxQty.<ROOT>
             }
@@ -1460,10 +1463,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             return end < 0 ? null : json.Substring(head.Length, end - head.Length);
         }
 
+        private static readonly string[] AgentLaneTypes = { "agent", "agentPlan", "agentProposal", "agentNote", "agentState" };   // 0.5.0 agents: never behind market data
+
         public static bool OrderLane(string json)
         {
             string type = TypeOf(json);
-            return type != null && Array.IndexOf(OrderLaneTypes, type) >= 0;
+            return type != null && (Array.IndexOf(OrderLaneTypes, type) >= 0 || Array.IndexOf(AgentLaneTypes, type) >= 0);
         }
 
         private static bool Bulk(string json)
@@ -1857,7 +1862,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.4.3";
+        public const string Version = "0.5.0";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -1866,6 +1871,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, Instrument> Instruments = new Dictionary<string, Instrument>();
         private static readonly List<MarketData> Feeds = new List<MarketData>();
         private static readonly HashSet<Account> Watched = new HashSet<Account>();
+        private static readonly HashSet<string> Replayed = new HashSet<string>();   // 0.5.0 agents: accounts whose executions were read once since the watch began
         private static System.Threading.Timer accountTimer, pollTimer;
         private static readonly Regex TypeRx = new Regex("\"type\"\\s*:\\s*\"(\\w+)\"");
         private static readonly Regex RootRx = new Regex("\"root\"\\s*:\\s*\"(\\w+)\"");
@@ -1898,6 +1904,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ChartBridgeOrders.StartPlans();   // 0.3.7: planned_brackets.txt, read on a pool thread before the accounts are watched
                     ChartBridgeAccounts.Start();      // 0.4.0 accounts: accounts.txt (the checkmarks) read before the accounts are watched; the 1 s Gone check
                     ChartBridgeBot.Start();           // 0.4.0 bot: its secret, rails and day, before the accounts are watched (off: nothing)
+                    ChartBridgeAgents.Start();        // 0.5.0 agents: each agent's secret, rules, account and day, before the accounts are watched (none: nothing)
                     Log(ChartBridgeOrders.Enabled
                         ? "order entry is ON for " + ChartBridgeOrders.TradeAccounts.Count + " account(s): " + string.Join(", ", ChartBridgeOrders.TradeAccounts)
                         : "order entry is off (read only)");
@@ -1940,6 +1947,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 try { if (cts != null) cts.Cancel(); } catch (Exception) { }
                 ChartBridgeBot.Stop();   // 0.4.0 bot
+                ChartBridgeAgents.Stop();   // 0.5.0 agents
                 ChartBridgeBars.Stop();
                 ChartBridgeCopier.Stop();   // 0.4.0 copier:
                 try { if (accountTimer != null) accountTimer.Dispose(); } catch (Exception) { }
@@ -2026,6 +2034,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!ChartBridgeAccess.IsLoopback(remote)) { ChartBridgeAccess.NoteRefusedAddress(remote, SafePath(ctx)); Refuse(ctx); return; }
                 string path = ctx.Request.Url.AbsolutePath;
                 if (path == "/bot" || path == "/bot-library") { await ChartBridgeBot.Serve(ctx, path, token); return; }   // 0.4.0 bot: off = 404 (ChartBridgeBot.cs)
+                if (path == "/agent" || path.StartsWith("/agent/", StringComparison.Ordinal)) { await ChartBridgeAgents.Serve(ctx, path, token); return; }   // 0.5.0 agents: an id not in agents = 404 (ChartBridgeAgents.cs)
                 if (path == "/ws" && ctx.Request.IsWebSocketRequest)
                 {
                     string origin = ctx.Request.Headers["Origin"];
@@ -2216,6 +2225,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (type == "merge") ChartBridgeOrders.OnMessage(client, type, text);   // 0.4.0 B4: Merge stops and targets (ChartBridgeMerge.cs)
             else if (type.StartsWith("copier", StringComparison.Ordinal)) ChartBridgeCopier.OnMessage(client, type, text);   // 0.4.0 copier: copier*
             else if (type.StartsWith("bot", StringComparison.Ordinal)) ChartBridgeBot.OnPageMessage(client, type, text);   // 0.4.0 bot: botMode, botKill, botSeen, botAnswer, botRails
+            else if (type.StartsWith("agent", StringComparison.Ordinal)) ChartBridgeAgents.OnPageMessage(client, type, text);   // 0.5.0 agents: agentMode, agentKill, agentSeen, agentAnswer, agentAccount, agentRules
         }
 
         // The order code's lookups (0.4.0): a root that may be traded from the chart and its contract. A quote-only root
@@ -2439,7 +2449,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (wantBackfill) book.BackfillState = "queued";
                     lastChanged = book.LastChanged;
                     capGen = book.CapGen; book.CapGen = -1;
-                    foreach (ChartBridgeClient c in Clients.Values)
+                    foreach (ChartBridgeClient c in Clients.Values.Concat(ChartBridgeAgents.Subscribed()))   // 0.5.0 agents: an agent's subscribe is a page's
                     {
                         if (c.Root != root) continue;
                         if (c.Ready) c.Send(json);
@@ -2455,6 +2465,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 catch (Exception tx) { ChartBridgeTape.Failed(tx); }
                 HtfOnTrade(root, e.Time, t, e.Price, e.Volume);   // 0.3.7: the forming 4h, 1D and 1W bars, from this trade (no request)
                 ChartBridgeBot.OnTick(json);   // 0.4.0 bot: every live trade to the bot (one read when none is connected)
+                ChartBridgeAgents.OnTick(root, json);   // 0.5.0 agents: every live trade to each agent (its subscribed root came through the seam above)
                 if (wantBackfill) QueueBackfill(book, e.Instrument, false);
                 if (capGen >= 0) Task.Run(() => WindowFailed(book, capGen, "over " + RootBook.LiveCap + " live trades came while it waited", false));   // B2
                 if (lastChanged) SaveLast(book);
@@ -2524,6 +2535,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         private static void Subscribe(ChartBridgeClient client, string root, int days, int tickHours) { StartLoad(client, root, days, tickHours, null, false, false); }
+
+        // 0.5.0 agents: an agent's subscribe, answered as a page's (history, ticks, ready, then live tick for that root).
+        public static void AgentSubscribe(ChartBridgeClient client, string root, int days, int tickHours, string sub) { StartLoad(client, root, days, tickHours, sub, false, false); }
 
         // sub: the page's subscribe id (digits), or null to number the loads here. window (0.3.5, subscribe "liveFirst"): ignored
         // since 0.3.5, every tick chart gets the served window. profile (0.3.5): the page wants "profile" messages.
@@ -3096,7 +3110,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // S-E: the feed up and quiet for BackfillStartMs (from the first live trade after market data started), and no page
             // loading; then in profileRoots order (MNQ, NQ, ES, MES), whatever order their first trades came in.
             long first = Interlocked.Read(ref firstTradeUtcTicks);
-            if (first == 0 || (ChartBridgeTime.ToUtc(NowNt()).Ticks - first) / TimeSpan.TicksPerMillisecond < BackfillStartMs || Clients.Values.Any(c => !string.IsNullOrEmpty(c.Root) && !c.Ready)) { wait = true; return null; }
+            if (first == 0 || (ChartBridgeTime.ToUtc(NowNt()).Ticks - first) / TimeSpan.TicksPerMillisecond < BackfillStartMs || PageLoading()) { wait = true; return null; }
             int best = int.MaxValue;
             foreach (GateJob b in GateBackfills)
             {
@@ -3244,7 +3258,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // chart never waits on bars (Anthony, 0.3.6; GateLoop). When the gate is not idle nothing is queued: GateBars says why,
         // and ChartBridgeBars tries next minute.
         private static readonly List<GateJob> GateBarJobs = new List<GateJob>();
-        private static bool PageLoading() { return Clients.Values.Any(c => !string.IsNullOrEmpty(c.Root) && !c.Ready); }
+        private static bool PageLoading() { return Clients.Values.Any(c => !string.IsNullOrEmpty(c.Root) && !c.Ready) || ChartBridgeAgents.Subscribed().Any(c => !c.Ready); }   // 0.5.0 agents: an agent's load counts as a page's
         // Under GateLock: why the gate is not idle for a bars request, or null.
         private static string BarsBusyLocked()
         {
@@ -4692,14 +4706,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static bool FirstTime(string key) { lock (Seen) return Seen.Add(key); }
 
         // To the open pages now; to The Desk's queue (in `deskBatch` when given, saved once by the caller).
+        // 0.5.0: the execution's own Order (NinjaTrader's Execution.Order) while it is delivered, so the fills "by" never scans.
+        [ThreadStatic] private static Order execOrder;
+
         private static void Deliver(string account, Instrument inst, MarketPosition side, int qty, double price, DateTime time, string id, string orderId,
                                     List<string> deskBatch)
         {
             string json = ExecJson(account, inst, side, qty, price, time, id, orderId, true);
             foreach (ChartBridgeClient c in Clients.Values) c.Send(json);
             try { ChartBridgeBot.OnExec(account, inst, side, qty, price, orderId, json); } catch (Exception ex) { Log("bot fill error: " + ex.Message); }   // 0.4.0 bot: its trades, losses and fills
+            try { ChartBridgeAgents.OnExec(account, inst, side, qty, price, orderId, json); } catch (Exception ex) { Log("agent fill error: " + ex.Message); }   // 0.5.0 agents: each agent's trades, losses and fills
             if (!ChartBridgeConfig.PostFills) return;
-            string desk = DeskFillJson(account, inst, side, qty, price, time, id, orderId);
+            string desk = DeskFillJson(account, inst, side, qty, price, time, id, orderId, execOrder);
             if (deskBatch != null) deskBatch.Add(desk); else ChartBridgeDesk.Queue(desk);
         }
 
@@ -4715,9 +4733,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (Execution x in list)
                 {
                     if (!FirstTime(ExecKey(a.Name, x.ExecutionId, x.Time, x.Price, x.Quantity, x.OrderId))) continue;
-                    Deliver(a.Name, x.Instrument, x.MarketPosition, x.Quantity, x.Price, x.Time, x.ExecutionId, x.OrderId, batch);
+                    execOrder = x.Order;   // 0.5.0: for the fills "by"
+                    try { Deliver(a.Name, x.Instrument, x.MarketPosition, x.Quantity, x.Price, x.Time, x.ExecutionId, x.OrderId, batch); } finally { execOrder = null; }
                     n++;
                 }
+                lock (Replayed) Replayed.Add(a.Name);   // 0.5.0 agents: read through without an error (an agent's stale records wait for it)
             }
             catch (Exception ex) { Log("could not read executions for " + a.Name + ": " + ex.Message); }
             ChartBridgeDesk.QueueMany(batch);
@@ -4768,6 +4788,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (n > 0) ChartBridgeDesk.Flush();
         }
 
+        // 0.5.0 agents: true once this account's executions of the session were read through without an error since its watch began
+        // (WatchAccounts' CatchUp, or a later poll's when that one failed).
+        public static bool ExecutionsReplayed(string account) { if (account == null) return false; lock (Replayed) return Replayed.Contains(account); }
+
         // Order code calls this before trading an account: an account that just connected may not be watched yet,
         // and an unwatched account's fills and order updates would never reach the page.
         // 0.4.3: watched already (no watch attempt): the copier's every-second order look skips the rest
@@ -4793,6 +4817,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 Watched.Clear();
             }
+            lock (Replayed) Replayed.Clear();   // 0.5.0 agents
             lock (Seen) Seen.Clear();
         }
 
@@ -4809,6 +4834,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Count(a != null ? a.Name : "", 2);
             try { ChartBridgeOrders.OnPositionUpdate(a, e); } catch (Exception ex) { Log("position update error: " + ex.Message); }
             try { ChartBridgeBot.OnPosition(a, e); } catch (Exception ex) { Log("bot position error: " + ex.Message); }   // 0.4.0 bot
+            try { ChartBridgeAgents.OnPosition(a, e); } catch (Exception ex) { Log("agent position error: " + ex.Message); }   // 0.5.0 agents
         }
 
         // GET /diag: what ChartBridge sees, for checking why fills do or do not arrive. This PC only.
@@ -4837,6 +4863,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (ChartBridgeOrders.MergeOn) b.Append(",\"merges\":").Append(ChartBridgeOrders.MergeDiagJson());   // 0.4.0 B4: with merge = on
             if (ChartBridgeCopier.Enabled) b.Append(",\"copier\":").Append(ChartBridgeCopier.DiagJson());   // 0.4.0 copier: counts only, never account names
             if (ChartBridgeBot.Enabled) b.Append(",\"bot\":").Append(ChartBridgeBot.DiagJson());   // 0.4.0 bot: counts only, never the secret
+            if (ChartBridgeAgents.Enabled) b.Append(",\"agents\":").Append(ChartBridgeAgents.DiagJson());   // 0.5.0 agents: per id counts and state, never a secret
             b.Append(",\"windows\":").Append(WindowsJson());   // 0.3.5: the last 20 served windows   // 0.3.4: how each trade's side was found, live and in the last backfill
             b.Append(",\"accounts\":[");
             List<Account> accounts;
@@ -4934,7 +4961,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // One fill in The Desk's POST /api/fills shape.
-        private static string DeskFillJson(string account, Instrument inst, MarketPosition side, int qty, double price, DateTime time, string id, string orderId)
+        private static string DeskFillJson(string account, Instrument inst, MarketPosition side, int qty, double price, DateTime time, string id, string orderId) { return DeskFillJson(account, inst, side, qty, price, time, id, orderId, null); }
+
+        private static string DeskFillJson(string account, Instrument inst, MarketPosition side, int qty, double price, DateTime time, string id, string orderId, Order order)
         {
             DateTime utc = ChartBridgeTime.ToUtc(time);
             return "{\"source\":\"nt8\",\"account\":" + CbJson.Str(account) +
@@ -4945,7 +4974,30 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ",\"price\":" + CbJson.Num(price) +
                 ",\"time_utc_ms\":" + Math.Round(ChartBridgeTime.UtcMs(utc)).ToString(CultureInfo.InvariantCulture) +
                 ",\"exec_id\":" + CbJson.Str(id) +
-                ",\"order_id\":" + CbJson.Str(orderId) + "}";
+                ",\"order_id\":" + CbJson.Str(orderId) + FillBy(account, orderId, order) + "}";   // 0.5.0: "by" when ChartBridge knows who placed it
+        }
+
+        // 0.5.0 (contract section 8): ,"by":"agent:<id>", "bot" or "copier" when ChartBridge knows the fill's order as one of theirs;
+        // "" otherwise, so every other fill is byte for byte as before. Reads the order by its id on that account.
+        private static string FillBy(string account, string orderId, Order order)
+        {
+            if (order != null) { try { string own = ChartBridgeV3.SourceOf(order); return own == null ? "" : ",\"by\":" + CbJson.Str(own); } catch (Exception) { return ""; } }   // the execution's own order: no scan
+            if (string.IsNullOrEmpty(orderId) || string.IsNullOrEmpty(account)) return "";
+            try
+            {
+                Order o = null;
+                List<Account> all;
+                lock (Account.All) all = Account.All.ToList();
+                foreach (Account a in all)
+                {
+                    if (a.Name != account) continue;
+                    lock (a.Orders) foreach (Order x in a.Orders) if (x.OrderId == orderId) { o = x; break; }
+                    break;
+                }
+                string by = ChartBridgeV3.SourceOf(o);
+                return by == null ? "" : ",\"by\":" + CbJson.Str(by);
+            }
+            catch (Exception ex) { Log("fill by error: " + ex.Message); return ""; }
         }
 
         private static string ExecsJson()
@@ -4983,7 +5035,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Instrument inst = e.Execution != null ? e.Execution.Instrument : null;   // ExecutionEventArgs has no Instrument of its own
                 if (!FirstTime(ExecKey(name, e.ExecutionId, e.Time, e.Price, e.Quantity, e.OrderId))) return;
                 Interlocked.Increment(ref eventNew);
-                Deliver(name, inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, null);
+                execOrder = e.Execution != null ? e.Execution.Order : null;   // 0.5.0: for the fills "by"
+                try { Deliver(name, inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, null); } finally { execOrder = null; }
                 ChartBridgeDesk.Flush();
             }
             catch (Exception ex) { Log("fill error: " + ex.Message); }
