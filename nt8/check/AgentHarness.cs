@@ -177,6 +177,7 @@ public static class AgentHarness
             OwnerLockCopier();
             ChosenAccounts();
             ReviewFixes();   // the two order-path reviews of cf97657 (reviewer A's RA1 to RA8, reviewer B's flood and stale record)
+            Round3();   // contract section 10, reviewer B's second nits, reviewer A's second round (A1 to A5)
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -1714,6 +1715,358 @@ public static class AgentHarness
         ChartBridgeAgents.CopierReadFault = null;
         Advance(500);
         Check(M.AccountConflict() == null, "read again: it stands up");
+        foreach (Account x in Account.All.ToList()) Settle(x);
+    }
+
+    // ------------------------------------------------------------ contract section 10, reviewer B's second nits, reviewer A's second round
+    static void Part(string name, Action body) { try { body(); } catch (Exception ex) { Check(false, name + " threw: " + ex.GetType().Name + ": " + ex.Message); } }
+    static void ClearMoves() { ((System.Collections.IDictionary)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null)).Clear(); }
+    static HashSet<string> ReplayedSet() { return (HashSet<string>)typeof(ChartBridgeServer).GetField("Replayed", PS).GetValue(null); }
+    static string HelloMsg() { return "{\"type\":\"agentHello\",\"name\":\"Manrae\",\"build\":\"sample-build-1\"}"; }
+    static string OrderMsgWithId(List<string> l, string id) { lock (l) for (int i = l.Count - 1; i >= 0; i--) if (l[i].StartsWith("{\"type\":\"order\"") && l[i].Contains("\"id\":\"" + id + "\"")) return l[i]; return ""; }
+    static void Fills(Order o, string oid, double price)
+    {
+        int pos = PosOf(o.Account, o.Instrument);
+        o.OrderId = oid; o.Filled = o.Quantity; o.AverageFillPrice = price; o.OrderState = OrderState.Filled; Update(o);
+        bool buy = o.OrderAction == OrderAction.Buy;
+        Deliver(o.Account.Name, o.Instrument, buy ? MarketPosition.Long : MarketPosition.Short, o.Quantity, price, oid);
+        SetPos(o.Account, o.Instrument, pos + (buy ? o.Quantity : -o.Quantity));
+        ClearMoves();
+    }
+
+    static void Round3()
+    {
+        sime = Account.All.First(x => x.Name == "SIM-E");
+
+        // 10.1: agentState carries its session and is sent again whenever a field changes, owns included, at once
+        Part("10.1", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            Fill(e, 1, 24999);
+            List<Order> legs = Legs(sime, e);
+            Check(legs.Count == 2 && legs.All(o => o.Name.StartsWith("CB#" + Tag(e) + " ")), "the legs of an agent entry carry the entry's tag (v2 naming): " + string.Join(" | ", legs.Select(o => o.Name)));
+            Check(Last(agentOut, "agentState").Contains("\"owns\":true") && Regex.IsMatch(Last(agentOut, "agentState"), "\"session\":\"2026-10-09\"\\}$"), "10.1: agentState after the fill: owns true, session 2026-10-09: " + Last(agentOut, "agentState"));
+            Order stop = legs.First(o => o.Name.Contains(" stop ")), target = legs.First(o => o.Name.Contains(" target "));
+            target.OrderId = "T31"; target.Filled = 1; target.AverageFillPrice = 25003; target.OrderState = OrderState.Filled; Update(target);
+            Deliver("SIM-E", mnq, MarketPosition.Short, 1, 25003, "T31");
+            SetPos(sime, mnq, 0);
+            ClearMoves();
+            Check(Last(agentOut, "agentState").Contains("\"owns\":true"), "10.1: the trade closed, its stop still works: owns true");
+            stop.OrderState = OrderState.Cancelled; Update(stop);   // no timer pass
+            Check(Last(agentOut, "agentState").Contains("\"owns\":false") && Last(agentOut, "agentState").Contains("\"trades\":1"), "10.1: the stop cancelled after the close: agentState at once, owns false: " + Last(agentOut, "agentState"));
+            int k = Count(agentOut, "agentState");
+            Advance(2000);
+            Check(Count(agentOut, "agentState") == k, "10.1: nothing changed for two timer passes: no agentState again");
+            et = new DateTime(2026, 10, 9, 18, 1, 0);
+            Advance(1000);
+            Check(Last(agentOut, "agentState").Contains("\"session\":\"2026-10-10\"") && Last(agentOut, "agentState").Contains("\"trades\":0"), "10.1: at 18:00 the session rolls: agentState with the new session and its counters: " + Last(agentOut, "agentState"));
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // 10.2 and 10.3: exec carries cbId and role; the flat close and the protective exit are named ag:<id> with their roles
+        Part("10.2", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            string eid = ChartBridgeOrders.AgentKnownId(e);
+            Fill(e, 1, 24999);   // the order event first (ChartBridge forgets a done order's id), then the execution
+            string ex = Last(agentOut, "exec");
+            Check(eid != null && ex.Contains("\"cbId\":\"" + eid + "\"") && ex.EndsWith(",\"role\":\"entry\"}") && OrderMsgWithId(agentOut, eid) != "", "10.2: the entry's exec carries its cbId (as its order messages) and role entry: " + ex);
+            Order target = Legs(sime, e).First(o => o.Name.Contains(" target "));
+            string tid = ChartBridgeOrders.AgentKnownId(target);
+            Fills(target, "T32", 25003);
+            ex = Last(agentOut, "exec");
+            Check(ex.Contains("\"cbId\":\"" + tid + "\"") && ex.Contains("\"role\":\"target\""), "10.2: a target's exec: its cbId, role target: " + ex);
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+
+            e = PlacedOn(sime, Good(NewId()));
+            Fill(e, 1, 24999);
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            Advance(5000);
+            Order fl;
+            lock (sime.Orders) fl = sime.Orders.LastOrDefault(o => (o.Name ?? "").EndsWith(" ag:manrae flat"));
+            string fid = fl != null ? ChartBridgeOrders.AgentKnownId(fl) : null;
+            Check(fl != null && OrderMsgWithId(agentOut, fid).Contains("\"role\":\"flat\""), "10.3: the flat close \"CB#<tag> ag:manrae flat\" has role flat in the agent's order message: " + (fl != null ? fl.Name + " " + OrderMsgWithId(agentOut, fid) : "none"));
+            Check(fl != null && OrderMsgWithId(page, fid).Contains("\"role\":\"other\""), "10.3: the page's order message is as before (role other): " + OrderMsgWithId(page, fid ?? "-"));
+            if (fl != null)
+            {
+                Fills(fl, "F32", 25000);
+                ex = Last(agentOut, "exec");
+                Check(ex.Contains("\"cbId\":\"" + fid + "\"") && ex.Contains("\"role\":\"flat\""), "10.2: the flat close's exec: role flat: " + ex);
+            }
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        Part("10.3 protect", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 2, 8, 16, 600));
+            ChartBridgeOrders.NoteLast("MNQ", 24996);   // the stop level (24,997) already traded when the fill is handled
+            Fill(e, 1, 24999);
+            Order px;
+            lock (sime.Orders) px = sime.Orders.LastOrDefault(o => (o.Name ?? "").Contains(" protect "));
+            Check(px != null && px.Name == "CB#" + Tag(e) + " ag:manrae protect f1 q1 p24999" && px.OrderType == OrderType.Market && ChartBridgeAgents.AgentOf(px) == "manrae",
+                  "10.3: an agent entry's protective exit is named \"CB#<tag> ag:manrae protect f1 q1 p24999\": " + (px != null ? px.Name : "none"));
+            string pid = px != null ? ChartBridgeOrders.AgentKnownId(px) : null;
+            Check(px != null && OrderMsgWithId(agentOut, pid).Contains("\"role\":\"protect\"") && OrderMsgWithId(page, pid).Contains("\"role\":\"other\""), "10.3: role protect to the agent, other to the pages (unchanged)");
+            if (px == null) return;
+            Fills(px, "P33", 24996);
+            Check(Last(agentOut, "exec").Contains("\"role\":\"protect\""), "10.2: the protective exit's exec: role protect");
+            // a restart: the exit's name still counts the contract it covered, so the next fill gets legs for its own contract only
+            ChartBridgeOrders.Clear();
+            ChartBridgeOrders.LoadPlansNow();
+            foreach (Account x in Account.All) ChartBridgeOrders.SeedNoted(x);
+            Restart();
+            Last2();
+            Fill(e, 2, 24999);
+            List<Order> legs = Legs(sime, e).Where(IsLive).ToList();
+            Check(legs.Count == 2 && legs.All(o => o.Name.Contains(" f2 q1 ")), "10.3: after a restart the protective exit's contract stays covered: the second fill's legs are f2 q1: " + string.Join(" | ", legs.Select(o => o.Name)));
+            // the exit alarm still knows it: a protect exit NinjaTrader rejects
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            SetPos(sime, mnq, 0);
+            Fresh();
+            e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "10.3: an entry was placed: " + AgentReject()); return; }
+            ChartBridgeOrders.NoteLast("MNQ", 24996);
+            int s0 = N(page);
+            Fill(e, 1, 24999);
+            lock (sime.Orders) px = sime.Orders.LastOrDefault(o => (o.Name ?? "").Contains(" protect "));
+            if (px != null) { px.OrderState = OrderState.Rejected; Update(px); }
+            Check(px != null && Any(page, s0, "the market EXIT was REJECTED"), "10.3: a protective exit NinjaTrader rejects raises the exit alarm");
+            Last2();
+        });
+
+        // 10.4: the snapshot after hello covers welcome's served roots exactly, then ends with "snapshot"
+        Part("10.4", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            Fill(e, 1, 24999);
+            int n = N(agentOut);
+            A(HelloMsg());
+            List<string> got;
+            lock (agentOut) got = agentOut.Skip(n).ToList();
+            List<string> pos = got.Where(x => x.StartsWith("{\"type\":\"position\"")).ToList(), ord = got.Where(x => x.StartsWith("{\"type\":\"order\"")).ToList();
+            Check(got.Count == 7 && got[0].StartsWith("{\"type\":\"welcome\"") && got[1].StartsWith("{\"type\":\"agentState\"") && pos.Count == 2 && pos.Any(x => x.Contains("\"root\":\"NQ\",\"qty\":0,")) &&
+                  pos.Any(x => x.Contains("\"root\":\"MNQ\",\"qty\":1,")) && ord.Count == 2 && got[6] == "{\"type\":\"snapshot\",\"roots\":[\"NQ\",\"MNQ\"]}",
+                  "10.4: welcome, agentState, a position per root (flat included), its stop and target, then snapshot: " + string.Join(" | ", got.Select(x => x.Length > 60 ? x.Substring(0, 60) : x)));
+            Instrument nqI = Named()["NQ"];
+            Named().Remove("NQ");   // NQ not served (NinjaTrader has not found the contract)
+            try
+            {
+                n = N(agentOut);
+                A(HelloMsg());
+                lock (agentOut) got = agentOut.Skip(n).ToList();
+                Check(!got[0].Contains("\"root\":\"NQ\"") && got[0].Contains("\"root\":\"MNQ\"") && !got.Any(x => x.StartsWith("{\"type\":\"position\"") && x.Contains("\"NQ\"")) &&
+                      got.Last() == "{\"type\":\"snapshot\",\"roots\":[\"MNQ\"]}", "10.4: a root not served: welcome lists only MNQ, the snapshot covers only MNQ: " + got.Last());
+            }
+            finally { Named()["NQ"] = nqI; }
+        });
+
+        // reviewer B, nit 1: a failed first read is a clash at once; the bot's copy never starts as Sim101
+        Part("B nit 1", () =>
+        {
+            Fresh();
+            string bf = Path.Combine(Dir, "bot-account.txt");
+            File.WriteAllLines(bf, new[] { "# made-up", "# test", "a line ChartBridge does not understand" });
+            Restart();
+            Check(M.AccountConflict() != null && M.AccountConflict().Contains("bot-account.txt cannot be read or understood"), "B nit 1: bot-account.txt unreadable at the first read: a clash at once: " + M.AccountConflict());
+            File.WriteAllLines(bf, new[] { "# made-up", "# test", "account\tSIM-Z" });
+            File.SetLastWriteTimeUtc(bf, DateTime.UtcNow.AddSeconds(5));
+            Advance(500);
+            Check(M.AccountConflict() == null, "B nit 1: read again: no clash");
+            ChartBridgeAgents.CopierReadFault = () => "made-up sharing violation";
+            Restart();
+            Check(M.AccountConflict() != null && M.AccountConflict().Contains("copier.txt cannot be read"), "B nit 1: copier.txt unreadable at the first read: a clash at once: " + M.AccountConflict());
+            ChartBridgeAgents.CopierReadFault = null;
+            Advance(500);
+            Check(M.AccountConflict() == null, "B nit 1: copier.txt read again: no clash");
+        });
+
+        // reviewer B, nit 2: refused plans held back are told by the timer within about a second, with no plan after them
+        Part("B nit 2", () =>
+        {
+            Fresh();
+            int pp = Count(page, "agentPlan");
+            for (int i = 0; i < 4; i++) M.OnMessage(ac, Plan(NewId(), "MNQ", "buy", "limit", "24999", 99, 8, 16, 600));
+            Check(Count(page, "agentPlan") == pp + 1, "B nit 2: four refused plans in one instant: one shown");
+            Advance(1500);
+            Check(Count(page, "agentPlan") == pp + 2 && Last(page, "agentPlan").Contains("(and 2 more refused plans in the second before, not shown)"), "B nit 2: the timer shows the latest held one with the count of the rest: " + Last(page, "agentPlan"));
+        });
+
+        // reviewer B, nit 3: appending a plan id and writing the day file whole never lose an id; a sharing violation is tried again
+        Part("B nit 3", () =>
+        {
+            Fresh();
+            string day = Path.Combine(Dir, "agent-manrae-day.txt");
+            MethodInfo save = typeof(ChartBridgeAgent).GetMethod("SaveDay", BindingFlags.NonPublic | BindingFlags.Instance);
+            bool stop = false;
+            System.Threading.Thread t = new System.Threading.Thread(() => { while (!stop) { try { save.Invoke(M, null); } catch (Exception) { } } });
+            t.Start();
+            List<string> ids = new List<string>();
+            for (int i = 0; i < 120; i++) { string id = NewId(); ids.Add(id); A(Plan(id, "MNQ", "buy", "limit", "24999", 99, 8, 16, 600)); }
+            stop = true; t.Join();
+            string[] lines = File.ReadAllLines(day);
+            int missing = ids.Count(x => !lines.Contains("plan\t" + x));
+            Check(missing == 0, "B nit 3: 120 ids appended while the file is written whole again and again: none lost (" + missing + " missing)");
+            string last = NewId();
+            FileStream held = new FileStream(day, FileMode.Open, FileAccess.ReadWrite, FileShare.None);   // a virus scanner, for a moment
+            System.Threading.Thread rel = new System.Threading.Thread(() => { System.Threading.Thread.Sleep(10); held.Dispose(); });
+            rel.Start();
+            A(Plan(last, "MNQ", "buy", "limit", "24999", 99, 8, 16, 600));
+            rel.Join();
+            Check(File.ReadAllLines(day).Contains("plan\t" + last), "B nit 3: a sharing violation is tried again briefly: the id is in the file");
+        });
+
+        // reviewer B, nit 5: a record is checked only once the session's executions were read again (WatchAccounts' CatchUp)
+        // reviewer A, A3: a record dropped while the account holds a position there: an error every 60 s until that pair is flat
+        Part("B nit 5 and A3", () =>
+        {
+            Fresh();
+            File.WriteAllLines(Path.Combine(Dir, "agent-manrae-day.txt"), new[] { "# made-up", "# test", "session\t2026-10-09", "trade\tabcdef12\topen" });
+            ReplayedSet().Remove("SIM-E");
+            SetPos(sime, mnq, 1);   // a position there (not the agent's: no order of its listed)
+            ClearMoves();
+            Restart();
+            int s0 = N(page);
+            Advance(8000);
+            Check(FileText("agent-manrae-day.txt").Contains("trade\tabcdef12\topen"), "B nit 5: before the replay is through the record is kept (no 5 s timer)");
+            ReplayedSet().Add("SIM-E");
+            Advance(1000);
+            Check(!FileText("agent-manrae-day.txt").Contains("abcdef12"), "B nit 5: after the replay a record nothing matches is dropped");
+            string lost = "agent manrae had an open trade on SIM-E MNQ and its legs are gone; ChartBridge no longer treats the position as the agent's: flatten or protect it by hand";
+            int e1 = page.Skip(s0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(lost));
+            Check(e1 == 1, "A3: dropped with a position there: a status error (" + e1 + ")");
+            Advance(61000);
+            int e2 = page.Skip(s0).Count(x => x.Contains(lost));
+            Check(e2 == 2, "A3: repeated every 60 s (" + e2 + ")");
+            Check(ChartBridgeAgents.EntryCheck("page", sime, "MNQ") == null, "A3: ownership is not restored: the page may trade the pair");
+            SetPos(sime, mnq, 0);
+            ClearMoves();
+            Advance(61000);
+            Check(page.Skip(s0).Count(x => x.Contains(lost)) == 2, "A3: once the pair is flat, no more");
+        });
+
+        // reviewer A, A4: after 10 tries an error, then every 30 s; never while the account is not Connected
+        Part("A4", () =>
+        {
+            Fresh();
+            et = new DateTime(2026, 10, 9, 14, 58, 0);
+            Order e = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 16, 60));
+            if (e == null) { Check(false, "A4: an entry was placed: " + AgentReject()); return; }
+            Hold = (kd, o) => kd == "cancel";
+            int c0 = sime.Calls.Count, s0 = N(page);
+            et = new DateTime(2026, 10, 9, 15, 0, 0);
+            Func<int> tries = () => sime.Calls.Skip(c0).Count(x => x == "cancel " + e.Name);
+            Advance(30000);
+            Check(tries() == 10 && Any(page, s0, "is still not confirmed after 10 tries"), "A4: 10 tries in about 30 s, then a status error (" + tries() + ")");
+            Advance(27000);
+            Check(tries() == 10, "A4: then not again for 30 s (" + tries() + ")");
+            Advance(2000);
+            Check(tries() == 11, "A4: the 11th try 30 s after the 10th (" + tries() + ")");
+            sime.Connection.Status = ConnectionStatus.Disconnected;
+            Advance(65000);
+            Check(tries() == 11, "A4: never sent while the account is not Connected (" + tries() + ")");
+            sime.Connection.Status = ConnectionStatus.Connected;
+            Advance(1000);
+            Check(tries() == 12, "A4: sent again once it is Connected (" + tries() + ")");
+            Hold = null;
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // reviewer A, A1 (RA9): the account leaves the list, the agent's position ends meanwhile and Anthony holds his own short 2
+        Part("A1", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "A1: an entry was placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            Hold = (kd, o) => kd == "cancel";
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            Advance(1000);
+            Account.All.Remove(sime);
+            Advance(5000);
+            Hold = null;
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            SetPos(sime, mnq, -2);   // his own short 2, placed elsewhere while NinjaTrader did not list the account
+            ClearMoves();
+            et = new DateTime(2026, 10, 12, 19, 0, 0);   // Monday 19:00: the market open
+            int c9 = sime.Calls.Count, s0 = N(page);
+            Account.All.Add(sime);
+            Advance(5000);
+            List<string> s9 = sime.Calls.Skip(c9).ToList();
+            Check(!s9.Any(c => c.Contains(" ag:manrae flat ")) && Any(page, s0, "SIM-E MNQ is no longer agent manrae's: ChartBridge did not close it"),
+                  "A1 (RA9): back in the list, his short 2 is not the agent's: the job ends with a warning, nothing closed: " + string.Join(" | ", s9));
+            Check(Any(page, s0, "agent manrae had an open trade on SIM-E MNQ and its legs are gone"), "A1: the agent's open trade the account holds the other side of is dropped, with the error");
+            SetPos(sime, mnq, 0); ClearMoves();
+            Advance(1000);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+
+            // the close never exceeds the agent's own trade, even when the account holds more
+            Fresh();
+            e = PlacedOn(sime, Good(NewId()));
+            Fill(e, 1, 24999);
+            SetPos(sime, mnq, 3);   // 2 more bought in NinjaTrader itself
+            ClearMoves();
+            int c1 = sime.Calls.Count;
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            Advance(5000);
+            List<string> s1 = sime.Calls.Skip(c1).Where(c => c.Contains(" ag:manrae flat ")).ToList();
+            Check(s1.Count == 1 && s1[0].Contains(" ag:manrae flat Sell Market 1 "), "A1: the close is the agent's 1, not the account's 3: " + string.Join(" | ", s1));
+            SetPos(sime, mnq, 0); ClearMoves();
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1000);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // reviewer A, A2: a weekday's shut hour (17:00 to 18:00): nothing sent; at the open the flatten goes on
+        Part("A2", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "A2: an entry was placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            et = new DateTime(2026, 10, 12, 17, 30, 0);   // Monday 17:30: the market shut
+            int c0 = sime.Calls.Count;
+            Advance(5000);
+            Check(sime.Calls.Count == c0 && Legs(sime, e).Count(IsLive) == 2, "A2: Monday 17:30: nothing sent, its stop and target stay");
+            et = new DateTime(2026, 10, 12, 18, 0, 30);
+            Advance(5000);
+            Check(sime.Calls.Skip(c0).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")), "A2: at 18:00 the market opens: the flatten cancels and closes");
+            Check(!ChartBridgeAgents.MarketShut(new DateTime(2026, 10, 11, 18, 0, 0)) && ChartBridgeAgents.MarketShut(new DateTime(2026, 10, 11, 17, 59, 0)) && ChartBridgeAgents.MarketShut(new DateTime(2026, 10, 10, 12, 0, 0)) &&
+                  ChartBridgeAgents.MarketShut(new DateTime(2026, 10, 9, 17, 0, 0)) && !ChartBridgeAgents.MarketShut(new DateTime(2026, 10, 9, 16, 59, 0)), "A2: the shut hours: Friday 17:00 to Sunday 18:00, weekdays 17:00 to 18:00");
+            SetPos(sime, mnq, 0); ClearMoves();
+            Advance(1000);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // reviewer A, A5: the served contract rolls; the agent's own trade is on the old month: the flatten closes it there
+        Part("A5", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "A5: an entry was placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            Instrument march = new Instrument { FullName = "MNQ 03-27", MasterInstrument = mnq.MasterInstrument };
+            Named()["MNQ"] = march;   // ChartBridge now serves the next month
+            try
+            {
+                int c0 = sime.Calls.Count;
+                et = new DateTime(2026, 10, 9, 15, 55, 0);
+                Advance(5000);
+                Order fl;
+                lock (sime.Orders) fl = sime.Orders.LastOrDefault(o => (o.Name ?? "").EndsWith(" ag:manrae flat"));
+                Check(fl != null && fl.Instrument == mnq && fl.Quantity == 1 && fl.OrderAction == OrderAction.Sell && sime.Calls.Skip(c0).Any(c => c.StartsWith("cancel CB#" + Tag(e) + " stop")),
+                      "A5: the old month (MNQ 12-26) the agent's trade holds: its legs cancelled and closed there: " + (fl != null ? fl.Instrument.FullName : "no close"));
+            }
+            finally { Named()["MNQ"] = mnq; }
+            SetPos(sime, mnq, 0); ClearMoves();
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1000);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
         foreach (Account x in Account.All.ToList()) Settle(x);
     }
 }

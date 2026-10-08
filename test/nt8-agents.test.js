@@ -53,7 +53,15 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   // a cancel of its own entry only (never a stop or a target), resent every 3 s while it works, or every order there in a
   // flatten of a pair it owns
   assert.match(bodies(acode, 'Cancel'), /!IsMyEntry\(o\)\) return false;/);
-  assert.match(bodies(acode, 'ResendCancels'), /now - kv\.Value\.LastMs >= ChartBridgeAgents\.FlatRetryMs/);
+  // review A4: never while the account is not Connected; every 3 s, from the 10th try every 30 s
+  assert.match(bodies(acode, 'ResendCancels'), /acc\.Connection\.Status != ConnectionStatus\.Connected\) continue;/);
+  assert.match(bodies(acode, 'ResendCancels'), /double every = kv\.Value\.Tries >= ChartBridgeAgents\.CancelSlowAfter \? ChartBridgeAgents\.CancelSlowMs : ChartBridgeAgents\.FlatRetryMs;\s*if \(now - kv\.Value\.LastMs >= every\)/);
+  // review A1 and A2: nothing sent while the market is shut; the pair asked again before every close, never more than its trade
+  const step = bodies(acode, 'StepFlatten');
+  assert.match(step, /bool shut = ChartBridgeAgents\.MarketShut\(NowEt\(\)\);/);
+  assert.match(step, /if \(!OwnsContract\(j\.Root, inst, a\)\) \{ DropJob\(j, key, a\); continue; \}\s*qty = Math\.Min\(qty, CloseCap\(j\.Root, inst, j\)\);/);
+  // contract section 10: an agent entry's protective exit is named for the agent; its legs keep v2's names (the entry's tag)
+  assert.match(bodies(ocode, 'PlaceLegs'), /agentOf != null \? "CB#" \+ br\.Tag \+ " ag:" \+ agentOf \+ " protect" \+ mark : "CB#" \+ br\.Tag \+ " exit" \+ mark/);
   assert.match(bodies(acode, 'SendCancel'), /try \{ o\.Account\.Cancel\(new\[\] \{ o \}\); \}\s*catch \(Exception ex\)/);
   assert.match(bodies(acode, 'StepFlatten'), /may\.Where\(o => o != j\.Close && \(j\.Owned \|\| IsMine\(o\)\)\)/);
   // every entry goes through ChartBridgeOrders.PlaceAgentEntry: the page's order path with the agent as its source
