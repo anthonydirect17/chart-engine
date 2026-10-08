@@ -21,8 +21,10 @@ settings, on the Agent tab. `nt8/PROTOCOL.md`, "Agent channel", has the rules.
 - **A position from an earlier session.** After a restart past 18:00, an agent position whose trade began in the session
   before (its 15:55 flatten did not finish) is flattened at once by its rules, even inside an 18:00 window; never into a
   closed market. The day file keeps such a trade as a `carried` line until the agent is flat, so a roll at 18:00 while
-  ChartBridge runs, then a restart, still flattens it. Going back to 0.5.1 with that line in the file: 0.5.1 cannot read
-  the file and takes no entries for that agent until the file is deleted.
+  ChartBridge runs, then a restart, still flattens it. Only that trade's position is flattened: a fresh trade of the new
+  session never is, even before the line is cleared (it clears when a plan finds the agent flat, or on the next pass). Going back to 0.5.1 with that line in the file: 0.5.1 cannot read
+  the file and never rewrites it, so it takes no entries for that agent on every run until the file is deleted or 0.5.2 is
+  back.
 - **An account change keeps the mode** (until 0.5.1 the agent went to Shadow). The page asks once before a LIVE account,
   naming the mode: "Agent manrae will trade LIVE account EVAL-A in Auto. Continue?"; the Bot tab's question names the bot's
   mode the same way. Not confirmed, nothing changes. ChartBridge keeps the mode only when `agentAccount` carries `keepMode`,

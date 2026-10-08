@@ -1645,6 +1645,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (entry) return "one at a time: agent " + Id + " already has a working entry";
             if (open || owns) return "one at a time: agent " + Id + " already has a position";
             if (proposal) return "one at a time: agent " + Id + " already has an open proposal";
+            ClearCarried();   // 0.5.2 re-check: flat by check 8, so nothing from an earlier session is left (never left to the next pass)
             // 9. maxTrades, maxLosses
             int trades;
             string lossWhy;
@@ -1787,6 +1788,30 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- the agent's orders
+        // 0.5.2 re-check: does the agent own a position on root from an earlier session? Its open trade's tag is carried, or (no
+        // trade record yet: after a start, before the executions are read again) the position is held under its own legs of a
+        // carried trade. A position of this session (its own record, or legs of a tag not carried) never counts.
+        private bool FromBefore(string root)
+        {
+            if (!Owns(root)) return false;
+            string open;
+            HashSet<string> carried;
+            lock (Sync) { open = openTag != null && openRoot == root ? openTag : null; carried = new HashSet<string>(Carried.Select(t => t.Length > 8 ? t.Substring(0, 8) : t)); }
+            if (open != null) return carried.Contains(open.Length > 8 ? open.Substring(0, 8) : open);
+            Account a = FindAccount(Account);
+            Instrument inst = ChartBridgeServer.InstrumentFor(root);
+            if (a == null || inst == null) return false;
+            if (ChartBridgeOrders.AgentListed(a, inst) == 0 && ChartBridgeOrders.AgentEffective(a, inst) == 0) return false;
+            return ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && LegRx.IsMatch(o.Name ?? "") && carried.Contains(ChartBridgeAgents.TagOf(o.Name) ?? ""));
+        }
+
+        private void ClearCarried()
+        {
+            bool had;
+            lock (Sync) { had = Carried.Count > 0; Carried.Clear(); }
+            if (had) SaveDay();
+        }
+
         public bool Owns(string root)
         {
             string acct;
@@ -2285,7 +2310,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             // before) and while the market is closed, whatever the agent does or whether it is there
             bool flatHours = FlatHours(r, etNow), fromBefore;
             lock (Sync) fromBefore = Carried.Count > 0;
-            if (fromBefore && !roots.Any(x => Owns(x))) { lock (Sync) Carried.Clear(); fromBefore = false; SaveDay(); }   // flat: nothing left from the session before
+            if (fromBefore && !roots.Any(x => Owns(x))) { ClearCarried(); fromBefore = false; }   // flat: nothing left from the session before
+            // 0.5.2 re-check: only a position that is in fact from an earlier session, never because Carried is merely not empty
+            if (fromBefore) fromBefore = roots.Any(x => FromBefore(x));
             flatHours = flatHours || fromBefore;   // 0.5.2 review: a position whose trade began in an earlier session is flattened, the market open
             if (!startTold && now - startedMs >= ChartBridgeAgents.SilenceMs)
             {

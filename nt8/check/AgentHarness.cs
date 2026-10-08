@@ -2807,6 +2807,50 @@ public static class AgentHarness
             Settle(sime);
         }
         Hold = null;
+
+        // 5. (re-check) a carried line whose position is already flat, a restart, and a fresh Auto entry filled before any pass:
+        // check 8 found the agent flat, so the carried line goes there and then, and the fresh trade is never flattened
+        CarriedFresh(false);
+        // 6. (re-check) the same with the carried tag put back after the fill (as if check 8 had not cleared it): still never
+        // flattened, because the fresh trade's tag is not carried (Carried not empty is not enough)
+        CarriedFresh(true);
         et = new DateTime(2026, 10, 9, 10, 0, 0);
+    }
+
+    static HashSet<string> CarriedOf(ChartBridgeAgent m) { return (HashSet<string>)typeof(ChartBridgeAgent).GetField("Carried", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(m); }
+
+    static void CarriedFresh(bool putBack)
+    {
+        string label = putBack ? "re-check (carried tag put back after the fill)" : "re-check";
+        Fresh();
+        SessionRules("18:00", "15:25", "15:55");
+        et = new DateTime(2026, 10, 8, 18, 30, 0);   // Friday's session, inside the 18:00 window
+        Advance(1000);
+        Settle(sime);
+        Advance(1000);
+        ChartBridgeAgents.Stop();
+        File.WriteAllText(Path.Combine(Dir, "agent-manrae-day.txt"), "session\t2026-10-09\ncarried\tdeadbeef\n");
+        ChartBridgeAgents.Start(false);
+        ac = new ChartBridgeClient(null, -100);
+        ac.Tap = x => { lock (agentOut) agentOut.Add(x); };
+        M.Attach(ac);
+        A("{\"type\":\"agentHello\",\"name\":\"Manrae\",\"build\":\"sample-build-1\"}");
+        Check(CarriedOf(M).Contains("deadbeef"), label + ": the restart reads the carried line");
+        Mode("manrae", "auto");
+        int calls = sime.Calls.Count, from = N(page);
+        Order e = PlacedOn(sime, Good(NewId()));   // no pass since the start
+        Check(e != null, label + ": a fresh Auto entry is placed before any pass");
+        if (e == null) return;
+        Check(putBack || (CarriedOf(M).Count == 0 && !FileText("agent-manrae-day.txt").Contains("carried\t")), label + ": check 8 found the agent flat: the carried line is gone at once (memory and day file)");
+        Fill(e, 1, 24999);
+        if (putBack) CarriedOf(M).Add("deadbeef");
+        Last2();
+        Advance(3000);
+        Check(!sime.Calls.Skip(calls).Any(c => c.StartsWith("cancel CB#") || c.Contains(" ag:manrae flat ")) && !Any(page, from, "earlier session") && !Any(page, from, "by its rules") && PosOf(sime, mnq) == 1 && Legs(sime, e).All(IsLive),
+              "0.5.2 " + label + ": a fresh trade of this session is never flattened as if it came from an earlier session: " + string.Join(" | ", sime.Calls.Skip(calls)));
+        Settle(sime);
+        Advance(2000);
+        if (putBack) CarriedOf(M).Clear();   // the harness's Settle leaves the ledger's trade open, so that pass never finds it flat
+        else Check(CarriedOf(M).Count == 0, label + ": flat: Carried is empty");
     }
 }
