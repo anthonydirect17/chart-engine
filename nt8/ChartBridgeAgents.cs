@@ -196,6 +196,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static int botFails, copierFails;
         private static bool copierUnreadable;
 
+        public static Func<string> CopierReadFault;   // test hook: a non-null answer fails a read of copier.txt (unused in NinjaTrader)
+
         internal static void RefreshFiles()
         {
             try
@@ -220,6 +222,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 DateTime cs = File.Exists(cf) ? File.GetLastWriteTimeUtc(cf) : DateTime.MinValue.AddTicks(1);
                 bool readCopier; lock (FilesLock) readCopier = cs != copierStamp || copierFails > 0;
                 if (!readCopier) return;
+                Func<string> fault = CopierReadFault;
+                if (fault != null && fault() != null) throw new IOException(fault());
                 List<string> leader = new List<string>(), followers = new List<string>();
                 if (File.Exists(cf))
                     foreach (string raw in File.ReadAllLines(cf))
