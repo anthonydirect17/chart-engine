@@ -809,7 +809,12 @@ function create(o) {
     if (mode && !mode.disabled) {
       const m = mode.dataset.mode;
       if (S.bot && S.bot.mode === m) return;
-      if (m === 'auto' && !(S.autoConfirm > Date.now())) { S.autoConfirm = Date.now() + 4000; renderPanel(); setTimeout(renderPanel, 4100); return; }
+      if (m === 'auto') {
+        // 1.17.0: a second click within 4 s confirms, but not one under 400 ms after the first (a double-click)
+        const step = BC.confirmStep(S.autoConfirm ? { at: S.autoAt, until: S.autoConfirm } : null, Date.now());
+        if (step === 'ignore') return;
+        if (step === 'arm') { S.autoConfirm = Date.now() + 4000; S.autoAt = Date.now(); renderPanel(); setTimeout(renderPanel, 4100); return; }
+      }
       S.autoConfirm = 0;
       if (sendBot({ type: 'botMode', mode: m }, 'mode')) log.add({ k: 'askmode:' + Date.now(), kind: 'mode', text: 'Asked for ' + BC.MODE_NAME[m] });
       return;
@@ -834,7 +839,9 @@ function create(o) {
       // R3: instant. On: one click, always. Release: a second click within 4 s (it lets the bot trade again).
       const b = S.bot || {};
       if (!b.killed) { if (sendBot({ type: 'botKill', on: true }, 'kill')) log.add({ k: 'kill:' + Date.now(), kind: 'kill', text: 'Kill switch pressed', level: 'red' }); return; }
-      if (!(S.killConfirm > Date.now())) { S.killConfirm = Date.now() + 4000; renderPanel(); setTimeout(renderPanel, 4100); return; }
+      const step = BC.confirmStep(S.killConfirm ? { at: S.killAt, until: S.killConfirm } : null, Date.now());   // 1.17.0: not a double-click
+      if (step === 'ignore') return;
+      if (step === 'arm') { S.killConfirm = Date.now() + 4000; S.killAt = Date.now(); renderPanel(); setTimeout(renderPanel, 4100); return; }
       S.killConfirm = 0;
       if (sendBot({ type: 'botKill', on: false }, 'kill')) log.add({ k: 'kill:' + Date.now(), kind: 'kill', text: 'Kill switch released' });
       renderPanel();

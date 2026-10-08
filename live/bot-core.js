@@ -153,6 +153,16 @@ function botFillLedger(mark) {
   };
 }
 
+/* ======================================================================== second clicks */
+/** A second click confirms Auto or a kill switch's release within 4 s of the first; one that comes under 400 ms after it is
+ *  the same double-click and is ignored (1.17.0, the review of the Agent tab, S3). armed: { at, until } of the first click,
+ *  or null. Returns 'arm' (this is a first click), 'ignore' or 'confirm'. */
+const CONFIRM_MS = 4000, DOUBLE_CLICK_MS = 400;
+function confirmStep(armed, now) {
+  if (!armed || !isNum(armed.until) || !(now < armed.until)) return 'arm';
+  return isNum(armed.at) && now - armed.at < DOUBLE_CLICK_MS ? 'ignore' : 'confirm';
+}
+
 /* ======================================================================== the bot's account */
 /** SIM or LIVE: an account is SIM only when ChartBridge says `sim: true` (NinjaTrader's own simulator); anything else is LIVE
  *  (the careful side: an evaluation or funded account is real to NinjaTrader). */
@@ -639,7 +649,7 @@ function statusText(b) {
 
 return {
   VERSION, RAILS, RAIL_MAX, BOT_ACCOUNT, ROOT_SIBLING, isBotMark, botFillLedger, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
-  railLevel, rails, railsChange, worse,
+  railLevel, rails, railsChange, worse, CONFIRM_MS, DOUBLE_CLICK_MS, confirmStep,
   modesAllowed, accountTradable, botSwitchOn, accountMark, botAccount, accountChoices, botAccountChange,
   createProposals,
   parseLibrary, checkEntry, shelves, slotEntry, thinCell, timeOfDayRow, thinEquity, ruleLines, evidenceLevel,

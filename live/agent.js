@@ -248,9 +248,9 @@ function create(o) {
   }
   function propHtml(p) {
     const a = agents.get(p.agent) || { agent: p.agent }, r = p.root, lp = AC.legPrices(p, tickOf(r));
-    const acc = { name: p.account || AC.agentAccount(a).name, mark: typeof p.sim === 'boolean' ? AC.accountMark(p.sim) : AC.agentAccount(a).mark };
+    const acc = { name: p.account || AC.agentAccount(a).name, mark: AC.accountMark(p.sim) };   // no sim: LIVE, as an unknown account anywhere
     const kc = k => (k ? ' <span class="bt-keycap">' + esc(k) + '</span>' : '');
-    return '<div class="ag-prop-h"><span class="ag-ttl">Copilot · ' + esc(AC.agentName(a)) + '</span>' + markHtml(acc.mark) + '<span class="ag-fill"></span><span class="ag-lbl">expires in</span> <span class="mono ag-cd" data-k="cd">-</span></div>' +
+    return '<div class="ag-prop-h"><span class="ag-ttl">Copilot · ' + esc(AC.agentName(a)) + ' <span class="ag-id">' + esc(p.agent) + '</span></span>' + markHtml(acc.mark) + '<span class="ag-fill"></span><span class="ag-lbl">expires in</span> <span class="mono ag-cd" data-k="cd">-</span></div>' +
       '<div class="ag-prop-big mono"><span class="' + (p.side === 'buy' ? 'pos' : 'neg') + '">' + sideWord(p.side) + ' ' + esc(p.qty) + ' ' + esc(r) + '</span> <span class="ag-soft">' + esc(entryText(p)) + '</span></div>' +
       '<div class="ag-prop-setup"><span class="ag-chip">' + esc(p.setup || 'no setup name') + '</span><span class="ag-lbl">confidence</span>' + confHtml(p.confidence) + '</div>' +
       '<div class="ag-quote">' + esc(p.reason || '') + '</div>' +
@@ -359,7 +359,12 @@ function create(o) {
   }
   /* one handler for the copilot key across the Bot tab and every agent (AgentCore.copilotRouter): the oldest open proposal */
   const ROUTER = AC.copilotRouter(document);
-  const unroute = ROUTER.add('agents', { open: () => [...cards.values()].filter(x => !x.ended && !props.answered(x.p.agent, x.p.id)).map(x => ({ id: x.p.agent + ':' + x.p.id, shownAt: x.shownAt, answer: ans => answer(x.p.agent, x.p.id, ans) })) });
+  /* the router's view of this tab: every proposal not ended (an answered one waiting for ChartBridge stays the key's target),
+     and the agent shown while the tab is open (the keys then answer its proposals only) */
+  const unroute = ROUTER.add('agents', { kind: 'agents',
+    open: () => [...cards.values()].filter(x => !x.ended).map(x => ({ id: x.p.agent + ':' + x.p.id, agent: x.p.agent, shownAt: x.shownAt, answered: !!props.answered(x.p.agent, x.p.id),
+      expiresAt: x.p.expiresAt, answer: ans => answer(x.p.agent, x.p.id, ans) })),
+    focus: () => (S.shown && !popout && cur() ? S.chosen : '') });
   function loadKeys() {
     if (typeof o.copilotKeys !== 'function') { S.keys = { accept: '', reject: '', notes: [], from: 'window' }; return; }
     const doc = o.copilotKeys();
@@ -426,7 +431,7 @@ function create(o) {
     const list = agents.list(), pick = q('[data-k="pick"]');
     put(q('[data-k="pickWrap"]'), 'hidden', list.length < 2);
     put(q('[data-k="pickN"]'), 'textContent', list.length + ' agents');
-    const opts = list.map(x => '<option value="' + esc(x.agent) + '">' + esc(AC.agentName(x)) + '</option>').join('');
+    const opts = list.map(x => '<option value="' + esc(x.agent) + '">' + esc(AC.agentName(x)) + (AC.agentName(x) !== x.agent ? ' (' + esc(x.agent) + ')' : '') + '</option>').join('');
     if (pick.dataset.html !== opts) { pick.dataset.html = opts; pick.innerHTML = opts; }
     put(pick, 'value', S.chosen);
     const m = AC.stripModel(a, S.orders.values(), (p, r) => fmtPx(p, r));
@@ -476,7 +481,7 @@ function create(o) {
     attr(q('[data-k="acctOpen"]'), 'title', can.ok ? 'Any account ChartBridge says is tradable, except the bot\'s, the copier\'s and another agent\'s; only while the agent is flat' : can.why.replace('change its rules', 'choose its account'));
     put(q('[data-k="acctEdit"]'), 'hidden', !S.acctEdit || !!S.acctAsk);
     put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
-    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', AC.agentName(a) + ' will trade LIVE account ' + S.acctAsk + '. Continue?');
+    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(a, S.acctAsk));
     setHtml(q('[data-k="rules"]'), AC.rulesLines(a.rules).map(([k, v]) => '<span>' + esc(k) + '</span><span class="mono">' + esc(v) + '</span>').join('') || '<span>Rules</span><span>not known yet</span>');
     const ro = q('[data-k="rulesOpen"]');
     put(ro, 'disabled', !S.signedIn || !can.ok);
@@ -561,7 +566,7 @@ function create(o) {
     const a = cur(); if (!a) return;
     const r = AC.accountChange(a, name, AC.accountChoices(S.accounts, a, others()), ctxNow(a));
     if (r.error) { put(q('[data-k="acctWhy"]'), 'textContent', r.error); return; }
-    if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', 'Sent. ChartBridge keeps it (agent-' + a.agent + '-account.txt) until you change it again.'); }
+    if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', 'Sent. ChartBridge keeps it (agent-' + a.agent + '-account.txt) until you change it again, and puts ' + AC.agentName(a) + ' in Shadow: choose its mode again when you are ready.'); }
     renderPanel();
   }
   function openRules() {
@@ -595,7 +600,12 @@ function create(o) {
     if (mode && !mode.disabled) {
       const m = mode.dataset.mode;
       if (a.mode === m) return;
-      if (m === 'auto' && !(S.autoConfirm > Date.now())) { S.autoConfirm = Date.now() + AC.CONFIRM_MS; renderPanel(); tick(); setTimeout(renderPanel, AC.CONFIRM_MS + 100); return; }
+      if (m === 'auto') {
+        // a second click within 4 s confirms; one under 400 ms after the first is the same double-click and is ignored
+        const step = BC.confirmStep(S.autoConfirm ? { at: S.autoAt, until: S.autoConfirm } : null, Date.now());
+        if (step === 'ignore') return;
+        if (step === 'arm') { S.autoConfirm = Date.now() + AC.CONFIRM_MS; S.autoAt = Date.now(); renderPanel(); tick(); setTimeout(renderPanel, AC.CONFIRM_MS + 100); return; }
+      }
       S.autoConfirm = 0;
       sendAgent(AC.modeMsg(a.agent, m), 'mode');
       renderPanel();
@@ -606,7 +616,9 @@ function create(o) {
     if (k === 'kill') {
       // instant on, always; release with a second click within 4 s (it lets the agent trade again)
       if (!a.killed) { sendAgent(AC.killMsg(a.agent, true), 'kill'); return; }
-      if (!(S.killConfirm > Date.now())) { S.killConfirm = Date.now() + AC.CONFIRM_MS; renderPanel(); setTimeout(renderPanel, AC.CONFIRM_MS + 100); return; }
+      const step = BC.confirmStep(S.killConfirm ? { at: S.killAt, until: S.killConfirm } : null, Date.now());
+      if (step === 'ignore') return;
+      if (step === 'arm') { S.killConfirm = Date.now() + AC.CONFIRM_MS; S.killAt = Date.now(); renderPanel(); setTimeout(renderPanel, AC.CONFIRM_MS + 100); return; }
       S.killConfirm = 0;
       sendAgent(AC.killMsg(a.agent, false), 'kill');
       renderPanel();
@@ -728,7 +740,16 @@ function create(o) {
       if (m && Array.isArray(m.features) && m.features.includes('v3')) return;
       S.v3 = false; S.version = m && typeof m.version === 'string' ? m.version : ''; render();
     },
-    keysChanged() { loadKeys(); for (const x of cards.values()) if (!x.ended) both(x, el => { const n = el.querySelector('[data-k="msg"]'), t = n ? n.textContent : ''; el.innerHTML = propHtml(x.p); if (t) put(el.querySelector('[data-k="msg"]'), 'textContent', t); }); tick(); },
+    keysChanged() {
+      loadKeys();
+      for (const x of cards.values()) if (!x.ended) both(x, el => {
+        const n = el.querySelector('[data-k="msg"]'), t = n ? n.textContent : '';
+        el.innerHTML = propHtml(x.p);
+        if (t) put(el.querySelector('[data-k="msg"]'), 'textContent', t);
+        if (props.answered(x.p.agent, x.p.id)) for (const b of el.querySelectorAll('button')) b.disabled = true;   // answered: waiting for ChartBridge
+      });
+      tick();
+    },
     showTab, shown: () => S.shown,
     /** agents are known: the copilot keys work for them too */
     on: () => agents.size() > 0,

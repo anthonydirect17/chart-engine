@@ -1444,6 +1444,7 @@ function runExtraKey(id) {
     /* the copilot's one-key answer: the bot channel's page part answers it (a cancelable `chart-copilot-key` event) */
     const ev = new CustomEvent('chart-copilot-key', { cancelable: true, detail: { answer: id } });
     if (document.dispatchEvent(ev)) note((id === 'accept' ? 'Accept' : 'Reject') + ': no copilot proposal to answer here.', true);
+    else if (ev.detail.said) note((id === 'accept' ? 'Accept' : 'Reject') + ': ' + ev.detail.said + '.', true);   // 1.17.0: the key answered nothing, and why
     return;
   }
   if (id.startsWith('strategy:')) { pickStrategy(id.slice(9)); return; }

@@ -269,7 +269,14 @@ function accountChange(agent, name, choices, ctx, cid) {
   const msg = { type: 'agentAccount' };
   if (cid) msg.cid = cid;
   msg.agent = a.agent; msg.account = name;
-  return { msg, live: !ch.sim, confirm: ch.sim ? '' : agentName(a) + ' will trade LIVE account ' + name + '. Continue?' };
+  return { msg, live: !ch.sim, confirm: ch.sim ? '' : liveQuestion(a, name) };
+}
+/** The one question before an agent takes a LIVE account: it names the mode, and that the agent goes to Shadow when its
+ *  account changes (lead's default, ChartBridge does it: the review's S5). */
+function liveQuestion(a, name) {
+  const mode = MODE_NAME[a && a.mode] || 'Shadow';
+  return agentName(a) + ' is in ' + mode + ': it will trade LIVE account ' + name + (a && a.mode && a.mode !== 'shadow' ? ' once it is back in ' + mode : ' once you put it in Copilot or Auto') +
+    '. The agent goes to Shadow when its account changes. Continue?';
 }
 
 /* ======================================================================== modes */
@@ -340,6 +347,7 @@ function createProposals() {
     if (!e) return { error: 'No proposal ' + id + '.' };
     if (e.ended || e.p.state !== 'open') return { error: 'That proposal is ' + e.p.state + ': nothing was sent.' };
     if (e.answered) return { error: 'Already answered (' + e.answered + '): nothing was sent.' };
+    if (ans === 'accept' && !isNum(e.p.expiresAt)) return { error: 'No expiry known for this proposal: Accept is refused. Nothing was sent.' };
     if (ans === 'accept' && countdown(e.p.expiresAt, at).late) return { error: 'Too late to accept: under 5 s left (ChartBridge would refuse it as expired). Nothing was sent.' };
     e.answered = ans;
     const msg = { type: 'agentAnswer' };
@@ -391,11 +399,16 @@ function createFeed() {
     while (f.notes.length > NOTES_MAX) { const x = f.notes.shift(); f.noteKeys.delete(x.at + '|' + x.kind + '|' + x.text); }
     return true;
   }
+  /* the same id again replaces it (its result), except that a refused plan never replaces one that was not refused (a
+     duplicate id the agent sent): that one is kept as its own line (the review's S2) */
+  const refused = m => /^refused/.test(str(m.result));
   function plan(m) {
     if (!plainObj(m) || !validId(m.agent) || typeof m.id !== 'string' || !m.id) return false;
-    const f = of(m.agent);
-    f.plans.delete(m.id); f.plans.set(m.id, m);
-    if (f.plans.size > PLANS_MAX) { const old = [...f.plans.values()].sort((a, b) => (a.at || 0) - (b.at || 0))[0]; f.plans.delete(old.id); }
+    const f = of(m.agent), had = f.plans.get(m.id);
+    const key = had && !refused(had) && refused(m) ? m.id + '\u0000refused\u0000' + m.at : m.id;
+    if (f.plans.has(key) && f.plans.get(key) === m) return false;
+    f.plans.delete(key); f.plans.set(key, m);
+    if (f.plans.size > PLANS_MAX) { const old = [...f.plans.entries()].sort((a, b) => (a[1].at || 0) - (b[1].at || 0))[0]; f.plans.delete(old[0]); }
     return true;
   }
   function items(agent, filter) {
@@ -523,48 +536,81 @@ const etClock = ms => { const t = etParts(ms); return p2(t.h) + ':' + p2(t.mi); 
 const etClockSec = ms => { const t = etParts(ms); return p2(t.h) + ':' + p2(t.mi) + ':' + p2(t.s); };
 
 /* ======================================================================== copilot keys: one handler for the bot and every agent */
+/* After a key answer the keys rest this long; a proposal must have been on screen this long before a key may answer it
+   (the review of 19e9ef0, B1: a double press must never answer a second, different proposal). */
+const KEY_LOCK_MS = 1000, KEY_MIN_SHOWN_MS = 1000;
+const KEY_SAY = {
+  many: 'More than one proposal is open: click the one you mean',
+  locked: 'Key ignored: one copilot answer a second',
+  fresh: 'That proposal has just appeared: press again in a moment, or click it',
+  late: 'Under 5 s left: the key does not answer it; click it if you mean to',
+};
 /**
  * The workspace's hotkeys fire one cancelable `chart-copilot-key` event (detail.answer 'accept' or 'reject'). The Bot tab
- * and the Agent tab each register their open proposals here; the router answers the oldest open one across all of them
- * (lead's default), by the time it showed on this page; a tie goes to the source added first (the Bot tab). With nothing
- * open the event is left alone, so the workspace says "no copilot proposal to answer here", as in 1.16.0.
- *   add(name, { open: () => [{ id, shownAt, answer: ans => bool }] }) -> remove()
- *   pick()      the oldest open one: { source, id, shownAt, answer } or null
- *   handle(ans) answer the oldest with 'accept' or 'reject': the one answered, or null (nothing open, or a bad answer)
+ * and the Agent tab each give the router their open proposals (an answered one waiting for ChartBridge included: it stays
+ * the key's target, so a second press can only find it again). Which one a key answers (lead's default, the review's S1):
+ *   - The Agent tab open: only the shown agent's proposals, the oldest of those not in its last 5 s.
+ *   - Elsewhere, no agent proposal open: the bot's oldest, exactly as 1.16.0 (no other rule touches it).
+ *   - Elsewhere, an agent proposal open: exactly one proposal open (the bot's and every agent's) is answered; more than one,
+ *     none is, and the page says "More than one proposal is open: click the one you mean".
+ *   And for every key answer but the bot's own 1.16.0 path: the keys rest 1 s after an answer, a proposal must have been on
+ *   screen 1 s, and one in its last 5 s (or with no expiry) is never answered by a key.
+ * Sources: add(name, { kind ('bot' or 'agents'; 'bot' for the name 'bot'), open: () => [{ id, agent, shownAt, answered,
+ * expiresAt, name, answer: ans => bool }], focus: () => the agent shown in the Agent tab, or '' }) -> remove().
+ * decide(ans) is { act: 'answer', entry } or { act: 'say', text } or { act: 'none' } (nothing open: the event is left alone,
+ * so the workspace says "no copilot proposal to answer here"); handle(ans) acts on it and returns it.
  */
-function createCopilotRouter() {
+function createCopilotRouter(clock) {
+  const now = typeof clock === 'function' ? clock : () => Date.now();
   const sources = [];
-  function add(name, src) { const s = { name: String(name), src }; sources.push(s); return () => { const i = sources.indexOf(s); if (i >= 0) sources.splice(i, 1); }; }
-  function pick() {
-    let best = null;
+  let lockUntil = 0;
+  function add(name, src) { const s = { name: String(name), kind: (src && src.kind) || (name === 'bot' ? 'bot' : 'agents'), src }; sources.push(s); return () => { const i = sources.indexOf(s); if (i >= 0) sources.splice(i, 1); }; }
+  const late = (x, t) => !isNum(x.expiresAt) || x.expiresAt - t < LATE_MS;
+  function decide(ans) {
+    if (ans !== 'accept' && ans !== 'reject') return { act: 'none' };
+    const t = now(), bot = [], agents = [];
+    let focus = '';
     for (const s of sources) {
       let list = [];
       try { list = s.src && typeof s.src.open === 'function' ? s.src.open() || [] : []; } catch (e) { list = []; }
-      for (const x of list) if (x && isNum(x.shownAt) && typeof x.answer === 'function' && (!best || x.shownAt < best.shownAt)) best = { source: s.name, id: x.id, shownAt: x.shownAt, answer: x.answer };
+      for (const x of list) if (x && isNum(x.shownAt) && typeof x.answer === 'function') (s.kind === 'bot' ? bot : agents).push(Object.assign({ source: s.name, kind: s.kind }, x));
+      if (s.kind !== 'bot' && s.src && typeof s.src.focus === 'function') focus = s.src.focus() || focus;
     }
-    return best;
+    const byAge = (a, b) => a.shownAt - b.shownAt;
+    bot.sort(byAge); agents.sort(byAge);
+    const gate = x => {
+      if (t < lockUntil) return { act: 'say', text: KEY_SAY.locked };
+      if (t - x.shownAt < KEY_MIN_SHOWN_MS) return { act: 'say', text: KEY_SAY.fresh };
+      if (x.kind !== 'bot' && late(x, t)) return { act: 'say', text: KEY_SAY.late };
+      return { act: 'answer', entry: x };
+    };
+    if (focus) {                                       // the Agent tab is open: its agent's proposals only
+      const mine = agents.filter(x => x.agent === focus);
+      if (!mine.length) return bot.length || agents.length ? { act: 'say', text: 'With the Agent tab open the keys answer only ' + focus + '\'s proposals: click the one you mean' } : { act: 'none' };
+      return gate(mine.find(x => !late(x, t)) || mine[0]);
+    }
+    if (!agents.length) return bot.length ? { act: 'answer', entry: bot[0] } : { act: 'none' };   // the bot alone: 1.16.0
+    if (bot.length + agents.length > 1) return { act: 'say', text: KEY_SAY.many };
+    return gate(agents[0]);
   }
   function handle(ans) {
-    if (ans !== 'accept' && ans !== 'reject') return null;
-    const e = pick();
-    if (!e) return null;
-    e.answer(ans);
-    return e;
+    const d = decide(ans);
+    if (d.act === 'answer') { lockUntil = now() + KEY_LOCK_MS; d.entry.answer(ans); }
+    return d;
   }
-  return { add, pick, handle, size: () => sources.length };
+  return { add, decide, handle, size: () => sources.length, locked: () => now() < lockUntil };
 }
-/** The one router of a document, with its one `chart-copilot-key` listener (made on first use). */
+/** The one router of a document, with its one `chart-copilot-key` listener (made on first use). What it says (more than one
+ *  open, too soon) goes back on the event (detail.said) for the workspace to show. */
 function copilotRouter(doc) {
   if (!doc) return null;
   if (doc.__copilotRouter) return doc.__copilotRouter;
   const r = createCopilotRouter();
   doc.addEventListener('chart-copilot-key', e => {
-    const ans = e && e.detail ? e.detail.answer : '';
-    if (ans !== 'accept' && ans !== 'reject') return;
-    const x = r.pick();
-    if (!x) return;                       // nothing open: the workspace says so
+    const d = r.handle(e && e.detail ? e.detail.answer : '');
+    if (d.act === 'none') return;                      // nothing open: the workspace says so
     e.preventDefault();
-    x.answer(ans);
+    if (d.act === 'say' && e.detail) e.detail.said = d.text;
   });
   doc.__copilotRouter = r;
   return r;
@@ -575,12 +621,12 @@ return {
   validId, parseVersion, atLeast, offText,
   createAgents, pickAgent, agentName,
   parseRules, rulesLines, rulesForm, rulesChangeable, rulesChange, durationText,
-  accountMark, agentAccount, accountChoices, accountChange,
+  accountMark, agentAccount, accountChoices, accountChange, liveQuestion,
   modesAllowed, accountTradable, modeMsg, killMsg,
   countdown, createProposals, endText, legPrices,
   createFeed, planLine,
   agentOfOrder, isAgentMark, workingEntries, ownsText,
   fmtUsd, positionText, beatText, statusText, stateOf, stripModel, noticesFrom, etClock, etClockSec,
-  createCopilotRouter, copilotRouter,
+  createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
 };
 });

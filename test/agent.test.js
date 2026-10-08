@@ -220,7 +220,9 @@ test('account chooser: tradable accounts, SIM first; never the bot\'s, the copie
   assert.match(AC.accountChange(a, '', ch, {}).error, /Choose/);
   const live = AC.accountChange(a, 'EVAL-A', ch, {}, 'c3');
   assert.deepEqual(live.msg, { type: 'agentAccount', cid: 'c3', agent: 'demo', account: 'EVAL-A' });
-  assert.equal(live.live, true); assert.equal(live.confirm, 'Demo Agent will trade LIVE account EVAL-A. Continue?');
+  assert.equal(live.live, true);
+  assert.equal(live.confirm, 'Demo Agent is in Shadow: it will trade LIVE account EVAL-A once you put it in Copilot or Auto. The agent goes to Shadow when its account changes. Continue?');
+  assert.equal(AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, {}).confirm, 'Demo Agent is in Auto: it will trade LIVE account EVAL-A once it is back in Auto. The agent goes to Shadow when its account changes. Continue?', 'the question names the mode (review S5)');
   const off = AC.accountChoices(accounts, a, { bot: { enabled: false, account: 'Sim101' } });
   assert.equal(off.find(c => c.name === 'Sim101').why, '', 'with the bot channel off its account is free');
   assert.match(AC.accountChange(agent({ position: { root: 'MNQ', qty: 1 } }), 'EVAL-A', ch, {}).error, /choose its account when it is flat/);
@@ -261,34 +263,127 @@ test('the agent\'s orders: by "agent:<id>" on its own account only; its fills cl
   assert.equal(ACC.orderName({ side: 'sell', kind: 'stop', role: 'stop', by: 'bot' }), 'Sell stop · bot');
 });
 
-test('copilot keys: one handler answers the oldest open proposal across the bot and every agent', () => {
-  const R = AC.createCopilotRouter(), done = [];
-  const src = (name, list) => ({ open: () => list.map(x => ({ id: x.id, shownAt: x.at, answer: ans => { done.push(name + ':' + x.id + ':' + ans); return true; } })) });
-  const bot = [], demo = [], manrae = [];
-  R.add('bot', src('bot', bot)); R.add('agents', { open: () => src('demo', demo).open().concat(src('manrae', manrae).open()) });
-  assert.equal(R.handle('accept'), null, 'nothing open: the event is left alone (the workspace says so)');
-  bot.push({ id: 'b1', at: 2000 });
-  assert.equal(R.handle('accept').source, 'bot', 'only the bot\'s open: the bot\'s, exactly as in 1.16.0');
-  demo.push({ id: 'd1', at: 1000 }); manrae.push({ id: 'm1', at: 1500 });
-  R.handle('reject');
-  assert.deepEqual(done, ['bot:b1:accept', 'demo:d1:reject'], 'the oldest across all of them: the agent\'s, shown first');
-  demo.length = 0;
-  R.handle('accept');
-  assert.equal(done[2], 'manrae:m1:accept');
-  manrae.length = 0; bot.length = 0; bot.push({ id: 'b2', at: 3000 }); demo.push({ id: 'd2', at: 3000 });
-  R.handle('accept');
-  assert.equal(done[3], 'bot:b2:accept', 'a tie goes to the source added first (the Bot tab)');
-  assert.equal(R.handle('maybe'), null);
-  // the document's one router and its one listener: preventDefault only when something was answered
+/* the copilot keys' router: a fake clock, a made-up bot proposal list and two agents' lists */
+function routerRig() {
+  let t = 100000;
+  const R = AC.createCopilotRouter(() => t), done = [], bot = [], ag = [], view = { focus: '' };
+  const entry = (who, x) => ({ id: x.id, agent: who === 'bot' ? undefined : who, shownAt: x.at, answered: !!x.answered, expiresAt: x.exp === undefined ? t + 600000 : x.exp,
+    answer: ans => { if (x.answered) return false; x.answered = ans; done.push(who + ':' + x.id + ':' + ans); return true; } });
+  R.add('bot', { open: () => bot.map(x => entry('bot', x)) });
+  R.add('agents', { kind: 'agents', open: () => ag.map(x => entry(x.agent, x)), focus: () => view.focus });
+  return { R, done, bot, ag, view, at: () => t, advance: ms => { t += ms; } };
+}
+
+test('copilot keys, the bot alone: exactly 1.16.0 (the oldest bot proposal; nothing open leaves the event alone)', () => {
+  const g = routerRig();
+  assert.equal(g.R.handle('accept').act, 'none', 'nothing open: the workspace says "no copilot proposal to answer here"');
+  g.bot.push({ id: 'b2', at: g.at() - 50 }, { id: 'b1', at: g.at() - 100 });
+  assert.equal(g.R.handle('accept').entry.id, 'b1', 'the oldest, even with two bot proposals open, and even one just shown');
+  assert.deepEqual(g.done, ['bot:b1:accept']);
+  assert.equal(g.R.handle('reject').entry.id, 'b1', 'answered and waiting: it stays the target (the bot\'s own card says "Already answered")');
+  assert.deepEqual(g.done, ['bot:b1:accept'], 'nothing else answered');
+  assert.equal(g.R.handle('maybe').act, 'none');
+});
+
+test('copilot keys, B1: a double press never answers a second, different proposal', () => {
+  // the Agent tab on demo: demo's proposal answered by the first press; the second press within 1 s answers nothing
+  const g = routerRig();
+  g.view.focus = 'demo';
+  g.ag.push({ agent: 'demo', id: 'k1', at: g.at() - 3000 }, { agent: 'demo', id: 'k3', at: g.at() - 2000 }, { agent: 'demotwo', id: 'k2', at: g.at() - 2500 });
+  assert.equal(g.R.handle('accept').entry.id, 'k1');
+  g.advance(80);
+  const second = g.R.handle('accept');
+  assert.deepEqual([second.act, second.text], ['say', AC.KEY_SAY.locked], 'the keys rest 1 s after an answer');
+  assert.deepEqual(g.done, ['demo:k1:accept']);
+  g.advance(1000);
+  assert.equal(g.R.handle('accept').entry.id, 'k1', '(a) answered and waiting, it is still the target: never the next one');
+  assert.deepEqual(g.done, ['demo:k1:accept'], 'k3 and demotwo\'s k2 untouched');
+  // elsewhere with two agents' proposals open: neither press answers anything
+  const h = routerRig();
+  h.ag.push({ agent: 'demo', id: 'k1', at: h.at() - 3000 }, { agent: 'demotwo', id: 'k2', at: h.at() - 2500 });
+  assert.deepEqual(h.R.handle('accept'), { act: 'say', text: 'More than one proposal is open: click the one you mean' });
+  h.advance(60);
+  assert.equal(h.R.handle('accept').act, 'say');
+  assert.deepEqual(h.done, []);
+  // (c) a proposal on screen under 1 s is never answered by a key
+  const f = routerRig();
+  f.ag.push({ agent: 'demo', id: 'n1', at: f.at() - 400 });
+  assert.deepEqual(f.R.handle('accept'), { act: 'say', text: AC.KEY_SAY.fresh });
+  f.advance(700);
+  assert.equal(f.R.handle('accept').entry.id, 'n1');
+});
+
+test('copilot keys, S1 and N1: the tab answers its agent only; elsewhere exactly one open is answered; never the last 5 s', () => {
+  const g = routerRig();
+  g.view.focus = 'demotwo';
+  g.ag.push({ agent: 'demo', id: 'old1', at: g.at() - 9000 }, { agent: 'demotwo', id: 'new1', at: g.at() - 2000 });
+  g.bot.push({ id: 'b1', at: g.at() - 10000 });
+  assert.equal(g.R.handle('accept').entry.id, 'new1', 'the shown agent\'s, not the older ones elsewhere');
+  const e = routerRig();
+  e.view.focus = 'demo';
+  e.bot.push({ id: 'b1', at: e.at() - 10000 });
+  assert.match(e.R.handle('accept').text, /only demo's proposals/, 'the tab open with none of its agent\'s: nothing answered, said');
+  // elsewhere: one open in all (an agent's) is answered; one agent's and one bot's: none
+  const one = routerRig();
+  one.ag.push({ agent: 'demo', id: 'only', at: one.at() - 2000 });
+  assert.equal(one.R.handle('reject').entry.id, 'only');
+  const mix = routerRig();
+  mix.ag.push({ agent: 'demo', id: 'a1', at: mix.at() - 2000 }); mix.bot.push({ id: 'b1', at: mix.at() - 5000 });
+  assert.equal(mix.R.handle('accept').text, AC.KEY_SAY.many);
+  assert.deepEqual(mix.done, []);
+  // N1: the last 5 s (and no expiry at all) are never a key's
+  const l = routerRig();
+  l.ag.push({ agent: 'demo', id: 'late', at: l.at() - 9000, exp: l.at() + 4000 });
+  assert.equal(l.R.handle('reject').text, AC.KEY_SAY.late);
+  const n = routerRig();
+  n.ag.push({ agent: 'demo', id: 'noexp', at: n.at() - 9000, exp: null });
+  assert.equal(n.R.handle('accept').text, AC.KEY_SAY.late);
+  const tab = routerRig();
+  tab.view.focus = 'demo';
+  tab.ag.push({ agent: 'demo', id: 'late', at: tab.at() - 9000, exp: tab.at() + 3000 }, { agent: 'demo', id: 'fine', at: tab.at() - 5000 });
+  assert.equal(tab.R.handle('accept').entry.id, 'fine', 'in the tab the oldest not in its last 5 s');
+  assert.deepEqual(l.done.concat(n.done), []);
+});
+
+test('copilot keys: the document\'s one router and its one listener; what it says goes back on the event', () => {
   const listeners = [];
   const doc = { addEventListener: (t, f) => listeners.push([t, f]) };
   const r1 = AC.copilotRouter(doc), r2 = AC.copilotRouter(doc);
   assert.equal(r1, r2); assert.equal(listeners.length, 1); assert.equal(listeners[0][0], 'chart-copilot-key');
-  const fire = ans => { let prevented = false; listeners[0][1]({ detail: { answer: ans }, preventDefault: () => { prevented = true; } }); return prevented; };
-  assert.equal(fire('accept'), false);
+  const fire = ans => { const e = { detail: { answer: ans }, prevented: false, preventDefault() { this.prevented = true; } }; listeners[0][1](e); return e; };
+  assert.equal(fire('accept').prevented, false, 'nothing open: left alone');
   let answered = '';
-  r1.add('agents', { open: () => [{ id: 'd9', shownAt: 1, answer: a => { answered = a; } }] });
-  assert.equal(fire('reject'), true); assert.equal(answered, 'reject');
+  r1.add('agents', { kind: 'agents', open: () => [{ id: 'd9', agent: 'demo', shownAt: Date.now() - 5000, expiresAt: Date.now() + 60000, answer: a => { answered = a; } },
+    { id: 'd8', agent: 'demotwo', shownAt: Date.now() - 6000, expiresAt: Date.now() + 60000, answer: a => { answered = a; } }] });
+  const e = fire('reject');
+  assert.ok(e.prevented); assert.equal(e.detail.said, AC.KEY_SAY.many); assert.equal(answered, '');
+});
+
+test('S3: a second click confirms within 4 s, but never one under 400 ms after the first (a double-click)', () => {
+  assert.equal(BC.confirmStep(null, 1000), 'arm');
+  const armed = { at: 1000, until: 1000 + BC.CONFIRM_MS };
+  assert.equal(BC.confirmStep(armed, 1000 + 120), 'ignore');
+  assert.equal(BC.confirmStep(armed, 1000 + 399), 'ignore');
+  assert.equal(BC.confirmStep(armed, 1000 + 400), 'confirm');
+  assert.equal(BC.confirmStep(armed, 1000 + 3999), 'confirm');
+  assert.equal(BC.confirmStep(armed, 1000 + 4000), 'arm', 'after 4 s it starts again');
+  const bot = read('live', 'bot.js'), ag = read('live', 'agent.js');
+  assert.equal((bot.match(/BC\.confirmStep\(/g) || []).length, 2, 'the Bot tab: Auto and the release');
+  assert.equal((ag.match(/BC\.confirmStep\(/g) || []).length, 2, 'the Agent tab: Auto and the release');
+});
+
+test('S2 and N5: a refused duplicate keeps its own line; Accept needs an expiry', () => {
+  const F = AC.createFeed();
+  F.plan({ type: 'agentPlan', agent: 'demo', id: 'p1', at: 1000, action: 'plan', side: 'buy', qty: 2, root: 'MNQ', result: 'proposed' });
+  F.plan({ type: 'agentPlan', agent: 'demo', id: 'p1', at: 2000, action: 'plan', side: 'sell', qty: 1, root: 'MNQ', result: 'refused: plan id p1 was used today' });
+  assert.deepEqual(F.items('demo', 'plans').map(x => x.m.result.split(':')[0]), ['refused', 'proposed']);
+  F.plan({ type: 'agentPlan', agent: 'demo', id: 'r1', at: 3000, action: 'plan', result: 'refused: x' });
+  F.plan({ type: 'agentPlan', agent: 'demo', id: 'r1', at: 3000, action: 'plan', result: 'refused: x' });
+  assert.equal(F.counts('demo').plans, 3, 'a repeat of a refused one replaces it (a page that signs in again)');
+  const P = AC.createProposals();
+  P.update(proposal({ expiresAt: undefined }));
+  assert.match(P.answer('demo', 'p1', 'accept', T0).error, /No expiry known/);
+  assert.ok(P.answer('demo', 'p1', 'reject', T0).msg, 'Reject still goes');
 });
 
 test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the one copilot-key handler; versions 1.17.0', () => {
