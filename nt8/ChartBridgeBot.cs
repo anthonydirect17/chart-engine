@@ -153,6 +153,30 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // The account the bot trades: Sim101 until Anthony chooses another on the page (botAccount).
         public static string BotAccount { get { lock (Sync) return account; } }
+
+        // 0.5.0 agents (lead's default): the bot's account for the agents' refusals whether or not the bot is on: in memory when on,
+        // else read from bot-account.txt (Sim101 when there is none); null when that file cannot be understood.
+        public static string AccountForAgents() { return Enabled ? BotAccount : ReadAccountFile(); }
+
+        // bot-account.txt as the agents read it (ChartBridgeAgents.RefreshFiles, on its timer's thread): Sim101 when there is none.
+        public static string ReadAccountFile()
+        {
+            try
+            {
+                if (!File.Exists(AccountFile)) return DefaultAccount;
+                string found = null;
+                foreach (string raw in File.ReadAllLines(AccountFile))
+                {
+                    string line = raw.Trim();
+                    if (line.Length == 0 || line.StartsWith("#")) continue;
+                    string[] p = line.Split('\t');
+                    if (found == null && p.Length == 2 && p[0] == "account" && PlainName(p[1])) found = p[1];
+                    else return null;
+                }
+                return found;
+            }
+            catch (Exception) { return null; }
+        }
         private static string DayFile { get { return Path.Combine(Folder, "bot-day.txt"); } }
         private static string LogFile { get { return Path.Combine(Folder, "bot.log"); } }
 
@@ -1438,6 +1462,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool broken;
             lock (Sync) broken = accountBroken != null;
             if (name == old && !broken) return null;   // already the bot's account
+            why = ChartBridgeAgents.AccountTakenWhy(name, "the bot");   // 0.5.0 agents: never an agent's account (ruling 1)
+            if (why != null) return why;
             // Minors (3): any position or working order on the bot's root, the bot's or not, on the account chosen or on the bot's
             // account now, refuses the change (a trade there would sit beside the bot's or under its rails).
             string root = EffectiveRoot();
