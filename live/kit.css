@@ -271,7 +271,8 @@
 
 /* ---------------------------------------------------------------- the light (kit.js makes the layers) */
 .kit .kit-lit { box-shadow: 0 0 34px -4px var(--kit-pc), inset 0 0 22px -12px var(--kit-pc); }
-.kit .kit-armed.kit-lit { box-shadow: 0 0 34px -4px var(--kit-pc), inset 0 0 22px -12px var(--kit-pc), 0 0 22px -3px rgba(123,92,255,.45), inset 0 0 18px -8px rgba(123,92,255,.25); }
+/* armed and lit: the purple ring is painted first (on top), the light's glow under it, so both show */
+.kit .kit-armed.kit-lit { box-shadow: 0 0 0 1px rgba(155,123,255,.45), 0 0 14px -2px rgba(123,92,255,.80), inset 0 0 18px -8px rgba(123,92,255,.40), 0 0 34px -4px var(--kit-pc), inset 0 0 22px -12px var(--kit-pc); }
 .kit .kit-orbit {
   position: absolute; inset: -2px; padding: 3px; pointer-events: none; opacity: 0;
   background: conic-gradient(from var(--kit-ang), transparent 0deg, transparent 200deg, var(--kit-pc) 310deg, #fff 352deg, transparent 360deg);
