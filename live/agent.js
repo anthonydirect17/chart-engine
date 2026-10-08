@@ -82,6 +82,8 @@ function create(o) {
     view.classList.add('ag-view');
     view.innerHTML =
       '<div class="ag-off" data-k="off" hidden><div class="ag-off-card"><span class="ag-ttl">Agents</span><p data-k="offText"></p></div></div>' +
+      /* narrower than 1100 px: ChartBridge's line and the notices, pinned at the top in a band of their own (agent.css) */
+      '<div class="ag-tray" data-k="tray" aria-label="ChartBridge and notices"></div>' +
       '<div class="ag-main" data-k="main" hidden>' +
       /* the strip: who, how it is, what it holds */
       '<header class="ag-strip ag-panel" data-k="strip" data-no-motion>' +
@@ -157,7 +159,7 @@ function create(o) {
         '<div class="ag-panel ag-proppanel" data-panel="prop" data-no-motion>' + LIGHT_HTML +
           '<div class="ag-sechead"><span class="ag-k2">Proposal · copilot</span><span class="ag-lbl" data-k="propCount"></span></div>' +
           '<div class="ag-slot" data-k="slot"><div class="ag-plist" data-k="plist"></div><p class="ag-empty" data-k="pempty">None open</p></div>' +
-          '<div class="ag-pbody"><div class="ag-others" data-k="others"></div></div></div>' +
+          '<div class="ag-pbody"><div class="ag-listhead" data-k="listhead" aria-hidden="true"></div><div class="ag-others" data-k="others"></div></div></div>' +
         '<div class="ag-panel ag-feedwrap" data-panel="stream">' + LIGHT_HTML +
           '<div class="ag-loghead"><span class="ag-k2">His stream</span><span class="ag-lbl" data-k="feedCount"></span></div>' +
           '<div class="ag-filters" role="tablist" data-k="filters">' + FILTERS.map(f => '<button type="button" role="tab" data-filter="' + f[0] + '" aria-selected="false">' + f[1] + '</button>').join('') + '</div>' +
@@ -198,7 +200,7 @@ function create(o) {
         render(); return;
       case 'trading': S.trading = m; S.signedIn = !!m.enabled; render(); return;
       case 'accounts': S.accounts = m; renderPanel(); renderLive(); return;
-      case 'bot': S.bot = m; return;
+      case 'bot': S.bot = m; adoptBotCards(); return;   // its name on its listed cards
       case 'copier': S.copier = m; return;
       case 'agent': onAgent(m); return;
       case 'agentProposal': onProposal(m); return;
@@ -322,8 +324,11 @@ function create(o) {
       /* the foot: ChartBridge's words (a refusal, the last 5 s, "Waiting for ChartBridge") right above Accept and Reject, so both
          stay in sight together while the proposal's words scroll (the foot is sticky in the tab) */
       '<div class="ag-prop-foot"><div class="ag-prop-msg" data-k="msg" role="status"></div>' +
-      '<div class="ag-prop-btns"><button type="button" class="ag-acc" data-agans="accept" data-no-motion>Accept' + kc(S.keys.accept) + '</button><button type="button" class="ag-rej" data-agans="reject" data-no-motion>Reject' + kc(S.keys.reject) + '</button></div></div>';
+      '<div class="ag-prop-btns" data-who="' + esc(whoText(p)) + '"><button type="button" class="ag-acc" data-agans="accept" data-no-motion>Accept' + kc(S.keys.accept) + '</button><button type="button" class="ag-rej" data-agans="reject" data-no-motion>Reject' + kc(S.keys.reject) + '</button></div></div>';
   }
+  /* whose proposal, in one line: shown right above a listed card's Accept and Reject, which stay at its foot while it scrolls,
+     so they never show without it (the re-check of 7bca487) */
+  const whoText = p => AC.agentName(agents.get(p.agent) || { agent: p.agent }) + ' · ' + sideWord(p.side) + ' ' + p.qty + ' ' + p.root;
   function makeCard(p, where) {
     const el = document.createElement('div');
     el.className = 'ag-prop ' + where;
@@ -381,15 +386,25 @@ function create(o) {
   /* a placeholder of a leaving card's exact height, in its place, while an open card comes after it, or while taking it away
      would pull a scrolled box back */
   function ghostFor(order, height) {
-    if (!panelOn() || !(height > 0) || !(openAfterOrder(order) || wouldClamp(height))) return;
+    if (!panelOn() || !(height > 0) || pointerAway() || !(openAfterOrder(order) || wouldClamp(height))) return;
     const g = document.createElement('div');
     g.className = 'ag-ghost'; g.setAttribute('aria-hidden', 'true');
     g.style.setProperty('--ag-order', order); g.style.height = height + 'px';
     q('.ag-pbody').appendChild(g); ghosts.add(g);
   }
-  /* placeholders with nothing open after them go (nothing open can move when they do) */
+  /* placeholders go when nothing open comes after them (nothing open can move then), and also once the pointer has been off
+     the proposal panel for 1 s (the cards after them move up then, with nothing under the pointer to slide; the re-check of 7bca487:
+     at 1366 x 768 a placeholder kept the list's few lines empty) */
+  let pointerOnList = false, pointerLeftAt = 0;
+  const pointerAway = () => !pointerOnList && Date.now() - pointerLeftAt >= 1000;
   function sweepGhosts() {
-    for (const g of [...ghosts]) if (!panelOn() || !(openAfterOrder(orderOf(g)) || wouldClamp(g.offsetHeight))) { g.remove(); ghosts.delete(g); }
+    const away = pointerAway();
+    for (const g of [...ghosts]) if (!panelOn() || away || !(openAfterOrder(orderOf(g)) || wouldClamp(g.offsetHeight))) { g.remove(); ghosts.delete(g); }
+  }
+  if (view) {
+    const list = q('[data-panel="prop"]');                    // the whole proposal panel: the slot's buttons are a hand's width from the list
+    list.addEventListener('pointerenter', () => { pointerOnList = true; });
+    list.addEventListener('pointerleave', () => { pointerOnList = false; pointerLeftAt = Date.now(); setTimeout(sweepGhosts, 1050); });
   }
   /* before a card arrives: from the end of the panel, every placeholder and every ended card goes until an open one (the bot's
      ended cards are hidden here: live/bot.js removes them on its own timer) */
@@ -405,15 +420,23 @@ function create(o) {
   /* the bot's cards in the panel: an order when they arrive, their height known, a placeholder when one leaves (live/bot.js
      drops an ended card on its own timer) */
   const sizeObs = typeof ResizeObserver === 'function' ? new ResizeObserver(es => { for (const e of es) sizes.set(e.target, e.target.getBoundingClientRect().height); }) : null;
-  function adoptBotCards() { for (const el of propBox.children) if (el.classList.contains('bt-prop') && !el.style.getPropertyValue('--ag-order')) { el.style.setProperty('--ag-order', ++cardSeq); if (sizeObs) sizeObs.observe(el); } }
+  function adoptBotCards() {
+    for (const el of propBox.children) {
+      if (!el.classList.contains('bt-prop')) continue;
+      if (!el.style.getPropertyValue('--ag-order')) { el.style.setProperty('--ag-order', ++cardSeq); if (sizeObs) sizeObs.observe(el); }
+      const big = el.querySelector('.bt-prop-big'), btns = el.querySelector('.bt-prop-btns'), msg = el.querySelector('[data-k="msg"]');
+      if (btns && big) attr(btns, 'data-who', ((S.bot && S.bot.name) || 'Bot') + ' · ' + big.textContent.trim().split(/\s+/).slice(0, 3).join(' '));
+      if (msg) attr(msg, 'title', msg.textContent || null);
+    }
+  }
   const boxObs = typeof MutationObserver === 'function' ? new MutationObserver(recs => {
     for (const r of recs) for (const el of r.removedNodes) if (el.nodeType === 1 && el.classList.contains('bt-prop')) {
       if (el.classList.contains('bt-ended') && !el.classList.contains('ag-gone')) ghostFor(orderOf(el), sizes.get(el) || 0);
       if (sizeObs) sizeObs.unobserve(el);
     }
-    adoptBotCards(); sweepGhosts(); placeEmpty();
+    adoptBotCards(); sweepGhosts(); placeEmpty(); placeListHead();
   }) : null;
-  if (boxObs) boxObs.observe(propBox, { childList: true });
+  if (boxObs) boxObs.observe(propBox, { childList: true, subtree: true });   // the bot's cards and their words (live/bot.js writes them)
   adoptBotCards();
   /* "None open" in the slot while the shown agent has nothing there (the slot keeps its height either way) */
   function placeEmpty() { put(q('[data-k="pempty"]'), 'hidden', !!q('[data-k="plist"] .ag-prop')); }
@@ -425,7 +448,7 @@ function create(o) {
     for (const x of cards.values()) put(x.corner, 'hidden', inTab && x.p.agent === S.chosen);
     const n = mine.filter(x => !x.ended).length;
     put(q('[data-k="propCount"]'), 'textContent', n ? n + ' open' : '');
-    placeBox(); sweepGhosts(); placeEmpty();
+    placeBox(); sweepGhosts(); placeEmpty(); placeListHead();
   }
   /* the corner: in the proposal panel while the tab is shown (its main part, not the "no agents" card), else the page's corner */
   function placeBox() {
@@ -448,7 +471,7 @@ function create(o) {
   }
   document.addEventListener('visibilitychange', seenNow);
   const both = (x, fn) => { fn(x.inline); fn(x.corner); };
-  function setMsg(x, t) { both(x, el => put(el.querySelector('[data-k="msg"]'), 'textContent', t)); }
+  function setMsg(x, t) { both(x, el => { const m = el.querySelector('[data-k="msg"]'); put(m, 'textContent', t); attr(m, 'title', t || null); }); }   // a listed card shows one line: the rest in its title
   function endProposal(p, why) {
     const x = cards.get(keyOf(p.agent, p.id)), a = agents.get(p.agent);
     const react = isNum(p.seenAt) && isNum(p.answeredAt) ? ' in ' + ((p.answeredAt - p.seenAt) / 1000).toFixed(1) + ' s' : '';
@@ -762,8 +785,12 @@ function create(o) {
      whole tab down 46 px before). Both go back where the page keeps them when the tab closes. Moved only when needed. */
   const alertsEl = popout ? null : document.getElementById('wsAlerts');
   const alertsHome = alertsEl ? { parent: alertsEl.parentNode, next: alertsEl.nextSibling } : null;
+  /* Narrower than 1100 px the chart sits far down the tab (the review of 7bca487: the line at 989 px at 1000 x 800, 1299 px on
+     a phone), so there both are pinned at the top instead, in a band of a fixed height above the tab's scrolling part (the
+     tray): always in sight, covering nothing, and their coming and going moves nothing. */
+  const NARROW = typeof matchMedia === 'function' ? matchMedia('(max-width: 1100px)') : null;
   function placeNotes() {
-    const over = view ? q('[data-k="over"]') : null, main = view ? q('[data-k="main"]') : null;
+    const over = view ? q(NARROW && NARROW.matches ? '[data-k="tray"]' : '[data-k="over"]') : null, main = view ? q('[data-k="main"]') : null;
     const inTab = !!(S.shown && over && main && !main.hidden);
     const host = inTab ? over : document.body;
     if (notes.parentElement !== host) host.appendChild(notes);
@@ -774,6 +801,22 @@ function create(o) {
       tog(alertsEl, 'ag-in-tab', inTab);
     }
   }
+  /* the list's head: when the list is scrolled so a listed card's foot is cut at its top (its "whose" line out of sight, its
+     Accept and Reject still in sight under it), the head pinned at the top of the list says whose they are. Worked out when
+     the list scrolls or changes, never per frame. */
+  function placeListHead() {
+    const box = view ? q('.ag-pbody') : null, head = view ? q('[data-k="listhead"]') : null;
+    if (!box || !head) return;
+    const top = box.getBoundingClientRect().top, H = head.offsetHeight || 22;
+    let who = '';
+    for (const b of propBox.querySelectorAll('.ag-prop.corner:not([hidden]) .ag-prop-btns[data-who], .bt-prop:not(.ag-gone) .bt-prop-btns[data-who]')) {
+      const r = b.getBoundingClientRect();
+      if (r.height && r.top < top + H && r.bottom > top + 2) { who = b.dataset.who; break; }   // any of it in sight under its cut line
+    }
+    put(head, 'textContent', who); tog(head, 'on', !!who);
+  }
+  if (view) { q('.ag-pbody').addEventListener('scroll', placeListHead, { passive: true }); window.addEventListener('resize', placeListHead); }
+  if (view && NARROW) { if (NARROW.addEventListener) NARROW.addEventListener('change', placeNotes); else if (NARROW.addListener) NARROW.addListener(placeNotes); }
   let resizeObs = null;
   if (view && typeof ResizeObserver === 'function') {
     resizeObs = new ResizeObserver(() => placeDrawer(true));   // a new size: the open row back in sight

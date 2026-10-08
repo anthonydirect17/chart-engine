@@ -161,15 +161,22 @@ decision in a drawer over the right column, outlined in that decision's colour:
   only). Nothing covers any of them, at any size, in the workspace and in the pop-out.
   **The shown agent's proposal is always first and in sight, and no Accept or Reject ever moves under the pointer** (after
   the re-reviews of a4fa9d9 and 60e9ddd). The shown agent's own proposal has a slot of a fixed height at the panel's top
-  (`clamp(220px, 36vh, 380px)`), reserved whenever the tab is shown, with "None open" in it at the same height when it is
+  (`clamp(190px, 30vh, 380px)`: at 1366 x 768 230 px, which still shows its head and its Accept and Reject), reserved
+  whenever the tab is shown, with "None open" in it at the same height when it is
   empty; its words scroll inside the slot and its Accept and Reject stay at the slot's foot, in the window without scrolling
   at 1000 x 800, 1366 x 768 and 1920 x 1080 (on a phone, in the panel's first screen), whatever else is open. Its proposal
   arriving, ending or going moves nothing. Under the slot, another agent's and the bot's proposals are one list in the order
   they arrived: a card that arrives goes at the end; a card that ends and leaves while an open card comes after it leaves a
   placeholder of its exact height until nothing open follows (the bot's cards too: the tab watches the Bot tab's corner);
   the browser's scroll anchoring is off in the tab, and a card leaving the end of a box scrolled to its end leaves a
-  placeholder too (the box would be pulled back). When the panel is at its height (all but 128 px of the column, so the
-  stream keeps its own) that list scrolls. Switching the agent shown is deliberate: the slot and the list may change then.
+  placeholder too (the box would be pulled back). A placeholder also goes once the pointer has been off the proposal panel
+  for 1 s (the cards after it move up then, with nothing under the pointer). When the panel is at its height (all but
+  128 px of the column, so the stream keeps its own) that list scrolls: at 1366 x 768 it has about 135 px, enough for a
+  card's header with its Accept and Reject. Each listed card's foot (its words in one line, the full text in its title;
+  whose it is in one line, "Second Demo Agent · Buy 1 MNQ"; Accept and Reject) stays at the foot of the list while the card
+  scrolls, and scrolling to a listed Accept or Reject brings that line with it. When the list is scrolled so a card's foot
+  is cut at the list's top, a one-line head pinned there names whose it is (worked out on scroll, never per frame) and
+  blocks presses on what it covers. So a listed Accept never shows without whose it is. Switching the agent shown is deliberate: the slot and the list may change then.
   The list is written only when it changed, so a button keeps its focus and a press held across an agent message still
   clicks.
 - **Right, his stream:** notes (look, thinking, lesson, notebook, status), plans (with their result: shadow, waiting for
@@ -182,12 +189,15 @@ decision in a drawer over the right column, outlined in that decision's colour:
   corner, so the two never overlap); while the tab is shown that corner is part of its proposal panel (above). Notices for
   an entry, an exit, a stand-down, the heartbeat, the kill switch, the mode, the account and how a proposal ended. While
   the Agent tab is shown the notices cover none of it: they stack over the chart's lower left, above its time axis (over
-  the oldest bars), at every width (narrower than 1100 px they scroll with the chart), never over the controls, the rules,
-  a proposal, the stream or the footer. The workspace's ChartBridge line (its warnings and errors, until dismissed) lies
-  across the chart's top while the tab is shown, so its coming and going moves nothing in the tab (it pushed the whole tab
-  down 46 px before).
+  the oldest bars), never over the controls, the rules, a proposal, the stream or the footer. The workspace's ChartBridge
+  line (its warnings and errors, until dismissed) lies across the chart's top while the tab is shown, so its coming and
+  going moves nothing in the tab (it pushed the whole tab down 46 px before). At 1100 px and narrower the chart sits far
+  down the tab, so both are pinned at the top instead, in a band of their own of a fixed height above the tab's scrolling
+  part (66 px, 96 px on a phone; they scroll inside it): always in sight, over no Accept or Reject, and moving nothing.
 - **Smaller screens:** at 1366 x 768 everything fits the window with no scroll; narrower than 1100 px the controls and the
-  proposal (with the stream under it) sit side by side at the top, the chart under them across both (the tab scrolls); on a phone everything stacks, with no sideways scroll
+  proposal (with the stream under it) sit side by side at the top, the chart under them across both (the tab scrolls); on a
+  phone the controls, then the proposal and the stream, then the chart, the words under the mode, the account and the rules
+  keeping their two lines while empty so they move nothing under them; on a phone everything stacks, with no sideways scroll
   (the workspace's top bar wraps while the tab is open there).
 
 ## Page messages (contract section 7), exactly
@@ -462,7 +472,12 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
   they were, and each one's old point still finds the same card's same button, or no live button. The shown agent's card
   (added after the re-review of 60e9ddd): at 1000 x 800, 1366 x 768, 1920 x 1080 and 390 x 844, with the bot (two
   proposals), the second agent and the shown agent all proposing, it is the panel's first card and its Accept and Reject
-  are in the window with nothing scrolled (on the phone, in the panel's first screen) and hit-test to themselves. Screenshots `agent-targets-1366`, `-390`, `-popout`.
+  are in the window with nothing scrolled (on the phone, in the panel's first screen) and hit-test to themselves. The list
+  (added after the re-check of 7bca487): at 1366 x 768 with nothing scrolled a listed card shows its header, Accept and
+  Reject; at 1366 x 768 and 1600 x 900 each listed card's Accept, scrolled to, shows with whose it is right above it, and with
+  the list scrolled from top to end in 6 px steps every listed Accept in sight shows whose it is (its line or the head). At
+  1000 x 800, 800 x 900 and 390 x 844, with the tab at its top, ChartBridge's error line is in the window, covers no Accept
+  or Reject and moves the shown agent's Accept by nothing. Screenshots `agent-targets-1366`, `-390`, `-popout`.
 - `npm run perf:agent` (R5, `test/perf-agent.mjs`, not part of `npm test`): the Agent tab in a trade at 1920 x 1080 while
   MNQ trades a busy tape (`--live-rate=200`), Motion Full and Motion Off taking turns. Gates: a chart's frame p95 under 4 ms
   and all charts per frame under 8 ms (the chart's own), the light on the chart and the footer with Full and none with

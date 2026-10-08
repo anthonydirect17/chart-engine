@@ -117,6 +117,14 @@ lead's default.
     its words scrolling inside it with Accept and Reject at its foot; the other agents' and the bot's proposals keep the
     arrival-ordered list with placeholders under it. Narrower than 1100 px the controls and the proposal sit side by side
     at the top, with the chart under them.
+  - At 1366 x 768 (Anthony's laptop) the list of other proposals has room (the slot is 30vh, at least 190 px: 230 px there,
+    against 276 px before; the list about 135 px against 85 px), placeholders go once the pointer has been off the panel
+    for 1 s, and each listed card's foot (its words in one line with the full text in its title, whose it is in one line,
+    Accept and Reject) stays at the foot of the list while it scrolls; scrolled so a foot is cut at the list's top, a head
+    pinned there names whose it is: a listed Accept never shows without whose it is.
+  - At 1100 px and narrower ChartBridge's error line and the notices are pinned at the top of the tab in a band of a fixed
+    height (it lay on the chart, far down: at 989 px at 1000 x 800, 1299 px on a phone). On a phone the proposal comes
+    before the chart, and the words under the mode, the account and the rules keep their lines while empty.
   - The fake ChartBridge's texts as on main: the last NOT FLAT names the second position reading ("(or N with fills not yet
     in the position)") and why the account takes no exit ("; the account is not connected (...)"); the warning at a cancel's
     second try goes to every trader page.

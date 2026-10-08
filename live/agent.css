@@ -275,13 +275,20 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
    arrives goes at the end, and a card that leaves while an open card comes after it leaves a placeholder of its height
    (review of a4fa9d9): no Accept or Reject ever moves under the pointer. With the panel at its height that list scrolls. */
 .ag-view .ag-proppanel { flex: 0 0 auto; min-height: 110px; max-height: calc(100% - 128px); display: flex; flex-direction: column; padding: 12px 16px; gap: 10px; }
-.ag-view .ag-slot { flex: none; height: clamp(220px, 36vh, 380px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent; }
+.ag-view .ag-slot { flex: none; height: clamp(190px, 30vh, 380px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent; }
 .ag-view .ag-slot > .ag-plist { display: grid; gap: 14px; }
 .ag-view .ag-slot > .ag-plist:empty { display: none; }
 .ag-view .ag-pbody { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent;
   display: flex; flex-direction: column; gap: 14px; }
 .ag-view .ag-pbody:not(:has(> * > * > :not([hidden]):not(.ag-gone))):not(:has(> .ag-ghost)) { display: none; }
 .ag-view .ag-others, .ag-view .ag-others > .bt-props, .ag-view .ag-others > .ag-props { display: contents; }
+/* the list's head (live/agent.js placeListHead): pinned at the top of the list, taking no room in it (its height and the gap
+   cancelled), shown only while a listed card's foot is cut there: whose its Accept and Reject are */
+.ag-view .ag-listhead { order: -1; position: sticky; top: 0; z-index: 2; flex: none; height: 22px; margin-bottom: -36px; padding: 3px 8px; box-sizing: border-box;
+  background: var(--ag-inset); border-bottom: 1px solid var(--ag-pur); font: 600 11.5px/16px var(--ag-sans); color: var(--ag-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; visibility: hidden; pointer-events: none; cursor: default; }
+.ag-view .ag-listhead.on { visibility: visible; pointer-events: auto; }   /* what it covers cannot be pressed unseen */
+.ag-view .ag-pbody { scroll-padding-top: 22px; }   /* scrolling to something brings it clear of the head */
 /* no scroll anchoring in the tab: the browser would scroll a box to keep a row below in place when a card goes, which moves
    every card above it */
 .ag-view .ag-main, .ag-view .ag-pbody, .ag-view .ag-slot { overflow-anchor: none; }
@@ -442,6 +449,17 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
    the corner notices stack in the chart's lower left above its time axis, and the workspace's ChartBridge line lies across the
    chart's top. Nothing of them covers a control, a proposal's Accept or Reject, the stream or the footer, at any size. */
 .ag-view .ag-others .ag-prop.corner, .ag-view .ag-others .bt-prop { width: auto; box-shadow: none; }
+/* a listed card's foot (its words, whose it is, Accept and Reject) stays at the foot of the box while the card scrolls, so its
+   Accept never shows without whose it is (the re-check of 7bca487); its words take one line, all of them in its title */
+.ag-view .ag-others .ag-prop.corner .ag-prop-foot { position: sticky; bottom: 0; z-index: 1; background: var(--ag-inset); padding-top: 4px; }
+.ag-view .ag-others .bt-prop .bt-prop-btns { position: sticky; bottom: 0; z-index: 1; background: var(--bt-copilot, var(--ag-inset)); flex-wrap: wrap; row-gap: 4px; padding-top: 4px; }
+.ag-view .ag-others .ag-prop-btns { flex-wrap: wrap; row-gap: 4px; }
+/* scrolled to (a key, a click, scrollIntoView), a listed card's Accept and Reject bring whose they are into sight with them */
+.ag-view .ag-others [data-agans], .ag-view .ag-others [data-ans] { scroll-margin-top: 26px; }
+.ag-view .ag-others .ag-prop-btns[data-who]::before, .ag-view .ag-others .bt-prop-btns[data-who]::before {
+  content: attr(data-who); flex: 0 0 100%; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font: 600 11.5px/1.4 var(--ag-sans); color: var(--ag-soft); }
+.ag-view .ag-others .ag-prop-msg, .ag-view .ag-others .bt-prop-msg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ag-view .ag-others .mono { font-family: var(--ag-mono); }
 /* with the tab open the copilot keys answer the shown agent's proposals only (docs/AGENT_TAB.md, lead's default 3): the other
    proposals here are answered with their own buttons, so their key caps are not shown */
@@ -459,7 +477,15 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 @media (max-height: 820px) {
   .ag-view .ag-pipe { padding: 8px 16px 7px; }
 }
+/* the tray: narrower than 1100 px, ChartBridge's line and the notices pinned above the tab's scrolling part, in a band of a
+   fixed height (they scroll inside it), so they are always in sight, cover nothing, and coming or going move nothing */
+.ag-view .ag-tray { display: none; }
 @media (max-width: 1100px) {
+  .ag-view .ag-tray { display: block; flex: none; height: 66px; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 6px 10px 2px; border-bottom: 1px solid var(--f-line2); }
+  .ag-view .ag-tray:has(~ .ag-main[hidden]) { display: none; }
+  .ag-view .ag-tray > .ws-alerts { position: static; padding: 0; }
+  .ag-view .ag-tray > .ws-alerts .ws-alert:first-child { margin-top: 0; }
+  .ag-view .ag-tray > .ag-notes, .ag-view .ag-tray > .bt-notes { position: static; width: auto; max-height: none; flex-direction: column; margin-top: 4px; }
   .ag-main { overflow-y: auto; }
   .ag-view .ag-grid { flex: none; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto; }
   /* the controls and the proposal side by side at the top (its Accept and Reject in the window without scrolling), the chart
@@ -479,6 +505,13 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
   .ag-main { padding: 8px 8px 10px; }
   .ag-view .ag-grid { grid-template-columns: minmax(0, 1fr); }
   .ag-view .ag-left, .ag-view .ag-right, .ag-view .ag-centre { grid-row: auto; grid-column: auto; }
+  /* a phone: the controls, then the proposal (its slot) and his stream, then the chart */
+  .ag-view .ag-left { order: 1; } .ag-view .ag-right { order: 2; } .ag-view .ag-centre { order: 3; }
+  .ag-view .ag-tray { height: 96px; }
+  /* the words under the mode, the account and the rules keep their two lines even while empty: their coming and going never
+     moves the proposal under them */
+  .ag-view .ag-why, .ag-view .ag-why:empty { display: block; min-height: 2.9em; }
+  .ag-view .ag-why[hidden] { display: block; visibility: hidden; }
   .ag-view .ag-left, .ag-view .ag-right { max-height: none; }
   .ag-view .ag-scroll { overflow: visible; }
   .ag-view .ag-feedwrap { min-height: 320px; }

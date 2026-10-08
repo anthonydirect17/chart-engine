@@ -136,8 +136,12 @@ try {
     await notices(page, 4);
     await sleep(100);
     const bad = await hitTest(page, TAB + ', #agView .ag-prop.corner[data-id="q2"] [data-agans], #agView .bt-prop[data-id="b1"] [data-ans]');
-    const inChart = await page.evaluate(() => { const c = document.querySelector('#agView [data-panel="chart"]').getBoundingClientRect(); return [...document.querySelectorAll('.ag-note')].every(n => { const r = n.getBoundingClientRect(); return r.height === 0 || (r.left >= c.left - 1 && r.right <= c.right + 1 && r.top >= c.top - 1 && r.bottom <= c.bottom + 1); }); });
-    check(!bad.length && inChart, 'at ' + w + ' x ' + h + ' with four notices showing, they sit in the chart panel and no Accept or Reject is under one' + (bad.length ? ': ' + bad.slice(0, 4).join('; ') : inChart ? '' : ': a notice outside the chart panel'));
+    /* above 1100 px over the chart's lower left; at 1100 px and narrower pinned at the top of the tab (the tray), the newest in sight */
+    const inChart = await page.evaluate(() => { const narrow = innerWidth <= 1100, c = document.querySelector(narrow ? '#agView [data-k="tray"]' : '#agView [data-panel="chart"]').getBoundingClientRect(), all = [...document.querySelectorAll('.ag-note')];
+      const inside = all.every(n => { const r = n.getBoundingClientRect(); return narrow ? !!n.closest('#agView [data-k="tray"]') : r.height === 0 || (r.left >= c.left - 1 && r.right <= c.right + 1 && r.top >= c.top - 1 && r.bottom <= c.bottom + 1); });
+      const newest = all[0] && all[0].getBoundingClientRect();
+      return inside && (!narrow || (!!newest && newest.top >= Math.max(0, c.top) - 1 && newest.bottom <= Math.min(innerHeight, c.bottom) + 1)); });
+    check(!bad.length && inChart, 'at ' + w + ' x ' + h + ' with four notices showing, they sit ' + (w <= 1100 ? 'at the top of the tab, the newest in sight,' : 'in the chart panel') + ' and no Accept or Reject is under one' + (bad.length ? ': ' + bad.slice(0, 4).join('; ') : inChart ? '' : ': a notice outside the chart panel'));
     await clearNotices(page);
   }
 
@@ -267,6 +271,7 @@ try {
     /* the proposal panel in sight (narrower than 1100 px the tab scrolls), from its top */
     await page.evaluate(() => { const b = document.querySelector('#agView .ag-pbody'); b.scrollTop = 0; document.querySelector('#agView [data-panel="prop"]').scrollIntoView({ block: 'start' }); });
     await sleep(200);
+    await page.hover('#agView [data-panel="prop"] .ag-sechead');                      // the pointer on the panel, as before a click
     /* the bot's and the second agent's proposals open (new ones when the last were answered), then the agent's own arrives */
     const ids = await panelIds();
     await cross('at ' + w + ' x ' + h + ' the bot\'s proposal arrives', botNew, 1200);   // the bot may have several open
@@ -308,7 +313,86 @@ try {
     const bad = await hitTest(page, '#agView .ag-plist .ag-prop[data-id="' + mine + '"] [data-agans]', true);
     check(seen.first && seen.others >= 3 && inView && !bad.length, 'at ' + w + ' x ' + h + (w < 720 ? ' (the panel\'s first screen)' : '') + ' the shown agent\'s proposal is first of ' + (seen.others + 1) + ', its Accept and Reject in the window without scrolling and the buttons themselves: ' + JSON.stringify(seen) + (bad.length ? ' ' + bad.slice(0, 3).join('; ') : ''));
   }
+  /* the listed cards (the second agent's, the bot's): whose each Accept is, always with it; at 1366 x 768 one listed card whole
+     in sight with nothing scrolled */
+  const listed = () => page.evaluate(() => [...document.querySelectorAll('#agView .ag-others .ag-prop.corner:not([hidden]):not(.ag-ended), #agView .ag-others .bt-prop:not(.bt-ended):not(.ag-gone)')].filter(c => c.getClientRects().length).map(c => (c.dataset.agent || 'bot') + ':' + c.dataset.id));
+  await page.mouse.move(5, 300); await sleep(1300);                                   // the pointer off the proposal panel: the list's placeholders go
+  for (const [w, h] of [[1366, 768], [1600, 900]]) {
+    await page.setViewportSize({ width: w, height: h }); await sleep(700);
+    await page.evaluate(() => { window.scrollTo(0, 0); for (const b of document.querySelectorAll('#agView .ag-main, #agView .ag-slot, #agView .ag-pbody')) b.scrollTop = 0; });
+    await sleep(200);
+    const ids = await listed();
+    const whole = await page.evaluate(() => {
+      const box = document.querySelector('#agView .ag-pbody').getBoundingClientRect(), inBox = r => r.height > 0 && r.top >= box.top - 1 && r.bottom <= box.bottom + 1 && r.bottom <= innerHeight;
+      const self = b => { const r = b.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!hit && b.contains(hit); };
+      return [...document.querySelectorAll('#agView .ag-others .ag-prop.corner:not([hidden]), #agView .ag-others .bt-prop:not(.ag-gone)')].filter(c => c.getClientRects().length).map(c => {
+        const head = c.querySelector('.ag-prop-h, .bt-prop-h'), bs = [...c.querySelectorAll('[data-agans], [data-ans]')];
+        return { id: (c.dataset.agent || 'bot') + ':' + c.dataset.id, ok: inBox(head.getBoundingClientRect()) && bs.length === 2 && bs.every(b => inBox(b.getBoundingClientRect()) && self(b)) };
+      });
+    });
+    if (w === 1366) check(whole.some(x => x.ok), 'at 1366 x 768 with nothing scrolled, a listed card shows its header, Accept and Reject in the list: ' + JSON.stringify(whole));
+    const pairs = [];
+    for (const id of ids) {
+      pairs.push(await page.evaluate(id => {
+        const [agent, pid] = id.split(':'), c = agent === 'bot' ? document.querySelector('#agView .bt-prop[data-id="' + pid + '"]') : document.querySelector('#agView .ag-prop.corner[data-agent="' + agent + '"][data-id="' + pid + '"]');
+        const acc = c.querySelector('[data-agans="accept"], [data-ans="accept"]');
+        acc.scrollIntoView({ block: 'nearest' });
+        const btns = acc.closest('.ag-prop-btns, .bt-prop-btns'), br = btns.getBoundingClientRect(), box = document.querySelector('#agView .ag-pbody').getBoundingClientRect(), ar = acc.getBoundingClientRect();
+        const hit = document.elementFromPoint(ar.left + ar.width / 2, ar.top + ar.height / 2), who = btns.dataset.who || '', whoRow = br.top + 2;
+        const name = agent === 'bot' ? /^Sample Lantern Fade · (Buy|Sell) \d+ MNQ/ : /^Second Demo Agent · (Buy|Sell) \d+ (MNQ|NQ)$/;
+        return { id, who, btns: [Math.round(br.top), Math.round(br.bottom)], box: [Math.round(box.top), Math.round(box.bottom)], acc: Math.round(ar.top), hit: !!hit && acc.contains(hit),
+          ok: name.test(who) && br.top >= box.top - 1 && br.bottom <= box.bottom + 1 && br.bottom <= innerHeight && whoRow < ar.top && !!hit && acc.contains(hit) };
+      }, id));
+    }
+    check(pairs.length >= 2 && pairs.every(x => x.ok), 'at ' + w + ' x ' + h + ' each listed card\'s Accept, scrolled to, shows with whose it is (name, side, quantity, root) right above it: ' + JSON.stringify(pairs));
+    /* whatever is scrolled: the list scrolled from its top to its end in 6 px steps; at each, every listed Accept in sight
+       has whose it is in sight with it (its own line, or the list's head naming it) */
+    const sweep = await page.evaluate(async () => {
+      const box = document.querySelector('#agView .ag-pbody'), head = document.querySelector('#agView [data-k="listhead"]'), bad = [];
+      const frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      for (let y = 0; y <= box.scrollHeight - box.clientHeight + 6; y += 6) {
+        box.scrollTop = y; box.dispatchEvent(new Event('scroll')); await frame();
+        const b0 = box.getBoundingClientRect(), H = head.classList.contains('on') ? head.offsetHeight : 0;
+        for (const acc of document.querySelectorAll('#agView .ag-others .ag-prop.corner:not([hidden]) [data-agans="accept"], #agView .ag-others .bt-prop:not(.ag-gone) [data-ans="accept"]')) {
+          if (acc.disabled) continue;
+          const r = acc.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, Math.max(r.top, b0.top + H) + 4);
+          if (!hit || !acc.contains(hit) || r.bottom > b0.bottom || r.bottom < b0.top + H + 8) continue;   // not in sight
+          const btns = acc.closest('.ag-prop-btns, .bt-prop-btns'), who = btns.dataset.who, wt = btns.getBoundingClientRect().top;
+          const own = wt >= b0.top + H - 1, named = H > 0 && head.textContent === who;
+          if (!own && !named) bad.push(y + ': ' + who + ' (its line at ' + Math.round(wt - b0.top) + ', head ' + (H ? '"' + head.textContent + '"' : 'off') + ')');
+        }
+      }
+      box.scrollTop = 0; box.dispatchEvent(new Event('scroll'));
+      return bad;
+    });
+    check(!sweep.length, 'at ' + w + ' x ' + h + ' scrolled anywhere, every listed Accept in sight shows whose it is with it (its own line or the list\'s head)' + (sweep.length ? ': ' + sweep.slice(0, 4).join('; ') : ''));
+  }
   await page.click('.ag-plist .ag-prop[data-id="' + mine + '"] [data-agans="reject"]');
+
+  /* ---------------------------------------------------------------- ChartBridge's errors in sight at narrow widths */
+  console.log('at 1100 px and narrower ChartBridge\'s error line is pinned in sight, over no Accept or Reject');
+  if (!(await page.$('.ag-plist .ag-prop:not(.ag-ended)'))) { const id = await ownNew(); await until(() => page.isVisible('.ag-plist .ag-prop[data-id="' + id + '"]'), 'the shown agent\'s proposal'); }
+  for (const [w, h] of [[1000, 800], [800, 900], [390, 844]]) {
+    await page.setViewportSize({ width: w, height: h }); await sleep(600);
+    await page.evaluate(() => { window.scrollTo(0, 0); for (const b of document.querySelectorAll('#agView .ag-main, #agView .ag-slot, #agView .ag-pbody')) b.scrollTop = 0; });
+    const before = await page.evaluate(() => { const b = document.querySelector('#agView .ag-plist [data-agans="accept"]'); return b ? Math.round(b.getBoundingClientRect().top) : null; });
+    await control('status', { level: 'error', text: 'Sample: Agent demo: NOT FLAT 10 s after its flatten (flat time): MNQ on SIM-AG1 still shows 1; act in NinjaTrader now' });
+    await until(() => page.isVisible('#wsAlert'), 'the error line shows');
+    await sleep(200);
+    const r = await page.evaluate(() => {
+      const a = document.getElementById('wsAlert'), ar = a.getBoundingClientRect(), hit = document.elementFromPoint(ar.left + Math.min(60, ar.width / 2), ar.top + Math.min(12, ar.height / 2));
+      const covered = [];
+      for (const b of document.querySelectorAll('#agView [data-agans], #agView [data-ans]')) {
+        const br = b.getBoundingClientRect(); if (!b.getClientRects().length || br.top < 0 || br.bottom > innerHeight) continue;
+        for (const [x, y] of [[br.left + br.width / 2, br.top + br.height / 2], [br.left + 3, br.top + 3], [br.right - 3, br.bottom - 3]]) { const e = document.elementFromPoint(x, y); if (!e || !b.contains(e)) { covered.push((b.closest('.ag-prop, .bt-prop') || {}).className + ' -> ' + (e ? e.className : 'none')); break; } }
+      }
+      const own = document.querySelector('#agView .ag-plist [data-agans="accept"]');
+      return { top: Math.round(ar.top), bottom: Math.round(ar.bottom), seen: ar.height > 0 && ar.top >= 0 && ar.bottom <= innerHeight && !!hit && a.contains(hit), covered, own: own ? Math.round(own.getBoundingClientRect().top) : null };
+    });
+    check(r.seen && !r.covered.length && r.own !== null && Math.abs(r.own - before) <= 1, 'at ' + w + ' x ' + h + ' with the tab at its top, ChartBridge\'s error line is in sight, covers no Accept or Reject and moves none: ' + JSON.stringify(r) + ' (Accept at ' + before + ' before)');
+    await page.click('#wsAlertClose');
+  }
+  for (const id of await panelIds()) if (id.startsWith('demo:')) await control('agent-withdraw', { agent: 'demo', id: id.split(':')[1] });
 
   if (!(await panelIds()).some(i => i.startsWith('demotwo:'))) await twoNew();   // the pop-out shows the second agent's
 
