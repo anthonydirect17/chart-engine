@@ -1571,7 +1571,7 @@ Object.assign(OrderDeskV3.prototype, {
     const t = this.now(), c = o.cancelPending || (o.cancelPending = { why, tries: 0, first: t, last: 0, gaveUp: false });
     c.tries++; c.last = t;
     const name = (o.tag || o.name) + ' on ' + o.account;
-    if (c.tries === 2) this.broadcastV3({ type: 'status', level: 'warn', text: 'Agent ' + a.id + ': the cancel of its entry ' + name + ' was not confirmed in 3 s (' + c.why + '); ChartBridge sends it again every 3 s until it is done; check NinjaTrader' });
+    if (c.tries === 2) this.broadcast({ type: 'status', level: 'warn', text: 'Agent ' + a.id + ': the cancel of its entry ' + name + ' was not confirmed in 3 s (' + c.why + '); ChartBridge sends it again every 3 s until it is done; check NinjaTrader' });
     if (c.tries === AGENT_TIMING.cancelSlowAfter) this.broadcast({ type: 'status', level: 'error', text: 'Agent ' + a.id + ': the cancel of its entry ' + name + ' is still not confirmed after ' + c.tries + ' tries (' + c.why + '); ChartBridge tries again every 30 s; cancel it in NinjaTrader now' });
     if (a.stuckCancels > 0) { a.stuckCancels--; return; }
     this.cancelOne(o); o.cancelPending = null;
@@ -1711,6 +1711,15 @@ Object.assign(OrderDeskV3.prototype, {
   agentMarketShut(t) { return this.marketShutForce !== null ? this.marketShutForce : this.agentAnyTime ? false : marketShut(t); },
   agentTradingNow(root, t) { return t - (this.lastAt[root] || -Infinity) <= AGENT_TIMING.tradingFreshMs; },
   agentOwnsPair(a, root) { return this.ownerOf(a.account, root) === 'agent:' + a.id; },
+  /** why an account takes no exit (ChartBridgeAccounts.ExitAllowed's words), or null */
+  exitWhy(name) {
+    const x = this.acct.get(name);
+    if (!name || name === 'Backtest' || /^Playback/i.test(name)) return 'account ' + (name || '(none)') + ' may not trade from the chart (never Backtest or Playback)';
+    if (x && x.state === 'archived') return 'account ' + name + ' is archived';
+    if (!this.watched(name)) return 'account ' + name + ' is not watched (accounts in config.txt)';
+    if (!this.connected(name)) return 'account ' + name + ' is not connected (' + (x && x.connection === 'disabled' ? 'Disabled' : 'Disconnected') + ')';
+    return null;
+  },
   /** a pair its flatten owns stays the agent's until flat (as built: cancelling its own legs or closing its part never hands it
    *  away); a lost trade or a dropped job ends that */
   agentSticky(a, root) { const j = a.flatJob; return !!(j && j.owned && !j.unstuck && j.root === root && this.pos(a.account, root).qty); },
@@ -1853,7 +1862,11 @@ Object.assign(OrderDeskV3.prototype, {
     }
     p = this.pos(a.account, j.root).qty;
     if ((!p || !j.owned) && !this.agentOrdersOn(a, j.root).some(o => o !== j.close)) return this.agentEndJob(a, j, t);
-    if (p && j.owned && errDue(AGENT_TIMING.flatErrorEveryMs)) this.agentFlatError(a, j, t, 'Agent ' + a.id + ': NOT FLAT ' + since + ': ' + j.root + ' on ' + a.account + ' still shows ' + p + (up ? '' : '; the account is not connected') + '; act in NinjaTrader now');
+    /* as built: both position readings (p2: with fills NinjaTrader shows ahead of the position; the fake's tests set
+       a.fillsAhead) and why the account takes no exit (ChartBridgeAccounts.ExitAllowed) */
+    const p2 = p + (a.fillsAhead || 0);
+    if (p && j.owned && errDue(AGENT_TIMING.flatErrorEveryMs)) this.agentFlatError(a, j, t, 'Agent ' + a.id + ': NOT FLAT ' + since + ': ' + j.root + ' on ' + a.account + ' still shows ' + p +
+      (p2 !== p ? ' (or ' + p2 + ' with fills not yet in the position)' : '') + (up ? '' : '; the account is not connected (' + this.exitWhy(a.account) + ')') + '; act in NinjaTrader now');
   },
 });
 

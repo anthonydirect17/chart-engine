@@ -155,12 +155,18 @@ decision in a drawer over the right column, outlined in that decision's colour:
   account and its mark, a live countdown to `expiresAt`, Accept (cyan) and Reject (purple), with The Desk's keys on them.
   Accept and Reject never scroll out of sight: they stay at the foot of the proposal's box while its words scroll, with
   ChartBridge's words for that proposal right above them in the same foot (a refusal, "Under 5 s left", "Accept sent.
-  Waiting for ChartBridge."). "None open" when there is none. Under the agent's own, in the same panel and the page's flow,
-  every other open proposal: another agent's and the bot's, each under its own name, answered with its own buttons (their
-  key caps are not shown there: with the tab open the keys answer the shown agent only). Nothing covers any of them, at any
-  size, in the workspace and in the pop-out. The list is written only when it changed, so a button keeps its focus and a
-  press held across an agent message still clicks; a new proposal right after an ended one takes the top at once and never
-  jumps up when the ended one goes.
+  Waiting for ChartBridge."; a card keeps that one line even while it is empty, so a word coming makes it no taller). In
+  the same panel and the page's flow, every other open proposal too: another agent's and the bot's, each under its own name,
+  answered with its own buttons (their key caps are not shown there: with the tab open the keys answer the shown agent
+  only). Nothing covers any of them, at any size, in the workspace and in the pop-out.
+  **No Accept or Reject ever moves under the pointer** (after the re-review of a4fa9d9): the whole panel is one list in the
+  order the proposals arrived, the agent's own, another agent's and the bot's alike, so a card that arrives goes at the end;
+  a card that ends and leaves while an open card comes after it leaves a placeholder of its exact height until nothing open
+  follows (the bot's cards too: the tab watches the Bot tab's corner); "None open" shows only while the panel holds nothing;
+  the browser's scroll anchoring is off in the tab, and a card leaving the end of a box scrolled to its end leaves a
+  placeholder too (the box would be pulled back). So with several proposals open the shown agent's may be lower in the
+  panel, which then scrolls; each card's own Accept and Reject stay at its foot while its words scroll. The list is written
+  only when it changed, so a button keeps its focus and a press held across an agent message still clicks.
 - **Right, his stream:** notes (look, thinking, lesson, notebook, status), plans (with their result: shadow, waiting for
   you, accepted in 1.3 s, rejected, expired, refused and why, skipped), and his fills and exits today, newest first, with
   filters (All, Plans, Notes, Thinking, Lessons). Each row opens the drawer above.
@@ -238,9 +244,10 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
 4. **The copilot keys for agents (lead's default):** Accept and Reject keys work and show in Settings while the bot switch
    is on or ChartBridge has told of an agent. The Desk's hotkeys are still read only while a switch needs The Desk, as in
    1.16.0.
-5. **Where a proposal shows (lead's default):** in the tab's proposal panel for the agent shown there, first; while the tab
-   is shown, every other agent's and the bot's under it in the same panel (the corner moved into the panel, in the page's
-   flow); in the corner whenever the tab is closed. `agentSeen` goes once, the moment it shows in a window Anthony can see (a
+5. **Where a proposal shows (lead's default):** in the tab's proposal panel for the agent shown there; while the tab is
+   shown, every other agent's and the bot's in the same panel (the corner moved into the panel, in the page's flow), all in
+   the order they arrived (a card arriving never pushes another down: the re-review of a4fa9d9); in the corner whenever the
+   tab is closed. `agentSeen` goes once, the moment it shows in a window Anthony can see (a
    hidden window sends it when it comes to the front), as `botSeen`.
 6. **Accept in the last 5 s (lead's default):** ChartBridge refuses an accept with under 5 s left as expired, so the page
    closes Accept then and says why; Reject still goes. The countdown runs on this PC's clock against ChartBridge's
@@ -313,7 +320,8 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
     - The owner lock: a page exit is a market order that only reduces, with no bracket and no strategy; anything else from
       the page gets "...: use Flatten, or move its stop or target"; the bot, the copier and other agents "... until it is
       flat". The copier skips an agent's pair.
-    - Cancels: a cancel NinjaTrader does not confirm is sent again every 3 s, with a `status` warning at the second try; at
+    - Cancels: a cancel NinjaTrader does not confirm is sent again every 3 s, with a `status` warning at the second try (to
+      every trader page, as ChartBridge's own warnings); at
       the tenth (about 30 s) an error ("... is still not confirmed after 10 tries ...; ChartBridge tries again every 30 s;
       cancel it in NinjaTrader now") and one try every 30 s from then; no try while the account is not connected (they go on
       when it is); after 30 minutes a last error ("... was never confirmed in 30 minutes (n tries); ChartBridge stops
@@ -340,7 +348,9 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
       ledger of its own fills; with no trade followed, what its stop legs covered at the start, less each close); when its
       part is closed and the account holds more, a warning "<account> <root>: agent <id>'s N closed; the rest (M) is not
       agent <id>'s: ChartBridge did not close it". A pair its flatten owns stays the agent's until flat. Not flat 10 s after
-      its flatten, "Agent demo: NOT FLAT n s after its flatten ..." every 10 s.
+      its flatten, "Agent demo: NOT FLAT n s after its flatten (...): <root> on <account> still shows <n> (or <m> with fills
+      not yet in the position); the account is not connected (<why>); act in NinjaTrader now" every 10 s, the two middle
+      parts only when they hold (the second reading: `a.fillsAhead` in the fake's tests).
     - The agent's trade is its own ledger: its entry's fills open and add to it, a fill the other way (its leg, its close,
       Anthony's Flatten, a close in NinjaTrader) takes off at most what it holds; a fill bigger than the trade ends it and
       the rest is not the agent's: the lost-trade error "agent <id> had an open trade on <account> <root> and its legs are
@@ -440,7 +450,11 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
   stays on Reject over several renders, 20 ordinary clicks all arrive, a press held 1.4 s across a render still clicks; a
   new proposal right after an ended one never moves; the ChartBridge line coming and going moves no Accept; "Under 5 s
   left" and a long refusal are in sight right above Accept; a double click on the kill switch sends `agentKill` once; the
-  pop-out the same at 1366 x 768, 1920 x 1080 and 390 x 844. Screenshots `agent-targets-1366`, `-390`, `-popout`.
+  pop-out the same at 1366 x 768, 1920 x 1080 and 390 x 844. Across the whole panel (added after the re-review of a4fa9d9,
+  and it fails on a4fa9d9): at 1000 x 800, 1366 x 768 and 1920 x 1080, while the bot, the second agent and the shown agent
+  have proposals open, a proposal arriving, the top card answered and gone, and the shown agent's card answered and gone
+  each leave every other open card's Accept and Reject exactly where they were, and each one's old point still finds the
+  same card's same button, or no live button. Screenshots `agent-targets-1366`, `-390`, `-popout`.
 - `npm run perf:agent` (R5, `test/perf-agent.mjs`, not part of `npm test`): the Agent tab in a trade at 1920 x 1080 while
   MNQ trades a busy tape (`--live-rate=200`), Motion Full and Motion Off taking turns. Gates: a chart's frame p95 under 4 ms
   and all charts per frame under 8 ms (the chart's own), the light on the chart and the footer with Full and none with

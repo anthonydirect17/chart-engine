@@ -104,6 +104,19 @@ lead's default.
     orderName, cbId and role, others' fills on its pair). What it still does not model is listed in `docs/AGENT_TAB.md`.
   - `npm run smoke:agent` runs at 11:00 New York whatever the time of day (the trail check failed after 15:55 New York),
     and `npm run smoke:agent-targets` holds the tab's Accept and Reject: never covered, never dropped, never moving.
+- **After the re-review of a4fa9d9:**
+  - A card leaving the proposal panel no longer slides another proposal's Accept under the pointer (a rejected card of the
+    shown agent going 1.5 s later moved the bot's and the second agent's cards up, so the bot's old Accept found the second
+    agent's). The whole panel is one list in the order the proposals arrived, every agent's and the bot's alike: a card that
+    arrives goes at the end and pushes nothing; a card that ends and leaves while an open card comes after it leaves a
+    placeholder of its exact height until nothing open follows (the bot's cards too); "None open" shows only while the panel
+    is empty; a card keeps a line for ChartBridge's words even while it has none; the browser's scroll anchoring is off in
+    the tab. With several proposals open the shown agent's may sit lower in the panel, which scrolls.
+  - The fake ChartBridge's texts as on main: the last NOT FLAT names the second position reading ("(or N with fills not yet
+    in the position)") and why the account takes no exit ("; the account is not connected (...)"); the warning at a cancel's
+    second try goes to every trader page.
+  - `npm run smoke:agent-targets` checks the whole panel: after every arrival and every card that leaves, at 1000 x 800,
+    1366 x 768 and 1920 x 1080, no other open card's Accept or Reject has moved (it fails on a4fa9d9).
 - Tests: `test/agent.test.js`, the agent part of `test/fake-v3.test.js`, `npm run smoke:agent` and `smoke:agent-targets`
   (screenshots `test/out/agent-*.png`), `npm run perf:agent`. The chart draws exactly as in 1.16.0. Page only, no
   recompile; COMPAT stays at ChartBridge 0.3.2.

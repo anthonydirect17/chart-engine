@@ -1378,3 +1378,25 @@ test('4d4a81f, section 10 (the agent\'s side): welcome\'s caps, agentState\'s se
   const yx = y.d.agentTake('exec');
   assert.equal(yx.length, 1); assert.equal(yx[0].role, 'other'); assert.equal(yx[0].cbId, null);
 });
+
+test('origin/main as built: the last NOT FLAT names both readings and why the account takes no exit; the cancel warning reaches every trader page', async () => {
+  const { d, a } = await inTrade({ at: Date.UTC(2026, 9, 8, 18, 0) });
+  a.holdClose = true; a.fillsAhead = 1;                                  // a fill NinjaTrader shows ahead of the position
+  at(d, '15:55'); d.desk.tick('MNQ', 25399.5); d.take(); d.desk.everySecond();
+  d.advance(10000); d.desk.tick('MNQ', 25399.5); d.desk.everySecond();
+  assert.deepEqual(errs(d), ['Agent demo: NOT FLAT 10 s after its flatten (flat time): MNQ on SIM-AG1 still shows 1 (or 2 with fills not yet in the position); act in NinjaTrader now']);
+  d.desk.setConnection('SIM-AG1', 'disconnected'); d.take();
+  d.advance(10000); d.desk.tick('MNQ', 25399.5); d.desk.everySecond();
+  assert.deepEqual(errs(d), ['Agent demo: NOT FLAT 20 s after its flatten (flat time): MNQ on SIM-AG1 still shows 1 (or 2 with fills not yet in the position); the account is not connected (account SIM-AG1 is not connected (Disconnected)); act in NinjaTrader now']);
+  // the second try's warning (AgentWarn: Warn, to every trader page, a v2 page too)
+  const m = await makeAgentDesk();
+  const v2 = { origin: 'http://localhost:8765', authed: true, actions: [], v3: false }, got = [];
+  const conns0 = m.desk.conns, send0 = m.desk.send;
+  m.desk.conns = () => conns0().concat([v2]); m.desk.send = (c, msg) => (c === v2 ? got.push(msg) : send0(c, msg));
+  m.hello(); m.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  m.plan({ price: 25390 }); m.take();
+  m.desk.agents.get('demo').stuckCancels = 2;
+  m.act({ type: 'agentKill', agent: 'demo', on: true });
+  m.advance(3000); m.desk.everySecond();
+  assert.ok(got.some(x => x.type === 'status' && x.level === 'warn' && /^Agent demo: the cancel of its entry .* was not confirmed in 3 s/.test(x.text)), 'a v2 page gets it too');
+});

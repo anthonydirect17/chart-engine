@@ -178,6 +178,8 @@ try {
   for (const [w, h] of [[1366, 768], [1440, 1000]]) {
     await page.setViewportSize({ width: w, height: h });
     await sleep(500);
+    await page.evaluate(id => document.querySelector('.ag-plist .ag-prop[data-id="' + id + '"] [data-agans="accept"]').scrollIntoView({ block: 'nearest' }), open1);
+    await sleep(200);
     const t0 = await tops(open1);
     await control('status', { level: 'warn', text: 'Sample: EVAL-B is gone (disconnected for 10 s): entries wait until it is back' });
     await until(() => page.isVisible('#wsAlert'), 'the ChartBridge line shows');
@@ -195,6 +197,8 @@ try {
   const target = 'pb';
   await control('agent-expire', { agent: 'demo', id: target, ms: 4000 });
   await until(async () => /too late to accept/.test(await text('.ag-plist .ag-prop[data-id="' + target + '"] [data-k="msg"]')), 'Under 5 s left shows');
+  await page.evaluate(id => document.querySelector('.ag-plist .ag-prop[data-id="' + id + '"] [data-agans="accept"]').scrollIntoView({ block: 'nearest' }), target);
+  await sleep(200);
   const inSight = id => page.evaluate(id => {
     const card = document.querySelector('.ag-plist .ag-prop[data-id="' + id + '"]'), box = document.querySelector('#agView .ag-pbody').getBoundingClientRect();
     const m = card.querySelector('[data-k="msg"]').getBoundingClientRect(), a = card.querySelector('[data-agans="accept"]').getBoundingClientRect();
@@ -219,6 +223,67 @@ try {
   check((await text('#agView [data-k="kill"]')) === 'Kill switch on · Release', 'the double click never armed the release: ' + await text('#agView [data-k="kill"]'));
   await page.click('#agView [data-k="kill"]'); await sleep(600); await page.click('#agView [data-k="kill"]');   // released (two clicks, as always)
   await until(async () => !(await agentsNow()).find(a => a.agent === 'demo').killed, 'released');
+
+  /* ---------------------------------------------------------------- across the whole proposal panel */
+  console.log('across the whole panel (the agent\'s own, the second agent\'s and the bot\'s): a card that arrives or leaves moves no other open card\'s Accept or Reject');
+  /* every open (live) Accept and Reject in the panel that is in sight and uncovered now: its card and its centre */
+  const livePoints = () => page.evaluate(() => [...document.querySelectorAll('#agView [data-panel="prop"] .ag-prop:not(.ag-ended) [data-agans], #agView [data-panel="prop"] .bt-prop:not(.bt-ended) [data-ans]')].filter(b => !b.disabled && b.offsetParent).map(b => {
+    const c = b.closest('.ag-prop, .bt-prop'), r = b.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2, hit = document.elementFromPoint(x, y);
+    return hit && (hit === b || b.contains(hit)) ? { who: (c.dataset.agent || 'bot') + ':' + c.dataset.id + ':' + (b.dataset.agans || b.dataset.ans), x, y } : null; }).filter(Boolean));
+  /* each point still finds the same card's same button, or no live button at all (that card ended, or nothing is there) */
+  const moved = pts => page.evaluate(pts => pts.map(p => {
+    const hit = document.elementFromPoint(p.x, p.y), b = hit && hit.closest('button[data-agans], button[data-ans]');
+    if (!b || b.disabled) return null;
+    const c = b.closest('.ag-prop, .bt-prop'), who = (c.dataset.agent || 'bot') + ':' + c.dataset.id + ':' + (b.dataset.agans || b.dataset.ans);
+    return who === p.who ? null : p.who + ' at ' + Math.round(p.x) + ',' + Math.round(p.y) + ' now finds ' + who;
+  }).filter(Boolean), pts);
+  /* where every open card's buttons are now (in sight or not): its place on the page */
+  const places = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#agView [data-panel="prop"] .ag-prop:not(.ag-ended):not([hidden]) [data-agans], #agView [data-panel="prop"] .bt-prop:not(.bt-ended) [data-ans]')]
+    .filter(b => !b.disabled && b.getClientRects().length).map(b => { const c = b.closest('.ag-prop, .bt-prop'), r = b.getBoundingClientRect(); return [(c.dataset.agent || 'bot') + ':' + c.dataset.id + ':' + (b.dataset.agans || b.dataset.ans), Math.round(r.top)]; })));
+  const cross = async (what, act, ms, target) => {
+    if (target) { await page.evaluate(sel => document.querySelector(sel).scrollIntoView({ block: 'nearest' }), target); await sleep(200); }   // the click scrolls nothing
+    const before = await livePoints(), was = await places();
+    await act();
+    const bad = [];
+    for (let t = 0; t < ms; t += 250) {
+      await sleep(250);
+      for (const m of await moved(before)) if (!bad.includes(m)) bad.push(m);
+      const now = await places();
+      for (const [k, y] of Object.entries(was)) if (now[k] !== undefined && Math.abs(now[k] - y) > 1) { const m = k + ' moved from ' + y + ' to ' + now[k]; if (!bad.some(b => b.startsWith(k + ' moved'))) bad.push(m); }
+    }
+    if (process.env.DEBUG) console.log('     ' + JSON.stringify(before.map(p => p.who + '@' + Math.round(p.y))) + ' -> ' + JSON.stringify((await livePoints()).map(p => p.who + '@' + Math.round(p.y))));
+    if (process.env.DEBUG) console.log('     panel: ' + JSON.stringify(await page.evaluate(() => [...document.querySelectorAll('#agView .ag-pbody .ag-prop, #agView .ag-pbody .bt-prop, #agView .ag-pbody .ag-ghost')].filter(e => e.getClientRects().length).map(e => (e.dataset.agent || (e.classList.contains('ag-ghost') ? 'ghost' : 'bot')) + ':' + (e.dataset.id || '') + ' o' + e.style.getPropertyValue('--ag-order') + ' ' + (e.classList.contains('ag-ended') || e.classList.contains('bt-ended') ? 'ended ' : '') + Math.round(e.getBoundingClientRect().top) + '+' + Math.round(e.getBoundingClientRect().height)))));
+    check(!bad.length, what + ': ' + before.length + ' live buttons, none moved' + (bad.length ? ': ' + bad.slice(0, 4).join('; ') : ''));
+  };
+  /* the open cards in the panel, top to bottom as they show */
+  const panelIds = () => page.evaluate(() => [...document.querySelectorAll('#agView [data-panel="prop"] .ag-prop:not(.ag-ended):not([hidden]), #agView [data-panel="prop"] .bt-prop:not(.bt-ended)')]
+    .filter(c => c.getClientRects().length).sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top).map(c => (c.dataset.agent || 'bot') + ':' + c.dataset.id));
+  let n = 0;
+  const botNew = async () => { const id = 'bx' + (++n); await control('bot-proposal', { id, side: 'sell', kind: 'market', stop: 12, target: 24, reason: 'Sample: the made-up bot\'s signal ' + n }); return id; };
+  const twoNew = async () => { const id = 'qx' + (++n); await control('agent-plan', { agent: 'demotwo', id, side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 16, target: 32, expire: 900, setup: 'Sample Q', reason: LONG, confidence: 0.6 }); return id; };
+  const ownNew = async () => { const id = 'px' + (++n); await control('agent-plan', { agent: 'demo', id, side: 'sell', kind: 'limit', p: 25410, qty: 1, stop: 20, target: 40, expire: 900, setup: 'Sample X', reason: LONG, confidence: 0.5 }); return id; };
+  for (const [w, h] of [[1000, 800], [1366, 768], [1920, 1080]]) {
+    await page.setViewportSize({ width: w, height: h }); await sleep(600);
+    /* the proposal panel in sight (narrower than 1100 px the tab scrolls), from its top */
+    await page.evaluate(() => { const b = document.querySelector('#agView .ag-pbody'); b.scrollTop = 0; document.querySelector('#agView [data-panel="prop"]').scrollIntoView({ block: 'start' }); });
+    await sleep(200);
+    /* the bot's and the second agent's proposals open (new ones when the last were answered), then the agent's own arrives */
+    const ids = await panelIds();
+    if (!ids.some(i => i.startsWith('bot:'))) await cross('at ' + w + ' x ' + h + ' the bot\'s proposal arrives', botNew, 1200);
+    if (!ids.some(i => i.startsWith('demotwo:'))) await cross('at ' + w + ' x ' + h + ' the second agent\'s proposal arrives', twoNew, 1200);
+    await cross('at ' + w + ' x ' + h + ' the shown agent\'s proposal arrives', ownNew, 1500);
+    await sleep(1100);
+    /* the top open card answered: it ends and leaves (1.2 s to 3 s later) */
+    const top = (await panelIds())[0];
+    const sel = top.startsWith('bot:') ? '#agView .bt-prop[data-id="' + top.split(':')[1] + '"] [data-ans="reject"]' : '#agView .ag-prop[data-agent="' + top.split(':')[0] + '"][data-id="' + top.split(':')[1] + '"]:not([hidden]) [data-agans="reject"]';
+    await cross('at ' + w + ' x ' + h + ' the top card (' + top + ') answered and gone', async () => { await page.click(sel); }, 3600, sel);
+    /* the shown agent's own answered and gone */
+    const own = (await panelIds()).find(i => i.startsWith('demo:'));
+    const ownSel = own && '#agView .ag-plist .ag-prop[data-id="' + own.split(':')[1] + '"] [data-agans="reject"]';
+    if (own) await cross('at ' + w + ' x ' + h + ' the shown agent\'s card (' + own + ') answered and gone', async () => { await page.click(ownSel); }, 3600, ownSel);
+  }
+
+  if (!(await panelIds()).some(i => i.startsWith('demotwo:'))) await twoNew();   // the pop-out shows the second agent's
 
   /* ---------------------------------------------------------------- the pop-out (agent.html) */
   console.log('the pop-out: the same');
