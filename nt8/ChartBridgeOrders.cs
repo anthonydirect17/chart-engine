@@ -273,7 +273,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return m.Success && m.Groups[2].Value != "exit" ? m.Groups[2].Value : MergedRole(name) ?? "other";   // 0.4.0 B4: merged legs
         }
 
-        private static bool IsExit(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return m.Success && m.Groups[2].Value == "exit"; }
+        private static bool IsExit(Order o) { Match m = LegNameRx.Match(AgentLegName(o.Name)); return m.Success && m.Groups[2].Value == "exit"; }   // 0.5.0 agents: "CB#<tag> ag:<id> protect f.." is an exit
 
         // A ChartBridge stop or target (not an entry, not a market exit).
         private static bool IsChartBridgeLeg(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return (m.Success && m.Groups[2].Value != "exit") || IsMergedLeg(o); }   // 0.4.0 B4: merged legs
@@ -1013,7 +1013,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             return "other";
         }
 
-        private static string OrderJson(Order o, string text)
+        private static string OrderJson(Order o, string text) { return OrderJson(o, text, null); }
+
+        // role: null for the page's (RoleFor); an agent's order messages name its flat close and protective exit (0.5.0 agents).
+        private static string OrderJson(Order o, string text, string role)
         {
             string id = IdFor(o), cid;
             lock (Sync) CidOf.TryGetValue(o, out cid);
@@ -1031,7 +1034,7 @@ namespace NinjaTrader.NinjaScript.AddOns
              .Append(",\"price\":").Append(px > 0 ? CbJson.Num(px) : "null")
              .Append(",\"avgFill\":").Append(o.Filled > 0 ? CbJson.Num(o.AverageFillPrice) : "null")
              .Append(",\"state\":").Append(CbJson.Str(StateText(o.OrderState)))
-             .Append(",\"role\":").Append(CbJson.Str(RoleFor(o)))
+             .Append(",\"role\":").Append(CbJson.Str(role ?? RoleFor(o)))
              .Append(",\"oco\":").Append(string.IsNullOrEmpty(o.Oco) ? "null" : CbJson.Str(o.Oco));
             if (!string.IsNullOrEmpty(text)) b.Append(",\"text\":").Append(CbJson.Str(text));
             // 0.3.8: a working resting entry's planned stop and target, ticks from its fill (null = none). Pages that do not
@@ -1080,8 +1083,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeAccounts.SendScoped(account, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null), true, o);   // 0.4.0 review 2: o for a v3 page's "by"
             try { if (ChartBridgeBot.Watching(o)) ChartBridgeBot.OnOrderUpdate(account, o, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null)); }   // 0.4.0 bot: the bot sees its own orders
             catch (Exception ex) { ChartBridgeServer.Log("bot order update error: " + ex.Message); }
-            try { if (ChartBridgeAgents.AgentOf(o) != null) ChartBridgeAgents.OnOrderUpdate(account, o, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null)); }   // 0.5.0 agents: each agent sees its own orders
+            try { if (ChartBridgeAgents.AgentOf(o) != null) ChartBridgeAgents.OnOrderUpdate(account, o, AgentOrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null)); }   // 0.5.0 agents: each agent sees its own orders
             catch (Exception ex) { ChartBridgeServer.Log("agent order update error: " + ex.Message); }
+            try { ChartBridgeAgents.OnAccountChange(account, o.Instrument); }   // 0.5.0 agents: agentState follows every order of an agent's account and roots
+            catch (Exception ex) { ChartBridgeServer.Log("agent state error: " + ex.Message); }
             if (IsDone(o.OrderState)) Forget(o);   // after OrderJson, which would otherwise hand out a new id
             ChartBridgeCopier.OnOrderUpdate(account, o);   // 0.4.0 copier: follower fills get their stop; the leader's stop moves are followed
         }
@@ -1191,7 +1196,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Dictionary<int, Pair> byFill = new Dictionary<int, Pair>();
             foreach (Order leg in orders)
             {
-                Match lm = LegNameRx.Match(leg.Name ?? "");
+                Match lm = LegNameRx.Match(AgentLegName(leg.Name));   // 0.5.0 agents: an agent's protective exit counts as an exit
                 if (!lm.Success || lm.Groups[1].Value != br.Tag) continue;
                 int f = int.Parse(lm.Groups[3].Value, CultureInfo.InvariantCulture), q = int.Parse(lm.Groups[4].Value, CultureInfo.InvariantCulture);
                 double px = double.Parse(lm.Groups[5].Value, CultureInfo.InvariantCulture);
@@ -1547,8 +1552,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool fresh = hasStop && root != null && FreshLast(root, FreshTickMs, out last);
             if (fresh && (br.EntryIsBuy ? sp >= last : sp <= last))
             {
+                string agentOf = ChartBridgeAgents.AgentOfTag(br.Tag);   // 0.5.0 agents: an agent entry's exit is "CB#<tag> ag:<id> protect f.. q.. p.."
                 Order x = br.Account.CreateOrder(br.Instrument, exit, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
-                    "CB#" + br.Tag + " exit" + mark, NinjaTrader.Core.Globals.MaxDate, null);
+                    agentOf != null ? "CB#" + br.Tag + " ag:" + agentOf + " protect" + mark : "CB#" + br.Tag + " exit" + mark, NinjaTrader.Core.Globals.MaxDate, null);
                 lock (Sync) { IdFor(x); Ours.Add(x); Manage(br.Account, br.Instrument); }
                 br.Account.Submit(new[] { x });
                 Alarm(where + ": price had already passed the stop level " + CbJson.Num(sp) + " (last " + CbJson.Num(last) + "); exited " + qty + " at market");

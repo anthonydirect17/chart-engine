@@ -56,7 +56,24 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
         internal static object AgentPlaceLock { get { return PlaceLock; } }
         internal static string AgentIdFor(Order o) { return IdFor(o); }   // the id the agent's order messages carry ("o12")
-        internal static string AgentOrderJson(Order o) { return OrderJson(o, null); }   // as the page's order message (the snapshot after hello)
+        internal static string AgentOrderJson(Order o) { return AgentOrderJson(o, null); }   // the snapshot after hello
+        // As the page's order message, with the agent's roles: its flat close "flat", its protective exit "protect" (section 10).
+        internal static string AgentOrderJson(Order o, string text) { return OrderJson(o, text, AgentRoleFor(o)); }
+        private static readonly Regex AgentMarketRx = new Regex("^CB#([0-9a-f]{8}) ag:[a-z][a-z0-9]{0,11} (flat|protect)(?: (f[0-9]{1,6} q[0-9]{1,6} p[0-9]{1,9}(?:\\.[0-9]{1,8})?)){0,1}$");
+        internal static string AgentRoleFor(Order o)
+        {
+            if (o == null) return "other";
+            Match m = AgentMarketRx.Match(o.Name ?? "");
+            return m.Success ? m.Groups[2].Value : RoleFor(o);
+        }
+        // An agent's protective exit read as v2's exit name ("CB#<tag> exit f.. q.. p.."), for the recovery and the exit alarm.
+        private static string AgentLegName(string name)
+        {
+            Match m = AgentMarketRx.Match(name ?? "");
+            return m.Success && m.Groups[2].Value == "protect" && m.Groups[3].Success ? "CB#" + m.Groups[1].Value + " exit " + m.Groups[3].Value : name ?? "";
+        }
+        // ChartBridge's id of an order it already knows ("o12"), never a new one; null when it has none.
+        internal static string AgentKnownId(Order o) { string id; lock (Sync) return o != null && IdOf.TryGetValue(o, out id) ? id : null; }
         internal static string AgentPriceProblem(string root, double tick, string kind, bool isBuy, double price) { return PriceProblem(root, tick, kind, isBuy, price); }
         internal static bool AgentOnGrid(double price, double tick) { return OnGrid(price, tick); }
         internal static string AgentLastPrice(string root, out double p) { return LastPrice(root, out p); }
@@ -168,6 +185,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (string id in Ids()) list.Add(new ChartBridgeAgent(id, -100 - (n++)));
             Volatile.Write(ref agents, list.ToArray());
             if (list.Count == 0) return;
+            ResetFiles();
             RefreshFiles();
             foreach (ChartBridgeAgent a in list) a.Start();
             RecoverTags();
@@ -187,14 +205,24 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- bot-account.txt and copier.txt, when those lanes are off
         // Read on the timer's thread (and a page's), never on NinjaTrader's event threads: the agents' clash rules read this copy. A file
-        // read again only when its time stamp changes; one that cannot be read keeps the last good copy for 2 passes, then counts as
-        // a clash (ChartBridge cannot tell whose the account is).
+        // read again only when its time stamp changes; one that cannot be read keeps the last good copy for one more pass, then
+        // counts as a clash (ChartBridge cannot tell whose the account is). With no good copy yet (the first read at a start), a
+        // failed read counts as a clash at once (review B).
         private static readonly object FilesLock = new object();
         private static DateTime botStamp = DateTime.MinValue, copierStamp = DateTime.MinValue;
-        private static string botFileAccount = ChartBridgeBot.DefaultAccount;   // null: unreadable
+        private static string botFileAccount;   // null: not read yet, or unreadable (a clash)
         private static List<string> copierLeader = new List<string>(), copierFollowers = new List<string>();
         private static int botFails, copierFails;
-        private static bool copierUnreadable;
+        private static bool botGood, copierGood, copierUnreadable = true;
+
+        private static void ResetFiles()
+        {
+            lock (FilesLock)
+            {
+                botStamp = DateTime.MinValue; copierStamp = DateTime.MinValue; botFileAccount = null; botGood = false; copierGood = false;
+                copierLeader = new List<string>(); copierFollowers = new List<string>(); botFails = 0; copierFails = 0; copierUnreadable = true;
+            }
+        }
 
         public static Func<string> CopierReadFault;   // test hook: a non-null answer fails a read of copier.txt (unused in NinjaTrader)
 
@@ -210,12 +238,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string acct = ChartBridgeBot.ReadAccountFile();
                     lock (FilesLock)
                     {
-                        if (acct != null) { botFileAccount = acct; botFails = 0; botStamp = bs; }
-                        else if (++botFails >= 2) { botFileAccount = null; botStamp = bs; }
+                        if (acct != null) { botFileAccount = acct; botFails = 0; botGood = true; botStamp = bs; }
+                        else if (++botFails >= 2 || !botGood) { botFileAccount = null; botStamp = bs; }
                     }
                 }
             }
-            catch (Exception) { lock (FilesLock) if (++botFails >= 2) botFileAccount = null; }
+            catch (Exception) { lock (FilesLock) if (++botFails >= 2 || !botGood) botFileAccount = null; }
             string cf = Path.Combine(ChartBridgeConfig.Folder, "copier.txt");
             try
             {
@@ -232,9 +260,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (p.Length == 2 && p[0] == "leader" && p[1].Length > 0) leader.Add(p[1]);
                         else if (p.Length == 6 && p[0] == "follower" && p[1].Length > 0) followers.Add(p[1]);
                     }
-                lock (FilesLock) { copierLeader = leader; copierFollowers = followers; copierFails = 0; copierUnreadable = false; copierStamp = cs; }
+                lock (FilesLock) { copierLeader = leader; copierFollowers = followers; copierFails = 0; copierGood = true; copierUnreadable = false; copierStamp = cs; }
             }
-            catch (Exception) { lock (FilesLock) if (++copierFails >= 2) copierUnreadable = true; }
+            catch (Exception) { lock (FilesLock) if (++copierFails >= 2 || !copierGood) copierUnreadable = true; }
         }
 
         // The bot's account for the agents' clash rules (on: its memory; off: the copy of bot-account.txt); null: cannot be told.
@@ -284,6 +312,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static bool IsEntryName(string name) { return name != null && EntryRx.IsMatch(name); }
         public static bool IsAgentEntry(Order o) { return o != null && IsEntryName(o.Name); }
         internal static void NoteTag(string tag, string id) { if (tag != null && id != null) lock (TagsLock) AgentTags[tag] = id; }
+        public static string AgentOfTag(string tag) { string id; if (tag == null || !Enabled) return null; lock (TagsLock) return AgentTags.TryGetValue(tag, out id) ? id : null; }
 
         // The agent an order belongs to (its entry, a leg of it, its flat close), or null. Name and memory only (NinjaTrader's
         // threads call it): the tags are learned at placement, from every order update, and by a scan of the accounts every 2 s.
@@ -466,7 +495,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void OnPosition(Account account, PositionEventArgs e)
         {
             if (!Enabled || account == null || e == null || e.Position == null) return;
-            foreach (ChartBridgeAgent a in All()) if (a.Account == account.Name) a.OnPosition(e);
+            foreach (ChartBridgeAgent a in All()) if (a.Account == account.Name) { a.OnPosition(e); a.StateChanged(e.Position.Instrument); }
+        }
+
+        // Every order update on any account (ChartBridgeOrders.OnOrderUpdate): an agent on that account and root sends agentState
+        // again when a field changed, owns included (contract section 10: a leg cancelled after a close turns owns false at once).
+        public static void OnAccountChange(Account account, Instrument inst)
+        {
+            if (!Enabled || account == null) return;
+            foreach (ChartBridgeAgent a in All()) if (a.Account == account.Name) a.StateChanged(inst);
         }
 
         // ChartBridgeOrders.Auth and the v3 handshake: a signed-in v3 page gets every agent's strip, its open proposals, its last
@@ -937,17 +974,40 @@ namespace NinjaTrader.NinjaScript.AddOns
             return tags;
         }
 
+        // The day file is appended to and written whole under one lock (review B), so an appended plan id is never lost to a whole
+        // write made from an older copy. A Windows sharing violation (a virus scanner, a backup) is tried again briefly, then logged.
+        private readonly object DayFileLock = new object();
+        private const int DayTries = 3, DayRetryMs = 25;
+
+        private static void TryIo(Action write)
+        {
+            for (int i = 1; ; i++)
+            {
+                try { write(); return; }
+                catch (IOException) { if (i >= DayTries) throw; }
+                Thread.Sleep(DayRetryMs);
+            }
+        }
+
         private void AppendDay(string line)
         {
-            try
+            lock (DayFileLock)
             {
-                if (!File.Exists(DayFile)) { SaveDay(); return; }   // the whole file (with this id) the first time
-                File.AppendAllText(DayFile, line + Environment.NewLine);
+                try
+                {
+                    if (!File.Exists(DayFile)) { SaveDay(); return; }   // the whole file (with this id) the first time
+                    TryIo(delegate { File.AppendAllText(DayFile, line + Environment.NewLine); });
+                }
+                catch (Exception ex) { Log("agent-" + Id + "-day.txt could not be appended to (" + ex.Message + "); a restart would forget a plan id"); }
             }
-            catch (Exception ex) { Log("agent-" + Id + "-day.txt could not be appended to (" + ex.Message + "); a restart would forget a plan id"); }
         }
 
         private void SaveDay()
+        {
+            lock (DayFileLock) SaveDayLocked();
+        }
+
+        private void SaveDayLocked()
         {
             List<string> lines = new List<string> { "# ChartBridge day for agent " + Id + " (written by ChartBridge; do not edit)", "# session, its trades (tag and open or realized dollars), plan ids used, entries and their expiry" };
             lock (Sync)
@@ -961,7 +1021,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (KeyValuePair<string, int[]> kv in Spans) if (Trades.ContainsKey(kv.Key)) lines.Add("span\t" + kv.Key + "\t" + kv.Value[0].ToString(CultureInfo.InvariantCulture) + "\t" + kv.Value[1].ToString(CultureInfo.InvariantCulture));
                 if (lossStandDown != null) lines.Add("standDown\t" + lossStandDown);
             }
-            try { WriteWhole(DayFile, lines); }
+            try { TryIo(delegate { WriteWhole(DayFile, lines); }); }
             catch (Exception ex) { Log("agent-" + Id + "-day.txt could not be saved (" + ex.Message + "); a restart would forget today's trades and plan ids"); }
         }
 
@@ -1014,7 +1074,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public string AccountConflict()
         {
             string acct = Account, bot = ChartBridgeAgents.BotAccountForAgents();   // on or off (lead's default); never a file read here
-            if (bot == null) return "bot-account.txt cannot be understood, so ChartBridge cannot tell the bot's account: agent " + Id + " trades nothing until it is fixed";
+            if (bot == null) return "bot-account.txt cannot be read or understood, so ChartBridge cannot tell the bot's account: agent " + Id + " trades nothing until it is fixed";
             if (string.Equals(acct, bot, StringComparison.OrdinalIgnoreCase))
                 return acct + " is also the bot's account: choose an account for agent " + Id + " on the Agent tab (an agent never shares an account)";
             string cw = ChartBridgeAgents.CopierUses(acct);
@@ -1202,7 +1262,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync)
             {
                 if (c == null || client != null) return false;
-                client = c; claimed = false; helloed = false; name = null; build = null; lastMsgMs = Now(); attachedMs = lastMsgMs; Actions.Clear();
+                client = c; claimed = false; helloed = false; name = null; build = null; lastMsgMs = Now(); attachedMs = lastMsgMs; Actions.Clear(); lastStateSent = null;
             }
             Log("agent " + Id + " connected; it is told nothing until its agentHello");
             Notify();
@@ -1305,9 +1365,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (nm == null || nm.Length < 1 || nm.Length > 40) { ToAgent(Reject(null, "agentHello needs a name of 1 to 40 characters")); return; }
             if (bd == null || bd.Length < 1 || bd.Length > 40) { ToAgent(Reject(null, "agentHello needs a build of 1 to 40 characters")); return; }
             lock (Sync) { helloed = true; name = nm; build = bd; }
-            ToAgent(WelcomeJson());
-            ToAgent(StateJson());
-            Snapshot();
+            List<string> served = ServedRoots();   // welcome.instruments and the snapshot cover exactly these roots (section 10)
+            ToAgent(WelcomeJson(served));
+            SendState(true);
+            Snapshot(served);
             Log("agent " + Id + " (\"" + nm + "\", build " + bd + ") said hello");
             AgentLog("hello: \"" + nm + "\", build " + bd);
             Notify();
@@ -1315,25 +1376,36 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Contract addition (after agentState, at every hello): one position per root of the agent (flat included) and one order per
         // working order of its own, so a runner that reconnects sees fills it missed.
-        private void Snapshot()
+        private void Snapshot(List<string> served)
         {
             Account a = FindAccount(Account);
             string acct = Account;
-            foreach (string root in RulesNow().Roots)
+            List<Instrument> insts = new List<Instrument>();
+            foreach (string root in served)
             {
                 Instrument inst = ChartBridgeServer.InstrumentFor(root);
                 if (inst == null) continue;
+                insts.Add(inst);
                 int q = a != null ? ChartBridgeOrders.AgentListed(a, inst) : 0;
                 double avg = 0;
                 if (a != null && q != 0) lock (a.Positions) { Position ps = a.Positions.FirstOrDefault(x => x.Instrument == inst || (x.Instrument != null && x.Instrument.FullName == inst.FullName)); if (ps != null) avg = ps.AveragePrice; }
                 ToAgent("{\"type\":\"position\",\"account\":" + CbJson.Str(acct) + ",\"root\":" + CbJson.Str(root) + ",\"qty\":" + q.ToString(CultureInfo.InvariantCulture) +
                         ",\"avgPrice\":" + (q != 0 ? CbJson.Num(avg) : "null") + "}");
             }
-            if (a == null) return;
-            List<Order> orders;
-            lock (a.Orders) orders = a.Orders.ToList();
-            foreach (Order o in orders) if (IsMine(o) && ChartBridgeOrders.IsWorking(o.OrderState)) ToAgent(ChartBridgeOrders.AgentOrderJson(o));
+            if (a != null)
+            {
+                List<Order> orders;
+                lock (a.Orders) orders = a.Orders.ToList();
+                foreach (Order o in orders)
+                    if (IsMine(o) && ChartBridgeOrders.IsWorking(o.OrderState) && insts.Any(i => i == o.Instrument || (o.Instrument != null && i.FullName == o.Instrument.FullName)))
+                        ToAgent(ChartBridgeOrders.AgentOrderJson(o));
+            }
+            // the end of the snapshot (section 10): a runner without it is not ready
+            ToAgent("{\"type\":\"snapshot\",\"roots\":[" + string.Join(",", served.Select(x => CbJson.Str(x))) + "]}");
         }
+
+        // The agent's roots ChartBridge serves now (NinjaTrader connected, the contract found), in its rules' order.
+        private List<string> ServedRoots() { return RulesNow().Roots.Where(x => ChartBridgeServer.InstrumentFor(x) != null).ToList(); }
 
         // subscribe: answered as for a page (history, ticks, ready, then live tick for that root). Strict values (lead's default:
         // root required; days, tickHours and sub whole numbers, the page's defaults when left out).
@@ -1711,6 +1783,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ChartBridgeOrders.OnOrderUpdate: the agent sees its own orders; done entries are forgotten.
         public void OnOrderUpdate(Order o, string json)
         {
+            CbIdOf(o);   // before ChartBridge forgets a done order's id: its exec carries the same cbId as its order messages
             string tag = ChartBridgeAgents.TagOf(o.Name);
             if (IsMyEntry(o)) { ChartBridgeAgents.NoteTag(tag, Id); lock (Sync) MyTags.Add(tag); }
             bool done = !ChartBridgeOrders.AgentMayFillState(o.OrderState), rejectedEntry = false;
@@ -1744,6 +1817,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             Order o = FindOrder(orderId);
             string entryTag = IsMyEntry(o) ? ChartBridgeAgents.TagOf(o.Name) : null;
             bool mine = o != null && IsMine(o);
+            if (mine && json != null && json.EndsWith("}", StringComparison.Ordinal))   // section 10: ChartBridge's id and the order's role
+                json = json.Substring(0, json.Length - 1) + ",\"cbId\":" + Str(CbIdOf(o)) + ",\"role\":" + CbJson.Str(ChartBridgeOrders.AgentRoleFor(o)) + "}";
             RollDay();
             string closedTag = null, opened = null;
             bool spanChanged = false;
@@ -1811,6 +1886,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (sd != null && pnl < 0) { SaveDay(); Log("agent " + Id + " stands down: " + sd); ToPages(StatusJson("warn", "Agent " + Id + " stands down: " + sd)); }
             }
             Notify();
+        }
+
+        // ChartBridge's id for an order of this agent ("o12"), as its order messages carried it (kept here: ChartBridge forgets a done
+        // order's id); null for an order that is not ChartBridge's.
+        private readonly Dictionary<Order, string> CbIds = new Dictionary<Order, string>();
+
+        private string CbIdOf(Order o)
+        {
+            if (o == null || !(o.Name ?? "").StartsWith("CB#", StringComparison.Ordinal)) return null;
+            string id;
+            lock (Sync) if (CbIds.TryGetValue(o, out id)) return id;
+            id = ChartBridgeOrders.AgentKnownId(o) ?? ChartBridgeOrders.AgentIdFor(o);
+            lock (Sync)
+            {
+                if (CbIds.Count >= 2000) foreach (Order k in CbIds.Keys.ToList()) if (!ChartBridgeOrders.AgentMayFillState(k.OrderState)) CbIds.Remove(k);   // done orders go first
+                CbIds[o] = id;
+            }
+            return id;
         }
 
         private Order FindOrder(string orderId)
@@ -1915,12 +2008,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (why != null && Cancel(o, why)) { cancelled++; AnswerEntryEnded(o, "expired", why); }
             }
             ResendCancels(now);
+            FlushRefused(now);
             if (cancelled > 0 || ended.Count > 0) Notify();
             // every pass: a lock whose pair is flat by both readings, with nothing of the agent working there, clears; an open trade
             // record that nothing listed belongs to any more is dropped (once the executions have been read again after a start)
             List<string> roots = FlatRoots();
             foreach (string root in roots) Owns(root);
-            if (now - startedMs >= ChartBridgeAgents.SilenceMs) DropStaleRecords(roots);
+            if (ChartBridgeServer.ExecutionsReplayed(Account)) DropStaleRecords(roots);   // only once the session's executions were read again (review B)
             // the flat time (ruling 2): from flatAt until the next entryFrom (18:00 ET included: a position held overnight is flattened
             // too), whatever the agent does or whether it is there
             bool flatHours = tod >= r.FlatAt * 60 || tod < r.EntryFrom * 60;
@@ -1937,6 +2031,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (flatHours) StartFlatten(tod >= r.FlatAt * 60 && tod < 18 * 3600 ? Id + " flattened at " + Hm(r.FlatAt) + " by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + "): flattened by its rules", true);
             StepFlatten(now);
+            SendState(false);   // a change no event carries (the session's roll, the clock, a file): within one pass
             if (strip) ToPages(StripJson());
         }
 
@@ -2030,7 +2125,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         j.LastCancelMs = now;
                         if (j.Owned) ChartBridgeOrders.AgentFlattening(a, inst);   // never marks the page's brackets on a pair it does not own
-                                try { a.Cancel(others.ToArray()); }
+                        try { a.Cancel(others.ToArray()); }
                         catch (Exception ex) { Log("agent " + Id + " flatten: the cancels could not be sent (" + ex.Message + "); tried again in 3 s"); }
                         Log("agent " + Id + " flatten: cancel sent for " + others.Count + " order(s) on " + j.Root + " " + a.Name);
                     }
@@ -2226,7 +2321,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!PlainName(nm)) return "account must be an account name";
             ChartBridgeAgents.RefreshFiles();   // a page's thread: the copies are read fresh
             string bot = ChartBridgeAgents.BotAccountForAgents();   // on or off (lead's default)
-            if (bot == null) return "bot-account.txt cannot be understood, so ChartBridge cannot tell the bot's account: fix or delete it first";
+            if (bot == null) return "bot-account.txt cannot be read or understood, so ChartBridge cannot tell the bot's account: fix or delete it first";
             if (string.Equals(nm, bot, StringComparison.OrdinalIgnoreCase)) return nm + " is the bot's account: an agent never trades it";
             string cw = ChartBridgeAgents.CopierUses(nm);
             if (cw != null) return cw + ": an agent never trades it";
@@ -2356,9 +2451,36 @@ namespace NinjaTrader.NinjaScript.AddOns
         private void Notify()
         {
             ToPages(StripJson());
-            ChartBridgeClient c;
-            lock (Sync) c = helloed ? client : null;
-            if (c != null) c.Send(StateJson());
+            SendState(false);
+        }
+
+        // agentState to the agent: always after its hello, else only when a field changed (section 10). One at a time, so the
+        // agent never gets an older state after a newer one.
+        private readonly object StateLock = new object();
+        private string lastStateSent;
+
+        private void SendState(bool force)
+        {
+            lock (StateLock)
+            {
+                ChartBridgeClient c;
+                lock (Sync) c = helloed ? client : null;
+                if (c == null) return;
+                string json = StateJson();
+                lock (Sync) { if (client != c) return; if (!force && json == lastStateSent) return; lastStateSent = json; }
+                c.Send(json);
+            }
+        }
+
+        // An order or position change on this agent's account: on one of its roots (or of an unknown contract), agentState again
+        // if it changed.
+        public void StateChanged(Instrument inst)
+        {
+            bool on;
+            lock (Sync) on = helloed && client != null;
+            if (!on) return;
+            if (inst != null) { string root = ChartBridgeServer.RootFor(inst); if (root != null && !FlatRoots().Contains(root)) return; }
+            SendState(false);
         }
 
         // A plan id seen today: true when it is new (now used), false when it was used before or is not an id at all.
@@ -2366,8 +2488,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (id == null || id.Length < 1 || id.Length > 40) return false;
             bool fresh, broken;
-            lock (Sync) { fresh = PlanIds.Add(id); broken = dayBroken != null; }
-            if (fresh && !broken) AppendDay("plan\t" + id);   // appended (review B-S1): the whole file is written on the roll and on trades
+            lock (DayFileLock)   // the id and its line together: a whole write either has it or comes before the line (review B)
+            {
+                lock (Sync) { fresh = PlanIds.Add(id); broken = dayBroken != null; }
+                if (fresh && !broken) AppendDay("plan\t" + id);
+            }   // appended (review B-S1): the whole file is written on the roll and on trades
             return fresh;
         }
 
@@ -2375,6 +2500,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private double lastRefusedShownMs = -1e18;
         private int refusedHeld;
+        private Plan heldPlan;      // the latest refused plan held back (shown by the timer's flush with the count of the others)
+        private bool heldStore;
 
         private void ShowPlan(Plan p, bool store)
         {
@@ -2385,11 +2512,33 @@ namespace NinjaTrader.NinjaScript.AddOns
                 int held;
                 lock (Sync)
                 {
-                    if (now - lastRefusedShownMs < 1000) { refusedHeld++; return; }
-                    lastRefusedShownMs = now; held = refusedHeld; refusedHeld = 0;
+                    if (now - lastRefusedShownMs < 1000) { refusedHeld++; heldPlan = p; heldStore = store; return; }
+                    lastRefusedShownMs = now; held = refusedHeld; refusedHeld = 0; heldPlan = null;
                 }
                 if (held > 0) p.Result += " (and " + held + " more refused plan" + (held == 1 ? "" : "s") + " in the second before, not shown)";
             }
+            ShowPlanNow(p, store);
+        }
+
+        // The timer's flush (review B): refused plans held back are told within about a second even when no other plan follows: the
+        // latest of them is shown with the count of the rest.
+        private void FlushRefused(double now)
+        {
+            Plan p;
+            bool store;
+            int others;
+            lock (Sync)
+            {
+                if (heldPlan == null || now - lastRefusedShownMs < 1000) return;
+                p = heldPlan; store = heldStore; others = refusedHeld - 1;
+                heldPlan = null; refusedHeld = 0; lastRefusedShownMs = now;
+            }
+            if (others > 0) p.Result += " (and " + others + " more refused plan" + (others == 1 ? "" : "s") + " in the second before, not shown)";
+            ShowPlanNow(p, store);
+        }
+
+        private void ShowPlanNow(Plan p, bool store)
+        {
             string json = PlanJson(p);
             if (!store) { ToPages(json); return; }
             lock (Sync)
@@ -2454,14 +2603,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                    ",\"seenAt\":" + Ms(seen) + ",\"answeredAt\":" + Ms(answered) + "}";
         }
 
-        private string WelcomeJson()
+        private string WelcomeJson() { return WelcomeJson(ServedRoots()); }
+
+        private string WelcomeJson(List<string> served)
         {
             Rules r = RulesNow();
             string m;
             lock (Sync) m = mode;
             StringBuilder ins = new StringBuilder("[");
             bool first = true;
-            foreach (string root in r.Roots)
+            foreach (string root in served)
             {
                 Instrument inst = ChartBridgeServer.InstrumentFor(root);
                 if (inst == null) continue;
@@ -2498,7 +2649,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 return "{\"type\":\"agentState\",\"mode\":" + CbJson.Str(mode) + ",\"killed\":" + (killed ? "true" : "false") + ",\"standDown\":" + Str(sd) +
                        ",\"trades\":" + Trades.Count + ",\"losses\":" + LossesLocked() + ",\"pnlToday\":" + CbJson.Num(Math.Round(Trades.Values.Where(v => !double.IsNaN(v)).Sum(), 2)) +
-                       ",\"owns\":" + (owns ? "true" : "false") + "}";
+                       ",\"owns\":" + (owns ? "true" : "false") + ",\"session\":" + Str(session) + "}";
             }
         }
 

@@ -329,7 +329,7 @@ public static class AgentHarness
               w.Contains("{\"root\":\"MNQ\",\"name\":\"MNQ 12-26\",\"tick\":0.25,\"pointValue\":2}") && w.Contains("{\"root\":\"NQ\",\"name\":\"NQ 12-26\",\"tick\":0.25,\"pointValue\":20}"),
               "welcome: version, agent, shadow, Sim101 (sim), the default rules, its roots' instruments: " + w);
         string st = Last(agentOut, "agentState");
-        Check(st == "{\"type\":\"agentState\",\"mode\":\"shadow\",\"killed\":false,\"standDown\":null,\"trades\":0,\"losses\":0,\"pnlToday\":0,\"owns\":false}", "agentState: " + st);
+        Check(Regex.IsMatch(st, "^\\{\"type\":\"agentState\",\"mode\":\"shadow\",\"killed\":false,\"standDown\":null,\"trades\":0,\"losses\":0,\"pnlToday\":0,\"owns\":false,\"session\":\"[0-9]{4}-[0-9]{2}-[0-9]{2}\"\\}$"), "agentState (with its session): " + st);
         string strip = Last(page, "agent");
         Check(strip.Contains("\"agent\":\"manrae\",\"name\":\"Manrae\",\"build\":\"sample-build-1\",\"enabled\":true,\"connected\":true,\"mode\":\"shadow\"") && strip.Contains("\"lastPlan\":null"), "the page's strip: " + strip);
         ChartBridgeAgents.OnTick("MNQ", "{\"type\":\"tick\",\"root\":\"MNQ\",\"p\":25000.25,\"v\":1}");
