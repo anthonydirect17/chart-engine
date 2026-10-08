@@ -755,6 +755,8 @@ function create(o) {
     on: () => agents.size() > 0,
     layoutChanged(name) { S.layout = String(name || ''); if (S.shown && !popout) showTab(false); },
     choose: id => { choose(id); unmountChart(); render(); },
+    /** the agent that owns (account, root) by ChartBridge's owner lock, or '' (the order ticket refuses a resting order there) */
+    ownerOf: (account, root) => AC.pairOwner(agents.list(), S.orders.values(), account, root),
     answer: (agent, id, ans) => answer(agent, id, ans),
     /* read only, for the tests and the console */
     state: () => ({ v3: S.v3, version: S.version, signedIn: S.signedIn, shown: S.shown, chosen: S.chosen, agents: agents.list().map(a => Object.assign({}, a)),

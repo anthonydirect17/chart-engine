@@ -51,7 +51,7 @@ const DESK_KEYS = { rev: 3, keys: { buy: '', sell: '', be: '', close: '', flatte
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 let bridge = null;
 try {
-  bridge = await startBridge(PORT, ['--agents=demo,demotwo', '--agent-any-time']);
+  bridge = await startBridge(PORT, ['--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2']);   // config.txt's cap holds for agents (as built)
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   await ctx.route('http://localhost:8800/api/chart-hotkeys', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(DESK_KEYS) }));
   await ctx.route('http://localhost:8800/api/chart-strategies', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ rev: 0, strategies: [] }) }));
@@ -109,7 +109,8 @@ try {
   await until(async () => (await A()).feed.notes === 5 && (await A()).feed.plans === 2, 'five notes and two plans in the feed');
   const kinds = await page.evaluate(() => [...document.querySelectorAll('.ag-feed .ag-k')].map(e => e.textContent));
   check(kinds[0] === 'STATUS' && kinds[1] === 'LESSON' && kinds.includes('PLAN') && kinds.includes('SKIP') && kinds.includes('THINKING') && kinds[kinds.length - 1] === 'NOTEBOOK', 'newest first, every kind: ' + kinds.join(' '));
-  check(/refused: Sim101 is the bot's account/.test(await text('.ag-feed')), 'a refused plan says why (the bot\'s account is never an agent\'s)');
+  check(/refused: Sim101 is also the bot's account: choose an account for agent demo on the Agent tab/.test(await text('.ag-feed')), 'a refused plan says why (the bot\'s account is never an agent\'s)');
+  check(/STOOD DOWN: Sim101 is also the bot's account/.test(await text('.ag-strip')), 'on its unchosen default Sim101, the bot\'s too, the agent stands down and the strip says so (as built)');
   check(await page.evaluate(() => { const d = document.querySelector('.ag-feed details.ag-think'); return !!d && !d.open; }), 'thinking is a collapsed block');
   await page.click('.ag-feed details.ag-think summary');
   await control('agent-note', { agent: 'demo', kind: 'look', text: 'Sample: a new look after the click' });
@@ -218,10 +219,16 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'agent-1366.png') });
   await page.setViewportSize({ width: 1600, height: 900 });
 
+  /* ---------------------------------------------------------------- a cancel not confirmed (ChartBridge 0.5.0 as built) */
+  console.log('a cancel NinjaTrader does not confirm: sent again every 3 s, the warning on the workspace\'s line');
+  await control('agent-stuck-cancel', { agent: 'demo', n: 2 });
+  await control('agent-withdraw', { agent: 'demo', id: 'cp1' });                        // its unfilled entry's cancel is not confirmed twice
+  await until(async () => /Agent demo: the cancel of its entry .* was not confirmed in 3 s .*check NinjaTrader/.test(await page.textContent('#wsAlert')), 'ChartBridge\'s warning shows as its other warnings do', 6000);
+  await until(async () => !(await A()).orders.some(o => o.by === 'agent:demo' && o.role === 'entry'), 'the entry is gone at the third try', 8000);
+  await page.click('#wsAlertClose').catch(() => {});
+
   /* ---------------------------------------------------------------- expiry: Accept closes in the last 5 s */
   console.log('expiry');
-  await control('agent-withdraw', { agent: 'demo', id: 'cp1' });                        // its unfilled entry is cancelled
-  await until(async () => !(await A()).orders.some(o => o.by === 'agent:demo' && o.role === 'entry'), 'the entry is gone');
   const ex = await control('agent-plan', { agent: 'demo', id: 'cp2', side: 'sell', kind: 'limit', p: 25410, qty: 1, stop: 20, target: 40, expire: 60 });
   check(!ex.refused, 'a second plan: ' + (ex.refused || 'proposed'));
   await until(() => page.isVisible('.ag-plist .ag-prop[data-id="cp2"]'), 'proposal cp2');
@@ -232,6 +239,25 @@ try {
   await until(async () => (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'cp2').state === 'expired', 'ChartBridge expires it', 8000);
   await until(async () => !(await page.$('.ag-prop[data-id="cp2"]')), 'the expired card goes', 6000);
   check(/EXPIRED/.test(await text('.ag-feed')) && /ACCEPTED IN \d+\.\d S/.test(await text('.ag-feed')), 'the feed says how each proposal ended (on its plan): ' + (await text('.ag-feed')).slice(0, 160));
+
+  /* ---------------------------------------------------------------- the flat hours on an account NinjaTrader no longer lists */
+  console.log('the flat hours: an account NinjaTrader no longer lists gives NOT FLAT on the workspace\'s line');
+  await control('agent-plan', { agent: 'demo', id: 'fl1', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 12, target: 24, expire: 900 });
+  await until(() => page.isVisible('.ag-plist .ag-prop[data-id="fl1"]'), 'proposal fl1');
+  await page.click('.ag-plist .ag-prop[data-id="fl1"] [data-agans="accept"]');
+  await until(async () => (await A()).orders.some(o => o.by === 'agent:demo' && o.role === 'entry'), 'fl1 working');
+  await control('price', { root: 'MNQ', p: 25389.75 });                                   // it fills: a position, its legs
+  await until(async () => /Long 1 MNQ/.test(await text('.ag-strip [data-k="sPos"]')), 'demo is long 1 MNQ');
+  await control('agent-unlist', { account: 'SIM-AG1' });
+  await control('agent-flat-hours', { agent: 'demo' });
+  await until(async () => /Agent demo: NOT FLAT\? its flatten \(.*\) waits: SIM-AG1 \(account not listed by NinjaTrader\)/.test(await page.textContent('#wsAlert')), 'the NOT FLAT error shows as ChartBridge\'s other errors do');
+  check(/Long 1 MNQ/.test(await text('.ag-strip [data-k="sPos"]')), 'nothing goes to an account NinjaTrader does not list');
+  await page.screenshot({ path: path.join(SHOTS, 'agent-notflat.png'), clip: { x: 0, y: 0, width: 1600, height: 200 } });
+  await control('agent-unlist', { account: 'SIM-AG1', on: 0 });
+  await until(async () => (await text('.ag-strip [data-k="sPos"]')) === 'Flat', 'the account is back: ChartBridge flattens it');
+  await control('agent-flat-hours', { agent: 'demo', on: 0 });
+  await control('price', { root: 'MNQ', p: 25400 });
+  await page.click('#wsAlertClose').catch(() => {});
 
   /* ---------------------------------------------------------------- one copilot key for the bot and every agent */
   console.log('copilot keys: never a second proposal (review B1), the tab answers its agent only, elsewhere one open only (S1)');

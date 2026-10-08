@@ -717,6 +717,9 @@ const core = TC.create({
      The Desk's form to ChartBridge's); the switches come from the window's v3 connection (syncV3) */
   strategy: () => { const st = activeStrategy(); return st ? { name: st.name, wire: OS.toWire(st) } : null; },
   merged: () => {},
+  /* 1.17.0: the AI agent that owns this pair by ChartBridge's owner lock (the Agent tab knows): a resting order there is
+     refused before it is sent, a market exit that only reduces passes */
+  agentOwner: (account, root) => (agentDesk ? agentDesk.ownerOf(account, root) : ''),
 });
 /* 1.16.0: what only the v3 connection gets, for the ticket: `managed` and the Merge result (Merge itself goes on the ticket's
    connection, as every order action); its errors and warnings are said as the ticket's own (the Bot tab says the bot's) */

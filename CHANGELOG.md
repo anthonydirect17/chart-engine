@@ -32,7 +32,14 @@ lead's default.
   Account page names such an order "agent <id>".
 - **Pop out:** `agent.html`, the tab in its own window.
 - **An older ChartBridge:** the tab says "No agents on this ChartBridge (0.5.0 or later)." and nothing else changes.
-- The fake ChartBridge speaks the agent channel (`--agents=demo`, the made-up Demo Agent and Sim account SIM-AG1).
+- **On a pair an agent owns** (ChartBridge 0.5.0's owner lock), the order ticket sends only a market exit that reduces; a
+  resting order there is refused before it is sent, in ChartBridge's words ("... belongs to agent demo: use Flatten, or
+  move its stop or target"). Flatten and moving its stop or target work as always.
+- ChartBridge's own lines are shown as they come: a refused plan with its held count, the warning when a cancel is not
+  confirmed and the NOT FLAT errors (an account NinjaTrader no longer lists included) on the workspace's ChartBridge line.
+- The fake ChartBridge speaks the agent channel as ChartBridge 0.5.0 built it (`--agents=demo`, the made-up Demo Agent and
+  Sim accounts SIM-AG1 and SIM-AG2): the snapshot after hello, the owner lock, the refused plans' pace, cancels sent again,
+  the backstop, the flat hours and the NOT FLAT errors; what it does not model is listed in `docs/AGENT_TAB.md`.
 - Tests: `test/agent.test.js`, the agent part of `test/fake-v3.test.js`, `npm run smoke:agent` (screenshots
   `test/out/agent-*.png`). The chart draws exactly as in 1.16.0. Page only, no recompile; COMPAT stays at ChartBridge 0.3.2.
 

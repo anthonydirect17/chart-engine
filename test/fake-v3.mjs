@@ -1108,7 +1108,7 @@ Object.assign(OrderDeskV3.prototype, {
   /** NinjaTrader lists the account (the fake: known, not archived, not hidden with /test/agent-unlist) */
   agentListed(name) { const x = this.acct.get(name); return !!x && x.state !== 'archived' && !this.unlisted.has(name); },
   agentOutside(a, t) { if (this.agentAnyTime) return false; const ny = nyMinutes(t); return ny < hhmm(a.rules.entryFrom) || ny >= hhmm(a.rules.entryUntil); },
-  agentFlatHours(a, t) { if (this.agentAnyTime) return false; const ny = nyMinutes(t); return ny >= hhmm(a.rules.flatAt) || ny < hhmm(a.rules.entryFrom); },
+  agentFlatHours(a, t) { if (a.forceFlatHours) return true; if (this.agentAnyTime) return false; const ny = nyMinutes(t); return ny >= hhmm(a.rules.flatAt) || ny < hhmm(a.rules.entryFrom); },
   agentRulesOut(a) { const r = a.rules; return { roots: r.roots.slice(), maxQty: Object.assign({}, r.maxQty), entryFrom: r.entryFrom, entryUntil: r.entryUntil, flatAt: r.flatAt, maxExpireSec: r.maxExpireSec, maxTrades: r.maxTrades, maxLosses: r.maxLosses }; },
   agentMsg(a) {
     return { type: 'agent', agent: a.id, name: a.name, build: a.build, enabled: true, connected: a.connected, mode: a.mode, account: a.account, sim: this.agentSim(a), rules: this.agentRulesOut(a),

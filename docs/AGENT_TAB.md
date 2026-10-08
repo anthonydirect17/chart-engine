@@ -154,35 +154,62 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
     builder, but the installer and the PC updater copy only the page files this list names, and four tests check it, so
     its `www` part gains the four page files (`agent.html`, `agent.js`, `agent-core.js`, `agent.css`). Nothing else in
     `nt8/` changed. The other builder's additions go in `addons`, so the two merge without a conflict.
-17. **The fake's choices (lead's defaults, for the C# builder to compare):**
-    - Each agent starts on Sim101 (the contract's no-file default), which is also the bot's account and the copier's
-      default leader. The fake refuses an agent's plan at check 2 while its account is the bot's, the copier's leader or a
-      follower ("choose demo's own account on the Agent tab"), and `agentAccount` refuses those accounts, whether or not
-      the bot and copier switches are on, so an agent and the bot never share an account even at the defaults. The bridge
-      adds the made-up Sim accounts `SIM-AG1` and `SIM-AG2` for agents to take.
-    - Hello first: anything an agent sends before `agentHello` is refused before it is read ("send agentHello first"), is
-      no heartbeat, never reaches the pages and never becomes `lastPlan`. A socket that never says hello, or says nothing,
-      is closed after 5 s.
-    - Every plan id seen today is used, whether its plan was refused or not. A refused duplicate never replaces the plan it
-      copies, in the pages' plans or as `lastPlan`; both are sent and kept.
-    - The 18:00 ET reset: trades, losing trades, P&L today, a stand-down and the plan ids start over (a trade still open
-      goes on). A rules change can stand the agent down now but never lifts a stand-down; only 18:00 ET does.
-    - The page's `plan` message on an agent's entry cannot take its stop or target away (null or 0: "an agent's entry always
-      has a stop and a target"); other whole numbers of 1 or more pass. Moving the entry with `change`, and moving or
-      cancelling its legs, pass (the contract's exits).
-    - Auto refuses an account that is not tradable now: unchecked, not Connected, or gone.
-    - An account change puts the agent in shadow (its new `welcome` says so).
+17. **The order ticket on an agent's pair (ChartBridge 0.5.0 as built):** while an agent owns (account, root) by the owner
+    lock (`owns`, its position's root or a root where one of its own orders works), the ticket sends only a market exit
+    that reduces (no bracket, no strategy). Any other order is refused before it is sent, in ChartBridge's words: "SIM-AG1
+    MNQ belongs to agent demo: use Flatten, or move its stop or target". Flatten and moving or cancelling its stop or target
+    work as always. ChartBridge refuses the same either way; the single chart page (no Agent tab) leaves it to ChartBridge.
+18. **ChartBridge's words, shown as they come:** a refused plan that carries "(and N more refused plans in the second
+    before, not shown)" is shown as is (ChartBridge sends at most one refused plan a second per agent). The warning when a
+    cancel is not confirmed and the NOT FLAT errors (an account NinjaTrader no longer lists included) are ChartBridge
+    `status` lines: the workspace's ChartBridge line shows them as it shows every other warning and error.
+19. **The fake ChartBridge follows ChartBridge 0.5.0 as built** (`agent-channel` fb15822, `nt8/PROTOCOL.md` "Agent channel
+    as built"):
+    - Each agent starts on Sim101 unless its account was chosen (`agentAccounts`, the account file). Only a chosen account
+      is the agent's: the bot, the copier and other agents refuse only that. A clash stands the AGENT down in plain words
+      ("Sim101 is also the bot's account: choose an account for agent demo on the Agent tab (an agent never shares an
+      account)"): the bot's account and the copier's leader and followers, whatever the switches; another agent's chosen
+      account, or two agents both on their unchosen default. `agentAccount` refuses those accounts and puts the agent in
+      shadow. The bridge adds the made-up Sim accounts `SIM-AG1` and `SIM-AG2` for agents to take.
+    - Hello first: anything before `agentHello` is refused unread, is no heartbeat, and never reaches the pages. After every
+      `agentHello`: `welcome`, `agentState`, then the snapshot: a `position` per root of the agent on its account (a flat
+      one too) and an `order` per working order of its own, as a v2 page gets them. A socket that never says hello, or says
+      nothing, is closed after 5 s. The rate is counted first (every message but `beat`).
+    - Every plan id seen today is used, refused or not. Refused plans reach the pages at most once a second per agent; the
+      next one shown says how many were held. A refused duplicate never replaces the plan it copies.
+    - Checks as built: stood down includes a clash; the account listed by NinjaTrader; a stop-limit refused with
+      `orderTypes` off; the size the smallest of the agent's `maxQty`, the ceiling and config.txt's gate 3 cap;
+      `maxBracketTicks` holds.
+    - The owner lock: a page exit is a market order that only reduces, with no bracket and no strategy; anything else from
+      the page gets "...: use Flatten, or move its stop or target"; the bot, the copier and other agents "... until it is
+      flat". The copier skips an agent's pair.
+    - Cancels: a cancel NinjaTrader does not confirm is sent again every 3 s, with a `status` warning from the second try.
+    - The backstop: no agent entry works while the agent is killed, in shadow, stood down or outside its window; outside
+      its window an open proposal expires. A restart puts every agent in shadow (its sockets gone, its open proposals not
+      answered), and the backstop cancels any entry from before it.
+    - The flat hours run from `flatAt` to the next `entryFrom`: a flatten job per agent ("<id> flattened at 15:55 by its
+      rules", or "<id> held a position outside its trading hours (15:55 to 09:45): flattened by its rules"). Nothing goes
+      to an account NinjaTrader does not list: "Agent demo: NOT FLAT? its flatten (...) waits: ... (account not listed by
+      NinjaTrader) ..." every 10 s, and the job goes on when it is back; not flat 10 s after its flatten, "Agent demo: NOT
+      FLAT n s after its flatten ..." every 10 s, the close sent again every 3 s.
     - The kill switch on: the agent's unfilled entries are cancelled (each `answer` `expired`), its open proposals end
-      `not answered`, a position keeps its stop and target, and the pages get a `status` `warn`. Off: nothing else changes.
-    - Mode changes: leaving copilot ends the open proposals `not answered`; leaving auto cancels the unfilled entries (`answer`
-      `expired`); the agent gets a new `welcome`. Every start is shadow.
-    - `agentSeen` counts in gate 7's rate (the contract names no exemption; `botSeen` is not counted).
-    - An `agentAnswer` accept with under 5 s left ends the proposal `expired` (the agent's `answer` says so) and the page
-      gets a `reject` with its cid. An accept refused at placing ends it `rejected`, the agent gets `answer` `refused`.
-    - The owner lock: a page order that only reduces the position on the agent's (account, root) is an exit and passes.
-    - `agentRules` refuses a `maxQty<ROOT>` for a root not in `roots`, and a root other than NQ, MNQ, ES and MES.
-    - `subscribe` from an agent is answered `ready` only (the fake keeps no history for agents).
-    - `--agent-any-time` (tests and smokes only) skips the entry window and the flat time, so they run at any hour.
+      `not answered`, a position keeps its stop and target, and the pages get a `status` `warn`. Mode changes: leaving
+      copilot ends the open proposals `not answered`; leaving auto cancels the unfilled entries; the agent gets a new
+      `welcome`. Every start is shadow.
+    - The 18:00 ET roll: trades, losing trades, P&L today, a stand-down and the plan ids start over, ended proposals are
+      dropped (a trade still open goes on). A rules change never lifts a stand-down.
+    - The page's `plan` on an agent's entry cannot take its stop or target away; `change` moves it; its legs move and cancel.
+    - Rules: `roots` a list in `agent` and `welcome`; a chosen root's `maxQty<ROOT>` left out is its ceiling; a root not
+      chosen takes only 0. A skip's `agentPlan` carries every plan key, null where it has none. `placed` names the order and
+      when it ends. An agent gets `exec` for its own orders only, `position` for its account on its roots.
+    - `--agent-any-time` (tests and smokes only) skips the window and the flat hours; `/test/agent-flat-hours` starts them on
+      demand, `/test/agent-unlist` and `/test/agent-stuck-cancel` play an unlisted account and an unconfirmed cancel.
+    - **Not modelled by the fake** (ChartBridge does them; the page needs none of it): `subscribe`'s history and ticks
+      (answered `ready` only); one `reject` a second at most for messages over the rate; the strict number format and key
+      length; the day file over a restart (plan ids, entry expiries, the stand-down); a part-filled entry's rest as a trade
+      of its own; the error 5 s after a start with a position; the owner lock's both position readings and fills ahead of
+      their events; the flatten cancelling every order on that contract of the account (the fake: the agent's own) and
+      cancelling again every 3 s; files that cannot be read; NinjaTrader refusing an entry; fills to The Desk.
 
 ## Tests
 

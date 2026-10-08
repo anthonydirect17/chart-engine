@@ -170,3 +170,32 @@ test('a chart click from another window: sent with the chart\'s kind only when t
   R.core.placeChecked('buy', 'limit', 95);
   assert.match(R.notes.pop(), /^warn: Armed is off/);
 });
+
+test('1.17.0: on a pair an AI agent owns, only a market exit that reduces is sent; a resting order is refused before sending', () => {
+  let owner = 'demo';
+  const sent = [], notes = [], store = new Map();
+  let clock = 9000;
+  // a TradeCore with the workspace's agentOwner hook (the Agent tab answers it)
+  const core = TC.create({ LP, prefs: LP.create({ getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) }),
+    fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve('{"token":"t"}') }), send: m => sent.push(m), open: () => true, sock: () => ({}),
+    root: () => 'MNQ', lastPrice: () => 100, qty: () => 1, pickerAccount: () => core.TR.account, wantedAccount: () => '', tick: () => 0.25, served: () => true, fmt: p => p.toFixed(2),
+    flash: (t, l) => notes.push((l ? l + ': ' : '') + t), later: () => 0, changed: () => {}, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {},
+    batch: () => {}, unsent: () => {}, armBlocked: () => '', destroyed: () => false, now: () => (clock += 500),
+    agentOwner: (account, root) => (account === 'Sim101' && root === 'MNQ' ? owner : '') });
+  core.applyTrading({ enabled: true, accounts: ['Sim101'], maxQty: { MNQ: 5 } });
+  core.setArmed(true);
+  core.message({ type: 'position', account: 'Sim101', root: 'MNQ', qty: 2, avgPrice: 100 });
+  core.setBracket('MNQ', 'stop', 8, true); core.setBracket('MNQ', 'target', 8, true);
+  const words = /^error: Not sent: Sim101 MNQ belongs to agent demo: use Flatten, or move its stop or target\.$/;
+  core.placeAt('sell', 101);                                   // a resting sell limit above: an exit that could outlive the position
+  assert.equal(sent.length, 0); assert.match(notes.pop(), words);
+  core.placeAt('sell', 99);                                    // a resting sell stop below
+  assert.equal(sent.length, 0); assert.match(notes.pop(), words);
+  core.sendOrder('buy', 'market', null);                       // adding: an entry
+  assert.equal(sent.length, 0); assert.match(notes.pop(), words);
+  core.sendOrder('sell', 'market', null);                      // a market exit that only reduces: sent, no bracket
+  assert.equal(sent.length, 1); assert.equal(sent[0].kind, 'market'); assert.equal(sent[0].bracket, undefined);
+  owner = '';                                                  // not owned: as before
+  core.placeAt('sell', 101);
+  assert.equal(sent.length, 2); assert.equal(sent[1].kind, 'limit');
+});

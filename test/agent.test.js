@@ -399,3 +399,25 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.17\.0/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
+
+test('1.17.0 as built: who owns a pair, the page exit that passes, ChartBridge\'s words; the feed shows a held count as given', () => {
+  const ag = [agent({ owns: true, account: 'SIM-AG1', position: { root: 'MNQ', qty: 2, avgPrice: 1 } }), agent({ agent: 'demotwo', owns: true, account: 'SIM-AG2' })];
+  const orders = [{ id: 'NT1', by: 'agent:demotwo', account: 'SIM-AG2', root: 'NQ', state: 'working', role: 'stop' }];
+  assert.equal(AC.pairOwner(ag, orders, 'SIM-AG1', 'MNQ'), 'demo');
+  assert.equal(AC.pairOwner(ag, orders, 'SIM-AG1', 'NQ'), '');
+  assert.equal(AC.pairOwner(ag, orders, 'SIM-AG2', 'NQ'), 'demotwo', 'its own working leg there');
+  assert.equal(AC.pairOwner([agent({ owns: false, position: { root: 'MNQ', qty: 2 } })], [], 'SIM-AG1', 'MNQ'), '', 'only while ChartBridge says it owns');
+  assert.ok(AC.pageExitPasses({ kind: 'market', side: 'sell', qty: 2 }, 2));
+  assert.ok(!AC.pageExitPasses({ kind: 'limit', side: 'sell', qty: 1, price: 1 }, 2));
+  assert.ok(!AC.pageExitPasses({ kind: 'market', side: 'sell', qty: 3 }, 2));
+  assert.ok(!AC.pageExitPasses({ kind: 'market', side: 'buy', qty: 1 }, 2));
+  assert.ok(!AC.pageExitPasses({ kind: 'market', side: 'sell', qty: 1, bracket: { stop: 8, target: 8 } }, 2));
+  assert.ok(!AC.pageExitPasses({ kind: 'market', side: 'sell', qty: 1 }, 0));
+  assert.equal(AC.lockText('SIM-AG1', 'MNQ', 'demo'), 'SIM-AG1 MNQ belongs to agent demo: use Flatten, or move its stop or target');
+  const held = 'refused: qty must be a whole number from 1 to 20 (maxQty.MNQ) (and 3 more refused plans in the second before, not shown)';
+  assert.equal(AC.planLine({ action: 'plan', side: 'buy', qty: 99, root: 'MNQ', result: held }).result, held.replace(/^refused: /, 'refused: '), 'shown as is');
+  const F = AC.createFeed();
+  F.plan({ type: 'agentPlan', agent: 'demo', id: 'h', at: 1, action: 'plan', result: held });
+  assert.equal(F.items('demo')[0].m.result, held);
+  assert.deepEqual(AC.parseRules({ roots: ['NQ', 'MNQ'], maxQty: { NQ: 2, MNQ: 20 }, maxTrades: null }).roots, ['NQ', 'MNQ'], 'roots as a list (as built)');
+});

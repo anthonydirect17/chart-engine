@@ -459,6 +459,28 @@ function ownsText(agent, orders) {
   return ('owns ' + agentAccount(a).name + ' ' + root).trim();
 }
 
+/**
+ * The agent that owns (account, root) by ChartBridge's owner lock, or '' (1.17.0, ChartBridge 0.5.0 as built). An agent owns
+ * the pair while ChartBridge says it holds the lock (`owns`) and the pair is its: its position's root, or a root where one
+ * of its own orders (entry, stop or target) works on its account. agents: the `agent` messages; orders: order messages.
+ */
+function pairOwner(agents, orders, account, root) {
+  for (const a of agents || []) {
+    if (!a || a.owns !== true || agentAccount(a).name !== account) continue;
+    if (a.position && a.position.root === root && a.position.qty) return a.agent;
+    for (const o of orders || []) if (agentOfOrder(o) === a.agent && o.account === account && o.root === root && WORKING.includes(o.state)) return a.agent;
+  }
+  return '';
+}
+/** The only page order that passes an agent's lock (as built): MARKET, the other side of the position, at most its size, with
+ *  no bracket and no strategy (an exit). o: { kind, side, qty, bracket, strategy }; posQty: the position on that pair. */
+function pageExitPasses(o, posQty) {
+  const x = o || {}, q = isNum(posQty) ? posQty : 0;
+  return x.kind === 'market' && !x.bracket && !x.strategy && q !== 0 && (x.side === 'buy') === (q < 0) && isInt(x.qty) && x.qty >= 1 && x.qty <= Math.abs(q);
+}
+/** ChartBridge's words for the page's refused order on an agent's pair. */
+const lockText = (account, root, id) => account + ' ' + root + ' belongs to agent ' + id + ': use Flatten, or move its stop or target';
+
 /* ======================================================================== the strip and its words */
 function fmtUsd(v) {
   if (!isNum(v)) return '';
@@ -625,7 +647,7 @@ return {
   modesAllowed, accountTradable, modeMsg, killMsg,
   countdown, createProposals, endText, legPrices,
   createFeed, planLine,
-  agentOfOrder, isAgentMark, workingEntries, ownsText,
+  agentOfOrder, isAgentMark, workingEntries, ownsText, pairOwner, pageExitPasses, lockText,
   fmtUsd, positionText, beatText, statusText, stateOf, stripModel, noticesFrom, etClock, etClockSec,
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
 };
