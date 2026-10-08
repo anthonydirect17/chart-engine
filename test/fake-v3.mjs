@@ -81,7 +81,7 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   agentKill: ['type', 'cid', 'agent', 'on'],
   agentSeen: ['type', 'agent', 'id', 'at'],
   agentAnswer: ['type', 'cid', 'agent', 'id', 'answer', 'at'],
-  agentAccount: ['type', 'cid', 'agent', 'account'],
+  agentAccount: ['type', 'cid', 'agent', 'account', 'keepMode'],
   agentRules: ['type', 'cid', 'agent', 'roots', 'maxQtyNQ', 'maxQtyMNQ', 'maxQtyES', 'maxQtyMES', 'entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses'],
 });
 export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep'];
@@ -1306,6 +1306,7 @@ Object.assign(OrderDeskV3.prototype, {
   check_agentAccount(m) {
     const a = this.agents.get(m.agent), name = m.account, x = typeof name === 'string' ? this.acct.get(name) : null;
     if (typeof name !== 'string' || !name || name.trim() !== name) return 'account must be an account name';
+    if (m.keepMode !== undefined && !['shadow', 'copilot', 'auto'].includes(m.keepMode)) return 'keepMode must be shadow, copilot or auto (the mode the page\'s question named)';
     if (/^(Backtest|Playback)/i.test(name)) return name + ' is a Backtest or Playback account: an agent never trades one';
     if (!x || x.state === 'archived') return name + ' is not in NinjaTrader';
     if (name === a.account) return name + ' is already ' + a.id + '\'s account';
@@ -1325,8 +1326,14 @@ Object.assign(OrderDeskV3.prototype, {
   do_agentAccount(m) {
     const a = this.agents.get(m.agent), old = a.account;
     a.account = m.account; a.chosen = true;           // written to agent-<id>-account.txt: now the agent's
-    /* ChartBridge 0.5.2 (Anthony 2026-10-08): the mode is kept (until 0.5.1 a change put the agent in shadow) */
-    this.agentLogLine(a, 'account ' + m.account + ' (' + (this.agentSim(a) ? 'Sim' : 'LIVE') + '), was ' + old + ', set by the page; mode ' + a.mode + ' kept');
+    /* ChartBridge 0.5.2 (Anthony 2026-10-08, and its review): the mode is kept only when the page says which mode its question
+       named (keepMode) and that is the mode now; without it (a page before 1.18.1) or when another page changed the mode since,
+       shadow, as until 0.5.1 */
+    const was = a.mode, kept = m.keepMode !== undefined && m.keepMode === was;
+    if (!kept) a.mode = 'shadow';
+    const modeSay = kept ? 'mode ' + was + ' kept' : was === 'shadow' ? 'mode shadow'
+      : 'mode shadow (was ' + was + (m.keepMode === undefined ? ': the page did not say which mode it showed' : ': the page\'s question named ' + m.keepMode) + ')';
+    this.agentLogLine(a, 'account ' + m.account + ' (' + (this.agentSim(a) ? 'Sim' : 'LIVE') + '), was ' + old + ', set by the page; ' + modeSay);
     this.agentToAgent(a, this.agentWelcome(a));
     this.agentNotify(a);
   },
@@ -1549,7 +1556,7 @@ Object.assign(OrderDeskV3.prototype, {
     if (!isInt(m.expireSec) || m.expireSec < 60 || m.expireSec > a.rules.maxExpireSec) return 'expireSec must be from 60 to ' + a.rules.maxExpireSec;
     // 7. the entry window
     if (this.agentOutside(a, this.now())) return agentMarketClosed(this.now()) ? 'the market is closed now (the 17:00 to 18:00 break, the weekend, a CME holiday or a holiday halt): no entry for agent ' + a.id
-      : 'outside the entry window (' + a.rules.entryFrom + ' to ' + a.rules.entryUntil + ' ET)';
+      : 'outside agent ' + a.id + '\'s entry window (' + a.rules.entryFrom + ' to ' + a.rules.entryUntil + ' New York time)';   // ChartBridge's words (WindowRefusal)
     // 8. one at a time
     if (a.trade) return a.id + ' has a position: one at a time';
     if (this.agentWorkingEntries(a).length) return a.id + ' has a working entry: one at a time';
@@ -1758,7 +1765,7 @@ Object.assign(OrderDeskV3.prototype, {
      are cancelled the market must have traded on that root in the last 5 s (NOT FLAT "market not trading" every 10 s); a close
      never exceeds what the agent's trade holds, and when its part is closed and the account holds more, the job ends with a
      warning; not flat 10 s after the start, NOT FLAT every 10 s. */
-  agentMarketShut(t) { return this.marketShutForce !== null ? this.marketShutForce : this.agentAnyTime ? false : marketShut(t); },
+  agentMarketShut(t) { return this.marketShutForce !== null ? this.marketShutForce : this.agentAnyTime ? false : marketShut(t) || agentMarketClosed(t); },   // 0.5.2 review: the calendar's halts too (ChartBridgeCme.Closed)
   agentTradingNow(root, t) { return t - (this.lastAt[root] || -Infinity) <= AGENT_TIMING.tradingFreshMs; },
   agentOwnsPair(a, root) { return this.ownerOf(a.account, root) === 'agent:' + a.id; },
   /** why an account takes no exit (ChartBridgeAccounts.ExitAllowed's words), or null */

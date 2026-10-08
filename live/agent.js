@@ -62,7 +62,7 @@ function create(o) {
     chosen: String(readJson(KEYS.chosen) || ''), shown: popout, layout: '', cidSeq: 0,
     orders: new Map(), pending: new Map(), propEnds: [],
     keys: { accept: '', reject: '', notes: [], from: '' },
-    killConfirm: 0, autoConfirm: 0, rulesEdit: false, acctEdit: false, acctAsk: '', feedFilter: 'all', rows: null,
+    killConfirm: 0, autoConfirm: 0, rulesEdit: false, acctEdit: false, acctAsk: '', acctAskMode: '', feedFilter: 'all', rows: null,
     chart: null, chartRoot: '', chartTf: 'm1', contract: '',
     motion: AC.motionPref(storage), drawer: '', exits: new Map(), lightSig: '', lightColor: '', lightSlot: 0,
   };
@@ -640,7 +640,7 @@ function create(o) {
     attr(q('[data-k="acctOpen"]'), 'title', can.ok ? 'Any account ChartBridge says is tradable, except the bot\'s, the copier\'s and another agent\'s; only while the agent is flat' : can.why.replace('change its rules', 'choose its account'));
     put(q('[data-k="acctEdit"]'), 'hidden', !S.acctEdit || !!S.acctAsk);
     put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
-    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(a, S.acctAsk));
+    if (S.acctAsk) { S.acctAskMode = a.mode; put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(a, S.acctAsk, S.version)); }   // keepMode: the mode this question names
     setHtml(q('[data-k="rules"]'), AC.rulesLines(a.rules).map(([k, v]) => '<span>' + esc(k) + '</span><span class="mono">' + esc(v) + '</span>').join('') || '<span>Rules</span><span>not known yet</span>');
     const ro = q('[data-k="rulesOpen"]');
     put(ro, 'disabled', !S.signedIn || !can.ok);
@@ -898,12 +898,12 @@ function create(o) {
     setTimeout(() => { if (el.textContent === t) put(el, 'textContent', ''); }, 6000);
   }
   function others() { return { bot: S.bot, copier: S.copier, agents: agents.list() }; }
-  function ctxNow(a) { return { workingEntry: AC.workingEntries(S.orders.values(), a).length > 0, openProposals: props.open(a.agent).length, roots: servedRoots() }; }
+  function ctxNow(a) { return { workingEntry: AC.workingEntries(S.orders.values(), a).length > 0, openProposals: props.open(a.agent).length, roots: servedRoots(), version: S.version, askedMode: S.acctAsk ? S.acctAskMode : a.mode }; }
   function sendAccount(name) {
     const a = cur(); if (!a) return;
     const r = AC.accountChange(a, name, AC.accountChoices(S.accounts, a, others()), ctxNow(a));
     if (r.error) { put(q('[data-k="acctWhy"]'), 'textContent', r.error); return; }
-    if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; sentLine('acctWhy', 'Sent: its mode (' + (AC.MODE_NAME[a.mode] || 'Shadow') + ') is kept.'); }
+    if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; sentLine('acctWhy', r.msg.keepMode ? 'Sent: its mode (' + AC.MODE_NAME[r.msg.keepMode] + ') is kept.' : 'Sent: it goes to Shadow (ChartBridge before 0.5.2).'); }
     renderPanel();
   }
   function openRules() {

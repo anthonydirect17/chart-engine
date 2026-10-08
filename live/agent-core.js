@@ -260,8 +260,12 @@ function accountChoices(accountsMsg, agent, others) {
 }
 /**
  * The page's change of the agent's account: { error } or { msg, live, confirm }. confirm, for a LIVE account, is the one
- * question the page asks first, in the page ("Manrae will trade LIVE account X. Continue?"). ChartBridge checks every rule
- * again (section 6).
+ * question the page asks first, in the page ("Agent demo will trade LIVE account X in Auto. Continue?"). ChartBridge checks
+ * every rule again (section 6). ctx: { workingEntry, openProposals, roots, version (ChartBridge's hello), askedMode (the mode
+ * the shown question named; the agent's mode when no question was asked) }.
+ * ChartBridge 0.5.2 and its review: the agent keeps its mode only when the message says which mode the page showed
+ * (keepMode) and that is still its mode; keepMode goes only to 0.5.2 or later (0.5.1 refuses a key it does not know), and an
+ * older ChartBridge puts the agent in Shadow, so its question says Shadow.
  */
 function accountChange(agent, name, choices, ctx, cid) {
   const a = agent || {}, cur = agentAccount(a).name, c = ctx || {};
@@ -276,13 +280,20 @@ function accountChange(agent, name, choices, ctx, cid) {
   const msg = { type: 'agentAccount' };
   if (cid) msg.cid = cid;
   msg.agent = a.agent; msg.account = name;
-  return { msg, live: !ch.sim, confirm: ch.sim ? '' : liveQuestion(a, name) };
+  const keeps = keepsMode(c.version), asked = MODES.includes(c.askedMode) ? c.askedMode : MODES.includes(a.mode) ? a.mode : 'shadow';
+  if (keeps) msg.keepMode = asked;
+  return { msg, live: !ch.sim, confirm: ch.sim ? '' : liveQuestion(Object.assign({}, a, { mode: asked }), name, c.version), mode: keeps ? asked : 'shadow' };
 }
-/** The one question before an agent takes a LIVE account: it names the mode the agent keeps (ChartBridge 0.5.2, Anthony
- *  2026-10-08: an account change keeps the mode; the review's S5). Not confirmed: nothing is sent, the account stays. */
-function liveQuestion(a, name) {
-  const mode = MODE_NAME[a && a.mode] || 'Shadow';
-  return 'Agent ' + (a && validId(a.agent) ? a.agent : agentName(a)) + ' will trade LIVE account ' + name + ' in ' + mode + (mode === 'Shadow' ? ' (nothing is placed until you choose Copilot or Auto)' : '') + '. Continue?';
+/** Does this ChartBridge keep the mode when the account changes (0.5.2 or later, with keepMode)? */
+function keepsMode(version) { return atLeast(version, '0.5.2'); }
+/** The one question before an agent takes a LIVE account: it names the mode the agent will be in (ChartBridge 0.5.2, Anthony
+ *  2026-10-08: an account change keeps the mode; the review's S5). Before 0.5.2 ChartBridge puts the agent in Shadow, and the
+ *  question says so. Not confirmed: nothing is sent, the account stays. */
+function liveQuestion(a, name, version) {
+  const who = 'Agent ' + (a && validId(a.agent) ? a.agent : agentName(a)) + ' will trade LIVE account ' + name;
+  const mode = keepsMode(version) ? MODE_NAME[a && a.mode] || 'Shadow' : 'Shadow';
+  const older = !keepsMode(version) && a && a.mode && a.mode !== 'shadow' ? ' This ChartBridge (before 0.5.2) puts it in Shadow when its account changes.' : '';
+  return who + ' in ' + mode + (mode === 'Shadow' ? ' (nothing is placed until you choose Copilot or Auto)' : '') + '.' + older + ' Continue?';
 }
 
 /* ======================================================================== modes */
@@ -899,7 +910,7 @@ return {
   validId, parseVersion, atLeast, offText,
   createAgents, pickAgent, agentName,
   parseRules, rulesLines, rulesForm, rulesChangeable, rulesChange, durationText,
-  accountMark, agentAccount, accountChoices, accountChange, liveQuestion,
+  accountMark, agentAccount, accountChoices, accountChange, keepsMode, liveQuestion,
   modesAllowed, accountTradable, modeMsg, killMsg,
   countdown, createProposals, endText, legPrices,
   createFeed, planLine,

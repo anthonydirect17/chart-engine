@@ -144,7 +144,7 @@
 //   proposal on demand), /test/bot-withdraw?id=, /test/account?name=EVAL-A&connection=lost|connected|disabled,
 //   /test/restart?lost=1 (managed strategies resume, or with lost=1 cannot), /test/v3 (the v3 state as JSON).
 //   --agents=demo                   (with --v3) ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1, docs/AGENT_TAB.md):
-//                                   config.txt's `agents` list; hello says fake-0.5.0. The made-up accounts SIM-AG1 and SIM-AG2 (Sim, checked)
+//                                   config.txt's `agents` list; hello says fake-0.5.2. The made-up accounts SIM-AG1 and SIM-AG2 (Sim, checked)
 //                                   are added for agents to take; every agent starts on Sim101 (no account file) in shadow.
 //                                   The agents listen on /agent/<id> (no Origin, header X-ChartBridge-Agent: the secret).
 //   --agent-any-time                no entry window and no flat time for the agents (smokes run at any hour)
@@ -871,7 +871,7 @@ server.on('upgrade', (req, sock) => {
     for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
   }
-  if (V3) { hello.features = (hello.features || []).concat(['v3']); hello.version = AGENTS.length ? 'fake-0.5.0' : 'fake-0.4.0'; }   // protocol v3 (quote-only markets are told per instrument); 0.5.0 with agents
+  if (V3) { hello.features = (hello.features || []).concat(['v3']); hello.version = AGENTS.length ? 'fake-0.5.2' : 'fake-0.4.0'; }   // protocol v3 (quote-only markets are told per instrument); 0.5.2 with agents (its keepMode)
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {
