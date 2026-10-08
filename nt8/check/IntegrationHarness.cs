@@ -19,6 +19,9 @@
 //   X9-X11 the review fixes (fix1: a merged entry after a restart; fix2: Sim101 never both the bot's account and a follower).
 //   X12 the copier and Merge never act on one account (lead's default): Merge is refused on a copier follower while the copier
 //      is on, and an account with a Merge running cannot become a follower until the swap ends.
+//   X13 0.5.0 agents with every lane: the one v3 handshake tells the agent lane too (a page that signs in first, then sends client,
+//      gets each agent's strip); an agent on an account the copier and the bot use stands down in plain words, and neither the
+//      copier nor the bot is changed by it; a page entry and a bot entry on an agent-owned pair are refused at the one choke point.
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -187,6 +190,7 @@ public static class IntegrationHarness
             MergedThenRestart();   // fix1 (F4); it restarts ChartBridge's memory (the copier's is its own)
             Sim101NeverAFollowerWithTheBot();
             MergeNeverOnAFollower();   // X12 (last: SIM-G stays listed as a follower)   // X10, X11: review 2 findings 3 and 9 (last: Sim101 stays listed as a follower)
+            AgentsWithTheLanes();   // X13: 0.5.0, the agent channel with every lane (last: it stops the agents)
         }
         catch (Exception ex) { Check(false, "integration harness threw: " + ex); }
         finally
@@ -712,5 +716,33 @@ public static class IntegrationHarness
         Check(!Rejected(""), "X12: once the swap has ended it can be a follower: " + Last());
         Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"fh3\",\"account\":\"SIM-H\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
         Clean(h);
+    }
+
+    // ------------------------------------------------------------ X13: 0.5.0, the agent channel with every lane
+    static void AgentsWithTheLanes()
+    {
+        ChartBridgeAgents.ReadConfig("agents", "xa");
+        ChartBridgeAgents.Start(false);
+        try
+        {
+            List<string> got = new List<string>();
+            ChartBridgeClient late = new ChartBridgeClient(null, 73) { Origin = "http://localhost:8765" };
+            late.Tap = x => { lock (got) got.Add(x); };
+            Clients()[73] = late;
+            ChartBridgeOrders.OnMessage(late, "auth", "{\"type\":\"auth\",\"token\":\"" + token + "\"}");
+            bool before;
+            lock (got) before = got.Any(m => m.StartsWith("{\"type\":\"agent\""));
+            ChartBridgeAccounts.OnMessage(late, "client", "{\"type\":\"client\",\"v\":3}");
+            string strip;
+            lock (got) strip = got.FirstOrDefault(m => m.StartsWith("{\"type\":\"agent\",\"agent\":\"xa\"")) ?? "";
+            Check(!before && strip != "", "X13: a page that signs in before its client message gets each agent's strip once it is v3 (the one handshake)");
+            // xa starts on Sim101 by default: Sim101 is the bot's account and a copier follower here (X10, X11): it stands down plainly
+            string sd = ChartBridgeAgents.Get("xa").AccountConflict() ?? "";
+            Check(sd.StartsWith("Sim101 is also ") && sd.Contains("choose an account for agent xa on the Agent tab") && strip.Contains("\"standDown\":\"Sim101 is also"),
+                  "X13: an agent on the bot's or the copier's account stands down in plain words: " + sd);
+            Check(ChartBridgeCopier.Enabled && ChartBridgeAgents.EntryCheck("page", lead, "MNQ") == null, "X13: the copier is left as it was; the agent owns nothing, so the page is free");
+            Clients().TryRemove(73, out late);
+        }
+        finally { ChartBridgeAgents.Stop(); ChartBridgeAgents.ResetConfig(); }
     }
 }

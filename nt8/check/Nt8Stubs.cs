@@ -122,6 +122,7 @@ namespace NinjaTrader.Cbi
         public double LimitPriceChanged { get; set; }
         public double StopPriceChanged { get; set; }
         public int QuantityChanged { get; set; }
+        public TimeInForce TimeInForce { get; set; }   // 0.5.0 agents: the harness checks an agent entry is Day and its legs GTC
     }
     public class Position
     {
@@ -178,7 +179,7 @@ namespace NinjaTrader.Cbi
                                  double limitPrice, double stopPrice, string oco, string name, DateTime gtd, CustomOrder customOrder)
         {
             return new Order { Account = this, Instrument = instrument, OrderAction = action, OrderType = orderType, Quantity = quantity, LimitPrice = limitPrice,
-                               StopPrice = stopPrice, Oco = oco, Name = name, OrderState = OrderState.Initialized };
+                               StopPrice = stopPrice, Oco = oco, Name = name, OrderState = OrderState.Initialized, TimeInForce = timeInForce };
         }
         public void Submit(IEnumerable<Order> orders) { foreach (Order o in orders) { Calls.Add("submit " + o.Name + " " + o.OrderAction + " " + o.OrderType + " " + o.Quantity + " L" + o.LimitPrice + " S" + o.StopPrice + " oco:" + o.Oco); o.OrderState = OrderState.Working; Orders.Add(o); } Broker("submit", orders); }
         public void Change(IEnumerable<Order> orders) { foreach (Order o in orders) Calls.Add("change " + o.Name + " L" + o.LimitPriceChanged + " S" + o.StopPriceChanged + " Q" + o.QuantityChanged); Broker("change", orders); }

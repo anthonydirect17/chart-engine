@@ -222,7 +222,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Regex RestingNameRx = new Regex("^CB#([0-9a-f]{8}) atm s([0-9]{1,9}) t([0-9]{1,9})(?: (?:sl|mit)){0,1}$");   // 0.4.0 B1: " sl" stop-limit, " mit" MIT
         private static readonly Regex PlanNameRx = new Regex("^CB#([0-9a-f]{8}) plan s([0-9]{1,9}(?:\\.[0-9]{1,8})?) t([0-9]{1,9}(?:\\.[0-9]{1,8})?)$");
 
-        private static bool IsEntryName(string name) { return name != null && (EntryNameRx.IsMatch(name) || RestingNameRx.IsMatch(name) || PlanNameRx.IsMatch(name) || IsStrategyName(name)); }   // 0.4.0 B1: "CB#1a2b3c4d sg"
+        private static bool IsEntryName(string name) { return name != null && (EntryNameRx.IsMatch(name) || RestingNameRx.IsMatch(name) || PlanNameRx.IsMatch(name) || IsStrategyName(name) || ChartBridgeAgents.IsEntryName(name)); }   // 0.4.0 B1: "CB#1a2b3c4d sg"   // 0.5.0 agents: "CB#1a2b3c4d ag:manrae s8 t16"
         private static bool IsResting(Order o) { return o.OrderType == OrderType.Limit || o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit || o.OrderType == OrderType.MIT; }   // 0.4.0 B1: stop-limit and MIT entries rest too
         private static readonly Regex LegNameRx = new Regex("^CB#([0-9a-f]{8}) (stop|target|exit) f([0-9]{1,6}) q([0-9]{1,6}) p([0-9]{1,9}(?:\\.[0-9]{1,8})?)(?: k([1-3])){0,1}$");   // 0.4.0 B1: " k2", a strategy's target bucket
 
@@ -273,7 +273,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return m.Success && m.Groups[2].Value != "exit" ? m.Groups[2].Value : MergedRole(name) ?? "other";   // 0.4.0 B4: merged legs
         }
 
-        private static bool IsExit(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return m.Success && m.Groups[2].Value == "exit"; }
+        private static bool IsExit(Order o) { Match m = LegNameRx.Match(AgentLegName(o.Name)); return m.Success && m.Groups[2].Value == "exit"; }   // 0.5.0 agents: "CB#<tag> ag:<id> protect f.." is an exit
 
         // A ChartBridge stop or target (not an entry, not a market exit).
         private static bool IsChartBridgeLeg(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return (m.Success && m.Groups[2].Value != "exit") || IsMergedLeg(o); }   // 0.4.0 B4: merged legs
@@ -434,6 +434,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (client.Trader) MergeOnAuth(client);   // 0.4.0 B4: a Merge cut by a restart is told to each page that signs in
             if (client.Trader) ChartBridgeCopier.AfterAuth(client);   // 0.4.0 copier: a v3 page gets the copier's state
             ChartBridgeBot.AfterAuth(client);   // 0.4.0 bot: a signed-in v3 page gets the bot strip and its open proposals
+            try { ChartBridgeAgents.AfterAuth(client); } catch (Exception ex) { ChartBridgeServer.Log("agents error: " + ex.Message); }   // 0.5.0 agents: every agent's strip, open proposals, last plans and notes
             SendManagedTo(client);   // 0.4.0 B1: every live managed entry, to a signed-in v3 page
         }
 
@@ -656,10 +657,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             return false;
         }
 
-        private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, out Order placed)
+        private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, out Order placed) { return PlaceOrder(top, bracketBody, cid, strategyBody, bot, null, out placed); }
+
+        // agent (0.5.0 agents): the agent id when an agent places it (ChartBridgeAgents.cs, PlaceAgentEntry), else null.
+        private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, string agent, out Order placed)
         {
             string planTag, why;
-            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
+            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
             if (planTag != null)
             {
                 // The record is what a recompile reads. Its name holds the same ticks, so a failed write does not refuse the
@@ -671,7 +675,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return why;
         }
 
-        private static string PlaceOrderLocked(string top, string bracketBody, string cid, string strategyBody, bool bot, out string planTag, out Order placed)
+        private static string PlaceOrderLocked(string top, string bracketBody, string cid, string strategyBody, bool bot, string agent, out string planTag, out Order placed)
         {
             planTag = null; placed = null;
             string accountName = Str(top, "account"), root = (Str(top, "root") ?? "").ToUpperInvariant();
@@ -680,9 +684,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (account == null) return why;
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
             if (inst == null) return "instrument " + root + " is not served by ChartBridge";
+            // 0.5.0 agents: the owner lock, here where every entry of the page, the bot and every agent passes (the copier's own
+            // entries ask the same in its Eligible): an agent's (account, root) refuses every other source; an agent is refused
+            // wherever anything else is held or working. Exits never come here.
+            // A page MARKET order that only reduces (no bracket, no strategy, the other side of the position by both readings, at most
+            // the smaller of them) is an exit: it passes. A resting page order there is refused (it would outlive the position).
+            bool pageReduces = false;
+            int rq;
+            if (ChartBridgeAgents.Enabled && !bot && agent == null && kind == "market" && bracketBody == null && strategyBody == null && Int(top, "qty", out rq) == 1 && rq >= 1)
+            {
+                int pn = SignedPosition(account, inst), pe = EffectivePosition(account, inst), along = Str(top, "side") == "buy" ? -1 : 1;
+                pageReduces = pn * along > 0 && pe * along > 0 && rq <= Math.Min(Math.Abs(pn), Math.Abs(pe));
+            }
+            string ownerWhy = pageReduces ? null : ChartBridgeAgents.EntryCheck(agent != null ? "agent:" + agent : bot ? "bot" : "page", account, root);
+            if (ownerWhy != null) return ownerWhy;
             if (side != "buy" && side != "sell") return "side must be buy or sell";
             if (kind != "market" && kind != "limit" && kind != "stop" && !(OrderTypesOn && NewKind(kind))) return "kind must be market, limit or stop";   // 0.4.0 B1: stopLimit, mit
             if (bot && (NewKind(kind) || strategyBody != null)) return "the bot places market, limit and stop entries with a plain stop and target only";   // 0.4.0 bot: (integration) never a new kind or an Order Strategy
+            if (agent != null && ((kind != "limit" && kind != "stopLimit") || strategyBody != null || bracketBody == null)) return "an agent's entry is a limit or a stop-limit with a stop and a target";   // 0.5.0 agents: never market, stop or MIT, never a strategy
             int qty;
             if (Int(top, "qty", out qty) != 1 || qty < 1) return "qty must be a whole number of 1 or more";
             bool isBuy = side == "buy";
@@ -691,6 +710,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             int posNow = SignedPosition(account, inst), posEff = EffectivePosition(account, inst), pendBuy, pendSell;
             int cap = CapFor(root), pos = isBuyOrder(top) ? Math.Max(posNow, posEff) : Math.Min(posNow, posEff);
             if (bot) cap = Math.Min(cap, ChartBridgeBot.MaxQty);   // 0.4.0 bot: the 1 contract rail, on the order and the position (gate 3's own count)
+            if (agent != null) cap = Math.Min(cap, ChartBridgeAgents.CapFor(agent, root));   // 0.5.0 agents: the agent's maxQty, never above the hard ceiling (minis 2, micros 20), on the order and the position
             if (qty > cap) return "qty " + qty + " is over the " + root + " cap of " + cap + " (maxQty." + root + " in config.txt)";
             PendingOrders(account, inst, out pendBuy, out pendSell);
             long worst = isBuy ? (long)pos + pendBuy + qty : (long)(-pos) + pendSell + qty;
@@ -707,6 +727,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (Has(top, "price")) return "a market order takes no price";
             string newKind = OrderTypesOn ? NewKindProblem(top, kind, root, tick, isBuy, price, out limitPx) : null;   // 0.4.0 B1: a stop-limit's limit
             if (newKind != null) return newKind;
+            if (agent != null) { string agentWhy = ChartBridgeAgents.PlacingProblem(agent, kind, isBuy, price, limitPx, tick); if (agentWhy != null) return agentWhy; }   // 0.5.0 agents: its window, mode, kill and stop-limit band, here too
             int stopTicks = 0, targetTicks = 0;
             if (bracketBody != null)
             {
@@ -735,6 +756,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     return "the bracket would put a leg at or below zero from " + (kind == "market" ? "the last price " : "the entry price ") + CbJson.Num(from);
             }
             bool wantsLegs = stopTicks > 0 || targetTicks > 0;
+            if (agent != null && (stopTicks < 1 || targetTicks < 1)) return "every agent entry needs a stop and a target";   // 0.5.0 agents
             // Refused only when both readings agree the order reduces the position (legs on a reducing order
             // could open a new position; one stale reading must not block a fresh entry).
             bool reduces = ((posNow > 0 && !isBuy) || (posNow < 0 && isBuy)) && ((posEff > 0 && !isBuy) || (posEff < 0 && isBuy));
@@ -744,6 +766,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
             // 0.3.8: a resting entry is named "atm": its ticks can change before the fill (plan), and travel with it when moved.
             string name = "CB#" + tag + (bot ? " bot" : kind == "market" ? "" : " atm") + (strat != null ? StrategyNamePart(strat) : " s" + stopTicks + " t" + targetTicks) + KindSuffix(kind);   // 0.4.0 bot: "bot" names a bot entry   // 0.4.0 B1: sg, sl, mit   // 0.4.0 fix1 (F5): "sg s20", the stop ticks in the name
+            if (agent != null) name = "CB#" + tag + " ag:" + agent + " s" + stopTicks + " t" + targetTicks;   // 0.5.0 agents: "CB#1a2b3c4d ag:manrae s8 t16" (any kind; recovery reads it as a v2 entry)
             if (kind != "market" && strat == null) { SetPlan(tag, stopTicks, targetTicks); planTag = tag; }   // in memory now; PlaceOrder writes the file after PlaceLock
             OrderType type = OrderTypeOf(kind);   // 0.4.0 B1: also StopLimit and MIT
             Order order = account.CreateOrder(inst, isBuy ? OrderAction.Buy : OrderAction.Sell, type, OrderEntry.Manual, TimeInForce.Day, qty,
@@ -765,7 +788,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception) { lock (Sync) Ours.Remove(order); if (!bot) ChartBridgeCopier.LeaderEntryDropped(order); throw; }   // 0.4.0 copier: review 2: never reached NinjaTrader, nothing copied; 0.4.3 review (4): never sent, so never "may still fill"
             placed = order;
             if (!bot) ChartBridgeCopier.LeaderEntrySent(order);   // 0.4.0 copier: orders mode places the followers' orders now (a rejected entry is dropped)
-            ChartBridgeServer.Log((bot ? "bot " : "") + "order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +
+            ChartBridgeServer.Log((bot ? "bot " : agent != null ? "agent " + agent + " " : "") + "order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +
                 (strat != null ? " with strategy " + strat.Json : wantsLegs ? " with bracket stop " + stopTicks + " / target " + targetTicks + " ticks" : "") + " on " + account.Name);
             return null;
         }
@@ -846,6 +869,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!IsResting(o)) return "only a resting limit or stop entry has a planned stop and target";
             int st, tt, hs = TicksOf(top, "stopTicks", out st), ht = TicksOf(top, "targetTicks", out tt);
             if (hs == 0 && ht == 0) return "plan needs stopTicks or targetTicks (a whole number of ticks to set it, null to remove it)";
+            if (ChartBridgeAgents.IsEntryName(o.Name) && (hs == 2 || ht == 2 || hs < 0 || ht < 0)) return "an agent's entry always has a stop and a target";   // 0.5.0 agents (lead's default): new distances of 1 or more only
             if (hs < 0) return "stopTicks must be a whole number of 1 or more, or null to remove the stop";
             if (ht < 0) return "targetTicks must be a whole number of 1 or more, or null to remove the target";
             if (MaxBracketTicks > 0 && ((hs == 1 && st > MaxBracketTicks) || (ht == 1 && tt > MaxBracketTicks)))
@@ -989,7 +1013,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             return "other";
         }
 
-        private static string OrderJson(Order o, string text)
+        private static string OrderJson(Order o, string text) { return OrderJson(o, text, null); }
+
+        // role: null for the page's (RoleFor); an agent's order messages name its flat close and protective exit (0.5.0 agents).
+        private static string OrderJson(Order o, string text, string role)
         {
             string id = IdFor(o), cid;
             lock (Sync) CidOf.TryGetValue(o, out cid);
@@ -1007,7 +1034,7 @@ namespace NinjaTrader.NinjaScript.AddOns
              .Append(",\"price\":").Append(px > 0 ? CbJson.Num(px) : "null")
              .Append(",\"avgFill\":").Append(o.Filled > 0 ? CbJson.Num(o.AverageFillPrice) : "null")
              .Append(",\"state\":").Append(CbJson.Str(StateText(o.OrderState)))
-             .Append(",\"role\":").Append(CbJson.Str(RoleFor(o)))
+             .Append(",\"role\":").Append(CbJson.Str(role ?? RoleFor(o)))
              .Append(",\"oco\":").Append(string.IsNullOrEmpty(o.Oco) ? "null" : CbJson.Str(o.Oco));
             if (!string.IsNullOrEmpty(text)) b.Append(",\"text\":").Append(CbJson.Str(text));
             // 0.3.8: a working resting entry's planned stop and target, ticks from its fill (null = none). Pages that do not
@@ -1056,6 +1083,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeAccounts.SendScoped(account, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null), true, o);   // 0.4.0 review 2: o for a v3 page's "by"
             try { if (ChartBridgeBot.Watching(o)) ChartBridgeBot.OnOrderUpdate(account, o, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null)); }   // 0.4.0 bot: the bot sees its own orders
             catch (Exception ex) { ChartBridgeServer.Log("bot order update error: " + ex.Message); }
+            try { if (ChartBridgeAgents.AgentOf(o) != null) ChartBridgeAgents.OnOrderUpdate(account, o, AgentOrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null)); }   // 0.5.0 agents: each agent sees its own orders
+            catch (Exception ex) { ChartBridgeServer.Log("agent order update error: " + ex.Message); }
+            try { ChartBridgeAgents.OnAccountChange(account, o.Instrument, o); }   // 0.5.0 agents: agentState follows every order of an agent's account and roots
+            catch (Exception ex) { ChartBridgeServer.Log("agent state error: " + ex.Message); }
             if (IsDone(o.OrderState)) Forget(o);   // after OrderJson, which would otherwise hand out a new id
             ChartBridgeCopier.OnOrderUpdate(account, o);   // 0.4.0 copier: follower fills get their stop; the leader's stop moves are followed
         }
@@ -1110,6 +1141,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             pairs = new List<Pair>();
             deferred = false;
             Match m = EntryNameRx.Match(entry.Name ?? ""), am = RestingNameRx.Match(entry.Name ?? ""), pm = PlanNameRx.Match(entry.Name ?? "");
+            if (!m.Success) { Match gm = ChartBridgeAgents.EntryRx.Match(entry.Name ?? ""); if (gm.Success) m = Regex.Match(gm.Groups[1].Value + " " + gm.Groups[3].Value + " " + gm.Groups[4].Value, "^([0-9a-f]{8}) ([0-9]{1,9}) ([0-9]{1,9})$"); }   // 0.5.0 agents: "CB#<tag> ag:<id> s8 t16" is a v2 entry (tag, stop, target in groups 1 to 3, as EntryNameRx)
             if ((!m.Success && !am.Success && !pm.Success) || entry.Account == null) return null;
             Match named0 = m.Success ? m : am.Success ? am : pm;
             Bracket br = new Bracket { Account = entry.Account, Instrument = entry.Instrument, Tag = named0.Groups[1].Value, EntryIsBuy = IsBuy(entry), Resting = IsResting(entry) };
@@ -1164,7 +1196,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Dictionary<int, Pair> byFill = new Dictionary<int, Pair>();
             foreach (Order leg in orders)
             {
-                Match lm = LegNameRx.Match(leg.Name ?? "");
+                Match lm = LegNameRx.Match(AgentLegName(leg.Name));   // 0.5.0 agents: an agent's protective exit counts as an exit
                 if (!lm.Success || lm.Groups[1].Value != br.Tag) continue;
                 int f = int.Parse(lm.Groups[3].Value, CultureInfo.InvariantCulture), q = int.Parse(lm.Groups[4].Value, CultureInfo.InvariantCulture);
                 double px = double.Parse(lm.Groups[5].Value, CultureInfo.InvariantCulture);
@@ -1520,8 +1552,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool fresh = hasStop && root != null && FreshLast(root, FreshTickMs, out last);
             if (fresh && (br.EntryIsBuy ? sp >= last : sp <= last))
             {
+                string agentOf = ChartBridgeAgents.AgentOfTag(br.Tag);   // 0.5.0 agents: an agent entry's exit is "CB#<tag> ag:<id> protect f<n>" (at most 43 characters)
                 Order x = br.Account.CreateOrder(br.Instrument, exit, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
-                    "CB#" + br.Tag + " exit" + mark, NinjaTrader.Core.Globals.MaxDate, null);
+                    agentOf != null ? "CB#" + br.Tag + " ag:" + agentOf + " protect f" + filled.ToString(CultureInfo.InvariantCulture) : "CB#" + br.Tag + " exit" + mark, NinjaTrader.Core.Globals.MaxDate, null);
                 lock (Sync) { IdFor(x); Ours.Add(x); Manage(br.Account, br.Instrument); }
                 br.Account.Submit(new[] { x });
                 Alarm(where + ": price had already passed the stop level " + CbJson.Num(sp) + " (last " + CbJson.Num(last) + "); exited " + qty + " at market");

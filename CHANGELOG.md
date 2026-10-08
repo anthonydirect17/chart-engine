@@ -72,6 +72,75 @@ lead's default.
 - Tests: `test/agent.test.js`, the agent part of `test/fake-v3.test.js`, `npm run smoke:agent` (screenshots
   `test/out/agent-*.png`). The chart draws exactly as in 1.16.0. Page only, no recompile; COMPAT stays at ChartBridge 0.3.2.
 
+## ChartBridge 0.5.0 (2026-10-08): the agent channel
+
+AI trading agents (the first is Manrae; any number may follow) trade through ChartBridge, inside per-agent rules ChartBridge
+enforces. AI is never in the order path: an agent sends plans, and ChartBridge places every order itself, from the plan's
+parameters. Contract v1 of 2026-10-08 and Anthony's rulings are in `nt8/PROTOCOL.md`, "Agent channel (`agents`, 0.5.0)", with
+every lead's default in its "as built" list. The chart's own version is unchanged (the Agent tab ships with the page).
+
+- **Off until named.** `agents = manrae` in `config.txt` (a comma list) turns the channel on for those ids; with no line,
+  `/agent/...` answers 404 and nothing changes. Each agent has its own secret, account, rules, day file and log next to
+  `config.txt`, its own mode (every start in shadow), heartbeat and kill switch: `nt8/ChartBridgeAgents.cs`, one object per id.
+- **Plans, checked in order.** A plan is refused at the first of twelve checks that fails (strict message, the account and the
+  files, the root and kind, the size, the risk in dollars, the expiry, the entry window, one at a time, the day's limits, the
+  owner lock, the price). Shadow shows it; copilot proposes it until the plan's own expiry; auto places it. Entries are limit
+  or stop-limit only, always with a stop and a target, never above the hard ceiling (minis 2, micros 20, a code constant).
+- **ChartBridge's own timers.** An unfilled entry is cancelled at its expiry and at the end of the entry window; at the flat
+  time ChartBridge cancels the agent's orders and closes its position at market, with the agent gone too, and says so loudly
+  until it is flat.
+- **The owner lock.** While an agent holds a position or a working entry on its account and root, entries from the page, the
+  bot, the copier and other agents are refused there; exits always pass (Flatten, cancels, moving a stop or target, an order
+  that only reduces). An agent never enters where anything else is held or working. One check, where every entry passes.
+- **Accounts never shared.** An agent never trades the bot's account, the copier's leader or a follower, or another agent's;
+  the bot and the copier refuse an agent's account once it is chosen on the page. An agent still on its unchosen default
+  (Sim101) claims nothing: if the bot or the copier takes that account, the agent stands down in plain words (its unfilled
+  entries cancelled) and the bot and the copier are left as they were.
+- **Fills to The Desk** carry `by` (`agent:<id>`, `bot` or `copier`) when ChartBridge knows who placed the order; nothing else
+  in the fill changes. v3 pages see `by: "agent:<id>"` on an agent's orders and legs.
+- **After two order-path reviews.** A cancel NinjaTrader does not confirm is sent again every 3 s, with a warning from the
+  second try. A backstop cancels any agent entry still working while the agent is killed, in shadow, stood down or outside its
+  window (every start is shadow, so an entry from before a restart goes at once), and the page's kill, mode, account and rules
+  wait for the agent's placing gate. A trade record left open never makes the agent own a position it did not place (current
+  session only, and only while its orders are listed or its executions followed). Only a page MARKET order may reduce an
+  agent's position; resting page orders on its pair are refused ("use Flatten, or move its stop or target"). A flatten whose
+  account leaves NinjaTrader's list keeps saying NOT FLAT and goes on when the account is back. The rest of a part-filled entry
+  that fills after the first part closed is its own trade. The rate is counted before anything else; refused plans reach the
+  pages at most once a second. After every `agentHello` the agent gets its positions and working orders.
+- **The agent socket's additions (contract section 10).** `agentState` carries its session and is sent again whenever a field
+  changes, `owns` included, at the next order or position event. `exec` carries ChartBridge's order id (`cbId`) and the order's
+  role; its `order` messages carry `orderName`, NinjaTrader's own name of the order. The flat-time close and the protective
+  exit are named with `ag:<id>` and carry the roles `flat` and `protect`. The
+  snapshot after hello covers exactly the served roots of `welcome` and ends with a `snapshot` message. Pages are unchanged.
+- **After the second reviews.** A flatten asks again whether the pair is still the agent's before it closes anything, and
+  never closes more than the agent's own trade holds. Nothing is sent while the market is shut (fixed hours: 17:00 to 18:00 on
+  weekdays, Friday 17:00 to Sunday 18:00). An agent trade that ended where ChartBridge could not see it raises an error every
+  minute while the account holds a position there. Unconfirmed cancels slow to every 30 s after 10 tries, with an error, and
+  wait while the account is disconnected. The flatten follows the agent's trade into another contract month. A first failed
+  read of `bot-account.txt` or `copier.txt` stands the agent down at once; held-back refused plans are shown within a second;
+  the day file never loses a plan id; old trade records wait for NinjaTrader's execution replay.
+- **Round 4.** While the agent owns a pair it hears of every fill there, its own or not, so a close made by hand is booked as
+  a manual exit. `welcome.rules` shows the caps ChartBridge really enforces, with `config.txt`'s bracket and distance limits,
+  and goes again when they change. The flatten cancels no leg unless the market is trading in fact; over a shut market a
+  position whose legs were already cancelled gets its stop back at the agent's own price (unless that price is through the
+  market), and the error says which. The close cap counts each close; a trade the account holds the other way is ended after
+  3 s with its realized part booked; unconfirmed cancels stop after 30 minutes with a final error; the protective exit's name
+  is at most 43 characters; a failed execution read is not taken as the replay.
+- **Round 5.** The stop ChartBridge places again over a shut market is the agent's protective leg: after a restart the pair
+  stays the agent's, the stop stays, Anthony gets an error every minute, and at the open the flatten closes it. That stop is
+  never placed beside a market close that still works, and a pair the agent does not own never loses it while it holds a
+  position. Only the cancel step waits for a trading market; a close that cannot go puts the stop back at once. The agent
+  never gets agentState before its welcome; a trade never crosses zero, so its booked result is always from real fills. A
+  fill of an order that is not the agent's reaches it as role `other` (a page order too), with the page's id.
+- **Round 6.** A late fill of an agent's entry nets against the close that ended its trade, so no ghost trade is left open;
+  an open trade on a pair flat by both readings for 5 s is ended from its own fills, with a warning when they do not add up.
+  A stop placed again after a rejected close waits for a trading market before it is cancelled. A second hello keeps the
+  agent connected and its ticks flowing, and agentState still follows the welcome.
+- **Tests.** `nt8/check/AgentHarness.cs` (inside `npm run check:orders`) runs every refusal and every timer; IntegrationHarness
+  X13 where the lanes meet; `test/fake-agent.mjs` is a made-up agent client with its test; `test/nt8-agents.test.js` guards the
+  source. The bot channel, the copier and every other lane behave as in 0.4.3 except where the contract requires (refusing an
+  agent's account, the owner lock, `by` on fills).
+
 ## ChartBridge 0.4.3 (2026-10-07): the copier never crosses zero, copies a fixed quantity, and can have no leader
 
 Found on WORK on Sim, test card section 5 (the copier), Anthony's copier test of 2026-10-07 15:01 ET:

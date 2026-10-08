@@ -86,11 +86,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (o == null) return "";
             try
             {
+                string agent = ChartBridgeAgents.AgentOf(o);   // 0.5.0 agents: ,"by":"agent:<id>" for an agent's entry, its legs and its flat close
+                if (agent != null) return ",\"by\":" + CbJson.Str("agent:" + agent);
                 if (BotNameRx.IsMatch(o.Name ?? "") || ChartBridgeBot.Watching(o)) return ",\"by\":\"bot\"";
                 if (ChartBridgeCopier.IsCopierOrder(o)) return ",\"by\":\"copier\"";
             }
             catch (Exception ex) { ChartBridgeServer.Log("order by error: " + ex.Message); }
             return "";
+        }
+
+        // 0.5.0 (fills to The Desk, contract section 8): who placed an order, when ChartBridge knows: "agent:<id>", "bot" or "copier";
+        // null otherwise (the page's own orders, orders placed in NinjaTrader, an order not found).
+        public static string SourceOf(Order o)
+        {
+            if (o == null) return null;
+            string agent = ChartBridgeAgents.AgentOf(o);
+            if (agent != null) return "agent:" + agent;
+            if (BotNameRx.IsMatch(o.Name ?? "") || ChartBridgeBot.Watching(o)) return "bot";
+            if (ChartBridgeCopier.IsCopierOrder(o)) return "copier";
+            return null;
         }
 
         public static bool AccountChecks { get { return ChartBridgeSwitches.Get("accountChecks"); } }
@@ -123,6 +137,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             try { ChartBridgeCopier.AfterAuth(client); } catch (Exception ex) { ChartBridgeServer.Log("copier error: " + ex.Message); }
             try { ChartBridgeBot.AfterAuth(client); } catch (Exception ex) { ChartBridgeServer.Log("bot error: " + ex.Message); }
+            try { ChartBridgeAgents.AfterAuth(client); } catch (Exception ex) { ChartBridgeServer.Log("agents error: " + ex.Message); }   // 0.5.0 agents
             try { ChartBridgeOrders.SendManagedAfterClient(client); } catch (Exception ex) { ChartBridgeServer.Log("managed error: " + ex.Message); }
         }
 
