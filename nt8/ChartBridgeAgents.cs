@@ -55,6 +55,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return why ?? PlaceOrder(top, bracketBody, null, null, false, agentId, out placed);
         }
         internal static object AgentPlaceLock { get { return PlaceLock; } }
+        internal static string AgentIdFor(Order o) { return IdFor(o); }   // the id the agent's order messages carry ("o12")
         internal static string AgentPriceProblem(string root, double tick, string kind, bool isBuy, double price) { return PriceProblem(root, tick, kind, isBuy, price); }
         internal static bool AgentOnGrid(double price, double tick) { return OnGrid(price, tick); }
         internal static string AgentLastPrice(string root, out double p) { return LastPrice(root, out p); }
@@ -414,7 +415,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string odd = ChartBridgeAgent.UnknownKey(d, keys);
                 if (odd != null) { PageReject(client, cid, id, "unknown key \"" + odd + "\" in " + type); return; }
                 if (d.ContainsKey("cid") && cid == null) { PageReject(client, cid, id, "cid must be a plain string"); return; }
-                if (type != "agentSeen" && !RateOk(client.Actions)) { PageReject(client, cid, id, "too many order actions (more than " + MaxActionsPerSecond + " a second)"); return; }
+                if (!RateOk(client.Actions)) { PageReject(client, cid, id, "too many order actions (more than " + MaxActionsPerSecond + " a second)"); return; }
                 ChartBridgeAgent a = Get(ChartBridgeAgent.S(d, "agent") ?? "");
                 if (a == null) { PageReject(client, cid, id, "there is no agent " + (ChartBridgeAgent.S(d, "agent") ?? "(none)") + " (agents in config.txt)"); return; }
                 why = a.OnPage(type, d);
@@ -477,10 +478,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return new Rules { Roots = Roots.ToList(), MaxQty = new Dictionary<string, int>(MaxQty), EntryFrom = EntryFrom, EntryUntil = EntryUntil, FlatAt = FlatAt,
                                    MaxExpireSec = MaxExpireSec, MaxTrades = MaxTrades, MaxLosses = MaxLosses };
             }
-            // A root's maxQty: its line, else the default (NQ 2, MNQ 20; ES and MES 1, lead's default).
+            // A root's maxQty: its line, else the hard ceiling (NQ 2 and MNQ 20 are the contract's defaults; ES 2, MES 20).
             public int QtyFor(string root) { int n; return MaxQty.TryGetValue(root ?? "", out n) ? n : DefaultQty(root); }
         }
-        public static int DefaultQty(string root) { return root == "NQ" ? 2 : root == "MNQ" ? 20 : 1; }
+        public static int DefaultQty(string root) { return ChartBridgeAgents.HardCeiling(root); }   // NQ 2, MNQ 20 (the contract's defaults), ES 2, MES 20
 
         public static string Hm(int minutes) { return (minutes / 60).ToString("00", CultureInfo.InvariantCulture) + ":" + (minutes % 60).ToString("00", CultureInfo.InvariantCulture); }
         public static int ParseHm(string s)
@@ -876,12 +877,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string acct = Account;
             if (ChartBridgeBot.Enabled && string.Equals(acct, ChartBridgeBot.BotAccount, StringComparison.OrdinalIgnoreCase))
-                return acct + " is the bot's account: agent " + Id + " does not trade it (choose another account for the agent on the Agent tab)";
+                return acct + " is also the bot's account: choose an account for agent " + Id + " on the Agent tab (an agent never shares an account)";
             string cw = ChartBridgeCopier.AgentAccountRefusal(acct);
-            if (cw != null) return cw + ": agent " + Id + " does not trade it (choose another account for the agent on the Agent tab)";
+            if (cw != null) return cw.Replace(" is the copier's", " is also the copier's").Replace(" is a copier follower", " is also a copier follower") + ": choose an account for agent " + Id + " on the Agent tab (an agent never shares an account)";
             foreach (ChartBridgeAgent other in ChartBridgeAgents.All())
                 if (other != this && string.Equals(other.Account, acct, StringComparison.OrdinalIgnoreCase))
-                    return acct + " is also agent " + other.Id + "'s account: agent " + Id + " does not trade it (each agent has its own account)";
+                    return acct + " is also agent " + other.Id + "'s account: choose an account for agent " + Id + " on the Agent tab (an agent never shares an account)";
             return null;
         }
 
@@ -1241,7 +1242,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Order placed;
                 why = Place(p, null, out placed);
                 p.Result = why == null ? "placed" : "refused: " + why;
-                if (why == null) ToAgent(AnswerJson(p.Id, "placed", "placed on " + Account + "; it works until " + Iso(p.ExpiresAt)));
+                if (why == null) ToAgent(AnswerJson(p.Id, "placed", "placed on " + Account + " as order " + ChartBridgeOrders.AgentIdFor(placed) + "; it works until " + Iso(p.ExpiresAt)));
             }
             if (why != null) { lock (Sync) nRefused++; ToAgent(Reject(p.Id, why)); }
             ShowPlan(p);
@@ -1879,7 +1880,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (why == null)
             {
                 ToAgent(AnswerJson(id, "accepted", "accepted on the page"));
-                ToAgent(AnswerJson(id, cancelled ? "withdrawn" : "placed", cancelled ? "withdrawn during placement: its entry is cancelled" : "placed on " + p.Account + "; it works until " + Iso(p.P.ExpiresAt)));
+                ToAgent(AnswerJson(id, cancelled ? "withdrawn" : "placed", cancelled ? "withdrawn during placement: its entry is cancelled" : "placed on " + p.Account + " as order " + ChartBridgeOrders.AgentIdFor(placed) + "; it works until " + Iso(p.P.ExpiresAt)));
             }
             else { lock (Sync) nRefused++; ToAgent(AnswerJson(id, "refused", why)); }
             AgentLog("proposal " + id + " accepted on the page" + (why == null ? ": placed on " + p.Account + (cancelled ? " and withdrawn during placement" : "") : " but refused: " + why));
@@ -1929,8 +1930,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             return ex || WorkingEntries().Count > 0 || RulesNow().Roots.Any(r => Owns(r));
         }
 
-        // agentRules: flat keys (the strict parser allows no nesting): roots "NQ,MNQ", maxQty<ROOT> for each root named (required
-        // for each, lead's default), entryFrom, entryUntil, flatAt (HH:MM New York), maxExpireSec, maxTrades and maxLosses (0 = none).
+        // agentRules: flat keys (the strict parser allows no nesting): roots "NQ,MNQ", maxQty<ROOT> for a root named (left out: the
+        // hard ceiling; for a root not named only 0 is accepted), entryFrom, entryUntil, flatAt (HH:MM New York), maxExpireSec,
+        // maxTrades and maxLosses (0 = none).
         private string SetRules(Dictionary<string, Val> d)
         {
             Rules r = new Rules();
@@ -1942,11 +1944,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 int q;
                 if (ChartBridgeAgents.HardCeiling(root) == 0) return root + " is not a root an agent may trade (NQ, MNQ, ES, MES)";
-                if (Whole(d, "maxQty" + root, out q) != 1) return "maxQty" + root + " must be a whole number (every root named needs its maxQty)";
-                r.MaxQty[root] = q;
+                int has = Whole(d, "maxQty" + root, out q);
+                if (has < 0) return "maxQty" + root + " must be a whole number";
+                r.MaxQty[root] = has == 1 ? q : ChartBridgeAgents.HardCeiling(root);   // left out: the hard ceiling
                 if (ChartBridgeConfig.QuoteOnly(root) || ChartBridgeServer.InstrumentFor(root) == null) return root + " is not traded by ChartBridge (roots, quoteRoots in config.txt)";
             }
-            foreach (string k in new[] { "maxQtyNQ", "maxQtyMNQ", "maxQtyES", "maxQtyMES" }) { int q; if (d.ContainsKey(k) && Whole(d, k, out q) != 1) return k + " must be a whole number"; }
+            foreach (string k in new[] { "maxQtyNQ", "maxQtyMNQ", "maxQtyES", "maxQtyMES" })
+            {
+                int q;
+                if (!d.ContainsKey(k)) continue;
+                if (Whole(d, k, out q) != 1) return k + " must be a whole number";
+                if (!r.Roots.Contains(k.Substring(6)) && q != 0) return k + " is for a root not in roots: send 0 or leave it out";
+            }
             r.EntryFrom = ParseHm(S(d, "entryFrom")); r.EntryUntil = ParseHm(S(d, "entryUntil")); r.FlatAt = ParseHm(S(d, "flatAt"));
             if (r.EntryFrom < 0 || r.EntryUntil < 0 || r.FlatAt < 0) return "entryFrom, entryUntil and flatAt must be HH:MM (New York time)";
             int n;

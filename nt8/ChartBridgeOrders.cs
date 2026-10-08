@@ -684,6 +684,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (account == null) return why;
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
             if (inst == null) return "instrument " + root + " is not served by ChartBridge";
+            // 0.5.0 agents: the owner lock, here where every entry of the page, the bot and every agent passes (the copier's own
+            // entries ask the same in its Eligible): an agent's (account, root) refuses every other source; an agent is refused
+            // wherever anything else is held or working. Exits never come here.
+            // A page order that only reduces (no bracket, no strategy, the other side of the position by both readings, at most the
+            // smaller of them) is an exit: it passes.
+            bool pageReduces = false;
+            int rq;
+            if (!bot && agent == null && bracketBody == null && strategyBody == null && Int(top, "qty", out rq) == 1 && rq >= 1)
+            {
+                int pn = SignedPosition(account, inst), pe = EffectivePosition(account, inst), along = Str(top, "side") == "buy" ? -1 : 1;
+                pageReduces = pn * along > 0 && pe * along > 0 && rq <= Math.Min(Math.Abs(pn), Math.Abs(pe));
+            }
+            string ownerWhy = pageReduces ? null : ChartBridgeAgents.EntryCheck(agent != null ? "agent:" + agent : bot ? "bot" : "page", account, root);
+            if (ownerWhy != null) return ownerWhy;
             if (side != "buy" && side != "sell") return "side must be buy or sell";
             if (kind != "market" && kind != "limit" && kind != "stop" && !(OrderTypesOn && NewKind(kind))) return "kind must be market, limit or stop";   // 0.4.0 B1: stopLimit, mit
             if (bot && (NewKind(kind) || strategyBody != null)) return "the bot places market, limit and stop entries with a plain stop and target only";   // 0.4.0 bot: (integration) never a new kind or an Order Strategy
@@ -748,11 +762,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (wantsLegs && reduces) return (strat != null ? "a strategy" : "a bracket") + " can only go on an order that opens or adds; this order reduces the position";
             string copierWhy = bot ? ChartBridgeCopier.BotEntryCheck(account) : ChartBridgeCopier.LeaderEntryCheck(account, stopTicks > 0);   // 0.4.0 copier: a leader entry needs a stop while armed (integration: a bot entry is never a leader entry, and never on the leader's account; a strategy's stop counts)
             if (copierWhy != null) return copierWhy;   // 0.4.0 copier:
-            // 0.5.0 agents: the owner lock, here where every entry of the page, the bot and every agent passes (the copier's own
-            // entries ask the same in its Eligible): an agent's (account, root) refuses every other source; an agent is refused
-            // wherever anything else is held or working. Exits never come here.
-            string ownerWhy = ChartBridgeAgents.EntryCheck(agent != null ? "agent:" + agent : bot ? "bot" : "page", account, root);
-            if (ownerWhy != null) return ownerWhy;
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
             // 0.3.8: a resting entry is named "atm": its ticks can change before the fill (plan), and travel with it when moved.
             string name = "CB#" + tag + (bot ? " bot" : kind == "market" ? "" : " atm") + (strat != null ? StrategyNamePart(strat) : " s" + stopTicks + " t" + targetTicks) + KindSuffix(kind);

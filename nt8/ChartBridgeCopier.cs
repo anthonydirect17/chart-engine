@@ -727,7 +727,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Decision(a.Name, "refused", null, BotAccountWhy(a.Name) + " (copierFollower refused)");
                 return BotAccountWhy(a.Name);
             }
-            string agentWhy = on.Groups[1].Value == "true" ? ChartBridgeAgents.AccountTakenWhy(a.Name, "the copier") : null;   // 0.5.0 agents: never an agent's account as a follower (turning one off is always allowed)
+            // 0.5.0 agents: never an agent's account as a follower, on or off (turning off one already listed is always allowed)
+            bool listed;
+            lock (Lk) listed = FollowerNamed(a.Name) != null;
+            string agentWhy = on.Groups[1].Value == "true" || !listed ? ChartBridgeAgents.AccountTakenWhy(a.Name, "the copier") : null;
             if (agentWhy != null) { Decision(a.Name, "refused", null, agentWhy + " (copierFollower refused)"); return agentWhy; }
             if (on.Groups[1].Value == "true" && ChartBridgeOrders.MergeRunningOn(a))   // integration (lead's default): the copier and Merge never act on one account
                 return a.Name + " has a Merge running: it can become a copier follower once the merge has ended.";
