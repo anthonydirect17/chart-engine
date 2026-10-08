@@ -6,10 +6,13 @@
  *
  * THE LIGHT (Anthony's rules, 2026-10-08):
  *   L1 Outside the Agent tab (.kit-agent) the light runs only while in a trade (pace 'trade'), only around the panel
- *      showing that trade, and only on its border.
+ *      showing that trade, and only on its border. The caller supplies the "in a trade" state (pace 'trade' while in
+ *      one, { on: false } when flat); the kit cannot see positions. Outside the Agent tab, lighting one trade panel turns
+ *      off any other lit trade panel in the document, so only one is ever lit.
  *   L2 Never on the order ticket, order lines, Flatten or the copier. An element marked data-no-light, or inside one, or
- *      inside the chart itself (.chart-live), a ticket (.tk, tk-* classes), Flatten (.ws-flat) or the copier
- *      (.apg-cop-top, .apg-cop-g, data-copier) refuses to light, with a console note. So does a panel that holds a
+ *      inside the chart itself (.chart-live), a ticket (.tk, tk-* classes), Flatten (.ws-flat), the copier
+ *      (.apg-cop-top, .apg-cop-g, data-copier) or anything marked data-no-motion (the P&L box and the kill switch
+ *      areas bot.js marks) refuses to light, with a console note. So does a panel that holds a
  *      ticket or the copier, and any button, link, field, chip or number (.kit-btn, .kit-chip, .kit-num, .kit-big).
  *   L3 Rule R3 of docs/MOTION.md holds: numbers, prices, P&L and buttons never animate or ease. Only the border light and
  *      the panel glow fade between colours.
@@ -17,7 +20,8 @@
  *   ChartKit.light(panelEl, { on: true, color: 'profit', pace: 'trade' });   // true when lit, false when off or refused
  *   ChartKit.light(panelEl, { on: false });
  *   ChartKit.armed(panelEl, true);                                         // the soft purple armed outline
- *   ChartKit.setMotion('off');                                             // 'full' or 'off', remembered
+ *   ChartKit.setMotion('off');                                             // 'full' or 'off', remembered; also sets
+ *                                                                          // ChartMotion's Less motion when it is loaded
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(root);
@@ -31,7 +35,7 @@ const STORAGE_KEY = 'kit-motion-v1';
 const LAP = Object.freeze({ decide: 13, trade: 9 });
 
 /* L2: what never lights. INSIDE is checked on the element and every parent; HOLDS on everything under the element. */
-const NO_LIGHT = '[data-no-light], .chart-live, .tk, [class^="tk-"], [class*=" tk-"], .ws-flat, .apg-cop-top, .apg-cop-g, [data-copier]';
+const NO_LIGHT = '[data-no-light], [data-no-motion], .chart-live, .tk, [class^="tk-"], [class*=" tk-"], .ws-flat, .apg-cop-top, .apg-cop-g, [data-copier]';
 const HOLDS_ORDERS = '.tk, [class^="tk-"], [class*=" tk-"], .apg-cop-top, .apg-cop-g, [data-copier]';
 const NOT_A_PANEL = 'button, a, input, select, textarea, .kit-btn, .kit-chip, .kit-num, .kit-big';
 
@@ -151,6 +155,8 @@ function create(env) {
       return mm ? mm('(prefers-reduced-motion: reduce)') : null;
     } catch (e) { return null; }
   };
+  /* the motion kit (live/motion.js), when the page loaded it: setMotion keeps its Less motion in step */
+  const motionKit = () => { try { return env.ChartMotion !== undefined ? env.ChartMotion : (glob && glob.ChartMotion) || null; } catch (e) { return null; } };
   const noted = typeof WeakMap === 'function' ? new WeakMap() : null;
 
   const closest = (el, sel) => { try { return el && el.closest ? el.closest(sel) : null; } catch (e) { return null; } };
@@ -168,7 +174,7 @@ function create(env) {
   /** Why an element may not light at this pace ('' when it may). Pure reading; writes nothing. */
   function whyNoLight(el, pace) {
     if (!el || !el.classList) return 'Not an element.';
-    if (closest(el, NO_LIGHT)) return 'It is the order ticket, an order line, Flatten or the copier, or inside one (or marked data-no-light).';
+    if (closest(el, NO_LIGHT)) return 'It is the order ticket, an order line, Flatten or the copier, or inside one (or marked data-no-light or data-no-motion).';
     if (find(el, HOLDS_ORDERS)) return 'It holds the order ticket or the copier.';
     if (matches(el, NOT_A_PANEL) || /^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/.test(String(el.tagName || '').toUpperCase())) return 'The light goes around panels, never on a button, a field, a chip or a number.';
     if (pace !== 'trade' && !closest(el, '.kit-agent')) return 'Outside the Agent tab the light runs only while in a trade (pace: trade).';
@@ -188,8 +194,19 @@ function create(env) {
     el.insertBefore(orbit, halo);
   }
 
+  /** L1: outside the Agent tab only one trade panel is lit. Turns off every other lit trade panel in el's document
+   *  that is also outside the Agent tab. */
+  function onlyTrade(el) {
+    const doc = el.ownerDocument || docOf();
+    let others = [];
+    try { others = doc && doc.querySelectorAll ? Array.from(doc.querySelectorAll('.kit-lit')) : []; } catch (e) { others = []; }
+    for (const p of others) if (p !== el && hasClass(p, 'kit-pace-trade') && !closest(p, '.kit-agent')) setClass(p, 'kit-lit', false);
+  }
+
   /** The light around a panel: { on, color, pace }. Returns true when lit; false when off or refused (with a console
-   *  note). Writes only what changed, so calling it on every P&L update is cheap. Turning it off is never refused. */
+   *  note). Writes only what changed, so calling it on every P&L update is cheap. Turning it off is never refused.
+   *  The caller supplies the trade state: pace 'trade' while in a trade, { on: false } when flat. Outside the Agent tab,
+   *  lighting a trade panel turns off any other lit trade panel in the document (L1: only the panel showing the trade). */
   function light(el, o) {
     o = o || {};
     if (!el || !el.classList) return false;
@@ -199,6 +216,7 @@ function create(env) {
     const color = resolveColor(o.color);
     if (!why && !color) why = 'Unknown colour ' + JSON.stringify(o.color) + '.';
     if (why) { note(el, why); setClass(el, 'kit-lit', false); return false; }
+    if (pace === 'trade' && !closest(el, '.kit-agent')) onlyTrade(el);
     layers(el);
     try { if (el.style.getPropertyValue('--kit-pc') !== color) el.style.setProperty('--kit-pc', color); } catch (e) { /* no style */ }
     setClass(el, 'kit-pace-trade', pace === 'trade');
@@ -229,13 +247,19 @@ function create(env) {
   /** The page's motion setting: 'full' (the default) or 'off'. */
   function motion() { return readSetting(); }
   /** Sets motion 'full' or 'off' (class kit-motion-off on <html>: the light stops circling; the glow stays), saved in
-   *  localStorage under STORAGE_KEY unless { save: false }. Returns the setting. */
+   *  localStorage under STORAGE_KEY unless { save: false }. When the motion kit is loaded it also calls
+   *  ChartMotion.setReducedMotion, so Settings' Less motion stays the one user control. Returns the setting. */
   function setMotion(v, o) {
     setting = v === 'off' ? 'off' : 'full';
-    if (!o || o.save !== false) {
+    const save = !o || o.save !== false;
+    if (save) {
       try { const s = storage(); if (s) { if (setting === 'off') s.setItem(STORAGE_KEY, 'off'); else s.removeItem(STORAGE_KEY); } } catch (e) { /* storage blocked */ }
     }
     markRoot();
+    try {
+      const M = motionKit();
+      if (M && typeof M.setReducedMotion === 'function') M.setReducedMotion(setting === 'off', save ? undefined : { save: false });
+    } catch (e) { /* the motion kit failed: the kit's own setting still holds */ }
     return setting;
   }
   /** True when the light does not circle: the page setting, the motion kit's Less motion (motion-off on <html>), or

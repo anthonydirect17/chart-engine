@@ -24,10 +24,12 @@ screen**. A step tracker's sub-line (`.kit-step-sub`) holds a value (a time, a c
 ## Never on order surfaces
 
 The light never goes on the order ticket, the chart's order lines, Flatten or the copier. Rule R3 of `docs/MOTION.md`
-holds everywhere: numbers, prices, P&L and buttons never animate or ease. The kit puts no transition and no animation
-on a number (`.kit-num`, `.kit-big`), a chip, a tag, a button, a stream row, a tab, a field or a meter; `test/kit.test.js`
-reads `kit.css` to make sure. The only things that move are the light's border layers and the decision drawer's slide.
-The only things that fade are the light's colour and the panel glow.
+holds everywhere: numbers, prices, P&L and buttons never animate or ease, and neither does anything that holds them (a
+box that slides or fades moves the prices in it). The kit puts no transition and no animation on a number (`.kit-num`,
+`.kit-big`), a chip, a tag, a button, a stream row, a tab, a field or a meter, or on a box that holds one, such as the
+decision drawer, which appears at once; `test/kit.test.js` reads `kit.css` to make sure, and `npm run smoke:kit` checks
+every such element and all its ancestors in a real page. The only things that move are the light's border layers. The
+only things that fade are the light's colour and the panel glow.
 
 ## Loading it
 
@@ -45,9 +47,9 @@ inside a `.kit` root, so the kit never leaks into the rest of a page.
 
 | Token | Font | For |
 |---|---|---|
-| `--kit-head` | Chakra Petch | titles, section labels, tabs, buttons |
-| `--kit-body` | IBM Plex Sans | body text |
-| `--kit-mono` | JetBrains Mono | every number, with tabular digits (`.kit-num`) |
+| `--kit-head` | Chakra Petch | titles, section labels, chips, tabs, buttons |
+| `--kit-body` | IBM Plex Sans | body text, text fields and selects (the account select) |
+| `--kit-mono` | JetBrains Mono | every number, with tabular digits (`.kit-num`): a number inside a chip, a numeric field (`.kit-field.kit-num`) |
 
 Every font comes from the page's own folder, never the internet: ChartBridge's pages load nothing from the internet
 (the 1.16.0 offline rule, `test/offline.test.js`, which reads every file in the www list, `kit.html` and `kit.css`
@@ -133,17 +135,17 @@ The gallery shows each ratio.
 | `.kit-title`, `.kit-label`, `.kit-brand`, `.kit-glow`, `.kit-hot`, `.kit-dim` | page title, section label, brand name, glowing value (Agent tab), hot and dim text |
 | `.kit-num`, `.kit-big` (with `<small>`), `.kit-profit-text`, `.kit-loss-text` | a number (mono, tabular), a big number, money colours |
 | `.kit-btn` with `.kit-btn-primary`, `.kit-btn-accent`, `.kit-btn-danger`, `.kit-btn-compact` | buttons: default, primary cyan, accent purple, danger red; 44 px tall, 34 px compact for the dense trading screen. States: hover, `:focus-visible`, `:disabled`, `aria-pressed="true"` (the kill switch on). |
-| `.kit-chip` with `.kit-chip-purple`, `.kit-chip-profit`, `.kit-chip-loss`, `.kit-chip-danger`, or a colour class | chips, 11 px mono uppercase |
+| `.kit-chip` with `.kit-chip-purple`, `.kit-chip-profit`, `.kit-chip-loss`, `.kit-chip-danger`, or a colour class | chips, 11 px Chakra Petch 600 uppercase (LONG, ARMED, COPILOT); a number inside one keeps `.kit-num` (mono) |
 | `.kit-tag` with a colour class | the small tag on a stream row |
 | `.kit-pill` with `.kit-dot` (`.is-off`, `.is-warn`, `.is-bad`) | a status pill with a dot |
 | `.kit-tabs` with `.kit-tab` (`aria-selected`, `aria-current="page"` or `.is-on`) | tabs; the active one is cyan |
 | `.kit-seg` with buttons (`aria-pressed`) | a segmented switch (the mode) |
 | `.kit-rail`, `.kit-rail-brand`, `.kit-rail-item` (`aria-current="page"`) | the side rail |
 | `.kit-meter` (with `.kit-meter-purple`, `.kit-meter-profit`) and an `<i style="width:40%">` | meters |
-| `.kit-field` on an `<input>` or `<select>` (`.kit-field-compact`, `aria-invalid`) | fields and selects |
+| `.kit-field` on an `<input>` or `<select>` (`.kit-field-compact`, `aria-invalid`) | fields and selects, in the body font; add `.kit-num` to a numeric field (a price, a quantity) for mono, tabular digits |
 | `.kit-steps` with `.kit-step[data-step]` (`screen`, `eyes`, `judgment`, `checks`, `chartbridge`; `.is-done`, `.is-now`), `.kit-step-node`, `.kit-step-name`, `.kit-step-sub` | the step tracker in step colours; the sub-line is a value (a time, a count), never an explanation |
 | `button.kit-row` with a colour class (`aria-pressed` when its drawer is open) | a stream row, a real button |
-| `.kit-drawer-host`, `.kit-drawer` with a colour class, `.kit-drawer-top`, `.kit-drawer-title`, `.kit-drawer-close`, `.kit-quote`, `.kit-fact` | the decision drawer: slides over its column, outlined in the decision colour, with a Close button |
+| `.kit-drawer-host`, `.kit-drawer` with a colour class, `.kit-drawer-top`, `.kit-drawer-title`, `.kit-drawer-close`, `.kit-quote`, `.kit-fact` | the decision drawer: appears over its column at once (it holds prices and a button, so it never slides or fades: R3), outlined in the decision colour, with a Close button |
 | `.kit-keys`, `.kit-key` with a colour class (`.kit-key-armed`) | the legend key: **gallery and docs only, never on a product screen** |
 | `.kit-c-screen`, `-cyan`, `-eyes`, `-judgment`, `-checks`, `-go`, `-pass`, `-danger`, `-profit`, `-loss`, `-purple`, `-armed` | colour classes: set `--kit-sig` for chips, tags, keys, rows and the drawer. Never the light's colour. |
 
@@ -153,7 +155,8 @@ For galleries and tests, `.is-hover`, `.is-focus` and `.is-disabled` show those 
 
 `ChartKit.armed(panel, true)` (or the class `.kit-armed`): a soft, faded, glowing purple outline (border
 `rgba(155,123,255,.32)` with a soft outer and inner purple glow), in place of today's solid purple line. It goes with
-the light: an armed panel in a trade shows both.
+the light: an armed panel in a trade shows both, with the purple ring drawn over the light at the same faded
+`--kit-armed-line` alpha and the same soft glow, never a crisp solid line.
 
 ## The light
 
@@ -163,11 +166,16 @@ fade between colours. Paces: `decide` about 13 s a lap, `trade` about 9 s. Pure 
 
 **Anthony's rules (enforced by `ChartKit.light`, tested):**
 
-1. Outside the Agent tab (`.kit-agent`) the light runs only while in a trade (`pace: 'trade'`), only around the panel
-   showing that trade, and only on its border. Flat means no light at all. (On The Desk: around Today's trades while a
-   trade is open.)
+1. Outside the Agent tab (`.kit-agent`) the light runs only while in a trade, only around the panel showing that
+   trade, and only on its border. Flat means no light at all. (On The Desk: around Today's trades while a trade is
+   open.) The kit cannot see positions: **the caller supplies the "in a trade" state**, lighting the panel with
+   `pace: 'trade'` while in a trade and turning it off (`{ on: false }`) when flat; without `pace: 'trade'` the light
+   refuses outside the Agent tab. The kit enforces "only that panel": outside the Agent tab, lighting one panel with
+   `pace: 'trade'` turns off any other lit trade panel in the document, so only one is ever lit. (Panels inside
+   `.kit-agent` follow the Agent tab's own rule and are left alone.)
 2. Never on the order ticket, order lines, Flatten or the copier. These refuse to light, with a console note
-   (`ChartKit: no light here. ...`): anything marked `data-no-light` or inside one; anything inside the chart itself
+   (`ChartKit: no light here. ...`): anything marked `data-no-light` or `data-no-motion` (the P&L box and the kill
+   switch areas `live/bot.js` marks), or inside one; anything inside the chart itself
    (`.chart-live`, where the order lines are), a ticket (`.tk`, `tk-*` classes), Flatten (`.ws-flat`) or the copier
    (`.apg-cop-top`, `.apg-cop-g`, `data-copier`); a panel that holds a ticket or the copier; and any button, link,
    field, chip or number. These include every order surface the motion kit refuses (`ChartMotion.NO_MOTION`).
@@ -187,17 +195,21 @@ An unknown colour is refused, never guessed. `light()` writes only what changed,
 update, and it makes the two layers (`.kit-orbit` and `.kit-halo`) once per panel and keeps them. The panel must be
 positioned (`.kit-panel` and `.kit-card` are).
 
+`light()` inserts its two layers as two `<span>`s that become the panel's first children, so host CSS using
+`:first-child` or `:nth-child` on the panel's children can shift; and a panel with `overflow: hidden` clips the orbit and
+the halo, which sit just outside its border.
+
 ## Motion on and off
 
 | Call | What it does |
 |---|---|
 | `ChartKit.motion()` | `'full'` (the default) or `'off'` |
-| `ChartKit.setMotion('full' or 'off')` | the page setting, saved in `localStorage` as `kit-motion-v1` (only `off` is stored); puts `kit-motion-off` on `<html>` |
+| `ChartKit.setMotion('full' or 'off')` | the page setting, saved in `localStorage` as `kit-motion-v1` (only `off` is stored); puts `kit-motion-off` on `<html>`. When the motion kit is loaded (`window.ChartMotion`) it also calls `ChartMotion.setReducedMotion`, so Settings' Less motion stays the one user control. |
 | `ChartKit.reduced()` | true when the light stands still: the page setting, the motion kit's Less motion (`motion-off` on `<html>`, from `ChartMotion.setReducedMotion`), or the system's reduced motion |
 
-With motion off or reduced motion the orbit stops (a still arc and the glow stay), colours change at once and the drawer
-appears without sliding. Every storage call is inside a try: a private window or blocked storage just means the setting
-lasts for that page.
+With motion off or reduced motion the orbit stops (a still arc and the glow stay) and colours change at once. (The
+drawer never slides, with or without motion.) Every storage call is inside a try: a private window or blocked storage
+just means the setting lasts for that page.
 
 ## The rest of the API
 
@@ -210,21 +222,26 @@ lasts for that page.
 | `ChartKit.COLORS`, `ChartKit.LAP` | the light's colours by name, its seconds per lap |
 | `ChartKit.contrast(a, b)`, `ChartKit.over(top, base)`, `ChartKit.parseColor(c)`, `ChartKit.luminance(c)` | WCAG contrast and colour maths |
 | `ChartKit.NO_LIGHT`, `ChartKit.HOLDS_ORDERS`, `ChartKit.NOT_A_PANEL` | the selectors the light refuses |
-| `ChartKit.create({ document, storage, console, matchMedia })` | a kit on its own page (the tests pass fakes) |
+| `ChartKit.create({ document, storage, console, matchMedia, ChartMotion })` | a kit on its own page (the tests pass fakes) |
 
 ## Tests
 
-`node --test test/kit.test.js` (part of `npm test`): the light's guards (data-no-light, inside a ticket, Flatten, the
-copier, a panel holding a ticket; a chart panel in a trade lights; outside the Agent tab only in a trade), the armed
-outline with the light, the motion setting with storage that throws, reduced motion, the tokens against the chart's
+`node --test test/kit.test.js` (part of `npm test`): the light's guards (data-no-light, data-no-motion, inside a ticket,
+Flatten, the copier, a panel holding a ticket; a chart panel in a trade lights; outside the Agent tab only in a trade,
+and only one trade panel lit), the armed outline with the light, the motion setting with storage that throws, setMotion
+setting the motion kit's Less motion, reduced motion, the tokens against the chart's
 locked palette (`test/theme.test.js` LOCKED and the engine's `buildTheme()`), contrast for every text token on every
-surface, no transition or animation on numbers, chips, buttons and the rest (R3), no em or en dashes, and the files
-installed, with the fonts it loads and no internet address.
+surface, no transition or animation on numbers, chips, buttons and the rest, or on the drawer (R3), the fonts of chips
+and fields, no em or en dashes, no account name but Sim101, and the files installed, with the fonts it loads and no
+internet address.
 
 `npm run smoke:kit` (Chromium, `test/kit-smoke.mjs` on `live/kit.html`): the gallery loads with no console error and
 nothing from the internet; no horizontal scroll at 390, 1366 and 1920 px; the light circles only while lit, at 9 s in a
-trade and 13 s deciding, and fades to the locked green and red; reduced motion and motion off stop the orbit and keep the
-glow; the light refuses on the mock ticket, a ticket row, Flatten and the copier. Screenshots in `test/out/`:
-`kit-gallery-1440.png`, `kit-trading.png`, `kit-desk.png`, `kit-agent.png`, `kit-light-profit.png`, `kit-light-loss.png`,
-`kit-armed.png`. The smoke also checks that all three fonts load from `live/fonts` and that the armed outline comes
-and goes at once, never fading.
+trade and 13 s deciding, and fades to the locked green and red; only one trade panel is lit outside the Agent tab, after
+every control; reduced motion and motion off stop the orbit and keep the glow; the light refuses on the mock ticket, a
+ticket row, Flatten and the copier; R3 with the drawer open: no element that holds a number, a price or a button moves,
+on its own or through an animated or transitioned ancestor; `ChartKit.setMotion` sets the motion kit's Less motion.
+Screenshots in `test/out/`: `kit-gallery-1440.png`, `kit-trading.png`, `kit-desk.png`, `kit-agent.png`, `kit-light-profit.png`, `kit-light-loss.png`,
+`kit-armed.png`. The smoke also checks that all three fonts load from `live/fonts`, that chips are in Chakra Petch and
+text fields in IBM Plex Sans with numeric fields in JetBrains Mono, and that the armed outline comes and goes at once,
+never fading.

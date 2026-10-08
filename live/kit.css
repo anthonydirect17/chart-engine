@@ -6,8 +6,8 @@
  *   .kit-desk     The Desk and the Studio (also the plain .kit): cyan lines; glow only on page titles, the active tab
  *                 and the light; body text 15 px.
  *   .kit-agent    the Agent tab: the fuller glow.
- * Fonts: --kit-head Chakra Petch (titles, labels, tabs, buttons), --kit-body IBM Plex Sans, --kit-mono JetBrains Mono
- * (every number, tabular). All three are served with the page, never from the internet: a page loads fonts/plex.css and
+ * Fonts: --kit-head Chakra Petch (titles, labels, chips, tabs, buttons), --kit-body IBM Plex Sans (body text, text
+ * fields and selects), --kit-mono JetBrains Mono (every number, tabular, and numeric fields: .kit-field.kit-num). All three are served with the page, never from the internet: a page loads fonts/plex.css and
  * fonts/agent-fonts.css before this file (docs/KIT.md). A character outside their Latin subset, or a page without them,
  * falls back to IBM Plex Sans Condensed and IBM Plex Mono, then the system's fonts.
  *
@@ -16,9 +16,10 @@
  * is for the gallery and docs only.
  *
  * Rule R3 of docs/MOTION.md: numbers, prices, P&L and buttons never animate or ease. Nothing here puts a transition or
- * an animation on a number, a chip, a button or a row (test/kit.test.js reads this file to make sure). The only things
- * that move are the light's border layers and the decision drawer's slide; the only things that fade are the light's
- * colour and the panel glow.
+ * an animation on a number, a chip, a button or a row, or on anything that holds one (test/kit.test.js reads this file
+ * to make sure; test/kit-smoke.mjs also checks every ancestor in a real page). The only things that move are the light's
+ * border layers; the only things that fade are the light's colour and the panel glow. The decision drawer appears at
+ * once: it holds prices and a button.
  */
 
 @property --kit-ang { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
@@ -167,8 +168,9 @@
 .kit .kit-btn-danger[aria-pressed="true"], .kit .kit-btn-danger.is-on { border-color: var(--kit-danger); background: var(--kit-danger); color: #1a0006; }
 .kit .kit-btn-compact { min-height: 34px; padding: 0 10px; font-size: 12px; }
 
-/* ---------------------------------------------------------------- chips (11 px mono uppercase) and tags */
-.kit .kit-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--kit-line); color: var(--kit-text); font: 600 11px/1.3 var(--kit-mono); letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
+/* ---------------------------------------------------------------- chips (11 px Chakra Petch uppercase; a .kit-num inside keeps mono) and tags */
+.kit .kit-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--kit-line); color: var(--kit-text); font: 600 11px/1.3 var(--kit-head); letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
+.kit .kit-chip .kit-num { font-family: var(--kit-mono); font-variant-numeric: tabular-nums; }
 .kit .kit-chip-purple { border-color: var(--kit-purple); color: var(--kit-purple-text); background: rgba(109,40,217,.16); }
 .kit .kit-chip-profit { border-color: var(--kit-profit); color: var(--kit-profit-text); background: rgba(61,220,151,.08); }
 .kit .kit-chip-loss { border-color: var(--kit-loss); color: var(--kit-loss-text); background: rgba(255,122,122,.08); }
@@ -214,8 +216,9 @@
 .kit-agent .kit-meter-purple > i { box-shadow: 0 0 10px rgba(123,92,255,.7); }
 .kit .kit-meter-profit > i { background: var(--kit-profit); box-shadow: none; }
 
-/* ---------------------------------------------------------------- field and select */
-.kit .kit-field { display: flex; align-items: center; min-height: 44px; width: 100%; min-width: 0; padding: 0 10px; border: 1px solid var(--kit-line); border-radius: 0; background: rgba(0,0,0,.35); color: var(--kit-hot); font: 13px var(--kit-mono); }
+/* ---------------------------------------------------------------- field and select: the body font; a numeric field adds .kit-num (mono, tabular) */
+.kit .kit-field { display: flex; align-items: center; min-height: 44px; width: 100%; min-width: 0; padding: 0 10px; border: 1px solid var(--kit-line); border-radius: 0; background: rgba(0,0,0,.35); color: var(--kit-hot); font: 13px var(--kit-body); }
+.kit .kit-field.kit-num { font-family: var(--kit-mono); font-variant-numeric: tabular-nums; }
 .kit .kit-field::placeholder { color: var(--kit-dim); }
 .kit .kit-field:focus, .kit .kit-field.is-focus { outline: 2px solid var(--kit-cyan); outline-offset: -1px; border-color: transparent; }
 .kit .kit-field:disabled, .kit .kit-field.is-disabled { opacity: .45; cursor: not-allowed; }
@@ -252,9 +255,9 @@
 .kit .kit-row > .kit-num { color: var(--kit-dim); }
 .kit .kit-row > .kit-row-go { color: var(--kit-dim); }
 
-/* ---------------------------------------------------------------- decision drawer: slides over a column */
+/* ---------------------------------------------------------------- decision drawer: appears over a column at once (it holds prices and a button: R3) */
 .kit .kit-drawer-host { position: relative; }
-.kit .kit-drawer { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; gap: 12px; padding: 16px; overflow: auto; border: 1px solid var(--kit-sig); background: var(--kit-drawer-bg); box-shadow: 0 0 34px -6px var(--kit-sig); animation: kit-slide .45s cubic-bezier(.2,.8,.2,1); }
+.kit .kit-drawer { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; gap: 12px; padding: 16px; overflow: auto; border: 1px solid var(--kit-sig); background: var(--kit-drawer-bg); box-shadow: 0 0 34px -6px var(--kit-sig); }
 .kit .kit-drawer[hidden] { display: none; }
 .kit .kit-drawer-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .kit .kit-drawer-title { margin: 6px 0 0; font: 600 20px/1.25 var(--kit-head); color: var(--kit-sig); }
@@ -292,19 +295,17 @@
 .kit .kit-pace-trade > .kit-orbit, .kit .kit-pace-trade > .kit-halo > .kit-orbit { animation-duration: var(--kit-lap-trade); }
 .kit .kit-lit > .kit-orbit, .kit .kit-lit > .kit-halo > .kit-orbit { opacity: 1; animation-play-state: running; }
 .kit .kit-lit > .kit-halo { box-shadow: 0 0 34px -4px var(--kit-pc), inset 0 0 22px -12px var(--kit-pc); }
-/* armed and lit: the purple ring is drawn last, over the light, so both show */
-.kit .kit-armed.kit-lit::after { content: ""; position: absolute; inset: -1px; pointer-events: none; border: 1px solid rgba(155,123,255,.50); box-shadow: 0 0 14px -2px rgba(123,92,255,.80), inset 0 0 18px -8px rgba(123,92,255,.40); }
+/* armed and lit: the purple ring is drawn last, over the light, so both show. Soft, faded and glowing like the armed
+   outline itself (the --kit-armed-line alpha), never a crisp solid line. */
+.kit .kit-armed.kit-lit::after { content: ""; position: absolute; inset: -1px; pointer-events: none; border: 1px solid var(--kit-armed-line); box-shadow: 0 0 14px -2px rgba(123,92,255,.80), inset 0 0 18px -8px rgba(123,92,255,.40); }
 
 @keyframes kit-orbit { to { --kit-ang: 360deg; } }
-@keyframes kit-slide { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 /* motion off (ChartKit.setMotion('off'), or the motion kit's Less motion) and the system's reduced motion: the light
-   stands still (its glow and a still arc stay), colours change at once, the drawer appears without sliding */
+   stands still (its glow and a still arc stay) and colours change at once */
 :root.kit-motion-off .kit .kit-orbit, :root.motion-off .kit .kit-orbit { animation: none; transition: none; }
 :root.kit-motion-off .kit .kit-halo, :root.motion-off .kit .kit-halo { transition: none; }
-:root.kit-motion-off .kit .kit-drawer, :root.motion-off .kit .kit-drawer { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   .kit .kit-orbit { animation: none; transition: none; }
   .kit .kit-halo { transition: none; }
-  .kit .kit-drawer { animation: none; }
 }

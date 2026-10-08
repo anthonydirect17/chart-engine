@@ -216,10 +216,11 @@
 
         <div class="kit-card">
           <span class="kit-label">Field and select</span>
-          <div class="gal-row" style="flex-wrap: nowrap"><select class="kit-field" aria-label="Instrument" style="flex: 0 0 96px"><option>MNQ</option><option>MES</option></select><select class="kit-field" aria-label="Account"><option>Sim101</option><option>Sim102</option></select></div>
+          <div class="gal-row" style="flex-wrap: nowrap"><select class="kit-field" aria-label="Instrument" style="flex: 0 0 96px"><option>MNQ</option><option>MES</option></select><select class="kit-field" aria-label="Account"><option>Sim101</option></select></div>
           <input class="kit-field" aria-label="Sample field" placeholder="Placeholder">
-          <div class="gal-row" style="flex-wrap: nowrap"><input class="kit-field is-focus" aria-label="Focused field" value="25,390.00"><input class="kit-field" aria-label="Disabled field" value="16" disabled></div>
-          <div class="gal-row" style="flex-wrap: nowrap"><input class="kit-field kit-field-compact" aria-label="Invalid field" aria-invalid="true" value="-3"><input class="kit-field kit-field-compact" aria-label="Compact field" value="1"></div>
+          <div class="gal-row" style="flex-wrap: nowrap"><input class="kit-field kit-num is-focus" aria-label="Focused field" value="25,390.00"><input class="kit-field kit-num" aria-label="Disabled field" value="16" disabled></div>
+          <div class="gal-row" style="flex-wrap: nowrap"><input class="kit-field kit-field-compact kit-num" aria-label="Invalid field" aria-invalid="true" value="-3"><input class="kit-field kit-field-compact kit-num" aria-label="Compact field" value="1"></div>
+          <span class="gal-note">Text fields and selects use the body font; a numeric field adds <code>.kit-num</code> for mono, tabular digits.</span>
         </div>
 
         <div class="kit-card">
@@ -313,7 +314,12 @@
       <span class="kit-label">4</span>
       <h2>The three surfaces side by side</h2>
       <p>The trading screen keeps its lines and labels a dim grey-blue so the chart's candles stay the brightest thing. The Desk has cyan lines and glows only on the title, the active tab and the light. The Agent tab glows fully. As on a real screen, these carry no legend and no sentence explaining the page: only titles, field names, values, buttons and warnings.</p>
+      <p>One sample trade, one lit panel: outside the Agent tab only the panel showing the trade lights, so lighting a trade panel anywhere on this page turns the others off. Pick where the trade shows.</p>
     </header>
+    <div class="kit-seg" role="group" aria-label="The trade shows on" style="max-width: 520px">
+      <button type="button" data-show="tradingChart" aria-pressed="false">TRADING SCREEN</button>
+      <button type="button" data-show="deskTrades" aria-pressed="false">THE DESK</button>
+    </div>
     <div class="gal-trio">
 
       <div class="kit kit-trading gal-surface" id="v-trading">
@@ -361,7 +367,7 @@
           <span class="kit-chip kit-chip-purple">Build 21</span>
         </div>
         <div class="kit-panel" id="agentPipe" style="padding: 12px 14px">
-          <div class="kit-card-head" style="margin-bottom: 10px"><span class="kit-label">What it is doing now</span><span class="kit-c-judgment" style="color: var(--kit-sig)">Judgment is making a plan</span></div>
+          <div class="kit-card-head" style="margin-bottom: 10px"><span class="kit-label">What it is doing now</span></div>
           <ol class="kit-steps" aria-label="Agent steps (sample)">
             <li class="kit-step is-done" data-step="screen"><span class="kit-step-node">1</span><span class="kit-step-name">Screen</span></li>
             <li class="kit-step is-done" data-step="eyes"><span class="kit-step-node">2</span><span class="kit-step-name">Eyes</span></li>
@@ -396,10 +402,14 @@
       <h2>The armed outline</h2>
       <p>A soft, faded, glowing purple outline on a chart that is armed, in place of today's solid purple line. It goes with the light: both show at once.</p>
     </header>
+    <div class="kit-seg" role="group" aria-label="The armed chart" style="max-width: 360px">
+      <button type="button" data-armed-trade="off" aria-pressed="true">FLAT</button>
+      <button type="button" data-armed-trade="on" aria-pressed="false">IN A TRADE</button>
+    </div>
     <div class="kit kit-trading gal-grid" id="armedRow" style="padding: 12px">
       <div class="kit-panel" style="min-height: 150px"><div class="kit-panel-head"><b>MNQ 12-26</b><span class="kit-chip">Not armed</span></div><div class="kit-panel-body"><span class="gal-note">The plain panel line.</span></div></div>
       <div class="kit-panel kit-armed" style="min-height: 150px"><div class="kit-panel-head"><b>MNQ 12-26</b><span class="kit-chip kit-chip-danger">Armed, Sim101</span></div><div class="kit-panel-body"><span class="gal-note">.kit-armed: the soft purple outline.</span></div></div>
-      <div class="kit-panel kit-armed" id="armedLit" style="min-height: 150px"><div class="kit-panel-head"><b>MNQ 12-26</b><span class="kit-chip kit-chip-danger">Armed, Sim101</span></div><div class="kit-panel-body"><span class="gal-note">Armed and in a trade, in profit: the outline and the light together.</span></div></div>
+      <div class="kit-panel kit-armed" id="armedLit" style="min-height: 150px"><div class="kit-panel-head"><b>MNQ 12-26</b><span class="kit-chip kit-chip-danger">Armed, Sim101</span></div><div class="kit-panel-body"><span class="gal-note">Armed; in a trade, in profit, it shows the outline and the light together.</span></div></div>
     </div>
   </section>
 
@@ -408,7 +418,7 @@
     <header>
       <span class="kit-label">6</span>
       <h2>The light</h2>
-      <p>A slow comet around a panel's border, with a soft glow. On the trading screen and The Desk it runs only while you are in a trade, only around the panel showing that trade: green in profit, red under water, none when flat. On the Agent tab it follows what the agent is doing. Only the light's colour fades between states; numbers never move.</p>
+      <p>A slow comet around a panel's border, with a soft glow. On the trading screen and The Desk it runs only while you are in a trade, only around the panel showing that trade: green in profit, red under water, none when flat. The page says when it is in a trade; the kit keeps only one trade panel lit. On the Agent tab it follows what the agent is doing. Only the light's colour fades between states; numbers never move.</p>
     </header>
     <div class="gal-grid-wide">
       <div class="kit kit-trading gal-col" style="padding: 12px; gap: 10px" id="lightTrading">
@@ -472,7 +482,7 @@
             <button type="button" class="kit-btn kit-btn-compact" data-try="flat">A chart while flat</button>
             <button type="button" class="kit-btn kit-btn-compact kit-btn-primary" data-try="chart">A chart in a trade</button>
           </div>
-          <div class="kit-panel" data-copier id="mockCopier" style="padding: 8px 10px"><span class="kit-label">Copier (a mock)</span><span class="gal-note">Leader Sim101, follower Sim102</span></div>
+          <div class="kit-panel" data-copier id="mockCopier" style="padding: 8px 10px"><span class="kit-label">Copier (a mock)</span><span class="gal-note">Leader Sim101, Follower A</span></div>
           <section class="kit-panel" id="mockChart" style="padding: 8px 10px; min-height: 60px"><span class="kit-label">A chart panel</span></section>
           <pre class="gal-log" id="refusalLog" aria-live="polite"></pre>
         </div>
@@ -480,7 +490,7 @@
     </div>
   </section>
 
-  <footer class="gal-note" style="padding: 8px 0 24px">Chart kit gallery. Sample data only: Sim101, Sim102 and made-up names. live/kit.css, live/kit.js, docs/KIT.md.</footer>
+  <footer class="gal-note" style="padding: 8px 0 24px">Chart kit gallery. Sample data only: Sim101 and made-up names. live/kit.css, live/kit.js, docs/KIT.md.</footer>
 </div>
 </div>
 
@@ -549,26 +559,45 @@
   }
   $$('[data-chart]').forEach((h, i) => chart(h, i * 7));
 
-  /* ---- surfaces: the trade lights the trading chart and Today's trades; the agent lights its step panel */
-  K.light($('#tradingChart'), { on: true, color: 'profit', pace: 'trade' });
-  K.light($('#deskTrades'), { on: true, color: 'profit', pace: 'trade' });
-  K.light($('#agentPipe'), { on: true, color: 'judgment', pace: 'decide' });
-  K.light($('#armedLit'), { on: true, color: 'profit', pace: 'trade' });
-
-  /* ---- the light: trade states on the trading screen */
+  /* ---- one sample trade, one lit panel: outside the Agent tab K.light keeps only one trade panel lit, so lighting one
+     here turns the others off; sync() puts every control back in step with what is lit */
   const pos = {
     flat: '<span class="kit-dim">flat</span>',
     profit: 'LONG 2 from 25,390.00, open <b class="kit-profit-text">+$24.00</b>',
     loss: 'LONG 2 from 25,390.00, open <b class="kit-loss-text">-$12.00</b>',
   };
-  function trade(state) {
-    const el = $('#lightDemo');
-    const on = state !== 'flat';
-    const lit = K.light(el, on ? { on: true, color: state, pace: 'trade' } : { on: false });
+  let tradeState = 'flat';
+  function showTradeState(state, note) {
+    tradeState = state;
     $('#lightPos').innerHTML = pos[state];
     $$('[data-trade]').forEach(b => b.setAttribute('aria-pressed', String(b.getAttribute('data-trade') === state)));
-    $('#lightReadout').textContent = lit ? 'Light on: ' + state + ' ' + K.COLORS[state] + ', pace trade, ' + K.LAP.trade + ' s a lap.' : 'Flat: no light at all.';
-    document.body.setAttribute('data-trade', state);
+    $('#lightReadout').textContent = state !== 'flat' ? 'Light on: ' + state + ' ' + K.COLORS[state] + ', pace trade, ' + K.LAP.trade + ' s a lap.' : (note || 'Flat: no light at all.');
+    document.body.setAttribute('data-trade-state', state);
+  }
+  function sync() {
+    $$('[data-show]').forEach(b => b.setAttribute('aria-pressed', String(K.lit($('#' + b.getAttribute('data-show'))))));
+    const armedOn = K.lit($('#armedLit'));
+    $$('[data-armed-trade]').forEach(b => b.setAttribute('aria-pressed', String((b.getAttribute('data-armed-trade') === 'on') === armedOn)));
+    if (tradeState !== 'flat' && !K.lit($('#lightDemo'))) showTradeState('flat', 'Flat here: the sample trade shows on another panel.');
+  }
+  function lightTrade(el, color) { const ok = K.light(el, { on: true, color: color, pace: 'trade' }); sync(); return ok; }
+
+  /* ---- surfaces: the trade on the trading chart or Today's trades; the agent lights its step panel */
+  K.light($('#agentPipe'), { on: true, color: 'judgment', pace: 'decide' });
+  $$('[data-show]').forEach(b => b.addEventListener('click', () => lightTrade($('#' + b.getAttribute('data-show')), 'profit')));
+
+  /* ---- the armed chart, flat or in a trade */
+  $$('[data-armed-trade]').forEach(b => b.addEventListener('click', () => {
+    if (b.getAttribute('data-armed-trade') === 'on') lightTrade($('#armedLit'), 'profit');
+    else { K.light($('#armedLit'), { on: false }); sync(); }
+  }));
+
+  /* ---- the light: trade states on the trading screen */
+  function trade(state) {
+    const on = state !== 'flat';
+    const lit = on ? lightTrade($('#lightDemo'), state) : K.light($('#lightDemo'), { on: false });
+    showTradeState(lit ? state : 'flat');
+    sync();
   }
   $$('[data-trade]').forEach(b => b.addEventListener('click', () => trade(b.getAttribute('data-trade'))));
   trade('profit');
@@ -603,6 +632,7 @@
     const [el, o] = tries[k]();
     const why = K.whyNoLight(el, o.pace === 'trade' ? 'trade' : 'decide');
     const ok = K.light(el, o);
+    sync();
     const line = (ok ? 'Lit: ' : 'Refused: ') + k + (ok ? ', ' + o.color + ', pace ' + o.pace + '.' : '. ' + why);
     log.textContent = (line + '\n' + log.textContent).split('\n').slice(0, 6).join('\n');
     return ok;
