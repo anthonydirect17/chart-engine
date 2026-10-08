@@ -302,5 +302,5 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.equal(JSON.parse(read('package.json')).version, '1.17.0');
   assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.17\.0'/);
   assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.17\.0/);
-  for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md']) assert.doesNotMatch(read(f), /[–—]/, f + ': no em or en dashes');
+  for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });

@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.17.0 (2026-10-08): the Agent tab
+
+Anthony's AI trading agents get their own tab next to the Bot tab (Manrae is the first; the tab serves any number). It is
+the page's side of ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1). The look starts from the Manrae
+training viewer ("looks great and is a great foundation", 2026-10-08). Everything is in `docs/AGENT_TAB.md`, with every
+lead's default.
+
+- **The strip:** name, build, connected and the heartbeat's age, mode, the account with its SIM or LIVE mark (as the Bot
+  tab's), position, P&L today, trades, losing trades, KILLED or STOOD DOWN with why, and "OWNS <account> <root>" while the
+  agent holds the owner lock. A picker when there is more than one agent.
+- **Control:** Shadow, Copilot, Auto (Auto asks a second click within 4 s) and the kill switch (on in one click, release
+  in two), as the Bot tab. Change account lists the tradable accounts, never the bot's, the copier's or another agent's, and
+  asks once in the page for a LIVE one. The rules in force, and Change the rules (only while the agent is flat with nothing
+  working or proposed), checked against the contract's allowed values before `agentRules` goes out with flat keys;
+  ChartBridge's refusal shows under the button.
+- **Proposals:** side, quantity, root, kind and price, stop and target, risk, setup, confidence, reason, the account, and a
+  live countdown to the plan's own expiry; Accept and Reject send `agentAnswer` (`agentSeen` the moment it shows). Accept
+  closes in the last 5 s, when ChartBridge would refuse it. In the tab for the agent shown, in the corner everywhere else.
+- **One copilot key for the bot and every agent:** the workspace's Accept and Reject keys answer the oldest open proposal
+  across the bot and all agents. With no agent proposal open the bot's answer is exactly as in 1.16.0 (`live/bot.js` now
+  hands its proposals to the one handler, `AgentCore.copilotRouter`).
+- **Notes and plans:** the agent's looks, thinking (a collapsed block), lessons, notebook and status, and its plans with
+  their results, newest first, with filters.
+- **The chart:** the agent's root with its own orders and legs (`by: "agent:<id>"`) as lines and its trades as marks; the
+  Account page names such an order "agent <id>".
+- **Pop out:** `agent.html`, the tab in its own window.
+- **An older ChartBridge:** the tab says "No agents on this ChartBridge (0.5.0 or later)." and nothing else changes.
+- The fake ChartBridge speaks the agent channel (`--agents=demo`, the made-up Demo Agent and Sim account SIM-AG1).
+- Tests: `test/agent.test.js`, the agent part of `test/fake-v3.test.js`, `npm run smoke:agent` (screenshots
+  `test/out/agent-*.png`). The chart draws exactly as in 1.16.0. Page only, no recompile; COMPAT stays at ChartBridge 0.3.2.
+
 ## ChartBridge 0.4.3 (2026-10-07): the copier never crosses zero, copies a fixed quantity, and can have no leader
 
 Found on WORK on Sim, test card section 5 (the copier), Anthony's copier test of 2026-10-07 15:01 ET:
