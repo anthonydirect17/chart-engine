@@ -989,11 +989,12 @@ public static class AccountsHarness
         sent.Clear();
         ChartBridgeAccounts.Tick(t + 2000);
         Check(Watching("TEST-NEW-1"), "0.5.1 review: watched from its first Connected sighting by the 1 s check (no wait for the 10 s watch)");
-        Check(sent.Any(x => x.StartsWith("{\"type\":\"orders\"") && x.Contains("\"account\":\"TEST-NEW-1\"")) && sent.Any(x => x.StartsWith("{\"type\":\"position\"") && x.Contains("\"account\":\"TEST-NEW-1\"") && x.Contains("\"qty\":1")), "0.5.1 review: its first sighting: the signed-in v3 page gets a fresh orders list with its working stop, and its position");
+        Check(sent.Any(x => x.StartsWith("{\"type\":\"order\"") && x.Contains("\"account\":\"TEST-NEW-1\"") && x.Contains("\"state\":\"working\"")) && sent.Any(x => x.StartsWith("{\"type\":\"position\"") && x.Contains("\"account\":\"TEST-NEW-1\"") && x.Contains("\"qty\":1")), "0.5.1 review: its first sighting: the signed-in v3 page gets its working stop (an order message) and its position");
+        Check(!sent.Any(x => x.StartsWith("{\"type\":\"orders\"")), "0.5.1 re-review: never a full orders list for a newly listed account (pages replace theirs on it)");
         Check(!sentV2.Any(x => x.Contains("TEST-NEW-1")), "a 1.15 page gets none of it (v2 scope)");
         sent.Clear();
         ChartBridgeAccounts.Tick(t + 3000);
-        Check(!sent.Any(x => x.StartsWith("{\"type\":\"orders\"")), "nothing new listed: no orders list again");
+        Check(!sent.Any(x => x.StartsWith("{\"type\":\"order") && x.Contains("TEST-NEW-1")), "nothing new listed: its orders are not sent again");
         f1.Positions.Clear(); wf.OrderState = OrderState.Cancelled;
         ChartBridgeAccounts.Tick(t + 4000);
         // review repro A: a position and a stop that appear while hidden; the account is listed again; the page learns them
@@ -1021,8 +1022,43 @@ public static class AccountsHarness
         st2.OrderState = OrderState.Accepted;
         sent.Clear();
         Send(page, Show("TEST-HID-1"));
-        Check(sent.Any(x => x.StartsWith("{\"type\":\"orders\"") && x.Contains("\"account\":\"TEST-HID-1\"")), "0.5.1 review: Show: the signed-in page gets a fresh orders list with its working order");
+        Check(sent.Any(x => x.StartsWith("{\"type\":\"order\"") && x.Contains("\"account\":\"TEST-HID-1\"")) && !sent.Any(x => x.StartsWith("{\"type\":\"orders\"")), "0.5.1 review: Show: the signed-in page gets its working order (an order message)");
         st2.OrderState = OrderState.Cancelled;
+        // 0.5.1 re-review: an order update for another account sent from NinjaTrader's thread while a newly listed account's orders
+        // go out: the page's final state is the latest (it merges order messages and replaces on orders)
+        Account other = NewOn("TEST-OTH-1", ConnectionStatus.Connected);
+        Order ostop = Working(other, OrderAction.Sell, OrderType.StopMarket, 0, 24980, "stop on another account");
+        ChartBridgeAccounts.Tick(tr + 3000);
+        Send(page, Hide("TEST-HID-1"));
+        Order nlim = Working(h1, OrderAction.Buy, OrderType.Limit, 24900, 0, "limit on the shown account");
+        Order placed = null;
+        bool fired = false;
+        string idOld = IdOf(ostop);   // taken now: a done order's id is forgotten after its last message
+        ChartBridgeOrders.ScopeAgainHook = () =>
+        {
+            if (fired) return;
+            fired = true;
+            ostop.OrderState = OrderState.Cancelled;   // the other account's stop is cancelled in NinjaTrader meanwhile
+            ChartBridgeOrders.OnOrderUpdate(other, new OrderEventArgs { Order = ostop });
+            placed = Working(other, OrderAction.Sell, OrderType.StopMarket, 0, 24975, "new stop on another account");
+            ChartBridgeOrders.OnOrderUpdate(other, new OrderEventArgs { Order = placed });
+        };
+        sent.Clear();
+        Send(page, Show("TEST-HID-1"));
+        ChartBridgeOrders.ScopeAgainHook = null;
+        Dictionary<string, string> pageOrders = new Dictionary<string, string>();   // id to state, as a page keeps them
+        System.Text.RegularExpressions.Regex one = new System.Text.RegularExpressions.Regex("\\{\"type\":\"order\",\"id\":\"([^\"]+)\"[^{}]*?\"state\":\"([^\"]+)\"");
+        foreach (string m in sent)
+        {
+            if (m.StartsWith("{\"type\":\"orders\"")) pageOrders.Clear();
+            foreach (System.Text.RegularExpressions.Match mm in one.Matches(m.Replace("{\"type\":\"orders\",\"list\":[", "")))
+                pageOrders[mm.Groups[1].Value] = mm.Groups[2].Value;
+        }
+        string sOld, sNew, sLim;
+        pageOrders.TryGetValue(idOld, out sOld); pageOrders.TryGetValue(IdOf(placed), out sNew); pageOrders.TryGetValue(IdOf(nlim), out sLim);
+        Check(fired && sOld == "cancelled" && sNew == "working" && sLim == "working", "0.5.1 re-review: interleaved update for another account: no ghost (its cancelled stop stays cancelled: " + sOld + "), nothing lost (its new stop: " + sNew + "), the shown account's order: " + sLim);
+        nlim.OrderState = OrderState.Cancelled; placed.OrderState = OrderState.Cancelled;
+        Account.All.Remove(other);
         Account.All.Remove(h1); Account.All.Remove(f1);
         // review repro B: a new account's first sighting saved even when a page action's save comes before the check makes its record
         Account n1 = NewOn("TEST-NEW-2", ConnectionStatus.Connected);
@@ -1046,6 +1082,20 @@ public static class AccountsHarness
         Check(!(File_("accounts-detail.txt") ?? "").Contains("\tTEST-NEW-2\tharness-stop\n"), "before the stop: not saved yet");
         ChartBridgeAccounts.Stop();
         Check((File_("accounts-detail.txt") ?? "").Contains("\tTEST-NEW-2\tharness-stop\n"), "0.5.1 review: Stop saves accounts-detail.txt (and the log) before it clears");
+        AccountsCall("WatchStatus");
+        Restart();
+        // a save under way at the stop (the 1 s check holds the file lock): Stop waits at most 200 ms, then skips its save, said once
+        object fileLock = typeof(ChartBridgeAccounts).GetField("FileLock", PS).GetValue(null);
+        System.Threading.ManualResetEvent held = new System.Threading.ManualResetEvent(false), release = new System.Threading.ManualResetEvent(false);
+        System.Threading.Thread holder = new System.Threading.Thread(() => { lock (fileLock) { held.Set(); release.WaitOne(5000); } });
+        holder.Start();
+        held.WaitOne(5000);
+        int saidStop = NinjaTrader.Code.Output.Lines.Count;
+        System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+        ChartBridgeAccounts.Stop();
+        long took = sw.ElapsedMilliseconds;
+        release.Set(); holder.Join(5000);
+        Check(took < 1500 && NinjaTrader.Code.Output.Lines.Skip(saidStop).Any(x => x.Contains("accounts: a save was under way at the stop; the last save is skipped")), "0.5.1 re-review: Stop waits at most " + ChartBridgeAccounts.StopSaveWaitMs + " ms for a save under way, then skips its own, said (took " + took + " ms)");
         AccountsCall("WatchStatus");
         Restart();
         // the trading message lists only checked accounts connected this session
