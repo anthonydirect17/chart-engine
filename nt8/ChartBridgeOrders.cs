@@ -1085,7 +1085,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception ex) { ChartBridgeServer.Log("bot order update error: " + ex.Message); }
             try { if (ChartBridgeAgents.AgentOf(o) != null) ChartBridgeAgents.OnOrderUpdate(account, o, AgentOrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null)); }   // 0.5.0 agents: each agent sees its own orders
             catch (Exception ex) { ChartBridgeServer.Log("agent order update error: " + ex.Message); }
-            try { ChartBridgeAgents.OnAccountChange(account, o.Instrument); }   // 0.5.0 agents: agentState follows every order of an agent's account and roots
+            try { ChartBridgeAgents.OnAccountChange(account, o.Instrument, o); }   // 0.5.0 agents: agentState follows every order of an agent's account and roots
             catch (Exception ex) { ChartBridgeServer.Log("agent state error: " + ex.Message); }
             if (IsDone(o.OrderState)) Forget(o);   // after OrderJson, which would otherwise hand out a new id
             ChartBridgeCopier.OnOrderUpdate(account, o);   // 0.4.0 copier: follower fills get their stop; the leader's stop moves are followed
@@ -1552,9 +1552,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool fresh = hasStop && root != null && FreshLast(root, FreshTickMs, out last);
             if (fresh && (br.EntryIsBuy ? sp >= last : sp <= last))
             {
-                string agentOf = ChartBridgeAgents.AgentOfTag(br.Tag);   // 0.5.0 agents: an agent entry's exit is "CB#<tag> ag:<id> protect f.. q.. p.."
+                string agentOf = ChartBridgeAgents.AgentOfTag(br.Tag);   // 0.5.0 agents: an agent entry's exit is "CB#<tag> ag:<id> protect f<n>" (at most 43 characters)
                 Order x = br.Account.CreateOrder(br.Instrument, exit, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
-                    agentOf != null ? "CB#" + br.Tag + " ag:" + agentOf + " protect" + mark : "CB#" + br.Tag + " exit" + mark, NinjaTrader.Core.Globals.MaxDate, null);
+                    agentOf != null ? "CB#" + br.Tag + " ag:" + agentOf + " protect f" + filled.ToString(CultureInfo.InvariantCulture) : "CB#" + br.Tag + " exit" + mark, NinjaTrader.Core.Globals.MaxDate, null);
                 lock (Sync) { IdFor(x); Ours.Add(x); Manage(br.Account, br.Instrument); }
                 br.Account.Submit(new[] { x });
                 Alarm(where + ": price had already passed the stop level " + CbJson.Num(sp) + " (last " + CbJson.Num(last) + "); exited " + qty + " at market");

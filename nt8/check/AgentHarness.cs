@@ -326,7 +326,7 @@ public static class AgentHarness
         string w = got.Count > 0 ? got[0] : "";
         Check(w.StartsWith("{\"type\":\"welcome\"") && got.Count > 1 && got[1].StartsWith("{\"type\":\"agentState\""), "agentHello: welcome, then agentState");
         Check(w.Contains("\"version\":\"0.5.0\"") && w.Contains("\"agent\":\"manrae\"") && w.Contains("\"mode\":\"shadow\"") && w.Contains("\"account\":\"Sim101\",\"sim\":true") &&
-              w.Contains("\"rules\":{\"roots\":[\"NQ\",\"MNQ\"],\"maxQty\":{\"NQ\":2,\"MNQ\":20},\"entryFrom\":\"09:45\",\"entryUntil\":\"15:00\",\"flatAt\":\"15:55\",\"maxExpireSec\":1800,\"maxTrades\":null,\"maxLosses\":null}") &&
+              w.Contains("\"rules\":{\"roots\":[\"NQ\",\"MNQ\"],\"maxQty\":{\"NQ\":2,\"MNQ\":20},\"entryFrom\":\"09:45\",\"entryUntil\":\"15:00\",\"flatAt\":\"15:55\",\"maxExpireSec\":1800,\"maxTrades\":null,\"maxLosses\":null,\"maxBracketTicks\":null,\"maxTicksAway\":null}") &&
               w.Contains("{\"root\":\"MNQ\",\"name\":\"MNQ 12-26\",\"tick\":0.25,\"pointValue\":2}") && w.Contains("{\"root\":\"NQ\",\"name\":\"NQ 12-26\",\"tick\":0.25,\"pointValue\":20}"),
               "welcome: version, agent, shadow, Sim101 (sim), the default rules, its roots' instruments: " + w);
         string st = Last(agentOut, "agentState");
@@ -847,7 +847,7 @@ public static class AgentHarness
         Check(PageReject().Contains("maxLosses must be none or 1 to 20"), "agentRules: maxLosses 21");
         int welcomes = Count(agentOut, "welcome");
         P(Rules("MNQ", ",\"maxQtyMNQ\":5", "10:00", "14:00", "15:30", 900, 3, 2));
-        Check(Count(agentOut, "welcome") == welcomes + 1 && Last(agentOut, "welcome").Contains("\"rules\":{\"roots\":[\"MNQ\"],\"maxQty\":{\"MNQ\":5},\"entryFrom\":\"10:00\",\"entryUntil\":\"14:00\",\"flatAt\":\"15:30\",\"maxExpireSec\":900,\"maxTrades\":3,\"maxLosses\":2}"),
+        Check(Count(agentOut, "welcome") == welcomes + 1 && Last(agentOut, "welcome").Contains("\"rules\":{\"roots\":[\"MNQ\"],\"maxQty\":{\"MNQ\":5},\"entryFrom\":\"10:00\",\"entryUntil\":\"14:00\",\"flatAt\":\"15:30\",\"maxExpireSec\":900,\"maxTrades\":3,\"maxLosses\":2,\"maxBracketTicks\":null,\"maxTicksAway\":null}"),
               "saved: the agent gets welcome again with the new rules: " + Last(agentOut, "welcome"));
         string text = FileText("agent-manrae-rules.txt");
         Check(text.StartsWith("#") && text.Contains("roots\tMNQ") && text.Contains("maxQty.MNQ\t5") && text.Contains("entryFrom\t10:00") && text.Contains("maxTrades\t3") && text.Contains("maxLosses\t2"), "agent-manrae-rules.txt written: " + text);
@@ -1812,10 +1812,11 @@ public static class AgentHarness
             Order e = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 2, 8, 16, 600));
             ChartBridgeOrders.NoteLast("MNQ", 24996);   // the stop level (24,997) already traded when the fill is handled
             Fill(e, 1, 24999);
+            lock (sime.Executions) sime.Executions.Add(new Execution { Order = e, OrderId = e.OrderId, Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, Price = 24999, Time = DateTime.Now, ExecutionId = "XP1" });   // NinjaTrader's list of it
             Order px;
             lock (sime.Orders) px = sime.Orders.LastOrDefault(o => (o.Name ?? "").Contains(" protect "));
-            Check(px != null && px.Name == "CB#" + Tag(e) + " ag:manrae protect f1 q1 p24999" && px.OrderType == OrderType.Market && ChartBridgeAgents.AgentOf(px) == "manrae",
-                  "10.3: an agent entry's protective exit is named \"CB#<tag> ag:manrae protect f1 q1 p24999\": " + (px != null ? px.Name : "none"));
+            Check(px != null && px.Name == "CB#" + Tag(e) + " ag:manrae protect f1" && px.OrderType == OrderType.Market && ChartBridgeAgents.AgentOf(px) == "manrae",
+                  "10.3: an agent entry's protective exit is named \"CB#<tag> ag:manrae protect f1\" (at most 43 characters): " + (px != null ? px.Name : "none"));
             string pid = px != null ? ChartBridgeOrders.AgentKnownId(px) : null;
             Check(px != null && OrderMsgWithId(agentOut, pid).Contains("\"role\":\"protect\"") && OrderMsgWithId(agentOut, pid).Contains("\"orderName\":\"" + px.Name + "\"") && OrderMsgWithId(page, pid).Contains("\"role\":\"other\""), "10.3: role protect (and its orderName) to the agent, other to the pages (unchanged)");
             if (px == null) return;

@@ -4737,6 +4737,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     try { Deliver(a.Name, x.Instrument, x.MarketPosition, x.Quantity, x.Price, x.Time, x.ExecutionId, x.OrderId, batch); } finally { execOrder = null; }
                     n++;
                 }
+                lock (Replayed) Replayed.Add(a.Name);   // 0.5.0 agents: read through without an error (an agent's stale records wait for it)
             }
             catch (Exception ex) { Log("could not read executions for " + a.Name + ": " + ex.Message); }
             ChartBridgeDesk.QueueMany(batch);
@@ -4783,11 +4784,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Fills that happened before this account was watched (earlier this session) go to The Desk too;
             // The Desk ignores ones it already has.
             int n = 0;
-            foreach (Account a in added) { n += CatchUp(a); lock (Replayed) Replayed.Add(a.Name); }   // 0.5.0 agents: the replay is through (an agent's stale records wait for it)
+            foreach (Account a in added) n += CatchUp(a);
             if (n > 0) ChartBridgeDesk.Flush();
         }
 
-        // 0.5.0 agents: true once this account's executions of the session were read after its watch began (WatchAccounts' CatchUp).
+        // 0.5.0 agents: true once this account's executions of the session were read through without an error since its watch began
+        // (WatchAccounts' CatchUp, or a later poll's when that one failed).
         public static bool ExecutionsReplayed(string account) { if (account == null) return false; lock (Replayed) return Replayed.Contains(account); }
 
         // Order code calls this before trading an account: an account that just connected may not be watched yet,

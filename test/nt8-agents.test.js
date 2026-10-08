@@ -61,7 +61,7 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   assert.match(step, /bool shut = ChartBridgeAgents\.MarketShut\(NowEt\(\)\);/);
   assert.match(step, /if \(!OwnsContract\(j\.Root, inst, a\)\) \{ DropJob\(j, key, a\); continue; \}\s*qty = Math\.Min\(qty, CloseCap\(j\.Root, inst, j\)\);/);
   // contract section 10: an agent entry's protective exit is named for the agent; its legs keep v2's names (the entry's tag)
-  assert.match(bodies(ocode, 'PlaceLegs'), /agentOf != null \? "CB#" \+ br\.Tag \+ " ag:" \+ agentOf \+ " protect" \+ mark : "CB#" \+ br\.Tag \+ " exit" \+ mark/);
+  assert.match(bodies(ocode, 'PlaceLegs'), /agentOf != null \? "CB#" \+ br\.Tag \+ " ag:" \+ agentOf \+ " protect f" \+ filled\.ToString\(CultureInfo\.InvariantCulture\) : "CB#" \+ br\.Tag \+ " exit" \+ mark/);
   assert.match(bodies(acode, 'SendCancel'), /try \{ o\.Account\.Cancel\(new\[\] \{ o \}\); \}\s*catch \(Exception ex\)/);
   assert.match(bodies(acode, 'StepFlatten'), /may\.Where\(o => o != j\.Close && \(j\.Owned \|\| IsMine\(o\)\)\)/);
   // every entry goes through ChartBridgeOrders.PlaceAgentEntry: the page's order path with the agent as its source
