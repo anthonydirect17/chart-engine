@@ -2354,7 +2354,7 @@ Conversely the bot, the copier and other agents refuse an agent's account. A LIV
 
 | page to ChartBridge (signed-in v3 pages, gate 7's rate) | fields (no others) |
 |---|---|
-| `agentMode` | `cid` (optional), `agent`, `mode` (`auto` needs the account tradable; the page asks a second click within 4 s for Auto and for Kill, as for the bot) |
+| `agentMode` | `cid` (optional), `agent`, `mode` (`auto` needs the account tradable; the page asks a second click within 4 s for Auto and to release Kill; Kill itself takes one click, as for the bot (Anthony, 2026-10-08)) |
 | `agentKill` | `cid` (optional), `agent`, `on` (*bool*) |
 | `agentSeen` | `agent`, `id`, `at` |
 | `agentAnswer` | `cid` (optional), `agent`, `id`, `answer` (`accept`/`reject`), `at` |
