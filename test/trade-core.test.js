@@ -199,3 +199,24 @@ test('1.17.0: on a pair an AI agent owns, only a market exit that reduces is sen
   core.placeAt('sell', 101);
   assert.equal(sent.length, 2); assert.equal(sent[1].kind, 'limit');
 });
+
+test('ChartBridge 0.5.1: a finished order sent again after a snapshot flashes once (one fill note, one rejected note)', () => {
+  const R = rig();
+  R.on();
+  const o = { type: 'order', id: 'o7', account: 'Sim101', root: 'MNQ', name: 'MNQ 12-26', side: 'buy', kind: 'limit', qty: 1, price: 100, state: 'working', filled: 0 };
+  R.core.message(o);
+  R.notes.length = 0;
+  const filled = Object.assign({}, o, { state: 'filled', filled: 1, avgFill: 100 });
+  R.core.message(filled);
+  R.core.message(Object.assign({}, filled, { again: true }));
+  assert.equal(R.notes.filter(n => /Filled/.test(n)).length, 1, R.notes.join(' / '));
+  const r = { type: 'order', id: 'o8', account: 'Sim101', root: 'MNQ', name: 'MNQ 12-26', side: 'sell', kind: 'stop', qty: 1, price: 95, state: 'rejected', filled: 0, text: 'NinjaTrader: OrderRejected' };
+  R.core.message(r);
+  R.core.message(Object.assign({}, r, { again: true }));
+  assert.equal(R.notes.filter(n => /Rejected/.test(n)).length, 1, R.notes.join(' / '));
+  // a working order sent again merges, quietly
+  R.notes.length = 0;
+  R.core.message(Object.assign({}, o, { id: 'o9', again: true }));
+  assert.equal(R.notes.length, 0);
+  assert.ok(R.core.TR.orders.has('o9'));
+});
