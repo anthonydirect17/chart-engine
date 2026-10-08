@@ -62,6 +62,7 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   client: ['type', 'v'],
   accountTrade: ['type', 'cid', 'account', 'on'],
   accountArchive: ['type', 'cid', 'account', 'confirm'],
+  accountUnarchive: ['type', 'cid', 'account'],                    // 0.5.1: Show
   merge: ['type', 'cid', 'account', 'root'],
   copierGet: ['type', 'cid'],
   copierSet: ['type', 'cid', 'leader', 'mode'],
@@ -88,8 +89,8 @@ export const BOT_KEYS = {
   signal: ['type', 'id', 'action', 'side', 'kind', 'price', 'stopTicks', 'targetTicks', 'reason'],
 };
 export const AGENT_PAGE_TYPES = ['agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules'];
-const V3_TYPES = ['accountTrade', 'accountArchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount'].concat(AGENT_PAGE_TYPES);
-const SWITCH_OF = { accountTrade: 'accountChecks', accountArchive: null, merge: 'merge', copierGet: 'copier', copierSet: 'copier', copierFollower: 'copier', copierRearm: 'copier', botMode: 'bot', botKill: 'bot', botSeen: 'bot', botAnswer: 'bot', botRails: 'bot', botAccount: 'bot' };
+const V3_TYPES = ['accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount'].concat(AGENT_PAGE_TYPES);
+const SWITCH_OF = { accountTrade: 'accountChecks', accountArchive: null, accountUnarchive: null, merge: 'merge', copierGet: 'copier', copierSet: 'copier', copierFollower: 'copier', copierRearm: 'copier', botMode: 'bot', botKill: 'bot', botSeen: 'bot', botAnswer: 'bot', botRails: 'bot', botAccount: 'bot' };
 
 const isInt = v => typeof v === 'number' && Number.isInteger(v);
 const BOT_SIBLING = { MNQ: 'NQ', NQ: 'MNQ', MES: 'ES', ES: 'MES' };   // ChartBridgeBot.cs Sibling
@@ -232,7 +233,18 @@ export class OrderDeskV3 extends OrderDesk {
       tradable: this.config.trading && this.accounts.includes(a.name), state: a.state, goneWhy: a.goneWhy, goneSince: a.goneSince,
       balance: +(a.balance + p.realized).toFixed(2), pnlToday: p.today, realizedToday: p.realized, unrealized: p.unrealized, positions,
       roomDrawdown: off ? null : room, roomDrawdownWhy: off || (room === null ? 'NinjaTrader does not report a trailing drawdown for this account' : null),
-      roomDailyLoss: null, roomDailyLossWhy: off || 'NinjaTrader does not report a daily loss limit for this account' };
+      roomDailyLoss: null, roomDailyLossWhy: off || 'NinjaTrader does not report a daily loss limit for this account',
+      canHide: this.hideWhy(a) === null, hideWhy: this.hideWhy(a) };
+  }
+  /** ChartBridge 0.5.1's Hide rule (ChartBridgeAccounts.HideRefusal): flat, no working orders, not the bot's or the copier's */
+  hideWhy(a) {
+    if (!this.sw.accountChecks) return 'accountChecks is off';
+    const busy = [...this.positions].some(([k, p]) => k.split('|')[0] === a.name && p.qty) || [...this.orders.values()].some(o => o.account === a.name && isWorking(o));
+    if (busy) return a.name + ' has a position or working orders: only a flat account can be hidden (exits always work)';
+    if (a.name === this.botAccount) return a.name + " is the bot's account (the Bot tab): it cannot be hidden";
+    if (a.name === this.copier.leader) return a.name + " is the copier's leader: it cannot be hidden";
+    if (this.copier.followers.has(a.name)) return a.name + ' is a copier follower: it cannot be hidden';
+    return null;
   }
   accountsMsg() {
     return { type: 'accounts', list: [...this.acct.values()].filter(a => a.state !== 'archived').sort((x, y) => x.name < y.name ? -1 : 1).map(a => this.accountMsg(a)),
@@ -306,7 +318,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (m.type === 'botSeen') { const why = this.blocked(conn) || checkKeysV3(m, text) || this.check_botSeen(m); if (why) this.send(conn, Object.assign({ type: 'reject' }, ref, { reason: why })); else this.do_botSeen(m); return !why; }
     let why = this.checkAction(conn) || checkKeysV3(m, text);
     if (!why && V3_TYPES.includes(m.type) && SWITCH_OF[m.type] && !this.sw[SWITCH_OF[m.type]]) why = m.type + ' is off (' + SWITCH_OF[m.type] + ' = off in config.txt).';
-    if (!why && m.type === 'accountArchive' && !this.sw.accountChecks) why = 'accountArchive is off (accountChecks = off in config.txt).';
+    if (!why && (m.type === 'accountArchive' || m.type === 'accountUnarchive') && !this.sw.accountChecks) why = m.type + ' is off (accountChecks = off in config.txt).';
     if (!why && AGENT_PAGE_TYPES.includes(m.type)) why = this.agentPageCheck(m);
     if (!why) why = this['check_' + m.type](m);
     if (why) { this.send(conn, Object.assign({ type: 'reject' }, ref, { reason: why })); if (m.type === 'merge') this.merges.refused++; return false; }
@@ -431,13 +443,23 @@ export class OrderDeskV3 extends OrderDesk {
     const a = this.acct.get(m.account);
     if (!a || a.state === 'archived') return 'No account ' + m.account + '.';
     if (m.confirm !== true) return 'Archive needs confirm: true.';
-    if (a.state !== 'gone') return a.name + ' is not gone; only a gone account can be archived.';
-    return null;
+    return this.hideWhy(a);   // 0.5.1: any flat account, Gone or not
   }
   do_accountArchive(m) {
     const a = this.acct.get(m.account); a.state = 'archived'; a.archivedAt = this.now(); a.trade = false;
     this.copier.followers.delete(a.name);
     this.logLine('accounts', a.name, 'archived by the page');
+    this.refreshAccounts(); this.sendAccounts();
+  }
+  check_accountUnarchive(m) {
+    const a = this.acct.get(m.account);
+    if (!a) return 'no account ' + m.account;
+    return a.state === 'archived' ? null : a.name + ' is not archived';
+  }
+  /** 0.5.1 Show: back, active and unchecked */
+  do_accountUnarchive(m) {
+    const a = this.acct.get(m.account); a.state = 'active'; a.archivedAt = null; a.trade = false; a.goneWhy = null; a.goneSince = null; a.badSince = null;
+    this.logLine('accounts', a.name, 'shown by the page; unchecked');
     this.refreshAccounts(); this.sendAccounts();
   }
 

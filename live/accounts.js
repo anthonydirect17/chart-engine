@@ -2,9 +2,9 @@
  * The Account page (chart 1.16.0, ChartBridge 0.4.0, protocol v3; Anthony's spec, chart page section 1, items 14, 15 and 20):
  * a grid piece of the workspace (live/workspace.js panel type 'accounts') with six tabs, and the Quote board's formats.
  *
- *   Accounts         every account ChartBridge watches: connection, balance, today's P&L, open position, the room to the
- *                    trailing drawdown and the daily loss limit, the trading checkmark, the Gone list and Archive (an
- *                    in-page confirm)
+ *   Accounts         every account ChartBridge watches (0.5.1: connected in NinjaTrader this session): connection, balance,
+ *                    today's P&L, open position, the room to the trailing drawdown and the daily loss limit, the trading
+ *                    checkmark, the Gone list, Hide on any flat account (an in-page confirm) and Show on a hidden one
  *   Positions        every open position on every account: average price, unrealized P&L, the attached stop and target
  *   Working orders   every working order on every account (Cancel only with `cancelFromList` on)
  *   Today's trades   per account, the fills and the flat-to-flat round trips, gross and net (The Desk's commission)
@@ -548,6 +548,7 @@ function createFeed(env) {
     /* the page's v3 actions, exactly the contract's messages; each only when its switch is on (ChartBridge checks again) */
     accountTrade: (name, on) => S.switches.accountChecks && send({ type: 'accountTrade', cid: cid(), account: name, on: !!on }),
     accountArchive: name => S.switches.accountChecks && send({ type: 'accountArchive', cid: cid(), account: name, confirm: true }),
+    accountUnarchive: name => S.switches.accountChecks && send({ type: 'accountUnarchive', cid: cid(), account: name }),   // ChartBridge 0.5.1: Show
     cancelFromList: id => S.switches.cancelFromList && sendOrder({ type: 'cancel', cid: cid(), id, from: 'list' }),
     copierSet: (what) => S.switches.copier && send(Object.assign({ type: 'copierSet', cid: cid() }, what)),
     copierFollower: row => {
@@ -607,6 +608,7 @@ function mount(v, host) {
     if (a === 'archive') { P.confirm = id; render(); }
     else if (a === 'archive-no') { P.confirm = ''; render(); }
     else if (a === 'archive-yes') { if (P.confirm === id) F.accountArchive(id); P.confirm = ''; render(); }
+    else if (a === 'unarchive') F.accountUnarchive(id);
     else if (a === 'cancel') F.cancelFromList(id);
     else if (a === 'rearm') F.copierRearm();
     else if (a === 'mode') F.copierSet({ mode: b.dataset.v });
@@ -671,6 +673,10 @@ function mount(v, host) {
     else if (!S.got) html = `<p class="ac-empty">${esc(S.open ? 'Waiting for ChartBridge\'s accounts.' : S.reason || 'Connecting to ChartBridge.')}</p>`;
     else if (P.tab === 'acc') {
       const lim = a => AC.limitState(a, S.desk.get(a.name));
+      const canAct = sw.accountChecks && S.enabled;
+      const canShow = canAct && accounts.some(a => a && 'canHide' in a);   // Show: ChartBridge 0.5.1 and later (its accounts carry canHide)
+      /* the in-page confirm for Hide, a row of its own under the account's */
+      const ask = a => P.confirm !== a.name ? '' : row('ask|' + a.name, `<span role="cell" class="apg-confirm">Hide ${esc(a.name)}? It leaves every list until you Show it; its history stays. <button type="button" class="ac-btn apg-yes" data-act="archive-yes" data-id="${esc(a.name)}">Hide</button><button type="button" class="ac-btn" data-act="archive-no" data-id="${esc(a.name)}">Keep</button></span>`, 'apg-ask');
       const accRow = a => {
         const s = lim(a), pos = (a.positions || []).filter(p => p.qty).map(p => p.root + ' ' + (p.qty > 0 ? '+' : '') + p.qty).join(', ');
         const lvl = s.level ? ' apg-' + s.level : '';
@@ -679,25 +685,32 @@ function mount(v, host) {
           s.level ? (s.level === 'red' ? 'RED: ' : 'AMBER: ') + Math.round(s.pct * 100) + '% of the room used to the closer limit' : ''].filter(Boolean).join('\n');
         /* the checkmark: a control only with accountChecks on; else what gate 2 says, read only */
         const canCheck = sw.accountChecks && S.enabled;
+        /* Hide (ChartBridge 0.5.1): on any account ChartBridge says may be hidden now (flat, not the bot's, the copier's or an agent's) */
+        const hide = !canAct ? '' : a.canHide === true
+          ? `<span role="cell" class="r"><button type="button" class="ac-btn apg-hide" data-act="archive" data-id="${esc(a.name)}" title="Hide ${esc(a.name)}: it leaves every list until you Show it; its fills and history stay">Hide</button></span>`
+          : c('', 'r mut', a.hideWhy || '');
         const mark = canCheck
           ? `<span role="cell" class="r"><input type="checkbox" class="apg-chk" data-act="trade" data-id="${esc(a.name)}" ${pr({ checked: !!a.trade, disabled: !a.trade && (a.state !== 'active' || a.connection !== 'connected') })} aria-label="Trade on ${esc(a.name)}" title="Trading on ${esc(a.name)}: checked, ChartBridge takes entries for it. Unchecking always works; exits always work."></span>`
           : c(a.trade ? '✓' : '', 'r ' + (a.tradable ? 'up' : 'mut'), a.trade ? (a.tradable ? 'Trading is on for ' + a.name : 'Checked, but not tradable now') : 'Not checked for trading');
         return row(a.name, `${c(a.name, 'b', a.sim ? 'NinjaTrader Sim account' : '')}${c(CONN[a.connection] || a.connection, a.connection === 'connected' ? '' : 'warn')}` +
           `${c(AC.fmtUsdPlain(a.balance), 'r')}${c(AC.fmtUsd(a.pnlToday), 'r ' + (a.pnlToday > 0.004 ? 'up' : a.pnlToday < -0.004 ? 'dn' : ''))}${c(pos, 'r')}` +
-          `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${mark}`, 'apg-acc' + lvl);
+          `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${mark}${hide}`, 'apg-acc' + lvl) + ask(a);
       };
       html = !accounts.length ? '<p class="ac-empty">ChartBridge watches no account.</p>' :
-        '<div class="gr apg-g apg-acc-g" role="table" aria-label="Accounts">' +
-        row('h', h('Account') + h('Conn') + h('Balance', 'r') + h('Today', 'r') + h('Position', 'r') + h('Room', 'r') + h('Trade', 'r'), 'gr-h') +
+        `<div class="gr apg-g apg-acc-g${canAct ? ' apg-hides' : ''}" role="table" aria-label="Accounts">` +
+        row('h', h('Account') + h('Conn') + h('Balance', 'r') + h('Today', 'r') + h('Position', 'r') + h('Room', 'r') + h('Trade', 'r') + (canAct ? h('', 'r') : ''), 'gr-h') +
         active.map(accRow).join('') + '</div>' +
         (gone.length ? '<h3 class="apg-h">Gone</h3><div class="gr apg-g apg-gone-g" role="table" aria-label="Gone accounts">' + gone.map(a => {
           const asking = P.confirm === a.name;
-          const btn = !(sw.accountChecks && S.enabled) ? '' : asking
-            ? `<span role="cell" class="apg-confirm">Archive ${esc(a.name)}? It leaves every list; its history stays. <button type="button" class="ac-btn apg-yes" data-act="archive-yes" data-id="${esc(a.name)}">Archive</button><button type="button" class="ac-btn" data-act="archive-no" data-id="${esc(a.name)}">Keep</button></span>`
-            : `<span role="cell" class="r"><button type="button" class="ac-btn" data-act="archive" data-id="${esc(a.name)}" title="Archive ${esc(a.name)}: it leaves every list (the copier, Working orders); its fills and history stay">Archive</button></span>`;
+          const btn = !canAct ? '' : asking
+            ? `<span role="cell" class="apg-confirm">Hide ${esc(a.name)}? It leaves every list until you Show it; its history stays. <button type="button" class="ac-btn apg-yes" data-act="archive-yes" data-id="${esc(a.name)}">Hide</button><button type="button" class="ac-btn" data-act="archive-no" data-id="${esc(a.name)}">Keep</button></span>`
+            : a.canHide === false ? c('', 'r mut', a.hideWhy || '')
+            : `<span role="cell" class="r"><button type="button" class="ac-btn apg-hide" data-act="archive" data-id="${esc(a.name)}" title="Hide ${esc(a.name)}: it leaves every list (the copier, Working orders) until you Show it; its fills and history stay">Hide</button></span>`;
           return row('g|' + a.name + (asking ? '|ask' : ''), c(a.name, 'b') + c(GONE_WHY[a.goneWhy] || a.goneWhy || 'gone', 'warn') + c(a.goneSince ? 'since ' + hms(a.goneSince) + ' ET' : '', 'mut') + c(AC.fmtUsd(a.pnlToday), 'r') + btn, 'apg-gone');
         }).join('') + '</div>' : '') +
-        (S.archived.length ? `<p class="apg-arch">Archived: ${esc(S.archived.map(a => a.name).join(', '))}</p>` : '');
+        /* hidden (archived) accounts: Show brings one back, unchecked (ChartBridge 0.5.1) */
+        (S.archived.length ? '<h3 class="apg-h">Hidden</h3><div class="gr apg-g apg-arch-g" role="table" aria-label="Hidden accounts">' + S.archived.map(a =>
+          row('a|' + a.name, c(a.name, 'b mut') + (canAct ? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show" data-act="unarchive" data-id="${esc(a.name)}" title="Show ${esc(a.name)}: back in the lists, unchecked">Show</button></span>` : ''), 'apg-arch')).join('') + '</div>' : '');
       foot = (S.deskState === 'ok' ? 'Limits: NinjaTrader where it reports them, else The Desk.' : S.deskState === 'not asked' ? 'Limits: NinjaTrader where it reports them.' : S.deskState) +
         (sw.accountChecks ? '' : ' Checkmarks are read only (accountChecks = off in config.txt).') + (S.enabled ? '' : ' ' + (S.reason || ''));
     } else if (P.tab === 'pos') {
