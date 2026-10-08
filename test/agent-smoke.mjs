@@ -45,9 +45,21 @@ async function until(fn, what, ms = 10000) {
   const t0 = Date.now();
   for (;;) { let v = null; try { v = await fn(); } catch (e) { v = null; } if (v) return v; if (Date.now() - t0 > ms) { fail('timed out: ' + what); return null; } await sleep(150); }
 }
+/* The smoke's clock, whatever the time of day it runs at: the fake's exchange and desk clocks (--clock-offset) and the page's
+   clock (Playwright's, the same offset) all read 11:00 New York on today's New York date and run on from there, so his
+   session trail (entryFrom 09:45 to flatAt 15:55) always holds the fills. Until this, after 15:55 New York the trail check
+   failed by the wall clock. */
+const SMOKE_NY = '11:00';
+const NY_PARTS = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+function offsetToNy(hhmm, now) {
+  const o = {}; for (const x of NY_PARTS.formatToParts(new Date(now))) o[x.type] = +x.value || 0;
+  const wall = Date.UTC(o.year, o.month - 1, o.day, o.hour % 24, o.minute, o.second), want = Date.UTC(o.year, o.month - 1, o.day, +hhmm.slice(0, 2), +hhmm.slice(3), 0);
+  return Math.round((want - wall) / 1000);   // seconds
+}
+const CLOCK_OFFSET_S = offsetToNy(SMOKE_NY, Date.now());
 async function startBridge(p, flags) {
   port = p;
-  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN].concat(flags || []), { stdio: ['ignore', 'pipe', 'inherit'] });
+  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--clock-offset=' + CLOCK_OFFSET_S].concat(flags || []), { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { br.stdout.once('data', res); br.once('exit', c => rej(new Error('bridge exited ' + c))); });
   return br;
 }
@@ -59,6 +71,14 @@ let bridge = null;
 try {
   bridge = await startBridge(PORT, ['--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2']);   // config.txt's cap holds for agents (as built)
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
+  /* the page's clock: the fake's, running on. Only Date is shifted; the timers stay real (Playwright's fake clock also takes
+     over the timers, and the tab's 4 s confirm windows then never end) */
+  await ctx.addInitScript(off => {
+    const Real = Date;
+    class Shifted extends Real { constructor(...a) { if (a.length) super(...a); else super(Real.now() + off); } static now() { return Real.now() + off; } }
+    window.Date = Shifted;
+  }, CLOCK_OFFSET_S * 1000);
+  console.log('the smoke runs at ' + SMOKE_NY + ' New York (clock offset ' + CLOCK_OFFSET_S + ' s from the wall clock)');
   await ctx.route('http://localhost:8800/api/chart-hotkeys', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(DESK_KEYS) }));
   await ctx.route('http://localhost:8800/api/chart-strategies', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ rev: 0, strategies: [] }) }));
   await ctx.route('http://localhost:8800/api/chart-accounts', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ accounts: [] }) }));
@@ -74,6 +94,8 @@ try {
     window.WebSocket = Spy;
   });
   const page = await ctx.newPage();
+  const pageNy = await page.evaluate(() => new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).format(new Date()));
+  check(/^11:0\d$/.test(pageNy), 'the page\'s clock reads ' + SMOKE_NY + ' New York, whatever the time of day the smoke runs: ' + pageNy);
   page.on('pageerror', e => fail('page error: ' + e.message));
   page.on('dialog', d => { fail('a browser dialog: ' + d.message()); d.dismiss(); });
   const open = async (q = '?layout=Main') => {

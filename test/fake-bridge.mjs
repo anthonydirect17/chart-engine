@@ -51,7 +51,8 @@
 //   --desk-url=http://127.0.0.1:8837  /diag's desk.deskUrl (config.txt deskUrl; default http://localhost:8800): The Desk's
 //                                   address, the page's one source for it (chart 1.16.0)
 //   --serve-root=DIR                serve the page files from another checkout (to compare versions)
-//   --clock-offset=-45000           run the exchange clock this many seconds off the PC's (a chosen time of day)
+//   --clock-offset=-45000           run the exchange clock this many seconds off the PC's (a chosen time of day); with --v3 the desk's
+//                                   clock (fills, execs, proposals, the agents' hours) follows it too
 //   --pc-clock-offset=-45010        the clock of the PC ChartBridge runs on, as seconds off the real one (default: the
 //                                   exchange clock's, --clock-offset): each live tick's `rx` is read from it and `u` from
 //                                   the exchange clock (the data's time, a few ms before), so a PC clock 10 s behind the
@@ -480,7 +481,9 @@ const deskOpts = {
   send, conns: () => clients, barTime: () => etNow(),
 };
 // --v3: ChartBridge 0.4.0's desk (test/fake-v3.mjs) with every switch on but those in --v3-off
-const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { switches: Object.fromEntries(SWITCHES.map(k => [k, !V3_OFF.includes(k)])), accountList: V3_ACCOUNTS.concat(AGENT_ACCOUNTS),
+/* --v3 with --clock-offset: the desk's clock (fills, execs, proposals, expiries, the agents' flat hours) is the exchange clock too,
+   so a smoke can run at a chosen time of day whatever the wall clock says (the page's clock pinned to the same offset) */
+const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { now: () => Date.now() + CLOCK_OFFSET * 1000, switches: Object.fromEntries(SWITCHES.map(k => [k, !V3_OFF.includes(k)])), accountList: V3_ACCOUNTS.concat(AGENT_ACCOUNTS),
   graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ', agents: AGENTS, agentAnyTime: !!flag('agent-any-time') })) : new OrderDesk(deskOpts);
 const tapeStats = V3 ? new TapeStats() : null;          // 0.4.0: the tape counters are always on (no switch)
 const BOT_SECRET = crypto.randomBytes(32).toString('hex');   // ChartBridge keeps it in bot-secret.txt; never printed
@@ -908,7 +911,7 @@ function botUpgrade(req, sock) {
   const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   const c = { sock, bot: true, buf: Buffer.alloc(0) };
-  desk.bot.conn = c; desk.bot.simulated = false; desk.bot.lastBeat = Date.now();
+  desk.bot.conn = c; desk.bot.simulated = false; desk.bot.lastBeat = desk.now();
   sock.on('data', d => {
     const r = parseFrames(Buffer.concat([c.buf, d]), t => {
       let m; try { m = JSON.parse(t); } catch (e) { return send(c, { type: 'reject', id: null, reason: 'Not JSON.' }); }
@@ -997,7 +1000,7 @@ function agentControl(p, q, req, res) {
   if (p === '/test/agent-stuck-cancel') { a.stuckCancels = +(q.get('n') || 2); return json(200, { stuckCancels: a.stuckCancels }); }
   if (p === '/test/agent-unlist') { const n = q.get('account') || a.account; if (q.get('on') === '0') desk.unlisted.delete(n); else desk.unlisted.add(n); return json(200, { unlisted: [...desk.unlisted] }); }
   if (p === '/test/agent-flat-hours') { a.forceFlatHours = q.get('on') !== '0'; return json(200, { forceFlatHours: a.forceFlatHours }); }
-  if (p === '/test/agent-expire') { const x = a.proposals.get(q.get('id') || ''); if (x) x.expiresAt = Date.now() + +(q.get('ms') || 0); if (x) desk.broadcastV3(x); return json(200, { expiresAt: x ? x.expiresAt : null }); }
+  if (p === '/test/agent-expire') { const x = a.proposals.get(q.get('id') || ''); if (x) x.expiresAt = desk.now() + +(q.get('ms') || 0); if (x) desk.broadcastV3(x); return json(200, { expiresAt: x ? x.expiresAt : null }); }
   return json(404, { error: 'unknown control' });
 }
 pinReady.then(() => server.listen(PORT, '127.0.0.1', () => console.log('fake ChartBridge on http://localhost:' + PORT + '/live/' +
