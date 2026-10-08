@@ -748,6 +748,21 @@ public static class AgentHarness
         Check(page.Count(x => x.Contains("NOT FLAT")) == errs && M.DiagJson().Contains("\"flattenedAt\":\"20") && Last(page, "agent").Contains("\"position\":null") && Last(page, "agent").Contains("\"owns\":false"),
               "flat: the errors stop; /diag flattenedAt; the strip flat");
         Check(FileText("agent-manrae.log").Contains("agent manrae flatten: sell 1 MNQ at market on Sim101"), "agent-manrae.log has the flatten");
+        // a flat time when the agent does not own the pair (Anthony's own position there): only the agent's stray orders go
+        Settle(sim);
+        Advance(500);
+        SetPos(sim, mnq, 1);
+        Order his = sim.CreateOrder(mnq, OrderAction.Sell, OrderType.StopMarket, OrderEntry.Manual, TimeInForce.Gtc, 1, 0, 24900, "", "", NinjaTrader.Core.Globals.MaxDate, null);
+        Order stray = sim.CreateOrder(mnq, OrderAction.Sell, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, 1, 25100, 0, "", "CB#deadbeef ag:manrae flat", NinjaTrader.Core.Globals.MaxDate, null);
+        his.OrderState = OrderState.Working; stray.OrderState = OrderState.Working;
+        lock (sim.Orders) { sim.Orders.Add(his); sim.Orders.Add(stray); }
+        calls = sim.Calls.Count;
+        Advance(1500);
+        List<string> c2 = sim.Calls.Skip(calls).ToList();
+        Check(stray.OrderState == OrderState.Cancelled && IsLive(his) && PosOf(sim, mnq) == 1 && !c2.Any(c => c.StartsWith("submit")) && c2.Count == 1,
+              "flat time on a pair the agent does not own: only its own stray order is cancelled; Anthony's position and stop are never touched: " + string.Join(" | ", c2));
+        his.OrderState = OrderState.Cancelled;
+        Settle(sim);
         // the agent's own flatten: auto only, not killed
         et = new DateTime(2026, 10, 8, 10, 0, 0);
         ac = new ChartBridgeClient(null, -100);

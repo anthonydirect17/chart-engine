@@ -536,6 +536,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private class FlatJob
         {
             public string Root, Why;
+            public bool Owned;   // it owned the pair at the start: close its position; else only its own orders are cancelled
             public double StartMs, LastCancelMs = -1e18, LastCloseMs = -1e18, LastErrorMs, ApartSinceMs = -1;
             public Order Close;
         }
@@ -1678,9 +1679,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 bool busy;
                 lock (Sync) busy = Flats.ContainsKey(root);
                 if (busy) continue;
-                bool mineWorking = ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o));
-                if (!Owns(root) && !mineWorking) continue;
-                lock (Sync) { Flats[root] = new FlatJob { Root = root, Why = why, StartMs = Now() }; }
+                bool mineWorking = ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o)), owned = Owns(root);
+                if (!owned && !mineWorking) continue;
+                lock (Sync) { Flats[root] = new FlatJob { Root = root, Why = why, StartMs = Now(), Owned = owned }; }
                 started++;
                 string text = byRules ? why : "Agent " + Id + ": " + why + ": " + root + " on " + a.Name;
                 Log(text); AgentLog(text + " (" + root + " on " + a.Name + ")");
@@ -1704,7 +1705,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 bool up = ChartBridgeAccounts.ExitAllowed(a, out exitWhy);
                 int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
                 List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
-                List<Order> others = may.Where(o => o != j.Close).ToList();
+                List<Order> others = may.Where(o => o != j.Close && (j.Owned || IsMine(o))).ToList();   // not its pair: only its own orders
                 bool closeWorks = j.Close != null && may.Contains(j.Close);
                 if (up && others.Count > 0)
                 {
@@ -1719,7 +1720,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 else if (up && !closeWorks)
                 {
-                    if (p1 == 0 && p2 == 0)
+                    if ((p1 == 0 && p2 == 0) || !j.Owned)
                     {
                         string at = Iso(now);
                         lock (Sync) { Flats.Remove(j.Root); flattenedAt = at; }
@@ -1736,9 +1737,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (now - j.ApartSinceMs >= ChartBridgeAgents.FlatRetryMs && Math.Sign(p1) == Math.Sign(p2) && p1 != 0)
                         { qty = Math.Min(Math.Abs(p1), Math.Abs(p2)); dir = Math.Sign(p1); }
                     }
-                    if (qty > 0 && now - j.LastCloseMs >= ChartBridgeAgents.FlatRetryMs) { j.LastCloseMs = now; j.Close = SendClose(a, inst, dir, qty, j.Root); }
+                    if (qty > 0 && now - j.LastCloseMs >= ChartBridgeAgents.FlatRetryMs) { j.LastCloseMs = now; j.Close = SendClose(a, inst, dir, qty, j.Root, j); }
                 }
-                bool flat = p1 == 0 && p2 == 0;
+                bool flat = (p1 == 0 && p2 == 0) || !j.Owned;
                 if (!flat && now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)
                 {
                     j.LastErrorMs = now;
@@ -1751,14 +1752,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The flatten's one market order: closes what the position holds, never more (an exit: no entry gate, a Connected account).
-        private Order SendClose(Account a, Instrument inst, int dir, int qty, string root)
+        // Under the order lock, the position and the orders that may fill are read again first: nothing new may slip in between.
+        private Order SendClose(Account a, Instrument inst, int dir, int qty, string root, FlatJob j)
         {
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
-            Order x = a.CreateOrder(inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
-                "CB#" + tag + " ag:" + Id + " flat", NinjaTrader.Core.Globals.MaxDate, null);
-            ChartBridgeAgents.NoteTag(tag, Id);
+            Order x;
             lock (ChartBridgeOrders.AgentPlaceLock)
             {
+                int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
+                bool other = ChartBridgeOrders.AgentMayFill(a, inst).Any(o => o != j.Close);
+                if (other || Math.Sign(p1) != dir || Math.Sign(p2) != dir || qty > Math.Min(Math.Abs(p1), Math.Abs(p2))) return null;   // changed meanwhile: the next pass looks again
+                x = a.CreateOrder(inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
+                    "CB#" + tag + " ag:" + Id + " flat", NinjaTrader.Core.Globals.MaxDate, null);
+                ChartBridgeAgents.NoteTag(tag, Id);
                 ChartBridgeOrders.AgentSent(x);
                 try { a.Submit(new[] { x }); }
                 catch (Exception ex) { ChartBridgeOrders.AgentUnsent(x); Log("agent " + Id + " flatten: the close could not be sent (" + ex.Message + ")"); return null; }
