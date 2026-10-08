@@ -289,3 +289,13 @@ test('paceChunks: B/E split by the per-second budget, what fits now first, then 
   assert.deepEqual(OT.paceChunks([], 0, 10), [[]]);
   assert.deepEqual(OT.paceChunks(null, 0, 10), [[]]);
 });
+
+test('orderEvent (ChartBridge 0.5.1): a message sent again after a snapshot (again: true) is never shown twice', () => {
+  const f = p => p.toFixed(2);
+  const base = { id: 'o1', account: 'Sim101', root: 'MNQ', name: 'MNQ 12-26', side: 'buy', kind: 'limit', qty: 2, price: 25400, state: 'working', filled: 0 };
+  const filled = Object.assign({}, base, { state: 'filled', filled: 2, avgFill: 25400 }), rejected = Object.assign({}, base, { state: 'rejected', text: 'NinjaTrader: OrderRejected' });
+  assert.equal(OT.orderEvent(Object.assign({}, filled, { again: true }), null, f), null);
+  assert.equal(OT.orderEvent(Object.assign({}, rejected, { again: true }), rejected, f), null);
+  assert.equal(OT.orderEvent(Object.assign({}, base, { again: true }), null, f), null);
+  assert.ok(OT.orderEvent(Object.assign({}, filled, { again: false }), null, f), 'only again: true is quiet');
+});
