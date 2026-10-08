@@ -647,7 +647,9 @@ test('agents: plan checks in the contract\'s order; shadow logs and shows (no an
   const late = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 19, 0) });     // 15:00 New York: not before entryUntil
   late.hello();
   assert.match(late.plan().why, /outside the entry window/);
-  assert.equal((await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 19, 0), anyTime: true })).plan().why, 'send agentHello first');
+  const any = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 19, 0), anyTime: true });   // tests and smokes only: no window
+  any.hello();
+  assert.equal(any.plan().why, null, '--agent-any-time: a plan at 15:00 passes the window');
   // the bot's account is never an agent's
   const shared = await makeAgentDesk({ accounts: { demo: 'Sim101' } });
   shared.hello();
@@ -768,6 +770,18 @@ test('agents: flat time flattens the agent\'s position itself, with the agent go
   assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).position, null);
   assert.ok(d.desk.agentsDiag().demo.flattenedAt > 0);
   assert.ok(!d.working('SIM-AG1').length, 'its stop and target cancelled first');
+  // not flat 10 s later (here: a position left there by hand after the flatten): an error every 10 s until flat
+  d.desk.agents.get('demo').trade = { root: 'MNQ', pnl: 0 };
+  d.desk.placeElsewhere({ account: 'SIM-AG1', root: 'MNQ', side: 'buy', kind: 'market', qty: 1, price: null }); d.take();
+  d.advance(5000); d.desk.everySecond();
+  assert.equal(d.take('status').filter(s => s.level === 'error').length, 0, 'not before 10 s');
+  d.advance(5000); d.desk.everySecond();
+  const e1 = d.take('status').filter(s => s.level === 'error');
+  assert.equal(e1.length, 1); assert.match(e1[0].text, /^demo is not flat 10 s after its flat time: check SIM-AG1 in NinjaTrader$/);
+  d.advance(4000); d.desk.everySecond();
+  assert.equal(d.take('status').filter(s => s.level === 'error').length, 0, 'once every 10 s, not every second');
+  d.advance(6000); d.desk.everySecond();
+  assert.equal(d.take('status').filter(s => s.level === 'error').length, 1, 'again 10 s later');
 });
 
 test('agents: account (section 6) never the bot\'s, the copier\'s or another agent\'s; the bot and the copier refuse an agent\'s', async () => {
@@ -799,7 +813,8 @@ test('agents: rules from the page (sections 3 and 7): every allowed value, saved
   d.hello(); d.agentTake();
   const base = { type: 'agentRules', cid: 'r', agent: 'demo', roots: 'NQ,MNQ', maxQtyNQ: 1, maxQtyMNQ: 10, entryFrom: '09:45', entryUntil: '11:30', flatAt: '12:00', maxExpireSec: 900, maxTrades: 6, maxLosses: 3 };
   const r = o => reasonOf(d.act(Object.assign({}, base, o)));
-  assert.match(r({ roots: 'NQ,YM', maxQtyYM: 1 }), /Unknown key|cannot be an agent's root/);
+  assert.match(r({ roots: 'NQ,YM' }), /YM cannot be an agent's root/, 'a valid key set reaches the root check');
+  assert.match(r({ roots: 'NQ,NQ' }), /twice/);
   assert.match(r({ roots: 'NQ,MNQ', maxQtyNQ: 3 }), /maxQtyNQ must be a whole number from 1 to 2/);
   assert.match(r({ maxQtyMNQ: 21 }), /from 1 to 20/);
   assert.match(r({ roots: 'MNQ' }), /maxQtyNQ is for a root not in roots/);
@@ -862,4 +877,133 @@ test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; h
     assert.deepEqual(Object.keys(diag.agents.demo), ['connected', 'mode', 'killed', 'plans', 'proposals', 'placed', 'refused', 'heartbeatLost', 'flattenedAt', 'secretFile']);
     a.close(); ws.close();
   } finally { child.kill(); }
+});
+
+/* ---------------- the review of 19e9ef0 (lead's defaults, the C# builder has the same list) */
+test('agents review S6a: before agentHello nothing is read, shown or kept; it is no heartbeat', async () => {
+  const d = await makeAgentDesk();
+  d.desk.agentConnect('demo', d.agentConn);
+  const why = d.say({ type: 'plan', id: 'pre1', root: 'MNQ', side: 'buy', kind: 'limit', price: 25399, qty: 2, stopTicks: 16, targetTicks: 32, expireSec: 600, riskDollars: 16, setup: 'Sample', reason: 'Sample', confidence: 0.6, extra: 1 });
+  assert.equal(why, 'send agentHello first');
+  assert.equal(d.take('agentPlan').length, 0, 'never shown to the pages');
+  assert.equal(d.desk.agents.get('demo').lastPlan, null, 'never lastPlan');
+  assert.equal(d.say({ type: 'note', kind: 'look', text: 'Sample' }), 'send agentHello first');
+  assert.equal(d.take('agentNote').length, 0);
+  d.hello();
+  assert.equal(d.plan({ id: 'pre1' }).why, null, 'a pre-hello id was never seen');
+});
+
+test('agents review S6f: a socket that never says hello, or says nothing, is closed after 5 s', async () => {
+  const d = await makeAgentDesk(), closed = [];
+  d.desk.closeAgentConn = c => closed.push(c);
+  d.desk.agentConnect('demo', d.agentConn);
+  d.silent(3000); d.say({ type: 'beat' });              // a beat before hello does not count
+  d.silent(2500); d.desk.everySecond();
+  assert.equal(closed.length, 1, 'no hello in 5 s: closed');
+  assert.equal(d.desk.agents.get('demo').conn, null);
+  d.hello(); d.silent(5100); d.desk.everySecond();
+  assert.equal(closed.length, 2, '5 s of silence after hello: closed');
+  assert.equal(d.desk.agents.get('demo').connected, false);
+});
+
+test('agents review S6b: the page cannot take an agent entry\'s stop or target away; other plan changes, moves and leg moves pass', async () => {
+  const d = await makeAgentDesk();
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  d.plan({ price: 25390 });
+  const entry = d.working('SIM-AG1').find(o => o.agentId === 'demo' && o.role === 'entry');
+  for (const f of [{ stopTicks: null }, { stopTicks: 0 }, { targetTicks: null }, { targetTicks: 0 }])
+    assert.equal(reasonOf(d.act(Object.assign({ type: 'plan', cid: 'x', id: entry.id }, f))), 'an agent\'s entry always has a stop and a target', JSON.stringify(f));
+  assert.equal(reasonOf(d.act({ type: 'plan', cid: 'y', id: entry.id, stopTicks: 20, targetTicks: 40 })), null, 'other whole numbers of 1 or more');
+  assert.deepEqual(entry.planned, { stopTicks: 20, targetTicks: 40 });
+  assert.equal(reasonOf(d.act({ type: 'change', cid: 'z', id: entry.id, price: 25389 })), null, 'the entry price moves');
+  d.tick(25388.75);
+  const stop = d.working('SIM-AG1').find(o => o.role === 'stop');
+  assert.equal(reasonOf(d.act({ type: 'change', cid: 'w', id: stop.id, price: stop.price + 1 })), null, 'a leg moves (an exit)');
+  assert.equal(reasonOf(d.act({ type: 'cancel', cid: 'v', id: stop.id })), null, 'a leg cancels (an exit)');
+});
+
+test('agents review S6c, S6d: 18:00 ET starts the day over; a rules change never lifts a loss stand-down', async () => {
+  const d = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 21, 0) });   // 17:00 New York
+  d.hello(); d.desk.everySecond();
+  const a = d.desk.agents.get('demo');
+  a.trades = 3; a.losses = 2; a.pnl = -40; a.planIds.add('used'); a.standDown = '2 losing trades today: no new entries until 18:00 ET';
+  d.act({ type: 'agentRules', cid: 'r', agent: 'demo', roots: 'NQ,MNQ', maxQtyNQ: 2, maxQtyMNQ: 20, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 1800, maxTrades: 0, maxLosses: 5 });
+  assert.equal(a.standDown, '2 losing trades today: no new entries until 18:00 ET', 'a looser rule never lifts it');
+  d.advance(30 * 60000); d.desk.everySecond();                       // 17:30: the same day
+  assert.equal(a.trades, 3);
+  d.advance(31 * 60000); d.desk.everySecond();                       // 18:01: a new day
+  assert.deepEqual([a.trades, a.losses, a.pnl, a.standDown, a.planIds.has('used')], [0, 0, 0, null, false]);
+  assert.equal(d.V.tradingDay(Date.UTC(2026, 9, 8, 22, 1)), '2026-10-09');
+  assert.equal(d.V.tradingDay(Date.UTC(2026, 9, 8, 21, 59)), '2026-10-08');
+});
+
+test('agents review S6h, S6i, S6k: the bot\'s and the copier\'s accounts whatever the switches; a refused id is used; auto refuses a gone account', async () => {
+  const off = await makeAgentDesk({ switches: { bot: false, copier: false } });
+  const r = m => reasonOf(off.act(Object.assign({ type: 'agentAccount', agent: 'demo' }, m)));
+  assert.match(r({ account: 'Sim101' }), /the bot's account/, 'the bot switch off changes nothing');
+  off.desk.copier.followers.set('EVAL-A', { account: 'EVAL-A', on: false, qty: 1, size: 'micro', lossLimit: null });
+  assert.match(r({ account: 'EVAL-A' }), /copier follower/, 'the copier switch off changes nothing');
+  const shared = await makeAgentDesk({ switches: { bot: false }, accounts: { demo: 'Sim101' } });
+  shared.hello();
+  assert.match(shared.plan().why, /Sim101 is the bot's account/);
+  const d = await makeAgentDesk();
+  d.hello();
+  assert.match(d.plan({ id: 'bad1', qty: 99, riskDollars: 792 }).why, /from 1 to 20/);
+  assert.match(d.plan({ id: 'bad1' }).why, /plan id bad1 was used today/, 'refused or not, a plan id is used once a day');
+  d.desk.acct.get('SIM-AG1').state = 'gone';
+  assert.match(reasonOf(d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' })), /auto refused: SIM-AG1 is not tradable now/);
+});
+
+test('agents review S2: a refused duplicate never replaces the plan it copies; both are shown', async () => {
+  const d = await makeAgentDesk();
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' }); d.take();
+  d.plan({ id: 'dup1' });
+  assert.match(d.plan({ id: 'dup1', side: 'sell', price: 25401 }).why, /used today/);
+  const a = d.desk.agents.get('demo');
+  assert.deepEqual(a.plans.map(p => p.id + ':' + p.result.split(':')[0]), ['dup1:proposed', 'dup1:refused']);
+  assert.equal(a.lastPlan.result, 'proposed', 'lastPlan stays the plan that was not refused');
+  assert.equal(d.take('agentPlan').length, 2, 'both go to the pages');
+  assert.equal(a.proposals.get('dup1').state, 'open');
+});
+
+test('agents review S5: an account change puts the agent in shadow', async () => {
+  const d = await makeAgentDesk();
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  d.desk.acct.get('SIM-F2').trade = true; d.desk.refreshAccounts(); d.desk.copier.followers.delete('SIM-F2');
+  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2' })), null);
+  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).mode, 'shadow');
+  assert.equal(d.agentTake('welcome').pop().mode, 'shadow', 'the agent is told');
+});
+
+test('agents review V3: the checks run in the contract\'s order (a plan failing two gets the earlier reason); checks 2, 9, 10 and 11', async () => {
+  const d = await makeAgentDesk();
+  d.hello();
+  // two failures each: the earlier check's reason
+  assert.match(d.plan({ kind: 'market', qty: 99 }).why, /limit or a stop-limit/, '3 before 4');
+  assert.match(d.plan({ qty: 99, riskDollars: 1 }).why, /from 1 to 20/, '4 before 5');
+  assert.match(d.plan({ riskDollars: 1, expireSec: 5 }).why, /riskDollars/, '5 before 6');
+  assert.match(d.plan({ expireSec: 5, price: 25401 }).why, /expireSec/, '6 before 11');
+  d.act({ type: 'agentKill', agent: 'demo', on: true });
+  assert.match(d.plan({ root: 'ES', riskDollars: 400 }).why, /kill switch/, '2 before 3');
+  d.act({ type: 'agentKill', agent: 'demo', on: false });
+  // check 2: the account tradable now
+  d.act({ type: 'accountTrade', account: 'SIM-AG1', on: false });
+  assert.match(d.plan().why, /SIM-AG1 is not tradable now/);
+  d.act({ type: 'accountTrade', account: 'SIM-AG1', on: true });
+  // check 9: maxTrades and maxLosses
+  const a = d.desk.agents.get('demo');
+  a.rules.maxTrades = 2; a.trades = 2;
+  assert.match(d.plan().why, /has made 2 trades today/);
+  a.rules.maxTrades = null; a.rules.maxLosses = 1; a.losses = 1;
+  assert.match(d.plan().why, /1 losing trades today/);
+  a.rules.maxLosses = null; a.losses = 0;
+  // check 10: the owner lock (the page's own working entry on SIM-AG1 MNQ)
+  d.act({ type: 'order', cid: 'o1', account: 'SIM-AG1', root: 'MNQ', side: 'buy', kind: 'limit', qty: 1, price: 25300 });
+  assert.match(d.plan().why, /SIM-AG1 MNQ belongs to your own trading until it is flat/);
+  d.act({ type: 'cancel', cid: 'o2', id: d.working('SIM-AG1').find(o => o.price === 25300).id });
+  // check 11: the last trade over 300 s old
+  d.advance(301000);
+  assert.match(d.plan().why, /over 300 s old/);
+  d.tick(25400);
+  assert.equal(d.plan().why, null, 'all checks pass again');
 });

@@ -387,6 +387,7 @@ export class OrderDeskV3 extends OrderDesk {
   }
   check_plan(m) {
     const o = this.orders.get(m.id);
+    if (o && o.agentId && (m.stopTicks === null || m.stopTicks === 0 || m.targetTicks === null || m.targetTicks === 0)) return 'an agent\'s entry always has a stop and a target';   // 0.5.0 (lead's default)
     if (o && o.strategy) return 'A strategy entry has no planned stop and target to change; cancel it and place it again.';
     if (o && isWorking(o) && !this.accounts.includes(o.account)) return 'No working order ' + m.id + '.';
     return super.check_plan(m);
@@ -999,6 +1000,13 @@ const NY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour
 /** minutes after midnight in New York of a UTC ms time */
 export function nyMinutes(ms) { const o = {}; for (const x of NY.formatToParts(new Date(ms))) o[x.type] = x.value; return (+o.hour % 24) * 60 + +o.minute; }
 const pad2 = n => String(n).padStart(2, '0');
+const NY_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit' });
+/** the trading day of a UTC ms time: 'YYYY-MM-DD' of the session's end (a new day at 18:00 New York) */
+export function tradingDay(ms) {
+  const o = {}; for (const x of NY_DATE.formatToParts(new Date(ms))) o[x.type] = x.value;
+  let d = Date.UTC(+o.year, +o.month - 1, +o.day); if (+o.hour % 24 >= 18) d += 86400000;
+  return new Date(d).toISOString().slice(0, 10);
+}
 const hm = m => pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
 
 /** The strict parser for an agent's message (gate 8 as the contract says it): one flat object, no unknown or duplicate keys,
@@ -1107,7 +1115,8 @@ Object.assign(OrderDeskV3.prototype, {
   check_agentMode(m) {
     const a = this.agents.get(m.agent);
     if (!['shadow', 'copilot', 'auto'].includes(m.mode)) return 'mode must be shadow, copilot or auto.';
-    if (m.mode === 'auto' && !(this.accounts.includes(a.account) && this.connected(a.account))) return 'auto refused: ' + a.account + ' is not tradable now (its checkmark, Connected): ' + a.id + ' needs it tradable';
+    const acc = this.acct.get(a.account);
+    if (m.mode === 'auto' && !(this.accounts.includes(a.account) && this.connected(a.account) && acc && acc.state !== 'gone')) return 'auto refused: ' + a.account + ' is not tradable now (its checkmark, Connected): ' + a.id + ' needs it tradable';
     return null;
   },
   do_agentMode(m) {
@@ -1177,9 +1186,10 @@ Object.assign(OrderDeskV3.prototype, {
     if (/^(Backtest|Playback)/i.test(name)) return name + ' is a Backtest or Playback account: an agent never trades one';
     if (!x || x.state === 'archived') return name + ' is not in NinjaTrader';
     if (name === a.account) return name + ' is already ' + a.id + '\'s account';
-    if (this.sw.bot && name === this.botAccount) return name + ' is the bot\'s account: an agent trades an account of its own';
-    if (this.sw.copier && name === this.copier.leader) return name + ' is the copier\'s leader: an agent trades an account of its own';
-    if (this.sw.copier && this.copier.followers.has(name)) return name + ' is a copier follower: an agent trades an account of its own';
+    /* the bot's and the copier's accounts whether or not those switches are on (lead's default) */
+    if (name === this.botAccount) return name + ' is the bot\'s account: an agent trades an account of its own';
+    if (name === this.copier.leader) return name + ' is the copier\'s leader: an agent trades an account of its own';
+    if (this.copier.followers.has(name)) return name + ' is a copier follower: an agent trades an account of its own';
     const other = this.agentOfAccount(name); if (other) return name + ' is agent ' + other.id + '\'s account: an agent trades an account of its own';
     if (!this.config.trading || !this.accounts.includes(name) || !this.connected(name) || x.state === 'gone') return name + ' is not tradable now (its checkmark on the Accounts tab, Connected)';
     if (a.trade || this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length) return a.id + ' has a position, a working entry or a proposal: choose its account when it is flat';
@@ -1190,9 +1200,10 @@ Object.assign(OrderDeskV3.prototype, {
     return null;
   },
   do_agentAccount(m) {
-    const a = this.agents.get(m.agent), old = a.account;
+    const a = this.agents.get(m.agent), old = a.account, was = a.mode;
     a.account = m.account;
-    this.agentLogLine(a, 'account ' + m.account + ' (' + (this.agentSim(a) ? 'Sim' : 'LIVE') + '), was ' + old + ', set by the page');
+    a.mode = 'shadow';                              // lead's default: a new account starts in shadow (nothing was open: the change needs that)
+    this.agentLogLine(a, 'account ' + m.account + ' (' + (this.agentSim(a) ? 'Sim' : 'LIVE') + '), was ' + old + ', set by the page; mode shadow (was ' + was + ')');
     this.agentToAgent(a, this.agentWelcome(a));
     this.agentNotify(a);
   },
@@ -1224,9 +1235,8 @@ Object.assign(OrderDeskV3.prototype, {
     const a = this.agents.get(m.agent), roots = m.roots.split(',').map(x => x.trim());
     a.rules = { roots, maxQty: Object.fromEntries(roots.map(r => [r, m['maxQty' + r]])), entryFrom: m.entryFrom, entryUntil: m.entryUntil, flatAt: m.flatAt, maxExpireSec: m.maxExpireSec,
       maxTrades: m.maxTrades || null, maxLosses: m.maxLosses || null };
-    const lossRule = /losing trades today/;
+    /* a tighter rule can stand the agent down now; a rules change never lifts a stand-down (only 18:00 ET does: lead's default) */
     if (a.rules.maxLosses && a.losses >= a.rules.maxLosses && !a.standDown) a.standDown = a.losses + ' losing trades today: no new entries until 18:00 ET';
-    if ((!a.rules.maxLosses || a.losses < a.rules.maxLosses) && a.standDown && lossRule.test(a.standDown)) a.standDown = null;
     this.agentLogLine(a, 'rules set by the page: ' + JSON.stringify(this.agentRulesOut(a)));
     this.agentToAgent(a, this.agentWelcome(a));
     this.agentNotify(a);
@@ -1236,7 +1246,7 @@ Object.assign(OrderDeskV3.prototype, {
   /** connect a simulated agent (tests and smokes) or note a real one's socket; returns the agent or null */
   agentConnect(id, conn) {
     const a = this.agents.get(id); if (!a) return null;
-    a.conn = conn || null; a.simulated = !conn; a.lastBeat = this.now(); a.helloed = false;
+    a.conn = conn || null; a.simulated = !conn; a.lastBeat = this.now(); a.connAt = this.now(); a.helloed = false;
     return a;
   },
   agentDrop(id, why) {
@@ -1252,10 +1262,12 @@ Object.assign(OrderDeskV3.prototype, {
   agentMessage(id, m, text) {
     const a = this.agents.get(id);
     if (!a) return 'No agent ' + id + '.';
+    /* the hello first (contract section 2): anything earlier is refused before it is even read, is no heartbeat, and never
+       reaches the pages (lead's default) */
+    if (!a.helloed && !(m && typeof m === 'object' && m.type === 'agentHello')) return 'send agentHello first';
     a.lastBeat = this.now();
     const strict = checkAgentMessage(m, text);
     if (strict) { if (m && m.type === 'plan' && typeof m.id === 'string') this.agentRefusePlan(a, m, strict); return strict; }
-    if (!a.helloed && m.type !== 'agentHello') return 'send agentHello first';
     if (m.type !== 'beat') {
       const t = this.now(); a.msgTimes = a.msgTimes.filter(x => t - x < 1000); a.msgTimes.push(t);
       if (a.msgTimes.length > 10) return 'More than 10 messages in one second. Slow down.';
@@ -1304,9 +1316,13 @@ Object.assign(OrderDeskV3.prototype, {
     }
     return 'Unknown message.';
   },
+  /* a plan to the pages and the agent's last 50. A refused plan with the id of one that was not refused (a duplicate id)
+     never replaces it: both are kept and shown, and lastPlan stays the first (lead's default) */
   agentKeepPlan(a, p) {
-    a.plans = a.plans.filter(x => x.id !== p.id); a.plans.push(p); if (a.plans.length > 50) a.plans.shift();
-    a.lastPlan = p;
+    const dup = /^refused/.test(p.result) && a.plans.some(x => x.id === p.id && !/^refused/.test(x.result));
+    if (!dup) a.plans = a.plans.filter(x => x.id !== p.id);
+    a.plans.push(p); if (a.plans.length > 50) a.plans.shift();
+    if (!dup) a.lastPlan = p;
     this.broadcastV3(p);
   },
   agentPlanFields(m) {
@@ -1316,6 +1332,7 @@ Object.assign(OrderDeskV3.prototype, {
   },
   agentRefusePlan(a, m, why) {
     a.stats.refused++;
+    if (typeof m.id === 'string' && m.id.length >= 1 && m.id.length <= 40) a.planIds.add(m.id);   // any plan id seen today is used, refused or not
     this.agentToAgent(a, { type: 'reject', id: typeof m.id === 'string' ? m.id : null, reason: why });
     this.agentKeepPlan(a, Object.assign({ type: 'agentPlan', agent: a.id, id: m.id, at: this.now(), action: 'plan' }, this.agentPlanFields(m), { result: 'refused: ' + why }));
     this.agentLogLine(a, m.id + ' refused: ' + why);
@@ -1342,8 +1359,8 @@ Object.assign(OrderDeskV3.prototype, {
     if (!this.config.trading) return 'trading is off in config.txt';
     const acc = this.acct.get(a.account);
     if (!acc || !this.accounts.includes(a.account) || !this.connected(a.account) || acc.state === 'gone') return a.account + ' is not tradable now (its checkmark, Connected)';
-    if (this.sw.bot && a.account === this.botAccount) return a.account + ' is the bot\'s account: choose ' + a.id + '\'s own account on the Agent tab';
-    if (this.sw.copier && (a.account === this.copier.leader || this.copier.followers.has(a.account))) return a.account + ' is the copier\'s: choose ' + a.id + '\'s own account on the Agent tab';
+    if (a.account === this.botAccount) return a.account + ' is the bot\'s account: choose ' + a.id + '\'s own account on the Agent tab';
+    if (a.account === this.copier.leader || this.copier.followers.has(a.account)) return a.account + ' is the copier\'s: choose ' + a.id + '\'s own account on the Agent tab';
     // 3. root and kind
     if (!a.rules.roots.includes(m.root)) return m.root + ' is not one of ' + a.id + '\'s roots (' + a.rules.roots.join(', ') + ')';
     if (!this.instruments[m.root] || this.instruments[m.root].quoteOnly) return m.root + ' is not traded by ChartBridge';
@@ -1461,12 +1478,28 @@ Object.assign(OrderDeskV3.prototype, {
       if (a === a0 || a.account === o.account) this.agentNotify(a);
     }
   },
+  /** 18:00 ET: a new trading day for the agent: trades, losing trades, P&L today, a loss stand-down and the plan ids start
+   *  over (contract section 5; a trade still open goes on into the new day) */
+  agentNewDay(a, t) {
+    const day = tradingDay(t);
+    if (a.day === undefined) { a.day = day; return; }
+    if (a.day === day) return;
+    a.day = day; a.trades = 0; a.losses = 0; a.pnl = 0; a.standDown = null; a.planIds.clear();
+    this.agentLogLine(a, 'a new trading day: ' + day);
+    this.agentNotify(a);
+  },
   /** every second: the heartbeat, expiry, the entry window and the flat time (ChartBridge's own timers, the agent gone or not) */
   agentsEverySecond() {
     if (!this.agents || !this.agents.size) return;
     const t = this.now(), ny = nyMinutes(t);
     for (const a of this.agents.values()) {
-      if (a.connected && !a.simulated && t - a.lastBeat > 5000) { const c = a.conn; this.agentDrop(a.id, 'no heartbeat for 5 s'); if (c && typeof this.closeAgentConn === 'function') this.closeAgentConn(c); }
+      this.agentNewDay(a, t);
+      /* 5 s of silence, or a socket that never says hello in 5 s: closed (contract section 2) */
+      if (a.conn && !a.simulated && (a.helloed ? t - a.lastBeat > 5000 : t - (a.connAt || 0) > 5000)) {
+        const c = a.conn;
+        if (a.helloed) this.agentDrop(a.id, 'no heartbeat for 5 s'); else { a.conn = null; a.helloed = false; this.agentLogLine(a, 'closed: no agentHello within 5 s'); }
+        if (c && typeof this.closeAgentConn === 'function') this.closeAgentConn(c);
+      }
       for (const p of this.agentOpenProposals(a)) if (p.expiresAt <= t) { p.state = 'expired'; this.broadcastV3(p); this.agentAnswer(a, p.id, 'expired', 'the plan\'s entry time ran out'); this.agentLogLine(a, p.id + ' expired'); this.agentNotify(a); }
       for (const o of this.agentWorkingEntries(a)) if (o.expiresAt <= t) { this.cancelOne(o); this.agentAnswer(a, o.planId, 'expired', 'the entry\'s time ran out'); this.agentNotify(a); }
       if (this.agentAnyTime) continue;
