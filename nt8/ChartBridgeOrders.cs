@@ -434,7 +434,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (client.Trader) MergeOnAuth(client);   // 0.4.0 B4: a Merge cut by a restart is told to each page that signs in
             if (client.Trader) ChartBridgeCopier.AfterAuth(client);   // 0.4.0 copier: a v3 page gets the copier's state
             ChartBridgeBot.AfterAuth(client);   // 0.4.0 bot: a signed-in v3 page gets the bot strip and its open proposals
-            ChartBridgeAgents.AfterAuth(client);   // 0.5.0 agents: every agent's strip, open proposals, last plans and notes
+            try { ChartBridgeAgents.AfterAuth(client); } catch (Exception ex) { ChartBridgeServer.Log("agents error: " + ex.Message); }   // 0.5.0 agents: every agent's strip, open proposals, last plans and notes
             SendManagedTo(client);   // 0.4.0 B1: every live managed entry, to a signed-in v3 page
         }
 
@@ -687,11 +687,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             // 0.5.0 agents: the owner lock, here where every entry of the page, the bot and every agent passes (the copier's own
             // entries ask the same in its Eligible): an agent's (account, root) refuses every other source; an agent is refused
             // wherever anything else is held or working. Exits never come here.
-            // A page order that only reduces (no bracket, no strategy, the other side of the position by both readings, at most the
-            // smaller of them) is an exit: it passes.
+            // A page MARKET order that only reduces (no bracket, no strategy, the other side of the position by both readings, at most
+            // the smaller of them) is an exit: it passes. A resting page order there is refused (it would outlive the position).
             bool pageReduces = false;
             int rq;
-            if (!bot && agent == null && bracketBody == null && strategyBody == null && Int(top, "qty", out rq) == 1 && rq >= 1)
+            if (ChartBridgeAgents.Enabled && !bot && agent == null && kind == "market" && bracketBody == null && strategyBody == null && Int(top, "qty", out rq) == 1 && rq >= 1)
             {
                 int pn = SignedPosition(account, inst), pe = EffectivePosition(account, inst), along = Str(top, "side") == "buy" ? -1 : 1;
                 pageReduces = pn * along > 0 && pe * along > 0 && rq <= Math.Min(Math.Abs(pn), Math.Abs(pe));
@@ -727,6 +727,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (Has(top, "price")) return "a market order takes no price";
             string newKind = OrderTypesOn ? NewKindProblem(top, kind, root, tick, isBuy, price, out limitPx) : null;   // 0.4.0 B1: a stop-limit's limit
             if (newKind != null) return newKind;
+            if (agent != null) { string agentWhy = ChartBridgeAgents.PlacingProblem(agent, kind, isBuy, price, limitPx, tick); if (agentWhy != null) return agentWhy; }   // 0.5.0 agents: its window, mode, kill and stop-limit band, here too
             int stopTicks = 0, targetTicks = 0;
             if (bracketBody != null)
             {

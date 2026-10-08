@@ -396,6 +396,7 @@ public static class AgentHarness
         Action<string, string, string> refuse = (plan, has, label) =>
         {
             Last2();
+            clock += 1000;   // refused plans reach the pages at most once a second (review B-S1)
             A(plan);
             string r = AgentReject(), ap = Last(page, "agentPlan");
             Check(r.Contains(has) && ap.Contains("\"result\":\"refused: ") && ap.Contains(has.Replace("\"", "\\\"")) && sim.Calls.Count == calls, label + ": " + r);
@@ -511,7 +512,7 @@ public static class AgentHarness
         // the owner lock against the page: an entry on Sim101 MNQ is refused; exits always pass
         int calls = sim.Calls.Count;
         P("{\"type\":\"order\",\"cid\":\"p1\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}}");
-        Check(PageReject().Contains("Sim101 MNQ belongs to agent manrae until it is flat") && sim.Calls.Count == calls, "owner lock: the page's entry on the agent's account and root is refused: " + PageReject());
+        Check(PageReject().Contains("Sim101 MNQ belongs to agent manrae: use Flatten, or move its stop or target") && sim.Calls.Count == calls, "owner lock: the page's entry on the agent's account and root is refused: " + PageReject());
         P("{\"type\":\"order\",\"cid\":\"p2\",\"account\":\"Sim101\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"bracket\":{\"stop\":8,\"target\":16}}");
         Order pageNq;
         lock (sim.Orders) pageNq = sim.Orders.LastOrDefault(o => o.Instrument == nq && IsLive(o));
@@ -534,16 +535,21 @@ public static class AgentHarness
         Check(Last(agentOut, "exec") != "" && Last(page, "agent").Contains("\"position\":{\"root\":\"MNQ\",\"qty\":1,\"avgPrice\":24999}") && Last(page, "agent").Contains("\"trades\":1"),
               "the agent gets its exec; the strip: its position and one trade: " + Last(page, "agent"));
         P("{\"type\":\"order\",\"cid\":\"p3\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1}");
-        Check(PageReject().Contains("\"cid\":\"p3\"") && PageReject().Contains("belongs to agent manrae until it is flat"), "owner lock: while it holds a position, an add is refused");
+        Check(PageReject().Contains("\"cid\":\"p3\"") && PageReject().Contains("belongs to agent manrae: use Flatten"), "owner lock: while it holds a position, an add is refused");
         P("{\"type\":\"order\",\"cid\":\"p5\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"sell\",\"kind\":\"market\",\"qty\":2}");
         Check(PageReject().Contains("\"cid\":\"p5\"") && PageReject().Contains("belongs to agent manrae"), "owner lock: a sell of 2 against a long 1 would cross zero: not an exit, refused");
         P("{\"type\":\"order\",\"cid\":\"p6\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"sell\",\"kind\":\"limit\",\"qty\":1,\"price\":25002,\"bracket\":{\"stop\":8,\"target\":16}}");
         Check(PageReject().Contains("\"cid\":\"p6\"") && PageReject().Contains("belongs to agent manrae"), "owner lock: a reducing order with a bracket is not an exit: refused");
         int before = sim.Calls.Count;
         P("{\"type\":\"order\",\"cid\":\"p7\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"sell\",\"kind\":\"limit\",\"qty\":1,\"price\":25002}");
+        Check(PageReject().Contains("\"cid\":\"p7\"") && PageReject().Contains("Sim101 MNQ belongs to agent manrae: use Flatten, or move its stop or target") && sim.Calls.Count == before,
+              "owner lock: a resting page order that would only reduce is refused (it could outlive the position; review A-S5)");
+        Hold = (kind, o) => kind == "submit";   // the market reduce is sent, not filled here
+        P("{\"type\":\"order\",\"cid\":\"p8\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"sell\",\"kind\":\"market\",\"qty\":1}");
+        Hold = null;
         Order reduce;
-        lock (sim.Orders) reduce = sim.Orders.LastOrDefault(o => o.Instrument == mnq && IsLive(o) && o.OrderType == OrderType.Limit && o.OrderAction == OrderAction.Sell && o.Name != null && Regex.IsMatch(o.Name, "^CB#[0-9a-f]{8} atm s0 t0$"));
-        Check(sim.Calls.Count == before + 1 && reduce != null, "owner lock: a page order that only reduces the agent's position passes as an exit");
+        lock (sim.Orders) reduce = sim.Orders.LastOrDefault(o => o.Instrument == mnq && IsLive(o) && o.OrderType == OrderType.Market && o.OrderAction == OrderAction.Sell && o.Name != null && Regex.IsMatch(o.Name, "^CB#[0-9a-f]{8} s0 t0$"));
+        Check(sim.Calls.Count == before + 1 && reduce != null, "owner lock: a page MARKET order that only reduces the agent's position passes as an exit");
         if (reduce != null) { reduce.OrderState = OrderState.Cancelled; Update(reduce); }
         A(Good(NewId()));
         Check(AgentReject().Contains("one at a time: agent manrae already has a position"), "check 8: its own position refuses the next plan");
@@ -1113,7 +1119,8 @@ public static class AgentHarness
     // ------------------------------------------------------------ fills to The Desk carry "by" when ChartBridge knows the source
     static string DeskFill(string account, Instrument inst, string orderId)
     {
-        return (string)typeof(ChartBridgeServer).GetMethod("DeskFillJson", PS).Invoke(null, new object[] { account, inst, MarketPosition.Long, 1, 25000.0, DateTime.Now, "E1", orderId });
+        MethodInfo m = typeof(ChartBridgeServer).GetMethods(PS).First(x => x.Name == "DeskFillJson" && x.GetParameters().Length == 8);
+        return (string)m.Invoke(null, new object[] { account, inst, MarketPosition.Long, 1, 25000.0, DateTime.Now, "E1", orderId });
     }
 
     static void FillsBy()
@@ -1218,23 +1225,30 @@ public static class AgentHarness
         // ChartBridge restarts (a recompile): every memory goes; the names and the files stay
         ChartBridgeOrders.Clear();
         ChartBridgeOrders.LoadPlansNow();
+        foreach (Account x in Account.All) ChartBridgeOrders.SeedNoted(x);   // as WatchAccounts does at a real start
         Restart();
         Check(ChartBridgeAgents.AgentOf(e) == "manrae", "after a restart the entry is known as manrae's by its name");
-        Mode("manrae", "auto");
-        Advance(500);
-        Check(IsLive(e), "its expiry came back from agent-manrae-day.txt: it keeps working");
-        Fill(e, 1, 24999);
+        Fill(e, 1, 24999);   // it fills before the first pass after the restart
         List<Order> legs = Legs(sim, e);
         Check(legs.Count == 2 && legs.Any(o => o.StopPrice == 24997) && legs.Any(o => o.LimitPrice == 25003) && ChartBridgeV3.OrderBy(legs[0]).Contains("agent:manrae"),
               "a fill after the restart: its legs from the name's ticks (a v2 entry), by agent:manrae");
         Check(Last(page, "agent").Contains("\"owns\":true") && Last(page, "agent").Contains("\"position\":{\"root\":\"MNQ\""), "the trade is followed after the restart");
         Close(sim, mnq, 25003);
-        // an entry whose expiry is not known after a restart is cancelled at once
+        // a restart puts the agent in shadow, so an entry placed before it is cancelled at the first pass (review A-S7)
+        Mode("manrae", "auto");
+        id = NewId();
+        e = PlacedNow(id, Good(id));
+        Restart();
+        Advance(500);
+        Check(e != null && e.OrderState == OrderState.Cancelled && Logged("agent manrae is in shadow"), "after a restart (shadow) an entry placed before it is cancelled at the first pass: " + (e == null ? AgentReject() : e.OrderState.ToString()));
+        // an entry whose expiry is not known after a restart is cancelled at once (auto set again before the first pass)
+        Mode("manrae", "auto");
         id = NewId();
         e = PlacedNow(id, Good(id));
         string day = Path.Combine(Dir, "agent-manrae-day.txt");
         File.WriteAllLines(day, File.ReadAllLines(day).Where(l => !l.StartsWith("entry\t")).ToArray());
         Restart();
+        Mode("manrae", "auto");
         Advance(500);
         Check(e != null && e.OrderState == OrderState.Cancelled && Logged("its expiry is not known (ChartBridge restarted)"), "an entry with no expiry record after a restart: cancelled at once");
         // no agent connected for 5 s after a start: its unfilled entries are cancelled
@@ -1242,6 +1256,7 @@ public static class AgentHarness
         id = NewId();
         e = PlacedNow(id, Good(id));
         ChartBridgeAgents.Stop(); ChartBridgeAgents.Start(false);
+        Mode("manrae", "auto");   // auto from the page before the first pass, the agent not connected
         Advance(4000);
         Check(e != null && IsLive(e), "4 s after a start with no agent: still working");
         Advance(1500);
@@ -1271,8 +1286,14 @@ public static class AgentHarness
         File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSIM-C" });
         File.WriteAllLines(Path.Combine(Dir, "agent-demob-day.txt"), new[] { "# made-up", "# test", "session\t2026-10-09", "trade\tabcdef12\topen" });
         SetPos(simc, mnq, 1);
+        // what is left of demob's trade there: its filled entry and its working stop (by name), as after a restart
+        Order de = simc.CreateOrder(mnq, OrderAction.Buy, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, 1, 24999, 0, "", "CB#abcdef12 ag:demob s8 t16", NinjaTrader.Core.Globals.MaxDate, null);
+        de.OrderState = OrderState.Filled; de.Filled = 1; de.AverageFillPrice = 24999;
+        Order ds = simc.CreateOrder(mnq, OrderAction.Sell, OrderType.StopMarket, OrderEntry.Manual, TimeInForce.Gtc, 1, 0, 24997, "", "CB#abcdef12 stop f1 q1 p24999", NinjaTrader.Core.Globals.MaxDate, null);
+        ds.OrderState = OrderState.Working;
+        lock (simc.Orders) { simc.Orders.Add(de); simc.Orders.Add(ds); }
         Restart();
-        Check(ChartBridgeAgents.OwnerAgent("SIM-C", "MNQ") == "demob" && D.AccountConflict() != null, "demob owns SIM-C MNQ (an open trade and a position) and stands down (SIM-C is a follower)");
+        Check(ChartBridgeAgents.OwnerAgent("SIM-C", "MNQ") == "demob" && D.AccountConflict() != null, "demob owns SIM-C MNQ (its stop protects a position there) and stands down (SIM-C is a follower)");
         int cCalls = simc.Calls.Count, dCalls = simd.Calls.Count;
         Last2();
         P("{\"type\":\"order\",\"cid\":\"L1\",\"account\":\"EVAL-A\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}}");

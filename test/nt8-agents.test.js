@@ -40,9 +40,9 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
 
 test('0.5.0 agents: order calls only where the contract allows; never a market entry, never a flatten call', () => {
   let rest = acode;
-  for (const f of ['Cancel', 'StepFlatten', 'SendClose']) rest = rest.replace(bodies(acode, f), '');
+  for (const f of ['SendCancel', 'StepFlatten', 'SendClose']) rest = rest.replace(bodies(acode, f), '');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/, /CancelAllOrders/, /\bAtm\w*\./])
-    assert.ok(!re.test(rest), 'order call outside Cancel, StepFlatten and SendClose: ' + re);
+    assert.ok(!re.test(rest), 'order call outside SendCancel, StepFlatten and SendClose: ' + re);
   assert.ok(!/\.Flatten\s*\(|\.Change\s*\(/.test(acode), 'never NinjaTrader\'s Flatten, never a change');
   // the one order it creates itself is the flatten's market close, under the order lock, after reading both positions again
   const close = bodies(acode, 'SendClose');
@@ -50,12 +50,17 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   assert.match(close, /OrderType\.Market/);
   assert.match(close, /lock \(ChartBridgeOrders\.AgentPlaceLock\)[\s\S]*AgentListed[\s\S]*AgentEffective[\s\S]*AgentMayFill[\s\S]*\.CreateOrder\(/);
   assert.match(close, /qty > Math\.Min\(Math\.Abs\(p1\), Math\.Abs\(p2\)\)\) return null;/, 'never more than either reading shows');
-  // a cancel of its own entry only (never a stop or a target), or every order there in a flatten of a pair it owns
+  // a cancel of its own entry only (never a stop or a target), resent every 3 s while it works, or every order there in a
+  // flatten of a pair it owns
   assert.match(bodies(acode, 'Cancel'), /!IsMyEntry\(o\)\) return false;/);
+  assert.match(bodies(acode, 'ResendCancels'), /now - kv\.Value\.LastMs >= ChartBridgeAgents\.FlatRetryMs/);
+  assert.match(bodies(acode, 'SendCancel'), /try \{ o\.Account\.Cancel\(new\[\] \{ o \}\); \}\s*catch \(Exception ex\)/);
   assert.match(bodies(acode, 'StepFlatten'), /may\.Where\(o => o != j\.Close && \(j\.Owned \|\| IsMine\(o\)\)\)/);
   // every entry goes through ChartBridgeOrders.PlaceAgentEntry: the page's order path with the agent as its source
   assert.match(bodies(acode, 'Place'), /ChartBridgeOrders\.PlaceAgentEntry\(Id, text, out placed\)/);
-  assert.match(bodies(acode, 'Place'), /string why = Checks\(p, forAccount, forAccount != null\);/, 'every check again at the moment of placing');
+  assert.match(bodies(acode, 'Place'), /string why = Checks\(p, forAccount, forAccount != null, out acct\);/, 'every check again at the moment of placing, and the account they validated is the one used');
+  for (const f of ['SetMode', 'SetKill', 'SetAccount', 'SetRules']) assert.match(bodies(acode, f), /lock \(PlaceGate\) return \w+Locked\(d\);/, f + ' waits for a placement under way');
+  assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) \{ string agentWhy = ChartBridgeAgents\.PlacingProblem\(agent, kind, isBuy, price, limitPx, tick\);/, 'the order path asks the agent at the last moment');
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(\(kind != "limit" && kind != "stopLimit"\) \|\| strategyBody != null \|\| bracketBody == null\)\) return/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(stopTicks < 1 \|\| targetTicks < 1\)\) return "every agent entry needs a stop and a target";/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) cap = Math\.Min\(cap, ChartBridgeAgents\.CapFor\(agent, root\)\);/);
@@ -97,6 +102,7 @@ test('0.5.0 agents: the hooks in ChartBridge.cs', () => {
   assert.match(main, /try \{ ChartBridgeAgents\.OnExec\(account, inst, side, qty, price, orderId, json\); \} catch/);
   assert.match(main, /try \{ ChartBridgeAgents\.OnPosition\(a, e\); \} catch/);
   assert.match(main, /if \(ChartBridgeAgents\.Enabled\) b\.Append\(",\\"agents\\":"\)\.Append\(ChartBridgeAgents\.DiagJson\(\)\);/);
-  assert.match(main, /",\\"order_id\\":" \+ CbJson\.Str\(orderId\) \+ FillBy\(account, orderId\) \+ "\}";/, 'fills to The Desk: "by" only when known');
+  assert.match(main, /",\\"order_id\\":" \+ CbJson\.Str\(orderId\) \+ FillBy\(account, orderId, order\) \+ "\}";/, 'fills to The Desk: "by" only when known');
+  assert.match(bodies(main, 'FillBy'), /if \(order != null\) \{ try \{ string own = ChartBridgeV3\.SourceOf\(order\);/, 'the execution\'s own order first (no scan)');
   assert.match(bodies(main, 'FillBy'), /return by == null \? "" : ",\\"by\\":" \+ CbJson\.Str\(by\);/, 'no by key at all when unknown');
 });

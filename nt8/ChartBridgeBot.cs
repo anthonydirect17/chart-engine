@@ -156,9 +156,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // 0.5.0 agents (lead's default): the bot's account for the agents' refusals whether or not the bot is on: in memory when on,
         // else read from bot-account.txt (Sim101 when there is none); null when that file cannot be understood.
-        public static string AccountForAgents()
+        public static string AccountForAgents() { return Enabled ? BotAccount : ReadAccountFile(); }
+
+        // bot-account.txt as the agents read it (ChartBridgeAgents.RefreshFiles, on its timer's thread): Sim101 when there is none.
+        public static string ReadAccountFile()
         {
-            if (Enabled) return BotAccount;
             try
             {
                 if (!File.Exists(AccountFile)) return DefaultAccount;

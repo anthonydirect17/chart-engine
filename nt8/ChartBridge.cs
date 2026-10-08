@@ -4705,6 +4705,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static bool FirstTime(string key) { lock (Seen) return Seen.Add(key); }
 
         // To the open pages now; to The Desk's queue (in `deskBatch` when given, saved once by the caller).
+        // 0.5.0: the execution's own Order (NinjaTrader's Execution.Order) while it is delivered, so the fills "by" never scans.
+        [ThreadStatic] private static Order execOrder;
+
         private static void Deliver(string account, Instrument inst, MarketPosition side, int qty, double price, DateTime time, string id, string orderId,
                                     List<string> deskBatch)
         {
@@ -4713,7 +4716,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { ChartBridgeBot.OnExec(account, inst, side, qty, price, orderId, json); } catch (Exception ex) { Log("bot fill error: " + ex.Message); }   // 0.4.0 bot: its trades, losses and fills
             try { ChartBridgeAgents.OnExec(account, inst, side, qty, price, orderId, json); } catch (Exception ex) { Log("agent fill error: " + ex.Message); }   // 0.5.0 agents: each agent's trades, losses and fills
             if (!ChartBridgeConfig.PostFills) return;
-            string desk = DeskFillJson(account, inst, side, qty, price, time, id, orderId);
+            string desk = DeskFillJson(account, inst, side, qty, price, time, id, orderId, execOrder);
             if (deskBatch != null) deskBatch.Add(desk); else ChartBridgeDesk.Queue(desk);
         }
 
@@ -4729,7 +4732,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (Execution x in list)
                 {
                     if (!FirstTime(ExecKey(a.Name, x.ExecutionId, x.Time, x.Price, x.Quantity, x.OrderId))) continue;
-                    Deliver(a.Name, x.Instrument, x.MarketPosition, x.Quantity, x.Price, x.Time, x.ExecutionId, x.OrderId, batch);
+                    execOrder = x.Order;   // 0.5.0: for the fills "by"
+                    try { Deliver(a.Name, x.Instrument, x.MarketPosition, x.Quantity, x.Price, x.Time, x.ExecutionId, x.OrderId, batch); } finally { execOrder = null; }
                     n++;
                 }
             }
@@ -4950,7 +4954,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // One fill in The Desk's POST /api/fills shape.
-        private static string DeskFillJson(string account, Instrument inst, MarketPosition side, int qty, double price, DateTime time, string id, string orderId)
+        private static string DeskFillJson(string account, Instrument inst, MarketPosition side, int qty, double price, DateTime time, string id, string orderId) { return DeskFillJson(account, inst, side, qty, price, time, id, orderId, null); }
+
+        private static string DeskFillJson(string account, Instrument inst, MarketPosition side, int qty, double price, DateTime time, string id, string orderId, Order order)
         {
             DateTime utc = ChartBridgeTime.ToUtc(time);
             return "{\"source\":\"nt8\",\"account\":" + CbJson.Str(account) +
@@ -4961,13 +4967,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ",\"price\":" + CbJson.Num(price) +
                 ",\"time_utc_ms\":" + Math.Round(ChartBridgeTime.UtcMs(utc)).ToString(CultureInfo.InvariantCulture) +
                 ",\"exec_id\":" + CbJson.Str(id) +
-                ",\"order_id\":" + CbJson.Str(orderId) + FillBy(account, orderId) + "}";   // 0.5.0: "by" when ChartBridge knows who placed it
+                ",\"order_id\":" + CbJson.Str(orderId) + FillBy(account, orderId, order) + "}";   // 0.5.0: "by" when ChartBridge knows who placed it
         }
 
         // 0.5.0 (contract section 8): ,"by":"agent:<id>", "bot" or "copier" when ChartBridge knows the fill's order as one of theirs;
         // "" otherwise, so every other fill is byte for byte as before. Reads the order by its id on that account.
-        private static string FillBy(string account, string orderId)
+        private static string FillBy(string account, string orderId, Order order)
         {
+            if (order != null) { try { string own = ChartBridgeV3.SourceOf(order); return own == null ? "" : ",\"by\":" + CbJson.Str(own); } catch (Exception) { return ""; } }   // the execution's own order: no scan
             if (string.IsNullOrEmpty(orderId) || string.IsNullOrEmpty(account)) return "";
             try
             {
@@ -5021,7 +5028,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Instrument inst = e.Execution != null ? e.Execution.Instrument : null;   // ExecutionEventArgs has no Instrument of its own
                 if (!FirstTime(ExecKey(name, e.ExecutionId, e.Time, e.Price, e.Quantity, e.OrderId))) return;
                 Interlocked.Increment(ref eventNew);
-                Deliver(name, inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, null);
+                execOrder = e.Execution != null ? e.Execution.Order : null;   // 0.5.0: for the fills "by"
+                try { Deliver(name, inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, null); } finally { execOrder = null; }
                 ChartBridgeDesk.Flush();
             }
             catch (Exception ex) { Log("fill error: " + ex.Message); }
