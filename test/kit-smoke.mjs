@@ -93,10 +93,12 @@ try {
   check(fam.loaded.plex && fam.loaded.chakra && fam.loaded.jet, 'all three fonts load from the page folder (live/fonts), nothing from the internet: ' + JSON.stringify(fam.loaded));
   const fam2 = await page.evaluate(() => {
     const f = el => getComputedStyle(el).fontFamily.split(',')[0].replace(/"/g, '').trim();
-    return { chip: f(document.querySelector('#chips .kit-chip-profit')), account: f(document.querySelector('select[aria-label="Account"]')), text: f(document.querySelector('input[aria-label="Sample field"]')),
+    const numIn = cls => { const c = document.createElement('span'); c.className = cls; c.innerHTML = 'Stop <span class="kit-num">16</span>'; document.getElementById('chips').appendChild(c); const r = f(c.querySelector('.kit-num')); c.remove(); return r; };
+    return { chip: f(document.querySelector('#chips .kit-chip-profit')), tag: f(document.querySelector('#chips .kit-tag')), numInTag: numIn('kit-tag kit-c-go'), account: f(document.querySelector('select[aria-label="Account"]')), text: f(document.querySelector('input[aria-label="Sample field"]')),
       numField: f(document.querySelector('input[aria-label="Focused field"]')), numInChip: (() => { const c = document.createElement('span'); c.className = 'kit-chip'; c.innerHTML = 'Stop <span class="kit-num">16</span>'; document.getElementById('chips').appendChild(c); const r = f(c.querySelector('.kit-num')); c.remove(); return r; })() };
   });
   check(fam2.chip === 'Chakra Petch' && fam2.numInChip === 'JetBrains Mono', 'chips are in Chakra Petch; a number inside a chip stays JetBrains Mono: ' + JSON.stringify(fam2));
+  check(fam2.tag === 'Chakra Petch' && fam2.numInTag === 'JetBrains Mono', 'tags (LOOK, PLAN, FILL) are in Chakra Petch; a number inside a tag stays JetBrains Mono: ' + JSON.stringify(fam2));
   check(fam2.account === 'IBM Plex Sans' && fam2.text === 'IBM Plex Sans' && fam2.numField === 'JetBrains Mono', 'the account select and text fields use the body font; a numeric field uses JetBrains Mono: ' + JSON.stringify(fam2));
 
   // ---- the light circles only while lit
