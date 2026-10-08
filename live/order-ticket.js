@@ -161,9 +161,11 @@ function describe(o, fmt) {
 }
 /**
  * A status line for an order update, compared with the previous message for the same id.
- * Returns { text, level } or null when nothing worth saying changed (a leg resized, a repeat).
+ * Returns { text, level } or null when nothing worth saying changed (a leg resized, a repeat, or a message ChartBridge 0.5.1
+ * sends again after a snapshot, marked `again`: its first sending was already shown).
  */
 function orderEvent(o, prev, fmt) {
+  if (o && o.again === true) return null;
   const f = fmt || (p => String(p));
   const where = ' · ' + o.account;
   if (o.state === 'rejected') return { text: 'Rejected: ' + describe(o, f) + (o.text ? ': ' + o.text : '') + where, level: 'error' };

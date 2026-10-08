@@ -1415,12 +1415,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         public volatile bool Trader;            // signed in for orders (ChartBridgeOrders.Auth)
         public readonly Queue<double> Actions = new Queue<double>();   // recent order actions, for the rate limit
         // 0.5.1: an orders or positions snapshot for this page (the list at sign-in, a newly listed account's orders) is being built
-        // and queued: what NinjaTrader's thread sends this page meanwhile is noted here (under SnapLock, held only to note or take
-        // it) and sent again, fresh, right after the snapshot (ChartBridgeOrders.Snapshot), so the newest state lands last.
+        // and queued: what NinjaTrader's thread sends this page meanwhile is noted in every open snapshot's own notes (under
+        // SnapLock, held only to note or take) and sent again, fresh, right after that snapshot (ChartBridgeOrders.Snapshot), so
+        // the newest state lands last, also with two snapshots open at once.
         public readonly object SnapLock = new object();
-        public int SnapDepth;
-        public Dictionary<Order, string> SnapOrders;          // the order, and the message sent for it
-        public Dictionary<string, string> SnapPositions;      // "account|root", and the message sent for it
+        public readonly List<ChartBridgeOrders.SnapNotes> SnapOpen = new List<ChartBridgeOrders.SnapNotes>();   // each open snapshot's own notes
         public readonly List<SeamTick> Pending = new List<SeamTick>();   // live ticks held during backfill (lock it to read or write)
         public int SubscribeSeq;                // bumped under the Pending lock on every subscribe: a load for an older one is dropped
         public volatile bool WantsProfile;      // 0.3.5: the page's subscribe asked for "profile" messages (set under the Pending lock)

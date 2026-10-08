@@ -1110,7 +1110,82 @@ public static class AccountsHarness
         string sS, sN;
         po.TryGetValue(idS, out sS); po.TryGetValue(snew != null ? IdOf(snew) : "", out sN);
         Check(firedSign && sS == "cancelled" && sN == "working", "0.5.1 re-review 2: sign-in: an order cancelled meanwhile stays cancelled (" + sS + "), a stop placed meanwhile is kept (" + sN + ")");
+        Check(sent.Last(x => x.Contains("\"id\":\"" + idS + "\"")).Contains(",\"again\":true"), "0.5.1 re-review 3: the order sent again after the snapshot is marked again (pages never flash it twice)");
         snew.OrderState = OrderState.Cancelled;
+        // review 3, MEDIUM: two snapshots open at once for one page (sign-in's list and a newly listed account's, meanwhile)
+        Order g = Working(other, OrderAction.Sell, OrderType.StopMarket, 0, 24960, "stop before sign-in 2");
+        ChartBridgeAccounts.Tick(tr + 5000);
+        string idG = IdOf(g);
+        bool firedG = false;
+        ChartBridgeOrders.SnapshotHook = () =>
+        {
+            if (firedG) return;
+            firedG = true;
+            g.OrderState = OrderState.Cancelled;
+            ChartBridgeOrders.OnOrderUpdate(other, new OrderEventArgs { Order = g });   // noted: a snapshot is open
+            ChartBridgeOrders.SendScopeAgain(page, new List<string>());                 // another snapshot opens and closes meanwhile
+        };
+        sent.Clear();
+        SignIn(page);
+        ChartBridgeOrders.SnapshotHook = null;
+        string sG;
+        PageOrders(sent).TryGetValue(idG, out sG);
+        Check(firedG && sG == "cancelled" && !ChartBridgeOrders.SnapshotOpen(page), "0.5.1 re-review 3: two snapshots at once for one page: each keeps its own notes; the page ends with the cancelled stop as " + sG);
+        // a finished order the snapshot never sent as working is not sent again (the page has its final state already)
+        Order brief = null;
+        string idBrief = null;
+        bool firedB = false;
+        ChartBridgeOrders.SnapshotHook = () =>
+        {
+            if (firedB) return;
+            firedB = true;
+            brief = Working(other, OrderAction.Sell, OrderType.StopMarket, 0, 24955, "placed and cancelled during sign-in");
+            ChartBridgeOrders.OnOrderUpdate(other, new OrderEventArgs { Order = brief });
+            idBrief = IdOf(brief);
+            brief.OrderState = OrderState.Cancelled;
+            ChartBridgeOrders.OnOrderUpdate(other, new OrderEventArgs { Order = brief });
+        };
+        sent.Clear();
+        SignIn(page);
+        ChartBridgeOrders.SnapshotHook = null;
+        int briefMsgs = sent.Count(x => x.Contains("\"id\":\"" + idBrief + "\""));
+        string sB;
+        PageOrders(sent).TryGetValue(idBrief, out sB);
+        Check(firedB && briefMsgs == 2 && sB == null && !sent.Any(x => x.Contains("\"id\":\"" + idBrief + "\"") && x.Contains("again")), "0.5.1 re-review 3: an order placed and cancelled during the snapshot (never in it as working) is not sent again (" + briefMsgs + " messages; the page ends without it: " + (sB ?? "absent") + ")");
+        // a working order sent again keeps NinjaTrader's last error text
+        Order errd = Working(other, OrderAction.Sell, OrderType.StopMarket, 0, 24950, "stop NinjaTrader would not move");
+        ChartBridgeAccounts.Tick(tr + 6000);
+        string idE = IdOf(errd);
+        bool firedE = false;
+        ChartBridgeOrders.SnapshotHook = () =>
+        {
+            if (firedE) return;
+            firedE = true;
+            ChartBridgeOrders.OnOrderUpdate(other, new OrderEventArgs { Order = errd, Error = ErrorCode.UnableToChangeOrder });
+        };
+        sent.Clear();
+        SignIn(page);
+        ChartBridgeOrders.SnapshotHook = null;
+        string lastE = sent.Last(x => x.Contains("\"id\":\"" + idE + "\""));
+        Check(firedE && lastE.Contains("again") && lastE.Contains("NinjaTrader: UnableToChangeOrder"), "0.5.1 re-review 3: a working order sent again keeps NinjaTrader's error text: " + (lastE.Length > 160 ? lastE.Substring(0, 160) : lastE));
+        // at the 20-round cap the snapshot stays open through its last round's sends, then closes
+        List<bool> openInRound = new List<bool>();
+        int lastRound = -1;
+        ChartBridgeOrders.SnapshotRoundHook = r =>
+        {
+            lastRound = r;
+            errd.StopPrice -= 0.25;   // a change every round: notes never run dry
+            ChartBridgeOrders.OnOrderUpdate(other, new OrderEventArgs { Order = errd });
+        };
+        Order spy = Working(other, OrderAction.Sell, OrderType.Limit, 25100, 0, "spy limit");
+        ChartBridgeOrders.SnapshotHook = () => { ChartBridgeOrders.OnOrderUpdate(other, new OrderEventArgs { Order = errd }); };
+        page.Tap = x => { sent.Add(x); if (x.Contains(",\"again\":true")) openInRound.Add(ChartBridgeOrders.SnapshotOpen(page)); };
+        sent.Clear();
+        SignIn(page);
+        page.Tap = x => sent.Add(x);
+        ChartBridgeOrders.SnapshotHook = null; ChartBridgeOrders.SnapshotRoundHook = null;
+        Check(lastRound == ChartBridgeOrders.MaxSnapshotRounds - 1 && openInRound.Count >= ChartBridgeOrders.MaxSnapshotRounds && openInRound.All(x => x) && !ChartBridgeOrders.SnapshotOpen(page), "0.5.1 re-review 3: at the " + ChartBridgeOrders.MaxSnapshotRounds + "-round cap every re-send goes while the snapshot is open (" + openInRound.Count(x => x) + " of " + openInRound.Count + "), then it closes");
+        errd.OrderState = OrderState.Cancelled; spy.OrderState = OrderState.Cancelled; g.OrderState = OrderState.Cancelled;
         Account.All.Remove(other);
         Account.All.Remove(h1); Account.All.Remove(f1);
         // review repro B: a new account's first sighting saved even when a page action's save comes before the check makes its record
