@@ -323,7 +323,7 @@ export class OrderDeskV3 extends OrderDesk {
   check_order(m) {
     const q = this.quoteOnly(m.root); if (q) return q;
     const e = this.checkEntryAccount(m.account); if (e) return e;
-    const lock = this.agentLockFor(m.account, m.root, 'page', m.side, m.qty); if (lock) return lock;   // 0.5.0: the owner lock (section 6)
+    const lock = this.agentLockFor(m.account, m.root, this._orderSource || 'page', m); if (lock) return lock;   // 0.5.0: the owner lock (section 6)
     if ((m.kind === 'stopLimit' || m.kind === 'mit') && !this.sw.orderTypes) return 'Stop-limit and MIT orders are off (orderTypes = off in config.txt).';
     if (m.strategy !== undefined && !this.sw.strategies) return 'Order Strategies are off (strategies = off in config.txt).';
     if ((m.limitOffset !== undefined || m.limitPrice !== undefined) && m.kind !== 'stopLimit') return 'limitOffset and limitPrice go on a stopLimit order only.';
@@ -545,6 +545,13 @@ export class OrderDeskV3 extends OrderDesk {
   }
   /** a restart (F5) in the fake: resume when the managed record is there, else leave the stops (PROTOCOL.md) */
   simulateRestart(lostRecord) {
+    if (this.agents) for (const a of this.agents.values()) {   // 0.5.0: every start is shadow; open proposals are gone with the old run
+      a.mode = 'shadow'; a.connected = false; a.helloed = false; a.simulated = false;
+      if (a.conn && typeof this.closeAgentConn === 'function') this.closeAgentConn(a.conn);
+      a.conn = null;
+      for (const p of this.agentOpenProposals(a)) { p.state = 'not answered'; this.broadcastV3(p); }
+      this.agentNotify(a);
+    }
     for (const x of this.managed.values()) {
       if (x.state === 'done' || !x.pairs.length) continue;
       if (lostRecord) { x.state = 'unmanaged'; x.text = 'breakeven and trailing could not be resumed after the restart; the stop stays where it is'; this.broadcastV3({ type: 'status', level: 'error', text: x.entry.root + ' ' + x.entry.account + ': ' + x.text + '. Manage it by hand' }); }
@@ -664,7 +671,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (m.mode !== undefined && m.mode !== 'executions' && m.mode !== 'orders') return 'mode must be executions or orders.';
     if (m.leader !== undefined && m.leader !== null && !this.watched(m.leader)) return 'No account ' + m.leader + '.';   // 0.4.3: null is no leader
     if (m.leader !== undefined && m.leader !== null && this.copier.followers.has(m.leader)) return m.leader + ' is a follower; the leader cannot be one.';
-    if (m.leader !== undefined && m.leader !== null && this.agentOfAccount(m.leader)) return m.leader + ' is agent ' + this.agentOfAccount(m.leader).id + '\'s account: it cannot be the copier\'s leader.';
+    if (m.leader !== undefined && m.leader !== null && this.chosenAgentOf(m.leader)) return m.leader + ' is agent ' + this.chosenAgentOf(m.leader).id + '\'s account: it cannot be the copier\'s leader.';
     const L = this.copier.leader;
     if (L && [...this.positions].some(([k, p]) => k.startsWith(L + '|') && p.qty)) return 'The copier cannot change while the leader ' + L + ' has a position.';
     return null;
@@ -679,7 +686,7 @@ export class OrderDeskV3 extends OrderDesk {
     for (const k of ['account', 'on', 'qty', 'size', 'lossLimit']) if (m[k] === undefined) return 'copierFollower needs ' + k + '.';
     const a = this.acct.get(m.account);
     if (!a || a.state === 'archived') return 'No account ' + m.account + '.';
-    { const ag = this.agentOfAccount(m.account); if (ag) return m.account + ' is agent ' + ag.id + '\'s account: it cannot be a copier follower.'; }   // 0.5.0, section 6
+    { const ag = this.chosenAgentOf(m.account); if (ag && (m.on === true || !this.copier.followers.has(m.account))) return m.account + ' is agent ' + ag.id + '\'s account: it cannot be a copier follower.'; }   // 0.5.0, section 6 (a chosen account; on: false too unless already listed)
     if (m.on === true && this.sw.bot && m.account === this.botAccount) return m.account + ' is the bot\'s account: it cannot be a copier follower while the bot trades it (choose another account for the bot on the Bot tab first).';
     if (m.account === this.copier.leader) return m.account + ' is the leader; it cannot be a follower.';
     if (!isInt(m.qty) || m.qty < 1 || m.qty > 9) return 'qty must be a whole number from 1 to 9.';
@@ -729,6 +736,7 @@ export class OrderDeskV3 extends OrderDesk {
         const a = this.acct.get(f.account), root = this.followerRoot(o.root, f.size), fq = f.qty;
         f.root = root;
         let why = !a ? 'not connected' : this.sw.bot && f.account === this.botAccount ? 'bot account' : !this.connected(f.account) ? 'not connected' : a.state !== 'active' ? 'gone' : !this.accounts.includes(f.account) ? 'not checked for trading'
+          : this.agents.size && String(this.ownerOf(f.account, root) || '').startsWith('agent:') ? 'agent'
           : f.lossLimit !== null && this.pnl(f.account).today <= -f.lossLimit ? 'loss limit' : this.exposure(f.account, root, o.side, fq) > this.capFor(root) ? 'position limit' : null;
         if (why) { f.skipped = why; f.lastAction = 'skip'; f.lastAt = this.now(); this.copierEvent({ action: 'skip', account: f.account, root, qty: fq, text: 'skipped: ' + why }); continue; }
         f.skipped = null;
@@ -877,7 +885,7 @@ export class OrderDeskV3 extends OrderDesk {
     const name = m.account, a = typeof name === 'string' ? this.acct.get(name) : null;
     if (typeof name !== 'string' || !name || name.trim() !== name) return 'account must be an account name';
     if (/^(Backtest|Playback)/i.test(name)) return name + ' is a Backtest or Playback account: the bot never trades one';
-    const ag = this.agentOfAccount(name); if (ag) return name + ' is agent ' + ag.id + '\'s account: the bot trades an account of its own';   // 0.5.0, section 6
+    const ag = this.agentOfAccount && this.chosenAgentOf(name); if (ag) return name + ' is agent ' + ag.id + '\'s account: the bot trades an account of its own';   // 0.5.0, section 6 (a chosen account only)
     if (!a || a.state === 'archived') return name + ' is not in NinjaTrader';
     if (!this.config.trading) return 'trading is off in config.txt';
     if (!this.accounts.includes(name)) return (this.checkEntryAccount(name) || name + ' may not trade from the chart (tradeAccounts in config.txt)') + ': the bot needs it tradable';
@@ -910,7 +918,9 @@ export class OrderDeskV3 extends OrderDesk {
     if (this.sw.copier && f && f.on) return acct + ' is a copier follower: the bot does not trade while the copier copies to its account (turn that follower off on the page).';
     const m = { type: 'order', account: acct, root: this.botRoot, side: s.side, kind: s.kind, qty: 1, bracket: { stop: s.stopTicks, target: s.targetTicks || 0 } };
     if (s.kind !== 'market') m.price = s.price;
-    const why = this.checkEntryAccount(acct) || (this.accounts.includes(acct) ? null : acct + ' may not trade from the chart (tradeAccounts in config.txt)') || this.check_order(m);
+    this._orderSource = 'bot';                       // the owner lock names the bot's refusal as ChartBridge does
+    let why;
+    try { why = this.checkEntryAccount(acct) || (this.accounts.includes(acct) ? null : acct + ' may not trade from the chart (tradeAccounts in config.txt)') || this.check_order(m); } finally { this._orderSource = null; }
     if (why) { b.stats.refused++; return why; }
     const o = this.newOrder({ cid: null, account: acct, root: this.botRoot, side: s.side, kind: s.kind, qty: 1, price: s.kind === 'market' ? null : s.price, role: 'entry', by: 'bot', botId: s.id });
     if (s.kind === 'market') o.bracket = { stop: s.stopTicks, target: s.targetTicks || 0 };
@@ -1031,13 +1041,15 @@ Object.assign(OrderDeskV3.prototype, {
    *  agentAnyTime (tests and smokes only: no entry window and no flat time, so they run at any hour). */
   agentsInit(o) {
     this.agents = new Map();
+    this.unlisted = new Set();
     this.agentAnyTime = !!o.agentAnyTime;
     for (const id of o.agents || []) {
       if (!AGENT_ID_RX.test(id) || this.agents.has(id)) continue;
       const r = (o.agentRules || {})[id] || AGENT_DEFAULT_RULES;
       this.agents.set(id, { id, name: null, build: null, connected: false, simulated: false, conn: null, mode: 'shadow', killed: false, standDown: null,
-        trades: 0, losses: 0, pnl: 0, account: (o.agentAccounts || {})[id] || 'Sim101', rules: JSON.parse(JSON.stringify(r)), lastBeat: 0, lastPlan: null,
-        plans: [], notes: [], planIds: new Set(), proposals: new Map(), trade: null, msgTimes: [], flattenedDay: null, flatWarnAt: 0, day: tradingDay(this.now()),
+        trades: 0, losses: 0, pnl: 0, account: (o.agentAccounts || {})[id] || 'Sim101', chosen: !!(o.agentAccounts || {})[id], rules: JSON.parse(JSON.stringify(r)), lastBeat: 0, lastPlan: null,
+        plans: [], notes: [], planIds: new Set(), proposals: new Map(), trade: null, msgTimes: [], flatJob: null, day: tradingDay(this.now()),
+        refusedShownAt: -1e18, refusedHeld: 0, stuckCancels: 0,
         stats: { plans: 0, proposals: 0, placed: 0, refused: 0, heartbeatLost: 0, flattenedAt: null } });
     }
   },
@@ -1065,23 +1077,47 @@ Object.assign(OrderDeskV3.prototype, {
   agentOwns(a) { for (const r of new Set(this.agentRootsOf(a).concat(a.trade ? [a.trade.root] : []))) if (this.ownerOf(a.account, r) === 'agent:' + a.id) return true; return false; },
   /** the owner lock for a new entry (section 6): while an agent owns (account, root) every entry from another source is
    *  refused; a page order that only reduces the position is an exit and passes */
-  agentLockFor(account, root, source, side, qty) {
+  /* As built (review A-S5): a page order that only reduces passes as an exit, and only a MARKET order with no bracket and no
+     strategy, the other side of the position, at most its size; a resting page limit, stop or MIT is refused (it could
+     outlive the position and open one with no stop). Other sources: "until it is flat". m: the order message. */
+  agentLockFor(account, root, source, m) {
     if (!this.agents || !this.agents.size) return null;
     const owner = this.ownerOf(account, root);
     if (!owner || !owner.startsWith('agent:') || owner === source) return null;
-    const p = this.pos(account, root).qty;
-    if (side && p && (side === 'buy') === (p < 0) && qty <= Math.abs(p)) return null;
+    const p = this.pos(account, root).qty, x = m || {};
+    if (source === 'page') {
+      if (x.kind === 'market' && x.bracket === undefined && x.strategy === undefined && p && (x.side === 'buy') === (p < 0) && x.qty <= Math.abs(p)) return null;
+      return account + ' ' + root + ' belongs to agent ' + owner.slice(6) + ': use Flatten, or move its stop or target';
+    }
     return account + ' ' + root + ' belongs to agent ' + owner.slice(6) + ' until it is flat';
   },
-  agentRulesOut(a) { const r = a.rules; return { roots: r.roots.join(','), maxQty: Object.assign({}, r.maxQty), entryFrom: r.entryFrom, entryUntil: r.entryUntil, flatAt: r.flatAt, maxExpireSec: r.maxExpireSec, maxTrades: r.maxTrades, maxLosses: r.maxLosses }; },
+  /** only a chosen account is the agent's (as built): the bot, the copier and other agents refuse only an account chosen on
+   *  the page (agent-<id>-account.txt); an agent on its unchosen default Sim101 claims it against nobody */
+  chosenAgentOf(name) { for (const a of this.agents.values()) if (a.chosen && a.account === name) return a; return null; },
+  /** an account clash stands the AGENT down, in plain words (as built): the bot's account and the copier's leader and
+   *  followers whatever the switches; another agent's chosen account, or two agents both on their unchosen default */
+  agentClash(a) {
+    const acct = a.account, tail = ': choose an account for agent ' + a.id + ' on the Agent tab (an agent never shares an account)';
+    if (acct === this.botAccount) return acct + ' is also the bot\'s account' + tail;
+    if (acct === this.copier.leader) return acct + ' is also the copier\'s leader' + tail;
+    if (this.copier.followers.has(acct)) return acct + ' is also a copier follower' + tail;
+    for (const b of this.agents.values()) if (b !== a && b.account === acct && (b.chosen || !a.chosen)) return acct + ' is also agent ' + b.id + '\'s account' + tail;
+    return null;
+  },
+  agentStoodDown(a) { return this.agentClash(a) || a.standDown; },
+  /** NinjaTrader lists the account (the fake: known, not archived, not hidden with /test/agent-unlist) */
+  agentListed(name) { const x = this.acct.get(name); return !!x && x.state !== 'archived' && !this.unlisted.has(name); },
+  agentOutside(a, t) { if (this.agentAnyTime) return false; const ny = nyMinutes(t); return ny < hhmm(a.rules.entryFrom) || ny >= hhmm(a.rules.entryUntil); },
+  agentFlatHours(a, t) { if (this.agentAnyTime) return false; const ny = nyMinutes(t); return ny >= hhmm(a.rules.flatAt) || ny < hhmm(a.rules.entryFrom); },
+  agentRulesOut(a) { const r = a.rules; return { roots: r.roots.slice(), maxQty: Object.assign({}, r.maxQty), entryFrom: r.entryFrom, entryUntil: r.entryUntil, flatAt: r.flatAt, maxExpireSec: r.maxExpireSec, maxTrades: r.maxTrades, maxLosses: r.maxLosses }; },
   agentMsg(a) {
     return { type: 'agent', agent: a.id, name: a.name, build: a.build, enabled: true, connected: a.connected, mode: a.mode, account: a.account, sim: this.agentSim(a), rules: this.agentRulesOut(a),
-      position: this.agentPosition(a), pnlToday: +a.pnl.toFixed(2), trades: a.trades, losses: a.losses, killed: a.killed, standDown: a.standDown, owns: this.agentOwns(a),
+      position: this.agentPosition(a), pnlToday: +a.pnl.toFixed(2), trades: a.trades, losses: a.losses, killed: a.killed, standDown: this.agentStoodDown(a), owns: this.agentOwns(a),
       lastBeatMs: a.connected ? (a.simulated ? 400 : this.now() - a.lastBeat) : null, lastPlan: a.lastPlan };
   },
-  agentStateMsg(a) { return { type: 'agentState', mode: a.mode, killed: a.killed, standDown: a.standDown, trades: a.trades, losses: a.losses, pnlToday: +a.pnl.toFixed(2), owns: this.agentOwns(a) }; },
+  agentStateMsg(a) { return { type: 'agentState', mode: a.mode, killed: a.killed, standDown: this.agentStoodDown(a), trades: a.trades, losses: a.losses, pnlToday: +a.pnl.toFixed(2), owns: this.agentOwns(a) }; },
   agentWelcome(a) {
-    return { type: 'welcome', version: '0.5.0', agent: a.id, mode: a.mode, account: a.account, sim: this.agentSim(a), rules: Object.assign(this.agentRulesOut(a), { roots: a.rules.roots.join(',') }),
+    return { type: 'welcome', version: '0.5.0', agent: a.id, mode: a.mode, account: a.account, sim: this.agentSim(a), rules: this.agentRulesOut(a),
       instruments: a.rules.roots.filter(r => this.instruments[r]).map(r => ({ root: r, name: this.instruments[r].name, tick: this.instruments[r].tick, pointValue: this.instruments[r].pointValue })) };
   },
   agentNotify(a) { this.broadcastV3(this.agentMsg(a)); if (a.conn) this.send(a.conn, this.agentStateMsg(a)); },
@@ -1116,6 +1152,7 @@ Object.assign(OrderDeskV3.prototype, {
     const a = this.agents.get(m.agent);
     if (!['shadow', 'copilot', 'auto'].includes(m.mode)) return 'mode must be shadow, copilot or auto.';
     const acc = this.acct.get(a.account);
+    if (m.mode === 'auto' && this.agentClash(a)) return 'auto refused: ' + this.agentClash(a);
     if (m.mode === 'auto' && !(this.accounts.includes(a.account) && this.connected(a.account) && acc && acc.state !== 'gone')) return 'auto refused: ' + a.account + ' is not tradable now (its checkmark, Connected): ' + a.id + ' needs it tradable';
     return null;
   },
@@ -1175,8 +1212,8 @@ Object.assign(OrderDeskV3.prototype, {
     }
     p.state = 'accepted'; this.broadcastV3(p);
     this.agentAnswer(a, p.id, 'accepted', 'accepted by the page');
-    this.agentPlace(a, p, p.expiresAt);
-    this.agentAnswer(a, p.id, 'placed', 'placed on ' + a.account);
+    const po = this.agentPlace(a, p, p.expiresAt);
+    this.agentAnswer(a, p.id, 'placed', 'placed on ' + a.account + ' as order ' + po.id + '; it works until ' + new Date(po.expiresAt).toISOString());
     this.agentNotify(a);
   },
   /* agentAccount (sections 6 and 7) */
@@ -1190,7 +1227,7 @@ Object.assign(OrderDeskV3.prototype, {
     if (name === this.botAccount) return name + ' is the bot\'s account: an agent trades an account of its own';
     if (name === this.copier.leader) return name + ' is the copier\'s leader: an agent trades an account of its own';
     if (this.copier.followers.has(name)) return name + ' is a copier follower: an agent trades an account of its own';
-    const other = this.agentOfAccount(name); if (other) return name + ' is agent ' + other.id + '\'s account: an agent trades an account of its own';
+    const other = this.chosenAgentOf(name); if (other && other !== a) return name + ' is agent ' + other.id + '\'s account: an agent trades an account of its own';
     if (!this.config.trading || !this.accounts.includes(name) || !this.connected(name) || x.state === 'gone') return name + ' is not tradable now (its checkmark on the Accounts tab, Connected)';
     if (a.trade || this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length) return a.id + ' has a position, a working entry or a proposal: choose its account when it is flat';
     for (const acc of [a.account, name]) for (const r of this.agentRootsOf(a)) {
@@ -1201,7 +1238,7 @@ Object.assign(OrderDeskV3.prototype, {
   },
   do_agentAccount(m) {
     const a = this.agents.get(m.agent), old = a.account, was = a.mode;
-    a.account = m.account;
+    a.account = m.account; a.chosen = true;           // written to agent-<id>-account.txt: now the agent's
     a.mode = 'shadow';                              // lead's default: a new account starts in shadow (nothing was open: the change needs that)
     this.agentLogLine(a, 'account ' + m.account + ' (' + (this.agentSim(a) ? 'Sim' : 'LIVE') + '), was ' + old + ', set by the page; mode shadow (was ' + was + ')');
     this.agentToAgent(a, this.agentWelcome(a));
@@ -1216,10 +1253,10 @@ Object.assign(OrderDeskV3.prototype, {
     for (const r of roots) {
       if (!AGENT_CEILING[r]) return r + ' cannot be an agent\'s root (NQ, MNQ, ES or MES)';
       if (!this.instruments[r] || this.instruments[r].quoteOnly) return r + ' is not traded by ChartBridge (served, not quote only)';
-      const q = m['maxQty' + r];
+      const q = m['maxQty' + r] === undefined ? AGENT_CEILING[r] : m['maxQty' + r];   // left out: its hard ceiling (as built)
       if (!isInt(q) || q < 1 || q > AGENT_CEILING[r]) return 'maxQty' + r + ' must be a whole number from 1 to ' + AGENT_CEILING[r] + ' (the ceiling)';
     }
-    for (const r of Object.keys(AGENT_CEILING)) if (!roots.includes(r) && m['maxQty' + r] !== undefined) return 'maxQty' + r + ' is for a root not in roots';
+    for (const r of Object.keys(AGENT_CEILING)) if (!roots.includes(r) && m['maxQty' + r] !== undefined && m['maxQty' + r] !== 0) return 'maxQty' + r + ' is for a root not in roots (only 0 is taken there)';
     for (const k of ['entryFrom', 'entryUntil', 'flatAt']) if (typeof m[k] !== 'string' || !TIME_RX.test(m[k])) return k + ' must be a New York time HH:MM';
     if (hhmm(m.entryFrom) < hhmm('09:30')) return 'entryFrom must be 09:30 or later';
     if (!(hhmm(m.entryFrom) < hhmm(m.entryUntil))) return 'entryFrom must be before entryUntil';
@@ -1233,7 +1270,7 @@ Object.assign(OrderDeskV3.prototype, {
   },
   do_agentRules(m) {
     const a = this.agents.get(m.agent), roots = m.roots.split(',').map(x => x.trim());
-    a.rules = { roots, maxQty: Object.fromEntries(roots.map(r => [r, m['maxQty' + r]])), entryFrom: m.entryFrom, entryUntil: m.entryUntil, flatAt: m.flatAt, maxExpireSec: m.maxExpireSec,
+    a.rules = { roots, maxQty: Object.fromEntries(roots.map(r => [r, m['maxQty' + r] === undefined ? AGENT_CEILING[r] : m['maxQty' + r]])), entryFrom: m.entryFrom, entryUntil: m.entryUntil, flatAt: m.flatAt, maxExpireSec: m.maxExpireSec,
       maxTrades: m.maxTrades || null, maxLosses: m.maxLosses || null };
     /* a tighter rule can stand the agent down now; a rules change never lifts a stand-down (only 18:00 ET does: lead's default) */
     if (a.rules.maxLosses && a.losses >= a.rules.maxLosses && !a.standDown) a.standDown = a.losses + ' losing trades today: no new entries until 18:00 ET';
@@ -1266,18 +1303,20 @@ Object.assign(OrderDeskV3.prototype, {
        reaches the pages (lead's default) */
     if (!a.helloed && !(m && typeof m === 'object' && m.type === 'agentHello')) return 'send agentHello first';
     a.lastBeat = this.now();
-    const strict = checkAgentMessage(m, text);
-    if (strict) { if (m && m.type === 'plan' && typeof m.id === 'string') this.agentRefusePlan(a, m, strict); return strict; }
-    if (m.type !== 'beat') {
+    /* the rate is counted first (as built): every message but beat, malformed and refused ones included */
+    if (!(m && m.type === 'beat')) {
       const t = this.now(); a.msgTimes = a.msgTimes.filter(x => t - x < 1000); a.msgTimes.push(t);
       if (a.msgTimes.length > 10) return 'More than 10 messages in one second. Slow down.';
     }
+    const strict = checkAgentMessage(m, text);
+    if (strict) { if (m && m.type === 'plan' && typeof m.id === 'string') this.agentRefusePlan(a, m, strict); return strict; }
     switch (m.type) {
       case 'beat': return null;
       case 'agentHello': {
         if (typeof m.name !== 'string' || !m.name || m.name.length > 40 || typeof m.build !== 'string' || !m.build || m.build.length > 40) return 'agentHello needs name and build of 1 to 40 characters';
         a.name = m.name; a.build = m.build; a.connected = true; a.helloed = true;
         this.agentToAgent(a, this.agentWelcome(a)); this.agentToAgent(a, this.agentStateMsg(a));
+        this.agentSnapshot(a);
         this.agentLogLine(a, 'hello ' + m.name + ' ' + m.build);
         this.agentNotify(a);
         return null;
@@ -1294,14 +1333,16 @@ Object.assign(OrderDeskV3.prototype, {
       case 'skip': {
         if (typeof m.id !== 'string' || !m.id || m.id.length > 40) return 'id must be 1 to 40 characters';
         if (typeof m.reason !== 'string' || !m.reason) return 'reason must be 1 to 200 characters';
-        const p = { type: 'agentPlan', agent: a.id, id: m.id, at: this.now(), action: 'skip', setup: m.setup === undefined ? null : m.setup, reason: m.reason, result: 'skipped' };
+        /* a skip carries every plan key, null where a skip has none (as built) */
+        const p = Object.assign({ type: 'agentPlan', agent: a.id, id: m.id, at: this.now(), action: 'skip' }, { root: null, side: null, kind: null, price: null, qty: null, stopTicks: null, targetTicks: null,
+          expireSec: null, riskDollars: null, setup: m.setup === undefined ? null : m.setup, reason: m.reason, confidence: null, result: 'skipped' });
         this.agentKeepPlan(a, p); this.agentLogLine(a, m.id + ' skipped: ' + m.reason);
         return null;
       }
       case 'withdraw': {
         const p = a.proposals.get(m.id);
         if (p && p.state === 'open') { p.state = 'withdrawn'; this.broadcastV3(p); this.agentAnswer(a, p.id, 'withdrawn', 'withdrawn: ' + m.reason); }
-        for (const o of this.agentWorkingEntries(a)) if (o.planId === m.id) { this.cancelOne(o); this.agentAnswer(a, m.id, 'withdrawn', 'entry cancelled: ' + m.reason); }
+        for (const o of this.agentWorkingEntries(a)) if (o.planId === m.id && !o.cancelPending) this.agentCancelEntry(a, o, 'withdrawn', 'withdrawn: ' + m.reason);
         this.agentLogLine(a, m.id + ' withdrawn: ' + m.reason);
         this.agentNotify(a);
         return null;
@@ -1318,7 +1359,22 @@ Object.assign(OrderDeskV3.prototype, {
   },
   /* a plan to the pages and the agent's last 50. A refused plan with the id of one that was not refused (a duplicate id)
      never replaces it: both are kept and shown, and lastPlan stays the first (lead's default) */
+  /** the snapshot after every agentHello (as built): one `position` per root of the agent on its account, a flat one too,
+   *  then one `order` per working order of its own (entries, stops and targets), as a v2 page gets them */
+  agentSnapshot(a) {
+    for (const r of this.agentRootsOf(a)) { const p = this.pos(a.account, r); this.agentToAgent(a, { type: 'position', account: a.account, root: r, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null }); }
+    for (const o of this.orders.values()) if (isWorking(o) && this.agentOfOrder(o) === a.id && this.instruments[o.root]) this.agentToAgent(a, this.orderMsg(o));
+  },
   agentKeepPlan(a, p) {
+    /* refused plans reach the pages at most once a second per agent (as built, review B-S1): the next one shown says how many
+       were held; every one is still answered to the agent and logged */
+    if (/^refused/.test(p.result)) {
+      const t = this.now();
+      if (t - a.refusedShownAt < 1000) { a.refusedHeld++; return; }
+      a.refusedShownAt = t;
+      if (a.refusedHeld > 0) p.result += ' (and ' + a.refusedHeld + ' more refused plan' + (a.refusedHeld === 1 ? '' : 's') + ' in the second before, not shown)';
+      a.refusedHeld = 0;
+    }
     const dup = /^refused/.test(p.result) && a.plans.some(x => x.id === p.id && !/^refused/.test(x.result));
     if (!dup) a.plans = a.plans.filter(x => x.id !== p.id);
     a.plans.push(p); if (a.plans.length > 50) a.plans.shift();
@@ -1355,20 +1411,21 @@ Object.assign(OrderDeskV3.prototype, {
     if (m.confidence < 0 || m.confidence > 1) return 'confidence must be from 0 to 1';
     // 2. not killed, not stood down, the account tradable now (and an account of its own: lead's default)
     if (a.killed) return 'the kill switch is on';
-    if (a.standDown) return a.standDown;
+    if (this.agentStoodDown(a)) return this.agentStoodDown(a);
     if (!this.config.trading) return 'trading is off in config.txt';
+    if (!this.agentListed(a.account)) return a.account + ' is not listed by NinjaTrader';
     const acc = this.acct.get(a.account);
     if (!acc || !this.accounts.includes(a.account) || !this.connected(a.account) || acc.state === 'gone') return a.account + ' is not tradable now (its checkmark, Connected)';
-    if (a.account === this.botAccount) return a.account + ' is the bot\'s account: choose ' + a.id + '\'s own account on the Agent tab';
-    if (a.account === this.copier.leader || this.copier.followers.has(a.account)) return a.account + ' is the copier\'s: choose ' + a.id + '\'s own account on the Agent tab';
     // 3. root and kind
     if (!a.rules.roots.includes(m.root)) return m.root + ' is not one of ' + a.id + '\'s roots (' + a.rules.roots.join(', ') + ')';
     if (!this.instruments[m.root] || this.instruments[m.root].quoteOnly) return m.root + ' is not traded by ChartBridge';
     if (m.kind !== 'limit' && m.kind !== 'stopLimit') return 'an agent\'s entry is a limit or a stop-limit';
+    if (m.kind === 'stopLimit' && !this.sw.orderTypes) return 'stop-limit orders are off (orderTypes = off in config.txt)';
     // 4. quantity, stop and target
-    const cap = a.rules.maxQty[m.root];
+    const cap = Math.min(a.rules.maxQty[m.root], AGENT_CEILING[m.root] || 0, this.capFor(m.root));   // the agent's, the ceiling and config.txt's gate 3 cap
     if (!isInt(m.qty) || m.qty < 1 || m.qty > cap) return 'qty must be a whole number from 1 to ' + cap + ' (maxQty.' + m.root + ')';
     if (!isInt(m.stopTicks) || m.stopTicks < 1 || !isInt(m.targetTicks) || m.targetTicks < 1) return 'stopTicks and targetTicks must be whole numbers of 1 or more';
+    if (this.config.maxBracketTicks > 0 && (m.stopTicks > this.config.maxBracketTicks || m.targetTicks > this.config.maxBracketTicks)) return 'stopTicks and targetTicks must be at most ' + this.config.maxBracketTicks + ' (maxBracketTicks in config.txt)';
     // 5. risk
     const ins = this.instruments[m.root], risk = m.stopTicks * ins.tick * ins.pointValue * m.qty;
     if (Math.abs(m.riskDollars - risk) > 0.01 + 1e-9) return 'riskDollars ' + m.riskDollars + ' is not stopTicks x tick x point value x qty (' + risk.toFixed(2) + ')';
@@ -1419,8 +1476,8 @@ Object.assign(OrderDeskV3.prototype, {
       return null;
     }
     this.agentKeepPlan(a, out);
-    this.agentPlace(a, Object.assign({ id: m.id }, fields), at + m.expireSec * 1000);
-    this.agentAnswer(a, m.id, 'placed', 'placed on ' + a.account);
+    const po = this.agentPlace(a, Object.assign({ id: m.id }, fields), at + m.expireSec * 1000);
+    this.agentAnswer(a, m.id, 'placed', 'placed on ' + a.account + ' as order ' + po.id + '; it works until ' + new Date(po.expiresAt).toISOString());
     this.agentNotify(a);
     return null;
   },
@@ -1436,21 +1493,33 @@ Object.assign(OrderDeskV3.prototype, {
     return o;
   },
   agentCancelEntries(a, answer, why) {
-    for (const o of this.agentWorkingEntries(a)) { this.cancelOne(o); this.agentAnswer(a, o.planId, answer, 'entry cancelled: ' + why); }
+    for (const o of this.agentWorkingEntries(a)) if (!o.cancelPending) this.agentCancelEntry(a, o, answer, why);
+  },
+  agentCancelEntry(a, o, answer, why) { this.agentAnswer(a, o.planId, answer, 'entry cancelled: ' + why); this.agentTryCancel(a, o, why); },
+  /* a cancel NinjaTrader does not confirm (the fake: /test/agent-stuck-cancel) is sent again every 3 s while the order is
+     working; from the second try the pages get a status warning (as built, review A-S1) */
+  agentTryCancel(a, o, why) {
+    const t = this.now(), c = o.cancelPending || (o.cancelPending = { why, tries: 0, last: 0 });
+    c.tries++; c.last = t;
+    if (c.tries >= 2) this.broadcastV3({ type: 'status', level: 'warn', text: 'Agent ' + a.id + ': the cancel of its entry ' + (o.tag || o.name) + ' on ' + o.account + ' was not confirmed in 3 s (' + c.why + '); ChartBridge sends it again every 3 s until it is done; check NinjaTrader' });
+    if (a.stuckCancels > 0) { a.stuckCancels--; return; }
+    this.cancelOne(o); o.cancelPending = null;
   },
   agentExpireProposals(a, state, why) {
     for (const p of this.agentOpenProposals(a)) { p.state = state; this.broadcastV3(p); this.agentAnswer(a, p.id, state, why); this.agentLogLine(a, p.id + ' ' + state + ': ' + why); }
   },
   /** cancel every working order of the agent on its account and roots (entries and legs), then close its position at market */
   agentFlatten(a, why) {
-    for (const o of [...this.orders.values()]) if (isWorking(o) && this.agentOfOrder(o) === a.id) this.cancelOne(o);
+    if (!this.agentListed(a.account)) return false;  // nothing goes to an account NinjaTrader does not list (the job waits)
+    for (const o of [...this.orders.values()]) if (isWorking(o) && this.agentOfOrder(o) === a.id) { this.cancelOne(o); o.cancelPending = null; }
     const pos = this.agentPosition(a);
-    if (pos) {
+    if (pos && !a.holdClose) {                       // holdClose (tests only): a close that does not fill, as NinjaTrader may leave it
       const x = this.newOrder({ cid: null, account: a.account, root: pos.root, side: pos.qty > 0 ? 'sell' : 'buy', kind: 'market', qty: Math.abs(pos.qty), price: null, role: 'other', agentId: a.id });
       this.emitOrder(x); this.matchOne(x, this.last[pos.root], true);
     }
     this.agentLogLine(a, 'flattened: ' + why);
     this.agentNotify(a);
+    return true;
   },
   /* fills: an agent's trade opens with the first fill of its entry and closes when its account is flat on that root */
   agentBeforeFill(o, qty, price) {
@@ -1466,10 +1535,8 @@ Object.assign(OrderDeskV3.prototype, {
     const mine = this.agentOfOrder(o), a0 = mine ? this.agents.get(mine) : null;
     if (a0 && o.role === 'entry' && !a0.trade) { a0.trade = { root: o.root, pnl: 0 }; a0.trades++; }
     for (const a of this.agents.values()) {
-      if (a.conn && (a === a0 || (a.account === o.account && a.trade && a.trade.root === o.root))) {
-        this.send(a.conn, { type: 'exec', account: o.account, name: o.name, root: o.root, side: o.side, qty, p: price, t: +this.barTime().toFixed(3), u: this.now(), id: 'X' + this.execSeq, order: o.id });
-        const p = this.pos(o.account, o.root); this.send(a.conn, { type: 'position', account: o.account, root: o.root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null });
-      }
+      if (a.conn && a === a0) this.send(a.conn, { type: 'exec', account: o.account, name: o.name, root: o.root, side: o.side, qty, p: price, t: +this.barTime().toFixed(3), u: this.now(), id: 'X' + this.execSeq, order: o.id });
+      if (a.conn && a.account === o.account && a.rules.roots.includes(o.root)) { const p = this.pos(o.account, o.root); this.send(a.conn, { type: 'position', account: o.account, root: o.root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null }); }
       if (a.trade && a.account === o.account && a.trade.root === o.root && !this.pos(o.account, o.root).qty) {
         const t = a.trade; a.trade = null; a.pnl += t.pnl;
         if (t.pnl < 0) { a.losses++; if (a.rules.maxLosses && a.losses >= a.rules.maxLosses) a.standDown = a.losses + ' losing trades today: no new entries until 18:00 ET'; }
@@ -1484,6 +1551,7 @@ Object.assign(OrderDeskV3.prototype, {
     const day = tradingDay(t);                     // a.day: the trading day the agent's counts belong to, from its start
     if (a.day === day) return;
     a.day = day; a.trades = 0; a.losses = 0; a.pnl = 0; a.standDown = null; a.planIds.clear();
+    for (const [id, p] of a.proposals) if (p.state !== 'open') a.proposals.delete(id);   // the roll drops ended proposals
     this.agentLogLine(a, 'a new trading day: ' + day);
     this.agentNotify(a);
   },
@@ -1500,20 +1568,43 @@ Object.assign(OrderDeskV3.prototype, {
         if (c && typeof this.closeAgentConn === 'function') this.closeAgentConn(c);
       }
       for (const p of this.agentOpenProposals(a)) if (p.expiresAt <= t) { p.state = 'expired'; this.broadcastV3(p); this.agentAnswer(a, p.id, 'expired', 'the plan\'s entry time ran out'); this.agentLogLine(a, p.id + ' expired'); this.agentNotify(a); }
-      for (const o of this.agentWorkingEntries(a)) if (o.expiresAt <= t) { this.cancelOne(o); this.agentAnswer(a, o.planId, 'expired', 'the entry\'s time ran out'); this.agentNotify(a); }
-      if (this.agentAnyTime) continue;
-      if (ny >= hhmm(a.rules.entryUntil)) { if (this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length) { this.agentCancelEntries(a, 'expired', 'the entry window ended'); this.agentExpireProposals(a, 'expired', 'the entry window ended'); this.agentNotify(a); } }
-      if (ny >= hhmm(a.rules.flatAt)) {
-        const day = new Date(t).toISOString().slice(0, 10), busy = this.agentPosition(a) || [...this.orders.values()].some(o => isWorking(o) && this.agentOfOrder(o) === a.id);
-        if (busy && a.flattenedDay !== day) {
-          a.flattenedDay = day; a.stats.flattenedAt = t; a.flatWarnAt = t;
-          this.agentFlatten(a, 'flat time');
-          this.broadcastV3({ type: 'status', level: 'info', text: a.id + ' flattened at ' + a.rules.flatAt + ' by its rules' });
-        } else if (a.flattenedDay === day && this.agentPosition(a) && t - a.flatWarnAt >= 10000) {
-          a.flatWarnAt = t;
-          this.broadcastV3({ type: 'status', level: 'error', text: a.id + ' is not flat ' + Math.round((t - a.stats.flattenedAt) / 1000) + ' s after its flat time: check ' + a.account + ' in NinjaTrader' });
-        }
+      for (const o of this.agentWorkingEntries(a)) {
+        if (o.cancelPending) { if (t - o.cancelPending.last >= 3000) this.agentTryCancel(a, o, o.cancelPending.why); continue; }
+        if (o.expiresAt <= t) { this.agentCancelEntry(a, o, 'expired', 'the entry\'s time ran out'); this.agentNotify(a); }
       }
+      /* the backstop (as built, review A-S2): no agent entry works while the agent is killed, in shadow, stood down or outside
+         its window, however it came to be working; outside the window an open proposal expires */
+      const outside = this.agentOutside(a, t), stop = a.killed ? 'the kill switch' : a.mode === 'shadow' ? 'shadow' : this.agentStoodDown(a) ? 'stood down' : outside ? 'outside its window' : '';
+      if (stop) for (const o of this.agentWorkingEntries(a)) if (!o.cancelPending) { this.agentCancelEntry(a, o, 'expired', stop); this.agentNotify(a); }
+      if (outside && this.agentOpenProposals(a).length) { this.agentExpireProposals(a, 'expired', 'outside its window'); this.agentNotify(a); }
+      this.agentFlatJob(a, t);
+    }
+  },
+  /* The flat hours, from flatAt to the next entryFrom (as built): ChartBridge flattens the agent itself, the agent gone or not.
+     A job per agent: started when it holds a position or has orders working in the flat hours; nothing is sent while
+     NinjaTrader does not list its account (the NOT FLAT error every 10 s, "account not listed by NinjaTrader"), and it goes on
+     when the account is back; not flat 10 s after its flatten, the NOT FLAT error every 10 s until it is. */
+  agentFlatJob(a, t) {
+    const busy = () => !!this.agentPosition(a) || [...this.orders.values()].some(o => isWorking(o) && this.agentOfOrder(o) === a.id);
+    let j = a.flatJob;
+    if (!j) {
+      if (!this.agentFlatHours(a, t) || !busy()) return;
+      const ny = nyMinutes(t), atFlat = ny >= hhmm(a.rules.flatAt) && ny < 18 * 60;
+      j = a.flatJob = { start: t, why: atFlat ? 'flat time' : 'outside its trading hours', lastErr: -1e18, done: false, root: (this.agentPosition(a) || {}).root || a.rules.roots[0] };
+      this.broadcast({ type: 'status', level: 'info', text: atFlat ? a.id + ' flattened at ' + a.rules.flatAt + ' by its rules'
+        : a.id + ' held a position outside its trading hours (' + a.rules.flatAt + ' to ' + a.rules.entryFrom + '): flattened by its rules' });
+    }
+    if (!busy()) { a.flatJob = null; a.stats.flattenedAt = t; return; }
+    if (!this.agentListed(a.account)) {
+      if (t - j.lastErr >= 10000) { j.lastErr = t; this.broadcast({ type: 'status', level: 'error', text: 'Agent ' + a.id + ': NOT FLAT? its flatten (' + j.why + ') waits: ' + a.account + ' (account not listed by NinjaTrader); it goes on when the account is back; check NinjaTrader now' }); }
+      return;
+    }
+    if (!j.done) { j.done = this.agentFlatten(a, j.why); if (j.done) { j.start = t; j.lastClose = t; } if (!busy()) { a.flatJob = null; a.stats.flattenedAt = t; } return; }
+    const pos = this.agentPosition(a);
+    if (pos && !a.holdClose && t - (j.lastClose || 0) >= 3000) { j.lastClose = t; this.agentFlatten(a, j.why); if (!busy()) { a.flatJob = null; a.stats.flattenedAt = t; return; } }   // a close that ends unfilled goes again 3 s later
+    if (pos && t - j.start >= 10000 && t - j.lastErr >= 10000) {
+      j.lastErr = t;
+      this.broadcast({ type: 'status', level: 'error', text: 'Agent ' + a.id + ': NOT FLAT ' + Math.round((t - j.start) / 1000) + ' s after its flatten (' + j.why + '): ' + pos.root + ' on ' + a.account + ' still shows ' + pos.qty + '; act in NinjaTrader now' });
     }
   },
 });
