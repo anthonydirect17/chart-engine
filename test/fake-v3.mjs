@@ -3,7 +3,9 @@
 // made-up accounts (Sim101, EVAL-A, EVAL-B, FUNDED-C, SIM-F1, SIM-F2), a made-up bot, sample prices; nothing reaches a
 // broker. OrderDeskV3 extends the v2 OrderDesk (test/fake-orders.mjs, unchanged) with: account checkmarks and Gone,
 // stop-limit and MIT, Order Strategies (allocation, a pair per target bucket per fill, breakeven, trailing), Merge,
-// cancel from the Working orders tab, quote-only roots, the copier and the bot channel's rails. Anthony 2026-10-07: no switches
+// cancel from the Working orders tab, quote-only roots, the copier, the bot channel's rails and (ChartBridge 0.5.0, contract
+// AGENT_CHANNEL v1, chart 1.17.0) the agent channel: any number of agents, each with its own rules and account, the owner lock,
+// proposals that live until the plan's own expiry; the agent in the tests is the made-up "Demo Agent" (id demo). Anthony 2026-10-07: no switches
 // (every v3 switch on unless options.switches names it false, as config.txt's off line), no Sim locks (a real follower is copied
 // through every gate; the bot trades the account chosen with botAccount, Sim101 by default, Sim or LIVE).
 import { OrderDesk, KEYS as V2_KEYS, allowedAccounts, onTickGrid } from './fake-orders.mjs';
@@ -71,14 +73,22 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   botAnswer: ['type', 'cid', 'id', 'answer', 'at'],
   botRails: ['type', 'cid', 'maxTrades', 'maxLosses', 'root'],   // as ChartBridge 0.4.0 built it (ChartBridgeBot.cs SetRails)
   botAccount: ['type', 'cid', 'account'],                          // Anthony 2026-10-07: the bot's account (ChartBridgeBot.cs SetAccount)
+  // ChartBridge 0.5.0, the agent channel (contract AGENT_CHANNEL v1, section 7): flat keys only
+  agentMode: ['type', 'cid', 'agent', 'mode'],
+  agentKill: ['type', 'cid', 'agent', 'on'],
+  agentSeen: ['type', 'agent', 'id', 'at'],
+  agentAnswer: ['type', 'cid', 'agent', 'id', 'answer', 'at'],
+  agentAccount: ['type', 'cid', 'agent', 'account'],
+  agentRules: ['type', 'cid', 'agent', 'roots', 'maxQtyNQ', 'maxQtyMNQ', 'maxQtyES', 'maxQtyMES', 'entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses'],
 });
 export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep'];
-export const BOOL_KEYS = { accountTrade: ['on'], accountArchive: ['confirm'], copierFollower: ['on'], botKill: ['on'] };
+export const BOOL_KEYS = { accountTrade: ['on'], accountArchive: ['confirm'], copierFollower: ['on'], botKill: ['on'], agentKill: ['on'] };
 export const BOT_KEYS = {
   botHello: ['type', 'name'], beat: ['type'], withdraw: ['type', 'id', 'reason'], flatten: ['type'],
   signal: ['type', 'id', 'action', 'side', 'kind', 'price', 'stopTicks', 'targetTicks', 'reason'],
 };
-const V3_TYPES = ['accountTrade', 'accountArchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount'];
+export const AGENT_PAGE_TYPES = ['agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules'];
+const V3_TYPES = ['accountTrade', 'accountArchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount'].concat(AGENT_PAGE_TYPES);
 const SWITCH_OF = { accountTrade: 'accountChecks', accountArchive: null, merge: 'merge', copierGet: 'copier', copierSet: 'copier', copierFollower: 'copier', copierRearm: 'copier', botMode: 'bot', botKill: 'bot', botSeen: 'bot', botAnswer: 'bot', botRails: 'bot', botAccount: 'bot' };
 
 const isInt = v => typeof v === 'number' && Number.isInteger(v);
@@ -164,6 +174,7 @@ export class OrderDeskV3 extends OrderDesk {
     this.botAccount = 'Sim101';                  // the bot's account (botAccount; bot-account.txt), Sim101 until Anthony chooses another
     this.bot = { connected: false, simulated: false, name: null, mode: 'shadow', killed: false, standDown: null, trades: 0, losses: 0, lastBeat: 0, lastSignal: null, conn: null, maxTrades: 5, maxLosses: 3,
       proposals: new Map(), signals: [], stats: { signals: 0, proposals: 0, answered: 0, notAnswered: 0, placed: 0, refused: 0, heartbeatLost: 0 } };
+    this.agentsInit(o);
     this.refreshAccounts();
   }
 
@@ -258,6 +269,7 @@ export class OrderDeskV3 extends OrderDesk {
     for (const x of this.managed.values()) this.send(conn, this.managedMsg(x));
     if (this.sw.copier) this.send(conn, this.copierMsg());
     if (this.sw.bot) this.send(conn, this.botMsg());
+    this.agentsOnAuth(conn);                     // 0.5.0: every agent's state, its open proposals, last 200 notes and 50 plans
   }
   orderMsg(o, v3) {
     const m = super.orderMsg(o);
@@ -267,6 +279,7 @@ export class OrderDeskV3 extends OrderDesk {
        follows, `by: "copier"` for an order the copier placed on a follower (ChartBridgeV3.OrderBy via ChartBridgeAccounts.ForPage;
        an order that already says `by` keeps it). Merge marks nothing. `tradable` to a v3 page only. */
     if (o.by === 'strategy') m.by = o.by;
+    else if (v3 && this.agentOfOrder(o)) m.by = 'agent:' + this.agentOfOrder(o);   // 0.5.0: an agent's entry and its legs
     else if (v3 && this.isBotOrder(o)) m.by = 'bot';
     else if (v3 && (o.copier || o.by === 'copier')) m.by = 'copier';
     if (o.bucket && o.by === 'strategy') m.bucket = o.bucket;
@@ -278,6 +291,8 @@ export class OrderDeskV3 extends OrderDesk {
     const msg = this.orderMsg(o), msg3 = this.orderMsg(o, true);
     for (const c of this.conns()) if (c.authed && this.visible(o.account, c)) this.send(c, c.v3 ? msg3 : msg);
     if (this.bot.conn && this.isBotOrder(o)) this.send(this.bot.conn, msg);     // the bot sees its own orders only
+    const ag = this.agentOfOrder(o), a = ag ? this.agents.get(ag) : null;
+    if (a && a.conn) this.send(a.conn, msg);                                     // an agent sees its own orders only
   }
   isBotOrder(o) { return o.by === 'bot' || (o.parent && (this.orders.get(o.parent) || {}).by === 'bot'); }
 
@@ -290,6 +305,7 @@ export class OrderDeskV3 extends OrderDesk {
     let why = this.checkAction(conn) || checkKeysV3(m, text);
     if (!why && V3_TYPES.includes(m.type) && SWITCH_OF[m.type] && !this.sw[SWITCH_OF[m.type]]) why = m.type + ' is off (' + SWITCH_OF[m.type] + ' = off in config.txt).';
     if (!why && m.type === 'accountArchive' && !this.sw.accountChecks) why = 'accountArchive is off (accountChecks = off in config.txt).';
+    if (!why && AGENT_PAGE_TYPES.includes(m.type)) why = this.agentPageCheck(m);
     if (!why) why = this['check_' + m.type](m);
     if (why) { this.send(conn, Object.assign({ type: 'reject' }, ref, { reason: why })); if (m.type === 'merge') this.merges.refused++; return false; }
     this['do_' + m.type](m, conn);
@@ -307,6 +323,7 @@ export class OrderDeskV3 extends OrderDesk {
   check_order(m) {
     const q = this.quoteOnly(m.root); if (q) return q;
     const e = this.checkEntryAccount(m.account); if (e) return e;
+    const lock = this.agentLockFor(m.account, m.root, 'page', m.side, m.qty); if (lock) return lock;   // 0.5.0: the owner lock (section 6)
     if ((m.kind === 'stopLimit' || m.kind === 'mit') && !this.sw.orderTypes) return 'Stop-limit and MIT orders are off (orderTypes = off in config.txt).';
     if (m.strategy !== undefined && !this.sw.strategies) return 'Order Strategies are off (strategies = off in config.txt).';
     if ((m.limitOffset !== undefined || m.limitPrice !== undefined) && m.kind !== 'stopLimit') return 'limitOffset and limitPrice go on a stopLimit order only.';
@@ -423,6 +440,7 @@ export class OrderDeskV3 extends OrderDesk {
 
   /* ---------------- fills: realized P&L, strategies, the copier */
   fill(o, qty, price) {
+    this.agentBeforeFill(o, qty, price);         // 0.5.0: an agent's trade, its realized dollars
     const p = this.pos(o.account, o.root), was = p.qty, avg = p.avgPrice, a = this.acct.get(o.account);
     const signed = o.side === 'buy' ? qty : -qty;
     if (a && was && Math.sign(was) !== Math.sign(signed)) {
@@ -442,6 +460,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (ms) this.mergedUpkeep(o, ms);
     if (o.role === 'entry' && o.by === 'bot' && o.filled === qty) this.bot.trades++;
     if (this.sw.copier) this.copierOnFill(o, qty, price, was);
+    this.agentAfterFill(o, qty, price);
   }
   isBotPosition(o) { return o.account === this.botAccount && o.root === this.botRoot && this.bot.position; }
   bracketsAfterFill(entry, qty, price) {
@@ -644,6 +663,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (m.mode !== undefined && m.mode !== 'executions' && m.mode !== 'orders') return 'mode must be executions or orders.';
     if (m.leader !== undefined && m.leader !== null && !this.watched(m.leader)) return 'No account ' + m.leader + '.';   // 0.4.3: null is no leader
     if (m.leader !== undefined && m.leader !== null && this.copier.followers.has(m.leader)) return m.leader + ' is a follower; the leader cannot be one.';
+    if (m.leader !== undefined && m.leader !== null && this.agentOfAccount(m.leader)) return m.leader + ' is agent ' + this.agentOfAccount(m.leader).id + '\'s account: it cannot be the copier\'s leader.';
     const L = this.copier.leader;
     if (L && [...this.positions].some(([k, p]) => k.startsWith(L + '|') && p.qty)) return 'The copier cannot change while the leader ' + L + ' has a position.';
     return null;
@@ -658,6 +678,7 @@ export class OrderDeskV3 extends OrderDesk {
     for (const k of ['account', 'on', 'qty', 'size', 'lossLimit']) if (m[k] === undefined) return 'copierFollower needs ' + k + '.';
     const a = this.acct.get(m.account);
     if (!a || a.state === 'archived') return 'No account ' + m.account + '.';
+    { const ag = this.agentOfAccount(m.account); if (ag) return m.account + ' is agent ' + ag.id + '\'s account: it cannot be a copier follower.'; }   // 0.5.0, section 6
     if (m.on === true && this.sw.bot && m.account === this.botAccount) return m.account + ' is the bot\'s account: it cannot be a copier follower while the bot trades it (choose another account for the bot on the Bot tab first).';
     if (m.account === this.copier.leader) return m.account + ' is the leader; it cannot be a follower.';
     if (!isInt(m.qty) || m.qty < 1 || m.qty > 9) return 'qty must be a whole number from 1 to 9.';
@@ -855,6 +876,7 @@ export class OrderDeskV3 extends OrderDesk {
     const name = m.account, a = typeof name === 'string' ? this.acct.get(name) : null;
     if (typeof name !== 'string' || !name || name.trim() !== name) return 'account must be an account name';
     if (/^(Backtest|Playback)/i.test(name)) return name + ' is a Backtest or Playback account: the bot never trades one';
+    const ag = this.agentOfAccount(name); if (ag) return name + ' is agent ' + ag.id + '\'s account: the bot trades an account of its own';   // 0.5.0, section 6
     if (!a || a.state === 'archived') return name + ' is not in NinjaTrader';
     if (!this.config.trading) return 'trading is off in config.txt';
     if (!this.accounts.includes(name)) return (this.checkEntryAccount(name) || name + ' may not trade from the chart (tradeAccounts in config.txt)') + ': the bot needs it tradable';
@@ -939,6 +961,7 @@ export class OrderDeskV3 extends OrderDesk {
   /** every second: the heartbeat (5 s), the copier's sweep, Gone */
   everySecond() {
     this.checkGone();
+    this.agentsEverySecond();
     if (this.sw.copier) this.copierSweep();
     const b = this.bot;
     if (this.sw.bot && b.connected && !b.simulated && this.now() - b.lastBeat > 5000) {
@@ -949,9 +972,519 @@ export class OrderDeskV3 extends OrderDesk {
   }
   diag() {
     const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; };
-    return { merges: this.merges, copier: { decisions: this.copier.decisions, skipped: this.copier.skipped, standDowns: this.copier.standDowns, leaderMsMedian: med(this.copier.leaderMs) }, bot: this.bot.stats };
+    return Object.assign({ merges: this.merges, copier: { decisions: this.copier.decisions, skipped: this.copier.skipped, standDowns: this.copier.standDowns, leaderMsMedian: med(this.copier.leaderMs) }, bot: this.bot.stats },
+      this.agents.size ? { agents: this.agentsDiag() } : {});
   }
 }
+
+/* ======================================================================== the agent channel (ChartBridge 0.5.0)
+   Contract AGENT_CHANNEL v1 (docs/AGENT_TAB.md has the page's side). Any number of agents (`agents` in config.txt, here the
+   option agents: ['demo']), each with its own account (agent-<id>-account.txt; no file: Sim101), its own rules
+   (agent-<id>-rules.txt; no file: the defaults below, Manrae's), its own day. AI is never in the order path: the fake, as
+   ChartBridge, places every agent entry itself from the plan's numbers, inside the agent's rules. Every start puts every
+   agent in shadow. The agent here is made up ("Demo Agent", id demo); nothing reaches a broker. */
+export const AGENT_KEYS = {
+  agentHello: ['type', 'name', 'build'], beat: ['type'], subscribe: ['type', 'root', 'days', 'tickHours', 'sub'],
+  plan: ['type', 'id', 'root', 'side', 'kind', 'price', 'limitPrice', 'qty', 'stopTicks', 'targetTicks', 'expireSec', 'riskDollars', 'setup', 'reason', 'confidence'],
+  skip: ['type', 'id', 'setup', 'reason'], withdraw: ['type', 'id', 'reason'], note: ['type', 'kind', 'text'], flatten: ['type'],
+};
+/* the size ceiling (a ChartBridge constant: raising it is a code change and a review): minis 2, micros 20 */
+export const AGENT_CEILING = { NQ: 2, ES: 2, MNQ: 20, MES: 20 };
+export const AGENT_DEFAULT_RULES = { roots: ['NQ', 'MNQ'], maxQty: { NQ: 2, MNQ: 20 }, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 1800, maxTrades: null, maxLosses: null };
+export const AGENT_NOTE_KINDS = ['look', 'thinking', 'lesson', 'notebook', 'status'];
+const AGENT_ID_RX = /^[a-z][a-z0-9]{0,11}$/;
+const TIME_RX = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const hhmm = t => +t.slice(0, 2) * 60 + +t.slice(3);
+const NY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' });
+/** minutes after midnight in New York of a UTC ms time */
+export function nyMinutes(ms) { const o = {}; for (const x of NY.formatToParts(new Date(ms))) o[x.type] = x.value; return (+o.hour % 24) * 60 + +o.minute; }
+const pad2 = n => String(n).padStart(2, '0');
+const hm = m => pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
+
+/** The strict parser for an agent's message (gate 8 as the contract says it): one flat object, no unknown or duplicate keys,
+ *  plain strings (no backslash, no control characters) of at most 200 characters, except note.text (at most 1,000). */
+export function checkAgentMessage(m, text) {
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return 'The message is not one JSON object.';
+  if (text !== undefined && /\\/.test(text)) return 'The message has a backslash escape.';
+  const keys = AGENT_KEYS[m.type];
+  if (!keys) return 'Unknown message type ' + JSON.stringify(m.type) + '.';
+  if (text !== undefined) { const seen = new Set(); for (const x of text.matchAll(/"([^"]*)"\s*:/g)) { if (seen.has(x[1])) return 'Key "' + x[1] + '" twice.'; seen.add(x[1]); } }
+  for (const [k, v] of Object.entries(m)) {
+    if (!keys.includes(k)) return 'Unknown key "' + k + '" in ' + m.type + '.';
+    if (v !== null && typeof v === 'object') return 'The message has a nested object or list.';
+    if (typeof v === 'boolean') return k + ' cannot be true or false.';
+    if (typeof v === 'string' && (/[\u0000-\u001f\u007f]/.test(v) || v.length > (m.type === 'note' && k === 'text' ? 1000 : 200))) return k + ' is not a plain string of at most ' + (m.type === 'note' && k === 'text' ? '1,000' : '200') + ' characters.';
+  }
+  return null;
+}
+
+Object.assign(OrderDeskV3.prototype, {
+  /** options: agents [ids] (config.txt `agents`), agentAccounts {id: account} (agent-<id>-account.txt), agentRules {id: rules},
+   *  agentAnyTime (tests and smokes only: no entry window and no flat time, so they run at any hour). */
+  agentsInit(o) {
+    this.agents = new Map();
+    this.agentAnyTime = !!o.agentAnyTime;
+    for (const id of o.agents || []) {
+      if (!AGENT_ID_RX.test(id) || this.agents.has(id)) continue;
+      const r = (o.agentRules || {})[id] || AGENT_DEFAULT_RULES;
+      this.agents.set(id, { id, name: null, build: null, connected: false, simulated: false, conn: null, mode: 'shadow', killed: false, standDown: null,
+        trades: 0, losses: 0, pnl: 0, account: (o.agentAccounts || {})[id] || 'Sim101', rules: JSON.parse(JSON.stringify(r)), lastBeat: 0, lastPlan: null,
+        plans: [], notes: [], planIds: new Set(), proposals: new Map(), trade: null, msgTimes: [], flattenedDay: null, flatWarnAt: 0,
+        stats: { plans: 0, proposals: 0, placed: 0, refused: 0, heartbeatLost: 0, flattenedAt: null } });
+    }
+  },
+  agentLogLine(a, what) { this.logLine('agent-' + a.id, a.account, what); },
+  agentOfAccount(name) { for (const a of this.agents.values()) if (a.account === name) return a; return null; },
+  /** the agent an order belongs to: its own mark, or its parent's (a leg) */
+  agentOfOrder(o) { if (!o) return ''; if (o.agentId) return o.agentId; const p = o.parent ? this.orders.get(o.parent) : null; return p && p.agentId ? p.agentId : ''; },
+  agentRootsOf(a) { return a.rules.roots.slice(); },
+  agentSim(a) { const x = this.acct.get(a.account); return !!(x && x.sim); },
+  agentWorkingEntries(a) { return [...this.orders.values()].filter(o => isWorking(o) && o.agentId === a.id && o.role === 'entry'); },
+  agentOpenProposals(a) { return [...a.proposals.values()].filter(p => p.state === 'open'); },
+  agentPosition(a) {
+    if (!a.trade) return null;
+    const p = this.pos(a.account, a.trade.root);
+    return p.qty ? { root: a.trade.root, qty: p.qty, avgPrice: p.avgPrice } : null;
+  },
+  /** the owner of (account, root): 'agent:<id>', 'bot', 'copier', 'page', or null (flat, no entry working) */
+  ownerOf(account, root) {
+    for (const a of this.agents.values()) if (a.account === account && ((a.trade && a.trade.root === root && this.pos(account, root).qty) || this.agentWorkingEntries(a).some(o => o.root === root))) return 'agent:' + a.id;
+    const entry = [...this.orders.values()].find(o => isWorking(o) && o.account === account && o.root === root && o.role === 'entry');
+    if (entry) return entry.by === 'bot' ? 'bot' : entry.copier ? 'copier' : 'page';
+    if (this.pos(account, root).qty) return 'page';
+    return null;
+  },
+  agentOwns(a) { for (const r of new Set(this.agentRootsOf(a).concat(a.trade ? [a.trade.root] : []))) if (this.ownerOf(a.account, r) === 'agent:' + a.id) return true; return false; },
+  /** the owner lock for a new entry (section 6): while an agent owns (account, root) every entry from another source is
+   *  refused; a page order that only reduces the position is an exit and passes */
+  agentLockFor(account, root, source, side, qty) {
+    if (!this.agents || !this.agents.size) return null;
+    const owner = this.ownerOf(account, root);
+    if (!owner || !owner.startsWith('agent:') || owner === source) return null;
+    const p = this.pos(account, root).qty;
+    if (side && p && (side === 'buy') === (p < 0) && qty <= Math.abs(p)) return null;
+    return account + ' ' + root + ' belongs to agent ' + owner.slice(6) + ' until it is flat';
+  },
+  agentRulesOut(a) { const r = a.rules; return { roots: r.roots.join(','), maxQty: Object.assign({}, r.maxQty), entryFrom: r.entryFrom, entryUntil: r.entryUntil, flatAt: r.flatAt, maxExpireSec: r.maxExpireSec, maxTrades: r.maxTrades, maxLosses: r.maxLosses }; },
+  agentMsg(a) {
+    return { type: 'agent', agent: a.id, name: a.name, build: a.build, enabled: true, connected: a.connected, mode: a.mode, account: a.account, sim: this.agentSim(a), rules: this.agentRulesOut(a),
+      position: this.agentPosition(a), pnlToday: +a.pnl.toFixed(2), trades: a.trades, losses: a.losses, killed: a.killed, standDown: a.standDown, owns: this.agentOwns(a),
+      lastBeatMs: a.connected ? (a.simulated ? 400 : this.now() - a.lastBeat) : null, lastPlan: a.lastPlan };
+  },
+  agentStateMsg(a) { return { type: 'agentState', mode: a.mode, killed: a.killed, standDown: a.standDown, trades: a.trades, losses: a.losses, pnlToday: +a.pnl.toFixed(2), owns: this.agentOwns(a) }; },
+  agentWelcome(a) {
+    return { type: 'welcome', version: '0.5.0', agent: a.id, mode: a.mode, account: a.account, sim: this.agentSim(a), rules: Object.assign(this.agentRulesOut(a), { roots: a.rules.roots.join(',') }),
+      instruments: a.rules.roots.filter(r => this.instruments[r]).map(r => ({ root: r, name: this.instruments[r].name, tick: this.instruments[r].tick, pointValue: this.instruments[r].pointValue })) };
+  },
+  agentNotify(a) { this.broadcastV3(this.agentMsg(a)); if (a.conn) this.send(a.conn, this.agentStateMsg(a)); },
+  agentToAgent(a, msg) { if (a.conn) this.send(a.conn, msg); },
+  agentAnswer(a, id, answer, text) { this.agentToAgent(a, { type: 'answer', id, answer, text }); },
+  /** a v3 page that signs in gets every agent's `agent`, its open proposals, its last 200 notes and last 50 plans */
+  agentsOnAuth(conn) {
+    if (!conn.v3 || !conn.authed) return;
+    for (const a of this.agents.values()) {
+      this.send(conn, this.agentMsg(a));
+      for (const p of this.agentOpenProposals(a)) this.send(conn, p);
+      for (const n of a.notes) this.send(conn, n);
+      for (const p of a.plans) this.send(conn, p);
+    }
+  },
+  /** once a second (the fake bridge): `agent` to the pages while connected */
+  agentsBeat() { for (const a of this.agents.values()) if (a.connected) this.broadcastV3(this.agentMsg(a)); },
+  agentsDiag() {
+    const out = {};
+    for (const a of this.agents.values()) out[a.id] = { connected: a.connected, mode: a.mode, killed: a.killed, plans: a.stats.plans, proposals: a.stats.proposals, placed: a.stats.placed,
+      refused: a.stats.refused, heartbeatLost: a.stats.heartbeatLost, flattenedAt: a.stats.flattenedAt, secretFile: 'ok' };
+    return out;
+  },
+
+  /* ---------------- page to server (section 7) */
+  agentPageCheck(m) {
+    if (!this.agents.size) return m.type + ' is refused: there are no agents on this ChartBridge (agents in config.txt).';
+    if (typeof m.agent !== 'string' || !this.agents.has(m.agent)) return 'No agent ' + m.agent + '.';
+    return null;
+  },
+  check_agentMode(m) {
+    const a = this.agents.get(m.agent);
+    if (!['shadow', 'copilot', 'auto'].includes(m.mode)) return 'mode must be shadow, copilot or auto.';
+    if (m.mode === 'auto' && !(this.accounts.includes(a.account) && this.connected(a.account))) return 'auto refused: ' + a.account + ' is not tradable now (its checkmark, Connected): ' + a.id + ' needs it tradable';
+    return null;
+  },
+  do_agentMode(m) {
+    const a = this.agents.get(m.agent), was = a.mode;
+    if (was === m.mode) { this.agentNotify(a); return; }
+    if (was === 'copilot') this.agentExpireProposals(a, 'not answered', 'the mode left copilot');
+    if (was === 'auto') this.agentCancelEntries(a, 'expired', 'the mode left auto');
+    a.mode = m.mode;
+    this.agentLogLine(a, 'mode ' + m.mode + ' (was ' + was + '), set by the page');
+    this.agentToAgent(a, this.agentWelcome(a));
+    this.agentNotify(a);
+  },
+  check_agentKill(m) { return typeof m.on === 'boolean' ? null : 'on must be true or false.'; },
+  do_agentKill(m) {
+    const a = this.agents.get(m.agent);
+    a.killed = m.on;
+    if (m.on) {
+      this.agentCancelEntries(a, 'expired', 'the kill switch');
+      this.agentExpireProposals(a, 'not answered', 'the kill switch');
+      this.broadcastV3({ type: 'status', level: 'warn', text: 'Agent ' + a.id + ': the kill switch: its unfilled entries are cancelled; any position keeps its stop and target' });
+    }
+    this.agentLogLine(a, 'kill switch ' + (m.on ? 'on' : 'off') + ' by the page');
+    this.agentNotify(a);
+  },
+  check_agentSeen(m) {
+    const a = this.agents.get(m.agent), p = a.proposals.get(m.id);
+    if (!p) return 'No proposal ' + m.id + ' from ' + a.id + '.';
+    if (!isInt(m.at) || m.at < 1) return 'at must be page UTC ms.';
+    return null;
+  },
+  do_agentSeen(m) { const a = this.agents.get(m.agent), p = a.proposals.get(m.id); if (p.seenAt === null) { p.seenAt = m.at; this.broadcastV3(p); } },
+  check_agentAnswer(m) {
+    const a = this.agents.get(m.agent), p = a.proposals.get(m.id);
+    if (!p) return 'No proposal ' + m.id + ' from ' + a.id + '.';
+    if (p.state !== 'open') return 'Proposal ' + m.id + ' is ' + p.state + '.';
+    if (m.answer !== 'accept' && m.answer !== 'reject') return 'answer must be accept or reject.';
+    if (!isInt(m.at) || m.at < 1) return 'at must be page UTC ms.';
+    return null;
+  },
+  do_agentAnswer(m, conn) {
+    const a = this.agents.get(m.agent), p = a.proposals.get(m.id);
+    p.answeredAt = m.at;
+    if (m.answer === 'reject') { p.state = 'rejected'; this.broadcastV3(p); this.agentAnswer(a, p.id, 'rejected', 'rejected by the page'); this.agentLogLine(a, p.id + ' rejected'); return; }
+    const left = p.expiresAt - this.now();
+    if (left < 5000) {                              // accepted with under 5 s left: refused as expired
+      p.state = 'expired'; this.broadcastV3(p); this.agentAnswer(a, p.id, 'expired', 'accepted with under 5 s left');
+      this.send(conn, Object.assign({ type: 'reject' }, m.cid ? { cid: m.cid } : {}, { reason: 'Proposal ' + p.id + ' expired: under 5 s were left when it was accepted' }));
+      return;
+    }
+    const why = this.agentPlanChecks(a, p, { placing: p.id });   // every check again at this moment
+    if (why) {
+      p.state = 'rejected'; a.stats.refused++; this.broadcastV3(p); this.agentAnswer(a, p.id, 'refused', why);
+      this.agentLogLine(a, p.id + ' accepted but refused: ' + why);
+      this.send(conn, Object.assign({ type: 'reject' }, m.cid ? { cid: m.cid } : {}, { reason: 'Proposal ' + p.id + ' was accepted but refused: ' + why }));
+      return;
+    }
+    p.state = 'accepted'; this.broadcastV3(p);
+    this.agentAnswer(a, p.id, 'accepted', 'accepted by the page');
+    this.agentPlace(a, p, p.expiresAt);
+    this.agentAnswer(a, p.id, 'placed', 'placed on ' + a.account);
+    this.agentNotify(a);
+  },
+  /* agentAccount (sections 6 and 7) */
+  check_agentAccount(m) {
+    const a = this.agents.get(m.agent), name = m.account, x = typeof name === 'string' ? this.acct.get(name) : null;
+    if (typeof name !== 'string' || !name || name.trim() !== name) return 'account must be an account name';
+    if (/^(Backtest|Playback)/i.test(name)) return name + ' is a Backtest or Playback account: an agent never trades one';
+    if (!x || x.state === 'archived') return name + ' is not in NinjaTrader';
+    if (name === a.account) return name + ' is already ' + a.id + '\'s account';
+    if (this.sw.bot && name === this.botAccount) return name + ' is the bot\'s account: an agent trades an account of its own';
+    if (this.sw.copier && name === this.copier.leader) return name + ' is the copier\'s leader: an agent trades an account of its own';
+    if (this.sw.copier && this.copier.followers.has(name)) return name + ' is a copier follower: an agent trades an account of its own';
+    const other = this.agentOfAccount(name); if (other) return name + ' is agent ' + other.id + '\'s account: an agent trades an account of its own';
+    if (!this.config.trading || !this.accounts.includes(name) || !this.connected(name) || x.state === 'gone') return name + ' is not tradable now (its checkmark on the Accounts tab, Connected)';
+    if (a.trade || this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length) return a.id + ' has a position, a working entry or a proposal: choose its account when it is flat';
+    for (const acc of [a.account, name]) for (const r of this.agentRootsOf(a)) {
+      if (this.pos(acc, r).qty || [...this.orders.values()].some(o => isWorking(o) && o.account === acc && o.root === r))
+        return (acc === name ? name : a.id + '\'s account ' + acc) + ' holds a position or a working order on ' + r + ': choose ' + a.id + '\'s account when both accounts are flat on ' + a.rules.roots.join(' and ');
+    }
+    return null;
+  },
+  do_agentAccount(m) {
+    const a = this.agents.get(m.agent), old = a.account;
+    a.account = m.account;
+    this.agentLogLine(a, 'account ' + m.account + ' (' + (this.agentSim(a) ? 'Sim' : 'LIVE') + '), was ' + old + ', set by the page');
+    this.agentToAgent(a, this.agentWelcome(a));
+    this.agentNotify(a);
+  },
+  /* agentRules (sections 3 and 7): flat keys */
+  check_agentRules(m) {
+    const a = this.agents.get(m.agent);
+    if (typeof m.roots !== 'string' || !m.roots) return 'roots must be a comma list such as NQ,MNQ';
+    const roots = m.roots.split(',').map(x => x.trim());
+    if (new Set(roots).size !== roots.length) return 'roots names a root twice';
+    for (const r of roots) {
+      if (!AGENT_CEILING[r]) return r + ' cannot be an agent\'s root (NQ, MNQ, ES or MES)';
+      if (!this.instruments[r] || this.instruments[r].quoteOnly) return r + ' is not traded by ChartBridge (served, not quote only)';
+      const q = m['maxQty' + r];
+      if (!isInt(q) || q < 1 || q > AGENT_CEILING[r]) return 'maxQty' + r + ' must be a whole number from 1 to ' + AGENT_CEILING[r] + ' (the ceiling)';
+    }
+    for (const r of Object.keys(AGENT_CEILING)) if (!roots.includes(r) && m['maxQty' + r] !== undefined) return 'maxQty' + r + ' is for a root not in roots';
+    for (const k of ['entryFrom', 'entryUntil', 'flatAt']) if (typeof m[k] !== 'string' || !TIME_RX.test(m[k])) return k + ' must be a New York time HH:MM';
+    if (hhmm(m.entryFrom) < hhmm('09:30')) return 'entryFrom must be 09:30 or later';
+    if (!(hhmm(m.entryFrom) < hhmm(m.entryUntil))) return 'entryFrom must be before entryUntil';
+    if (!(hhmm(m.flatAt) > hhmm(m.entryUntil))) return 'flatAt must be after entryUntil';
+    if (hhmm(m.flatAt) > hhmm('15:59')) return 'flatAt must be 15:59 at the latest';
+    if (!isInt(m.maxExpireSec) || m.maxExpireSec < 60 || m.maxExpireSec > 1800) return 'maxExpireSec must be a whole number from 60 to 1800';
+    if (!isInt(m.maxTrades) || m.maxTrades < 0 || m.maxTrades > 50) return 'maxTrades must be 0 (none) or a whole number from 1 to 50';
+    if (!isInt(m.maxLosses) || m.maxLosses < 0 || m.maxLosses > 20) return 'maxLosses must be 0 (none) or a whole number from 1 to 20';
+    if (a.trade || this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length) return a.id + ' has a position, a working entry or an open proposal: change its rules when it is flat';
+    return null;
+  },
+  do_agentRules(m) {
+    const a = this.agents.get(m.agent), roots = m.roots.split(',').map(x => x.trim());
+    a.rules = { roots, maxQty: Object.fromEntries(roots.map(r => [r, m['maxQty' + r]])), entryFrom: m.entryFrom, entryUntil: m.entryUntil, flatAt: m.flatAt, maxExpireSec: m.maxExpireSec,
+      maxTrades: m.maxTrades || null, maxLosses: m.maxLosses || null };
+    const lossRule = /losing trades today/;
+    if (a.rules.maxLosses && a.losses >= a.rules.maxLosses && !a.standDown) a.standDown = a.losses + ' losing trades today: no new entries until 18:00 ET';
+    if ((!a.rules.maxLosses || a.losses < a.rules.maxLosses) && a.standDown && lossRule.test(a.standDown)) a.standDown = null;
+    this.agentLogLine(a, 'rules set by the page: ' + JSON.stringify(this.agentRulesOut(a)));
+    this.agentToAgent(a, this.agentWelcome(a));
+    this.agentNotify(a);
+  },
+
+  /* ---------------- agent to server (section 4) */
+  /** connect a simulated agent (tests and smokes) or note a real one's socket; returns the agent or null */
+  agentConnect(id, conn) {
+    const a = this.agents.get(id); if (!a) return null;
+    a.conn = conn || null; a.simulated = !conn; a.lastBeat = this.now(); a.helloed = false;
+    return a;
+  },
+  agentDrop(id, why) {
+    const a = this.agents.get(id); if (!a || (!a.connected && !a.conn)) return;
+    a.connected = false; a.conn = null; a.simulated = false; a.helloed = false; a.stats.heartbeatLost++;
+    this.agentCancelEntries(a, 'expired', why);
+    this.agentExpireProposals(a, 'not answered', why);
+    this.broadcastV3({ type: 'status', level: 'warn', text: 'Agent ' + a.id + ': ' + why + ': its unfilled entries are cancelled, its proposals not answered; any position keeps its stop and target' });
+    this.agentLogLine(a, 'heartbeat lost: ' + why);
+    this.agentNotify(a);
+  },
+  /** one message from agent id; returns the reject's reason, or null */
+  agentMessage(id, m, text) {
+    const a = this.agents.get(id);
+    if (!a) return 'No agent ' + id + '.';
+    a.lastBeat = this.now();
+    const strict = checkAgentMessage(m, text);
+    if (strict) { if (m && m.type === 'plan' && typeof m.id === 'string') this.agentRefusePlan(a, m, strict); return strict; }
+    if (!a.helloed && m.type !== 'agentHello') return 'send agentHello first';
+    if (m.type !== 'beat') {
+      const t = this.now(); a.msgTimes = a.msgTimes.filter(x => t - x < 1000); a.msgTimes.push(t);
+      if (a.msgTimes.length > 10) return 'More than 10 messages in one second. Slow down.';
+    }
+    switch (m.type) {
+      case 'beat': return null;
+      case 'agentHello': {
+        if (typeof m.name !== 'string' || !m.name || m.name.length > 40 || typeof m.build !== 'string' || !m.build || m.build.length > 40) return 'agentHello needs name and build of 1 to 40 characters';
+        a.name = m.name; a.build = m.build; a.connected = true; a.helloed = true;
+        this.agentToAgent(a, this.agentWelcome(a)); this.agentToAgent(a, this.agentStateMsg(a));
+        this.agentLogLine(a, 'hello ' + m.name + ' ' + m.build);
+        this.agentNotify(a);
+        return null;
+      }
+      case 'subscribe': this.agentToAgent(a, { type: 'ready', root: m.root }); return null;   // the fake keeps no history for an agent (lead's default)
+      case 'note': {
+        if (!AGENT_NOTE_KINDS.includes(m.kind)) return 'kind must be look, thinking, lesson, notebook or status';
+        if (typeof m.text !== 'string' || !m.text) return 'text must be 1 to 1,000 characters';
+        const n = { type: 'agentNote', agent: a.id, at: this.now(), kind: m.kind, text: m.text };
+        a.notes.push(n); if (a.notes.length > 200) a.notes.shift();
+        this.broadcastV3(n);
+        return null;
+      }
+      case 'skip': {
+        if (typeof m.id !== 'string' || !m.id || m.id.length > 40) return 'id must be 1 to 40 characters';
+        if (typeof m.reason !== 'string' || !m.reason) return 'reason must be 1 to 200 characters';
+        const p = { type: 'agentPlan', agent: a.id, id: m.id, at: this.now(), action: 'skip', setup: m.setup === undefined ? null : m.setup, reason: m.reason, result: 'skipped' };
+        this.agentKeepPlan(a, p); this.agentLogLine(a, m.id + ' skipped: ' + m.reason);
+        return null;
+      }
+      case 'withdraw': {
+        const p = a.proposals.get(m.id);
+        if (p && p.state === 'open') { p.state = 'withdrawn'; this.broadcastV3(p); this.agentAnswer(a, p.id, 'withdrawn', 'withdrawn: ' + m.reason); }
+        for (const o of this.agentWorkingEntries(a)) if (o.planId === m.id) { this.cancelOne(o); this.agentAnswer(a, m.id, 'withdrawn', 'entry cancelled: ' + m.reason); }
+        this.agentLogLine(a, m.id + ' withdrawn: ' + m.reason);
+        this.agentNotify(a);
+        return null;
+      }
+      case 'flatten': {
+        if (a.mode !== 'auto') return 'flatten is for auto mode only';
+        if (a.killed) return 'the kill switch is on';
+        this.agentFlatten(a, 'the agent asked');
+        return null;
+      }
+      case 'plan': return this.agentPlan(a, m);
+    }
+    return 'Unknown message.';
+  },
+  agentKeepPlan(a, p) {
+    a.plans = a.plans.filter(x => x.id !== p.id); a.plans.push(p); if (a.plans.length > 50) a.plans.shift();
+    a.lastPlan = p;
+    this.broadcastV3(p);
+  },
+  agentPlanFields(m) {
+    const f = { root: m.root, side: m.side, kind: m.kind, price: m.price };
+    if (m.limitPrice !== undefined) f.limitPrice = m.limitPrice;
+    return Object.assign(f, { qty: m.qty, stopTicks: m.stopTicks, targetTicks: m.targetTicks, expireSec: m.expireSec, riskDollars: m.riskDollars, setup: m.setup, reason: m.reason, confidence: m.confidence });
+  },
+  agentRefusePlan(a, m, why) {
+    a.stats.refused++;
+    this.agentToAgent(a, { type: 'reject', id: typeof m.id === 'string' ? m.id : null, reason: why });
+    this.agentKeepPlan(a, Object.assign({ type: 'agentPlan', agent: a.id, id: m.id, at: this.now(), action: 'plan' }, this.agentPlanFields(m), { result: 'refused: ' + why }));
+    this.agentLogLine(a, m.id + ' refused: ' + why);
+    return why;
+  },
+  /** the checks on a plan, in the contract's order (section 4); returns why, or null. o.placing: the id of an accepted
+   *  proposal being placed (its own id and its own open proposal do not count against it) */
+  agentPlanChecks(a, m, o) {
+    const placing = o && o.placing;
+    const str = (v, max) => typeof v === 'string' && v.length >= 1 && v.length <= max;
+    // 1. strict message; id new today
+    if (!str(m.id, 40)) return 'id must be 1 to 40 characters';
+    if (!placing && a.planIds.has(m.id)) return 'plan id ' + m.id + ' was used today';
+    if (m.side !== 'buy' && m.side !== 'sell') return 'side must be buy or sell';
+    for (const k of ['price', 'qty', 'stopTicks', 'targetTicks', 'expireSec', 'riskDollars', 'confidence']) if (typeof m[k] !== 'number' || !isFinite(m[k])) return k + ' must be a number';
+    if (m.kind === 'stopLimit' && typeof m.limitPrice !== 'number') return 'a stop-limit plan needs limitPrice';
+    if (m.kind !== 'stopLimit' && m.limitPrice !== undefined) return 'limitPrice goes on a stop-limit plan only';
+    if (!str(m.setup, 40)) return 'setup must be 1 to 40 characters';
+    if (!str(m.reason, 200)) return 'reason must be 1 to 200 characters';
+    if (m.confidence < 0 || m.confidence > 1) return 'confidence must be from 0 to 1';
+    // 2. not killed, not stood down, the account tradable now (and an account of its own: lead's default)
+    if (a.killed) return 'the kill switch is on';
+    if (a.standDown) return a.standDown;
+    if (!this.config.trading) return 'trading is off in config.txt';
+    const acc = this.acct.get(a.account);
+    if (!acc || !this.accounts.includes(a.account) || !this.connected(a.account) || acc.state === 'gone') return a.account + ' is not tradable now (its checkmark, Connected)';
+    if (this.sw.bot && a.account === this.botAccount) return a.account + ' is the bot\'s account: choose ' + a.id + '\'s own account on the Agent tab';
+    if (this.sw.copier && (a.account === this.copier.leader || this.copier.followers.has(a.account))) return a.account + ' is the copier\'s: choose ' + a.id + '\'s own account on the Agent tab';
+    // 3. root and kind
+    if (!a.rules.roots.includes(m.root)) return m.root + ' is not one of ' + a.id + '\'s roots (' + a.rules.roots.join(', ') + ')';
+    if (!this.instruments[m.root] || this.instruments[m.root].quoteOnly) return m.root + ' is not traded by ChartBridge';
+    if (m.kind !== 'limit' && m.kind !== 'stopLimit') return 'an agent\'s entry is a limit or a stop-limit';
+    // 4. quantity, stop and target
+    const cap = a.rules.maxQty[m.root];
+    if (!isInt(m.qty) || m.qty < 1 || m.qty > cap) return 'qty must be a whole number from 1 to ' + cap + ' (maxQty.' + m.root + ')';
+    if (!isInt(m.stopTicks) || m.stopTicks < 1 || !isInt(m.targetTicks) || m.targetTicks < 1) return 'stopTicks and targetTicks must be whole numbers of 1 or more';
+    // 5. risk
+    const ins = this.instruments[m.root], risk = m.stopTicks * ins.tick * ins.pointValue * m.qty;
+    if (Math.abs(m.riskDollars - risk) > 0.01 + 1e-9) return 'riskDollars ' + m.riskDollars + ' is not stopTicks x tick x point value x qty (' + risk.toFixed(2) + ')';
+    // 6. expiry
+    if (!isInt(m.expireSec) || m.expireSec < 60 || m.expireSec > a.rules.maxExpireSec) return 'expireSec must be from 60 to ' + a.rules.maxExpireSec;
+    // 7. the entry window
+    if (!this.agentAnyTime) { const t = nyMinutes(this.now()); if (t < hhmm(a.rules.entryFrom) || t >= hhmm(a.rules.entryUntil)) return 'outside the entry window (' + a.rules.entryFrom + ' to ' + a.rules.entryUntil + ' ET)'; }
+    // 8. one at a time
+    if (a.trade) return a.id + ' has a position: one at a time';
+    if (this.agentWorkingEntries(a).length) return a.id + ' has a working entry: one at a time';
+    if (this.agentOpenProposals(a).some(p => p.id !== placing)) return a.id + ' has an open proposal: one at a time';
+    // 9. trades and losing trades
+    if (a.rules.maxTrades && a.trades >= a.rules.maxTrades) return a.id + ' has made ' + a.rules.maxTrades + ' trades today (its rules)';
+    if (a.rules.maxLosses && a.losses >= a.rules.maxLosses) return a.losses + ' losing trades today (its rules)';
+    // 10. the owner lock
+    const owner = this.ownerOf(a.account, m.root);
+    if (owner && owner !== 'agent:' + a.id) return a.account + ' ' + m.root + ' belongs to ' + (owner.startsWith('agent:') ? 'agent ' + owner.slice(6) : owner === 'page' ? 'your own trading' : 'the ' + owner) + ' until it is flat';
+    // 11. price
+    const last = this.last[m.root], tick = ins.tick;
+    if (!onTickGrid(m.price, tick) || (m.kind === 'stopLimit' && !onTickGrid(m.limitPrice, tick))) return 'the price is not on the ' + m.root + ' tick grid (' + tick + ')';
+    if (!(last > 0) || !(this.now() - (this.lastAt[m.root] || -Infinity) <= 300000)) return 'the last trade on ' + m.root + ' is over 300 s old';
+    const buy = m.side === 'buy';
+    if (m.kind === 'limit') { if (buy ? m.price > last : m.price < last) return 'a ' + m.side + ' limit must be at or ' + (buy ? 'below' : 'above') + ' the last trade (' + fmt(last) + ')'; }
+    else {
+      if (buy ? !(m.price > last) : !(m.price < last)) return 'a ' + m.side + ' stop-limit\'s price must be ' + (buy ? 'above' : 'below') + ' the last trade (' + fmt(last) + ')';
+      const off = Math.round((m.limitPrice - m.price) / tick) * (buy ? 1 : -1);
+      if (off < 0 || off > 20) return 'a ' + m.side + ' stop-limit\'s limitPrice must be from its price to 20 ticks ' + (buy ? 'above' : 'below') + ' it';
+    }
+    return null;
+  },
+  agentPlan(a, m) {
+    a.stats.plans++;
+    const why = this.agentPlanChecks(a, m);
+    if (why) return this.agentRefusePlan(a, m, why);
+    a.planIds.add(m.id);
+    const at = this.now(), fields = this.agentPlanFields(m);
+    const out = Object.assign({ type: 'agentPlan', agent: a.id, id: m.id, at, action: 'plan' }, fields, { result: a.mode === 'shadow' ? 'shadow' : a.mode === 'copilot' ? 'proposed' : 'placed' });
+    if (a.mode === 'shadow') { this.agentKeepPlan(a, out); this.agentLogLine(a, m.id + ' shadow'); this.agentNotify(a); return null; }
+    if (a.mode === 'copilot') {
+      a.stats.proposals++;
+      const p = Object.assign({ type: 'agentProposal', agent: a.id, id: m.id, at, account: a.account, sim: this.agentSim(a) }, fields, { expiresAt: at + m.expireSec * 1000, state: 'open', seenAt: null, answeredAt: null });
+      a.proposals.set(m.id, p);
+      this.agentKeepPlan(a, out);
+      this.broadcastV3(p);
+      this.agentAnswer(a, m.id, 'proposed', 'proposed to the page');
+      this.agentLogLine(a, m.id + ' proposed');
+      this.agentNotify(a);
+      return null;
+    }
+    this.agentKeepPlan(a, out);
+    this.agentPlace(a, Object.assign({ id: m.id }, fields), at + m.expireSec * 1000);
+    this.agentAnswer(a, m.id, 'placed', 'placed on ' + a.account);
+    this.agentNotify(a);
+    return null;
+  },
+  /** ChartBridge places the entry from the plan's own numbers: limit or stop-limit, Day, its stop and target from each fill */
+  agentPlace(a, p, expiresAt) {
+    const o = this.newOrder({ cid: null, account: a.account, root: p.root, side: p.side, kind: p.kind, qty: p.qty, price: p.price, role: 'entry', agentId: a.id, planId: p.id, expiresAt });
+    if (p.kind === 'stopLimit') { o.limitPrice = p.limitPrice; o.limitOffset = Math.round(Math.abs(p.limitPrice - p.price) / this.instruments[p.root].tick); }
+    o.planned = { stopTicks: p.stopTicks, targetTicks: p.targetTicks };
+    o.tag = 'CB#' + o.id.toLowerCase() + ' ag:' + a.id + ' s' + p.stopTicks + ' t' + p.targetTicks;
+    a.stats.placed++;
+    this.agentLogLine(a, p.id + ' placed: ' + o.tag);
+    this.emitOrder(o); this.matchOne(o, this.last[o.root], true);
+    return o;
+  },
+  agentCancelEntries(a, answer, why) {
+    for (const o of this.agentWorkingEntries(a)) { this.cancelOne(o); this.agentAnswer(a, o.planId, answer, 'entry cancelled: ' + why); }
+  },
+  agentExpireProposals(a, state, why) {
+    for (const p of this.agentOpenProposals(a)) { p.state = state; this.broadcastV3(p); this.agentAnswer(a, p.id, state, why); this.agentLogLine(a, p.id + ' ' + state + ': ' + why); }
+  },
+  /** cancel every working order of the agent on its account and roots (entries and legs), then close its position at market */
+  agentFlatten(a, why) {
+    for (const o of [...this.orders.values()]) if (isWorking(o) && this.agentOfOrder(o) === a.id) this.cancelOne(o);
+    const pos = this.agentPosition(a);
+    if (pos) {
+      const x = this.newOrder({ cid: null, account: a.account, root: pos.root, side: pos.qty > 0 ? 'sell' : 'buy', kind: 'market', qty: Math.abs(pos.qty), price: null, role: 'other', agentId: a.id });
+      this.emitOrder(x); this.matchOne(x, this.last[pos.root], true);
+    }
+    this.agentLogLine(a, 'flattened: ' + why);
+    this.agentNotify(a);
+  },
+  /* fills: an agent's trade opens with the first fill of its entry and closes when its account is flat on that root */
+  agentBeforeFill(o, qty, price) {
+    if (!this.agents || !this.agents.size) return;
+    for (const a of this.agents.values()) {
+      if (!a.trade || a.account !== o.account || a.trade.root !== o.root) continue;
+      const p = this.pos(o.account, o.root), signed = o.side === 'buy' ? qty : -qty;
+      if (p.qty && Math.sign(p.qty) !== Math.sign(signed)) a.trade.pnl += (price - p.avgPrice) * Math.min(Math.abs(p.qty), qty) * Math.sign(p.qty) * this.instruments[o.root].pointValue;
+    }
+  },
+  agentAfterFill(o, qty, price) {
+    if (!this.agents || !this.agents.size) return;
+    const mine = this.agentOfOrder(o), a0 = mine ? this.agents.get(mine) : null;
+    if (a0 && o.role === 'entry' && !a0.trade) { a0.trade = { root: o.root, pnl: 0 }; a0.trades++; }
+    for (const a of this.agents.values()) {
+      if (a.conn && (a === a0 || (a.account === o.account && a.trade && a.trade.root === o.root))) {
+        this.send(a.conn, { type: 'exec', account: o.account, name: o.name, root: o.root, side: o.side, qty, p: price, t: +this.barTime().toFixed(3), u: this.now(), id: 'X' + this.execSeq, order: o.id });
+        const p = this.pos(o.account, o.root); this.send(a.conn, { type: 'position', account: o.account, root: o.root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null });
+      }
+      if (a.trade && a.account === o.account && a.trade.root === o.root && !this.pos(o.account, o.root).qty) {
+        const t = a.trade; a.trade = null; a.pnl += t.pnl;
+        if (t.pnl < 0) { a.losses++; if (a.rules.maxLosses && a.losses >= a.rules.maxLosses) a.standDown = a.losses + ' losing trades today: no new entries until 18:00 ET'; }
+        this.agentLogLine(a, 'trade closed: ' + t.pnl.toFixed(2));
+      }
+      if (a === a0 || a.account === o.account) this.agentNotify(a);
+    }
+  },
+  /** every second: the heartbeat, expiry, the entry window and the flat time (ChartBridge's own timers, the agent gone or not) */
+  agentsEverySecond() {
+    if (!this.agents || !this.agents.size) return;
+    const t = this.now(), ny = nyMinutes(t);
+    for (const a of this.agents.values()) {
+      if (a.connected && !a.simulated && t - a.lastBeat > 5000) { const c = a.conn; this.agentDrop(a.id, 'no heartbeat for 5 s'); if (c && typeof this.closeAgentConn === 'function') this.closeAgentConn(c); }
+      for (const p of this.agentOpenProposals(a)) if (p.expiresAt <= t) { p.state = 'expired'; this.broadcastV3(p); this.agentAnswer(a, p.id, 'expired', 'the plan\'s entry time ran out'); this.agentLogLine(a, p.id + ' expired'); this.agentNotify(a); }
+      for (const o of this.agentWorkingEntries(a)) if (o.expiresAt <= t) { this.cancelOne(o); this.agentAnswer(a, o.planId, 'expired', 'the entry\'s time ran out'); this.agentNotify(a); }
+      if (this.agentAnyTime) continue;
+      if (ny >= hhmm(a.rules.entryUntil)) { if (this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length) { this.agentCancelEntries(a, 'expired', 'the entry window ended'); this.agentExpireProposals(a, 'expired', 'the entry window ended'); this.agentNotify(a); } }
+      if (ny >= hhmm(a.rules.flatAt)) {
+        const day = new Date(t).toISOString().slice(0, 10), busy = this.agentPosition(a) || [...this.orders.values()].some(o => isWorking(o) && this.agentOfOrder(o) === a.id);
+        if (busy && a.flattenedDay !== day) {
+          a.flattenedDay = day; a.stats.flattenedAt = t; a.flatWarnAt = t;
+          this.agentFlatten(a, 'flat time');
+          this.broadcastV3({ type: 'status', level: 'info', text: a.id + ' flattened at ' + a.rules.flatAt + ' by its rules' });
+        } else if (a.flattenedDay === day && this.agentPosition(a) && t - a.flatWarnAt >= 10000) {
+          a.flatWarnAt = t;
+          this.broadcastV3({ type: 'status', level: 'error', text: a.id + ' is not flat ' + Math.round((t - a.stats.flattenedAt) / 1000) + ' s after its flat time: check ' + a.account + ' in NinjaTrader' });
+        }
+      }
+    }
+  },
+});
 
 /* ---------------- tape timing counters, as ChartBridge 0.4.0 built them (PROTOCOL.md "/diag additions", `tape`): per root
    this session's 15-minute slots (from 18:00 ET) and the last session's; medians and p95 read from fixed log buckets (each

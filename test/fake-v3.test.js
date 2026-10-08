@@ -504,3 +504,362 @@ test('server --v3: hello lists v3 and quote-only roots; client gets accounts; au
     a.close(); bot.close();
   } finally { child.kill(); }
 });
+
+/* ======================================================================== the agent channel (ChartBridge 0.5.0, contract
+   AGENT_CHANNEL v1): the fake's reference behaviour. The agent is the made-up "Demo Agent" (id demo); SIM-AG1 is a made-up
+   Sim account for it to take. */
+async function makeAgentDesk(o) {
+  o = o || {};
+  const V = await import('./fake-v3.mjs');
+  let clock = o.at || Date.UTC(2026, 9, 8, 14, 0, 0);          // 10:00 New York, inside Manrae's default window
+  const out = [], toAgent = [];
+  const conn = { origin: 'http://localhost:8765', authed: false, actions: [], v3: true };
+  const agentConn = { agentConn: true };
+  const desk = new V.OrderDeskV3({
+    config: { trading: true, tradeAccounts: ['Sim101', 'EVAL-A', 'SIM-AG1', 'SIM-AG2'], maxQty: { MNQ: 20, NQ: 2 }, port: 8765 },
+    instruments: INSTR, knownAccounts: V.V3_ACCOUNTS.map(a => a.name).concat(['SIM-AG1', 'SIM-AG2']), token: 'tok', switches: Object.assign({}, ALL_ON, o.switches || {}),
+    accountList: V.V3_ACCOUNTS.concat([{ name: 'SIM-AG1', sim: true, balance: 50000 }, { name: 'SIM-AG2', sim: true, balance: 50000 }]), graceMs: 1000,
+    send: (c, m) => (c === agentConn ? toAgent : out).push(m), conns: () => [conn], now: () => clock, barTime: () => clock / 1000,
+    agents: o.agents || ['demo'], agentAccounts: o.accounts || { demo: 'SIM-AG1' }, agentAnyTime: !!o.anyTime,
+  });
+  desk.tick('MNQ', 25400); desk.tick('NQ', 25400); desk.tick('YM', 46200);
+  desk.auth(conn, 'tok'); out.length = 0;
+  const d = {
+    V, desk, conn, out, toAgent, agentConn,
+    advance(ms) { clock += ms; for (const a of desk.agents.values()) if (a.conn === agentConn) a.lastBeat = clock; },   // the agent keeps beating
+    silent(ms) { clock += ms; },                                                                                          // the agent says nothing
+    now: () => clock,
+    take(type) { const r = out.filter(m => !type || m.type === type); out.length = 0; return r; },
+    agentTake(type) { const r = toAgent.filter(m => !type || m.type === type); toAgent.length = 0; return r; },
+    act(m) { clock += 150; desk.handle(conn, m, JSON.stringify(m)); return d.take(); },
+    hello(id) { desk.agentConnect(id || 'demo', agentConn); return desk.agentMessage(id || 'demo', { type: 'agentHello', name: 'Demo Agent', build: 'sample-build-1' }); },
+    say(m, id) { clock += 120; return desk.agentMessage(id || 'demo', m, JSON.stringify(m)); },
+    plan(f, id) {
+      const m = Object.assign({ type: 'plan', id: 'p' + Math.random().toString(36).slice(2, 7), root: 'MNQ', side: 'buy', kind: 'limit', price: 25399, qty: 2, stopTicks: 16, targetTicks: 32, expireSec: 600, riskDollars: 16,
+        setup: 'Sample pullback', reason: 'Sample: a made-up reason', confidence: 0.6 }, f || {});
+      return { id: m.id, why: d.say(m, id) };
+    },
+    tick(p, root) { clock += 600; desk.tick(root || 'MNQ', p); return d.take(); },
+    working(account) { return [...desk.orders.values()].filter(x => (x.state === 'working' || x.state === 'partFilled') && (!account || x.account === account)); },
+  };
+  return d;
+}
+
+test('agents: strict page keys (flat, agentKill on only bool) and the agent\'s own strict parser', async () => {
+  const { checkKeysV3, checkAgentMessage, AGENT_KEYS } = await import('./fake-v3.mjs');
+  const ok = m => checkKeysV3(m, JSON.stringify(m));
+  assert.equal(ok({ type: 'agentMode', cid: 'c', agent: 'demo', mode: 'copilot' }), null);
+  assert.equal(ok({ type: 'agentKill', agent: 'demo', on: true }), null);
+  assert.equal(ok({ type: 'agentSeen', agent: 'demo', id: 'p1', at: 1 }), null);
+  assert.equal(ok({ type: 'agentAnswer', cid: 'c', agent: 'demo', id: 'p1', answer: 'accept', at: 1 }), null);
+  assert.equal(ok({ type: 'agentAccount', agent: 'demo', account: 'SIM-AG1' }), null);
+  assert.equal(ok({ type: 'agentRules', agent: 'demo', roots: 'NQ,MNQ', maxQtyNQ: 2, maxQtyMNQ: 20, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 1800, maxTrades: 0, maxLosses: 0 }), null);
+  assert.match(ok({ type: 'agentRules', agent: 'demo', maxQty: { NQ: 2 } }), /Unknown key "maxQty"/);
+  assert.match(ok({ type: 'agentRules', agent: 'demo', roots: ['NQ'] }), /nested/);
+  assert.match(ok({ type: 'agentMode', agent: 'demo', mode: true }), /cannot be true or false/);
+  assert.match(ok({ type: 'agentKill', agent: 'demo', on: 1 }), /on must be true or false/);
+  assert.equal(checkAgentMessage({ type: 'note', kind: 'look', text: 'x'.repeat(1000) }), null);
+  assert.match(checkAgentMessage({ type: 'note', kind: 'look', text: 'x'.repeat(1001) }), /1,000/);
+  assert.match(checkAgentMessage({ type: 'plan', id: 'x'.repeat(201) }), /200/);
+  assert.match(checkAgentMessage({ type: 'plan', id: 'a', account: 'Sim101' }), /Unknown key "account"/, 'an agent never names an account');
+  assert.match(checkAgentMessage({ type: 'beat', x: { y: 1 } }), /Unknown key|nested/);
+  assert.match(checkAgentMessage({ type: 'note', kind: 'look', text: 'a\u0001b' }), /plain string/);
+  assert.match(checkAgentMessage({ type: 'note', kind: 'look', text: 'a' }, '{"type":"note","kind":"look","text":"a\\nb"}'), /backslash/);
+  assert.match(checkAgentMessage({ type: 'note', kind: 'look', text: 'b' }, '{"type":"note","kind":"look","text":"a","text":"b"}'), /twice/);
+  assert.match(checkAgentMessage({ type: 'order' }), /Unknown message type/);
+  assert.deepEqual(Object.keys(AGENT_KEYS).sort(), ['agentHello', 'beat', 'flatten', 'note', 'plan', 'skip', 'subscribe', 'withdraw']);
+});
+
+test('agents: agentHello first, welcome then agentState; every start in shadow; a page that signs in gets everything', async () => {
+  const d = await makeAgentDesk();
+  d.desk.agentConnect('demo', d.agentConn);
+  assert.equal(d.say({ type: 'note', kind: 'look', text: 'x' }), 'send agentHello first');
+  assert.equal(d.say({ type: 'agentHello', name: 'Demo Agent', build: 'sample-build-1' }), null);
+  const [w, st] = d.agentTake();
+  assert.equal(w.type, 'welcome'); assert.equal(st.type, 'agentState');
+  assert.deepEqual(Object.keys(w), ['type', 'version', 'agent', 'mode', 'account', 'sim', 'rules', 'instruments']);
+  assert.equal(w.agent, 'demo'); assert.equal(w.mode, 'shadow'); assert.equal(w.account, 'SIM-AG1'); assert.equal(w.sim, true);
+  assert.deepEqual(w.rules, { roots: 'NQ,MNQ', maxQty: { NQ: 2, MNQ: 20 }, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 1800, maxTrades: null, maxLosses: null });
+  assert.deepEqual(w.instruments.map(i => i.root), ['NQ', 'MNQ']);
+  assert.deepEqual(Object.keys(st), ['type', 'mode', 'killed', 'standDown', 'trades', 'losses', 'pnlToday', 'owns']);
+  const ag = d.take('agent').pop();
+  assert.deepEqual(Object.keys(ag), ['type', 'agent', 'name', 'build', 'enabled', 'connected', 'mode', 'account', 'sim', 'rules', 'position', 'pnlToday', 'trades', 'losses', 'killed', 'standDown', 'owns', 'lastBeatMs', 'lastPlan']);
+  assert.equal(ag.name, 'Demo Agent'); assert.equal(ag.build, 'sample-build-1'); assert.equal(ag.connected, true);
+  for (const k of ['look', 'thinking', 'lesson', 'notebook', 'status']) d.say({ type: 'note', kind: k, text: 'Sample ' + k });
+  const notes = d.take('agentNote');
+  assert.equal(notes.length, 5); assert.deepEqual(Object.keys(notes[0]), ['type', 'agent', 'at', 'kind', 'text']);
+  d.say({ type: 'skip', id: 's1', setup: 'Sample breakout', reason: 'Sample: no level' });
+  assert.equal(d.take('agentPlan')[0].result, 'skipped');
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' });
+  const pr = d.plan();
+  assert.equal(pr.why, null);
+  // a second page signs in: every agent, its open proposals, its notes and plans
+  const c2 = { origin: 'http://localhost:8765', authed: false, actions: [], v3: true }, got = [];
+  const send0 = d.desk.send; d.desk.send = (c, m) => (c === c2 ? got.push(m) : send0(c, m));
+  d.desk.auth(c2, 'tok');
+  d.desk.send = send0;
+  const types = got.map(m => m.type);
+  assert.ok(types.includes('agent') && types.includes('agentProposal'));
+  assert.equal(got.filter(m => m.type === 'agentNote').length, 5);
+  assert.equal(got.filter(m => m.type === 'agentPlan').length, 2);
+});
+
+test('agents: plan checks in the contract\'s order; shadow logs and shows (no answer); a refusal is a reject and an agentPlan', async () => {
+  const d = await makeAgentDesk();
+  d.hello(); d.take(); d.agentTake();
+  let r = d.plan({ id: 'sh1' });
+  assert.equal(r.why, null);
+  assert.equal(d.take('agentPlan')[0].result, 'shadow');
+  assert.equal(d.agentTake('answer').length, 0, 'shadow: the agent gets no answer');
+  assert.equal(d.working().filter(o => o.agentId).length, 0, 'shadow places nothing');
+  const why = f => d.plan(f).why;
+  assert.match(why({ id: 'sh1' }), /was used today/);
+  assert.match(why({ root: 'ES', riskDollars: 400 }), /not one of demo's roots/);
+  assert.match(why({ kind: 'market' }), /an agent's entry is a limit or a stop-limit/);
+  assert.match(why({ kind: 'stop' }), /limit or a stop-limit/);
+  assert.match(why({ qty: 21, riskDollars: 168 }), /from 1 to 20/);
+  assert.match(why({ root: 'NQ', qty: 3, riskDollars: 240 }), /from 1 to 2/);
+  assert.match(why({ stopTicks: 0, riskDollars: 0 }), /whole numbers of 1 or more/);
+  assert.match(why({ riskDollars: 17 }), /riskDollars 17 is not/);
+  assert.equal(why({ riskDollars: 16.009 }), null, 'within $0.01');
+  assert.match(why({ expireSec: 59 }), /expireSec must be from 60 to 1800/);
+  assert.match(why({ expireSec: 1801 }), /from 60 to 1800/);
+  assert.match(why({ price: 25400.1 }), /tick grid/);
+  assert.match(why({ price: 25401 }), /buy limit must be at or below the last trade/);
+  assert.match(why({ side: 'sell', price: 25399 }), /sell limit must be at or above/);
+  assert.match(why({ kind: 'stopLimit', price: 25399, limitPrice: 25400 }), /stop-limit's price must be above/);
+  assert.match(why({ kind: 'stopLimit', price: 25401, limitPrice: 25406.25 }), /from its price to 20 ticks above/);
+  assert.match(why({ kind: 'stopLimit', price: 25401, limitPrice: 25400.75 }), /from its price to 20 ticks above/);
+  assert.equal(why({ kind: 'stopLimit', price: 25401, limitPrice: 25406 }), null, '20 ticks above: allowed');
+  assert.match(why({ kind: 'stopLimit', price: 25401 }), /needs limitPrice/);
+  assert.match(why({ limitPrice: 25399 }), /stop-limit plan only/);
+  assert.match(why({ confidence: 1.2 }), /confidence/);
+  const ref = d.take('agentPlan').pop();
+  assert.match(ref.result, /^refused: /);
+  assert.equal(d.agentTake('reject').length > 5, true, 'each refusal is a reject to the agent');
+  d.act({ type: 'agentKill', agent: 'demo', on: true });
+  assert.match(why({}), /the kill switch is on/);
+  d.act({ type: 'agentKill', agent: 'demo', on: false });
+  // the window: before entryFrom and at entryUntil
+  const early = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 13, 40) });   // 09:40 New York
+  early.hello();
+  assert.match(early.plan().why, /outside the entry window \(09:45 to 15:00 ET\)/);
+  const late = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 19, 0) });     // 15:00 New York: not before entryUntil
+  late.hello();
+  assert.match(late.plan().why, /outside the entry window/);
+  assert.equal((await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 19, 0), anyTime: true })).plan().why, 'send agentHello first');
+  // the bot's account is never an agent's
+  const shared = await makeAgentDesk({ accounts: { demo: 'Sim101' } });
+  shared.hello();
+  assert.match(shared.plan().why, /Sim101 is the bot's account/);
+});
+
+test('agents: copilot proposal lives until the plan\'s own expiry; agentSeen; accept places it from the plan with by agent:demo', async () => {
+  const d = await makeAgentDesk();
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' }); d.take(); d.agentTake();
+  const { id } = d.plan({ expireSec: 600, price: 25399 });
+  const p = d.take('agentProposal')[0];
+  assert.deepEqual(Object.keys(p), ['type', 'agent', 'id', 'at', 'account', 'sim', 'root', 'side', 'kind', 'price', 'qty', 'stopTicks', 'targetTicks', 'expireSec', 'riskDollars', 'setup', 'reason', 'confidence', 'expiresAt', 'state', 'seenAt', 'answeredAt']);
+  assert.equal(p.expiresAt, p.at + 600000, 'open until the plan\'s entry expiry (ruling 4)');
+  assert.equal(d.agentTake('answer')[0].answer, 'proposed');
+  assert.match(d.plan().why, /open proposal: one at a time/);
+  d.act({ type: 'agentSeen', agent: 'demo', id, at: d.now() });
+  assert.ok(d.desk.agents.get('demo').proposals.get(id).seenAt > 0);
+  assert.match(reasonOf(d.act({ type: 'agentAnswer', agent: 'demo', id: 'nope', answer: 'accept', at: 1 })), /No proposal nope/);
+  assert.match(reasonOf(d.act({ type: 'agentRules', agent: 'demo', roots: 'MNQ', maxQtyMNQ: 5, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 900, maxTrades: 0, maxLosses: 0 })), /open proposal: change its rules when it is flat/);
+  d.advance(60000);
+  const msgs = d.act({ type: 'agentAnswer', cid: 'a1', agent: 'demo', id, answer: 'accept', at: d.now() });
+  assert.equal(msgs.filter(m => m.type === 'agentProposal').pop().state, 'accepted');
+  const entry = d.working('SIM-AG1').find(o => o.role === 'entry');
+  assert.ok(entry && entry.agentId === 'demo' && entry.price === 25399 && entry.qty === 2 && entry.kind === 'limit', 'placed from the plan\'s own numbers');
+  assert.equal(entry.expiresAt, p.expiresAt, 'it works only the time left');
+  assert.match(entry.tag, /^CB#nt\d+ ag:demo s16 t32$/);
+  const om = msgs.find(m => m.type === 'order' && m.id === entry.id);
+  assert.equal(om.by, 'agent:demo', 'v3 pages see by agent:demo');
+  assert.deepEqual(d.agentTake('answer').map(x => x.answer), ['accepted', 'placed']);
+  // it fills: its legs carry the mark, the trade is counted, the agent owns SIM-AG1 MNQ
+  const fills = d.tick(25398.75);
+  const legs = fills.filter(m => m.type === 'order' && (m.role === 'stop' || m.role === 'target'));
+  assert.ok(legs.length === 2 && legs.every(l => l.by === 'agent:demo'), 'its stop and target are the agent\'s too');
+  const ag = d.desk.agentMsg(d.desk.agents.get('demo'));
+  assert.equal(ag.trades, 1); assert.equal(ag.owns, true); assert.deepEqual(ag.position, { root: 'MNQ', qty: 2, avgPrice: 25399 });
+  assert.ok(d.agentTake('exec').length >= 1, 'the agent gets its own fills');
+  // the owner lock: the page's new entry on SIM-AG1 MNQ is refused; an exit passes
+  assert.match(reasonOf(d.act({ type: 'order', cid: 'o1', account: 'SIM-AG1', root: 'MNQ', side: 'buy', kind: 'market', qty: 1 })), /SIM-AG1 MNQ belongs to agent demo until it is flat/);
+  assert.equal(reasonOf(d.act({ type: 'order', cid: 'o2', account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 1 })), null, 'reducing is an exit');
+  assert.equal(reasonOf(d.act({ type: 'flatten', account: 'SIM-AG1', root: 'MNQ' })), null, 'Flatten always works');
+  const after = d.desk.agentMsg(d.desk.agents.get('demo'));
+  assert.equal(after.position, null); assert.equal(after.owns, false);
+  assert.equal(after.losses, 1, 'closed below the entry: a losing trade');
+  assert.ok(after.pnlToday < 0);
+});
+
+test('agents: reject, withdraw, expiry, under 5 s left, an accept refused at placing', async () => {
+  const d = await makeAgentDesk();
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' }); d.take(); d.agentTake();
+  let { id } = d.plan();
+  d.act({ type: 'agentAnswer', agent: 'demo', id, answer: 'reject', at: d.now() });
+  assert.equal(d.desk.agents.get('demo').proposals.get(id).state, 'rejected');
+  ({ id } = d.plan());
+  d.say({ type: 'withdraw', id, reason: 'Sample: gone' });
+  assert.equal(d.desk.agents.get('demo').proposals.get(id).state, 'withdrawn');
+  ({ id } = d.plan({ expireSec: 60 }));
+  d.advance(61000); d.desk.everySecond();
+  assert.equal(d.desk.agents.get('demo').proposals.get(id).state, 'expired', 'ChartBridge\'s own timer');
+  assert.ok(d.agentTake('answer').some(a => a.id === id && a.answer === 'expired'));
+  ({ id } = d.plan({ expireSec: 60 }));
+  d.advance(56000);
+  assert.match(reasonOf(d.act({ type: 'agentAnswer', cid: 'z', agent: 'demo', id, answer: 'accept', at: d.now() })), /under 5 s/);
+  assert.equal(d.desk.agents.get('demo').proposals.get(id).state, 'expired');
+  // accepted, but the market moved through the limit: every check runs again at that moment
+  ({ id } = d.plan({ price: 25399 }));
+  d.tick(25390);
+  assert.match(reasonOf(d.act({ type: 'agentAnswer', cid: 'y', agent: 'demo', id, answer: 'accept', at: d.now() })), /accepted but refused: a buy limit must be at or below/);
+  assert.equal(d.desk.agents.get('demo').proposals.get(id).state, 'rejected');
+  assert.ok(d.agentTake('answer').some(a => a.id === id && a.answer === 'refused'));
+  // leaving copilot expires the open proposals as not answered
+  ({ id } = d.plan({ price: 25390 }));
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'shadow' });
+  assert.equal(d.desk.agents.get('demo').proposals.get(id).state, 'not answered');
+});
+
+test('agents: auto places at once; the kill switch and the heartbeat cancel unfilled entries; the agent\'s flatten', async () => {
+  const d = await makeAgentDesk();
+  d.hello();
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  let { id } = d.plan({ price: 25390 });
+  assert.equal(d.desk.agents.get('demo').lastPlan.result, 'placed');
+  assert.ok(d.working('SIM-AG1').some(o => o.planId === id));
+  assert.match(d.plan({ price: 25390 }).why, /working entry: one at a time/);
+  d.act({ type: 'agentKill', agent: 'demo', on: true });
+  assert.ok(!d.working('SIM-AG1').some(o => o.planId === id), 'the kill switch cancels its unfilled entries');
+  assert.equal(d.say({ type: 'flatten' }), 'the kill switch is on');
+  d.act({ type: 'agentKill', agent: 'demo', on: false });
+  ({ id } = d.plan({ price: 25390 }));
+  d.silent(6000); d.desk.everySecond();
+  assert.equal(d.desk.agents.get('demo').connected, false, '5 s of silence');
+  assert.ok(!d.working('SIM-AG1').some(o => o.planId === id));
+  assert.equal(d.desk.agentsDiag().demo.heartbeatLost, 1);
+  // back, a fill, then the agent's own flatten (auto only)
+  d.hello();
+  d.plan({ price: 25400 });
+  d.tick(25399.75);
+  assert.ok(d.desk.agentMsg(d.desk.agents.get('demo')).position);
+  assert.equal(d.say({ type: 'flatten' }), null);
+  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).position, null);
+  assert.ok(!d.working('SIM-AG1').length, 'its legs are gone too');
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' });
+  assert.equal(d.say({ type: 'flatten' }), 'flatten is for auto mode only');
+  // auto needs the account tradable
+  d.act({ type: 'accountTrade', account: 'SIM-AG1', on: false });
+  assert.match(reasonOf(d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' })), /auto refused: SIM-AG1 is not tradable now/);
+});
+
+test('agents: flat time flattens the agent\'s position itself, with the agent gone; an error every 10 s until flat', async () => {
+  const d = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 18, 0) });   // 14:00 New York
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  d.plan({ price: 25400 }); d.tick(25399.75);
+  d.desk.agentDrop('demo', 'the agent disconnected');
+  assert.ok(d.desk.agentMsg(d.desk.agents.get('demo')).position, 'the heartbeat keeps a position (its stop and target)');
+  d.advance(3600000 + 55 * 60000); d.desk.tick('MNQ', 25399.5); d.take();   // 15:55 New York
+  d.desk.everySecond();
+  const st = d.take('status');
+  assert.ok(st.some(s => s.level === 'info' && s.text === 'demo flattened at 15:55 by its rules'), JSON.stringify(st));
+  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).position, null);
+  assert.ok(d.desk.agentsDiag().demo.flattenedAt > 0);
+  assert.ok(!d.working('SIM-AG1').length, 'its stop and target cancelled first');
+});
+
+test('agents: account (section 6) never the bot\'s, the copier\'s or another agent\'s; the bot and the copier refuse an agent\'s', async () => {
+  const d = await makeAgentDesk({ agents: ['demo', 'manrae'], accounts: { demo: 'SIM-AG1', manrae: 'SIM-AG2' } });
+  const r = m => reasonOf(d.act(Object.assign({ type: 'agentAccount', agent: 'demo' }, m)));
+  assert.match(r({ account: 'Sim101' }), /the bot's account/);
+  assert.match(r({ account: 'SIM-AG2' }), /agent manrae's account/);
+  assert.match(r({ account: 'NOPE' }), /not in NinjaTrader/);
+  assert.match(r({ account: 'SIM-AG1' }), /already/);
+  assert.match(r({ account: 'EVAL-B' }), /not tradable now/);
+  assert.match(reasonOf(d.act({ type: 'agentAccount', agent: 'zed', account: 'EVAL-A' })), /No agent zed/);
+  d.act({ type: 'copierFollower', account: 'EVAL-A', on: false, qty: 1, size: 'micro', lossLimit: null });
+  assert.match(r({ account: 'EVAL-A' }), /copier follower/, 'a follower, on or off');
+  assert.match(reasonOf(d.act({ type: 'botAccount', account: 'SIM-AG1' })), /agent demo's account: the bot trades an account of its own/);
+  assert.match(reasonOf(d.act({ type: 'copierFollower', account: 'SIM-AG1', on: true, qty: 1, size: 'micro', lossLimit: null })), /agent demo's account/);
+  assert.match(reasonOf(d.act({ type: 'copierSet', leader: 'SIM-AG2' })), /agent manrae's account/);
+  // a free Sim account: taken, logged, the agent gets welcome again
+  d.desk.acct.get('SIM-F2').trade = true; d.desk.refreshAccounts(); d.desk.copier.followers.delete('SIM-F2');
+  d.hello(); d.agentTake();
+  assert.equal(r({ account: 'SIM-F2' }), null);
+  assert.equal(d.agentTake('welcome')[0].account, 'SIM-F2');
+  // the old or the new account holding a position on the agent's roots
+  d.desk.placeElsewhere({ account: 'SIM-AG1', root: 'NQ', side: 'buy', kind: 'market', qty: 1, price: null });
+  assert.match(r({ account: 'SIM-AG1' }), /SIM-AG1 holds a position or a working order on NQ/);
+});
+
+test('agents: rules from the page (sections 3 and 7): every allowed value, saved and sent to the agent in a new welcome', async () => {
+  const d = await makeAgentDesk();
+  d.hello(); d.agentTake();
+  const base = { type: 'agentRules', cid: 'r', agent: 'demo', roots: 'NQ,MNQ', maxQtyNQ: 1, maxQtyMNQ: 10, entryFrom: '09:45', entryUntil: '11:30', flatAt: '12:00', maxExpireSec: 900, maxTrades: 6, maxLosses: 3 };
+  const r = o => reasonOf(d.act(Object.assign({}, base, o)));
+  assert.match(r({ roots: 'NQ,YM', maxQtyYM: 1 }), /Unknown key|cannot be an agent's root/);
+  assert.match(r({ roots: 'NQ,MNQ', maxQtyNQ: 3 }), /maxQtyNQ must be a whole number from 1 to 2/);
+  assert.match(r({ maxQtyMNQ: 21 }), /from 1 to 20/);
+  assert.match(r({ roots: 'MNQ' }), /maxQtyNQ is for a root not in roots/);
+  assert.match(r({ entryFrom: '09:29' }), /09:30 or later/);
+  assert.match(r({ entryFrom: '9:45' }), /HH:MM/);
+  assert.match(r({ entryUntil: '09:45' }), /before entryUntil/);
+  assert.match(r({ flatAt: '11:30' }), /after entryUntil/);
+  assert.match(r({ flatAt: '16:00' }), /15:59 at the latest/);
+  assert.match(r({ maxExpireSec: 59 }), /60 to 1800/);
+  assert.match(r({ maxTrades: 51 }), /1 to 50/);
+  assert.match(r({ maxLosses: 21 }), /1 to 20/);
+  assert.equal(r({}), null);
+  const w = d.agentTake('welcome')[0];
+  assert.deepEqual(w.rules, { roots: 'NQ,MNQ', maxQty: { NQ: 1, MNQ: 10 }, entryFrom: '09:45', entryUntil: '11:30', flatAt: '12:00', maxExpireSec: 900, maxTrades: 6, maxLosses: 3 });
+  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).rules.maxTrades, 6);
+  assert.equal(r({ maxTrades: 0, maxLosses: 0 }), null);
+  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).rules.maxTrades, null, '0 is none');
+  assert.match(d.plan({ expireSec: 901 }).why, /from 60 to 900/, 'the new rules are in force');
+  d.plan({ expireSec: 600 });                                                // a working entry? no: shadow. A position: refused
+  d.desk.agents.get('demo').trade = { root: 'MNQ', pnl: 0 };
+  assert.match(r({ maxTrades: 4 }), /has a position, a working entry or an open proposal/);
+});
+
+test('agents: with no agents in config.txt every agent message is refused and nothing is sent', async () => {
+  const d = await makeAgentDesk({ agents: [] });
+  assert.match(reasonOf(d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' })), /no agents on this ChartBridge/);
+  assert.equal(d.desk.diag().agents, undefined, '/diag agents only with the channel on');
+});
+
+test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; hello says 0.5.0; a v3 page gets the agent', async () => {
+  const port = 18990 + Math.floor(Math.random() * 9);
+  const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port), '--v3', '--agents=demo', '--agent-any-time', '--trading', '--test-controls', '--test-pin=5820'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await new Promise(r => child.stdout.once('data', r));
+  try {
+    const own = 'http://localhost:' + port;
+    const unlock = (await post(port, '/pin/unlock', { pin: '5820' })).json.token;
+    const token = JSON.parse((await get(port, '/session', unlock)).body).token;
+    const a = await wsConnect(port, '/ws?unlock=' + encodeURIComponent(unlock), { Origin: own });
+    assert.equal((await a.next('hello')).version, 'fake-0.5.0');
+    a.send({ type: 'client', v: 3 }); a.send({ type: 'auth', token });
+    const ag = await a.next('agent');
+    assert.equal(ag.agent, 'demo'); assert.equal(ag.mode, 'shadow'); assert.equal(ag.account, 'Sim101', 'no account file: Sim101');
+    const secret = (await post(port, '/test/agent-secret?agent=demo')).json.secret;
+    await assert.rejects(wsConnect(port, '/agent/nobody', { 'X-ChartBridge-Agent': secret }), /404/);
+    await assert.rejects(wsConnect(port, '/agent/demo', {}), /403/);
+    await assert.rejects(wsConnect(port, '/agent/demo', { 'X-ChartBridge-Agent': secret, Origin: own }), /403/, 'a browser page never reaches /agent');
+    assert.equal((await get(port, '/agent/demo')).status, 400, 'not an upgrade');
+    const ws = await wsConnect(port, '/agent/demo', { 'X-ChartBridge-Agent': secret });
+    await assert.rejects(wsConnect(port, '/agent/demo', { 'X-ChartBridge-Agent': secret }), /409/);
+    ws.send({ type: 'beat' });
+    assert.equal((await ws.next('reject')).reason, 'send agentHello first');
+    ws.send({ type: 'agentHello', name: 'Demo Agent', build: 'sample-build-1' });
+    assert.equal((await ws.next('welcome')).agent, 'demo');
+    assert.ok(await ws.next('agentState'));
+    assert.ok(await ws.next('tick', 4000), 'the agent reads live ticks');
+    ws.send({ type: 'note', kind: 'thinking', text: 'Sample: thinking about a made-up level' });
+    let n; do { n = await a.next('agentNote', 3000); } while (n && n.kind !== 'thinking');
+    assert.equal(n && n.text, 'Sample: thinking about a made-up level');
+    const diag = JSON.parse((await get(port, '/diag')).body);
+    assert.deepEqual(Object.keys(diag.agents.demo), ['connected', 'mode', 'killed', 'plans', 'proposals', 'placed', 'refused', 'heartbeatLost', 'flattenedAt', 'secretFile']);
+    a.close(); ws.close();
+  } finally { child.kill(); }
+});

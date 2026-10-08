@@ -142,6 +142,17 @@
 //   &stop=12&target=24&reason= (a signal, handled by the mode), /test/bot-proposal?... (the same, always proposed: a
 //   proposal on demand), /test/bot-withdraw?id=, /test/account?name=EVAL-A&connection=lost|connected|disabled,
 //   /test/restart?lost=1 (managed strategies resume, or with lost=1 cannot), /test/v3 (the v3 state as JSON).
+//   --agents=demo                   (with --v3) ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1, docs/AGENT_TAB.md):
+//                                   config.txt's `agents` list; hello says fake-0.5.0. The made-up account SIM-AG1 (Sim, checked)
+//                                   is added for an agent to take; every agent starts on Sim101 (no account file) in shadow.
+//                                   The agents listen on /agent/<id> (no Origin, header X-ChartBridge-Agent: the secret).
+//   --agent-any-time                no entry window and no flat time for the agents (smokes run at any hour)
+//   With --agents and --test-controls (POST): /test/agent-secret?agent= (tests only), /test/agent-connect?agent=&name=&build=
+//   (a made-up agent that never misses a heartbeat; on=0 drops it), /test/agent-plan?agent=&id=&side=&kind=limit&p=&lp=&qty=
+//   &stop=&target=&expire=&setup=&reason=&confidence= (a plan, handled by the mode; p defaults to a price the checks take, the
+//   risk is worked out), /test/agent-proposal?... (the same, always proposed), /test/agent-skip, /test/agent-note?agent=&kind=
+//   &text=, /test/agent-withdraw?agent=&id=, /test/agent-expire?agent=&id=&ms= (an open proposal's expiresAt moved to now+ms),
+//   /test/agents (every agent's state as JSON). Sample data and made-up names only.
 //   GET /bot-library (lane C4, docs/BOT_LIBRARY.md): with --v3 and the bot switch on, the made-up example
 //   test/fixtures/bot-library.json, or the file --bot-library=path names; --no-bot-library answers 404 (no file on this PC).
 import http from 'node:http';
@@ -172,6 +183,8 @@ const DEEP = !!flag('deep-history');
 const V3 = !!flag('v3') && !flag('v1');
 const V3_OFF = flagValue('v3-off').split(',').map(x => x.trim()).filter(Boolean);
 const QUOTE = (V3 && !V3_OFF.includes('quoteRoots')) || (!!flag('quote-roots') && !flag('v1'));
+const AGENTS = V3 ? flagValue('agents').split(',').map(x => x.trim()).filter(Boolean) : [];   // 0.5.0: config.txt `agents`
+const AGENT_ACCOUNTS = AGENTS.length ? [{ name: 'SIM-AG1', sim: true, balance: 50000 }] : [];   // a made-up Sim account for an agent to take
 let htfFail = '';                                  // /test/htf?fail=: the error every htf request gets (none when '')
 const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
@@ -217,7 +230,7 @@ const config = {
   // a trailing slash, and skips wildcards; the fake takes the list as given)
   allowOrigins: flagValue('allow-origins').split(',').map(x => x.trim().toLowerCase().replace(/\/$/, '')).filter(Boolean),
 };
-const ACCOUNTS = V3 ? V3_ACCOUNTS.map(a => a.name) : ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'];
+const ACCOUNTS = V3 ? V3_ACCOUNTS.concat(AGENT_ACCOUNTS).map(a => a.name) : ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'];
 const pin = new PinLock({ file: flagValue('pin-file') || null });
 const pinReady = flagValue('test-pin') && !pin.isSet() ? pin.set(flagValue('test-pin')) : Promise.resolve();
 const OWN = 'http://localhost:' + PORT;
@@ -465,10 +478,11 @@ const deskOpts = {
   send, conns: () => clients, barTime: () => etNow(),
 };
 // --v3: ChartBridge 0.4.0's desk (test/fake-v3.mjs) with every switch on but those in --v3-off
-const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { switches: Object.fromEntries(SWITCHES.map(k => [k, !V3_OFF.includes(k)])), accountList: V3_ACCOUNTS,
-  graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ' })) : new OrderDesk(deskOpts);
+const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { switches: Object.fromEntries(SWITCHES.map(k => [k, !V3_OFF.includes(k)])), accountList: V3_ACCOUNTS.concat(AGENT_ACCOUNTS),
+  graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ', agents: AGENTS, agentAnyTime: !!flag('agent-any-time') })) : new OrderDesk(deskOpts);
 const tapeStats = V3 ? new TapeStats() : null;          // 0.4.0: the tape counters are always on (no switch)
 const BOT_SECRET = crypto.randomBytes(32).toString('hex');   // ChartBridge keeps it in bot-secret.txt; never printed
+const AGENT_SECRETS = Object.fromEntries(AGENTS.map(id => [id, crypto.randomBytes(32).toString('hex')]));   // agent-<id>-secret.txt; never printed
 
 function onMessage(c, text) {
   let m; try { m = JSON.parse(text); } catch (e) { return; }
@@ -482,7 +496,7 @@ function onMessage(c, text) {
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (V3 && m.type === 'client') desk.client(c, m);
   else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'accountTrade', 'accountArchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm',
-    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount'].includes(m.type)) desk.handle(c, m, text);
+    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules'].includes(m.type)) desk.handle(c, m, text);
   else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */
@@ -659,6 +673,7 @@ function trade(r, p) {
   if (DATA_037) htfTrade(r, msg.t, p, msg.v);   // the forming 4h, 1D and 1W bars follow the trades
   if (tapeStats) tapeStats.add(r, msg.t, p, msg.u, msg.rx, INSTR[r].tick);
   if (V3 && desk.bot.conn) send(desk.bot.conn, msg);  // the bot reads every live trade
+  if (V3) for (const a of desk.agents.values()) if (a.conn && a.helloed) send(a.conn, msg);   // and every agent
   desk.tick(r, p);                        // the matching engine sees every trade
 }
 /* --scene=signals: the scripted MNQ tape (see the header), replayed once from the first page that is live on MNQ. */
@@ -785,6 +800,7 @@ const server = http.createServer((req, res) => {
       if (p === '/test/bot-proposal') { desk.bot.mode = mode; desk.botNotify(); }
       res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ id: sig.id }));
     }
+    else if (V3 && AGENTS.length && p.startsWith('/test/agent')) return agentControl(p, q, req, res);
     else if (V3 && p === '/test/bot-withdraw') desk.botMessage({ type: 'withdraw', id: q.get('id') || '', reason: q.get('reason') || 'Sample: the entry is no longer valid' });
     else if (V3 && p === '/test/account') desk.setConnection(q.get('name'), q.get('connection') || 'lost');
     else if (V3 && p === '/test/restart') desk.simulateRestart(q.get('lost') === '1');
@@ -806,6 +822,9 @@ const server = http.createServer((req, res) => {
       accounts: ACCOUNTS.map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })),
       ...(V3 ? Object.assign(v3Diag(), desk.diag()) : {}) }));
   }
+  if (V3 && AGENTS.length && /^\/agent\//.test(p)) {   // a plain request to the agent path is not a WebSocket upgrade: 400 (404 for an id not in agents)
+    res.writeHead(AGENTS.includes(p.slice(7)) ? 400 : 404); return res.end();
+  }
   if (p === '/bot-library') {   // lane C4: the frozen Bot-Lab builds (docs/BOT_LIBRARY.md); a made-up example file here
     const file = flagValue('bot-library') ? path.resolve(flagValue('bot-library')) : path.join(root, 'test', 'fixtures', 'bot-library.json');
     if (!V3 || V3_OFF.includes('bot') || flag('no-bot-library') || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
@@ -822,6 +841,7 @@ server.on('upgrade', (req, sock) => {
   if (!V1 && !isLoopback(req.socket.remoteAddress)) { refused.notThisPc++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   if (V3 && !V3_OFF.includes('bot') && req.url.split('?')[0] === '/bot') return botUpgrade(req, sock);
   if (req.url.split('?')[0] === '/bot') { sock.end('HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }   // bot off: /bot does not exist (PROTOCOL.md)
+  if (/^\/agent\//.test(req.url.split('?')[0])) return agentUpgrade(req, sock);   // 0.5.0: 404 unless the id is in `agents`
   if (!req.url.startsWith('/ws')) { sock.destroy(); return; }
   if (!V1 && !wsOriginAllowed(req.headers.origin)) { refused.origin++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   if (TICKETS) {
@@ -844,7 +864,7 @@ server.on('upgrade', (req, sock) => {
     for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
   }
-  if (V3) { hello.features = (hello.features || []).concat(['v3']); hello.version = 'fake-0.4.0'; }   // protocol v3 (quote-only markets are told per instrument)
+  if (V3) { hello.features = (hello.features || []).concat(['v3']); hello.version = AGENTS.length ? 'fake-0.5.0' : 'fake-0.4.0'; }   // protocol v3 (quote-only markets are told per instrument); 0.5.0 with agents
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {
@@ -899,7 +919,9 @@ function botUpgrade(req, sock) {
   sock.on('close', gone); sock.on('error', gone);
 }
 if (V3) {
-  setInterval(() => { desk.everySecond(); desk.sendAccounts(); for (const c of clients) if (c.authed && c.v3 && desk.sw.bot && desk.bot.connected) send(c, desk.botMsg()); }, 1000);
+  setInterval(() => { desk.everySecond(); desk.sendAccounts(); for (const c of clients) if (c.authed && c.v3 && desk.sw.bot && desk.bot.connected) send(c, desk.botMsg()); desk.agentsBeat(); }, 1000);
+  desk.closeAgentConn = c => { try { c.sock.end(); } catch (e) { /* gone */ } };
+  if (AGENTS.length) { const x = desk.acct.get('SIM-AG1'); if (x) { x.trade = true; desk.refreshAccounts(); } }   // the made-up agent account is checked for trading
   if (!flag('no-v3-seed')) {                           // made-up state for the page lanes' smokes (see the header)
     const lp = r => last[r];
     desk.placeElsewhere({ account: 'EVAL-A', root: 'MNQ', side: 'buy', kind: 'market', qty: 2, price: null });
@@ -914,6 +936,62 @@ if (V3) {
       desk.refreshAccounts();
     }
   }
+}
+/* --agents: ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1, section 2): /agent/<id>, loopback only, no Origin, the
+   id's secret in X-ChartBridge-Agent (constant-time compare), 404 for an id not in `agents`, 409 while that id is connected */
+function agentUpgrade(req, sock) {
+  const no = code => sock.end('HTTP/1.1 ' + code + '\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+  const id = req.url.split('?')[0].slice(7);
+  if (!AGENTS.includes(id)) return no('404 Not Found');
+  if (req.headers.origin !== undefined) return no('403 Forbidden');
+  const given = String(req.headers['x-chartbridge-agent'] || ''), secret = AGENT_SECRETS[id];
+  if (given.length !== secret.length || !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(secret))) return no('403 Forbidden');
+  const a = desk.agents.get(id);
+  if (a.conn || (a.connected && a.simulated)) return no('409 Conflict');
+  const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
+  const c = { sock, agent: id, buf: Buffer.alloc(0) };
+  desk.agentConnect(id, c);
+  sock.on('data', d => {
+    const r = parseFrames(Buffer.concat([c.buf, d]), t => {
+      if (t.length > 65536) { sock.end(); return; }      // over 64 KB: the connection closes
+      let m; try { m = JSON.parse(t); } catch (e) { return send(c, { type: 'reject', id: null, reason: 'Not JSON.' }); }
+      const why = desk.agentMessage(id, m, t);
+      if (why) send(c, { type: 'reject', id: m && typeof m.id === 'string' ? m.id : null, reason: why });
+    });
+    c.buf = r.rest; if (r.closed) sock.end();
+  });
+  const gone = () => { if (a.conn === c) desk.agentDrop(id, 'the agent disconnected'); };
+  sock.on('close', gone); sock.on('error', gone);
+}
+/* the agents' test controls (see the header); sample data only */
+function agentControl(p, q, req, res) {
+  const json = (code, v) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(v)); };
+  const id = q.get('agent') || AGENTS[0], a = desk.agents.get(id);
+  if (p === '/test/agents') return json(200, { agents: [...desk.agents.values()].map(x => Object.assign(desk.agentMsg(x), { proposals: [...x.proposals.values()], plans: x.plans, notes: x.notes.length })), log: desk.log.filter(l => l.file.startsWith('agent-')), diag: desk.agentsDiag() });
+  if (!a) return json(404, { error: 'no agent ' + id });
+  if (p === '/test/agent-secret' && req.method === 'POST') return json(200, { secret: AGENT_SECRETS[id] });
+  const hello = () => { if (!a.connected) { desk.agentConnect(id, null); desk.agentMessage(id, { type: 'agentHello', name: q.get('name') || 'Demo Agent', build: q.get('build') || 'sample-build-1' }); } };
+  if (p === '/test/agent-connect') { if (q.get('on') === '0') desk.agentDrop(id, 'no heartbeat for 5 s'); else hello(); return json(200, desk.agentMsg(a)); }
+  hello();
+  if (p === '/test/agent-plan' || p === '/test/agent-proposal') {
+    const root = q.get('root') || 'MNQ', ins = INSTR[root], side = q.get('side') || 'buy', kind = q.get('kind') || 'limit', qty = +(q.get('qty') || 2), stop = +(q.get('stop') || 16);
+    const price = q.get('p') ? +q.get('p') : rqr(last[root] + (kind === 'stopLimit' ? 1 : -1) * (side === 'buy' ? 4 : -4) * ins.tick, root);
+    const m = { type: 'plan', id: q.get('id') || 'demo-' + Date.now(), root, side, kind, price };
+    if (kind === 'stopLimit') m.limitPrice = q.get('lp') ? +q.get('lp') : rqr(price + (side === 'buy' ? 2 : -2) * ins.tick, root);
+    Object.assign(m, { qty, stopTicks: stop, targetTicks: +(q.get('target') || 32), expireSec: +(q.get('expire') || 600), riskDollars: q.get('risk') ? +q.get('risk') : +(stop * ins.tick * ins.pointValue * qty).toFixed(2),
+      setup: q.get('setup') || 'Sample pullback', reason: q.get('reason') || 'Sample: a made-up reason, not a real read of the market', confidence: q.get('confidence') ? +q.get('confidence') : 0.62 });
+    const mode = a.mode;
+    if (p === '/test/agent-proposal') a.mode = 'copilot';      // a proposal on demand, whatever the mode
+    const why = desk.agentMessage(id, m, JSON.stringify(m));
+    if (p === '/test/agent-proposal') { a.mode = mode; desk.agentNotify(a); }
+    return json(200, { id: m.id, refused: why || null });
+  }
+  if (p === '/test/agent-skip') { const m = { type: 'skip', id: q.get('id') || 'skip-' + Date.now(), setup: q.get('setup') || 'Sample breakout', reason: q.get('reason') || 'Sample: no clean level within reach' }; return json(200, { refused: desk.agentMessage(id, m, JSON.stringify(m)) }); }
+  if (p === '/test/agent-note') { const m = { type: 'note', kind: q.get('kind') || 'look', text: q.get('text') || 'Sample: a made-up note' }; return json(200, { refused: desk.agentMessage(id, m, JSON.stringify(m)) }); }
+  if (p === '/test/agent-withdraw') { const m = { type: 'withdraw', id: q.get('id') || '', reason: q.get('reason') || 'Sample: the setup is gone' }; return json(200, { refused: desk.agentMessage(id, m, JSON.stringify(m)) }); }
+  if (p === '/test/agent-expire') { const x = a.proposals.get(q.get('id') || ''); if (x) x.expiresAt = Date.now() + +(q.get('ms') || 0); if (x) desk.broadcastV3(x); return json(200, { expiresAt: x ? x.expiresAt : null }); }
+  return json(404, { error: 'unknown control' });
 }
 pinReady.then(() => server.listen(PORT, '127.0.0.1', () => console.log('fake ChartBridge on http://localhost:' + PORT + '/live/' +
   (V1 ? ' (v1, read only)' : (config.trading ? ' (trading on: ' + desk.accounts.join(', ') + ')' : ' (trading off)') + (pin.isSet() ? ' (PIN set)' : ' (no PIN set)')))));
