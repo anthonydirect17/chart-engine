@@ -26,7 +26,8 @@ A new evaluation account no longer needs a `config.txt` edit and F5, and dead ac
 - **No ghost or missing orders after sign-in.** An order or position change NinjaTrader reports while the page's order list
   is being built is sent again right after the list, so the page always ends with the latest state (before, a stop
   cancelled at that moment could reappear on the page, or a new one be missing)). Those messages are marked `again`, and the page never shows them a
-  second time (one fill note, one rejection note).
+  second time (one fill note, one rejection note); its notes compare each update with what the order last said in a message
+  of its own, so a re-send that arrives first never hides the note for NinjaTrader's own part fill or move.
 - **Tidy files.** Plain `off` records not seen connected for 30 days leave `accounts.txt` (logged); checked and archived ones
   never do. The last time each account was seen connected and the conversion marker are in a new `accounts-detail.txt`:
   `accounts.txt` keeps 0.5.0's exact format, because 0.5.0's reader refuses the whole file for a line with a 4th field.
