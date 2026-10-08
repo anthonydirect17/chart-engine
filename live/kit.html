@@ -7,10 +7,11 @@
 <!--
   The kit gallery (docs/KIT.md): every token, the three fonts, every component in every state, the three surfaces side
   by side, the armed outline, the light in each colour, the refusal on a mock ticket, and motion on and off.
-  Sample data only: Sim101 and made-up names. This page loads nothing from the internet: on a PC without the web fonts
-  the titles fall back to IBM Plex Sans Condensed and the numbers to IBM Plex Mono, both served from fonts/.
+  Sample data only: Sim101 and made-up names. This page loads nothing from the internet: its three fonts are served
+  from fonts/ beside it (IBM Plex Sans from plex.css, Chakra Petch and JetBrains Mono from agent-fonts.css).
 -->
 <link rel="stylesheet" href="fonts/plex.css">
+<link rel="stylesheet" href="fonts/agent-fonts.css">
 <link rel="stylesheet" href="kit.css">
 <style>
   html, body { margin: 0; background: #010307; }
@@ -127,7 +128,7 @@
     <header>
       <span class="kit-label">2</span>
       <h2>Fonts: the hybrid</h2>
-      <p>Chakra Petch for titles, section labels, tabs and buttons. IBM Plex Sans for body text. JetBrains Mono for every number, with tabular digits. Offline, the titles fall back to IBM Plex Sans Condensed and the numbers to IBM Plex Mono, which the PC serves itself.</p>
+      <p>Chakra Petch for titles, section labels, tabs and buttons. IBM Plex Sans for body text. JetBrains Mono for every number, with tabular digits. All three come from the page's own folder, never the internet. A character outside them falls back to IBM Plex Sans Condensed and IBM Plex Mono.</p>
     </header>
     <div class="gal-grid">
       <div class="kit-card gal-font"><span class="kit-label">--kit-head</span><span class="big" style="font-family: var(--kit-head); font-weight: 600; letter-spacing: .06em">TODAY'S TRADES</span><span class="gal-note" data-font="Chakra Petch"></span></div>

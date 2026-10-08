@@ -7,8 +7,9 @@
  *                 and the light; body text 15 px.
  *   .kit-agent    the Agent tab: the fuller glow.
  * Fonts: --kit-head Chakra Petch (titles, labels, tabs, buttons), --kit-body IBM Plex Sans, --kit-mono JetBrains Mono
- * (every number, tabular). A page online loads them from Google Fonts (docs/KIT.md has the link); a trading PC loads
- * nothing from the internet and falls back to the IBM Plex it serves itself (fonts/plex.css), then the system's.
+ * (every number, tabular). All three are served with the page, never from the internet: a page loads fonts/plex.css and
+ * fonts/agent-fonts.css before this file (docs/KIT.md). A character outside their Latin subset, or a page without them,
+ * falls back to IBM Plex Sans Condensed and IBM Plex Mono, then the system's fonts.
  *
  * Rule R3 of docs/MOTION.md: numbers, prices, P&L and buttons never animate or ease. Nothing here puts a transition or
  * an animation on a number, a chip, a button or a row (test/kit.test.js reads this file to make sure). The only things
@@ -135,11 +136,11 @@
 .kit .kit-big small { font-size: 15px; color: var(--kit-dim); text-shadow: none; }
 
 /* ---------------------------------------------------------------- panel, panel header, card */
-.kit .kit-panel { position: relative; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--kit-line); background: var(--kit-panel); transition: box-shadow 1.4s ease; }
+.kit .kit-panel { position: relative; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--kit-line); background: var(--kit-panel); }
 .kit .kit-panel-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 7px 12px; border-bottom: 1px solid var(--kit-line-soft); font-size: 13px; color: var(--kit-hot); }
 .kit .kit-panel-head > b { font: 600 13px var(--kit-head); letter-spacing: .06em; }
 .kit .kit-panel-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.kit .kit-card { position: relative; display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 16px 18px; border: 1px solid var(--kit-line); background: var(--kit-panel); transition: box-shadow 1.4s ease; }
+.kit .kit-card { position: relative; display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 16px 18px; border: 1px solid var(--kit-line); background: var(--kit-panel); }
 .kit .kit-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 
 /* ---------------------------------------------------------------- buttons (never a transition: rule R3) */
@@ -266,13 +267,12 @@
 .kit .kit-key > b { flex: none; display: inline-block; width: 30px; height: 3px; border-radius: 2px; background: var(--kit-sig); box-shadow: 0 0 8px var(--kit-sig); }
 .kit .kit-key.kit-key-armed > b { height: 8px; background: transparent; border: 1px solid rgba(155,123,255,.5); box-shadow: 0 0 10px rgba(123,92,255,.7); }
 
-/* ---------------------------------------------------------------- the armed outline: soft, faded, glowing purple */
+/* ---------------------------------------------------------------- the armed outline: soft, faded, glowing purple
+   Armed is trading truth: it shows and goes at once, never fading (the panel has no transition). */
 .kit .kit-armed { border-color: var(--kit-armed-line); box-shadow: 0 0 22px -3px rgba(123,92,255,.55), 0 0 8px -2px rgba(182,156,255,.35), inset 0 0 18px -8px rgba(123,92,255,.30); }
 
-/* ---------------------------------------------------------------- the light (kit.js makes the layers) */
-.kit .kit-lit { box-shadow: 0 0 34px -4px var(--kit-pc), inset 0 0 22px -12px var(--kit-pc); }
-/* armed and lit: the purple ring is painted first (on top), the light's glow under it, so both show */
-.kit .kit-armed.kit-lit { box-shadow: 0 0 0 1px rgba(155,123,255,.45), 0 0 14px -2px rgba(123,92,255,.80), inset 0 0 18px -8px rgba(123,92,255,.40), 0 0 34px -4px var(--kit-pc), inset 0 0 22px -12px var(--kit-pc); }
+/* ---------------------------------------------------------------- the light (kit.js makes the layers)
+   The glow is on the halo layer, not the panel, so only the light fades; the panel and its armed outline never do. */
 .kit .kit-orbit {
   position: absolute; inset: -2px; padding: 3px; pointer-events: none; opacity: 0;
   background: conic-gradient(from var(--kit-ang), transparent 0deg, transparent 200deg, var(--kit-pc) 310deg, #fff 352deg, transparent 360deg);
@@ -283,10 +283,13 @@
   animation: kit-orbit var(--kit-lap-decide) linear infinite;
   animation-play-state: paused;
 }
-.kit .kit-halo { position: absolute; inset: 0; pointer-events: none; filter: blur(7px); opacity: .95; }
+.kit .kit-halo { position: absolute; inset: 0; pointer-events: none; filter: blur(7px); opacity: .95; transition: box-shadow 1.4s ease; }
 .kit .kit-halo > .kit-orbit { inset: -4px; padding: 6px; }
 .kit .kit-pace-trade > .kit-orbit, .kit .kit-pace-trade > .kit-halo > .kit-orbit { animation-duration: var(--kit-lap-trade); }
 .kit .kit-lit > .kit-orbit, .kit .kit-lit > .kit-halo > .kit-orbit { opacity: 1; animation-play-state: running; }
+.kit .kit-lit > .kit-halo { box-shadow: 0 0 34px -4px var(--kit-pc), inset 0 0 22px -12px var(--kit-pc); }
+/* armed and lit: the purple ring is drawn last, over the light, so both show */
+.kit .kit-armed.kit-lit::after { content: ""; position: absolute; inset: -1px; pointer-events: none; border: 1px solid rgba(155,123,255,.50); box-shadow: 0 0 14px -2px rgba(123,92,255,.80), inset 0 0 18px -8px rgba(123,92,255,.40); }
 
 @keyframes kit-orbit { to { --kit-ang: 360deg; } }
 @keyframes kit-slide { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -294,10 +297,10 @@
 /* motion off (ChartKit.setMotion('off'), or the motion kit's Less motion) and the system's reduced motion: the light
    stands still (its glow and a still arc stay), colours change at once, the drawer appears without sliding */
 :root.kit-motion-off .kit .kit-orbit, :root.motion-off .kit .kit-orbit { animation: none; transition: none; }
-:root.kit-motion-off .kit .kit-panel, :root.kit-motion-off .kit .kit-card, :root.motion-off .kit .kit-panel, :root.motion-off .kit .kit-card { transition: none; }
+:root.kit-motion-off .kit .kit-halo, :root.motion-off .kit .kit-halo { transition: none; }
 :root.kit-motion-off .kit .kit-drawer, :root.motion-off .kit .kit-drawer { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   .kit .kit-orbit { animation: none; transition: none; }
-  .kit .kit-panel, .kit .kit-card { transition: none; }
+  .kit .kit-halo { transition: none; }
   .kit .kit-drawer { animation: none; }
 }

@@ -2,8 +2,7 @@
 // error, never scrolls sideways at 390, 1366 and 1920 px, the light circles only while lit, stands still with reduced
 // motion and with motion off, and refuses on the mock ticket, Flatten and the copier. Screenshots in test/out/.
 //   npm run smoke:kit        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
-// The gallery is served as the PC serves it: nothing from the internet, so the titles and numbers use the fallbacks.
-// With KIT_WEBFONTS=1 the screenshots load the approved web fonts from Google Fonts first (needs the internet).
+// The gallery is served as the PC serves it: nothing from the internet; its three fonts come from live/fonts.
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -14,8 +13,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
 fs.mkdirSync(out, { recursive: true });
 const PORT = +(process.env.KIT_SMOKE_PORT || 8823);
-const WEBFONTS = process.env.KIT_WEBFONTS === '1';
-const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap';
 const errors = [];
 let checks = 0;
 const check = (ok, m) => { checks++; if (!ok) { errors.push(m); console.error('  FAIL ' + m); } else console.log('  ok   ' + m); };
@@ -65,10 +62,12 @@ try {
   check(await page.evaluate(t => Object.keys(ChartKit.TOKENS).every(k => t[k].toLowerCase().replace(/\s/g, '') === ChartKit.TOKENS[k].toLowerCase()), tok), 'every token in kit.css on the page equals ChartKit.TOKENS');
   const fam = await page.evaluate(() => {
     const f = s => getComputedStyle(document.querySelector(s)).fontFamily;
-    return { head: f('#kitRoot .kit-btn'), body: f('#kitRoot'), mono: f('#kitRoot .kit-num'), plex: document.fonts.check('16px "IBM Plex Sans"') };
+    const has = (w, fam) => [...document.fonts].some(ff => ff.family.replace(/"/g, '') === fam && String(ff.weight) === String(w) && ff.status === 'loaded');
+    return { head: f('#kitRoot .kit-btn'), body: f('#kitRoot'), mono: f('#kitRoot .kit-num'),
+      loaded: { plex: has(400, 'IBM Plex Sans'), chakra: has(600, 'Chakra Petch'), jet: has(400, 'JetBrains Mono') && has(600, 'JetBrains Mono') } };
   });
   check(/^"?Chakra Petch"?, "?IBM Plex Sans Condensed"?/.test(fam.head) && /^"?IBM Plex Sans"?/.test(fam.body) && /^"?JetBrains Mono"?, "?IBM Plex Mono"?/.test(fam.mono), 'the hybrid: titles Chakra Petch, body IBM Plex Sans, numbers JetBrains Mono, with Plex fallbacks: ' + JSON.stringify(fam));
-  check(fam.plex, 'offline the body font still draws in IBM Plex Sans from the page folder');
+  check(fam.loaded.plex && fam.loaded.chakra && fam.loaded.jet, 'all three fonts load from the page folder (live/fonts), nothing from the internet: ' + JSON.stringify(fam.loaded));
 
   // ---- the light circles only while lit
   const lit = await page.evaluate(() => ({ demo: document.getElementById('lightDemo').classList.contains('kit-lit'), layers: document.querySelectorAll('#lightDemo > .kit-orbit, #lightDemo > .kit-halo > .kit-orbit').length,
@@ -111,7 +110,7 @@ try {
   // ---- motion off stops the light; the glow stays
   await page.click('[data-motion="off"]');
   const off = await page.evaluate(() => ({ cls: document.documentElement.classList.contains('kit-motion-off'), saved: localStorage.getItem('kit-motion-v1'),
-    shadow: getComputedStyle(document.getElementById('lightDemo')).boxShadow, op: getComputedStyle(document.querySelector('#lightDemo > .kit-orbit')).opacity }));
+    shadow: getComputedStyle(document.querySelector('#lightDemo > .kit-halo')).boxShadow, op: getComputedStyle(document.querySelector('#lightDemo > .kit-orbit')).opacity }));
   check(off.cls && off.saved === 'off', 'motion off: kit-motion-off on <html>, saved as kit-motion-v1 = off');
   check(await orbits(page) === 0, 'motion off: no orbit animation runs anywhere');
   check(off.shadow !== 'none' && off.op === '1', 'motion off: the lit panel keeps its glow and a still arc');
@@ -123,18 +122,24 @@ try {
   check(await page.evaluate(() => { document.documentElement.classList.add('motion-off'); return ChartKit.reduced(); }) && await orbits(page) === 0, 'the motion kit\'s Less motion (motion-off on <html>) stops the light too');
   await page.evaluate(() => document.documentElement.classList.remove('motion-off'));
 
-  // ---- screenshots (optionally with the approved web fonts)
-  if (WEBFONTS) {
-    await page.evaluate(href => new Promise(r => { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = href; l.onload = l.onerror = r; document.head.appendChild(l); }), FONTS_CSS);
-    await page.evaluate(() => document.fonts.ready);
-    await page.waitForTimeout(300);
-  }
+  // ---- screenshots
   await page.locator('#v-trading').screenshot({ path: path.join(out, 'kit-trading.png') });
   await page.locator('#v-desk').screenshot({ path: path.join(out, 'kit-desk.png') });
   await page.locator('#v-agent').screenshot({ path: path.join(out, 'kit-agent.png') });
   await page.locator('#armedRow').screenshot({ path: path.join(out, 'kit-armed.png') });
-  const armed = await page.evaluate(() => { const s = getComputedStyle(document.getElementById('armedLit')); return { border: s.borderTopColor, shadow: s.boxShadow, lit: document.getElementById('armedLit').classList.contains('kit-lit') }; });
-  check(armed.border === 'rgba(155, 123, 255, 0.32)' && armed.lit && /^rgba\(155, 123, 255, 0\.45\) 0px 0px 0px 1px/.test(armed.shadow) && /rgb\(61, 220, 151\)/.test(armed.shadow), 'armed and lit: the purple outline and the light\'s glow show together');
+  const armed = await page.evaluate(() => {
+    const el = document.getElementById('armedLit'), s = getComputedStyle(el), ring = getComputedStyle(el, '::after'), halo = getComputedStyle(el.querySelector(':scope > .kit-halo'));
+    return { border: s.borderTopColor, ring: ring.borderTopColor, glow: halo.boxShadow, lit: el.classList.contains('kit-lit') };
+  });
+  check(armed.border === 'rgba(155, 123, 255, 0.32)' && armed.ring === 'rgba(155, 123, 255, 0.5)' && armed.lit && /rgb\(61, 220, 151\)/.test(armed.glow), 'armed and lit: the purple outline (a ring over the light) and the light\'s glow show together: ' + JSON.stringify(armed));
+  // armed is trading truth: it shows and goes at once, even while lit
+  const flip = await page.evaluate(() => {
+    const el = document.getElementById('armedLit');
+    ChartKit.armed(el, false); const off = { shadow: getComputedStyle(el).boxShadow, border: getComputedStyle(el).borderTopColor, ring: getComputedStyle(el, '::after').content };
+    ChartKit.armed(el, true); const on = { shadow: getComputedStyle(el).boxShadow, ring: getComputedStyle(el, '::after').content };
+    return { off, on, anims: el.getAnimations().length };
+  });
+  check(flip.off.shadow === 'none' && flip.off.ring === 'none' && /rgba\(123, 92, 255, 0\.55\)/.test(flip.on.shadow) && flip.on.ring !== 'none' && flip.anims === 0, 'the armed outline comes and goes at once, never fading: ' + JSON.stringify(flip));
   await page.screenshot({ path: path.join(out, 'kit-gallery-1440.png'), fullPage: true });
   await page.close();
 
@@ -159,7 +164,7 @@ try {
 
   // ---- the system's reduced motion: no orbit runs, the glow still shows
   const rm = await open({ reducedMotion: 'reduce' });
-  const r = await rm.evaluate(() => ({ reduced: ChartKit.reduced(), lit: document.getElementById('lightDemo').classList.contains('kit-lit'), shadow: getComputedStyle(document.getElementById('lightDemo')).boxShadow,
+  const r = await rm.evaluate(() => ({ reduced: ChartKit.reduced(), lit: document.getElementById('lightDemo').classList.contains('kit-lit'), shadow: getComputedStyle(document.querySelector('#lightDemo > .kit-halo')).boxShadow,
     anim: getComputedStyle(document.querySelector('#lightDemo > .kit-orbit')).animationName }));
   check(r.reduced && r.lit && r.anim === 'none' && await orbits(rm) === 0, 'prefers-reduced-motion: the light is on but no orbit animation runs');
   check(r.shadow !== 'none', 'prefers-reduced-motion: the static glow still shows');
