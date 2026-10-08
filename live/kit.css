@@ -11,6 +11,10 @@
  * fonts/agent-fonts.css before this file (docs/KIT.md). A character outside their Latin subset, or a page without them,
  * falls back to IBM Plex Sans Condensed and IBM Plex Mono, then the system's fonts.
  *
+ * No explanatory labelling on a product screen (Anthony): titles, field names, values, buttons and actionable warnings
+ * or errors only. No legends, no status words beside the light, no sentences explaining the page. The legend key below
+ * is for the gallery and docs only.
+ *
  * Rule R3 of docs/MOTION.md: numbers, prices, P&L and buttons never animate or ease. Nothing here puts a transition or
  * an animation on a number, a chip, a button or a row (test/kit.test.js reads this file to make sure). The only things
  * that move are the light's border layers and the decision drawer's slide; the only things that fade are the light's
@@ -230,7 +234,7 @@
 .kit .kit-step-name { font: 500 11px var(--kit-head); letter-spacing: .14em; text-transform: uppercase; color: var(--kit-hot); }
 @container (max-width: 520px) { .kit .kit-step-name { font-size: 10px; letter-spacing: .02em; } .kit .kit-step-sub { font-size: 11px; } }
 @container (max-width: 340px) { .kit .kit-step-name { font-size: 9px; letter-spacing: 0; } .kit .kit-step-sub { display: none; } }
-.kit .kit-step-sub { font-size: 12px; color: var(--kit-dim); }
+.kit .kit-step-sub { font-size: 12px; color: var(--kit-dim); }   /* a value (a time, a count), never an explanation */
 .kit .kit-step.is-done .kit-step-node { border-color: var(--kit-sig); color: var(--kit-sig); }
 .kit .kit-step.is-now .kit-step-node { border-color: var(--kit-sig); background: var(--kit-sig); color: var(--kit-ground); box-shadow: 0 0 0 5px rgba(255,255,255,.05), 0 0 20px var(--kit-sig); }
 .kit-trading .kit-step.is-now .kit-step-node { box-shadow: none; }
@@ -261,7 +265,7 @@
 .kit .kit-fact > :first-child { color: var(--kit-dim); }
 .kit .kit-fact > :last-child { color: var(--kit-hot); text-align: right; }
 
-/* ---------------------------------------------------------------- legend key */
+/* ---------------------------------------------------------------- legend key: gallery and docs only, never on a product screen */
 .kit .kit-keys { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; }
 .kit .kit-key { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--kit-text); }
 .kit .kit-key > b { flex: none; display: inline-block; width: 30px; height: 3px; border-radius: 2px; background: var(--kit-sig); box-shadow: 0 0 8px var(--kit-sig); }

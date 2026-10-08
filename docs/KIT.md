@@ -8,6 +8,19 @@ motion kit (`docs/MOTION.md`) and follows the same pattern: one file of styles, 
 
 Nothing in this version moves an existing screen onto the kit. Each screen moves over in its own branch.
 
+## No explanatory labelling (Anthony's principle)
+
+A product screen carries only what is needed to understand and use it: section titles, field names, values, buttons, and
+warnings or errors that ask for an action. Nothing that explains the page:
+
+* no colour legends and no "the light means ..." keys;
+* no status words beside the light ("in profit", "under water"): the light and the numbers say it;
+* no sentences explaining how the page works, where its data comes from, or what to tap.
+
+The kit is built for this. The legend key (`.kit-keys`, `.kit-key`) is **gallery and docs only, never on a product
+screen**. A step tracker's sub-line (`.kit-step-sub`) holds a value (a time, a count), never an explanation. The gallery
+(`kit.html`) is documentation, so it may explain meanings; its three surface mocks follow the rule like a real screen.
+
 ## Never on order surfaces
 
 The light never goes on the order ticket, the chart's order lines, Flatten or the copier. Rule R3 of `docs/MOTION.md`
@@ -128,10 +141,10 @@ The gallery shows each ratio.
 | `.kit-rail`, `.kit-rail-brand`, `.kit-rail-item` (`aria-current="page"`) | the side rail |
 | `.kit-meter` (with `.kit-meter-purple`, `.kit-meter-profit`) and an `<i style="width:40%">` | meters |
 | `.kit-field` on an `<input>` or `<select>` (`.kit-field-compact`, `aria-invalid`) | fields and selects |
-| `.kit-steps` with `.kit-step[data-step]` (`screen`, `eyes`, `judgment`, `checks`, `chartbridge`; `.is-done`, `.is-now`), `.kit-step-node`, `.kit-step-name`, `.kit-step-sub` | the step tracker in step colours |
+| `.kit-steps` with `.kit-step[data-step]` (`screen`, `eyes`, `judgment`, `checks`, `chartbridge`; `.is-done`, `.is-now`), `.kit-step-node`, `.kit-step-name`, `.kit-step-sub` | the step tracker in step colours; the sub-line is a value (a time, a count), never an explanation |
 | `button.kit-row` with a colour class (`aria-pressed` when its drawer is open) | a stream row, a real button |
 | `.kit-drawer-host`, `.kit-drawer` with a colour class, `.kit-drawer-top`, `.kit-drawer-title`, `.kit-drawer-close`, `.kit-quote`, `.kit-fact` | the decision drawer: slides over its column, outlined in the decision colour, with a Close button |
-| `.kit-keys`, `.kit-key` with a colour class (`.kit-key-armed`) | the legend key |
+| `.kit-keys`, `.kit-key` with a colour class (`.kit-key-armed`) | the legend key: **gallery and docs only, never on a product screen** |
 | `.kit-c-screen`, `-cyan`, `-eyes`, `-judgment`, `-checks`, `-go`, `-pass`, `-danger`, `-profit`, `-loss`, `-purple`, `-armed` | colour classes: set `--kit-sig` for chips, tags, keys, rows and the drawer. Never the light's colour. |
 
 For galleries and tests, `.is-hover`, `.is-focus` and `.is-disabled` show those states without a pointer.
