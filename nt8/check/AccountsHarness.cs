@@ -70,7 +70,6 @@ public static class AccountsHarness
         List<Account> allWas = Account.All.ToList();
         Dictionary<string, Instrument> namedWas = new Dictionary<string, Instrument>(Named());
         Dictionary<int, ChartBridgeClient> clientsWas = Clients().ToDictionary(kv => kv.Key, kv => kv.Value);
-        List<string> allowWas = ChartBridgeConfig.AccountAllow;
         try
         {
             Setup();
@@ -90,6 +89,7 @@ public static class AccountsHarness
             CancelFromList();
             Unreadable();
             Missing();
+            FollowNinjaTrader();
         }
         catch (Exception ex) { Check(false, "accounts harness threw: " + ex); }
         finally
@@ -98,7 +98,6 @@ public static class AccountsHarness
             OrdersHarness.AllOffLines();
             ChartBridgeAccounts.Clear();
             ChartBridgeOrders.ResetConfig();
-            ChartBridgeConfig.AccountAllow = allowWas;
             Account.All.Clear(); Account.All.AddRange(allWas);
             Named().Clear(); foreach (KeyValuePair<string, Instrument> kv in namedWas) Named()[kv.Key] = kv.Value;
             Clients().Clear(); foreach (KeyValuePair<int, ChartBridgeClient> kv in clientsWas) Clients()[kv.Key] = kv.Value;
@@ -112,7 +111,6 @@ public static class AccountsHarness
         folder = Path.Combine(home, "ChartBridge");
         Directory.CreateDirectory(folder);
         NinjaTrader.Core.Globals.UserDataDir = home;
-        ChartBridgeConfig.AccountAllow = new List<string>();
         Account.All.Clear();
         evalA = NewAccount("EVAL-A", Provider.Rithmic);
         fundedB = NewAccount("FUNDED-B", Provider.Tradovate);
@@ -149,6 +147,14 @@ public static class AccountsHarness
             File.WriteAllLines(Path.Combine(cfgDir, "ChartBridge", "config.txt"), new[] { "trading = true", "tradeAccounts = Sim101" });
             ChartBridgeConfig.Load();
             Check(ChartBridgeSwitches.Names.All(ChartBridgeSwitches.Get) && ChartBridgeOrders.Enabled, "config.txt with no v3 line: every v3 feature on; trading = true unchanged");
+            Check(ChartBridgeConfig.OldAccounts == null, "0.5.1: no accounts line: none read");
+            // 0.5.1: the accounts watch list is retired as a filter (read once by ChartBridgeAccounts for the conversion)
+            File.WriteAllLines(Path.Combine(cfgDir, "ChartBridge", "config.txt"), new[] { "accounts = Sim101, FUNDED*", "trading = true", "tradeAccounts = Sim101" });
+            ChartBridgeConfig.Load();
+            Check(ChartBridgeConfig.OldAccounts.SequenceEqual(new[] { "Sim101", "FUNDED*" }) && ChartBridgeConfig.OnOldAccounts("FUNDED-B") && ChartBridgeConfig.OnOldAccounts("sim101") && !ChartBridgeConfig.OnOldAccounts("EVAL-A"), "0.5.1: the old accounts line is kept for the one-time conversion, matched as 0.5.0 did (exact, or a prefix before *)");
+            Check(ChartBridgeConfig.AccountAllowed("EVAL-A") && ChartBridgeConfig.AccountAllowed("TEST-EVAL-1") && ChartBridgeConfig.AccountAllowed("Sim101"), "0.5.1: accounts = no longer filters by name (EVAL-A, a new TEST-EVAL-1 allowed)");
+            Check(!ChartBridgeConfig.AccountAllowed("Playback101") && !ChartBridgeConfig.AccountAllowed("Backtest") && !ChartBridgeConfig.AccountAllowed(""), "0.5.1: never Backtest or Playback");
+            Check(ChartBridgeOrders.Enabled && ChartBridgeOrders.TradeAccounts.SequenceEqual(new[] { "Sim101" }), "0.5.1: the other lines are read as before");
             File.WriteAllLines(Path.Combine(cfgDir, "ChartBridge", "config.txt"), new[] { "trading = true", "merge = off", "copier = OFF", "bot = 0" });
             ChartBridgeConfig.Load();
             Check(!ChartBridgeV3.Merge && !ChartBridgeV3.Copier && !ChartBridgeV3.Bot && ChartBridgeV3.AccountChecks && ChartBridgeV3.OrderTypes && ChartBridgeV3.Strategies && ChartBridgeV3.CancelFromList,
@@ -200,7 +206,7 @@ public static class AccountsHarness
         {
             ChartBridgeClient gone; Clients().TryRemove(46, out gone); Clients().TryRemove(47, out gone);
             OrdersHarness.AllOffLines(); ChartBridgeAccounts.Clear();
-            foreach (string f in new[] { "accounts.txt", "accounts.log" }) File.Delete(Path.Combine(folder, f));   // the rest starts from a first start
+            foreach (string f in new[] { "accounts.txt", "accounts.log", "accounts-detail.txt" }) File.Delete(Path.Combine(folder, f));   // the rest starts from a first start
         }
     }
     static string why0;
@@ -337,10 +343,6 @@ public static class AccountsHarness
         evalA.Connection.Status = ConnectionStatus.Connected;
         Send(page, "{\"type\":\"flatten\",\"account\":\"Playback101\",\"root\":\"MNQ\"}");
         Check(Rejected("never Backtest or Playback") && play.Calls.Count == 0, "exits never on Playback");
-        ChartBridgeConfig.AccountAllow = new List<string> { "Sim101", "FUNDED-B" };
-        Send(page, "{\"type\":\"flatten\",\"account\":\"EVAL-A\",\"root\":\"MNQ\"}");
-        Check(Rejected("not watched") && evalA.Calls.Count == calls + 3, "exits only on a watched account");
-        ChartBridgeConfig.AccountAllow = new List<string>();
         evalA.Orders.Clear();
     }
 
@@ -394,23 +396,24 @@ public static class AccountsHarness
     }
 
     // ------------------------------------------------------------ lead's default: an account signed in by hand after a restart keeps its checkmark
+    // 0.5.1: a new NinjaTrader session (SessionStartMs after every saved connected time): not listed until it connects
+    static void NewSession(double at) { Restart(); ChartBridgeAccounts.SessionStartMs = at; }
     static void NotYetConnected()
     {
         Check(ChartBridgeAccounts.Checked("EVAL-A") && ChartBridgeAccounts.Checked("FUNDED-B"), "EVAL-A and FUNDED-B checked before the restart");
         evalA.Connection.Status = ConnectionStatus.Disconnected;
         Account.All.Remove(fundedB);   // its connection not up yet: NinjaTrader does not list it
-        Restart();
-        double t = ChartBridgeTime.NowUtcMs() + 50000;
+        double t = ChartBridgeTime.NowUtcMs() + 10050000;
+        NewSession(t - 1000);
         ChartBridgeAccounts.Tick(t);
         ChartBridgeAccounts.Tick(t + 30000);
         ChartBridgeAccounts.Tick(t + 60000);
         Check(ChartBridgeAccounts.Checked("EVAL-A") && ChartBridgeAccounts.Checked("FUNDED-B"), "restart, not connected for 60 s: the saved checkmarks stay (never connected this run, not Gone)");
-        string acc = ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0), e = Entry(acc, "EVAL-A");
-        Check(e.Contains("\"connection\":\"disconnected\"") && e.Contains("\"notConnectedYet\":true") && e.Contains("\"state\":\"active\"") && e.Contains("\"trade\":true") && e.Contains("\"tradable\":false") && e.Contains("the account is not connected yet"), "not connected yet: listed so, checked, not tradable");
-        Check(Entry(acc, "FUNDED-B").Contains("\"notConnectedYet\":true"), "an account NinjaTrader does not list yet: not connected yet too");
+        string acc = ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0);
+        Check(Entry(acc, "EVAL-A") == "" && Entry(acc, "FUNDED-B") == "" && Entry(acc, "Sim101") != "", "0.5.1: a new session: an account not connected yet (in NinjaTrader or not) is not listed; accounts.txt keeps its checkmark");
         int calls = evalA.Calls.Count;
         Send(page, Order("EVAL-A", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
-        Check(Rejected("EVAL-A is not connected (Disconnected)") && evalA.Calls.Count == calls, "not connected yet: an order is refused by the normal gate");
+        Check(Rejected("EVAL-A is not connected") && evalA.Calls.Count == calls, "not connected yet: an order is refused by the normal gate");
         int callsB = fundedB.Calls.Count;
         Send(page, Order("FUNDED-B", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
         Check(Rejected("account FUNDED-B is not connected in NinjaTrader") && !Rejected("tradeAccounts") && fundedB.Calls.Count == callsB, "not listed yet: refused, the reason names no tradeAccounts (accountChecks on)");
@@ -431,14 +434,20 @@ public static class AccountsHarness
         Check(ChartBridgeAccounts.Checked("FUNDED-B"), "connected again: trades with its kept checkmark, nothing to tick (0.4.2)");
         // disabled at first sight, never connected: Gone after the grace all the same
         sim.Connection.Status = ConnectionStatus.Disconnected;
-        Restart();
+        NewSession(t + 79000);
         Account.FireStatus(sim, AccountStatus.Disabled);
         ChartBridgeAccounts.Tick(t + 80000);
         ChartBridgeAccounts.Tick(t + 90000);
-        Check(!ChartBridgeAccounts.Checked("Sim101") && ChartBridgeAccounts.Checked("EVAL-A"), "disabled at first sight (never connected): Gone after the grace");
+        Check(Entry(Accounts(), "Sim101") == "" && ChartBridgeAccounts.Checked("EVAL-A"), "0.5.1: disabled and never connected this session: not listed (no Gone row)");
+        sim.Connection.Status = ConnectionStatus.Connected;
+        ChartBridgeAccounts.Tick(t + 90500);
+        sim.Connection.Status = ConnectionStatus.Disconnected;
+        ChartBridgeAccounts.Tick(t + 90600);
+        ChartBridgeAccounts.Tick(t + 100700);
+        Check(!ChartBridgeAccounts.Checked("Sim101") && Entry(Accounts(), "Sim101").Contains("\"state\":\"gone\""), "connected once, then disabled for the grace: Gone");
         Account.FireStatus(sim, AccountStatus.Enabled);
         sim.Connection.Status = ConnectionStatus.Connected;
-        ChartBridgeAccounts.Tick(t + 91000);
+        ChartBridgeAccounts.Tick(t + 101000);
         Check(ChartBridgeAccounts.Checked("Sim101"), "enabled and connected again: its kept checkmark trades (0.4.2)");
         Check(ChartBridgeAccounts.Checked("Sim101") && ChartBridgeAccounts.Checked("EVAL-A") && ChartBridgeAccounts.Checked("FUNDED-B"), "all three checked again");
     }
@@ -515,6 +524,8 @@ public static class AccountsHarness
         Check(Entry(Accounts(), "EVAL-A").Contains("\"state\":\"active\"") && !ChartBridgeAccounts.Checked("EVAL-A") && sent.Any(x => x.Contains("EVAL-A is back (connected): it is not checked for trading")), "back unchecked: stays unchecked, said so");
         Send(page, Trade("EVAL-A", "true"));
         Check(ChartBridgeAccounts.Checked("EVAL-A"), "Anthony checks it again");
+        evalA.Orders.Clear();
+        ChartBridgeAccounts.Tick(t + 34000);   // 0.5.1: last seen flat
         // an account that NinjaTrader no longer lists (its connection is off) goes Gone too
         Account.All.Remove(evalA);
         ChartBridgeAccounts.Tick(t + 40000);
@@ -529,8 +540,12 @@ public static class AccountsHarness
         Check(Rejected("Archive needs confirm: true"), "archive without confirm: refused");
         Send(page, "{\"type\":\"accountArchive\",\"account\":\"EVAL-A\",\"confirm\":false}");
         Check(Rejected("Archive needs confirm: true") && !File_("accounts.txt").Contains("archived"), "archive with confirm false: refused");
+        Order w = Working(fundedB, OrderAction.Buy, OrderType.Limit, 24990, 0, "my limit");
         Send(page, "{\"type\":\"accountArchive\",\"account\":\"FUNDED-B\",\"confirm\":true}");
-        Check(Rejected("FUNDED-B is not gone; only a gone account can be archived"), "archive of an active account: refused");
+        Check(Rejected("FUNDED-B has a position or working orders: only a flat account can be hidden (exits always work)"), "0.5.1: Hide of an account with a working order: refused, plain reason");
+        fundedB.Orders.Remove(w);
+        Send(page, "{\"type\":\"accountArchive\",\"account\":\"Sim101\",\"confirm\":true}");
+        Check(Rejected("Sim101 is the bot's account (the Bot tab): it cannot be hidden") && !File_("accounts.txt").Contains("archived"), "0.5.1: Hide of the bot's account (Sim101 when bot-account.txt names none): refused");
         sent.Clear();
         Send(page, "{\"type\":\"accountArchive\",\"cid\":\"z\",\"account\":\"EVAL-A\",\"confirm\":true}");
         Check(!sent.Any(x => x.Contains("\"type\":\"reject\"")), "archive of a Gone account with confirm: accepted");
@@ -544,8 +559,11 @@ public static class AccountsHarness
         Account.All.Add(evalA);
         evalA.Connection.Status = ConnectionStatus.Connected;
         ChartBridgeAccounts.Tick(ChartBridgeTime.NowUtcMs() + 200000);
+        ChartBridgeAccounts.Tick(ChartBridgeTime.NowUtcMs() + 230000);
+        Check(Entry(Accounts(), "EVAL-A") == "" && !ChartBridgeAccounts.Checked("EVAL-A") && !File_("accounts.log").Contains("\tEVAL-A\tback from the archive\t"), "0.5.1: hidden on the page, then in NinjaTrader and healthy: stays archived until Show");
+        Send(page, "{\"type\":\"accountUnarchive\",\"cid\":\"u\",\"account\":\"EVAL-A\"}");
         string e = Entry(Accounts(), "EVAL-A");
-        Check(e.Contains("\"state\":\"active\"") && e.Contains("\"trade\":false") && !ChartBridgeAccounts.Checked("EVAL-A") && File_("accounts.log").Contains("\tEVAL-A\tback from the archive\t"), "archived and connected again: back as active, unchecked (Anthony archived it), logged");
+        Check(!Rejected("") && e.Contains("\"state\":\"active\"") && e.Contains("\"trade\":false") && !ChartBridgeAccounts.Checked("EVAL-A") && File_("accounts.log").Contains("\tEVAL-A\tshown\tby the page; unchecked\n"), "0.5.1: Show: back as active, unchecked, logged");
         Send(page, Trade("EVAL-A", "true"));
     }
 
@@ -676,5 +694,211 @@ public static class AccountsHarness
         Check(f.StartsWith(ChartBridgeAccounts.Header) && !f.Contains("trade\t"), "missing: a new accounts.txt with nothing checked");
         Send(page, Trade("Sim101", "true"));
         Check(ChartBridgeAccounts.Checked("Sim101"), "missing: Anthony checks them again");
+    }
+
+    // ------------------------------------------------------------ 0.5.1: connected accounts only; Hide and Show; pruning; the one-time conversion
+    static Account NewOn(string name, ConnectionStatus st) { Account a = new Account { Name = name, Provider = Provider.Rithmic, Connection = new Connection { Status = st } }; Account.All.Add(a); return a; }
+    static string Log_() { return File_("accounts.log") ?? ""; }
+    static bool ArchivedNow(string name) { return Accounts().Contains("{\"name\":\"" + name + "\",\"at\":"); }
+    static string Hide(string name) { return "{\"type\":\"accountArchive\",\"cid\":\"h\",\"account\":\"" + name + "\",\"confirm\":true}"; }
+    static string Show(string name) { return "{\"type\":\"accountUnarchive\",\"cid\":\"s\",\"account\":\"" + name + "\"}"; }
+    static bool InFile(string name) { return System.Text.RegularExpressions.Regex.IsMatch(File_("accounts.txt") ?? "", "\n[a-z]+\t[0-9]+\t" + System.Text.RegularExpressions.Regex.Escape(name) + "\n"); }
+    static void WatchNow() { typeof(ChartBridgeServer).GetMethod("WatchAccounts", PS).Invoke(null, null); }
+    static bool Watching(string name) { return NinjaTrader.Code.Output.Lines.Any(x => x.EndsWith("watching fills on account " + name)); }
+
+    static void FollowNinjaTrader()
+    {
+        OrdersHarness.AllOffLines();
+        ChartBridgeSwitches.Note("accountChecks", "on");
+        Restart();
+        double t = ChartBridgeTime.NowUtcMs() + 20000000;
+        // 90 accounts NinjaTrader remembers with no connection, or never connected: never watched, listed or written
+        List<Account> old = new List<Account>();
+        for (int i = 1; i <= 90; i++) { Account a = new Account { Name = "OLD-EVAL-" + i.ToString("00"), Provider = Provider.Rithmic, Connection = i % 3 == 0 ? new Connection { Status = ConnectionStatus.Disconnected } : null }; Account.All.Add(a); old.Add(a); }
+        Account e1 = NewOn("TEST-EVAL-1", ConnectionStatus.Disconnected);
+        ChartBridgeAccounts.Tick(t);
+        WatchNow();
+        string acc = Accounts();
+        Check(!acc.Contains("OLD-EVAL-") && !acc.Contains("TEST-EVAL-1") && !InFile("OLD-EVAL-01") && !InFile("OLD-EVAL-03") && !InFile("TEST-EVAL-1"), "0.5.1: 90 accounts in Account.All with no connection or never connected: not listed, not written to accounts.txt");
+        Check(!NinjaTrader.Code.Output.Lines.Any(x => x.Contains("watching fills on account OLD-EVAL-")) && !Watching("TEST-EVAL-1"), "0.5.1: and never watched (no fills)");
+        Check(Entry(acc, "Sim101") != "" && Entry(acc, "EVAL-A") != "", "the connected accounts are listed");
+        // one connects later: listed at the next check, its checkmark off; watched by the 10 s timer
+        e1.Connection.Status = ConnectionStatus.Connected;
+        sent.Clear();
+        ChartBridgeAccounts.Tick(t + 1000);
+        string en = Entry(Accounts(), "TEST-EVAL-1");
+        Check(en.Contains("\"state\":\"active\"") && en.Contains("\"trade\":false") && !ChartBridgeAccounts.Checked("TEST-EVAL-1") && System.Text.RegularExpressions.Regex.IsMatch(File_("accounts.txt"), "\noff\t[0-9]+\tTEST-EVAL-1\n"), "0.5.1: an account that connects appears at the next check with its checkmark off, kept in accounts.txt as off");
+        Check(en.Contains("\"canHide\":true") && en.Contains("\"hideWhy\":null"), "0.5.1: a flat account: canHide true");
+        WatchNow();
+        Check(Watching("TEST-EVAL-1"), "0.5.1: the 10 s watch picks it up (its fills go to The Desk)");
+        Check((File_("accounts-detail.txt") ?? "").StartsWith(ChartBridgeAccounts.DetailHeader + "\n") && File_("accounts-detail.txt").Contains("\nconnected\t" + ((long)(t + 1000)).ToString() + "\tTEST-EVAL-1\n"), "0.5.1: accounts-detail.txt keeps when it was last seen connected");
+        Check(File_("accounts.txt").Split('\n').Skip(1).Where(x => x.Length > 0).All(x => x.Split('\t').Length == 3), "0.5.1: accounts.txt keeps 0.5.0's exact 3-field lines (0.5.0 refuses the whole file for a 4th field)");
+        // seen connected, then dropped: Gone in this session, still listed (exits and positions never stranded)
+        Send(page, Trade("TEST-EVAL-1", "true"));
+        e1.Connection.Status = ConnectionStatus.Disconnected;
+        ChartBridgeAccounts.Tick(t + 2000);
+        ChartBridgeAccounts.Tick(t + 12000);
+        Account.All.Remove(e1);
+        ChartBridgeAccounts.Tick(t + 13000);
+        en = Entry(Accounts(), "TEST-EVAL-1");
+        Check(en.Contains("\"state\":\"gone\"") && en.Contains("\"trade\":true") && !ChartBridgeAccounts.Checked("TEST-EVAL-1"), "0.5.1: seen connected, then dropped (and gone from NinjaTrader's list): listed Gone this session, its checkmark kept");
+        // an F5 in the same NinjaTrader session: still listed (accounts-detail.txt says it was seen since NinjaTrader started)
+        Restart();
+        ChartBridgeAccounts.Tick(t + 14000);
+        Check(Entry(Accounts(), "TEST-EVAL-1") != "", "0.5.1: a recompile in the same NinjaTrader session: still listed");
+        // the next NinjaTrader session: remembered (accounts.txt keeps its checkmark) but not listed until it connects
+        double t2 = t + 10100000;
+        NewSession(t2 - 1000);
+        ChartBridgeAccounts.Tick(t2);
+        Check(Entry(Accounts(), "TEST-EVAL-1") == "" && System.Text.RegularExpressions.Regex.IsMatch(File_("accounts.txt"), "\ntrade\t[0-9]+\tTEST-EVAL-1\n"), "0.5.1: after a restart a remembered account that is not connected is not listed; accounts.txt keeps its checkmark");
+        Account.All.Add(e1); e1.Connection.Status = ConnectionStatus.Connected;
+        ChartBridgeAccounts.Tick(t2 + 1000);
+        Check(ChartBridgeAccounts.Checked("TEST-EVAL-1") && Entry(Accounts(), "TEST-EVAL-1").Contains("\"trade\":true"), "0.5.1: it connects: listed again and trades with its kept checkmark");
+        Send(page, Trade("TEST-EVAL-1", "false"));
+
+        // pruning: off records not seen connected for 30 days; never trade or archived
+        double day = 24 * 3600000.0, t3 = t2 + 100 * day;
+        string txt = File_("accounts.txt");
+        txt += "off\t" + ((long)(t3 - 31 * day)).ToString() + "\tOLD-OFF-1\n" + "trade\t" + ((long)(t3 - 400 * day)).ToString() + "\tOLD-TRADE-1\n" + "archived\t" + ((long)(t3 - 400 * day)).ToString() + "\tOLD-ARCH-1\n"
+             + "off\t" + ((long)(t3 - 29 * day)).ToString() + "\tRECENT-OFF-1\n" + "off\t" + ((long)(t3 - 90 * day)).ToString() + "\tOLD-OFF-2\n";
+        File.WriteAllText(Path.Combine(folder, "accounts.txt"), txt);
+        File.AppendAllText(Path.Combine(folder, "accounts-detail.txt"), "connected\t" + ((long)(t3 - 5 * day)).ToString() + "\tOLD-OFF-2\n");
+        NewSession(t3 - 1000);
+        ChartBridgeAccounts.Tick(t3);
+        Check(!InFile("OLD-OFF-1") && Log_().Contains("\tOLD-OFF-1\tforgotten\toff and not seen connected for 30 days\n"), "0.5.1: an off record not seen connected for 30 days is forgotten, logged");
+        Check(InFile("OLD-TRADE-1") && InFile("OLD-ARCH-1"), "0.5.1: a trade or archived record is never forgotten, however old");
+        Check(InFile("RECENT-OFF-1") && InFile("OLD-OFF-2"), "0.5.1: an off record seen in the last 30 days stays (by its time in accounts.txt, or accounts-detail.txt's last connected time)");
+        Check(InFile("TEST-EVAL-1") && InFile("Sim101"), "0.5.1: the connected accounts stay");
+        Check(ArchivedNow("OLD-ARCH-1"), "the archived list still offers OLD-ARCH-1 (Show)");
+        ChartBridgeAccounts.Tick(t3 + 1000);
+        Check(InFile("RECENT-OFF-1"), "pruning runs once an hour, not every second");
+        double t4 = t3 + 3 * day;   // RECENT-OFF-1 is 32 days old now
+        ChartBridgeAccounts.Tick(t4);
+        Check(!InFile("RECENT-OFF-1") && InFile("OLD-TRADE-1"), "0.5.1: the hourly check forgets it once 30 days have passed");
+
+        // Hide and Show
+        Account e2 = NewOn("TEST-EVAL-2", ConnectionStatus.Connected), e3 = NewOn("TEST-EVAL-3", ConnectionStatus.Connected);
+        double t5 = t4 + 1000;
+        e2.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
+        ChartBridgeAccounts.Tick(t5);
+        Check(Entry(Accounts(), "TEST-EVAL-2").Contains("\"canHide\":false") && Entry(Accounts(), "TEST-EVAL-2").Contains("TEST-EVAL-2 has a position or working orders"), "0.5.1: with a position: canHide false, with why");
+        Send(page, Hide("TEST-EVAL-2"));
+        Check(Rejected("TEST-EVAL-2 has a position or working orders: only a flat account can be hidden (exits always work)") && !ArchivedNow("TEST-EVAL-2"), "0.5.1: Hide refused with a position");
+        e2.Positions.Clear();
+        Order wo = Working(e2, OrderAction.Buy, OrderType.Limit, 24990, 0, "placed in NinjaTrader");
+        Send(page, Hide("TEST-EVAL-2"));
+        Check(Rejected("TEST-EVAL-2 has a position or working orders") && !ArchivedNow("TEST-EVAL-2"), "0.5.1: Hide refused with a working order");
+        wo.OrderState = OrderState.Cancelled;
+        string botFile = Path.Combine(folder, "bot-account.txt"), cop = Path.Combine(folder, "copier.txt"), agent = Path.Combine(folder, "agent-a1-account.txt");
+        File.WriteAllLines(botFile, new[] { "# ChartBridge bot account", "# written by ChartBridge", "account\tTEST-EVAL-2" });
+        Send(page, Hide("TEST-EVAL-2"));
+        Check(Rejected("TEST-EVAL-2 is the bot's account (the Bot tab): it cannot be hidden"), "0.5.1: Hide of the bot's account: refused");
+        File.Delete(botFile);
+        File.WriteAllLines(cop, new[] { "leader\tTEST-EVAL-2" });
+        Send(page, Hide("TEST-EVAL-2"));
+        Check(Rejected("TEST-EVAL-2 is the copier's leader: it cannot be hidden"), "0.5.1: Hide of the copier's leader: refused");
+        File.WriteAllLines(cop, new[] { "leader\tSim101", "follower\tTEST-EVAL-2\ton\t1\tmicro\t" });
+        Send(page, Hide("TEST-EVAL-2"));
+        Check(Rejected("TEST-EVAL-2 is a copier follower: it cannot be hidden"), "0.5.1: Hide of a copier follower: refused");
+        File.Delete(cop);
+        File.WriteAllLines(agent, new[] { "# ChartBridge account for agent a1", "account\tTEST-EVAL-2" });
+        Send(page, Hide("TEST-EVAL-2"));
+        Check(Rejected("TEST-EVAL-2 is agent a1's account (the Agent tab): it cannot be hidden"), "0.5.1: Hide of an agent's account (agent-<id>-account.txt): refused");
+        File.Delete(agent);
+        Send(page, Trade("TEST-EVAL-2", "true"));
+        sent.Clear();
+        Send(page, Hide("TEST-EVAL-2"));
+        Check(!sent.Any(x => x.Contains("\"type\":\"reject\"")) && ArchivedNow("TEST-EVAL-2") && Entry(Accounts(), "TEST-EVAL-2") == "" && Log_().Contains("\tTEST-EVAL-2\tarchived\tby the page\n"), "0.5.1: Hide of a flat, active, connected account: accepted, out of the list, logged");
+        Check(!ChartBridgeOrders.AccountTradable("TEST-EVAL-2"), "0.5.1: hidden: no entries");
+        for (int i = 1; i <= 30; i++) ChartBridgeAccounts.Tick(t5 + i * 1000);
+        Check(ArchivedNow("TEST-EVAL-2") && Entry(Accounts(), "TEST-EVAL-2") == "", "0.5.1: hidden, connected and healthy for 30 s: stays archived");
+        e2.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Short, Quantity = 1, AveragePrice = 25000 });
+        sent.Clear();
+        ChartBridgeAccounts.Tick(t5 + 31000);
+        en = Entry(Accounts(), "TEST-EVAL-2");
+        Check(en.Contains("\"state\":\"active\"") && en.Contains("\"trade\":false") && sent.Any(x => x.Contains("\"level\":\"warn\"") && x.Contains("TEST-EVAL-2 was archived, but NinjaTrader shows a position or working orders on it")), "0.5.1: a hidden account NinjaTrader shows with a position: listed again at once, unchecked, warned (archiving never strands an exit)");
+        string why;
+        Check(ChartBridgeAccounts.FindForExit("TEST-EVAL-2", out why) != null, "0.5.1: its exits work again");
+        e2.Positions.Clear();
+        ChartBridgeAccounts.Tick(t5 + 32000);
+        Send(page, Show("TEST-EVAL-2"));
+        Check(Rejected("TEST-EVAL-2 is not archived"), "0.5.1: Show of an account not archived: refused");
+        Send(page, Show("NO-SUCH-1"));
+        Check(Rejected("no account NO-SUCH-1"), "0.5.1: Show of an unknown account: refused");
+        Send(page, "{\"type\":\"accountUnarchive\",\"account\":\"TEST-EVAL-2\",\"confirm\":true}");
+        Check(Rejected("unknown key"), "0.5.1: Show with any other key: refused (strict)");
+        Send(page, "{\"type\":\"accountUnarchive\",\"account\":7}");
+        Check(Rejected("accountUnarchive needs account"), "0.5.1: Show needs account as a plain string");
+        Send(page, Hide("TEST-EVAL-2"));
+        ChartBridgeClient anon = new ChartBridgeClient(null, 48); anon.Origin = "http://localhost:8765"; List<string> ga = new List<string>(); anon.Tap = x => ga.Add(x);
+        Clients()[48] = anon;
+        Send(anon, Show("TEST-EVAL-2"));
+        Check(ga.Any(x => x.Contains("\"type\":\"reject\"")) && ArchivedNow("TEST-EVAL-2"), "0.5.1: Show needs a signed-in page");
+        ChartBridgeClient gone; Clients().TryRemove(48, out gone);
+        Send(page, Show("TEST-EVAL-2"));
+        en = Entry(Accounts(), "TEST-EVAL-2");
+        Check(!ArchivedNow("TEST-EVAL-2") && en.Contains("\"state\":\"active\"") && en.Contains("\"trade\":false") && !ChartBridgeAccounts.Checked("TEST-EVAL-2") && Log_().Contains("\tTEST-EVAL-2\tshown\tby the page; unchecked\n"), "0.5.1: Show: active and unchecked, logged");
+        // Hide of a Gone account that NinjaTrader no longer lists: by what ChartBridge last saw
+        Account.All.Remove(e3);
+        sent.Clear();
+        Send(page, Hide("TEST-EVAL-3"));
+        Check(!sent.Any(x => x.Contains("\"type\":\"reject\"")) && ArchivedNow("TEST-EVAL-3"), "0.5.1: Hide of an account NinjaTrader no longer lists, last seen flat: accepted");
+        Send(page, Show("TEST-EVAL-3"));
+        Account.All.Add(e3);
+        e3.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
+        ChartBridgeAccounts.Tick(t5 + 33000);
+        Account.All.Remove(e3);
+        Send(page, Hide("TEST-EVAL-3"));
+        Check(Rejected("TEST-EVAL-3 was last seen with a position or working orders: only a flat account can be hidden"), "0.5.1: Hide of an account NinjaTrader no longer lists, last seen with a position: refused");
+        Account.All.Add(e3); e3.Positions.Clear();
+        ChartBridgeAccounts.Tick(t5 + 34000);
+
+        // the one-time conversion of the old accounts line
+        ChartBridgeConfig.OldAccounts = new List<string> { "Sim101", "FUNDED*", "TEST-EVAL-1" };
+        Account e4 = NewOn("TEST-EVAL-4", ConnectionStatus.Connected);
+        e3.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
+        Send(page, Trade("TEST-EVAL-1", "true"));
+        Send(page, Trade("EVAL-A", "true"));   // checked, not on the old line
+        bool evalWas = ChartBridgeAccounts.Checked("EVAL-A"), fundedWas = ChartBridgeAccounts.Checked("FUNDED-B");
+        int said = NinjaTrader.Code.Output.Lines.Count;
+        Restart();
+        double t6 = t5 + 40000;
+        ChartBridgeAccounts.Tick(t6);
+        List<string> outLines = NinjaTrader.Code.Output.Lines.Skip(said).ToList();
+        Check(outLines.Count(x => x.Contains("config.txt: the accounts line is read once now (ChartBridge 0.5.1)")) == 1, "0.5.1: the first run with the accounts line: one Output line says it is read once now");
+        Check(ArchivedNow("TEST-EVAL-2") && ArchivedNow("TEST-EVAL-4") && Log_().Contains("\tTEST-EVAL-2\thidden\tnot on the old accounts list\n") && Log_().Contains("\tTEST-EVAL-4\thidden\tnot on the old accounts list\n"), "0.5.1: conversion: connected accounts the old line does not name are hidden, logged");
+        Check(!ArchivedNow("Sim101") && !ArchivedNow("FUNDED-B") && !ArchivedNow("TEST-EVAL-1") && ChartBridgeAccounts.Checked("TEST-EVAL-1") && ChartBridgeAccounts.Checked("EVAL-A") == evalWas && ChartBridgeAccounts.Checked("FUNDED-B") == fundedWas, "0.5.1: conversion: the accounts it names keep their checkmarks exactly");
+        Check(evalWas && !ArchivedNow("EVAL-A"), "0.5.1: conversion: a checked account is kept (0.5.0 always watched the accounts the chart may trade)");
+        Check(!ArchivedNow("TEST-EVAL-3") && Log_().Contains("\tTEST-EVAL-3\tnot hidden\tnot on the old accounts list, but TEST-EVAL-3 has a position or working orders"), "0.5.1: conversion: one with a position is not hidden (logged why)");
+        Check(!old.Any(a => InFile(a.Name)), "0.5.1: conversion: the never-connected accounts are untouched");
+        Check((File_("accounts-detail.txt") ?? "").Contains("\nconverted\t"), "0.5.1: the conversion is marked in accounts-detail.txt");
+        Send(page, Show("TEST-EVAL-2"));
+        Account e5 = NewOn("TEST-EVAL-5", ConnectionStatus.Connected);
+        ChartBridgeAccounts.Tick(t6 + 1000);
+        Check(!ArchivedNow("TEST-EVAL-2") && ArchivedNow("TEST-EVAL-5"), "0.5.1: conversion: each account is looked at once (a Show stays); one connecting later in that run is hidden too");
+        said = NinjaTrader.Code.Output.Lines.Count;
+        Restart();
+        Account e6 = NewOn("TEST-EVAL-6", ConnectionStatus.Connected);
+        ChartBridgeAccounts.Tick(t6 + 2000);
+        outLines = NinjaTrader.Code.Output.Lines.Skip(said).ToList();
+        Check(!ArchivedNow("TEST-EVAL-6") && Entry(Accounts(), "TEST-EVAL-6").Contains("\"trade\":false") && outLines.Count(x => x.Contains("config.txt: the accounts line is ignored since ChartBridge 0.5.1")) == 1, "0.5.1: the next run: the line is ignored (one Output line), a new account appears by itself");
+        File.Delete(Path.Combine(folder, "accounts-detail.txt"));
+        Restart();
+        Account e7 = NewOn("TEST-EVAL-7", ConnectionStatus.Connected);
+        ChartBridgeAccounts.Tick(t6 + 3000);
+        Check(!ArchivedNow("TEST-EVAL-7"), "0.5.1: accounts-detail.txt lost: accounts.log's converted line keeps the conversion from running twice");
+        ChartBridgeConfig.OldAccounts = null;
+
+        // a 0.5.0 accounts.txt (3 fields) with no accounts-detail.txt loads; a detail file with lines it does not know is fine
+        Send(page, Trade("TEST-EVAL-1", "true"));
+        File.Delete(Path.Combine(folder, "accounts-detail.txt"));
+        Restart();
+        Check(ChartBridgeAccounts.Checked("TEST-EVAL-1") && ChartBridgeAccounts.Checked("Sim101"), "0.5.1: a 0.5.0 accounts.txt (3 fields) with no accounts-detail.txt loads as before");
+        File.WriteAllText(Path.Combine(folder, "accounts-detail.txt"), ChartBridgeAccounts.DetailHeader + "\nsomething\tnew\tTEST-EVAL-1\nbroken line\nconnected\tnot-a-time\tTEST-EVAL-1\n");
+        Restart();
+        ChartBridgeAccounts.Tick(t6 + 4000);
+        Check(ChartBridgeAccounts.Checked("TEST-EVAL-1") && Entry(Accounts(), "TEST-EVAL-1") != "", "0.5.1: accounts-detail.txt with lines ChartBridge does not know: skipped, the checkmarks load");
+        e3.Positions.Clear();
+        foreach (Account a in old.Concat(new[] { e1, e2, e3, e4, e5, e6, e7 })) Account.All.Remove(a);
     }
 }

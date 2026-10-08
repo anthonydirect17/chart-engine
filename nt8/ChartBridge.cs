@@ -72,23 +72,28 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static Dictionary<string, string> ContractOverride = new Dictionary<string, string>();
         public static bool PostFills = false;                       // send fills to The Desk
         public static string DeskUrl = "http://localhost:8800";
-        public static List<string> AccountAllow = new List<string>();   // empty = every account except Backtest / Playback
+        public static List<string> OldAccounts;   // 0.5.1: the retired "accounts =" line, null when there is none (ChartBridgeAccounts reads it once, then ignores it)
         public static List<string> AllowOrigins = new List<string>();   // web pages besides ChartBridge's own that may open the read-only WebSocket
         // 0.4.0: markets served for the Quote board only (ChartBridgeTape.cs, ChartBridgeMarkets): every order for them is refused.
         // A root in both roots and quoteRoots is quote only.
         public static string[] QuoteRoots = ChartBridgeMarkets.DefaultQuoteRoots();
         public static bool QuoteOnly(string root) { return root != null && Array.IndexOf(QuoteRoots, root.ToUpperInvariant()) >= 0; }
 
+        // 0.5.1: no Backtest or Playback account. Which accounts are watched (their fills go to The Desk) and listed is
+        // ChartBridgeAccounts.SeenConnected: connected in this NinjaTrader session. The "accounts =" watch list is retired.
         public static bool AccountAllowed(string name)
         {
             if (string.IsNullOrEmpty(name)) return false;
-            if (name.StartsWith("Backtest", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Playback", StringComparison.OrdinalIgnoreCase)) return false;
-            if (ChartBridgeOrders.AccountTradable(name)) return true;      // accounts the chart may trade are always watched
-            if (AccountAllow.Count == 0) return true;
-            foreach (string pat in AccountAllow)
-            {
+            return !name.StartsWith("Backtest", StringComparison.OrdinalIgnoreCase) && !name.StartsWith("Playback", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // 0.5.1: the old accounts line names this account (exact, or a prefix before *), as 0.5.0 matched it.
+        public static bool OnOldAccounts(string name)
+        {
+            List<string> list = OldAccounts;
+            if (list == null || string.IsNullOrEmpty(name)) return false;
+            foreach (string pat in list)
                 if (pat.EndsWith("*") ? name.StartsWith(pat.TrimEnd('*'), StringComparison.OrdinalIgnoreCase) : name.Equals(pat, StringComparison.OrdinalIgnoreCase)) return true;
-            }
             return false;
         }
 
@@ -114,8 +119,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   contract.MNQ = MNQ 12-26      (forces a contract instead of the computed front month)
         //   postFills = true              (send every fill to The Desk; off by default)
         //   deskUrl = http://localhost:8800
-        //   accounts = Sim101, EVAL*       (only these accounts' fills; * matches a prefix; default all,
-        //                                   Backtest and Playback accounts are always skipped)
+        //   accounts                      (until 0.5.0 a watch list. 0.5.1 reads it once, on its first run, to hide the connected
+        //                                   accounts it does not name; after that it is ignored, said once in the Output window)
         //   trading = true                (order entry from the chart; OFF by default; see ChartBridgeOrders.cs)
         //   tradeAccounts = Sim101, ...   (exact account names the chart may trade; no wildcard)
         //   maxQty.MNQ = 5                (largest order per instrument root; default 1)
@@ -141,6 +146,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeCopier.ResetConfig();   // 0.4.0 copier:
             ChartBridgeBot.ResetConfig();   // 0.4.0 bot: on by default
             ChartBridgeAgents.ResetConfig();   // 0.5.0 agents: off until config.txt names one
+            OldAccounts = null;   // 0.5.1
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -163,7 +169,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key.StartsWith("contract.")) ContractOverride[key.Substring(9).Trim().ToUpperInvariant()] = val;
                 else if (key == "postFills") PostFills = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1";
                 else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
-                else if (key == "accounts") AccountAllow = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+                else if (key == "accounts") OldAccounts = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();   // 0.5.1: read once (ChartBridgeAccounts)
                 else if (key == "allowOrigins") AllowOrigins = ChartBridgeAccess.ParseOrigins(val);
                 else if (key == "quoteHours") ChartBridgeServer.Log("config.txt: quoteHours is no longer used (its by-date tick load was replaced by the served window in 0.3.5 and removed in 0.3.7); the line can go");
                 else if (ChartBridgeCopier.ReadConfig(key, val)) { }   // 0.4.0 copier: copier = off turns it off (on by default; ChartBridgeCopier.cs)
@@ -1862,7 +1868,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.5.0";
+        public const string Version = "0.5.1";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -2220,7 +2226,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (type == "weekProfile") OnWeekProfileMessage(client, text); // 0.3.7: the last 5 sessions' volume at price (strict)
             else if (type == "auth" || type == "order" || type == "change" || type == "plan" || type == "cancel" || type == "flatten")
                 ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
-            else if (type == "client" || type == "accountTrade" || type == "accountArchive")
+            else if (type == "client" || type == "accountTrade" || type == "accountArchive" || type == "accountUnarchive")
                 ChartBridgeAccounts.OnMessage(client, type, text);   // 0.4.0 accounts: v3 page, the checkmark and Archive (ChartBridgeAccounts.cs; no order calls)
             else if (type == "merge") ChartBridgeOrders.OnMessage(client, type, text);   // 0.4.0 B4: Merge stops and targets (ChartBridgeMerge.cs)
             else if (type.StartsWith("copier", StringComparison.Ordinal)) ChartBridgeCopier.OnMessage(client, type, text);   // 0.4.0 copier: copier*
@@ -4766,6 +4772,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 foreach (Account a in Account.All) fresh.Add(a);
             }
+            fresh = fresh.Where(ChartBridgeAccounts.SeenConnected).ToList();   // 0.5.1: only accounts seen Connected this NinjaTrader session
             List<Account> added = new List<Account>();
             lock (Watched)
             {
