@@ -47,9 +47,9 @@ inside a `.kit` root, so the kit never leaks into the rest of a page.
 
 | Token | Font | For |
 |---|---|---|
-| `--kit-head` | Chakra Petch | titles, section labels, chips, tabs, buttons |
+| `--kit-head` | Chakra Petch | titles, section labels, chips, tags, tabs, buttons |
 | `--kit-body` | IBM Plex Sans | body text, text fields and selects (the account select) |
-| `--kit-mono` | JetBrains Mono | every number, with tabular digits (`.kit-num`): a number inside a chip, a numeric field (`.kit-field.kit-num`) |
+| `--kit-mono` | JetBrains Mono | every number, with tabular digits (`.kit-num`): a number inside a chip or a tag, a numeric field (`.kit-field.kit-num`) |
 
 Every font comes from the page's own folder, never the internet: ChartBridge's pages load nothing from the internet
 (the 1.16.0 offline rule, `test/offline.test.js`, which reads every file in the www list, `kit.html` and `kit.css`
@@ -136,7 +136,7 @@ The gallery shows each ratio.
 | `.kit-num`, `.kit-big` (with `<small>`), `.kit-profit-text`, `.kit-loss-text` | a number (mono, tabular), a big number, money colours |
 | `.kit-btn` with `.kit-btn-primary`, `.kit-btn-accent`, `.kit-btn-danger`, `.kit-btn-compact` | buttons: default, primary cyan, accent purple, danger red; 44 px tall, 34 px compact for the dense trading screen. States: hover, `:focus-visible`, `:disabled`, `aria-pressed="true"` (the kill switch on). |
 | `.kit-chip` with `.kit-chip-purple`, `.kit-chip-profit`, `.kit-chip-loss`, `.kit-chip-danger`, or a colour class | chips, 11 px Chakra Petch 600 uppercase (LONG, ARMED, COPILOT); a number inside one keeps `.kit-num` (mono) |
-| `.kit-tag` with a colour class | the small tag on a stream row |
+| `.kit-tag` with a colour class | the small tag on a stream row (LOOK, PLAN, FILL), 10 px Chakra Petch 600 uppercase; a number inside one keeps `.kit-num` (mono) |
 | `.kit-pill` with `.kit-dot` (`.is-off`, `.is-warn`, `.is-bad`) | a status pill with a dot |
 | `.kit-tabs` with `.kit-tab` (`aria-selected`, `aria-current="page"` or `.is-on`) | tabs; the active one is cyan |
 | `.kit-seg` with buttons (`aria-pressed`) | a segmented switch (the mode) |
@@ -242,6 +242,6 @@ every control; reduced motion and motion off stop the orbit and keep the glow; t
 ticket row, Flatten and the copier; R3 with the drawer open: no element that holds a number, a price or a button moves,
 on its own or through an animated or transitioned ancestor; `ChartKit.setMotion` sets the motion kit's Less motion.
 Screenshots in `test/out/`: `kit-gallery-1440.png`, `kit-trading.png`, `kit-desk.png`, `kit-agent.png`, `kit-light-profit.png`, `kit-light-loss.png`,
-`kit-armed.png`. The smoke also checks that all three fonts load from `live/fonts`, that chips are in Chakra Petch and
-text fields in IBM Plex Sans with numeric fields in JetBrains Mono, and that the armed outline comes and goes at once,
+`kit-armed.png`. The smoke also checks that all three fonts load from `live/fonts`, that chips and tags are in Chakra Petch
+and text fields in IBM Plex Sans with numeric fields in JetBrains Mono, and that the armed outline comes and goes at once,
 never fading.

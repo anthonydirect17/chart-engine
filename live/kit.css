@@ -6,7 +6,7 @@
  *   .kit-desk     The Desk and the Studio (also the plain .kit): cyan lines; glow only on page titles, the active tab
  *                 and the light; body text 15 px.
  *   .kit-agent    the Agent tab: the fuller glow.
- * Fonts: --kit-head Chakra Petch (titles, labels, chips, tabs, buttons), --kit-body IBM Plex Sans (body text, text
+ * Fonts: --kit-head Chakra Petch (titles, labels, chips, tags, tabs, buttons), --kit-body IBM Plex Sans (body text, text
  * fields and selects), --kit-mono JetBrains Mono (every number, tabular, and numeric fields: .kit-field.kit-num). All three are served with the page, never from the internet: a page loads fonts/plex.css and
  * fonts/agent-fonts.css before this file (docs/KIT.md). A character outside their Latin subset, or a page without them,
  * falls back to IBM Plex Sans Condensed and IBM Plex Mono, then the system's fonts.
@@ -168,7 +168,7 @@
 .kit .kit-btn-danger[aria-pressed="true"], .kit .kit-btn-danger.is-on { border-color: var(--kit-danger); background: var(--kit-danger); color: #1a0006; }
 .kit .kit-btn-compact { min-height: 34px; padding: 0 10px; font-size: 12px; }
 
-/* ---------------------------------------------------------------- chips (11 px Chakra Petch uppercase; a .kit-num inside keeps mono) and tags */
+/* ---------------------------------------------------------------- chips (11 px) and tags (10 px), Chakra Petch uppercase; a .kit-num inside either keeps mono */
 .kit .kit-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--kit-line); color: var(--kit-text); font: 600 11px/1.3 var(--kit-head); letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
 .kit .kit-chip .kit-num { font-family: var(--kit-mono); font-variant-numeric: tabular-nums; }
 .kit .kit-chip-purple { border-color: var(--kit-purple); color: var(--kit-purple-text); background: rgba(109,40,217,.16); }
@@ -176,7 +176,8 @@
 .kit .kit-chip-loss { border-color: var(--kit-loss); color: var(--kit-loss-text); background: rgba(255,122,122,.08); }
 .kit .kit-chip-danger { border-color: var(--kit-danger); color: var(--kit-danger-text); background: rgba(255,59,92,.10); }
 .kit .kit-chip[class*="kit-c-"] { border-color: var(--kit-sig); color: var(--kit-sig); background: color-mix(in srgb, var(--kit-sig) 10%, transparent); }
-.kit .kit-tag { display: inline-block; padding: 3px 4px; border: 1px solid var(--kit-sig); color: var(--kit-sig); font: 600 10px/1.2 var(--kit-mono); letter-spacing: .12em; text-align: center; text-transform: uppercase; }
+.kit .kit-tag { display: inline-block; padding: 3px 4px; border: 1px solid var(--kit-sig); color: var(--kit-sig); font: 600 10px/1.2 var(--kit-head); letter-spacing: .12em; text-align: center; text-transform: uppercase; }
+.kit .kit-tag .kit-num { font-family: var(--kit-mono); font-variant-numeric: tabular-nums; }
 
 /* ---------------------------------------------------------------- status pill with a dot */
 .kit .kit-pill { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid var(--kit-line); background: rgba(0,6,12,.6); color: var(--kit-hot); font-size: 13px; }

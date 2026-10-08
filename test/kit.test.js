@@ -500,6 +500,9 @@ test('installed: kit.css, kit.js and kit.html are in the www list, and the galle
   // the hybrid: chips in the title font (a number inside keeps mono); fields in the body font, numeric ones in mono
   assert.match(css, /\.kit \.kit-chip \{[^}]*font: 600 11px\/1\.3 var\(--kit-head\);/);
   assert.match(css, /\.kit \.kit-chip \.kit-num \{ font-family: var\(--kit-mono\);/);
+  assert.match(css, /\.kit \.kit-tag \{[^}]*font: 600 10px\/1\.2 var\(--kit-head\);/, 'tags are words: Chakra Petch');
+  assert.match(css, /\.kit \.kit-tag \.kit-num \{ font-family: var\(--kit-mono\);/);
+  for (const r of rules(css)) if (/\.kit-(chip|tag)\b/.test(r.sel) && !/\.kit-num/.test(r.sel)) assert.ok(!/var\(--kit-mono\)/.test(r.body), r.sel + ' sets mono on words');
   assert.match(css, /\.kit \.kit-field \{[^}]*font: 13px var\(--kit-body\);/);
   assert.match(css, /\.kit \.kit-field\.kit-num \{ font-family: var\(--kit-mono\);/);
   // test/offline.test.js reads every www file: kit.html, kit.css, kit.js and the font stylesheet are among them
