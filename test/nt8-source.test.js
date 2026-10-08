@@ -1275,3 +1275,21 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
   assert.match(w, /string tmp = ManagedFile \+ "\.tmp";\s*File\.WriteAllLines\(tmp, lines\.ToArray\(\)\);\s*if \(File\.Exists\(ManagedFile\)\) File\.Replace\(tmp, ManagedFile, null\); else File\.Move\(tmp, ManagedFile\);/);
   assert.match(w, /if \(managedReadFailed\)/);
 });
+
+test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
+  const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
+  assert.match(code, /public const string Version = "0\.5\.1";/);
+  // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
+  assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
+  // AccountAllowed is never Backtest or Playback and reads no list
+  const allowed = bodyOf(code, 'public static bool AccountAllowed(string name)');
+  assert.ok(!/OldAccounts|AccountAllow\b/.test(allowed), 'AccountAllowed reads no accounts list');
+  assert.ok(!/\bAccountAllow\b/.test(code), 'the old watch list field is gone');
+  // accounts.txt is written with exactly three fields per line (0.5.0's reader refuses any other line)
+  assert.match(asrc, /b\.Append\(r\.State\)\.Append\('\\t'\)\.Append\(r\.ChangedMs\.ToString\(CultureInfo\.InvariantCulture\)\)\.Append\('\\t'\)\.Append\(r\.Name\)\.Append\('\\n'\);/);
+  assert.match(asrc, /p\.Length != 3 \|\| \(p\[0\] != "trade" && p\[0\] != "off" && p\[0\] != "archived"\)/);
+  // Show: accountUnarchive takes exactly type, cid and account
+  assert.match(asrc, /type == "accountUnarchive" \? new\[\] \{ "type", "cid", "account" \}/);
+  // still no order call in the accounts file
+  for (const re of [/\.Submit\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/]) assert.ok(!re.test(asrc.replace(/^\s*\/\/.*$/gm, '')), 'ChartBridgeAccounts.cs never ' + re);
+});
