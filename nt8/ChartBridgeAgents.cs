@@ -1956,7 +1956,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // in NinjaTrader: role other, cbId null when the order is not ChartBridge's), read before this fill is booked
             bool tell = mine || OwnsContract(root, inst, FindAccount(Account));
             if (tell && json != null && json.EndsWith("}", StringComparison.Ordinal))   // section 10: ChartBridge's id and the order's role
-                json = json.Substring(0, json.Length - 1) + ",\"cbId\":" + Str(CbIdOf(o)) + ",\"role\":" + CbJson.Str(o != null ? ChartBridgeOrders.AgentRoleFor(o) : "other") + "}";
+                json = json.Substring(0, json.Length - 1) + ",\"cbId\":" + Str(CbIdOf(o)) + ",\"role\":" + CbJson.Str(mine ? ChartBridgeOrders.AgentRoleFor(o) : "other") + "}";   // 10.7: a role only for its own orders (ag:<id>, or legs of its entry's tag)
             RollDay();
             string closedTag = null, opened = null;
             bool spanChanged = false;

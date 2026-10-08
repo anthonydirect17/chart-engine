@@ -2119,6 +2119,21 @@ public static class AgentHarness
             Deliver("SIM-E", mnq, MarketPosition.Long, 1, 25000, "NTC72");
             Check(!Any(agentOut, n, "\"type\":\"exec\""), "10.7: a fill on a pair it does not own is not sent to it");
             SetPos(sime, mnq, 0); ClearMoves();
+            // a page market order on its pair (named "CB#<tag> s0 t0", an entry name for the page) reaches it as role other
+            Order e2 = PlacedOn(sime, Good(NewId()));
+            if (e2 == null) { Check(false, "10.7: an entry was placed: " + AgentReject()); return; }
+            Fill(e2, 1, 24999);
+            Order pg = NtOrder(sime, OrderAction.Sell, 1, "CB#0a0b0c0d s0 t0", "PG71");
+            string pid = ChartBridgeOrders.AgentIdFor(pg);
+            n = N(agentOut);
+            pg.Filled = 1; pg.AverageFillPrice = 25002; pg.OrderState = OrderState.Filled; Update(pg);
+            Deliver("SIM-E", mnq, MarketPosition.Short, 1, 25002, "PG71");
+            SetPos(sime, mnq, 0); ClearMoves();
+            lock (agentOut) ex = agentOut.Skip(n).LastOrDefault(x => x.StartsWith("{\"type\":\"exec\"")) ?? "";
+            Check(ex.EndsWith(",\"cbId\":\"" + pid + "\",\"role\":\"other\"}"), "10.7: a page order's fill on its pair: role other (not entry), with the page's cbId: " + ex);
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1000);
+            SetPos(sime, mnq, 0); ClearMoves();
         });
 
         // item 8: welcome.rules carries the caps really enforced, and goes again when one changes

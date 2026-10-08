@@ -58,7 +58,8 @@ every lead's default in its "as built" list. The chart's own version is unchange
   stays the agent's, the stop stays, Anthony gets an error every minute, and at the open the flatten closes it. That stop is
   never placed beside a market close that still works, and a pair the agent does not own never loses it while it holds a
   position. Only the cancel step waits for a trading market; a close that cannot go puts the stop back at once. The agent
-  never gets agentState before its welcome; a trade never crosses zero, so its booked result is always from real fills.
+  never gets agentState before its welcome; a trade never crosses zero, so its booked result is always from real fills. A
+  fill of an order that is not the agent's reaches it as role `other` (a page order too), with the page's id.
 - **Tests.** `nt8/check/AgentHarness.cs` (inside `npm run check:orders`) runs every refusal and every timer; IntegrationHarness
   X13 where the lanes meet; `test/fake-agent.mjs` is a made-up agent client with its test; `test/nt8-agents.test.js` guards the
   source. The bot channel, the copier and every other lane behave as in 0.4.3 except where the contract requires (refusing an
