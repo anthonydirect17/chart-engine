@@ -119,13 +119,16 @@ function isBotMark(x, bot) {
  *   order(o)   note an order message; true when it owes new contracts
  *   claim(f)   true when the fill is the bot's (it uses up what it covers; the same fill id twice is the same answer)
  *   clear()    forget everything (ChartBridge went away)
+ * mark (1.17.0, optional): whose orders count, mark(order, owner); the bot's (isBotMark) by default. The Agent tab passes
+ * AgentCore.isAgentMark, so an agent's fills are claimed against its own `by: "agent:<id>"` orders the same way.
  */
-function botFillLedger() {
+function botFillLedger(mark) {
+  const isMine = typeof mark === 'function' ? mark : isBotMark;
   const seen = new Map(), owed = [], claimed = new Set();   // seen: order id -> { filled, avg }
   const same = (a, b) => isNum(a) && isNum(b) && Math.abs(a - b) < 1e-6;
   return {
     order(o, bot) {
-      if (!isBotMark(o, bot) || typeof o.id !== 'string') return false;
+      if (!isMine(o, bot) || typeof o.id !== 'string') return false;
       const was = seen.get(o.id) || { filled: 0, avg: null }, now = isNum(o.filled) && o.filled > 0 ? o.filled : 0;
       if (!(now > was.filled)) return false;
       const d = now - was.filled, avg = isNum(o.avgFill) ? o.avgFill : null;
