@@ -487,10 +487,12 @@ try {
   await until(async () => (await text('.ag-strip [data-k="name"]')) === 'Demo Agent', 'Demo Agent shown');
   await page.click('#agView [data-mode="copilot"]');
   await until(async () => (await agentsNow()).find(a => a.agent === 'demo').mode === 'copilot', 'demo in Copilot');
-  // two agents' proposals open: demotwo's (older, in the corner) and demo's (in the tab); a quick double press of Accept
+  // two agents' proposals open: demotwo's (older; with the tab open only counted under the proposal, never a card on the tab)
+  // and demo's (in the tab); a quick double press of Accept
   await control('agent-plan', { agent: 'demotwo', id: 'k2', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 12, target: 24, expire: 900 });
-  await until(() => visible('.ag-prop.corner[data-id="k2"]'), 'demotwo\'s proposal in the corner');
-  check(/Second Demo Agent\s*demotwo/.test(await text('.ag-prop.corner[data-id="k2"] .ag-prop-h')), 'a card names the agent and its id');
+  await until(async () => /^Second Demo Agent: 1 proposal$/.test(await text('#agView [data-panel="prop"] [data-k="others"]')), 'demotwo\'s proposal counted under the proposal');
+  check(!(await visible('.ag-prop.corner[data-id="k2"]')) && !(await page.evaluate(() => [...document.querySelectorAll('[data-agans], [data-ans]')].some(b => b.getClientRects().length && !b.closest('#agView .ag-plist')))),
+    'with the Agent tab open demotwo\'s proposal is no card: no Accept or Reject but in the slot');
   await sleep(300);
   await control('agent-plan', { agent: 'demo', id: 'k1', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 12, target: 24, expire: 900 });
   await until(() => page.isVisible('.ag-plist .ag-prop[data-id="k1"]'), 'demo\'s proposal in the tab');
@@ -503,11 +505,13 @@ try {
   const dbl = (await answersSent()).slice(a0);
   check(dbl.length === 1 && dbl[0].agent === 'demo' && dbl[0].id === 'k1', 'a double press answers one proposal, the shown agent\'s: ' + JSON.stringify(dbl.map(m => m.agent + ':' + m.id)));
   await until(async () => (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'k1').state === 'accepted', 'demo\'s k1 accepted');
-  check((await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'open', 'demotwo\'s k2 (in the corner) untouched');
+  check((await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'open', 'demotwo\'s k2 (not shown on the tab) untouched');
   await control('agent-withdraw', { agent: 'demo', id: 'k1' });
   // elsewhere: two open (demotwo's and the bot's): the key answers neither and says so
   await page.click('#wsAgentTab');
   await until(async () => !(await A()).shown, 'the tab closes');
+  await until(() => visible('.ag-prop.corner[data-id="k2"]'), 'the tab closed: demotwo\'s proposal in the corner');
+  check(/Second Demo Agent\s*demotwo/.test(await text('.ag-prop.corner[data-id="k2"] .ag-prop-h')), 'a card names the agent and its id');
   await control('bot-connect', { name: 'Sample Lantern Fade' });
   await control('bot-proposal', { id: 'b1', side: 'sell', kind: 'market', stop: 12, target: 24, reason: 'Sample: the made-up bot\'s signal' });
   await until(() => visible('.bt-prop[data-id="b1"]'), 'the bot\'s proposal too');

@@ -45,8 +45,8 @@ lead's default.
   ChartBridge's refusal shows under the button.
 - **Proposals:** side, quantity, root, kind and price, stop and target, risk, setup, confidence, reason, the account, and a
   live countdown to the plan's own expiry; Accept and Reject send `agentAnswer` (`agentSeen` the moment it shows). Accept
-  closes in the last 5 s, when ChartBridge would refuse it. In the tab for the agent shown, with every other agent's and
-  the bot's under it in the same panel while the tab is shown; in the corner while it is closed.
+  closes in the last 5 s, when ChartBridge would refuse it. In the tab for the agent shown, alone (the bot's and the other
+  agents' only counted in one line under it while the tab is shown); in the corner while it is closed.
 - **One copilot key for the bot and every agent** (`AgentCore.copilotRouter`; `live/bot.js` hands it its proposals): with
   the Agent tab open a key answers the shown agent's proposals only; elsewhere, with an agent proposal open, it answers
   only when exactly one proposal is open in all, and otherwise says "More than one proposal is open: click the one you
@@ -72,12 +72,11 @@ lead's default.
   the backstop, the flat hours and the NOT FLAT errors; what it does not model is listed in `docs/AGENT_TAB.md`.
 - **After the independent review of fc3101a** (the Agent tab is on the order path: Anthony accepts or rejects there):
   - Nothing covers the tab's Accept and Reject. Another agent's proposal and the bot's sat in the fixed corner over them
-    (at 1366 x 768, 1600 x 900 and on a phone, and in the pop-out); while the tab is shown the corner is now part of its
-    proposal panel, under the shown agent's own proposals, in the page's flow, each under its own name (their key caps not
-    shown: with the tab open the keys answer the shown agent only). The drawer keeps clear of all of them.
+    (at 1366 x 768, 1600 x 900 and on a phone, and in the pop-out); while the tab is shown the corner is now hidden (see
+    "Only the shown agent's proposal on the tab" below). The drawer keeps clear of the proposal.
   - Clicks and the focus are no longer lost: the proposal list was written again on every render (once a second per agent),
     which took the buttons out of the page (the focus fell to the page, about 3 clicks in 40 were lost, a held press sent
-    nothing); now it is written only when the list or its order changed.
+    nothing); now it is written only when its cards changed.
   - ChartBridge's words under a proposal ("Refused by ChartBridge: ...", "Under 5 s left", "Accept sent. Waiting for
     ChartBridge.") sit in the sticky foot right above Accept and Reject, in sight at 1366 x 768.
   - The light is cheap: thin strips along the border each turn a small conic gradient by a transform on the compositor,
@@ -91,8 +90,7 @@ lead's default.
   - A double click on the kill switch sends `agentKill` once (a click within 1 s of a kill-on is the same press).
   - The workspace's ChartBridge line no longer pushes the tab down 46 px (it lies over the chart's top), and a new proposal
     right after an ended one takes the top at once instead of jumping up 153 px when the ended one goes.
-  - Narrower than 1100 px the notices sat fixed at the bottom left over in-flow buttons; they stay over the chart now, and
-    the right column grows with the proposals instead of running under the footer.
+  - Narrower than 1100 px the notices sat fixed at the bottom left over in-flow buttons; they are in the tab now (below).
   - The pop-out names an agent in every ChartBridge status line that says "agent <id>" anywhere, in any case ("... is no
     longer agent demo's", "agent demo had an open trade ...", "agent demo holds 1 ... with no trade record", "...: agent
     demo's 1 closed; the rest ...": `AgentCore.statusAgent`). The order ticket uses `AgentCore.pageExitPasses`.
@@ -104,35 +102,40 @@ lead's default.
     orderName, cbId and role, others' fills on its pair). What it still does not model is listed in `docs/AGENT_TAB.md`.
   - `npm run smoke:agent` runs at 11:00 New York whatever the time of day (the trail check failed after 15:55 New York),
     and `npm run smoke:agent-targets` holds the tab's Accept and Reject: never covered, never dropped, never moving.
-- **After the re-review of a4fa9d9:**
-  - A card leaving the proposal panel no longer slides another proposal's Accept under the pointer (a rejected card of the
-    shown agent going 1.5 s later moved the bot's and the second agent's cards up, so the bot's old Accept found the second
-    agent's). Under the shown agent's slot (below), the other agents' and the bot's proposals are one list in the order they
-    arrived: a card that arrives goes at the end and pushes nothing; a card that ends and leaves while an open card comes
-    after it leaves a placeholder of its exact height until nothing open follows (the bot's cards too); a card keeps a line
-    for ChartBridge's words even while it has none; the browser's scroll anchoring is off in the tab.
-  - The shown agent's proposal stays first and in sight (look F: Accept and Reject always in sight; the re-review of
-    60e9ddd): it has a slot of a
-    fixed height at the top of the panel, reserved whenever the tab is shown ("None open" at the same height when empty),
-    its words scrolling inside it with Accept and Reject at its foot; the other agents' and the bot's proposals keep the
-    arrival-ordered list with placeholders under it. Narrower than 1100 px the controls and the proposal sit side by side
-    at the top, with the chart under them.
-  - At 1366 x 768 (Anthony's laptop) the list of other proposals has room (the slot is 30vh, at least 190 px: 230 px there,
-    against 276 px before; the list about 135 px against 85 px), placeholders go once the pointer has been off the panel
-    for 1 s, and each listed card's foot (its words in one line with the full text in its title, whose it is in one line,
-    Accept and Reject) stays at the foot of the list while it scrolls; scrolled so a foot is cut at the list's top, a head
-    pinned there names whose it is: a listed Accept never shows without whose it is.
+- **After the re-reviews of a4fa9d9, 60e9ddd and 7bca487:**
+  - The shown agent's proposal stays first and in sight (look F: Accept and Reject always in sight): it has a slot of a
+    fixed height at the top of the panel (30vh, at least 190 px and at most 380 px: 230 px at 1366 x 768), reserved
+    whenever the tab is shown ("None open" at the same height when empty), its words scrolling inside it with Accept and
+    Reject at its foot; a card keeps a line for ChartBridge's words even while it has none; the browser's scroll anchoring
+    is off in the tab. Narrower than 1100 px the controls and the proposal sit side by side at the top, with the chart
+    under them.
   - At 1100 px and narrower ChartBridge's error line and the notices are pinned at the top of the tab in a band of a fixed
     height (it lay on the chart, far down: at 989 px at 1000 x 800, 1299 px on a phone). On a phone the proposal comes
     before the chart, and the words under the mode, the account and the rules keep their lines while empty.
   - The fake ChartBridge's texts as on main: the last NOT FLAT names the second position reading ("(or N with fills not yet
     in the position)") and why the account takes no exit ("; the account is not connected (...)"); the warning at a cancel's
     second try goes to every trader page.
-  - `npm run smoke:agent-targets` checks the whole panel: after every arrival and every card that leaves, at 1000 x 800,
-    1366 x 768 and 1920 x 1080, no other open card's Accept or Reject has moved (it fails on a4fa9d9).
-  - It also checks that the shown agent's proposal is the panel's first card with its Accept and Reject in the window
-    without scrolling at 1000 x 800, 1366 x 768, 1920 x 1080 and 390 x 844 (the panel's first screen) while the bot, the
-    second agent and the shown agent all propose.
+- **Only the shown agent's proposal on the tab** (Anthony, 2026-10-08; it replaces the list of other proposals that the
+  re-reviews of a4fa9d9, 60e9ddd, 7bca487 and 3d28bb0 kept fixing: its placeholders, its pointer-away timer, the watch on
+  the bot's cards, its pinned head and the "whose" line are gone):
+  - While the Agent tab is shown, the bot's and the other agents' proposals are not cards anywhere on it: the corner (the
+    Bot tab's, or the window's own) is hidden, and always in the pop-out. Under the shown agent's slot, one line of a fixed
+    height (30 px) counts them, "Bot: 1 proposal · Second Demo Agent: 1" (display names, open proposals); each name is a
+    link, the bot's to the Bot tab and an agent's to that agent in the tab (as the picker); with none it keeps its height
+    and says "No other proposals". It has no Accept or Reject, never changes height, and a count that rises is marked at
+    once and stays still for 8 s (R3). So nothing on the tab moves when other proposals arrive or leave.
+  - On the Bot tab the bot's proposals show with Accept and Reject as before; with every tab closed the corner shows every
+    proposal as before.
+  - The copilot keys on the Agent tab answer the shown agent only, never a hidden proposal: with none of its own open, or
+    the tab on its "no agents" card (`AgentCore.copilotRouter`: the tab's focus may be `true`, holding every key), they
+    answer nothing and say so. The Bot tab's keys are the same keys through the same router, so they answer no hidden bot
+    card either.
+  - `npm run smoke:agent-targets` is rewritten for it: with the bot and the second agent proposing, no other Accept or
+    Reject on the page; the line's counts at 30 px; its links (the second agent shown, back, the Bot tab with the bot's card
+    and its buttons); the shown agent's Accept and Reject in the window and hit-testing to themselves at 1000 x 800,
+    1366 x 768, 1600 x 900, 1440 x 1000, 1920 x 1080 and 390 x 844; nothing moving while the others arrive and leave at
+    1000 x 800, 1366 x 768, 1920 x 1080 and 390 x 844; the keys; the pop-out's slot and line; and, as before, the error
+    band, the notices, the focus and clicks, ChartBridge's words in the foot and the kill switch.
 - Tests: `test/agent.test.js`, the agent part of `test/fake-v3.test.js`, `npm run smoke:agent` and `smoke:agent-targets`
   (screenshots `test/out/agent-*.png`), `npm run perf:agent`. The chart draws exactly as in 1.16.0. Page only, no
   recompile; COMPAT stays at ChartBridge 0.3.2.

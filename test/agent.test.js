@@ -323,6 +323,14 @@ test('copilot keys, S1 and N1: the tab answers its agent only; elsewhere exactly
   e.view.focus = 'demo';
   e.bot.push({ id: 'b1', at: e.at() - 10000 });
   assert.match(e.R.handle('accept').text, /only demo's proposals/, 'the tab open with none of its agent\'s: nothing answered, said');
+  assert.deepEqual(e.done, [], 'the bot\'s proposal (not shown on the Agent tab) untouched');
+  // the tab open on its "no agents" card (focus true): the bot's proposal, hidden there, is never answered by a key
+  const z = routerRig();
+  z.view.focus = true;
+  z.bot.push({ id: 'b1', at: z.at() - 10000 });
+  assert.equal(z.R.handle('accept').act, 'say');
+  assert.equal(z.R.handle('reject').act, 'say');
+  assert.deepEqual(z.done, [], 'nothing answered while the tab is open with no agent shown');
   // elsewhere: one open in all (an agent's) is answered; one agent's and one bot's: none
   const one = routerRig();
   one.ag.push({ agent: 'demo', id: 'only', at: one.at() - 2000 });

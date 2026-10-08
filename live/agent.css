@@ -271,34 +271,31 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 /* At its top, the shown agent's own proposal in a slot of a fixed height (look F: its Accept and Reject always in sight, the
    card Anthony is looking at): reserved whenever the tab is shown, "None open" at the same height when it is empty, the card's
    words scrolling inside it with Accept and Reject at its foot. Its proposal arriving, ending or going moves nothing. Under it,
-   another agent's and the bot's proposals in one list in the order they arrived (--ag-order, live/agent.js): a card that
-   arrives goes at the end, and a card that leaves while an open card comes after it leaves a placeholder of its height
-   (review of a4fa9d9): no Accept or Reject ever moves under the pointer. With the panel at its height that list scrolls. */
-.ag-view .ag-proppanel { flex: 0 0 auto; min-height: 110px; max-height: calc(100% - 128px); display: flex; flex-direction: column; padding: 12px 16px; gap: 10px; }
+   one line of a fixed height counts the proposals open elsewhere (the bot's, the other agents'), each name a link to where it
+   is answered: no other proposal is a card on the tab (Anthony, 2026-10-08), so their coming and going moves nothing either. */
+.ag-view .ag-proppanel { flex: 0 0 auto; display: flex; flex-direction: column; padding: 12px 16px; gap: 10px; }
 .ag-view .ag-slot { flex: none; height: clamp(190px, 30vh, 380px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent; }
 .ag-view .ag-slot > .ag-plist { display: grid; gap: 14px; }
 .ag-view .ag-slot > .ag-plist:empty { display: none; }
-.ag-view .ag-pbody { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent;
-  display: flex; flex-direction: column; gap: 14px; }
-.ag-view .ag-pbody:not(:has(> * > * > :not([hidden]):not(.ag-gone))):not(:has(> .ag-ghost)) { display: none; }
-.ag-view .ag-others, .ag-view .ag-others > .bt-props, .ag-view .ag-others > .ag-props { display: contents; }
-/* the list's head (live/agent.js placeListHead): pinned at the top of the list, taking no room in it (its height and the gap
-   cancelled), shown only while a listed card's foot is cut there: whose its Accept and Reject are */
-.ag-view .ag-listhead { order: -1; position: sticky; top: 0; z-index: 2; flex: none; height: 22px; margin-bottom: -36px; padding: 3px 8px; box-sizing: border-box;
-  background: var(--ag-inset); border-bottom: 1px solid var(--ag-pur); font: 600 11.5px/16px var(--ag-sans); color: var(--ag-soft);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; visibility: hidden; pointer-events: none; cursor: default; }
-.ag-view .ag-listhead.on { visibility: visible; pointer-events: auto; }   /* what it covers cannot be pressed unseen */
-.ag-view .ag-pbody { scroll-padding-top: 22px; }   /* scrolling to something brings it clear of the head */
 /* no scroll anchoring in the tab: the browser would scroll a box to keep a row below in place when a card goes, which moves
    every card above it */
-.ag-view .ag-main, .ag-view .ag-pbody, .ag-view .ag-slot { overflow-anchor: none; }
-.ag-view .ag-pbody .ag-prop, .ag-view .ag-pbody .bt-prop, .ag-view .ag-ghost { order: var(--ag-order, 0); flex: none; }
-.ag-view .ag-ghost { pointer-events: none; }
-.ag-view .ag-others .ag-gone { display: none !important; }
-/* a card keeps one line for ChartBridge's words even while it has none, so "Accept sent", "Rejected" and the like never make
-   it taller over the cards after it */
-.ag-view .ag-proppanel .ag-prop .ag-prop-msg, .ag-view .ag-pbody .bt-prop .bt-prop-msg { line-height: 1.45; min-height: 1.45em; }
-.ag-view .ag-proppanel .ag-prop .ag-prop-msg:empty, .ag-view .ag-pbody .bt-prop .bt-prop-msg:empty { display: block; }
+.ag-view .ag-main, .ag-view .ag-slot { overflow-anchor: none; }
+/* the card keeps one line for ChartBridge's words even while it has none, so "Accept sent", "Rejected" and the like never
+   move its Accept and Reject */
+.ag-view .ag-proppanel .ag-prop .ag-prop-msg { line-height: 1.45; min-height: 1.45em; }
+.ag-view .ag-proppanel .ag-prop .ag-prop-msg:empty { display: block; }
+/* the line of the other proposals (live/agent.js renderOthers): one line, always the same height, cut at its end when long; a
+   count that rose is marked at once and stays still (R3: nothing here moves or fades) */
+.ag-view .ag-others { flex: none; display: block; height: 30px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--f-line2);
+  font: 500 12px/28px var(--f-body); color: var(--f-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ag-view .ag-others[hidden] { display: none; }
+.ag-view .ag-others .ag-oitem { color: var(--f-soft); padding: 1px 3px; }
+.ag-view .ag-others .ag-oitem.up { color: var(--f-hot); background: rgba(93, 242, 255, .14); box-shadow: inset 0 0 0 1px var(--f-c); }
+.ag-view .ag-others .ag-olink { appearance: none; background: none; border: 0; padding: 0; margin: 0; font: inherit; line-height: inherit; color: inherit;
+  text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--f-line); cursor: pointer; }
+.ag-view .ag-others .ag-olink:hover { color: var(--f-hot); text-decoration-color: currentColor; }
+.ag-view .ag-others .ag-osep { color: var(--f-dim); }
+.ag-view .ag-off-card .ag-others { margin-top: 12px; }
 .ag-view .ag-empty[hidden] { display: none; }
 .ag-view .ag-prop.inline { background: transparent; border: 0; border-radius: 0; padding: 0; gap: 9px; color: var(--f-c); font: 13px/1.4 var(--f-ui); box-shadow: none; display: grid; grid-template-columns: minmax(0, 1fr); }
 .ag-view .ag-prop.inline + .ag-prop.inline { border-top: 1px solid var(--f-line2); padding-top: 14px; }
@@ -444,27 +441,11 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-note.red { border-left-color: var(--ag-sell); border-color: color-mix(in srgb, var(--ag-sell) 45%, transparent); }
 .ag-note .ag-ttl { flex: none; font: 500 10px/1.3 var(--ag-mono); letter-spacing: .14em; color: var(--ag-lav); text-transform: uppercase; white-space: nowrap; }
 
-/* While the Agent tab is shown (live/agent.js placeBox, placeNotes): the corner (the Bot tab's, with the bot's proposals, or
-   the window's own) is part of the proposal panel, under the shown agent's own proposals, in the page's flow, oldest first;
-   the corner notices stack in the chart's lower left above its time axis, and the workspace's ChartBridge line lies across the
-   chart's top. Nothing of them covers a control, a proposal's Accept or Reject, the stream or the footer, at any size. */
-.ag-view .ag-others .ag-prop.corner, .ag-view .ag-others .bt-prop { width: auto; box-shadow: none; }
-/* a listed card's foot (its words, whose it is, Accept and Reject) stays at the foot of the box while the card scrolls, so its
-   Accept never shows without whose it is (the re-check of 7bca487); its words take one line, all of them in its title */
-.ag-view .ag-others .ag-prop.corner .ag-prop-foot { position: sticky; bottom: 0; z-index: 1; background: var(--ag-inset); padding-top: 4px; }
-.ag-view .ag-others .bt-prop .bt-prop-btns { position: sticky; bottom: 0; z-index: 1; background: var(--bt-copilot, var(--ag-inset)); flex-wrap: wrap; row-gap: 4px; padding-top: 4px; }
-.ag-view .ag-others .ag-prop-btns { flex-wrap: wrap; row-gap: 4px; }
-/* scrolled to (a key, a click, scrollIntoView), a listed card's Accept and Reject bring whose they are into sight with them */
-.ag-view .ag-others [data-agans], .ag-view .ag-others [data-ans] { scroll-margin-top: 26px; }
-.ag-view .ag-others .ag-prop-btns[data-who]::before, .ag-view .ag-others .bt-prop-btns[data-who]::before {
-  content: attr(data-who); flex: 0 0 100%; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  font: 600 11.5px/1.4 var(--ag-sans); color: var(--ag-soft); }
-.ag-view .ag-others .ag-prop-msg, .ag-view .ag-others .bt-prop-msg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ag-view .ag-others .mono { font-family: var(--ag-mono); }
-/* with the tab open the copilot keys answer the shown agent's proposals only (docs/AGENT_TAB.md, lead's default 3): the other
-   proposals here are answered with their own buttons, so their key caps are not shown */
-.ag-view .ag-others .bt-keycap { display: none; }
-.ag-view .ag-others .bt-prop .pos { color: var(--ws-buy, var(--ag-buy)); } .ag-view .ag-others .bt-prop .neg { color: var(--ws-sell, var(--ag-sell)); }
+/* While the Agent tab is shown (live/agent.js hideBox, placeNotes): the corner proposals (the Bot tab's corner, with the bot's
+   proposals, or the window's own) are hidden, and always in the pop-out; the tab counts them under its proposal instead. The
+   corner notices stack in the chart's lower left above its time axis, and the workspace's ChartBridge line lies across the
+   chart's top. Nothing of them covers a control, the proposal's Accept or Reject, the stream or the footer, at any size. */
+.bt-props.ag-hide, .ag-props.ag-hide { display: none !important; }
 .ag-view .ag-over { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
 .ag-view .ag-over > .ag-notes, .ag-view .ag-over > .bt-notes { position: absolute; left: 10px; bottom: 34px; width: min(380px, calc(100% - 90px)); max-height: calc(100% - 44px); overflow: hidden; z-index: auto; }
 .ag-view .ag-over > .ws-alerts { position: absolute; left: 8px; right: 8px; top: 6px; padding: 0; pointer-events: auto; max-height: calc(100% - 50px); overflow: auto; }
@@ -495,9 +476,7 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
   .ag-view .ag-centre { grid-row: 2; grid-column: 1 / -1; }
   .ag-view .ag-chartpanel { min-height: 380px; }
   .ag-view .ag-left { max-height: 640px; }
-  /* the proposal panel grows with what is open (the agent's own, the other agents' and the bot's): the column grows with it,
-     so nothing of it runs under the footer; the stream keeps its own height and scrolls */
-  .ag-view .ag-proppanel { max-height: none; }
+  /* the stream keeps its own height and scrolls */
   .ag-view .ag-feedwrap { flex: none; min-height: 320px; }
   .ag-view .ag-feed { max-height: 460px; }
 }

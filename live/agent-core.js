@@ -814,14 +814,17 @@ const KEY_SAY = {
  * The workspace's hotkeys fire one cancelable `chart-copilot-key` event (detail.answer 'accept' or 'reject'). The Bot tab
  * and the Agent tab each give the router their open proposals (an answered one waiting for ChartBridge included: it stays
  * the key's target, so a second press can only find it again). Which one a key answers (lead's default, the review's S1):
- *   - The Agent tab open: only the shown agent's proposals, the oldest of those not in its last 5 s.
+ *   - The Agent tab open: only the shown agent's proposals, the oldest of those not in its last 5 s. The bot's and the other
+ *     agents' are not shown on the tab (only counted, under the proposal), so no key answers them there; with no agent shown
+ *     (the tab's "no agents" card) no key answers anything.
  *   - Elsewhere, no agent proposal open: the bot's oldest, exactly as 1.16.0 (no other rule touches it).
  *   - Elsewhere, an agent proposal open: exactly one proposal open (the bot's and every agent's) is answered; more than one,
  *     none is, and the page says "More than one proposal is open: click the one you mean".
  *   And for every key answer but the bot's own 1.16.0 path: the keys rest 1 s after an answer, a proposal must have been on
  *   screen 1 s, and one in its last 5 s (or with no expiry) is never answered by a key.
  * Sources: add(name, { kind ('bot' or 'agents'; 'bot' for the name 'bot'), open: () => [{ id, agent, shownAt, answered,
- * expiresAt, name, answer: ans => bool }], focus: () => the agent shown in the Agent tab, or '' }) -> remove().
+ * expiresAt, name, answer: ans => bool }], focus: () => the agent shown in the Agent tab, true while the tab is open with no agent shown, or '' })
+ * -> remove().
  * decide(ans) is { act: 'answer', entry } or { act: 'say', text } or { act: 'none' } (nothing open: the event is left alone,
  * so the workspace says "no copilot proposal to answer here"); handle(ans) acts on it and returns it.
  */
@@ -839,7 +842,7 @@ function createCopilotRouter(clock) {
       let list = [];
       try { list = s.src && typeof s.src.open === 'function' ? s.src.open() || [] : []; } catch (e) { list = []; }
       for (const x of list) if (x && isNum(x.shownAt) && typeof x.answer === 'function') (s.kind === 'bot' ? bot : agents).push(Object.assign({ source: s.name, kind: s.kind }, x));
-      if (s.kind !== 'bot' && s.src && typeof s.src.focus === 'function') focus = s.src.focus() || focus;
+      if (s.kind !== 'bot' && s.src && typeof s.src.focus === 'function') focus = s.src.focus() || focus;   // an agent's id, or true
     }
     const byAge = (a, b) => a.shownAt - b.shownAt;
     bot.sort(byAge); agents.sort(byAge);
@@ -849,9 +852,9 @@ function createCopilotRouter(clock) {
       if (x.kind !== 'bot' && late(x, t)) return { act: 'say', text: KEY_SAY.late };
       return { act: 'answer', entry: x };
     };
-    if (focus) {                                       // the Agent tab is open: its agent's proposals only
-      const mine = agents.filter(x => x.agent === focus);
-      if (!mine.length) return bot.length || agents.length ? { act: 'say', text: 'With the Agent tab open the keys answer only ' + focus + '\'s proposals: click the one you mean' } : { act: 'none' };
+    if (focus) {                                       // the Agent tab is open: its agent's proposals only (none with no agent shown)
+      const mine = focus === true ? [] : agents.filter(x => x.agent === focus);
+      if (!mine.length) return bot.length || agents.length ? { act: 'say', text: 'With the Agent tab open the keys answer only ' + (focus === true ? 'the shown agent' : focus) + '\'s proposals: open the Bot tab or that agent for the others' } : { act: 'none' };
       return gate(mine.find(x => !late(x, t)) || mine[0]);
     }
     if (!agents.length) return bot.length ? { act: 'answer', entry: bot[0] } : { act: 'none' };   // the bot alone: 1.16.0

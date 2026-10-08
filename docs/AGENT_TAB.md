@@ -155,30 +155,24 @@ decision in a drawer over the right column, outlined in that decision's colour:
   account and its mark, a live countdown to `expiresAt`, Accept (cyan) and Reject (purple), with The Desk's keys on them.
   Accept and Reject never scroll out of sight: they stay at the foot of the proposal's box while its words scroll, with
   ChartBridge's words for that proposal right above them in the same foot (a refusal, "Under 5 s left", "Accept sent.
-  Waiting for ChartBridge."; a card keeps that one line even while it is empty, so a word coming makes it no taller). In
-  the same panel and the page's flow, every other open proposal too: another agent's and the bot's, each under its own name,
-  answered with its own buttons (their key caps are not shown there: with the tab open the keys answer the shown agent
-  only). Nothing covers any of them, at any size, in the workspace and in the pop-out.
-  **The shown agent's proposal is always first and in sight, and no Accept or Reject ever moves under the pointer** (after
-  the re-reviews of a4fa9d9 and 60e9ddd). The shown agent's own proposal has a slot of a fixed height at the panel's top
-  (`clamp(190px, 30vh, 380px)`: at 1366 x 768 230 px, which still shows its head and its Accept and Reject), reserved
-  whenever the tab is shown, with "None open" in it at the same height when it is
-  empty; its words scroll inside the slot and its Accept and Reject stay at the slot's foot, in the window without scrolling
-  at 1000 x 800, 1366 x 768 and 1920 x 1080 (on a phone, in the panel's first screen), whatever else is open. Its proposal
-  arriving, ending or going moves nothing. Under the slot, another agent's and the bot's proposals are one list in the order
-  they arrived: a card that arrives goes at the end; a card that ends and leaves while an open card comes after it leaves a
-  placeholder of its exact height until nothing open follows (the bot's cards too: the tab watches the Bot tab's corner);
-  the browser's scroll anchoring is off in the tab, and a card leaving the end of a box scrolled to its end leaves a
-  placeholder too (the box would be pulled back). A placeholder also goes once the pointer has been off the proposal panel
-  for 1 s (the cards after it move up then, with nothing under the pointer). When the panel is at its height (all but
-  128 px of the column, so the stream keeps its own) that list scrolls: at 1366 x 768 it has about 135 px, enough for a
-  card's header with its Accept and Reject. Each listed card's foot (its words in one line, the full text in its title;
-  whose it is in one line, "Second Demo Agent · Buy 1 MNQ"; Accept and Reject) stays at the foot of the list while the card
-  scrolls, and scrolling to a listed Accept or Reject brings that line with it. When the list is scrolled so a card's foot
-  is cut at the list's top, a one-line head pinned there names whose it is (worked out on scroll, never per frame) and
-  blocks presses on what it covers. So a listed Accept never shows without whose it is. Switching the agent shown is deliberate: the slot and the list may change then.
-  The list is written only when it changed, so a button keeps its focus and a press held across an agent message still
-  clicks.
+  Waiting for ChartBridge."; a card keeps that one line even while it is empty, so a word coming makes it no taller).
+  **Only the shown agent's proposal is a card on the tab** (Anthony, 2026-10-08). It has a slot of a fixed height at the
+  panel's top (`clamp(190px, 30vh, 380px)`: at 1366 x 768 230 px, which still shows its head and its Accept and Reject),
+  reserved whenever the tab is shown, with "None open" in it at the same height when it is empty; its words scroll inside
+  the slot and its Accept and Reject stay at the slot's foot, in the window without scrolling at 1000 x 800, 1366 x 768,
+  1600 x 900, 1920 x 1080 (on a phone, 390 x 844, in the panel's first screen). Its proposal arriving, ending or going
+  moves nothing. Nothing covers its Accept and Reject, at any size, in the workspace and in the pop-out.
+  Under the slot, one line of a fixed height (30 px) counts the proposals open elsewhere, by whose: "Bot: 1 proposal ·
+  Second Demo Agent: 1" (the agents by their display names). Each name is a link: the bot's opens the Bot tab, where its
+  proposals are answered with their Accept and Reject as before; an agent's shows that agent in this tab (as the picker
+  does), its proposal then in the slot. With none open the line keeps its height and says "No other proposals". It has no
+  Accept or Reject, never changes height, and a count that rises is marked at once and stays still for 8 s (R3: nothing
+  in it moves or fades). The bot's and the other agents' proposals are never cards on the tab: no list, no corner, no
+  placeholders; the corner (the Bot tab's, with the bot's proposals, or the window's own) is hidden while the tab is shown,
+  and always in the pop-out. So the others arriving and leaving move nothing on the tab. Switching the agent shown is
+  deliberate: the slot changes then.
+  The slot is written only when its cards changed, so a button keeps its focus and a press held across an agent message
+  still clicks.
 - **Right, his stream:** notes (look, thinking, lesson, notebook, status), plans (with their result: shadow, waiting for
   you, accepted in 1.3 s, rejected, expired, refused and why, skipped), and his fills and exits today, newest first, with
   filters (All, Plans, Notes, Thinking, Lessons). Each row opens the drawer above.
@@ -186,7 +180,8 @@ decision in a drawer over the right column, outlined in that decision's colour:
   (of the limit when the rules set one), his session as a light trail from the rules' `entryFrom` to `flatAt` (09:45 to
   15:55 by default) with now and his fills (F) and exits (X, green or red by result).
 - **Corner:** with the Agent tab closed, a proposal of any agent pops up in the corner wherever Anthony is (the Bot tab's
-  corner, so the two never overlap); while the tab is shown that corner is part of its proposal panel (above). Notices for
+  corner, so the two never overlap), with the bot's as before; while the tab is shown that corner is hidden and the tab
+  counts what is in it (above). Notices for
   an entry, an exit, a stand-down, the heartbeat, the kill switch, the mode, the account and how a proposal ended. While
   the Agent tab is shown the notices cover none of it: they stack over the chart's lower left, above its time axis (over
   the oldest bars), never over the controls, the rules, a proposal, the stream or the footer. The workspace's ChartBridge
@@ -245,8 +240,11 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
    press (`AgentCore.killOnRepeat`): a double click sends `agentKill` on once, and never arms the release.
 3. **One copilot key (lead's default, after the review of 19e9ef0):** the `chart-copilot-key` event has one handler for the
    bot and every agent (`AgentCore.copilotRouter`). Which proposal a key answers:
-   - With the Agent tab open: only the shown agent's proposals, the oldest of those (any other proposal is answered with
-     its own buttons). With none of that agent's open, the key answers nothing and says so.
+   - With the Agent tab open: only the shown agent's proposals, the oldest of those. No key ever answers the bot's or
+     another agent's there (they are not shown on the tab, only counted: open the Bot tab or that agent to answer them).
+     With none of that agent's open, or the tab on its "no agents" card, the key answers nothing and says so. The Bot
+     tab's own keys are the same keys through the same router: while the Agent tab is shown (the bot's corner hidden)
+     they answer no bot proposal; on the Bot tab (its corner shown) they work as 1.16.0.
    - Anywhere else, with no agent proposal open: the bot's oldest, exactly as 1.16.0 (no rule below touches it).
    - Anywhere else, with an agent proposal open: when exactly one proposal is open across the bot and every agent, that
      one; when more than one is, none, and the workspace's line says "More than one proposal is open: click the one you
@@ -259,10 +257,11 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
 4. **The copilot keys for agents (lead's default):** Accept and Reject keys work and show in Settings while the bot switch
    is on or ChartBridge has told of an agent. The Desk's hotkeys are still read only while a switch needs The Desk, as in
    1.16.0.
-5. **Where a proposal shows (lead's default):** in the tab's proposal panel for the agent shown there, in its fixed slot at
-   the top; while the tab is shown, every other agent's and the bot's under it in the same panel (the corner moved into the
-   panel, in the page's flow), in the order they arrived (a card arriving never pushes another down: the re-review of
-   a4fa9d9); in the corner whenever the tab is closed. `agentSeen` goes once, the moment it shows in a window Anthony can see (a
+5. **Where a proposal shows (Anthony, 2026-10-08):** in the tab's proposal panel for the agent shown there, in its fixed
+   slot at the top; while the tab is shown the bot's and every other agent's are only counted, in one line under the slot
+   (each name a link to the Bot tab or to that agent), and the corner is hidden; on the Bot tab the bot's show with Accept
+   and Reject as before; in the corner whenever the tab is closed. `agentSeen` goes once, the moment it shows in a window
+   Anthony can see (a
    hidden window sends it when it comes to the front), as `botSeen`.
 6. **Accept in the last 5 s (lead's default):** ChartBridge refuses an accept with under 5 s left as expired, so the page
    closes Accept then and says why; Reject still goes. The countdown runs on this PC's clock against ChartBridge's
@@ -457,27 +456,28 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
   Screenshots at 1440 x 1000: `agent-f-watching`, `agent-f-plan`, `agent-f-profit`, `agent-f-under`, `agent-f-drawer`,
   `agent-f-notices`.
   `npm run smoke:bot` is unchanged and passes with the Agent tab beside it.
-- `npm run smoke:agent-targets` (run by `smoke:agent` too; written after the review of fc3101a, and it fails on fc3101a):
-  with the shown agent's proposal open while the second agent AND the bot have proposals open, `document.elementFromPoint`
-  at the centre and the four corners of the tab's Accept and Reject finds the button itself at 1366 x 768, 1600 x 900,
-  1440 x 1000, 1920 x 1080 and 390 x 844, and the other proposals are in the panel under their own names with their own
-  buttons reachable; with four notices showing at 1366, 1000 and 390 px wide, no Accept or Reject is under one; the focus
-  stays on Reject over several renders, 20 ordinary clicks all arrive, a press held 1.4 s across a render still clicks; a
-  new proposal right after an ended one never moves; the ChartBridge line coming and going moves no Accept; "Under 5 s
-  left" and a long refusal are in sight right above Accept; a double click on the kill switch sends `agentKill` once; the
-  pop-out the same at 1366 x 768, 1920 x 1080 and 390 x 844. Across the whole panel (added after the re-review of a4fa9d9,
-  and it fails on a4fa9d9): at 1000 x 800, 1366 x 768 and 1920 x 1080, while the bot, the second agent and the shown agent
-  have proposals open, a proposal arriving (the bot's, the second agent's, the shown agent's), the list's top card answered
-  and gone, and the shown agent's card answered and gone each leave every other open card's Accept and Reject exactly where
-  they were, and each one's old point still finds the same card's same button, or no live button. The shown agent's card
-  (added after the re-review of 60e9ddd): at 1000 x 800, 1366 x 768, 1920 x 1080 and 390 x 844, with the bot (two
-  proposals), the second agent and the shown agent all proposing, it is the panel's first card and its Accept and Reject
-  are in the window with nothing scrolled (on the phone, in the panel's first screen) and hit-test to themselves. The list
-  (added after the re-check of 7bca487): at 1366 x 768 with nothing scrolled a listed card shows its header, Accept and
-  Reject; at 1366 x 768 and 1600 x 900 each listed card's Accept, scrolled to, shows with whose it is right above it, and with
-  the list scrolled from top to end in 6 px steps every listed Accept in sight shows whose it is (its line or the head). At
-  1000 x 800, 800 x 900 and 390 x 844, with the tab at its top, ChartBridge's error line is in the window, covers no Accept
-  or Reject and moves the shown agent's Accept by nothing. Screenshots `agent-targets-1366`, `-390`, `-popout`.
+- `npm run smoke:agent-targets` (run by `smoke:agent` too; written after the review of fc3101a, rewritten for the count line
+  of 2026-10-08): with the shown agent's proposal open while the second agent AND the bot have proposals open, no other
+  Accept or Reject is anywhere on the page, the corner is hidden, and the line says "Bot: 1 proposal · Second Demo Agent:
+  1" at 30 px; `document.elementFromPoint` at the centre and the four corners of the tab's Accept and Reject finds the
+  button itself, in the window with nothing scrolled (on the phone, in the panel's first screen), at 1000 x 800, 1366 x 768,
+  1600 x 900, 1440 x 1000, 1920 x 1080 and 390 x 844; the line has no transition or animation; with four notices showing at
+  1366, 1000 and 390 px wide, no Accept or Reject is under one; the focus stays on Reject over several renders, 20 ordinary
+  clicks all arrive, a press held 1.4 s across a render still clicks; a new proposal right after an ended one never moves;
+  the ChartBridge line coming and going moves no Accept; "Under 5 s left" and a long refusal are in sight right above
+  Accept; a double click on the kill switch sends `agentKill` once. At 1000 x 800, 1366 x 768, 1920 x 1080 and 390 x 844
+  the bot's and the second agent's proposals arrive and leave one by one ("No other proposals", "Bot: 1 proposal", ...,
+  "Bot: 2 proposals · Second Demo Agent: 1", and back): each time the line says the right counts at 30 px, marks a risen
+  count, and nothing on the tab moves (the shown agent's Accept and Reject, the slot, the line, the stream, the chart, the
+  footer, the left column). The line's links: the second agent's name shows it in the tab (its proposal in the slot, the
+  line then counting the first agent's), the first agent's brings it back, and the bot's opens the Bot tab, where the bot's
+  proposal is in its corner with its Accept and Reject the buttons themselves. The keys: with the tab open and none of the
+  shown agent's open, Accept and Reject keys answer nothing (the bot's and the second agent's are hidden) and say so; with
+  one of its own open, the Reject key answers that one and nothing else. At 1000 x 800, 800 x 900 and 390 x 844, with the
+  tab at its top, ChartBridge's error line is in the window, covers no Accept or Reject and moves the shown agent's Accept
+  by nothing. The pop-out at 1366 x 768, 1920 x 1080 and 390 x 844: its agent's Accept and Reject in the window and
+  themselves, no other Accept or Reject, the line counting the second agent's; its link shows the second agent there.
+  Screenshots `agent-targets-1366`, `-390`, `-popout`.
 - `npm run perf:agent` (R5, `test/perf-agent.mjs`, not part of `npm test`): the Agent tab in a trade at 1920 x 1080 while
   MNQ trades a busy tape (`--live-rate=200`), Motion Full and Motion Off taking turns. Gates: a chart's frame p95 under 4 ms
   and all charts per frame under 8 ms (the chart's own), the light on the chart and the footer with Full and none with

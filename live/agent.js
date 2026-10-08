@@ -81,7 +81,8 @@ function create(o) {
   function build() {
     view.classList.add('ag-view');
     view.innerHTML =
-      '<div class="ag-off" data-k="off" hidden><div class="ag-off-card"><span class="ag-ttl">Agents</span><p data-k="offText"></p></div></div>' +
+      '<div class="ag-off" data-k="off" hidden><div class="ag-off-card"><span class="ag-ttl">Agents</span><p data-k="offText"></p>' +
+        '<div class="ag-others" data-k="others" data-where="off" aria-label="Proposals open elsewhere"></div></div></div>' +
       /* narrower than 1100 px: ChartBridge's line and the notices, pinned at the top in a band of their own (agent.css) */
       '<div class="ag-tray" data-k="tray" aria-label="ChartBridge and notices"></div>' +
       '<div class="ag-main" data-k="main" hidden>' +
@@ -154,12 +155,13 @@ function create(o) {
           '<div class="ag-chart" data-k="chart" data-no-motion><div class="ag-over" data-k="over"></div></div>' +
         '</div>' +
       '</section>' +
-      /* right: the proposal, then his stream; his decision's drawer slides over both */
+      /* right: the proposal (the shown agent's own, in its slot; the others only counted, in one line under it), then his
+         stream; his decision's drawer slides over both */
       '<aside class="ag-col ag-right" aria-label="Proposals and his stream">' +
         '<div class="ag-panel ag-proppanel" data-panel="prop" data-no-motion>' + LIGHT_HTML +
           '<div class="ag-sechead"><span class="ag-k2">Proposal · copilot</span><span class="ag-lbl" data-k="propCount"></span></div>' +
           '<div class="ag-slot" data-k="slot"><div class="ag-plist" data-k="plist"></div><p class="ag-empty" data-k="pempty">None open</p></div>' +
-          '<div class="ag-pbody"><div class="ag-listhead" data-k="listhead" aria-hidden="true"></div><div class="ag-others" data-k="others"></div></div></div>' +
+          '<div class="ag-others" data-k="others" aria-label="Other proposals open"></div></div>' +
         '<div class="ag-panel ag-feedwrap" data-panel="stream">' + LIGHT_HTML +
           '<div class="ag-loghead"><span class="ag-k2">His stream</span><span class="ag-lbl" data-k="feedCount"></span></div>' +
           '<div class="ag-filters" role="tablist" data-k="filters">' + FILTERS.map(f => '<button type="button" role="tab" data-filter="' + f[0] + '" aria-selected="false">' + f[1] + '</button>').join('') + '</div>' +
@@ -187,6 +189,7 @@ function create(o) {
     S.signedIn = false; S.trading = null; S.orders.clear(); ledger.clear(); unclaimed.clear();
     agents.clear(); feed.clear();
     for (const p of props.clear()) { const x = cards.get(keyOf(p.agent, p.id)); if (x) removeCard(x); }
+    botProps.clear();
     S.pending.clear();
     render();
   }
@@ -200,7 +203,8 @@ function create(o) {
         render(); return;
       case 'trading': S.trading = m; S.signedIn = !!m.enabled; render(); return;
       case 'accounts': S.accounts = m; renderPanel(); renderLive(); return;
-      case 'bot': S.bot = m; adoptBotCards(); return;   // its name on its listed cards
+      case 'bot': S.bot = m; return;
+      case 'botProposal': botProps.update(m); renderOthers(); return;   // counted under the proposal while the tab is shown
       case 'copier': S.copier = m; return;
       case 'agent': onAgent(m); return;
       case 'agentProposal': onProposal(m); return;
@@ -235,7 +239,7 @@ function create(o) {
   }
   function choose(id, quiet) {
     if (S.chosen === id) return;
-    S.chosen = id; S.rulesEdit = false; S.acctEdit = false; S.acctAsk = ''; S.killConfirm = 0; S.autoConfirm = 0; S.drawer = ''; S.lightSig = '';
+    S.chosen = id; S.othersQuiet = true; S.rulesEdit = false; S.acctEdit = false; S.acctAsk = ''; S.killConfirm = 0; S.autoConfirm = 0; S.drawer = ''; S.lightSig = '';
     for (const k of ['rulesWhy', 'acctWhy']) put(q('[data-k="' + k + '"]'), 'textContent', '');
     writeJson(KEYS.chosen, id);
     placeCards();
@@ -288,13 +292,14 @@ function create(o) {
 
   /* ---------------- proposals: in the tab for the agent shown, in the corner everywhere else */
   const cards = new Map();                     // agent|id -> { inline, corner, p, shownAt, ended }
+  const botProps = BC.createProposals();       // the bot's, only to count them under the proposal (live/bot.js shows and answers them)
   const keyOf = (a, id) => a + '|' + id;
   function onProposal(p) {
     const r = props.update(p);
     if (r.act === 'show') { showProposal(r.p); renderChartLines(); }
     else if (r.act === 'update') { const x = cards.get(keyOf(p.agent, p.id)); if (x) x.p = p; else showProposal(p); }
     else if (r.act === 'end') endProposal(r.p, r.why);
-    renderPanel(); renderFeed(); renderLive();
+    renderPanel(); renderFeed(); renderLive(); renderOthers();
   }
   const sideWord = s => (s === 'buy' ? 'Buy' : s === 'sell' ? 'Sell' : '');
   const tickOf = r => { const i = S.instruments[r]; return i && +i.tick > 0 ? +i.tick : 0.25; };
@@ -324,11 +329,8 @@ function create(o) {
       /* the foot: ChartBridge's words (a refusal, the last 5 s, "Waiting for ChartBridge") right above Accept and Reject, so both
          stay in sight together while the proposal's words scroll (the foot is sticky in the tab) */
       '<div class="ag-prop-foot"><div class="ag-prop-msg" data-k="msg" role="status"></div>' +
-      '<div class="ag-prop-btns" data-who="' + esc(whoText(p)) + '"><button type="button" class="ag-acc" data-agans="accept" data-no-motion>Accept' + kc(S.keys.accept) + '</button><button type="button" class="ag-rej" data-agans="reject" data-no-motion>Reject' + kc(S.keys.reject) + '</button></div></div>';
+      '<div class="ag-prop-btns"><button type="button" class="ag-acc" data-agans="accept" data-no-motion>Accept' + kc(S.keys.accept) + '</button><button type="button" class="ag-rej" data-agans="reject" data-no-motion>Reject' + kc(S.keys.reject) + '</button></div></div>';
   }
-  /* whose proposal, in one line: shown right above a listed card's Accept and Reject, which stay at its foot while it scrolls,
-     so they never show without it (the re-check of 7bca487) */
-  const whoText = p => AC.agentName(agents.get(p.agent) || { agent: p.agent }) + ' · ' + sideWord(p.side) + ' ' + p.qty + ' ' + p.root;
   function makeCard(p, where) {
     const el = document.createElement('div');
     el.className = 'ag-prop ' + where;
@@ -342,12 +344,8 @@ function create(o) {
   function showProposal(p) {
     const k = keyOf(p.agent, p.id);
     if (cards.has(k)) return;
-    const x = { inline: makeCard(p, 'inline'), corner: makeCard(p, 'corner'), p, shownAt: Date.now(), ended: false, seq: ++cardSeq };
-    for (const el of [x.inline, x.corner]) el.style.setProperty('--ag-order', x.seq);
-    /* what ended and has nothing open after it goes now (the new card takes its place at the end of the panel); outside the
-       tab, the same agent's ended cards with no open card of it after them */
-    if (panelOn()) { clearTrailing(); for (const y of [...cards.values()]) if (y.p.agent === p.agent && y.ended) removeCard(y, true); }
-    else for (const y of [...cards.values()]) if (y.p.agent === p.agent && y.ended && ![...cards.values()].some(z => z.p.agent === y.p.agent && z.seq > y.seq && !z.ended)) removeCard(y);
+    const x = { inline: makeCard(p, 'inline'), corner: makeCard(p, 'corner'), p, shownAt: Date.now(), ended: false };
+    for (const y of [...cards.values()]) if (y.p.agent === p.agent && y.ended) removeCard(y);   // its agent's ended ones make way
     cards.set(k, x);
     propBox.prepend(x.corner);
     placeCards();
@@ -355,89 +353,15 @@ function create(o) {
     seenNow();
     tick();
   }
-  /* Each card in its place: the agent shown in the tab has its proposals in the tab (no corner card); every other one is in
-     the corner. While the tab is shown the corner itself (the Bot tab's, with the bot's proposals, or this window's own) is
-     part of the proposal panel, in the page's flow (placeBox), each proposal under its own name: nothing covers the tab's
-     Accept and Reject at any size. The list is written only when it or its order changed: a button taken out of the page
-     loses its focus and a press held on it (review of fc3101a).
-     No Accept or Reject ever moves under the pointer (reviews of a4fa9d9 and 60e9ddd). The shown agent's own proposal is
-     first, in a slot of a fixed height at the panel's top (agent.css): reserved whenever the tab is shown, "None open" in it
-     when it is empty, so its arrival, ending and going move nothing, and its Accept and Reject are always in sight. Under it,
-     another agent's and the bot's proposals show in the order they arrived (--ag-order): a card that arrives goes at the
-     end, and a card that ends and leaves while an open card comes after it leaves a placeholder of its exact height
-     (.ag-ghost) until nothing open comes after it; the bot's cards (live/bot.js removes them) the same, watched here. */
-  let cardSeq = 0;
-  const ghosts = new Set(), sizes = new WeakMap();
-  const panelOn = () => !!(view && propBox.classList.contains('ag-in-tab'));
-  const orderOf = el => +el.style.getPropertyValue('--ag-order') || 0;
-  const mineNow = () => [...cards.values()].filter(x => x.p.agent === S.chosen).sort((a, b) => a.seq - b.seq);
-  /* the list's cards as they show (the corner's cards not hidden, the bot's not cleared), each with its order; the shown
-     agent's own are in the slot above it, which keeps its height */
-  function panelCards() {
-    const out = [];
-    for (const el of propBox.children) if (!el.hidden && !el.classList.contains('ag-gone') && el.getClientRects().length) out.push(el);
-    return out;
-  }
-  const liveCard = el => !el.classList.contains('ag-ended') && !el.classList.contains('bt-ended');
-  const openAfterOrder = n => panelCards().some(el => liveCard(el) && orderOf(el) > n);
-  /* the boxes that scroll the panel (the proposal box, and narrower than 1100 px the whole tab): taking `height` away from the
-     end would pull one that is scrolled to its end back (the browser clamps it), moving every card above */
-  const wouldClamp = height => [q('.ag-pbody'), q('[data-k="main"]')].some(b => b && b.scrollTop > 0 && b.scrollTop + b.clientHeight > b.scrollHeight - height - 1);
-  /* a placeholder of a leaving card's exact height, in its place, while an open card comes after it, or while taking it away
-     would pull a scrolled box back */
-  function ghostFor(order, height) {
-    if (!panelOn() || !(height > 0) || pointerAway() || !(openAfterOrder(order) || wouldClamp(height))) return;
-    const g = document.createElement('div');
-    g.className = 'ag-ghost'; g.setAttribute('aria-hidden', 'true');
-    g.style.setProperty('--ag-order', order); g.style.height = height + 'px';
-    q('.ag-pbody').appendChild(g); ghosts.add(g);
-  }
-  /* placeholders go when nothing open comes after them (nothing open can move then), and also once the pointer has been off
-     the proposal panel for 1 s (the cards after them move up then, with nothing under the pointer to slide; the re-check of 7bca487:
-     at 1366 x 768 a placeholder kept the list's few lines empty) */
-  let pointerOnList = false, pointerLeftAt = 0;
-  const pointerAway = () => !pointerOnList && Date.now() - pointerLeftAt >= 1000;
-  function sweepGhosts() {
-    const away = pointerAway();
-    for (const g of [...ghosts]) if (!panelOn() || away || !(openAfterOrder(orderOf(g)) || wouldClamp(g.offsetHeight))) { g.remove(); ghosts.delete(g); }
-  }
-  if (view) {
-    const list = q('[data-panel="prop"]');                    // the whole proposal panel: the slot's buttons are a hand's width from the list
-    list.addEventListener('pointerenter', () => { pointerOnList = true; });
-    list.addEventListener('pointerleave', () => { pointerOnList = false; pointerLeftAt = Date.now(); setTimeout(sweepGhosts, 1050); });
-  }
-  /* before a card arrives: from the end of the panel, every placeholder and every ended card goes until an open one (the bot's
-     ended cards are hidden here: live/bot.js removes them on its own timer) */
-  function clearTrailing() {
-    const items = panelCards().concat([...ghosts]).sort((a, b) => orderOf(b) - orderOf(a));
-    for (const el of items) {
-      if (ghosts.has(el)) { el.remove(); ghosts.delete(el); continue; }
-      if (liveCard(el)) break;
-      if (el.classList.contains('bt-prop')) { el.classList.add('ag-gone'); continue; }
-      const x = cards.get(keyOf(el.dataset.agent, el.dataset.id)); if (x) removeCard(x, true);
-    }
-  }
-  /* the bot's cards in the panel: an order when they arrive, their height known, a placeholder when one leaves (live/bot.js
-     drops an ended card on its own timer) */
-  const sizeObs = typeof ResizeObserver === 'function' ? new ResizeObserver(es => { for (const e of es) sizes.set(e.target, e.target.getBoundingClientRect().height); }) : null;
-  function adoptBotCards() {
-    for (const el of propBox.children) {
-      if (!el.classList.contains('bt-prop')) continue;
-      if (!el.style.getPropertyValue('--ag-order')) { el.style.setProperty('--ag-order', ++cardSeq); if (sizeObs) sizeObs.observe(el); }
-      const big = el.querySelector('.bt-prop-big'), btns = el.querySelector('.bt-prop-btns'), msg = el.querySelector('[data-k="msg"]');
-      if (btns && big) attr(btns, 'data-who', ((S.bot && S.bot.name) || 'Bot') + ' · ' + big.textContent.trim().split(/\s+/).slice(0, 3).join(' '));
-      if (msg) attr(msg, 'title', msg.textContent || null);
-    }
-  }
-  const boxObs = typeof MutationObserver === 'function' ? new MutationObserver(recs => {
-    for (const r of recs) for (const el of r.removedNodes) if (el.nodeType === 1 && el.classList.contains('bt-prop')) {
-      if (el.classList.contains('bt-ended') && !el.classList.contains('ag-gone')) ghostFor(orderOf(el), sizes.get(el) || 0);
-      if (sizeObs) sizeObs.unobserve(el);
-    }
-    adoptBotCards(); sweepGhosts(); placeEmpty(); placeListHead();
-  }) : null;
-  if (boxObs) boxObs.observe(propBox, { childList: true, subtree: true });   // the bot's cards and their words (live/bot.js writes them)
-  adoptBotCards();
+  /* Each card in its place (Anthony, 2026-10-08): the agent shown in the tab has its proposals in the tab's slot, a box of a
+     fixed height at the top of the proposal panel, reserved whenever the tab is shown ("None open" in it when it is empty),
+     so its arrival, ending and going move nothing and its Accept and Reject are always in sight. No other proposal shows on
+     the tab as a card: the corner (the Bot tab's, with the bot's proposals, or this window's own) is hidden while the tab is
+     shown (hideBox), and one line of a fixed height under the slot counts what is open elsewhere, each name a link to the
+     tab where it is answered (renderOthers). Everywhere else the corner shows every proposal but the shown agent's while the
+     tab is shown. The slot is written only when its cards changed: a button taken out of the page loses its focus and a
+     press held on it (review of fc3101a). */
+  const mineNow = () => [...cards.values()].filter(x => x.p.agent === S.chosen);
   /* "None open" in the slot while the shown agent has nothing there (the slot keeps its height either way) */
   function placeEmpty() { put(q('[data-k="pempty"]'), 'hidden', !!q('[data-k="plist"] .ag-prop')); }
   function placeCards() {
@@ -448,16 +372,53 @@ function create(o) {
     for (const x of cards.values()) put(x.corner, 'hidden', inTab && x.p.agent === S.chosen);
     const n = mine.filter(x => !x.ended).length;
     put(q('[data-k="propCount"]'), 'textContent', n ? n + ' open' : '');
-    placeBox(); sweepGhosts(); placeEmpty(); placeListHead();
+    hideBox(); placeEmpty(); renderOthers();
   }
-  /* the corner: in the proposal panel while the tab is shown (its main part, not the "no agents" card), else the page's corner */
-  function placeBox() {
-    const slot = view ? q('[data-k="others"]') : null, main = view ? q('[data-k="main"]') : null;
-    const inTab = !!(S.shown && slot && main && !main.hidden);
-    const host = inTab ? slot : document.body;
-    if (propBox.parentElement !== host) host.appendChild(propBox);
-    tog(propBox, 'ag-in-tab', inTab);
-    if (!inTab) for (const g of [...ghosts]) { g.remove(); ghosts.delete(g); }
+  /* the corner, hidden while the tab is shown (always in the pop-out): no proposal but the shown agent's is a card on the tab */
+  function hideBox() { tog(propBox, 'ag-hide', !!(S.shown && view)); }
+  /* The line under the slot: how many proposals are open elsewhere, by whose ("Bot: 1 proposal · Second Demo: 2"), each name a
+     button to where they are answered (the Bot tab; another agent in this tab). It keeps its one line's height with nothing
+     open ("No other proposals"), has no Accept or Reject, and never moves: a count that rises is marked at once, still, for
+     8 s (R3: no motion). */
+  const UP_MS = 8000, upUntil = new Map(), lastCount = new Map();
+  let othersTimer = 0;
+  function otherCounts() {
+    const out = [], by = new Map();
+    if (BC.botSwitchOn(S.trading)) { const n = botProps.open().length; if (n) out.push({ key: 'bot', name: 'Bot', n }); }
+    for (const x of cards.values()) if (!x.ended && x.p.agent !== S.chosen) by.set(x.p.agent, (by.get(x.p.agent) || 0) + 1);
+    for (const id of [...agents.ids().filter(i => by.has(i)), ...[...by.keys()].filter(i => !agents.get(i))]) out.push({ key: 'agent:' + id, id, name: AC.agentName(agents.get(id) || { agent: id }), n: by.get(id) });
+    return out;
+  }
+  function renderOthers() {
+    if (!view) return;
+    clearTimeout(othersTimer); othersTimer = 0;
+    const now = Date.now(), list = otherCounts(), quiet = !!S.othersQuiet;
+    S.othersQuiet = false;
+    const seen = new Set(list.map(x => x.key));
+    for (const x of list) { if (!quiet && x.n > (lastCount.get(x.key) || 0)) upUntil.set(x.key, now + UP_MS); lastCount.set(x.key, x.n); }
+    for (const k of [...lastCount.keys()]) if (!seen.has(k)) { lastCount.delete(k); upUntil.delete(k); }
+    if (quiet) upUntil.clear();
+    const bot = typeof o.openBot === 'function';
+    const html = list.length ? list.map((x, i) => {
+      const up = (upUntil.get(x.key) || 0) > now, link = x.key === 'bot' && !bot;
+      const name = link ? '<span class="ag-oname" title="Answered on the Bot tab of the workspace">' + esc(x.name) + '</span>'
+        : '<button type="button" class="ag-olink" data-goto="' + esc(x.key) + '" title="' + (x.key === 'bot' ? 'Open the Bot tab: its proposals are answered there' : 'Show ' + esc(x.name) + ' in this tab: its proposals are answered here then') + '">' + esc(x.name) + '</button>';
+      return '<span class="ag-oitem' + (up ? ' up' : '') + '" data-key="' + esc(x.key) + '" data-n="' + x.n + '">' + name + ': <span class="mono">' + x.n + '</span>' + (i ? '' : x.n === 1 ? ' proposal' : ' proposals') + '</span>';
+    }).join('<span class="ag-osep" aria-hidden="true"> · </span>') : '<span class="ag-onone">No other proposals</span>';
+    for (const el of view.querySelectorAll('[data-k="others"]')) {
+      const had = el.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.goto : '';
+      setHtml(el, html);
+      put(el, 'hidden', el.dataset.where === 'off' && !list.length);   // the "no agents" card says it only when there is some
+      if (had) { const b = el.querySelector('[data-goto="' + CSS.escape(had) + '"]'); if (b && document.activeElement !== b) b.focus({ preventScroll: true }); }
+    }
+    const next = Math.min(...[...upUntil.values()].filter(t => t > now));
+    if (isFinite(next)) othersTimer = setTimeout(renderOthers, next - now + 20);
+  }
+  /* a name in the line: the Bot tab (the workspace's), or that agent shown in this tab */
+  function goTo(key) {
+    if (key === 'bot') { if (typeof o.openBot === 'function') o.openBot(); return; }
+    const id = key.slice(6);
+    if (key.startsWith('agent:') && agents.get(id)) { choose(id); unmountChart(); render(); }
   }
   /* agentSeen the moment it shows, in a window Anthony can see (as the Bot tab's botSeen) */
   function seenNow() {
@@ -471,7 +432,7 @@ function create(o) {
   }
   document.addEventListener('visibilitychange', seenNow);
   const both = (x, fn) => { fn(x.inline); fn(x.corner); };
-  function setMsg(x, t) { both(x, el => { const m = el.querySelector('[data-k="msg"]'); put(m, 'textContent', t); attr(m, 'title', t || null); }); }   // a listed card shows one line: the rest in its title
+  function setMsg(x, t) { both(x, el => put(el.querySelector('[data-k="msg"]'), 'textContent', t)); }
   function endProposal(p, why) {
     const x = cards.get(keyOf(p.agent, p.id)), a = agents.get(p.agent);
     const react = isNum(p.seenAt) && isNum(p.answeredAt) ? ' in ' + ((p.answeredAt - p.seenAt) / 1000).toFixed(1) + ' s' : '';
@@ -485,15 +446,9 @@ function create(o) {
     both(x, el => { el.classList.add('ag-ended'); for (const b of el.querySelectorAll('button')) b.disabled = true; });
     setMsg(x, text);
     setTimeout(() => dropProposal(p.agent, p.id), why === 'accepted' || why === 'rejected' ? 1500 : 3000);
-    sweepGhosts();                                             // a placeholder held for this one can go now
   }
-  /* an ended card's time is up: it goes, and leaves a placeholder of its height while an open card comes after it */
   function dropProposal(agent, id) { const x = cards.get(keyOf(agent, id)); if (x) removeCard(x); }
-  function removeCard(x, noGhost) {
-    if (!noGhost && x.ended && panelOn()) {
-      const el = [x.corner].find(e => e.isConnected && !e.hidden && e.getClientRects().length);
-      if (el) ghostFor(orderOf(el), el.getBoundingClientRect().height);
-    }
+  function removeCard(x) {
     x.inline.remove(); x.corner.remove(); cards.delete(keyOf(x.p.agent, x.p.id)); placeCards();
   }
   function onCardClick(e) {
@@ -537,11 +492,12 @@ function create(o) {
   /* one handler for the copilot key across the Bot tab and every agent (AgentCore.copilotRouter): the oldest open proposal */
   const ROUTER = AC.copilotRouter(document);
   /* the router's view of this tab: every proposal not ended (an answered one waiting for ChartBridge stays the key's target),
-     and the agent shown while the tab is open (the keys then answer its proposals only) */
+     and the agent shown while the tab is open: the keys then answer its proposals only, never the bot's or another agent's
+     (not shown on the tab); open on its "no agents" card (true), none at all */
   const unroute = ROUTER.add('agents', { kind: 'agents',
     open: () => [...cards.values()].filter(x => !x.ended).map(x => ({ id: x.p.agent + ':' + x.p.id, agent: x.p.agent, shownAt: x.shownAt, answered: !!props.answered(x.p.agent, x.p.id),
       expiresAt: x.p.expiresAt, answer: ans => answer(x.p.agent, x.p.id, ans) })),
-    focus: () => (S.shown && !popout && cur() ? S.chosen : '') });
+    focus: () => (S.shown && view ? (cur() ? S.chosen : true) : '') });
   function loadKeys() {
     if (typeof o.copilotKeys !== 'function') { S.keys = { accept: '', reject: '', notes: [], from: 'window' }; return; }
     const doc = o.copilotKeys();
@@ -801,21 +757,6 @@ function create(o) {
       tog(alertsEl, 'ag-in-tab', inTab);
     }
   }
-  /* the list's head: when the list is scrolled so a listed card's foot is cut at its top (its "whose" line out of sight, its
-     Accept and Reject still in sight under it), the head pinned at the top of the list says whose they are. Worked out when
-     the list scrolls or changes, never per frame. */
-  function placeListHead() {
-    const box = view ? q('.ag-pbody') : null, head = view ? q('[data-k="listhead"]') : null;
-    if (!box || !head) return;
-    const top = box.getBoundingClientRect().top, H = head.offsetHeight || 22;
-    let who = '';
-    for (const b of propBox.querySelectorAll('.ag-prop.corner:not([hidden]) .ag-prop-btns[data-who], .bt-prop:not(.ag-gone) .bt-prop-btns[data-who]')) {
-      const r = b.getBoundingClientRect();
-      if (r.height && r.top < top + H && r.bottom > top + 2) { who = b.dataset.who; break; }   // any of it in sight under its cut line
-    }
-    put(head, 'textContent', who); tog(head, 'on', !!who);
-  }
-  if (view) { q('.ag-pbody').addEventListener('scroll', placeListHead, { passive: true }); window.addEventListener('resize', placeListHead); }
   if (view && NARROW) { if (NARROW.addEventListener) NARROW.addEventListener('change', placeNotes); else if (NARROW.addListener) NARROW.addListener(placeNotes); }
   let resizeObs = null;
   if (view && typeof ResizeObserver === 'function') {
@@ -964,6 +905,8 @@ function create(o) {
   function onViewClick(e) {
     const t = e.target, a = cur();
     const mode = t.closest('[data-mode]'), act = t.closest('[data-act]'), flt = t.closest('[data-filter]'), row = t.closest('button[data-row]'), mo = t.closest('button[data-motion]');
+    const go = t.closest('button[data-goto]');
+    if (go) { goTo(go.dataset.goto); return; }
     if (flt) { S.feedFilter = flt.dataset.filter; writeJson(KEYS.feed, { filter: S.feedFilter }); renderFeed(); return; }
     if (row) { openDrawer(row.dataset.row); return; }
     if (mo) { S.motion = AC.setMotionPref(storage, mo.dataset.motion); renderMotion(); return; }
@@ -1141,10 +1084,11 @@ function create(o) {
     answer: (agent, id, ans) => answer(agent, id, ans),
     /* read only, for the tests and the console */
     state: () => ({ v3: S.v3, version: S.version, signedIn: S.signedIn, shown: S.shown, chosen: S.chosen, agents: agents.list().map(a => Object.assign({}, a)),
-      proposals: [...cards.values()].map(x => ({ agent: x.p.agent, id: x.p.id, ended: !!x.ended, corner: !x.corner.hidden })), offText: AC.offText(offCtx()),
+      proposals: [...cards.values()].map(x => ({ agent: x.p.agent, id: x.p.id, ended: !!x.ended, corner: !x.corner.hidden && !propBox.classList.contains('ag-hide') })),
+      others: otherCounts().map(x => ({ key: x.key, name: x.name, n: x.n })), offText: AC.offText(offCtx()),
       feed: S.chosen ? feed.counts(S.chosen) : { notes: 0, plans: 0 }, light: cur() ? lightNow(cur()) : null, drawer: S.drawer, motion: S.motion, chart: !!S.chart, chartRoot: S.chartRoot, orders: [...S.orders.values()].map(x => ({ id: x.id, by: x.by, role: x.role, root: x.root })), trips: trips() }),
     chart: () => (S.chart ? S.chart.chart : null),
-    destroy() { unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (boxObs) boxObs.disconnect(); if (sizeObs) sizeObs.disconnect(); for (const g of ghosts) g.remove(); S.shown = false; placeNotes(); placeBox(); propBox.removeEventListener('click', onCardClick); for (const x of cards.values()) x.corner.remove(); clearTimeout(timer); },
+    destroy() { unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); clearTimeout(othersTimer); S.shown = false; placeNotes(); hideBox(); propBox.removeEventListener('click', onCardClick); for (const x of cards.values()) x.corner.remove(); clearTimeout(timer); },
   };
   return api;
 }
