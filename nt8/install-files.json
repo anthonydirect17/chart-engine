@@ -52,6 +52,14 @@
     { "from": "live/fonts/IBMPlexSans-SemiBold.woff2", "to": "fonts/IBMPlexSans-SemiBold.woff2" },
     { "from": "live/fonts/IBMPlexSansCondensed-Medium.woff2", "to": "fonts/IBMPlexSansCondensed-Medium.woff2" },
     { "from": "live/fonts/IBMPlexSansCondensed-SemiBold.woff2", "to": "fonts/IBMPlexSansCondensed-SemiBold.woff2" },
-    { "from": "live/fonts/IBMPlexSansCondensed-Bold.woff2", "to": "fonts/IBMPlexSansCondensed-Bold.woff2" }
+    { "from": "live/fonts/IBMPlexSansCondensed-Bold.woff2", "to": "fonts/IBMPlexSansCondensed-Bold.woff2" },
+    { "from": "live/fonts/agent-fonts.css", "to": "fonts/agent-fonts.css" },
+    { "from": "live/fonts/OFL-agent.txt", "to": "fonts/OFL-agent.txt" },
+    { "from": "live/fonts/ChakraPetch-Regular.woff2", "to": "fonts/ChakraPetch-Regular.woff2" },
+    { "from": "live/fonts/ChakraPetch-Medium.woff2", "to": "fonts/ChakraPetch-Medium.woff2" },
+    { "from": "live/fonts/ChakraPetch-SemiBold.woff2", "to": "fonts/ChakraPetch-SemiBold.woff2" },
+    { "from": "live/fonts/ChakraPetch-Bold.woff2", "to": "fonts/ChakraPetch-Bold.woff2" },
+    { "from": "live/fonts/JetBrainsMono-Regular.woff2", "to": "fonts/JetBrainsMono-Regular.woff2" },
+    { "from": "live/fonts/JetBrainsMono-SemiBold.woff2", "to": "fonts/JetBrainsMono-SemiBold.woff2" }
   ]
 }
