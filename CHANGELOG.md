@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.18.0 (2026-10-08): the Account tab's Hide and Show; the ticket and ChartBridge 0.5.1's re-sent orders
+
+The page side of ChartBridge 0.5.1 (below). Page only, no recompile; with an older ChartBridge everything works as 1.17.0.
+
+- **Hide and Show on the Account tab.** Each account ChartBridge says may be hidden (flat, no working orders, not the bot's,
+  the copier's or an agent's) has a Hide button, Gone or not; it asks on the page first ("Hide EVAL-B? It leaves every list
+  until you Show it; its history stays."). Hidden accounts are listed under Hidden, each with a Show button that brings it
+  back unchecked. Show appears only with a ChartBridge that has it (0.5.1); with 0.5.0 a Gone account keeps its Archive as
+  before.
+- **The order ticket and re-sent orders.** ChartBridge 0.5.1 sends an order again, marked `again`, right after a snapshot
+  so the page always ends with the latest state. The ticket never shows a note for such a message (one "Filled", one
+  "Rejected"), and its notes compare each update with what the order last said in a message of its own, so a re-send that
+  arrives first never hides the note for NinjaTrader's own part fill or move.
+
 ## ChartBridge 0.5.1 (2026-10-08): the Account tab follows NinjaTrader's connected accounts; Hide and Show
 
 A new evaluation account no longer needs a `config.txt` edit and F5, and dead accounts are one click to remove.
@@ -25,7 +39,7 @@ A new evaluation account no longer needs a `config.txt` edit and F5, and dead ac
   the first second it sees it connected.
 - **No ghost or missing orders after sign-in.** An order or position change NinjaTrader reports while the page's order list
   is being built is sent again right after the list, so the page always ends with the latest state (before, a stop
-  cancelled at that moment could reappear on the page, or a new one be missing)). Those messages are marked `again`, and the page never shows them a
+  cancelled at that moment could reappear on the page, or a new one be missing). Those messages are marked `again`, and the page never shows them a
   second time (one fill note, one rejection note); its notes compare each update with what the order last said in a message
   of its own, so a re-send that arrives first never hides the note for NinjaTrader's own part fill or move.
 - **Tidy files.** Plain `off` records not seen connected for 30 days leave `accounts.txt` (logged); checked and archived ones
