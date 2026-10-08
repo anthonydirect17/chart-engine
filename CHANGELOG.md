@@ -1,5 +1,35 @@
 # Changelog
 
+## ChartBridge 0.5.0 (2026-10-08): the agent channel
+
+AI trading agents (the first is Manrae; any number may follow) trade through ChartBridge, inside per-agent rules ChartBridge
+enforces. AI is never in the order path: an agent sends plans, and ChartBridge places every order itself, from the plan's
+parameters. Contract v1 of 2026-10-08 and Anthony's rulings are in `nt8/PROTOCOL.md`, "Agent channel (`agents`, 0.5.0)", with
+every lead's default in its "as built" list. The chart's own version is unchanged (the Agent tab ships with the page).
+
+- **Off until named.** `agents = manrae` in `config.txt` (a comma list) turns the channel on for those ids; with no line,
+  `/agent/...` answers 404 and nothing changes. Each agent has its own secret, account, rules, day file and log next to
+  `config.txt`, its own mode (every start in shadow), heartbeat and kill switch: `nt8/ChartBridgeAgents.cs`, one object per id.
+- **Plans, checked in order.** A plan is refused at the first of twelve checks that fails (strict message, the account and the
+  files, the root and kind, the size, the risk in dollars, the expiry, the entry window, one at a time, the day's limits, the
+  owner lock, the price). Shadow shows it; copilot proposes it until the plan's own expiry; auto places it. Entries are limit
+  or stop-limit only, always with a stop and a target, never above the hard ceiling (minis 2, micros 20, a code constant).
+- **ChartBridge's own timers.** An unfilled entry is cancelled at its expiry and at the end of the entry window; at the flat
+  time ChartBridge cancels the agent's orders and closes its position at market, with the agent gone too, and says so loudly
+  until it is flat.
+- **The owner lock.** While an agent holds a position or a working entry on its account and root, entries from the page, the
+  bot, the copier and other agents are refused there; exits always pass (Flatten, cancels, moving a stop or target, an order
+  that only reduces). An agent never enters where anything else is held or working. One check, where every entry passes.
+- **Accounts never shared.** An agent never trades the bot's account, the copier's leader or a follower, or another agent's;
+  the bot and the copier refuse an agent's account. A clash from the files stands the agent down in plain words and leaves
+  the bot and the copier as they were.
+- **Fills to The Desk** carry `by` (`agent:<id>`, `bot` or `copier`) when ChartBridge knows who placed the order; nothing else
+  in the fill changes. v3 pages see `by: "agent:<id>"` on an agent's orders and legs.
+- **Tests.** `nt8/check/AgentHarness.cs` (inside `npm run check:orders`) runs every refusal and every timer; IntegrationHarness
+  X13 where the lanes meet; `test/fake-agent.mjs` is a made-up agent client with its test; `test/nt8-agents.test.js` guards the
+  source. The bot channel, the copier and every other lane behave as in 0.4.3 except where the contract requires (refusing an
+  agent's account, the owner lock, `by` on fills).
+
 ## ChartBridge 0.4.3 (2026-10-07): the copier never crosses zero, copies a fixed quantity, and can have no leader
 
 Found on WORK on Sim, test card section 5 (the copier), Anthony's copier test of 2026-10-07 15:01 ET:
