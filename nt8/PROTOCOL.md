@@ -2545,8 +2545,12 @@ Where the contract left a detail open, the safest simple choice was taken and is
   after 18:00 with a flatten that did not finish) is flattened at once, whatever the window says ("held a position from an
   earlier session (its 15:55 flatten did not finish): flattened by its rules"); the closed-market rule still applies. The
   roll keeps such a record as `carried<TAB><tag>` in the day file (a dropped stale record too, at a start), so a roll while
-  running followed by a restart still flattens it (the 0.5.2 re-review); the line goes when the agent is flat on its roots.
-  ChartBridge 0.5.1 does not know the line and treats the file as unreadable (no entries for that agent that run). It looks at the served contract and at any other contract month its own open trade holds (review A5: the trade
+  running followed by a restart still flattens it (the 0.5.2 re-review). Only that position counts: the agent's open trade
+  whose tag is carried, or (no trade record yet, after a start) a position under its own legs of a carried tag; a trade of
+  this session is never flattened because a carried line is still there. The line goes when the agent is flat on its roots,
+  on the next pass or at once when a plan's check 8 finds it flat. ChartBridge 0.5.1 does not know the line and treats the
+  day file as unreadable; it never rewrites a day file it cannot read, so it takes no entries for that agent on every run
+  until the file is deleted or 0.5.2 is back. It looks at the served contract and at any other contract month its own open trade holds (review A5: the trade
   follows its executions in any month of its roots). If the account is missing from NinjaTrader's list the job is kept, the
   pages get the NOT FLAT error every 10 s ("account not listed by NinjaTrader"), and the job goes on when the account is back,
   after 18:00 included (review A-S6).
