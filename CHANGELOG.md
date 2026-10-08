@@ -15,13 +15,22 @@ settings, on the Agent tab. `nt8/PROTOCOL.md`, "Agent channel", has the rules.
   The day's counters, stand-down and plan ids still start over at 18:00.
 - **Never into a closed market.** No agent entry while the market is closed: the 17:00 to 18:00 break, Friday 17:00 to Sunday
   18:00, a CME holiday, and after the 13:00 halt on an NYSE holiday or the 13:15 halt on an early close (ChartBridge's own
-  CME calendar). A position still held then is flattened at the next open, as before over a shut market.
+  CME calendar). A position still held then is flattened at the next open: the flatten sends nothing at all while the
+  market is closed, the calendar's holidays and halts included (no cancel, no market close into a halted market, even with
+  trades still printing; its stop and target stay), and goes on at the open.
+- **A position from an earlier session.** After a restart past 18:00, an agent position whose trade began in the session
+  before (its 15:55 flatten did not finish) is flattened at once by its rules, even inside an 18:00 window; never into a
+  closed market.
 - **An account change keeps the mode** (until 0.5.1 the agent went to Shadow). The page asks once before a LIVE account,
   naming the mode: "Agent manrae will trade LIVE account EVAL-A in Auto. Continue?"; the Bot tab's question names the bot's
-  mode the same way. Not confirmed, nothing changes. The rest is as it was: never the bot's, the copier's or another agent's
+  mode the same way. Not confirmed, nothing changes. ChartBridge keeps the mode only when `agentAccount` carries `keepMode`,
+  the mode the page's question named, and the agent is still in it; a page without `keepMode` (1.18.0 and older, whose
+  question says Shadow) or a mode changed meanwhile by another page puts the agent in Shadow, as before. The rest is as it was: never the bot's, the copier's or another agent's
   account, the owner lock, and no change while the agent has a position, a working entry or a proposal.
 - **The page (chart 1.18.1).** The Agent tab checks the rules the same way before sending, its session trail runs across
-  midnight (an hour mark every 3 hours on a long session), and it says the mode is kept after an account change. A rules file
+  midnight (an hour mark every 3 hours on a long session), and it sends `keepMode` only to ChartBridge 0.5.2 or later (0.5.1
+  refuses a key it does not know); to an older ChartBridge its LIVE question says the agent goes to Shadow, and after
+  sending it says which. A rules file
   with an 18:00 window is refused by ChartBridge 0.5.1 and older (no entries for that agent until its rules are set again):
   update ChartBridge before setting one.
 

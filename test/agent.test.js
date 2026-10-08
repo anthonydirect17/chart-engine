@@ -223,13 +223,33 @@ test('account chooser: tradable accounts, SIM first; never the bot\'s, the copie
   assert.match(AC.accountChange(a, 'SIM-AG1', ch, {}).error, /already/);
   assert.match(AC.accountChange(a, 'EVAL-B', ch, {}).error, /not tradable/);
   assert.match(AC.accountChange(a, '', ch, {}).error, /Choose/);
-  const live = AC.accountChange(a, 'EVAL-A', ch, {}, 'c3');
-  assert.deepEqual(live.msg, { type: 'agentAccount', cid: 'c3', agent: 'demo', account: 'EVAL-A' });
+  const live = AC.accountChange(a, 'EVAL-A', ch, { version: '0.5.2' }, 'c3');
+  assert.deepEqual(live.msg, { type: 'agentAccount', cid: 'c3', agent: 'demo', account: 'EVAL-A', keepMode: 'shadow' });
   assert.equal(live.live, true);
   assert.equal(live.confirm, 'Agent demo will trade LIVE account EVAL-A in Shadow (nothing is placed until you choose Copilot or Auto). Continue?');
-  /* ChartBridge 0.5.2 (Anthony 2026-10-08): an account change keeps the mode, so the question names it (review S5) */
-  assert.equal(AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, {}).confirm, 'Agent demo will trade LIVE account EVAL-A in Auto. Continue?', 'the question names the mode it keeps');
-  assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, {}).confirm, 'Agent demo will trade LIVE account EVAL-A in Copilot. Continue?');
+  /* ChartBridge 0.5.2 (Anthony 2026-10-08): an account change keeps the mode, so the question names it (review S5); the 0.5.2
+     review: the message names the mode the question showed (keepMode), and ChartBridge keeps it only if that is still the mode */
+  const v052 = { version: '0.5.2' };
+  assert.equal(AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, v052).confirm, 'Agent demo will trade LIVE account EVAL-A in Auto. Continue?', 'the question names the mode it keeps');
+  assert.equal(AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, v052).msg.keepMode, 'auto');
+  assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, v052).confirm, 'Agent demo will trade LIVE account EVAL-A in Copilot. Continue?');
+  assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, { version: 'fake-0.5.2' }).msg.keepMode, 'copilot', 'the fake\'s version text counts');
+  assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, { version: '0.6.0' }).msg.keepMode, 'copilot');
+  // the mismatch: the question named Auto; another page put the agent in Copilot since: keepMode says auto (ChartBridge then
+  // puts it in Shadow), never the mode the person did not see
+  const mis = AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, { version: '0.5.2', askedMode: 'auto' });
+  assert.equal(mis.msg.keepMode, 'auto');
+  assert.equal(mis.confirm, 'Agent demo will trade LIVE account EVAL-A in Auto. Continue?');
+  assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, { version: '0.5.2', askedMode: 'fast' }).msg.keepMode, 'copilot', 'not a mode: the agent\'s');
+  // version gating: 0.5.1 refuses a key it does not know and puts the agent in Shadow: no keepMode, and the question says Shadow
+  for (const version of ['0.5.1', '0.5.0', 'fake-0.5.0', '', undefined]) {
+    const old = AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, { version });
+    assert.ok(!('keepMode' in old.msg), 'no keepMode to ' + version);
+    assert.equal(old.mode, 'shadow');
+    assert.equal(old.confirm, 'Agent demo will trade LIVE account EVAL-A in Shadow (nothing is placed until you choose Copilot or Auto). This ChartBridge (before 0.5.2) puts it in Shadow when its account changes. Continue?');
+  }
+  assert.equal(AC.accountChange(a, 'EVAL-A', ch, { version: '0.5.1' }).confirm, 'Agent demo will trade LIVE account EVAL-A in Shadow (nothing is placed until you choose Copilot or Auto). Continue?', 'already in Shadow: nothing more to say');
+  assert.ok(AC.keepsMode('0.5.2') && !AC.keepsMode('0.5.1') && !AC.keepsMode(null));
   const off = AC.accountChoices(accounts, a, { bot: { enabled: false, account: 'Sim101' } });
   assert.equal(off.find(c => c.name === 'Sim101').why, '', 'with the bot channel off its account is free');
   assert.match(AC.accountChange(agent({ position: { root: 'MNQ', qty: 1 } }), 'EVAL-A', ch, {}).error, /choose its account when it is flat/);

@@ -58,7 +58,8 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   assert.match(bodies(acode, 'ResendCancels'), /double every = kv\.Value\.Tries >= ChartBridgeAgents\.CancelSlowAfter \? ChartBridgeAgents\.CancelSlowMs : ChartBridgeAgents\.FlatRetryMs;\s*if \(now - kv\.Value\.LastMs >= every\)/);
   // review A1 and A2: nothing sent while the market is shut; the pair asked again before every close, never more than its trade
   const step = bodies(acode, 'StepFlatten');
-  assert.match(step, /bool shut = ChartBridgeAgents\.MarketShut\(NowEt\(\)\);/);
+  // the 0.5.2 review: the calendar's closures and halts too (ChartBridgeCme.Closed), as check 7
+  assert.match(step, /DateTime etShut = NowEt\(\);\s*bool shut = ChartBridgeAgents\.MarketShut\(etShut\) \|\| ChartBridgeCme\.Closed\(etShut\);/);
   assert.match(step, /if \(!OwnsContract\(j\.Root, inst, a\)\) \{ DropJob\(j, key, a\); continue; \}\s*int cap = CloseCap\(j\.Root, inst, j\);[\s\S]*qty = Math\.Min\(qty, cap\);\s*if \(qty > 0\)/);
   // review A C1: the stop placed again over a shut market is a stop (never a market order), under the order lock, re-read first
   const restop = bodies(acode, 'SendStop');

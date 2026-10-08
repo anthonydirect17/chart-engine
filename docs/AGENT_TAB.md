@@ -236,7 +236,12 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
     account, the copier's leader and followers and another agent's account are listed but not offered, with the reason
     (ChartBridge refuses them anyway). **An account change keeps the agent's mode** (ChartBridge 0.5.2, Anthony 2026-10-08;
     until 1.18.0 it went to Shadow): the LIVE question names the mode ("Agent demo will trade LIVE account EVAL-A in Auto.
-    Continue?"); not confirmed, nothing is sent and the account stays; the page says the mode is kept after sending.
+    Continue?"); not confirmed, nothing is sent and the account stays. The message carries `keepMode`, the mode the question
+    named (for a SIM account, the mode shown), and ChartBridge keeps the mode only if it is still that one; otherwise the agent
+    goes to Shadow (another page changed the mode meanwhile). `keepMode` goes only to ChartBridge 0.5.2 or later (by the hello's
+    `version`; 0.5.1 refuses a key it does not know): to an older one the question says Shadow ("This ChartBridge (before
+    0.5.2) puts it in Shadow when its account changes.") and the page says so after sending; with 0.5.2 it says the mode is
+    kept.
 11. **The agent's chart (lead's default):** its root is the one picked in the chart's header, else the position's, else a
     working entry's, else an open proposal's, else the last plan's, else the first of its roots. Its trades come from
     fills claimed against its own marked orders (`BotCore.botFillLedger` with the agent's mark, as the bot's), kept in this

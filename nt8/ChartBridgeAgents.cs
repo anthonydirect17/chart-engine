@@ -144,7 +144,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const double CancelSlowMs = 30000, ShutErrorEveryMs = 60000, LostTradeEveryMs = 60000, CancelGiveUpMs = 30 * 60000;
 
         // The market is shut (no market order is sent): 17:00 to 18:00 New York time Monday to Thursday, and Friday 17:00 to Sunday
-        // 18:00. Fixed times (lead's default: NinjaTrader's trading hours are not read; holidays are not known here).
+        // 18:00. Fixed times (lead's default: NinjaTrader's trading hours are not read; holidays are not known here: the flatten
+        // also asks ChartBridgeCme.Closed, the 0.5.2 review).
         public static bool MarketShut(DateTime et)
         {
             double h = et.TimeOfDay.TotalHours;
@@ -557,7 +558,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "agentKill", new[] { "type", "cid", "agent", "on" } },
             { "agentSeen", new[] { "type", "agent", "id", "at" } },
             { "agentAnswer", new[] { "type", "cid", "agent", "id", "answer", "at" } },
-            { "agentAccount", new[] { "type", "cid", "agent", "account" } },
+            { "agentAccount", new[] { "type", "cid", "agent", "account", "keepMode" } },   // 0.5.2: keepMode, the mode the page's question named
             { "agentRules", new[] { "type", "cid", "agent", "roots", "maxQtyNQ", "maxQtyMNQ", "maxQtyES", "maxQtyMES", "entryFrom", "entryUntil", "flatAt", "maxExpireSec", "maxTrades", "maxLosses" } },
         };
 
@@ -657,7 +658,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // 0.5.2 (Anthony's rulings, 2026-10-08): the window is in session time, minutes since the 18:00 New York open, so 18:00 is
         // 0, 23:59 is 359, midnight is 360 and 17:00 (the break) is 1380. A window may start at 18:00 and run past midnight.
-        public const int SessionOpenMin = 18 * 60, BreakSm = 23 * 60, LastFlatMin = 15 * 60 + 59;
+        public const int SessionOpenMin = 18 * 60, LastFlatMin = 15 * 60 + 59;
         public static int Sm(int minuteOfDay) { return ((minuteOfDay - SessionOpenMin) % 1440 + 1440) % 1440; }
         // Seconds since the session's 18:00 open for a New York wall time (0 to 86399).
         public static double SessionSec(DateTime et) { double s = et.TimeOfDay.TotalSeconds - SessionOpenMin * 60; return s < 0 ? s + 86400 : s; }
@@ -759,6 +760,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string rulesBroken, accountBroken, dayBroken, lossStandDown;
         private string secret, secretState = "missing";
         private string session;
+        private bool carried;   // 0.5.2 review: a trade record from an earlier session (dropped at a start, or carried over at the roll): a position left is flattened
         private readonly Dictionary<string, double> Trades = new Dictionary<string, double>();   // entry tag -> realized $ (NaN while open)
         private readonly HashSet<string> PlanIds = new HashSet<string>();
         private readonly Dictionary<string, double> Expiry = new Dictionary<string, double>();   // entry tag -> its plan's expiry (UTC ms)
@@ -1038,6 +1040,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                     else stale = trades.Count(kv => double.IsNaN(kv.Value));
                 }
+                carried = stale > 0;   // 0.5.2 review: whatever position it left is flattened (the flat hours below), the market open
             }
             if (broken != null) Log(broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)");
             if (stale > 0) Log("agent-" + Id + "-day.txt: " + stale + " open trade(s) from the session of " + fileSession + " dropped (a record counts only in its own session)");
@@ -1117,6 +1120,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 session = today;
                 // a trade the ledger still follows goes on into the new day; any other open record is dropped (review A-S4)
                 List<KeyValuePair<string, double>> open = Trades.Where(kv => double.IsNaN(kv.Value) && kv.Key == openTag).ToList();
+                if (open.Count > 0) carried = true;   // 0.5.2 review: a trade of the session before: flattened (its flat time has passed)
                 Trades.Clear();
                 foreach (KeyValuePair<string, double> kv in open) Trades[kv.Key] = kv.Value;
                 foreach (string k in Spans.Keys.ToList()) if (!Trades.ContainsKey(k)) Spans.Remove(k);
@@ -2268,7 +2272,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             // the flat time (ruling 2): from flatAt until the next entryFrom in session order (0.5.2: with an 18:00 entryFrom a
             // position held across midnight is inside the session and stays; with 09:45 one held overnight is flattened, as
             // before) and while the market is closed, whatever the agent does or whether it is there
-            bool flatHours = FlatHours(r, etNow);
+            bool flatHours = FlatHours(r, etNow), fromBefore;
+            lock (Sync) fromBefore = carried;
+            if (fromBefore && !roots.Any(x => Owns(x))) { lock (Sync) carried = false; fromBefore = false; }   // flat: nothing left from the session before
+            flatHours = flatHours || fromBefore;   // 0.5.2 review: a position whose trade began in an earlier session is flattened, the market open
             if (!startTold && now - startedMs >= ChartBridgeAgents.SilenceMs)
             {
                 startTold = true;
@@ -2280,7 +2287,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
                 }
             }
-            if (flatHours) StartFlatten(AtFlatTime(r, etNow) ? Id + " flattened at " + Hm(r.FlatAt) + " by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + (ChartBridgeCme.Closed(etNow) ? ", or the market closed" : "") + "): flattened by its rules", true);
+            if (flatHours) StartFlatten(AtFlatTime(r, etNow) ? Id + " flattened at " + Hm(r.FlatAt) + " by its rules" : fromBefore && !FlatHours(r, etNow) ? Id + " held a position from an earlier session (its " + Hm(r.FlatAt) + " flatten did not finish): flattened by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + (ChartBridgeCme.Closed(etNow) ? ", or the market closed" : "") + "): flattened by its rules", true);
             StepFlatten(now);
             WelcomeIfCapsChanged();
             SendState(false);   // a change no event carries (the session's roll, the clock, a file): within one pass
@@ -2473,7 +2480,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) jobs = Flats.Values.ToList();
             if (jobs.Count == 0) return;
             Account a = FindAccount(Account);
-            bool shut = ChartBridgeAgents.MarketShut(NowEt());
+            DateTime etShut = NowEt();
+            bool shut = ChartBridgeAgents.MarketShut(etShut) || ChartBridgeCme.Closed(etShut);   // 0.5.2 review: the calendar's halts too (13:00 NYSE holiday, 13:15 early close, CME holidays): no order while closed
             foreach (FlatJob j in jobs)
             {
                 Instrument inst = j.Inst;
@@ -2821,13 +2829,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         // agentAccount (ruling 1): refused for the bot's account, the copier's leader or any follower (on or off), another agent's
         // account, an account not tradable now, while this agent has a position, a working entry or a proposal, and while the old or
         // the new account holds any position or working order on the agent's roots (as botAccount). Saved; the agent gets welcome.
-        // 0.5.2 (Anthony 2026-10-08): the agent keeps its mode (until 0.5.1 a change put it in shadow).
+        // 0.5.2 (Anthony 2026-10-08): the agent keeps its mode when keepMode names it (until 0.5.1, and for a page that does not
+        // send keepMode or names another mode, a change puts it in shadow).
         private string SetAccount(Dictionary<string, Val> d) { lock (PlaceGate) return SetAccountLocked(d); }   // never between a placement's checks and its order
 
         private string SetAccountLocked(Dictionary<string, Val> d)
         {
-            string nm = S(d, "account");
+            string nm = S(d, "account"), keep = S(d, "keepMode");
             if (!PlainName(nm)) return "account must be an account name";
+            if (d.ContainsKey("keepMode") && keep != "shadow" && keep != "copilot" && keep != "auto") return "keepMode must be shadow, copilot or auto (the mode the page's question named)";
             ChartBridgeAgents.RefreshFiles();   // a page's thread: the copies are read fresh
             string bot = ChartBridgeAgents.BotAccountForAgents();   // on or off (lead's default)
             if (bot == null) return "bot-account.txt cannot be read or understood, so ChartBridge cannot tell the bot's account: fix or delete it first";
@@ -2850,11 +2860,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             string err = SaveAccount(nm);
             if (err != null) return "agent-" + Id + "-account.txt could not be saved (" + err + "); nothing changed";
-            string keptMode;
-            lock (Sync) { account = nm; accountBroken = null; chosen = true; Sticky.Clear(); keptMode = mode; }   // 0.5.2 (Anthony 2026-10-08): the mode is kept (the page asks first for a LIVE account, naming the mode)
+            // 0.5.2 (Anthony 2026-10-08): the mode is kept only when the page says which mode its question named (keepMode) and that is
+            // still the agent's mode; an older page (no keepMode, its question says the agent goes to Shadow) or a mode changed since
+            // the question (another page) puts the agent in shadow, as until 0.5.1.
+            string wasMode;
+            bool kept;
+            lock (Sync) { account = nm; accountBroken = null; chosen = true; Sticky.Clear(); wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
             string mark = SimNow() ? "Sim" : "LIVE";
-            Log("agent " + Id + " account " + nm + " (" + mark + "), was " + old + ", set by the page; mode " + keptMode + " kept");
-            AgentLog("account " + nm + " (" + mark + "), was " + old + ", set by the page; mode " + keptMode + " kept");
+            string modeSay = kept ? "mode " + wasMode + " kept" : wasMode == "shadow" ? "mode shadow" : "mode shadow (was " + wasMode + (keep == null ? ": the page did not say which mode it showed" : ": the page's question named " + keep) + ")";
+            Log("agent " + Id + " account " + nm + " (" + mark + "), was " + old + ", set by the page; " + modeSay);
+            AgentLog("account " + nm + " (" + mark + "), was " + old + ", set by the page; " + modeSay);
             ToAgent(WelcomeJson());
             Notify();
             return null;

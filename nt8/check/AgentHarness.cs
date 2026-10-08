@@ -182,6 +182,7 @@ public static class AgentHarness
             Round5();   // reviewer A's D1 to D5 (RS1, RS3)
             Round6();   // reviewer A's E1 to E3 (RX)
             FullSession();   // 0.5.2: the window in session time (Anthony's rulings 2026-10-08 p and q)
+            Review052();     // 0.5.2 review: the calendar's halts in the flatten, keepMode, a position from an earlier session
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -986,9 +987,9 @@ public static class AgentHarness
         A("{\"type\":\"withdraw\",\"id\":\"" + id + "\",\"reason\":\"made up\"}");
         Mode("manrae", "auto");
         // EVAL-A, a LIVE account: accepted; welcome says so
-        P(AccountMsg("manrae", "EVAL-A"));
+        P(AccountKeep("EVAL-A", "auto"));   // a 1.18.1 page names the mode its question showed
         Check(M.Account == "EVAL-A" && Last(agentOut, "welcome").Contains("\"mode\":\"auto\",\"account\":\"EVAL-A\",\"sim\":false") && FileText("agent-manrae-account.txt").Contains("account\tEVAL-A"),
-              "agentAccount EVAL-A (LIVE): saved in agent-manrae-account.txt, welcome again with sim false; 0.5.2: the agent keeps its mode (auto)");
+              "agentAccount EVAL-A (LIVE) with keepMode auto: saved in agent-manrae-account.txt, welcome again with sim false; 0.5.2: the agent keeps its mode (auto)");
         Check(FileText("agent-manrae.log").Contains("account EVAL-A (LIVE), was Sim101, set by the page; mode auto kept"), "logged with LIVE and the mode kept");
         Mode("manrae", "shadow");   // as before this change, for the checks that follow
         // the bot: refuses an agent's account; an agent refuses the bot's
@@ -2677,6 +2678,88 @@ public static class AgentHarness
         // the 18:00 reset stays at 18:00, the start of the session
         Check(ChartBridgeAgents.Get("manrae") != null, "manrae is there");
         Settle(sime);
+        et = new DateTime(2026, 10, 9, 10, 0, 0);
+    }
+
+    // ------------------------------------------------------------ 0.5.2 review
+    static string AccountKeep(string account, string keep) { return "{\"type\":\"agentAccount\",\"cid\":\"ak\",\"agent\":\"manrae\",\"account\":\"" + account + "\"" + (keep != null ? ",\"keepMode\":\"" + keep + "\"" : "") + "}"; }
+
+    // A long filled before a halt; fresh trades at the halt itself: no order goes, its stop and target stay; at the open it closes.
+    static void HaltFlatten(string label, DateTime fill, DateTime beforeHalt, DateTime halt, DateTime open)
+    {
+        Fresh();   // 09:45 to 15:00, flat 15:55 (the defaults)
+        et = fill.AddMinutes(-10);
+        Advance(1000);
+        Order e = PlacedOn(sime, Good(NewId()));
+        Check(e != null, label + ": placed before the halt");
+        if (e == null) return;
+        et = fill;
+        Fill(e, 1, 24999);
+        Advance(1000);
+        int calls = sime.Calls.Count;
+        et = beforeHalt; Last2(); Tick();
+        et = halt; Last2(); Advance(1000);
+        List<string> sent = sime.Calls.Skip(calls).ToList();
+        Check(sent.Count == 0 && Legs(sime, e).All(IsLive) && PosOf(sime, mnq) == 1,
+              "0.5.2 review: " + label + ": at the halt, with a trade under 5 s old, nothing is sent (no cancel, no market close into the halted market); its stop and target stay: " + string.Join(" | ", sent));
+        Advance(30000);
+        Check(sime.Calls.Count == calls, "0.5.2 review: " + label + ": still nothing while the calendar says closed");
+        et = open; Last2(); Advance(4000);
+        Check(sime.Calls.Skip(calls).Any(c => c.Contains(" ag:manrae flat ")), "0.5.2 review: " + label + ": at the open the flatten goes on and closes it: " + string.Join(" | ", sime.Calls.Skip(calls)));
+        Settle(sime);
+    }
+
+    static void Review052()
+    {
+        // 1. a holiday halt (Thanksgiving, 13:00) and an early close (Christmas Eve, 13:15)
+        HaltFlatten("Thanksgiving 13:00", new DateTime(2026, 11, 26, 12, 50, 0), new DateTime(2026, 11, 26, 12, 59, 59), new DateTime(2026, 11, 26, 13, 0, 0), new DateTime(2026, 11, 26, 18, 5, 0));
+        HaltFlatten("Christmas Eve 13:15", new DateTime(2026, 12, 24, 13, 5, 0), new DateTime(2026, 12, 24, 13, 14, 59), new DateTime(2026, 12, 24, 13, 15, 0), new DateTime(2026, 12, 27, 18, 5, 0));
+
+        // 2. keepMode: kept only when it names the agent's mode now; else shadow, as until 0.5.1
+        Fresh();   // SIM-E, auto
+        P(AccountKeep("SIM-D", "auto"));
+        Check(M.Account == "SIM-D" && Last(page, "agent").Contains("\"mode\":\"auto\"") && FileText("agent-manrae.log").Contains("account SIM-D (Sim), was SIM-E, set by the page; mode auto kept"),
+              "0.5.2 review: keepMode auto with the agent in auto: the mode is kept");
+        P(AccountKeep("SIM-E", null));
+        Check(M.Account == "SIM-E" && Last(page, "agent").Contains("\"mode\":\"shadow\"") && FileText("agent-manrae.log").Contains("mode shadow (was auto: the page did not say which mode it showed)"),
+              "0.5.2 review: an older page (no keepMode; its question said the agent goes to Shadow): shadow, as until 0.5.1");
+        Mode("manrae", "copilot");
+        P(AccountKeep("SIM-D", "auto"));
+        Check(M.Account == "SIM-D" && Last(page, "agent").Contains("\"mode\":\"shadow\"") && FileText("agent-manrae.log").Contains("mode shadow (was copilot: the page's question named auto)"),
+              "0.5.2 review: keepMode auto but the agent is in copilot now (another page changed it): shadow");
+        int rj = Count(page, "reject");
+        P(AccountKeep("SIM-E", "fast"));
+        Check(Count(page, "reject") > rj && PageReject().Contains("keepMode must be shadow, copilot or auto") && M.Account == "SIM-D", "0.5.2 review: keepMode must be a mode: refused, nothing changed");
+        Mode("manrae", "copilot");
+        P(AccountKeep("SIM-E", "copilot"));
+        Check(M.Account == "SIM-E" && Last(page, "agent").Contains("\"mode\":\"copilot\""), "0.5.2 review: keepMode copilot with the agent in copilot: kept");
+
+        // 3. a restart after 18:00 with a position from the session before (its 15:55 flatten lost): flattened, the market open
+        Fresh();
+        SessionRules("18:00", "15:25", "15:55");
+        et = new DateTime(2026, 10, 8, 12, 0, 0);
+        Advance(1000);
+        Order e = PlacedOn(sime, Good(NewId()));
+        Check(e != null, "a position from Thursday's session");
+        if (e != null)
+        {
+            Fill(e, 1, 24999);
+            Advance(1000);
+            et = new DateTime(2026, 10, 8, 18, 30, 0);   // Friday's session (18:00 to 15:25: inside the window); its 15:55 flatten never ran
+            Restart();
+            Mode("manrae", "auto");
+            int calls = sime.Calls.Count, from = N(page);
+            Last2();
+            Advance(2000);
+            Check(sime.Calls.Skip(calls).Count(c => c.StartsWith("cancel CB#")) == 2 && Any(page, from, "held a position from an earlier session (its 15:55 flatten did not finish): flattened by its rules"),
+                  "0.5.2 review: a restart after 18:00 with a position whose trade began in the session before: the flatten starts at once: " + string.Join(" | ", sime.Calls.Skip(calls)));
+            Settle(sime);
+            Advance(2000);
+            int c2 = sime.Calls.Count;
+            Order e2 = PlacedOn(sime, Good(NewId()));
+            Check(e2 != null, "0.5.2 review: once flat, the new session trades as usual (18:30 is inside its window)");
+            Settle(sime);
+        }
         et = new DateTime(2026, 10, 9, 10, 0, 0);
     }
 }

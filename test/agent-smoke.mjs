@@ -194,7 +194,9 @@ try {
   await page.click('#agView [data-act="acctSave"]');
   await until(async () => (await text('.ag-strip [data-k="sAccount"]')) === 'SIM-AG1', 'the agent trades SIM-AG1 now');
   const am = (await sent()).filter(m => m.type === 'agentAccount');
-  check(am.length === 1 && am[0].agent === 'demo' && am[0].account === 'SIM-AG1' && Object.keys(am[0]).join(',') === 'type,cid,agent,account', 'agentAccount sent once, exactly the contract\'s keys: ' + JSON.stringify(am));
+  check(am.length === 1 && am[0].agent === 'demo' && am[0].account === 'SIM-AG1' && Object.keys(am[0]).join(',') === 'type,cid,agent,account,keepMode' && ['shadow', 'copilot', 'auto'].includes(am[0].keepMode),
+    'agentAccount sent once, exactly the contract\'s keys; to ChartBridge 0.5.2 (the fake says fake-0.5.2) keepMode names the mode the page showed: ' + JSON.stringify(am));
+  check((await agentsNow()).find(a => a.agent === 'demo').mode === am[0].keepMode, 'the mode is kept: ' + am[0].keepMode);
 
   /* ---------------------------------------------------------------- the light: a look */
   console.log('the light follows his real state');

@@ -653,10 +653,10 @@ test('agents: plan checks in the contract\'s order; shadow logs and shows (no an
   // the window: before entryFrom and at entryUntil
   const early = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 13, 40) });   // 09:40 New York
   early.hello();
-  assert.match(early.plan().why, /outside the entry window \(09:45 to 15:00 ET\)/);
+  assert.match(early.plan().why, /^outside agent demo's entry window \(09:45 to 15:00 New York time\)$/);
   const late = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 19, 0) });     // 15:00 New York: not before entryUntil
   late.hello();
-  assert.match(late.plan().why, /outside the entry window/);
+  assert.match(late.plan().why, /^outside agent demo's entry window/);
   const any = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 19, 0), anyTime: true });   // tests and smokes only: no window
   any.hello();
   assert.equal(any.plan().why, null, '--agent-any-time: a plan at 15:00 passes the window');
@@ -859,7 +859,7 @@ test('agents: with no agents in config.txt every agent message is refused and no
   assert.equal(d.desk.diag().agents, undefined, '/diag agents only with the channel on');
 });
 
-test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; hello says 0.5.0; a v3 page gets the agent', async () => {
+test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; hello says 0.5.2; a v3 page gets the agent', async () => {
   const port = 18990 + Math.floor(Math.random() * 9);
   const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port), '--v3', '--agents=demo', '--agent-any-time', '--trading', '--test-controls', '--test-pin=5820'], { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise(r => child.stdout.once('data', r));
@@ -868,7 +868,7 @@ test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; h
     const unlock = (await post(port, '/pin/unlock', { pin: '5820' })).json.token;
     const token = JSON.parse((await get(port, '/session', unlock)).body).token;
     const a = await wsConnect(port, '/ws?unlock=' + encodeURIComponent(unlock), { Origin: own });
-    assert.equal((await a.next('hello')).version, 'fake-0.5.0');
+    assert.equal((await a.next('hello')).version, 'fake-0.5.2');
     a.send({ type: 'client', v: 3 }); a.send({ type: 'auth', token });
     const ag = await a.next('agent');
     assert.equal(ag.agent, 'demo'); assert.equal(ag.mode, 'shadow'); assert.equal(ag.account, 'Sim101', 'no account file: Sim101');
@@ -986,20 +986,58 @@ test('agents review S2: a refused duplicate never replaces the plan it copies; b
   assert.equal(a.proposals.get('dup1').state, 'open');
 });
 
-test('ChartBridge 0.5.2: an account change keeps the agent\'s mode (until 0.5.1 it went to shadow)', async () => {
+test('ChartBridge 0.5.2 and its review: an account change keeps the mode only when keepMode names it; otherwise shadow, as until 0.5.1', async () => {
   const d = await makeAgentDesk();
+  const a = d.desk.agents.get('demo');
+  const free = n => { d.desk.acct.get(n).trade = true; d.desk.refreshAccounts(); d.desk.copier.followers.delete(n); };
+  const logged = () => d.desk.log.filter(x => x.file === 'agent-demo').pop().what;
   d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
-  d.desk.acct.get('SIM-F2').trade = true; d.desk.refreshAccounts(); d.desk.copier.followers.delete('SIM-F2');
-  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2' })), null);
-  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).mode, 'auto');
+  free('SIM-F2'); free('SIM-F1');
+  // a 1.18.1 page names the mode its question showed: kept
+  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2', keepMode: 'auto' })), null);
+  assert.equal(d.desk.agentMsg(a).mode, 'auto');
   assert.equal(d.agentTake('welcome').pop().mode, 'auto', 'the agent is told, in its mode');
-  d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' });
-  d.desk.acct.get('SIM-F1').trade = true; d.desk.refreshAccounts(); d.desk.copier.followers.delete('SIM-F1');
+  assert.equal(logged(), 'account SIM-F2 (Sim), was SIM-AG1, set by the page; mode auto kept');
+  // an older page (no keepMode; its question said the agent goes to Shadow): shadow
   assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F1' })), null);
-  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).mode, 'copilot');
+  assert.equal(d.desk.agentMsg(a).mode, 'shadow');
+  assert.equal(d.agentTake('welcome').pop().mode, 'shadow');
+  assert.equal(logged(), 'account SIM-F1 (Sim), was SIM-F2, set by the page; mode shadow (was auto: the page did not say which mode it showed)');
+  // another page changed the mode after the question: shadow
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' });
+  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2', keepMode: 'auto' })), null);
+  assert.equal(d.desk.agentMsg(a).mode, 'shadow', 'the question named auto; the agent was in copilot');
+  assert.equal(logged(), 'account SIM-F2 (Sim), was SIM-F1, set by the page; mode shadow (was copilot: the page\'s question named auto)');
+  // keepMode must be a mode
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' });
+  assert.match(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F1', keepMode: 'fast' })), /^keepMode must be shadow, copilot or auto/);
+  assert.equal(d.desk.agentMsg(a).account, 'SIM-F2', 'refused: nothing changed');
+  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F1', keepMode: 'copilot' })), null);
+  assert.equal(d.desk.agentMsg(a).mode, 'copilot');
   // still refused while it has a position (as before)
-  d.desk.agents.get('demo').trade = { root: 'MNQ', pnl: 0 };
-  assert.match(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2' })), /position/);
+  a.trade = { root: 'MNQ', pnl: 0 };
+  assert.match(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2', keepMode: 'copilot' })), /position/);
+});
+
+test('ChartBridge 0.5.2 review: the flatten sends nothing into a holiday halt (13:00 Thanksgiving) with fresh trades; it closes at the open', async () => {
+  const d = await makeAgentDesk({ at: Date.UTC(2026, 10, 26, 17, 30) });   // Thanksgiving 2026, 12:30 New York: open until the 13:00 halt
+  const a = d.desk.agents.get('demo');
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  d.plan({ price: 25400 }); d.tick(25399.75);
+  assert.ok(d.desk.agentMsg(a).position, 'filled before the halt');
+  const working = () => [...d.desk.orders.values()].filter(o => ['working', 'accepted', 'submitted'].includes(o.state) && d.desk.agentOfOrder(o) === 'demo').length;
+  const legs = working();
+  assert.ok(legs >= 2, 'its stop and target');
+  d.advance(30 * 60000); d.desk.tick('MNQ', 25401); d.take();             // 13:00: the halt, a trade under 5 s old
+  d.desk.everySecond();
+  assert.ok(d.desk.agentMsg(a).position, 'no market close into the halted market');
+  assert.equal(working(), legs, 'no cancel: its stop and target stay');
+  d.advance(60000); d.desk.tick('MNQ', 25401); d.desk.everySecond();
+  assert.equal(working(), legs, 'still nothing while the calendar says closed');
+  assert.ok(d.take('status').some(s => s.level === 'error' && /the market is shut, so ChartBridge sends no close until it opens/.test(s.text)));
+  d.advance(5 * 3600000 + 4 * 60000); d.desk.tick('MNQ', 25401); d.desk.everySecond();   // 18:05: the open
+  assert.equal(d.desk.agentMsg(a).position, null, 'flattened at the open');
+  assert.equal(working(), 0);
 });
 
 test('agents review V3: the checks run in the contract\'s order (a plan failing two gets the earlier reason); checks 2, 9, 10 and 11', async () => {
@@ -1161,7 +1199,7 @@ test('as built 6: the flat hours run to the next entryFrom; an account NinjaTrad
   assert.equal(d.take('status').filter(s => s.level === 'error').length, 0);
   d.advance(5000); d.desk.everySecond();
   assert.equal(d.take('status').filter(s => s.level === 'error').length, 1, 'every 10 s');
-  d.desk.unlisted.delete('SIM-AG1'); d.advance(1000); d.desk.everySecond();
+  d.desk.unlisted.delete('SIM-AG1'); d.desk.tick('MNQ', 25399.5); d.advance(1000); d.desk.everySecond();   // a trade 1 s ago: trading in fact
   assert.equal(d.desk.agentMsg(a).position, null, 'the account is back: flattened');
   assert.equal(a.flatJob, null);
 });

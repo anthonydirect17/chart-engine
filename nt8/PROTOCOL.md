@@ -2449,7 +2449,7 @@ Conversely the bot, the copier and other agents refuse an agent's account. A LIV
 | `agentKill` | `cid` (optional), `agent`, `on` (*bool*) |
 | `agentSeen` | `agent`, `id`, `at` |
 | `agentAnswer` | `cid` (optional), `agent`, `id`, `answer` (`accept`/`reject`), `at` |
-| `agentAccount` | `cid` (optional), `agent`, `account` |
+| `agentAccount` | `cid` (optional), `agent`, `account`, `keepMode` (optional, 0.5.2: `shadow`, `copilot` or `auto`, the mode the page's question named; a 1.18.1 page sends it only to ChartBridge 0.5.2 or later, because 0.5.1 refuses a key it does not know) |
 | `agentRules` | `cid` (optional), `agent`, `roots`, `maxQtyNQ`, `maxQtyMNQ`, `maxQtyES`, `maxQtyMES` (each optional), `entryFrom`, `entryUntil`, `flatAt`, `maxExpireSec`, `maxTrades` (0 = none), `maxLosses` (0 = none) |
 
 | ChartBridge to page | fields | when |
@@ -2540,7 +2540,10 @@ Where the contract left a detail open, the safest simple choice was taken and is
   `entryFrom` in session order (0.5.2), and whenever the market is closed (the break, the weekend, a holiday or a halt). With
   `entryFrom` 09:45 a position held overnight is flattened by its rules ("held a position outside its trading hours"); with
   `entryFrom` 18:00 a position held from 22:00 across midnight is inside the session and is NOT flattened until `flatAt`. Over
-  a closed market the job waits for the market as before (review A2) and closes the position at the next open. It looks at the served contract and at any other contract month its own open trade holds (review A5: the trade
+  a closed market (0.5.2 review: the calendar's closures and halts too, see "The market shut") the job sends nothing and
+  closes the position at the next open. A position whose trade record began in an earlier session (0.5.2 review: a restart
+  after 18:00 with a flatten that did not finish) is flattened at once, whatever the window says ("held a position from an
+  earlier session (its 15:55 flatten did not finish): flattened by its rules"); the closed-market rule still applies. It looks at the served contract and at any other contract month its own open trade holds (review A5: the trade
   follows its executions in any month of its roots). If the account is missing from NinjaTrader's list the job is kept, the
   pages get the NOT FLAT error every 10 s ("account not listed by NinjaTrader"), and the job goes on when the account is back,
   after 18:00 included (review A-S6).
@@ -2551,10 +2554,11 @@ Where the contract left a detail open, the safest simple choice was taken and is
   ledger quantity), even when the account holds more; with no trade followed (after a restart, before the executions are read
   again), the contracts its stop legs covered when the job started (lead's default). A pair the job owns stays the agent's until
   flat, so cancelling its own legs never hands it away.
-- **The market shut** (review A2, lead's default: fixed times; NinjaTrader's trading hours are not read and holidays are not
-  known): 17:00 to 18:00 New York time Monday to Thursday, and Friday 17:00 to Sunday 18:00. While shut the flatten sends
-  nothing at all (no cancel, no close: its stop and target stay) and the NOT FLAT error repeats every 60 s; it goes on at the
-  open.
+- **The market shut** (review A2, lead's default; NinjaTrader's trading hours are not read): 17:00 to 18:00 New York time
+  Monday to Thursday, and Friday 17:00 to Sunday 18:00; 0.5.2 review: also whenever `ChartBridgeCme.Closed` says closed (a CME
+  holiday, the halt at 13:00 on an NYSE holiday, the 13:15 early close), the calendar check 7 uses. While shut the flatten
+  sends nothing at all (no cancel, no close: its stop and target stay, even with trades still printing) and the NOT FLAT error
+  repeats every 60 s; it goes on at the open.
 - **The market trading in fact** (review A C1, D3): before the flatten cancels any leg of a position it owns, the root must have
   traded in the last 5 s (an early close, a holiday or a halt). Otherwise its stop and target stay, NOT FLAT says "market not
   trading: the stop and target stay" every 10 s, and it tries again each pass. Only the cancel step waits for it: once its
@@ -2632,11 +2636,16 @@ Where the contract left a detail open, the safest simple choice was taken and is
   account an agent sits on, its plans are refused at check 2, its unfilled entries are cancelled and its open proposals
   expire; an open position keeps its stop and target and the flat time still applies. Between agents: a chosen account
   blocks an agent sitting there on its default; two agents on their unchosen default Sim101 both stand down.
-- **agentAccount** (0.5.2, Anthony 2026-10-08): a change KEEPS the agent's mode (until 0.5.1 it put the agent in `shadow`); the
-  page asks once before a LIVE account, naming the mode ("Agent manrae will trade LIVE account EVAL-A in Auto. Continue?"), and
-  not confirmed nothing is sent. Unchanged: never the bot's account, a copier leader or follower, or another agent's; the owner
-  lock; no change while the agent has a position, a working entry or a proposal. The agent gets `welcome` again (with its
-  mode); logged with SIM or LIVE and the mode kept.
+- **agentAccount** (0.5.2, Anthony 2026-10-08, and its review): a change KEEPS the agent's mode only when the message carries
+  `keepMode` and it equals the agent's mode now; otherwise the agent goes to `shadow`, as until 0.5.1: no `keepMode` (a page
+  before 1.18.1, whose question said the agent goes to Shadow) or another mode (another page changed it after the question was
+  shown). `keepMode` that is not `shadow`, `copilot` or `auto` is refused and nothing changes. The page asks once before a LIVE
+  account, naming the mode ("Agent manrae will trade LIVE account EVAL-A in Auto. Continue?"), sends that mode as `keepMode`,
+  and not confirmed nothing is sent; to a ChartBridge before 0.5.2 (by the hello's `version`) it sends no `keepMode` and its
+  question says Shadow. Unchanged: never the bot's account, a copier leader or follower, or another agent's; the owner lock; no
+  change while the agent has a position, a working entry or a proposal. The agent gets `welcome` again (with its mode); logged
+  with SIM or LIVE and the mode ("mode auto kept", or "mode shadow (was auto: the page did not say which mode it showed)",
+  "mode shadow (was copilot: the page's question named auto)").
 - **agentRules** (lead's default): roots from NQ, MNQ, ES and MES only (a root needs a hard ceiling); a `maxQty<ROOT>` left out
   for a chosen root is its hard ceiling; for a root not chosen only 0 is accepted. In the rules file a key left out keeps its
   default and a root without a `maxQty` line gets its ceiling. A rules change never lifts a loss stand-down for that day; the
