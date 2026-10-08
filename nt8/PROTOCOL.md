@@ -1533,8 +1533,16 @@ Where the contract above left a detail open, the build chose the safe simple opt
 - **Newly listed accounts reach the pages** (0.5.1): an account that becomes listed (its first sighting, Show, or back from
   the archive with a position or working orders) makes every signed-in v3 page get that account's working orders, one
   `order` message each (pages merge them), and its `position` messages (it got none of its messages while it was not
-  listed). Never a full `orders` list there: pages replace theirs on it, and a list read off NinjaTrader's thread could undo
-  an `order` update NinjaTrader's thread sent meanwhile for another account. Sign-in still sends the full list. ChartBridge watches an account
+  listed). Never a full `orders` list there: pages replace theirs on it. Sign-in still sends the full list.
+- **The latest state lands last** (0.5.1, Anthony approved 2026-10-08). A snapshot (the `orders` list and `position` messages at
+  sign-in, or a newly listed account's `order` and `position` messages) is read on the page's or the timer's thread and then
+  queued, so it can be older than an `order` or `position` message NinjaTrader's thread queued for that page while it was
+  built (until 0.5.0 a stop cancelled meanwhile could come back as a ghost on the page, or a stop placed meanwhile vanish).
+  While a page's snapshot is open, every order and position message NinjaTrader's thread sends that page is noted; right
+  after the snapshot is queued each noted order and position is sent again, read fresh (an order that is done: the very
+  message NinjaTrader's thread sent, since its id is forgotten after it), and again for anything noted meanwhile, until
+  nothing new came in (at most 20 rounds). NinjaTrader's thread never waits on a snapshot: the per-page lock is held only to
+  note a send or take the notes, never while a list is built. ChartBridge watches an account
   (its fills, orders and positions) from the 1 s check that first sees it Connected, and still on demand before an order.
 - **`trading`'s accounts list** (0.5.1): the checked accounts seen Connected this session only.
 - **`/diag`**: nothing added (account names stay out of new diagnostics).

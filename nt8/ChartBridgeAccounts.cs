@@ -572,7 +572,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // A live order or position message: to every signed-in page that sees the account (NinjaTrader's thread: no lookups).
-        public static void SendScoped(Account a, string json, bool isOrder, Order o = null)
+        // 0.5.1: root for a position message; each send is noted for a page whose snapshot is being built (ChartBridgeOrders.Snapshot).
+        public static void SendScoped(Account a, string json, bool isOrder, Order o = null, string root = null)
         {
             string account = a.Name;
             bool tradable = ChartBridgeOrders.AccountTradable(account), listed = Listed(account);
@@ -580,8 +581,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (ChartBridgeClient c in ChartBridgeServer.AllClients())
             {
                 if (!c.Trader) continue;
-                if (IsV3(c)) { if (listed) c.Send(isOrder ? (v3json ?? (v3json = ForPage(c, a, json, o))) : json); }
-                else if (tradable) c.Send(json);
+                if (IsV3(c)) { if (listed) ChartBridgeOrders.NoteAndSend(c, account, isOrder ? (v3json ?? (v3json = ForPage(c, a, json, o))) : json, isOrder, o, root); }
+                else if (tradable) ChartBridgeOrders.NoteAndSend(c, account, json, isOrder, o, root);
             }
         }
 
