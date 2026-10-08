@@ -857,8 +857,8 @@ test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and t
   assert.match(acode, /if \(File\.Exists\(FilePath\)\) File\.Replace\(tmp, FilePath, null\); else File\.Move\(tmp, FilePath\);/);
   assert.ok(!/Save\(\)|FlushLog\(\)/.test(bodyOf(acode, 'public static void StartNow(')), 'no write at start (NinjaTrader\'s thread)');
   assert.match(acode, /public const double GraceMs = 10000;/);
-  // the main file: client, accountTrade and accountArchive go to ChartBridgeAccounts; "accounts" rides the order lane
-  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
+  // the main file: client, accountTrade, accountArchive and accountUnarchive (0.5.1) go to ChartBridgeAccounts; "accounts" rides the order lane
+  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive" \|\| type == "accountUnarchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
   assert.match(code, /ChartBridgeAccounts\.Start\(\);[^\n]*\n[\s\S]*?WatchAccounts\(\);/);
 });
 
@@ -1160,7 +1160,7 @@ test('0.4.0 integration: exactly one v3 handshake and one v3 send; no lane keeps
   // the one "client" dispatch, to the accounts lane, which marks the page through ChartBridgeV3.OnClient and tells the lanes
   const clientLines = code.split('\n').filter(l => /type == "client"/.test(l));
   assert.equal(clientLines.length, 1, 'one client dispatch: ' + clientLines.join(' | '));
-  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
+  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive" \|\| type == "accountUnarchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
   const acode = strip(fs.readFileSync(path.join(nt8, 'ChartBridgeAccounts.cs'), 'utf8'));
   assert.match(bodyOf(acode, 'private static void OnClient(ChartBridgeClient client, string text)'), /if \(!ChartBridgeV3\.OnClient\(client, text\)\) return;[\s\S]*ChartBridgeV3\.TellLanes\(client\);/);
   // every switch is read once, by ChartBridgeSwitches; each lane's Enabled reads it
