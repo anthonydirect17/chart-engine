@@ -1775,6 +1775,14 @@ public static class AgentHarness
             Check(eid != null && ex.Contains("\"cbId\":\"" + eid + "\"") && ex.EndsWith(",\"role\":\"entry\"}") && OrderMsgWithId(agentOut, eid) != "", "10.2: the entry's exec carries its cbId (as its order messages) and role entry: " + ex);
             Order target = Legs(sime, e).First(o => o.Name.Contains(" target "));
             string tid = ChartBridgeOrders.AgentKnownId(target);
+            // section 10 item 6: the agent's order messages carry orderName (NinjaTrader's name); name stays the instrument; pages as before
+            Order stopLeg = Legs(sime, e).First(o => o.Name.Contains(" stop "));
+            string sid = ChartBridgeOrders.AgentKnownId(stopLeg);
+            string em = OrderMsgWithId(agentOut, eid), sm = OrderMsgWithId(agentOut, sid), tm = OrderMsgWithId(agentOut, tid);
+            Check(em.Contains("\"name\":\"MNQ 12-26\"") && em.EndsWith(",\"orderName\":\"" + e.Name + "\"}") && Regex.IsMatch(e.Name, "^CB#[0-9a-f]{8} ag:manrae s8 t16$") &&
+                  sm.EndsWith(",\"orderName\":\"CB#" + Tag(e) + " stop f1 q1 p24999\"}") && tm.EndsWith(",\"orderName\":\"CB#" + Tag(e) + " target f1 q1 p24999\"}"),
+                  "10.6: orderName on the agent's order messages: the entry " + e.Name + ", its legs with the same tag: " + sm + " | " + tm);
+            Check(OrderMsgWithId(page, eid) != "" && !OrderMsgWithId(page, eid).Contains("orderName") && !OrderMsgWithId(page, sid).Contains("orderName"), "10.6: the pages' order messages are unchanged (no orderName)");
             Fills(target, "T32", 25003);
             ex = Last(agentOut, "exec");
             Check(ex.Contains("\"cbId\":\"" + tid + "\"") && ex.Contains("\"role\":\"target\""), "10.2: a target's exec: its cbId, role target: " + ex);
@@ -1787,7 +1795,7 @@ public static class AgentHarness
             Order fl;
             lock (sime.Orders) fl = sime.Orders.LastOrDefault(o => (o.Name ?? "").EndsWith(" ag:manrae flat"));
             string fid = fl != null ? ChartBridgeOrders.AgentKnownId(fl) : null;
-            Check(fl != null && OrderMsgWithId(agentOut, fid).Contains("\"role\":\"flat\""), "10.3: the flat close \"CB#<tag> ag:manrae flat\" has role flat in the agent's order message: " + (fl != null ? fl.Name + " " + OrderMsgWithId(agentOut, fid) : "none"));
+            Check(fl != null && OrderMsgWithId(agentOut, fid).Contains("\"role\":\"flat\"") && OrderMsgWithId(agentOut, fid).Contains("\"orderName\":\"" + fl.Name + "\""), "10.3: the flat close \"CB#<tag> ag:manrae flat\" has role flat in the agent's order message: " + (fl != null ? fl.Name + " " + OrderMsgWithId(agentOut, fid) : "none"));
             Check(fl != null && OrderMsgWithId(page, fid).Contains("\"role\":\"other\""), "10.3: the page's order message is as before (role other): " + OrderMsgWithId(page, fid ?? "-"));
             if (fl != null)
             {
@@ -1809,7 +1817,7 @@ public static class AgentHarness
             Check(px != null && px.Name == "CB#" + Tag(e) + " ag:manrae protect f1 q1 p24999" && px.OrderType == OrderType.Market && ChartBridgeAgents.AgentOf(px) == "manrae",
                   "10.3: an agent entry's protective exit is named \"CB#<tag> ag:manrae protect f1 q1 p24999\": " + (px != null ? px.Name : "none"));
             string pid = px != null ? ChartBridgeOrders.AgentKnownId(px) : null;
-            Check(px != null && OrderMsgWithId(agentOut, pid).Contains("\"role\":\"protect\"") && OrderMsgWithId(page, pid).Contains("\"role\":\"other\""), "10.3: role protect to the agent, other to the pages (unchanged)");
+            Check(px != null && OrderMsgWithId(agentOut, pid).Contains("\"role\":\"protect\"") && OrderMsgWithId(agentOut, pid).Contains("\"orderName\":\"" + px.Name + "\"") && OrderMsgWithId(page, pid).Contains("\"role\":\"other\""), "10.3: role protect (and its orderName) to the agent, other to the pages (unchanged)");
             if (px == null) return;
             Fills(px, "P33", 24996);
             Check(Last(agentOut, "exec").Contains("\"role\":\"protect\""), "10.2: the protective exit's exec: role protect");

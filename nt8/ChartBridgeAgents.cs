@@ -58,7 +58,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal static string AgentIdFor(Order o) { return IdFor(o); }   // the id the agent's order messages carry ("o12")
         internal static string AgentOrderJson(Order o) { return AgentOrderJson(o, null); }   // the snapshot after hello
         // As the page's order message, with the agent's roles: its flat close "flat", its protective exit "protect" (section 10).
-        internal static string AgentOrderJson(Order o, string text) { return OrderJson(o, text, AgentRoleFor(o)); }
+        // Section 10 item 6: and orderName, NinjaTrader's own name of the order (the tag the agent's legs carry); name stays the instrument.
+        internal static string AgentOrderJson(Order o, string text)
+        {
+            string json = OrderJson(o, text, AgentRoleFor(o));
+            return json.Substring(0, json.Length - 1) + ",\"orderName\":" + (o.Name != null ? CbJson.Str(o.Name) : "null") + "}";
+        }
         private static readonly Regex AgentMarketRx = new Regex("^CB#([0-9a-f]{8}) ag:[a-z][a-z0-9]{0,11} (flat|protect)(?: (f[0-9]{1,6} q[0-9]{1,6} p[0-9]{1,9}(?:\\.[0-9]{1,8})?)){0,1}$");
         internal static string AgentRoleFor(Order o)
         {

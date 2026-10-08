@@ -35,6 +35,18 @@ every lead's default in its "as built" list. The chart's own version is unchange
   account leaves NinjaTrader's list keeps saying NOT FLAT and goes on when the account is back. The rest of a part-filled entry
   that fills after the first part closed is its own trade. The rate is counted before anything else; refused plans reach the
   pages at most once a second. After every `agentHello` the agent gets its positions and working orders.
+- **The agent socket's additions (contract section 10).** `agentState` carries its session and is sent again whenever a field
+  changes, `owns` included, at the next order or position event. `exec` carries ChartBridge's order id (`cbId`) and the order's
+  role; its `order` messages carry `orderName`, NinjaTrader's own name of the order. The flat-time close and the protective
+  exit are named with `ag:<id>` and carry the roles `flat` and `protect`. The
+  snapshot after hello covers exactly the served roots of `welcome` and ends with a `snapshot` message. Pages are unchanged.
+- **After the second reviews.** A flatten asks again whether the pair is still the agent's before it closes anything, and
+  never closes more than the agent's own trade holds. Nothing is sent while the market is shut (fixed hours: 17:00 to 18:00 on
+  weekdays, Friday 17:00 to Sunday 18:00). An agent trade that ended where ChartBridge could not see it raises an error every
+  minute while the account holds a position there. Unconfirmed cancels slow to every 30 s after 10 tries, with an error, and
+  wait while the account is disconnected. The flatten follows the agent's trade into another contract month. A first failed
+  read of `bot-account.txt` or `copier.txt` stands the agent down at once; held-back refused plans are shown within a second;
+  the day file never loses a plan id; old trade records wait for NinjaTrader's execution replay.
 - **Tests.** `nt8/check/AgentHarness.cs` (inside `npm run check:orders`) runs every refusal and every timer; IntegrationHarness
   X13 where the lanes meet; `test/fake-agent.mjs` is a made-up agent client with its test; `test/nt8-agents.test.js` guards the
   source. The bot channel, the copier and every other lane behave as in 0.4.3 except where the contract requires (refusing an
