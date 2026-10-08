@@ -2426,13 +2426,18 @@ Where the contract left a detail open, the safest simple choice was taken and is
 - **Page edits of an agent's entry** (lead's default): `plan` may set new distances of 1 or more, never remove the stop or the
   target (null or 0: "an agent's entry always has a stop and a target"); `change` of its price is allowed (gate 5); legs,
   Flatten and cancel always.
+- **Only a chosen account is the agent's** (lead's default). An account chosen on the page (written to
+  `agent-<id>-account.txt`) is the agent's, and it is the only one `botAccount`, `copierSet`, `copierFollower` and other agents
+  refuse (`copierFollower` with `on: false` too, unless the account is already listed: it would list it). An agent with no
+  account file sits on its unchosen default, Sim101, and claims it against nobody: installing 0.5.0 with `agents = manrae`
+  never stops Anthony choosing Sim101 for the bot or the copier. Such an agent trades Sim101 only while nothing else uses it.
 - **Account clashes** (lead's default): the bot's account and the copier's leader and followers count whether or not the bot
   and copier switches are on (read from `bot-account.txt` and `copier.txt` when off; a file that cannot be understood counts
-  as a clash). A clash that comes from the files (the agent's default Sim101 is also the bot's default, say) stands the AGENT
-  down in plain words ("Sim101 is also the bot's account: choose an account for agent manrae on the Agent tab"); the bot and
-  the copier are left as they were. Two agents naming one account both stand down. `botAccount`, `copierSet` and
-  `copierFollower` refuse an agent's account; `copierFollower` with `on: false` is refused too unless the account is already
-  listed (it would list it).
+  as a clash). A clash stands the AGENT down in plain words ("Sim101 is also the bot's account: choose an account for agent
+  manrae on the Agent tab"); the bot and the copier are left as they were. The moment the bot or the copier is set to the
+  account an agent sits on, its plans are refused at check 2, its unfilled entries are cancelled and its open proposals
+  expire; an open position keeps its stop and target and the flat time still applies. Between agents: a chosen account
+  blocks an agent sitting there on its default; two agents on their unchosen default Sim101 both stand down.
 - **agentAccount** (lead's default): a change puts the agent in `shadow` (it never carries Auto or Copilot onto a new account);
   the agent gets `welcome` again; logged with SIM or LIVE.
 - **agentRules** (lead's default): roots from NQ, MNQ, ES and MES only (a root needs a hard ceiling); a `maxQty<ROOT>` left out
@@ -2451,6 +2456,18 @@ Where the contract left a detail open, the safest simple choice was taken and is
   by their entry's tag (learned at placement, from every order event, and by a scan of the accounts every 2 s).
 - **Recovery** (lead's default): an agent entry is a v2 entry: its `planned_brackets.txt` line if there is one, else the ticks
   in its name. `/diag` `flattenedAt` is the UTC time of the last flatten that ended flat.
+
+**Plain words on two risks** (as built, for Anthony):
+
+- **The flatten removes the stop first.** At the flat time (and on the agent's own `flatten`) ChartBridge cancels the agent's
+  working orders on that contract, its stop and target included, and only then closes the position at market, so the stop
+  never fills beside the close and turns the account the other way. For that moment the position has no stop. If the account
+  disconnects then, nothing is sent until it is back, and every signed-in page gets the NOT FLAT error every 10 s until the
+  position is flat: act in NinjaTrader.
+- **Nothing flattens an agent whose id is removed from `config.txt`.** The flat time, the expiry timers and the heartbeat run
+  only for the ids in `agents`. Take an id out (and restart) while that agent holds a position or a working entry, and
+  ChartBridge no longer watches it: its stop and target stay at the broker as v2 legs, but nothing closes it at its flat time.
+  Flatten it first, or flatten it by hand.
 
 What only NinjaTrader can show: the `/agent/<id>` upgrade through `HttpListener` (the Mono harness drives the agent object
 directly), NinjaTrader's own order and execution event order, `TimeInForce.Day` at the broker, and whether an order name of up

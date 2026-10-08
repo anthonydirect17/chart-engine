@@ -175,6 +175,7 @@ public static class AgentHarness
             Replay();
             Recovery();
             OwnerLockCopier();
+            ChosenAccounts();
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -1287,5 +1288,69 @@ public static class AgentHarness
         Check(Logged("belongs to agent demob until it is flat"), "the copier's skip says why");
         Check(ChartBridgeAgents.EntryCheck("copier", simc, "MNQ").Contains("belongs to agent demob"), "EntryCheck for the copier: refused");
         Settle(eval); Settle(simc); Settle(simd);
+    }
+
+    // ------------------------------------------------------------ only a CHOSEN account is the agent's (lead's default)
+    // An agent on its unchosen default (Sim101, no agent-<id>-account.txt) claims nothing against the bot, the copier or other
+    // agents; it trades Sim101 while nothing else uses it, and stands down (its unfilled entry cancelled) the moment something does.
+    static void ChosenAccounts()
+    {
+        // the bot on, on a made-up SIM-Z; manrae back on its unchosen default
+        File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSIM-Z" });
+        ChartBridgeSwitches.Note("bot", "on");
+        ChartBridgeBot.Start(false);
+        File.Delete(Path.Combine(Dir, "agent-manrae-account.txt"));
+        Restart();
+        SettleAll();
+        Check(M.Account == "Sim101" && !M.Chosen && M.AccountConflict() == null && ChartBridgeAgents.AgentOfAccount("Sim101") == null,
+              "manrae on its unchosen default Sim101: nothing else uses it, and it claims it against nobody");
+        // the bot chooses Sim101 while the agent sits on its default: accepted; the agent stands down
+        P("{\"type\":\"botAccount\",\"cid\":\"b2\",\"account\":\"Sim101\"}");
+        Check(!PageReject().Contains("\"cid\":\"b2\"") && ChartBridgeBot.BotAccount == "Sim101", "botAccount Sim101 while an agent sits on its unchosen default: accepted: " + PageReject());
+        Tick();
+        Check(M.StripJson().Contains("\"standDown\":\"Sim101 is also the bot's account: choose an account for agent manrae"), "the agent stands down in plain words");
+        Mode("manrae", "auto");
+        Check(PageReject().Contains("auto refused: Sim101 is also the bot's account"), "its auto is refused");
+        int calls = sim.Calls.Count;
+        Last2();
+        M.OnMessage(ac, Good(NewId()));
+        Check(AgentReject().Contains("Sim101 is also the bot's account") && sim.Calls.Count == calls, "check 2 refuses its plans");
+        // the reverse order: the bot moves away (to a made-up SIM-E); the agent CHOOSES Sim101; then the bot may not have it
+        NewAccount("SIM-E", Provider.Simulator);
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-B, SIM-C, SIM-D, SIM-E");
+        P("{\"type\":\"botAccount\",\"cid\":\"b3\",\"account\":\"SIM-E\"}");
+        Check(!PageReject().Contains("\"cid\":\"b3\"") && ChartBridgeBot.BotAccount == "SIM-E" && M.AccountConflict() == null, "the bot moves to SIM-E: the agent on its default stands up: " + PageReject());
+        P(AccountMsg("manrae", "Sim101"));
+        Check(M.Chosen && M.Account == "Sim101" && FileText("agent-manrae-account.txt").Contains("account\tSim101"), "manrae chooses Sim101 on the page: it is its own now");
+        P("{\"type\":\"botAccount\",\"cid\":\"b4\",\"account\":\"Sim101\"}");
+        Check(PageReject().Contains("Sim101 is agent manrae's account: the bot does not trade it") && ChartBridgeBot.BotAccount == "SIM-E", "then botAccount Sim101 is refused");
+        P("{\"type\":\"copierFollower\",\"cid\":\"c9\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+        Check(PageReject().Contains("Sim101 is agent manrae's account: the copier does not trade it"), "and the copier may not take it either");
+        ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off");
+        File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSIM-Z" });
+        // two agents: an unchosen default never blocks a chosen account; the unchosen one stands down
+        File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
+        File.Delete(Path.Combine(Dir, "agent-manrae-account.txt"));
+        Restart();
+        Check(D.Chosen && !M.Chosen && D.AccountConflict() == null && M.AccountConflict() != null && M.AccountConflict().Contains("Sim101 is also agent demob's account"),
+              "demob CHOSE Sim101 (its file), manrae is on its default: manrae stands down, demob does not");
+        File.Delete(Path.Combine(Dir, "agent-demob-account.txt"));
+        Restart();
+        Check(M.AccountConflict() != null && D.AccountConflict() != null, "both on their unchosen default Sim101: both stand down");
+        File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSIM-B" });
+        Restart();
+        Mode("manrae", "auto");
+        // the copier takes Sim101 while manrae (unchosen) has a working entry: accepted; the entry is cancelled at once
+        Last2();
+        string id = NewId();
+        Order e = PlacedNow(id, Good(id));
+        Check(e != null && IsLive(e), "manrae on its unchosen default, nothing else on Sim101: it trades Sim101 (the contract's default)");
+        P("{\"type\":\"copierFollower\",\"cid\":\"c10\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+        Check(!PageReject().Contains("\"cid\":\"c10\""), "copierFollower Sim101 while an agent sits on its default: accepted");
+        Tick();
+        Check(e != null && e.OrderState == OrderState.Cancelled && Answer().Contains("\"answer\":\"expired\"") && Answer().Contains("stands down: Sim101 is also a copier follower") &&
+              Last(page, "status").Contains("Agent manrae stands down: Sim101 is also a copier follower"),
+              "the moment the copier uses Sim101, manrae stands down and its unfilled entry is cancelled: " + Answer());
+        Settle(sim);
     }
 }

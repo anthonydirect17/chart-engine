@@ -286,11 +286,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             return a == null ? 0 : Math.Min(HardCeiling(root), a.MaxQtyFor(root));
         }
 
-        // An account any agent names as its own (its file, or Sim101 by default), for the bot's and the copier's refusals, or null.
+        // The agent whose CHOSEN account (chosen on the page: agent-<id>-account.txt) this is, for the bot's and the copier's
+        // refusals, or null. An agent on its unchosen default (Sim101, no file) claims nothing against anyone (lead's default).
         public static string AgentOfAccount(string name)
         {
             if (string.IsNullOrEmpty(name)) return null;
-            foreach (ChartBridgeAgent a in All()) if (string.Equals(a.Account, name, StringComparison.OrdinalIgnoreCase)) return a.Id;
+            foreach (ChartBridgeAgent a in All()) if (a.Chosen && string.Equals(a.Account, name, StringComparison.OrdinalIgnoreCase)) return a.Id;
             return null;
         }
 
@@ -551,6 +552,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private bool killed;
         private Rules rules = new Rules();
         private string account = "Sim101";
+        private bool chosen;   // the account was chosen on the page (agent-<id>-account.txt); false on the unchosen default
         private string rulesBroken, accountBroken, dayBroken, lossStandDown;
         private string secret, secretState = "missing";
         private string session;
@@ -575,6 +577,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private long nPlans, nProposals, nPlaced, nRefused, nHeartbeatLost;
 
         public string Account { get { lock (Sync) return account; } }
+        public bool Chosen { get { lock (Sync) return chosen; } }
         public int MaxQtyFor(string root) { lock (Sync) return rules.Roots.Contains(root ?? "") ? rules.QtyFor(root) : 0; }
         private Rules RulesNow() { lock (Sync) return rules.Copy(); }
 
@@ -746,7 +749,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex) { broken = "agent-" + Id + "-account.txt could not be read (" + ex.Message + ")"; }
             if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); }
-            lock (Sync) { account = a; accountBroken = broken; }
+            lock (Sync) { account = a; accountBroken = broken; chosen = broken == null && a != null && File.Exists(AccountFile); }
         }
 
         private string SaveAccount(string nm)
@@ -886,8 +889,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return acct + " is also the bot's account: choose an account for agent " + Id + " on the Agent tab (an agent never shares an account)";
             string cw = ChartBridgeCopier.AgentAccountRefusal(acct);
             if (cw != null) return cw.Replace(" is the copier's", " is also the copier's").Replace(" is a copier follower", " is also a copier follower") + ": choose an account for agent " + Id + " on the Agent tab (an agent never shares an account)";
+            bool mine = Chosen;
             foreach (ChartBridgeAgent other in ChartBridgeAgents.All())
-                if (other != this && string.Equals(other.Account, acct, StringComparison.OrdinalIgnoreCase))
+                if (other != this && string.Equals(other.Account, acct, StringComparison.OrdinalIgnoreCase) && (other.Chosen || !mine))
                     return acct + " is also agent " + other.Id + "'s account: choose an account for agent " + Id + " on the Agent tab (an agent never shares an account)";
             return null;
         }
@@ -1635,6 +1639,21 @@ namespace NinjaTrader.NinjaScript.AddOns
                 int n = CancelUnfilled("no agent " + Id + " connected for 5 s");
                 if (n > 0) { string text = "Agent " + Id + ": not connected: " + n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled; any position keeps its stop and target"; Log(text); AgentLog(text); ToPages(StatusJson("warn", text)); Notify(); }
             }
+            // A clash with the bot, the copier or another agent (set after this agent's entries went out): it stands down, its
+            // unfilled entries are cancelled and its open proposals expire; a position keeps its legs, the flat time still runs.
+            string clash = AccountConflict();
+            if (clash != null)
+            {
+                List<Proposal> gone;
+                lock (Sync) gone = ExpireOpenLocked("expired");
+                foreach (Proposal p in gone) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "expired", "agent " + Id + " stands down: " + clash)); }
+                int n = CancelUnfilled("agent " + Id + " stands down: " + clash);
+                if (n > 0 || gone.Count > 0)
+                {
+                    string text = "Agent " + Id + " stands down: " + clash + ": " + n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled; any position keeps its stop and target; its flat time still runs";
+                    Log(text); AgentLog(text); ToPages(StatusJson("warn", text)); Notify();
+                }
+            }
             Rules r = RulesNow();
             double tod = NowEt().TimeOfDay.TotalSeconds;
             bool inWindow = tod >= r.EntryFrom * 60 && tod < r.EntryUntil * 60;
@@ -1912,14 +1931,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             string cw = ChartBridgeCopier.AgentAccountRefusal(nm);
             if (cw != null) return cw + ": an agent never trades it";
             foreach (ChartBridgeAgent other in ChartBridgeAgents.All())
-                if (other != this && string.Equals(other.Account, nm, StringComparison.OrdinalIgnoreCase)) return nm + " is agent " + other.Id + "'s account: each agent has its own";
+                if (other != this && other.Chosen && string.Equals(other.Account, nm, StringComparison.OrdinalIgnoreCase)) return nm + " is agent " + other.Id + "'s account: each agent has its own";
             string why = AccountProblemFor(nm, true);
             if (why != null) return why;
             if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: choose its account when it is flat";
             string old = Account;
             bool broken;
             lock (Sync) broken = accountBroken != null;
-            if (nm == old && !broken) return null;
+            if (nm == old && !broken && Chosen) return null;   // already its chosen account (choosing its unchosen default writes the file: it is then its own)
             foreach (string root in RulesNow().Roots)
             {
                 if (ChartBridgeOrders.AgentHoldsOnRoot(FindAccount(nm), root)) return nm + " holds a position or a working order on " + root + ": choose agent " + Id + "'s account when both accounts are flat on its roots";
@@ -1928,7 +1947,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string err = SaveAccount(nm);
             if (err != null) return "agent-" + Id + "-account.txt could not be saved (" + err + "); nothing changed";
             string wasMode;
-            lock (Sync) { account = nm; accountBroken = null; Sticky.Clear(); wasMode = mode; mode = "shadow"; }   // never carries Auto or Copilot onto a new account (lead's default)
+            lock (Sync) { account = nm; accountBroken = null; chosen = true; Sticky.Clear(); wasMode = mode; mode = "shadow"; }   // never carries Auto or Copilot onto a new account (lead's default)
             string mark = SimNow() ? "Sim" : "LIVE";
             if (wasMode != "shadow") AgentLog("mode shadow (was " + wasMode + "): its account changed");
             Log("agent " + Id + " account " + nm + " (" + mark + "), was " + old + ", set by the page");

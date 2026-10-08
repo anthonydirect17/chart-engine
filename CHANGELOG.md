@@ -21,8 +21,9 @@ every lead's default in its "as built" list. The chart's own version is unchange
   bot, the copier and other agents are refused there; exits always pass (Flatten, cancels, moving a stop or target, an order
   that only reduces). An agent never enters where anything else is held or working. One check, where every entry passes.
 - **Accounts never shared.** An agent never trades the bot's account, the copier's leader or a follower, or another agent's;
-  the bot and the copier refuse an agent's account. A clash from the files stands the agent down in plain words and leaves
-  the bot and the copier as they were.
+  the bot and the copier refuse an agent's account once it is chosen on the page. An agent still on its unchosen default
+  (Sim101) claims nothing: if the bot or the copier takes that account, the agent stands down in plain words (its unfilled
+  entries cancelled) and the bot and the copier are left as they were.
 - **Fills to The Desk** carry `by` (`agent:<id>`, `bot` or `copier`) when ChartBridge knows who placed the order; nothing else
   in the fill changes. v3 pages see `by: "agent:<id>"` on an agent's orders and legs.
 - **Tests.** `nt8/check/AgentHarness.cs` (inside `npm run check:orders`) runs every refusal and every timer; IntegrationHarness
