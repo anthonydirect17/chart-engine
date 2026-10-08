@@ -250,6 +250,11 @@ test('account chooser: tradable accounts, SIM first; never the bot\'s, the copie
   }
   assert.equal(AC.accountChange(a, 'EVAL-A', ch, { version: '0.5.1' }).confirm, 'Agent demo will trade LIVE account EVAL-A in Shadow (nothing is placed until you choose Copilot or Auto). Continue?', 'already in Shadow: nothing more to say');
   assert.ok(AC.keepsMode('0.5.2') && !AC.keepsMode('0.5.1') && !AC.keepsMode(null));
+  /* the 0.5.2 re-review: the open question stands only while the agent is in the mode it named when it opened */
+  assert.equal(AC.askStale('shadow', agent({ mode: 'shadow' })), null);
+  assert.equal(AC.askStale('shadow', agent({ mode: 'auto' })), 'demo went to Auto while the question said Shadow: nothing was sent. Choose Set to be asked again.');
+  assert.equal(AC.askStale('auto', agent({ mode: 'copilot' })), 'demo went to Copilot while the question said Auto: nothing was sent. Choose Set to be asked again.');
+  assert.equal(AC.askStale('', agent({ mode: 'auto' })), null, 'no question open');
   const off = AC.accountChoices(accounts, a, { bot: { enabled: false, account: 'Sim101' } });
   assert.equal(off.find(c => c.name === 'Sim101').why, '', 'with the bot channel off its account is free');
   assert.match(AC.accountChange(agent({ position: { root: 'MNQ', qty: 1 } }), 'EVAL-A', ch, {}).error, /choose its account when it is flat/);

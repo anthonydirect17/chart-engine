@@ -20,7 +20,9 @@ settings, on the Agent tab. `nt8/PROTOCOL.md`, "Agent channel", has the rules.
   trades still printing; its stop and target stay), and goes on at the open.
 - **A position from an earlier session.** After a restart past 18:00, an agent position whose trade began in the session
   before (its 15:55 flatten did not finish) is flattened at once by its rules, even inside an 18:00 window; never into a
-  closed market.
+  closed market. The day file keeps such a trade as a `carried` line until the agent is flat, so a roll at 18:00 while
+  ChartBridge runs, then a restart, still flattens it. Going back to 0.5.1 with that line in the file: 0.5.1 cannot read
+  the file and takes no entries for that agent until the file is deleted.
 - **An account change keeps the mode** (until 0.5.1 the agent went to Shadow). The page asks once before a LIVE account,
   naming the mode: "Agent manrae will trade LIVE account EVAL-A in Auto. Continue?"; the Bot tab's question names the bot's
   mode the same way. Not confirmed, nothing changes. ChartBridge keeps the mode only when `agentAccount` carries `keepMode`,
@@ -30,7 +32,8 @@ settings, on the Agent tab. `nt8/PROTOCOL.md`, "Agent channel", has the rules.
 - **The page (chart 1.18.1).** The Agent tab checks the rules the same way before sending, its session trail runs across
   midnight (an hour mark every 3 hours on a long session), and it sends `keepMode` only to ChartBridge 0.5.2 or later (0.5.1
   refuses a key it does not know); to an older ChartBridge its LIVE question says the agent goes to Shadow, and after
-  sending it says which. A rules file
+  sending it says which. The LIVE question keeps the mode it named when it opened; if another page changes the agent's
+  mode while it is open, it closes with a note, nothing is sent, and Set asks again. A rules file
   with an 18:00 window is refused by ChartBridge 0.5.1 and older (no entries for that agent until its rules are set again):
   update ChartBridge before setting one.
 

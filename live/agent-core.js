@@ -284,6 +284,14 @@ function accountChange(agent, name, choices, ctx, cid) {
   if (keeps) msg.keepMode = asked;
   return { msg, live: !ch.sim, confirm: ch.sim ? '' : liveQuestion(Object.assign({}, a, { mode: asked }), name, c.version), mode: keeps ? asked : 'shadow' };
 }
+/** The open LIVE question stands only while the agent is still in the mode it named when it opened (the 0.5.2 re-review): the
+ *  question is never redrawn with another mode. null while it stands; else the note that closes it (nothing is sent, and Set
+ *  asks again, naming the mode then). */
+function askStale(askedMode, agent) {
+  const a = agent || {};
+  if (!MODES.includes(askedMode) || a.mode === askedMode) return null;
+  return (validId(a.agent) ? a.agent : agentName(a)) + ' went to ' + (MODE_NAME[a.mode] || 'Shadow') + ' while the question said ' + MODE_NAME[askedMode] + ': nothing was sent. Choose Set to be asked again.';
+}
 /** Does this ChartBridge keep the mode when the account changes (0.5.2 or later, with keepMode)? */
 function keepsMode(version) { return atLeast(version, '0.5.2'); }
 /** The one question before an agent takes a LIVE account: it names the mode the agent will be in (ChartBridge 0.5.2, Anthony
@@ -886,7 +894,7 @@ return {
   validId, parseVersion, atLeast, offText,
   createAgents, pickAgent, agentName,
   parseRules, rulesLines, rulesForm, rulesChangeable, rulesChange, durationText,
-  accountMark, agentAccount, accountChoices, accountChange, keepsMode, liveQuestion,
+  accountMark, agentAccount, accountChoices, accountChange, keepsMode, liveQuestion, askStale,
   modesAllowed, accountTradable, modeMsg, killMsg,
   countdown, createProposals, endText, legPrices,
   createFeed, planLine,

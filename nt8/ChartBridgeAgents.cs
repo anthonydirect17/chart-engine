@@ -760,7 +760,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string rulesBroken, accountBroken, dayBroken, lossStandDown;
         private string secret, secretState = "missing";
         private string session;
-        private bool carried;   // 0.5.2 review: a trade record from an earlier session (dropped at a start, or carried over at the roll): a position left is flattened
+        // 0.5.2 review: the tags of trade records from an earlier session (dropped at a start, or carried over at the roll): a position
+        // left is flattened. Kept in the day file (carried<TAB><tag>), so a roll while running and then a restart still flatten it.
+        private readonly HashSet<string> Carried = new HashSet<string>();
         private readonly Dictionary<string, double> Trades = new Dictionary<string, double>();   // entry tag -> realized $ (NaN while open)
         private readonly HashSet<string> PlanIds = new HashSet<string>();
         private readonly Dictionary<string, double> Expiry = new Dictionary<string, double>();   // entry tag -> its plan's expiry (UTC ms)
@@ -993,7 +995,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string today = SessionOf(NowEt()), fileSession = null, broken = null, held = null;
             Dictionary<string, double> trades = new Dictionary<string, double>(), expiry = new Dictionary<string, double>();
             Dictionary<string, int[]> spans = new Dictionary<string, int[]>();
-            HashSet<string> ids = new HashSet<string>();
+            HashSet<string> ids = new HashSet<string>(), carriedTags = new HashSet<string>();
             try
             {
                 if (File.Exists(DayFile))
@@ -1010,6 +1012,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         else if (p.Length == 2 && p[0] == "plan" && p[1].Length >= 1 && p[1].Length <= 40) ids.Add(p[1]);
                         else if (p.Length == 3 && p[0] == "entry" && Regex.IsMatch(p[1], "^[0-9a-f]{8}$") && Regex.IsMatch(p[2], "^[0-9]{1,15}$")) expiry[p[1]] = double.Parse(p[2], CultureInfo.InvariantCulture);
                         else if (p.Length == 2 && p[0] == "standDown" && p[1].Length > 0) held = p[1];
+                        else if (p.Length == 2 && p[0] == "carried" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$")) carriedTags.Add(p[1]);   // 0.5.2 review
                         else if (p.Length == 4 && p[0] == "span" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && Regex.IsMatch(p[2], "^[0-9]{1,6}$") && Regex.IsMatch(p[3], "^[0-9]{1,6}$"))
                             spans[p[1]] = new[] { int.Parse(p[2], CultureInfo.InvariantCulture), int.Parse(p[3], CultureInfo.InvariantCulture) };
                         else { broken = "agent-" + Id + "-day.txt has a line ChartBridge does not understand"; break; }
@@ -1040,7 +1043,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                     else stale = trades.Count(kv => double.IsNaN(kv.Value));
                 }
-                carried = stale > 0;   // 0.5.2 review: whatever position it left is flattened (the flat hours below), the market open
+                // 0.5.2 review: whatever position a trade of an earlier session left is flattened (the flat hours below), the market open:
+                // the records carried over at a roll (the file's carried lines), and an open record of an earlier session dropped now
+                Carried.Clear();
+                if (broken == null)
+                {
+                    foreach (string t in carriedTags) Carried.Add(t);
+                    if (fileSession != today) foreach (KeyValuePair<string, double> kv in trades) if (double.IsNaN(kv.Value)) Carried.Add(kv.Key);
+                }
             }
             if (broken != null) Log(broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)");
             if (stale > 0) Log("agent-" + Id + "-day.txt: " + stale + " open trade(s) from the session of " + fileSession + " dropped (a record counts only in its own session)");
@@ -1102,6 +1112,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (KeyValuePair<string, double> kv in Expiry) lines.Add("entry\t" + kv.Key + "\t" + kv.Value.ToString("0", CultureInfo.InvariantCulture));
                 foreach (KeyValuePair<string, int[]> kv in Spans) if (Trades.ContainsKey(kv.Key)) lines.Add("span\t" + kv.Key + "\t" + kv.Value[0].ToString(CultureInfo.InvariantCulture) + "\t" + kv.Value[1].ToString(CultureInfo.InvariantCulture));
                 if (lossStandDown != null) lines.Add("standDown\t" + lossStandDown);
+                foreach (string t in Carried) lines.Add("carried\t" + t);   // 0.5.2 review: a trade of an earlier session, until flat
             }
             try { TryIo(delegate { WriteWhole(DayFile, lines); }); }
             catch (Exception ex) { Log("agent-" + Id + "-day.txt could not be saved (" + ex.Message + "); a restart would forget today's trades and plan ids"); }
@@ -1120,7 +1131,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 session = today;
                 // a trade the ledger still follows goes on into the new day; any other open record is dropped (review A-S4)
                 List<KeyValuePair<string, double>> open = Trades.Where(kv => double.IsNaN(kv.Value) && kv.Key == openTag).ToList();
-                if (open.Count > 0) carried = true;   // 0.5.2 review: a trade of the session before: flattened (its flat time has passed)
+                foreach (KeyValuePair<string, double> kv in open) Carried.Add(kv.Key);   // 0.5.2 review: a trade of the session before: flattened (its flat time has passed); saved below
                 Trades.Clear();
                 foreach (KeyValuePair<string, double> kv in open) Trades[kv.Key] = kv.Value;
                 foreach (string k in Spans.Keys.ToList()) if (!Trades.ContainsKey(k)) Spans.Remove(k);
@@ -2273,8 +2284,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // position held across midnight is inside the session and stays; with 09:45 one held overnight is flattened, as
             // before) and while the market is closed, whatever the agent does or whether it is there
             bool flatHours = FlatHours(r, etNow), fromBefore;
-            lock (Sync) fromBefore = carried;
-            if (fromBefore && !roots.Any(x => Owns(x))) { lock (Sync) carried = false; fromBefore = false; }   // flat: nothing left from the session before
+            lock (Sync) fromBefore = Carried.Count > 0;
+            if (fromBefore && !roots.Any(x => Owns(x))) { lock (Sync) Carried.Clear(); fromBefore = false; SaveDay(); }   // flat: nothing left from the session before
             flatHours = flatHours || fromBefore;   // 0.5.2 review: a position whose trade began in an earlier session is flattened, the market open
             if (!startTold && now - startedMs >= ChartBridgeAgents.SilenceMs)
             {

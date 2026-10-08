@@ -241,7 +241,9 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
     goes to Shadow (another page changed the mode meanwhile). `keepMode` goes only to ChartBridge 0.5.2 or later (by the hello's
     `version`; 0.5.1 refuses a key it does not know): to an older one the question says Shadow ("This ChartBridge (before
     0.5.2) puts it in Shadow when its account changes.") and the page says so after sending; with 0.5.2 it says the mode is
-    kept.
+    kept. The question records the mode once, when it opens, and is never redrawn with another: if the agent's mode changes
+    while it is open (another page), it closes with a note ("demo went to Auto while the question said Shadow: nothing was
+    sent. Choose Set to be asked again."), nothing is sent, and Set asks again naming the mode then (the 0.5.2 re-review).
 11. **The agent's chart (lead's default):** its root is the one picked in the chart's header, else the position's, else a
     working entry's, else an open proposal's, else the last plan's, else the first of its roots. Its trades come from
     fills claimed against its own marked orders (`BotCore.botFillLedger` with the agent's mark, as the bot's), kept in this

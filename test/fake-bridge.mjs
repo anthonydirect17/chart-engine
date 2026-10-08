@@ -153,7 +153,7 @@
 //   &stop=&target=&expire=&setup=&reason=&confidence= (a plan, handled by the mode; p defaults to a price the checks take, the
 //   risk is worked out), /test/agent-proposal?... (the same, always proposed), /test/agent-skip, /test/agent-note?agent=&kind=
 //   &text=, /test/agent-withdraw?agent=&id=, /test/agent-expire?agent=&id=&ms= (an open proposal's expiresAt moved to now+ms),
-//   /test/agents (every agent's state as JSON), /test/agent-stuck-cancel?agent=&n=2 (its next cancels not confirmed),
+//   /test/agents (every agent's state as JSON), /test/agent-stuck-cancel?agent=&n=2 (its next cancels not confirmed), /test/agent-mode?agent=&mode=auto (another page changed its mode),
 //   /test/agent-unlist?account=&on=1 (NinjaTrader no longer lists it), /test/agent-flat-hours?agent=&on=1 (the flat hours now).
 //   Sample data and made-up names only.
 //   GET /bot-library (lane C4, docs/BOT_LIBRARY.md): with --v3 and the bot switch on, the made-up example
@@ -997,6 +997,7 @@ function agentControl(p, q, req, res) {
   if (p === '/test/agent-withdraw') { const m = { type: 'withdraw', id: q.get('id') || '', reason: q.get('reason') || 'Sample: the setup is gone' }; return json(200, { refused: desk.agentMessage(id, m, JSON.stringify(m)) }); }
   /* as built (agent-channel fb15822): a cancel NinjaTrader leaves unconfirmed n times; an account it no longer lists; the flat
      hours now (the flatten job on demand, with --agent-any-time) */
+  if (p === '/test/agent-mode') { a.mode = q.get('mode') || 'shadow'; desk.agentNotify(a); return json(200, { mode: a.mode }); }   // another page changed the mode (the 0.5.2 re-review)
   if (p === '/test/agent-stuck-cancel') { a.stuckCancels = +(q.get('n') || 2); return json(200, { stuckCancels: a.stuckCancels }); }
   if (p === '/test/agent-unlist') { const n = q.get('account') || a.account; if (q.get('on') === '0') desk.unlisted.delete(n); else desk.unlisted.add(n); return json(200, { unlisted: [...desk.unlisted] }); }
   if (p === '/test/agent-flat-hours') { a.forceFlatHours = q.get('on') !== '0'; return json(200, { forceFlatHours: a.forceFlatHours }); }
