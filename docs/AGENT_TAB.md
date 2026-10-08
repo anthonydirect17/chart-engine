@@ -113,7 +113,10 @@ decision in a drawer over the right column, outlined in that decision's colour:
   opens and back to the row when it closes). There is no key handler on the page, so the order hotkeys and the page's own
   Escape are untouched; a row is a button, not a box, so the hotkeys work with the focus on it.
 - **Where it sits** (lead's default): over the right column, never over an open proposal (Accept and Reject stay in
-  sight), and above the last part of the stream when there is room, so its row stays in sight.
+  sight), and above the last part of the stream when there is room; while it is open the stream's rows start below it,
+  so its row stays in sight even in a short list.
+- **A long record** scrolls inside the drawer (never the page), and "more below" shows at its foot until its end is in
+  sight.
 
 ## What the tab shows
 
@@ -140,7 +143,9 @@ decision in a drawer over the right column, outlined in that decision's colour:
   15:55 by default) with now and his fills (F) and exits (X, green or red by result), and the legend of the light's colours.
 - **Corner:** a proposal of an agent not shown in the tab pops up in the corner wherever Anthony is (the Bot tab's corner,
   so the two never overlap); notices for an entry, an exit, a stand-down, the heartbeat, the kill switch, the mode, the
-  account and how a proposal ended. While the Agent tab is open the notices sit above its footer.
+  account and how a proposal ended. While the Agent tab is shown the notices cover none of it: they stack in the chart
+  panel's lower left, above its time axis (over the oldest bars), never over the controls, the rules, the proposal, the
+  stream or the footer.
 - **Smaller screens:** at 1366 x 768 everything fits the window with no scroll; narrower than 1100 px the chart goes on
   top with the controls and the stream below (the tab scrolls); on a phone everything stacks, with no sideways scroll
   (the workspace's top bar wraps while the tab is open there).
@@ -311,8 +316,9 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
       not move the light.
     - The P&L figures keep green and red for their sign and change at once (R3); only the light's colour fades.
     - The chart keeps the page's own look (candles, lines, price line); only its panel is board F's.
-    - The workspace's top bar wraps on a phone while the Agent tab is open (it is wider than a phone otherwise), and the
-      corner notices sit above the tab's footer while it is open; nothing else outside the tab changed.
+    - The workspace's top bar wraps on a phone while the Agent tab is open (it is wider than a phone otherwise), and while
+      the tab is shown the corner notices stack in its chart panel's lower left (over the oldest bars, above the time
+      axis) so they cover no control, rule, proposal, stream row or figure; nothing else outside the tab changed.
 
 ## Tests
 
@@ -329,6 +335,9 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
   panels in the right colour for watching, a look, a plan waiting in copilot, his rules being checked (the answer held a
   moment), his entry placed, an expired plan, an open trade in profit and under water, and a flat exit; the drawer opens
   and closes (the same row, Close, Escape only from inside it); Motion Off and reduced motion stop the light and keep the
-  glow; the P&L figures, the position and the chart have no transition; no sideways scroll at 1366 px and at 390 px.
-  Screenshots at 1440 x 1000: `agent-f-watching`, `agent-f-plan`, `agent-f-profit`, `agent-f-under`, `agent-f-drawer`.
+  glow; the P&L figures, the position and the chart have no transition; no sideways scroll at 1366 px and at 390 px; a
+  long record scrolls inside its drawer to its last fact; at 1440 x 1000 and 1366 x 768 the corner notices sit in the
+  chart panel and cover none of the left column, its rules, the proposal, the tracker, the stream or the footer.
+  Screenshots at 1440 x 1000: `agent-f-watching`, `agent-f-plan`, `agent-f-profit`, `agent-f-under`, `agent-f-drawer`,
+  `agent-f-notices`.
   `npm run smoke:bot` is unchanged and passes with the Agent tab beside it.

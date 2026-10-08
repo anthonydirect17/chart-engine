@@ -30,7 +30,9 @@ lead's default.
   a drawer over the right column, outlined in its colour: his words, the plan's numbers, ChartBridge's verdict on his
   rules, the proposal and when you saw and answered it, fill and exit details. Only what the channel carries. The same row
   again, Close, or Escape from inside it closes it; no key handler on the page, so the order hotkeys are untouched. It
-  never covers an open proposal.
+  never covers an open proposal, keeps its row in sight below it, and a long record scrolls inside it ("more below").
+- **The corner notices** cover nothing of the tab while it is shown: they stack in the chart panel's lower left, above
+  its time axis.
 
 - **The strip:** name, build, connected and the heartbeat's age, mode, the account with its SIM or LIVE mark, position,
   KILLED or STOOD DOWN with why, and "OWNS <account> <root>" while the agent holds the owner lock; the Motion switch and Pop

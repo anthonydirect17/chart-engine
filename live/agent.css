@@ -295,6 +295,15 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-drawer { position: absolute; inset: 0; z-index: 6; box-shadow: 0 0 34px -6px var(--tc, var(--f-c)), 0 16px 30px rgba(0, 0, 0, .7); display: flex; flex-direction: column; gap: 14px; padding: 16px; overflow: auto; box-sizing: border-box;
   background: #01050b; border: 1px solid var(--tc, var(--f-c)); animation: ag-slide .45s cubic-bezier(.2, .8, .2, 1); }
 .ag-view .ag-drawer[hidden] { display: none; }
+/* taller than its space: it scrolls inside itself (each part keeps its own height) */
+.ag-view .ag-drawer { overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--tc, var(--f-line)) rgba(93, 242, 255, .06); scrollbar-gutter: stable; }
+.ag-view .ag-drawer::-webkit-scrollbar { width: 8px; }
+.ag-view .ag-drawer::-webkit-scrollbar-thumb { background: var(--tc, var(--f-line)); }
+.ag-view .ag-drawer::-webkit-scrollbar-track { background: rgba(93, 242, 255, .06); }
+.ag-view .ag-drawer > * { flex: none; }
+.ag-view .ag-dmore { display: none; position: sticky; bottom: -16px; margin: -14px -16px -16px; padding: 22px 16px 8px; text-align: center; font: 600 10.5px var(--f-ui); letter-spacing: .2em; text-transform: uppercase;
+  color: var(--tc, var(--f-c)); background: linear-gradient(transparent, #01050b 60%); pointer-events: none; }
+.ag-view .ag-drawer.ag-more .ag-dmore { display: block; }
 .ag-view .ag-dhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .ag-view .ag-dtitle { font-size: 19px; font-weight: 600; margin-top: 6px; color: var(--tc); text-shadow: 0 0 10px var(--tc); overflow-wrap: anywhere; }
 .ag-view .ag-dclose { min-height: 44px; min-width: 64px; background: transparent; border: 1px solid var(--f-line); color: var(--f-hot); font: 600 12px var(--f-ui); letter-spacing: .18em; text-transform: uppercase; cursor: pointer; flex: none; }
@@ -376,8 +385,9 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-note.red { border-left-color: var(--ag-sell); border-color: color-mix(in srgb, var(--ag-sell) 45%, transparent); }
 .ag-note .ag-ttl { flex: none; font: 500 10px/1.3 var(--ag-mono); letter-spacing: .14em; color: var(--ag-lav); text-transform: uppercase; white-space: nowrap; }
 
-/* while the Agent tab is open its footer holds today's dollars: the corner notices sit above it */
-body.ag-on .ag-notes, body.ag-on .bt-notes { bottom: 124px; }
+/* while the Agent tab is shown the corner notices cover none of it: they stack in the chart panel's lower left, above its
+   time axis (live/agent.js placeNotes sets where); newest at the bottom, at most the chart's height */
+body.ag-notes-placed .ag-notes, body.ag-notes-placed .bt-notes { left: var(--ag-nl) !important; bottom: var(--ag-nb) !important; width: var(--ag-nw) !important; max-height: var(--ag-nh); overflow: hidden; }
 
 /* ---------------- smaller screens: narrower sides; then the chart on top with the controls and the stream below; a phone stacks */
 @media (max-width: 1500px) {

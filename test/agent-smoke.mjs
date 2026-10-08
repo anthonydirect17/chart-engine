@@ -17,10 +17,11 @@
 //     copilot, his rules being checked, an entry placed, an open trade in profit and under water, and a flat exit; every
 //     stream row is a button whose drawer opens and closes (the same row, Close, Escape only from inside it); the Motion
 //     switch Off and the system's reduced motion stop the light and keep the glow; the P&L figures, the price line and
-//     Accept have no transition; no sideways scroll at 1366 px and at phone width.
+//     Accept have no transition; no sideways scroll at 1366 px and at phone width; a long record scrolls inside its drawer;
+//     the corner notices cover nothing of the tab (they stack in the chart panel's lower left).
 //   npm run smoke:agent      (CHROMIUM_PATH=/path/to/chrome; AGENT_SMOKE_PORT and the next one; SHOTS=dir)
 // Screenshots: agent-tab, agent-1366, agent-live-ask, agent-proposal, agent-accepted, agent-rules, agent-corner, agent-popout, agent-none,
-// agent-phone, and at 1440 x 1000 agent-f-watching, agent-f-plan, agent-f-profit, agent-f-under, agent-f-drawer (.png in test/out).
+// agent-phone, and at 1440 x 1000 agent-f-watching, agent-f-plan, agent-f-profit, agent-f-under, agent-f-drawer, agent-f-notices (.png in test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -288,6 +289,23 @@ try {
     /Risk\s*\$16\.00, reward 2\.00 to 1/.test(pt) && /passed ChartBridge's checks/.test(pt) && /Proposal\s*accepted/i.test(pt) && /You answered/.test(pt) && !/For and against|cost/i.test(pt),
     'a plan\'s record: his words, entry, stop, target, risk, the checks, the proposal and his answer time: "' + pt.slice(0, 220) + '..."');
   await shotF('agent-f-drawer');
+  check(await page.evaluate(() => { const d = document.querySelector('#agView [data-k="drawer"]').getBoundingClientRect(), r = document.querySelector('.ag-feed .ag-rowb.sel'), f = document.querySelector('#agView [data-k="feed"]').getBoundingClientRect(); const b = r.getBoundingClientRect(); return b.top >= d.bottom - 1 && b.bottom <= f.bottom + 1; }),
+    'at 1440 x 1000 its row (the newest, in a short list) is in sight below the drawer');
+  /* a long record in a short window: the drawer scrolls inside itself and its last fact can be reached */
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await sleep(600);
+  const dscroll = await page.evaluate(async () => {
+    const d = document.querySelector('#agView [data-k="drawer"]'), facts = d.querySelectorAll('.ag-fact'), last = facts[facts.length - 1];
+    const before = { sh: d.scrollHeight, ch: d.clientHeight, overflow: getComputedStyle(d).overflowY, more: d.classList.contains('ag-more') && getComputedStyle(d.querySelector('.ag-dmore')).display !== 'none' };
+    d.scrollTop = d.scrollHeight;
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const dr = d.getBoundingClientRect(), lr = last.getBoundingClientRect();
+    return Object.assign(before, { more: before.more, facts: facts.length, lastText: last.textContent, lastIn: lr.top >= dr.top - 1 && lr.bottom <= dr.bottom + 1, scrolled: d.scrollTop > 0, moreAfter: d.classList.contains('ag-more'), page: document.documentElement.scrollHeight <= innerHeight });
+  });
+  check(dscroll.sh > dscroll.ch && /auto|scroll/.test(dscroll.overflow) && dscroll.more && dscroll.scrolled && dscroll.lastIn && !dscroll.moreAfter && dscroll.facts >= 10 && dscroll.page,
+    'a record taller than its drawer says "more below", scrolls inside the drawer, and its last fact is reachable (' + dscroll.lastText + '): ' + JSON.stringify(dscroll));
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await sleep(400);
   await page.click('#agView [data-k="drawer"] [data-act="drawerClose"]');
   await page.click('.ag-filters [data-filter="all"]');
   check(drawerTop >= 0, 'the drawer sits over the right column');
@@ -469,6 +487,43 @@ try {
   /* ---------------------------------------------------------------- the pop-out */
   console.log('the pop-out window');
   await page.click('#wsAgentTab');
+  /* the corner notices cover none of the tab: never the left column (its rules and Change the rules), the proposal, the
+     tracker, the stream or the footer; they stack in the chart panel's lower left */
+  console.log('the corner notices while the Agent tab is open');
+  await until(async () => (await A()).shown && (await A()).chosen === 'demo', 'the tab open on Demo Agent');
+  await control('agent-plan', { agent: 'demo', id: 'n1', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 12, target: 24, expire: 900, setup: 'Sample pullback', reason: 'Sample: a made-up reason for the notices check' });
+  await until(() => page.isVisible('.ag-plist .ag-prop[data-id="n1"]'), 'a proposal in the tab');
+  for (const [w, h] of [[1440, 1000], [1366, 768]]) {
+    await page.setViewportSize({ width: w, height: h });
+    await sleep(700);
+    await control('agent-connect', { agent: 'demotwo', on: 0 });                       // a heartbeat lost, then back: two notices
+    await control('agent-connect', { agent: 'demotwo', name: 'Second Demo Agent', build: 'sample-build-7' });
+    await page.click('#agView [data-mode="shadow"]');                                  // and a mode change: a third
+    await until(async () => (await page.$$('.ag-note')).length >= 3, 'three corner notices at ' + w + ' x ' + h);
+    const hits = await page.evaluate(() => {
+      const box = e => e.getBoundingClientRect();
+      const meet = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+      const keep = { left: '#agView .ag-left', rules: '#agView [data-k="rules"]', rulesOpen: '#agView [data-act="rulesOpen"]', proposal: '#agView [data-panel="prop"]', card: '#agView .ag-plist .ag-prop',
+        tracker: '#agView [data-panel="pipe"]', stream: '#agView [data-panel="stream"]', footer: '#agView .ag-foot', strip: '#agView .ag-strip' };
+      const notes = [...document.querySelectorAll('.ag-note')].filter(n => box(n).height > 0), chart = box(document.querySelector('#agView [data-panel="chart"]'));
+      const out = [];
+      for (const n of notes) {
+        for (const [k, sel] of Object.entries(keep)) { const e = document.querySelector(sel); if (e && box(e).height && meet(box(n), box(e))) out.push(k); }
+        const b = box(n); if (b.left < chart.left || b.right > chart.right || b.top < chart.top || b.bottom > chart.bottom) out.push('outside the chart panel');
+      }
+      return { notes: notes.length, hits: out };
+    });
+    check(hits.notes >= 3 && !hits.hits.length, 'at ' + w + ' x ' + h + ' the corner notices sit in the chart panel and cover nothing else of the tab: ' + JSON.stringify(hits));
+    if (w === 1440) await page.screenshot({ path: path.join(SHOTS, 'agent-f-notices.png') });
+    await page.click('#agView [data-mode="copilot"]');
+    await until(async () => (await agentsNow()).find(a => a.agent === 'demo').mode === 'copilot', 'demo back in Copilot');
+    if (w === 1440) {                                                                  // Copilot again: a fresh proposal for the second size
+      await control('agent-plan', { agent: 'demo', id: 'n2', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 12, target: 24, expire: 900 });
+      await until(() => page.isVisible('.ag-plist .ag-prop[data-id="n2"]'), 'a second proposal in the tab');
+    }
+  }
+  await control('agent-withdraw', { agent: 'demo', id: 'n2' });
+  await page.setViewportSize({ width: 1600, height: 900 });
   const [pop] = await Promise.all([ctx.waitForEvent('page'), page.click('.ag-popbtn')]);
   pop.on('pageerror', e => fail('pop-out error: ' + e.message));
   await pop.waitForLoadState();

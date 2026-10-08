@@ -624,14 +624,14 @@ function create(o) {
     const d = q('[data-k="drawer"]'); if (!d) return;
     const r = S.drawer && S.rows ? S.rows.get(S.drawer) : null;
     if (S.drawer && !r) S.drawer = '';                         // its row is gone (another agent, a new day)
-    if (!r) { put(d, 'hidden', true); setHtml(d, ''); return; }
+    if (!r) { put(d, 'hidden', true); setHtml(d, ''); placeDrawer(); return; }   // closed: the stream's rows start at its top again
     const x = AC.decisionRecord(r, { fmtPx, tick: tickOf });
     const html = '<div class="ag-dhead"><div><div class="ag-lbl">' + esc(x.time) + ' · ' + esc(x.tag) + ' · his decision</div><div class="ag-dtitle">' + esc(x.title) + '</div></div>' +
       '<button type="button" class="ag-dclose" data-act="drawerClose" aria-label="Close his decision">Close</button></div>' +
       (x.words ? '<div class="ag-dsec"><div class="ag-lbl">In his words</div><div class="ag-dquote' + (x.pre ? ' pre mono' : '') + '">' + esc(x.words) + '</div></div>' : '') +
       (x.facts.length ? '<div class="ag-dsec"><div class="ag-lbl">The facts</div>' + x.facts.map(f => '<div class="ag-fact"><span>' + esc(f[0]) + '</span><span class="mono">' + esc(f[1]) + '</span></div>').join('') + '</div>' : '') +
-      '<p class="ag-dnote">Only what ChartBridge\'s agent channel carries. Esc or Close shuts this.</p>';
-    put(d, 'className', 'ag-drawer t-' + x.tone);
+      '<p class="ag-dnote">Only what ChartBridge\'s agent channel carries. Esc or Close shuts this.</p><div class="ag-dmore" aria-hidden="true">more below</div>';
+    put(d, 'className', 'ag-drawer t-' + x.tone + (d.classList.contains('ag-more') ? ' ag-more' : ''));
     setHtml(d, html);
     put(d, 'hidden', false);
     placeDrawer();
@@ -640,22 +640,47 @@ function create(o) {
      above the last part of the stream when there is room, so the row it shows stays in sight and a second click on it
      closes it. Worked out when it opens, when a proposal comes or goes and when the column changes size (no timer). */
   function placeDrawer(reveal) {
-    const d = q('[data-k="drawer"]'), col = q('.ag-right'), prop = q('[data-panel="prop"]');
-    if (!d || d.hidden || !col) return;
+    const d = q('[data-k="drawer"]'), col = q('.ag-right'), prop = q('[data-panel="prop"]'), feedBox = q('[data-k="feed"]');
+    if (!d || d.hidden || !col) { if (feedBox && feedBox.style.paddingTop) feedBox.style.paddingTop = ''; return; }
     const H = col.clientHeight, open = [...cards.values()].some(x => x.p.agent === S.chosen && !x.ended);
     const top = open && prop ? prop.offsetTop + prop.offsetHeight + 8 : 0;
     let bottom = Math.max(150, Math.round(H * 0.38));
     if (H - top - bottom < 220) bottom = 0;
     d.style.top = top + 'px'; d.style.bottom = bottom + 'px';
-    const feedBox = q('[data-k="feed"]'), row = feedBox && S.drawer ? feedBox.querySelector('[data-row="' + CSS.escape(S.drawer) + '"]') : null;
-    if (reveal === true && row && bottom) {                    // on opening: the row in sight, in the part of the stream left showing
-      const fr = feedBox.getBoundingClientRect(), rr = row.getBoundingClientRect(), dr = d.getBoundingClientRect();
-      const from = Math.max(fr.top, dr.bottom + 4);
+    const row = feedBox && S.drawer ? feedBox.querySelector('[data-row="' + CSS.escape(S.drawer) + '"]') : null;
+    /* the stream's rows start below the drawer while it is open, so even the newest row (or a short list) can be in sight */
+    const fr = feedBox ? feedBox.getBoundingClientRect() : null, dr = d.getBoundingClientRect();
+    const under = fr && bottom ? Math.max(0, Math.round(dr.bottom + 4 - fr.top)) : 0;
+    if (feedBox) feedBox.style.paddingTop = under ? under + 'px' : '';
+    if (reveal === true && row && bottom) {                    // on opening or a new size: the row in sight, below the drawer
+      const rr = row.getBoundingClientRect(), from = Math.max(fr.top, dr.bottom + 4);
       if (rr.top < from || rr.bottom > fr.bottom) feedBox.scrollTop += rr.top - from;
     }
+    moreBelow();
+  }
+  /* "more below" while the drawer holds more than it shows (its scroll, no timer) */
+  function moreBelow() { const d = q('[data-k="drawer"]'); if (d) tog(d, 'ag-more', !d.hidden && d.scrollTop + d.clientHeight < d.scrollHeight - 2); }
+  /* the corner notices (the page's, or the Bot tab's corner when it is there) cover nothing of the tab while it is shown: they
+     stack in the chart panel's lower left, above its time axis (the oldest bars), never over the controls, the rules, the
+     proposal, the stream or the footer. Worked out when the tab shows and when the chart panel changes size (no timer). */
+  const NOTE_ROOM = 34;                                     // the chart's time axis stays clear
+  function placeNotes() {
+    const body = document.body, panel = view ? q('[data-panel="chart"]') : null, chart = view ? q('[data-k="chart"]') : null;
+    const r = S.shown && panel && chart && !q('[data-k="main"]').hidden ? chart.getBoundingClientRect() : null;
+    const ok = r && r.width >= 260 && r.height >= 200 && r.top >= 0 && r.bottom <= innerHeight + 1 && innerWidth > 1100;
+    tog(body, 'ag-notes-placed', !!ok);
+    if (!ok) return;
+    body.style.setProperty('--ag-nl', Math.round(r.left + 10) + 'px');
+    body.style.setProperty('--ag-nb', Math.round(innerHeight - r.bottom + NOTE_ROOM) + 'px');
+    body.style.setProperty('--ag-nw', Math.round(Math.min(380, r.width - 120)) + 'px');
+    body.style.setProperty('--ag-nh', Math.round(r.height - NOTE_ROOM - 10) + 'px');
   }
   let resizeObs = null;
-  if (view && typeof ResizeObserver === 'function') { const col = q('.ag-right'); if (col) { resizeObs = new ResizeObserver(() => placeDrawer()); resizeObs.observe(col); } }
+  if (view && typeof ResizeObserver === 'function') {
+    resizeObs = new ResizeObserver(() => { placeDrawer(true); placeNotes(); });   // a new size: the open row back in sight
+    for (const el of [q('.ag-right'), q('[data-panel="chart"]')]) if (el) resizeObs.observe(el);
+  }
+  if (view) window.addEventListener('resize', placeNotes);
 
   /* ---------------- the light, the tracker, the chart's position and the footer: worked out again on each message */
   /* the open P&L: NinjaTrader's unrealized for the agent's own account (when it holds nothing else there), else from the chart's
@@ -851,6 +876,7 @@ function create(o) {
     /* Escape closes the drawer only while the focus is inside it: no keydown handler on the document, so the page's order
        hotkeys and its own Escape (menus, dialogs) are never touched */
     const dr = q('[data-k="drawer"]');
+    if (dr) dr.addEventListener('scroll', moreBelow, { passive: true });
     if (dr) dr.addEventListener('keydown', e => { if (e.key === 'Escape' && !e.defaultPrevented && !e.isComposing) { e.preventDefault(); closeDrawer(); } });
     view.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.closest('.ag-rform input')) { e.preventDefault(); saveRules(); } });
   }
@@ -921,6 +947,7 @@ function create(o) {
     if (typeof o.onTab === 'function') o.onTab(on);
     if (!on) unmountChart();
     render();
+    placeNotes();
     seenNow();
   }
   if (tabBtn) tabBtn.addEventListener('click', () => showTab(!S.shown));
@@ -929,6 +956,7 @@ function create(o) {
   renderMotion();
   const unlisten = V3 ? V3.listen({ message: onMessage, closed: () => lost() }) : () => {};
   render();
+  placeNotes();
   loadKeys();
 
   const api = {
@@ -962,7 +990,7 @@ function create(o) {
       proposals: [...cards.values()].map(x => ({ agent: x.p.agent, id: x.p.id, ended: !!x.ended, corner: !x.corner.hidden })), offText: AC.offText(offCtx()),
       feed: S.chosen ? feed.counts(S.chosen) : { notes: 0, plans: 0 }, light: cur() ? lightNow(cur()) : null, drawer: S.drawer, motion: S.motion, chart: !!S.chart, chartRoot: S.chartRoot, orders: [...S.orders.values()].map(x => ({ id: x.id, by: x.by, role: x.role, root: x.root })), trips: trips() }),
     chart: () => (S.chart ? S.chart.chart : null),
-    destroy() { unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); propBox.removeEventListener('click', onCardClick); for (const x of cards.values()) x.corner.remove(); clearTimeout(timer); },
+    destroy() { unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); window.removeEventListener('resize', placeNotes); document.body.classList.remove('ag-notes-placed'); propBox.removeEventListener('click', onCardClick); for (const x of cards.values()) x.corner.remove(); clearTimeout(timer); },
   };
   return api;
 }
