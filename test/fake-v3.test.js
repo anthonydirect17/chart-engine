@@ -923,6 +923,11 @@ test('agents review S6b: the page cannot take an agent entry\'s stop or target a
 });
 
 test('agents review S6c, S6d: 18:00 ET starts the day over; a rules change never lifts a loss stand-down', async () => {
+  const first = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 21, 0) });   // 17:00 New York; its first second comes after 18:00
+  first.hello();
+  const f = first.desk.agents.get('demo'); f.trades = 3; f.planIds.add('used');
+  first.advance(2 * 3600000); first.desk.everySecond();
+  assert.deepEqual([f.trades, f.planIds.has('used')], [0, false], 'the day is known from the start, not from the first second');
   const d = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 21, 0) });   // 17:00 New York
   d.hello(); d.desk.everySecond();
   const a = d.desk.agents.get('demo');

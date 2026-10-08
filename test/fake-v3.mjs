@@ -1037,7 +1037,7 @@ Object.assign(OrderDeskV3.prototype, {
       const r = (o.agentRules || {})[id] || AGENT_DEFAULT_RULES;
       this.agents.set(id, { id, name: null, build: null, connected: false, simulated: false, conn: null, mode: 'shadow', killed: false, standDown: null,
         trades: 0, losses: 0, pnl: 0, account: (o.agentAccounts || {})[id] || 'Sim101', rules: JSON.parse(JSON.stringify(r)), lastBeat: 0, lastPlan: null,
-        plans: [], notes: [], planIds: new Set(), proposals: new Map(), trade: null, msgTimes: [], flattenedDay: null, flatWarnAt: 0,
+        plans: [], notes: [], planIds: new Set(), proposals: new Map(), trade: null, msgTimes: [], flattenedDay: null, flatWarnAt: 0, day: tradingDay(this.now()),
         stats: { plans: 0, proposals: 0, placed: 0, refused: 0, heartbeatLost: 0, flattenedAt: null } });
     }
   },
@@ -1481,8 +1481,7 @@ Object.assign(OrderDeskV3.prototype, {
   /** 18:00 ET: a new trading day for the agent: trades, losing trades, P&L today, a loss stand-down and the plan ids start
    *  over (contract section 5; a trade still open goes on into the new day) */
   agentNewDay(a, t) {
-    const day = tradingDay(t);
-    if (a.day === undefined) { a.day = day; return; }
+    const day = tradingDay(t);                     // a.day: the trading day the agent's counts belong to, from its start
     if (a.day === day) return;
     a.day = day; a.trades = 0; a.losses = 0; a.pnl = 0; a.standDown = null; a.planIds.clear();
     this.agentLogLine(a, 'a new trading day: ' + day);
