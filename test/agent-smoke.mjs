@@ -236,8 +236,8 @@ try {
   const before = (await sent()).length;
   await page.selectOption('#agView [data-k="acctSel"]', 'EVAL-A');
   await page.click('#agView [data-act="acctSave"]');
-  check(await visible('#agView [data-k="acctAsk"]') && /Demo Agent is in Shadow: it will trade LIVE account EVAL-A once you put it in Copilot or Auto\. The agent goes to Shadow when its account changes\. Continue\?/.test(await text('#agView [data-k="acctAsk"]')),
-    'a LIVE account is asked once, in the page, naming the mode and the move to Shadow: ' + await text('#agView [data-k="acctAsk"]'));
+  check(await visible('#agView [data-k="acctAsk"]') && /Agent demo will trade LIVE account EVAL-A in (Shadow \(nothing is placed until you choose Copilot or Auto\)|Copilot|Auto)\. Continue\?/.test(await text('#agView [data-k="acctAsk"]')),
+    'a LIVE account is asked once, in the page, naming the mode it keeps (ChartBridge 0.5.2): ' + await text('#agView [data-k="acctAsk"]'));
   check((await sent()).length === before, 'nothing sent before the answer');
   await page.screenshot({ path: path.join(SHOTS, 'agent-live-ask.png'), clip: { x: 0, y: 0, width: 640, height: 900 } });
   await page.click('#agView [data-act="acctNo"]');

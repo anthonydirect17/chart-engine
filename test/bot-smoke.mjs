@@ -330,7 +330,7 @@ try {
   await page.click('[data-act="acctSave"]');
   await until(() => page.isVisible('[data-k="acctAsk"]'), 'a LIVE account: the page asks once');
   const ask = await page.textContent('[data-k="acctAsk"]');
-  check(/The bot will trade LIVE account EVAL-A\. Continue\?/.test(ask) && dialogs === 0, 'the question is in the page, never a browser dialog: ' + ask.trim());
+  check(/The bot will trade LIVE account EVAL-A in (Shadow|Copilot|Auto)\. Continue\?/.test(ask) && dialogs === 0, 'the question is in the page, never a browser dialog: ' + ask.trim());
   check((await v3()).bot.account === 'Sim101', 'nothing sent before the answer');
   await page.screenshot({ path: path.join(SHOTS, 'bot-live-ask.png') });
   await page.click('[data-act="acctNo"]');

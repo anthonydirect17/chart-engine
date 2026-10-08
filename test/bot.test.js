@@ -123,7 +123,8 @@ test('the bot\'s account (Anthony 2026-10-07): SIM or LIVE mark, the accounts to
   assert.ok(BC.accountChoices(accounts, { account: 'FUNDED-B', sim: false }).some(c => c.name === 'FUNDED-B' && c.current && !c.tradable), 'the current account is always listed');
   const live = BC.botAccountChange(bot, 'EVAL-A', ch, 'c9');
   assert.deepEqual(live.msg, { type: 'botAccount', cid: 'c9', account: 'EVAL-A' });
-  assert.equal(live.live, true); assert.equal(live.confirm, 'The bot will trade LIVE account EVAL-A. Continue?', 'a LIVE account: asked once, in the page');
+  assert.equal(live.live, true); assert.equal(live.confirm, 'The bot will trade LIVE account EVAL-A in Shadow. Continue?', 'a LIVE account: asked once, in the page, naming the mode it keeps');
+  assert.equal(BC.botAccountChange(Object.assign({}, bot, { mode: 'auto' }), 'EVAL-A', ch).confirm, 'The bot will trade LIVE account EVAL-A in Auto. Continue?', '1.18.1: the mode named');
   const sim = BC.botAccountChange(bot, 'SIM-F1', ch);
   assert.equal(sim.live, false); assert.equal(sim.confirm, ''); assert.deepEqual(sim.msg, { type: 'botAccount', account: 'SIM-F1' });
   assert.match(BC.botAccountChange(bot, 'FUNDED-B', ch).error, /not tradable/);

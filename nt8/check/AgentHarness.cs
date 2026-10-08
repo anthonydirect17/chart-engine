@@ -181,6 +181,7 @@ public static class AgentHarness
             Round4();   // contract section 10 items 7 to 9, reviewer A's C1 to C5
             Round5();   // reviewer A's D1 to D5 (RS1, RS3)
             Round6();   // reviewer A's E1 to E3 (RX)
+            FullSession();   // 0.5.2: the window in session time (Anthony's rulings 2026-10-08 p and q)
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -328,7 +329,7 @@ public static class AgentHarness
         lock (agentOut) got = agentOut.Skip(n).ToList();
         string w = got.Count > 0 ? got[0] : "";
         Check(w.StartsWith("{\"type\":\"welcome\"") && got.Count > 1 && got[1].StartsWith("{\"type\":\"agentState\""), "agentHello: welcome, then agentState");
-        Check(w.Contains("\"version\":\"0.5.1\"") && w.Contains("\"agent\":\"manrae\"") && w.Contains("\"mode\":\"shadow\"") && w.Contains("\"account\":\"Sim101\",\"sim\":true") &&
+        Check(w.Contains("\"version\":\"0.5.2\"") && w.Contains("\"agent\":\"manrae\"") && w.Contains("\"mode\":\"shadow\"") && w.Contains("\"account\":\"Sim101\",\"sim\":true") &&
               w.Contains("\"rules\":{\"roots\":[\"NQ\",\"MNQ\"],\"maxQty\":{\"NQ\":2,\"MNQ\":20},\"entryFrom\":\"09:45\",\"entryUntil\":\"15:00\",\"flatAt\":\"15:55\",\"maxExpireSec\":1800,\"maxTrades\":null,\"maxLosses\":null,\"maxBracketTicks\":null,\"maxTicksAway\":null}") &&
               w.Contains("{\"root\":\"MNQ\",\"name\":\"MNQ 12-26\",\"tick\":0.25,\"pointValue\":2}") && w.Contains("{\"root\":\"NQ\",\"name\":\"NQ 12-26\",\"tick\":0.25,\"pointValue\":20}"),
               "welcome: version, agent, shadow, Sim101 (sim), the default rules, its roots' instruments: " + w);
@@ -835,7 +836,7 @@ public static class AgentHarness
         Check(PageReject().Contains("maxQty for MNQ must be from 1 to 20"), "agentRules: 0 for a chosen root is refused");
         P(Rules("YM", ",\"maxQtyNQ\":2", "09:45", "15:00", "15:55", 1800, 0, 0));
         Check(PageReject().Contains("YM is not a root an agent may trade"), "agentRules: a root with no ceiling: refused");
-        foreach (string[] bad in new[] { new[] { "09:29", "15:00", "15:55", "entryFrom must be 09:30 or later" }, new[] { "15:00", "15:00", "15:55", "entryFrom must be before entryUntil" },
+        foreach (string[] bad in new[] { new[] { "15:00", "10:00", "15:55", "entryFrom must be before entryUntil in the session" }, new[] { "15:00", "15:00", "15:55", "entryFrom must be before entryUntil" },
                                          new[] { "09:45", "15:00", "15:00", "flatAt must be after entryUntil" }, new[] { "09:45", "15:00", "16:00", "flatAt must be 15:59 at the latest" },
                                          new[] { "09:45", "15:00", "9:55", "HH:MM" } })
         {
@@ -986,9 +987,10 @@ public static class AgentHarness
         Mode("manrae", "auto");
         // EVAL-A, a LIVE account: accepted; welcome says so
         P(AccountMsg("manrae", "EVAL-A"));
-        Check(M.Account == "EVAL-A" && Last(agentOut, "welcome").Contains("\"mode\":\"shadow\",\"account\":\"EVAL-A\",\"sim\":false") && FileText("agent-manrae-account.txt").Contains("account\tEVAL-A"),
-              "agentAccount EVAL-A (LIVE): saved in agent-manrae-account.txt, welcome again with sim false, and the agent in shadow (it never carries auto onto a new account)");
-        Check(FileText("agent-manrae.log").Contains("account EVAL-A (LIVE), was Sim101, set by the page"), "logged with LIVE");
+        Check(M.Account == "EVAL-A" && Last(agentOut, "welcome").Contains("\"mode\":\"auto\",\"account\":\"EVAL-A\",\"sim\":false") && FileText("agent-manrae-account.txt").Contains("account\tEVAL-A"),
+              "agentAccount EVAL-A (LIVE): saved in agent-manrae-account.txt, welcome again with sim false; 0.5.2: the agent keeps its mode (auto)");
+        Check(FileText("agent-manrae.log").Contains("account EVAL-A (LIVE), was Sim101, set by the page; mode auto kept"), "logged with LIVE and the mode kept");
+        Mode("manrae", "shadow");   // as before this change, for the checks that follow
         // the bot: refuses an agent's account; an agent refuses the bot's
         ChartBridgeSwitches.Note("bot", "on");
         ChartBridgeBot.Start(false);
@@ -2564,5 +2566,117 @@ public static class AgentHarness
             Check(M.DiagJson().Contains("\"connected\":true") && Last(agentOut, "tick").Contains("25001.75"), "E3: still connected after 7 s (never taken for a socket with no hello), ticks flow");
         });
         foreach (Account x in Account.All.ToList()) Settle(x);
+    }
+
+    // ------------------------------------------------------------ 0.5.2: the full-session window, 18:00 to 15:25, flat 15:55
+    static void SessionRules(string from, string until, string flat) { P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", from, until, flat, 1800, 0, 0)); }
+    static void FullFresh(DateTime when)
+    {
+        Fresh();
+        SessionRules("18:00", "15:25", "15:55");
+        et = when;
+        Advance(1000);
+    }
+    static bool PlacesAt(DateTime when) { FullFresh(when); Order e = PlacedOn(sime, Good(NewId())); bool ok = e != null; Settle(sime); return ok; }
+    static string RefusedAt(DateTime when) { FullFresh(when); int n = Count(agentOut, "reject"); A(Good(NewId())); return Count(agentOut, "reject") > n ? AgentReject() : ""; }
+
+    static void FullSession()
+    {
+        // the rules: in session order (18:00 is the start), both shapes; a window the wrong way round is refused, with why
+        Fresh();
+        int rj = Count(page, "reject");
+        SessionRules("18:00", "15:25", "15:55");
+        Check(Count(page, "reject") == rj && FileText("agent-manrae-rules.txt").Contains("entryFrom\t18:00") && FileText("agent-manrae-rules.txt").Contains("entryUntil\t15:25") && Last(page, "agent").Contains("\"entryFrom\":\"18:00\",\"entryUntil\":\"15:25\",\"flatAt\":\"15:55\""),
+              "0.5.2: 18:00 to 15:25, flat 15:55: accepted, saved and shown");
+        SessionRules("09:45", "15:00", "15:55");
+        Check(Count(page, "reject") == rj && FileText("agent-manrae-rules.txt").Contains("entryFrom\t09:45"), "0.5.2: 09:45 to 15:00, flat 15:55: still accepted");
+        SessionRules("09:29", "15:00", "15:55");
+        Check(Count(page, "reject") == rj, "0.5.2: an entryFrom before 09:30 is no longer refused (any time from 18:00 in session order)");
+        foreach (string[] bad in new[] { new[] { "15:30", "09:00", "15:55", "entryFrom must be before entryUntil in the session, which runs from 18:00 to 17:00 New York time (15:30 to 09:00 goes the wrong way round)" },
+                                         new[] { "17:30", "15:25", "15:55", "entryFrom must be before entryUntil in the session" },
+                                         new[] { "18:00", "15:25", "16:30", "flatAt must be 15:59 at the latest (the session runs from 18:00 to 17:00 New York time)" },
+                                         new[] { "18:00", "15:25", "18:30", "flatAt must be after entryUntil in the session" },
+                                         new[] { "18:00", "15:25", "15:20", "flatAt must be after entryUntil in the session" } })
+        {
+            SessionRules(bad[0], bad[1], bad[2]);
+            Check(PageReject().Contains(bad[3]), "0.5.2: " + bad[0] + " to " + bad[1] + ", flat " + bad[2] + ": refused: " + PageReject());
+        }
+        Fresh();
+        Check(FileText("agent-manrae-rules.txt") == "" && Last(page, "agent").Contains("\"entryFrom\":\"09:45\",\"entryUntil\":\"15:00\",\"flatAt\":\"15:55\""), "0.5.2: no rules file: the defaults stay 09:45 to 15:00, flat 15:55");
+
+        // entries: inside from 18:00 to 15:25 across midnight; outside 15:25 to 18:00, the weekend and holidays
+        foreach (DateTime t in new[] { new DateTime(2026, 10, 8, 18, 0, 0), new DateTime(2026, 10, 8, 23, 30, 0), new DateTime(2026, 10, 9, 2, 0, 0), new DateTime(2026, 10, 9, 9, 0, 0), new DateTime(2026, 10, 9, 15, 20, 0), new DateTime(2026, 10, 11, 18, 0, 0) })
+            Check(PlacesAt(t), "0.5.2: " + t.ToString("ddd HH:mm", CultureInfo.InvariantCulture) + " is inside 18:00 to 15:25: the plan is placed");
+        string why = RefusedAt(new DateTime(2026, 10, 9, 15, 25, 0));
+        Check(why.Contains("outside agent manrae's entry window (18:00 to 15:25 New York time)"), "0.5.2: 15:25 is outside (entryUntil not included): " + why);
+        why = RefusedAt(new DateTime(2026, 10, 8, 16, 30, 0));
+        Check(why.Contains("outside agent manrae's entry window (18:00 to 15:25 New York time)"), "0.5.2: 16:30 is outside: " + why);
+        why = RefusedAt(new DateTime(2026, 10, 8, 17, 30, 0));
+        Check(why.Contains("the market is closed now"), "0.5.2: 17:30 (the break) is outside: the market is closed: " + why);
+        why = RefusedAt(new DateTime(2026, 10, 10, 12, 0, 0));
+        Check(why.Contains("the market is closed now"), "0.5.2: Saturday noon: the market is closed: " + why);
+        why = RefusedAt(new DateTime(2026, 10, 11, 17, 59, 0));
+        Check(why.Contains("the market is closed now"), "0.5.2: Sunday 17:59: the market is closed (it opens at 18:00): " + why);
+        why = RefusedAt(new DateTime(2026, 10, 9, 18, 30, 0));
+        Check(why.Contains("the market is closed now"), "0.5.2: Friday 18:30: the market is closed until Sunday 18:00: " + why);
+        why = RefusedAt(new DateTime(2026, 12, 25, 10, 0, 0));
+        Check(why.Contains("the market is closed now"), "0.5.2: Christmas Day (a CME holiday, no session): the market is closed: " + why);
+        Check(PlacesAt(new DateTime(2026, 12, 24, 12, 0, 0)), "0.5.2: Christmas Eve (an NYSE early close) at 12:00: open, placed");
+        why = RefusedAt(new DateTime(2026, 12, 24, 13, 20, 0));
+        Check(why.Contains("the market is closed now"), "0.5.2: Christmas Eve after the 13:15 halt: the market is closed: " + why);
+        why = RefusedAt(new DateTime(2026, 11, 26, 13, 5, 0));
+        Check(why.Contains("the market is closed now"), "0.5.2: Thanksgiving after the 13:00 halt: the market is closed: " + why);
+        Check(PlacesAt(new DateTime(2026, 11, 26, 12, 0, 0)), "0.5.2: Thanksgiving before the 13:00 halt: open, placed");
+
+        // a position held from 22:00 across midnight stays; the flatten comes at 15:55
+        FullFresh(new DateTime(2026, 10, 8, 22, 0, 0));
+        Order e = PlacedOn(sime, Good(NewId()));
+        Check(e != null, "0.5.2: Thursday 22:00: placed");
+        if (e != null)
+        {
+            Fill(e, 1, 24999);
+            int calls = sime.Calls.Count, st = N(page);
+            foreach (DateTime t in new[] { new DateTime(2026, 10, 8, 23, 59, 30), new DateTime(2026, 10, 9, 0, 0, 0), new DateTime(2026, 10, 9, 0, 30, 0), new DateTime(2026, 10, 9, 9, 0, 0), new DateTime(2026, 10, 9, 15, 54, 59) })
+            {
+                et = t;
+                Advance(1000);
+            }
+            Check(!sime.Calls.Skip(calls).Any() && !Any(page, st, "by its rules") && PosOf(sime, mnq) == 1 && Legs(sime, e).All(IsLive),
+                  "0.5.2: a position held from 22:00 across midnight to 15:54:59 is inside the session: not flattened, its stop and target stay: " + string.Join(" | ", sime.Calls.Skip(calls)));
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            Advance(1000);
+            Check(sime.Calls.Skip(calls).Count(c => c.StartsWith("cancel CB#")) == 2 && Any(page, st, "manrae flattened at 15:55 by its rules"), "0.5.2: 15:55: the flatten starts, its legs cancelled first: " + string.Join(" | ", sime.Calls.Skip(calls)));
+        }
+        // an unfilled entry is cancelled when the window closes at 15:25; one placed at 23:30 lives on past midnight
+        FullFresh(new DateTime(2026, 10, 8, 23, 30, 0));
+        e = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 16, 1800));
+        if (e != null)
+        {
+            et = new DateTime(2026, 10, 9, 0, 5, 0);
+            Advance(1000);
+            Check(IsLive(e), "0.5.2: an unfilled entry placed at 23:30 is still working at 00:05 (inside the window)");
+            Settle(sime);
+        }
+        FullFresh(new DateTime(2026, 10, 9, 15, 10, 0));
+        e = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 16, 1800));
+        if (e != null)
+        {
+            et = new DateTime(2026, 10, 9, 15, 25, 0);
+            Advance(1000);
+            Check(!IsLive(e), "0.5.2: an unfilled entry is cancelled at 15:25, when the window closes");
+        }
+        // a copilot proposal never lives outside the window
+        FullFresh(new DateTime(2026, 10, 9, 15, 20, 0));
+        Mode("manrae", "copilot");
+        int props = Count(page, "agentProposal");
+        A(Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 16, 1800));
+        Check(Count(page, "agentProposal") > props && Last(page, "agentProposal").Contains("\"state\":\"open\""), "0.5.2: copilot at 15:20: an open proposal");
+        et = new DateTime(2026, 10, 9, 15, 25, 0);
+        Advance(1000);
+        Check(Last(page, "agentProposal").Contains("\"state\":\"expired\""), "0.5.2: at 15:25 the open proposal expires (never outside the window)");
+        // the 18:00 reset stays at 18:00, the start of the session
+        Check(ChartBridgeAgents.Get("manrae") != null, "manrae is there");
+        Settle(sime);
+        et = new DateTime(2026, 10, 9, 10, 0, 0);
     }
 }

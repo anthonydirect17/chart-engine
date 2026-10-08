@@ -174,9 +174,14 @@ test('rules change: flat keys exactly as the contract (section 7), checked again
   assert.ok(AC.rulesChange(a, form({ roots: ['MNQ'], maxQty: { NQ: '99', MNQ: '20' }, maxTrades: '5' }), ctx).msg, 'a root not chosen is not checked or sent');
   assert.equal(AC.rulesChange(a, form({ roots: ['MNQ'], maxTrades: '5' }), ctx).msg.maxQtyNQ, undefined);
   assert.match(err({ entryFrom: '9:45' }), /New York time/);
-  assert.match(err({ entryFrom: '09:29' }), /09:30 at the earliest/);
+  assert.ok(AC.rulesChange(a, form({ entryFrom: '09:29' }), ctx).msg, 'ChartBridge 0.5.2: no 09:30 limit (any time from 18:00 in session order)');
   assert.ok(AC.rulesChange(a, form({ entryFrom: '09:30' }), ctx).msg);
   assert.match(err({ entryFrom: '15:00' }), /start before they end/);
+  const full = AC.rulesChange(a, form({ entryFrom: '18:00', entryUntil: '15:25', flatAt: '15:55' }), ctx);   // ChartBridge 0.5.2: the full session
+  assert.deepEqual([full.msg.entryFrom, full.msg.entryUntil, full.msg.flatAt], ['18:00', '15:25', '15:55']);
+  assert.match(err({ entryFrom: '15:30', entryUntil: '09:00' }), /in the session, which runs from 18:00 to 17:00 New York time \(15:30 to 09:00 goes the wrong way round\)/);
+  assert.match(err({ entryFrom: '17:30', entryUntil: '15:25' }), /wrong way round/, 'the break is no start');
+  assert.match(err({ entryFrom: '18:00', entryUntil: '15:25', flatAt: '18:30' }), /after new entries end/);
   assert.match(err({ flatAt: '15:00' }), /after new entries end/);
   assert.match(err({ flatAt: '16:00' }), /15:59 at the latest/);
   assert.ok(AC.rulesChange(a, form({ flatAt: '15:59' }), ctx).msg);
@@ -221,8 +226,10 @@ test('account chooser: tradable accounts, SIM first; never the bot\'s, the copie
   const live = AC.accountChange(a, 'EVAL-A', ch, {}, 'c3');
   assert.deepEqual(live.msg, { type: 'agentAccount', cid: 'c3', agent: 'demo', account: 'EVAL-A' });
   assert.equal(live.live, true);
-  assert.equal(live.confirm, 'Demo Agent is in Shadow: it will trade LIVE account EVAL-A once you put it in Copilot or Auto. The agent goes to Shadow when its account changes. Continue?');
-  assert.equal(AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, {}).confirm, 'Demo Agent is in Auto: it will trade LIVE account EVAL-A once it is back in Auto. The agent goes to Shadow when its account changes. Continue?', 'the question names the mode (review S5)');
+  assert.equal(live.confirm, 'Agent demo will trade LIVE account EVAL-A in Shadow (nothing is placed until you choose Copilot or Auto). Continue?');
+  /* ChartBridge 0.5.2 (Anthony 2026-10-08): an account change keeps the mode, so the question names it (review S5) */
+  assert.equal(AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, {}).confirm, 'Agent demo will trade LIVE account EVAL-A in Auto. Continue?', 'the question names the mode it keeps');
+  assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, {}).confirm, 'Agent demo will trade LIVE account EVAL-A in Copilot. Continue?');
   const off = AC.accountChoices(accounts, a, { bot: { enabled: false, account: 'Sim101' } });
   assert.equal(off.find(c => c.name === 'Sim101').why, '', 'with the bot channel off its account is free');
   assert.match(AC.accountChange(agent({ position: { root: 'MNQ', qty: 1 } }), 'EVAL-A', ch, {}).error, /choose its account when it is flat/);
@@ -413,9 +420,9 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.18.0');   // 1.18.0: the Account tab's Hide and Show on top of 1.17.0
-  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.18\.0'/);
-  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.18\.0/);
+  assert.equal(JSON.parse(read('package.json')).version, '1.18.1');   // 1.18.1: the Agent tab's full-session rules (ChartBridge 0.5.2)
+  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.18\.1'/);
+  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.18\.1/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 
@@ -558,6 +565,13 @@ test('the session trail, the room and the Motion switch', () => {
   assert.equal(T.nowPct, Math.round((12 * 60 + 50 - 585) / 370 * 10000) / 100, '12:50 New York');
   assert.equal(T.marks.length, 1, 'a fill outside the session is left out');
   assert.equal(T.marks[0].pct, Math.round(20 / 370 * 10000) / 100);
+  /* ChartBridge 0.5.2: a session from 18:00 runs across midnight to its flat time; about 8 hour marks */
+  const F = AC.sessionTrail({ roots: ['MNQ'], maxQty: { MNQ: 20 }, entryFrom: '18:00', entryUntil: '15:25', flatAt: '15:55', maxExpireSec: 1800 }, Date.UTC(2026, 9, 9, 4, 0, 0),
+    [{ at: Date.UTC(2026, 9, 9, 3, 30, 0), mark: 'F', tone: 'bridge', title: 'a fill at 23:30' }, { at: Date.UTC(2026, 9, 8, 21, 30, 0), mark: 'X', tone: 'no', title: '17:30, the break' }]);
+  assert.equal(F.from, '18:00'); assert.equal(F.to, '15:55');
+  assert.deepEqual(F.hours.map(h => h.label), ['18:00', '21:00', '00:00', '03:00', '06:00', '09:00', '12:00', '15:00', '15:55']);
+  assert.equal(F.nowPct, Math.round(360 / 1315 * 10000) / 100, 'midnight New York');
+  assert.deepEqual(F.marks.map(m => [m.mark, m.pct]), [['F', Math.round(330 / 1315 * 10000) / 100]], 'the 23:30 fill is on it; the break is not');
   const lines = AC.roomLines({ roomDrawdownWhy: 'NinjaTrader does not report a trailing drawdown for this account' }, ACC.limitState({ roomDrawdown: null, roomDailyLoss: null, pnlToday: -100 }, { daily_loss_limit: 600 }));
   assert.deepEqual(lines.map(l => [l.key, l.room, l.limit, l.leftPct]), [['dd', null, null, null], ['dl', 500, 600, 83]]);
   assert.deepEqual([lines[0].why, lines[0].said], ['not reported', 'NinjaTrader does not report a trailing drawdown for this account'], 'never estimated: "not reported", ChartBridge\'s words kept for the tooltip');

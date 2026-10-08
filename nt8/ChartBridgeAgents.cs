@@ -1,5 +1,6 @@
 // ChartBridge 0.5.0: the agent channel (nt8/PROTOCOL.md, "Agent channel (agents, 0.5.0)"). Part of the ChartBridge add-on;
-// install it with the other ChartBridge files.
+// install it with the other ChartBridge files. 0.5.2: the window is measured in session time (minutes since the 18:00 New
+// York open), so an agent may trade the whole session, 18:00 to its entryUntil, across midnight (ChartBridgeAgent.SessionSec).
 //
 // Any number of agent programs (the first is named in config.txt "agents = ..."; each id has its own files, rules, account,
 // mode and state) connect on their own WebSocket path, /agent/<id>, each with its own secret (agent-<id>-secret.txt next to
@@ -633,7 +634,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             public List<string> Roots = new List<string> { "NQ", "MNQ" };
             public Dictionary<string, int> MaxQty = new Dictionary<string, int> { { "NQ", 2 }, { "MNQ", 20 } };
-            public int EntryFrom = 9 * 60 + 45, EntryUntil = 15 * 60, FlatAt = 15 * 60 + 55;   // New York minutes of the day
+            public int EntryFrom = 9 * 60 + 45, EntryUntil = 15 * 60, FlatAt = 15 * 60 + 55;   // New York minutes of the day (0.5.2: in session order, Sm)
             public int MaxExpireSec = 1800, MaxTrades, MaxLosses;                             // 0: none
             public Rules Copy()
             {
@@ -654,7 +655,35 @@ namespace NinjaTrader.NinjaScript.AddOns
             return h > 23 || mi > 59 ? -1 : h * 60 + mi;
         }
 
-        // Why a rule set is not allowed, or null (the page's agentRules and the rules file share it).
+        // 0.5.2 (Anthony's rulings, 2026-10-08): the window is in session time, minutes since the 18:00 New York open, so 18:00 is
+        // 0, 23:59 is 359, midnight is 360 and 17:00 (the break) is 1380. A window may start at 18:00 and run past midnight.
+        public const int SessionOpenMin = 18 * 60, BreakSm = 23 * 60, LastFlatMin = 15 * 60 + 59;
+        public static int Sm(int minuteOfDay) { return ((minuteOfDay - SessionOpenMin) % 1440 + 1440) % 1440; }
+        // Seconds since the session's 18:00 open for a New York wall time (0 to 86399).
+        public static double SessionSec(DateTime et) { double s = et.TimeOfDay.TotalSeconds - SessionOpenMin * 60; return s < 0 ? s + 86400 : s; }
+        // Inside the entry window: the market open (not the 17:00 to 18:00 break, Friday 17:00 to Sunday 18:00, a CME holiday, or
+        // after the halt on an NYSE holiday or early close: ChartBridgeCme.Closed) and from entryFrom up to entryUntil in session order.
+        public static bool InWindow(Rules r, DateTime et)
+        {
+            if (ChartBridgeCme.Closed(et)) return false;
+            double s = SessionSec(et);
+            return s >= Sm(r.EntryFrom) * 60 && s < Sm(r.EntryUntil) * 60;
+        }
+        // The flat hours: from flatAt until the next entryFrom in session order, and whenever the market is closed (the break, the
+        // weekend, a holiday or a halt); a position held across midnight inside the window is never flattened.
+        public static bool FlatHours(Rules r, DateTime et)
+        {
+            if (ChartBridgeCme.Closed(et)) return true;
+            double s = SessionSec(et);
+            return s >= Sm(r.FlatAt) * 60 || s < Sm(r.EntryFrom) * 60;
+        }
+        // From flatAt up to the session's end (18:00): the flat time itself (else the agent held a position outside its hours).
+        public static bool AtFlatTime(Rules r, DateTime et) { return SessionSec(et) >= Sm(r.FlatAt) * 60; }
+        public static string WindowText(Rules r) { return Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + " New York time"; }
+
+        // Why a rule set is not allowed, or null (the page's agentRules and the rules file share it). 0.5.2: in session order,
+        // entryFrom before entryUntil before flatAt, flatAt at the latest 15:59 (the 17:00 to 18:00 break and 16:00 to 17:00 stay
+        // out); both 09:45 to 15:00 flat 15:55 and 18:00 to 15:25 flat 15:55 are allowed.
         public static string RulesProblem(Rules r)
         {
             if (r.Roots.Count == 0) return "roots must name at least one root";
@@ -665,10 +694,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (q < 1 || q > ChartBridgeAgents.HardCeiling(root)) return "maxQty for " + root + " must be from 1 to " + ChartBridgeAgents.HardCeiling(root) + " (the hard ceiling)";
             }
             if (r.Roots.Distinct().Count() != r.Roots.Count) return "roots names a root twice";
-            if (r.EntryFrom < 9 * 60 + 30) return "entryFrom must be 09:30 or later";
-            if (r.EntryFrom >= r.EntryUntil) return "entryFrom must be before entryUntil";
-            if (r.FlatAt <= r.EntryUntil) return "flatAt must be after entryUntil";
-            if (r.FlatAt > 15 * 60 + 59) return "flatAt must be 15:59 at the latest";
+            if (Sm(r.FlatAt) > Sm(LastFlatMin)) return "flatAt must be 15:59 at the latest (the session runs from 18:00 to 17:00 New York time)";
+            if (Sm(r.EntryFrom) >= Sm(r.EntryUntil)) return "entryFrom must be before entryUntil in the session, which runs from 18:00 to 17:00 New York time (" + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + " goes the wrong way round)";
+            if (Sm(r.FlatAt) <= Sm(r.EntryUntil)) return "flatAt must be after entryUntil in the session, which runs from 18:00 to 17:00 New York time";
             if (r.MaxExpireSec < 60 || r.MaxExpireSec > 1800) return "maxExpireSec must be from 60 to 1800";
             if (r.MaxTrades < 0 || r.MaxTrades > 50) return "maxTrades must be none or 1 to 50";
             if (r.MaxLosses < 0 || r.MaxLosses > 20) return "maxLosses must be none or 1 to 20";
@@ -886,7 +914,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 List<string> lines = new List<string> { "# ChartBridge rules for agent " + Id + " (written by ChartBridge from the page's Agent tab; do not edit)",
-                    "# roots, maxQty.<ROOT> (1 to the hard ceiling: minis 2, micros 20), entryFrom, entryUntil, flatAt (New York time), maxExpireSec, maxTrades, maxLosses",
+                    "# roots, maxQty.<ROOT> (1 to the hard ceiling: minis 2, micros 20), entryFrom, entryUntil, flatAt (New York time, in session order from 18:00), maxExpireSec, maxTrades, maxLosses",
                     "roots\t" + string.Join(",", r.Roots) };
                 foreach (string root in r.Roots) lines.Add("maxQty." + root + "\t" + r.QtyFor(root).ToString(CultureInfo.InvariantCulture));
                 lines.Add("entryFrom\t" + Hm(r.EntryFrom)); lines.Add("entryUntil\t" + Hm(r.EntryUntil)); lines.Add("flatAt\t" + Hm(r.FlatAt));
@@ -1589,10 +1617,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Math.Abs(p.Risk - risk) > 0.01 + 1e-9) return "riskDollars " + p.RiskText + " is not stopTicks x tick x point value x qty (" + risk.ToString("0.00", CultureInfo.InvariantCulture) + ")";
             // 6. the expiry
             if (p.ExpireSec < 60 || p.ExpireSec > r.MaxExpireSec) return "expireSec must be from 60 to " + r.MaxExpireSec;
-            // 7. the entry window (New York time)
+            // 7. the entry window (session time, 0.5.2; never while the market is closed)
             DateTime et = NowEt();
-            double tod = et.TimeOfDay.TotalSeconds;
-            if (tod < r.EntryFrom * 60 || tod >= r.EntryUntil * 60) return "outside agent " + Id + "'s entry window (" + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + " New York time)";
+            if (!InWindow(r, et)) return WindowRefusal(r, et);
             // 8. one at a time (Owns first: it clears a lock whose position is flat by both readings)
             bool entry = WorkingEntries().Count > 0, owns = r.Roots.Any(x => Owns(x)), open, proposal;
             lock (Sync)
@@ -2194,8 +2221,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
             Rules r = RulesNow();
-            double tod = NowEt().TimeOfDay.TotalSeconds;
-            bool inWindow = tod >= r.EntryFrom * 60 && tod < r.EntryUntil * 60;
+            DateTime etNow = NowEt();
+            bool inWindow = InWindow(r, etNow);   // 0.5.2: session time, the market open
             // proposals live until their plan's expiry (Anthony's ruling 4), and never outside the window
             List<Proposal> ended = new List<Proposal>();
             lock (Sync)
@@ -2203,7 +2230,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (p.State == "open" && (now >= p.P.ExpiresAt || !inWindow)) { p.State = "expired"; ended.Add(p); }
             foreach (Proposal p in ended)
             {
-                string why = now >= p.P.ExpiresAt ? "its plan expired unanswered" : "the entry window closed at " + Hm(r.EntryUntil);
+                string why = now >= p.P.ExpiresAt ? "its plan expired unanswered" : ChartBridgeCme.Closed(etNow) ? "the market closed" : "the entry window closed at " + Hm(r.EntryUntil);
                 ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "expired", why)); AgentLog("proposal " + p.P.Id + " expired (" + why + ")");
             }
             lock (Sync)
@@ -2224,7 +2251,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 double exp;
                 bool known;
                 lock (Sync) known = Expiry.TryGetValue(tag ?? "", out exp);
-                string why = backstop ?? (!inWindow ? "outside the entry window (" + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + ")" : !known ? "its expiry is not known (ChartBridge restarted)" : now >= exp ? "its plan expired" : null);
+                string why = backstop ?? (!inWindow ? (ChartBridgeCme.Closed(etNow) ? "the market is closed" : "outside the entry window (" + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + ")") : !known ? "its expiry is not known (ChartBridge restarted)" : now >= exp ? "its plan expired" : null);
                 if (why != null && Cancel(o, why)) { cancelled++; AnswerEntryEnded(o, "expired", why); }
             }
             ResendCancels(now);
@@ -2238,9 +2265,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (string root in roots) Owns(root);
             if (ChartBridgeServer.ExecutionsReplayed(Account)) { DropStaleRecords(roots); WarnHeldByStopOnly(roots); }
             RepeatTradeLost(now);   // only once the session's executions were read again (review B)
-            // the flat time (ruling 2): from flatAt until the next entryFrom (18:00 ET included: a position held overnight is flattened
-            // too), whatever the agent does or whether it is there
-            bool flatHours = tod >= r.FlatAt * 60 || tod < r.EntryFrom * 60;
+            // the flat time (ruling 2): from flatAt until the next entryFrom in session order (0.5.2: with an 18:00 entryFrom a
+            // position held across midnight is inside the session and stays; with 09:45 one held overnight is flattened, as
+            // before) and while the market is closed, whatever the agent does or whether it is there
+            bool flatHours = FlatHours(r, etNow);
             if (!startTold && now - startedMs >= ChartBridgeAgents.SilenceMs)
             {
                 startTold = true;
@@ -2252,7 +2280,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
                 }
             }
-            if (flatHours) StartFlatten(tod >= r.FlatAt * 60 && tod < 18 * 3600 ? Id + " flattened at " + Hm(r.FlatAt) + " by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + "): flattened by its rules", true);
+            if (flatHours) StartFlatten(AtFlatTime(r, etNow) ? Id + " flattened at " + Hm(r.FlatAt) + " by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + (ChartBridgeCme.Closed(etNow) ? ", or the market closed" : "") + "): flattened by its rules", true);
             StepFlatten(now);
             WelcomeIfCapsChanged();
             SendState(false);   // a change no event carries (the session's roll, the clock, a file): within one pass
@@ -2793,6 +2821,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // agentAccount (ruling 1): refused for the bot's account, the copier's leader or any follower (on or off), another agent's
         // account, an account not tradable now, while this agent has a position, a working entry or a proposal, and while the old or
         // the new account holds any position or working order on the agent's roots (as botAccount). Saved; the agent gets welcome.
+        // 0.5.2 (Anthony 2026-10-08): the agent keeps its mode (until 0.5.1 a change put it in shadow).
         private string SetAccount(Dictionary<string, Val> d) { lock (PlaceGate) return SetAccountLocked(d); }   // never between a placement's checks and its order
 
         private string SetAccountLocked(Dictionary<string, Val> d)
@@ -2821,12 +2850,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             string err = SaveAccount(nm);
             if (err != null) return "agent-" + Id + "-account.txt could not be saved (" + err + "); nothing changed";
-            string wasMode;
-            lock (Sync) { account = nm; accountBroken = null; chosen = true; Sticky.Clear(); wasMode = mode; mode = "shadow"; }   // never carries Auto or Copilot onto a new account (lead's default)
+            string keptMode;
+            lock (Sync) { account = nm; accountBroken = null; chosen = true; Sticky.Clear(); keptMode = mode; }   // 0.5.2 (Anthony 2026-10-08): the mode is kept (the page asks first for a LIVE account, naming the mode)
             string mark = SimNow() ? "Sim" : "LIVE";
-            if (wasMode != "shadow") AgentLog("mode shadow (was " + wasMode + "): its account changed");
-            Log("agent " + Id + " account " + nm + " (" + mark + "), was " + old + ", set by the page");
-            AgentLog("account " + nm + " (" + mark + "), was " + old + ", set by the page");
+            Log("agent " + Id + " account " + nm + " (" + mark + "), was " + old + ", set by the page; mode " + keptMode + " kept");
+            AgentLog("account " + nm + " (" + mark + "), was " + old + ", set by the page; mode " + keptMode + " kept");
             ToAgent(WelcomeJson());
             Notify();
             return null;
@@ -2889,6 +2917,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             ToAgent(WelcomeJson());
             Notify();
             return null;
+        }
+
+        // 0.5.2: why an entry is refused outside the window: the market closed, or the time.
+        private string WindowRefusal(Rules r, DateTime et)
+        {
+            return ChartBridgeCme.Closed(et) ? "the market is closed now (the 17:00 to 18:00 break, the weekend, a CME holiday or a holiday halt): no entry for agent " + Id
+                                             : "outside agent " + Id + "'s entry window (" + WindowText(r) + ")";
         }
 
         private static string RulesText(Rules r)
@@ -3153,8 +3188,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) { m = mode; k = killed; }
             if (k) return "the kill switch is on (release it on the Agent tab)";
             if (m == "shadow") return "agent " + Id + " is in shadow: nothing is placed";
-            double tod = NowEt().TimeOfDay.TotalSeconds;
-            if (tod < r.EntryFrom * 60 || tod >= r.EntryUntil * 60) return "outside agent " + Id + "'s entry window (" + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + " New York time)";
+            DateTime et = NowEt();
+            if (!InWindow(r, et)) return WindowRefusal(r, et);   // 0.5.2: session time, the market open
             return null;
         }
 

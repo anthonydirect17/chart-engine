@@ -728,7 +728,7 @@ function create(o) {
     put(q('[data-k="acctOpen"]'), 'disabled', !S.signedIn || !!(b.position && b.position.qty));   // ChartBridge refuses a change unless the bot is flat
     put(q('[data-k="acctEdit"]'), 'hidden', !S.acctEdit || !!S.acctAsk);
     put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
-    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', 'The bot will trade LIVE account ' + S.acctAsk + '. Continue?');
+    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', 'The bot will trade LIVE account ' + S.acctAsk + ' in ' + (BC.MODE_NAME[S.bot && S.bot.mode] || 'Shadow') + '. Continue?');   // 1.18.1: the mode it keeps
     put(q('[data-k="size"]'), 'textContent', (b.root || botRoot()) + ' (' + (MICRO[b.root || botRoot()] || 'contract') + '), 1 contract');
     put(q('[data-k="status"]'), 'textContent', BC.statusText(b));
     const beat = q('[data-k="beat"]');
