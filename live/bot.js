@@ -369,8 +369,11 @@ function create(o) {
     ageTimer = setTimeout(ageTick, 1000);
   }
   /* One key: the workspace's hotkeys (The Desk's `accept` and `reject`, no default) fire a cancelable `chart-copilot-key`
-     event (live/workspace.js); this is its one handler. It answers the oldest open proposal and cancels the event (the
-     workspace then says nothing more); with none open it leaves the event alone (the workspace says so). */
+     event (live/workspace.js). 1.17.0: the event has one handler for the bot and every agent (AgentCore.copilotRouter): the
+     Bot tab gives it its open proposals, and the oldest open one across the bot and the agents is answered; with no agent
+     proposal open that is the bot's oldest, exactly as before. Without AgentCore (bot.html) this is the handler, as in
+     1.16.0: it answers the oldest open proposal and cancels the event (the workspace then says nothing more); with none open
+     it leaves the event alone (the workspace says so). */
   function onCopilotKey(e) {
     const ans = e && e.detail ? e.detail.answer : '';
     if (!S.on || (ans !== 'accept' && ans !== 'reject')) return;
@@ -379,7 +382,9 @@ function create(o) {
     e.preventDefault();
     answer(open.p.id, ans);
   }
-  document.addEventListener('chart-copilot-key', onCopilotKey);
+  const ROUTER = window.AgentCore && window.AgentCore.copilotRouter ? window.AgentCore.copilotRouter(document) : null;
+  const unroute = ROUTER ? ROUTER.add('bot', { open: () => (S.on ? [...propEls.values()].filter(x => !x.ended).map(x => ({ id: x.p.id, shownAt: x.shownAt, answer: ans => answer(x.p.id, ans) })) : []) }) : null;
+  if (!ROUTER) document.addEventListener('chart-copilot-key', onCopilotKey);
   /** the keys shown on the buttons and in Options: what the workspace has (o.copilotKeys), checked as before */
   function loadKeys() {
     if (typeof o.copilotKeys !== 'function') { S.keys = { accept: '', reject: '', notes: [], from: 'window' }; return; }
@@ -1018,7 +1023,7 @@ function create(o) {
     state: () => ({ on: S.on, v3: S.v3, signedIn: S.signedIn, shown: S.shown, bot: S.bot, library: { state: S.library.state, n: S.library.bots.length, problems: S.library.problems.slice() },
       proposals: [...propEls.keys()], keys: Object.assign({}, S.keys), dayType: days.current(), dayCalls: days.calls().length, log: log.list().length, trips: trips(), chart: !!S.chart, detail: !!S.detail }),
     chart: () => (S.chart ? S.chart.chart : null),
-    destroy() { S.destroyed = true; unlisten(); unmountChart(); document.removeEventListener('chart-copilot-key', onCopilotKey); propBox.remove(); },
+    destroy() { S.destroyed = true; unlisten(); unmountChart(); if (unroute) unroute(); else document.removeEventListener('chart-copilot-key', onCopilotKey); propBox.remove(); },
   };
   window.addEventListener('storage', e => {
     if (e.key === BC.KEYS.log || e.key === BC.KEYS.dayType) { renderPanel(); renderTrips(); }

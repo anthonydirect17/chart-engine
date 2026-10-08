@@ -759,6 +759,7 @@ function tmessage(m) {
       for (const v of views.values()) if (v.quotes && v.quotes.sync) v.quotes.sync();   // the quote-only markets hello lists
       renderOrders();
       if (botDesk) botDesk.hello(m);                      // 1.16.0: the Bot tab says what an older ChartBridge lacks
+      if (agentDesk) agentDesk.hello(m);                  // 1.17.0: the Agent tab too (agents need ChartBridge 0.5.0)
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
     case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
@@ -1216,6 +1217,10 @@ setInterval(syncKeys, 250);
    read of both documents), live-desk-sync-v1 (whether the hotkeys are kept in The Desk now: the single chart page then
    shows them read only). The Desk's address is not kept here: it is ChartBridge's deskUrl (AccountsPage.deskBase). */
 const EXTRA_KEYS = [{ id: 'merge', sw: 'merge' }, { id: 'accept', sw: 'bot' }, { id: 'reject', sw: 'bot' }];
+/* 1.17.0: the copilot's keys answer the bot's proposals and every agent's (one handler, AgentCore.copilotRouter): on while the
+   bot switch is on or ChartBridge has told of an agent */
+const copilotOn = () => core.switchOn('bot') || !!(agentDesk && agentDesk.on());
+const extraOn = a => (a.id === 'accept' || a.id === 'reject' ? copilotOn() : core.switchOn(a.sw));
 const STRAT_KEY = 'live-strategy-v1', DESK_SYNC_KEY = 'live-desk-sync-v1';
 /* The Desk's address: one source for the whole page, ChartBridge's deskUrl (AccountsPage.deskBase, /diag desk.deskUrl) */
 const DESK = OS.createDesk({ fetch: (u, o) => fetch(u, o), storage: store, base: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)) });
@@ -1287,6 +1292,7 @@ function applyDeskHotkeys() {
 }
 function deskChanged() {
   if (botDesk) botDesk.keysChanged();                           // the copilot's Accept and Reject keys on its buttons
+  if (agentDesk) agentDesk.keysChanged();
   if (!$('wsSettings').hidden) renderHotkeys();
   if (SG.open) renderStrategies();
   const id = activeStrategyId();
@@ -1429,7 +1435,7 @@ grid.addEventListener('pointermove', e => { pointerAt = { x: e.clientX, y: e.cli
 grid.addEventListener('pointerleave', () => { pointerAt = null; });
 document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
   root: document.body, busy,
-  resolve: combo => (DS.on && DS.hk ? OS.resolveKey(combo, Object.assign(keyCtx(), { on: { merge: core.switchOn('merge'), accept: core.switchOn('bot'), strategies: core.switchOn('strategies'), types: core.switchOn('orderTypes') } })) : ''),
+  resolve: combo => (DS.on && DS.hk ? OS.resolveKey(combo, Object.assign(keyCtx(), { on: { merge: core.switchOn('merge'), accept: copilotOn(), strategies: core.switchOn('strategies'), types: core.switchOn('orderTypes') } })) : ''),
   run: id => runExtraKey(id),
 }));
 function runExtraKey(id) {
@@ -2652,8 +2658,8 @@ function renderHotkeys() {
   const mode = deskMode();
   for (const a of EXTRA_KEYS) {
     let row = document.querySelector('#wsHotkeys .hk-row[data-hk="' + a.id + '"]');
-    if (core.switchOn(a.sw) && !row) { document.querySelector('#wsHotkeys .hk-list').insertAdjacentHTML('beforeend', extraRow(a)); row = true; }
-    else if (!core.switchOn(a.sw) && row) { row.remove(); row = null; }
+    if (extraOn(a) && !row) { document.querySelector('#wsHotkeys .hk-list').insertAdjacentHTML('beforeend', extraRow(a)); row = true; }
+    else if (!extraOn(a) && row) { row.remove(); row = null; }
     if (row) $('wsHk-' + a.id).value = DS.hk ? DS.hk.keys[a.id] : '';
   }
   for (const el of document.querySelectorAll('#wsHotkeys .hk-in, #wsHotkeys .hk-clear')) {
@@ -2785,6 +2791,7 @@ function syncLaptop() {
 $('wsTabs').addEventListener('click', e => {
   const b = e.target.closest('[data-tab]');
   if (b && botDesk && botDesk.shown()) botDesk.showTab(false);   // 1.16.0: from the Bot tab back to a layout
+  if (b && agentDesk && agentDesk.shown()) agentDesk.showTab(false);   // 1.17.0: and from the Agent tab
   if (!b || b.dataset.tab === layout) return;
   save(); openLayout(b.dataset.tab);
 });
@@ -2907,6 +2914,7 @@ function openLayout(name) {
   if (holds() && !panels.some(p => p.type === 'ticket')) releaseTicket();   // a layout without the ticket lets it go
   renderOrders();
   if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); }   // 1.16.0: the strip on Main only; ghost marks
+  if (agentDesk) agentDesk.layoutChanged(layout);                             // 1.17.0: a layout closes the Agent tab
 }
 
 /* Another window or the single chart page changed something this page uses. Its open layouts stay its own. */
@@ -2940,7 +2948,9 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   /* 1.16.0: the Bot tab (read it; its actions go through ChartBridge's checks) */
   bot: () => (botDesk ? botDesk.state() : null),
   /* the Bot tab's entrance played again (test/perf-bot.mjs: the motion kit running while the live chart draws) */
-  botReplay: () => !!(botDesk && botDesk.replay()) };
+  botReplay: () => !!(botDesk && botDesk.replay()),
+  /* 1.17.0: the Agent tab (read it; its actions go through ChartBridge's checks) */
+  agent: () => (agentDesk ? agentDesk.state() : null) };
 
 /* 1.16.0: the Bot tab, the bot strip and the bot's pop-ups (live/bot.js), on the window's v3 connection (AF); everything bot
    shows only when ChartBridge's bot switch is on. The Bot tab hides the grid while it is open (?tab=bot keeps it on a reload). */
@@ -2953,16 +2963,35 @@ function startBot() {
     charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
     onTab: on => {
       document.body.classList.toggle('bt-on', on);
-      if (on) { closePops(); restoreMax(); }
-      const u = new URL(location.href);
-      if (on) u.searchParams.set('tab', 'bot'); else u.searchParams.delete('tab');
-      history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
+      if (on) { closePops(); restoreMax(); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); }   // one tab at a time
+      tabUrl(on ? 'bot' : '');
+    } });
+}
+/* the tab in the URL (?tab=bot or ?tab=agent), so a reload keeps it */
+function tabUrl(t) {
+  const u = new URL(location.href);
+  if (t) u.searchParams.set('tab', t); else if (!document.body.classList.contains('bt-on') && !document.body.classList.contains('ag-on')) u.searchParams.delete('tab');
+  history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
+}
+/* 1.17.0: the Agent tab (live/agent.js) on the same v3 connection (AF); the agents come with ChartBridge 0.5.0, and with an
+   older one the tab says so. It hides the grid while it is open, as the Bot tab does (?tab=agent keeps it on a reload). */
+let agentDesk = null;
+function startAgent() {
+  if (!window.AgentDesk) return;
+  agentDesk = window.AgentDesk.create({ v3: AF, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
+    els: { tab: $('wsAgentTab'), view: $('agView') }, tradingKeys: () => HK,
+    copilotKeys: () => (DS.on && DS.hk ? DS.hk : null),
+    onTab: on => {
+      document.body.classList.toggle('ag-on', on);
+      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); }   // one tab at a time
+      tabUrl(on ? 'agent' : '');
     } });
 }
 const start = () => {
-  startBot();
+  startBot(); startAgent();
   openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake();
   if (botDesk && new URLSearchParams(location.search).get('tab') === 'bot') botDesk.showTab(true);
+  if (agentDesk && new URLSearchParams(location.search).get('tab') === 'agent') agentDesk.showTab(true);
 };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
    2026-10-01), Armed off. The same `ifAvailable` lock as any take: two windows opening at once give one holder, and a
