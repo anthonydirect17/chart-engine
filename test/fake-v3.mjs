@@ -244,6 +244,8 @@ export class OrderDeskV3 extends OrderDesk {
     if (a.name === this.botAccount) return a.name + " is the bot's account (the Bot tab): it cannot be hidden";
     if (a.name === this.copier.leader) return a.name + " is the copier's leader: it cannot be hidden";
     if (this.copier.followers.has(a.name)) return a.name + ' is a copier follower: it cannot be hidden';
+    const ag = this.chosenAgentOf && this.agents && this.chosenAgentOf(a.name);
+    if (ag) return a.name + ' is agent ' + ag.id + "'s account (the Agent tab): it cannot be hidden";
     return null;
   }
   accountsMsg() {
