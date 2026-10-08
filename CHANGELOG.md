@@ -47,6 +47,13 @@ every lead's default in its "as built" list. The chart's own version is unchange
   wait while the account is disconnected. The flatten follows the agent's trade into another contract month. A first failed
   read of `bot-account.txt` or `copier.txt` stands the agent down at once; held-back refused plans are shown within a second;
   the day file never loses a plan id; old trade records wait for NinjaTrader's execution replay.
+- **Round 4.** While the agent owns a pair it hears of every fill there, its own or not, so a close made by hand is booked as
+  a manual exit. `welcome.rules` shows the caps ChartBridge really enforces, with `config.txt`'s bracket and distance limits,
+  and goes again when they change. The flatten cancels no leg unless the market is trading in fact; over a shut market a
+  position whose legs were already cancelled gets its stop back at the agent's own price (unless that price is through the
+  market), and the error says which. The close cap counts each close; a trade the account holds the other way is ended after
+  3 s with its realized part booked; unconfirmed cancels stop after 30 minutes with a final error; the protective exit's name
+  is at most 43 characters; a failed execution read is not taken as the replay.
 - **Tests.** `nt8/check/AgentHarness.cs` (inside `npm run check:orders`) runs every refusal and every timer; IntegrationHarness
   X13 where the lanes meet; `test/fake-agent.mjs` is a made-up agent client with its test; `test/nt8-agents.test.js` guards the
   source. The bot channel, the copier and every other lane behave as in 0.4.3 except where the contract requires (refusing an
