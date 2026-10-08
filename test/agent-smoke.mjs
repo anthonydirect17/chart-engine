@@ -13,9 +13,14 @@
 //   - one copilot key for the bot and the agents: the oldest open proposal across both is answered first;
 //   - the kill switch (on in one click, release in two), Auto asks a second click;
 //   - the pop-out window (agent.html); an older ChartBridge (0.4.0): "No agents on this ChartBridge (0.5.0 or later)".
+//   - board F (Anthony 2026-10-08): the light sits on the right panels, in the right colour, for watching, a look, a plan in
+//     copilot, his rules being checked, an entry placed, an open trade in profit and under water, and a flat exit; every
+//     stream row is a button whose drawer opens and closes (the same row, Close, Escape only from inside it); the Motion
+//     switch Off and the system's reduced motion stop the light and keep the glow; the P&L figures, the price line and
+//     Accept have no transition; no sideways scroll at 1366 px and at phone width.
 //   npm run smoke:agent      (CHROMIUM_PATH=/path/to/chrome; AGENT_SMOKE_PORT and the next one; SHOTS=dir)
-// Screenshots: agent-tab, agent-1366, agent-live-ask, agent-proposal, agent-accepted, agent-rules, agent-corner, agent-popout, agent-none (.png in
-// test/out).
+// Screenshots: agent-tab, agent-1366, agent-live-ask, agent-proposal, agent-accepted, agent-rules, agent-corner, agent-popout, agent-none,
+// agent-phone, and at 1440 x 1000 agent-f-watching, agent-f-plan, agent-f-profit, agent-f-under, agent-f-drawer (.png in test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -59,7 +64,11 @@ try {
   /* every message a page sends, by type, on each WebSocket */
   await ctx.addInitScript(() => {
     const Real = window.WebSocket, socks = window.__socks = [];
-    function Spy(url, p) { const s = p === undefined ? new Real(url) : new Real(url, p); const rec = { url: String(url), types: [], msgs: [] }; const send = s.send.bind(s); s.send = d => { try { const m = JSON.parse(d); rec.types.push(m.type); if (/^agent/.test(m.type)) rec.msgs.push(m); } catch (e) { /* not JSON */ } return send(d); }; socks.push(rec); return s; }
+    /* window.__holdAnswers: agentAnswer waits here (as on a slow line) until window.__release(), so the page's "accepted,
+       ChartBridge checks it" moment can be looked at */
+    window.__holdAnswers = false; const held = window.__held = [];
+    window.__release = () => { window.__holdAnswers = false; while (held.length) held.shift()(); };
+    function Spy(url, p) { const s = p === undefined ? new Real(url) : new Real(url, p); const rec = { url: String(url), types: [], msgs: [] }; const send = s.send.bind(s); s.send = d => { let m = null; try { m = JSON.parse(d); rec.types.push(m.type); if (/^agent/.test(m.type)) rec.msgs.push(m); } catch (e) { /* not JSON */ } if (m && m.type === 'agentAnswer' && window.__holdAnswers) { held.push(() => send(d)); return; } return send(d); }; socks.push(rec); return s; }
     Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
     window.WebSocket = Spy;
   });
@@ -76,6 +85,20 @@ try {
   const sent = () => page.evaluate(() => window.__socks.flatMap(s => s.msgs));
   const text = sel => page.evaluate(s => { const e = document.querySelector(s); return e ? e.textContent.replace(/\s+/g, ' ').trim() : null; }, sel);
   const visible = sel => page.evaluate(s => { const e = document.querySelector(s); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; }, sel);
+  /* board F: the light's state, the lit panels, the running light animations (the line and its halo: one animation per lit panel) */
+  const light = () => page.evaluate(() => window.workspace.agent().light);
+  const lit = () => page.evaluate(() => [...document.querySelectorAll('#agView .ag-panel.lit')].map(e => e.dataset.panel).sort().join(','));
+  const orbits = () => page.evaluate(() => document.getAnimations().filter(a => a.animationName === 'ag-orbit' && a.playState === 'running').map(a => a.effect.target.parentElement.dataset.panel).sort().join(','));
+  const lapOf = () => page.evaluate(() => { const l = document.querySelector('#agView .ag-panel.lit > .ag-light'); return l ? getComputedStyle(l).animationDuration : ''; });
+  async function lightIs(phase, tone, panels, what) {
+    await until(async () => { const l = await light(); return l && l.phase === phase && l.tone === tone; }, what + ': the light is ' + phase + ' (' + tone + ')');
+    await until(async () => (await lit()) === panels.slice().sort().join(','), what + ': lit ' + panels.join(' and '), 3000);
+    const L = await light(), on = await lit(), run = await orbits();
+    check(L.phase === phase && L.tone === tone && on === panels.slice().sort().join(',') && run === on,
+      what + ': the light circles ' + panels.join(' and ') + ' in ' + L.color + ' (' + L.said + '); lit: ' + on + '; running: ' + (run || 'none'));
+    return L;
+  }
+  const shotF = async name => { const vp = page.viewportSize(); await page.setViewportSize({ width: 1440, height: 1000 }); await sleep(700); await page.screenshot({ path: path.join(SHOTS, name + '.png') }); await page.setViewportSize(vp); await sleep(300); };
   await open();
   await control('price', { root: 'MNQ', p: 25400 });                                   // MNQ held at a sample price: the entries rest
 
@@ -93,8 +116,11 @@ try {
   await page.selectOption('#agView [data-k="pick"]', 'demo');
   await until(async () => (await text('.ag-strip [data-k="name"]')) === 'Demo Agent', 'Demo Agent chosen');
   const strip = await text('.ag-strip');
-  check(/Demo Agent/.test(strip) && /sample-build-1/.test(strip) && /CONNECTED · 0\.4 s ago/.test(strip) && /SHADOW/.test(strip) && /Sim101\s*SIM/.test(strip) && /Flat/.test(strip) && /\$0\.00/.test(strip) && /Trades\s*0/.test(strip) && /Losses\s*0/.test(strip),
-    'the strip: name, build, connected and its heartbeat, mode, account with SIM, position, P&L, trades, losses: "' + strip + '"');
+  check(/Demo Agent/.test(strip) && /sample-build-1/.test(strip) && /CONNECTED · 0\.4 s ago/.test(strip) && /SHADOW/.test(strip) && /Sim101\s*SIM/.test(strip) && /Flat/.test(strip),
+    'the strip: name, build, connected and its heartbeat, mode, account with SIM, position: "' + strip + '"');
+  const foot = await text('#agView .ag-foot');
+  check(/\$0\.00/.test(foot) && /Today/.test(foot) && /0\s*Trades/.test(foot) && /0\s*Losses/.test(foot) && /09:45/.test(foot) && /15:55/.test(foot) && /The light/.test(foot),
+    'the footer: today\'s P&L, trades, losses, his session 09:45 to 15:55 and the legend: "' + foot.slice(0, 200) + '"');
   check(!(await visible('#agView [data-k="sOwns"]')), 'no owner lock while flat with nothing working');
 
   /* ---------------------------------------------------------------- notes and plans */
@@ -107,17 +133,44 @@ try {
   await control('agent-note', { agent: 'demo', kind: 'lesson', text: 'Sample lesson: wait for the second touch on a slow open' });
   await control('agent-note', { agent: 'demo', kind: 'status', text: 'Sample status: watching MNQ and NQ' });
   await until(async () => (await A()).feed.notes === 5 && (await A()).feed.plans === 2, 'five notes and two plans in the feed');
-  const kinds = await page.evaluate(() => [...document.querySelectorAll('.ag-feed .ag-k')].map(e => e.textContent));
-  check(kinds[0] === 'STATUS' && kinds[1] === 'LESSON' && kinds.includes('PLAN') && kinds.includes('SKIP') && kinds.includes('THINKING') && kinds[kinds.length - 1] === 'NOTEBOOK', 'newest first, every kind: ' + kinds.join(' '));
+  const kinds = await page.evaluate(() => [...document.querySelectorAll('.ag-feed .ag-tag')].map(e => e.textContent));
+  check(kinds[0] === 'STATUS' && kinds[1] === 'LESSON' && kinds.includes('REFUSED') && kinds.includes('PASS') && kinds.includes('THINKING') && kinds.includes('LOOK') && kinds[kinds.length - 1] === 'NOTEBOOK', 'newest first, every kind: ' + kinds.join(' '));
+  check(await page.evaluate(() => [...document.querySelectorAll('.ag-feed > *')].every(e => e.tagName === 'BUTTON' && e.type === 'button' && e.getAttribute('aria-controls'))), 'every stream row is a real button');
   check(/refused: Sim101 is also the bot's account: choose an account for agent demo on the Agent tab/.test(await text('.ag-feed')), 'a refused plan says why (the bot\'s account is never an agent\'s)');
   check(/STOOD DOWN: Sim101 is also the bot's account/.test(await text('.ag-strip')), 'on its unchosen default Sim101, the bot\'s too, the agent stands down and the strip says so (as built)');
-  check(await page.evaluate(() => { const d = document.querySelector('.ag-feed details.ag-think'); return !!d && !d.open; }), 'thinking is a collapsed block');
-  await page.click('.ag-feed details.ag-think summary');
-  await control('agent-note', { agent: 'demo', kind: 'look', text: 'Sample: a new look after the click' });
+  /* the decision drawer: his full record of one row */
+  console.log('the decision drawer');
+  const thinkRow = '.ag-feed .ag-rowb.t-judgment';
+  check(/\.\.\.$/.test(await text(thinkRow + ' .ag-tx')), 'a long thinking row shows its start: ' + (await text(thinkRow + ' .ag-tx')).slice(-40));
+  await page.click(thinkRow);
+  await until(() => visible('#agView [data-k="drawer"]'), 'the drawer opens');
+  const dtext = await text('#agView [data-k="drawer"]');
+  check(/His thinking/.test(dtext) && /More sample words to make this long enough to collapse\. More sample words/.test(dtext) && /In his words/.test(dtext) && !/For and against|Notebook rule|cost/i.test(dtext),
+    'the drawer: his full thinking, only what the channel carries: "' + dtext.slice(0, 120) + '..."');
+  check(await page.evaluate(() => { const d = document.querySelector('#agView [data-k="drawer"]'), r = document.querySelector('.ag-feed .ag-rowb.t-judgment'); return d.classList.contains('t-judgment') && getComputedStyle(d).borderTopColor === 'rgb(200, 31, 224)' && r.getAttribute('aria-expanded') === 'true' && r.classList.contains('sel') && d.contains(document.activeElement); }),
+    'outlined in the decision\'s colour (Judgment #c81fe0), the row marked open, the focus on its Close');
+  check(await page.evaluate(() => { const d = document.querySelector('#agView [data-k="drawer"]').getBoundingClientRect(), r = document.querySelector('.ag-feed .ag-rowb.sel').getBoundingClientRect(); return r.top >= d.bottom - 1; }), 'the row stays in sight below the drawer');
+  await page.click(thinkRow);
+  await until(async () => !(await visible('#agView [data-k="drawer"]')), 'the same row again closes it');
+  await page.click(thinkRow);
+  await until(() => visible('#agView [data-k="drawer"]'), 'open again');
+  await page.click('#agView .ag-strip [data-k="name"]');                              // the focus outside the drawer
+  await page.keyboard.press('Escape');
+  await sleep(200);
+  check(await visible('#agView [data-k="drawer"]'), 'Escape with the focus outside the drawer leaves it (no page-wide key handler)');
+  await page.focus('#agView [data-k="drawer"] [data-act="drawerClose"]');
+  await page.keyboard.press('Escape');
+  await until(async () => !(await visible('#agView [data-k="drawer"]')), 'Escape from inside the drawer closes it');
+  check(await page.evaluate(() => document.activeElement && document.activeElement.matches('.ag-feed .ag-rowb.t-judgment')), 'the focus goes back to its row');
+  await page.click('.ag-feed .ag-rowb.t-no');                                          // the refused plan
+  await until(() => visible('#agView [data-k="drawer"]'), 'a refused plan\'s record');
+  check(/refused by ChartBridge: Sim101 is also the bot's account/.test(await text('#agView [data-k="drawer"]')), 'a refused plan: ChartBridge\'s words under his rules');
+  await page.click('#agView [data-k="drawer"] [data-act="drawerClose"]');
+  await until(async () => !(await visible('#agView [data-k="drawer"]')), 'Close closes it');
+  await control('agent-note', { agent: 'demo', kind: 'lesson', text: 'Sample: a new lesson after the click' });
   await until(async () => (await A()).feed.notes === 6, 'one more note');
-  check(await page.evaluate(() => document.querySelector('.ag-feed details.ag-think').open), 'an opened thinking block stays open when the feed redraws');
   await page.click('.ag-filters [data-filter="plans"]');
-  check((await page.$$('.ag-feed .ag-item')).length === 2, 'the Plans filter shows the plans only');
+  check((await page.$$('.ag-feed .ag-rowb')).length === 2, 'the Plans filter shows the plans only');
   await page.click('.ag-filters [data-filter="all"]');
 
   /* ---------------------------------------------------------------- account */
@@ -141,6 +194,15 @@ try {
   await until(async () => (await text('.ag-strip [data-k="sAccount"]')) === 'SIM-AG1', 'the agent trades SIM-AG1 now');
   const am = (await sent()).filter(m => m.type === 'agentAccount');
   check(am.length === 1 && am[0].agent === 'demo' && am[0].account === 'SIM-AG1' && Object.keys(am[0]).join(',') === 'type,cid,agent,account', 'agentAccount sent once, exactly the contract\'s keys: ' + JSON.stringify(am));
+
+  /* ---------------------------------------------------------------- the light: a look */
+  console.log('the light follows his real state');
+  await control('agent-note', { agent: 'demo', kind: 'look', text: 'Sample: price is back at the made-up VWAP; worth a closer look' });
+  await lightIs('look', 'eyes', ['pipe', 'stream'], 'a look');
+  check((await lapOf()) === '13s', 'while he decides the light takes 13 s a lap: ' + await lapOf());
+  check(await page.evaluate(() => [...document.querySelectorAll('#agView .ag-panel:not(.lit) > .ag-light')].every(l => getComputedStyle(l).display === 'none')), 'no light on a panel that is not lit');
+  check(await page.evaluate(() => getComputedStyle(document.querySelector('#agView .ag-step[data-step="1"]')).getPropertyValue('--tc').trim() === '#8f7bff' && document.querySelector('#agView .ag-step[data-step="1"]').classList.contains('now')), 'the tracker: Eyes is the step now');
+  check((await text('#agView [data-k="room"]')).includes('Max loss room') && !/target/i.test(await text('#agView [data-k="room"]')), 'his account\'s room: ' + await text('#agView [data-k="room"]'));
 
   /* ---------------------------------------------------------------- rules */
   console.log('the rules');
@@ -201,12 +263,34 @@ try {
   await sleep(1100);
   check((await text('.ag-plist [data-k="cd"]')) !== cd, 'the countdown runs');
   await page.screenshot({ path: path.join(SHOTS, 'agent-proposal.png') });
+  await lightIs('plan', 'judgment', ['pipe', 'prop'], 'a plan waiting in copilot');
+  check(await page.evaluate(() => getComputedStyle(document.querySelector('#agView [data-k="main"]')).getPropertyValue('--ag-pc').trim()) !== '', 'the light\'s colour is a registered property on the tab');
+  await shotF('agent-f-plan');
+  /* his rules being checked: Accept sent, ChartBridge not answered yet (the answer held a moment, as on a slow line) */
+  await page.evaluate(() => { window.__holdAnswers = true; });
   await page.click('.ag-plist [data-agans="accept"]');
+  await lightIs('check', 'checks', ['acct', 'prop'], 'Accept sent, his rules being checked');
+  check(await page.isDisabled('.ag-plist [data-agans="accept"]') && await page.isDisabled('.ag-plist [data-agans="reject"]'), 'Accept and Reject closed while ChartBridge checks (the double-press guard)');
+  await page.evaluate(() => window.__release());
   await until(async () => (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'cp1').state === 'accepted', 'accepted in ChartBridge');
   const ans = (await sent()).filter(m => m.type === 'agentAnswer');
   check(ans.length === 1 && ans[0].answer === 'accept' && ans[0].agent === 'demo' && ans[0].id === 'cp1' && Object.keys(ans[0]).join(',') === 'type,cid,agent,id,answer,at', 'agentAnswer: exactly the contract\'s keys, no order fields: ' + JSON.stringify(ans[0]));
   await until(async () => (await A()).orders.some(o => o.by === 'agent:demo' && o.role === 'entry'), 'the agent\'s working entry, marked by agent:demo');
   await until(() => visible('#agView [data-k="sOwns"]'), 'the owner lock badge');
+  await lightIs('placed', 'bridge', ['chart', 'prop'], 'his entry placed and working');
+  /* the drawer on a plan: the facts as the channel carries them */
+  await page.click('.ag-filters [data-filter="plans"]');
+  await page.click('.ag-feed .ag-rowb.t-bridge');
+  await until(() => visible('#agView [data-k="drawer"]'), 'the accepted plan\'s record');
+  const drawerTop = await page.evaluate(() => { const d = document.querySelector('#agView [data-k="drawer"]').getBoundingClientRect(); return Math.round(d.top); });
+  const pt = await text('#agView [data-k="drawer"]');
+  check(/In his words/.test(pt) && /pullback to the made-up VWAP held twice/.test(pt) && /Entry\s*Buy 2 MNQ, limit 25,390\.00/.test(pt) && /Stop\s*16 ticks, 25,386\.00/.test(pt) && /Target\s*32 ticks, 25,398\.00/.test(pt) &&
+    /Risk\s*\$16\.00, reward 2\.00 to 1/.test(pt) && /passed ChartBridge's checks/.test(pt) && /Proposal\s*accepted/i.test(pt) && /You answered/.test(pt) && !/For and against|cost/i.test(pt),
+    'a plan\'s record: his words, entry, stop, target, risk, the checks, the proposal and his answer time: "' + pt.slice(0, 220) + '..."');
+  await shotF('agent-f-drawer');
+  await page.click('#agView [data-k="drawer"] [data-act="drawerClose"]');
+  await page.click('.ag-filters [data-filter="all"]');
+  check(drawerTop >= 0, 'the drawer sits over the right column');
   check(/OWNS SIM-AG1 MNQ/.test(await text('#agView [data-k="sOwns"]')), 'the strip: ' + await text('#agView [data-k="sOwns"]'));
   const lines = await page.evaluate(() => { const c = window.workspace.agent(); return c.chart; });
   check(lines && (await A()).chartRoot === 'MNQ' && /^MNQ/.test(await text('#agView [data-k="chartName"]')), 'the Agent tab\'s chart is on the agent\'s root, MNQ (its working entry\'s, not its first root NQ): ' + await text('#agView [data-k="chartName"]'));
@@ -215,8 +299,14 @@ try {
   await page.setViewportSize({ width: 1366, height: 768 });                             // Anthony's laptop: no page scroll
   await sleep(600);
   const fit = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, sh: document.documentElement.scrollHeight, w: innerWidth, h: innerHeight }));
-  check(fit.sw <= fit.w && fit.sh <= fit.h, 'at 1366 x 768 the Agent tab fits the window (no page scroll): ' + JSON.stringify(fit));
+  check(fit.sw <= fit.w && fit.sh <= fit.h, 'at 1366 x 768 the Agent tab fits the window (no page scroll, none sideways): ' + JSON.stringify(fit));
+  check(await page.evaluate(() => { const f = document.querySelector('#agView .ag-foot').getBoundingClientRect(), c = document.querySelector('#agView .ag-chart').getBoundingClientRect(); return f.bottom <= innerHeight + 1 && c.bottom <= f.top; }), 'at 1366 x 768 the chart ends above the footer, and the footer is in the window');
   await page.screenshot({ path: path.join(SHOTS, 'agent-1366.png') });
+  await page.setViewportSize({ width: 390, height: 844 });                              // a phone
+  await sleep(700);
+  const phone = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, w: innerWidth, tab: [...document.querySelectorAll('#agView *')].filter(e => { const r = e.getBoundingClientRect(); return r.width && r.right > innerWidth + 1 && !e.closest('.chart-live'); }).length }));
+  check(phone.sw <= phone.w && phone.tab === 0, 'at phone width (390 px) no sideways scroll and nothing of the tab past the edge: ' + JSON.stringify(phone));
+  await page.screenshot({ path: path.join(SHOTS, 'agent-phone.png') });
   await page.setViewportSize({ width: 1600, height: 900 });
 
   /* ---------------------------------------------------------------- a cancel not confirmed (ChartBridge 0.5.0 as built) */
@@ -238,7 +328,8 @@ try {
   check(!(await page.isDisabled('.ag-plist .ag-prop[data-id="cp2"] [data-agans="reject"]')), 'Reject still goes');
   await until(async () => (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'cp2').state === 'expired', 'ChartBridge expires it', 8000);
   await until(async () => !(await page.$('.ag-prop[data-id="cp2"]')), 'the expired card goes', 6000);
-  check(/EXPIRED/.test(await text('.ag-feed')) && /ACCEPTED IN \d+\.\d S/.test(await text('.ag-feed')), 'the feed says how each proposal ended (on its plan): ' + (await text('.ag-feed')).slice(0, 160));
+  check(/expired/.test(await text('.ag-feed')) && /accepted in \d+\.\d s/.test(await text('.ag-feed')), 'the feed says how each proposal ended (on its plan): ' + (await text('.ag-feed')).slice(0, 160));
+  await lightIs('passed', 'passed', ['prop', 'stream'], 'a plan that expired');
 
   /* ---------------------------------------------------------------- the flat hours on an account NinjaTrader no longer lists */
   console.log('the flat hours: an account NinjaTrader no longer lists gives NOT FLAT on the workspace\'s line');
@@ -248,6 +339,22 @@ try {
   await until(async () => (await A()).orders.some(o => o.by === 'agent:demo' && o.role === 'entry'), 'fl1 working');
   await control('price', { root: 'MNQ', p: 25389.75 });                                   // it fills: a position, its legs
   await until(async () => /Long 1 MNQ/.test(await text('.ag-strip [data-k="sPos"]')), 'demo is long 1 MNQ');
+  /* an open trade: the light moves to the chart and the P&L, the faster lap, its colour the open P&L */
+  await control('price', { root: 'MNQ', p: 25393 });
+  await until(async () => /^\+\$/.test(await text('#agView [data-k="cPnl"]')), 'the open P&L shows the gain (NinjaTrader\'s figure for the account)');
+  const up = await lightIs('trade', 'bridge', ['chart', 'pnl'], 'an open trade in profit');
+  check(up.fast && (await lapOf()) === '9s', 'in a trade the light takes 9 s a lap: ' + await lapOf());
+  check(/\+\$/.test(await text('#agView [data-k="cPnl"]')) && (await page.getAttribute('#agView [data-k="cPnl"]', 'class')).includes('pos'), 'the chart\'s header: the open P&L in green: ' + await text('#agView [data-k="cPnl"]'));
+  const still = await page.evaluate(() => ['[data-k="sPnl"]', '[data-k="cPnl"]', '[data-k="cPos"]', '[data-k="sTrades"]', '.ag-chart canvas', '.ag-chart .chart-live'].map(sel => { const e = document.querySelector('#agView ' + sel); if (!e) return sel + ' missing'; const c = getComputedStyle(e); return c.transitionDuration.split(',').every(d => parseFloat(d) === 0) && c.animationName === 'none' && !!e.closest('[data-no-motion]') ? '' : sel + ' ' + c.transitionProperty + ' ' + c.transitionDuration; }).filter(Boolean));
+  check(!still.length, 'the P&L figures, the position, the price line (the chart) have no transition and sit under data-no-motion' + (still.length ? ': ' + still.join('; ') : ''));
+  check(await page.evaluate(() => [...document.querySelectorAll('#agView .ag-trail .ag-ev')].some(e => e.textContent === 'F' && /^Bought 1 MNQ at 25,3(89\.75|90\.00)/.test(e.title) && getComputedStyle(e).getPropertyValue('--tc').trim() === '#3dff9a')),
+    'his session\'s trail marks the fill (F, green), drawn above the now mark');
+  await shotF('agent-f-profit');
+  await control('price', { root: 'MNQ', p: 25388 });                                   // under water, above its stop
+  await until(async () => /^-\$/.test(await text('#agView [data-k="cPnl"]')), 'the open P&L shows the loss');
+  await lightIs('trade', 'no', ['chart', 'pnl'], 'an open trade under water');
+  check(/-\$/.test(await text('#agView [data-k="cPnl"]')) && (await page.getAttribute('#agView [data-k="cPnl"]', 'class')).includes('neg'), 'the open P&L in red at once: ' + await text('#agView [data-k="cPnl"]'));
+  await shotF('agent-f-under');
   await control('agent-unlist', { account: 'SIM-AG1' });
   await control('agent-flat-hours', { agent: 'demo' });
   await until(async () => /Agent demo: NOT FLAT\? its flatten \(.*\) waits: SIM-AG1 \(account not listed by NinjaTrader\)/.test(await page.textContent('#wsAlert')), 'the NOT FLAT error shows as ChartBridge\'s other errors do');
@@ -255,6 +362,9 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'agent-notflat.png'), clip: { x: 0, y: 0, width: 1600, height: 200 } });
   await control('agent-unlist', { account: 'SIM-AG1', on: 0 });
   await until(async () => (await text('.ag-strip [data-k="sPos"]')) === 'Flat', 'the account is back: ChartBridge flattens it');
+  await until(async () => (await light()).phase === 'exit', 'a flat exit');
+  const out = await lightIs('exit', (await light()).tone, ['pipe', 'pnl'], 'a flat exit: back on the tracker');
+  check(/^Out of the trade/.test(out.said) && ['bridge', 'no'].includes(out.tone), 'how it went: ' + out.said);
   await control('agent-flat-hours', { agent: 'demo', on: 0 });
   await control('price', { root: 'MNQ', p: 25400 });
   await page.click('#wsAlertClose').catch(() => {});
@@ -271,6 +381,22 @@ try {
   await until(async () => (await agentsNow()).find(a => a.agent === 'demotwo').account === 'SIM-AG2', 'demotwo trades SIM-AG2');
   await page.click('#agView [data-mode="copilot"]');
   await until(async () => (await agentsNow()).find(a => a.agent === 'demotwo').mode === 'copilot', 'demotwo in Copilot');
+  await control('agent-note', { agent: 'demotwo', kind: 'notebook', text: 'Sample notebook v1: wait for a made-up level to be tested twice' });
+  await control('agent-note', { agent: 'demotwo', kind: 'status', text: 'Sample status: watching MNQ and NQ' });
+  await lightIs('watch', 'screen', ['pipe'], 'watching (a notebook and a status are not decisions)');
+  await shotF('agent-f-watching');
+  /* the Motion switch: Off stops the light and keeps the glow, kept in this browser; reduced motion does the same */
+  await page.click('#agView [data-motion="off"]');
+  await until(async () => (await orbits()) === '', 'Motion Off: no light animation');
+  check(await page.evaluate(() => { const p = document.querySelector('#agView .ag-panel.lit'); return !!p && getComputedStyle(p).boxShadow !== 'none' && getComputedStyle(p.querySelector('.ag-light')).display === 'none' && localStorage.getItem('live-agent-motion-v1') === 'off' && document.querySelector('#agView [data-motion="off"]').getAttribute('aria-pressed') === 'true'; }),
+    'Motion Off: the light stops, the glow stays where his attention is, the choice kept in this browser');
+  await page.click('#agView [data-motion="full"]');
+  await until(async () => (await orbits()) === 'pipe', 'Motion Full: the light again');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await until(async () => (await orbits()) === '', 'the system\'s reduced motion: no light animation');
+  check(await page.evaluate(() => getComputedStyle(document.querySelector('#agView .ag-panel.lit')).transitionDuration.split(',').every(d => parseFloat(d) === 0)), 'reduced motion: no transition either');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await until(async () => (await orbits()) === 'pipe', 'the light back');
   await page.selectOption('#agView [data-k="pick"]', 'demo');
   await until(async () => (await text('.ag-strip [data-k="name"]')) === 'Demo Agent', 'Demo Agent shown');
   await page.click('#agView [data-mode="copilot"]');
@@ -350,6 +476,7 @@ try {
   await pop.waitForFunction(() => window.agentDesk && window.agentDesk.state().agents.length === 2, null, { timeout: 20000 });
   await pop.waitForFunction(() => /Demo Agent/.test(document.querySelector('.ag-strip').textContent), null, { timeout: 10000 });
   check(/\/live\/agent\.html$/.test(pop.url()), 'an agent-only page (agent.html) for a third monitor');
+  check(await pop.evaluate(() => getComputedStyle(document.querySelector('.ag-view')).fontFamily.includes('Chakra Petch') && document.fonts.check('600 12px "Chakra Petch"') && document.fonts.check('12px "JetBrains Mono"') && document.fonts.check('12px "IBM Plex Sans"')), 'the pop-out has the tab\'s fonts, from this PC');
   await pop.setViewportSize({ width: 1500, height: 900 });
   await sleep(1500);
   await pop.screenshot({ path: path.join(SHOTS, 'agent-popout.png') });

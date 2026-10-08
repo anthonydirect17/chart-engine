@@ -343,6 +343,7 @@ function create(o) {
   }
   /* each card in its place: the agent shown in the tab has its proposals in the tab (no corner card); every other one is in the corner */
   function placeCards() {
+    setTimeout(placeDrawer, 0);                                // a proposal came or went: the drawer keeps clear of it (setTimeout passes no argument)
     const list = q('[data-k="plist"]'), inTab = S.shown && !!view;
     const mine = [...cards.values()].filter(x => x.p.agent === S.chosen).sort((a, b) => a.shownAt - b.shownAt);
     if (list) list.replaceChildren(...mine.map(x => x.inline));
@@ -609,7 +610,7 @@ function create(o) {
   function openDrawer(key) {
     S.drawer = S.drawer === key ? '' : key;                  // the same row again closes it
     renderFeed();
-    if (S.drawer) { const x = q('[data-k="drawer"] [data-act="drawerClose"]'); if (x) x.focus({ preventScroll: true }); }
+    if (S.drawer) { placeDrawer(true); const x = q('[data-k="drawer"] [data-act="drawerClose"]'); if (x) x.focus({ preventScroll: true }); }
   }
   function closeDrawer() {
     const key = S.drawer;
@@ -633,7 +634,28 @@ function create(o) {
     put(d, 'className', 'ag-drawer t-' + x.tone);
     setHtml(d, html);
     put(d, 'hidden', false);
+    placeDrawer();
   }
+  /* where the drawer sits over the right column: never over an open proposal (its Accept and Reject stay in sight), and
+     above the last part of the stream when there is room, so the row it shows stays in sight and a second click on it
+     closes it. Worked out when it opens, when a proposal comes or goes and when the column changes size (no timer). */
+  function placeDrawer(reveal) {
+    const d = q('[data-k="drawer"]'), col = q('.ag-right'), prop = q('[data-panel="prop"]');
+    if (!d || d.hidden || !col) return;
+    const H = col.clientHeight, open = [...cards.values()].some(x => x.p.agent === S.chosen && !x.ended);
+    const top = open && prop ? prop.offsetTop + prop.offsetHeight + 8 : 0;
+    let bottom = Math.max(150, Math.round(H * 0.38));
+    if (H - top - bottom < 220) bottom = 0;
+    d.style.top = top + 'px'; d.style.bottom = bottom + 'px';
+    const feedBox = q('[data-k="feed"]'), row = feedBox && S.drawer ? feedBox.querySelector('[data-row="' + CSS.escape(S.drawer) + '"]') : null;
+    if (reveal === true && row && bottom) {                    // on opening: the row in sight, in the part of the stream left showing
+      const fr = feedBox.getBoundingClientRect(), rr = row.getBoundingClientRect(), dr = d.getBoundingClientRect();
+      const from = Math.max(fr.top, dr.bottom + 4);
+      if (rr.top < from || rr.bottom > fr.bottom) feedBox.scrollTop += rr.top - from;
+    }
+  }
+  let resizeObs = null;
+  if (view && typeof ResizeObserver === 'function') { const col = q('.ag-right'); if (col) { resizeObs = new ResizeObserver(() => placeDrawer()); resizeObs.observe(col); } }
 
   /* ---------------- the light, the tracker, the chart's position and the footer: worked out again on each message */
   /* the open P&L: NinjaTrader's unrealized for the agent's own account (when it holds nothing else there), else from the chart's
@@ -696,8 +718,8 @@ function create(o) {
     const T = AC.sessionTrail(a.rules, Date.now(), ev), now = T.nowPct === null ? 0 : T.nowPct;
     setHtml(q('[data-k="trail"]'), '<div class="ag-track"><div class="ag-base"></div><div class="ag-done" style="width:' + now + '%"></div>' +
       T.hours.map((h, i) => '<span class="ag-hour mono' + (i && i < T.hours.length - 1 ? ' mid' : '') + '" style="left:' + h.pct + '%">' + esc(h.label) + '</span>').join('') +
-      T.marks.map(x => '<span class="ag-ev t-' + x.tone + ' mono" style="left:' + x.pct + '%" title="' + esc(x.title) + '">' + esc(x.mark) + '</span>').join('') +
-      '<span class="ag-head" style="left:' + now + '%" title="Now"></span></div>');
+      '<span class="ag-head" style="left:' + now + '%" title="Now"></span>' +            // under the marks: a fill a moment ago still shows
+      T.marks.map(x => '<span class="ag-ev t-' + x.tone + ' mono" style="left:' + x.pct + '%" title="' + esc(x.title) + '">' + esc(x.mark) + '</span>').join('') + '</div>');
   }
   /* his account's room (the Account page's figures: ChartBridge's, else The Desk's limits; never estimated) */
   function renderRoom(a) {
@@ -940,7 +962,7 @@ function create(o) {
       proposals: [...cards.values()].map(x => ({ agent: x.p.agent, id: x.p.id, ended: !!x.ended, corner: !x.corner.hidden })), offText: AC.offText(offCtx()),
       feed: S.chosen ? feed.counts(S.chosen) : { notes: 0, plans: 0 }, light: cur() ? lightNow(cur()) : null, drawer: S.drawer, motion: S.motion, chart: !!S.chart, chartRoot: S.chartRoot, orders: [...S.orders.values()].map(x => ({ id: x.id, by: x.by, role: x.role, root: x.root })), trips: trips() }),
     chart: () => (S.chart ? S.chart.chart : null),
-    destroy() { unlisten(); unroute(); unmountChart(); propBox.removeEventListener('click', onCardClick); for (const x of cards.values()) x.corner.remove(); clearTimeout(timer); },
+    destroy() { unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); propBox.removeEventListener('click', onCardClick); for (const x of cards.values()) x.corner.remove(); clearTimeout(timer); },
   };
   return api;
 }

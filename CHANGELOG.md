@@ -3,13 +3,38 @@
 ## 1.17.0 (2026-10-08): the Agent tab
 
 Anthony's AI trading agents get their own tab next to the Bot tab (Manrae is the first; the tab serves any number). It is
-the page's side of ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1). The look starts from the Manrae
-training viewer ("looks great and is a great foundation", 2026-10-08). Everything is in `docs/AGENT_TAB.md`, with every
+the page's side of ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1). Its look is board F of Anthony's
+mockups ("love it, lets build F into the real agent tab", 2026-10-08). Everything is in `docs/AGENT_TAB.md`, with every
 lead's default.
 
-- **The strip:** name, build, connected and the heartbeat's age, mode, the account with its SIM or LIVE mark (as the Bot
-  tab's), position, P&L today, trades, losing trades, KILLED or STOOD DOWN with why, and "OWNS <account> <root>" while the
-  agent holds the owner lock. A picker when there is more than one agent.
+- **The look (board F), scoped to the tab:** a blue-black ground with faint glows, cyan panels, purple and red only on a
+  few buttons, chips and words (the kill switch, Reject, a LIVE account, the agent's name). Fonts, Anthony's hybrid:
+  Chakra Petch for titles, labels, tabs and buttons, IBM Plex Sans for body text, JetBrains Mono for every number, all
+  from this PC (Chakra Petch and JetBrains Mono added to `live/fonts`, Latin subset, SIL Open Font License; listed in
+  `nt8/install-files.json`); offline each falls back to the system's own. The rest of the page is unchanged.
+- **The layout:** left, the mode, the kill switch, status, his account with the room left (the Account page's figures:
+  ChartBridge's, else The Desk's limits) and his rules; centre, "What he is doing now" (Screen, Eyes, Judgment, Checks,
+  ChartBridge) above the chart; right, the proposal and his stream; bottom, today's dollars, trades and losses (of the
+  limit), his session as a trail from his rules' entryFrom to flatAt with his fills and exits, and what the light's
+  colours mean.
+- **The flowing light:** one slow comet circles the borders of the panels where his attention is (13 s a lap while he
+  decides, 9 s in a trade), with a blurred halo, and those panels glow. Its place and colour come from his real state
+  (`AgentCore.lightState`, from the messages the page already gets): watching cyan, a look violet, a plan or his thinking
+  magenta (#c81fe0), his rules being checked gold, placed, filled or a go green; passed or a plan that ended unaccepted
+  orange; refused red. In a trade it moves to the chart and the P&L, green at or above zero and red below, and back to the
+  tracker after a flat exit. Pure CSS, one animation per lit panel, worked out again only when a message arrives.
+- **Motion:** only the light and the glow move or fade; the figures, the price, the position, Accept and Reject change at
+  once (`docs/MOTION.md` R3). A Motion switch (Full, Off; kept in this browser) and the system's reduced motion stop the
+  light and keep the glow, still. The ChartMotion kit is not used on the tab.
+- **His stream's drawer:** every row (a note, a plan, a fill, an exit) is a button; it opens his record of that decision in
+  a drawer over the right column, outlined in its colour: his words, the plan's numbers, ChartBridge's verdict on his
+  rules, the proposal and when you saw and answered it, fill and exit details. Only what the channel carries. The same row
+  again, Close, or Escape from inside it closes it; no key handler on the page, so the order hotkeys are untouched. It
+  never covers an open proposal.
+
+- **The strip:** name, build, connected and the heartbeat's age, mode, the account with its SIM or LIVE mark, position,
+  KILLED or STOOD DOWN with why, and "OWNS <account> <root>" while the agent holds the owner lock; the Motion switch and Pop
+  out. A picker when there is more than one agent. P&L today, trades and losing trades are in the footer.
 - **Control:** Shadow, Copilot, Auto (Auto asks a second click within 4 s) and the kill switch (on in one click, release
   in two), as the Bot tab. Change account lists the tradable accounts, never the bot's, the copier's or another agent's, and
   asks once in the page for a LIVE one, naming the mode; the agent goes to Shadow when its account changes. The rules in force, and Change the rules (only while the agent is flat with nothing
@@ -26,10 +51,11 @@ lead's default.
   in 1.16.0.
 - **A double-click never confirms** Auto or a kill switch's release, on the Agent tab and the Bot tab (a second click under
   400 ms after the first is ignored).
-- **Notes and plans:** the agent's looks, thinking (a collapsed block), lessons, notebook and status, and its plans with
-  their results, newest first, with filters.
-- **The chart:** the agent's root with its own orders and legs (`by: "agent:<id>"`) as lines and its trades as marks; the
-  Account page names such an order "agent <id>".
+- **His stream:** the agent's looks, thinking, lessons, notebook and status, its plans with their results, and its fills
+  and exits today, newest first, with filters (All, Plans, Notes, Thinking, Lessons).
+- **The chart:** the agent's root with its own orders and legs (`by: "agent:<id>"`) as lines and its trades as marks, its
+  position and open P&L in the chart's header; the chart itself is the page's, never restyled or animated. The Account
+  page names such an order "agent <id>".
 - **Pop out:** `agent.html`, the tab in its own window.
 - **An older ChartBridge:** the tab says "No agents on this ChartBridge (0.5.0 or later)." and nothing else changes.
 - **On a pair an agent owns** (ChartBridge 0.5.0's owner lock), the order ticket sends only a market exit that reduces; a

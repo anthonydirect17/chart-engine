@@ -1,8 +1,10 @@
 /*
  * The Agent tab (live/agent.js; chart page 1.17.0). Its look is board F of Anthony's mockups (2026-10-08: "love it, lets
- * build F into the real agent tab"): a blue-black ground with faint glows, cyan panels, Chakra Petch for words and
- * JetBrains Mono for numbers (from this PC, live/fonts/agent-fonts.css), purple and red only on a few buttons, chips and
- * words, and one slow light that circles the panels where the agent's attention is.
+ * build F into the real agent tab"): a blue-black ground with faint glows, cyan panels, purple and red only on a few
+ * buttons, chips and words, and one slow light that circles the panels where the agent's attention is. Fonts (Anthony's
+ * hybrid, 2026-10-08): Chakra Petch for titles, section labels, tabs and buttons; IBM Plex Sans for body text (his words,
+ * the proposal's reason, the stream's rows, notes); JetBrains Mono for every number. All three from this PC
+ * (live/fonts/agent-fonts.css, live/fonts/plex.css); offline or missing, each falls back to the system's own.
  *
  * Scoped to the tab: every board F rule sits under .ag-view. The tab button in the top bar, the corner proposals and the
  * corner notices (they show wherever Anthony is) keep the page's own look, below.
@@ -43,10 +45,16 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
   --f-pu: #7b5cff; --f-pud: #6d28d9; --f-put: #b69cff; --f-pul: #d8ccff; --f-rd: #ff3b5c; --f-gr: #3dff9a; --f-or: #ff8a2a; --f-gold: #ffd23f;
   --f-ui: "Chakra Petch", "Segoe UI", system-ui, -apple-system, sans-serif;
   --f-num: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
   flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; position: relative; color: var(--f-c);
   background: radial-gradient(900px 520px at 42% 38%, rgba(0, 150, 255, .07), transparent 65%), radial-gradient(520px 340px at 88% 92%, rgba(123, 92, 255, .05), transparent 70%), var(--f-ground);
   font: 13px/1.4 var(--f-ui);
 }
+/* body text in IBM Plex Sans (the hybrid): his words, the reason, the stream's rows, notes, the explanations */
+.ag-view .ag-dquote, .ag-view .ag-quote, .ag-view .ag-rowb .ag-tx, .ag-view .ag-prop-note, .ag-view .ag-why, .ag-view .ag-help, .ag-view .ag-empty,
+.ag-view .ag-roomwhy, .ag-view .ag-dnote, .ag-view .ag-off-card p, .ag-view .ag-ask, .ag-view .ag-prop-msg, .ag-view .ag-stepsub, .ag-view .ag-tap,
+.ag-view .ag-pgrid > span:nth-child(even):not(.mono), .ag-view .ag-fact > span:first-child, .ag-view .ag-key { font-family: var(--f-body); }
+.ag-view .ag-rowb .ag-tx.mono, .ag-view .ag-dquote.pre { font-family: var(--f-num); }
 /* the tones: a step of the tracker, or an outcome (AgentCore.LIGHT) */
 .ag-view .t-screen { --tc: #5df2ff; } .ag-view .t-eyes { --tc: #8f7bff; } .ag-view .t-judgment { --tc: #c81fe0; } .ag-view .t-checks { --tc: #ffd23f; }
 .ag-view .t-bridge { --tc: #3dff9a; } .ag-view .t-passed { --tc: #ff8a2a; } .ag-view .t-no { --tc: #ff3b5c; }
@@ -284,8 +292,8 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-chev { color: var(--f-dim); }
 
 /* ---------------- the decision drawer, over the right column, in that decision's colour */
-.ag-view .ag-drawer { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; gap: 14px; padding: 16px; overflow: auto; box-sizing: border-box;
-  background: #01050b; border: 1px solid var(--tc, var(--f-c)); box-shadow: 0 0 34px -6px var(--tc, var(--f-c)); animation: ag-slide .45s cubic-bezier(.2, .8, .2, 1); }
+.ag-view .ag-drawer { position: absolute; inset: 0; z-index: 6; box-shadow: 0 0 34px -6px var(--tc, var(--f-c)), 0 16px 30px rgba(0, 0, 0, .7); display: flex; flex-direction: column; gap: 14px; padding: 16px; overflow: auto; box-sizing: border-box;
+  background: #01050b; border: 1px solid var(--tc, var(--f-c)); animation: ag-slide .45s cubic-bezier(.2, .8, .2, 1); }
 .ag-view .ag-drawer[hidden] { display: none; }
 .ag-view .ag-dhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .ag-view .ag-dtitle { font-size: 19px; font-weight: 600; margin-top: 6px; color: var(--tc); text-shadow: 0 0 10px var(--tc); overflow-wrap: anywhere; }

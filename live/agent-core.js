@@ -17,6 +17,10 @@
  *   orders
  *   copilot     the one handler of the workspace's `chart-copilot-key` event, shared by the Bot tab and the Agent tab:
  *   keys        the oldest open proposal across the bot and every agent is the one answered (lead's default)
+ *   the light   board F (Anthony 2026-10-08): what the agent is doing now, from the messages the page gets (lightState: the
+ *               phase, its colour, the panels lit), each stream row's tone and his record of it for the drawer
+ *               (rowTone, decisionRecord), his session as a trail (sessionTrail), his account's room (roomLines) and the
+ *               tab's Motion switch kept in this browser (motionPref)
  *
  * Nothing here sends an order. The page never builds an order for an agent: ChartBridge places every agent order itself,
  * from the plan's parameters, inside the agent's rules (AI is never in the order path).

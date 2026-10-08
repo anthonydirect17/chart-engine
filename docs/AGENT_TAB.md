@@ -14,9 +14,10 @@ every one again.
 
 | file | what |
 |---|---|
-| `live/agent-core.js` | `AgentCore`: the logic, no page in it (Node tests run it): agents and the picker, proposals and their countdown, the feed, the rule form and its checks, the account chooser, the agent's orders by its mark, the one copilot-key router |
+| `live/agent-core.js` | `AgentCore`: the logic, no page in it (Node tests run it): agents and the picker, proposals and their countdown, the feed, the rule form and its checks, the account chooser, the agent's orders by its mark, the one copilot-key router, and board F's light (`lightState`), stream tones and drawer records (`rowTone`, `decisionRecord`), session trail (`sessionTrail`), room (`roomLines`) and Motion switch (`motionPref`) |
 | `live/agent.js` | `AgentDesk`: draws the tab from AgentCore on the window's one v3 connection |
-| `live/agent.css` | its look: the Manrae training viewer's (below) on the house style |
+| `live/agent.css` | its look: board F (below), scoped to the tab |
+| `live/fonts/agent-fonts.css` | Chakra Petch and JetBrains Mono from this PC (Latin subset, `OFL-agent.txt` beside them) |
 | `live/agent.html` | the tab in its own window (Pop out, for a third monitor), on its own v3 connection |
 | `test/agent.test.js` | AgentCore's unit tests, and the files' wiring |
 | `test/fake-v3.mjs`, `test/fake-bridge.mjs` | the fake ChartBridge speaks the agent channel (`--agents=demo`): the made-up "Demo Agent" |
@@ -31,32 +32,118 @@ keeps one tab open at a time and lets the copilot keys work for agents; `live/in
 
 ## The look
 
-Anthony on the Manrae training viewer (2026-10-08): "looks great and is a great foundation". The tab takes its look, not
-its file: one dark theme, flat columns ruled in purple (`#2A1F4D`), small mono labels in lavender (`#B69CFF`, uppercase,
-wide tracking), the viewer's buttons and selects, quote blocks with a purple rule for the agent's reasons and thinking, the
-confidence meter, the log's colored kinds (look lavender, plan purple, lesson gold, status dim). Green and red only for
-trade sides and P&L (and, as on the Bot tab, the kill switch). Crimson only for a LIVE account's mark and question, the
-Bot tab's Armed red. IBM Plex Sans, Condensed and Mono from the page folder. Nothing moves.
+Board F of Anthony's mockups (2026-10-08: "love it, lets build F into the real agent tab"; the Judgment colour and the
+light's pace as he corrected them the same day). Board A's information in board F's look. Everything is scoped to the
+tab (`.ag-view`): the top bar, the corner proposals and notices, the chart and every other tab keep the page's look.
+
+- **Ground and colours:** a blue-black ground (`#010307`) with two faint radial glows; cyan (`#5df2ff`) is the base colour
+  of lines, labels and figures. Purple (`#6d28d9`, `#7b5cff`, `#b69cff`, `#d8ccff`) and red (`#ff3b5c`) only on a few
+  buttons, chips and words: the agent's name, the SIM chip and Reject in purple; the kill switch, a LIVE account's chip
+  and the losses in red. Green and red for P&L.
+- **Fonts (Anthony's hybrid):** Chakra Petch for titles, section labels, tabs and buttons; IBM Plex Sans for body text
+  (his words, the proposal's reason, the stream's rows, notes, explanations); JetBrains Mono for every number. All three
+  come from this PC: IBM Plex as for the whole page (`fonts/plex.css`), Chakra Petch (400 to 700) and JetBrains Mono (400,
+  600) in `live/fonts` (Latin subset of npm `@fontsource` 5.2.5, SIL Open Font License, listed in
+  `nt8/install-files.json`). The page loads nothing from the internet (1.16.0); a missing font falls back to the
+  system's own (Segoe UI, Consolas).
+- **Panels:** thin cyan borders on a dark glass; the light (below) circles the ones where his attention is.
+
+## The light
+
+One slow comet light circles the borders of the panels where the agent's attention is, brighter at its head, with a
+blurred halo, and those panels glow softly. Where it circles and its colour follow his real state, worked out by
+`AgentCore.lightState` (a pure function, unit tested) from the messages the page already gets: his `agent` message, his
+notes and plans, his proposals and this window's answers, his own orders (`by: "agent:<id>"`) and his position, his open
+P&L. Nothing is guessed: what the channel does not say is not shown.
+
+| state | colour | where | from |
+|---|---|---|---|
+| watching | cyan `#5df2ff` (Screen) | the tracker | nothing newer below |
+| a look | violet `#8f7bff` (Eyes) | the tracker and the stream | a `look` note in the last 2 min |
+| judgment at work | magenta `#c81fe0` (Judgment) | the tracker and the stream | a `thinking` note in the last 2 min |
+| a plan | magenta `#c81fe0` | the tracker and the proposal | a proposal open for you, or a Shadow plan in the last 2 min |
+| his rules being checked | gold `#ffd23f` (Checks) | his account and the proposal | you pressed Accept and ChartBridge has not answered yet |
+| placed | green `#3dff9a` (ChartBridge) | the proposal and the chart | his own entry works |
+| a go | green | the proposal and the stream | a plan placed or accepted in the last 30 s |
+| he passed, a plan ended | orange `#ff8a2a` | the proposal and the stream | a skip, or a proposal rejected, expired, withdrawn or not answered, in the last 30 s |
+| a hard no | red `#ff3b5c` | his account and the proposal | a plan ChartBridge refused, in the last 30 s |
+| in a trade | green at or above zero, red below | the chart and the P&L footer | a position; its open P&L (cyan while the P&L is not known yet) |
+| out of the trade | green for a gain, red for a loss | the tracker and the P&L footer | a flat exit this window saw, in the last 30 s |
+| kill switch on, stood down | red | his account | the `agent` message |
+| not connected, off | no light | | the `agent` message |
+
+The newest event inside its hold wins; a position, a working entry, an answer waiting for ChartBridge and an open
+proposal come first, in that order. The tracker's step (Screen, Eyes, Judgment, Checks, ChartBridge) and its line of words
+follow the same state.
+
+- **Pace:** about 13 s a lap while he decides, about 9 s in a trade.
+- **Open P&L** (lead's default): NinjaTrader's `unrealized` for the agent's account from ChartBridge's `accounts` message,
+  when that account holds nothing but the agent's root; else from the chart's last price, the position's average price
+  and the point value; else not known. Never estimated further.
+- **Colour changes fade** (a registered CSS colour, 1.6 s): the light and the glow only.
+- **Cheap:** pure CSS, a conic gradient masked to the border; one animation per lit panel (two at most), none on a panel
+  that is not lit, no script per frame. The state is worked out again only when a message arrives (ChartBridge sends
+  `agent` once a second while connected, so a hold ends on the next one).
+
+## Motion
+
+`docs/MOTION.md` R3 holds: only the border light and the panels' glow move or fade. The P&L figures (today, open), the
+position, the trades and losses, the chart and its price line, Accept and Reject, the kill switch and the mode change at
+once, with no transition, easing or count-up, and are marked `data-no-motion`. The ChartMotion kit is not used on the tab.
+
+- **The Motion switch** (in the strip: Full, Off) is kept in this browser (`live-agent-motion-v1`, every read and write in
+  a try, Full when storage is blocked). Off hides the light and stops every animation and transition in the tab; the glow
+  stays, still, on the panels where his attention is.
+- **The system's reduced motion** does the same, whatever the switch says.
+
+## His stream and the decision drawer
+
+Every row of his stream (a note, a plan or skip, a fill, an exit) is a real `<button>`. A click opens his record of that
+decision in a drawer over the right column, outlined in that decision's colour:
+
+- **In his words:** the note's text, or the plan's reason.
+- **The facts:** for a plan, the entry, stop and target (ticks and prices), the risk and the reward ratio, how long the
+  entry lives, the setup, the confidence, ChartBridge's verdict on his rules (passed, or refused and why), and for a
+  proposal how it ended, when you saw it, when you answered and how fast, and until when it was open. For a fill, the
+  side, size, price, time and account. For an exit (from his own fills), in and out, the result before fees and how long
+  he held.
+- Only fields that exist. The channel carries no "for and against", no notebook rule cited by a plan and no time or cost
+  of his thinking (board F showed them), so none is shown.
+- **Closing:** Close, the same row again, or Escape while the focus is inside the drawer (the focus goes to Close when it
+  opens and back to the row when it closes). There is no key handler on the page, so the order hotkeys and the page's own
+  Escape are untouched; a row is a button, not a box, so the hotkeys work with the focus on it.
+- **Where it sits** (lead's default): over the right column, never over an open proposal (Accept and Reject stay in
+  sight), and above the last part of the stream when there is room, so its row stays in sight.
 
 ## What the tab shows
 
-- **The strip:** the agent's initials, name and build (as its hello says them), connected with the heartbeat's age, the
-  mode, the account with its SIM or LIVE mark, the position, P&L today, trades and losing trades (of the limit when the rules
-  set one), KILLED or STOOD DOWN with why, and while ChartBridge says the agent holds the owner lock, "OWNS SIM-AG1 MNQ".
-  With two or more agents, a picker at the strip's end (the choice is kept in this browser).
-- **Left, control:** the mode (Shadow, Copilot, Auto), the kill switch, status, heartbeat and the last plan; the account and
-  Change account; the rules in force and Change the rules, with ChartBridge's refusal under the button.
-- **Centre, chart:** a normal live chart (never animated, takes no orders) of the agent's root, with the agent's own
-  working orders, stop and target as lines (`by: "agent:<id>"` only) and its trades today as marks.
-- **Right, proposals:** each open proposal: side, quantity, root, kind and price (and limit price for a stop-limit), the
-  setup, the confidence, the reason, stop and target in ticks and prices, the risk in dollars and the reward ratio, the
-  account and its mark, a live countdown to `expiresAt`, Accept and Reject (with The Desk's keys on them).
-- **Right, notes and plans:** the agent's notes (look, thinking, lesson, notebook, status) and plans (with their result:
-  shadow, waiting for you, accepted in 1.3 s, rejected, expired, refused and why, skipped), newest first, with filters
-  (All, Plans, Notes, Thinking, Lessons). Thinking is a collapsed block; an opened one stays open as the feed grows.
+- **The strip:** the agent's initials, name (purple) and build (as its hello says them), connected with the heartbeat's
+  age, the mode, the account with its SIM or LIVE mark, the position, KILLED or STOOD DOWN with why, and while ChartBridge
+  says the agent holds the owner lock, "OWNS SIM-AG1 MNQ"; the Motion switch and Pop out. With two or more agents, a
+  picker (the choice is kept in this browser).
+- **Left:** the mode (Shadow, Copilot, Auto), the kill switch, status, heartbeat and the last plan; his account with its
+  mark, the room left (max loss room from ChartBridge's `roomDrawdown`, daily limit left from `roomDailyLoss` or The
+  Desk's limit, each with the limit and a meter when known, else ChartBridge's words why) and Change account; the rules in
+  force and Change the rules, with ChartBridge's refusal under the button.
+- **Centre:** "What he is doing now", the tracker (Screen, Eyes, Judgment, Checks, ChartBridge) with a line in the light's
+  colour; under it a normal live chart (never animated, takes no orders) of the agent's root, with the agent's own working
+  orders, stop and target as lines (`by: "agent:<id>"` only), its trades today as marks and the chart's own live price
+  line; its header has the root, the bars, the indicators and the position with its open P&L.
+- **Right, the proposal:** each open proposal: side, quantity, root, kind and price (and limit price for a stop-limit),
+  the setup, the confidence, the reason, stop and target in ticks and prices, the risk in dollars and the reward ratio, the
+  account and its mark, a live countdown to `expiresAt`, Accept (cyan) and Reject (purple), with The Desk's keys on them.
+- **Right, his stream:** notes (look, thinking, lesson, notebook, status), plans (with their result: shadow, waiting for
+  you, accepted in 1.3 s, rejected, expired, refused and why, skipped), and his fills and exits today, newest first, with
+  filters (All, Plans, Notes, Thinking, Lessons). Each row opens the drawer above.
+- **The footer:** today's P&L (ChartBridge's `pnlToday`, with the open P&L beside it in a trade), trades and losing trades
+  (of the limit when the rules set one), his session as a light trail from the rules' `entryFrom` to `flatAt` (09:45 to
+  15:55 by default) with now and his fills (F) and exits (X, green or red by result), and the legend of the light's colours.
 - **Corner:** a proposal of an agent not shown in the tab pops up in the corner wherever Anthony is (the Bot tab's corner,
   so the two never overlap); notices for an entry, an exit, a stand-down, the heartbeat, the kill switch, the mode, the
-  account and how a proposal ended.
+  account and how a proposal ended. While the Agent tab is open the notices sit above its footer.
+- **Smaller screens:** at 1366 x 768 everything fits the window with no scroll; narrower than 1100 px the chart goes on
+  top with the controls and the stream below (the tab scrolls); on a phone everything stacks, with no sideways scroll
+  (the workspace's top bar wraps while the tab is open there).
 
 ## Page messages (contract section 7), exactly
 
@@ -211,11 +298,37 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
       their events; the flatten cancelling every order on that contract of the account (the fake: the agent's own) and
       cancelling again every 3 s; files that cannot be read; NinjaTrader refusing an entry; fills to The Desk.
 
+20. **Board F's choices (lead's defaults, for Anthony to confirm):**
+    - The mockup's account room had "to target" (a profit target): the channel and The Desk carry none, so it is left out.
+      Max loss room and daily limit left are the Account page's own figures, with ChartBridge's words when a figure is not
+      reported.
+    - The mockup's drawer had "for and against", the notebook rule he leaned on, and the time and cost of his eyes and
+      judgment: the channel carries none of them, so they are left out.
+    - The words "What he is doing now", "His stream" and "his decision" are board F's; the tab shows them for any agent.
+    - In a trade the open P&L is NinjaTrader's (the account's `unrealized`), else from the chart's last price; while
+      neither is known the light is cyan and says so.
+    - "Thinking" lights Judgment (magenta) with the stream, as a look lights Eyes; lessons, notebook and status notes do
+      not move the light.
+    - The P&L figures keep green and red for their sign and change at once (R3); only the light's colour fades.
+    - The chart keeps the page's own look (candles, lines, price line); only its panel is board F's.
+    - The workspace's top bar wraps on a phone while the Agent tab is open (it is wider than a phone otherwise), and the
+      corner notices sit above the tab's footer while it is open; nothing else outside the tab changed.
+
 ## Tests
 
 - `npm test`: `test/agent.test.js` (AgentCore: messages, the strip, notices, proposals and their countdown and expiry, the
   feed, the rule form against every allowed value, the account chooser, the agent's orders and fills, the copilot-key
   router across the bot and the agents, the wiring) and `test/fake-v3.test.js` (the fake: strict messages, the plan checks
   in the contract's order, shadow, copilot, auto, expiry, the heartbeat, the flat time, accounts, rules, the socket).
-- `npm run smoke:agent`: the workspace against the fake with two made-up agents; `npm run smoke:bot` is unchanged and
-  passes with the Agent tab beside it.
+- `npm test` also checks board F: the light for every state (watching, a look, his thinking, a plan, his rules being
+  checked, placed, passed, rejected, expired, refused, a go, a trade in profit, at zero, under water and not known, a flat
+  exit, the kill switch, a stand-down, not connected), the drawer's records (only what the channel carries), the session
+  trail, the room, the Motion switch with blocked storage, and the wiring (fonts from this PC, the light in CSS only, no
+  document keydown handler, no ChartMotion).
+- `npm run smoke:agent`: the workspace against the fake with two made-up agents. Board F: the light sits on the right
+  panels in the right colour for watching, a look, a plan waiting in copilot, his rules being checked (the answer held a
+  moment), his entry placed, an expired plan, an open trade in profit and under water, and a flat exit; the drawer opens
+  and closes (the same row, Close, Escape only from inside it); Motion Off and reduced motion stop the light and keep the
+  glow; the P&L figures, the position and the chart have no transition; no sideways scroll at 1366 px and at 390 px.
+  Screenshots at 1440 x 1000: `agent-f-watching`, `agent-f-plan`, `agent-f-profit`, `agent-f-under`, `agent-f-drawer`.
+  `npm run smoke:bot` is unchanged and passes with the Agent tab beside it.

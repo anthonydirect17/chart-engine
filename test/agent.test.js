@@ -534,10 +534,13 @@ test('board F wiring: fonts from this PC, the light in CSS only, no keydown on t
   assert.doesNotMatch(css + fonts, /fonts\.(googleapis|gstatic)\.com/);
   assert.match(css, /@property --ag-pc \{ syntax: '<color>'/); assert.match(css, /@keyframes ag-orbit \{ to \{ --ag-ang: 360deg; \} \}/);
   assert.match(css, /prefers-reduced-motion: reduce/); assert.match(css, /\.ag-view\.ag-still \.ag-light \{ display: none !important; \}/);
+  assert.match(css, /--f-body: "IBM Plex Sans"/, 'the hybrid: IBM Plex Sans for body text (already loaded by plex.css)');
+  assert.match(css, /--f-ui: "Chakra Petch"/); assert.match(css, /--f-num: "JetBrains Mono"/);
+  for (const page of ['index.html', 'agent.html']) assert.match(read('live', page), /href="fonts\/plex\.css">\n<!--[^\n]*-->\n<link rel="stylesheet" href="fonts\/agent-fonts\.css">/, page + ': Plex and the tab\'s fonts');
   assert.match(css, /#c81fe0/); assert.doesNotMatch(css + js + read('live', 'agent-core.js'), /#ff4fd8/i, 'the old Judgment pink is gone');
   assert.doesNotMatch(js, /requestAnimationFrame|setInterval/, 'no per-frame script for the light');
   assert.doesNotMatch(js, /document\.addEventListener\('keydown'/, 'no keydown handler on the document');
   assert.doesNotMatch(js, /ChartMotion\.|window\.ChartMotion|data-in=|data-count=/, 'the ChartMotion kit is not used on the Agent tab');
   assert.match(js, /data-agans="accept" data-no-motion/); assert.match(js, /data-k="sPnl"/);
-  for (const f of ['live/agent.css', 'live/fonts/agent-fonts.css', 'live/fonts/OFL-agent.txt']) assert.doesNotMatch(read(...f.split('/')), /[–—]/, f + ': no em or en dashes');
+  for (const f of ['live/agent.css', 'live/fonts/agent-fonts.css', 'live/fonts/OFL-agent.txt']) assert.doesNotMatch(read(...f.split('/')), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
