@@ -18,8 +18,9 @@
 //     an agent's; it stays archived until Show (accountUnarchive), which brings it back unchecked. An archived account that
 //     NinjaTrader shows with a position or working orders is listed again at once (unchecked), so archiving never strands
 //     an exit. Plain off records not seen Connected for 30 days are forgotten (trade and archived never are). The retired
-//     "accounts =" line is read once (the first 0.5.1 run): every account seen Connected that run that it does not name,
-//     and that is not checked, is hidden. The last time each account was seen Connected and the conversion marker are in
+//     "accounts =" line is read once (the first 0.5.1 run): every account seen Connected in the first 5 minutes that it does
+//     not name, and that is not checked, is hidden. An account that becomes listed reaches signed-in pages at once (its
+//     orders and positions), and is watched from the 1 s check that first sees it Connected. The last time each account was seen Connected and the conversion marker are in
 //     accounts-detail.txt, a file of its own: accounts.txt keeps the exact 0.5.0 format, because 0.5.0's reader (and
 //     0.4.x's) refuses the whole file for any line that is not <state> <time> <name>, a 4th field or a comment included;
 //   - the "accounts" message: every watched account with its connection, checkmark, money, positions and the room to its
@@ -67,6 +68,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const double PruneMs = 30.0 * 24 * 3600 * 1000;   // 0.5.1: a plain off record not seen Connected for 30 days is forgotten
         public const double PruneEveryMs = 3600000;               // checked once an hour (and at the first check)
         public const double SeenWriteMs = 3600000;                // the last-connected time is saved at most once an hour per account
+        public const double ConvertWindowMs = 300000;             // 0.5.1: the accounts line's conversion covers the first 5 minutes after the start
         public const string DetailHeader = "# ChartBridge account details (written by ChartBridge; do not edit)";
 
         public static bool On { get { return ChartBridgeV3.AccountChecks; } }
@@ -91,15 +93,24 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, Live> Lives = new Dictionary<string, Live>(StringComparer.OrdinalIgnoreCase);
         // 0.5.1 (accounts-detail.txt): when each account was last seen Connected (UTC ms), and when the accounts line was converted.
         private static readonly Dictionary<string, double> ConnectedAt = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, string> ConnectedSession = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // the NinjaTrader session that saw it
         private static readonly HashSet<string> Converted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // looked at by this run's conversion
+        private static readonly Dictionary<string, string> ConvertUnsure = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // a file could not be read: tried again
         private static bool detailDirty;     // memory differs from accounts-detail.txt
         private static bool detailSaveFailed;   // the last save of accounts-detail.txt failed (said once)
+        private static bool detailReadError; // accounts-detail.txt exists but could not be read: never rewritten this run
+        private static bool offMarkPending;  // accountChecks off with an accounts line: the conversion marker is written once (never converted later)
         private static double convertedMs = -1;   // the accounts line was converted then (-1: never)
-        private static bool converting;      // this run hides the accounts the old accounts line does not name
+        private static bool converting;      // this run hides the accounts the old accounts line does not name, until convertUntilMs
+        private static double convertUntilMs;
         private static double lastPruneMs = -1;
-        // 0.5.1: the start of this NinjaTrader session (its process), UTC ms: an account last seen Connected since then counts as
-        // seen this session after an F5. Public for the harness, which sets it to stand for a new session.
+        // 0.5.1: this NinjaTrader session: its process id and start (SessionId) and the start in UTC ms (SessionStartMs, used when
+        // the id cannot be read or a saved time has none). An account saved as seen Connected by this session counts as seen after
+        // an F5. Public for the harness, which sets them to stand for a new session.
         public static double SessionStartMs;
+        public static string SessionId;
+        private static readonly object ListedLock = new object();
+        private static readonly HashSet<string> ListedBefore = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // listed at the last look (TellNewlyListed)
         private static readonly Dictionary<string, string> StatusText = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // AccountStatusUpdate
         private static readonly HashSet<string> DrawdownSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // a non-zero trailing drawdown seen this run
         private static readonly HashSet<string> EverConnected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);  // seen Connected this run (lead's default: only these can go Gone by disconnecting)
@@ -131,6 +142,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { if (timer != null) timer.Dispose(); } catch (Exception) { }
             timer = null;
             UnwatchStatus();
+            try { Save(); FlushLog(); } catch (Exception) { }   // 0.5.1: what is in memory (a first connected time, a log line) is not lost at a stop
             Clear();
         }
 
@@ -138,10 +150,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (Mem)
             {
-                Recs.Clear(); Lives.Clear(); ConnectedAt.Clear(); Converted.Clear(); StatusText.Clear(); DrawdownSeen.Clear(); EverConnected.Clear(); PendingLog.Clear();
-                loaded = false; readError = null; startAlarm = null; dirty = false; detailDirty = false; detailSaveFailed = false; saveError = null; lastAccountsJson = null;
-                convertedMs = -1; converting = false; lastPruneMs = -1;
+                Recs.Clear(); Lives.Clear(); ConnectedAt.Clear(); ConnectedSession.Clear(); Converted.Clear(); ConvertUnsure.Clear(); StatusText.Clear(); DrawdownSeen.Clear(); EverConnected.Clear(); PendingLog.Clear();
+                loaded = false; readError = null; startAlarm = null; dirty = false; detailDirty = false; detailSaveFailed = false; detailReadError = false; offMarkPending = false; saveError = null; lastAccountsJson = null;
+                convertedMs = -1; converting = false; convertUntilMs = 0; lastPruneMs = -1;
             }
+            lock (ListedLock) ListedBefore.Clear();
         }
 
         // Reads accounts.txt (accountChecks on only). Public for the harness, which runs it on its own thread.
@@ -149,6 +162,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Clear();
             SessionStartMs = SessionStart(now);
+            SessionId = ProcessSession();
             if (!On) { OldAccountsNote(now, false); return; }
             string path = FilePath;
             if (!File.Exists(path)) { NoFile(now); AfterRead(now); return; }
@@ -197,29 +211,81 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception) { return now; }
         }
 
-        // 0.5.1, the retired accounts line in config.txt. The first run with it (no conversion marker in accounts-detail.txt and
-        // no "converted" line in accounts.log) converts it: every account seen Connected this run that it does not name and that
-        // is not checked is hidden once (Tick). Afterwards it is ignored, said once at start.
+        // This NinjaTrader process: its id and start ticks, or null when they cannot be read (then times decide).
+        private static string ProcessSession()
+        {
+            try
+            {
+                System.Diagnostics.Process p = System.Diagnostics.Process.GetCurrentProcess();
+                return p.Id.ToString(CultureInfo.InvariantCulture) + "-" + p.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
+            }
+            catch (Exception) { return null; }
+        }
+
+        // 0.5.1, the retired accounts line in config.txt. The first run with it converts it: no accounts-detail.txt yet (any
+        // 0.5.1 run writes one) and no "converted" line in accounts.log. Every account seen Connected in the first ConvertWindowMs
+        // after the start that it does not name and that is not checked is hidden once (Convert). If either file cannot be read,
+        // nothing is converted (ChartBridge cannot tell). With accountChecks off the line is ignored and the marker is written,
+        // so a later run never converts it. Afterwards it is ignored, said once at start.
         private static void OldAccountsNote(double now, bool canConvert)
         {
             if (ChartBridgeConfig.OldAccounts == null) return;
-            bool done;
-            lock (Mem) done = convertedMs >= 0;
-            if (!done && canConvert) done = LogSaysConverted();
-            if (done || !canConvert)
+            string why = null;
+            bool detailThere;
+            try { detailThere = File.Exists(DetailPath); } catch (Exception) { detailThere = true; }
+            if (!On) why = "accountChecks is off";
+            else if (!canConvert) why = "accounts.txt could not be read";
+            else if (detailThere) why = "";
+            else
             {
-                ChartBridgeServer.Log("config.txt: the accounts line is ignored since ChartBridge 0.5.1: the Account tab lists the accounts connected in NinjaTrader (Hide on the Account tab removes one); the line can go");
+                string log = LogConverted();
+                if (log == "yes") why = "";
+                else if (log != "no") why = "accounts.log could not be read (" + log + "), so ChartBridge cannot tell whether it was converted before";
+            }
+            if (why != null)
+            {
+                if (!On) lock (Mem) offMarkPending = true;
+                ChartBridgeServer.Log("config.txt: the accounts line is ignored since ChartBridge 0.5.1" + (why.Length > 0 ? " (" + why + ")" : "") + ": the Account tab lists the accounts connected in NinjaTrader (Hide on the Account tab removes one); the line can go");
                 return;
             }
-            lock (Mem) { converting = true; convertedMs = now; detailDirty = true; }
-            ChartBridgeServer.Log("config.txt: the accounts line is read once now (ChartBridge 0.5.1): an account that connects this run, is not on it and is not checked is hidden (Show on the Account tab brings it back); after this run the line is ignored and can go");
-            NoteChange("(all)", "converted", "the accounts line in config.txt: connected accounts it does not name are hidden this run");
+            lock (Mem) { converting = true; convertedMs = now; convertUntilMs = now + ConvertWindowMs; detailDirty = true; }
+            ChartBridgeServer.Log("config.txt: the accounts line is read once now (ChartBridge 0.5.1): for the next 5 minutes an account that connects, is not on it and is not checked is hidden (Show on the Account tab brings it back); after that the line is ignored and can go");
+            NoteChange("(all)", "converted", "the accounts line in config.txt: connected accounts it does not name are hidden for 5 minutes");
         }
 
-        private static bool LogSaysConverted()
+        // "yes" when accounts.log has the conversion's line, "no" when it does not (or there is no log), else why it cannot be read.
+        private static string LogConverted()
         {
-            try { return File.Exists(LogPath) && File.ReadLines(LogPath).Any(l => l.Contains("\t(all)\tconverted\t")); }
-            catch (Exception) { return false; }
+            string err = null;
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                try
+                {
+                    if (!File.Exists(LogPath)) return "no";
+                    foreach (string l in ReadShared(LogPath)) if (l.Contains("\t(all)\tconverted\t")) return "yes";
+                    return "no";
+                }
+                catch (Exception ex) { err = ex.Message; if (attempt < 2) Thread.Sleep(100); }
+            }
+            return err ?? "unknown";
+        }
+
+        // A whole text file, opened so that ChartBridge or another lane may replace or delete it meanwhile (File.Replace).
+        public static Func<string, string> ReadFault;   // test hook: a non-null answer for a file name fails its read (unused in NinjaTrader)
+
+        private static string[] ReadShared(string path)
+        {
+            Func<string, string> fault = ReadFault;
+            string why = fault != null ? fault(Path.GetFileName(path)) : null;
+            if (why != null) throw new IOException(why);
+            List<string> lines = new List<string>();
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (StreamReader r = new StreamReader(fs))
+            {
+                string l;
+                while ((l = r.ReadLine()) != null) lines.Add(l);
+            }
+            return lines.ToArray();
         }
 
         // No accounts.txt. A first start (no accounts.log either: ChartBridge never kept checkmarks here) pre-checks every
@@ -266,17 +332,28 @@ namespace NinjaTrader.NinjaScript.AddOns
             return d;
         }
 
-        // 0.5.1: accounts-detail.txt, a header, then "connected\t<UTC ms>\t<account name>" (when it was last seen Connected) and
-        // "converted\t<UTC ms>" (the accounts line was converted) lines. A line ChartBridge does not understand is skipped; a file
-        // that cannot be read counts as empty (one Output line): then an account counts as seen this session only once it
-        // connects, and an off record's age is taken from accounts.txt's changed time.
+        // 0.5.1: accounts-detail.txt, a header, then "connected\t<UTC ms>\t<account name>[\t<session>]" (when it was last seen
+        // Connected, and by which NinjaTrader session: its process id and start) and "converted\t<UTC ms>" (the accounts line was
+        // converted) lines. A line ChartBridge does not understand is skipped. A file that cannot be read (three tries, as
+        // accounts.txt) is never rewritten that run: accounts are listed as they connect, and an off record's age is taken from
+        // accounts.txt's changed time.
         private static void LoadDetails()
         {
             string path = DetailPath;
             if (!File.Exists(path)) return;
-            string[] lines;
-            try { lines = File.ReadAllLines(path); }
-            catch (Exception ex) { ChartBridgeServer.Log("accounts-detail.txt could not be read (" + ex.Message + "): accounts are listed as they connect"); return; }
+            string[] lines = null;
+            string err = null;
+            for (int attempt = 0; attempt < 3 && lines == null; attempt++)
+            {
+                try { lines = ReadShared(path); err = null; }
+                catch (Exception ex) { err = ex.Message; if (attempt < 2) Thread.Sleep(100); }
+            }
+            if (lines == null)
+            {
+                lock (Mem) detailReadError = true;
+                ChartBridgeServer.Log("accounts-detail.txt could not be read (" + err + "): it is not rewritten this run; accounts are listed as they connect");
+                return;
+            }
             lock (Mem)
             {
                 if (lines.Length == 0 || lines[0].TrimEnd('\r') != DetailHeader) { detailDirty = true; return; }
@@ -286,16 +363,29 @@ namespace NinjaTrader.NinjaScript.AddOns
                     double ms;
                     if (p.Length < 2 || !double.TryParse(p[1], NumberStyles.None, CultureInfo.InvariantCulture, out ms)) continue;
                     if (p[0] == "converted" && p.Length == 2) convertedMs = ms;
-                    else if (p[0] == "connected" && p.Length == 3 && p[2].Trim().Length > 0 && !ChartBridgeOrders.IsNeverTradable(p[2])) ConnectedAt[p[2]] = ms;
+                    else if (p[0] == "connected" && (p.Length == 3 || p.Length == 4) && p[2].Trim().Length > 0 && !ChartBridgeOrders.IsNeverTradable(p[2]))
+                    {
+                        ConnectedAt[p[2]] = ms;
+                        if (p.Length == 4 && p[3].Length > 0) ConnectedSession[p[2]] = p[3]; else ConnectedSession.Remove(p[2]);
+                    }
                 }
             }
         }
 
-        // 0.5.1: seen Connected in this NinjaTrader session (this run, or since NinjaTrader started by accounts-detail.txt).
+        // 0.5.1: seen Connected in this NinjaTrader session: this run, or by accounts-detail.txt (the same NinjaTrader process when
+        // the saved line says which, else a time at or after NinjaTrader's start).
         private static bool SeenThisSession(string name)
         {
             if (string.IsNullOrEmpty(name)) return false;
-            lock (Mem) { double ms; return EverConnected.Contains(name) || (ConnectedAt.TryGetValue(name, out ms) && ms >= SessionStartMs); }
+            lock (Mem)
+            {
+                if (EverConnected.Contains(name)) return true;
+                double ms;
+                if (!ConnectedAt.TryGetValue(name, out ms)) return false;
+                string sid;
+                if (SessionId != null && ConnectedSession.TryGetValue(name, out sid)) return sid == SessionId;
+                return ms >= SessionStartMs;
+            }
         }
 
         // 0.5.1: an account Connected now is marked seen (and its time kept, saved at most once an hour); then whether it has been
@@ -307,17 +397,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             return SeenThisSession(a.Name);
         }
 
-        private static void MarkSeen(string name, double now)
+        // Returns true the first time this run (the 1 s check then starts watching it).
+        private static bool MarkSeen(string name, double now)
         {
             lock (Mem)
             {
-                EverConnected.Add(name);
-                if (!On || !loaded || readError != null) return;
+                bool first = EverConnected.Add(name);
+                if (!On || !loaded || readError != null) return first;
                 double was;
-                bool had = ConnectedAt.TryGetValue(name, out was);
-                if (had && now <= was) return;
-                ConnectedAt[name] = now;
-                if (!had || was < SessionStartMs || now - was >= SeenWriteMs) detailDirty = true;
+                string sid;
+                bool had = ConnectedAt.TryGetValue(name, out was), hasSid = ConnectedSession.TryGetValue(name, out sid);
+                bool same = had && (SessionId != null ? hasSid && sid == SessionId : was >= SessionStartMs);
+                if (same && now <= was) return first;
+                ConnectedAt[name] = had ? Math.Max(was, now) : now;   // a clock set back never moves it back
+                if (SessionId != null) ConnectedSession[name] = SessionId; else ConnectedSession.Remove(name);
+                if (!same || now - was >= SeenWriteMs) detailDirty = true;
+                return first;
             }
         }
 
@@ -408,7 +503,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             List<string> names = new List<string>();
             lock (Mem) { if (!loaded || readError != null) return names; names.AddRange(Recs.Values.Where(r => r.State == "trade").Select(r => r.Name)); }
-            return names.Where(Checked).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            return names.Where(n => Checked(n) && SeenThisSession(n)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();   // 0.5.1: connected this session
         }
 
         // ---------------------------------------------------------- what a page sees (v3: every watched account; v2: v2's scope)
@@ -539,7 +634,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Gone(name, out gw)) return name + " is gone (" + gw + "); it can be checked once it is back";
             string status = a != null ? StatusOf(a) : "not in NinjaTrader";
             if (status != "Connected") return name + " is not connected (" + status + ")";
-            SetState(name, "trade", now);
+            if (!SetStateIf(name, "trade", now, st => st != "archived")) return name + " is archived (hidden); Show it first, it comes back unchecked";   // hidden meanwhile
             NoteChange(name, "checked", "by the page");
             AfterCheckmark();
             return null;
@@ -549,14 +644,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Uncheck(string name, double now)
         {
             Rec r;
-            bool change;
-            lock (Mem) change = readError == null && Recs.TryGetValue(name, out r) && r.State == "trade";
-            if (change)
-            {
-                lock (Mem) { name = Recs[name].Name; }
-                SetState(name, "off", now);
-                NoteChange(name, "unchecked", "by the page");
-            }
+            bool ok;
+            lock (Mem) { ok = readError == null; if (Recs.TryGetValue(name, out r)) name = r.Name; }
+            if (ok && SetStateIf(name, "off", now, st => st == "trade")) NoteChange(name, "unchecked", "by the page");
             AfterCheckmark();
             return null;
         }
@@ -576,10 +666,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             else lock (Mem) { Rec r; if (Recs.TryGetValue(name, out r)) name = r.Name; }
             if (Archived(name)) return name + " is archived already";
             if (a == null && !Known(name)) return "no account " + name;
-            string why = HideRefusal(name, a);
+            bool unsure;
+            string why = HideRefusal(name, a, ReadClaims(), out unsure);
             if (why != null) return why;
             double now = ChartBridgeTime.NowUtcMs();
-            SetState(name, "archived", now);
+            if (!SetStateIf(name, "archived", now, st => st != "archived")) return name + " is archived already";
             NoteChange(name, "archived", "by the page");
             AfterCheckmark();
             return null;
@@ -595,7 +686,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Mem) { Rec r; if (Recs.TryGetValue(name, out r)) name = r.Name; else if (a != null) name = a.Name; }
             if (!Archived(name)) return Known(name) || a != null ? name + " is not archived" : "no account " + name;
             double now = ChartBridgeTime.NowUtcMs();
-            SetState(name, "off", now);
+            if (!SetStateIf(name, "off", now, st => st == "archived")) return name + " is not archived";
             lock (Mem)
             {
                 Live l;
@@ -606,12 +697,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
-        // Why this account may not be hidden now, or null.
-        private static string HideRefusal(string name, Account a)
+        // Why this account may not be hidden now, or null. unsure: a file could not be read (it may be fine a moment later).
+        private static string HideRefusal(string name, Account a, Claims claims, out bool unsure)
         {
+            unsure = false;
             if (a != null ? Busy(a) : LastSeen(name) == "busy")
                 return name + (a != null ? " has" : " was last seen with") + " a position or working orders: only a flat account can be hidden (exits always work)";
-            string claim = ClaimWhy(name);
+            string claim = claims.Why(name, out unsure);
             return claim != null ? claim + ": it cannot be hidden" : null;
         }
 
@@ -633,54 +725,151 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception) { return true; }
         }
 
-        // Whose this account is, for Hide and the conversion: the bot's (on: its memory; off: bot-account.txt, Sim101 when there is
-        // none), a copier leader or follower (on or off: copier.txt), or an agent's chosen account (agent-<id>-account.txt, on
-        // or off). Null when none; a file that cannot be read counts as a claim (ChartBridge cannot tell). Reads files: never
-        // on NinjaTrader's thread.
-        private static string ClaimWhy(string name)
+        // Whose accounts are taken, for Hide and the conversion: the bot's (on: its memory; off: bot-account.txt, Sim101 when
+        // there is none), a copier leader or follower (on: its memory; off: copier.txt), an agent's chosen account (the agent
+        // channel's memory, and every agent-<id>-account.txt, on or off). Read once per check (a page action reads its own) from
+        // copies kept by each file's time stamp; a file is opened so its owner can replace it meanwhile. A file that cannot be
+        // read or understood counts against every account (ChartBridge cannot tell) and is read again next time.
+        private sealed class Claims
         {
-            string bot;
-            try { bot = ChartBridgeBot.AccountForAgents(); } catch (Exception) { bot = null; }
-            if (bot == null) return "bot-account.txt cannot be read, so ChartBridge cannot tell whether " + name + " is the bot's account";
-            if (bot.Equals(name, StringComparison.OrdinalIgnoreCase)) return name + " is the bot's account (the Bot tab)";
-            string copier;
-            try { copier = ChartBridgeCopier.AgentAccountRefusal(name); } catch (Exception ex) { copier = "copier.txt could not be read (" + ex.Message + "), so ChartBridge cannot tell whether " + name + " is the copier's"; }
-            if (copier != null) return copier;
-            string id = ChartBridgeAgents.AgentOfAccount(name);
-            if (id != null) return name + " is agent " + id + "'s account (the Agent tab)";
+            public string Bot, BotError, CopierError, AgentError;
+            public bool CopierOn;
+            public readonly HashSet<string> Leader = new HashSet<string>(StringComparer.OrdinalIgnoreCase), Followers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            public readonly Dictionary<string, string> Agent = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // account to agent id
+
+            public string Why(string name, out bool unsure)
+            {
+                unsure = true;
+                if (BotError != null) return BotError + ", so ChartBridge cannot tell whether " + name + " is the bot's account";
+                unsure = false;
+                if (Bot != null && Bot.Equals(name, StringComparison.OrdinalIgnoreCase)) return name + " is the bot's account (the Bot tab)";
+                if (CopierOn)
+                {
+                    string r = ChartBridgeCopier.AgentAccountRefusal(name);   // the copier's memory
+                    if (r != null) { unsure = r.StartsWith("copier.txt could not be read", StringComparison.Ordinal); return r; }
+                }
+                else
+                {
+                    if (CopierError != null) { unsure = true; return CopierError + ", so ChartBridge cannot tell whether " + name + " is the copier's"; }
+                    if (Leader.Contains(name)) return name + " is the copier's leader";
+                    if (Followers.Contains(name)) return name + " is a copier follower";
+                }
+                string id = ChartBridgeAgents.AgentOfAccount(name);
+                if (id != null || Agent.TryGetValue(name, out id)) return name + " is agent " + id + "'s account (the Agent tab)";
+                if (AgentError != null) { unsure = true; return AgentError + ", so ChartBridge cannot tell whether " + name + " is an agent's account"; }
+                return null;
+            }
+        }
+
+        private sealed class FileCopy { public DateTime Stamp; public long Length; public string[] Lines; }
+        private static readonly object CopyLock = new object();
+        private static readonly Dictionary<string, FileCopy> Copies = new Dictionary<string, FileCopy>(StringComparer.OrdinalIgnoreCase);
+        private static DateTime agentDirStamp = DateTime.MinValue;
+        private static string[] agentFiles;
+
+        // A file's lines, read again only when its time stamp or length changed; null when there is no file. Throws when it
+        // cannot be read (nothing kept: read again next time).
+        private static string[] Cached(string path)
+        {
+            FileInfo fi = new FileInfo(path);
+            if (!fi.Exists) { lock (CopyLock) Copies.Remove(path); return null; }
+            DateTime stamp = fi.LastWriteTimeUtc;
+            long length = fi.Length;
+            lock (CopyLock) { FileCopy c; if (Copies.TryGetValue(path, out c) && c.Stamp == stamp && c.Length == length) return c.Lines; }
+            string[] lines = ReadShared(path);
+            lock (CopyLock) Copies[path] = new FileCopy { Stamp = stamp, Length = length, Lines = lines };
+            return lines;
+        }
+
+        // "account<TAB>name" after # lines (bot-account.txt and agent-<id>-account.txt), or null when not understood.
+        private static string AccountLine(string[] lines)
+        {
+            string found = null;
+            foreach (string raw in lines)
+            {
+                string line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith("#")) continue;
+                string[] p = line.Split('\t');
+                if (found == null && p.Length == 2 && p[0] == "account" && p[1].Length > 0) found = p[1];
+                else return null;
+            }
+            return found;
+        }
+
+        private static Claims ReadClaims()
+        {
+            Claims c = new Claims();
+            string folder = ChartBridgeConfig.Folder;
+            if (ChartBridgeBot.Enabled) c.Bot = ChartBridgeBot.BotAccount;
+            else
+            {
+                try
+                {
+                    string[] lines = Cached(Path.Combine(folder, "bot-account.txt"));
+                    c.Bot = lines == null ? ChartBridgeBot.DefaultAccount : AccountLine(lines);
+                    if (c.Bot == null) c.BotError = "bot-account.txt cannot be understood";
+                }
+                catch (Exception ex) { c.BotError = "bot-account.txt could not be read (" + ex.Message + ")"; }
+            }
+            c.CopierOn = ChartBridgeCopier.Enabled;
+            if (!c.CopierOn)
+            {
+                try
+                {
+                    string[] lines = Cached(Path.Combine(folder, "copier.txt"));
+                    if (lines != null)
+                        foreach (string raw in lines)
+                        {
+                            string[] p = raw.Split('\t');
+                            if (p.Length == 2 && p[0] == "leader" && p[1].Length > 0) c.Leader.Add(p[1]);
+                            else if (p.Length == 6 && p[0] == "follower" && p[1].Length > 0) c.Followers.Add(p[1]);
+                        }
+                }
+                catch (Exception ex) { c.CopierError = "copier.txt could not be read (" + ex.Message + ")"; }
+            }
             try
             {
-                string folder = ChartBridgeConfig.Folder;
-                if (!Directory.Exists(folder)) return null;
-                foreach (string f in Directory.GetFiles(folder, "agent-*-account.txt"))
+                string[] files = null;
+                if (Directory.Exists(folder))
                 {
-                    string file = Path.GetFileName(f), agent = file.Substring(6, file.Length - 6 - "-account.txt".Length), found = null;
-                    bool bad = false;
-                    foreach (string raw in File.ReadAllLines(f))
+                    DateTime ds = Directory.GetLastWriteTimeUtc(folder);
+                    lock (CopyLock) { if (agentFiles != null && ds == agentDirStamp) files = agentFiles; }
+                    if (files == null)
                     {
-                        string line = raw.Trim();
-                        if (line.Length == 0 || line.StartsWith("#")) continue;
-                        string[] p = line.Split('\t');
-                        if (found == null && p.Length == 2 && p[0] == "account" && p[1].Length > 0) found = p[1];
-                        else { bad = true; break; }
+                        files = Directory.GetFiles(folder, "agent-*-account.txt");
+                        lock (CopyLock) { agentFiles = files; agentDirStamp = ds; }
                     }
-                    if (bad || found == null) return file + " cannot be understood, so ChartBridge cannot tell whether " + name + " is agent " + agent + "'s account";
-                    if (found.Equals(name, StringComparison.OrdinalIgnoreCase)) return name + " is agent " + agent + "'s account (the Agent tab)";
+                }
+                foreach (string f in files ?? new string[0])
+                {
+                    string file = Path.GetFileName(f), id = file.Substring(6, file.Length - 6 - "-account.txt".Length);
+                    string[] lines;
+                    try { lines = Cached(f); }
+                    catch (Exception ex) { c.AgentError = file + " could not be read (" + ex.Message + ")"; continue; }
+                    if (lines == null) continue;   // deleted since the listing
+                    string acct = AccountLine(lines);
+                    if (acct == null) { c.AgentError = file + " cannot be understood"; continue; }
+                    if (!c.Agent.ContainsKey(acct)) c.Agent[acct] = id;
                 }
             }
-            catch (Exception ex) { return "the agent account files could not be read (" + ex.Message + "), so ChartBridge cannot tell whether " + name + " is an agent's"; }
-            return null;
+            catch (Exception ex) { c.AgentError = "the agent account files could not be listed (" + ex.Message + ")"; }
+            return c;
         }
 
         private static bool Known(string name) { lock (Mem) return Recs.ContainsKey(name) || Lives.ContainsKey(name); }
 
-        private static void SetState(string name, string state, double now)
+        // 0.5.1: the state changes only if it still is what the caller expects (checked under the lock), so a change made by
+        // another thread in between is never overwritten. A new record for an account with a connected time saves that too.
+        private static bool SetStateIf(string name, string state, double now, Func<string, bool> expected)
         {
             lock (Mem)
             {
                 Rec r;
-                if (!Recs.TryGetValue(name, out r)) Recs[name] = r = new Rec { Name = name };
+                bool had = Recs.TryGetValue(name, out r);
+                if (!expected(had ? r.State : null)) return false;
+                if (!had) { Recs[name] = r = new Rec { Name = name }; if (ConnectedAt.ContainsKey(name)) detailDirty = true; }
                 r.State = state; r.ChangedMs = (long)now; dirty = true;
+                return true;
             }
         }
 
@@ -693,6 +882,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             SendAccounts(AccountsJson(Snapshot(), ChartBridgeTime.NowUtcMs()), true);
             foreach (ChartBridgeClient c in ChartBridgeServer.AllClients())
                 if (c.Trader) c.Send(TradingFor(c, ChartBridgeOrders.TradingJson(true, null)));
+            TellNewlyListed();
+        }
+
+        // 0.5.1: an account that became listed (its first sighting, Show, or back from the archive) since the last look: every
+        // signed-in v3 page gets a fresh orders list and that account's positions (it got none while the account was not listed).
+        private static void TellNewlyListed()
+        {
+            List<Account> all = Snapshot();
+            HashSet<string> fresh = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            lock (ListedLock)
+            {
+                HashSet<string> now = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (Account a in all) if (Listed(a.Name)) now.Add(a.Name);
+                foreach (string n in now) if (!ListedBefore.Contains(n)) fresh.Add(n);
+                ListedBefore.Clear(); ListedBefore.UnionWith(now);
+            }
+            if (fresh.Count == 0) return;
+            foreach (ChartBridgeClient c in ChartBridgeServer.AllClients())
+                if (c.Trader && IsV3(c)) ChartBridgeOrders.SendScopeAgain(c, fresh);
         }
 
         // ---------------------------------------------------------- every second: Gone, the file, the accounts message
@@ -704,14 +912,23 @@ namespace NinjaTrader.NinjaScript.AddOns
                 List<Account> all = Snapshot();
                 bool changed = false;
                 bool track;
-                foreach (Account a in all) if (a.Name != null && !ChartBridgeOrders.IsNeverTradable(a.Name) && ConnectionText(a) == "connected") MarkSeen(a.Name, now);   // 0.5.1
+                foreach (Account a in all)   // 0.5.1: seen Connected; watched (fills, order and position events) from its first sighting
+                    if (a.Name != null && !ChartBridgeOrders.IsNeverTradable(a.Name) && ConnectionText(a) == "connected")
+                    {
+                        MarkSeen(a.Name, now);
+                        if (!ChartBridgeServer.IsWatched(a)) ChartBridgeServer.EnsureWatched(a);
+                    }
                 lock (Mem) track = loaded && readError == null;
                 if (On && track) changed = Convert(all, now) | Prune(now) | CheckGone(all, now);
                 Save();
                 FlushLog();
                 if (changed) AfterCheckmark();
-                else if (AnyV3Page()) SendAccounts(AccountsJson(all, now), false);   // money and positions: at most once a second
-                else lock (Mem) lastAccountsJson = null;
+                else
+                {
+                    if (AnyV3Page()) SendAccounts(AccountsJson(all, now), false);   // money and positions: at most once a second
+                    else lock (Mem) lastAccountsJson = null;
+                    TellNewlyListed();
+                }
             }
             finally { Interlocked.Exchange(ref ticking, 0); }
         }
@@ -740,31 +957,52 @@ namespace NinjaTrader.NinjaScript.AddOns
             return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        // 0.5.1, the one-time conversion of the old accounts line (OldAccountsNote): each account seen Connected this run is looked
-        // at once; one the line does not name, that is not checked and not archived, is hidden ("hidden: not on the old accounts
-        // list") unless Hide would refuse it (then logged why). Returns true when one was hidden.
+        // 0.5.1, the one-time conversion of the old accounts line (OldAccountsNote): until convertUntilMs, each account seen
+        // Connected is looked at once; one the line does not name, that is not checked and not archived, is hidden ("hidden:
+        // not on the old accounts list", and an info status to the signed-in pages) unless Hide would refuse it (then logged
+        // why). One refused only because a file could not be read is tried again each second until the window ends. Returns true
+        // when one was hidden.
         private static bool Convert(List<Account> all, double now)
         {
             List<Account> look = new List<Account>();
+            List<KeyValuePair<string, string>> unsureLeft = null;
             lock (Mem)
             {
                 if (!converting) return false;
-                foreach (Account a in all)
+                if (now > convertUntilMs)
                 {
-                    if (a.Name == null || ChartBridgeOrders.IsNeverTradable(a.Name) || !EverConnected.Contains(a.Name) || Converted.Contains(a.Name)) continue;
-                    Converted.Add(a.Name);
-                    Rec r;
-                    if (ChartBridgeConfig.OnOldAccounts(a.Name) || (Recs.TryGetValue(a.Name, out r) && r.State != "off")) continue;   // named, checked or archived already: kept exactly
-                    look.Add(a);
+                    converting = false;
+                    unsureLeft = ConvertUnsure.ToList();
+                    ConvertUnsure.Clear();
                 }
+                else
+                    foreach (Account a in all)
+                    {
+                        if (a.Name == null || ChartBridgeOrders.IsNeverTradable(a.Name) || !EverConnected.Contains(a.Name) || Converted.Contains(a.Name)) continue;
+                        Rec r;
+                        if (ChartBridgeConfig.OnOldAccounts(a.Name) || (Recs.TryGetValue(a.Name, out r) && r.State != "off")) { Converted.Add(a.Name); ConvertUnsure.Remove(a.Name); continue; }   // named, checked or archived already: kept exactly
+                        look.Add(a);
+                    }
             }
+            if (unsureLeft != null)
+            {
+                foreach (KeyValuePair<string, string> u in unsureLeft) NoteChange(u.Key, "not hidden", "not on the old accounts list, but " + u.Value);
+                NoteChange("(all)", "conversion done", "5 minutes after the start: an account that connects from now on is listed as usual");
+                return false;
+            }
+            if (look.Count == 0) return false;
+            Claims claims = ReadClaims();   // reads files: outside Mem
             bool changed = false;
             foreach (Account a in look)
             {
-                string why = HideRefusal(a.Name, a);   // reads files: outside Mem
+                bool unsure;
+                string why = HideRefusal(a.Name, a, claims, out unsure);
+                if (why != null && unsure) { lock (Mem) ConvertUnsure[a.Name] = why; continue; }   // tried again next second
+                lock (Mem) { Converted.Add(a.Name); ConvertUnsure.Remove(a.Name); }
                 if (why != null) { NoteChange(a.Name, "not hidden", "not on the old accounts list, but " + why); continue; }
-                SetState(a.Name, "archived", now);
+                if (!SetStateIf(a.Name, "archived", now, st => st == null || st == "off")) continue;   // checked or hidden meanwhile
                 NoteChange(a.Name, "hidden", "not on the old accounts list");
+                Info(a.Name + " was hidden: it is not on the old accounts list in config.txt. Show it from the Hidden list on the Account tab if you want it");
                 changed = true;
             }
             return changed;
@@ -816,7 +1054,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Live l;
                     if (!Lives.TryGetValue(name, out l)) Lives[name] = l = new Live();
                     Rec r;
-                    if (!Recs.TryGetValue(name, out r)) { Recs[name] = r = new Rec { Name = name, State = "off", ChangedMs = (long)now }; dirty = true; }   // seen Connected: kept in accounts.txt, unchecked
+                    if (!Recs.TryGetValue(name, out r)) { Recs[name] = r = new Rec { Name = name, State = "off", ChangedMs = (long)now }; dirty = true; if (ConnectedAt.ContainsKey(name)) detailDirty = true; }   // seen Connected: kept in accounts.txt, unchecked; its connected time saved with it
                     if (a != null) l.Busy = busy;
                     if (r.State == "archived")
                     {
@@ -884,11 +1122,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (Account a in all) SeenConnected(a);   // 0.5.1: one Connected now counts at once (never NinjaTrader's thread here)
             StringBuilder b = new StringBuilder("{\"type\":\"accounts\",\"list\":[");
             bool first = true;
+            Claims claims = On ? ReadClaims() : null;   // 0.5.1: once per message (cached copies)
             foreach (string name in Names(all, false))
             {
                 Account a = all.FirstOrDefault(x => x.Name != null && x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
                 if (!first) b.Append(','); first = false;
-                AccountJson(b, name, a);
+                AccountJson(b, name, a, claims);
             }
             b.Append("],\"archived\":[");
             List<Rec> archived;
@@ -898,7 +1137,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return b.Append("]}").ToString();
         }
 
-        private static void AccountJson(StringBuilder b, string name, Account a)
+        private static void AccountJson(StringBuilder b, string name, Account a, Claims claims)
         {
             string connection = a == null ? "disconnected" : ConnectionText(a);
             bool trade = On ? SavedChecked(name) : ChartBridgeOrders.TradeAccounts.Any(t => t.Equals(name, StringComparison.OrdinalIgnoreCase));
@@ -917,7 +1156,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (up) dlWhy = "NinjaTrader reports the daily loss limit only as the share already used (its Accounts tab), not as dollars left; ChartBridge does not estimate it";
             string hideWhy;   // 0.5.1: Hide on the page (accountArchive), null when it would be accepted now
             lock (Mem) hideWhy = !On ? "accountChecks is off" : readError != null ? ReadFailedText : null;
-            if (hideWhy == null) hideWhy = HideRefusal(name, a);
+            bool unsure;
+            if (hideWhy == null) hideWhy = HideRefusal(name, a, claims, out unsure);
             b.Append("{\"name\":").Append(CbJson.Str(name))
              .Append(",\"sim\":").Append(a != null && IsSim(a) ? "true" : "false")
              .Append(",\"connection\":").Append(CbJson.Str(connection))
@@ -1120,16 +1360,34 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void SaveDetails()
         {
             string text;
+            bool markOnly = false;
             lock (Mem)
             {
-                if (!loaded || readError != null || !detailDirty) return;
-                StringBuilder b = new StringBuilder(DetailHeader).Append('\n');
-                if (convertedMs >= 0) b.Append("converted\t").Append(((long)convertedMs).ToString(CultureInfo.InvariantCulture)).Append('\n');
-                foreach (KeyValuePair<string, double> kv in ConnectedAt.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
-                    if (Recs.ContainsKey(kv.Key)) b.Append("connected\t").Append(((long)kv.Value).ToString(CultureInfo.InvariantCulture)).Append('\t').Append(kv.Key).Append('\n');
-                text = b.ToString();
-                detailDirty = false;
+                if (offMarkPending && !On)
+                {
+                    // accountChecks off with an accounts line: only the conversion marker, and only into a file that is not there yet
+                    offMarkPending = false;
+                    markOnly = true;
+                    text = DetailHeader + "\nconverted\t" + ((long)ChartBridgeTime.NowUtcMs()).ToString(CultureInfo.InvariantCulture) + "\n";
+                }
+                else
+                {
+                    if (!loaded || readError != null || detailReadError || !detailDirty) return;   // a file that could not be read is never rewritten that run
+                    StringBuilder b = new StringBuilder(DetailHeader).Append('\n');
+                    if (convertedMs >= 0) b.Append("converted\t").Append(((long)convertedMs).ToString(CultureInfo.InvariantCulture)).Append('\n');
+                    foreach (KeyValuePair<string, double> kv in ConnectedAt.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+                    {
+                        if (!Recs.ContainsKey(kv.Key)) continue;
+                        string sid;
+                        b.Append("connected\t").Append(((long)kv.Value).ToString(CultureInfo.InvariantCulture)).Append('\t').Append(kv.Key);
+                        if (ConnectedSession.TryGetValue(kv.Key, out sid)) b.Append('\t').Append(sid);
+                        b.Append('\n');
+                    }
+                    text = b.ToString();
+                    detailDirty = false;
+                }
             }
+            if (markOnly && File.Exists(DetailPath)) return;
             try
             {
                 Directory.CreateDirectory(ChartBridgeConfig.Folder);

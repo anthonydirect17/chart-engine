@@ -1353,10 +1353,13 @@ ChartBridge saves the checkmarks itself in `accounts.txt` next to `config.txt` (
 swapped in, off NinjaTrader's thread, read once at start before the accounts are watched. Exactly three fields: 0.5.0's
 (and 0.4.x's) reader refuses the whole file for any other line, a 4th field or a comment included, so 0.5.1 adds nothing to
 it. **`accounts-detail.txt`** (0.5.1, next to it, same writing rules): a first line
-`# ChartBridge account details (written by ChartBridge; do not edit)`, then `connected\t<UTC ms>\t<account name>` (the last
-time ChartBridge saw it Connected; saved at most once an hour per account) and `converted\t<UTC ms>` (the `accounts` line
-was converted, below). A line it does not understand is skipped; a missing or unreadable file only means an account counts as
-seen this session once it connects again. **Pruning** (0.5.1): a plain `off` record not seen Connected for 30 days (by
+`# ChartBridge account details (written by ChartBridge; do not edit)`, then `connected\t<UTC ms>\t<account name>\t<session>`
+(the last time ChartBridge saw it Connected, and which NinjaTrader session saw it: the process id and start ticks, as
+`<id>-<ticks>`; the 4th field is left out when they cannot be read; saved at most once an hour per account, and at once the
+first time a session sees it) and `converted\t<UTC ms>` (the `accounts` line was converted, below). A line it does not
+understand is skipped. Read with three tries, as `accounts.txt`; a file that still cannot be read is **never rewritten that
+run** (one Output line) and only means an account counts as seen this session once it connects again. ChartBridge's stop
+saves both files and flushes `accounts.log` (on the thread that stops it). **Pruning** (0.5.1): a plain `off` record not seen Connected for 30 days (by
 `accounts-detail.txt`, else its changed time) is forgotten at the hourly check, logged `forgotten`; a `trade` or `archived`
 record never is. **First start** (no
 `accounts.txt`): every account named in `tradeAccounts` comes pre-checked and the file is written; after that only the
@@ -1397,17 +1400,24 @@ account NinjaTrader shows with a position or working orders is listed again at o
 Hide is also how Anthony removes a connected account he does not want listed (a dead evaluation). Until 0.5.0 only a Gone
 account could be archived, and it came back on its own when it connected again.
 
-**The old `accounts` line (0.5.1, once).** The first 0.5.1 run that finds `accounts = ...` in `config.txt` (no `converted`
-line in `accounts-detail.txt` and no `converted` line in `accounts.log`) converts it: every account seen Connected during that
-run that the line does not name (exact, or a prefix before `*`, as before) and that is not checked is hidden once, logged
-`hidden: not on the old accounts list` (one that Hide would refuse is left listed, logged `not hidden` with why). The
-accounts it names keep their checkmarks exactly. Each account is looked at once, so a Show stays. From the next run the line
-is ignored, one Output line says so, and it can go. With `accountChecks` off nothing is converted (there is no archive) and
-the line is ignored.
+**The old `accounts` line (0.5.1, once).** The first 0.5.1 run that finds `accounts = ...` in `config.txt` converts it. It is
+the first run when there is no `accounts-detail.txt` yet (any 0.5.1 run writes one, so its mere existence means "done") and
+`accounts.log` has no `converted` line; if `accounts.log` cannot be read (three tries) nothing is converted (ChartBridge
+cannot tell), said in the Output window. The conversion covers the **first 5 minutes** after ChartBridge starts: every account
+seen Connected in that time that the line does not name (exact, or a prefix before `*`, as before) and that is not checked
+is hidden once, logged `hidden: not on the old accounts list`, and the signed-in pages get a `status` `info` ("EVAL-B was
+hidden: it is not on the old accounts list in config.txt. Show it from the Hidden list on the Account tab if you want it").
+One that Hide would refuse stays listed, logged `not hidden` with why; one refused only because a file could not be read or
+understood is tried again each second until the 5 minutes end (then logged `not hidden`). The accounts it names keep their
+checkmarks exactly. Each account is looked at once, so a Show stays. After the 5 minutes (`(all)` `conversion done` in the
+log) an account that connects is listed as usual, unchecked; from the next run the line is ignored, one Output line says
+so, and it can go. With `accountChecks` off nothing is converted (there is no archive), the line is ignored, and the marker
+is written (an `accounts-detail.txt` with only `converted`, the one file written with `accountChecks` off, and only when
+there is none) so a later run with it on never converts.
 
 **Every change is logged**: one line in the Output window and one appended to `accounts.log` (next to `config.txt`;
 `<UTC ISO time>\t<account>\t<what>\t<why>`, e.g. `checked by the page`, `gone: disconnected`, `archived by the page`, and
-0.5.1's `shown`, `hidden`, `not hidden`, `forgotten`, and `(all)` `converted`).
+0.5.1's `shown`, `hidden`, `not hidden`, `forgotten`, and `(all)` `converted` and `conversion done`).
 Account names appear only in these local files and the local page, never in `/diag` exports or reports.
 
 | page to server | fields (no others) | notes |
@@ -1489,9 +1499,10 @@ Where the contract above left a detail open, the build chose the safe simple opt
   is listed and trades at once with its checkmark. Then a drop (disconnected or disabled, for the grace) makes it Gone.
   `"notConnectedYet"` (an added field in each `account` since 0.4.0) is always false since 0.5.1 and is kept for older pages.
 - **Seen this session** (0.5.1): Connected at a 1 s check, a 10 s watch, a page's sign-in or an `accounts` message in this
-  ChartBridge run, or a `connected` time in `accounts-detail.txt` at or after NinjaTrader's process start (so a recompile in
-  the same NinjaTrader session keeps a Gone account listed). When the process start cannot be read, ChartBridge's start is
-  used. A page's orders and positions (`orders`, `order`, `position`) cover the same accounts.
+  ChartBridge run, or a `connected` line in `accounts-detail.txt` from this NinjaTrader process (same process id and start;
+  so a recompile keeps a Gone account listed, even if the clock was set back). A line without the session field, or a
+  NinjaTrader whose process cannot be read, falls back to the time: at or after NinjaTrader's process start (ChartBridge's
+  start when that cannot be read). A page's orders and positions (`orders`, `order`, `position`) cover the same accounts.
 - **Gone**: sampled once a second; the 10 s grace starts at the first bad reading and any healthy reading starts it again. An
   account seen this session that NinjaTrader no longer lists is listed `disconnected` and goes Gone. 0.5.1: an archived account
   stays archived when it comes back healthy (until 0.5.0 it came back on its own); one NinjaTrader shows with a position or
@@ -1504,10 +1515,24 @@ Where the contract above left a detail open, the build chose the safe simple opt
 - **Every account ChartBridge lists is written to `accounts.txt`** (as `off` until checked), so an account that later
   disappears can still be listed Gone and archived. 0.5.1: only accounts seen Connected are listed, so only those are written
   (and the tradeAccounts names of a first start).
-- **The conversion of the old `accounts` line** (0.5.1, lead's defaults): a checked account is kept even when the line does
-  not name it (0.5.0 always watched the accounts the chart may trade); an account Hide would refuse is not hidden; the marker
-  is written when the conversion starts, so a recompile later in that NinjaTrader session ignores the line (accounts that
-  connect after it are not hidden).
+- **The conversion of the old `accounts` line** (0.5.1, lead's defaults and the review's rulings): a checked account is kept
+  even when the line does not name it (0.5.0 always watched the accounts the chart may trade); an account Hide would refuse
+  is not hidden; it covers the first 5 minutes after the start only; the marker is written when the conversion starts, so a
+  recompile ends it. A first run that could not read `accounts.log` still writes `accounts-detail.txt`, so the line is never
+  converted after that (the safe side: nothing is hidden by guess).
+- **Every state change checks first** (0.5.1): a checkmark, Hide, Show and the conversion change an account only if it is
+  still in the state they found, checked under the lock, so a change made in between (a Hide while a check is on its way, a
+  checkmark while the conversion looks) is never overwritten.
+- **Whose accounts** (0.5.1, for Hide and the conversion): the bot's (on: its memory; off: `bot-account.txt`, Sim101 when
+  there is none), the copier's leader and followers (on: its memory; off: `copier.txt`), an agent's chosen account (the agent
+  channel's memory and every `agent-<id>-account.txt`). Read once per check from copies kept by each file's time stamp (the
+  folder's for the list of agent files), each file opened so its owner may replace or delete it meanwhile. A file that cannot
+  be read or understood refuses Hide for every account and is read again next time.
+- **Newly listed accounts reach the pages** (0.5.1): an account that becomes listed (its first sighting, Show, or back from
+  the archive with a position or working orders) makes every signed-in v3 page get a fresh `orders` list and that account's
+  `position` messages, as at sign-in (it got none of its messages while it was not listed). ChartBridge watches an account
+  (its fills, orders and positions) from the 1 s check that first sees it Connected, and still on demand before an order.
+- **`trading`'s accounts list** (0.5.1): the checked accounts seen Connected this session only.
 - **`/diag`**: nothing added (account names stay out of new diagnostics).
 
 **What NinjaTrader 8 reports, and what the fields use** (help guide, checked 2026-10-07; never estimated):
@@ -1521,7 +1546,7 @@ Where the contract above left a detail open, the build chose the safe simple opt
 | `roomDrawdown` | `AccountItem.TrailingMaxDrawdown`, read by name | not in the documented `AccountItem` list; the Accounts tab column "Trailing max drawdown" is documented as "the remaining value of the trailing max drawdown", and NinjaTrader staff read it with `Get` "if your broker provides the information". `Get` answers 0 when nothing is reported, so 0 counts only after a non-zero value for that account this run; until then null, "NinjaTrader does not report a trailing drawdown for this account (it shows 0, as it does when none is set)". A NinjaTrader without the item: null with why |
 | `roomDailyLoss` | always null | NinjaTrader documents its "Daily loss limit" column as "the percentage of the daily loss limit that has been reached", not dollars left; the why says so. The page may show a limit typed on The Desk (`/api/chart-accounts`) |
 | `sim` | the account's `Provider` is `Simulator` (reflection) | unknown is `false`, the safe side for the copier and the bot |
-| disabled | `Account.AccountStatusUpdate` (documented static event; `e.Status` values are not documented) | a last status text of `Disabled` counts; a status from before ChartBridge started is not seen until it changes |
+| disabled | `Account.AccountStatusUpdate` (documented static event; `e.Status` values are not documented) | a last status text of `Disabled` counts; a status from before ChartBridge started is not seen until it changes. **Known limit** (since 0.4.0): after a recompile (F5) the status text is lost, so an account NinjaTrader disabled before it, still Connected and checked, is not Gone and ChartBridge does not refuse its entries (the broker still does). NinjaTrader documents no account property to read the status again; its Accounts tab shows it. Uncheck such an account by hand |
 
 Money is rounded to cents. Every money and room field is null while the account is not Connected (why: "the account is not
 connected").

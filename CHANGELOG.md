@@ -16,9 +16,13 @@ A new evaluation account no longer needs a `config.txt` edit and F5, and dead ac
   with a position or working orders is listed again at once, unchecked, so hiding never strands an exit. The page has a Hide
   button on each account that may be hidden and a Show button in the Hidden list; each account in `accounts` carries
   `canHide` and `hideWhy`.
-- **The `accounts =` line is retired.** On the first 0.5.1 run with the line, every account seen connected that run that the
-  line does not name and that is not checked is hidden once ("hidden: not on the old accounts list"); the accounts it names
-  keep their checkmarks exactly. Afterwards the line is ignored (one Output line says so) and can go.
+- **The `accounts =` line is retired.** On the first 0.5.1 run with the line, every account seen connected in the first 5
+  minutes that the line does not name and that is not checked is hidden once ("hidden: not on the old accounts list", and an
+  info line on the page); the accounts it names keep their checkmarks exactly. Afterwards the line is ignored (one Output
+  line says so) and can go. If ChartBridge cannot tell whether it converted before, it does not convert.
+- **Newly listed accounts reach the page.** When an account is listed (it connects, Show, or it comes back from Hidden with a
+  position or orders) a signed-in page gets its working orders and positions at once. ChartBridge watches an account from
+  the first second it sees it connected.
 - **Tidy files.** Plain `off` records not seen connected for 30 days leave `accounts.txt` (logged); checked and archived ones
   never do. The last time each account was seen connected and the conversion marker are in a new `accounts-detail.txt`:
   `accounts.txt` keeps 0.5.0's exact format, because 0.5.0's reader refuses the whole file for a line with a 4th field.
