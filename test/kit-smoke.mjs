@@ -134,7 +134,7 @@ try {
   await page.locator('#v-agent').screenshot({ path: path.join(out, 'kit-agent.png') });
   await page.locator('#armedRow').screenshot({ path: path.join(out, 'kit-armed.png') });
   const armed = await page.evaluate(() => { const s = getComputedStyle(document.getElementById('armedLit')); return { border: s.borderTopColor, shadow: s.boxShadow, lit: document.getElementById('armedLit').classList.contains('kit-lit') }; });
-  check(armed.border === 'rgba(155, 123, 255, 0.32)' && armed.lit && /rgba\(123, 92, 255, 0\.45\)/.test(armed.shadow) && /rgb\(61, 220, 151\)/.test(armed.shadow), 'armed and lit: the purple outline and the light\'s glow show together');
+  check(armed.border === 'rgba(155, 123, 255, 0.32)' && armed.lit && /^rgba\(155, 123, 255, 0\.45\) 0px 0px 0px 1px/.test(armed.shadow) && /rgb\(61, 220, 151\)/.test(armed.shadow), 'armed and lit: the purple outline and the light\'s glow show together');
   await page.screenshot({ path: path.join(out, 'kit-gallery-1440.png'), fullPage: true });
   await page.close();
 

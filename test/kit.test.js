@@ -169,7 +169,7 @@ test('the armed outline: on and off, and together with the light', () => {
   assert.ok(!p.classList.contains('kit-armed') && p.classList.contains('kit-lit'));
   const css = read('live/kit.css');
   assert.match(css, /\.kit \.kit-armed \{ border-color: var\(--kit-armed-line\); box-shadow: 0 0 22px -3px rgba\(123,92,255,\.55\), 0 0 8px -2px rgba\(182,156,255,\.35\), inset 0 0 18px -8px rgba\(123,92,255,\.30\); \}/);
-  assert.match(css, /\.kit \.kit-armed\.kit-lit \{ box-shadow: 0 0 34px -4px var\(--kit-pc\)[^}]*rgba\(123,92,255,\.45\)/, 'armed and lit keep both glows');
+  assert.match(css, /\.kit \.kit-armed\.kit-lit \{ box-shadow: 0 0 0 1px rgba\(155,123,255,\.45\), 0 0 14px -2px rgba\(123,92,255,\.80\)[^}]*, 0 0 34px -4px var\(--kit-pc\), inset 0 0 22px -12px var\(--kit-pc\); \}/, 'armed and lit: the purple ring on top, the light\'s glow under it');
 });
 
 test('motion: full by default, off remembered under kit-motion-v1, and storage that throws never breaks it', () => {
