@@ -9,8 +9,19 @@
 //   - Gone: an account that is disconnected (after it was connected) or disabled for 10 s without a break is listed Gone and
 //     the pages are told; entries wait until it is back. ChartBridge never clears a checkmark (Anthony, 2026-10-07: "I will
 //     manage the checkmarks"; 0.4.2): Gone keeps it, and NinjaTrader's trailing drawdown never makes an account Gone (it is
-//     shown in the Room column only). Archive only after the page's confirm, and only for a Gone account. History is kept
-//     (nothing is deleted); every change is one Output line and one accounts.log line;
+//     shown in the Room column only). History is kept (nothing is deleted); every change is one Output line and one
+//     accounts.log line;
+//   - 0.5.1, connected accounts only: an account is watched and listed once it has been seen Connected in this NinjaTrader
+//     session (since NinjaTrader's process started, so an F5 keeps it); one that never connected this session is never
+//     watched, listed or written. A new one starts unchecked. Once seen, a drop leaves it listed Gone as before. Hide
+//     (accountArchive with the page's confirm) for any flat account that is not the bot's, a copier leader or follower, or
+//     an agent's; it stays archived until Show (accountUnarchive), which brings it back unchecked. An archived account that
+//     NinjaTrader shows with a position or working orders is listed again at once (unchecked), so archiving never strands
+//     an exit. Plain off records not seen Connected for 30 days are forgotten (trade and archived never are). The retired
+//     "accounts =" line is read once (the first 0.5.1 run): every account seen Connected that run that it does not name,
+//     and that is not checked, is hidden. The last time each account was seen Connected and the conversion marker are in
+//     accounts-detail.txt, a file of its own: accounts.txt keeps the exact 0.5.0 format, because 0.5.0's reader (and
+//     0.4.x's) refuses the whole file for any line that is not <state> <time> <name>, a 4th field or a comment included;
 //   - the "accounts" message: every watched account with its connection, checkmark, money, positions and the room to its
 //     trailing drawdown and daily loss limit where NinjaTrader reports them (else null with a plain reason, never estimated);
 //   - the exit side of gate 2 (flatten, cancel, moving a stop or target, cancel from the Working orders tab): a watched,
@@ -53,22 +64,42 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const int TickMs = 1000;        // the check and the money in "accounts": at most once a second
         public const string Header = "# ChartBridge accounts (written by ChartBridge; do not edit)";
         public const string ReadFailedText = "accounts.txt could not be read: trading is off for every account until it can";
+        public const double PruneMs = 30.0 * 24 * 3600 * 1000;   // 0.5.1: a plain off record not seen Connected for 30 days is forgotten
+        public const double PruneEveryMs = 3600000;               // checked once an hour (and at the first check)
+        public const double SeenWriteMs = 3600000;                // the last-connected time is saved at most once an hour per account
+        public const string DetailHeader = "# ChartBridge account details (written by ChartBridge; do not edit)";
 
         public static bool On { get { return ChartBridgeV3.AccountChecks; } }
         public static bool CancelFromListOn { get { return ChartBridgeV3.CancelFromList; } }
 
         private static string FilePath { get { return Path.Combine(ChartBridgeConfig.Folder, "accounts.txt"); } }
         private static string LogPath { get { return Path.Combine(ChartBridgeConfig.Folder, "accounts.log"); } }
+        private static string DetailPath { get { return Path.Combine(ChartBridgeConfig.Folder, "accounts-detail.txt"); } }
 
         // ---------------------------------------------------------- memory (Mem: never held during file I/O or a NinjaTrader call)
         private static readonly object Mem = new object();
         private static readonly object FileLock = new object();   // one write of accounts.txt or accounts.log at a time
 
         private class Rec { public string Name; public string State; public long ChangedMs; }   // State: trade, off or archived
-        private class Live { public double BadSince = -1; public bool Gone; public string GoneWhy; public long GoneSince; }
+        private class Live
+        {
+            public double BadSince = -1; public bool Gone; public string GoneWhy; public long GoneSince;
+            public bool Busy;   // 0.5.1: last seen with a position or working orders (for Hide while NinjaTrader does not list it)
+        }
 
         private static readonly Dictionary<string, Rec> Recs = new Dictionary<string, Rec>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, Live> Lives = new Dictionary<string, Live>(StringComparer.OrdinalIgnoreCase);
+        // 0.5.1 (accounts-detail.txt): when each account was last seen Connected (UTC ms), and when the accounts line was converted.
+        private static readonly Dictionary<string, double> ConnectedAt = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> Converted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // looked at by this run's conversion
+        private static bool detailDirty;     // memory differs from accounts-detail.txt
+        private static bool detailSaveFailed;   // the last save of accounts-detail.txt failed (said once)
+        private static double convertedMs = -1;   // the accounts line was converted then (-1: never)
+        private static bool converting;      // this run hides the accounts the old accounts line does not name
+        private static double lastPruneMs = -1;
+        // 0.5.1: the start of this NinjaTrader session (its process), UTC ms: an account last seen Connected since then counts as
+        // seen this session after an F5. Public for the harness, which sets it to stand for a new session.
+        public static double SessionStartMs;
         private static readonly Dictionary<string, string> StatusText = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // AccountStatusUpdate
         private static readonly HashSet<string> DrawdownSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // a non-zero trailing drawdown seen this run
         private static readonly HashSet<string> EverConnected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);  // seen Connected this run (lead's default: only these can go Gone by disconnecting)
@@ -107,8 +138,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (Mem)
             {
-                Recs.Clear(); Lives.Clear(); StatusText.Clear(); DrawdownSeen.Clear(); EverConnected.Clear(); PendingLog.Clear();
-                loaded = false; readError = null; startAlarm = null; dirty = false; saveError = null; lastAccountsJson = null;
+                Recs.Clear(); Lives.Clear(); ConnectedAt.Clear(); Converted.Clear(); StatusText.Clear(); DrawdownSeen.Clear(); EverConnected.Clear(); PendingLog.Clear();
+                loaded = false; readError = null; startAlarm = null; dirty = false; detailDirty = false; detailSaveFailed = false; saveError = null; lastAccountsJson = null;
+                convertedMs = -1; converting = false; lastPruneMs = -1;
             }
         }
 
@@ -116,9 +148,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void StartNow(double now)
         {
             Clear();
-            if (!On) return;
+            SessionStartMs = SessionStart(now);
+            if (!On) { OldAccountsNote(now, false); return; }
             string path = FilePath;
-            if (!File.Exists(path)) { NoFile(now); return; }
+            if (!File.Exists(path)) { NoFile(now); AfterRead(now); return; }
             string[] lines = null;
             string err = null;
             for (int attempt = 0; attempt < 3 && lines == null; attempt++)
@@ -140,6 +173,53 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (read == null) Alarm(ReadFailedText + " (" + err + "); fix or delete the file, then recompile");
             else ChartBridgeServer.Log("accountChecks is on: the checkmarks in accounts.txt are gate 2 (" + read.Values.Count(r => r.State == "trade") + " checked); tradeAccounts in config.txt is not read for trading");
+            AfterRead(now);
+        }
+
+        // 0.5.1: accounts-detail.txt and the old accounts line, once accounts.txt is read (or made on a first start).
+        private static void AfterRead(double now)
+        {
+            bool ok;
+            lock (Mem) ok = loaded && readError == null;
+            if (ok) LoadDetails();
+            OldAccountsNote(now, ok);
+        }
+
+        // NinjaTrader's process start (this NinjaTrader session), UTC ms; now when it cannot be read.
+        private static double SessionStart(double now)
+        {
+            try
+            {
+                DateTime st = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime();
+                double ms = (st - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+                return ms > 0 && ms <= now ? ms : now;
+            }
+            catch (Exception) { return now; }
+        }
+
+        // 0.5.1, the retired accounts line in config.txt. The first run with it (no conversion marker in accounts-detail.txt and
+        // no "converted" line in accounts.log) converts it: every account seen Connected this run that it does not name and that
+        // is not checked is hidden once (Tick). Afterwards it is ignored, said once at start.
+        private static void OldAccountsNote(double now, bool canConvert)
+        {
+            if (ChartBridgeConfig.OldAccounts == null) return;
+            bool done;
+            lock (Mem) done = convertedMs >= 0;
+            if (!done && canConvert) done = LogSaysConverted();
+            if (done || !canConvert)
+            {
+                ChartBridgeServer.Log("config.txt: the accounts line is ignored since ChartBridge 0.5.1: the Account tab lists the accounts connected in NinjaTrader (Hide on the Account tab removes one); the line can go");
+                return;
+            }
+            lock (Mem) { converting = true; convertedMs = now; detailDirty = true; }
+            ChartBridgeServer.Log("config.txt: the accounts line is read once now (ChartBridge 0.5.1): an account that connects this run, is not on it and is not checked is hidden (Show on the Account tab brings it back); after this run the line is ignored and can go");
+            NoteChange("(all)", "converted", "the accounts line in config.txt: connected accounts it does not name are hidden this run");
+        }
+
+        private static bool LogSaysConverted()
+        {
+            try { return File.Exists(LogPath) && File.ReadLines(LogPath).Any(l => l.Contains("\t(all)\tconverted\t")); }
+            catch (Exception) { return false; }
         }
 
         // No accounts.txt. A first start (no accounts.log either: ChartBridge never kept checkmarks here) pre-checks every
@@ -184,6 +264,61 @@ namespace NinjaTrader.NinjaScript.AddOns
                 d[p[2]] = new Rec { Name = p[2], State = p[0], ChangedMs = ms };
             }
             return d;
+        }
+
+        // 0.5.1: accounts-detail.txt, a header, then "connected\t<UTC ms>\t<account name>" (when it was last seen Connected) and
+        // "converted\t<UTC ms>" (the accounts line was converted) lines. A line ChartBridge does not understand is skipped; a file
+        // that cannot be read counts as empty (one Output line): then an account counts as seen this session only once it
+        // connects, and an off record's age is taken from accounts.txt's changed time.
+        private static void LoadDetails()
+        {
+            string path = DetailPath;
+            if (!File.Exists(path)) return;
+            string[] lines;
+            try { lines = File.ReadAllLines(path); }
+            catch (Exception ex) { ChartBridgeServer.Log("accounts-detail.txt could not be read (" + ex.Message + "): accounts are listed as they connect"); return; }
+            lock (Mem)
+            {
+                if (lines.Length == 0 || lines[0].TrimEnd('\r') != DetailHeader) { detailDirty = true; return; }
+                for (int i = 1; i < lines.Length; i++)
+                {
+                    string[] p = lines[i].TrimEnd('\r').Split('\t');
+                    double ms;
+                    if (p.Length < 2 || !double.TryParse(p[1], NumberStyles.None, CultureInfo.InvariantCulture, out ms)) continue;
+                    if (p[0] == "converted" && p.Length == 2) convertedMs = ms;
+                    else if (p[0] == "connected" && p.Length == 3 && p[2].Trim().Length > 0 && !ChartBridgeOrders.IsNeverTradable(p[2])) ConnectedAt[p[2]] = ms;
+                }
+            }
+        }
+
+        // 0.5.1: seen Connected in this NinjaTrader session (this run, or since NinjaTrader started by accounts-detail.txt).
+        private static bool SeenThisSession(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            lock (Mem) { double ms; return EverConnected.Contains(name) || (ConnectedAt.TryGetValue(name, out ms) && ms >= SessionStartMs); }
+        }
+
+        // 0.5.1: an account Connected now is marked seen (and its time kept, saved at most once an hour); then whether it has been
+        // seen this session. For ChartBridgeServer.WatchAccounts (the fills) and the lists. Never Backtest or Playback.
+        public static bool SeenConnected(Account a)
+        {
+            if (a == null || string.IsNullOrEmpty(a.Name) || ChartBridgeOrders.IsNeverTradable(a.Name)) return false;
+            if (ConnectionText(a) == "connected") MarkSeen(a.Name, ChartBridgeTime.NowUtcMs());
+            return SeenThisSession(a.Name);
+        }
+
+        private static void MarkSeen(string name, double now)
+        {
+            lock (Mem)
+            {
+                EverConnected.Add(name);
+                if (!On || !loaded || readError != null) return;
+                double was;
+                bool had = ConnectedAt.TryGetValue(name, out was);
+                if (had && now <= was) return;
+                ConnectedAt[name] = now;
+                if (!had || was < SessionStartMs || now - was >= SeenWriteMs) detailDirty = true;
+            }
         }
 
         // ---------------------------------------------------------- gate 2 (asked by ChartBridgeOrders.cs only when accountChecks is on)
@@ -243,7 +378,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             string name = a != null ? a.Name : null;
             if (string.IsNullOrEmpty(name) || ChartBridgeOrders.IsNeverTradable(name)) { why = "account " + (name ?? "(none)") + " may not trade from the chart (never Backtest or Playback)"; return false; }
             if (Archived(name)) { why = "account " + name + " is archived"; return false; }
-            if (!ChartBridgeConfig.AccountAllowed(name)) { why = "account " + name + " is not watched (accounts in config.txt)"; return false; }
             string status = StatusOf(a);
             if (status != "Connected") { why = "account " + name + " is not connected (" + status + ")"; return false; }
             if (!ChartBridgeServer.EnsureWatched(a)) { why = "ChartBridge is not listening to account " + name + " yet; try again in a few seconds"; return false; }
@@ -278,10 +412,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- what a page sees (v3: every watched account; v2: v2's scope)
-        // A watched, non-archived account: in the accounts list and in a v3 page's orders and positions.
+        // A watched, non-archived account: in the accounts list and in a v3 page's orders and positions. 0.5.1: seen Connected this
+        // NinjaTrader session (memory only: NinjaTrader's thread may ask).
         public static bool Listed(string name)
         {
-            return !string.IsNullOrEmpty(name) && !ChartBridgeOrders.IsNeverTradable(name) && ChartBridgeConfig.AccountAllowed(name) && !Archived(name);
+            return !string.IsNullOrEmpty(name) && !ChartBridgeOrders.IsNeverTradable(name) && !Archived(name) && SeenThisSession(name);
         }
 
         private static bool AnyV3Page()
@@ -305,6 +440,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<Account> all;
             lock (Account.All) all = Account.All.ToList();
             bool v3 = IsV3(c);
+            foreach (Account a in all) SeenConnected(a);   // 0.5.1: one that connected since the last check counts now (the page's thread)
             return all.Where(a => v3 ? Listed(a.Name) : ChartBridgeOrders.AccountTradable(a.Name)).ToList();
         }
 
@@ -351,7 +487,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- messages from the page
-        // client (no sign-in needed), accountTrade, accountArchive (gates 1, 4 and 7 first, then strict keys, then the switch).
+        // client (no sign-in needed), accountTrade, accountArchive (Hide), accountUnarchive (Show, 0.5.1) (gates 1, 4 and 7 first,
+        // then strict keys, then the switch).
         public static void OnMessage(ChartBridgeClient client, string type, string text)
         {
             string cid = null;
@@ -360,12 +497,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (type == "client") { OnClient(client, text); return; }
                 string why = ChartBridgeV3.Gate(client);
                 Dictionary<string, string> m = null;
-                string[] keys = type == "accountTrade" ? new[] { "type", "cid", "account", "on" } : new[] { "type", "cid", "account", "confirm" };
+                string[] keys = type == "accountTrade" ? new[] { "type", "cid", "account", "on" } : type == "accountUnarchive" ? new[] { "type", "cid", "account" } : new[] { "type", "cid", "account", "confirm" };
                 if (why == null) m = ChartBridgeV3.Flat(text, type, keys, out why);
                 if (m != null) cid = ChartBridgeV3.Str(m, "cid");
                 if (why == null && m.ContainsKey("cid") && cid == null) why = "cid must be a plain string";
                 if (why == null && !On) why = type + " is off (accountChecks = off in config.txt)";
-                if (why == null) why = type == "accountTrade" ? AccountTrade(m) : AccountArchive(m);
+                if (why == null) why = type == "accountTrade" ? AccountTrade(m) : type == "accountUnarchive" ? AccountUnarchive(m) : AccountArchive(m);
                 if (why != null) client.Send(Reject(cid, why));
             }
             catch (Exception ex)
@@ -396,10 +533,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Mem) if (readError != null) return ReadFailedText + "; nothing was changed";
             Account a = Find(name);
             if (a == null && !Known(name)) return "no account " + name;
-            if (a != null && !Listed(a.Name) && !Archived(a.Name)) return "account " + name + " is not watched (accounts in config.txt)";
             if (a != null) name = a.Name;
             string gw;
-            if (Archived(name)) return name + " is archived; it comes back unchecked when it connects again";
+            if (Archived(name)) return name + " is archived (hidden); Show it first, it comes back unchecked";
             if (Gone(name, out gw)) return name + " is gone (" + gw + "); it can be checked once it is back";
             string status = a != null ? StatusOf(a) : "not in NinjaTrader";
             if (status != "Connected") return name + " is not connected (" + status + ")";
@@ -425,22 +561,114 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
+        // Hide (0.5.1): accepted for any account, Gone or not, that is flat with no working orders (as NinjaTrader shows it now, or
+        // as ChartBridge last saw it when NinjaTrader does not list it) and is not the bot's, a copier leader or follower, or an
+        // agent's. A hidden account stays archived, in NinjaTrader and healthy or not, until Show (accountUnarchive).
         private static string AccountArchive(Dictionary<string, string> m)
         {
             string name = ChartBridgeV3.Str(m, "account"), confirm = m.ContainsKey("confirm") ? m["confirm"] : null;
             if (name == null) return "accountArchive needs account (a plain string)";
             if (confirm != "true") return "Archive needs confirm: true (the page asks Anthony first)";
             lock (Mem) if (readError != null) return ReadFailedText + "; nothing was changed";
+            if (ChartBridgeOrders.IsNeverTradable(name)) return name + " is never listed (Backtest and Playback)";
             Account a = Find(name);
             if (a != null) name = a.Name;
             else lock (Mem) { Rec r; if (Recs.TryGetValue(name, out r)) name = r.Name; }
             if (Archived(name)) return name + " is archived already";
-            string gw;
-            if (!Gone(name, out gw)) return (Known(name) || a != null ? name + " is not gone; only a gone account can be archived" : "no account " + name);
+            if (a == null && !Known(name)) return "no account " + name;
+            string why = HideRefusal(name, a);
+            if (why != null) return why;
             double now = ChartBridgeTime.NowUtcMs();
             SetState(name, "archived", now);
             NoteChange(name, "archived", "by the page");
             AfterCheckmark();
+            return null;
+        }
+
+        // Show (0.5.1): an archived account back, active and unchecked. It is listed once it has been seen Connected this session.
+        private static string AccountUnarchive(Dictionary<string, string> m)
+        {
+            string name = ChartBridgeV3.Str(m, "account");
+            if (name == null) return "accountUnarchive needs account (a plain string)";
+            lock (Mem) if (readError != null) return ReadFailedText + "; nothing was changed";
+            Account a = Find(name);
+            lock (Mem) { Rec r; if (Recs.TryGetValue(name, out r)) name = r.Name; else if (a != null) name = a.Name; }
+            if (!Archived(name)) return Known(name) || a != null ? name + " is not archived" : "no account " + name;
+            double now = ChartBridgeTime.NowUtcMs();
+            SetState(name, "off", now);
+            lock (Mem)
+            {
+                Live l;
+                if (Lives.TryGetValue(name, out l)) { l.Gone = false; l.GoneWhy = null; l.GoneSince = 0; l.BadSince = -1; }
+            }
+            NoteChange(name, "shown", "by the page; unchecked");
+            AfterCheckmark();
+            return null;
+        }
+
+        // Why this account may not be hidden now, or null.
+        private static string HideRefusal(string name, Account a)
+        {
+            if (a != null ? Busy(a) : LastSeen(name) == "busy")
+                return name + (a != null ? " has" : " was last seen with") + " a position or working orders: only a flat account can be hidden (exits always work)";
+            string claim = ClaimWhy(name);
+            return claim != null ? claim + ": it cannot be hidden" : null;
+        }
+
+        private static string LastSeen(string name) { lock (Mem) { Live l; return Lives.TryGetValue(name, out l) && l.Busy ? "busy" : null; } }
+
+        // A position on any instrument or any order not filled, cancelled or rejected. Unreadable: busy (the safe side).
+        private static bool Busy(Account a)
+        {
+            try
+            {
+                List<Position> ps;
+                lock (a.Positions) ps = a.Positions.ToList();
+                foreach (Position p in ps) if (p != null && p.MarketPosition != MarketPosition.Flat && p.Quantity != 0) return true;
+                List<Order> os;
+                lock (a.Orders) os = a.Orders.ToList();
+                foreach (Order o in os) if (o != null && o.OrderState != OrderState.Filled && o.OrderState != OrderState.Cancelled && o.OrderState != OrderState.Rejected) return true;
+                return false;
+            }
+            catch (Exception) { return true; }
+        }
+
+        // Whose this account is, for Hide and the conversion: the bot's (on: its memory; off: bot-account.txt, Sim101 when there is
+        // none), a copier leader or follower (on or off: copier.txt), or an agent's chosen account (agent-<id>-account.txt, on
+        // or off). Null when none; a file that cannot be read counts as a claim (ChartBridge cannot tell). Reads files: never
+        // on NinjaTrader's thread.
+        private static string ClaimWhy(string name)
+        {
+            string bot;
+            try { bot = ChartBridgeBot.AccountForAgents(); } catch (Exception) { bot = null; }
+            if (bot == null) return "bot-account.txt cannot be read, so ChartBridge cannot tell whether " + name + " is the bot's account";
+            if (bot.Equals(name, StringComparison.OrdinalIgnoreCase)) return name + " is the bot's account (the Bot tab)";
+            string copier;
+            try { copier = ChartBridgeCopier.AgentAccountRefusal(name); } catch (Exception ex) { copier = "copier.txt could not be read (" + ex.Message + "), so ChartBridge cannot tell whether " + name + " is the copier's"; }
+            if (copier != null) return copier;
+            string id = ChartBridgeAgents.AgentOfAccount(name);
+            if (id != null) return name + " is agent " + id + "'s account (the Agent tab)";
+            try
+            {
+                string folder = ChartBridgeConfig.Folder;
+                if (!Directory.Exists(folder)) return null;
+                foreach (string f in Directory.GetFiles(folder, "agent-*-account.txt"))
+                {
+                    string file = Path.GetFileName(f), agent = file.Substring(6, file.Length - 6 - "-account.txt".Length), found = null;
+                    bool bad = false;
+                    foreach (string raw in File.ReadAllLines(f))
+                    {
+                        string line = raw.Trim();
+                        if (line.Length == 0 || line.StartsWith("#")) continue;
+                        string[] p = line.Split('\t');
+                        if (found == null && p.Length == 2 && p[0] == "account" && p[1].Length > 0) found = p[1];
+                        else { bad = true; break; }
+                    }
+                    if (bad || found == null) return file + " cannot be understood, so ChartBridge cannot tell whether " + name + " is agent " + agent + "'s account";
+                    if (found.Equals(name, StringComparison.OrdinalIgnoreCase)) return name + " is agent " + agent + "'s account (the Agent tab)";
+                }
+            }
+            catch (Exception ex) { return "the agent account files could not be read (" + ex.Message + "), so ChartBridge cannot tell whether " + name + " is an agent's"; }
             return null;
         }
 
@@ -476,8 +704,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 List<Account> all = Snapshot();
                 bool changed = false;
                 bool track;
+                foreach (Account a in all) if (a.Name != null && !ChartBridgeOrders.IsNeverTradable(a.Name) && ConnectionText(a) == "connected") MarkSeen(a.Name, now);   // 0.5.1
                 lock (Mem) track = loaded && readError == null;
-                if (On && track) changed = CheckGone(all, now);
+                if (On && track) changed = Convert(all, now) | Prune(now) | CheckGone(all, now);
                 Save();
                 FlushLog();
                 if (changed) AfterCheckmark();
@@ -499,22 +728,78 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
-        // Every account to list or watch for Gone: the watched accounts NinjaTrader has, and the ones accounts.txt knows
-        // (an account whose connection is not up is not always in Account.All; it shows as disconnected).
+        // Every account to list or watch for Gone: 0.5.1, those seen Connected this NinjaTrader session, whether NinjaTrader lists
+        // them now or not (an account whose connection is not up is not always in Account.All; it shows as disconnected).
+        // Accounts NinjaTrader remembers but never connected this session are never listed, nor written to accounts.txt.
         private static List<string> Names(List<Account> all, bool withArchived)
         {
             HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Account a in all) if (a.Name != null && !ChartBridgeOrders.IsNeverTradable(a.Name) && ChartBridgeConfig.AccountAllowed(a.Name)) names.Add(a.Name);
-            lock (Mem) foreach (Rec r in Recs.Values) if (withArchived || r.State != "archived") names.Add(r.Name);
+            foreach (Account a in all) if (a.Name != null && !ChartBridgeOrders.IsNeverTradable(a.Name) && SeenThisSession(a.Name)) names.Add(a.Name);
+            lock (Mem) foreach (Rec r in Recs.Values) if ((withArchived || r.State != "archived") && SeenThisSession(r.Name)) names.Add(r.Name);
             if (!withArchived) names.RemoveWhere(Archived);
             return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
+        // 0.5.1, the one-time conversion of the old accounts line (OldAccountsNote): each account seen Connected this run is looked
+        // at once; one the line does not name, that is not checked and not archived, is hidden ("hidden: not on the old accounts
+        // list") unless Hide would refuse it (then logged why). Returns true when one was hidden.
+        private static bool Convert(List<Account> all, double now)
+        {
+            List<Account> look = new List<Account>();
+            lock (Mem)
+            {
+                if (!converting) return false;
+                foreach (Account a in all)
+                {
+                    if (a.Name == null || ChartBridgeOrders.IsNeverTradable(a.Name) || !EverConnected.Contains(a.Name) || Converted.Contains(a.Name)) continue;
+                    Converted.Add(a.Name);
+                    Rec r;
+                    if (ChartBridgeConfig.OnOldAccounts(a.Name) || (Recs.TryGetValue(a.Name, out r) && r.State != "off")) continue;   // named, checked or archived already: kept exactly
+                    look.Add(a);
+                }
+            }
+            bool changed = false;
+            foreach (Account a in look)
+            {
+                string why = HideRefusal(a.Name, a);   // reads files: outside Mem
+                if (why != null) { NoteChange(a.Name, "not hidden", "not on the old accounts list, but " + why); continue; }
+                SetState(a.Name, "archived", now);
+                NoteChange(a.Name, "hidden", "not on the old accounts list");
+                changed = true;
+            }
+            return changed;
+        }
+
+        // 0.5.1: a plain off record not seen Connected for PruneMs (by accounts-detail.txt, else its changed time in accounts.txt)
+        // is forgotten, logged. Never a trade or archived record, never one seen this session. Once an hour.
+        private static bool Prune(double now)
+        {
+            List<string> gone = new List<string>();
+            lock (Mem)
+            {
+                if (lastPruneMs >= 0 && now - lastPruneMs < PruneEveryMs) return false;
+                lastPruneMs = now;
+                foreach (Rec r in Recs.Values)
+                {
+                    if (r.State != "off" || EverConnected.Contains(r.Name)) continue;
+                    double at;
+                    double last = Math.Max(r.ChangedMs, ConnectedAt.TryGetValue(r.Name, out at) ? at : 0);
+                    if (last >= SessionStartMs || now - last < PruneMs) continue;
+                    gone.Add(r.Name);
+                }
+                foreach (string n in gone) { Recs.Remove(n); Lives.Remove(n); ConnectedAt.Remove(n); }
+                if (gone.Count > 0) { dirty = true; detailDirty = true; }
+            }
+            foreach (string n in gone) NoteChange(n, "forgotten", "off and not seen connected for 30 days");
+            return gone.Count > 0;
+        }
+
         // Gone (PROTOCOL.md "Gone"): disconnected (after it was connected) or disabled for GraceMs without a break. At that
         // moment the pages are told and the change is logged; its checkmark is kept (0.4.2: ChartBridge never clears one) and
-        // entries wait. When it comes back healthy it is listed as active again and trades with its checkmark. An archived
-        // account that comes back healthy returns as active and unchecked (Anthony archived it). Returns true when a state
-        // changed.
+        // entries wait. When it comes back healthy it is listed as active again and trades with its checkmark. 0.5.1: only
+        // accounts seen Connected this session (Names); an archived one stays archived until Show, except that one NinjaTrader
+        // shows with a position or working orders is listed again at once, unchecked (exits need a listed account). Returns
+        // true when a state changed.
         private static bool CheckGone(List<Account> all, double now)
         {
             bool changed = false;
@@ -525,16 +810,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string name = listed;
                 Account a = all.FirstOrDefault(x => x.Name != null && x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
                 string why = BadWhy(name, a);   // NinjaTrader calls, outside Mem
-                bool upNow = a != null && ConnectionText(a) == "connected";
+                bool upNow = a != null && ConnectionText(a) == "connected", busy = a != null && Busy(a);
                 lock (Mem)
                 {
                     Live l;
                     if (!Lives.TryGetValue(name, out l)) Lives[name] = l = new Live();
                     Rec r;
-                    if (!Recs.TryGetValue(name, out r)) { Recs[name] = r = new Rec { Name = name, State = "off", ChangedMs = (long)now }; dirty = true; }   // seen: kept in accounts.txt
+                    if (!Recs.TryGetValue(name, out r)) { Recs[name] = r = new Rec { Name = name, State = "off", ChangedMs = (long)now }; dirty = true; }   // seen Connected: kept in accounts.txt, unchecked
+                    if (a != null) l.Busy = busy;
                     if (r.State == "archived")
                     {
-                        if (why == null && upNow) { r.State = "off"; r.ChangedMs = (long)now; dirty = true; l.Gone = false; l.GoneWhy = null; l.BadSince = -1; changed = true; notes.Add(new[] { name, "back from the archive", "connected again; unchecked" }); }
+                        if (busy)
+                        {
+                            r.State = "off"; r.ChangedMs = (long)now; dirty = true; l.Gone = false; l.GoneWhy = null; l.BadSince = -1; changed = true;
+                            notes.Add(new[] { name, "back from the archive", "NinjaTrader shows a position or working orders on it; unchecked" });
+                            warn.Add(name + " was archived, but NinjaTrader shows a position or working orders on it: it is listed again (unchecked) so its exits work");
+                        }
                         continue;
                     }
                     if (why == null)
@@ -572,9 +863,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // What makes an account Gone now, or null when it is healthy.
         // Lead's default (2026-10-07): Anthony signs the prop accounts in by hand after NinjaTrader opens, so an account that has
-        // not been Connected yet in this ChartBridge run is never Gone for being disconnected: it keeps its saved checkmark, is
-        // listed "not connected yet", and every order to it is refused by the normal gates (not Connected) until it connects.
-        // Once it has been Connected, a drop counts. Disabled counts at first sight, after the grace. NinjaTrader's trailing
+        // not been Connected yet is never Gone for being disconnected: it keeps its saved checkmark and every order to it is
+        // refused by the normal gates (not Connected) until it connects. 0.5.1: it is not listed at all until it has been seen
+        // Connected this NinjaTrader session (Names). Once it has been Connected, a drop counts, and so does disabled, after the
+        // grace. NinjaTrader's trailing
         // drawdown never makes an account Gone (0.4.2, Anthony: its figure drifts once a prop account passes the drawdown
         // lock; the Room column shows it, ChartBridge never acts on it).
         private static string BadWhy(string name, Account a)
@@ -589,6 +881,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- the accounts message
         public static string AccountsJson(List<Account> all, double now)
         {
+            foreach (Account a in all) SeenConnected(a);   // 0.5.1: one Connected now counts at once (never NinjaTrader's thread here)
             StringBuilder b = new StringBuilder("{\"type\":\"accounts\",\"list\":[");
             bool first = true;
             foreach (string name in Names(all, false))
@@ -622,10 +915,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             string ddWhy = yet ? "the account is not connected" : "the account is not connected yet", dlWhy = ddWhy;
             double? room = up ? RoomDrawdown(a, out ddWhy) : null;
             if (up) dlWhy = "NinjaTrader reports the daily loss limit only as the share already used (its Accounts tab), not as dollars left; ChartBridge does not estimate it";
+            string hideWhy;   // 0.5.1: Hide on the page (accountArchive), null when it would be accepted now
+            lock (Mem) hideWhy = !On ? "accountChecks is off" : readError != null ? ReadFailedText : null;
+            if (hideWhy == null) hideWhy = HideRefusal(name, a);
             b.Append("{\"name\":").Append(CbJson.Str(name))
              .Append(",\"sim\":").Append(a != null && IsSim(a) ? "true" : "false")
              .Append(",\"connection\":").Append(CbJson.Str(connection))
-             .Append(",\"notConnectedYet\":").Append(!up && !yet ? "true" : "false")   // lead's default: not Connected since ChartBridge started (keeps its checkmark)
+             .Append(",\"notConnectedYet\":").Append(!up && !yet ? "true" : "false")   // 0.5.1: always false (only accounts seen Connected this session are listed); kept for older pages
              .Append(",\"trade\":").Append(trade ? "true" : "false")
              .Append(",\"tradable\":").Append(!gone && TradableNow(name, connection) ? "true" : "false")
              .Append(",\"state\":").Append(gone ? "\"gone\"" : "\"active\"")
@@ -640,6 +936,8 @@ namespace NinjaTrader.NinjaScript.AddOns
              .Append(",\"roomDrawdownWhy\":").Append(room.HasValue ? "null" : CbJson.Str(ddWhy))
              .Append(",\"roomDailyLoss\":null")
              .Append(",\"roomDailyLossWhy\":").Append(CbJson.Str(dlWhy))
+             .Append(",\"canHide\":").Append(hideWhy == null ? "true" : "false")
+             .Append(",\"hideWhy\":").Append(hideWhy == null ? "null" : CbJson.Str(hideWhy))
              .Append('}');
         }
 
@@ -734,7 +1032,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return "disconnected";
         }
 
-        private static bool WasConnected(string name) { lock (Mem) return name != null && EverConnected.Contains(name); }
+        private static bool WasConnected(string name) { return SeenThisSession(name); }   // 0.5.1: seen Connected this NinjaTrader session
 
         private static bool IsDisabled(string name)
         {
@@ -786,6 +1084,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (FileLock)
             {
+                SaveDetails();
                 string text;
                 lock (Mem)
                 {
@@ -814,6 +1113,38 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 if (alarm) Alarm("accounts.txt could not be saved (" + err + "): the checkmarks are in force now but may not survive a restart; ChartBridge tries again every second");
             }
+        }
+
+        // 0.5.1: accounts-detail.txt, whole via a temp file (under FileLock). A failed save is tried again every second; nothing
+        // else depends on it this run (memory is in force).
+        private static void SaveDetails()
+        {
+            string text;
+            lock (Mem)
+            {
+                if (!loaded || readError != null || !detailDirty) return;
+                StringBuilder b = new StringBuilder(DetailHeader).Append('\n');
+                if (convertedMs >= 0) b.Append("converted\t").Append(((long)convertedMs).ToString(CultureInfo.InvariantCulture)).Append('\n');
+                foreach (KeyValuePair<string, double> kv in ConnectedAt.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+                    if (Recs.ContainsKey(kv.Key)) b.Append("connected\t").Append(((long)kv.Value).ToString(CultureInfo.InvariantCulture)).Append('\t').Append(kv.Key).Append('\n');
+                text = b.ToString();
+                detailDirty = false;
+            }
+            try
+            {
+                Directory.CreateDirectory(ChartBridgeConfig.Folder);
+                string tmp = DetailPath + ".tmp";
+                File.WriteAllText(tmp, text);
+                if (File.Exists(DetailPath)) File.Replace(tmp, DetailPath, null); else File.Move(tmp, DetailPath);
+            }
+            catch (Exception ex)
+            {
+                bool first;
+                lock (Mem) { first = !detailSaveFailed; detailSaveFailed = true; detailDirty = true; }
+                if (first) ChartBridgeServer.Log("accounts-detail.txt could not be saved (" + ex.Message + "); trying again every second");
+                return;
+            }
+            lock (Mem) detailSaveFailed = false;
         }
 
         // One Output line now, one accounts.log line when the log is next flushed (off NinjaTrader's thread).

@@ -117,8 +117,8 @@ test('bars: the fills queue\'s rules (file first, atomic, 10 s, deskUrl, set asi
   assert.match(bars, /public static int TickMs = 10000;/, 'retried every 10 s');
 });
 
-test('bars: ChartBridge.cs hooks it in (config, start, stop, /diag) and runs its requests through the gate; version 0.5.0', () => {
-  assert.match(main, /public const string Version = "0\.5\.0";/);
+test('bars: ChartBridge.cs hooks it in (config, start, stop, /diag) and runs its requests through the gate; version 0.5.1', () => {
+  assert.match(main, /public const string Version = "0\.5\.1";/);
   assert.match(src, /^\/\/ ChartBridge 0\.3\.8 for NinjaTrader 8/);
   assert.match(main, /AllowOrigins = new List<string>\(\);\s*ChartBridgeBars\.ResetConfig\(\);/);
   assert.match(main, /else if \(ChartBridgeBars\.ReadConfig\(key, val\)\) \{ \}[^\n]*\n\s*else ChartBridgeOrders\.ReadConfig\(key, val\);/);
