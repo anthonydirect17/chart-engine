@@ -165,7 +165,7 @@ test('bracket upkeep runs even with trading off; pages hear only about the accou
   // 0.4.0: a v2 page (no client message) keeps v2's scope: the tradable accounts only
   const acc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
   assert.match(acc, /public static bool Seen\(string name\) \{ return ChartBridgeOrders\.AccountTradable\(name\) \|\| \(Listed\(name\) && AnyV3Trader\(\)\); \}/);
-  assert.match(acc, /if \(IsV3\(c\)\) \{ if \(listed\) [^\n]*\}\s*else if \(tradable\) c\.Send\(json\);/);
+  assert.match(acc, /if \(IsV3\(c\)\) \{ if \(listed\) [^\n]*\}\s*else if \(tradable\) ChartBridgeOrders\.NoteAndSend\(c, account, json, isOrder, o, root\);/);   // 0.5.1: noted for an open snapshot
   assert.match(acc, /return all\.Where\(a => v3 \? Listed\(a\.Name\) : ChartBridgeOrders\.AccountTradable\(a\.Name\)\)\.ToList\(\);/);
 });
 

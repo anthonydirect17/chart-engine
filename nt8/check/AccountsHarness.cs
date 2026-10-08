@@ -698,6 +698,19 @@ public static class AccountsHarness
     }
 
     // ------------------------------------------------------------ 0.5.1: connected accounts only; Hide and Show; pruning; the one-time conversion
+    // The orders a page keeps, as the pages do: replaced on "orders", merged by id on "order" (id to state).
+    static Dictionary<string, string> PageOrders(List<string> msgs)
+    {
+        Dictionary<string, string> d = new Dictionary<string, string>();
+        System.Text.RegularExpressions.Regex one = new System.Text.RegularExpressions.Regex("\\{\"type\":\"order\",\"id\":\"([^\"]+)\"[^{}]*?\"state\":\"([^\"]+)\"");
+        foreach (string m in msgs)
+        {
+            if (m.StartsWith("{\"type\":\"orders\"")) d.Clear();
+            foreach (System.Text.RegularExpressions.Match mm in one.Matches(m.Replace("{\"type\":\"orders\",\"list\":[", "")))
+                d[mm.Groups[1].Value] = mm.Groups[2].Value;
+        }
+        return d;
+    }
     static Account NewOn(string name, ConnectionStatus st) { Account a = new Account { Name = name, Provider = Provider.Rithmic, Connection = new Connection { Status = st } }; Account.All.Add(a); return a; }
     static string Log_() { return File_("accounts.log") ?? ""; }
     static bool ArchivedNow(string name) { return Accounts().Contains("{\"name\":\"" + name + "\",\"at\":"); }
@@ -1034,7 +1047,7 @@ public static class AccountsHarness
         Order placed = null;
         bool fired = false;
         string idOld = IdOf(ostop);   // taken now: a done order's id is forgotten after its last message
-        ChartBridgeOrders.ScopeAgainHook = () =>
+        ChartBridgeOrders.SnapshotHook = () =>
         {
             if (fired) return;
             fired = true;
@@ -1045,7 +1058,7 @@ public static class AccountsHarness
         };
         sent.Clear();
         Send(page, Show("TEST-HID-1"));
-        ChartBridgeOrders.ScopeAgainHook = null;
+        ChartBridgeOrders.SnapshotHook = null;
         Dictionary<string, string> pageOrders = new Dictionary<string, string>();   // id to state, as a page keeps them
         System.Text.RegularExpressions.Regex one = new System.Text.RegularExpressions.Regex("\\{\"type\":\"order\",\"id\":\"([^\"]+)\"[^{}]*?\"state\":\"([^\"]+)\"");
         foreach (string m in sent)
@@ -1058,6 +1071,46 @@ public static class AccountsHarness
         pageOrders.TryGetValue(idOld, out sOld); pageOrders.TryGetValue(IdOf(placed), out sNew); pageOrders.TryGetValue(IdOf(nlim), out sLim);
         Check(fired && sOld == "cancelled" && sNew == "working" && sLim == "working", "0.5.1 re-review: interleaved update for another account: no ghost (its cancelled stop stays cancelled: " + sOld + "), nothing lost (its new stop: " + sNew + "), the shown account's order: " + sLim);
         nlim.OrderState = OrderState.Cancelled; placed.OrderState = OrderState.Cancelled;
+        // 0.5.1 re-review 2: the shown account's own order changes between building its message and queuing it: the latest lands last
+        Send(page, Hide("TEST-HID-1"));
+        Order own = Working(h1, OrderAction.Buy, OrderType.Limit, 24890, 0, "own limit on the shown account");
+        string idOwn = IdOf(own);
+        bool firedOwn = false;
+        ChartBridgeOrders.SnapshotHook = () =>
+        {
+            if (firedOwn) return;
+            firedOwn = true;
+            own.OrderState = OrderState.Cancelled;
+            ChartBridgeOrders.OnOrderUpdate(h1, new OrderEventArgs { Order = own });
+        };
+        sent.Clear();
+        Send(page, Show("TEST-HID-1"));
+        ChartBridgeOrders.SnapshotHook = null;
+        string sOwn = PageOrders(sent).TryGetValue(idOwn, out sOwn) ? sOwn : null;
+        Check(firedOwn && sOwn == "cancelled", "0.5.1 re-review 2: a newly listed account's own order cancelled between build and send: the page ends with it cancelled (" + sOwn + "), no ghost");
+        // the sign-in list: an order cancelled and a new stop placed between building the list and queuing it
+        Order sstop = Working(other, OrderAction.Sell, OrderType.StopMarket, 0, 24970, "stop before sign-in");
+        ChartBridgeAccounts.Tick(tr + 4000);
+        string idS = IdOf(sstop);
+        Order snew = null;
+        bool firedSign = false;
+        ChartBridgeOrders.SnapshotHook = () =>
+        {
+            if (firedSign) return;
+            firedSign = true;
+            sstop.OrderState = OrderState.Cancelled;
+            ChartBridgeOrders.OnOrderUpdate(other, new OrderEventArgs { Order = sstop });
+            snew = Working(other, OrderAction.Sell, OrderType.StopMarket, 0, 24965, "stop placed during sign-in");
+            ChartBridgeOrders.OnOrderUpdate(other, new OrderEventArgs { Order = snew });
+        };
+        sent.Clear();
+        SignIn(page);
+        ChartBridgeOrders.SnapshotHook = null;
+        Dictionary<string, string> po = PageOrders(sent);
+        string sS, sN;
+        po.TryGetValue(idS, out sS); po.TryGetValue(snew != null ? IdOf(snew) : "", out sN);
+        Check(firedSign && sS == "cancelled" && sN == "working", "0.5.1 re-review 2: sign-in: an order cancelled meanwhile stays cancelled (" + sS + "), a stop placed meanwhile is kept (" + sN + ")");
+        snew.OrderState = OrderState.Cancelled;
         Account.All.Remove(other);
         Account.All.Remove(h1); Account.All.Remove(f1);
         // review repro B: a new account's first sighting saved even when a page action's save comes before the check makes its record
