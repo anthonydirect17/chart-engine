@@ -4,10 +4,11 @@
 // answered by the test (a made-up firm's limits and commission).
 //
 //   1. every switch on: the Accounts tab with the checkmarks (one checked from the page), EVAL-B Gone after the grace and
-//      archived through the in-page confirm (Keep first), FUNDED-C amber from The Desk's trailing drawdown and the chart's
+//      hidden through the in-page confirm (Keep first), shown again from the Hidden list and hidden again; Hide on an active
+//      account once flat (FUNDED-C) and Show (ChartBridge 0.5.1); no Hide on the bot's account or a follower, FUNDED-C amber from The Desk's trailing drawdown and the chart's
 //      warning on it, Positions, Working orders with Cancel, Today's trades (gross and net), the Copier tab (Re-arm, a
 //      follower's quantity), the Log; the Quote board's rows NQ, ES, then YM to ZB with ZN and ZB in 32nds
-//   2. every off line written (--v3-off=...; the switches are on by default since 2026-10-07): no checkbox, no Archive, no Cancel, no Copier tab, no box or list at all on the page
+//   2. every off line written (--v3-off=...; the switches are on by default since 2026-10-07): no checkbox, no Hide or Show, no Cancel, no Copier tab, no box or list at all on the page
 //   3. ChartBridge 0.3.8 (no v3): the page says what it needs, opens no connection of its own; the Quote board NQ and ES only
 // Screenshots in test/out/accounts-*.png.
 import { chromium } from 'playwright';
@@ -70,7 +71,7 @@ const AP = '.ws-panel[data-id="ap"]';
 const tab = async (page, id) => { await page.click(`${AP} .ac-tab[data-tab="${id}"]`); await wait(150); };
 const rows = (page, sel) => page.$$eval(`${AP} ${sel} .gr-row:not(.gr-h)`, els => els.map(e => ({ k: e.dataset.k, text: e.textContent, cls: e.className })));
 const quoteRows = page => page.$$eval('.ws-panel[data-id="qb"] [data-root]', els => els.map(e => ({ root: e.dataset.root, cls: e.className, last: e.querySelector('[data-q="last"]').textContent, chg: e.querySelector('[data-q="chg"]').textContent })));
-const controlsOnPage = page => page.$$eval(`${AP} .ac-list input, ${AP} .ac-list select, ${AP} .ac-list button[data-act="archive"], ${AP} .ac-list button[data-act="cancel"], ${AP} .ac-list button[data-act="rearm"], ${AP} .ac-list button[data-act="mode"]`, els => els.length);
+const controlsOnPage = page => page.$$eval(`${AP} .ac-list input, ${AP} .ac-list select, ${AP} .ac-list button[data-act="archive"], ${AP} .ac-list button[data-act="unarchive"], ${AP} .ac-list button[data-act="cancel"], ${AP} .ac-list button[data-act="rearm"], ${AP} .ac-list button[data-act="mode"]`, els => els.length);
 
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 try {
@@ -106,20 +107,32 @@ try {
   await page.screenshot({ path: path.join(out, 'accounts-1-accounts.png') });
   await page.selectOption('.ws-panel[data-id="tk"] [data-tk-id="oAcct"]', 'Sim101');
   await until(() => page.$$eval('.ws-limit', els => els.every(e => !e.textContent)), 'the warning goes with an account not near its limit');
-  // Gone and Archive (the in-page confirm)
+  // Gone and Hide (the in-page confirm), then Show (ChartBridge 0.5.1)
   await until(() => page.$(`${AP} .apg-gone-g [data-k="g|EVAL-B"]`), 'EVAL-B in the Gone list after the grace', 8000);
   check(!(await rows(page, '.apg-acc-g')).some(r => r.k === 'EVAL-B'), 'a Gone account leaves the active rows');
+  const hideButtons = await page.$$eval(`${AP} .apg-acc-g button[data-act="archive"]`, els => els.map(e => e.dataset.id).sort());
+  const canHide = (await v3(PORT)).accounts.list.filter(a => a.state === 'active' && a.canHide).map(a => a.name).sort();
+  check(hideButtons.join() === canHide.join() && !hideButtons.includes('Sim101') && !hideButtons.includes('EVAL-A') && !hideButtons.includes('SIM-F1'), 'Hide shows only on an active account ChartBridge says may be hidden: not the bot\'s Sim101, a copier follower or one with a position or working order (' + (hideButtons.join(', ') || 'none') + ')');
   await page.click(`${AP} button[data-act="archive"][data-id="EVAL-B"]`);
   const ask = await page.$eval(`${AP} .apg-confirm`, e => e.textContent).catch(() => '');
-  check(/Archive EVAL-B\? It leaves every list; its history stays\./.test(ask), 'Archive asks in the page first (' + ask + ')');
+  check(/Hide EVAL-B\? It leaves every list until you Show it; its history stays\./.test(ask), 'Hide asks in the page first (' + ask + ')');
   check((await page.$('dialog[open]')) === null, 'no browser dialog for it');
   await page.click(`${AP} button[data-act="archive-no"]`);
   check((await v3(PORT)).accounts.archived.length === 0 && (await page.$(`${AP} .apg-confirm`)) === null, 'Keep: nothing sent, the question goes');
   await page.click(`${AP} button[data-act="archive"][data-id="EVAL-B"]`);
   await page.click(`${AP} button[data-act="archive-yes"]`);
   await until(async () => (await v3(PORT)).accounts.archived.some(a => a.name === 'EVAL-B'), 'EVAL-B archived through ChartBridge');
-  await until(async () => /Archived: EVAL-B/.test(await page.$eval(AP, e => e.textContent)) && !(await page.$(`${AP} [data-k="g|EVAL-B"]`)), 'EVAL-B out of every list, named under Archived');
-  check(true, 'Archive after the confirm: accountArchive with confirm true; EVAL-B leaves the lists');
+  await until(async () => (await page.$(`${AP} .apg-arch-g [data-k="a|EVAL-B"] button[data-act="unarchive"]`)) && !(await page.$(`${AP} [data-k="g|EVAL-B"]`)), 'EVAL-B out of every list, under Hidden with a Show button');
+  check(true, 'Hide after the confirm: accountArchive with confirm true; EVAL-B leaves the lists');
+  await page.screenshot({ path: path.join(out, 'accounts-1b-hidden.png') });
+  await page.click(`${AP} button[data-act="unarchive"][data-id="EVAL-B"]`);
+  await until(async () => { const a = (await v3(PORT)).accounts; return !a.archived.length && a.list.some(x => x.name === 'EVAL-B' && x.trade === false); }, 'Show: EVAL-B back through ChartBridge, unchecked');
+  await until(async () => !(await page.$(`${AP} .apg-arch-g`)) && (await page.$(`${AP} [data-k="g|EVAL-B"], ${AP} .apg-acc-g [data-k="EVAL-B"]`)), 'Show: EVAL-B listed again, the Hidden list gone');
+  check(true, 'Show: accountUnarchive; EVAL-B back in the list, unchecked');
+  await until(() => page.$(`${AP} .apg-gone-g button[data-act="archive"][data-id="EVAL-B"]`), 'EVAL-B Gone again (still disconnected)', 8000);
+  await page.click(`${AP} button[data-act="archive"][data-id="EVAL-B"]`);
+  await page.click(`${AP} button[data-act="archive-yes"]`);
+  await until(async () => (await v3(PORT)).accounts.archived.some(a => a.name === 'EVAL-B'), 'EVAL-B hidden again');
   // Positions
   await tab(page, 'pos');
   const pos = await rows(page, '.apg-pos-g');
@@ -133,6 +146,18 @@ try {
   await page.click(`${AP} button[data-act="cancel"][data-id="${fcOrder.k}"]`);
   await until(async () => !(await rows(page, '.apg-ord-g')).some(r => r.k === fcOrder.k), 'the FUNDED-C order cancelled from the list');
   check(true, 'Cancel from the Working orders tab: cancel with from "list"');
+  await tab(page, 'acc');
+  // Hide on an active, connected account now flat (its order cancelled), then Show; checked again after
+  await page.click(`${AP} .apg-acc-g button[data-act="archive"][data-id="FUNDED-C"]`);
+  const ask2 = await page.$eval(`${AP} .apg-acc-g .apg-confirm`, e => e.textContent).catch(() => '');
+  check(/Hide FUNDED-C\? It leaves every list until you Show it/.test(ask2), 'Hide on an active row asks in the page first (' + ask2 + ')');
+  await page.click(`${AP} .apg-acc-g button[data-act="archive-yes"]`);
+  await until(async () => (await v3(PORT)).accounts.archived.some(a => a.name === 'FUNDED-C') && !(await rows(page, '.apg-acc-g')).some(r => r.k === 'FUNDED-C'), 'FUNDED-C hidden: out of the active rows');
+  await page.click(`${AP} button[data-act="unarchive"][data-id="FUNDED-C"]`);
+  await until(async () => (await rows(page, '.apg-acc-g')).some(r => r.k === 'FUNDED-C') && !(await page.$(`${AP} [data-k="a|FUNDED-C"]`)), 'FUNDED-C shown: back in the active rows');
+  check(!(await page.$eval(`${AP} input[data-act="trade"][data-id="FUNDED-C"]`, e => e.checked)), 'Show brings FUNDED-C back unchecked');
+  await page.click(`${AP} input[data-act="trade"][data-id="FUNDED-C"]`);
+  await until(async () => (await v3(PORT)).accounts.list.find(a => a.name === 'FUNDED-C').trade === true, 'FUNDED-C checked again');
   // Today's trades: a Sim101 round trip in NinjaTrader (the fake's "elsewhere"), gross and net
   await control(PORT, 'elsewhere', { account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'market', qty: 2 });
   await wait(300);

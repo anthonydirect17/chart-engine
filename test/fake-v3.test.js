@@ -115,14 +115,24 @@ test('accounts: tradeAccounts pre-checked on first start; checkmarks gate entrie
   assert.equal(d.desk.acct.get('EVAL-A').state, 'active'); assert.equal(d.desk.acct.get('EVAL-A').trade, true, 'back with its checkmark (0.4.2)');
   assert.ok(d.desk.accounts.includes('EVAL-A'), 'back: tradable again, nothing to tick');
   assert.match(d.take('status').pop().text, /EVAL-A is back \(connected\): its checkmark is kept/);
-  // archive: only a gone account, only with confirm
-  assert.match(reasonOf(d.act({ type: 'accountArchive', account: 'EVAL-A', confirm: true })), /not gone/);
+  // Hide (ChartBridge 0.5.1): any flat account that is not the bot's or the copier's, only with confirm
+  assert.match(reasonOf(d.act({ type: 'accountArchive', account: 'Sim101', confirm: true })), /Sim101 is the bot's account \(the Bot tab\): it cannot be hidden/);
+  assert.equal(d.desk.accountsMsg().list.find(x => x.name === 'Sim101').canHide, false);
+  d.order({ account: 'EVAL-A', kind: 'limit', price: 25000 - 50 });
+  assert.match(reasonOf(d.act({ type: 'accountArchive', account: 'EVAL-A', confirm: true })), /EVAL-A has a position or working orders: only a flat account can be hidden/);
   d.desk.setConnection('FUNDED-C', 'disabled'); d.advance(1100); d.desk.checkGone(); d.take();
   assert.match(reasonOf(d.act({ type: 'accountArchive', account: 'FUNDED-C', confirm: false })), /confirm: true/);
   d.act({ type: 'accountArchive', account: 'FUNDED-C', confirm: true });
   const msg = d.desk.accountsMsg();
   assert.ok(!msg.list.some(x => x.name === 'FUNDED-C')); assert.equal(msg.archived[0].name, 'FUNDED-C');
   assert.ok(d.desk.log.some(l => l.who === 'FUNDED-C' && /archived/.test(l.what)));
+  // Show (0.5.1): back, active and unchecked
+  assert.match(reasonOf(d.act({ type: 'accountUnarchive', account: 'EVAL-B' })), /EVAL-B is not archived/);
+  assert.match(reasonOf(d.act({ type: 'accountUnarchive', account: 'FUNDED-C', confirm: true })), /Unknown key "confirm"/);
+  assert.equal(reasonOf(d.act({ type: 'accountUnarchive', account: 'FUNDED-C' })), null);
+  const shown = d.desk.accountsMsg().list.find(x => x.name === 'FUNDED-C');
+  assert.ok(shown && shown.trade === false && shown.state === 'active' && !d.desk.accountsMsg().archived.length);
+  d.act({ type: 'accountArchive', account: 'FUNDED-C', confirm: true });
   const acc = msg.list.find(x => x.name === 'Sim101');
   for (const k of ['sim', 'connection', 'trade', 'tradable', 'state', 'balance', 'pnlToday', 'positions', 'roomDrawdown', 'roomDrawdownWhy', 'roomDailyLoss', 'roomDailyLossWhy']) assert.ok(k in acc, k);
   assert.equal(acc.roomDailyLoss, null); assert.match(acc.roomDailyLossWhy, /does not report/);
