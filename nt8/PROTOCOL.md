@@ -2245,7 +2245,9 @@ refuses every connection for that id. The secret is never printed (Output window
 **Connection.** `ws://localhost:<port>/agent/<id>`. Loopback only (as every request), **no** `Origin` header (any `Origin`:
 403), header `X-ChartBridge-Agent: <secret>` (constant-time compare; wrong or missing: 403), 400 for a non-upgrade, 404 for an
 id not in `agents`, 409 while that id is connected. Ids are independent: two agents connect at once. The first message is
-`agentHello`; anything earlier gets `reject` "send agentHello first". The answer is `welcome`, then `agentState`. Every start
+`agentHello`; anything earlier gets `reject` "send agentHello first". The answer is `welcome`, then `agentState`, then a
+snapshot (contract addition, 2026-10-08): one `position` for each of the agent's roots on its account (a flat one included) and
+one `order` for each working order of the agent's own (entries, stops and targets), after every `agentHello`. Every start
 of ChartBridge puts every agent in `shadow`; `auto` never survives a restart. Heartbeat: any message counts; `beat` at least
 every 2 s when idle. 5 s of silence (or a disconnect, or no connection for 5 s after a start): ChartBridge closes the socket,
 cancels that agent's unfilled entries, expires its open proposals as `not answered`, keeps any position's stop and target and
@@ -2331,9 +2333,10 @@ start over at 18:00 ET (as the bot's).
 position (`page`, which includes orders placed in NinjaTrader itself, `bot`, `copier`, `agent:<id>`). The owner is set by the
 first entry that works or fills on a flat (account, root) with no working entry, and clears when the position is flat by both
 readings and no entry works there. Built (the lead's scope, the ruling's question): while the owner is an agent, every new
-entry from another source is refused ("<account> <root> belongs to agent <id> until it is flat"); an agent's entry is refused
-while the owner is anyone else. Exits always pass: Flatten, cancel, moving or cancelling a stop or target, the legs check, the
-protective exit. Between `page`, `bot` and `copier` the lock changes nothing yet (a separate decision for Anthony).
+entry from another source is refused (from the page: "<account> <root> belongs to agent <id>: use Flatten, or move its stop or
+target"; from the bot, the copier or another agent: "<account> <root> belongs to agent <id> until it is flat"); an agent's entry
+is refused while the owner is anyone else. Exits always pass: Flatten, cancel, moving or cancelling a stop or target, the legs
+check, the protective exit, and a page market order that only reduces (see as built). Between `page`, `bot` and `copier` the lock changes nothing yet (a separate decision for Anthony).
 `agentState.owns` and the page's `agent` strip show it.
 
 **Accounts** (ruling 1). `agentAccount` is refused, in plain words, for the bot's account, the copier's leader or any follower
@@ -2381,13 +2384,18 @@ Where the contract left a detail open, the safest simple choice was taken and is
   as a plan. A socket that sends nothing, or never says hello, is closed after 5 s and frees its id. A second `agentHello`
   gets `welcome` and `agentState` again (name and build updated).
 - **Strict parser** (lead's default): key names at most 40 characters; numbers plain (no sign, no exponent, no leading zero, at
-  most 15 digits and 10 decimals); the rate counts every message but `beat` (notes and subscribe included).
+  most 15 digits and 10 decimals). **The rate is counted first**: every message but `beat` (notes, subscribe, malformed and
+  refused ones included) counts toward the 10 a second before anything else is done with it; one over the rate does nothing
+  but answer `reject` (at most one such `reject` a second).
 - **subscribe** (lead's default): `root` required; `days`, `tickHours` and `sub` whole numbers, the page's defaults when left
   out and clamped as the page's (1 to 60, 0 to 48). The subscribed root's trades reach the agent through the seam (held during
   its load, as a page's); every other root's straight. An agent's load counts as a page loading for the one-at-a-time gate.
 - **Check 1** (lead's default): every field present and of its kind (`side` too); `limitPrice` is checked with the kind (check
   3). **Every plan id seen today is used, refused or not.** A refusal for an id already used goes to the pages as its own
-  `agentPlan` and never replaces the plan that id first named (sign-in replay, `lastPlan`).
+  `agentPlan` and never replaces the plan that id first named (sign-in replay, `lastPlan`). Each new id is appended to the day
+  file as one `plan` line (the file is written whole only at the roll and when a trade, an entry or the stand-down changes).
+  Refused plans reach the pages at most once a second per agent: the next one shown says "(and N more refused plans in the
+  second before, not shown)"; every one is still logged and answered to the agent.
 - **Check 2** (lead's default): also trading on (gate 1), the account listed by NinjaTrader (an account it no longer lists is
   refused), Connected, not Gone, and the account not clashing (below).
 - **Check 3** (lead's default): `root` is compared upper-cased, and must be served and not quote only; a `stopLimit` plan is
@@ -2404,25 +2412,49 @@ Where the contract left a detail open, the safest simple choice was taken and is
   `not answered`; NinjaTrader rejecting the entry answers `refused`.
 - **The window** (lead's default): outside `entryFrom` to `entryUntil` no agent entry works (before `entryFrom` too) and an
   open proposal expires. After a restart an entry whose expiry is not on record is cancelled at once; the expiries and the
-  plan ids are kept in the day file (`plan<TAB><id>`, `entry<TAB><tag><TAB><expiry UTC ms>`).
+  plan ids are kept in the day file (`plan<TAB><id>`, `entry<TAB><tag><TAB><expiry UTC ms>`). An `entry` line whose order
+  NinjaTrader no longer lists is dropped when the day file is read and at the roll.
+- **Every start is shadow, and shadow cancels** (review A-S7): every agent starts in `shadow`, and the backstop below cancels any
+  agent entry still working from before the restart at the first pass, whatever its expiry.
+- **The backstop** (review A-S2): every pass (500 ms) cancels any working agent entry while that agent is killed, in `shadow` or
+  stood down, or outside its window, however it came to be working. The page's `agentKill`, `agentMode`, `agentAccount` and
+  `agentRules` wait for the agent's placing gate, so none of them lands between a plan's checks and its order; the order goes
+  to the account the checks validated.
+- **A cancel not confirmed** (review A-S1): an agent entry's cancel is sent again every 3 s while NinjaTrader still lists the
+  order as working (each send in its own try; a send that throws is logged and tried again); from the second try the pages
+  get a `status` warning ("the cancel of its entry ... was not confirmed in 3 s ... check NinjaTrader").
+- **The order path checks again** (review A-N4, defense in depth): `PlaceOrderLocked` refuses an agent entry outside its window,
+  while killed, in shadow or stood down, and a stop-limit whose limit is more than 20 ticks from its stop, whatever called it.
 - **Modes** (lead's default, as the bot): leaving `copilot` ends open proposals `not answered`; leaving `auto` cancels the
   unfilled entries; the mode survives a heartbeat loss (only a start resets it); `auto` needs the account tradable and not
   clashing.
 - **Kill** (lead's default): on, with one click: the unfilled entries cancelled and the proposals `not answered`; the agent's
   own `flatten` refused; the flat time still runs. Off needs the page's confirm (the page's side).
-- **The flatten** (lead's default): per root the agent owns (or has orders working on), from `flatAt` until 18:00 ET. Every
+- **The flatten** (lead's default): per root the agent owns (or has orders working on), from `flatAt` until the next
+  `entryFrom` (after 18:00 ET too: a position held overnight is flattened by its rules, "held a position outside its trading
+  hours"). If the account is missing from NinjaTrader's list the job is kept, the pages get the NOT FLAT error every 10 s
+  ("account not listed by NinjaTrader"), and the job goes on when the account is back, after 18:00 included (review A-S6). Every
   order that may fill on that contract of its account is cancelled (again every 3 s until NinjaTrader confirms each); then,
   under the order lock, with both position readings agreeing and every fill through, what it holds is closed at market as
   `CB#<tag> ag:<id> flat` (readings apart 3 s: the smaller, never more than either shows; a close that ends unfilled is sent
   again 3 s later). On a pair the agent does not own only its own orders are cancelled and no position is ever closed. The
   `info` and the `error` go to every signed-in page (v2 pages too). The agent's own `flatten` (auto) is the same job.
 - **The owner, as built** (lead's default): an agent owns (account, root) while its entry may fill there, while its trade is
-  open there (followed from the executions, as the bot's), and from its first entry until the pair is flat by both readings
-  with no entry working; after a restart, its day file's open trade with a position there. The check is in `PlaceOrderLocked`
+  open there (followed from the executions, as the bot's), while its own stop or target works there with a position by either
+  reading (also after a restart, by name), and from its first entry until the pair is flat by both readings with nothing of the
+  agent working and no fill NinjaTrader shows ahead of its event (review A-N1). That last lock is checked and cleared every pass.
+  An open trade record counts only in its own session and only while its entry or legs are listed or the executions follow it;
+  otherwise it is dropped with a log line (reviews A-S4, B-S2), so a record can never make the agent own a position it did not
+  place. An unowned pair's flatten only ever cancels the agent's own entry and legs (review A-N2). The check is in `PlaceOrderLocked`
   right after the account and the instrument are found (the page, Order Strategies, the bot and every agent) and in the
   copier's `Eligible` (a skip labelled `agent`).
-- **A page order that only reduces** the agent's position passes the owner lock as an exit (lead's default): no bracket, no
-  strategy, the other side of the position by both readings, at most the smaller of them.
+- **A page order that only reduces** the agent's position passes the owner lock as an exit (lead's default, review A-S5): a
+  MARKET order only, no bracket, no strategy, the other side of the position by both readings, at most the smaller of them. A
+  resting page limit, stop or MIT on the agent's pair is refused ("<account> <root> belongs to agent <id>: use Flatten, or move
+  its stop or target"): it could outlive the position and open one with no stop.
+- **A part-filled entry** (review A-S3): if the first part's trade closes (its target or stop) and the rest of the entry then
+  fills, the rest is its own trade (`<tag>-2`, then `-3`), counted in `trades`, `losses`, `pnlToday` and `maxLosses`; the day
+  file keeps which contracts each trade covered (`span<TAB><key><TAB><from><TAB><to>`), so a restart gives the same trades.
 - **Page edits of an agent's entry** (lead's default): `plan` may set new distances of 1 or more, never remove the stop or the
   target (null or 0: "an agent's entry always has a stop and a target"); `change` of its price is allowed (gate 5); legs,
   Flatten and cancel always.
@@ -2433,7 +2465,8 @@ Where the contract left a detail open, the safest simple choice was taken and is
   never stops Anthony choosing Sim101 for the bot or the copier. Such an agent trades Sim101 only while nothing else uses it.
 - **Account clashes** (lead's default): the bot's account and the copier's leader and followers count whether or not the bot
   and copier switches are on (read from `bot-account.txt` and `copier.txt` when off; a file that cannot be understood counts
-  as a clash). A clash stands the AGENT down in plain words ("Sim101 is also the bot's account: choose an account for agent
+  as a clash). Both files are read on ChartBridge's timer (when their time stamp changes), never on a NinjaTrader event
+  thread; a `copier.txt` that cannot be read keeps the last good copy for one pass and counts as a clash from the second. A clash stands the AGENT down in plain words ("Sim101 is also the bot's account: choose an account for agent
   manrae on the Agent tab"); the bot and the copier are left as they were. The moment the bot or the copier is set to the
   account an agent sits on, its plans are refused at check 2, its unfilled entries are cancelled and its open proposals
   expire; an open position keeps its stop and target and the flat time still applies. Between agents: a chosen account
@@ -2443,8 +2476,12 @@ Where the contract left a detail open, the safest simple choice was taken and is
 - **agentRules** (lead's default): roots from NQ, MNQ, ES and MES only (a root needs a hard ceiling); a `maxQty<ROOT>` left out
   for a chosen root is its hard ceiling; for a root not chosen only 0 is accepted. In the rules file a key left out keeps its
   default and a root without a `maxQty` line gets its ceiling. A rules change never lifts a loss stand-down for that day; the
-  18:00 ET roll resets trades, losses, the stand-down and plan ids. The loss stand-down is kept in the day file
-  (`standDown<TAB><why>`), so a restart keeps it.
+  18:00 ET roll resets trades, losses, the stand-down and plan ids, and drops ended proposals (at most 50 ended ones are kept
+  between rolls). The loss stand-down is kept in the day file (`standDown<TAB><why>`), so a restart keeps it.
+- **A start with a position** (review A-N5): 5 s after a start, an agent that owns a pair (its open trade, or its legs with a
+  position) gets a `status` `error` to the pages ("holds a position or orders ... since ChartBridge started ... check
+  NinjaTrader"); outside its trading hours it is flattened by its rules at once. A rules file that cannot be read gives the
+  default times and makes the flatten look at all four roots an agent may trade (NQ, MNQ, ES, MES).
 - **The `rules` object** (lead's default): `roots` a list of strings, `maxQty` an object, times as `"HH:MM"`, `maxTrades` and
   `maxLosses` null for none.
 - **Page messages** (lead's default): signed-in v3 pages only; every one counts in gate 7, `agentSeen` included.
@@ -2452,8 +2489,12 @@ Where the contract left a detail open, the safest simple choice was taken and is
   50 plans.
 - **What the agent gets** (lead's default): `order` as a v2 page gets it (no `by`, no `tradable`), `exec` only for its own
   orders, `position` for its account on its roots. Warnings of the heartbeat and the kill switch go to v3 pages (as the bot's).
-- **Fills `by`** (lead's default): the fill's order is looked up by its id on its account; legs and the flat close are known
-  by their entry's tag (learned at placement, from every order event, and by a scan of the accounts every 2 s).
+- **Fills `by`** (lead's default): the execution's own order is used; only without one is the order looked up by its id on its
+  account. Legs and the flat close are known by their entry's tag (learned at placement, from every order event, and by a scan
+  of the accounts every 2 s).
+- **Robustness** (review nits): a connection's end always closes its socket (the agent's cleanup runs in `finally`); an
+  exception in an agent's message loop is logged with its type and message; the page sign-in hook runs in its own `try`; with
+  the channel off the tick loop and the page's reduce check do no agent work at all.
 - **Recovery** (lead's default): an agent entry is a v2 entry: its `planned_brackets.txt` line if there is one, else the ticks
   in its name. `/diag` `flattenedAt` is the UTC time of the last flatten that ended flat.
 

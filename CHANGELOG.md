@@ -26,6 +26,15 @@ every lead's default in its "as built" list. The chart's own version is unchange
   entries cancelled) and the bot and the copier are left as they were.
 - **Fills to The Desk** carry `by` (`agent:<id>`, `bot` or `copier`) when ChartBridge knows who placed the order; nothing else
   in the fill changes. v3 pages see `by: "agent:<id>"` on an agent's orders and legs.
+- **After two order-path reviews.** A cancel NinjaTrader does not confirm is sent again every 3 s, with a warning from the
+  second try. A backstop cancels any agent entry still working while the agent is killed, in shadow, stood down or outside its
+  window (every start is shadow, so an entry from before a restart goes at once), and the page's kill, mode, account and rules
+  wait for the agent's placing gate. A trade record left open never makes the agent own a position it did not place (current
+  session only, and only while its orders are listed or its executions followed). Only a page MARKET order may reduce an
+  agent's position; resting page orders on its pair are refused ("use Flatten, or move its stop or target"). A flatten whose
+  account leaves NinjaTrader's list keeps saying NOT FLAT and goes on when the account is back. The rest of a part-filled entry
+  that fills after the first part closed is its own trade. The rate is counted before anything else; refused plans reach the
+  pages at most once a second. After every `agentHello` the agent gets its positions and working orders.
 - **Tests.** `nt8/check/AgentHarness.cs` (inside `npm run check:orders`) runs every refusal and every timer; IntegrationHarness
   X13 where the lanes meet; `test/fake-agent.mjs` is a made-up agent client with its test; `test/nt8-agents.test.js` guards the
   source. The bot channel, the copier and every other lane behave as in 0.4.3 except where the contract requires (refusing an

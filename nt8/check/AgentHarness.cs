@@ -1561,7 +1561,8 @@ public static class AgentHarness
         e = PlacedOn(sime, Good(NewId()));
         if (e != null)
         {
-            ((System.Collections.IDictionary)typeof(ChartBridgeAgent).GetField("CancelSent", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M)).Clear();
+            object sent = typeof(ChartBridgeAgent).GetField("CancelSent", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
+            sent.GetType().GetMethod("Clear", Type.EmptyTypes).Invoke(sent, null);   // forget the cancels already sent: only the backstop may act
             typeof(ChartBridgeAgent).GetField("killed", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(M, true);   // killed by any path at all
             Advance(500);
             Check(e.OrderState == OrderState.Cancelled, "RA5: the backstop cancels any working agent entry while the agent is killed");
