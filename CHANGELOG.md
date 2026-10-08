@@ -19,11 +19,11 @@ lead's default.
   understand and use the page (Anthony): no legend of the light, no step captions, no sentences explaining the page; a
   figure not reported says "not reported".
 - **The flowing light:** one slow comet circles the borders of the panels where his attention is (13 s a lap while he
-  decides, 9 s in a trade), with a blurred halo, and those panels glow. Its place and colour come from his real state
+  decides, 9 s in a trade), with a soft halo, and those panels glow. Its place and colour come from his real state
   (`AgentCore.lightState`, from the messages the page already gets): watching cyan, a look violet, a plan or his thinking
   magenta (#c81fe0), his rules being checked gold, placed, filled or a go green; passed or a plan that ended unaccepted
   orange; refused red. In a trade it moves to the chart and the P&L, green at or above zero and red below, and back to the
-  tracker after a flat exit. Pure CSS, one animation per lit panel, worked out again only when a message arrives.
+  tracker after a flat exit. Pure CSS, turned on the compositor (below), worked out again only when a message arrives.
 - **Motion:** only the light and the glow move or fade; the figures, the price, the position, Accept and Reject change at
   once (`docs/MOTION.md` R3). A Motion switch (Full, Off; kept in this browser) and the system's reduced motion stop the
   light and keep the glow, still. The ChartMotion kit is not used on the tab.
@@ -32,8 +32,8 @@ lead's default.
   rules, the proposal and when you saw and answered it, fill and exit details. Only what the channel carries. The same row
   again, Close, or Escape from inside it closes it; no key handler on the page, so the order hotkeys are untouched. It
   never covers an open proposal, keeps its row in sight below it, and a long record scrolls inside it ("more below").
-- **The corner notices** cover nothing of the tab while it is shown: they stack in the chart panel's lower left, above
-  its time axis.
+- **The corner notices** cover nothing of the tab while it is shown: they stack over the chart's lower left, above its
+  time axis, at every width; the workspace's ChartBridge line lies across the chart's top while the tab is shown.
 
 - **The strip:** name, build, connected and the heartbeat's age, mode, the account with its SIM or LIVE mark, position,
   KILLED or STOOD DOWN with why, and "OWNS <account> <root>" while the agent holds the owner lock; the Motion switch and Pop
@@ -45,7 +45,8 @@ lead's default.
   ChartBridge's refusal shows under the button.
 - **Proposals:** side, quantity, root, kind and price, stop and target, risk, setup, confidence, reason, the account, and a
   live countdown to the plan's own expiry; Accept and Reject send `agentAnswer` (`agentSeen` the moment it shows). Accept
-  closes in the last 5 s, when ChartBridge would refuse it. In the tab for the agent shown, in the corner everywhere else.
+  closes in the last 5 s, when ChartBridge would refuse it. In the tab for the agent shown, with every other agent's and
+  the bot's under it in the same panel while the tab is shown; in the corner while it is closed.
 - **One copilot key for the bot and every agent** (`AgentCore.copilotRouter`; `live/bot.js` hands it its proposals): with
   the Agent tab open a key answers the shown agent's proposals only; elsewhere, with an agent proposal open, it answers
   only when exactly one proposal is open in all, and otherwise says "More than one proposal is open: click the one you
@@ -69,8 +70,43 @@ lead's default.
 - The fake ChartBridge speaks the agent channel as ChartBridge 0.5.0 built it (`--agents=demo`, the made-up Demo Agent and
   Sim accounts SIM-AG1 and SIM-AG2): the snapshot after hello, the owner lock, the refused plans' pace, cancels sent again,
   the backstop, the flat hours and the NOT FLAT errors; what it does not model is listed in `docs/AGENT_TAB.md`.
-- Tests: `test/agent.test.js`, the agent part of `test/fake-v3.test.js`, `npm run smoke:agent` (screenshots
-  `test/out/agent-*.png`). The chart draws exactly as in 1.16.0. Page only, no recompile; COMPAT stays at ChartBridge 0.3.2.
+- **After the independent review of fc3101a** (the Agent tab is on the order path: Anthony accepts or rejects there):
+  - Nothing covers the tab's Accept and Reject. Another agent's proposal and the bot's sat in the fixed corner over them
+    (at 1366 x 768, 1600 x 900 and on a phone, and in the pop-out); while the tab is shown the corner is now part of its
+    proposal panel, under the shown agent's own proposals, in the page's flow, each under its own name (their key caps not
+    shown: with the tab open the keys answer the shown agent only). The drawer keeps clear of all of them.
+  - Clicks and the focus are no longer lost: the proposal list was written again on every render (once a second per agent),
+    which took the buttons out of the page (the focus fell to the page, about 3 clicks in 40 were lost, a held press sent
+    nothing); now it is written only when the list or its order changed.
+  - ChartBridge's words under a proposal ("Refused by ChartBridge: ...", "Under 5 s left", "Accept sent. Waiting for
+    ChartBridge.") sit in the sticky foot right above Accept and Reject, in sight at 1366 x 768.
+  - The light is cheap: thin strips along the border each turn a small conic gradient by a transform on the compositor,
+    the halo softened by a mask instead of a 7 px blur, and a colour change crossfades two copies (the glow's colour is a
+    registered property that is not inherited), so nothing is painted again per frame and no colour fade restyles the tab.
+    The same look (look F, 13 s and 9 s laps). The reviewer's measure at 1920 x 1080 in a trade (headless, software
+    rendering): Motion Full frame p95 50 ms before (66.7 ms in the review), 16.8 ms after, the same as Motion Off. A new gate,
+    `npm run perf:agent`.
+  - The decision drawer appears at once (it slid in over prices, risk dollars, P&L and its Close button: R3), and the R3
+    smoke now catches motion inherited from an animated or transitioned ancestor, as on kit-v1.
+  - A double click on the kill switch sends `agentKill` once (a click within 1 s of a kill-on is the same press).
+  - The workspace's ChartBridge line no longer pushes the tab down 46 px (it lies over the chart's top), and a new proposal
+    right after an ended one takes the top at once instead of jumping up 153 px when the ended one goes.
+  - Narrower than 1100 px the notices sat fixed at the bottom left over in-flow buttons; they stay over the chart now, and
+    the right column grows with the proposals instead of running under the footer.
+  - The pop-out names an agent in every ChartBridge status line that says "agent <id>" anywhere, in any case ("... is no
+    longer agent demo's", "agent demo had an open trade ...", "agent demo holds 1 ... with no trade record", "...: agent
+    demo's 1 closed; the rest ...": `AgentCore.statusAgent`). The order ticket uses `AgentCore.pageExitPasses`.
+  - The fake ChartBridge follows ChartBridge 0.5.0 as built at agent-channel 4d4a81f (was fb15822): a cancel not confirmed
+    is an error after 10 tries, then tried every 30 s, never while disconnected, and given up after 30 minutes; the market
+    shut hours (nothing sent, NOT FLAT every 60 s); the market trading in fact before legs are cancelled; the stop placed
+    again; the flatten asking again and its close cap; the lost-trade error; the held refused plan shown within about a
+    second; and the agent's side of contract section 10 (welcome's caps, agentState's session, the snapshot's end,
+    orderName, cbId and role, others' fills on its pair). What it still does not model is listed in `docs/AGENT_TAB.md`.
+  - `npm run smoke:agent` runs at 11:00 New York whatever the time of day (the trail check failed after 15:55 New York),
+    and `npm run smoke:agent-targets` holds the tab's Accept and Reject: never covered, never dropped, never moving.
+- Tests: `test/agent.test.js`, the agent part of `test/fake-v3.test.js`, `npm run smoke:agent` and `smoke:agent-targets`
+  (screenshots `test/out/agent-*.png`), `npm run perf:agent`. The chart draws exactly as in 1.16.0. Page only, no
+  recompile; COMPAT stays at ChartBridge 0.3.2.
 
 ## ChartBridge 0.4.3 (2026-10-07): the copier never crosses zero, copies a fixed quantity, and can have no leader
 

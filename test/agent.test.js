@@ -400,6 +400,34 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 
+test('ChartBridge 0.5.0 as built (agent-channel 4d4a81f): every status line naming an agent is that agent\'s notice', () => {
+  const ids = ['demo', 'demotwo'];
+  /* the texts as nt8/ChartBridgeAgents.cs on origin/agent-channel 4d4a81f writes them (about lines 2339, 2347, 2436, 2584) */
+  const lines = {
+    lost: 'agent demo had an open trade on SIM-AG1 MNQ and its legs are gone; ChartBridge no longer treats the position as the agent\'s: flatten or protect it by hand',
+    noRecord: 'agent demo holds 1 on SIM-AG1 MNQ with no trade record (ChartBridge restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader',
+    noLonger: 'SIM-AG1 MNQ is no longer agent demo\'s: ChartBridge did not close it',
+    rest: 'SIM-AG1 MNQ: agent demo\'s 1 closed; the rest (2) is not agent demo\'s: ChartBridge did not close it',
+    flatTime: 'demo flattened at 15:55 by its rules',
+    prefixed: 'Agent demo: NOT FLAT 10 s after its flatten (flat time): MNQ on SIM-AG1 still shows 1; act in NinjaTrader now',
+    cancel: 'Agent demo: the cancel of its entry CB#o12 ag:demo s16 t32 on SIM-AG1 is still not confirmed after 10 tries (the kill switch); ChartBridge tries again every 30 s; cancel it in NinjaTrader now',
+  };
+  for (const [k, t] of Object.entries(lines)) assert.equal(AC.statusAgent(t, ids), 'demo', k + ': ' + t);
+  assert.equal(AC.statusAgent('SIM-AG2 NQ is no longer agent demotwo\'s: ChartBridge did not close it', ids), 'demotwo', 'never the shorter id inside a longer one');
+  assert.equal(AC.statusAgent('AGENT DEMO had an open trade', ids), 'demo', 'any case');
+  assert.equal(AC.statusAgent('demonstration of nothing', ids), '');
+  assert.equal(AC.statusAgent('EVAL-B is gone (disconnected for 10 s): entries wait until it is back', ids), '', 'an account line is no agent\'s');
+  assert.equal(AC.statusAgent(null, ids), '');
+});
+
+test('the kill switch on: a second press within 1 s is the same press (a double click sends agentKill once)', () => {
+  assert.equal(AC.KILL_REPEAT_MS, 1000);
+  assert.ok(!AC.killOnRepeat(undefined, 5000), 'the first press');
+  assert.ok(AC.killOnRepeat(5000, 5000) && AC.killOnRepeat(5000, 5999), 'within 1 s');
+  assert.ok(!AC.killOnRepeat(5000, 6000), '1 s later it is a new press');
+  assert.ok(!AC.killOnRepeat(5000, 4000), 'a clock gone back never blocks the kill switch');
+});
+
 test('1.17.0 as built: who owns a pair, the page exit that passes, ChartBridge\'s words; the feed shows a held count as given', () => {
   const ag = [agent({ owns: true, account: 'SIM-AG1', position: { root: 'MNQ', qty: 2, avgPrice: 1 } }), agent({ agent: 'demotwo', owns: true, account: 'SIM-AG2' })];
   const orders = [{ id: 'NT1', by: 'agent:demotwo', account: 'SIM-AG2', root: 'NQ', state: 'working', role: 'stop' }];
@@ -533,7 +561,15 @@ test('board F wiring: fonts from this PC, the light in CSS only, no keydown on t
   }
   assert.match(read('live', 'fonts', 'OFL-agent.txt'), /SIL OPEN FONT LICENSE Version 1\.1/);
   assert.doesNotMatch(css + fonts, /fonts\.(googleapis|gstatic)\.com/);
-  assert.match(css, /@property --ag-pc \{ syntax: '<color>'/); assert.match(css, /@keyframes ag-orbit \{ to \{ --ag-ang: 360deg; \} \}/);
+  assert.match(css, /@property --ag-pc \{ syntax: '<color>'/);
+  /* the light is cheap (review of fc3101a): turned by a transform on the compositor, never a gradient painted again each frame,
+     and no blur filter */
+  assert.match(css, /@keyframes ag-orbit \{ to \{ transform: rotate\(360deg\); \} \}/);
+  assert.doesNotMatch(css, /--ag-ang|filter: blur/, 'no animated angle property and no blur');
+  assert.match(css, /\.ag-edge > b \{[^}]*will-change: transform, opacity;/);
+  assert.match(css, /\.ag-light \{[^}]*container-type: size;/);
+  assert.doesNotMatch(css, /ag-slide/, 'the drawer appears at once (R3: it shows prices, risk and P&L)');
+  assert.doesNotMatch(css.replace(/@keyframes ag-orbit[^\n]*/, ''), /@keyframes/, 'the light is the only animation in the tab');
   assert.match(css, /prefers-reduced-motion: reduce/); assert.match(css, /\.ag-view\.ag-still \.ag-light \{ display: none !important; \}/);
   assert.match(css, /--f-body: "IBM Plex Sans"/, 'the hybrid: IBM Plex Sans for body text (already loaded by plex.css)');
   assert.match(css, /--f-ui: "Chakra Petch"/); assert.match(css, /--f-num: "JetBrains Mono"/);

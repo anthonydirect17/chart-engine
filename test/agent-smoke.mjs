@@ -45,9 +45,21 @@ async function until(fn, what, ms = 10000) {
   const t0 = Date.now();
   for (;;) { let v = null; try { v = await fn(); } catch (e) { v = null; } if (v) return v; if (Date.now() - t0 > ms) { fail('timed out: ' + what); return null; } await sleep(150); }
 }
+/* The smoke's clock, whatever the time of day it runs at: the fake's exchange and desk clocks (--clock-offset) and the page's
+   clock (Playwright's, the same offset) all read 11:00 New York on today's New York date and run on from there, so his
+   session trail (entryFrom 09:45 to flatAt 15:55) always holds the fills. Until this, after 15:55 New York the trail check
+   failed by the wall clock. */
+const SMOKE_NY = '11:00';
+const NY_PARTS = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+function offsetToNy(hhmm, now) {
+  const o = {}; for (const x of NY_PARTS.formatToParts(new Date(now))) o[x.type] = +x.value || 0;
+  const wall = Date.UTC(o.year, o.month - 1, o.day, o.hour % 24, o.minute, o.second), want = Date.UTC(o.year, o.month - 1, o.day, +hhmm.slice(0, 2), +hhmm.slice(3), 0);
+  return Math.round((want - wall) / 1000);   // seconds
+}
+const CLOCK_OFFSET_S = offsetToNy(SMOKE_NY, Date.now());
 async function startBridge(p, flags) {
   port = p;
-  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN].concat(flags || []), { stdio: ['ignore', 'pipe', 'inherit'] });
+  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--clock-offset=' + CLOCK_OFFSET_S].concat(flags || []), { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { br.stdout.once('data', res); br.once('exit', c => rej(new Error('bridge exited ' + c))); });
   return br;
 }
@@ -59,6 +71,14 @@ let bridge = null;
 try {
   bridge = await startBridge(PORT, ['--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2']);   // config.txt's cap holds for agents (as built)
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
+  /* the page's clock: the fake's, running on. Only Date is shifted; the timers stay real (Playwright's fake clock also takes
+     over the timers, and the tab's 4 s confirm windows then never end) */
+  await ctx.addInitScript(off => {
+    const Real = Date;
+    class Shifted extends Real { constructor(...a) { if (a.length) super(...a); else super(Real.now() + off); } static now() { return Real.now() + off; } }
+    window.Date = Shifted;
+  }, CLOCK_OFFSET_S * 1000);
+  console.log('the smoke runs at ' + SMOKE_NY + ' New York (clock offset ' + CLOCK_OFFSET_S + ' s from the wall clock)');
   await ctx.route('http://localhost:8800/api/chart-hotkeys', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(DESK_KEYS) }));
   await ctx.route('http://localhost:8800/api/chart-strategies', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ rev: 0, strategies: [] }) }));
   await ctx.route('http://localhost:8800/api/chart-accounts', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ accounts: [] }) }));
@@ -74,6 +94,8 @@ try {
     window.WebSocket = Spy;
   });
   const page = await ctx.newPage();
+  const pageNy = await page.evaluate(() => new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).format(new Date()));
+  check(/^11:0\d$/.test(pageNy), 'the page\'s clock reads ' + SMOKE_NY + ' New York, whatever the time of day the smoke runs: ' + pageNy);
   page.on('pageerror', e => fail('page error: ' + e.message));
   page.on('dialog', d => { fail('a browser dialog: ' + d.message()); d.dismiss(); });
   const open = async (q = '?layout=Main') => {
@@ -89,8 +111,38 @@ try {
   /* board F: the light's state, the lit panels, the running light animations (the line and its halo: one animation per lit panel) */
   const light = () => page.evaluate(() => window.workspace.agent().light);
   const lit = () => page.evaluate(() => [...document.querySelectorAll('#agView .ag-panel.lit')].map(e => e.dataset.panel).sort().join(','));
-  const orbits = () => page.evaluate(() => document.getAnimations().filter(a => a.animationName === 'ag-orbit' && a.playState === 'running').map(a => a.effect.target.parentElement.dataset.panel).sort().join(','));
-  const lapOf = () => page.evaluate(() => { const l = document.querySelector('#agView .ag-panel.lit > .ag-light'); return l ? getComputedStyle(l).animationDuration : ''; });
+  /* the panels whose light runs: each lit panel turns its strips (the line's four and the halo's four, each with its crossfade copy), all on one lap */
+  const orbits = () => page.evaluate(() => { const by = {}; for (const a of document.getAnimations()) if (a.animationName === 'ag-orbit' && a.playState === 'running') { const p = a.effect.target.closest('[data-panel]').dataset.panel; by[p] = (by[p] || 0) + 1; } return Object.keys(by).filter(p => by[p] === 16).sort().join(','); });
+  const lapOf = () => page.evaluate(() => { const l = document.querySelector('#agView .ag-panel.lit > .ag-light .ag-edge > b'); return l ? getComputedStyle(l).animationDuration : ''; });
+  /* R3, motion inherited (as test/kit-smoke.mjs on kit-v1): every figure, price, chip, row and button of the tab, with itself
+     or an ancestor that animates, or has a transition that could move or change it. The only transitions allowed on an
+     ancestor are a panel's glow and its colour (box-shadow, and --ag-pc, registered as not inherited: no child gets it); a
+     figure itself has none at all. */
+  const R3_HOLDS = '#agView .mono, #agView button, #agView .ag-chip, #agView .ag-mark, #agView .ag-fact, #agView .ag-prop, #agView .ag-cd, #agView .ag-today, #agView .ag-count, #agView .ag-cpnl, #agView .ag-cpos, #agView .ag-kv, #agView [data-no-motion], #agView .ag-drawer, #agView .ag-drawer *';
+  const r3Moving = () => page.evaluate(sel => {
+    /* the light's colour and the glow: on the tab's main part and its panels only */
+    const allowed = el => (el.matches('.ag-panel') ? ['--ag-pc', 'box-shadow'] : []);
+    const animated = new Set(document.getAnimations().filter(a => !(typeof CSSTransition === 'function' && a instanceof CSSTransition && a.effect && a.effect.target && allowed(a.effect.target).includes(a.transitionProperty)))
+      .map(a => a.effect && a.effect.target).filter(Boolean));
+    const props = s => s.transitionProperty.split(',').map(x => x.trim()), durs = s => s.transitionDuration.split(',').map(d => parseFloat(d));
+    const moves = el => {
+      if (animated.has(el) && !el.closest('.ag-light')) return 'animated';
+      const s = getComputedStyle(el);
+      if (s.animationName !== 'none') return 'animation ' + s.animationName;
+      const p = props(s), d = durs(s);
+      for (let i = 0; i < p.length; i++) if ((d[i % d.length] || 0) > 0 && !allowed(el).includes(p[i])) return 'transition ' + p[i];
+      return '';
+    };
+    const bad = [];
+    for (const el of document.querySelectorAll(sel)) {
+      if (el.closest('.ag-light') || !el.getClientRects().length) continue;
+      for (let a = el; a && a !== document.documentElement; a = a.parentElement) {
+        const why = moves(a);
+        if (why) { bad.push((el.dataset.k || el.tagName.toLowerCase() + '.' + String(el.className).split(' ')[0]) + ' via ' + (a === el ? 'itself' : (a.dataset.k || a.tagName.toLowerCase() + '.' + String(a.className).split(' ').join('.'))) + ' (' + why + ')'); break; }
+      }
+    }
+    return bad;
+  }, R3_HOLDS);
   async function lightIs(phase, tone, panels, what) {
     await until(async () => { const l = await light(); return l && l.phase === phase && l.tone === tone; }, what + ': the light is ' + phase + ' (' + tone + ')');
     await until(async () => (await lit()) === panels.slice().sort().join(','), what + ': lit ' + panels.join(' and '), 3000);
@@ -240,7 +292,7 @@ try {
   await page.click('#agView [data-k="kill"]');
   await until(async () => (await A()).agents.find(a => a.agent === 'demo').killed, 'kill on in one click');
   check(/KILLED/.test(await text('.ag-strip')), 'the strip says KILLED');
-  await sleep(300);
+  await sleep(1100);                                                                   // a click within 1 s of kill-on is the same press (ignored)
   await page.dblclick('#agView [data-k="kill"]');
   await sleep(500);
   check((await A()).agents.find(a => a.agent === 'demo').killed && (await sent()).filter(m => m.type === 'agentKill').length === 1, 'a double-click on Release never releases (review S3)');
@@ -267,7 +319,9 @@ try {
   check((await text('.ag-plist [data-k="cd"]')) !== cd, 'the countdown runs');
   await page.screenshot({ path: path.join(SHOTS, 'agent-proposal.png') });
   await lightIs('plan', 'judgment', ['pipe', 'prop'], 'a plan waiting in copilot');
-  check(await page.evaluate(() => getComputedStyle(document.querySelector('#agView [data-k="main"]')).getPropertyValue('--ag-pc').trim()) !== '', 'the light\'s colour is a registered property on the tab');
+  check(await page.evaluate(() => { const L = window.workspace.agent().light, p = document.querySelector('#agView .ag-panel.lit'), l = p.querySelector('.ag-light'); const rgb = h => 'rgb(' + [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)).join(', ') + ')';
+    const slot = l.classList.contains('ag-c1') ? 1 : 0; return getComputedStyle(p).getPropertyValue('--ag-to').trim() === rgb(L.color) && getComputedStyle(l).getPropertyValue('--ag-c' + slot).trim() === rgb(L.color); }),
+    'the light\'s colour is set where it draws: the lit panel\'s glow fades to it, the light crossfades to it (registered colours, not inherited by the tab)');
   for (const [w, h] of [[1440, 1000], [1366, 768]]) {
     await page.setViewportSize({ width: w, height: h });
     await sleep(500);
@@ -298,6 +352,8 @@ try {
     /Risk\s*\$16\.00, reward 2\.00 to 1/.test(pt) && /passed ChartBridge's checks/.test(pt) && /Proposal\s*accepted/i.test(pt) && /You answered/.test(pt) && !/For and against|cost/i.test(pt),
     'a plan\'s record: his words, entry, stop, target, risk, the checks, the proposal and his answer time: "' + pt.slice(0, 220) + '..."');
   await shotF('agent-f-drawer');
+  const r3d = await r3Moving();
+  check(!r3d.length, 'R3: with the drawer open, no figure, price, chip, row or button moves, on its own or through an animated or transitioned ancestor (the drawer appears at once)' + (r3d.length ? ': ' + JSON.stringify(r3d.slice(0, 6)) : ''));
   check(await page.evaluate(() => { const d = document.querySelector('#agView [data-k="drawer"]').getBoundingClientRect(), r = document.querySelector('.ag-feed .ag-rowb.sel'), f = document.querySelector('#agView [data-k="feed"]').getBoundingClientRect(); const b = r.getBoundingClientRect(); return b.top >= d.bottom - 1 && b.bottom <= f.bottom + 1; }),
     'at 1440 x 1000 its row (the newest, in a short list) is in sight below the drawer');
   /* a long record in a short window: the drawer scrolls inside itself and its last fact can be reached */
@@ -331,7 +387,7 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'agent-1366.png') });
   await page.setViewportSize({ width: 390, height: 844 });                              // a phone
   await sleep(700);
-  const phone = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, w: innerWidth, tab: [...document.querySelectorAll('#agView *')].filter(e => { const r = e.getBoundingClientRect(); return r.width && r.right > innerWidth + 1 && !e.closest('.chart-live'); }).length }));
+  const phone = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, w: innerWidth, tab: [...document.querySelectorAll('#agView *')].filter(e => { const r = e.getBoundingClientRect(); return r.width && r.right > innerWidth + 1 && !e.closest('.chart-live') && !e.closest('.ag-light'); }).length }));
   check(phone.sw <= phone.w && phone.tab === 0, 'at phone width (390 px) no sideways scroll and nothing of the tab past the edge: ' + JSON.stringify(phone));
   await page.screenshot({ path: path.join(SHOTS, 'agent-phone.png') });
   await page.setViewportSize({ width: 1600, height: 900 });
@@ -378,6 +434,8 @@ try {
   check(await page.evaluate(() => [...document.querySelectorAll('#agView .ag-trail .ag-ev')].some(e => e.textContent === 'F' && /^Bought 1 MNQ at 25,3(89\.75|90\.00)/.test(e.title) && getComputedStyle(e).getPropertyValue('--tc').trim() === '#3dff9a')),
     'his session\'s trail marks the fill (F, green), drawn above the now mark');
   await shotF('agent-f-profit');
+  const r3t = await r3Moving();
+  check(!r3t.length, 'R3: in a trade, no figure, price, chip, row or button moves, on its own or through an ancestor' + (r3t.length ? ': ' + JSON.stringify(r3t.slice(0, 6)) : ''));
   await control('price', { root: 'MNQ', p: 25388 });                                   // under water, above its stop
   await until(async () => /^-\$/.test(await text('#agView [data-k="cPnl"]')), 'the open P&L shows the loss');
   await lightIs('trade', 'no', ['chart', 'pnl'], 'an open trade under water');
@@ -385,7 +443,7 @@ try {
   await shotF('agent-f-under');
   await control('agent-unlist', { account: 'SIM-AG1' });
   await control('agent-flat-hours', { agent: 'demo' });
-  await until(async () => /Agent demo: NOT FLAT\? its flatten \(.*\) waits: SIM-AG1 \(account not listed by NinjaTrader\)/.test(await page.textContent('#wsAlert')), 'the NOT FLAT error shows as ChartBridge\'s other errors do');
+  await until(async () => /Agent demo: NOT FLAT\? its flatten \(.*\) waits: SIM-AG1 \(account not listed by NinjaTrader\)/.test(await page.textContent('#wsAlert')), 'the NOT FLAT error shows as ChartBridge\'s other errors do (10 s after the flatten starts, as built)', 16000);
   check(/Long 1 MNQ/.test(await text('.ag-strip [data-k="sPos"]')), 'nothing goes to an account NinjaTrader does not list');
   await page.screenshot({ path: path.join(SHOTS, 'agent-notflat.png'), clip: { x: 0, y: 0, width: 1600, height: 200 } });
   await control('agent-unlist', { account: 'SIM-AG1', on: 0 });

@@ -482,6 +482,21 @@ function pageExitPasses(o, posQty) {
   const x = o || {}, q = isNum(posQty) ? posQty : 0;
   return x.kind === 'market' && !x.bracket && !x.strategy && q !== 0 && (x.side === 'buy') === (q < 0) && isInt(x.qty) && x.qty >= 1 && x.qty <= Math.abs(q);
 }
+/** Which agent a ChartBridge `status` line is about (or ''): the id at its start ("demo flattened at 15:55 by its rules",
+ *  "Agent demo: ...") or "agent <id>" anywhere in it, in any case ("agent demo had an open trade on ...", "SIM-AG1 MNQ is no
+ *  longer agent demo's", "SIM-AG1 MNQ: agent demo's 1 closed; ..."; ChartBridge 0.5.0 as built, agent-channel 4d4a81f). */
+function statusAgent(text, ids) {
+  if (typeof text !== 'string' || !text) return '';
+  for (const id of ids || []) {
+    if (!validId(id)) continue;
+    if (new RegExp('^(agent )?' + id + '\\b', 'i').test(text) || new RegExp('\\bagent ' + id + '\\b', 'i').test(text)) return id;
+  }
+  return '';
+}
+/** The kill switch on: a second press within KILL_REPEAT_MS of the first is the same press (a double click) and sends
+ *  nothing more (ChartBridge has not answered yet, so the page still shows it off). last: when the last kill-on went. */
+const KILL_REPEAT_MS = 1000;
+const killOnRepeat = (last, now) => isNum(last) && now - last >= 0 && now - last < KILL_REPEAT_MS;
 /** ChartBridge's words for the page's refused order on an agent's pair. */
 const lockText = (account, root, id) => account + ' ' + root + ' belongs to agent ' + id + ': use Flatten, or move its stop or target';
 
@@ -875,7 +890,7 @@ return {
   modesAllowed, accountTradable, modeMsg, killMsg,
   countdown, createProposals, endText, legPrices,
   createFeed, planLine,
-  agentOfOrder, isAgentMark, workingEntries, ownsText, pairOwner, pageExitPasses, lockText,
+  agentOfOrder, isAgentMark, workingEntries, ownsText, pairOwner, pageExitPasses, lockText, statusAgent, KILL_REPEAT_MS, killOnRepeat,
   fmtUsd, positionText, beatText, statusText, stateOf, stripModel, noticesFrom, etClock, etClockSec,
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightState, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,

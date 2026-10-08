@@ -56,6 +56,9 @@
 const OT = typeof self !== 'undefined' && self.OrderTicket ? self.OrderTicket : require('./order-ticket.js');
 /* 1.16.0: Order Strategies, entry types and Merge (live/order-strategies.js); a page that does not load it has none */
 const OS = typeof self !== 'undefined' && self.OrderStrategies ? self.OrderStrategies : typeof require === 'function' ? require('./order-strategies.js') : null;
+/* 1.17.0: AgentCore's pageExitPasses, the one test of an exit on an agent's pair (agent-core.js loads after this file in
+   index.html, so it is looked up when needed; with none loaded no agent owns anything and nothing asks) */
+const agentCore = () => (typeof self !== 'undefined' && self.AgentCore) || (typeof require === 'function' ? require('./agent-core.js') : null);
 const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten', 'plan', 'merge'];   // what ChartBridge counts, 10 a second at most (plan: 0.3.8; merge: 0.4.0)
 const CANCEL_CHUNK = 6, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;
 const BE_LIMIT = 10;
@@ -245,8 +248,9 @@ function create(env) {
        one with no stop. Said before sending, in ChartBridge's own words; Flatten and moving its stop or target still work. */
     const owner = typeof env.agentOwner === 'function' ? env.agentOwner(TR.account, R) : '';
     if (owner) {
-      const pq = pos && pos.qty ? pos.qty : 0;
-      if (!(kind === 'market' && pq && (side === 'buy') === (pq < 0) && qty <= Math.abs(pq))) {
+      const pq = pos && pos.qty ? pos.qty : 0, AG = agentCore();
+      // a reducing order never carries a bracket or a strategy (ChartBridge refuses them there): the exit as sent
+      if (!AG || !AG.pageExitPasses({ kind, side, qty }, pq)) {
         flash('Not sent: ' + TR.account + ' ' + R + ' belongs to agent ' + owner + ': use Flatten, or move its stop or target.', 'error');
         return;
       }

@@ -11,8 +11,9 @@
  *
  * Motion (docs/MOTION.md R3): only the light (.ag-light) and the panels' glow move or fade. Figures, the price, the
  * position, Accept and Reject, the kill switch and the mode change at once: nothing else here has a transition. The light is
- * pure CSS, one animation per lit panel, none on a panel that is not lit. The Motion switch (.ag-still) and the system's
- * reduced motion hide it and stop every animation in the tab; the glow stays, still.
+ * pure CSS and cheap: thin strips along the lit panel's border, each turning a small conic gradient with a transform (on the
+ * compositor, no repaint and no blur per frame); none on a panel that is not lit. The Motion switch (.ag-still) and the
+ * system's reduced motion hide it and stop every animation in the tab; the glow stays, still.
  */
 :root {
   --ag-line: #2A1F4D; --ag-line2: #1B1636; --ag-panel: #0B0E15; --ag-inset: #0E0B1C; --ag-raise: #15102B; --ag-hover: #0F1320;
@@ -23,9 +24,16 @@
   --ag-cond: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
   --ag-buy: #3DDC97; --ag-sell: #FF5C7A; --ag-sell-ground: #2A0F17; --ag-warn: #FFC266;
 }
-/* the light's angle and colour: registered, so the angle can turn and the colour can fade (the light and the glow only) */
-@property --ag-ang { syntax: '<angle>'; inherits: true; initial-value: 0deg; }
-@property --ag-pc { syntax: '<color>'; inherits: true; initial-value: #5df2ff; }
+/* the light's colour: --ag-to is the colour of his state now (set on the tab, never eased). The glow fades to it through
+   --ag-pc, registered and not inherited, so only the panels are styled again while it fades (review of fc3101a: an inherited
+   fade restyled the whole tab every frame). The light itself crossfades (below): its gradient is painted once per colour. */
+@property --ag-pc { syntax: '<color>'; inherits: false; initial-value: #5df2ff; }
+/* set by live/agent.js only on the elements that draw with them (each panel, each light, the tracker's words), and not
+   inherited, so a colour change restyles those few elements, never the whole tab */
+@property --ag-to { syntax: '<color>'; inherits: false; initial-value: #5df2ff; }
+@property --ag-tone { syntax: '<color>'; inherits: false; initial-value: #5df2ff; }
+@property --ag-c0 { syntax: '<color>'; inherits: true; initial-value: #5df2ff; }
+@property --ag-c1 { syntax: '<color>'; inherits: true; initial-value: #5df2ff; }
 
 /* ---------------- the tab button in the top bar, and the workspace while the tab is open (the page's look) */
 .ws-btn.ag-tabbtn { font-weight: 600; letter-spacing: .02em; position: relative; }
@@ -47,6 +55,7 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
   --f-num: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
   --f-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
   flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; position: relative; color: var(--f-c);
+  overflow: clip;   /* the light's halo past the panels at the window's edge is clipped: it never makes the page scroll */
   background: radial-gradient(900px 520px at 42% 38%, rgba(0, 150, 255, .07), transparent 65%), radial-gradient(520px 340px at 88% 92%, rgba(123, 92, 255, .05), transparent 70%), var(--f-ground);
   font: 13px/1.4 var(--f-ui);
 }
@@ -75,24 +84,52 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-why:empty { display: none; }
 .ag-view .ag-why.live { color: #ffd0d8; }
 
-.ag-main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px 10px; box-sizing: border-box; --ag-pc: #5df2ff; --ag-tone: #5df2ff; --ag-lap: 13000ms; transition: --ag-pc 1.6s ease; }
+.ag-main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px 10px; box-sizing: border-box; --ag-lap: 13000ms; }
 .ag-main[hidden], .ag-off[hidden] { display: none; }
 .ag-off { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
 .ag-off-card { max-width: 540px; background: var(--f-panel); border: 1px solid var(--f-line); padding: 18px 20px; display: grid; gap: 8px; }
 .ag-off-card p { margin: 0; font-size: 14px; line-height: 1.5; color: var(--f-soft); }
 
 /* ---------------- a panel, and the light that circles it while it is lit */
-.ag-view .ag-panel { position: relative; border: 1px solid var(--f-line); background: var(--f-panel); box-sizing: border-box; min-width: 0; transition: box-shadow 1.4s ease; }
+.ag-view .ag-panel { position: relative; border: 1px solid var(--f-line); background: var(--f-panel); box-sizing: border-box; min-width: 0; --ag-pc: var(--ag-to); transition: box-shadow 1.4s ease, --ag-pc 1.6s ease; }
 .ag-view .ag-panel.lit { box-shadow: 0 0 34px -4px var(--ag-pc), inset 0 0 22px -12px var(--ag-pc); }
-.ag-light { position: absolute; inset: -2px; pointer-events: none; display: none; z-index: 4; }
-.ag-view .ag-panel.lit > .ag-light { display: block; animation: ag-orbit var(--ag-lap) linear infinite; }
-.ag-orb { position: absolute; inset: 0; padding: 3px; box-sizing: border-box;
-  background: conic-gradient(from var(--ag-ang), transparent 0deg, transparent 200deg, var(--ag-pc) 310deg, #fff 352deg, transparent 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite: exclude; }
-.ag-orb.ag-halo { inset: -2px; padding: 6px; filter: blur(7px); opacity: .95; }
-@keyframes ag-orbit { to { --ag-ang: 360deg; } }
-@keyframes ag-slide { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+/* The light (look F, Anthony 2026-10-08): a comet circling the border, brighter at its head, with a soft halo. Drawn cheaply
+   (review of fc3101a: the old conic gradient was painted again every frame over the whole panel, with a 7 px blur): the line
+   is four 3 px strips along the border and the halo four soft 30 px strips across it; each strip clips its own copy of one
+   small conic gradient centred on the panel's centre, turned by a transform on the compositor. Only the strips' pixels are
+   drawn each frame; nothing is painted again and nothing is blurred. A conic gradient looks the same at any size about its
+   centre, so a 512 px one scaled 8 times covers any panel. The same angle, the same colours, the same laps (13 s, 9 s). */
+.ag-light { position: absolute; inset: -2px; pointer-events: none; display: none; z-index: 4; container-type: size; }
+.ag-view .ag-panel.lit > .ag-light { display: block; }
+.ag-edge { position: absolute; overflow: hidden; }
+.ag-edge > b { position: absolute; width: 512px; height: 512px; scale: 8; left: calc(50cqw - var(--x) - 256px); top: calc(50cqh - var(--y) - 256px);
+  background: conic-gradient(from 0deg, transparent 0deg, transparent 200deg, var(--ag-c0) 310deg, #fff 352deg, transparent 360deg);
+  animation: ag-orbit var(--ag-lap) linear infinite; will-change: transform, opacity; transition: opacity 1.6s ease; }
+/* a colour change fades (1.6 s): each strip holds the light twice, in the last colour and the new one (live/agent.js swaps
+   them), and only their opacity moves, on the compositor */
+.ag-edge > b + b { background: conic-gradient(from 0deg, transparent 0deg, transparent 200deg, var(--ag-c1) 310deg, #fff 352deg, transparent 360deg); opacity: 0; }
+.ag-light.ag-c1 > .ag-edge > b:first-child { opacity: 0; }
+.ag-light.ag-c1 > .ag-edge > b + b { opacity: 1; }
+/* the line: the light box's 3 px border (each strip's --x, --y: its top left in the light box) */
+.ag-edge.e-t { left: 0; right: 0; top: 0; height: 3px; --x: 0px; --y: 0px; }
+.ag-edge.e-b { left: 0; right: 0; bottom: 0; height: 3px; --x: 0px; --y: calc(100cqh - 3px); }
+.ag-edge.e-l { left: 0; top: 3px; bottom: 3px; width: 3px; --x: 0px; --y: 3px; }
+.ag-edge.e-r { right: 0; top: 3px; bottom: 3px; width: 3px; --x: calc(100cqw - 3px); --y: 3px; }
+/* the halo: a soft band across the border, fading both ways (the old blurred ring's profile, its ends soft at the corners) */
+.ag-edge.ag-h { opacity: .35; }
+.ag-edge.ag-h.e-t { left: -14px; right: -14px; top: -14px; height: 30px; --x: -14px; --y: -14px; }
+.ag-edge.ag-h.e-b { left: -14px; right: -14px; top: auto; bottom: -14px; height: 30px; --x: -14px; --y: calc(100cqh - 16px); }
+.ag-edge.ag-h.e-l { left: -14px; top: 16px; bottom: 16px; width: 30px; --x: -14px; --y: 16px; }
+.ag-edge.ag-h.e-r { left: auto; right: -14px; top: 16px; bottom: 16px; width: 30px; --x: calc(100cqw - 16px); --y: 16px; }
+.ag-edge.ag-h.e-t, .ag-edge.ag-h.e-b {
+  -webkit-mask: linear-gradient(to bottom, transparent, rgba(0, 0, 0, .12) 18%, rgba(0, 0, 0, .45) 33%, #000 50%, rgba(0, 0, 0, .45) 67%, rgba(0, 0, 0, .12) 82%, transparent), linear-gradient(to right, transparent, #000 30px, #000 calc(100% - 30px), transparent);
+  -webkit-mask-composite: source-in;
+  mask: linear-gradient(to bottom, transparent, rgba(0, 0, 0, .12) 18%, rgba(0, 0, 0, .45) 33%, #000 50%, rgba(0, 0, 0, .45) 67%, rgba(0, 0, 0, .12) 82%, transparent), linear-gradient(to right, transparent, #000 30px, #000 calc(100% - 30px), transparent);
+  mask-composite: intersect; }
+.ag-edge.ag-h.e-l, .ag-edge.ag-h.e-r {
+  -webkit-mask: linear-gradient(to right, transparent, rgba(0, 0, 0, .12) 18%, rgba(0, 0, 0, .45) 33%, #000 50%, rgba(0, 0, 0, .45) 67%, rgba(0, 0, 0, .12) 82%, transparent);
+  mask: linear-gradient(to right, transparent, rgba(0, 0, 0, .12) 18%, rgba(0, 0, 0, .45) 33%, #000 50%, rgba(0, 0, 0, .45) 67%, rgba(0, 0, 0, .12) 82%, transparent); }
+@keyframes ag-orbit { to { transform: rotate(360deg); } }
 /* Motion Off, or the system's reduced motion: no light, no animation, no transition; the glow stays where his attention is */
 .ag-view.ag-still .ag-light { display: none !important; }
 .ag-view.ag-still, .ag-view.ag-still * { animation: none !important; transition: none !important; }
@@ -236,8 +273,8 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-plist { display: grid; gap: 14px; }
 .ag-view .ag-plist:empty { display: none; }
 .ag-view .ag-empty[hidden] { display: none; }
-.ag-view .ag-prop { background: transparent; border: 0; border-radius: 0; padding: 0; gap: 9px; color: var(--f-c); font: 13px/1.4 var(--f-ui); box-shadow: none; display: grid; grid-template-columns: minmax(0, 1fr); }
-.ag-view .ag-prop + .ag-prop { border-top: 1px solid var(--f-line2); padding-top: 14px; }
+.ag-view .ag-prop.inline { background: transparent; border: 0; border-radius: 0; padding: 0; gap: 9px; color: var(--f-c); font: 13px/1.4 var(--f-ui); box-shadow: none; display: grid; grid-template-columns: minmax(0, 1fr); }
+.ag-view .ag-prop.inline + .ag-prop.inline { border-top: 1px solid var(--f-line2); padding-top: 14px; }
 .ag-view .ag-prop.ag-ended { opacity: .6; }
 .ag-view .ag-prop .ag-ttl { color: var(--f-hot); }
 .ag-view .ag-prop-h { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -255,12 +292,14 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-prop .ag-pgrid { font-family: var(--f-num); font-size: 12.5px; }
 .ag-view .ag-prop-note { color: var(--f-dim); font-size: 12px; line-height: 1.45; }
 .ag-view .ag-prop-btns { display: flex; gap: 8px; }
-/* Accept and Reject never scroll out of sight: they stay at the foot of the proposal's box while its words scroll */
-.ag-view .ag-plist .ag-prop-btns { position: sticky; bottom: 0; z-index: 1; padding: 8px 0 2px; margin-top: -6px; background: linear-gradient(transparent, #00060c 10px); }
-.ag-view .ag-acc, .ag-view .ag-rej { flex: 1; min-height: 44px; padding: 0 12px; border-radius: 0; font: 700 13px var(--f-ui); letter-spacing: .2em; text-transform: uppercase; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
-.ag-view .ag-acc { background: var(--f-c); color: var(--f-ground); border: 0; box-shadow: 0 0 14px rgba(93, 242, 255, .45); }
-.ag-view .ag-rej { background: rgba(109, 40, 217, .18); color: var(--f-pul); border: 1px solid var(--f-pu); }
-.ag-view .ag-acc:disabled, .ag-view .ag-rej:disabled { opacity: .4; cursor: default; box-shadow: none; }
+/* Accept and Reject never scroll out of sight: they stay at the foot of the proposal's box while its words scroll, with
+   ChartBridge's words for this proposal right above them (a refusal, the last 5 s, "Waiting for ChartBridge") */
+.ag-view .ag-prop-foot { display: grid; gap: 6px; }
+.ag-view .ag-plist .ag-prop-foot { position: sticky; bottom: 0; z-index: 1; padding: 8px 0 2px; margin-top: -6px; background: linear-gradient(transparent, #00060c 10px); }
+.ag-view .inline .ag-acc, .ag-view .inline .ag-rej { flex: 1; min-height: 44px; padding: 0 12px; border-radius: 0; font: 700 13px var(--f-ui); letter-spacing: .2em; text-transform: uppercase; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.ag-view .inline .ag-acc { background: var(--f-c); color: var(--f-ground); border: 0; box-shadow: 0 0 14px rgba(93, 242, 255, .45); }
+.ag-view .inline .ag-rej { background: rgba(109, 40, 217, .18); color: var(--f-pul); border: 1px solid var(--f-pu); }
+.ag-view .inline .ag-acc:disabled, .ag-view .inline .ag-rej:disabled { opacity: .4; cursor: default; box-shadow: none; }
 .ag-view .ag-prop .bt-keycap { font: 600 10.5px/1 var(--f-num); border: 1px solid currentColor; border-bottom-width: 2px; border-radius: 3px; padding: 2px 5px; color: inherit; background: transparent; margin-left: 6px; text-transform: none; letter-spacing: 0; }
 .ag-view .ag-prop-msg { color: var(--f-soft); font-size: 12.5px; }
 .ag-view .ag-prop-msg:empty { display: none; }
@@ -290,7 +329,7 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 
 /* ---------------- the decision drawer, over the right column, in that decision's colour */
 .ag-view .ag-drawer { position: absolute; inset: 0; z-index: 6; box-shadow: 0 0 34px -6px var(--tc, var(--f-c)), 0 16px 30px rgba(0, 0, 0, .7); display: flex; flex-direction: column; gap: 14px; padding: 16px; overflow: auto; box-sizing: border-box;
-  background: #01050b; border: 1px solid var(--tc, var(--f-c)); animation: ag-slide .45s cubic-bezier(.2, .8, .2, 1); }
+  background: #01050b; border: 1px solid var(--tc, var(--f-c)); }   /* no slide: it shows prices, risk and P&L (R3) */
 .ag-view .ag-drawer[hidden] { display: none; }
 /* taller than its space: it scrolls inside itself (each part keeps its own height) */
 .ag-view .ag-drawer { overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--tc, var(--f-line)) rgba(93, 242, 255, .06); scrollbar-gutter: stable; }
@@ -378,9 +417,23 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-note.red { border-left-color: var(--ag-sell); border-color: color-mix(in srgb, var(--ag-sell) 45%, transparent); }
 .ag-note .ag-ttl { flex: none; font: 500 10px/1.3 var(--ag-mono); letter-spacing: .14em; color: var(--ag-lav); text-transform: uppercase; white-space: nowrap; }
 
-/* while the Agent tab is shown the corner notices cover none of it: they stack in the chart panel's lower left, above its
-   time axis (live/agent.js placeNotes sets where); newest at the bottom, at most the chart's height */
-body.ag-notes-placed .ag-notes, body.ag-notes-placed .bt-notes { left: var(--ag-nl) !important; bottom: var(--ag-nb) !important; width: var(--ag-nw) !important; max-height: var(--ag-nh); overflow: hidden; }
+/* While the Agent tab is shown (live/agent.js placeBox, placeNotes): the corner (the Bot tab's, with the bot's proposals, or
+   the window's own) is part of the proposal panel, under the shown agent's own proposals, in the page's flow, oldest first;
+   the corner notices stack in the chart's lower left above its time axis, and the workspace's ChartBridge line lies across the
+   chart's top. Nothing of them covers a control, a proposal's Accept or Reject, the stream or the footer, at any size. */
+.ag-view .ag-others { display: grid; }
+.ag-view .ag-others > .bt-props, .ag-view .ag-others > .ag-props { position: static; width: auto; z-index: auto; pointer-events: auto; flex-direction: column-reverse; gap: 10px; margin-top: 12px; }
+.ag-view .ag-others > :not(:has(> :not([hidden]))) { display: none; }
+.ag-view .ag-others .ag-prop.corner, .ag-view .ag-others .bt-prop { width: auto; box-shadow: none; }
+.ag-view .ag-others .mono { font-family: var(--ag-mono); }
+/* with the tab open the copilot keys answer the shown agent's proposals only (docs/AGENT_TAB.md, lead's default 3): the other
+   proposals here are answered with their own buttons, so their key caps are not shown */
+.ag-view .ag-others .bt-keycap { display: none; }
+.ag-view .ag-others .bt-prop .pos { color: var(--ws-buy, var(--ag-buy)); } .ag-view .ag-others .bt-prop .neg { color: var(--ws-sell, var(--ag-sell)); }
+.ag-view .ag-over { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+.ag-view .ag-over > .ag-notes, .ag-view .ag-over > .bt-notes { position: absolute; left: 10px; bottom: 34px; width: min(380px, calc(100% - 90px)); max-height: calc(100% - 44px); overflow: hidden; z-index: auto; }
+.ag-view .ag-over > .ws-alerts { position: absolute; left: 8px; right: 8px; top: 6px; padding: 0; pointer-events: auto; max-height: calc(100% - 50px); overflow: auto; }
+.ag-view .ag-over > .ws-alerts .ws-alert:first-child { margin-top: 0; }
 
 /* ---------------- smaller screens: narrower sides; then the chart on top with the controls and the stream below; a phone stacks */
 @media (max-width: 1500px) {
@@ -394,8 +447,12 @@ body.ag-notes-placed .ag-notes, body.ag-notes-placed .bt-notes { left: var(--ag-
   .ag-view .ag-grid { flex: none; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto; }
   .ag-view .ag-centre { grid-column: 1 / -1; }
   .ag-view .ag-chartpanel { min-height: 380px; }
-  .ag-view .ag-left, .ag-view .ag-right { max-height: 640px; }
+  .ag-view .ag-left { max-height: 640px; }
+  /* the proposal panel grows with what is open (the agent's own, the other agents' and the bot's): the column grows with it,
+     so nothing of it runs under the footer; the stream keeps its own height and scrolls */
   .ag-view .ag-proppanel { max-height: none; }
+  .ag-view .ag-feedwrap { flex: none; min-height: 320px; }
+  .ag-view .ag-feed { max-height: 460px; }
 }
 @media (max-width: 720px) {
   .ag-main { padding: 8px 8px 10px; }

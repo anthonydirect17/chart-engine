@@ -579,9 +579,11 @@ test('agents: agentHello first, welcome then agentState; every start in shadow; 
   assert.equal(w.type, 'welcome'); assert.equal(st.type, 'agentState');
   assert.deepEqual(Object.keys(w), ['type', 'version', 'agent', 'mode', 'account', 'sim', 'rules', 'instruments']);
   assert.equal(w.agent, 'demo'); assert.equal(w.mode, 'shadow'); assert.equal(w.account, 'SIM-AG1'); assert.equal(w.sim, true);
-  assert.deepEqual(w.rules, { roots: ['NQ', 'MNQ'], maxQty: { NQ: 2, MNQ: 20 }, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 1800, maxTrades: null, maxLosses: null }, 'roots a list, as built');
+  assert.deepEqual(w.rules, { roots: ['NQ', 'MNQ'], maxQty: { NQ: 2, MNQ: 20 }, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 1800, maxTrades: null, maxLosses: null, maxBracketTicks: null, maxTicksAway: null },
+    'roots a list; the caps enforced, config.txt\'s distance limits null when not set (as built, 4d4a81f)');
   assert.deepEqual(w.instruments.map(i => i.root), ['NQ', 'MNQ']);
-  assert.deepEqual(Object.keys(st), ['type', 'mode', 'killed', 'standDown', 'trades', 'losses', 'pnlToday', 'owns']);
+  assert.deepEqual(Object.keys(st), ['type', 'mode', 'killed', 'standDown', 'trades', 'losses', 'pnlToday', 'owns', 'session']);
+  assert.equal(st.session, '2026-10-08', 'its session: the day of the 18:00 ET session');
   const ag = d.take('agent').pop();
   assert.deepEqual(Object.keys(ag), ['type', 'agent', 'name', 'build', 'enabled', 'connected', 'mode', 'account', 'sim', 'rules', 'position', 'pnlToday', 'trades', 'losses', 'killed', 'standDown', 'owns', 'lastBeatMs', 'lastPlan']);
   assert.equal(ag.name, 'Demo Agent'); assert.equal(ag.build, 'sample-build-1'); assert.equal(ag.connected, true);
@@ -772,20 +774,21 @@ test('agents: flat time flattens the agent\'s position itself, with the agent go
   assert.ok(!d.working('SIM-AG1').length, 'its stop and target cancelled first');
   // not flat 10 s after its flatten (here: a close NinjaTrader leaves unfilled): the NOT FLAT error every 10 s until flat
   const a = d.desk.agents.get('demo');
-  a.trade = { root: 'MNQ', pnl: 0 }; a.holdClose = true;
+  a.holdClose = true;
   d.desk.placeElsewhere({ account: 'SIM-AG1', root: 'MNQ', side: 'buy', kind: 'market', qty: 1, price: null }); d.take();
-  d.desk.everySecond(); d.take();                                    // a new job (still the flat hours): its close does not fill
-  d.advance(5000); d.desk.everySecond();
+  a.trade = { root: 'MNQ', qty: 1, avg: 25399.5, pnl: 0 };           // as if its own: the job closes what its trade holds
+  d.desk.tick('MNQ', 25399.5); d.desk.everySecond(); d.take();       // a new job (still the flat hours): its close does not fill
+  d.advance(5000); d.desk.tick('MNQ', 25399.5); d.desk.everySecond();
   assert.equal(d.take('status').filter(s => s.level === 'error').length, 0, 'not before 10 s');
-  d.advance(5000); d.desk.everySecond();
+  d.advance(5000); d.desk.tick('MNQ', 25399.5); d.desk.everySecond();
   const e1 = d.take('status').filter(s => s.level === 'error');
   assert.equal(e1.length, 1); assert.match(e1[0].text, /^Agent demo: NOT FLAT 10 s after its flatten \(flat time\): MNQ on SIM-AG1 still shows 1; act in NinjaTrader now$/);
-  d.advance(4000); d.desk.everySecond();
+  d.advance(4000); d.desk.tick('MNQ', 25399.5); d.desk.everySecond();
   assert.equal(d.take('status').filter(s => s.level === 'error').length, 0, 'once every 10 s, not every second');
-  d.advance(6000); d.desk.everySecond();
+  d.advance(6000); d.desk.tick('MNQ', 25399.5); d.desk.everySecond();
   assert.equal(d.take('status').filter(s => s.level === 'error').length, 1, 'again 10 s later');
-  a.holdClose = false; d.advance(3000); d.desk.everySecond();
-  assert.equal(d.desk.agentMsg(a).position, null, 'the close goes again and fills: flat, the job ends');
+  a.holdClose = false; d.advance(3000); d.desk.tick('MNQ', 25399.5); d.desk.everySecond();
+  assert.equal(d.desk.agentMsg(a).position, null, 'the close NinjaTrader held fills: flat, the job ends');
   assert.equal(a.flatJob, null);
 });
 
@@ -833,13 +836,13 @@ test('agents: rules from the page (sections 3 and 7): every allowed value, saved
   assert.match(r({ maxLosses: 21 }), /1 to 20/);
   assert.equal(r({}), null);
   const w = d.agentTake('welcome')[0];
-  assert.deepEqual(w.rules, { roots: ['NQ', 'MNQ'], maxQty: { NQ: 1, MNQ: 10 }, entryFrom: '09:45', entryUntil: '11:30', flatAt: '12:00', maxExpireSec: 900, maxTrades: 6, maxLosses: 3 });
+  assert.deepEqual(w.rules, { roots: ['NQ', 'MNQ'], maxQty: { NQ: 1, MNQ: 10 }, entryFrom: '09:45', entryUntil: '11:30', flatAt: '12:00', maxExpireSec: 900, maxTrades: 6, maxLosses: 3, maxBracketTicks: null, maxTicksAway: null });
   assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).rules.maxTrades, 6);
   assert.equal(r({ maxTrades: 0, maxLosses: 0 }), null);
   assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).rules.maxTrades, null, '0 is none');
   assert.match(d.plan({ expireSec: 901 }).why, /from 60 to 900/, 'the new rules are in force');
   d.plan({ expireSec: 600 });                                                // a working entry? no: shadow. A position: refused
-  d.desk.agents.get('demo').trade = { root: 'MNQ', pnl: 0 };
+  d.desk.agents.get('demo').trade = { root: 'MNQ', qty: 1, avg: 25400, pnl: 0 };
   assert.match(r({ maxTrades: 4 }), /has a position, a working entry or an open proposal/);
 });
 
@@ -1089,8 +1092,8 @@ test('as built 4: a cancel not confirmed goes again every 3 s, with a status war
   assert.match(w[0].text, /^Agent demo: the cancel of its entry CB#nt\d+ ag:demo s16 t32 on SIM-AG1 was not confirmed in 3 s \(the kill switch\); ChartBridge sends it again every 3 s until it is done; check NinjaTrader$/);
   assert.equal(entry.state, 'working');
   d.advance(3000); d.desk.everySecond();
-  assert.equal(d.take('status').length, 1, 'the third try warns too');
-  assert.equal(entry.state, 'cancelled', 'and is confirmed');
+  assert.equal(d.take('status').length, 0, 'the warning once, at the second try (as built, 4d4a81f)');
+  assert.equal(entry.state, 'cancelled', 'the third try is confirmed');
 });
 
 test('as built 5: the backstop cancels any agent entry while killed, in shadow, stood down or outside its window; a restart is shadow', async () => {
@@ -1136,7 +1139,9 @@ test('as built 6: the flat hours run to the next entryFrom; an account NinjaTrad
   d.desk.everySecond();
   const st = d.take('status');
   assert.ok(st.some(s => s.level === 'info' && s.text === 'demo held a position outside its trading hours (15:55 to 09:45): flattened by its rules'), JSON.stringify(st.map(s => s.text)));
-  const e1 = st.filter(s => s.level === 'error');
+  assert.equal(st.filter(s => s.level === 'error').length, 0, 'not in the first 10 s (as built, 4d4a81f)');
+  d.advance(10000); d.desk.everySecond();
+  const e1 = d.take('status').filter(s => s.level === 'error');
   assert.equal(e1.length, 1);
   assert.equal(e1[0].text, 'Agent demo: NOT FLAT? its flatten (outside its trading hours) waits: SIM-AG1 (account not listed by NinjaTrader); it goes on when the account is back; check NinjaTrader now');
   assert.ok(d.desk.agentMsg(a).position, 'nothing is sent to an account NinjaTrader does not list');
@@ -1144,7 +1149,7 @@ test('as built 6: the flat hours run to the next entryFrom; an account NinjaTrad
   assert.equal(d.take('status').filter(s => s.level === 'error').length, 0);
   d.advance(5000); d.desk.everySecond();
   assert.equal(d.take('status').filter(s => s.level === 'error').length, 1, 'every 10 s');
-  d.desk.unlisted.delete('SIM-AG1'); d.advance(1000); d.desk.everySecond();
+  d.desk.unlisted.delete('SIM-AG1'); d.advance(1000); d.desk.tick('MNQ', 25399.5); d.take(); d.desk.everySecond();   // the market trading in fact
   assert.equal(d.desk.agentMsg(a).position, null, 'the account is back: flattened');
   assert.equal(a.flatJob, null);
 });
@@ -1192,4 +1197,184 @@ test('as built: only a chosen account is the agent\'s; a clash stands the agent 
   x.hello(); x.agentTake();
   x.act({ type: 'order', cid: 'own', account: 'SIM-AG1', root: 'ES', side: 'buy', kind: 'market', qty: 1 });
   assert.equal(x.agentTake('exec').length, 0, 'Anthony\'s fill on its account is not the agent\'s');
+});
+
+/* ======================================================================== ChartBridge 0.5.0 as built at agent-channel 4d4a81f
+   (nt8/ChartBridgeAgents.cs): what the pages see of the cancel's slow tries, the market shut, the market trading in fact, the
+   stop placed again, the flatten asking again and its close cap, the lost trade and the held refused plans; and the agent's
+   side of contract section 10 the fake models (welcome's caps, agentState's session, the snapshot's end, orderName, cbId and
+   role, the fills of others on its pair). */
+const errs = d => d.take('status').filter(s => s.level === 'error').map(s => s.text);
+const inTrade = async o => {
+  const d = await makeAgentDesk(o);
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  d.plan({ price: 25400, qty: 1, riskDollars: 8 }); d.tick(25399.75);
+  d.take(); d.agentTake();
+  return { d, a: d.desk.agents.get('demo') };
+};
+const at = (d, ny) => { const [h, m] = ny.split(':').map(Number); const now = d.now(), day = Date.UTC(2026, 9, 8, h + 4, m); d.advance(day - now); };   // a New York time on 2026-10-08 (EDT)
+
+test('4d4a81f: a cancel not confirmed: the warning at the second try, an error at the tenth, then every 30 s, none while disconnected, and an end at 30 minutes', async () => {
+  const d = await makeAgentDesk();
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  d.plan({ price: 25390 }); d.take();
+  const a = d.desk.agents.get('demo'), entry = d.working('SIM-AG1').find(o => o.agentId === 'demo');
+  a.stuckCancels = 10000;
+  d.act({ type: 'agentKill', agent: 'demo', on: true }); d.take();
+  const st = [];
+  for (let i = 0; i < 9; i++) { d.advance(3000); d.desk.everySecond(); st.push(...d.take('status')); }   // tries 2 to 10
+  assert.equal(entry.cancelPending.tries, 10);
+  assert.deepEqual(st.map(s => s.level), ['warn', 'error'], 'one warning (try 2) and one error (try 10)');
+  assert.match(st[1].text, /^Agent demo: the cancel of its entry CB#nt\d+ ag:demo s16 t32 on SIM-AG1 is still not confirmed after 10 tries \(the kill switch\); ChartBridge tries again every 30 s; cancel it in NinjaTrader now$/);
+  d.advance(3000); d.desk.everySecond();
+  assert.equal(entry.cancelPending.tries, 10, 'not every 3 s now');
+  d.advance(27000); d.desk.everySecond();
+  assert.equal(entry.cancelPending.tries, 11, 'every 30 s');
+  d.desk.setConnection('SIM-AG1', 'disconnected'); d.take();
+  d.advance(60000); d.desk.everySecond();
+  assert.equal(entry.cancelPending.tries, 11, 'no try while the account is not connected');
+  d.desk.setConnection('SIM-AG1', 'connected'); d.desk.everySecond();
+  assert.equal(entry.cancelPending.tries, 12, 'they go on when it is back');
+  d.take();
+  d.advance(30 * 60000); d.desk.everySecond();
+  const end = errs(d);
+  assert.equal(end.length, 1); assert.match(end[0], /^Agent demo: the cancel of its entry CB#nt\d+ ag:demo s16 t32 on SIM-AG1 was never confirmed in 30 minutes \(12 tries\); ChartBridge stops trying: cancel it in NinjaTrader now$/);
+  const tries = entry.cancelPending.tries;
+  d.advance(120000); d.desk.everySecond();
+  assert.equal(entry.cancelPending.tries, tries, 'no more tries'); assert.equal(errs(d).length, 0, 'and no more errors');
+});
+
+test('4d4a81f: the market shut: fixed hours; the flatten sends nothing and says NOT FLAT every 60 s, then flattens at the open', async () => {
+  const { marketShut } = await import('./fake-v3.mjs');
+  const t = (d, h, m) => Date.UTC(2026, 9, d, h + 4, m || 0);          // October 2026, EDT; the 8th is a Thursday
+  for (const [d, h, m, shut] of [[8, 16, 59, false], [8, 17, 0, true], [8, 17, 59, true], [8, 18, 0, false], [9, 16, 59, false], [9, 17, 0, true], [10, 12, 0, true], [11, 17, 59, true], [11, 18, 0, false], [12, 10, 0, false]])
+    assert.equal(marketShut(t(d, h, m)), shut, d + ' ' + h + ':' + m);
+  const { d, a } = await inTrade({ at: Date.UTC(2026, 9, 8, 18, 0) });   // 14:00 New York, Thursday
+  const legs = d.working('SIM-AG1').filter(o => o.parent);
+  assert.equal(legs.length, 2);
+  at(d, '17:10'); d.desk.tick('MNQ', 25399.5); d.take(); d.desk.everySecond();
+  assert.ok(a.flatJob && d.desk.agentMsg(a).position, 'a job, and nothing closed');
+  assert.ok(legs.every(o => o.state === 'working'), 'its stop and target stay');
+  d.advance(10000); d.desk.everySecond();
+  const e = errs(d);
+  assert.equal(e.length, 1);
+  assert.match(e[0], /^Agent demo: NOT FLAT 10 s after its flatten \(flat time\): MNQ on SIM-AG1 still shows 1; the market is shut, so ChartBridge sends no close until it opens; its stop and target stay; act in NinjaTrader if you need to$/);
+  d.advance(30000); d.desk.everySecond(); assert.equal(errs(d).length, 0, 'not every 10 s');
+  d.advance(30000); d.desk.everySecond(); assert.equal(errs(d).length, 1, 'every 60 s');
+  at(d, '18:00'); d.desk.tick('MNQ', 25399.5); d.take(); d.desk.everySecond();
+  assert.equal(d.desk.agentMsg(a).position, null, 'the open: flattened');
+  assert.ok(legs.every(o => o.state === 'cancelled'));
+});
+
+test('4d4a81f: the market trading in fact: no leg is cancelled before a trade in the last 5 s', async () => {
+  const { d, a } = await inTrade({ at: Date.UTC(2026, 9, 8, 18, 0) });
+  at(d, '15:55'); d.take(); d.desk.everySecond();                       // no trade on MNQ for hours
+  assert.ok(d.working('SIM-AG1').filter(o => o.parent).every(o => o.state === 'working'), 'its stop and target stay');
+  d.advance(10000); d.desk.everySecond();
+  const e = errs(d);
+  assert.equal(e.length, 1); assert.match(e[0], /: MNQ on SIM-AG1 still shows 1; market not trading: the stop and target stay; ChartBridge tries again when it trades$/);
+  d.desk.tick('MNQ', 25399.5); d.take(); d.desk.everySecond();
+  assert.equal(d.desk.agentMsg(a).position, null, 'it trades: flattened');
+});
+
+test('4d4a81f: a close NinjaTrader rejects: its stop placed again at once; over the shut market it stays; at the open it goes with the close', async () => {
+  const { d, a } = await inTrade({ at: Date.UTC(2026, 9, 8, 18, 0) });
+  a.rejectClose = true;
+  at(d, '15:55'); d.desk.tick('MNQ', 25399.5); d.take(); d.desk.everySecond();
+  assert.equal(d.working('SIM-AG1').filter(o => o.parent).length, 0, 'its legs cancelled');
+  d.advance(1000); d.desk.tick('MNQ', 25399.5); d.desk.everySecond();
+  const e = errs(d);
+  assert.equal(e.length, 1);
+  assert.match(e[0], /^Agent demo: NOT FLAT: its market close on MNQ SIM-AG1 ended unfilled \(rejected\); its stop and target had been cancelled: ChartBridge placed its stop again at 25396 for 1; ChartBridge tries again in 30 s$/);
+  const re = d.working('SIM-AG1').find(o => o.agentId === 'demo' && o.kind === 'stop');
+  assert.ok(re && re.price === 25396 && re.side === 'sell' && re.qty === 1);
+  assert.equal(d.desk.orderMsg(re, true).by, 'agent:demo', 'the pages see it as the agent\'s');
+  assert.match(d.desk.agentOrderMsg(re).orderName, /^CB#nt\d+ ag:demo stop p25396$/); assert.equal(d.desk.agentOrderMsg(re).role, 'stop');
+  a.rejectClose = false;
+  at(d, '17:05'); d.desk.everySecond(); d.advance(60000); d.desk.everySecond();
+  const s = errs(d).pop();
+  assert.match(s, /the market is shut, so ChartBridge sends no close until it opens; ChartBridge placed its stop again at 25396; act in NinjaTrader if you need to$/);
+  assert.equal(re.state, 'working', 'over the shut market its stop stays');
+  at(d, '18:00'); d.desk.everySecond();
+  assert.equal(re.state, 'working', 'no trade yet at the open: it stays');
+  d.desk.tick('MNQ', 25399.5); d.take(); d.desk.everySecond();
+  assert.equal(re.state, 'cancelled'); assert.equal(d.desk.agentMsg(a).position, null, 'at the open: cancelled with the rest, and closed');
+});
+
+test('4d4a81f: the flatten asks again, closes at most the agent\'s own part, and the lost trade is an error every 60 s until flat', async () => {
+  // more on the account than the agent's trade: its part closed, the rest is not the agent's
+  const { d, a } = await inTrade({ at: Date.UTC(2026, 9, 8, 18, 0) });
+  d.desk.placeElsewhere({ account: 'SIM-AG1', root: 'MNQ', side: 'buy', kind: 'market', qty: 2, price: null }); d.take();
+  assert.equal(d.desk.pos('SIM-AG1', 'MNQ').qty, 3);
+  at(d, '15:55'); d.desk.tick('MNQ', 25399.5); d.take(); d.desk.everySecond();
+  assert.equal(d.desk.pos('SIM-AG1', 'MNQ').qty, 2, 'one closed: the agent\'s');
+  d.advance(3000); d.desk.tick('MNQ', 25399.5); d.desk.everySecond();
+  const w = d.take('status').filter(s => s.level === 'warn');
+  assert.deepEqual(w.map(s => s.text), ['SIM-AG1 MNQ: agent demo\'s 1 closed; the rest (2) is not agent demo\'s: ChartBridge did not close it']);
+  assert.equal(a.flatJob, null); assert.equal(d.desk.pos('SIM-AG1', 'MNQ').qty, 2);
+  // a fill the other way bigger than its trade: the trade ends, the rest is not the agent's, the job ends with a warning
+  const x = await inTrade({ at: Date.UTC(2026, 9, 8, 18, 0) });
+  x.a.holdClose = true;
+  at(x.d, '15:55'); x.d.desk.tick('MNQ', 25399.5); x.d.take(); x.d.desk.everySecond();
+  x.d.desk.placeElsewhere({ account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 3, price: null });
+  const lost = errs(x.d);
+  assert.deepEqual(lost, ['agent demo had an open trade on SIM-AG1 MNQ and its legs are gone; ChartBridge no longer treats the position as the agent\'s: flatten or protect it by hand']);
+  assert.equal(x.a.trade, null);
+  x.d.advance(1000); x.d.desk.tick('MNQ', 25399.5); x.d.desk.everySecond();
+  assert.deepEqual(x.d.take('status').filter(s => s.level === 'warn').map(s => s.text), ['SIM-AG1 MNQ is no longer agent demo\'s: ChartBridge did not close it']);
+  assert.equal(x.d.desk.pos('SIM-AG1', 'MNQ').qty, -2, 'nothing of it closed');
+  x.d.advance(30000); x.d.desk.everySecond(); assert.equal(errs(x.d).length, 0);
+  x.d.advance(30000); x.d.desk.everySecond(); assert.equal(errs(x.d).length, 1, 'the lost-trade error every 60 s');
+  x.d.desk.placeElsewhere({ account: 'SIM-AG1', root: 'MNQ', side: 'buy', kind: 'market', qty: 2, price: null });
+  x.d.advance(60000); x.d.desk.everySecond(); assert.equal(errs(x.d).length, 0, 'until the pair is flat');
+  // after a restart: its trade record gone, its own stop protecting the position
+  const r = await inTrade();
+  r.d.desk.agentLoseTrade(r.a, true);
+  assert.deepEqual(errs(r.d), ['agent demo holds 1 on SIM-AG1 MNQ with no trade record (ChartBridge restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader']);
+});
+
+test('4d4a81f: refused plans held back are shown within about a second, the latest with the count of the rest', async () => {
+  const d = await makeAgentDesk();
+  d.hello(); d.take();
+  for (const id of ['h1', 'h2', 'h3']) d.plan({ id, qty: 99, riskDollars: 792 });
+  assert.deepEqual(d.take('agentPlan').map(p => p.id), ['h1'], 'one a second');
+  d.advance(1000); d.desk.everySecond();
+  const p = d.take('agentPlan');
+  assert.equal(p.length, 1); assert.equal(p[0].id, 'h3');
+  assert.match(p[0].result, /^refused: .* \(and 1 more refused plan in the second before, not shown\)$/);
+  d.advance(1000); d.desk.everySecond(); assert.equal(d.take('agentPlan').length, 0, 'once');
+});
+
+test('4d4a81f, section 10 (the agent\'s side): welcome\'s caps, agentState\'s session sent on change, the snapshot\'s end, orderName, cbId and role, fills of others on its pair', async () => {
+  const d = await makeAgentDesk();
+  d.desk.config.maxQty = { MNQ: 3, NQ: 2 };
+  d.hello();
+  const got = d.agentTake();
+  assert.deepEqual(got.map(m => m.type), ['welcome', 'agentState', 'position', 'position', 'snapshot']);
+  assert.deepEqual(got[0].rules.maxQty, { NQ: 2, MNQ: 3 }, 'the caps enforced: config.txt\'s gate 3 cap');
+  assert.deepEqual(got[4], { type: 'snapshot', roots: ['NQ', 'MNQ'] });
+  d.desk.config.maxBracketTicks = 40; d.desk.config.maxTicksAway = 400; d.desk.everySecond();
+  const w = d.agentTake('welcome');
+  assert.equal(w.length, 1, 'welcome again when a cap enforced changed'); assert.equal(w[0].rules.maxBracketTicks, 40); assert.equal(w[0].rules.maxTicksAway, 400);
+  d.desk.everySecond(); d.desk.everySecond();
+  assert.equal(d.agentTake('agentState').length, 0, 'agentState only when a field changed');
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  assert.equal(d.agentTake('agentState').length, 1);
+  d.plan({ price: 25400, qty: 1, riskDollars: 8 });
+  const ord = d.agentTake('order');
+  assert.match(ord[0].orderName, /^CB#nt\d+ ag:demo s16 t32$/);
+  d.tick(25399.75);
+  const after = d.agentTake();
+  const ex = after.find(m => m.type === 'exec');
+  assert.equal(ex.role, 'entry'); assert.match(ex.cbId, /^NT\d+$/);
+  assert.ok(after.filter(m => m.type === 'order' && m.role === 'stop').every(m => /^CB#nt\d+ stop f1 q1 p25396$/.test(m.orderName)), 'its legs: v2\'s names with the entry\'s tag');
+  // Anthony's exit from the page on its pair: the agent hears of it, role other, with the page's id
+  d.act({ type: 'order', cid: 'out', account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 1 });
+  const ox = d.agentTake('exec');
+  assert.equal(ox.length, 1); assert.equal(ox[0].role, 'other'); assert.match(ox[0].cbId, /^NT\d+$/);
+  // a fill in NinjaTrader itself on a pair it owns: cbId null
+  const y = await inTrade();
+  y.d.desk.placeElsewhere({ account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 1, price: null });
+  const yx = y.d.agentTake('exec');
+  assert.equal(yx.length, 1); assert.equal(yx[0].role, 'other'); assert.equal(yx[0].cbId, null);
 });
