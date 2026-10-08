@@ -1,0 +1,302 @@
+/*
+ * The shared visual kit (docs/KIT.md, live/kit.js): colours, type, components and the light, approved by Anthony
+ * 2026-10-08. Everything sits under one root class, .kit, with three surfaces:
+ *   .kit-trading  the trading screen: dim cool grey-blue lines and labels, so the chart's blue candles stay the brightest
+ *                 thing; cyan only for the light, active states and key buttons; no text glow.
+ *   .kit-desk     The Desk and the Studio (also the plain .kit): cyan lines; glow only on page titles, the active tab
+ *                 and the light; body text 15 px.
+ *   .kit-agent    the Agent tab: the fuller glow.
+ * Fonts: --kit-head Chakra Petch (titles, labels, tabs, buttons), --kit-body IBM Plex Sans, --kit-mono JetBrains Mono
+ * (every number, tabular). A page online loads them from Google Fonts (docs/KIT.md has the link); a trading PC loads
+ * nothing from the internet and falls back to the IBM Plex it serves itself (fonts/plex.css), then the system's.
+ *
+ * Rule R3 of docs/MOTION.md: numbers, prices, P&L and buttons never animate or ease. Nothing here puts a transition or
+ * an animation on a number, a chip, a button or a row (test/kit.test.js reads this file to make sure). The only things
+ * that move are the light's border layers and the decision drawer's slide; the only things that fade are the light's
+ * colour and the panel glow.
+ */
+
+@property --kit-ang { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+@property --kit-pc { syntax: '<color>'; inherits: true; initial-value: #5df2ff; }
+
+/* ---------------------------------------------------------------- tokens */
+.kit {
+  --kit-ground: #010307;
+  --kit-panel: rgba(0,6,12,.74);
+  --kit-drawer-bg: rgba(1,5,11,.97);
+  --kit-cyan: #5df2ff;
+  --kit-hot: #e8feff;
+  --kit-text: #c9e7ec;
+  --kit-dim: #7fb6c0;
+  --kit-line: rgba(93,242,255,.20);
+  --kit-line-soft: rgba(93,242,255,.10);
+  --kit-tint: rgba(93,242,255,.08);
+  --kit-meter: #5df2ff;
+  --kit-purple-deep: #6d28d9;
+  --kit-purple: #7b5cff;
+  --kit-purple-soft: #b69cff;
+  --kit-purple-text: #d8ccff;
+  --kit-danger: #ff3b5c;
+  --kit-danger-text: #ffd0d8;
+  --kit-profit: #3ddc97;
+  --kit-loss: #ff7a7a;
+  --kit-profit-text: #c9f7e3;
+  --kit-loss-text: #ffd6d6;
+  --kit-candle-up: #4b9cd3;
+  --kit-candle-down: #6d28d9;
+  --kit-sig-screen: #5df2ff;
+  --kit-sig-eyes: #8f7bff;
+  --kit-sig-judgment: #c81fe0;
+  --kit-sig-checks: #ffd23f;
+  --kit-sig-go: #3dff9a;
+  --kit-sig-pass: #ff8a2a;
+  --kit-sig-danger: #ff3b5c;
+  --kit-armed: #9b7bff;
+  --kit-armed-line: rgba(155,123,255,.32);
+  --kit-off: #3a4a55;
+
+  --kit-head: "Chakra Petch", "IBM Plex Sans Condensed", "Segoe UI", system-ui, sans-serif;
+  --kit-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --kit-mono: "JetBrains Mono", "IBM Plex Mono", Consolas, ui-monospace, monospace;
+
+  --kit-size: 15px;
+  --kit-glow-title: 0 0 14px rgba(93,242,255,.45);
+  --kit-glow-text: none;
+  --kit-glow-brand: none;
+  --kit-glow-active: 0 0 14px rgba(93,242,255,.45);
+  --kit-glow-meter: none;
+  --kit-lap-decide: 13s;
+  --kit-lap-trade: 9s;
+  --kit-sig: var(--kit-cyan);
+
+  color: var(--kit-text);
+  font-family: var(--kit-body);
+  font-size: var(--kit-size);
+  line-height: 1.5;
+  background: radial-gradient(900px 520px at 40% 30%, rgba(0,150,255,.06), transparent 65%), radial-gradient(520px 340px at 90% 95%, rgba(123,92,255,.05), transparent 70%), var(--kit-ground);
+}
+.kit *, .kit *::before, .kit *::after { box-sizing: border-box; }
+
+.kit-trading {
+  --kit-hot: #dfe8ef;
+  --kit-text: #b7c6d1;
+  --kit-dim: #7d8fa0;
+  --kit-line: rgba(120,146,166,.20);
+  --kit-line-soft: rgba(120,146,166,.14);
+  --kit-tint: rgba(120,146,166,.08);
+  --kit-meter: #7d8fa0;
+  --kit-size: 13px;
+  --kit-glow-title: none;
+  --kit-glow-active: none;
+  background: radial-gradient(900px 520px at 40% 35%, rgba(60,110,160,.05), transparent 65%), var(--kit-ground);
+}
+.kit-desk { --kit-size: 15px; }
+.kit-agent {
+  --kit-line: rgba(93,242,255,.26);
+  --kit-size: 14px;
+  --kit-glow-text: 0 0 10px rgba(93,242,255,.6);
+  --kit-glow-brand: 0 0 12px rgba(123,92,255,.8);
+  --kit-glow-active: 0 0 14px rgba(93,242,255,.5);
+  --kit-glow-meter: 0 0 10px rgba(93,242,255,.6);
+  background: radial-gradient(900px 520px at 42% 38%, rgba(0,150,255,.07), transparent 65%), radial-gradient(520px 340px at 88% 92%, rgba(123,92,255,.05), transparent 70%), var(--kit-ground);
+}
+
+/* colour classes: set --kit-sig for chips, tags, keys, steps, rows and the drawer (never the light's colour) */
+.kit .kit-c-screen { --kit-sig: var(--kit-sig-screen); }
+.kit .kit-c-cyan { --kit-sig: var(--kit-cyan); }
+.kit .kit-c-eyes { --kit-sig: var(--kit-sig-eyes); }
+.kit .kit-c-judgment { --kit-sig: var(--kit-sig-judgment); }
+.kit .kit-c-checks { --kit-sig: var(--kit-sig-checks); }
+.kit .kit-c-go { --kit-sig: var(--kit-sig-go); }
+.kit .kit-c-pass { --kit-sig: var(--kit-sig-pass); }
+.kit .kit-c-danger { --kit-sig: var(--kit-sig-danger); }
+.kit .kit-c-profit { --kit-sig: var(--kit-profit); }
+.kit .kit-c-loss { --kit-sig: var(--kit-loss); }
+.kit .kit-c-purple { --kit-sig: var(--kit-purple-soft); }
+.kit .kit-c-armed { --kit-sig: var(--kit-armed); }
+
+/* ---------------------------------------------------------------- type */
+.kit a { color: var(--kit-cyan); }
+.kit a:hover { color: var(--kit-hot); }
+.kit .kit-label { font: 500 11px/1.4 var(--kit-head); letter-spacing: .18em; text-transform: uppercase; color: var(--kit-dim); }
+.kit .kit-title { margin: 0; font: 600 32px/1.15 var(--kit-head); letter-spacing: .02em; color: var(--kit-hot); text-shadow: var(--kit-glow-title); }
+.kit .kit-h { margin: 0; font: 600 15px/1.3 var(--kit-head); letter-spacing: .02em; color: var(--kit-hot); }
+.kit .kit-brand { font-family: var(--kit-head); font-weight: 600; letter-spacing: .16em; color: var(--kit-purple-text); text-shadow: var(--kit-glow-brand); }
+.kit .kit-glow { color: var(--kit-hot); text-shadow: var(--kit-glow-text); }
+.kit .kit-hot { color: var(--kit-hot); }
+.kit .kit-dim { color: var(--kit-dim); }
+.kit .kit-num { font-family: var(--kit-mono); font-variant-numeric: tabular-nums; }
+.kit .kit-profit-text { color: var(--kit-profit); }
+.kit .kit-loss-text { color: var(--kit-loss); }
+.kit .kit-danger-text { color: var(--kit-danger-text); }
+.kit .kit-big { font: 600 34px/1 var(--kit-mono); font-variant-numeric: tabular-nums; color: var(--kit-hot); text-shadow: var(--kit-glow-text); }
+.kit .kit-big.kit-profit-text { color: var(--kit-profit); }
+.kit .kit-big.kit-loss-text { color: var(--kit-loss); }
+.kit .kit-big small { font-size: 15px; color: var(--kit-dim); text-shadow: none; }
+
+/* ---------------------------------------------------------------- panel, panel header, card */
+.kit .kit-panel { position: relative; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--kit-line); background: var(--kit-panel); transition: box-shadow 1.4s ease; }
+.kit .kit-panel-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 7px 12px; border-bottom: 1px solid var(--kit-line-soft); font-size: 13px; color: var(--kit-hot); }
+.kit .kit-panel-head > b { font: 600 13px var(--kit-head); letter-spacing: .06em; }
+.kit .kit-panel-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.kit .kit-card { position: relative; display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 16px 18px; border: 1px solid var(--kit-line); background: var(--kit-panel); transition: box-shadow 1.4s ease; }
+.kit .kit-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+
+/* ---------------------------------------------------------------- buttons (never a transition: rule R3) */
+.kit .kit-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 44px; padding: 0 14px; border: 1px solid var(--kit-line); border-radius: 0;
+  background: transparent; color: var(--kit-hot); cursor: pointer;
+  font: 600 13px/1.2 var(--kit-head); letter-spacing: .08em; text-decoration: none; white-space: nowrap;
+}
+.kit .kit-btn:hover, .kit .kit-btn.is-hover { background: var(--kit-tint); border-color: var(--kit-dim); }
+.kit .kit-btn:focus-visible, .kit .kit-btn.is-focus { outline: 2px solid var(--kit-cyan); outline-offset: 2px; }
+.kit .kit-btn:disabled, .kit .kit-btn.is-disabled { opacity: .45; cursor: not-allowed; }
+.kit .kit-btn[aria-pressed="true"], .kit .kit-btn.is-on { border-color: var(--kit-cyan); background: var(--kit-tint); color: var(--kit-hot); }
+.kit .kit-btn-primary { background: var(--kit-cyan); border-color: var(--kit-cyan); color: var(--kit-ground); box-shadow: var(--kit-glow-active); }
+.kit .kit-btn-primary:hover, .kit .kit-btn-primary.is-hover { background: var(--kit-hot); border-color: var(--kit-hot); }
+.kit .kit-btn-accent { background: rgba(109,40,217,.18); border-color: var(--kit-purple); color: var(--kit-purple-text); }
+.kit .kit-btn-accent:hover, .kit .kit-btn-accent.is-hover { background: rgba(109,40,217,.32); border-color: var(--kit-purple-soft); }
+.kit .kit-btn-danger { background: rgba(255,59,92,.10); border-color: var(--kit-danger); color: var(--kit-danger-text); }
+.kit .kit-btn-danger:hover, .kit .kit-btn-danger.is-hover { background: rgba(255,59,92,.20); border-color: var(--kit-danger); }
+.kit .kit-btn-danger[aria-pressed="true"], .kit .kit-btn-danger.is-on { border-color: var(--kit-danger); background: var(--kit-danger); color: #1a0006; }
+.kit .kit-btn-compact { min-height: 34px; padding: 0 10px; font-size: 12px; }
+
+/* ---------------------------------------------------------------- chips (11 px mono uppercase) and tags */
+.kit .kit-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--kit-line); color: var(--kit-text); font: 600 11px/1.3 var(--kit-mono); letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
+.kit .kit-chip-purple { border-color: var(--kit-purple); color: var(--kit-purple-text); background: rgba(109,40,217,.16); }
+.kit .kit-chip-profit { border-color: var(--kit-profit); color: var(--kit-profit-text); background: rgba(61,220,151,.08); }
+.kit .kit-chip-loss { border-color: var(--kit-loss); color: var(--kit-loss-text); background: rgba(255,122,122,.08); }
+.kit .kit-chip-danger { border-color: var(--kit-danger); color: var(--kit-danger-text); background: rgba(255,59,92,.10); }
+.kit .kit-chip[class*="kit-c-"] { border-color: var(--kit-sig); color: var(--kit-sig); background: color-mix(in srgb, var(--kit-sig) 10%, transparent); }
+.kit .kit-tag { display: inline-block; padding: 3px 4px; border: 1px solid var(--kit-sig); color: var(--kit-sig); font: 600 10px/1.2 var(--kit-mono); letter-spacing: .12em; text-align: center; text-transform: uppercase; }
+
+/* ---------------------------------------------------------------- status pill with a dot */
+.kit .kit-pill { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid var(--kit-line); background: rgba(0,6,12,.6); color: var(--kit-hot); font-size: 13px; }
+.kit .kit-pill > b { font: 600 12px var(--kit-head); letter-spacing: .08em; }
+.kit .kit-pill > .kit-dim { color: var(--kit-dim); }
+.kit .kit-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--kit-profit); }
+.kit .kit-dot.is-off { background: var(--kit-off); }
+.kit .kit-dot.is-warn { background: var(--kit-sig-checks); }
+.kit .kit-dot.is-bad { background: var(--kit-danger); }
+
+/* ---------------------------------------------------------------- tabs and the segmented switch */
+.kit .kit-tabs { display: flex; flex-wrap: wrap; gap: 2px; }
+.kit .kit-tab { display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px; border: 0; background: transparent; color: var(--kit-text); cursor: pointer; font: 500 14px var(--kit-head); letter-spacing: .04em; text-decoration: none; }
+.kit .kit-tab:hover, .kit .kit-tab.is-hover { color: var(--kit-hot); background: var(--kit-tint); }
+.kit .kit-tab:focus-visible, .kit .kit-tab.is-focus { outline: 2px solid var(--kit-cyan); outline-offset: -2px; }
+.kit .kit-tab.is-on, .kit .kit-tab[aria-selected="true"], .kit .kit-tab[aria-current="page"] { color: var(--kit-ground); background: var(--kit-cyan); box-shadow: var(--kit-glow-active); }
+.kit-trading .kit-tab { min-height: 34px; font-size: 13px; }
+.kit .kit-seg { display: flex; }
+.kit .kit-seg > button { flex: 1; min-height: 44px; padding: 0 10px; border: 1px solid var(--kit-line); background: transparent; color: var(--kit-dim); cursor: pointer; font: 600 13px var(--kit-head); letter-spacing: .16em; }
+.kit .kit-seg > button + button { border-left: 0; }
+.kit .kit-seg > button:focus-visible { outline: 2px solid var(--kit-cyan); outline-offset: -2px; }
+.kit .kit-seg > button[aria-pressed="true"], .kit .kit-seg > button.is-on { color: var(--kit-ground); background: var(--kit-cyan); box-shadow: var(--kit-glow-active); }
+
+/* ---------------------------------------------------------------- side rail */
+.kit .kit-rail { display: flex; flex-direction: column; gap: 4px; padding: 14px 6px; width: 84px; border-right: 1px solid var(--kit-line-soft); }
+.kit .kit-rail-brand { width: 44px; height: 44px; margin: 0 auto 10px; display: grid; place-items: center; border: 1px solid var(--kit-purple); background: rgba(109,40,217,.25); color: var(--kit-purple-text); font: 700 14px var(--kit-head); letter-spacing: .06em; }
+.kit .kit-rail-item { display: flex; flex-direction: column; align-items: center; gap: 4px; min-height: 44px; padding: 10px 4px; color: var(--kit-dim); font: 500 11px var(--kit-head); letter-spacing: .06em; text-align: center; text-decoration: none; }
+.kit .kit-rail-item:hover, .kit .kit-rail-item.is-hover { color: var(--kit-hot); }
+.kit .kit-rail-item:focus-visible { outline: 2px solid var(--kit-cyan); outline-offset: -2px; }
+.kit .kit-rail-item.is-on, .kit .kit-rail-item[aria-current="page"] { color: var(--kit-hot); background: var(--kit-tint); box-shadow: inset 2px 0 0 var(--kit-cyan); }
+.kit .kit-rail-item svg { width: 20px; height: 20px; }
+
+/* ---------------------------------------------------------------- meters (no transition: a meter is a number) */
+.kit .kit-meter { height: 6px; background: var(--kit-tint); }
+.kit .kit-meter > i { display: block; height: 100%; background: var(--kit-meter); box-shadow: var(--kit-glow-meter); }
+.kit .kit-meter-purple > i { background: var(--kit-purple); }
+.kit-agent .kit-meter-purple > i { box-shadow: 0 0 10px rgba(123,92,255,.7); }
+.kit .kit-meter-profit > i { background: var(--kit-profit); box-shadow: none; }
+
+/* ---------------------------------------------------------------- field and select */
+.kit .kit-field { display: flex; align-items: center; min-height: 44px; width: 100%; min-width: 0; padding: 0 10px; border: 1px solid var(--kit-line); border-radius: 0; background: rgba(0,0,0,.35); color: var(--kit-hot); font: 13px var(--kit-mono); }
+.kit .kit-field::placeholder { color: var(--kit-dim); }
+.kit .kit-field:focus, .kit .kit-field.is-focus { outline: 2px solid var(--kit-cyan); outline-offset: -1px; border-color: transparent; }
+.kit .kit-field:disabled, .kit .kit-field.is-disabled { opacity: .45; cursor: not-allowed; }
+.kit .kit-field[aria-invalid="true"] { border-color: var(--kit-danger); }
+.kit select.kit-field { appearance: none; -webkit-appearance: none; padding-right: 28px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--kit-dim) 50%), linear-gradient(135deg, var(--kit-dim) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+.kit select.kit-field option { background: #0a1016; color: var(--kit-hot); }
+.kit .kit-field-compact { min-height: 32px; }
+
+/* ---------------------------------------------------------------- step tracker: Screen, Eyes, Judgment, Checks, ChartBridge */
+.kit .kit-steps { position: relative; display: flex; margin: 0; padding: 0; list-style: none; container-type: inline-size; }
+.kit .kit-steps::before { content: ""; position: absolute; left: 10%; right: 10%; top: 16px; height: 2px; background: var(--kit-line); }
+.kit .kit-step { position: relative; z-index: 1; flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.kit .kit-step-node { display: grid; place-items: center; width: 32px; height: 32px; border: 2px solid var(--kit-line); border-radius: 50%; background: var(--kit-ground); color: var(--kit-dim); font: 600 12px var(--kit-mono); }
+.kit .kit-step-name { font: 500 11px var(--kit-head); letter-spacing: .14em; text-transform: uppercase; color: var(--kit-hot); }
+@container (max-width: 520px) { .kit .kit-step-name { font-size: 10px; letter-spacing: .02em; } .kit .kit-step-sub { font-size: 11px; } }
+@container (max-width: 340px) { .kit .kit-step-name { font-size: 9px; letter-spacing: 0; } .kit .kit-step-sub { display: none; } }
+.kit .kit-step-sub { font-size: 12px; color: var(--kit-dim); }
+.kit .kit-step.is-done .kit-step-node { border-color: var(--kit-sig); color: var(--kit-sig); }
+.kit .kit-step.is-now .kit-step-node { border-color: var(--kit-sig); background: var(--kit-sig); color: var(--kit-ground); box-shadow: 0 0 0 5px rgba(255,255,255,.05), 0 0 20px var(--kit-sig); }
+.kit-trading .kit-step.is-now .kit-step-node { box-shadow: none; }
+.kit .kit-step[data-step="screen"] { --kit-sig: var(--kit-sig-screen); }
+.kit .kit-step[data-step="eyes"] { --kit-sig: var(--kit-sig-eyes); }
+.kit .kit-step[data-step="judgment"] { --kit-sig: var(--kit-sig-judgment); }
+.kit .kit-step[data-step="checks"] { --kit-sig: var(--kit-sig-checks); }
+.kit .kit-step[data-step="chartbridge"] { --kit-sig: var(--kit-sig-go); }
+
+/* ---------------------------------------------------------------- stream row: a real <button> (no arrival animation) */
+.kit .kit-row { display: grid; grid-template-columns: 52px 60px minmax(0, 1fr) 14px; gap: 8px; align-items: start; width: 100%; min-height: 44px; padding: 9px 6px; border: 0; border-bottom: 1px solid var(--kit-line-soft); background: transparent; color: var(--kit-hot); cursor: pointer; font: inherit; font-size: 13px; line-height: 1.35; text-align: left; }
+.kit .kit-row:hover, .kit .kit-row.is-hover { background: var(--kit-tint); }
+.kit .kit-row:focus-visible, .kit .kit-row.is-focus { outline: 2px solid var(--kit-cyan); outline-offset: -2px; }
+.kit .kit-row[aria-pressed="true"], .kit .kit-row.is-sel { background: rgba(93,242,255,.10); box-shadow: inset 2px 0 0 var(--kit-sig); }
+.kit .kit-row > .kit-num { color: var(--kit-dim); }
+.kit .kit-row > .kit-row-go { color: var(--kit-dim); }
+
+/* ---------------------------------------------------------------- decision drawer: slides over a column */
+.kit .kit-drawer-host { position: relative; }
+.kit .kit-drawer { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; gap: 12px; padding: 16px; overflow: auto; border: 1px solid var(--kit-sig); background: var(--kit-drawer-bg); box-shadow: 0 0 34px -6px var(--kit-sig); animation: kit-slide .45s cubic-bezier(.2,.8,.2,1); }
+.kit .kit-drawer[hidden] { display: none; }
+.kit .kit-drawer-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.kit .kit-drawer-title { margin: 6px 0 0; font: 600 20px/1.25 var(--kit-head); color: var(--kit-sig); }
+.kit-agent .kit-drawer-title { text-shadow: 0 0 10px var(--kit-sig); }
+.kit .kit-drawer-close { min-width: 44px; }
+.kit .kit-quote { margin: 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--kit-sig); color: var(--kit-hot); font-size: 14px; line-height: 1.55; }
+.kit .kit-fact { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--kit-line-soft); font-size: 13px; }
+.kit .kit-fact > :first-child { color: var(--kit-dim); }
+.kit .kit-fact > :last-child { color: var(--kit-hot); text-align: right; }
+
+/* ---------------------------------------------------------------- legend key */
+.kit .kit-keys { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; }
+.kit .kit-key { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--kit-text); }
+.kit .kit-key > b { flex: none; display: inline-block; width: 30px; height: 3px; border-radius: 2px; background: var(--kit-sig); box-shadow: 0 0 8px var(--kit-sig); }
+.kit .kit-key.kit-key-armed > b { height: 8px; background: transparent; border: 1px solid rgba(155,123,255,.5); box-shadow: 0 0 10px rgba(123,92,255,.7); }
+
+/* ---------------------------------------------------------------- the armed outline: soft, faded, glowing purple */
+.kit .kit-armed { border-color: var(--kit-armed-line); box-shadow: 0 0 22px -3px rgba(123,92,255,.55), 0 0 8px -2px rgba(182,156,255,.35), inset 0 0 18px -8px rgba(123,92,255,.30); }
+
+/* ---------------------------------------------------------------- the light (kit.js makes the layers) */
+.kit .kit-lit { box-shadow: 0 0 34px -4px var(--kit-pc), inset 0 0 22px -12px var(--kit-pc); }
+.kit .kit-armed.kit-lit { box-shadow: 0 0 34px -4px var(--kit-pc), inset 0 0 22px -12px var(--kit-pc), 0 0 22px -3px rgba(123,92,255,.45), inset 0 0 18px -8px rgba(123,92,255,.25); }
+.kit .kit-orbit {
+  position: absolute; inset: -2px; padding: 3px; pointer-events: none; opacity: 0;
+  background: conic-gradient(from var(--kit-ang), transparent 0deg, transparent 200deg, var(--kit-pc) 310deg, #fff 352deg, transparent 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  transition: opacity 1.4s ease, --kit-pc 1.6s ease;
+  animation: kit-orbit var(--kit-lap-decide) linear infinite;
+  animation-play-state: paused;
+}
+.kit .kit-halo { position: absolute; inset: 0; pointer-events: none; filter: blur(7px); opacity: .95; }
+.kit .kit-halo > .kit-orbit { inset: -4px; padding: 6px; }
+.kit .kit-pace-trade > .kit-orbit, .kit .kit-pace-trade > .kit-halo > .kit-orbit { animation-duration: var(--kit-lap-trade); }
+.kit .kit-lit > .kit-orbit, .kit .kit-lit > .kit-halo > .kit-orbit { opacity: 1; animation-play-state: running; }
+
+@keyframes kit-orbit { to { --kit-ang: 360deg; } }
+@keyframes kit-slide { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* motion off (ChartKit.setMotion('off'), or the motion kit's Less motion) and the system's reduced motion: the light
+   stands still (its glow and a still arc stay), colours change at once, the drawer appears without sliding */
+:root.kit-motion-off .kit .kit-orbit, :root.motion-off .kit .kit-orbit { animation: none; transition: none; }
+:root.kit-motion-off .kit .kit-panel, :root.kit-motion-off .kit .kit-card, :root.motion-off .kit .kit-panel, :root.motion-off .kit .kit-card { transition: none; }
+:root.kit-motion-off .kit .kit-drawer, :root.motion-off .kit .kit-drawer { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .kit .kit-orbit { animation: none; transition: none; }
+  .kit .kit-panel, .kit .kit-card { transition: none; }
+  .kit .kit-drawer { animation: none; }
+}
