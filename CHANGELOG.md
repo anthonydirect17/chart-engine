@@ -23,6 +23,9 @@ A new evaluation account no longer needs a `config.txt` edit and F5, and dead ac
 - **Newly listed accounts reach the page.** When an account is listed (it connects, Show, or it comes back from Hidden with a
   position or orders) a signed-in page gets its working orders and positions at once. ChartBridge watches an account from
   the first second it sees it connected.
+- **No ghost or missing orders after sign-in.** An order or position change NinjaTrader reports while the page's order list
+  is being built is sent again right after the list, so the page always ends with the latest state (before, a stop
+  cancelled at that moment could reappear on the page, or a new one be missing).
 - **Tidy files.** Plain `off` records not seen connected for 30 days leave `accounts.txt` (logged); checked and archived ones
   never do. The last time each account was seen connected and the conversion marker are in a new `accounts-detail.txt`:
   `accounts.txt` keeps 0.5.0's exact format, because 0.5.0's reader refuses the whole file for a line with a 4th field.
