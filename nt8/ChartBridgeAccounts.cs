@@ -142,8 +142,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { if (timer != null) timer.Dispose(); } catch (Exception) { }
             timer = null;
             UnwatchStatus();
-            try { Save(); FlushLog(); } catch (Exception) { }   // 0.5.1: what is in memory (a first connected time, a log line) is not lost at a stop
+            FinalSave();   // 0.5.1: what is in memory (a first connected time, a log line) is not lost at a stop
             Clear();
+        }
+
+        public const int StopSaveWaitMs = 200;
+
+        // 0.5.1: the last save at a stop, on the thread that stops ChartBridge (NinjaTrader's at an F5), so it waits at most
+        // StopSaveWaitMs for a save already under way; if that one does not finish in time this save is skipped with an Output
+        // line (the next start reads both files again; at most the last second's connected times and log lines are lost).
+        private static void FinalSave()
+        {
+            bool got = false;
+            try
+            {
+                got = Monitor.TryEnter(FileLock, StopSaveWaitMs);
+                if (!got) { ChartBridgeServer.Log("accounts: a save was under way at the stop; the last save is skipped (the next start reads the files again)"); return; }
+                Save();
+                FlushLog();
+            }
+            catch (Exception ex) { ChartBridgeServer.Log("accounts: the last save at the stop failed (" + ex.Message + ")"); }
+            finally { if (got) Monitor.Exit(FileLock); }
         }
 
         public static void Clear()
@@ -886,7 +905,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // 0.5.1: an account that became listed (its first sighting, Show, or back from the archive) since the last look: every
-        // signed-in v3 page gets a fresh orders list and that account's positions (it got none while the account was not listed).
+        // signed-in v3 page gets that account's working orders (one order message each, never a full list: see SendScopeAgain)
+        // and its positions (it got none while the account was not listed).
         private static void TellNewlyListed()
         {
             List<Account> all = Snapshot();

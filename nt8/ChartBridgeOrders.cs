@@ -2300,11 +2300,29 @@ namespace NinjaTrader.NinjaScript.AddOns
             return "{\"type\":\"orders\",\"list\":[" + string.Join(",", items) + "]}";
         }
 
-        // 0.5.1 accounts: accounts that became listed (a first sighting, Show, back from the archive): a signed-in v3 page gets a
-        // fresh orders list and their positions, as at sign-in (it got none of their messages while they were not listed).
+        // 0.5.1 accounts: accounts that became listed (a first sighting, Show, back from the archive): a signed-in v3 page gets their
+        // working orders and positions (it got none of their messages while they were not listed). Never a full "orders" list here:
+        // a page replaces its orders on that message, and a list read on this thread (the timer's or a page's) could undo an order
+        // update NinjaTrader's thread sent meanwhile for another account. Each order goes as its own "order" message (pages merge
+        // it), built just before it goes; then their positions. Sign-in still sends the full list, as before.
+        public static Action ScopeAgainHook;   // test hook: runs between building an order message and sending it (unused in NinjaTrader)
+
         internal static void SendScopeAgain(ChartBridgeClient client, ICollection<string> accounts)
         {
-            client.Send(OrdersJson(client));
+            foreach (Account a in ChartBridgeAccounts.ScopeFor(client))
+            {
+                if (!accounts.Contains(a.Name)) continue;
+                List<Order> orders;
+                lock (a.Orders) orders = a.Orders.ToList();
+                foreach (Order o in orders)
+                {
+                    if (!IsWorking(o.OrderState) || ChartBridgeServer.RootFor(o.Instrument) == null) continue;
+                    string msg = ChartBridgeAccounts.ForPage(client, a, OrderJson(o, null), o);
+                    Action hook = ScopeAgainHook;
+                    if (hook != null) hook();
+                    client.Send(msg);
+                }
+            }
             foreach (string p in PositionJsons(client, accounts)) client.Send(p);
         }
 

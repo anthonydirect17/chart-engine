@@ -1359,7 +1359,9 @@ it. **`accounts-detail.txt`** (0.5.1, next to it, same writing rules): a first l
 first time a session sees it) and `converted\t<UTC ms>` (the `accounts` line was converted, below). A line it does not
 understand is skipped. Read with three tries, as `accounts.txt`; a file that still cannot be read is **never rewritten that
 run** (one Output line) and only means an account counts as seen this session once it connects again. ChartBridge's stop
-saves both files and flushes `accounts.log` (on the thread that stops it). **Pruning** (0.5.1): a plain `off` record not seen Connected for 30 days (by
+saves both files and flushes `accounts.log` (on the thread that stops it, NinjaTrader's at an F5): it waits at most 200 ms for
+a save already under way and otherwise skips its own with an Output line (the next start reads both files again; at most the
+last second's connected times and log lines are lost). **Pruning** (0.5.1): a plain `off` record not seen Connected for 30 days (by
 `accounts-detail.txt`, else its changed time) is forgotten at the hourly check, logged `forgotten`; a `trade` or `archived`
 record never is. **First start** (no
 `accounts.txt`): every account named in `tradeAccounts` comes pre-checked and the file is written; after that only the
@@ -1529,8 +1531,10 @@ Where the contract above left a detail open, the build chose the safe simple opt
   folder's for the list of agent files), each file opened so its owner may replace or delete it meanwhile. A file that cannot
   be read or understood refuses Hide for every account and is read again next time.
 - **Newly listed accounts reach the pages** (0.5.1): an account that becomes listed (its first sighting, Show, or back from
-  the archive with a position or working orders) makes every signed-in v3 page get a fresh `orders` list and that account's
-  `position` messages, as at sign-in (it got none of its messages while it was not listed). ChartBridge watches an account
+  the archive with a position or working orders) makes every signed-in v3 page get that account's working orders, one
+  `order` message each (pages merge them), and its `position` messages (it got none of its messages while it was not
+  listed). Never a full `orders` list there: pages replace theirs on it, and a list read off NinjaTrader's thread could undo
+  an `order` update NinjaTrader's thread sent meanwhile for another account. Sign-in still sends the full list. ChartBridge watches an account
   (its fills, orders and positions) from the 1 s check that first sees it Connected, and still on demand before an order.
 - **`trading`'s accounts list** (0.5.1): the checked accounts seen Connected this session only.
 - **`/diag`**: nothing added (account names stay out of new diagnostics).
