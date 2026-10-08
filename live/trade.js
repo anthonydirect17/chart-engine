@@ -175,14 +175,17 @@ function create(env) {
   }
   /* ChartBridge 0.5.1: what each working order last said in a message of its own (never one sent `again` after a snapshot):
      the note for an update compares with this, so a re-send that read ahead of NinjaTrader's own message never swallows
-     that message's note. Dropped with TR.orders' entries (finished, reconnect, a new orders list). */
+     that message's note. An again re-send only seeds an order it has no entry for (one a new orders list left out, its own
+     message already shown), so its next move reads "Moved". Dropped with TR.orders' entries (finished, reconnect, a new
+     orders list). */
   const announced = new Map();
   function onOrder(o) {
     if (!served(o.root)) return;
     const prev = announced.get(o.id) || null;
     const ev = OT.orderEvent(o, prev, fmt);
     if (OT.isWorking(o)) TR.orders.set(o.id, o); else TR.orders.delete(o.id);
-    if (!OT.isWorking(o)) announced.delete(o.id); else if (o.again !== true) announced.set(o.id, o);
+    if (!OT.isWorking(o)) announced.delete(o.id);
+    else if (o.again !== true || !announced.has(o.id)) announced.set(o.id, o);   // an again re-send only seeds a missing entry (after a new orders list)
     if (ev) flash(ev.text, ev.level === 'error' ? 'error' : '');
     if (!OT.isWorking(o) && unsent.delete(o.id)) env.unsent();
     env.changed();

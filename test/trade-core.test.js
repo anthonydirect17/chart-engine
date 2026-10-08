@@ -253,3 +253,17 @@ test('ChartBridge 0.5.1: a moved order re-sent (again) ahead of NinjaTrader\'s o
   R.core.message(Object.assign({}, q, { id: 'q3', price: 98 }));
   assert.equal(R.notes.filter(n => /Moved/.test(n)).length, 1, 'an order from the orders list: its move is said once: ' + R.notes.join(' / '));
 });
+
+test('ChartBridge 0.5.1: a stop placed while the sign-in list was built, left out of it and re-sent (again): its next move reads Moved', () => {
+  const R = rig();
+  R.on();
+  const y = { type: 'order', id: 'y1', account: 'Sim101', root: 'MNQ', name: 'MNQ 12-26', side: 'sell', kind: 'stop', qty: 1, price: 95, state: 'working', filled: 0 };
+  R.core.message(y);                                           // its own message: "Working SELL STP 1 @ 95.00"
+  R.core.message({ type: 'orders', list: [] });                // the sign-in list, built just before it, arrives without it
+  R.core.message(Object.assign({}, y, { again: true }));       // the snapshot's re-send
+  assert.ok(R.core.TR.orders.has('y1'));
+  R.notes.length = 0;
+  R.core.message(Object.assign({}, y, { price: 94 }));         // Anthony moves it
+  assert.equal(R.notes.length, 1, R.notes.join(' / '));
+  assert.match(R.notes[0], /^Moved SELL STP 1 @ 94\.00/);
+});
