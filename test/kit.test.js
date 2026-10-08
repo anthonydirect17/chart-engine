@@ -45,11 +45,13 @@ class El {
   setAttribute(a, v) { this.attrs[a] = String(v); }
   descendants() { return this.children.flatMap(c => [c, ...c.descendants()]); }
   querySelector(sel) { return this.descendants().find(e => matches(e, sel)) || null; }
+  querySelectorAll(sel) { return this.descendants().filter(e => matches(e, sel)); }
   matches(sel) { return matches(this, sel); }
   closest(sel) { for (let e = this; e; e = e.parentElement) if (matches(e, sel)) return e; return null; }
 }
 function page() {
-  const doc = { documentElement: new El('html'), createElement: t => { const e = new El(t); e.ownerDocument = doc; return e; } };
+  const doc = { documentElement: new El('html'), createElement: t => { const e = new El(t); e.ownerDocument = doc; return e; }, querySelectorAll: sel => doc.documentElement.querySelectorAll(sel) };
+  doc.documentElement.ownerDocument = doc;
   const el = (tag, attrs, ...kids) => { const e = new El(tag, attrs); e.ownerDocument = doc; return e.add(...kids); };
   return { doc, el };
 }
@@ -77,6 +79,8 @@ test('L2: the light refuses on data-no-light, inside one, a ticket, Flatten and 
   const refused = {
     'data-no-light': el('section', { class: 'kit-panel', 'data-no-light': '' }),
     'inside data-no-light': (() => { const inner = el('div', { class: 'kit-panel' }); el('div', { 'data-no-light': '' }, inner); return inner; })(),
+    'data-no-motion (the P&L box bot.js marks)': el('div', { class: 'bt-kv bt-money', 'data-no-motion': '' }),
+    'inside data-no-motion (the kill switch area)': (() => { const b = el('div', { class: 'kit-panel' }); el('div', { class: 'bt-sec', 'data-no-motion': '' }, b); return b; })(),
     'the ticket root (.tk)': el('div', { class: 'chart-live tk' }),
     'a ticket row (tk-row)': (() => { const r = el('div', { class: 'tk-row tk-acct' }); el('div', { class: 'ws-panel' }, r); return r; })(),
     'inside a ticket row': (() => { const b = el('div', { class: 'kit-panel' }); el('div', { class: 'tk-row' }, b); return b; })(),
@@ -157,6 +161,42 @@ test('L1: outside the Agent tab the light runs only in a trade; on the Agent tab
   assert.ok(!agent.classList.contains('kit-lit'));
 });
 
+test('L1: outside the Agent tab only one trade panel is lit; lighting one turns off the others', () => {
+  const { doc, el } = page();
+  const k = K.create({ document: doc, console: quiet().console });
+  const chart = el('section', { class: 'kit-panel' }), chart2 = el('section', { class: 'kit-panel' }), deskTrades = el('section', { class: 'kit-card' });
+  const agentTrade = el('section', { class: 'kit-panel' }), agentDecide = el('section', { class: 'kit-panel' });
+  doc.documentElement.add(
+    el('div', { class: 'kit kit-trading' }, chart, chart2),
+    el('div', { class: 'kit kit-desk' }, deskTrades),
+    el('div', { class: 'kit kit-agent' }, agentTrade, agentDecide));
+  const trade = c => ({ on: true, color: c || 'profit', pace: 'trade' });
+  const litTrade = () => doc.querySelectorAll('.kit-lit').filter(p => p.classList.contains('kit-pace-trade') && !p.closest('.kit-agent'));
+  assert.strictEqual(k.light(agentTrade, trade()), true);
+  assert.strictEqual(k.light(agentDecide, { on: true, color: 'judgment' }), true);
+  assert.strictEqual(k.light(chart, trade()), true);
+  assert.deepStrictEqual(litTrade(), [chart]);
+  assert.strictEqual(k.light(chart2, trade('loss')), true, 'a second trade panel lights');
+  assert.deepStrictEqual(litTrade(), [chart2], 'and the first goes off');
+  assert.ok(!k.lit(chart) && chart.children.length === 2, 'the first keeps its layers for next time');
+  assert.strictEqual(k.light(deskTrades, trade()), true, 'across surfaces in one document too');
+  assert.deepStrictEqual(litTrade(), [deskTrades]);
+  assert.ok(k.lit(agentTrade) && k.lit(agentDecide), 'the Agent tab follows its own rule: its panels stay lit');
+  // the same panel again changes nothing else; a refused panel turns nothing off
+  assert.strictEqual(k.light(deskTrades, trade('loss')), true);
+  assert.deepStrictEqual(litTrade(), [deskTrades]);
+  const ticket = el('div', { class: 'chart-live tk' });
+  doc.documentElement.add(ticket);
+  assert.strictEqual(k.light(ticket, trade()), false);
+  assert.deepStrictEqual(litTrade(), [deskTrades], 'a refusal turns nothing off');
+  // a trade panel lit on the Agent tab never turns off the trading screen's
+  assert.strictEqual(k.light(agentTrade, trade('loss')), true);
+  assert.deepStrictEqual(litTrade(), [deskTrades]);
+  // flat: off, and nothing else lights in its place
+  assert.strictEqual(k.light(deskTrades, { on: false }), false);
+  assert.deepStrictEqual(litTrade(), []);
+});
+
 test('the armed outline: on and off, and together with the light', () => {
   const { el } = page();
   const k = K.create({ console: quiet().console });
@@ -169,7 +209,11 @@ test('the armed outline: on and off, and together with the light', () => {
   assert.ok(!p.classList.contains('kit-armed') && p.classList.contains('kit-lit'));
   const css = read('live/kit.css');
   assert.match(css, /\.kit \.kit-armed \{ border-color: var\(--kit-armed-line\); box-shadow: 0 0 22px -3px rgba\(123,92,255,\.55\), 0 0 8px -2px rgba\(182,156,255,\.35\), inset 0 0 18px -8px rgba\(123,92,255,\.30\); \}/);
-  assert.match(css, /\.kit \.kit-armed\.kit-lit::after \{ content: ""; position: absolute; inset: -1px; pointer-events: none; border: 1px solid rgba\(155,123,255,\.50\);/, 'armed and lit: the purple ring is drawn over the light');
+  const ring = /\.kit \.kit-armed\.kit-lit::after \{([^}]*)\}/.exec(css);
+  assert.ok(ring, 'armed and lit: the purple ring is drawn over the light');
+  assert.match(ring[1], /content: ""; position: absolute; inset: -1px; pointer-events: none; border: 1px solid var\(--kit-armed-line\);/, 'the ring is the soft armed line, never a crisp solid line');
+  assert.ok(!/rgba\(155,123,255,\.(?:[4-9]\d?|[1-9]\d)\)/.test(ring[1].split('box-shadow')[0]), 'no ring line above the armed-line alpha');
+  assert.ok(K.parseColor(K.TOKENS['armed-line']).a <= 0.32, 'the armed line stays faded');
   // armed is trading truth: the panel, the card and the outline never fade
   for (const r of rules(css)) if (/kit-(panel|card|armed)\b/.test(r.sel) && !/kit-halo|kit-orbit/.test(r.sel)) assert.ok(!/transition|animation/.test(r.body), r.sel + ' has motion');
 });
@@ -215,6 +259,42 @@ test('motion: full by default, off remembered under kit-motion-v1, and storage t
   // in the source, every storage call is inside a try
   const src = read('live/kit.js');
   for (const m of src.matchAll(/^.*(?:getItem|setItem|removeItem|localStorage).*$/gm)) assert.match(m[0], /try \{|\/\*|^\s*\*|\/\//, 'not in a try: ' + m[0].trim());
+});
+
+test('one motion control: setMotion also sets the motion kit\'s Less motion when it is loaded', () => {
+  // a recording fake
+  const calls = [];
+  const fakeM = { setReducedMotion: (on, o) => { calls.push([on, o]); return on; } };
+  const p = page();
+  const k = K.create({ document: p.doc, storage: memStore(), matchMedia: () => ({ matches: false }), ChartMotion: fakeM });
+  k.setMotion('off');
+  k.setMotion('full');
+  k.setMotion('off', { save: false });
+  assert.deepStrictEqual(calls, [[true, undefined], [false, undefined], [true, { save: false }]]);
+  // no motion kit loaded: nothing to call, nothing breaks
+  const k0 = K.create({ document: page().doc, storage: memStore(), matchMedia: () => ({ matches: false }), ChartMotion: null });
+  assert.strictEqual(k0.setMotion('off'), 'off');
+  // a motion kit that throws never breaks the kit's own setting
+  const k1 = K.create({ document: page().doc, storage: memStore(), matchMedia: () => ({ matches: false }), ChartMotion: { setReducedMotion() { throw new Error('boom'); } } });
+  assert.strictEqual(k1.setMotion('off'), 'off');
+  // the real motion kit on the same fake page and storage: Less motion follows, and is saved under its own key
+  const M = require('../live/motion.js');
+  const p2 = page(), store = memStore();
+  const realM = M.create({ document: p2.doc, storage: store, matchMedia: () => ({ matches: false }), raf: () => 0 });
+  const k2 = K.create({ document: p2.doc, storage: store, matchMedia: () => ({ matches: false }), ChartMotion: realM });
+  assert.strictEqual(realM.reduced(), false);
+  k2.setMotion('off');
+  assert.strictEqual(realM.reduced(), true, 'Less motion is on');
+  assert.ok(p2.doc.documentElement.classList.contains('motion-off') && p2.doc.documentElement.classList.contains('kit-motion-off'));
+  assert.strictEqual(store.m['motion-reduced-v1'], '1');
+  assert.strictEqual(store.m['kit-motion-v1'], 'off');
+  k2.setMotion('full');
+  assert.strictEqual(realM.reduced(), false, 'Less motion is off again');
+  assert.ok(!p2.doc.documentElement.classList.contains('motion-off'));
+  assert.ok(!('motion-reduced-v1' in store.m) && !('kit-motion-v1' in store.m));
+  // and Settings' Less motion alone still stops the light (reduced() reads motion-off)
+  realM.setReducedMotion(true);
+  assert.strictEqual(k2.reduced(), true);
 });
 
 test('reduced motion: the system setting and the motion kit\'s Less motion stop the orbit, the glow stays (CSS)', () => {
@@ -337,7 +417,7 @@ test('R3: kit.css puts no transition or animation on a number, chip, button, row
   const all = rules(css);
   assert.ok(all.length > 80, 'the rules were read: ' + all.length);
   const NEVER = /kit-num|kit-big|kit-chip|kit-tag|kit-btn|kit-row|kit-tab|kit-seg|kit-meter|kit-field|kit-step|kit-pill|kit-dot|kit-rail|kit-fact|kit-key|kit-glow|kit-profit-text|kit-loss-text|button|select|input|\*/;
-  const MAY_MOVE = /^\.kit \.kit-(?:orbit|halo|drawer|pace-trade > \.kit-orbit|pace-trade > \.kit-halo > \.kit-orbit|lit > \.kit-orbit|lit > \.kit-halo > \.kit-orbit)$|^:root\.(?:kit-)?motion-off \.kit \.kit-(?:orbit|halo|drawer)$/;
+  const MAY_MOVE = /^\.kit \.kit-(?:orbit|halo|pace-trade > \.kit-orbit|pace-trade > \.kit-halo > \.kit-orbit|lit > \.kit-orbit|lit > \.kit-halo > \.kit-orbit)$|^:root\.(?:kit-)?motion-off \.kit \.kit-(?:orbit|halo)$/;
   let moving = 0;
   for (const r of all) {
     const decls = [...r.body.matchAll(/(?:^|;)\s*(transition[a-z-]*|animation[a-z-]*)\s*:\s*([^;]+)/g)].filter(d => !/^(none|0s?|paused|running)$/.test(d[2].trim()) && !/^animation-(?:play-state|duration)$/.test(d[1]));
@@ -349,8 +429,12 @@ test('R3: kit.css puts no transition or animation on a number, chip, button, row
     }
     if (decls.length) moving++;
   }
-  assert.ok(moving >= 3, 'the orbit, the panel glow and the drawer move');
-  // what moves: the orbit's opacity and colour, the panel's glow, the drawer's slide; nothing else
+  assert.ok(moving >= 2, 'the orbit and the panel glow move');
+  // the decision drawer holds prices and a button: it appears at once, never slides or fades in
+  for (const r of all) if (/kit-drawer/.test(r.sel)) assert.ok(!/transition|animation/.test(r.body), r.sel + ' has motion');
+  assert.ok(!/@keyframes kit-slide|kit-slide/.test(css), 'no drawer slide');
+  assert.deepStrictEqual([...css.matchAll(/@keyframes ([a-z-]+)/g)].map(m => m[1]), ['kit-orbit'], 'the orbit is the only keyframes');
+  // what moves: the orbit's opacity and colour, the panel's glow; nothing else
   for (const r of all) for (const d of r.body.matchAll(/(?:^|;)\s*transition\s*:\s*([^;]+)/g)) {
     if (d[1].trim() === 'none') continue;
     for (const part of d[1].split(',')) assert.match(part.trim(), /^(opacity|--kit-pc|box-shadow) [\d.]+s ease$/, r.sel + ': ' + part);
@@ -363,7 +447,10 @@ test('R3: kit.css puts no transition or animation on a number, chip, button, row
 test('the order surfaces the light refuses include the motion kit\'s (R3), and the copier', () => {
   const M = require('../live/motion.js');
   const noLight = K.NO_LIGHT.split(',').map(s => s.trim());
-  for (const s of M.NO_MOTION.split(',').map(x => x.trim()).filter(x => x !== '[data-no-motion]')) assert.ok(noLight.includes(s), s);
+  for (const s of M.NO_MOTION.split(',').map(x => x.trim())) assert.ok(noLight.includes(s), s);
+  assert.ok(noLight.includes('[data-no-motion]'), 'the P&L box and the kill switch areas bot.js marks never light');
+  assert.match(read('live/bot.js'), /bt-kill" data-no-motion/);
+  assert.match(read('live/bot.js'), /bt-kv bt-money" data-no-motion/);
   for (const s of ['[data-no-light]', '.tk', '.ws-flat', '.apg-cop-top', '.apg-cop-g', '[data-copier]']) assert.ok(noLight.includes(s), s);
   // the classes are the real ones: the ticket, Flatten and the copier in the live page
   assert.match(read('live/workspace.js'), /class="chart-live tk"/);
@@ -376,9 +463,10 @@ test('the order surfaces the light refuses include the motion kit\'s (R3), and t
 const KIT_FILES = ['live/kit.css', 'live/kit.js', 'live/kit.html', 'docs/KIT.md', 'test/kit.test.js', 'test/kit-smoke.mjs'];
 // AI model and vendor names, spelled backwards so this file does not name them either
 const MODEL = new RegExp('\\b(' + ['edualc', 'ciporhtna', 'tpg', 'ianepo', 'inimeg', 'korg', 'amall', 'lartsim', 'supo', 'tennos', 'ukiah'].map(w => [...w].reverse().join('')).join('|') + ')\\b', 'i');
-test('plain words: no em or en dash, and no AI model name, in any kit file', () => {
+test('plain words: no em or en dash, no AI model name, and no account name but Sim101, in any kit file', () => {
   for (const f of KIT_FILES) {
     const t = read(f);
+    for (const m of t.matchAll(/\bSim\d+\b/g)) assert.strictEqual(m[0], 'Sim101', f + ' names ' + m[0]);
     assert.ok(!/[\u2013\u2014]/.test(t), f + ' has an em or en dash');
     assert.ok(!MODEL.test(t), f + ' names a model');
   }
@@ -409,6 +497,11 @@ test('installed: kit.css, kit.js and kit.html are in the www list, and the galle
     assert.ok(faces.some(f => f.family === fam && f.weight === +m[1]), fam + ' ' + m[1] + ' is used but not served');
   }
   assert.ok(!/font: 500 [^;]*var\(--kit-mono\)/.test(css));
+  // the hybrid: chips in the title font (a number inside keeps mono); fields in the body font, numeric ones in mono
+  assert.match(css, /\.kit \.kit-chip \{[^}]*font: 600 11px\/1\.3 var\(--kit-head\);/);
+  assert.match(css, /\.kit \.kit-chip \.kit-num \{ font-family: var\(--kit-mono\);/);
+  assert.match(css, /\.kit \.kit-field \{[^}]*font: 13px var\(--kit-body\);/);
+  assert.match(css, /\.kit \.kit-field\.kit-num \{ font-family: var\(--kit-mono\);/);
   // test/offline.test.js reads every www file: kit.html, kit.css, kit.js and the font stylesheet are among them
   assert.match(read('test/offline.test.js'), /for \(const f of www\)/);
   // the gallery uses sample data only
@@ -423,5 +516,12 @@ test('docs/KIT.md: the tokens, the fonts link, the rules, the API and the storag
   assert.match(md, /## No explanatory labelling/);
   assert.match(md, /`\.kit-keys`, `\.kit-key`\) is \*\*gallery and docs only, never on a product\s+screen\*\*/);
   assert.match(read('live/kit.css'), /legend key: gallery and docs only, never on a product screen/);
+  assert.match(md, /the caller supplies the "in a trade" state/, 'the caller says when it is in a trade');
+  assert.match(md, /turns off any other lit trade panel in the document/);
+  assert.match(md, /`data-no-light` or `data-no-motion`/);
+  assert.match(md, /first children, so host CSS using\s+`:first-child` or `:nth-child`/, 'the layers note');
+  assert.match(md, /`overflow: hidden` clips the orbit and\s+the halo/);
+  assert.match(md, /ChartMotion\.setReducedMotion`, so Settings' Less motion stays the one user control/);
+  assert.ok(!/drawer's slide|slides over its column/.test(md), 'the drawer never slides');
   for (const s of ['kit-motion-v1', 'data-no-light', 'ChartKit.light', 'ChartKit.armed', 'ChartKit.setMotion', 'kit-trading', 'kit-desk', 'kit-agent', 'kit-armed', 'R3', 'npm run smoke:kit']) assert.ok(md.includes(s), s);
 });

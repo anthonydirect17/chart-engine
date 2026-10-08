@@ -1,6 +1,8 @@
 // Kit smoke test (live/kit.css, live/kit.js, live/kit.html, docs/KIT.md) in Chromium: the gallery loads with no console
-// error, never scrolls sideways at 390, 1366 and 1920 px, the light circles only while lit, stands still with reduced
-// motion and with motion off, and refuses on the mock ticket, Flatten and the copier. Screenshots in test/out/.
+// error, never scrolls sideways at 390, 1366 and 1920 px, the light circles only while lit, only one trade panel is lit
+// outside the Agent tab, the light stands still with reduced motion and with motion off, it refuses on the mock ticket,
+// Flatten and the copier, and nothing that holds a number, a price or a button moves, or sits inside anything that
+// moves (R3). Screenshots in test/out/.
 //   npm run smoke:kit        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 // The gallery is served as the PC serves it: nothing from the internet; its three fonts come from live/fonts.
 import { chromium } from 'playwright';
@@ -43,6 +45,27 @@ const orbits = (page, sel) => page.evaluate(s => {
   const host = s ? document.querySelector(s) : document;
   return document.getAnimations().filter(a => a.animationName === 'kit-orbit' && host.contains(a.effect.target) && a.playState === 'running').length;
 }, sel || null);
+// lit trade panels outside the Agent tab (Anthony's rule: only the one panel showing the trade)
+const tradeLit = page => page.evaluate(() => [...document.querySelectorAll('.kit-lit.kit-pace-trade')].filter(e => !e.closest('.kit-agent')).map(e => e.id || e.className));
+// R3: every element that holds a number, a price or a button, with the element itself or an ancestor that has a
+// transition or an animation (motion is inherited: a sliding box moves the prices in it)
+const R3_HOLDS = '.kit-num, .kit-big, .kit-chip, .kit-btn, .kit-row, .kit-tag, .kit-tab, .kit-seg > button, .kit-meter > i, .kit-field, .kit-fact, .kit-drawer-title, button, [data-no-light], [data-no-motion]';
+const r3Moving = page => page.evaluate(sel => {
+  const root = document.getElementById('kitRoot');
+  const animated = new Set(document.getAnimations().map(a => a.effect && a.effect.target).filter(Boolean));
+  const moves = el => {
+    const s = getComputedStyle(el);
+    return animated.has(el) || s.animationName !== 'none' || !s.transitionDuration.split(',').every(d => parseFloat(d) === 0);
+  };
+  const bad = [];
+  for (const el of document.querySelectorAll(sel)) {
+    if (!root.contains(el)) continue;
+    for (let a = el; a && a !== document.documentElement; a = a.parentElement) {
+      if (moves(a)) { bad.push((el.id || el.tagName + '.' + el.className) + ' via ' + (a === el ? 'itself' : (a.id || a.tagName + '.' + a.className) + ' (' + getComputedStyle(a).animationName + ')')); break; }
+    }
+  }
+  return bad;
+}, R3_HOLDS);
 
 try {
   // ---- loads clean, offline, as the PC serves it
@@ -68,11 +91,19 @@ try {
   });
   check(/^"?Chakra Petch"?, "?IBM Plex Sans Condensed"?/.test(fam.head) && /^"?IBM Plex Sans"?/.test(fam.body) && /^"?JetBrains Mono"?, "?IBM Plex Mono"?/.test(fam.mono), 'the hybrid: titles Chakra Petch, body IBM Plex Sans, numbers JetBrains Mono, with Plex fallbacks: ' + JSON.stringify(fam));
   check(fam.loaded.plex && fam.loaded.chakra && fam.loaded.jet, 'all three fonts load from the page folder (live/fonts), nothing from the internet: ' + JSON.stringify(fam.loaded));
+  const fam2 = await page.evaluate(() => {
+    const f = el => getComputedStyle(el).fontFamily.split(',')[0].replace(/"/g, '').trim();
+    return { chip: f(document.querySelector('#chips .kit-chip-profit')), account: f(document.querySelector('select[aria-label="Account"]')), text: f(document.querySelector('input[aria-label="Sample field"]')),
+      numField: f(document.querySelector('input[aria-label="Focused field"]')), numInChip: (() => { const c = document.createElement('span'); c.className = 'kit-chip'; c.innerHTML = 'Stop <span class="kit-num">16</span>'; document.getElementById('chips').appendChild(c); const r = f(c.querySelector('.kit-num')); c.remove(); return r; })() };
+  });
+  check(fam2.chip === 'Chakra Petch' && fam2.numInChip === 'JetBrains Mono', 'chips are in Chakra Petch; a number inside a chip stays JetBrains Mono: ' + JSON.stringify(fam2));
+  check(fam2.account === 'IBM Plex Sans' && fam2.text === 'IBM Plex Sans' && fam2.numField === 'JetBrains Mono', 'the account select and text fields use the body font; a numeric field uses JetBrains Mono: ' + JSON.stringify(fam2));
 
   // ---- the light circles only while lit
   const lit = await page.evaluate(() => ({ demo: document.getElementById('lightDemo').classList.contains('kit-lit'), layers: document.querySelectorAll('#lightDemo > .kit-orbit, #lightDemo > .kit-halo > .kit-orbit').length,
     pc: getComputedStyle(document.getElementById('lightDemo')).getPropertyValue('--kit-pc').trim() }));
   check(lit.demo && lit.layers === 2, 'the light demo is lit with its two layers (orbit and halo)');
+  check(JSON.stringify(await tradeLit(page)) === '["lightDemo"]', 'at load only one trade panel is lit outside the Agent tab: ' + JSON.stringify(await tradeLit(page)));
   check(await orbits(page, '#lightDemo') === 2, 'the lit panel\'s orbit and halo circle (a CSS animation, running)');
   check(await page.evaluate(() => getComputedStyle(document.querySelector('#lightDemo > .kit-orbit')).animationDuration) === '9s', 'a trade laps in 9 s');
   check(await page.evaluate(() => getComputedStyle(document.querySelector('#lightDecide > .kit-orbit')).animationDuration) === '13s', 'deciding laps in 13 s');
@@ -87,10 +118,13 @@ try {
   await page.waitForTimeout(1800);
   check(await page.evaluate(() => getComputedStyle(document.querySelector('#lightDemo > .kit-orbit')).getPropertyValue('--kit-pc').trim()) === 'rgb(61, 220, 151)', 'in profit: the light fades to the locked profit green');
   await page.locator('#lightTrading').screenshot({ path: path.join(out, 'kit-light-profit.png') });
-  // numbers, chips and buttons never move: no transition and no animation on them
-  const still = await page.evaluate(() => [...document.querySelectorAll('#kitRoot .kit-num, #kitRoot .kit-big, #kitRoot .kit-chip, #kitRoot .kit-btn, #kitRoot .kit-row, #kitRoot .kit-tag, #kitRoot .kit-tab, #kitRoot .kit-seg > button, #kitRoot .kit-meter > i')]
-    .filter(el => { const s = getComputedStyle(el); return !(s.transitionDuration.split(',').every(d => parseFloat(d) === 0) && s.animationName === 'none'); }).map(el => el.className));
-  check(still.length === 0, 'R3: no number, chip, button, row, tab or meter has a transition or an animation: ' + JSON.stringify(still.slice(0, 5)));
+  // numbers, prices and buttons never move, on their own or inside anything that moves (the decision drawer open: it
+  // holds prices and a Close button)
+  await page.click('#streamRows [data-open="fill"]');
+  const drawerOpen = await page.evaluate(() => !document.getElementById('drawer').hidden);
+  const still = await r3Moving(page);
+  check(drawerOpen && still.length === 0, 'R3: no number, price, chip, button, row, tab, field or meter moves, on its own or through an animated or transitioned ancestor (drawer open): ' + JSON.stringify(still.slice(0, 5)));
+  await page.click('#drawerClose');
 
   // ---- the refusal on the mock ticket, Flatten and the copier
   const ref = await page.evaluate(() => ({
@@ -103,9 +137,14 @@ try {
   check(!ref.ticket && !ref.row && !ref.flatten && !ref.copier && ref.layers === 0 && ref.litInside === 0, 'the light refuses on the mock ticket, a ticket row, Flatten and the copier, and adds nothing to them');
   check(!ref.flat, 'outside the Agent tab a chart while flat (no trade) refuses');
   check(ref.chart, 'a chart panel in a trade lights');
+  check(JSON.stringify(await tradeLit(page)) === '["mockChart"]', 'and the light demo went off: still one trade panel lit: ' + JSON.stringify(await tradeLit(page)));
   check(/Refused: ticket/.test(ref.log), 'the gallery says so in plain words');
   check(page.warnings.some(w => /^ChartKit: no light here/.test(w)), 'the refusal leaves a console note');
   check(page.consoleErrors.length === 0, 'still no console error after every control');
+
+  // ---- the trade back on the light demo
+  await page.click('[data-trade="profit"]');
+  check(JSON.stringify(await tradeLit(page)) === '["lightDemo"]', 'the trade back on the light demo: one trade panel lit');
 
   // ---- motion off stops the light; the glow stays
   await page.click('[data-motion="off"]');
@@ -128,15 +167,27 @@ try {
     [...s.querySelectorAll('.kit-keys, .kit-key, p, .gal-note, .kit-step-sub')].filter(el => !(el.classList.contains('kit-step-sub') && /^[\d.]+ ?(s|ms)$/.test(el.textContent.trim()))).map(el => s.id + ' ' + el.className + ': ' + el.textContent.trim().slice(0, 40))));
   check(told.length === 0, 'the product mocks carry no legend, no explaining sentence and no hint: ' + JSON.stringify(told));
   check(await page.evaluate(() => !/\b(in profit|under water|tap one|tap a row)\b/i.test(['v-trading', 'v-desk', 'v-agent'].map(id => document.getElementById(id).textContent).join(' '))), 'no status words beside the light on the product mocks');
+  check(await page.evaluate(() => !/making a plan/i.test(document.getElementById('v-agent').textContent) && document.querySelector('#v-agent .kit-step.is-now[data-step="judgment"]') && /Sample data/.test(document.getElementById('v-agent').textContent)),
+    'the agent mock: the step tracker says Judgment, no sentence repeats it, and the Sample data label stays');
+  const sims = await page.evaluate(() => [...new Set([...(document.body.innerText + ' ' + [...document.querySelectorAll('option')].map(o => o.textContent).join(' ')).matchAll(/\bSim(\d+)/g)].map(m => m[0]))]);
+  check(sims.length === 1 && sims[0] === 'Sim101', 'no account name but Sim101 on the page: ' + JSON.stringify(sims));
+  await page.click('[data-show="tradingChart"]');
+  check(JSON.stringify(await tradeLit(page)) === '["tradingChart"]' && await page.evaluate(() => document.querySelector('[data-show="tradingChart"]').getAttribute('aria-pressed') === 'true' && document.querySelector('[data-trade="flat"]').getAttribute('aria-pressed') === 'true'),
+    'the trade on the trading screen: only its chart is lit, and the light demo shows flat');
   await page.locator('#v-trading').screenshot({ path: path.join(out, 'kit-trading.png') });
+  await page.click('[data-show="deskTrades"]');
+  check(JSON.stringify(await tradeLit(page)) === '["deskTrades"]', 'the trade on The Desk: only Today\'s trades is lit');
   await page.locator('#v-desk').screenshot({ path: path.join(out, 'kit-desk.png') });
   await page.locator('#v-agent').screenshot({ path: path.join(out, 'kit-agent.png') });
+  await page.click('[data-armed-trade="on"]');
+  check(JSON.stringify(await tradeLit(page)) === '["armedLit"]', 'the armed chart in a trade: only it is lit');
+  await page.waitForTimeout(1800);   // the light's fade in
   await page.locator('#armedRow').screenshot({ path: path.join(out, 'kit-armed.png') });
   const armed = await page.evaluate(() => {
     const el = document.getElementById('armedLit'), s = getComputedStyle(el), ring = getComputedStyle(el, '::after'), halo = getComputedStyle(el.querySelector(':scope > .kit-halo'));
     return { border: s.borderTopColor, ring: ring.borderTopColor, glow: halo.boxShadow, lit: el.classList.contains('kit-lit') };
   });
-  check(armed.border === 'rgba(155, 123, 255, 0.32)' && armed.ring === 'rgba(155, 123, 255, 0.5)' && armed.lit && /rgb\(61, 220, 151\)/.test(armed.glow), 'armed and lit: the purple outline (a ring over the light) and the light\'s glow show together: ' + JSON.stringify(armed));
+  check(armed.border === 'rgba(155, 123, 255, 0.32)' && armed.ring === 'rgba(155, 123, 255, 0.32)' && armed.lit && /rgb\(61, 220, 151\)/.test(armed.glow), 'armed and lit: the soft purple outline (a faded ring at the armed-line alpha over the light) and the light\'s glow show together: ' + JSON.stringify(armed));
   // armed is trading truth: it shows and goes at once, even while lit
   const flip = await page.evaluate(() => {
     const el = document.getElementById('armedLit');
@@ -146,6 +197,20 @@ try {
   });
   check(flip.off.shadow === 'none' && flip.off.ring === 'none' && /rgba\(123, 92, 255, 0\.55\)/.test(flip.on.shadow) && flip.on.ring !== 'none' && flip.anims === 0, 'the armed outline comes and goes at once, never fading: ' + JSON.stringify(flip));
   await page.screenshot({ path: path.join(out, 'kit-gallery-1440.png'), fullPage: true });
+  check((await tradeLit(page)).length <= 1, 'after every control: at most one trade panel lit outside the Agent tab');
+
+  // ---- one motion control: with the motion kit loaded, ChartKit.setMotion sets its Less motion too
+  await page.addScriptTag({ url: '/live/motion.js' });
+  const one = await page.evaluate(() => {
+    ChartKit.setMotion('off');
+    const off = { kit: ChartKit.motion(), less: ChartMotion.reduced(), saved: localStorage.getItem('motion-reduced-v1'), cls: document.documentElement.classList.contains('motion-off') };
+    ChartKit.setMotion('full');
+    const full = { kit: ChartKit.motion(), less: ChartMotion.reduced(), saved: localStorage.getItem('motion-reduced-v1'), cls: document.documentElement.classList.contains('motion-off') };
+    return { off, full };
+  });
+  check(one.off.kit === 'off' && one.off.less && one.off.saved === '1' && one.off.cls && one.full.kit === 'full' && !one.full.less && one.full.saved === null && !one.full.cls,
+    'ChartKit.setMotion also sets ChartMotion\'s Less motion when the motion kit is loaded: ' + JSON.stringify(one));
+  check(page.consoleErrors.length === 0, 'no console error at the end: ' + JSON.stringify(page.consoleErrors));
   await page.close();
 
   // ---- no sideways scroll at a phone, a laptop and a desktop
