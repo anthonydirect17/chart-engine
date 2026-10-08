@@ -66,13 +66,16 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   assert.match(restop, /OrderType\.StopMarket, OrderEntry\.Manual, TimeInForce\.Gtc/);
   assert.match(restop, /lock \(ChartBridgeOrders\.AgentPlaceLock\)[\s\S]*AgentListed[\s\S]*AgentEffective[\s\S]*\.CreateOrder\(/);
   assert.match(step, /!ChartBridgeOrders\.AgentFreshLast\(j\.Root, ChartBridgeAgents\.TradingFreshMs, out lastPx\)/, 'no leg cancelled while the market is not trading');
+  // review D4: helloed only after the welcome is queued (no agentState before it)
+  const hello = bodies(acode, 'OnHello');
+  assert.ok(hello.indexOf('ToAgent(WelcomeJson(served));') > 0 && hello.indexOf('ToAgent(WelcomeJson(served));') < hello.indexOf('helloed = true'), 'helloed set after the welcome');
   // review A C3: agentState is built before StateLock is taken; the lock only compares and sends
   const send = bodies(acode, 'SendState');
   assert.ok(send.indexOf('string json = StateJson();') > 0 && send.indexOf('string json = StateJson();') < send.indexOf('lock (StateLock)'), 'the state is built outside StateLock');
   // contract section 10: an agent entry's protective exit is named for the agent; its legs keep v2's names (the entry's tag)
   assert.match(bodies(ocode, 'PlaceLegs'), /agentOf != null \? "CB#" \+ br\.Tag \+ " ag:" \+ agentOf \+ " protect f" \+ filled\.ToString\(CultureInfo\.InvariantCulture\) : "CB#" \+ br\.Tag \+ " exit" \+ mark/);
   assert.match(bodies(acode, 'SendCancel'), /try \{ o\.Account\.Cancel\(new\[\] \{ o \}\); \}\s*catch \(Exception ex\)/);
-  assert.match(bodies(acode, 'StepFlatten'), /may\.Where\(o => o != j\.Close && \(j\.Owned \|\| IsMine\(o\)\)\)/);
+  assert.match(bodies(acode, 'StepFlatten'), /may\.Where\(o => o != j\.Close && \(j\.Owned \|\| \(IsMine\(o\) && !\(IsReStop\(o\) && \(p1 != 0 \|\| p2 != 0\)\)\)\)\)/, 'a pair it does not own: only its own orders, never its stop placed again over a position');
   // every entry goes through ChartBridgeOrders.PlaceAgentEntry: the page's order path with the agent as its source
   assert.match(bodies(acode, 'Place'), /ChartBridgeOrders\.PlaceAgentEntry\(Id, text, out placed\)/);
   assert.match(bodies(acode, 'Place'), /string why = Checks\(p, forAccount, forAccount != null, out acct\);/, 'every check again at the moment of placing, and the account they validated is the one used');

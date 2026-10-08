@@ -179,6 +179,7 @@ public static class AgentHarness
             ReviewFixes();   // the two order-path reviews of cf97657 (reviewer A's RA1 to RA8, reviewer B's flood and stale record)
             Round3();   // contract section 10, reviewer B's second nits, reviewer A's second round (A1 to A5)
             Round4();   // contract section 10 items 7 to 9, reviewer A's C1 to C5
+            Round5();   // reviewer A's D1 to D5 (RS1, RS3)
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -2297,6 +2298,166 @@ public static class AgentHarness
             Check(!ChartBridgeServer.ExecutionsReplayed("SIM-E"), "C5: an execution read that fails does not mark the account as replayed");
             catchUp.Invoke(null, new object[] { sime });
             Check(ChartBridgeServer.ExecutionsReplayed("SIM-E"), "C5: the next read that goes through does");
+        });
+        foreach (Account x in Account.All.ToList()) Settle(x);
+    }
+
+    // ------------------------------------------------------------ round 5: reviewer A's D1 to D5 (RS1, RS3)
+    static Order ReStopOf(Account a) { lock (a.Orders) return a.Orders.LastOrDefault(o => IsLive(o) && Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae stop p")); }
+    static Order LiveClose(Account a) { lock (a.Orders) return a.Orders.LastOrDefault(o => IsLive(o) && Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$")); }
+    // Monday 16:59:59: the legs cancelled, the close rejected; 17:00:30 shut: its stop placed again
+    static Order ShutWithReStop(Order e)
+    {
+        Fill(e, 1, 24999);
+        et = new DateTime(2026, 10, 12, 16, 59, 59);
+        Hold = (kd, o) => kd == "submit" && (o.Name ?? "").EndsWith(" ag:manrae flat");
+        Last2();
+        Advance(1000);
+        Hold = null;
+        Order cl = LiveClose(sime);
+        et = new DateTime(2026, 10, 12, 17, 0, 30);   // shut before the rejection is handled: the shut branch places the stop again
+        if (cl != null) { cl.OrderState = OrderState.Rejected; Update(cl); }
+        Advance(2000);
+        return ReStopOf(sime);
+    }
+
+    static void Round5()
+    {
+        sime = Account.All.First(x => x.Name == "SIM-E");
+
+        // D2 (RS1): the close still works when the market shuts: the stop is not placed again beside it
+        Part("D2", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "D2: an entry was placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            Hold = (kd, o) => kd == "submit" && (o.Name ?? "").EndsWith(" ag:manrae flat");   // accepted, not filled
+            et = new DateTime(2026, 10, 9, 16, 59, 50);
+            for (int q = 0; q < 8; q++) { Last2(); Advance(1000); }
+            Order cl = LiveClose(sime);
+            et = new DateTime(2026, 10, 9, 17, 0, 5);
+            int s0 = N(page);
+            Advance(12000);
+            Check(cl != null && IsLive(cl) && ReStopOf(sime) == null && Any(page, s0, "its market close still works (it may fill at the open), so its stop is not placed again beside it"),
+                  "D2 (RS1): its market close still works at the shut: no stop placed beside it, and the error says so");
+            Hold = null;
+            if (cl != null) { cl.OrderState = OrderState.Cancelled; Update(cl); }
+            SetPos(sime, mnq, 0); ClearMoves();
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // D1 (RS3): a restart over the shut hours with its stop placed again: the pair stays the agent's, the stop stays, Anthony is
+        // told every 60 s, and at the open the flatten closes it
+        Part("D1", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "D1: an entry was placed: " + AgentReject()); return; }
+            Order rs = ShutWithReStop(e);
+            Check(rs != null && PosOf(sime, mnq) == 1, "D1 setup: shut, long 1, its stop placed again: " + (rs != null ? rs.Name : "none"));
+            if (rs == null) return;
+            ChartBridgeOrders.Clear(); ChartBridgeOrders.LoadPlansNow();
+            foreach (Account x in Account.All) ChartBridgeOrders.SeedNoted(x);
+            Restart();   // no trade followed after it
+            int s0 = N(page), c0 = sime.Calls.Count;
+            Advance(6000);
+            string say = "agent manrae holds 1 on SIM-E MNQ with no trade record (ChartBridge restarted); only its own stop protects it";
+            Check(IsLive(rs) && !sime.Calls.Skip(c0).Any() && ChartBridgeAgents.EntryCheck("page", sime, "MNQ") != null, "D1: after the restart its stop stays and the pair is still the agent's (the owner lock holds)");
+            Check(page.Skip(s0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(say)) == 1, "D1: the lost-trade error at once");
+            Advance(61000);
+            Check(page.Skip(s0).Count(x => x.Contains(say)) == 2, "D1: and every 60 s");
+            et = new DateTime(2026, 10, 12, 18, 0, 30);
+            for (int q = 0; q < 6; q++) { Last2(); Advance(1000); }
+            Check(!IsLive(rs) && sime.Calls.Skip(c0).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")), "D1: at the open the flatten cancels that stop and closes the 1");
+            SetPos(sime, mnq, 0); ClearMoves();
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1000);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // D1: a job that does not own the pair never cancels its stop placed again while the account holds a position there
+        Part("D1 unowned", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "D1: an entry was placed: " + AgentReject()); return; }
+            Order rs = ShutWithReStop(e);
+            if (rs == null) { Check(false, "D1 unowned setup: no stop placed again"); return; }
+            SetPos(sime, mnq, -2); ClearMoves();   // the account turns short 2 (not the agent's: its stop is a sell)
+            Advance(5000);
+            et = new DateTime(2026, 10, 12, 18, 0, 30);
+            int c0 = sime.Calls.Count;
+            for (int q = 0; q < 6; q++) { Last2(); Advance(1000); }
+            Check(IsLive(rs) && !sime.Calls.Skip(c0).Any(c => c.Contains(" ag:manrae flat ") || c.Contains("cancel " + rs.Name)), "D1: the pair not the agent's: its stop placed again is not cancelled, nothing closed");
+            SetPos(sime, mnq, 0); ClearMoves();
+            for (int q = 0; q < 3; q++) { Last2(); Advance(1000); }
+            Check(!IsLive(rs), "D1 (lead's default): flat, that stop could only open a position: it is cancelled");
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // D3: the trade check gates only the cancels; a close that cannot go in open hours puts the stop back at once
+        Part("D3", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "D3: an entry was placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            Hold = (kd, o) => kd == "submit" && (o.Name ?? "").EndsWith(" ag:manrae flat");
+            Last2();
+            Advance(1000);   // the cancels go (the market trading)
+            StaleLast("MNQ", 60000);   // then no trade for a minute
+            int c0 = sime.Calls.Count;
+            Advance(4000);
+            Order cl = LiveClose(sime);
+            Check(cl != null, "D3: its legs' cancels sent: the close goes even with no fresh trade");
+            Hold = null;
+            int s0 = N(page);
+            if (cl != null) { cl.OrderState = OrderState.Rejected; Update(cl); }
+            Advance(1000);
+            Order rs = ReStopOf(sime);
+            Check(rs != null && rs.StopPrice == 24997 && Any(page, s0, "ended unfilled (Rejected); its stop and target had been cancelled: ChartBridge placed its stop again at 24997 for 1; ChartBridge tries again in 30 s"),
+                  "D3: the close rejected in open hours: its stop back at once (24997), said so: " + (rs != null ? rs.Name : "none"));
+            int c1 = sime.Calls.Count;
+            Last2();
+            Advance(20000);
+            Check(rs != null && IsLive(rs) && !sime.Calls.Skip(c1).Any(), "D3: for 30 s the stop stays and nothing else is sent");
+            for (int q = 0; q < 14; q++) { Last2(); Advance(1000); }
+            Check(rs != null && !IsLive(rs) && sime.Calls.Skip(c1).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")), "D3: then the flatten tries again: the stop cancelled, the close sent");
+            SetPos(sime, mnq, 0); ClearMoves();
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1000);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // D4: no agentState before the welcome, a second hello too
+        Part("D4", () =>
+        {
+            Fresh();
+            int n = N(agentOut);
+            A(HelloMsg());
+            List<string> got;
+            lock (agentOut) got = agentOut.Skip(n).ToList();
+            Check(got.Count > 1 && got[0].StartsWith("{\"type\":\"welcome\"") && got[1].StartsWith("{\"type\":\"agentState\""), "D4: a second hello: welcome first, then agentState");
+        });
+
+        // D5: a fill bigger than the trade on the other side closes the trade at that fill's own price; the rest is not the agent's
+        Part("D5", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "D5: an entry was placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            Order nt = NtOrder(sime, OrderAction.Sell, 2, "Sell2", "NTD5");
+            nt.Filled = 2; nt.AverageFillPrice = 25003; nt.OrderState = OrderState.Filled; Update(nt);
+            Deliver("SIM-E", mnq, MarketPosition.Short, 2, 25003, "NTD5");
+            SetPos(sime, mnq, -1); ClearMoves();
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains("\"trades\":1") && st.Contains("\"pnlToday\":8") && Last(page, "agent").Contains("\"position\":null"), "D5: the trade closed at 25003 by the actual fill (8 dollars), the extra 1 is not booked to it: " + st);
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            SetPos(sime, mnq, 0); ClearMoves();
+            Advance(1000);
         });
         foreach (Account x in Account.All.ToList()) Settle(x);
     }
