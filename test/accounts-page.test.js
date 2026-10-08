@@ -324,3 +324,11 @@ test('the Account page is a workspace panel: its type, the Add menu, its files i
   // one source for The Desk's address: ChartBridge's deskUrl (/diag), nothing kept per browser
   for (const t of [ws, bot, read('live/order-strategies.js')]) assert.doesNotMatch(t, /live-desk-url-v1/);
 });
+
+test('ChartBridge 0.5.1: Show only when ChartBridge has it (its accounts carry canHide); Hide only where canHide is true', () => {
+  const js = read('live/accounts.js');
+  assert.match(js, /const canShow = canAct && accounts\.some\(a => a && 'canHide' in a\);/);
+  assert.match(js, /\(canShow \? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show" data-act="unarchive"/);
+  assert.ok(!/\(canAct \? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show"/.test(js), 'Show is never offered on canAct alone');
+  assert.match(js, /const hide = !canAct \? '' : a\.canHide === true/);
+});

@@ -2300,11 +2300,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             return "{\"type\":\"orders\",\"list\":[" + string.Join(",", items) + "]}";
         }
 
-        private static List<string> PositionJsons(ChartBridgeClient client)
+        // 0.5.1 accounts: accounts that became listed (a first sighting, Show, back from the archive): a signed-in v3 page gets a
+        // fresh orders list and their positions, as at sign-in (it got none of their messages while they were not listed).
+        internal static void SendScopeAgain(ChartBridgeClient client, ICollection<string> accounts)
+        {
+            client.Send(OrdersJson(client));
+            foreach (string p in PositionJsons(client, accounts)) client.Send(p);
+        }
+
+        private static List<string> PositionJsons(ChartBridgeClient client) { return PositionJsons(client, null); }
+
+        private static List<string> PositionJsons(ChartBridgeClient client, ICollection<string> only)
         {
             List<string> items = new List<string>();
             foreach (Account a in ChartBridgeAccounts.ScopeFor(client))
             {
+                if (only != null && !only.Contains(a.Name)) continue;
                 List<Position> positions;
                 lock (a.Positions) positions = a.Positions.ToList();
                 foreach (Position p in positions)
