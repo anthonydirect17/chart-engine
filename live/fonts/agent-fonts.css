@@ -1,11 +1,11 @@
 /*
- * The Agent tab's own fonts (chart 1.17.0, board F, Anthony 2026-10-08), served by this PC: the page loads nothing from the
- * internet (1.16.0). Chakra Petch 400 500 600 700 for its titles, labels, tabs and buttons, JetBrains Mono 400 600 for its
- * numbers; its body text is IBM Plex Sans, already loaded for the whole page by plex.css (Anthony's hybrid). The Latin
- * subset only (npm @fontsource/chakra-petch 5.2.5 and @fontsource/jetbrains-mono 5.2.5, files/*-latin-*-normal.woff2,
- * unchanged, renamed). A character outside it falls back to the system fonts the tab names after these. Licence: SIL Open
- * Font License 1.1, in OFL-agent.txt beside them. Loaded by the Agent tab's pages only (live/index.html, live/agent.html)
- * and used only inside .ag-view; the rest of the page keeps IBM Plex. Listed in nt8/install-files.json.
+ * Chakra Petch and JetBrains Mono, served by this PC: these pages load nothing from the internet. Chakra Petch 400 500
+ * 600 700 for titles, labels, chips, tabs and buttons, JetBrains Mono 400 600 for numbers; body text is IBM Plex Sans,
+ * from plex.css (Anthony's hybrid). The Latin subset only (npm @fontsource/chakra-petch 5.2.5 and
+ * @fontsource/jetbrains-mono 5.2.5, files/*-latin-*-normal.woff2, unchanged, renamed). A character outside it falls back
+ * to the fonts each page names after these. Licence: SIL Open Font License 1.1, in OFL-agent.txt beside them.
+ * Loaded by live/index.html and live/agent.html (the Agent tab, inside .ag-view) and by the kit's pages (live/kit.html,
+ * and any page on the kit, docs/KIT.md), always after plex.css. Listed in nt8/install-files.json.
  */
 @font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 400; font-display: swap; src: url("ChakraPetch-Regular.woff2") format("woff2"); }
 @font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 500; font-display: swap; src: url("ChakraPetch-Medium.woff2") format("woff2"); }

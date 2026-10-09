@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chart kit gallery</title>
+<!--
+  The kit gallery (docs/KIT.md): every token, the three fonts, every component in every state, the three surfaces side
+  by side, the armed outline, the light in each colour, the refusal on a mock ticket, and motion on and off.
+  Sample data only: Sim101 and made-up names. This page loads nothing from the internet: its three fonts are served
+  from fonts/ beside it (IBM Plex Sans from plex.css, Chakra Petch and JetBrains Mono from agent-fonts.css).
+-->
+<link rel="stylesheet" href="fonts/plex.css">
+<link rel="stylesheet" href="fonts/agent-fonts.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+  html, body { margin: 0; background: #010307; }
+  body { min-height: 100vh; }
+  .gal { padding: 16px; display: flex; flex-direction: column; gap: 16px; max-width: 1600px; margin: 0 auto; }
+  .gal-top { flex-direction: row !important; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 10px 16px; }
+  .gal-top .kit-brand { font-size: 19px; }
+  .gal-fill { flex: 1; }
+  .gal-sec { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 12px; }
+  .gal-sec > header { display: flex; flex-direction: column; gap: 4px; }
+  .gal-sec > header h2 { margin: 0; font: 600 22px/1.2 var(--kit-head); letter-spacing: .04em; color: var(--kit-hot); }
+  .gal-sec > header p { margin: 0; max-width: 820px; color: var(--kit-text); }
+  .gal-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px; }
+  .gal-grid-wide { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; align-items: start; }
+  .gal-trio { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); gap: 12px; align-items: start; }
+  .gal-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .gal-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .gal-note { font-size: 12px; color: var(--kit-dim); }
+  .gal-state { font: 11px var(--kit-mono); color: var(--kit-dim); min-width: 74px; }
+
+  /* swatches */
+  .gal-sw { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr)); gap: 8px; }
+  .gal-swatch { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 4px 10px; align-items: center; padding: 8px; border: 1px solid var(--kit-line-soft); }
+  .gal-swatch i { grid-row: span 3; width: 44px; height: 44px; border: 1px solid rgba(255,255,255,.14); background-image: linear-gradient(45deg, #222 25%, transparent 25%, transparent 75%, #222 75%), linear-gradient(45deg, #222 25%, transparent 25%, transparent 75%, #222 75%); background-size: 10px 10px; background-position: 0 0, 5px 5px; position: relative; }
+  .gal-swatch i::after { content: ""; position: absolute; inset: 0; background: var(--sw); }
+  .gal-swatch b { font: 600 12px var(--kit-mono); color: var(--kit-hot); overflow-wrap: anywhere; }
+  .gal-swatch span { font: 11px var(--kit-mono); color: var(--kit-dim); overflow-wrap: anywhere; }
+  .gal-swatch em { font-style: normal; font-size: 12px; color: var(--kit-text); }
+  .gal-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .gal-table th, .gal-table td { padding: 6px 8px; border-bottom: 1px solid var(--kit-line-soft); text-align: left; }
+  .gal-table th { font: 500 11px var(--kit-head); letter-spacing: .14em; text-transform: uppercase; color: var(--kit-dim); }
+  .gal-table td.kit-num { text-align: right; }
+  .gal-scroll { overflow-x: auto; }
+
+  /* fonts */
+  .gal-font { display: flex; flex-direction: column; gap: 6px; }
+  .gal-font .big { font-size: 28px; line-height: 1.2; color: var(--kit-hot); overflow-wrap: anywhere; }
+
+  /* mock chart (locked candle colours, sample data) */
+  .gal-chart { position: relative; flex: 1; min-height: 220px; overflow: hidden; background-image: linear-gradient(rgba(42,54,69,.30) 1px, transparent 1px), linear-gradient(90deg, rgba(42,54,69,.30) 1px, transparent 1px); background-size: 64px 56px; }
+  .gal-cv { position: absolute; inset: 12px 70px 16px 10px; }
+  .gal-cv .w { position: absolute; width: 1px; }
+  .gal-cv .b { position: absolute; }
+  .gal-cv .up > * { background: var(--kit-candle-up); }
+  .gal-cv .dn > * { background: var(--kit-candle-down); }
+  .gal-lvl { position: absolute; left: 0; right: -70px; height: 0; border-top: 1px dashed; }
+  .gal-lvl span { position: absolute; right: 0; top: -10px; font: 600 10.5px var(--kit-mono); padding: 2px 5px; color: #010307; }
+  .gal-px { position: absolute; left: 0; right: -70px; height: 0; border-top: 1px solid var(--kit-hot); }
+  .gal-px span { position: absolute; right: 0; top: -11px; font: 600 11px var(--kit-mono); padding: 2px 5px; color: #010307; background: var(--kit-hot); }
+
+  /* surfaces */
+  .gal-surface { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid rgba(255,255,255,.06); min-width: 0; }
+  .gal-desk { display: flex; flex-direction: row; padding: 0; }
+  .gal-desk .kit-rail { flex: none; width: 72px; }
+  .gal-desk main { flex: 1; min-width: 0; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .gal-desk .kit-title { font-size: 26px; }
+  .gal-tr { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--kit-line-soft); }
+  .gal-tr > .kit-hot { flex: 1 1 90px; min-width: 0; }
+
+  /* the light demos */
+  .gal-lights { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); gap: 16px; padding: 8px; }
+  .gal-lights .kit-card { min-height: 84px; justify-content: center; align-items: flex-start; padding: 12px 14px; }
+  .gal-readout { font: 12px var(--kit-mono); color: var(--kit-text); }
+
+  /* the mock ticket (it imitates a ticket only to show the refusal: it trades nothing) */
+  .gal-ticket { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--kit-danger); background: rgba(255,59,92,.04); }
+  .gal-ticket .tk-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .gal-log { margin: 0; padding: 8px 10px; min-height: 64px; border: 1px solid var(--kit-line-soft); font: 12px/1.5 var(--kit-mono); color: var(--kit-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="kit kit-desk" id="kitRoot">
+<div class="gal">
+
+  <header class="kit-panel gal-top">
+    <span class="kit-brand">CHART KIT</span>
+    <span class="kit-label">Version 1 <span class="kit-num" id="kitVersion"></span></span>
+    <span class="kit-label">Sample data, made-up names</span>
+    <span class="gal-fill"></span>
+    <span class="kit-label">Motion</span>
+    <div class="kit-seg" role="group" aria-label="Motion" style="min-width: 180px">
+      <button type="button" data-motion="full" aria-pressed="true">FULL</button>
+      <button type="button" data-motion="off" aria-pressed="false">OFF</button>
+    </div>
+    <span class="gal-note" id="motionNote"></span>
+  </header>
+
+  <nav class="kit-tabs" aria-label="Gallery sections">
+    <a class="kit-tab" href="#tokens" aria-current="page">Tokens</a>
+    <a class="kit-tab" href="#fonts">Fonts</a>
+    <a class="kit-tab" href="#components">Components</a>
+    <a class="kit-tab" href="#surfaces">Surfaces</a>
+    <a class="kit-tab" href="#armed">Armed</a>
+    <a class="kit-tab" href="#light">The light</a>
+    <a class="kit-tab" href="#refusal">Never on orders</a>
+  </nav>
+
+  <!-- ============================================================ tokens -->
+  <section class="gal-sec" id="tokens">
+    <header>
+      <span class="kit-label">1</span>
+      <h2>Tokens</h2>
+      <p>Every colour as a CSS custom property on <code>.kit</code>. The number under each one is its contrast on the ground (#010307). Text colours need 4.5 to 1 (3 to 1 at 24 px and up). The money and candle colours are the chart's locked palette.</p>
+    </header>
+    <div class="gal-sw" id="swatches"></div>
+    <div class="kit-panel">
+      <div class="kit-panel-head"><b>Text contrast on each surface</b><span class="kit-label">on the ground / on a panel</span></div>
+      <div class="kit-panel-body gal-scroll"><table class="gal-table" id="contrastTable"></table></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ fonts -->
+  <section class="gal-sec" id="fonts">
+    <header>
+      <span class="kit-label">2</span>
+      <h2>Fonts: the hybrid</h2>
+      <p>Chakra Petch for titles, section labels, tabs and buttons. IBM Plex Sans for body text. JetBrains Mono for every number, with tabular digits. All three come from the page's own folder, never the internet. A character outside them falls back to IBM Plex Sans Condensed and IBM Plex Mono.</p>
+    </header>
+    <div class="gal-grid">
+      <div class="kit-card gal-font"><span class="kit-label">--kit-head</span><span class="big" style="font-family: var(--kit-head); font-weight: 600; letter-spacing: .06em">TODAY'S TRADES</span><span class="gal-note" data-font="Chakra Petch"></span></div>
+      <div class="kit-card gal-font"><span class="kit-label">--kit-body</span><span class="big" style="font-family: var(--kit-body); font-size: 20px">Pullback into VWAP held twice and sellers are thin.</span><span class="gal-note" data-font="IBM Plex Sans"></span></div>
+      <div class="kit-card gal-font"><span class="kit-label">--kit-mono</span><span class="big kit-num">+$1,284.50 &nbsp;25,390.25</span><span class="gal-note" data-font="JetBrains Mono"></span></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ components -->
+  <section class="gal-sec" id="components">
+    <header>
+      <span class="kit-label">3</span>
+      <h2>Components</h2>
+      <p>Each one in every state. Switch the surface to see it on the trading screen, The Desk or the Agent tab.</p>
+    </header>
+    <div class="kit-seg" role="group" aria-label="Surface" id="compSurface" style="max-width: 520px">
+      <button type="button" data-surface="trading" aria-pressed="false">TRADING</button>
+      <button type="button" data-surface="desk" aria-pressed="true">DESK</button>
+      <button type="button" data-surface="agent" aria-pressed="false">AGENT</button>
+    </div>
+
+    <div class="kit kit-desk" id="comp" style="background: transparent">
+      <div class="gal-grid-wide">
+
+        <div class="kit-panel">
+          <div class="kit-panel-head"><b>MNQ 12-26</b><span class="kit-dim">1 min</span><span class="kit-chip">Indicators 5/5</span><span class="gal-fill"></span><span class="kit-num kit-dim">flat</span></div>
+          <div class="kit-panel-body">
+            <span class="kit-label">Panel and panel header</span>
+            <p style="margin: 0">A panel holds one thing: a chart, a list, a form. Its header names it in the title font and carries chips on the right.</p>
+          </div>
+        </div>
+
+        <div class="kit-card">
+          <div class="kit-card-head"><span class="kit-label">Card</span><a href="#components">Open it</a></div>
+          <div class="gal-row"><h3 class="kit-h">Demo Opening Fade</h3><span class="kit-chip kit-chip-purple">Copilot</span></div>
+          <div class="kit-num kit-profit-text" style="font-size: 22px">+2.40 R</div>
+          <div class="gal-note">3 proposals: 2 accepted, 1 not answered</div>
+        </div>
+
+        <div class="kit-card" id="buttons">
+          <span class="kit-label">Buttons</span>
+          <div class="gal-row"><span class="gal-state">default</span><button type="button" class="kit-btn">Colors</button><button type="button" class="kit-btn is-hover">Hover</button><button type="button" class="kit-btn is-focus">Focus</button><button type="button" class="kit-btn" aria-pressed="true">On</button><button type="button" class="kit-btn" disabled>Disabled</button></div>
+          <div class="gal-row"><span class="gal-state">primary</span><button type="button" class="kit-btn kit-btn-primary">Accept</button><button type="button" class="kit-btn kit-btn-primary is-hover">Hover</button><button type="button" class="kit-btn kit-btn-primary is-focus">Focus</button><button type="button" class="kit-btn kit-btn-primary" disabled>Disabled</button></div>
+          <div class="gal-row"><span class="gal-state">accent</span><button type="button" class="kit-btn kit-btn-accent">+ Add panel</button><button type="button" class="kit-btn kit-btn-accent is-hover">Reject</button><button type="button" class="kit-btn kit-btn-accent is-focus">Alerts</button><button type="button" class="kit-btn kit-btn-accent" disabled>Disabled</button></div>
+          <div class="gal-row"><span class="gal-state">danger</span><button type="button" class="kit-btn kit-btn-danger" data-no-light>Flatten all</button><button type="button" class="kit-btn kit-btn-danger is-hover">Hover</button><button type="button" class="kit-btn kit-btn-danger" aria-pressed="true">Kill switch on</button><button type="button" class="kit-btn kit-btn-danger" disabled>Disabled</button></div>
+          <div class="gal-row"><span class="gal-state">compact</span><button type="button" class="kit-btn kit-btn-compact">B/E</button><button type="button" class="kit-btn kit-btn-compact kit-btn-primary">Buy</button><button type="button" class="kit-btn kit-btn-compact kit-btn-accent">+ Add</button><button type="button" class="kit-btn kit-btn-compact kit-btn-danger">Flatten</button></div>
+        </div>
+
+        <div class="kit-card" id="chips">
+          <span class="kit-label">Chips and tags</span>
+          <div class="gal-row"><span class="kit-chip">Neutral</span><span class="kit-chip kit-chip-purple">Purple</span><span class="kit-chip kit-chip-profit">Long</span><span class="kit-chip kit-chip-loss">Short</span><span class="kit-chip kit-chip-danger">Armed, Sim101</span></div>
+          <div class="gal-row"><span class="kit-chip kit-c-screen">Screen</span><span class="kit-chip kit-c-eyes">Eyes</span><span class="kit-chip kit-c-judgment">Judgment</span><span class="kit-chip kit-c-checks">Checks</span><span class="kit-chip kit-c-go">Go</span><span class="kit-chip kit-c-pass">Passed</span><span class="kit-chip kit-c-danger">Danger</span></div>
+          <div class="gal-row"><span class="kit-tag kit-c-eyes">LOOK</span><span class="kit-tag kit-c-judgment">PLAN</span><span class="kit-tag kit-c-checks">RULES</span><span class="kit-tag kit-c-go">FILL</span><span class="kit-tag kit-c-pass">PASS</span><span class="kit-tag kit-c-danger">STOP</span></div>
+        </div>
+
+        <div class="kit-card">
+          <span class="kit-label">Status pills</span>
+          <div class="gal-row"><span class="kit-pill"><span class="kit-dot"></span><b>HOME</b><span class="kit-dim">ChartBridge, now</span></span><span class="kit-pill"><span class="kit-dot is-warn"></span><b>Feed</b><span class="kit-dim">slow, 900 ms</span></span></div>
+          <div class="gal-row"><span class="kit-pill"><span class="kit-dot is-off"></span><b>Backup</b><span class="kit-dim">none yet</span></span><span class="kit-pill"><span class="kit-dot is-bad"></span><b>Bridge</b><span class="kit-dim">no answer</span></span></div>
+        </div>
+
+        <div class="kit-card">
+          <span class="kit-label">Tabs</span>
+          <div class="kit-tabs" role="tablist" aria-label="Sample tabs"><button type="button" class="kit-tab" role="tab" aria-selected="true">Today</button><button type="button" class="kit-tab" role="tab" aria-selected="false">Review</button><button type="button" class="kit-tab is-hover" role="tab" aria-selected="false">Hover</button><button type="button" class="kit-tab is-focus" role="tab" aria-selected="false">Focus</button></div>
+          <span class="kit-label">Segmented switch</span>
+          <div class="kit-seg" role="group" aria-label="Mode"><button type="button" aria-pressed="false">SHADOW</button><button type="button" aria-pressed="true">COPILOT</button><button type="button" aria-pressed="false">AUTO</button></div>
+        </div>
+
+        <div class="kit-card" style="flex-direction: row; gap: 14px">
+          <nav class="kit-rail" aria-label="Sample sections" style="padding: 6px 4px; width: 84px">
+            <div class="kit-rail-brand">TD</div>
+            <a href="#components" class="kit-rail-item" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 17l5-5 4 3 7-8"></path><path d="M4 20h16"></path></svg>Futures</a>
+            <a href="#components" class="kit-rail-item is-hover"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg>Live trading</a>
+            <a href="#components" class="kit-rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20l4-1 11-11-3-3L5 16z"></path></svg>Studio</a>
+          </nav>
+          <div class="gal-col"><span class="kit-label">Side rail</span><span class="gal-note">Active: a tint and a cyan bar on the left. Hover: hot text. Every item is at least 44 px tall.</span></div>
+        </div>
+
+        <div class="kit-card">
+          <span class="kit-label">Meters</span>
+          <div class="gal-col"><div class="gal-row" style="justify-content: space-between"><span>Max loss room</span><span class="kit-num kit-glow">$1,032</span></div><div class="kit-meter"><i style="width: 72%"></i></div></div>
+          <div class="gal-col"><div class="gal-row" style="justify-content: space-between"><span>Daily limit left</span><span class="kit-num kit-glow">$552 of $600</span></div><div class="kit-meter kit-meter-purple"><i style="width: 92%"></i></div></div>
+          <div class="gal-col"><div class="gal-row" style="justify-content: space-between"><span>To the $1,250 target</span><span class="kit-num kit-profit-text">$1,170</span></div><div class="kit-meter kit-meter-profit"><i style="width: 6%"></i></div></div>
+        </div>
+
+        <div class="kit-card">
+          <span class="kit-label">Field and select</span>
+          <div class="gal-row" style="flex-wrap: nowrap"><select class="kit-field" aria-label="Instrument" style="flex: 0 0 96px"><option>MNQ</option><option>MES</option></select><select class="kit-field" aria-label="Account"><option>Sim101</option></select></div>
+          <input class="kit-field" aria-label="Sample field" placeholder="Placeholder">
+          <div class="gal-row" style="flex-wrap: nowrap"><input class="kit-field kit-num is-focus" aria-label="Focused field" value="25,390.00"><input class="kit-field kit-num" aria-label="Disabled field" value="16" disabled></div>
+          <div class="gal-row" style="flex-wrap: nowrap"><input class="kit-field kit-field-compact kit-num" aria-label="Invalid field" aria-invalid="true" value="-3"><input class="kit-field kit-field-compact kit-num" aria-label="Compact field" value="1"></div>
+          <span class="gal-note">Text fields and selects use the body font; a numeric field adds <code>.kit-num</code> for mono, tabular digits.</span>
+        </div>
+
+        <div class="kit-card">
+          <span class="kit-label">Step tracker</span>
+          <ol class="kit-steps" aria-label="Watching">
+            <li class="kit-step is-now" data-step="screen"><span class="kit-step-node">1</span><span class="kit-step-name">Screen</span><span class="kit-step-sub kit-num">12 s</span></li>
+            <li class="kit-step" data-step="eyes"><span class="kit-step-node">2</span><span class="kit-step-name">Eyes</span></li>
+            <li class="kit-step" data-step="judgment"><span class="kit-step-node">3</span><span class="kit-step-name">Judgment</span></li>
+            <li class="kit-step" data-step="checks"><span class="kit-step-node">4</span><span class="kit-step-name">Checks</span></li>
+            <li class="kit-step" data-step="chartbridge"><span class="kit-step-node">5</span><span class="kit-step-name">ChartBridge</span></li>
+          </ol>
+          <ol class="kit-steps" aria-label="Making a plan">
+            <li class="kit-step is-done" data-step="screen"><span class="kit-step-node">1</span><span class="kit-step-name">Screen</span></li>
+            <li class="kit-step is-done" data-step="eyes"><span class="kit-step-node">2</span><span class="kit-step-name">Eyes</span></li>
+            <li class="kit-step is-now" data-step="judgment"><span class="kit-step-node">3</span><span class="kit-step-name">Judgment</span><span class="kit-step-sub kit-num">24 s</span></li>
+            <li class="kit-step" data-step="checks"><span class="kit-step-node">4</span><span class="kit-step-name">Checks</span></li>
+            <li class="kit-step" data-step="chartbridge"><span class="kit-step-node">5</span><span class="kit-step-name">ChartBridge</span></li>
+          </ol>
+          <ol class="kit-steps" aria-label="Placing it">
+            <li class="kit-step is-done" data-step="screen"><span class="kit-step-node">1</span><span class="kit-step-name">Screen</span></li>
+            <li class="kit-step is-done" data-step="eyes"><span class="kit-step-node">2</span><span class="kit-step-name">Eyes</span></li>
+            <li class="kit-step is-done" data-step="judgment"><span class="kit-step-node">3</span><span class="kit-step-name">Judgment</span></li>
+            <li class="kit-step is-now" data-step="checks"><span class="kit-step-node">4</span><span class="kit-step-name">Checks</span><span class="kit-step-sub kit-num">1 s</span></li>
+            <li class="kit-step" data-step="chartbridge"><span class="kit-step-node">5</span><span class="kit-step-name">ChartBridge</span></li>
+          </ol>
+          <ol class="kit-steps" aria-label="Placed">
+            <li class="kit-step is-done" data-step="screen"><span class="kit-step-node">1</span><span class="kit-step-name">Screen</span></li>
+            <li class="kit-step is-done" data-step="eyes"><span class="kit-step-node">2</span><span class="kit-step-name">Eyes</span></li>
+            <li class="kit-step is-done" data-step="judgment"><span class="kit-step-node">3</span><span class="kit-step-name">Judgment</span></li>
+            <li class="kit-step is-done" data-step="checks"><span class="kit-step-node">4</span><span class="kit-step-name">Checks</span></li>
+            <li class="kit-step is-now" data-step="chartbridge"><span class="kit-step-node">5</span><span class="kit-step-name">ChartBridge</span><span class="kit-step-sub kit-num">0.3 s</span></li>
+          </ol>
+        </div>
+
+        <div class="kit-card kit-drawer-host" id="drawerDemo" style="min-height: 420px">
+          <div class="kit-card-head"><span class="kit-label">Stream rows and the decision drawer</span><span class="gal-note">tap a row</span></div>
+          <div class="gal-col" style="gap: 0" id="streamRows">
+            <button type="button" class="kit-row kit-c-eyes" data-open="look" aria-pressed="false"><span class="kit-num">10:41</span><span class="kit-tag">LOOK</span><span>Pullback into VWAP; sellers thin</span><span class="kit-row-go" aria-hidden="true">&rsaquo;</span></button>
+            <button type="button" class="kit-row kit-c-judgment is-hover" data-open="plan" aria-pressed="false"><span class="kit-num">10:42</span><span class="kit-tag">PLAN</span><span>Buy 2 MNQ limit, stop 16, target 32 (hover)</span><span class="kit-row-go" aria-hidden="true">&rsaquo;</span></button>
+            <button type="button" class="kit-row kit-c-checks is-focus" data-open="rules" aria-pressed="false"><span class="kit-num">10:43</span><span class="kit-tag">RULES</span><span>Inside the rules: 2 of 20 MNQ (focus)</span><span class="kit-row-go" aria-hidden="true">&rsaquo;</span></button>
+            <button type="button" class="kit-row kit-c-go" data-open="fill" aria-pressed="true"><span class="kit-num">10:44</span><span class="kit-tag">FILL</span><span>Bought 2 MNQ at the limit (selected)</span><span class="kit-row-go" aria-hidden="true">&rsaquo;</span></button>
+            <button type="button" class="kit-row kit-c-pass" data-open="pass" aria-pressed="false"><span class="kit-num">10:51</span><span class="kit-tag">PASS</span><span>Passed: range too wide</span><span class="kit-row-go" aria-hidden="true">&rsaquo;</span></button>
+            <button type="button" class="kit-row kit-c-danger" data-open="stop" aria-pressed="false"><span class="kit-num">09:58</span><span class="kit-tag">STOP</span><span>Opening short stopped, -$16.00</span><span class="kit-row-go" aria-hidden="true">&rsaquo;</span></button>
+          </div>
+          <div class="kit-drawer kit-c-go" id="drawer" role="dialog" aria-label="The decision" hidden>
+            <div class="kit-drawer-top">
+              <div><span class="kit-label" id="drawerKind">10:44, FILL, the decision</span><h3 class="kit-drawer-title" id="drawerTitle">Bought 2 MNQ at 25,390.00</h3></div>
+              <button type="button" class="kit-btn kit-drawer-close" id="drawerClose" aria-label="Close the decision">CLOSE</button>
+            </div>
+            <div><span class="kit-label">In plain words</span><p class="kit-quote" id="drawerWords">Filled when price traded through the limit. The stop and target went in with the fill.</p></div>
+            <div><span class="kit-label">The facts</span>
+              <div class="kit-fact"><span>Filled</span><span class="kit-num">2 MNQ at 25,390.00</span></div>
+              <div class="kit-fact"><span>Stop placed</span><span class="kit-num">25,386.00</span></div>
+              <div class="kit-fact"><span>Target placed</span><span class="kit-num">25,398.00</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="kit-card">
+          <span class="kit-label">Legend key: gallery and docs only, never on a product screen</span>
+          <div class="kit-keys">
+            <span class="kit-key kit-c-screen"><b></b>screen: watching</span>
+            <span class="kit-key kit-c-eyes"><b></b>eyes: a look</span>
+            <span class="kit-key kit-c-judgment"><b></b>judgment: a plan</span>
+            <span class="kit-key kit-c-checks"><b></b>checks: the rules</span>
+            <span class="kit-key kit-c-go"><b></b>ChartBridge or a fill</span>
+            <span class="kit-key kit-c-pass"><b></b>passed</span>
+            <span class="kit-key kit-c-danger"><b></b>a hard no</span>
+            <span class="kit-key kit-c-profit"><b></b>in profit</span>
+            <span class="kit-key kit-c-loss"><b></b>under water</span>
+            <span class="kit-key kit-key-armed"><b></b>armed</span>
+          </div>
+        </div>
+
+        <div class="kit-card">
+          <span class="kit-label">Big numbers</span>
+          <div class="gal-row" style="gap: 14px 28px">
+            <div><div class="kit-big kit-profit-text">+$80.00</div><div class="kit-label">Today</div></div>
+            <div><div class="kit-big kit-loss-text">-$16.00</div><div class="kit-label">Open</div></div>
+            <div><div class="kit-big">4 <small>of 6</small></div><div class="kit-label">Trades</div></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ surfaces -->
+  <section class="gal-sec" id="surfaces">
+    <header>
+      <span class="kit-label">4</span>
+      <h2>The three surfaces side by side</h2>
+      <p>The trading screen keeps its lines and labels a dim grey-blue so the chart's candles stay the brightest thing. The Desk has cyan lines and glows only on the title, the active tab and the light. The Agent tab glows fully. As on a real screen, these carry no legend and no sentence explaining the page: only titles, field names, values, buttons and warnings.</p>
+      <p>One sample trade, one lit panel: outside the Agent tab only the panel showing the trade lights, so lighting a trade panel anywhere on this page turns the others off. Pick where the trade shows.</p>
+    </header>
+    <div class="kit-seg" role="group" aria-label="The trade shows on" style="max-width: 520px">
+      <button type="button" data-show="tradingChart" aria-pressed="false">TRADING SCREEN</button>
+      <button type="button" data-show="deskTrades" aria-pressed="false">THE DESK</button>
+    </div>
+    <div class="gal-trio">
+
+      <div class="kit kit-trading gal-surface" id="v-trading">
+        <div class="kit-panel" style="flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 10px">
+          <span class="kit-label" style="color: var(--kit-hot)">Trading screen</span>
+          <span class="kit-num" style="color: var(--kit-hot)">10:42:05 <span class="kit-dim">ET</span></span>
+          <span class="gal-fill"></span>
+          <span class="kit-chip kit-chip-profit">Keys on</span>
+          <button type="button" class="kit-btn kit-btn-compact kit-btn-danger ws-flat" data-no-light>Flatten all</button>
+          <button type="button" class="kit-btn kit-btn-compact kit-btn-accent">+ Add panel</button>
+        </div>
+        <section class="kit-panel kit-armed" id="tradingChart" style="min-height: 300px">
+          <div class="kit-panel-head"><b>MNQ 12-26</b><span class="kit-dim">1 min</span><span class="kit-chip kit-chip-danger">Armed, Sim101</span><span class="gal-fill"></span><span class="kit-num" data-no-light>LONG 2 from 25,390.00, open <b class="kit-profit-text">+$24.00</b></span></div>
+          <div class="gal-chart" data-chart="tr"></div>
+        </section>
+      </div>
+
+      <div class="kit kit-desk gal-surface gal-desk" id="v-desk">
+        <nav class="kit-rail" aria-label="Desk sections (sample)">
+          <div class="kit-rail-brand">TD</div>
+          <a href="#surfaces" class="kit-rail-item" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 17l5-5 4 3 7-8"></path><path d="M4 20h16"></path></svg>Futures</a>
+          <a href="#surfaces" class="kit-rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg>Live</a>
+          <a href="#surfaces" class="kit-rail-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20l4-1 11-11-3-3L5 16z"></path></svg>Studio</a>
+        </nav>
+        <main>
+          <div class="gal-row"><span class="kit-brand">THE DESK</span><span class="kit-dim">/ Futures</span></div>
+          <div class="kit-tabs" role="tablist" aria-label="Futures screens (sample)"><button type="button" class="kit-tab" role="tab" aria-selected="true">Today</button><button type="button" class="kit-tab" role="tab" aria-selected="false">Review</button><button type="button" class="kit-tab" role="tab" aria-selected="false">Trades</button></div>
+          <div><span class="kit-label">Today</span><h1 class="kit-title">Thursday, October 8</h1></div>
+          <div class="gal-row"><span class="kit-pill"><span class="kit-dot"></span><b>HOME</b><span class="kit-dim">now</span></span><span class="kit-pill"><span class="kit-dot is-off"></span><b>Backup</b><span class="kit-dim">none yet</span></span></div>
+          <section class="kit-card" id="deskTrades">
+            <div class="kit-card-head"><span class="kit-label">Today's trades</span><a href="#surfaces">Review</a></div>
+            <div class="gal-tr"><span class="kit-num kit-dim">10:41:12</span><span class="kit-chip kit-chip-profit">Long</span><span class="kit-hot">MNQ, open now</span><span class="kit-num kit-profit-text">+$24.00</span></div>
+            <div class="gal-tr"><span class="kit-num kit-dim">09:58:02</span><span class="kit-chip kit-chip-loss">Short</span><span class="kit-hot">MNQ</span><span class="kit-num kit-loss-text">-$16.00</span></div>
+          </section>
+          <div class="kit-card"><div class="kit-card-head"><span class="kit-label">Studio</span></div><div class="kit-card-head"><h3 class="kit-h">Label set 1</h3><span class="kit-num">12 of 30</span></div><div class="kit-meter"><i style="width: 40%"></i></div></div>
+        </main>
+      </div>
+
+      <div class="kit kit-agent gal-surface" id="v-agent">
+        <div class="kit-panel" style="flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 12px">
+          <span class="kit-brand" style="font-size: 17px">AGENT DESK</span>
+          <span class="kit-label">Sample data</span>
+          <span class="gal-fill"></span>
+          <span class="kit-num kit-glow" style="font-size: 17px">10:42:05</span>
+          <span class="kit-chip kit-chip-purple">Build 21</span>
+        </div>
+        <div class="kit-panel" id="agentPipe" style="padding: 12px 14px">
+          <div class="kit-card-head" style="margin-bottom: 10px"><span class="kit-label">What it is doing now</span></div>
+          <ol class="kit-steps" aria-label="Agent steps (sample)">
+            <li class="kit-step is-done" data-step="screen"><span class="kit-step-node">1</span><span class="kit-step-name">Screen</span></li>
+            <li class="kit-step is-done" data-step="eyes"><span class="kit-step-node">2</span><span class="kit-step-name">Eyes</span></li>
+            <li class="kit-step is-now" data-step="judgment"><span class="kit-step-node">3</span><span class="kit-step-name">Judgment</span></li>
+            <li class="kit-step" data-step="checks"><span class="kit-step-node">4</span><span class="kit-step-name">Checks</span></li>
+            <li class="kit-step" data-step="chartbridge"><span class="kit-step-node">5</span><span class="kit-step-name">ChartBridge</span></li>
+          </ol>
+        </div>
+        <div class="kit-panel" style="padding: 12px 14px; gap: 10px">
+          <div class="kit-seg" role="group" aria-label="Mode (sample)"><button type="button" aria-pressed="false">SHADOW</button><button type="button" aria-pressed="true">COPILOT</button><button type="button" aria-pressed="false">AUTO</button></div>
+          <button type="button" class="kit-btn kit-btn-danger" data-no-light>KILL SWITCH</button>
+          <div class="gal-col"><div class="gal-row" style="justify-content: space-between"><span>Daily limit left</span><span class="kit-num kit-glow">$552 of $600</span></div><div class="kit-meter kit-meter-purple"><i style="width: 92%"></i></div></div>
+        </div>
+        <div class="kit-panel" id="agentStream" style="padding: 10px 14px">
+          <div class="kit-card-head"><span class="kit-label" style="color: var(--kit-hot)">The stream</span></div>
+          <button type="button" class="kit-row kit-c-judgment" aria-pressed="true"><span class="kit-num">10:42</span><span class="kit-tag">PLAN</span><span>Buy 2 MNQ limit, stop 16, target 32</span><span class="kit-row-go" aria-hidden="true">&rsaquo;</span></button>
+          <button type="button" class="kit-row kit-c-eyes" aria-pressed="false"><span class="kit-num">10:41</span><span class="kit-tag">LOOK</span><span>Pullback into VWAP; sellers thin</span><span class="kit-row-go" aria-hidden="true">&rsaquo;</span></button>
+        </div>
+        <div class="kit-panel" style="padding: 12px 14px; flex-direction: row; flex-wrap: wrap; gap: 14px 26px">
+          <div><div class="kit-big kit-profit-text">+$80.00</div><div class="kit-label">Today</div></div>
+          <div><div class="kit-big" style="font-size: 24px">4 <small>of 6</small></div><div class="kit-label">Trades</div></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============================================================ armed -->
+  <section class="gal-sec" id="armed">
+    <header>
+      <span class="kit-label">5</span>
+      <h2>The armed outline</h2>
+      <p>A soft, faded, glowing purple outline on a chart that is armed, in place of today's solid purple line. It goes with the light: both show at once.</p>
+    </header>
+    <div class="kit-seg" role="group" aria-label="The armed chart" style="max-width: 360px">
+      <button type="button" data-armed-trade="off" aria-pressed="true">FLAT</button>
+      <button type="button" data-armed-trade="on" aria-pressed="false">IN A TRADE</button>
+    </div>
+    <div class="kit kit-trading gal-grid" id="armedRow" style="padding: 12px">
+      <div class="kit-panel" style="min-height: 150px"><div class="kit-panel-head"><b>MNQ 12-26</b><span class="kit-chip">Not armed</span></div><div class="kit-panel-body"><span class="gal-note">The plain panel line.</span></div></div>
+      <div class="kit-panel kit-armed" style="min-height: 150px"><div class="kit-panel-head"><b>MNQ 12-26</b><span class="kit-chip kit-chip-danger">Armed, Sim101</span></div><div class="kit-panel-body"><span class="gal-note">.kit-armed: the soft purple outline.</span></div></div>
+      <div class="kit-panel kit-armed" id="armedLit" style="min-height: 150px"><div class="kit-panel-head"><b>MNQ 12-26</b><span class="kit-chip kit-chip-danger">Armed, Sim101</span></div><div class="kit-panel-body"><span class="gal-note">Armed; in a trade, in profit, it shows the outline and the light together.</span></div></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ the light -->
+  <section class="gal-sec" id="light">
+    <header>
+      <span class="kit-label">6</span>
+      <h2>The light</h2>
+      <p>A slow comet around a panel's border, with a soft glow. On the trading screen and The Desk it runs only while you are in a trade, only around the panel showing that trade: green in profit, red under water, none when flat. The page says when it is in a trade; the kit keeps only one trade panel lit. On the Agent tab it follows what the agent is doing. Only the light's colour fades between states; numbers never move.</p>
+    </header>
+    <div class="gal-grid-wide">
+      <div class="kit kit-trading gal-col" style="padding: 12px; gap: 10px" id="lightTrading">
+        <div class="kit-seg" role="group" aria-label="Trade state">
+          <button type="button" data-trade="flat" aria-pressed="false">FLAT</button>
+          <button type="button" data-trade="profit" aria-pressed="true">IN PROFIT</button>
+          <button type="button" data-trade="loss" aria-pressed="false">UNDER WATER</button>
+        </div>
+        <section class="kit-panel" id="lightDemo" style="min-height: 280px">
+          <div class="kit-panel-head"><b>MNQ 12-26</b><span class="kit-dim">1 min</span><span class="gal-fill"></span><span class="kit-num" data-no-light id="lightPos">LONG 2 from 25,390.00, open <b class="kit-profit-text">+$24.00</b></span></div>
+          <div class="gal-chart" data-chart="demo"></div>
+        </section>
+        <div class="gal-readout" id="lightReadout"></div>
+      </div>
+      <div class="kit kit-agent gal-col" style="padding: 12px; gap: 10px" id="lightAgent">
+        <div class="gal-row" role="group" aria-label="Deciding colours" id="decideButtons">
+          <button type="button" class="kit-btn kit-btn-compact" data-decide="screen" aria-pressed="true">Watching</button>
+          <button type="button" class="kit-btn kit-btn-compact" data-decide="eyes" aria-pressed="false">A look</button>
+          <button type="button" class="kit-btn kit-btn-compact" data-decide="judgment" aria-pressed="false">A plan</button>
+          <button type="button" class="kit-btn kit-btn-compact" data-decide="checks" aria-pressed="false">Checks</button>
+          <button type="button" class="kit-btn kit-btn-compact" data-decide="go" aria-pressed="false">A fill</button>
+          <button type="button" class="kit-btn kit-btn-compact" data-decide="pass" aria-pressed="false">Passed</button>
+          <button type="button" class="kit-btn kit-btn-compact" data-decide="danger" aria-pressed="false">A hard no</button>
+        </div>
+        <section class="kit-panel" id="lightDecide" style="min-height: 180px; padding: 14px">
+          <span class="kit-label">What it is doing now</span>
+          <p style="margin: 8px 0 0" id="decideWords">Watching each 1 minute bar.</p>
+        </section>
+        <div class="gal-readout" id="decideReadout"></div>
+      </div>
+    </div>
+    <div class="kit kit-agent">
+      <div class="gal-lights" id="allLights"></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ refusal -->
+  <section class="gal-sec" id="refusal">
+    <header>
+      <span class="kit-label">7</span>
+      <h2>Never on the ticket, order lines, Flatten or the copier</h2>
+      <p>These refuse to light, and the browser console notes why. A panel marked <code>data-no-light</code> or anything inside one refuses too, and so does any button, field, chip or number.</p>
+    </header>
+    <div class="kit kit-trading gal-grid" style="padding: 12px">
+      <section class="kit-panel" id="mockTicketPanel" data-no-light>
+        <div class="kit-panel-head"><b>Order ticket (a mock)</b><span class="gal-fill"></span><span class="kit-label">no light here, ever</span></div>
+        <div class="gal-ticket" id="mockTicket">
+          <div class="tk-row"><select class="kit-field kit-field-compact" aria-label="Instrument (mock)" style="flex: 0 0 90px"><option>MNQ</option></select><select class="kit-field kit-field-compact" aria-label="Account (mock)" style="flex: 1"><option>Sim101</option></select></div>
+          <div class="tk-row"><button type="button" class="kit-btn kit-btn-compact" style="flex: 1">Buy MKT</button><button type="button" class="kit-btn kit-btn-compact" style="flex: 1">Sell MKT</button></div>
+          <div class="tk-row"><span class="gal-note">A mock: it places nothing.</span></div>
+        </div>
+      </section>
+      <div class="kit-panel">
+        <div class="kit-panel-head"><b>Try it</b></div>
+        <div class="kit-panel-body">
+          <div class="gal-row">
+            <button type="button" class="kit-btn kit-btn-compact" data-try="ticket">Light the ticket</button>
+            <button type="button" class="kit-btn kit-btn-compact" data-try="row">Light a ticket row</button>
+            <button type="button" class="kit-btn kit-btn-compact kit-btn-danger ws-flat" data-try="flatten">Light Flatten</button>
+            <button type="button" class="kit-btn kit-btn-compact" data-try="copier">Light the copier</button>
+            <button type="button" class="kit-btn kit-btn-compact" data-try="flat">A chart while flat</button>
+            <button type="button" class="kit-btn kit-btn-compact kit-btn-primary" data-try="chart">A chart in a trade</button>
+          </div>
+          <div class="kit-panel" data-copier id="mockCopier" style="padding: 8px 10px"><span class="kit-label">Copier (a mock)</span><span class="gal-note">Leader Sim101, Follower A</span></div>
+          <section class="kit-panel" id="mockChart" style="padding: 8px 10px; min-height: 60px"><span class="kit-label">A chart panel</span></section>
+          <pre class="gal-log" id="refusalLog" aria-live="polite"></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="gal-note" style="padding: 8px 0 24px">Chart kit gallery. Sample data only: Sim101 and made-up names. live/kit.css, live/kit.js, docs/KIT.md.</footer>
+</div>
+</div>
+
+<script src="kit.js"></script>
+<script>
+(function () {
+  'use strict';
+  const K = window.ChartKit;
+  const $ = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+  const fmt = v => v.toFixed(1) + ':1';
+  $('#kitVersion').textContent = K.VERSION;
+
+  /* ---- tokens */
+  const USE = {
+    ground: 'the page ground', panel: 'panels and cards', 'drawer-bg': 'the decision drawer', cyan: 'the base colour: the light, active states, key buttons, links',
+    hot: 'hot text: titles, values', text: 'body text', dim: 'dim labels', line: 'panel lines', 'line-soft': 'row lines inside a panel', tint: 'hover and active tint',
+    meter: 'a neutral meter', 'purple-deep': 'accent fills (the chart\'s down candle)', purple: 'accent lines', 'purple-soft': 'accent text (the chart\'s VWAP)',
+    'purple-text': 'accent button text, the brand name (the chart\'s drawings)', danger: 'kill switch, Flatten', 'danger-text': 'text on danger',
+    profit: 'money in profit (locked)', loss: 'money under water (locked)', 'profit-text': 'text on a profit chip', 'loss-text': 'text on a loss chip',
+    'candle-up': 'up candles (locked)', 'candle-down': 'down candles (locked)', 'sig-screen': 'signal: screen, watching', 'sig-eyes': 'signal: eyes, a look',
+    'sig-judgment': 'signal: judgment, a plan', 'sig-checks': 'signal: checks, the rules', 'sig-go': 'signal: go, ChartBridge or a fill', 'sig-pass': 'signal: passed, caution',
+    'sig-danger': 'signal: danger, a hard no', armed: 'the armed glow', 'armed-line': 'the armed outline', off: 'a dot that is off',
+  };
+  const ground = K.TOKENS.ground;
+  $('#swatches').innerHTML = Object.keys(K.TOKENS).map(k => {
+    const v = K.TOKENS[k], c = K.contrast(v, ground);
+    const ratio = k === 'ground' ? 'the ground' : K.TEXT[k] ? fmt(c) + ' on the ground' : (/rgba/.test(v) ? 'a line or a fill' : 'not for text, ' + fmt(c));
+    return '<div class="gal-swatch"><i style="--sw:' + v + '"></i><b>--kit-' + k + '</b><span>' + v + ', ' + ratio + '</span><em>' + (USE[k] || '') + '</em></div>';
+  }).join('');
+  const panelOn = K.over(K.TOKENS.panel, ground);
+  const surf = ['trading', 'desk', 'agent'];
+  $('#contrastTable').innerHTML = '<tr><th>Text token</th>' + surf.map(s => '<th>' + s + '</th>').join('') + '</tr>' +
+    Object.keys(K.TEXT).map(k => '<tr><td class="kit-num">--kit-' + k + '</td>' + surf.map(s => {
+      const v = K.tokens(s)[k];
+      return '<td class="kit-num" style="color:' + v + '">' + fmt(K.contrast(v, ground)) + ' / ' + fmt(K.contrast(v, panelOn)) + '</td>';
+    }).join('') + '</tr>').join('');
+
+  /* ---- fonts: which face this browser actually draws */
+  const fontNotes = () => $$('[data-font]').forEach(el => {
+    const f = el.getAttribute('data-font');
+    let ok = false;
+    try { ok = document.fonts.check('16px "' + f + '"', 'Ag1'); } catch (e) { ok = false; }
+    el.textContent = ok ? 'Drawn in ' + f + '.' : f + ' is not loaded here: the fallback draws it.';
+  });
+  fontNotes();
+  try { document.fonts.ready.then(fontNotes); } catch (e) { /* old browser */ }
+
+  /* ---- mock charts: sample candles in the locked candle colours */
+  function chart(host, seed) {
+    const n = 44, cs = [];
+    let p = 25412;
+    for (let i = 0; i < n; i++) {
+      const d = Math.sin((i + seed) / 6.5) * 2.6 + Math.cos((i + seed) / 2.9) * 1.7 - (i > 30 ? 0.9 : 0) + (i > 38 ? 1.8 : 0);
+      const o = p, c = p + d;
+      cs.push({ o, c, h: Math.max(o, c) + 1 + Math.abs(Math.sin(i * 2.3)) * 2.4, l: Math.min(o, c) - 1 - Math.abs(Math.cos(i * 1.9)) * 2.4 });
+      p = c;
+    }
+    const lo = Math.min(...cs.map(c => c.l)) - 2, hi = Math.max(...cs.map(c => c.h)) + 2, y = v => ((hi - v) / (hi - lo) * 100).toFixed(2);
+    const q = x => Math.round(x * 4) / 4, last = q(cs[n - 1].c);
+    host.innerHTML = '<div class="gal-cv">' + cs.map((c, i) => '<div class="' + (c.c >= c.o ? 'up' : 'dn') + '">' +
+      '<div class="w" style="left:' + ((i + 0.5) / n * 100).toFixed(2) + '%;top:' + y(c.h) + '%;height:' + ((c.h - c.l) / (hi - lo) * 100).toFixed(2) + '%"></div>' +
+      '<div class="b" style="left:' + ((i + 0.2) / n * 100).toFixed(2) + '%;width:' + (0.6 / n * 100).toFixed(2) + '%;top:' + y(Math.max(c.o, c.c)) + '%;height:' + Math.max(0.4, Math.abs(c.c - c.o) / (hi - lo) * 100).toFixed(2) + '%"></div></div>').join('') +
+      '<div class="gal-lvl" style="top:' + y(last - 3) + '%;border-color:var(--kit-profit)" data-no-light><span style="background:var(--kit-profit)">' + (last - 3).toFixed(2) + '</span></div>' +
+      '<div class="gal-px" style="top:' + y(last) + '%" data-no-light><span>' + last.toFixed(2) + '</span></div></div>';
+  }
+  $$('[data-chart]').forEach((h, i) => chart(h, i * 7));
+
+  /* ---- one sample trade, one lit panel: outside the Agent tab K.light keeps only one trade panel lit, so lighting one
+     here turns the others off; sync() puts every control back in step with what is lit */
+  const pos = {
+    flat: '<span class="kit-dim">flat</span>',
+    profit: 'LONG 2 from 25,390.00, open <b class="kit-profit-text">+$24.00</b>',
+    loss: 'LONG 2 from 25,390.00, open <b class="kit-loss-text">-$12.00</b>',
+  };
+  let tradeState = 'flat';
+  function showTradeState(state, note) {
+    tradeState = state;
+    $('#lightPos').innerHTML = pos[state];
+    $$('[data-trade]').forEach(b => b.setAttribute('aria-pressed', String(b.getAttribute('data-trade') === state)));
+    $('#lightReadout').textContent = state !== 'flat' ? 'Light on: ' + state + ' ' + K.COLORS[state] + ', pace trade, ' + K.LAP.trade + ' s a lap.' : (note || 'Flat: no light at all.');
+    document.body.setAttribute('data-trade-state', state);
+  }
+  function sync() {
+    $$('[data-show]').forEach(b => b.setAttribute('aria-pressed', String(K.lit($('#' + b.getAttribute('data-show'))))));
+    const armedOn = K.lit($('#armedLit'));
+    $$('[data-armed-trade]').forEach(b => b.setAttribute('aria-pressed', String((b.getAttribute('data-armed-trade') === 'on') === armedOn)));
+    if (tradeState !== 'flat' && !K.lit($('#lightDemo'))) showTradeState('flat', 'Flat here: the sample trade shows on another panel.');
+  }
+  function lightTrade(el, color) { const ok = K.light(el, { on: true, color: color, pace: 'trade' }); sync(); return ok; }
+
+  /* ---- surfaces: the trade on the trading chart or Today's trades; the agent lights its step panel */
+  K.light($('#agentPipe'), { on: true, color: 'judgment', pace: 'decide' });
+  $$('[data-show]').forEach(b => b.addEventListener('click', () => lightTrade($('#' + b.getAttribute('data-show')), 'profit')));
+
+  /* ---- the armed chart, flat or in a trade */
+  $$('[data-armed-trade]').forEach(b => b.addEventListener('click', () => {
+    if (b.getAttribute('data-armed-trade') === 'on') lightTrade($('#armedLit'), 'profit');
+    else { K.light($('#armedLit'), { on: false }); sync(); }
+  }));
+
+  /* ---- the light: trade states on the trading screen */
+  function trade(state) {
+    const on = state !== 'flat';
+    const lit = on ? lightTrade($('#lightDemo'), state) : K.light($('#lightDemo'), { on: false });
+    showTradeState(lit ? state : 'flat');
+    sync();
+  }
+  $$('[data-trade]').forEach(b => b.addEventListener('click', () => trade(b.getAttribute('data-trade'))));
+  trade('profit');
+
+  /* ---- the light: deciding colours on the Agent tab */
+  const words = { screen: 'Watching each 1 minute bar.', eyes: 'The eyes flagged a pullback.', judgment: 'Judgment is making a plan.', checks: 'Checking the plan against the rules.', go: 'Rules said yes; ChartBridge placed it and it filled.', pass: 'Passed: the range is too wide for the stop.', danger: 'A hard no: a rule said stop.' };
+  function decide(c) {
+    K.light($('#lightDecide'), { on: true, color: c, pace: 'decide' });
+    $('#decideWords').textContent = words[c];
+    $$('[data-decide]').forEach(b => b.setAttribute('aria-pressed', String(b.getAttribute('data-decide') === c)));
+    $('#decideReadout').textContent = 'Light on: ' + c + ' ' + K.COLORS[c] + ', pace decide, ' + K.LAP.decide + ' s a lap.';
+  }
+  $$('[data-decide]').forEach(b => b.addEventListener('click', () => decide(b.getAttribute('data-decide'))));
+  decide('screen');
+
+  /* ---- every colour at once */
+  const all = ['screen', 'eyes', 'judgment', 'checks', 'go', 'pass', 'danger', 'profit', 'loss'];
+  $('#allLights').innerHTML = all.map(c => '<div class="kit-card" data-light="' + c + '"><span class="kit-label">' + c + '</span><span class="kit-num kit-hot">' + K.COLORS[c] + '</span></div>').join('');
+  $$('#allLights [data-light]').forEach(el => K.light(el, { on: true, color: el.getAttribute('data-light'), pace: el.getAttribute('data-light') === 'profit' || el.getAttribute('data-light') === 'loss' ? 'trade' : 'decide' }));
+
+  /* ---- the refusal */
+  const log = $('#refusalLog');
+  const tries = {
+    ticket: () => [$('#mockTicketPanel'), { on: true, color: 'profit', pace: 'trade' }],
+    row: () => [$('#mockTicket .tk-row'), { on: true, color: 'profit', pace: 'trade' }],
+    flatten: () => [$('[data-try="flatten"]'), { on: true, color: 'loss', pace: 'trade' }],
+    copier: () => [$('#mockCopier'), { on: true, color: 'profit', pace: 'trade' }],
+    flat: () => [$('#mockChart'), { on: true, color: 'screen' }],
+    chart: () => [$('#mockChart'), { on: true, color: 'profit', pace: 'trade' }],
+  };
+  function attempt(k) {
+    const [el, o] = tries[k]();
+    const why = K.whyNoLight(el, o.pace === 'trade' ? 'trade' : 'decide');
+    const ok = K.light(el, o);
+    sync();
+    const line = (ok ? 'Lit: ' : 'Refused: ') + k + (ok ? ', ' + o.color + ', pace ' + o.pace + '.' : '. ' + why);
+    log.textContent = (line + '\n' + log.textContent).split('\n').slice(0, 6).join('\n');
+    return ok;
+  }
+  $$('[data-try]').forEach(b => b.addEventListener('click', () => attempt(b.getAttribute('data-try'))));
+  window.galAttempt = attempt;
+  attempt('ticket');
+
+  /* ---- the drawer */
+  const D = {
+    look: ['10:41, LOOK', 'Worth a look: pullback into VWAP', 'Price came back to VWAP for the second time in 20 minutes and the sellers are thinning out.', 'kit-c-eyes'],
+    plan: ['10:42, PLAN', 'Buy 2 MNQ limit 25,390.00', 'VWAP has held twice. A limit at VWAP, the stop under the morning low, the target at twice the risk.', 'kit-c-judgment'],
+    rules: ['10:43, RULES', 'Inside the rules', 'ChartBridge checked the plan against the rules before placing it.', 'kit-c-checks'],
+    fill: ['10:44, FILL', 'Bought 2 MNQ at 25,390.00', 'Filled when price traded through the limit. The stop and target went in with the fill.', 'kit-c-go'],
+    pass: ['10:51, PASS', 'Passed', 'The stop would have to be too wide for this setup. No trade.', 'kit-c-pass'],
+    stop: ['09:58, STOP', 'Opening short stopped, -$16.00', 'Sold into the opening drive expecting it to fade. It kept going and the stop was hit.', 'kit-c-danger'],
+  };
+  const drawer = $('#drawer');
+  function openDrawer(k) {
+    const d = D[k];
+    drawer.className = 'kit-drawer ' + d[3];
+    $('#drawerKind').textContent = d[0] + ', the decision';
+    $('#drawerTitle').textContent = d[1];
+    $('#drawerWords').textContent = d[2];
+    drawer.hidden = false;
+    $$('#streamRows .kit-row').forEach(r => r.setAttribute('aria-pressed', String(r.getAttribute('data-open') === k)));
+    $('#drawerClose').focus();
+  }
+  $$('#streamRows .kit-row').forEach(r => r.addEventListener('click', () => openDrawer(r.getAttribute('data-open'))));
+  $('#drawerClose').addEventListener('click', () => { drawer.hidden = true; const sel = $('#streamRows [aria-pressed="true"]'); if (sel) sel.focus(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !drawer.hidden) $('#drawerClose').click(); });
+
+  /* ---- the component surface switch */
+  $$('#compSurface button').forEach(b => b.addEventListener('click', () => {
+    const s = b.getAttribute('data-surface');
+    $('#comp').className = 'kit kit-' + s;
+    $$('#compSurface button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  }));
+
+  /* ---- motion on and off */
+  function showMotion() {
+    const m = K.motion();
+    $$('[data-motion]').forEach(b => b.setAttribute('aria-pressed', String(b.getAttribute('data-motion') === m)));
+    let sys = false;
+    try { sys = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { sys = false; }
+    $('#motionNote').textContent = sys ? 'The system asks for reduced motion: the light stands still.' : m === 'off' ? 'Motion off: the light stands still, its glow stays.' : 'The light circles.';
+  }
+  $$('[data-motion]').forEach(b => b.addEventListener('click', () => { K.setMotion(b.getAttribute('data-motion')); showMotion(); }));
+  showMotion();
+})();
+</script>
+</body>
+</html>
