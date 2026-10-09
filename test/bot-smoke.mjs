@@ -181,7 +181,7 @@ try {
   await page.click('.bt-modes [data-mode="copilot"]');
   await until(async () => (await v3()).bot.mode === 'copilot', 'Copilot');
   await page.click('.bt-modes [data-mode="auto"]');
-  await sleep(300);
+  await sleep(450);                                   // 1.17.0: a second click under 400 ms after the first is a double-click, ignored
   check((await v3()).bot.mode === 'copilot' && (await page.textContent('.bt-modes [data-mode="auto"]')) === 'Confirm', 'Auto asks once more');
   await page.click('.bt-modes [data-mode="auto"]');
   await until(async () => (await v3()).bot.mode === 'auto', 'Auto on Sim101 (ChartBridge allows it: Sim101 is tradable)');
@@ -205,7 +205,10 @@ try {
   check(!!pv && pv.seenAt > 0 && pv.state === 'open', 'botSeen the moment it showed (seenAt ' + (pv && pv.seenAt) + ')');
   const ptext = await page.textContent('.bt-prop[data-id="p1"]');
   check(/Sell 1 MNQ market/.test(ptext) && /stalled at the made-up line/.test(ptext) && /Stop 12 ticks · Target 24 ticks/.test(ptext) && /Alt\+Y/.test(ptext) && /Alt\+N/.test(ptext), 'the bot\'s reason, the legs and the keys on it');
-  check(await page.evaluate(() => getComputedStyle(document.querySelector('.bt-prop .bt-acc')).opacity === '1' && document.querySelector('.bt-props').hasAttribute('data-no-motion')), 'R3: Accept is there at once, never animated');
+  /* 1.17.0: a card's Accept and Reject (and the keys) are off for its first second in the corner, at once and still (R3) */
+  check(await page.evaluate(() => { const b = document.querySelector('.bt-prop[data-id="p1"] .bt-acc'), c = getComputedStyle(b); return b.disabled && parseFloat(c.transitionDuration) === 0 && c.animationName === 'none'; }), 'its first second: Accept off at once, never animated (1.17.0)');
+  await sleep(1100);
+  check(await page.evaluate(() => getComputedStyle(document.querySelector('.bt-prop .bt-acc')).opacity === '1' && !document.querySelector('.bt-prop .bt-acc').disabled && document.querySelector('.bt-props').hasAttribute('data-no-motion')), 'R3: Accept is there at once, never animated');
   await page.screenshot({ path: path.join(SHOTS, 'bot-proposal.png') });
   await page.mouse.click(5, 300);                                   // the focus on the page, as Anthony's would be
   await page.keyboard.press('Alt+KeyY');
@@ -347,6 +350,7 @@ try {
   check(live.name === 'EVAL-A' && live.byMode === 'LIVE' && /live/.test(live.cls) && live.bg === 'rgb(159, 18, 57)', 'LIVE next to the mode, in the house red: ' + JSON.stringify(live));
   check(/^0s(, 0s)*$/.test(live.tr) && live.anim === 'none' && live.noMotion, 'the LIVE mark is never animated');
   await page.click('.bt-modes [data-mode="auto"]');
+  await sleep(450);                                   // a person's second click, not a double-click (1.17.0)
   await page.click('.bt-modes [data-mode="auto"]');
   await until(async () => (await v3()).bot.mode === 'auto', 'Auto on the LIVE account (no Sim lock; ChartBridge says EVAL-A is tradable)');
   check(/EVAL-A \(LIVE\)/.test(await page.getAttribute('.bt-modes [data-mode="auto"]', 'title') || ''), 'the Auto button names the account and its mark');

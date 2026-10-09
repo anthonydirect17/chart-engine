@@ -56,6 +56,9 @@
 const OT = typeof self !== 'undefined' && self.OrderTicket ? self.OrderTicket : require('./order-ticket.js');
 /* 1.16.0: Order Strategies, entry types and Merge (live/order-strategies.js); a page that does not load it has none */
 const OS = typeof self !== 'undefined' && self.OrderStrategies ? self.OrderStrategies : typeof require === 'function' ? require('./order-strategies.js') : null;
+/* 1.17.0: AgentCore's pageExitPasses, the one test of an exit on an agent's pair (agent-core.js loads after this file in
+   index.html, so it is looked up when needed; with none loaded no agent owns anything and nothing asks) */
+const agentCore = () => (typeof self !== 'undefined' && self.AgentCore) || (typeof require === 'function' ? require('./agent-core.js') : null);
 const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten', 'plan', 'merge'];   // what ChartBridge counts, 10 a second at most (plan: 0.3.8; merge: 0.4.0)
 const CANCEL_CHUNK = 6, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;
 const BE_LIMIT = 10;
@@ -240,6 +243,18 @@ function create(env) {
     const qty = qtyNow(), bad = OT.checkQty(qty, capNow(), R);
     if (bad) { flash('Not sent: ' + bad, 'error'); return; }
     const b = OT.cleanBracket(brackets[R], cap()), pos = TR.positions.get(TR.account + '|' + R);
+    /* 1.17.0 (ChartBridge 0.5.0's owner lock): on a pair an AI agent owns, the only order the page may send is an exit at
+       market that only reduces (no bracket, no strategy): a resting limit, stop or MIT could outlive the position and open
+       one with no stop. Said before sending, in ChartBridge's own words; Flatten and moving its stop or target still work. */
+    const owner = typeof env.agentOwner === 'function' ? env.agentOwner(TR.account, R) : '';
+    if (owner) {
+      const pq = pos && pos.qty ? pos.qty : 0, AG = agentCore();
+      // a reducing order never carries a bracket or a strategy (ChartBridge refuses them there): the exit as sent
+      if (!AG || !AG.pageExitPasses({ kind, side, qty }, pq)) {
+        flash('Not sent: ' + TR.account + ' ' + R + ' belongs to agent ' + owner + ': use Flatten, or move its stop or target.', 'error');
+        return;
+      }
+    }
     const reduces = !OT.bracketAllowed(side, pos && pos.qty);          // ChartBridge refuses a bracket on a reducing order
     /* 1.16.0: the active Order Strategy goes with the entry in place of the bracket (only while ChartBridge says strategies
        is on); never on an order that reduces (ChartBridge refuses it there, as a bracket). Checked here by ChartBridge's own

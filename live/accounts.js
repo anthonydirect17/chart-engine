@@ -318,11 +318,12 @@ function logText(m) {
 /* ---------------- orders */
 const SIDE = { buy: 'Buy', sell: 'Sell' };
 const KIND = { market: 'market', limit: 'limit', stop: 'stop', stopLimit: 'stop limit', mit: 'MIT', other: 'order' };
-/** "Buy limit", "Sell stop (target)", with what placed it (strategy, merge, copier, bot) when a v3 feature did. */
+/** "Buy limit", "Sell stop (target)", with what placed it (strategy, merge, copier, bot) when a v3 feature did; an agent's
+ *  order (1.17.0, `by: "agent:<id>"`) says "agent <id>". */
 function orderName(o) {
   const role = o.role === 'stop' ? 'stop' : o.role === 'target' ? 'target' : '';
   const kind = role === 'target' ? 'target' : role === 'stop' && o.kind === 'stop' ? 'stop' : KIND[o.kind] || 'order';
-  return (SIDE[o.side] || '') + ' ' + kind + (role === 'stop' && o.kind !== 'stop' ? ' (stop)' : '') + (o.by ? ' · ' + o.by : '');
+  return (SIDE[o.side] || '') + ' ' + kind + (role === 'stop' && o.kind !== 'stop' ? ' (stop)' : '') + (o.by ? ' · ' + String(o.by).replace(/^agent:/, 'agent ') : '');
 }
 /** The working stop and target on one account and instrument: { stop: [prices], target: [prices] } (role from ChartBridge). */
 function attachedLegs(orders, account, root) {

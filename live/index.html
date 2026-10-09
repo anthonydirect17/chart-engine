@@ -6,6 +6,8 @@
 <title>Workspace</title>
 <!-- IBM Plex from this PC (1.16.0): nothing is loaded from the internet -->
 <link rel="stylesheet" href="fonts/plex.css">
+<!-- 1.17.0: the Agent tab's own fonts (Chakra Petch, JetBrains Mono), from this PC too; used only inside the Agent tab -->
+<link rel="stylesheet" href="fonts/agent-fonts.css">
 <link rel="stylesheet" href="live.css">
 <link rel="stylesheet" href="pin.css">
 <link rel="stylesheet" href="workspace.css">
@@ -14,6 +16,8 @@
 <!-- 1.16.0: the motion kit (the Bot tab and its Library only, docs/MOTION.md) and the Bot tab (live/bot.js) -->
 <link rel="stylesheet" href="motion.css">
 <link rel="stylesheet" href="bot.css">
+<!-- 1.17.0: the Agent tab (live/agent.js) -->
+<link rel="stylesheet" href="agent.css">
 </head>
 <body>
 <!-- The trading workspace, ChartBridge's main page (http://localhost:8765/): panels on a 12 x 6 snap grid, one window per
@@ -41,6 +45,8 @@
   <span class="ws-tabs" id="wsTabs" role="tablist" aria-label="Layouts" hidden></span>
   <!-- the Bot tab (1.16.0, live/bot.js): shown with a ChartBridge that speaks protocol v3; it works only when ChartBridge's bot switch is on -->
   <button type="button" class="ws-btn bt-tabbtn" id="wsBotTab" aria-pressed="false" hidden>Bot</button>
+  <!-- the Agent tab (1.17.0, live/agent.js): shown with a ChartBridge that speaks protocol v3; its agents come with ChartBridge 0.5.0 -->
+  <button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent</button>
   <label class="ws-lbl" for="wsLayout">Layout</label>
   <select class="ws-sel" id="wsLayout"></select>
   <button type="button" class="ws-btn add" id="wsAdd" aria-haspopup="menu" aria-expanded="false" aria-controls="wsAddMenu">+ Add panel</button>
@@ -62,6 +68,8 @@
 </main>
 <!-- the Bot tab's own layout: Library, its chart, the bot panel (live/bot.js builds it) -->
 <section class="bt-view bt-in-ws" id="btView" aria-label="Bot tab"></section>
+<!-- the Agent tab's own layout: the agent strip, its controls, its chart, its proposals and its notes and plans (live/agent.js builds it) -->
+<section class="ag-view ag-in-ws" id="agView" aria-label="Agent tab"></section>
 
 <div class="ws-pop ws-menu" id="wsAddMenu" role="menu" aria-label="Add panel" hidden>
   <button type="button" role="menuitem" data-add="chart">Chart</button>
@@ -187,7 +195,10 @@
 <!-- 1.16.0: the motion kit, then the Bot tab's logic and page (before workspace.js, which creates the Bot tab) -->
 <script src="motion.js"></script>
 <script src="bot-core.js"></script>
+<!-- 1.17.0: the Agent tab's logic before bot.js (the one copilot-key handler for the bot and every agent), its page after -->
+<script src="agent-core.js"></script>
 <script src="bot.js"></script>
+<script src="agent.js"></script>
 <script src="workspace.js"></script>
 <!-- "Update ready: reload when flat" from the per-PC updater (nt8/update-pc.ps1); never reloads by itself. -->
 <script src="update-notice.js"></script>

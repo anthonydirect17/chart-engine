@@ -119,13 +119,16 @@ function isBotMark(x, bot) {
  *   order(o)   note an order message; true when it owes new contracts
  *   claim(f)   true when the fill is the bot's (it uses up what it covers; the same fill id twice is the same answer)
  *   clear()    forget everything (ChartBridge went away)
+ * mark (1.17.0, optional): whose orders count, mark(order, owner); the bot's (isBotMark) by default. The Agent tab passes
+ * AgentCore.isAgentMark, so an agent's fills are claimed against its own `by: "agent:<id>"` orders the same way.
  */
-function botFillLedger() {
+function botFillLedger(mark) {
+  const isMine = typeof mark === 'function' ? mark : isBotMark;
   const seen = new Map(), owed = [], claimed = new Set();   // seen: order id -> { filled, avg }
   const same = (a, b) => isNum(a) && isNum(b) && Math.abs(a - b) < 1e-6;
   return {
     order(o, bot) {
-      if (!isBotMark(o, bot) || typeof o.id !== 'string') return false;
+      if (!isMine(o, bot) || typeof o.id !== 'string') return false;
       const was = seen.get(o.id) || { filled: 0, avg: null }, now = isNum(o.filled) && o.filled > 0 ? o.filled : 0;
       if (!(now > was.filled)) return false;
       const d = now - was.filled, avg = isNum(o.avgFill) ? o.avgFill : null;
@@ -148,6 +151,16 @@ function botFillLedger() {
     },
     clear() { seen.clear(); owed.length = 0; claimed.clear(); }
   };
+}
+
+/* ======================================================================== second clicks */
+/** A second click confirms Auto or a kill switch's release within 4 s of the first; one that comes under 400 ms after it is
+ *  the same double-click and is ignored (1.17.0, the review of the Agent tab, S3). armed: { at, until } of the first click,
+ *  or null. Returns 'arm' (this is a first click), 'ignore' or 'confirm'. */
+const CONFIRM_MS = 4000, DOUBLE_CLICK_MS = 400;
+function confirmStep(armed, now) {
+  if (!armed || !isNum(armed.until) || !(now < armed.until)) return 'arm';
+  return isNum(armed.at) && now - armed.at < DOUBLE_CLICK_MS ? 'ignore' : 'confirm';
 }
 
 /* ======================================================================== the bot's account */
@@ -636,7 +649,7 @@ function statusText(b) {
 
 return {
   VERSION, RAILS, RAIL_MAX, BOT_ACCOUNT, ROOT_SIBLING, isBotMark, botFillLedger, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
-  railLevel, rails, railsChange, worse,
+  railLevel, rails, railsChange, worse, CONFIRM_MS, DOUBLE_CLICK_MS, confirmStep,
   modesAllowed, accountTradable, botSwitchOn, accountMark, botAccount, accountChoices, botAccountChange,
   createProposals,
   parseLibrary, checkEntry, shelves, slotEntry, thinCell, timeOfDayRow, thinEquity, ruleLines, evidenceLevel,

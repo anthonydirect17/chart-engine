@@ -130,6 +130,10 @@ mid-entrance (R3); Less motion in Settings shows the Bot tab in its final state 
 while the tab's live chart draws a busy tape. It holds the chart's gates (a chart's frame p95 under 4 ms, all charts per
 frame under 8 ms), keeps the kit's own loop under 4 ms at p95, and checks that the kit never runs inside a chart's frame.
 
+`npm run perf:agent` (R5, `test/perf-agent.mjs`): the Agent tab's flowing light (pure CSS, not the kit) while its agent is
+in a trade over a busy tape, Motion Full and Off taking turns. It holds the chart's gates (a chart's frame p95 under 4 ms, all
+charts per frame under 8 ms) and keeps the light's cost to at most 4 ms on the frame interval p95 over Motion Off's.
+
 ## Keeping it cheap on a big page (the Bot tab)
 
 What the Bot tab learned (`live/bot.css`, `live/bot.js`): a `.motion-atmo` glow under a whole screen is painted again
@@ -137,3 +141,10 @@ with every piece that moves over it, so give its `::before` a layer of its own (
 plays, give the moving pieces layers of their own too (a class on the root until the scene's `onDone`), and take them
 away at rest; read a canvas's size at a scene's first and last frames only (a layout read in every frame is a forced
 layout); and never put a backdrop blur over a live chart.
+
+What the Agent tab's light learned (`live/agent.css`, review of fc3101a): a border light drawn as a conic gradient whose angle
+is an animated custom property is painted again every frame over the whole panel, and a blur over it costs more still; turn
+a small gradient with a transform instead, inside thin strips that clip it to the border (only their pixels are drawn), and
+soften the halo with a mask, not a filter. Fade a colour only on the elements that draw with it: an inherited custom property
+in a transition restyles every element under it, every frame; register it as not inherited, or crossfade two copies by
+opacity.

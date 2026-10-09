@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Agent</title>
+<!-- IBM Plex from this PC (1.16.0): nothing is loaded from the internet -->
+<link rel="stylesheet" href="fonts/plex.css">
+<!-- 1.17.0: the Agent tab's own fonts (Chakra Petch, JetBrains Mono), from this PC too; used only inside the Agent tab -->
+<link rel="stylesheet" href="fonts/agent-fonts.css">
+<link rel="stylesheet" href="live.css">
+<link rel="stylesheet" href="pin.css">
+<link rel="stylesheet" href="workspace.css">
+<link rel="stylesheet" href="motion.css">
+<link rel="stylesheet" href="bot.css">
+<link rel="stylesheet" href="agent.css">
+</head>
+<body>
+<!-- The Agent tab in its own window (1.17.0): the Agent tab's Pop out, or http://localhost:8765/agent.html, for a third
+     monitor. The same strip, controls, chart, proposals and notes as the workspace's Agent tab, on this window's one v3
+     connection (live/accounts.js createFeed, as every workspace window has); proposals are answered with the buttons
+     (their keys work in the workspace's windows). With a ChartBridge older than 0.5.0 it says it has no agents. -->
+<header class="ws-top">
+  <span class="ws-title">AGENT</span>
+  <span class="ws-clock"><span id="agClock">--:--:--</span> <span class="ws-et">ET</span></span>
+  <span class="ws-fill"></span>
+  <span class="ws-note">ChartBridge places every agent order inside its rules. This window takes no orders of its own.</span>
+</header>
+<section class="ag-view" id="agView" aria-label="Agent"></section>
+
+<script src="../src/chart-engine.js"></script>
+<script src="bar-builder.js"></script>
+<script src="order-ticket.js"></script>
+<script src="pin.js"></script>
+<script src="live.js"></script>
+<script src="feed.js"></script>
+<script src="motion.js"></script>
+<!-- the window's v3 connection (the Account page's createFeed; no Account page here) -->
+<script src="accounts.js"></script>
+<script src="bot-core.js"></script>
+<script src="agent-core.js"></script>
+<script src="agent.js"></script>
+<script>
+(function () {
+  'use strict';
+  const PIN = window.ChartBridgePin || null;
+  const LS = (() => { try { return window.localStorage; } catch (e) { return null; } })();
+  const store = { getItem: k => { try { return LS ? LS.getItem(k) : null; } catch (e) { return null; } }, setItem: (k, v) => { try { if (LS) LS.setItem(k, v); } catch (e) { /* blocked */ } } };
+  const onBridge = location.protocol.startsWith('http') && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(location.host);
+  const BASE_WS = onBridge ? 'ws://' + location.host + '/ws' : 'ws://localhost:8765/ws';
+  const wsUrl = () => (PIN ? PIN.wsUrl(BASE_WS) : BASE_WS);
+  const clock = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const tick = () => { document.getElementById('agClock').textContent = clock.format(new Date()); };
+  tick(); setInterval(tick, 1000);
+  const framed = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
+  const start = () => {
+    const hub = window.ChartFeed.create({ wsUrl });
+    /* this window's one v3 connection: it connects at once and ChartBridge's hello decides (an older one: nothing more) */
+    const v3 = window.AccountsPage.createFeed({ wsUrl, pin: PIN, framed, desk: false, fetch: (u, o) => fetch(u, o), note: () => {}, changed: () => {} });
+    window.agentDesk = window.AgentDesk.create({ popout: true, v3, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, els: { view: document.getElementById('agView') } });
+    window.agentDesk.showTab(true);
+    v3.startAny();
+  };
+  if (PIN) PIN.gate().then(start); else start();
+})();
+</script>
+</body>
+</html>

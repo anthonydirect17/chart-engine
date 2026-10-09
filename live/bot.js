@@ -293,23 +293,62 @@ function create(o) {
     el.setAttribute('role', 'alertdialog');
     el.setAttribute('aria-label', 'Copilot proposal: ' + sideWord(p.side) + ' ' + (p.qty || 1) + ' ' + (p.root || ''));
     el.innerHTML = propHtml(p);
-    propBox.prepend(el);
-    propEls.set(p.id, { el, p, shownAt: Date.now() });
-    seenNow();
+    propEls.set(p.id, { el, p, shownAt: Date.now(), armAt: 0, waiting: false });
+    placeCorner();
     beep('');
     ageTick();
+  }
+  /* 1.17.0 (the re-check of e87ba23, Anthony's count-only rule): the corner shows ONE bot card at a time, the oldest open
+     proposal (the one the keys answer), and under it one line of a fixed height, "+N more bot proposals" (empty, the same
+     height, with none waiting); the others wait their turn. No stack and no scrolling, so a card coming or going moves no
+     other card, and the corner stays clear of the top bar. A card that ended stays shown with its words until it goes.
+     When the card shown changes, its Accept and Reject and the keys are off for 1 s (ARM_MS: disabled at once, R3), so a
+     fast double press or click never answers the next proposal that lands in the same place; a press then does nothing
+     and is not kept. */
+  const ARM_MS = 1000;
+  let shownId = '', armTimer = 0;
+  const moreEl = document.createElement('div');
+  moreEl.className = 'bt-more';
+  moreEl.setAttribute('aria-live', 'polite');
+  const shownCard = () => (shownId ? propEls.get(shownId) || null : null);
+  const armed = x => !!x && Date.now() >= x.armAt;
+  function placeCorner() {
+    let x = shownCard();
+    if (!x) {
+      x = [...propEls.values()].find(y => !y.ended) || null;
+      shownId = x ? x.p.id : '';
+      if (x) {
+        x.shownAt = Date.now(); x.armAt = x.shownAt + ARM_MS;
+        clearTimeout(armTimer); armTimer = setTimeout(() => { armTimer = 0; const y = shownCard(); if (y) syncButtons(y); }, ARM_MS + 20);
+      }
+    }
+    const want = x ? [x.el, moreEl] : [];
+    if (propBox.children.length !== want.length || want.some((e, i) => propBox.children[i] !== e)) propBox.replaceChildren(...want);
+    const more = [...propEls.values()].filter(y => !y.ended && y !== x).length;
+    put(moreEl, 'textContent', more ? '+' + more + ' more bot proposal' + (more === 1 ? '' : 's') : '');
+    if (x) syncButtons(x);
+    seenNow();
+  }
+  /* the card's buttons: off while it is arming, waiting for ChartBridge or ended */
+  function syncButtons(x) {
+    const off = !!x.ended || x.waiting || !armed(x);
+    for (const b of x.el.querySelectorAll('button')) put(b, 'disabled', off);
+    x.el.classList.toggle('bt-arming', !x.ended && !armed(x));
+  }
+  /* the shown card is whole in the window, under the top bar: the keys answer it only then */
+  function inView(el) {
+    const r = el.getBoundingClientRect(), bar = document.querySelector('.ws-top'), top = bar ? bar.getBoundingClientRect().bottom : 0;
+    return r.height > 0 && r.top >= top - 1 && r.bottom <= innerHeight + 1 && r.left >= -1 && r.right <= innerWidth + 1;
   }
   /* botSeen the moment it shows (PROTOCOL.md: "the page sends botSeen the moment it shows it"; not rate counted): in a
      window Anthony can see. A window behind another tab or minimized sends it when it comes to the front; the first window
      to show it is the one ChartBridge records. */
   function seenNow() {
     if (document.visibilityState === 'hidden') return;
-    const at = Date.now();
-    for (const x of propEls.values()) {
-      if (x.ended) continue;
-      const seen = props.shown(x.p.id, at);
-      if (seen) { x.shownAt = at; sendRaw(seen); }
-    }
+    const at = Date.now(), x = shownCard();           // the card shown (the ones waiting are not shown yet)
+    if (!x || x.ended) return;
+    const seen = props.shown(x.p.id, at);
+    if (seen) sendRaw(seen);
   }
   document.addEventListener('visibilitychange', seenNow);
   function updateProposal(p) { const x = propEls.get(p.id); if (x) x.p = p; else showProposal(p); }
@@ -319,13 +358,14 @@ function create(o) {
     if (!x) { if (why === 'not answered') notice({ kind: 'proposal', level: '', text: 'Copilot proposal ' + sideWord(p.side).toLowerCase() + ' ' + (p.root || '') + ': not answered' }); return; }
     // an expired proposal disappears and says "not answered" (Anthony, addendum 3); the others say how they ended
     x.el.classList.add('bt-ended');
-    for (const b of x.el.querySelectorAll('button')) b.disabled = true;
     put(x.el.querySelector('[data-k="msg"]'), 'textContent', text);
     x.ended = true;
-    setTimeout(() => dropProposal(p.id), why === 'not answered' ? 2500 : 1200);
+    syncButtons(x);
+    if (x !== shownCard()) dropProposal(p.id);            // one waiting its turn: it just goes (the line counts one fewer)
+    else setTimeout(() => dropProposal(p.id), why === 'not answered' ? 2500 : 1200);
     notice({ kind: 'proposal', level: why === 'not answered' ? 'amber' : '', text });
   }
-  function dropProposal(id) { const x = propEls.get(id); if (x) { x.el.remove(); propEls.delete(id); } }
+  function dropProposal(id) { const x = propEls.get(id); if (x) { x.el.remove(); propEls.delete(id); if (shownId === id) shownId = ''; placeCorner(); } }
   propBox.addEventListener('click', e => {
     const b = e.target.closest('button[data-ans]'); if (!b) return;
     const card = b.closest('.bt-prop');
@@ -333,14 +373,14 @@ function create(o) {
   });
   function answer(id, ans) {
     const x = propEls.get(id);
-    if (!x || x.ended) return false;
+    if (!x || x.ended || x !== shownCard() || !armed(x)) return false;   // only the card shown, once armed
     const c = cid();
     const r = props.answer(id, ans, Date.now(), c);
     const msgEl = x.el.querySelector('[data-k="msg"]');
     if (r.error) { put(msgEl, 'textContent', r.error); return false; }
     if (!sendRaw(r.msg)) { props.refused(id); put(msgEl, 'textContent', 'Not sent: not connected to ChartBridge.'); return false; }
     S.pending.set(c, { kind: 'answer', id });
-    for (const btn of x.el.querySelectorAll('button')) btn.disabled = true;
+    x.waiting = true; syncButtons(x);
     put(msgEl, 'textContent', (ans === 'accept' ? 'Accept' : 'Reject') + ' sent. Waiting for ChartBridge.');
     return true;
   }
@@ -352,7 +392,7 @@ function create(o) {
     if (x.kind === 'answer') {
       props.refused(x.id);
       const pe = propEls.get(x.id);
-      if (pe && !pe.ended) { for (const b of pe.el.querySelectorAll('button')) b.disabled = false; put(pe.el.querySelector('[data-k="msg"]'), 'textContent', why); }
+      if (pe && !pe.ended) { pe.waiting = false; syncButtons(pe); put(pe.el.querySelector('[data-k="msg"]'), 'textContent', why); }
     } else if (x.kind === 'rails') { railsWhy(why); }
     else if (x.kind === 'account') { acctWhy(why); }
     else if (x.kind === 'mode') { modeWhy(why); }
@@ -369,17 +409,24 @@ function create(o) {
     ageTimer = setTimeout(ageTick, 1000);
   }
   /* One key: the workspace's hotkeys (The Desk's `accept` and `reject`, no default) fire a cancelable `chart-copilot-key`
-     event (live/workspace.js); this is its one handler. It answers the oldest open proposal and cancels the event (the
-     workspace then says nothing more); with none open it leaves the event alone (the workspace says so). */
+     event (live/workspace.js). 1.17.0: the event has one handler for the bot and every agent (AgentCore.copilotRouter): the
+     Bot tab gives it its open proposals, and the oldest open one across the bot and the agents is answered; with no agent
+     proposal open that is the bot's oldest, exactly as before. Without AgentCore (bot.html) this is the handler, as in
+     1.16.0: it answers the oldest open proposal and cancels the event (the workspace then says nothing more); with none open
+     it leaves the event alone (the workspace says so). 1.17.0: the oldest open one is the card shown (the only one), and a
+     key answers it only once it is armed and whole in the window (ready); before that the key does nothing. */
+  const keyTarget = () => { const x = shownCard(); return S.on && x && !x.ended ? x : null; };
   function onCopilotKey(e) {
     const ans = e && e.detail ? e.detail.answer : '';
     if (!S.on || (ans !== 'accept' && ans !== 'reject')) return;
-    const open = [...propEls.values()].filter(x => !x.ended).sort((a, b) => a.shownAt - b.shownAt)[0];
+    const open = keyTarget();
     if (!open) return;
     e.preventDefault();
-    answer(open.p.id, ans);
+    if (armed(open) && inView(open.el)) answer(open.p.id, ans);
   }
-  document.addEventListener('chart-copilot-key', onCopilotKey);
+  const ROUTER = window.AgentCore && window.AgentCore.copilotRouter ? window.AgentCore.copilotRouter(document) : null;
+  const unroute = ROUTER ? ROUTER.add('bot', { open: () => { const x = keyTarget(); return x ? [{ id: x.p.id, shownAt: x.shownAt, ready: armed(x) && inView(x.el), answer: ans => answer(x.p.id, ans) }] : []; } }) : null;
+  if (!ROUTER) document.addEventListener('chart-copilot-key', onCopilotKey);
   /** the keys shown on the buttons and in Options: what the workspace has (o.copilotKeys), checked as before */
   function loadKeys() {
     if (typeof o.copilotKeys !== 'function') { S.keys = { accept: '', reject: '', notes: [], from: 'window' }; return; }
@@ -804,7 +851,12 @@ function create(o) {
     if (mode && !mode.disabled) {
       const m = mode.dataset.mode;
       if (S.bot && S.bot.mode === m) return;
-      if (m === 'auto' && !(S.autoConfirm > Date.now())) { S.autoConfirm = Date.now() + 4000; renderPanel(); setTimeout(renderPanel, 4100); return; }
+      if (m === 'auto') {
+        // 1.17.0: a second click within 4 s confirms, but not one under 400 ms after the first (a double-click)
+        const step = BC.confirmStep(S.autoConfirm ? { at: S.autoAt, until: S.autoConfirm } : null, Date.now());
+        if (step === 'ignore') return;
+        if (step === 'arm') { S.autoConfirm = Date.now() + 4000; S.autoAt = Date.now(); renderPanel(); setTimeout(renderPanel, 4100); return; }
+      }
       S.autoConfirm = 0;
       if (sendBot({ type: 'botMode', mode: m }, 'mode')) log.add({ k: 'askmode:' + Date.now(), kind: 'mode', text: 'Asked for ' + BC.MODE_NAME[m] });
       return;
@@ -829,7 +881,9 @@ function create(o) {
       // R3: instant. On: one click, always. Release: a second click within 4 s (it lets the bot trade again).
       const b = S.bot || {};
       if (!b.killed) { if (sendBot({ type: 'botKill', on: true }, 'kill')) log.add({ k: 'kill:' + Date.now(), kind: 'kill', text: 'Kill switch pressed', level: 'red' }); return; }
-      if (!(S.killConfirm > Date.now())) { S.killConfirm = Date.now() + 4000; renderPanel(); setTimeout(renderPanel, 4100); return; }
+      const step = BC.confirmStep(S.killConfirm ? { at: S.killAt, until: S.killConfirm } : null, Date.now());   // 1.17.0: not a double-click
+      if (step === 'ignore') return;
+      if (step === 'arm') { S.killConfirm = Date.now() + 4000; S.killAt = Date.now(); renderPanel(); setTimeout(renderPanel, 4100); return; }
       S.killConfirm = 0;
       if (sendBot({ type: 'botKill', on: false }, 'kill')) log.add({ k: 'kill:' + Date.now(), kind: 'kill', text: 'Kill switch released' });
       renderPanel();
@@ -1004,7 +1058,7 @@ function create(o) {
       S.v3 = false; S.version = m && typeof m.version === 'string' ? m.version : ''; render();
     },
     /** the workspace's hotkeys changed (The Desk read): the keys shown on the buttons */
-    keysChanged() { loadKeys(); renderPanelTab(); for (const x of propEls.values()) if (!x.ended) { const n = x.el.querySelector('[data-k="msg"]'); const t = n ? n.textContent : ''; x.el.innerHTML = propHtml(x.p); if (t) put(x.el.querySelector('[data-k="msg"]'), 'textContent', t); } },
+    keysChanged() { loadKeys(); renderPanelTab(); for (const x of propEls.values()) if (!x.ended) { const n = x.el.querySelector('[data-k="msg"]'); const t = n ? n.textContent : ''; x.el.innerHTML = propHtml(x.p); if (t) put(x.el.querySelector('[data-k="msg"]'), 'textContent', t); syncButtons(x); } },
     showTab, shown: () => S.shown, on: () => S.on,
     layoutChanged(name) { S.layout = String(name || ''); if (S.shown && !popout) showTab(false); renderStrip(); },
     /** the chart menu's ghost switch (workspace.js): whether it is offered and on, and to flip it */
@@ -1018,7 +1072,7 @@ function create(o) {
     state: () => ({ on: S.on, v3: S.v3, signedIn: S.signedIn, shown: S.shown, bot: S.bot, library: { state: S.library.state, n: S.library.bots.length, problems: S.library.problems.slice() },
       proposals: [...propEls.keys()], keys: Object.assign({}, S.keys), dayType: days.current(), dayCalls: days.calls().length, log: log.list().length, trips: trips(), chart: !!S.chart, detail: !!S.detail }),
     chart: () => (S.chart ? S.chart.chart : null),
-    destroy() { S.destroyed = true; unlisten(); unmountChart(); document.removeEventListener('chart-copilot-key', onCopilotKey); propBox.remove(); },
+    destroy() { S.destroyed = true; unlisten(); unmountChart(); if (unroute) unroute(); else document.removeEventListener('chart-copilot-key', onCopilotKey); propBox.remove(); },
   };
   window.addEventListener('storage', e => {
     if (e.key === BC.KEYS.log || e.key === BC.KEYS.dayType) { renderPanel(); renderTrips(); }
