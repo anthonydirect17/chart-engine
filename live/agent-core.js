@@ -809,6 +809,7 @@ const KEY_SAY = {
   locked: 'Key ignored: one copilot answer a second',
   fresh: 'That proposal has just appeared: press again in a moment, or click it',
   late: 'Under 5 s left: the key does not answer it; click it if you mean to',
+  arming: 'The bot\'s proposal has just come into the corner: press again in a moment',
 };
 /**
  * The workspace's hotkeys fire one cancelable `chart-copilot-key` event (detail.answer 'accept' or 'reject'). The Bot tab
@@ -825,7 +826,7 @@ const KEY_SAY = {
  *   And for every key answer but the bot's own 1.16.0 path: the keys rest 1 s after an answer, a proposal must have been on
  *   screen 1 s, and one in its last 5 s (or with no expiry) is never answered by a key.
  * Sources: add(name, { kind ('bot' or 'agents'; 'bot' for the name 'bot'), open: () => [{ id, agent, shownAt, answered,
- * expiresAt, name, answer: ans => bool }], focus: () => the agent shown in the Agent tab, true while the tab is open with no agent shown, or '' })
+ * expiresAt, name, ready (the bot's: false while its card is arming or not whole in the window), answer: ans => bool }], focus: () => the agent shown in the Agent tab, true while the tab is open with no agent shown, or '' })
  * -> remove().
  * decide(ans) is { act: 'answer', entry } or { act: 'say', text } or { act: 'none' } (nothing open: the event is left alone,
  * so the workspace says "no copilot proposal to answer here"); handle(ans) acts on it and returns it.
@@ -859,7 +860,10 @@ function createCopilotRouter(clock) {
       if (!mine.length) return bot.length || agents.length ? { act: 'say', text: 'With the Agent tab open the keys answer only ' + (focus === true ? 'the shown agent' : focus) + '\'s proposals: open the Bot tab or that agent for the others' } : { act: 'none' };
       return gate(mine.find(x => !late(x, t)) || mine[0]);
     }
-    if (!agents.length) return bot.length ? { act: 'answer', entry: bot[0] } : { act: 'none' };   // the bot alone: 1.16.0
+    if (!agents.length) {                              // the bot alone: 1.16.0 (its oldest, the card it shows), once ready
+      if (!bot.length) return { act: 'none' };
+      return bot[0].ready === false ? { act: 'say', text: KEY_SAY.arming } : { act: 'answer', entry: bot[0] };
+    }
     if (bot.length + agents.length > 1) return { act: 'say', text: KEY_SAY.many };
     return gate(agents[0]);
   }

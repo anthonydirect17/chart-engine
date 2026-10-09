@@ -143,13 +143,22 @@ lead's default.
   - The copilot keys answer an agent's proposal only while the Agent tab is shown (they were global: off the tab a key
     answered an agent's proposal when it was the only one open). Off the tab they answer the bot's, as 1.16.0. `agentSeen`
     goes when the proposal shows in the tab's slot.
-  - The bot's corner never reaches the top bar (at most the window less the top bar and 16 px; it scrolls inside past
-    that); each bot card's name and its side, size and root line stay at the card's top while it scrolls (sticky); a new
-    bot card goes at the top and moves none already there (the corner keeps them in place when it scrolls).
   - `npm run smoke:agent-targets` checks it at 1366 x 768 and 1920 x 1080 with two agents and the bot proposing: no agent
-    Accept or Reject anywhere, the line's counts and links, the corner below the top bar, every bot Accept in sight with
-    its own name line wherever the corner is scrolled, a new bot card moving no button, and the keys (it fails on
-    c47a8a1). `npm run smoke:agent` checks the corner's line and the keys off the tab.
+    Accept or Reject anywhere, the line's counts and links, and the keys (it fails on c47a8a1). `npm run smoke:agent`
+    checks the corner's line and the keys off the tab.
+- **After the re-check of e87ba23** (the bot's corner: B1, a corner that scrolled let Alt+Y accept the oldest bot proposal
+  scrolled out of sight; B2, as on main, a bot card leaving slid the cards above down, the next card's Accept landing
+  where the last one's was, enabled):
+  - The bot's corner shows ONE card at a time, the oldest open proposal (the one the keys answer), and under it one line
+    of a fixed height, "+N more bot proposals"; no stack and no scrolling, so nothing moves when a proposal arrives or
+    leaves, and the corner never reaches the top bar (the card's reason gives way in a short window).
+  - When the card shown changes, its Accept and Reject and the keys are off for 1 s (disabled at once, R3): a press or a
+    click then does nothing and is not kept. The keys answer only the card shown, once armed and whole in the window
+    (`AgentCore.copilotRouter`: the bot's entry is `ready` then). `botSeen` goes when a card shows.
+  - `npm run smoke:agent-targets` checks it with seven bot proposals at 1366 x 768 and 1920 x 1080 (one card and "+6
+    more", nothing over the top bar, Alt+Y on the card shown only, the next card disarmed for 1 s, a press and a click in
+    that second answering nothing, one after it answering once), and its notices check at 1100 px and narrower now checks
+    the band at the top of the tab, as designed. `npm run smoke:bot` waits out a card's first second before its key.
 - Tests: `test/agent.test.js`, the agent part of `test/fake-v3.test.js`, `npm run smoke:agent` and `smoke:agent-targets`
   (screenshots `test/out/agent-*.png`), `npm run perf:agent`. The chart draws exactly as in 1.16.0. Page only, no
   recompile; COMPAT stays at ChartBridge 0.3.2.

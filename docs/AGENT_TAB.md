@@ -184,11 +184,17 @@ decision in a drawer over the right column, outlined in that decision's colour:
   the corner wherever Anthony is counts the agents' open proposals, "Demo Agent: 1 proposal · Second Demo Agent: 1"; each
   name opens the Agent tab on that agent; with none open the line is gone, and its room stays (while agents are known the
   Bot tab's corner sits 40 px higher), so its coming and going moves no bot card. No agent Accept or Reject exists
-  outside the tab. The Bot tab's corner (the bot's proposals, as on main) never reaches the top bar: it is at most the
-  window's height less the top bar (40 px) and 16 px, and scrolls inside past that; each bot card's name and its side,
-  size and root stay at the card's top while it scrolls (sticky), so a bot Accept or Reject is never in sight without
-  them; a new bot card goes at the top and moves none already there (the corner grows upward, and once it scrolls it
-  scrolls by the new card's room). While the Agent tab is shown the Bot tab's corner and the agents' line are hidden and
+  outside the tab. The Bot tab's corner shows ONE bot card at a time (the re-check of e87ba23): the oldest open
+  proposal, the one the keys answer, whole, with one line of a fixed height (24 px) under it, "+6 more bot proposals"
+  (empty with none waiting). No stack and no scrolling: a proposal arriving is counted in that line and moves nothing;
+  a card that ended shows its words until it goes, and then the next one takes its place. When the card shown changes
+  (the last one answered, expired or withdrawn, or one arriving in an empty corner), its Accept and Reject and the keys
+  are off for 1 s, disabled at once with no animation (R3): a press or a click in that second does nothing and is not
+  kept, so a fast double press never answers the next proposal landing in the same place. The keys answer only the card
+  shown, once armed and whole in the window under the top bar ("The bot's proposal has just come into the corner: press
+  again in a moment" otherwise). The card is at most the window less the top bar, 16 px and the line (its reason
+  scrolls inside when it must), so the corner never reaches the top bar. `botSeen` goes when a card shows. While the
+  Agent tab is shown the Bot tab's corner and the agents' line are hidden and
   the tab counts what is open (above). Notices for
   an entry, an exit, a stand-down, the heartbeat, the kill switch, the mode, the account and how a proposal ended. While
   the Agent tab is shown the notices cover none of it: they stack over the chart's lower left, above its time axis (over
@@ -490,13 +496,16 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
   tab at its top, ChartBridge's error line is in the window, covers no Accept or Reject and moves the shown agent's Accept
   by nothing. The pop-out at 1366 x 768, 1920 x 1080 and 390 x 844: its agent's Accept and Reject in the window and
   themselves, no other Accept or Reject, the line counting the second agent's; its link shows the second agent there.
-  Off the tab (added after the re-review of c47a8a1, and it fails on c47a8a1: 11 of 78 checks), with two agents and the
-  bot proposing (three bot cards, then a fourth), at 1366 x 768 and 1920 x 1080: no agent Accept or Reject exists anywhere;
-  the corner's line says "Demo Agent: 1 proposal · Second Demo Agent: 1" at 30 px; the bot's corner starts below the top
-  bar and the top bar's buttons are themselves; with the corner scrolled anywhere (8 px steps) every bot Accept and Reject
-  in sight has its own card's name line and side, size and root line in sight; a new bot card moves none of the bot
-  buttons already there; the Reject key answers the bot's proposal, never an agent's; and the line's names open the Agent
-  tab on that agent (the second agent at 1366 x 768, the first at 1920 x 1080), its proposal in the slot.
+  Off the tab (added after the re-review of c47a8a1, which it fails; the bot's corner rewritten after the re-check of
+  e87ba23), with two agents and seven bot proposals, at 1366 x 768 and 1920 x 1080: no agent Accept or Reject exists
+  anywhere and the corner's line says "Demo Agent: 1 proposal · Second Demo Agent: 1"; the bot's corner shows one card,
+  the oldest, whole with its name, side and size lines and its buttons, and "+6 more bot proposals" (24 px) under it;
+  nothing covers the top bar (every 16 px along it); an eighth proposal moves nothing; Alt+Y answers the card shown and
+  nothing else; the next card takes its place disarmed (buttons off at once), and a key press and a click where the last
+  Accept was within its first second answer nothing; after it, Alt+N answers it once. The line's names open the Agent
+  tab on that agent (the second agent at 1366 x 768, the first at 1920 x 1080), its proposal in the slot. The notices
+  at 1100 px and narrower: every one in the band at the top of the tab, right under the top bar, at its fixed height (66
+  px, 96 px on a phone), one in sight in it.
   Screenshots `agent-targets-1366`, `-390`, `-popout`.
 - `npm run perf:agent` (R5, `test/perf-agent.mjs`, not part of `npm test`): the Agent tab in a trade at 1920 x 1080 while
   MNQ trades a busy tape (`--live-rate=200`), Motion Full and Motion Off taking turns. Gates: a chart's frame p95 under 4 ms

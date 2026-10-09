@@ -285,6 +285,17 @@ test('copilot keys, the bot alone: exactly 1.16.0 (the oldest bot proposal; noth
   assert.equal(g.R.handle('maybe').act, 'none');
 });
 
+test('copilot keys, the bot\'s card arming (1 s after it shows) or not whole in the window: the key answers nothing', () => {
+  const R = AC.createCopilotRouter(() => 5000), done = [];
+  let ready = false;
+  R.add('bot', { open: () => [{ id: 'b1', shownAt: 4900, ready, answer: ans => { done.push(ans); return true; } }] });
+  assert.deepEqual(R.handle('accept'), { act: 'say', text: AC.KEY_SAY.arming });
+  assert.deepEqual(done, [], 'a press while it arms does nothing, and is not kept');
+  ready = true;
+  assert.equal(R.handle('accept').act, 'answer');
+  assert.deepEqual(done, ['accept'], 'armed: answered once');
+});
+
 test('copilot keys, B1: a double press never answers a second, different proposal', () => {
   // the Agent tab on demo: demo's proposal answered by the first press; the second press within 1 s answers nothing
   const g = routerRig();

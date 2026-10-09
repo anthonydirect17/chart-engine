@@ -6,8 +6,8 @@
 //     Second Demo Agent: 1"), each name a link to the Bot tab or to that agent in the tab; the copilot keys answer nothing
 //     hidden; on the Bot tab the bot's cards are as before;
 //   - off the tab (the re-review of c47a8a1): no agent Accept or Reject anywhere, one line in the corner counts the agents'
-//     proposals and opens the tab on that agent, the bot's corner stays under the top bar with each card's name, side and
-//     size in sight with its buttons, a new bot card moves none already there, and the keys answer no agent's proposal;
+//     proposals and opens the tab on that agent; the bot's corner shows one card (the oldest) and "+N more", never over
+//     the top bar; a new card moves nothing; Alt+Y answers the card shown only; the next card is disarmed for 1 s;
 //   - never covered: document.elementFromPoint at the centre and the four corners of the tab's Accept and Reject finds the
 //     button itself, in the window without scrolling, at 1000 x 800, 1366 x 768, 1600 x 900, 1440 x 1000, 1920 x 1080 and
 //     390 x 844 (and with notices showing); the same in the pop-out;
@@ -158,12 +158,20 @@ try {
     await sleep(100);
     /* above 1100 px over the chart's lower left; at 1100 px and narrower pinned at the top of the tab (the tray), the newest in
        sight (as the tab shows, before anything is scrolled to a button) */
-    const inChart = await page.evaluate(() => { const narrow = innerWidth <= 1100, c = document.querySelector(narrow ? '#agView [data-k="tray"]' : '#agView [data-panel="chart"]').getBoundingClientRect(), all = [...document.querySelectorAll('.ag-note')];
-      const inside = all.every(n => { const r = n.getBoundingClientRect(); return narrow ? !!n.closest('#agView [data-k="tray"]') : r.height === 0 || (r.left >= c.left - 1 && r.right <= c.right + 1 && r.top >= c.top - 1 && r.bottom <= c.bottom + 1); });
-      const newest = all[0] && all[0].getBoundingClientRect();
-      return inside && (!narrow || (!!newest && newest.top >= Math.max(0, c.top) - 1 && newest.bottom <= Math.min(innerHeight, c.bottom) + 1)); });
+    /* above 1100 px: every notice inside the chart panel. At 1100 px and narrower: every notice in the band pinned at the top
+       of the tab (the tray), the band in the window right under the top bar at its fixed height (66 px, 96 px on a phone;
+       the notices scroll inside it), with a notice in sight in it */
+    const where = await page.evaluate(() => {
+      const narrow = innerWidth <= 1100, all = [...document.querySelectorAll('.ag-note')];
+      if (!narrow) { const c = document.querySelector('#agView [data-panel="chart"]').getBoundingClientRect(); const out = all.filter(n => { const r = n.getBoundingClientRect(); return r.height > 0 && !(r.left >= c.left - 1 && r.right <= c.right + 1 && r.top >= c.top - 1 && r.bottom <= c.bottom + 1); }); return { ok: !out.length, why: out.length ? out.length + ' notices outside the chart panel' : '' }; }
+      const tray = document.querySelector('#agView [data-k="tray"]'), t = tray.getBoundingClientRect(), bar = document.querySelector('.ws-top').getBoundingClientRect();
+      const outside = all.filter(n => !tray.contains(n)).length, seen = all.some(n => { const r = n.getBoundingClientRect(); return r.height > 0 && r.top < t.bottom - 8 && r.bottom > t.top + 8; });
+      const height = Math.round(t.height), want = innerWidth <= 720 ? 96 : 66;
+      const ok = !outside && seen && Math.abs(t.top - bar.bottom) <= 1 && t.bottom <= innerHeight && height === want;
+      return { ok, why: ok ? '' : JSON.stringify({ outside, seen, trayTop: Math.round(t.top), barBottom: Math.round(bar.bottom), height, want }) };
+    });
     const bad = await hitTest(page, TAB);
-    check(!bad.length && inChart, 'at ' + w + ' x ' + h + ' with four notices showing, they sit ' + (w <= 1100 ? 'at the top of the tab, the newest in sight,' : 'in the chart panel') + ' and no Accept or Reject is under one' + (bad.length ? ': ' + bad.slice(0, 4).join('; ') : inChart ? '' : ': a notice outside the chart panel'));
+    check(!bad.length && where.ok, 'at ' + w + ' x ' + h + ' with four notices showing, they sit ' + (w <= 1100 ? 'in the band at the top of the tab (under the top bar, at its fixed height, a notice in sight)' : 'in the chart panel') + ' and no Accept or Reject is under one' + (bad.length ? ': ' + bad.slice(0, 4).join('; ') : where.why ? ': ' + where.why : ''));
     await clearNotices(page);
   }
 
@@ -376,7 +384,7 @@ try {
     await page.click('#wsAlertClose');
   }
   /* ---------------------------------------------------------------- off the Agent tab: the corner */
-  console.log('off the Agent tab, two agents and the bot proposing: no agent card, one line for them; the bot\'s corner under the top bar');
+  console.log('off the Agent tab, two agents and the bot proposing: no agent card, one line for them; the bot\'s corner one card at a time');
   for (const id of await ownOpen()) await control('agent-withdraw', { agent: 'demo', id });
   for (const id of [...twoOpen]) await twoGone(id);
   for (const id of [...botOpen]) await botGone(id);
@@ -386,59 +394,70 @@ try {
   await tabShown(false);
   await control('agent-plan', { agent: 'demo', id: 'oa', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 16, target: 32, expire: 900, setup: 'Sample O', reason: LONG, confidence: 0.6 });
   const oq = await twoNew();
-  for (let i = 0; i < 3; i++) { await botNew(); await sleep(250); }
   const CORNER_LINE = '.ag-cornerline';
   const AGENTS_LINE = 'Demo Agent: 1 proposal · Second Demo Agent: 1';
   await until(async () => (await text(CORNER_LINE)) === AGENTS_LINE, 'the corner\'s line counts both agents\' proposals');
-  await until(() => page.evaluate(n => document.querySelectorAll('.bt-props .bt-prop:not(.bt-ended)').length >= n, 3), 'three bot cards in the corner');
-  /* the bot's corner: below the top bar, the top bar's buttons themselves; every Accept or Reject in sight with its own card's
-     name and side, size and root line in sight too, wherever the corner is scrolled */
-  const cornerNow = () => page.evaluate(() => {
-    const bar = document.querySelector('.ws-top').getBoundingClientRect(), box = document.querySelector('.bt-props'), br = box.getBoundingClientRect();
-    const top = {};
-    for (const id of ['wsAgentTab', 'wsBotTab', 'wsLayout', 'wsAdd', 'wsSet']) { const e = document.getElementById(id); if (!e || !e.getClientRects().length) continue; const r = e.getBoundingClientRect(), h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); top[id] = !!h && (h === e || e.contains(h)); }
-    const seenIn = (el, card) => { const r = el.getBoundingClientRect(); if (!r.height) return false; const h = document.elementFromPoint(r.left + Math.min(30, r.width / 2), r.top + r.height / 2); return !!h && card.contains(h) && (h === el || el.contains(h)); };
-    const bad = [], frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const sweep = async () => {
-      for (let y = 0; y <= box.scrollHeight - box.clientHeight + 8; y += 8) {
-        box.scrollTop = y; await frame();
-        for (const b of box.querySelectorAll('.bt-prop [data-ans]')) {
-          const r = b.getBoundingClientRect(); if (!r.height || b.disabled) continue;
-          const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-          if (!h || !(h === b || b.contains(h))) continue;                                     // not in sight
-          const card = b.closest('.bt-prop'), big = card.querySelector('.bt-prop-big'), name = card.querySelector('.bt-prop-h');
-          if (!seenIn(big, card) || !seenIn(name, card)) { const m = card.dataset.id + ':' + b.dataset.ans + ' at scroll ' + y; if (bad.length < 6) bad.push(m); }
-        }
-      }
-    };
-    return sweep().then(() => { box.scrollTop = box.scrollHeight; return { boxTop: Math.round(br.top), barBottom: Math.round(bar.bottom), top, bad }; });
+  /* the bot's corner as it shows: one card (its id, whole under the top bar, its name and side, size and root lines and
+     its buttons themselves), the line under it, and nothing over the top bar */
+  const corner = () => page.evaluate(() => {
+    const box = document.querySelector('.bt-props'), bar = document.querySelector('.ws-top').getBoundingClientRect();
+    const cards = [...box.querySelectorAll('.bt-prop')].filter(c => c.getClientRects().length), c = cards[0], more = box.querySelector('.bt-more');
+    const self = el => { const r = el.getBoundingClientRect(), h = document.elementFromPoint(r.left + Math.min(30, r.width / 2), r.top + r.height / 2); return r.height > 0 && !!h && (h === el || el.contains(h)); };
+    let barCovered = 0;
+    for (let x = 4; x < innerWidth; x += 16) for (const y of [bar.top + 3, bar.top + bar.height / 2, bar.bottom - 3]) { const h = document.elementFromPoint(x, y); if (!h || !h.closest('.ws-top')) barCovered++; }
+    const r = c ? c.getBoundingClientRect() : null, acc = c ? c.querySelector('[data-ans="accept"]').getBoundingClientRect() : null;
+    return { n: cards.length, id: c ? c.dataset.id : '', arming: !!c && c.classList.contains('bt-arming'), more: more && more.isConnected ? more.textContent : null, moreH: more && more.isConnected ? Math.round(more.getBoundingClientRect().height) : 0,
+      boxTop: Math.round(box.getBoundingClientRect().top), barBottom: Math.round(bar.bottom), barCovered, whole: !!r && r.top >= bar.bottom && r.bottom <= innerHeight,
+      head: !!c && self(c.querySelector('.bt-prop-h')) && self(c.querySelector('.bt-prop-big')), btns: c ? [...c.querySelectorAll('[data-ans]')].map(b => (b.disabled ? 'off' : self(b) ? 'on' : 'covered')) : [],
+      acc: acc ? [Math.round(acc.left + acc.width / 2), Math.round(acc.top + acc.height / 2)] : null };
   });
   const agentButtons = () => page.evaluate(() => [...document.querySelectorAll('[data-agans]')].filter(b => b.getClientRects().length).map(b => (b.closest('.ag-prop') || {}).dataset.id + ':' + b.dataset.agans));
+  const press = async key => { await page.evaluate(() => { if (document.activeElement) document.activeElement.blur(); }); await page.keyboard.press(key); };
   for (const [w, h] of [[1366, 768], [1920, 1080]]) {
-    await page.setViewportSize({ width: w, height: h }); await sleep(600);
-    const ab = await agentButtons(), line = await page.evaluate(sel => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { text: e.textContent.replace(/\s+/g, ' ').trim(), h: Math.round(r.height), shown: r.height > 0 }; }, CORNER_LINE);
-    check(!ab.length && !!line && line.shown && line.text === AGENTS_LINE && line.h === 30, 'at ' + w + ' x ' + h + ' off the Agent tab no agent Accept or Reject exists anywhere and the corner\'s line says "' + (line && line.text) + '" at ' + (line && line.h) + ' px' + (ab.length ? ': ' + ab.join(', ') : ''));
-    const c = await cornerNow();
-    check(c.boxTop >= c.barBottom && Object.values(c.top).every(Boolean), 'at ' + w + ' x ' + h + ' the bot\'s corner starts below the top bar (' + c.boxTop + ' against ' + c.barBottom + ') and the top bar\'s buttons are themselves: ' + JSON.stringify(c.top));
-    check(!c.bad.length, 'at ' + w + ' x ' + h + ' scrolled anywhere, every bot Accept and Reject in sight shows its own card\'s name and side, size and root' + (c.bad.length ? ': ' + c.bad.join('; ') : ''));
-    /* a new bot card arriving moves no button already there */
-    const where = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.bt-props .bt-prop [data-ans]')].filter(b => b.getClientRects().length).map(b => [b.closest('.bt-prop').dataset.id + ':' + b.dataset.ans, Math.round(b.getBoundingClientRect().top)])));
-    const before = await where();
+    await page.setViewportSize({ width: w, height: h }); await sleep(500);
+    for (const id of [...botOpen]) await botGone(id);
+    await until(async () => (await corner()).n === 0, 'at ' + w + ' x ' + h + ' the bot\'s corner empty', 8000);
+    const seven = [];
+    for (let i = 0; i < 7; i++) { seven.push(await botNew()); await sleep(120); }
+    await until(async () => (await corner()).more === '+6 more bot proposals', 'at ' + w + ' x ' + h + ' seven bot proposals: one card, six more');
+    await sleep(1100);                                                                    // armed
+    const ab = await agentButtons(), c0 = await corner();
+    check(!ab.length && (await text(CORNER_LINE)) === AGENTS_LINE, 'at ' + w + ' x ' + h + ' off the Agent tab no agent Accept or Reject exists anywhere; the corner\'s line says "' + await text(CORNER_LINE) + '"' + (ab.length ? ': ' + ab.join(', ') : ''));
+    check(c0.n === 1 && c0.id === seven[0] && c0.more === '+6 more bot proposals' && c0.moreH === 24 && c0.whole && c0.head && c0.btns.join() === 'on,on',
+      'at ' + w + ' x ' + h + ' with seven bot proposals the corner shows one card, the oldest, whole with its name line, side and size and its buttons, and "' + c0.more + '" under it: ' + JSON.stringify(c0));
+    check(c0.boxTop >= c0.barBottom && c0.barCovered === 0, 'at ' + w + ' x ' + h + ' nothing covers the top bar (the corner starts at ' + c0.boxTop + ', the bar ends at ' + c0.barBottom + '; ' + c0.barCovered + ' points of the bar covered)');
+    /* a new bot card arriving moves nothing (it waits its turn: the line counts it) */
     await botNew();
-    await until(() => page.evaluate(n => document.querySelectorAll('.bt-props .bt-prop').length > n, Object.keys(before).length / 2), 'the new bot card');
+    await until(async () => (await corner()).more === '+7 more bot proposals', 'the eighth counted');
+    const c1 = await corner();
+    check(c1.id === c0.id && JSON.stringify(c1.acc) === JSON.stringify(c0.acc), 'at ' + w + ' x ' + h + ' a new bot proposal moves nothing: the card shown stays, its Accept at ' + JSON.stringify(c1.acc));
+    /* Alt+Y answers the card shown, and only it */
+    const n0 = (await answers()).length;
+    await press('Alt+KeyY');
+    await until(async () => (await answers()).length > n0, 'the key answer', 4000);
     await sleep(300);
-    const after = await where(), movedB = Object.keys(before).filter(k => after[k] !== undefined && Math.abs(after[k] - before[k]) > 1).map(k => k + ' ' + before[k] + ' -> ' + after[k]);
-    check(!movedB.length, 'at ' + w + ' x ' + h + ' a new bot card arriving moves none of the ' + Object.keys(before).length + ' bot buttons already there' + (movedB.length ? ': ' + movedB.slice(0, 4).join('; ') : ''));
+    const k1 = (await answers()).slice(n0);
+    check(k1.length === 1 && k1[0].type === 'botAnswer' && k1[0].id === c0.id && k1[0].answer === 'accept', 'at ' + w + ' x ' + h + ' Alt+Y answers the card shown (' + c0.id + ') and nothing else: ' + JSON.stringify(k1.map(m => m.type + ':' + m.id + ':' + m.answer)));
+    /* its time up, the next card takes its place, disarmed for 1 s: a key press and a click on its Accept then do nothing */
+    await page.waitForFunction(id => { const c = document.querySelector('.bt-props .bt-prop'); return !!c && c.dataset.id !== id; }, c0.id, { polling: 'raf', timeout: 8000 });
+    const c2 = await corner();
+    const atOld = await page.evaluate(([x, y]) => { const h = document.elementFromPoint(x, y), b = h && h.closest('.bt-prop button'); return b ? b.dataset.ans : ''; }, c0.acc);
+    await press('Alt+KeyY');
+    if (atOld) await page.mouse.click(c0.acc[0], c0.acc[1]);
+    await sleep(400);
+    const k2 = (await answers()).slice(n0 + 1);
+    check(c2.id === seven[1] && c2.arming && c2.btns.join() === 'off,off' && !k2.length && c2.more === '+6 more bot proposals',
+      'at ' + w + ' x ' + h + ' the next card (' + c2.id + ') takes its place disarmed (its buttons off at once), and a key press' + (atOld ? ' and a click where the last Accept was' : '') + ' within its first second answer nothing: ' + JSON.stringify({ c2, k2 }));
+    await sleep(900);
+    const c3 = await corner();
+    await press('Alt+KeyN');
+    await until(async () => (await answers()).length > n0 + 1, 'the key answer after the second', 4000);
+    await sleep(400);
+    const k3 = (await answers()).slice(n0 + 1);
+    check(c3.btns.join() === 'on,on' && !c3.arming && k3.length === 1 && k3[0].type === 'botAnswer' && k3[0].id === seven[1] && k3[0].answer === 'reject', 'at ' + w + ' x ' + h + ' after its second it is armed and Alt+N answers it, once: ' + JSON.stringify(k3.map(m => m.type + ':' + m.id + ':' + m.answer)));
+    for (const id of [seven[0], seven[1]]) botOpen.delete(id);
   }
-  /* the keys off the tab never answer an agent's proposal (the bot's oldest, as 1.16.0) */
-  await sleep(1100);
-  const nk = (await answers()).length;
-  await page.evaluate(() => { if (document.activeElement) document.activeElement.blur(); });
-  await page.keyboard.press('Alt+KeyN');
-  await until(async () => (await answers()).length > nk, 'a key answer off the tab', 4000);
-  await sleep(400);
-  const offKeys = (await answers()).slice(nk);
-  check(offKeys.length === 1 && offKeys[0].type === 'botAnswer', 'off the Agent tab the Reject key answers the bot\'s proposal, never an agent\'s: ' + JSON.stringify(offKeys.map(m => m.type + ':' + m.id)));
+  for (const id of [...botOpen]) await botGone(id);
   /* the line's names open the Agent tab on that agent */
   for (const [w, h, id, pid] of [[1366, 768, 'demotwo', oq], [1920, 1080, 'demo', 'oa']]) {
     await page.setViewportSize({ width: w, height: h }); await sleep(400);
