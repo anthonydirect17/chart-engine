@@ -430,7 +430,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> warnings;
             lock (ConfigWarnings) warnings = client.Trader ? ConfigWarnings.ToList() : new List<string>();   // only to a page that signed in
             foreach (string w in warnings) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(w) + "}");
-            if (client.Trader) { client.Send(OrdersJson(client)); foreach (string p in PositionJsons(client)) client.Send(p); ChartBridgeAccounts.SignedIn(client); }   // 0.4.0 accounts: a v3 page sees every watched account
+            if (client.Trader)   // 0.4.0 accounts: a v3 page sees every watched account
+            {
+                Snapshot(client, delegate(SnapNotes notes)   // 0.5.1: what NinjaTrader's thread sends meanwhile is sent again after the list (Snapshot)
+                {
+                    string list = OrdersListJson(client, notes.SentWorking);
+                    List<string> positions = PositionJsons(client);
+                    Action hook = SnapshotHook;
+                    if (hook != null) hook();
+                    client.Send(list);
+                    foreach (string p in positions) client.Send(p);
+                });
+                ChartBridgeAccounts.SignedIn(client);
+            }
             if (client.Trader) MergeOnAuth(client);   // 0.4.0 B4: a Merge cut by a restart is told to each page that signs in
             if (client.Trader) ChartBridgeCopier.AfterAuth(client);   // 0.4.0 copier: a v3 page gets the copier's state
             ChartBridgeBot.AfterAuth(client);   // 0.4.0 bot: a signed-in v3 page gets the bot strip and its open proposals
@@ -1609,7 +1621,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             MergeSawPosition(account, inst);   // 0.4.0 B4: the position is changing (Merge waits 2 s)
             string root = ChartBridgeServer.RootFor(inst);
             if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))   // 0.4.0 accounts: each page its scope
-                ChartBridgeAccounts.SendScoped(account, PositionJson(account.Name, root, e.MarketPosition, e.Quantity, e.AveragePrice), false);
+                ChartBridgeAccounts.SendScoped(account, PositionJson(account.Name, root, e.MarketPosition, e.Quantity, e.AveragePrice), false, null, root);
             // Flat, and still flat now (a newer fill may already have opened a position whose legs must stay),
             // on a connection that has been steady (not a reconnect still loading positions).
             double now = ChartBridgeTime.NowUtcMs();
@@ -2287,7 +2299,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // 0.4.0 accounts: a v2 page gets the tradable accounts (as before), a v3 page every watched one (ChartBridgeAccounts.ScopeFor).
-        private static string OrdersJson(ChartBridgeClient client)
+        private static string OrdersJson(ChartBridgeClient client) { return OrdersListJson(client, null); }
+
+        private static string OrdersListJson(ChartBridgeClient client, HashSet<Order> listed)
         {
             List<string> items = new List<string>();
             foreach (Account a in ChartBridgeAccounts.ScopeFor(client))
@@ -2295,16 +2309,144 @@ namespace NinjaTrader.NinjaScript.AddOns
                 List<Order> orders;
                 lock (a.Orders) orders = a.Orders.ToList();
                 foreach (Order o in orders)
-                    if (IsWorking(o.OrderState) && ChartBridgeServer.RootFor(o.Instrument) != null) items.Add(ChartBridgeAccounts.ForPage(client, a, OrderJson(o, null), o));   // 0.4.0 review 2: o for a v3 page's "by"
+                    if (IsWorking(o.OrderState) && ChartBridgeServer.RootFor(o.Instrument) != null)
+                    {
+                        items.Add(ChartBridgeAccounts.ForPage(client, a, OrderJson(o, null), o));   // 0.4.0 review 2: o for a v3 page's "by"
+                        if (listed != null) lock (listed) listed.Add(o);   // 0.5.1: the snapshot sent it as working
+                    }
             }
             return "{\"type\":\"orders\",\"list\":[" + string.Join(",", items) + "]}";
         }
 
-        private static List<string> PositionJsons(ChartBridgeClient client)
+        // 0.5.1 accounts: accounts that became listed (a first sighting, Show, back from the archive): a signed-in v3 page gets their
+        // working orders and positions (it got none of their messages while they were not listed). Never a full "orders" list here:
+        // a page replaces its orders on that message, and could lose another account's newer update. Each order goes as its own
+        // "order" message (pages merge it); then their positions. Inside a Snapshot, like sign-in's list.
+        public static Action SnapshotHook;   // test hook: runs between building a snapshot's messages and queuing them (unused in NinjaTrader)
+
+        internal static void SendScopeAgain(ChartBridgeClient client, ICollection<string> accounts)
+        {
+            Snapshot(client, delegate(SnapNotes notes)
+            {
+                foreach (Account a in ChartBridgeAccounts.ScopeFor(client))
+                {
+                    if (!accounts.Contains(a.Name)) continue;
+                    List<Order> orders;
+                    lock (a.Orders) orders = a.Orders.ToList();
+                    foreach (Order o in orders)
+                    {
+                        if (!IsWorking(o.OrderState) || ChartBridgeServer.RootFor(o.Instrument) == null) continue;
+                        string msg = ChartBridgeAccounts.ForPage(client, a, OrderJson(o, null), o);
+                        lock (notes.SentWorking) notes.SentWorking.Add(o);
+                        Action hook = SnapshotHook;
+                        if (hook != null) hook();
+                        client.Send(msg);
+                    }
+                }
+                foreach (string p in PositionJsons(client, accounts)) client.Send(p);
+            });
+        }
+
+        // 0.5.1: the latest state lands last. A snapshot (orders and positions read on the page's or the timer's thread, then queued)
+        // can be older than an order or position message NinjaTrader's thread queued for this page while it was built. Each open
+        // snapshot has its own notes: NoteAndSend notes each such send in every snapshot open for that page (SnapLock is held only
+        // to note or take: NinjaTrader's thread never waits for a build), and right after a snapshot is queued each order and
+        // position noted in its notes is sent again, read fresh, marked "again": true (pages never flash or toast for it), then
+        // again for anything noted meanwhile, until nothing new came in or MaxSnapshotRounds rounds were sent; the snapshot stays
+        // open through its last round. An order that is done is sent again (the very message NinjaTrader's thread sent, as its id
+        // is then forgotten) only if this snapshot had sent it as working; otherwise the page already has its final state. A
+        // working order sent again keeps NinjaTrader's last error text.
+        public const int MaxSnapshotRounds = 20;
+        public static Action<int> SnapshotRoundHook;   // test hook: each round of a snapshot's re-sends, with its number (unused in NinjaTrader)
+
+        public sealed class SnapNotes
+        {
+            public Dictionary<Order, string> Orders = new Dictionary<Order, string>();        // the order, and the last message sent for it (SnapLock)
+            public Dictionary<string, string> Positions = new Dictionary<string, string>();   // "account|root", and the last message (SnapLock)
+            public readonly HashSet<Order> SentWorking = new HashSet<Order>();               // what the snapshot itself sent as working (lock it)
+        }
+
+        internal static void NoteAndSend(ChartBridgeClient c, string account, string msg, bool isOrder, Order o, string root)
+        {
+            lock (c.SnapLock)
+                foreach (SnapNotes n in c.SnapOpen)
+                {
+                    if (isOrder && o != null) n.Orders[o] = msg;
+                    else if (!isOrder && root != null) n.Positions[account + "|" + root] = msg;
+                }
+            c.Send(msg);
+        }
+
+        // Is a snapshot open for this page now? (the harness)
+        public static bool SnapshotOpen(ChartBridgeClient c) { lock (c.SnapLock) return c.SnapOpen.Count > 0; }
+
+        internal static void Snapshot(ChartBridgeClient client, Action<SnapNotes> buildAndSend)
+        {
+            SnapNotes notes = new SnapNotes();
+            lock (client.SnapLock) client.SnapOpen.Add(notes);
+            try { buildAndSend(notes); }
+            finally
+            {
+                for (int round = 0; ; round++)
+                {
+                    Dictionary<Order, string> orders;
+                    Dictionary<string, string> positions;
+                    lock (client.SnapLock)
+                    {
+                        orders = notes.Orders; positions = notes.Positions;
+                        notes.Orders = new Dictionary<Order, string>(); notes.Positions = new Dictionary<string, string>();
+                    }
+                    bool last = (orders.Count == 0 && positions.Count == 0) || round >= MaxSnapshotRounds - 1;
+                    Action<int> rh = SnapshotRoundHook;
+                    if (rh != null && !(orders.Count == 0 && positions.Count == 0)) rh(round);
+                    try { SendLatest(client, notes, orders, positions); }
+                    catch (Exception ex) { ChartBridgeServer.Log("snapshot error: " + ex.Message); }
+                    if (last) { lock (client.SnapLock) client.SnapOpen.Remove(notes); break; }   // closed after its last round's sends
+                }
+            }
+        }
+
+        private static string Again(string json) { return json.EndsWith("}", StringComparison.Ordinal) && !json.Contains(",\"again\":true") ? json.Substring(0, json.Length - 1) + ",\"again\":true}" : json; }
+
+        private static void SendLatest(ChartBridgeClient client, SnapNotes notes, Dictionary<Order, string> orders, Dictionary<string, string> positions)
+        {
+            bool v3 = ChartBridgeV3.IsV3(client);
+            foreach (KeyValuePair<Order, string> kv in orders)
+            {
+                Order o = kv.Key;
+                Account a = o.Account;
+                if (a == null || !(v3 ? ChartBridgeAccounts.Listed(a.Name) : AccountTradable(a.Name))) continue;
+                if (IsDone(o.OrderState))
+                {
+                    bool sentWorking;
+                    lock (notes.SentWorking) sentWorking = notes.SentWorking.Contains(o);
+                    if (sentWorking) client.Send(Again(kv.Value));   // the snapshot showed it working: its final message goes last
+                    continue;
+                }
+                string fresh = OrderJson(o, Str(kv.Value, "text"));   // NinjaTrader's last error text kept
+                client.Send(Again(v3 ? ChartBridgeAccounts.ForPage(client, a, fresh, o) : fresh));
+            }
+            foreach (KeyValuePair<string, string> kv in positions)
+            {
+                int bar = kv.Key.LastIndexOf('|');
+                string name = kv.Key.Substring(0, bar), root = kv.Key.Substring(bar + 1);
+                if (!(v3 ? ChartBridgeAccounts.Listed(name) : AccountTradable(name))) continue;
+                Account a = null;
+                lock (Account.All) foreach (Account x in Account.All) if (x.Name == name) { a = x; break; }
+                Position found = null;
+                if (a != null) { List<Position> ps; lock (a.Positions) ps = a.Positions.ToList(); found = ps.FirstOrDefault(p => p != null && ChartBridgeServer.RootFor(p.Instrument) == root); }
+                client.Send(found != null ? PositionJson(name, root, found.MarketPosition, found.Quantity, found.AveragePrice) : kv.Value);
+            }
+        }
+
+        private static List<string> PositionJsons(ChartBridgeClient client) { return PositionJsons(client, null); }
+
+        private static List<string> PositionJsons(ChartBridgeClient client, ICollection<string> only)
         {
             List<string> items = new List<string>();
             foreach (Account a in ChartBridgeAccounts.ScopeFor(client))
             {
+                if (only != null && !only.Contains(a.Name)) continue;
                 List<Position> positions;
                 lock (a.Positions) positions = a.Positions.ToList();
                 foreach (Position p in positions)

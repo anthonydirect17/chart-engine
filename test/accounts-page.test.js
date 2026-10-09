@@ -240,7 +240,7 @@ test('the Account page\'s connection: client v3 right after hello, then auth; it
     // every switch off (the default): no message at all
     s.deliver({ type: 'trading', enabled: true, accounts: ['Sim101'], maxQty: {}, switches: { accountChecks: false, orderTypes: false, strategies: false, merge: false, cancelFromList: false, copier: false, bot: false } });
     F.sent.length = 0;
-    const tryAll = () => [F.feed.accountTrade('EVAL-A', true), F.feed.accountArchive('EVAL-B'), F.feed.cancelFromList('o14'), F.feed.copierSet({ mode: 'orders' }),
+    const tryAll = () => [F.feed.accountTrade('EVAL-A', true), F.feed.accountArchive('EVAL-B'), F.feed.accountUnarchive('EVAL-B'), F.feed.cancelFromList('o14'), F.feed.copierSet({ mode: 'orders' }),
       F.feed.copierFollower({ account: 'SIM-F1', on: true, qty: 1, size: 'micro', lossLimit: null }), F.feed.copierRearm()];
     assert.ok(tryAll().every(x => !x)); assert.equal(F.sent.length, 0, 'with every switch off nothing is sent');
     // a switch not strictly true is off
@@ -252,11 +252,12 @@ test('the Account page\'s connection: client v3 right after hello, then auth; it
     // every switch on: each action is one message with the contract's keys only (gate 8 extended, the fake's checker)
     s.deliver({ type: 'trading', enabled: true, accounts: [], maxQty: {}, switches: { accountChecks: true, orderTypes: true, strategies: true, merge: true, cancelFromList: true, copier: true, bot: true } });
     assert.ok(tryAll().every(Boolean));
-    assert.deepEqual(F.sent.map(m => m.type), ['accountTrade', 'accountArchive', 'cancel', 'copierSet', 'copierFollower', 'copierRearm']);
+    assert.deepEqual(F.sent.map(m => m.type), ['accountTrade', 'accountArchive', 'accountUnarchive', 'cancel', 'copierSet', 'copierFollower', 'copierRearm']);
     for (const m of F.sent) assert.equal(V.checkKeysV3(m, JSON.stringify(m)), null, JSON.stringify(m));
     assert.equal(F.sent[1].confirm, true, 'Archive always carries confirm: true (sent only after the page\'s own confirm)');
-    assert.equal(F.sent[2].from, 'list');
-    assert.deepEqual(F.viaOrders, [F.sent[2]], 'cancel from the list goes on the order ticket\'s connection (the one order path), nothing else does');
+    assert.deepEqual(Object.keys(F.sent[2]).sort(), ['account', 'cid', 'type'], 'Show (0.5.1): accountUnarchive with the account only');
+    assert.equal(F.sent[3].from, 'list');
+    assert.deepEqual(F.viaOrders, [F.sent[3]], 'cancel from the list goes on the order ticket\'s connection (the one order path), nothing else does');
     // its refusal comes back on that connection: the host hands it here (takeReject), said in the window and the Log
     F.notes.length = 0;
     assert.equal(F.feed.takeReject({ type: 'reject', cid: F.sent[2].cid, reason: 'No working order o14.' }), true);
@@ -322,4 +323,12 @@ test('the Account page is a workspace panel: its type, the Add menu, its files i
   assert.match(read('live/bot.html'), /src="accounts\.js"/);
   // one source for The Desk's address: ChartBridge's deskUrl (/diag), nothing kept per browser
   for (const t of [ws, bot, read('live/order-strategies.js')]) assert.doesNotMatch(t, /live-desk-url-v1/);
+});
+
+test('ChartBridge 0.5.1: Show only when ChartBridge has it (its accounts carry canHide); Hide only where canHide is true', () => {
+  const js = read('live/accounts.js');
+  assert.match(js, /const canShow = canAct && accounts\.some\(a => a && 'canHide' in a\);/);
+  assert.match(js, /\(canShow \? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show" data-act="unarchive"/);
+  assert.ok(!/\(canAct \? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show"/.test(js), 'Show is never offered on canAct alone');
+  assert.match(js, /const hide = !canAct \? '' : a\.canHide === true/);
 });

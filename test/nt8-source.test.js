@@ -165,7 +165,7 @@ test('bracket upkeep runs even with trading off; pages hear only about the accou
   // 0.4.0: a v2 page (no client message) keeps v2's scope: the tradable accounts only
   const acc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
   assert.match(acc, /public static bool Seen\(string name\) \{ return ChartBridgeOrders\.AccountTradable\(name\) \|\| \(Listed\(name\) && AnyV3Trader\(\)\); \}/);
-  assert.match(acc, /if \(IsV3\(c\)\) \{ if \(listed\) [^\n]*\}\s*else if \(tradable\) c\.Send\(json\);/);
+  assert.match(acc, /if \(IsV3\(c\)\) \{ if \(listed\) [^\n]*\}\s*else if \(tradable\) ChartBridgeOrders\.NoteAndSend\(c, account, json, isOrder, o, root\);/);   // 0.5.1: noted for an open snapshot
   assert.match(acc, /return all\.Where\(a => v3 \? Listed\(a\.Name\) : ChartBridgeOrders\.AccountTradable\(a\.Name\)\)\.ToList\(\);/);
 });
 
@@ -857,8 +857,8 @@ test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and t
   assert.match(acode, /if \(File\.Exists\(FilePath\)\) File\.Replace\(tmp, FilePath, null\); else File\.Move\(tmp, FilePath\);/);
   assert.ok(!/Save\(\)|FlushLog\(\)/.test(bodyOf(acode, 'public static void StartNow(')), 'no write at start (NinjaTrader\'s thread)');
   assert.match(acode, /public const double GraceMs = 10000;/);
-  // the main file: client, accountTrade and accountArchive go to ChartBridgeAccounts; "accounts" rides the order lane
-  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
+  // the main file: client, accountTrade, accountArchive and accountUnarchive (0.5.1) go to ChartBridgeAccounts; "accounts" rides the order lane
+  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive" \|\| type == "accountUnarchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
   assert.match(code, /ChartBridgeAccounts\.Start\(\);[^\n]*\n[\s\S]*?WatchAccounts\(\);/);
 });
 
@@ -1160,7 +1160,7 @@ test('0.4.0 integration: exactly one v3 handshake and one v3 send; no lane keeps
   // the one "client" dispatch, to the accounts lane, which marks the page through ChartBridgeV3.OnClient and tells the lanes
   const clientLines = code.split('\n').filter(l => /type == "client"/.test(l));
   assert.equal(clientLines.length, 1, 'one client dispatch: ' + clientLines.join(' | '));
-  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
+  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive" \|\| type == "accountUnarchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
   const acode = strip(fs.readFileSync(path.join(nt8, 'ChartBridgeAccounts.cs'), 'utf8'));
   assert.match(bodyOf(acode, 'private static void OnClient(ChartBridgeClient client, string text)'), /if \(!ChartBridgeV3\.OnClient\(client, text\)\) return;[\s\S]*ChartBridgeV3\.TellLanes\(client\);/);
   // every switch is read once, by ChartBridgeSwitches; each lane's Enabled reads it
@@ -1274,4 +1274,22 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
   const w = sBodies('WriteManagedOnce');
   assert.match(w, /string tmp = ManagedFile \+ "\.tmp";\s*File\.WriteAllLines\(tmp, lines\.ToArray\(\)\);\s*if \(File\.Exists\(ManagedFile\)\) File\.Replace\(tmp, ManagedFile, null\); else File\.Move\(tmp, ManagedFile\);/);
   assert.match(w, /if \(managedReadFailed\)/);
+});
+
+test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
+  const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
+  assert.match(code, /public const string Version = "0\.5\.1";/);
+  // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
+  assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
+  // AccountAllowed is never Backtest or Playback and reads no list
+  const allowed = bodyOf(code, 'public static bool AccountAllowed(string name)');
+  assert.ok(!/OldAccounts|AccountAllow\b/.test(allowed), 'AccountAllowed reads no accounts list');
+  assert.ok(!/\bAccountAllow\b/.test(code), 'the old watch list field is gone');
+  // accounts.txt is written with exactly three fields per line (0.5.0's reader refuses any other line)
+  assert.match(asrc, /b\.Append\(r\.State\)\.Append\('\\t'\)\.Append\(r\.ChangedMs\.ToString\(CultureInfo\.InvariantCulture\)\)\.Append\('\\t'\)\.Append\(r\.Name\)\.Append\('\\n'\);/);
+  assert.match(asrc, /p\.Length != 3 \|\| \(p\[0\] != "trade" && p\[0\] != "off" && p\[0\] != "archived"\)/);
+  // Show: accountUnarchive takes exactly type, cid and account
+  assert.match(asrc, /type == "accountUnarchive" \? new\[\] \{ "type", "cid", "account" \}/);
+  // still no order call in the accounts file
+  for (const re of [/\.Submit\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/]) assert.ok(!re.test(asrc.replace(/^\s*\/\/.*$/gm, '')), 'ChartBridgeAccounts.cs never ' + re);
 });

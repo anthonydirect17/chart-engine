@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.18.0 (2026-10-08): the Account tab's Hide and Show; the ticket and ChartBridge 0.5.1's re-sent orders
+
+The page side of ChartBridge 0.5.1 (below). Page only, no recompile; with an older ChartBridge everything works as 1.17.0.
+
+- **Hide and Show on the Account tab.** Each account ChartBridge says may be hidden (flat, no working orders, not the bot's,
+  the copier's or an agent's) has a Hide button, Gone or not; it asks on the page first ("Hide EVAL-B? It leaves every list
+  until you Show it; its history stays."). Hidden accounts are listed under Hidden, each with a Show button that brings it
+  back unchecked. Show appears only with a ChartBridge that has it (0.5.1); with 0.5.0 a Gone account keeps its Archive as
+  before.
+- **The order ticket and re-sent orders.** ChartBridge 0.5.1 sends an order again, marked `again`, right after a snapshot
+  so the page always ends with the latest state. The ticket never shows a note for such a message (one "Filled", one
+  "Rejected"), and its notes compare each update with what the order last said in a message of its own, so a re-send that
+  arrives first never hides the note for NinjaTrader's own part fill or move.
+
+## ChartBridge 0.5.1 (2026-10-08): the Account tab follows NinjaTrader's connected accounts; Hide and Show
+
+A new evaluation account no longer needs a `config.txt` edit and F5, and dead accounts are one click to remove.
+`nt8/PROTOCOL.md`, "Accounts" and "Accounts as built", has the rules. Built on 0.5.0 (the agent channel).
+
+- **Connected accounts only.** An account is watched (its fills go to The Desk) and listed on the Account tab once NinjaTrader
+  has shown it Connected in this NinjaTrader session; a new one appears by itself within seconds, its checkmark off. Accounts
+  NinjaTrader only remembers (no connection, or not connected this session) are never watched, listed or written to
+  `accounts.txt`. One seen connected that then drops stays listed Gone as before (its checkmark kept, exits work); after a
+  restart of NinjaTrader it is listed again when it connects. Never Backtest or Playback.
+- **Hide and Show.** `accountArchive` (with the page's confirm) is accepted for any account that is flat with no working orders
+  and is not the bot's, a copier leader or follower, or an agent's; otherwise it is refused with the reason. A hidden account
+  stays hidden until Show (`accountUnarchive`, new), which brings it back unchecked. An archived account NinjaTrader shows
+  with a position or working orders is listed again at once, unchecked, so hiding never strands an exit. The page has a Hide
+  button on each account that may be hidden and a Show button in the Hidden list; each account in `accounts` carries
+  `canHide` and `hideWhy`.
+- **The `accounts =` line is retired.** On the first 0.5.1 run with the line, every account seen connected in the first 5
+  minutes that the line does not name and that is not checked is hidden once ("hidden: not on the old accounts list", and an
+  info line on the page); the accounts it names keep their checkmarks exactly. Afterwards the line is ignored (one Output
+  line says so) and can go. If ChartBridge cannot tell whether it converted before, it does not convert.
+- **Newly listed accounts reach the page.** When an account is listed (it connects, Show, or it comes back from Hidden with a
+  position or orders) a signed-in page gets its working orders and positions at once. ChartBridge watches an account from
+  the first second it sees it connected.
+- **No ghost or missing orders after sign-in.** An order or position change NinjaTrader reports while the page's order list
+  is being built is sent again right after the list, so the page always ends with the latest state (before, a stop
+  cancelled at that moment could reappear on the page, or a new one be missing). Those messages are marked `again`, and the page never shows them a
+  second time (one fill note, one rejection note); its notes compare each update with what the order last said in a message
+  of its own, so a re-send that arrives first never hides the note for NinjaTrader's own part fill or move.
+- **Tidy files.** Plain `off` records not seen connected for 30 days leave `accounts.txt` (logged); checked and archived ones
+  never do. The last time each account was seen connected and the conversion marker are in a new `accounts-detail.txt`:
+  `accounts.txt` keeps 0.5.0's exact format, because 0.5.0's reader refuses the whole file for a line with a 4th field.
+
 ## 1.17.0 (2026-10-08): the Agent tab
 
 Anthony's AI trading agents get their own tab next to the Bot tab (Manrae is the first; the tab serves any number). It is
