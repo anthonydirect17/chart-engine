@@ -268,8 +268,8 @@ function create(o) {
     const tgt = isNum(p.targetTicks) ? (px !== null ? fmtPx(px + dir * p.targetTicks * t, r) + ' (' + p.targetTicks + ' ticks)' : p.targetTicks + ' ticks') : 'none';
     const kc = k => (k ? ' <span class="bt-keycap">' + esc(k) + '</span>' : '');
     const acc = propAccount(p);
-    return '<div class="bt-prop-h"><span class="bt-cap">Copilot · ' + esc((S.bot && S.bot.name) || 'Bot') + ' ' + markHtml(acc.mark) + '</span><span class="mono bt-age" data-k="age"></span></div>' +
-      '<div class="bt-prop-big mono"><span class="' + (p.side === 'buy' ? 'pos' : 'neg') + '">' + sideWord(p.side) + '</span> ' + esc(p.qty || 1) + ' ' + esc(r) + ' ' + esc(p.kind || '') + (px !== null ? ' ' + fmtPx(px, r) : '') + '</div>' +
+    return '<div class="bt-prop-top"><div class="bt-prop-h"><span class="bt-cap">Copilot · ' + esc((S.bot && S.bot.name) || 'Bot') + ' ' + markHtml(acc.mark) + '</span><span class="mono bt-age" data-k="age"></span></div>' +
+      '<div class="bt-prop-big mono"><span class="' + (p.side === 'buy' ? 'pos' : 'neg') + '">' + sideWord(p.side) + '</span> ' + esc(p.qty || 1) + ' ' + esc(r) + ' ' + esc(p.kind || '') + (px !== null ? ' ' + fmtPx(px, r) : '') + '</div></div>' +
       '<div class="bt-prop-why">' + esc(p.reason || '') + '</div>' +
       '<div class="bt-prop-legs mono">Stop ' + esc(stop) + ' · Target ' + esc(tgt) + '</div>' +
       '<div class="bt-prop-note"><b class="mono">' + esc(acc.name) + '</b> ' + markHtml(acc.mark) + '. ChartBridge places it on this account from these numbers if you accept. Unanswered, it is never sent: it ends as not answered when the bot withdraws it.</div>' +
@@ -293,7 +293,11 @@ function create(o) {
     el.setAttribute('role', 'alertdialog');
     el.setAttribute('aria-label', 'Copilot proposal: ' + sideWord(p.side) + ' ' + (p.qty || 1) + ' ' + (p.root || ''));
     el.innerHTML = propHtml(p);
+    /* the new card goes at the top; a card already there keeps its place on the screen (the corner grows upward, and once
+       it is at its height and scrolls, it scrolls by the new card's room), so nothing moves under the pointer */
+    const ref = propBox.firstElementChild, y0 = ref ? ref.getBoundingClientRect().top : 0;
     propBox.prepend(el);
+    if (ref) { const d = ref.getBoundingClientRect().top - y0; if (d) propBox.scrollTop += d; }
     propEls.set(p.id, { el, p, shownAt: Date.now() });
     seenNow();
     beep('');

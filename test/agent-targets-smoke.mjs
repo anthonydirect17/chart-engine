@@ -5,6 +5,9 @@
 //     other Accept or Reject is on the page; one line of a fixed height under the slot counts them ("Bot: 1 proposal ·
 //     Second Demo Agent: 1"), each name a link to the Bot tab or to that agent in the tab; the copilot keys answer nothing
 //     hidden; on the Bot tab the bot's cards are as before;
+//   - off the tab (the re-review of c47a8a1): no agent Accept or Reject anywhere, one line in the corner counts the agents'
+//     proposals and opens the tab on that agent, the bot's corner stays under the top bar with each card's name, side and
+//     size in sight with its buttons, a new bot card moves none already there, and the keys answer no agent's proposal;
 //   - never covered: document.elementFromPoint at the centre and the four corners of the tab's Accept and Reject finds the
 //     button itself, in the window without scrolling, at 1000 x 800, 1366 x 768, 1600 x 900, 1440 x 1000, 1920 x 1080 and
 //     390 x 844 (and with notices showing); the same in the pop-out;
@@ -114,7 +117,8 @@ try {
   const others = pg => pg.evaluate(sel => { const e = document.querySelector(sel), r = e.getBoundingClientRect(); return { text: e.textContent.replace(/\s+/g, ' ').trim(), h: Math.round(r.height), up: [...e.querySelectorAll('.ag-oitem.up')].map(x => x.dataset.key) }; }, LINE);
   /* nothing scrolled: the page, the tab and the slot at their tops (a phone: the proposal panel's top at the top of the tab) */
   const toTop = (pg, phone) => pg.evaluate(phone => {
-    window.scrollTo(0, 0); for (const b of document.querySelectorAll('#agView .ag-main, #agView .ag-slot')) b.scrollTop = 0;
+    window.scrollTo(0, 0); for (const b of document.querySelectorAll('#agView .ag-main, #agView .ag-slot, #agView [data-k="tray"]')) b.scrollTop = 0;
+    for (let e = document.querySelector('#agView'); e; e = e.parentElement) if (e.scrollTop) e.scrollTop = 0;
     if (phone) document.querySelector('#agView [data-panel="prop"]').scrollIntoView({ block: 'start' });
   }, !!phone);
   /* the shown agent's open Accept and Reject in the window as it is (nothing scrolled to them) */
@@ -129,8 +133,8 @@ try {
   await until(() => page.isVisible('.ag-plist .ag-prop[data-id="pa"]'), 'demo\'s proposal in the tab');
   const BOTH = 'Bot: 1 proposal · Second Demo Agent: 1';
   await until(async () => (await others(page)).text === BOTH, 'the line counts the bot\'s and the second agent\'s proposals');
-  check(await page.evaluate(() => !!document.querySelector('.bt-prop[data-id="b1"]') && !!document.querySelector('.ag-prop.corner[data-id="q2"]') && getComputedStyle(document.querySelector('.bt-props')).display === 'none'),
-    'their cards exist (the Bot tab\'s corner) and the corner is hidden while the Agent tab is shown');
+  check(await page.evaluate(() => !!document.querySelector('.bt-prop[data-id="b1"]') && getComputedStyle(document.querySelector('.bt-props')).display === 'none' && !document.querySelector('.ag-prop[data-id="q2"]') && document.querySelector('.ag-cornerline').hidden),
+    'the bot\'s card exists (the Bot tab\'s corner), hidden with its corner while the Agent tab is shown; the second agent\'s is no card, and the corner\'s line is hidden too');
   const TAB = '#agView .ag-plist .ag-prop[data-id="pa"] [data-agans]';
   for (const [w, h] of SIZES) {
     await page.setViewportSize({ width: w, height: h });
@@ -152,12 +156,13 @@ try {
     await toTop(page);
     await notices(page, 4);
     await sleep(100);
-    const bad = await hitTest(page, TAB);
-    /* above 1100 px over the chart's lower left; at 1100 px and narrower pinned at the top of the tab (the tray), the newest in sight */
+    /* above 1100 px over the chart's lower left; at 1100 px and narrower pinned at the top of the tab (the tray), the newest in
+       sight (as the tab shows, before anything is scrolled to a button) */
     const inChart = await page.evaluate(() => { const narrow = innerWidth <= 1100, c = document.querySelector(narrow ? '#agView [data-k="tray"]' : '#agView [data-panel="chart"]').getBoundingClientRect(), all = [...document.querySelectorAll('.ag-note')];
       const inside = all.every(n => { const r = n.getBoundingClientRect(); return narrow ? !!n.closest('#agView [data-k="tray"]') : r.height === 0 || (r.left >= c.left - 1 && r.right <= c.right + 1 && r.top >= c.top - 1 && r.bottom <= c.bottom + 1); });
       const newest = all[0] && all[0].getBoundingClientRect();
       return inside && (!narrow || (!!newest && newest.top >= Math.max(0, c.top) - 1 && newest.bottom <= Math.min(innerHeight, c.bottom) + 1)); });
+    const bad = await hitTest(page, TAB);
     check(!bad.length && inChart, 'at ' + w + ' x ' + h + ' with four notices showing, they sit ' + (w <= 1100 ? 'at the top of the tab, the newest in sight,' : 'in the chart panel') + ' and no Accept or Reject is under one' + (bad.length ? ': ' + bad.slice(0, 4).join('; ') : inChart ? '' : ': a notice outside the chart panel'));
     await clearNotices(page);
   }
@@ -370,7 +375,82 @@ try {
     check(r.seen && !r.covered.length && r.own !== null && Math.abs(r.own - before) <= 1, 'at ' + w + ' x ' + h + ' with the tab at its top, ChartBridge\'s error line is in sight, covers no Accept or Reject and moves none: ' + JSON.stringify(r) + ' (Accept at ' + before + ' before)');
     await page.click('#wsAlertClose');
   }
+  /* ---------------------------------------------------------------- off the Agent tab: the corner */
+  console.log('off the Agent tab, two agents and the bot proposing: no agent card, one line for them; the bot\'s corner under the top bar');
   for (const id of await ownOpen()) await control('agent-withdraw', { agent: 'demo', id });
+  for (const id of [...twoOpen]) await twoGone(id);
+  for (const id of [...botOpen]) await botGone(id);
+  await sleep(3500);                                                                    // the ended cards gone
+  await page.setViewportSize({ width: 1366, height: 768 }); await sleep(400);
+  const tabShown = async on => { if ((await page.evaluate(() => window.workspace.agent().shown)) !== on) await page.evaluate(() => document.getElementById('wsAgentTab').click()); await until(async () => (await page.evaluate(() => window.workspace.agent().shown)) === on, 'the Agent tab ' + (on ? 'shown' : 'closed')); };
+  await tabShown(false);
+  await control('agent-plan', { agent: 'demo', id: 'oa', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 16, target: 32, expire: 900, setup: 'Sample O', reason: LONG, confidence: 0.6 });
+  const oq = await twoNew();
+  for (let i = 0; i < 3; i++) { await botNew(); await sleep(250); }
+  const CORNER_LINE = '.ag-cornerline';
+  const AGENTS_LINE = 'Demo Agent: 1 proposal · Second Demo Agent: 1';
+  await until(async () => (await text(CORNER_LINE)) === AGENTS_LINE, 'the corner\'s line counts both agents\' proposals');
+  await until(() => page.evaluate(n => document.querySelectorAll('.bt-props .bt-prop:not(.bt-ended)').length >= n, 3), 'three bot cards in the corner');
+  /* the bot's corner: below the top bar, the top bar's buttons themselves; every Accept or Reject in sight with its own card's
+     name and side, size and root line in sight too, wherever the corner is scrolled */
+  const cornerNow = () => page.evaluate(() => {
+    const bar = document.querySelector('.ws-top').getBoundingClientRect(), box = document.querySelector('.bt-props'), br = box.getBoundingClientRect();
+    const top = {};
+    for (const id of ['wsAgentTab', 'wsBotTab', 'wsLayout', 'wsAdd', 'wsSet']) { const e = document.getElementById(id); if (!e || !e.getClientRects().length) continue; const r = e.getBoundingClientRect(), h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); top[id] = !!h && (h === e || e.contains(h)); }
+    const seenIn = (el, card) => { const r = el.getBoundingClientRect(); if (!r.height) return false; const h = document.elementFromPoint(r.left + Math.min(30, r.width / 2), r.top + r.height / 2); return !!h && card.contains(h) && (h === el || el.contains(h)); };
+    const bad = [], frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const sweep = async () => {
+      for (let y = 0; y <= box.scrollHeight - box.clientHeight + 8; y += 8) {
+        box.scrollTop = y; await frame();
+        for (const b of box.querySelectorAll('.bt-prop [data-ans]')) {
+          const r = b.getBoundingClientRect(); if (!r.height || b.disabled) continue;
+          const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          if (!h || !(h === b || b.contains(h))) continue;                                     // not in sight
+          const card = b.closest('.bt-prop'), big = card.querySelector('.bt-prop-big'), name = card.querySelector('.bt-prop-h');
+          if (!seenIn(big, card) || !seenIn(name, card)) { const m = card.dataset.id + ':' + b.dataset.ans + ' at scroll ' + y; if (bad.length < 6) bad.push(m); }
+        }
+      }
+    };
+    return sweep().then(() => { box.scrollTop = box.scrollHeight; return { boxTop: Math.round(br.top), barBottom: Math.round(bar.bottom), top, bad }; });
+  });
+  const agentButtons = () => page.evaluate(() => [...document.querySelectorAll('[data-agans]')].filter(b => b.getClientRects().length).map(b => (b.closest('.ag-prop') || {}).dataset.id + ':' + b.dataset.agans));
+  for (const [w, h] of [[1366, 768], [1920, 1080]]) {
+    await page.setViewportSize({ width: w, height: h }); await sleep(600);
+    const ab = await agentButtons(), line = await page.evaluate(sel => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { text: e.textContent.replace(/\s+/g, ' ').trim(), h: Math.round(r.height), shown: r.height > 0 }; }, CORNER_LINE);
+    check(!ab.length && !!line && line.shown && line.text === AGENTS_LINE && line.h === 30, 'at ' + w + ' x ' + h + ' off the Agent tab no agent Accept or Reject exists anywhere and the corner\'s line says "' + (line && line.text) + '" at ' + (line && line.h) + ' px' + (ab.length ? ': ' + ab.join(', ') : ''));
+    const c = await cornerNow();
+    check(c.boxTop >= c.barBottom && Object.values(c.top).every(Boolean), 'at ' + w + ' x ' + h + ' the bot\'s corner starts below the top bar (' + c.boxTop + ' against ' + c.barBottom + ') and the top bar\'s buttons are themselves: ' + JSON.stringify(c.top));
+    check(!c.bad.length, 'at ' + w + ' x ' + h + ' scrolled anywhere, every bot Accept and Reject in sight shows its own card\'s name and side, size and root' + (c.bad.length ? ': ' + c.bad.join('; ') : ''));
+    /* a new bot card arriving moves no button already there */
+    const where = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.bt-props .bt-prop [data-ans]')].filter(b => b.getClientRects().length).map(b => [b.closest('.bt-prop').dataset.id + ':' + b.dataset.ans, Math.round(b.getBoundingClientRect().top)])));
+    const before = await where();
+    await botNew();
+    await until(() => page.evaluate(n => document.querySelectorAll('.bt-props .bt-prop').length > n, Object.keys(before).length / 2), 'the new bot card');
+    await sleep(300);
+    const after = await where(), movedB = Object.keys(before).filter(k => after[k] !== undefined && Math.abs(after[k] - before[k]) > 1).map(k => k + ' ' + before[k] + ' -> ' + after[k]);
+    check(!movedB.length, 'at ' + w + ' x ' + h + ' a new bot card arriving moves none of the ' + Object.keys(before).length + ' bot buttons already there' + (movedB.length ? ': ' + movedB.slice(0, 4).join('; ') : ''));
+  }
+  /* the keys off the tab never answer an agent's proposal (the bot's oldest, as 1.16.0) */
+  await sleep(1100);
+  const nk = (await answers()).length;
+  await page.evaluate(() => { if (document.activeElement) document.activeElement.blur(); });
+  await page.keyboard.press('Alt+KeyN');
+  await until(async () => (await answers()).length > nk, 'a key answer off the tab', 4000);
+  await sleep(400);
+  const offKeys = (await answers()).slice(nk);
+  check(offKeys.length === 1 && offKeys[0].type === 'botAnswer', 'off the Agent tab the Reject key answers the bot\'s proposal, never an agent\'s: ' + JSON.stringify(offKeys.map(m => m.type + ':' + m.id)));
+  /* the line's names open the Agent tab on that agent */
+  for (const [w, h, id, pid] of [[1366, 768, 'demotwo', oq], [1920, 1080, 'demo', 'oa']]) {
+    await page.setViewportSize({ width: w, height: h }); await sleep(400);
+    await tabShown(false);
+    await until(() => page.isVisible(CORNER_LINE), 'the corner\'s line');
+    await page.click(CORNER_LINE + ' [data-goto="agent:' + id + '"]');
+    const landed = await until(async () => { const st = await page.evaluate(() => ({ shown: window.workspace.agent().shown, chosen: window.workspace.agent().chosen })); return st.shown && st.chosen === id && await page.isVisible('#agView .ag-plist .ag-prop[data-agent="' + id + '"][data-id="' + pid + '"]'); }, 'the Agent tab on ' + id);
+    check(!!landed && !(await page.isVisible(CORNER_LINE)), 'at ' + w + ' x ' + h + ' the corner\'s "' + id + '" opens the Agent tab on it, its proposal in the slot, the corner\'s line gone');
+  }
+  await tabShown(true);
+  for (const id of await ownOpen()) await control('agent-withdraw', { agent: 'demo', id });
+  for (const id of [...botOpen]) await botGone(id);
   if (!twoOpen.size) await twoNew();                                                    // the pop-out counts the second agent's
 
   /* ---------------------------------------------------------------- the pop-out (agent.html) */

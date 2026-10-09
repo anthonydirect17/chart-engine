@@ -507,29 +507,32 @@ try {
   await until(async () => (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'k1').state === 'accepted', 'demo\'s k1 accepted');
   check((await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'open', 'demotwo\'s k2 (not shown on the tab) untouched');
   await control('agent-withdraw', { agent: 'demo', id: 'k1' });
-  // elsewhere: two open (demotwo's and the bot's): the key answers neither and says so
+  // off the tab: demotwo's proposal is no card anywhere, only counted in the corner's line; the key answers the bot's (1.16.0)
   await page.click('#wsAgentTab');
   await until(async () => !(await A()).shown, 'the tab closes');
-  await until(() => visible('.ag-prop.corner[data-id="k2"]'), 'the tab closed: demotwo\'s proposal in the corner');
-  check(/Second Demo Agent\s*demotwo/.test(await text('.ag-prop.corner[data-id="k2"] .ag-prop-h')), 'a card names the agent and its id');
+  await until(async () => (await text('.ag-cornerline')) === 'Second Demo Agent: 1 proposal', 'the tab closed: demotwo\'s proposal counted in the corner\'s line');
+  check(!(await page.evaluate(() => [...document.querySelectorAll('[data-agans]')].some(b => b.getClientRects().length))), 'off the tab no agent Accept or Reject anywhere');
   await control('bot-connect', { name: 'Sample Lantern Fade' });
   await control('bot-proposal', { id: 'b1', side: 'sell', kind: 'market', stop: 12, target: 24, reason: 'Sample: the made-up bot\'s signal' });
-  await until(() => visible('.bt-prop[data-id="b1"]'), 'the bot\'s proposal too');
+  await until(() => visible('.bt-prop[data-id="b1"]'), 'the bot\'s proposal in the corner');
   await sleep(1100);
   await page.screenshot({ path: path.join(SHOTS, 'agent-corner.png') });
   await page.mouse.click(800, 450);
   const a1 = (await answersSent()).length;
   await page.keyboard.press('Alt+KeyN');
-  await until(async () => /More than one proposal is open: click the one you mean/.test(await page.textContent('#wsNote')), 'more than one open: the key says so on the workspace\'s line');
-  await sleep(300);
-  check((await answersSent()).length === a1 && !(await sent()).some(m => m.type === 'botAnswer'), 'and answers nothing');
-  // click Reject on demotwo's card: the bot's is the only one left, and the key answers it as 1.16.0 did
-  await page.click('.ag-prop.corner[data-id="k2"] [data-agans="reject"]');
+  await until(async () => (await control('v3')).proposals.find(p => p.id === 'b1').state === 'rejected', 'the key answers the bot\'s (agents\' proposals are answered only in the Agent tab)');
+  check((await answersSent()).length === a1 && (await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'open', 'and never demotwo\'s k2');
+  await until(() => page.evaluate(() => !document.querySelector('.bt-prop[data-id="b1"]:not(.bt-ended)')), 'the bot\'s card shows it ended');
+  // the corner's line opens the tab on demotwo: k2 answered there with its button
+  await page.click('.ag-cornerline [data-goto="agent:demotwo"]');
+  await until(async () => (await A()).shown && (await A()).chosen === 'demotwo', 'the Agent tab on demotwo');
+  await page.click('.ag-plist .ag-prop[data-id="k2"] [data-agans="reject"]');
   await until(async () => (await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'rejected', 'k2 rejected by its button');
   await until(async () => !(await page.$('.ag-prop[data-id="k2"]')), 'its card goes', 6000);
-  await page.keyboard.press('Alt+KeyN');
-  await until(async () => (await control('v3')).proposals.find(p => p.id === 'b1').state === 'rejected', 'the bot\'s alone: the key answers it (1.16.0)');
-  await until(() => page.evaluate(() => !document.querySelector('.bt-prop[data-id="b1"]:not(.bt-ended)')), 'the bot\'s card shows it ended');
+  await page.selectOption('#agView [data-k="pick"]', 'demo');
+  await page.click('#wsAgentTab');
+  await until(async () => !(await A()).shown, 'the tab closes again');
+  await page.mouse.click(800, 450);
   await page.keyboard.press('Alt+KeyN');
   await until(async () => /no copilot proposal to answer here/.test(await page.textContent('#wsNote')), 'with none open the workspace says so (as in 1.16.0)');
 

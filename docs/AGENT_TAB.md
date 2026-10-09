@@ -179,9 +179,17 @@ decision in a drawer over the right column, outlined in that decision's colour:
 - **The footer:** today's P&L (ChartBridge's `pnlToday`, with the open P&L beside it in a trade), trades and losing trades
   (of the limit when the rules set one), his session as a light trail from the rules' `entryFrom` to `flatAt` (09:45 to
   15:55 by default) with now and his fills (F) and exits (X, green or red by result).
-- **Corner:** with the Agent tab closed, a proposal of any agent pops up in the corner wherever Anthony is (the Bot tab's
-  corner, so the two never overlap), with the bot's as before; while the tab is shown that corner is hidden and the tab
-  counts what is in it (above). Notices for
+- **Corner:** an agent's proposal is answered only in the Agent tab (the re-review of c47a8a1: two agents' cards and the
+  bot's ran the corner 207 px over the top bar at 1366 x 768). With the tab closed, one line of a fixed height (30 px) in
+  the corner wherever Anthony is counts the agents' open proposals, "Demo Agent: 1 proposal · Second Demo Agent: 1"; each
+  name opens the Agent tab on that agent; with none open the line is gone, and its room stays (while agents are known the
+  Bot tab's corner sits 40 px higher), so its coming and going moves no bot card. No agent Accept or Reject exists
+  outside the tab. The Bot tab's corner (the bot's proposals, as on main) never reaches the top bar: it is at most the
+  window's height less the top bar (40 px) and 16 px, and scrolls inside past that; each bot card's name and its side,
+  size and root stay at the card's top while it scrolls (sticky), so a bot Accept or Reject is never in sight without
+  them; a new bot card goes at the top and moves none already there (the corner grows upward, and once it scrolls it
+  scrolls by the new card's room). While the Agent tab is shown the Bot tab's corner and the agents' line are hidden and
+  the tab counts what is open (above). Notices for
   an entry, an exit, a stand-down, the heartbeat, the kill switch, the mode, the account and how a proposal ended. While
   the Agent tab is shown the notices cover none of it: they stack over the chart's lower left, above its time axis (over
   the oldest bars), never over the controls, the rules, a proposal, the stream or the footer. The workspace's ChartBridge
@@ -245,7 +253,11 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
      With none of that agent's open, or the tab on its "no agents" card, the key answers nothing and says so. The Bot
      tab's own keys are the same keys through the same router: while the Agent tab is shown (the bot's corner hidden)
      they answer no bot proposal; on the Bot tab (its corner shown) they work as 1.16.0.
-   - Anywhere else, with no agent proposal open: the bot's oldest, exactly as 1.16.0 (no rule below touches it).
+   - Anywhere else: the bot's oldest, exactly as 1.16.0. An agent's proposal is answered only in the Agent tab (the
+     re-review of c47a8a1): the tab gives the router its proposals only while it is shown, so off the tab no key ever
+     answers an agent's proposal, even one alone (the keys used to answer one there when it was the only one open).
+   - (`AgentCore.copilotRouter` keeps its rule for a page that gives it agents' proposals off the tab, which this page no
+     longer does:)
    - Anywhere else, with an agent proposal open: when exactly one proposal is open across the bot and every agent, that
      one; when more than one is, none, and the workspace's line says "More than one proposal is open: click the one you
      mean".
@@ -260,9 +272,10 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
 5. **Where a proposal shows (Anthony, 2026-10-08):** in the tab's proposal panel for the agent shown there, in its fixed
    slot at the top; while the tab is shown the bot's and every other agent's are only counted, in one line under the slot
    (each name a link to the Bot tab or to that agent), and the corner is hidden; on the Bot tab the bot's show with Accept
-   and Reject as before; in the corner whenever the tab is closed. `agentSeen` goes once, the moment it shows in a window
-   Anthony can see (a
-   hidden window sends it when it comes to the front), as `botSeen`.
+   and Reject as before; with the tab closed, agents' proposals are only counted in the corner's line (each name opening
+   the tab on that agent) and the bot's are its own cards in the corner. `agentSeen` goes once, the moment it shows in the
+   slot of the tab (the agent shown) in a window Anthony can see (a hidden window sends it when it comes to the front), as
+   `botSeen`; a proposal only counted is not seen yet.
 6. **Accept in the last 5 s (lead's default):** ChartBridge refuses an accept with under 5 s left as expired, so the page
    closes Accept then and says why; Reject still goes. The countdown runs on this PC's clock against ChartBridge's
    `expiresAt` (the same PC). A proposal with no `expiresAt` is never accepted; one with no `sim` is marked LIVE, as an
@@ -477,6 +490,13 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
   tab at its top, ChartBridge's error line is in the window, covers no Accept or Reject and moves the shown agent's Accept
   by nothing. The pop-out at 1366 x 768, 1920 x 1080 and 390 x 844: its agent's Accept and Reject in the window and
   themselves, no other Accept or Reject, the line counting the second agent's; its link shows the second agent there.
+  Off the tab (added after the re-review of c47a8a1, and it fails on c47a8a1: 11 of 78 checks), with two agents and the
+  bot proposing (three bot cards, then a fourth), at 1366 x 768 and 1920 x 1080: no agent Accept or Reject exists anywhere;
+  the corner's line says "Demo Agent: 1 proposal · Second Demo Agent: 1" at 30 px; the bot's corner starts below the top
+  bar and the top bar's buttons are themselves; with the corner scrolled anywhere (8 px steps) every bot Accept and Reject
+  in sight has its own card's name line and side, size and root line in sight; a new bot card moves none of the bot
+  buttons already there; the Reject key answers the bot's proposal, never an agent's; and the line's names open the Agent
+  tab on that agent (the second agent at 1366 x 768, the first at 1920 x 1080), its proposal in the slot.
   Screenshots `agent-targets-1366`, `-390`, `-popout`.
 - `npm run perf:agent` (R5, `test/perf-agent.mjs`, not part of `npm test`): the Agent tab in a trade at 1920 x 1080 while
   MNQ trades a busy tape (`--live-rate=200`), Motion Full and Motion Off taking turns. Gates: a chart's frame p95 under 4 ms

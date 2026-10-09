@@ -73,8 +73,10 @@ function create(o) {
   const view = els.view, tabBtn = els.tab;
   const DRAWER_ID = 'agDrawer' + (++drawerSeq);
   const q = sel => (view ? view.querySelector(sel) : null);
-  /* the corner proposals (wherever Anthony is) share the Bot tab's corner when it is there, so the two never overlap */
-  const propBox = document.querySelector('.bt-props') || (() => { const d = document.createElement('div'); d.className = 'ag-props'; d.setAttribute('role', 'region'); d.setAttribute('aria-label', 'Agent proposals'); document.body.appendChild(d); return d; })();
+  /* the Bot tab's corner (its proposals): hidden while this tab is shown. An agent's proposal is never a card outside this
+     tab: off it, one line in the corner counts them (cornerLine), each name opening this tab on that agent */
+  const propBox = document.querySelector('.bt-props');
+  const cornerLine = view && !popout ? (() => { const d = document.createElement('div'); d.className = 'ag-cornerline'; d.setAttribute('role', 'region'); d.setAttribute('aria-label', 'Agent proposals open'); d.hidden = true; document.body.appendChild(d); return d; })() : null;
   const notes = document.querySelector('.bt-notes') || (() => { const d = document.createElement('div'); d.className = 'ag-notes'; d.setAttribute('aria-live', 'polite'); document.body.appendChild(d); return d; })();
   if (view) build();
 
@@ -243,6 +245,7 @@ function create(o) {
     for (const k of ['rulesWhy', 'acctWhy']) put(q('[data-k="' + k + '"]'), 'textContent', '');
     writeJson(KEYS.chosen, id);
     placeCards();
+    seenNow();
     if (!quiet) render();
   }
 
@@ -290,8 +293,8 @@ function create(o) {
     return { fills, exits };
   }
 
-  /* ---------------- proposals: in the tab for the agent shown, in the corner everywhere else */
-  const cards = new Map();                     // agent|id -> { inline, corner, p, shownAt, ended }
+  /* ---------------- proposals: a card only in the tab, for the agent shown; counted everywhere else */
+  const cards = new Map();                     // agent|id -> { inline, p, shownAt, ended }
   const botProps = BC.createProposals();       // the bot's, only to count them under the proposal (live/bot.js shows and answers them)
   const keyOf = (a, id) => a + '|' + id;
   function onProposal(p) {
@@ -311,7 +314,7 @@ function create(o) {
     const r = p.root;
     return p.kind === 'stopLimit' ? 'stop-limit ' + fmtPx(p.price, r) + ', limit ' + fmtPx(p.limitPrice, r) : 'limit ' + fmtPx(p.price, r);
   }
-  function propHtml(p, where) {
+  function propHtml(p) {
     const a = agents.get(p.agent) || { agent: p.agent }, r = p.root, lp = AC.legPrices(p, tickOf(r));
     const acc = { name: p.account || AC.agentAccount(a).name, mark: AC.accountMark(p.sim) };   // no sim: LIVE, as an unknown account anywhere
     const kc = k => (k ? ' <span class="bt-keycap">' + esc(k) + '</span>' : '');
@@ -324,30 +327,28 @@ function create(o) {
         '<span>Target</span><span>' + esc(p.targetTicks) + ' ticks' + (lp.target !== null ? ' (' + fmtPx(lp.target, r) + ')' : '') + '</span>' +
         '<span>Risk</span><span>' + esc(AC.fmtUsd(p.riskDollars).replace(/^\+/, '') || '-') + (isNum(p.stopTicks) && isNum(p.targetTicks) && p.stopTicks ? ', reward ' + (p.targetTicks / p.stopTicks).toFixed(2) + ' to 1' : '') + '</span>' +
         '<span>Open until</span><span>' + (isNum(p.expiresAt) ? esc(AC.etClockSec(p.expiresAt)) + ' ET' : '-') + '</span>' +
-        (where === 'inline' ? '<span>Account</span><span>' + esc(acc.name) + ' ' + markHtml(acc.mark) + '</span>' : '') + '</div>' +
-      (where === 'inline' ? '' : '<div class="ag-prop-note"><b class="mono">' + esc(acc.name) + '</b> ' + markHtml(acc.mark) + ' ChartBridge places it on this account from these numbers if you accept, inside ' + esc(AC.agentName(a)) + '\'s rules. Unanswered, it is never sent.</div>') +
+        '<span>Account</span><span>' + esc(acc.name) + ' ' + markHtml(acc.mark) + '</span></div>' +
       /* the foot: ChartBridge's words (a refusal, the last 5 s, "Waiting for ChartBridge") right above Accept and Reject, so both
          stay in sight together while the proposal's words scroll (the foot is sticky in the tab) */
       '<div class="ag-prop-foot"><div class="ag-prop-msg" data-k="msg" role="status"></div>' +
       '<div class="ag-prop-btns"><button type="button" class="ag-acc" data-agans="accept" data-no-motion>Accept' + kc(S.keys.accept) + '</button><button type="button" class="ag-rej" data-agans="reject" data-no-motion>Reject' + kc(S.keys.reject) + '</button></div></div>';
   }
-  function makeCard(p, where) {
+  function makeCard(p) {
     const el = document.createElement('div');
-    el.className = 'ag-prop ' + where;
+    el.className = 'ag-prop inline';
     el.dataset.agent = p.agent; el.dataset.id = p.id;
     el.setAttribute('role', 'alertdialog');
     el.setAttribute('data-no-motion', '');
     el.setAttribute('aria-label', 'Copilot proposal from ' + AC.agentName(agents.get(p.agent) || { agent: p.agent }) + ': ' + sideWord(p.side) + ' ' + p.qty + ' ' + p.root);
-    el.innerHTML = propHtml(p, where);
+    el.innerHTML = propHtml(p);
     return el;
   }
   function showProposal(p) {
     const k = keyOf(p.agent, p.id);
     if (cards.has(k)) return;
-    const x = { inline: makeCard(p, 'inline'), corner: makeCard(p, 'corner'), p, shownAt: Date.now(), ended: false };
+    const x = { inline: makeCard(p), p, shownAt: Date.now(), ended: false };
     for (const y of [...cards.values()]) if (y.p.agent === p.agent && y.ended) removeCard(y);   // its agent's ended ones make way
     cards.set(k, x);
-    propBox.prepend(x.corner);
     placeCards();
     if (p.agent === S.chosen && q('[data-k="slot"]')) q('[data-k="slot"]').scrollTop = 0;   // the new proposal from its top
     seenNow();
@@ -358,80 +359,106 @@ function create(o) {
      so its arrival, ending and going move nothing and its Accept and Reject are always in sight. No other proposal shows on
      the tab as a card: the corner (the Bot tab's, with the bot's proposals, or this window's own) is hidden while the tab is
      shown (hideBox), and one line of a fixed height under the slot counts what is open elsewhere, each name a link to the
-     tab where it is answered (renderOthers). Everywhere else the corner shows every proposal but the shown agent's while the
-     tab is shown. The slot is written only when its cards changed: a button taken out of the page loses its focus and a
-     press held on it (review of fc3101a). */
+     tab where it is answered (renderOthers). Off the tab no agent's proposal is a card anywhere (the re-review of c47a8a1:
+     two agents' cards and the bot's ran the corner over the top bar): one line in the corner counts them, each name opening
+     the tab on that agent, and the copilot keys answer an agent's proposal only in the tab. The slot is written only when
+     its cards changed: a button taken out of the page loses its focus and a press held on it (review of fc3101a). */
   const mineNow = () => [...cards.values()].filter(x => x.p.agent === S.chosen);
   /* "None open" in the slot while the shown agent has nothing there (the slot keeps its height either way) */
   function placeEmpty() { put(q('[data-k="pempty"]'), 'hidden', !!q('[data-k="plist"] .ag-prop')); }
   function placeCards() {
     setTimeout(placeDrawer, 0);                                // a proposal came or went: the drawer keeps clear of it (setTimeout passes no argument)
-    const list = q('[data-k="plist"]'), inTab = S.shown && !!view;
+    const list = q('[data-k="plist"]');
     const mine = mineNow(), want = mine.map(x => x.inline);
     if (list && (list.children.length !== want.length || want.some((el, i) => list.children[i] !== el))) list.replaceChildren(...want);
-    for (const x of cards.values()) put(x.corner, 'hidden', inTab && x.p.agent === S.chosen);
     const n = mine.filter(x => !x.ended).length;
     put(q('[data-k="propCount"]'), 'textContent', n ? n + ' open' : '');
     hideBox(); placeEmpty(); renderOthers();
   }
-  /* the corner, hidden while the tab is shown (always in the pop-out): no proposal but the shown agent's is a card on the tab */
-  function hideBox() { tog(propBox, 'ag-hide', !!(S.shown && view)); }
+  /* the Bot tab's corner, hidden while the tab is shown: no proposal but the shown agent's is a card on the tab. While agents
+     are known (and the tab is not shown) the corner keeps the room of the agents' line under it (agent.css body.ag-agents),
+     so that line coming and going moves none of the bot's cards. */
+  function hideBox() {
+    if (propBox) tog(propBox, 'ag-hide', !!(S.shown && view));
+    if (cornerLine) tog(document.body, 'ag-agents', agents.size() > 0 && !S.shown);
+  }
   /* The line under the slot: how many proposals are open elsewhere, by whose ("Bot: 1 proposal · Second Demo: 2"), each name a
      button to where they are answered (the Bot tab; another agent in this tab). It keeps its one line's height with nothing
      open ("No other proposals"), has no Accept or Reject, and never moves: a count that rises is marked at once, still, for
      8 s (R3: no motion). */
-  const UP_MS = 8000, upUntil = new Map(), lastCount = new Map();
+  const UP_MS = 8000;
+  const lineIn = { up: new Map(), last: new Map() }, lineOut = { up: new Map(), last: new Map() };   // the tab's line, the corner's
   let othersTimer = 0;
-  function otherCounts() {
+  /* open proposals by whose: the bot's (with `bot`), then each agent's but `but`'s, in the agents' order */
+  function openCounts(bot, but) {
     const out = [], by = new Map();
-    if (BC.botSwitchOn(S.trading)) { const n = botProps.open().length; if (n) out.push({ key: 'bot', name: 'Bot', n }); }
-    for (const x of cards.values()) if (!x.ended && x.p.agent !== S.chosen) by.set(x.p.agent, (by.get(x.p.agent) || 0) + 1);
+    if (bot && BC.botSwitchOn(S.trading)) { const n = botProps.open().length; if (n) out.push({ key: 'bot', name: 'Bot', n }); }
+    for (const x of cards.values()) if (!x.ended && x.p.agent !== but) by.set(x.p.agent, (by.get(x.p.agent) || 0) + 1);
     for (const id of [...agents.ids().filter(i => by.has(i)), ...[...by.keys()].filter(i => !agents.get(i))]) out.push({ key: 'agent:' + id, id, name: AC.agentName(agents.get(id) || { agent: id }), n: by.get(id) });
     return out;
+  }
+  const otherCounts = () => openCounts(true, S.chosen);
+  /* a line's words: "Name: 1 proposal · Name: 2", each name a button (data-goto), a risen count marked (st: its counts) */
+  function lineHtml(list, st, now, quiet, title) {
+    const seen = new Set(list.map(x => x.key));
+    for (const x of list) { if (!quiet && x.n > (st.last.get(x.key) || 0)) st.up.set(x.key, now + UP_MS); st.last.set(x.key, x.n); }
+    for (const k of [...st.last.keys()]) if (!seen.has(k)) { st.last.delete(k); st.up.delete(k); }
+    if (quiet) st.up.clear();
+    const bot = typeof o.openBot === 'function';
+    return list.map((x, i) => {
+      const up = (st.up.get(x.key) || 0) > now;
+      const name = x.key === 'bot' && !bot ? '<span class="ag-oname" title="Answered on the Bot tab of the workspace">' + esc(x.name) + '</span>'
+        : '<button type="button" class="ag-olink" data-goto="' + esc(x.key) + '" title="' + esc(title(x)) + '">' + esc(x.name) + '</button>';
+      return '<span class="ag-oitem' + (up ? ' up' : '') + '" data-key="' + esc(x.key) + '" data-n="' + x.n + '">' + name + ': <span class="mono">' + x.n + '</span>' + (i ? '' : x.n === 1 ? ' proposal' : ' proposals') + '</span>';
+    }).join('<span class="ag-osep" aria-hidden="true"> · </span>');
+  }
+  /* write a line, keeping the focus on its name if it had it */
+  function writeLine(el, html) {
+    const had = el.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.goto : '';
+    setHtml(el, html);
+    if (had) { const b = el.querySelector('[data-goto="' + CSS.escape(had) + '"]'); if (b && document.activeElement !== b) b.focus({ preventScroll: true }); }
   }
   function renderOthers() {
     if (!view) return;
     clearTimeout(othersTimer); othersTimer = 0;
-    const now = Date.now(), list = otherCounts(), quiet = !!S.othersQuiet;
+    const now = Date.now(), quiet = !!S.othersQuiet, list = otherCounts();
     S.othersQuiet = false;
-    const seen = new Set(list.map(x => x.key));
-    for (const x of list) { if (!quiet && x.n > (lastCount.get(x.key) || 0)) upUntil.set(x.key, now + UP_MS); lastCount.set(x.key, x.n); }
-    for (const k of [...lastCount.keys()]) if (!seen.has(k)) { lastCount.delete(k); upUntil.delete(k); }
-    if (quiet) upUntil.clear();
-    const bot = typeof o.openBot === 'function';
-    const html = list.length ? list.map((x, i) => {
-      const up = (upUntil.get(x.key) || 0) > now, link = x.key === 'bot' && !bot;
-      const name = link ? '<span class="ag-oname" title="Answered on the Bot tab of the workspace">' + esc(x.name) + '</span>'
-        : '<button type="button" class="ag-olink" data-goto="' + esc(x.key) + '" title="' + (x.key === 'bot' ? 'Open the Bot tab: its proposals are answered there' : 'Show ' + esc(x.name) + ' in this tab: its proposals are answered here then') + '">' + esc(x.name) + '</button>';
-      return '<span class="ag-oitem' + (up ? ' up' : '') + '" data-key="' + esc(x.key) + '" data-n="' + x.n + '">' + name + ': <span class="mono">' + x.n + '</span>' + (i ? '' : x.n === 1 ? ' proposal' : ' proposals') + '</span>';
-    }).join('<span class="ag-osep" aria-hidden="true"> · </span>') : '<span class="ag-onone">No other proposals</span>';
+    const html = lineHtml(list, lineIn, now, quiet, x => (x.key === 'bot' ? 'Open the Bot tab: its proposals are answered there' : 'Show ' + x.name + ' in this tab: its proposals are answered here then')) || '<span class="ag-onone">No other proposals</span>';
     for (const el of view.querySelectorAll('[data-k="others"]')) {
-      const had = el.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.goto : '';
-      setHtml(el, html);
+      writeLine(el, html);
       put(el, 'hidden', el.dataset.where === 'off' && !list.length);   // the "no agents" card says it only when there is some
-      if (had) { const b = el.querySelector('[data-goto="' + CSS.escape(had) + '"]'); if (b && document.activeElement !== b) b.focus({ preventScroll: true }); }
     }
-    const next = Math.min(...[...upUntil.values()].filter(t => t > now));
+    /* the corner's line, off the tab: every agent's open proposals (the bot's are its own cards there) */
+    if (cornerLine) {
+      const all = openCounts(false, ''), on = !S.shown && all.length > 0;
+      writeLine(cornerLine, lineHtml(all, lineOut, now, false, x => 'Open the Agent tab on ' + x.name + ': its proposals are answered there'));
+      put(cornerLine, 'hidden', !on);
+    }
+    const next = Math.min(...[...lineIn.up.values(), ...lineOut.up.values()].filter(t => t > now));
     if (isFinite(next)) othersTimer = setTimeout(renderOthers, next - now + 20);
   }
-  /* a name in the line: the Bot tab (the workspace's), or that agent shown in this tab */
+  /* a name in a line: the Bot tab (the workspace's), or that agent shown in this tab (the tab opened from the corner) */
   function goTo(key) {
     if (key === 'bot') { if (typeof o.openBot === 'function') o.openBot(); return; }
     const id = key.slice(6);
-    if (key.startsWith('agent:') && agents.get(id)) { choose(id); unmountChart(); render(); }
+    if (!key.startsWith('agent:') || !agents.get(id)) return;
+    if (S.chosen !== id) { choose(id); unmountChart(); }
+    if (S.shown) render(); else showTab(true);
   }
-  /* agentSeen the moment it shows, in a window Anthony can see (as the Bot tab's botSeen) */
+  if (cornerLine) cornerLine.addEventListener('click', e => { const b = e.target.closest('button[data-goto]'); if (b) goTo(b.dataset.goto); });
+  /* agentSeen the moment it shows, in a window Anthony can see (as the Bot tab's botSeen): only in the tab, for the agent
+     shown (elsewhere it is only counted); the keys count its time on screen from then */
   function seenNow() {
-    if (document.visibilityState === 'hidden') return;
+    if (document.visibilityState === 'hidden' || !S.shown || !view) return;
     const at = Date.now();
     for (const x of cards.values()) {
-      if (x.ended) continue;
+      if (x.ended || x.p.agent !== S.chosen) continue;
       const seen = props.shown(x.p.agent, x.p.id, at);
       if (seen) { x.shownAt = at; sendRaw(seen); }
     }
   }
   document.addEventListener('visibilitychange', seenNow);
-  const both = (x, fn) => { fn(x.inline); fn(x.corner); };
+  const both = (x, fn) => fn(x.inline);
   function setMsg(x, t) { both(x, el => put(el.querySelector('[data-k="msg"]'), 'textContent', t)); }
   function endProposal(p, why) {
     const x = cards.get(keyOf(p.agent, p.id)), a = agents.get(p.agent);
@@ -449,14 +476,13 @@ function create(o) {
   }
   function dropProposal(agent, id) { const x = cards.get(keyOf(agent, id)); if (x) removeCard(x); }
   function removeCard(x) {
-    x.inline.remove(); x.corner.remove(); cards.delete(keyOf(x.p.agent, x.p.id)); placeCards();
+    x.inline.remove(); cards.delete(keyOf(x.p.agent, x.p.id)); placeCards();
   }
   function onCardClick(e) {
     const b = e.target.closest('button[data-agans]'); if (!b) return;
     const card = b.closest('.ag-prop');
     if (card) answer(card.dataset.agent, card.dataset.id, b.dataset.agans);
   }
-  propBox.addEventListener('click', onCardClick);
   if (view) view.addEventListener('click', onCardClick);
   function answer(agent, id, ans) {
     const x = cards.get(keyOf(agent, id));
@@ -491,11 +517,12 @@ function create(o) {
   }
   /* one handler for the copilot key across the Bot tab and every agent (AgentCore.copilotRouter): the oldest open proposal */
   const ROUTER = AC.copilotRouter(document);
-  /* the router's view of this tab: every proposal not ended (an answered one waiting for ChartBridge stays the key's target),
-     and the agent shown while the tab is open: the keys then answer its proposals only, never the bot's or another agent's
-     (not shown on the tab); open on its "no agents" card (true), none at all */
+  /* the router's view of this tab: only while the tab is shown (an agent's proposal is a card nowhere else, so off the tab
+     the keys answer the bot's alone, as 1.16.0), every proposal not ended (an answered one waiting for ChartBridge stays the
+     key's target), and the agent shown: the keys then answer its proposals only, never the bot's or another agent's (not
+     shown on the tab); open on its "no agents" card (true), none at all */
   const unroute = ROUTER.add('agents', { kind: 'agents',
-    open: () => [...cards.values()].filter(x => !x.ended).map(x => ({ id: x.p.agent + ':' + x.p.id, agent: x.p.agent, shownAt: x.shownAt, answered: !!props.answered(x.p.agent, x.p.id),
+    open: () => (S.shown && view ? [...cards.values()] : []).filter(x => !x.ended).map(x => ({ id: x.p.agent + ':' + x.p.id, agent: x.p.agent, shownAt: x.shownAt, answered: !!props.answered(x.p.agent, x.p.id),
       expiresAt: x.p.expiresAt, answer: ans => answer(x.p.agent, x.p.id, ans) })),
     focus: () => (S.shown && view ? (cur() ? S.chosen : true) : '') });
   function loadKeys() {
@@ -1068,7 +1095,7 @@ function create(o) {
       loadKeys();
       for (const x of cards.values()) if (!x.ended) both(x, el => {
         const n = el.querySelector('[data-k="msg"]'), t = n ? n.textContent : '';
-        el.innerHTML = propHtml(x.p, el.classList.contains('inline') ? 'inline' : 'corner');
+        el.innerHTML = propHtml(x.p);
         if (t) put(el.querySelector('[data-k="msg"]'), 'textContent', t);
         if (props.answered(x.p.agent, x.p.id)) for (const b of el.querySelectorAll('button')) b.disabled = true;   // answered: waiting for ChartBridge
       });
@@ -1084,11 +1111,11 @@ function create(o) {
     answer: (agent, id, ans) => answer(agent, id, ans),
     /* read only, for the tests and the console */
     state: () => ({ v3: S.v3, version: S.version, signedIn: S.signedIn, shown: S.shown, chosen: S.chosen, agents: agents.list().map(a => Object.assign({}, a)),
-      proposals: [...cards.values()].map(x => ({ agent: x.p.agent, id: x.p.id, ended: !!x.ended, corner: !x.corner.hidden && !propBox.classList.contains('ag-hide') })),
-      others: otherCounts().map(x => ({ key: x.key, name: x.name, n: x.n })), offText: AC.offText(offCtx()),
+      proposals: [...cards.values()].map(x => ({ agent: x.p.agent, id: x.p.id, ended: !!x.ended })),
+      others: otherCounts().map(x => ({ key: x.key, name: x.name, n: x.n })), corner: cornerLine && !cornerLine.hidden ? cornerLine.textContent : '', offText: AC.offText(offCtx()),
       feed: S.chosen ? feed.counts(S.chosen) : { notes: 0, plans: 0 }, light: cur() ? lightNow(cur()) : null, drawer: S.drawer, motion: S.motion, chart: !!S.chart, chartRoot: S.chartRoot, orders: [...S.orders.values()].map(x => ({ id: x.id, by: x.by, role: x.role, root: x.root })), trips: trips() }),
     chart: () => (S.chart ? S.chart.chart : null),
-    destroy() { unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); clearTimeout(othersTimer); S.shown = false; placeNotes(); hideBox(); propBox.removeEventListener('click', onCardClick); for (const x of cards.values()) x.corner.remove(); clearTimeout(timer); },
+    destroy() { unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); clearTimeout(othersTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
   };
   return api;
 }

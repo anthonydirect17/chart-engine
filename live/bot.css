@@ -202,7 +202,16 @@ body.ws-tight .bt-strip { padding: 2px 2px 0; }
 .bt-go { margin-left: auto; color: var(--ws-muted); }
 
 /* ---------------- copilot proposals: wherever Anthony is, instant (R3), Accept and Reject always buttons */
-.bt-props { position: fixed; right: 16px; bottom: 16px; z-index: 80; display: flex; flex-direction: column; gap: 10px; width: min(370px, calc(100vw - 32px)); pointer-events: none; }
+/* 1.17.0 (the re-review of c47a8a1): the corner never reaches the top bar (40 px) and scrolls inside when its cards need more
+   room; each card's name and its side, size and root stay at the card's top while it scrolls (.bt-prop-top, sticky), so
+   no Accept or Reject is ever in sight without them; a new card (at the top) moves no card already there (live/bot.js
+   keeps them where they were). --bt-corner-bottom: the room under it (the Agent tab's line for the agents, live/agent.css).
+   4 px of padding (and the same less at the edges) keeps the cards' outline in the box. */
+.bt-props { --bt-corner-bottom: 16px; position: fixed; right: 12px; bottom: calc(var(--bt-corner-bottom) - 4px); z-index: 80; display: flex; flex-direction: column; gap: 10px;
+  width: min(378px, calc(100vw - 24px)); box-sizing: border-box; padding: 4px; max-height: calc(100vh - 40px - 16px - var(--bt-corner-bottom) + 4px);
+  overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; scrollbar-width: thin; pointer-events: none; }
+.bt-props > * { flex: none; }
+.bt-prop-top { position: sticky; top: 0; z-index: 1; display: grid; gap: 7px; margin: -12px -12px 0; padding: 12px 12px 4px; border-radius: 11px 11px 0 0; background: var(--bt-copilot); }
 .bt-prop { pointer-events: auto; background: var(--bt-copilot); border: 1px solid var(--ws-accent); border-radius: 12px; box-shadow: 0 20px 50px rgba(0, 0, 0, .6), 0 0 0 4px color-mix(in srgb, var(--ws-accent) 14%, transparent); padding: 12px; display: grid; gap: 7px; color: var(--ws-text); font: 12px var(--ws-sans); }
 .bt-prop.bt-ended { border-color: var(--ws-line2); box-shadow: 0 20px 50px rgba(0, 0, 0, .6); }
 .bt-prop-h { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }

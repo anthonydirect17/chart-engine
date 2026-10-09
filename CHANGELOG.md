@@ -45,14 +45,12 @@ lead's default.
   ChartBridge's refusal shows under the button.
 - **Proposals:** side, quantity, root, kind and price, stop and target, risk, setup, confidence, reason, the account, and a
   live countdown to the plan's own expiry; Accept and Reject send `agentAnswer` (`agentSeen` the moment it shows). Accept
-  closes in the last 5 s, when ChartBridge would refuse it. In the tab for the agent shown, alone (the bot's and the other
-  agents' only counted in one line under it while the tab is shown); in the corner while it is closed.
+  closes in the last 5 s, when ChartBridge would refuse it. A card only in the tab, for the agent shown (the bot's and the
+  other agents' counted in one line under it); off the tab, counted in one line in the corner that opens the tab on them.
 - **One copilot key for the bot and every agent** (`AgentCore.copilotRouter`; `live/bot.js` hands it its proposals): with
-  the Agent tab open a key answers the shown agent's proposals only; elsewhere, with an agent proposal open, it answers
-  only when exactly one proposal is open in all, and otherwise says "More than one proposal is open: click the one you
-  mean". After an answer the keys rest 1 s, a proposal must have been on screen 1 s, and none in its last 5 s is answered
-  by a key, so a double press never answers a second proposal. With no agent proposal open the bot's answer is exactly as
-  in 1.16.0.
+  the Agent tab open a key answers the shown agent's proposals only; elsewhere it answers the bot's alone, never an
+  agent's (the Agent tab hands the router its proposals only while it is shown). After an answer the keys rest 1 s, a proposal must have been on screen 1 s, and none in its last 5 s is answered
+  by a key, so a double press never answers a second proposal. Off the Agent tab the bot's answer is exactly as in 1.16.0.
 - **A double-click never confirms** Auto or a kill switch's release, on the Agent tab and the Bot tab (a second click under
   400 ms after the first is ignored).
 - **His stream:** the agent's looks, thinking, lessons, notebook and status, its plans with their results, and its fills
@@ -124,8 +122,8 @@ lead's default.
     link, the bot's to the Bot tab and an agent's to that agent in the tab (as the picker); with none it keeps its height
     and says "No other proposals". It has no Accept or Reject, never changes height, and a count that rises is marked at
     once and stays still for 8 s (R3). So nothing on the tab moves when other proposals arrive or leave.
-  - On the Bot tab the bot's proposals show with Accept and Reject as before; with every tab closed the corner shows every
-    proposal as before.
+  - On the Bot tab the bot's proposals show with Accept and Reject as before (off the Agent tab, see the re-review of
+    c47a8a1 below).
   - The copilot keys on the Agent tab answer the shown agent only, never a hidden proposal: with none of its own open, or
     the tab on its "no agents" card (`AgentCore.copilotRouter`: the tab's focus may be `true`, holding every key), they
     answer nothing and say so. The Bot tab's keys are the same keys through the same router, so they answer no hidden bot
@@ -136,6 +134,22 @@ lead's default.
     1366 x 768, 1600 x 900, 1440 x 1000, 1920 x 1080 and 390 x 844; nothing moving while the others arrive and leave at
     1000 x 800, 1366 x 768, 1920 x 1080 and 390 x 844; the keys; the pop-out's slot and line; and, as before, the error
     band, the notices, the focus and clicks, ChartBridge's words in the foot and the kill switch.
+- **After the re-review of c47a8a1** (off the Agent tab, every agent's proposal and the bot's shared the corner, with no
+  height limit: at 1366 x 768 with the bot and two agents proposing its top was at -207 px, the top card's name off screen
+  with its Accept in sight, the top bar's Bot, settings and Agent buttons under it):
+  - An agent's proposal is answered only in the Agent tab: off it no agent's proposal is a card anywhere. One line of a
+    fixed height in the corner counts them, "Demo Agent: 1 proposal · Second Demo Agent: 1", each name opening the Agent
+    tab on that agent (a risen count marked, still); its room is kept while agents are known, so it moves no bot card.
+  - The copilot keys answer an agent's proposal only while the Agent tab is shown (they were global: off the tab a key
+    answered an agent's proposal when it was the only one open). Off the tab they answer the bot's, as 1.16.0. `agentSeen`
+    goes when the proposal shows in the tab's slot.
+  - The bot's corner never reaches the top bar (at most the window less the top bar and 16 px; it scrolls inside past
+    that); each bot card's name and its side, size and root line stay at the card's top while it scrolls (sticky); a new
+    bot card goes at the top and moves none already there (the corner keeps them in place when it scrolls).
+  - `npm run smoke:agent-targets` checks it at 1366 x 768 and 1920 x 1080 with two agents and the bot proposing: no agent
+    Accept or Reject anywhere, the line's counts and links, the corner below the top bar, every bot Accept in sight with
+    its own name line wherever the corner is scrolled, a new bot card moving no button, and the keys (it fails on
+    c47a8a1). `npm run smoke:agent` checks the corner's line and the keys off the tab.
 - Tests: `test/agent.test.js`, the agent part of `test/fake-v3.test.js`, `npm run smoke:agent` and `smoke:agent-targets`
   (screenshots `test/out/agent-*.png`), `npm run perf:agent`. The chart draws exactly as in 1.16.0. Page only, no
   recompile; COMPAT stays at ChartBridge 0.3.2.

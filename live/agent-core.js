@@ -820,6 +820,8 @@ const KEY_SAY = {
  *   - Elsewhere, no agent proposal open: the bot's oldest, exactly as 1.16.0 (no other rule touches it).
  *   - Elsewhere, an agent proposal open: exactly one proposal open (the bot's and every agent's) is answered; more than one,
  *     none is, and the page says "More than one proposal is open: click the one you mean".
+ *     (The Agent tab gives the router its proposals only while it is shown, the only place an agent's proposal is a card:
+ *     the re-review of c47a8a1. So on the page, elsewhere is the bot's alone, as 1.16.0.)
  *   And for every key answer but the bot's own 1.16.0 path: the keys rest 1 s after an answer, a proposal must have been on
  *   screen 1 s, and one in its last 5 s (or with no expiry) is never answered by a key.
  * Sources: add(name, { kind ('bot' or 'agents'; 'bot' for the name 'bot'), open: () => [{ id, agent, shownAt, answered,
