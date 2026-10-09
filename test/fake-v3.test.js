@@ -655,10 +655,10 @@ test('agents: plan checks in the contract\'s order; shadow logs and shows (no an
   // the window: before entryFrom and at entryUntil
   const early = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 13, 40) });   // 09:40 New York
   early.hello();
-  assert.match(early.plan().why, /outside the entry window \(09:45 to 15:00 ET\)/);
+  assert.match(early.plan().why, /^outside agent demo's entry window \(09:45 to 15:00 New York time\)$/);
   const late = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 19, 0) });     // 15:00 New York: not before entryUntil
   late.hello();
-  assert.match(late.plan().why, /outside the entry window/);
+  assert.match(late.plan().why, /^outside agent demo's entry window/);
   const any = await makeAgentDesk({ at: Date.UTC(2026, 9, 8, 19, 0), anyTime: true });   // tests and smokes only: no window
   any.hello();
   assert.equal(any.plan().why, null, '--agent-any-time: a plan at 15:00 passes the window');
@@ -836,7 +836,7 @@ test('agents: rules from the page (sections 3 and 7): every allowed value, saved
   assert.match(r({ roots: 'NQ,MNQ', maxQtyNQ: 3 }), /maxQtyNQ must be a whole number from 1 to 2/);
   assert.match(r({ maxQtyMNQ: 21 }), /from 1 to 20/);
   assert.match(r({ roots: 'MNQ' }), /maxQtyNQ is for a root not in roots/);
-  assert.match(r({ entryFrom: '09:29' }), /09:30 or later/);
+  assert.match(r({ entryFrom: '15:00', entryUntil: '10:00', flatAt: '15:55' }), /in the session, which runs from 18:00 to 17:00 New York time \(15:00 to 10:00 goes the wrong way round\)/);   // 0.5.2
   assert.match(r({ entryFrom: '9:45' }), /HH:MM/);
   assert.match(r({ entryUntil: '09:45' }), /before entryUntil/);
   assert.match(r({ flatAt: '11:30' }), /after entryUntil/);
@@ -862,7 +862,7 @@ test('agents: with no agents in config.txt every agent message is refused and no
   assert.equal(d.desk.diag().agents, undefined, '/diag agents only with the channel on');
 });
 
-test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; hello says 0.5.0; a v3 page gets the agent', async () => {
+test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; hello says 0.5.2; a v3 page gets the agent', async () => {
   const port = 18990 + Math.floor(Math.random() * 9);
   const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port), '--v3', '--agents=demo', '--agent-any-time', '--trading', '--test-controls', '--test-pin=5820'], { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise(r => child.stdout.once('data', r));
@@ -871,7 +871,7 @@ test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; h
     const unlock = (await post(port, '/pin/unlock', { pin: '5820' })).json.token;
     const token = JSON.parse((await get(port, '/session', unlock)).body).token;
     const a = await wsConnect(port, '/ws?unlock=' + encodeURIComponent(unlock), { Origin: own });
-    assert.equal((await a.next('hello')).version, 'fake-0.5.0');
+    assert.equal((await a.next('hello')).version, 'fake-0.5.2');
     a.send({ type: 'client', v: 3 }); a.send({ type: 'auth', token });
     const ag = await a.next('agent');
     assert.equal(ag.agent, 'demo'); assert.equal(ag.mode, 'shadow'); assert.equal(ag.account, 'Sim101', 'no account file: Sim101');
@@ -989,13 +989,58 @@ test('agents review S2: a refused duplicate never replaces the plan it copies; b
   assert.equal(a.proposals.get('dup1').state, 'open');
 });
 
-test('agents review S5: an account change puts the agent in shadow', async () => {
+test('ChartBridge 0.5.2 and its review: an account change keeps the mode only when keepMode names it; otherwise shadow, as until 0.5.1', async () => {
   const d = await makeAgentDesk();
+  const a = d.desk.agents.get('demo');
+  const free = n => { d.desk.acct.get(n).trade = true; d.desk.refreshAccounts(); d.desk.copier.followers.delete(n); };
+  const logged = () => d.desk.log.filter(x => x.file === 'agent-demo').pop().what;
   d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
-  d.desk.acct.get('SIM-F2').trade = true; d.desk.refreshAccounts(); d.desk.copier.followers.delete('SIM-F2');
-  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2' })), null);
-  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).mode, 'shadow');
-  assert.equal(d.agentTake('welcome').pop().mode, 'shadow', 'the agent is told');
+  free('SIM-F2'); free('SIM-F1');
+  // a 1.18.1 page names the mode its question showed: kept
+  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2', keepMode: 'auto' })), null);
+  assert.equal(d.desk.agentMsg(a).mode, 'auto');
+  assert.equal(d.agentTake('welcome').pop().mode, 'auto', 'the agent is told, in its mode');
+  assert.equal(logged(), 'account SIM-F2 (Sim), was SIM-AG1, set by the page; mode auto kept');
+  // an older page (no keepMode; its question said the agent goes to Shadow): shadow
+  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F1' })), null);
+  assert.equal(d.desk.agentMsg(a).mode, 'shadow');
+  assert.equal(d.agentTake('welcome').pop().mode, 'shadow');
+  assert.equal(logged(), 'account SIM-F1 (Sim), was SIM-F2, set by the page; mode shadow (was auto: the page did not say which mode it showed)');
+  // another page changed the mode after the question: shadow
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' });
+  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2', keepMode: 'auto' })), null);
+  assert.equal(d.desk.agentMsg(a).mode, 'shadow', 'the question named auto; the agent was in copilot');
+  assert.equal(logged(), 'account SIM-F2 (Sim), was SIM-F1, set by the page; mode shadow (was copilot: the page\'s question named auto)');
+  // keepMode must be a mode
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'copilot' });
+  assert.match(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F1', keepMode: 'fast' })), /^keepMode must be shadow, copilot or auto/);
+  assert.equal(d.desk.agentMsg(a).account, 'SIM-F2', 'refused: nothing changed');
+  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F1', keepMode: 'copilot' })), null);
+  assert.equal(d.desk.agentMsg(a).mode, 'copilot');
+  // still refused while it has a position (as before)
+  a.trade = { root: 'MNQ', pnl: 0 };
+  assert.match(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-F2', keepMode: 'copilot' })), /position/);
+});
+
+test('ChartBridge 0.5.2 review: the flatten sends nothing into a holiday halt (13:00 Thanksgiving) with fresh trades; it closes at the open', async () => {
+  const d = await makeAgentDesk({ at: Date.UTC(2026, 10, 26, 17, 30) });   // Thanksgiving 2026, 12:30 New York: open until the 13:00 halt
+  const a = d.desk.agents.get('demo');
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  d.plan({ price: 25400 }); d.tick(25399.75);
+  assert.ok(d.desk.agentMsg(a).position, 'filled before the halt');
+  const working = () => [...d.desk.orders.values()].filter(o => ['working', 'accepted', 'submitted'].includes(o.state) && d.desk.agentOfOrder(o) === 'demo').length;
+  const legs = working();
+  assert.ok(legs >= 2, 'its stop and target');
+  d.advance(30 * 60000); d.desk.tick('MNQ', 25401); d.take();             // 13:00: the halt, a trade under 5 s old
+  d.desk.everySecond();
+  assert.ok(d.desk.agentMsg(a).position, 'no market close into the halted market');
+  assert.equal(working(), legs, 'no cancel: its stop and target stay');
+  d.advance(60000); d.desk.tick('MNQ', 25401); d.desk.everySecond();
+  assert.equal(working(), legs, 'still nothing while the calendar says closed');
+  assert.ok(d.take('status').some(s => s.level === 'error' && /the market is shut, so ChartBridge sends no close until it opens/.test(s.text)));
+  d.advance(5 * 3600000 + 4 * 60000); d.desk.tick('MNQ', 25401); d.desk.everySecond();   // 18:05: the open
+  assert.equal(d.desk.agentMsg(a).position, null, 'flattened at the open');
+  assert.equal(working(), 0);
 });
 
 test('agents review V3: the checks run in the contract\'s order (a plan failing two gets the earlier reason); checks 2, 9, 10 and 11', async () => {
@@ -1409,4 +1454,46 @@ test('origin/main as built: the last NOT FLAT names both readings and why the ac
   m.act({ type: 'agentKill', agent: 'demo', on: true });
   m.advance(3000); m.desk.everySecond();
   assert.ok(got.some(x => x.type === 'status' && x.level === 'warn' && /^Agent demo: the cancel of its entry .* was not confirmed in 3 s/.test(x.text)), 'a v2 page gets it too');
+});
+
+test('ChartBridge 0.5.2: the full-session window (18:00 to 15:25, flat 15:55) in session time; the market closed; no flatten at midnight', async () => {
+  const NY = (d, h, mi) => Date.UTC(2026, 9, d, h + 4, mi || 0);   // October: New York is UTC less 4 hours
+  const d = await makeAgentDesk({ at: NY(8, 17, 50) });            // Thursday 17:50 (the break)
+  d.hello(); d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  const rules = { type: 'agentRules', cid: 'r', agent: 'demo', roots: 'NQ,MNQ', maxQtyNQ: 2, maxQtyMNQ: 20, entryFrom: '18:00', entryUntil: '15:25', flatAt: '15:55', maxExpireSec: 1800, maxTrades: 0, maxLosses: 0 };
+  assert.equal(reasonOf(d.act(rules)), null, '18:00 to 15:25, flat 15:55 is accepted');
+  assert.match(reasonOf(d.act(Object.assign({}, rules, { entryFrom: '15:30', entryUntil: '09:00' }))), /goes the wrong way round/);
+  assert.match(reasonOf(d.act(Object.assign({}, rules, { flatAt: '16:30' }))), /15:59 at the latest/);
+  d.tick(25400);
+  assert.match(d.plan({ price: 25390 }).why, /^the market is closed now/, '17:50: the break');
+  let px = 25400;
+  const at = t => { d.advance(t - d.now()); d.desk.tick('MNQ', px); d.desk.tick('NQ', 25400); };   // fresh trades, between its stop and target once held
+  at(NY(8, 23, 0));                                                // Thursday 23:00
+  assert.equal(d.plan({ price: 25390, expireSec: 1800 }).why, null, '23:00: inside, placed');
+  d.tick(25389.75); px = 25391;                                    // it fills: a position held from 23:00
+  const a = d.desk.agents.get('demo');
+  assert.ok(d.desk.agentMsg(a).position, 'held');
+  d.take('status');
+  for (const t of [NY(8, 23, 59), NY(9, 0, 0), NY(9, 0, 30), NY(9, 9, 0), NY(9, 15, 54)]) { at(t); d.desk.everySecond(); }
+  const st = d.take('status');
+  assert.ok(!st.some(x => /by its rules/.test(x.text)), 'no flatten across midnight: ' + JSON.stringify(st));
+  assert.ok(d.desk.agentMsg(a).position, 'still held at 15:54');
+  at(NY(9, 15, 55)); d.desk.everySecond();
+  assert.ok(d.take('status').some(x => x.text === 'demo flattened at 15:55 by its rules'), 'the flatten at 15:55');
+  assert.equal(d.desk.agentMsg(a).position, null);
+  // Sunday 18:00 opens; Saturday is closed
+  const sun = await makeAgentDesk({ at: NY(11, 18, 0) });
+  sun.hello(); sun.act({ type: 'agentMode', agent: 'demo', mode: 'auto' }); sun.act(rules); sun.tick(25400);
+  assert.equal(sun.plan({ price: 25390 }).why, null, 'Sunday 18:00: open');
+  const sat = await makeAgentDesk({ at: NY(10, 12, 0) });
+  sat.hello(); sat.act({ type: 'agentMode', agent: 'demo', mode: 'auto' }); sat.act(rules); sat.tick(25400);
+  assert.match(sat.plan({ price: 25390 }).why, /^the market is closed now/);
+  // Christmas Day 2026 (a CME holiday): closed; Christmas Eve 12:00 open, 13:20 (after the early close) closed
+  const NYd = (m, d2, h, mi) => Date.UTC(2026, m - 1, d2, h + 5, mi || 0);   // December: UTC less 5 hours
+  for (const [t, open] of [[NYd(12, 25, 10), false], [NYd(12, 24, 12), true], [NYd(12, 24, 13, 20), false]]) {
+    const x = await makeAgentDesk({ at: t });
+    x.hello(); x.act({ type: 'agentMode', agent: 'demo', mode: 'auto' }); x.tick(25400);
+    const why = x.plan({ price: 25390 }).why;
+    if (open) assert.equal(why, null); else assert.match(why, /^the market is closed now/);
+  }
 });

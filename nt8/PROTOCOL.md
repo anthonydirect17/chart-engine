@@ -2353,8 +2353,8 @@ newlines to ` / `, backslashes and control characters dropped, cut to length).
 |---|---|---|
 | `roots` | `NQ,MNQ` | traded, served, not quote-only roots |
 | `maxQty.<ROOT>` | `NQ 2`, `MNQ 20` | 1 to the hard ceiling: minis (NQ, ES) 2, micros (MNQ, MES) 20. The ceiling is a ChartBridge constant (`ChartBridgeAgents.HardCeiling`): raising it is a code change and a review |
-| `entryFrom` / `entryUntil` | `09:45` / `15:00` | New York time, `HH:MM`, from 09:30, `entryFrom` before `entryUntil` |
-| `flatAt` | `15:55` | after `entryUntil`, at most 15:59 |
+| `entryFrom` / `entryUntil` | `09:45` / `15:00` | New York time, `HH:MM`, in session order (0.5.2): the session runs from 18:00 to 17:00, so `entryFrom` may be any time from 18:00 and `entryFrom` comes before `entryUntil` in the session (18:00 to 15:25 runs across midnight; 15:30 to 09:00 goes the wrong way round and is refused). Until 0.5.1: from 09:30, on one calendar day |
+| `flatAt` | `15:55` | after `entryUntil` in session order, at most 15:59 |
 | `maxExpireSec` | `1800` | 60 to 1800 |
 | `maxTrades` | none | none, or 1 to 50 a day |
 | `maxLosses` | none | none, or 1 to 20 losing trades a day (stand down) |
@@ -2394,7 +2394,10 @@ in a new `welcome`.
 4. `qty` a whole number from 1 to `maxQty.<root>`; `stopTicks` and `targetTicks` whole numbers of 1 or more.
 5. `riskDollars` equals `stopTicks` x tick x point value x `qty` within $0.01.
 6. `expireSec` from 60 to `maxExpireSec`.
-7. New York time now from `entryFrom` up to (not including) `entryUntil`.
+7. The market open (0.5.2: not the 17:00 to 18:00 break, Friday 17:00 to Sunday 18:00, a CME holiday, or after the halt on an
+   NYSE holiday (13:00) or early close (13:15), as `ChartBridgeCme.Closed`; refused as "the market is closed now ...") and the
+   New York time now from `entryFrom` up to (not including) `entryUntil`, in session time: minutes since the 18:00 open, so
+   18:00 is 0, midnight 360 and 17:00 1380 (refused as "outside agent <id>'s entry window (18:00 to 15:25 New York time)").
 8. One at a time: no position for this agent, no working agent entry, no open proposal.
 9. `maxTrades`, `maxLosses` when set.
 10. The owner lock.
@@ -2446,7 +2449,7 @@ Conversely the bot, the copier and other agents refuse an agent's account. A LIV
 | `agentKill` | `cid` (optional), `agent`, `on` (*bool*) |
 | `agentSeen` | `agent`, `id`, `at` |
 | `agentAnswer` | `cid` (optional), `agent`, `id`, `answer` (`accept`/`reject`), `at` |
-| `agentAccount` | `cid` (optional), `agent`, `account` |
+| `agentAccount` | `cid` (optional), `agent`, `account`, `keepMode` (optional, 0.5.2: `shadow`, `copilot` or `auto`, the mode the page's question named; a 1.18.1 page sends it only to ChartBridge 0.5.2 or later, because 0.5.1 refuses a key it does not know) |
 | `agentRules` | `cid` (optional), `agent`, `roots`, `maxQtyNQ`, `maxQtyMNQ`, `maxQtyES`, `maxQtyMES` (each optional), `entryFrom`, `entryUntil`, `flatAt`, `maxExpireSec`, `maxTrades` (0 = none), `maxLosses` (0 = none) |
 
 | ChartBridge to page | fields | when |
@@ -2508,8 +2511,10 @@ Where the contract left a detail open, the safest simple choice was taken and is
   accept sends `accepted`, then `placed`. A cancel ChartBridge makes (expiry, the window, the heartbeat, the kill switch,
   leaving auto) answers `expired` with the reason; a proposal ended by the kill switch, a mode change or the heartbeat is
   `not answered`; NinjaTrader rejecting the entry answers `refused`.
-- **The window** (lead's default): outside `entryFrom` to `entryUntil` no agent entry works (before `entryFrom` too) and an
-  open proposal expires. After a restart an entry whose expiry is not on record is cancelled at once; the expiries and the
+- **The window** (lead's default; 0.5.2 in session time, Anthony's rulings 2026-10-08): outside `entryFrom` to `entryUntil`, in
+  session order from the 18:00 open, or while the market is closed, no agent entry works (before `entryFrom` too) and an open
+  proposal expires. With 18:00 to 15:25 an entry placed at 23:30 lives on past midnight; one still working at 15:25 is
+  cancelled. The day's counters, stand-down and plan ids still start over at 18:00, the start of the session. After a restart an entry whose expiry is not on record is cancelled at once; the expiries and the
   plan ids are kept in the day file (`plan<TAB><id>`, `entry<TAB><tag><TAB><expiry UTC ms>`). An `entry` line whose order
   NinjaTrader no longer lists is dropped when the day file is read and at the roll.
 - **Every start is shadow, and shadow cancels** (review A-S7): every agent starts in `shadow`, and the backstop below cancels any
@@ -2532,8 +2537,20 @@ Where the contract left a detail open, the safest simple choice was taken and is
 - **Kill** (lead's default): on, with one click: the unfilled entries cancelled and the proposals `not answered`; the agent's
   own `flatten` refused; the flat time still runs. Off needs the page's confirm (the page's side).
 - **The flatten** (lead's default): per root the agent owns (or has orders working on), from `flatAt` until the next
-  `entryFrom` (after 18:00 ET too: a position held overnight is flattened by its rules, "held a position outside its trading
-  hours"). It looks at the served contract and at any other contract month its own open trade holds (review A5: the trade
+  `entryFrom` in session order (0.5.2), and whenever the market is closed (the break, the weekend, a holiday or a halt). With
+  `entryFrom` 09:45 a position held overnight is flattened by its rules ("held a position outside its trading hours"); with
+  `entryFrom` 18:00 a position held from 22:00 across midnight is inside the session and is NOT flattened until `flatAt`. Over
+  a closed market (0.5.2 review: the calendar's closures and halts too, see "The market shut") the job sends nothing and
+  closes the position at the next open. A position whose trade record began in an earlier session (0.5.2 review: a restart
+  after 18:00 with a flatten that did not finish) is flattened at once, whatever the window says ("held a position from an
+  earlier session (its 15:55 flatten did not finish): flattened by its rules"); the closed-market rule still applies. The
+  roll keeps such a record as `carried<TAB><tag>` in the day file (a dropped stale record too, at a start), so a roll while
+  running followed by a restart still flattens it (the 0.5.2 re-review). Only that position counts: the agent's open trade
+  whose tag is carried, or (no trade record yet, after a start) a position under its own legs of a carried tag; a trade of
+  this session is never flattened because a carried line is still there. The line goes when the agent is flat on its roots,
+  on the next pass or at once when a plan's check 8 finds it flat. ChartBridge 0.5.1 does not know the line and treats the
+  day file as unreadable; it never rewrites a day file it cannot read, so it takes no entries for that agent on every run
+  until the file is deleted or 0.5.2 is back. It looks at the served contract and at any other contract month its own open trade holds (review A5: the trade
   follows its executions in any month of its roots). If the account is missing from NinjaTrader's list the job is kept, the
   pages get the NOT FLAT error every 10 s ("account not listed by NinjaTrader"), and the job goes on when the account is back,
   after 18:00 included (review A-S6).
@@ -2544,10 +2561,11 @@ Where the contract left a detail open, the safest simple choice was taken and is
   ledger quantity), even when the account holds more; with no trade followed (after a restart, before the executions are read
   again), the contracts its stop legs covered when the job started (lead's default). A pair the job owns stays the agent's until
   flat, so cancelling its own legs never hands it away.
-- **The market shut** (review A2, lead's default: fixed times; NinjaTrader's trading hours are not read and holidays are not
-  known): 17:00 to 18:00 New York time Monday to Thursday, and Friday 17:00 to Sunday 18:00. While shut the flatten sends
-  nothing at all (no cancel, no close: its stop and target stay) and the NOT FLAT error repeats every 60 s; it goes on at the
-  open.
+- **The market shut** (review A2, lead's default; NinjaTrader's trading hours are not read): 17:00 to 18:00 New York time
+  Monday to Thursday, and Friday 17:00 to Sunday 18:00; 0.5.2 review: also whenever `ChartBridgeCme.Closed` says closed (a CME
+  holiday, the halt at 13:00 on an NYSE holiday, the 13:15 early close), the calendar check 7 uses. While shut the flatten
+  sends nothing at all (no cancel, no close: its stop and target stay, even with trades still printing) and the NOT FLAT error
+  repeats every 60 s; it goes on at the open.
 - **The market trading in fact** (review A C1, D3): before the flatten cancels any leg of a position it owns, the root must have
   traded in the last 5 s (an early close, a holiday or a halt). Otherwise its stop and target stay, NOT FLAT says "market not
   trading: the stop and target stay" every 10 s, and it tries again each pass. Only the cancel step waits for it: once its
@@ -2625,13 +2643,22 @@ Where the contract left a detail open, the safest simple choice was taken and is
   account an agent sits on, its plans are refused at check 2, its unfilled entries are cancelled and its open proposals
   expire; an open position keeps its stop and target and the flat time still applies. Between agents: a chosen account
   blocks an agent sitting there on its default; two agents on their unchosen default Sim101 both stand down.
-- **agentAccount** (lead's default): a change puts the agent in `shadow` (it never carries Auto or Copilot onto a new account);
-  the agent gets `welcome` again; logged with SIM or LIVE.
+- **agentAccount** (0.5.2, Anthony 2026-10-08, and its review): a change KEEPS the agent's mode only when the message carries
+  `keepMode` and it equals the agent's mode now; otherwise the agent goes to `shadow`, as until 0.5.1: no `keepMode` (a page
+  before 1.18.1, whose question said the agent goes to Shadow) or another mode (another page changed it after the question was
+  shown). `keepMode` that is not `shadow`, `copilot` or `auto` is refused and nothing changes. The page asks once before a LIVE
+  account, naming the mode ("Agent manrae will trade LIVE account EVAL-A in Auto. Continue?"), sends that mode as `keepMode`,
+  and not confirmed nothing is sent; to a ChartBridge before 0.5.2 (by the hello's `version`) it sends no `keepMode` and its
+  question says Shadow. Unchanged: never the bot's account, a copier leader or follower, or another agent's; the owner lock; no
+  change while the agent has a position, a working entry or a proposal. The agent gets `welcome` again (with its mode); logged
+  with SIM or LIVE and the mode ("mode auto kept", or "mode shadow (was auto: the page did not say which mode it showed)",
+  "mode shadow (was copilot: the page's question named auto)").
 - **agentRules** (lead's default): roots from NQ, MNQ, ES and MES only (a root needs a hard ceiling); a `maxQty<ROOT>` left out
   for a chosen root is its hard ceiling; for a root not chosen only 0 is accepted. In the rules file a key left out keeps its
   default and a root without a `maxQty` line gets its ceiling. A rules change never lifts a loss stand-down for that day; the
   18:00 ET roll resets trades, losses, the stand-down and plan ids, and drops ended proposals (at most 50 ended ones are kept
-  between rolls). The loss stand-down is kept in the day file (`standDown<TAB><why>`), so a restart keeps it.
+  between rolls). The loss stand-down is kept in the day file (`standDown<TAB><why>`), so a restart keeps it; so are the
+  trades of an earlier session not yet flat (`carried<TAB><tag>`, 0.5.2).
 - **A start with a position** (review A-N5): 5 s after a start, an agent that owns a pair (its open trade, or its legs with a
   position) gets a `status` `error` to the pages ("holds a position or orders ... since ChartBridge started ... check
   NinjaTrader"); outside its trading hours it is flattened by its rules at once. A rules file that cannot be read gives the

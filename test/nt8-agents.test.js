@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.5\.[01]";/);   // 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0
+  assert.match(main, /public const string Version = "0\.5\.[012]";/);   // 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -58,7 +58,8 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   assert.match(bodies(acode, 'ResendCancels'), /double every = kv\.Value\.Tries >= ChartBridgeAgents\.CancelSlowAfter \? ChartBridgeAgents\.CancelSlowMs : ChartBridgeAgents\.FlatRetryMs;\s*if \(now - kv\.Value\.LastMs >= every\)/);
   // review A1 and A2: nothing sent while the market is shut; the pair asked again before every close, never more than its trade
   const step = bodies(acode, 'StepFlatten');
-  assert.match(step, /bool shut = ChartBridgeAgents\.MarketShut\(NowEt\(\)\);/);
+  // the 0.5.2 review: the calendar's closures and halts too (ChartBridgeCme.Closed), as check 7
+  assert.match(step, /DateTime etShut = NowEt\(\);\s*bool shut = ChartBridgeAgents\.MarketShut\(etShut\) \|\| ChartBridgeCme\.Closed\(etShut\);/);
   assert.match(step, /if \(!OwnsContract\(j\.Root, inst, a\)\) \{ DropJob\(j, key, a\); continue; \}\s*int cap = CloseCap\(j\.Root, inst, j\);[\s\S]*qty = Math\.Min\(qty, cap\);\s*if \(qty > 0\)/);
   // review A C1: the stop placed again over a shut market is a stop (never a market order), under the order lock, re-read first
   const restop = bodies(acode, 'SendStop');

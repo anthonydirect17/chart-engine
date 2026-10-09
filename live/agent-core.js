@@ -43,7 +43,9 @@ const PROPOSAL_STATES = ['open', 'accepted', 'rejected', 'withdrawn', 'not answe
 const RULE_ROOTS = ['NQ', 'MNQ', 'ES', 'MES'];
 const CEILING = Object.freeze({ NQ: 2, ES: 2, MNQ: 20, MES: 20 });
 /* section 3's limits */
-const LIMITS = Object.freeze({ firstEntry: '09:30', lastFlat: '15:59', expireMin: 60, expireMax: 1800, tradesMax: 50, lossesMax: 20 });
+const LIMITS = Object.freeze({ sessionOpen: '18:00', lastFlat: '15:59', expireMin: 60, expireMax: 1800, tradesMax: 50, lossesMax: 20 });
+/* ChartBridge 0.5.2: the window in session time, minutes since the 18:00 New York open (18:00 is 0, midnight 360, 17:00 1380) */
+const sessionMin = m => ((m - 18 * 60) % 1440 + 1440) % 1440;
 /* Manrae's defaults (contract section 3); ChartBridge's `agent` message carries the rules in force */
 const DEFAULT_RULES = Object.freeze({ roots: ['NQ', 'MNQ'], maxQty: { NQ: 2, MNQ: 20 }, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 1800, maxTrades: null, maxLosses: null });
 /* Accept closes this long before expiresAt: ChartBridge refuses an accept with under 5 s left (contract section 4) */
@@ -198,10 +200,11 @@ function rulesChange(agent, form, ctx, cid) {
   }
   const from = str(f.entryFrom).trim(), until = str(f.entryUntil).trim(), flat = str(f.flatAt).trim();
   for (const [name, t] of [['New entries from', from], ['New entries until', until], ['Flat at', flat]]) if (minutes(t) === null) return { error: name + ' must be a New York time such as 09:45: nothing was sent.' };
-  if (minutes(from) < minutes(LIMITS.firstEntry)) return { error: 'New entries start at ' + LIMITS.firstEntry + ' at the earliest: nothing was sent.' };
-  if (!(minutes(from) < minutes(until))) return { error: 'New entries must start before they end (' + from + ' to ' + until + '): nothing was sent.' };
-  if (!(minutes(flat) > minutes(until))) return { error: 'Flat at must be after new entries end (' + until + '): nothing was sent.' };
-  if (minutes(flat) > minutes(LIMITS.lastFlat)) return { error: 'Flat at is ' + LIMITS.lastFlat + ' at the latest: nothing was sent.' };
+  /* ChartBridge 0.5.2: in session order (the session runs from 18:00 to 17:00 New York time), as ChartBridge checks */
+  const sf = sessionMin(minutes(from)), su = sessionMin(minutes(until)), sl = sessionMin(minutes(flat));
+  if (sl > sessionMin(minutes(LIMITS.lastFlat))) return { error: 'Flat at is ' + LIMITS.lastFlat + ' at the latest (the session runs from 18:00 to 17:00 New York time): nothing was sent.' };
+  if (!(sf < su)) return { error: 'New entries must start before they end in the session, which runs from 18:00 to 17:00 New York time (' + from + ' to ' + until + ' goes the wrong way round): nothing was sent.' };
+  if (!(sl > su)) return { error: 'Flat at must be after new entries end (' + until + '), in the session from 18:00: nothing was sent.' };
   const exp = whole(f.maxExpireSec);
   if (!isInt(exp) || exp < LIMITS.expireMin || exp > LIMITS.expireMax) return { error: 'An entry\'s life must be a whole number of seconds from ' + LIMITS.expireMin + ' to ' + LIMITS.expireMax + ': nothing was sent.' };
   const tr = whole(f.maxTrades === '' || f.maxTrades === undefined ? '0' : f.maxTrades), lo = whole(f.maxLosses === '' || f.maxLosses === undefined ? '0' : f.maxLosses);
@@ -257,8 +260,12 @@ function accountChoices(accountsMsg, agent, others) {
 }
 /**
  * The page's change of the agent's account: { error } or { msg, live, confirm }. confirm, for a LIVE account, is the one
- * question the page asks first, in the page ("Manrae will trade LIVE account X. Continue?"). ChartBridge checks every rule
- * again (section 6).
+ * question the page asks first, in the page ("Agent demo will trade LIVE account X in Auto. Continue?"). ChartBridge checks
+ * every rule again (section 6). ctx: { workingEntry, openProposals, roots, version (ChartBridge's hello), askedMode (the mode
+ * the shown question named; the agent's mode when no question was asked) }.
+ * ChartBridge 0.5.2 and its review: the agent keeps its mode only when the message says which mode the page showed
+ * (keepMode) and that is still its mode; keepMode goes only to 0.5.2 or later (0.5.1 refuses a key it does not know), and an
+ * older ChartBridge puts the agent in Shadow, so its question says Shadow.
  */
 function accountChange(agent, name, choices, ctx, cid) {
   const a = agent || {}, cur = agentAccount(a).name, c = ctx || {};
@@ -273,14 +280,28 @@ function accountChange(agent, name, choices, ctx, cid) {
   const msg = { type: 'agentAccount' };
   if (cid) msg.cid = cid;
   msg.agent = a.agent; msg.account = name;
-  return { msg, live: !ch.sim, confirm: ch.sim ? '' : liveQuestion(a, name) };
+  const keeps = keepsMode(c.version), asked = MODES.includes(c.askedMode) ? c.askedMode : MODES.includes(a.mode) ? a.mode : 'shadow';
+  if (keeps) msg.keepMode = asked;
+  return { msg, live: !ch.sim, confirm: ch.sim ? '' : liveQuestion(Object.assign({}, a, { mode: asked }), name, c.version), mode: keeps ? asked : 'shadow' };
 }
-/** The one question before an agent takes a LIVE account: it names the mode, and that the agent goes to Shadow when its
- *  account changes (lead's default, ChartBridge does it: the review's S5). */
-function liveQuestion(a, name) {
-  const mode = MODE_NAME[a && a.mode] || 'Shadow';
-  return agentName(a) + ' is in ' + mode + ': it will trade LIVE account ' + name + (a && a.mode && a.mode !== 'shadow' ? ' once it is back in ' + mode : ' once you put it in Copilot or Auto') +
-    '. The agent goes to Shadow when its account changes. Continue?';
+/** The open LIVE question stands only while the agent is still in the mode it named when it opened (the 0.5.2 re-review): the
+ *  question is never redrawn with another mode. null while it stands; else the note that closes it (nothing is sent, and Set
+ *  asks again, naming the mode then). */
+function askStale(askedMode, agent) {
+  const a = agent || {};
+  if (!MODES.includes(askedMode) || a.mode === askedMode) return null;
+  return (validId(a.agent) ? a.agent : agentName(a)) + ' went to ' + (MODE_NAME[a.mode] || 'Shadow') + ' while the question said ' + MODE_NAME[askedMode] + ': nothing was sent. Choose Set to be asked again.';
+}
+/** Does this ChartBridge keep the mode when the account changes (0.5.2 or later, with keepMode)? */
+function keepsMode(version) { return atLeast(version, '0.5.2'); }
+/** The one question before an agent takes a LIVE account: it names the mode the agent will be in (ChartBridge 0.5.2, Anthony
+ *  2026-10-08: an account change keeps the mode; the review's S5). Before 0.5.2 ChartBridge puts the agent in Shadow, and the
+ *  question says so. Not confirmed: nothing is sent, the account stays. */
+function liveQuestion(a, name, version) {
+  const who = 'Agent ' + (a && validId(a.agent) ? a.agent : agentName(a)) + ' will trade LIVE account ' + name;
+  const mode = keepsMode(version) ? MODE_NAME[a && a.mode] || 'Shadow' : 'Shadow';
+  const older = !keepsMode(version) && a && a.mode && a.mode !== 'shadow' ? ' This ChartBridge (before 0.5.2) puts it in Shadow when its account changes.' : '';
+  return who + ' in ' + mode + (mode === 'Shadow' ? ' (nothing is placed until you choose Copilot or Auto)' : '') + '.' + older + ' Continue?';
 }
 
 /* ======================================================================== modes */
@@ -753,18 +774,20 @@ function decisionRecord(row, o) {
 
 /* ======================================================================== the session trail and the room */
 /**
- * His session as a trail from the rules' entryFrom to flatAt (09:45 to 15:55 by default), New York time. now and each event
+ * His session as a trail from the rules' entryFrom to flatAt (09:45 to 15:55 by default; ChartBridge 0.5.2: in session time, so 18:00
+ * to 15:55 runs across midnight), New York time. now and each event
  * in UTC ms; events [{ at, mark, tone, title }]. Returns { from, to, nowPct (0 to 100, null outside the trading day's
  * clock), hours: [{ label, pct }], marks: [{ pct, mark, tone, title }] } (marks outside the session are left out).
  */
 function sessionTrail(rules, now, events) {
   const r = parseRules(rules) || {};
   const from = minutes(r.entryFrom) !== null ? r.entryFrom : DEFAULT_RULES.entryFrom, to = minutes(r.flatAt) !== null ? r.flatAt : DEFAULT_RULES.flatAt;
-  const a = minutes(from), b = minutes(to), span = Math.max(1, b - a);
-  const minOf = ms => { const t = etParts(ms); return t.h * 60 + t.mi + t.s / 60; };
+  /* in session time (ChartBridge 0.5.2), so a session from 18:00 runs across midnight to its flat time */
+  const a = sessionMin(minutes(from)), b = sessionMin(minutes(to)), span = Math.max(1, b - a);
+  const minOf = ms => { const t = etParts(ms); return sessionMin(t.h * 60 + t.mi + t.s / 60); };
   const pct = m => Math.round(Math.min(100, Math.max(0, (m - a) / span * 100)) * 100) / 100;
-  const hours = [{ label: from, pct: 0 }];
-  for (let h = Math.floor(a / 60) + 1; h * 60 < b; h++) if (h * 60 - a >= 30 && b - h * 60 >= 30) hours.push({ label: p2(h) + ':00', pct: pct(h * 60) });
+  const hours = [{ label: from, pct: 0 }], step = Math.max(1, Math.ceil(span / 60 / 8));   // at most about 8 hour marks
+  for (let h = Math.floor(a / 60) + 1; h * 60 < b; h++) if (h % step === 0 && h * 60 - a >= 30 && b - h * 60 >= 30) hours.push({ label: p2((h + 18) % 24) + ':00', pct: pct(h * 60) });
   hours.push({ label: to, pct: 100 });
   const marks = [];
   for (const e of Array.isArray(events) ? events : []) {
@@ -895,7 +918,7 @@ return {
   validId, parseVersion, atLeast, offText,
   createAgents, pickAgent, agentName,
   parseRules, rulesLines, rulesForm, rulesChangeable, rulesChange, durationText,
-  accountMark, agentAccount, accountChoices, accountChange, liveQuestion,
+  accountMark, agentAccount, accountChoices, accountChange, keepsMode, liveQuestion, askStale,
   modesAllowed, accountTradable, modeMsg, killMsg,
   countdown, createProposals, endText, legPrices,
   createFeed, planLine,

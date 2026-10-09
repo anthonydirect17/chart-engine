@@ -9,6 +9,8 @@
 // (every v3 switch on unless options.switches names it false, as config.txt's off line), no Sim locks (a real follower is copied
 // through every gate; the bot trades the account chosen with botAccount, Sim101 by default, Sim or LIVE).
 import { OrderDesk, KEYS as V2_KEYS, allowedAccounts, onTickGrid } from './fake-orders.mjs';
+import { createRequire } from 'node:module';
+const ENGINE = createRequire(import.meta.url)('../src/chart-engine.js');   // ChartBridgeCme is a port of the engine's CME calendar
 
 export const SWITCHES = ['accountChecks', 'orderTypes', 'strategies', 'merge', 'cancelFromList', 'copier', 'bot'];
 export const V3_ACCOUNTS = [
@@ -79,7 +81,7 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   agentKill: ['type', 'cid', 'agent', 'on'],
   agentSeen: ['type', 'agent', 'id', 'at'],
   agentAnswer: ['type', 'cid', 'agent', 'id', 'answer', 'at'],
-  agentAccount: ['type', 'cid', 'agent', 'account'],
+  agentAccount: ['type', 'cid', 'agent', 'account', 'keepMode'],
   agentRules: ['type', 'cid', 'agent', 'roots', 'maxQtyNQ', 'maxQtyMNQ', 'maxQtyES', 'maxQtyMES', 'entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses'],
 });
 export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep'];
@@ -1050,6 +1052,21 @@ const hhmm = t => +t.slice(0, 2) * 60 + +t.slice(3);
 const NY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' });
 /** minutes after midnight in New York of a UTC ms time */
 export function nyMinutes(ms) { const o = {}; for (const x of NY.formatToParts(new Date(ms))) o[x.type] = x.value; return (+o.hour % 24) * 60 + +o.minute; }
+/* ChartBridge 0.5.2: the agent window in session time, minutes since the 18:00 New York open (18:00 is 0, midnight 360, 17:00 1380),
+   and closed when ChartBridgeCme.Closed says (the break, the weekend, a CME holiday, a holiday halt or early close) */
+export const sessionMinute = m => ((m - 18 * 60) % 1440 + 1440) % 1440;
+const NY_WALL = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+/** New York wall-clock seconds stored as if UTC (the engine's time), of a UTC ms time */
+export function nyWallSeconds(ms) { const o = {}; for (const x of NY_WALL.formatToParts(new Date(ms))) o[x.type] = x.value; return Date.UTC(+o.year, +o.month - 1, +o.day, +o.hour % 24, +o.minute, +o.second) / 1000; }
+export const agentMarketClosed = ms => ENGINE.util.cmeClosed(nyWallSeconds(ms));
+/** ChartBridge 0.5.2's rules check for the window (ChartBridgeAgent.RulesProblem), in its order and words */
+export function agentWindowProblem(from, until, flat) {
+  const f = sessionMinute(hhmm(from)), u = sessionMinute(hhmm(until)), fl = sessionMinute(hhmm(flat));
+  if (fl > sessionMinute(hhmm('15:59'))) return 'flatAt must be 15:59 at the latest (the session runs from 18:00 to 17:00 New York time)';
+  if (f >= u) return 'entryFrom must be before entryUntil in the session, which runs from 18:00 to 17:00 New York time (' + from + ' to ' + until + ' goes the wrong way round)';
+  if (fl <= u) return 'flatAt must be after entryUntil in the session, which runs from 18:00 to 17:00 New York time';
+  return null;
+}
 const pad2 = n => String(n).padStart(2, '0');
 const NY_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit' });
 /** the trading day of a UTC ms time: 'YYYY-MM-DD' of the session's end (a new day at 18:00 New York) */
@@ -1149,8 +1166,19 @@ Object.assign(OrderDeskV3.prototype, {
   agentStoodDown(a) { return this.agentClash(a) || a.standDown; },
   /** NinjaTrader lists the account (the fake: known, not archived, not hidden with /test/agent-unlist) */
   agentListed(name) { const x = this.acct.get(name); return !!x && x.state !== 'archived' && !this.unlisted.has(name); },
-  agentOutside(a, t) { if (this.agentAnyTime) return false; const ny = nyMinutes(t); return ny < hhmm(a.rules.entryFrom) || ny >= hhmm(a.rules.entryUntil); },
-  agentFlatHours(a, t) { if (a.forceFlatHours) return true; if (this.agentAnyTime) return false; const ny = nyMinutes(t); return ny >= hhmm(a.rules.flatAt) || ny < hhmm(a.rules.entryFrom); },
+  agentOutside(a, t) {
+    if (this.agentAnyTime) return false;
+    if (agentMarketClosed(t)) return true;
+    const s = sessionMinute(nyMinutes(t));
+    return s < sessionMinute(hhmm(a.rules.entryFrom)) || s >= sessionMinute(hhmm(a.rules.entryUntil));
+  },
+  agentFlatHours(a, t) {
+    if (a.forceFlatHours) return true;
+    if (this.agentAnyTime) return false;
+    if (agentMarketClosed(t)) return true;
+    const s = sessionMinute(nyMinutes(t));
+    return s >= sessionMinute(hhmm(a.rules.flatAt)) || s < sessionMinute(hhmm(a.rules.entryFrom));
+  },
   agentRulesOut(a) { const r = a.rules; return { roots: r.roots.slice(), maxQty: Object.assign({}, r.maxQty), entryFrom: r.entryFrom, entryUntil: r.entryUntil, flatAt: r.flatAt, maxExpireSec: r.maxExpireSec, maxTrades: r.maxTrades, maxLosses: r.maxLosses }; },
   agentMsg(a) {
     return { type: 'agent', agent: a.id, name: a.name, build: a.build, enabled: true, connected: a.connected, mode: a.mode, account: a.account, sim: this.agentSim(a), rules: this.agentRulesOut(a),
@@ -1278,6 +1306,7 @@ Object.assign(OrderDeskV3.prototype, {
   check_agentAccount(m) {
     const a = this.agents.get(m.agent), name = m.account, x = typeof name === 'string' ? this.acct.get(name) : null;
     if (typeof name !== 'string' || !name || name.trim() !== name) return 'account must be an account name';
+    if (m.keepMode !== undefined && !['shadow', 'copilot', 'auto'].includes(m.keepMode)) return 'keepMode must be shadow, copilot or auto (the mode the page\'s question named)';
     if (/^(Backtest|Playback)/i.test(name)) return name + ' is a Backtest or Playback account: an agent never trades one';
     if (!x || x.state === 'archived') return name + ' is not in NinjaTrader';
     if (name === a.account) return name + ' is already ' + a.id + '\'s account';
@@ -1295,10 +1324,16 @@ Object.assign(OrderDeskV3.prototype, {
     return null;
   },
   do_agentAccount(m) {
-    const a = this.agents.get(m.agent), old = a.account, was = a.mode;
+    const a = this.agents.get(m.agent), old = a.account;
     a.account = m.account; a.chosen = true;           // written to agent-<id>-account.txt: now the agent's
-    a.mode = 'shadow';                              // lead's default: a new account starts in shadow (nothing was open: the change needs that)
-    this.agentLogLine(a, 'account ' + m.account + ' (' + (this.agentSim(a) ? 'Sim' : 'LIVE') + '), was ' + old + ', set by the page; mode shadow (was ' + was + ')');
+    /* ChartBridge 0.5.2 (Anthony 2026-10-08, and its review): the mode is kept only when the page says which mode its question
+       named (keepMode) and that is the mode now; without it (a page before 1.18.1) or when another page changed the mode since,
+       shadow, as until 0.5.1 */
+    const was = a.mode, kept = m.keepMode !== undefined && m.keepMode === was;
+    if (!kept) a.mode = 'shadow';
+    const modeSay = kept ? 'mode ' + was + ' kept' : was === 'shadow' ? 'mode shadow'
+      : 'mode shadow (was ' + was + (m.keepMode === undefined ? ': the page did not say which mode it showed' : ': the page\'s question named ' + m.keepMode) + ')';
+    this.agentLogLine(a, 'account ' + m.account + ' (' + (this.agentSim(a) ? 'Sim' : 'LIVE') + '), was ' + old + ', set by the page; ' + modeSay);
     this.agentToAgent(a, this.agentWelcome(a));
     this.agentNotify(a);
   },
@@ -1316,10 +1351,7 @@ Object.assign(OrderDeskV3.prototype, {
     }
     for (const r of Object.keys(AGENT_CEILING)) if (!roots.includes(r) && m['maxQty' + r] !== undefined && m['maxQty' + r] !== 0) return 'maxQty' + r + ' is for a root not in roots (only 0 is taken there)';
     for (const k of ['entryFrom', 'entryUntil', 'flatAt']) if (typeof m[k] !== 'string' || !TIME_RX.test(m[k])) return k + ' must be a New York time HH:MM';
-    if (hhmm(m.entryFrom) < hhmm('09:30')) return 'entryFrom must be 09:30 or later';
-    if (!(hhmm(m.entryFrom) < hhmm(m.entryUntil))) return 'entryFrom must be before entryUntil';
-    if (!(hhmm(m.flatAt) > hhmm(m.entryUntil))) return 'flatAt must be after entryUntil';
-    if (hhmm(m.flatAt) > hhmm('15:59')) return 'flatAt must be 15:59 at the latest';
+    { const w = agentWindowProblem(m.entryFrom, m.entryUntil, m.flatAt); if (w) return w; }   // 0.5.2: session order
     if (!isInt(m.maxExpireSec) || m.maxExpireSec < 60 || m.maxExpireSec > 1800) return 'maxExpireSec must be a whole number from 60 to 1800';
     if (!isInt(m.maxTrades) || m.maxTrades < 0 || m.maxTrades > 50) return 'maxTrades must be 0 (none) or a whole number from 1 to 50';
     if (!isInt(m.maxLosses) || m.maxLosses < 0 || m.maxLosses > 20) return 'maxLosses must be 0 (none) or a whole number from 1 to 20';
@@ -1523,7 +1555,8 @@ Object.assign(OrderDeskV3.prototype, {
     // 6. expiry
     if (!isInt(m.expireSec) || m.expireSec < 60 || m.expireSec > a.rules.maxExpireSec) return 'expireSec must be from 60 to ' + a.rules.maxExpireSec;
     // 7. the entry window
-    if (!this.agentAnyTime) { const t = nyMinutes(this.now()); if (t < hhmm(a.rules.entryFrom) || t >= hhmm(a.rules.entryUntil)) return 'outside the entry window (' + a.rules.entryFrom + ' to ' + a.rules.entryUntil + ' ET)'; }
+    if (this.agentOutside(a, this.now())) return agentMarketClosed(this.now()) ? 'the market is closed now (the 17:00 to 18:00 break, the weekend, a CME holiday or a holiday halt): no entry for agent ' + a.id
+      : 'outside agent ' + a.id + '\'s entry window (' + a.rules.entryFrom + ' to ' + a.rules.entryUntil + ' New York time)';   // ChartBridge's words (WindowRefusal)
     // 8. one at a time
     if (a.trade) return a.id + ' has a position: one at a time';
     if (this.agentWorkingEntries(a).length) return a.id + ' has a working entry: one at a time';
@@ -1732,7 +1765,7 @@ Object.assign(OrderDeskV3.prototype, {
      are cancelled the market must have traded on that root in the last 5 s (NOT FLAT "market not trading" every 10 s); a close
      never exceeds what the agent's trade holds, and when its part is closed and the account holds more, the job ends with a
      warning; not flat 10 s after the start, NOT FLAT every 10 s. */
-  agentMarketShut(t) { return this.marketShutForce !== null ? this.marketShutForce : this.agentAnyTime ? false : marketShut(t); },
+  agentMarketShut(t) { return this.marketShutForce !== null ? this.marketShutForce : this.agentAnyTime ? false : marketShut(t) || agentMarketClosed(t); },   // 0.5.2 review: the calendar's halts too (ChartBridgeCme.Closed)
   agentTradingNow(root, t) { return t - (this.lastAt[root] || -Infinity) <= AGENT_TIMING.tradingFreshMs; },
   agentOwnsPair(a, root) { return this.ownerOf(a.account, root) === 'agent:' + a.id; },
   /** why an account takes no exit (ChartBridgeAccounts.ExitAllowed's words), or null */
@@ -1801,8 +1834,9 @@ Object.assign(OrderDeskV3.prototype, {
       if (!this.agentFlatHours(a, t)) return;
       const busy = !!this.agentPosition(a) || [...this.orders.values()].some(o => isWorking(o) && this.agentOfOrder(o) === a.id);
       if (!busy) return;
-      const ny = nyMinutes(t), atFlat = ny >= hhmm(a.rules.flatAt) && ny < 18 * 60;
-      if (!this.agentStartJob(a, atFlat ? a.id + ' flattened at ' + a.rules.flatAt + ' by its rules' : a.id + ' held a position outside its trading hours (' + a.rules.flatAt + ' to ' + a.rules.entryFrom + '): flattened by its rules', true)) return;
+      const atFlat = sessionMinute(nyMinutes(t)) >= sessionMinute(hhmm(a.rules.flatAt)), closed = agentMarketClosed(t);   // 0.5.2: from flatAt to the session's end
+      if (!this.agentStartJob(a, atFlat ? a.id + ' flattened at ' + a.rules.flatAt + ' by its rules'
+        : a.id + ' held a position outside its trading hours (' + a.rules.flatAt + ' to ' + a.rules.entryFrom + (closed ? ', or the market closed' : '') + '): flattened by its rules', true)) return;
       a.flatJob.why = atFlat ? 'flat time' : 'outside its trading hours';
     }
     this.agentFlatStep(a, t);
