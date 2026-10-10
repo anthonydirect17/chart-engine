@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.20.0 (2026-10-10): On/Off, the spend readout and the hero picker on the Agent tab
+
+Anthony's request (NOTE_HOME_2026-10-08; DECISION 2026-10-09 v and w): an On/Off switch that ends the agent's program so
+API spend is $0, the agent of his choice started from the app, the live agent's spend next to it, and heroes by name.
+Page only, no recompile. Needs Bot-Lab's PC helper (`manrae/helper.py`, registered at sign-in by
+`tools/manrae_helper.ps1`); without it the tab says so and offers no On, and everything else works as 1.19.0.
+
+- **On/Off** (a new Agent section at the top of the left column): On asks the PC helper on `http://localhost:8767` to start
+  the agent's runner with the build picked (no window, no agent session); Off asks it to end the runner. Kill and Shadow
+  are unchanged: neither stops model calls, Off does.
+- **Off in a trade** asks, in the page: "Flatten and turn him off?". Flatten and turn off sends the page's own Flatten for
+  his account and root (`trade.js` `flattenAgent`, the chart's Flatten message), then Off once ChartBridge says he is
+  flat; not flat in 30 s, he stays on and the line says so. Keep him on sends nothing. The pop-out has no order
+  connection: it says to flatten on the main page or in NinjaTrader first.
+- **Spend:** this session's and the overall dollars of the live agent only (the runner's own journal of its calls; never
+  training or exams), beside On/Off.
+- **The picker** (DECISION w): in Copilot, in Auto and on a LIVE account, heroes only; in Shadow on a Sim account, heroes
+  and the builds over the Shadow bar (until Anthony sets the bar, every build). While a build that is not a hero runs,
+  Copilot and Auto are closed and say why (the runner refuses them too). The picker is closed while he runs: Off first.
+- **Names** (DECISION v): the header shows the agent's name as his hello says it (a hero's name, "Demo 2"; a build that is
+  not a hero shows its build id); the build id and stamp moved from the header to a Build row under Status.
+- **Auto-On and the daily cap** (folded under the section): an auto-On time (New York) and a dollar cap a session, kept by
+  the helper; a new cap takes effect at his next start.
+- Every call to the helper carries this page's PIN unlock; the helper checks it with ChartBridge's `GET /session`.
+- Tests: `test/agent-helper.test.js` (in `npm test`) and `npm run smoke:onoff` against the fake bridge and a fake helper
+  (`test/fake-helper.mjs`); `npm run smoke:agent` checks the build in the Build row.
+
 ## 1.19.0 (2026-10-08): Kit version 1
 
 A shared look for Anthony's trading apps, as Anthony approved it on 2026-10-08 (`docs/KIT.md`). It is added alongside the

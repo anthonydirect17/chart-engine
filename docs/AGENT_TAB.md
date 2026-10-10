@@ -16,6 +16,8 @@ every one again.
 |---|---|
 | `live/agent-core.js` | `AgentCore`: the logic, no page in it (Node tests run it): agents and the picker, proposals and their countdown, the feed, the rule form and its checks, the account chooser, the agent's orders by its mark, the one copilot-key router, and board F's light (`lightState`), stream tones and drawer records (`rowTone`, `decisionRecord`), session trail (`sessionTrail`), room (`roomLines`) and Motion switch (`motionPref`) |
 | `live/agent.js` | `AgentDesk`: draws the tab from AgentCore on the window's one v3 connection |
+| `live/agent-helper.js` | `AgentHelper` (1.20.0): On/Off, the spend readout, the hero picker and the names; its client for the PC helper on localhost:8767 |
+| `test/agent-helper.test.js`, `test/fake-helper.mjs`, `test/agent-onoff-smoke.mjs` | its unit tests, a fake PC helper, and `npm run smoke:onoff` |
 | `live/agent.css` | its look: board F (below), scoped to the tab |
 | `live/fonts/agent-fonts.css` | Chakra Petch and JetBrains Mono from this PC (Latin subset, `OFL-agent.txt` beside them) |
 | `live/agent.html` | the tab in its own window (Pop out, for a third monitor), on its own v3 connection |
@@ -138,7 +140,7 @@ decision in a drawer over the right column, outlined in that decision's colour:
 
 ## What the tab shows
 
-- **The strip:** the agent's initials, name (purple) and build (as its hello says them), connected with the heartbeat's
+- **The strip:** the agent's initials and name (purple; 1.20.0: the build id and stamp are in the Build row under Status), connected with the heartbeat's
   age, the mode, the account with its SIM or LIVE mark, the position, KILLED or STOOD DOWN with why, and while ChartBridge
   says the agent holds the owner lock, "OWNS SIM-AG1 MNQ"; the Motion switch and Pop out. With two or more agents, a
   picker (the choice is kept in this browser).
@@ -208,6 +210,34 @@ decision in a drawer over the right column, outlined in that decision's colour:
   phone the controls, then the proposal and the stream, then the chart, the words under the mode, the account and the rules
   keeping their two lines while empty so they move nothing under them; on a phone everything stacks, with no sideways scroll
   (the workspace's top bar wraps while the tab is open there).
+
+## On/Off, spend and the hero picker (chart 1.20.0)
+
+DECISION 2026-10-09 v and w. The page talks to Bot-Lab's PC helper (`manrae/helper.py`), one small process per PC started
+at sign-in, which starts and stops the agent's runner. The logic is `live/agent-helper.js` (`AgentHelper`, Node-tested in
+`test/agent-helper.test.js`); `live/agent.js` draws it at the top of the left column.
+
+| part | what it does |
+|---|---|
+| Build | the picker: heroes, and in Shadow on a Sim account the builds over the Shadow bar; heroes only in Copilot, Auto and on a LIVE account. Closed while he runs. |
+| On | `POST http://localhost:8767/on {agent, build}`: the helper starts his runner (fetching a missing build from The Desk) once NinjaTrader is connected |
+| Off | `POST /off {agent}`: the helper ends his runner; no model calls from then. In a trade it asks first (below). |
+| Session, Overall | the live agent's dollars (his runner's own journal), this session (18:00 to 17:00 New York) and overall on this PC |
+| Auto-On and daily cap | `POST /settings {agent, autoOn, cap}`: an auto-On time (HH:MM New York) and a dollar cap a session; a new cap applies at his next start |
+| Build row (Status) | the build id and stamp, as his hello says them; the header shows only his name |
+
+- **Off in a trade:** "<name> holds long 1 MNQ on SIM-AG1. Flatten and turn him off?" Flatten and turn off sends the page's
+  own Flatten for his account and root (`trade.js` `flattenAgent`: the chart's Flatten message, which ChartBridge lets
+  through the agent's lock as an exit) and sends Off once his `agent` message says flat, 30 s at most; not flat by then,
+  he stays on and the line says so. Keep him on sends nothing. The page never builds an order for him.
+- **A build that is not a hero** runs in Shadow on a Sim account only: Copilot and Auto are closed with the reason, and the
+  runner refuses every plan in any other mode or account.
+- **Every helper call** carries this page's PIN unlock (`X-ChartBridge-Unlock`); the helper asks ChartBridge's `GET /session`
+  whether it holds. The helper answers only this page's origin, on 127.0.0.1.
+- **No helper on the PC:** "The PC helper is not running on this PC", no On or Off; everything else as before.
+- Tests: `npm run smoke:onoff` (the workspace against the fake bridge and `test/fake-helper.mjs` on 8767: the picker by
+  mode, On with a build that is not a hero and with a hero, the header and the Build row, Off flat, Off in a trade with
+  both answers, the settings, a PC with no helper). Screenshots `agent-onoff-off`, `agent-onoff-on`, `agent-onoff-ask`.
 
 ## Page messages (contract section 7), exactly
 

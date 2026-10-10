@@ -44,6 +44,7 @@
     { "from": "live/agent.html", "to": "agent.html" },
     { "from": "live/agent.js", "to": "agent.js" },
     { "from": "live/agent-core.js", "to": "agent-core.js" },
+    { "from": "live/agent-helper.js", "to": "agent-helper.js" },
     { "from": "live/agent.css", "to": "agent.css" },
     { "from": "src/chart-engine.js", "to": "src/chart-engine.js" },
     { "from": "live/fonts/plex.css", "to": "fonts/plex.css" },

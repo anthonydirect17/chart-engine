@@ -2986,6 +2986,7 @@ function startAgent() {
     els: { tab: $('wsAgentTab'), view: $('agView') }, tradingKeys: () => HK,
     copilotKeys: () => (DS.on && DS.hk ? DS.hk : null),
     openBot: () => { if (botDesk) botDesk.showTab(true); },        // "Bot: 1 proposal" under the agent's proposal: the Bot tab answers it
+    flatten: (account, root) => core.flattenAgent(account, root),   // On/Off's "Flatten and turn him off?" Yes (1.20.0)
     onTab: on => {
       document.body.classList.toggle('ag-on', on);
       if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); }   // one tab at a time
