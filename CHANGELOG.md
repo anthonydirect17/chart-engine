@@ -1,5 +1,30 @@
 # Changelog
 
+## ChartBridge 0.5.3 (2026-10-10): the retired accounts line goes; one line for any unknown config.txt key
+
+Anthony's approved cuts (2026-10-10, items C1 to C4 of the cut list). ChartBridge only: recompile once (update-pc stages
+it); no page change, and every page keeps working with it.
+
+- **The one-time conversion of the `accounts` line is gone** (0.5.1 read the line once, on each PC's first 0.5.1 start, to
+  hide the connected accounts it did not name). All three PCs were sent 0.5.2 on 2026-10-09, and any 0.5.1 or later run writes
+  `accounts-detail.txt`, after which the conversion never runs again. Accounts follow NinjaTrader as since 0.5.1: an account seen Connected is listed,
+  unchecked when new. Nothing can trade that could not before: this code only ever hid accounts, never checked one.
+  `accounts-detail.txt` now holds the connected times only (its old `converted` line is skipped and dropped at the next
+  save; going back to 0.5.2 finds the file there and converts nothing either).
+- **Any config.txt key ChartBridge does not read is said once per load** in the Output window: "config.txt: `<key>` is not
+  a ChartBridge setting; the line does nothing". The retired `accounts` and `quoteHours` lines get this line instead of
+  their own special notes, and a mistyped key (`tradeAcounts`) is no longer silently ignored. A `maxQty.<ROOT>` value that is
+  not a whole number says so (the cap stays the default 1, as before). Every key ChartBridge reads, the v3 off-lines
+  included, is still read exactly as before, and `port`, `days`, `tickHours` and `rangeHours` with a value that is not a
+  number are still ignored without that line.
+- **`notConnectedYet` is gone from each account** in the `accounts` message (always false since 0.5.1; no page ever read it).
+- **Stale text fixed:** ChartBridge.cs's header names no version (the version is `ChartBridgeServer.Version`), the install
+  notes point at `nt8/install-files.json` instead of naming 4 of the 12 files, and gate 2 is described as the Account page's
+  checkmark (with `tradeAccounts` only for `accountChecks = off` and the first start's pre-check), in README and the headers.
+- Tests: `npm run check:orders` (the accounts section: the generic line for accounts, quoteHours, a mistyped key and a bad
+  maxQty value; no line for any key ChartBridge reads; no conversion on a run without `accounts-detail.txt`), and
+  `test/nt8-source.test.js`.
+
 ## 1.19.0 (2026-10-08): Kit version 1
 
 A shared look for Anthony's trading apps, as Anthony approved it on 2026-10-08 (`docs/KIT.md`). It is added alongside the

@@ -140,15 +140,13 @@ line; recompile or restart NinjaTrader after a change):
 | `days`, `tickHours` | `5`, `8` | 1-minute history days; tick backfill cap for seconds and range bars. |
 | `rangeHours` | `2` | 0.3.5: the hours of recent trades a Range or seconds chart opens with (1 to 8). |
 | `profileRoots` | `MNQ, NQ, ES, MES` | 0.3.5: when ChartBridge starts after 18:00 ET, the instruments whose session so far is loaded once, one at a time in this order, for an exact volume profile. Others count from the live trades ("since HH:MM ET"). |
-| `quoteHours` | none | No longer used (ChartBridge 0.3.7 removed the by-date tick load it served; since 0.3.5 every Range and seconds chart gets the served window). The line is noted once in the Output window and does nothing; it can go. |
-| `accounts` | none | No longer used (ChartBridge 0.5.1): the accounts follow NinjaTrader, every account it has except Backtest and Playback. The line is noted once in the Output window and does nothing; it can go. |
 | `postFills` | `false` | `true` also sends every fill to The Desk (see `nt8/PROTOCOL.md`). |
 | `deskUrl` | `http://localhost:8800` | Where The Desk runs. |
 | `bars` | off | `on` sends each session's 1-minute bars to The Desk after the close (ChartBridge 0.3.6, see below). |
 | `barsRoots` | `NQ, MNQ, ES, MES` | Whose bars `bars = on` sends. |
 | `pc` | the Windows computer name | This PC's name in the bars messages, e.g. `HOME` or `WORK`. |
 | `trading` | `false` | `true` turns on order entry from the chart (see below). |
-| `tradeAccounts` | none | Accounts the chart may trade, e.g. `Sim101, <eval name>`. Exact names, no wildcard; Backtest and Playback never. |
+| `tradeAccounts` | none | Exact account names, e.g. `Sim101, <eval name>`, no wildcard; Backtest and Playback never. With `accountChecks` on (the default) they only come pre-checked on the first start (no `accounts.txt` yet); with `accountChecks = off` they are the accounts the chart may trade. |
 | `maxQty.MNQ` | `1` | Position cap per instrument root, one line per root (`maxQty.NQ = 1`, ...). |
 | `maxTicksAway` | none | ChartBridge 0.3.7: a limit or stop price at most this many ticks from the last price (none: no limit; before 0.3.7 always 200). A value that is not a whole number of 1 or more means no limit, said in the Output window and to the signed-in pages. |
 | `maxBracketTicks` | none | ChartBridge 0.3.7: a bracket at most this many ticks (0.3.8: a market or resting entry's stop and target ticks, and a `plan`'s). None: no limit. Same rule for a mistyped value. |
@@ -162,6 +160,7 @@ line; recompile or restart NinjaTrader after a change):
 | `bot` | on | 0.4.0: the bot channel (`/bot`, its own secret in `bot-secret.txt`); auto and accepted proposals trade the account chosen on the Bot tab (Sim101 until you choose another, kept in `bot-account.txt`), Sim or LIVE, marked plainly (`bot = off` turns it off). |
 | `botRoot` | `MNQ` | 0.4.0: the one root the bot may trade (1 contract). |
 | `botLibrary` | `bot-library.json` | 0.4.0: the file `GET /bot-library` serves to ChartBridge's own page (next to `config.txt`, or a full path; `.json`, at most 2 MB). |
+| any other key | | Does nothing. ChartBridge 0.5.3 says so once in the Output window each time it reads `config.txt`: "config.txt: `<key>` is not a ChartBridge setting; the line does nothing". The retired `accounts` (0.5.1) and `quoteHours` (0.3.7) lines are such keys; they can go. A `maxQty.<ROOT>` line whose value is not a whole number is said the same way (the cap stays 1). |
 
 **This PC only** (ChartBridge 0.3.1). Windows' web server (HTTP.sys) listens on every network interface and
 matches only the `Host` header, so the `localhost` address alone does not keep other devices out. ChartBridge
@@ -504,9 +503,8 @@ program on this PC, never AI: **ChartBridge places every bot order**, inside its
 Decided by Anthony on 2026-09-29: market buy and sell, limit and stop by clicking a price, brackets (stop
 and target in ticks, per instrument, placed as an OCO pair), Flatten and Cancel all, **one click while
 Armed is on**. Orders go through NinjaTrader's own order system (ChartBridge 0.3 and later, protocol v2 in
-`nt8/PROTOCOL.md`), so the broker and the prop firm see NinjaTrader orders. Lucid's written OK on custom
-front ends was requested and had not arrived when this was written; adding the evals to `tradeAccounts` is
-Anthony's call once it does.
+`nt8/PROTOCOL.md`), so the broker and the prop firm see NinjaTrader orders. Which accounts may trade is Anthony's call:
+the checkmarks on the Account page (gate 2 below).
 
 **Turn it on** in `Documents\NinjaTrader 8\ChartBridge\config.txt`, then recompile or restart NinjaTrader:
 
@@ -517,7 +515,8 @@ maxQty.MNQ = 2
 maxQty.MES = 2
 ```
 
-Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` first.
+Then check the accounts that may trade on the Account page: only checked accounts can be picked for orders
+(`tradeAccounts` only pre-checks its names on the first start). Use `Sim101` first.
 
 **The order bar** (above the chart, only with ChartBridge 0.3 or later):
 
@@ -529,11 +528,11 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   is off** (except Flatten, which works with Armed off, 1.11.0), and nothing asks for confirmation while it is on:
   one click sends the order. The one exception (1.13.0, Anthony): the first order with no stop after each page load
   (see NO STOP below).
-- **Account** (only `tradeAccounts`), **Qty** (a select, 1 to 9; the choices over that instrument's cap are off and
+- **Account** (only the checked accounts), **Qty** (a select, 1 to 9; the choices over that instrument's cap are off and
   the cap shows beside it, "max 5"; the last qty picked is remembered per instrument, 1.10.0). The chart marks this account's fills
   (1.6.0). When trading comes on the bar is on the account this tab was using (1.6.1): after a reconnect or a PIN
   entry the one it was on, after a reload of the tab the one that tab was on, in a new tab the last one picked on
-  this PC; always only if `tradeAccounts` still has it, else Sim101 with the note "Last account ... not available,
+  this PC; always only if it is still checked, else Sim101 with the note "Last account ... not available,
   on Sim101". The picker is ringed for a moment and a note says which account orders go to. Armed is always off
   then. Each tab keeps its own account. Other accounts with orders or a position on the instrument are named in the
   bar. With trading off the picker lists every account ChartBridge knows and still switches the fills.
@@ -616,7 +615,9 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
 **Safety gates** (all enforced in ChartBridge; the page only adds its own checks on top):
 
 1. Off unless `trading = true`.
-2. Only the accounts in `tradeAccounts`; never Backtest or Playback; no wildcard.
+2. Only an account checked on the Account page (ChartBridge 0.4.0, `accountChecks` on, the default; saved in
+   `accounts.txt`). With `accountChecks = off`, only the accounts in `tradeAccounts`. Never Backtest or Playback; no
+   wildcard.
 3. `maxQty.<ROOT>` caps the position (default 1): the position plus working orders on the same side plus
    the new order may not exceed it. Orders that reduce the position are always allowed.
 4. Only ChartBridge's own page: the WebSocket Origin must be `http://localhost:<port>` (pages listed in

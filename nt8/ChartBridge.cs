@@ -1,16 +1,16 @@
-// ChartBridge 0.3.8 for NinjaTrader 8
+// ChartBridge for NinjaTrader 8 (its version is ChartBridgeServer.Version, below)
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
 // Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only:
 // every request must come from a loopback address, and a browser WebSocket from an allowed origin).
 // ChartBridge's own page is locked with a 4-digit PIN (ChartBridgePin.cs): nothing streams to it and it cannot
 // sign in for orders until it is unlocked.
 // READ ONLY by default. Order entry from the chart (Step 2) lives only in ChartBridgeOrders.cs and stays
-// off unless config.txt has "trading = true" and names the accounts in "tradeAccounts"; this file never
-// places, changes or cancels an order itself.
+// off unless config.txt has "trading = true"; which accounts may trade is the Account page's checkmark (gate 2,
+// ChartBridgeAccounts.cs). This file never places, changes or cancels an order itself.
 // Protocol: nt8/PROTOCOL.md in https://github.com/anthonydirect17/chart-engine (MIT).
 //
-// Install: copy this file, ChartBridgeOrders.cs, ChartBridgePin.cs and ChartBridgeBars.cs to Documents\NinjaTrader 8\bin\Custom\AddOns\ and the page files to
-// Documents\NinjaTrader 8\ChartBridge\www\ (nt8\install.ps1 does both), then compile in the
+// Install: copy the add-on files listed in nt8\install-files.json to Documents\NinjaTrader 8\bin\Custom\AddOns\ and its page files to
+// Documents\NinjaTrader 8\ChartBridge\www\ (nt8\install.ps1 does both; nt8\update-pc.ps1 updates them), then compile in the
 // NinjaScript Editor. Output from the add-on appears in the Output window (New > NinjaScript Output).
 //
 // Written in C# 5 syntax on purpose so it compiles on every NinjaTrader 8 release.
@@ -72,7 +72,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static Dictionary<string, string> ContractOverride = new Dictionary<string, string>();
         public static bool PostFills = false;                       // send fills to The Desk
         public static string DeskUrl = "http://localhost:8800";
-        public static List<string> OldAccounts;   // 0.5.1: the retired "accounts =" line, null when there is none (ChartBridgeAccounts reads it once, then ignores it)
         public static List<string> AllowOrigins = new List<string>();   // web pages besides ChartBridge's own that may open the read-only WebSocket
         // 0.4.0: markets served for the Quote board only (ChartBridgeTape.cs, ChartBridgeMarkets): every order for them is refused.
         // A root in both roots and quoteRoots is quote only.
@@ -85,16 +84,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (string.IsNullOrEmpty(name)) return false;
             return !name.StartsWith("Backtest", StringComparison.OrdinalIgnoreCase) && !name.StartsWith("Playback", StringComparison.OrdinalIgnoreCase);
-        }
-
-        // 0.5.1: the old accounts line names this account (exact, or a prefix before *), as 0.5.0 matched it.
-        public static bool OnOldAccounts(string name)
-        {
-            List<string> list = OldAccounts;
-            if (list == null || string.IsNullOrEmpty(name)) return false;
-            foreach (string pat in list)
-                if (pat.EndsWith("*") ? name.StartsWith(pat.TrimEnd('*'), StringComparison.OrdinalIgnoreCase) : name.Equals(pat, StringComparison.OrdinalIgnoreCase)) return true;
-            return false;
         }
 
         public static string Folder
@@ -119,10 +108,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   contract.MNQ = MNQ 12-26      (forces a contract instead of the computed front month)
         //   postFills = true              (send every fill to The Desk; off by default)
         //   deskUrl = http://localhost:8800
-        //   accounts                      (until 0.5.0 a watch list. 0.5.1 reads it once, on its first run, to hide the connected
-        //                                   accounts it does not name; after that it is ignored, said once in the Output window)
         //   trading = true                (order entry from the chart; OFF by default; see ChartBridgeOrders.cs)
-        //   tradeAccounts = Sim101, ...   (exact account names the chart may trade; no wildcard)
+        //   tradeAccounts = Sim101, ...   (exact account names; pre-checked on a first start, and gate 2 only with accountChecks = off)
         //   maxQty.MNQ = 5                (largest order per instrument root; default 1)
         //   accountChecks = off           (0.4.0: every v3 feature is ON by default, Anthony 2026-10-07; a line like this turns one
         //                                  off. accountChecks: gate 2 is the page's per-account checkmark, saved in accounts.txt;
@@ -133,10 +120,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         //                                  WebSocket, such as The Desk; exact scheme://host[:port], no wildcard;
         //                                  they can never trade. Requests still have to come from this PC.
         //                                  One line: the last allowOrigins line wins. Non-ASCII hosts in punycode.)
-        //   quoteHours                    (0.3.4.1 to 0.3.6; no longer used since 0.3.7, said once in the Output window)
         //   bars = on, barsRoots, pc      (0.3.6: daily 1-minute bars to The Desk; off by default; see ChartBridgeBars.cs)
         //   bot = off, botRoot, botLibrary (0.4.0: the bot channel, on by default, on the account chosen on the Bot tab; see ChartBridgeBot.cs)
         //   agents = manrae                (0.5.0: the agent channel, a comma list of agent ids; none: off; see ChartBridgeAgents.cs)
+        // Any other key (the retired accounts and quoteHours lines included) does nothing, said once per load in the Output
+        // window: "config.txt: <key> is not a ChartBridge setting; the line does nothing".
         public static void Load()
         {
             ChartBridgeOrders.ResetConfig();
@@ -146,7 +134,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeCopier.ResetConfig();   // 0.4.0 copier:
             ChartBridgeBot.ResetConfig();   // 0.4.0 bot: on by default
             ChartBridgeAgents.ResetConfig();   // 0.5.0 agents: off until config.txt names one
-            OldAccounts = null;   // 0.5.1
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -159,24 +146,25 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string val = line.Substring(eq + 1).Trim();
                 ChartBridgeSwitches.Note(key, val);   // 0.4.0 accounts: records a v3 switch (accountChecks, cancelFromList, ...); never takes the key
                 int n;
-                if (key == "port" && int.TryParse(val, out n)) Port = n;
-                else if (key == "days" && int.TryParse(val, out n)) DefaultDays = Math.Max(1, Math.Min(60, n));
-                else if (key == "tickHours" && int.TryParse(val, out n)) DefaultTickHours = Math.Max(0, Math.Min(48, n));
-                else if (key == "rangeHours" && int.TryParse(val, out n)) RangeHours = Math.Max(1, Math.Min(8, n));
+                if (key == "port") { if (int.TryParse(val, out n)) Port = n; }
+                else if (key == "days") { if (int.TryParse(val, out n)) DefaultDays = Math.Max(1, Math.Min(60, n)); }
+                else if (key == "tickHours") { if (int.TryParse(val, out n)) DefaultTickHours = Math.Max(0, Math.Min(48, n)); }
+                else if (key == "rangeHours") { if (int.TryParse(val, out n)) RangeHours = Math.Max(1, Math.Min(8, n)); }
                 else if (key == "profileRoots") ProfileRoots = val.Split(',').Select(s => s.Trim().ToUpperInvariant()).Where(s => s.Length > 0).ToArray();
                 else if (key == "roots") Roots = val.Split(',').Select(s => s.Trim().ToUpperInvariant()).Where(s => s.Length > 0).ToArray();
                 else if (key == "quoteRoots") QuoteRoots = val.Split(',').Select(s => s.Trim().ToUpperInvariant()).Where(s => s.Length > 0).ToArray();   // 0.4.0
                 else if (key.StartsWith("contract.")) ContractOverride[key.Substring(9).Trim().ToUpperInvariant()] = val;
                 else if (key == "postFills") PostFills = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1";
                 else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
-                else if (key == "accounts") OldAccounts = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();   // 0.5.1: read once (ChartBridgeAccounts)
                 else if (key == "allowOrigins") AllowOrigins = ChartBridgeAccess.ParseOrigins(val);
-                else if (key == "quoteHours") ChartBridgeServer.Log("config.txt: quoteHours is no longer used (its by-date tick load was replaced by the served window in 0.3.5 and removed in 0.3.7); the line can go");
                 else if (ChartBridgeCopier.ReadConfig(key, val)) { }   // 0.4.0 copier: copier = off turns it off (on by default; ChartBridgeCopier.cs)
                 else if (ChartBridgeBot.ReadConfig(key, val)) { }    // 0.4.0 bot: bot, botRoot, botLibrary (ChartBridgeBot.cs)
                 else if (ChartBridgeAgents.ReadConfig(key, val)) { }   // 0.5.0 agents: agents = manrae (ChartBridgeAgents.cs)
                 else if (ChartBridgeBars.ReadConfig(key, val)) { }   // bars, barsRoots, pc (ChartBridgeBars.cs)
-                else ChartBridgeOrders.ReadConfig(key, val);   // trading, tradeAccounts, maxQty.<ROOT>
+                else if (ChartBridgeOrders.ReadConfig(key, val)) { }   // trading, tradeAccounts, maxQty.<ROOT>, maxTicksAway, maxBracketTicks, merge, orderTypes, strategies
+                else if (Array.IndexOf(ChartBridgeSwitches.Names, key) >= 0) { }   // accountChecks, cancelFromList: read by ChartBridgeSwitches.Note above
+                else if (key.StartsWith("maxQty.")) ChartBridgeServer.Log("config.txt: " + key + " = " + val + " is not a whole number; the line does nothing");
+                else ChartBridgeServer.Log("config.txt: " + key + " is not a ChartBridge setting; the line does nothing");
             }
         }
     }
@@ -1874,7 +1862,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.5.2";
+        public const string Version = "0.5.3";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;

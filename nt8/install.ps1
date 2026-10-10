@@ -13,8 +13,8 @@ $www = Join-Path $nt 'ChartBridge\www'
 New-Item -ItemType Directory -Force -Path $addons, $www | Out-Null
 
 # What gets copied is listed once, in nt8\install-files.json (nt8\update-pc.ps1 reads the same list):
-# the add-on sources (ChartBridge.cs; ChartBridgeOrders.cs, order entry, off unless config.txt turns it on;
-# ChartBridgePin.cs, the PIN on ChartBridge's own page) and the live page files.
+# the add-on sources (every ChartBridge*.cs file; order entry stays off unless config.txt turns it on) and the
+# live page files.
 $list = Get-Content -Raw -LiteralPath (Join-Path $repo 'nt8\install-files.json') | ConvertFrom-Json
 foreach ($f in $list.addons) {
   Copy-Item (Join-Path $repo $f) (Join-Path $addons (Split-Path -Leaf $f)) -Force

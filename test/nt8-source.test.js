@@ -528,7 +528,7 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
 
 // ---- 0.3.4: the side of every trade (behaviour: nt8/check/SidesHarness.cs under Mono, test/trade-sides.test.js)
 test('0.3.4: every trade carries its side, additively, and the seam match ignores it', () => {
-  assert.match(src, /^\/\/ ChartBridge 0\.3\.(4\.1|[5-9]) for NinjaTrader 8/);
+  assert.match(src, /^\/\/ ChartBridge for NinjaTrader 8 \(its version is ChartBridgeServer\.Version, below\)/);   // 0.5.3: the header names no version
   assert.match(code, /public const string Version = "0\.(3\.(4\.1|[5-9])|4\.[0-9]+|5\.[0-9]+)";/);
   const md = bodyOf(code, 'private static void OnMarketData(');
   // Bid and Ask updates only move the quote: nothing is sent or held for them
@@ -574,7 +574,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
 
 // ---- 0.3.5: the served window and the session's volume at price (behaviour: nt8/check/WindowHarness.cs under Mono)
 test('0.3.5: every tick chart gets the served window by count, one request at a time; the profile comes from the session table', () => {
-  assert.match(src, /^\/\/ ChartBridge 0\.3\.[5-9] for NinjaTrader 8/);   // 0.3.6 adds the daily bars on top
+  assert.match(src, /^\/\/ ChartBridge for NinjaTrader 8 \(its version is ChartBridgeServer\.Version, below\)/);   // 0.5.3: the header names no version   // 0.3.6 adds the daily bars on top
   assert.match(code, /public const string Version = "0\.(3\.[5-9]|4\.[0-9]+|5\.[0-9]+)";/);
   assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\",\\"v3\\"\]/);   // 0.3.7 adds three; 0.4.0 v3
   // S6: every tick chart (liveFirst or not) gets the served window; 0.3.7: the by-date tick load is gone
@@ -685,11 +685,13 @@ test('0.3.5: a HEAD request gets headers only (HttpListener refuses a body on a 
 });
 
 // ---- 0.3.7: quoteHours went with the by-date tick load (removed; 0.3.5 replaced it with the served window)
-test('0.3.7: the by-date tick load and its Bid and Ask history are removed; a quoteHours line is only noted', () => {
+test('0.3.7: the by-date tick load and its Bid and Ask history are removed; a quoteHours line is only noted (0.5.3: as any unknown key)', () => {
   for (const gone of ['RequestTickHistory', 'RequestQuotes', 'BeginQuotes', 'QuoteAnswered', 'QuotesOutstanding', 'QuoteWindowHours', 'ParseQuoteHours', 'ByDateTickLoads', 'ClassifyLoad', 'ContinueSides', 'NoteSides', 'LastLoadSides', 'CopyTicks', 'TickToMargin;', 'ClassifyBackfill', 'QuoteSeries', 'ContinueTickRule', 'BackfillSides', 'QuoteEndSlack'])
     assert.ok(!code.includes(gone), gone + ' is gone');
   assert.ok(!/public static int QuoteHours/.test(code), 'no quoteHours setting');
-  assert.match(bodyOf(code, 'public static void Load()'), /else if \(key == "quoteHours"\) ChartBridgeServer\.Log\("config\.txt: quoteHours is no longer used/);
+  const load = bodyOf(code, 'public static void Load()');
+  assert.ok(!/"quoteHours"|"accounts"/.test(load), '0.5.3: no special case for the retired quoteHours and accounts lines');
+  assert.match(load, /else ChartBridgeServer\.Log\("config\.txt: " \+ key \+ " is not a ChartBridge setting; the line does nothing"\);/);
   const harness = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'SidesHarness.cs'), 'utf8');
   assert.ok(!/QuoteHoursCases|ByDateTickLoads/.test(harness));
   // every tick chart load goes to the served window; minute and hour charts keep their 20,000 last trades for the forming minute
@@ -1278,7 +1280,7 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.5\.[12]";/);
+  assert.match(code, /public const string Version = "0\.5\.[123]";/);
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1292,4 +1294,16 @@ test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer fi
   assert.match(asrc, /type == "accountUnarchive" \? new\[\] \{ "type", "cid", "account" \}/);
   // still no order call in the accounts file
   for (const re of [/\.Submit\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/]) assert.ok(!re.test(asrc.replace(/^\s*\/\/.*$/gm, '')), 'ChartBridgeAccounts.cs never ' + re);
+});
+
+test('ChartBridge 0.5.3: the accounts line\'s one-time conversion and notConnectedYet are gone; any unknown config.txt key is said', () => {
+  const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
+  for (const gone of ['OldAccounts', 'OnOldAccounts', 'OldAccountsNote', 'LogConverted', 'ConvertWindowMs', 'ConvertUnsure', 'offMarkPending', 'convertedMs', 'notConnectedYet'])
+    assert.ok(!code.includes(gone) && !asrc.includes(gone), gone + ' is gone');
+  assert.ok(!/\bConvert\(/.test(asrc), 'no Convert step in the 1 s check');
+  const load = bodyOf(code, 'public static void Load()');
+  // a key every reader turned down (and that is not a v3 switch) gets one Output line
+  assert.match(load, /else if \(ChartBridgeOrders\.ReadConfig\(key, val\)\) \{ \}[^\n]*\n\s*else if \(Array\.IndexOf\(ChartBridgeSwitches\.Names, key\) >= 0\) \{ \}[^\n]*\n\s*else if \(key\.StartsWith\("maxQty\."\)\)[^\n]*\n\s*else ChartBridgeServer\.Log\(/);
+  // a key ChartBridge reads itself is taken even when its value cannot be read (it is not "not a setting")
+  for (const k of ['port', 'days', 'tickHours', 'rangeHours']) assert.match(load, new RegExp('key == "' + k + '"\\) \\{ if \\(int\\.TryParse\\(val, out n\\)\\)'));
 });
