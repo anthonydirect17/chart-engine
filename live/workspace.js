@@ -1336,15 +1336,29 @@ function renderDeskUi() {
     : n + ' strateg' + (n === 1 ? 'y' : 'ies') + (a ? '; ' + a.name + ' is active on the ticket.' : '; the ticket uses its bracket.') + (mode === 'readonly' ? ' Read only: The Desk does not answer.' : '');
 }
 $('wsDeskTry').addEventListener('click', () => deskRead());
+/* 1.19.1 (quality round 1): the hotkeys document is saved whole with the rev last read, so two changes in a row (two keys
+   set quickly, or Limit then Stop) sent the second with the old rev; The Desk refused it as if another PC had saved first
+   and that change was lost. Now one save at a time, each built from the document the save before it left: edit(doc)
+   changes a copy and returns '' or why it cannot be saved (checked again then, against the keys as they are by then). */
+let hkSaving = Promise.resolve();
+function saveHotkeysDesk(edit) {
+  const run = hkSaving.then(() => {
+    if (!DS.hk) return { ok: false, error: 'Not saved: The Desk has not answered.' };
+    const next = JSON.parse(JSON.stringify(DS.hk)), why = edit(next);
+    if (why) return { ok: false, error: why };
+    return DESK.save('hotkeys', next).then(r => { loadDeskCache(); return r; });
+  });
+  hkSaving = run.catch(() => {});
+  return run;
+}
 /* Save one hotkey in The Desk (the whole document with the rev read; a 409 reads it again) */
 function saveKeyDesk(id, combo) {
   if (deskMode() === 'readonly') { renderHotkeys(); hkNote(id, 'Not saved: ' + DESK.error + ' The keys shown are the last copy read, read only.', 'warn'); return; }
-  const next = JSON.parse(JSON.stringify(DS.hk));
-  next.keys[id] = combo;
-  const why = (combo && OS.hotkeyConflict(combo, { key: id }, keyCtx())) || OS.checkHotkeysDoc(next, stratList());
+  const withKey = doc => { doc.keys[id] = combo; return (combo && OS.hotkeyConflict(combo, { key: id }, keyCtx())) || OS.checkHotkeysDoc(doc, stratList()); };
+  const why = withKey(JSON.parse(JSON.stringify(DS.hk)));
   if (why) { renderHotkeys(); hkNote(id, why, 'warn'); return; }
   hkNote(id, 'Saving in The Desk...', '');
-  DESK.save('hotkeys', next).then(r => {
+  saveHotkeysDesk(withKey).then(r => {
     loadDeskCache();
     if (r.ok) applyDeskHotkeys();
     renderHotkeys();
@@ -1356,14 +1370,11 @@ function saveKeyDesk(id, combo) {
 for (const k of ['limit', 'stop']) $('wsMod-' + k).addEventListener('change', e => {
   const mod = e.target.value, note2 = t => { $('wsModNote').textContent = t; $('wsModNote').hidden = !t; };
   if (deskMode() !== 'desk') { renderDeskUi(); note2('Not saved: The Desk does not answer.'); return; }
-  const why = OS.modifierConflict(k, mod, keyCtx());
+  const withMod = doc => { doc.modifiers[k] = mod; return OS.modifierConflict(k, mod, keyCtx()) || OS.checkHotkeysDoc(doc, stratList()); };
+  const why = withMod(JSON.parse(JSON.stringify(DS.hk)));
   if (why) { renderDeskUi(); note2(why); return; }
-  const next = JSON.parse(JSON.stringify(DS.hk));
-  next.modifiers[k] = mod;
-  const dw = OS.checkHotkeysDoc(next, stratList());
-  if (dw) { renderDeskUi(); note2(dw); return; }
   note2('Saving in The Desk...');
-  DESK.save('hotkeys', next).then(r => { loadDeskCache(); renderDeskUi(); note2(r.ok ? 'Saved in The Desk.' : r.error + ' Pick it again.'); deskChanged(); });
+  saveHotkeysDesk(withMod).then(r => { loadDeskCache(); renderDeskUi(); note2(r.ok ? 'Saved in The Desk.' : r.error + ' Pick it again.'); deskChanged(); });
 });
 
 /* ---------------- the active Order Strategy (strategies = on): picked on the ticket or by its key, in any window */
