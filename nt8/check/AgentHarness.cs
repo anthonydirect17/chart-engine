@@ -2919,6 +2919,21 @@ public static class AgentHarness
         File.Delete(rf);
         typeof(ChartBridgeAgent).GetMethod("LoadRules", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, null);
         Settle(sime);
+        // and the exposure looks at every root an agent may trade then: a pair it owns outside the placeholder roots (NQ, MNQ),
+        // here ES, still counts
+        Fresh();
+        File.WriteAllText(rf, "# made-up\n# test\nroots\tMNQ\nwhatever\tthing\n");
+        typeof(ChartBridgeAgent).GetMethod("LoadRules", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, null);
+        HashSet<string> sticky = (HashSet<string>)typeof(ChartBridgeAgent).GetField("Sticky", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
+        object sync = typeof(ChartBridgeAgent).GetField("Sync", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
+        lock (sync) sticky.Add("ES");
+        int rj4 = Count(page, "reject");
+        SessionRules("09:45", "15:20", "15:58");
+        Check(Count(page, "reject") == rj4 + 1 && PageReject().Contains("agent-manrae-rules.txt could not be read"),
+              "0.5.4: the rules file unreadable: an ES pair it owns counts as exposed too (every root an agent may trade): " + PageReject());
+        lock (sync) sticky.Clear();
+        File.Delete(rf);
+        typeof(ChartBridgeAgent).GetMethod("LoadRules", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, null);
         // flat again: every rule may change, as before
         Fresh();
         int rjF = Count(page, "reject");

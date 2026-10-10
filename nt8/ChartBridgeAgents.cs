@@ -2965,7 +2965,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             bool ex;
             lock (Sync) ex = openTag != null || Proposals.Values.Any(p => p.State == "open" || p.State == "accepting");
-            return ex || WorkingEntries().Count > 0 || RulesNow().Roots.Any(r => Owns(r));
+            return ex || WorkingEntries().Count > 0 || FlatRoots().Any(r => Owns(r));   // rules file unreadable: every root an agent may trade
         }
 
         // agentRules: flat keys (the strict parser allows no nesting): roots "NQ,MNQ", maxQty<ROOT> for a root named (left out: the

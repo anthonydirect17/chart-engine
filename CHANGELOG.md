@@ -11,7 +11,8 @@ full-session limit (in session order from 18:00, flat at 15:59 at the latest); n
   it is flat, and is refused with "only its window (entries from, until, flat at) can change now". The new window rules at
   once, as any window does: a flat time already passed, or a start after now, puts him in his flat hours and ChartBridge
   flattens his position by his rules. While his `agent-<id>-rules.txt` cannot be read (the rules in force are then
-  placeholder defaults), nothing changes while he is exposed, not even the window. **Order path: F5 needed** (a
+  placeholder defaults), nothing changes while he is exposed, not even the window; and then a pair he owns on any root
+  an agent may trade (NQ, MNQ, ES, MES) counts as exposed, not only the placeholder roots. **Order path: F5 needed** (a
   ChartBridge recompile).
 - **The Agent tab (chart 1.20.1, page only):** with ChartBridge 0.5.4 or later the rules button reads "Change the window"
   while he is in a trade or has an entry or a proposal open, and only the three times are open in the form. A window that
