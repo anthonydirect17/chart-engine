@@ -1386,7 +1386,12 @@ Object.assign(OrderDeskV3.prototype, {
     if (!isInt(m.maxExpireSec) || m.maxExpireSec < 60 || m.maxExpireSec > 1800) return 'maxExpireSec must be a whole number from 60 to 1800';
     if (!isInt(m.maxTrades) || m.maxTrades < 0 || m.maxTrades > 50) return 'maxTrades must be 0 (none) or a whole number from 1 to 50';
     if (!isInt(m.maxLosses) || m.maxLosses < 0 || m.maxLosses > 20) return 'maxLosses must be 0 (none) or a whole number from 1 to 20';
-    if (a.trade || this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length) return a.id + ' has a position, a working entry or an open proposal: change its rules when it is flat';
+    if (a.trade || this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length) {
+      /* ChartBridge 0.5.4 (SameButWindow): the window alone may change; the roots, each size, maxExpireSec, maxTrades, maxLosses wait */
+      const cur = a.rules, q = r => (m['maxQty' + r] === undefined ? AGENT_CEILING[r] : m['maxQty' + r]);
+      const same = cur.roots.join(',') === roots.join(',') && roots.every(r => cur.maxQty[r] === q(r)) && cur.maxExpireSec === m.maxExpireSec && (cur.maxTrades || 0) === m.maxTrades && (cur.maxLosses || 0) === m.maxLosses;
+      if (!same) return a.id + ' has a position, a working entry or an open proposal: only its window (entries from, until, flat at) can change now; change its other rules when it is flat';
+    }
     return null;
   },
   do_agentRules(m) {

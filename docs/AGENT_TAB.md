@@ -331,7 +331,11 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
    only when this ChartBridge serves it and it is not quote only. `maxQty<ROOT>` is sent for each root chosen, never for
    one not chosen.
 9. **When the rules and the account can change (lead's default):** the page offers both only while the agent is flat with
-   no working entry and no open proposal (ChartBridge refuses them otherwise and says why under the button).
+   no working entry and no open proposal (ChartBridge refuses them otherwise and says why under the button). **ChartBridge
+   0.5.4 (chart 1.20.1, Anthony 2026-10-10, DECISION ag):** the window may change at any time: in a trade, or with an entry or
+   a proposal open, the button reads "Change the window" and only the three times are open in the form; a window that puts
+   him in his flat hours now (a start after now, or a flat time already passed) asks first, in the page, since ChartBridge
+   then flattens his position by his rules. The account still waits until flat.
 10. **The account chooser (lead's default):** every account ChartBridge says is tradable, SIM first, each marked; the bot's
     account, the copier's leader and followers and another agent's account are listed but not offered, with the reason
     (ChartBridge refuses them anyway). **An account change keeps the agent's mode** (ChartBridge 0.5.2, Anthony 2026-10-08;

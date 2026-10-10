@@ -680,7 +680,7 @@ test('agents: copilot proposal lives until the plan\'s own expiry; agentSeen; ac
   d.act({ type: 'agentSeen', agent: 'demo', id, at: d.now() });
   assert.ok(d.desk.agents.get('demo').proposals.get(id).seenAt > 0);
   assert.match(reasonOf(d.act({ type: 'agentAnswer', agent: 'demo', id: 'nope', answer: 'accept', at: 1 })), /No proposal nope/);
-  assert.match(reasonOf(d.act({ type: 'agentRules', agent: 'demo', roots: 'MNQ', maxQtyMNQ: 5, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 900, maxTrades: 0, maxLosses: 0 })), /open proposal: change its rules when it is flat/);
+  assert.match(reasonOf(d.act({ type: 'agentRules', agent: 'demo', roots: 'MNQ', maxQtyMNQ: 5, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 900, maxTrades: 0, maxLosses: 0 })), /open proposal: only its window \(entries from, until, flat at\) can change now; change its other rules when it is flat/);
   d.advance(60000);
   const msgs = d.act({ type: 'agentAnswer', cid: 'a1', agent: 'demo', id, answer: 'accept', at: d.now() });
   assert.equal(msgs.filter(m => m.type === 'agentProposal').pop().state, 'accepted');
@@ -853,7 +853,10 @@ test('agents: rules from the page (sections 3 and 7): every allowed value, saved
   assert.match(d.plan({ expireSec: 901 }).why, /from 60 to 900/, 'the new rules are in force');
   d.plan({ expireSec: 600 });                                                // a working entry? no: shadow. A position: refused
   d.desk.agents.get('demo').trade = { root: 'MNQ', qty: 1, avg: 25400, pnl: 0 };
-  assert.match(r({ maxTrades: 4 }), /has a position, a working entry or an open proposal/);
+  assert.match(r({ maxTrades: 4 }), /has a position, a working entry or an open proposal: only its window \(entries from, until, flat at\) can change now/);
+  assert.equal(r({ maxTrades: 0, maxLosses: 0, entryUntil: '14:00', flatAt: '15:30' }), null, 'ChartBridge 0.5.4: in a trade the window alone may change');
+  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).rules.flatAt, '15:30');
+  assert.match(r({ maxTrades: 0, maxLosses: 0, maxQtyMNQ: 5 }), /only its window/, 'a size still waits');
 });
 
 test('agents: with no agents in config.txt every agent message is refused and nothing is sent', async () => {
@@ -871,7 +874,7 @@ test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; h
     const unlock = (await post(port, '/pin/unlock', { pin: '5820' })).json.token;
     const token = JSON.parse((await get(port, '/session', unlock)).body).token;
     const a = await wsConnect(port, '/ws?unlock=' + encodeURIComponent(unlock), { Origin: own });
-    assert.equal((await a.next('hello')).version, 'fake-0.5.2');
+    assert.equal((await a.next('hello')).version, 'fake-0.5.4');
     a.send({ type: 'client', v: 3 }); a.send({ type: 'auth', token });
     const ag = await a.next('agent');
     assert.equal(ag.agent, 'demo'); assert.equal(ag.mode, 'shadow'); assert.equal(ag.account, 'Sim101', 'no account file: Sim101');

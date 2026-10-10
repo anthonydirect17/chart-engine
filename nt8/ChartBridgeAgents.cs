@@ -2965,7 +2965,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             bool ex;
             lock (Sync) ex = openTag != null || Proposals.Values.Any(p => p.State == "open" || p.State == "accepting");
-            return ex || WorkingEntries().Count > 0 || RulesNow().Roots.Any(r => Owns(r));
+            return ex || WorkingEntries().Count > 0 || FlatRoots().Any(r => Owns(r));   // rules file unreadable: every root an agent may trade
         }
 
         // agentRules: flat keys (the strict parser allows no nesting): roots "NQ,MNQ", maxQty<ROOT> for a root named (left out: the
@@ -3007,7 +3007,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             r.MaxLosses = n;
             string bad = RulesProblem(r);
             if (bad != null) return bad;
-            if (Exposed()) return "agent " + Id + " has a position, a working entry or an open proposal: change its rules when it is flat";
+            // 0.5.4 (Anthony 2026-10-10, DECISION ag: "I do not want to be locked out of changing the time ... during live trading"):
+            // while the agent has a position, a working entry or an open proposal, its window (entryFrom, entryUntil, flatAt) may
+            // still change, inside the same limits; every other rule waits until it is flat. The new window rules at once: a flat
+            // time already passed, or a start after now, puts it in its flat hours (FlatHours) and its position is flattened by its
+            // rules; an entry or a proposal outside the new window ends as at the window's end.
+            // the rules file could not be read (the rules in force are placeholder defaults): no change while exposed, not even the
+            // window, since it would be measured against those defaults and would clear the broken file's stand-down
+            bool broken; lock (Sync) broken = rulesBroken != null;
+            if (broken && Exposed()) return "agent-" + Id + "-rules.txt could not be read: agent " + Id + " has a position, a working entry or an open proposal, so its rules cannot change until it is flat (or the file reads again)";
+            if (Exposed() && !SameButWindow(RulesNow(), r)) return "agent " + Id + " has a position, a working entry or an open proposal: only its window (entries from, until, flat at) can change now; change its other rules when it is flat";
             string err = SaveRules(r);
             if (err != null) return "agent-" + Id + "-rules.txt could not be saved (" + err + "); nothing changed";
             lock (Sync) { rules = r; rulesBroken = null; StandDownLocked(); }   // a loss stand-down already held stays (lead's default)
@@ -3018,6 +3027,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             ToAgent(WelcomeJson());
             Notify();
             return null;
+        }
+
+        // The two rule sets differ in the window alone (entryFrom, entryUntil, flatAt): the same roots in the same order, each root's
+        // maxQty, maxExpireSec, maxTrades and maxLosses.
+        private static bool SameButWindow(Rules a, Rules b)
+        {
+            return a.Roots.SequenceEqual(b.Roots) && a.Roots.All(x => a.QtyFor(x) == b.QtyFor(x)) && a.MaxExpireSec == b.MaxExpireSec && a.MaxTrades == b.MaxTrades && a.MaxLosses == b.MaxLosses;
         }
 
         // 0.5.2: why an entry is refused outside the window: the market closed, or the time.
