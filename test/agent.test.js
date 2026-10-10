@@ -24,7 +24,9 @@ const proposal = o => Object.assign({ type: 'agentProposal', agent: 'demo', id: 
   state: 'open', seenAt: null, answeredAt: null }, o || {});
 
 test('the tab with no agent; 1.20.0: the version is no longer read (the page needs ChartBridge 0.5.2)', () => {
-  assert.equal(AC.parseVersion, undefined); assert.equal(AC.atLeast, undefined);
+  assert.deepEqual(AC.parseVersion('fake-0.4.0'), [0, 4, 0]);   // kept for checks above the page's minimum ChartBridge
+  assert.ok(AC.atLeast('0.5.0', '0.5.0') && AC.atLeast('0.5.1', '0.5.0') && AC.atLeast('fake-0.5.0', '0.5.0'));
+  assert.ok(!AC.atLeast('0.4.3', '0.5.0') && !AC.atLeast('', '0.5.0'));
   assert.equal(AC.offText({ v3: null }), 'Connecting to ChartBridge...');
   assert.equal(AC.offText({ v3: false, version: '0.3.8' }), 'No agents on this ChartBridge (0.5.0 or later).');
   assert.match(AC.offText({ v3: true, version: '0.4.3', trading: { enabled: true } }), /none is named in its config\.txt/, 'a v3 ChartBridge has the agent channel, whatever its version says');

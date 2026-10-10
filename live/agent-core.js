@@ -62,6 +62,17 @@ const str = v => (typeof v === 'string' ? v : '');
 /** An agent id as the contract allows: 1 to 12 characters, a to z and 0 to 9, starting with a letter. */
 const validId = id => typeof id === 'string' && /^[a-z][a-z0-9]{0,11}$/.test(id);
 
+/* ======================================================================== versions */
+/** [major, minor, patch] from a version text ("0.5.0", "fake-0.4.0"), or null. Kept for checks above the page's minimum
+ *  ChartBridge (0.5.2 since 1.20.0), such as a later release's feature. */
+function parseVersion(v) { const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(v || '')); return m ? [+m[1], +m[2], +m[3]] : null; }
+/** Is version a at least b? An unknown a is false. */
+function atLeast(a, b) {
+  const x = parseVersion(a), y = parseVersion(b);
+  if (!x || !y) return false;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return true;
+}
 /**
  * What the tab says when it has no agent to show. o: { v3 (true, false, null: not known yet), signedIn, trading (the
  * `trading` answer), agents (how many are known) }. '' when there is an agent to show. Chart 1.20.0 needs ChartBridge 0.5.2
@@ -902,7 +913,7 @@ function copilotRouter(doc) {
 
 return {
   VERSION, MIN_BRIDGE, MODES, MODE_NAME, NOTE_KINDS, NOTE_NAME, PROPOSAL_STATES, RULE_ROOTS, CEILING, LIMITS, DEFAULT_RULES, LATE_MS, CONFIRM_MS, NOTES_MAX, PLANS_MAX, DEFAULT_ACCOUNT,
-  validId, offText,
+  validId, parseVersion, atLeast, offText,
   createAgents, pickAgent, agentName,
   parseRules, rulesLines, rulesForm, rulesChangeable, rulesChange, durationText,
   accountMark, agentAccount, accountChoices, accountChange, liveQuestion, askStale,
