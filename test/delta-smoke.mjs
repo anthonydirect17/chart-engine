@@ -1,5 +1,5 @@
 // Cumulative delta pane smoke (1.7.0): the live page and mounted panes against the fake bridge (SAMPLE data only, never
-// market data), which sends trade sides like ChartBridge 0.3.4 and newer (1.20.0: no page for ChartBridge 0.3.3's no sides).
+// market data), which sends trade sides like ChartBridge 0.3.4 and newer (1.21.0: no page for ChartBridge 0.3.3's no sides).
 //   npm run smoke:delta        (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks: the pane is on by default under the main chart, sharing its bars, and draws candles; its totals equal every
 // trade the page received (counted independently here), also after live trades; a new core only on a reload or a bar

@@ -936,7 +936,7 @@ the broker and the prop firm see NinjaTrader orders.
    The account must also be **Connected** in NinjaTrader, and ChartBridge must be listening to its
    order events (it starts listening on the first order if it was not yet).
 3. **Size caps on the order and the position.** `maxQty.MNQ = 5` style lines, per instrument root;
-   default **1** for any root without a line. No single order may exceed the cap, and the cap limits what
+   default **1** for any root without a line (ChartBridge 0.5.3: an agent's entry on MNQ takes the agents' own 20 instead, whatever the line says; below). No single order may exceed the cap, and the cap limits what
    the position could become: the current position (read two ways, as NinjaTrader lists it and with fills
    it has reported that are not in the position yet, taking the worse, since event order differs between
    connections; a position update consumes only the fills its change explains), plus every order on the same side that may still fill (working, part filled,
@@ -2360,9 +2360,14 @@ newlines to ` / `, backslashes and control characters dropped, cut to length).
 | `maxLosses` | none | none, or 1 to 20 losing trades a day (stand down) |
 
 Fixed for every agent: limit or stop-limit entries only; a stop and a target on every entry; one position and one entry
-(working or proposed) at a time; long or short (NinjaTrader accounts net); the owner lock. `agentRules` from the page is
-refused while the agent has a position, a working entry or an open proposal. A change is saved, logged and sent to the agent
-in a new `welcome`.
+(working or proposed) at a time; long or short (NinjaTrader accounts net); the owner lock. While the agent has a position, a
+working entry or an open proposal, `agentRules` from the page may change only the window (`entryFrom`, `entryUntil`,
+`flatAt`; 0.5.4, Anthony 2026-10-10: "I do not want to be locked out of changing the time ... during live trading"); a change
+of any other rule then is refused ("only its window (entries from, until, flat at) can change now; change its other rules when
+it is flat"). The new window rules at once: a flat time already passed, or a start after now, puts the agent in its flat hours
+and its position is flattened by its rules; an entry or a proposal outside it ends as at the window's end. While its
+`agent-<id>-rules.txt` cannot be read (the rules in force are then placeholder defaults), nothing changes while it is exposed,
+not even the window. A change is saved, logged and sent to the agent in a new `welcome`.
 
 | agent to ChartBridge | fields (no others) | notes |
 |---|---|---|
@@ -2377,7 +2382,7 @@ in a new `welcome`.
 
 | ChartBridge to the agent | fields | when |
 |---|---|---|
-| `welcome` | `version`, `agent`, `mode`, `account`, `sim`, `rules` (`{roots: [..], maxQty: {ROOT: n}, entryFrom, entryUntil, flatAt, maxExpireSec, maxTrades, maxLosses, maxBracketTicks, maxTicksAway}`, null for none; `maxQty` per root is the cap really enforced: the smallest of the agent's rule, the hard ceiling and `config.txt`'s gate 3 cap for that root, its default of 1 included; `maxBracketTicks` and `maxTicksAway` are `config.txt`'s, null when not set), `instruments` (`[{root, name, tick, pointValue}]` of its roots ChartBridge serves now) | after `agentHello`; again after any rules, account or mode change, and whenever an enforced cap changes |
+| `welcome` | `version`, `agent`, `mode`, `account`, `sim`, `rules` (`{roots: [..], maxQty: {ROOT: n}, entryFrom, entryUntil, flatAt, maxExpireSec, maxTrades, maxLosses, maxBracketTicks, maxTicksAway}`, null for none; `maxQty` per root is the cap really enforced: the smallest of the agent's rule, the hard ceiling and `config.txt`'s gate 3 cap for that root, its default of 1 included (0.5.3: for MNQ always the agents' own 20, never `maxQty.MNQ`); `maxBracketTicks` and `maxTicksAway` are `config.txt`'s, null when not set), `instruments` (`[{root, name, tick, pointValue}]` of its roots ChartBridge serves now) | after `agentHello`; again after any rules, account or mode change, and whenever an enforced cap changes |
 | `agentState` | `mode`, `killed`, `standDown` (null or why), `trades`, `losses`, `pnlToday`, `owns`, `session` (`yyyy-MM-dd`, ChartBridge's 18:00 ET session date; compare counters only within one session) | after `agentHello`, and again whenever any field changes (`owns` recomputed on every order and position change of its account and roots) |
 | `tick`, `history`, `ticks`, `ready` | as the page's | |
 | `order`, `exec`, `position` | as the page's: `order` for its own orders, `position` for its account on its roots, `exec` for its own fills and, while it owns a pair, for every fill on its account and that root, its own or not (Anthony's Flatten or a close made in NinjaTrader arrives as `role` `other`, `cbId` null when the order is not ChartBridge's). `order` adds `orderName` (NinjaTrader's own order name: `CB#<tag> ag:<id> s<n> t<n>` for an entry; its legs are v2's, `CB#<tag> stop f<n> q<n> p<price>` and `CB#<tag> target f<n> q<n> p<price>`, no `ag:`, matched by the entry's tag; `CB#<tag> ag:<id> flat`; `CB#<tag> ag:<id> protect f<n>`; `CB#<tag> ag:<id> stop p<price>` for its stop placed again over a shut market; `name` stays the instrument), and `order.role` is `flat` for its flat-time close, `protect` for its protective exit and `stop` for the stop placed again. `exec` adds `cbId` (ChartBridge's order id, `o12`, or null when the order is not ChartBridge's) and `role` (`entry`, `stop`, `target`, `flat`, `protect` only for the agent's own orders: `ag:<id>` in the name, or legs carrying its entry's tag; `other` for every other order, a page's included) | |
@@ -2503,6 +2508,28 @@ Where the contract left a detail open, the safest simple choice was taken and is
   refused plainly while `orderTypes = off`.
 - **Check 4** (lead's default): `config.txt`'s gate 3 cap (`maxQty.<ROOT>`) and `maxBracketTicks` still hold for agents: the
   smallest of the agent's `maxQty`, the hard ceiling and the cap.
+- **The agents' MNQ cap** (ChartBridge 0.5.3, Anthony 2026-10-10): the cap of 20 ships with ChartBridge, so any PC can run an
+  agent at its full plan (20 MNQ) with nothing set by hand. Gate 3's config cap for an agent's MNQ entry is always 20
+  (`ChartBridgeAgents.ShippedConfigCap`, through `ChartBridgeOrders.AgentCap`): `config.txt`'s `maxQty.MNQ` is never read
+  for agents. The agent's MNQ entry is capped by the smallest of its own rule (Agent tab, default 20), the hard ceiling (20)
+  and that 20. The page's, the bot's and the copier's MNQ caps are as before: the `maxQty.MNQ` line, or 1 with no line.
+  Every other root for agents is as before too (`config.txt`'s cap, 1 with no line). With agents on and a `maxQty.MNQ`
+  line, ChartBridge says once at start in the Output window that the line caps the page, the bot and the copier only.
+  ChartBridge never writes `config.txt`; nor do the installer and the updater.
+- **A page exit from an agent's position** (0.5.3 review): a page market order that only reduces an agent's position (the
+  owner lock's exit: no bracket, no strategy, the other side, at most the smaller reading) skips gate 3's per-order qty
+  check, and gate 3's position count (position plus working orders on that side plus this order) is held to that agent's
+  cap (`ChartBridgeOrders.AgentExitCap`: its rule, the hard ceiling, MNQ 20; or the position when that is larger), never
+  below the page's own cap. So with no `maxQty.MNQ` line the page may sell 5 of an agent's 20 MNQ in one order. Re-review:
+  the exit plus the page's exits still working on that side (orders that are no bracket leg or merged set) may close at most
+  the position, read again at gate 3 (both readings on the other side, else 0), so two quick exits never flip it: "this exit
+  would close <n> <ROOT> contracts (working exits <w>, this order <q>) of agent <id>'s position of <held>: an exit closes at
+  most the position (use Flatten to close it all)". More than the position, or an add, is no exit: the owner lock
+  refuses it (never trimmed to the position).
+- **The words of a size refusal** (0.5.3 review): gate 3 and plan check 4 name the cap that applied
+  (`ChartBridgeAgents.CapWords`): `agent <id>'s maxQty for <ROOT>` when the agent's rule is below the hard ceiling, else
+  `the hard ceiling of <n> for <ROOT>`; `maxQty.<ROOT> in config.txt` only for a root with no shipped cap whose line is
+  lower (never MNQ for an agent); an exit's count says `an exit from agent <id>'s position: ...`.
 - **Check 7** (lead's default): New York time of day, any day (a closed market's stale last trade refuses at check 11).
 - **Check 8** (lead's default): "a position" is the agent's open trade or any pair it still owns.
 - **Check 10** (lead's default): an agent enters only where its account and root hold no position by either reading (any

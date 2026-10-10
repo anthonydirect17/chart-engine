@@ -92,7 +92,31 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal static List<Order> AgentMayFill(Account a, Instrument i) { return CopierMayFill(a, i); }
         internal static bool AgentMayFillState(OrderState s) { return MayFill(s); }
         internal static string AgentStatus(Account a) { return StatusOf(a); }
-        internal static int AgentCap(string root) { return CapFor(root); }
+        // Gate 3's config cap for an agent's entry: the agents' shipped cap where one ships (0.5.3: MNQ 20, Anthony 2026-10-10;
+        // config.txt's maxQty line for that root is never read for agents), else config.txt's cap as for the page (CapFor). The
+        // page's, the bot's and the copier's caps stay CapFor. The agent's rule and the hard ceiling apply on top (CapFor(id, root)).
+        internal static int AgentCap(string root) { int s = ChartBridgeAgents.ShippedConfigCap(root); return s > 0 ? s : CapFor(root); }
+        // Gate 3's cap for an agent's entry and its words (0.5.3 review: the words name the cap that applied, never maxQty.MNQ):
+        // the agent's maxQty (ChartBridgeAgents.CapFor, its words CapWords), or AgentCap when that is lower (config.txt's line
+        // for a root with no shipped cap).
+        internal static int AgentEntryCap(string agent, string root, out string why)
+        {
+            int own = ChartBridgeAgents.CapFor(agent, root), conf = AgentCap(root);
+            if (conf < own) { why = "maxQty." + root + " in config.txt"; return conf; }
+            why = ChartBridgeAgents.CapWords(agent, root, own);
+            return own;
+        }
+        // 0.5.3 review: the position count's cap for a page exit from an agent's position (PlaceOrderLocked's pageReduces: at most
+        // the smaller reading, never a flip or an add; it skips the per-order qty check): the agent's cap (AgentEntryCap), or the
+        // position it holds (held) when that is larger, as after its rule was lowered. The page's exits still working never add up
+        // past the position itself (PlaceOrderLocked, 0.5.3 re-review).
+        internal static int AgentExitCap(string owner, string root, int held, out string why)
+        {
+            string w;
+            int a = AgentEntryCap(owner, root, out w);
+            why = "an exit from agent " + owner + "'s position: " + (a >= held ? w : "its " + held + " contracts");
+            return Math.Max(a, held);
+        }
         internal static int AgentMaxBracketTicks { get { return MaxBracketTicks; } }
         internal static int AgentMaxTicksAway { get { return MaxTicksAway; } }
         // The last trade on a root (any age, 0 when none) and whether it is no older than maxAgeMs (the market trading in fact).
@@ -131,6 +155,21 @@ namespace NinjaTrader.NinjaScript.AddOns
                 case "MES": return 20;
                 default: return 0;
             }
+        }
+
+        // 0.5.3 (Anthony, 2026-10-10): the agents' MNQ cap of 20 ships with ChartBridge, so any PC can run an agent at its full
+        // plan with nothing set by hand. For agent entries on MNQ it replaces config.txt's gate 3 cap: a maxQty.MNQ line caps the
+        // page, the bot and the copier only. 0: nothing ships for the root (it takes config.txt's cap, as the page's).
+        public static int ShippedConfigCap(string root) { return (root ?? "").ToUpperInvariant() == "MNQ" ? 20 : 0; }
+
+        // At config load, with agents on and a maxQty.MNQ line: said once, so the line is not read as the agents' cap.
+        public static void NoteConfigCaps()
+        {
+            if (Ids().Count == 0) return;
+            int n;
+            if (ChartBridgeOrders.MaxQty.TryGetValue("MNQ", out n))
+                ChartBridgeServer.Log("config.txt: maxQty.MNQ = " + n + " caps the page's, the bot's and the copier's MNQ orders only; agents use their own MNQ cap of " +
+                                      ShippedConfigCap("MNQ") + " (with the agent's rule and the hard ceiling)");
         }
 
         public const string SecretHeader = "X-ChartBridge-Agent";
@@ -435,6 +474,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             ChartBridgeAgent a = Get(id);
             return a == null ? 0 : Math.Min(HardCeiling(root), a.MaxQtyFor(root));
+        }
+        // 0.5.3 review: the words for the agent's cap that applied (rule: its maxQty for the root): its own rule (the Agent tab)
+        // when below the hard ceiling, else the hard ceiling (a rule is never above it, RulesProblem; with no line it is the ceiling).
+        public static string CapWords(string id, string root, int rule)
+        {
+            int ceil = HardCeiling(root);
+            return rule < ceil ? "agent " + id + "'s maxQty for " + root : "the hard ceiling of " + ceil + " for " + root;
         }
 
         // The agent whose CHOSEN account (chosen on the page: agent-<id>-account.txt) this is, for the bot's and the copier's
@@ -1620,9 +1666,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (p.Kind == "limit" && p.LimitText != null) return "limitPrice goes on a stopLimit plan only";
             if (p.Kind == "stopLimit" && !ChartBridgeOrders.AgentOrderTypes) return "stop-limit entries are off (orderTypes = off in config.txt)";
             // 4. the size, the stop and the target
-            int ceiling = Math.Min(ChartBridgeAgents.HardCeiling(root), r.QtyFor(root)), cap = ChartBridgeOrders.AgentCap(root);
-            if (p.Qty < 1 || p.Qty > ceiling) return "qty must be a whole number from 1 to " + ceiling + " (agent " + Id + "'s maxQty for " + root + ")";
-            if (p.Qty > cap) return "qty " + p.Qty + " is over the " + root + " cap of " + cap + " (maxQty." + root + " in config.txt)";
+            int ceiling = Math.Min(ChartBridgeAgents.HardCeiling(root), r.QtyFor(root)), cap;
+            if (p.Qty < 1 || p.Qty > ceiling) return "qty must be a whole number from 1 to " + ceiling + " (" + ChartBridgeAgents.CapWords(Id, root, ceiling) + ")";
+            string capWhy;
+            cap = ChartBridgeOrders.AgentEntryCap(Id, root, out capWhy);   // 0.5.3 review: the words name the cap that applied (MNQ never maxQty.MNQ)
+            if (p.Qty > cap) return "qty " + p.Qty + " is over the " + root + " cap of " + cap + " (" + capWhy + ")";
             if (p.StopTicks < 1 || p.TargetTicks < 1) return "every agent entry needs a stop and a target: stopTicks and targetTicks must be whole numbers of 1 or more";
             int mb = ChartBridgeOrders.AgentMaxBracketTicks;
             if (mb > 0 && (p.StopTicks > mb || p.TargetTicks > mb)) return "stopTicks and targetTicks must be at most " + mb + " (maxBracketTicks in config.txt)";
@@ -2917,7 +2965,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             bool ex;
             lock (Sync) ex = openTag != null || Proposals.Values.Any(p => p.State == "open" || p.State == "accepting");
-            return ex || WorkingEntries().Count > 0 || RulesNow().Roots.Any(r => Owns(r));
+            return ex || WorkingEntries().Count > 0 || FlatRoots().Any(r => Owns(r));   // rules file unreadable: every root an agent may trade
         }
 
         // agentRules: flat keys (the strict parser allows no nesting): roots "NQ,MNQ", maxQty<ROOT> for a root named (left out: the
@@ -2959,7 +3007,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             r.MaxLosses = n;
             string bad = RulesProblem(r);
             if (bad != null) return bad;
-            if (Exposed()) return "agent " + Id + " has a position, a working entry or an open proposal: change its rules when it is flat";
+            // 0.5.4 (Anthony 2026-10-10, DECISION ag: "I do not want to be locked out of changing the time ... during live trading"):
+            // while the agent has a position, a working entry or an open proposal, its window (entryFrom, entryUntil, flatAt) may
+            // still change, inside the same limits; every other rule waits until it is flat. The new window rules at once: a flat
+            // time already passed, or a start after now, puts it in its flat hours (FlatHours) and its position is flattened by its
+            // rules; an entry or a proposal outside the new window ends as at the window's end.
+            // the rules file could not be read (the rules in force are placeholder defaults): no change while exposed, not even the
+            // window, since it would be measured against those defaults and would clear the broken file's stand-down
+            bool broken; lock (Sync) broken = rulesBroken != null;
+            if (broken && Exposed()) return "agent-" + Id + "-rules.txt could not be read: agent " + Id + " has a position, a working entry or an open proposal, so its rules cannot change until it is flat (or the file reads again)";
+            if (Exposed() && !SameButWindow(RulesNow(), r)) return "agent " + Id + " has a position, a working entry or an open proposal: only its window (entries from, until, flat at) can change now; change its other rules when it is flat";
             string err = SaveRules(r);
             if (err != null) return "agent-" + Id + "-rules.txt could not be saved (" + err + "); nothing changed";
             lock (Sync) { rules = r; rulesBroken = null; StandDownLocked(); }   // a loss stand-down already held stays (lead's default)
@@ -2970,6 +3027,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             ToAgent(WelcomeJson());
             Notify();
             return null;
+        }
+
+        // The two rule sets differ in the window alone (entryFrom, entryUntil, flatAt): the same roots in the same order, each root's
+        // maxQty, maxExpireSec, maxTrades and maxLosses.
+        private static bool SameButWindow(Rules a, Rules b)
+        {
+            return a.Roots.SequenceEqual(b.Roots) && a.Roots.All(x => a.QtyFor(x) == b.QtyFor(x)) && a.MaxExpireSec == b.MaxExpireSec && a.MaxTrades == b.MaxTrades && a.MaxLosses == b.MaxLosses;
         }
 
         // 0.5.2: why an entry is refused outside the window: the market closed, or the time.
@@ -3143,7 +3207,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Str(string s) { return s != null ? CbJson.Str(s) : "null"; }
 
         // welcome.rules (contract section 10 item 8): the caps ChartBridge really enforces on this agent's entries: per root the
-        // smallest of its rule, the hard ceiling and config.txt's gate 3 cap (DefaultMaxQty when config.txt names none), plus
+        // smallest of its rule, the hard ceiling and gate 3's config cap for agents (AgentCap: MNQ 20 whatever config.txt says), plus
         // config.txt's maxBracketTicks and maxTicksAway (null when not set). The pages' strip keeps the agent's own rules.
         private static string EnforcedRulesJson(Rules r)
         {

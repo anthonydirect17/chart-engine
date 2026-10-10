@@ -431,7 +431,7 @@ test('TradeCore: the active strategy goes in place of the bracket (strict keys),
   h.core.sendOrder('buy', 'market', null);
   assert.equal(h.sent.length, 0);
   assert.match(h.flashes.pop()[0], /^Not sent: strategy Scalp 2: stop must be at most 10/);
-  // the bracket itself was cut to that maxBracketTicks (1.20.0: the cap is maxBracketTicks whatever the version; until 1.19.0
+  // the bracket itself was cut to that maxBracketTicks (1.21.0: the cap is maxBracketTicks whatever the version; until 1.19.0
   // a hello with no version kept the 200-tick cap)
   assert.deepEqual(h.core.brackets.MNQ, { stop: 8, target: 10 });
   // no strategy picked: the bracket as before

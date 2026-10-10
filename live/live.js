@@ -1,6 +1,6 @@
 /*
  * Live chart page: connects to ChartBridge (NinjaTrader 8 add-on) and drives chart-engine.
- * Protocol: nt8/PROTOCOL.md, ChartBridge 0.5.2 or newer (live/COMPAT.json; 1.20.0 dropped the fallbacks for older ones).
+ * Protocol: nt8/PROTOCOL.md, ChartBridge 0.5.2 or newer (live/COMPAT.json; 1.21.0 dropped the fallbacks for older ones).
  * It can trade (protocol v2), but only after ChartBridge enables it (trading = true in config.txt, this page signed in with
  * the session token) and only while the Armed switch is on. Armed is off after every page load.
  * ChartBridge 0.3.2 locks this page with a 4-digit PIN (live/pin.js): the page boot waits for the unlock, and only
@@ -1720,7 +1720,7 @@ function start(container, opt, PAGE) {
    * shown, then each live trade is added after the bar builders in onTick, told which bar it made, so it holds exactly
    * the trades the store holds and the bars the chart shows, with no rebuild per trade. Hidden, there is no core.
    * Every ChartBridge this page works with (0.5.2 or newer, live/COMPAT.json) sends sides, so the pane never waits to
-   * learn whether they come (1.20.0: the note for ChartBridge 0.3.3 and older is gone).
+   * learn whether they come (1.21.0: the note for ChartBridge 0.3.3 and older is gone).
    * It counts only trades with a measured side, from the start of that window (deltaCoverage): a session that started
    * before it counts from its first complete bar, and the pane's title and the legend say since when ("since 10:04 ET
    * (page opened)").
@@ -1933,7 +1933,7 @@ function start(container, opt, PAGE) {
   function deltaStop() { deltaJob = null; deltaSet(null); }
   function deltaSet(cd) { D.delta = cd; chart.setDelta(cd); deltaView(); deltaLegend(true); if (typeof sigDivergence === 'function') sigDivergence(false); }
   const deltaBuilding = () => deltaJob !== null;
-  /* Why a session may count from later than 18:00, for the pane's title (the page sets no note since 1.20.0). */
+  /* Why a session may count from later than 18:00, for the pane's title (the page sets no note since 1.21.0). */
   const deltaWhy = () => D.deltaCov ? D.deltaCov.why : '';
   function deltaView() { chart.setDeltaView({ note: '', reason: deltaWhy(), missed: countMissed() }); }
   /* "Delta +12,345" in the legend (the bar under the crosshair, else the newest), "Bar delta" in bar mode, the start

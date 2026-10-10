@@ -41,7 +41,7 @@ test('planDrag: the new distance in whole ticks, snapped, at least 1; a stop at 
   assert.match(OT.planDrag(null, 'stop', 1, 0.25).error, /no longer working/);
 });
 
-test('the bracket cap: none unless maxBracketTicks is set (1.20.0: no 200-tick cap for ChartBridge before 0.3.7)', () => {
+test('the bracket cap: none unless maxBracketTicks is set (1.21.0: no 200-tick cap for ChartBridge before 0.3.7)', () => {
   assert.equal(OT.bracketCap(), OT.NO_CAP);
   assert.equal(OT.bracketCap(0), OT.NO_CAP);
   assert.equal(OT.bracketCap(300), 300);
@@ -96,7 +96,7 @@ test('TradeCore: a planned line\'s drag sends plan with the ticks; its x sends n
   assert.equal(r.sent.length, 4);
 });
 
-test('TradeCore: no page cap whatever the version says (1.20.0); plan counts toward ChartBridge\'s 10 a second', () => {
+test('TradeCore: no page cap whatever the version says (1.21.0); plan counts toward ChartBridge\'s 10 a second', () => {
   assert.equal(rig('fake-0.3.4').core.cap(), OT.NO_CAP, 'the version no longer counts: no 200-tick cap');
   assert.equal(rig('0.3.8').core.cap(), OT.NO_CAP);
   assert.ok(TC.ORDER_ACTIONS.includes('plan'));

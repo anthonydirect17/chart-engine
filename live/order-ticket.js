@@ -43,7 +43,7 @@ function cleanBracket(v, max) {
 
 /*
  * The bracket's cap (1.13.0): no limit unless config.txt sets maxBracketTicks (ChartBridge's `trading` message names it).
- * NO_CAP keeps a typed number sane, nothing more. 1.20.0: the page needs ChartBridge 0.5.2 (live/COMPAT.json), so the
+ * NO_CAP keeps a typed number sane, nothing more. 1.21.0: the page needs ChartBridge 0.5.2 (live/COMPAT.json), so the
  * 200-tick cap for ChartBridge before 0.3.7 is gone.
  */
 const NO_CAP = 100000;

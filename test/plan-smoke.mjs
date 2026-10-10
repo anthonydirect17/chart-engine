@@ -221,7 +221,7 @@ try {
   check(await page.evaluate(() => document.getElementById('bStop').max) === '100000', 'ChartBridge 0.3.8 with no maxBracketTicks: no 200-tick cap on the bracket fields');
   await page.close();
 
-  // a mistyped limit in config.txt: the warning stays on the page until dismissed (1.20.0: no page for ChartBridge 0.3.6 and
+  // a mistyped limit in config.txt: the warning stays on the page until dismissed (1.21.0: no page for ChartBridge 0.3.6 and
   // its 200-tick cap any more)
   for (const [port, flags, what] of [[PORT + 1, ['--version=0.3.8', '--max-ticks-away=abc', '--max-bracket-ticks=1.5'], 'warn']]) {
     await startBridge(port, ['--trading', '--trade-accounts=Sim101', '--test-controls', '--test-pin=' + TEST_PIN].concat(flags));

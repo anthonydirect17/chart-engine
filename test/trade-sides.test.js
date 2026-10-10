@@ -2,7 +2,7 @@
 // ChartBridge 0.3.4 tags every trade with its side: live ticks get "s" and "sm", backfill trades become [t, p, v, s, sm].
 // The fields are additive: the current page (live/live.js with live/bar-builder.js) must read the new messages exactly
 // as the old ones. These tests feed both formats to the page's own parsing and bar building, check the page reads only
-// what it always read, and check the fake bridge speaks the new format (chart 1.20.0: the fake has no --no-sides mode any
+// what it always read, and check the fake bridge speaks the new format (chart 1.21.0: the fake has no --no-sides mode any
 // more; the page needs ChartBridge 0.5.2).
 const test = require('node:test');
 const assert = require('node:assert/strict');

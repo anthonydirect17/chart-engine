@@ -288,7 +288,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   bottom), eased like the price scale. Numbers with thousands separators and a sign. Bars with no delta (before the page
   has every trade, or with no trade) stay blank; a session that counts from later than 18:00 gets a dashed
   `#8392A5` line at its first counted bar. (A note from the page, drawn alone with the title in 500 12px Condensed,
-  centered, was the page's "Delta needs ChartBridge 0.3.4 on this PC" until chart 1.20.0; the page sets none now.) Legend: "Delta +12,345" (bull color above zero, bear
+  centered, was the page's "Delta needs ChartBridge 0.3.4 on this PC" until chart 1.21.0; the page sets none now.) Legend: "Delta +12,345" (bull color above zero, bear
   below), "Bar delta +123" in bar mode, "Delta since 18:37:16.6 +1,234" for a later start ("Delta since 18:37:16.6, missed 32 s +1,234" after a gap), and "· 37 unknown" (the unknown
   side volume of the session, dim) when there is any. On by default on the main pane, without a chip (pin it from the
   menu for one); its own Indicators entry "Cumulative delta" (chip DELTA, letter D) in the Volume group.

@@ -387,7 +387,7 @@ try {
   }
   await page.close();
 
-  /* ---------------- a plain string wsUrl (1.20.0: on the current protocol; ChartBridge 0.2's v1 is gone), and no storagePrefix given */
+  /* ---------------- a plain string wsUrl (1.21.0: on the current protocol; ChartBridge 0.2's v1 is gone), and no storagePrefix given */
   await startBridge(PORT + 1, ['--pin-off']);   // the host page is on the bridge's own origin: no PIN here (a host never has one)
   {
     const p2 = await ctx.newPage();

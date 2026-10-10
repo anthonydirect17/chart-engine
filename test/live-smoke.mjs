@@ -1,5 +1,5 @@
 // Live page smoke test against the fake bridge (test/fake-bridge.mjs) on the current protocol (v2, trade sides, the PIN;
-// trading off, as ChartBridge starts), so the page is checked to work as before. Chart 1.20.0 rewrote it from ChartBridge
+// trading off, as ChartBridge starts), so the page is checked to work as before. Chart 1.21.0 rewrote it from ChartBridge
 // 0.2's protocol v1, which the page no longer serves (live/COMPAT.json: ChartBridge 0.5.2 or newer). Order entry:
 // test/orders-smoke.mjs. Sample data only; nothing reaches a broker. Screenshots in test/out/.
 import { chromium } from 'playwright';
