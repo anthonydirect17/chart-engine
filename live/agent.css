@@ -220,6 +220,22 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-kill:hover { background: rgba(255, 59, 92, .14); }
 .ag-view .ag-kill.on { background: var(--f-rd); color: #1a0006; box-shadow: 0 0 26px rgba(255, 59, 92, .8); }
 .ag-view .ag-kill:disabled { opacity: .5; cursor: not-allowed; }
+/* On/Off (1.20.0): the build he runs, On and Off, the live agent's spend beside them, auto-On and the daily cap folded away.
+   On and Off change at once (R3: they start and stop trading), as the mode */
+.ag-view .ag-onoff[hidden] { display: none; }
+.ag-view .ag-hpick { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ag-view .ag-hpick .ag-sel { flex: 1; min-width: 0; }
+.ag-view .ag-hrow { display: flex; align-items: center; gap: 12px; }
+.ag-view .ag-onoffbtns { flex: 0 0 auto; width: 150px; }
+.ag-view .ag-onoffbtns button[data-onoff="on"][aria-pressed="true"] { color: var(--f-ground); background: var(--f-c); }
+.ag-view .ag-onoffbtns button[data-onoff="off"][aria-pressed="true"] { color: #fff; background: transparent; border-color: var(--f-dim); box-shadow: none; }
+.ag-view .ag-spend { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--f-hot); min-width: 0; }
+.ag-view .ag-spend .mono { font-weight: 600; }
+.ag-view .ag-hset summary { cursor: pointer; }
+.ag-view .ag-hform { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 6px; }
+.ag-view .ag-hform label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--f-dim); }
+.ag-view .ag-hform .ag-in { width: 84px; }
+.ag-view .ag-onoffbtns button, .ag-view .ag-spend, .ag-view .ag-spend * { transition: none !important; animation: none !important; }
 .ag-view .ag-ask { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--f-rd); background: rgba(255, 59, 92, .08); font-size: 13px; color: #ffe4ea; }
 .ag-view .ag-ask[hidden], .ag-view .ag-edit[hidden], .ag-view .ag-rform[hidden] { display: none; }
 .ag-view .ag-ask .ag-live-go { color: #1a0006; background: var(--f-rd); border-color: var(--f-rd); }

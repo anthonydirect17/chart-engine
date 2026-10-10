@@ -47,6 +47,8 @@
     "smoke:bot": "node test/bot-smoke.mjs",
     "smoke:agent": "node test/agent-smoke.mjs && node test/agent-targets-smoke.mjs",
     "smoke:agent-targets": "node test/agent-targets-smoke.mjs",
+    "smoke:quality": "node test/quality-smoke.mjs",
+    "smoke:onoff": "node test/agent-onoff-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",
     "perf:bot": "node test/perf-bot.mjs",

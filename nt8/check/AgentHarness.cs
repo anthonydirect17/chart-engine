@@ -41,6 +41,7 @@ public static class AgentHarness
     static int Count(List<string> l, string type) { lock (l) return l.Count(x => x.StartsWith("{\"type\":\"" + type + "\"")); }
     static bool Any(List<string> l, int from, string has) { lock (l) return l.Skip(from).Any(x => x.Contains(has)); }
     static int N(List<string> l) { lock (l) return l.Count; }
+    static int LogCount() { lock (NinjaTrader.Code.Output.Lines) return NinjaTrader.Code.Output.Lines.Count; }
     static bool Logged(string has) { lock (NinjaTrader.Code.Output.Lines) return NinjaTrader.Code.Output.Lines.Any(x => x.Contains(has)); }
     static string Dir { get { return Path.Combine(home, "ChartBridge"); } }
     static string FileText(string name) { try { return File.ReadAllText(Path.Combine(Dir, name)); } catch (Exception) { return ""; } }
@@ -441,11 +442,11 @@ public static class AgentHarness
         refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 16, 600, ",\"limitPrice\":24999"), "limitPrice goes on a stopLimit plan only", "check 3: limitPrice on a limit");
         // 4. size, stop, target
         refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 0, 0, 16, 1), "qty must be a whole number from 1 to 20", "check 4 before 5 and 6: qty 0");
-        refuse(Plan(NewId(), "NQ", "buy", "limit", "24999", 3, 8, 16, 600), "qty must be a whole number from 1 to 2 (agent manrae's maxQty for NQ)", "check 4: NQ 3 (ceiling 2)");
-        refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 21, 8, 16, 600), "qty must be a whole number from 1 to 20", "check 4: MNQ 21 (ceiling 20)");
-        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
-        refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 4, 8, 16, 600), "qty 4 is over the MNQ cap of 3 (maxQty.MNQ in config.txt)", "check 4: config.txt's gate 3 cap still holds");
-        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "30");
+        refuse(Plan(NewId(), "NQ", "buy", "limit", "24999", 3, 8, 16, 600), "qty must be a whole number from 1 to 2 (the hard ceiling of 2 for NQ)", "check 4: NQ 3 (ceiling 2; 0.5.3 review: the words name the ceiling)");
+        refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 21, 8, 16, 600), "qty must be a whole number from 1 to 20 (the hard ceiling of 20 for MNQ)", "check 4: MNQ 21 (ceiling 20)");
+        ChartBridgeOrders.ReadConfig("maxQty.NQ", "1");   // 0.5.3: MNQ takes the agents' own cap of 20; config.txt's cap holds for NQ
+        refuse(Plan(NewId(), "NQ", "buy", "limit", "24999", 2, 8, 16, 600), "qty 2 is over the NQ cap of 1 (maxQty.NQ in config.txt)", "check 4: config.txt's gate 3 cap still holds (NQ)");
+        ChartBridgeOrders.ReadConfig("maxQty.NQ", "5");
         refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 0, 16, 600), "every agent entry needs a stop and a target", "check 4: no stop");
         refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 0, 600), "every agent entry needs a stop and a target", "check 4: no target");
         // 5. risk
@@ -2145,23 +2146,163 @@ public static class AgentHarness
         Part("10.8", () =>
         {
             Fresh();
-            int capWas = ChartBridgeOrders.CapFor("MNQ");
+            int capWas = ChartBridgeOrders.CapFor("NQ");
             try
             {
                 int w0 = Count(agentOut, "welcome");
-                ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
+                ChartBridgeOrders.ReadConfig("maxQty.NQ", "1");   // 0.5.3: NQ, since an agent's MNQ cap is its own 20 whatever config.txt says
                 ChartBridgeOrders.MaxBracketTicks = 40; ChartBridgeOrders.MaxTicksAway = 30;
                 Advance(500);
                 string w = Last(agentOut, "welcome");
-                Check(Count(agentOut, "welcome") == w0 + 1 && w.Contains("\"maxQty\":{\"NQ\":2,\"MNQ\":3}") && w.Contains("\"maxBracketTicks\":40,\"maxTicksAway\":30}"),
-                      "10.8: config.txt's cap 3 and its bracket and distance limits: welcome again with the caps enforced: " + w);
+                Check(Count(agentOut, "welcome") == w0 + 1 && w.Contains("\"maxQty\":{\"NQ\":1,\"MNQ\":20}") && w.Contains("\"maxBracketTicks\":40,\"maxTicksAway\":30}"),
+                      "10.8: config.txt's NQ cap 1 and its bracket and distance limits: welcome again with the caps enforced: " + w);
                 Advance(1000);
                 Check(Count(agentOut, "welcome") == w0 + 1, "10.8: nothing changed: no welcome again");
-                A(Plan(NewId(), "MNQ", "buy", "limit", "24999", 4, 8, 16, 600));
-                Check(AgentReject().Contains("qty"), "10.8: what is enforced is as before: 4 MNQ refused at the cap of 3: " + AgentReject());
+                A(Plan(NewId(), "NQ", "buy", "limit", "24999", 2, 8, 16, 600));
+                Check(AgentReject().Contains("qty"), "10.8: what is enforced is as before: 2 NQ refused at the cap of 1: " + AgentReject());
                 Check(Last(page, "agent").Contains("\"maxQty\":{\"NQ\":2,\"MNQ\":20}"), "10.8: the pages' strip keeps the agent's own rules");
             }
-            finally { ChartBridgeOrders.ReadConfig("maxQty.MNQ", capWas.ToString(CultureInfo.InvariantCulture)); ChartBridgeOrders.MaxBracketTicks = 0; ChartBridgeOrders.MaxTicksAway = 0; }
+            finally { ChartBridgeOrders.ReadConfig("maxQty.NQ", capWas.ToString(CultureInfo.InvariantCulture)); ChartBridgeOrders.MaxBracketTicks = 0; ChartBridgeOrders.MaxTicksAway = 0; }
+            Advance(500);
+        });
+
+        // 0.5.3 (Anthony 2026-10-10): the agents' MNQ cap of 20 ships with ChartBridge, and an agent's MNQ entry never reads
+        // config.txt's maxQty.MNQ: it is capped by its own rule and the hard ceiling only. The page keeps config.txt's cap (the
+        // line, or 1 with no line). Other roots for agents as before. A maxQty.MNQ line, with agents on, is said once at start.
+        Part("0.5.3 shipped cap", () =>
+        {
+            Fresh();
+            int capWas = ChartBridgeOrders.CapFor("MNQ");
+            int logWas;
+            try
+            {
+                ChartBridgeOrders.MaxQty.Remove("MNQ");   // this PC's config.txt has no maxQty.MNQ line
+                Check(ChartBridgeOrders.AgentCap("MNQ") == 20 && ChartBridgeOrders.CapFor("MNQ") == 1, "0.5.3: no maxQty.MNQ line: an agent's MNQ cap is 20, the page's stays 1");
+                Check(ChartBridgeOrders.AgentCap("ES") == 1 && ChartBridgeOrders.AgentCap("NQ") == 5 && ChartBridgeOrders.CapFor("NQ") == 5, "0.5.3: only MNQ ships: ES with no line stays 1; NQ's line holds for both");
+                Advance(500);
+                Check(Last(agentOut, "welcome").Contains("\"maxQty\":{\"NQ\":2,\"MNQ\":20}"), "0.5.3: welcome.rules: MNQ 20 enforced: " + Last(agentOut, "welcome"));
+                Order e = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 20, 27, 54, 600));
+                Check(e != null && e.Quantity == 20 && e.OrderAction == OrderAction.Buy, "0.5.3: an agent's 20 MNQ entry risking $270 is placed: " + (e != null ? e.Quantity + " " + e.Name : AgentReject()));
+                Settle(sime);
+                Advance(1000);
+                Order g3o;
+                string g3 = ChartBridgeOrders.PlaceAgentEntry("manrae", "{\"type\":\"order\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"limit\",\"qty\":21,\"price\":24999,\"bracket\":{\"stop\":8,\"target\":16}}", out g3o);
+                Check(g3 == "qty 21 is over the MNQ cap of 20 (the hard ceiling of 20 for MNQ)" && g3o == null, "0.5.3 review: gate 3's words for an agent's MNQ at its default rule name the hard ceiling, never maxQty.MNQ: " + g3);
+                A(Plan(NewId(), "MNQ", "buy", "limit", "24999", 21, 8, 16, 600));
+                Check(AgentReject().Contains("qty must be a whole number from 1 to 20 (the hard ceiling of 20 for MNQ)"), "0.5.3: 21 MNQ is still over the hard ceiling (plan check 4 names it): " + AgentReject());
+                int calls = sim.Calls.Count;
+                P("{\"type\":\"order\",\"cid\":\"q53\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":2,\"bracket\":{\"stop\":8,\"target\":16}}");
+                Check(PageReject().Contains("qty 2 is over the MNQ cap of 1 (maxQty.MNQ in config.txt)") && sim.Calls.Count == calls, "0.5.3: the page's own MNQ order keeps the cap of 1: " + PageReject());
+                logWas = LogCount();
+                ChartBridgeAgents.NoteConfigCaps();
+                Check(LogCount() == logWas, "0.5.3: no maxQty.MNQ line: nothing to say at start");
+                // a maxQty.MNQ line on this PC: the page's cap only; the agent keeps its own 20
+                ChartBridgeOrders.ReadConfig("maxQty.MNQ", "5");
+                Check(ChartBridgeOrders.AgentCap("MNQ") == 20 && ChartBridgeOrders.CapFor("MNQ") == 5, "0.5.3: maxQty.MNQ = 5: the page's cap is 5, the agent's stays 20");
+                Advance(500);
+                Check(Last(agentOut, "welcome").Contains("\"maxQty\":{\"NQ\":2,\"MNQ\":20}"), "0.5.3: welcome.rules: still MNQ 20 with the line: " + Last(agentOut, "welcome"));
+                Order e6 = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 6, 8, 16, 600));
+                Check(e6 != null && e6.Quantity == 6, "0.5.3: an agent's 6 MNQ entry is placed above the line's 5: " + (e6 != null ? e6.Quantity + " " + e6.Name : AgentReject()));
+                Settle(sime);
+                Advance(1000);
+                A(Plan(NewId(), "MNQ", "buy", "limit", "24999", 21, 8, 16, 600));
+                Check(AgentReject().Contains("qty must be a whole number from 1 to 20"), "0.5.3: with the line, refused only above 20: " + AgentReject());
+                P("{\"type\":\"agentRules\",\"cid\":\"r53\",\"agent\":\"manrae\",\"roots\":\"NQ,MNQ\",\"maxQtyNQ\":2,\"maxQtyMNQ\":10,\"entryFrom\":\"09:45\",\"entryUntil\":\"15:00\",\"flatAt\":\"15:55\",\"maxExpireSec\":1800,\"maxTrades\":0,\"maxLosses\":0}");
+                A(Plan(NewId(), "MNQ", "buy", "limit", "24999", 11, 8, 16, 600));
+                Check(AgentReject().Contains("qty must be a whole number from 1 to 10 (agent manrae's maxQty for MNQ)"), "0.5.3: or above its own rule (10): " + AgentReject());
+                g3 = ChartBridgeOrders.PlaceAgentEntry("manrae", "{\"type\":\"order\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"limit\",\"qty\":11,\"price\":24999,\"bracket\":{\"stop\":8,\"target\":16}}", out g3o);
+                Check(g3 == "qty 11 is over the MNQ cap of 10 (agent manrae's maxQty for MNQ)" && g3o == null, "0.5.3 review: gate 3's words name the agent's own rule (10) when that applied, with the line of 5: " + g3);
+                calls = sim.Calls.Count;
+                P("{\"type\":\"order\",\"cid\":\"q56\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":6,\"bracket\":{\"stop\":8,\"target\":16}}");
+                Check(PageReject().Contains("qty 6 is over the MNQ cap of 5 (maxQty.MNQ in config.txt)") && sim.Calls.Count == calls, "0.5.3: the page is still refused above the line's 5: " + PageReject());
+                ChartBridgeAgents.NoteConfigCaps();
+                Check(Logged("config.txt: maxQty.MNQ = 5 caps the page's, the bot's and the copier's MNQ orders only; agents use their own MNQ cap of 20 (with the agent's rule and the hard ceiling)"),
+                      "0.5.3: the line is said in the Output window: it caps the page only");
+            }
+            finally { ChartBridgeOrders.ReadConfig("maxQty.MNQ", capWas.ToString(CultureInfo.InvariantCulture)); Settle(sime); }
+            Advance(500);
+        });
+
+        // 0.5.3 review: Anthony cuts an agent's 20 MNQ from the page while config.txt's cap for the page is 1 (no maxQty.MNQ line).
+        // A page market order that only reduces it is an exit: it skips gate 3's per-order qty check, and gate 3's position count
+        // is held to the agent's cap (20), not the page's 1. More than the position, or an add, is refused by the owner lock.
+        Part("0.5.3 review: a page exit from an agent's position", () =>
+        {
+            Fresh();
+            int capWas = ChartBridgeOrders.CapFor("MNQ");
+            try
+            {
+                ChartBridgeOrders.MaxQty.Remove("MNQ");
+                Check(ChartBridgeOrders.CapFor("MNQ") == 1, "0.5.3 review: no maxQty.MNQ line: the page's MNQ cap is 1");
+                Advance(500);
+                Order e = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 20, 27, 54, 600));
+                Check(e != null && e.Quantity == 20, "0.5.3 review: the agent's 20 MNQ entry is placed: " + (e != null ? e.Quantity + " " + e.Name : AgentReject()));
+                if (e == null) return;
+                // 0.5.3 review: Anthony cuts the agent's 20 MNQ from the page while config.txt's cap for the page is 1
+                Fill(e, 20, 24999);
+                Check(PosOf(sime, mnq) == 20 && Legs(sime, e).Count == 2, "0.5.3 review: the agent is long 20 MNQ with its stop and target");
+                int n0;
+                lock (sime.Orders) n0 = sime.Orders.Count;
+                P("{\"type\":\"order\",\"cid\":\"x5\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"sell\",\"kind\":\"market\",\"qty\":5}");
+                Order cut;
+                lock (sime.Orders) cut = sime.Orders.Skip(n0).FirstOrDefault(o => o.OrderType == OrderType.Market && o.OrderAction == OrderAction.Sell);
+                Check(cut != null && cut.Quantity == 5 && !PageReject().Contains("\"x5\""), "0.5.3 review: the page sells 5 of the agent's 20: placed (an exit skips the per-order qty check; the page's cap is 1): " + (cut != null ? "sell " + cut.Quantity : PageReject()));
+                // still working: a second exit may not add up past the position (its stop and target 20, the first exit 5, this one 16)
+                lock (sime.Orders) n0 = sime.Orders.Count;
+                P("{\"type\":\"order\",\"cid\":\"x16\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"sell\",\"kind\":\"market\",\"qty\":16}");
+                Check(PageReject().Contains("\"x16\"") && PageReject().Contains("this exit would close 21 MNQ contracts (working exits 5, this order 16) of agent manrae's position of 20: an exit closes at most the position (use Flatten to close it all)") && sime.Orders.Count == n0,
+                      "0.5.3 review: a second exit that would add up past the position: refused: " + PageReject());
+                if (cut != null) { cut.OrderState = OrderState.Cancelled; Update(cut); }
+                lock (sime.Orders) n0 = sime.Orders.Count;
+                P("{\"type\":\"order\",\"cid\":\"x25\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"sell\",\"kind\":\"market\",\"qty\":25}");
+                Check(PageReject().Contains("\"x25\"") && PageReject().Contains("SIM-E MNQ belongs to agent manrae: use Flatten, or move its stop or target") && sime.Orders.Count == n0,
+                      "0.5.3 review: the page sells 25 of a long 20: refused, not capped (more than the position is no exit; it would open a short on the agent's pair, the owner lock): " + PageReject());
+                P("{\"type\":\"order\",\"cid\":\"xb\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1}");
+                Check(PageReject().Contains("\"xb\"") && PageReject().Contains("SIM-E MNQ belongs to agent manrae") && sime.Orders.Count == n0, "0.5.3 review: a page buy while the agent is long 20: refused (adds are never an exit): " + PageReject());
+            }
+            finally { ChartBridgeOrders.ReadConfig("maxQty.MNQ", capWas.ToString(CultureInfo.InvariantCulture)); Settle(sime); }
+            Advance(500);
+        });
+
+        // 0.5.3 re-review (M1): an agent that holds less than its cap. Page exits still working count against the position, so two
+        // quick exits can never flip it (long 5: sell 5 twice, the second refused; sell 3 then 2, both placed; 3 then 3, refused).
+        Part("0.5.3 re-review: page exits on a position below the agent's cap", () =>
+        {
+            Fresh();
+            int capWas = ChartBridgeOrders.CapFor("MNQ");
+            try
+            {
+                ChartBridgeOrders.MaxQty.Remove("MNQ");
+                Advance(500);
+                Order e = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 5, 8, 16, 600));
+                Check(e != null && e.Quantity == 5, "0.5.3 re-review: the agent's 5 MNQ entry is placed: " + (e != null ? e.Quantity + " " + e.Name : AgentReject()));
+                if (e == null) return;
+                Fill(e, 5, 24999);
+                Check(PosOf(sime, mnq) == 5 && Legs(sime, e).Count == 2, "0.5.3 re-review: the agent is long 5 MNQ with its stop and target");
+                int k = 0;
+                Func<int, Order> sell = q =>
+                {
+                    int n;
+                    lock (sime.Orders) n = sime.Orders.Count;
+                    string cid = "h" + (++k);
+                    P("{\"type\":\"order\",\"cid\":\"" + cid + "\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"sell\",\"kind\":\"market\",\"qty\":" + q + "}");
+                    lock (sime.Orders) return sime.Orders.Skip(n).FirstOrDefault(o => o.OrderType == OrderType.Market && o.OrderAction == OrderAction.Sell);
+                };
+                Action clear = () => { foreach (Order o in Live(sime).Where(o => o.OrderType == OrderType.Market).ToList()) { o.OrderState = OrderState.Cancelled; Update(o); } };
+                Order a1 = sell(5), a2 = sell(5);
+                Check(a1 != null && a1.Quantity == 5, "0.5.3 re-review: long 5: the page sells 5: placed: " + (a1 != null ? "sell " + a1.Quantity : PageReject()));
+                Check(a2 == null && PageReject().Contains("this exit would close 10 MNQ contracts (working exits 5, this order 5) of agent manrae's position of 5: an exit closes at most the position"),
+                      "0.5.3 re-review: long 5, the first sell of 5 still working: a second sell of 5 is refused (it would flip the position): " + PageReject());
+                clear();
+                Order b1 = sell(3), b2 = sell(2);
+                Check(b1 != null && b1.Quantity == 3 && b2 != null && b2.Quantity == 2, "0.5.3 re-review: long 5: sell 3 then sell 2: both placed: " + (b2 != null ? "sell 3, sell 2" : PageReject()));
+                clear();
+                Order c1 = sell(3), c2 = sell(3);
+                Check(c1 != null && c1.Quantity == 3 && c2 == null && PageReject().Contains("this exit would close 6 MNQ contracts (working exits 3, this order 3) of agent manrae's position of 5"),
+                      "0.5.3 re-review: long 5: sell 3 then sell 3: the second is refused: " + PageReject());
+                clear();
+            }
+            finally { ChartBridgeOrders.ReadConfig("maxQty.MNQ", capWas.ToString(CultureInfo.InvariantCulture)); Settle(sime); }
             Advance(500);
         });
 

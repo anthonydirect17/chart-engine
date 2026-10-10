@@ -169,8 +169,9 @@ try {
   await page.selectOption('#agView [data-k="pick"]', 'demo');
   await until(async () => (await text('.ag-strip [data-k="name"]')) === 'Demo Agent', 'Demo Agent chosen');
   const strip = await text('.ag-strip');
-  check(/Demo Agent/.test(strip) && /sample-build-1/.test(strip) && /CONNECTED · 0\.4 s ago/.test(strip) && /SHADOW/.test(strip) && /Sim101\s*SIM/.test(strip) && /Flat/.test(strip),
-    'the strip: name, build, connected and its heartbeat, mode, account with SIM, position: "' + strip + '"');
+  check(/Demo Agent/.test(strip) && !/sample-build-1/.test(strip) && /CONNECTED · 0\.4 s ago/.test(strip) && /SHADOW/.test(strip) && /Sim101\s*SIM/.test(strip) && /Flat/.test(strip),
+    'the strip: name (DECISION 2026-10-09 v: no build in the header), connected and its heartbeat, mode, account with SIM, position: "' + strip + '"');
+  check((await text('#agView [data-k="buildRow"]')) === 'sample-build-1', 'the build in the details (the Build row): ' + await text('#agView [data-k="buildRow"]'));
   const foot = await text('#agView .ag-foot');
   check(/\$0\.00/.test(foot) && /Today/.test(foot) && /0\s*Trades/.test(foot) && /0\s*Losses/.test(foot) && /09:45/.test(foot) && /15:55/.test(foot) && !/The light|in profit|under water/.test(foot),
     'the footer: today\'s P&L, trades, losses, his session 09:45 to 15:55, no legend: "' + foot.slice(0, 200) + '"');

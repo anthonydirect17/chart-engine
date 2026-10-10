@@ -468,7 +468,7 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.20.1');   // 1.20.1: the window at any time with ChartBridge 0.5.4 (after 1.19.0, Kit version 1)
+  assert.equal(JSON.parse(read('package.json')).version, '1.20.1');   // 1.20.1: the window at any time with ChartBridge 0.5.4 (after 1.20.0, On/Off)
   assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.20\.1'/);
   assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.20\.1/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');

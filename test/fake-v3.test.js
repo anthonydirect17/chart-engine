@@ -1127,7 +1127,7 @@ test('as built 3: refused plans reach the pages at most once a second per agent;
   d.advance(1000);
   d.plan({ id: 'r9', qty: 99, riskDollars: 792 });
   const next = d.take('agentPlan')[0];
-  assert.match(next.result, /^refused: qty must be a whole number from 1 to 20 \(maxQty\.MNQ\) \(and 3 more refused plans in the second before, not shown\)$/);
+  assert.match(next.result, /^refused: qty must be a whole number from 1 to 20 \(the hard ceiling of 20 for MNQ\) \(and 3 more refused plans in the second before, not shown\)$/);
   d.advance(1000); d.plan({ id: 'r10', qty: 99, riskDollars: 792 }); d.plan({ id: 'r11', qty: 99, riskDollars: 792 });
   d.advance(1000); d.plan({ id: 'r12', qty: 99, riskDollars: 792 });
   assert.match(d.take('agentPlan').pop().result, /\(and 1 more refused plan in the second before, not shown\)$/, 'one: "plan"');
@@ -1245,9 +1245,10 @@ test('as built: only a chosen account is the agent\'s; a clash stands the agent 
   off.hello();
   assert.match(off.plan({ kind: 'stopLimit', price: 25401, limitPrice: 25402 }).why, /stop-limit orders are off/);
   const capped = await makeAgentDesk();
-  capped.desk.config.maxQty = { MNQ: 3, NQ: 2 };
+  capped.desk.config.maxQty = { MNQ: 3, NQ: 1 };
   capped.hello();
-  assert.match(capped.plan({ qty: 4, riskDollars: 32 }).why, /from 1 to 3/, 'config.txt\'s gate 3 cap holds for agents');
+  assert.match(capped.plan({ root: 'NQ', qty: 2, riskDollars: 160 }).why, /from 1 to 1/, 'config.txt\'s gate 3 cap holds for agents (NQ)');
+  assert.equal(capped.plan({ qty: 4, riskDollars: 32 }).why, null, '0.5.3: not for MNQ: the agents\' own cap of 20');
   capped.desk.config.maxBracketTicks = 20;
   assert.match(capped.plan({ targetTicks: 40 }).why, /at most 20 \(maxBracketTicks/);
   // execs: only for its own orders
@@ -1255,6 +1256,63 @@ test('as built: only a chosen account is the agent\'s; a clash stands the agent 
   x.hello(); x.agentTake();
   x.act({ type: 'order', cid: 'own', account: 'SIM-AG1', root: 'ES', side: 'buy', kind: 'market', qty: 1 });
   assert.equal(x.agentTake('exec').length, 0, 'Anthony\'s fill on its account is not the agent\'s');
+});
+
+test('ChartBridge 0.5.3: an agent\'s MNQ cap is the shipped 20 whatever maxQty.MNQ says; the page keeps the line, or 1', async () => {
+  const d = await makeAgentDesk();
+  d.desk.config.maxQty = { NQ: 2 };                                   // this PC's config.txt has no maxQty.MNQ line
+  d.hello();
+  assert.deepEqual(d.agentTake('welcome')[0].rules.maxQty, { NQ: 2, MNQ: 20 }, 'welcome: MNQ 20 enforced');
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  const p = d.plan({ qty: 20, stopTicks: 27, targetTicks: 54, riskDollars: 270 });   // a made-up plan risking $270
+  assert.equal(p.why, null);
+  assert.equal(d.working('SIM-AG1').find(o => o.planId === p.id).qty, 20, 'the 20 MNQ entry is placed');
+  assert.match(reasonOf(d.act({ type: 'order', cid: 'pg', account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'market', qty: 2 })), /^Qty 2 is over the MNQ cap of 1 \(maxQty\.MNQ in config\.txt\)\.$/, 'the page keeps 1');
+  /* the 0.5.3 review: Anthony cuts the agent's long 20 from the page while config.txt's cap for the page is 1 */
+  d.tick(25398);
+  assert.equal(d.desk.pos('SIM-AG1', 'MNQ').qty, 20, 'the agent is long 20');
+  assert.equal(reasonOf(d.act({ type: 'order', cid: 'x5', account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 5 })), null, 'the page sells 5 of it: placed (an exit skips the per-order qty check; the position count is held to the agent\'s cap of 20)');
+  assert.equal(d.desk.pos('SIM-AG1', 'MNQ').qty, 15);
+  assert.match(reasonOf(d.act({ type: 'order', cid: 'x25', account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 25 })), /^SIM-AG1 MNQ belongs to agent demo: use Flatten, or move its stop or target$/, 'more than the position is no exit: refused');
+  assert.match(reasonOf(d.act({ type: 'order', cid: 'xb', account: 'SIM-AG1', root: 'MNQ', side: 'buy', kind: 'market', qty: 1 })), /^SIM-AG1 MNQ belongs to agent demo/, 'an add: refused');
+  assert.deepEqual(d.desk.orderCap({ account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 15 }), [20, 'an exit from agent demo\'s position: the hard ceiling of 20 for MNQ', true], 'an exit: the agent\'s cap, named');
+  assert.deepEqual(d.desk.orderCap({ account: 'Sim101', root: 'MNQ', side: 'sell', kind: 'market', qty: 1 }), [1, 'maxQty.MNQ in config.txt', false], 'any other order: the page\'s cap');
+  assert.equal(reasonOf(d.act({ type: 'order', cid: 'x15', account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 15 })), null, 'and the rest: placed');
+  assert.equal(d.desk.pos('SIM-AG1', 'MNQ').qty, 0, 'the agent is flat');
+  /* the 0.5.3 re-review (M1): long 5, below the agent's cap; the page's exits still working count against the position */
+  const h = await makeAgentDesk();
+  h.desk.config.maxQty = { NQ: 2 };
+  h.hello();
+  h.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  assert.equal(h.plan({ qty: 5, riskDollars: 40 }).why, null);
+  h.tick(25398);
+  assert.equal(h.desk.pos('SIM-AG1', 'MNQ').qty, 5, 'the agent is long 5');
+  const mo = h.desk.matchOne;
+  h.desk.matchOne = function (o, ...r) { if (o.kind === 'market') return; return mo.call(this, o, ...r); };   // the exits do not fill yet
+  const sell = (cid, qty) => reasonOf(h.act({ type: 'order', cid, account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty }));
+  const clear = () => { for (const o of h.desk.orders.values()) if (o.kind === 'market' && o.state === 'working') h.desk.cancelOne(o); };
+  assert.equal(sell('a1', 5), null, 'sell 5: placed');
+  assert.equal(sell('a2', 5), 'This exit would close 10 MNQ contracts (working exits 5, this order 5) of agent demo\'s position of 5: an exit closes at most the position (use Flatten to close it all).', 'a second sell of 5 would flip it: refused');
+  clear();
+  assert.equal(sell('b1', 3), null); assert.equal(sell('b2', 2), null, 'sell 3 then 2: both placed');
+  clear();
+  assert.equal(sell('c1', 3), null);
+  assert.match(sell('c2', 3), /^This exit would close 6 MNQ contracts \(working exits 3, this order 3\) of agent demo's position of 5/, 'sell 3 then 3: the second refused');
+  clear();
+  h.desk.matchOne = mo;
+  const e = await makeAgentDesk();
+  e.desk.config.maxQty = { MNQ: 5, NQ: 2 };                           // a line on this PC: the page's cap only
+  e.hello();
+  assert.deepEqual(e.agentTake('welcome')[0].rules.maxQty, { NQ: 2, MNQ: 20 }, 'the agent keeps its own 20');
+  e.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  const p6 = e.plan({ qty: 6, riskDollars: 48 });
+  assert.equal(p6.why, null);
+  assert.equal(e.working('SIM-AG1').find(o => o.planId === p6.id).qty, 6, 'the agent is placed at 6, above the line\'s 5');
+  assert.match(reasonOf(e.act({ type: 'order', cid: 'pg', account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'market', qty: 6 })), /^Qty 6 is over the MNQ cap of 5 \(maxQty\.MNQ in config\.txt\)\.$/, 'the page is refused above 5');
+  const f = await makeAgentDesk();
+  f.desk.config.maxQty = { MNQ: 5, NQ: 2 };
+  f.hello();
+  assert.match(f.plan({ qty: 21, riskDollars: 168 }).why, /^qty must be a whole number from 1 to 20 \(the hard ceiling of 20 for MNQ\)$/, 'refused only above 20, and the words name the hard ceiling (never maxQty.MNQ)');
 });
 
 /* ======================================================================== ChartBridge 0.5.0 as built at agent-channel 4d4a81f
@@ -1405,11 +1463,11 @@ test('4d4a81f: refused plans held back are shown within about a second, the late
 
 test('4d4a81f, section 10 (the agent\'s side): welcome\'s caps, agentState\'s session sent on change, the snapshot\'s end, orderName, cbId and role, fills of others on its pair', async () => {
   const d = await makeAgentDesk();
-  d.desk.config.maxQty = { MNQ: 3, NQ: 2 };
+  d.desk.config.maxQty = { MNQ: 3, NQ: 1 };
   d.hello();
   const got = d.agentTake();
   assert.deepEqual(got.map(m => m.type), ['welcome', 'agentState', 'position', 'position', 'snapshot']);
-  assert.deepEqual(got[0].rules.maxQty, { NQ: 2, MNQ: 3 }, 'the caps enforced: config.txt\'s gate 3 cap');
+  assert.deepEqual(got[0].rules.maxQty, { NQ: 1, MNQ: 20 }, 'the caps enforced: config.txt\'s gate 3 cap (NQ); MNQ the agents\' own 20 (0.5.3)');
   assert.deepEqual(got[4], { type: 'snapshot', roots: ['NQ', 'MNQ'] });
   d.desk.config.maxBracketTicks = 40; d.desk.config.maxTicksAway = 400; d.desk.everySecond();
   const w = d.agentTake('welcome');
