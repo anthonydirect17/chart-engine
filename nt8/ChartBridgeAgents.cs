@@ -96,6 +96,27 @@ namespace NinjaTrader.NinjaScript.AddOns
         // config.txt's maxQty line for that root is never read for agents), else config.txt's cap as for the page (CapFor). The
         // page's, the bot's and the copier's caps stay CapFor. The agent's rule and the hard ceiling apply on top (CapFor(id, root)).
         internal static int AgentCap(string root) { int s = ChartBridgeAgents.ShippedConfigCap(root); return s > 0 ? s : CapFor(root); }
+        // Gate 3's cap for an agent's entry and its words (0.5.3 review: the words name the cap that applied, never maxQty.MNQ):
+        // the agent's maxQty (ChartBridgeAgents.CapFor, its words CapWords), or AgentCap when that is lower (config.txt's line
+        // for a root with no shipped cap).
+        internal static int AgentEntryCap(string agent, string root, out string why)
+        {
+            int own = ChartBridgeAgents.CapFor(agent, root), conf = AgentCap(root);
+            if (conf < own) { why = "maxQty." + root + " in config.txt"; return conf; }
+            why = ChartBridgeAgents.CapWords(agent, root, own);
+            return own;
+        }
+        // 0.5.3 review: the position count's cap for a page exit from an agent's position (PlaceOrderLocked's pageReduces: at most
+        // the smaller reading, never a flip or an add; it skips the per-order qty check): the agent's cap (AgentEntryCap), or the
+        // position it holds (held) when that is larger, as after its rule was lowered. Working orders on that side still count, so
+        // exits sent one after another can never add up past it.
+        internal static int AgentExitCap(string owner, string root, int held, out string why)
+        {
+            string w;
+            int a = AgentEntryCap(owner, root, out w);
+            why = "an exit from agent " + owner + "'s position: " + (a >= held ? w : "its " + held + " contracts");
+            return Math.Max(a, held);
+        }
         internal static int AgentMaxBracketTicks { get { return MaxBracketTicks; } }
         internal static int AgentMaxTicksAway { get { return MaxTicksAway; } }
         // The last trade on a root (any age, 0 when none) and whether it is no older than maxAgeMs (the market trading in fact).
@@ -453,6 +474,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             ChartBridgeAgent a = Get(id);
             return a == null ? 0 : Math.Min(HardCeiling(root), a.MaxQtyFor(root));
+        }
+        // 0.5.3 review: the words for the agent's cap that applied (rule: its maxQty for the root): its own rule (the Agent tab)
+        // when below the hard ceiling, else the hard ceiling (a rule is never above it, RulesProblem; with no line it is the ceiling).
+        public static string CapWords(string id, string root, int rule)
+        {
+            int ceil = HardCeiling(root);
+            return rule < ceil ? "agent " + id + "'s maxQty for " + root : "the hard ceiling of " + ceil + " for " + root;
         }
 
         // The agent whose CHOSEN account (chosen on the page: agent-<id>-account.txt) this is, for the bot's and the copier's
@@ -1638,9 +1666,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (p.Kind == "limit" && p.LimitText != null) return "limitPrice goes on a stopLimit plan only";
             if (p.Kind == "stopLimit" && !ChartBridgeOrders.AgentOrderTypes) return "stop-limit entries are off (orderTypes = off in config.txt)";
             // 4. the size, the stop and the target
-            int ceiling = Math.Min(ChartBridgeAgents.HardCeiling(root), r.QtyFor(root)), cap = ChartBridgeOrders.AgentCap(root);
-            if (p.Qty < 1 || p.Qty > ceiling) return "qty must be a whole number from 1 to " + ceiling + " (agent " + Id + "'s maxQty for " + root + ")";
-            if (p.Qty > cap) return "qty " + p.Qty + " is over the " + root + " cap of " + cap + " (maxQty." + root + " in config.txt)";
+            int ceiling = Math.Min(ChartBridgeAgents.HardCeiling(root), r.QtyFor(root)), cap;
+            if (p.Qty < 1 || p.Qty > ceiling) return "qty must be a whole number from 1 to " + ceiling + " (" + ChartBridgeAgents.CapWords(Id, root, ceiling) + ")";
+            string capWhy;
+            cap = ChartBridgeOrders.AgentEntryCap(Id, root, out capWhy);   // 0.5.3 review: the words name the cap that applied (MNQ never maxQty.MNQ)
+            if (p.Qty > cap) return "qty " + p.Qty + " is over the " + root + " cap of " + cap + " (" + capWhy + ")";
             if (p.StopTicks < 1 || p.TargetTicks < 1) return "every agent entry needs a stop and a target: stopTicks and targetTicks must be whole numbers of 1 or more";
             int mb = ChartBridgeOrders.AgentMaxBracketTicks;
             if (mb > 0 && (p.StopTicks > mb || p.TargetTicks > mb)) return "stopTicks and targetTicks must be at most " + mb + " (maxBracketTicks in config.txt)";

@@ -19,7 +19,24 @@ An agent's MNQ entry is the smallest of its own rule (Agent tab, default 20), th
 - **Nothing writes `config.txt`.** ChartBridge, the installer and the updater leave it alone. With agents on and a
   `maxQty.MNQ` line, ChartBridge says once at start in the Output window: "config.txt: maxQty.MNQ = 2 caps the page's, the
   bot's and the copier's MNQ orders only; agents use their own MNQ cap of 20 (with the agent's rule and the hard ceiling)".
-- Tests: `nt8/check/AgentHarness.cs` (a 20 MNQ agent entry with no line; with a line of 5 the agent placed at 6 and refused
+- **A page exit from an agent's position** (review). Anthony can cut an agent's MNQ from the page with no `maxQty.MNQ`
+  line: a market order that only reduces it (no bracket, at most the position) skips gate 3's per-order qty check, and
+  gate 3's position count (position plus working orders on that side plus this order) is held to the agent's cap (20),
+  not the page's 1. Every other gate stays.
+
+  | agent long 20 MNQ, page cap 1 | result | why |
+  |---|---|---|
+  | page market sell 5 | placed | an exit: no per-order qty check; count 5 of 20 |
+  | a second sell of 16 while the 5 still works | refused | the count would be 21 (stop and target 20, the 5, this 16), over 20 |
+  | page market sell 25 | refused, never trimmed | more than the position is no exit: the owner lock ("use Flatten, or move its stop or target") |
+  | page buy 1 | refused | an add is never an exit: the owner lock, before gate 3 |
+
+- **Refusals name the cap that applied** (review). Gate 3 and plan check 4 never say `maxQty.MNQ in config.txt` for an
+  agent: they say "agent manrae's maxQty for MNQ" when its Agent tab rule is below the hard ceiling, else "the hard ceiling
+  of 20 for MNQ" (`ChartBridgeAgents.CapWords`). `maxQty.<ROOT> in config.txt` stays for a root with no shipped cap whose
+  line is lower, and for the page.
+- Tests: `nt8/check/AgentHarness.cs` (a 20 MNQ agent entry with no line; the page sells 5 of it, a second exit past the
+  position, 25 and a buy refused; gate 3's and check 4's words; with a line of 5 the agent placed at 6 and refused
   only above 20 or its own rule, the page refused above 5; the note), `test/nt8-agents.test.js` (the source guards), and
   the fake follows (`test/fake-v3.mjs`, `test/fake-v3.test.js`).
 

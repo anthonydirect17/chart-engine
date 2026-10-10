@@ -711,6 +711,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             string ownerWhy = pageReduces ? null : ChartBridgeAgents.EntryCheck(agent != null ? "agent:" + agent : bot ? "bot" : "page", account, root);
             if (ownerWhy != null) return ownerWhy;
+            string exitOf = pageReduces ? ChartBridgeAgents.OwnerAgent(account.Name, root) : null;   // 0.5.3 review: a page exit from an agent's position
             if (side != "buy" && side != "sell") return "side must be buy or sell";
             if (kind != "market" && kind != "limit" && kind != "stop" && !(OrderTypesOn && NewKind(kind))) return "kind must be market, limit or stop";   // 0.4.0 B1: stopLimit, mit
             if (bot && (NewKind(kind) || strategyBody != null)) return "the bot places market, limit and stop entries with a plain stop and target only";   // 0.4.0 bot: (integration) never a new kind or an Order Strategy
@@ -721,15 +722,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             // The position two ways: as NinjaTrader lists it, and with fills reported but not yet in it. Event
             // order differs between connections, so either can be the stale one: the cap takes the worse.
             int posNow = SignedPosition(account, inst), posEff = EffectivePosition(account, inst), pendBuy, pendSell;
-            int cap = agent != null ? AgentCap(root) : CapFor(root), pos = isBuyOrder(top) ? Math.Max(posNow, posEff) : Math.Min(posNow, posEff);   // 0.5.3: an agent's config cap (MNQ 20, never maxQty.MNQ)
+            int cap = CapFor(root), pos = isBuyOrder(top) ? Math.Max(posNow, posEff) : Math.Min(posNow, posEff);
+            string capWhy = "maxQty." + root + " in config.txt";   // 0.5.3 review: the words name the cap that applied
             if (bot) cap = Math.Min(cap, ChartBridgeBot.MaxQty);   // 0.4.0 bot: the 1 contract rail, on the order and the position (gate 3's own count)
-            if (agent != null) cap = Math.Min(cap, ChartBridgeAgents.CapFor(agent, root));   // 0.5.0 agents: the agent's maxQty, never above the hard ceiling (minis 2, micros 20), on the order and the position
-            if (qty > cap) return "qty " + qty + " is over the " + root + " cap of " + cap + " (maxQty." + root + " in config.txt)";
+            if (agent != null) cap = AgentEntryCap(agent, root, out capWhy);   // 0.5.0 agents: the agent's maxQty, never above the hard ceiling (minis 2, micros 20), on the order and the position; 0.5.3: MNQ never maxQty.MNQ
+            // 0.5.3 review: a page exit from an agent's position skips the per-order qty check (pageReduces: at most the smaller
+            // reading, never a flip or an add), and the position count is held to the agent's cap (AgentExitCap), never below the
+            // page's: Anthony may sell 5 of an agent's 20 MNQ with config.txt's MNQ cap at 1.
+            if (exitOf != null) { string ew; int ec = AgentExitCap(exitOf, root, Math.Min(Math.Abs(posNow), Math.Abs(posEff)), out ew); if (ec > cap) { cap = ec; capWhy = ew; } }
+            if (exitOf == null && qty > cap) return "qty " + qty + " is over the " + root + " cap of " + cap + " (" + capWhy + ")";
             PendingOrders(account, inst, out pendBuy, out pendSell);
             long worst = isBuy ? (long)pos + pendBuy + qty : (long)(-pos) + pendSell + qty;
             if (worst > cap)
                 return "this order could make the " + root + " position " + worst + " contracts (position " + pos + ", working " +
-                       (isBuy ? pendBuy : pendSell) + ", this order " + qty + "); the cap is " + cap + " (maxQty." + root + " in config.txt)";
+                       (isBuy ? pendBuy : pendSell) + ", this order " + qty + "); the cap is " + cap + " (" + capWhy + ")";
             double tick = inst.MasterInstrument.TickSize, price = 0, limitPx = 0;
             if (kind != "market")
             {

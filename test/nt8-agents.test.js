@@ -86,7 +86,8 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) \{ string agentWhy = ChartBridgeAgents\.PlacingProblem\(agent, kind, isBuy, price, limitPx, tick\);/, 'the order path asks the agent at the last moment');
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(\(kind != "limit" && kind != "stopLimit"\) \|\| strategyBody != null \|\| bracketBody == null\)\) return/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(stopTicks < 1 \|\| targetTicks < 1\)\) return "every agent entry needs a stop and a target";/);
-  assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) cap = Math\.Min\(cap, ChartBridgeAgents\.CapFor\(agent, root\)\);/);
+  assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) cap = AgentEntryCap\(agent, root, out capWhy\);/);   // 0.5.3 review: same cap, its words named
+  assert.match(bodies(acode, 'AgentEntryCap'), /int own = ChartBridgeAgents\.CapFor\(agent, root\), conf = AgentCap\(root\);\s*if \(conf < own\) \{[^}]*return conf; \}[\s\S]*return own;/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) name = "CB#" \+ tag \+ " ag:" \+ agent \+ " s" \+ stopTicks \+ " t" \+ targetTicks;/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /TimeInForce\.Day/);
 });
@@ -121,9 +122,17 @@ test('0.5.3 agents: the shipped MNQ cap of 20 is the agents\' own: maxQty.MNQ ca
   assert.match(bodies(ocode, 'CapFor'), /return MaxQty\.TryGetValue\(root \?\? "", out n\) \? n : DefaultMaxQty;/, 'the page\'s, the bot\'s and the copier\'s cap is unchanged');
   assert.match(ocode, /public const int MaxActionsPerSecond = 10, DefaultMaxQty = 1;/);
   const place = bodies(ocode, 'PlaceOrderLocked');
-  assert.match(place, /int cap = agent != null \? AgentCap\(root\) : CapFor\(root\),/, 'gate 3: only an agent entry takes the agents\' cap');
-  assert.ok(place.indexOf('cap = Math.Min(cap, ChartBridgeAgents.CapFor(agent, root));') > place.indexOf('AgentCap(root)'), 'the agent\'s rule and the hard ceiling still apply on top');
-  assert.equal((ocode + acode + ccode).match(/\bAgentCap\(/g).length, 4, 'AgentCap: its definition, gate 3, plan check 4 and welcome.rules only');
+  assert.match(place, /int cap = CapFor\(root\), pos = /, 'gate 3 starts from the page\'s cap');
+  assert.match(place, /if \(agent != null\) cap = AgentEntryCap\(agent, root, out capWhy\);/, 'gate 3: an agent entry takes its own cap');
+  assert.match(place, /if \(exitOf != null\) \{ string ew; int ec = AgentExitCap\(exitOf, root, Math\.Min\(Math\.Abs\(posNow\), Math\.Abs\(posEff\)\), out ew\); if \(ec > cap\) \{ cap = ec; capWhy = ew; \} \}\s*if \(exitOf == null && qty > cap\) return "qty "/, 'a page exit from an agent\'s position skips the per-order qty check; its position count is held to the agent\'s cap, never below the page\'s');
+  assert.match(place, /PendingOrders\(account, inst, out pendBuy, out pendSell\);\s*long worst = [^\n]*\n\s*if \(worst > cap\)/, 'the position count still applies to every order, exits too');
+  assert.match(place, /string exitOf = pageReduces \? ChartBridgeAgents\.OwnerAgent\(account\.Name, root\) : null;/, 'only an exit (pageReduces) of an agent\'s pair');
+  assert.match(bodies(acode, 'AgentEntryCap'), /int own = ChartBridgeAgents\.CapFor\(agent, root\), conf = AgentCap\(root\);/, 'the agent\'s rule and the hard ceiling still apply');
+  assert.match(bodies(acode, 'AgentExitCap'), /int a = AgentEntryCap\(owner, root, out w\);[\s\S]*return Math\.Max\(a, held\);/, 'an exit: the agent\'s cap, or the position when larger');
+  assert.match(bodies(acode, 'CapWords'), /return rule < ceil \? "agent " \+ id \+ "'s maxQty for " \+ root : "the hard ceiling of " \+ ceil \+ " for " \+ root;/, 'the words name the agent\'s rule or the hard ceiling');
+  assert.ok(!/in config\.txt/.test(bodies(acode, 'CapWords')), 'never maxQty.MNQ in config.txt for an agent\'s own cap');
+  assert.match(place, /" is over the " \+ root \+ " cap of " \+ cap \+ " \(" \+ capWhy \+ "\)"/, 'the words name the cap that applied');
+  assert.equal((ocode + acode + ccode).match(/\bAgentCap\(/g).length, 3, 'AgentCap: its definition, AgentEntryCap (gate 3 and plan check 4) and welcome.rules only');
   assert.match(main, /else ChartBridgeOrders\.ReadConfig\(key, val\);[^\n]*\n\s*\}\s*ChartBridgeAgents\.NoteConfigCaps\(\);/, 'said once at config load, after every line is read');
   assert.match(bodies(acode, 'NoteConfigCaps'), /if \(Ids\(\)\.Count == 0\) return;[\s\S]*ChartBridgeServer\.Log\("config\.txt: maxQty\.MNQ = " \+ n \+ " caps the page's, the bot's and the copier's MNQ orders only; agents use their own MNQ cap of "/);
   assert.ok(!/MaxQty\[|MaxQty\.(Add|Remove|Clear)/.test(bodies(acode, 'NoteConfigCaps') + bodies(acode, 'AgentCap')), 'nothing in config is changed');

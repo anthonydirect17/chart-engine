@@ -2511,6 +2511,17 @@ Where the contract left a detail open, the safest simple choice was taken and is
   Every other root for agents is as before too (`config.txt`'s cap, 1 with no line). With agents on and a `maxQty.MNQ`
   line, ChartBridge says once at start in the Output window that the line caps the page, the bot and the copier only.
   ChartBridge never writes `config.txt`; nor do the installer and the updater.
+- **A page exit from an agent's position** (0.5.3 review): a page market order that only reduces an agent's position (the
+  owner lock's exit: no bracket, no strategy, the other side, at most the smaller reading) skips gate 3's per-order qty
+  check, and gate 3's position count (position plus working orders on that side plus this order) is held to that agent's
+  cap (`ChartBridgeOrders.AgentExitCap`: its rule, the hard ceiling, MNQ 20; or the position when that is larger), never
+  below the page's own cap. So with no `maxQty.MNQ` line the page may sell 5 of an agent's 20 MNQ in one order; exits sent
+  one after another still cannot add up past the count. More than the position, or an add, is no exit: the owner lock
+  refuses it (never trimmed to the position).
+- **The words of a size refusal** (0.5.3 review): gate 3 and plan check 4 name the cap that applied
+  (`ChartBridgeAgents.CapWords`): `agent <id>'s maxQty for <ROOT>` when the agent's rule is below the hard ceiling, else
+  `the hard ceiling of <n> for <ROOT>`; `maxQty.<ROOT> in config.txt` only for a root with no shipped cap whose line is
+  lower (never MNQ for an agent); an exit's count says `an exit from agent <id>'s position: ...`.
 - **Check 7** (lead's default): New York time of day, any day (a closed market's stale last trade refuses at check 11).
 - **Check 8** (lead's default): "a position" is the agent's open trade or any pair it still owns.
 - **Check 10** (lead's default): an agent enters only where its account and root hold no position by either reading (any

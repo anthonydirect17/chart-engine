@@ -1196,6 +1196,23 @@ Object.assign(OrderDeskV3.prototype, {
   agentServed(a) { return a.rules.roots.filter(r => this.instruments[r]); },
   /** gate 3's config cap for an agent's entry (0.5.3, ChartBridgeOrders.AgentCap): AGENT_SHIPPED_CAP where one ships, else config.txt's */
   agentCapFor(root) { return AGENT_SHIPPED_CAP[root] || this.capFor(root); },
+  /** gate 3 (0.5.3 review, ChartBridgeOrders.AgentExitCap): a page market order that only reduces an agent's position (the owner
+   *  lock's exit) skips the per-order qty check, and the position count is held to the agent's cap (or the position when that is
+   *  larger), never below the page's; working orders on that side still count. Anything else: config.txt's cap, as before */
+  orderCap(m) {
+    const page = [this.capFor(m.root), 'maxQty.' + m.root + ' in config.txt', false];
+    if (!this.agents || !this.agents.size || this._orderSource) return page;
+    const owner = this.ownerOf(m.account, m.root), p = this.pos(m.account, m.root).qty;
+    if (!owner || !owner.startsWith('agent:') || m.kind !== 'market' || m.bracket !== undefined || m.strategy !== undefined || !p || (m.side === 'buy') !== (p < 0) || m.qty > Math.abs(p)) return page;
+    const a = this.agents.get(owner.slice(6)), r = m.root, held = Math.abs(p);
+    const own = Math.min(a.rules.maxQty[r] === undefined ? AGENT_CEILING[r] || 0 : a.rules.maxQty[r], AGENT_CEILING[r] || 0), conf = this.agentCapFor(r);
+    const ac = Math.min(own, conf), cap = Math.max(ac, held);
+    if (cap <= page[0]) return [page[0], page[1], true];
+    return [cap, 'an exit from agent ' + a.id + '\'s position: ' + (ac < held ? 'its ' + held + ' contracts' : conf < own ? 'maxQty.' + r + ' in config.txt' : this.agentCapWords(a, r, own)), true];
+  },
+  /** the words for the agent's cap that applied (0.5.3 review, ChartBridgeAgents.CapWords): its own rule when below the hard
+   *  ceiling, else the hard ceiling (a rule is never above it) */
+  agentCapWords(a, root, rule) { return rule < AGENT_CEILING[root] ? 'agent ' + a.id + '\'s maxQty for ' + root : 'the hard ceiling of ' + AGENT_CEILING[root] + ' for ' + root; },
   /** welcome.rules (section 10, as built): the caps really enforced: per root the smallest of the agent's rule, the ceiling
    *  and config.txt's gate 3 cap; config.txt's maxBracketTicks and maxTicksAway (null when not set). The pages' `agent`
    *  message keeps the agent's own rules. */
@@ -1550,8 +1567,8 @@ Object.assign(OrderDeskV3.prototype, {
     if (m.kind !== 'limit' && m.kind !== 'stopLimit') return 'an agent\'s entry is a limit or a stop-limit';
     if (m.kind === 'stopLimit' && !this.sw.orderTypes) return 'stop-limit orders are off (orderTypes = off in config.txt)';
     // 4. quantity, stop and target
-    const cap = Math.min(a.rules.maxQty[m.root], AGENT_CEILING[m.root] || 0, this.agentCapFor(m.root));   // the agent's, the ceiling and gate 3's config cap (0.5.3: MNQ 20, never maxQty.MNQ)
-    if (!isInt(m.qty) || m.qty < 1 || m.qty > cap) return 'qty must be a whole number from 1 to ' + cap + ' (maxQty.' + m.root + ')';
+    const own = Math.min(a.rules.maxQty[m.root], AGENT_CEILING[m.root] || 0), conf = this.agentCapFor(m.root), cap = Math.min(own, conf);   // the agent's, the ceiling and gate 3's config cap (0.5.3: MNQ 20, never maxQty.MNQ)
+    if (!isInt(m.qty) || m.qty < 1 || m.qty > cap) return 'qty must be a whole number from 1 to ' + cap + ' (' + (conf < own ? 'maxQty.' + m.root + ' in config.txt' : this.agentCapWords(a, m.root, own)) + ')';   // 0.5.3 review: the cap that applied
     if (!isInt(m.stopTicks) || m.stopTicks < 1 || !isInt(m.targetTicks) || m.targetTicks < 1) return 'stopTicks and targetTicks must be whole numbers of 1 or more';
     if (this.config.maxBracketTicks > 0 && (m.stopTicks > this.config.maxBracketTicks || m.targetTicks > this.config.maxBracketTicks)) return 'stopTicks and targetTicks must be at most ' + this.config.maxBracketTicks + ' (maxBracketTicks in config.txt)';
     // 5. risk

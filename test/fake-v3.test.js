@@ -1124,7 +1124,7 @@ test('as built 3: refused plans reach the pages at most once a second per agent;
   d.advance(1000);
   d.plan({ id: 'r9', qty: 99, riskDollars: 792 });
   const next = d.take('agentPlan')[0];
-  assert.match(next.result, /^refused: qty must be a whole number from 1 to 20 \(maxQty\.MNQ\) \(and 3 more refused plans in the second before, not shown\)$/);
+  assert.match(next.result, /^refused: qty must be a whole number from 1 to 20 \(the hard ceiling of 20 for MNQ\) \(and 3 more refused plans in the second before, not shown\)$/);
   d.advance(1000); d.plan({ id: 'r10', qty: 99, riskDollars: 792 }); d.plan({ id: 'r11', qty: 99, riskDollars: 792 });
   d.advance(1000); d.plan({ id: 'r12', qty: 99, riskDollars: 792 });
   assert.match(d.take('agentPlan').pop().result, /\(and 1 more refused plan in the second before, not shown\)$/, 'one: "plan"');
@@ -1265,6 +1265,17 @@ test('ChartBridge 0.5.3: an agent\'s MNQ cap is the shipped 20 whatever maxQty.M
   assert.equal(p.why, null);
   assert.equal(d.working('SIM-AG1').find(o => o.planId === p.id).qty, 20, 'the 20 MNQ entry is placed');
   assert.match(reasonOf(d.act({ type: 'order', cid: 'pg', account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'market', qty: 2 })), /^Qty 2 is over the MNQ cap of 1 \(maxQty\.MNQ in config\.txt\)\.$/, 'the page keeps 1');
+  /* the 0.5.3 review: Anthony cuts the agent's long 20 from the page while config.txt's cap for the page is 1 */
+  d.tick(25398);
+  assert.equal(d.desk.pos('SIM-AG1', 'MNQ').qty, 20, 'the agent is long 20');
+  assert.equal(reasonOf(d.act({ type: 'order', cid: 'x5', account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 5 })), null, 'the page sells 5 of it: placed (an exit skips the per-order qty check; the position count is held to the agent\'s cap of 20)');
+  assert.equal(d.desk.pos('SIM-AG1', 'MNQ').qty, 15);
+  assert.match(reasonOf(d.act({ type: 'order', cid: 'x25', account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 25 })), /^SIM-AG1 MNQ belongs to agent demo: use Flatten, or move its stop or target$/, 'more than the position is no exit: refused');
+  assert.match(reasonOf(d.act({ type: 'order', cid: 'xb', account: 'SIM-AG1', root: 'MNQ', side: 'buy', kind: 'market', qty: 1 })), /^SIM-AG1 MNQ belongs to agent demo/, 'an add: refused');
+  assert.deepEqual(d.desk.orderCap({ account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 15 }), [20, 'an exit from agent demo\'s position: the hard ceiling of 20 for MNQ', true], 'an exit: the agent\'s cap, named');
+  assert.deepEqual(d.desk.orderCap({ account: 'Sim101', root: 'MNQ', side: 'sell', kind: 'market', qty: 1 }), [1, 'maxQty.MNQ in config.txt', false], 'any other order: the page\'s cap');
+  assert.equal(reasonOf(d.act({ type: 'order', cid: 'x15', account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 15 })), null, 'and the rest: placed');
+  assert.equal(d.desk.pos('SIM-AG1', 'MNQ').qty, 0, 'the agent is flat');
   const e = await makeAgentDesk();
   e.desk.config.maxQty = { MNQ: 5, NQ: 2 };                           // a line on this PC: the page's cap only
   e.hello();
@@ -1277,7 +1288,7 @@ test('ChartBridge 0.5.3: an agent\'s MNQ cap is the shipped 20 whatever maxQty.M
   const f = await makeAgentDesk();
   f.desk.config.maxQty = { MNQ: 5, NQ: 2 };
   f.hello();
-  assert.match(f.plan({ qty: 21, riskDollars: 168 }).why, /from 1 to 20/, 'refused only above 20');
+  assert.match(f.plan({ qty: 21, riskDollars: 168 }).why, /^qty must be a whole number from 1 to 20 \(the hard ceiling of 20 for MNQ\)$/, 'refused only above 20, and the words name the hard ceiling (never maxQty.MNQ)');
 });
 
 /* ======================================================================== ChartBridge 0.5.0 as built at agent-channel 4d4a81f

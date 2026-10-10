@@ -79,6 +79,9 @@ export class OrderDesk {
   origin() { return 'http://localhost:' + this.config.port; }
   maxQtyMap() { return Object.assign({ '*': DEFAULT_MAX_QTY }, this.config.maxQty); }
   capFor(root) { const m = this.config.maxQty; return m[root] !== undefined ? m[root] : DEFAULT_MAX_QTY; }
+  /** gate 3's cap for an order, its words and whether the order is an exit that skips the per-order qty check (ChartBridge
+   *  0.5.3 names the cap that applied; the v3 desk adds a page exit from an agent's position) */
+  orderCap(m) { return [this.capFor(m.root), 'maxQty.' + m.root + ' in config.txt', false]; }
 
   /** Why this connection cannot trade, or null when it can. */
   blocked(conn) {
@@ -158,8 +161,8 @@ export class OrderDesk {
     if (m.side !== 'buy' && m.side !== 'sell') return 'Side must be buy or sell.';
     if (!['market', 'limit', 'stop'].includes(m.kind)) return 'Kind must be market, limit or stop.';
     if (!Number.isInteger(m.qty) || m.qty < 1) return 'Qty must be a whole number of at least 1.';
-    const cap = this.capFor(m.root);
-    if (m.qty > cap) return 'Qty ' + m.qty + ' is over the ' + m.root + ' cap of ' + cap + ' (maxQty.' + m.root + ' in config.txt).';
+    const [cap, capWhy, exit] = this.orderCap(m);
+    if (!exit && m.qty > cap) return 'Qty ' + m.qty + ' is over the ' + m.root + ' cap of ' + cap + ' (' + capWhy + ').';
     if (CAP_COUNTS_POSITION) {
       const would = this.exposure(m.account, m.root, m.side, m.qty);
       if (would > cap) return (m.side === 'buy' ? 'Buying ' : 'Selling ') + m.qty + ' could take the ' + m.root + ' position on ' + m.account + ' to ' + would + ' (with working orders), over the cap of ' + cap + '.';
