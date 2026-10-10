@@ -10,20 +10,26 @@ Page only, no recompile. Needs Bot-Lab's PC helper (`manrae/helper.py`, register
 - **On/Off** (a new Agent section at the top of the left column): On asks the PC helper on `http://localhost:8767` to start
   the agent's runner with the build picked (no window, no agent session); Off asks it to end the runner. Kill and Shadow
   are unchanged: neither stops model calls, Off does.
-- **Off in a trade** asks, in the page: "Flatten and turn him off?". Flatten and turn off sends the page's own Flatten for
-  his account and root (`trade.js` `flattenAgent`, the chart's Flatten message), then Off once ChartBridge says he is
-  flat; not flat in 30 s, he stays on and the line says so. Keep him on sends nothing. The pop-out has no order
-  connection: it says to flatten on the main page or in NinjaTrader first.
+- **Off in a trade** asks, in the page, for that agent only (showing another agent closes the question): "Flatten and turn
+  him off?". Flatten and turn off first puts him in Shadow (ChartBridge then places nothing more for him and cancels his
+  unfilled entries; 10 s at most), then sends the page's own Flatten for his account and root (`trade.js` `flattenAgent`,
+  the chart's Flatten message; his position and account read again right before it goes; never a default account), then
+  Off once ChartBridge says he is flat. Not in Shadow in 10 s, or not flat in 30 s: he stays on (in Shadow) and the line
+  says so until the next On or Off. Keep him on sends nothing. The pop-out has no order connection: it says to flatten on
+  the main page or in NinjaTrader first.
 - **Spend:** this session's and the overall dollars of the live agent only (the runner's own journal of its calls; never
   training or exams), beside On/Off.
 - **The picker** (DECISION w): in Copilot, in Auto and on a LIVE account, heroes only; in Shadow on a Sim account, heroes
   and the builds over the Shadow bar (until Anthony sets the bar, every build). While a build that is not a hero runs,
-  Copilot and Auto are closed and say why (the runner refuses them too). The picker is closed while he runs: Off first.
+  Copilot, Auto and a LIVE account are closed and say why (the runner and the helper refuse them too). This fails closed:
+  without the helper's word the page reads it from his hello (a build that is not a hero says its build id as its name).
+  The picker is closed while he runs: Off first.
 - **Names** (DECISION v): the header shows the agent's name as his hello says it (a hero's name, "Demo 2"; a build that is
   not a hero shows its build id); the build id and stamp moved from the header to a Build row under Status.
 - **Auto-On and the daily cap** (folded under the section): an auto-On time (New York) and a dollar cap a session, kept by
   the helper; a new cap takes effect at his next start.
-- Every call to the helper carries this page's PIN unlock; the helper checks it with ChartBridge's `GET /session`.
+- Every call to the helper carries this page's PIN unlock; the helper checks it with ChartBridge's `GET /session`. A
+  helper that refuses the page (403) says so, with its reason.
 - Tests: `test/agent-helper.test.js` (in `npm test`) and `npm run smoke:onoff` against the fake bridge and a fake helper
   (`test/fake-helper.mjs`); `npm run smoke:agent` checks the build in the Build row.
 

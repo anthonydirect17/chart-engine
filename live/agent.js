@@ -66,6 +66,10 @@ function create(o) {
     chart: null, chartRoot: '', chartTf: 'm1', contract: '',
     motion: AC.motionPref(storage), drawer: '', exits: new Map(), lightSig: '', lightColor: '', lightSlot: 0,
   };
+  /* On/Off (live/agent-helper.js): H.ask, the open "Flatten and turn him off?" for one agent ({ agent, text }), closed when
+     another agent is shown (choose); H.job, a Flatten-and-off under way for one agent (Shadow, Flatten, Off), its line in
+     H.lines[agent] until it ends (a give-up's until the next On or Off for that agent) */
+  const H = { reach: '', why: '', status: null, pick: {}, busy: false, ask: null, job: null, flatSent: false, lines: {}, said: '', saidAt: 0, setFilled: '' };
   { const v = readJson(KEYS.chart); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; }
   { const v = readJson(KEYS.feed); if (v && FILTERS.some(f => f[0] === v.filter)) S.feedFilter = v.filter; }
 
@@ -225,7 +229,7 @@ function create(o) {
       case 'bot': S.bot = m; return;
       case 'botProposal': botProps.update(m); renderOthers(); return;   // counted under the proposal while the tab is shown
       case 'copier': S.copier = m; return;
-      case 'agent': onAgent(m); return;
+      case 'agent': onAgent(m); if (H.job && m.agent === H.job.agent) jobStep(); return;
       case 'agentProposal': onProposal(m); return;
       case 'agentPlan': if (feed.plan(m)) { renderFeed(); renderStrip(); renderLive(); } return;
       case 'agentNote': if (feed.note(m)) { renderFeed(); renderLive(); } return;
@@ -258,6 +262,7 @@ function create(o) {
   }
   function choose(id, quiet) {
     if (S.chosen === id) return;
+    H.ask = null;                                  // the Off question is for the agent it was asked about only
     S.chosen = id; S.othersQuiet = true; S.rulesEdit = false; S.acctEdit = false; S.acctAsk = ''; S.killConfirm = 0; S.autoConfirm = 0; S.drawer = ''; S.lightSig = '';
     for (const k of ['rulesWhy', 'acctWhy']) put(q('[data-k="' + k + '"]'), 'textContent', '');
     writeJson(KEYS.chosen, id);
@@ -636,7 +641,7 @@ function create(o) {
     if (!view) return;
     const a = cur(); if (!a) return;
     const acc = AC.agentAccount(a), tradable = AC.accountTradable(S.accounts, S.trading, acc.name), allowed = AC.modesAllowed({ tradable, account: acc.name });
-    const hb = AH ? AH.modeBlock(helperOf(a.agent)) : {};       // DECISION w: a build that is not a hero stays in Shadow on Sim
+    const hb = AH ? AH.modeBlock(helperOf(a.agent), a) : {};    // DECISION w: a build that is not a hero stays in Shadow on Sim (fails closed)
     for (const m of ['copilot', 'auto']) if (hb[m] && allowed[m].ok && a.mode !== m) allowed[m] = { ok: false, why: hb[m] };
     const now = Date.now();
     for (const btn of q('[data-k="modes"]').children) {
@@ -685,12 +690,12 @@ function create(o) {
   /* ---------------- On/Off, spend and the picker: the PC helper (Bot-Lab manrae/helper.py) on localhost:8767, behind this
      page's PIN unlock (AgentHelper). It never sends an order; Flatten-and-off is this page's own Flatten (o.flatten), then Off */
   const HC = AH && typeof fetch === 'function' ? AH.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (typeof o.headers === 'function' ? o.headers() : {}) }) : null;
-  const H = { reach: '', status: null, pick: {}, busy: false, ask: '', flatUntil: 0, said: '', saidAt: 0, setFilled: '' };
   function helperOf(id) { return H.status && H.status.agents ? H.status.agents[id] || null : null; }
   async function pollHelper() {
     if (!HC || !S.shown) return;
     const r = await HC.status();
     H.reach = r.reach === 'ok' ? (r.body && r.body.agents ? 'ok' : 'down') : r.reach;
+    H.why = r.body && typeof r.body.error === 'string' ? r.body.error : '';
     if (r.reach === 'ok' && r.body) H.status = r.body; else if (r.reach !== 'ok') H.status = null;
     renderPanel();
   }
@@ -703,7 +708,7 @@ function create(o) {
     const sec = q('[data-k="hSec"]'); if (!sec) return;
     put(sec, 'hidden', !HC);
     if (!HC) return;
-    const h = helperOf(a.agent), reach = H.reach === 'ok' && !h ? 'none' : H.reach;
+    const h = helperOf(a.agent), reach = H.reach === 'ok' && !h ? 'none' : H.reach, mine = H.job && H.job.agent === a.agent;
     const rows = AH.pickerRows(H.status, a.mode, a.sim), sel = q('[data-k="hPick"]');
     const want = H.pick[a.agent] || (h && (h.runningBuild || h.build)) || (rows[0] && rows[0].build) || '';
     const opts = rows.map(r => '<option value="' + esc(r.build) + '" title="' + esc(r.title) + '">' + esc(r.label) + '</option>').join('') ||
@@ -711,22 +716,25 @@ function create(o) {
     if (sel.dataset.html !== opts) { sel.dataset.html = opts; sel.innerHTML = opts; }
     if (rows.some(r => r.build === want)) put(sel, 'value', want);
     const running = !!(h && h.running);
-    put(sel, 'disabled', !h || running || H.busy);
+    put(sel, 'disabled', !h || running || H.busy || mine);
     attr(sel, 'title', running ? 'Turn him Off to change the build' : null);
     put(q('[data-k="hNote"]'), 'textContent', H.reach === 'ok' ? AH.pickerNote(H.status, a.mode, a.sim) : '');
-    const on = !!(h && h.on);
+    const on = !!(h && h.on), asking = !!(H.ask && H.ask.agent === a.agent);
     for (const b of q('[data-k="hBtns"]').children) {
       const isOn = b.dataset.onoff === 'on';
       attr(b, 'aria-pressed', String(isOn === on && !!h));
-      put(b, 'disabled', !h || H.busy || !!H.ask || (isOn ? on || !sel.value : !on));
+      put(b, 'disabled', !h || H.busy || mine || asking || (isOn ? on || !sel.value : !on));
     }
     const sp = AH.spendText(h && h.spend);
     put(q('[data-k="hSess"]'), 'textContent', sp.session); put(q('[data-k="hAll"]'), 'textContent', sp.overall);
     const fresh = H.said && Date.now() - H.saidAt < 8000;
-    put(q('[data-k="hWhy"]'), 'textContent', fresh ? H.said : AH.stateText(h, reach));
-    put(q('[data-k="hAsk"]'), 'hidden', !H.ask);
-    if (H.ask) put(q('[data-k="hAskText"]'), 'textContent', H.ask);
-    for (const k of ['hFlatOff', 'hAskNo']) put(q('[data-act="' + k + '"]'), 'disabled', H.busy && k === 'hFlatOff');
+    /* the helper not answering comes first; then a Flatten-and-off's line (kept until it ends, a give-up's until the next On or
+       Off); then a word just said; then the helper's state */
+    const unreachable = ['down', 'locked', 'forbidden'].includes(H.reach);
+    put(q('[data-k="hWhy"]'), 'textContent', unreachable ? AH.stateText(h, reach, H.why) : H.lines[a.agent] || (fresh ? H.said : AH.stateText(h, reach, H.why)));
+    put(q('[data-k="hAsk"]'), 'hidden', !asking);
+    if (asking) put(q('[data-k="hAskText"]'), 'textContent', H.ask.text);
+    put(q('[data-act="hFlatOff"]'), 'disabled', H.busy || !!H.job);
     /* the settings form shows the helper's values until edited here */
     const sig = h ? (h.autoOn || '') + '|' + (h.cap === null || h.cap === undefined ? '' : h.cap) : '';
     if (h && sig !== H.setFilled && !q('.ag-hform').contains(document.activeElement)) {
@@ -736,39 +744,60 @@ function create(o) {
   async function helperOn(a) {
     const build = q('[data-k="hPick"]').value;
     if (!build) return;
+    delete H.lines[a.agent];
     H.busy = true; helperSay('Asking the PC helper to start him...'); renderPanel();
-    const r = await HC.on(a.agent, build);
+    const r = await HC.on(a.agent, build, a.mode, a.sim);
     H.busy = false;
     helperSay(r.reach === 'ok' ? 'On: he starts once NinjaTrader is connected.' : r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach));
     await pollHelper();
   }
-  async function helperOff(a) {
+  async function helperOff(id, after) {
     H.busy = true; helperSay('Turning him off...'); renderPanel();
-    const r = await HC.off(a.agent);
+    const r = await HC.off(id);
     H.busy = false;
-    helperSay(r.reach === 'ok' ? 'Off: his program ends, no more model calls.' : r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach));
+    const said = r.reach === 'ok' ? (after || '') + 'Off: his program ends, no more model calls.' : 'Off was not done: ' + (r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach, H.why));
+    if (r.reach === 'ok') { delete H.lines[id]; helperSay(said); } else H.lines[id] = said;   // a failure stays until the next On or Off
     await pollHelper();
   }
-  /* Off in a trade, Yes: this page's own Flatten for his account and root, then Off once ChartBridge says he is flat (30 s at
-     most; not flat by then, he stays on and the line says so). The pop-out has no order connection: it says where to flatten */
-  function flattenThenOff(a) {
-    const p = a.position || {};
-    H.ask = '';
-    if (typeof o.flatten !== 'function') { helperSay('Flatten him on the main page or in NinjaTrader, then press Off.'); renderPanel(); return; }
-    const sent = o.flatten(a.account || AC.DEFAULT_ACCOUNT, p.root);
-    if (sent === false) { helperSay('The Flatten was not sent (see the chart\'s line): he stays on.'); renderPanel(); return; }
-    H.busy = true; H.flatUntil = Date.now() + AH.FLAT_WAIT_MS; H.flatAgent = a.agent; flatLoop();
-    helperSay('Flatten sent for ' + (a.account || '') + ' ' + (p.root || '') + ': turning him off once flat...');
-    renderPanel();
+  function offPressed(a) {
+    delete H.lines[a.agent];
+    if (AH.offStep(a) === 'ask') { H.ask = { agent: a.agent, text: AH.offQuestion(a, AC.agentName(a)) }; renderPanel(); const y = q('[data-act="hAskNo"]'); if (y) y.focus(); return; }
+    helperOff(a.agent);
   }
-  /* each second while a Flatten-and-off is under way: Off when ChartBridge says he is flat, or give up at its time */
+  /* "Flatten and turn off", for the agent the question was asked about only (H.ask.agent), his position read again now:
+     Shadow first (nothing more placed for him), then this page's own Flatten for his account and root, then Off once flat.
+     The pop-out has no order connection: it says where to flatten. */
+  function flattenThenOff() {
+    const ask = H.ask; H.ask = null;
+    const a = ask ? agents.get(ask.agent) : null;
+    if (!a || a.agent !== S.chosen) { renderPanel(); return; }
+    if (typeof o.flatten !== 'function') { H.lines[a.agent] = 'Flatten him on the main page or in NinjaTrader, then press Off.'; renderPanel(); return; }
+    const st = AH.flatOffStart(a, Date.now());
+    if (st.error) { H.lines[a.agent] = st.error; renderPanel(); return; }
+    if (st.action === 'off') { helperOff(a.agent); return; }
+    H.job = st.job; H.flatSent = false;
+    if (st.action === 'shadow') sendAgent(AC.modeMsg(a.agent, 'shadow'), 'mode');
+    else jobFlatten(st.job);                       // in Shadow already: the Flatten at once
+    if (H.job) { jobStep(); flatLoop(); } else renderPanel();
+  }
+  /* the Flatten of a job, his position and account read again right before it goes */
+  function jobFlatten(j) {
+    const a = agents.get(j.agent);
+    if (!a || AH.offStep(a) !== 'ask' || a.account !== j.account) { H.job = null; H.lines[j.agent] = 'His position changed before the Flatten: nothing was sent. He stays on, in Shadow.'; }
+    else if (o.flatten(j.account, j.root) === false) { H.job = null; H.lines[j.agent] = 'The Flatten was not sent (see the chart\'s line): he stays on, in Shadow.'; }
+    else H.flatSent = true;
+  }
+  /* each second, and at each `agent` message, while a Flatten-and-off is under way */
   let flatTimer = 0;
-  function flatLoop() { clearTimeout(flatTimer); if (H.flatUntil) flatTimer = setTimeout(() => { helperFlatCheck(); flatLoop(); }, 1000); }
-  function helperFlatCheck() {
-    if (!H.flatUntil) return;
-    const a = agents.get(H.flatAgent);
-    if (a && AH.flat(a)) { H.flatUntil = 0; H.busy = false; helperOff(a); return; }
-    if (Date.now() > H.flatUntil) { H.flatUntil = 0; H.busy = false; helperSay('Not flat after ' + AH.FLAT_WAIT_MS / 1000 + ' s: he stays on. Flatten in NinjaTrader, then press Off.'); renderPanel(); }
+  function flatLoop() { clearTimeout(flatTimer); if (H.job) flatTimer = setTimeout(() => { jobStep(); flatLoop(); }, 1000); }
+  function jobStep() {
+    const j = H.job; if (!j) return;
+    const r = AH.flatOffStep(j, agents.get(j.agent) || null, Date.now(), H.flatSent);
+    H.job = r.job; H.lines[j.agent] = r.line;
+    if (r.action === 'flatten') { jobFlatten(r.job); if (H.job) H.lines[j.agent] = 'Flatten sent for ' + j.account + ' ' + j.root + ' (he is in Shadow): turning him off once flat...'; }
+    else if (r.action === 'off') { H.job = null; helperOff(j.agent, 'Flat. '); }
+    if (H.job) flatLoop();
+    renderPanel();
   }
   async function helperSave(a) {
     const r = AH.settingsBody(a.agent, q('[data-k="hAuto"]').value, q('[data-k="hCap"]').value);
@@ -1022,8 +1051,15 @@ function create(o) {
   }
   function others() { return { bot: S.bot, copier: S.copier, agents: agents.list() }; }
   function ctxNow(a) { return { workingEntry: AC.workingEntries(S.orders.values(), a).length > 0, openProposals: props.open(a.agent).length, roots: servedRoots(), version: S.version, askedMode: S.acctAsk ? S.acctAskMode : a.mode }; }
+  /* DECISION w: while a build that is not a hero runs, no LIVE account (it fails closed: his hello says so without the helper) */
+  function liveBlocked(a, name) {
+    const ch = AC.accountChoices(S.accounts, a, others()).find(x => x.name === name);
+    return AH ? AH.accountBlock(a, helperOf(a.agent), ch ? ch.sim : undefined) : '';
+  }
   function sendAccount(name) {
     const a = cur(); if (!a) return;
+    const blocked = liveBlocked(a, name);
+    if (blocked) { S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', blocked); renderPanel(); return; }
     const r = AC.accountChange(a, name, AC.accountChoices(S.accounts, a, others()), ctxNow(a));
     if (r.error) { put(q('[data-k="acctWhy"]'), 'textContent', r.error); return; }
     if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; sentLine('acctWhy', r.msg.keepMode ? 'Sent: its mode (' + AC.MODE_NAME[r.msg.keepMode] + ') is kept.' : 'Sent: it goes to Shadow (ChartBridge before 0.5.2).'); }
@@ -1059,8 +1095,7 @@ function create(o) {
     if (go) { goTo(go.dataset.goto); return; }
     if (oo && a && HC && !oo.disabled) {
       if (oo.dataset.onoff === 'on') { helperOn(a); return; }
-      if (AH.offStep(a) === 'ask') { H.ask = AH.offQuestion(a, AC.agentName(a)); renderPanel(); const y = q('[data-act="hAskNo"]'); if (y) y.focus(); return; }
-      helperOff(a); return;
+      offPressed(a); return;
     }
     if (flt) { S.feedFilter = flt.dataset.filter; writeJson(KEYS.feed, { filter: S.feedFilter }); renderFeed(); return; }
     if (row) { openDrawer(row.dataset.row); return; }
@@ -1104,6 +1139,8 @@ function create(o) {
     } else if (k === 'acctCancel' || k === 'acctNo') { S.acctEdit = false; S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', ''); renderPanel(); }
     else if (k === 'acctSave') {
       const name = q('[data-k="acctSel"]').value;
+      const blocked = liveBlocked(a, name);
+      if (blocked) { put(q('[data-k="acctWhy"]'), 'textContent', blocked); return; }
       const r = AC.accountChange(a, name, AC.accountChoices(S.accounts, a, others()), ctxNow(a));
       if (r.error) { put(q('[data-k="acctWhy"]'), 'textContent', r.error); return; }
       if (r.live) { S.acctAsk = name; S.acctAskMode = a.mode; put(q('[data-k="acctWhy"]'), 'textContent', ''); renderPanel();   // the mode recorded once, as the question opens
@@ -1115,8 +1152,8 @@ function create(o) {
       if (stale) { S.acctAsk = ''; S.acctAskMode = ''; put(q('[data-k="acctWhy"]'), 'textContent', stale); renderPanel(); return; }
       sendAccount(S.acctAsk);
     }
-    else if (k === 'hFlatOff') flattenThenOff(a);
-    else if (k === 'hAskNo') { H.ask = ''; helperSay('He stays on.'); renderPanel(); }
+    else if (k === 'hFlatOff') flattenThenOff();
+    else if (k === 'hAskNo') { H.ask = null; helperSay('He stays on. Nothing was sent.'); renderPanel(); }
     else if (k === 'hSave') helperSave(a);
     else if (k === 'rulesOpen') openRules();
     else if (k === 'rulesCancel') { S.rulesEdit = false; rulesWhy(''); renderPanel(); }

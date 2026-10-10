@@ -10,9 +10,13 @@
 //   - Off in a trade: asks "Flatten and turn him off?"; "Keep him on" sends nothing; "Flatten and turn off" sends the page's
 //     own `flatten` for his account and root (once, exactly the chart's Flatten message), and Off only once ChartBridge says
 //     he is flat;
+//   - the question is for one agent (showing another closes it); Shadow goes before the Flatten; a Flatten that never fills
+//     keeps its line and gives up at 30 s with a line that stays;
+//   - fails closed: the helper down or refusing (403, said so) while a build that is not a hero runs: Copilot, Auto and a
+//     LIVE account stay closed;
 //   - every helper call carries the PIN unlock; a PC with no helper says so and offers no On.
 //   npm run smoke:onoff      (CHROMIUM_PATH=/path/to/chrome; ONOFF_SMOKE_PORT; SHOTS=dir)
-// Screenshots: agent-onoff-off, agent-onoff-on, agent-onoff-ask (.png in test/out).
+// Screenshots: agent-onoff-off, agent-onoff-on, agent-onoff-ask, agent-onoff-notflat (.png in test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -40,9 +44,9 @@ async function until(fn, what, ms = 10000) {
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 let bridge = null, helper = null;
 try {
-  bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--agents=demo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2'], { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
-  helper = await startFakeHelper({ bridgePort: PORT });
+  helper = await startFakeHelper({ bridgePort: PORT, agents: ['demo', 'demotwo'] });
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   for (const r of ['chart-hotkeys', 'chart-strategies', 'chart-accounts']) {
     await ctx.route('http://localhost:8800/api/' + r, x => x.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(r === 'chart-accounts' ? { accounts: [] } : r === 'chart-strategies' ? { rev: 0, strategies: [] } : { rev: 1, keys: {}, modifiers: {} }) }));
@@ -50,7 +54,9 @@ try {
   /* every message a page sends on each WebSocket, and every request to the helper with its headers */
   await ctx.addInitScript(() => {
     const Real = window.WebSocket, socks = window.__socks = [];
-    function Spy(url, p) { const s = p === undefined ? new Real(url) : new Real(url, p); const rec = { url: String(url), msgs: [] }; const send = s.send.bind(s); s.send = d => { try { rec.msgs.push(JSON.parse(d)); } catch (e) { /* not JSON */ } return send(d); }; socks.push(rec); return s; }
+    /* window.__dropFlatten: the page's flatten messages are kept here and never reach ChartBridge (the not-flat path) */
+    window.__dropFlatten = false;
+    function Spy(url, p) { const s = p === undefined ? new Real(url) : new Real(url, p); const rec = { url: String(url), msgs: [] }; const send = s.send.bind(s); s.send = d => { let m = null; try { m = JSON.parse(d); m.__at = Date.now(); rec.msgs.push(m); } catch (e) { /* not JSON */ } if (m && m.type === 'flatten' && window.__dropFlatten) { m.__dropped = true; return; } return send(d); }; socks.push(rec); return s; }
     Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
     window.WebSocket = Spy;
   });
@@ -71,9 +77,11 @@ try {
   await control('price', { root: 'MNQ', p: 25400 });
 
   console.log('the tab, off: the picker, the spend, On offered');
-  await until(async () => (await page.evaluate(() => window.workspace.agent().agents.length)) === 1, 'ChartBridge told of demo');
+  await until(async () => (await page.evaluate(() => window.workspace.agent().agents.length)) === 2, 'ChartBridge told of demo and demotwo');
   await page.click('#wsAgentTab');
   await until(async () => (await page.evaluate(() => window.workspace.agent().shown)), 'the tab opens');
+  await page.selectOption('#agView [data-k="pick"]', 'demo');
+  await until(async () => (await page.evaluate(() => window.workspace.agent().chosen)) === 'demo', 'demo shown');
   /* his own account first (Sim101 is the bot's: as built, an agent there stands down) */
   await page.click('#agView [data-act="acctOpen"]');
   await page.selectOption('#agView [data-k="acctSel"]', 'SIM-AG1');
@@ -98,6 +106,21 @@ try {
   await until(async () => await disabled('#agView [data-mode="copilot"]'), 'Copilot closes for a build that is not a hero');
   check(await disabled('#agView [data-mode="auto"]') && /is not a hero: Shadow on a Sim account only/.test(await page.getAttribute('#agView [data-mode="copilot"]', 'title')), 'Copilot and Auto closed, with why: ' + await page.getAttribute('#agView [data-mode="copilot"]', 'title'));
   check(await disabled('#agView [data-k="hPick"]'), 'the picker is closed while he runs (Off first)');
+  /* fails closed: the helper down, his own hello still says he is not a hero */
+  helper.setDown(true);
+  await until(async () => /PC helper is not running on this PC/.test(await text('#agView [data-k="hWhy"]')), 'the helper stops answering', 15000);
+  check(await disabled('#agView [data-mode="copilot"]') && await disabled('#agView [data-mode="auto"]'), 'the helper down: Copilot and Auto stay closed for a build that is not a hero (his hello says so)');
+  await page.click('#agView [data-act="acctOpen"]');
+  await page.selectOption('#agView [data-k="acctSel"]', 'EVAL-A');
+  const acctBefore = (await sentAll()).filter(m => m.type === 'agentAccount').length;
+  await page.click('#agView [data-act="acctSave"]');
+  check((await text('#agView [data-k="acctWhy"]')) === 'sample-build-2 is not a hero: it trades a Sim account only. Turn him Off and pick a hero first.' && !(await visible('#agView [data-k="acctAsk"]')) &&
+    (await sentAll()).filter(m => m.type === 'agentAccount').length === acctBefore, 'a LIVE account is refused while a build that is not a hero runs; nothing sent: ' + await text('#agView [data-k="acctWhy"]'));
+  await page.click('#agView [data-act="acctCancel"]');
+  helper.setForbid(true); helper.setDown(false);
+  await until(async () => (await text('#agView [data-k="hWhy"]')) === 'The PC helper refused this page: only ChartBridge\'s own page.', 'a 403 says what was refused', 15000);
+  helper.setForbid(false);
+  await until(async () => /^On/.test(await text('#agView [data-k="hWhy"]')), 'the helper answers again', 15000);
   console.log('Off when flat: at once');
   await page.click('#agView [data-onoff="off"]');
   await until(async () => !(await agentNow()).connected, 'Off: the helper ended him');
@@ -114,7 +137,7 @@ try {
   await until(async () => !(await disabled('#agView [data-mode="copilot"]')), 'a hero may go to Copilot');
   await page.screenshot({ path: path.join(SHOTS, 'agent-onoff-on.png'), clip: { x: 0, y: 0, width: 760, height: 900 } });
 
-  console.log('Copilot: heroes only in the picker; a trade; Off asks');
+  console.log('Copilot: heroes only in the picker; a trade; Off asks, for that agent only');
   await page.click('#agView [data-mode="copilot"]');
   await until(async () => (await agentNow()).mode === 'copilot', 'Copilot');
   await until(async () => JSON.stringify(await options()) === JSON.stringify(['sample-build-1', 'sample-build-3']), 'heroes only in Copilot');
@@ -131,22 +154,52 @@ try {
   check((await text('#agView [data-k="hAskText"]')) === 'Demo 2 holds long 1 MNQ on SIM-AG1. Flatten and turn him off?', 'the question: ' + await text('#agView [data-k="hAskText"]'));
   check(helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await sentAll()).filter(m => m.type === 'flatten').length === flattensBefore, 'asking sends nothing');
   await page.screenshot({ path: path.join(SHOTS, 'agent-onoff-ask.png'), clip: { x: 0, y: 0, width: 760, height: 900 } });
+  /* the question is for demo only: showing demotwo closes it, and coming back finds it closed (review of 8d59357, 1) */
+  await page.selectOption('#agView [data-k="pick"]', 'demotwo');
+  await until(async () => (await page.evaluate(() => window.workspace.agent().chosen)) === 'demotwo', 'demotwo shown');
+  check(!(await visible('#agView [data-k="hAsk"]')), 'another agent shown: the question is gone');
+  await page.selectOption('#agView [data-k="pick"]', 'demo');
+  await until(async () => (await page.evaluate(() => window.workspace.agent().chosen)) === 'demo', 'demo shown again');
+  check(!(await visible('#agView [data-k="hAsk"]')) && (await sentAll()).filter(m => m.type === 'flatten').length === flattensBefore, 'back on demo: the question stays closed; nothing sent');
+  await page.click('#agView [data-onoff="off"]');
+  await until(() => visible('#agView [data-k="hAsk"]'), 'asked again');
   await page.click('#agView [data-act="hAskNo"]');
   await sleep(600);
   check(!(await visible('#agView [data-k="hAsk"]')) && (await agentNow()).connected && helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await sentAll()).filter(m => m.type === 'flatten').length === flattensBefore,
     '"Keep him on": nothing sent, he stays on and in his trade');
-  console.log('Flatten and turn off');
+  console.log('Flatten and turn off, not flat in 30 s: Shadow first, he stays on, and the line says so');
+  const flattens = async () => (await sentAll()).filter(m => m.type === 'flatten');
+  await page.evaluate(() => { window.__dropFlatten = true; });                         // ChartBridge never gets this Flatten
   await page.click('#agView [data-onoff="off"]');
   await until(() => visible('#agView [data-k="hAsk"]'), 'asked again');
   await page.click('#agView [data-act="hFlatOff"]');
-  await until(async () => (await sentAll()).filter(m => m.type === 'flatten').length === flattensBefore + 1, 'the page\'s own Flatten is sent');
-  const fl = (await sentAll()).filter(m => m.type === 'flatten').pop();
-  check(fl.account === 'SIM-AG1' && fl.root === 'MNQ' && Object.keys(fl).sort().join(',') === 'account,root,type', 'the chart\'s own Flatten message {type, account SIM-AG1, root MNQ}: ' + JSON.stringify(fl));
+  await until(async () => (await flattens()).length === flattensBefore + 1, 'the Flatten goes (after Shadow)');
+  const modeSh = (await sentAll()).filter(m => m.type === 'agentMode').pop(), fl1 = (await flattens()).pop();
+  check(modeSh && modeSh.agent === 'demo' && modeSh.mode === 'shadow' && modeSh.__at <= fl1.__at && (await agentNow()).mode === 'shadow', 'Shadow first (agentMode shadow), then the Flatten: ' + JSON.stringify(modeSh));
+  check(/^Flatten sent for SIM-AG1 MNQ \(he is in Shadow\): turning him off once flat\.\.\.$/.test(await text('#agView [data-k="hWhy"]')) && await disabled('#agView [data-onoff="off"]'), 'the line while it waits: ' + await text('#agView [data-k="hWhy"]'));
+  await sleep(12000);
+  check(/^Flatten sent for SIM-AG1 MNQ/.test(await text('#agView [data-k="hWhy"]')), 'still said after 12 s (it does not fade): ' + await text('#agView [data-k="hWhy"]'));
+  await until(async () => /^Not flat 30 s after the Flatten/.test(await text('#agView [data-k="hWhy"]')), 'the give-up after 30 s', 30000);
+  check((await text('#agView [data-k="hWhy"]')) === 'Not flat 30 s after the Flatten for SIM-AG1 MNQ: he stays on, in Shadow. Flatten in NinjaTrader, then press Off.' && helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await agentNow()).connected,
+    'not flat in 30 s: no Off, he stays on, in Shadow: ' + await text('#agView [data-k="hWhy"]'));
+  await sleep(10000);
+  check(/^Not flat 30 s after the Flatten/.test(await text('#agView [data-k="hWhy"]')) && !(await disabled('#agView [data-onoff="off"]')), 'the give-up line stays (10 s later), and Off can be pressed again');
+  await page.screenshot({ path: path.join(SHOTS, 'agent-onoff-notflat.png'), clip: { x: 0, y: 0, width: 760, height: 900 } });
+
+  console.log('Flatten and turn off');
+  await page.evaluate(() => { window.__dropFlatten = false; });
+  await page.click('#agView [data-onoff="off"]');
+  await until(() => visible('#agView [data-k="hAsk"]'), 'asked again');
+  await page.click('#agView [data-act="hFlatOff"]');
+  await until(async () => (await flattens()).filter(m => !m.__dropped).length === 1, 'the page\'s own Flatten is sent (he is in Shadow already)');
+  const fl = (await flattens()).pop();
+  check(fl.account === 'SIM-AG1' && fl.root === 'MNQ' && Object.keys(fl).filter(k => !k.startsWith('__')).sort().join(',') === 'account,root,type', 'the chart\'s own Flatten message {type, account SIM-AG1, root MNQ}: ' + JSON.stringify(fl));
   const offAt = await until(() => helper.calls.filter(c => c.route === 'POST /off').length === 2 && helper.calls.filter(c => c.route === 'POST /off')[1].at, 'Off once he is flat');
   check(/Flat/.test(await text('.ag-strip [data-k="sPos"]')) && !(await agentNow()).position, 'he is flat');
   await until(async () => !(await agentNow()).connected, 'the helper ended him');
-  check((await sentAll()).filter(m => m.type === 'flatten').length === flattensBefore + 1, 'one flatten only');
-  check(offAt > 0, 'Off went after the flatten filled');
+  check((await flattens()).length === flattensBefore + 2, 'one flatten for each press');
+  check(offAt >= fl.__at, 'Off went after the flatten filled');
+  await until(async () => (await text('#agView [data-k="hWhy"]')) === 'Flat. Off: his program ends, no more model calls.', 'the line says flat, then off');
   check(!(await sentAll()).some(m => m.type === 'order' && m.account === 'SIM-AG1'), 'the page built no order for him');
 
   console.log('settings: auto-On and the daily cap');

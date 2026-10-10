@@ -10,9 +10,11 @@
  *   On         the helper starts the runner with the build picked here (it fetches a missing build from The Desk)
  *   Off        the helper ends the runner process: no more model calls, so spend stops. ChartBridge cancels his unfilled
  *              entries when he disconnects (as built); a position keeps its stop and target.
- *   Off in a trade   asks "Flatten and turn him off?" (offStep). Yes: the page's own Flatten for his account and root
- *              (the chart's Flatten path, never an order built here), then Off once ChartBridge says he is flat
- *              (FLAT_WAIT_MS at most; not flat by then: he stays on and the tab says so). No: he stays on.
+ *   Off in a trade   asks "Flatten and turn him off?" (offStep), for that agent only. Yes (flatOffStart, flatOffStep):
+ *              first Shadow (ChartBridge then places nothing more for him and cancels his unfilled entries; SHADOW_WAIT_MS
+ *              at most), then the page's own Flatten for his account and root (the chart's Flatten path, never an order built
+ *              here), then Off once ChartBridge says he is flat (FLAT_WAIT_MS at most). Not in Shadow or not flat in time: he
+ *              stays on, and the line says so until Anthony acts. No: nothing is sent.
  *   Spend      this session's and the overall dollars of the live agent only (the runner's own journal of its calls)
  *   Picker     DECISION w: Copilot, Auto and a LIVE account list heroes only; Shadow on a Sim account lists heroes and the
  *              builds that pass the Shadow bar (pickerRows). A build that is not a hero keeps the mode at Shadow on Sim:
@@ -33,6 +35,7 @@ const BASE = 'http://localhost:' + PORT;
 const POLL_MS = 3000;
 const TIMEOUT_MS = 4000;
 const FLAT_WAIT_MS = 30000;
+const SHADOW_WAIT_MS = 10000;
 const HHMM = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 const isNum = v => typeof v === 'number' && isFinite(v);
 const str = v => (typeof v === 'string' ? v : '');
@@ -50,8 +53,9 @@ function spendText(spend) {
 }
 
 /** The helper's word for one agent, for the line under On/Off. h: the agent's entry in GET /status (or null). */
-function stateText(h, reach) {
+function stateText(h, reach, why) {
   if (reach === 'down') return 'The PC helper is not running on this PC (tools\\manrae_helper.ps1 register).';
+  if (reach === 'forbidden') return 'The PC helper refused this page' + (why ? ': ' + why : '') + '.';
   if (reach === 'locked') return 'Unlock ChartBridge\'s page with its PIN.';
   if (!h) return reach === 'none' ? 'This PC\'s helper does not run this agent.' : 'Asking the PC helper...';
   if (!h.on) return h.running ? 'Turning off...' : 'Off: no model calls, no spend.';
@@ -82,13 +86,30 @@ function pickerNote(status, mode, sim) {
 }
 
 /**
- * The mode buttons while a build that is not a hero runs: { copilot, auto } each null (allowed) or why not. h: the helper's
- * entry for the agent. Only heroes trade in Copilot or Auto (DECISION w); the runner refuses them too.
+ * The build he runs is not a hero (DECISION w): its name, or '' when he is one or nothing runs. Fails closed: the helper's
+ * word when it has one, and always his own hello as well, since a runner that is not a hero says its build id as its name
+ * (Bot-Lab manrae/live.py), whether or not the helper answers. a: his `agent` message; h: the helper's entry or null.
  */
-function modeBlock(h) {
-  if (!h || !h.running || h.hero) return { copilot: null, auto: null };
-  const why = (h.runningBuild || 'This build') + ' is not a hero: Shadow on a Sim account only.';
+function nonHero(a, h) {
+  if (h && h.running && !h.hero) return h.runningBuild || 'This build';
+  const x = a || {}, build = str(x.build).split(' ')[0];
+  if (x.connected && build && str(x.name) === build) return build;
+  return '';
+}
+/**
+ * The mode buttons while a build that is not a hero runs: { copilot, auto } each null (allowed) or why not. Only heroes trade
+ * in Copilot or Auto (DECISION w); the runner refuses them too.
+ */
+function modeBlock(h, a) {
+  const b = nonHero(a, h);
+  if (!b) return { copilot: null, auto: null };
+  const why = b + ' is not a hero: Shadow on a Sim account only.';
   return { copilot: why, auto: why };
+}
+/** A LIVE account while a build that is not a hero runs: why not, or ''. sim: the account chosen is a Sim one. */
+function accountBlock(a, h, sim) {
+  const b = nonHero(a, h);
+  return b && sim !== true ? b + ' is not a hero: it trades a Sim account only. Turn him Off and pick a hero first.' : '';
 }
 
 /** Off pressed: 'off' (send it), 'ask' (he holds a position: "Flatten and turn him off?"). a: his `agent` message. */
@@ -105,6 +126,41 @@ function offQuestion(a, name) {
 
 /** Is he flat now (his `agent` message)? */
 function flat(a) { return offStep(a) === 'off'; }
+
+/**
+ * "Flatten and turn off" pressed for agent a: { job, action } or { error } (nothing sent). The job: { agent, account, root,
+ * phase, until }. action: 'shadow' (send agentMode shadow first), 'flatten' (already in Shadow), or 'off' (he is flat now).
+ * His account must be known: never a default.
+ */
+function flatOffStart(a, now) {
+  const x = a || {}, p = x.position || {};
+  if (flat(x)) return { job: { agent: str(x.agent), account: str(x.account), root: str(p.root), phase: 'off', until: 0 }, action: 'off' };
+  if (!str(x.account)) return { error: 'His account is not known yet: nothing was sent. Flatten in NinjaTrader, then press Off.' };
+  if (!str(p.root)) return { error: 'His position\'s instrument is not known: nothing was sent. Flatten in NinjaTrader, then press Off.' };
+  const job = { agent: str(x.agent), account: x.account, root: p.root, phase: x.mode === 'shadow' ? 'flatten' : 'shadow', until: now + (x.mode === 'shadow' ? FLAT_WAIT_MS : SHADOW_WAIT_MS) };
+  return { job, action: job.phase };
+}
+
+/**
+ * The job's next step, at each `agent` message and each second: { action, job, line }. action: '' (wait), 'flatten' (he is
+ * in Shadow now: send the Flatten), 'off' (flat: send Off), 'giveup' (time is up: he stays on; line says why and stays).
+ * a: his `agent` message now (null when ChartBridge no longer tells of him). sent: the Flatten has gone.
+ */
+function flatOffStep(job, a, now, sent) {
+  const j = job, x = a || {};
+  if (!j) return { action: '', job: null, line: '' };
+  if (j.phase === 'shadow') {
+    if (x.mode === 'shadow') return { action: flat(x) ? 'off' : 'flatten', job: Object.assign({}, j, { phase: flat(x) ? 'off' : 'flatten', until: now + FLAT_WAIT_MS }), line: flat(x) ? 'In Shadow and flat: turning him off...' : 'In Shadow: flattening ' + j.account + ' ' + j.root + '...' };
+    if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not put him in Shadow within ' + SHADOW_WAIT_MS / 1000 + ' s: nothing was flattened and he stays on.' };
+    return { action: '', job: j, line: 'Putting him in Shadow first (no new entries)...' };
+  }
+  if (j.phase === 'flatten') {
+    if (sent && flat(x)) return { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'Flat: turning him off...' };
+    if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + FLAT_WAIT_MS / 1000 + ' s after the Flatten for ' + j.account + ' ' + j.root + ': he stays on, in Shadow. Flatten in NinjaTrader, then press Off.' };
+    return { action: '', job: j, line: 'Flatten sent for ' + j.account + ' ' + j.root + ' (he is in Shadow): turning him off once flat...' };
+  }
+  return { action: '', job: j, line: 'Turning him off...' };
+}
 
 /** The header and details (DECISION v): { name, build } where name is the hello's name (a hero's name, or the build id of
  *  a build that is not a hero) and build the build id and stamp for the details row. */
@@ -145,6 +201,7 @@ function createClient(env) {
       let b = null;
       try { b = await r.json(); } catch (x) { b = null; }
       if (r.status === 401) return { reach: 'locked', body: b };
+      if (r.status === 403) return { reach: 'forbidden', body: b };
       if (!r.ok) return { reach: r.status === 409 || r.status === 400 ? 'refused' : 'down', body: b || { error: 'HTTP ' + r.status } };
       return { reach: 'ok', body: b };
     } catch (x) {
@@ -153,11 +210,11 @@ function createClient(env) {
   }
   return {
     status: () => call('GET', '/status'),
-    on: (agent, build) => call('POST', '/on', { agent, build }),
+    on: (agent, build, mode, sim) => call('POST', '/on', { agent, build, mode, sim: sim === true }),
     off: agent => call('POST', '/off', { agent }),
     settings: body => call('POST', '/settings', body),
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, usd, spendText, stateText, pickerRows, pickerNote, modeBlock, offStep, offQuestion, flat, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, names, settingsBody, createClient };
 });

@@ -226,18 +226,26 @@ at sign-in, which starts and stops the agent's runner. The logic is `live/agent-
 | Auto-On and daily cap | `POST /settings {agent, autoOn, cap}`: an auto-On time (HH:MM New York) and a dollar cap a session; a new cap applies at his next start |
 | Build row (Status) | the build id and stamp, as his hello says them; the header shows only his name |
 
-- **Off in a trade:** "<name> holds long 1 MNQ on SIM-AG1. Flatten and turn him off?" Flatten and turn off sends the page's
-  own Flatten for his account and root (`trade.js` `flattenAgent`: the chart's Flatten message, which ChartBridge lets
-  through the agent's lock as an exit) and sends Off once his `agent` message says flat, 30 s at most; not flat by then,
-  he stays on and the line says so. Keep him on sends nothing. The page never builds an order for him.
-- **A build that is not a hero** runs in Shadow on a Sim account only: Copilot and Auto are closed with the reason, and the
-  runner refuses every plan in any other mode or account.
+- **Off in a trade:** "<name> holds long 1 MNQ on SIM-AG1. Flatten and turn him off?", for that agent only (showing another
+  agent closes it). Flatten and turn off (`AgentHelper.flatOffStart`, `flatOffStep`): Shadow first (`agentMode` shadow, 10 s
+  at most for ChartBridge to say so), then the page's own Flatten for his account and root (`trade.js` `flattenAgent`: the
+  chart's Flatten message, which ChartBridge lets through the agent's lock as an exit; his position and account read again
+  right before; never a default account), then Off once his `agent` message says flat, 30 s at most. Not in Shadow or not
+  flat in time: he stays on, in Shadow, and the line says so until the next On or Off. Keep him on sends nothing. The page
+  never builds an order for him.
+- **A build that is not a hero** runs in Shadow on a Sim account only: Copilot, Auto and a LIVE account are closed with the
+  reason, the helper refuses On for it in any other mode or account, and the runner refuses every plan there. The page fails
+  closed: without the helper's word it reads it from his hello (such a runner says its build id as its name).
 - **Every helper call** carries this page's PIN unlock (`X-ChartBridge-Unlock`); the helper asks ChartBridge's `GET /session`
   whether it holds. The helper answers only this page's origin, on 127.0.0.1.
-- **No helper on the PC:** "The PC helper is not running on this PC", no On or Off; everything else as before.
+- **No helper on the PC:** "The PC helper is not running on this PC", no On or Off; everything else as before. A helper that
+  refuses the page: "The PC helper refused this page: <its reason>".
 - Tests: `npm run smoke:onoff` (the workspace against the fake bridge and `test/fake-helper.mjs` on 8767: the picker by
   mode, On with a build that is not a hero and with a hero, the header and the Build row, Off flat, Off in a trade with
-  both answers, the settings, a PC with no helper). Screenshots `agent-onoff-off`, `agent-onoff-on`, `agent-onoff-ask`.
+  both answers, the question closed by showing another agent, Shadow before the Flatten, a Flatten that never fills (the
+  line kept, the give-up at 30 s), the helper down or refusing with a build that is not a hero running (Copilot, Auto and a
+  LIVE account stay closed), the settings, a PC with no helper). Screenshots `agent-onoff-off`, `agent-onoff-on`,
+  `agent-onoff-ask`, `agent-onoff-notflat`.
 
 ## Page messages (contract section 7), exactly
 
