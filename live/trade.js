@@ -603,6 +603,22 @@ function create(env) {
     flash('Flatten sent for ' + TR.account + ' ' + R + ': cancel its orders, close the position at market.', '');
   }
   /*
+   * The Agent tab's "Flatten and turn him off?" Yes (chart 1.20.0, DECISION 2026-10-09 v): one Flatten (sendFlatten, as the
+   * Flatten button) for the agent's own account and root, whatever account the ticket shows. Needs what Flatten needs but
+   * Armed and the picker's account (the agent's account is not the ticket's): trading on, connected. ChartBridge checks the
+   * account as for any Flatten, and lets it pass the agent's owner lock (an exit). true when it was sent.
+   */
+  function flattenAgent(account, R) {
+    if (FRAMED) { flash(FRAMED_REASON, 'error'); return false; }
+    if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
+    if (!open()) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
+    if (typeof account !== 'string' || !account || !ROOTS.includes(R)) { flash('Nothing was sent: the agent\'s account or instrument is not known.', 'error'); return false; }
+    if (!sameAction('flatten|' + account + '|' + R, now())) return false;
+    sendFlatten(account, R, false, 'agent');
+    flash('Flatten sent for ' + account + ' ' + R + ' (the agent\'s): cancel its orders, close the position at market.', '');
+    return true;
+  }
+  /*
    * Flatten all (1.11.0, the hotkey; Anthony 2026-10-01): one flatten (sendFlatten, as the Flatten button) per instrument
    * of the order account with a position or a working order, whatever instrument is shown. Needs what the Flatten
    * button needs: every check of ready() but Armed. Within ChartBridge's 10 order actions a second: what fits now goes at once, the rest as soon
@@ -878,7 +894,7 @@ function create(env) {
     TR, brackets, qtys, BK, cap, framed: FRAMED, allowNoStop, noStopAsked: () => !noStopOk,
     planMove, planRemove, planAdd, chartOrders, framedReason: FRAMED_REASON, tradeMode,
     hello, message, lost, signIn, applyTrading,
-    ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
+    ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAgent, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
     merge, managedOf, switchOn: sw, setSwitches, v3Lost, cancelFromList,
     working, inCancelAll, batchLine, unsentNote, dismissUnsent,
     fmtUnit, bracketSelShown, typedTicks, committedTicks, setBracket, setUnit, setQty, pickPreset, savePreset, readPresets, flushBrackets, cancelBrackets,
