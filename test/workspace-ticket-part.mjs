@@ -1,7 +1,7 @@
 // The workspace's order ticket (chart 1.12.0), run by test/workspace-smoke.mjs: two pages in one browser context are two
 // windows on one PC. Against the fake bridge with trading on (sample data; nothing reaches a broker):
-//   - the ticket's buttons send exactly what the single chart page's 1.11.0 order bar sends (the same sequence run on
-//     /single.html and on the ticket, the messages compared);
+//   - the ticket's buttons send exactly what the 1.11.0 order bar sent (the sequence the single chart page's bar sent
+//     until chart 1.21.0, when that page went, written out here and compared message by message);
 //   - chart clicks on every chart of the ticket's instrument, in both windows (the other window's forwarded and sent from
 //     the ticket's window), none on other instruments; drags and the x; the Armed border;
 //   - "Move the ticket here?" and Armed off after the move; the tie-break when two windows add it at once; the ticket's
@@ -74,7 +74,7 @@ export async function run({ browser, check, fail, shot, root, port }) {
     const info = p => p.evaluate(() => window.workspace.ticket());
     const panelsOf = async (p, type, rootName) => (await p.evaluate(() => window.workspace.panels())).filter(x => x.type === type && (!rootName || x.root === rootName));
 
-    /* ---------------- the 1.11.0 bar's messages, on /single.html */
+    /* ---------------- the 1.11.0 bar's messages (run on /single.html until 1.21.0; written out below) */
     const SEQ = async (p, sel, chartClick) => {
       const msgs = [];
       const click = async s => { await p.click(s); await wait(450); };
@@ -109,21 +109,18 @@ export async function run({ browser, check, fail, shot, root, port }) {
       for (const [s, v] of [[sel.stop, '0'], [sel.target, '0']]) { await p.fill(s, v); await p.press(s, 'Tab'); }
       return msgs;
     };
-    /* Shift+click on a chart's canvas at a price; `id` a workspace panel, or '' for the single chart page */
+    /* Shift+click on a workspace chart's canvas at a price */
     const shiftClickAt = async (p, canvas, price, id) => {
       const b = await p.locator(canvas).first().boundingBox();
-      const y = await p.evaluate(([i, pr]) => (i ? window.workspace.chart(i) : window.liveChart).priceToY(pr), [id, price]);
+      const y = await p.evaluate(([i, pr]) => window.workspace.chart(i).priceToY(pr), [id, price]);
       await p.keyboard.down('Shift'); await p.mouse.click(b.x + b.width * 0.45, b.y + y); await p.keyboard.up('Shift');
     };
-    const single = await ctx.newPage();
-    single.on('pageerror', e => fail('single page error: ' + e.message));
-    await single.goto(`http://localhost:${port}/live/single.html`);
-    await single.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(single, TEST_PIN);
-    await single.waitForFunction(() => !!document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE' && !document.getElementById('buyMkt').disabled, null, { timeout: 30000 });
-    await single.evaluate(() => window.liveChart.goLive()); await wait(1200);
-    const barMsgs = await SEQ(single, { buy: '#buyMkt', sell: '#sellMkt', close: '#flattenBtn', be: '#beBtn', cancelAll: '#cancelAllBtn', arm: '#armBtn', qty: '#oQty', stop: '#bStop', target: '#bTarget' },
-      price => shiftClickAt(single, '#chart canvas', price, ''));
-    await single.close();
+    /* what the 1.11.0 order bar sent for that sequence (Close disarmed, Buy 2 with bracket 40 / 80, B/E at L, Sell 2, a
+       chart click: a buy limit at L - 5, Cancel all, Close), as /single.html sent it in chart 1.19.0 */
+    const acct = { account: 'Sim101', root: 'MNQ' };
+    const barMsgs = [{ type: 'flatten', ...acct }, { type: 'order', ...acct, side: 'buy', kind: 'market', qty: 2, bracket: { stop: 40, target: 80 } },
+      { type: 'change', id: 'ID', price: L }, { type: 'order', ...acct, side: 'sell', kind: 'market', qty: 2 },
+      { type: 'order', ...acct, side: 'buy', kind: 'limit', qty: 2, price: L - 5, bracket: { stop: 40, target: 80 } }, { type: 'cancel', id: 'ID' }, { type: 'flatten', ...acct }];
 
     /* ---------------- two windows: the first to open takes the ticket by itself (Anthony), the second never does */
     const A = await openWs('Main');

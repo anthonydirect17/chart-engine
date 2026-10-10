@@ -1,11 +1,12 @@
 // No scrolling, ever (chart 1.14.0, Anthony's item 1): every panel, menu, popover and dialog fits its content with no
-// scrollbar and nothing cut, at 1366x768, 1920x1080 and 2560x1440, in the workspace (live/index.html) and on the single
-// chart page (/single.html), against the fake bridge (sample data; nothing reaches a broker).
+// scrollbar and nothing cut, at 1366x768, 1920x1080 and 2560x1440, in the workspace (live/index.html) and on a mounted
+// chart with its own toolbar (test/chart-host.html; the single chart page, /single.html, until chart 1.21.0), against the
+// fake bridge (sample data; nothing reaches a broker).
 //   1.15.0: the Account panel (each tab) and the Quote board in Anthony's Main layout (under the ticket) with their figures
 //   never cut, the drawing ring, the bars picker with 4h, 1D and 1W.
 //   Opened one at a time: Colors, Settings, the Indicators menu with each indicator's gear, the chart's instrument and bars
 //   popover and its small menu, Add panel, the Time and Sales gear, the Layout select, the New layout and Reset dialogs;
-//   the order ticket and the order bar as they stand; the single chart page's toolbar on one line.
+//   the order ticket as it stands; a mounted chart's own toolbar on one line (1920x1080 and up).
 //   Fails on any element (the open one and everything in it) whose content is wider than its box (scrollWidth >
 //   clientWidth) where it would scroll or be cut, any vertical scroll (Time and Sales rows are the only intended one), and
 //   any part of it off the screen. Text cut on purpose with an ellipsis (its whole text in a tooltip) is not counted.
@@ -16,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { C, hostUrl, waitLive } from './chart-host.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
@@ -79,7 +81,9 @@ async function expectFits(page, sel, what) {
 
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--trading', '--trade-accounts=Sim101', '--test-controls',
   '--version=0.3.8', '--data-037', '--live-rate=40', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
-await new Promise(r => bridge.stdout.once('data', r));
+// a mounted chart never has ChartBridge's PIN (only the workspace page asks for it): its own bridge, the PIN off
+const bridge2 = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT + 1), '--version=0.3.8', '--data-037', '--live-rate=40', '--pin-off'], { stdio: ['ignore', 'pipe', 'inherit'] });
+await Promise.all([bridge, bridge2].map(b => new Promise(r => b.stdout.once('data', r))));
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 try {
   for (const [w, h] of SIZES) {
@@ -171,44 +175,31 @@ try {
       await page.click('.tk [data-tk-id="armBtn"]');
     }
 
-    /* ---------------- the single chart page */
-    await page.goto(`http://localhost:${PORT}/live/single.html`);
-    await page.waitForFunction(() => document.getElementById('connPill') || document.querySelector('.cb-pin-key'), null, { timeout: 15000 });
-    if (await page.$('.cb-pin-key')) await enterPin(page, TEST_PIN);
-    await page.waitForFunction(() => /LIVE/.test((document.getElementById('connPill') || {}).textContent || ''), null, { timeout: 30000 });
+    /* ---------------- a mounted chart with its own toolbar (test/chart-host.html), at 1920x1080 and up. Until 1.21.0 this
+       part ran on the single chart page, whose slimmer toolbar (drawing tools and Glide in its Settings, the gears beside
+       the list) fitted 1366x768 too; a mounted chart's full toolbar wraps at 1366 wide, as it did before 1.21.0. */
+    if (w < 1920) { await ctx.close(); continue; }
+    await page.goto(hostUrl(PORT + 1));
+    await waitLive(page, 30000);
     await page.waitForTimeout(600);
-    await expectFits(page, 'header.bar', 'single: the toolbar');
+    await expectFits(page, 'header.bar', 'a chart\'s own toolbar');
     // one line: every item of the toolbar overlaps every other vertically
     const line = await page.evaluate(() => { const rs = [...document.querySelector('header.bar').children].filter(c => c.getClientRects().length).map(c => c.getBoundingClientRect());
       return { one: Math.max(...rs.map(r => r.top)) < Math.min(...rs.map(r => r.bottom)), h: Math.round(document.querySelector('header.bar').getBoundingClientRect().height) }; });
-    check(line.one, 'single: the toolbar is one line (' + line.h + ' px tall)');
-    await expectFits(page, '#obar', 'single: the order bar');
-    await page.click('.ce-theme-btn'); await expectFits(page, '.ce-theme-panel', 'single: Colors'); await esc();
-    // the NO STOP question: under the legend, the LIVE and ARMED pills in view
-    await page.click('#armBtn');
-    await page.fill('#bStop', '0'); await page.press('#bStop', 'Enter');
-    await page.click('#buyMkt');
-    await page.waitForSelector('#noStopAsk:not([hidden])', { timeout: 5000 }).catch(() => fail('single: the NO STOP question did not show'));
-    await expectFits(page, '#noStopAsk', 'single: the NO STOP question');
-    const su = await page.evaluate(uncovered, ['#noStopAsk', ['#connPill', '#armPill', '#legend', '#flattenBtn', '#armBtn', '#noStopCancel', '#noStopSend']]);
-    check(Object.values(su).every(v => v === true), 'single: the NO STOP question covers none of: LIVE, ARMED, the legend, Flatten, the Armed switch, Cancel, Send ' + JSON.stringify(su));
-    await page.screenshot({ path: path.join(out, `noscroll-single-nostop-${w}.png`) });
-    await page.click('#noStopCancel');
-    await page.click('#armBtn');
-    await page.click('#setBtn'); await expectFits(page, '#setPanel', 'single: Settings'); await esc();
-    await page.click('#moreBtn'); await expectFits(page, '#moreMenu', 'single: the small menu (drawing tools, Reset view)'); await esc();
-    await page.click('#indBtn'); await expectFits(page, '#indPanel', 'single: Indicators');
-    for (const g of await page.$$eval('#indPanel [data-act="gear"]', l => l.map(b => b.dataset.id))) {
-      await page.click(`#indPanel [data-act="gear"][data-id="${g}"]`);
-      await expectFits(page, '#indPanel', 'single:   its ' + g + ' gear');
-      await page.click(`#indPanel [data-act="gear"][data-id="${g}"]`);
+    check(line.one, 'a chart\'s own toolbar is one line (' + line.h + ' px tall)');
+    await page.click('header.bar .ce-theme-btn'); await expectFits(page, 'header.bar .ce-theme-panel', 'its Colors'); await esc();
+    await page.click(C('indBtn')); await expectFits(page, C('indPanel'), 'its Indicators');
+    for (const g of await page.$$eval(C('indPanel') + ' [data-act="gear"]', l => l.map(b => b.dataset.id))) {
+      await page.click(`${C('indPanel')} [data-act="gear"][data-id="${g}"]`);
+      await expectFits(page, C('indPanel'), '  its ' + g + ' gear');
+      await page.click(`${C('indPanel')} [data-act="gear"][data-id="${g}"]`);
     }
     await esc();
     await ctx.close();
   }
 } finally {
   await browser.close();
-  bridge.kill();
+  bridge.kill(); bridge2.kill();
 }
 console.log(`\n${checks - errors.length}/${checks} checks passed`);
 if (errors.length) { console.error(errors.length + ' failed'); process.exit(1); }

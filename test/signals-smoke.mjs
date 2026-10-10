@@ -1,5 +1,6 @@
-// Chart signals smoke (G1c): absorption bars, large-order bubbles and the delta pane's divergence arrows, on the single
-// chart page (/single.html) and in the workspace (/), against the fake bridge replaying a scripted tape (--scene=signals,
+// Chart signals smoke (G1c): absorption bars, large-order bubbles and the delta pane's divergence arrows, on a mounted
+// chart with its own toolbar (test/chart-host.html; the single chart page, /single.html, until chart 1.21.0) and in the
+// workspace (/), against the fake bridge replaying a scripted tape (--scene=signals,
 // test/signals-scene.mjs: SAMPLE trades with sides, made up, never market data) on MNQ Range 40 in regular hours.
 //   npm run smoke:signals        (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks: the three switched on from the menus (Absorption bars in the Signals group with no chip and no pin, the bubbles
@@ -15,6 +16,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { C, hostUrl, waitLive } from './chart-host.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -43,9 +45,9 @@ function offsetTo(hh, mm) {
 }
 const OFFSET = offsetTo(10, 2);                       // the page and the bridge at 10:02 ET: regular hours, floor 100 on MNQ
 const bridges = [];
-async function startBridge(extra) {
+async function startBridge(extra, pinOff) {        // pinOff: for a mounted chart, which never has ChartBridge's PIN
   const p = port++;
-  const b = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--test-controls', '--test-pin=' + TEST_PIN, '--live-first',
+  const b = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--test-controls', pinOff ? '--pin-off' : '--test-pin=' + TEST_PIN, '--live-first',
     '--version=0.3.7', '--scene=signals', '--clock-offset=' + OFFSET].concat(extra || []), { stdio: ['ignore', 'pipe', 'inherit'] });
   bridges.push(b);
   await new Promise((res, rej) => { b.stdout.once('data', res); b.once('exit', c => rej(new Error('bridge exited ' + c))); });
@@ -93,29 +95,27 @@ const pixel = (page, x, y, sel) => page.evaluate(([x, y, sel]) => {
 const dist = (a, b) => { const x = U.parseColor(a), y = U.parseColor(b); return Math.hypot(x.r - y.r, x.g - y.g, x.b - y.b); };
 
 try {
-  /* ---------------------------------------------------------------- the single chart page */
-  console.log('single chart page: MNQ Range 40, the three switched on from the menus');
-  const P1 = await startBridge(['--scene-delay=7000']);
+  /* ---------------------------------------------------------------- a mounted chart with its own toolbar */
+  console.log('a mounted chart: MNQ Range 40, the three switched on from the menus');
+  const P1 = await startBridge(['--scene-delay=7000'], true);
   const seed1 = () => { try { if (!localStorage.getItem('g1c-seeded')) { localStorage.setItem('g1c-seeded', '1');
     localStorage.setItem('live-settings-v2', JSON.stringify({ root: 'MNQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' }));
     localStorage.setItem('live-range-v2', JSON.stringify({ MNQ: 40 })); } } catch (e) {} };
   const ctx1 = await context(1920, 1080, seed1);
   const page = await ctx1.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
-  await page.goto(`http://localhost:${P1}/live/single.html`);
-  await page.waitForSelector('.cb-pin-key', { timeout: 15000 });
-  await enterPin(page, TEST_PIN);
-  await page.waitForFunction(() => window.liveChart && /LIVE/.test(document.getElementById('connPill').textContent), null, { timeout: 30000 });
+  await page.goto(hostUrl(P1));
+  await waitLive(page, 30000);
   // the menu: Signals group, Absorption bars (no pin), Volume group, bubbles (a chip), the delta gear's Show divergences
-  await page.click('#indBtn');
+  await page.click(C('indBtn'));
   await page.click('[data-f="cat:signals"]');
   check(await page.$('[data-f="add:absorption"]') !== null, 'Absorption bars is in the Signals group');
   await page.click('[data-f="add:absorption"]');
   check(await page.$('[data-f="pin:absorption"]') === null, 'Absorption bars on the chart has no pin');
-  check(await page.$('#indChips [data-id="absorption"]') === null, 'and no chip on the strip');
+  check(await page.$(C('indChips') + ' [data-id="absorption"]') === null, 'and no chip on the strip');
   await page.click('[data-f="cat:volume"]');
   await page.click('[data-f="add:bubbles"]');
-  check(await page.$('#indChips [data-id="bubbles"]') !== null, 'Large-order bubbles added with a chip (Volume group)');
+  check(await page.$(C('indChips') + ' [data-id="bubbles"]') !== null, 'Large-order bubbles added with a chip (Volume group)');
   await page.click('[data-f="gear:delta"]');
   await page.click('[data-f="opt:delta:div:on"]');
   check(await page.$('[data-f="sig:div:SwingLookback"]') !== null, 'Show divergences on: SwingLookback, MinBarsBetweenSwings and MinDivergencePct in the delta gear');
@@ -123,19 +123,19 @@ try {
   check(counted.absorption.on && !counted.absorption.pin && counted.bubbles.on && counted.bubbles.pin, 'saved: absorption on without a pin, bubbles on and pinned');
   await page.keyboard.press('Escape');
   check(await page.evaluate(() => { const L = window.liveChart.getLayers(); return L.absorption && L.bubbles && L.divergence; }), 'the chart draws all three');
-  await shot(page, 'signals-single-menu-done-1920.png');
+  await shot(page, 'signals-chart-menu-done-1920.png');
 
   console.log('the scripted tape plays (sample data)');
   let formingSeen = 0;
   const sigArrows = () => { const d = window.liveChart.getSignals().divergence; return d ? d.arrows.map(a => ({ t: a.t, dir: a.dir, solid: a.solid })) : []; };
   await watchArrows(page);
   const seen = await playScene(P1, page, sigArrows, async a => {
-    await shot(page, 'signals-single-hollow-1920.png');
-    const g = await page.evaluate(t => { const c = window.liveChart, i = c.bars().findIndex(b => b.t === t), r = document.getElementById('chart').getBoundingClientRect(), dp = c.deltaPane();
+    await shot(page, 'signals-chart-hollow-1920.png');
+    const g = await page.evaluate(t => { const c = window.liveChart, i = c.bars().findIndex(b => b.t === t), r = document.getElementById('chart-live-1-chart').getBoundingClientRect(), dp = c.deltaPane();
       return { x: r.x + c.barToX(i), y: r.y + dp.top, h: dp.height }; }, a.t);
     await shot(page, 'signals-crop-hollow-arrow.png', { x: Math.max(0, g.x - 300), y: g.y - 4, width: 420, height: g.h + 8 });
   }, async () => {                                          // the outline of a forming bar, when the polling catches one
-    const g = await page.evaluate(() => { const c = window.liveChart, b = c.bars(), i = b.length - 1, r = document.getElementById('chart').getBoundingClientRect();
+    const g = await page.evaluate(() => { const c = window.liveChart, b = c.bars(), i = b.length - 1, r = document.getElementById('chart-live-1-chart').getBoundingClientRect();
       return { x: r.x + c.barToX(i), y: r.y + c.priceToY(b[i].c), f: c.getSignals().absorption.forming(b) }; });
     formingSeen = g.f;
     await shot(page, 'signals-crop-forming.png', { x: Math.max(0, g.x - 260), y: Math.max(0, g.y - 160), width: 320, height: 320 });
@@ -151,17 +151,17 @@ try {
   const sizes = st.bubbles.map(b => b.v);
   check(st.bubbles.length >= 6 && st.bubbles.every(b => b.v >= b.f && b.f === 100), st.bubbles.length + ' bubbles, each at least the RTH floor of 100');
   check(Math.max(...sizes) / Math.min(...sizes) >= 4 && st.bubbles.some(b => b.side > 0) && st.bubbles.some(b => b.side < 0), 'of several sizes (' + Math.min(...sizes) + ' to ' + Math.max(...sizes) + '), buys and sells');
-  await shot(page, 'signals-single-1920.png');
+  await shot(page, 'signals-chart-1920.png');
 
   console.log('the toned colors on the canvas');
   check(st.T.sigBull === '#38DCE8' && st.T.sigBear === '#F3D84A', 'the theme\'s signal colors are the toned tokens');
   // zoom in so the bodies are wide, then read the canvas
-  const cb = await page.evaluate(() => { const r = document.getElementById('chart').getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+  const cb = await page.evaluate(() => { const r = document.getElementById('chart-live-1-chart').getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
   await page.mouse.move(cb.x + cb.w - 220, cb.y + 260);
   for (let i = 0; i < 5; i++) { await page.mouse.wheel(0, -240); await sleep(120); }
   await page.mouse.move(cb.x + cb.w + 30, cb.y + 40);
   await sleep(900);
-  const geo = await page.evaluate(() => { const c = window.liveChart, s = c.getSignals(), b = c.bars(), r = document.getElementById('chart').getBoundingClientRect();
+  const geo = await page.evaluate(() => { const c = window.liveChart, s = c.getSignals(), b = c.bars(), r = document.getElementById('chart-live-1-chart').getBoundingClientRect();
     const at = t => b.findIndex(x => x.t === t);
     return { left: r.x, top: r.y, painted: s.absorption.painted.map(p => { const i = at(p.t), x = b[i]; return { dir: p.dir, x: c.barToX(i), y: c.priceToY((x.o + x.c) / 2), h: Math.abs(c.priceToY(x.o) - c.priceToY(x.c)) }; }),
       arrows: s.divergence.arrows.filter(a => a.solid).map(a => { const i = at(a.t), d = c.getDelta().at(a.t); return { dir: a.dir, x: c.barToX(i), y: a.dir < 0 ? c.deltaToY(d.h) - 4 - 6 : c.deltaToY(d.l) + 4 + 6 }; }),
@@ -192,12 +192,12 @@ try {
   await shot(page, 'signals-crop-bars-bubbles.png', { x: Math.max(0, cb.x + xs[0]), y: cb.y + 20, width: Math.min(1100, xs[1] - xs[0]), height: Math.round(cb.h * 0.62) });
   const dp = await page.evaluate(() => window.liveChart.deltaPane());
   if (inPane[0]) await shot(page, 'signals-crop-delta-arrow.png', { x: Math.max(0, cb.x + inPane[0].x - 380), y: cb.y + dp.top - 4, width: 760, height: dp.height + 8 });
-  await shot(page, 'signals-single-zoom-1920.png');
+  await shot(page, 'signals-chart-zoom-1920.png');
 
   console.log('the absorption gear: a setting saved for MNQ Range 40 and applied');
-  await page.click('#indBtn');
+  await page.click(C('indBtn'));
   await page.click('[data-f="gear:absorption"]');
-  check(/MNQ, Range 40/.test(await page.textContent('#indPanel')), 'the gear says which instrument and bars its settings are for');
+  check(/MNQ, Range 40/.test(await page.textContent(C('indPanel'))), 'the gear says which instrument and bars its settings are for');
   await shot(page, 'signals-gear-absorption-1920.png');
   await page.fill('[data-f="sig:abs:VolumeMultiplier"]', '2.5');
   await sleep(300);
@@ -220,7 +220,7 @@ try {
   console.log('2560x1440 and the light ground');
   await page.setViewportSize({ width: 2560, height: 1440 });
   await sleep(1200);
-  await shot(page, 'signals-single-2560.png');
+  await shot(page, 'signals-chart-2560.png');
   await page.setViewportSize({ width: 1920, height: 1080 });
   await sleep(600);
   await page.click('.ce-theme-btn');
@@ -230,7 +230,7 @@ try {
   await sleep(900);
   const LT = await page.evaluate(() => window.liveChart.colors());
   check(LT.ground === 'light' && U_contrastOk(LT), 'on the light ground the signal colors move until they read: ' + LT.sigBull + ', ' + LT.sigBear);
-  await shot(page, 'signals-single-light-1920.png');
+  await shot(page, 'signals-chart-light-1920.png');
   await page.click('.ce-theme-btn');
   await page.click('.ce-ground[data-bg="dark"]');
   await page.keyboard.press('Escape');

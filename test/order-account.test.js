@@ -10,7 +10,7 @@ const path = require('node:path');
 const { LivePrefs: LP } = require('../live/live.js');
 
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'live', 'live.js'), 'utf8').replace(/\r\n/g, '\n');
-const PAGE = SRC.slice(SRC.indexOf('function start(container, opt, PAGE)'));
+const PAGE = SRC.slice(SRC.indexOf('function mount(container, options)'));   // every chart (1.21.0: no standalone page)
 
 test('orderAccount: the last pick when ChartBridge allows it now', () => {
   assert.deepEqual(LP.orderAccount(['Sim101', 'EVAL-1', 'EVAL-2'], 'EVAL-2'), { account: 'EVAL-2', missed: '' });
@@ -40,8 +40,9 @@ test('orderAccount: the result is always one of the allowed accounts, or none', 
   }
 });
 
-/* 1.12.0: the order logic moved unchanged from live.js into live/trade.js (TradeCore), which the single chart page's
-   order bar and the workspace's ticket share; the checks below read it there, and its wiring in live.js. */
+/* 1.12.0: the order logic moved unchanged from live.js into live/trade.js (TradeCore), which the workspace's ticket uses
+   (the single chart page's order bar did too until 1.21.0); the checks below read it there. A chart (live.js) sends no
+   order at all since 1.21.0: it hands clicks and drags to its host. */
 const CORE = fs.readFileSync(path.join(__dirname, '..', 'live', 'trade.js'), 'utf8').replace(/\r\n/g, '\n');
 const WS = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8').replace(/\r\n/g, '\n');
 const TC = require('../live/trade.js');
@@ -59,7 +60,6 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   // ready(): the picker must show TR.account, else nothing is sent
   const ready = CORE.slice(CORE.indexOf('function ready('), CORE.indexOf('function sendOrder('));
   assert.match(ready, /if \(env\.pickerAccount\(\) !== TR\.account\) \{ env\.syncAccounts\(\); flash\('Nothing was sent[^\n]*return false; \}/);
-  assert.match(PAGE, /pickerAccount: \(\) => \$\('oAcct'\)\.value,/, 'the page\'s picker');
   assert.match(WS, /pickerAccount: \(\) => \(holds\(\) && TK\.el \? tk\('oAcct'\)\.value : ticketAccount\(\)\),/, 'the ticket\'s picker');
   // every path goes through ready(): sendOrder (Buy, Sell, click-trade, Shift+click), cancelAll, Flatten, move, cancel
   assert.match(CORE.slice(CORE.indexOf('function sendOrder('), CORE.indexOf('function placeAt(')), /^\s+if \(!ready\(\)\) return;/m);
@@ -74,13 +74,17 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   // only Flatten and Flatten all skip the Armed check (Anthony 2026-10-01); every other ready() call keeps it
   assert.deepEqual((CORE.match(/ready\(false\)/g) || []).length, 2);
   assert.match(CORE, /if \(!TR\.armed && armed !== false\) \{ flash\('Armed is off: nothing was sent/);
-  // the hotkeys and the buttons call the core's own functions: no second order path, on either page
-  assert.match(PAGE, /actions: \{ buy: \(\) => T\.sendOrder\('buy', 'market', null\), sell: \(\) => T\.sendOrder\('sell', 'market', null\), be: T\.breakEven, close: \(\) => T\.flattenHere\(\), flattenAll: T\.flattenAll \},/);
+  // the buttons call the core's own functions: no second order path. 1.21.0: a chart (live.js) has no TradeCore, no order
+  // bar and no trading hotkeys of its own; its clicks, drags and x go to its host (HOST.place, move, cancel, planAdd)
+  for (const re of [/TradeCore|window\.TradeCore|\bTC\.(create|wire)\(/, /sendOrder|flattenHere|flattenAll|breakEven|cancelOrder|moveOrder|planMove|planRemove/, /type: '(order|flatten|cancel|change|plan|auth)'/])
+    assert.doesNotMatch(PAGE.replace(/^\s*(\/\/|\*).*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, ''), re, 'live.js sends no order itself: ' + re);
+  assert.match(PAGE, /const READ_ONLY_TYPES = \['subscribe', 'ping', 'htf'\];/);
+  assert.match(PAGE, /function send\(obj\) \{\n\s+if \(!READ_ONLY_TYPES\.includes\(obj && obj\.type\)\) return;/, 'every chart is read only, with no exception');
   assert.match(CORE, /\$\('buyMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.sendOrder\('buy', 'market', null\)\)\);/);
   assert.match(CORE, /\$\('sellMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.sendOrder\('sell', 'market', null\)\)\);/);
   assert.match(CORE, /\$\('beBtn'\)\.addEventListener\('click', pointerOnly\(core\.breakEven\)\);/);
-  assert.match(PAGE, /chart\.on\('orderMove', e => \(OT\.planIdOf\(e\.id\) \? T\.planMove\(e\.id, e\.price, e\.from\) : T\.moveOrder\(e\.id, e\.price\)\)\);/);
-  assert.match(PAGE, /chart\.on\('orderCancel', e => \(OT\.planIdOf\(e\.id\) \? T\.planRemove\(e\.id\) : T\.cancelOrder\(e\.id\)\)\);/);
+  assert.match(PAGE, /chart\.on\('orderMove', e => \{ if \(armedHere\(\)\) call\(HOST\.move, \[e\.id, e\.price, D\.root, e\.from\]\); else renderHost\(\); \}\);/);
+  assert.match(PAGE, /chart\.on\('orderCancel', e => \{ if \(armedHere\(\)\) call\(HOST\.cancel, \[e\.id, D\.root\]\); \}\);/);
   // 1.13.0: a planned line's drag, x and "+SL" / "+TP" go through ready() too (the gates of a leg's drag)
   assert.match(CORE, /function planTarget\(entryId\) \{\n\s+if \(!ready\(\)\) \{ env\.changed\(\); return null; \}\n\s+if \(notShown\(entryId\)\) return null;/);
   for (const f of ['planMove', 'planRemove', 'planAdd']) assert.match(CORE.slice(CORE.indexOf('function ' + f + '(')), /^\s+const o = planTarget\(/m, f);
@@ -98,19 +102,12 @@ test('trade.js: TR.account is set only from orderAccount, the picker, or cleared
   const sets = CORE.match(/TR\.account = [^;]*;/g);
   assert.deepEqual(sets, ["TR.account = TR.enabled ? pick.account : '';", "TR.account = '';", 'TR.account = a;']);
   assert.match(CORE, /const pick = LP\.orderAccount\(TR\.accounts, TR\.enabled \? env\.wantedAccount\(\) : ''\);/);
-  assert.match(PAGE, /wantedAccount: \(\) => viewAccount,/);
   assert.match(CORE, /function pickAccount\(a\) \{\n\s+TR\.account = a;\n\s+if \(TR\.armed\) \{ setArmed\(false\); flash\('Armed turned off: the account changed\.', 'warn'\); \}/);
   assert.doesNotMatch(PAGE + CORE + WS, /TR\.armed = (?!v;)/, 'TR.armed is set only in setArmed');
   assert.doesNotMatch(PAGE + WS, /store\.(get|set|getItem|setItem)\('[^']*arm/i, 'nothing about Armed in storage');
   assert.match(CORE, /if \(cameOn \|\| !TR\.enabled \|\| TR\.account !== was\) setArmed\(false\);/);
-  // the trading page never follows another tab's pick (each tab keeps its own account while open)
-  assert.match(PAGE, /function followAccount\(v\) \{\n\s+if \(TRADING \|\| /);
-  // the 1.5 fills choice is never an order account
-  assert.match(PAGE, /if \(typeof v === 'string' && v\) \{ if \(TRADING\) \{ restored\.account = v; restored\.from = 'pc'; \} return v; \}\n\s+if \(TRADING\) return '';\n\s+const old = store\.get\('live-fill-account-v1'/);
-  // review S1: a reload restores this tab's account (sessionStorage) first, the PC-wide last pick only for a new tab
-  assert.match(PAGE, /if \(TRADING && tabAccount\(\)\) \{ restored\.account = tabAccount\(\); restored\.from = 'tab'; return restored\.account; \}\n\s+const v = store\.get\('live-account-v1', null\);/);
-  assert.match(PAGE, /prefixedStorage\(window\.sessionStorage, PREFIX\)/);
-  assert.equal((PAGE.match(/saveTabAccount\(/g) || []).length, 2, 'called on the two kinds of pick, never on a fallback');
+  // 1.21.0: a chart's account picker only picks whose fills it marks (the single chart page's per-tab order account is gone)
+  assert.doesNotMatch(PAGE, /sessionStorage|saveTabAccount|tabAccount/);
 });
 
 /* Cancel all's batch (review 2 S1, S2, N1), run on its own: TradeCore with the page around it stubbed (the socket, the

@@ -1,9 +1,9 @@
 # Embedding the live chart (ChartLive.mount)
 
-The single chart page (`live/single.html`, served by ChartBridge at `http://localhost:8765/single.html`), the
-workspace (`live/index.html`, ChartBridge's main page at `http://localhost:8765/`, a host of its own) and a host page such
-as The Desk run the same code. The standalone page boots itself; a host page calls `ChartLive.mount`. Every
-change to the standalone chart therefore shows up in the host as soon as the host vendors the new files.
+The workspace (`live/index.html`, ChartBridge's page at `http://localhost:8765/`, a host of its own) and any other host
+page run the same code: each calls `ChartLive.mount`, so every change to the chart shows up in the host as soon as the
+host vendors the new files (The Desk stopped embedding the chart on 2026-09-30). Until 1.21.0 a single chart page,
+`live/single.html`, booted itself with `data-mount="page"`; it is gone, and every chart is a mounted one.
 
 ## Files to vendor, in load order
 
@@ -15,12 +15,11 @@ Copy these five files from one chart-engine commit (all from the same version), 
 | 2 | `src/chart-engine.js` | `<script>` or `<script defer>` | `window.ChartEngine` |
 | 3 | `live/bar-builder.js` | `<script>` or `<script defer>` | `window.BarBuilder` |
 | 4 | `live/order-ticket.js` | `<script>` or `<script defer>` | `window.OrderTicket` (needed even read only: `live.js` reads it at load) |
-| (4b) | `live/trade.js` | `<script>` before `live.js` | `window.TradeCore`, the order logic (1.12.0): only for a page that trades (the single chart page and the workspace load it); a read-only host does not need it |
-| 5 | `live/live.js` | `<script>` or `<script defer>`, **without** `data-mount` | `window.LivePrefs`, `window.ChartLive` |
+| (4b) | `live/trade.js` | `<script>` before `live.js` | `window.TradeCore`, the order logic (1.12.0): only for a page that trades (the workspace loads it); a read-only host does not need it |
+| 5 | `live/live.js` | `<script>` or `<script defer>` | `window.LivePrefs`, `window.ChartLive` |
 
 No bundler, no build step. Scripts 2 to 5 must run in this order (plain `defer` scripts keep document order),
 and `ChartLive.mount` must run after script 5, for example from the host's own deferred or module script.
-Leave out `data-mount="page"`: that attribute is how `live/single.html` boots the standalone page into `body`.
 
 Record the chart-engine commit and version (`ChartEngine.VERSION`) in the host's `VENDORED.txt`.
 
@@ -55,19 +54,18 @@ field), nor while a text box, select or editable element has it, nor with Ctrl, 
 already marked handled (`preventDefault`), but only a host listener that runs before the chart's (capture phase, or
 added on `document` earlier) can do that; one on `window` runs after. The menu stays inside the chart's own width,
 so a narrow pane in a host that clips its panes still shows all of it. Read-only mounts can show, hide, add, remove
-and pin indicators like the standalone page (nothing is sent to ChartBridge for it).
+and pin indicators like the workspace's charts (nothing is sent to ChartBridge for it).
 
 Account (1.6.0): a mounted chart has no order bar, so a compact **Account** picker sits in its toolbar; the chart
 marks that account's fills only (there is no "All accounts" any more). It lists the accounts ChartBridge names in
 `hello` and any with fills, those with fills first, and remembers the choice per prefix (`live-account-v1`). A
-mounted chart still follows a pick made by another chart or tab with its prefix (1.6.1 changes this only on the
-trading page, where each tab keeps its own order account).
+mounted chart still follows a pick made by another chart or tab with its prefix.
 
-`mount` returns `{ destroy(), chart, element, paneId, setIndicatorOption(id, key, value), indicatorOptions(id) }` and,
-since 1.14.0, `legendToggle`, `legendShown()` and `setLegendShown(on)`. 1.16.0 (Anthony): a mounted chart has no text on
-it, no legend and no **Aa** toggle: `legendToggle` is an empty hidden element (a host that places it shows nothing),
-`legendShown()` is false and `setLegendShown` does nothing (only the single chart page has its legend and toggle). It has
-`badge` instead, a small element (in the chart's top left corner, unless the host places it in its own header, inside an
+`mount` returns `{ destroy(), chart, element, paneId, setIndicatorOption(id, key, value), indicatorOptions(id) }`, and
+`data()`, the chart's data for tests and the console (read it, never change it; 1.21.0, the single chart page's
+`window.liveData`). 1.16.0 (Anthony): a mounted chart has no text on it, no legend and no **Aa** toggle (1.21.0:
+`legendToggle`, `legendShown()` and `setLegendShown(on)`, empty since 1.16.0, are gone with the single chart page's
+legend). It has `badge`, a small element (in the chart's top left corner, unless the host places it in its own header, inside an
 element with the class `chart-live`) that shows **ARMED · account** while the chart takes orders (`setTrade`'s `live`) and
 the connection when it is not LIVE: CONNECTING, LOADING, OFFLINE, or "Feed stale 12 s" (no trade for 10 s in RTH or 60 s
 outside it while CME Globex is open; the chart then has a thin amber edge, gone with the next trade). Its `data-conn` is the
@@ -106,16 +104,15 @@ per pane (`live-pane-heights-v1`). The divider is an element inside the chart; n
 
 The volume profile keeps the last session until the next session's first trade (legend "(Fri)"; RTH through the
 weekday night until the next 9:30), for the ticks the chart has (1.6.1): it asks for no more tick history than 1.6.0,
-so after a weekend load it shows what the view's ticks hold, with a quiet note. The Desk's relay clamps `tickHours` to
-`THEDESK_LIVE_RELAY_TICK_HOURS` (default 8) as before.
+so after a weekend load it shows what the view's ticks hold, with a quiet note.
 
 | Option | Default | What it does |
 |---|---|---|
-| `wsUrl` | none, required | ChartBridge's WebSocket URL. A **function** is called again for **every** connect and reconnect, so it can hand out a fresh single-use relay ticket each time (`/api/live/ws?ticket=...`), or choose between `ws://localhost:8765/ws` and the relay. It may return a promise; a thrown error or a rejected promise counts as a failed connect and is retried. The query string is never shown on screen. |
+| `wsUrl` | none, required | ChartBridge's WebSocket URL, a string (`ws://localhost:8765/ws`), used for every connect and reconnect. The query string is never shown on screen. (Until 1.21.0 it could also be a function or a promise, for The Desk's relay and its single-use tickets; the relay is gone.) |
 | `paneId` | `'main'` | Key for this chart's indicators (Volume bars, VWAP, Levels, Initial balance, Volume profile, Cumulative delta, Fills: on the chart, shown, pinned; and their options), the delta pane's height and drawings. `'main'` starts with the five on and pinned and the cumulative delta pane on without a chip (the volume profile off), any other id with none on (Anthony's rule for new panes). Give every pane its own id. |
 | `storagePrefix` | `'embed:'` | Put in front of every storage key, see below. |
 | `onStatus` | none | Called with `{ state, paneId, root, attempt, contract }` on every connection change (`contract`, 1.16.0: the contract's name, such as "MNQ 12-26", once known). `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
-| `brand` | `false` | Show The Desk logo and "Live chart" at the start of the toolbar (the standalone page shows it). |
+| `brand` | `false` | Show The Desk logo and "Live chart" at the start of the toolbar. |
 | `presetStore` | this browser's storage | Where the Colors panel's named presets live (1.9.0): `{ list(), save(group, name, colors, ind), rename(group, id, name), remove(group, id), shared }` (`ind`: a chart preset's linked indicator preset id), each call returning a promise, as `LivePrefs.localPresetStore` in `live/live.js` describes. |
 | `feed` | none | A `ChartFeed` hub (`live/feed.js`, `ChartFeed.create({ wsUrl })`): the chart takes its data from the hub's one connection per instrument instead of opening its own WebSocket, so several charts (and tapes) of one instrument share one connection and one subscribe. `wsUrl` is then not needed. Added for the workspace (E2a). |
 | `view` | none | `{ root, tf, range }`: the chart's own instrument, bars (`s15` to `h1`, `range`) and range size in ticks. The chart starts on them and never saves them under the prefix; the host keeps them (`onView`). Without it the chart reads and saves them under the prefix as before. |
@@ -141,9 +138,9 @@ panel) for a host to place, and `setTrade` (with `trade`). None of it changes a
 chart mounted without them. `ChartLive.hotkeyHandler(o)` is the trading hotkeys' one keydown handler (1.11.0), which
 the workspace uses for its window.
 
-Reconnecting works as on the standalone page: after a drop it tries again after 0.5 s, then 1 s, 1.5 s and so
-on up to every 5 s. Before the first connection the chart shows "Waiting for ChartBridge"; after a drop it shows
-"Lost ChartBridge" from the third failed try in a row. Each try calls `wsUrl` again.
+Reconnecting: after a drop it tries again after 0.5 s, then 1 s, 1.5 s and so on up to every 5 s. Before the first
+connection the chart shows "Waiting for ChartBridge"; after a drop it shows "Lost ChartBridge" from the third failed try
+in a row.
 
 `destroy()` saves anything typed and not yet saved (a range size, as on page close), closes the WebSocket
 (no reconnect follows), clears every timer, removes the chart's listeners on `document` and `window` and the
@@ -168,7 +165,7 @@ needs no entry. Listed origins can read, never trade (see nt8/PROTOCOL.md, Netwo
 ChartBridge 0.3.2 locks its own page with a PIN (nt8/PROTOCOL.md, PIN). That lock is for ChartBridge's own
 origin only: a host listed in `allowOrigins` and a relay with no `Origin` connect exactly as before, and a
 mounted chart never loads `pin.js`, never shows the PIN pad and never asks `/pin/` anything. Do not vendor
-`live/pin.js` or `live/pin.css`; they belong to the standalone page.
+`live/pin.js` or `live/pin.css`; they belong to ChartBridge's own page.
 
 ## What the chart sends (for a relay)
 
@@ -181,10 +178,9 @@ A read-only chart sends only these messages (nt8/PROTOCOL.md), so a relay in bet
 
 To ChartBridge 0.3.5 or later, whose `hello` lists `liveFirst` and `profile` in `features` (1.8.0), the `subscribe` also
 carries `sub` (the chart's subscribe id), `profile: true`, and on seconds and range views `liveFirst: true` with
-`tickHours` 2 (the served window, nt8/PROTOCOL.md). A relay that passes `hello` without `features` (The Desk's does) never
-sees them: the chart subscribes as before, and ChartBridge 0.3.5 answers its tick subscribes with the served window (the
-last 2 hours) all the same. For the exact session profile in The Desk, the relay needs to pass `features` in `hello` and
-the `profile` message to the page, and The Desk to vendor chart 1.8.0.
+`tickHours` 2 (the served window, nt8/PROTOCOL.md). A relay that passes `hello` without `features` never sees them: the
+chart subscribes as before, and ChartBridge 0.3.5 answers its tick subscribes with the served window (the last 2 hours)
+all the same. For the exact session profile, a relay needs to pass `features` in `hello` and the `profile` message.
 
 A relay may clamp `tickHours` to a lower cap instead of refusing the subscribe. The chart then works as with a PC
 that has little tick history: Range bars start where the ticks start, and the status line says "Range bars start
@@ -196,7 +192,7 @@ session counted from later than 18:00 with the start ("since 18:05 ET"). A relay
 ## Read-only guarantee
 
 A chart made with `ChartLive.mount` is always read only: there is no option to turn trading on (a `trading`
-option is ignored). Only the standalone page, booted by `live/single.html` with `data-mount="page"`, trades itself.
+option is ignored). (Until 1.21.0 the single chart page, booted by `live/single.html` with `data-mount="page"`, traded itself; it is gone.)
 The workspace (1.12.0) trades through its own order connection and TradeCore (`live/trade.js`), never through a chart:
 its charts are mounted with `trade` (below), which only hands the host the clicks; every point here still holds for
 the chart itself.
@@ -216,10 +212,10 @@ the chart itself.
 
 ## Storage prefix rule
 
-Every storage key the chart uses is `storagePrefix + <the standalone page's key>`, in this browser's
-`localStorage` for the host's origin. The standalone page uses no prefix:
+Every storage key the chart uses is `storagePrefix + <the key>`, in this browser's `localStorage` for the host's origin.
+The workspace (and, until 1.21.0, the single chart page) uses no prefix:
 
-| Standalone key | What it holds | Shared by |
+| Key (no prefix) | What it holds | Shared by |
 |---|---|---|
 | `live-settings-v2` | instrument, bars, glide, range mode | all charts with this prefix |
 | `live-range-v2` | range size per instrument | all charts with this prefix |
@@ -235,9 +231,8 @@ Every storage key the chart uses is `storagePrefix + <the standalone page's key>
 | `live-color-presets-v1` | `{ chart: [{ id, name, colors }], indicator: [...] }` the named presets (1.9.0), unless `presetStore` is passed | all charts with this prefix |
 
 So with `storagePrefix: 'desk:'` The Desk's chart keeps `desk:live-settings-v2` and so on, and never reads or
-writes the standalone page's keys even when both run on the same origin. With no `storagePrefix` a mounted
-chart uses `'embed:'` (`ChartLive.EMBED_PREFIX`). Passing `''` on purpose shares the standalone page's
-settings. The 1.3 keys (`live-settings-v1`, `live-range-v1`) are only carried over for the empty prefix.
+writes the workspace's keys even when both run on the same origin. With no `storagePrefix` a mounted
+chart uses `'embed:'` (`ChartLive.EMBED_PREFIX`). Passing `''` on purpose shares the workspace's settings. The 1.3 keys (`live-settings-v1`, `live-range-v1`) are only carried over for the empty prefix.
 
 Choices shared by all charts with one prefix (instrument, bars and the rest in the table) are each read when a
 chart mounts and written one field at a time when changed, so two panes never undo each other while they run;

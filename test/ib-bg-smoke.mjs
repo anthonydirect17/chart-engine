@@ -1,18 +1,20 @@
-// 1.5.3 smoke: the 1-hour Initial Balance and the chart background, on the live page and a mounted chart, against the
+// 1.5.3 smoke: the 1-hour Initial Balance and the chart background, on a mounted chart with its own toolbar
+// (test/chart-host.html; the single chart page until chart 1.21.0) and a host's pair of mounted charts, against the
 // fake bridge (sample data only, never market data). The page and the bridge run on a chosen New York time of day on
 // the most recent weekday that has a regular session, so the IB phases can be seen whatever the time of the run:
 //   npm run smoke:ib        (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks: nothing before 9:30; forming (dashed, "(forming)") at 10:00 and the same values on every view, after a
 // reload and in ChartLive.mount; locked (solid) at 11:15; a weekend and an NYSE holiday show nothing; history that
 // starts after 9:30 shows nothing and says so; the Initial balance menu entry per pane. Background: the four presets and a
-// picked color draw the ground and the legend follows; saved per prefix, across a reload, and a second tab changing
-// another color does not undo it. Screenshots of each go to SHOTS (default test/out).
+// picked color draw the ground and the chart's chrome follows; saved per prefix, across a reload, and a second tab
+// changing another color does not undo it. Screenshots of each go to SHOTS (default test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
+import { C as H, hostUrl, waitLive } from './chart-host.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -90,10 +92,10 @@ async function openPage(ctx, url) {
   await live(p);
   return p;
 }
-const live = p => p.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 20000 }).then(() => p.waitForTimeout(700));
-/* the IB lines the chart holds: the page's chart, or pane A of a mounted pair */
+const live = p => waitLive(p, 20000).then(() => p.waitForTimeout(700));
+/* the IB lines the chart holds: the chart host's chart, or pane A of a mounted pair */
 const ibOf = (p, pane) => p.evaluate(pn => (pn ? window[pn].chart : window.liveChart).getLevels().filter(l => l.layer === 'ib').map(l => ({ name: l.name, price: l.price, dash: l.dash.join('/'), from: l.from, color: l.color })), pane || null);
-async function pickTf(p, text) { await p.click(`#tfSeg >> text="${text}"`); await live(p); }
+async function pickTf(p, text) { await p.click(`${H('tfSeg')} >> text="${text}"`); await live(p); }
 const todayAt = (offset, hh, mm) => Math.floor(U.zoneSeconds(Date.now() / 1000 + offset) / 86400) * 86400 + hh * 3600 + mm * 60;
 
 try {
@@ -102,7 +104,7 @@ try {
     const off = offsetTo(10, 0, weekday);
     const br = await startBridge(off);
     const ctx = await context(off);
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const p = await openPage(ctx, hostUrl(br.port));
     const ib = await ibOf(p);
     check(ib.length === 2 && ib[0].name === 'IBH' && ib[1].name === 'IBL' && ib.every(l => l.dash === CE.IB_FORMING_DASH.join('/')) && ib[0].price >= ib[1].price,
       '10:00 ET: IBH and IBL forming, long dashes: ' + JSON.stringify(ib));
@@ -110,14 +112,14 @@ try {
     check(ib[0].color === CE.LEVEL_COLORS.ibHigh && ib[1].color === CE.LEVEL_COLORS.ibLow && U.luminance(ib[0].color) > U.luminance(ib[1].color), 'IB high in the brighter orchid: ' + ib[0].color + ' / ' + ib[1].color);
     // the IB line is drawn from 9:30, not from the left edge: the canvas left of the 9:30 bar has no orchid on the IBH row
     const drawn = await p.evaluate(price => {
-      const c = document.querySelector('#chart canvas'), x = c.getContext('2d'), y = Math.round(window.liveChart.priceToY(price) * devicePixelRatio);
+      const c = document.querySelector('[id$="-chart"] canvas'), x = c.getContext('2d'), y = Math.round(window.liveChart.priceToY(price) * devicePixelRatio);
       const row = [];
       for (let yy = y - 1; yy <= y + 1; yy++) { const d = x.getImageData(0, yy, c.width, 1).data; for (let i = 0; i < c.width; i++) { const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2]; if (r > 150 && b > 120 && r >= b - 20 && g < r - 25 && g < b - 10) row.push(i); } }
       return { first: row.length ? Math.min(...row) / devicePixelRatio : null, n: row.length, plotW: c.width / devicePixelRatio - 78 };
     }, ib[0].price);
     check(drawn.n > 20 && drawn.first > 200, 'IBH pixels start well right of the left edge (at the 9:30 bar): first orchid at x ' + drawn.first);
     check((await p.evaluate(() => window.liveChart.getLayers().ib)) === true, 'Initial balance on by default on the main pane');
-    check(/5\/5/.test(await p.textContent('#indCount')), 'indicator count 5/5 (the delta pane on too, 1.7.0; the IB in Levels, 1.14.0): ' + await p.textContent('#indCount'));
+    check(/5\/5/.test(await p.textContent(H('indCount'))), 'indicator count 5/5 (the delta pane on too, 1.7.0; the IB in Levels, 1.14.0): ' + await p.textContent(H('indCount')));
     await p.screenshot({ path: path.join(SHOTS, 'ib-forming-1000.png') });
     // the same IB on every view
     for (const tf of ['15s', '30s', '5m', '15m', '1h', 'Range', '1m']) {
@@ -129,20 +131,20 @@ try {
     await p.reload(); await live(p);
     check(JSON.stringify(await ibOf(p)) === JSON.stringify(ib), 'same IB after a reload');
     // the IB in the Levels gear (1.14.0, its own indicator retired): IBH and IBL each a toggle, saved for this pane only
-    await p.click('#indBtn');
-    check(!(await p.$('#indPanel [data-f="sw:ib"]')), 'no Initial balance row of its own (1.14.0)');
-    await p.click('#indPanel [data-act="gear"][data-id="levels"]');
-    check(await p.getAttribute('#indPanel [data-f="tog:levels:ibh"]', 'aria-pressed') === 'true' && await p.getAttribute('#indPanel [data-f="tog:levels:ibl"]', 'aria-pressed') === 'true', 'the Levels gear has IBH and IBL toggles, on');
-    await p.click('#indPanel [data-f="tog:levels:ibh"]');
+    await p.click(H('indBtn'));
+    check(!(await p.$(H('indPanel') + ' [data-f="sw:ib"]')), 'no Initial balance row of its own (1.14.0)');
+    await p.click(H('indPanel') + ' [data-act="gear"][data-id="levels"]');
+    check(await p.getAttribute(H('indPanel') + ' [data-f="tog:levels:ibh"]', 'aria-pressed') === 'true' && await p.getAttribute(H('indPanel') + ' [data-f="tog:levels:ibl"]', 'aria-pressed') === 'true', 'the Levels gear has IBH and IBL toggles, on');
+    await p.click(H('indPanel') + ' [data-f="tog:levels:ibh"]');
     check(JSON.stringify((await ibOf(p)).map(l => l.name)) === '["IBL"]', 'IBH off: only IBL drawn: ' + JSON.stringify((await ibOf(p)).map(l => l.name)));
-    await p.click('#indPanel [data-f="tog:levels:ibl"]'); await p.keyboard.press('Escape');
+    await p.click(H('indPanel') + ' [data-f="tog:levels:ibl"]'); await p.keyboard.press('Escape');
     const saved = await p.evaluate(() => JSON.parse(localStorage.getItem('live-indicator-options-v1')).main.levels);
     check((await ibOf(p)).length === 0 && saved.ibh === 'off' && saved.ibl === 'off' && (await p.evaluate(() => window.liveChart.getLayers().levels)) === true, 'both IB lines off, Levels still on, saved for the main pane: ' + JSON.stringify(saved));
-    check(await p.isHidden('#ibNote'), 'no IB note while its lines are off');
+    check(await p.isHidden(H('ibNote')), 'no IB note while its lines are off');
     await p.reload(); await live(p);
     check((await ibOf(p)).length === 0, 'IB lines off after a reload');
-    await p.click('#indBtn'); await p.click('#indPanel [data-act="gear"][data-id="levels"]');
-    await p.click('#indPanel [data-f="tog:levels:ibh"]'); await p.click('#indPanel [data-f="tog:levels:ibl"]'); await p.keyboard.press('Escape');
+    await p.click(H('indBtn')); await p.click(H('indPanel') + ' [data-act="gear"][data-id="levels"]');
+    await p.click(H('indPanel') + ' [data-f="tog:levels:ibh"]'); await p.click(H('indPanel') + ' [data-f="tog:levels:ibl"]'); await p.keyboard.press('Escape');
     check(JSON.stringify(await ibOf(p)) === JSON.stringify(ib), 'both back on: the same IB');
     // the mounted chart (The Desk): same IB; a new pane starts with it off
     const host = await openPageEmbed(ctx, br.port);
@@ -158,7 +160,7 @@ try {
     const off = offsetTo(11, 15, weekday);
     const br = await startBridge(off);
     const ctx = await context(off);
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const p = await openPage(ctx, hostUrl(br.port));
     const ib = await ibOf(p);
     check(ib.length === 2 && ib[0].name === 'IBH' && ib[1].name === 'IBL' && ib.every(l => l.dash === ''), '11:15 ET: IBH and IBL locked, solid: ' + JSON.stringify(ib.map(l => [l.name, l.price, l.dash])));
     await p.screenshot({ path: path.join(SHOTS, 'ib-locked-1115.png') });
@@ -171,16 +173,16 @@ try {
     const off = offsetTo(9, 0, weekday);
     const br = await startBridge(off);
     const ctx = await context(off);
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
-    check((await ibOf(p)).length === 0 && await p.isHidden('#ibNote'), '9:00 ET: no IB yet, no note');
+    const p = await openPage(ctx, hostUrl(br.port));
+    check((await ibOf(p)).length === 0 && await p.isHidden(H('ibNote')), '9:00 ET: no IB yet, no note');
     await ctx.close(); br.kill();
   }
   {
     const off = offsetTo(11, 0, saturday);
     const br = await startBridge(off);
     const ctx = await context(off);
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
-    check((await ibOf(p)).length === 0 && await p.isHidden('#ibNote'), 'Saturday 11:00 ET: no IB, no note');
+    const p = await openPage(ctx, hostUrl(br.port));
+    check((await ibOf(p)).length === 0 && await p.isHidden(H('ibNote')), 'Saturday 11:00 ET: no IB, no note');
     await ctx.close(); br.kill();
   }
   {
@@ -189,8 +191,8 @@ try {
     if (off !== null) {
       const br = await startBridge(off);
       const ctx = await context(off);
-      const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
-      check((await ibOf(p)).length === 0 && /holiday/.test(await p.textContent('#ibNote')), 'NYSE holiday 11:00 ET: no IB, a quiet note: ' + await p.textContent('#ibNote'));
+      const p = await openPage(ctx, hostUrl(br.port));
+      check((await ibOf(p)).length === 0 && /holiday/.test(await p.textContent(H('ibNote'))), 'NYSE holiday 11:00 ET: no IB, a quiet note: ' + await p.textContent(H('ibNote')));
       await ctx.close(); br.kill();
     }
   }
@@ -198,9 +200,9 @@ try {
     const off = offsetTo(11, 0, weekday);
     const br = await startBridge(off);
     const ctx = await context(off, { dropHistoryBefore: todayAt(off, 9, 45) });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
-    const note = await p.textContent('#ibNote');
-    check((await ibOf(p)).length === 0 && /^Initial balance not shown: the history does not reach back before 9:30/.test(note) && await p.isVisible('#ibNote'), 'history from 9:45: no IB, and the status line says why: ' + note);
+    const p = await openPage(ctx, hostUrl(br.port));
+    const note = await p.textContent(H('ibNote'));
+    check((await ibOf(p)).length === 0 && /^Initial balance not shown: the history does not reach back before 9:30/.test(note) && await p.isVisible(H('ibNote')), 'history from 9:45: no IB, and the status line says why: ' + note);
     await p.screenshot({ path: path.join(SHOTS, 'ib-uncovered.png') });
     await ctx.close(); br.kill();
   }
@@ -208,74 +210,43 @@ try {
   /* ---------------- background */
   {
     const off = offsetTo(11, 15, weekday);
-    const br = await startBridge(off, ['--trading', '--trade-accounts=Sim101']);   // trading on: the order bar and Armed
+    const br = await startBridge(off, ['--trading', '--trade-accounts=Sim101']);   // trading on (the fills)
     const ctx = await context(off);
-    const a = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
-    const b = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);      // a second tab, open before A changes anything
+    const a = await openPage(ctx, hostUrl(br.port));
+    const b = await openPage(ctx, hostUrl(br.port));      // a second tab, open before A changes anything
     await a.bringToFront();
-    /* the ground drawn in the plot's top-left corner (device pixels), and the stage and legend backgrounds */
+    /* the ground drawn in the plot's top-left corner (device pixels), and the stage's background */
     const look = p => p.evaluate(() => {
-      const c = document.querySelector('#chart canvas'), x = c.getContext('2d');
+      const c = document.querySelector('[id$="-chart"] canvas'), x = c.getContext('2d');
       const d = x.getImageData(4, 4, 1, 1).data;
       const hex = '#' + [d[0], d[1], d[2]].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase();
-      return { canvas: hex, stage: getComputedStyle(document.querySelector('.stage')).backgroundColor, legend: getComputedStyle(document.getElementById('legend')).backgroundColor,
-        head: getComputedStyle(document.getElementById('lgName')).color, theme: window.liveChart.getTheme().bg, saved: JSON.parse(localStorage.getItem('live-colors-v1') || 'null') };
+      return { canvas: hex, stage: getComputedStyle(document.querySelector('.stage')).backgroundColor, theme: window.liveChart.getTheme().bg, saved: JSON.parse(localStorage.getItem('live-colors-v1') || 'null') };
     });
     const rgb = h => { const c = U.parseColor(h); return 'rgb(' + c.r + ', ' + c.g + ', ' + c.b + ')'; };
     /* the canvas is repainted on the next frame, so read it until it shows `hex`, up to 3 s (review 3 N5: fixed waits of
        200 to 250 ms failed now and then on a busy box, on main too) */
     const lookFor = async (p, hex) => { let l = await look(p); for (let k = 0; k < 30 && l.canvas !== hex; k++) { await p.waitForTimeout(100); l = await look(p); } return l; };
     const base = await look(a);
-    check(base.theme === '#080B10' && base.canvas === '#080B10' && base.legend === 'rgba(8, 11, 16, 0.78)', 'default ground unchanged: ' + JSON.stringify(base));
+    check(base.theme === '#080B10' && base.canvas === '#080B10', 'default ground unchanged: ' + JSON.stringify(base));
     await a.screenshot({ path: path.join(SHOTS, 'bg-dark-default.png') });
-    /* ---- the order bar looks exactly as in 1.5.2 on the default ground, off and Armed (review 2, B1); since 1.9.0 the
-       page chrome and the order bar match every other ground (Anthony: "white chart, white top bar", and the top bar
-       matches every ground): their ground is the chrome's (the chart's, or on a mid grey that grey moved to 9:1) */
-    await a.waitForFunction(() => !document.getElementById('armBtn').disabled, null, { timeout: 15000 });
+    /* ---- the chart's chrome takes every ground (1.9.0: "white chart, white top bar"): its ground is the chrome's (the
+       chart's, or on a mid grey that grey moved to 9:1). (Until 1.21.0 this also swept the single chart page's order bar.) */
     const rgbOf = h => { const c = U.parseColor(h); return 'rgb(' + c.r + ', ' + c.g + ', ' + c.b + ')'; };
+    await a.click('.ce-theme-btn'); await a.keyboard.press('Escape');               // the Colors panel built (its hex box)
     const sweep = await a.evaluate(({ grounds }) => {
-      const props = ['color', 'backgroundColor', 'borderTopColor', 'borderBottomColor', 'boxShadow', 'opacity', 'colorScheme', 'outlineColor'];
-      const els = () => [document.querySelector('.obar-ground'), ...document.querySelectorAll('#obar, #obar *')];
-      const snap = () => JSON.stringify(els().map(el => { const cs = getComputedStyle(el); return props.map(k => cs[k]); }));
       const hex = document.querySelector('.ce-theme-panel input[data-hex="bg"]');
       const setBg = v => { hex.value = v; hex.dispatchEvent(new Event('input', { bubbles: true })); };
-      const out = { off: [], armed: [], chrome: [], n: 0, unfollowed: [], back: [] };
-      setBg('#080B10');
-      for (const armed of [false, true]) {
-        if (armed) document.getElementById('armBtn').click();
-        setBg('#080B10');
-        const base = snap();
-        if (armed) out.baseArmed = base; else out.baseOff = base;
-        for (const [g, want] of grounds) {
-          setBg(g); out.n++;
-          const root = getComputedStyle(document.querySelector('.chart-live')).backgroundColor;
-          if (!want && snap() !== base) out[armed ? 'armed' : 'off'].push(g);
-          if (want && root !== want) out.chrome.push(g + ' chrome ' + root + ', not ' + want);
-          if (want && getComputedStyle(document.querySelector('.obar-ground')).backgroundColor !== root) out.unfollowed.push(g);
-        }
-        setBg('#080B10');
-        if (snap() !== base) out.back.push(armed ? 'armed' : 'off');
+      const out = { chrome: [], n: 0 };
+      for (const [g, want] of grounds) {
+        setBg(g); out.n++;
+        const root = getComputedStyle(document.querySelector('.chart-live')).backgroundColor;
+        if (want && root !== want) out.chrome.push(g + ' chrome ' + root + ', not ' + want);
       }
-      document.getElementById('armBtn').click();                                      // Armed off again
       setBg('#080B10');
-      const buy = getComputedStyle(document.getElementById('buyMkt')), sell = getComputedStyle(document.getElementById('sellMkt')), bar = getComputedStyle(document.getElementById('obar'));
-      out.literal = { buy: buy.color, sell: sell.color, bar: bar.backgroundColor, ground: getComputedStyle(document.querySelector('.obar-ground')).backgroundColor, off: getComputedStyle(document.getElementById('buyMkt')).opacity };
       return out;
     }, { grounds: CE.BACKGROUNDS.map(g => g.bg).concat([...Array(256).keys()].map(v => { const h = v.toString(16).padStart(2, '0').toUpperCase(); return '#' + h + h + h; }))
         .map(g => { const c = U.chromeColors(U.buildTheme({ bg: g })); return [g, c ? rgbOf(c['--bg']) : null]; }) });
-    check(sweep.off.length === 0 && sweep.armed.length === 0 && sweep.back.length === 0, 'order bar computed styles identical to the default on the default ground, off and Armed, and again after ' + sweep.n + ' other grounds: ' + JSON.stringify([sweep.off.slice(0, 5), sweep.armed.slice(0, 5), sweep.back]));
-    check(sweep.chrome.length === 0, 'every other ground (4 presets, 256 greys): the page chrome takes the ground chromeColors gives: ' + sweep.chrome.slice(0, 5).join(', '));
-    check(sweep.unfollowed.length === 0, 'on every ground the order bar takes the page chrome\'s ground (1.9.0): ' + sweep.unfollowed.slice(0, 5).join(', '));
-    check(sweep.literal.buy === 'rgb(61, 220, 151)' && sweep.literal.sell === 'rgb(255, 122, 122)' && sweep.literal.bar === 'rgb(15, 21, 29)' && sweep.literal.ground === 'rgb(8, 11, 16)' && sweep.literal.off === '0.45',
-      'default ground: the order bar in the 1.5.2 colors: Buy #3DDC97, Sell #FF7A7A, bar #0F151D, disarmed at 0.45: ' + JSON.stringify(sweep.literal));
-    // screenshots: the order bar Armed on #888888 and on Light; the fill markers on #888888
-    await a.click('#armBtn');
-    for (const [g, name] of [['#888888', '888888'], ['#F5F7FA', 'light']]) {
-      await a.evaluate(v => { const h = document.querySelector('.ce-theme-panel input[data-hex="bg"]'); h.value = v; h.dispatchEvent(new Event('input', { bubbles: true })); }, g);
-      await a.mouse.move(700, 500); await a.waitForTimeout(250);
-      await a.screenshot({ path: path.join(SHOTS, 'obar-armed-' + name + '.png') });
-    }
-    await a.click('#armBtn');
+    check(sweep.chrome.length === 0 && sweep.n > 256, 'every other ground (4 presets, 256 greys): the chart\'s chrome takes the ground chromeColors gives: ' + sweep.chrome.slice(0, 5).join(', '));
     await a.evaluate(() => { const h = document.querySelector('.ce-theme-panel input[data-hex="bg"]'); h.value = '#888888'; h.dispatchEvent(new Event('input', { bubbles: true })); });
     await a.waitForTimeout(250);
     const marks = await a.evaluate(() => { const T = window.liveChart.colors(); return { long: T.long, short: T.short, ring: T.ring, halo: T.halo }; });
@@ -292,7 +263,7 @@ try {
       const l = await lookFor(a, g.bg);
       const T = U.buildTheme({ bg: g.bg });
       check(l.theme === g.bg && l.canvas === g.bg && l.stage === rgb(g.bg) && l.saved.bg === g.bg && U.contrast(T.tagText, g.bg) >= 7,
-        g.name + ' ground: canvas ' + l.canvas + ', stage ' + l.stage + ', saved ' + l.saved.bg + ', legend name ' + l.head);
+        g.name + ' ground: canvas ' + l.canvas + ', stage ' + l.stage + ', saved ' + l.saved.bg);
       await a.keyboard.press('Escape'); await a.mouse.move(700, 400); await a.waitForTimeout(200);
       await a.screenshot({ path: path.join(SHOTS, 'bg-' + g.id + '.png') });
       await a.click('.ce-theme-btn');
@@ -321,8 +292,8 @@ try {
     // a light ground takes the toolbar, menus and status line light too, text at the floors
     const chrome = await a.evaluate(() => {
       const cs = el => getComputedStyle(el);
-      // 1.14.0: Reset view moved into the small menu; Settings is the toolbar's own .btn
-      const btn = document.getElementById('setBtn'), tf = document.querySelector('#tfSeg [aria-pressed="true"]'), stat = document.querySelector('.status');
+      // a mounted chart's toolbar: Reset view is its own .btn
+      const btn = document.querySelector('[id$="-resetBtn"]'), tf = document.querySelector('[id$="-tfSeg"] [aria-pressed="true"]'), stat = document.querySelector('.status');
       return { root: cs(document.querySelector('.chart-live')).backgroundColor, btnBg: cs(btn).backgroundColor, btnFg: cs(btn).color, tfFg: cs(tf).color, tfBg: cs(tf).backgroundColor,
         status: cs(stat).color, colorsBtn: cs(document.querySelector('.ce-theme-btn')).backgroundColor, colorsFg: cs(document.querySelector('.ce-theme-btn')).color, scheme: cs(document.querySelector('.chart-live')).colorScheme };
     });
@@ -339,9 +310,8 @@ try {
     await a.bringToFront(); await a.reload(); await live(a);
     const r = await look(a);
     check(r.theme === '#F5F7FA' && r.canvas === '#F5F7FA' && (await a.evaluate(() => window.liveChart.getTheme().up)) === '#4FD1A5', 'after a reload: light ground and the other tab\'s bull color');
-    check(r.legend === 'rgba(245, 247, 250, 0.78)', 'the legend follows the ground: ' + r.legend);
     await a.screenshot({ path: path.join(SHOTS, 'bg-light-after-reload.png') });
-    await a.click('#indBtn'); await a.waitForTimeout(150);
+    await a.click(H('indBtn')); await a.waitForTimeout(150);
     await a.screenshot({ path: path.join(SHOTS, 'bg-light-indicators-menu.png') });
     await a.keyboard.press('Escape');
     await a.click('.ce-theme-btn'); await a.waitForTimeout(150);
@@ -353,7 +323,7 @@ try {
     check(emb.bg === '#080B10', 'the embedded chart keeps its own ground: ' + JSON.stringify(emb));
     await host.click('#paneA .ce-theme-btn'); await host.click('#paneA .ce-ground[data-bg="black"]'); await host.keyboard.press('Escape');
     check(JSON.parse(await host.evaluate(() => localStorage.getItem('desk:live-colors-v1'))).bg === '#000000' && JSON.parse(await host.evaluate(() => localStorage.getItem('live-colors-v1'))).bg === '#F5F7FA',
-      'embedded ground saved under desk:, the page\'s untouched');
+      'embedded ground saved under desk:, the unprefixed one untouched');
     await host.close();
     // reset puts the default ground back. The page is brought to the front first (the embed's tab was on top, and a
     // background tab paints no frames), and the canvas is read until it repaints (lookFor)

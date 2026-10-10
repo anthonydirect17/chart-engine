@@ -1,6 +1,6 @@
-// Saved settings smoke test (B1: "NQ range set to 40 ticks was back to 20 after a reload"). Drives the live page in
-// Chromium against the fake bridge and checks what comes back after a reload. It only uses controls the page has
-// had since 1.1, so it can be run against an older checkout to show the old failures:
+// Saved settings smoke test (B1: "NQ range set to 40 ticks was back to 20 after a reload"). Drives a mounted chart with its
+// toolbar (test/chart-host.html; the single chart page until chart 1.21.0) in Chromium against the fake bridge and checks
+// what comes back after a reload:
 //   npm run smoke:settings        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 // Found on 1.3.1: (1) a size typed and not committed (no Enter, no click elsewhere) was never saved, and
 // (2) a second chart tab wrote its whole in-memory copy of the sizes back, putting NQ back to 20.
@@ -8,19 +8,18 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { TEST_PIN, unlockIfAsked } from './smoke-pin.mjs';
+import { C, hostUrl, waitLive, view } from './chart-host.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.env.SETTINGS_SMOKE_PORT || 8793);
 const errors = [];
 const fail = m => { errors.push(m); console.error('  FAIL ' + m); };
 const check = (ok, m) => { if (!ok) fail(m); else console.log('  ok   ' + m); };
-const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
+const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--pin-off'], { stdio: ['ignore', 'pipe', 'inherit'] });   // a mounted chart never has the PIN
 await new Promise(r => bridge.stdout.once('data', r));
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
-// ChartBridge 0.3.2: after a load or reload the page asks for its PIN (made-up test PIN) before the chart starts
-const live = async p => { await unlockIfAsked(p); await p.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 20000 }); };
-const URL = `http://localhost:${PORT}/live/single.html`;
+const live = p => waitLive(p);
+const URL = hostUrl(PORT);
 
 async function newPage(ctx) {
   const p = await ctx.newPage();
@@ -30,14 +29,14 @@ async function newPage(ctx) {
   return p;
 }
 async function pick(p, seg, text) {
-  const pressed = await p.getAttribute(`#${seg} >> text="${text}"`, 'aria-pressed');
-  if (pressed !== 'true') { await p.click(`#${seg} >> text="${text}"`); await live(p); }
+  const pressed = await p.getAttribute(`${C(seg)} >> text="${text}"`, 'aria-pressed');
+  if (pressed !== 'true') { await p.click(`${C(seg)} >> text="${text}"`); await live(p); }
   await p.waitForTimeout(300);
 }
 async function rangeAfterReload(p, rootSym) {
   await p.reload(); await live(p); await p.waitForTimeout(400);
   await pick(p, 'symSeg', rootSym); await pick(p, 'tfSeg', 'Range');
-  return { box: await p.inputValue('#rangeTicks'), legend: (await p.textContent('#lgTf')).trim() };
+  return { box: await p.inputValue(C('rangeTicks')), range: (await view(p)).range };
 }
 
 try {
@@ -46,9 +45,9 @@ try {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });
     const p = await newPage(ctx);
     await pick(p, 'symSeg', 'NQ'); await pick(p, 'tfSeg', 'Range');
-    await p.click('#rangeTicks', { clickCount: 3 }); await p.keyboard.type('40');
+    await p.click(C('rangeTicks'), { clickCount: 3 }); await p.keyboard.type('40');
     const r = await rangeAfterReload(p, 'NQ');
-    check(r.box === '40' && /Range 40t/.test(r.legend), 'typed 40 on NQ, reloaded at once: ' + JSON.stringify(r));
+    check(r.box === '40' && r.range === 40, 'typed 40 on NQ, reloaded at once: ' + JSON.stringify(r));
     // MNQ keeps its own size
     const m = await rangeAfterReload(p, 'MNQ');
     check(m.box === '20', 'MNQ still 20 while NQ is 40: ' + JSON.stringify(m));
@@ -60,8 +59,8 @@ try {
     const a = await newPage(ctx), b = await newPage(ctx);
     await pick(b, 'symSeg', 'MNQ'); await pick(b, 'tfSeg', 'Range');
     await a.bringToFront(); await pick(a, 'symSeg', 'NQ'); await pick(a, 'tfSeg', 'Range');
-    await a.fill('#rangeTicks', '40'); await a.press('#rangeTicks', 'Enter'); await a.waitForTimeout(500);
-    await b.bringToFront(); await b.fill('#rangeTicks', '16'); await b.press('#rangeTicks', 'Enter'); await b.waitForTimeout(500);
+    await a.fill(C('rangeTicks'), '40'); await a.press(C('rangeTicks'), 'Enter'); await a.waitForTimeout(500);
+    await b.bringToFront(); await b.fill(C('rangeTicks'), '16'); await b.press(C('rangeTicks'), 'Enter'); await b.waitForTimeout(500);
     await a.bringToFront();
     const r = await rangeAfterReload(a, 'NQ');
     check(r.box === '40', 'NQ 40 kept after another tab saved MNQ 16: ' + JSON.stringify(r));
@@ -74,7 +73,7 @@ try {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });
     const p = await newPage(ctx);
     await pick(p, 'symSeg', 'ES'); await pick(p, 'tfSeg', 'Range');
-    await p.focus('#rangeTicks'); for (let i = 0; i < 4; i++) await p.keyboard.press('ArrowUp');
+    await p.focus(C('rangeTicks')); for (let i = 0; i < 4; i++) await p.keyboard.press('ArrowUp');
     const r = await rangeAfterReload(p, 'ES');
     check(r.box === '12', 'ES 8 + four ArrowUp = 12 after reload: ' + JSON.stringify(r));
     await ctx.close();
@@ -89,25 +88,25 @@ try {
     await p.evaluate(() => { const c = window.liveChart, f = c.setBars; window.__rebuilds = 0; c.setBars = function () { window.__rebuilds++; return f.apply(this, arguments); }; });
     const rebuilds = () => p.evaluate(() => window.__rebuilds);
     // a slow "12": no rebuild at 1, none at 12 until Enter
-    await p.click('#rangeTicks', { clickCount: 3 }); await p.keyboard.type('1'); await p.waitForTimeout(700);
-    check(await rebuilds() === 0 && /Range 20t/.test(await p.textContent('#lgTf')), 'slow "1": no rebuild at 1 tick (' + await rebuilds() + ' rebuilds)');
+    await p.click(C('rangeTicks'), { clickCount: 3 }); await p.keyboard.type('1'); await p.waitForTimeout(700);
+    check(await rebuilds() === 0 && (await view(p)).range === 20, 'slow "1": no rebuild at 1 tick (' + await rebuilds() + ' rebuilds)');
     await p.keyboard.type('2'); await p.waitForTimeout(700);
     check(await rebuilds() === 0, 'typed "12": still no rebuild before Enter');
     check(await storedNQ() === 12, 'typed "12" is saved for a reload: ' + await storedNQ());
     await p.keyboard.press('Enter'); await p.waitForTimeout(400);
-    check(await rebuilds() === 1 && /Range 12t/.test(await p.textContent('#lgTf')), 'Enter: one rebuild at 12 (' + await rebuilds() + ')');
+    check(await rebuilds() === 1 && (await view(p)).range === 12, 'Enter: one rebuild at 12 (' + await rebuilds() + ')');
     // "450": the "45" on the way is dropped when the "0" makes it invalid; a reload commits it like Enter (400)
-    await p.click('#rangeTicks', { clickCount: 3 }); await p.keyboard.type('45'); await p.waitForTimeout(700);
+    await p.click(C('rangeTicks'), { clickCount: 3 }); await p.keyboard.type('45'); await p.waitForTimeout(700);
     check(await storedNQ() === 45, '"45" typed and waiting is saved: ' + await storedNQ());
     await p.keyboard.type('0'); await p.waitForTimeout(700);
     check(await storedNQ() === 12, '"450" drops the saved 45, keeps the committed 12: ' + await storedNQ());
     let r = await rangeAfterReload(p, 'NQ');
     check(r.box === '400', '"450" then reload: 400, as Enter would give, never 45: ' + JSON.stringify(r));
     // reload mid-typing: "7" saved after a pause, then "5" and an immediate reload gives 75, not the stale 7
-    await p.click('#rangeTicks', { clickCount: 3 }); await p.keyboard.type('7'); await p.waitForTimeout(700);
+    await p.click(C('rangeTicks'), { clickCount: 3 }); await p.keyboard.type('7'); await p.waitForTimeout(700);
     await p.keyboard.type('5');
     r = await rangeAfterReload(p, 'NQ');
-    check(r.box === '75' && /Range 75t/.test(r.legend), 'reload mid-typing keeps what was in the box: ' + JSON.stringify(r));
+    check(r.box === '75' && r.range === 75, 'reload mid-typing keeps what was in the box: ' + JSON.stringify(r));
     await ctx.close();
   }
   // 4. first run after the update: the indicators and size chosen on 1.3 carry over, so the chart looks the same
@@ -122,10 +121,10 @@ try {
     await p.reload(); await live(p); await p.waitForTimeout(400);
     const layers = await p.evaluate(() => window.liveChart.getLayers());
     check(layers.volume === false && layers.vwap === true && layers.levels === true && layers.ib === true, '1.3 indicator choices carried over (Levels on with only the IB lines, as 1.13 drew the IB on by default): ' + JSON.stringify(layers));
-    check(await p.inputValue('#rangeTicks') === '40' && /Range 40t/.test(await p.textContent('#lgTf')), '1.3 NQ range 40 carried over');
+    check(await p.inputValue(C('rangeTicks')) === '40' && (await view(p)).range === 40, '1.3 NQ range 40 carried over');
     // 1.3 had no IB: the main pane gets the Initial balance default (on, 1.5.3), so 2 of the 1.3 four plus IB; since 1.6.0 the two
     // that were off stay on the main pane's chart, hidden; since 1.7.0 the delta pane is on too (shown/on: 4/6)
-    if (await p.$('#indCount')) check(await p.textContent('#indCount') === '4/5' && layers.delta === true, 'indicator count 4/5 (the IB in Levels and the delta pane on by default)');
+    check(await p.textContent(C('indCount')) === '4/5' && layers.delta === true, 'indicator count 4/5 (the IB in Levels and the delta pane on by default)');
     const lvNames = await p.evaluate(() => window.liveChart.getLevels().filter(l => l.layer !== 'ib').map(l => l.name));
     check(lvNames.length === 0, 'only the IB lines of Levels drawn: ' + JSON.stringify(lvNames));
     await ctx.close();

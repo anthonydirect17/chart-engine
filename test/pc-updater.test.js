@@ -26,11 +26,12 @@ test('install-files.json: one list, every file there, the add-ons are exactly nt
   assert.deepStrictEqual([...manifest.addons].sort(), cs);
   const to = manifest.www.map(f => f.to);
   assert.strictEqual(new Set(to).size, to.length, 'no target twice');
-  assert.ok(to.includes('update-notice.js') && to.includes('index.html') && to.includes('single.html') && to.includes('src/chart-engine.js'));
+  assert.ok(to.includes('update-notice.js') && to.includes('index.html') && to.includes('src/chart-engine.js'));
+  assert.ok(!to.includes('single.html') && !manifest.www.some(f => f.from === 'live/single.html'), '1.21.0: the single chart page is not installed');
   assert.ok(!to.includes('update.json'), 'update.json is the updater\'s own file');
   assert.ok(manifest.www.every(f => !f.to.endsWith('.cs') && !f.from.endsWith('.cs')), 'no .cs file goes to www');
-  // every page file the workspace (index.html) and the single chart page (single.html) load is installed
-  for (const page of ['index.html', 'single.html']) {
+  // every page file the workspace (index.html) loads is installed (1.21.0: the single chart page is gone)
+  for (const page of ['index.html']) {
     for (const src of read('live/' + page).match(/<(?:script|link)[^>]+(?:src|href)="([^":]+)"/g).map(t => /(?:src|href)="([^"]+)"/.exec(t)[1])) {
       const target = src.replace(/^\.\.\//, '');
       assert.ok(to.includes(target), page + ' loads ' + src + ', which is not installed');
@@ -170,12 +171,12 @@ test('ChartBridge answers /diag to a program on this PC: no PIN, no Origin, only
   assert.match(updater, /"http:\/\/localhost:\$\(Get-ChartBridgePort\)\/diag"/, 'Host localhost:<port>, as HttpListener\'s prefix wants');
 });
 
-test('the page notice never reloads, navigates or sends anything, and only the two pages load it', () => {
+test('the page notice never reloads, navigates or sends anything, and only the workspace loads it', () => {
   const js = read('live/update-notice.js');
   assert.ok(!/location\.(reload|assign|replace|href\s*=)|window\.open|\.submit\(|WebSocket|method:\s*'POST'/.test(js));
   assert.deepStrictEqual([...js.matchAll(/fetch\(([^,)]+)/g)].map(m => m[1]), ["'update.json'"]);
   assert.match(js, /cache: 'no-store'/);
-  for (const page of ['live/index.html', 'live/single.html']) {
+  for (const page of ['live/index.html']) {
     const html = read(page);
     assert.ok(html.indexOf('update-notice.js') > html.indexOf('live.js'), page + ': after live.js');
   }

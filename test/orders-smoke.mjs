@@ -1,4 +1,8 @@
-// Order entry smoke test: drives the live page in Chromium against the fake bridge (protocol v2).
+// Order entry smoke test: drives the workspace's order ticket and its MNQ chart (live/index.html) in Chromium against the
+// fake bridge (protocol v2). Until chart 1.21.0 it drove the single chart page's order bar (live/single.html, gone); the
+// ticket is the same TradeCore with the same controls, so the checks are the same, read from the ticket (its note line
+// for the page's status line, the workspace's alert and "Not sent" lines for the page's). The page's own parts went with
+// it: its legend, footer, title wording, tab account (sessionStorage) and phone layout.
 // Sample data only; nothing reaches a broker. Screenshots in test/out/ (and SHOTS_DIR when set).
 //   npm run smoke:orders        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
@@ -43,20 +47,38 @@ async function until(fn, what, ms) {
 }
 /* 1.13.0: the first order with no stop after each load asks "No stop: send anyway?" (Anthony); this smoke answers Send
    (test/plan-smoke.mjs and test/nostop-smoke.mjs check the question itself) */
+/* The workspace window, read as the page was: $tk(id) is the ticket's control (the order bar's id), window.liveChart the
+   chart of the ticket's instrument (the first one in the layout), __chartEl() its chart box. */
+const wsShim = () => {
+  window.$tk = id => document.querySelector('.tk [data-tk-id="' + id + '"]');
+  window.__chartPanel = () => { const w = window.workspace; if (!w) return null; const r = (window.$tk('root') || {}).value || 'MNQ'; return w.panels().find(p => p.type === 'chart' && p.root === r) || null; };
+  window.__chartEl = () => { const p = window.__chartPanel(); return p ? document.querySelector('.ws-panel[data-id="' + p.id + '"] .chart-box') : null; };
+  Object.defineProperty(window, 'liveChart', { configurable: true, get() { const p = window.__chartPanel(); return p ? window.workspace.chart(p.id) : undefined; } });
+};
+const T = id => '.tk [data-tk-id="' + id + '"]';
+const wsLive = () => { const c = document.getElementById('wsConn'); return !!c && c.classList.contains('live'); };
+/* the chart's canvas, measured fresh */
+const chartBox = pg => pg.evaluate(() => { const r = window.__chartEl().querySelector('canvas').getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
+/* the chart panel's own controls (its header: Indicators, the chips; its ARMED badge) */
+const panelSel = pg => pg.evaluate(() => '.ws-panel[data-id="' + window.__chartPanel().id + '"]');
+/* whose fills the chart marks */
+const fillAcct = pg => pg.evaluate(() => [...new Set(window.liveChart.getMarkers().map(m => m.account))].join());
 const answerNoStop = () => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); };
 async function open(browser, port, width, height) {
   const page = await browser.newPage({ viewport: { width, height: height || 860 }, deviceScaleFactor: 2 });
   await page.addInitScript(answerNoStop);
+  await page.addInitScript(wsShim);
   page.on('pageerror', e => fail(width + 'px pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) fail('console: ' + m.text()); });
   await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-  await page.goto(`http://localhost:${port}/live/single.html`);
+  await page.goto(`http://localhost:${port}/live/?layout=Orders`);   // a new layout: the default one, with the ticket on MNQ
   await unlockIfAsked(page);                                   // ChartBridge 0.3.2: the page's PIN (made-up test PIN)
-  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForFunction(wsLive, null, { timeout: 15000 });
+  await page.waitForFunction(() => !!window.$tk('buyMkt') && !!window.__chartEl(), null, { timeout: 15000 });
   await page.waitForTimeout(600);
   return page;
 }
-const status = page => page.evaluate(() => { const el = document.getElementById('statusMsg'); return { text: el.textContent, cls: el.className }; });
+const status = page => page.evaluate(() => { const el = window.$tk('note'); return { text: el.textContent, cls: el.className }; });   // the ticket's note line
 const noSideScroll = async (page, width) => check(await page.evaluate(() => document.documentElement.scrollWidth) <= width, width + 'px: the page scrolls sideways');
 
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
@@ -71,42 +93,41 @@ try {
   const state = () => control(PORT, 'state', { root: 'MNQ' });
 
   // auth happened: the bar is on, lists only the allowed accounts, Sim101 first choice, qty capped at 5, Armed off
-  await until(() => page.evaluate(() => !document.getElementById('obar').hidden && !document.getElementById('buyMkt').disabled), 'trading enabled after auth');
-  check(JSON.stringify(await page.$$eval('#oAcct option', os => os.map(o => o.value))) === '["Sim101","DEMO-EVAL"]', 'trade accounts');
-  check(await page.inputValue('#oAcct') === 'Sim101', 'default account Sim101');
+  await until(() => page.evaluate(() => !$tk('obar').hidden && !$tk('buyMkt').disabled), 'trading enabled after auth');
+  check(JSON.stringify(await page.$$eval(T('oAcct') + ' option', os => os.map(o => o.value))) === '["Sim101","DEMO-EVAL"]', 'trade accounts');
+  check(await page.inputValue(T('oAcct')) === 'Sim101', 'default account Sim101');
   // one account picker (1.6.0): the order bar's, larger; no toolbar picker beside it; the chart marks its fills only
   const marks = p => p.evaluate(() => window.liveChart.getMarkers().map(m => m.side + m.qty + '@' + m.price));
-  const markAccounts = p => p.evaluate(() => document.getElementById('lgFill').textContent.split(' · ').pop());
-  check(await page.isHidden('#acctWrap') && await page.evaluate(() => document.getElementById('oAcct').classList.contains('acct-main')), 'one account picker: the order bar\'s');
+  const markAccounts = fillAcct;
+  check(await page.evaluate(() => [...document.querySelectorAll('[id$="-acctWrap"]')].every(e => !e.getClientRects().length) && $tk('oAcct').classList.contains('acct-main')), 'one account picker: the ticket\'s');
   check(await markAccounts(page) === 'Sim101' && (await marks(page)).length === 2, 'fills follow the order account (Sim101): ' + JSON.stringify(await marks(page)));
-  await page.selectOption('#oAcct', 'DEMO-EVAL'); await page.waitForTimeout(200);
+  await page.selectOption(T('oAcct'), 'DEMO-EVAL'); await page.waitForTimeout(200);
   check(await markAccounts(page) === 'DEMO-EVAL' && (await marks(page)).length === 2, 'switching the account switches the fills (DEMO-EVAL)');
   check(await page.evaluate(() => localStorage.getItem('live-account-v1')) === '"DEMO-EVAL"', 'account choice saved');
   await shot(page, 'orders-1440-account-picker.png');
-  await page.selectOption('#oAcct', 'Sim101'); await page.waitForTimeout(200);
+  await page.selectOption(T('oAcct'), 'Sim101'); await page.waitForTimeout(200);
   check(await markAccounts(page) === 'Sim101', 'back to Sim101');
   // 1.10.0: Qty is a select 1 to 9; above the MNQ cap of 5 the choices are off, never hidden, and the cap shows beside it
   {
-    const q = await page.evaluate(() => ({ tag: document.getElementById('oQty').tagName, opts: [...document.getElementById('oQty').options].map(o => o.value + (o.disabled ? '-' : '+')).join(), cap: document.getElementById('oQtyCap').textContent, title: document.getElementById('oQty').title }));
+    const q = await page.evaluate(() => ({ tag: $tk('oQty').tagName, opts: [...$tk('oQty').options].map(o => o.value + (o.disabled ? '-' : '+')).join(), cap: $tk('oQtyCap').textContent, title: $tk('oQty').title }));
     check(q.tag === 'SELECT' && q.opts === '1+,2+,3+,4+,5+,6-,7-,8-,9-' && q.cap === 'max 5' && /MNQ cap 5/.test(q.title), 'qty select 1 to 9, 6 to 9 off over the cap of 5: ' + JSON.stringify(q));
   }
-  check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'Armed off after load');
-  check(/Trading through ChartBridge/.test(await page.textContent('#statusRo')), 'footer says trading');
+  check(await page.getAttribute(T('armBtn'), 'aria-checked') === 'false', 'Armed off after load');
 
   // Armed off: Buy, Sell and Shift+click send nothing; Flatten works while disarmed (Anthony 2026-10-01: never blocked)
   const types0 = (await control(PORT, 'received')).types;
-  await page.click('#sellMkt');
+  await page.click(T('sellMkt'));
   check((await status(page)).text === 'Armed is off: nothing was sent. Turn Armed on to trade.', 'disarmed Sell: nothing sent');
   await page.waitForTimeout(450);
-  await page.click('#buyMkt');
+  await page.click(T('buyMkt'));
   let st = await status(page);
   check(/Armed is off: nothing was sent/.test(st.text) && /warn/.test(st.cls), 'disarmed click message: ' + st.text);
-  const cbox = () => page.locator('#chart canvas').boundingBox();   // measured fresh before each use
+  const cbox = () => chartBox(page);   // measured fresh before each use
   let box = await cbox();
   const box0 = box;
   const yAt = p => page.evaluate(pr => window.liveChart.priceToY(pr), p);
   await page.keyboard.down('Shift'); await page.mouse.click(box.x + box.width * 0.5, box.y + await yAt(L - 10)); await page.keyboard.up('Shift');
-  await page.click('#flattenBtn');
+  await page.click(T('flattenBtn'));
   await page.waitForTimeout(400);
   check((await state()).orders.length === 0 && !Object.values((await state()).positions).some(p => p.qty), 'nothing traded while disarmed');
   {
@@ -118,15 +139,15 @@ try {
   await shot(page, 'orders-1440-disarmed.png');
 
   // arm, bracket 40 / 80 ticks, buy 2 at market
-  await page.click('#armBtn');
-  check(await page.getAttribute('#armBtn', 'aria-checked') === 'true', 'armed');
+  await page.click(T('armBtn'));
+  check(await page.getAttribute(T('armBtn'), 'aria-checked') === 'true', 'armed');
   check((await page.title()).startsWith('ARMED'), 'title shows ARMED');
-  check(await page.isVisible('#armPill'), 'ARMED pill on the chart legend');
-  await page.fill('#bStop', '40'); await page.press('#bStop', 'Tab');
-  await page.fill('#bTarget', '80'); await page.press('#bTarget', 'Tab');
-  await page.selectOption('#oQty', '2');
-  await page.click('#buyMkt');
-  await until(async () => (await page.textContent('#oPos')).startsWith('LONG 2'), 'position LONG 2 in the bar');
+  check(await page.isVisible(await panelSel(page) + ' [id$="-bArmed"]'), 'ARMED badge on the chart');
+  await page.fill(T('bStop'), '40'); await page.press(T('bStop'), 'Tab');
+  await page.fill(T('bTarget'), '80'); await page.press(T('bTarget'), 'Tab');
+  await page.selectOption(T('oQty'), '2');
+  await page.click(T('buyMkt'));
+  await until(async () => (await page.textContent(T('oPos'))).startsWith('LONG 2'), 'position LONG 2 in the bar');
   let s = await until(async () => { const x = await state(); return x.orders.length === 2 ? x : null; }, 'two bracket legs');
   const stopLeg = s && s.orders.find(o => o.role === 'stop'), targetLeg = s && s.orders.find(o => o.role === 'target');
   check(stopLeg && stopLeg.price === L - 10 && stopLeg.qty === 2 && stopLeg.side === 'sell', 'stop leg at L - 10: ' + JSON.stringify(stopLeg));
@@ -134,7 +155,7 @@ try {
   check(JSON.parse(await page.evaluate(() => localStorage.getItem('live-bracket-v1'))).MNQ.stop === 40, 'bracket remembered per root');
   await until(() => page.evaluate(() => window.liveChart.getOrders().length === 2 && !!window.liveChart.getPosition()), 'order and position lines on the chart');
   await page.waitForTimeout(300);
-  box = await page.locator('#chart canvas').boundingBox();
+  box = await chartBox(page);
   check(Math.abs(box.y - box0.y) < 1 && Math.abs(box.height - box0.height) < 1, 'the chart did not move when the position changed');
   await shot(page, 'orders-1440-bracket.png');
 
@@ -144,15 +165,16 @@ try {
     const live = () => page.evaluate(() => ({ pos: window.liveChart.getPosition(), orders: window.liveChart.getOrders().length, marks: window.liveChart.getMarkers().map(m => m.side + m.qty) }));
     const before = await live();
     check(before.marks.length === 3 && before.marks.includes('buy2'), 'past fills and the entry marked: ' + JSON.stringify(before.marks));
-    await page.click('#indBtn'); await page.click('#indHideAll'); await page.keyboard.press('Escape');
+    const PS = await panelSel(page);
+    await page.click(PS + ' .ind-btn'); await page.click(PS + ' [id$="-indHideAll"]'); await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
     let after = await live();
     const layers = await page.evaluate(() => window.liveChart.getLayers());
     check(!layers.volume && !layers.vwap && !layers.levels && !layers.ib, 'Hide all hid the indicators');
     check(after.pos && after.pos.qty === 2 && after.orders === 2 && JSON.stringify(after.marks) === '["buy2"]', 'Hide all keeps the open position, both legs and its entry fill, and drops the past fills: ' + JSON.stringify(after));
     await shot(page, 'orders-1440-hide-all-open-position.png');
-    await page.click('#indBtn'); await page.click('#indHideAll'); await page.keyboard.press('Escape');   // Restore
-    const fillsSw = async () => { await page.click('#indChips .ind-chip[data-id="fills"]'); await page.click('body .chip-pop [data-act="popsw"]'); await page.keyboard.press('Escape'); };   // 1.14.0: the chip's popover switch
+    await page.click(PS + ' .ind-btn'); await page.click(PS + ' [id$="-indHideAll"]'); await page.keyboard.press('Escape');   // Restore
+    const fillsSw = async () => { await page.click(PS + ' .ind-chips .ind-chip[data-id="fills"]'); await page.click('body .chip-pop [data-act="popsw"]'); await page.keyboard.press('Escape'); };   // 1.14.0: the chip's popover switch
     await fillsSw();                                                                                      // the Fills chip alone
     after = await live();
     check(after.pos && after.orders === 2 && JSON.stringify(after.marks) === '["buy2"]', 'Fills hidden: the entry fill, position and legs stay: ' + JSON.stringify(after));
@@ -240,13 +262,13 @@ try {
   await shot(page, 'orders-1440-working.png');
 
   // flatten: every order on Sim101 MNQ cancelled and the position closed
-  await page.click('#flattenBtn');
+  await page.click(T('flattenBtn'));
   await until(async () => { const x = await state(); return x.orders.length === 0 && !Object.values(x.positions).some(p => p.qty); }, 'flatten');
-  await until(async () => (await page.textContent('#oPos')) === 'Flat', 'bar shows Flat');
+  await until(async () => (await page.textContent(T('oPos'))) === 'Flat', 'bar shows Flat');
   await until(() => page.evaluate(() => !window.liveChart.getPosition() && window.liveChart.getOrders().length === 0), 'position and orders gone from the chart');
 
   // a 2-lot limit that fills in two pieces gets two stop and target pairs; the bar sums them up (item 4)
-  await page.selectOption('#oQty', '2');
+  await page.selectOption(T('oQty'), '2');
   await page.evaluate(() => window.liveChart.goLive());
   for (let k = 0, prev = -1, calm = 0; k < 40 && calm < 3; k++) { const y = await yAt(L - 3); calm = Math.abs(y - prev) < 0.25 ? calm + 1 : 0; prev = y; await page.waitForTimeout(200); }
   box = await cbox();
@@ -257,51 +279,51 @@ try {
   await control(PORT, 'price', { root: 'MNQ', p: lim3.price });                // touches fill 1 at a time
   s = await until(async () => { const x = await state(); return x.orders.filter(o => o.role === 'stop').length === 2 ? x : null; }, 'two stop legs, one per fill');
   await control(PORT, 'price', { root: 'MNQ', p: lim3.price + 1 });           // off the limit, inside the bracket
-  const legsText = await until(async () => { const t = await page.textContent('#oLegs'); return t === 'Stop 2/2 · Target 2/2' ? t : null; }, 'leg summary 2 of 2');
-  check(!!legsText, 'leg summary: ' + await page.textContent('#oLegs'));
-  check(!(await page.getAttribute('#oLegs', 'class') || '').includes('uncovered'), 'covered: not in the error color');
+  const legsText = await until(async () => { const t = await page.textContent(T('oLegs')); return t === 'Stop 2/2 · Target 2/2' ? t : null; }, 'leg summary 2 of 2');
+  check(!!legsText, 'leg summary: ' + await page.textContent(T('oLegs')));
+  check(!(await page.getAttribute(T('oLegs'), 'class') || '').includes('uncovered'), 'covered: not in the error color');
   await page.waitForTimeout(300);
   await shot(page, 'orders-1440-legs.png');
   // close 1 by hand: long 1 with two pairs working, more than the position: the warning color and why
-  await page.selectOption('#oQty', '1');
-  await page.click('#sellMkt');
-  await until(async () => (await page.textContent('#oPos')).startsWith('LONG 1'), 'long 1 after selling 1');
-  const overText = await until(async () => { const t = await page.textContent('#oLegs'); return t === 'Stop 2/1 · Target 2/1 · over the position' ? t : null; }, 'leg summary over the position');
-  check(!!overText, 'over the position: ' + await page.textContent('#oLegs'));
-  check((await page.getAttribute('#oLegs', 'class') || '').includes('over'), 'over: warning class');
-  check(await page.evaluate(() => getComputedStyle(document.getElementById('oLegs')).color) === 'rgb(224, 180, 90)', 'over: warning color');
+  await page.selectOption(T('oQty'), '1');
+  await page.click(T('sellMkt'));
+  await until(async () => (await page.textContent(T('oPos'))).startsWith('LONG 1'), 'long 1 after selling 1');
+  const overText = await until(async () => { const t = await page.textContent(T('oLegs')); return t === 'Stop 2/1 · Target 2/1 · over the position' ? t : null; }, 'leg summary over the position');
+  check(!!overText, 'over the position: ' + await page.textContent(T('oLegs')));
+  check((await page.getAttribute(T('oLegs'), 'class') || '').includes('over'), 'over: warning class');
+  check(await page.evaluate(() => getComputedStyle($tk('oLegs')).color) === 'rgb(224, 180, 90)', 'over: warning color');
   await shot(page, 'orders-1440-legs-over.png');
   // buy 1 back with no bracket (0 / 0), then cancel one pair: stops 1 of 2, the error color
-  await page.fill('#bStop', '0'); await page.press('#bStop', 'Tab');
-  await page.fill('#bTarget', '0'); await page.press('#bTarget', 'Tab');
-  await page.click('#buyMkt');
-  await until(async () => (await page.textContent('#oLegs')) === 'Stop 2/2 · Target 2/2', 'long 2 again, two pairs');
+  await page.fill(T('bStop'), '0'); await page.press(T('bStop'), 'Tab');
+  await page.fill(T('bTarget'), '0'); await page.press(T('bTarget'), 'Tab');
+  await page.click(T('buyMkt'));
+  await until(async () => (await page.textContent(T('oLegs'))) === 'Stop 2/2 · Target 2/2', 'long 2 again, two pairs');
   s = await state();
   const stopLegs = s.orders.filter(o => o.role === 'stop');
   box = await cbox();
   h = await page.evaluate(id => window.liveChart.orderHandles().find(x => x.id === id), stopLegs[0].id);
   await page.mouse.click(box.x + h.xbox.x + h.xbox.w / 2, box.y + h.xbox.y + h.xbox.h / 2);   // cancels that pair
-  await until(async () => (await page.textContent('#oLegs')) === 'NO STOP on 1 · Target 1/2', 'leg summary after one pair cancelled');
-  const cls = await page.getAttribute('#oLegs', 'class') || '';
+  await until(async () => (await page.textContent(T('oLegs'))) === 'NO STOP on 1 · Target 1/2', 'leg summary after one pair cancelled');
+  const cls = await page.getAttribute(T('oLegs'), 'class') || '';
   check(cls.includes('uncovered'), 'stops short: the uncovered class, got "' + cls + '"');
-  const col = await page.evaluate(() => getComputedStyle(document.getElementById('oLegs')).color);
+  const col = await page.evaluate(() => getComputedStyle($tk('oLegs')).color);
   check(col === 'rgb(255, 122, 122)', 'stops short: the loss red of the NO STOP tag (F2 review), got ' + col);
   await shot(page, 'orders-1440-legs-short.png');
-  await page.fill('#bStop', '40'); await page.press('#bStop', 'Tab');
-  await page.fill('#bTarget', '80'); await page.press('#bTarget', 'Tab');
-  await page.click('#flattenBtn');
-  await until(async () => (await page.textContent('#oPos')) === 'Flat', 'flat after the pieces test');
-  check((await page.textContent('#oLegs')) === '', 'no leg summary when flat');
+  await page.fill(T('bStop'), '40'); await page.press(T('bStop'), 'Tab');
+  await page.fill(T('bTarget'), '80'); await page.press(T('bTarget'), 'Tab');
+  await page.click(T('flattenBtn'));
+  await until(async () => (await page.textContent(T('oPos'))) === 'Flat', 'flat after the pieces test');
+  check((await page.textContent(T('oLegs'))) === '', 'no leg summary when flat');
   await control(PORT, 'price', { root: 'MNQ', p: L });
 
   // rejects: qty over the cap (stopped in the page: a qty remembered over a lower cap stays picked and is refused), and a
   // ChartBridge refusal (more than 200 ticks away, maxTicksAway = 200)
-  await page.evaluate(() => { const q = document.getElementById('oQty'); q.value = '9'; q.dispatchEvent(new Event('change')); });
-  await page.click('#buyMkt');
+  await page.evaluate(() => { const q = $tk('oQty'); q.value = '9'; q.dispatchEvent(new Event('change')); });
+  await page.click(T('buyMkt'));
   st = await status(page);
   check(/Not sent: Qty 9 is over the MNQ cap of 5/.test(st.text) && /error/.test(st.cls), 'over-cap qty refused: ' + st.text);
   await shot(page, 'orders-1440-reject-qty.png');
-  await page.selectOption('#oQty', '1');
+  await page.selectOption(T('oQty'), '1');
   for (let k = 0; k < 20 && (await page.evaluate(() => window.liveChart.yToPrice(12))) < L + 60; k++) {
     await page.mouse.move(box.x + box.width - 30, box.y + box.height * 0.5); await page.mouse.wheel(0, 240); await page.waitForTimeout(60);
   }
@@ -312,97 +334,97 @@ try {
   check(/error/.test(st.cls), 'reject in the error color');
   await shot(page, 'orders-1440-reject.png');
   check((await state()).orders.length === 0, 'rejected order not working');
-  await page.dblclick('.stage', { position: { x: 1360, y: 400 } });            // price axis back to auto-fit
+  { const cb = await chartBox(page); await page.mouse.dblclick(cb.x + cb.width - 30, cb.y + cb.height * 0.45); }   // price axis back to auto-fit
 
   // an error-level status from ChartBridge stays on screen until dismissed
   await control(PORT, 'status', { level: 'error', text: 'MNQ Sim101: bracket stop rejected; the position may have NO STOP' });
-  await until(() => page.isVisible('#alertBar'), 'error alert shown');
+  await until(() => page.isVisible('#wsAlert'), 'error alert shown');
   await page.waitForTimeout(7000);
-  check(await page.isVisible('#alertBar') && /NO STOP/.test(await page.textContent('#alertText')), 'error alert still shown after 7 s');
+  check(await page.isVisible('#wsAlert') && /NO STOP/.test(await page.textContent('#wsAlertText')), 'error alert still shown after 7 s');
   await shot(page, 'orders-1440-alert.png');
-  await page.click('#alertClose');
-  check(await page.isHidden('#alertBar'), 'alert dismissed');
+  await page.click('#wsAlertClose');
+  check(await page.isHidden('#wsAlert'), 'alert dismissed');
 
   // reload: Armed is off again (and the PIN is asked again: the unlock lives in memory only)
   await page.reload();
   check(await unlockIfAsked(page), 'reload asks for the PIN again');
-  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
-  await until(() => page.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading after reload');
-  check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'Armed off after reload');
+  await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 15000 });
+  await until(() => page.evaluate(() => !$tk('buyMkt').disabled), 'trading after reload');
+  check(await page.getAttribute(T('armBtn'), 'aria-checked') === 'false', 'Armed off after reload');
   check(!(await page.title()).startsWith('ARMED'), 'title not ARMED after reload');
-  check(await page.inputValue('#bStop') === '40', 'bracket kept after reload');
+  check(await page.inputValue(T('bStop')) === '40', 'bracket kept after reload');
   await noSideScroll(page, 1440);
 
   /* ---------------- 1.10.0 order bar essentials: bracket presets, qty select, B/E, Shift+click by mouse button */
   {
     const reloadPage = async () => {
       await page.reload(); await unlockIfAsked(page);
-      await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
-      await until(() => page.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading after reload');
+      await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 15000 });
+      await until(() => page.evaluate(() => !$tk('buyMkt').disabled), 'trading after reload');
     };
     const saved = () => page.evaluate(() => ({ br: JSON.parse(localStorage.getItem('live-bracket-v1')).MNQ, sel: JSON.parse(localStorage.getItem('live-bracket-sel-v1') || '{}').MNQ, presets: JSON.parse(localStorage.getItem('live-bracket-presets-v1') || 'null') }));
-    const boxes = async () => [await page.inputValue('#bPreset'), await page.inputValue('#bStop'), await page.inputValue('#bTarget')].join(' ');
+    const boxes = async () => [await page.inputValue(T('bPreset')), await page.inputValue(T('bStop')), await page.inputValue(T('bTarget'))].join(' ');
     const commit = async (id, v) => { await page.fill(id, v); await page.press(id, 'Tab'); };
     const received = async () => (await control(PORT, 'received')).types.change || 0;
 
     // qty: the pick is remembered per root
-    await page.selectOption('#oQty', '3');
+    await page.selectOption(T('oQty'), '3');
     check(JSON.parse(await page.evaluate(() => localStorage.getItem('live-qty-v1'))).MNQ === 3, '1.10.0 qty 3 saved for MNQ');
     await reloadPage();
-    check(await page.inputValue('#oQty') === '3', '1.10.0 qty 3 back after a reload');
-    await page.selectOption('#oQty', '1');
+    check(await page.inputValue(T('oQty')) === '3', '1.10.0 qty 3 back after a reload');
+    await page.selectOption(T('oQty'), '1');
 
     // presets: a ratio sets the target and stays linked to the stop; typing the target makes it Custom
-    check(JSON.stringify(await page.$$eval('#bPreset option', os => os.map(o => o.value))) === '["custom","1:1","1:1.5","1:2","save"]', '1.10.0 preset choices: ' + JSON.stringify(await page.$$eval('#bPreset option', os => os.map(o => o.value))));
-    await commit('#bStop', '12');
+    check(JSON.stringify(await page.$$eval(T('bPreset') + ' option', os => os.map(o => o.value))) === '["custom","1:1","1:1.5","1:2","save"]', '1.10.0 preset choices: ' + JSON.stringify(await page.$$eval(T('bPreset') + ' option', os => os.map(o => o.value))));
+    await commit(T('bStop'), '12');
     check(await boxes() === 'custom 12 80', '1.10.0 Custom 12 / 80: ' + await boxes());
-    await page.selectOption('#bPreset', '1:2');
+    await page.selectOption(T('bPreset'), '1:2');
     check(await boxes() === '1:2 12 24', '1.10.0 1:2 sets the target to 24: ' + await boxes());
-    await page.fill('#bStop', '15');                                          // typing, not committed yet: linked at once
+    await page.fill(T('bStop'), '15');                                          // typing, not committed yet: linked at once
     check(await boxes() === '1:2 15 30', '1.10.0 the stop typed, the target follows: ' + await boxes());
-    await page.press('#bStop', 'Tab');
+    await page.press(T('bStop'), 'Tab');
     let sv = await saved();
     check(sv.br.stop === 15 && sv.br.target === 30 && sv.sel === '1:2', '1.10.0 1:2 saved: ' + JSON.stringify(sv));
-    await page.selectOption('#bPreset', '1:1.5');
+    await page.selectOption(T('bPreset'), '1:1.5');
     check(await boxes() === '1:1.5 15 23', '1.10.0 1:1.5 of 15 is round(22.5) = 23: ' + await boxes());
-    await commit('#bTarget', '40');
+    await commit(T('bTarget'), '40');
     check(await boxes() === 'custom 15 40', '1.10.0 typing the target makes it Custom: ' + await boxes());
     // Save current... with a name; it is picked, and survives a reload
-    await page.selectOption('#bPreset', 'save');
-    check(await page.isVisible('#bSaveBox') && await page.inputValue('#bSaveName') === '15/40t', '1.10.0 the save box opens with the numbers as the name');
-    await page.fill('#bSaveName', 'Scalp'); await page.press('#bSaveName', 'Enter');
+    await page.selectOption(T('bPreset'), 'save');
+    check(await page.isVisible(T('bSaveBox')) && await page.inputValue(T('bSaveName')) === '15/40t', '1.10.0 the save box opens with the numbers as the name');
+    await page.fill(T('bSaveName'), 'Scalp'); await page.press(T('bSaveName'), 'Enter');
     sv = await saved();
-    check(await page.isHidden('#bSaveBox') && await boxes() === 'p:Scalp 15 40' && JSON.stringify(sv.presets) === '[{"name":"Scalp","stop":15,"target":40}]', '1.10.0 preset Scalp saved and picked: ' + await boxes() + ' ' + JSON.stringify(sv.presets));
-    await commit('#bStop', '20'); await commit('#bTarget', '60');               // Custom again, then back to the preset
+    check(await page.isHidden(T('bSaveBox')) && await boxes() === 'p:Scalp 15 40' && JSON.stringify(sv.presets) === '[{"name":"Scalp","stop":15,"target":40}]', '1.10.0 preset Scalp saved and picked: ' + await boxes() + ' ' + JSON.stringify(sv.presets));
+    await commit(T('bStop'), '20'); await commit(T('bTarget'), '60');               // Custom again, then back to the preset
     check(await boxes() === 'custom 20 60', '1.10.0 typing the stop of a saved preset makes it Custom: ' + await boxes());
-    await page.selectOption('#bPreset', 'p:Scalp');
+    await page.selectOption(T('bPreset'), 'p:Scalp');
     check(await boxes() === 'p:Scalp 15 40', '1.10.0 the preset sets stop and target: ' + await boxes());
     await reloadPage();
     check(await boxes() === 'p:Scalp 15 40', '1.10.0 the preset pick survives a reload: ' + await boxes());
-    await page.selectOption('#bPreset', '1:2');
+    await page.selectOption(T('bPreset'), '1:2');
     await reloadPage();
     check(await boxes() === '1:2 15 30', '1.10.0 the ratio pick survives a reload: ' + await boxes());
     // points: shown and typed in points, stored in ticks, rounded to the nearest tick on commit
-    await page.click('#bUnit >> text="pt"');
+    await page.click(T('bUnit') + ' >> text="pt"');
     check(await boxes() === '1:2 3.75 7.5', '1.10.0 in points: ' + await boxes());
-    await commit('#bStop', '2.6');                                            // 10.4 ticks: rounds to 10
+    await commit(T('bStop'), '2.6');                                            // 10.4 ticks: rounds to 10
     sv = await saved();
     check(await boxes() === '1:2 2.5 5' && sv.br.stop === 10 && sv.br.target === 20, '1.10.0 2.6 pt commits as 10 ticks, the target linked: ' + await boxes() + ' ' + JSON.stringify(sv.br));
     await reloadPage();
     check(await boxes() === '1:2 2.5 5', '1.10.0 the unit survives a reload: ' + await boxes());
-    await page.click('#bUnit >> text="t"');
+    await page.click(T('bUnit') + ' >> text="t"');
     check(await boxes() === '1:2 10 20', '1.10.0 back in ticks: ' + await boxes());
     // delete the saved preset; the stop and target stay
-    await page.selectOption('#bPreset', 'p:Scalp');
-    await page.selectOption('#bPreset', 'delete');
+    await page.selectOption(T('bPreset'), 'p:Scalp');
+    await page.selectOption(T('bPreset'), 'delete');
     sv = await saved();
     check(await boxes() === 'custom 15 40' && JSON.stringify(sv.presets) === '[]', '1.10.0 preset deleted: ' + await boxes() + ' ' + JSON.stringify(sv.presets));
     await shot(page, 'orders-1440-presets.png');
-    await commit('#bStop', '40'); await commit('#bTarget', '80');
+    await commit(T('bStop'), '40'); await commit(T('bTarget'), '80');
 
     // Shift+click by mouse button, armed: Shift + left buys, Shift + right and Ctrl + left sell; Ctrl and Shift together
     // send nothing
-    await page.click('#armBtn');
+    await page.click(T('armBtn'));
     await control(PORT, 'price', { root: 'MNQ', p: L });
     await page.evaluate(() => window.liveChart.goLive());
     for (let k = 0, prev = -1, calm = 0; k < 40 && calm < 3; k++) { const y = await yAt(L - 5); calm = Math.abs(y - prev) < 0.25 ? calm + 1 : 0; prev = y; await page.waitForTimeout(200); }
@@ -427,12 +449,13 @@ try {
     await page.waitForTimeout(450);
     await clickAt(L - 7, ['Control', 'Shift']);
     await page.waitForTimeout(500);
-    check((await state()).orders.length === 3 && /^Ctrl and Shift together: nothing was sent/.test((await status(page)).text), '1.10.0 Ctrl + Shift: nothing sent: ' + (await status(page)).text);
-    await page.click('#cancelAllBtn');
+    const chartNote = () => page.evaluate(() => window.__chartEl().closest('.chart-live').querySelector('[id$="-statusMsg"]').textContent);   // the chart's own note line
+    check((await state()).orders.length === 3 && /^Ctrl and Shift together: nothing was sent/.test(await chartNote()), '1.10.0 Ctrl + Shift: nothing sent: ' + await chartNote());
+    await page.click(T('cancelAllBtn'));
     await until(async () => (await state()).orders.length === 0, '1.10.0 the three orders cancelled');
     // no browser menu anywhere on the chart (Anthony 2026-10-01): plot (right click with or without Shift; disarmed, so
     // nothing is placed), price axis, delta pane, time axis; the order bar and the rest of the page keep it
-    await page.click('#armBtn');
+    await page.click(T('armBtn'));
     await page.evaluate(() => { window.__cm = []; window.addEventListener('contextmenu', e => { window.__cm.push(e.defaultPrevented); }); });
     box = await cbox();
     await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.3, { button: 'right' });
@@ -443,32 +466,32 @@ try {
     await page.mouse.click(box.x + box.width * 0.4, box.y + dp.top + dp.height / 2, { button: 'right' });   // the delta pane
     await page.mouse.click(box.x + box.width - 20, box.y + dp.top + dp.height / 2, { button: 'right' });    // the delta pane's axis
     await page.mouse.click(box.x + box.width * 0.4, box.y + box.height - 6, { button: 'right' });           // the time axis
-    await page.click('#oPos', { button: 'right' });                                                     // the order bar
-    await page.click('#statusRo', { button: 'right' });                                                 // the page
+    await page.click(T('oPos'), { button: 'right' });                                                     // the order bar
+    await page.click('#wsConn', { button: 'right' });                                                   // the page (the workspace's top bar)
     const cm = await page.evaluate(() => window.__cm);
     check(JSON.stringify(cm) === '[true,true,true,true,true,true,false,false]', '1.10.0 no browser menu anywhere on the chart, the menu on the order bar and the page: ' + JSON.stringify(cm));
     check((await state()).orders.length === 0, '1.10.0 disarmed right clicks placed nothing');
-    await page.click('#armBtn');
+    await page.click(T('armBtn'));
 
     // B/E: off while flat; one change per ChartBridge stop leg, to the average price rounded up a tick (long), only past it
-    check(await page.isDisabled('#beBtn'), '1.10.0 B/E off while flat');
-    await commit('#bStop', '40'); await commit('#bTarget', '0');
-    await page.click('#buyMkt');
-    await until(async () => (await page.textContent('#oPos')).startsWith('LONG 1') && (await state()).orders.length === 1, '1.10.0 long 1 with a stop');
+    check(await page.isDisabled(T('beBtn')), '1.10.0 B/E off while flat');
+    await commit(T('bStop'), '40'); await commit(T('bTarget'), '0');
+    await page.click(T('buyMkt'));
+    await until(async () => (await page.textContent(T('oPos'))).startsWith('LONG 1') && (await state()).orders.length === 1, '1.10.0 long 1 with a stop');
     await control(PORT, 'price', { root: 'MNQ', p: L + 0.25 });
     await page.waitForTimeout(450);
-    await page.click('#buyMkt');                                              // a second fill a tick higher: average L + 0.125
-    await until(async () => (await page.textContent('#oPos')).startsWith('LONG 2') && (await state()).orders.filter(x => x.role === 'stop').length === 2, '1.10.0 long 2, two stop legs');
+    await page.click(T('buyMkt'));                                              // a second fill a tick higher: average L + 0.125
+    await until(async () => (await page.textContent(T('oPos'))).startsWith('LONG 2') && (await state()).orders.filter(x => x.role === 'stop').length === 2, '1.10.0 long 2, two stop legs');
     await control(PORT, 'elsewhere', { account: 'Sim101', root: 'MNQ', side: 'sell', kind: 'stop', qty: 1, p: L - 20 });   // a stop placed in NinjaTrader
     await until(async () => (await state()).orders.length === 3, '1.10.0 the NinjaTrader stop is working');
-    await until(() => page.evaluate(() => !document.getElementById('beBtn').disabled), '1.10.0 B/E on with a position and a stop leg');
+    await until(() => page.evaluate(() => !$tk('beBtn').disabled), '1.10.0 B/E on with a position and a stop leg');
     const be = L + 0.25;
     // underwater and at break-even: nothing sent
     for (const last of [L - 1, be]) {
       await control(PORT, 'price', { root: 'MNQ', p: last });
       await page.waitForTimeout(450);
       const c0 = await received();
-      await page.click('#beBtn');
+      await page.click(T('beBtn'));
       await page.waitForTimeout(400);
       check(await received() === c0 && (await status(page)).text === 'Price is not past break-even yet; the stop stays.', '1.10.0 B/E with the last price at ' + last + ' sends nothing: ' + (await status(page)).text);
     }
@@ -476,8 +499,8 @@ try {
     await control(PORT, 'price', { root: 'MNQ', p: L + 2 });
     await page.waitForTimeout(450);
     const c0 = await received();
-    await page.evaluate(() => { const el = document.getElementById('statusMsg'); window.__msgs = []; new MutationObserver(() => window.__msgs.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); });
-    await page.click('#beBtn');
+    await page.evaluate(() => { const el = $tk('note'); window.__msgs = []; new MutationObserver(() => window.__msgs.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); });
+    await page.click(T('beBtn'));
     s = await until(async () => { const x = await state(); return x.orders.filter(q => q.role === 'stop' && q.price === be).length === 2 ? x : null; }, '1.10.0 both stop legs at break-even');
     check(await received() === c0 + 2, '1.10.0 B/E sent one change per stop leg: ' + (await received() - c0));
     const other = s && s.orders.find(q => q.role === 'other');
@@ -487,50 +510,33 @@ try {
     await page.waitForTimeout(450);
     // a second click: the legs are at break-even already, nothing more is sent
     const c1 = await received();
-    await page.click('#beBtn');
+    await page.click(T('beBtn'));
     await page.waitForTimeout(400);
     check(await received() === c1, '1.10.0 a second B/E sends nothing: ' + (await status(page)).text);
     await shot(page, 'orders-1440-be.png');
 
-    // the order bar on one line at 1920 and 1440 (it may wrap below about 1200, as before); screenshots at 1920, 1440, 1280
-    const oneLine = () => page.evaluate(() => {
-      const kids = [...document.getElementById('obar').children].filter(c => !c.classList.contains('ostate'));
-      const tops = kids.map(k => k.getBoundingClientRect().top), bottoms = kids.map(k => k.getBoundingClientRect().bottom);
-      return { spread: Math.max(...tops) - Math.min(...tops), height: Math.max(...bottoms) - Math.min(...tops) };
-    });
+    // the ticket at 1920, 1440 and 1280 (screenshots; the single chart page's order bar was one line, the ticket is a panel)
     for (const w of [1920, 1440, 1280]) {
       await page.setViewportSize({ width: w, height: 860 });
       await page.waitForTimeout(300);
-      const ol = await oneLine();
-      if (w >= 1440) check(ol.spread < 4 && ol.height < 40, '1.10.0 the order bar is one line at ' + w + ': ' + JSON.stringify(ol));
-      await page.locator('.obar-ground').screenshot({ path: path.join(out, 'orders-' + w + '-order-bar.png') });
-      if (SHOTS) fs.copyFileSync(path.join(out, 'orders-' + w + '-order-bar.png'), path.join(SHOTS, 'orders-' + w + '-order-bar.png'));
+      await page.locator(T('obar')).screenshot({ path: path.join(out, 'orders-' + w + '-ticket.png') });
+      if (SHOTS) fs.copyFileSync(path.join(out, 'orders-' + w + '-ticket.png'), path.join(SHOTS, 'orders-' + w + '-ticket.png'));
     }
     await page.setViewportSize({ width: 1440, height: 860 });
-    await page.click('#flattenBtn');
-    await until(async () => (await page.textContent('#oPos')) === 'Flat' && (await state()).orders.length === 0, '1.10.0 flat after the B/E test');
-    await page.click('#armBtn');
+    await page.click(T('flattenBtn'));
+    await until(async () => (await page.textContent(T('oPos'))) === 'Flat' && (await state()).orders.length === 0, '1.10.0 flat after the B/E test');
+    await page.click(T('armBtn'));
     await control(PORT, 'price', { root: 'MNQ', p: L });
-    await commit('#bStop', '40'); await commit('#bTarget', '80');
+    await commit(T('bStop'), '40'); await commit(T('bTarget'), '80');
   }
 
-  // 400 px: armed with a position and a bracket
-  const phone = await open(browser, PORT, 400, 860);
-  await until(() => phone.evaluate(() => !document.getElementById('buyMkt').disabled), 'phone: trading enabled');
-  await phone.click('#armBtn');
-  await phone.click('#buyMkt');
-  await until(async () => (await phone.textContent('#oPos')).startsWith('LONG 1'), 'phone: position');
-  await phone.waitForTimeout(400);
-  await noSideScroll(phone, 400);
-  await shot(phone, 'orders-400-armed.png');
-  await phone.click('#flattenBtn');
-  await until(async () => (await phone.textContent('#oPos')) === 'Flat', 'phone: flatten');
-  await phone.close();
+  // (until 1.21.0 the single chart page was checked at 400 px here; the workspace is not laid out for a phone)
   await page.close();
 
   /* ---------------- 1.6.1 (Anthony's ruling 2026-09-30): the order account after a reload or a dropped connection.
-     The account last picked on this PC when ChartBridge allows it, else Sim101 with a note; Armed always off; the
-     picker highlighted; every order path sends for the account shown; two tabs each keep their own account. */
+     The account last picked on this PC when ChartBridge allows it, else Sim101 with a note; Armed always off; every
+     order path sends for the account shown. (Until 1.21.0 the single chart page also kept each tab's own account, with
+     a ring on its picker and its own notes; the workspace has one order ticket, on the last account picked.) */
   {
     const P5 = PORT + 5;
     // MNQ cap 40: the cap counts working orders, and the Cancel all probes below keep 30 working while Anthony buys
@@ -540,11 +546,12 @@ try {
     const state5 = () => control(P5, 'state', { root: 'MNQ' });
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 }, deviceScaleFactor: 1 });
     await ctx.addInitScript(answerNoStop);
+    await ctx.addInitScript(wsShim);
     await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     // every message a page sends, and the account of every order ChartBridge reports to it
     await ctx.addInitScript(() => {
       window.__sent = []; window.__orderAcct = {}; window.__rejects = []; window.__statusSeen = [];
-      const iv = setInterval(() => { const el = document.getElementById('statusMsg'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__statusSeen.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
+      const iv = setInterval(() => { const el = window.$tk && window.$tk('note'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__statusSeen.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
       const send = WebSocket.prototype.send;
       WebSocket.prototype.send = function (d) { try { window.__sent.push(Object.assign(JSON.parse(d), { __at: performance.now() })); } catch (e) { /* not JSON */ } return send.call(this, d); };
       const d = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
@@ -556,85 +563,86 @@ try {
             if (m.type === 'order' && m.id) window.__orderAcct[m.id] = m.account;
             if (m.type === 'reject') window.__rejects.push(m.reason);
             if (m.type === 'trading' && m.enabled) window.__lastTrading = m;
+            if (m.type === 'trading') window.__inject = x => fn({ data: JSON.stringify(x) });   // the order connection's (a workspace has one per instrument too)
             if (m.type === 'trading' && window.__holdTrading) return;
           } catch (e) { /* not JSON */ }
           return fn(ev);   // __holdTrading: the sign-in answer held back, so trading stays off after a reconnect
         });
       } });
     });
-    const tradingOn = pg => until(() => pg.evaluate(() => !document.getElementById('buyMkt').disabled && document.getElementById('connPill').textContent === 'LIVE'), 'trading on', 15000);
+    const tradingOn = pg => until(() => pg.evaluate(() => !!window.$tk && !!$tk('buyMkt') && !$tk('buyMkt').disabled && document.getElementById('wsConn').classList.contains('live')), 'trading on', 15000);
     const openTab = async () => {
       const pg = await ctx.newPage();
       pg.on('pageerror', e => fail('1.6.1 pageerror: ' + e.message));
       pg.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|WebSocket connection/.test(m.text())) fail('1.6.1 console: ' + m.text()); });
-      await pg.goto(`http://localhost:${P5}/live/single.html`);
+      await pg.goto(`http://localhost:${P5}/live/?layout=Orders`);
       await unlockIfAsked(pg);
       await tradingOn(pg);
       return pg;
     };
     const reloadTab = async pg => { await pg.reload(); await unlockIfAsked(pg); await tradingOn(pg); };
-    const acct = pg => pg.evaluate(() => { const s = document.getElementById('oAcct'), n = document.getElementById('oAcctNote');
-      return { shown: s.value, options: [...s.options].map(o => o.value), armed: document.getElementById('armBtn').getAttribute('aria-checked'), note: n.textContent, warn: n.classList.contains('warn'),
-        ring: s.classList.contains('acct-flash'), stored: JSON.parse(localStorage.getItem('live-account-v1')), tab: JSON.parse(sessionStorage.getItem('live-account-tab-v1')), fills: document.getElementById('lgFill').textContent.split(' · ').pop() }; });
+    const acct = pg => pg.evaluate(() => { const s = $tk('oAcct'), n = $tk('oAcctNote');
+      return { shown: s.value, options: [...s.options].map(o => o.value), armed: $tk('armBtn').getAttribute('aria-checked'), note: n.textContent, warn: n.classList.contains('warn'),
+        stored: JSON.parse(localStorage.getItem('live-account-v1')), fills: [...new Set(window.liveChart.getMarkers().map(m => m.account))].join() }; });
 
-    // a first visit (nothing picked yet): Sim101, Armed off, and the picker stands out with a note
+    // a first visit (nothing picked yet): Sim101, Armed off, with a note
     const A = await openTab();
     let a = await acct(A);
-    check(a.shown === 'Sim101' && a.armed === 'false' && a.note === 'On Sim101. Armed is off.' && a.ring && !a.warn && a.stored === null, '1.6.1 first visit: Sim101, Armed off, highlighted: ' + JSON.stringify(a));
-    check(await A.evaluate(() => { const b = document.getElementById('oAcct').getBoundingClientRect(); return getComputedStyle(document.getElementById('oAcct')).boxShadow !== 'none' && b.height >= 30; }), '1.6.1: the highlight is a ring around the picker');
-    await A.waitForTimeout(3800);
-    a = await acct(A);
-    check(!a.ring && a.note !== '', '1.6.1: the ring goes after a few seconds, the note stays a little longer');
+    check(a.shown === 'Sim101' && a.armed === 'false' && a.note === 'On Sim101. Armed is off.' && !a.warn && a.stored === null, '1.6.1 first visit: Sim101, Armed off, the note: ' + JSON.stringify(a));
 
     // pick DEMO-EVAL and arm; a reload (with the PIN asked again) comes back on DEMO-EVAL with Armed off
-    const box0 = await A.locator('#chart canvas').boundingBox();
-    await A.selectOption('#oAcct', 'DEMO-EVAL'); await A.waitForTimeout(200);
+    const box0 = await chartBox(A);
+    await A.selectOption(T('oAcct'), 'DEMO-EVAL'); await A.waitForTimeout(200);
     a = await acct(A);
-    check(a.shown === 'DEMO-EVAL' && a.stored === 'DEMO-EVAL' && a.note === '' && a.fills === 'DEMO-EVAL', '1.6.1: a pick is saved, the note cleared, the fills follow: ' + JSON.stringify(a));
-    await A.click('#armBtn');
-    check(await A.getAttribute('#armBtn', 'aria-checked') === 'true', '1.6.1: armed on DEMO-EVAL');
+    check(a.shown === 'DEMO-EVAL' && a.stored === 'DEMO-EVAL' && a.fills === 'DEMO-EVAL', '1.6.1: a pick is saved, the fills follow: ' + JSON.stringify(a));
+    await A.click(T('armBtn'));
+    check(await A.getAttribute(T('armBtn'), 'aria-checked') === 'true', '1.6.1: armed on DEMO-EVAL');
     await A.reload();
     check(await unlockIfAsked(A), '1.6.1: the reload asks for the PIN again');
     await tradingOn(A);
     a = await acct(A);
-    check(a.shown === 'DEMO-EVAL' && a.armed === 'false' && a.note === 'On DEMO-EVAL, the account this tab was on. Armed is off.' && a.ring && a.fills === 'DEMO-EVAL' && JSON.stringify(a.options) === '["Sim101","DEMO-EVAL"]',
-      '1.6.1 reload: back on DEMO-EVAL (this tab\'s account), Armed off, highlighted, its fills: ' + JSON.stringify(a));
+    check(a.shown === 'DEMO-EVAL' && a.armed === 'false' && a.note === 'On DEMO-EVAL. Armed is off.' && a.fills === 'DEMO-EVAL' && JSON.stringify(a.options) === '["Sim101","DEMO-EVAL"]',
+      '1.6.1 reload: back on DEMO-EVAL (the last account picked), Armed off, the note, its fills: ' + JSON.stringify(a));
     check(!(await A.title()).startsWith('ARMED'), '1.6.1: the title is not ARMED after the reload');
-    const box1 = await A.locator('#chart canvas').boundingBox();
-    check(Math.abs(box1.y - box0.y) < 1 && Math.abs(box1.height - box0.height) < 1, '1.6.1: the note and the ring do not move the chart: ' + box0.y + ' / ' + box1.y);
+    const box1 = await chartBox(A);
+    check(Math.abs(box1.y - box0.y) < 1 && Math.abs(box1.height - box0.height) < 1, '1.6.1: the note does not move the chart: ' + box0.y + ' / ' + box1.y);
     await shot(A, 'orders-1440-account-restored.png');
 
     // every order path, armed on the restored account: the account shown is the account used
     const yAt5 = p => A.evaluate(pr => window.liveChart.priceToY(pr), p);
     const settle = async price => { await A.evaluate(() => window.liveChart.goLive()); for (let k = 0, prev = -1, calm = 0; k < 40 && calm < 3; k++) { const y = await yAt5(price); calm = Math.abs(y - prev) < 0.25 ? calm + 1 : 0; prev = y; await A.waitForTimeout(150); } };
-    const shiftClick = async price => { await settle(price); const b = await A.locator('#chart canvas').boundingBox(); await A.keyboard.down('Shift'); await A.mouse.click(b.x + b.width * 0.45, b.y + await yAt5(price)); await A.keyboard.up('Shift'); };
+    const shiftClick = async price => { await settle(price); const b = await chartBox(A); await A.keyboard.down('Shift'); await A.mouse.click(b.x + b.width * 0.45, b.y + await yAt5(price)); await A.keyboard.up('Shift'); };
     const handle = id => A.evaluate(i => window.liveChart.orderHandles().find(x => x.id === i), id);
     await A.evaluate(() => { window.__sent.length = 0; });
-    await A.click('#armBtn');
-    await A.click('#buyMkt');                                                         // order bar Buy
-    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1'), '1.6.1 Buy MKT on DEMO-EVAL');
+    await A.click(T('armBtn'));
+    await A.click(T('buyMkt'));                                                         // order bar Buy
+    await until(async () => (await A.textContent(T('oPos'))).startsWith('LONG 1'), '1.6.1 Buy MKT on DEMO-EVAL');
     await A.waitForTimeout(450);
-    await A.click('#sellMkt');                                                        // order bar Sell
-    await until(async () => (await A.textContent('#oPos')) === 'Flat', '1.6.1 Sell MKT on DEMO-EVAL');
+    await A.click(T('sellMkt'));                                                        // order bar Sell
+    await until(async () => (await A.textContent(T('oPos'))) === 'Flat', '1.6.1 Sell MKT on DEMO-EVAL');
     await shiftClick(L5 - 12);                                                       // Shift+click (click-trade)
     let s5 = await until(async () => { const x = await state5(); return x.orders.length === 1 ? x : null; }, '1.6.1 Shift+click limit');
     const lim = s5 && s5.orders[0];
     await until(() => A.evaluate(id => !!window.liveChart.orderHandles().find(x => x.id === id), lim.id), '1.6.1 the limit on the chart');
-    let h = await handle(lim.id), b5 = await A.locator('#chart canvas').boundingBox();   // drag it (modify)
+    let h = await handle(lim.id), b5 = await chartBox(A);   // drag it (modify)
     await A.mouse.move(b5.x + h.box.x + h.box.w / 2, b5.y + h.box.y + h.box.h / 2); await A.mouse.down();
     await A.mouse.move(b5.x + h.box.x + h.box.w / 2, b5.y + h.box.y + h.box.h / 2 + 25, { steps: 5 }); await A.mouse.up();
-    await until(async () => { const x = await state5(); const o = x.orders.find(q => q.id === lim.id); return o && o.price < lim.price; }, '1.6.1 limit moved');
-    h = await handle(lim.id); b5 = await A.locator('#chart canvas').boundingBox();     // its x (single cancel)
+    const movedTo = await until(async () => { const x = await state5(); const o = x.orders.find(q => q.id === lim.id); return o && o.price < lim.price ? o.price : null; }, '1.6.1 limit moved');
+    // the workspace's chart draws the order at the price ChartBridge confirmed: read its x once it is there
+    await until(() => A.evaluate(([id, p]) => window.liveChart.getOrders().some(o => o.id === id && o.price === p), [lim.id, movedTo]), '1.6.1 the chart shows the moved limit');
+    await A.waitForTimeout(450);                                                      // past the 0.4 s repeat guard
+    h = await handle(lim.id); b5 = await chartBox(A);     // its x (single cancel)
     await A.mouse.click(b5.x + h.xbox.x + h.xbox.w / 2, b5.y + h.xbox.y + h.xbox.h / 2);
-    await until(async () => (await state5()).orders.length === 0, '1.6.1 the x cancelled it');
+    if (!(await until(async () => (await state5()).orders.length === 0, '1.6.1 the x cancelled it')))
+      fail('1.6.1 the x: ' + JSON.stringify({ h, b5, notes: await A.evaluate(() => [$tk('note').textContent, document.getElementById('wsNote').textContent, window.__chartEl().closest('.chart-live').querySelector('[id$="-statusMsg"]').textContent]) }));
     await shiftClick(L5 - 14); await A.waitForTimeout(450); await shiftClick(L5 - 16);  // two more, then Cancel all
     await until(async () => (await state5()).orders.length === 2, '1.6.1 two limits');
-    await A.click('#cancelAllBtn');
+    await A.click(T('cancelAllBtn'));
     await until(async () => (await state5()).orders.length === 0, '1.6.1 Cancel all');
-    await A.click('#buyMkt');
-    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1'), '1.6.1 long before Flatten');
-    await A.click('#flattenBtn');                                                     // Flatten
-    await until(async () => (await A.textContent('#oPos')) === 'Flat', '1.6.1 Flatten');
+    await A.click(T('buyMkt'));
+    await until(async () => (await A.textContent(T('oPos'))).startsWith('LONG 1'), '1.6.1 long before Flatten');
+    await A.click(T('flattenBtn'));                                                     // Flatten
+    await until(async () => (await A.textContent(T('oPos'))) === 'Flat', '1.6.1 Flatten');
     const sent = await A.evaluate(() => ({ sent: window.__sent.filter(m => ['order', 'flatten', 'cancel', 'change'].includes(m.type)), acct: window.__orderAcct }));
     const kinds = sent.sent.map(m => m.type + (m.type === 'order' ? ':' + m.kind : '')).join(',');
     check(kinds === 'order:market,order:market,order:limit,change,cancel,order:limit,order:limit,cancel,cancel,order:market,flatten', '1.6.1 every order path was used: ' + kinds);
@@ -642,110 +650,97 @@ try {
     check(wrong.length === 0, '1.6.1 Buy, Sell, Shift+click, modify, single cancel, Cancel all and Flatten all for DEMO-EVAL, the account shown: ' + JSON.stringify(wrong));
     s5 = await state5();
     check(!Object.keys(s5.positions).some(k => k.startsWith('Sim101|')) && (await acct(A)).shown === 'DEMO-EVAL', '1.6.1 nothing reached Sim101: ' + JSON.stringify(s5.positions));
-    await A.click('#armBtn');
+    await A.click(T('armBtn'));
 
     // the account last picked is not a trade account now (DEMO-EMPTY is known to ChartBridge, not allowed): Sim101, a note
-    await A.evaluate(() => { localStorage.setItem('live-account-v1', JSON.stringify('DEMO-EMPTY')); sessionStorage.setItem('live-account-tab-v1', JSON.stringify('DEMO-EMPTY')); });
+    // the ticket's account (live-ticket-v1) and the last pick (live-account-v1) both DEMO-EMPTY
+    await A.evaluate(() => { localStorage.setItem('live-account-v1', JSON.stringify('DEMO-EMPTY')); const t = JSON.parse(localStorage.getItem('live-ticket-v1') || '{}'); t.account = 'DEMO-EMPTY'; localStorage.setItem('live-ticket-v1', JSON.stringify(t)); });
     await reloadTab(A);
     a = await acct(A);
-    check(a.shown === 'Sim101' && a.armed === 'false' && a.note === 'Last account DEMO-EMPTY not available, on Sim101.' && a.warn && a.ring && a.stored === 'DEMO-EMPTY' && a.fills === 'Sim101',
+    check(a.shown === 'Sim101' && a.armed === 'false' && a.note === 'Last account DEMO-EMPTY not available, on Sim101.' && a.warn && a.stored === 'DEMO-EMPTY' && a.fills === 'Sim101',
       '1.6.1 not available: Sim101 with the note, storage keeps the pick: ' + JSON.stringify(a));
     await shot(A, 'orders-1440-account-not-available.png');
     await A.evaluate(() => { window.__sent.length = 0; });
-    await A.click('#armBtn'); await A.click('#buyMkt');
-    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1'), '1.6.1 Buy on the fallback');
-    await A.click('#flattenBtn');
-    await until(async () => (await A.textContent('#oPos')) === 'Flat', '1.6.1 Flatten on the fallback');
+    await A.click(T('armBtn')); await A.click(T('buyMkt'));
+    await until(async () => (await A.textContent(T('oPos'))).startsWith('LONG 1'), '1.6.1 Buy on the fallback');
+    await A.click(T('flattenBtn'));
+    await until(async () => (await A.textContent(T('oPos'))) === 'Flat', '1.6.1 Flatten on the fallback');
     const sentF = await A.evaluate(() => window.__sent.filter(m => m.type === 'order' || m.type === 'flatten').map(m => m.account));
     check(sentF.length === 2 && sentF.every(x => x === 'Sim101'), '1.6.1 on the fallback, orders go to Sim101, the account shown: ' + sentF.join());
-    await A.click('#armBtn');
+    await A.click(T('armBtn'));
 
-    // two tabs (review S1): each tab keeps its own account while it is open, and a reload of a tab comes back on that
-    // tab's account (sessionStorage); a new tab starts on the last one picked on this PC
-    const obarBox = pg => pg.evaluate(() => { const r = document.getElementById('obar').getBoundingClientRect(); return [r.width, r.height].join('x'); });
-    await A.selectOption('#oAcct', 'DEMO-EVAL'); await A.waitForTimeout(200);
+    // review S5: the window's title and the chart's ARMED badge while Armed; the ticket keeps its size
+    const obarBox = pg => pg.evaluate(() => { const r = $tk('obar').getBoundingClientRect(); return [r.width, r.height].join('x'); });
+    await A.selectOption(T('oAcct'), 'DEMO-EVAL'); await A.waitForTimeout(200);
     const bar0 = await obarBox(A);
-    await A.click('#armBtn');
-    // review S5: the tab title and the ARMED pill name the account; the order bar keeps its size
-    check(await A.title() === 'ARMED · MNQ · DEMO-EVAL' && await A.textContent('#armPill') === 'ARMED · DEMO-EVAL' && await A.isVisible('#armPill') && await obarBox(A) === bar0,
-      '1.6.1 S5: title "' + await A.title() + '", pill "' + await A.textContent('#armPill') + '", order bar ' + bar0 + ' -> ' + await obarBox(A));
+    await A.click(T('armBtn'));
+    const armSel = await panelSel(A) + ' [id$="-bArmed"]';
+    check((await A.title()).startsWith('ARMED · MNQ · DEMO-EVAL · ') && await A.isVisible(armSel) && await obarBox(A) === bar0,
+      '1.6.1 S5: title "' + await A.title() + '", the ARMED badge, the ticket ' + bar0 + ' -> ' + await obarBox(A));
     await shot(A, 'orders-1440-armed-account-title.png');
-    const B = await openTab();
-    let b = await acct(B);
-    check(b.shown === 'DEMO-EVAL' && b.armed === 'false' && b.note === 'On DEMO-EVAL, the last account picked. Armed is off.' && b.tab === null && await B.title() === 'MNQ · DEMO-EVAL · Live Chart',
-      '1.6.1 two tabs: a new tab B opens on the last pick, DEMO-EVAL, Armed off: ' + JSON.stringify(b) + ' ' + await B.title());
-    // the review's case: tab A has a DEMO-EVAL long with a working stop; tab B picks Sim101; tab A reloads
-    await A.fill('#bStop', '40'); await A.press('#bStop', 'Tab'); await A.fill('#bTarget', '0'); await A.press('#bTarget', 'Tab');
-    await A.click('#buyMkt');
-    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1') && (await state5()).orders.length === 1, '1.6.1 tab A long 1 with a stop on DEMO-EVAL');
-    await B.selectOption('#oAcct', 'Sim101'); await B.waitForTimeout(400);
-    a = await acct(A); b = await acct(B);
-    check(a.shown === 'DEMO-EVAL' && a.armed === 'true' && a.fills === 'DEMO-EVAL' && b.shown === 'Sim101' && a.stored === 'Sim101' && a.tab === 'DEMO-EVAL' && b.tab === 'Sim101',
-      '1.6.1 two tabs: B picks Sim101 (saved for new tabs); A stays on DEMO-EVAL, still armed: ' + JSON.stringify({ a, b }));
-    // review S3: tab B names the other account's live trade, in the warning color, on one line
-    const other = await until(() => B.evaluate(() => { const el = document.getElementById('oOther'); return el.textContent ? { text: el.textContent, live: el.classList.contains('live'), h: el.getBoundingClientRect().height } : null; }), 'tab B shows DEMO-EVAL\'s trade');
-    check(other && other.text === 'Other accounts on MNQ: DEMO-EVAL: LONG 1, 1 order' && other.live && other.h <= 20, '1.6.1 S3: the other account by name: ' + JSON.stringify(other));
-    await shot(B, 'orders-1440-other-account-named.png');
+    // review S3: a DEMO-EVAL long with a working stop, the ticket then on Sim101: it names the other account's live trade
+    await A.fill(T('bStop'), '40'); await A.press(T('bStop'), 'Tab'); await A.fill(T('bTarget'), '0'); await A.press(T('bTarget'), 'Tab');
+    await A.click(T('buyMkt'));
+    await until(async () => (await A.textContent(T('oPos'))).startsWith('LONG 1') && (await state5()).orders.length === 1, '1.6.1 long 1 with a stop on DEMO-EVAL');
+    await A.click(T('armBtn'));
+    await A.selectOption(T('oAcct'), 'Sim101'); await A.waitForTimeout(400);
+    const other = await until(() => A.evaluate(() => { const el = $tk('oOther'); return el.textContent ? { text: el.textContent, live: el.classList.contains('live'), h: el.getBoundingClientRect().height } : null; }), 'the ticket on Sim101 shows DEMO-EVAL\'s trade');
+    check(other && other.text === 'Other accounts on MNQ: DEMO-EVAL: LONG 1, 1 order' && other.live, '1.6.1 S3: the other account by name: ' + JSON.stringify(other));
+    await shot(A, 'orders-1440-other-account-named.png');
+    await A.selectOption(T('oAcct'), 'DEMO-EVAL'); await A.waitForTimeout(200);
     await reloadTab(A);
     a = await acct(A);
-    check(a.shown === 'DEMO-EVAL' && a.armed === 'false' && a.note === 'On DEMO-EVAL, the account this tab was on. Armed is off.' && (await A.textContent('#oPos')).startsWith('LONG 1') && a.fills === 'DEMO-EVAL',
-      '1.6.1 S1: tab A reloaded comes back on its own account, DEMO-EVAL, with its long: ' + JSON.stringify(a) + ' ' + await A.textContent('#oPos'));
-    // a dropped connection, the page kept: no account changes, Armed off
+    check(a.shown === 'DEMO-EVAL' && a.armed === 'false' && a.note === 'On DEMO-EVAL. Armed is off.' && (await A.textContent(T('oPos'))).startsWith('LONG 1') && a.fills === 'DEMO-EVAL',
+      '1.6.1 a reload comes back on DEMO-EVAL with its long: ' + JSON.stringify(a) + ' ' + await A.textContent(T('oPos')));
+    // a dropped connection, the window kept: no account change, Armed off
     let n0 = await A.evaluate(() => window.__sent.filter(m => m.type === 'subscribe').length);
+    await A.click(T('armBtn'));
     await control(P5, 'drop');
-    await until(() => A.evaluate(n => window.__sent.filter(m => m.type === 'subscribe').length > n, n0), '1.6.1 tab A reconnected', 15000);
-    await tradingOn(A); await tradingOn(B);
-    await until(async () => (await acct(A)).note === 'Still on DEMO-EVAL. Armed is off.', '1.6.1 the reconnect note in tab A');
-    a = await acct(A); b = await acct(B);
-    check(a.shown === 'DEMO-EVAL' && a.armed === 'false' && a.ring && b.shown === 'Sim101' && b.armed === 'false' && b.note === 'Still on Sim101. Armed is off.',
-      '1.6.1 reconnect keeping the page: A still DEMO-EVAL, B still Sim101, both Armed off: ' + JSON.stringify({ a, b }));
+    await until(() => A.evaluate(n => window.__sent.filter(m => m.type === 'subscribe').length > n, n0), '1.6.1 reconnected', 15000);
+    await tradingOn(A);
+    a = await acct(A);
+    check(a.shown === 'DEMO-EVAL' && a.armed === 'false', '1.6.1 a reconnect keeping the window: still DEMO-EVAL, Armed off: ' + JSON.stringify(a));
     await shot(A, 'orders-1440-account-after-reconnect.png');
-    // review S2: Armed on clears the note ("Armed is off" would contradict it)
-    await A.click('#armBtn');
-    check((await acct(A)).note === '' && (await acct(A)).armed === 'true', '1.6.1 S2: arming clears the note');
-    await A.click('#armBtn');
-    // review S2 and N3: trading off (the connection back, the sign-in held): the note goes; a pick then is named on return
+    // trading off (the connection back, the sign-in held): Armed off, nothing to send with; trading back: the same account
+    // (the single chart page let a pick be made meanwhile; the ticket's picker lists the trade accounts, none until then)
     await A.evaluate(() => { window.__holdTrading = true; });
     n0 = await A.evaluate(() => window.__sent.filter(m => m.type === 'subscribe').length);
     await control(P5, 'drop');
-    await until(() => A.evaluate(n => window.__sent.filter(m => m.type === 'subscribe').length > n, n0), '1.6.1 tab A reconnected, trading held off', 15000);
-    await until(() => A.evaluate(() => document.getElementById('buyMkt').disabled && document.getElementById('connPill').textContent === 'LIVE'), '1.6.1 tab A live with trading off');
-    check((await acct(A)).note === '', '1.6.1 S2: trading lost clears the note');
-    await A.selectOption('#oAcct', 'Sim101'); await A.waitForTimeout(200);
+    await until(() => A.evaluate(n => window.__sent.filter(m => m.type === 'subscribe').length > n, n0), '1.6.1 reconnected, trading held off', 15000);
+    await until(() => A.evaluate(() => $tk('buyMkt').disabled && document.getElementById('wsConn').classList.contains('live')), '1.6.1 live with trading off');
     a = await acct(A);
-    check(a.shown === 'Sim101' && a.note === '' && a.tab === 'Sim101', '1.6.1: a pick while trading is off: the picker shows it, no stale note: ' + JSON.stringify(a));
+    check(a.armed === 'false' && await A.evaluate(() => $tk('armBtn').disabled && $tk('sellMkt').disabled), '1.6.1: trading off after the reconnect: Armed off, the order buttons off: ' + JSON.stringify(a));
     await A.evaluate(() => { window.__holdTrading = false; });
     n0 = await A.evaluate(() => window.__sent.filter(m => m.type === 'subscribe').length);
     await control(P5, 'drop');
-    await until(() => A.evaluate(n => window.__sent.filter(m => m.type === 'subscribe').length > n, n0), '1.6.1 tab A reconnected again', 15000);
+    await until(() => A.evaluate(n => window.__sent.filter(m => m.type === 'subscribe').length > n, n0), '1.6.1 reconnected again', 15000);
     await tradingOn(A);
-    await until(async () => (await acct(A)).note !== '', '1.6.1 the note after trading came back');
     a = await acct(A);
-    check(a.shown === 'Sim101' && a.armed === 'false' && a.note === 'On Sim101 (picked while trading was off). Armed is off.', '1.6.1 N3: the note says the account changed while off: ' + JSON.stringify(a));
+    check(a.shown === 'DEMO-EVAL' && a.armed === 'false', '1.6.1: trading back on: still DEMO-EVAL, Armed off: ' + JSON.stringify(a));
     // back on DEMO-EVAL: flatten the long (orders only for DEMO-EVAL, the account shown)
-    await A.selectOption('#oAcct', 'DEMO-EVAL'); await A.waitForTimeout(200);
+    await A.selectOption(T('oAcct'), 'DEMO-EVAL'); await A.waitForTimeout(200);
     await A.evaluate(() => { window.__sent.length = 0; });
-    await A.click('#armBtn'); await A.click('#flattenBtn');
-    await until(async () => (await A.textContent('#oPos')) === 'Flat' && (await state5()).orders.length === 0, '1.6.1 tab A flat on DEMO-EVAL');
+    await A.click(T('armBtn')); await A.click(T('flattenBtn'));
+    await until(async () => (await A.textContent(T('oPos'))) === 'Flat' && (await state5()).orders.length === 0, '1.6.1 tab A flat on DEMO-EVAL');
     // review 2 S1, S2, N1, N2: a Cancel all goes out by id, 8 a second, and locks nothing: Armed, the picker, the
     // instrument and Flatten all work while it runs. The state row names what is still going out.
-    await A.bringToFront();                                                           // tab B opened after A: timers of a tab behind run late
+    await A.bringToFront();
     const place = async (n, from) => { for (let i = 0; i < n; i++) await control(P5, 'elsewhere', { account: 'DEMO-EVAL', root: 'MNQ', side: 'buy', kind: 'limit', qty: 1, p: L5 - (from || 20) - i }); };
     const evalWorking = async () => (await state5()).orders.filter(o => o.account === 'DEMO-EVAL' && o.root === 'MNQ').length;
     // the orders on the chart, and 1.2 s since the last cancels (the page sends at most 8 in any 1.1 s)
     const onChart = async n => { await until(() => A.evaluate(k => window.liveChart.getOrders().length === k, n), '1.6.1 ' + n + ' DEMO-EVAL orders on the chart'); await A.waitForTimeout(1200); };
     const sentOf = type => A.evaluate(t => window.__sent.filter(m => m.type === t).map(m => ({ id: m.id, acct: window.__orderAcct[m.id], at: m.__at, account: m.account, root: m.root })), type);
-    const bar = () => A.evaluate(() => ({ unsent: document.getElementById('unsentBar').hidden ? '' : document.getElementById('unsentText').textContent, batch: document.getElementById('oCancel').textContent,
-      acct: document.getElementById('oAcct').disabled, arm: document.getElementById('armBtn').disabled, flatten: document.getElementById('flattenBtn').disabled, note: document.getElementById('oAcctNote').textContent }));
-    const armOn = async () => { if (await A.getAttribute('#armBtn', 'aria-checked') !== 'true') await A.click('#armBtn'); };
-    const armOff = async () => { if (await A.getAttribute('#armBtn', 'aria-checked') === 'true') await A.click('#armBtn'); };
+    const bar = () => A.evaluate(() => ({ unsent: document.getElementById('wsUnsent').hidden ? '' : document.getElementById('wsUnsentText').textContent, batch: $tk('oCancel').textContent,
+      acct: $tk('oAcct').disabled, arm: $tk('armBtn').disabled, flatten: $tk('flattenBtn').disabled, note: $tk('oAcctNote').textContent }));
+    const armOn = async () => { if (await A.getAttribute(T('armBtn'), 'aria-checked') !== 'true') await A.click(T('armBtn')); };
+    const armOff = async () => { if (await A.getAttribute(T('armBtn'), 'aria-checked') === 'true') await A.click(T('armBtn')); };
     const batchDone = what => until(async () => (await bar()).batch === '' && await evalWorking() === 0, what, 8000);
 
     // 10 orders: nothing locked, the state row counts down, every cancel for DEMO-EVAL
     await place(10);
     await onChart(10);
     await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
-    await armOn(); await A.click('#cancelAllBtn');
+    await armOn(); await A.click(T('cancelAllBtn'));
     let bb = await bar();
     check(!bb.acct && !bb.arm && !bb.flatten && bb.batch === 'Cancelling on DEMO-EVAL MNQ: 4 left (6 a second).', '1.6.1 review 2 S1: during a Cancel all nothing is locked, the state row names it: ' + JSON.stringify(bb));
     await shot(A, 'orders-1440-cancel-all-under-way.png');
@@ -759,14 +754,14 @@ try {
     await place(30);
     await onChart(30);
     await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
-    await armOn(); await A.click('#cancelAllBtn');
+    await armOn(); await A.click(T('cancelAllBtn'));
     await A.waitForTimeout(300);
-    await A.click('#symSeg button[data-v="NQ"]');
+    await A.selectOption(T('root'), 'NQ');                                            // the ticket's instrument (the page's toolbar until 1.21.0)
     bb = await bar();
-    const armedAfter = await A.getAttribute('#armBtn', 'aria-checked');
+    const armedAfter = await A.getAttribute(T('armBtn'), 'aria-checked');
     check(armedAfter === 'false' && !bb.arm && /^Cancelling on DEMO-EVAL MNQ: \d+ left/.test(bb.batch), 'R15: after the switch Armed is off and not locked, the state row still names DEMO-EVAL MNQ: ' + JSON.stringify(bb));
-    await until(() => A.evaluate(() => document.getElementById('connPill').textContent === 'LIVE'), 'R15 NQ loaded', 8000);
-    await A.click('#armBtn'); await A.click('#flattenBtn');
+    await until(() => A.evaluate(() => document.getElementById('wsConn').classList.contains('live')), 'R15 NQ loaded', 8000);
+    await A.click(T('armBtn')); await A.click(T('flattenBtn'));
     const fl15 = await sentOf('flatten');
     check(fl15.length === 1 && fl15[0].account === 'DEMO-EVAL' && fl15[0].root === 'NQ', 'R15: arm and Flatten on NQ right after the switch: ' + JSON.stringify(fl15));
     await until(async () => await evalWorking() === 0, 'R15 every MNQ order cancelled', 8000);
@@ -774,15 +769,15 @@ try {
     check(cs.length === 30 && cs.every(x => x.acct === 'DEMO-EVAL') && await evalWorking() === 0, 'R15: all 30 cancels sent by id, 0 DEMO-EVAL MNQ orders working: ' + cs.length);
     await until(async () => (await bar()).batch === '', 'R15 the batch note gone', 5000);
     await armOff();
-    await A.click('#symSeg button[data-v="MNQ"]');
-    await until(() => A.evaluate(() => document.getElementById('connPill').textContent === 'LIVE'), 'R15 back on MNQ', 8000);
+    await A.selectOption(T('root'), 'MNQ');
+    await until(() => A.evaluate(() => document.getElementById('wsConn').classList.contains('live')), 'R15 back on MNQ', 8000);
 
     // R16: the connection drops 300 ms into a batch of 20: a note that stays (not a 6 s status line) names the account,
     // the instrument and the 14 cancels not sent; it stays over the reconnect and goes by itself once they are cancelled
     await place(20);
     await onChart(20);
     await A.evaluate(() => { window.__sent.length = 0; });
-    await armOn(); await A.click('#cancelAllBtn');
+    await armOn(); await A.click(T('cancelAllBtn'));
     await A.waitForTimeout(300);
     n0 = await A.evaluate(() => window.__sent.filter(m => m.type === 'subscribe').length);
     await control(P5, 'drop');
@@ -793,7 +788,7 @@ try {
     check(/^14 cancels on DEMO-EVAL MNQ were not sent: the connection to ChartBridge dropped\.\nThose orders may still be working\./.test(bb.unsent) && await evalWorking() === 14 && (await sentOf('cancel')).length === 6,
       'R16: 6 sent, the note stays over the reconnect and 7 s: ' + JSON.stringify(bb.unsent) + ' working ' + await evalWorking() + ', sent ' + JSON.stringify(await sentOf('cancel')));
     await shot(A, 'orders-1440-cancels-not-sent.png');
-    await A.click('#armBtn'); await A.click('#cancelAllBtn');
+    await A.click(T('armBtn')); await A.click(T('cancelAllBtn'));
     await batchDone('R16 the rest cancelled');
     await until(async () => (await bar()).unsent === '', 'R16 the note goes once those orders are no longer working', 5000);
     await armOff();
@@ -803,7 +798,7 @@ try {
     await place(20);
     await onChart(20);
     await A.evaluate(() => { window.__sent.length = 0; });
-    await armOn(); await A.click('#cancelAllBtn');
+    await armOn(); await A.click(T('cancelAllBtn'));
     await A.waitForTimeout(300);
     await A.evaluate(() => window.__inject(Object.assign({}, window.__lastTrading, { accounts: ['Sim101'] })));
     await A.waitForTimeout(3000);                                                     // past where the batch would have ended
@@ -811,31 +806,31 @@ try {
     const a17 = await acct(A);
     check(/^14 cancels on DEMO-EVAL MNQ were not sent: the account is no longer a trade account in ChartBridge\./.test(bb.unsent) && (await sentOf('cancel')).length === 6 && a17.shown === 'Sim101' && a17.armed === 'false' && a17.note === 'Last account DEMO-EVAL not available, on Sim101.',
       'R17 and N2: 6 sent, the note says why, the fallback note still up 3 s later: ' + JSON.stringify({ unsent: bb.unsent, note: a17.note, shown: a17.shown }));
-    await A.click('#unsentClose');
+    await A.click('#wsUnsentClose');
     check((await bar()).unsent === '', 'R17: Dismiss takes the note away');
     await A.evaluate(() => window.__inject(window.__lastTrading));                   // DEMO-EVAL allowed again
-    await A.selectOption('#oAcct', 'DEMO-EVAL'); await A.waitForTimeout(200);
-    await A.click('#armBtn'); await A.click('#cancelAllBtn');
+    await A.selectOption(T('oAcct'), 'DEMO-EVAL'); await A.waitForTimeout(200);
+    await A.click(T('armBtn')); await A.click(T('cancelAllBtn'));
     await batchDone('R17 the rest cancelled after DEMO-EVAL came back');
     await armOff();
 
     // R18: Flatten 300 ms into a batch of 20 with a position: flat, every order gone, and no cancel after the Flatten
     // (so no red "No working order" from ChartBridge)
     await armOn();
-    await A.fill('#bStop', '0'); await A.press('#bStop', 'Tab');
-    await A.click('#buyMkt');                                                         // the long first (the MNQ cap counts working orders)
-    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1'), 'R18 long 1');
+    await A.fill(T('bStop'), '0'); await A.press(T('bStop'), 'Tab');
+    await A.click(T('buyMkt'));                                                         // the long first (the MNQ cap counts working orders)
+    await until(async () => (await A.textContent(T('oPos'))).startsWith('LONG 1'), 'R18 long 1');
     await place(20);
     await onChart(20);
     await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
     await A.waitForTimeout(1200);                                                     // ChartBridge's 10 a second counts the Buy too
-    await A.click('#cancelAllBtn');
+    await A.click(T('cancelAllBtn'));
     await A.waitForTimeout(300);
-    await A.click('#flattenBtn');
+    await A.click(T('flattenBtn'));
     await A.waitForTimeout(3000);
     const msgs18 = await A.evaluate(() => window.__sent.filter(m => ['cancel', 'flatten'].includes(m.type)).map(m => m.type));
     const rej18 = await A.evaluate(() => window.__rejects.slice());
-    check((await A.textContent('#oPos')) === 'Flat' && await evalWorking() === 0 && msgs18.lastIndexOf('cancel') < msgs18.indexOf('flatten') && rej18.length === 0 && (await status(A)).cls.indexOf('error') < 0,
+    check((await A.textContent(T('oPos'))) === 'Flat' && await evalWorking() === 0 && msgs18.lastIndexOf('cancel') < msgs18.indexOf('flatten') && rej18.length === 0 && (await status(A)).cls.indexOf('error') < 0,
       'R18: Flatten mid-batch: flat, no order working, no cancel after it, no reject: ' + msgs18.join(',') + ' ' + JSON.stringify(rej18));
     await armOff();
 
@@ -843,9 +838,9 @@ try {
     await place(20);
     await onChart(20);
     await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; window.__statusSeen.length = 0; });
-    await armOn(); await A.click('#cancelAllBtn');
+    await armOn(); await A.click(T('cancelAllBtn'));
     await A.waitForTimeout(300);
-    await A.click('#cancelAllBtn');
+    await A.click(T('cancelAllBtn'));
     const st19 = { text: (await A.evaluate(() => window.__statusSeen.filter(t => /^Still cancelling/.test(t)))).join(' | ') };
     await batchDone('R19 all cancelled');
     const times = await A.evaluate(() => window.__sent.filter(m => m.type === 'cancel').map(m => m.__at));
@@ -859,29 +854,27 @@ try {
     // Sim101 (3 orders): Sim101's go first, at the next slot of the pace, not behind DEMO-EVAL's. At 390 px the batch
     // line (in the warning color: DEMO-EVAL is not shown) and "Other accounts ... DEMO-EVAL: LONG 1" wrap, never cut
     await armOn();
-    await A.click('#buyMkt');
-    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1'), 'R26 long 1 on DEMO-EVAL');
+    await A.click(T('buyMkt'));
+    await until(async () => (await A.textContent(T('oPos'))).startsWith('LONG 1'), 'R26 long 1 on DEMO-EVAL');
     await armOff();
     await place(30);
     for (let i = 0; i < 3; i++) await control(P5, 'elsewhere', { account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'limit', qty: 1, p: L5 - 60 - i });
     await onChart(30);
     await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
-    await armOn(); await A.click('#cancelAllBtn');
+    await armOn(); await A.click(T('cancelAllBtn'));
     await A.waitForTimeout(150);
-    await A.selectOption('#oAcct', 'Sim101'); await A.waitForTimeout(100);
-    await A.setViewportSize({ width: 390, height: 860 });
+    await A.selectOption(T('oAcct'), 'Sim101'); await A.waitForTimeout(100);
     await A.waitForTimeout(200);
-    const r26 = await A.evaluate(() => { const c = document.getElementById('oCancel'), o = document.getElementById('oOther');
-      return { batch: c.textContent, away: c.classList.contains('away'), color: getComputedStyle(c).color, other: o.textContent, cut: [c, o].map(el => el.scrollWidth > el.clientWidth + 1), sw: document.documentElement.scrollWidth }; });
-    check(/^Cancelling on DEMO-EVAL MNQ: \d+ left/.test(r26.batch) && r26.away && /DEMO-EVAL: LONG 1/.test(r26.other) && !r26.cut[0] && !r26.cut[1] && r26.sw <= 390,
-      'R26 at 390 px: the batch line in the warning color and "Other accounts" with LONG 1, both whole: ' + JSON.stringify(r26));
-    await shot(A, 'orders-390-cancel-all-other-account.png');
-    await A.setViewportSize({ width: 1440, height: 860 });
-    await A.click('#armBtn');
+    const r26 = await A.evaluate(() => { const c = $tk('oCancel'), o = $tk('oOther');
+      return { batch: c.textContent, away: c.classList.contains('away'), color: getComputedStyle(c).color, other: o.textContent, cut: [c, o].map(el => el.scrollWidth > el.clientWidth + 1) }; });
+    check(/^Cancelling on DEMO-EVAL MNQ: \d+ left/.test(r26.batch) && r26.away && /DEMO-EVAL: LONG 1/.test(r26.other) && !r26.cut[0] && !r26.cut[1],
+      'R26: the batch line in the warning color and "Other accounts" with LONG 1, both whole in the ticket (the single chart page was checked at 390 px): ' + JSON.stringify(r26));
+    await shot(A, 'orders-1440-cancel-all-other-account.png');
+    await A.click(T('armBtn'));
     // the moment of the click itself (a capture listener runs first): a DEMO-EVAL cancel the batch sends between an earlier
     // stamp and the click is not "after its click" (the check failed now and then when a pace slot fell in that gap)
-    await A.evaluate(() => document.getElementById('cancelAllBtn').addEventListener('click', () => { window.__t26 = performance.now(); }, { capture: true, once: true }));
-    await A.click('#cancelAllBtn');
+    await A.evaluate(() => $tk('cancelAllBtn').addEventListener('click', () => { window.__t26 = performance.now(); }, { capture: true, once: true }));
+    await A.click(T('cancelAllBtn'));
     const t26 = await A.evaluate(() => window.__t26);
     await until(async () => (await state5()).orders.filter(o => o.account === 'Sim101').length === 0, 'R26 Sim101 cancelled', 8000);
     const c26 = await A.evaluate(t => window.__sent.filter(m => m.type === 'cancel' && m.__at >= t).map(m => ({ acct: window.__orderAcct[m.id], dt: Math.round(m.__at - t) })), t26);
@@ -890,24 +883,25 @@ try {
       'R26: Sim101\'s 3 cancels are the first sent after its click, at the next slot of the pace (' + sims.map(x => x.dt).join(', ') + ' ms), DEMO-EVAL\'s rest (' + evalAfter.length + ') after them');
     await batchDone('R26 DEMO-EVAL\'s rest cancelled');
     await armOff();
-    await A.selectOption('#oAcct', 'DEMO-EVAL'); await A.waitForTimeout(200);
+    await A.selectOption(T('oAcct'), 'DEMO-EVAL'); await A.waitForTimeout(200);
 
     // R23 (review 3 S4): long 1 and 30 orders; Cancel all, Buy MKT +100 ms, Sell MKT +200 ms, Flatten +300 ms: at 6 a
     // second the batch leaves room, so nothing is refused and the account ends flat
     await place(30);
     await onChart(30);
     await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
-    await armOn(); await A.click('#cancelAllBtn');
-    await A.waitForTimeout(100); await A.click('#buyMkt');
-    await A.waitForTimeout(100); await A.click('#sellMkt');
-    await A.waitForTimeout(100); await A.click('#flattenBtn');
-    await until(async () => (await A.textContent('#oPos')) === 'Flat' && await evalWorking() === 0, 'R23 flat, nothing working', 8000);
+    await armOn(); await A.click(T('cancelAllBtn'));
+    await A.waitForTimeout(100); await A.click(T('buyMkt'));
+    await A.waitForTimeout(100); await A.click(T('sellMkt'));
+    await A.waitForTimeout(100); await A.click(T('flattenBtn'));
+    await until(async () => (await A.textContent(T('oPos'))) === 'Flat' && await evalWorking() === 0, 'R23 flat, nothing working', 8000);
     const rej23 = await A.evaluate(() => window.__rejects.slice());
-    check(rej23.length === 0 && (await A.textContent('#oPos')) === 'Flat', 'R23: Cancel all, Buy, Sell and Flatten within 300 ms: none refused, flat: ' + JSON.stringify(rej23));
+    const sent23 = rej23.length ? await A.evaluate(() => { const t0 = window.__sent.length ? window.__sent[0].__at : 0; return window.__sent.filter(m => ['order', 'cancel', 'change', 'flatten', 'plan'].includes(m.type)).map(m => m.type + '@' + Math.round(m.__at - t0)); }) : [];
+    check(rej23.length === 0 && (await A.textContent(T('oPos'))) === 'Flat', 'R23: Cancel all, Buy, Sell and Flatten within 300 ms: none refused, flat: ' + JSON.stringify(rej23) + (sent23.length ? ' sent ' + sent23.join(' ') : ''));
     // and if ChartBridge refuses Flatten for the rate anyway, the page sends it once more 1.1 s later (a made-up refusal)
     await A.waitForTimeout(1200);                                                     // past Flatten's 0.4 s repeat guard and the last refusal's window
     await A.evaluate(() => { window.__sent.length = 0; window.__statusSeen.length = 0; });
-    await A.click('#flattenBtn');
+    await A.click(T('flattenBtn'));
     await A.evaluate(() => window.__inject({ type: 'reject', reason: 'More than 10 order actions in one second. Slow down.' }));
     await until(() => A.evaluate(() => window.__sent.filter(m => m.type === 'flatten').length === 2), 'R23 Flatten sent again', 4000);
     const fl23 = await A.evaluate(() => ({ f: window.__sent.filter(m => m.type === 'flatten').map(m => m.account + ' ' + m.root + ' ' + Math.round(m.__at)), seen: window.__statusSeen.filter(t => /Flatten/.test(t)) }));
@@ -919,7 +913,7 @@ try {
     await place(20);
     await onChart(20);
     await A.evaluate(() => { window.__sent.length = 0; window.__statusSeen.length = 0; });
-    await armOn(); await A.click('#cancelAllBtn');
+    await armOn(); await A.click(T('cancelAllBtn'));
     const t0q = Date.now();
     const sentNow = await A.evaluate(() => window.__sent.filter(m => m.type === 'cancel').map(m => m.id));
     // 1.14.0, the flake's root cause: the probe took the first order still queued, whose cancel goes out at the very next
@@ -933,7 +927,7 @@ try {
     await settle(queued.price);
     const stillQueued = await A.evaluate(id => !window.__sent.some(m => m.type === 'cancel' && m.id === id), queued.id);
     check(stillQueued, 'the drag probe: order ' + queued.id + ' is still waiting in the Cancel all when it is pressed (' + (Date.now() - t0q) + ' ms after the click)');
-    const hq = await handle(queued.id), bq = await A.locator('#chart canvas').boundingBox();
+    const hq = await handle(queued.id), bq = await chartBox(A);
     await A.mouse.move(bq.x + hq.box.x + hq.box.w / 2, bq.y + hq.box.y + hq.box.h / 2); await A.mouse.down();
     await A.mouse.move(bq.x + hq.box.x + hq.box.w / 2, bq.y + hq.box.y + hq.box.h / 2 + 25, { steps: 5 }); await A.mouse.up();
     await batchDone('the drag probe: all cancelled');
@@ -948,31 +942,31 @@ try {
     await onChart(3);
     await A.evaluate(() => { window.__sent.length = 0; });
     await armOn();
-    await A.evaluate(() => { document.getElementById('cancelAllBtn').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); document.getElementById('armBtn').click(); });
+    await A.evaluate(() => { $tk('cancelAllBtn').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); $tk('armBtn').click(); });
     await until(async () => await evalWorking() === 0, 'N1 the three cancelled');
-    check((await sentOf('cancel')).length === 3 && await A.getAttribute('#armBtn', 'aria-checked') === 'false', 'review 2 N1: 3 of 3 sent though Armed went off in the same task');
+    check((await sentOf('cancel')).length === 3 && await A.getAttribute(T('armBtn'), 'aria-checked') === 'false', 'review 2 N1: 3 of 3 sent though Armed went off in the same task');
     // B/E in paced chunks (Anthony 2026-10-01): with 12 ChartBridge stop legs one click sends 10 at once and the last 2
     // once ChartBridge's 10 a second allows; a second click while it runs sends nothing; never over 10 in any second
-    const brKept = [await A.inputValue('#bStop'), await A.inputValue('#bTarget')];
+    const brKept = [await A.inputValue(T('bStop')), await A.inputValue(T('bTarget'))];
     const commitA = async (id, v) => { await A.fill(id, v); await A.press(id, 'Tab'); };
     const stopLegs = async () => (await state5()).orders.filter(o => o.account === 'DEMO-EVAL' && o.root === 'MNQ' && o.role === 'stop');
     const changesSent = () => A.evaluate(() => window.__sent.filter(m => m.type === 'change').map(m => ({ id: m.id, price: m.price, at: m.__at })));
     const legs12 = async what => {
       await control(P5, 'price', { root: 'MNQ', p: L5 });
-      await A.selectOption('#oQty', '1');
+      await A.selectOption(T('oQty'), '1');
       await armOn();
-      for (let i = 0; i < 12; i++) { await A.click('#buyMkt'); await A.waitForTimeout(450); }
-      await until(async () => (await stopLegs()).length === 12 && (await A.textContent('#oPos')).startsWith('LONG 12'), what, 8000);
+      for (let i = 0; i < 12; i++) { await A.click(T('buyMkt')); await A.waitForTimeout(450); }
+      await until(async () => (await stopLegs()).length === 12 && (await A.textContent(T('oPos'))).startsWith('LONG 12'), what, 8000);
       await control(P5, 'price', { root: 'MNQ', p: L5 + 2 });                        // past break-even (L5, every fill at L5)
       await A.waitForTimeout(1200);                                                   // the buys out of ChartBridge's last second
       await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; window.__statusSeen.length = 0; });
     };
-    const flatA = async what => { await armOn(); await A.click('#flattenBtn'); await until(async () => (await A.textContent('#oPos')) === 'Flat' && await evalWorking() === 0, what); };
-    await commitA('#bStop', '40'); await commitA('#bTarget', '0');
+    const flatA = async what => { await armOn(); await A.click(T('flattenBtn')); await until(async () => (await A.textContent(T('oPos'))) === 'Flat' && await evalWorking() === 0, what); };
+    await commitA(T('bStop'), '40'); await commitA(T('bTarget'), '0');
     await legs12('B/E paced: long 12 with 12 stop legs');
-    await A.click('#beBtn');
+    await A.click(T('beBtn'));
     await A.waitForTimeout(500);
-    await A.click('#beBtn');                                                          // while the run is under way: absorbed
+    await A.click(T('beBtn'));                                                          // while the run is under way: absorbed
     await until(async () => (await stopLegs()).filter(o => o.price === L5).length === 12, 'B/E paced: all 12 stop legs at break-even', 6000);
     await A.waitForTimeout(1300);                                                     // anything more would have gone by now
     const ch12 = await changesSent(), at12 = ch12.map(x => x.at);
@@ -987,7 +981,7 @@ try {
     await flatA('B/E paced: flat after the 12');
     // Armed off while the run waits: the last 2 are not sent, and the note says so
     await legs12('B/E paced: long 12 again');
-    await A.click('#beBtn');
+    await A.click(T('beBtn'));
     await A.waitForTimeout(300);
     await armOff();
     await A.waitForTimeout(1600);
@@ -996,63 +990,43 @@ try {
     check(chOff.length === 10 && atBe === 10 && seenOff.some(t => /^B\/E: 10 changes sent to break-even [\d,.]+ · DEMO-EVAL MNQ\. 2 not sent: Armed went off\.$/.test(t)),
       'B/E paced: Armed off mid-run stops the rest (' + chOff.length + ' changes, ' + atBe + ' legs moved): ' + JSON.stringify(seenOff));
     await flatA('B/E paced: flat after the disarm test');
-    await commitA('#bStop', brKept[0]); await commitA('#bTarget', brKept[1]);
+    await commitA(T('bStop'), brKept[0]); await commitA(T('bTarget'), brKept[1]);
     await armOff();
 
-    // a phone: the note never wraps the order bar
-    await B.setViewportSize({ width: 400, height: 860 });
-    await reloadTab(B);
-    const n400 = await B.evaluate(() => { const n = document.getElementById('oAcctNote'); return { text: n.textContent, h: n.getBoundingClientRect().height, sw: document.documentElement.scrollWidth }; });
-    check(n400.text === 'On Sim101, the account this tab was on. Armed is off.' && n400.h <= 20 && n400.sw <= 400, '1.6.1 400 px: the note on one line, no sideways scroll: ' + JSON.stringify(n400));
-    await shot(B, 'orders-400-account-restored.png');
-    const barB = await obarBox(B);
-    await B.click('#armBtn');
-    check(await B.title() === 'ARMED · MNQ · Sim101' && await B.textContent('#armPill') === 'ARMED · Sim101' && await obarBox(B) === barB && await B.evaluate(() => document.documentElement.scrollWidth <= 400),
-      '1.6.1 S5 at 400 px: title and pill name the account, the order bar keeps its size (' + barB + '), no sideways scroll');
-    await shot(B, 'orders-400-armed-account.png');
-    await B.click('#armBtn');
+    // (until 1.21.0 a second tab at 400 px checked the page's account note and title here: the workspace has one ticket)
     await ctx.close();
   }
 
-  /* ---------------- trading off in config.txt: the bar says why, every control disabled */
+  /* ---------------- trading off in config.txt: the ticket says why, every control disabled */
   await startBridge(PORT + 1, ['--test-pin=' + TEST_PIN]);
   const off = await open(browser, PORT + 1, 1440);
-  await until(() => off.evaluate(() => !document.getElementById('obar').hidden), 'disabled bar visible');
-  check(/Trading off: Trading is off\. Set trading = true in config\.txt/.test(await off.textContent('#oOff')), 'reason shown: ' + await off.textContent('#oOff'));
-  const enabled = await off.$$eval('#obar button, #obar input, #obar select', els => els.filter(e => !e.disabled).map(e => e.id));
-  check(JSON.stringify(enabled) === '["oAcct"]', 'while trading is off only the account picker works: ' + enabled.join(','));
-  check(/^Trading is off: this picks whose fills the chart marks, and the account orders go to when trading comes back on$/.test(await off.getAttribute('#oAcct', 'title')), 'trading off: the picker says what it picks (1.6.1: also the account used when trading comes back): ' + await off.getAttribute('#oAcct', 'title'));
-  // trading off: the picker still switches whose fills are marked (the accounts ChartBridge knows)
-  check(await off.isHidden('#acctWrap') && await off.inputValue('#oAcct') === 'Sim101' && /Sim101/.test(await off.textContent('#lgFill')), 'trading off: Sim101 picked, its fills marked');
-  await off.selectOption('#oAcct', 'DEMO-EVAL'); await off.waitForTimeout(200);
-  check(/DEMO-EVAL/.test(await off.textContent('#lgFill')), 'trading off: the account switches and the fills follow');
-  await shot(off, 'orders-1440-trading-off-account.png');
-  await off.reload(); await unlockIfAsked(off); await off.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
-  await off.waitForTimeout(400);
-  check(await off.inputValue('#oAcct') === 'DEMO-EVAL', 'trading off: the account is remembered');
-  check(/^Read only/.test(await off.textContent('#statusRo')), 'footer read only');
+  await until(() => off.evaluate(() => !$tk('obar').hidden), 'disabled ticket visible');
+  check(/Trading off: Trading is off\. Set trading = true in config\.txt/.test(await off.textContent(T('oOff'))), 'reason shown: ' + await off.textContent(T('oOff')));
+  const enabled = await off.$$eval(T('obar') + ' button, ' + T('obar') + ' input, ' + T('obar') + ' select', els => els.filter(e => !e.disabled && !e.closest('[hidden]')).map(e => e.dataset.tkId));
+  check(JSON.stringify(enabled) === '["root"]', 'while trading is off only the ticket\'s instrument works (its account picker lists the trade accounts: none): ' + enabled.join(','));
+  // (the single chart page's picker, with trading off, still chose whose fills the chart marked; the ticket's has no
+  // accounts to list until trading is on)
   await shot(off, 'orders-1440-trading-off.png');
-  const offPhone = await open(browser, PORT + 1, 400, 860);
-  await noSideScroll(offPhone, 400);
-  await shot(offPhone, 'orders-400-trading-off.png');
-  await offPhone.close(); await off.close();
+  await off.close();
 
   /* ---------------- clickjacking: ChartBridge refuses frames; the page also refuses to trade inside one */
   const host = await browser.newPage({ viewport: { width: 1300, height: 900 } });
   await host.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-  await host.setContent(`<iframe id="f" src="http://localhost:${PORT}/live/single.html" style="width:1260px;height:860px;border:0"></iframe>`);
+  await host.setContent(`<iframe id="f" src="http://localhost:${PORT}/live/" style="width:1260px;height:860px;border:0"></iframe>`);
   await host.waitForTimeout(2500);
   const blocked = host.frames().find(f => f !== host.mainFrame());
-  check(!blocked || !(await blocked.evaluate(() => !!document.getElementById('connPill')).catch(() => false)), 'ChartBridge page loaded inside a frame');
+  check(!blocked || !(await blocked.evaluate(() => !!document.getElementById('wsConn')).catch(() => false)), 'ChartBridge page loaded inside a frame');
   await startBridge(PORT + 3, ['--trading', '--trade-accounts=Sim101', '--allow-frames', '--test-pin=' + TEST_PIN]);
-  await host.setContent(`<iframe id="f" src="http://localhost:${PORT + 3}/live/single.html" style="width:1260px;height:860px;border:0"></iframe>`);
-  const pinFrame = await until(async () => host.frames().find(x => x !== host.mainFrame() && /\/live\/single\.html$/.test(x.url())), 'framed page', 15000);
+  await host.setContent(`<iframe id="f" src="http://localhost:${PORT + 3}/live/?layout=Orders" style="width:1260px;height:860px;border:0"></iframe>`);
+  const pinFrame = await until(async () => host.frames().find(x => x !== host.mainFrame() && /\/live\/(\?.*)?$/.test(x.url())), 'framed page', 15000);
   if (pinFrame) await unlockIfAsked(pinFrame).catch(e => fail('framed page PIN: ' + e.message));
-  const fr = await until(async () => { const f = host.frames().find(x => x !== host.mainFrame()); return f && await f.evaluate(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE').catch(() => false) ? f : null; }, 'framed page loads with --allow-frames', 15000);
+  const fr = await until(async () => { const f = host.frames().find(x => x !== host.mainFrame()); return f && await f.evaluate(wsLive).catch(() => false) ? f : null; }, 'framed page loads with --allow-frames', 15000);
   if (fr) {
     await fr.waitForTimeout(800);
-    check(/inside another page/.test(await fr.textContent('#oOff')), 'framed page says why it cannot trade: ' + await fr.textContent('#oOff'));
-    check(await fr.isDisabled('#armBtn'), 'framed page cannot arm');
+    // the workspace in a frame has no order ticket (and would refuse to trade: TradeCore's framed reason)
+    const fx = await fr.evaluate(() => ({ arm: !!document.querySelector('.tk [data-tk-id="armBtn"]'), off: (document.querySelector('.tk [data-tk-id="oOff"]') || {}).textContent || '',
+      panel: (document.querySelector('.ws-panel[data-type="ticket"] .ws-body') || {}).textContent || '' }));
+    check(!fx.arm || /inside another page/.test(fx.off), 'framed page cannot trade: ' + JSON.stringify({ arm: fx.arm, off: fx.off, panel: fx.panel.trim().slice(0, 80) }));
     await shot(host, 'orders-framed-refused.png');
   }
   await host.close();
@@ -1061,36 +1035,26 @@ try {
   await startBridge(PORT + 4, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--no-hello-accounts', '--test-pin=' + TEST_PIN]);
   {
     const na = await open(browser, PORT + 4, 1440);
-    await until(() => na.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading on after an empty hello');
-    const r = await na.evaluate(() => ({ disabled: document.getElementById('oAcct').disabled, options: [...document.getElementById('oAcct').options].map(o => o.value), title: document.getElementById('oAcct').title, toolbar: document.getElementById('acctWrap').hidden }));
-    check(!r.disabled && JSON.stringify(r.options) === '["Sim101","DEMO-EVAL"]' && /^Orders go to this account/.test(r.title) && r.toolbar, 'empty hello, then trading: the order bar picker is enabled with the trade accounts: ' + JSON.stringify(r));
-    await na.selectOption('#oAcct', 'DEMO-EVAL');
-    check(await na.inputValue('#oAcct') === 'DEMO-EVAL', 'and the order account can be changed');
+    await until(() => na.evaluate(() => !$tk('buyMkt').disabled), 'trading on after an empty hello');
+    const r = await na.evaluate(() => ({ disabled: $tk('oAcct').disabled, options: [...$tk('oAcct').options].map(o => o.value), title: $tk('oAcct').title, toolbar: [...document.querySelectorAll('[id$="-acctWrap"]')].every(e => !e.getClientRects().length) }));
+    check(!r.disabled && JSON.stringify(r.options) === '["Sim101","DEMO-EVAL"]' && /^Orders go to this account/.test(r.title) && r.toolbar, 'empty hello, then trading: the ticket\'s picker is enabled with the trade accounts: ' + JSON.stringify(r));
+    await na.selectOption(T('oAcct'), 'DEMO-EVAL');
+    check(await na.inputValue(T('oAcct')) === 'DEMO-EVAL', 'and the order account can be changed');
     await na.close();
   }
-  /* ---------------- connecting (no hello yet): the trading page shows no toolbar picker, so the toolbar never jumps (review 2, N4) */
+  /* ---------------- connecting (no hello yet): no chart shows a toolbar account picker, so nothing jumps (review 2, N4) */
   {
     const cn = await browser.newPage({ viewport: { width: 1680, height: 860 } });
     await cn.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     await cn.addInitScript(() => { window.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} }; });   // never connects
-    await cn.goto(`http://localhost:${PORT + 4}/live/single.html`);
+    await cn.goto(`http://localhost:${PORT + 4}/live/?layout=Orders`);
     await unlockIfAsked(cn);
-    await cn.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'CONNECTING', null, { timeout: 15000 });
+    await cn.waitForFunction(() => !!document.getElementById('wsConn') && !!document.querySelector('.ws-panel[data-type="chart"]'), null, { timeout: 15000 });
     await cn.waitForTimeout(300);
-    check(await cn.isHidden('#acctWrap'), 'trading page while connecting: no toolbar account picker');
+    check(await cn.evaluate(() => !document.getElementById('wsConn').classList.contains('live') && [...document.querySelectorAll('[id$="-acctWrap"]')].every(e => !e.getClientRects().length)), 'the workspace while connecting: no chart shows a toolbar account picker');
     await cn.close();
   }
-
-  /* ---------------- ChartBridge 0.2 (protocol v1): read only exactly as before */
-  await startBridge(PORT + 2, ['--v1']);
-  const v1 = await open(browser, PORT + 2, 1440);
-  await v1.waitForTimeout(500);
-  check(await v1.isHidden('#obar'), 'no order bar with ChartBridge 0.2');
-  check(await v1.textContent('#statusRo') === 'Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.', 'v1 footer');
-  check(/Last fill (BUY|SELL)/.test(await v1.textContent('#legend')), 'v1 fills still shown');
-  check(await v1.isVisible('#acctPick') && JSON.stringify(await v1.$$eval('#acctPick option', os => os.map(o => o.value))) === '["DEMO-EVAL","Sim101","DEMO-EMPTY"]', 'no order bar: the compact account picker in the toolbar, no "All accounts"');
-  await shot(v1, 'orders-1440-v1-read-only.png');
-  await v1.close();
+  // (until 1.21.0 the single chart page on ChartBridge 0.2's protocol v1 was checked here: read only, its legend and picker)
 } finally {
   await browser.close();
   for (const b of bridges) b.kill();

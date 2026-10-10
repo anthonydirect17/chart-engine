@@ -413,20 +413,13 @@ test('Levels: each line its own toggle; the IB folded in (migrateIb) and old ind
   assert.deepEqual(LP.INDICATOR_COLORS.filter(c => c.id === 'vp').map(c => c.key), ['vpRow', 'vpValue', 'vpPoc'], 'the profile gear: rows, value area, POC');
 });
 
-test('chips: up to ten, the eleventh refused; the header text toggle saved per chart, on by default', () => {
+test('chips: up to ten, the eleventh refused; 1.21.0: no header text toggle (it was the single chart page\'s)', () => {
   assert.equal(LP.PIN_MAX, 10);
   let st = LP.defaultPane('main');
   for (const d of LP.INDICATORS) st = LP.Pane.add(st, d.id);
   assert.ok(LP.Pane.pinned(st) <= 10);
   const p = LP.create(memStorage());
-  assert.equal(p.legendShown('main'), true, 'on by default');
-  assert.equal(p.setLegendShown('pane-3', false), true);
-  assert.equal(p.legendShown('pane-3'), false);
-  assert.equal(p.legendShown('main'), true, 'per chart');
-  assert.equal(p.setLegendShown('pane-3', true), true);
-  assert.equal(p.legendShown('pane-3'), true);
-  assert.equal(p.setLegendShown('', false), false, 'a pane id is needed');
-  assert.equal(p.setLegendShown('__proto__', false), false);
+  assert.equal(p.legendShown, undefined); assert.equal(p.setLegendShown, undefined); assert.equal(LP.KEYS.legend, undefined);
 });
 
 test('RTH VWAP kept up to date bar by bar equals the whole computation, and starts over on other bars (review D2)', () => {

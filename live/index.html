@@ -21,7 +21,8 @@
 </head>
 <body>
 <!-- The trading workspace, ChartBridge's main page (http://localhost:8765/): panels on a 12 x 6 snap grid, one window per
-     screen, each with its own layout (?layout=Main, ?layout=Second). The single chart page is single.html. -->
+     screen, each with its own layout (?layout=Main, ?layout=Second). One chart: a layout with one chart panel (chart 1.21.0
+     removed the single chart page, single.html). -->
 <header class="ws-top">
   <span class="ws-title">TRADING SCREEN</span>
   <span class="ws-conn wait" id="wsConn" role="status"><span class="ws-dot" aria-hidden="true">●</span> <span id="wsConnText">CONNECTING · ChartBridge</span></span>
@@ -107,7 +108,7 @@
   <!-- 1.14.0: two columns, so Settings fits a 1366x768 screen whole (Anthony: no scrolling, ever) -->
   <div class="ws-cols"><div class="ws-col">
   <section class="ws-sec">
-    <h2>Charts <span>every chart, and the single chart page</span></h2>
+    <h2>Charts <span>every chart</span></h2>
     <div class="ws-field"><span class="ws-flabel" id="wsGlideLbl">Glide</span>
       <span class="ws-seg" id="wsGlide" role="group" aria-labelledby="wsGlideLbl"><button type="button" data-v="smooth">Smooth</button><button type="button" data-v="fast">Fast</button><button type="button" data-v="off">Off</button></span></div>
     <div class="ws-field"><label class="ws-flabel" for="wsRangeMode">Range style</label>
@@ -123,10 +124,10 @@
       <input class="ws-num" id="wsAtr" type="number" min="2" max="100" step="1" inputmode="numeric" aria-label="ATR period, bars"></div>
   </section>
   <section class="ws-sec">
-    <h2 id="wsHkCap">Hotkeys <span id="wsHkWhere">the same keys as the single chart page</span></h2>
+    <h2 id="wsHkCap">Hotkeys <span id="wsHkWhere">kept in this browser</span></h2>
     <div class="chart-live ws-lv" id="wsHotkeys"></div>
     <p class="ws-help" id="wsHkHelpShared" hidden>Click a box, then press the keys; saved in The Desk for every PC. Each does what its button does (Merge: the ticket's Merge; Accept and Reject: the copilot's answer). Never while typing in a box or with a menu open.</p>
-    <p class="ws-help" id="wsHkHelp">Click a box, then press the keys. Each does what its button on the order ticket does: Buy MKT and Sell MKT with the ticket's Qty and bracket, B/E, and Close on the ticket's account and instrument; Flatten all flattens every instrument with a position or a working order on that account. Buy, Sell and B/E need Armed and go to the window that has the ticket; Close and Flatten all work with Armed off and go from the window you press them in. KEYS ON in the top bar: a key works now. Never while typing in a box or with a menu open. The same keys work on the single chart page (single.html). Maximize panel fills the screen with the panel under the mouse, and the same key puts it back; it can never be a trading key. Saved in this browser.</p>
+    <p class="ws-help" id="wsHkHelp">Click a box, then press the keys. Each does what its button on the order ticket does: Buy MKT and Sell MKT with the ticket's Qty and bracket, B/E, and Close on the ticket's account and instrument; Flatten all flattens every instrument with a position or a working order on that account. Buy, Sell and B/E need Armed and go to the window that has the ticket; Close and Flatten all work with Armed off and go from the window you press them in. KEYS ON in the top bar: a key works now. Never while typing in a box or with a menu open. Maximize panel fills the screen with the panel under the mouse, and the same key puts it back; it can never be a trading key. Saved in this browser.</p>
   </section>
   </div><div class="ws-col">
   <section class="ws-sec">
@@ -183,7 +184,7 @@
 <script src="order-strategies.js"></script>
 <!-- the order logic of the order bar and the workspace's order ticket (one order path, 1.12.0) -->
 <script src="trade.js"></script>
-<!-- ChartBridge's PIN (0.3.2): this page is served by ChartBridge like the single chart page, so it unlocks the same way. -->
+<!-- ChartBridge's PIN (0.3.2): this page is ChartBridge's own, so it unlocks with the PIN. -->
 <script src="pin.js"></script>
 <script src="live.js"></script>
 <!-- one connection per instrument for the whole window, shared by every chart and tape -->

@@ -459,7 +459,7 @@ test('debounce waits for quiet, flush runs a waiting call now', async () => {
 // nt8/install.ps1 and the updater (nt8/update-pc.ps1) copy what nt8/install-files.json lists
 const installed = () => JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).www.map(f => f.from);
 
-for (const page of ['single.html', 'index.html']) {
+for (const page of ['index.html']) {   // 1.21.0: the workspace is the only page (single.html is gone)
 test('every script the live page loads is copied by nt8/install.ps1: ' + page, () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'live', page), 'utf8');
   const srcs = [...html.matchAll(/<script src="([^"]+)"/g)].map(m => m[1]);

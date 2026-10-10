@@ -22,9 +22,10 @@
 // chart update), GC pauses and layout from a Chromium trace, and heap growth. --profile adds a CPU profile (top
 // functions by self time); it slows the page, so its numbers are only for finding where the time goes.
 // ChartBridge 0.3.2's PIN: the fake bridge starts with a made-up test PIN, typed on the standalone page's pad before
-// the measurement (a page from an older --root has no pad and goes straight on). --embed connects with single-use
-// tickets, like The Desk's relay, which needs no ChartBridge PIN. A --root older than the PIN (no live/pin.js) gets a
-// bridge with --pin-off.
+// the measurement (a page from an older --root has no pad and goes straight on). A checkout with no standalone chart
+// page (chart 1.21.0 and later) measures one mounted chart with its own toolbar (test/chart-host.html), and --embed a
+// mounted chart in test/embed-host.html; a mounted chart never has the PIN, so both get a bridge with --pin-off, as does
+// a --root older than the PIN (no live/pin.js).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -34,7 +35,8 @@ import { TEST_PIN, unlockIfAsked } from './smoke-pin.mjs';
 
 const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name, d) => { const a = process.argv.slice(2).find(x => x === '--' + name || x.startsWith('--' + name + '=')); return a === undefined ? d : a.includes('=') ? a.slice(a.indexOf('=') + 1) : true; };
-// the single chart page: live/single.html since the workspace became live/index.html (E2a), live/index.html before
+// the standalone chart: live/single.html from the workspace (E2a) until chart 1.21.0, live/index.html before; since
+// 1.21.0 a mounted chart with its own toolbar (test/chart-host.html)
 const VIEW = arg('view', 'range'), SECS = +arg('secs', 30), ROOT = path.resolve(arg('root', here)), LABEL = arg('label', path.basename(ROOT));
 const PORT = +arg('port', 8830), TICK_RATE = +arg('tick-rate', 15), LIVE_RATE = +arg('live-rate', 100), RANGE = +arg('range', 40);
 const ET = arg('et', '');                  // a time of day in New York (HH:MM) for the page and the bridge clocks
@@ -52,9 +54,10 @@ const LIVE_FIRST = !!arg('live-first', false);
 const DELTA_OFF = arg('delta', '1') === '0';
 const SIGNALS = !!arg('signals', false);
 
-const SINGLE = fs.existsSync(path.join(ROOT, 'live', 'single.html')) ? 'single.html' : '';
+const STANDALONE = fs.existsSync(path.join(ROOT, 'live', 'single.html')) ? 'live/single.html' : fs.existsSync(path.join(ROOT, 'test', 'chart-host.html')) ? 'test/chart-host.html' : 'live/';
+const PIN_OFF = EMBED || STANDALONE === 'test/chart-host.html' || !fs.existsSync(path.join(ROOT, 'live', 'pin.js'));
 const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--serve-root=' + ROOT,
-  '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--clock-offset=' + OFFSET, '--test-pin=' + TEST_PIN].concat(EMBED ? ['--tickets'] : []).concat(LIVE_FIRST ? ['--live-first'] : []).concat(fs.existsSync(path.join(ROOT, 'live', 'pin.js')) ? [] : ['--pin-off']), { stdio: ['ignore', 'pipe', 'inherit'] });
+  '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--clock-offset=' + OFFSET, PIN_OFF ? '--pin-off' : '--test-pin=' + TEST_PIN].concat(LIVE_FIRST ? ['--live-first'] : []), { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
 
 const settings = { root: 'NQ', tf: VIEW === 'm1' ? 'm1' : 'range', glide: 'smooth' };
@@ -114,7 +117,7 @@ try {
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   await ctx.addInitScript(init);
   // cross-origin isolated, so performance.now() has 5 microsecond resolution instead of 100
-  await ctx.route(/\/live\/(index\.html|single\.html)?$|\/test\/embed-host\.html$/, async r => {
+  await ctx.route(/\/live\/(index\.html|single\.html)?$|\/test\/(embed|chart)-host\.html$/, async r => {
     const resp = await r.fetch();
     await r.fulfill({ response: resp, headers: Object.assign({}, resp.headers(), { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'require-corp' }) });
   });
@@ -126,8 +129,8 @@ try {
     const t0 = Date.now();
     if (EMBED) {
       await page.goto(`http://localhost:${PORT}/test/embed-host.html`);
-      await page.evaluate(url => { window.ChartLive.mount(document.getElementById('paneA'), { wsUrl: () => url + '?ticket=' + Math.random().toString(36).slice(2), storagePrefix: '' }); document.getElementById('paneB').remove(); }, `ws://localhost:${PORT}/ws`);
-    } else { await page.goto(`http://localhost:${PORT}/live/${SINGLE}`); await unlockIfAsked(page, TEST_PIN, 120000); }
+      await page.evaluate(url => { window.ChartLive.mount(document.getElementById('paneA'), { wsUrl: url, storagePrefix: '' }); document.getElementById('paneB').remove(); }, `ws://localhost:${PORT}/ws`);
+    } else { await page.goto(`http://localhost:${PORT}/${STANDALONE}`); if (!PIN_OFF) await unlockIfAsked(page, TEST_PIN, 120000); }
     // the page's LIVE pill; a mounted chart (1.16.0) has its badge's state instead
     await page.waitForFunction(() => { const el = document.querySelector('[id$="connPill"]'), b = document.querySelector('[id$="-badge"]'); return el ? el.textContent === 'LIVE' : !!b && b.dataset.conn === 'live'; }, null, { timeout: 120000, polling: 200 });
     return { page, loadMs: Date.now() - t0 };

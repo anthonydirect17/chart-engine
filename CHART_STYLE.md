@@ -187,12 +187,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   headers no longer show the change from the settlement (the Quote board has it). 1.16.0: the bubble under the mouse comes
   first, "Buy 142 · Bar 0:23 · ATR(14) 12.50" (short form "Buy 142 · 0:23 · ATR 12.50"), set when the bubble changes.
 - **No text inside a mounted chart (1.16.0, Anthony):** the workspace's charts (and a host's) have no legend and no **Aa**
-  toggle; the single chart page keeps its legend as above. A small badge, in the panel header (or the chart's top left
+  toggle; the single chart page kept its legend as above until it was removed (1.21.0). A small badge, in the panel header (or the chart's top left
   corner when a host does not place it), 9px pills: **ARMED · account** in the ARMED pill's colors while the chart takes
   orders, and the connection only when it is not LIVE (CONNECTING, LOADING, OFFLINE in the loss color).
 - **Stale feed (1.16.0):** no trade for 10 s in RTH (09:30 to 16:00 ET) or 60 s outside it, while the line is live and CME
   Globex open: a 2 px amber edge (`--warn` at 75%) inside the chart's border, over the candles and taking no room, and
-  "Feed stale 12 s" in the badge in amber (on the single chart page the LIVE pill reads "STALE 12 s"). Gone with the next
+  "Feed stale 12 s" in the badge in amber. Gone with the next
   trade.
 
 ## Drawing
@@ -401,7 +401,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   bracket box, the focus leaves the control so the hotkeys work at once. Flatten (button and hotkeys) works with Armed
   off, so it does not dim while disarmed (Buy, Sell, B/E and Cancel all still do). Escape (outside a key box) or a click outside closes it. No new
   colors; the order bar does not change.
-- **The single chart page's cleanup (1.14.0, Anthony: "the 1m format with everything on one line").** One toolbar line
+- **The single chart page's cleanup (1.14.0, Anthony: "the 1m format with everything on one line"; the page is gone since 1.21.0).** One toolbar line
   at 1366, 1920 and 2560 px: the instruments, Bars and the range size, Indicators and its chips (the workspace's 2-letter
   chips, VO VW LV FL, 30 px tall; up to ten pinned, those that do not fit behind a **+N** chip that opens a small
   list of them), a **⋯** `.btn` opening a small menu (Trend line, Price line,
@@ -529,18 +529,15 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Chart panels**: the slim 28 px header, the compact chart. A chart live for orders (the ticket's instrument while
   Armed) has a purple outline on its stage, the workspace accent `#7B5CFF` (Anthony), with a soft static glow (a
   1 px ring and an 8 px shadow at 45%); no new color, no animation. 1.13.0: the Armed switch and the ticket's outline
-  are deep red (the house crimson, Anthony); the chart borders stay purple with the glow, and the single chart page's
-  chart takes the same purple glow (`--armed-ring`), only its order bar deep red.
+  are deep red (the house crimson, Anthony); the chart borders stay purple with the glow (`--armed-ring`).
 - **Short header (1.14.0, Anthony):** a chart panel under 700 px wide or 400 px tall shows its header text as one quiet
   line (17 px: the name, bars, last price and change, the indicators' values); the bar's open, high, low, volume, the
   readouts and a hovered bubble come on a second line only while the crosshair is over the chart (the price scale does
-  not move for it). A bigger panel shows the full header; `/single.html` always does.
-- **Header text toggle (1.14.0):** **Aa** (`.lg-tog`, the header's 22 px button style, pressed = on) next to
-  Indicators in each panel header and on `/single.html`. Off: no header text at all, not even on hover, nor the hovered
+  not move for it). A bigger panel shows the full header.
+- **Header text toggle (1.14.0; gone from the workspace in 1.16.0 and with the single chart page in 1.21.0):** **Aa**
+  (`.lg-tog`, the header's 22 px button style, pressed = on) next to Indicators. Off: no header text at all, not even on hover, nor the hovered
   bubble's; the price scale takes the room back with the 120 ms re-fit. Saved per chart (`live-legend-v1`).
-- **The NO STOP question (1.13.0)** takes no room and is never modal, so nothing resizes or scrolls: on the single
-  chart page a strip over the top centre of the chart (the ChartBridge alert's shape, the loss red border and title,
-  a shadow); in the workspace a strip over the top bar from the left up to KEYS, one line, the text cut short with
+- **The NO STOP question (1.13.0)** takes no room and is never modal, so nothing resizes or scrolls: in the workspace a strip over the top bar from the left up to KEYS, one line, the text cut short with
   the whole of it in the tooltip (the `.ws-alert` shape). Cancel then Send, Send in the loss red; Cancel has the
   focus. It covers no order control (the order bar, KEYS, Flatten all, the ticket). The protection line's gap ("NO STOP on 1") is
   the loss red of the NO STOP tag.

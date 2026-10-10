@@ -9,7 +9,7 @@
 //     by its key and sent with Buy MKT in ChartBridge's flat form; the managed state (resumed, NOT MANAGED); Merge by its
 //     button and by its key with the result shown; the entry types by a modifier held with Buy's key and with a click;
 //     the one conflict check (Merge, Maximize, a strategy's key, a modifier); no key while typing in a box; a stale rev
-//     (409); The Desk not reachable (the last copy, read only); the single chart page read only. Every message sent passes
+//     (409); The Desk not reachable (the last copy, read only). Every message sent passes
 //     the fake's strict v3 keys; screenshots at 1920x1080 and 1366x768 (Settings and the dialog never scroll).
 //   npm run smoke:strategies        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { TEST_PIN, enterPin, unlockIfAsked } from './smoke-pin.mjs';
+import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 import { startDesk } from './fake-desk.mjs';
 import { checkKeysV3, SWITCHES } from './fake-v3.mjs';
 
@@ -121,14 +121,14 @@ try {
   await A.click('#wsSet'); await wait(400);
   for (const id of ['wsDeskSec', 'wsStratSec', 'wsTypesSec']) check(!(await visible(A, '#' + id)), 'switches off: no ' + id + ' in Settings');
   for (const id of ['merge', 'accept', 'reject']) check(!(await visible(A, `#wsHotkeys .hk-row[data-hk="${id}"]`)), 'no ' + id + ' key row');
-  check((await A.textContent('#wsHkWhere')) === 'the same keys as the single chart page', 'the hotkeys are this browser\'s');
+  check((await A.textContent('#wsHkWhere')) === 'kept in this browser', 'the hotkeys are this browser\'s');
   check((await A.inputValue('#wsHk-sell')) === 'Alt+X', 'this browser\'s own keys (Sell Alt+X), not The Desk\'s');
   await A.click('#wsHk-be'); await A.keyboard.press('Alt+K'); await wait(200);
   check(JSON.parse(await A.evaluate(() => localStorage.getItem('live-hotkeys-v1'))).be === 'Alt+K', 'a key set in Settings is saved in this browser, as before');
   await A.keyboard.press('Escape'); await A.evaluate(() => document.activeElement && document.activeElement.blur()); await wait(200);
   if (await visible(A, '#wsSettings')) { await A.click('#wsSet'); await wait(200); }
   check(desk.log.length === 0, 'The Desk was never asked (' + desk.log.length + ' requests)');
-  check((await A.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) !== 'true', 'the single chart page is not told the keys are shared');
+  check((await A.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === null, 'live-desk-sync-v1 is never written (1.21.0: it told the single chart page, gone)');
   // an order: the 1.15 order, a bracket and no strategy, and Num9 (a strategy's key on The Desk) does nothing
   await A.selectOption('.ws-panel[data-type="ticket"] [data-tk-id="oQty"]', '1');
   await tk(A, 'bStop').fill('8'); await tk(A, 'bStop').press('Tab'); await tk(A, 'bTarget').fill('16'); await tk(A, 'bTarget').press('Tab'); await wait(400);
@@ -162,7 +162,7 @@ try {
   check(desk.log.filter(x => x.method === 'GET').length >= 2, 'both documents read from The Desk');
   check((await notes(A)).some(t => /Hotkeys now come from The Desk, shared by every PC\. This browser had Sell MKT Alt\+X/.test(t)), 'this browser\'s different keys replaced, and said so: ' + (await notes(A)).slice(-1)[0]);
   check(JSON.parse(await A.evaluate(() => localStorage.getItem('live-hotkeys-v1'))).sell === 'F8', 'The Desk\'s Sell key in this browser\'s keys');
-  check((await A.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === 'true', 'the single chart page is told the keys are shared');
+  check((await A.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === null, 'shared keys: live-desk-sync-v1 still never written (1.21.0: it told the single chart page, gone)');
   check(await visible(A, '.ws-panel[data-type="ticket"] [data-tk-id="stratRow"]'), 'the Strategy picker on the ticket');
   check(JSON.stringify(await A.$$eval('.ws-panel[data-type="ticket"] [data-tk-id="strat"] option', o => o.map(x => x.textContent))) === '["None (the bracket)","Scalp 2 (Num9)"]', 'None and The Desk\'s strategy, with its key');
   check(await visible(A, '.ws-panel[data-type="ticket"] [data-tk-id="mergeBtn"]'), 'the Merge button on the ticket');
@@ -381,17 +381,6 @@ try {
   const bad = raw.map(d => [d, checkKeysV3(JSON.parse(d), d)]).filter(([d, w]) => w && !/Unknown message type (subscribe|auth|ping|unsubscribe)/.test(w) && !/"type":"(subscribe|auth|ping|unsubscribe|history|more|profile|htf|weekProfile)"/.test(d));
   check(bad.length === 0, 'every message sent has strict keys: ' + JSON.stringify(bad.slice(0, 2)));
   await tk(A, 'flattenBtn').click(); await wait(400);
-
-  /* ---- the single chart page: the keys shown, not changed, while shared */
-  const S = await ctx.newPage();
-  S.on('pageerror', e => fail('single page error: ' + e.message));
-  await S.goto(`http://localhost:${PORT}/live/single.html`);
-  await unlockIfAsked(S);
-  await S.waitForSelector('#setBtn', { timeout: 20000 });
-  await S.click('#setBtn'); await wait(300);
-  await S.click('#hk-be'); await S.keyboard.press('Alt+KeyJ'); await wait(300);
-  check(/shared by every PC through The Desk now/.test(await S.textContent('#hkNote-be')) && JSON.parse(await S.evaluate(() => localStorage.getItem('live-hotkeys-v1'))).be === '', 'the single chart page: shared keys are not changed there');
-  await S.close();
 
   /* ---- The Desk not reachable: the last copy, read only; nothing lost */
   desk.down = true;

@@ -1,7 +1,8 @@
-// PIN smoke test (ChartBridge 0.3.2): drives ChartBridge's own page in Chromium against the fake bridge with a pin
-// file, the way Anthony uses it: set a PIN (keyboard), nothing streams before; reload asks again; wrong PINs (20 in
-// a row) never block the right one; a ChartBridge restart mid-session keeps the open page unlocked and trading;
-// change the PIN; a phone-sized page with touch; the forgotten-PIN recovery (delete the pin file). Made-up PINs
+// PIN smoke test (ChartBridge 0.3.2): drives ChartBridge's own page, the workspace (live/index.html; the single chart page
+// until chart 1.21.0), in Chromium against the fake bridge with a pin file, the way Anthony uses it: set a PIN (keyboard),
+// nothing streams before; reload asks again; wrong PINs (20 in a row) never block the right one; a ChartBridge restart
+// mid-session keeps the open page unlocked and trading on its order ticket; change the PIN; a touch screen; the
+// forgotten-PIN recovery (delete the pin file). Made-up PINs
 // only; sample data; nothing reaches a broker. Screenshots in test/out/ (and SHOTS_DIR when set).
 //   npm run smoke:pin        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
@@ -62,7 +63,10 @@ function spies() {
 }
 const title = p => p.textContent('#cbPinTitle').catch(() => null);
 const msg = p => p.textContent('#cbPinMsg').catch(() => null);
-const pill = p => p.evaluate(() => { const el = document.getElementById('connPill'); return el ? el.textContent : null; });
+/* the workspace's connection in its top bar (the single chart page's LIVE pill until chart 1.21.0): LIVE, OFFLINE or null */
+const pill = p => p.evaluate(() => { const el = document.getElementById('wsConn'); return !el || !document.querySelector('.ws-panel') ? null : el.classList.contains('live') ? 'LIVE' : el.classList.contains('bad') ? 'OFFLINE' : 'WAIT'; });
+/* the order ticket's controls (the 1.11.0 ids, as TradeCore.wire finds them) */
+const T = k => `.ws-panel[data-type="ticket"] [data-tk-id="${k}"]`;
 const notBusy = p => p.waitForFunction(() => !document.querySelector('.cb-pin-busy'), null, { timeout: 10000 });
 async function typePin(p, pin) { await p.keyboard.type(pin); await notBusy(p); }
 const storedAnywhere = p => p.evaluate(() => JSON.stringify(Object.entries(localStorage)) + JSON.stringify(Object.entries(sessionStorage)) + document.cookie + location.href);
@@ -80,10 +84,10 @@ try {
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|WebSocket connection/.test(m.text())) fail('console: ' + m.text()); });
 
   /* ---------------- 1. no PIN on this PC: "Set a PIN", nothing streams, no order UI */
-  await page.goto(`http://localhost:${PORT}/live/single.html`);
+  await page.goto(`http://localhost:${PORT}/live/?layout=Main`);
   await until(async () => await title(page) === 'Set a PIN', '"Set a PIN" shown');
   await page.waitForTimeout(800);
-  check(!(await page.$('#connPill')) && !(await page.$('#obar')) && !(await page.$('#chart')), 'no PIN set: no chart, no order bar, nothing behind the pad');
+  check(!(await page.$('.ws-panel')) && !(await page.$(T('obar'))) && !(await page.$('.chart-live canvas')), 'no PIN set: no panel, no chart, no order ticket, nothing behind the pad');
   check(await page.evaluate(() => window.__ws.length) === 0 && (await diag()).clients === 0, 'no PIN set: no WebSocket opened, ChartBridge has no client');
   check(await page.evaluate(async () => (await fetch('/session')).status) === 403, 'no PIN set: GET /session refused');
   check(await page.evaluate(() => document.activeElement && document.activeElement.classList.contains('cb-pin-card')), 'the pad has the keyboard focus');
@@ -101,13 +105,13 @@ try {
   await typePin(page, FIRST);
   await until(async () => await pill(page) === 'LIVE', 'live after setting the PIN', 15000);
   check(!(await page.$('.cb-pin')), 'set: the pad is gone, the chart is live');
-  await until(() => page.evaluate(() => !document.getElementById('obar').hidden && !document.getElementById('buyMkt').disabled), 'trading after set');
-  check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'Armed off after the unlock');
+  await until(() => page.evaluate(t => { const b = document.querySelector(t); return !!b && !b.disabled; }, T('buyMkt')), 'trading after set');
+  check(await page.getAttribute(T('armBtn'), 'aria-checked') === 'false', 'Armed off after the unlock');
   const fileText = fs.readFileSync(PIN_FILE, 'utf8');
   check(/^v1 pbkdf2-sha256 50000 [0-9a-f]{32} [0-9a-f]{64} [0-9a-f]{64}$/m.test(fileText) && !fileText.replace(/[0-9a-f]{32,}/g, '').includes(FIRST), 'the pin file holds a salted hash, never the PIN');
   check(!/v1\.[0-9a-f]{32}\.[0-9a-f]{64}/.test(await storedAnywhere(page)), 'the unlock is not in localStorage, sessionStorage, a cookie or the URL');
-  await page.click('#setBtn');                                            // 1.14.0: Change PIN is in Settings
-  check(await page.isVisible('#pinBtn'), 'Change PIN shows in Settings');
+  await page.click('#wsSet');                                             // Change PIN is in Settings
+  check(await page.isVisible('#wsPin'), 'Change PIN shows in Settings');
   await page.keyboard.press('Escape');
   await shot(page, 'pin-unlocked-1440.png');
 
@@ -115,7 +119,7 @@ try {
   await page.reload();
   await until(async () => await title(page) === 'Enter PIN', 'reload asks for the PIN');
   await page.waitForTimeout(600);
-  check(await page.evaluate(() => window.__ws.length) === 0 && !(await page.$('#connPill')), 'reload: locked, no WebSocket opened');
+  check(await page.evaluate(() => window.__ws.length) === 0 && !(await page.$('.ws-panel')), 'reload: locked, no WebSocket opened');
   await until(async () => (await diag()).clients === 0, 'the old page\'s WebSocket is gone');
   await typePin(page, '0000');
   check(/Wrong PIN/.test(await msg(page)) && await title(page) === 'Enter PIN', 'a wrong PIN is refused');
@@ -129,40 +133,40 @@ try {
   check(Date.now() - t0 < 5000, 'then the right PIN opens at once (' + (Date.now() - t0) + ' ms), nothing blocked');
 
   /* ---------------- 3. ChartBridge restarts mid-session: the open page stays unlocked and trading */
-  await until(() => page.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading after unlock');
+  await until(() => page.evaluate(t => { const b = document.querySelector(t); return !!b && !b.disabled; }, T('buyMkt')), 'trading after unlock');
   await control('hold?root=MNQ');
-  await page.click('#armBtn');
-  await page.click('#buyMkt');
-  await until(async () => (await page.textContent('#oPos')).startsWith('LONG 1'), 'a position is open');
+  await page.click(T('armBtn'));
+  await page.click(T('buyMkt'));
+  await until(async () => (await page.textContent(T('oPos'))).startsWith('LONG 1'), 'a position is open');
   const shownBefore = await page.evaluate(() => window.__pinShown);
   check(shownBefore === 1, 'the pad spy works: it saw this page\'s one unlock pad (' + shownBefore + ')');
   bridge.kill();
   await until(async () => await pill(page) === 'OFFLINE', 'offline while ChartBridge is down');
-  check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'restart: Armed off while disconnected (unchanged rule)');
+  check(await page.getAttribute(T('armBtn'), 'aria-checked') === 'false', 'restart: Armed off while disconnected (unchanged rule)');
   await page.waitForTimeout(2500);                                      // the page keeps retrying meanwhile
   check(!(await page.$('.cb-pin')), 'restart: while ChartBridge is down the page is not sent back to the PIN');
   bridge = await startBridge();
   await until(async () => await pill(page) === 'LIVE', 'live again after the restart', 20000);
-  await until(() => page.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading again after the restart (new order token)', 10000);
+  await until(() => page.evaluate(t => { const b = document.querySelector(t); return !!b && !b.disabled; }, T('buyMkt')), 'trading again after the restart (new order token)', 10000);
   check(await page.evaluate(() => window.__pinShown) === shownBefore && !(await page.$('.cb-pin')), 'restart: the PIN pad never showed');
   const rec = await control('received');
   check(rec.sessionRequests >= 1 && rec.urls.some(u => /unlock=\(hidden\)/.test(u)), 'restart: signed in again with the unlock held in memory (GET /session ' + rec.sessionRequests + ', WebSocket with ?unlock)');
-  await page.click('#armBtn');
-  await page.click('#buyMkt');
-  await until(async () => (await page.textContent('#oPos')).startsWith('LONG'), 'an order after the restart fills');
-  await page.click('#flattenBtn');
-  await until(async () => (await page.textContent('#oPos')) === 'Flat', 'flatten after the restart');
-  await page.click('#armBtn');
+  await page.click(T('armBtn'));
+  await page.click(T('buyMkt'));
+  await until(async () => (await page.textContent(T('oPos'))).startsWith('LONG'), 'an order after the restart fills');
+  await page.click(T('flattenBtn'));
+  await until(async () => (await page.textContent(T('oPos'))) === 'Flat', 'flatten after the restart');
+  await page.click(T('armBtn'));
   await shot(page, 'pin-after-restart.png');
 
   /* ---------------- 4. change the PIN: the current one first; the page stays live */
-  await page.click('#setBtn'); await page.click('#pinBtn');
+  await page.click('#wsSet'); await page.click('#wsPin');
   await until(async () => await title(page) === 'Current PIN', 'change dialog');
   check(await pill(page) === 'LIVE', 'change: the chart keeps streaming behind the dialog');
   await shot(page, 'pin-change.png');
   await page.keyboard.press('Escape');
   check(!(await page.$('.cb-pin')), 'change: Escape cancels');
-  await page.click('#setBtn'); await page.click('#pinBtn');
+  await page.click('#wsSet'); await page.click('#wsPin');
   await until(async () => await title(page) === 'Current PIN', 'change dialog again');
   await typePin(page, '0000');
   check(/current PIN is wrong/.test(await msg(page)) && await title(page) === 'Current PIN', 'change: a wrong current PIN is refused');
@@ -178,24 +182,25 @@ try {
   check(fs.readFileSync(PIN_FILE, 'utf8') !== hashBefore && await pill(page) === 'LIVE', 'change: saved, the page stays live');
   check(/PIN changed/.test(await page.textContent('.cb-pin-toast').catch(() => '')), 'change: a short note says so');
 
-  /* ---------------- 5. a phone-sized page with touch: the new PIN, the old one refused */
-  const phoneCtx = await browser.newContext({ viewport: { width: 400, height: 820 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true });
+  /* ---------------- 5. a touch screen (a laptop's size: the workspace's smallest; the single chart page also fitted a phone
+     until 1.21.0): the new PIN, the old one refused */
+  const phoneCtx = await browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, hasTouch: true });
   await phoneCtx.addInitScript(() => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); });   // 1.13.0: answers the one NO STOP question with Send
   await phoneCtx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   const phone = await phoneCtx.newPage();
   phone.on('pageerror', e => fail('phone pageerror: ' + e.message));
-  await phone.goto(`http://localhost:${PORT}/live/single.html`);
+  await phone.goto(`http://localhost:${PORT}/live/?layout=Second`);
   await until(async () => await title(phone) === 'Enter PIN', 'phone: PIN pad');
-  await noSideScroll(phone, 400, 'PIN pad');
+  await noSideScroll(phone, 1366, 'PIN pad');
   const keys = await phone.locator('.cb-pin-key').evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return [r.width, r.height]; }));
-  check(keys.length === 12 && keys.every(([w, h]) => w >= 44 && h >= 44), 'phone: 12 keys, each at least 44 px: ' + JSON.stringify(keys.slice(0, 3)));
+  check(keys.length === 12 && keys.every(([w, h]) => w >= 44 && h >= 44), 'touch: 12 keys, each at least 44 px: ' + JSON.stringify(keys.slice(0, 3)));
   await shot(phone, 'pin-phone.png');
   for (const d of FIRST) await phone.locator(`.cb-pin-key[data-k="${d}"]`).tap();
   await notBusy(phone);
-  check(/Wrong PIN/.test(await msg(phone)), 'phone: the old PIN is refused after the change');
+  check(/Wrong PIN/.test(await msg(phone)), 'touch: the old PIN is refused after the change');
   for (const d of SECOND) await phone.locator(`.cb-pin-key[data-k="${d}"]`).tap();
-  await until(async () => await pill(phone) === 'LIVE', 'phone: the new PIN opens (touch)', 15000);
-  await noSideScroll(phone, 400, 'chart');
+  await until(async () => await pill(phone) === 'LIVE', 'touch: the new PIN opens', 15000);
+  await noSideScroll(phone, 1366, 'workspace');
   await phoneCtx.close();
 
   /* ---------------- 5b. review S2: /pin/status answering 500 on a reconnect keeps the page LIVE and unlocked */
@@ -205,15 +210,15 @@ try {
   await until(async () => await pill(page) === 'LIVE' && await page.evaluate(() => window.__ws.length) > 0, 'live again after a drop with /pin/status answering 500', 15000);
   await page.waitForTimeout(800);
   check(await pill(page) === 'LIVE' && !(await page.$('.cb-pin')) && await page.evaluate(() => window.__pinShown) === shown5 && await page.evaluate(() => window.ChartBridgePin.active()),
-    '/pin/status 500 on a reconnect: the page stays LIVE and unlocked, no pad');
+    '/pin/status 500 on a reconnect: the page stays LIVE and unlocked, no pad (' + JSON.stringify({ pill: await pill(page), pad: !!(await page.$('.cb-pin')), shown: await page.evaluate(() => window.__pinShown), was: shown5, active: await page.evaluate(() => window.ChartBridgePin.active()) }) + ')');
   await page.unroute('**/pin/status');
 
   /* ---------------- 5c. review S3: GET /session refused once after a reconnect: it asks again and trading comes back */
   let sessionRefusals = 0;
   await page.route('**/session', r => { if (sessionRefusals < 1) { sessionRefusals++; return r.fulfill({ status: 403, body: '' }); } return r.continue(); });
   await control('drop');
-  await until(async () => /Signing in to ChartBridge for orders again/.test(await page.textContent('#oOff')), 'a refused sign-in says it tries again', 15000);
-  await until(() => page.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading back after the sign-in retry', 10000);
+  await until(async () => /Signing in to ChartBridge for orders again/.test(await page.textContent(T('oOff'))), 'a refused sign-in says it tries again', 15000);
+  await until(() => page.evaluate(t => { const b = document.querySelector(t); return !!b && !b.disabled; }, T('buyMkt')), 'trading back after the sign-in retry', 10000);
   check(sessionRefusals === 1 && !(await page.$('.cb-pin')), 'a refused GET /session is retried after a status check; trading comes back with no pad');
   await page.unroute('**/session');
 
@@ -224,7 +229,7 @@ try {
   await until(async () => await pill(page) === 'LIVE', 'live after a drop with a torn pin file (the copy read earlier)', 15000);
   check(!(await page.$('.cb-pin')) && await page.evaluate(() => window.ChartBridgePin.active()), 'torn pin file: the open page reconnects, unlocked, no pad');
   const other = await ctx.newPage();
-  await other.goto(`http://localhost:${PORT}/live/single.html`);
+  await other.goto(`http://localhost:${PORT}/live/?layout=Main`);
   await until(async () => await title(other) === 'Enter PIN', 'a new page with a torn pin file asks for the PIN');
   check(await other.evaluate(async () => (await fetch('/pin/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"pin":"0000"}' })).status) === 409,
     'torn pin file: "Enter PIN", not "Set a PIN"; setting a new PIN is refused (409)');
@@ -248,7 +253,11 @@ try {
   await until(async () => await title(page) === 'Enter PIN', 'the pad when ChartBridge says the unlock does not hold', 15000);
   fs.writeFileSync(PIN_FILE, goodPin);
   await until(async () => !(await page.$('.cb-pin')) && await pill(page) === 'LIVE', 'the pad closes by itself once the unlock holds again', 15000);
-  check(await page.evaluate(() => window.__pinShown) === shown5d + 1, 'the pad showed once and closed by itself, no PIN typed, no reload');
+  // the workspace has several connections (one per instrument, the ticket's, the Account page's); each that ChartBridge
+  // refuses opens the pad again until the unlock holds, so it can show more than once here (4 times on main's workspace
+  // too, chart 1.19.0); the single chart page, with one connection, showed it once
+  const shownNow = await page.evaluate(() => window.__pinShown);
+  check(shownNow > shown5d && !(await page.$('.cb-pin')), 'the pad showed and closed by itself, no PIN typed, no reload (shown ' + (shownNow - shown5d) + ' times)');
 
   /* ---------------- 6. forgotten PIN: delete the pin file with ChartBridge running */
   fs.unlinkSync(PIN_FILE);

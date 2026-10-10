@@ -693,7 +693,7 @@ test('server (0.3.2 PIN): a restarted bridge with the same pin file keeps an ope
   } finally { child.kill(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('server (0.3.2 PIN): allowOrigins pages, local programs and relay tickets keep 0.3.1 rules; no token in /test/received', async () => {
+test('server (0.3.2 PIN): allowOrigins pages and local programs keep 0.3.1 rules; no token in /test/received (1.21.0: no relay tickets)', async () => {
   const port = 19300 + Math.floor(Math.random() * 90);
   const child = await startBridge(port, ['--allow-origins=https://desk.example', '--test-pin=' + TEST_PIN, '--test-controls']);
   try {
@@ -704,17 +704,6 @@ test('server (0.3.2 PIN): allowOrigins pages, local programs and relay tickets k
     const rec = await (await fetch(`http://127.0.0.1:${port}/test/received`, { method: 'POST' })).json();
     assert.ok(!JSON.stringify(rec).includes(token) && rec.urls.some(u => u.includes('unlock=(hidden)')), 'the unlock token is never kept: ' + JSON.stringify(rec.urls));
   } finally { child.kill(); }
-  const port2 = port + 100;
-  const relay = await startBridge(port2, ['--tickets', '--test-pin=' + TEST_PIN]);
-  try {
-    const req = (p, origin) => new Promise((resolve, reject) => {
-      const r = http.request({ host: '127.0.0.1', port: port2, agent: false, path: p, headers: { Host: 'localhost:' + port2, Connection: 'Upgrade', Upgrade: 'websocket',
-        'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64'), Origin: origin } });
-      r.on('upgrade', (res, sock) => { sock.destroy(); resolve(101); }); r.on('response', res => { res.resume(); resolve(res.statusCode); }); r.on('error', reject); r.end();
-    });
-    assert.equal(await req('/ws?ticket=t1', 'http://localhost:' + port2), 101, 'a relay ticket stands for the relay (no Origin at ChartBridge): no PIN');
-    assert.equal(await req('/ws', 'http://localhost:' + port2), 403, 'no ticket: still refused');
-  } finally { relay.kill(); }
 });
 
 test('server (0.3.2 PIN, review B1): a pin file that exists but cannot be read is never "no PIN"', async () => {

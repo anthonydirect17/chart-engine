@@ -1,21 +1,21 @@
-// 1.9.0 smoke: color presets and the top bar following the chart, on the live page against the fake bridge (sample data
-// only, never market data), trading on so the order bar shows:
+// 1.9.0 smoke: color presets and the top bar following the chart, on a mounted chart with its toolbar (test/chart-host.html;
+// the single chart page until chart 1.21.0) against the fake bridge (sample data only, never market data):
 //   npm run smoke:presets   (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks: the Colors panel's two preset groups (chart: bull, bear and background; indicator: every indicator color)
 // save, replace by name, pick, rename and delete, and survive a reload and a second tab; VWAP is no longer in the
 // Colors panel but in its gear, as are the levels', the IB's and the profile's colors, drawn at once; a VWAP color
 // saved before 1.9.0 survives a ground change and a reload (review R1); a chart preset brings its indicator preset
 // (the save row's "Indicator colors" select), a save never makes an indicator preset, a refused save writes nothing
-// and a full group keeps a link (review 2 S1, S2), and one deleted since is ignored; the order bar is the 1.5.2 bar
-// on the default ground and matches every other ground (review 1's 21 grounds: every text at full strength 4.5:1,
-// every dimmed control at least as strong as on the house bar, disarmed, armed and trading off); the Armed switch,
-// Buy and Flatten still work the same way. Screenshots of each go to SHOTS (default test/out).
+// and a full group keeps a link (review 2 S1, S2), and one deleted since is ignored; the toolbar follows every ground.
+// (1.21.0: the single chart page's order bar and its 21-ground contrast sweep went with that page.) Screenshots of each go
+// to SHOTS (default test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
+import { C, hostUrl, waitLive } from './chart-host.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -44,8 +44,7 @@ function offsetTo(hh, mm) {
 }
 async function startBridge(offset) {
   for (let port = BASE_PORT; port < BASE_PORT + 6; port++) {
-    const b = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--pin-off', '--test-controls', '--clock-offset=' + offset,
-      '--trading', '--trade-accounts=Sim101'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const b = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--pin-off', '--test-controls', '--clock-offset=' + offset], { stdio: ['ignore', 'pipe', 'pipe'] });
     let errText = '';
     b.stderr.on('data', d => { errText += d; });
     const ok = await new Promise(res => { b.stdout.once('data', () => res(true)); b.once('exit', () => res(false)); });
@@ -57,13 +56,12 @@ async function startBridge(offset) {
 
 const offset = offsetTo(11, 15);
 const br = await startBridge(offset);
-const URL = `http://localhost:${br.port}/live/single.html`;
+const URL = hostUrl(br.port);
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
-await ctx.addInitScript(() => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); });   // 1.13.0: answers the one NO STOP question with Send
 await ctx.addInitScript(`(() => { const realNow = Date.now; Date.now = () => realNow() + ${offset * 1000}; })();`);
 await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-const live = p => p.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 20000 }).then(() => p.waitForTimeout(600));
+const live = p => waitLive(p).then(() => p.waitForTimeout(600));
 async function openPage() {
   const p = await ctx.newPage();
   p.on('pageerror', e => fail('pageerror: ' + e.message));
@@ -83,87 +81,24 @@ const setBg = (p, hex) => p.evaluate(v => { const h = document.querySelector('.c
 const theme = p => p.evaluate(() => { const t = window.liveChart.getTheme(); return { up: t.up, down: t.down, bg: t.bg, vwap: t.vwap, vpPoc: t.vpPoc, vpRow: t.vpRow, vpValue: t.vpValue }; });
 const levelColor = (p, name) => p.evaluate(n => { const l = window.liveChart.getLevels().find(x => x.name === n); return l ? l.color : null; }, name);
 async function openGear(p, id) {
-  if (await p.isHidden('#indPanel')) await p.click('#indBtn');
-  await p.waitForSelector('#indPanel:not([hidden])');
+  if (await p.isHidden(C('indPanel'))) await p.click(C('indBtn'));
+  await p.waitForSelector(C('indPanel') + ':not([hidden])');
   if (!(await p.$(`.ind-set[data-id="${id}"]`))) {
     // one off this chart (the profile is off by default) waits in its folded group
     const cat = CE_CATS[id];
-    if (!(await p.$(`#indBody [data-act="gear"][data-id="${id}"]`)) && cat) await p.click(`#indBody [data-act="cat"][data-id="${cat}"]`);
-    await p.click(`#indBody [data-act="gear"][data-id="${id}"]`);
+    if (!(await p.$(`${C('indBody')} [data-act="gear"][data-id="${id}"]`)) && cat) await p.click(`${C('indBody')} [data-act="cat"][data-id="${cat}"]`);
+    await p.click(`${C('indBody')} [data-act="gear"][data-id="${id}"]`);
   }
   await p.waitForSelector(`.ind-set[data-id="${id}"]`);
 }
-const closeMenu = async p => { if (await p.isVisible('#indPanel')) { await p.keyboard.press('Escape'); await p.waitForTimeout(100); } };
+const closeMenu = async p => { if (await p.isVisible(C('indPanel'))) { await p.keyboard.press('Escape'); await p.waitForTimeout(100); } };
 const typeHex = async (p, sel, v) => { await p.fill(sel, v); await p.waitForTimeout(80); };
-/* the order bar's colors as drawn: the ground, the bar, Buy and Sell text and their buttons */
-const obar = p => p.evaluate(() => {
-  const cs = el => getComputedStyle(el);
-  const buy = cs(document.getElementById('buyMkt')), sell = cs(document.getElementById('sellMkt')), bar = cs(document.getElementById('obar'));
-  const arm = cs(document.getElementById('armBtn'));
-  return { ground: cs(document.querySelector('.obar-ground')).backgroundColor, bar: bar.backgroundColor, barText: bar.color,
-    buy: buy.color, buyBg: buy.backgroundColor, sell: sell.color, sellBg: sell.backgroundColor, arm: arm.color, armBg: arm.backgroundColor,
-    toolbar: cs(document.querySelector('.chart-live')).backgroundColor, scheme: bar.colorScheme };
-});
-/* an rgb()/rgba() over another rgb(), as it shows */
-const px = s => { const m = s.match(/[\d.]+/g).map(Number); return { r: m[0], g: m[1], b: m[2], a: m.length > 3 ? m[3] : 1 }; };
-const hexOf = s => '#' + ['r', 'g', 'b'].map(k => Math.round(px(s)[k]).toString(16).padStart(2, '0')).join('').toUpperCase();
-const overRgb = (top, under) => { const t = px(top), u = px(under); return '#' + ['r', 'g', 'b'].map(k => Math.round(t[k] * t.a + u[k] * (1 - t.a)).toString(16).padStart(2, '0')).join('').toUpperCase(); };
-
-/* Every text in the order bar and the status line, per ground and state, as review 1 measured it: the text over its
-   own background and what is behind it, faded by its opacity. States: disarmed and armed, each with the state row's
-   notes shown, and each with every control disabled (trading off). */
-const REVIEW_GROUNDS = ['#080B10', '#000000', '#1B2433', '#F5F7FA', '#FFFFFF', '#E0E0E0', '#D0D0D0', '#C8C8C8', '#BBBBBB', '#B0B0B0', '#A0A0A0',
-  '#808080', '#FFF8E1', '#FFE0E0', '#E8F5E9', '#E3F2FD', '#D0D8E0', '#F0E6FF', '#FFFF00', '#00FF00', '#FF00FF'];
-const contrastSweep = (p, grounds) => p.evaluate(grounds => {
-  const parse = s => { const m = s.match(/rgba?\(([^)]+)\)/); if (!m) return [0, 0, 0, 0]; const a = m[1].split(/[ ,\/]+/).filter(Boolean).map(Number); return [a[0], a[1], a[2], a.length > 3 ? a[3] : 1]; };
-  const over = (f, b) => { const a = f[3]; return [f[0] * a + b[0] * (1 - a), f[1] * a + b[1] * (1 - a), f[2] * a + b[2] * (1 - a), 1]; };
-  const lum = c => { const f = v => { v /= 255; return v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); }; return .2126 * f(c[0]) + .7152 * f(c[1]) + .0722 * f(c[2]); };
-  const cr = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
-  const backdrop = el => { const chain = []; for (let e = el.parentElement; e; e = e.parentElement) chain.push(e); let b = [255, 255, 255, 1]; for (const e of chain.reverse()) { const bg = parse(getComputedStyle(e).backgroundColor); if (bg[3] > 0) b = over(bg, b); } return b; };
-  const ownBg = (el, b) => { const bg = parse(getComputedStyle(el).backgroundColor); return bg[3] > 0 ? over(bg, b) : b; };
-  const opac = el => { let o = 1; for (let e = el; e && e !== document.body; e = e.parentElement) o *= +getComputedStyle(e).opacity; return o; };
-  const setBg = v => { const hex = document.querySelector('.ce-theme-panel input[data-hex="bg"]'); hex.value = v; hex.dispatchEvent(new Event('input', { bubbles: true })); };
-  const $ = id => document.getElementById(id);
-  const scan = () => [...document.querySelectorAll('.obar-ground, .obar-ground *, #statusMsg')].filter(e => e.offsetParent !== null || e.id === 'armBtn').flatMap(el => {
-    const own = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
-    if (!own && !/^(INPUT|SELECT)$/.test(el.tagName)) return [];
-    const fg = parse(getComputedStyle(el).color), bd = backdrop(el), bg = ownBg(el, bd), o = opac(el), fgc = over(fg, bg);
-    const final = o < 1 ? over([fgc[0], fgc[1], fgc[2], o], bd) : fgc, bgFinal = o < 1 ? over([bg[0], bg[1], bg[2], o], bd) : bg;
-    return [{ id: el.id || (typeof el.className === 'string' && el.className) || el.tagName, text: (el.textContent || el.value || '').trim().slice(0, 24), cr: +cr(final, bgFinal).toFixed(2), o: +o.toFixed(3) }];
-  });
-  const notes = on => {
-    $('oLegs').textContent = on ? 'No stop working' : ''; $('oLegs').classList.toggle('uncovered', on);
-    $('oOther').textContent = on ? 'Another account on MNQ: LONG 1' : ''; $('oOther').classList.toggle('live', on);
-    $('oAcctNote').textContent = on ? 'Orders go to Sim101' : ''; $('oAcctNote').classList.toggle('warn', on);
-    $('oCancel').textContent = on ? 'Cancelling 2 orders' : ''; $('oCancel').classList.toggle('away', on);
-    $('oOff').textContent = on ? 'Trading off: reason' : ''; $('oOff').hidden = !on;
-    $('oPos').innerHTML = on ? '<span class="long">LONG 1</span> @ 100.00 <span class="profit">+2.00 pt +$4.00</span> <span class="loss">-1.00 pt</span> <span class="short">SHORT</span>' : 'Flat';
-  };
-  const out = {};
-  for (const g of grounds) {
-    setBg(g);
-    const r = {};
-    for (const armed of [false, true]) {
-      if (($('armBtn').getAttribute('aria-checked') === 'true') !== armed) $('armBtn').click();
-      notes(true);
-      r[armed ? 'armed' : 'disarmed'] = scan();
-      const dis = [...$('obar').querySelectorAll('button, input, select')].filter(e => e !== $('oAcct'));
-      dis.forEach(e => { e.disabled = true; });
-      r[armed ? 'armed, trading off' : 'disarmed, trading off'] = scan();
-      dis.forEach(e => { e.disabled = false; });
-      notes(false);
-    }
-    if ($('armBtn').getAttribute('aria-checked') === 'true') $('armBtn').click();
-    out[g] = r;
-  }
-  setBg('#080B10');
-  return out;
-}, grounds);
+/* the toolbar as drawn: its ground and color scheme (it follows the chart's ground, 1.9.0) */
+const toolbarLook = p => p.evaluate(() => { const cs = getComputedStyle(document.querySelector('.chart-live')); return { toolbar: cs.backgroundColor, scheme: getComputedStyle(document.querySelector('.chart-live .bar')).colorScheme }; });
 
 /* A fresh browser profile at `origin` with only `seed` in its storage, loaded and live. */
 async function freshPage(seed) {
   const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  await c.addInitScript(() => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); });   // 1.13.0: answers the one NO STOP question with Send
   await c.addInitScript(`(() => { const realNow = Date.now; Date.now = () => realNow() + ${offset * 1000}; })();`);
   await c.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   const p = await c.newPage();
@@ -191,7 +126,6 @@ try {
   }
 
   const a = await openPage();
-  await a.waitForFunction(() => !document.getElementById('armBtn').disabled, null, { timeout: 15000 });
 
   /* ---------------- the Colors panel: two preset groups, VWAP gone from it */
   await openColors(a);
@@ -200,7 +134,7 @@ try {
     'two preset groups: Chart presets and Indicator presets');
   check((await a.textContent(group('chart') + ' .pr-empty')) === 'None saved yet.', 'none saved yet');
   check(/saved in this browser only/i.test(await a.textContent('.ce-theme-panel > .ce-note:last-child')), 'the panel says where presets are kept (this browser, until the shared store)');
-  const base = await obar(a);
+  const base = await toolbarLook(a);
   await shot(a, 'presets-colors-panel-dark-empty');
 
   /* ---------------- save a white chart look, then a dark one */
@@ -224,76 +158,35 @@ try {
   check((await a.textContent(group('chart') + ' [data-act="save"]')) === 'Replace', 'an existing name, any case: Replace');
   await a.fill(group('chart') + ' .pr-name-in', '');
 
-  /* ---------------- pick: White chart gives the light chart, the light toolbar and the light order bar */
+  /* ---------------- pick: White chart gives the light chart and the light toolbar */
   await a.click(rowBtn('chart', 'White chart', 'pick')); await a.waitForTimeout(250);
   let t = await theme(a);
   check(t.bg === '#F5F7FA' && t.up === '#1F6FB2' && t.down === '#6D28D9', 'picking White chart: its bull, bear and background: ' + JSON.stringify(t));
   check(JSON.stringify(await pressed(a, 'chart')) === '["White chart"]' && (await note(a, 'chart')) === 'Using White chart.', 'White chart in use');
   await shot(a, 'presets-colors-panel-light');
   await closeColors(a);
-  let ob = await obar(a);
-  check(ob.ground === 'rgb(245, 247, 250)' && ob.toolbar === 'rgb(245, 247, 250)' && ob.scheme === 'light', 'white chart, white top bar: the order bar ground follows the chart: ' + ob.ground);
-  const buyOn = overRgb(ob.buyBg, ob.bar), sellOn = overRgb(ob.sellBg, ob.bar);
-  check(U.contrast(hexOf(ob.buy), buyOn) >= 4.5 && U.contrast(hexOf(ob.sell), sellOn) >= 4.5 && U.contrast(hexOf(ob.barText), hexOf(ob.bar)) >= 7,
-    'light order bar: Buy ' + hexOf(ob.buy) + ' and Sell ' + hexOf(ob.sell) + ' read 4.5:1 on their buttons, text 7:1 (' + U.contrast(hexOf(ob.buy), buyOn).toFixed(2) + ', ' + U.contrast(hexOf(ob.sell), sellOn).toFixed(2) + ')');
-  check(px(ob.buy).g > px(ob.buy).r && px(ob.sell).r > px(ob.sell).g, 'Buy stays green, Sell red');
+  let ob = await toolbarLook(a);
+  check(ob.toolbar === 'rgb(245, 247, 250)' && ob.scheme === 'light', 'white chart, white top bar: the toolbar follows the chart: ' + JSON.stringify(ob));
   await a.mouse.move(700, 600);
   await shot(a, 'presets-light-top-bar');
-  // Armed on the light bar: deep red (1.13.0; amber before), readable, and it still arms and disarms the same way
-  await a.click('#armBtn'); await a.waitForTimeout(150);
-  ob = await obar(a);
-  check((await a.getAttribute('#armBtn', 'aria-checked')) === 'true' && U.contrast(hexOf(ob.arm), hexOf(ob.armBg)) >= 4.5 && await a.isVisible('#armPill'),
-    'Armed on the light bar: on, the ARMED pill shown, switch text ' + U.contrast(hexOf(ob.arm), hexOf(ob.armBg)).toFixed(2) + ':1 on ' + hexOf(ob.armBg));
-  await shot(a, 'presets-light-top-bar-armed');
-  // one market buy and a flatten, exactly as on the dark bar (Sim101 on the fake bridge)
-  await a.click('#buyMkt');
-  await a.waitForFunction(() => document.getElementById('oPos').textContent.startsWith('LONG 1'), null, { timeout: 8000 }).then(() => check(true, 'Buy MKT on the light bar: long 1'), () => fail('Buy MKT on the light bar did not fill'));
-  await a.click('#flattenBtn');
-  await a.waitForFunction(() => document.getElementById('oPos').textContent === 'Flat', null, { timeout: 8000 }).then(() => check(true, 'Flatten on the light bar: flat'), () => fail('Flatten on the light bar did not flatten'));
-  await a.click('#armBtn'); await a.waitForTimeout(100);
 
-  /* ---------------- the dark grounds: the order bar is exactly the 1.5.2 bar */
+  /* ---------------- the dark grounds: the toolbar as before the presets were used */
   await openColors(a);
   await a.click(rowBtn('chart', 'Dark desk', 'pick')); await a.waitForTimeout(200);
-  ob = await obar(a);
-  check(ob.ground === 'rgb(8, 11, 16)' && ob.bar === 'rgb(15, 21, 29)' && ob.buy === 'rgb(61, 220, 151)' && ob.sell === 'rgb(255, 122, 122)'
-    && ob.buyBg === 'rgba(61, 220, 151, 0.08)' && ob.sellBg === 'rgba(255, 122, 122, 0.08)', 'dark ground: the 1.5.2 order bar (#080B10, #0F151D, Buy #3DDC97, Sell #FF7A7A): ' + JSON.stringify(ob));
-  check(JSON.stringify(ob) === JSON.stringify(base), 'dark ground: the order bar exactly as before the presets were used');
+  ob = await toolbarLook(a);
+  check(ob.toolbar === 'rgb(8, 11, 16)' && JSON.stringify(ob) === JSON.stringify(base), 'dark ground: the toolbar exactly as before the presets were used: ' + JSON.stringify(ob));
   // every other ground: the top bar matches it (Anthony: Black a black bar, Blue-grey a blue-grey one), as chromeColors
   const rgbOf = h => { const c = U.parseColor(h); return 'rgb(' + c.r + ', ' + c.g + ', ' + c.b + ')'; };
   for (const g of ['#000000', '#1B2433', '#888888', '#FFF8E1']) {
     await setBg(a, g); await a.waitForTimeout(60);
-    const o = await obar(a), v = U.chromeColors(U.buildTheme({ bg: g }));
-    check(o.ground === rgbOf(v['--bg']) && o.toolbar === o.ground && o.bar === rgbOf(v['--s2']) && o.buy === rgbOf(v['--buy']) && o.sell === rgbOf(v['--sell']) && o.scheme === v['--scheme'],
-      g + ': the toolbar and the order bar match the ground (' + v['--bg'] + ', bar ' + v['--s2'] + ', Buy ' + v['--buy'] + ', Sell ' + v['--sell'] + ')');
+    const o = await toolbarLook(a), v = U.chromeColors(U.buildTheme({ bg: g }));
+    check(o.toolbar === rgbOf(v['--bg']) && o.scheme === v['--scheme'], g + ': the toolbar matches the ground (' + v['--bg'] + ', ' + v['--scheme'] + ')');
   }
   await a.click(rowBtn('chart', 'Dark desk', 'pick')); await a.waitForTimeout(100);
-  check(JSON.stringify(await obar(a)) === JSON.stringify(base), 'back on the default ground: the order bar exactly as before');
+  check(JSON.stringify(await toolbarLook(a)) === JSON.stringify(base), 'back on the default ground: the toolbar exactly as before');
 
-  /* ---------------- review 1's 21 grounds: every text at full strength 4.5:1, every dimmed control at least as strong
-     as on the house bar (disarmed Buy 2.85, Sell 2.28, Flatten 4.01; trading off Buy 2.51), in every state */
   await closeColors(a);
-  const sweep = await contrastSweep(a, REVIEW_GROUNDS);
-  fs.writeFileSync(path.join(SHOTS, 'presets-contrast.json'), JSON.stringify(sweep));
-  const house = sweep['#080B10'], weak = [], dimWeak = [], mins = {};
-  for (const g of REVIEW_GROUNDS) for (const st of Object.keys(house)) {
-    const els = sweep[g][st];
-    if (els.length !== house[st].length) { weak.push(g + ' ' + st + ': ' + els.length + ' texts, ' + house[st].length + ' on the house bar'); continue; }
-    els.forEach((e, i) => {
-      const h = house[st][i], kind = e.o < 1 ? 'dim' : 'full', key = st + (kind === 'dim' ? ' (dimmed)' : '');
-      if (e.id !== h.id || (e.o < 1) !== (h.o < 1)) { weak.push(g + ' ' + st + ' #' + i + ' ' + e.id + ' vs ' + h.id); return; }
-      if (kind === 'full' && e.cr < 4.5) weak.push(g + ' ' + st + ' ' + e.id + ' "' + e.text + '" ' + e.cr);
-      if (kind === 'dim' && e.cr < h.cr) dimWeak.push(g + ' ' + st + ' ' + e.id + ' ' + e.cr + ' < house ' + h.cr);
-      if (!mins[key] || e.cr < mins[key].cr) mins[key] = { cr: e.cr, g, id: e.id };
-    });
-  }
-  check(weak.length === 0, 'full strength: every order bar and status text reads 4.5:1 or more on the 21 grounds in 4 states: ' + weak.slice(0, 6).join('; '));
-  check(dimWeak.length === 0, 'dimmed (disarmed, trading off): every control at least as strong as on the house bar on the 21 grounds: ' + dimWeak.slice(0, 6).join('; '));
-  const dimHouse = st => Object.fromEntries(house[st].filter(e => e.o < 1).map(e => [e.id + (e.text ? ' ' + e.text : ''), e.cr]));
-  console.log('       house bar dimmed, disarmed: ' + JSON.stringify(dimHouse('disarmed')));
-  console.log('       house bar dimmed, trading off: ' + JSON.stringify(dimHouse('disarmed, trading off')));
-  for (const k of Object.keys(mins)) console.log('       min ' + k + ': ' + mins[k].cr + ' (' + mins[k].g + ', ' + mins[k].id + ')');
-  // the top bar on the four grounds and two custom ones, disarmed
+  // the top bar on the four grounds and two custom ones
   for (const [g, name] of [['#080B10', 'dark'], ['#000000', 'black'], ['#1B2433', 'blue-grey'], ['#F5F7FA', 'light'], ['#808080', 'custom-808080'], ['#FFF8E1', 'custom-FFF8E1']]) {
     await setBg(a, g); await a.mouse.move(700, 600); await a.waitForTimeout(200);
     await a.screenshot({ path: path.join(SHOTS, 'presets-top-bar-' + name + '.png'), clip: { x: 0, y: 0, width: 1440, height: 330 } });

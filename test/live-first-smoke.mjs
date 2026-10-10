@@ -1,4 +1,5 @@
-// 1.8.0 smoke: the served window and the session table (ChartBridge 0.3.5) on the real page against the fake bridge's tape
+// 1.8.0 smoke: the served window and the session table (ChartBridge 0.3.5) on a mounted chart with its own toolbar
+// (test/chart-host.html; the single chart page until chart 1.21.0) against the fake bridge's tape
 // (sample data only, never market data). The market trades on during every load (150 trades a second, bursts of 450).
 //   npm run smoke:live-first      (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks, on NQ Range 40 at 10:45 ET on a weekday: the subscribe asks for the served window and the profile; the page's
@@ -7,7 +8,7 @@
 // equals the tape's volume at every price, for the session and for RTH. A reload and a second page get the same window
 // from ChartBridge's memory (NinjaTrader asked once) and draw the same first bar. A 1m page gets the exact profile with no
 // tick history. A table still building: the note "building, from HH:MM ET" and no VWAP on range bars, then the pushed
-// profile makes both exact; a market order during a Range load fills. A quiet market: no range bar until one is proven,
+// profile makes both exact. A quiet market: no range bar until one is proven,
 // with a note. The Sunday 18:00 open. The 18:00 rollover on an open page, and a reload after it. An old bridge: a full load.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -15,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
+import { C as H, hostUrl, waitLive } from './chart-host.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -80,7 +82,7 @@ async function context(browser, offset, settings, ranges) {
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   return ctx;
 }
-const live = p => p.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 30000 });
+const live = p => waitLive(p, 30000);
 async function openPage(ctx, url) {
   const p = await ctx.newPage();
   p.on('pageerror', e => fail('pageerror: ' + e.message));
@@ -91,10 +93,10 @@ async function openPage(ctx, url) {
 }
 const subscribes = p => p.evaluate(() => window.__rec.sent.filter(m => m.type === 'subscribe'));
 async function profileOn(p, rth) {
-  await p.click('#indBtn');
-  if (!(await p.evaluate(() => window.liveChart.getLayers().vp))) { await p.fill('#indQ', 'profile'); await p.keyboard.press('Enter'); await p.fill('#indQ', ''); }
-  await p.click('#indBody [data-act="gear"][data-id="vp"]');
-  await p.click(`#indBody [data-act="opt"][data-id="vp"][data-v="${rth ? 'rth' : 'full'}"]`);
+  await p.click(H('indBtn'));
+  if (!(await p.evaluate(() => window.liveChart.getLayers().vp))) { await p.fill(H('indQ'), 'profile'); await p.keyboard.press('Enter'); await p.fill(H('indQ'), ''); }
+  await p.click(H('indBody') + ' [data-act="gear"][data-id="vp"]');
+  await p.click(`${H('indBody')} [data-act="opt"][data-id="vp"][data-v="${rth ? 'rth' : 'full'}"]`);
   await p.keyboard.press('Escape');
 }
 /* Hold the market so the page and the tape can be compared at rest. */
@@ -151,9 +153,10 @@ const exact = (p, br) => p.evaluate(async pt => {
     for (const [q, v] of want) if (!bad && got.get(q) !== v) bad = 'price ' + q * D.tick + ': ' + got.get(q) + ' vs ' + v;
     out.vp = { rth: vpRth, total: vpTotal, rows: got.size, bad };
   }
-  out.vpNote = document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent;
-  out.rangeNote = document.getElementById('rangeNote').hidden ? '' : document.getElementById('rangeNote').textContent;
-  out.legendVw = document.getElementById('lgVw').textContent;
+  out.vpNote = document.querySelector('[id$="-vpNote"]').hidden ? '' : document.querySelector('[id$="-vpNote"]').textContent;
+  out.rangeNote = document.querySelector('[id$="-rangeNote"]').hidden ? '' : document.querySelector('[id$="-rangeNote"]').textContent;
+  const vwLast = window.liveChart.bars().length ? window.liveChart.vwapAt(window.liveChart.bars().length - 1) : null;
+  out.legendVw = vwLast === null ? '-' : U.fmtPrice(vwLast, 2);           // the chart's VWAP at its last bar (the legend's, until 1.16.0)
   return out;
 }, br.port);
 const books = br => control(br.port, 'books');
@@ -168,7 +171,7 @@ try {
     const br = await startBridge(off, ['--live-first', '--tick-rate=4', '--live-rate=150', '--window-ms=300']);
     const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
     const t0 = Date.now();
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const p = await openPage(ctx, hostUrl(br.port));
     note('live ' + (Date.now() - t0) + ' ms after opening the page');
     const sub = (await subscribes(p))[0];
     check(sub.liveFirst === true && sub.profile === true && sub.sub > 0 && sub.tickHours > 0, 'the subscribe asks for the served window and the profile: ' + JSON.stringify(sub));
@@ -203,10 +206,10 @@ try {
     check(c.firstBar === a.firstBar && !c.barsBad && c.bars >= a.bars && c.storeBad < 0, 'reload: the bars start where they started (' + hm(c.firstBar) + ' ET) and are exact (' + c.bars + ' bars)');
     check(c.vp && !c.vp.bad, 'reload: the profile is exact');
     await p.waitForFunction(() => { const D = window.liveData(); return !!D.delta; }, null, { timeout: 10000 }).catch(() => {});
-    const d1 = await p.evaluate(() => { const D = window.liveData(); return { on: !!D.delta, by: D.deltaCov && D.deltaCov.by, legend: document.getElementById('lgDl') ? document.getElementById('lgDl').textContent : '' }; });
+    const d1 = await p.evaluate(() => { const D = window.liveData(); return { on: !!D.delta, by: D.deltaCov && D.deltaCov.by }; });
     check(d1.on && (d1.by === 'live' || d1.by === 'first'), 'reload from memory: the delta pane counts again from the reload (a page reload is a new page: ' + JSON.stringify(d1) + ')');
     // a second page
-    const p2 = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const p2 = await openPage(ctx, hostUrl(br.port));
     const d = await exact(p2, br);
     b = await books(br);
     check(b.NQ.asked === 1 && b.NQ.served === 2 && d.firstBar === a.firstBar && !d.barsBad, 'a second page: from memory too, the same first bar (' + JSON.stringify(b.NQ) + ')');
@@ -216,12 +219,12 @@ try {
     await control(br.port, 'drop');
     await p.waitForTimeout(300); await live(p);
     await p.waitForFunction(() => { const D = window.liveData(); return !!D.delta && D.deltaCov && D.deltaCov.journal === true; }, null, { timeout: 10000 }).catch(() => {});
-    const d2 = await p.evaluate(() => { const D = window.liveData(); return { on: !!D.delta, journal: !!(D.deltaCov && D.deltaCov.journal), legend: document.getElementById('lgDl') ? document.getElementById('lgDl').textContent : '' }; });
+    const d2 = await p.evaluate(() => { const D = window.liveData(); return { on: !!D.delta, journal: !!(D.deltaCov && D.deltaCov.journal) }; });
     b = await books(br);
-    check(d2.on && d2.journal && b.NQ.asked === 1, 'a reconnect served from memory (NinjaTrader not asked) is a later load for the delta: its count carries on ("' + d2.legend + '")');
+    check(d2.on && d2.journal && b.NQ.asked === 1, 'a reconnect served from memory (NinjaTrader not asked) is a later load for the delta: its count carries on (' + JSON.stringify(d2) + ')');
     // a 15s view from the same window (no load), bars from the first whole one, with VWAP
     const subs0 = (await subscribes(p)).length;
-    await p.click('#tfSeg [data-v="s15"]');
+    await p.click(H('tfSeg') + ' [data-v="s15"]');
     await p.waitForTimeout(300);
     const s = await exact(p, br);
     check((await subscribes(p)).length === subs0 && s.bars > 100 && !s.barsBad && s.firstBar > s.first && s.firstBar - s.first <= 15 && s.vwBars === s.bars, '15s: no new load, bars from the first whole one (' + hm(s.firstBar) + ' ET), exact with VWAP' + (s.barsBad ? ': ' + s.barsBad : ''));
@@ -229,7 +232,7 @@ try {
     await ctx.close();
     // a 1m page: the profile from the table, no tick history
     const ctx2 = await context(browser, off, { root: 'NQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
-    const m = await openPage(ctx2, `http://localhost:${br.port}/live/single.html`);
+    const m = await openPage(ctx2, hostUrl(br.port));
     await profileOn(m, false);
     await hold(m, br, true);
     const e = await exact(m, br);
@@ -243,33 +246,25 @@ try {
 
   /* ---------------- the table still building (ChartBridge started mid-session), and an order during a Range load */
   {
-    console.log('A table still building; an order while Range loads');
+    console.log('A table still building; Range loads');
     const off = offsetWhere(10, 45, 0, weekday);
     const br = await startBridge(off, ['--live-first', '--tick-rate=2', '--live-rate=150', '--window-ms=1500', '--table-building=9000', '--profile-roots=NQ,MNQ', '--trading', '--trade-accounts=Sim101', '--max-qty=NQ:2']);
     const ctx = await context(browser, off, { root: 'NQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const p = await openPage(ctx, hostUrl(br.port));
     await profileOn(p, false);
     await hold(p, br, true);
     const a = await exact(p, br);
     check(/^Volume profile building, from \d+:\d\d ET/.test(a.vpNote), 'the note: "' + a.vpNote + '"');
     await hold(p, br, false);
-    // Range: a new window load (1.5 s); a market order during it
-    await p.waitForFunction(() => !document.getElementById('obar').hidden && !document.getElementById('buyMkt').disabled, null, { timeout: 10000 });
-    await p.click('#armBtn');
-    await p.click('#tfSeg [data-v="range"]');
-    const pill = await p.textContent('#connPill');
-    await p.click('#buyMkt');
-    await p.waitForFunction(() => document.getElementById('oPos').textContent.startsWith('LONG 1'), null, { timeout: 5000 }).catch(() => {});
-    const msg = await p.textContent('#statusMsg');
-    check(pill === 'LOADING' && (await p.textContent('#oPos')).startsWith('LONG 1'), 'a market buy while Range loads fills (pill ' + pill + ', "' + msg + '")');
-    await p.click('#flattenBtn');
-    await p.waitForFunction(() => document.getElementById('oPos').textContent === 'Flat', null, { timeout: 5000 }).catch(() => {});
-    check(await p.textContent('#oPos') === 'Flat', 'and Flatten, still loading or live');
-    await p.click('#armBtn');
+    // Range: a new window load (1.5 s). (Until 1.21.0 a market order on the single chart page's order bar was checked to
+    // fill during it; the workspace's ticket never waits on a chart's load.)
+    await p.click(H('tfSeg') + ' [data-v="range"]');
+    const pill = await p.evaluate(() => document.querySelector('[id$="-badge"]').dataset.conn);
+    check(pill === 'loading', 'Range on: a new window load (the badge says ' + pill + ')');
     await live(p);
     await hold(p, br, true);
     const r = await exact(p, br);
-    check(r.bars > 0 && !r.barsBad && r.vwBars === 0 && r.legendVw === '-', 'range bars exact, without VWAP while the table builds (legend "' + r.legendVw + '")' + (r.barsBad ? ': ' + r.barsBad : ''));
+    check(r.bars > 0 && !r.barsBad && r.vwBars === 0 && r.legendVw === '-', 'range bars exact, without VWAP while the table builds (the chart\'s VWAP "' + r.legendVw + '")' + (r.barsBad ? ': ' + r.barsBad : ''));
     await hold(p, br, false);
     await p.waitForFunction(() => window.__rec.profiles >= 3, null, { timeout: 15000 }).catch(() => {});
     await hold(p, br, true);
@@ -281,19 +276,20 @@ try {
     await hold(p, br, false);
     // an instrument not in profileRoots: no backfill, the profile counts from the live trades, and says since when
     const ctxE = await context(browser, off, { root: 'MES', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
-    const e = await openPage(ctxE, `http://localhost:${br.port}/live/single.html`);
+    const e = await openPage(ctxE, hostUrl(br.port));
     await profileOn(e, false);
-    const en = await e.evaluate(() => document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent);
+    const en = await e.evaluate(() => document.querySelector('[id$="-vpNote"]').hidden ? '' : document.querySelector('[id$="-vpNote"]').textContent);
     check(/^Volume profile since \d+:\d\d ET: .*not in its profileRoots/.test(en), 'MES, not in profileRoots: "' + en + '"');
     await ctxE.close();
     // a data connection drop: the live page says the profile is missing trades, and so does a reload
     await control(br.port, 'feed-drop');
     await p.waitForTimeout(400);
-    const dn = await p.evaluate(() => document.getElementById('vpNote').textContent);
+    const dn = await p.evaluate(() => document.querySelector('[id$="-vpNote"]').textContent);
     await p.reload(); await live(p);
-    const dn2 = await p.evaluate(() => document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent);
+    const dn2 = await p.evaluate(() => document.querySelector('[id$="-vpNote"]').hidden ? '' : document.querySelector('[id$="-vpNote"]').textContent);
     check(/^Volume profile missing trades: the data connection was down at \d+:\d\d ET/.test(dn) && dn2 === dn, 'a feed drop: "' + dn + '", and the same after a reload (never whole again)');
-    const vwn = await p.evaluate(() => ({ note: document.getElementById('rangeNote').hidden ? '' : document.getElementById('rangeNote').textContent, vw: document.getElementById('lgVw').textContent }));
+    const vwn = await p.evaluate(() => { const n = document.querySelector('[id$="-rangeNote"]'), c = window.liveChart, v = c.bars().length ? c.vwapAt(c.bars().length - 1) : null;
+      return { note: n.hidden ? '' : n.textContent, vw: v === null ? '-' : v.toFixed(2) }; });
     check(/^VWAP and range bars after \d+:\d\d ET miss the trades while the data connection was down/.test(vwn.note) && vwn.vw !== '-', 'review 3 S-C: after the drop the range VWAP stays (' + vwn.vw + ') and says what it misses: "' + vwn.note + '"');
     await ctx.close();
     br.kill();
@@ -306,7 +302,7 @@ try {
     const br = await startBridge(off, ['--live-first', '--range-hours=0.02', '--window-ms=100']);
     await control(br.port, 'hold', { root: 'NQ' });
     const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' }, { NQ: 200 });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const p = await openPage(ctx, hostUrl(br.port));
     await p.waitForTimeout(600);
     const a = await exact(p, br);
     check(a.bars === 0 && /^Range bars start where they are proven/.test(a.rangeNote), 'no range bar yet, and the note: "' + a.rangeNote + '"');
@@ -326,7 +322,7 @@ try {
     const off = offsetWhere(18, 5, 0, sunday);
     const br = await startBridge(off, ['--live-first', '--calendar', '--live-rate=100']);
     const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const p = await openPage(ctx, hostUrl(br.port));
     await profileOn(p, false);
     await hold(p, br, true);
     const a = await exact(p, br);
@@ -343,7 +339,7 @@ try {
     const off = offsetWhere(17, 59, 48, midWeek);
     const br = await startBridge(off, ['--live-first', '--calendar', '--live-rate=100']);
     const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const p = await openPage(ctx, hostUrl(br.port));
     await profileOn(p, false);
     await p.waitForFunction(() => window.ChartEngine.util.zoneSeconds(Date.now() / 1000) % 86400 > 64803, null, { timeout: 30000, polling: 200 });
     await hold(p, br, true);
@@ -368,7 +364,7 @@ try {
     const br = await startBridge(off, ['--live-first', '--live-rate=100']);
     await control(br.port, 'features', { liveFirst: '0' });
     const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const p = await openPage(ctx, hostUrl(br.port));
     await profileOn(p, false);
     await hold(p, br, true);
     const a = await exact(p, br);

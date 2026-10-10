@@ -1,7 +1,8 @@
 // The header room and Jump to live (chart 1.14.0, Anthony live on 1.13.0: "price keeps running up into the header",
 // and the Jump to live pill over the plot) against the fake bridge (sample data; nothing reaches a broker), in Chromium:
 //   - a trend of +60 points in two minutes on MNQ (the fake's random walk held, a trade every 200 ms), watched on a big
-//     workspace panel (full header) and a small one (the short header), then on /single.html: the last price, the
+//     workspace panel (full header) and a small one (the short header), then on a mounted chart with its own toolbar
+//     (test/chart-host.html; /single.html until chart 1.21.0): the last price, the
 //     forming bar's high and every visible high stay below the header plus a margin, all the time, by themselves;
 //   - the bars are never squashed more than the move needs: the scale is the fit of the bars in view (eased);
 //   - with the price scale squashed by hand (a drag on the price axis) the auto-fit takes over once the price nears
@@ -18,6 +19,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { C as H, hostUrl, waitLive } from './chart-host.mjs';
 
 const require = createRequire(import.meta.url);
 const CE = require('../src/chart-engine.js');
@@ -38,18 +40,20 @@ async function shot(page, name) {
   await page.screenshot({ path: file });
   if (SHOTS) fs.copyFileSync(file, path.join(SHOTS, name));
 }
-let bridge = null;
-async function startBridge() {
-  bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--trading', '--trade-accounts=Sim101', '--test-controls',
-    '--version=0.3.8', '--data-037', '--live-rate=40', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
-  await new Promise(r => bridge.stdout.once('data', r));
+const bridges = [];
+let cport = PORT;                                     // the bridge the trend drives
+async function startBridge(port, pin) {               // pin: the workspace's PIN; a mounted chart never has it (PIN off)
+  const b = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--trading', '--trade-accounts=Sim101', '--test-controls',
+    '--version=0.3.8', '--data-037', '--live-rate=40', pin ? '--test-pin=' + TEST_PIN : '--pin-off'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  bridges.push(b);
+  await new Promise(r => b.stdout.once('data', r));
 }
-const control = async (what, q) => (await fetch(`http://127.0.0.1:${PORT}/test/${what}?` + new URLSearchParams(q || {}), { method: 'POST' })).json();
+const control = async (what, q) => (await fetch(`http://127.0.0.1:${cport}/test/${what}?` + new URLSearchParams(q || {}), { method: 'POST' })).json();
 async function openPage(ctx, url) {
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
   await page.goto(url);
-  await page.waitForFunction(() => document.getElementById('connPill') || document.getElementById('wsConn') || document.querySelector('.cb-pin-key'), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('wsConn') || document.querySelector('.cb-pin-key'), null, { timeout: 15000 });
   if (await page.$('.cb-pin-key')) await enterPin(page, TEST_PIN);
   return page;
 }
@@ -77,7 +81,7 @@ const look = (page, sel) => page.evaluate(sel => {
       icon: b ? { x: b.left - box.left, y: b.top - box.top, w: b.width, h: b.height, title: btn.title, plotW: w } : null,
     };
   };
-  if (sel === 'single') return [one(window.liveChart, document.querySelector('.chart-live'))];
+  if (sel === 'host') return [one(window.liveChart, document.querySelector('.chart-live'))];
   return window.workspace.panels().filter(p => p.type === 'chart' && p.root === 'MNQ').map(p => Object.assign(one(window.workspace.chart(p.id), document.querySelector(`.ws-panel[data-id="${p.id}"]`)), { id: p.id, tf: p.tf }));
 }, sel);
 
@@ -98,7 +102,7 @@ async function trend(from, onSample, pts = TREND_PTS, secs = TREND_SECS) {
 
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 try {
-  await startBridge();
+  await startBridge(PORT, true);
   const L = Math.round((await control('hold', { root: 'MNQ' })).last);
   await control('price', { root: 'MNQ', p: L });
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1 });
@@ -167,62 +171,68 @@ try {
   check(locks.length > 0 && locks.every(Boolean), 'every workspace chart has the lock in its corner under the price axis');
   await ctx.close();
 
-  /* ================================================================ /single.html: the same trend, then End */
-  console.log('/single.html 1366x768');
+  /* ================================================================ a mounted chart (the single chart page until 1.21.0): the same
+     trend, then End. Its own bridge (the PIN off), its price where the workspace's trend left MNQ */
+  console.log('a mounted chart (test/chart-host.html) 1366x768');
+  await startBridge(PORT + 1, false);
+  cport = PORT + 1;
+  await control('hold', { root: 'MNQ' }); await control('price', { root: 'MNQ', p: last1 });
   const ctx2 = await browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1 });
   await ctx2.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-  const sp = await openPage(ctx2, `http://localhost:${PORT}/live/single.html`);
-  await sp.waitForFunction(() => /LIVE/.test((document.getElementById('connPill') || {}).textContent || '') && window.liveChart && window.liveChart.lastBar(), null, { timeout: 30000 });
-  await sp.click('#tfSeg [data-v="m1"]'); await sp.waitForTimeout(1500);
+  const sp = await ctx2.newPage();
+  sp.on('pageerror', e => fail('page error: ' + e.message));
+  await sp.goto(hostUrl(PORT + 1));
+  await waitLive(sp, 30000);
+  await sp.waitForFunction(() => window.liveChart && window.liveChart.lastBar(), null, { timeout: 30000 });
+  await sp.click(H('tfSeg') + ' [data-v="m1"]'); await sp.waitForTimeout(1500);
   const sbad = []; let sworst = Infinity, ssq = 0;
   await trend(last1, async f => {
-    const [x] = await look(sp, 'single');
+    const [x] = await look(sp, 'host');
     const top = x.header + MARGIN;
     if (x.yLast < top || x.yHigh < top || x.yVis < top || x.yLast > x.plotH) sbad.push(Math.round(f * 100) + '%: ' + JSON.stringify({ header: Math.round(x.header), last: Math.round(x.yLast), high: Math.round(x.yHigh), vis: Math.round(x.yVis) }));
     sworst = Math.min(sworst, Math.min(x.yLast, x.yHigh, x.yVis) - x.header);
     if (x.auto) ssq = Math.max(ssq, x.squash);
   });
-  check(sbad.length === 0, 'single: through the trend everything stayed below the header (closest ' + Math.round(sworst) + ' px)' + (sbad.length ? ': ' + sbad.slice(0, 4).join('; ') : ''));
-  check(ssq <= 1.1, 'single: never squashed more than needed (' + ssq.toFixed(3) + ')');
-  await shot(sp, 'headroom-single-1366-after-trend.png');
+  check(sbad.length === 0, 'mounted chart: through the trend everything stayed below the header (closest ' + Math.round(sworst) + ' px)' + (sbad.length ? ': ' + sbad.slice(0, 4).join('; ') : ''));
+  check(ssq <= 1.1, 'mounted chart: never squashed more than needed (' + ssq.toFixed(3) + ')');
+  await shot(sp, 'headroom-chart-1366-after-trend.png');
   // scroll back: the icon; End goes back to live
-  const cb = await sp.locator('#chart').boundingBox();
+  const cb = await sp.locator(H('chart')).boundingBox();
   await sp.mouse.move(cb.x + cb.width * 0.3, cb.y + cb.height * 0.4); await sp.mouse.down();
   await sp.mouse.move(cb.x + cb.width * 0.7, cb.y + cb.height * 0.4, { steps: 6 }); await sp.mouse.up();
   await sp.mouse.move(cb.x + 40, cb.y + cb.height + 20); await sp.waitForTimeout(500);
-  let [x] = await look(sp, 'single');
-  check(!x.live && x.icon && x.icon.x >= x.icon.plotW && x.icon.y < 60 && x.icon.title === 'Jump to live (End)', 'single: scrolled back, the icon at the top of the price scale: ' + JSON.stringify(x.icon));
-  await shot(sp, 'headroom-single-jump-to-live.png');
-  await sp.focus('#chart'); await sp.keyboard.press('End'); await sp.waitForTimeout(500);
-  [x] = await look(sp, 'single');
+  let [x] = await look(sp, 'host');
+  check(!x.live && x.icon && x.icon.x >= x.icon.plotW && x.icon.y < 60 && x.icon.title === 'Jump to live (End)', 'mounted chart: scrolled back, the icon at the top of the price scale: ' + JSON.stringify(x.icon));
+  await shot(sp, 'headroom-chart-jump-to-live.png');
+  await sp.focus(H('chart')); await sp.keyboard.press('End'); await sp.waitForTimeout(500);
+  [x] = await look(sp, 'host');
   check(x.live && !x.icon, 'End: following live again, the icon gone');
   // the price scale lock (Anthony, review D2): in the corner under the price axis, saved per chart
-  const lockAt = await sp.evaluate(() => { const l = document.querySelector('#chart .ce-lock'), b = document.getElementById('chart').getBoundingClientRect(), r = l.getBoundingClientRect();
-    return { inCorner: r.left >= b.right - 78 && r.right <= b.right && r.top >= b.bottom - 26 && r.bottom <= b.bottom, pressed: l.getAttribute('aria-pressed'), title: l.title }; });
+  const lockAt = await sp.evaluate(sel => { const l = document.querySelector(sel + ' .ce-lock'), b = document.querySelector(sel).getBoundingClientRect(), r = l.getBoundingClientRect();
+    return { inCorner: r.left >= b.right - 78 && r.right <= b.right && r.top >= b.bottom - 26 && r.bottom <= b.bottom, pressed: l.getAttribute('aria-pressed'), title: l.title }; }, H('chart'));
   check(lockAt.inCorner && lockAt.pressed === 'false', 'a lock in the corner under the price axis (no tag ever goes there), unlocked by default: ' + JSON.stringify(lockAt));
-  await sp.click('#chart .ce-lock');
+  await sp.click(H('chart') + ' .ce-lock');
   check((await sp.evaluate(() => JSON.parse(localStorage.getItem('live-scale-lock-v1') || '{}').main)) === true, 'a click locks it, saved for this chart');
   await sp.mouse.move(cb.x + cb.width - 30, cb.y + cb.height * 0.4); await sp.mouse.down();
   await sp.mouse.move(cb.x + cb.width - 30, cb.y + cb.height * 0.4 - 130, { steps: 8 }); await sp.mouse.up();
   await sp.mouse.move(cb.x + 40, cb.y + cb.height + 20); await sp.waitForTimeout(300);
-  const lastNow = (await look(sp, 'single'))[0].last;
+  const lastNow = (await look(sp, 'host'))[0].last;
   await trend(lastNow, async () => {}, 30, 8);
-  [x] = await look(sp, 'single');
+  [x] = await look(sp, 'host');
   check(!x.auto, 'locked: the zoom set by hand is kept through +30 points (price may leave the view: last at ' + Math.round(x.yLast) + ' px)');
-  await sp.focus('#chart'); await sp.keyboard.press('End'); await sp.waitForTimeout(500);
-  [x] = await look(sp, 'single');
-  check(x.auto && await sp.getAttribute('#chart .ce-lock', 'aria-pressed') === 'true', 'End fits it again; the lock stays on');
-  await shot(sp, 'headroom-single-lock.png');
-  await sp.reload(); await sp.waitForFunction(() => document.getElementById('connPill') || document.querySelector('.cb-pin-key'));
-  if (await sp.$('.cb-pin-key')) await enterPin(sp, TEST_PIN);
+  await sp.focus(H('chart')); await sp.keyboard.press('End'); await sp.waitForTimeout(500);
+  [x] = await look(sp, 'host');
+  check(x.auto && await sp.getAttribute(H('chart') + ' .ce-lock', 'aria-pressed') === 'true', 'End fits it again; the lock stays on');
+  await shot(sp, 'headroom-chart-lock.png');
+  await sp.reload(); await waitLive(sp, 30000);
   await sp.waitForFunction(() => window.liveChart && window.liveChart.lastBar(), null, { timeout: 30000 });
-  check(await sp.getAttribute('#chart .ce-lock', 'aria-pressed') === 'true', 'locked after a reload');
-  await sp.click('#chart .ce-lock');
-  check((await sp.evaluate(() => JSON.parse(localStorage.getItem('live-scale-lock-v1') || '{}').main)) === undefined && (await look(sp, 'single'))[0].auto, 'unlocked: saved, the auto-fit on');
+  check(await sp.getAttribute(H('chart') + ' .ce-lock', 'aria-pressed') === 'true', 'locked after a reload');
+  await sp.click(H('chart') + ' .ce-lock');
+  check((await sp.evaluate(() => JSON.parse(localStorage.getItem('live-scale-lock-v1') || '{}').main)) === undefined && (await look(sp, 'host'))[0].auto, 'unlocked: saved, the auto-fit on');
   await ctx2.close();
 } finally {
   await browser.close();
-  if (bridge) bridge.kill();
+  for (const b of bridges) b.kill();
 }
 console.log(`\n${checks - errors.length}/${checks} checks passed`);
 if (errors.length) { console.error(errors.length + ' failed'); process.exit(1); }

@@ -127,7 +127,7 @@ try {
   await page.click('#wsSet'); await wait(400);
   for (const id of ['wsDeskSec', 'wsStratSec', 'wsTypesSec']) check(!(await visible(page, '#' + id)), 'no ' + id + ' in Settings');
   for (const id of ['merge', 'accept', 'reject']) check(!(await visible(page, `#wsHotkeys .hk-row[data-hk="${id}"]`)), 'no ' + id + ' key in Settings');
-  check((await page.textContent('#wsHkWhere')) === 'the same keys as the single chart page', 'the hotkeys are this browser\'s, as in 1.15');
+  check((await page.textContent('#wsHkWhere')) === 'kept in this browser', 'the hotkeys are this browser\'s, as in 1.15');
   await page.keyboard.press('Escape'); await page.evaluate(() => document.activeElement && document.activeElement.blur()); await wait(200);
   if (await visible(page, '#wsSettings')) { await page.click('#wsSet'); await wait(200); }
   await control('hold', { root: 'MNQ' }); await control('price', { root: 'MNQ', p: 25000 });
@@ -140,7 +140,7 @@ try {
   check(orders.length === 4 && orders.every(m => JSON.stringify(Object.keys(m).sort()) === '["account","bracket","cid","kind","qty","root","side","type"]' || JSON.stringify(Object.keys(m).sort()) === '["account","cid","kind","qty","root","side","type"]'),
     'each order is the 1.15 order (a bracket, or none on an order that reduces): ' + JSON.stringify(orders.map(m => Object.keys(m).join(','))));
   check(requests.every(u => !/\/bot-library|\/api\/chart-(hotkeys|strategies|accounts)|:8800\//.test(u)), 'The Desk and /bot-library never asked: ' + requests.filter(u => /bot-library|\/api\/chart-|8800/.test(u)).join(', '));
-  check((await page.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) !== 'true', 'the single chart page is not told the keys are shared');
+  check((await page.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === null, 'live-desk-sync-v1 is never written (1.21.0: it told the single chart page, gone)');
   const mine = ticketSent(all);
   await ctx.close(); await stopBridge();
 

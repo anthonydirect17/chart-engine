@@ -16,7 +16,6 @@
   ],
   "www": [
     { "from": "live/index.html", "to": "index.html" },
-    { "from": "live/single.html", "to": "single.html" },
     { "from": "live/live.js", "to": "live.js" },
     { "from": "live/live.css", "to": "live.css" },
     { "from": "live/bar-builder.js", "to": "bar-builder.js" },

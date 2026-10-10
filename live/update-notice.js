@@ -1,6 +1,6 @@
 /*
- * "Update ready: reload when flat" (the per-PC updater, nt8/update-pc.ps1). Only ChartBridge's own pages load this (the
- * workspace, live/index.html, and the single chart page, live/single.html); a mounted chart (The Desk) does not.
+ * "Update ready: reload when flat" (the per-PC updater, nt8/update-pc.ps1). Only ChartBridge's own page loads this (the
+ * workspace, live/index.html; the single chart page did too until chart 1.21.0); a chart mounted elsewhere does not.
  *
  * The updater writes update.json next to the page files. This page reads it when it opens and then about once a
  * minute (no cache) and compares:
@@ -49,28 +49,20 @@
     if (document.getElementById('updNoticeStyle')) return;
     const s = document.createElement('style');
     s.id = 'updNoticeStyle';
-    // flex-basis 0 and a margin that cancels the status line's 16 px column gap: the notice's outer size is 0, so it
-    // never wraps the line, never pushes the chart up and never moves the order bar; it only fills room that is left
-    // (text-indent puts the gap back inside it). A long text ends in "...", and a shorter form is picked when it fits.
-    s.textContent = '.chart-live .status .upd-note { flex: 1 1 0; min-width: 0; margin-left: -16px; text-indent: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info); font-family: var(--sans); }' +
-      '.chart-live .status .upd-note .upd-vis::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }' +
-      '.chart-live .status .upd-note.upd-stop { color: var(--warn); font-weight: 600; }' +
-      '.chart-live .status .upd-note .upd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }' +
-      // a page with its own place for it (the workspace's top bar, data-update-host): there, in the same colours
-      '[data-update-host] .upd-note { display: block; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info, #7FB2FF); }' +
+    // in the page's own place for it (the workspace's top bar, data-update-host). A long text ends in "...", and a shorter
+    // form is picked when it fits. (1.21.0: the single chart page's spot on its status line went with that page.)
+    s.textContent = '[data-update-host] .upd-note { display: block; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info, #7FB2FF); }' +
       '[data-update-host] .upd-note .upd-vis::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }' +
       '[data-update-host] .upd-note.upd-stop { color: var(--warn, #E0B45A); font-weight: 600; }' +
       '[data-update-host] .upd-note .upd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }';
     document.head.appendChild(s);
   }
 
-  /* The notice lives on the status line (the footer), before its read-only / trading note; on a page with its own place
-     for it (an element with data-update-host, the workspace's top bar) there instead. */
+  /* The notice lives in the page's own place for it: an element with data-update-host, the workspace's top bar. */
   function spot() {
     if (el && el.isConnected) return el;
     const host = document.querySelector('[data-update-host]');
-    const footer = host ? null : document.querySelector('.chart-live footer.status');
-    if (!host && !footer) return null;
+    if (!host) return null;
     style();
     el = document.createElement('span');
     el.className = 'upd-note';
@@ -78,7 +70,7 @@
     el.hidden = true;
     // what a screen reader says: the whole text, changed only when it changes (the visible form is refitted, unread)
     el.innerHTML = '<span class="upd-vis" aria-hidden="true"></span><span class="upd-sr" role="status"></span>';
-    if (host) host.appendChild(el); else footer.insertBefore(el, footer.querySelector('.ro'));
+    host.appendChild(el);
     return el;
   }
 

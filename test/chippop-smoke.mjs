@@ -1,5 +1,6 @@
 // The chip settings popover (chart 1.14.0, Anthony: he changes indicator settings many times a day) against the fake
-// bridge (sample data; nothing reaches a broker), in Chromium, on /single.html and in the workspace, at 1366x768,
+// bridge (sample data; nothing reaches a broker), in Chromium, on a mounted chart with its own toolbar
+// (test/chart-host.html; /single.html until chart 1.21.0) and in the workspace, at 1366x768,
 // 1920x1080 and 2560x1440: a chip click opens its indicator's settings (the gear's card) dropped from the chip, with an
 // on/off switch at the top; an edit applies and is saved; the switch hides the indicator and keeps the chip, and turns
 // it back on; a click outside, Escape or the chip again closes it and the focus goes back to the page (the workspace's
@@ -12,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { C as H, hostUrl, waitLive } from './chart-host.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
@@ -28,16 +30,18 @@ async function shot(page, name) {
   await page.screenshot({ path: file });
   if (SHOTS) fs.copyFileSync(file, path.join(SHOTS, name));
 }
-let bridge = null;
+let bridge = null, bridge2 = null;
 async function startBridge() {
   bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--trading', '--trade-accounts=Sim101', '--test-controls',
     '--version=0.3.8', '--data-037', '--live-rate=40', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
-  await new Promise(r => bridge.stdout.once('data', r));
+  // a mounted chart never has ChartBridge's PIN (only the workspace page asks for it): its own bridge, the PIN off
+  bridge2 = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT + 1), '--version=0.3.8', '--data-037', '--live-rate=40', '--pin-off'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await Promise.all([bridge, bridge2].map(b => new Promise(r => b.stdout.once('data', r))));
 }
 /* every message the page sends, and every status line it shows (as smoke:hotkeys); Close on Alt+C, Flatten all on Shift+F9 */
 const spies = () => {
   window.__sent = []; window.__statusSeen = [];
-  const iv = setInterval(() => { const el = document.getElementById('statusMsg') || document.getElementById('wsNote'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__statusSeen.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
+  const iv = setInterval(() => { const el = document.getElementById('wsNote'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__statusSeen.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
   const send = WebSocket.prototype.send;
   WebSocket.prototype.send = function (d) { try { window.__sent.push(JSON.parse(d)); } catch (e) { /* not JSON */ } return send.call(this, d); };
   try { localStorage.setItem('live-hotkeys-v1', JSON.stringify({ buy: '', sell: '', be: '', close: 'Alt+C', flattenAll: 'Shift+F9' })); } catch (e) { /* none */ }
@@ -64,7 +68,7 @@ async function openPage(ctx, url) {
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
   await page.goto(url);
-  await page.waitForFunction(() => document.getElementById('connPill') || document.getElementById('wsConn') || document.querySelector('.cb-pin-key'), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('wsConn') || document.querySelector('.cb-pin-key'), null, { timeout: 15000 });
   if (await page.$('.cb-pin-key')) await enterPin(page, TEST_PIN);
   return page;
 }
@@ -88,41 +92,36 @@ try {
     await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     await ctx.addInitScript(spies);
 
-    /* ================================================================ /single.html */
-    console.log(`/single.html ${w}x${h}`);
-    const sp = await openPage(ctx, `http://localhost:${PORT}/live/single.html`);
-    await sp.waitForFunction(() => /LIVE/.test((document.getElementById('connPill') || {}).textContent || '') && window.liveChart && window.liveChart.lastBar(), null, { timeout: 30000 });
+    /* ================================================================ a mounted chart with its own toolbar (test/chart-host.html;
+       the single chart page until 1.21.0, whose order bar and order keys went with it: the workspace part checks those) */
+    console.log(`a mounted chart ${w}x${h}`);
+    const sp = await ctx.newPage();
+    sp.on('pageerror', e => fail('page error: ' + e.message));
+    await sp.goto(hostUrl(PORT + 1));
+    await waitLive(sp, 30000);
+    await sp.waitForFunction(() => window.liveChart && window.liveChart.lastBar(), null, { timeout: 30000 });
     await sp.waitForTimeout(800);
     // every indicator pinned, so the strip is full at 1366 (some behind +N)
-    await sp.click('#indBtn');
-    for (const q of ['profile', 'bubbles']) { await sp.fill('#indQ', q); await sp.press('#indQ', 'Enter'); }
-    await sp.fill('#indQ', '');
-    for (const id of ['delta', 'vp', 'bubbles']) { const b = await sp.$(`#indBody [data-act="pin"][data-id="${id}"]`); if (b && (await b.getAttribute('aria-pressed')) === 'false') await b.click(); }
+    await sp.click(H('indBtn'));
+    for (const q of ['profile', 'bubbles']) { await sp.fill(H('indQ'), q); await sp.press(H('indQ'), 'Enter'); }
+    await sp.fill(H('indQ'), '');
+    for (const id of ['delta', 'vp', 'bubbles']) { const b = await sp.$(`${H('indBody')} [data-act="pin"][data-id="${id}"]`); if (b && (await b.getAttribute('aria-pressed')) === 'false') await b.click(); }
     await sp.keyboard.press('Escape'); await sp.waitForTimeout(300);
-    await sp.click('#chart'); await sp.waitForTimeout(200);
-    // review D2: every chip's popover clear of the order bar; Close and Flatten all work while it is open
-    const ORDER = ['#flattenBtn', '#beBtn', '#cancelAllBtn', '#buyMkt', '#sellMkt', '#armBtn'];
-    for (const id of await sp.evaluate(() => [...document.querySelectorAll('#indChips > .ind-chip[data-id]')].map(c => c.dataset.id))) {
-      await sp.click(`#indChips > .ind-chip[data-id="${id}"]`); await sp.waitForTimeout(150);
+    await sp.click(H('chart')); await sp.waitForTimeout(200);
+    for (const id of await sp.evaluate(sel => [...document.querySelectorAll(sel + ' > .ind-chip[data-id]')].map(c => c.dataset.id), H('indChips'))) {
+      await sp.click(`${H('indChips')} > .ind-chip[data-id="${id}"]`); await sp.waitForTimeout(150);
       const ps = await popState(sp, 'body');
       check(ps.open && ps.inside && !ps.scrolls, `${id} popover open, whole on screen`);
-      await reachAndKeys(sp, ORDER, `/single.html ${w}: the ${id} popover`);
-      if (w === 1920 && id === 'levels') await shot(sp, 'chippop-single-levels-1920.png');
+      if (w === 1920 && id === 'levels') await shot(sp, 'chippop-chart-levels-1920.png');
       await sp.keyboard.press('Escape'); await sp.waitForTimeout(100);
     }
-    // from one of its boxes (a hex box has the focus): Ctrl or Alt combos still act
-    await sp.click('#indChips .ind-chip[data-id="vwap"]'); await sp.focus('body .chip-pop input[data-hk="vwap"]');
-    await reachAndKeys(sp, ORDER, `/single.html ${w}: a box in the VWAP popover has the focus`);
-    await sp.keyboard.press('Escape'); await sp.waitForTimeout(100);
-    if (await sp.evaluate(() => !document.querySelector('body .chip-pop').hidden)) await sp.keyboard.press('Escape');
     // open: the VWAP chip shows VWAP's settings, dropped from the chip; the chart is unchanged
-    await sp.click('#indChips .ind-chip[data-id="vwap"]'); await sp.waitForTimeout(200);
+    await sp.click(H('indChips') + ' .ind-chip[data-id="vwap"]'); await sp.waitForTimeout(200);
     let s = await popState(sp, 'body');
     check(s.open && s.id === 'vwap' && s.on && /VWAP/.test(s.text) && (await sp.evaluate(() => window.liveChart.getLayers().vwap)) === true, 'a chip click opens its settings, the indicator still shown: "' + s.text + '"');
-    const obB = await sp.evaluate(() => document.getElementById('obar').getBoundingClientRect().bottom);
-    check(s.chip && s.y >= obB + 5 && s.inside && !s.scrolls, 'dropped under the chip, below the order bar, whole on screen, no scrolling: ' + JSON.stringify({ x: Math.round(s.x), y: Math.round(s.y), w: Math.round(s.w), h: Math.round(s.h) }));
+    check(s.chip && s.y >= s.chip.b && s.inside && !s.scrolls, 'dropped under the chip, whole on screen, no scrolling: ' + JSON.stringify({ x: Math.round(s.x), y: Math.round(s.y), w: Math.round(s.w), h: Math.round(s.h) }));
     check(await sp.isVisible('body .chip-pop [data-f="opt:vwap:session:rth"]') && (await sp.$$('body .chip-pop input[data-ck="vwap"]')).length === 1, 'the gear\'s own content: Hours and the line color');
-    if (w === 1366) await shot(sp, 'chippop-single-vwap-1366.png');
+    if (w === 1366) await shot(sp, 'chippop-chart-vwap-1366.png');
     // edit: RTH only, applied and saved for this chart
     await sp.click('body .chip-pop [data-f="opt:vwap:session:rth"]');
     check((await sp.evaluate(() => JSON.parse(localStorage.getItem('live-indicator-options-v1')).main.vwap.session)) === 'rth' && await sp.getAttribute('body .chip-pop [data-f="opt:vwap:session:rth"]', 'aria-pressed') === 'true', 'an edit applies and is saved (VWAP RTH only)');
@@ -130,7 +129,7 @@ try {
     // switch: off hides VWAP and keeps the chip; on again from the same popover
     await sp.click('body .chip-pop [data-act="popsw"]'); await sp.waitForTimeout(150);
     s = await popState(sp, 'body');
-    const chipKept = await sp.evaluate(() => { const c = document.querySelector('#indChips .ind-chip[data-id="vwap"]'); return !!c && c.getAttribute('aria-pressed') === 'false'; });
+    const chipKept = await sp.evaluate(sel => { const c = document.querySelector(sel + ' .ind-chip[data-id="vwap"]'); return !!c && c.getAttribute('aria-pressed') === 'false'; }, H('indChips'));
     check(s.open && !s.on && (await sp.evaluate(() => window.liveChart.getLayers().vwap)) === false && chipKept, 'the switch off: VWAP hidden, the chip kept (dashed), the popover still open');
     await sp.click('body .chip-pop [data-act="popsw"]'); await sp.waitForTimeout(150);
     check((await sp.evaluate(() => window.liveChart.getLayers().vwap)) === true && (await popState(sp, 'body')).on, 'and on again from the same popover');
@@ -138,45 +137,45 @@ try {
     await sp.keyboard.press('Escape'); await sp.waitForTimeout(100);
     s = await popState(sp, 'body');
     check(!s.open && s.active === 'body', 'Escape closes it and the focus goes back to the page (' + s.active + ')');
-    await sp.click('#indChips .ind-chip[data-id="levels"]'); await sp.waitForTimeout(150);
+    await sp.click(H('indChips') + ' .ind-chip[data-id="levels"]'); await sp.waitForTimeout(150);
     check((await popState(sp, 'body')).id === 'levels' && await sp.isVisible('body .chip-pop [data-f="tog:levels:ibh"]'), 'the Levels chip: its ten line toggles');
-    await sp.click('#indChips .ind-chip[data-id="levels"]'); await sp.waitForTimeout(100);
+    await sp.click(H('indChips') + ' .ind-chip[data-id="levels"]'); await sp.waitForTimeout(100);
     s = await popState(sp, 'body');
     check(!s.open && s.active === 'body', 'the chip again closes it, focus on the page');
-    await sp.click('#indChips .ind-chip[data-id="volume"]'); await sp.waitForTimeout(100);
-    const cb = await sp.locator('#chart').boundingBox();
+    await sp.click(H('indChips') + ' .ind-chip[data-id="volume"]'); await sp.waitForTimeout(100);
+    const cb = await sp.locator(H('chart')).boundingBox();
     await sp.mouse.click(cb.x + cb.width * 0.4, cb.y + cb.height * 0.6); await sp.waitForTimeout(100);
     check(!(await popState(sp, 'body')).open, 'a click outside closes it');
     // the last chip shown, near the right of the strip, and a chip behind "+N"
-    const lastId = await sp.evaluate(() => { const cs = [...document.querySelectorAll('#indChips > .ind-chip[data-id]')]; return cs[cs.length - 1].dataset.id; });
-    await sp.click(`#indChips > .ind-chip[data-id="${lastId}"]`); await sp.waitForTimeout(150);
+    const lastId = await sp.evaluate(sel => { const cs = [...document.querySelectorAll(sel + ' > .ind-chip[data-id]')]; return cs[cs.length - 1].dataset.id; }, H('indChips'));
+    await sp.click(`${H('indChips')} > .ind-chip[data-id="${lastId}"]`); await sp.waitForTimeout(150);
     s = await popState(sp, 'body');
     check(s.open && s.inside && !s.scrolls, `the last chip shown (${lastId}): whole on screen`);
     await sp.keyboard.press('Escape');
-    const more = await sp.$('#indChips .ind-chip-more:not([hidden])');
+    const more = await sp.$(H('indChips') + ' .ind-chip-more:not([hidden])');
     if (more) {
       await more.click(); await sp.waitForTimeout(100);
-      const inList = await sp.evaluate(() => document.querySelector('#indChips .ind-chip-list .ind-chip').dataset.id);
-      await sp.click(`#indChips .ind-chip-list .ind-chip[data-id="${inList}"]`); await sp.waitForTimeout(150);
+      const inList = await sp.evaluate(sel => document.querySelector(sel + ' .ind-chip-list .ind-chip').dataset.id, H('indChips'));
+      await sp.click(`${H('indChips')} .ind-chip-list .ind-chip[data-id="${inList}"]`); await sp.waitForTimeout(150);
       s = await popState(sp, 'body');
-      check(s.open && s.id === inList && s.inside && !s.scrolls && (await sp.evaluate(() => document.querySelector('#indChips .ind-chip-list').hidden)), 'a chip behind "+N" (' + inList + ') opens its settings too, dropped from "+N", whole on screen');
-      if (w === 1366) await shot(sp, 'chippop-single-more-1366.png');
+      check(s.open && s.id === inList && s.inside && !s.scrolls && (await sp.evaluate(sel => document.querySelector(sel + ' .ind-chip-list').hidden, H('indChips'))), 'a chip behind "+N" (' + inList + ') opens its settings too, dropped from "+N", whole on screen');
+      if (w === 1366) await shot(sp, 'chippop-chart-more-1366.png');
       await sp.keyboard.press('Escape');
-    } else check(w > 1366, 'no "+N" at ' + w + ' px (all seven chips fit)');
+    } else check((await sp.evaluate(sel => { const st = document.querySelector(sel); return st.scrollWidth <= st.clientWidth + 1 && st.querySelectorAll(':scope > .ind-chip[data-id]').length === 7; }, H('indChips'))), 'no "+N" at ' + w + ' px: all seven chips shown, none cut (a mounted chart\'s toolbar wraps, so the strip has the room)');
     if (w === 1366) {
       // a narrow window: "+N" near the right edge, so the popover flips left to stay whole
       await sp.setViewportSize({ width: 1000, height: 640 }); await sp.waitForTimeout(500);
-      const m2 = await sp.$('#indChips .ind-chip-more:not([hidden])');
+      const m2 = await sp.$(H('indChips') + ' .ind-chip-more:not([hidden])');
       if (m2) {
         await m2.click(); await sp.waitForTimeout(100);
-        const id2 = await sp.evaluate(() => document.querySelector('#indChips .ind-chip-list .ind-chip').dataset.id);
-        await sp.click(`#indChips .ind-chip-list .ind-chip[data-id="${id2}"]`); await sp.waitForTimeout(150);
+        const id2 = await sp.evaluate(sel => document.querySelector(sel + ' .ind-chip-list .ind-chip').dataset.id, H('indChips'));
+        await sp.click(`${H('indChips')} .ind-chip-list .ind-chip[data-id="${id2}"]`); await sp.waitForTimeout(150);
         s = await popState(sp, 'body');
         const mb = await m2.boundingBox();
         check(s.open && s.inside && !s.scrolls && (mb.x + 300 <= 1000 - 8 || s.x < mb.x), 'a narrow window (1000 px): whole on screen, flipped left when "+N" is near the edge (+N at ' + Math.round(mb.x) + ', popover ' + Math.round(s.x) + ' to ' + Math.round(s.x + s.w) + ')');
-        await shot(sp, 'chippop-single-narrow-1000.png');
+        await shot(sp, 'chippop-chart-narrow-1000.png');
         await sp.keyboard.press('Escape');
-      } else check(false, 'a narrow window shows "+N"');
+      } else check((await sp.evaluate(sel => { const st = document.querySelector(sel); return st.scrollWidth <= st.clientWidth + 1 && st.querySelectorAll(':scope > .ind-chip[data-id]').length === 7; }, H('indChips'))), 'a narrow window (1000 px): no "+N", all seven chips shown, none cut');
     }
     await sp.close();
 
@@ -219,6 +218,7 @@ try {
 } finally {
   await browser.close();
   if (bridge) bridge.kill();
+  if (bridge2) bridge2.kill();
 }
 console.log(`\n${checks - errors.length}/${checks} checks passed`);
 if (errors.length) { console.error(errors.length + ' failed'); process.exit(1); }
