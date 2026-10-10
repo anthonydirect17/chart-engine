@@ -7,8 +7,8 @@
 //   2. only accounts named in "tradeAccounts = ..." (exact names, no wildcard; never Backtest/Playback),
 //      only while the account is Connected, and only once ChartBridge is listening to its order events;
 //   3. size cap per root, "maxQty.MNQ = 5" (default 1), on the order and on the POSITION: the current
-//      position plus working orders on the same side plus the new order may not exceed it (0.5.3: an agent's entry
-//      with no line: ChartBridgeAgents.ShippedConfigCap, MNQ 20);
+//      position plus working orders on the same side plus the new order may not exceed it (0.5.3: an agent's MNQ
+//      entry takes the agents' shipped cap of 20 instead, whatever maxQty.MNQ says: AgentCap);
 //   4. only ChartBridge's own page: WebSocket Origin must be http://localhost:<port>, and the page must
 //      send the token it read from GET /session (new random token each start, no CORS headers);
 //   5. prices on the tick grid, a last price no older than 300 seconds, stops on the right side of the
@@ -721,7 +721,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // The position two ways: as NinjaTrader lists it, and with fills reported but not yet in it. Event
             // order differs between connections, so either can be the stale one: the cap takes the worse.
             int posNow = SignedPosition(account, inst), posEff = EffectivePosition(account, inst), pendBuy, pendSell;
-            int cap = agent != null ? AgentCap(root) : CapFor(root), pos = isBuyOrder(top) ? Math.Max(posNow, posEff) : Math.Min(posNow, posEff);   // 0.5.3: an agent's config cap (MNQ 20 with no line)
+            int cap = agent != null ? AgentCap(root) : CapFor(root), pos = isBuyOrder(top) ? Math.Max(posNow, posEff) : Math.Min(posNow, posEff);   // 0.5.3: an agent's config cap (MNQ 20, never maxQty.MNQ)
             if (bot) cap = Math.Min(cap, ChartBridgeBot.MaxQty);   // 0.4.0 bot: the 1 contract rail, on the order and the position (gate 3's own count)
             if (agent != null) cap = Math.Min(cap, ChartBridgeAgents.CapFor(agent, root));   // 0.5.0 agents: the agent's maxQty, never above the hard ceiling (minis 2, micros 20), on the order and the position
             if (qty > cap) return "qty " + qty + " is over the " + root + " cap of " + cap + " (maxQty." + root + " in config.txt)";

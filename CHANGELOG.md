@@ -6,19 +6,22 @@ Anthony's decision (2026-10-10): the agent's MNQ cap of 20 ships, so any PC can 
 hand. Nothing else in NinjaTrader changes. `nt8/PROTOCOL.md`, "Agent channel", has the rule. ChartBridge only: no page
 change, no `config.txt` change; install it with `update-pc.ps1 -InstallChartBridge` and F5 while flat.
 
-| | MNQ cap with no `maxQty.MNQ` line | with a `maxQty.MNQ = N` line |
+| MNQ cap | with no `maxQty.MNQ` line | with a `maxQty.MNQ = N` line |
 |---|---|---|
-| an agent's entry | **20** (was 1) | N, as before (never above the ceiling of 20) |
+| an agent's entry | **20** (was 1) | **20** (was N) |
 | the page, the bot, the copier | 1, as before | N, as before |
 
-- **Where it lives.** `ChartBridgeAgents.ShippedConfigCap` (MNQ 20; every other root the default of 1), used for agent
-  entries only by gate 3, plan check 4 and `welcome.rules`. The agent's own rule (Agent tab, default MNQ 20) and the hard
-  ceiling (20) are unchanged, so an agent's MNQ entry is now at most the smallest of its rule and 20.
-- **A line of the PC's own is kept.** ChartBridge, the installer and the updater never write `config.txt`. A `maxQty.MNQ`
-  line set on a PC still holds for agents; with agents on and a line other than 20, ChartBridge says so once at start in
-  the Output window ("config.txt: maxQty.MNQ = 2 is this PC's own and is kept: agent entries on MNQ are capped at 2 ...").
-- Tests: `nt8/check/AgentHarness.cs` (a 20 MNQ agent entry placed with no line, the page refused at 1, a line of 5 kept and
-  said), `test/nt8-agents.test.js` (the source guards), and the fake follows (`test/fake-v3.mjs`, `test/fake-v3.test.js`).
+An agent's MNQ entry is the smallest of its own rule (Agent tab, default 20), the hard ceiling (20) and this 20.
+
+- **Agents never read `maxQty.MNQ`** (Anthony, 2026-10-10). The line caps the page, the bot and the copier only.
+  `ChartBridgeAgents.ShippedConfigCap` (MNQ 20) is used through `ChartBridgeOrders.AgentCap` for agent entries only: gate
+  3, plan check 4 and `welcome.rules`. Every other root for agents is as before (`config.txt`'s cap, 1 with no line).
+- **Nothing writes `config.txt`.** ChartBridge, the installer and the updater leave it alone. With agents on and a
+  `maxQty.MNQ` line, ChartBridge says once at start in the Output window: "config.txt: maxQty.MNQ = 2 caps the page's, the
+  bot's and the copier's MNQ orders only; agents use their own MNQ cap of 20 (with the agent's rule and the hard ceiling)".
+- Tests: `nt8/check/AgentHarness.cs` (a 20 MNQ agent entry with no line; with a line of 5 the agent placed at 6 and refused
+  only above 20 or its own rule, the page refused above 5; the note), `test/nt8-agents.test.js` (the source guards), and
+  the fake follows (`test/fake-v3.mjs`, `test/fake-v3.test.js`).
 
 ## 1.19.0 (2026-10-08): Kit version 1
 

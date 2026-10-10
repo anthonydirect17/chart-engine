@@ -443,9 +443,9 @@ public static class AgentHarness
         refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 0, 0, 16, 1), "qty must be a whole number from 1 to 20", "check 4 before 5 and 6: qty 0");
         refuse(Plan(NewId(), "NQ", "buy", "limit", "24999", 3, 8, 16, 600), "qty must be a whole number from 1 to 2 (agent manrae's maxQty for NQ)", "check 4: NQ 3 (ceiling 2)");
         refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 21, 8, 16, 600), "qty must be a whole number from 1 to 20", "check 4: MNQ 21 (ceiling 20)");
-        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
-        refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 4, 8, 16, 600), "qty 4 is over the MNQ cap of 3 (maxQty.MNQ in config.txt)", "check 4: config.txt's gate 3 cap still holds");
-        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "30");
+        ChartBridgeOrders.ReadConfig("maxQty.NQ", "1");   // 0.5.3: MNQ takes the agents' own cap of 20; config.txt's cap holds for NQ
+        refuse(Plan(NewId(), "NQ", "buy", "limit", "24999", 2, 8, 16, 600), "qty 2 is over the NQ cap of 1 (maxQty.NQ in config.txt)", "check 4: config.txt's gate 3 cap still holds (NQ)");
+        ChartBridgeOrders.ReadConfig("maxQty.NQ", "5");
         refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 0, 16, 600), "every agent entry needs a stop and a target", "check 4: no stop");
         refuse(Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 0, 600), "every agent entry needs a stop and a target", "check 4: no target");
         // 5. risk
@@ -2145,29 +2145,29 @@ public static class AgentHarness
         Part("10.8", () =>
         {
             Fresh();
-            int capWas = ChartBridgeOrders.CapFor("MNQ");
+            int capWas = ChartBridgeOrders.CapFor("NQ");
             try
             {
                 int w0 = Count(agentOut, "welcome");
-                ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
+                ChartBridgeOrders.ReadConfig("maxQty.NQ", "1");   // 0.5.3: NQ, since an agent's MNQ cap is its own 20 whatever config.txt says
                 ChartBridgeOrders.MaxBracketTicks = 40; ChartBridgeOrders.MaxTicksAway = 30;
                 Advance(500);
                 string w = Last(agentOut, "welcome");
-                Check(Count(agentOut, "welcome") == w0 + 1 && w.Contains("\"maxQty\":{\"NQ\":2,\"MNQ\":3}") && w.Contains("\"maxBracketTicks\":40,\"maxTicksAway\":30}"),
-                      "10.8: config.txt's cap 3 and its bracket and distance limits: welcome again with the caps enforced: " + w);
+                Check(Count(agentOut, "welcome") == w0 + 1 && w.Contains("\"maxQty\":{\"NQ\":1,\"MNQ\":20}") && w.Contains("\"maxBracketTicks\":40,\"maxTicksAway\":30}"),
+                      "10.8: config.txt's NQ cap 1 and its bracket and distance limits: welcome again with the caps enforced: " + w);
                 Advance(1000);
                 Check(Count(agentOut, "welcome") == w0 + 1, "10.8: nothing changed: no welcome again");
-                A(Plan(NewId(), "MNQ", "buy", "limit", "24999", 4, 8, 16, 600));
-                Check(AgentReject().Contains("qty"), "10.8: what is enforced is as before: 4 MNQ refused at the cap of 3: " + AgentReject());
+                A(Plan(NewId(), "NQ", "buy", "limit", "24999", 2, 8, 16, 600));
+                Check(AgentReject().Contains("qty"), "10.8: what is enforced is as before: 2 NQ refused at the cap of 1: " + AgentReject());
                 Check(Last(page, "agent").Contains("\"maxQty\":{\"NQ\":2,\"MNQ\":20}"), "10.8: the pages' strip keeps the agent's own rules");
             }
-            finally { ChartBridgeOrders.ReadConfig("maxQty.MNQ", capWas.ToString(CultureInfo.InvariantCulture)); ChartBridgeOrders.MaxBracketTicks = 0; ChartBridgeOrders.MaxTicksAway = 0; }
+            finally { ChartBridgeOrders.ReadConfig("maxQty.NQ", capWas.ToString(CultureInfo.InvariantCulture)); ChartBridgeOrders.MaxBracketTicks = 0; ChartBridgeOrders.MaxTicksAway = 0; }
             Advance(500);
         });
 
-        // 0.5.3 (Anthony 2026-10-10): the agents' MNQ cap of 20 ships with ChartBridge. With no maxQty.MNQ line an agent's MNQ entry
-        // may be 20 (a made-up plan risking $270); the page keeps the default of 1; a maxQty.MNQ line of this PC's own still holds
-        // for agents and is said at start.
+        // 0.5.3 (Anthony 2026-10-10): the agents' MNQ cap of 20 ships with ChartBridge, and an agent's MNQ entry never reads
+        // config.txt's maxQty.MNQ: it is capped by its own rule and the hard ceiling only. The page keeps config.txt's cap (the
+        // line, or 1 with no line). Other roots for agents as before. A maxQty.MNQ line, with agents on, is said once at start.
         Part("0.5.3 shipped cap", () =>
         {
             Fresh();
@@ -2192,18 +2192,26 @@ public static class AgentHarness
                 logWas = LogCount();
                 ChartBridgeAgents.NoteConfigCaps();
                 Check(LogCount() == logWas, "0.5.3: no maxQty.MNQ line: nothing to say at start");
-                // a maxQty.MNQ line of this PC's own: kept for agents, and said
+                // a maxQty.MNQ line on this PC: the page's cap only; the agent keeps its own 20
                 ChartBridgeOrders.ReadConfig("maxQty.MNQ", "5");
-                Check(ChartBridgeOrders.AgentCap("MNQ") == 5 && ChartBridgeOrders.CapFor("MNQ") == 5, "0.5.3: maxQty.MNQ = 5 set on this PC is kept for agents and the page");
-                A(Plan(NewId(), "MNQ", "buy", "limit", "24999", 6, 8, 16, 600));
-                Check(AgentReject().Contains("qty 6 is over the MNQ cap of 5 (maxQty.MNQ in config.txt)"), "0.5.3: an agent's 6 MNQ refused at this PC's cap of 5: " + AgentReject());
+                Check(ChartBridgeOrders.AgentCap("MNQ") == 20 && ChartBridgeOrders.CapFor("MNQ") == 5, "0.5.3: maxQty.MNQ = 5: the page's cap is 5, the agent's stays 20");
+                Advance(500);
+                Check(Last(agentOut, "welcome").Contains("\"maxQty\":{\"NQ\":2,\"MNQ\":20}"), "0.5.3: welcome.rules: still MNQ 20 with the line: " + Last(agentOut, "welcome"));
+                Order e6 = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 6, 8, 16, 600));
+                Check(e6 != null && e6.Quantity == 6, "0.5.3: an agent's 6 MNQ entry is placed above the line's 5: " + (e6 != null ? e6.Quantity + " " + e6.Name : AgentReject()));
+                Settle(sime);
+                Advance(1000);
+                A(Plan(NewId(), "MNQ", "buy", "limit", "24999", 21, 8, 16, 600));
+                Check(AgentReject().Contains("qty must be a whole number from 1 to 20"), "0.5.3: with the line, refused only above 20: " + AgentReject());
+                P("{\"type\":\"agentRules\",\"cid\":\"r53\",\"agent\":\"manrae\",\"roots\":\"NQ,MNQ\",\"maxQtyNQ\":2,\"maxQtyMNQ\":10,\"entryFrom\":\"09:45\",\"entryUntil\":\"15:00\",\"flatAt\":\"15:55\",\"maxExpireSec\":1800,\"maxTrades\":0,\"maxLosses\":0}");
+                A(Plan(NewId(), "MNQ", "buy", "limit", "24999", 11, 8, 16, 600));
+                Check(AgentReject().Contains("qty must be a whole number from 1 to 10 (agent manrae's maxQty for MNQ)"), "0.5.3: or above its own rule (10): " + AgentReject());
+                calls = sim.Calls.Count;
+                P("{\"type\":\"order\",\"cid\":\"q56\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":6,\"bracket\":{\"stop\":8,\"target\":16}}");
+                Check(PageReject().Contains("qty 6 is over the MNQ cap of 5 (maxQty.MNQ in config.txt)") && sim.Calls.Count == calls, "0.5.3: the page is still refused above the line's 5: " + PageReject());
                 ChartBridgeAgents.NoteConfigCaps();
-                Check(Logged("config.txt: maxQty.MNQ = 5 is this PC's own and is kept: agent entries on MNQ are capped at 5 (with no maxQty.MNQ line the agents' shipped cap is 20); the page's and the bot's MNQ caps are unchanged"),
-                      "0.5.3: the kept line is said in the Output window");
-                ChartBridgeOrders.ReadConfig("maxQty.MNQ", "20");
-                logWas = LogCount();
-                ChartBridgeAgents.NoteConfigCaps();
-                Check(LogCount() == logWas, "0.5.3: maxQty.MNQ = 20, the shipped cap: nothing to say");
+                Check(Logged("config.txt: maxQty.MNQ = 5 caps the page's, the bot's and the copier's MNQ orders only; agents use their own MNQ cap of 20 (with the agent's rule and the hard ceiling)"),
+                      "0.5.3: the line is said in the Output window: it caps the page only");
             }
             finally { ChartBridgeOrders.ReadConfig("maxQty.MNQ", capWas.ToString(CultureInfo.InvariantCulture)); Settle(sime); }
             Advance(500);

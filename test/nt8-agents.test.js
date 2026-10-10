@@ -115,15 +115,17 @@ test('0.5.0 agents: the hard ceiling is a constant; the secret is never logged; 
   assert.ok(!/trading = false|Enabled = true|ChartBridgeSwitches\.Note\(/.test(acode), 'never turns a switch on or off');
 });
 
-test('0.5.3 agents: the shipped MNQ cap of 20 is for agent entries only; a maxQty line of this PC\'s own holds and is said', () => {
-  assert.match(bodies(acode, 'ShippedConfigCap'), /return \(root \?\? ""\)\.ToUpperInvariant\(\) == "MNQ" \? 20 : ChartBridgeOrders\.DefaultMaxQty;/, 'MNQ 20; every other root the page\'s default');
-  assert.match(bodies(acode, 'AgentCap'), /return MaxQty\.TryGetValue\(root \?\? "", out n\) \? n : ChartBridgeAgents\.ShippedConfigCap\(root\);/, 'a maxQty line first');
+test('0.5.3 agents: the shipped MNQ cap of 20 is the agents\' own: maxQty.MNQ caps the page, the bot and the copier only', () => {
+  assert.match(bodies(acode, 'ShippedConfigCap'), /return \(root \?\? ""\)\.ToUpperInvariant\(\) == "MNQ" \? 20 : 0;/, 'MNQ 20; nothing ships for any other root');
+  assert.match(bodies(acode, 'AgentCap'), /int s = ChartBridgeAgents\.ShippedConfigCap\(root\); return s > 0 \? s : CapFor\(root\);/, 'MNQ never reads maxQty.MNQ; other roots as the page');
   assert.match(bodies(ocode, 'CapFor'), /return MaxQty\.TryGetValue\(root \?\? "", out n\) \? n : DefaultMaxQty;/, 'the page\'s, the bot\'s and the copier\'s cap is unchanged');
   assert.match(ocode, /public const int MaxActionsPerSecond = 10, DefaultMaxQty = 1;/);
-  assert.match(bodies(ocode, 'PlaceOrderLocked'), /int cap = agent != null \? AgentCap\(root\) : CapFor\(root\),/, 'gate 3: only an agent entry takes the agents\' cap');
+  const place = bodies(ocode, 'PlaceOrderLocked');
+  assert.match(place, /int cap = agent != null \? AgentCap\(root\) : CapFor\(root\),/, 'gate 3: only an agent entry takes the agents\' cap');
+  assert.ok(place.indexOf('cap = Math.Min(cap, ChartBridgeAgents.CapFor(agent, root));') > place.indexOf('AgentCap(root)'), 'the agent\'s rule and the hard ceiling still apply on top');
   assert.equal((ocode + acode + ccode).match(/\bAgentCap\(/g).length, 4, 'AgentCap: its definition, gate 3, plan check 4 and welcome.rules only');
   assert.match(main, /else ChartBridgeOrders\.ReadConfig\(key, val\);[^\n]*\n\s*\}\s*ChartBridgeAgents\.NoteConfigCaps\(\);/, 'said once at config load, after every line is read');
-  assert.match(bodies(acode, 'NoteConfigCaps'), /if \(Ids\(\)\.Count == 0\) return;[\s\S]*ChartBridgeServer\.Log\("config\.txt: maxQty\.MNQ = " \+ n \+ " is this PC's own and is kept/);
+  assert.match(bodies(acode, 'NoteConfigCaps'), /if \(Ids\(\)\.Count == 0\) return;[\s\S]*ChartBridgeServer\.Log\("config\.txt: maxQty\.MNQ = " \+ n \+ " caps the page's, the bot's and the copier's MNQ orders only; agents use their own MNQ cap of "/);
   assert.ok(!/MaxQty\[|MaxQty\.(Add|Remove|Clear)/.test(bodies(acode, 'NoteConfigCaps') + bodies(acode, 'AgentCap')), 'nothing in config is changed');
 });
 

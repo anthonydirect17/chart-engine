@@ -1029,8 +1029,8 @@ export const AGENT_KEYS = {
 };
 /* the size ceiling (a ChartBridge constant: raising it is a code change and a review): minis 2, micros 20 */
 export const AGENT_CEILING = { NQ: 2, ES: 2, MNQ: 20, MES: 20 };
-/* ChartBridge 0.5.3 (Anthony 2026-10-10, ChartBridgeAgents.ShippedConfigCap): config.txt's gate 3 cap for an agent's entry
-   with no maxQty line for its root: MNQ 20, any other root the page's default; a maxQty line holds for agents as before */
+/* ChartBridge 0.5.3 (Anthony 2026-10-10, ChartBridgeAgents.ShippedConfigCap): gate 3's config cap for an agent's MNQ entry is
+   20, whatever config.txt's maxQty.MNQ says (that line caps the page, the bot and the copier only); other roots: config.txt's */
 export const AGENT_SHIPPED_CAP = { MNQ: 20 };
 export const AGENT_DEFAULT_RULES = { roots: ['NQ', 'MNQ'], maxQty: { NQ: 2, MNQ: 20 }, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 1800, maxTrades: null, maxLosses: null };
 export const AGENT_NOTE_KINDS = ['look', 'thinking', 'lesson', 'notebook', 'status'];
@@ -1194,8 +1194,8 @@ Object.assign(OrderDeskV3.prototype, {
   agentSendState(a, force) { if (!a.conn || !a.helloed) return; const m = this.agentStateMsg(a), j = JSON.stringify(m); if (force || j !== a.stateSent) { a.stateSent = j; this.send(a.conn, m); } },
   /** the roots ChartBridge serves now (the fake: those it has an instrument for), in the rules' order */
   agentServed(a) { return a.rules.roots.filter(r => this.instruments[r]); },
-  /** config.txt's gate 3 cap for an agent's entry (0.5.3): the root's maxQty line, else AGENT_SHIPPED_CAP, else the default */
-  agentCapFor(root) { return this.config.maxQty[root] !== undefined ? this.capFor(root) : AGENT_SHIPPED_CAP[root] || this.capFor(root); },
+  /** gate 3's config cap for an agent's entry (0.5.3, ChartBridgeOrders.AgentCap): AGENT_SHIPPED_CAP where one ships, else config.txt's */
+  agentCapFor(root) { return AGENT_SHIPPED_CAP[root] || this.capFor(root); },
   /** welcome.rules (section 10, as built): the caps really enforced: per root the smallest of the agent's rule, the ceiling
    *  and config.txt's gate 3 cap; config.txt's maxBracketTicks and maxTicksAway (null when not set). The pages' `agent`
    *  message keeps the agent's own rules. */
@@ -1550,7 +1550,7 @@ Object.assign(OrderDeskV3.prototype, {
     if (m.kind !== 'limit' && m.kind !== 'stopLimit') return 'an agent\'s entry is a limit or a stop-limit';
     if (m.kind === 'stopLimit' && !this.sw.orderTypes) return 'stop-limit orders are off (orderTypes = off in config.txt)';
     // 4. quantity, stop and target
-    const cap = Math.min(a.rules.maxQty[m.root], AGENT_CEILING[m.root] || 0, this.agentCapFor(m.root));   // the agent's, the ceiling and config.txt's gate 3 cap (0.5.3: MNQ 20 with no line)
+    const cap = Math.min(a.rules.maxQty[m.root], AGENT_CEILING[m.root] || 0, this.agentCapFor(m.root));   // the agent's, the ceiling and gate 3's config cap (0.5.3: MNQ 20, never maxQty.MNQ)
     if (!isInt(m.qty) || m.qty < 1 || m.qty > cap) return 'qty must be a whole number from 1 to ' + cap + ' (maxQty.' + m.root + ')';
     if (!isInt(m.stopTicks) || m.stopTicks < 1 || !isInt(m.targetTicks) || m.targetTicks < 1) return 'stopTicks and targetTicks must be whole numbers of 1 or more';
     if (this.config.maxBracketTicks > 0 && (m.stopTicks > this.config.maxBracketTicks || m.targetTicks > this.config.maxBracketTicks)) return 'stopTicks and targetTicks must be at most ' + this.config.maxBracketTicks + ' (maxBracketTicks in config.txt)';

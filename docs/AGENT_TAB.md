@@ -356,7 +356,7 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
       count of the rest, within about a second. A refused duplicate never replaces the plan it copies.
     - Checks as built: stood down includes a clash; the account listed by NinjaTrader; a stop-limit refused with
       `orderTypes` off; the size the smallest of the agent's `maxQty`, the ceiling and config.txt's gate 3 cap (ChartBridge
-      0.5.3: with no `maxQty.MNQ` line an agent's MNQ cap is 20, the page's stays 1);
+      0.5.3: for MNQ the agents' own 20, never `maxQty.MNQ`, which caps the page only);
       `maxBracketTicks` holds.
     - The owner lock: a page exit is a market order that only reduces, with no bracket and no strategy; anything else from
       the page gets "...: use Flatten, or move its stop or target"; the bot, the copier and other agents "... until it is
@@ -409,7 +409,7 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
       chosen takes only 0. A skip's `agentPlan` carries every plan key, null where it has none. `placed` names the order and
       when it ends. `position` for its account on its roots.
     - The agent's side of contract section 10 (the pages see none of it): `welcome.rules` carries the caps really enforced
-      (per root the smallest of its rule, the ceiling and config.txt's gate 3 cap, MNQ 20 with no line since 0.5.3) and config.txt's `maxBracketTicks` and
+      (per root the smallest of its rule, the ceiling and config.txt's gate 3 cap; for MNQ the agents' own 20 since 0.5.3) and config.txt's `maxBracketTicks` and
       `maxTicksAway` (null when not set), and `welcome` goes again when a cap changes; `agentState` carries `session` (the
       18:00 ET session's date) and goes after every hello and whenever a field changed; its `order` messages carry
       `orderName` (its entry's `CB#<tag> ag:<id> s<n> t<n>`, its legs' `CB#<tag> stop|target f<n> q<n> p<price>`, its flat
