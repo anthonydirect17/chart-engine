@@ -1,10 +1,10 @@
-// "Update ready: reload when flat" smoke (live/update-notice.js, the per-PC updater nt8/update-pc.ps1): the page
-// laid out as the updater installs it (nt8/install-files.json), served by the fake bridge with trading on and an
-// open position, and www/update.json written the way the updater writes it. Checks: nothing shows while the build is
-// the one the page loaded; a new build shows the notice on the status line and the page never reloads by itself; the
-// notice covers neither the order bar nor the chart, and neither moves; the ChartBridge ready and copied notes; a
-// page opened after an install shows nothing, one opened during an install shows the notice; no update.json, no
-// notice and no error. Sample data only; nothing reaches a broker. Screenshots in test/out/.
+// "Update ready: reload when flat" smoke (live/update-notice.js, the per-PC updater nt8/update-pc.ps1): the workspace
+// (live/index.html; the single chart page until chart 1.21.0) laid out as the updater installs it (nt8/install-files.json),
+// served by the fake bridge with trading on and an open position, and www/update.json written the way the updater writes
+// it. Checks: nothing shows while the build is the one the page loaded; a new build shows the notice in the top bar and
+// the page never reloads by itself; the notice covers neither the order ticket nor the charts, and neither moves; the
+// ChartBridge ready and copied notes; a page opened after an install shows nothing, one opened during an install shows the
+// notice; no update.json, no notice and no error. Sample data only; nothing reaches a broker. Screenshots in test/out/.
 //   npm run smoke:update        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -39,7 +39,7 @@ const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs
   { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const control = async (what, q = {}) => (await fetch(`http://127.0.0.1:${PORT}/test/${what}?` + new URLSearchParams(q), { method: 'POST' })).json();
-const URL_ = `http://localhost:${PORT}/live/single.html`;
+const URL_ = `http://localhost:${PORT}/live/`;   // the workspace, ChartBridge's page
 
 async function open(browser, width) {
   const page = await browser.newPage({ viewport: { width, height: 860 } });
@@ -47,16 +47,19 @@ async function open(browser, width) {
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) fail('console: ' + m.text()); });
   await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   await page.goto(URL_);
-  await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('wsConn')?.classList.contains('live'), null, { timeout: 20000 });
   return page;
 }
-const note = async page => { await page.waitForSelector('#updNote', { state: 'attached', timeout: 5000 }).catch(() => {}); return page.evaluate(() => { const n = document.getElementById('updNote'); return n ? { hidden: n.hidden, text: n.querySelector('.upd-vis').textContent, said: n.querySelector('[role=status]').textContent, inFooter: !!n.closest('footer.status') } : null; }); };
+const note = async page => { await page.waitForSelector('#updNote', { state: 'attached', timeout: 5000 }).catch(() => {}); return page.evaluate(() => { const n = document.getElementById('updNote'); return n ? { hidden: n.hidden, text: n.querySelector('.upd-vis').textContent, said: n.querySelector('[role=status]').textContent, inTop: !!n.closest('#wsUpdate') } : null; }); };
 const boxes = page => page.evaluate(() => {
   const r = el => { if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; };
-  return { note: r(document.getElementById('updNote')), obar: r(document.getElementById('obar')), stage: r(document.querySelector('.stage')), canvas: r(document.querySelector('.stage canvas')) };
+  // the order ticket (where it is held), the panels' grid and a chart's canvas
+  return { note: r(document.getElementById('updNote')), obar: r(document.querySelector('.ws-panel[data-type="ticket"] [data-tk-id="obar"]')), stage: r(document.getElementById('wsGrid')),
+    canvas: r(document.querySelector('.ws-panel[data-type="chart"] .stage canvas')) };
 });
 const overlap = (a, b) => !!a && !!b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 const same = (a, b) => !!a && !!b && ['x', 'y', 'w', 'h'].every(k => Math.abs(a[k] - b[k]) < 0.5);
+const samePlace = (a, b) => !!a && !!b && ['x', 'y', 'w'].every(k => Math.abs(a[k] - b[k]) < 0.5);   // the ticket's own notes change its height
 // ask now, then wait until the notice has settled: shown in a form that fits (or hidden)
 async function poll(page) {
   await page.evaluate(() => window.ChartUpdateNotice.checkNow());
@@ -71,40 +74,41 @@ async function until(fn, what, ms = 8000) {
 let browser = null;
 try {
   browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
-  const page = await open(browser, 1440);
+  const page = await open(browser, 1920);
   let navigations = 0;
   page.on('framenavigated', f => { if (f === page.mainFrame()) navigations++; });
-  await page.waitForSelector('#obar:not([hidden])', { timeout: 10000 });
-  // an open position (placed in NinjaTrader itself): LONG 1 in the order bar
+  const oPos = '.ws-panel[data-type="ticket"] [data-tk-id="oPos"]';
+  await page.waitForSelector('.ws-panel[data-type="ticket"] [data-tk-id="obar"]', { timeout: 15000 });   // the first window takes the ticket
+  // an open position (placed in NinjaTrader itself): LONG 1 on the order ticket
   await control('elsewhere', { account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'market', qty: 1 });
-  await until(async () => (await page.textContent('#oPos')).startsWith('LONG 1'), 'position LONG 1 in the order bar');
+  await until(async () => (await page.textContent(oPos)).startsWith('LONG 1'), 'position LONG 1 on the order ticket');
   await page.evaluate(() => { window.__loadedOnce = 'yes'; });
   await poll(page);
   const n0 = await note(page);
-  check(n0 && n0.inFooter && n0.hidden, 'the same build as loaded: nothing shown (the notice waits on the status line)');
+  check(n0 && n0.inTop && n0.hidden, 'the same build as loaded: nothing shown (the notice waits in the top bar)');
   const before = await boxes(page);
 
   writeUpdate('build-b', Date.now());
   await poll(page);
   const n1 = await note(page);
   check(n1 && !n1.hidden && n1.text === 'Update ready: reload when flat', 'a new build: "Update ready: reload when flat" (' + (n1 && n1.text) + ')');
-  check(await page.evaluate(() => { const n = document.getElementById('updNote'); return n.scrollWidth <= n.clientWidth + 1 && n.clientWidth > 0; }), '1440 px: the notice is shown whole');
+  check(await page.evaluate(() => { const n = document.getElementById('updNote'); return n.scrollWidth <= n.clientWidth + 1 && n.clientWidth > 0; }), '1920 px: the notice is shown whole');
   const after = await boxes(page);
-  check(!overlap(after.note, after.obar), 'the notice does not cover the order bar');
-  check(!overlap(after.note, after.stage) && !overlap(after.note, after.canvas), 'the notice does not cover the chart');
-  check(same(before.obar, after.obar) && same(before.stage, after.stage), 'the order bar and the chart did not move');
-  check((await page.textContent('#oPos')).startsWith('LONG 1'), 'the open position is still shown');
+  check(!overlap(after.note, after.obar), 'the notice does not cover the order ticket');
+  check(!overlap(after.note, after.stage) && !overlap(after.note, after.canvas), 'the notice does not cover the charts');
+  check(samePlace(before.obar, after.obar) && same(before.stage, after.stage), 'the order ticket and the charts did not move');
+  check((await page.textContent(oPos)).startsWith('LONG 1'), 'the open position is still shown');
   check(await page.evaluate(() => window.__loadedOnce) === 'yes' && navigations === 0, 'the page did not reload itself');
   const styles = await page.evaluate(() => { const s = getComputedStyle(document.getElementById('updNote')); return s.position + ' ' + s.zIndex; });
-  check(/^(static|relative) /.test(styles), 'the notice sits in the flow of the status line, not over anything (' + styles + ')');
-  await page.screenshot({ path: path.join(out, 'update-notice-1440.png'), clip: { x: 0, y: 760, width: 1440, height: 100 } });
+  check(/^(static|relative) /.test(styles), 'the notice sits in the flow of the top bar, not over anything (' + styles + ')');
+  await page.screenshot({ path: path.join(out, 'update-notice-1920.png'), clip: { x: 0, y: 0, width: 1920, height: 100 } });
 
-  // the status line's own text changes twice a second; the notice refits when its room changes
+  // the notice refits when its room changes
   const whole = pg => pg.waitForFunction(() => { const n = document.getElementById('updNote'); return n.scrollWidth <= n.clientWidth + 1; }, null, { timeout: 3000 }).then(() => true, () => false);
   writeUpdate('build-b', Date.now() - 1000, { ready: '0.3.4' });
   await poll(page);
   const n2 = await note(page);
-  check(n2 && /^Update ready.* · ChartBridge 0\.3\.4 ready/.test(n2.text) && await whole(page), '1440 px: ChartBridge ready, in the form that fits: ' + (n2 && n2.text));
+  check(n2 && /^Update ready.* · ChartBridge 0\.3\.4 ready/.test(n2.text) && await whole(page), '1920 px: ChartBridge ready, in the form that fits: ' + (n2 && n2.text));
   check(/ChartBridge 0\.3\.4 ready to install \(flat, then F5\)/.test(await page.getAttribute('#updNote', 'title')), 'the tooltip has the whole text');
   const wide = await open(browser, 1920);
   await poll(wide);
@@ -115,8 +119,8 @@ try {
   await poll(page);
   const n3 = await note(page);
   check(n3 && /ChartBridge 0\.3\.5(: F5 when flat| copied: press F5 when flat)$/.test(n3.text) && await whole(page), 'ChartBridge copied, waiting for F5: ' + (n3 && n3.text));
-  check(same(before.obar, (await boxes(page)).obar) && same(before.stage, (await boxes(page)).stage), 'still nothing moved with the longer notice');
-  await page.screenshot({ path: path.join(out, 'update-notice-1440-chartbridge.png'), clip: { x: 0, y: 760, width: 1440, height: 100 } });
+  { const b3 = await boxes(page); check(samePlace(before.obar, b3.obar) && same(before.stage, b3.stage), 'still nothing moved with the longer notice' + (samePlace(before.obar, b3.obar) && same(before.stage, b3.stage) ? '' : ': ' + JSON.stringify([before, b3]))); }
+  await page.screenshot({ path: path.join(out, 'update-notice-1920-chartbridge.png'), clip: { x: 0, y: 0, width: 1920, height: 100 } });
   // 1.16.0: the ChartBridge this page is connected to (its hello: 0.3.4) is already the copied version: no F5 note, at once
   writeUpdate('build-b', Date.now() - 1000, { copied: '0.3.4' });
   await poll(page);
@@ -127,8 +131,8 @@ try {
   // the page's own minute: it polls by itself (no test hook) and still never reloads
   check(await page.evaluate(() => window.__loadedOnce) === 'yes' && navigations === 0, 'still no reload');
 
-  // the reviewer's sweep: 700 to 1920 px, the longest notice; the chart's top and height and the status line's height
-  // are the same with the notice shown as hidden, at every width
+  // the reviewer's sweep: 700 to 1920 px, the longest notice; the panels' top and height and the top bar's height are the
+  // same with the notice shown as hidden, at every width
   writeUpdate('build-e', Date.now(), { ready: '0.3.4' });
   await poll(page);
   let moved = [];
@@ -136,15 +140,15 @@ try {
     await page.setViewportSize({ width: w, height: 860 });
     await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
     const m = await page.evaluate(() => {
-      const n = document.getElementById('updNote'), stage = document.querySelector('.stage'), foot = n.closest('footer.status');
+      const n = document.getElementById('updNote'), stage = document.getElementById('wsGrid'), foot = document.querySelector('.ws-top');
       const box = () => { const s = stage.getBoundingClientRect(), f = foot.getBoundingClientRect(); return [Math.round(s.top), Math.round(s.height), Math.round(f.height)].join(','); };
       n.hidden = true; const off = box(); n.hidden = false; const on = box();
       return { off, on, whole: n.scrollWidth <= n.clientWidth + 1 || getComputedStyle(n).textOverflow === 'ellipsis' };
     });
     if (m.off !== m.on) moved.push(w + ': ' + m.off + ' -> ' + m.on);
   }
-  check(moved.length === 0, '700 to 1920 px in 20 px steps: the chart top and height and the status line never change with the notice' + (moved.length ? ' (' + moved.join('; ') + ')' : ''));
-  await page.setViewportSize({ width: 1440, height: 860 });
+  check(moved.length === 0, '700 to 1920 px in 20 px steps: the panels\' top and height and the top bar never change with the notice' + (moved.length ? ' (' + moved.join('; ') + ')' : ''));
+  await page.setViewportSize({ width: 1920, height: 860 });
   const said = (await note(page)).said;
   check(/^Update ready: reload when flat · ChartBridge 0\.3\.4 ready to install \(flat, then F5\)$/.test(said), 'a screen reader gets the whole text once: ' + said);
   writeUpdate('interrupted', Date.now(), {}, 'interrupted');
@@ -159,7 +163,7 @@ try {
   const f1 = await note(fresh);
   check(f1 && f1.hidden, 'a page opened after the install shows nothing');
   const bx = await boxes(fresh);
-  if (bx.obar && bx.note) check(!overlap(bx.note, bx.obar), '1024 px: the notice spot is off the order bar');
+  if (bx.obar && bx.note) check(!overlap(bx.note, bx.obar), '1024 px: the notice spot is off the order ticket');
   await fresh.close();
   writeUpdate('build-d', Date.now() + 5000);           // installed after this page began loading
   const during = await open(browser, 1024);
@@ -167,16 +171,17 @@ try {
   await during.waitForTimeout(2500);                  // fonts and status messages settle; the notice fits again
   const f2 = await note(during);
   check(f2 && !f2.hidden && /^Update ready(: reload when flat)?$/.test(f2.text), 'a page that loaded during an install shows the notice (' + (f2 && f2.text) + ')');
-  check(await during.evaluate(() => { const n = document.getElementById('updNote'); return n.scrollWidth <= n.clientWidth + 1 && /reload when flat/.test(n.title); }), '1024 px: shown whole (the short form when the room is short; the tooltip has it all)');
+  check(await during.evaluate(() => { const n = document.getElementById('updNote'); return (n.scrollWidth <= n.clientWidth + 1 || getComputedStyle(n).textOverflow === 'ellipsis') && /reload when flat/.test(n.title); }),
+    '1024 px: the short form, cut with "..." when the top bar has no room for it (the tooltip has it all)');
   const b2 = await boxes(during);
-  check(!overlap(b2.note, b2.obar) && !overlap(b2.note, b2.stage), '1024 px: the notice covers neither the order bar nor the chart');
+  check(!overlap(b2.note, b2.obar) && !overlap(b2.note, b2.stage), '1024 px: the notice covers neither the order ticket nor the charts');
   await during.screenshot({ path: path.join(out, 'update-notice-1024.png') });
   await during.close();
 
   // the reviewer's 1a and 1b: a page that opens while an install runs (update.json already says "installing" the new
   // build) is told to wait, never takes that build as its own, and is told "Update ready" once the install completes
   writeUpdate('build-f', Date.now() - 2000, {}, 'installing');
-  const mid = await open(browser, 1440);
+  const mid = await open(browser, 1920);
   await poll(mid);
   const m1 = await note(mid);
   check(m1 && !m1.hidden && /^Page files are being updated: do not reload yet/.test(m1.text) && !/reload when flat/.test(m1.text), '1a. opened during an install: ' + (m1 && m1.text));
@@ -191,7 +196,7 @@ try {
   const m3 = await note(mid);
   check(m3 && /^Page update cut off/.test(m3.text) && !/reload/.test(m3.text), '1c. an open page after a crash: ' + (m3 && m3.text));
   await mid.close();
-  const late = await open(browser, 1440);
+  const late = await open(browser, 1920);
   await poll(late);
   const m4 = await note(late);
   check(m4 && /^Page update cut off/.test(m4.text) && !/reload/.test(m4.text), '1d. a page opened after a crash: ' + (m4 && m4.text));
@@ -199,9 +204,9 @@ try {
 
   // review 3: an -InstallChartBridge that failed half way and could not put the old files back, and a scheduled task
   // whose copy failed its own check. Each is said first, in the warning colour, never with "F5 when flat" or "ready",
-  // and the notice still never moves the chart or the status line
+  // and the notice still never moves the panels or the top bar
   writeUpdate('build-h', Date.now() - 60000, { mixed: true, ready: '0.3.9', copied: null });
-  const mx = await open(browser, 1440);
+  const mx = await open(browser, 1920);
   await poll(mx);
   const x1 = await note(mx);
   const x1said = x1 && x1.said;
@@ -213,16 +218,16 @@ try {
     await mx.setViewportSize({ width: w, height: 860 });
     await mx.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
     const m = await mx.evaluate(() => {
-      const n = document.getElementById('updNote'), stage = document.querySelector('.stage'), foot = n.closest('footer.status');
+      const n = document.getElementById('updNote'), stage = document.getElementById('wsGrid'), foot = document.querySelector('.ws-top');
       const box = () => { const s = stage.getBoundingClientRect(), f = foot.getBoundingClientRect(); return [Math.round(s.top), Math.round(s.height), Math.round(f.height)].join(','); };
       n.hidden = true; const off = box(); n.hidden = false; const on = box();
       return { off, on };
     });
     if (m.off !== m.on) xmoved.push(w + ': ' + m.off + ' -> ' + m.on);
   }
-  check(xmoved.length === 0, 'the mixed notice, 700 to 1920 px in 40 px steps: the chart and the status line never move' + (xmoved.length ? ' (' + xmoved.join('; ') + ')' : ''));
-  await mx.setViewportSize({ width: 1440, height: 860 });
-  await mx.screenshot({ path: path.join(out, 'update-notice-1440-mixed.png'), clip: { x: 0, y: 760, width: 1440, height: 100 } });
+  check(xmoved.length === 0, 'the mixed notice, 700 to 1920 px in 40 px steps: the panels and the top bar never move' + (xmoved.length ? ' (' + xmoved.join('; ') + ')' : ''));
+  await mx.setViewportSize({ width: 1920, height: 860 });
+  await mx.screenshot({ path: path.join(out, 'update-notice-1920-mixed.png'), clip: { x: 0, y: 0, width: 1920, height: 100 } });
   writeUpdate('build-h', Date.now() - 60000, {}, '', { updater: { stopped: true } });
   await poll(mx);
   const x2 = await note(mx);
@@ -236,7 +241,7 @@ try {
 
   // no update.json (a PC without the updater): no notice, no error
   fs.rmSync(updateJson);
-  const none = await open(browser, 1440);
+  const none = await open(browser, 1920);
   await poll(none);
   const f3 = await note(none);
   check(f3 && f3.hidden, 'no update.json: nothing shown');

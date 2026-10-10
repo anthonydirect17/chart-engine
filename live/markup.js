@@ -136,7 +136,7 @@
   function mount() {
     if (!A.inst) { instReady.then(mount); return; }               // the charts need the instrument's root first
     unmount();
-    const wsUrl = () => 'ws://' + location.host + '/ws';
+    const wsUrl = 'ws://' + location.host + '/ws';                    // a string (chart 1.21.0: ChartLive.mount takes no function)
     // each chart has its own connection: a shared feed (live/feed.js) gives a 1 minute chart no tick backfill, so its delta
     // would count only from the load; the server encodes the load once and sends the same bytes to both
     const opts = (prefix, tf) => ({ wsUrl, paneId: 'main', storagePrefix: prefix, view: { root: A.inst.root, tf, range: 40 }, compact: true, toolbar: false });

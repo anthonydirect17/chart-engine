@@ -1,27 +1,24 @@
 // The NO STOP question never blocks Close or Flatten all (chart 1.13.0, the F2 review; ported from its probes
 // probe-nostop-flatten.mjs and probe-nostop-ws.mjs), against the fake bridge (ChartBridge 0.3.8's protocol, sample
 // data; nothing reaches a broker):
-//   - /single.html: with the question open, the Close key, the Flatten all key and a click on Flatten each send at once
-//     and close the question (its order not sent); the question floats over the chart, covers no control and the
-//     chart does not resize; Cancel has the focus, so Enter sends nothing; a reversal (Sell 3 while long 1) is asked,
-//     a reducing Sell is not; Armed off, or another instrument and Armed again, drops it and nothing is sent;
-//   - the workspace (two windows): the same for the ticket's Close, the top bar's Flatten all and the keys, in the
-//     ticket's window and in a window that forwards; Cancel has the focus there too; the question sits over the top
-//     bar, so the grid never resizes and the ticket never scrolls (1366x768, 1920x1080, 2560x1440); Armed off, the
-//     ticket on another instrument, or a Close in the other window drops it; an answer that reaches the ticket's
-//     window after a Close of its instrument (the drop arriving late) is refused (the F2 re-review).
-//   npm run smoke:nostop        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser; NOSTOP_PART=single or
-//                               workspace runs one part)
+//   - the workspace (two windows): with the question open, the ticket's Close, the top bar's Flatten all and the keys
+//     send at once and close the question (its order not sent), in the ticket's window and in a window that forwards;
+//     Cancel has the focus, so Enter sends nothing, and Escape is Cancel; Send sends it; the question sits over the top
+//     bar, so the grid never resizes and the ticket never scrolls (1366x768, 1920x1080, 2560x1440); Armed off, the ticket
+//     on another instrument, or a Close in the other window drops it; an answer that reaches the ticket's window after a
+//     Close of its instrument (the drop arriving late) is refused (the F2 re-review); a reversal (Sell 3 while long 1) is
+//     asked, a reducing Sell is not. (Chart 1.21.0: the single chart page's own part went with that page; its Escape,
+//     Send, reversal and reducing checks run on the ticket here.)
+//   npm run smoke:nostop        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { TEST_PIN, unlockIfAsked, enterPin } from './smoke-pin.mjs';
+import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.env.NOSTOP_SMOKE_PORT || 8881);
-const PART = process.env.NOSTOP_PART || '';
 const out = path.join(root, 'test', 'out');
 fs.mkdirSync(out, { recursive: true });
 const errors = [];
@@ -68,89 +65,8 @@ try {
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   await ctx.addInitScript(spies, HOTKEYS);
 
-  /* ================================================================ /single.html */
-  if (PART !== 'workspace') {
-  console.log('/single.html');
-  const page = await ctx.newPage();
-  page.on('pageerror', e => fail('pageerror: ' + e.message));
-  const openSingle = async () => {
-    await page.goto(`http://localhost:${PORT}/live/single.html`);
-    await unlockIfAsked(page);
-    await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE' && !document.getElementById('buyMkt').disabled, null, { timeout: 30000 });
-    await wait(600);
-    await page.fill('#bStop', '0'); await page.press('#bStop', 'Tab'); await blur(page);
-  };
-  await openSingle();
-  const asked = () => page.evaluate(() => !document.getElementById('noStopAsk').hidden);
-  await page.click('#armBtn'); await wait(450);
-  const chartSize = () => page.evaluate(() => { const c = document.querySelector('#chart canvas').getBoundingClientRect(), st = document.querySelector('.stage').getBoundingClientRect(); return [Math.round(c.width), Math.round(c.height), Math.round(st.top), Math.round(st.height)]; });
-  const sizeBefore = await chartSize();
-  await page.click('#buyMkt'); await wait(250);
-  check(await asked() && !(await sent(page)).length, 'Buy MKT with stop 0: the question, nothing sent');
-  check(await page.evaluate(() => document.activeElement === document.getElementById('noStopCancel')), 'Cancel has the focus');
-  const flow = await page.evaluate(() => getComputedStyle(document.getElementById('noStopAsk')).position);
-  const sizeNow = await chartSize();
-  check(flow === 'absolute' && await uncovered(page, '#flattenBtn') && await uncovered(page, '#armBtn') && await uncovered(page, '#buyMkt') && await uncovered(page, '#noStopCancel') && await uncovered(page, '#noStopSend'),
-    'the question floats over the chart (' + flow + '): the order bar, Cancel and Send are not covered');
-  await page.screenshot({ path: path.join(out, 'nostop-single-1600x900.png') });
-  check(JSON.stringify(sizeNow) === JSON.stringify(sizeBefore), 'the chart does not resize when the question shows (' + JSON.stringify(sizeBefore) + ' / ' + JSON.stringify(sizeNow) + ')');
-  await page.keyboard.press('Enter'); await wait(300);
-  check(!(await asked()) && !(await sent(page)).length, 'Enter on the question: Cancel, nothing sent');
-
-  const flattenWhileAsked = async (what, act) => {
-    await elsewhere(L); await wait(500);
-    await clear(page); await wait(450);
-    await page.click('#buyMkt'); await wait(250);
-    const open = await asked();
-    await act(); await wait(400);
-    const s = await sent(page);
-    check(open && s.length >= 1 && s.every(m => m.type === 'flatten' && m.root === 'MNQ') && !(await asked()), what + ' with the question open: sent at once (' + JSON.stringify(s) + '), the question closed, its order not sent');
-  };
-  await flattenWhileAsked('the Close key', () => page.keyboard.press('Alt+C'));
-  await flattenWhileAsked('the Flatten all key', () => page.keyboard.press('Shift+F9'));
-  await flattenWhileAsked('a click on Flatten', () => page.click('#flattenBtn'));
-  await until(async () => !(await state()).orders.length, 'no working order left');
-
-  // Armed off drops the question; another instrument and Armed again: still gone, nothing sent (F2 re-review)
-  await clear(page); await wait(450);
-  await page.click('#buyMkt'); await wait(250);
-  await page.click('#armBtn'); await wait(250);
-  check(!(await asked()) && !(await sent(page)).length, 'Armed off drops the question, nothing sent');
-  await page.click('#armBtn'); await wait(450);
-  await page.click('#buyMkt'); await wait(250);
-  const wasOpen = await asked();
-  await page.click('#symSeg button[data-v="NQ"]'); await wait(800);
-  await page.click('#armBtn'); await wait(450);
-  check(wasOpen && !(await asked()) && !(await sent(page)).length, 'asked on MNQ, then NQ and Armed again: the question is gone, nothing sent');
-  await page.click('#symSeg button[data-v="MNQ"]'); await wait(800);
-  await page.click('#armBtn'); await wait(450);
-
-  // Escape is Cancel; Send sends it
-  await clear(page); await wait(450);
-  await page.click('#buyMkt'); await wait(250);
-  await page.keyboard.press('Escape'); await wait(200);
-  check(!(await asked()) && !(await sent(page)).length, 'Escape: Cancel, nothing sent');
-  await wait(450); await page.click('#buyMkt'); await wait(250);
-  await page.click('#noStopSend');
-  await until(async () => Object.values((await state()).positions).some(p => p.qty === 1), 'long 1');
-
-  // a reversal opens a position: asked as an entry (a new page load, so the question is back); reducing is not
-  await openSingle();
-  await page.click('#armBtn'); await wait(450);
-  await page.selectOption('#oQty', '3'); await blur(page); await clear(page);
-  await page.click('#sellMkt'); await wait(250);
-  check(await asked() && !(await sent(page)).length, 'long 1, Sell 3 (a reversal: it opens short 2) with stop 0: asked');
-  await page.click('#noStopCancel'); await wait(450);
-  await page.selectOption('#oQty', '1'); await blur(page); await clear(page);
-  await page.click('#sellMkt'); await wait(400);
-  const red = await sent(page, ['order']);
-  check(!(await asked()) && red.length === 1 && red[0].side === 'sell' && !red[0].bracket, 'long 1, Sell 1 (reduces): never asked, sent');
-  await until(async () => !Object.values((await state()).positions).some(p => p.qty), 'flat (single)');
-  await page.close();
-  }
-
   /* ================================================================ the workspace: two windows */
-  if (PART !== 'single') {
+  {
   console.log('the workspace');
   const openWs = async layout => {
     const q = await ctx.newPage();
@@ -263,6 +179,30 @@ try {
   await A.bringToFront(); await A.click(tk('buyMkt')); await wait(300);
   check(await wsAsked(A), 'and A was not told "Send" by it: its own order with no stop is still asked');
   await A.click('#wsNoStopCancel');
+
+  // Escape is Cancel (the single chart page's checks until 1.21.0, now on the ticket)
+  await clear(A); await clear(B); await A.bringToFront(); await wait(450);
+  await A.click(tk('buyMkt')); await wait(250);
+  await A.keyboard.press('Escape'); await wait(200);
+  check(!(await wsAsked(A)) && !(await sent(A)).length, 'Escape: Cancel, nothing sent');
+  // a reversal opens a position: asked as an entry; reducing is not (long 1 placed in NinjaTrader itself)
+  await control('elsewhere', { account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'market', qty: 1 });
+  await until(async () => Object.values((await state()).positions).some(p => p.qty === 1), 'long 1');
+  await A.selectOption(tk('oQty'), '3'); await blur(A); await clear(A); await wait(450);
+  await A.click(tk('sellMkt')); await wait(300);
+  check(await wsAsked(A) && !(await sent(A)).length, 'long 1, Sell 3 (a reversal: it opens short 2) with stop 0: asked');
+  await A.click('#wsNoStopCancel'); await wait(450);
+  await A.selectOption(tk('oQty'), '1'); await blur(A); await clear(A); await wait(450);
+  await A.click(tk('sellMkt')); await wait(600);
+  const red = await sent(A, ['order']);
+  check(!(await wsAsked(A)) && red.length === 1 && red[0].side === 'sell' && !red[0].bracket, 'long 1, Sell 1 (reduces): never asked, sent: ' + JSON.stringify(red));
+  await until(async () => !Object.values((await state()).positions).some(p => p.qty), 'flat (workspace)');
+  // Send sends it
+  await wait(450); await A.click(tk('buyMkt')); await wait(250);
+  await A.click('#wsNoStopSend');
+  await until(async () => Object.values((await state()).positions).some(p => p.qty === 1), 'long 1 after Send');
+  await A.click(tk('flattenBtn'));
+  await until(async () => !Object.values((await state()).positions).some(p => p.qty), 'flat after Send (workspace)');
   }
   await ctx.close();
 } catch (e) {

@@ -492,9 +492,9 @@ test('order-ticket: a stop-limit or MIT entry carries its planned lines (0.4.0 r
   assert.equal(OT.plannedLines(Object.assign({}, o, { kind: 'mit', price: 25000 }), 0.25).lines.length, 2);
 });
 
-test('the pages load order-strategies.js before trade.js, and the install list has it', () => {
+test('the workspace loads order-strategies.js before trade.js, and the install list has it', () => {
   const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  for (const f of ['live/index.html', 'live/single.html']) {
+  for (const f of ['live/index.html']) {
     const h = read(f), at = s => h.indexOf('src="' + s + '"');
     assert.ok(at('order-ticket.js') < at('order-strategies.js') && at('order-strategies.js') < at('trade.js'), f);
   }

@@ -1,11 +1,13 @@
-// Volume profile smoke (1.6.0): the live page on NQ Range 40 against the fake bridge (SAMPLE data
+// Volume profile smoke (1.6.0): a mounted chart with its own toolbar (test/chart-host.html; the single chart page until
+// chart 1.21.0) on NQ Range 40 against the fake bridge (SAMPLE data
 // only, never market data), at 13:00 New York time on the most recent weekday with a regular session, so the full
 // session (from 18:00 the evening before) and RTH (from 9:30) differ.
 //   npm run smoke:vp        (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks: off by default and counted in the Indicators menu; on from the menu draws bars at the right edge of the plot
 // (POC row in its color reaching VP_WIDTH of the plot width, value-area rows, nothing in the left half); the profile
 // holds exactly the trades the page got (every backfill and live trade counted independently in the page) for the
-// session and for RTH; Session and RTH differ and the legend follows; both choices survive a reload; a mounted chart's
+// session and for RTH; Session and RTH differ, with the profile's day (the single chart page's legend until 1.21.0, now worked out from
+// the profile and its note: test/vp-smoke.mjs state()); both choices survive a reload; a mounted chart's
 // documented API (setIndicatorOption) and a new pane with the profile off; two tabs, where a stale tab's pick is saved
 // as it shows it (review S2). Screenshots, labelled as sample data.
 import { chromium } from 'playwright';
@@ -13,6 +15,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { hostUrl, waitLive } from './chart-host.mjs';
 import fs from 'node:fs';
 
 const require = createRequire(import.meta.url);
@@ -89,7 +92,7 @@ async function context(offset) {
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   return ctx;
 }
-const live = p => p.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 30000 }).then(() => p.waitForTimeout(800));
+const live = p => waitLive(p, 30000).then(() => p.waitForTimeout(800));
 async function openPage(ctx, url) {
   const p = await ctx.newPage();
   p.on('pageerror', e => fail('pageerror: ' + e.message));
@@ -109,20 +112,26 @@ const state = p => p.evaluate(() => {
     if (t >= rthFrom && t < rthTo && v > 0) rth += v;
   }
   for (const [t, pr] of window.__trades) if (t >= rthFrom && t < rthTo) { lo = Math.min(lo, pr); hi = Math.max(hi, pr); }
-  const lg = document.getElementById('lgVp');
+  // the profile's readout, as the single chart page's legend showed it until 1.21.0: "POC p · VA a to b (Day)", and
+  // "(Day from 16:00)" when the ticks start after the session did (the same time the note gives)
+  const noteEl = document.querySelector('[id$="-vpNote"]'), noteText = noteEl.hidden ? '' : noteEl.textContent;
+  const fromM = /^Volume profile from (\d\d:\d\d(?::\d\d)?) ET: the tick history does not reach back/.exec(noteText), U = window.ChartEngine.util;
+  const cols = window.liveChart.getLayers().vp && vp ? vp.columns() : null;
+  const lgText = cols && vp.poc() ? 'POC ' + U.fmtPrice(vp.poc().price, 2) + ' · VA ' + U.fmtPrice(vp.valueArea().val, 2) + ' to ' + U.fmtPrice(vp.valueArea().vah, 2) +
+    ' (' + ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(vp.day * 86400000).getUTCDay()] + (fromM ? ' from ' + fromM[1] : '') + ')' : null;
   return {
     on: window.liveChart.getLayers().vp, has: !!vp, rth: vp ? vp.rth : null, total: vp ? vp.total : null, low: vp ? vp.low : null, high: vp ? vp.high : null,
     poc: vp && vp.poc() ? vp.poc().price : null, va: vp && vp.valueArea() ? [vp.valueArea().val, vp.valueArea().vah] : null,
-    expect: { session, rth, rthLow: lo, rthHigh: hi }, legend: lg && !lg.hidden ? lg.textContent : null,
+    expect: { session, rth, rthLow: lo, rthHigh: hi }, legend: lgText,
     // the Session / RTH switch in the profile's gear panel (Indicators menu, 1.6.0), when that panel is open
-    pressed: (() => { const b = [...document.querySelectorAll('#indBody [data-act="opt"][data-id="vp"][data-k="session"]')]; return b.length ? b.filter(x => x.getAttribute('aria-pressed') === 'true').map(x => x.dataset.v) : null; })(),
-    note: document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent,
+    pressed: (() => { const b = [...document.querySelectorAll('[id$="-indBody"] [data-act="opt"][data-id="vp"][data-k="session"]')]; return b.length ? b.filter(x => x.getAttribute('aria-pressed') === 'true').map(x => x.dataset.v) : null; })(),
+    note: noteText,
     day: vp && vp.day !== null ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(vp.day * 86400000).getUTCDay()] : null,   // the session's trading day (1.6.1)
   };
 });
 /* Pixels of the profile's colors on the canvas: along the POC row, and in the column just left of the plot's right edge. */
 const pixels = p => p.evaluate(() => {
-  const chart = window.liveChart, c = document.querySelector('#chart canvas'), x = c.getContext('2d'), dpr = devicePixelRatio;
+  const chart = window.liveChart, c = document.querySelector('[id$="-chart"] canvas'), x = c.getContext('2d'), dpr = devicePixelRatio;
   const T = chart.colors(), rgb = h => { const m = /^#(..)(..)(..)$/.exec(h); return [1, 2, 3].map(i => parseInt(m[i], 16)); };
   const want = { poc: rgb(T.vpPoc), value: rgb(T.vpValue), row: rgb(T.vpRow) };
   const plotW = c.width / dpr - 78, right = Math.round(plotW * dpr);
@@ -157,35 +166,36 @@ try {
   const off = offsetTo(13, 0);
   const br = await startBridge(off);
   const ctx = await context(off);
-  const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
-  check(await p.textContent('#lgTf') === 'Range 40t' && await p.textContent('#lgName') !== '', 'NQ Range 40 (sample data): ' + await p.textContent('#lgName') + ' ' + await p.textContent('#lgTf'));
+  const p = await openPage(ctx, hostUrl(br.port));
+  const v0 = await p.evaluate(() => Object.assign(window.liveMount.view(), { name: window.liveData().name }));
+  check(v0.root === 'NQ' && v0.tf === 'range' && v0.range === 40 && !!v0.name, 'NQ Range 40 (sample data): ' + JSON.stringify(v0));
 
   /* off by default, listed in the Indicators menu */
   const s0 = await state(p), px0 = await pixels(p);
-  check(s0.on === false && s0.has === false && s0.legend === null, 'volume profile off by default: no layer, no profile, no legend');
-  check(await p.textContent('#indCount') === '5/5', 'Indicators count 5/5 (shown / on this chart; the profile is not on it, the delta pane is, 1.7.0; the IB in Levels, 1.14.0): ' + await p.textContent('#indCount'));
+  check(s0.on === false && s0.has === false && s0.legend === null, 'volume profile off by default: no layer, no profile');
+  check(await p.textContent('[id$="-indCount"]') === '5/5', 'Indicators count 5/5 (shown / on this chart; the profile is not on it, the delta pane is, 1.7.0; the IB in Levels, 1.14.0): ' + await p.textContent('[id$="-indCount"]'));
   check(px0.column.poc === 0 && px0.column.value === 0, 'nothing of the profile at the right edge while off: ' + JSON.stringify(px0.column));
 
   /* on from the menu: the full session */
-  await p.click('#indBtn');
-  await p.click('#indBody .ind-cat[data-id="volume"]');
-  check(await p.isVisible('#indBody [data-f="add:vp"]') && !(await p.$('#indBody .ind-item[data-id="vp"] .ind-tag')) && !(await p.$('#indBody [data-act="pin"][data-id="vp"]')), 'Indicators menu: Volume profile in the Volume group with a +, no "coming" tag, no pin until added');
-  await p.click('#indBody [data-act="gear"][data-id="vp"]');
-  check(JSON.stringify((await state(p)).pressed) === '["full"]' && /Hours/.test(await p.textContent('#indBody .ind-set[data-id="vp"]')), 'its gear panel: the Session / RTH switch shows Session');
+  await p.click('[id$="-indBtn"]');
+  await p.click('[id$="-indBody"] .ind-cat[data-id="volume"]');
+  check(await p.isVisible('[id$="-indBody"] [data-f="add:vp"]') && !(await p.$('[id$="-indBody"] .ind-item[data-id="vp"] .ind-tag')) && !(await p.$('[id$="-indBody"] [data-act="pin"][data-id="vp"]')), 'Indicators menu: Volume profile in the Volume group with a +, no "coming" tag, no pin until added');
+  await p.click('[id$="-indBody"] [data-act="gear"][data-id="vp"]');
+  check(JSON.stringify((await state(p)).pressed) === '["full"]' && /Hours/.test(await p.textContent('[id$="-indBody"] .ind-set[data-id="vp"]')), 'its gear panel: the Session / RTH switch shows Session');
   await p.screenshot({ path: path.join(SHOTS, 'vp-indicators-menu.png') });
-  await p.click('#indBody [data-f="add:vp"]');
+  await p.click('[id$="-indBody"] [data-f="add:vp"]');
   // 1.14.0: the developing POC line runs through the POC bar; off here, so the bar's own pixels are measured
-  if (await p.isHidden('#indBody .ind-set[data-id="vp"]')) await p.click('#indBody [data-act="gear"][data-id="vp"]');
-  await p.click('#indBody [data-f="tog:vp:dpoc"]'); await p.keyboard.press('Escape');
-  check(await p.evaluate(() => [...document.querySelectorAll('#indChips .ind-chip')].map(c => c.dataset.id).join()) === 'volume,vwap,levels,vp,fills', 'added: its chip on the strip (the delta pane has none)');
+  if (await p.isHidden('[id$="-indBody"] .ind-set[data-id="vp"]')) await p.click('[id$="-indBody"] [data-act="gear"][data-id="vp"]');
+  await p.click('[id$="-indBody"] [data-f="tog:vp:dpoc"]'); await p.keyboard.press('Escape');
+  check(await p.evaluate(() => [...document.querySelectorAll('[id$="-indChips"] .ind-chip')].map(c => c.dataset.id).join()) === 'volume,vwap,levels,vp,fills', 'added: its chip on the strip (the delta pane has none)');
   await p.mouse.move(10, 400); await p.waitForTimeout(600);
   const s1 = await state(p), px1 = await pixels(p);
   check(s1.on === true && s1.has === true && s1.rth === false, 'on: the chart has a session profile');
   check(s1.total === s1.expect.session && s1.total > 0, 'session profile holds every trade from 18:00 ET the page got: ' + s1.total + ' = ' + s1.expect.session);
-  check(await p.textContent('#indCount') === '6/6', 'Indicators count 6/6');
+  check(await p.textContent('[id$="-indCount"]') === '6/6', 'Indicators count 6/6');
   const fmt = v => U.fmtPrice(v, 2);
   const today = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(U.zoneSeconds(Date.now() / 1000 + off) * 1000).getUTCDay()];
-  check(s1.legend === 'POC ' + fmt(s1.poc) + ' · VA ' + fmt(s1.va[0]) + ' to ' + fmt(s1.va[1]) + ' (' + today + ')' && s1.day === today, 'legend, with the session\'s day (1.6.1): ' + s1.legend);
+  check(s1.legend === 'POC ' + fmt(s1.poc) + ' · VA ' + fmt(s1.va[0]) + ' to ' + fmt(s1.va[1]) + ' (' + today + ')' && s1.day === today, 'the profile\'s readout, with the session\'s day (1.6.1): ' + s1.legend);
   check(s1.va[0] <= s1.poc && s1.poc <= s1.va[1], 'VAL <= POC <= VAH');
   check(px1.pocN > 20 && px1.pocLast >= px1.right - 2 && px1.pocFirst >= px1.right - px1.maxW - 3 && px1.pocFirst <= px1.right - px1.maxW * 0.5,
     'POC row drawn from the right edge, about ' + CE.VP_WIDTH * 100 + '% of the plot wide: device x ' + px1.pocFirst + ' to ' + px1.pocLast + ' (edge ' + px1.right + ', full width ' + Math.round(px1.maxW) + ')');
@@ -197,15 +207,15 @@ try {
   await p.screenshot({ path: path.join(SHOTS, 'vp-session-nq-range40-sample.png') });
 
   /* RTH */
-  await p.click('#indBtn'); await p.click('#indBody [data-act="gear"][data-id="vp"]'); await p.click('#indBody [data-act="opt"][data-id="vp"][data-v="rth"]');
-  check(JSON.stringify((await state(p)).pressed) === '["rth"]' && /9:30 to 16:00 ET/.test(await p.textContent('#indBody .ind-set[data-id="vp"]')), 'the switch shows RTH and says what it counts');
+  await p.click('[id$="-indBtn"]'); await p.click('[id$="-indBody"] [data-act="gear"][data-id="vp"]'); await p.click('[id$="-indBody"] [data-act="opt"][data-id="vp"][data-v="rth"]');
+  check(JSON.stringify((await state(p)).pressed) === '["rth"]' && /9:30 to 16:00 ET/.test(await p.textContent('[id$="-indBody"] .ind-set[data-id="vp"]')), 'the switch shows RTH and says what it counts');
   await label(p, 'SAMPLE DATA (fake bridge), not market data. Volume profile: RTH');
   await p.screenshot({ path: path.join(SHOTS, 'vp-menu-settings-rth.png') });
   await p.keyboard.press('Escape'); await p.mouse.move(10, 400); await p.waitForTimeout(600);
   const s2 = await state(p), px2 = await pixels(p);
   check(s2.rth === true && s2.total === s2.expect.rth && s2.total > 0 && s2.total < s1.total, 'RTH profile holds exactly the trades from 9:30 ET: ' + s2.total + ' = ' + s2.expect.rth + ' (session ' + s1.total + ')');
   check(s2.low === s2.expect.rthLow && s2.high === s2.expect.rthHigh, 'RTH low and high are those of the trades from 9:30: ' + s2.low + ' to ' + s2.high);
-  check(s2.legend === 'POC ' + fmt(s2.poc) + ' · VA ' + fmt(s2.va[0]) + ' to ' + fmt(s2.va[1]) + ' (' + today + ')' && s2.legend !== s1.legend, 'legend follows: ' + s2.legend);
+  check(s2.legend === 'POC ' + fmt(s2.poc) + ' · VA ' + fmt(s2.va[0]) + ' to ' + fmt(s2.va[1]) + ' (' + today + ')' && s2.legend !== s1.legend, 'the readout follows: ' + s2.legend);
   check(JSON.stringify(px2.column) !== JSON.stringify(px1.column), 'RTH draws differently at the right edge: ' + JSON.stringify(px2.column));
   check(await p.evaluate(() => JSON.parse(localStorage.getItem('live-indicator-options-v1')).main.vp.session) === 'rth' && await p.evaluate(() => { const x = JSON.parse(localStorage.getItem('live-indicators-v2')).main.ind.vp; return x.on && x.shown; }),
     'both saved for the main pane');
@@ -220,16 +230,16 @@ try {
   /* persistence across a reload */
   await p.reload(); await live(p);
   const s4 = await state(p);
-  await p.click('#indBtn'); await p.click('#indBody [data-act="gear"][data-id="vp"]');
+  await p.click('[id$="-indBtn"]'); await p.click('[id$="-indBody"] [data-act="gear"][data-id="vp"]');
   check(s4.on === true && s4.rth === true && s4.total === s4.expect.rth && JSON.stringify((await state(p)).pressed) === '["rth"]' && s4.legend !== null, 'after a reload: on, RTH, rebuilt from the backfill: ' + s4.total);
-  await p.click('#indBody [data-act="opt"][data-id="vp"][data-v="full"]'); await p.keyboard.press('Escape'); await p.waitForTimeout(300);
+  await p.click('[id$="-indBody"] [data-act="opt"][data-id="vp"][data-v="full"]'); await p.keyboard.press('Escape'); await p.waitForTimeout(300);
   const s5 = await state(p);
   check(s5.rth === false && s5.total === s5.expect.session, 'back to Session: ' + s5.total);
   await p.reload(); await live(p);
   check((await state(p)).rth === false, 'Session kept after a reload');
 
   /* other views keep the profile (it does not depend on the bars); 1m after a fresh load has no tick history */
-  await p.click('#tfSeg >> text="5m"'); await live(p);
+  await p.click('[id$="-tfSeg"] >> text="5m"'); await live(p);
   const s6 = await state(p);
   check(s6.total === s6.expect.session, '5m keeps the same profile: ' + s6.total);
 
@@ -263,22 +273,22 @@ try {
   await host.close();
 
   /* two tabs (review S2): a pick is saved as what the tab shows, also when the tab already shows it */
-  const pick = async (pg, v) => { await pg.click('#indBtn'); await pg.click('#indBody [data-act="gear"][data-id="vp"]'); await pg.click('#indBody [data-act="opt"][data-id="vp"][data-v="' + v + '"]'); await pg.keyboard.press('Escape'); await pg.waitForTimeout(300); };
+  const pick = async (pg, v) => { await pg.click('[id$="-indBtn"]'); await pg.click('[id$="-indBody"] [data-act="gear"][data-id="vp"]'); await pg.click('[id$="-indBody"] [data-act="opt"][data-id="vp"][data-v="' + v + '"]'); await pg.keyboard.press('Escape'); await pg.waitForTimeout(300); };
   const saved = pg => pg.evaluate(() => ({ opt: JSON.parse(localStorage.getItem('live-indicator-options-v1')), ind: localStorage.getItem('live-indicators-v2'), settings: localStorage.getItem('live-settings-v2') }));
   await pick(p, 'rth');
-  const tabB = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);      // opened while RTH is saved
+  const tabB = await openPage(ctx, hostUrl(br.port));      // opened while RTH is saved
   await pick(p, 'full');                                                        // tab A saves Session
   await p.evaluate(() => { const o = JSON.parse(localStorage.getItem('live-indicator-options-v1')); o['pane-2'] = { vp: { session: 'rth' } }; localStorage.setItem('live-indicator-options-v1', JSON.stringify(o)); });
   const before = await saved(p);
-  await tabB.click('#indBtn'); await tabB.click('#indBody [data-act="gear"][data-id="vp"]');
+  await tabB.click('[id$="-indBtn"]'); await tabB.click('[id$="-indBody"] [data-act="gear"][data-id="vp"]');
   const b0 = await state(tabB);
   check(before.opt.main.vp.session === 'full' && b0.rth === true && JSON.stringify(b0.pressed) === '["rth"]', 'two tabs: A saved Session; stale tab B still draws RTH, RTH pressed in its gear panel');
-  await tabB.click('#indBody [data-act="opt"][data-id="vp"][data-v="rth"]'); await tabB.keyboard.press('Escape'); await tabB.waitForTimeout(300);
+  await tabB.click('[id$="-indBody"] [data-act="opt"][data-id="vp"][data-v="rth"]'); await tabB.keyboard.press('Escape'); await tabB.waitForTimeout(300);
   const after = await saved(tabB), b1 = await state(tabB);
   check(after.opt.main.vp.session === 'rth' && b1.rth === true && b1.total === b1.expect.rth, 'tab B clicks RTH, the one it shows: RTH saved and still drawn: ' + JSON.stringify(after.opt));
   check(after.opt['pane-2'].vp.session === 'rth' && Object.keys(after.opt).sort().join() === 'main,pane-2' && after.ind === before.ind && after.settings === before.settings,
     'read, merged, written: another pane\'s option and the other keys kept');
-  const tabC = await openPage(ctx, `http://localhost:${br.port}/live/single.html`), c = await state(tabC);
+  const tabC = await openPage(ctx, hostUrl(br.port)), c = await state(tabC);
   check(c.on === true && c.rth === true && c.total === c.expect.rth, 'a new load draws what tab B showed: RTH, ' + c.total);
   await tabB.close(); await tabC.close();
   await ctx.close(); br.kill();
@@ -294,10 +304,10 @@ try {
         localStorage.setItem('live-indicators-v1', JSON.stringify({ main: { vp: true } }));
       } catch (e) {}
     });
-    const q = await openPage(ctx2, `http://localhost:${br2.port}/live/single.html`);
+    const q = await openPage(ctx2, hostUrl(br2.port));
     await q.waitForTimeout(1500);
     const m = await state(q);
-    check(m.on && m.has && /loads no tick history/.test(m.note) && await q.isVisible('#vpNote'), '1m first load: a quiet note: ' + m.note);
+    check(m.on && m.has && /loads no tick history/.test(m.note) && await q.isVisible('[id$="-vpNote"]'), '1m first load: a quiet note: ' + m.note);
     check(m.total === m.expect.session, '1m: the profile holds just the live trades since the page went live: ' + m.total);
     await label(q, 'SAMPLE DATA (fake bridge), not market data. 1m: profile from the first live trade');
     await q.screenshot({ path: path.join(SHOTS, 'vp-m1-live-only-sample.png') });
@@ -389,7 +399,7 @@ try {
     const br = await startBridge(off, NEW_BRIDGE);
     const ctx = await closedContext(off, false);
     await vpOn(ctx);
-    const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const q = await openPage(ctx, hostUrl(br.port));
     const now0 = await etNowOf(q);
     check(dowOf(now0) === dow && U.tod(now0) >= 12 * 3600 && U.tod(now0) < 12 * 3600 + 120, label + ' clock: ' + U.fmtFull(now0));
     for (const tf of Object.keys(TFS)) for (const session of ['full', 'rth']) {
@@ -417,7 +427,7 @@ try {
     const br = await startBridge(off, NEW_BRIDGE);
     const ctx = await closedContext(off, true, null, 72);
     await vpOn(ctx);
-    const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const q = await openPage(ctx, hostUrl(br.port));
     await loadOn(q, 'range', session);
     const rth = session === 'rth', sunDay = Math.floor((await etNowOf(q)) / 86400) * 86400, open = sunDay + 18 * 3600;
     let w = await state(q);
@@ -448,7 +458,7 @@ try {
     const br = await startBridge(off, NEW_BRIDGE);
     const ctx = await closedContext(off, true);
     await vpOn(ctx);
-    const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const q = await openPage(ctx, hostUrl(br.port));
     await loadOn(q, 'range', 'rth');
     const tueDay = Math.floor((await etNowOf(q)) / 86400) * 86400, open = tueDay + 18 * 3600;
     let w = await state(q);
@@ -472,7 +482,7 @@ try {
     const br = await startBridge(off, NEW_BRIDGE);
     const ctx = await closedContext(off, true);   // live trades held: the counts are compared with the page's
     await vpOn(ctx);
-    const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const q = await openPage(ctx, hostUrl(br.port));
     for (const tf of ['range', 's15']) {
       await loadOn(q, tf, 'rth');
       const w = await state(q), ask = (await asked(q)).pop();
@@ -496,7 +506,7 @@ try {
       const br = await startBridge(off, NEW_BRIDGE);
       const ctx = await closedContext(off, true);
       await vpOn(ctx);
-      const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+      const q = await openPage(ctx, hostUrl(br.port));
       const hDay = Math.floor((await etNowOf(q)) / 86400) * 86400;
       for (const tf of ['range', 'm1']) {
         await loadOn(q, tf, 'rth');
@@ -523,7 +533,7 @@ try {
       const br = await startBridge(off, NEW_BRIDGE.concat('--tick-shift-ms=137'));
       const ctx = await closedContext(off, true);
       await vpOn(ctx);
-      const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+      const q = await openPage(ctx, hostUrl(br.port));
       await loadOn(q, 'range', 'full');
       const w = await state(q), got = await trades(q), exp = lastSession(got, Infinity, false), first = got.length ? got[0][0] : null;
       check(first !== null && Math.abs(U.tod(first) - 64800.137) < 0.0005 && w.total === exp.total && w.total > 0 && new RegExp(' \\(' + exp.day + '\\)$').test(w.legend || '') && w.note === '',
@@ -543,7 +553,7 @@ try {
       const br = await startBridge(off, NEW_BRIDGE.concat('--tick-shift-ms=137'));
       const ctx = await closedContext(off, true, gap ? [need, need + gap] : null);
       await vpOn(ctx);
-      const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+      const q = await openPage(ctx, hostUrl(br.port));
       await loadOn(q, 'range', 'full');
       const w = await state(q), got = await trades(q), first = got.length ? got[0][0] : null;
       const ok = gap === 0 ? / \(Mon\)$/.test(w.legend || '') && w.note === ''

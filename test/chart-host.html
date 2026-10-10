@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chart host (test page)</title>
+<!-- A test page (chart 1.21.0): one chart mounted with ChartLive.mount, as the workspace mounts its charts, filling the
+     window, with its own toolbar. The smokes that drove the single chart page (live/single.html, gone in 1.21.0) drive the
+     chart's behaviour here. Storage with no prefix (the workspace's keys) on the main pane unless the query says
+     (?prefix=desk:&pane=pane-2). Read only: it hands no orders anywhere. Sample data from the fake bridge only. -->
+<link rel="stylesheet" href="../live/fonts/plex.css">
+<link rel="stylesheet" href="../live/live.css">
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; }
+  body { background: #080B10; }
+  #host { height: 100%; }
+</style>
+</head>
+<body>
+  <div id="host"></div>
+  <script src="../src/chart-engine.js"></script>
+  <script src="../live/bar-builder.js"></script>
+  <script src="../live/order-ticket.js"></script>
+  <script src="../live/live.js"></script>
+  <script>
+    const q = new URLSearchParams(location.search);
+    window.liveMount = ChartLive.mount(document.getElementById('host'), { wsUrl: 'ws://' + location.host + '/ws',
+      storagePrefix: q.has('prefix') ? q.get('prefix') : '', paneId: q.get('pane') || 'main' });
+    window.liveChart = window.liveMount.chart;   // for the smokes (read it; the chart sends no orders)
+    window.liveData = window.liveMount.data;     // the chart's data, read only (the single chart page's window.liveData)
+  </script>
+</body>
+</html>

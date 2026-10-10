@@ -1,7 +1,7 @@
 /*
- * TradeCore: the order logic of the order bar, in one place (chart 1.12.0). The single chart page's order bar
- * (live/live.js, single.html) and the workspace's order ticket (live/workspace.js, index.html) both call these very
- * functions, so there is one order path: what Buy MKT, Sell MKT, B/E, Flatten (Close), Cancel all, Flatten all, a
+ * TradeCore: the order logic of the order ticket, in one place (chart 1.12.0). The workspace's order ticket
+ * (live/workspace.js, index.html) calls these very functions (the single chart page's order bar did too until chart
+ * 1.21.0, when that page went), so there is one order path: what Buy MKT, Sell MKT, B/E, Flatten (Close), Cancel all, Flatten all, a
  * chart click and a drag send, and every check before it, is written once, here. It is the 1.11.0 code of live.js moved
  * out unchanged, with the chart's instrument, last price, Qty box and account picker read through `env`.
  *
@@ -906,7 +906,7 @@ function create(env) {
 }
 
 /*
- * The order bar's controls wired to a core (the single chart page's bar and the workspace's ticket share it). `$(id)`
+ * The order ticket's controls wired to a core (the workspace's ticket; the single chart page's bar shared it until 1.21.0). `$(id)`
  * finds a control by its 1.11.0 id (obar, armBtn, armText, oAcct, oQty, oQtyCap, buyMkt, sellMkt, bPreset, bSaveBox,
  * bSaveName, bSaveOk, bSaveNo, bStop, bTarget, bUnit, flattenBtn, beBtn, cancelAllBtn, oPos, oLegs, oOther, oAcctNote,
  * oCancel, oOff, unsentBar, unsentText, unsentClose). A control marked data-keep stays on while trading is off.

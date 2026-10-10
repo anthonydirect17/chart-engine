@@ -33,8 +33,9 @@ window with its own layout (`?layout=Main`, `?layout=Second`). Charts with slim 
 Indicators menu, drawing tools), Time and Sales, and the **order ticket** (see [The workspace's order
 ticket](#the-workspaces-order-ticket)). Each instrument's trades come in once per window, whatever the number of panels
 showing it. Colors sit in the top bar, everything general (Glide, Range style, hotkeys, large prints, the PIN) in
-Settings, and both are shared with the single chart page. The top bar also has **Flatten all** and **KEYS ON / OFF**.
-The **single chart page** with its order bar and hotkeys is `http://localhost:8765/single.html`.
+Settings. The top bar also has **Flatten all** and **KEYS ON / OFF**. The workspace is ChartBridge's only page since
+1.21.0: the **single chart page** (`/single.html`) is gone (Anthony 2026-10-10; it is kept on the branch
+`archive/chart-single-page-2026-10-10`), and the PC updater deletes the file from the PC.
 
 **The display round (1.14.0, Anthony's list):** nothing scrolls (every menu, popover and dialog fits at 1366x768 and up;
 Colors and Settings in two columns, an indicator's gear beside the list); panels resize from any edge or corner;
@@ -47,7 +48,7 @@ ATR(14) and the change from the prior settlement (ChartBridge 0.3.7; blank with 
 (area by size over the floor), placed on the bar their prints traded in, and say their size in the legend on hover; the price scale keeps the legend clear. Batch 2: the profile's colors in its gear (brighter rows), the IB folded into
 Levels with PD VAH, PD VAL and a drawn PD POC, each level its own toggle, the developing POC, VAH and VAL, up to 10 chips,
 the VWAP from 09:30 ET (RTH only) or 18:00 ET per chart, a short header on small panels, and an **Aa** header text toggle
-per chart. The single chart page has the
+per chart. The single chart page (gone in 1.21.0) had the
 workspace's cleanup (one toolbar line, 2-letter chips, the drawing tools and Reset view in a small menu, Glide, Range
 style, grid, room and the PIN in Settings). "chart x.y.z · ChartBridge a.b.c" is in the LIVE badge's tooltip and in
 Settings. The page's clock follows Windows clock fixes (re-anchored to the PC's clock every 5 s, as ChartBridge does).
@@ -264,7 +265,7 @@ session is said). Old pages ignore all of it. Details: "Settlement, higher-timef
 `nt8/PROTOCOL.md`.
 
 Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/` (the
-workspace; the single chart page is `http://localhost:8765/live/single.html`)
+workspace)
 (`npm run bridge -- --trading --trade-accounts=Sim101,DEMO-EVAL --max-qty=MNQ:5` to try order entry on
 simulated fills; the flags are listed at the top of `test/fake-bridge.mjs`). The fake has the same PIN; it
 asks for one to be set unless started with `--test-pin=<made-up PIN>`, and `--pin-file=<path>` keeps it
@@ -427,9 +428,9 @@ With NinjaTrader closed, the ChartBridge version counted is the newest one `/dia
 
 The workspace trades through its **order ticket** (1.12.0, Anthony 2026-10-01), a panel of its own: instrument,
 account, Armed, Qty, the bracket presets with the stop and target, Buy MKT, Sell MKT, B/E, **Close** (cancel this
-instrument's orders and close its position at market; the single chart page calls it Flatten), Cancel all, and the
+instrument's orders and close its position at market; the single chart page called it Flatten), Cancel all, and the
 position, P&L, stop and target cover and last fill of its instrument. It calls the very same functions as the single
-chart page's order bar (`live/trade.js`), so everything below about the order bar holds for it too.
+chart page's order bar did until 1.21.0 (`live/trade.js`), so everything below about the order bar holds for it.
 
 - **Every chart on the ticket's instrument takes orders while it is Armed**, in every window: Shift + left click buys,
   Shift + right click and Ctrl + left click sell, drag a working order or a bracket leg to move it, its x cancels it.
@@ -776,12 +777,12 @@ only on a light ground), which the live page and the demo apply.
 ```sh
 npm test          # unit tests (Node 20+, no install needed); with pwsh or Windows PowerShell also the updater's tests
 npm i && npm run smoke   # drives the demo in Chromium, screenshots in test/out/
-npm run smoke:live       # the live page against the fake bridge as ChartBridge 0.2 (read only)
-npm run smoke:orders     # order entry against the fake bridge (protocol v2)
+npm run smoke:live       # a mounted chart with its own toolbar (test/chart-host.html) against the fake bridge, read only
+npm run smoke:orders     # order entry on the workspace's order ticket against the fake bridge (protocol v2)
 npm run smoke:settings   # saved choices survive a reload and a second chart tab
 npm run smoke:hotkeys    # trading hotkeys: set in Settings, each sends what its button sends, refused combos, typing, reload, mounted
 npm run smoke:strategies # 0.4.0 on the ticket (fake bridge --v3, a fake Desk): every off line shows nothing new; by default strategies, Merge, entry types, shared keys
-npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reconnects, destroy, two panes
+npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reconnects, destroy, two panes, storage prefixes
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames
 npm run smoke:ib         # Initial balance forming, locked, on every view and mounted; the Background presets, saved per prefix

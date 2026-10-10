@@ -1,5 +1,5 @@
 /*
- * The trading workspace (live/index.html, ChartBridge's main page since E2a; the single chart page is /single.html):
+ * The trading workspace (live/index.html, ChartBridge's page since E2a; chart 1.21.0 removed the single chart page):
  * independent panels on a 12 x 6 snap grid, one browser window per screen, each window with its own saved layout opened
  * from its URL (?layout=Main, ?layout=Second, any name).
  *
@@ -12,8 +12,8 @@
  *                  large-print floor by time of day, formatting). No DOM; it also loads in Node for test/workspace.test.js.
  *   the page       runs only in a browser, after live.js (ChartLive), feed.js (ChartFeed) and pin.js (ChartBridgePin).
  *
- * Saved in this browser's localStorage under the same prefix as the single chart page (none), so colors, color presets,
- * indicator colors, Glide, Range style, bracket presets, Qty and hotkeys are the same on both pages (each chart keeps its
+ * Saved in this browser's localStorage with no prefix (the keys the single chart page used until 1.21.0, so a PC keeps
+ * its colors, color presets, indicator colors, Glide, Range style, bracket presets, Qty and hotkeys; each chart keeps its
  * own indicators and drawings under its paneId, the panel id). The workspace's own keys:
  *   live-workspace-v1     { v: 1, layouts: { <name>: { panels: [{ id, type: 'chart' | 'tape' | 'ticket', root, tf, range?,
  *                         x, y, w, h }] } } }  (x, y from 0; w, h in cells; tapes have no tf, the ticket no root)
@@ -487,7 +487,7 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.C
 'use strict';
 const W = window.WorkspaceCore, LP = window.LivePrefs, OT = window.OrderTicket, PIN = window.ChartBridgePin || null;
 const OS = window.OrderStrategies;                   // 1.16.0: Order Strategies, entry types, Merge, The Desk's shared settings
-const PREFIX = '';                                 // the single chart page's prefix (none): its settings are this page's
+const PREFIX = '';                                 // no prefix: the keys the single chart page used (until 1.21.0)
 const TAPE_MAX = 500, TAPE_ROW = 18;
 const TF_SHORT = { s15: '15s', s30: '30s', m1: '1m', m5: '5m', m15: '15m', h1: '1h', range: 'Range', h4: '4h', d1: '1D', w1: '1W' };
 /* 1.15.0: the 1 hour chart loads 30 days of 1-minute history (15 minute 10, the rest 5); 4h, 1D and 1W are NinjaTrader's
@@ -504,9 +504,9 @@ const store = {
   getItem: k => { try { return LS ? LS.getItem(PREFIX + k) : null; } catch (e) { return null; } },
   setItem: (k, v) => { try { if (LS) LS.setItem(PREFIX + k, v); } catch (e) { /* full or blocked */ } },
 };
-const prefs = LP.create(store);                    // the single chart page's settings (Glide, Range style, hotkeys)
+const prefs = LP.create(store);                    // the general settings (Glide, Range style, hotkeys)
 
-/* ---------------- ChartBridge: the page's own origin, unlocked with ChartBridge's PIN (0.3.2) like the single chart page.
+/* ---------------- ChartBridge: the page's own origin, unlocked with ChartBridge's PIN (0.3.2).
    One connection per instrument for the whole window (live/feed.js), shared by every chart and tape showing it. */
 const BASE_WS = (() => {
   const onBridge = location.protocol.startsWith('http') && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(location.host);
@@ -1217,14 +1217,14 @@ setInterval(syncKeys, 250);
    (nt8/PROTOCOL.md "Protocol v3"); with every switch off this page is the 1.15 page. The order path is TradeCore's
    (live/trade.js); the rules are OrderStrategies' (live/order-strategies.js). No motion on any of it.
    Saved here: live-strategy-v1 (the active strategy's id, every window of this browser), live-desk-cache-v1 (the last copy
-   read of both documents), live-desk-sync-v1 (whether the hotkeys are kept in The Desk now: the single chart page then
-   shows them read only). The Desk's address is not kept here: it is ChartBridge's deskUrl (AccountsPage.deskBase). */
+   read of both documents). (live-desk-sync-v1 told the single chart page the hotkeys were kept in The Desk; 1.21.0 no longer
+   writes it.) The Desk's address is not kept here: it is ChartBridge's deskUrl (AccountsPage.deskBase). */
 const EXTRA_KEYS = [{ id: 'merge', sw: 'merge' }, { id: 'accept', sw: 'bot' }, { id: 'reject', sw: 'bot' }];
 /* 1.17.0: the copilot's keys answer the bot's proposals and every agent's (one handler, AgentCore.copilotRouter): on while the
    bot switch is on or ChartBridge has told of an agent */
 const copilotOn = () => core.switchOn('bot') || !!(agentDesk && agentDesk.on());
 const extraOn = a => (a.id === 'accept' || a.id === 'reject' ? copilotOn() : core.switchOn(a.sw));
-const STRAT_KEY = 'live-strategy-v1', DESK_SYNC_KEY = 'live-desk-sync-v1';
+const STRAT_KEY = 'live-strategy-v1';
 /* The Desk's address: one source for the whole page, ChartBridge's deskUrl (AccountsPage.deskBase, /diag desk.deskUrl) */
 const DESK = OS.createDesk({ fetch: (u, o) => fetch(u, o), storage: store, base: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)) });
 /* on: the switches need The Desk; hk, st: the documents in use (The Desk's, or the last copy read); readAt: when last read */
@@ -1243,12 +1243,11 @@ function deskCheck() {
   const on = OS.deskSyncOn(core.TR.switches);
   if (on === DS.on) return;
   DS.on = on;
-  try { store.setItem(DESK_SYNC_KEY, JSON.stringify(on)); } catch (e) { /* blocked */ }
   if (on) { loadDeskCache(); deskRead(); }
   if (!$('wsSettings').hidden) renderHotkeys();
 }
-/* Read both documents (one read at a time). The hotkeys read are written to this browser's keys, so the 1.15 handlers and
-   the single chart page use them as they are. */
+/* Read both documents (one read at a time). The hotkeys read are written to this browser's keys, so the 1.15 handlers use
+   them as they are. */
 function deskRead() {
   if (!DS.on) return Promise.resolve();
   if (DS.reading) return DS.reading;
@@ -1313,7 +1312,7 @@ function renderDeskUi() {
   $('wsStratSec').hidden = !core.switchOn('strategies');
   $('wsTypesSec').hidden = !(DS.on && core.switchOn('orderTypes'));
   const local = deskMode() === 'local';
-  $('wsHkWhere').textContent = local ? 'the same keys as the single chart page' : 'shared by every PC through The Desk';
+  $('wsHkWhere').textContent = local ? 'kept in this browser' : 'shared by every PC through The Desk';
   $('wsHkHelp').hidden = !local; $('wsHkHelpShared').hidden = local;   // the short help while shared, so Settings fits 1366x768
   if (!DS.on) return;
   if ($('wsDeskUrl').textContent !== DESK.url()) $('wsDeskUrl').textContent = DESK.url();
@@ -2591,8 +2590,7 @@ $('wsGear').addEventListener('input', e => {
 $('wsGear').addEventListener('focusout', e => { const h = e.target.closest('input[data-tchex]'); if (h) { h.value = tapeColors[h.dataset.tchex]; h.classList.remove('bad'); } });
 $('wsTapeDefault').addEventListener('click', () => { if (W.resetTapeColors(store)) { tapeColors = W.readTapeColors(store); applyTapeColors(); renderTapeColors(); } });
 
-/* ---------------- Settings: everything general (Anthony): Glide and Range style for every chart (and the single chart
-   page), the trading hotkeys (the 1.11.0 Settings), the large-print floors, ChartBridge's PIN, the layout. */
+/* ---------------- Settings: everything general (Anthony): Glide and Range style for every chart, the trading hotkeys (the 1.11.0 Settings), the large-print floors, ChartBridge's PIN, the layout. */
 function renderGeneral() {
   const s = prefs.settings();
   for (const b of $('wsGlide').children) b.setAttribute('aria-pressed', String(b.dataset.v === s.glide));
@@ -2608,7 +2606,7 @@ $('wsMotion').addEventListener('click', e => {
   const b = e.target.closest('button[data-v]'); if (!b || !window.ChartMotion) return;
   window.ChartMotion.setReducedMotion(b.dataset.v === 'less'); renderGeneral();
 });
-/* 1.14.0: grid lines (off by default) and the room right of price, for every chart and the single chart page */
+/* 1.14.0: grid lines (off by default) and the room right of price, for every chart */
 $('wsGridLines').addEventListener('click', e => {
   const b = e.target.closest('button[data-v]'); if (!b || !LP.GRIDS.includes(b.dataset.v)) return;
   prefs.setSetting('grid', b.dataset.v); renderGeneral();
@@ -2640,7 +2638,7 @@ $('wsRangeMode').addEventListener('change', e => {
   for (const v of chartViews()) v.pane.refreshSettings();
 });
 
-/* Hotkeys: the single chart page's Settings, the same keys (live-hotkeys-v1). Each box reads the keys pressed in it. */
+/* Hotkeys: the 1.11.0 keys (live-hotkeys-v1, the single chart page's Settings until 1.21.0). Each box reads the keys pressed in it. */
 const HKKEY = LP.KEYS.hotkeys;
 const readHotkeys = () => (HK = OT.cleanHotkeys(prefs.raw.get(HKKEY)));
 $('wsHotkeys').innerHTML = `<div class="hk-list" role="group" aria-labelledby="wsHkCap">${OT.HOTKEY_ACTIONS.map(a => `
@@ -2932,7 +2930,7 @@ function openLayout(name) {
   if (agentDesk) agentDesk.layoutChanged(layout);                             // 1.17.0: a layout closes the Agent tab
 }
 
-/* Another window or the single chart page changed something this page uses. Its open layouts stay its own. */
+/* Another window changed something this page uses. Its open layouts stay its own. */
 window.addEventListener('storage', e => {
   const k = e.key === null ? null : e.key.slice(PREFIX.length);
   if (k === null) return;

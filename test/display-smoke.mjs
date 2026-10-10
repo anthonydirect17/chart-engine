@@ -1,20 +1,20 @@
 // The display round (chart 1.14.0, Anthony's list of 2026-10-01) against the fake bridge (ChartBridge 0.3.8's protocol,
 // sample data; nothing reaches a broker), in Chromium:
-//   - grid lines off by default on both pages, on and off again from Settings (shared by every chart);
-//   - the room right of price: 80 px by default, kept at any zoom and by Jump to live, changed in Settings;
+//   - grid lines off by default, on and off again from the workspace's Settings (shared by every chart);
+//   - the room right of price: 80 px by default, kept at any zoom and by Jump to live, changed in the workspace's Settings;
 //   - zoom to brackets: a working order far from price comes on screen, eased (never a snap); a planned stop and target too;
 //   - the VWAP no longer sizes the chart: off the scale it draws an edge marker;
-//   - the readouts: the bar countdown (Range: ticks left), ATR(14), the change from the prior settlement (blank with none);
+//   - the readouts in the chart's corner: the bar countdown (Range: ticks left), ATR(14), a bubble's size on hover;
 //   - Time and Sales by category with ChartBridge 0.3.8's q (each its own color, editable in the gear, big trades brighter
 //     and bold, a tape that joins later colored the same), and by side with an older ChartBridge (no q);
 //   - panels resized from an edge and a corner, an overlap refused;
-//   - the single chart page's layout: one toolbar line, 2-letter chips, the small menu, Settings with the general controls,
-//     Colors in the toolbar, Armed: the chart's outline purple with the glow, the order bar deep red;
+//   - (until chart 1.21.0 the single chart page's layout, Settings, legend and order bar: gone with the page; a mounted
+//     chart with its own toolbar, test/chart-host.html, takes its chart checks);
 //   - the versions in the LIVE badge's tooltip and in Settings;
 //   - batch 2 (2026-10-02): the Levels gear's toggles (the IB in it, PD POC), the profile's developing lines and colors,
-//     the VWAP's hours, every chip pinned at three sizes on both pages, the short header on small panels, no numbers on
-//     the bubbles, and the header text toggle on both pages.
-// Screenshots in test/out/ at 1366x768, 1920x1080 and 2560x1440 of both pages, and close crops of the tape and the Colors
+//     the VWAP's hours, every chip pinned at three sizes on a mounted chart and in the workspace, no text on the
+//     workspace's charts, no numbers on the bubbles.
+// Screenshots in test/out/ at 1366x768, 1920x1080 and 2560x1440 of the chart and the workspace, and close crops of the tape and the Colors
 // panel.
 //   npm run smoke:display        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
@@ -24,6 +24,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { C as H, hostUrl, waitLive } from './chart-host.mjs';
 
 const require = createRequire(import.meta.url);
 const CE = require('../src/chart-engine.js');
@@ -76,11 +77,11 @@ async function openPage(ctx, url) {
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
   await page.goto(url);
-  await page.waitForFunction(() => document.getElementById('connPill') || document.getElementById('wsConn') || document.querySelector('.cb-pin-key'), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('wsConn') || document.querySelector('.cb-pin-key'), null, { timeout: 15000 });
   if (await page.$('.cb-pin-key')) await enterPin(page, TEST_PIN);
   return page;
 }
-const singleLive = p => p.waitForFunction(() => /LIVE/.test((document.getElementById('connPill') || {}).textContent || '') && window.liveChart && window.liveChart.lastBar(), null, { timeout: 30000 });
+const hostLive = async p => { await waitLive(p, 30000); await p.waitForFunction(() => window.liveChart && window.liveChart.lastBar(), null, { timeout: 30000 }); };
 const wsLive = p => p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
 
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
@@ -92,66 +93,41 @@ try {
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   await ctx.addInitScript(tapeQ);
 
-  /* ================================================================ /single.html */
-  console.log('/single.html');
-  const page = await openPage(ctx, `http://localhost:${PORT}/live/single.html`);
-  await singleLive(page);
+  /* ================================================================ a mounted chart with its own toolbar (test/chart-host.html;
+     the single chart page, /single.html, until chart 1.21.0: its Settings, legend and order bar went with it) */
+  console.log('a mounted chart (test/chart-host.html)');
+  await startBridge(PORT + 2, ['--test-controls', '--version=0.3.8', '--data-037', '--live-rate=60', '--pin-off']);   // a mounted chart never has the PIN
+  const page = await ctx.newPage();
+  page.on('pageerror', e => fail('page error: ' + e.message));
+  await page.goto(hostUrl(PORT + 2));
+  await hostLive(page);
   await page.waitForTimeout(1200);
   const C = (fn, a) => page.evaluate(fn, a);
+  const CH = H('chart');
 
-  // grid lines: off by default, one click in Settings, saved for every chart
+  // grid lines: off by default (the workspace's Settings switch them, below)
   check(await C(() => window.liveChart.getGrid() === false), 'grid lines are off by default');
-  await page.click('#setBtn');
-  const setRows = await C(() => [...document.querySelectorAll('#setPanel .set-row .set-name')].map(e => e.textContent));
-  check(['Glide', 'Range style', 'Grid lines', 'Room right'].every(t => setRows.includes(t)), 'Settings holds Glide, Range style, Grid lines and Room right: ' + setRows.join(', '));
-  await page.click('#gridSeg [data-v="on"]');
-  check(await C(() => window.liveChart.getGrid() === true && JSON.parse(localStorage.getItem('live-settings-v2')).grid === 'on'), 'Grid lines On: drawn and saved');
-  await page.click('#gridSeg [data-v="off"]');
-  check(await C(() => window.liveChart.getGrid() === false), 'Grid lines Off again');
 
-  // room right of price: 80 px by default, at any zoom, and Jump to live keeps it
+  // room right of price: a mounted chart's 120 px by default (the single chart page's was 80), at any zoom, and Jump to
+  // live keeps it (the workspace's Settings change it, below)
+  const RM = 120;
   const roomPx = () => C(() => Math.round(window.liveChart.room().gap));
-  check(await C(() => window.liveChart.room().px === 80), 'room right: 80 px by default');
+  check(await C(r => window.liveChart.room().px === r, RM), 'room right: ' + RM + ' px by default');
   const r0 = await roomPx();
-  check(Math.abs(r0 - 80) <= 1, 'the last bar sits 80 px left of the price axis (' + r0 + ' px)');
-  const box = await page.locator('#chart canvas').boundingBox();
+  check(Math.abs(r0 - RM) <= 1, 'the last bar sits ' + RM + ' px left of the price axis (' + r0 + ' px)');
+  const box = await page.locator(CH + ' canvas').first().boundingBox();
   await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.4);
   for (let i = 0; i < 4; i++) { await page.mouse.wheel(0, 300); await page.waitForTimeout(60); }
   await page.waitForTimeout(500);
   const r1 = await roomPx();
-  check(Math.abs(r1 - 80) <= 1, 'zoomed out, still 80 px (' + r1 + ' px; before 1.14.0 a fixed 8 bars shrank to a few px)');
+  check(Math.abs(r1 - RM) <= 1, 'zoomed out, still ' + RM + ' px (' + r1 + ' px; before 1.14.0 a fixed 8 bars shrank to a few px)');
   await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5); await page.mouse.down(); await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.5, { steps: 6 }); await page.mouse.up();
   await page.waitForTimeout(400);
   await page.keyboard.press('End'); await page.waitForTimeout(900);
   const r2 = await roomPx();
-  check(Math.abs(r2 - 80) <= 1, 'End back to live keeps it (' + r2 + ' px)');
-  await page.click('#setBtn'); await page.click('#roomSeg [data-v="160"]');
-  await page.waitForTimeout(300);
-  await page.waitForTimeout(400);
-  const r3 = await roomPx();
-  check(Math.abs(r3 - 160) <= 1 && await C(() => JSON.parse(localStorage.getItem('live-settings-v2')).room === 160), 'Room right 160 px: at once, saved (' + r3 + ' px)');
-  await page.click('#roomSeg [data-v="80"]');
-  await page.keyboard.press('Escape');
+  check(Math.abs(r2 - RM) <= 1, 'End back to live keeps it (' + r2 + ' px)');
   await C(() => window.liveChart.reset());
   await page.waitForTimeout(600);
-
-  // zoom to brackets: a working limit far below the price comes on screen, eased in with the axis re-fit
-  const far = L - 150;
-  check(await C(p => window.liveChart.priceScale().lo > p, far), 'a price 150 points down is off the scale to begin with');
-  await control(PORT, 'elsewhere', { account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'limit', qty: 1, p: far });
-  await until(() => C(p => window.liveChart.getOrders().some(o => o.price === p), far), 'the far order on the chart');
-  const tr = await C(async p => {
-    const c = window.liveChart, s = [];
-    for (let k = 0; k < 40; k++) { s.push(c.priceScale().lo); await new Promise(r => requestAnimationFrame(r)); }
-    return { s, target: c.priceScale().target, y: c.priceToY(p), h: c.priceScale().plotHeight };
-  }, far);
-  check(tr.target.lo < far && tr.y > 0 && tr.y < tr.h, 'zoom to brackets: the order is on screen (y ' + Math.round(tr.y) + ' of ' + Math.round(tr.h) + ')');
-  const steps = tr.s.filter((v, i) => i && v !== tr.s[i - 1]).length, mids = tr.s.filter(v => v < tr.s[0] - 0.01 && v > tr.target.lo + 0.01).length;
-  check(steps >= 3 && mids >= 2, 'eased with the 120 ms re-fit, never a snap (' + steps + ' steps, ' + mids + ' frames in between)');
-  await shot(page, 'display-1920-zoom-to-brackets.png');
-  await page.click('#armBtn'); await page.click('#cancelAllBtn');
-  await until(() => C(() => window.liveChart.getOrders().length === 0), 'the far order cancelled');
-  await page.click('#armBtn');
 
   // the engine itself, on its own bars: a planned stop and target in the fit, the VWAP out of it with its edge marker
   const eng = await C(() => {
@@ -170,64 +146,17 @@ try {
   check(eng.b.lo < 88 && eng.b.hi > 113, 'planned stop (-40t) and target (+60t) lines are in the fit (' + eng.b.lo.toFixed(2) + ' to ' + eng.b.hi.toFixed(2) + ')');
   check(!!eng.m && eng.m.up === true && eng.m.price === 140, 'the off-scale VWAP gets an edge marker at the top: ' + JSON.stringify(eng.m));
 
-  // readouts: the bar countdown, the ATR, the change from the prior settlement (ChartBridge 0.3.7+)
-  await page.waitForTimeout(1200);
-  const ro = await C(() => ({ bar: document.getElementById('lgBar').textContent, atr: document.getElementById('lgAtr').textContent, set: document.getElementById('lgSet').textContent, setHidden: document.getElementById('lgSet').hidden }));
-  check(/^Bar \d+:\d\d$/.test(ro.bar), 'the bar countdown on 1 minute bars: "' + ro.bar + '"');
-  check(/^ATR\(14\) [\d,]+\.\d\d$/.test(ro.atr), 'ATR(14) of the closed bars: "' + ro.atr + '"');
-  // the ATR period in Settings (Anthony, review D2): 20, as typed; saved; back to 14
-  await page.click('#setBtn'); await page.fill('#atrIn', '20'); await page.keyboard.press('Enter'); await page.keyboard.press('Escape');
-  await page.waitForTimeout(300);
-  check(/^ATR\(20\) /.test(await page.textContent('#lgAtr')) && (await C(() => JSON.parse(localStorage.getItem('live-settings-v2')).atr)) === 20, 'Settings: ATR period 20, at once and saved: "' + await page.textContent('#lgAtr') + '"');
-  await page.click('#setBtn'); await page.fill('#atrIn', '1'); await page.keyboard.press('Enter');
-  check(await page.inputValue('#atrIn') === '20', 'a period out of range is not taken (the box shows the one in use)');
-  await page.fill('#atrIn', '14'); await page.keyboard.press('Enter'); await page.keyboard.press('Escape');
-  const hello = await control(PORT, 'state', { root: 'MNQ' }).catch(() => null);
-  const expect = await C(() => { const b = window.liveChart.lastBar(); return b ? b.c : null; });
-  check(/^[+-]\d+\.\d\d% vs settle$/.test(ro.set) && !ro.setHidden, 'the change from the prior settlement: "' + ro.set + '" (last ' + expect + ')');
-  await control(PORT, 'settlement', { root: 'MNQ', p: String(L - 100), date: '2026-10-01' });
-  await page.waitForTimeout(1300);
-  const pct = await C(() => document.getElementById('lgSet').textContent);
-  const lastNow = await C(() => window.liveChart.lastBar().c);
-  const want = ((lastNow - (L - 100)) / (L - 100) * 100);
-  check(pct === (want >= 0 ? '+' : '') + want.toFixed(2) + '% vs settle', 'a new settlement from ChartBridge: "' + pct + '" (' + want.toFixed(4) + ')');
-  await control(PORT, 'settlement', { root: 'MNQ', p: 'null' });
-  await page.waitForTimeout(1300);
-  check(await C(() => document.getElementById('lgSet').hidden && document.getElementById('lgSet').textContent === ''), 'no settlement: blank, never estimated');
-  await page.click('#tfSeg [data-v="range"]');
-  await until(() => C(() => /^Bar ▲\d+ ▼\d+t$/.test(document.getElementById('lgBar').textContent)), 'Range bars: ticks left up and down', 15000);
-  check(true, 'Range bars: "' + await C(() => document.getElementById('lgBar').textContent) + '"');
-  await page.click('#tfSeg [data-v="m1"]');
-  void hello;
-
-  // versions: the LIVE pill's tooltip and Settings
-  const ver = await C(() => ({ pill: document.getElementById('connPill').title, set: document.getElementById('setVer').textContent }));
-  check(ver.pill === 'chart ' + CE.VERSION + ' · ChartBridge ' + (await C(() => /ChartBridge (\S+)/.exec(document.getElementById('lgSrc').textContent)[1])) && ver.set === ver.pill, 'versions: "' + ver.pill + '" (LIVE pill tooltip and Settings)');
-
-  // the layout: one toolbar line, 2-letter chips, the small menu, Colors in the toolbar
-  const lay = await C(() => {
-    const rs = [...document.querySelector('header.bar').children].filter(c => c.getClientRects().length).map(c => c.getBoundingClientRect());
-    return { one: Math.max(...rs.map(r => r.top)) < Math.min(...rs.map(r => r.bottom)), chips: [...document.querySelectorAll('#indChips .ind-chip')].map(c => c.textContent),
-      colors: !!document.querySelector('header.bar .ce-theme-btn'), glideInBar: !!document.querySelector('header.bar > .group #glideSeg'), menu: [...document.querySelectorAll('#moreMenu button')].map(b => b.textContent) };
-  });
-  check(lay.one, 'one toolbar line at 1920');
-  check(lay.chips.length && lay.chips.every(t => /^[A-Z]{2}$/.test(t)), '2-letter chips: ' + lay.chips.join(' '));
-  check(lay.colors && !lay.glideInBar, 'Colors in the toolbar; Glide moved to Settings');
-  check(lay.menu.join('|') === 'Trend line|Price line|Clear drawings|Reset view', 'the small menu: ' + lay.menu.join(', '));
-  await page.click('#moreBtn'); await page.click('#toolTrend');
-  check(await C(() => window.liveChart.getTool() === 'trend' && document.getElementById('moreMenu').hidden), 'Trend line from the menu: the tool is on, the menu closed');
-  await C(() => window.liveChart.setTool(null));
-
-  // Armed: the chart outlined in purple with the glow, the order bar deep red
-  await page.click('#armBtn');
-  await page.waitForTimeout(200);
-  const arm = await C(() => { const st = getComputedStyle(document.querySelector('.stage')), ob = getComputedStyle(document.getElementById('obar'));
-    return { border: st.borderTopColor, glow: st.boxShadow, obar: ob.borderTopColor }; });
-  check(arm.border === 'rgb(123, 92, 255)' && /rgb\(123, 92, 255\)/.test(arm.glow) && arm.obar === 'rgb(224, 68, 94)', 'Armed: the chart purple with the glow, the order bar deep red: ' + JSON.stringify(arm));
-  await page.click('#armBtn');
+  // readouts in the chart's corner (1.15.0): the bar countdown and ATR(14); Range bars: the ticks left up and down
+  const corner = () => C(() => (window.liveChart.corner() || {}).text || '');
+  const ro = await until(async () => { const t = await corner(); return /^Bar \d+:\d\d · ATR\(14\) [\d,]+\.\d\d$/.test(t) ? t : null; }, 'the corner readout on 1 minute bars', 15000);
+  check(!!ro, 'the bar countdown and ATR(14) of the closed bars in the corner: "' + ro + '"');
+  await page.click(H('tfSeg') + ' [data-v="range"]');
+  const rr = await until(async () => { const t = await corner(); return /^Bar ▲\d+ ▼\d+t · ATR\(14\) /.test(t) ? t : null; }, 'Range bars: ticks left up and down', 15000);
+  check(!!rr, 'Range bars: "' + rr + '"');
+  await page.click(H('tfSeg') + ' [data-v="m1"]');
 
   // Anthony from WORK: the bubble's size shows the order size (area by size / floor), no numbers on the chart, the size
-  // in the legend on hover
+  // in the corner readout on hover (1.16.0)
   // G (batch 2): the text the chart draws is recorded, to show no numbers are drawn on the bubbles
   await ctx.addInitScript(() => {
     const f = CanvasRenderingContext2D.prototype.fillText;
@@ -238,46 +167,40 @@ try {
     };
   });
   await C(() => { localStorage.setItem('live-tape-floors-v1', JSON.stringify({ NQ: { rth: 2, eth: 2 } })); });
-  await page.reload(); await page.waitForFunction(() => document.getElementById('connPill') || document.querySelector('.cb-pin-key'));
-  if (await page.$('.cb-pin-key')) await enterPin(page, TEST_PIN);
-  await singleLive(page);
-  await page.click('#symSeg [data-v="NQ"]'); await singleLive(page);
-  await page.click('#indBtn'); await page.fill('#indQ', 'bubbles'); await page.press('#indQ', 'Enter'); await page.keyboard.press('Escape');
+  await page.reload(); await hostLive(page);
+  await page.click(H('symSeg') + ' [data-v="NQ"]'); await hostLive(page);
+  await page.click(H('indBtn')); await page.fill(H('indQ'), 'bubbles'); await page.press(H('indQ'), 'Enter'); await page.keyboard.press('Escape');
   await until(() => C(() => window.liveChart.bubbles().length >= 4), 'bubbles on the NQ chart', 20000);
-  const bub = await C(() => ({ list: window.liveChart.bubbles(), zoom: Math.min(1.6, Math.max(1, Math.sqrt(window.liveChart.stats ? 1 : 1))) }));
+  const bub = await C(() => ({ list: window.liveChart.bubbles() }));
   const radiusOk = bub.list.every(q => Math.abs(q.r - CE.util.bubbleRadius(q.v, 2)) < 0.01 || q.r > CE.util.bubbleRadius(q.v, 2));
   const sizes = bub.list.map(q => q.v + ':' + q.r.toFixed(1));
   check(radiusOk && bub.list.some(q => q.v >= 4) && bub.list.every(q => q.v < 4 || q.r >= CE.util.bubbleRadius(4, 2) - 0.01), 'bubble radius by size / floor (4.8 px x sqrt): ' + sizes.slice(0, 8).join(' '));
   const pick = bub.list.reduce((a, q) => (q.r > a.r ? q : a), bub.list[0]);
-  const cb = await page.locator('#chart canvas').boundingBox();
+  const cb = await page.locator(CH + ' canvas').first().boundingBox();
   await page.mouse.move(cb.x + pick.x, cb.y + pick.y);
   await page.waitForTimeout(150);
-  const lgb = await C(() => ({ text: document.getElementById('lgBub').textContent, hidden: document.getElementById('lgBub').hidden, hov: window.liveChart.bubbleHover() }));
-  check(!lgb.hidden && /^Bubble (Buy|Sell) [\d,.K]+ @ [\d,]+\.\d\d \d\d:\d\d:\d\d\.\d$/.test(lgb.text) && lgb.hov, 'hover: the bubble in the legend\'s top line: "' + lgb.text + '"');
+  const hb = { text: await corner(), hov: await C(() => window.liveChart.bubbleHover()) };
+  check(/^(Buy|Sell) [\d,.K]+ · Bar /.test(hb.text) && !!hb.hov, 'hover: the bubble in front of the corner readout: "' + hb.text + '"');
   await shot(page, 'display-bubble-hover.png');
   await page.mouse.move(cb.x + 40, cb.y + cb.height - 60);
   await page.waitForTimeout(150);
-  check(await C(() => document.getElementById('lgBub').hidden), 'away from it: gone');
-  const onBub = await C(() => { const cv = document.querySelector('#chart canvas'), dpr = window.devicePixelRatio || 1; window.__texts.length = 0;
+  check(/^Bar /.test(await corner()), 'away from it: gone');
+  const onBub = await C(sel => { const cv = document.querySelector(sel), dpr = window.devicePixelRatio || 1; window.__texts.length = 0;
     return new Promise(res => setTimeout(() => { const bs = window.liveChart.bubbles();
       const hits = window.__texts.filter(t => t.c === cv && /\d/.test(t.s) && bs.some(q => Math.hypot(t.x / dpr - q.x, t.y / dpr - q.y) <= q.r + 2));
-      res({ n: bs.length, texts: window.__texts.filter(t => t.c === cv).length, hits: hits.map(t => t.s) }); }, 600)); });
+      res({ n: bs.length, texts: window.__texts.filter(t => t.c === cv).length, hits: hits.map(t => t.s) }); }, 600)); }, CH + ' canvas');
   check(onBub.n > 0 && onBub.texts > 0 && onBub.hits.length === 0, 'G: no numbers drawn on the ' + onBub.n + ' bubbles (' + onBub.texts + ' texts drawn, ' + JSON.stringify(onBub.hits.slice(0, 5)) + ' on a bubble)');
   await C(() => localStorage.removeItem('live-tape-floors-v1'));
-  await page.click('#symSeg [data-v="MNQ"]'); await singleLive(page);
+  await page.click(H('symSeg') + ' [data-v="MNQ"]'); await hostLive(page);
 
-  // the high never under the legend: the scale keeps the legend's height free at its top
-  const top = await C(() => { const c = window.liveChart, lg = document.getElementById('legend'), box = document.getElementById('chart').getBoundingClientRect();
-    const r = lg.getBoundingClientRect(), w = box.width - 78; let hi = -Infinity; const bs = c.bars();
+  // no text inside the chart (1.16.0): no legend, and the high stays inside the plot
+  const top = await C(sel => { const c = window.liveChart, box = document.querySelector(sel).getBoundingClientRect(), w = box.width - 78; let hi = -Infinity; const bs = c.bars();
     for (let i = 0; i < bs.length; i++) { const x = c.barToX(i); if (x >= 0 && x <= w && bs[i].h > hi) hi = bs[i].h; }
-    return { legendBottom: r.bottom - box.top, highY: c.priceToY(hi) }; });
-  check(top.highY >= top.legendBottom, 'single: the highest candle in view sits below the legend (' + Math.round(top.highY) + ' px, the legend ends at ' + Math.round(top.legendBottom) + ')');
-
+    return { legend: !!document.querySelector('.legend'), fitTop: c.getFitTop(), highY: c.priceToY(hi) }; }, CH);
+  check(!top.legend && top.fitTop === 0 && top.highY >= 0, 'no legend on the chart, and the highest candle in view inside the plot: ' + JSON.stringify(top));
   for (const [w, h] of [[1366, 768], [1920, 1080], [2560, 1440]]) {
     await page.setViewportSize({ width: w, height: h }); await page.waitForTimeout(700);
-    const one = await C(() => { const rs = [...document.querySelector('header.bar').children].filter(c => c.getClientRects().length).map(c => c.getBoundingClientRect()); return Math.max(...rs.map(r => r.top)) < Math.min(...rs.map(r => r.bottom)); });
-    check(one, `one toolbar line at ${w}x${h}`);
-    await shot(page, `display-single-${w}.png`);
+    await shot(page, `display-chart-${w}.png`);
   }
   await page.setViewportSize({ width: 1920, height: 1080 });
 
@@ -300,7 +223,34 @@ try {
   check(wAtr.length > 0 && wAtr.every(t => /ATR\(21\) /.test(t) || /ATR [\d,.]+$/.test(t)), 'workspace Settings: ATR period 21 on every chart\'s corner readout: ' + JSON.stringify(wAtr));
   await wp.fill('#wsAtr', '14'); await wp.keyboard.press('Enter');
   check(/^chart \d+\.\d+\.\d+ · ChartBridge \S+$/.test(wver.badge) && wver.badge.startsWith('chart ' + CE.VERSION + ' · ') && wver.set.startsWith(wver.badge), 'workspace versions: the LIVE badge\'s tooltip and Settings: "' + wver.badge + '"');
+  // the room right of price in Settings: every chart at once, saved (the single chart page's own Settings until 1.21.0)
+  await wp.click('#wsRoom [data-v="160"]'); await wp.waitForTimeout(700);
+  const rooms = await W(ids => ids.map(id => Math.round(window.workspace.chart(id).room().px)), charts);
+  check(rooms.every(r => r === 160) && await W(() => JSON.parse(localStorage.getItem('live-settings-v2')).room === 160), 'Settings: Room right 160 px on every chart at once, saved: ' + rooms.join(' '));
+  await wp.click('#wsRoom [data-v="80"]');
   await wp.keyboard.press('Escape');
+
+  // zoom to brackets: a working limit far below the price comes on screen, eased in with the axis re-fit (on the
+  // single chart page until 1.21.0)
+  const mq = await W(() => window.workspace.panels().find(p => p.type === 'chart' && p.root === 'MNQ' && p.tf === 'range').id);
+  const WC = (fn, a) => wp.evaluate(fn, a);
+  await WC(i => window.workspace.chart(i).reset(), mq); await wp.waitForTimeout(600);
+  const far = Math.floor(await WC(i => window.workspace.chart(i).priceScale().lo, mq)) - 50;   // 50 points under the scale
+  check(await WC(([i, p]) => window.workspace.chart(i).priceScale().lo > p, [mq, far]) && far < L, 'a price under the MNQ chart\'s scale (' + (L - far) + ' points down) is off it to begin with');
+  await control(PORT, 'elsewhere', { account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'limit', qty: 1, p: far });
+  await until(() => WC(([i, p]) => window.workspace.chart(i).getOrders().some(o => o.price === p), [mq, far]), 'the far order on the chart');
+  const tr = await WC(async ([i, p]) => {
+    const c = window.workspace.chart(i), s = [];
+    for (let k = 0; k < 40; k++) { s.push(c.priceScale().lo); await new Promise(r => requestAnimationFrame(r)); }
+    return { s, target: c.priceScale().target, y: c.priceToY(p), h: c.priceScale().plotHeight };
+  }, [mq, far]);
+  check(tr.target.lo < far && tr.y > 0 && tr.y < tr.h, 'zoom to brackets: the order is on screen (y ' + Math.round(tr.y) + ' of ' + Math.round(tr.h) + ')');
+  const steps = tr.s.filter((v, i) => i && v !== tr.s[i - 1]).length, mids = tr.s.filter(v => v < tr.s[0] - 0.01 && v > tr.target.lo + 0.01).length;
+  check(steps >= 3 && mids >= 2, 'eased with the 120 ms re-fit, never a snap (' + steps + ' steps, ' + mids + ' frames in between)');
+  await shot(wp, 'display-1920-zoom-to-brackets.png');
+  await wp.click('.tk [data-tk-id="armBtn"]'); await wp.click('.tk [data-tk-id="cancelAllBtn"]');
+  await until(() => WC(i => window.workspace.chart(i).getOrders().length === 0, mq), 'the far order cancelled');
+  await wp.click('.tk [data-tk-id="armBtn"]');
 
   // Time and Sales: categories with q
   const tape = await W(() => window.workspace.panels().find(p => p.type === 'tape').id);
@@ -435,8 +385,8 @@ try {
   check(await page.getAttribute(spRoot + ' [data-f="opt:vwap:session:full"]', 'aria-pressed') === 'true', 'E: VWAP full session by default');
   await page.click(spRoot + ' [data-f="opt:vwap:session:rth"]');
   await page.keyboard.press('Escape');
-  await page.click('#tfSeg [data-v="m1"]'); await page.waitForTimeout(600);
-  const cbx = await page.locator('#chart canvas').boundingBox();
+  await page.click(H('tfSeg') + ' [data-v="m1"]'); await page.waitForTimeout(600);
+  const cbx = await page.locator(CH + ' canvas').first().boundingBox();
   await page.mouse.move(cbx.x + cbx.width * 0.45, cbx.y + cbx.height * 0.5); await page.waitForTimeout(200);
   await C(() => { window.__lgE = null; window.liveChart.on('legend', e => { if (e && e.hovering) window.__lgE = e.index; }); });
   // pan back (drags) until the bar under the mouse is inside RTH, so the RTH value is a number, not "-"
@@ -446,7 +396,8 @@ try {
     return C(() => { const c = window.liveChart, U = window.ChartEngine.util, bs = c.bars(), i = window.__lgE, b = bs[i];
       if (!b) return { i, n: bs.length, tod: -1, want: null, text: 'no hover' };
       const s = U.rthVwap(bs, { sessionStart: 18 * 3600 }), want = U.vwapAt(s, b.t + 60);
-      return { i, n: bs.length, tod: U.tod(b.t), want, full: b.vw, text: document.getElementById('lgVw').textContent }; });
+      const v = c.vwapAt(i);
+      return { i, n: bs.length, tod: U.tod(b.t), want, full: b.vw, text: v === null ? '-' : U.fmtPrice(U.roundTo(v, 0.25), 2) }; });
   };
   let vw = await hovered();
   for (let k = 0; k < 24 && !(vw.tod >= 34200 + 900 && vw.tod < 57600 - 60); k++) {
@@ -456,36 +407,12 @@ try {
     vw = await hovered();
   }
   const fmtWant = vw.want === null ? '-' : CE.util.fmtPrice(CE.util.roundTo(vw.want, 0.25), 2);
-  check(vw.text === fmtWant, `E: RTH only: the legend shows the VWAP from 09:30 ET (${vw.text}, expected ${fmtWant} at ${Math.floor(vw.tod / 3600)}:${String(Math.floor(vw.tod / 60) % 60).padStart(2, '0')} ET)`);
+  check(vw.text === fmtWant, `E: RTH only: the chart's VWAP is the one from 09:30 ET (${vw.text}, expected ${fmtWant} at ${Math.floor(vw.tod / 3600)}:${String(Math.floor(vw.tod / 60) % 60).padStart(2, '0')} ET)`);
   check(vw.want !== null && Math.abs(vw.want - vw.full) > 0.01, 'E: an RTH bar found in the history, its RTH-only VWAP apart from the full session\'s (' + (vw.full === undefined ? '-' : vw.full.toFixed(2)) + ')');
   await shot(page, 'display-b2-vwap-rth.png');
-  await page.focus('#chart'); await page.keyboard.press('End'); await page.waitForTimeout(400);
+  await page.focus(CH); await page.keyboard.press('End'); await page.waitForTimeout(400);
   await gear(page, spRoot, 'vwap'); await page.click(spRoot + ' [data-f="opt:vwap:session:full"]'); await page.keyboard.press('Escape');
   check((await C(() => JSON.parse(localStorage.getItem('live-indicator-options-v1')).main.vwap.session)) === 'full', 'E: saved per chart');
-  // the header text toggle (single page): off hides it even on hover, the scale takes the room back, eased
-  const highY = () => C(() => { const c = window.liveChart, box = document.getElementById('chart').getBoundingClientRect(), w = box.width - 78, bs = c.bars(); let hi = -Infinity;
-    for (let i = 0; i < bs.length; i++) { const x = c.barToX(i); if (x >= 0 && x <= w && bs[i].h > hi) hi = bs[i].h; } return c.priceToY(hi); });
-  await page.mouse.move(cbx.x + 40, cbx.y + cbx.height + 40); await page.waitForTimeout(400);
-  const topOn = await C(() => window.liveChart.getFitTop());
-  check(topOn > 20, 'header on: the scale keeps ' + topOn + ' px free at the top');
-  const yOn = await highY();
-  const easing = C(() => new Promise(res => { const ys = [], c = window.liveChart; let n = 0;
-    const box = document.getElementById('chart').getBoundingClientRect(), w = box.width - 78;
-    const step = () => { const bs = c.bars(); let hi = -Infinity; for (let i = 0; i < bs.length; i++) { const x = c.barToX(i); if (x >= 0 && x <= w && bs[i].h > hi) hi = bs[i].h; }
-      ys.push(Math.round(c.priceToY(hi) * 10) / 10); if (++n < 24) requestAnimationFrame(step); else res(ys); };
-    requestAnimationFrame(step); }));
-  await page.click('#lgTog');
-  const ys = await easing;
-  check(await C(() => document.querySelector('.chart-live').classList.contains('lg-off') && getComputedStyle(document.getElementById('legend')).display === 'none'), 'header text off: no header text');
-  check((await C(() => window.liveChart.getFitTop())) === 0 && (await highY()) < yOn - 10, 'header text off: the scale takes the room back (' + Math.round(yOn) + ' px to ' + Math.round(await highY()) + ' px)');
-  check(new Set(ys).size >= 3, 'the room shrinks eased, never a snap: ' + [...new Set(ys)].length + ' steps');
-  await page.mouse.move(cbx.x + cbx.width * 0.4, cbx.y + cbx.height * 0.5); await page.waitForTimeout(200);
-  check(await C(() => getComputedStyle(document.getElementById('legend')).display === 'none' && document.getElementById('lgBub').offsetParent === null), 'header text off: none on hover either');
-  check((await C(() => JSON.parse(localStorage.getItem('live-legend-v1') || '{}').main)) === false && (await page.getAttribute('#lgTog', 'aria-pressed')) === 'false', 'saved for this chart');
-  await shot(page, 'display-b2-header-off-single.png');
-  await page.click('#lgTog'); await page.waitForTimeout(400);
-  check(await C(() => !document.querySelector('.chart-live').classList.contains('lg-off') && window.liveChart.getFitTop() > 20), 'header text back on');
-  check(await C(() => !document.querySelector('.chart-live').classList.contains('short')), 'F: /single.html keeps its full header');
   // D: every chip pinned (7 today, room for 10): one line at every size, the rest behind +N
   await addInd(page, spRoot, 'bubbles');
   if (await page.isHidden(spRoot + ' .ind-panel')) await page.click(spRoot + ' .ind-btn');
@@ -497,9 +424,8 @@ try {
   for (const [w, h] of [[1366, 768], [1920, 1080], [2560, 1440]]) {
     await page.setViewportSize({ width: w, height: h }); await page.waitForTimeout(600);
     const st = await chipState(page, spRoot);
-    const one = await C(() => { const rs = [...document.querySelector('header.bar').children].filter(c => c.getClientRects().length).map(c => c.getBoundingClientRect()); return Math.max(...rs.map(r => r.top)) < Math.min(...rs.map(r => r.bottom)); });
-    check(st.shown + st.listed === 7 && st.fits && one && (st.listed === 0 ? st.more === '' : st.more === '+' + st.listed), `D: single ${w}x${h}: ${st.shown} chips shown${st.listed ? ', ' + st.more : ''}, one toolbar line`);
-    await shot(page, `display-b2-chips-single-${w}.png`);
+    check(st.shown + st.listed === 7 && st.fits && (st.listed === 0 ? st.more === '' : st.more === '+' + st.listed), `D: a mounted chart ${w}x${h}: ${st.shown} chips shown${st.listed ? ', ' + st.more : ''}, on one line`);
+    await shot(page, `display-b2-chips-chart-${w}.png`);
   }
   await page.setViewportSize({ width: 1920, height: 1080 });
 
@@ -534,7 +460,7 @@ try {
   await ctx.close();
 
   /* ================================================================ an older ChartBridge: no q, no settlement */
-  console.log('ChartBridge before 0.3.8 (no q) and before 0.3.7 (no settlement)');
+  console.log('ChartBridge before 0.3.8 (no q)');
   await startBridge(PORT + 1, ['--test-controls', '--version=0.3.6', '--live-rate=60', '--test-pin=' + TEST_PIN]);
   const ctx2 = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   await ctx2.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
@@ -547,10 +473,6 @@ try {
   const orows = await op.evaluate(i => [...document.querySelectorAll(`.ws-panel[data-id="${i}"] .tp-row:not([hidden])`)].map(r => ({ c: r.className, p: getComputedStyle(r.querySelector('.tp-p')).color })), otape);
   check(orows.every(r => !/\bq(m?\d)\b/.test(r.c)) && orows.some(r => /\bbuy\b/.test(r.c)) && orows.some(r => /\bsell\b/.test(r.c)), 'no q: the tape colors by side as before');
   check(orows.filter(r => /\bbuy\b/.test(r.c)).every(r => r.p === 'rgb(61, 220, 151)') && orows.filter(r => /\bsell\b/.test(r.c)).every(r => r.p === 'rgb(255, 92, 122)'), 'buys green, sells red');
-  const sp = await openPage(ctx2, `http://localhost:${PORT + 1}/live/single.html`);
-  await singleLive(sp);
-  await sp.waitForTimeout(1500);
-  check(await sp.evaluate(() => document.getElementById('lgSet').hidden), 'no settlement from ChartBridge 0.3.6: the change from it is blank');
   await ctx2.close();
 } finally {
   await browser.close();

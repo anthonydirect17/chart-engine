@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.21.0 (2026-10-10): the single chart page removed
+
+Anthony's cut (2026-10-10): the workspace is ChartBridge's only page. **The workspace, and the workspace open in several
+windows, work exactly as in 1.20.1**; its smokes run unchanged where they did not drive the single chart page. Page only,
+no recompile; no change to ChartBridge or the engine's drawing. The page is kept on the branch
+`archive/chart-single-page-2026-10-10` (main at 235a02b).
+
+- **`live/single.html` is gone**, and with it everything only it used in `live/live.js`: the page boot
+  (`data-mount="page"`), its order bar and order connection, its Settings and small menu, its legend and **Aa** toggle,
+  the PIN boot, the tab's own account (`live-account-tab-v1`), the settlement readout, `window.liveChart` and
+  `window.liveData`. `nt8/install-files.json` no longer lists it, so `nt8/update-pc.ps1` deletes it from the PC (it drops
+  managed files that leave the manifest). Every chart is a mounted one (`ChartLive.mount`).
+- **`ChartLive.mount`:** `wsUrl` is a string only (a function or a promise of one served The Desk's relay and its
+  single-use tickets; the relay is being removed); anything else throws at mount, saying so. `legendToggle`, `legendShown()` and `setLegendShown()`, empty since
+  1.16.0, are gone; `data()` gives the chart's data for tests and the console (the page's `window.liveData`).
+  `LivePrefs` no longer has the legend key (`live-legend-v1`) or its methods. Markup Studio (`live/markup.js`), the one
+  caller that passed a function, passes the same address as a string.
+- **The update notice** (`live/update-notice.js`) has only the workspace's place for it (the page's footer spot is gone).
+- **The workspace** no longer writes `live-desk-sync-v1` (it told the single chart page the hotkeys were shared); its
+  Settings say the hotkeys are "kept in this browser" and no longer mention the page.
+- **Tests:** `test/chart-host.html` (one mounted chart with its own toolbar) takes the chart checks the page carried;
+  `smoke:orders` drives the workspace's order ticket (the same TradeCore and controls); `smoke:live` runs on the current
+  protocol (it ran on ChartBridge 0.2). The fake bridge's `--tickets` (the relay) is gone. Checks of the page's own parts
+  went with it: its legend, footer, title wording, the tab's own account, its order bar on one line, its layout at 400 px
+  and its Settings; a mounted chart's toolbar is checked at 1920x1080 and up (it wraps at 1366, as before).
 ## ChartBridge 0.5.4 and chart 1.20.1 (2026-10-10): the agent's window can change at any time
 
 Anthony (2026-10-10, DECISION ag): "I don't want any restrictions. I will set the time and that's what the rule is ... I do

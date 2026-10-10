@@ -1,12 +1,13 @@
 // Workspace load benchmark: the default layout (4 charts and Time and Sales, live/index.html) against the fake
-// bridge feeding a busy tape, compared with the single chart page (live/single.html) on the same feed. Sample data only.
+// bridge feeding a busy tape, compared with one mounted chart with its own toolbar (test/chart-host.html; the single chart
+// page, live/single.html, until chart 1.21.0) on the same feed. Sample data only.
 // Not part of `npm test`: it takes about 2 minutes per page.
 //
-//   node test/perf-workspace.mjs [--mode=both|workspace|single] [--secs=120] [--warm=10] [--live-rate=300]
+//   node test/perf-workspace.mjs [--mode=both|workspace|chart] [--secs=120] [--warm=10] [--live-rate=300]
 //                                [--tick-rate=15] [--port=8834] [--json=FILE] [--variant=default|no-tape|main-only|main-tape|panels|databox|accounts] [--ticket]
 //
 // --live-rate is trades a second per instrument while a page is subscribed to it (with the fake's bursts of 3 times
-// that for 1.5 s in every 10 s), so the workspace's MNQ, NQ and ES each trade at that rate. The single page shows the
+// that for 1.5 s in every 10 s), so the workspace's MNQ, NQ and ES each trade at that rate. The one chart shows the
 // main chart's view (MNQ Range 40, the main pane's indicators); the workspace adds the 1 hour MNQ chart, NQ 5 min,
 // ES 1 min and the MNQ tape (and the order ticket's place). CHROMIUM_PATH=/path/to/chrome uses a preinstalled browser.
 //
@@ -33,7 +34,8 @@ const VARIANT = arg('variant', 'default');
 /* --ticket (1.12.0): trading on; the workspace's ticket held and Armed, MNQ long with its stop and target working, so
    the order display path (every MNQ chart's lines, the Armed border, the ticket's P&L) runs under the load */
 const TICKET = !!arg('ticket', false);
-const MODE = arg('mode', 'both'), SECS = +arg('secs', 120), WARM = +arg('warm', 10), LIVE_RATE = +arg('live-rate', 300), TICK_RATE = +arg('tick-rate', 15), PORT = +arg('port', 8834);
+// --mode=single: the name before 1.21.0, now the one mounted chart
+const MODE = arg('mode', 'both') === 'single' ? 'chart' : arg('mode', 'both'), SECS = +arg('secs', 120), WARM = +arg('warm', 10), LIVE_RATE = +arg('live-rate', 300), TICK_RATE = +arg('tick-rate', 15), PORT = +arg('port', 8834);
 
 const init = `(() => {
   const P = window.__perf = { on: false, ts: [], exec: [], charts: [], perFrame: [], tape: [], long: [], sockets: [] };
@@ -71,15 +73,16 @@ const q = (arr, p) => { if (!arr.length) return 0; const s = arr.slice().sort((a
 const r2 = v => Math.round(v * 100) / 100, r3 = v => Math.round(v * 1000) / 1000;
 
 async function run(mode) {
-  const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--test-pin=' + TEST_PIN]
+  // a mounted chart never has ChartBridge's PIN (only the workspace page asks for it)
+  const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, mode === 'chart' ? '--pin-off' : '--test-pin=' + TEST_PIN]
     .concat(TICKET ? ['--trading', '--trade-accounts=Sim101', '--max-qty=MNQ:9'] : []).concat(VARIANT === 'accounts' ? ['--v3'].concat(TICKET ? [] : ['--trading']) : []), { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
   const browser = await chromium.launch(Object.assign({ args: ['--enable-precise-memory-info', '--js-flags=--expose-gc'] }, process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));
   try {
     const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
     await ctx.addInitScript(init);
-    // the single page: the execution chart's view (MNQ, Range 40)
-    if (mode === 'single') await ctx.addInitScript(() => { try { localStorage.setItem('live-settings-v2', JSON.stringify({ root: 'MNQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' })); localStorage.setItem('live-range-v2', JSON.stringify({ MNQ: 40 })); } catch (e) {} });
+    // the one chart: the execution chart's view (MNQ, Range 40)
+    if (mode === 'chart') await ctx.addInitScript(() => { try { localStorage.setItem('live-settings-v2', JSON.stringify({ root: 'MNQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' })); localStorage.setItem('live-range-v2', JSON.stringify({ MNQ: 40 })); } catch (e) {} });
     if (mode === 'workspace' && VARIANT !== 'default') {
       const W = (await import('../live/workspace.js')).default;
       const main = (p, i) => i === 0;
@@ -93,7 +96,7 @@ async function run(mode) {
       if (VARIANT === 'accounts') panels = panels.map(p => (p.type === 'tape' ? { id: 'perfAp', type: 'accounts', x: p.x, y: p.y, w: p.w, h: p.h } : p));
       if (VARIANT === 'databox') {
         panels = panels.map(p => (p.type === 'tape' ? { id: 'perfDb', type: 'databox', x: p.x, y: p.y, w: p.w, h: p.h } : p));
-        // the main chart with the single chart page's indicators (the delta pane on: the Data Box's buys and sells) and bubbles
+        // the main chart with the main pane's indicators (the delta pane on: the Data Box's buys and sells) and bubbles
         const LP = (await import('../live/live.js')).default.LivePrefs, pane = LP.defaultPane(LP.MAIN_PANE);
         pane.ind.bubbles = { on: true, shown: true, pin: true };
         await ctx.addInitScript(v => { try { localStorage.setItem('live-indicators-v2', v); } catch (e) {} }, JSON.stringify({ [panels[0].id]: pane }));
@@ -103,7 +106,7 @@ async function run(mode) {
     }
     await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     // cross-origin isolated, so performance.now() has 5 microsecond resolution instead of 100 (as perf-live)
-    await ctx.route(/\/live\/(index\.html|single\.html)?(\?.*)?$/, async r => {
+    await ctx.route(/\/live\/(index\.html)?(\?.*)?$|\/test\/chart-host\.html$/, async r => {
       const resp = await r.fetch();
       await r.fulfill({ response: resp, headers: Object.assign({}, resp.headers(), { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'require-corp' }) });
     });
@@ -111,11 +114,10 @@ async function run(mode) {
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     const t0 = Date.now();
-    await page.goto(`http://localhost:${PORT}/live/${mode === 'single' ? 'single.html' : '?layout=Perf'}`);
-    await page.waitForSelector('.cb-pin-key', { timeout: 30000 });
-    await enterPin(page, TEST_PIN);
-    if (mode === 'single') await page.waitForFunction(() => { const e = document.getElementById('connPill'); return e && e.textContent === 'LIVE'; }, null, { timeout: 120000, polling: 200 });
-    else await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 120000, polling: 200 });
+    await page.goto(`http://localhost:${PORT}/${mode === 'chart' ? 'test/chart-host.html' : 'live/?layout=Perf'}`);
+    if (mode === 'chart') await page.waitForFunction(() => { const b = document.querySelector('[id$="-badge"]'); return !!b && b.dataset.conn === 'live'; }, null, { timeout: 120000, polling: 200 });
+    else { await page.waitForSelector('.cb-pin-key', { timeout: 30000 }); await enterPin(page, TEST_PIN); }
+    if (mode !== 'chart') await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 120000, polling: 200 });
     const loadMs = Date.now() - t0;
     let ticket = null;
     if (TICKET && mode === 'workspace') {
@@ -147,7 +149,7 @@ async function run(mode) {
 
     const iv = []; for (let i = 1; i < P.ts.length; i++) iv.push(P.ts[i] - P.ts[i - 1]);
     return {
-      page: mode === 'single' ? 'single chart page (MNQ Range 40)' : VARIANT === 'default' ? 'workspace default layout (4 charts + tape)' : 'workspace ' + VARIANT, secs: SECS, liveRatePerInstrument: LIVE_RATE, loadMs,
+      page: mode === 'chart' ? 'one mounted chart (MNQ Range 40, test/chart-host.html)' : VARIANT === 'default' ? 'workspace default layout (4 charts + tape)' : 'workspace ' + VARIANT, secs: SECS, liveRatePerInstrument: LIVE_RATE, loadMs,
       fps: r2(iv.length / SECS), frameP50: r2(q(iv, 0.5)), frameP95: r2(q(iv, 0.95)), frameP99: r2(q(iv, 0.99)), frameMax: r2(Math.max(0, ...iv)), over33: iv.filter(d => d > 33.4).length,
       execChartP50: r3(q(P.exec, 0.5)), execChartP95: r3(q(P.exec, 0.95)), execChartP99: r3(q(P.exec, 0.99)), execChartMean: r3(P.exec.reduce((a, b) => a + b, 0) / (P.exec.length || 1)),
       allChartsPerFrameP50: r3(q(P.perFrame, 0.5)), allChartsPerFrameP95: r3(q(P.perFrame, 0.95)),
@@ -160,7 +162,7 @@ async function run(mode) {
 }
 
 const results = [];
-for (const m of MODE === 'both' ? ['single', 'workspace'] : [MODE]) results.push(await run(m));
+for (const m of MODE === 'both' ? ['chart', 'workspace'] : [MODE]) results.push(await run(m));
 const json = arg('json', '');
 if (json) for (const r of results) fs.appendFileSync(json, JSON.stringify(r) + '\n');
 console.log(JSON.stringify(results, null, 1));

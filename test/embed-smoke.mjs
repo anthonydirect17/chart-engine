@@ -1,7 +1,9 @@
 // Embedded chart smoke test: ChartLive.mount inside a plain host page (test/embed-host.html), against the fake
 // bridge, in Chromium. Checks the read-only guarantee (only subscribe and ping sent, no GET /session, no order bar),
-// a fresh wsUrl on every reconnect (single-use tickets, like The Desk's relay), destroy() taking everything down,
-// mount again, two panes with their own indicators, and storagePrefix keeping settings apart from the standalone page.
+// reconnecting to its wsUrl after a drop, destroy() taking everything down, mount again, two panes with their own
+// indicators, and storagePrefix keeping settings apart (the prefix 'desk:' beside the workspace's unprefixed keys). Chart
+// 1.21.0: wsUrl is a string (a function or a promise of one, for The Desk's relay tickets, is gone with the relay), and the
+// single chart page this compared with is gone.
 // Sample data only. Screenshots in test/out/ (and SHOTS_DIR when set).
 //   npm run smoke:embed        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
@@ -10,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import http from 'node:http';
-import { TEST_PIN, unlockIfAsked } from './smoke-pin.mjs';
+import { TEST_PIN } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
@@ -74,9 +76,10 @@ function spies() {
 
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 try {
-  /* ChartBridge offers trading here (protocol v2, trading on), and the WebSocket needs single-use tickets. */
-  // ChartBridge 0.3.2: a PIN is set on this bridge; the embedded chart must never ask for it or need it
-  await startBridge(PORT, ['--trading', '--trade-accounts=Sim101', '--test-controls', '--tickets', '--test-pin=' + TEST_PIN]);
+  /* ChartBridge offers trading here (protocol v2, trading on). The host page is served by the bridge itself (its own
+     origin), where ChartBridge's PIN would apply: no PIN on this one. A host on its own origin with ChartBridge's PIN
+     set (as The Desk) is checked at the end. */
+  await startBridge(PORT, ['--trading', '--trade-accounts=Sim101', '--test-controls', '--pin-off']);
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 }, deviceScaleFactor: 2 });
   const page = await ctx.newPage();
   await page.addInitScript(spies);
@@ -92,10 +95,9 @@ try {
   const before = await page.evaluate(() => ({ globals: Object.keys(window), listeners: [...window.__spy.listeners], intervals: window.__spy.intervals.size }));
   await page.evaluate(port => {
     document.getElementById('paneB').hidden = true;
-    window.__calls = { A: 0, B: 0 }; window.__status = { A: [], B: [] };
-    // an async function, like The Desk fetching a relay ticket for every connect
-    window.__urlA = () => { window.__calls.A++; return Promise.resolve('ws://localhost:' + port + '/ws?ticket=A' + window.__calls.A + '-' + Math.random().toString(36).slice(2)); };
-    window.__urlB = () => { window.__calls.B++; return 'ws://localhost:' + port + '/ws?ticket=B' + window.__calls.B + '-' + Math.random().toString(36).slice(2); };
+    window.__status = { A: [], B: [] };
+    window.__urlA = 'ws://localhost:' + port + '/ws?pane=A';      // a string (1.21.0); the query marks the pane's connects
+    window.__urlB = 'ws://localhost:' + port + '/ws?pane=B';
     // trading: true is ignored by mount(): a mounted chart is read only whatever the options say
     window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: window.__urlA, trading: true, paneId: 'main', storagePrefix: 'desk:', onStatus: s => window.__status.A.push(s.state) });
   }, PORT);
@@ -113,9 +115,9 @@ try {
   // the page's ids are prefixed per mount; the engine's Colors panel makes its own random ones
   check(await page.evaluate(() => { const el = document.querySelector('#paneA .chart-live'); return !!el && [...el.querySelectorAll('[id]')].every(e => e.id.startsWith('chart-live-') || e.closest('.ce-theme')); }), 'every element id is prefixed per mount');
   check(await page.evaluate(() => window.__spy.listeners.size > 0 && [...window.__spy.listeners].every(k => /^(document|window) /.test(k))), 'listener spy sees the chart\'s own listeners: ' + await page.evaluate(() => [...window.__spy.listeners].map(k => k.split(' ').slice(0, 2).join(' ')).join(', ')));
-  check(await page.evaluate(() => !document.getElementById('connPill') && !document.getElementById('chart')), 'none of the standalone page ids exist in the host');
+  check(await page.evaluate(() => !document.getElementById('connPill') && !document.getElementById('chart')), 'no unprefixed ids (connPill, chart) in the host');
   check(await page.evaluate(() => !document.querySelector('.cb-pin') && typeof window.ChartBridgePin === 'undefined') && !requests.some(u => /\/pin\//.test(u)),
-    'PIN set on ChartBridge: the embedded chart shows no PIN pad, loads no pin.js, asks nothing of /pin/');
+    'the embedded chart shows no PIN pad, loads no pin.js, asks nothing of /pin/'); 
   check(await page.evaluate(() => document.body.getAttribute('style') === null && document.documentElement.getAttribute('style') === null && document.body.className === '' && document.documentElement.className === ''), 'no style or class put on html or body');
   check(await page.evaluate(() => !document.querySelector('#paneA .obar, #paneA .arm, #paneA [role="switch"], #paneA .pill.armed, #paneA .side-seg')), 'mounted with trading: true, still no order bar, no Armed switch, no ARMED pill');
   // Shift+click and a drag on the chart: nothing is sent, no order lines
@@ -130,22 +132,20 @@ try {
   check(await page.evaluate(() => window.__a.chart.getOrders().length === 0), 'no order lines on the chart');
   await shot(page, 'embed-one-pane.png');
 
-  /* ---------------- reconnect: the wsUrl function is asked again, with a fresh ticket each time */
-  const callsBefore = await page.evaluate(() => window.__calls.A);
+  /* ---------------- reconnect: after a drop the chart connects to its wsUrl again, by itself */
+  const connectsA = async () => (await control(PORT, 'received')).urls.filter(u => /pane=A/.test(u)).length;
+  const callsBefore = await connectsA();
   await control(PORT, 'drop');
   await until(() => page.evaluate(() => window.__status.A.includes('offline')), 'offline after the drop');
   await until(() => paneLive('paneA'), 'pane A live again after the drop', 10000);
-  const callsAfter = await page.evaluate(() => window.__calls.A);
-  check(callsBefore === 1 && callsAfter === 2, 'wsUrl called again on reconnect: ' + callsBefore + ' then ' + callsAfter);
+  const callsAfter = await connectsA();
+  check(callsBefore === 1 && callsAfter === 2, 'connected again on reconnect: ' + callsBefore + ' then ' + callsAfter + ' connects');
   await control(PORT, 'drop');
-  await until(() => page.evaluate(() => window.__calls.A >= 3), 'wsUrl called a third time');
+  await until(async () => (await connectsA()) >= 3, 'a third connect');
   await until(() => paneLive('paneA'), 'pane A live after a second drop', 10000);
   let rec = await control(PORT, 'received');
-  const ticketsA = rec.urls.filter(u => /ticket=A/.test(u));
-  check(ticketsA.length === 3 && new Set(ticketsA).size === 3 && rec.ticketsRefused === 0, 'three connects, three different tickets, none refused: ' + JSON.stringify(ticketsA));
-  // the fake really refuses a reused ticket (so the check above means something)
-  const reused = await page.evaluate(u => new Promise(r => { const s = new WebSocket(u); s.onopen = () => { s.close(); r('open'); }; s.onerror = () => r('refused'); }), 'ws://localhost:' + PORT + ticketsA[0]);
-  check(reused === 'refused', 'a reused ticket is refused by the fake relay: ' + reused);
+  const urlsA = rec.urls.filter(u => /pane=A/.test(u));
+  check(urlsA.length === 3 && urlsA.every(u => u === '/ws?pane=A'), 'three connects, each to the wsUrl given: ' + JSON.stringify(urlsA));
 
   /* ---------------- read-only guarantee */
   const sentTypes = await page.evaluate(() => [...new Set(window.__spy.sockets.flatMap(s => s.sent.map(d => JSON.parse(d).type)))]);
@@ -170,10 +170,10 @@ try {
   const newGlobals = after.globals.filter(k => !before.globals.includes(k) && !k.startsWith('__'));
   check(newGlobals.length === 0, 'no new globals after mount and destroy: ' + newGlobals.join(','));
   check(await page.evaluate(() => ['ChartEngine', 'BarBuilder', 'OrderTicket', 'LivePrefs', 'ChartLive'].every(k => k in window)), 'the scripts define ChartEngine, BarBuilder, OrderTicket, LivePrefs and ChartLive');
-  const callsAtDestroy = await page.evaluate(() => window.__calls.A);
+  const callsAtDestroy = await connectsA();
   await control(PORT, 'drop');
   await page.waitForTimeout(2500);
-  check(await page.evaluate(() => window.__calls.A) === callsAtDestroy, 'no reconnect after destroy');
+  check(await connectsA() === callsAtDestroy, 'no reconnect after destroy');
 
   /* ---------------- mount again, then two panes side by side with their own indicators */
   await page.evaluate(() => {
@@ -330,9 +330,8 @@ try {
   await page.evaluate(() => { window.__a.destroy(); window.__b.destroy(); });
   await page.reload();
   await page.evaluate(() => {
-    window.__calls = { A: 0, B: 0 };
-    window.__urlA = () => { window.__calls.A++; return 'ws://' + location.host + '/ws?ticket=RA' + window.__calls.A + '-' + Math.random().toString(36).slice(2); };
-    window.__urlB = () => { window.__calls.B++; return 'ws://' + location.host + '/ws?ticket=RB' + window.__calls.B + '-' + Math.random().toString(36).slice(2); };
+    window.__urlA = 'ws://' + location.host + '/ws?pane=A';
+    window.__urlB = 'ws://' + location.host + '/ws?pane=B';
     window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: window.__urlA, paneId: 'main', storagePrefix: 'desk:' });
     window.__b = ChartLive.mount(document.getElementById('paneB'), { wsUrl: window.__urlB, paneId: 'pane-2', storagePrefix: 'desk:' });
   });
@@ -347,43 +346,41 @@ try {
   check(sentTypes2.every(t => t === 'subscribe' || t === 'ping') && Object.keys(rec.types).every(t => t === 'subscribe' || t === 'ping') && rec.sessionRequests === 0, 'two panes: still only subscribe and ping, no /session: ' + JSON.stringify(rec.types));
   await page.evaluate(() => { window.__a.destroy(); window.__b.destroy(); });
 
-  /* ---------------- storagePrefix: the standalone page and the embedded chart keep their own settings */
+  /* ---------------- storagePrefix: two prefixes keep their own settings. Pane B unprefixed (the workspace's own keys),
+     pane A on 'desk:' (until 1.21.0 this compared with the single chart page, which used the unprefixed keys) */
   {
     // instrument, bars and range settings are saved per prefix (the last pane to change them wins); indicators per pane
     const deskBefore = await page.evaluate(() => localStorage.getItem('desk:live-settings-v2'));
-    const sa = await ctx.newPage();
-    sa.on('pageerror', e => fail('standalone pageerror: ' + e.message));
-    await sa.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-    await sa.goto(`http://localhost:${PORT}/live/single.html`);             // no ticket: the standalone page is refused by --tickets,
-    await unlockIfAsked(sa);                                     // (after its PIN, ChartBridge 0.3.2)
-    await sa.waitForTimeout(300);                                // but its controls and storage work the same offline
-    await sa.click('#symSeg >> text="NQ"'); await sa.click('#tfSeg >> text="Range"');
-    await sa.fill('#rangeTicks', '40'); await sa.press('#rangeTicks', 'Enter');
-    await sa.click('#indBtn'); await sa.click('#indPanel [data-f="sw:levels"]'); await sa.keyboard.press('Escape');
-    await sa.waitForTimeout(300);
+    await page.evaluate(() => { window.__b = ChartLive.mount(document.getElementById('paneB'), { wsUrl: window.__urlB, paneId: 'main', storagePrefix: '' }); });
+    await until(() => paneLive('paneB'), 'pane B (unprefixed) live');
+    await page.click('#paneB [aria-label="Instrument"] >> text="NQ"'); await page.click('#paneB [id$="-tfSeg"] >> text="Range"');
+    await page.fill('#paneB [id$="-rangeTicks"]', '40'); await page.press('#paneB [id$="-rangeTicks"]', 'Enter');
+    await page.click('#paneB [id$="-indBtn"]'); await page.click('#paneB .ind-panel [data-f="sw:levels"]'); await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
     // the embedded chart (prefix desk:) still starts as it was left, on its own keys
     await page.evaluate(() => { window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: window.__urlA, paneId: 'main', storagePrefix: 'desk:' }); });
-    await until(() => paneLive('paneA'), 'pane A live next to the standalone page');
+    await until(() => paneLive('paneA'), 'pane A live next to the unprefixed pane');
     const emb = await page.evaluate(() => ({ root: document.querySelector('#paneA [aria-label="Instrument"] [aria-pressed="true"]').dataset.v, tf: document.querySelector('#paneA [id$="-tfSeg"] [aria-pressed="true"]').dataset.v, layers: window.__a.chart.getLayers() }));
     const want = JSON.parse(deskBefore);
     check(await page.evaluate(() => localStorage.getItem('desk:live-settings-v2')) === deskBefore && emb.root === want.root && emb.tf === want.tf && emb.layers.levels === true && emb.layers.vwap === false,
-      'embedded settings untouched by the standalone page: ' + JSON.stringify(emb) + ' saved ' + deskBefore);
-    // and the other way: an embedded change does not reach the standalone page
+      'desk: settings untouched by the unprefixed pane: ' + JSON.stringify(emb) + ' saved ' + deskBefore);
+    // and the other way: a desk: change does not reach the unprefixed keys
     await page.click('#paneA [aria-label="Instrument"] >> text="MES"');
     await page.click('#paneA .ce-theme-btn'); await page.click('#paneA .ce-preset[data-id="mint"]'); await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
-    await sa.reload(); await unlockIfAsked(sa); await sa.waitForTimeout(500);
-    const st = await sa.evaluate(() => ({ root: document.querySelector('#symSeg [aria-pressed="true"]').dataset.v, tf: document.querySelector('#tfSeg [aria-pressed="true"]').dataset.v, range: document.getElementById('rangeTicks').value, levels: window.liveChart.getLayers().levels, colors: localStorage.getItem('live-colors-v1') }));
-    check(st.root === 'NQ' && st.tf === 'range' && st.range === '40' && st.levels === false && st.colors === null, 'standalone settings untouched by the embedded chart: ' + JSON.stringify(st));
+    await page.evaluate(() => { window.__b.destroy(); window.__b = ChartLive.mount(document.getElementById('paneB'), { wsUrl: window.__urlB, paneId: 'main', storagePrefix: '' }); });
+    await until(() => paneLive('paneB'), 'pane B (unprefixed) live again');
+    await page.waitForTimeout(500);
+    const st = await page.evaluate(() => { const v = window.__b.view(); return { root: v.root, tf: v.tf, range: document.querySelector('#paneB [id$="-rangeTicks"]').value, levels: window.__b.chart.getLayers().levels, colors: localStorage.getItem('live-colors-v1') }; });
+    check(st.root === 'NQ' && st.tf === 'range' && st.range === '40' && st.levels === false && st.colors === null, 'unprefixed settings untouched by the desk: pane: ' + JSON.stringify(st));
     const keys = await page.evaluate(() => Object.keys(localStorage).sort());
     const embedKeys = keys.filter(k => k.startsWith('desk:'));
-    const standaloneKeys = keys.filter(k => !k.startsWith('desk:'));
-    check(embedKeys.includes('desk:live-settings-v2') && embedKeys.includes('desk:live-indicators-v2') && embedKeys.includes('desk:live-colors-v1'), 'embedded keys carry the prefix: ' + embedKeys.join(','));
-    check(standaloneKeys.length > 0 && standaloneKeys.every(k => /^live-/.test(k)), 'standalone keys are unprefixed: ' + standaloneKeys.join(','));
+    const plainKeys = keys.filter(k => !k.startsWith('desk:'));
+    check(embedKeys.includes('desk:live-settings-v2') && embedKeys.includes('desk:live-indicators-v2') && embedKeys.includes('desk:live-colors-v1'), 'desk: keys carry the prefix: ' + embedKeys.join(','));
+    check(plainKeys.length > 0 && plainKeys.every(k => /^live-/.test(k)), 'unprefixed keys are the plain live- ones: ' + plainKeys.join(','));
     const deskSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('desk:live-settings-v2')));
-    check(deskSettings.root === 'MES', 'embedded instrument saved under the prefix: ' + JSON.stringify(deskSettings));
-    await page.evaluate(() => window.__a.destroy());
-    await sa.close();
+    check(deskSettings.root === 'MES', 'the desk: instrument saved under the prefix: ' + JSON.stringify(deskSettings));
+    await page.evaluate(() => { window.__a.destroy(); window.__b.destroy(); });
   }
   await page.close();
 
@@ -406,6 +403,7 @@ try {
     const keys = await p2.evaluate(() => Object.keys(localStorage)), prefix = await p2.evaluate(() => ChartLive.EMBED_PREFIX);
     check(prefix && keys.length > 0 && keys.every(k => k.startsWith(prefix)), 'string wsUrl on ChartBridge 0.2 works; with no storagePrefix every key starts with "' + prefix + '": ' + keys.join(','));
     check(await p2.evaluate(() => { try { ChartLive.mount(document.getElementById('paneB'), {}); return false; } catch (e) { return /wsUrl/.test(e.message); } }), 'mount without wsUrl throws');
+    check(await p2.evaluate(() => { try { ChartLive.mount(document.getElementById('paneB'), { wsUrl: () => 'ws://localhost:1/ws' }); return false; } catch (e) { return /as a string/.test(e.message); } }), 'mount with a function for wsUrl throws, saying it takes a string (1.21.0)');
     const gone = await p2.evaluate(() => { const sel = document.querySelector('#paneA [id$="-acctPick"]'); return { value: sel.value, text: sel.selectedOptions[0].textContent, marks: window.__a.chart.getMarkers().length }; });
     check(gone.value === 'GONE-ACCT' && gone.text === 'GONE-ACCT (no longer listed)' && gone.marks === 0, 'a saved account ChartBridge no longer lists is shown plainly, with no fills: ' + JSON.stringify(gone));
     const mig = await p2.evaluate(() => ({ layers: window.__a.chart.getLayers(), count: document.querySelector('#paneA .ind-count').textContent, v2: JSON.parse(localStorage.getItem(ChartLive.EMBED_PREFIX + 'live-indicators-v2')), plain: localStorage.getItem('live-indicators-v2') }));

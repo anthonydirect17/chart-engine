@@ -2824,7 +2824,7 @@ Each choice below that the brief left open is marked **(lead's default)**.
 
 - **v3 page.** The ticket's switches, `managed` and the Merge result come from the window's v3 connection (see "The page's
   v3 connection" below); the ticket's own connection stays a v2 page and sends every order action, a strategy's `order`
-  and `merge` included. The single chart page (`single.html`) has no v3 connection (lead's default). A control shows only while its switch is
+  and `merge` included. (The single chart page, `single.html`, had no v3 connection; it is gone since chart 1.21.0.) A control shows only while its switch is
   true: the Strategy picker on the ticket and Settings > Order Strategies (`strategies`), the Merge button and key
   (`merge`), the entry-type modifiers (`orderTypes`), Accept and Reject keys (`bot`). With every switch off the page is
   the 1.15 page: no new control, The Desk never asked, an order is the 1.15 order.
@@ -2833,8 +2833,8 @@ Each choice below that the brief left open is marked **(lead's default)**.
   (they need the shared keys). With all four off they stay this browser's, as in 1.15. On The Desk's first answer in a
   browser: when The Desk has none yet (rev 0) and the browser has keys, they are saved there; otherwise The Desk's keys are
   used and a note names the browser's keys they replaced. The Desk's keys are written to the browser's own keys
-  (`live-hotkeys-v1`, `live-ws-keys-v1`), so the 1.15 handlers use them; the single chart page then shows them read only
-  (`live-desk-sync-v1`). A key The Desk has that this browser keeps for itself (`hotkeyRefused`) is shown with why it does
+  (`live-hotkeys-v1`, `live-ws-keys-v1`), so the 1.15 handlers use them. (Until chart 1.21.0 the single chart page then
+  showed them read only, told by `live-desk-sync-v1`; the page and the key are gone.) A key The Desk has that this browser keeps for itself (`hotkeyRefused`) is shown with why it does
   nothing here.
 - **The hotkeys document** has nine keys: The Desk's seven plus `accept` and `reject` (the copilot's one-key answers, no
   default key) (lead's default; The Desk lane adds them). The page sends a cancelable `chart-copilot-key` DOM event

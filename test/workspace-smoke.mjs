@@ -65,12 +65,12 @@ try {
   await ctx.route(/\/update\.json$/, r => r.fulfill({ contentType: 'application/json', body: JSON.stringify({ schema: 1,
     page: { version: '1.12.0', build: 'b2', installedAt: Date.now() + 3600000, state: '' }, chartBridge: { compiled: '0.3.5', ready: null, copied: null, mixed: null }, updater: null }) }));
   await ctx.addInitScript(spies);
-  // the single chart page's own instrument and bars, which the workspace must never change
+  // the general settings' instrument and bars (the single chart page's until 1.21.0), which the workspace must never change
   await ctx.addInitScript(() => { try { if (!localStorage.getItem('live-settings-v2')) localStorage.setItem('live-settings-v2', JSON.stringify({ root: 'NQ', tf: 'm5', glide: 'smooth', rangeMode: 'nt' })); } catch (e) {} });
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
 
-  /* Open a URL, type the PIN on ChartBridge's pad (the page's own origin needs it, like the single chart page), wait for live. */
+  /* Open a URL, type the PIN on ChartBridge's pad (the page's own origin needs it), wait for live. */
   async function open(url, p = page) {
     await p.goto(url);
     await p.waitForSelector('.cb-pin-key', { timeout: 15000 });
@@ -120,7 +120,7 @@ try {
   const paneIds = await page.evaluate(() => [...document.querySelectorAll('.ws-panel[data-type="chart"] [data-pane]')].map(e => e.dataset.pane));
   check(paneIds.length === 4 && new Set(paneIds).size === 4 && paneIds.every(id => s.panels.some(p => p.id === id)), 'each chart has its own paneId, the panel id');
   const ind = await page.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v2') || '{}'));
-  check(ind[main.id] && ind[main.id].ind.vwap.on && !ind[nq.id], 'the first chart starts with the single chart page\'s indicators, the others with none');
+  check(ind[main.id] && ind[main.id].ind.vwap.on && !ind[nq.id], 'the first chart starts with the main pane\'s default indicators, the others with none');
 
   const sessions = async () => (await (await fetch(`http://127.0.0.1:${PORT}/test/received`, { method: 'POST' })).json()).sessionRequests;
   check(await sessions() === 2, 'each window load signs in once for its own order connection (GET /session): ' + await sessions());
@@ -195,7 +195,7 @@ try {
   check(p1.tf === 'range' && p1.range === 12, 'Range bars of 12 ticks from the header (' + p1.tf + ' ' + p1.range + ')');
   check(await page.evaluate(i => document.querySelector(`.ws-panel[data-id="${i}"] .ws-tf`).textContent, nq.id) === 'Range 12', 'the header says Range 12');
   const single = await page.evaluate(() => ({ s: JSON.parse(localStorage.getItem('live-settings-v2')), r: JSON.parse(localStorage.getItem('live-range-v2') || '{}') }));
-  check(single.s.root === 'NQ' && single.s.tf === 'm5' && single.r.ES !== 12, 'the single chart page\'s instrument, bars and range sizes are untouched (' + single.s.root + ' ' + single.s.tf + ')');
+  check(single.s.root === 'NQ' && single.s.tf === 'm5' && single.r.ES !== 12, 'the general instrument, bars and range sizes are untouched (' + single.s.root + ' ' + single.s.tf + ')');
   await page.click(`.ws-panel[data-id="${nq.id}"] .ws-view`);
   await page.click('#wsView [data-root="NQ"]');
   await page.click('#wsView [data-tf="m5"]');
@@ -213,7 +213,7 @@ try {
   check(st.pin === 'Change PIN', 'Settings: Change PIN (ChartBridge has a PIN)');
   check(st.floors === 8, 'Settings: the large-print floors, RTH and overnight for 4 instruments');
   // 1.16.0: and the workspace's own Maximize panel (never a trading key)
-  check(st.hk === 'Buy MKT|Sell MKT|B/E|Close|Flatten all|Maximize panel', 'Settings: the hotkeys of the single chart page, and Maximize panel (' + st.hk + ')');
+  check(st.hk === 'Buy MKT|Sell MKT|B/E|Close|Flatten all|Maximize panel', 'Settings: the 1.11.0 trading hotkeys, and Maximize panel (' + st.hk + ')');
   check(st.reset && st.fits, 'Settings: Reset layout, and the panel fits the window (it scrolls inside)');
   await shot(page, 'workspace-settings.png');
   await page.click('#wsGlide [data-v="fast"]');
@@ -233,8 +233,8 @@ try {
   await page.keyboard.press('Escape');
   check(await page.evaluate(() => document.getElementById('wsSettings').hidden), 'Escape closes Settings');
   const kept = await page.evaluate(() => ({ s: JSON.parse(localStorage.getItem('live-settings-v2')), hk: JSON.parse(localStorage.getItem('live-hotkeys-v1')), fl: JSON.parse(localStorage.getItem('live-tape-floors-v1')) }));
-  check(kept.s.glide === 'fast' && kept.s.rangeMode === 'traded' && kept.s.root === 'NQ' && kept.s.tf === 'm5', 'Glide and Range style saved where the single chart page keeps them (its instrument and bars untouched)');
-  check(kept.hk && kept.hk.buy === 'Alt+B', 'the hotkey saved where the single chart page keeps them');
+  check(kept.s.glide === 'fast' && kept.s.rangeMode === 'traded' && kept.s.root === 'NQ' && kept.s.tf === 'm5', 'Glide and Range style saved in the general settings (live-settings-v2; the instrument and bars there untouched)');
+  check(kept.hk && kept.hk.buy === 'Alt+B', 'the hotkey saved in live-hotkeys-v1');
   check(kept.fl.MNQ.rth === 4, 'large-print floors set in Settings are saved');
 
   console.log('Colors in the top bar');
@@ -255,29 +255,26 @@ try {
   const un = await page.evaluate(() => { const n = document.getElementById('updNote'); return n ? { text: n.querySelector('[role=status]').textContent, top: !!n.closest('#wsUpdate'), inChart: !!n.closest('.chart-live') } : null; });
   check(un && un.top && !un.inChart && /Update ready: reload when flat/.test(un.text), '"Update ready: reload when flat" in the top bar (' + (un && un.text) + ')');
 
-  console.log('settings shared with the single chart page');
+  /* 1.21.0: the single chart page is gone; its place here is a second workspace tab (Anthony opens the workspace in several
+     tabs): the general settings are one set for every tab, each tab keeps its own layout */
+  console.log('settings shared with a second workspace tab');
   const sp = await ctx.newPage();
-  sp.on('pageerror', e => fail('single page error: ' + e.message));
-  await sp.goto(`http://localhost:${PORT}/live/single.html`);
-  await sp.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(sp, TEST_PIN)).catch(() => {});
-  await sp.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 30000 }).catch(() => fail('single page not live'));
-  const sv = await sp.evaluate(() => ({ grid: !!document.getElementById('wsGrid'), sym: document.querySelector('#symSeg [aria-pressed="true"]').dataset.v, tf: document.querySelector('#tfSeg [aria-pressed="true"]').dataset.v,
-    glide: document.querySelector('#glideSeg [aria-pressed="true"]').dataset.v, mode: document.getElementById('rangeMode').value, toolbar: getComputedStyle(document.querySelector('header.bar')).display }));
-  check(!sv.grid && sv.toolbar !== 'none', '/single.html is the single chart page with its toolbar');
-  check(sv.sym === 'NQ' && sv.tf === 'm5', 'it opens on its own instrument and bars (' + sv.sym + ' ' + sv.tf + ')');
-  const sl = await sp.evaluate(() => { const vis = id => { const e = document.getElementById(id); return !!e && getComputedStyle(e).display !== 'none' && e.offsetHeight > 0; };
-    return { src: vis('lgSrc') && /ChartBridge .*chart \d/.test(document.getElementById('lgSrc').textContent), pill: vis('connPill'), time: vis('lgTime'), grid: getComputedStyle(document.getElementById('legend')).display,
-      status: vis('dFeed') && vis('fps') && getComputedStyle(document.querySelector('footer.status')).display !== 'none' }; });
-  check(sl.src && sl.pill && sl.time && sl.grid === 'grid' && sl.status, 'the single chart page keeps its full legend (source line, LIVE, bar time) and its status line');
-  check(sv.glide === 'fast' && sv.mode === 'traded', 'with the Glide and Range style set in the workspace');
-  // and back: Glide set on the single chart page reaches the workspace's charts
-  await sp.click('#setBtn'); await sp.click('#glideSeg [data-v="off"]'); await sp.keyboard.press('Escape');   // 1.14.0: Glide in the page's Settings
+  sp.on('pageerror', e => fail('second tab error: ' + e.message));
+  await open(`http://localhost:${PORT}/live/?layout=Second`, sp);
+  const sv = await sp.evaluate(() => ({ layout: window.workspace.layout, grid: !!document.getElementById('wsGrid'), single: !!document.getElementById('connPill') || !!document.getElementById('legend') }));
+  check(sv.grid && !sv.single && sv.layout === 'Second', 'the second tab is the workspace on its own layout (Second), with no single chart page anywhere');
+  await sp.click('#wsSet');
+  const sg = await sp.evaluate(() => ({ glide: document.querySelector('#wsGlide [aria-pressed="true"]').dataset.v, mode: document.getElementById('wsRangeMode').value, hk: document.getElementById('wsHk-buy').value }));
+  check(sg.glide === 'fast' && sg.mode === 'traded' && sg.hk === 'Alt+B', 'with the Glide, Range style and hotkey set in the first tab (' + JSON.stringify(sg) + ')');
+  // and back: Glide set in the second tab reaches the first tab's charts
+  await sp.click('#wsGlide [data-v="off"]'); await sp.keyboard.press('Escape');
   await page.waitForTimeout(300);
   await page.click('#wsSet');
-  check(await page.evaluate(() => document.querySelector('#wsGlide [aria-pressed="true"]').dataset.v) === 'off', 'Glide set on the single chart page shows in the workspace\'s Settings');
+  check(await page.evaluate(() => document.querySelector('#wsGlide [aria-pressed="true"]').dataset.v) === 'off', 'Glide set in the second tab shows in the first tab\'s Settings');
   await page.keyboard.press('Escape');
+  check(await page.evaluate(() => window.workspace.layout) === 'Main' && (await sp.evaluate(() => window.workspace.layout)) === 'Second', 'each tab keeps its own layout');
   await sp.close();
-  const sess0 = await sessions();                          // each page load (the workspace's and the single chart page's) signs in once
+  const sess0 = await sessions();                          // each page load (each workspace tab) signs in once
   await page.evaluate(() => { const s = JSON.parse(localStorage.getItem('live-settings-v2')); s.glide = 'smooth'; s.rangeMode = 'nt'; localStorage.setItem('live-settings-v2', JSON.stringify(s)); localStorage.removeItem('live-hotkeys-v1'); });
 
   console.log('Time and Sales');

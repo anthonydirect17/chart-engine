@@ -198,24 +198,22 @@ test('no en or em dashes in the workspace files', () => {
   }
 });
 
-test('the workspace is the main page (index.html), the single chart page is single.html, both installed', () => {
+test('the workspace is the page (index.html), installed; 1.21.0: the single chart page (single.html) is gone', () => {
   const www = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).www;
   const to = www.map(f => f.to);
-  for (const f of ['index.html', 'single.html', 'workspace.js', 'workspace.css', 'feed.js', 'update-notice.js', 'trade.js', 'ticket-link.js']) assert.ok(to.includes(f), f);
+  for (const f of ['index.html', 'workspace.js', 'workspace.css', 'feed.js', 'update-notice.js', 'trade.js', 'ticket-link.js']) assert.ok(to.includes(f), f);
   assert.ok(!to.includes('workspace.html'), 'no workspace.html any more');
   assert.deepStrictEqual(www.find(f => f.to === 'index.html').from, 'live/index.html');
-  assert.deepStrictEqual(www.find(f => f.to === 'single.html').from, 'live/single.html');
+  assert.ok(!www.some(f => f.to === 'single.html' || f.from === 'live/single.html'), 'single.html is not installed');
+  assert.ok(!fs.existsSync(path.join(__dirname, '..', 'live', 'single.html')), 'and not in the repo');
   const html = fs.readFileSync(path.join(__dirname, '..', 'live', 'index.html'), 'utf8');
   for (const m of html.matchAll(/<(?:script|link)[^>]+(?:src|href)="([^":]+)"/g)) assert.ok(to.includes(m[1].replace(/^\.\.\//, '')), m[1]);
   assert.match(html, /id="wsGrid"/, 'index.html is the workspace');
   const at = f => html.indexOf('src="' + f + '"');
   assert.ok(at('live.js') < at('feed.js') && at('feed.js') < at('workspace.js') && at('workspace.js') < at('update-notice.js'), 'live.js, feed.js, workspace.js, then the update notice');
   assert.match(html, /data-update-host/, 'the update notice has its place in the top bar');
-  const single = fs.readFileSync(path.join(__dirname, '..', 'live', 'single.html'), 'utf8');
-  assert.match(single, /<script src="live\.js" data-mount="page"><\/script>/, 'single.html is the trading page');
-  assert.ok(!/workspace|feed\.js|ticket-link/.test(single), 'and nothing of the workspace');
-  const sat = f => single.indexOf('src="' + f + '"');
-  assert.ok(sat('order-ticket.js') < sat('trade.js') && sat('trade.js') < sat('live.js') && at('trade.js') < at('live.js') && at('ticket-link.js') < at('workspace.js'), '1.12.0: trade.js (the one order path) before live.js on both pages, ticket-link.js before workspace.js');
+  assert.ok(at('order-ticket.js') < at('trade.js') && at('trade.js') < at('live.js') && at('ticket-link.js') < at('workspace.js'), '1.12.0: trade.js (the one order path) before live.js, ticket-link.js before workspace.js');
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'live', 'live.js'), 'utf8'), /document\.currentScript|getAttribute\('data-mount'\)/, 'live.js boots no page of its own');
 });
 
 test('Quote board rows (1.16.0): cleanPanel keeps the hidden rows, sanitised; none hidden keeps no key; the layout keeps them', () => {

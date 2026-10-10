@@ -39,7 +39,8 @@ test('IBM Plex from the page folder: every weight the pages use, its licence, in
   }
   assert.ok(to.includes('fonts/plex.css') && to.includes('fonts/OFL.txt'), 'the stylesheet and the licence are installed');
   assert.match(fs.readFileSync(path.join(root, LICENCE), 'utf8'), /SIL Open Font License, Version 1\.1/);
-  for (const page of ['index.html', 'single.html']) {
+  assert.ok(!fs.existsSync(path.join(root, 'live', 'single.html')), '1.21.0: the single chart page is gone');
+  for (const page of ['index.html']) {
     const html = fs.readFileSync(path.join(root, 'live', page), 'utf8');
     assert.ok(!/fonts\.(googleapis|gstatic)\.com/.test(html), page + ' has no Google Fonts link');
     assert.match(html, /<link rel="stylesheet" href="fonts\/plex\.css">/, page + ' loads the PC\'s fonts');
