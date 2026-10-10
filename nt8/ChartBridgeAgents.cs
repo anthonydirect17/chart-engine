@@ -92,7 +92,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal static List<Order> AgentMayFill(Account a, Instrument i) { return CopierMayFill(a, i); }
         internal static bool AgentMayFillState(OrderState s) { return MayFill(s); }
         internal static string AgentStatus(Account a) { return StatusOf(a); }
-        internal static int AgentCap(string root) { return CapFor(root); }
+        // config.txt's gate 3 cap for an agent's entry: this PC's maxQty line for the root when it has one, else the agents' shipped
+        // cap (0.5.3: MNQ 20, any other root DefaultMaxQty). The page's, the bot's and the copier's caps stay CapFor.
+        internal static int AgentCap(string root) { int n; return MaxQty.TryGetValue(root ?? "", out n) ? n : ChartBridgeAgents.ShippedConfigCap(root); }
         internal static int AgentMaxBracketTicks { get { return MaxBracketTicks; } }
         internal static int AgentMaxTicksAway { get { return MaxTicksAway; } }
         // The last trade on a root (any age, 0 when none) and whether it is no older than maxAgeMs (the market trading in fact).
@@ -131,6 +133,21 @@ namespace NinjaTrader.NinjaScript.AddOns
                 case "MES": return 20;
                 default: return 0;
             }
+        }
+
+        // 0.5.3 (Anthony, 2026-10-10): the agents' MNQ cap of 20 ships with ChartBridge, so any PC can run an agent at its full
+        // plan with nothing set by hand. It stands in for config.txt's gate 3 default (DefaultMaxQty, 1) for agent entries only;
+        // a maxQty.<ROOT> line set on this PC still holds for agents (kept, and said at start: NoteConfigCaps).
+        public static int ShippedConfigCap(string root) { return (root ?? "").ToUpperInvariant() == "MNQ" ? 20 : ChartBridgeOrders.DefaultMaxQty; }
+
+        // At config load, with agents on: a maxQty line that differs from a shipped agent cap is this PC's own; it is kept, and said once.
+        public static void NoteConfigCaps()
+        {
+            if (Ids().Count == 0) return;
+            int n;
+            if (ChartBridgeOrders.MaxQty.TryGetValue("MNQ", out n) && n != ShippedConfigCap("MNQ"))
+                ChartBridgeServer.Log("config.txt: maxQty.MNQ = " + n + " is this PC's own and is kept: agent entries on MNQ are capped at " + Math.Min(n, HardCeiling("MNQ")) +
+                                      " (with no maxQty.MNQ line the agents' shipped cap is " + ShippedConfigCap("MNQ") + "); the page's and the bot's MNQ caps are unchanged");
         }
 
         public const string SecretHeader = "X-ChartBridge-Agent";
@@ -3143,7 +3160,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Str(string s) { return s != null ? CbJson.Str(s) : "null"; }
 
         // welcome.rules (contract section 10 item 8): the caps ChartBridge really enforces on this agent's entries: per root the
-        // smallest of its rule, the hard ceiling and config.txt's gate 3 cap (DefaultMaxQty when config.txt names none), plus
+        // smallest of its rule, the hard ceiling and config.txt's gate 3 cap (ShippedConfigCap when config.txt names none), plus
         // config.txt's maxBracketTicks and maxTicksAway (null when not set). The pages' strip keeps the agent's own rules.
         private static string EnforcedRulesJson(Rules r)
         {

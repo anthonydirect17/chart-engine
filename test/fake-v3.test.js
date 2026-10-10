@@ -1254,6 +1254,23 @@ test('as built: only a chosen account is the agent\'s; a clash stands the agent 
   assert.equal(x.agentTake('exec').length, 0, 'Anthony\'s fill on its account is not the agent\'s');
 });
 
+test('ChartBridge 0.5.3: with no maxQty.MNQ line an agent\'s MNQ cap is the shipped 20; the page keeps 1; a line of this PC\'s own still holds', async () => {
+  const d = await makeAgentDesk();
+  d.desk.config.maxQty = { NQ: 2 };                                   // this PC's config.txt has no maxQty.MNQ line
+  d.hello();
+  assert.deepEqual(d.agentTake('welcome')[0].rules.maxQty, { NQ: 2, MNQ: 20 }, 'welcome: MNQ 20 enforced');
+  d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  const p = d.plan({ qty: 20, stopTicks: 27, targetTicks: 54, riskDollars: 270 });   // a made-up plan risking $270
+  assert.equal(p.why, null);
+  assert.equal(d.working('SIM-AG1').find(o => o.planId === p.id).qty, 20, 'the 20 MNQ entry is placed');
+  assert.match(reasonOf(d.act({ type: 'order', cid: 'pg', account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'market', qty: 2 })), /^Qty 2 is over the MNQ cap of 1 \(maxQty\.MNQ in config\.txt\)\.$/, 'the page keeps 1');
+  const e = await makeAgentDesk();
+  e.desk.config.maxQty = { MNQ: 5, NQ: 2 };                           // a line of this PC's own
+  e.hello();
+  assert.deepEqual(e.agentTake('welcome')[0].rules.maxQty, { NQ: 2, MNQ: 5 }, 'kept for agents');
+  assert.match(e.plan({ qty: 6, riskDollars: 48 }).why, /from 1 to 5/);
+});
+
 /* ======================================================================== ChartBridge 0.5.0 as built at agent-channel 4d4a81f
    (nt8/ChartBridgeAgents.cs): what the pages see of the cancel's slow tries, the market shut, the market trading in fact, the
    stop placed again, the flatten asking again and its close cap, the lost trade and the held refused plans; and the agent's

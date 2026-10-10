@@ -123,7 +123,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         //                                   accounts it does not name; after that it is ignored, said once in the Output window)
         //   trading = true                (order entry from the chart; OFF by default; see ChartBridgeOrders.cs)
         //   tradeAccounts = Sim101, ...   (exact account names the chart may trade; no wildcard)
-        //   maxQty.MNQ = 5                (largest order per instrument root; default 1)
+        //   maxQty.MNQ = 5                (largest order per instrument root; default 1. 0.5.3: an agent's entries with no line:
+        //                                  MNQ 20, Anthony 2026-10-10; ChartBridgeAgents.ShippedConfigCap)
         //   accountChecks = off           (0.4.0: every v3 feature is ON by default, Anthony 2026-10-07; a line like this turns one
         //                                  off. accountChecks: gate 2 is the page's per-account checkmark, saved in accounts.txt;
         //                                  see ChartBridgeAccounts.cs. The others: orderTypes, strategies, merge, cancelFromList,
@@ -178,6 +179,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (ChartBridgeBars.ReadConfig(key, val)) { }   // bars, barsRoots, pc (ChartBridgeBars.cs)
                 else ChartBridgeOrders.ReadConfig(key, val);   // trading, tradeAccounts, maxQty.<ROOT>
             }
+            ChartBridgeAgents.NoteConfigCaps();   // 0.5.3: a maxQty.MNQ line of this PC's own is kept for agents, and said
         }
     }
 
@@ -1874,7 +1876,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.5.2";
+        public const string Version = "0.5.3";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;

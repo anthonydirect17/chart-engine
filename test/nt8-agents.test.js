@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.5\.[012]";/);   // 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0
+  assert.match(main, /public const string Version = "0\.5\.[0-3]";/);   // 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -113,6 +113,18 @@ test('0.5.0 agents: the hard ceiling is a constant; the secret is never logged; 
   assert.match(acode, /private string mode = "shadow";/);
   assert.match(bodies(acode, 'Start'), /mode = "shadow";/);
   assert.ok(!/trading = false|Enabled = true|ChartBridgeSwitches\.Note\(/.test(acode), 'never turns a switch on or off');
+});
+
+test('0.5.3 agents: the shipped MNQ cap of 20 is for agent entries only; a maxQty line of this PC\'s own holds and is said', () => {
+  assert.match(bodies(acode, 'ShippedConfigCap'), /return \(root \?\? ""\)\.ToUpperInvariant\(\) == "MNQ" \? 20 : ChartBridgeOrders\.DefaultMaxQty;/, 'MNQ 20; every other root the page\'s default');
+  assert.match(bodies(acode, 'AgentCap'), /return MaxQty\.TryGetValue\(root \?\? "", out n\) \? n : ChartBridgeAgents\.ShippedConfigCap\(root\);/, 'a maxQty line first');
+  assert.match(bodies(ocode, 'CapFor'), /return MaxQty\.TryGetValue\(root \?\? "", out n\) \? n : DefaultMaxQty;/, 'the page\'s, the bot\'s and the copier\'s cap is unchanged');
+  assert.match(ocode, /public const int MaxActionsPerSecond = 10, DefaultMaxQty = 1;/);
+  assert.match(bodies(ocode, 'PlaceOrderLocked'), /int cap = agent != null \? AgentCap\(root\) : CapFor\(root\),/, 'gate 3: only an agent entry takes the agents\' cap');
+  assert.equal((ocode + acode + ccode).match(/\bAgentCap\(/g).length, 4, 'AgentCap: its definition, gate 3, plan check 4 and welcome.rules only');
+  assert.match(main, /else ChartBridgeOrders\.ReadConfig\(key, val\);[^\n]*\n\s*\}\s*ChartBridgeAgents\.NoteConfigCaps\(\);/, 'said once at config load, after every line is read');
+  assert.match(bodies(acode, 'NoteConfigCaps'), /if \(Ids\(\)\.Count == 0\) return;[\s\S]*ChartBridgeServer\.Log\("config\.txt: maxQty\.MNQ = " \+ n \+ " is this PC's own and is kept/);
+  assert.ok(!/MaxQty\[|MaxQty\.(Add|Remove|Clear)/.test(bodies(acode, 'NoteConfigCaps') + bodies(acode, 'AgentCap')), 'nothing in config is changed');
 });
 
 test('0.5.0 agents: the hooks in ChartBridge.cs', () => {
