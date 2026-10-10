@@ -62,7 +62,7 @@ function create(o) {
     chosen: String(readJson(KEYS.chosen) || ''), shown: popout, layout: '', cidSeq: 0,
     orders: new Map(), pending: new Map(), propEnds: [],
     keys: { accept: '', reject: '', notes: [], from: '' },
-    killConfirm: 0, autoConfirm: 0, rulesEdit: false, acctEdit: false, acctAsk: '', acctAskMode: '', feedFilter: 'all', rows: null,
+    killConfirm: 0, autoConfirm: 0, rulesEdit: false, rulesWindowOnly: false, rulesAsk: null, acctEdit: false, acctAsk: '', acctAskMode: '', feedFilter: 'all', rows: null,
     chart: null, chartRoot: '', chartTf: 'm1', contract: '',
     motion: AC.motionPref(storage), drawer: '', exits: new Map(), lightSig: '', lightColor: '', lightSlot: 0,
   };
@@ -136,6 +136,8 @@ function create(o) {
             '<p class="ag-help">New York time · 0 = no limit</p>' +
             '<div class="ag-row"><button type="button" class="ag-btn primary" data-act="rulesSave">Set</button><button type="button" class="ag-btn" data-act="rulesCancel">Cancel</button></div>' +
           '</div>' +
+          '<div class="ag-ask" data-k="rulesAsk" role="alertdialog" aria-label="A window that flattens him now" hidden><span data-k="rulesAskText"></span>' +
+            '<button type="button" class="ag-btn ag-live-go" data-act="rulesYes">Set it</button><button type="button" class="ag-btn" data-act="rulesNo">Cancel</button></div>' +
           '<div class="ag-row"><button type="button" class="ag-btn" data-act="rulesOpen" data-k="rulesOpen">Change the rules</button></div>' +
           '<p class="ag-why" data-k="rulesWhy"></p>' +
         '</div>' +
@@ -645,15 +647,21 @@ function create(o) {
     put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
     if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(Object.assign({}, a, { mode: S.acctAskMode }), S.acctAsk, S.version));   // keepMode: the mode this question names
     setHtml(q('[data-k="rules"]'), AC.rulesLines(a.rules).map(([k, v]) => '<span>' + esc(k) + '</span><span class="mono">' + esc(v) + '</span>').join('') || '<span>Rules</span><span>not known yet</span>');
+    /* ChartBridge 0.5.4 (DECISION 2026-10-10 ag): in a trade, or with an entry or a proposal open, the window alone may change */
+    const ce = AC.rulesEditable(a, { workingEntry: work, openProposals: open, version: S.version });
     const ro = q('[data-k="rulesOpen"]');
-    put(ro, 'disabled', !S.signedIn || !can.ok);
-    attr(ro, 'title', can.ok ? 'Only while the agent is flat with no working entry and no open proposal' : can.why);
-    put(q('[data-k="rulesEdit"]'), 'hidden', !S.rulesEdit);
+    put(ro, 'disabled', !S.signedIn || !ce.ok);
+    put(ro, 'textContent', ce.windowOnly ? 'Change the window' : 'Change the rules');
+    attr(ro, 'title', ce.ok ? (ce.windowOnly ? ce.why : 'Every rule while the agent is flat with no working entry and no open proposal; the window at any time') : ce.why);
+    if (S.rulesEdit && S.rulesWindowOnly !== ce.windowOnly) { S.rulesEdit = false; S.rulesAsk = null; }   // flat or not changed under the open form: open it again
+    put(q('[data-k="rulesEdit"]'), 'hidden', !S.rulesEdit || !!S.rulesAsk);
+    put(q('[data-k="rulesAsk"]'), 'hidden', !S.rulesAsk);
+    if (S.rulesAsk) put(q('[data-k="rulesAskText"]'), 'textContent', S.rulesAsk.ask);
     /* why the rules cannot change now, under the button (written here: data-auto), unless ChartBridge's own words are there */
     const rw = q('[data-k="rulesWhy"]');
-    if (!can.ok) {
-      if (S.rulesEdit) S.rulesEdit = false, put(q('[data-k="rulesEdit"]'), 'hidden', true);
-      if (rw.dataset.kind !== 'refused') { put(rw, 'textContent', can.why); rw.dataset.kind = 'auto'; }
+    if (!ce.ok || ce.windowOnly) {
+      if (!ce.ok && S.rulesEdit) S.rulesEdit = false, put(q('[data-k="rulesEdit"]'), 'hidden', true);
+      if (rw.dataset.kind !== 'refused') { put(rw, 'textContent', ce.why); rw.dataset.kind = 'auto'; }
     } else if (rw.dataset.kind === 'auto') { put(rw, 'textContent', ''); rw.dataset.kind = ''; }
     put(ro, 'hidden', S.rulesEdit);                             // the form has its own Set and Cancel
   }
@@ -918,7 +926,11 @@ function create(o) {
         '<span class="mono">' + r + '</span><input class="ag-in ag-qty" type="number" min="1" max="' + AC.CEILING[r] + '" step="1" data-qty="' + r + '" value="' + esc(f.maxQty[r]) + '"' + (on ? '' : ' disabled') + ' aria-label="' + r + ' size at most (1 to ' + AC.CEILING[r] + ')"><span class="ag-lbl">max ' + AC.CEILING[r] + '</span></label>';
     }).join('');
     for (const k of ['entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses']) q('[data-r="' + k + '"]').value = f[k];
-    S.rulesEdit = true; rulesWhy('');
+    /* the window alone (0.5.4, in a trade): every other input shows its value, closed */
+    const wo = AC.rulesEditable(a, ctxNow(a)).windowOnly;
+    for (const el of q('[data-k="rulesEdit"]').querySelectorAll('input')) if (!['entryFrom', 'entryUntil', 'flatAt'].includes(el.dataset.r)) el.disabled = wo || el.disabled;
+    if (!wo) for (const el of q('[data-k="rulesEdit"]').querySelectorAll('input[data-r]')) el.disabled = false;
+    S.rulesEdit = true; S.rulesWindowOnly = wo; S.rulesAsk = null; rulesWhy('');
     renderPanel();
     const first = q('[data-k="rRoots"] input'); if (first) first.focus();
   }
@@ -929,7 +941,12 @@ function create(o) {
     for (const k of ['entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses']) form[k] = q('[data-r="' + k + '"]').value;
     const r = AC.rulesChange(a, form, ctxNow(a));
     if (r.error) { rulesWhy(r.error); return; }
-    if (sendAgent(r.msg, 'rules')) { S.rulesEdit = false; rulesWhy(''); sentLine('rulesWhy', 'Sent.'); }
+    if (r.ask) { S.rulesAsk = r; renderPanel(); const y = q('[data-act="rulesNo"]'); if (y) y.focus(); return; }   // asked once, in the page
+    sendRules(r.msg);
+  }
+  function sendRules(msg) {
+    S.rulesAsk = null;
+    if (sendAgent(msg, 'rules')) { S.rulesEdit = false; rulesWhy(''); sentLine('rulesWhy', 'Sent.'); }
     renderPanel();
   }
   function onViewClick(e) {
@@ -991,7 +1008,9 @@ function create(o) {
       sendAccount(S.acctAsk);
     }
     else if (k === 'rulesOpen') openRules();
-    else if (k === 'rulesCancel') { S.rulesEdit = false; rulesWhy(''); renderPanel(); }
+    else if (k === 'rulesCancel') { S.rulesEdit = false; S.rulesAsk = null; rulesWhy(''); renderPanel(); }
+    else if (k === 'rulesYes') { if (S.rulesAsk) sendRules(S.rulesAsk.msg); }
+    else if (k === 'rulesNo') { S.rulesAsk = null; renderPanel(); }
     else if (k === 'rulesSave') saveRules();
     else if (k === 'popout') popOut();
   }

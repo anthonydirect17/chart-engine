@@ -200,6 +200,29 @@ test('rules change: flat keys exactly as the contract (section 7), checked again
   assert.deepEqual(AC.rulesChangeable(a, {}), { ok: true, why: '' });
 });
 
+test('ChartBridge 0.5.4 (DECISION 2026-10-10 ag): in a trade the window alone may change; a window that flattens now asks first', () => {
+  const pos = { root: 'MNQ', qty: 1, avgPrice: 25400 };
+  const inTrade = agent({ position: pos }), ctx = { roots: ['NQ', 'MNQ', 'ES', 'MES'], version: 'fake-0.5.4', now: T0 };   // 10:00 New York
+  const form = o => Object.assign(AC.rulesForm(RULES), o || {});
+  assert.deepEqual(AC.rulesEditable(agent(), { version: '0.5.4' }), { ok: true, windowOnly: false, why: '' });
+  assert.deepEqual(AC.rulesEditable(inTrade, { version: '0.5.4' }), { ok: true, windowOnly: true, why: 'Demo Agent has a position: only the window (entries from, until, flat at) can change now.' });
+  assert.equal(AC.rulesEditable(agent(), { version: '0.5.4', workingEntry: true }).windowOnly, true);
+  assert.equal(AC.rulesEditable(agent(), { version: '0.5.4', openProposals: 1 }).windowOnly, true);
+  assert.deepEqual(AC.rulesEditable(inTrade, { version: '0.5.2' }), { ok: false, windowOnly: false, why: 'Demo Agent has a position: change its rules when it is flat.' }, 'an older ChartBridge: as before');
+  const w = AC.rulesChange(inTrade, form({ entryUntil: '15:20', flatAt: '15:58' }), ctx, 'c1');
+  assert.deepEqual(w.msg, { type: 'agentRules', cid: 'c1', agent: 'demo', roots: 'NQ,MNQ', maxQtyNQ: 2, maxQtyMNQ: 20, entryFrom: '09:45', entryUntil: '15:20', flatAt: '15:58', maxExpireSec: 1800, maxTrades: 0, maxLosses: 0 });
+  assert.equal(w.ask, undefined, 'a window that still holds now: sent at once');
+  assert.match(AC.rulesChange(inTrade, form({ maxTrades: '5' }), ctx).error, /only the window \(entries from, until, flat at\) can change now: the other rules wait until it is flat\. Nothing was sent\./);
+  assert.match(AC.rulesChange(inTrade, form({ entryUntil: '15:20', maxQty: { NQ: '1', MNQ: '20', ES: '2', MES: '20' } }), ctx).error, /other rules wait/);
+  const late = AC.rulesChange(inTrade, form({ entryFrom: '10:30', entryUntil: '15:00' }), ctx);
+  assert.ok(late.msg && /^This window puts Demo Agent in his flat hours now \(flat at 15:55, new entries from 10:30\): ChartBridge flattens his position at once, by his rules\. Set it\?$/.test(late.ask), 'a start after now asks first: ' + late.ask);
+  const passed = AC.rulesChange(inTrade, form({ entryFrom: '09:00', entryUntil: '09:30', flatAt: '09:59' }), ctx);
+  assert.ok(passed.msg && /flat at 09:59/.test(passed.ask), 'a flat time already passed asks first');
+  assert.equal(AC.rulesChange(agent({ position: pos }), form({ entryFrom: '18:00', entryUntil: '15:25' }), ctx).ask, undefined, '18:00 to 15:25 at 10:00: inside, no question');
+  assert.equal(AC.windowFlattensNow(agent(), '10:30', '15:55', T0), false, 'flat: never asked');
+  assert.match(AC.accountChange(inTrade, 'EVAL-A', [{ name: 'EVAL-A', sim: false, tradable: true }], { version: '0.5.4' }).error, /choose its account when it is flat/, 'the account still waits until flat');
+});
+
 test('account chooser: tradable accounts, SIM first; never the bot\'s, the copier\'s or another agent\'s; LIVE asked once', () => {
   const accounts = { list: [
     { name: 'Sim101', sim: true, tradable: true, state: 'active' }, { name: 'SIM-AG1', sim: true, tradable: true, state: 'active' },
@@ -445,9 +468,9 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.19.0');   // 1.19.0: Kit version 1 (after 1.18.1, the Agent tab's full-session rules)
-  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.19\.0'/);
-  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.19\.0/);
+  assert.equal(JSON.parse(read('package.json')).version, '1.20.1');   // 1.20.1: the window at any time with ChartBridge 0.5.4 (after 1.19.0, Kit version 1)
+  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.20\.1'/);
+  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.20\.1/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 

@@ -2959,7 +2959,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             r.MaxLosses = n;
             string bad = RulesProblem(r);
             if (bad != null) return bad;
-            if (Exposed()) return "agent " + Id + " has a position, a working entry or an open proposal: change its rules when it is flat";
+            // 0.5.4 (Anthony 2026-10-10, DECISION ag: "I do not want to be locked out of changing the time ... during live trading"):
+            // while the agent has a position, a working entry or an open proposal, its window (entryFrom, entryUntil, flatAt) may
+            // still change, inside the same limits; every other rule waits until it is flat. The new window rules at once: a flat
+            // time already passed, or a start after now, puts it in its flat hours (FlatHours) and its position is flattened by its
+            // rules; an entry or a proposal outside the new window ends as at the window's end.
+            if (Exposed() && !SameButWindow(RulesNow(), r)) return "agent " + Id + " has a position, a working entry or an open proposal: only its window (entries from, until, flat at) can change now; change its other rules when it is flat";
             string err = SaveRules(r);
             if (err != null) return "agent-" + Id + "-rules.txt could not be saved (" + err + "); nothing changed";
             lock (Sync) { rules = r; rulesBroken = null; StandDownLocked(); }   // a loss stand-down already held stays (lead's default)
@@ -2970,6 +2975,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             ToAgent(WelcomeJson());
             Notify();
             return null;
+        }
+
+        // The two rule sets differ in the window alone (entryFrom, entryUntil, flatAt): the same roots in the same order, each root's
+        // maxQty, maxExpireSec, maxTrades and maxLosses.
+        private static bool SameButWindow(Rules a, Rules b)
+        {
+            return a.Roots.SequenceEqual(b.Roots) && a.Roots.All(x => a.QtyFor(x) == b.QtyFor(x)) && a.MaxExpireSec == b.MaxExpireSec && a.MaxTrades == b.MaxTrades && a.MaxLosses == b.MaxLosses;
         }
 
         // 0.5.2: why an entry is refused outside the window: the market closed, or the time.

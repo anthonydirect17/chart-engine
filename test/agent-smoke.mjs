@@ -261,7 +261,7 @@ try {
   await until(async () => (await text('.ag-strip [data-k="sAccount"]')) === 'SIM-AG1', 'the agent trades SIM-AG1 now');
   const am = (await sent()).filter(m => m.type === 'agentAccount');
   check(am.length === 1 && am[0].agent === 'demo' && am[0].account === 'SIM-AG1' && Object.keys(am[0]).join(',') === 'type,cid,agent,account,keepMode' && ['shadow', 'copilot', 'auto'].includes(am[0].keepMode),
-    'agentAccount sent once, exactly the contract\'s keys; to ChartBridge 0.5.2 (the fake says fake-0.5.2) keepMode names the mode the page showed: ' + JSON.stringify(am));
+    'agentAccount sent once, exactly the contract\'s keys; to ChartBridge 0.5.2 or later (the fake says fake-0.5.4) keepMode names the mode the page showed: ' + JSON.stringify(am));
   check((await agentsNow()).find(a => a.agent === 'demo').mode === am[0].keepMode, 'the mode is kept: ' + am[0].keepMode);
 
   /* ---------------------------------------------------------------- the light: a look */
@@ -330,7 +330,8 @@ try {
     'side, root, qty, kind, price, stop and target ticks, risk, setup, confidence, reason, account: "' + card.slice(0, 260) + '"');
   await until(async () => (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'cp1').seenAt > 0, 'agentSeen the moment it showed');
   check((await sent()).filter(m => m.type === 'agentSeen' && m.id === 'cp1').length === 1, 'agentSeen once');
-  check(await page.isDisabled('#agView [data-act="rulesOpen"]') && /open proposal/.test(await text('#agView [data-k="rulesWhy"]')), 'Change the rules only while flat with nothing working or proposed: ' + await text('#agView [data-k="rulesWhy"]'));
+  check(!(await page.isDisabled('#agView [data-act="rulesOpen"]')) && (await text('#agView [data-act="rulesOpen"]')) === 'Change the window' && /open proposal: only the window \(entries from, until, flat at\) can change now/.test(await text('#agView [data-k="rulesWhy"]')),
+    'ChartBridge 0.5.4: with a proposal open only the window can change, and the button says so: ' + await text('#agView [data-k="rulesWhy"]'));
   await sleep(1100);
   check((await text('.ag-plist [data-k="cd"]')) !== cd, 'the countdown runs');
   await page.screenshot({ path: path.join(SHOTS, 'agent-proposal.png') });
@@ -438,6 +439,24 @@ try {
   await until(async () => (await A()).orders.some(o => o.by === 'agent:demo' && o.role === 'entry'), 'fl1 working');
   await control('price', { root: 'MNQ', p: 25389.75 });                                   // it fills: a position, its legs
   await until(async () => /Long 1 MNQ/.test(await text('.ag-strip [data-k="sPos"]')), 'demo is long 1 MNQ');
+  /* ChartBridge 0.5.4 (DECISION 2026-10-10 ag): in a trade the window alone may change; one that flattens him now asks first */
+  check((await text('#agView [data-act="rulesOpen"]')) === 'Change the window' && !(await page.isDisabled('#agView [data-act="rulesOpen"]')), 'in a trade: Change the window');
+  await page.click('#agView [data-act="rulesOpen"]');
+  check(await page.isDisabled('#agView [data-r="maxTrades"]') && await page.isDisabled('#agView [data-qty="MNQ"]') && !(await page.isDisabled('#agView [data-r="flatAt"]')) && !(await page.isDisabled('#agView [data-r="entryFrom"]')),
+    'in a trade only the three times of the window are open');
+  const rulesSent = async () => (await sent()).filter(m => m.type === 'agentRules').length;
+  const rs0 = await rulesSent();
+  await page.fill('#agView [data-r="entryFrom"]', '11:30');
+  await page.click('#agView [data-act="rulesSave"]');
+  check(await visible('#agView [data-k="rulesAsk"]') && /in his flat hours now \(flat at 15:55, new entries from 11:30\): ChartBridge flattens his position at once/.test(await text('#agView [data-k="rulesAsk"]')) && (await rulesSent()) === rs0,
+    'a window starting after now asks first, in the page; nothing sent: ' + await text('#agView [data-k="rulesAsk"]'));
+  await page.click('#agView [data-act="rulesNo"]');
+  check(!(await visible('#agView [data-k="rulesAsk"]')) && (await rulesSent()) === rs0, 'Cancel: nothing sent');
+  await page.fill('#agView [data-r="entryFrom"]', '09:45');
+  await page.fill('#agView [data-r="flatAt"]', '15:58');
+  await page.click('#agView [data-act="rulesSave"]');
+  await until(async () => /15:58/.test(await text('#agView [data-k="rules"]')), 'the new flat time is in force, in the trade');
+  check((await rulesSent()) === rs0 + 1 && /Long 1 MNQ/.test(await text('.ag-strip [data-k="sPos"]')), 'one agentRules; still in the trade');
   /* an open trade: the light moves to the chart and the P&L, the faster lap, its colour the open P&L */
   await control('price', { root: 'MNQ', p: 25393 });
   await until(async () => /^\+\$/.test(await text('#agView [data-k="cPnl"]')), 'the open P&L shows the gain (NinjaTrader\'s figure for the account)');

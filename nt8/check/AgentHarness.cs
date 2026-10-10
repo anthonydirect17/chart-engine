@@ -183,6 +183,7 @@ public static class AgentHarness
             Round6();   // reviewer A's E1 to E3 (RX)
             FullSession();   // 0.5.2: the window in session time (Anthony's rulings 2026-10-08 p and q)
             Review052();     // 0.5.2 review: the calendar's halts in the flatten, keepMode, a position from an earlier session
+            WindowAnytime(); // 0.5.4: the window may change while the agent holds a position (DECISION 2026-10-10 ag)
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -330,7 +331,7 @@ public static class AgentHarness
         lock (agentOut) got = agentOut.Skip(n).ToList();
         string w = got.Count > 0 ? got[0] : "";
         Check(w.StartsWith("{\"type\":\"welcome\"") && got.Count > 1 && got[1].StartsWith("{\"type\":\"agentState\""), "agentHello: welcome, then agentState");
-        Check(w.Contains("\"version\":\"0.5.2\"") && w.Contains("\"agent\":\"manrae\"") && w.Contains("\"mode\":\"shadow\"") && w.Contains("\"account\":\"Sim101\",\"sim\":true") &&
+        Check(w.Contains("\"version\":\"0.5.4\"") && w.Contains("\"agent\":\"manrae\"") && w.Contains("\"mode\":\"shadow\"") && w.Contains("\"account\":\"Sim101\",\"sim\":true") &&
               w.Contains("\"rules\":{\"roots\":[\"NQ\",\"MNQ\"],\"maxQty\":{\"NQ\":2,\"MNQ\":20},\"entryFrom\":\"09:45\",\"entryUntil\":\"15:00\",\"flatAt\":\"15:55\",\"maxExpireSec\":1800,\"maxTrades\":null,\"maxLosses\":null,\"maxBracketTicks\":null,\"maxTicksAway\":null}") &&
               w.Contains("{\"root\":\"MNQ\",\"name\":\"MNQ 12-26\",\"tick\":0.25,\"pointValue\":2}") && w.Contains("{\"root\":\"NQ\",\"name\":\"NQ 12-26\",\"tick\":0.25,\"pointValue\":20}"),
               "welcome: version, agent, shadow, Sim101 (sim), the default rules, its roots' instruments: " + w);
@@ -2707,6 +2708,48 @@ public static class AgentHarness
         et = open; Last2(); Advance(4000);
         Check(sime.Calls.Skip(calls).Any(c => c.Contains(" ag:manrae flat ")), "0.5.2 review: " + label + ": at the open the flatten goes on and closes it: " + string.Join(" | ", sime.Calls.Skip(calls)));
         Settle(sime);
+    }
+
+    // 0.5.4 (Anthony 2026-10-10, DECISION ag): while the agent holds a position, a working entry or an open proposal, the page may
+    // still change its window (entryFrom, entryUntil, flatAt); every other rule waits until it is flat. The new window rules at once.
+    static void WindowAnytime()
+    {
+        Fresh();   // SIM-E, auto, 10:00 on a Friday
+        SessionRules("09:45", "15:00", "15:55");
+        Order e = PlacedOn(sime, Good(NewId()));
+        Check(e != null, "0.5.4: placed at 10:00");
+        if (e == null) return;
+        // a working entry: the window may change, the rest may not
+        int rj = Count(page, "reject");
+        P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 4, 0));
+        Check(Count(page, "reject") == rj + 1 && PageReject().Contains("only its window (entries from, until, flat at) can change now; change its other rules when it is flat") && !FileText("agent-manrae-rules.txt").Contains("maxTrades\t4"),
+              "0.5.4: a working entry: maxTrades cannot change now, and the page is told only the window can: " + PageReject());
+        P(Rules("MNQ", ",\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));
+        Check(Count(page, "reject") == rj + 2 && PageReject().Contains("only its window"), "0.5.4: nor the roots");
+        P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":5", "09:45", "15:00", "15:55", 1800, 0, 0));
+        Check(Count(page, "reject") == rj + 3 && PageReject().Contains("only its window"), "0.5.4: nor a size");
+        // a position: a later entryUntil and flatAt are taken at once, saved, and the agent is told (welcome)
+        Fill(e, 1, 24999);
+        Advance(500);
+        int welcomes = Count(agentOut, "welcome"), calls = sime.Calls.Count;
+        SessionRules("09:45", "15:20", "15:58");
+        Check(Count(page, "reject") == rj + 3 && FileText("agent-manrae-rules.txt").Contains("entryUntil\t15:20") && FileText("agent-manrae-rules.txt").Contains("flatAt\t15:58") &&
+              Count(agentOut, "welcome") == welcomes + 1 && Last(agentOut, "welcome").Contains("\"entryUntil\":\"15:20\",\"flatAt\":\"15:58\"") && Last(page, "agent").Contains("\"flatAt\":\"15:58\""),
+              "0.5.4: in a trade, a new window is accepted, saved, sent to the agent and shown: " + Last(agentOut, "welcome"));
+        Advance(1500);
+        Check(!sime.Calls.Skip(calls).Any(c => c.StartsWith("cancel") || c.StartsWith("submit")), "0.5.4: a window that still holds now touches nothing: its stop and target stay");
+        // a window whose flat time has passed puts him in his flat hours at once: flattened by his rules
+        int st = N(page);
+        SessionRules("09:00", "09:30", "09:59");
+        Check(Count(page, "reject") == rj + 3 && FileText("agent-manrae-rules.txt").Contains("flatAt\t09:59"), "0.5.4: a flat time already passed is his to set: accepted");
+        Advance(1500);
+        Check(sime.Calls.Skip(calls).Any(c => c.StartsWith("cancel CB#")) && Any(page, st, "manrae flattened at 09:59 by its rules"),
+              "0.5.4: the new flat time has passed: his legs are cancelled and he is flattened by his rules, as at any flat time");
+        Settle(sime);
+        // flat again: every rule may change, as before
+        Fresh();
+        P(Rules("MNQ", ",\"maxQtyMNQ\":5", "10:00", "14:00", "15:30", 900, 3, 2));
+        Check(Count(page, "reject") == rj + 3 && FileText("agent-manrae-rules.txt").Contains("maxTrades\t3"), "0.5.4: flat: every rule changes as before");
     }
 
     static void Review052()

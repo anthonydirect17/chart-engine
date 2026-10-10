@@ -1,5 +1,25 @@
 # Changelog
 
+## ChartBridge 0.5.4 and chart 1.20.1 (2026-10-10): the agent's window can change at any time
+
+Anthony (2026-10-10, DECISION ag): "I don't want any restrictions. I will set the time and that's what the rule is ... I do
+not want to be locked out of changing the time if I want to during live trading." The window stays inside ChartBridge's
+full-session limit (in session order from 18:00, flat at 15:59 at the latest); nothing else narrows it.
+
+- **ChartBridge 0.5.4:** while the agent has a position, a working entry or an open proposal, `agentRules` may change its
+  window (`entryFrom`, `entryUntil`, `flatAt`); every other rule (roots, sizes, entry life, trades, losses) still waits until
+  it is flat, and is refused with "only its window (entries from, until, flat at) can change now". The new window rules at
+  once, as any window does: a flat time already passed, or a start after now, puts him in his flat hours and ChartBridge
+  flattens his position by his rules. **Order path: F5 needed** (a ChartBridge recompile).
+- **The Agent tab (chart 1.20.1, page only):** with ChartBridge 0.5.4 or later the rules button reads "Change the window"
+  while he is in a trade or has an entry or a proposal open, and only the three times are open in the form. A window that
+  would flatten him now asks first, in the page ("This window puts Demo in his flat hours now ...: ChartBridge flattens his
+  position at once, by his rules. Set it?"); Cancel sends nothing. With an older ChartBridge the tab works as before.
+- **Already so, unchanged:** a new agent starts on 09:45 to 15:00, flat 15:55 (no rules file), and ChartBridge keeps his
+  last window in `agent-<id>-rules.txt`, so it never resets (over restarts and F5 too).
+- Tests: the harness (`check:orders`, AgentHarness `WindowAnytime`), the fake (`test/fake-v3.mjs` follows, its hello says
+  fake-0.5.4), `test/agent.test.js` and `npm run smoke:agent` (in a trade: Change the window, the question, Cancel, Set).
+
 ## 1.19.0 (2026-10-08): Kit version 1
 
 A shared look for Anthony's trading apps, as Anthony approved it on 2026-10-08 (`docs/KIT.md`). It is added alongside the
