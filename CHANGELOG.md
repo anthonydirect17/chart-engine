@@ -1,5 +1,49 @@
 # Changelog
 
+## ChartBridge 0.5.3 (2026-10-10): the agents' MNQ cap of 20 ships with ChartBridge
+
+Anthony's decision (2026-10-10): the agent's MNQ cap of 20 ships, so any PC can run the live agent at the full $270 and nothing is set by
+hand. Nothing else in NinjaTrader changes. `nt8/PROTOCOL.md`, "Agent channel", has the rule. ChartBridge only: no page
+change, no `config.txt` change; install it with `update-pc.ps1 -InstallChartBridge` and F5 while flat.
+
+| MNQ cap | with no `maxQty.MNQ` line | with a `maxQty.MNQ = N` line |
+|---|---|---|
+| an agent's entry | **20** (was 1) | **20** (was N) |
+| the page, the bot, the copier | 1, as before | N, as before |
+
+An agent's MNQ entry is the smallest of its own rule (Agent tab, default 20), the hard ceiling (20) and this 20.
+
+- **Agents never read `maxQty.MNQ`** (Anthony, 2026-10-10). The line caps the page, the bot and the copier only.
+  `ChartBridgeAgents.ShippedConfigCap` (MNQ 20) is used through `ChartBridgeOrders.AgentCap` for agent entries only: gate
+  3, plan check 4 and `welcome.rules`. Every other root for agents is as before (`config.txt`'s cap, 1 with no line).
+- **Nothing writes `config.txt`.** ChartBridge, the installer and the updater leave it alone. With agents on and a
+  `maxQty.MNQ` line, ChartBridge says once at start in the Output window: "config.txt: maxQty.MNQ = 2 caps the page's, the
+  bot's and the copier's MNQ orders only; agents use their own MNQ cap of 20 (with the agent's rule and the hard ceiling)".
+- **A page exit from an agent's position** (review). Anthony can cut an agent's MNQ from the page with no `maxQty.MNQ`
+  line: a market order that only reduces it (no bracket, at most the position) skips gate 3's per-order qty check, and
+  gate 3's position count (position plus working orders on that side plus this order) is held to the agent's cap (20),
+  not the page's 1. Every other gate stays. Re-review: the exit plus the page's exits still working on that side (orders
+  that are no stop or target) may close at most the position, read again at gate 3, so two quick exits never flip it.
+
+  | agent long 20 MNQ, page cap 1 | result | why |
+  |---|---|---|
+  | page market sell 5 | placed | an exit: no per-order qty check; count 5 of 20 |
+  | a second sell of 16 while the 5 still works | refused | 5 working plus 16 would close 21 of 20 |
+  | agent long 5: sell 5, then 5 again before the first fills | second refused | 10 of 5 would flip it |
+  | agent long 5: sell 3, then 2 | both placed | 5 of 5 |
+  | agent long 5: sell 3, then 3 | second refused | 6 of 5 |
+  | page market sell 25 | refused, never trimmed | more than the position is no exit: the owner lock ("use Flatten, or move its stop or target") |
+  | page buy 1 | refused | an add is never an exit: the owner lock, before gate 3 |
+
+- **Refusals name the cap that applied** (review). Gate 3 and plan check 4 never say `maxQty.MNQ in config.txt` for an
+  agent: they say "agent manrae's maxQty for MNQ" when its Agent tab rule is below the hard ceiling, else "the hard ceiling
+  of 20 for MNQ" (`ChartBridgeAgents.CapWords`). `maxQty.<ROOT> in config.txt` stays for a root with no shipped cap whose
+  line is lower, and for the page.
+- Tests: `nt8/check/AgentHarness.cs` (a 20 MNQ agent entry with no line; the page sells 5 of it, a second exit past the
+  position, 25 and a buy refused; on a long 5: 5 and 5, 3 and 2, 3 and 3; gate 3's and check 4's words; with a line of 5 the agent placed at 6 and refused
+  only above 20 or its own rule, the page refused above 5; the note), `test/nt8-agents.test.js` (the source guards), and
+  the fake follows (`test/fake-v3.mjs`, `test/fake-v3.test.js`).
+
 ## 1.19.1 (2026-10-10): quality round 1
 
 A small fix found by clicking every control of the workspace against the fake bridge (Anthony 2026-10-09: "Make sure every
