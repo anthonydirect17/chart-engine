@@ -211,14 +211,17 @@ try {
   check(await page.evaluate(() => getComputedStyle(document.querySelector('.bt-prop .bt-acc')).opacity === '1' && !document.querySelector('.bt-prop .bt-acc').disabled && document.querySelector('.bt-props').hasAttribute('data-no-motion')), 'R3: Accept is there at once, never animated');
   await page.screenshot({ path: path.join(SHOTS, 'bot-proposal.png') });
   await page.mouse.click(5, 300);                                   // the focus on the page, as Anthony's would be
+  await control('hold', { root: 'MNQ' });                           // MNQ still until the short is read: its 12 tick stop cannot close it first
   await page.keyboard.press('Alt+KeyY');
   await until(async () => (await v3()).proposals.find(x => x.id === 'p1').state === 'accepted', 'Accept with The Desk\'s accept key');
   const placed = await v3();
   const pp = placed.proposals.find(x => x.id === 'p1');
   check(pp.answeredAt >= pp.seenAt, 'both times recorded: seen ' + pp.seenAt + ', answered ' + pp.answeredAt);
   await until(async () => !(await page.$('.bt-prop[data-id="p1"]')), 'the accepted proposal goes');
-  const st2 = await control('state', { root: 'MNQ' });
-  check(st2.positions['Sim101|MNQ'] && st2.positions['Sim101|MNQ'].qty === -1, 'ChartBridge placed it on Sim101 from the proposal itself: short 1 MNQ');
+  // wait for the fill, as the checks above wait for theirs (one read could come before it)
+  const st2 = await until(async () => { const s = await control('state', { root: 'MNQ' }), q = s.positions['Sim101|MNQ']; return q && q.qty === -1 ? s : null; }, 'the accepted short filled on Sim101');
+  check(!!st2 && st2.positions['Sim101|MNQ'].qty === -1, 'ChartBridge placed it on Sim101 from the proposal itself: short 1 MNQ');
+  await control('hold', { root: 'MNQ', on: '0' });                  // MNQ trades on
   await control('bot-proposal', { id: 'p2', side: 'buy', kind: 'market', stop: 10, target: 20 });
   await until(() => page.isVisible('.bt-prop[data-id="p2"] .bt-rej'), 'a second proposal');
   await page.click('.bt-prop[data-id="p2"] .bt-rej');
