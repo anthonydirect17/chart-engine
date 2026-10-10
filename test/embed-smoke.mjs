@@ -387,11 +387,11 @@ try {
   }
   await page.close();
 
-  /* ---------------- a plain string wsUrl against ChartBridge 0.2 (protocol v1), and no storagePrefix given */
-  await startBridge(PORT + 1, ['--v1']);
+  /* ---------------- a plain string wsUrl (1.20.0: on the current protocol; ChartBridge 0.2's v1 is gone), and no storagePrefix given */
+  await startBridge(PORT + 1, ['--pin-off']);   // the host page is on the bridge's own origin: no PIN here (a host never has one)
   {
     const p2 = await ctx.newPage();
-    p2.on('pageerror', e => fail('v1 pageerror: ' + e.message));
+    p2.on('pageerror', e => fail('string wsUrl pageerror: ' + e.message));
     await p2.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     await p2.goto(`http://localhost:${PORT + 1}/test/embed-host.html`);
     await p2.evaluate(port => {
@@ -404,7 +404,7 @@ try {
     await p2.waitForFunction(() => { const el = document.querySelector('#paneA [id$="-badge"]'); return el && el.dataset.conn === 'live'; }, null, { timeout: 15000 });
     await p2.click('#paneA .seg >> text="5m"'); await p2.waitForTimeout(300);
     const keys = await p2.evaluate(() => Object.keys(localStorage)), prefix = await p2.evaluate(() => ChartLive.EMBED_PREFIX);
-    check(prefix && keys.length > 0 && keys.every(k => k.startsWith(prefix)), 'string wsUrl on ChartBridge 0.2 works; with no storagePrefix every key starts with "' + prefix + '": ' + keys.join(','));
+    check(prefix && keys.length > 0 && keys.every(k => k.startsWith(prefix)), 'a string wsUrl works; with no storagePrefix every key starts with "' + prefix + '": ' + keys.join(','));
     check(await p2.evaluate(() => { try { ChartLive.mount(document.getElementById('paneB'), {}); return false; } catch (e) { return /wsUrl/.test(e.message); } }), 'mount without wsUrl throws');
     const gone = await p2.evaluate(() => { const sel = document.querySelector('#paneA [id$="-acctPick"]'); return { value: sel.value, text: sel.selectedOptions[0].textContent, marks: window.__a.chart.getMarkers().length }; });
     check(gone.value === 'GONE-ACCT' && gone.text === 'GONE-ACCT (no longer listed)' && gone.marks === 0, 'a saved account ChartBridge no longer lists is shown plainly, with no fills: ' + JSON.stringify(gone));

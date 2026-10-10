@@ -2,7 +2,8 @@
 // ChartBridge 0.3.4 tags every trade with its side: live ticks get "s" and "sm", backfill trades become [t, p, v, s, sm].
 // The fields are additive: the current page (live/live.js with live/bar-builder.js) must read the new messages exactly
 // as the old ones. These tests feed both formats to the page's own parsing and bar building, check the page reads only
-// what it always read, and check the fake bridge speaks the new format (and the old one with --no-sides).
+// what it always read, and check the fake bridge speaks the new format (chart 1.20.0: the fake has no --no-sides mode any
+// more; the page needs ChartBridge 0.5.2).
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -75,7 +76,7 @@ test('the page reads live ticks by name and backfill trades by their places: t, 
   }
 });
 
-/* ---------------- the fake bridge speaks the new format (and the old with --no-sides) */
+/* ---------------- the fake bridge speaks the new format */
 function wsConnect(port) {
   return new Promise((resolve, reject) => {
     // no Origin header: a local program (like The Desk's relay), which ChartBridge lets read without the page's PIN
@@ -150,12 +151,6 @@ test('fake bridge: backfill trades are [t, p, v, s, sm] and live ticks carry s a
   assert.deepEqual(s.at(5), ticks[5].slice(0, 3));
 });
 
-test('fake bridge --no-sides: the 0.3.3 format ([t, p, v], no s or sm)', async () => {
-  const { ticks, live } = await load(['--no-sides']);
-  assert.ok(ticks.length > 100 && ticks.every(x => x.length === 3));
-  assert.ok(live.every(m => !('s' in m) && !('sm' in m)));
-});
-
 /* ---------------- 0.3.8: the Time and Sales category q (nt8/PROTOCOL.md "Time and Sales category") */
 const Q = NEW.map((x, i) => x[4] === 2 ? (Math.abs(x[1] - OLD[i - 1][1]) >= 0.5 ? 2 : 1) * Math.sign(x[1] - OLD[i - 1][1]) : x[4] === 3 ? 0 : null);
 
@@ -210,7 +205,7 @@ test('q: the hub keeps a trade\'s 6th place and a tick\'s q (chart 1.14.0), neve
   assert.ok(!/\bx\[5\]|\bm\.q\b|\bmsg\.q\b/.test(['live.js', 'bar-builder.js', 'trade.js'].map(read).join('\n')), 'the chart, the bar builder and the order code read no q');
 });
 
-test('fake bridge: live ticks carry q (or none when unknown) and backfill trades a 6th place when known; --no-q sends none', async () => {
+test('fake bridge: live ticks carry q (or none when unknown) and backfill trades a 6th place when known', async () => {
   const { ticks, live } = await load([]);
   const six = ticks.filter(x => x.length === 6);
   assert.ok(six.length > 50 && six.every(x => [-2, -1, 0, 1, 2].includes(x[5])), 'some backfill trades have their q');
@@ -219,6 +214,4 @@ test('fake bridge: live ticks carry q (or none when unknown) and backfill trades
   assert.ok(live.length && live.every(m => !('q' in m) || [-2, -1, 0, 1, 2].includes(m.q)), JSON.stringify(live.slice(0, 3)));
   const s = new BB.TickStore(); s.pushAll(ticks);
   assert.deepEqual(s.at(5), ticks[5].slice(0, 3));
-  const old = await load(['--no-q']);
-  assert.ok(old.ticks.every(x => x.length === 5) && old.live.every(m => !('q' in m) && 's' in m));
 });

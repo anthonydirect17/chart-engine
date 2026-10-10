@@ -1,11 +1,11 @@
 // Cumulative delta pane smoke (1.7.0): the live page and mounted panes against the fake bridge (SAMPLE data only, never
-// market data), which sends trade sides like ChartBridge 0.3.4, or none like 0.3.3 (--no-sides).
+// market data), which sends trade sides like ChartBridge 0.3.4 and newer (1.20.0: no page for ChartBridge 0.3.3's no sides).
 //   npm run smoke:delta        (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks: the pane is on by default under the main chart, sharing its bars, and draws candles; its totals equal every
 // trade the page received (counted independently here), also after live trades; a new core only on a reload or a bar
 // type change, never per trade; the Show option (Cumulative or Bar delta) from the gear and back, both after a reload;
-// the divider dragged and keyed, the height saved per pane; the chip and Hide all / Restore; ChartBridge 0.3.3 (no
-// sides): nothing drawn and the note; a history that starts after 18:00 labelled; a second pane off by default and
+// the divider dragged and keyed, the height saved per pane; the chip and Hide all / Restore; a history that starts after
+// 18:00 labelled; a second pane off by default and
 // added from the menu, with setIndicatorOption under its prefix; the 18:00 ET rollover on a clock set to 17:59:35.
 // Review round 1: a backfill cut short after 18:00 (The Desk's relay capping tickHours at 8, and NinjaTrader sending
 // less) is labelled with its exact start, never taken as the whole session (B1); a minute view opened before 18:00
@@ -342,24 +342,6 @@ try {
   s = await state(p);
   check(s.pane.on && s.chips.includes('delta+') && s.count === '5/5', '+ in the Volume group adds it back, with its chip');
   await ctx.close(); br.kill();
-
-  /* ---------------- ChartBridge 0.3.3 (no sides): nothing drawn, a note */
-  {
-    const o = offsetTo(13, 0, 0, weekday);
-    const b3 = await startBridge(o, ['--no-sides']);
-    const c3 = await context(o, 'range');
-    const q = await openPage(c3, `http://localhost:${b3.port}/live/single.html`);
-    const st = await state(q), pxl = await pixels(q);
-    check(/fake-0\.3\.3/.test(await q.textContent('#lgSrc')) && st.layer && st.pane.on, 'ChartBridge 0.3.3: the pane is there (the layout as with sides)');
-    check(st.delta === null && pxl.pane.up + pxl.pane.down === 0 && pxl.plot.up + pxl.plot.down > 1000, 'and draws nothing: no delta, no candle pixels in it: ' + JSON.stringify(pxl));
-    check(st.pane.note === 'Delta needs ChartBridge 0.3.4 on this PC' && st.legend === 'Delta needs ChartBridge 0.3.4 on this PC', 'the note, in the pane and the legend: "' + st.legend + '"');
-    check(await q.textContent('#lgDv') === '' && !/[+-]\d|\d,\d/.test(st.pane.title), 'no delta number anywhere: "' + st.pane.title + '"');
-    await shot(q, 'delta-old-bridge-note.png', 'ChartBridge 0.3.3: no sides, no delta');
-    await q.click('#tfSeg >> text="1m"'); await live(q);
-    const m1 = await state(q);
-    check(m1.delta === null && m1.pane.note !== '', '1m on 0.3.3 (no backfill, live trades without sides): still nothing, still the note');
-    await c3.close(); b3.kill();
-  }
 
   /* ---------------- a history that starts after 18:00: labelled, not started at 0 from a later time silently */
   {

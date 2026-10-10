@@ -643,7 +643,7 @@ function create(o) {
     if (S.acctAsk) { const stale = AC.askStale(S.acctAskMode, a); if (stale) { S.acctAsk = ''; S.acctAskMode = ''; put(q('[data-k="acctWhy"]'), 'textContent', stale); } }
     put(q('[data-k="acctEdit"]'), 'hidden', !S.acctEdit || !!S.acctAsk);
     put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
-    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(Object.assign({}, a, { mode: S.acctAskMode }), S.acctAsk, S.version));   // keepMode: the mode this question names
+    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(Object.assign({}, a, { mode: S.acctAskMode }), S.acctAsk));   // keepMode: the mode this question names
     setHtml(q('[data-k="rules"]'), AC.rulesLines(a.rules).map(([k, v]) => '<span>' + esc(k) + '</span><span class="mono">' + esc(v) + '</span>').join('') || '<span>Rules</span><span>not known yet</span>');
     const ro = q('[data-k="rulesOpen"]');
     put(ro, 'disabled', !S.signedIn || !can.ok);
@@ -906,7 +906,7 @@ function create(o) {
     const a = cur(); if (!a) return;
     const r = AC.accountChange(a, name, AC.accountChoices(S.accounts, a, others()), ctxNow(a));
     if (r.error) { put(q('[data-k="acctWhy"]'), 'textContent', r.error); return; }
-    if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; sentLine('acctWhy', r.msg.keepMode ? 'Sent: its mode (' + AC.MODE_NAME[r.msg.keepMode] + ') is kept.' : 'Sent: it goes to Shadow (ChartBridge before 0.5.2).'); }
+    if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; sentLine('acctWhy', 'Sent: its mode (' + AC.MODE_NAME[r.msg.keepMode] + ') is kept.'); }
     renderPanel();
   }
   function openRules() {

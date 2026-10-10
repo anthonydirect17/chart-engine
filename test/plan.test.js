@@ -41,15 +41,13 @@ test('planDrag: the new distance in whole ticks, snapped, at least 1; a stop at 
   assert.match(OT.planDrag(null, 'stop', 1, 0.25).error, /no longer working/);
 });
 
-test('the bracket cap: 200 before ChartBridge 0.3.7, none after unless maxBracketTicks is set', () => {
-  assert.equal(OT.bracketCap('fake-0.3.4'), 200);
-  assert.equal(OT.bracketCap('0.3.6'), 200);
-  assert.equal(OT.bracketCap(''), 200, 'unknown: the safe cap');
-  assert.equal(OT.bracketCap('0.3.7'), OT.NO_CAP);
-  assert.equal(OT.bracketCap('fake-0.3.8', 300), 300);
-  assert.equal(OT.bracketCap('1.0.0', 0), OT.NO_CAP);
-  assert.equal(OT.versionAtLeast('0.3.10', '0.3.7'), true);
-  assert.equal(OT.versionAtLeast('0.2.9', '0.3.7'), false);
+test('the bracket cap: none unless maxBracketTicks is set (1.20.0: no 200-tick cap for ChartBridge before 0.3.7)', () => {
+  assert.equal(OT.bracketCap(), OT.NO_CAP);
+  assert.equal(OT.bracketCap(0), OT.NO_CAP);
+  assert.equal(OT.bracketCap(300), 300);
+  assert.equal(OT.bracketCap(1.5), OT.NO_CAP, 'not a whole number: no cap (ChartBridge warns and has none either)');
+  assert.equal(OT.bracketCap.length, 1, 'the version no longer counts');
+  assert.equal(OT.versionAtLeast, undefined);
   assert.deepEqual(OT.cleanBracket({ stop: 500, target: 1000 }), { stop: 200, target: 200 });
   assert.deepEqual(OT.cleanBracket({ stop: 500, target: 1000 }, OT.NO_CAP), { stop: 500, target: 1000 });
   assert.deepEqual(OT.planIdOf('o5:sl'), { entry: 'o5', which: 'stop' });
@@ -98,16 +96,17 @@ test('TradeCore: a planned line\'s drag sends plan with the ticks; its x sends n
   assert.equal(r.sent.length, 4);
 });
 
-test('TradeCore: the cap follows the version; plan counts toward ChartBridge\'s 10 a second', () => {
-  assert.equal(rig('fake-0.3.4').core.cap(), 200);
+test('TradeCore: no page cap whatever the version says (1.20.0); plan counts toward ChartBridge\'s 10 a second', () => {
+  assert.equal(rig('fake-0.3.4').core.cap(), OT.NO_CAP, 'the version no longer counts: no 200-tick cap');
   assert.equal(rig('0.3.8').core.cap(), OT.NO_CAP);
   assert.ok(TC.ORDER_ACTIONS.includes('plan'));
   const r = rig('0.3.6');
   r.core.setBracket('MNQ', 'stop', 450, true);
-  assert.equal(r.core.brackets.MNQ.stop, 200, 'an older ChartBridge: capped at 200 as before');
+  assert.equal(r.core.brackets.MNQ.stop, 450, 'no page cap with any version (ChartBridge 0.5.2 is the oldest the page works with)');
   const n = rig('0.3.8');
+  n.core.applyTrading({ enabled: true, accounts: ['Sim101'], maxQty: { MNQ: 5 }, maxBracketTicks: 300 });
   n.core.setBracket('MNQ', 'stop', 450, true);
-  assert.equal(n.core.brackets.MNQ.stop, 450, '0.3.7 and newer: no page cap');
+  assert.equal(n.core.brackets.MNQ.stop, 300, 'maxBracketTicks in config.txt still caps it');
 });
 
 test('NO STOP (Anthony): the first order with no stop after a load asks; Send sends it and no later one asks; Flatten never asks', () => {

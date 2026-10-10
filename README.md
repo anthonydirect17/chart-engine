@@ -20,7 +20,8 @@ not market data). It updates on every push to `main`. To run it offline, open `i
 
 `live/` is the chart fed by real market data through **ChartBridge**, a NinjaTrader 8 add-on in `nt8/`.
 It is **read only** unless trading is turned on in ChartBridge (see [Trading from the chart](#trading-from-the-chart)).
-With ChartBridge 0.2 or older it is always read only, exactly as before.
+The page needs ChartBridge 0.5.2 or newer (chart 1.20.0, `live/COMPAT.json`): the PC updater installs it only on a PC that
+runs one, so a PC on an older ChartBridge keeps the page it has.
 
 1. From this folder on the Windows PC: `powershell -ExecutionPolicy Bypass -File nt8\install.ps1`
 2. NinjaTrader > New > NinjaScript Editor > compile (F5). Check New > NinjaScript Output for
@@ -551,7 +552,7 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   name, default like "12/24t"; up to 12) and **Delete** for the saved preset picked. A **t / pt** toggle shows and
   types the values in ticks or points (points round to the nearest tick); they are kept in ticks. With ChartBridge
   0.3.7 or newer the boxes take what ChartBridge takes (`maxBracketTicks` in `config.txt`, no limit without it; 1.13.0);
-  with an older ChartBridge at most 200 ticks, as before. A limit or stop entry's stop and target are ticks from its
+  (1.20.0: the 200-tick cap for a ChartBridge before 0.3.7 is gone). A limit or stop entry's stop and target are ticks from its
   fill and travel with it (ChartBridge 0.3.8, see below).
 - **NO STOP** (1.13.0, Anthony): while the stop box is 0 a red NO STOP tag shows beside the bracket boxes. The first
   order with no stop after each page load (Buy MKT, Sell MKT, their hotkeys, a Shift+click or Ctrl+click on the chart)
@@ -771,7 +772,7 @@ only on a light ground), which the live page and the demo apply.
 ```sh
 npm test          # unit tests (Node 20+, no install needed); with pwsh or Windows PowerShell also the updater's tests
 npm i && npm run smoke   # drives the demo in Chromium, screenshots in test/out/
-npm run smoke:live       # the live page against the fake bridge as ChartBridge 0.2 (read only)
+npm run smoke:live       # the live page against the fake bridge on the current protocol (v2, trade sides, the PIN; trading off)
 npm run smoke:orders     # order entry against the fake bridge (protocol v2)
 npm run smoke:settings   # saved choices survive a reload and a second chart tab
 npm run smoke:hotkeys    # trading hotkeys: set in Settings, each sends what its button sends, refused combos, typing, reload, mounted

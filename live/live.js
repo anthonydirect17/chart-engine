@@ -1,7 +1,7 @@
 /*
  * Live chart page: connects to ChartBridge (NinjaTrader 8 add-on) and drives chart-engine.
- * Protocol: nt8/PROTOCOL.md. With ChartBridge 0.2 (protocol v1) the page is read only. With protocol v2 it
- * can trade, but only after ChartBridge enables it (trading = true in config.txt, this page signed in with
+ * Protocol: nt8/PROTOCOL.md, ChartBridge 0.5.2 or newer (live/COMPAT.json; 1.20.0 dropped the fallbacks for older ones).
+ * It can trade (protocol v2), but only after ChartBridge enables it (trading = true in config.txt, this page signed in with
  * the session token) and only while the Armed switch is on. Armed is off after every page load.
  * ChartBridge 0.3.2 locks this page with a 4-digit PIN (live/pin.js): the page boot waits for the unlock, and only
  * the page (never ChartLive.mount) passes the unlock on its WebSocket URL and GET /session.
@@ -1300,7 +1300,7 @@ function start(container, opt, PAGE) {
 
   /* ---------------- per-instrument data */
   const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
-    lv: [], lvSrc: null, ib: null, ibKey: '', vp: null, liveFrom: null, delta: null, sides: null,
+    lv: [], lvSrc: null, ib: null, ibKey: '', vp: null, liveFrom: null, delta: null,
     // the delta pane (1.7.0): the number of tick backfill trades (the store's trades before the first live one), and the
     // window the current delta was built with ({ from, by, why, journal })
     backfill: 0, deltaCov: null,
@@ -1313,7 +1313,7 @@ function start(container, opt, PAGE) {
   const SIG = { absorption: null, bubbles: null, divergence: null, cd: null, version: 0, job: null, rangeFrom: undefined };
   const sigSum = () => (SIG.absorption ? SIG.absorption.version : 0) + (SIG.bubbles ? SIG.bubbles.version : 0) + (SIG.divergence ? SIG.divergence.version : 0);
   let sigFloors = prefs.largeFloors();
-  let bridgeVersion = '';                                      // ChartBridge's version from hello (the delta pane's first hint)
+  let bridgeVersion = '';                                      // ChartBridge's version from hello (shown in Settings)
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js).
      With ChartBridge 0.3.5 (hello "liveFirst") seconds and range views get ChartBridge's served window instead: the last
@@ -1374,7 +1374,7 @@ function start(container, opt, PAGE) {
     D.vp = null; D.liveFrom = null; if (!keep) chart.setProfile(null); vpNote(); vpLegend();
     D.window = false; D.table = null; D.sync = null; rangeNote();
     D.backfill = 0; D.deltaCov = null;
-    deltaJob = null; D.delta = null; D.sides = null; if (!keep) chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
+    deltaJob = null; D.delta = null; if (!keep) chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
     if (SIG.job || SIG.absorption || SIG.bubbles || SIG.divergence) { SIG.job = null; SIG.absorption = SIG.bubbles = SIG.divergence = SIG.cd = null; SIG.version++; }   // made again with the bars
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
@@ -1719,20 +1719,13 @@ function start(container, opt, PAGE) {
    * Built from the TickStore with the bars (rebuild: a reload, a bar type or size change) or on its own when it is
    * shown, then each live trade is added after the bar builders in onTick, told which bar it made, so it holds exactly
    * the trades the store holds and the bars the chart shows, with no rebuild per trade. Hidden, there is no core.
-   * ChartBridge 0.3.3 or older sends no sides: the pane draws nothing but "Delta needs ChartBridge 0.3.4 on this PC".
-   * Whether a load has sides is read from its first trade (backfill or live); before any trade, from hello's version.
+   * Every ChartBridge this page works with (0.5.2 or newer, live/COMPAT.json) sends sides, so the pane never waits to
+   * learn whether they come (1.20.0: the note for ChartBridge 0.3.3 and older is gone).
    * It counts only trades with a measured side, from the start of that window (deltaCoverage): a session that started
    * before it counts from its first complete bar, and the pane's title and the legend say since when ("since 10:04 ET
    * (page opened)").
    * Nothing is added to the status line, so the chart's height stays as in 1.6.0 on every view.
    */
-  const OLD_BRIDGE = 'Delta needs ChartBridge 0.3.4 on this PC';
-  /* true: trades carry sides; false: this ChartBridge sends none; null: not known yet (no trade, no version). */
-  function bridgeSides() {
-    if (D.sides !== null) return D.sides;
-    const m = /(\d+)\.(\d+)\.(\d+)/.exec(bridgeVersion || '');
-    return m ? (+m[1] * 1e6 + +m[2] * 1e3 + +m[3]) >= 3004 : null;
-  }
   /*
    * The delta's window (1.7.0; Anthony, round 4: "Delta is a tool I use WHILE trading, not for historical look backs"):
    * only trades whose side was measured count. Those are the live trades, and the backfill trades inside ChartBridge's
@@ -1851,8 +1844,8 @@ function start(container, opt, PAGE) {
   }
   const rangeBuilder = () => new BarBuilder({ mode: 'range', rangeTicks: ranges[D.root], rangeMode: S.rangeMode, tick: D.tick, sessionStart: SESSION });
   /* The delta is kept while it is on the chart, shown or hidden (review S5: showing it again is then at once; a trade
-     costs O(1)); not when it is off the chart or this ChartBridge sends no sides. */
-  const deltaWanted = () => IS.ind.delta.on && D.ready && bridgeSides() !== false && !masked('delta');
+     costs O(1)); not when it is off the chart. */
+  const deltaWanted = () => IS.ind.delta.on && D.ready && !masked('delta');
   /* Feeds a range bar builder and the delta core together: each trade goes to the delta with the bar it made. */
   const pairFeed = (builder, cd) => ({ addQuiet(t, p, v, s, sm) { builder.addQuiet(t, p, v); const b = builder.bars; cd.add(t, v, s, b[b.length - 1].t, sm); } });
   /*
@@ -1940,10 +1933,9 @@ function start(container, opt, PAGE) {
   function deltaStop() { deltaJob = null; deltaSet(null); }
   function deltaSet(cd) { D.delta = cd; chart.setDelta(cd); deltaView(); deltaLegend(true); if (typeof sigDivergence === 'function') sigDivergence(false); }
   const deltaBuilding = () => deltaJob !== null;
-  /* The pane's note (only for a ChartBridge that sends no sides, and then nothing else is drawn in it), and why a
-     session may count from later than 18:00, for its title. */
+  /* Why a session may count from later than 18:00, for the pane's title (the page sets no note since 1.20.0). */
   const deltaWhy = () => D.deltaCov ? D.deltaCov.why : '';
-  function deltaView() { chart.setDeltaView({ note: S.layers.delta && D.ready && bridgeSides() === false ? OLD_BRIDGE : '', reason: deltaWhy(), missed: countMissed() }); }
+  function deltaView() { chart.setDeltaView({ note: '', reason: deltaWhy(), missed: countMissed() }); }
   /* "Delta +12,345" in the legend (the bar under the crosshair, else the newest), "Bar delta" in bar mode, the start
      when the session counts from later than 18:00, and the unknown sides (they add nothing) when there are any. */
   let legendBarT = null, deltaLegendKey = '';
@@ -1951,16 +1943,8 @@ function start(container, opt, PAGE) {
   const put = (el, k, v) => { if (el && el[k] !== v) el[k] = v; };   // 1.16.0: a mounted chart has no legend (el null)
   function deltaLegend(force) {
     const el = $('lgDelta'); if (!el) return;
-    const cd = S.layers.delta ? D.delta : null, old = S.layers.delta && D.ready && bridgeSides() === false;
-    put(el, 'hidden', !cd && !old);
-    if (old) {                                                     // no sides from this ChartBridge: say so, no number
-      if (deltaLegendKey === 'old') return;
-      deltaLegendKey = 'old';
-      const v = /(\d+\.\d+\.\d+)/.exec(bridgeVersion || '');
-      $('lgDl').textContent = OLD_BRIDGE; $('lgDv').textContent = ''; $('lgDu').hidden = true;
-      el.title = 'This ChartBridge' + (v ? ' (' + v[1] + ')' : '') + ' sends no buy or sell side with its trades, so the delta pane stays empty. Delta is never estimated.';
-      return;
-    }
+    const cd = S.layers.delta ? D.delta : null;
+    put(el, 'hidden', !cd);
     if (!cd) { deltaLegendKey = ''; return; }
     const bar = S.options.delta.show === 'bar', b = legendBarT === null ? cd.last : cd.at(legendBarT), ses = b ? cd.sessionOf(b) : cd.session;
     const v = b ? (bar ? b.c - b.o : b.c) : null;
@@ -2166,11 +2150,6 @@ function start(container, opt, PAGE) {
     D.ticks.push(t, p, v, m.s, m.sm);                  // columns, not one array per trade (TickStore, bar-builder.js); the side since 1.7.0
     if (D.vp) D.vp.add(t, p, v);                       // the volume profile holds what the store holds (vpBuild)
     let deltaFed = false;
-    if (D.sides === null) {                            // the first trade of a load with no backfill says whether sides come
-      const before = bridgeSides();
-      D.sides = typeof m.s === 'number';
-      if (bridgeSides() !== before && IS.ind.delta.on) { deltaStart(); deltaFed = true; }   // built from the store, this trade in it
-    }
     // Over 2.5 million trades the trades of earlier sessions go (the first session left is partial now); the current
     // session's never do, so range bars built from the store stay all day (1.8.0; BB.trimCount).
     const drop = D.ticks.length > TRIM_CAP ? BB.trimCount(D.ticks, etNow(), SESSION, TRIM_CAP, TRIM_HARD, 500000) : 0;
@@ -2534,7 +2513,7 @@ function start(container, opt, PAGE) {
         syncVersion();
         syncAccounts(m.accounts || []);
         subscribe(S.root);
-        if (T) T.hello(m);                                 // protocol v2 (m.trading): sign in; ChartBridge 0.2 has no trading field
+        if (T) T.hello(m);                                 // protocol v2 (m.trading): sign in
         // 1.16.0: the update notice's "copied: press F5" goes once this ChartBridge is that version (display only, after
         // everything else; a mounted chart has no notice)
         if (window.ChartUpdateNotice && window.ChartUpdateNotice.bridge) window.ChartUpdateNotice.bridge(bridgeVersion);
@@ -2550,9 +2529,7 @@ function start(container, opt, PAGE) {
         if (m.root !== D.root || stale(m)) return;
         if (m.load) adoptLoad(m.load);
         D.ticks.pushAll(m.ticks);
-        // 0.3.4: [t, p, v, s, sm]. ChartBridge 0.3.5's served window sends [t, p, v] (no side) though its live trades carry
-        // sides: then the first live trade says (onTick)
-        if (D.sides === null && m.ticks && m.ticks.length && !D.window) { const x = m.ticks[0]; D.sides = typeof x[3] === 'number'; }
+        // [t, p, v, s, sm] (0.3.4); ChartBridge 0.3.5's served window sends [t, p, v] (no side) though its live trades carry sides
         setStatus('Loading ' + D.root + ' ticks: ' + D.ticks.length.toLocaleString(), '');
         break;
       case 'ready':
@@ -2931,14 +2908,13 @@ function start(container, opt, PAGE) {
     if (!e || !e.bar || destroyed) return null;
     const b = e.bar, i = e.index, bs = chart.bars(), next = i + 1 < bs.length ? bs[i + 1].t : Infinity;
     const cd = S.layers.delta && !masked('delta') ? D.delta : null, db = cd ? cd.at(b.t) : null;
-    const old = !!S.layers.delta && D.ready && bridgeSides() === false;
     return {
       root: D.root || S.root, name: D.name || D.root || S.root, tf: S.tf, range: S.tf === 'range' ? ranges[D.root || S.root] : null, tick: D.tick, dp: precisionOf(),
       index: i, t: b.t, end: barEnd(b, i), forming: !!e.forming, hovering: !!e.hovering,
       o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0,
       // buys, sells, unknown and the largest trade from the delta pane's core (null: not counted there); why not
       delta: db ? { buy: db.buy, sell: db.sell, unknown: db.unknown, big: db.big || 0 } : null,
-      deltaWhy: db ? '' : old ? 'old' : !S.layers.delta ? 'off' : masked('delta') ? 'htf' : deltaBuilding() || !cd ? 'building' : 'before',
+      deltaWhy: db ? '' : !S.layers.delta ? 'off' : masked('delta') ? 'htf' : deltaBuilding() || !cd ? 'building' : 'before',
       deltaFrom: cd && cd.session && cd.session.partial ? cd.session.from : null,
       bubbles: bubblesOn(b.t, next),
       bubble: hoverBub ? { side: hoverBub.side, v: hoverBub.v, p: hoverBub.p, t: hoverBub.t } : null,
