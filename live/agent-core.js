@@ -176,6 +176,32 @@ function rulesChangeable(agent, ctx) {
   if (c.openProposals > 0) return { ok: false, why: agentName(a) + ' has an open proposal: change its rules when it is answered or gone.' };
   return { ok: true, why: '' };
 }
+/* ChartBridge 0.5.4 (Anthony 2026-10-10, DECISION ag: "I do not want to be locked out of changing the time ... during live
+   trading"): the window may change while the agent holds a position, a working entry or an open proposal */
+const WINDOW_ANYTIME = '0.5.4';
+/**
+ * Can the rules form be used now? Flat with nothing working or open: every rule ({ ok, windowOnly: false }). Otherwise, with
+ * ChartBridge 0.5.4 or later, the window alone ({ ok, windowOnly: true, why }); with an older one, nothing (rulesChangeable).
+ * The account follows rulesChangeable: it still waits until flat. ctx: { workingEntry, openProposals, version }.
+ */
+function rulesEditable(agent, ctx) {
+  const can = rulesChangeable(agent, ctx);
+  if (can.ok) return { ok: true, windowOnly: false, why: '' };
+  if (!atLeast((ctx || {}).version, WINDOW_ANYTIME)) return { ok: false, windowOnly: false, why: can.why };
+  return { ok: true, windowOnly: true, why: can.why.replace(/change its rules when.*$/, 'only the window (entries from, until, flat at) can change now.') };
+}
+/**
+ * Does a window put the agent in its flat hours now while it holds a position (ChartBridge then flattens it at once, by its
+ * rules)? As ChartBridge's FlatHours: from flatAt until the next entryFrom, in session order from 18:00. now: ms.
+ */
+function windowFlattensNow(agent, from, flat, now) {
+  const a = agent || {};
+  if (!(a.position && isNum(a.position.qty) && a.position.qty !== 0)) return false;
+  const f = minutes(from), l = minutes(flat);
+  if (f === null || l === null || !isNum(now)) return false;
+  const t = etParts(now), s = sessionMin(t.h * 60 + t.mi);
+  return s >= sessionMin(l) || s < sessionMin(f);
+}
 /**
  * The page's change of the rules (`agentRules`, contract section 7, flat keys): checked against section 3's allowed values
  * first, so nothing ChartBridge would refuse for its values is sent. agent: the `agent` message; form: the inputs' values
@@ -185,7 +211,7 @@ function rulesChangeable(agent, ctx) {
 function rulesChange(agent, form, ctx, cid) {
   const a = agent || {}, f = form || {}, c = ctx || {};
   if (!validId(a.agent)) return { error: 'No agent chosen: nothing was sent.' };
-  const can = rulesChangeable(a, c);
+  const can = rulesEditable(a, c);
   if (!can.ok) return { error: can.why + ' Nothing was sent.' };
   const served = Array.isArray(c.roots) ? c.roots : RULE_ROOTS;
   const roots = RULE_ROOTS.filter(x => (f.roots || []).includes(x));
@@ -211,15 +237,17 @@ function rulesChange(agent, form, ctx, cid) {
   if (!isInt(tr) || tr < 0 || tr > LIMITS.tradesMax) return { error: 'Trades a day must be 0 (no limit) or a whole number from 1 to ' + LIMITS.tradesMax + ': nothing was sent.' };
   if (!isInt(lo) || lo < 0 || lo > LIMITS.lossesMax) return { error: 'Losing trades must be 0 (no limit) or a whole number from 1 to ' + LIMITS.lossesMax + ': nothing was sent.' };
   const cur = parseRules(a.rules);
-  if (cur && cur.roots.join(',') === roots.join(',') && roots.every(x => cur.maxQty[x] === qty[x]) && cur.entryFrom === from && cur.entryUntil === until &&
-    cur.flatAt === flat && cur.maxExpireSec === exp && (cur.maxTrades || 0) === tr && (cur.maxLosses || 0) === lo) return { error: 'Nothing to change.' };
+  const sameRest = !!cur && cur.roots.join(',') === roots.join(',') && roots.every(x => cur.maxQty[x] === qty[x]) && cur.maxExpireSec === exp && (cur.maxTrades || 0) === tr && (cur.maxLosses || 0) === lo;
+  if (sameRest && cur.entryFrom === from && cur.entryUntil === until && cur.flatAt === flat) return { error: 'Nothing to change.' };
+  if (can.windowOnly && !sameRest) return { error: can.why.replace(/\.$/, '') + ': the other rules wait until it is flat. Nothing was sent.' };
   const msg = { type: 'agentRules' };
   if (cid) msg.cid = cid;
   msg.agent = a.agent;
   msg.roots = roots.join(',');
   for (const x of roots) msg['maxQty' + x] = qty[x];
   Object.assign(msg, { entryFrom: from, entryUntil: until, flatAt: flat, maxExpireSec: exp, maxTrades: tr, maxLosses: lo });
-  return { msg };
+  const flattens = windowFlattensNow(a, from, flat, isNum(c.now) ? c.now : Date.now());
+  return flattens ? { msg, ask: 'This window puts ' + agentName(a) + ' in his flat hours now (flat at ' + flat + ', new entries from ' + from + '): ChartBridge flattens his position at once, by his rules. Set it?' } : { msg };
 }
 
 /* ======================================================================== the account (contract sections 6 and 7) */
@@ -917,7 +945,7 @@ return {
   VERSION, MIN_BRIDGE, MODES, MODE_NAME, NOTE_KINDS, NOTE_NAME, PROPOSAL_STATES, RULE_ROOTS, CEILING, LIMITS, DEFAULT_RULES, LATE_MS, CONFIRM_MS, NOTES_MAX, PLANS_MAX, DEFAULT_ACCOUNT,
   validId, parseVersion, atLeast, offText,
   createAgents, pickAgent, agentName,
-  parseRules, rulesLines, rulesForm, rulesChangeable, rulesChange, durationText,
+  parseRules, rulesLines, rulesForm, rulesChangeable, rulesEditable, windowFlattensNow, WINDOW_ANYTIME, rulesChange, durationText,
   accountMark, agentAccount, accountChoices, accountChange, keepsMode, liveQuestion, askStale,
   modesAllowed, accountTradable, modeMsg, killMsg,
   countdown, createProposals, endText, legPrices,

@@ -1,6 +1,6 @@
 # Changelog
 
-## ChartBridge 0.5.3 (2026-10-10): the retired accounts line goes; one line for any unknown config.txt key
+## ChartBridge 0.5.5 (2026-10-10): the retired accounts line goes; one line for any unknown config.txt key
 
 Anthony's approved cuts (2026-10-10, items C1 to C4 of the cut list). ChartBridge only: recompile once (update-pc stages
 it); no page change, and every page keeps working with it.
@@ -24,6 +24,118 @@ it); no page change, and every page keeps working with it.
 - Tests: `npm run check:orders` (the accounts section: the generic line for accounts, quoteHours, a mistyped key and a bad
   maxQty value; no line for any key ChartBridge reads; no conversion on a run without `accounts-detail.txt`), and
   `test/nt8-source.test.js`.
+
+## ChartBridge 0.5.4 and chart 1.20.1 (2026-10-10): the agent's window can change at any time
+
+Anthony (2026-10-10, DECISION ag): "I don't want any restrictions. I will set the time and that's what the rule is ... I do
+not want to be locked out of changing the time if I want to during live trading." The window stays inside ChartBridge's
+full-session limit (in session order from 18:00, flat at 15:59 at the latest); nothing else narrows it.
+
+- **ChartBridge 0.5.4:** while the agent has a position, a working entry or an open proposal, `agentRules` may change its
+  window (`entryFrom`, `entryUntil`, `flatAt`); every other rule (roots, sizes, entry life, trades, losses) still waits until
+  it is flat, and is refused with "only its window (entries from, until, flat at) can change now". The new window rules at
+  once, as any window does: a flat time already passed, or a start after now, puts him in his flat hours and ChartBridge
+  flattens his position by his rules. While his `agent-<id>-rules.txt` cannot be read (the rules in force are then
+  placeholder defaults), nothing changes while he is exposed, not even the window; and then a pair he owns on any root
+  an agent may trade (NQ, MNQ, ES, MES) counts as exposed, not only the placeholder roots. **Order path: F5 needed** (a
+  ChartBridge recompile).
+- **The Agent tab (chart 1.20.1, page only):** with ChartBridge 0.5.4 or later the rules button reads "Change the window"
+  while he is in a trade or has an entry or a proposal open, and only the three times are open in the form. A window that
+  would flatten him now asks first, in the page ("This window puts Demo in his flat hours now ...: ChartBridge flattens his
+  position at once, by his rules. Set it?"); Cancel sends nothing. With an older ChartBridge the tab works as before.
+- **Already so, unchanged:** a new agent starts on 09:45 to 15:00, flat 15:55 (no rules file), and ChartBridge keeps his
+  last window in `agent-<id>-rules.txt`, so it never resets (over restarts and F5 too).
+- Tests: the harness (`check:orders`, AgentHarness `WindowAnytime`), the fake (`test/fake-v3.mjs` follows, its hello says
+  fake-0.5.4), `test/agent.test.js` and `npm run smoke:agent` (in a trade: Change the window, the question, Cancel, Set).
+## 1.20.0 (2026-10-10): On/Off, the spend readout and the hero picker on the Agent tab
+
+Anthony's request (NOTE_HOME_2026-10-08; DECISION 2026-10-09 v and w): an On/Off switch that ends the agent's program so
+API spend is $0, the agent of his choice started from the app, the live agent's spend next to it, and heroes by name.
+Page only, no recompile. Needs Bot-Lab's PC helper (`manrae/helper.py`, registered at sign-in by
+`tools/manrae_helper.ps1`); without it the tab says so and offers no On, and everything else works as 1.19.0.
+
+- **On/Off** (a new Agent section at the top of the left column): On asks the PC helper on `http://localhost:8767` to start
+  the agent's runner with the build picked (no window, no agent session); Off asks it to end the runner. Kill and Shadow
+  are unchanged: neither stops model calls, Off does.
+- **Off in a trade** asks, in the page, for that agent only (showing another agent closes the question): "Flatten and turn
+  him off?". Flatten and turn off first puts him in Shadow (ChartBridge then places nothing more for him and cancels his
+  unfilled entries; 10 s at most), then sends the page's own Flatten for his account and root (`trade.js` `flattenAgent`,
+  the chart's Flatten message; his position and account read again right before it goes; never a default account), then
+  Off once ChartBridge says he is flat. Not in Shadow in 10 s, or not flat in 30 s: he stays on (in Shadow) and the line
+  says so until the next On or Off. Keep him on sends nothing. The pop-out has no order connection: it says to flatten on
+  the main page or in NinjaTrader first.
+- **Spend:** this session's and the overall dollars of the live agent only (the runner's own journal of its calls; never
+  training or exams), beside On/Off.
+- **The picker** (DECISION w): in Copilot, in Auto and on a LIVE account, heroes only; in Shadow on a Sim account, heroes
+  and the builds over the Shadow bar (until Anthony sets the bar, every build). While a build that is not a hero runs,
+  Copilot, Auto and a LIVE account are closed and say why (the runner and the helper refuse them too). This fails closed:
+  without the helper's word the page reads it from his hello (a build that is not a hero says its build id as its name).
+  The picker is closed while he runs: Off first.
+- **Names** (DECISION v): the header shows the agent's name as his hello says it (a hero's name, "Demo 2"; a build that is
+  not a hero shows its build id); the build id and stamp moved from the header to a Build row under Status.
+- **Auto-On and the daily cap** (folded under the section): an auto-On time (New York) and a dollar cap a session, kept by
+  the helper; a new cap takes effect at his next start.
+- Every call to the helper carries this page's PIN unlock; the helper checks it with ChartBridge's `GET /session`. A
+  helper that refuses the page (403) says so, with its reason.
+- Tests: `test/agent-helper.test.js` (in `npm test`) and `npm run smoke:onoff` against the fake bridge and a fake helper
+  (`test/fake-helper.mjs`); `npm run smoke:agent` checks the build in the Build row.
+## ChartBridge 0.5.3 (2026-10-10): the agents' MNQ cap of 20 ships with ChartBridge
+
+Anthony's decision (2026-10-10): the agent's MNQ cap of 20 ships, so any PC can run the live agent at the full $270 and nothing is set by
+hand. Nothing else in NinjaTrader changes. `nt8/PROTOCOL.md`, "Agent channel", has the rule. ChartBridge only: no page
+change, no `config.txt` change; install it with `update-pc.ps1 -InstallChartBridge` and F5 while flat.
+
+| MNQ cap | with no `maxQty.MNQ` line | with a `maxQty.MNQ = N` line |
+|---|---|---|
+| an agent's entry | **20** (was 1) | **20** (was N) |
+| the page, the bot, the copier | 1, as before | N, as before |
+
+An agent's MNQ entry is the smallest of its own rule (Agent tab, default 20), the hard ceiling (20) and this 20.
+
+- **Agents never read `maxQty.MNQ`** (Anthony, 2026-10-10). The line caps the page, the bot and the copier only.
+  `ChartBridgeAgents.ShippedConfigCap` (MNQ 20) is used through `ChartBridgeOrders.AgentCap` for agent entries only: gate
+  3, plan check 4 and `welcome.rules`. Every other root for agents is as before (`config.txt`'s cap, 1 with no line).
+- **Nothing writes `config.txt`.** ChartBridge, the installer and the updater leave it alone. With agents on and a
+  `maxQty.MNQ` line, ChartBridge says once at start in the Output window: "config.txt: maxQty.MNQ = 2 caps the page's, the
+  bot's and the copier's MNQ orders only; agents use their own MNQ cap of 20 (with the agent's rule and the hard ceiling)".
+- **A page exit from an agent's position** (review). Anthony can cut an agent's MNQ from the page with no `maxQty.MNQ`
+  line: a market order that only reduces it (no bracket, at most the position) skips gate 3's per-order qty check, and
+  gate 3's position count (position plus working orders on that side plus this order) is held to the agent's cap (20),
+  not the page's 1. Every other gate stays. Re-review: the exit plus the page's exits still working on that side (orders
+  that are no stop or target) may close at most the position, read again at gate 3, so two quick exits never flip it.
+
+  | agent long 20 MNQ, page cap 1 | result | why |
+  |---|---|---|
+  | page market sell 5 | placed | an exit: no per-order qty check; count 5 of 20 |
+  | a second sell of 16 while the 5 still works | refused | 5 working plus 16 would close 21 of 20 |
+  | agent long 5: sell 5, then 5 again before the first fills | second refused | 10 of 5 would flip it |
+  | agent long 5: sell 3, then 2 | both placed | 5 of 5 |
+  | agent long 5: sell 3, then 3 | second refused | 6 of 5 |
+  | page market sell 25 | refused, never trimmed | more than the position is no exit: the owner lock ("use Flatten, or move its stop or target") |
+  | page buy 1 | refused | an add is never an exit: the owner lock, before gate 3 |
+
+- **Refusals name the cap that applied** (review). Gate 3 and plan check 4 never say `maxQty.MNQ in config.txt` for an
+  agent: they say "agent manrae's maxQty for MNQ" when its Agent tab rule is below the hard ceiling, else "the hard ceiling
+  of 20 for MNQ" (`ChartBridgeAgents.CapWords`). `maxQty.<ROOT> in config.txt` stays for a root with no shipped cap whose
+  line is lower, and for the page.
+- Tests: `nt8/check/AgentHarness.cs` (a 20 MNQ agent entry with no line; the page sells 5 of it, a second exit past the
+  position, 25 and a buy refused; on a long 5: 5 and 5, 3 and 2, 3 and 3; gate 3's and check 4's words; with a line of 5 the agent placed at 6 and refused
+  only above 20 or its own rule, the page refused above 5; the note), `test/nt8-agents.test.js` (the source guards), and
+  the fake follows (`test/fake-v3.mjs`, `test/fake-v3.test.js`).
+
+## 1.19.1 (2026-10-10): quality round 1
+
+A small fix found by clicking every control of the workspace against the fake bridge (Anthony 2026-10-09: "Make sure every
+button works"). Page only, no recompile. Nothing that decides, sizes, sends, changes or cancels an order changes: the fix is
+in how Settings saves The Desk's hotkeys document.
+
+- **Two changes to The Desk's hotkeys in a row are both saved.** The hotkeys document is saved whole with the rev last
+  read, so a second change made before the first was saved (Limit then Stop in Entry types, or two keys set quickly) went
+  with the old rev; The Desk refused it as if another PC had saved first ("Not saved: another PC saved the hotkeys first"),
+  and that change was lost. The saves now go one at a time, each built from the document the save before it left, and each
+  is checked again then.
+- Tests: `npm run smoke:quality` (`test/quality-smoke.mjs`: Limit then Stop, and Buy MKT's key then Sell MKT's key, each
+  twice, with The Desk's saves slowed to 400 ms as from another PC; it fails on 1.19.0 and passes here).
 
 ## 1.19.0 (2026-10-08): Kit version 1
 

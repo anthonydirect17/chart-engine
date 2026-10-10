@@ -148,7 +148,7 @@ public static class AccountsHarness
             File.WriteAllLines(Path.Combine(cfgDir, "ChartBridge", "config.txt"), new[] { "trading = true", "tradeAccounts = Sim101" });
             ChartBridgeConfig.Load();
             Check(ChartBridgeSwitches.Names.All(ChartBridgeSwitches.Get) && ChartBridgeOrders.Enabled, "config.txt with no v3 line: every v3 feature on; trading = true unchanged");
-            // 0.5.3: the retired accounts and quoteHours lines, and any other key ChartBridge does not read, do nothing: one Output
+            // 0.5.5: the retired accounts and quoteHours lines, and any other key ChartBridge does not read, do nothing: one Output
             // line each per load, the same words for all of them
             int saidCfg = NinjaTrader.Code.Output.Lines.Count;
             File.WriteAllLines(Path.Combine(cfgDir, "ChartBridge", "config.txt"), new[] { "accounts = Sim101, FUNDED*", "trading = true", "quoteHours = 4", "tradeAccounts = Sim101", "tradeAcounts = EVAL-A", "maxQty.MNQ = two" });
@@ -157,9 +157,9 @@ public static class AccountsHarness
             Check(cfgSaid.Count(x => x.Contains("config.txt: accounts is not a ChartBridge setting; the line does nothing")) == 1
                   && cfgSaid.Count(x => x.Contains("config.txt: quoteHours is not a ChartBridge setting; the line does nothing")) == 1
                   && cfgSaid.Count(x => x.Contains("config.txt: tradeAcounts is not a ChartBridge setting; the line does nothing")) == 1,
-                  "0.5.3: accounts, quoteHours and a mistyped key: one generic Output line each (" + string.Join(" | ", cfgSaid) + ")");
+                  "0.5.5: accounts, quoteHours and a mistyped key: one generic Output line each (" + string.Join(" | ", cfgSaid) + ")");
             Check(cfgSaid.Count(x => x.Contains("config.txt: maxQty.MNQ = two is not a whole number; the line does nothing")) == 1 && !ChartBridgeOrders.MaxQty.ContainsKey("MNQ"),
-                  "0.5.3: maxQty with a value that is not a whole number: said, and no maxQty is set (the default stays)");
+                  "0.5.5: maxQty with a value that is not a whole number: said, and no maxQty is set (the default stays)");
             // every key ChartBridge reads, the v3 off-lines included: no such line
             saidCfg = NinjaTrader.Code.Output.Lines.Count;
             File.WriteAllLines(Path.Combine(cfgDir, "ChartBridge", "config.txt"), new[] {
@@ -169,7 +169,7 @@ public static class AccountsHarness
                 "copier = on", "bot = on", "botRoot = MNQ", "botLibrary = bot-library.json", "agents = manrae", "bars = off", "barsRoots = MNQ", "pc = HOME", "days = many" });
             ChartBridgeConfig.Load();
             cfgSaid = NinjaTrader.Code.Output.Lines.Skip(saidCfg).ToList();
-            Check(!cfgSaid.Any(x => x.Contains("is not a ChartBridge setting") || x.Contains("is not a whole number")), "0.5.3: every key ChartBridge reads (a value it cannot read included): no unknown-key line (" + string.Join(" | ", cfgSaid) + ")");
+            Check(!cfgSaid.Any(x => x.Contains("is not a ChartBridge setting") || x.Contains("is not a whole number")), "0.5.5: every key ChartBridge reads (a value it cannot read included): no unknown-key line (" + string.Join(" | ", cfgSaid) + ")");
             File.WriteAllLines(Path.Combine(cfgDir, "ChartBridge", "config.txt"), new[] { "accounts = Sim101, FUNDED*", "trading = true", "tradeAccounts = Sim101" });
             ChartBridgeConfig.Load();
             Check(ChartBridgeConfig.AccountAllowed("EVAL-A") && ChartBridgeConfig.AccountAllowed("TEST-EVAL-1") && ChartBridgeConfig.AccountAllowed("Sim101"), "0.5.1: accounts = no longer filters by name (EVAL-A, a new TEST-EVAL-1 allowed)");
@@ -443,7 +443,7 @@ public static class AccountsHarness
         ChartBridgeAccounts.Tick(t + 61000);
         Send(page, Order("EVAL-A", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
         Check(evalA.Calls.Count == calls + 1 && evalA.Calls.Last().StartsWith("submit"), "connected after 60 s: trades with its saved checkmark");
-        Check(!Entry(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0), "EVAL-A").Contains("notConnectedYet"), "0.5.3: no notConnectedYet field (always false since 0.5.1; no page read it)");
+        Check(!Entry(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0), "EVAL-A").Contains("notConnectedYet"), "0.5.5: no notConnectedYet field (always false since 0.5.1; no page read it)");
         // then it drops: that counts now
         fundedB.Connection.Status = ConnectionStatus.ConnectionLost;
         ChartBridgeAccounts.Tick(t + 62000);
@@ -886,7 +886,7 @@ public static class AccountsHarness
         Account.All.Add(e3); e3.Positions.Clear();
         ChartBridgeAccounts.Tick(t5 + 34000);
 
-        // 0.5.3: the one-time conversion of the retired accounts line is gone. A run with no accounts-detail.txt (what started
+        // 0.5.5: the one-time conversion of the retired accounts line is gone. A run with no accounts-detail.txt (what started
         // 0.5.1's conversion) hides nothing and says nothing of an accounts line; accounts-detail.txt holds the connected times only
         string detail = Path.Combine(folder, "accounts-detail.txt");
         Account e4 = NewOn("TEST-EVAL-4", ConnectionStatus.Connected);
@@ -897,8 +897,8 @@ public static class AccountsHarness
         ChartBridgeAccounts.Tick(tc + 1000);
         List<string> outLines = NinjaTrader.Code.Output.Lines.Skip(said).ToList();
         Check(!ArchivedNow("TEST-EVAL-4") && Entry(Accounts(), "TEST-EVAL-4").Contains("\"trade\":false") && !ArchivedNow("TEST-EVAL-2") && !Log_().Contains("\t(all)\tconverted\t") && !outLines.Any(x => x.Contains("accounts line")),
-              "0.5.3: no accounts-detail.txt: nothing is hidden (a new account is listed unchecked), no accounts line is mentioned");
-        Check((File_("accounts-detail.txt") ?? "").Contains("\tTEST-EVAL-4") && !(File_("accounts-detail.txt") ?? "").Contains("\nconverted\t"), "0.5.3: accounts-detail.txt holds the connected times only");
+              "0.5.5: no accounts-detail.txt: nothing is hidden (a new account is listed unchecked), no accounts line is mentioned");
+        Check((File_("accounts-detail.txt") ?? "").Contains("\tTEST-EVAL-4") && !(File_("accounts-detail.txt") ?? "").Contains("\nconverted\t"), "0.5.5: accounts-detail.txt holds the connected times only");
         double t6 = tc + 402000;
         // accounts-detail.txt that cannot be read (three tries): never rewritten that run
         string detailWas = File_("accounts-detail.txt");

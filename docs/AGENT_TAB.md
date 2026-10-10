@@ -16,6 +16,8 @@ every one again.
 |---|---|
 | `live/agent-core.js` | `AgentCore`: the logic, no page in it (Node tests run it): agents and the picker, proposals and their countdown, the feed, the rule form and its checks, the account chooser, the agent's orders by its mark, the one copilot-key router, and board F's light (`lightState`), stream tones and drawer records (`rowTone`, `decisionRecord`), session trail (`sessionTrail`), room (`roomLines`) and Motion switch (`motionPref`) |
 | `live/agent.js` | `AgentDesk`: draws the tab from AgentCore on the window's one v3 connection |
+| `live/agent-helper.js` | `AgentHelper` (1.20.0): On/Off, the spend readout, the hero picker and the names; its client for the PC helper on localhost:8767 |
+| `test/agent-helper.test.js`, `test/fake-helper.mjs`, `test/agent-onoff-smoke.mjs` | its unit tests, a fake PC helper, and `npm run smoke:onoff` |
 | `live/agent.css` | its look: board F (below), scoped to the tab |
 | `live/fonts/agent-fonts.css` | Chakra Petch and JetBrains Mono from this PC (Latin subset, `OFL-agent.txt` beside them) |
 | `live/agent.html` | the tab in its own window (Pop out, for a third monitor), on its own v3 connection |
@@ -138,7 +140,7 @@ decision in a drawer over the right column, outlined in that decision's colour:
 
 ## What the tab shows
 
-- **The strip:** the agent's initials, name (purple) and build (as its hello says them), connected with the heartbeat's
+- **The strip:** the agent's initials and name (purple; 1.20.0: the build id and stamp are in the Build row under Status), connected with the heartbeat's
   age, the mode, the account with its SIM or LIVE mark, the position, KILLED or STOOD DOWN with why, and while ChartBridge
   says the agent holds the owner lock, "OWNS SIM-AG1 MNQ"; the Motion switch and Pop out. With two or more agents, a
   picker (the choice is kept in this browser).
@@ -208,6 +210,42 @@ decision in a drawer over the right column, outlined in that decision's colour:
   phone the controls, then the proposal and the stream, then the chart, the words under the mode, the account and the rules
   keeping their two lines while empty so they move nothing under them; on a phone everything stacks, with no sideways scroll
   (the workspace's top bar wraps while the tab is open there).
+
+## On/Off, spend and the hero picker (chart 1.20.0)
+
+DECISION 2026-10-09 v and w. The page talks to Bot-Lab's PC helper (`manrae/helper.py`), one small process per PC started
+at sign-in, which starts and stops the agent's runner. The logic is `live/agent-helper.js` (`AgentHelper`, Node-tested in
+`test/agent-helper.test.js`); `live/agent.js` draws it at the top of the left column.
+
+| part | what it does |
+|---|---|
+| Build | the picker: heroes, and in Shadow on a Sim account the builds over the Shadow bar; heroes only in Copilot, Auto and on a LIVE account. Closed while he runs. |
+| On | `POST http://localhost:8767/on {agent, build}`: the helper starts his runner (fetching a missing build from The Desk) once NinjaTrader is connected |
+| Off | `POST /off {agent}`: the helper ends his runner; no model calls from then. In a trade it asks first (below). |
+| Session, Overall | the live agent's dollars (his runner's own journal), this session (18:00 to 17:00 New York) and overall on this PC |
+| Auto-On and daily cap | `POST /settings {agent, autoOn, cap}`: an auto-On time (HH:MM New York) and a dollar cap a session; a new cap applies at his next start |
+| Build row (Status) | the build id and stamp, as his hello says them; the header shows only his name |
+
+- **Off in a trade:** "<name> holds long 1 MNQ on SIM-AG1. Flatten and turn him off?", for that agent only (showing another
+  agent closes it). Flatten and turn off (`AgentHelper.flatOffStart`, `flatOffStep`): Shadow first (`agentMode` shadow, 10 s
+  at most for ChartBridge to say so), then the page's own Flatten for his account and root (`trade.js` `flattenAgent`: the
+  chart's Flatten message, which ChartBridge lets through the agent's lock as an exit; his position and account read again
+  right before; never a default account), then Off once his `agent` message says flat, 30 s at most. Not in Shadow or not
+  flat in time: he stays on, in Shadow, and the line says so until the next On or Off. Keep him on sends nothing. The page
+  never builds an order for him.
+- **A build that is not a hero** runs in Shadow on a Sim account only: Copilot, Auto and a LIVE account are closed with the
+  reason, the helper refuses On for it in any other mode or account, and the runner refuses every plan there. The page fails
+  closed: without the helper's word it reads it from his hello (such a runner says its build id as its name).
+- **Every helper call** carries this page's PIN unlock (`X-ChartBridge-Unlock`); the helper asks ChartBridge's `GET /session`
+  whether it holds. The helper answers only this page's origin, on 127.0.0.1.
+- **No helper on the PC:** "The PC helper is not running on this PC", no On or Off; everything else as before. A helper that
+  refuses the page: "The PC helper refused this page: <its reason>".
+- Tests: `npm run smoke:onoff` (the workspace against the fake bridge and `test/fake-helper.mjs` on 8767: the picker by
+  mode, On with a build that is not a hero and with a hero, the header and the Build row, Off flat, Off in a trade with
+  both answers, the question closed by showing another agent, Shadow before the Flatten, a Flatten that never fills (the
+  line kept, the give-up at 30 s), the helper down or refusing with a build that is not a hero running (Copilot, Auto and a
+  LIVE account stay closed), the settings, a PC with no helper). Screenshots `agent-onoff-off`, `agent-onoff-on`,
+  `agent-onoff-ask`, `agent-onoff-notflat`.
 
 ## Page messages (contract section 7), exactly
 
@@ -293,7 +331,11 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
    only when this ChartBridge serves it and it is not quote only. `maxQty<ROOT>` is sent for each root chosen, never for
    one not chosen.
 9. **When the rules and the account can change (lead's default):** the page offers both only while the agent is flat with
-   no working entry and no open proposal (ChartBridge refuses them otherwise and says why under the button).
+   no working entry and no open proposal (ChartBridge refuses them otherwise and says why under the button). **ChartBridge
+   0.5.4 (chart 1.20.1, Anthony 2026-10-10, DECISION ag):** the window may change at any time: in a trade, or with an entry or
+   a proposal open, the button reads "Change the window" and only the three times are open in the form; a window that puts
+   him in his flat hours now (a start after now, or a flat time already passed) asks first, in the page, since ChartBridge
+   then flattens his position by his rules. The account still waits until flat.
 10. **The account chooser (lead's default):** every account ChartBridge says is tradable, SIM first, each marked; the bot's
     account, the copier's leader and followers and another agent's account are listed but not offered, with the reason
     (ChartBridge refuses them anyway). **An account change keeps the agent's mode** (ChartBridge 0.5.2, Anthony 2026-10-08;
@@ -355,7 +397,8 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
       next one shown says how many were held, and with no plan after them the timer shows the latest held one, with the
       count of the rest, within about a second. A refused duplicate never replaces the plan it copies.
     - Checks as built: stood down includes a clash; the account listed by NinjaTrader; a stop-limit refused with
-      `orderTypes` off; the size the smallest of the agent's `maxQty`, the ceiling and config.txt's gate 3 cap;
+      `orderTypes` off; the size the smallest of the agent's `maxQty`, the ceiling and config.txt's gate 3 cap (ChartBridge
+      0.5.3: for MNQ the agents' own 20, never `maxQty.MNQ`, which caps the page only);
       `maxBracketTicks` holds.
     - The owner lock: a page exit is a market order that only reduces, with no bracket and no strategy; anything else from
       the page gets "...: use Flatten, or move its stop or target"; the bot, the copier and other agents "... until it is
@@ -408,7 +451,7 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
       chosen takes only 0. A skip's `agentPlan` carries every plan key, null where it has none. `placed` names the order and
       when it ends. `position` for its account on its roots.
     - The agent's side of contract section 10 (the pages see none of it): `welcome.rules` carries the caps really enforced
-      (per root the smallest of its rule, the ceiling and config.txt's gate 3 cap) and config.txt's `maxBracketTicks` and
+      (per root the smallest of its rule, the ceiling and config.txt's gate 3 cap; for MNQ the agents' own 20 since 0.5.3) and config.txt's `maxBracketTicks` and
       `maxTicksAway` (null when not set), and `welcome` goes again when a cap changes; `agentState` carries `session` (the
       18:00 ET session's date) and goes after every hello and whenever a field changed; its `order` messages carry
       `orderName` (its entry's `CB#<tag> ag:<id> s<n> t<n>`, its legs' `CB#<tag> stop|target f<n> q<n> p<price>`, its flat

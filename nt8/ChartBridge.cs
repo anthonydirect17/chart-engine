@@ -110,7 +110,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   deskUrl = http://localhost:8800
         //   trading = true                (order entry from the chart; OFF by default; see ChartBridgeOrders.cs)
         //   tradeAccounts = Sim101, ...   (exact account names; pre-checked on a first start, and gate 2 only with accountChecks = off)
-        //   maxQty.MNQ = 5                (largest order per instrument root; default 1)
+        //   maxQty.MNQ = 5                (largest order per instrument root; default 1. 0.5.3: agents' MNQ entries never read it:
+        //                                  their own cap is 20, Anthony 2026-10-10; ChartBridgeAgents.ShippedConfigCap)
         //   accountChecks = off           (0.4.0: every v3 feature is ON by default, Anthony 2026-10-07; a line like this turns one
         //                                  off. accountChecks: gate 2 is the page's per-account checkmark, saved in accounts.txt;
         //                                  see ChartBridgeAccounts.cs. The others: orderTypes, strategies, merge, cancelFromList,
@@ -166,6 +167,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key.StartsWith("maxQty.")) ChartBridgeServer.Log("config.txt: " + key + " = " + val + " is not a whole number; the line does nothing");
                 else ChartBridgeServer.Log("config.txt: " + key + " is not a ChartBridge setting; the line does nothing");
             }
+            ChartBridgeAgents.NoteConfigCaps();   // 0.5.3: a maxQty.MNQ line caps the page only, not agents: said once
         }
     }
 
@@ -1862,7 +1864,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.5.3";
+        public const string Version = "0.5.5";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;

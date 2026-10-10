@@ -147,7 +147,7 @@ line; recompile or restart NinjaTrader after a change):
 | `pc` | the Windows computer name | This PC's name in the bars messages, e.g. `HOME` or `WORK`. |
 | `trading` | `false` | `true` turns on order entry from the chart (see below). |
 | `tradeAccounts` | none | Exact account names, e.g. `Sim101, <eval name>`, no wildcard; Backtest and Playback never. With `accountChecks` on (the default) they only come pre-checked on the first start (no `accounts.txt` yet); with `accountChecks = off` they are the accounts the chart may trade. |
-| `maxQty.MNQ` | `1` | Position cap per instrument root, one line per root (`maxQty.NQ = 1`, ...). |
+| `maxQty.MNQ` | `1` | Position cap per instrument root, one line per root (`maxQty.NQ = 1`, ...). ChartBridge 0.5.3 (Anthony, 2026-10-10): agents never read `maxQty.MNQ`; an agent's MNQ entries may be up to 20 (its own rule and the hard ceiling still apply). The line, or 1 with no line, caps the page, the bot and the copier. |
 | `maxTicksAway` | none | ChartBridge 0.3.7: a limit or stop price at most this many ticks from the last price (none: no limit; before 0.3.7 always 200). A value that is not a whole number of 1 or more means no limit, said in the Output window and to the signed-in pages. |
 | `maxBracketTicks` | none | ChartBridge 0.3.7: a bracket at most this many ticks (0.3.8: a market or resting entry's stop and target ticks, and a `plan`'s). None: no limit. Same rule for a mistyped value. |
 | `allowOrigins` | none | Other web pages that may open the read-only WebSocket (ChartBridge 0.3.1), comma separated, each an exact `scheme://host[:port]`, no wildcard, e.g. `https://desk.golivepage.com, http://100.88.192.33:8800` for The Desk's Live trading page (add `http://localhost:8800` or `http://127.0.0.1:8800` too if The Desk is ever opened that way). One line: the last `allowOrigins` line wins. Non-ASCII host names in punycode. They can read, never trade. |
@@ -160,7 +160,7 @@ line; recompile or restart NinjaTrader after a change):
 | `bot` | on | 0.4.0: the bot channel (`/bot`, its own secret in `bot-secret.txt`); auto and accepted proposals trade the account chosen on the Bot tab (Sim101 until you choose another, kept in `bot-account.txt`), Sim or LIVE, marked plainly (`bot = off` turns it off). |
 | `botRoot` | `MNQ` | 0.4.0: the one root the bot may trade (1 contract). |
 | `botLibrary` | `bot-library.json` | 0.4.0: the file `GET /bot-library` serves to ChartBridge's own page (next to `config.txt`, or a full path; `.json`, at most 2 MB). |
-| any other key | | Does nothing. ChartBridge 0.5.3 says so once in the Output window each time it reads `config.txt`: "config.txt: `<key>` is not a ChartBridge setting; the line does nothing". The retired `accounts` (0.5.1) and `quoteHours` (0.3.7) lines are such keys; they can go. A `maxQty.<ROOT>` line whose value is not a whole number is said the same way (the cap stays 1). |
+| any other key | | Does nothing. ChartBridge 0.5.5 says so once in the Output window each time it reads `config.txt`: "config.txt: `<key>` is not a ChartBridge setting; the line does nothing". The retired `accounts` (0.5.1) and `quoteHours` (0.3.7) lines are such keys; they can go. A `maxQty.<ROOT>` line whose value is not a whole number is said the same way (the cap stays 1). |
 
 **This PC only** (ChartBridge 0.3.1). Windows' web server (HTTP.sys) listens on every network interface and
 matches only the `Host` header, so the `localhost` address alone does not keep other devices out. ChartBridge
@@ -618,8 +618,13 @@ Then check the accounts that may trade on the Account page: only checked account
 2. Only an account checked on the Account page (ChartBridge 0.4.0, `accountChecks` on, the default; saved in
    `accounts.txt`). With `accountChecks = off`, only the accounts in `tradeAccounts`. Never Backtest or Playback; no
    wildcard.
-3. `maxQty.<ROOT>` caps the position (default 1): the position plus working orders on the same side plus
-   the new order may not exceed it. Orders that reduce the position are always allowed.
+3. `maxQty.<ROOT>` caps the position (default 1; ChartBridge 0.5.3: an agent's MNQ entry takes the agents' own 20 instead): the position plus working orders on the same side plus
+   the new order may not exceed it. Orders that reduce the position are always allowed. A page market order that cuts
+   an agent's position (an exit: no bracket, at most the position) skips the per-order qty check, and the count is held
+   to that agent's cap (MNQ 20), not the page's, so Anthony can sell 5 of an agent's 20 MNQ with no `maxQty.MNQ` line
+   (ChartBridge 0.5.3). Exits still working count: together they close at most the position. Selling more than the
+   position, or a buy on a long, is refused (the agent owns the pair: use
+   Flatten). A refusal names the cap that applied.
 4. Only ChartBridge's own page: the WebSocket Origin must be `http://localhost:<port>` (pages listed in
    `allowOrigins` can read, never trade), and the page must
    sign in with the token from `GET /session` (a new one each start; 0.3.2: only for a page unlocked with

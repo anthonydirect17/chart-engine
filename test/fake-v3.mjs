@@ -1029,6 +1029,9 @@ export const AGENT_KEYS = {
 };
 /* the size ceiling (a ChartBridge constant: raising it is a code change and a review): minis 2, micros 20 */
 export const AGENT_CEILING = { NQ: 2, ES: 2, MNQ: 20, MES: 20 };
+/* ChartBridge 0.5.3 (Anthony 2026-10-10, ChartBridgeAgents.ShippedConfigCap): gate 3's config cap for an agent's MNQ entry is
+   20, whatever config.txt's maxQty.MNQ says (that line caps the page, the bot and the copier only); other roots: config.txt's */
+export const AGENT_SHIPPED_CAP = { MNQ: 20 };
 export const AGENT_DEFAULT_RULES = { roots: ['NQ', 'MNQ'], maxQty: { NQ: 2, MNQ: 20 }, entryFrom: '09:45', entryUntil: '15:00', flatAt: '15:55', maxExpireSec: 1800, maxTrades: null, maxLosses: null };
 export const AGENT_NOTE_KINDS = ['look', 'thinking', 'lesson', 'notebook', 'status'];
 const AGENT_ID_RX = /^[a-z][a-z0-9]{0,11}$/;
@@ -1191,12 +1194,40 @@ Object.assign(OrderDeskV3.prototype, {
   agentSendState(a, force) { if (!a.conn || !a.helloed) return; const m = this.agentStateMsg(a), j = JSON.stringify(m); if (force || j !== a.stateSent) { a.stateSent = j; this.send(a.conn, m); } },
   /** the roots ChartBridge serves now (the fake: those it has an instrument for), in the rules' order */
   agentServed(a) { return a.rules.roots.filter(r => this.instruments[r]); },
+  /** gate 3's config cap for an agent's entry (0.5.3, ChartBridgeOrders.AgentCap): AGENT_SHIPPED_CAP where one ships, else config.txt's */
+  agentCapFor(root) { return AGENT_SHIPPED_CAP[root] || this.capFor(root); },
+  /** gate 3 (0.5.3 review, ChartBridgeOrders.AgentExitCap): a page market order that only reduces an agent's position (the owner
+   *  lock's exit) skips the per-order qty check, and the position count is held to the agent's cap (or the position when that is
+   *  larger), never below the page's; working orders on that side still count. Anything else: config.txt's cap, as before */
+  orderCap(m) {
+    const page = [this.capFor(m.root), 'maxQty.' + m.root + ' in config.txt', false];
+    if (!this.agents || !this.agents.size || this._orderSource) return page;
+    const owner = this.ownerOf(m.account, m.root), p = this.pos(m.account, m.root).qty;
+    if (!owner || !owner.startsWith('agent:') || m.kind !== 'market' || m.bracket !== undefined || m.strategy !== undefined || !p || (m.side === 'buy') !== (p < 0) || m.qty > Math.abs(p)) return page;
+    const a = this.agents.get(owner.slice(6)), r = m.root, held = Math.abs(p);
+    const own = Math.min(a.rules.maxQty[r] === undefined ? AGENT_CEILING[r] || 0 : a.rules.maxQty[r], AGENT_CEILING[r] || 0), conf = this.agentCapFor(r);
+    const ac = Math.min(own, conf), cap = Math.max(ac, held);
+    if (cap <= page[0]) return [page[0], page[1], true];
+    return [cap, 'an exit from agent ' + a.id + '\'s position: ' + (ac < held ? 'its ' + held + ' contracts' : conf < own ? 'maxQty.' + r + ' in config.txt' : this.agentCapWords(a, r, own)), true];
+  },
+  /** 0.5.3 re-review (ChartBridgeOrders.PlaceOrderLocked): an exit, with the page's exits still working on that side (orders
+   *  that are no bracket leg), closes at most the position, so two quick exits never flip it; null when it may go on */
+  exitOver(m) {
+    const held = Math.abs(this.pos(m.account, m.root).qty), owner = this.ownerOf(m.account, m.root);
+    let lone = 0;
+    for (const o of this.orders.values()) if (isWorking(o) && o.account === m.account && o.root === m.root && o.side === m.side && !o.oco && o.role !== 'stop' && o.role !== 'target') lone += o.qty - o.filled;
+    if (lone + m.qty <= held) return null;
+    return 'This exit would close ' + (lone + m.qty) + ' ' + m.root + ' contracts (working exits ' + lone + ', this order ' + m.qty + ') of agent ' + owner.slice(6) + '\'s position of ' + held + ': an exit closes at most the position (use Flatten to close it all).';
+  },
+  /** the words for the agent's cap that applied (0.5.3 review, ChartBridgeAgents.CapWords): its own rule when below the hard
+   *  ceiling, else the hard ceiling (a rule is never above it) */
+  agentCapWords(a, root, rule) { return rule < AGENT_CEILING[root] ? 'agent ' + a.id + '\'s maxQty for ' + root : 'the hard ceiling of ' + AGENT_CEILING[root] + ' for ' + root; },
   /** welcome.rules (section 10, as built): the caps really enforced: per root the smallest of the agent's rule, the ceiling
    *  and config.txt's gate 3 cap; config.txt's maxBracketTicks and maxTicksAway (null when not set). The pages' `agent`
    *  message keeps the agent's own rules. */
   agentEnforcedRules(a) {
     const r = this.agentRulesOut(a);
-    r.maxQty = Object.fromEntries(r.roots.map(x => [x, Math.min(a.rules.maxQty[x] === undefined ? AGENT_CEILING[x] : a.rules.maxQty[x], AGENT_CEILING[x] || 0, this.capFor(x))]));
+    r.maxQty = Object.fromEntries(r.roots.map(x => [x, Math.min(a.rules.maxQty[x] === undefined ? AGENT_CEILING[x] : a.rules.maxQty[x], AGENT_CEILING[x] || 0, this.agentCapFor(x))]));
     r.maxBracketTicks = this.config.maxBracketTicks > 0 ? this.config.maxBracketTicks : null;
     r.maxTicksAway = this.config.maxTicksAway > 0 ? this.config.maxTicksAway : null;
     return r;
@@ -1355,7 +1386,12 @@ Object.assign(OrderDeskV3.prototype, {
     if (!isInt(m.maxExpireSec) || m.maxExpireSec < 60 || m.maxExpireSec > 1800) return 'maxExpireSec must be a whole number from 60 to 1800';
     if (!isInt(m.maxTrades) || m.maxTrades < 0 || m.maxTrades > 50) return 'maxTrades must be 0 (none) or a whole number from 1 to 50';
     if (!isInt(m.maxLosses) || m.maxLosses < 0 || m.maxLosses > 20) return 'maxLosses must be 0 (none) or a whole number from 1 to 20';
-    if (a.trade || this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length) return a.id + ' has a position, a working entry or an open proposal: change its rules when it is flat';
+    if (a.trade || this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length) {
+      /* ChartBridge 0.5.4 (SameButWindow): the window alone may change; the roots, each size, maxExpireSec, maxTrades, maxLosses wait */
+      const cur = a.rules, q = r => (m['maxQty' + r] === undefined ? AGENT_CEILING[r] : m['maxQty' + r]);
+      const same = cur.roots.join(',') === roots.join(',') && roots.every(r => cur.maxQty[r] === q(r)) && cur.maxExpireSec === m.maxExpireSec && (cur.maxTrades || 0) === m.maxTrades && (cur.maxLosses || 0) === m.maxLosses;
+      if (!same) return a.id + ' has a position, a working entry or an open proposal: only its window (entries from, until, flat at) can change now; change its other rules when it is flat';
+    }
     return null;
   },
   do_agentRules(m) {
@@ -1545,8 +1581,8 @@ Object.assign(OrderDeskV3.prototype, {
     if (m.kind !== 'limit' && m.kind !== 'stopLimit') return 'an agent\'s entry is a limit or a stop-limit';
     if (m.kind === 'stopLimit' && !this.sw.orderTypes) return 'stop-limit orders are off (orderTypes = off in config.txt)';
     // 4. quantity, stop and target
-    const cap = Math.min(a.rules.maxQty[m.root], AGENT_CEILING[m.root] || 0, this.capFor(m.root));   // the agent's, the ceiling and config.txt's gate 3 cap
-    if (!isInt(m.qty) || m.qty < 1 || m.qty > cap) return 'qty must be a whole number from 1 to ' + cap + ' (maxQty.' + m.root + ')';
+    const own = Math.min(a.rules.maxQty[m.root], AGENT_CEILING[m.root] || 0), conf = this.agentCapFor(m.root), cap = Math.min(own, conf);   // the agent's, the ceiling and gate 3's config cap (0.5.3: MNQ 20, never maxQty.MNQ)
+    if (!isInt(m.qty) || m.qty < 1 || m.qty > cap) return 'qty must be a whole number from 1 to ' + cap + ' (' + (conf < own ? 'maxQty.' + m.root + ' in config.txt' : this.agentCapWords(a, m.root, own)) + ')';   // 0.5.3 review: the cap that applied
     if (!isInt(m.stopTicks) || m.stopTicks < 1 || !isInt(m.targetTicks) || m.targetTicks < 1) return 'stopTicks and targetTicks must be whole numbers of 1 or more';
     if (this.config.maxBracketTicks > 0 && (m.stopTicks > this.config.maxBracketTicks || m.targetTicks > this.config.maxBracketTicks)) return 'stopTicks and targetTicks must be at most ' + this.config.maxBracketTicks + ' (maxBracketTicks in config.txt)';
     // 5. risk
