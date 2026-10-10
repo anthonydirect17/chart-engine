@@ -2746,10 +2746,43 @@ public static class AgentHarness
         Check(sime.Calls.Skip(calls).Any(c => c.StartsWith("cancel CB#")) && Any(page, st, "manrae flattened at 09:59 by its rules"),
               "0.5.4: the new flat time has passed: his legs are cancelled and he is flattened by his rules, as at any flat time");
         Settle(sime);
+        // a start after now puts him in his flat hours too: flattened by his rules, as a position held outside its hours
+        Fresh();
+        SessionRules("09:45", "15:00", "15:55");
+        Order e2 = PlacedOn(sime, Good(NewId()));
+        Check(e2 != null, "0.5.4: placed again at 10:00");
+        if (e2 != null)
+        {
+            Fill(e2, 1, 24999);
+            Advance(500);
+            int c2 = sime.Calls.Count, st2 = N(page);
+            SessionRules("10:30", "15:00", "15:55");
+            Advance(1500);
+            Check(Count(page, "reject") == rj + 3 && sime.Calls.Skip(c2).Any(c => c.StartsWith("cancel CB#")) && Any(page, st2, "held a position outside its trading hours (15:55 to 10:30)"),
+                  "0.5.4: a start after now (10:30 at 10:00): accepted, and he is flattened by his rules as outside his hours");
+            Settle(sime);
+        }
+        // the rules file cannot be read while he is exposed: no change at all, not even the window (the rules in force are then
+        // placeholder defaults: a window measured against them would clear the broken file's stand-down)
+        Fresh();
+        Order e3 = PlacedOn(sime, Good(NewId()));
+        Check(e3 != null, "0.5.4: a working entry");
+        string rf = Path.Combine(Dir, "agent-manrae-rules.txt");
+        File.WriteAllText(rf, "# made-up\n# test\nroots\tMNQ\nwhatever\tthing\n");
+        typeof(ChartBridgeAgent).GetMethod("LoadRules", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, null);
+        int rj3 = Count(page, "reject");
+        SessionRules("09:45", "15:20", "15:58");
+        Check(Count(page, "reject") == rj3 + 1 && PageReject().Contains("agent-manrae-rules.txt could not be read: agent manrae has a position, a working entry or an open proposal, so its rules cannot change until it is flat") &&
+              FileText("agent-manrae-rules.txt").Contains("whatever\tthing"),
+              "0.5.4: the rules file unreadable while exposed: even a window change is refused, the file is left alone: " + PageReject());
+        File.Delete(rf);
+        typeof(ChartBridgeAgent).GetMethod("LoadRules", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, null);
+        Settle(sime);
         // flat again: every rule may change, as before
         Fresh();
+        int rjF = Count(page, "reject");
         P(Rules("MNQ", ",\"maxQtyMNQ\":5", "10:00", "14:00", "15:30", 900, 3, 2));
-        Check(Count(page, "reject") == rj + 3 && FileText("agent-manrae-rules.txt").Contains("maxTrades\t3"), "0.5.4: flat: every rule changes as before");
+        Check(Count(page, "reject") == rjF && FileText("agent-manrae-rules.txt").Contains("maxTrades\t3"), "0.5.4: flat: every rule changes as before");
     }
 
     static void Review052()

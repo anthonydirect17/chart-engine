@@ -2964,6 +2964,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             // still change, inside the same limits; every other rule waits until it is flat. The new window rules at once: a flat
             // time already passed, or a start after now, puts it in its flat hours (FlatHours) and its position is flattened by its
             // rules; an entry or a proposal outside the new window ends as at the window's end.
+            // the rules file could not be read (the rules in force are placeholder defaults): no change while exposed, not even the
+            // window, since it would be measured against those defaults and would clear the broken file's stand-down
+            bool broken; lock (Sync) broken = rulesBroken != null;
+            if (broken && Exposed()) return "agent-" + Id + "-rules.txt could not be read: agent " + Id + " has a position, a working entry or an open proposal, so its rules cannot change until it is flat (or the file reads again)";
             if (Exposed() && !SameButWindow(RulesNow(), r)) return "agent " + Id + " has a position, a working entry or an open proposal: only its window (entries from, until, flat at) can change now; change its other rules when it is flat";
             string err = SaveRules(r);
             if (err != null) return "agent-" + Id + "-rules.txt could not be saved (" + err + "); nothing changed";

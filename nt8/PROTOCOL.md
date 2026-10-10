@@ -2365,8 +2365,9 @@ working entry or an open proposal, `agentRules` from the page may change only th
 `flatAt`; 0.5.4, Anthony 2026-10-10: "I do not want to be locked out of changing the time ... during live trading"); a change
 of any other rule then is refused ("only its window (entries from, until, flat at) can change now; change its other rules when
 it is flat"). The new window rules at once: a flat time already passed, or a start after now, puts the agent in its flat hours
-and its position is flattened by its rules; an entry or a proposal outside it ends as at the window's end. A change is saved,
-logged and sent to the agent in a new `welcome`.
+and its position is flattened by its rules; an entry or a proposal outside it ends as at the window's end. While its
+`agent-<id>-rules.txt` cannot be read (the rules in force are then placeholder defaults), nothing changes while it is exposed,
+not even the window. A change is saved, logged and sent to the agent in a new `welcome`.
 
 | agent to ChartBridge | fields (no others) | notes |
 |---|---|---|
