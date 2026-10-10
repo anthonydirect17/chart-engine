@@ -2515,8 +2515,11 @@ Where the contract left a detail open, the safest simple choice was taken and is
   owner lock's exit: no bracket, no strategy, the other side, at most the smaller reading) skips gate 3's per-order qty
   check, and gate 3's position count (position plus working orders on that side plus this order) is held to that agent's
   cap (`ChartBridgeOrders.AgentExitCap`: its rule, the hard ceiling, MNQ 20; or the position when that is larger), never
-  below the page's own cap. So with no `maxQty.MNQ` line the page may sell 5 of an agent's 20 MNQ in one order; exits sent
-  one after another still cannot add up past the count. More than the position, or an add, is no exit: the owner lock
+  below the page's own cap. So with no `maxQty.MNQ` line the page may sell 5 of an agent's 20 MNQ in one order. Re-review:
+  the exit plus the page's exits still working on that side (orders that are no bracket leg or merged set) may close at most
+  the position, read again at gate 3 (both readings on the other side, else 0), so two quick exits never flip it: "this exit
+  would close <n> <ROOT> contracts (working exits <w>, this order <q>) of agent <id>'s position of <held>: an exit closes at
+  most the position (use Flatten to close it all)". More than the position, or an add, is no exit: the owner lock
   refuses it (never trimmed to the position).
 - **The words of a size refusal** (0.5.3 review): gate 3 and plan check 4 name the cap that applied
   (`ChartBridgeAgents.CapWords`): `agent <id>'s maxQty for <ROOT>` when the agent's rule is below the hard ceiling, else

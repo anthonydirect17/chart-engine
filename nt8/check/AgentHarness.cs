@@ -2249,8 +2249,8 @@ public static class AgentHarness
                 // still working: a second exit may not add up past the position (its stop and target 20, the first exit 5, this one 16)
                 lock (sime.Orders) n0 = sime.Orders.Count;
                 P("{\"type\":\"order\",\"cid\":\"x16\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"sell\",\"kind\":\"market\",\"qty\":16}");
-                Check(PageReject().Contains("\"x16\"") && PageReject().Contains("this order could make the MNQ position 21 contracts (position 20, working 25, this order 16); the cap is 20 (an exit from agent manrae's position: the hard ceiling of 20 for MNQ)") && sime.Orders.Count == n0,
-                      "0.5.3 review: a second exit that would add up past the position: refused by the position count: " + PageReject());
+                Check(PageReject().Contains("\"x16\"") && PageReject().Contains("this exit would close 21 MNQ contracts (working exits 5, this order 16) of agent manrae's position of 20: an exit closes at most the position (use Flatten to close it all)") && sime.Orders.Count == n0,
+                      "0.5.3 review: a second exit that would add up past the position: refused: " + PageReject());
                 if (cut != null) { cut.OrderState = OrderState.Cancelled; Update(cut); }
                 lock (sime.Orders) n0 = sime.Orders.Count;
                 P("{\"type\":\"order\",\"cid\":\"x25\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"sell\",\"kind\":\"market\",\"qty\":25}");
@@ -2258,6 +2258,48 @@ public static class AgentHarness
                       "0.5.3 review: the page sells 25 of a long 20: refused, not capped (more than the position is no exit; it would open a short on the agent's pair, the owner lock): " + PageReject());
                 P("{\"type\":\"order\",\"cid\":\"xb\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1}");
                 Check(PageReject().Contains("\"xb\"") && PageReject().Contains("SIM-E MNQ belongs to agent manrae") && sime.Orders.Count == n0, "0.5.3 review: a page buy while the agent is long 20: refused (adds are never an exit): " + PageReject());
+            }
+            finally { ChartBridgeOrders.ReadConfig("maxQty.MNQ", capWas.ToString(CultureInfo.InvariantCulture)); Settle(sime); }
+            Advance(500);
+        });
+
+        // 0.5.3 re-review (M1): an agent that holds less than its cap. Page exits still working count against the position, so two
+        // quick exits can never flip it (long 5: sell 5 twice, the second refused; sell 3 then 2, both placed; 3 then 3, refused).
+        Part("0.5.3 re-review: page exits on a position below the agent's cap", () =>
+        {
+            Fresh();
+            int capWas = ChartBridgeOrders.CapFor("MNQ");
+            try
+            {
+                ChartBridgeOrders.MaxQty.Remove("MNQ");
+                Advance(500);
+                Order e = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 5, 8, 16, 600));
+                Check(e != null && e.Quantity == 5, "0.5.3 re-review: the agent's 5 MNQ entry is placed: " + (e != null ? e.Quantity + " " + e.Name : AgentReject()));
+                if (e == null) return;
+                Fill(e, 5, 24999);
+                Check(PosOf(sime, mnq) == 5 && Legs(sime, e).Count == 2, "0.5.3 re-review: the agent is long 5 MNQ with its stop and target");
+                int k = 0;
+                Func<int, Order> sell = q =>
+                {
+                    int n;
+                    lock (sime.Orders) n = sime.Orders.Count;
+                    string cid = "h" + (++k);
+                    P("{\"type\":\"order\",\"cid\":\"" + cid + "\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"sell\",\"kind\":\"market\",\"qty\":" + q + "}");
+                    lock (sime.Orders) return sime.Orders.Skip(n).FirstOrDefault(o => o.OrderType == OrderType.Market && o.OrderAction == OrderAction.Sell);
+                };
+                Action clear = () => { foreach (Order o in Live(sime).Where(o => o.OrderType == OrderType.Market).ToList()) { o.OrderState = OrderState.Cancelled; Update(o); } };
+                Order a1 = sell(5), a2 = sell(5);
+                Check(a1 != null && a1.Quantity == 5, "0.5.3 re-review: long 5: the page sells 5: placed: " + (a1 != null ? "sell " + a1.Quantity : PageReject()));
+                Check(a2 == null && PageReject().Contains("this exit would close 10 MNQ contracts (working exits 5, this order 5) of agent manrae's position of 5: an exit closes at most the position"),
+                      "0.5.3 re-review: long 5, the first sell of 5 still working: a second sell of 5 is refused (it would flip the position): " + PageReject());
+                clear();
+                Order b1 = sell(3), b2 = sell(2);
+                Check(b1 != null && b1.Quantity == 3 && b2 != null && b2.Quantity == 2, "0.5.3 re-review: long 5: sell 3 then sell 2: both placed: " + (b2 != null ? "sell 3, sell 2" : PageReject()));
+                clear();
+                Order c1 = sell(3), c2 = sell(3);
+                Check(c1 != null && c1.Quantity == 3 && c2 == null && PageReject().Contains("this exit would close 6 MNQ contracts (working exits 3, this order 3) of agent manrae's position of 5"),
+                      "0.5.3 re-review: long 5: sell 3 then sell 3: the second is refused: " + PageReject());
+                clear();
             }
             finally { ChartBridgeOrders.ReadConfig("maxQty.MNQ", capWas.ToString(CultureInfo.InvariantCulture)); Settle(sime); }
             Advance(500);

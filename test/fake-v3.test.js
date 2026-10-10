@@ -1276,6 +1276,27 @@ test('ChartBridge 0.5.3: an agent\'s MNQ cap is the shipped 20 whatever maxQty.M
   assert.deepEqual(d.desk.orderCap({ account: 'Sim101', root: 'MNQ', side: 'sell', kind: 'market', qty: 1 }), [1, 'maxQty.MNQ in config.txt', false], 'any other order: the page\'s cap');
   assert.equal(reasonOf(d.act({ type: 'order', cid: 'x15', account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 15 })), null, 'and the rest: placed');
   assert.equal(d.desk.pos('SIM-AG1', 'MNQ').qty, 0, 'the agent is flat');
+  /* the 0.5.3 re-review (M1): long 5, below the agent's cap; the page's exits still working count against the position */
+  const h = await makeAgentDesk();
+  h.desk.config.maxQty = { NQ: 2 };
+  h.hello();
+  h.act({ type: 'agentMode', agent: 'demo', mode: 'auto' });
+  assert.equal(h.plan({ qty: 5, riskDollars: 40 }).why, null);
+  h.tick(25398);
+  assert.equal(h.desk.pos('SIM-AG1', 'MNQ').qty, 5, 'the agent is long 5');
+  const mo = h.desk.matchOne;
+  h.desk.matchOne = function (o, ...r) { if (o.kind === 'market') return; return mo.call(this, o, ...r); };   // the exits do not fill yet
+  const sell = (cid, qty) => reasonOf(h.act({ type: 'order', cid, account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty }));
+  const clear = () => { for (const o of h.desk.orders.values()) if (o.kind === 'market' && o.state === 'working') h.desk.cancelOne(o); };
+  assert.equal(sell('a1', 5), null, 'sell 5: placed');
+  assert.equal(sell('a2', 5), 'This exit would close 10 MNQ contracts (working exits 5, this order 5) of agent demo\'s position of 5: an exit closes at most the position (use Flatten to close it all).', 'a second sell of 5 would flip it: refused');
+  clear();
+  assert.equal(sell('b1', 3), null); assert.equal(sell('b2', 2), null, 'sell 3 then 2: both placed');
+  clear();
+  assert.equal(sell('c1', 3), null);
+  assert.match(sell('c2', 3), /^This exit would close 6 MNQ contracts \(working exits 3, this order 3\) of agent demo's position of 5/, 'sell 3 then 3: the second refused');
+  clear();
+  h.desk.matchOne = mo;
   const e = await makeAgentDesk();
   e.desk.config.maxQty = { MNQ: 5, NQ: 2 };                           // a line on this PC: the page's cap only
   e.hello();

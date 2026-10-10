@@ -610,9 +610,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // side (any order, from the chart or not, bracket legs too, and ChartBridge's own orders even
         // before NinjaTrader lists them). Orders sharing an OCO id fill one at a time, so a group counts
         // once, at its largest.
-        private static void PendingOrders(Account account, Instrument inst, out int buys, out int sells)
+        private static void PendingOrders(Account account, Instrument inst, out int buys, out int sells) { int lb, ls; PendingOrders(account, inst, out buys, out sells, out lb, out ls); }
+
+        // 0.5.3 re-review: loneBuys and loneSells, the part of buys and sells in orders that are no bracket leg or merged set (no OCO
+        // id, no group): a page exit already working counts there, an agent's stop and target do not.
+        private static void PendingOrders(Account account, Instrument inst, out int buys, out int sells, out int loneBuys, out int loneSells)
         {
-            buys = 0; sells = 0;
+            buys = 0; sells = 0; loneBuys = 0; loneSells = 0;
             List<Order> orders;
             lock (account.Orders) orders = account.Orders.ToList();
             lock (Sync) foreach (Order o in Ours) if (o.Account == account && !orders.Contains(o)) orders.Add(o);
@@ -622,7 +626,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!SameInstrument(o.Instrument, inst) || !MayFill(o.OrderState)) continue;
                 int left = Math.Max(0, o.Quantity - o.Filled), had;
                 string grp = MergeUnitKey(o);   // 0.4.0 B4: the OCO id, or a merged set's group
-                if (grp == null) { if (IsBuy(o)) buys += left; else sells += left; continue; }
+                if (grp == null) { if (IsBuy(o)) { buys += left; loneBuys += left; } else { sells += left; loneSells += left; } continue; }
                 string key = (IsBuy(o) ? "b|" : "s|") + grp;
                 if (!groups.TryGetValue(key, out had) || left > had) groups[key] = left;
             }
@@ -728,10 +732,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (agent != null) cap = AgentEntryCap(agent, root, out capWhy);   // 0.5.0 agents: the agent's maxQty, never above the hard ceiling (minis 2, micros 20), on the order and the position; 0.5.3: MNQ never maxQty.MNQ
             // 0.5.3 review: a page exit from an agent's position skips the per-order qty check (pageReduces: at most the smaller
             // reading, never a flip or an add), and the position count is held to the agent's cap (AgentExitCap), never below the
-            // page's: Anthony may sell 5 of an agent's 20 MNQ with config.txt's MNQ cap at 1.
-            if (exitOf != null) { string ew; int ec = AgentExitCap(exitOf, root, Math.Min(Math.Abs(posNow), Math.Abs(posEff)), out ew); if (ec > cap) { cap = ec; capWhy = ew; } }
+            // page's: Anthony may sell 5 of an agent's 20 MNQ with config.txt's MNQ cap at 1. 0.5.3 re-review: held is read here
+            // again (gate 3's own readings: a fill since the owner lock's reading cannot turn an exit into an entry).
+            int held = isBuy ? (posNow < 0 && posEff < 0 ? Math.Min(-posNow, -posEff) : 0) : (posNow > 0 && posEff > 0 ? Math.Min(posNow, posEff) : 0);
+            if (exitOf != null) { string ew; int ec = AgentExitCap(exitOf, root, held, out ew); if (ec > cap) { cap = ec; capWhy = ew; } }
             if (exitOf == null && qty > cap) return "qty " + qty + " is over the " + root + " cap of " + cap + " (" + capWhy + ")";
-            PendingOrders(account, inst, out pendBuy, out pendSell);
+            int loneBuy, loneSell;
+            PendingOrders(account, inst, out pendBuy, out pendSell, out loneBuy, out loneSell);
+            // 0.5.3 re-review: an exit, with the page's exits still working on that side (orders that are no bracket leg), closes at
+            // most the position: two quick sells of 5 on a long 5 never flip it. The agent's own stop and target are not counted
+            // here (they shrink with the position), so the rest can be sold before they are shrunk.
+            int loneSide = isBuy ? loneBuy : loneSell;
+            if (exitOf != null && (long)loneSide + qty > held)
+                return "this exit would close " + (loneSide + qty) + " " + root + " contracts (working exits " + loneSide + ", this order " + qty + ") of agent " + exitOf +
+                       "'s position of " + held + ": an exit closes at most the position (use Flatten to close it all)";
             long worst = isBuy ? (long)pos + pendBuy + qty : (long)(-pos) + pendSell + qty;
             if (worst > cap)
                 return "this order could make the " + root + " position " + worst + " contracts (position " + pos + ", working " +

@@ -1210,6 +1210,15 @@ Object.assign(OrderDeskV3.prototype, {
     if (cap <= page[0]) return [page[0], page[1], true];
     return [cap, 'an exit from agent ' + a.id + '\'s position: ' + (ac < held ? 'its ' + held + ' contracts' : conf < own ? 'maxQty.' + r + ' in config.txt' : this.agentCapWords(a, r, own)), true];
   },
+  /** 0.5.3 re-review (ChartBridgeOrders.PlaceOrderLocked): an exit, with the page's exits still working on that side (orders
+   *  that are no bracket leg), closes at most the position, so two quick exits never flip it; null when it may go on */
+  exitOver(m) {
+    const held = Math.abs(this.pos(m.account, m.root).qty), owner = this.ownerOf(m.account, m.root);
+    let lone = 0;
+    for (const o of this.orders.values()) if (isWorking(o) && o.account === m.account && o.root === m.root && o.side === m.side && !o.oco && o.role !== 'stop' && o.role !== 'target') lone += o.qty - o.filled;
+    if (lone + m.qty <= held) return null;
+    return 'This exit would close ' + (lone + m.qty) + ' ' + m.root + ' contracts (working exits ' + lone + ', this order ' + m.qty + ') of agent ' + owner.slice(6) + '\'s position of ' + held + ': an exit closes at most the position (use Flatten to close it all).';
+  },
   /** the words for the agent's cap that applied (0.5.3 review, ChartBridgeAgents.CapWords): its own rule when below the hard
    *  ceiling, else the hard ceiling (a rule is never above it) */
   agentCapWords(a, root, rule) { return rule < AGENT_CEILING[root] ? 'agent ' + a.id + '\'s maxQty for ' + root : 'the hard ceiling of ' + AGENT_CEILING[root] + ' for ' + root; },

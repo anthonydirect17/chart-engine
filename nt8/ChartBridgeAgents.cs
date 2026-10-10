@@ -108,8 +108,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
         // 0.5.3 review: the position count's cap for a page exit from an agent's position (PlaceOrderLocked's pageReduces: at most
         // the smaller reading, never a flip or an add; it skips the per-order qty check): the agent's cap (AgentEntryCap), or the
-        // position it holds (held) when that is larger, as after its rule was lowered. Working orders on that side still count, so
-        // exits sent one after another can never add up past it.
+        // position it holds (held) when that is larger, as after its rule was lowered. The page's exits still working never add up
+        // past the position itself (PlaceOrderLocked, 0.5.3 re-review).
         internal static int AgentExitCap(string owner, string root, int held, out string why)
         {
             string w;

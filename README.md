@@ -621,7 +621,8 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
    the new order may not exceed it. Orders that reduce the position are always allowed. A page market order that cuts
    an agent's position (an exit: no bracket, at most the position) skips the per-order qty check, and the count is held
    to that agent's cap (MNQ 20), not the page's, so Anthony can sell 5 of an agent's 20 MNQ with no `maxQty.MNQ` line
-   (ChartBridge 0.5.3). Selling more than the position, or a buy on a long, is refused (the agent owns the pair: use
+   (ChartBridge 0.5.3). Exits still working count: together they close at most the position. Selling more than the
+   position, or a buy on a long, is refused (the agent owns the pair: use
    Flatten). A refusal names the cap that applied.
 4. Only ChartBridge's own page: the WebSocket Origin must be `http://localhost:<port>` (pages listed in
    `allowOrigins` can read, never trade), and the page must

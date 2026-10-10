@@ -163,6 +163,7 @@ export class OrderDesk {
     if (!Number.isInteger(m.qty) || m.qty < 1) return 'Qty must be a whole number of at least 1.';
     const [cap, capWhy, exit] = this.orderCap(m);
     if (!exit && m.qty > cap) return 'Qty ' + m.qty + ' is over the ' + m.root + ' cap of ' + cap + ' (' + capWhy + ').';
+    if (exit) { const over = this.exitOver(m); if (over) return over; }   // ChartBridge 0.5.3 re-review (the v3 desk): an exit closes at most the position
     if (CAP_COUNTS_POSITION) {
       const would = this.exposure(m.account, m.root, m.side, m.qty);
       if (would > cap) return (m.side === 'buy' ? 'Buying ' : 'Selling ') + m.qty + ' could take the ' + m.root + ' position on ' + m.account + ' to ' + would + ' (with working orders), over the cap of ' + cap + '.';
