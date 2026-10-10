@@ -94,6 +94,15 @@ test('Flatten and turn off: Shadow first, then the Flatten, then Off once flat; 
   assert.deepEqual([r.action, r.job], ['giveup', null]);
   assert.equal(r.line, 'Not flat 30 s after the Flatten for SIM-AG1 MNQ: he stays on, in Shadow. Flatten in NinjaTrader, then press Off.');
   assert.deepEqual(AH.flatOffStep(null, inAuto, T, false), { action: '', job: null, line: '' });
+  /* the connection dropped: the page has no agent message for him; that is never flat (re-review of e15b971) */
+  r = AH.flatOffStep(j, null, T + 3000, true);
+  assert.deepEqual([r.action, r.job], ['', j]); assert.match(r.line, /^Waiting for ChartBridge \(the connection dropped\)/);
+  r = AH.flatOffStep(st.job, null, T + 500, false);
+  assert.equal(r.action, '', 'in the Shadow step too');
+  r = AH.flatOffStep(j, null, j.until + 1, true);
+  assert.deepEqual([r.action, r.job], ['giveup', null]);
+  assert.equal(r.line, 'ChartBridge did not answer: he may still hold SIM-AG1 MNQ and stays on. Check NinjaTrader, then press Off.');
+  assert.equal(AH.flatOffStep(j, Object.assign({}, shadowPos, { position: null }), T + 5000, true).action, 'off', 'back, and flat: Off');
 });
 
 test('the spend readout and the words under On/Off', () => {

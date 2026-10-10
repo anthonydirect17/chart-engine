@@ -149,6 +149,10 @@ function flatOffStart(a, now) {
 function flatOffStep(job, a, now, sent) {
   const j = job, x = a || {};
   if (!j) return { action: '', job: null, line: '' };
+  if (!a) {                                     // no word from ChartBridge (the connection dropped): never read as flat
+    if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not answer: ' + (j.phase === 'shadow' ? 'nothing was flattened and he stays on' : 'he may still hold ' + j.account + ' ' + j.root + ' and stays on') + '. Check NinjaTrader, then press Off.' };
+    return { action: '', job: j, line: 'Waiting for ChartBridge (the connection dropped): nothing is read as flat meanwhile...' };
+  }
   if (j.phase === 'shadow') {
     if (x.mode === 'shadow') return { action: flat(x) ? 'off' : 'flatten', job: Object.assign({}, j, { phase: flat(x) ? 'off' : 'flatten', until: now + FLAT_WAIT_MS }), line: flat(x) ? 'In Shadow and flat: turning him off...' : 'In Shadow: flattening ' + j.account + ' ' + j.root + '...' };
     if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not put him in Shadow within ' + SHADOW_WAIT_MS / 1000 + ' s: nothing was flattened and he stays on.' };

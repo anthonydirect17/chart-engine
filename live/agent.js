@@ -642,6 +642,7 @@ function create(o) {
     const a = cur(); if (!a) return;
     const acc = AC.agentAccount(a), tradable = AC.accountTradable(S.accounts, S.trading, acc.name), allowed = AC.modesAllowed({ tradable, account: acc.name });
     const hb = AH ? AH.modeBlock(helperOf(a.agent), a) : {};    // DECISION w: a build that is not a hero stays in Shadow on Sim (fails closed)
+    if (H.job && H.job.agent === a.agent) for (const m of AC.MODES) allowed[m] = { ok: false, why: 'Turning him off (Shadow, Flatten, Off): the mode waits until that ends.' };
     for (const m of ['copilot', 'auto']) if (hb[m] && allowed[m].ok && a.mode !== m) allowed[m] = { ok: false, why: hb[m] };
     const now = Date.now();
     for (const btn of q('[data-k="modes"]').children) {
@@ -776,14 +777,15 @@ function create(o) {
     if (st.error) { H.lines[a.agent] = st.error; renderPanel(); return; }
     if (st.action === 'off') { helperOff(a.agent); return; }
     H.job = st.job; H.flatSent = false;
-    if (st.action === 'shadow') sendAgent(AC.modeMsg(a.agent, 'shadow'), 'mode');
-    else jobFlatten(st.job);                       // in Shadow already: the Flatten at once
+    if (st.action === 'shadow') {
+      if (!sendAgent(AC.modeMsg(a.agent, 'shadow'), 'mode')) { H.job = null; H.lines[a.agent] = 'Shadow could not be sent (not signed in to ChartBridge): nothing was flattened and he stays on.'; renderPanel(); return; }
+    } else jobFlatten(st.job);                       // in Shadow already: the Flatten at once
     if (H.job) { jobStep(); flatLoop(); } else renderPanel();
   }
   /* the Flatten of a job, his position and account read again right before it goes */
   function jobFlatten(j) {
     const a = agents.get(j.agent);
-    if (!a || AH.offStep(a) !== 'ask' || a.account !== j.account) { H.job = null; H.lines[j.agent] = 'His position changed before the Flatten: nothing was sent. He stays on, in Shadow.'; }
+    if (!a || AH.offStep(a) !== 'ask' || a.account !== j.account || !a.position || a.position.root !== j.root) { H.job = null; H.lines[j.agent] = 'His position changed before the Flatten: nothing was sent. He stays on, in Shadow.'; }
     else if (o.flatten(j.account, j.root) === false) { H.job = null; H.lines[j.agent] = 'The Flatten was not sent (see the chart\'s line): he stays on, in Shadow.'; }
     else H.flatSent = true;
   }
