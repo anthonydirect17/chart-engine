@@ -63,7 +63,8 @@ const str = v => (typeof v === 'string' ? v : '');
 const validId = id => typeof id === 'string' && /^[a-z][a-z0-9]{0,11}$/.test(id);
 
 /* ======================================================================== versions */
-/** [major, minor, patch] from a version text ("0.5.0", "fake-0.4.0"), or null. */
+/** [major, minor, patch] from a version text ("0.5.0", "fake-0.4.0"), or null. Kept for checks above the page's minimum
+ *  ChartBridge (0.5.2 since 1.21.0), such as a later release's feature. */
 function parseVersion(v) { const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(v || '')); return m ? [+m[1], +m[2], +m[3]] : null; }
 /** Is version a at least b? An unknown a is false. */
 function atLeast(a, b) {
@@ -73,14 +74,15 @@ function atLeast(a, b) {
   return true;
 }
 /**
- * What the tab says when it has no agent to show. o: { v3 (true, false, null: not known yet), version, signedIn, trading
- * (the `trading` answer), agents (how many are known) }. '' when there is an agent to show.
+ * What the tab says when it has no agent to show. o: { v3 (true, false, null: not known yet), signedIn, trading (the
+ * `trading` answer), agents (how many are known) }. '' when there is an agent to show. Chart 1.21.0 needs ChartBridge 0.5.2
+ * (live/COMPAT.json), so the version is no longer read: a ChartBridge with v3 has the agent channel.
  */
 function offText(o) {
   const x = o || {};
   if (x.agents > 0) return '';
   if (x.v3 === null || x.v3 === undefined) return 'Connecting to ChartBridge...';
-  if (x.v3 === false || !atLeast(x.version, MIN_BRIDGE)) return 'No agents on this ChartBridge (' + MIN_BRIDGE + ' or later).';
+  if (x.v3 === false) return 'No agents on this ChartBridge (' + MIN_BRIDGE + ' or later).';
   if (!x.trading) return 'Signing in to ChartBridge...';
   if (!x.trading.enabled) return 'Trading is not enabled in ChartBridge on this PC, so the agent channel is off.';
   return 'No agents on this ChartBridge: none is named in its config.txt (agents = ...).';
@@ -292,8 +294,8 @@ function accountChoices(accountsMsg, agent, others) {
  * every rule again (section 6). ctx: { workingEntry, openProposals, roots, version (ChartBridge's hello), askedMode (the mode
  * the shown question named; the agent's mode when no question was asked) }.
  * ChartBridge 0.5.2 and its review: the agent keeps its mode only when the message says which mode the page showed
- * (keepMode) and that is still its mode; keepMode goes only to 0.5.2 or later (0.5.1 refuses a key it does not know), and an
- * older ChartBridge puts the agent in Shadow, so its question says Shadow.
+ * (keepMode) and that is still its mode. Chart 1.21.0 needs ChartBridge 0.5.2, so keepMode always goes (until 1.19.0 it
+ * went only to 0.5.2 or later, and the question said Shadow for an older one).
  */
 function accountChange(agent, name, choices, ctx, cid) {
   const a = agent || {}, cur = agentAccount(a).name, c = ctx || {};
@@ -308,9 +310,9 @@ function accountChange(agent, name, choices, ctx, cid) {
   const msg = { type: 'agentAccount' };
   if (cid) msg.cid = cid;
   msg.agent = a.agent; msg.account = name;
-  const keeps = keepsMode(c.version), asked = MODES.includes(c.askedMode) ? c.askedMode : MODES.includes(a.mode) ? a.mode : 'shadow';
-  if (keeps) msg.keepMode = asked;
-  return { msg, live: !ch.sim, confirm: ch.sim ? '' : liveQuestion(Object.assign({}, a, { mode: asked }), name, c.version), mode: keeps ? asked : 'shadow' };
+  const asked = MODES.includes(c.askedMode) ? c.askedMode : MODES.includes(a.mode) ? a.mode : 'shadow';
+  msg.keepMode = asked;
+  return { msg, live: !ch.sim, confirm: ch.sim ? '' : liveQuestion(Object.assign({}, a, { mode: asked }), name), mode: asked };
 }
 /** The open LIVE question stands only while the agent is still in the mode it named when it opened (the 0.5.2 re-review): the
  *  question is never redrawn with another mode. null while it stands; else the note that closes it (nothing is sent, and Set
@@ -320,16 +322,12 @@ function askStale(askedMode, agent) {
   if (!MODES.includes(askedMode) || a.mode === askedMode) return null;
   return (validId(a.agent) ? a.agent : agentName(a)) + ' went to ' + (MODE_NAME[a.mode] || 'Shadow') + ' while the question said ' + MODE_NAME[askedMode] + ': nothing was sent. Choose Set to be asked again.';
 }
-/** Does this ChartBridge keep the mode when the account changes (0.5.2 or later, with keepMode)? */
-function keepsMode(version) { return atLeast(version, '0.5.2'); }
 /** The one question before an agent takes a LIVE account: it names the mode the agent will be in (ChartBridge 0.5.2, Anthony
- *  2026-10-08: an account change keeps the mode; the review's S5). Before 0.5.2 ChartBridge puts the agent in Shadow, and the
- *  question says so. Not confirmed: nothing is sent, the account stays. */
-function liveQuestion(a, name, version) {
+ *  2026-10-08: an account change keeps the mode; the review's S5). Not confirmed: nothing is sent, the account stays. */
+function liveQuestion(a, name) {
   const who = 'Agent ' + (a && validId(a.agent) ? a.agent : agentName(a)) + ' will trade LIVE account ' + name;
-  const mode = keepsMode(version) ? MODE_NAME[a && a.mode] || 'Shadow' : 'Shadow';
-  const older = !keepsMode(version) && a && a.mode && a.mode !== 'shadow' ? ' This ChartBridge (before 0.5.2) puts it in Shadow when its account changes.' : '';
-  return who + ' in ' + mode + (mode === 'Shadow' ? ' (nothing is placed until you choose Copilot or Auto)' : '') + '.' + older + ' Continue?';
+  const mode = MODE_NAME[a && a.mode] || 'Shadow';
+  return who + ' in ' + mode + (mode === 'Shadow' ? ' (nothing is placed until you choose Copilot or Auto)' : '') + '. Continue?';
 }
 
 /* ======================================================================== modes */
@@ -946,7 +944,7 @@ return {
   validId, parseVersion, atLeast, offText,
   createAgents, pickAgent, agentName,
   parseRules, rulesLines, rulesForm, rulesChangeable, rulesEditable, windowFlattensNow, WINDOW_ANYTIME, rulesChange, durationText,
-  accountMark, agentAccount, accountChoices, accountChange, keepsMode, liveQuestion, askStale,
+  accountMark, agentAccount, accountChoices, accountChange, liveQuestion, askStale,
   modesAllowed, accountTradable, modeMsg, killMsg,
   countdown, createProposals, endText, legPrices,
   createFeed, planLine,

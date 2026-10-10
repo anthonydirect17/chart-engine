@@ -265,9 +265,10 @@ New York times `HH:MM`, in session order from the 18:00 open (ChartBridge 0.5.2,
 
 ## With an older ChartBridge
 
-The Agent tab button shows with any ChartBridge that speaks v3 (as the Bot tab's). Before 0.5.0 (the version in its
-hello) the tab says "No agents on this ChartBridge (0.5.0 or later)." and the page sends no agent message; with 0.5.0 and
-no `agents` line in config.txt it says none is named there. Everything else works as 1.16.0.
+The Agent tab button shows with any ChartBridge that speaks v3 (as the Bot tab's). Chart 1.21.0 needs ChartBridge 0.5.2
+(`live/COMPAT.json`), so the page no longer reads the version: with no `agents` line in config.txt the tab says none is
+named there. A ChartBridge without v3 (before 0.4.0) gets "No agents on this ChartBridge (0.5.0 or later)." Until 1.19.0 a
+v3 ChartBridge before 0.5.0 (by its hello's version) got that line too.
 
 ## The fake ChartBridge
 
@@ -342,10 +343,9 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
     until 1.18.0 it went to Shadow): the LIVE question names the mode ("Agent demo will trade LIVE account EVAL-A in Auto.
     Continue?"); not confirmed, nothing is sent and the account stays. The message carries `keepMode`, the mode the question
     named (for a SIM account, the mode shown), and ChartBridge keeps the mode only if it is still that one; otherwise the agent
-    goes to Shadow (another page changed the mode meanwhile). `keepMode` goes only to ChartBridge 0.5.2 or later (by the hello's
-    `version`; 0.5.1 refuses a key it does not know): to an older one the question says Shadow ("This ChartBridge (before
-    0.5.2) puts it in Shadow when its account changes.") and the page says so after sending; with 0.5.2 it says the mode is
-    kept. The question records the mode once, when it opens, and is never redrawn with another: if the agent's mode changes
+    goes to Shadow (another page changed the mode meanwhile). `keepMode` always goes (chart 1.21.0 needs ChartBridge 0.5.2; until
+    1.19.0 it went only to 0.5.2 or later, by the hello's `version`, and to an older one the question said Shadow), and the
+    page says after sending that the mode is kept. The question records the mode once, when it opens, and is never redrawn with another: if the agent's mode changes
     while it is open (another page), it closes with a note ("demo went to Auto while the question said Shadow: nothing was
     sent. Choose Set to be asked again."), nothing is sent, and Set asks again naming the mode then (the 0.5.2 re-review).
 11. **The agent's chart (lead's default):** its root is the one picked in the chart's header, else the position's, else a

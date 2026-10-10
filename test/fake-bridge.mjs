@@ -8,7 +8,6 @@
 //   --max-ticks-away=400            maxTicksAway = 400 (ChartBridge 0.3.7: a limit or stop price at most this many ticks from
 //                                   the last price; default none)
 //   --max-bracket-ticks=300         maxBracketTicks = 300 (0.3.7: a bracket stop or target at most this many ticks; default none)
-//   --v1                            behave like ChartBridge 0.2 (protocol v1, read only: no trading, no /session)
 //   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
 //                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/elsewhere
 //   --allow-frames                  drop X-Frame-Options and frame-ancestors (only to test the page's own frame check)
@@ -24,8 +23,8 @@
 //                                   futures' halt); tick history counted back from the clock, as ChartBridge does
 //   --tick-shift-ms=137             every trade stamped this many ms later (history and live), as real trades are: a
 //                                   session's first trade at 18:00:00.137, not 18:00:00.000 (chart 1.6.1, review 2 S4)
-//   --version=0.3.5                 the version hello reports (default fake-0.3.2; fake-0.2.1 with --v1); the page
-//                                   reads how many hours of ticks ChartBridge serves from it (48 before 0.3.5)
+//   --version=0.3.5                 the version hello reports (default fake-0.3.4; fake-0.3.7 with --data-037, fake-0.4.0
+//                                   with --v3, fake-0.5.2 with --agents)
 //   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
 //                                   like a fast market, so the two range bar modes differ (sample data, seeded)
 //   --tickets                       like The Desk's relay: /ws needs ?ticket=<t>, and each ticket works once
@@ -40,7 +39,7 @@
 //   --pin-off                       behave like ChartBridge 0.3.1 for the PIN only (no /pin/, nothing gated), to
 //                                   measure a page from a checkout older than the PIN (perf-live --root)
 // ChartBridge 0.3.2's PIN (test/fake-pin.mjs): the page's WebSocket needs ?unlock=<token> and GET /session the
-// X-ChartBridge-Unlock header; POST /pin/status, /pin/set, /pin/unlock, /pin/change. --v1 has no PIN.
+// X-ChartBridge-Unlock header; POST /pin/status, /pin/set, /pin/unlock, /pin/change.
 // With --test-controls, also: /test/drop closes every WebSocket (a dropped connection); /test/received lists
 // what the pages sent (message types, GET /session count, WebSocket URLs, ticketsRefused).
 // Load and performance testing (test/perf-live.mjs); sample data, seeded, never market data:
@@ -63,9 +62,6 @@
 //   --cme-hours                     the history and trades follow CME's hours on the exchange clock: no minute bar, tick or
 //                                   live trade from 17:00 to 18:00 ET, or from Friday 17:00 to Sunday 18:00 (sample data
 //                                   shifted to now otherwise trades through 18:00)
-//   --no-sides                      behave like ChartBridge 0.3.3 for trade sides: ticks as [t,p,v] and live ticks without
-//                                   s and sm (to check the page against an older add-on); no q either
-//   --no-q                          behave like ChartBridge 0.3.7 for the Time and Sales category: no q anywhere
 // Trade sides (ChartBridge 0.3.4, nt8/PROTOCOL.md "Trade side"): every backfill trade is [t, p, v, s, sm] and every live
 // tick carries s (1 buy, -1 sell, 0 unknown) and sm (0 none, 1 aggressor flag, 2 bid/ask, 3 tick rule). The fake has no
 // quotes: a trade that moved the price counts as at the quote (sm 2: up a buy, down a sell), an unchanged one keeps the
@@ -192,12 +188,10 @@ const QUOTE = (V3 && !V3_OFF.includes('quoteRoots')) || (!!flag('quote-roots') &
 const AGENTS = V3 ? flagValue('agents').split(',').map(x => x.trim()).filter(Boolean) : [];   // 0.5.0: config.txt `agents`
 const AGENT_ACCOUNTS = AGENTS.length ? [{ name: 'SIM-AG1', sim: true, balance: 50000 }, { name: 'SIM-AG2', sim: true, balance: 50000 }] : [];   // made-up Sim accounts for agents to take
 let htfFail = '';                                  // /test/htf?fail=: the error every htf request gets (none when '')
-const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
+const TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
-const SIDES = !flag('no-sides') && !V1;           // ChartBridge 0.2 (--v1) had no sides either
-const TAPE_Q = SIDES && !flag('no-q');             // 0.3.8: the Time and Sales category (see the header)
-const LIVE_FIRST = !!flag('live-first') && !V1, CALENDAR = !!flag('calendar');
+const LIVE_FIRST = !!flag('live-first'), CALENDAR = !!flag('calendar');
 let liveFirstOn = LIVE_FIRST;                      // /test/features can turn it off for new connections
 const RANGE_HOURS = +flagValue('range-hours') || 2, WINDOW_MS = flagValue('window-ms') === '' ? 300 : +flagValue('window-ms');
 const TABLE_BUILDING_MS = flagValue('table-building') === '' ? -1 : +flagValue('table-building');
@@ -225,7 +219,7 @@ function limitFlag(name, key) {
   return 0;
 }
 const config = {
-  trading: !V1 && !!flag('trading'),
+  trading: !!flag('trading'),
   tradeAccounts: (flagValue('trade-accounts') || (V3 ? 'Sim101,EVAL-A' : '')).split(',').map(x => x.trim()).filter(Boolean),
   maxQty: Object.fromEntries(flagValue('max-qty').split(',').filter(Boolean).map(x => { const [r, n] = x.split(':'); return [r.trim(), +n]; })),
   maxTicksAway: limitFlag('max-ticks-away', 'maxTicksAway'),            // 0.3.7: 0 = no limit, as an absent config.txt line
@@ -321,13 +315,11 @@ function ticksFrom(bars, hours, r) {
     prices.forEach((p, i) => {
       const row = [+(b.t + i * 59.9 / prices.length + TICK_SHIFT).toFixed(3), p, Math.max(1, base + (i < extra ? 1 : 0))];
       if (row[0] > nowT) return;
-      if (SIDES) {
-        const prev = out.length ? out[out.length - 1] : undefined, sd = sideOf(p, prev && prev[1], prev && prev[3]);
-        if (sd[1] === 2 && row[0] < quoteFrom) sd[1] = 3;          // before the quote window: the same side, by the tick rule
-        row.push(...sd);
-        const q = TAPE_Q && row[0] >= quoteFrom ? qOf(p, prev && prev[1], sd[1]) : null;
-        if (q !== null) row.push(q);                                // 0.3.8: the 6th place, only when known
-      }
+      const prev = out.length ? out[out.length - 1] : undefined, sd = sideOf(p, prev && prev[1], prev && prev[3]);
+      if (sd[1] === 2 && row[0] < quoteFrom) sd[1] = 3;            // before the quote window: the same side, by the tick rule
+      row.push(...sd);
+      const q = row[0] >= quoteFrom ? qOf(p, prev && prev[1], sd[1]) : null;
+      if (q !== null) row.push(q);                                  // 0.3.8: the 6th place, only when known
       out.push(row);
     });
   }
@@ -372,11 +364,10 @@ class Tape {
   /* q: the Time and Sales category, null when unknown (kept as -128) */
   push(t, p, v, s, sm, q) { if (this.n === this.cap) this._grow(this.cap * 2); const i = this.n++; this.t[i] = t; this.p[i] = p; this.v[i] = v; this.s[i] = s; this.m[i] = sm; this.q[i] = q === null || q === undefined ? -128 : q; }
   row(i) {
-    if (!SIDES) return [this.t[i], this.p[i], this.v[i]];
-    return TAPE_Q && this.q[i] !== -128 ? [this.t[i], this.p[i], this.v[i], this.s[i], this.m[i], this.q[i]] : [this.t[i], this.p[i], this.v[i], this.s[i], this.m[i]];
+    return this.q[i] !== -128 ? [this.t[i], this.p[i], this.v[i], this.s[i], this.m[i], this.q[i]] : [this.t[i], this.p[i], this.v[i], this.s[i], this.m[i]];
   }
   /* plain: the served window as ChartBridge 0.3.7 sends it, [t, p, v]; 0.3.8: [t, p, v, null, null, q] for a trade with a known q */
-  plainRow(i) { return TAPE_Q && this.q[i] !== -128 ? [this.t[i], this.p[i], this.v[i], null, null, this.q[i]] : [this.t[i], this.p[i], this.v[i]]; }
+  plainRow(i) { return this.q[i] !== -128 ? [this.t[i], this.p[i], this.v[i], null, null, this.q[i]] : [this.t[i], this.p[i], this.v[i]]; }
   rows(a, b, plain) { const out = new Array(Math.max(0, b - a)); for (let i = a; i < b; i++) out[i - a] = plain ? this.plainRow(i) : this.row(i); return out; }
   /* the first trade at or after time t */
   at(t) { let lo = 0, hi = this.n; while (lo < hi) { const m = (lo + hi) >> 1; if (this.t[m] < t) lo = m + 1; else hi = m; } return lo; }
@@ -498,7 +489,6 @@ function onMessage(c, text) {
   received.types[type] = (received.types[type] || 0) + 1;
   if (type === 'subscribe') { (received.subscribes = received.subscribes || []).push({ root: m.root, days: m.days, tickHours: m.tickHours, at: Date.now() }); if (received.subscribes.length > 200) received.subscribes.shift(); }
   if (type === 'flatten' || type === 'cancel') { (received.orderActions = received.orderActions || []).push({ type, root: m.root, id: m.id, at: Date.now() }); if (received.orderActions.length > 200) received.orderActions.shift(); }
-  if (V1) { if (m.type === 'subscribe') subscribe(c, m); return; }       // 0.2 ignores everything else
   if (m.type === 'subscribe') subscribe(c, m);
   else if (DATA_037 && (m.type === 'htf' || m.type === 'weekProfile')) onDataRequest(c, m, text);
   else if (m.type === 'auth') desk.auth(c, m.token);
@@ -665,12 +655,11 @@ if (LIVE_FIRST) for (const r of Object.keys(INSTR)) { const k = tapes[r]; if (k.
 function trade(r, p) {
   if (CME_HOURS && cmeClosed(etNow())) return;          // nothing trades while CME is closed
   const [s, sm] = sideOf(p, last[r], lastSide[r]);
-  const q = TAPE_Q && last[r] !== undefined ? qOf(p, last[r], sm) : null;   // 0.3.8
+  const q = last[r] !== undefined ? qOf(p, last[r], sm) : null;   // 0.3.8
   last[r] = p; lastSide[r] = s;
   const now = Date.now();
   // u: the data's UTC time, on the exchange clock, 20 to 50 ms before ChartBridge's PC receives it (rx, on its clock)
-  const msg = { type: 'tick', root: r, t: +(etNow() + TICK_SHIFT).toFixed(3), u: now + CLOCK_OFFSET * 1000 - 20 - Math.random() * 30, rx: now + PC_CLOCK_OFFSET * 1000, p, v: 1 + Math.floor(Math.random() * 5) };
-  if (SIDES) { msg.s = s; msg.sm = sm; }
+  const msg = { type: 'tick', root: r, t: +(etNow() + TICK_SHIFT).toFixed(3), u: now + CLOCK_OFFSET * 1000 - 20 - Math.random() * 30, rx: now + PC_CLOCK_OFFSET * 1000, p, v: 1 + Math.floor(Math.random() * 5), s, sm };
   if (q !== null) msg.q = q;                          // 0.3.8: no field when unknown
   if (LIVE_FIRST) {                                   // on the tape: never older than its last trade
     const k = tapes[r];
@@ -702,8 +691,7 @@ function sceneReady(r) {
 function sceneTrade(r, t, p, v, sd) {
   last[r] = p; lastSide[r] = sd;
   const now = Date.now();
-  const msg = { type: 'tick', root: r, t, u: now + CLOCK_OFFSET * 1000 - 25, rx: now + PC_CLOCK_OFFSET * 1000, p, v };
-  if (SIDES) { msg.s = sd; msg.sm = 2; }
+  const msg = { type: 'tick', root: r, t, u: now + CLOCK_OFFSET * 1000 - 25, rx: now + PC_CLOCK_OFFSET * 1000, p, v, s: sd, sm: 2 };
   if (LIVE_FIRST) { const k = tapes[r]; if (k.n && msg.t < k.t[k.n - 1]) msg.t = k.t[k.n - 1]; k.push(msg.t, p, v, sd, 2); }
   for (const c of clients) if (c.ready && c.root === r) send(c, msg);
   desk.tick(r, p);
@@ -744,20 +732,20 @@ const fillsSample = () => {
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.json': 'application/json' };
 const server = http.createServer((req, res) => {
-  if (!V1 && !isLoopback(req.socket.remoteAddress)) { refused.notThisPc++; res.writeHead(403); return res.end(); }   // first, before any routing
+  if (!isLoopback(req.socket.remoteAddress)) { refused.notThisPc++; res.writeHead(403); return res.end(); }   // first, before any routing
   // clickjacking: ChartBridge's page may never sit in another page's frame (protocol v2)
-  if (!V1 && !ALLOW_FRAMES) { res.setHeader('X-Frame-Options', 'DENY'); res.setHeader('Content-Security-Policy', "frame-ancestors 'none'"); }
+  if (!ALLOW_FRAMES) { res.setHeader('X-Frame-Options', 'DENY'); res.setHeader('Content-Security-Policy', "frame-ancestors 'none'"); }
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (p === '/') { res.writeHead(302, { Location: '/live/' }); return res.end(); }
   if (p === '/session') received.sessionRequests++;
-  if (p === '/session' && !V1) {
+  if (p === '/session') {
     // same-origin only: no CORS headers, and (like HttpListener's localhost prefix) only Host localhost:<port>
     if (req.headers.host !== 'localhost:' + PORT) { res.writeHead(400); return res.end('bad host'); }
     if (!PIN_OFF && !pin.tokenValid(req.headers[PIN_HEADER])) { res.writeHead(403); return res.end(); }   // 0.3.2: only for a page unlocked with the PIN
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({ token: desk.token }));
   }
-  if (p.startsWith('/pin/') && !V1 && !PIN_OFF) return pin.handle(req, res, PORT);
+  if (p.startsWith('/pin/') && !PIN_OFF) return pin.handle(req, res, PORT);
   if (p.startsWith('/test/') && TEST_CONTROLS && req.method === 'POST') {
     const q = new URL(req.url, 'http://x').searchParams, r = q.get('root') || 'MNQ';
     if (p === '/test/price') { held[r] = true; trade(r, rqr(+q.get('p'), r)); }
@@ -825,8 +813,8 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({ version: 'fake-0.2.0', clockOffsetMs: 0, fillEventsDelivered: 0, fillsFoundByPolling: 0, lastPollUtcMs: Date.now(), clients: clients.size,
       desk: { postFills: false, deskUrl: flagValue('desk-url') || 'http://localhost:8800', waiting: 0, lastSendFailed: false, lastError: '' },
-      ...(V1 ? {} : { network: { loopbackOnly: true, allowOrigins: ['http://localhost:' + PORT].concat(config.allowOrigins), refusedNotThisPc: refused.notThisPc, refusedOrigin: refused.origin },
-        pin: { set: pin.isSet() } }),
+      network: { loopbackOnly: true, allowOrigins: ['http://localhost:' + PORT].concat(config.allowOrigins), refusedNotThisPc: refused.notThisPc, refusedOrigin: refused.origin },
+      pin: { set: pin.isSet() },
       accounts: ACCOUNTS.map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })),
       ...(V3 ? Object.assign(v3Diag(), desk.diag()) : {}) }));
   }
@@ -846,27 +834,27 @@ const server = http.createServer((req, res) => {
   fs.createReadStream(full).pipe(res);
 });
 server.on('upgrade', (req, sock) => {
-  if (!V1 && !isLoopback(req.socket.remoteAddress)) { refused.notThisPc++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
+  if (!isLoopback(req.socket.remoteAddress)) { refused.notThisPc++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   if (V3 && !V3_OFF.includes('bot') && req.url.split('?')[0] === '/bot') return botUpgrade(req, sock);
   if (req.url.split('?')[0] === '/bot') { sock.end('HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }   // bot off: /bot does not exist (PROTOCOL.md)
   if (/^\/agent\//.test(req.url.split('?')[0])) return agentUpgrade(req, sock);   // 0.5.0: 404 unless the id is in `agents`
   if (!req.url.startsWith('/ws')) { sock.destroy(); return; }
-  if (!V1 && !wsOriginAllowed(req.headers.origin)) { refused.origin++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
+  if (!wsOriginAllowed(req.headers.origin)) { refused.origin++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   if (TICKETS) {
     const ticket = new URL(req.url, 'http://x').searchParams.get('ticket');
     if (!ticket || ticketsUsed.has(ticket)) { received.ticketsRefused++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'); return; }
     ticketsUsed.add(ticket);
   }
   const unlock = new URL(req.url, 'http://x').searchParams.get('unlock');
-  if (!V1 && !TICKETS && !PIN_OFF && !pin.wsUnlocked(req.headers.origin, unlock, OWN)) { received.pinRefused++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
+  if (!TICKETS && !PIN_OFF && !pin.wsUnlocked(req.headers.origin, unlock, OWN)) { received.pinRefused++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   received.urls.push(req.url.replace(/([?&]unlock=)[^&]*/, '$1(hidden)'));
   const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   const c = { sock, root: null, ready: false, buf: Buffer.alloc(0), origin: req.headers.origin || null, authed: false, actions: [] };
   clients.add(c);
-  // the version as the real add-on names it in hello: 0.3.4 sends trade sides, 0.3.3 (--no-sides) does not; --version sets it
-  const hello = { type: 'hello', version: flagValue('version') || (V1 ? 'fake-0.2.1' : SIDES ? 'fake-0.3.4' : 'fake-0.3.3'), now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => helloInstrument(r, i)), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
-  if (!V1) hello.trading = desk.helloTrading(c);
+  // the version as the real add-on names it in hello (0.3.4: trade sides); --version sets it
+  const hello = { type: 'hello', version: flagValue('version') || 'fake-0.3.4', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => helloInstrument(r, i)), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
+  hello.trading = desk.helloTrading(c);
   if (liveFirstOn) { hello.features = ['liveFirst', 'profile']; hello.version = 'fake-0.3.5'; }
   if (DATA_037) {                                   // 0.3.7: the prior settlement per instrument (sample), and the new features
     for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
@@ -1011,4 +999,4 @@ function agentControl(p, q, req, res) {
   return json(404, { error: 'unknown control' });
 }
 pinReady.then(() => server.listen(PORT, '127.0.0.1', () => console.log('fake ChartBridge on http://localhost:' + PORT + '/live/' +
-  (V1 ? ' (v1, read only)' : (config.trading ? ' (trading on: ' + desk.accounts.join(', ') + ')' : ' (trading off)') + (pin.isSet() ? ' (PIN set)' : ' (no PIN set)')))));
+  (config.trading ? ' (trading on: ' + desk.accounts.join(', ') + ')' : ' (trading off)') + (pin.isSet() ? ' (PIN set)' : ' (no PIN set)'))));

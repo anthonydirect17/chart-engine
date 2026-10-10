@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.21.0 (2026-10-10): the page needs ChartBridge 0.5.2; the fallbacks for older ones go
+
+Anthony's approved cut C7 (2026-10-10), in one change with `live/COMPAT.json`'s `minChartBridge` raised from 0.3.2 to
+**0.5.2**: the PC updater installs this page only on a PC whose compiled ChartBridge is 0.5.2 or newer, so a PC on an older
+ChartBridge keeps the page it has instead of getting one it cannot talk to (every PC was sent 0.5.2 on 2026-10-09). Page
+only, no recompile.
+
+- **Orders (order path, independent review): no 200-tick bracket cap for a ChartBridge before 0.3.7.** The bracket boxes take
+  what ChartBridge takes: no limit unless `config.txt` sets `maxBracketTicks` (as with 0.3.7 and newer since 1.13.0).
+  `OrderTicket.bracketCap(maxBracketTicks)` no longer reads the version, and its version helpers (`versionOf`,
+  `versionAtLeast`) are gone with it; TradeCore keeps no version.
+- **The Agent tab:** `agentAccount` always carries `keepMode` and the LIVE question always names the mode the agent keeps
+  (until 1.19.0 an older ChartBridge got no `keepMode` and the question said Shadow). The tab no longer reads ChartBridge's
+  version: a v3 ChartBridge with no `agents` line says none is named there. `keepsMode` is gone from
+  `live/agent-core.js` (its `parseVersion` and `atLeast` stay for checks above 0.5.2).
+- **The delta pane:** every trade carries its side (ChartBridge 0.3.4 and newer), so the page no longer waits to learn whether
+  sides come, and the "Delta needs ChartBridge 0.3.4 on this PC" note, its legend line and the Data Box's "This ChartBridge
+  sends no trade sides" are gone. The engine's note stays (a host may still set one).
+- **Protocol v1 (ChartBridge 0.2):** no read-only page for it any more; comments say so.
+- **The fake bridge:** `--v1` (ChartBridge 0.2), `--no-sides` (0.3.3) and `--no-q` (0.3.7) are gone, with their tests and
+  smoke sections (the 0.3.3 delta note, the 0.3.6 bracket cap, orders-smoke's v1 page). `npm run smoke:live` is rewritten on
+  the current protocol (v2, trade sides, the PIN, trading off), not dropped: the order bar shows with trading off and its
+  account picker switches the fills, and the delta pane counts. embed-smoke's string `wsUrl` check runs on the current
+  protocol too.
+- Still in the page, to go with a later change that moves the fake bridge's defaults to 0.5.2 (most smokes run the fake as
+  0.3.4 today): the load without the served window (before 0.3.5), the "needs ChartBridge 0.3.7" notes for 4h, 1D and 1W, the
+  0.3.4.1 quote window in the delta count, and the fake's `--pin-off` and `--quote-hours`.
+
 ## ChartBridge 0.5.4 and chart 1.20.1 (2026-10-10): the agent's window can change at any time
 
 Anthony (2026-10-10, DECISION ag): "I don't want any restrictions. I will set the time and that's what the rule is ... I do

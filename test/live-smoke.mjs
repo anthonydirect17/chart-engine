@@ -1,7 +1,9 @@
-// Live page smoke test against the fake bridge (test/fake-bridge.mjs) acting as ChartBridge 0.2 (protocol v1,
-// read only), so the page is checked to work exactly as before. Order entry: test/orders-smoke.mjs.
-// Screenshots in test/out/.
+// Live page smoke test against the fake bridge (test/fake-bridge.mjs) on the current protocol (v2, trade sides, the PIN;
+// trading off, as ChartBridge starts), so the page is checked to work as before. Chart 1.21.0 rewrote it from ChartBridge
+// 0.2's protocol v1, which the page no longer serves (live/COMPAT.json: ChartBridge 0.5.2 or newer). Order entry:
+// test/orders-smoke.mjs. Sample data only; nothing reaches a broker. Screenshots in test/out/.
 import { chromium } from 'playwright';
+import { TEST_PIN, unlockIfAsked } from './smoke-pin.mjs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -11,16 +13,17 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
 fs.mkdirSync(out, { recursive: true });
 const PORT = +(process.env.LIVE_SMOKE_PORT || 8799);   // LIVE_SMOKE_PORT: another port when 8799 is taken (a shared host)
-const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v1'], { stdio: ['ignore', 'pipe', 'inherit'] });
+const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const errors = [];
 const fail = m => errors.push(m);
 const isLive = () => document.getElementById('connPill')?.textContent === 'LIVE';
-/* One account picker (1.6.0, Anthony): with no order bar (ChartBridge 0.2 here) it sits in the toolbar. */
-async function pickFillAccount(page, value) { await page.selectOption('#acctPick', value); }
+/* One account picker (1.6.0, Anthony): with protocol v2 it is the order bar's, which with trading off lists every account
+   ChartBridge knows and still switches the fills. */
+async function pickFillAccount(page, value) { await page.selectOption('#oAcct', value); }
 /* The fills marked are always the picker's account's, and nobody else's (review B1). */
 async function fillsMatchPicker(page) {
-  const r = await page.evaluate(() => ({ pick: document.getElementById('acctPick').value, visible: !document.getElementById('acctWrap').hidden,
+  const r = await page.evaluate(() => ({ pick: document.getElementById('oAcct').value, visible: !document.getElementById('obar').hidden,
     accounts: [...new Set(window.liveChart.getMarkers().map(m => m.account))] }));
   if (!r.visible || r.accounts.some(a => a !== r.pick)) fail('fills marked are not the visible picker\'s account: ' + JSON.stringify(r));
   return r;
@@ -33,18 +36,20 @@ try {
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) fail('console: ' + m.text()); });
   await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   await page.goto(`http://localhost:${PORT}/live/single.html`);
+  await unlockIfAsked(page);
   await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(1500);
-  if (!(await page.isHidden('#obar'))) fail('order bar shown with a read-only ChartBridge');
+  if (await page.isHidden('#obar') || !/off/i.test(await page.textContent('#oOff'))) fail('the order bar shows, saying trading is off: "' + await page.textContent('#oOff') + '"');
+  if (await page.isVisible('#acctWrap')) fail('a second account picker in the toolbar beside the order bar\'s');
   const legend = (await page.textContent('#legend')).replace(/\s+/g, ' ');
   if (!/MNQ 12-26/.test(legend)) fail('legend missing contract: ' + legend);
   if (!/Last fill (BUY|SELL)/.test(legend)) fail('legend missing last fill: ' + legend);
   await page.screenshot({ path: path.join(out, 'live-1m.png') });
 
-  // the account picker (toolbar, no order bar): accounts with fills first, no "All accounts"; the fills follow it
-  const opts = await page.$$eval('#acctPick option', os => os.map(o => o.value + '=' + o.textContent));
+  // the account picker (the order bar's, trading off): accounts with fills first, no "All accounts"; the fills follow it
+  const opts = await page.$$eval('#oAcct option', os => os.map(o => o.value + '=' + o.textContent));
   if (JSON.stringify(opts) !== JSON.stringify(['DEMO-EVAL=DEMO-EVAL', 'Sim101=Sim101', 'DEMO-EMPTY=DEMO-EMPTY (no fills yet)'])) fail('account options: ' + JSON.stringify(opts));
-  if (await page.inputValue('#acctPick') !== 'Sim101' || (await fillsMatchPicker(page)).accounts.join() !== 'Sim101') fail('first run: Sim101 and its fills');
+  if (await page.inputValue('#oAcct') !== 'Sim101' || (await fillsMatchPicker(page)).accounts.join() !== 'Sim101') fail('first run: Sim101 and its fills');
   await pickFillAccount(page, 'DEMO-EVAL'); await page.waitForTimeout(300);
   let fillText = await page.textContent('#lgFill');
   if (!/DEMO-EVAL/.test(fillText) || (await fillsMatchPicker(page)).accounts.join() !== 'DEMO-EVAL') fail('fills not from the chosen account: ' + fillText);
@@ -53,9 +58,10 @@ try {
   fillText = await page.textContent('#lgFill');
   if (fillText.trim() !== '' || (await fillsMatchPicker(page)).accounts.length) fail('fills shown for an account with none: ' + fillText);
   await page.reload();
+  await unlockIfAsked(page);
   await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(500);
-  if (await page.inputValue('#acctPick') !== 'DEMO-EMPTY') fail('account choice not remembered');
+  if (await page.inputValue('#oAcct') !== 'DEMO-EMPTY') fail('account choice not remembered');
   await pickFillAccount(page, 'Sim101'); await page.waitForTimeout(300);
   await fillsMatchPicker(page);
   const diag = await page.evaluate(async () => (await fetch('/diag')).json());
@@ -87,6 +93,7 @@ try {
   if (!/Range 12t traded/.test(await page.textContent('#lgTf'))) fail('traded mode label: ' + await page.textContent('#lgTf'));
   await page.screenshot({ path: path.join(out, 'live-range-traded.png') });
   await page.reload();
+  await unlockIfAsked(page);
   await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(400);
   if (await page.inputValue('#rangeMode') !== 'traded' || await page.inputValue('#rangeTicks') !== '12') fail('range mode or size not remembered: ' + await page.inputValue('#rangeMode') + ' ' + await page.inputValue('#rangeTicks'));
@@ -99,9 +106,9 @@ try {
   if (await count() !== '5/5') fail('indicators on at first run (the 1.3 four and the delta pane 1.7.0; the IB is in Levels since 1.14.0): ' + await count());
   if (!(await page.isHidden('#indPanel'))) fail('indicator menu open at load');
   if (JSON.stringify(await chips()) !== JSON.stringify(['volume+', 'vwap+', 'levels+', 'fills+'])) fail('chip strip at first run (the delta pane on, with no chip): ' + JSON.stringify(await chips()));
-  // ChartBridge 0.2 sends no trade sides: the delta pane is there, draws nothing, and says why (1.7.0)
-  const dp = await page.evaluate(() => ({ pane: window.liveChart.deltaPane(), delta: window.liveChart.getDelta(), legend: document.getElementById('lgDelta').textContent.trim() }));
-  if (!dp.pane.on || dp.delta !== null || dp.pane.note !== 'Delta needs ChartBridge 0.3.4 on this PC' || dp.legend !== dp.pane.note) fail('delta pane on ChartBridge 0.2: ' + JSON.stringify(dp));
+  // every trade carries its side (ChartBridge 0.3.4 and newer): the delta pane is on and counts, with no note (1.7.0)
+  const dp = await page.evaluate(() => ({ pane: window.liveChart.deltaPane(), delta: !!window.liveChart.getDelta(), legend: document.getElementById('lgDelta').textContent.trim() }));
+  if (!dp.pane.on || !dp.delta || dp.pane.note || !/^Delta/.test(dp.legend)) fail('the delta pane with trade sides: ' + JSON.stringify(dp));
   await page.focus('#indBtn'); await page.keyboard.press('Enter');
   if (await page.isHidden('#indPanel') || await page.getAttribute('#indBtn', 'aria-expanded') !== 'true') fail('Enter did not open the indicator menu');
   if (await page.evaluate(() => document.activeElement.id) !== 'indQ') fail('focus not on the search box when the menu opens');
@@ -194,6 +201,7 @@ try {
   // saved for the pane: everything comes back after a reload
   const before = await page.evaluate(() => localStorage.getItem('live-indicators-v2'));
   await page.reload();
+  await unlockIfAsked(page);
   await page.waitForFunction(isLive, null, { timeout: 15000 });
   await page.waitForTimeout(400);
   const layers = await L();
@@ -237,6 +245,7 @@ try {
   if (saved.length !== 2) fail('expected 2 saved drawings, got ' + saved.length);
   await page.screenshot({ path: path.join(out, 'live-drawings.png') });
   await page.reload();
+  await unlockIfAsked(page);
   await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   saved = await page.evaluate(() => JSON.parse(localStorage.getItem('live-drawings-v1-MNQ') || '[]'));
   if (saved.length !== 2) fail('drawings lost on reload: ' + saved.length);
@@ -256,13 +265,14 @@ try {
 
   // less tick history than asked (review N5): a quiet note says range bars start mid-session, exactly when they do
   {
-    const short = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT + 1), '--v1', '--tick-hours-max=2'], { stdio: ['ignore', 'pipe', 'inherit'] });
+    const short = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT + 1), '--test-pin=' + TEST_PIN, '--tick-hours-max=2'], { stdio: ['ignore', 'pipe', 'inherit'] });
     await new Promise(r => short.stdout.once('data', r));
     try {
       const p2 = await browser.newPage({ viewport: { width: 1440, height: 860 } });
       p2.on('pageerror', e => fail('short history pageerror: ' + e.message));
       await p2.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
       await p2.goto(`http://localhost:${PORT + 1}/live/single.html`);
+      await unlockIfAsked(p2);
       await p2.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
       if (await p2.getAttribute('#tfSeg >> text="Range"', 'aria-pressed') !== 'true') { await p2.click('#tfSeg >> text="Range"'); await p2.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 }); }
       await p2.waitForTimeout(500);
@@ -279,6 +289,7 @@ try {
   phone.on('pageerror', e => fail('phone pageerror: ' + e.message));
   await phone.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   await phone.goto(`http://localhost:${PORT}/live/single.html`);
+  await unlockIfAsked(phone);
   await phone.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   if (await phone.evaluate(() => document.documentElement.scrollWidth) > 400) fail('phone scrolls sideways');
   await phone.screenshot({ path: path.join(out, 'live-phone.png') });
