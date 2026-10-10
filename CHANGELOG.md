@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.19.1 (2026-10-10): quality round 1
+
+A small fix found by clicking every control of the workspace against the fake bridge (Anthony 2026-10-09: "Make sure every
+button works"). Page only, no recompile. Nothing that decides, sizes, sends, changes or cancels an order changes: the fix is
+in how Settings saves The Desk's hotkeys document.
+
+- **Two changes to The Desk's hotkeys in a row are both saved.** The hotkeys document is saved whole with the rev last
+  read, so a second change made before the first was saved (Limit then Stop in Entry types, or two keys set quickly) went
+  with the old rev; The Desk refused it as if another PC had saved first ("Not saved: another PC saved the hotkeys first"),
+  and that change was lost. The saves now go one at a time, each built from the document the save before it left, and each
+  is checked again then.
+- Tests: `npm run smoke:quality` (`test/quality-smoke.mjs`: Limit then Stop, and Buy MKT's key then Sell MKT's key, each
+  twice, with The Desk's saves slowed to 400 ms as from another PC; it fails on 1.19.0 and passes here).
+
 ## 1.19.0 (2026-10-08): Kit version 1
 
 A shared look for Anthony's trading apps, as Anthony approved it on 2026-10-08 (`docs/KIT.md`). It is added alongside the
