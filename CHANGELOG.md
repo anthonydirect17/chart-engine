@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased: Layout 5 polish (after 1.23.0)
+## 1.23.1 (2026-10-14): Layout 5 polish
+
+Page only, no recompile (ChartBridge 0.5.2 as for 1.23.0). After 1.23.0 (#43).
 
 - **Change the rules in the Rules card's header** (the review of #43, LOW): at 1366 x 768 the card's lines have about 69 px and
   "more below" covered the button, so it was reached only by scrolling inside the card. It now sits at the right of the card's
