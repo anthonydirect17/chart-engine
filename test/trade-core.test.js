@@ -22,6 +22,7 @@ function rig(opts) {
     later: (fn, ms) => { timers.push({ id: ++tid, at: clock + ms, fn }); return tid; },
     changed: () => { R.renders++; }, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {},
     batch: () => {}, unsent: () => { R.unsent++; }, armBlocked: () => R.armedBlocked, destroyed: () => false, now: () => clock,
+    framed: !!o.framed,
   };
   const core = TC.create(env);
   R.core = core;
@@ -266,4 +267,73 @@ test('ChartBridge 0.5.1: a stop placed while the sign-in list was built, left ou
   R.core.message(Object.assign({}, y, { price: 94 }));         // Anthony moves it
   assert.equal(R.notes.length, 1, R.notes.join(' / '));
   assert.match(R.notes[0], /^Moved SELL STP 1 @ 94\.00/);
+});
+
+test('1.22.0 (F2 again): a moved entry is drawn at the price asked for until ChartBridge answers, its planned lines with it', () => {
+  const R = rig();
+  R.on(); R.core.setArmed(true);
+  const e = { type: 'order', id: 'e1', account: 'Sim101', root: 'MNQ', name: 'MNQ 12-26', side: 'buy', kind: 'limit', qty: 1, price: 98, state: 'working', filled: 0, role: 'entry', planned: { stopTicks: 16, targetTicks: 24 } };
+  R.core.message(e);
+  const entryOf = () => R.core.chartOrders('Sim101', 'MNQ').find(x => x.id === 'e1');
+  assert.equal(entryOf().movePending, undefined, 'nothing waits yet');
+  R.core.moveOrder('e1', 98.25);
+  assert.deepEqual(R.sent.pop(), { type: 'change', id: 'e1', price: 98.25 });
+  assert.equal(entryOf().movePending, 98.25, 'drawn where it was dropped while the move waits');
+  assert.equal(entryOf().price, 98, 'the order itself stays as ChartBridge last said');
+  // the answer to a plan sent meanwhile still carries the old price: the move still waits
+  R.core.message(Object.assign({}, e, { planned: { stopTicks: 20, targetTicks: 24 } }));
+  assert.equal(entryOf().movePending, 98.25, 'an order message at the old price (after a plan) does not end the wait');
+  // ChartBridge's answer at the new price: drawn as it says
+  R.core.message(Object.assign({}, e, { price: 98.25, planned: { stopTicks: 20, targetTicks: 24 } }));
+  assert.equal(entryOf().movePending, undefined, 'answered: no longer waiting');
+  assert.equal(entryOf().price, 98.25);
+  // a refused move: the line goes back at once
+  R.advance(500);
+  R.core.moveOrder('e1', 97.5);
+  assert.equal(entryOf().movePending, 97.5);
+  R.core.message({ type: 'reject', id: 'e1', reason: 'price too far' });
+  assert.equal(entryOf().movePending, undefined, 'refused: drawn at the confirmed price again');
+  // no answer at all: drawn as ChartBridge last said after 5 s, and the charts are redrawn then
+  R.advance(500);
+  R.core.moveOrder('e1', 97.75);
+  assert.equal(entryOf().movePending, 97.75);
+  const renders = R.renders;
+  R.advance(4900);
+  assert.equal(entryOf().movePending, 97.75, 'still waiting at 4.9 s');
+  R.advance(200);
+  assert.equal(entryOf().movePending, undefined, 'given up after 5 s');
+  assert.ok(R.renders > renders, 'the charts are redrawn when the wait ends');
+  // a move that is not sent (Armed off) never waits; a dropped connection or a new orders list ends every wait
+  R.core.setArmed(false);
+  R.core.moveOrder('e1', 97);
+  assert.equal(entryOf().movePending, undefined, 'not sent: nothing waits');
+  R.core.setArmed(true); R.advance(500);
+  R.core.moveOrder('e1', 97);
+  R.core.message({ type: 'orders', list: [Object.assign({}, e, { price: 98.25 })] });
+  assert.equal(entryOf().movePending, undefined, 'a new orders list: nothing waits');
+});
+
+test('a framed TradeCore never arms and never sends an order action, even if trading came on', () => {
+  const R = rig({ framed: true });
+  assert.equal(R.core.framed, true);
+  R.core.hello({ trading: { enabled: true, accounts: ['Sim101'], maxQty: { MNQ: 5 } } });
+  assert.equal(R.core.TR.enabled, false, 'trading stays off in a frame');
+  assert.match(R.core.TR.reason, /inside another page/);
+  R.core.setArmed(true);
+  assert.equal(R.core.TR.armed, false, 'never arms');
+  R.core.sendOrder('buy', 'market', null);
+  assert.match(R.notes.pop(), /inside another page/);
+  // the frame guard holds on its own: with trading forced on, Armed and an account, still nothing goes
+  Object.assign(R.core.TR, { enabled: true, armed: true, account: 'Sim101' });
+  R.core.message({ type: 'order', id: 'f1', account: 'Sim101', root: 'MNQ', name: 'MNQ 12-26', side: 'buy', kind: 'limit', qty: 1, price: 98, state: 'working', filled: 0, role: 'entry' });
+  R.core.sendOrder('buy', 'market', null); R.advance(500);
+  R.core.placeAt('sell', 101); R.advance(500);
+  R.core.moveOrder('f1', 97); R.advance(500);
+  R.core.cancelOrder('f1'); R.advance(500);
+  R.core.flattenHere(); R.advance(500);
+  R.core.flattenAll(); R.advance(500);
+  assert.equal(R.core.flattenAgent('Sim101', 'MNQ'), false);
+  assert.deepEqual(R.sent.filter(m => m.type !== 'auth'), [], 'no order action sent: ' + JSON.stringify(R.sent));
+  assert.ok(!R.sent.some(m => m.type === 'auth'), 'no sign-in from a frame');
+  assert.ok(R.notes.filter(n => /inside another page/.test(n)).length >= 6, R.notes.join(' / '));
 });

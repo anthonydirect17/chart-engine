@@ -170,9 +170,8 @@ try {
   check(JSON.stringify(strip(await sent(page, ['plan']))) === JSON.stringify([{ type: 'plan', id, stopTicks: 16 }]), 'the planned stop dragged to 16 ticks: plan stopTicks 16');
   await until(async () => (await state()).orders.find(o => o.id === id).planned.stopTicks === 16, 'ChartBridge keeps 16');
   // F2 review: a planned line dragged while the entry's move still waits for its answer sends the distance the chart
-  // showed. The workspace redraws its charts from the ticket's orders after every action, so while the move waits the
-  // chart shows the entry at the price ChartBridge last confirmed (L - 7) and its planned stop 16 ticks under that; the
-  // stop dragged to L - 12 is 20 ticks under the entry as drawn, and 20 is what goes (not 24 from the moved entry, L - 6)
+  // showed, from the moved entry (L - 6), not from the price ChartBridge last confirmed (L - 7). 1.22.0: the workspace's
+  // ticket redraws its charts after every action, so it keeps drawing a waiting move at the price asked for (movePending)
   await clear(page); await wait(450);
   await page.evaluate(() => { window.__holdChanges = true; });
   h = await hOf(id);
@@ -180,15 +179,16 @@ try {
   await page.mouse.move(box.x + h.box.x + h.box.w / 2, box.y + await yAt(L - 6), { steps: 6 }); await page.mouse.up(); await wait(300);
   await until(async () => (await sent(page, ['change'])).length === 1, 'the entry move sent (held)');
   const midOf = async i => { const g = await hOf(i); return g.box.y + g.box.h / 2; };
-  check(Math.abs(await midOf(id) - await yAt(L - 7)) < 1.5 && Math.abs(await midOf(id + ':sl') - await yAt(L - 7 - 4)) < 1.5, 'the entry moved and waiting for its answer: the chart draws it at L - 7, as ChartBridge last confirmed, and its planned stop 16 ticks under that');
+  check(Math.abs(await midOf(id) - await yAt(L - 6)) < 1.5 && Math.abs(await midOf(id + ':sl') - await yAt(L - 6 - 4)) < 1.5, 'the entry moved and waiting for its answer: drawn at the moved price (L - 6), its planned stop 16 ticks under it');
   await wait(450);
-  await dragLine(id + ':sl', L - 7 - 5);                                           // 20 ticks under the entry as drawn
+  await dragLine(id + ':sl', L - 6 - 5);                                           // 20 ticks under the moved entry (16 under the old)
   await until(async () => (await sent(page, ['plan'])).length === 1, 'a plan while the entry move waits');
   check(JSON.stringify(strip(await sent(page, ['plan']))) === JSON.stringify([{ type: 'plan', id, stopTicks: 20 }]), 'dragged while the entry move waits: plan stopTicks 20, the distance the chart showed (' + JSON.stringify(strip(await sent(page, ['plan']))) + ' ' + JSON.stringify(await notes(page)) + ')');
+  check(Math.abs(await midOf(id) - await yAt(L - 6)) < 1.5, 'still waiting: the entry stays drawn at L - 6 after the plan went');
   await page.evaluate(() => window.__release());
   await until(async () => { const o = (await state()).orders.find(x => x.id === id); return o.price === L - 6 && o.planned.stopTicks === 20; }, 'the entry at L - 6 with its stop 20 ticks under');
-  ls = await until(async () => { const l = await lines(); return l.find(o => o.id === id + ':sl' && o.price === L - 6 - 5) ? l : null; }, 'the planned stop 20 ticks under the moved entry');
-  check(!!ls, 'after the answer the planned stop is 20 ticks under the entry at L - 6 (L - 11)');
+  ls = await until(async () => { const l = await lines(); return l.find(o => o.id === id + ':sl' && o.price === L - 6 - 5) ? l : null; }, 'the planned stop where it was dropped');
+  check(!!ls, 'after the answer the planned stop is where Anthony dropped it (L - 11)');
   await clear(page); await wait(450);
   await dragLine(id + ':sl', L - 7 + 2);                                           // across the entry
   check(!(await sent(page, ['plan'])).length && (await notes(page)).some(t => /a stop goes on the loss side of the entry/.test(t)), 'the stop dragged across the entry: refused on the page, nothing sent');

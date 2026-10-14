@@ -35,7 +35,7 @@ example `ws://localhost:8765` and its own relay), and `style-src` must allow inl
 
 ```js
 const pane = ChartLive.mount(document.getElementById('live-pane'), {
-  wsUrl: () => pickUrl(),          // required; a string, or a function returning a string or a promise of one
+  wsUrl: 'ws://localhost:8765/ws', // required; a string
   paneId: 'main',                  // this chart's indicator choices
   storagePrefix: 'desk:',          // this host's own settings
   onStatus: s => showState(s.state),

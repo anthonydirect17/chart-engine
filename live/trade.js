@@ -64,6 +64,7 @@ const CANCEL_CHUNK = 6, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;
 const BE_LIMIT = 10;
 const RATE_REFUSAL = /order actions/i;
 const FLATTEN_KEEP = 3000;                                         // a refusal this soon after a Flatten is about it
+const MOVE_WAIT = 5000;                                            // 1.22.0: a moved order drawn at the price asked for, this long at most
 
 function create(env) {
   const LP = env.LP, prefs = env.prefs, ROOTS = LP.ROOTS;
@@ -90,6 +91,12 @@ function create(env) {
        managed strategies by entry id (`managed`), and the last Merge result per 'account|root' (`merge`). This connection
        stays a v2 page (it never sends `client`); those three come from the window's v3 connection (live/accounts.js) */
     switches: OS ? OS.cleanSwitches(null) : {}, managed: new Map(), merges: new Map(),
+    /* 1.22.0 (F2 again, the workspace): an order dragged to a new price, id -> { price asked for }, until ChartBridge
+       answers: an order message at that price, or the order finished, or a reject naming it, or MOVE_WAIT ms at most (an
+       order message after a `plan` still carries the old price, so it does not end the wait). The charts draw it there
+       meanwhile (chartOrders' movePending), as the single chart page's engine did, so a planned line dragged then is
+       measured from where the entry was dropped. */
+    moving: new Map(),
   };
   const sw = k => !!OS && TR.switches[k] === true;
   let v3sw = null;                                    // the switches the window's v3 connection last read (null: none)
@@ -168,7 +175,7 @@ function create(env) {
     TR.signInStarted = false;
     if (!TR.v2) return;
     batchStop(() => true, 'the connection to ChartBridge dropped');   // before the orders are cleared: count what was still working
-    TR.enabled = false; TR.reason = reason; TR.orders.clear(); announced.clear(); TR.positions.clear();
+    TR.enabled = false; TR.reason = reason; TR.orders.clear(); announced.clear(); TR.positions.clear(); TR.moving.clear();
     if (OS) TR.switches = OS.cleanSwitches(null);
     TR.managed.clear(); TR.merges.clear();                         // ChartBridge sends the managed ones again after auth
     const was = TR.account;
@@ -187,6 +194,8 @@ function create(env) {
     const prev = announced.get(o.id) || null;
     const ev = OT.orderEvent(o, prev, fmt);
     if (OT.isWorking(o)) TR.orders.set(o.id, o); else TR.orders.delete(o.id);
+    const mv = TR.moving.get(o.id);
+    if (mv && (!OT.isWorking(o) || o.price === mv.price)) TR.moving.delete(o.id);   // ChartBridge answered: drawn as it says
     if (!OT.isWorking(o)) announced.delete(o.id);
     else if (o.again !== true || !announced.has(o.id)) announced.set(o.id, o);   // an again re-send only seeds a missing entry (after a new orders list)
     if (ev) flash(ev.text, ev.level === 'error' ? 'error' : '');
@@ -202,10 +211,11 @@ function create(env) {
   function message(m) {
     switch (m && m.type) {
       case 'trading': applyTrading(m); if (!TR.signInStarted) signIn(); return true;
-      case 'orders': TR.orders.clear(); announced.clear(); for (const o of m.list || []) if (served(o.root)) { TR.orders.set(o.id, o); announced.set(o.id, o); } unsentCheck(); env.changed(); return true;
+      case 'orders': TR.orders.clear(); announced.clear(); TR.moving.clear(); for (const o of m.list || []) if (served(o.root)) { TR.orders.set(o.id, o); announced.set(o.id, o); } unsentCheck(); env.changed(); return true;
       case 'order': onOrder(m); return true;
       case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); env.changed(); if (env.positionChanged) env.positionChanged(); return true;
-      case 'reject': if (!onRefused(m)) flash('Refused by ChartBridge: ' + m.reason, 'error'); env.changed(); return true;
+      case 'reject': if (typeof m.id === 'string') TR.moving.delete(m.id);   // a refused move: the line goes back
+        if (!onRefused(m)) flash('Refused by ChartBridge: ' + m.reason, 'error'); env.changed(); return true;
       /* 1.16.0 (protocol v3): a managed strategy's state, and a Merge's result (each shown plainly by the host) */
       case 'managed': if (!OS || typeof m.id !== 'string') return true;
         if (m.state === 'done') TR.managed.delete(m.id); else TR.managed.set(m.id, m);
@@ -676,6 +686,11 @@ function create(env) {
        it (Anthony 2026-09-30), and no change goes out that could cross its cancel. The line goes back. */
     if (inCancelAll(id)) { env.changed(); flash('Not moved: order ' + id + ' is in the Cancel all under way, which cancels it.', 'warn'); return; }
     send({ type: 'change', id, price });
+    if (open()) {                                                  // drawn at the dropped price until the answer (F2)
+      const mv = { price };
+      TR.moving.set(id, mv);
+      later(() => { if (TR.moving.get(id) === mv) { TR.moving.delete(id); env.changed(); } }, MOVE_WAIT);
+    }
     flash('Moving order ' + id + ' to ' + fmt(price), '');
   }
   function cancelOrder(id) {
@@ -728,13 +743,17 @@ function create(env) {
     sendPlan(o, which, t, 'Planned ' + whichName(which) + ' added to order ' + o.id + ': ' + t + ' ticks from the fill.');
   }
   /** What a chart of root r shows for one account: the working orders, each resting entry's planned lines (0.3.8), and on
-      an entry what can be added ("+SL", "+TP"). */
+      an entry what can be added ("+SL", "+TP"); an order whose move waits for its answer carries the price asked for
+      (movePending, 1.22.0). */
   function chartOrders(account, r) {
     const out = [];
     for (const o of working(account, r)) {
       // 1.16.0: a strategy's entry has no planned lines to drag (ChartBridge refuses `plan` on it: cancel and place again)
       const pl = o.by === 'strategy' ? { lines: [], adds: [] } : OT.plannedLines(o, tickOf(r));
-      out.push(pl.adds.length && o.planned ? Object.assign({}, o, { adds: pl.adds }) : o);
+      const extra = {};
+      if (pl.adds.length && o.planned) extra.adds = pl.adds;
+      if (TR.moving.has(o.id)) extra.movePending = TR.moving.get(o.id).price;   // the engine draws it (and its planned lines) there
+      out.push(Object.keys(extra).length ? Object.assign({}, o, extra) : o);
       for (const l of pl.lines) out.push(l);
     }
     return out;
