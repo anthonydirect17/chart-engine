@@ -2804,8 +2804,8 @@ breaks. None is nobody's account: no clash with the bot, the copier or another a
 
 The order ticket (chart 1.25.0): its picker offers None first; with None nothing is sent ("No account (None): nothing was
 sent. Pick an account to trade.") and Armed does not come on. `LivePrefs.orderAccount` has no Sim101 fallback: a last pick
-ChartBridge does not allow now gives None with the note naming it. The window's Flatten all never needs the ticket's account:
-on None it covers every trade account with a position or a working order. 0.5.7: the sign-in `orders` list carries
+ChartBridge does not allow now gives None with the note naming it. On None the ticket's Flatten all sends nothing either (pick
+an account). 0.5.7: the sign-in `orders` list carries
 `positions`, how many `position` messages follow it, so a page knows when its snapshot of orders and positions is whole.
 
 **The daily reset.** Once per day in the 17:00 to 18:00 ET break (New York time, daylight saving included), ChartBridge puts

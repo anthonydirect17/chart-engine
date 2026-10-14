@@ -402,15 +402,15 @@ test('review of #47: the sign-in snapshot is whole only once the orders list and
   assert.equal(R.core.TR.snapReady, false, 'a drop: not whole until the next sign-in snapshot');
 });
 
-test('review of #47: Flatten all never needs the ticket\'s account: on None it covers every trade account with a position or a working order', () => {
+test('review of #47: on None the ticket\'s Flatten all sends nothing and says to pick an account, as every ticket action', () => {
   const R = rig({ wanted: '' });
   R.on();
   assert.equal(R.core.TR.account, '');
   R.pos('Sim101', 'MNQ', 1); R.pos('EVAL-1', 'NQ', -2);
   R.core.flattenAll();
-  assert.deepEqual(R.flattens().sort(), ['EVAL-1 NQ', 'Sim101 MNQ']);
-  assert.match(R.notes.pop(), /^Flatten all sent for every trade account: Sim101 MNQ, EVAL-1 NQ \(cancel their orders, close their positions at market\)\./);
-  R.core.setArmed(true);
-  R.core.sendOrder('buy', 'market', null);
-  assert.match(R.notes.pop(), /No account \(None\): nothing was sent/, 'every other action still needs an account');
+  assert.deepEqual(R.flattens(), [], 'nothing sent');
+  assert.match(R.notes.pop(), /No account \(None\): nothing was sent\. Pick an account to trade\./);
+  R.core.pickAccount('Sim101');
+  R.core.flattenAll();
+  assert.deepEqual(R.flattens(), ['Sim101 MNQ'], 'with an account picked: that account only');
 });

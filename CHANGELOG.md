@@ -41,8 +41,8 @@ older ChartBridge keeps the page it has, and the PC updater waits until ChartBri
   - The ticket's daily reset waited 3 s after trading came on, not for ChartBridge's snapshot: on a slow reconnect it could
     put the ticket on None while its account held a position. It now waits for the sign-in snapshot of orders and positions
     (ChartBridge 0.5.7's `orders` list says how many `position` messages follow it: `positions`), never a timer, and never
-    resets while that account has a position or a working order. The window's Flatten all never needs the ticket's account:
-    on None it covers every trade account with a position or a working order (every other ticket action still needs one).
+    resets while that account has a position or a working order. On None the ticket's Flatten all sends nothing and says to
+    pick an account, as every ticket action (whether it should cover every trade account then is Anthony's to decide).
   - The bot's None from the page and its daily reset take the bot's PlaceGate (as the agent's do), in Place's lock order.
   - The lost-trade hold is only for a flatten job that owns the pair (one that does not never says NOT FLAT) and lasts 30 s
     at most; then the error is raised and repeats every 60 s as before.

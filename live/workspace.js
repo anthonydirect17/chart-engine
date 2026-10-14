@@ -873,7 +873,7 @@ function syncTitle() {
   if (document.title !== t) document.title = t;
 }
 function renderFlat() {
-  const b = $('wsFlat'), a = ticketAccount() || 'every trade account', on = core.TR.enabled;   // review of #47: never needs the ticket's account (None: every trade account)
+  const b = $('wsFlat'), a = ticketAccount(), on = core.TR.enabled && !!a;   // None: off, pick an account (as every ticket action)
   b.disabled = !on;
   const t = on ? 'Flatten all on ' + a + ': every instrument with a position or a working order, cancel its orders and close its position at market. Works with Armed off.'
     : 'Flatten all: ' + (core.TR.reason || 'not connected to ChartBridge yet');

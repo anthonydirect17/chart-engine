@@ -242,12 +242,12 @@ function create(env) {
 
   /* Everything that sends an order action goes through here: trading enabled, Armed on, connected, data loaded.
      `armed` false (Flatten and Flatten all only; Anthony 2026-10-01, "Flatten is never blocked"): every check but Armed. */
-  function ready(armed, anyAccount) {   // anyAccount: Flatten all, which never needs the ticket's account (review of #47)
+  function ready(armed) {
     if (FRAMED) { flash(FRAMED_REASON, 'error'); return false; }
     if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
     if (!TR.armed && armed !== false) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
     if (!open()) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
-    if (!TR.account && !anyAccount) { flash('No account (None): nothing was sent. Pick an account to trade.', 'warn'); return false; }   // 1.8.0: never blocked by a view loading; DECISION 2026-10-14e: None sends nothing
+    if (!TR.account) { flash('No account (None): nothing was sent. Pick an account to trade.', 'warn'); return false; }   // 1.8.0: never blocked by a view loading; DECISION 2026-10-14e: None sends nothing
     if (env.pickerAccount() !== TR.account) { env.syncAccounts(); flash('Nothing was sent: the account shown was not the order account. The picker is back on ' + TR.account + '; click again to act on ' + TR.account + '.', 'error'); return false; }
     return true;
   }
@@ -649,16 +649,16 @@ function create(env) {
    * which were not sent. A press while a run is under way sends nothing.
    */
   let faRun = null;                                                // { account (what the notes name), queue: [{ a, r }], sent: [{ a, r }], one }
-  /* Review of #47: Flatten all never needs the ticket's account. With the ticket on an account, that account, as before; on
-     None (DECISION 2026-10-14e), every trade account with a position or a working order. */
+  /* Flatten all acts on the ticket's account. On None (DECISION 2026-10-14e) it sends nothing and says to pick an account, as
+     every ticket action does (whether it should cover every trade account then is Anthony's to decide). */
   const faName = (run, x) => (run.one ? x.r : x.a + ' ' + x.r);
   function flattenAll() {
     try { dropNoStop(); flattened(null); } catch (e) { /* never in the way of the flatten */ }
-    if (!ready(false, true)) return;
-    const one = !!TR.account, account = one ? TR.account : 'every trade account';
+    if (!ready(false)) return;
+    const one = true, account = TR.account;
     if (faRun) { flash('Flatten all under way on ' + faRun.account + ': ' + faRun.queue.map(x => faName(faRun, x)).join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
     const items = [];
-    for (const a of one ? [TR.account] : TR.accounts) for (const r of OT.flattenAllRoots([...TR.orders.values()], TR.positions, a, served, ROOTS)) items.push({ a, r });
+    for (const a of [account]) for (const r of OT.flattenAllRoots([...TR.orders.values()], TR.positions, a, served, ROOTS)) items.push({ a, r });
     if (!items.length) { flash('Flatten all: no position or working order on ' + account + '. Nothing was sent.', ''); return; }
     const t = now();
     if (!sameAction('flattenAll|' + account, t)) return;
