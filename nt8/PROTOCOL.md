@@ -199,7 +199,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields | when |
 |---|---|---|
-| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`) | on connect |
+| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`), `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
 | `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places); 0.3.7 sends `[t,p,v]` again; since 0.3.8 a trade with a known Time and Sales category is `[t,p,v,null,null,q]` (see Time and Sales category), `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root`, `sub` (0.3.3) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
@@ -207,6 +207,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 | `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side), since 0.3.8 `q` (Time and Sales category, see there; absent when unknown) | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
+| `pcClock` | the fields of hello's `pcClock` (0.5.6, see Delay readout): `checked`, then `offsetMs`, `rttMs`, `atUtcMs`, `server`, or `why`, `server` | to every page when a check of this PC's clock answers (every 5 minutes), when it changes to no answer, and when the PC clock steps by more than 250 ms; in the order lane, so after hello |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page; since 0.3.7 also a refused `htf` or `weekProfile` request (`warn`, "ChartBridge refused a htf message: why") |
 | `settlement` | `root`, `p` (null when none is known), `date` (the trading date it settles, `yyyy-MM-dd`) (0.3.7) | when the prior settlement changes: a value for that date comes in, or a new session starts at 18:00 ET and the day before becomes the prior |
 | `htf` | `root`, `tf` (`4h`, `1D`, `1W`), `id` (the request's, or null), `name` (the contract, or null with an error), `bars`: `[[t,o,h,l,c,v], ...]` oldest first, the last one forming, `error` (null, or why there are no bars) (0.3.7) | the answer to an `htf` request |
@@ -800,6 +801,37 @@ For each live tick the page shows two numbers:
   Tradovate and the PC clock offset from the exchange);
 - **local**: page receive time minus `rx`, the add-on to chart hop on this PC.
 
+### This PC's clock against a time server (0.5.6)
+
+A PC clock that runs ahead reads as late data: `rx` is stamped by this PC's clock (2026-10-12, the laptop showed "feed 2435
+ms", and 122 ms after a Windows time sync). So ChartBridge 0.5.6 asks a time server what time it is every 5 minutes (the first
+3 s after a start) and tells the pages how far this PC's clock is off. It only measures: it never sets the clock and never
+changes a setting of Windows or NinjaTrader.
+
+- **The check** (`ChartBridgeClock` in `ChartBridge.cs`): SNTP (RFC 4330), one 48-byte UDP question to port 123 of
+  `config.txt`'s `timeServer` (default `time.windows.com`, the server Windows time sync uses; `timeServer = off`: no check)
+  and its answer, on a background thread of its own (never NinjaTrader's or the thread pool's). The name lookup and the answer
+  each get 2 s. The times are ChartBridge's clock (`ChartBridgeTime.NowUtcMs`, the one `rx` is stamped with): t0 the question
+  sent, t1 the server's receipt, t2 its answer, t3 the answer received; offset = ((t1 - t0) + (t2 - t3)) / 2 (the server's
+  time minus this PC's: negative when the PC runs ahead), round trip = (t3 - t0) - (t2 - t1). An answer that is not a
+  server's (mode 4), that turns the question down (stratum 0, a kiss code), whose server says its own clock is not set (leap
+  3), that does not echo the question's time, or whose times do not add up, is no answer.
+- **`pcClock`**, in `hello` and as the `pcClock` message: `{"checked":true,"offsetMs":-2310.4,"rttMs":38.2,"atUtcMs":...,
+  "server":"time.windows.com"}` or `{"checked":false,"why":"no answer from time.windows.com (no answer within 2 s: offline,
+  or UDP port 123 blocked)","server":"time.windows.com"}` (`why` is also `not checked yet` before the first answer, and `the
+  time check is off in config.txt (timeServer = off)` with `server` null). With no answer the last answer is kept for 30
+  minutes, then the state is not checked; nothing else changes. When ChartBridge's clock follows a step of the PC clock
+  (`ChartBridgeTime`, more than 50 ms), the offset held moves with it at once; a step over 250 ms is checked again at once.
+- **The page** (chart 1.24.0): with `checked` true the feed delay shows split, `feed 2435 ms = clock +2310 ms, real 125 ms`
+  (the clock's part is `-offsetMs`, the PC ahead positive; the real delay `rx - u + offsetMs`; each part rounded first so they
+  add up), "PC clock off by 2.3 s" from 0.5 s off, and the feed's amber (from 1 s) and red (from 3 s) only for the real delay.
+  With `checked` false the feed shows as before and its tooltip says why the clock was not checked; with no `pcClock` (a
+  ChartBridge before 0.5.6) exactly as before.
+- **Output window**: a line when the first check answers or not, when that changes, and when the clock goes 500 ms off or
+  back; never one per check.
+- **`/diag` `pcClock`**: the same fields plus `checks`, `fails`, `lastError`, `lastTryUtcMs`, `everyMs`, `timeoutMs`,
+  `warnMs`. (`clockOffsetMs` is another thing: ChartBridge's own clock against this PC's.)
+
 ## Fills (0.2.0)
 
 ChartBridge learns about a fill two ways: the account's `ExecutionUpdate` event, and a poll of every
@@ -815,7 +847,7 @@ Order and position events are counted for `/diag` only. ChartBridge never acts o
 
 JSON: `version`; `network` (0.3.1: see Network access); `pin` (0.3.2: `{"set": bool}`, see PIN); `clockOffsetMs` (PC clock minus ChartBridge's clock, near 0 once the clock has
 re-anchored; the clock is rechecked every 5 seconds and follows the PC clock when they differ by more
-than 50 ms); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
+than 50 ms); `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
 session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`, `lastSendFailed`,
 `lastError`, `setAside`, `rejectedByDesk`); `bars` (0.3.6, see Daily bars to The Desk: `enabled`, `state` (`off`, `starting: ...`, `idle`,
 `asking NinjaTrader: <session contract>`, `waiting for the gate: <why>`, `waiting: regular trading hours ...`, `waiting:

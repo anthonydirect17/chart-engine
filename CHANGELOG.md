@@ -1,5 +1,48 @@
 # Changelog
 
+## ChartBridge 0.5.6 and chart 1.24.0 (2026-10-14): feed delay split, PC clock against real data delay
+
+Build list #77, Anthony's spec: "1) ChartBridge checks this PC's clock against an internet time server every few minutes,
+and the header splits the number: 'feed 2435 ms = clock +2310 ms, real 125 ms', plus a 'PC clock off by N s' warning. 2) The
+amber or red warning only for a real data delay (for example ship Wi-Fi)." The feed delay is ChartBridge's receipt of a trade
+(`rx`, this PC's clock) minus the exchange's time on it (`u`), so a PC clock that runs ahead read as late data (2026-10-12:
+the laptop showed "feed 2435 ms", and 122 ms after a Windows time sync). **The split needs ChartBridge 0.5.6 (a recompile,
+update-pc stages it); the page works with ChartBridge 0.5.2 to 0.5.5 exactly as before** (`minChartBridge` stays 0.5.2).
+
+- **ChartBridge 0.5.6: the time check** (`ChartBridgeClock`, in `ChartBridge.cs`; no new file, no new dependency). Every 5
+  minutes (the first 3 s after a start) one SNTP question (UDP port 123) to `config.txt`'s `timeServer`, default
+  `time.windows.com` (the server Windows time sync uses; `timeServer = off` turns it off), on a background thread of its own,
+  never NinjaTrader's or the thread pool's; the name lookup and the answer each get 2 s. Offset = ((t1 - t0) + (t2 - t3)) / 2,
+  the server's time minus this PC's, timed on the clock `rx` is stamped with; an answer that is not a server's, turns the
+  question down, comes from a server whose own clock is not set, does not echo the question, or does not add up, is no answer.
+  **It only measures: it never sets the clock and never changes a setting** (a test checks no add-on file can). No answer
+  (offline, a firewall): the last answer is kept for 30 minutes, then the state is "not checked" with why; nothing else changes.
+  When ChartBridge follows a step of the PC clock (a Windows time sync), the offset held moves with it at once and a step over
+  250 ms is checked again at once, so the split never shows the old clock for 5 minutes.
+- **What it tells:** `pcClock` in `hello` and the new `pcClock` message to every page (in the order lane, after hello):
+  `{checked: true, offsetMs, rttMs, atUtcMs, server}` or `{checked: false, why, server}`; `/diag` `pcClock` adds the counters
+  (`clockOffsetMs` stays what it was: ChartBridge's own clock against the PC's). The Output window says when the first check
+  answers or not, when that changes, and when the clock goes 0.5 s off or back; never one line per check.
+- **The workspace's top bar** (chart 1.24.0): with an answer, "feed 2435 ms = clock +2310 ms, real 125 ms" (the parts rounded
+  first, so they add up; the PC ahead is +), and "PC clock off by 2.3 s" in amber, right after it, from 0.5 s off either way.
+  The feed is **amber from 1 s and red from 3 s of real delay, never for the clock's part**, and only once the clock is checked
+  (unchecked, a late number may be the clock's). Where the top bar has no room for the split beside everything else (1366 x
+  768), the line says "125 ms real" and the tooltip has the split; while the warning shows and the line is still cut, the
+  frame rate, then the local delay's p95, then the local delay give way, never the warning. The line now shrinks last of
+  the top bar and is cut rather than push Flatten all out of the window. The tooltip says what was checked, by which server,
+  when, and the round trip, each instrument's split, and with the warning how Windows fixes it (Settings, Time and language,
+  Date and time, Sync now). No answer: the feed as before ("(PC clock behind)" below 0 included) and the tooltip says "PC clock
+  not checked: why". No `pcClock` (ChartBridge before 0.5.6): exactly as before. A mounted chart's own status line does the
+  same (`LivePrefs.feedText`, `feedLevel`, `clockWarn`, `clockNote`, new in `live/live.js`).
+- Tests: `npm run check:orders` (ClockHarness, new: the NTP time stamps and the 2036 era, the formula and its sign, every
+  answer that is none, a time server of its own on 127.0.0.1 that answers and one that never does, what the pages and the
+  Output window are told, the answer held through failed checks, a PC clock step, `timeServer = off`; 45 checks),
+  `test/nt8-source.test.js` (measures only, its own thread, the hooks), `test/feed-clock.test.js` (new: the split, the sign,
+  the thresholds, no clock), `npm run smoke:workspace` (a fake ChartBridge 0.5.6 with its PC clock 2.31 s ahead: the split at
+  1920 x 1080, "real" at 1366 x 768 with Flatten all in the window, amber and red by the real delay, no answer; the fake with
+  no `pcClock` as before) and `npm run smoke:live` (the chart's own line). The fake bridge's `--pc-clock` and
+  `/test/pc-clock`.
+
 ## 1.23.1 (2026-10-14): Layout 5 polish
 
 Page only, no recompile (ChartBridge 0.5.2 as for 1.23.0). After 1.23.0 (#43).

@@ -34,8 +34,12 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-conn.bad { color: var(--ws-sell); }
 .ws-clock { font: 600 13px var(--ws-mono); font-variant-numeric: tabular-nums; }
 .ws-et { color: var(--ws-muted); font-weight: 400; }
-.ws-stat { display: inline-flex; gap: 6px; font: 500 11px var(--ws-mono); color: var(--ws-muted); font-variant-numeric: tabular-nums; flex: none; }
+/* 1.24.0: the line shrinks last (after a note and the update notice), and is cut rather than push Flatten all out of the window */
+.ws-stat { display: inline-flex; gap: 6px; font: 500 11px var(--ws-mono); color: var(--ws-muted); font-variant-numeric: tabular-nums; flex: 0 0.001 auto; min-width: 0; overflow: hidden; }
 .ws-stat b { color: var(--ws-text2); font-weight: 500; }
+/* 1.24.0: the feed's real delay (ChartBridge 0.5.6's clock check) amber from 1 s, red from 3 s; "PC clock off by 2.3 s" amber */
+.ws-stat b.warn { color: var(--ws-warn); }
+.ws-stat b.bad { color: var(--ws-sell); }
 .ws-sep { color: var(--ws-line2); }
 .ws-note { color: var(--ws-text2); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .ws-note.warn { color: var(--ws-warn); }

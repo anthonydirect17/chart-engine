@@ -52,6 +52,12 @@
 //                                   exchange clock's, --clock-offset): each live tick's `rx` is read from it and `u` from
 //                                   the exchange clock (the data's time, a few ms before), so a PC clock 10 s behind the
 //                                   exchange is --pc-clock-offset=<clock offset - 10> (the page's own clock is the test's)
+//   --pc-clock                      ChartBridge 0.5.6's check of the PC's clock against a time server: hello carries pcClock
+//                                   { checked: true, offsetMs, rttMs, atUtcMs, server: 'time.windows.com' } with the offset
+//                                   the fake's PC clock really has (--pc-clock-offset against --clock-offset, so offsetMs is
+//                                   the exchange clock minus the PC's); --pc-clock=none: { checked: false, why } (no answer).
+//                                   With --test-controls, POST /test/pc-clock?offsetMs=-2310 (or ?checked=0&why=...) sends a
+//                                   "pcClock" message to every page and hello says the same from then on. Sample values.
 //   --load-delay-ms=3000            a load's ticks and `ready` go out this long after its subscribe (NinjaTrader answering
 //                                   the tick request), and no live trade reaches the page meanwhile, as with ChartBridge
 //                                   holding them (a page reloading for more ticks misses those seconds)
@@ -233,6 +239,11 @@ const OWN = 'http://localhost:' + PORT;
 
 const CLOCK_OFFSET = +flagValue('clock-offset') || 0;
 const PC_CLOCK_OFFSET = flagValue('pc-clock-offset') !== '' ? +flagValue('pc-clock-offset') : CLOCK_OFFSET;
+/* --pc-clock (ChartBridge 0.5.6): the time check's result as hello and the pcClock message carry it (null: not sent, before 0.5.6) */
+const PC_CLOCK_SERVER = 'time.windows.com';
+let pcClock = !flag('pc-clock') ? null : flagValue('pc-clock') === 'none'
+  ? { checked: false, why: 'no answer from ' + PC_CLOCK_SERVER + ' (no answer within 2 s: offline, or UDP port 123 blocked)', server: PC_CLOCK_SERVER }
+  : { checked: true, offsetMs: Math.round((CLOCK_OFFSET - PC_CLOCK_OFFSET) * 1000 * 1000) / 1000, rttMs: 31.5, atUtcMs: Date.now(), server: PC_CLOCK_SERVER };
 const CME_HOURS = !!flag('cme-hours');
 const QUOTE_HOURS = flagValue('quote-hours') !== '' ? +flagValue('quote-hours') : null;
 const LOAD_DELAY_MS = +flagValue('load-delay-ms') || 0;
@@ -752,6 +763,11 @@ const server = http.createServer((req, res) => {
     }
     else if (p === '/test/status') { for (const c of clients) send(c, { type: 'status', level: q.get('level') || 'error', text: q.get('text') || '' }); }
     else if (p === '/test/htf' && DATA_037) htfFail = q.get('fail') || '';
+    else if (p === '/test/pc-clock') {              // 0.5.6: a new time check result, to every page (and hello from now on)
+      pcClock = q.get('checked') === '0' ? { checked: false, why: q.get('why') || 'not checked yet', server: PC_CLOCK_SERVER }
+        : { checked: true, offsetMs: +q.get('offsetMs') || 0, rttMs: 31.5, atUtcMs: Date.now(), server: PC_CLOCK_SERVER };
+      for (const c of clients) send(c, Object.assign({ type: 'pcClock' }, pcClock));
+    }
     else if (p === '/test/settlement' && DATA_037) {
       settlement[r] = q.get('p') === 'null' ? null : +q.get('p'); if (q.get('date')) settlementDate[r] = q.get('date');
       for (const c of clients) send(c, { type: 'settlement', root: r, p: settlement[r], date: settlementDate[r] });
@@ -845,6 +861,7 @@ server.on('upgrade', (req, sock) => {
   // the version as the real add-on names it in hello (0.3.4: trade sides); --version sets it
   const hello = { type: 'hello', version: flagValue('version') || 'fake-0.3.4', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => helloInstrument(r, i)), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
   hello.trading = desk.helloTrading(c);
+  if (pcClock) hello.pcClock = pcClock;             // --pc-clock: ChartBridge 0.5.6's time check
   if (liveFirstOn) { hello.features = ['liveFirst', 'profile']; hello.version = 'fake-0.3.5'; }
   if (DATA_037) {                                   // 0.3.7: the prior settlement per instrument (sample), and the new features
     for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
