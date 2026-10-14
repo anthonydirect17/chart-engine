@@ -850,7 +850,7 @@ server.on('upgrade', (req, sock) => {
     for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
   }
-  if (V3) { hello.features = (hello.features || []).concat(['v3']); hello.version = AGENTS.length ? 'fake-0.5.4' : 'fake-0.4.0'; }   // protocol v3 (quote-only markets are told per instrument); 0.5.4 with agents (keepMode 0.5.2, the window in a trade 0.5.4)
+  if (V3) { hello.features = (hello.features || []).concat(['v3']); hello.version = flagValue('version') || (AGENTS.length ? 'fake-0.5.4' : 'fake-0.4.0'); }   // --version still wins (1.22.0)   // protocol v3 (quote-only markets are told per instrument); 0.5.4 with agents (keepMode 0.5.2, the window in a trade 0.5.4)
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {

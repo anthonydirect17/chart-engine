@@ -22,6 +22,13 @@ no recompile; no change to ChartBridge or the engine's drawing. The page is kept
 - **The update notice** (`live/update-notice.js`) has only the workspace's place for it (the page's footer spot is gone).
 - **The workspace** no longer writes `live-desk-sync-v1` (it told the single chart page the hotkeys were shared); its
   Settings say the hotkeys are "kept in this browser" and no longer mention the page.
+- **The workspace draws a moved order where it was dropped until ChartBridge answers** (order path, the F2 check again):
+  its ticket redraws the charts after every action, which put a waiting move back at the old price, so a planned stop
+  dragged then was measured from there. TradeCore keeps each sent move (until an order message at that price, the order
+  finished, a reject naming it, or 5 s) and the charts draw it there (`movePending`, `setOrders` in the engine).
+- **The Agent tab:** "No agents on this ChartBridge (0.5.2 or later)." for any ChartBridge before 0.5.2 (it said 0.5.0;
+  0.5.0 and 0.5.1 refuse every account change, which carries `keepMode`), and again for a v3 ChartBridge 0.4.x (1.21.0 told
+  it that none is named in config.txt). The tab reads the version for this text only.
 - **Tests:** `test/chart-host.html` (one mounted chart with its own toolbar) takes the chart checks the page carried;
   `smoke:orders` drives the workspace's order ticket (the same TradeCore and controls); `smoke:live` runs on the current
   protocol (it ran on ChartBridge 0.2). The fake bridge's `--tickets` (the relay) is gone. Checks of the page's own parts
