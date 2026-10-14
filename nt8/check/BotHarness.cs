@@ -837,6 +837,21 @@ public static class BotHarness
         Check(ChartBridgeBot.BotAccount == "-" && ChartBridgeBot.StripJson().Contains("\"standDown\":\"the bot's account is None"), "0.5.7: a restart keeps None (account<TAB>-)");
         Page("{\"type\":\"botAccount\",\"cid\":\"ba\",\"account\":\"-\"}");
         Check(PageReject().Contains("account must be an account name, or null for None"), "0.5.7: \"-\" is never an account name from the page");
+        // review of #47: None waits for PlaceGate (never between a placement's checks and its order)
+        Page(AccountMsg("Sim101"));
+        object gate = typeof(ChartBridgeBot).GetField("PlaceGate", PS).GetValue(null);
+        bool doneNone = false;
+        System.Threading.Thread tn;
+        lock (gate)
+        {
+            tn = new System.Threading.Thread(() => { ChartBridgeServer_OnClientMessage(pc, "{\"type\":\"botAccount\",\"cid\":\"bg\",\"account\":null}"); doneNone = true; });
+            tn.Start();
+            System.Threading.Thread.Sleep(300);
+            Check(!doneNone && ChartBridgeBot.BotAccount == "Sim101", "0.5.7 (review of #47): None from the page waits while a placement holds PlaceGate");
+        }
+        tn.Join(5000);
+        Check(doneNone && ChartBridgeBot.BotAccount == "-", "0.5.7 (review of #47): and goes once it is free");
+        Page(AccountMsg("Sim101"));
         // None while the bot has a working entry: refused (choose it when flat)
         Page(AccountMsg("Sim101"));
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");

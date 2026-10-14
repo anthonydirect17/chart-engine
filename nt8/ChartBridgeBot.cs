@@ -1488,7 +1488,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
-        private static string SetNone()
+        // Review of #47: SetNone, GoNone and ResetToNone take PlaceGate (never between a placement's checks and its order); the
+        // lock order is Place's own: PlaceGate, then ChartBridgeOrders' PlaceLock or Sync, never the other way.
+        private static string SetNone() { lock (PlaceGate) return SetNoneLocked(); }
+        private static string SetNoneLocked()
         {
             bool exposed;
             lock (Sync) exposed = openTag != null;
@@ -1498,6 +1501,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // The bot on None: saved, open proposals end, the bot is told. Null, or why not.
         private static string GoNone(string by)
+        {
+            lock (PlaceGate) return GoNoneLocked(by);
+        }
+        private static string GoNoneLocked(string by)
         {
             string old = BotAccount;
             bool broken;
@@ -1521,6 +1528,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static string ResetToNone()
         {
             if (!Enabled) return ResetFileToNone();
+            lock (PlaceGate) return ResetToNoneLocked();
+        }
+        private static string ResetToNoneLocked()
+        {
             string acct = BotAccount;
             if (ChartBridgeBranches.IsNone(acct) || ChartBridgeBranches.KeepThroughReset("bot", acct)) return null;
             bool exposed;

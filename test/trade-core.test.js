@@ -383,3 +383,34 @@ test('DECISION 2026-10-14e: the ticket on None (nothing picked, or None picked) 
   R2.on();
   assert.equal(R2.core.TR.account, '', 'a last pick ChartBridge does not allow now: None, never Sim101');
 });
+
+test('review of #47: the sign-in snapshot is whole only once the orders list and the positions it counts are in; a drop starts over', () => {
+  const R = rig({});
+  R.on();
+  assert.equal(R.core.TR.snapReady, false, 'trading on is not enough');
+  R.core.message({ type: 'orders', list: [], positions: 2 });
+  assert.equal(R.core.TR.snapReady, false, 'the list, with 2 positions to come');
+  R.pos('Sim101', 'MNQ', 1);
+  assert.equal(R.core.TR.snapReady, false);
+  R.pos('EVAL-1', 'NQ', -1);
+  assert.equal(R.core.TR.snapReady, true, 'both positions in');
+  R.core.message({ type: 'orders', list: [] });
+  assert.equal(R.core.TR.snapReady, false, 'a list with no count (a ChartBridge before 0.5.7): never whole');
+  R.core.message({ type: 'orders', list: [], positions: 0 });
+  assert.equal(R.core.TR.snapReady, true, 'no position to come: whole at the list');
+  R.core.lost('the connection dropped');
+  assert.equal(R.core.TR.snapReady, false, 'a drop: not whole until the next sign-in snapshot');
+});
+
+test('review of #47: Flatten all never needs the ticket\'s account: on None it covers every trade account with a position or a working order', () => {
+  const R = rig({ wanted: '' });
+  R.on();
+  assert.equal(R.core.TR.account, '');
+  R.pos('Sim101', 'MNQ', 1); R.pos('EVAL-1', 'NQ', -2);
+  R.core.flattenAll();
+  assert.deepEqual(R.flattens().sort(), ['EVAL-1 NQ', 'Sim101 MNQ']);
+  assert.match(R.notes.pop(), /^Flatten all sent for every trade account: Sim101 MNQ, EVAL-1 NQ \(cancel their orders, close their positions at market\)\./);
+  R.core.setArmed(true);
+  R.core.sendOrder('buy', 'market', null);
+  assert.match(R.notes.pop(), /No account \(None\): nothing was sent/, 'every other action still needs an account');
+});

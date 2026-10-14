@@ -1092,7 +1092,7 @@ test('0.4.0 bot: on by default, the account Anthony chooses (None until then, 0.
   assert.match(bodyOf(bcode, 'private static void ToPages(string json)'), /ChartBridgeV3\.SendToV3Traders\(json\);/);
   assert.match(bcode, /public const string DefaultAccount = ChartBridgeBranches\.None;/, '0.5.7 (DECISION 2026-10-14e): None until chosen');
   assert.match(bcode, /public static string BotAccount \{ get \{ lock \(Sync\) return account; \} \}/);
-  assert.ok(!/account = /.test(bcode.replace(bodyOf(bcode, 'private static string SetAccount(Dictionary<string, Val> d)'), '').replace(bodyOf(bcode, 'private static void LoadAccount()'), '').replace(bodyOf(bcode, 'private static void Reset()'), '').replace(bodyOf(bcode, 'private static string GoNone(string by)'), '').replace(/private static string account = DefaultAccount;/, '')),
+  assert.ok(!/account = /.test(bcode.replace(bodyOf(bcode, 'private static string SetAccount(Dictionary<string, Val> d)'), '').replace(bodyOf(bcode, 'private static void LoadAccount()'), '').replace(bodyOf(bcode, 'private static void Reset()'), '').replace(bodyOf(bcode, 'private static string GoNoneLocked(string by)'), '').replace(/private static string account = DefaultAccount;/, '')),
     'the bot\'s account changes only by botAccount (the page), bot-account.txt at start, the reset to None, or GoNone (the page\'s None or the 17:00 ET reset)');
   // botAccount: every gate, refused while the bot has a position or a working entry, never a copier follower or leader, a temp-file write
   const setAcc = bodyOf(bcode, 'private static string SetAccount(Dictionary<string, Val> d)');

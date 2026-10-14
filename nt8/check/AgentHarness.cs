@@ -2537,8 +2537,8 @@ public static class AgentHarness
             Advance(61000);
             // 0.5.7: its flatten job waits for the open on MNQ: the lost-trade error is held (not repeated beside the job's own
             // NOT FLAT error every 60 s), never dropped
-            Check(page.Skip(s0).Count(x => x.Contains(say)) == 1 && page.Skip(s1).Count(x => x.Contains("\"level\":\"error\"") && x.Contains("NOT FLAT") && x.Contains("MNQ on SIM-E still shows 1")) >= 1,
-                  "D1 (0.5.7): while its flatten job waits on MNQ the lost-trade error is held; the job's NOT FLAT error goes on every 60 s");
+            Check(page.Skip(s0).Count(x => x.Contains(say)) == 2 && page.Skip(s1).Count(x => x.Contains("\"level\":\"error\"") && x.Contains("NOT FLAT") && x.Contains("MNQ on SIM-E still shows 1")) >= 1,
+                  "D1 (0.5.7, review of #47): its flatten job waits on MNQ: the lost-trade error is held 30 s at most, then every 60 s as before, beside the job's NOT FLAT error");
             et = new DateTime(2026, 10, 12, 18, 0, 30);
             for (int q = 0; q < 6; q++) { Last2(); Advance(1000); }
             Check(!IsLive(rs) && sime.Calls.Skip(c0).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")), "D1: at the open the flatten cancels that stop and closes the 1");
@@ -3018,9 +3018,9 @@ public static class AgentHarness
     static void LostHeldInFlatten()
     {
         string lost = "agent manrae had an open trade on SIM-E MNQ and its legs are gone";
-        foreach (bool endFlat in new[] { false, true })
+        foreach (string how in new[] { "ends not flat", "ends flat", "runs on" })
         {
-            string tagName = endFlat ? "0.5.7 (ends flat)" : "0.5.7 (ends not flat)";
+            string tagName = "0.5.7 (" + how + ")";
             Fresh();
             ReplayedSet().Remove("SIM-E");   // the stale record below is looked at only once the executions were read again
             File.WriteAllLines(Path.Combine(Dir, "agent-manrae-day.txt"), new[] { "# made-up", "# test", "session\t2026-10-09", "trade\tabcdef12\topen" });
@@ -3034,37 +3034,85 @@ public static class AgentHarness
             et = new DateTime(2026, 10, 9, 15, 55, 0);
             Last2();
             Advance(1000);
-            int s0 = N(page), log0 = LogCount();
+            int s0 = N(page);
             ReplayedSet().Add("SIM-E");
             Advance(1500);
             Check(!FileText("agent-manrae-day.txt").Contains("abcdef12"), tagName + ": the stale record is dropped while its flatten job runs on MNQ");
             Check(!Any(page, s0, lost) && Logged(lost + "; ChartBridge no longer treats the position as the agent's: flatten or protect it by hand (held while ChartBridge's own flatten runs on MNQ)"),
                   tagName + ": the lost-trade error is held (logged, no alarm to the pages) while the job runs");
-            Advance(61000);
-            Check(!Any(page, s0, lost) && Any(page, s0, "NOT FLAT"), tagName + ": still held 61 s on (the job's own NOT FLAT error speaks meanwhile)");
-            Hold = null;
-            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
-            int s1 = N(page);
-            if (endFlat)
+            Advance(20000);
+            Check(!Any(page, s0, lost) && Any(page, s0, "NOT FLAT"), tagName + ": still held 21 s on (the job's own NOT FLAT error speaks meanwhile)");
+            if (how == "runs on")
             {
+                // review of #47: a hold never lasts over 30 s: raised then, the job still running, and every 60 s as before
+                Advance(10000);
+                int n1 = page.Skip(s0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(lost));
+                Check(n1 == 1, tagName + ": 30 s on, the job still running, the held error is raised (" + n1 + ")");
+                Advance(61000);
+                Check(page.Skip(s0).Count(x => x.Contains(lost)) == 2, tagName + ": and every 60 s from then, the job still running");
+                Hold = null;
+                foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
                 SetPos(sime, mnq, 0); ClearMoves();
-                Advance(3000);
-                Check(!Any(page, s0, lost) && Logged("agent manrae: the lost-trade error held on SIM-E MNQ is not raised: the pair is flat"), tagName + ": the job ends flat: the held error is never raised");
+                Advance(1000);
             }
             else
             {
-                SetPos(sime, mnq, -2); ClearMoves();   // his own short 2 meanwhile: the job ends, the pair not flat
-                Advance(5000);
-                int n = page.Skip(s1).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(lost));
-                Check(n >= 1, tagName + ": the job ends with the pair not flat: the held error is raised then (" + n + ")");
-                Advance(61000);
-                Check(page.Skip(s1).Count(x => x.Contains(lost)) > n, tagName + ": and every 60 s from then, as before");
-                SetPos(sime, mnq, 0); ClearMoves();
-                Advance(1000);
+                Hold = null;
+                foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+                int s1 = N(page);
+                if (how == "ends flat")
+                {
+                    SetPos(sime, mnq, 0); ClearMoves();
+                    Advance(3000);
+                    Check(!Any(page, s0, lost) && Logged("agent manrae: the lost-trade error held on SIM-E MNQ is not raised: the pair is flat"), tagName + ": the job ends flat: the held error is never raised");
+                }
+                else
+                {
+                    SetPos(sime, mnq, -2); ClearMoves();   // his own short 2 meanwhile: the job ends, the pair not flat
+                    Advance(5000);
+                    int n = page.Skip(s1).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(lost));
+                    Check(n >= 1, tagName + ": the job ends with the pair not flat: the held error is raised then (" + n + ")");
+                    Advance(61000);
+                    Check(page.Skip(s1).Count(x => x.Contains(lost)) > n, tagName + ": and every 60 s from then, as before");
+                    SetPos(sime, mnq, 0); ClearMoves();
+                    Advance(1000);
+                }
             }
             Settle(sime);
             et = new DateTime(2026, 10, 9, 10, 0, 0);
         }
+
+        // review of #47: a job that does not own the pair (it never says NOT FLAT) holds nothing: the error goes at once
+        Fresh();
+        SetPos(sime, mnq, 1);
+        ClearMoves();
+        Type jt = typeof(ChartBridgeAgent).GetNestedType("FlatJob", BindingFlags.NonPublic);
+        object job = Activator.CreateInstance(jt, true);
+        jt.GetField("Root").SetValue(job, "MNQ"); jt.GetField("Inst").SetValue(job, mnq); jt.GetField("Owned").SetValue(job, false); jt.GetField("StartMs").SetValue(job, clock);
+        System.Collections.IDictionary flats = (System.Collections.IDictionary)typeof(ChartBridgeAgent).GetField("Flats", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
+        object sync = typeof(ChartBridgeAgent).GetField("Sync", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
+        lock (sync) flats["MNQ 12-26"] = job;
+        int u0 = N(page);
+        typeof(ChartBridgeAgent).GetMethod("TradeLost", BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(string), typeof(string) }, null).Invoke(M, new object[] { "MNQ", null });
+        Check(page.Skip(u0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(lost)) == 1, "0.5.7 (review of #47): a flatten job that does not own the pair holds nothing: the lost-trade error at once");
+        lock (sync) flats.Remove("MNQ 12-26");
+        Settle(sime);
+        Advance(1000);
+
+        // review of #47: None from the page while the agent's account still holds a position (a trade it lost: not Exposed)
+        Fresh();
+        SetPos(sime, mnq, 1);
+        ClearMoves();
+        Mode("manrae", "shadow");
+        P("{\"type\":\"agentAccount\",\"cid\":\"an\",\"agent\":\"manrae\",\"account\":null}");
+        Check(M.Account == "SIM-E" && PageReject().Contains("agent manrae's account SIM-E has a position or a working order: choose None when it is flat"),
+              "0.5.7 (review of #47): None is refused while the agent's account holds a position, even one it no longer owns: " + PageReject());
+        Settle(sime);
+        Advance(1000);
+        P("{\"type\":\"agentAccount\",\"cid\":\"an\",\"agent\":\"manrae\",\"account\":null}");
+        Check(M.Account == "-", "0.5.7: flat: None accepted");
+        File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSIM-E" });
+        Restart();
     }
 
     // ------------------------------------------------------------ 0.5.7: the daily reset to None, agents

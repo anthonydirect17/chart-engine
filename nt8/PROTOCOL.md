@@ -1203,7 +1203,7 @@ String values must be plain (no backslash escapes, at most 200 characters).
 | type | fields | when |
 |---|---|---|
 | `trading` | `enabled` (bool), `reason` (when not enabled), `accounts` (allowed names), `maxQty` (`{root: n}`, including the default under `"*"`), `maxTicksAway` and `maxBracketTicks` (0.3.7, only when `config.txt` sets them) | answer to `auth`; also in `hello` with `enabled` false until `auth` succeeds |
-| `orders` | `list`: `[order]` | after `auth`, every working order on the allowed accounts |
+| `orders` | `list`: `[order]`, `positions` (0.5.7: how many `position` messages follow this list) | after `auth`, every working order on the allowed accounts |
 | `order` | `id` (ChartBridge's id, stable while the order lives), `cid` (when placed from this page), `account`, `root`, `name`, `side`, `kind` (`market`, `limit`, `stop`, `stopLimit`, `other`), `qty`, `filled`, `price` (limit or stop price, or null), `avgFill` (or null), `state` (`working`, `partFilled`, `filled`, `cancelled`, `cancelling`, `rejected`), `role` (`entry`, `stop`, `target`, or `other` for orders placed elsewhere), `oco` (or null), `text` (NinjaTrader's error when rejected or failed), `planned` (0.3.8: on a working limit or stop entry ChartBridge placed, `{"stopTicks": n or null, "targetTicks": n or null}`) | every order change, live; and again after a `plan` |
 | `position` | `account`, `root`, `qty` (signed: long positive, short negative), `avgPrice` (or null when flat) | after `auth` and on every change |
 | `reject` | `cid` or `id` (whichever the message had), `reason` | a refusal by ChartBridge's gates |
@@ -2675,9 +2675,10 @@ Where the contract left a detail open, the safest simple choice was taken and is
   roots raises a `status` error every 60 s until that pair is flat ("agent <id> had an open trade on <account> <root> and its
   legs are gone; ChartBridge no longer treats the position as the agent's: flatten or protect it by hand"; review A3).
   Ownership is not restored: Anthony decides. The pages have no acknowledge message, so the error ends only when the pair is
-  flat (lead's default). 0.5.7: while a flatten job of that agent runs on that root (its own cancels take the legs away) the
-  lost-trade error is held, never dropped: logged, not sent and not repeated; once no job runs there it is raised (then every
-  60 s) if the pair is still not flat, and forgotten if it is. The same happens to the trade being followed when both readings of its contract show a position on
+  flat (lead's default). 0.5.7: while a flatten job of that agent that owns the pair runs on that root (its own cancels take
+  the legs away) the lost-trade error is held, never dropped: logged, not sent and not repeated, for 30 s at most (then it is
+  raised and repeats every 60 s as before, the job still running); once no job runs there it is raised (then every 60 s) if
+  the pair is still not flat, and forgotten if it is. A job that does not own the pair (it never says NOT FLAT) holds nothing. The same happens to the trade being followed when both readings of its contract show a position on
   the other side (it ended where ChartBridge could not see it, and the account holds someone else's): the pair is not the
   agent's at once (the owner lock and the flatten), and once that has held for 3 s with no fill NinjaTrader shows ahead of its
   event the trade is ended with its realized part booked (what its fills closed, at the average of its opening fills; review
@@ -2795,14 +2796,17 @@ chosen on the Bot tab"; "agent <id>'s account is None: no new entries until an a
 also the strip's and `agentState`'s `standDown`); exits, flattens and the management of anything already open are never
 blocked. `bot`, `welcome`, the `agent` strip and the agent's `welcome` carry `"account": null` (and `sim` false) on None.
 `botAccount` and `agentAccount` take `"account": null` for None, refused only while that branch has a position, a working
-entry (or, for an agent, a proposal): "choose None when it is flat"; `"-"` is never an account name from the page. No
+entry (or, for an agent, a proposal, and any position or working order on its account, a trade it lost included: "agent <id>'s
+account <name> has a position or a working order: choose None when it is flat"); `"-"` is never an account name from the page. No
 `bot-account.txt` or `agent-<id>-account.txt` is None (until 0.5.6 Sim101); None is saved as `account<TAB>-`, which a
 ChartBridge before 0.5.7 reads as an account NinjaTrader does not have, so it refuses every entry there too and nothing
 breaks. None is nobody's account: no clash with the bot, the copier or another agent.
 
 The order ticket (chart 1.25.0): its picker offers None first; with None nothing is sent ("No account (None): nothing was
 sent. Pick an account to trade.") and Armed does not come on. `LivePrefs.orderAccount` has no Sim101 fallback: a last pick
-ChartBridge does not allow now gives None with the note naming it.
+ChartBridge does not allow now gives None with the note naming it. The window's Flatten all never needs the ticket's account:
+on None it covers every trade account with a position or a working order. 0.5.7: the sign-in `orders` list carries
+`positions`, how many `position` messages follow it, so a page knows when its snapshot of orders and positions is whole.
 
 **The daily reset.** Once per day in the 17:00 to 18:00 ET break (New York time, daylight saving included), ChartBridge puts
 every branch it holds that is flat with no working order on its account (no position on any contract, no order that may still
@@ -2815,7 +2819,8 @@ poll timer, without a page. The New York date it ran is kept in `daily-reset.txt
 `day<TAB>yyyy-MM-dd`), so a restart in the same break does not run it again and a branch chosen again after the reset stays.
 `ChartBridgeBranches.KeepThroughReset` is the one place an exception would go (Anthony is still deciding whether a branch
 running a hero on Sim101 is left alone); for now there is none. The ticket's account is each page's own, so the page applies
-the same rule to it (`LivePrefs.ticketReset`, every 5 s in the window with the ticket): a pick made before the latest 17:00 ET
+the same rule to it (`LivePrefs.ticketReset`, every 5 s in the window with the ticket, and only once that connection's
+sign-in snapshot of orders and positions is whole, never on a timer): a pick made before the latest 17:00 ET
 (`live-account-at-v1`, the time of the last pick) goes to None when that account is flat with no working order, else it is
 kept with a note naming it; either way once.
 

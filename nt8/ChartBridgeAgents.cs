@@ -183,6 +183,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const int CancelSlowAfter = 10;
         public const double TradingFreshMs = 5000, AgainstGraceMs = 3000, CloseRetryHoldMs = 30000, GhostGraceMs = 5000;   // the market trading in fact: a trade in the last 5 s
         public const double CancelSlowMs = 30000, ShutErrorEveryMs = 60000, LostTradeEveryMs = 60000, CancelGiveUpMs = 30 * 60000;
+        public const double LostHoldMaxMs = 30000;   // 0.5.7 review of #47: the longest a lost-trade error waits for ChartBridge's own flatten
 
         // The market is shut (no market order is sent): 17:00 to 18:00 New York time Monday to Thursday, and Friday 17:00 to Sunday
         // 18:00. Fixed times (lead's default: NinjaTrader's trading hours are not read; holidays are not known here: the flatten
@@ -836,6 +837,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly Dictionary<string, double> LostTrades = new Dictionary<string, double>();   // root -> last error (review A3)
         private readonly Dictionary<string, string> LostTradeText = new Dictionary<string, string>();
         private readonly Dictionary<string, string> HeldLost = new Dictionary<string, string>();   // root -> a lost-trade error held while ChartBridge's own flatten runs there (0.5.7)
+        private readonly Dictionary<string, double> HeldSince = new Dictionary<string, double>();   // root -> when the hold began (review of #47: at most 30 s)
         private double ledCash, ledAvg;
         private readonly HashSet<string> Sticky = new HashSet<string>();   // roots it owns until flat by both readings with no entry
         private readonly Dictionary<string, Proposal> Proposals = new Dictionary<string, Proposal>();
@@ -2520,7 +2522,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool held, already;
             lock (Sync)
             {
-                held = FlattenRunsLocked(root);
+                held = HoldLocked(root, Now());
                 already = HeldLost.ContainsKey(root);
                 if (held) HeldLost[root] = text;
                 else { HeldLost.Remove(root); LostTrades[root] = Now(); LostTradeText[root] = text; }
@@ -2529,8 +2531,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
         }
 
-        // Under Sync: a flatten job of this agent runs on a contract of that root.
-        private bool FlattenRunsLocked(string root) { return Flats.Values.Any(j => j.Root == root); }
+        // Under Sync: a flatten job of this agent that owns the pair runs on a contract of that root (review of #47: a job that does
+        // not own it never says NOT FLAT, so it holds nothing).
+        private bool FlattenRunsLocked(string root) { return Flats.Values.Any(j => j.Root == root && j.Owned); }
+
+        // Under Sync: hold the lost-trade error on that root now: its own flatten runs there, and the hold is under 30 s old (review
+        // of #47: after that it is raised and repeats as before, whatever the job does). Starts the hold's clock.
+        private bool HoldLocked(string root, double now)
+        {
+            if (!FlattenRunsLocked(root)) return false;
+            double since;
+            if (!HeldSince.TryGetValue(root, out since)) { HeldSince[root] = now; return true; }
+            return now - since < ChartBridgeAgents.LostHoldMaxMs;
+        }
 
         // Every pass: each lost-trade error again every 60 s until that pair is flat by both readings (lead's default: the pages have
         // no acknowledge message for it, so it ends only when the pair is flat). 0.5.7: none while a flatten job runs on that root;
@@ -2550,10 +2563,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     string h;
                     bool wasHeld = HeldLost.TryGetValue(root, out h);
-                    if (flat) { LostTrades.Remove(root); LostTradeText.Remove(root); HeldLost.Remove(root); if (wasHeld) dropped = h; }
-                    else if (FlattenRunsLocked(root)) { }   // held: neither repeated nor dropped
-                    else if (wasHeld) { HeldLost.Remove(root); LostTrades[root] = now; LostTradeText[root] = h; raise = h; }
-                    else if (now - LostTrades[root] >= ChartBridgeAgents.LostTradeEveryMs) { LostTrades[root] = now; text = LostTradeText[root]; }
+                    if (flat) { LostTrades.Remove(root); LostTradeText.Remove(root); HeldLost.Remove(root); HeldSince.Remove(root); if (wasHeld) dropped = h; }
+                    else if (HoldLocked(root, now)) { }   // held: neither repeated nor dropped (at most 30 s)
+                    else if (wasHeld) { HeldLost.Remove(root); if (!FlattenRunsLocked(root)) HeldSince.Remove(root); LostTrades[root] = now; LostTradeText[root] = h; raise = h; }
+                    else
+                    {
+                        if (!FlattenRunsLocked(root)) HeldSince.Remove(root);   // no job there now: a later job may hold again
+                        if (now - LostTrades[root] >= ChartBridgeAgents.LostTradeEveryMs) { LostTrades[root] = now; text = LostTradeText[root]; }
+                    }
                 }
                 if (dropped != null) { string d = "agent " + Id + ": the lost-trade error held on " + Account + " " + root + " is not raised: the pair is flat"; Log(d); AgentLog(d); }
                 if (raise != null) { Log(raise); AgentLog(raise); ChartBridgeOrders.AgentAlarm(raise); }
@@ -2994,9 +3011,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             string nm = S(d, "account"), keep = S(d, "keepMode");
             if (d.ContainsKey("keepMode") && keep != "shadow" && keep != "copilot" && keep != "auto") return "keepMode must be shadow, copilot or auto (the mode the page's question named)";
             Val nv;
-            if (d.TryGetValue("account", out nv) && nv.K == 'z')   // 0.5.7: null is None, refused only while the agent is exposed
+            if (d.TryGetValue("account", out nv) && nv.K == 'z')   // 0.5.7: null is None, refused while the agent is exposed
             {
                 if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: choose None when it is flat";
+                // review of #47: and while its account holds any position or working order (a trade it lost included): the reset's rule
+                string cur = Account;
+                if (!ChartBridgeBranches.IsNone(cur) && !ChartBridgeBranches.Idle(FindAccount(cur))) return "agent " + Id + "'s account " + cur + " has a position or a working order: choose None when it is flat";
                 return GoNone("set by the page", keep);
             }
             if (!PlainName(nm) || ChartBridgeBranches.IsNone(nm)) return "account must be an account name, or null for None";

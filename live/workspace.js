@@ -873,7 +873,7 @@ function syncTitle() {
   if (document.title !== t) document.title = t;
 }
 function renderFlat() {
-  const b = $('wsFlat'), a = ticketAccount(), on = core.TR.enabled && !!a;
+  const b = $('wsFlat'), a = ticketAccount() || 'every trade account', on = core.TR.enabled;   // review of #47: never needs the ticket's account (None: every trade account)
   b.disabled = !on;
   const t = on ? 'Flatten all on ' + a + ': every instrument with a position or a working order, cancel its orders and close its position at market. Works with Armed off.'
     : 'Flatten all: ' + (core.TR.reason || 'not connected to ChartBridge yet');
@@ -1043,19 +1043,18 @@ window.addEventListener('pagehide', () => { if (link) link.close(); });
 /* The ticket's daily reset (DECISION 2026-10-14e; LivePrefs.ticketReset): ChartBridge puts the bot, the agents and the copier's
    leader on None in the 17:00 to 18:00 ET break, and this does the same to the ticket's account, once per day (the pick's
    time, live-account-at-v1): flat with no working order there, None; else kept with a note naming it. Only in the window
-   with the ticket (or any window when no window has it), and only once ChartBridge's orders and positions have come in. */
-let tradingSince = 0;
+   with the ticket (or any window when no window has it), and (review of #47) only once this connection's sign-in snapshot of
+   orders and positions is whole (core.TR.snapReady, never a timer), and never while that account has a position or a
+   working order. */
 function ticketDailyReset() {
   const TR = core.TR;
-  if (!TR.enabled) { tradingSince = 0; return; }
-  if (!tradingSince) tradingSince = Date.now();
-  if (Date.now() - tradingSince < 3000 || (holder() && !holds())) return;
+  if (!TR.enabled || !TR.snapReady || (holder() && !holds())) return;
   const acct = holds() ? TR.account : accountPick(), at = +store.getItem(PICK_AT_KEY) || 0, now = Date.now();
   const busy = a => [...TR.positions].some(([k, p]) => k.startsWith(a + '|') && p && p.qty) || [...TR.orders.values()].some(o => o.account === a && OT.isWorking(o));
   const r = LP.ticketReset({ account: acct, pickedAt: at, now, busy });
   if (!r) return;
   try { store.setItem(PICK_AT_KEY, String(now)); } catch (e) { /* blocked */ }
-  if (!r.kept) {
+  if (!r.kept && !busy(acct)) {
     notePick('');
     try { store.setItem(TICKET_KEY, JSON.stringify({ root: TK.root, account: '' })); } catch (e) { /* blocked */ }
     if (TR.account) core.pickAccount('');
@@ -3030,7 +3029,7 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   views: () => [...views.values()].map(v => ({ id: v.panel.id, type: v.panel.type, state: v.state, count: v.tape ? v.tape.count() : null })),
   feed: () => hub.stats(),
   /* 1.12.0: the ticket as this window knows it, and a chart's engine (read it; orders still go through the checks) */
-  ticket: () => ({ held: holds(), holder: holder(), root: ticketRoot(), account: ticketAccount(), armed: ticketArmed(), enabled: core.TR.enabled, wid: link ? link.wid : '' }),
+  ticket: () => ({ held: holds(), holder: holder(), root: ticketRoot(), account: ticketAccount(), armed: ticketArmed(), enabled: core.TR.enabled, snapReady: core.TR.snapReady, wid: link ? link.wid : '' }),
   chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; },
   /* 1.16.0: the Account page's connection as this window knows it (read only) */
   accountFeed: () => (AF ? { v3: AF.S.v3, open: AF.S.open, enabled: AF.S.enabled, switches: Object.assign({}, AF.S.switches), accounts: AF.S.accounts.map(x => x.name), deskState: AF.S.deskState } : null),

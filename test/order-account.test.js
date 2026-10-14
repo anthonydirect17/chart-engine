@@ -95,10 +95,12 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   assert.match(CORE, /\$\('flattenBtn'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.flattenHere\(\)\)\);/);
   // 1.13.0 (the F2 review): an open NO STOP question is closed first (dropNoStop sends nothing; an error there never stops the flatten), then ready() as before
   assert.match(CORE, /function flattenHere\(other\) \{\n\s+(try \{ dropNoStop\(\); flattened\(other \|\| root\(\)\); \} catch \(e\) \{ \/\* never in the way of the flatten \*\/ \}\n\s+)if \(!ready\(false\)\) return;/);
-  assert.match(CORE, /function flattenAll\(\) \{\n\s+(try \{ dropNoStop\(\); flattened\(null\); \} catch \(e\) \{ \/\* never in the way of the flatten \*\/ \}\n\s+)if \(!ready\(false\)\) return;\n\s+const account = TR\.account;/);
+  // review of #47: Flatten all never needs the ticket's account (None: every trade account); every other check of ready() holds
+  assert.match(CORE, /function flattenAll\(\) \{\n\s+(try \{ dropNoStop\(\); flattened\(null\); \} catch \(e\) \{ \/\* never in the way of the flatten \*\/ \}\n\s+)if \(!ready\(false, true\)\) return;\n\s+const one = !!TR\.account, account = one \? TR\.account : 'every trade account';/);
+  assert.match(CORE, /if \(!TR\.account && !anyAccount\) \{ flash\('No account \(None\)/);
   assert.match(CORE, /function dropNoStop\(\) \{ if \(typeof env\.dropNoStop === 'function'\) env\.dropNoStop\(\); \}/, 'dropNoStop only closes the question');
   // only Flatten and Flatten all skip the Armed check (Anthony 2026-10-01); every other ready() call keeps it
-  assert.deepEqual((CORE.match(/ready\(false\)/g) || []).length, 2);
+  assert.deepEqual((CORE.match(/ready\(false(, true)?\)/g) || []).length, 2);
   assert.match(CORE, /if \(!TR\.armed && armed !== false\) \{ flash\('Armed is off: nothing was sent/);
   // the buttons call the core's own functions: no second order path. 1.22.0: a chart (live.js) has no TradeCore, no order
   // bar and no trading hotkeys of its own; its clicks, drags and x go to its host (HOST.place, move, cancel, planAdd)
@@ -351,6 +353,9 @@ test('the ticket\'s daily reset is wired in the workspace: every pick is stamped
   assert.match(WS, /pickViewAccount: a => \{ notePick\(a\); renderOrders\(\); \},\n\s+accountPicked: a => \{ notePick\(a\); renderOrders\(\); \},/);
   assert.match(WS, /const r = LP\.ticketReset\(\{ account: acct, pickedAt: at, now, busy \}\);/);
   assert.match(WS, /setInterval\(ticketDailyReset, 5000\);/);
+  assert.match(WS, /if \(!TR\.enabled \|\| !TR\.snapReady \|\| \(holder\(\) && !holds\(\)\)\) return;/, 'review of #47: only once the sign-in snapshot of orders and positions is whole, never on a timer');
+  assert.match(WS, /if \(!r\.kept && !busy\(acct\)\) \{/, 'never while that account has a position or a working order');
+  assert.doesNotMatch(WS, /tradingSince/);
   assert.match(WS, /account: core\.TR\.enabled \? core\.TR\.account : readTicket\(\)\.account \|\| ''/, 'None (\'\') is saved as picked, never replaced by the last account');
   assert.match(CORE, /sel\.replaceChildren\(new Option\('None', ''\), \.\.\.TR\.accounts\.map\(a => new Option\(a, a\)\)\);/, 'the ticket\'s picker offers None first');
   assert.match(CORE, /if \(!TR\.armed && !TR\.account\) \{ flash\('No account \(None\): pick an account to trade\.', 'warn'\); return; \}/, 'Armed does not come on with None');

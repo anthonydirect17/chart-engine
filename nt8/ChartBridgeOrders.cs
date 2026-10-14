@@ -437,6 +437,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     string list = OrdersListJson(client, notes.SentWorking);
                     List<string> positions = PositionJsons(client);
+                    // 0.5.7 (review of #47): how many position messages follow this list, so a page knows when its sign-in snapshot
+                    // of orders and positions is whole (the ticket's daily reset waits for it)
+                    list = list.Substring(0, list.Length - 1) + ",\"positions\":" + positions.Count.ToString(CultureInfo.InvariantCulture) + "}";
                     Action hook = SnapshotHook;
                     if (hook != null) hook();
                     client.Send(list);

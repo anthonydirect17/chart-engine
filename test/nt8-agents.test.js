@@ -170,10 +170,13 @@ test('0.5.7 agents: planId on an agent\'s orders to a v3 page, kept in the day f
 
 test('0.5.7 agents: the lost-trade error is held while its own flatten job runs on that root, never dropped', () => {
   const lost = bodies(acode, 'TradeLost'), rep = bodies(acode, 'RepeatTradeLost');
-  assert.match(lost, /held = FlattenRunsLocked\(root\);[\s\S]*if \(held\) HeldLost\[root\] = text;/);
+  assert.match(lost, /held = HoldLocked\(root, Now\(\)\);[\s\S]*if \(held\) HeldLost\[root\] = text;/);
   assert.match(lost, /if \(held\) \{[^\n]*return; \}\s*Log\(text\); AgentLog\(text\); ChartBridgeOrders\.AgentAlarm\(text\);/, 'held: no alarm');
-  assert.match(acode, /private bool FlattenRunsLocked\(string root\) \{ return Flats\.Values\.Any\(j => j\.Root == root\); \}/);
-  assert.match(rep, /if \(flat\) \{[^\n]*HeldLost\.Remove\(root\);[\s\S]*else if \(FlattenRunsLocked\(root\)\) \{ \}[\s\S]*else if \(wasHeld\) \{ HeldLost\.Remove\(root\); LostTrades\[root\] = now;/, 'flat: forgotten; job: held; job gone, not flat: raised');
+  // review of #47: only a job that owns the pair, and 30 s at most
+  assert.match(acode, /private bool FlattenRunsLocked\(string root\) \{ return Flats\.Values\.Any\(j => j\.Root == root && j\.Owned\); \}/);
+  assert.match(bodies(acode, 'HoldLocked'), /return now - since < ChartBridgeAgents\.LostHoldMaxMs;/);
+  assert.match(acode, /public const double LostHoldMaxMs = 30000;/);
+  assert.match(rep, /if \(flat\) \{[^\n]*HeldLost\.Remove\(root\);[\s\S]*else if \(HoldLocked\(root, now\)\) \{ \}[\s\S]*else if \(wasHeld\) \{ HeldLost\.Remove\(root\);[^\n]*LostTrades\[root\] = now;/, 'flat: forgotten; job: held; job gone or 30 s: raised');
 });
 
 test('0.5.7 None and the daily reset (DECISION 2026-10-14e): ChartBridge runs it without a page; one place for an exception; harnessed', () => {

@@ -85,6 +85,9 @@ function create(env) {
     v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, maxBracketTicks: 0, signInStarted: false,
     armed: false,                        // never saved: Armed is off after every page load
     account: '',
+    /* ChartBridge 0.5.7 (review of #47): the sign-in snapshot of orders and positions is whole (the orders list says how many
+       position messages follow it); false until then, and again after a drop. The ticket's daily reset waits for it. */
+    snapReady: false, snapLeft: null,
     orders: new Map(),                   // id -> latest order message (working ones; finished ones are dropped)
     positions: new Map(),                // 'account|root' -> { qty, avgPrice }
     /* 1.16.0 (protocol v3): ChartBridge's switches (all off unless the window's v3 connection says on: setSwitches), its
@@ -178,7 +181,7 @@ function create(env) {
     TR.signInStarted = false;
     if (!TR.v2) return;
     batchStop(() => true, 'the connection to ChartBridge dropped');   // before the orders are cleared: count what was still working
-    TR.enabled = false; TR.reason = reason; TR.orders.clear(); announced.clear(); TR.positions.clear(); TR.moving.clear();
+    TR.enabled = false; TR.reason = reason; TR.orders.clear(); announced.clear(); TR.positions.clear(); TR.moving.clear(); TR.snapReady = false; TR.snapLeft = null;
     if (OS) TR.switches = OS.cleanSwitches(null);
     TR.managed.clear(); TR.merges.clear();                         // ChartBridge sends the managed ones again after auth
     const was = TR.account;
@@ -214,9 +217,12 @@ function create(env) {
   function message(m) {
     switch (m && m.type) {
       case 'trading': applyTrading(m); if (!TR.signInStarted) signIn(); return true;
-      case 'orders': TR.orders.clear(); announced.clear(); TR.moving.clear(); for (const o of m.list || []) if (served(o.root)) { TR.orders.set(o.id, o); announced.set(o.id, o); } unsentCheck(); env.changed(); return true;
+      case 'orders': TR.orders.clear(); announced.clear(); TR.moving.clear(); for (const o of m.list || []) if (served(o.root)) { TR.orders.set(o.id, o); announced.set(o.id, o); }
+        TR.snapLeft = Number.isInteger(m.positions) && m.positions >= 0 ? m.positions : null; TR.snapReady = TR.snapLeft === 0;   // no count (before 0.5.7): never whole
+        unsentCheck(); env.changed(); return true;
       case 'order': onOrder(m); return true;
-      case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); env.changed(); if (env.positionChanged) env.positionChanged(); return true;
+      case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 });
+        if (TR.snapLeft > 0 && --TR.snapLeft === 0) TR.snapReady = true; env.changed(); if (env.positionChanged) env.positionChanged(); return true;
       case 'reject': if (!onRefused(m)) flash('Refused by ChartBridge: ' + m.reason, 'error'); env.changed(); return true;
       /* 1.16.0 (protocol v3): a managed strategy's state, and a Merge's result (each shown plainly by the host) */
       case 'managed': if (!OS || typeof m.id !== 'string') return true;
@@ -236,12 +242,12 @@ function create(env) {
 
   /* Everything that sends an order action goes through here: trading enabled, Armed on, connected, data loaded.
      `armed` false (Flatten and Flatten all only; Anthony 2026-10-01, "Flatten is never blocked"): every check but Armed. */
-  function ready(armed) {
+  function ready(armed, anyAccount) {   // anyAccount: Flatten all, which never needs the ticket's account (review of #47)
     if (FRAMED) { flash(FRAMED_REASON, 'error'); return false; }
     if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
     if (!TR.armed && armed !== false) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
     if (!open()) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
-    if (!TR.account) { flash('No account (None): nothing was sent. Pick an account to trade.', 'warn'); return false; }   // 1.8.0: never blocked by a view loading; DECISION 2026-10-14e: None sends nothing
+    if (!TR.account && !anyAccount) { flash('No account (None): nothing was sent. Pick an account to trade.', 'warn'); return false; }   // 1.8.0: never blocked by a view loading; DECISION 2026-10-14e: None sends nothing
     if (env.pickerAccount() !== TR.account) { env.syncAccounts(); flash('Nothing was sent: the account shown was not the order account. The picker is back on ' + TR.account + '; click again to act on ' + TR.account + '.', 'error'); return false; }
     return true;
   }
@@ -642,25 +648,30 @@ function create(env) {
    * at the press while connected and trading is on and that account is still a trade account; otherwise the note says
    * which were not sent. A press while a run is under way sends nothing.
    */
-  let faRun = null;                                                // { account, queue: [root], sent: [root] }
+  let faRun = null;                                                // { account (what the notes name), queue: [{ a, r }], sent: [{ a, r }], one }
+  /* Review of #47: Flatten all never needs the ticket's account. With the ticket on an account, that account, as before; on
+     None (DECISION 2026-10-14e), every trade account with a position or a working order. */
+  const faName = (run, x) => (run.one ? x.r : x.a + ' ' + x.r);
   function flattenAll() {
     try { dropNoStop(); flattened(null); } catch (e) { /* never in the way of the flatten */ }
-    if (!ready(false)) return;
-    const account = TR.account;
-    if (faRun) { flash('Flatten all under way on ' + faRun.account + ': ' + faRun.queue.join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
-    const roots = OT.flattenAllRoots([...TR.orders.values()], TR.positions, account, served, ROOTS);
-    if (!roots.length) { flash('Flatten all: no position or working order on ' + account + '. Nothing was sent.', ''); return; }
+    if (!ready(false, true)) return;
+    const one = !!TR.account, account = one ? TR.account : 'every trade account';
+    if (faRun) { flash('Flatten all under way on ' + faRun.account + ': ' + faRun.queue.map(x => faName(faRun, x)).join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
+    const items = [];
+    for (const a of one ? [TR.account] : TR.accounts) for (const r of OT.flattenAllRoots([...TR.orders.values()], TR.positions, a, served, ROOTS)) items.push({ a, r });
+    if (!items.length) { flash('Flatten all: no position or working order on ' + account + '. Nothing was sent.', ''); return; }
     const t = now();
     if (!sameAction('flattenAll|' + account, t)) return;
     const recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
-    const first = OT.paceChunks(roots, recent, BE_LIMIT)[0];
-    for (const r of first) sendFlatten(account, r, false, 'all');
-    const rest = roots.slice(first.length);
-    flash(first.length ? 'Flatten all sent for ' + account + ': ' + first.join(', ') + ' (cancel their orders, close their positions at market).' +
-      (rest.length ? ' ' + rest.join(', ') + ' as ChartBridge\'s 10 a second allows.' : '')
-      : 'Flatten all for ' + account + ': ' + rest.join(', ') + ' as ChartBridge\'s 10 a second allows.', '');
+    const run = { account, queue: items, sent: [], one };
+    const first = OT.paceChunks(items, recent, BE_LIMIT)[0];
+    for (const x of first) sendFlatten(x.a, x.r, false, 'all');
+    const rest = items.slice(first.length);
+    flash(first.length ? 'Flatten all sent for ' + account + ': ' + first.map(x => faName(run, x)).join(', ') + ' (cancel their orders, close their positions at market).' +
+      (rest.length ? ' ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.' : '')
+      : 'Flatten all for ' + account + ': ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.', '');
     if (!rest.length) return;
-    faRun = { account, queue: rest, sent: first.slice() };
+    faRun = Object.assign(run, { queue: rest, sent: first.slice() });
     faPump();
   }
   function faPump() {
@@ -669,17 +680,18 @@ function create(env) {
     const t = now(), recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
     const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
     if (room) {
+      const gone = r.queue.find(x => !TR.accounts.includes(x.a));
       const why = FRAMED || !TR.enabled ? 'trading went off' : !open() ? 'the connection to ChartBridge dropped' :
-        !TR.accounts.includes(r.account) ? r.account + ' is no longer a trade account in ChartBridge' : '';
+        gone ? gone.a + ' is no longer a trade account in ChartBridge' : '';
       if (why) {                                                   // a note that stays until dismissed, as for a Flatten not sent
         faRun = null;
-        flattenMiss = 'Flatten all on ' + r.account + ': ' + (r.sent.length ? r.sent.join(', ') + ' sent; ' : '') + r.queue.join(', ') + ' not sent: ' + why + '. Those positions may still be open. Flatten again.';
+        flattenMiss = 'Flatten all on ' + r.account + ': ' + (r.sent.length ? r.sent.map(x => faName(r, x)).join(', ') + ' sent; ' : '') + r.queue.map(x => faName(r, x)).join(', ') + ' not sent: ' + why + '. Those positions may still be open. Flatten again.';
         env.unsent(); flash(flattenMiss, 'error');
         return;
       }
-      for (const R of r.queue.splice(0, room)) { sendFlatten(r.account, R, false, 'all'); r.sent.push(R); }
+      for (const x of r.queue.splice(0, room)) { sendFlatten(x.a, x.r, false, 'all'); r.sent.push(x); }
     }
-    if (!r.queue.length) { faRun = null; flash('Flatten all sent for ' + r.account + ': ' + r.sent.join(', ') + ' (cancel their orders, close their positions at market).', ''); return; }
+    if (!r.queue.length) { faRun = null; flash('Flatten all sent for ' + r.account + ': ' + r.sent.map(x => faName(r, x)).join(', ') + ' (cancel their orders, close their positions at market).', ''); return; }
     const oldest = actionTimes.find(x => x > t - CANCEL_GAP);
     later(() => { if (faRun === r) faPump(); }, Math.max(20, (oldest === undefined ? t : oldest) + CANCEL_GAP - t));
   }

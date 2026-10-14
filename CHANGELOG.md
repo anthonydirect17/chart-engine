@@ -37,6 +37,17 @@ older ChartBridge keeps the page it has, and the PC updater waits until ChartBri
   is the one place an exception would go (a hero on Sim101, still to decide); for now there is none. The ticket's account is
   each page's own, so the workspace applies the same rule to it (`LivePrefs.ticketReset`, each pick stamped in
   `live-account-at-v1`; a page closed through the break does it at its next load).
+- **Review of #47 (fixed before merge):**
+  - The ticket's daily reset waited 3 s after trading came on, not for ChartBridge's snapshot: on a slow reconnect it could
+    put the ticket on None while its account held a position. It now waits for the sign-in snapshot of orders and positions
+    (ChartBridge 0.5.7's `orders` list says how many `position` messages follow it: `positions`), never a timer, and never
+    resets while that account has a position or a working order. The window's Flatten all never needs the ticket's account:
+    on None it covers every trade account with a position or a working order (every other ticket action still needs one).
+  - The bot's None from the page and its daily reset take the bot's PlaceGate (as the agent's do), in Place's lock order.
+  - The lost-trade hold is only for a flatten job that owns the pair (one that does not never says NOT FLAT) and lasts 30 s
+    at most; then the error is raised and repeats every 60 s as before.
+  - An agent's None from the page is refused while its account holds any position or working order (a trade it lost
+    included), the daily reset's own rule, so a lost-trade error can never repeat naming no account.
 - **Tests.** `check:orders` (AgentHarness: planId on the page's orders and through a restart, the day file with and without
   `#tagplan`, the TradeLost hold ending flat and not flat, None for agents, the reset on and off; BotHarness: None, the file,
   the reset in EDT and EST, once per day, a restart in the break; CopierHarness: the leader's reset). Unit tests for the

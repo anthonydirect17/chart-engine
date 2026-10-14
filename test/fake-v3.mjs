@@ -278,12 +278,18 @@ export class OrderDeskV3 extends OrderDesk {
     const out = [];
     const send0 = this.send; this.send = (c, msg) => out.push(msg);
     try { super.auth(conn, token); } finally { this.send = send0; }
-    for (const msg of out) {
-      if (msg.type === 'orders' && conn.v3) msg.list = [...this.orders.values()].filter(o => isWorking(o) && this.watched(o.account) && this.instruments[o.root]).map(o => this.orderMsg(o, true));
+    /* a v3 page's snapshot covers every watched account: the positions of the accounts that are not trade accounts go right after
+       the trade accounts' ones, and the orders list counts them all (ChartBridge 0.5.7: positions) */
+    const extra = [];
+    if (conn.authed && conn.v3) for (const [k, p] of this.positions) { const [account, root] = k.split('|'); if (p.qty && this.watched(account) && !this.accounts.includes(account)) extra.push({ type: 'position', account, root, qty: p.qty, avgPrice: p.avgPrice }); }
+    let lastPos = -1;
+    out.forEach((m, i) => { if (m.type === 'position') lastPos = i; else if (m.type === 'orders' && lastPos < 0) lastPos = i; });
+    out.forEach((msg, i) => {
+      if (msg.type === 'orders' && conn.v3) { msg.list = [...this.orders.values()].filter(o => isWorking(o) && this.watched(o.account) && this.instruments[o.root]).map(o => this.orderMsg(o, true)); msg.positions += extra.length; }
       this.send(conn, msg);
-    }
+      if (i === lastPos) for (const m of extra) this.send(conn, m);
+    });
     if (!conn.authed || !conn.v3) return;
-    for (const [k, p] of this.positions) { const [account, root] = k.split('|'); if (p.qty && this.watched(account) && !this.accounts.includes(account)) this.send(conn, { type: 'position', account, root, qty: p.qty, avgPrice: p.avgPrice }); }
     for (const x of this.managed.values()) this.send(conn, this.managedMsg(x));
     if (this.sw.copier) this.send(conn, this.copierMsg());
     if (this.sw.bot) this.send(conn, this.botMsg());
