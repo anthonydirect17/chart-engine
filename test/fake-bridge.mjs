@@ -27,10 +27,6 @@
 //                                   with --v3, fake-0.5.2 with --agents)
 //   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
 //                                   like a fast market, so the two range bar modes differ (sample data, seeded)
-//   --tickets                       like The Desk's relay: /ws needs ?ticket=<t>, and each ticket works once
-//                                   (a missing or reused one is refused), so every reconnect needs a fresh URL.
-//                                   A ticketed connection stands for the relay, which reaches ChartBridge with no
-//                                   Origin, so ChartBridge's PIN does not apply to it (the relay has its own gate)
 //   --pin-file=path                 where the PIN hash lives (ChartBridge 0.3.2 keeps pin.txt in its folder), so a
 //                                   restarted fake keeps the PIN and an open page's unlock; default: memory only
 //   --test-pin=2468                 start with this made-up PIN set (tests only), unless the pin file has one
@@ -41,7 +37,7 @@
 // ChartBridge 0.3.2's PIN (test/fake-pin.mjs): the page's WebSocket needs ?unlock=<token> and GET /session the
 // X-ChartBridge-Unlock header; POST /pin/status, /pin/set, /pin/unlock, /pin/change.
 // With --test-controls, also: /test/drop closes every WebSocket (a dropped connection); /test/received lists
-// what the pages sent (message types, GET /session count, WebSocket URLs, ticketsRefused).
+// what the pages sent (message types, GET /session count, WebSocket URLs).
 // Load and performance testing (test/perf-live.mjs); sample data, seeded, never market data:
 //   --tick-rate=15                  tick history this dense: 15 trades a second on average (weighted by each
 //                                   minute's volume), so 33 hours of NQ come to about 1.8 million ticks
@@ -188,7 +184,7 @@ const QUOTE = (V3 && !V3_OFF.includes('quoteRoots')) || (!!flag('quote-roots') &
 const AGENTS = V3 ? flagValue('agents').split(',').map(x => x.trim()).filter(Boolean) : [];   // 0.5.0: config.txt `agents`
 const AGENT_ACCOUNTS = AGENTS.length ? [{ name: 'SIM-AG1', sim: true, balance: 50000 }, { name: 'SIM-AG2', sim: true, balance: 50000 }] : [];   // made-up Sim accounts for agents to take
 let htfFail = '';                                  // /test/htf?fail=: the error every htf request gets (none when '')
-const TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
+const TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
 const LIVE_FIRST = !!flag('live-first'), CALENDAR = !!flag('calendar');
@@ -465,8 +461,7 @@ function wsOriginAllowed(origin) {
 const refused = { notThisPc: 0, origin: 0 };
 
 const clients = new Set();
-const received = { types: {}, sessionRequests: 0, urls: [], ticketsRefused: 0, pinRefused: 0 };   // for /test/received (no PIN or token ever in it)
-const ticketsUsed = new Set();
+const received = { types: {}, sessionRequests: 0, urls: [], pinRefused: 0 };   // for /test/received (no PIN or token ever in it)
 function send(c, obj) { if (!c.sock.destroyed) c.sock.write(frame(JSON.stringify(obj))); }
 
 // a new random session token each start, served same-origin at GET /session (gate 4)
@@ -840,13 +835,8 @@ server.on('upgrade', (req, sock) => {
   if (/^\/agent\//.test(req.url.split('?')[0])) return agentUpgrade(req, sock);   // 0.5.0: 404 unless the id is in `agents`
   if (!req.url.startsWith('/ws')) { sock.destroy(); return; }
   if (!wsOriginAllowed(req.headers.origin)) { refused.origin++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
-  if (TICKETS) {
-    const ticket = new URL(req.url, 'http://x').searchParams.get('ticket');
-    if (!ticket || ticketsUsed.has(ticket)) { received.ticketsRefused++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'); return; }
-    ticketsUsed.add(ticket);
-  }
   const unlock = new URL(req.url, 'http://x').searchParams.get('unlock');
-  if (!TICKETS && !PIN_OFF && !pin.wsUnlocked(req.headers.origin, unlock, OWN)) { received.pinRefused++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
+  if (!PIN_OFF && !pin.wsUnlocked(req.headers.origin, unlock, OWN)) { received.pinRefused++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   received.urls.push(req.url.replace(/([?&]unlock=)[^&]*/, '$1(hidden)'));
   const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
@@ -860,7 +850,7 @@ server.on('upgrade', (req, sock) => {
     for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
   }
-  if (V3) { hello.features = (hello.features || []).concat(['v3']); hello.version = AGENTS.length ? 'fake-0.5.4' : 'fake-0.4.0'; }   // protocol v3 (quote-only markets are told per instrument); 0.5.4 with agents (keepMode 0.5.2, the window in a trade 0.5.4)
+  if (V3) { hello.features = (hello.features || []).concat(['v3']); hello.version = flagValue('version') || (AGENTS.length ? 'fake-0.5.4' : 'fake-0.4.0'); }   // --version still wins (1.22.0)   // protocol v3 (quote-only markets are told per instrument); 0.5.4 with agents (keepMode 0.5.2, the window in a trade 0.5.4)
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {

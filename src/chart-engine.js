@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.21.0
+ * chart-engine 1.22.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.21.0';
+const VERSION = '1.22.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -2984,7 +2984,8 @@ function create(container, options) {
      * `offset` signed ticks from the entry's price, `role` 'stop' or 'target'): drawn fainter and finely dashed, labelled
      * "SL plan -12t" / "TP plan +24t", it follows the entry while that is dragged and is dragged and closed like an
      * order (orderMove with its own id and `from`, the entry price it was drawn from; orderCancel). `adds: ['stop', 'target']` on an entry draws "+SL" / "+TP" cells on
-     * its label while editing; a click on one emits orderPlanAdd { id, which }.
+     * its label while editing; a click on one emits orderPlanAdd { id, which }. `movePending: price` (1.22.0) on an order
+     * whose move still waits for its answer draws it there (faded, as after the drag), its planned lines with it.
      */
     setOrders(list) {
       orders = (list || []).filter(x => x && x.id !== undefined && isFinite(x.price) && x.price !== null)
@@ -2995,6 +2996,9 @@ function create(container, options) {
           return y;
         });
       pendingMoves.clear();
+      // 1.22.0: a host that keeps a move waiting for its answer says so (movePending, the price asked for): drawn there,
+      // as after the drag, until the host stops saying it (the workspace redraws its charts after every action)
+      for (const x of list || []) if (x && typeof x.movePending === 'number' && isFinite(x.movePending) && orders.some(y => y.id === x.id)) pendingMoves.set(x.id, x.movePending);
       if (od && !orders.some(x => x.id === od.id)) od = null;
       dirty = true;
     },

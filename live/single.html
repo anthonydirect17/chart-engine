@@ -2,33 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Chart 1.22.0: the single chart page is gone; the workspace (index.html) is ChartBridge's only page. This stub stays
+     installed (nt8/install-files.json) so an old /single.html on a PC, or a bookmark to it, opens the workspace instead of
+     a blank page or a 404. No script: it loads nothing else. -->
+<meta http-equiv="refresh" content="0; url=./">
 <title>Live Chart</title>
-<!-- IBM Plex from this PC (1.16.0): nothing is loaded from the internet -->
-<link rel="stylesheet" href="fonts/plex.css">
-<link rel="stylesheet" href="live.css">
-<link rel="stylesheet" href="pin.css">
-<style>
-/* Live trading chart fed by ChartBridge (NinjaTrader 8). One screen: toolbar, chart, status line.
-   live.css styles the chart (everything inside .chart-live); the page itself only fills the window.
-   Dark only on purpose: Anthony's house style. */
-:root { color-scheme: dark; }
-html, body { height: 100%; margin: 0; }
-body { background: #080B10; }
-</style>
 </head>
-<body>
-<!-- The page is the same chart a host page mounts with ChartLive.mount (live/EMBED.md); live.js builds it here. -->
-<script src="../src/chart-engine.js"></script>
-<script src="bar-builder.js"></script>
-<script src="order-ticket.js"></script>
-<script src="order-strategies.js"></script>
-<!-- the order bar's order logic, the one order path shared with the order ticket (1.12.0) -->
-<script src="trade.js"></script>
-<!-- ChartBridge's PIN (0.3.2): only this page loads it; a mounted chart never asks for the PIN. -->
-<script src="pin.js"></script>
-<script src="live.js" data-mount="page"></script>
-<!-- "Update ready: reload when flat" from the per-PC updater (nt8/update-pc.ps1); never reloads by itself. -->
-<script src="update-notice.js"></script>
+<body style="background:#080B10;color:#C9D3DE;font:14px system-ui,sans-serif">
+<p>The single chart page is gone. <a href="./" style="color:#4B9CD3">Open the workspace</a>.</p>
 </body>
 </html>
