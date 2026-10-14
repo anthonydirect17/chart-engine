@@ -260,6 +260,9 @@
 
 .chart-live .status { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center; font: 500 11px var(--mono); color: var(--text3); font-variant-numeric: tabular-nums; }
 .chart-live .status b { color: var(--text2); font-weight: 500; }
+/* 1.24.0: the feed's real delay (ChartBridge 0.5.6's clock check): amber from 1 s, red from 3 s */
+.chart-live .status b.warn { color: var(--warn); }
+.chart-live .status b.bad { color: var(--loss); }
 .chart-live .status .sep { color: var(--line-strong); }
 .chart-live .status .msg.warn { color: var(--warn); }
 .chart-live .status .ibnote { color: var(--text3); font-family: var(--sans); }

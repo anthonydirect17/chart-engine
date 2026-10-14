@@ -557,7 +557,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(bodyOf(code, 'public void Close()'), /try \{ if \(Socket != null\) Socket\.Abort\(\); \} catch \(Exception\) \{ \}/);
   assert.match(code, /long waited = Stopwatch\.GetTimestamp\(\) - q\.At - \(Interlocked\.Read\(ref bulkSpent\) - q\.Bulk\);/);
   for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
-  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",\s*"bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed" \};/);   // 0.4.0: accounts (B2), merge (B4), copier (B5), the bot channel (B3) and managed (B1) in the order lane
+  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",\s*"bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock" \};/);   // 0.4.0: accounts (B2), merge (B4), copier (B5), the bot channel (B3) and managed (B1) in the order lane; 0.5.6: pcClock (after hello, in order)
   assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
   const md2 = bodyOf(code, 'private static void OnMarketData(');
@@ -1280,7 +1280,7 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.5\.[1-5]";/);
+  assert.match(code, /public const string Version = "0\.5\.[1-6]";/);
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1306,4 +1306,57 @@ test('ChartBridge 0.5.5: the accounts line\'s one-time conversion and notConnect
   assert.match(load, /else if \(ChartBridgeOrders\.ReadConfig\(key, val\)\) \{ \}[^\n]*\n\s*else if \(Array\.IndexOf\(ChartBridgeSwitches\.Names, key\) >= 0\) \{ \}[^\n]*\n\s*else if \(key\.StartsWith\("maxQty\."\)\)[^\n]*\n\s*else ChartBridgeServer\.Log\(/);
   // a key ChartBridge reads itself is taken even when its value cannot be read (it is not "not a setting")
   for (const k of ['port', 'days', 'tickHours', 'rangeHours']) assert.match(load, new RegExp('key == "' + k + '"\\) \\{ if \\(int\\.TryParse\\(val, out n\\)\\)'));
+});
+
+test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its own thread, and tells hello, the pages and /diag', () => {
+  assert.match(code, /public const string Version = "0\.5\.6";/);
+  const clk = code.slice(code.indexOf('public static class ChartBridgeClock'));
+  assert.ok(code.indexOf('public static class ChartBridgeClock') > code.indexOf('public static class ChartBridgeServer') && clk.length > 1000, 'ChartBridgeClock is the last class of ChartBridge.cs');
+  // never sets the clock or a setting: no Win32 time call, no w32tm, no process, no registry, in any add-on file
+  for (const f of fs.readdirSync(path.join(__dirname, '..', 'nt8')).filter(n => n.endsWith('.cs'))) {
+    const s = fs.readFileSync(path.join(__dirname, '..', 'nt8', f), 'utf8');
+    for (const re of [/SetSystemTime/, /SetLocalTime/, /SetSystemTimeAdjustment/, /w32tm/i, /Microsoft\.Win32\.Registry/, /\bProcess\.Start\b/])
+      assert.ok(!re.test(s), f + ' never ' + re);
+  }
+  assert.ok(!/DllImport/.test(clk), 'no native call in the time check');
+  // its own background thread, never the pool or NinjaTrader's: no Task.Run, ThreadPool or Timer in the class
+  assert.match(bodyOf(clk, 'public static void Start()'), /new Thread\(Loop\) \{ IsBackground = true, Name = "ChartBridge time check", Priority = ThreadPriority\.BelowNormal \}/);
+  assert.ok(!/Task\.Run|ThreadPool|System\.Threading\.Timer|Task\.Factory/.test(clk), 'no pool thread');
+  // 5 minutes, 2 s timeouts, 500 ms warning, time.windows.com by default; the name lookup has its own timeout
+  assert.match(clk, /public const int EveryMs = 300000;/);
+  assert.match(clk, /public const int TimeoutMs = 2000;/);
+  assert.match(clk, /public const double WarnMs = 500;/);
+  assert.match(clk, /public const string DefaultServer = "time\.windows\.com";/);
+  const ask = bodyOf(clk, 'public static bool Ask(');
+  assert.match(ask, /IPAddress\[\] list = Dns\.GetHostAddresses\(server\);/, 'the lookup on its own thread, not a pool thread');
+  assert.ok(!/BeginGetHostAddresses/.test(clk));
+  // nothing leaves the loop as an exception (it would end NinjaTrader), and a fault still waits the full interval
+  const loop = bodyOf(clk, 'private static void Loop(');
+  assert.match(loop, /try \{ w\.WaitOne\(wait\); \} catch \(Exception\) \{ Thread\.Sleep\(wait\); \}\s*if \(Volatile\.Read\(ref gen\) != g\) return;\s*wait = EveryMs;\s*try\s*\{/);
+  assert.match(loop, /catch \(Exception ex\)\s*\{\s*Interlocked\.Increment\(ref faults\);/);
+  assert.match(ask, /s\.ReceiveTimeout = TimeoutMs; s\.SendTimeout = TimeoutMs;/);
+  assert.match(ask, /double t0 = ChartBridgeTime\.NowUtcMs\(\);[\s\S]*double t3 = ChartBridgeTime\.NowUtcMs\(\);/, 'the clock rx is stamped with');
+  // the SNTP four-timestamp formula, server minus PC
+  const off = bodyOf(clk, 'public static bool Offset(');
+  assert.match(off, /double r = \(t3 - t0\) - \(t2 - t1\);/);
+  assert.match(off, /offset = \(\(t1 - t0\) \+ \(t2 - t3\)\) \/ 2;/);
+  // config.txt timeServer, read in the chain before the unknown-key line
+  const load = bodyOf(code, 'public static void Load()');
+  assert.match(load, /ChartBridgeClock\.ResetConfig\(\);/);
+  assert.match(load, /else if \(ChartBridgeAgents\.ReadConfig\(key, val\)\) \{ \}[^\n]*\n\s*else if \(ChartBridgeClock\.ReadConfig\(key, val\)\) \{ \}/);
+  // started and stopped with ChartBridge; hello, the pages after hello, /diag; the PC clock's steps followed
+  assert.match(bodyOf(code, 'public static bool Start()'), /ChartBridgeCopier\.Start\(\);\s*ChartBridgeClock\.Start\(\);\s*return true;/);
+  assert.match(bodyOf(code, 'public static void Stop()'), /ChartBridgeClock\.Stop\(\);/);
+  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /b\.Append\(",\\"pcClock\\":"\)\.Append\(ChartBridgeClock\.Json\(\)\);/);
+  assert.match(bodyOf(code, 'private static async Task RunClient('), /int clockSeen = ChartBridgeClock\.Changes;\s*client\.Send\(HelloJsonFor\(seen\)\);[\s\S]*if \(ChartBridgeClock\.Changes != clockSeen\) client\.Send\(ChartBridgeClock\.MessageJson\(\)\);/);
+  assert.match(bodyOf(code, 'private static string DiagJson()'), /\\"clockOffsetMs\\"[^\n]*\n\s*b\.Append\(",\\"pcClock\\":"\)\.Append\(ChartBridgeClock\.DiagJson\(\)\);/);
+  assert.match(bodyOf(code, 'public static double NowUtcMs()'), /if \(stepped != 0\) ChartBridgeClock\.PcClockChanged\(stepped\);/);
+  // the harness runs it (npm run check:orders); C# 5
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/AgentHarness\.cs check\/ClockHarness\.cs &&/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("time check \(0\.5\.6\)", ClockHarness\.Run\);/);
+  assert.ok(!/(^|[\s(=,+:?])\$"/m.test(clk) && !/\?\.\w/.test(clk) && !/\bnameof\(/.test(clk), 'C# 5');
+  // documented
+  const proto = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'PROTOCOL.md'), 'utf8');
+  assert.match(proto, /\| `pcClock` \|/);
+  assert.match(proto, /### This PC's clock against a time server \(0\.5\.6\)/);
 });

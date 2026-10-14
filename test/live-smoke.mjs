@@ -256,6 +256,34 @@ try {
   await page.screenshot({ path: path.join(out, 'live-es.png') });
   console.log('status:', status.slice(0, 160));
 
+  // 1.24.0: no pcClock from this fake (a ChartBridge before 0.5.6): the feed as before. With ChartBridge 0.5.6's clock check
+  // (a fake whose PC clock runs 2.31 s ahead of the exchange) the chart's own line splits it, coloured by the real delay only
+  if (/= clock|real/.test(status)) fail('no pcClock: the feed split anyway: ' + status);
+  {
+    const clk = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT + 2), '--pin-off', '--test-controls', '--pc-clock', '--clock-offset=-2.31', '--pc-clock-offset=0', '--version=fake-0.5.6'], { stdio: ['ignore', 'pipe', 'inherit'] });
+    await new Promise(r => clk.stdout.once('data', r));
+    try {
+      const p3 = await browser.newPage({ viewport: { width: 1440, height: 860 } });
+      p3.on('pageerror', e => fail('clock pageerror: ' + e.message));
+      await p3.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+      await p3.goto(hostUrl(PORT + 2));
+      await waitLive(p3);
+      await p3.waitForTimeout(1500);
+      const rd = () => p3.evaluate(() => { const f = document.querySelector('[id$="-dFeed"]'); return { text: f.textContent, cls: f.className, color: getComputedStyle(f).color, tip: f.title }; });
+      let f = await rd();
+      const m = /^(\d+) ms = clock \+2310 ms, real (-?\d+) ms$/.exec(f.text);
+      if (!m || +m[1] !== 2310 + +m[2] || f.cls !== '' || !/^PC clock: 2310 ms ahead of time\.windows\.com/.test(f.tip)) fail('chart line, clock checked: ' + JSON.stringify(f));
+      await fetch(`http://127.0.0.1:${PORT + 2}/test/pc-clock?offsetMs=1000`, { method: 'POST' }); await p3.waitForTimeout(800);
+      f = await rd();
+      if (!/= clock -1000 ms, real 33\d\d ms$/.test(f.text) || f.cls !== 'bad' || f.color !== 'rgb(255, 122, 122)') fail('chart line, 3.3 s real: red: ' + JSON.stringify(f));
+      await fetch(`http://127.0.0.1:${PORT + 2}/test/pc-clock?checked=0&why=not%20checked%20yet`, { method: 'POST' }); await p3.waitForTimeout(800);
+      f = await rd();
+      if (!/^\d+ ms$/.test(f.text) || f.cls !== '' || !/^PC clock not checked: not checked yet\./.test(f.tip)) fail('chart line, not checked: as before: ' + JSON.stringify(f));
+      else console.log('feed split on the chart\'s line: ' + m[0] + '; then red at 3.3 s real; then as before: ' + f.text);
+      await p3.close();
+    } finally { clk.kill(); }
+  }
+
   // less tick history than asked (review N5): a quiet note says range bars start mid-session, exactly when they do
   {
     const short = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT + 1), '--pin-off', '--tick-hours-max=2'], { stdio: ['ignore', 'pipe', 'inherit'] });
