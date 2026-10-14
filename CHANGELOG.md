@@ -12,14 +12,15 @@ update-pc stages it); the page works with ChartBridge 0.5.2 to 0.5.5 exactly as 
 - **ChartBridge 0.5.6: the time check** (`ChartBridgeClock`, in `ChartBridge.cs`; no new file, no new dependency). Every 5
   minutes (the first 3 s after a start) one SNTP question (UDP port 123) to `config.txt`'s `timeServer`, default
   `time.windows.com` (the server Windows time sync uses; `timeServer = off` turns it off), on a background thread of its own,
-  never NinjaTrader's or the thread pool's; the name lookup and the answer each get 2 s. Offset = ((t1 - t0) + (t2 - t3)) / 2,
+  never NinjaTrader's or the thread pool's (the name lookup is synchronous on it); the answer gets 2 s, and a fault in a
+  check is said in the Output window and never ends the thread. Offset = ((t1 - t0) + (t2 - t3)) / 2,
   the server's time minus this PC's, timed on the clock `rx` is stamped with; an answer that is not a server's, turns the
   question down, comes from a server whose own clock is not set, does not echo the question, or does not add up, is no answer.
   **It only measures: it never sets the clock and never changes a setting** (a test checks no add-on file can). No answer
   (offline, a firewall): the last answer is kept for 30 minutes, then the state is "not checked" with why; nothing else changes.
   When ChartBridge follows a step of the PC clock (a Windows time sync), the offset held moves with it at once and a step over
   250 ms is checked again at once, so the split never shows the old clock for 5 minutes.
-- **What it tells:** `pcClock` in `hello` and the new `pcClock` message to every page (in the order lane, after hello):
+- **What it tells:** `pcClock` in `hello` and the new `pcClock` message to every page (in the order lane; a page may get one before its hello, which then carries the state as it is):
   `{checked: true, offsetMs, rttMs, atUtcMs, server}` or `{checked: false, why, server}`; `/diag` `pcClock` adds the counters
   (`clockOffsetMs` stays what it was: ChartBridge's own clock against the PC's). The Output window says when the first check
   answers or not, when that changes, and when the clock goes 0.5 s off or back; never one line per check.
@@ -28,12 +29,15 @@ update-pc stages it); the page works with ChartBridge 0.5.2 to 0.5.5 exactly as 
   The feed is **amber from 1 s and red from 3 s of real delay, never for the clock's part**, and only once the clock is checked
   (unchecked, a late number may be the clock's). Where the top bar has no room for the split beside everything else (1366 x
   768), the line says "125 ms real" and the tooltip has the split; while the warning shows and the line is still cut, the
-  frame rate, then the local delay's p95, then the local delay give way, never the warning. The line now shrinks last of
-  the top bar and is cut rather than push Flatten all out of the window. The tooltip says what was checked, by which server,
+  frame rate, then the local delay's p95, then the local delay give way, never the warning. Every control of the top bar
+  (KEYS, Flatten all, Colors, Layout, + Add panel, the gear) now keeps its full size; only a note, the update notice and the
+  status line give way, the line last, cut rather than push Flatten all out of the window (`smoke:workspace` checks the bar
+  never overflows at 1366 x 768, 1600 x 900 and 1920 x 1080, with and without the warning and with a long note). The tooltip says what was checked, by which server,
   when, and the round trip, each instrument's split, and with the warning how Windows fixes it (Settings, Time and language,
   Date and time, Sync now). No answer: the feed as before ("(PC clock behind)" below 0 included) and the tooltip says "PC clock
-  not checked: why". No `pcClock` (ChartBridge before 0.5.6): exactly as before. A mounted chart's own status line does the
-  same (`LivePrefs.feedText`, `feedLevel`, `clockWarn`, `clockNote`, new in `live/live.js`).
+  not checked: why". No `pcClock` (ChartBridge before 0.5.6): exactly as before. A mounted chart's own status line (not shown in the
+  workspace) splits the feed and colours it the same way, with the clock in its tooltip; the warning is the top bar's
+  (`LivePrefs.feedText`, `feedShort`, `feedLevel`, `clockWarn`, `clockNote`, new in `live/live.js`).
 - Tests: `npm run check:orders` (ClockHarness, new: the NTP time stamps and the 2036 era, the formula and its sign, every
   answer that is none, a time server of its own on 127.0.0.1 that answers and one that never does, what the pages and the
   Output window are told, the answer held through failed checks, a PC clock step, `timeServer = off`; 45 checks),

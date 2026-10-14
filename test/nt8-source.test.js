@@ -1328,7 +1328,12 @@ test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its o
   assert.match(clk, /public const double WarnMs = 500;/);
   assert.match(clk, /public const string DefaultServer = "time\.windows\.com";/);
   const ask = bodyOf(clk, 'public static bool Ask(');
-  assert.match(ask, /if \(!look\.AsyncWaitHandle\.WaitOne\(TimeoutMs\)\)/);
+  assert.match(ask, /IPAddress\[\] list = Dns\.GetHostAddresses\(server\);/, 'the lookup on its own thread, not a pool thread');
+  assert.ok(!/BeginGetHostAddresses/.test(clk));
+  // nothing leaves the loop as an exception (it would end NinjaTrader), and a fault still waits the full interval
+  const loop = bodyOf(clk, 'private static void Loop(');
+  assert.match(loop, /try \{ w\.WaitOne\(wait\); \} catch \(Exception\) \{ Thread\.Sleep\(wait\); \}\s*if \(Volatile\.Read\(ref gen\) != g\) return;\s*wait = EveryMs;\s*try\s*\{/);
+  assert.match(loop, /catch \(Exception ex\)\s*\{\s*Interlocked\.Increment\(ref faults\);/);
   assert.match(ask, /s\.ReceiveTimeout = TimeoutMs; s\.SendTimeout = TimeoutMs;/);
   assert.match(ask, /double t0 = ChartBridgeTime\.NowUtcMs\(\);[\s\S]*double t3 = ChartBridgeTime\.NowUtcMs\(\);/, 'the clock rx is stamped with');
   // the SNTP four-timestamp formula, server minus PC

@@ -36,6 +36,12 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-et { color: var(--ws-muted); font-weight: 400; }
 /* 1.24.0: the line shrinks last (after a note and the update notice), and is cut rather than push Flatten all out of the window */
 .ws-stat { display: inline-flex; gap: 6px; font: 500 11px var(--ws-mono); color: var(--ws-muted); font-variant-numeric: tabular-nums; flex: 0 0.001 auto; min-width: 0; overflow: hidden; }
+/* 1.24.0 (review of #46): every other part of the top bar keeps its full size (KEYS, Flatten all, Colors, Layout, + Add panel,
+   the gear, the tabs); only the note, the update notice and the status line give way, in that order */
+.ws-top > *, .ws-top > .ws-lv > * { flex: none; }
+.ws-top > .ws-stat { flex: 0 0.001 auto; }
+.ws-top > .ws-note, .ws-top > .ws-upd { flex: 0 1 auto; }
+.ws-top > .ws-fill { flex: 1 1 auto; }
 .ws-stat b { color: var(--ws-text2); font-weight: 500; }
 /* 1.24.0: the feed's real delay (ChartBridge 0.5.6's clock check) amber from 1 s, red from 3 s; "PC clock off by 2.3 s" amber */
 .ws-stat b.warn { color: var(--ws-warn); }

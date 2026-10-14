@@ -101,7 +101,36 @@ async function clockPart() {
     check(s.warn === 'PC clock off by 2.3 s' && s.warnSeen, '1366 x 768: "PC clock off by 2.3 s" in sight, not cut (local ' + s.local + ')');
     check(s.statRight <= s.keysLeft && s.flatRight <= s.vw, '1366 x 768: the line ends before KEYS (' + Math.round(s.statRight) + ' <= ' + Math.round(s.keysLeft) + '); Flatten all in the window (' + Math.round(s.flatRight) + ' of ' + s.vw + ')');
     await shot(p, 'workspace-clock-split-1366x768.png');
-    await p.setViewportSize({ width: 1920, height: 1080 }); await p.waitForTimeout(300);
+    /* the review of #46: the top bar never overflows; every control (KEYS, Flatten all, Colors, Layout, + Add panel, the gear)
+       at full size inside the window; only the note, the update notice and the status line give way; the warning never cut */
+    const bar = async label => {
+      const r = await p.evaluate(() => {
+        const top = document.querySelector('.ws-top'), stat = document.getElementById('wsStat'), warn = document.getElementById('wsClockWarn');
+        const ctl = [...top.querySelectorAll('button, select, .ws-keys')].filter(e => e.getClientRects().length && !e.closest('[hidden]') && !e.closest('.ws-alert'));
+        const bad = ctl.filter(e => { const b = e.getBoundingClientRect(); return b.right > innerWidth + 0.5 || b.left < 0 || e.scrollWidth > Math.ceil(b.width) + 1; }).map(e => e.id || e.className);
+        return { over: top.scrollWidth - top.clientWidth, bad, n: ctl.length, gear: Math.round(document.getElementById('wsSet').getBoundingClientRect().width),
+          warnCut: !warn.hidden && warn.getBoundingClientRect().right > stat.getBoundingClientRect().right + 0.5, line: stat.innerText.replace(/\s+/g, ' ').trim() };
+      });
+      check(r.over <= 0 && !r.bad.length && r.n >= 5 && r.gear === 28 && !r.warnCut, label + ': the top bar does not overflow, all ' + r.n + ' controls at full size in the window, the gear 28 px (' + r.line + ')' + (r.bad.length || r.over > 0 ? ' ' + JSON.stringify(r) : ''));
+    };
+    const LONG = encodeURIComponent('a long note from ChartBridge for the top bar, long enough to need all of the room there is and then some more room besides');
+    for (const [w, h] of [[1366, 768], [1600, 900], [1920, 1080]]) {
+      await p.setViewportSize({ width: w, height: h });
+      await ctl('pc-clock?offsetMs=-2310'); await p.waitForTimeout(1300);
+      await bar(w + ' x ' + h + ', the clock warning');
+      await ctl('status?level=info&text=' + LONG); await p.waitForTimeout(1200);
+      await bar(w + ' x ' + h + ', the clock warning and a long note');
+      await ctl('pc-clock?offsetMs=-100'); await p.waitForTimeout(1300);
+      await bar(w + ' x ' + h + ', no clock warning');
+      await ctl('status?level=info&text=' + LONG); await p.waitForTimeout(1200);
+      await bar(w + ' x ' + h + ', no clock warning, a long note');
+    }
+    await ctl('pc-clock?offsetMs=-2310');
+    await p.setViewportSize({ width: 1920, height: 1080 });
+    await p.waitForFunction(() => document.getElementById('wsNote').hidden, null, { timeout: 8000 });   // the split waits for a note to go
+    await p.waitForTimeout(1100);
+    s = await read();
+    check(!!parts(s.feed), '1920 x 1080, the note gone: the split again (' + s.feed + ')');
     // told the clock is only 0.5 s ahead: about 1.8 s of the delay is real (ship Wi-Fi): amber
     await ctl('pc-clock?offsetMs=-500'); await p.waitForTimeout(1300);
     s = await read(); x = parts(s.feed);

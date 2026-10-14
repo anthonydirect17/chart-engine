@@ -5065,8 +5065,8 @@ namespace NinjaTrader.NinjaScript.AddOns
     // The page's feed delay is ChartBridge's receipt of a trade (rx, this PC's clock through ChartBridgeTime.NowUtcMs) minus the
     // exchange's time on it (u), so a PC clock that runs ahead reads as late data (2026-10-12: the laptop showed "feed 2435 ms",
     // and 122 ms after a Windows time sync). Every 5 minutes ChartBridge asks a time server what time it is (SNTP, RFC 4330: one
-    // UDP packet to port 123 and its answer, 2 s at most) on a background thread of its own, never NinjaTrader's or the thread
-    // pool's, and tells the pages how far this PC's clock is off ("pcClock" in hello and the "pcClock" message, nt8/PROTOCOL.md),
+    // UDP packet to port 123 and its answer, 2 s at most) on a background thread of its own (the name lookup too, synchronous on
+    // it: never NinjaTrader's thread or the thread pool's), and tells the pages how far this PC's clock is off ("pcClock" in hello and the "pcClock" message, nt8/PROTOCOL.md),
     // so the page can split the feed delay into the clock's part and the real one. It only measures: it never sets the clock
     // and never changes a setting of Windows or NinjaTrader.
     // config.txt: timeServer = time.windows.com (the default, the server Windows time sync uses); timeServer = off: no check.
@@ -5076,7 +5076,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static int Port = 123;          // SNTP's port (the harness points it at a server of its own)
         public const int EveryMs = 300000;     // a check every 5 minutes
         public const int FirstAfterMs = 3000;  // the first one 3 s after a start
-        public const int TimeoutMs = 2000;     // the name lookup and the answer each get 2 s; then "no answer"
+        public const int TimeoutMs = 2000;     // the answer gets 2 s; then "no answer" (the name lookup takes what Windows' own takes)
         public const double KeepMs = 1800000;  // a result is kept through failed checks for 30 minutes, then "not checked"
         public const double WarnMs = 500;      // off by this much or more: said in the Output window (the page warns at the same)
         public const double StepMs = 250;      // the PC clock changed by more than this (ChartBridgeTime): checked again at once
@@ -5112,7 +5112,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 has = false; offsetMs = rttMs = atUtcMs = 0; answeredBy = null; changes++;
                 why = Off ? "the time check is off in config.txt (timeServer = off)" : "not checked yet";
-                checks = fails = 0; lastError = null; lastTryUtcMs = 0; said = 0; saidOver = false;
+                checks = fails = 0; faults = 0; lastError = null; lastTryUtcMs = 0; said = 0; saidOver = false;
             }
         }
 
@@ -5141,21 +5141,38 @@ namespace NinjaTrader.NinjaScript.AddOns
             int g = (int)a[0];
             AutoResetEvent w = (AutoResetEvent)a[1];
             int wait = FirstAfterMs, seen = -1;
+            // Nothing may leave this loop as an exception: one unhandled on a background thread ends NinjaTrader. A fault is said
+            // in the Output window and the loop waits its full interval again (never a hot spin), as the bars worker and the
+            // copier guard theirs.
             while (true)
             {
-                w.WaitOne(wait);
+                try { w.WaitOne(wait); } catch (Exception) { Thread.Sleep(wait); }
                 if (Volatile.Read(ref gen) != g) return;
-                int now = Changes;
-                if (seen != -1 && now != seen) ToPages();   // the PC clock changed since the last check: the corrected offset first
-                string server = Server;
-                double off, rtt; string err;
-                bool ok = Ask(server, Port, out off, out rtt, out err);
-                if (Volatile.Read(ref gen) != g) return;
-                Note(server, ok, off, rtt, err, ChartBridgeTime.NowUtcMs());
-                seen = Changes;
                 wait = EveryMs;
+                try
+                {
+                    Action fault = FaultForHarness;
+                    if (fault != null) fault();
+                    int now = Changes;
+                    if (seen != -1 && now != seen) ToPages();   // the PC clock changed since the last check: the corrected offset first
+                    string server = Server;
+                    double off, rtt; string err;
+                    bool ok = Ask(server, Port, out off, out rtt, out err);
+                    if (Volatile.Read(ref gen) != g) return;
+                    // An answer taken across a step of the PC clock is off by that step until the next check (the step itself
+                    // corrects the held offset only from the moment it is seen); a step over StepMs asks again at once.
+                    Note(server, ok, off, rtt, err, ChartBridgeTime.NowUtcMs());
+                    seen = Changes;
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref faults);
+                    try { ChartBridgeServer.Log("time check error (" + ex.GetType().Name + ": " + ex.Message + "); checked again in 5 minutes"); } catch (Exception) { }
+                }
             }
         }
+        public static Action FaultForHarness;   // the harness: throws inside the loop's step
+        private static int faults;
 
         // ChartBridgeTime followed a change of the PC clock (stepped ms; positive: the PC clock moved ahead). The offset held is
         // corrected by it at once (cheap: this runs on whatever thread read the clock); a change above StepMs is checked again now.
@@ -5235,7 +5252,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 string j = JsonLocked();
                 return j.Substring(0, j.Length - 1) + ",\"checks\":" + checks + ",\"fails\":" + fails + ",\"lastError\":" + (lastError == null ? "null" : CbJson.Str(lastError)) +
-                    ",\"lastTryUtcMs\":" + CbJson.Num3(lastTryUtcMs) + ",\"everyMs\":" + EveryMs + ",\"timeoutMs\":" + TimeoutMs + ",\"warnMs\":" + CbJson.Num(WarnMs) + "}";
+                    ",\"faults\":" + Volatile.Read(ref faults) + ",\"lastTryUtcMs\":" + CbJson.Num3(lastTryUtcMs) + ",\"everyMs\":" + EveryMs + ",\"timeoutMs\":" + TimeoutMs + ",\"warnMs\":" + CbJson.Num(WarnMs) + "}";
             }
         }
 
@@ -5246,9 +5263,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             offset = 0; rtt = 0; err = null;
             try
             {
-                IAsyncResult look = Dns.BeginGetHostAddresses(server, null, null);
-                if (!look.AsyncWaitHandle.WaitOne(TimeoutMs)) { err = "the name was not found within " + (TimeoutMs / 1000) + " s"; return false; }
-                IPAddress[] list = Dns.EndGetHostAddresses(look);
+                // synchronous on this check's own thread (Begin/EndGetHostAddresses would resolve on a pool thread and leave a lookup
+                // that timed out running): a slow lookup only delays this check, and Stop never waits for it
+                IPAddress[] list = Dns.GetHostAddresses(server);
                 IPAddress addr = list.FirstOrDefault(x => x.AddressFamily == AddressFamily.InterNetwork) ?? list.FirstOrDefault();
                 if (addr == null) { err = "the name has no address"; return false; }
                 using (Socket s = new Socket(addr.AddressFamily, SocketType.Dgram, ProtocolType.Udp))

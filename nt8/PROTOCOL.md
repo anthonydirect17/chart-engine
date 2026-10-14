@@ -207,7 +207,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 | `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side), since 0.3.8 `q` (Time and Sales category, see there; absent when unknown) | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
-| `pcClock` | the fields of hello's `pcClock` (0.5.6, see Delay readout): `checked`, then `offsetMs`, `rttMs`, `atUtcMs`, `server`, or `why`, `server` | to every page when a check of this PC's clock answers (every 5 minutes), when it changes to no answer, and when the PC clock steps by more than 250 ms; in the order lane, so after hello |
+| `pcClock` | the fields of hello's `pcClock` (0.5.6, see Delay readout): `checked`, then `offsetMs`, `rttMs`, `atUtcMs`, `server`, or `why`, `server` | to every page when a check of this PC's clock answers (every 5 minutes), when it changes to no answer, and when the PC clock steps by more than 250 ms; in the order lane. A page can get one before its `hello` (a page is told from the moment it connects); `hello` then carries the state as it is, and a check that ends while `hello` is built is sent again after it |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page; since 0.3.7 also a refused `htf` or `weekProfile` request (`warn`, "ChartBridge refused a htf message: why") |
 | `settlement` | `root`, `p` (null when none is known), `date` (the trading date it settles, `yyyy-MM-dd`) (0.3.7) | when the prior settlement changes: a value for that date comes in, or a new session starts at 18:00 ET and the day before becomes the prior |
 | `htf` | `root`, `tf` (`4h`, `1D`, `1W`), `id` (the request's, or null), `name` (the contract, or null with an error), `bars`: `[[t,o,h,l,c,v], ...]` oldest first, the last one forming, `error` (null, or why there are no bars) (0.3.7) | the answer to an `htf` request |
@@ -810,8 +810,9 @@ changes a setting of Windows or NinjaTrader.
 
 - **The check** (`ChartBridgeClock` in `ChartBridge.cs`): SNTP (RFC 4330), one 48-byte UDP question to port 123 of
   `config.txt`'s `timeServer` (default `time.windows.com`, the server Windows time sync uses; `timeServer = off`: no check)
-  and its answer, on a background thread of its own (never NinjaTrader's or the thread pool's). The name lookup and the answer
-  each get 2 s. The times are ChartBridge's clock (`ChartBridgeTime.NowUtcMs`, the one `rx` is stamped with): t0 the question
+  and its answer, on a background thread of its own (never NinjaTrader's or the thread pool's; the name lookup is synchronous
+  on it, so a slow lookup only delays that check). The answer gets 2 s. A fault in a check is said in the Output window and
+  never ends the thread; the next check comes at its time. The times are ChartBridge's clock (`ChartBridgeTime.NowUtcMs`, the one `rx` is stamped with): t0 the question
   sent, t1 the server's receipt, t2 its answer, t3 the answer received; offset = ((t1 - t0) + (t2 - t3)) / 2 (the server's
   time minus this PC's: negative when the PC runs ahead), round trip = (t3 - t0) - (t2 - t1). An answer that is not a
   server's (mode 4), that turns the question down (stratum 0, a kiss code), whose server says its own clock is not set (leap

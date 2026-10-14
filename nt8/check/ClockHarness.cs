@@ -43,7 +43,7 @@ public static class ClockHarness
         Check = check;
         string serverWas = ChartBridgeClock.Server; int portWas = ChartBridgeClock.Port;
         try { Stamps(); Formula(); NoAnswers(); Told(); Asked(); }
-        finally { ChartBridgeClock.Stop(); ChartBridgeClock.Server = serverWas; ChartBridgeClock.Port = portWas; ChartBridgeClock.Reset(); }
+        finally { ChartBridgeClock.FaultForHarness = null; ChartBridgeClock.Stop(); ChartBridgeClock.Server = serverWas; ChartBridgeClock.Port = portWas; ChartBridgeClock.Reset(); }
     }
 
     static void Stamps()
@@ -235,6 +235,22 @@ public static class ClockHarness
                 came = false;
                 for (int i = 0; i < 60 && !came; i++) { Thread.Sleep(50); lock (got) came = got.Count >= 2; }
                 lock (got) Check(came && Math.Abs(Num(got[0], "offsetMs") - 834) < 50 && Math.Abs(Num(got[1], "offsetMs") - 1234) < 50, "the PC clock changed by 400 ms: the corrected offset sent, then a fresh answer at once: " + string.Join(" | ", got));
+                // a step that throws (a fault anywhere in the check) does not end the loop: said, and the next wake checks again
+                int thrown = 0;
+                ChartBridgeClock.FaultForHarness = () => { if (Interlocked.Increment(ref thrown) == 1) throw new InvalidOperationException("made-up fault"); };
+                from = Lines();
+                lock (got) got.Clear();
+                ChartBridgeClock.PcClockChanged(400);
+                bool saidFault = false;
+                for (int i = 0; i < 60 && !saidFault; i++) { Thread.Sleep(50); saidFault = Said(from).Any(x => x.Contains("time check error (InvalidOperationException: made-up fault); checked again in 5 minutes")); }
+                Check(saidFault && thrown == 1, "a fault in the check: said in the Output window, not thrown out of the thread");
+                lock (got) got.Clear();
+                ChartBridgeClock.PcClockChanged(400);
+                came = false;
+                for (int i = 0; i < 60 && !came; i++) { Thread.Sleep(50); lock (got) came = got.Any(m => Math.Abs(Num(m, "offsetMs") - 1234) < 50); }
+                Check(came && thrown == 2, "the loop goes on after it: the next wake checks again (" + thrown + " steps)");
+                Check(Regex.IsMatch(Priv("DiagJson"), "\"faults\":1,"), "/diag counts the fault");
+                ChartBridgeClock.FaultForHarness = null;
                 ChartBridgeClock.Stop();
                 lock (got) got.Clear();
                 ChartBridgeClock.PcClockChanged(400);
