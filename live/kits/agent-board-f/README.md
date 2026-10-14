@@ -1,7 +1,7 @@
 # Agent tab, board F (kit)
 
 The Agent tab as it was before the "Layout 5 Tron" redesign (DECISION 2026-10-14a): chart 1.21.0, ChartBridge 0.5.5, main
-commit `a90c3c4`, git tag `agent-tab-board-f`. Kept here so it can be opened on its own, and put back if Anthony wants it.
+commit `a90c3c4` on main (`a90c3c41368aec319f387e09f3248b41330f4de8`); a git tag `agent-tab-board-f` may also point at it once pushed from a PC, but the commit works in every clone. Kept here so it can be opened on its own, and put back if Anthony wants it.
 
 It is a kit, not a part of the chart page: nothing on the live page loads it and it is not in `nt8/install-files.json`, so it
 never goes to a trading PC (`test/agent-kit.test.js` holds both).
@@ -38,7 +38,7 @@ Change account to SIM-AG1 (on Sim101, the bot's account, demo stands down). For 
 From the repo root (quote the patterns, so git matches them in the tag):
 
 ```
-git checkout agent-tab-board-f -- 'live/agent*.*' docs/AGENT_TAB.md 'test/agent*'
+git checkout a90c3c41368aec319f387e09f3248b41330f4de8 -- 'live/agent*.*' docs/AGENT_TAB.md 'test/agent*'
 ```
 
 That restores the tab, its doc and its tests exactly as tagged. The tag is older than the parity hooks; to keep the parity test

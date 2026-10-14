@@ -28,7 +28,7 @@ every one again.
 | `test/agent-targets-smoke.mjs` | `npm run smoke:agent-targets` (also run by `smoke:agent`): Accept and Reject never covered, never dropped, never moving (below) |
 | `test/perf-agent.mjs` | `npm run perf:agent`: the light's cost in a trade over a busy chart (`docs/MOTION.md` R5) |
 | `test/agent-parity.json`, `test/agent-parity-smoke.mjs` | the parity list (128 items, before Layout 5) and `npm run smoke:agent-parity` (also run by `smoke:agent`): every item asserted through its `data-parity` hook (below) |
-| `live/kits/agent-board-f/` | board F saved as a kit (tag `agent-tab-board-f`): opens on its own against the fake; never installed, never loaded by the page (`test/agent-kit.test.js`); its `README.md` says how to put it back |
+| `live/kits/agent-board-f/` | board F saved as a kit (main commit `a90c3c4`): opens on its own against the fake; never installed, never loaded by the page (`test/agent-kit.test.js`); its `README.md` says how to put it back |
 
 Shared code changed (each change small and tested): `live/bot.js` hands its open proposals to the one copilot-key router
 instead of owning the `chart-copilot-key` event; `live/bot-core.js` `botFillLedger(mark)` takes an optional mark (the
