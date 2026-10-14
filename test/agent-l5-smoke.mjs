@@ -223,8 +223,9 @@ try {
     await page.evaluate(() => { window.scrollTo(0, 0); for (const b of document.querySelectorAll('[data-parity~="view"] *')) if (b.scrollTop) b.scrollTop = 0; });
     const f = await fits(), Lb = await box(H('SS-controls')), Rb = await box(H('SS-right')), Cb = await box(H('SS-centre'));
     const ok = w > 720 ? Math.abs(Lb.top - Rb.top) <= 1 && Cb.top >= Math.max(Lb.bottom, Rb.bottom) - 1 : Lb.bottom <= Rb.top + 1 && Rb.bottom <= Cb.top + 1;
-    /* the tab itself never runs past the window (at 1000 px the workspace's own top bar does, on main as well: not the tab's) */
-    const wide = await page.evaluate(() => [...document.querySelectorAll('#agView *')].filter(e => e.getClientRects().length && !e.closest('.ag-scroll, .ag-feed, .ag-slot, .ag-tray') && e.getBoundingClientRect().right > innerWidth + 1).slice(0, 6).map(e => (e.dataset.parity || e.className || e.tagName) + '@' + Math.round(e.getBoundingClientRect().right)));
+    /* the tab itself never runs past the window (at 1000 px the workspace's own top bar does, on main as well: not the tab's; the
+       light's gradients are larger than their strips by design and clipped inside them) */
+    const wide = await page.evaluate(() => [...document.querySelectorAll('#agView *')].filter(e => e.getClientRects().length && !e.closest('.ag-scroll, .ag-feed, .ag-slot, .ag-tray, .ag-light') && e.getBoundingClientRect().right > innerWidth + 1).slice(0, 6).map(e => (e.dataset.parity || e.className || e.tagName) + '@' + Math.round(e.getBoundingClientRect().right)));
     check(!wide.length && ok && (w > 720 || f.sw <= f.w), w + ' x ' + h + ': board F\'s stacking, nothing of the tab past the window ' + JSON.stringify(f) + (wide.length ? ' wider: ' + wide.join(', ') : ''));
     await page.screenshot({ path: path.join(SHOTS, 'agent-l5-' + name + '.png') });
   }
