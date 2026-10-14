@@ -1,5 +1,5 @@
 // ChartBridge PIN (0.3.2): a 4-digit lock on ChartBridge's own page. Part of the ChartBridge add-on; install
-// it with ChartBridge.cs and ChartBridgeOrders.cs (nt8\install.ps1 copies all three). See nt8/PROTOCOL.md, "PIN".
+// it with the other add-on files listed in nt8\install-files.json (nt8\install.ps1 copies them all). See nt8/PROTOCOL.md, "PIN".
 //
 // A kid lock, not high security: it keeps someone else at this PC from opening http://localhost:8765/ and
 // seeing or trading Anthony's accounts. Rules (Anthony, 2026-09-29):
