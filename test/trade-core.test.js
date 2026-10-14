@@ -277,7 +277,10 @@ test('1.22.0 (F2 again): a moved entry is drawn at the price asked for until Cha
   const entryOf = () => R.core.chartOrders('Sim101', 'MNQ').find(x => x.id === 'e1');
   assert.equal(entryOf().movePending, undefined, 'nothing waits yet');
   R.core.moveOrder('e1', 98.25);
-  assert.deepEqual(R.sent.pop(), { type: 'change', id: 'e1', price: 98.25 });
+  const ch = R.sent.pop();
+  assert.ok(typeof ch.cid === 'string' && ch.cid && R.core.lastCid() === ch.cid, 'the change carries a cid (its refusal is matched by it, and a forwarded drag is told)');
+  delete ch.cid;
+  assert.deepEqual(ch, { type: 'change', id: 'e1', price: 98.25 });
   assert.equal(entryOf().movePending, 98.25, 'drawn where it was dropped while the move waits');
   assert.equal(entryOf().price, 98, 'the order itself stays as ChartBridge last said');
   // the answer to a plan sent meanwhile still carries the old price: the move still waits
@@ -287,12 +290,39 @@ test('1.22.0 (F2 again): a moved entry is drawn at the price asked for until Cha
   R.core.message(Object.assign({}, e, { price: 98.25, planned: { stopTicks: 20, targetTicks: 24 } }));
   assert.equal(entryOf().movePending, undefined, 'answered: no longer waiting');
   assert.equal(entryOf().price, 98.25);
-  // a refused move: the line goes back at once
+  // a refused plan names the entry too: the move still waits; a reject with another cid does not end it either
   R.advance(500);
   R.core.moveOrder('e1', 97.5);
+  const cid = R.sent.pop().cid;
   assert.equal(entryOf().movePending, 97.5);
-  R.core.message({ type: 'reject', id: 'e1', reason: 'price too far' });
+  R.core.message({ type: 'reject', cid: 'p-plan-1', id: 'e1', reason: 'stopTicks must be at most 200' });
+  assert.equal(entryOf().movePending, 97.5, 'a refused plan (its own cid) does not end the move\'s wait');
+  R.core.message({ type: 'reject', id: 'e1', reason: 'no cid' });
+  assert.equal(entryOf().movePending, 97.5, 'a reject without the change\'s cid does not end it');
+  // the move refused (its change's cid): the line goes back at once
+  R.notes.length = 0;
+  R.core.message({ type: 'reject', cid, id: 'e1', reason: 'price too far' });
   assert.equal(entryOf().movePending, undefined, 'refused: drawn at the confirmed price again');
+  assert.deepEqual(R.notes, ['error: Refused by ChartBridge: price too far'], 'no planned line was dragged meanwhile: the usual line only');
+  // a planned stop dragged while the move waits, then the move refused: one line says where the stop really is
+  R.advance(500);
+  R.core.moveOrder('e1', 97.5);                                   // the entry is at 98.25; dropped at 97.50
+  const cid2 = R.sent.pop().cid;
+  R.advance(500);
+  R.core.planMove('e1:sl', 92.5, 97.5);                           // 20 ticks under the dropped entry
+  const pm = R.sent.pop(); delete pm.cid;
+  assert.deepEqual(pm, { type: 'plan', id: 'e1', stopTicks: 20 }, 'the stop goes as 20 ticks, from where the entry was dropped');
+  R.notes.length = 0;
+  assert.equal(R.core.moveRefusal({ type: 'reject', cid: cid2, id: 'e1', reason: 'price too far' }), 'Order e1 stays at 98.25: its planned stop is 20 ticks from it, at 93.25 (dropped at 92.50).');
+  assert.equal(R.core.moveRefusal({ type: 'reject', cid: 'other', id: 'e1', reason: 'x' }), '', 'only for the move\'s own refusal');
+  R.core.message({ type: 'reject', cid: cid2, id: 'e1', reason: 'price too far' });
+  assert.deepEqual(R.notes, ['error: Refused by ChartBridge: price too far Order e1 stays at 98.25: its planned stop is 20 ticks from it, at 93.25 (dropped at 92.50).'], 'one line in the notes');
+  assert.equal(entryOf().movePending, undefined);
+  // another workspace window that forwarded the drag keeps the same wait (no cid): its own order messages or 5 s end it
+  R.core.noteMoving('e1', 99);
+  assert.equal(entryOf().movePending, 99);
+  R.core.message(Object.assign({}, e, { price: 99, planned: { stopTicks: 20, targetTicks: 24 } }));
+  assert.equal(entryOf().movePending, undefined, 'its own order message at that price ends it');
   // no answer at all: drawn as ChartBridge last said after 5 s, and the charts are redrawn then
   R.advance(500);
   R.core.moveOrder('e1', 97.75);

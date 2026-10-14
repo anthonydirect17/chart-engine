@@ -91,11 +91,13 @@ function create(env) {
        managed strategies by entry id (`managed`), and the last Merge result per 'account|root' (`merge`). This connection
        stays a v2 page (it never sends `client`); those three come from the window's v3 connection (live/accounts.js) */
     switches: OS ? OS.cleanSwitches(null) : {}, managed: new Map(), merges: new Map(),
-    /* 1.22.0 (F2 again, the workspace): an order dragged to a new price, id -> { price asked for }, until ChartBridge
-       answers: an order message at that price, or the order finished, or a reject naming it, or MOVE_WAIT ms at most (an
-       order message after a `plan` still carries the old price, so it does not end the wait). The charts draw it there
+    /* 1.22.0 (F2 again, the workspace): an order dragged to a new price, id -> { price asked for, cid of its change,
+       plans: the planned lines dragged meanwhile }, until ChartBridge answers: an order message at that price, or the
+       order finished, or a reject with that change's cid, or MOVE_WAIT ms at most (an order message after a `plan` still
+       carries the old price, and a refused `plan` names the entry too, so neither ends the wait). The charts draw it there
        meanwhile (chartOrders' movePending), as the single chart page's engine did, so a planned line dragged then is
-       measured from where the entry was dropped. */
+       measured from where the entry was dropped. Another workspace window that forwarded the drag keeps the same wait
+       (noteMoving, no cid: its own order messages or the time limit end it). */
     moving: new Map(),
   };
   const sw = k => !!OS && TR.switches[k] === true;
@@ -546,7 +548,11 @@ function create(env) {
      page shows it. */
   const requeued = new Set();                                      // batch cancels already sent again once after a rate refusal
   function onRefused(m) {
-    if (typeof m.id === 'string') TR.moving.delete(m.id);          // a refused move: drawn at the confirmed price again (1.22.0)
+    /* a refused move (its change's cid): drawn at the confirmed price again, and a planned line dragged while it waited
+       is said where it really is (1.22.0) */
+    const mvNote = moveRefusal(m);
+    if (typeof m.id === 'string' && typeof m.cid === 'string' && TR.moving.has(m.id) && TR.moving.get(m.id).cid === m.cid) TR.moving.delete(m.id);
+    if (mvNote) { flash('Refused by ChartBridge: ' + m.reason + ' ' + mvNote, 'error'); return true; }
     const wasBatch = typeof m.id === 'string' && cancelSent.has(m.id);
     if (typeof m.id === 'string') cancelSent.delete(m.id);         // a refused cancel can go again at once (review 3 N1)
     /* A Cancel all's cancel refused for the rate (the page keeps 6 in 1.1 s, but a busy PC can deliver two of its
@@ -685,13 +691,32 @@ function create(env) {
     /* An order in a Cancel all under way (queued, or its cancel just sent) is not moved: Cancel all wins and cancels
        it (Anthony 2026-09-30), and no change goes out that could cross its cancel. The line goes back. */
     if (inCancelAll(id)) { env.changed(); flash('Not moved: order ' + id + ' is in the Cancel all under way, which cancels it.', 'warn'); return; }
-    send({ type: 'change', id, price });
-    if (open()) {                                                  // drawn at the dropped price until the answer (F2)
-      const mv = { price };
-      TR.moving.set(id, mv);
-      later(() => { if (TR.moving.get(id) === mv) { TR.moving.delete(id); env.changed(); } }, MOVE_WAIT);
-    }
+    send({ type: 'change', cid: (sentCid = newCid()), id, price });   // its cid: a forwarded drag's refusal goes back to its window
+    if (open()) noteMoving(id, price, sentCid);                    // drawn at the dropped price until the answer (F2)
     flash('Moving order ' + id + ' to ' + fmt(price), '');
+  }
+  /** 1.22.0: an order's move waits for ChartBridge's answer (see TR.moving). `cid`: the change's, in the window that sent
+      it; none in a workspace window that forwarded the drag. */
+  function noteMoving(id, price, cid) {
+    if (typeof id !== 'string' || !isFinite(price)) return;
+    const mv = { price: +price, cid: typeof cid === 'string' ? cid : null, plans: [] };
+    TR.moving.set(id, mv);
+    later(() => { if (TR.moving.get(id) === mv) { TR.moving.delete(id); env.changed(); } }, MOVE_WAIT);
+  }
+  /**
+   * 1.22.0: the words added to a refused move when a planned line was dragged while it waited: the line went as a distance
+   * from the dropped price, so with the entry still at its price it is not where it was dropped. '' when there is none
+   * (any other reject). Reads only; onRefused and the workspace's note to the window that forwarded the drag use it.
+   */
+  function moveRefusal(m) {
+    const mv = m && typeof m.id === 'string' && typeof m.cid === 'string' ? TR.moving.get(m.id) : null;
+    const o = mv && mv.cid === m.cid ? TR.orders.get(m.id) : null;
+    if (!o || !mv.plans.length || typeof o.price !== 'number') return '';
+    const t = tickOf(o.root), dir = o.side === 'sell' ? -1 : 1;
+    return 'Order ' + o.id + ' stays at ' + fmt(o.price) + ': ' + mv.plans.map(p => {
+      const at = Math.round((o.price + (p.which === 'stop' ? -1 : 1) * dir * p.ticks * t) / t) * t;
+      return 'its planned ' + whichName(p.which) + ' is ' + p.ticks + ' ticks from it, at ' + fmt(at) + ' (dropped at ' + fmt(p.dropped) + ')';
+    }).join('; ') + '.';
   }
   function cancelOrder(id) {
     if (!ready()) return;
@@ -729,6 +754,8 @@ function create(env) {
     if (r.error) { env.changed(); flash(r.error, 'warn'); return; }
     if (r.ticks > cap()) { env.changed(); flash('Not sent: ' + r.ticks + ' ticks is more than ChartBridge takes (' + cap() + ').', 'warn'); return; }
     sendPlan(o, p.which, r.ticks, 'Planned ' + whichName(p.which) + ' of order ' + o.id + ': ' + r.ticks + ' ticks from the fill.');
+    const mv = TR.moving.get(o.id);                                // dragged while the entry's move waits: kept for its refusal
+    if (mv) mv.plans = mv.plans.filter(x => x.which !== p.which).concat([{ which: p.which, ticks: r.ticks, dropped: price }]);
   }
   function planRemove(planId) {
     const p = OT.planIdOf(planId); if (!p) return;
@@ -910,7 +937,7 @@ function create(env) {
 
   return {
     TR, brackets, qtys, BK, cap, framed: FRAMED, allowNoStop, noStopAsked: () => !noStopOk,
-    planMove, planRemove, planAdd, chartOrders, framedReason: FRAMED_REASON, tradeMode,
+    planMove, planRemove, planAdd, chartOrders, framedReason: FRAMED_REASON, tradeMode, noteMoving, moveRefusal,
     hello, message, lost, signIn, applyTrading,
     ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAgent, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
     merge, managedOf, switchOn: sw, setSwitches, v3Lost, cancelFromList,

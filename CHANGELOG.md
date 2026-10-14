@@ -25,7 +25,11 @@ no recompile; no change to ChartBridge or the engine's drawing. The page is kept
 - **The workspace draws a moved order where it was dropped until ChartBridge answers** (order path, the F2 check again):
   its ticket redraws the charts after every action, which put a waiting move back at the old price, so a planned stop
   dragged then was measured from there. TradeCore keeps each sent move (until an order message at that price, the order
-  finished, a reject naming it, or 5 s) and the charts draw it there (`movePending`, `setOrders` in the engine).
+  finished, a reject with that change's `cid` (a `change` now carries one), or 5 s) and the charts draw it there
+  (`movePending`, `setOrders` in the engine). A second workspace window that forwarded the drag keeps the same wait (its
+  own order messages or the 5 s end it; a refusal comes back as the note the ticket's window sends). A move refused after
+  a planned line was dragged during the wait adds one line saying where that line really is ("Order 123 stays at
+  21000.00: its planned stop is 20 ticks from it, at 20995.00 (dropped at 20994.00).").
 - **The Agent tab:** "No agents on this ChartBridge (0.5.2 or later)." for any ChartBridge before 0.5.2 (it said 0.5.0;
   0.5.0 and 0.5.1 refuse every account change, which carries `keepMode`), and again for a v3 ChartBridge 0.4.x (1.21.0 told
   it that none is named in config.txt). The tab reads the version for this text only.

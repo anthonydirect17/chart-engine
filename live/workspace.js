@@ -775,7 +775,8 @@ function tmessage(m) {
   // back to that window's note too
   const f = m.cid && fwdCids.get(m.cid);
   if (f && link && (m.type === 'reject' || (m.type === 'order' && m.state === 'rejected'))) {
-    link.tell(f.from, m.type === 'reject' ? 'Refused by ChartBridge: ' + m.reason : 'Rejected: ' + (m.text || m.name || m.root));
+    const mv = m.type === 'reject' ? core.moveRefusal(m) : '';    // 1.22.0: a refused move with a planned line dragged meanwhile
+    link.tell(f.from, m.type === 'reject' ? 'Refused by ChartBridge: ' + m.reason + (mv ? ' ' + mv : '') : 'Rejected: ' + (m.text || m.name || m.root));
     fwdCids.delete(m.cid);
   }
   core.message(m);
@@ -862,6 +863,10 @@ function forward(action) {
   link.forward(action).then(r => {
     if (!r.answered || !r.sent) note(r.note || 'Nothing was sent.', true, 8000);
     else note(r.note, false, 6000);
+    /* 1.22.0 (F2 in this window too): an entry's move the ticket's window sent waits here as there, drawn at the dropped
+       price, so a planned line dragged here meanwhile is measured from it. Ended by this window's own order messages,
+       orders list or drop, or the 5 s limit (a refusal comes back as the note above, from the ticket's window) */
+    if (r.answered && r.sent && action.kind === 'move' && typeof action.id === 'string' && !OT.planIdOf(action.id) && isFinite(action.price)) core.noteMoving(action.id, +action.price);
     renderCharts();                                     // a refused drag puts the line back
   });
 }

@@ -315,6 +315,32 @@ try {
   await B.mouse.move(cbB.x + gB.box.x + gB.box.w / 2, cbB.y + toB, { steps: 6 }); await B.mouse.up();
   await until(async () => (await state()).orders.find(o => o.id === e2.id).planned.targetTicks === 32, 'the target at 32 ticks');
   check(JSON.stringify(strip(await sent(A, ['plan']))) === JSON.stringify([{ type: 'plan', id: e2.id, targetTicks: 32 }]) && !(await sent(B, ['plan'])).length, 'B\'s drag of the planned target: plan targetTicks 32, sent from the ticket\'s window');
+  /* F2 in the window without the ticket (1.22.0, the #41 re-review): the entry dragged in B (its change held in A, so the
+     move waits), then its planned stop dragged in B during the wait: measured from where the entry was dropped in B, and
+     after the answer it lands where it was dropped */
+  await wait(450);
+  await A.evaluate(() => { window.__sent.length = 0; window.__holdChanges = true; }); await B.evaluate(() => { window.__sent.length = 0; });
+  const hB = id2 => B.evaluate(([i, x]) => window.workspace.chart(i).orderHandles().find(o => o.id === x), [mnqB.id, id2]);
+  const yB = p => B.evaluate(([i, x]) => window.workspace.chart(i).priceToY(x), [mnqB.id, p]);
+  const midB = async id2 => { const g = await hB(id2); return g.box.y + g.box.h / 2; };
+  let ge = await hB(e2.id);
+  await B.mouse.move(cbB.x + ge.box.x + ge.box.w / 2, cbB.y + ge.box.y + ge.box.h / 2); await B.mouse.down();
+  await B.mouse.move(cbB.x + ge.box.x + ge.box.w / 2, cbB.y + await yB(L - 4), { steps: 6 }); await B.mouse.up();
+  await until(async () => (await sent(A, ['change'])).length === 1, 'B\'s entry move sent from A (held)');
+  await wait(300);                                                 // A's answer to B, then B redraws its charts
+  check(Math.abs(await midB(e2.id) - await yB(L - 4)) < 1.5 && Math.abs(await midB(e2.id + ':sl') - await yB(L - 4 - 3)) < 1.5,
+    'B: the entry moved and waiting for its answer: B draws it at the dropped price (L - 4), its planned stop 12 ticks under it');
+  const gs = await hB(e2.id + ':sl');
+  await B.mouse.move(cbB.x + gs.box.x + gs.box.w / 2, cbB.y + gs.box.y + gs.box.h / 2); await B.mouse.down();
+  await B.mouse.move(cbB.x + gs.box.x + gs.box.w / 2, cbB.y + await yB(L - 4 - 5), { steps: 6 }); await B.mouse.up();   // 20 ticks under the dropped entry
+  await until(async () => (await sent(A, ['plan'])).length === 1, 'B\'s stop drag sent from A while the move waits');
+  check(JSON.stringify(strip(await sent(A, ['plan']))) === JSON.stringify([{ type: 'plan', id: e2.id, stopTicks: 20 }]), 'B\'s stop dragged while the move waits: plan stopTicks 20, the distance B showed (' + JSON.stringify(strip(await sent(A, ['plan']))) + ')');
+  await A.evaluate(() => window.__release());
+  await until(async () => { const o = (await state()).orders.find(x => x.id === e2.id); return o.price === L - 4 && o.planned.stopTicks === 20; }, 'the entry at L - 4 with its stop 20 ticks under');
+  const landed = await until(async () => { const l = await B.evaluate(i => window.workspace.chart(i).getOrders(), mnqB.id); const sl = l.find(o => o.id === e2.id + ':sl'); return sl && sl.price === L - 4 - 5 ? sl : null; }, 'B: the planned stop where it was dropped');
+  await wait(600);                                                 // the price scale settles
+  const slAt = [await midB(e2.id + ':sl'), await yB(L - 9)];
+  check(!!landed && Math.abs(slAt[0] - slAt[1]) < 1.5, 'B: after the answer the planned stop is where it was dropped in B (L - 9; drawn at y ' + slAt.map(Math.round).join(', y ') + ')');
   await A.bringToFront(); await A.click(tk('flattenBtn'));
   await until(async () => !(await state()).orders.length, 'flat at the end');
 } catch (e) {
