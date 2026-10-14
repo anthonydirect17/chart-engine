@@ -45,7 +45,7 @@ let drawerSeq = 0;
 /* a panel the light may circle: its light, drawn only while the panel is lit: the line (four 3 px strips along the border) and
    its halo (four soft strips across it), each turning one small conic gradient on the compositor (live/agent.css) */
 const EDGES = ['t', 'r', 'b', 'l'];
-const LIGHT_HTML = '<div class="ag-light" aria-hidden="true">' + EDGES.map(e => '<i class="ag-edge e-' + e + '"><b></b><b></b></i>').join('') +
+const LIGHT_HTML = '<div class="ag-light" data-parity="LT02" aria-hidden="true">' + EDGES.map(e => '<i class="ag-edge e-' + e + '"><b></b><b></b></i>').join('') +
   EDGES.map(e => '<i class="ag-edge ag-h e-' + e + '"><b></b><b></b></i>').join('') + '</div>';
 
 function create(o) {
@@ -83,124 +83,133 @@ function create(o) {
   const cornerLine = view && !popout ? (() => { const d = document.createElement('div'); d.className = 'ag-cornerline'; d.setAttribute('role', 'region'); d.setAttribute('aria-label', 'Agent proposals open'); d.hidden = true; document.body.appendChild(d); return d; })() : null;
   const notes = document.querySelector('.bt-notes') || (() => { const d = document.createElement('div'); d.className = 'ag-notes'; d.setAttribute('aria-live', 'polite'); document.body.appendChild(d); return d; })();
   if (view) build();
+  /* data-parity: the parity test's stable hooks (test/agent-parity-smoke.mjs, test/agent-parity.json). Each item's id on the
+     element that carries it, whatever the layout; a part of an item as <id>-<part>, a state as LT01-lit, W02-alert,
+     W02-waiting or P17 (an ended card). Besides: view (the tab), glow (a panel whose glow may fade though it never lights)
+     and SS-controls, SS-right, SS-centre, SS-foot (the regions the small screens are measured by). No style reads them. */
+  if (tabBtn) tabBtn.dataset.parity = 'W01 W02';
+  if (cornerLine) cornerLine.dataset.parity = 'CO01';
+  notes.dataset.parity = 'N02';
+  if (popout) for (const [sel, t] of [['.ws-top .ws-title', 'PO01 PO01-title'], ['.ws-top .ws-clock', 'PO01 PO01-clock'], ['.ws-top .ws-note', 'PO01 PO01-note']]) { const el = document.querySelector(sel); if (el) el.dataset.parity = t; }
 
   function build() {
     view.classList.add('ag-view');
+    view.dataset.parity = 'view SS01 SS02 SS03 PO02';
     view.innerHTML =
-      '<div class="ag-off" data-k="off" hidden><div class="ag-off-card"><span class="ag-ttl">Agents</span><p data-k="offText"></p>' +
-        '<div class="ag-others" data-k="others" data-where="off" aria-label="Proposals open elsewhere"></div></div></div>' +
+      '<div class="ag-off" data-k="off" data-parity="OF01" hidden><div class="ag-off-card"><span class="ag-ttl">Agents</span><p data-k="offText" data-parity="OF01-text"></p>' +
+        '<div class="ag-others" data-k="others" data-where="off" data-parity="O04" aria-label="Proposals open elsewhere"></div></div></div>' +
       /* narrower than 1100 px: ChartBridge's line and the notices, pinned at the top in a band of their own (agent.css) */
-      '<div class="ag-tray" data-k="tray" aria-label="ChartBridge and notices"></div>' +
+      '<div class="ag-tray" data-k="tray" data-parity="N04" aria-label="ChartBridge and notices"></div>' +
       '<div class="ag-main" data-k="main" hidden>' +
       /* the strip: who, how it is, what it holds */
-      '<header class="ag-strip ag-panel" data-k="strip" data-no-motion>' +
-        '<span class="ag-badge" data-k="initials" aria-hidden="true"></span>' +
-        '<span class="ag-brand"><span class="ag-name" data-k="name"></span> <span class="ag-desk">// AGENT DESK</span></span><span class="ag-chip ag-build" data-k="build" title="The build the agent runs, as it says in its hello"></span>' +
-        '<span class="ag-conn" data-k="conn"><i></i><span data-k="connText"></span></span>' +
-        '<span class="ag-chip ag-mode" data-k="modeChip"></span>' +
-        '<span class="ag-kv"><span class="ag-lbl">Account</span><span class="mono" data-k="sAccount"></span> <span class="bt-acct ag-mark" data-k="sMark"></span></span>' +
-        '<span class="ag-kv"><span class="ag-lbl">Position</span><span class="mono" data-k="sPos"></span></span>' +
-        '<span class="ag-chip ag-owns" data-k="sOwns" hidden title="The owner lock: while the agent has a position or a working entry here, ChartBridge refuses every new entry from anyone else. Your Flatten, cancels and stop or target moves always work."></span>' +
-        '<span class="ag-chip ag-bad" data-k="sState" hidden></span>' +
+      '<header class="ag-strip ag-panel" data-k="strip" data-parity="glow" data-no-motion>' +
+        '<span class="ag-badge" data-k="initials" data-parity="ST01" aria-hidden="true"></span>' +
+        '<span class="ag-brand"><span class="ag-name" data-k="name" data-parity="ST02"></span> <span class="ag-desk" data-parity="ST03">// AGENT DESK</span></span><span class="ag-chip ag-build" data-k="build" data-parity="ST04" title="The build the agent runs, as it says in its hello"></span>' +
+        '<span class="ag-conn" data-k="conn" data-parity="ST05"><i></i><span data-k="connText"></span></span>' +
+        '<span class="ag-chip ag-mode" data-k="modeChip" data-parity="ST06"></span>' +
+        '<span class="ag-kv" data-parity="ST07"><span class="ag-lbl">Account</span><span class="mono" data-k="sAccount" data-parity="ST07-account"></span> <span class="bt-acct ag-mark" data-k="sMark" data-parity="ST08"></span></span>' +
+        '<span class="ag-kv" data-parity="ST09"><span class="ag-lbl">Position</span><span class="mono" data-k="sPos" data-parity="ST09-pos"></span></span>' +
+        '<span class="ag-chip ag-owns" data-k="sOwns" data-parity="ST10" hidden title="The owner lock: while the agent has a position or a working entry here, ChartBridge refuses every new entry from anyone else. Your Flatten, cancels and stop or target moves always work."></span>' +
+        '<span class="ag-chip ag-bad" data-k="sState" data-parity="ST11" hidden></span>' +
         '<span class="ag-fill"></span>' +
-        '<label class="ag-pick" data-k="pickWrap" hidden><span class="ag-lbl" data-k="pickN">Agents</span><select class="ag-sel" data-k="pick" aria-label="Agent shown"></select></label>' +
-        '<span class="ag-motion" role="group" aria-label="Motion of the light" title="The light around the panels: Full moves it, Off keeps it still (kept in this browser). Your system\'s reduced motion keeps it still too."><span class="ag-lbl">Motion</span>' +
-          '<button type="button" data-motion="full" aria-pressed="true">Full</button><button type="button" data-motion="off" aria-pressed="false">Off</button></span>' +
-        (popout ? '' : '<button type="button" class="ws-btn ag-popbtn" data-act="popout" title="Open the Agent tab in its own window (for a third monitor)">Pop out</button>') +
+        '<label class="ag-pick" data-k="pickWrap" data-parity="ST12" hidden><span class="ag-lbl" data-k="pickN" data-parity="ST12-n">Agents</span><select class="ag-sel" data-k="pick" data-parity="ST12-pick" aria-label="Agent shown"></select></label>' +
+        '<span class="ag-motion" data-parity="ST13" role="group" aria-label="Motion of the light" title="The light around the panels: Full moves it, Off keeps it still (kept in this browser). Your system\'s reduced motion keeps it still too."><span class="ag-lbl">Motion</span>' +
+          '<button type="button" data-motion="full" data-parity="ST13-full" aria-pressed="true">Full</button><button type="button" data-motion="off" data-parity="ST13-off" aria-pressed="false">Off</button></span>' +
+        (popout ? '' : '<button type="button" class="ws-btn ag-popbtn" data-act="popout" data-parity="ST14" title="Open the Agent tab in its own window (for a third monitor)">Pop out</button>') +
       '</header>' +
       '<div class="ag-grid" data-k="grid">' +
       /* left: control, his account, his rules */
-      '<aside class="ag-col ag-left ag-panel" data-panel="acct" aria-label="Agent controls">' + LIGHT_HTML + '<div class="ag-scroll">' +
+      '<aside class="ag-col ag-left ag-panel" data-panel="acct" data-parity="LT01 SS-controls" aria-label="Agent controls">' + LIGHT_HTML + '<div class="ag-scroll">' +
         /* On/Off (DECISION 2026-10-09 v): the PC helper starts and stops his runner; Off is $0 of model calls. The spend next to
            it counts the live agent only. The picker: heroes, and in Shadow on Sim the builds over the bar (DECISION w) */
-        '<div class="ag-sec ag-onoff" data-no-motion data-k="hSec"><div class="ag-sechead"><span class="ag-ttl">Agent</span><span class="ag-lbl" data-k="hNote"></span></div>' +
-          '<label class="ag-hpick"><span class="ag-lbl">Build</span><select class="ag-sel" data-k="hPick" aria-label="The build he runs"></select></label>' +
+        '<div class="ag-sec ag-onoff" data-no-motion data-k="hSec" data-parity="OH01"><div class="ag-sechead"><span class="ag-ttl">Agent</span><span class="ag-lbl" data-k="hNote" data-parity="OH13"></span></div>' +
+          '<label class="ag-hpick"><span class="ag-lbl">Build</span><select class="ag-sel" data-k="hPick" data-parity="OH02" aria-label="The build he runs"></select></label>' +
           '<div class="ag-hrow"><div class="ag-modes ag-onoffbtns" role="group" aria-label="Agent on or off" data-k="hBtns">' +
-            '<button type="button" data-onoff="on" aria-pressed="false" title="Start him with the build picked: the PC helper starts his program, no window">On</button>' +
-            '<button type="button" data-onoff="off" aria-pressed="false" title="End his program: no model calls, no spend. Your Flatten first if he holds a position (you are asked)">Off</button></div>' +
+            '<button type="button" data-onoff="on" data-parity="OH03" aria-pressed="false" title="Start him with the build picked: the PC helper starts his program, no window">On</button>' +
+            '<button type="button" data-onoff="off" data-parity="OH04" aria-pressed="false" title="End his program: no model calls, no spend. Your Flatten first if he holds a position (you are asked)">Off</button></div>' +
             '<div class="ag-spend" title="API dollars of the live agent only (never training or exams): this session (18:00 to 17:00 New York) and overall, on this PC">' +
-              '<span><span class="ag-lbl">Session</span> <span class="mono" data-k="hSess">-</span></span><span><span class="ag-lbl">Overall</span> <span class="mono" data-k="hAll">-</span></span></div></div>' +
-          '<p class="ag-why" data-k="hWhy" role="status"></p>' +
-          '<div class="ag-ask" data-k="hAsk" role="alertdialog" aria-label="Flatten and turn him off" hidden><span data-k="hAskText"></span>' +
-            '<button type="button" class="ag-btn ag-live-go" data-act="hFlatOff">Flatten and turn off</button><button type="button" class="ag-btn" data-act="hAskNo">Keep him on</button></div>' +
-          '<details class="ag-hset"><summary class="ag-lbl">Auto-On and daily cap</summary><div class="ag-hform">' +
-            '<label><span>Auto-On</span><input class="ag-in" data-k="hAuto" maxlength="5" inputmode="numeric" placeholder="none" aria-label="Auto-On, New York time HH:MM (empty for none)"></label>' +
-            '<label><span>Daily cap $</span><input class="ag-in" data-k="hCap" type="number" min="0" max="1000" step="0.5" placeholder="none" aria-label="Daily dollar cap (empty for none)"></label>' +
-            '<button type="button" class="ag-btn" data-act="hSave">Set</button></div><p class="ag-why" data-k="hSetWhy"></p></details>' +
+              '<span data-parity="OH05"><span class="ag-lbl">Session</span> <span class="mono" data-k="hSess" data-parity="OH05-value">-</span></span><span data-parity="OH06"><span class="ag-lbl">Overall</span> <span class="mono" data-k="hAll" data-parity="OH06-value">-</span></span></div></div>' +
+          '<p class="ag-why" data-k="hWhy" data-parity="OH07 OH09" role="status"></p>' +
+          '<div class="ag-ask" data-k="hAsk" data-parity="OH08" role="alertdialog" aria-label="Flatten and turn him off" hidden><span data-k="hAskText" data-parity="OH08-text"></span>' +
+            '<button type="button" class="ag-btn ag-live-go" data-act="hFlatOff" data-parity="OH08-flat">Flatten and turn off</button><button type="button" class="ag-btn" data-act="hAskNo" data-parity="OH08-no">Keep him on</button></div>' +
+          '<details class="ag-hset"><summary class="ag-lbl" data-parity="OH10">Auto-On and daily cap</summary><div class="ag-hform" data-parity="OH14">' +
+            '<label><span>Auto-On</span><input class="ag-in" data-k="hAuto" data-parity="OH14-auto" maxlength="5" inputmode="numeric" placeholder="none" aria-label="Auto-On, New York time HH:MM (empty for none)"></label>' +
+            '<label><span>Daily cap $</span><input class="ag-in" data-k="hCap" data-parity="OH14-cap" type="number" min="0" max="1000" step="0.5" placeholder="none" aria-label="Daily dollar cap (empty for none)"></label>' +
+            '<button type="button" class="ag-btn" data-act="hSave" data-parity="OH14-set">Set</button></div><p class="ag-why" data-k="hSetWhy" data-parity="OH14-why"></p></details>' +
         '</div>' +
-        '<div class="ag-sec" data-no-motion><div class="ag-sechead"><span class="ag-ttl">Mode</span><span class="ag-lbl" data-k="modeAcct"></span></div>' +
-          '<div class="ag-modes" role="group" aria-label="Agent mode" data-k="modes">' + AC.MODES.map(m => '<button type="button" data-mode="' + m + '" aria-pressed="false">' + AC.MODE_NAME[m] + '</button>').join('') + '</div>' +
-          '<p class="ag-why" data-k="modeWhy" hidden></p>' +
-          '<button type="button" class="ag-kill" data-act="kill" data-k="kill">Kill switch</button>' +
-          '<div class="ag-pgrid"><span>Status</span><span data-k="status">-</span><span>Heartbeat</span><span class="mono" data-k="beat">-</span><span>Last plan</span><span data-k="last">-</span><span>Build</span><span class="mono" data-k="buildRow" title="The build id and stamp, as his hello says them">-</span></div>' +
+        '<div class="ag-sec" data-no-motion><div class="ag-sechead"><span class="ag-ttl">Mode</span><span class="ag-lbl" data-k="modeAcct" data-parity="LM01"></span></div>' +
+          '<div class="ag-modes" role="group" aria-label="Agent mode" data-k="modes">' + AC.MODES.map(m => '<button type="button" data-mode="' + m + '" data-parity="LM02 LM02-' + m + (m === 'shadow' ? '' : ' OH11') + ' OH09" aria-pressed="false">' + AC.MODE_NAME[m] + '</button>').join('') + '</div>' +
+          '<p class="ag-why" data-k="modeWhy" data-parity="LM03" hidden></p>' +
+          '<button type="button" class="ag-kill" data-act="kill" data-k="kill" data-parity="LM04">Kill switch</button>' +
+          '<div class="ag-pgrid"><span>Status</span><span data-k="status" data-parity="LM05">-</span><span>Heartbeat</span><span class="mono" data-k="beat" data-parity="LM06">-</span><span>Last plan</span><span data-k="last" data-parity="LM07">-</span><span>Build</span><span class="mono" data-k="buildRow" data-parity="LM08" title="The build id and stamp, as his hello says them">-</span></div>' +
         '</div>' +
         '<div class="ag-sec" data-no-motion><div class="ag-sechead"><span class="ag-ttl">His account</span></div>' +
-          '<div class="ag-pgrid"><span>Trades on</span><span><span class="mono" data-k="account">Sim101</span> <span class="bt-acct ag-mark" data-k="accountMark"></span></span></div>' +
+          '<div class="ag-pgrid"><span>Trades on</span><span data-parity="LA01"><span class="mono" data-k="account">Sim101</span> <span class="bt-acct ag-mark" data-k="accountMark"></span></span></div>' +
           '<div class="ag-room" data-k="room"></div>' +
-          '<div class="ag-edit" data-k="acctEdit" hidden><select class="ag-sel" data-k="acctSel" aria-label="The agent\'s account"></select>' +
-            '<button type="button" class="ag-btn primary" data-act="acctSave">Set</button><button type="button" class="ag-btn" data-act="acctCancel">Cancel</button></div>' +
-          '<div class="ag-ask" data-k="acctAsk" role="alertdialog" aria-label="Trade a LIVE account" hidden><span data-k="acctAskText"></span>' +
-            '<button type="button" class="ag-btn ag-live-go" data-act="acctYes">Continue</button><button type="button" class="ag-btn" data-act="acctNo">Cancel</button></div>' +
-          '<div class="ag-row"><button type="button" class="ag-btn" data-act="acctOpen" data-k="acctOpen" title="Any account ChartBridge says is tradable, except the bot\'s, the copier\'s and another agent\'s; only while the agent is flat">Change account</button></div>' +
-          '<p class="ag-why" data-k="acctWhy"></p>' +
+          '<div class="ag-edit" data-k="acctEdit" data-parity="LA05" hidden><select class="ag-sel" data-k="acctSel" data-parity="LA05-sel" aria-label="The agent\'s account"></select>' +
+            '<button type="button" class="ag-btn primary" data-act="acctSave" data-parity="LA05-set">Set</button><button type="button" class="ag-btn" data-act="acctCancel" data-parity="LA05-cancel">Cancel</button></div>' +
+          '<div class="ag-ask" data-k="acctAsk" data-parity="LA06" role="alertdialog" aria-label="Trade a LIVE account" hidden><span data-k="acctAskText" data-parity="LA06-text"></span>' +
+            '<button type="button" class="ag-btn ag-live-go" data-act="acctYes" data-parity="LA06-yes">Continue</button><button type="button" class="ag-btn" data-act="acctNo" data-parity="LA06-no">Cancel</button></div>' +
+          '<div class="ag-row"><button type="button" class="ag-btn" data-act="acctOpen" data-k="acctOpen" data-parity="LA04" title="Any account ChartBridge says is tradable, except the bot\'s, the copier\'s and another agent\'s; only while the agent is flat">Change account</button></div>' +
+          '<p class="ag-why" data-k="acctWhy" data-parity="LA07 OH11"></p>' +
         '</div>' +
         '<div class="ag-sec"><div class="ag-sechead"><span class="ag-ttl">Rules</span></div>' +
-          '<div class="ag-pgrid ag-rules" data-k="rules"></div>' +
+          '<div class="ag-pgrid ag-rules" data-k="rules" data-parity="LR01"></div>' +
           '<div class="ag-rform" data-k="rulesEdit" hidden>' +
-            '<div class="ag-rroots" data-k="rRoots"></div>' +
-            '<label><span>New entries from</span><input class="ag-in" data-r="entryFrom" maxlength="5" inputmode="numeric" placeholder="09:45" aria-label="New entries from, New York time"></label>' +
-            '<label><span>New entries until</span><input class="ag-in" data-r="entryUntil" maxlength="5" inputmode="numeric" placeholder="15:00" aria-label="New entries until, New York time"></label>' +
-            '<label><span>Flat at</span><input class="ag-in" data-r="flatAt" maxlength="5" inputmode="numeric" placeholder="15:55" aria-label="Flat at, New York time"></label>' +
-            '<label><span>Entry lives, s</span><input class="ag-in" type="number" min="60" max="1800" step="1" data-r="maxExpireSec" aria-label="An entry lives at most, seconds (60 to 1800)"></label>' +
-            '<label><span>Trades a day</span><input class="ag-in" type="number" min="0" max="50" step="1" data-r="maxTrades" aria-label="Trades a day, 0 for no limit"></label>' +
-            '<label><span>Losing trades</span><input class="ag-in" type="number" min="0" max="20" step="1" data-r="maxLosses" aria-label="Losing trades before it stands down, 0 for no limit"></label>' +
-            '<p class="ag-help">New York time · 0 = no limit</p>' +
-            '<div class="ag-row"><button type="button" class="ag-btn primary" data-act="rulesSave">Set</button><button type="button" class="ag-btn" data-act="rulesCancel">Cancel</button></div>' +
+            '<div class="ag-rroots" data-k="rRoots" data-parity="LR03"></div>' +
+            '<label><span>New entries from</span><input class="ag-in" data-r="entryFrom" data-parity="LR04 LR04-from" maxlength="5" inputmode="numeric" placeholder="09:45" aria-label="New entries from, New York time"></label>' +
+            '<label><span>New entries until</span><input class="ag-in" data-r="entryUntil" data-parity="LR04 LR04-until" maxlength="5" inputmode="numeric" placeholder="15:00" aria-label="New entries until, New York time"></label>' +
+            '<label><span>Flat at</span><input class="ag-in" data-r="flatAt" data-parity="LR04 LR04-flat" maxlength="5" inputmode="numeric" placeholder="15:55" aria-label="Flat at, New York time"></label>' +
+            '<label><span>Entry lives, s</span><input class="ag-in" type="number" min="60" max="1800" step="1" data-r="maxExpireSec" data-parity="LR05 LR05-expire" aria-label="An entry lives at most, seconds (60 to 1800)"></label>' +
+            '<label><span>Trades a day</span><input class="ag-in" type="number" min="0" max="50" step="1" data-r="maxTrades" data-parity="LR05 LR05-trades" aria-label="Trades a day, 0 for no limit"></label>' +
+            '<label><span>Losing trades</span><input class="ag-in" type="number" min="0" max="20" step="1" data-r="maxLosses" data-parity="LR05 LR05-losses" aria-label="Losing trades before it stands down, 0 for no limit"></label>' +
+            '<p class="ag-help" data-parity="LR06">New York time · 0 = no limit</p>' +
+            '<div class="ag-row"><button type="button" class="ag-btn primary" data-act="rulesSave" data-parity="LR07 LR07-set">Set</button><button type="button" class="ag-btn" data-act="rulesCancel" data-parity="LR07 LR07-cancel">Cancel</button></div>' +
           '</div>' +
-          '<div class="ag-ask" data-k="rulesAsk" role="alertdialog" aria-label="A window that flattens him now" hidden><span data-k="rulesAskText"></span>' +
-            '<button type="button" class="ag-btn ag-live-go" data-act="rulesYes">Set it</button><button type="button" class="ag-btn" data-act="rulesNo">Cancel</button></div>' +
-          '<div class="ag-row"><button type="button" class="ag-btn" data-act="rulesOpen" data-k="rulesOpen">Change the rules</button></div>' +
-          '<p class="ag-why" data-k="rulesWhy"></p>' +
+          '<div class="ag-ask" data-k="rulesAsk" data-parity="LR08" role="alertdialog" aria-label="A window that flattens him now" hidden><span data-k="rulesAskText" data-parity="LR08-text"></span>' +
+            '<button type="button" class="ag-btn ag-live-go" data-act="rulesYes" data-parity="LR08-yes">Set it</button><button type="button" class="ag-btn" data-act="rulesNo" data-parity="LR08-no">Cancel</button></div>' +
+          '<div class="ag-row"><button type="button" class="ag-btn" data-act="rulesOpen" data-k="rulesOpen" data-parity="LR02">Change the rules</button></div>' +
+          '<p class="ag-why" data-k="rulesWhy" data-parity="LR09"></p>' +
         '</div>' +
       '</div></aside>' +
       /* centre: what he is doing now, then the chart (a normal live chart: never animated, takes no orders) */
-      '<section class="ag-col ag-centre" aria-label="What the agent is doing, and its chart">' +
-        '<div class="ag-panel ag-pipe" data-panel="pipe">' + LIGHT_HTML +
-          '<div class="ag-pipehead"><span class="ag-k2">What he is doing now</span><span class="ag-said" data-k="said" role="status"></span></div>' +
-          '<ol class="ag-steps" data-k="steps">' + AC.STEPS.map((x, i) => '<li class="ag-step t-' + x[0] + '" data-step="' + i + '"><span class="ag-node mono">' + (i + 1) + '</span><span class="ag-stepname">' + x[1] + '</span></li>').join('') + '</ol>' +
+      '<section class="ag-col ag-centre" data-parity="SS-centre" aria-label="What the agent is doing, and its chart">' +
+        '<div class="ag-panel ag-pipe" data-panel="pipe" data-parity="LT01">' + LIGHT_HTML +
+          '<div class="ag-pipehead"><span class="ag-k2" data-parity="C01">What he is doing now</span><span class="ag-said" data-k="said" data-parity="C02" role="status"></span></div>' +
+          '<ol class="ag-steps" data-k="steps">' + AC.STEPS.map((x, i) => '<li class="ag-step t-' + x[0] + '" data-step="' + i + '" data-parity="C03"><span class="ag-node mono">' + (i + 1) + '</span><span class="ag-stepname">' + x[1] + '</span></li>').join('') + '</ol>' +
         '</div>' +
-        '<div class="ag-panel ag-chartpanel" data-panel="chart">' + LIGHT_HTML +
-          '<div class="ag-charthead"><span class="ag-ttl" data-k="chartName" title="The agent\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the agent\'s orders, so your own orders on its account do not show here.">Chart</span>' +
-            '<select class="ag-sel ag-small" data-k="chartRoot" aria-label="Root"></select>' +
-            '<select class="ag-sel ag-small" data-k="tf" aria-label="Bars">' + Object.keys(TF_NAMES).map(k => '<option value="' + k + '">' + TF_NAMES[k] + '</option>').join('') + '</select>' +
-            '<span class="chart-live ws-lv" data-k="ind"></span>' +
+        '<div class="ag-panel ag-chartpanel" data-panel="chart" data-parity="LT01">' + LIGHT_HTML +
+          '<div class="ag-charthead"><span class="ag-ttl" data-k="chartName" data-parity="CH01" title="The agent\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the agent\'s orders, so your own orders on its account do not show here.">Chart</span>' +
+            '<select class="ag-sel ag-small" data-k="chartRoot" data-parity="CH02" aria-label="Root"></select>' +
+            '<select class="ag-sel ag-small" data-k="tf" data-parity="CH03" aria-label="Bars">' + Object.keys(TF_NAMES).map(k => '<option value="' + k + '">' + TF_NAMES[k] + '</option>').join('') + '</select>' +
+            '<span class="chart-live ws-lv" data-k="ind" data-parity="CH04"></span>' +
             '<span class="ag-fill"></span>' +
-            '<span class="ag-cposwrap"><span class="ag-cpos mono" data-k="cPos" data-no-motion></span><span class="ag-cpnl mono" data-k="cPnl" data-no-motion title="Open P&L: NinjaTrader\'s for the agent\'s account, else from the chart\'s last price"></span></span>' +
+            '<span class="ag-cposwrap"><span class="ag-cpos mono" data-k="cPos" data-parity="CH05" data-no-motion></span><span class="ag-cpnl mono" data-k="cPnl" data-parity="CH06" data-no-motion title="Open P&L: NinjaTrader\'s for the agent\'s account, else from the chart\'s last price"></span></span>' +
             '</div>' +
-          '<div class="ag-chart" data-k="chart" data-no-motion><div class="ag-over" data-k="over"></div></div>' +
+          '<div class="ag-chart" data-k="chart" data-no-motion data-parity="CH07 CH08 CH09"><div class="ag-over" data-k="over" data-parity="CH10"></div></div>' +
         '</div>' +
       '</section>' +
       /* right: the proposal (the shown agent's own, in its slot; the others only counted, in one line under it), then his
          stream; his decision's drawer slides over both */
-      '<aside class="ag-col ag-right" aria-label="Proposals and his stream">' +
-        '<div class="ag-panel ag-proppanel" data-panel="prop" data-no-motion>' + LIGHT_HTML +
-          '<div class="ag-sechead"><span class="ag-k2">Proposal · copilot</span><span class="ag-lbl" data-k="propCount"></span></div>' +
-          '<div class="ag-slot" data-k="slot"><div class="ag-plist" data-k="plist"></div><p class="ag-empty" data-k="pempty">None open</p></div>' +
-          '<div class="ag-others" data-k="others" aria-label="Other proposals open"></div></div>' +
-        '<div class="ag-panel ag-feedwrap" data-panel="stream">' + LIGHT_HTML +
-          '<div class="ag-loghead"><span class="ag-k2">His stream</span><span class="ag-lbl" data-k="feedCount"></span></div>' +
-          '<div class="ag-filters" role="tablist" data-k="filters">' + FILTERS.map(f => '<button type="button" role="tab" data-filter="' + f[0] + '" aria-selected="false">' + f[1] + '</button>').join('') + '</div>' +
+      '<aside class="ag-col ag-right" data-parity="SS-right" aria-label="Proposals and his stream">' +
+        '<div class="ag-panel ag-proppanel" data-panel="prop" data-parity="LT01" data-no-motion>' + LIGHT_HTML +
+          '<div class="ag-sechead"><span class="ag-k2" data-parity="P01">Proposal · copilot</span><span class="ag-lbl" data-k="propCount" data-parity="P19"></span></div>' +
+          '<div class="ag-slot" data-k="slot" data-parity="P02"><div class="ag-plist" data-k="plist"></div><p class="ag-empty" data-k="pempty" data-parity="P02-empty">None open</p></div>' +
+          '<div class="ag-others" data-k="others" data-parity="O01" aria-label="Other proposals open"></div></div>' +
+        '<div class="ag-panel ag-feedwrap" data-panel="stream" data-parity="LT01">' + LIGHT_HTML +
+          '<div class="ag-loghead"><span class="ag-k2" data-parity="SM01">His stream</span><span class="ag-lbl" data-k="feedCount" data-parity="SM01-count"></span></div>' +
+          '<div class="ag-filters" role="tablist" data-k="filters">' + FILTERS.map(f => '<button type="button" role="tab" data-filter="' + f[0] + '" data-parity="SM02 SM02-' + f[0] + '" aria-selected="false">' + f[1] + '</button>').join('') + '</div>' +
           '<div class="ag-feed" data-k="feed"></div></div>' +
-        '<section class="ag-drawer" data-k="drawer" id="' + DRAWER_ID + '" role="dialog" aria-label="His decision" hidden></section>' +
+        '<section class="ag-drawer" data-k="drawer" data-parity="D01" id="' + DRAWER_ID + '" role="dialog" aria-label="His decision" hidden></section>' +
       '</aside>' +
       '</div>' +
       /* the footer: today's dollars, trades, losses, his session as a trail */
-      '<footer class="ag-panel ag-foot" data-panel="pnl">' + LIGHT_HTML +
+      '<footer class="ag-panel ag-foot" data-panel="pnl" data-parity="LT01 SS-foot">' + LIGHT_HTML +
         '<div class="ag-footrow">' +
-          '<div class="ag-big" data-no-motion><span class="mono ag-today" data-k="sPnl">-</span><span class="ag-lbl" data-k="todayNote">Today</span></div>' +
-          '<div class="ag-big" data-no-motion><span class="mono ag-count" data-k="sTrades">0</span><span class="ag-lbl">Trades</span></div>' +
-          '<div class="ag-big" data-no-motion><span class="mono ag-count ag-losses" data-k="sLosses">0</span><span class="ag-lbl">Losses</span></div>' +
-          '<div class="ag-trail" data-k="trail" aria-label="His session"></div>' +
+          '<div class="ag-big" data-no-motion><span class="mono ag-today" data-k="sPnl" data-parity="F01">-</span><span class="ag-lbl" data-k="todayNote" data-parity="F02">Today</span></div>' +
+          '<div class="ag-big" data-no-motion data-parity="F03"><span class="mono ag-count" data-k="sTrades" data-parity="F03-value">0</span><span class="ag-lbl">Trades</span></div>' +
+          '<div class="ag-big" data-no-motion data-parity="F04"><span class="mono ag-count ag-losses" data-k="sLosses" data-parity="F04-value">0</span><span class="ag-lbl">Losses</span></div>' +
+          '<div class="ag-trail" data-k="trail" data-parity="F05" aria-label="His session"></div>' +
         '</div>' +
         '</footer>' +
       '</div>';
@@ -332,8 +341,8 @@ function create(o) {
   const tickOf = r => { const i = S.instruments[r]; return i && +i.tick > 0 ? +i.tick : 0.25; };
   const decOf = r => { const s = String(tickOf(r)), i = s.indexOf('.'); return i < 0 ? 0 : Math.min(6, s.length - i - 1); };
   const fmtPx = (p, r) => (isNum(p) ? p.toFixed(decOf(r || 'MNQ')).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : '-');
-  const markHtml = m => (m ? '<span class="bt-acct ag-mark ' + (m === 'LIVE' ? 'live' : 'sim') + '" data-no-motion>' + esc(m) + '</span>' : '');
-  const confHtml = c => (isNum(c) ? '<span class="ag-cm"><span class="ag-meter"><b style="width:' + Math.max(0, Math.min(100, c * 100)).toFixed(0) + '%"></b></span><span class="mono">' + c.toFixed(2) + '</span></span>' : '-');
+  const markHtml = (m, parity) => (m ? '<span class="bt-acct ag-mark ' + (m === 'LIVE' ? 'live' : 'sim') + '"' + (parity ? ' data-parity="' + parity + '"' : '') + ' data-no-motion>' + esc(m) + '</span>' : '');
+  const confHtml = c => (isNum(c) ? '<span class="ag-cm" data-parity="P07 P07-conf"><span class="ag-meter"><b style="width:' + Math.max(0, Math.min(100, c * 100)).toFixed(0) + '%"></b></span><span class="mono">' + c.toFixed(2) + '</span></span>' : '-');
   function entryText(p) {
     const r = p.root;
     return p.kind === 'stopLimit' ? 'stop-limit ' + fmtPx(p.price, r) + ', limit ' + fmtPx(p.limitPrice, r) : 'limit ' + fmtPx(p.price, r);
@@ -341,26 +350,26 @@ function create(o) {
   function propHtml(p) {
     const a = agents.get(p.agent) || { agent: p.agent }, r = p.root, lp = AC.legPrices(p, tickOf(r));
     const acc = { name: p.account || AC.agentAccount(a).name, mark: AC.accountMark(p.sim) };   // no sim: LIVE, as an unknown account anywhere
-    const kc = k => (k ? ' <span class="bt-keycap">' + esc(k) + '</span>' : '');
-    return '<div class="ag-prop-h"><span class="ag-ttl" title="Copilot proposal from ' + esc(AC.agentName(a)) + '">' + esc(AC.agentName(a)) + '</span><span class="ag-lbl ag-id">' + esc(p.agent) + '</span>' + markHtml(acc.mark) + '<span class="ag-fill"></span><span class="ag-lbl" title="Open until the plan\'s own expiry">ends in</span> <span class="mono ag-cd" data-k="cd">-</span></div>' +
-      '<div class="ag-prop-big mono"><span class="' + (p.side === 'buy' ? 'pos' : 'neg') + '">' + sideWord(p.side) + ' ' + esc(p.qty) + ' ' + esc(r) + '</span> <span class="ag-soft">' + esc(entryText(p)) + '</span></div>' +
-      '<div class="ag-prop-setup"><span class="ag-chip">' + esc(p.setup || 'no setup name') + '</span><span class="ag-lbl">confidence</span>' + confHtml(p.confidence) + '</div>' +
-      '<div class="ag-quote">' + esc(p.reason || '') + '</div>' +
+    const kc = k => (k ? ' <span class="bt-keycap" data-parity="K02">' + esc(k) + '</span>' : '');
+    return '<div class="ag-prop-h"><span class="ag-ttl" data-parity="P04 P04-name" title="Copilot proposal from ' + esc(AC.agentName(a)) + '">' + esc(AC.agentName(a)) + '</span><span class="ag-lbl ag-id" data-parity="P04 P04-id">' + esc(p.agent) + '</span>' + markHtml(acc.mark, 'P04 P04-mark') + '<span class="ag-fill"></span><span class="ag-lbl" title="Open until the plan\'s own expiry">ends in</span> <span class="mono ag-cd" data-k="cd" data-parity="P05">-</span></div>' +
+      '<div class="ag-prop-big mono" data-parity="P06"><span class="' + (p.side === 'buy' ? 'pos' : 'neg') + '">' + sideWord(p.side) + ' ' + esc(p.qty) + ' ' + esc(r) + '</span> <span class="ag-soft">' + esc(entryText(p)) + '</span></div>' +
+      '<div class="ag-prop-setup"><span class="ag-chip" data-parity="P07 P07-setup">' + esc(p.setup || 'no setup name') + '</span><span class="ag-lbl">confidence</span>' + confHtml(p.confidence) + '</div>' +
+      '<div class="ag-quote" data-parity="P08">' + esc(p.reason || '') + '</div>' +
       '<div class="ag-pgrid mono">' +
-        '<span>Stop</span><span>' + esc(p.stopTicks) + ' ticks' + (lp.stop !== null ? ' (' + fmtPx(lp.stop, r) + ')' : '') + '</span>' +
-        '<span>Target</span><span>' + esc(p.targetTicks) + ' ticks' + (lp.target !== null ? ' (' + fmtPx(lp.target, r) + ')' : '') + '</span>' +
-        '<span>Risk</span><span>' + esc(AC.fmtUsd(p.riskDollars).replace(/^\+/, '') || '-') + (isNum(p.stopTicks) && isNum(p.targetTicks) && p.stopTicks ? ', reward ' + (p.targetTicks / p.stopTicks).toFixed(2) + ' to 1' : '') + '</span>' +
-        '<span>Open until</span><span>' + (isNum(p.expiresAt) ? esc(AC.etClockSec(p.expiresAt)) + ' ET' : '-') + '</span>' +
-        '<span>Account</span><span>' + esc(acc.name) + ' ' + markHtml(acc.mark) + '</span></div>' +
+        '<span>Stop</span><span data-parity="P09">' + esc(p.stopTicks) + ' ticks' + (lp.stop !== null ? ' (' + fmtPx(lp.stop, r) + ')' : '') + '</span>' +
+        '<span>Target</span><span data-parity="P10">' + esc(p.targetTicks) + ' ticks' + (lp.target !== null ? ' (' + fmtPx(lp.target, r) + ')' : '') + '</span>' +
+        '<span>Risk</span><span data-parity="P11">' + esc(AC.fmtUsd(p.riskDollars).replace(/^\+/, '') || '-') + (isNum(p.stopTicks) && isNum(p.targetTicks) && p.stopTicks ? ', reward ' + (p.targetTicks / p.stopTicks).toFixed(2) + ' to 1' : '') + '</span>' +
+        '<span>Open until</span><span data-parity="P12">' + (isNum(p.expiresAt) ? esc(AC.etClockSec(p.expiresAt)) + ' ET' : '-') + '</span>' +
+        '<span>Account</span><span data-parity="P13">' + esc(acc.name) + ' ' + markHtml(acc.mark) + '</span></div>' +
       /* the foot: ChartBridge's words (a refusal, the last 5 s, "Waiting for ChartBridge") right above Accept and Reject, so both
          stay in sight together while the proposal's words scroll (the foot is sticky in the tab) */
-      '<div class="ag-prop-foot"><div class="ag-prop-msg" data-k="msg" role="status"></div>' +
-      '<div class="ag-prop-btns"><button type="button" class="ag-acc" data-agans="accept" data-no-motion>Accept' + kc(S.keys.accept) + '</button><button type="button" class="ag-rej" data-agans="reject" data-no-motion>Reject' + kc(S.keys.reject) + '</button></div></div>';
+      '<div class="ag-prop-foot"><div class="ag-prop-msg" data-k="msg" data-parity="P14" role="status"></div>' +
+      '<div class="ag-prop-btns"><button type="button" class="ag-acc" data-agans="accept" data-no-motion data-parity="P15">Accept' + kc(S.keys.accept) + '</button><button type="button" class="ag-rej" data-agans="reject" data-no-motion data-parity="P16">Reject' + kc(S.keys.reject) + '</button></div></div>';
   }
   function makeCard(p) {
     const el = document.createElement('div');
     el.className = 'ag-prop inline';
-    el.dataset.agent = p.agent; el.dataset.id = p.id;
+    el.dataset.agent = p.agent; el.dataset.id = p.id; el.dataset.parity = 'P03';
     el.setAttribute('role', 'alertdialog');
     el.setAttribute('data-no-motion', '');
     el.setAttribute('aria-label', 'Copilot proposal from ' + AC.agentName(agents.get(p.agent) || { agent: p.agent }) + ': ' + sideWord(p.side) + ' ' + p.qty + ' ' + p.root);
@@ -431,9 +440,9 @@ function create(o) {
     const bot = typeof o.openBot === 'function';
     return list.map((x, i) => {
       const up = (st.up.get(x.key) || 0) > now;
-      const name = x.key === 'bot' && !bot ? '<span class="ag-oname" title="Answered on the Bot tab of the workspace">' + esc(x.name) + '</span>'
-        : '<button type="button" class="ag-olink" data-goto="' + esc(x.key) + '" title="' + esc(title(x)) + '">' + esc(x.name) + '</button>';
-      return '<span class="ag-oitem' + (up ? ' up' : '') + '" data-key="' + esc(x.key) + '" data-n="' + x.n + '">' + name + ': <span class="mono">' + x.n + '</span>' + (i ? '' : x.n === 1 ? ' proposal' : ' proposals') + '</span>';
+      const name = x.key === 'bot' && !bot ? '<span class="ag-oname" data-parity="O02" title="Answered on the Bot tab of the workspace">' + esc(x.name) + '</span>'
+        : '<button type="button" class="ag-olink" data-goto="' + esc(x.key) + '" data-parity="O02" title="' + esc(title(x)) + '">' + esc(x.name) + '</button>';
+      return '<span class="ag-oitem' + (up ? ' up' : '') + '"' + (up ? ' data-parity="O03"' : '') + ' data-key="' + esc(x.key) + '" data-n="' + x.n + '">' + name + ': <span class="mono">' + x.n + '</span>' + (i ? '' : x.n === 1 ? ' proposal' : ' proposals') + '</span>';
     }).join('<span class="ag-osep" aria-hidden="true"> · </span>');
   }
   /* write a line, keeping the focus on its name if it had it */
@@ -494,7 +503,7 @@ function create(o) {
     renderFeed();
     if (!x) return;
     x.ended = true;
-    both(x, el => { el.classList.add('ag-ended'); for (const b of el.querySelectorAll('button')) b.disabled = true; });
+    both(x, el => { el.classList.add('ag-ended'); el.dataset.parity = 'P03 P17'; for (const b of el.querySelectorAll('button')) b.disabled = true; });
     setMsg(x, text);
     setTimeout(() => dropProposal(p.agent, p.id), why === 'accepted' || why === 'rejected' ? 1500 : 3000);
   }
@@ -581,6 +590,7 @@ function create(o) {
     if (!agents.size()) return;
     const d = document.createElement('div');
     d.className = 'ag-note' + (n.level ? ' ' + n.level : '');
+    d.dataset.parity = 'N01';
     d.setAttribute('role', n.level === 'red' ? 'alert' : 'status');
     d.innerHTML = '<span class="ag-ttl">' + esc({ entry: 'Entry', exit: 'Exit', standDown: 'Stand-down', heartbeat: 'Heartbeat', kill: 'Kill switch', proposal: 'Copilot', status: 'ChartBridge', refused: 'Refused', account: 'Account', mode: 'Mode' }[n.kind] || 'Agent') + '</span><span>' + esc(n.text) + '</span>';
     d.addEventListener('click', () => d.remove());
@@ -599,6 +609,7 @@ function create(o) {
       const bad = agents.list().some(x => x.killed || x.standDown || (x.enabled !== false && !x.connected && x.name));
       tog(tabBtn, 'ag-alert', bad);
       tog(tabBtn, 'ag-waiting', !S.shown && [...cards.values()].some(x => !x.ended));
+      put(tabBtn.dataset, 'parity', 'W01 W02' + (bad ? ' W02-alert' : '') + (tabBtn.classList.contains('ag-waiting') ? ' W02-waiting' : ''));
       attr(tabBtn, 'title', off ? 'Agents: ' + AC.offText(offCtx()) : 'Agent tab: ' + agents.size() + (agents.size() === 1 ? ' agent' : ' agents'));
     }
     if (view) {
@@ -849,8 +860,9 @@ function create(o) {
   function rowHtml(r) {
     const t = AC.rowTone(r), sel = S.drawer === r.key;
     const label = t.tag + ' at ' + AC.etClockSec(r.at) + ': ' + (sel ? 'close his record' : 'open his record');
-    return '<button type="button" class="ag-rowb t-' + t.tone + (r.type === 'note' && r.m.kind === 'status' ? ' sys' : '') + (sel ? ' sel' : '') + '" data-row="' + esc(r.key) + '" aria-expanded="' + sel + '" aria-controls="' + DRAWER_ID + '" aria-label="' + esc(label) + '">' +
-      '<span class="ag-t mono">' + esc(AC.etClockSec(r.at)) + '</span><span class="ag-tag">' + esc(t.tag) + '</span>' +
+    const tagHook = { note: 'SM04', plan: 'SM05', fill: 'SM06', exit: 'SM07' }[r.type] || '';
+    return '<button type="button" data-parity="SM03" class="ag-rowb t-' + t.tone + (r.type === 'note' && r.m.kind === 'status' ? ' sys' : '') + (sel ? ' sel' : '') + '" data-row="' + esc(r.key) + '" aria-expanded="' + sel + '" aria-controls="' + DRAWER_ID + '" aria-label="' + esc(label) + '">' +
+      '<span class="ag-t mono">' + esc(AC.etClockSec(r.at)) + '</span><span class="ag-tag" data-parity="' + tagHook + '">' + esc(t.tag) + '</span>' +
       '<span class="ag-tx' + (r.type === 'note' && r.m.kind === 'notebook' ? ' mono' : '') + '">' + esc(rowText(r)) + '</span><span class="ag-chev" aria-hidden="true">›</span></button>';
   }
   function renderFeed() {
@@ -863,7 +875,7 @@ function create(o) {
     put(q('[data-k="feedCount"]'), 'textContent', c.notes + (c.notes === 1 ? ' note' : ' notes') + ' · ' + c.plans + (c.plans === 1 ? ' plan' : ' plans'));
     const box = q('[data-k="feed"]');
     const had = box.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.row : '';
-    setHtml(box, shown.length ? shown.map(rowHtml).join('') : '<p class="ag-empty">' + (a.connected ? 'Nothing yet' : 'Nothing yet · not connected') + '</p>');
+    setHtml(box, shown.length ? shown.map(rowHtml).join('') : '<p class="ag-empty" data-parity="SM08">' + (a.connected ? 'Nothing yet' : 'Nothing yet · not connected') + '</p>');
     if (had) { const b = box.querySelector('[data-row="' + CSS.escape(had) + '"]'); if (b && document.activeElement !== b) b.focus({ preventScroll: true }); }
     renderDrawer();
   }
@@ -888,11 +900,11 @@ function create(o) {
     if (S.drawer && !r) S.drawer = '';                         // its row is gone (another agent, a new day)
     if (!r) { put(d, 'hidden', true); setHtml(d, ''); placeDrawer(); return; }   // closed: the stream's rows start at its top again
     const x = AC.decisionRecord(r, { fmtPx, tick: tickOf });
-    const html = '<div class="ag-dhead"><div><div class="ag-lbl">' + esc(x.time) + ' · ' + esc(x.tag) + '</div><div class="ag-dtitle">' + esc(x.title) + '</div></div>' +
-      '<button type="button" class="ag-dclose" data-act="drawerClose" aria-label="Close his decision">Close</button></div>' +
-      (x.words ? '<div class="ag-dsec"><div class="ag-lbl">In his words</div><div class="ag-dquote' + (x.pre ? ' pre mono' : '') + '">' + esc(x.words) + '</div></div>' : '') +
-      (x.facts.length ? '<div class="ag-dsec"><div class="ag-lbl">The facts</div>' + x.facts.map(f => '<div class="ag-fact"><span>' + esc(f[0]) + '</span><span class="mono">' + esc(f[1]) + '</span></div>').join('') + '</div>' : '') +
-      '<div class="ag-dmore" aria-hidden="true">more below</div>';
+    const html = '<div class="ag-dhead"><div><div class="ag-lbl" data-parity="D02 D02-when">' + esc(x.time) + ' · ' + esc(x.tag) + '</div><div class="ag-dtitle" data-parity="D02 D02-title">' + esc(x.title) + '</div></div>' +
+      '<button type="button" class="ag-dclose" data-act="drawerClose" data-parity="D03" aria-label="Close his decision">Close</button></div>' +
+      (x.words ? '<div class="ag-dsec"><div class="ag-lbl">In his words</div><div class="ag-dquote' + (x.pre ? ' pre mono' : '') + '" data-parity="D04">' + esc(x.words) + '</div></div>' : '') +
+      (x.facts.length ? '<div class="ag-dsec"><div class="ag-lbl">The facts</div>' + x.facts.map(f => '<div class="ag-fact" data-parity="D05"><span>' + esc(f[0]) + '</span><span class="mono">' + esc(f[1]) + '</span></div>').join('') + '</div>' : '') +
+      '<div class="ag-dmore" data-parity="D06" aria-hidden="true">more below</div>';
     put(d, 'className', 'ag-drawer t-' + x.tone + (d.classList.contains('ag-more') ? ' ag-more' : ''));
     setHtml(d, html);
     put(d, 'hidden', false);
@@ -930,6 +942,7 @@ function create(o) {
      whole tab down 46 px before). Both go back where the page keeps them when the tab closes. Moved only when needed. */
   const alertsEl = popout ? null : document.getElementById('wsAlerts');
   const alertsHome = alertsEl ? { parent: alertsEl.parentNode, next: alertsEl.nextSibling } : null;
+  if (alertsEl) alertsEl.dataset.parity = 'N03';
   /* Narrower than 1100 px the chart sits far down the tab (the review of 7bca487: the line at 989 px at 1000 x 800, 1299 px on
      a phone), so there both are pinned at the top instead, in a band of a fixed height above the tab's scrolling part (the
      tray): always in sight, covering nothing, and their coming and going moves nothing. */
@@ -988,7 +1001,7 @@ function create(o) {
       }
       main.style.setProperty('--ag-lap', L.lapMs + 'ms');
       attr(main, 'data-phase', L.phase); attr(main, 'data-tone', L.tone);
-      for (const el of view.querySelectorAll('.ag-panel[data-panel]')) tog(el, 'lit', L.panels.includes(el.dataset.panel));
+      for (const el of view.querySelectorAll('.ag-panel[data-panel]')) { tog(el, 'lit', L.panels.includes(el.dataset.panel)); put(el.dataset, 'parity', (el.dataset.parity || '').replace(/ LT01-lit\b/g, '') + (L.panels.includes(el.dataset.panel) ? ' LT01-lit' : '')); }
       put(q('[data-k="said"]'), 'textContent', L.said);
       for (const li of q('[data-k="steps"]').children) { const i = +li.dataset.step; tog(li, 'done', L.step >= 0 && i < L.step); tog(li, 'now', i === L.step); attr(li, 'aria-current', i === L.step ? 'step' : null); }
     }
@@ -1017,17 +1030,17 @@ function create(o) {
         : { at: f.u, mark: 'F', tone: 'bridge', title: (f.side === 'buy' ? 'Bought ' : 'Sold ') + f.qty + ' ' + f.root + ' at ' + fmtPx(f.p, f.root) });
     }
     const T = AC.sessionTrail(a.rules, Date.now(), ev), now = T.nowPct === null ? 0 : T.nowPct;
-    setHtml(q('[data-k="trail"]'), '<div class="ag-track"><div class="ag-base"></div><div class="ag-done" style="width:' + now + '%"></div>' +
-      T.hours.map((h, i) => '<span class="ag-hour mono' + (i && i < T.hours.length - 1 ? ' mid' : '') + '" style="left:' + h.pct + '%">' + esc(h.label) + '</span>').join('') +
-      '<span class="ag-head" style="left:' + now + '%" title="Now"></span>' +            // under the marks: a fill a moment ago still shows
-      T.marks.map(x => '<span class="ag-ev t-' + x.tone + ' mono" style="left:' + x.pct + '%" title="' + esc(x.title) + '">' + esc(x.mark) + '</span>').join('') + '</div>');
+    setHtml(q('[data-k="trail"]'), '<div class="ag-track" data-parity="F05-track"><div class="ag-base"></div><div class="ag-done" data-parity="F05-done" style="width:' + now + '%"></div>' +
+      T.hours.map((h, i) => '<span class="ag-hour mono' + (i && i < T.hours.length - 1 ? ' mid' : '') + '" data-parity="F05-hour" style="left:' + h.pct + '%">' + esc(h.label) + '</span>').join('') +
+      '<span class="ag-head" data-parity="F05-head" style="left:' + now + '%" title="Now"></span>' +            // under the marks: a fill a moment ago still shows
+      T.marks.map(x => '<span class="ag-ev t-' + x.tone + ' mono" data-parity="F06" style="left:' + x.pct + '%" title="' + esc(x.title) + '">' + esc(x.mark) + '</span>').join('') + '</div>');
   }
   /* his account's room (the Account page's figures: ChartBridge's, else The Desk's limits; never estimated) */
   function renderRoom(a) {
     const name = AC.agentAccount(a).name, accs = S.accounts && Array.isArray(S.accounts.list) ? S.accounts.list : [], acc = accs.find(x => x && x.name === name) || null;
     const lim = V3 && typeof V3.limit === 'function' ? V3.limit(name) : acc && window.AccountsCore ? window.AccountsCore.limitState(acc, null) : null;
     const lines = AC.roomLines(acc, lim);
-    setHtml(q('[data-k="room"]'), '<div class="ag-lbl">Room left</div>' + lines.map(l => '<div class="ag-roomline" data-no-motion><div class="ag-roomrow"><span>' + esc(l.label) + '</span><span class="mono ag-hot">' +
+    setHtml(q('[data-k="room"]'), '<div class="ag-lbl">Room left</div>' + lines.map(l => '<div class="ag-roomline" data-parity="' + (l.key === 'dl' ? 'LA03' : 'LA02') + '" data-no-motion><div class="ag-roomrow"><span>' + esc(l.label) + '</span><span class="mono ag-hot">' +
       (l.room !== null ? esc(AC.fmtUsd(l.room).replace(/^\+/, '')) + (l.limit ? ' <small>of ' + esc(AC.fmtUsd(l.limit).replace(/^\+/, '')) + '</small>' : '') : '<small' + (l.said ? ' title="' + esc(l.said) + '"' : '') + '>' + esc(l.why) + '</small>') + '</span></div>' +
       (l.leftPct !== null ? '<div class="ag-meter2' + (l.key === 'dl' ? ' pu' : '') + '"><i style="width:' + l.leftPct + '%"></i></div>' : '') + '</div>').join(''));
   }
@@ -1080,8 +1093,8 @@ function create(o) {
     const f = AC.rulesForm(a.rules), served = servedRoots();
     q('[data-k="rRoots"]').innerHTML = AC.RULE_ROOTS.map(r => {
       const on = served.includes(r);
-      return '<label class="ag-rroot' + (on ? '' : ' off') + '" title="' + (on ? r + ': at most ' + AC.CEILING[r] + ' (ChartBridge\'s ceiling)' : r + ' is not traded on this ChartBridge') + '"><input type="checkbox" data-root="' + r + '"' + (f.roots.includes(r) ? ' checked' : '') + (on ? '' : ' disabled') + '>' +
-        '<span class="mono">' + r + '</span><input class="ag-in ag-qty" type="number" min="1" max="' + AC.CEILING[r] + '" step="1" data-qty="' + r + '" value="' + esc(f.maxQty[r]) + '"' + (on ? '' : ' disabled') + ' aria-label="' + r + ' size at most (1 to ' + AC.CEILING[r] + ')"><span class="ag-lbl">max ' + AC.CEILING[r] + '</span></label>';
+      return '<label class="ag-rroot' + (on ? '' : ' off') + '" title="' + (on ? r + ': at most ' + AC.CEILING[r] + ' (ChartBridge\'s ceiling)' : r + ' is not traded on this ChartBridge') + '"><input type="checkbox" data-root="' + r + '" data-parity="LR03-root"' + (f.roots.includes(r) ? ' checked' : '') + (on ? '' : ' disabled') + '>' +
+        '<span class="mono">' + r + '</span><input class="ag-in ag-qty" type="number" min="1" max="' + AC.CEILING[r] + '" step="1" data-qty="' + r + '" data-parity="LR03-qty" value="' + esc(f.maxQty[r]) + '"' + (on ? '' : ' disabled') + ' aria-label="' + r + ' size at most (1 to ' + AC.CEILING[r] + ')"><span class="ag-lbl">max ' + AC.CEILING[r] + '</span></label>';
     }).join('');
     for (const k of ['entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses']) q('[data-r="' + k + '"]').value = f[k];
     /* the window alone (0.5.4, in a trade): every other input shows its value, closed */
