@@ -1036,7 +1036,7 @@ function create(o) {
       attr(main, 'data-phase', L.phase); attr(main, 'data-tone', L.tone);
       for (const el of view.querySelectorAll('.ag-panel[data-panel]')) { tog(el, 'lit', L.panels.includes(el.dataset.panel)); put(el.dataset, 'parity', (el.dataset.parity || '').replace(/ LT01-lit\b/g, '') + (L.panels.includes(el.dataset.panel) ? ' LT01-lit' : '')); }
       put(q('[data-k="said"]'), 'textContent', L.said);
-      for (const li of q('[data-k="steps"]').children) { const i = +li.dataset.step, h = li.querySelector('.ag-stephead'); tog(h, 'done', L.step >= 0 && i < L.step); tog(h, 'now', i === L.step); attr(h, 'aria-current', i === L.step ? 'step' : null); }
+      for (const li of q('[data-k="steps"]').children) { const i = +li.dataset.step, h = li.querySelector('.ag-stephead'); for (const el of [li, h]) { tog(el, 'done', L.step >= 0 && i < L.step); tog(el, 'now', i === L.step); } attr(h, 'aria-current', i === L.step ? 'step' : null); }
     }
     renderGrid(a, L);
     /* the chart's header: the position and its open P&L, at once (R3) */
