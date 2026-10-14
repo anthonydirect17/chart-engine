@@ -27,6 +27,8 @@ every one again.
 | `test/agent-smoke.mjs` | `npm run smoke:agent`: the workspace against the fake, screenshots in `test/out/agent-*.png` |
 | `test/agent-targets-smoke.mjs` | `npm run smoke:agent-targets` (also run by `smoke:agent`): Accept and Reject never covered, never dropped, never moving (below) |
 | `test/perf-agent.mjs` | `npm run perf:agent`: the light's cost in a trade over a busy chart (`docs/MOTION.md` R5) |
+| `test/agent-parity.json`, `test/agent-parity-smoke.mjs` | the parity list (128 items, before Layout 5) and `npm run smoke:agent-parity` (also run by `smoke:agent`): every item asserted through its `data-parity` hook (below) |
+| `live/kits/agent-board-f/` | board F saved as a kit (tag `agent-tab-board-f`): opens on its own against the fake; never installed, never loaded by the page (`test/agent-kit.test.js`); its `README.md` says how to put it back |
 
 Shared code changed (each change small and tested): `live/bot.js` hands its open proposals to the one copilot-key router
 instead of owning the `chart-copilot-key` event; `live/bot-core.js` `botFillLedger(mark)` takes an optional mark (the
@@ -557,6 +559,15 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
   at 1100 px and narrower: every one in the band at the top of the tab, right under the top bar, at its fixed height (66
   px, 96 px on a phone), one in sight in it.
   Screenshots `agent-targets-1366`, `-390`, `-popout`.
+- `npm run smoke:agent-parity` (`test/agent-parity-smoke.mjs`, run by `smoke:agent` too; before Layout 5, DECISION
+  2026-10-14a): every item of `test/agent-parity.json` (the base state's 55 and the 73 that need a condition) and the rules
+  that hold across the tab (R3, Motion Off and reduced motion, keys, focus, fixed heights, Accept and Reject never covered
+  or moved, only the shown agent's card, the messages sent, the stored choices, no explanatory labels, the fonts). It finds
+  each item by its hook, never by the layout: `live/agent.js` puts `data-parity="<id>"` on the element of each item (a part
+  of it `<id>-<part>`, a state `<id>-lit`, `W02-alert`, `W02-waiting`, `P17` on an ended card); no style reads them, and a
+  redesign keeps them. Three fakes in turn: `--agents=demo` (the base state, then each condition), `--agents=demo,demotwo`
+  with the fake PC helper (`test/fake-helper.mjs` on 8767), and no agents line. It ends with the count: "parity: 128 of
+  128 items hold".
 - `npm run perf:agent` (R5, `test/perf-agent.mjs`, not part of `npm test`): the Agent tab in a trade at 1920 x 1080 while
   MNQ trades a busy tape (`--live-rate=200`), Motion Full and Motion Off taking turns. Gates: a chart's frame p95 under 4 ms
   and all charts per frame under 8 ms (the chart's own), the light on the chart and the footer with Full and none with
