@@ -704,24 +704,34 @@ test('Layout 5: the grid\'s steps say today\'s tracker words with their time, a 
 
 test('Layout 5: an entry\'s risk is its plan\'s own riskDollars (found by what both carry); his trades in R; never estimated', () => {
   const plan = { agent: 'demo', id: 'c1', action: 'plan', result: 'proposed', root: 'MNQ', side: 'buy', kind: 'limit', price: 25390, qty: 2, stopTicks: 16, targetTicks: 32, riskDollars: 16 };
-  const order = { id: 'O1', by: 'agent:demo', role: 'entry', root: 'MNQ', side: 'buy', kind: 'limit', price: 25390, qty: 2, name: 'CB#a1 ag:demo s16 t32' };
-  assert.equal(AC.entryRisk(order, [plan]), 16);
-  assert.equal(AC.entryRisk(Object.assign({}, order, { name: '', planned: { stopTicks: 16, targetTicks: 32 } }), [plan]), 16, 'the ticks from planned');
-  assert.equal(AC.entryRisk(Object.assign({}, order, { name: 'CB#a1 ag:demo s20 t32' }), [plan]), null, 'other stop ticks: not this plan');
+  const order = { id: 'o1', by: 'agent:demo', role: 'entry', root: 'MNQ', side: 'buy', kind: 'limit', price: 25390, qty: 2, name: 'MNQ 12-26', planned: { stopTicks: 16, targetTicks: 32 } };
+  assert.equal(AC.entryRisk(order, [plan]), 16, 'the ticks from planned');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planned: { stopTicks: 20, targetTicks: 32 } }), [plan]), null, 'other stop ticks: not this plan');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planned: undefined }), [plan]), null, 'the stop ticks not known: not reported, never a lookalike (review of 84893d0)');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planned: { stopTicks: null, targetTicks: 32 } }), [plan]), null, 'no stop: not reported');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { name: 'CB#a1 ag:demo s16 t32', planned: undefined }), [plan]), null, 'the order\'s name is the instrument: never read for ticks');
   assert.equal(AC.entryRisk(Object.assign({}, order, { price: 25391 }), [plan]), null, 'another price');
   assert.equal(AC.entryRisk(order, [plan, Object.assign({}, plan, { id: 'c2', riskDollars: 17 })]), null, 'two plans that disagree: not known');
   assert.equal(AC.entryRisk(order, [plan, Object.assign({}, plan, { id: 'c2' })]), 16, 'two plans that agree: that risk');
   assert.equal(AC.entryRisk(order, [Object.assign({}, plan, { result: 'refused: x' })]), null, 'a refused plan is never one');
   assert.equal(AC.entryRisk(Object.assign({}, order, { role: 'stop' }), [plan]), null, 'only an entry');
   const pv = r => (r === 'MNQ' ? 2 : 0);
-  const fills = [{ id: 'X1', root: 'MNQ', side: 'buy', qty: 2, p: 25390, u: T0, order: 'O1' }, { id: 'X2', root: 'MNQ', side: 'sell', qty: 2, p: 25398, u: T0 + 60000, order: 'T1' }];
-  let R = AC.tradesR(fills, { O1: { risk: 16, qty: 2 } }, pv);
+  const K1 = 'SIM-AG1|o1|' + T0, K2 = 'SIM-AG1|o2|' + T0;   // risk keys: account, page order id, first seen
+  const fills = [{ id: 'X1', root: 'MNQ', side: 'buy', qty: 2, p: 25390, u: T0, key: K1 }, { id: 'X2', root: 'MNQ', side: 'sell', qty: 2, p: 25398, u: T0 + 60000, key: '' }];
+  let R = AC.tradesR(fills, { [K1]: { risk: 16, qty: 2 } }, pv);
   assert.deepEqual(R.trades.map(t => [t.pnl, t.risk, t.r]), [[32, 16, 2]]); assert.equal(R.total, 2); assert.deepEqual(R.curve, [2]); assert.deepEqual(R.open, []);
-  R = AC.tradesR(fills.concat([{ id: 'X3', root: 'MNQ', side: 'sell', qty: 1, p: 25400, u: T0 + 120000, order: 'O2' }]), new Map([['O1', { risk: 16, qty: 2 }], ['O2', { risk: 10, qty: 2 }]]), pv);
+  R = AC.tradesR(fills.concat([{ id: 'X3', root: 'MNQ', side: 'sell', qty: 1, p: 25400, u: T0 + 120000, key: K2 }]), new Map([[K1, { risk: 16, qty: 2 }], [K2, { risk: 10, qty: 2 }]]), pv);
   assert.deepEqual(R.open, [{ root: 'MNQ', dir: -1, qty: 1, risk: 5 }], 'an open trade: half its entry filled, half its plan\'s risk');
   R = AC.tradesR(fills, {}, pv);
   assert.equal(R.total, null, 'a trade whose risk is not known: not reported'); assert.deepEqual(R.curve, []);
-  assert.equal(AC.tradesR(fills.map(f => Object.assign({}, f, { order: undefined })), { O1: { risk: 16, qty: 2 } }, pv).total, null, 'a fill kept before 1.23.0 (no order id): not known');
+  assert.equal(AC.tradesR(fills.map(f => Object.assign({}, f, { key: undefined })), { [K1]: { risk: 16, qty: 2 } }, pv).total, null, 'a fill with no risk key: not known');
+  assert.equal(AC.tradesR(fills.map(f => Object.assign({}, f, { key: f.key && 'SIM-AG1|o1|' + (T0 - 86400000) })), { [K1]: { risk: 16, qty: 2 } }, pv).total, null, 'the same page id first seen at another time (NinjaTrader restarted): never the old risk');
+  /* the ledger links a fill to the page order it was claimed for: a fill's own order is NinjaTrader's OrderId (review of 84893d0) */
+  const led = BC.botFillLedger(AC.isAgentMark), ag = agent();
+  led.order({ id: 'o1', by: 'agent:demo', account: 'SIM-AG1', root: 'MNQ', side: 'buy', qty: 2, filled: 2, avgFill: 25390 }, ag);
+  assert.ok(led.claim({ id: 'X1', account: 'SIM-AG1', root: 'MNQ', side: 'buy', qty: 2, p: 25390, order: 'a70000000001' }));
+  assert.equal(led.orderOf('X1'), 'o1', 'claimed for the page order o1, whatever NinjaTrader calls it');
+  assert.equal(led.orderOf('X9'), '', 'not claimed: none');
   assert.equal(AC.tradesR([], {}, pv).total, 0, 'no trade: 0 R');
 });
 

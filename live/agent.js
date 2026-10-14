@@ -156,7 +156,7 @@ function create(o) {
           '<button type="button" class="ag-kill" data-act="kill" data-k="kill" data-parity="LM04">Kill switch</button>' +
           '<div class="ag-pgrid"><span>Status</span><span data-k="status" data-parity="LM05">-</span><span>Heartbeat</span><span class="mono" data-k="beat" data-parity="LM06">-</span><span>Last plan</span><span data-k="last" data-parity="LM07">-</span><span>Build</span><span class="mono" data-k="buildRow" data-parity="LM08" title="The build id and stamp, as his hello says them">-</span></div>' +
         '</div>' +
-        '<div class="ag-sec ag-card" data-no-motion><div class="ag-sechead"><span class="ag-ttl">His account</span></div>' +
+        '<div class="ag-sec ag-card" data-no-motion><div class="ag-sechead"><span class="ag-ttl">His account</span><span class="ag-lbl">Room left</span></div>' +
           '<div class="ag-pgrid"><span>Trades on</span><span data-parity="LA01"><span class="mono" data-k="account">Sim101</span> <span class="bt-acct ag-mark" data-k="accountMark"></span></span></div>' +
           '<div class="ag-room" data-k="room"></div>' +
           '<div class="ag-edit" data-k="acctEdit" data-parity="LA05" hidden><select class="ag-sel" data-k="acctSel" data-parity="LA05-sel" aria-label="The agent\'s account"></select>' +
@@ -166,7 +166,9 @@ function create(o) {
           '<div class="ag-row"><button type="button" class="ag-btn" data-act="acctOpen" data-k="acctOpen" data-parity="LA04" title="Any account ChartBridge says is tradable, except the bot\'s, the copier\'s and another agent\'s; only while the agent is flat">Change account</button></div>' +
           '<p class="ag-why" data-k="acctWhy" data-parity="LA07 OH11"></p>' +
         '</div>' +
-        '<div class="ag-sec ag-card"><div class="ag-sechead"><span class="ag-ttl">Rules</span></div>' +
+        /* the Rules card takes the column's last room; when its lines are more than that, they scroll inside it with "more
+           below" at its foot (the column itself never cuts a line off: review of 84893d0, Anthony at 1600 x 900) */
+        '<div class="ag-sec ag-card ag-rulescard"><div class="ag-sechead"><span class="ag-ttl">Rules</span></div><div class="ag-rbody" data-k="rbody">' +
           '<div class="ag-pgrid ag-rules" data-k="rules" data-parity="LR01"></div>' +
           '<div class="ag-rform" data-k="rulesEdit" hidden>' +
             '<div class="ag-rroots" data-k="rRoots" data-parity="LR03"></div>' +
@@ -183,6 +185,7 @@ function create(o) {
             '<button type="button" class="ag-btn ag-live-go" data-act="rulesYes" data-parity="LR08-yes">Set it</button><button type="button" class="ag-btn" data-act="rulesNo" data-parity="LR08-no">Cancel</button></div>' +
           '<div class="ag-row"><button type="button" class="ag-btn" data-act="rulesOpen" data-k="rulesOpen" data-parity="LR02">Change the rules</button></div>' +
           '<p class="ag-why" data-k="rulesWhy" data-parity="LR09"></p>' +
+          '<div class="ag-rmore" aria-hidden="true">more below</div></div>' +
         '</div>' +
       '</div></aside>' +
       /* centre: the grid (what he is doing now: his five steps feed the sphere, its lines funnel into the decision; the canvas
@@ -241,7 +244,7 @@ function create(o) {
   const sendRaw = m => !!V3 && V3.post(m);
   const cid = () => 'ag' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
   function lost() {
-    S.signedIn = false; S.trading = null; S.orders.clear(); ledger.clear(); unclaimed.clear();
+    S.signedIn = false; S.trading = null; S.orders.clear(); ledger.clear(); unclaimed.clear(); riskKeys.clear();
     agents.clear(); feed.clear();
     for (const p of props.clear()) { const x = cards.get(keyOf(p.agent, p.id)); if (x) removeCard(x); }
     botProps.clear();
@@ -317,7 +320,14 @@ function create(o) {
     if (id && (x.state === 'working' || x.state === 'partFilled')) S.orders.set(x.id, x); else S.orders.delete(x.id);
   }
   function reclaim() { let any = false; for (const f of [...unclaimed.values()]) if (claim(f)) { unclaimed.delete(f.id); keepFill(f); any = true; } if (any) { renderTrips(); renderFeed(); renderLive(); } }
-  function claim(f) { for (const a of agents.list()) if (ledgerOf(a.agent).claim(f)) { f.agent = a.agent; return true; } return false; }
+  function claim(f) {
+    for (const a of agents.list()) if (ledgerOf(a.agent).claim(f)) {
+      const oid = ledgerOf(a.agent).orderOf(f.id);
+      f.agent = a.agent; f.riskKey = oid && riskKeys.has(oid) ? riskKeys.get(oid) : '';   // his entry's risk key; '' for any other order
+      return true;
+    }
+    return false;
+  }
   function onExec(f, quiet) {
     if (!f || typeof f.id !== 'string') return;
     if (!claim(f)) { unclaimed.set(f.id, f); if (unclaimed.size > 500) unclaimed.delete(unclaimed.keys().next().value); return; }
@@ -328,20 +338,30 @@ function create(o) {
   function keepFill(f) {
     const v = fillsDay();
     if (v.list.some(x => x.id === f.id)) return;
-    v.list.push({ id: f.id, agent: f.agent, side: f.side, qty: f.qty, p: f.p, t: f.t, u: isNum(f.u) ? f.u : null, root: f.root, account: f.account, order: typeof f.order === 'string' ? f.order : null });
+    v.list.push({ id: f.id, agent: f.agent, side: f.side, qty: f.qty, p: f.p, t: f.t, u: isNum(f.u) ? f.u : null, root: f.root, account: f.account, key: f.riskKey || null });
     if (v.list.length > 400) v.list.splice(0, v.list.length - 400);
     writeJson(KEYS.fills, v);
   }
   /* Layout 5: the risk of each of his entries, from the plan it came from (AgentCore.entryRisk: each plan's own riskDollars),
      kept for the trading day on this PC (live-agent-risk-v1: a filled entry is not sent again after a reload); his trades in R
-     (AgentCore.tradesR) and his heat (AgentCore.heatNow) are worked out from it. Not known: "not reported", never estimated */
+     (AgentCore.tradesR) and his heat (AgentCore.heatNow) are worked out from it. Not known: "not reported", never estimated.
+     A fill's own `order` is NinjaTrader's OrderId, never the page's (nt8/PROTOCOL.md), so a fill is linked to his entry the way
+     the bot's are: the ledger claims it against that order's filled contracts and says which page order it was (orderOf).
+     The page's order ids ("o12") start over when NinjaTrader restarts, so an entry's risk is kept under a key of its own:
+     account, page order id and the moment this page first saw it (riskKeys, in memory, cleared when ChartBridge goes away), so
+     an old risk is never handed to a new order of the same id (review of 84893d0). */
+  const riskKeys = new Map();                  // page order id -> its risk key, for this connection
+  function riskKeyOf(o) {
+    if (!riskKeys.has(o.id)) riskKeys.set(o.id, [o.account || '', o.id, Date.now()].join('|'));
+    return riskKeys.get(o.id);
+  }
   function risksDay() { const v = readJson(KEYS.risk), day = BC.tradeDay(Date.now()); return v && v.day === day && v.map && typeof v.map === 'object' ? v : { day, map: {} }; }
   function keepRisk(o, agent) {
-    const v = risksDay();
-    if (v.map[o.id]) return;
+    const key = riskKeyOf(o), v = risksDay();
+    if (v.map[key]) return;
     const plans = feed.items(agent, 'all').filter(x => x.type === 'plan').map(x => x.m), risk = AC.entryRisk(o, plans);
     if (risk === null) return;
-    v.map[o.id] = { risk, qty: o.qty, agent };
+    v.map[key] = { risk, qty: o.qty, agent };
     const ids = Object.keys(v.map); if (ids.length > 400) for (const k of ids.slice(0, ids.length - 400)) delete v.map[k];
     writeJson(KEYS.risk, v);
   }
@@ -687,7 +707,7 @@ function create(o) {
     const st = q('[data-k="sState"]');
     const stText = m.killed ? 'KILLED' : m.standDown ? 'STOOD DOWN: ' + m.standDown : '';
     put(st, 'hidden', !stText); put(st, 'textContent', stText); attr(st, 'title', stText || null);
-    put(q('[data-k="last"]'), 'textContent', m.last);
+    put(q('[data-k="last"]'), 'textContent', m.last); attr(q('[data-k="last"]'), 'title', m.last);   // one line in the column, the whole of it here
   }
   function renderPanel() {
     if (!view) return;
@@ -710,7 +730,7 @@ function create(o) {
     const kill = q('[data-k="kill"]');
     put(kill, 'textContent', a.killed ? (S.killConfirm > now ? 'Release: click again' : 'Kill switch on · Release') : 'Kill switch');
     tog(kill, 'on', !!a.killed); put(kill, 'disabled', !S.signedIn); attr(kill, 'aria-pressed', String(!!a.killed));
-    put(q('[data-k="status"]'), 'textContent', AC.statusText(a));
+    put(q('[data-k="status"]'), 'textContent', AC.statusText(a)); attr(q('[data-k="status"]'), 'title', AC.statusText(a));   // one line in the column, the whole of it here
     const beat = q('[data-k="beat"]'); put(beat, 'textContent', AC.beatText(a)); put(beat, 'className', 'mono ' + (!a.connected ? 'neg' : a.lastBeatMs > 2500 ? 'warn' : 'pos'));
     put(q('[data-k="account"]'), 'textContent', acc.name);
     renderRoom(a);
@@ -743,6 +763,7 @@ function create(o) {
       if (rw.dataset.kind !== 'refused') { put(rw, 'textContent', ce.why); rw.dataset.kind = 'auto'; }
     } else if (rw.dataset.kind === 'auto') { put(rw, 'textContent', ''); rw.dataset.kind = ''; }
     put(ro, 'hidden', S.rulesEdit);                             // the form has its own Set and Cancel
+    rulesMore();
   }
   const servedRoots = () => AC.RULE_ROOTS.filter(r => S.instruments[r] && !S.instruments[r].quoteOnly);
 
@@ -971,6 +992,8 @@ function create(o) {
     }
     moreBelow();
   }
+  /* "more below" at the Rules card's foot while its lines are more than it shows (its scroll and size, no timer) */
+  function rulesMore() { const b = q('[data-k="rbody"]'); if (b) tog(b, 'ag-more', b.scrollTop + b.clientHeight < b.scrollHeight - 2); }
   /* "more below" while the drawer holds more than it shows (its scroll, no timer) */
   function moreBelow() { const d = q('[data-k="drawer"]'); if (d) tog(d, 'ag-more', !d.hidden && d.scrollTop + d.clientHeight < d.scrollHeight - 2); }
   /* While the tab is shown, what floats over the page sits over its chart, the one part of the tab with no control of its own
@@ -999,10 +1022,12 @@ function create(o) {
     }
   }
   if (view && NARROW) { if (NARROW.addEventListener) NARROW.addEventListener('change', placeNotes); else if (NARROW.addListener) NARROW.addListener(placeNotes); }
-  let resizeObs = null;
+  let resizeObs = null, rulesObs = null;
   if (view && typeof ResizeObserver === 'function') {
     resizeObs = new ResizeObserver(() => placeDrawer(true));   // a new size: the open row back in sight
     for (const el of [q('.ag-right'), q('[data-panel="prop"]')]) if (el) resizeObs.observe(el);
+    const rb = q('[data-k="rbody"]');
+    if (rb) { rulesObs = new ResizeObserver(rulesMore); rulesObs.observe(rb); rb.addEventListener('scroll', rulesMore, { passive: true }); }
   }
 
   /* ---------------- the light, the tracker, the chart's position and the footer: worked out again on each message */
@@ -1067,7 +1092,7 @@ function create(o) {
     for (const li of q('[data-k="steps"]').children) {
       const i = +li.dataset.step, x = lines[i] || { words: '', at: null };
       put(li.querySelector('[data-k="words"]'), 'textContent', x.words);
-      put(li.querySelector('[data-k="age"]'), 'textContent', x.words ? AC.ageText(x.at, now) : '');
+      put(li.querySelector('[data-k="age"]'), 'textContent', x.words && a.connected ? AC.ageText(x.at, now) : '');   // refreshed with each agent message; none while he is not connected (it would go stale)
       tog(li, 'lit', !!x.words);
       const nw = q('[data-k="nw' + i + '"]'); put(nw, 'textContent', x.words);
     }
@@ -1147,7 +1172,7 @@ function create(o) {
     const name = AC.agentAccount(a).name, accs = S.accounts && Array.isArray(S.accounts.list) ? S.accounts.list : [], acc = accs.find(x => x && x.name === name) || null;
     const lim = V3 && typeof V3.limit === 'function' ? V3.limit(name) : acc && window.AccountsCore ? window.AccountsCore.limitState(acc, null) : null;
     const lines = AC.roomLines(acc, lim);
-    setHtml(q('[data-k="room"]'), '<div class="ag-lbl">Room left</div>' + lines.map(l => '<div class="ag-roomline" data-parity="' + (l.key === 'dl' ? 'LA03' : 'LA02') + '" data-no-motion><div class="ag-roomrow"><span>' + esc(l.label) + '</span><span class="mono ag-hot">' +
+    setHtml(q('[data-k="room"]'), lines.map(l => '<div class="ag-roomline" data-parity="' + (l.key === 'dl' ? 'LA03' : 'LA02') + '" data-no-motion><div class="ag-roomrow"><span>' + esc(l.label) + '</span><span class="mono ag-hot">' +
       (l.room !== null ? esc(AC.fmtUsd(l.room).replace(/^\+/, '')) + (l.limit ? ' <small>of ' + esc(AC.fmtUsd(l.limit).replace(/^\+/, '')) + '</small>' : '') : '<small' + (l.said ? ' title="' + esc(l.said) + '"' : '') + '>' + esc(l.why) + '</small>') + '</span></div>' +
       (l.leftPct !== null ? '<div class="ag-meter2' + (l.key === 'dl' ? ' pu' : '') + '"><i style="width:' + l.leftPct + '%"></i></div>' : '') + '</div>').join(''));
   }
@@ -1453,7 +1478,7 @@ function create(o) {
     chart: () => (S.chart ? S.chart.chart : null),
     /** Layout 5, read only (tests): the grid canvas, the chart maximized, his trades in R, his heat */
     layout5: () => { const a = cur(); return { grid: GRID ? GRID.state() : null, max: S.max, r: a ? rNow(a) : null, heat: a ? AC.heatNow(a, S.orders.values(), pointValue) : null, risks: risksDay().map }; },
-    destroy() { if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
+    destroy() { if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (rulesObs) rulesObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
   };
   return api;
 }

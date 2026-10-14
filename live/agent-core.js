@@ -884,25 +884,29 @@ const sameNum = (a, b) => isNum(a) && isNum(b) && Math.abs(a - b) < 1e-7;
  * The risk in dollars of the plan an agent's entry order came from (Layout 5: R only from each plan's own riskDollars, the
  * lead's ruling). The page is not told which plan an order is, so the plan is found by what both carry: the agent's plans
  * placed or proposed (never a skip or a refusal) with the entry's root, side, kind, size and price (its limit price too for a
- * stop-limit, when the order carries one), and its stop and target ticks when the entry says them (`planned`, or its name
- * "... s<n> t<n>"). Their riskDollars when every such plan says the same one; null when none matches or they differ (never
- * estimated). order: an `order` message (role entry); plans: his `agentPlan` messages.
+ * stop-limit, when the order carries one), its stop ticks and its target ticks (the entry's `planned`, which ChartBridge puts on
+ * every working entry it placed). Their riskDollars when every such plan says the same one; null when none matches, they
+ * differ, or the entry does not say its stop ticks (a lookalike plan with another stop must never lend its risk; review of
+ * 84893d0: an order's `name` is the instrument, so it carries no ticks). order: an `order` message (role entry); plans: his
+ * `agentPlan` messages.
  */
 function entryRisk(order, plans) {
   const o = order || {};
   if (o.role !== 'entry' || !isInt(o.qty) || !(o.qty > 0)) return null;
-  const nm = /\bs(\d+) t(\d+)\b/.exec(str(o.name)), pl = plainObj(o.planned) ? o.planned : {};
-  const st = isInt(pl.stopTicks) ? pl.stopTicks : nm ? +nm[1] : null, tt = isInt(pl.targetTicks) ? pl.targetTicks : nm ? +nm[2] : null;
+  const pl = plainObj(o.planned) ? o.planned : {};
+  if (!isInt(pl.stopTicks) || !(pl.stopTicks > 0)) return null;
+  const st = pl.stopTicks, tt = isInt(pl.targetTicks) ? pl.targetTicks : null;
   const c = (Array.isArray(plans) ? plans : []).filter(p => p && p.action !== 'skip' && (p.result === 'placed' || p.result === 'proposed') && isNum(p.riskDollars) &&
     p.root === o.root && p.side === o.side && p.kind === o.kind && p.qty === o.qty && sameNum(p.price, o.price) &&
-    (o.kind !== 'stopLimit' || !isNum(o.limitPrice) || sameNum(p.limitPrice, o.limitPrice)) && (st === null || p.stopTicks === st) && (tt === null || p.targetTicks === tt));
+    (o.kind !== 'stopLimit' || !isNum(o.limitPrice) || sameNum(p.limitPrice, o.limitPrice)) && p.stopTicks === st && (tt === null || p.targetTicks === tt));
   if (!c.length || c.some(p => p.riskDollars !== c[0].riskDollars)) return null;
   return c[0].riskDollars;
 }
 /**
- * His trades today in R (Layout 5): fills [{ id, root, side, qty, p, u, order }] (his own, as the page claimed them; u UTC ms,
- * order the order id the fill came from), risks: Map or object order id -> { risk, qty } (an entry's plan riskDollars and
- * the entry's size), pointValue(root). Per root in time order, as BotCore.trips: a trade opens with a fill from flat and ends
+ * His trades today in R (Layout 5): fills [{ id, root, side, qty, p, u, key }] (his own, as the page claimed them; u UTC ms,
+ * key the risk key of the page order the ledger claimed the fill for: account, page order id and when the page first saw it;
+ * '' or null for any order but his entry), risks: Map or object key -> { risk, qty } (an entry's plan riskDollars and the
+ * entry's size), pointValue(root). Per root in time order, as BotCore.trips: a trade opens with a fill from flat and ends
  * flat. Its result before fees from its own fills (the cash out and in, times the point value); its risk the sum over its entry
  * orders of risk x the contracts this trade took from that order / its size; its R the result over the risk, null when the
  * risk of any of its entry orders is not known (or the point value). Returns { trades: [{ root, dir, at, pnl, risk, r }]
@@ -932,7 +936,7 @@ function tradesR(fills, risks, pointValue) {
           cash = 0; ent = new Map();
         }
       }
-      if (q) { cash -= q * f.p; pos += q; const k = typeof f.order === 'string' ? f.order : ''; ent.set(k, (ent.get(k) || 0) + Math.abs(q)); }
+      if (q) { cash -= q * f.p; pos += q; const k = typeof f.key === 'string' ? f.key : ''; ent.set(k, (ent.get(k) || 0) + Math.abs(q)); }
     }
     if (pos) open.push({ root, dir: Math.sign(pos), qty: Math.abs(pos), risk: riskOf(ent) });
   }

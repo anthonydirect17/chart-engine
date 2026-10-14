@@ -118,13 +118,14 @@ function isBotMark(x, bot) {
  * A fill that arrives before its order message waits (claim it again after the next order). Pure: no page in it.
  *   order(o)   note an order message; true when it owes new contracts
  *   claim(f)   true when the fill is the bot's (it uses up what it covers; the same fill id twice is the same answer)
+ *   orderOf(id) the page order id ("o12") a claimed fill was claimed for, or '' (1.23.0, the Agent tab's R)
  *   clear()    forget everything (ChartBridge went away)
  * mark (1.17.0, optional): whose orders count, mark(order, owner); the bot's (isBotMark) by default. The Agent tab passes
  * AgentCore.isAgentMark, so an agent's fills are claimed against its own `by: "agent:<id>"` orders the same way.
  */
 function botFillLedger(mark) {
   const isMine = typeof mark === 'function' ? mark : isBotMark;
-  const seen = new Map(), owed = [], claimed = new Set();   // seen: order id -> { filled, avg }
+  const seen = new Map(), owed = [], claimed = new Map();   // seen: order id -> { filled, avg }; claimed: fill id -> the page order id it was claimed for
   const same = (a, b) => isNum(a) && isNum(b) && Math.abs(a - b) < 1e-6;
   return {
     order(o, bot) {
@@ -135,7 +136,7 @@ function botFillLedger(mark) {
       // the increment's own price: from the average before and after (null when either is unknown)
       const p = avg === null ? null : was.filled === 0 ? avg : was.avg === null ? null : (avg * now - was.avg * was.filled) / d;
       seen.set(o.id, { filled: now, avg });
-      owed.push({ account: o.account, root: o.root, side: o.side, qty: d, p });
+      owed.push({ account: o.account, root: o.root, side: o.side, qty: d, p, id: o.id });
       return true;
     },
     claim(f) {
@@ -146,9 +147,12 @@ function botFillLedger(mark) {
       if (!w) return false;
       w.qty -= f.qty;
       if (w.qty <= 0) owed.splice(owed.indexOf(w), 1);
-      claimed.add(f.id);
+      claimed.set(f.id, w.id);
       return true;
     },
+    /** the page order id (its `order` message's id, "o12") a claimed fill was claimed for, or '' (1.23.0: a fill's own `order`
+     *  is NinjaTrader's OrderId, never the page's) */
+    orderOf: id => claimed.get(id) || '',
     clear() { seen.clear(); owed.length = 0; claimed.clear(); }
   };
 }

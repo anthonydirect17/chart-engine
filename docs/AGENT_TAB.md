@@ -59,8 +59,8 @@ when they must, as board F's did):
 | row | left (290 px; 270 at 1500 px and narrower) | centre | right (370 px; 340) |
 |---|---|---|---|
 | strip (46 px) | his disc (initials), his name, `// AGENT DESK`, connected, mode, account | | position, today, Session R, picker, Motion, Pop out |
-| now line (24 px) | the newest word of each step that has one, still | | |
-| main | four cards: Agent (On/Off, spend, build), Mode (modes, kill switch, status, heartbeat, last plan, build), His account, Rules | the grid (about 40 %) over his chart (about 60 %) | the proposal's slot and the count line, then his stream (the drawer over both) |
+| now line (24 px) | the newest word of each step that has one, still (not shown at 820 px high or less: at 1366 x 768 the controls need the room) | | |
+| main | four cards: Agent (On/Off, spend, build), Mode (modes, kill switch, status, heartbeat, last plan, build: status and last plan one line each, their titles the whole text), His account ("Room left" in its head), Rules (the column's last room: its lines scroll inside it with "more below" at its foot when they are more; the column itself never cuts a line off) | the grid (about 40 %) over his chart (about 60 %) | the proposal's slot and the count line, then his stream (the drawer over both) |
 | footer (62 px) | today, trades and losses | his session trail | R curve, heat and if accepted |
 
 - **Only what is needed to understand and use the page** (Anthony 2026-10-08: "I dont need the labels in profit or under
@@ -79,7 +79,8 @@ The centre's top panel, "What he is doing now" with the light's line beside it (
   hold: "A look", "Thinking", "A plan in Shadow", "He passed: ...", "Refused by ChartBridge: ...", "Placed by ChartBridge",
   "Plan accepted", "Out of the trade: +$32.00"), and the state now on its own step ("A plan is waiting for you", "Entry placed,
   waiting for a fill", "In a trade, long 1 MNQ", "Watching" on Screen while nothing newer is). A step with nothing yet says
-  nothing. No scores. The step now is marked (C03, `aria-current`).
+  nothing. No scores. The step now is marked (C03, `aria-current`). The ages are written again with each `agent` message (once
+  a second); while he is not connected no age shows (it would go stale).
 - **The decision** on the right: his newest plan as its stream row says it ("Buy 2 MNQ · Sample pullback", "11:00 · waiting
   for you"), or "No plan yet today"; orange while his proposal waits.
 - **The canvas** behind them (`live/agent-grid.js`): each step's feed flows into a point-cloud sphere turning slowly inside
@@ -111,9 +112,14 @@ Only from real data; what is not known says "not reported", never estimated.
 - **Session R, the R curve, open R:** from his own fills (as the page claims them) and each plan's own `riskDollars`. The page
   is not told which plan an entry order is, so `AgentCore.entryRisk` finds it by what both carry: his plans placed or proposed
   with the entry's root, side, kind, size and price (its limit price for a stop-limit when the order carries one) and its stop
-  and target ticks (the order's `planned`, or its name "s16 t32"); their `riskDollars` when they all say the same, else not
-  known. Each entry's risk is kept for the trading day on this PC (`live-agent-risk-v1`, every read and write in a try: a
-  filled entry is not sent again after a reload); each fill now keeps the order id it came from. `AgentCore.tradesR` makes his
+  and target ticks (the order's `planned`); their `riskDollars` when they all say the same, else not known, and not known when
+  the entry does not say its stop ticks (an order's `name` is the instrument). A fill's own `order` is NinjaTrader's OrderId,
+  not the page's id, so the fill is linked to his entry as the bot's are: `BotCore.botFillLedger` claims it against that
+  entry's filled contracts and says which page order it was (`orderOf`). The page's ids ("o12") start over with NinjaTrader,
+  so each entry's risk is kept under a key of its own, account, page id and the moment this page first saw it (the keys are
+  forgotten when ChartBridge goes away): an old risk is never handed to a new order. Kept for the trading day on this PC
+  (`live-agent-risk-v1`, every read and write in a try: a filled entry is not sent again after a reload); each kept fill
+  holds its entry's key. `AgentCore.tradesR` makes his
   trades per root (flat to flat), each one's result before fees from its fills and its risk from its entry orders (in
   proportion to the contracts taken from each); a trade whose risk is not known makes Session R and the curve say "not
   reported". No trade: 0.00 R.
@@ -655,7 +661,10 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
   chart) and Escape only from inside the chart's panel, its strip's eight figures from real data, and Accept, Reject, the kill
   switch, the mode and On neither moved nor covered; a trade: heat $16.00 at his own stop, the entry's risk kept from the plan,
   open R in the strip, then +$32.00 on a $16.00 plan as +2.00 R with the R curve drawn; 1000 x 800 and 390 x 844 keep board F's
-  stacking. Screenshots `agent-l5-1366x768`, `-1600x900`, `-1920x1080`, `-max`, `-narrow`, `-phone`, `-proposal`, `-drawer`.
+  stacking. After the review of 84893d0: ChartBridge's words above Accept and Reject (the last 5 s, "Accept sent.", a long
+  refusal) move them 0 px at 1366 x 768, 1600 x 900, 1920 x 1080 and in the pop-out, and so does a real proposal's last 5 s;
+  the controls column cuts no line off at those sizes (the Rules card scrolls inside itself, "more below" gone at its end).
+  Screenshots `agent-l5-1366x768`, `-1600x900`, `-1920x1080`, `-max`, `-narrow`, `-phone`, `-proposal`, `-drawer`.
 - `npm run perf:agent` (R5, `test/perf-agent.mjs`, not part of `npm test`): the Agent tab in a trade at 1920 x 1080 while
   MNQ trades a busy tape (`--live-rate=200`), Motion Full and Motion Off taking turns. Gates: a chart's frame p95 under 4 ms
   and all charts per frame under 8 ms (the chart's own), the light on the chart and the footer with Full and none with

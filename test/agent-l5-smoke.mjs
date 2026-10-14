@@ -12,6 +12,9 @@
 //     kill switch, the mode, Accept and Reject neither move nor get covered;
 //   - his figures from real data: heat at his own stop in a trade, the risk if accepted, Session R and the R curve from the
 //     plan's riskDollars after the trade ends;
+//   - ChartBridge's words above Accept and Reject (the last 5 s, "Accept sent.", a long refusal) move them 0 px at 1366 x 768,
+//     1600 x 900, 1920 x 1080 and in the pop-out, and a real proposal's last 5 s too (review of 84893d0);
+//   - the controls column cuts no line off at those sizes: the Rules card scrolls inside itself with "more below";
 //   - the smaller screens keep board F's stacking (1000 x 800 and 390 x 844).
 //   npm run smoke:agent-l5   (CHROMIUM_PATH=/path/to/chrome; SHOTS=dir)
 // Screenshots (test/out): agent-l5-1366x768, -1600x900, -1920x1080, -max, -narrow (1000 x 800), -phone (390 x 844),
@@ -72,6 +75,31 @@ try {
     for (const [x, y] of [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 3, r.top + 3], [r.right - 3, r.bottom - 3]]) { const h = document.elementFromPoint(x, y); if (!h || !(h === b || b.contains(h))) out.push(id + ' covered at ' + Math.round(x) + ',' + Math.round(y)); }
     if (r.top < 0 || r.bottom > innerHeight || r.left < 0 || r.right > innerWidth) out.push(id + ' out of the window'); } return out; }, ids);
   const fits = () => page.evaluate(() => ({ sw: document.documentElement.scrollWidth, sh: document.documentElement.scrollHeight, w: innerWidth, h: innerHeight }));
+  /* ChartBridge's words right above Accept and Reject (P14) never move them (review of 84893d0: the last 5 s wrapped to a second
+     line and moved them 8 to 12 px): each of these, written where the page writes it, moves them 0 px */
+  const WORDS = ['Under 5 s left: too late to accept. Reject still goes.', 'Accept sent. Waiting for ChartBridge.',
+    'Refused by ChartBridge: SIM-AG1 is not allowed to trade (the account is not checked in config.txt), and this made-up refusal goes on long enough to need three lines in the card.'];
+  const accBox = pg => pg.evaluate(() => ['P15', 'P16'].map(id => { const e = document.querySelector('[data-parity~="P03"]:not([data-parity~="P17"]) [data-parity~="' + id + '"]'); if (!e) return id + ':-'; const r = e.getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(v => Math.round(v * 10) / 10).join(','); }).join(' '));
+  async function wordsMoveNothing(pg, label) {
+    const b0 = await accBox(pg), out = [];
+    for (const t of WORDS) {
+      await pg.evaluate(t => { document.querySelector('[data-parity~="P03"]:not([data-parity~="P17"]) [data-parity~="P14"]').textContent = t; }, t);
+      await pg.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+      const b = await accBox(pg); if (b !== b0) out.push('"' + t.slice(0, 24) + '...": ' + b0 + ' -> ' + b);
+    }
+    await pg.evaluate(() => { document.querySelector('[data-parity~="P03"]:not([data-parity~="P17"]) [data-parity~="P14"]').textContent = ''; });
+    check(!out.length && !/-/.test(b0.replace(/,-/g, ',')), label + ': the last 5 s, "Accept sent." and a long refusal above Accept and Reject move them 0 px' + (out.length ? ': ' + out.join('; ') : ' (' + b0 + ')'));
+  }
+  /* the controls column cuts no line off: it fits, and the Rules card's lines scroll inside it with "more below" when they are more */
+  async function leftFits(label) {
+    const x = await page.evaluate(() => { const c = document.querySelector('.ag-left .ag-scroll'), b = document.querySelector('[data-k="rbody"]'), m = b.querySelector('.ag-rmore');
+      return { col: c.scrollHeight - c.clientHeight, over: b.scrollHeight - b.clientHeight, more: getComputedStyle(m).display !== 'none', h: b.clientHeight }; });
+    let end = { more: false, last: true };
+    if (x.over > 2) end = await page.evaluate(async () => { const b = document.querySelector('[data-k="rbody"]'); b.scrollTop = b.scrollHeight; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const br = b.getBoundingClientRect(), l = [...b.querySelectorAll('[data-parity~="LR02"], [data-parity~="LR09"]')].filter(e => e.getClientRects().length).pop(); const lr = l ? l.getBoundingClientRect() : null;
+      const r = { more: getComputedStyle(b.querySelector('.ag-rmore')).display !== 'none', last: !!lr && lr.bottom <= br.bottom + 1 }; b.scrollTop = 0; return r; });
+    check(x.col <= 1 && x.h >= 60 && (x.over <= 2 ? !x.more : x.more && !end.more && end.last), label + ': the controls column fits (nothing cut off); the Rules card ' + (x.over <= 2 ? 'shows all its lines' : 'scrolls inside itself with "more below", gone at its end where its last line is in sight') + ' ' + JSON.stringify(Object.assign(x, { end })));
+  }
 
   await control('price', { root: 'MNQ', p: 25400 });
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
@@ -151,6 +179,8 @@ try {
     const share = ch.height / c.height;
     check(f.sw <= f.w && f.sh <= f.h && foot.bottom <= h + 1 && share >= 0.52 && share <= 0.68 && !bad.length,
       w + ' x ' + h + ': one screen with no page scroll, the chart ' + Math.round(share * 100) + ' % of the centre, Accept, Reject and the kill switch in sight' + (bad.length ? ': ' + bad.join('; ') : '') + ' ' + JSON.stringify(f));
+    await wordsMoveNothing(page, w + ' x ' + h);
+    await leftFits(w + ' x ' + h);
     await page.screenshot({ path: path.join(SHOTS, 'agent-l5-' + w + 'x' + h + '.png') });
   }
   await page.setViewportSize({ width: 1600, height: 900 }); await sleep(500);
@@ -216,6 +246,26 @@ try {
   const R = (await L5()).r;
   check((await text('[data-k="hR"]')) === '+2.00 R' && R.trades.length === 1 && R.trades[0].pnl === 32 && R.trades[0].risk === 16, 'out at the target: +$32.00 on a $16.00 plan is +2.00 R: ' + JSON.stringify(R.trades));
   check(await page.evaluate(() => !!document.querySelector('[data-k="rcurve"] polyline')) && (await text('[data-k="heat"]')) === '$0.00 · -', 'the R curve draws his trade; flat again, heat $0.00');
+
+  /* ------------------------------------------------------------------ the last 5 s for real, and the pop-out */
+  console.log('the last 5 s of a real proposal, and the pop-out: Accept and Reject never move');
+  await control('agent-plan', { agent: 'demo', id: 'l5late', side: 'sell', kind: 'limit', p: 25410, qty: 1, stop: 20, target: 40, expire: 900, setup: 'Sample late', reason: 'Sample: a made-up plan that runs out.' });
+  await until(async () => page.isVisible(H('P15')), 'a proposal for the last 5 s');
+  await sleep(600);
+  const [pop] = await Promise.all([ctx.waitForEvent('page'), page.click(H('ST14'))]);
+  pop.on('pageerror', e => fail('pop-out error: ' + e.message));
+  await pop.waitForLoadState();
+  if (await pop.waitForSelector('.cb-pin-key', { timeout: 5000 }).catch(() => null)) await enterPin(pop, TEST_PIN);
+  await pop.waitForFunction(() => !!document.querySelector('[data-parity~="P03"] [data-parity~="P15"]'), null, { timeout: 20000 }).catch(() => fail('the pop-out shows no proposal'));
+  for (const [w, h] of [[1366, 768], [1600, 900], [1920, 1080]]) { await pop.setViewportSize({ width: w, height: h }); await sleep(500); await wordsMoveNothing(pop, 'the pop-out at ' + w + ' x ' + h); }
+  await pop.close();
+  await page.setViewportSize({ width: 1600, height: 900 }); await sleep(500);
+  const lateB0 = await accBox(page);
+  await control('agent-expire', { agent: 'demo', id: 'l5late', ms: 4000 });
+  await until(async () => /too late to accept/.test(await text(H('P14'))), 'under 5 s left');
+  const lateB1 = await accBox(page);
+  check(lateB1 === lateB0 && /^Under 5 s left/.test(await text(H('P14'))), '1600 x 900, a real proposal in its last 5 s: its words above the buttons and Accept and Reject 0 px moved (' + lateB0 + ' / ' + lateB1 + ')');
+  await until(async () => !(await page.$('[data-parity~="P03"]')), 'the expired card goes', 12000);
 
   /* ------------------------------------------------------------------ the smaller screens keep board F's stacking */
   for (const [w, h, name] of [[1000, 800, 'narrow'], [390, 844, 'phone']]) {

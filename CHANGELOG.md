@@ -37,6 +37,17 @@ information and every control board F has. Page only, no recompile (ChartBridge 
   `riskDollars` (`AgentCore.entryRisk` finds the plan an entry came from by root, side, kind, size, price and stop and target
   ticks; `tradesR`); heat at his own working stop (`heatNow`); "if accepted" his open proposal's risk. Not known: "not
   reported". The entries' risks are kept for the day (`live-agent-risk-v1`) and each kept fill now carries its order id.
+- **Review of 84893d0 (fixed):** ChartBridge's words above Accept and Reject wrapping to a second line ("Under 5 s left: too
+  late to accept. Reject still goes.") moved them 8 to 12 px: the card now fills its slot with its foot at the bottom, so the
+  words grow upward and Accept and Reject move 0 px (`smoke:agent-l5` checks the last 5 s, "Accept sent." and a long refusal at
+  1366 x 768, 1600 x 900, 1920 x 1080 and in the pop-out). R never linked on a real ChartBridge: a fill's `order` is
+  NinjaTrader's OrderId, so fills are now linked to his entry through the ledger (`BotCore.botFillLedger` `orderOf`, new) and
+  the risks are kept under account, page id and first-seen time (never handed to a new order after NinjaTrader restarts); the
+  fakes send a NinjaTrader-style `order` on every `exec` (`ntOrderId`), as ChartBridge does. `entryRisk` needs the entry's
+  planned stop ticks (no lookalike). Step ages show nothing while he is not connected; the grid measures only when its canvas
+  changes size. The controls column fits at 1366 x 768, 1600 x 900 and 1920 x 1080: the Rules card scrolls inside itself with
+  "more below", status and last plan one line each, "Room left" in the account card's head, the now line not shown at 820 px
+  high or less.
 - **Fixed: on a phone the mode's words collapsed while hidden** (workspace.css's `[hidden] { display: none !important }` won
   over agent.css): they keep their two lines like the account's and the rules' (the parity test now asserts it).
 - **Order path unchanged:** no message the page sends changed; Accept, Reject, the kill switch, the mode, the account, the

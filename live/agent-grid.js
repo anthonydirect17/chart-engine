@@ -213,7 +213,7 @@ function create(canvas, o) {
       if ('decision' in v) S.decision = !!v.decision;
       if ('motion' in v) S.motion = v.motion === 'off' ? 'off' : 'full';
       if ('shown' in v) S.shown = !!v.shown;
-      if (!S.w && S.shown) { measure(); return; }
+      if (!S.w) return;                        // no size (the tab closed, the chart maximized): its ResizeObserver measures when it has one
       /* nothing new to draw: only make sure the loop runs exactly when it should (a missed reduced-motion change, say) */
       if (JSON.stringify([S.steps, S.decision, S.motion, S.shown]) === before) { if (moving() !== !!raf) update(); return; }
       update();
