@@ -566,6 +566,26 @@ function note(text, warn, ms) {
 /* One status line for the window (the charts' own are not shown here): the worst feed and local delay over the
    instruments (each one's in the tooltip) and the charts' frame rate, every second. */
 function fmtDelay(v) { return v === null || v === undefined ? '-' : (v < 1 && v >= 0 ? '<1' : Math.round(v)) + ' ms' + (v < 0 ? ' (PC clock behind)' : ''); }
+/* 1.24.0 (build list #77): ChartBridge 0.5.6 checks this PC's clock against a time server (hello's pcClock and the pcClock
+   message, on this window's order connection). With an answer the feed delay is split ("feed 2435 ms = clock +2310 ms, real
+   125 ms"), coloured by the real delay only (LivePrefs.feedLevel: amber from 1 s, red from 3 s), and "PC clock off by 2.3 s"
+   shows from 0.5 s off; with an older ChartBridge (no pcClock) or no answer, as before, and the tooltip says why it was not
+   checked. Where the top bar has no room for the split (1366 x 768), the line says "125 ms real" and the tooltip the split;
+   the line shrinks last of the top bar and never pushes Flatten all out of the window. The fallbacks keep the line as
+   before with a live.js older than this file (a window opened during an update). */
+let pcClock = null;
+const feedText = LP.feedText || ((f) => fmtDelay(f)), feedLevel = LP.feedLevel || (() => ''), clockWarn = LP.clockWarn || (() => '');
+const clockNote = LP.clockNote || (() => ''), pcClockOf = LP.pcClockOf || (() => null), feedShort = LP.feedShort || feedText;
+const fillEl = document.querySelector('.ws-top > .ws-fill');
+const clockAt = ms => clockFmt.format(new Date(ms)) + ' ET';
+/* the warning's place, right after the feed (what is cut last when the line has no room): made here, so an index.html older
+   than this file loses nothing */
+const clockWarnEl = (() => {
+  const sep = document.createElement('span'), b = document.createElement('b');
+  sep.className = 'ws-sep'; sep.textContent = '\u00b7'; b.id = 'wsClockWarn'; b.className = 'warn';
+  sep.hidden = b.hidden = true; $('wsFeed').parentElement.after(sep, b);
+  return { sep, b };
+})();
 function syncStats() {
   const per = new Map();
   let fps = 0, busy = false, frame = null, frameMax = null;
@@ -587,15 +607,37 @@ function syncStats() {
     if (r.local !== null && (local === null || r.local > local)) local = r.local;
     if (r.l95 !== null && r.l95 !== undefined && (l95 === null || r.l95 > l95)) l95 = r.l95;
   }
-  const ft = fmtDelay(feed) + (feed !== null && per.size > 1 ? ' ' + worst : '');
+  const tail = feed !== null && per.size > 1 ? ' ' + worst : '';
+  const ft = feedText(feed, pcClock) + tail;
   if ($('wsFeed').textContent !== ft) $('wsFeed').textContent = ft;
+  const lvl = feedLevel(feed, pcClock);                // 1.24.0: the real delay's colour, only with the clock checked
+  if ($('wsFeed').className !== lvl) $('wsFeed').className = lvl;
+  const cw = clockWarn(pcClock);
+  if (clockWarnEl.b.textContent !== cw) clockWarnEl.b.textContent = cw;
+  clockWarnEl.b.hidden = clockWarnEl.sep.hidden = !cw;
   // 1.15.0 (review): the local delay's p95 beside its median
   const lt = fmtDelay(local) + (local !== null && l95 !== null ? ' (p95 ' + fmtDelay(l95) + ')' : '');
   if ($('wsLocal').textContent !== lt) $('wsLocal').textContent = lt;
   $('wsFps').textContent = !chartViews().length ? '-' : busy ? Math.round(fps) + ' fps' : 'idle';
+  // 1.24.0: the split only while the top bar has room for it beside everything else (its free space, .ws-fill, not used
+  // up: a note or the update notice is never squeezed for it); else "125 ms real", the split in the tooltip. With the clock
+  // warning shown and the line still cut, the frame rate gives way, then the local delay's p95, then the local delay (each
+  // instrument's is in the tooltip): the warning is never cut.
+  const fpsEl = $('wsFps'), localEl = $('wsLocal').parentElement, stat = $('wsStat');
+  const show = (el, on) => { el.hidden = !on; if (el.previousElementSibling) el.previousElementSibling.hidden = !on; };
+  show(fpsEl, true); show(localEl, true);
+  const st = feedShort(feed, pcClock) + tail;
+  if (st !== ft && !(fillEl && fillEl.getBoundingClientRect().width >= 1)) $('wsFeed').textContent = st;
+  if (cw) {
+    const cut = () => stat.scrollWidth > stat.clientWidth + 1;
+    if (cut()) show(fpsEl, false);
+    if (cut()) $('wsLocal').textContent = fmtDelay(local);
+    if (cut()) show(localEl, false);
+  }
   $('wsStat').title = 'Feed delay (ChartBridge to here) and local delay per instrument, the worst shown. Frame: a trade\'s receipt by ChartBridge to the chart frame that drew it, ' +
     (frameMax === null ? 'no trade drawn in the last second' : fmtDelay(frameMax) + ' at worst in the last second (latest ' + fmtDelay(frame) + ')') + '; each chart\'s in the Data Box.\n' +
-    ([...per].map(([root, r]) => root + ': feed ' + fmtDelay(r.feed) + ', local ' + fmtDelay(r.local)).join('\n') || 'no data yet');
+    ([...per].map(([root, r]) => root + ': feed ' + feedText(r.feed, pcClock) + ', local ' + fmtDelay(r.local)).join('\n') || 'no data yet') +
+    (clockNote(pcClock, clockAt) ? '\n' + clockNote(pcClock, clockAt) : '');
 }
 setInterval(syncStats, 1000);
 
@@ -758,6 +800,7 @@ function tmessage(m) {
   switch (m.type) {
     case 'hello':
       bridgeVer = typeof m.version === 'string' ? m.version : ''; bridgeFeatures = Array.isArray(m.features) ? m.features.slice() : []; syncConn();
+      pcClock = pcClockOf(m.pcClock);                     // 1.24.0: ChartBridge 0.5.6's clock check; none before it
       instruments = {};
       for (const i of m.instruments || []) instruments[i.root] = i;
       core.hello(m);
@@ -768,6 +811,7 @@ function tmessage(m) {
       if (agentDesk) agentDesk.hello(m);                  // 1.17.0: the Agent tab too (agents need ChartBridge 0.5.0)
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
+    case 'pcClock': pcClock = pcClockOf(m); syncStats(); return;   // 1.24.0: a new check of this PC's clock (every 5 minutes)
     case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
     // errors stay until dismissed; a warning (a mistyped maxTicksAway or maxBracketTicks in config.txt, 0.3.7) too, in amber
     case 'status': if (m.level === 'error') alertOnce(m.text); else if (m.level === 'warn' && m.text) alertOnce(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;

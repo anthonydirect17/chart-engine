@@ -478,9 +478,9 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.23.1');   // 1.23.1: Layout 5 polish (Change the rules in the Rules header); 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.22.0 removed the single chart page; 1.21.0 needs ChartBridge 0.5.2
-  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.23\.1'/);
-  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.23\.1/);
+  assert.equal(JSON.parse(read('package.json')).version, '1.24.0');   // 1.24.0: the feed delay split (ChartBridge 0.5.6's clock check); 1.23.1: Layout 5 polish (Change the rules in the Rules header); 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.22.0 removed the single chart page; 1.21.0 needs ChartBridge 0.5.2
+  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.24\.0'/);
+  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.24\.0/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent-grid.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md', 'docs/MOTION.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 

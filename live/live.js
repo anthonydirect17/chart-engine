@@ -879,6 +879,79 @@ function pageClock(o) {
   };
 }
 
+/*
+ * The feed delay split (1.24.0, build list #77): the feed delay is ChartBridge's receipt of a trade (rx, this PC's clock)
+ * minus the exchange's time on it (u), so a PC clock that runs ahead reads as late data (2026-10-12: "feed 2435 ms" on the
+ * laptop, 122 ms after a Windows time sync). ChartBridge 0.5.6 checks this PC's clock against a time server every 5 minutes
+ * (hello's and the "pcClock" message's pcClock, nt8/PROTOCOL.md): offsetMs is the server's time minus this PC's, so the
+ * clock's part of the feed delay is -offsetMs (the PC ahead: positive) and the real delay is feed + offsetMs. Each part is
+ * rounded first, so the three numbers shown always add up ("2435 ms = clock +2310 ms, real 125 ms").
+ * With no answer (an older ChartBridge, or no answer from the time server) the feed delay shows as before.
+ * The warnings: "PC clock off by N s" from CLOCK_WARN_MS off; the feed in amber from REAL_WARN_MS of real delay and in red
+ * from REAL_BAD_MS (ship Wi-Fi), never for the clock's part, and only once the clock is checked.
+ */
+const CLOCK_WARN_MS = 500, REAL_WARN_MS = 1000, REAL_BAD_MS = 3000;
+/** pcClock as kept: { checked: true, offsetMs, rttMs, atUtcMs, server }, { checked: false, why, server }, or null (none sent). */
+function pcClockOf(c) {
+  if (!c || typeof c !== 'object') return null;
+  const str = v => (typeof v === 'string' ? v.slice(0, 200) : '');
+  if (c.checked === true && typeof c.offsetMs === 'number' && isFinite(c.offsetMs))
+    return { checked: true, offsetMs: c.offsetMs, rttMs: isFinite(c.rttMs) ? +c.rttMs : null, atUtcMs: isFinite(c.atUtcMs) ? +c.atUtcMs : null, server: str(c.server) };
+  if (c.checked === false) return { checked: false, why: str(c.why), server: str(c.server) };
+  return null;
+}
+/** A delay in ms as the status line shows it: "<1 ms" under 1, "-40 ms (PC clock behind)" below 0 (no clock checked). */
+function fmtDelay(v) { return v === null || v === undefined ? '-' : (v < 1 && v >= 0 ? '<1' : Math.round(v)) + ' ms' + (v < 0 ? ' (PC clock behind)' : ''); }
+/** The feed delay and its parts: { feed, clock (ms this PC is ahead; null unchecked), real (null unchecked) }, or null. */
+function feedSplit(feed, clock) {
+  if (feed === null || feed === undefined || !isFinite(feed)) return null;
+  const c = pcClockOf(clock);
+  if (!c || !c.checked) return { feed, clock: null, real: null };
+  const f = Math.round(feed), ahead = Math.round(-c.offsetMs) || 0;
+  return { feed: f, clock: ahead, real: f - ahead };
+}
+const signedMs = v => (v > 0 ? '+' : '') + v + ' ms';
+/** The status line's feed text: "2435 ms = clock +2310 ms, real 125 ms" with the clock checked, else fmtDelay. */
+function feedText(feed, clock) {
+  const s = feedSplit(feed, clock);
+  if (!s) return '-';
+  if (s.real === null) return fmtDelay(feed);
+  return s.feed + ' ms = clock ' + signedMs(s.clock) + ', real ' + s.real + ' ms';
+}
+/** The same when the line has no room for the split: "125 ms real" (the split goes in the tooltip), else fmtDelay. */
+function feedShort(feed, clock) {
+  const s = feedSplit(feed, clock);
+  if (!s) return '-';
+  return s.real === null ? fmtDelay(feed) : s.real + ' ms real';
+}
+/** The feed's warning colour: 'bad' (red) from REAL_BAD_MS of real delay, 'warn' (amber) from REAL_WARN_MS, else ''. Only
+    with the clock checked: unchecked, a late number may be the clock's. */
+function feedLevel(feed, clock) {
+  const s = feedSplit(feed, clock);
+  if (!s || s.real === null) return '';
+  return s.real >= REAL_BAD_MS ? 'bad' : s.real >= REAL_WARN_MS ? 'warn' : '';
+}
+/** "PC clock off by 2.3 s" when the checked clock is CLOCK_WARN_MS or more off, else ''. */
+function clockWarn(clock) {
+  const c = pcClockOf(clock);
+  if (!c || !c.checked || !(Math.abs(c.offsetMs) >= CLOCK_WARN_MS)) return '';
+  return 'PC clock off by ' + (Math.abs(c.offsetMs) / 1000).toFixed(1) + ' s';
+}
+/** The tooltip's lines about the clock: what was checked and when (fmtTime: UTC ms to text), or why it was not; '' when
+    ChartBridge sent nothing (before 0.5.6). */
+function clockNote(clock, fmtTime) {
+  const c = pcClockOf(clock);
+  if (!c) return '';
+  if (!c.checked) return 'PC clock not checked' + (c.why ? ': ' + c.why : '') + '. The feed delay includes any error of this PC\'s clock.';
+  const ahead = Math.round(-c.offsetMs) || 0;
+  const when = c.atUtcMs !== null && typeof fmtTime === 'function' ? ' at ' + fmtTime(c.atUtcMs) : '';
+  let t = 'PC clock: ' + (ahead === 0 ? 'right' : Math.abs(ahead) + ' ms ' + (ahead > 0 ? 'ahead of' : 'behind')) + (ahead === 0 ? ' by ' : ' ') + (c.server || 'the time server') +
+    ' (checked by ChartBridge' + when + (c.rttMs !== null ? ', round trip ' + Math.round(c.rttMs) + ' ms' : '') + '). Feed = clock + real delay; amber from ' +
+    REAL_WARN_MS / 1000 + ' s of real delay, red from ' + REAL_BAD_MS / 1000 + ' s.';
+  if (clockWarn(c)) t += '\n' + clockWarn(c) + ': Windows can fix it (Settings, Time and language, Date and time, Sync now).';
+  return t;
+}
+
 /** Runs fn after `ms` of quiet; flush() runs a waiting call now (on commit, or when the page is closing). */
 function debounce(fn, ms) {
   let timer = null, args = null;
@@ -889,7 +962,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
+api = { staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, CLOCK_WARN_MS, REAL_WARN_MS, REAL_BAD_MS, pcClockOf, fmtDelay, feedSplit, feedText, feedShort, feedLevel, clockWarn, clockNote, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -1235,6 +1308,7 @@ function mount(container, options) {
   const sigSum = () => (SIG.absorption ? SIG.absorption.version : 0) + (SIG.bubbles ? SIG.bubbles.version : 0) + (SIG.divergence ? SIG.divergence.version : 0);
   let sigFloors = prefs.largeFloors();
   let bridgeVersion = '';                                      // ChartBridge's version from hello (shown in Settings)
+  let pcClock = null;                                          // 1.24.0: ChartBridge 0.5.6's check of this PC's clock (pcClockOf), null before it
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js).
      With ChartBridge 0.3.5 (hello "liveFirst") seconds and range views get ChartBridge's served window instead: the last
@@ -2346,6 +2420,7 @@ function mount(container, options) {
         for (const i of m.instruments || []) instruments[i.root] = i;
         readouts();
         bridgeVersion = typeof m.version === 'string' ? m.version : '';
+        pcClock = LP.pcClockOf(m.pcClock);               // 1.24.0: none from ChartBridge before 0.5.6
         syncVersion();
         syncAccounts(m.accounts || []);
         subscribe(S.root);
@@ -2387,6 +2462,7 @@ function mount(container, options) {
       /* 1.13.0: a warning (for example a mistyped maxTicksAway in config.txt, which means NO limit) stays on screen
          until dismissed, as in the workspace; other notes go to the status line */
       case 'status': if (m.level === 'error') alertLoud(m.text); else if (m.level === 'warn' && m.text && !COMPACT) alertLoud(m.text, true); else setStatus(m.text, m.level); break;
+      case 'pcClock': pcClock = LP.pcClockOf(m); break;   // 1.24.0: a new check of this PC's clock (ChartBridge 0.5.6)
     }
   }
 
@@ -3579,7 +3655,11 @@ function mount(container, options) {
   /* ---------------- status line */
   every(() => {
     const f = median(delays.feed), l = median(delays.local);
-    $('dFeed').textContent = f === null ? '-' : Math.round(f) + ' ms' + (f < 0 ? ' (PC clock behind)' : '');
+    // 1.24.0: with ChartBridge 0.5.6's clock check, the clock's part and the real delay ("2435 ms = clock +2310 ms, real
+    // 125 ms"), coloured by the real delay; without it as before
+    $('dFeed').textContent = LP.feedText(f, pcClock);
+    $('dFeed').className = LP.feedLevel(f, pcClock);
+    $('dFeed').title = LP.clockNote(pcClock, ms => new Date(ms).toLocaleTimeString());
     // 1.15.0 (review): the local delay's p95 too
     const l95 = pct95(delays.local), ms = v => (v < 1 && v >= 0 ? '<1' : Math.round(v)) + ' ms';
     $('dLocal').textContent = l === null ? '-' : ms(l) + (l95 === null ? '' : ' (p95 ' + ms(l95) + ')');

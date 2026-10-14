@@ -166,7 +166,7 @@ public static class AccountsHarness
                 "port = 8765", "roots = MNQ, NQ", "days = 5", "tickHours = 8", "rangeHours = 2", "profileRoots = MNQ", "quoteRoots = YM", "contract.MNQ = MNQ 12-26",
                 "postFills = false", "deskUrl = http://localhost:8800", "allowOrigins = http://localhost:8800", "trading = true", "tradeAccounts = Sim101", "maxQty.MNQ = 2",
                 "maxTicksAway = 400", "maxBracketTicks = 300", "accountChecks = on", "orderTypes = on", "strategies = on", "merge = on", "cancelFromList = on",
-                "copier = on", "bot = on", "botRoot = MNQ", "botLibrary = bot-library.json", "agents = manrae", "bars = off", "barsRoots = MNQ", "pc = HOME", "days = many" });
+                "copier = on", "bot = on", "botRoot = MNQ", "botLibrary = bot-library.json", "agents = manrae", "bars = off", "barsRoots = MNQ", "pc = HOME", "days = many", "timeServer = time.windows.com" });   // 0.5.6: timeServer
             ChartBridgeConfig.Load();
             cfgSaid = NinjaTrader.Code.Output.Lines.Skip(saidCfg).ToList();
             Check(!cfgSaid.Any(x => x.Contains("is not a ChartBridge setting") || x.Contains("is not a whole number")), "0.5.5: every key ChartBridge reads (a value it cannot read included): no unknown-key line (" + string.Join(" | ", cfgSaid) + ")");

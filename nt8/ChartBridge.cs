@@ -124,6 +124,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   bars = on, barsRoots, pc      (0.3.6: daily 1-minute bars to The Desk; off by default; see ChartBridgeBars.cs)
         //   bot = off, botRoot, botLibrary (0.4.0: the bot channel, on by default, on the account chosen on the Bot tab; see ChartBridgeBot.cs)
         //   agents = manrae                (0.5.0: the agent channel, a comma list of agent ids; none: off; see ChartBridgeAgents.cs)
+        //   timeServer = time.windows.com  (0.5.6: the time server this PC's clock is checked against every 5 minutes, so the page
+        //                                  can split its feed delay into the clock's part and the real one; off: no check. It
+        //                                  only measures, never sets the clock. See ChartBridgeClock)
         // Any other key (the retired accounts and quoteHours lines included) does nothing, said once per load in the Output
         // window: "config.txt: <key> is not a ChartBridge setting; the line does nothing".
         public static void Load()
@@ -135,6 +138,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeCopier.ResetConfig();   // 0.4.0 copier:
             ChartBridgeBot.ResetConfig();   // 0.4.0 bot: on by default
             ChartBridgeAgents.ResetConfig();   // 0.5.0 agents: off until config.txt names one
+            ChartBridgeClock.ResetConfig();   // 0.5.6: the time check asks time.windows.com unless config.txt names another
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -161,6 +165,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (ChartBridgeCopier.ReadConfig(key, val)) { }   // 0.4.0 copier: copier = off turns it off (on by default; ChartBridgeCopier.cs)
                 else if (ChartBridgeBot.ReadConfig(key, val)) { }    // 0.4.0 bot: bot, botRoot, botLibrary (ChartBridgeBot.cs)
                 else if (ChartBridgeAgents.ReadConfig(key, val)) { }   // 0.5.0 agents: agents = manrae (ChartBridgeAgents.cs)
+                else if (ChartBridgeClock.ReadConfig(key, val)) { }   // 0.5.6: timeServer = time.windows.com, or off (ChartBridgeClock)
                 else if (ChartBridgeBars.ReadConfig(key, val)) { }   // bars, barsRoots, pc (ChartBridgeBars.cs)
                 else if (ChartBridgeOrders.ReadConfig(key, val)) { }   // trading, tradeAccounts, maxQty.<ROOT>, maxTicksAway, maxBracketTicks, merge, orderTypes, strategies
                 else if (Array.IndexOf(ChartBridgeSwitches.Names, key) >= 0) { }   // accountChecks, cancelFromList: read by ChartBridgeSwitches.Note above
@@ -383,6 +388,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             // Log outside the lock; small steps (stopwatch drift) are not worth a line.
             if (Math.Abs(stepped) > 250) ChartBridgeServer.Log("PC clock changed by " + Math.Round(stepped).ToString(CultureInfo.InvariantCulture) + " ms; ChartBridge follows it.");
+            if (stepped != 0) ChartBridgeClock.PcClockChanged(stepped);   // 0.5.6: the time check's offset follows too (over 250 ms: checked again)
             return now;
         }
 
@@ -1454,7 +1460,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public Action<string> Tap;              // test hook: sees every message sent (unused in NinjaTrader)
 
         private static readonly string[] OrderLaneTypes = { "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",
-            "bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed" };   // 0.4.0 accounts: "accounts" in the order lane   // 0.4.0 B4: merge   // 0.4.0 copier: copier, copierEvent   // 0.4.0 bot: the bot's messages never wait behind market data   // 0.4.0 B1: managed
+            "bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock" };   // 0.4.0 accounts: "accounts" in the order lane   // 0.4.0 B4: merge   // 0.4.0 copier: copier, copierEvent   // 0.4.0 bot: the bot's messages never wait behind market data   // 0.4.0 B1: managed   // 0.5.6: pcClock, in order after hello
 
         // The message's type, read from its start ({"type":"...), as every message ChartBridge sends begins.
         public static string TypeOf(string json)
@@ -1864,7 +1870,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.5.5";
+        public const string Version = "0.5.6";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -1883,6 +1889,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Regex SubRx = new Regex("\"sub\"\\s*:\\s*(\\d{1,15})(?!\\d)");   // the page's subscribe id (0.3.3), echoed back
         private static readonly Regex LiveFirstRx = new Regex("\"liveFirst\"\\s*:\\s*(true|1)(?![\\w.])");   // 0.3.5: a tick chart gets the served window
         private static readonly Regex ProfileRx = new Regex("\"profile\"\\s*:\\s*(true|1)(?![\\w.])");       // 0.3.5: the page wants "profile" messages
+
+        // 0.5.6: a message for every page (the time check's result, ChartBridgeClock)
+        public static void ToEveryPage(string json) { foreach (ChartBridgeClient c in Clients.Values) c.Send(json); }
 
         public static void Log(string text)
         {
@@ -1926,6 +1935,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     StartListening(cts.Token, 0);
                     ChartBridgeBars.Start();   // daily bars to The Desk, when bars = on (its own low-priority thread)
                     ChartBridgeCopier.Start();   // 0.4.0 copier: when copier = on (its own thread and 1 s timer); starts stood down
+                    ChartBridgeClock.Start();    // 0.5.6: this PC's clock against a time server, every 5 minutes on its own thread (measures only)
                     return true;
                 }
                 catch (Exception ex)
@@ -1952,6 +1962,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeAgents.Stop();   // 0.5.0 agents
                 ChartBridgeBars.Stop();
                 ChartBridgeCopier.Stop();   // 0.4.0 copier:
+                ChartBridgeClock.Stop();    // 0.5.6: the time check
                 try { if (accountTimer != null) accountTimer.Dispose(); } catch (Exception) { }
                 accountTimer = null;
                 try { if (pollTimer != null) pollTimer.Dispose(); } catch (Exception) { }
@@ -2155,8 +2166,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             // SendLoop blocks on its queue: never run it inline (0.1.0 deadlock). 0.4.0: on its own thread, not a pool thread per page
             Task sending = Task.Factory.StartNew(() => client.SendLoop(), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             Dictionary<string, string> seen = new Dictionary<string, string>();
+            int clockSeen = ChartBridgeClock.Changes;
             client.Send(HelloJsonFor(seen));
             SettlementAfterHello(client, seen);   // 0.3.7: hello ends up right even if settlements.txt was read (or a value came) while it was built
+            if (ChartBridgeClock.Changes != clockSeen) client.Send(ChartBridgeClock.MessageJson());   // 0.5.6: the same for a time check that ended meanwhile
             client.Send(ExecsJson());
             byte[] buf = new byte[16384];
             try
@@ -2349,6 +2362,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (Account a in Watched) { if (!first) b.Append(','); first = false; b.Append(CbJson.Str(a.Name)); }
             }
             b.Append("],\"trading\":").Append(ChartBridgeOrders.TradingJson(false, null));
+            b.Append(",\"pcClock\":").Append(ChartBridgeClock.Json());   // 0.5.6: this PC's clock against a time server (ChartBridgeClock)
             b.Append(",\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\",\"v3\"]}");   // 0.4.0 accounts: "v3", this ChartBridge speaks protocol v3   // 0.3.5: the served window, the session's volume at price; 0.3.7: settlement, higher-timeframe bars, the weekly profile
             return b.ToString();
         }
@@ -4846,6 +4860,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             StringBuilder b = new StringBuilder("{");
             b.Append("\"version\":").Append(CbJson.Str(Version));
             b.Append(",\"clockOffsetMs\":").Append(CbJson.Num3(ChartBridgeTime.UtcMs(DateTime.UtcNow) - ChartBridgeTime.NowUtcMs()));
+            b.Append(",\"pcClock\":").Append(ChartBridgeClock.DiagJson());   // 0.5.6: this PC's clock against a time server (clockOffsetMs is ChartBridge's own clock against the PC's)
             b.Append(",\"fillEventsDelivered\":").Append(Interlocked.Read(ref eventNew));
             b.Append(",\"fillsFoundByPolling\":").Append(Interlocked.Read(ref polledNew));
             b.Append(",\"lastPollUtcMs\":").Append(lastPollMs);
@@ -5043,6 +5058,277 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeDesk.Flush();
             }
             catch (Exception ex) { Log("fill error: " + ex.Message); }
+        }
+    }
+
+    // ------------------------------------------------------------------ 0.5.6: this PC's clock against a time server (build list #77)
+    // The page's feed delay is ChartBridge's receipt of a trade (rx, this PC's clock through ChartBridgeTime.NowUtcMs) minus the
+    // exchange's time on it (u), so a PC clock that runs ahead reads as late data (2026-10-12: the laptop showed "feed 2435 ms",
+    // and 122 ms after a Windows time sync). Every 5 minutes ChartBridge asks a time server what time it is (SNTP, RFC 4330: one
+    // UDP packet to port 123 and its answer, 2 s at most) on a background thread of its own (the name lookup too, synchronous on
+    // it: never NinjaTrader's thread or the thread pool's), and tells the pages how far this PC's clock is off ("pcClock" in hello and the "pcClock" message, nt8/PROTOCOL.md),
+    // so the page can split the feed delay into the clock's part and the real one. It only measures: it never sets the clock
+    // and never changes a setting of Windows or NinjaTrader.
+    // config.txt: timeServer = time.windows.com (the default, the server Windows time sync uses); timeServer = off: no check.
+    public static class ChartBridgeClock
+    {
+        public const string DefaultServer = "time.windows.com";
+        public static int Port = 123;          // SNTP's port (the harness points it at a server of its own)
+        public const int EveryMs = 300000;     // a check every 5 minutes
+        public const int FirstAfterMs = 3000;  // the first one 3 s after a start
+        public const int TimeoutMs = 2000;     // the answer gets 2 s; then "no answer" (the name lookup takes what Windows' own takes)
+        public const double KeepMs = 1800000;  // a result is kept through failed checks for 30 minutes, then "not checked"
+        public const double WarnMs = 500;      // off by this much or more: said in the Output window (the page warns at the same)
+        public const double StepMs = 250;      // the PC clock changed by more than this (ChartBridgeTime): checked again at once
+        public static string Server = DefaultServer;
+        public static bool Off { get { return Server.Equals("off", StringComparison.OrdinalIgnoreCase); } }
+
+        private static readonly object Sync = new object();
+        private static bool has;                                  // a good answer is held
+        private static double offsetMs, rttMs, atUtcMs;           // offset: the server's time minus this PC's (ChartBridge's clock)
+        private static string answeredBy, why = "not checked yet";
+        private static int changes, gen;                          // changes: every change the pages are told; gen: the running loop
+        private static long checks, fails;
+        private static string lastError;
+        private static double lastTryUtcMs;
+        private static int said;                                  // the Output window last said: 0 nothing, 1 an answer, 2 no answer
+        private static bool saidOver;                             // it last said the clock is off by WarnMs or more
+        private static AutoResetEvent wake;
+
+        public static void ResetConfig() { Server = DefaultServer; }
+        public static bool ReadConfig(string key, string val)
+        {
+            if (key != "timeServer") return false;
+            Server = val.Length == 0 ? DefaultServer : val;
+            return true;
+        }
+
+        public static int Changes { get { lock (Sync) return changes; } }
+
+        // Back to "not checked yet" (a start); nothing is sent.
+        public static void Reset()
+        {
+            lock (Sync)
+            {
+                has = false; offsetMs = rttMs = atUtcMs = 0; answeredBy = null; changes++;
+                why = Off ? "the time check is off in config.txt (timeServer = off)" : "not checked yet";
+                checks = fails = 0; faults = 0; lastError = null; lastTryUtcMs = 0; said = 0; saidOver = false;
+            }
+        }
+
+        public static void Start()
+        {
+            Reset();
+            if (Off) { ChartBridgeServer.Log("time check: off (config.txt timeServer = off); the page shows the feed delay as before"); return; }
+            AutoResetEvent w = new AutoResetEvent(false);
+            int g;
+            lock (Sync) { g = ++gen; wake = w; }
+            Thread t = new Thread(Loop) { IsBackground = true, Name = "ChartBridge time check", Priority = ThreadPriority.BelowNormal };
+            t.Start(new object[] { g, w });
+        }
+
+        // The loop ends at its next wake; a check under way ends within its timeouts and its answer is dropped.
+        public static void Stop()
+        {
+            AutoResetEvent w;
+            lock (Sync) { gen++; w = wake; wake = null; }
+            if (w != null) try { w.Set(); } catch (Exception) { }
+        }
+
+        private static void Loop(object state)
+        {
+            object[] a = (object[])state;
+            int g = (int)a[0];
+            AutoResetEvent w = (AutoResetEvent)a[1];
+            int wait = FirstAfterMs, seen = -1;
+            // Nothing may leave this loop as an exception: one unhandled on a background thread ends NinjaTrader. A fault is said
+            // in the Output window and the loop waits its full interval again (never a hot spin), as the bars worker and the
+            // copier guard theirs.
+            while (true)
+            {
+                try { w.WaitOne(wait); } catch (Exception) { Thread.Sleep(wait); }
+                if (Volatile.Read(ref gen) != g) return;
+                wait = EveryMs;
+                try
+                {
+                    Action fault = FaultForHarness;
+                    if (fault != null) fault();
+                    int now = Changes;
+                    if (seen != -1 && now != seen) ToPages();   // the PC clock changed since the last check: the corrected offset first
+                    string server = Server;
+                    double off, rtt; string err;
+                    bool ok = Ask(server, Port, out off, out rtt, out err);
+                    if (Volatile.Read(ref gen) != g) return;
+                    // An answer taken across a step of the PC clock is off by that step until the next check (the step itself
+                    // corrects the held offset only from the moment it is seen); a step over StepMs asks again at once.
+                    Note(server, ok, off, rtt, err, ChartBridgeTime.NowUtcMs());
+                    seen = Changes;
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref faults);
+                    try { ChartBridgeServer.Log("time check error (" + ex.GetType().Name + ": " + ex.Message + "); checked again in 5 minutes"); } catch (Exception) { }
+                }
+            }
+        }
+        public static Action FaultForHarness;   // the harness: throws inside the loop's step
+        private static int faults;
+
+        // ChartBridgeTime followed a change of the PC clock (stepped ms; positive: the PC clock moved ahead). The offset held is
+        // corrected by it at once (cheap: this runs on whatever thread read the clock); a change above StepMs is checked again now.
+        public static void PcClockChanged(double stepped)
+        {
+            AutoResetEvent w = null;
+            lock (Sync)
+            {
+                if (has) { offsetMs -= stepped; changes++; }
+                if (Math.Abs(stepped) > StepMs) w = wake;
+            }
+            if (w != null) try { w.Set(); } catch (Exception) { }
+        }
+
+        // One check's outcome. An answer replaces what was held; no answer keeps a held answer for KeepMs, then says why.
+        // The Output window gets a line when the first check answers or not, when that changes, and when the clock goes past
+        // WarnMs or back under it; never one per check.
+        public static void Note(string server, bool ok, double off, double rtt, string err, double nowMs)
+        {
+            string push = null, line = null, overLine = null;
+            lock (Sync)
+            {
+                checks++; lastTryUtcMs = nowMs;
+                if (ok)
+                {
+                    has = true; offsetMs = off; rttMs = rtt; atUtcMs = nowMs; answeredBy = server; why = null; lastError = null; changes++;
+                    push = MessageLocked();
+                    if (said != 1) line = "time check: " + Describe(off, server) + " (round trip " + Math.Round(rtt).ToString(CultureInfo.InvariantCulture) + " ms)" + (said == 2 ? ", answering again" : "") + ". ChartBridge only measures; it never sets the clock.";
+                    said = 1;
+                    bool over = Math.Abs(off) >= WarnMs;
+                    if (over != saidOver)
+                        overLine = over ? "this PC's clock is off by " + Seconds(off) + " s: the page's feed delay shows the clock's part apart. Windows can fix it: Settings, Time and language, Date and time, Sync now."
+                                        : "this PC's clock is within " + Math.Round(WarnMs).ToString(CultureInfo.InvariantCulture) + " ms of " + server + " again";
+                    saidOver = over;
+                }
+                else
+                {
+                    fails++; lastError = err;
+                    bool keep = has && nowMs - atUtcMs <= KeepMs;
+                    if (!keep)
+                    {
+                        string w = "no answer from " + server + " (" + err + ")";
+                        if (has || why != w) { has = false; why = w; changes++; push = MessageLocked(); }
+                    }
+                    if (said != 2) line = "time check: no answer from " + server + " (" + err + ")" + (keep ? "; the last answer is kept for up to 30 minutes" : "; the page shows the feed delay as before (the clock not checked)") + ". Checked again every 5 minutes.";
+                    said = 2;
+                }
+            }
+            if (line != null) ChartBridgeServer.Log(line);
+            if (overLine != null) ChartBridgeServer.Log(overLine);
+            if (push != null) ChartBridgeServer.ToEveryPage(push);
+        }
+
+        private static string Describe(double off, string server)
+        {
+            double ahead = -off;
+            return "this PC's clock is " + Math.Abs(Math.Round(ahead)).ToString(CultureInfo.InvariantCulture) + " ms " + (ahead >= 0 ? "ahead of " : "behind ") + server;
+        }
+        private static string Seconds(double ms) { return (Math.Abs(ms) / 1000).ToString("0.0", CultureInfo.InvariantCulture); }
+
+        // hello's pcClock: {"checked":true,"offsetMs","rttMs","atUtcMs","server"} or {"checked":false,"why","server"}
+        public static string Json() { lock (Sync) return JsonLocked(); }
+        private static string JsonLocked()
+        {
+            if (has)
+                return "{\"checked\":true,\"offsetMs\":" + CbJson.Num3(offsetMs) + ",\"rttMs\":" + CbJson.Num3(rttMs) + ",\"atUtcMs\":" + CbJson.Num3(atUtcMs) + ",\"server\":" + CbJson.Str(answeredBy) + "}";
+            return "{\"checked\":false,\"why\":" + CbJson.Str(why) + ",\"server\":" + (Off ? "null" : CbJson.Str(Server)) + "}";
+        }
+        public static string MessageJson() { lock (Sync) return MessageLocked(); }
+        private static string MessageLocked() { return "{\"type\":\"pcClock\"," + JsonLocked().Substring(1); }
+        private static void ToPages() { ChartBridgeServer.ToEveryPage(MessageJson()); }
+
+        // /diag pcClock: hello's fields and the counters
+        public static string DiagJson()
+        {
+            lock (Sync)
+            {
+                string j = JsonLocked();
+                return j.Substring(0, j.Length - 1) + ",\"checks\":" + checks + ",\"fails\":" + fails + ",\"lastError\":" + (lastError == null ? "null" : CbJson.Str(lastError)) +
+                    ",\"faults\":" + Volatile.Read(ref faults) + ",\"lastTryUtcMs\":" + CbJson.Num3(lastTryUtcMs) + ",\"everyMs\":" + EveryMs + ",\"timeoutMs\":" + TimeoutMs + ",\"warnMs\":" + CbJson.Num(WarnMs) + "}";
+            }
+        }
+
+        // One SNTP question and its answer; false with why when there is none. The times are ChartBridge's clock (the one rx is
+        // stamped with), so the offset is exactly what the page's feed delay is off by.
+        public static bool Ask(string server, int port, out double offset, out double rtt, out string err)
+        {
+            offset = 0; rtt = 0; err = null;
+            try
+            {
+                // synchronous on this check's own thread (Begin/EndGetHostAddresses would resolve on a pool thread and leave a lookup
+                // that timed out running): a slow lookup only delays this check, and Stop never waits for it
+                IPAddress[] list = Dns.GetHostAddresses(server);
+                IPAddress addr = list.FirstOrDefault(x => x.AddressFamily == AddressFamily.InterNetwork) ?? list.FirstOrDefault();
+                if (addr == null) { err = "the name has no address"; return false; }
+                using (Socket s = new Socket(addr.AddressFamily, SocketType.Dgram, ProtocolType.Udp))
+                {
+                    s.ReceiveTimeout = TimeoutMs; s.SendTimeout = TimeoutMs;
+                    s.Connect(new IPEndPoint(addr, port));
+                    byte[] req = new byte[48];
+                    req[0] = 0x23;                         // leap indicator 0, version 4, mode 3 (client)
+                    double t0 = ChartBridgeTime.NowUtcMs();
+                    WriteStamp(req, 40, t0);               // the transmit time, which the server echoes as the originate time
+                    s.Send(req);
+                    byte[] res = new byte[512];
+                    int n = s.Receive(res);
+                    double t3 = ChartBridgeTime.NowUtcMs();
+                    return Offset(req, res, n, t0, t3, out offset, out rtt, out err);
+                }
+            }
+            catch (SocketException ex) { err = ex.SocketErrorCode == SocketError.TimedOut || ex.SocketErrorCode == SocketError.WouldBlock ? "no answer within " + (TimeoutMs / 1000) + " s: offline, or UDP port 123 blocked" : "network error: " + ex.SocketErrorCode; return false; }
+            catch (Exception ex) { err = ex.GetType().Name + ": " + ex.Message; return false; }
+        }
+
+        // The SNTP four-timestamp formula (RFC 4330): t0 the question sent and t3 the answer received (this PC), t1 the question
+        // received and t2 the answer sent (the server). offset = ((t1 - t0) + (t2 - t3)) / 2, the server's time minus this PC's;
+        // round trip = (t3 - t0) - (t2 - t1). An answer that is not the server's to this very question, or from a server that
+        // says its own clock is not set, is no answer.
+        public static bool Offset(byte[] req, byte[] res, int n, double t0, double t3, out double offset, out double rtt, out string err)
+        {
+            offset = 0; rtt = 0; err = null;
+            if (res == null || n < 48) { err = "a short answer (" + n + " bytes)"; return false; }
+            int li = res[0] >> 6, mode = res[0] & 7, stratum = res[1];
+            if (mode != 4) { err = "not a server's answer (mode " + mode + ")"; return false; }
+            if (stratum == 0) { err = "the server turned the question down (" + Encoding.ASCII.GetString(res, 12, 4).Trim('\0', ' ') + ")"; return false; }
+            if (li == 3 || stratum > 15) { err = "the server's own clock is not set"; return false; }
+            for (int i = 0; i < 8; i++) if (res[24 + i] != req[40 + i]) { err = "the answer was not to this question"; return false; }
+            double t1 = StampMs(res, 32), t2 = StampMs(res, 40);
+            if (double.IsNaN(t1) || double.IsNaN(t2)) { err = "the answer has no times"; return false; }
+            double r = (t3 - t0) - (t2 - t1);
+            if (r < -5 || r > TimeoutMs + 1000) { err = "the times do not add up (round trip " + Math.Round(r).ToString(CultureInfo.InvariantCulture) + " ms)"; return false; }
+            rtt = Math.Max(0, r);
+            offset = ((t1 - t0) + (t2 - t3)) / 2;
+            return true;
+        }
+
+        // NTP time: seconds since 1900 and a 32-bit fraction, big-endian. Seconds with the top bit clear are after 2036-02-07
+        // (the next NTP era, RFC 4330 section 3). NaN for a zero time (not set).
+        private const double NtpToUnixSec = 2208988800.0, TwoTo32 = 4294967296.0;
+        public static double StampMs(byte[] b, int at)
+        {
+            uint sec = (uint)(b[at] << 24 | b[at + 1] << 16 | b[at + 2] << 8 | b[at + 3]);
+            uint frac = (uint)(b[at + 4] << 24 | b[at + 5] << 16 | b[at + 6] << 8 | b[at + 7]);
+            if (sec == 0 && frac == 0) return double.NaN;
+            double s = sec;
+            if ((sec & 0x80000000u) == 0) s += TwoTo32;
+            return (s - NtpToUnixSec) * 1000 + frac * 1000.0 / TwoTo32;
+        }
+        public static void WriteStamp(byte[] b, int at, double unixMs)
+        {
+            double s = unixMs / 1000 + NtpToUnixSec;
+            double whole = Math.Floor(s);
+            uint sec = (uint)((ulong)whole & 0xFFFFFFFFul);
+            uint frac = (uint)Math.Min(TwoTo32 - 1, Math.Floor((s - whole) * TwoTo32));
+            b[at] = (byte)(sec >> 24); b[at + 1] = (byte)(sec >> 16); b[at + 2] = (byte)(sec >> 8); b[at + 3] = (byte)sec;
+            b[at + 4] = (byte)(frac >> 24); b[at + 5] = (byte)(frac >> 16); b[at + 6] = (byte)(frac >> 8); b[at + 7] = (byte)frac;
         }
     }
 }

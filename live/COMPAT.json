@@ -1,8 +1,9 @@
 {
   "about": "The oldest ChartBridge each page version works with. nt8/update-pc.ps1 installs a page automatically only when the ChartBridge compiled on the PC is this version or newer. Keep it with the CHANGELOG: every release that needs a newer ChartBridge raises minChartBridge (and adds a line to history), and page follows package.json.",
-  "page": "1.23.1",
+  "page": "1.24.0",
   "minChartBridge": "0.5.2",
   "history": [
+    { "page": "1.24.0", "minChartBridge": "0.5.2", "note": "CHANGELOG ChartBridge 0.5.6 and chart 1.24.0: with ChartBridge 0.5.6 (a recompile) the feed delay is split into this PC's clock and the real delay (feed 2435 ms = clock +2310 ms, real 125 ms; ChartBridge checks the clock against time.windows.com every 5 minutes, measuring only), PC clock off by N s from 0.5 s, amber and red only for the real delay; with ChartBridge 0.5.2 to 0.5.5 the feed shows as before; page works with older, no recompile needed for the page" },
     { "page": "1.23.1", "minChartBridge": "0.5.2", "note": "CHANGELOG 1.23.1: Layout 5 polish: the Agent tab's Change the rules sits in the Rules card's header, in sight at every size (the review of #43); smoke:workspace's status-line check asks for what E2a meant; page only, no recompile" },
     { "page": "1.23.0", "minChartBridge": "0.5.2", "note": "CHANGELOG 1.23.0: the Agent tab's Layout 5 (DECISION 2026-10-14a): the Tron look, the grid canvas (live/agent-grid.js), Maximize for its chart, his R and heat from real data, the Orbitron font from this PC; every item and control of board F kept (the parity test, 128 of 128); page only, no recompile" },
     { "page": "1.22.0", "minChartBridge": "0.5.2", "note": "CHANGELOG 1.22.0: the single chart page (live/single.html) removed, the workspace is ChartBridge's only page (single.html is now a stub, installed over the old page by install.ps1 and the PC updater, that opens the workspace), and ChartLive.mount takes wsUrl as a string only (The Desk's relay support gone); the workspace works as 1.21.0; page only, no recompile" },

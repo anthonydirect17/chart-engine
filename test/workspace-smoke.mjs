@@ -55,6 +55,107 @@ const allSockets = page => page.evaluate(() => window.__spy.sockets.map(k => ({ 
 /* the instruments' connections (1.12.0: each window also has its own order connection, which subscribes to nothing) */
 const sockets = async page => (await allSockets(page)).filter(k => !k.auth);
 
+/* 1.24.0 (build list #77): the feed delay split, on a fake ChartBridge 0.5.6 of its own whose PC clock runs 2.31 s ahead of the
+   exchange (the exchange clock set 2.31 s back, --clock-offset, so the browser on the same clock keeps its own delay right; its
+   pcClock says so): at 1920 x 1080 the line splits "feed N ms = clock +2310 ms, real M ms" with no colour (the late number is
+   the clock's) and "PC clock off by 2.3 s" shows; at 1366 x 768, with no room for the split, "M ms real" and the split in the
+   tooltip, Flatten all still in the window; told the clock is nearer (a larger real delay) the feed turns amber at 1 s and red
+   at 3 s of real delay; with no answer the feed is as before and the tooltip says why. */
+async function clockPart() {
+  console.log('the feed delay split (ChartBridge 0.5.6\'s clock check)');
+  const port = PORT + 2;
+  const ctl = async what => (await fetch(`http://127.0.0.1:${port}/test/${what}`, { method: 'POST' })).json();
+  const fake = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--test-controls', '--live-rate=60', '--test-pin=' + TEST_PIN,
+    '--version=fake-0.5.6', '--pc-clock', '--clock-offset=-2.31', '--pc-clock-offset=0'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await new Promise(r => fake.stdout.once('data', r));
+  const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
+  try {
+    await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+    const p = await ctx.newPage();
+    p.on('pageerror', e => fail('clock page error: ' + e.message));
+    await p.goto(`http://localhost:${port}/live/`);
+    await p.waitForSelector('.cb-pin-key', { timeout: 15000 });
+    await enterPin(p, TEST_PIN);
+    await p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
+    await p.waitForFunction(() => /= clock/.test(document.getElementById('wsFeed').textContent), null, { timeout: 15000 }).catch(() => {});
+    await p.waitForTimeout(1500);
+    const read = () => p.evaluate(() => {
+      const f = document.getElementById('wsFeed'), w = document.getElementById('wsClockWarn'), fl = document.getElementById('wsFlat').getBoundingClientRect(), keys = document.getElementById('wsKeys').getBoundingClientRect();
+      return { feed: f.textContent, local: document.getElementById('wsLocal').textContent, cls: f.className, color: getComputedStyle(f).color, warn: w.hidden ? '' : w.textContent, warnColor: getComputedStyle(w).color,
+        tip: document.getElementById('wsStat').title, flatRight: fl.right, keysLeft: keys.left, statRight: document.getElementById('wsStat').getBoundingClientRect().right, vw: innerWidth,
+        warnSeen: !w.hidden && w.getBoundingClientRect().right <= document.getElementById('wsStat').getBoundingClientRect().right + 0.5 };
+    });
+    const parts = t => { const m = /^(-?\d+) ms = clock ([+-]?\d+) ms, real (-?\d+) ms( [A-Z]+)?$/.exec(t); return m ? { feed: +m[1], clock: +m[2], real: +m[3] } : null; };
+    const AMBER = 'rgb(255, 194, 102)', RED = 'rgb(255, 92, 122)';   // --ws-warn, --ws-sell
+    let s = await read(), x = parts(s.feed);
+    check(!!x && x.clock === 2310 && x.feed === x.clock + x.real && x.real >= 0 && x.real < 300, '1920 x 1080, the PC clock 2.31 s ahead: the feed split, the parts adding up: feed ' + s.feed + ' (local ' + s.local + ')');
+    check(s.cls === '' && s.color !== AMBER && s.color !== RED, 'no colour: the late number is the clock\'s (' + s.color + ')');
+    check(s.warn === 'PC clock off by 2.3 s' && s.warnColor === AMBER && s.warnSeen, 'the warning "PC clock off by 2.3 s", amber, in sight: ' + s.warn);
+    check(/PC clock: 2310 ms ahead of time\.windows\.com \(checked by ChartBridge at \d\d:\d\d:\d\d ET, round trip 32 ms\)/.test(s.tip) && /Windows can fix it/.test(s.tip) && /MNQ: feed \d+ ms = clock \+2310 ms, real/.test(s.tip), 'the tooltip says what was checked, when, and each instrument\'s split');
+    check(s.statRight <= s.keysLeft && s.flatRight <= s.vw, 'the line ends before KEYS; Flatten all in the window');
+    await shot(p, 'workspace-clock-split-1920x1080.png');
+    // 1366 x 768: no room for the split beside everything else: "M ms real", the split in the tooltip, Flatten all in the window
+    await p.setViewportSize({ width: 1366, height: 768 }); await p.waitForTimeout(1300);
+    s = await read();
+    check(/^-?\d+ ms real( [A-Z]+)?$/.test(s.feed) && /: feed \d+ ms = clock \+2310 ms, real/.test(s.tip), '1366 x 768: the line says the real delay (' + s.feed + '), the split in the tooltip');
+    check(s.warn === 'PC clock off by 2.3 s' && s.warnSeen, '1366 x 768: "PC clock off by 2.3 s" in sight, not cut (local ' + s.local + ')');
+    check(s.statRight <= s.keysLeft && s.flatRight <= s.vw, '1366 x 768: the line ends before KEYS (' + Math.round(s.statRight) + ' <= ' + Math.round(s.keysLeft) + '); Flatten all in the window (' + Math.round(s.flatRight) + ' of ' + s.vw + ')');
+    await shot(p, 'workspace-clock-split-1366x768.png');
+    /* the review of #46: the top bar never overflows; every control (KEYS, Flatten all, Colors, Layout, + Add panel, the gear)
+       at full size inside the window; only the note, the update notice and the status line give way; the warning never cut */
+    const bar = async label => {
+      const r = await p.evaluate(() => {
+        const top = document.querySelector('.ws-top'), stat = document.getElementById('wsStat'), warn = document.getElementById('wsClockWarn');
+        const ctl = [...top.querySelectorAll('button, select, .ws-keys')].filter(e => e.getClientRects().length && !e.closest('[hidden]') && !e.closest('.ws-alert'));
+        const bad = ctl.filter(e => { const b = e.getBoundingClientRect(); return b.right > innerWidth + 0.5 || b.left < 0 || e.scrollWidth > Math.ceil(b.width) + 1; }).map(e => e.id || e.className);
+        return { over: top.scrollWidth - top.clientWidth, bad, n: ctl.length, gear: Math.round(document.getElementById('wsSet').getBoundingClientRect().width),
+          warnCut: !warn.hidden && warn.getBoundingClientRect().right > stat.getBoundingClientRect().right + 0.5, line: stat.innerText.replace(/\s+/g, ' ').trim() };
+      });
+      check(r.over <= 0 && !r.bad.length && r.n >= 5 && r.gear === 28 && !r.warnCut, label + ': the top bar does not overflow, all ' + r.n + ' controls at full size in the window, the gear 28 px (' + r.line + ')' + (r.bad.length || r.over > 0 ? ' ' + JSON.stringify(r) : ''));
+    };
+    const LONG = encodeURIComponent('a long note from ChartBridge for the top bar, long enough to need all of the room there is and then some more room besides');
+    for (const [w, h] of [[1366, 768], [1600, 900], [1920, 1080]]) {
+      await p.setViewportSize({ width: w, height: h });
+      await ctl('pc-clock?offsetMs=-2310'); await p.waitForTimeout(1300);
+      await bar(w + ' x ' + h + ', the clock warning');
+      await ctl('status?level=info&text=' + LONG); await p.waitForTimeout(1200);
+      await bar(w + ' x ' + h + ', the clock warning and a long note');
+      await ctl('pc-clock?offsetMs=-100'); await p.waitForTimeout(1300);
+      await bar(w + ' x ' + h + ', no clock warning');
+      await ctl('status?level=info&text=' + LONG); await p.waitForTimeout(1200);
+      await bar(w + ' x ' + h + ', no clock warning, a long note');
+    }
+    await ctl('pc-clock?offsetMs=-2310');
+    await p.setViewportSize({ width: 1920, height: 1080 });
+    await p.waitForFunction(() => document.getElementById('wsNote').hidden, null, { timeout: 8000 });   // the split waits for a note to go
+    await p.waitForTimeout(1100);
+    s = await read();
+    check(!!parts(s.feed), '1920 x 1080, the note gone: the split again (' + s.feed + ')');
+    // told the clock is only 0.5 s ahead: about 1.8 s of the delay is real (ship Wi-Fi): amber
+    await ctl('pc-clock?offsetMs=-500'); await p.waitForTimeout(1300);
+    s = await read(); x = parts(s.feed);
+    check(!!x && x.clock === 500 && x.real >= 1000 && x.real < 3000 && s.cls === 'warn' && s.color === AMBER && s.warn === 'PC clock off by 0.5 s', 'a real delay over 1 s: the feed amber (' + s.feed + ', ' + s.color + ')');
+    // told the PC is 1 s behind: about 3.3 s real: red
+    await ctl('pc-clock?offsetMs=1000'); await p.waitForTimeout(1300);
+    s = await read(); x = parts(s.feed);
+    check(!!x && x.clock === -1000 && x.real >= 3000 && s.cls === 'bad' && s.color === RED, 'a real delay over 3 s: the feed red (' + s.feed + ', ' + s.color + ')');
+    await shot(p, 'workspace-clock-red-1920x1080.png');
+    // the clock's part back: no colour
+    await ctl('pc-clock?offsetMs=-2300'); await p.waitForTimeout(1300);
+    s = await read(); x = parts(s.feed);
+    check(!!x && x.clock === 2300 && s.cls === '' && s.warn === 'PC clock off by 2.3 s', 'the clock\'s part back: no colour again (' + s.feed + ')');
+    // no answer from the time server: the feed as before (no split, no colour, no warning), the tooltip says why
+    await ctl('pc-clock?checked=0&why=' + encodeURIComponent('no answer from time.windows.com (no answer within 2 s: offline, or UDP port 123 blocked)')); await p.waitForTimeout(1300);
+    s = await read();
+    check(/^\d+ ms( [A-Z]+)?$/.test(s.feed) && s.cls === '' && s.warn === '' && /PC clock not checked: no answer from time\.windows\.com \(no answer within 2 s: offline, or UDP port 123 blocked\)\. The feed delay includes any error of this PC's clock\./.test(s.tip),
+      'no answer: the feed as before (' + s.feed + '), no warning, and the tooltip says the clock was not checked');
+    await p.close();
+  } finally {
+    await ctx.close();
+    fake.kill();
+  }
+}
+
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--test-controls', '--live-rate=150', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));   // DECISION 2026-10-14e: the ticket starts on None; Sim101 picked, as Anthony would
@@ -164,6 +265,9 @@ try {
   const noted = one.footers.filter(f => f.shown).map(f => f.text);
   check(one.footers.length === 4 && one.footers.every(f => f.readouts === 0 && (!f.shown || f.note)), 'no status line under the charts: no feed, local or fps readout under any of the 4, a line only with a note' + (noted.length ? ' (' + noted.join(' | ') + ')' : ''));
   check(/ms( [A-Z]+)?$/.test(one.feed) && /ms( \(p95 [<\d]+ ms\))?$/.test(one.local) && /^(\d+ fps|idle)$/.test(one.fps) && /MNQ: feed/.test(one.tip) && /ES: feed/.test(one.tip), 'one status line in the top bar: feed ' + one.feed + ', local ' + one.local + ', ' + one.fps);
+  /* 1.24.0: this fake sends no pcClock (a ChartBridge before 0.5.6): the feed exactly as before, no split, no colour, no clock warning */
+  const old = await page.evaluate(() => ({ cls: document.getElementById('wsFeed').className, warn: document.getElementById('wsClockWarn').hidden }));
+  check(!/=|clock|real/.test(one.feed) && old.cls === '' && old.warn && !/PC clock/.test(one.tip), 'no pcClock (ChartBridge 0.5.2 to 0.5.5): the feed as before, no colour, no clock warning or tooltip line');
   const ib = `.ws-panel[data-id="${nq.id}"] .ws-head .ind-btn`;
   await page.click(ib);
   const im = await page.evaluate(id => { const p = document.querySelector(`.ws-panel[data-id="${id}"] .ind-panel`); const r = p.getBoundingClientRect(); return { open: !p.hidden, w: r.width, right: r.right, vw: innerWidth }; }, nq.id);
@@ -506,6 +610,7 @@ try {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.waitForTimeout(1500);
   await shot(page, 'workspace-1920x1080.png');
+  await clockPart();
   console.log('the order ticket (1.12.0): two windows, trading on');
   if (!process.env.WORKSPACE_SKIP_TICKET) await ticketPart({ browser, check, fail, shot, root, port: PORT + 1 });
 } catch (e) {
