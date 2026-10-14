@@ -21,6 +21,8 @@
  *               phase, its colour, the panels lit), each stream row's tone and his record of it for the drawer
  *               (rowTone, decisionRecord), his session as a trail (sessionTrail), his account's room (roomLines) and the
  *               tab's Motion switch kept in this browser (motionPref)
+ *   Layout 5    (chart 1.23.0, DECISION 2026-10-14a) the grid's step words (stepLines, ageText), his trades in R from each
+ *               plan's own riskDollars (entryRisk, tradesR) and his heat at his own stop (heatNow)
  *
  * Nothing here sends an order. The page never builds an order for an agent: ChartBridge places every agent order itself,
  * from the plan's parameters, inside the agent's rules (AI is never in the order path).
@@ -657,6 +659,37 @@ const refusedResult = r => /^refused/.test(str(r));
 const endTone = s => (s === 'accepted' ? 'bridge' : 'passed');
 const END_WORDS = { accepted: 'Accepted', rejected: 'Rejected', withdrawn: 'Withdrawn', 'not answered': 'Not answered', expired: 'Expired' };
 
+/** The events that light the tracker, from his notes, plans, the proposals this window saw end and his flat exits (x as
+ *  lightState): [{ at, hold, r: [phase, tone, panels, step, said] }], any age (lightState keeps those inside their hold,
+ *  stepLines the newest of each step). */
+function lightEvents(x) {
+  const o = x || {};
+  const ev = [];
+  for (const n of Array.isArray(o.notes) ? o.notes : []) {
+    if (!n || !isNum(n.at)) continue;
+    if (n.kind === 'look') ev.push({ at: n.at, hold: LIGHT_HOLD.look, r: ['look', 'eyes', ['pipe', 'stream'], 1, 'A look'] });
+    else if (n.kind === 'thinking') ev.push({ at: n.at, hold: LIGHT_HOLD.look, r: ['think', 'judgment', ['pipe', 'stream'], 2, 'Thinking'] });
+  }
+  const ends = new Map((Array.isArray(o.ends) ? o.ends : []).filter(e => e && typeof e.id === 'string').map(e => [e.id, e]));
+  for (const m of Array.isArray(o.plans) ? o.plans : []) {
+    if (!m || !isNum(m.at)) continue;
+    const res = str(m.result), what = (m.setup ? ': ' + m.setup : '');
+    if (m.action === 'skip' || res === 'skipped') ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['passed', 'passed', ['prop', 'stream'], 2, 'He passed' + what] });
+    else if (refusedResult(res)) ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['refused', 'no', ['acct', 'prop'], 3, 'Refused by ChartBridge: ' + res.replace(/^refused:?\s*/, '')] });
+    else if (res === 'shadow') ev.push({ at: m.at, hold: LIGHT_HOLD.look, r: ['plan', 'judgment', ['pipe', 'prop'], 2, 'A plan in Shadow'] });
+    else if (res === 'placed') ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['go', 'bridge', ['prop', 'stream'], 4, 'Placed by ChartBridge'] });
+    else if (res === 'proposed' && ends.has(m.id)) {
+      const e = ends.get(m.id), at = isNum(e.at) ? e.at : m.at;
+      ev.push({ at, hold: LIGHT_HOLD.outcome, r: [e.state === 'accepted' ? 'go' : 'passed', endTone(e.state), ['prop', 'stream'], e.state === 'accepted' ? 4 : 2, 'Plan ' + (END_WORDS[e.state] || e.state).toLowerCase()] });
+    }
+  }
+  for (const e of Array.isArray(o.exits) ? o.exits : []) {
+    if (!e || !isNum(e.at)) continue;
+    const p = isNum(e.pnl) ? e.pnl : null;
+    ev.push({ at: e.at, hold: LIGHT_HOLD.outcome, r: ['exit', p !== null && p < 0 ? 'no' : 'bridge', ['pipe', 'pnl'], 4, 'Out of the trade' + (p !== null ? ': ' + (fmtUsd(p) || '$0.00') : '')] });
+  }
+  return ev;
+}
 /**
  * What the agent is doing now, for the light. x:
  *   agent         its `agent` message (mode, enabled, connected, killed, standDown, position)
@@ -693,30 +726,7 @@ function lightState(x) {
   if (open.length) return out('plan', 'judgment', ['pipe', 'prop'], 2, open.length > 1 ? open.length + ' plans are waiting for you' : 'A plan is waiting for you', open[0].at);
   if (!a.connected) return out('quiet', 'screen', [], -1, 'Not connected: no agent program running', null);
   /* the newest event still inside its hold */
-  const ev = [];
-  for (const n of Array.isArray(o.notes) ? o.notes : []) {
-    if (!n || !isNum(n.at)) continue;
-    if (n.kind === 'look') ev.push({ at: n.at, hold: LIGHT_HOLD.look, r: ['look', 'eyes', ['pipe', 'stream'], 1, 'A look'] });
-    else if (n.kind === 'thinking') ev.push({ at: n.at, hold: LIGHT_HOLD.look, r: ['think', 'judgment', ['pipe', 'stream'], 2, 'Thinking'] });
-  }
-  const ends = new Map((Array.isArray(o.ends) ? o.ends : []).filter(e => e && typeof e.id === 'string').map(e => [e.id, e]));
-  for (const m of Array.isArray(o.plans) ? o.plans : []) {
-    if (!m || !isNum(m.at)) continue;
-    const res = str(m.result), what = (m.setup ? ': ' + m.setup : '');
-    if (m.action === 'skip' || res === 'skipped') ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['passed', 'passed', ['prop', 'stream'], 2, 'He passed' + what] });
-    else if (refusedResult(res)) ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['refused', 'no', ['acct', 'prop'], 3, 'Refused by ChartBridge: ' + res.replace(/^refused:?\s*/, '')] });
-    else if (res === 'shadow') ev.push({ at: m.at, hold: LIGHT_HOLD.look, r: ['plan', 'judgment', ['pipe', 'prop'], 2, 'A plan in Shadow'] });
-    else if (res === 'placed') ev.push({ at: m.at, hold: LIGHT_HOLD.outcome, r: ['go', 'bridge', ['prop', 'stream'], 4, 'Placed by ChartBridge'] });
-    else if (res === 'proposed' && ends.has(m.id)) {
-      const e = ends.get(m.id), at = isNum(e.at) ? e.at : m.at;
-      ev.push({ at, hold: LIGHT_HOLD.outcome, r: [e.state === 'accepted' ? 'go' : 'passed', endTone(e.state), ['prop', 'stream'], e.state === 'accepted' ? 4 : 2, 'Plan ' + (END_WORDS[e.state] || e.state).toLowerCase()] });
-    }
-  }
-  for (const e of Array.isArray(o.exits) ? o.exits : []) {
-    if (!e || !isNum(e.at)) continue;
-    const p = isNum(e.pnl) ? e.pnl : null;
-    ev.push({ at: e.at, hold: LIGHT_HOLD.outcome, r: ['exit', p !== null && p < 0 ? 'no' : 'bridge', ['pipe', 'pnl'], 4, 'Out of the trade' + (p !== null ? ': ' + (fmtUsd(p) || '$0.00') : '')] });
-  }
+  const ev = lightEvents(o);
   const live = ev.filter(e => now - e.at <= e.hold).sort((p, r) => r.at - p.at);
   if (live.length) { const r = live[0].r; return out(r[0], r[1], r[2], r[3], r[4], live[0].at); }
   return out('watch', 'screen', ['pipe'], 0, 'Watching', null);
@@ -845,6 +855,120 @@ function roomLines(account, limit) {
   ];
 }
 
+/* ======================================================================== Layout 5 (DECISION 2026-10-14a): the grid, R, heat */
+/**
+ * The grid's five steps (Layout 5): each step's words and when, today's tracker words only (the light's own events, x as
+ * lightState): the newest event that lights that step, whatever its hold, and the state now on its own step ("A plan is
+ * waiting for you", "In a trade, long 1 MNQ", "Watching" on Screen while nothing newer is). A step with nothing yet has words
+ * '' (no invented words) and no time; no scores. Returns [{ words, at }] in STEPS' order (at: UTC ms or null).
+ */
+function stepLines(x) {
+  const o = x || {}, out = STEPS.map(() => ({ words: '', at: null }));
+  if (!o.agent) return out;
+  for (const e of lightEvents(o)) {
+    const k = e.r[3];
+    if (k >= 0 && k < out.length && (!out[k].words || e.at > out[k].at)) out[k] = { words: e.r[4], at: e.at };
+  }
+  const L = lightState(o);
+  if (L.step >= 0 && L.said) out[L.step] = { words: L.said, at: L.at };
+  return out;
+}
+/** How long ago, short: "8s", "4m", "2h" (null or a time ahead: ''). */
+function ageText(at, now) {
+  if (!isNum(at) || !isNum(now) || now < at - 1000) return '';
+  const s = Math.max(0, Math.round((now - at) / 1000));
+  return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : Math.floor(s / 3600) + 'h';
+}
+const sameNum = (a, b) => isNum(a) && isNum(b) && Math.abs(a - b) < 1e-7;
+/**
+ * The risk in dollars of the plan an agent's entry order came from (Layout 5: R only from each plan's own riskDollars, the
+ * lead's ruling). The page is not told which plan an order is, so the plan is found by what both carry: the agent's plans
+ * placed or proposed (never a skip or a refusal) with the entry's root, side, kind, size and price (its limit price too for a
+ * stop-limit, when the order carries one), its stop ticks and its target ticks (the entry's `planned`, which ChartBridge puts on
+ * every working entry it placed). Their riskDollars when every such plan says the same one; null when none matches, they
+ * differ, or the entry does not say its stop ticks (a lookalike plan with another stop must never lend its risk; review of
+ * 84893d0: an order's `name` is the instrument, so it carries no ticks). order: an `order` message (role entry); plans: his
+ * `agentPlan` messages.
+ */
+function entryRisk(order, plans) {
+  const o = order || {};
+  if (o.role !== 'entry' || !isInt(o.qty) || !(o.qty > 0)) return null;
+  const pl = plainObj(o.planned) ? o.planned : {};
+  if (!isInt(pl.stopTicks) || !(pl.stopTicks > 0)) return null;
+  const st = pl.stopTicks, tt = isInt(pl.targetTicks) ? pl.targetTicks : null;
+  const c = (Array.isArray(plans) ? plans : []).filter(p => p && p.action !== 'skip' && (p.result === 'placed' || p.result === 'proposed') && isNum(p.riskDollars) &&
+    p.root === o.root && p.side === o.side && p.kind === o.kind && p.qty === o.qty && sameNum(p.price, o.price) &&
+    (o.kind !== 'stopLimit' || !isNum(o.limitPrice) || sameNum(p.limitPrice, o.limitPrice)) && p.stopTicks === st && (tt === null || p.targetTicks === tt));
+  if (!c.length || c.some(p => p.riskDollars !== c[0].riskDollars)) return null;
+  return c[0].riskDollars;
+}
+/**
+ * His trades today in R (Layout 5): fills [{ id, root, side, qty, p, u, key }] (his own, as the page claimed them; u UTC ms,
+ * key the risk key of the page order the ledger claimed the fill for: account, page order id and when the page first saw it;
+ * '' or null for any order but his entry), risks: Map or object key -> { risk, qty } (an entry's plan riskDollars and the
+ * entry's size), pointValue(root). Per root in time order, as BotCore.trips: a trade opens with a fill from flat and ends
+ * flat. Its result before fees from its own fills (the cash out and in, times the point value); its risk the sum over its entry
+ * orders of risk x the contracts this trade took from that order / its size; its R the result over the risk, null when the
+ * risk of any of its entry orders is not known (or the point value). Returns { trades: [{ root, dir, at, pnl, risk, r }]
+ * (closed, oldest first), open: [{ root, dir, qty, risk }] (risk null when not known), total (the sum of R; null when any
+ * trade's R is not known; 0 with no trade), curve: [the sum of R after each trade] (empty when total is null) }.
+ */
+function tradesR(fills, risks, pointValue) {
+  const get = id => (risks instanceof Map ? risks.get(id) : risks ? risks[id] : null) || null;
+  const pv = r => { const v = typeof pointValue === 'function' ? pointValue(r) : 0; return isNum(v) && v > 0 ? v : 0; };
+  const riskOf = ent => {
+    let risk = 0;
+    for (const [id, q] of ent) { const x = id ? get(id) : null; if (!x || !isNum(x.risk) || !(x.qty > 0)) return null; risk += x.risk * q / x.qty; }
+    return ent.size ? Math.round(risk * 100) / 100 : null;
+  };
+  const list = (Array.isArray(fills) ? fills : []).filter(f => f && (f.side === 'buy' || f.side === 'sell') && f.qty > 0 && isNum(f.p) && isNum(f.u));
+  const trades = [], open = [];
+  for (const root of [...new Set(list.map(f => f.root))]) {
+    let pos = 0, cash = 0, ent = new Map();
+    for (const f of list.filter(x => x.root === root).sort((a, b) => a.u - b.u)) {
+      let q = f.side === 'buy' ? f.qty : -f.qty;
+      if (pos && Math.sign(q) !== Math.sign(pos)) {
+        const closing = Math.min(Math.abs(q), Math.abs(pos)), d = Math.sign(q) * closing;
+        cash -= d * f.p; pos += d; q -= d;
+        if (!pos) {
+          const v = pv(root), risk = riskOf(ent), pnl = v ? Math.round(cash * v * 100) / 100 : null;
+          trades.push({ root, dir: -Math.sign(d), at: f.u, pnl, risk, r: pnl !== null && risk !== null && risk > 0 ? pnl / risk : null });
+          cash = 0; ent = new Map();
+        }
+      }
+      if (q) { cash -= q * f.p; pos += q; const k = typeof f.key === 'string' ? f.key : ''; ent.set(k, (ent.get(k) || 0) + Math.abs(q)); }
+    }
+    if (pos) open.push({ root, dir: Math.sign(pos), qty: Math.abs(pos), risk: riskOf(ent) });
+  }
+  trades.sort((a, b) => a.at - b.at);
+  const known = trades.every(t => t.r !== null), curve = [];
+  let sum = 0;
+  if (known) for (const t of trades) { sum += t.r; curve.push(sum); }
+  return { trades, open, total: known ? sum : null, curve };
+}
+/**
+ * His heat now (Layout 5): the dollars his open position loses at his own working stops (by "agent:<id>", role stop, on its
+ * root): from the position's average price to each stop's price for that stop's open size, times the point value; a stop past
+ * the entry (a gain locked) counts 0. Flat: 0. Stops that do not cover the whole position, a price not known or no point value:
+ * null (not reported, never estimated). agent: his `agent` message; orders: the page's working orders.
+ */
+function heatNow(agent, orders, pointValue) {
+  const a = agent || {}, pos = a.position;
+  if (!pos || !isNum(pos.qty) || !pos.qty) return 0;
+  const v = typeof pointValue === 'function' ? pointValue(pos.root) : 0;
+  if (!(isNum(v) && v > 0) || !isNum(pos.avgPrice)) return null;
+  const openQty = o => (isNum(o.qty) ? o.qty : 0) - (isNum(o.filled) ? o.filled : 0);
+  const stops = [...(orders || [])].filter(o => o && o.role === 'stop' && o.root === pos.root && WORKING.includes(o.state) && isAgentMark(o, a) && isNum(o.price) && openQty(o) > 0);
+  let left = Math.abs(pos.qty), loss = 0;
+  for (const o of stops) {
+    if (!left) break;
+    const q = Math.min(left, openQty(o));
+    left -= q;
+    loss += Math.max(0, pos.qty > 0 ? pos.avgPrice - o.price : o.price - pos.avgPrice) * q * v;
+  }
+  return left ? null : Math.round(loss * 100) / 100;
+}
+
 /* ======================================================================== the motion switch */
 const MOTION_KEY = 'live-agent-motion-v1';
 /** The tab's Motion switch as kept in this browser: 'full' (the default) or 'off'. storage may be null or throw. */
@@ -953,6 +1077,6 @@ return {
   agentOfOrder, isAgentMark, workingEntries, ownsText, pairOwner, pageExitPasses, lockText, statusAgent, KILL_REPEAT_MS, killOnRepeat,
   fmtUsd, positionText, beatText, statusText, stateOf, stripModel, noticesFrom, etClock, etClockSec,
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
-  LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightState, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
+  LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
 };
 });

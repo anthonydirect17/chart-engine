@@ -482,7 +482,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (!this.accounts.includes(o.account) && this.watched(o.account))
       for (const c of this.conns()) if (c.authed && c.v3) this.send(c, { type: 'position', account: o.account, root: o.root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null });
     if (this.bot.conn && this.isBotOrder(o)) {
-      this.send(this.bot.conn, { type: 'exec', account: o.account, name: o.name, root: o.root, side: o.side, qty, p: price, t: +this.barTime().toFixed(3), u: this.now(), id: 'X' + this.execSeq, order: o.id });
+      this.send(this.bot.conn, { type: 'exec', account: o.account, name: o.name, root: o.root, side: o.side, qty, p: price, t: +this.barTime().toFixed(3), u: this.now(), id: 'X' + this.execSeq, order: this.ntOrderId(o) });
       this.send(this.bot.conn, { type: 'position', account: o.account, root: o.root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null });
     }
     const ms = this.mergedSets.get(o.account + '|' + o.root);
@@ -1714,7 +1714,7 @@ Object.assign(OrderDeskV3.prototype, {
         const j = a.flatJob; if (j && o === j.close) j.closedQty += part;
       }
       if (a.conn && (a === a0 || (o.agentOwnedBefore || []).includes(a.id))) {
-        this.send(a.conn, { type: 'exec', account: o.account, name: o.name, root: o.root, side: o.side, qty, p: price, t: +this.barTime().toFixed(3), u: this.now(), id: 'X' + this.execSeq, order: o.id,
+        this.send(a.conn, { type: 'exec', account: o.account, name: o.name, root: o.root, side: o.side, qty, p: price, t: +this.barTime().toFixed(3), u: this.now(), id: 'X' + this.execSeq, order: this.ntOrderId(o),
           cbId: o.elsewhere ? null : o.id, role: this.agentExecRole(o, a) });
       }
       if (a.conn && a.account === o.account && a.rules.roots.includes(o.root)) { const p = this.pos(o.account, o.root); this.send(a.conn, { type: 'position', account: o.account, root: o.root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null }); }

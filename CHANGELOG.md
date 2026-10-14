@@ -1,5 +1,62 @@
 # Changelog
 
+## 1.23.0 (2026-10-14): the Agent tab's Layout 5 (Tron)
+
+Anthony's decision 2026-10-14a: the Agent tab takes "Layout 5 Tron" as in the approved preview, keeping every piece of
+information and every control board F has. Page only, no recompile (ChartBridge 0.5.2 as for 1.21.0). After 1.22.0 (#41).
+
+- **Before it (#42, merged): board F kept as a kit and the parity test.** `live/kits/agent-board-f/` saves board F (chart
+  1.21.0, main a90c3c4) so it opens on its own against the fake bridge and can be put back (its README); never installed,
+  never loaded by the page. `test/agent-parity.json` lists board F's 128 items (55 in the base state, 73 under a condition)
+  and `npm run smoke:agent-parity` asserts each through a `data-parity` hook `live/agent.js` puts on its element (no style
+  reads them), plus the rules across the tab (R3, motion, keys, focus, fixed heights, Accept and Reject never covered or
+  moved, the messages, the stored choices). It is Layout 5's gate: **128 of 128 hold**, the list unchanged.
+- **The look:** panels framed by a thin glowing line with cut corners (drawn behind each panel, so the light and the glow are
+  never clipped), a solid near-black ground (the preview's glow and horizon grid behind the panels cost frames under the moving
+  light in `perf:agent`, so the grid's canvas draws the horizon floor instead), cyan and white-hot, orange only for his action (his proposal
+  waiting, the decision, the beam when a plan arrives). Headers in **Orbitron** (new: 500 and 700, the Latin subset of npm
+  `@fontsource/orbitron` 5.2.8, SIL Open Font License in `live/fonts/OFL-orbitron.txt`, in `live/fonts/agent-fonts.css` and
+  `nt8/install-files.json`; nothing from the internet), Chakra Petch for buttons, chips, tabs and small labels, IBM Plex Sans
+  for body text, JetBrains Mono for numbers. Nothing rezzes in or flickers.
+- **The layout** at 1366 x 768, 1600 x 900 and 1920 x 1080, one screen with no page scroll: the strip (his disc and name only,
+  connected, mode, account, position, today, Session R, Motion, Pop out), a still line of each step's newest word, the controls
+  as four cards on the left, the grid over his chart (about 40 % and 60 %) in the centre, the proposal's slot (its height
+  unchanged) and his stream on the right, and the footer's cards (today, trades and losses, his session, his R curve, his
+  heat). Narrower than 1100 px and on a phone, board F's stacking rules, kept.
+- **The grid** (`live/agent-grid.js`, new, installed): his five steps with today's tracker words and how long ago
+  (`AgentCore.stepLines`, `ageText`; a step with nothing yet says nothing; no scores), the decision (his newest plan), and one
+  canvas behind them: the steps feed a point-cloud sphere inside identity-disc rings and its lines funnel into the decision;
+  an orange beam only for 6 s after an `agentPlan` arrives. At most 30 frames a second and 1.5 device pixels; paused with
+  Motion Off, reduced motion, a hidden window or the tab closed. The tab's one frame loop (the lead's ruling):
+  `test/agent.test.js` allows `requestAnimationFrame` in that file alone, with the reason.
+- **Maximize:** the chart takes the whole centre column by its button, a double click on its head bar (inside the chart a
+  double click stays the chart's own) or restores with Escape from inside its panel (no page-wide key handler); a strip of
+  Position, Entry, Stop, Target, Open R, Session, Heat and Room from real data, never animated. The controls and the proposal
+  keep their places: the kill switch, the mode, Accept and Reject never move and are never covered.
+- **His figures from real data only:** Session R, the R curve and open R from his own fills and each plan's own
+  `riskDollars` (`AgentCore.entryRisk` finds the plan an entry came from by root, side, kind, size, price and stop and target
+  ticks; `tradesR`); heat at his own working stop (`heatNow`); "if accepted" his open proposal's risk. Not known: "not
+  reported". The entries' risks are kept for the day (`live-agent-risk-v1`) and each kept fill now carries its order id.
+- **Review of 84893d0 (fixed):** ChartBridge's words above Accept and Reject wrapping to a second line ("Under 5 s left: too
+  late to accept. Reject still goes.") moved them 8 to 12 px: the card now fills its slot with its foot at the bottom, so the
+  words grow upward and Accept and Reject move 0 px (`smoke:agent-l5` checks the last 5 s, "Accept sent." and a long refusal at
+  1366 x 768, 1600 x 900, 1920 x 1080 and in the pop-out). R never linked on a real ChartBridge: a fill's `order` is
+  NinjaTrader's OrderId, so fills are now linked to his entry through the ledger (`BotCore.botFillLedger` `orderOf`, new) and
+  the risks are kept under account, page id and first-seen time (never handed to a new order after NinjaTrader restarts); the
+  fakes send a NinjaTrader-style `order` on every `exec` (`ntOrderId`), as ChartBridge does. `entryRisk` needs the entry's
+  planned stop ticks (no lookalike). Step ages show nothing while he is not connected; the grid measures only when its canvas
+  changes size. The controls column fits at 1366 x 768, 1600 x 900 and 1920 x 1080: the Rules card scrolls inside itself with
+  "more below", status and last plan one line each, "Room left" in the account card's head, the now line not shown at 820 px
+  high or less.
+- **Fixed: on a phone the mode's words collapsed while hidden** (workspace.css's `[hidden] { display: none !important }` won
+  over agent.css): they keep their two lines like the account's and the rules' (the parity test now asserts it).
+- **Order path unchanged:** no message the page sends changed; Accept, Reject, the kill switch, the mode, the account, the
+  rules, On/Off and Flatten-and-off behave and refuse as before, with the same focus and key rules. `live/agent.js` changed
+  in its markup and drawing only; `live/agent-core.js` gained pure functions (and `lightState`'s events moved into
+  `lightEvents`, unchanged).
+- Tests: `npm run smoke:agent-l5` (new, run by `smoke:agent`) and its screenshots `test/out/agent-l5-*.png`; unit tests for the
+  new functions, the grid canvas's pace and pauses (a fake clock), the fonts and the wiring; `test/kit.test.js` lists the
+  Orbitron faces in `agent-fonts.css`. `docs/AGENT_TAB.md` and `docs/MOTION.md` describe the grid canvas as allowed motion.
 ## 1.22.0 (2026-10-10): the single chart page removed
 
 Anthony's cut (2026-10-10): the workspace is ChartBridge's only page. **The workspace, and the workspace open in several

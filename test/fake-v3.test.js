@@ -1483,6 +1483,8 @@ test('4d4a81f, section 10 (the agent\'s side): welcome\'s caps, agentState\'s se
   const after = d.agentTake();
   const ex = after.find(m => m.type === 'exec');
   assert.equal(ex.role, 'entry'); assert.match(ex.cbId, /^NT\d+$/);
+  /* an exec's order is NinjaTrader's OrderId, never ChartBridge's page id (nt8/PROTOCOL.md; review of 84893d0) */
+  assert.ok(typeof ex.order === 'string' && ex.order !== ex.cbId && !/^(NT|o)\d+$/.test(ex.order), 'exec.order is NinjaTrader\'s own id: ' + ex.order + ' (page id ' + ex.cbId + ')');
   assert.ok(after.filter(m => m.type === 'order' && m.role === 'stop').every(m => /^CB#nt\d+ stop f1 q1 p25396$/.test(m.orderName)), 'its legs: v2\'s names with the entry\'s tag');
   // Anthony's exit from the page on its pair: the agent hears of it, role other, with the page's id
   d.act({ type: 'order', cid: 'out', account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 1 });

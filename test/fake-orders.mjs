@@ -72,7 +72,7 @@ export class OrderDesk {
     this.lastAt = {};               // root -> when it traded (now() ms), for the stale check
     this.orders = new Map();        // id -> order (every order this session, final ones included)
     this.positions = new Map();     // 'account|root' -> { qty, avgPrice }
-    this.seq = 0; this.execSeq = 0; this.ocoSeq = 0;
+    this.seq = 0; this.execSeq = 0; this.ocoSeq = 0; this.ntSeq = 0;
   }
 
   /* ---------------- connection and auth (gates 1, 4) */
@@ -327,6 +327,10 @@ export class OrderDesk {
     if (price === o.price && !placing) this.fill(o, Math.min(left, TOUCH_FILL), o.price);
   }
 
+  /** An exec's `order` is NinjaTrader's OrderId (nt8/PROTOCOL.md, ChartBridge.cs), never the page's id ("o12"): a made-up
+   *  hex id per order, so a page that claims fills by the page id fails here as it would against ChartBridge (review of
+   *  84893d0). */
+  ntOrderId(o) { if (!o.ntId) o.ntId = 'a7' + (++this.ntSeq).toString(16).padStart(10, '0'); return o.ntId; }
   pos(account, root) {
     const k = account + '|' + root;
     if (!this.positions.has(k)) this.positions.set(k, { qty: 0, avgPrice: 0 });
@@ -339,7 +343,7 @@ export class OrderDesk {
     o.state = o.filled >= o.qty ? 'filled' : 'partFilled';
     const signed = o.side === 'buy' ? qty : -qty;
     this.broadcastAll({ type: 'exec', account: o.account, name: o.name, root: o.root, side: o.side, qty, p: price,
-      t: +this.barTime().toFixed(3), u: this.now(), id: 'X' + (++this.execSeq), order: o.id });
+      t: +this.barTime().toFixed(3), u: this.now(), id: 'X' + (++this.execSeq), order: this.ntOrderId(o) });
     // position: adding keeps a weighted average, reducing keeps the average, crossing zero starts at the fill
     const p = this.pos(o.account, o.root), was = p.qty, now = was + signed;
     if (now === 0) p.avgPrice = 0;
