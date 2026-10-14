@@ -1,6 +1,6 @@
 /*
  * The Agent tab (live/agent.js; chart page 1.17.0, Layout 5 since 1.23.0). Its look is "Layout 5 Tron" (DECISION 2026-10-14a,
- * the approved preview): a near-black ground with a faint horizon grid, panels framed by a thin glowing line with cut corners,
+ * the approved preview): a solid near-black ground, panels framed by a thin glowing line with cut corners,
  * cyan #5df2ff and white-hot for lines, labels and figures, orange #ff7a18 only for the agent's action (a proposal waiting, the
  * decision) and warnings, purple and red only on a few buttons, chips and words, green and red for P&L. Fonts: Orbitron for
  * the headers (panel titles, his name, the step names, the decision, the footer's labels), Chakra Petch for buttons, chips,
@@ -61,12 +61,10 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
   --cut: 9px;
   flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; position: relative; color: var(--f-c);
   overflow: clip;   /* the light's halo past the panels at the window's edge is clipped: it never makes the page scroll */
-  /* the ground: a soft blue glow from below and a still horizon grid under the panels (drawn once, never animated) */
-  background:
-    linear-gradient(to bottom, var(--f-ground) 55%, transparent 100%),
-    repeating-linear-gradient(to right, rgba(46, 155, 255, .045) 0 1px, transparent 1px 64px),
-    repeating-linear-gradient(to bottom, rgba(46, 155, 255, .045) 0 1px, transparent 1px 32px),
-    radial-gradient(ellipse at 50% 120%, rgba(46, 155, 255, .12), transparent 60%), var(--f-ground);
+  /* the ground: one solid near-black. The preview's glow and horizon grid behind the panels cost frames under the moving light
+     (perf:agent, Motion Full, against main: a gradient here, even the glow alone or on a layer of its own, took about 10 % of
+     the frames); the grid panel's canvas draws the horizon floor instead */
+  background: var(--f-ground);
   font: 13px/1.4 var(--f-ui);
 }
 /* body text in IBM Plex Sans: his words, the reason, the stream's rows, notes, ChartBridge's words */

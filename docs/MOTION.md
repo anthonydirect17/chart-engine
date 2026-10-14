@@ -161,6 +161,9 @@ layout); and never put a backdrop blur over a live chart.
 What the Agent tab's light learned (`live/agent.css`, review of fc3101a): a border light drawn as a conic gradient whose angle
 is an animated custom property is painted again every frame over the whole panel, and a blur over it costs more still; turn
 a small gradient with a transform instead, inside thin strips that clip it to the border (only their pixels are drawn), and
-soften the halo with a mask, not a filter. Fade a colour only on the elements that draw with it: an inherited custom property
+soften the halo with a mask, not a filter. What Layout 5 learned (1.23.0, perf:agent against main, Motion Full): a gradient on the tab's
+own ground (the preview's glow and horizon grid) cost about 10 % of the frames under the moving light, even the glow alone and
+even on a layer of its own (worse there); a solid ground cost nothing, and the grid canvas, paused or running, cost nothing
+measurable. Fade a colour only on the elements that draw with it: an inherited custom property
 in a transition restyles every element under it, every frame; register it as not inherited, or crossfade two copies by
 opacity.

@@ -12,7 +12,8 @@ information and every control board F has. Page only, no recompile (ChartBridge 
   reads them), plus the rules across the tab (R3, motion, keys, focus, fixed heights, Accept and Reject never covered or
   moved, the messages, the stored choices). It is Layout 5's gate: **128 of 128 hold**, the list unchanged.
 - **The look:** panels framed by a thin glowing line with cut corners (drawn behind each panel, so the light and the glow are
-  never clipped), a near-black ground with a still horizon grid, cyan and white-hot, orange only for his action (his proposal
+  never clipped), a solid near-black ground (the preview's glow and horizon grid behind the panels cost frames under the moving
+  light in `perf:agent`, so the grid's canvas draws the horizon floor instead), cyan and white-hot, orange only for his action (his proposal
   waiting, the decision, the beam when a plan arrives). Headers in **Orbitron** (new: 500 and 700, the Latin subset of npm
   `@fontsource/orbitron` 5.2.8, SIL Open Font License in `live/fonts/OFL-orbitron.txt`, in `live/fonts/agent-fonts.css` and
   `nt8/install-files.json`; nothing from the internet), Chakra Petch for buttons, chips, tabs and small labels, IBM Plex Sans

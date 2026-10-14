@@ -11,7 +11,7 @@
 //            proposals counted, the small screens and the pop-out (agent.html);
 //   phase 2: --agents=demo,demotwo and the fake helper: the picker, On/Off, spend, a build that is not a hero, Off in a
 //            trade, the settings, the second agent's proposals counted;
-//   phase 3: no agents line: the tab's "no agents" card and its count line.
+//   phase 3: no agents line (a ChartBridge 0.5.2): the tab's "no agents" card and its count line.
 //   npm run smoke:agent-parity   (CHROMIUM_PATH=/path/to/chrome; AGENT_PARITY_PORT, else the first free ports from 8991;
 //                                 SHOTS=dir; PARITY_PHASES=1,2,3 to run some phases only, which then fails the count)
 // Screenshots: agent-parity-base, agent-parity-trade, agent-parity-popout (.png in test/out).
@@ -887,7 +887,10 @@ try {
   /* ====================================================================== phase 3: no agents */
   if (PHASES.includes(3)) {
     console.log('phase 3: a ChartBridge with no agents line');
-    bridge = await startBridge([]);
+    /* a current ChartBridge (0.5.2): since 1.22.0 (#41) the tab reads the version for this text only, and the fake's hello
+       without agents says fake-0.4.0, which gets "No agents on this ChartBridge (0.5.2 or later)." (test/agent-smoke.mjs does
+       the same) */
+    bridge = await startBridge(['--version=0.5.2']);
     const ctx = await newContext(browser);
     const page = await openPage(ctx, `http://localhost:${port}/live/?layout=Main&tab=agent`, workspaceReady);
     const { info, text, sent, shows } = tools(page);

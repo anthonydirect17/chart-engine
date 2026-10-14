@@ -47,7 +47,7 @@ look.
 
 | part | what |
 |---|---|
-| Ground | near-black `#02060c` with a soft blue glow from below and a still horizon grid under the panels (drawn once) |
+| Ground | one solid near-black `#02060c`; the horizon floor is drawn by the grid's canvas. The preview's glow and horizon grid behind the panels were left out: `perf:agent` measured any gradient on the tab's ground (even the glow alone, or on a layer of its own) costing about 10 % of the frames with Motion Full against main |
 | Panels | a thin glowing cyan line with cut corners and a faint inner line, drawn behind each panel (`::before`, `::after`), so the light and the glow along its box are never clipped; the controls and the footer are cards inside one panel each |
 | Colours | cyan `#5df2ff` and white-hot for lines, labels and figures; **orange `#ff7a18` only for his action**: the proposal panel's frame while his proposal waits, the decision while it waits, the grid's beam when a plan arrives; purple and red on a few buttons, chips and words (his name, SIM, Reject, the kill switch, LIVE); green and red for P&L |
 | Fonts | Orbitron for headers (panel titles, his name, the step names, the decision, the footer's labels); Chakra Petch for buttons, chips, tabs and small labels; IBM Plex Sans for body text (his words, the reason, the stream's rows, notes); JetBrains Mono for every number. All from this PC: IBM Plex from `fonts/plex.css`, the others from `live/fonts` (Latin subsets of npm `@fontsource` 5.2.5, Orbitron 5.2.8, SIL Open Font License, listed in `nt8/install-files.json`). Nothing from the internet; a missing font falls back to the system's own |
