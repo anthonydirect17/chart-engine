@@ -167,8 +167,11 @@ function create(o) {
           '<p class="ag-why" data-k="acctWhy" data-parity="LA07 OH11"></p>' +
         '</div>' +
         /* the Rules card takes the column's last room; when its lines are more than that, they scroll inside it with "more
-           below" at its foot (the column itself never cuts a line off: review of 84893d0, Anthony at 1600 x 900) */
-        '<div class="ag-sec ag-card ag-rulescard"><div class="ag-sechead"><span class="ag-ttl">Rules</span></div><div class="ag-rbody" data-k="rbody">' +
+           below" at its foot (the column itself never cuts a line off: review of 84893d0, Anthony at 1600 x 900). Change the
+           rules sits in its header, so it is in sight at every size without scrolling the card (review of #43: at 1366 x 768
+           it was under "more below") */
+        '<div class="ag-sec ag-card ag-rulescard"><div class="ag-sechead"><span class="ag-ttl">Rules</span>' +
+          '<button type="button" class="ag-btn" data-act="rulesOpen" data-k="rulesOpen" data-parity="LR02">Change the rules</button></div><div class="ag-rbody" data-k="rbody">' +
           '<div class="ag-pgrid ag-rules" data-k="rules" data-parity="LR01"></div>' +
           '<div class="ag-rform" data-k="rulesEdit" hidden>' +
             '<div class="ag-rroots" data-k="rRoots" data-parity="LR03"></div>' +
@@ -183,7 +186,6 @@ function create(o) {
           '</div>' +
           '<div class="ag-ask" data-k="rulesAsk" data-parity="LR08" role="alertdialog" aria-label="A window that flattens him now" hidden><span data-k="rulesAskText" data-parity="LR08-text"></span>' +
             '<button type="button" class="ag-btn ag-live-go" data-act="rulesYes" data-parity="LR08-yes">Set it</button><button type="button" class="ag-btn" data-act="rulesNo" data-parity="LR08-no">Cancel</button></div>' +
-          '<div class="ag-row"><button type="button" class="ag-btn" data-act="rulesOpen" data-k="rulesOpen" data-parity="LR02">Change the rules</button></div>' +
           '<p class="ag-why" data-k="rulesWhy" data-parity="LR09"></p>' +
           '<div class="ag-rmore" aria-hidden="true">more below</div></div>' +
         '</div>' +
@@ -756,7 +758,7 @@ function create(o) {
     put(q('[data-k="rulesEdit"]'), 'hidden', !S.rulesEdit || !!S.rulesAsk);
     put(q('[data-k="rulesAsk"]'), 'hidden', !S.rulesAsk);
     if (S.rulesAsk) put(q('[data-k="rulesAskText"]'), 'textContent', S.rulesAsk.ask);
-    /* why the rules cannot change now, under the button (written here: data-auto), unless ChartBridge's own words are there */
+    /* why the rules cannot change now, at the card's foot (written here: data-auto), unless ChartBridge's own words are there */
     const rw = q('[data-k="rulesWhy"]');
     if (!ce.ok || ce.windowOnly) {
       if (!ce.ok && S.rulesEdit) S.rulesEdit = false, put(q('[data-k="rulesEdit"]'), 'hidden', true);
@@ -1184,7 +1186,7 @@ function create(o) {
     for (const b of view.querySelectorAll('button[data-motion]')) attr(b, 'aria-pressed', String(b.dataset.motion === S.motion));
   }
 
-  /* the words under Change the rules: kind 'refused' (ChartBridge's own, kept until the next try), 'auto' (why it cannot change
+  /* the words at the Rules card's foot: kind 'refused' (ChartBridge's own, kept until the next try), 'auto' (why it cannot change
      now, written by renderPanel), or '' (this page's: an error before sending, or "Sent.") */
   function rulesWhy(t, kind) { const w = q('[data-k="rulesWhy"]'); if (!w) return; w.dataset.kind = kind || ''; put(w, 'textContent', t); }
   function modeWhy(t) { const w = q('[data-k="modeWhy"]'); if (!w) return; w.dataset.refused = '1'; put(w, 'hidden', false); put(w, 'textContent', t); setTimeout(() => { delete w.dataset.refused; renderPanel(); }, 6000); }

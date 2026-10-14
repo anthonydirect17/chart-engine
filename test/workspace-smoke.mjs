@@ -153,9 +153,16 @@ try {
   check(await page.getAttribute(vw, 'aria-pressed') === 'false' && vwSaved === false, 'the chip\'s popover switch hides that indicator, as the toolbar\'s chips do (' + vwSaved + ')');
   await vwSw();
   check(await page.getAttribute(vw, 'aria-pressed') === 'true', 'and shows it again');
-  const one = await page.evaluate(() => ({ footers: [...document.querySelectorAll('.ws-body > .chart-live > .status')].map(f => getComputedStyle(f).display), feed: document.getElementById('wsFeed').textContent,
-    local: document.getElementById('wsLocal').textContent, fps: document.getElementById('wsFps').textContent, tip: document.getElementById('wsStat').title }));
-  check(one.footers.length === 4 && one.footers.every(d => d === 'none'), 'no status line under the charts');
+  /* No status line under the charts: their feed, local and fps readouts are the top bar's (E2a). A chart's line shows only while
+     it carries a note (6b47065, checked below with a test note), and then holds the note alone: the default Range 40 chart
+     has one from about 10:40 to 11:30 ET, when the fake bridge's sample hour of no trading (17:00 to 18:00, shifted to end
+     at the current minute) covers the 18:00 session start ("Range bars start at 18:53 ET: ..."), so this check asks for no
+     readout under any chart and no line without a note, not for no line at all */
+  const one = await page.evaluate(() => ({ footers: [...document.querySelectorAll('.ws-body > .chart-live > .status')].map(f => ({ shown: getComputedStyle(f).display !== 'none', note: f.parentElement.classList.contains('has-note'),
+      readouts: [...f.children].filter(x => !x.matches('.msg, .ibnote') && getComputedStyle(x).display !== 'none' && x.getClientRects().length).length, text: f.innerText.replace(/\s+/g, ' ').trim().slice(0, 60) })),
+    feed: document.getElementById('wsFeed').textContent, local: document.getElementById('wsLocal').textContent, fps: document.getElementById('wsFps').textContent, tip: document.getElementById('wsStat').title }));
+  const noted = one.footers.filter(f => f.shown).map(f => f.text);
+  check(one.footers.length === 4 && one.footers.every(f => f.readouts === 0 && (!f.shown || f.note)), 'no status line under the charts: no feed, local or fps readout under any of the 4, a line only with a note' + (noted.length ? ' (' + noted.join(' | ') + ')' : ''));
   check(/ms( [A-Z]+)?$/.test(one.feed) && /ms( \(p95 [<\d]+ ms\))?$/.test(one.local) && /^(\d+ fps|idle)$/.test(one.fps) && /MNQ: feed/.test(one.tip) && /ES: feed/.test(one.tip), 'one status line in the top bar: feed ' + one.feed + ', local ' + one.local + ', ' + one.fps);
   const ib = `.ws-panel[data-id="${nq.id}"] .ws-head .ind-btn`;
   await page.click(ib);
