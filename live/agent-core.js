@@ -882,8 +882,10 @@ function ageText(at, now) {
 const sameNum = (a, b) => isNum(a) && isNum(b) && Math.abs(a - b) < 1e-7;
 /**
  * The risk in dollars of the plan an agent's entry order came from (Layout 5: R only from each plan's own riskDollars, the
- * lead's ruling). The page is not told which plan an order is, so the plan is found by what both carry: the agent's plans
- * placed or proposed (never a skip or a refusal) with the entry's root, side, kind, size and price (its limit price too for a
+ * lead's ruling). ChartBridge 0.5.7 and newer say which plan it is: the order's `planId` (DECISION 2026-10-14d, phase 2), and
+ * that plan's riskDollars is taken (his plans of that id placed or proposed, never a skip or a refusal: a refused plan may
+ * repeat an id; null when they differ). With no planId (an older ChartBridge), or none of his plans of that id here, the plan
+ * is found by what both carry: the agent's plans placed or proposed (never a skip or a refusal) with the entry's root, side, kind, size and price (its limit price too for a
  * stop-limit, when the order carries one), its stop ticks and its target ticks (the entry's `planned`, which ChartBridge puts on
  * every working entry it placed). Their riskDollars when every such plan says the same one; null when none matches, they
  * differ, or the entry does not say its stop ticks (a lookalike plan with another stop must never lend its risk; review of
@@ -893,11 +895,15 @@ const sameNum = (a, b) => isNum(a) && isNum(b) && Math.abs(a - b) < 1e-7;
 function entryRisk(order, plans) {
   const o = order || {};
   if (o.role !== 'entry' || !isInt(o.qty) || !(o.qty > 0)) return null;
+  const mine = (Array.isArray(plans) ? plans : []).filter(p => p && p.action !== 'skip' && (p.result === 'placed' || p.result === 'proposed') && isNum(p.riskDollars));
+  if (typeof o.planId === 'string' && o.planId) {
+    const byId = mine.filter(p => p.id === o.planId);
+    if (byId.length) return byId.some(p => p.riskDollars !== byId[0].riskDollars) ? null : byId[0].riskDollars;
+  }
   const pl = plainObj(o.planned) ? o.planned : {};
   if (!isInt(pl.stopTicks) || !(pl.stopTicks > 0)) return null;
   const st = pl.stopTicks, tt = isInt(pl.targetTicks) ? pl.targetTicks : null;
-  const c = (Array.isArray(plans) ? plans : []).filter(p => p && p.action !== 'skip' && (p.result === 'placed' || p.result === 'proposed') && isNum(p.riskDollars) &&
-    p.root === o.root && p.side === o.side && p.kind === o.kind && p.qty === o.qty && sameNum(p.price, o.price) &&
+  const c = mine.filter(p => p.root === o.root && p.side === o.side && p.kind === o.kind && p.qty === o.qty && sameNum(p.price, o.price) &&
     (o.kind !== 'stopLimit' || !isNum(o.limitPrice) || sameNum(p.limitPrice, o.limitPrice)) && p.stopTicks === st && (tt === null || p.targetTicks === tt));
   if (!c.length || c.some(p => p.riskDollars !== c[0].riskDollars)) return null;
   return c[0].riskDollars;

@@ -295,7 +295,11 @@ export class OrderDeskV3 extends OrderDesk {
        follows, `by: "copier"` for an order the copier placed on a follower (ChartBridgeV3.OrderBy via ChartBridgeAccounts.ForPage;
        an order that already says `by` keeps it). Merge marks nothing. `tradable` to a v3 page only. */
     if (o.by === 'strategy') m.by = o.by;
-    else if (v3 && this.agentOfOrder(o)) m.by = 'agent:' + this.agentOfOrder(o);   // 0.5.0: an agent's entry and its legs
+    else if (v3 && this.agentOfOrder(o)) {
+      m.by = 'agent:' + this.agentOfOrder(o);   // 0.5.0: an agent's entry and its legs
+      const plan = this.agentPlanOfOrder(o);    // 0.5.7: and the plan it came from (ChartBridgeAgents.PlanIdField)
+      if (plan) m.planId = plan;
+    }
     else if (v3 && this.isBotOrder(o)) m.by = 'bot';
     else if (v3 && (o.copier || o.by === 'copier')) m.by = 'copier';
     if (o.bucket && o.by === 'strategy') m.bucket = o.bucket;
@@ -1119,6 +1123,8 @@ Object.assign(OrderDeskV3.prototype, {
   agentOfAccount(name) { for (const a of this.agents.values()) if (a.account === name) return a; return null; },
   /** the agent an order belongs to: its own mark, or its parent's (a leg) */
   agentOfOrder(o) { if (!o) return ''; if (o.agentId) return o.agentId; const p = o.parent ? this.orders.get(o.parent) : null; return p && p.agentId ? p.agentId : ''; },
+  /** 0.5.7: the plan id of an agent's entry, its legs and its flat close ('' when not known) */
+  agentPlanOfOrder(o) { if (!o) return ''; if (o.agentId) return o.planId || ''; const p = o.parent ? this.orders.get(o.parent) : null; return p && p.agentId ? p.planId || '' : ''; },
   agentRootsOf(a) { return a.rules.roots.slice(); },
   agentSim(a) { const x = this.acct.get(a.account); return !!(x && x.sim); },
   agentWorkingEntries(a) { return [...this.orders.values()].filter(o => isWorking(o) && o.agentId === a.id && o.role === 'entry'); },

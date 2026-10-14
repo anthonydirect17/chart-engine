@@ -11,7 +11,8 @@
 //     with the focus inside the chart's panel; the chart takes the centre column, its strip shows the eight figures, and the
 //     kill switch, the mode, Accept and Reject neither move nor get covered;
 //   - his figures from real data: heat at his own stop in a trade, the risk if accepted, Session R and the R curve from the
-//     plan's riskDollars after the trade ends;
+//     plan's riskDollars after the trade ends; ChartBridge 0.5.7: a second trade whose entry names its plan (planId) where a
+//     lookalike plan a cent off leaves the matching "not reported";
 //   - ChartBridge's words above Accept and Reject (the last 5 s, "Accept sent.", a long refusal) move them 0 px at 1366 x 768,
 //     1600 x 900, 1920 x 1080 and in the pop-out, and a real proposal's last 5 s too (review of 84893d0);
 //   - the controls column cuts no line off at those sizes: the Rules card scrolls inside itself with "more below", its lines
@@ -27,6 +28,9 @@ import net from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { createRequire } from 'node:module';
+
+const AgentCore = createRequire(import.meta.url)('../live/agent-core.js');
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOTS = path.resolve(process.env.SHOTS || path.join(root, 'test', 'out'));
@@ -253,6 +257,36 @@ try {
   const R = (await L5()).r;
   check((await text('[data-k="hR"]')) === '+2.00 R' && R.trades.length === 1 && R.trades[0].pnl === 32 && R.trades[0].risk === 16, 'out at the target: +$32.00 on a $16.00 plan is +2.00 R: ' + JSON.stringify(R.trades));
   check(await page.evaluate(() => !!document.querySelector('[data-k="rcurve"] polyline')) && (await text('[data-k="heat"]')) === '$0.00 · -', 'the R curve draws his trade; flat again, heat $0.00');
+
+  /* ------------------------------------------------------------------ ChartBridge 0.5.7: the entry's planId names its plan */
+  console.log('planId (ChartBridge 0.5.7): R from the plan the entry names, where the matching cannot tell');
+  /* a lookalike first: the same entry, its riskDollars a cent off (ChartBridge allows 1 cent), proposed and rejected; the
+     matching by root, side, kind, size, price and ticks then finds two plans that disagree and says "not reported" */
+  const same = { agent: 'demo', side: 'buy', kind: 'limit', p: 25390, qty: 2, stop: 16, target: 32, expire: 900, setup: 'Sample pullback', reason: 'Sample: a made-up reason for the made-up plan.' };
+  await control('agent-plan', Object.assign({ id: 'l5look', risk: 16.01 }, same));
+  await until(async () => page.isVisible(H('P16')), 'the lookalike proposal');
+  await sleep(1200);
+  await page.click(H('P16'));
+  await until(async () => !(await page.$('[data-parity~="P03"]')), 'the lookalike rejected', 12000);
+  await control('agent-plan', Object.assign({ id: 'l5b' }, same));
+  await until(async () => page.isVisible(H('P15')), 'the second proposal');
+  await sleep(1200);
+  await page.click(H('P15'));
+  const ent = await until(async () => (await A()).orders.find(o => o.by === 'agent:demo' && o.role === 'entry'), 'his second entry works');
+  check(!!ent && ent.planId === 'l5b', 'his entry\'s order message carries planId l5b: ' + JSON.stringify(ent));
+  const plans = (await control('agents')).agents.find(x => x.agent === 'demo').plans;
+  const asOlder = { role: 'entry', root: 'MNQ', side: 'buy', kind: 'limit', price: 25390, qty: 2, planned: { stopTicks: 16, targetTicks: 32 } };
+  check(AgentCore.entryRisk(asOlder, plans) === null && AgentCore.entryRisk(Object.assign({ planId: 'l5b' }, asOlder), plans) === 16,
+    'without planId the matching finds l5a, l5look and l5b and says not reported; with it, l5b\'s own $16.00');
+  await control('price', { root: 'MNQ', p: 25389.75 });
+  await until(async () => /Long 2 MNQ/.test(await text(H('ST09'))), 'long 2 MNQ again', 15000);
+  const risks2 = Object.values((await L5()).risks).filter(x => x.agent === 'demo');
+  check(risks2.length === 2 && risks2.every(x => x.risk === 16 && x.qty === 2), 'his second entry\'s risk is l5b\'s own riskDollars, kept for the day: ' + JSON.stringify(risks2));
+  await control('price', { root: 'MNQ', p: 25399 });
+  await until(async () => /Flat/.test(await text(H('ST09'))), 'out at the target again', 15000);
+  await until(async () => (await text('[data-k="hR"]')) === '+4.00 R', 'Session R after two trades', 10000);
+  const R2 = (await L5()).r;
+  check((await text('[data-k="hR"]')) === '+4.00 R' && R2.trades.length === 2 && R2.trades[1].risk === 16, 'Session R +4.00 R: the second trade +2.00 R on l5b\'s $16.00, never "not reported": ' + JSON.stringify(R2.trades));
 
   /* ------------------------------------------------------------------ the last 5 s for real, and the pop-out */
   console.log('the last 5 s of a real proposal, and the pop-out: Accept and Reject never move');

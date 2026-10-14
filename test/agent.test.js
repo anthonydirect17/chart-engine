@@ -702,7 +702,7 @@ test('Layout 5: the grid\'s steps say today\'s tracker words with their time, a 
   assert.equal(AC.lightState({ agent: a, notes, now: T0 }).phase, 'think', 'the light unchanged by the refactor (lightEvents)');
 });
 
-test('Layout 5: an entry\'s risk is its plan\'s own riskDollars (found by what both carry); his trades in R; never estimated', () => {
+test('Layout 5: an entry\'s risk is its plan\'s own riskDollars (found by what both carry); never estimated', () => {
   const plan = { agent: 'demo', id: 'c1', action: 'plan', result: 'proposed', root: 'MNQ', side: 'buy', kind: 'limit', price: 25390, qty: 2, stopTicks: 16, targetTicks: 32, riskDollars: 16 };
   const order = { id: 'o1', by: 'agent:demo', role: 'entry', root: 'MNQ', side: 'buy', kind: 'limit', price: 25390, qty: 2, name: 'MNQ 12-26', planned: { stopTicks: 16, targetTicks: 32 } };
   assert.equal(AC.entryRisk(order, [plan]), 16, 'the ticks from planned');
@@ -715,6 +715,28 @@ test('Layout 5: an entry\'s risk is its plan\'s own riskDollars (found by what b
   assert.equal(AC.entryRisk(order, [plan, Object.assign({}, plan, { id: 'c2' })]), 16, 'two plans that agree: that risk');
   assert.equal(AC.entryRisk(order, [Object.assign({}, plan, { result: 'refused: x' })]), null, 'a refused plan is never one');
   assert.equal(AC.entryRisk(Object.assign({}, order, { role: 'stop' }), [plan]), null, 'only an entry');
+});
+
+test('Layout 5 (ChartBridge 0.5.7, DECISION 2026-10-14d phase 2): the entry\'s planId names its plan; with none, today\'s matching', () => {
+  const plan = { agent: 'demo', id: 'c1', action: 'plan', result: 'placed', root: 'MNQ', side: 'buy', kind: 'limit', price: 25390, qty: 2, stopTicks: 16, targetTicks: 32, riskDollars: 16 };
+  const look = Object.assign({}, plan, { id: 'c0', result: 'proposed', riskDollars: 16.01 });   // a lookalike within ChartBridge's 1 cent
+  const order = { id: 'o1', by: 'agent:demo', role: 'entry', root: 'MNQ', side: 'buy', kind: 'limit', price: 25390, qty: 2, name: 'MNQ 12-26', planned: { stopTicks: 16, targetTicks: 32 } };
+  assert.equal(AC.entryRisk(order, [look, plan]), null, 'no planId: two lookalikes that disagree by a cent: not reported (the matching)');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: 'c1' }), [look, plan]), 16, 'planId: that plan\'s own riskDollars, exactly');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: 'c0' }), [look, plan]), 16.01, 'planId: the other plan named, its own');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: 'c1', planned: undefined }), [plan]), 16, 'planId: no need for the planned ticks');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: 'c1', price: 25391 }), [plan]), 16, 'planId: the plan named, whatever the price matching would say');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: 'gone' }), [plan]), 16, 'planId of a plan not here (older than the plans kept): the matching');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: 'gone', planned: undefined }), [plan]), null, 'and the matching\'s own rules: no stop ticks, not reported');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: 'c1' }), [Object.assign({}, plan, { result: 'refused: plan id c1 was already used today', riskDollars: 99 }), plan]), 16, 'a refused plan repeating the id never lends its risk');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: 'c1' }), [Object.assign({}, plan, { result: 'proposed' }), plan]), 16, 'proposed then placed: the same plan, the same risk');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: 'c1' }), [plan, Object.assign({}, plan, { riskDollars: 17 })]), null, 'two of that id that disagree: not reported');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: 'c9' }), [Object.assign({}, plan, { id: 'c9', action: 'skip', result: 'skipped' })]), null, 'a skip is never a plan');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: 'c1', role: 'stop' }), [plan]), null, 'only an entry, planId or not');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { planId: '' }), [look, plan]), null, 'an empty planId: the matching');
+});
+
+test('Layout 5: his trades in R from each entry\'s risk; never estimated', () => {
   const pv = r => (r === 'MNQ' ? 2 : 0);
   const K1 = 'SIM-AG1|o1|' + T0, K2 = 'SIM-AG1|o2|' + T0;   // risk keys: account, page order id, first seen
   const fills = [{ id: 'X1', root: 'MNQ', side: 'buy', qty: 2, p: 25390, u: T0, key: K1 }, { id: 'X2', root: 'MNQ', side: 'sell', qty: 2, p: 25398, u: T0 + 60000, key: '' }];

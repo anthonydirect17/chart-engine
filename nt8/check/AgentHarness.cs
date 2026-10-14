@@ -185,6 +185,8 @@ public static class AgentHarness
             FullSession();   // 0.5.2: the window in session time (Anthony's rulings 2026-10-08 p and q)
             Review052();     // 0.5.2 review: the calendar's halts in the flatten, keepMode, a position from an earlier session
             WindowAnytime(); // 0.5.4: the window may change while the agent holds a position (DECISION 2026-10-10 ag)
+            PlanIdOnOrders();   // 0.5.7: planId on an agent's orders to the page, kept in the day file (DECISION 2026-10-14d phase 2)
+            LostHeldInFlatten(); // 0.5.7: no lost-trade error while ChartBridge's own flatten runs on that root: held, then raised if not flat
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -2526,8 +2528,12 @@ public static class AgentHarness
             string say = "agent manrae holds 1 on SIM-E MNQ with no trade record (ChartBridge restarted); only its own stop protects it";
             Check(IsLive(rs) && !sime.Calls.Skip(c0).Any() && ChartBridgeAgents.EntryCheck("page", sime, "MNQ") != null, "D1: after the restart its stop stays and the pair is still the agent's (the owner lock holds)");
             Check(page.Skip(s0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(say)) == 1, "D1: the lost-trade error at once");
+            int s1 = N(page);
             Advance(61000);
-            Check(page.Skip(s0).Count(x => x.Contains(say)) == 2, "D1: and every 60 s");
+            // 0.5.7: its flatten job waits for the open on MNQ: the lost-trade error is held (not repeated beside the job's own
+            // NOT FLAT error every 60 s), never dropped
+            Check(page.Skip(s0).Count(x => x.Contains(say)) == 1 && page.Skip(s1).Count(x => x.Contains("\"level\":\"error\"") && x.Contains("NOT FLAT") && x.Contains("MNQ on SIM-E still shows 1")) >= 1,
+                  "D1 (0.5.7): while its flatten job waits on MNQ the lost-trade error is held; the job's NOT FLAT error goes on every 60 s");
             et = new DateTime(2026, 10, 12, 18, 0, 30);
             for (int q = 0; q < 6; q++) { Last2(); Advance(1000); }
             Check(!IsLive(rs) && sime.Calls.Skip(c0).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")), "D1: at the open the flatten cancels that stop and closes the 1");
@@ -2939,6 +2945,121 @@ public static class AgentHarness
         int rjF = Count(page, "reject");
         P(Rules("MNQ", ",\"maxQtyMNQ\":5", "10:00", "14:00", "15:30", 900, 3, 2));
         Check(Count(page, "reject") == rjF && FileText("agent-manrae-rules.txt").Contains("maxTrades\t3"), "0.5.4: flat: every rule changes as before");
+    }
+
+    // ------------------------------------------------------------ 0.5.7: the plan id on an agent's orders
+    static string OrderMsgOf(int from, Order o)
+    {
+        string id = ChartBridgeOrders.AgentIdFor(o);
+        lock (page) return page.Skip(from).LastOrDefault(x => x.StartsWith("{\"type\":\"order\"") && x.Contains("\"id\":\"" + id + "\"")) ?? "";
+    }
+    static void ForgetPlanTags() { ((Dictionary<string, string>)typeof(ChartBridgeAgents).GetField("PlanTags", PS).GetValue(null)).Clear(); }
+
+    static void PlanIdOnOrders()
+    {
+        Fresh();   // SIM-E, auto, 10:00
+        string pid = NewId(), day = Path.Combine(Dir, "agent-manrae-day.txt");
+        int s0 = N(page);
+        Order e = PlacedOn(sime, Good(pid));
+        Check(e != null, "0.5.7: an entry placed for " + pid + ": " + AgentReject());
+        if (e == null) return;
+        string tag = Tag(e), m = OrderMsgOf(s0, e), first;
+        lock (page) first = page.Skip(s0).FirstOrDefault(x => x.StartsWith("{\"type\":\"order\"") && x.Contains("\"by\":\"agent:manrae\"")) ?? "";
+        Check(m.Contains("\"by\":\"agent:manrae\",\"planId\":\"" + pid + "\",\"tradable\":") && first.Contains("\"planId\":\"" + pid + "\""),
+              "0.5.7: the page's order message for its entry carries planId, from the first one: " + m);
+        Check(!Last(agentOut, "order").Contains("planId"), "0.5.7: the agent's own order message is unchanged (no planId)");
+        Check(File.ReadAllLines(day).Contains("#tagplan\t" + tag + "\t" + pid), "0.5.7: the day file keeps the entry's plan (#tagplan): " + FileText("agent-manrae-day.txt").Replace("\n", " | "));
+        Check(File.ReadAllLines(day).Where(l => l.Trim().Length > 0 && !l.StartsWith("#")).All(l => Regex.IsMatch(l, "^(session|trade|plan|entry|span|standDown|carried)\t")),
+              "0.5.7: every line a ChartBridge before 0.5.7 reads is one it knows (#tagplan is a comment to it)");
+        Fill(e, 1, 24999);
+        Advance(500);
+        List<Order> legs = Legs(sime, e);
+        Check(legs.Count == 2 && legs.All(l => OrderMsgOf(s0, l).Contains("\"planId\":\"" + pid + "\"")), "0.5.7: its stop and target carry the same planId: " + string.Join(" | ", legs.Select(l => OrderMsgOf(s0, l))));
+        // a restart: the plan of each tag is read back from the day file (the memory is gone)
+        ForgetPlanTags();
+        Restart();
+        Mode("manrae", "auto");
+        Check(Last(agentOut, "agentState").Contains("\"standDown\":null"), "0.5.7: a day file with #tagplan lines loads (no stand-down)");
+        int s1 = N(page);
+        Order stop = legs.FirstOrDefault(l => l.Name.Contains(" stop "));
+        if (stop != null) { stop.StopPrice = stop.StopPrice + 0.25; Update(stop); }
+        Check(stop != null && OrderMsgOf(s1, stop).Contains("\"planId\":\"" + pid + "\""), "0.5.7: after a restart its stop's order message still carries planId (read back from #tagplan): " + (stop != null ? OrderMsgOf(s1, stop) : "no stop"));
+        // a page order on another account: no planId
+        Settle(sime);
+        // older files: no #tagplan line loads as before (no planId known), and a malformed one is skipped, never fatal
+        Fresh();
+        ForgetPlanTags();
+        File.WriteAllLines(day, new[] { "# made-up", "# test", "session\t2026-10-09", "plan\tplan-old", "#tagplan\tZZZZ\tbad", "#tagplan\tabcdef12" });
+        Restart();
+        Mode("manrae", "auto");
+        Check(Last(agentOut, "agentState").Contains("\"standDown\":null"), "0.5.7: a day file without good #tagplan lines (older, or malformed) loads, no stand-down");
+        A(Good("plan-old"));
+        Check(AgentReject().Contains("plan id plan-old was already used today"), "0.5.7: and its other lines are read as before");
+        int s2 = N(page);
+        Order e2 = PlacedOn(sime, Good(NewId()));
+        Check(e2 != null && !OrderMsgOf(s2, e2).Contains("\"planId\":\"bad\""), "0.5.7: a malformed #tagplan line gives no planId");
+        // an entry placed without a plan id (the order path alone): no planId, never a wrong one
+        Settle(sime);
+        ForgetPlanTags();
+        Fresh();
+        Order direct;
+        int s3 = N(page);
+        string why = ChartBridgeOrders.PlaceAgentEntry("manrae", "{\"type\":\"order\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24999,\"bracket\":{\"stop\":8,\"target\":16}}", out direct);
+        Check(why == null && direct != null && OrderMsgOf(s3, direct).Contains("\"by\":\"agent:manrae\"") && !OrderMsgOf(s3, direct).Contains("planId"), "0.5.7: an agent order with no plan known carries no planId: " + (why ?? OrderMsgOf(s3, direct)));
+        Settle(sime);
+    }
+
+    // ------------------------------------------------------------ 0.5.7: the lost-trade error held while its own flatten runs
+    static void LostHeldInFlatten()
+    {
+        string lost = "agent manrae had an open trade on SIM-E MNQ and its legs are gone";
+        foreach (bool endFlat in new[] { false, true })
+        {
+            string tagName = endFlat ? "0.5.7 (ends flat)" : "0.5.7 (ends not flat)";
+            Fresh();
+            ReplayedSet().Remove("SIM-E");   // the stale record below is looked at only once the executions were read again
+            File.WriteAllLines(Path.Combine(Dir, "agent-manrae-day.txt"), new[] { "# made-up", "# test", "session\t2026-10-09", "trade\tabcdef12\topen" });
+            Restart();
+            Mode("manrae", "auto");
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, tagName + ": an entry was placed: " + AgentReject()); ReplayedSet().Add("SIM-E"); return; }
+            Fill(e, 1, 24999);
+            Advance(500);
+            Hold = (kd, o) => kd == "cancel";   // NinjaTrader does not confirm the flatten's cancels: the job keeps running
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            Last2();
+            Advance(1000);
+            int s0 = N(page), log0 = LogCount();
+            ReplayedSet().Add("SIM-E");
+            Advance(1500);
+            Check(!FileText("agent-manrae-day.txt").Contains("abcdef12"), tagName + ": the stale record is dropped while its flatten job runs on MNQ");
+            Check(!Any(page, s0, lost) && Logged(lost + "; ChartBridge no longer treats the position as the agent's: flatten or protect it by hand (held while ChartBridge's own flatten runs on MNQ)"),
+                  tagName + ": the lost-trade error is held (logged, no alarm to the pages) while the job runs");
+            Advance(61000);
+            Check(!Any(page, s0, lost) && Any(page, s0, "NOT FLAT"), tagName + ": still held 61 s on (the job's own NOT FLAT error speaks meanwhile)");
+            Hold = null;
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            int s1 = N(page);
+            if (endFlat)
+            {
+                SetPos(sime, mnq, 0); ClearMoves();
+                Advance(3000);
+                Check(!Any(page, s0, lost) && Logged("agent manrae: the lost-trade error held on SIM-E MNQ is not raised: the pair is flat"), tagName + ": the job ends flat: the held error is never raised");
+            }
+            else
+            {
+                SetPos(sime, mnq, -2); ClearMoves();   // his own short 2 meanwhile: the job ends, the pair not flat
+                Advance(5000);
+                int n = page.Skip(s1).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(lost));
+                Check(n >= 1, tagName + ": the job ends with the pair not flat: the held error is raised then (" + n + ")");
+                Advance(61000);
+                Check(page.Skip(s1).Count(x => x.Contains(lost)) > n, tagName + ": and every 60 s from then, as before");
+                SetPos(sime, mnq, 0); ClearMoves();
+                Advance(1000);
+            }
+            Settle(sime);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        }
     }
 
     static void Review052()

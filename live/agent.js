@@ -1476,7 +1476,7 @@ function create(o) {
     state: () => ({ v3: S.v3, version: S.version, signedIn: S.signedIn, shown: S.shown, chosen: S.chosen, agents: agents.list().map(a => Object.assign({}, a)),
       proposals: [...cards.values()].map(x => ({ agent: x.p.agent, id: x.p.id, ended: !!x.ended })),
       others: otherCounts().map(x => ({ key: x.key, name: x.name, n: x.n })), corner: cornerLine && !cornerLine.hidden ? cornerLine.textContent : '', offText: AC.offText(offCtx()),
-      feed: S.chosen ? feed.counts(S.chosen) : { notes: 0, plans: 0 }, light: cur() ? lightNow(cur()) : null, drawer: S.drawer, motion: S.motion, chart: !!S.chart, chartRoot: S.chartRoot, orders: [...S.orders.values()].map(x => ({ id: x.id, by: x.by, role: x.role, root: x.root })), trips: trips() }),
+      feed: S.chosen ? feed.counts(S.chosen) : { notes: 0, plans: 0 }, light: cur() ? lightNow(cur()) : null, drawer: S.drawer, motion: S.motion, chart: !!S.chart, chartRoot: S.chartRoot, orders: [...S.orders.values()].map(x => ({ id: x.id, by: x.by, role: x.role, root: x.root, planId: x.planId })), trips: trips() }),
     chart: () => (S.chart ? S.chart.chart : null),
     /** Layout 5, read only (tests): the grid canvas, the chart maximized, his trades in R, his heat */
     layout5: () => { const a = cur(); return { grid: GRID ? GRID.state() : null, max: S.max, r: a ? rNow(a) : null, heat: a ? AC.heatNow(a, S.orders.values(), pointValue) : null, risks: risksDay().map }; },

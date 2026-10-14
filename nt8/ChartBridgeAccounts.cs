@@ -502,14 +502,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Gate 2 for entries right now (the "tradable" flag): the checkmark (or tradeAccounts) and the master switch, Connected.
         private static bool TradableNow(string name, string connection) { return ChartBridgeOrders.AccountTradable(name) && connection == "connected"; }
 
-        // An order message as a page should get it: a v3 page also gets "tradable" (gate 2 for entries now, Gone included) and
-        // (review 2 finding 9) "by" for a bot or copier order (ChartBridgeV3.OrderBy; o null: none).
+        // An order message as a page should get it: a v3 page also gets "tradable" (gate 2 for entries now, Gone included),
+        // (review 2 finding 9) "by" for a bot or copier order (ChartBridgeV3.OrderBy; o null: none) and "planId" for an agent's
+        // entry, its legs and its flat close when ChartBridge knows the plan it came from (ChartBridgeAgents.PlanIdField).
         public static string ForPage(ChartBridgeClient c, Account a, string orderJson, Order o = null)
         {
             if (!IsV3(c) || a == null || !orderJson.EndsWith("}", StringComparison.Ordinal)) return orderJson;
             string gw, by = orderJson.Contains(",\"by\":") ? "" : ChartBridgeV3.OrderBy(o);
+            string plan = orderJson.Contains(",\"planId\":") ? "" : PlanIdOf(o);
             bool tradable = !Gone(a.Name, out gw) && TradableNow(a.Name, ConnectionText(a));
-            return orderJson.Substring(0, orderJson.Length - 1) + by + ",\"tradable\":" + (tradable ? "true" : "false") + "}";
+            return orderJson.Substring(0, orderJson.Length - 1) + by + plan + ",\"tradable\":" + (tradable ? "true" : "false") + "}";
+        }
+
+        private static string PlanIdOf(Order o)
+        {
+            try { return ChartBridgeAgents.PlanIdField(o); }
+            catch (Exception ex) { ChartBridgeServer.Log("order planId error: " + ex.Message); return ""; }
         }
 
         // A live order or position message: to every signed-in page that sees the account (NinjaTrader's thread: no lookups).

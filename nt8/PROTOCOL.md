@@ -1184,7 +1184,8 @@ carry `by` when the bot or the copier placed the order: `"by": "bot"` for a bot 
 of one the bot channel follows, `"by": "copier"` for any order the copier placed on a follower (its entry, stop, exit or
 reduce). An order that already says `by` (a strategy's) keeps it; the page's own orders and orders placed in NinjaTrader
 carry none. A v2 page never gets `by` for these: its `order` message stays byte for byte 0.3.8's. 0.5.0: `"by": "agent:<id>"`
-for an agent's entry (named `CB#<tag> ag:<id> s8 t16`), its legs and its flat close.
+for an agent's entry (named `CB#<tag> ag:<id> s8 t16`), its legs and its flat close. 0.5.7: those also carry `"planId"`, the
+`id` of the plan the entry was placed for, when ChartBridge knows it (see the agent channel's Placing).
 
 ## 0.4.0 hardening and markets
 
@@ -2389,7 +2390,7 @@ not even the window. A change is saved, logged and sent to the agent in a new `w
 | `welcome` | `version`, `agent`, `mode`, `account`, `sim`, `rules` (`{roots: [..], maxQty: {ROOT: n}, entryFrom, entryUntil, flatAt, maxExpireSec, maxTrades, maxLosses, maxBracketTicks, maxTicksAway}`, null for none; `maxQty` per root is the cap really enforced: the smallest of the agent's rule, the hard ceiling and `config.txt`'s gate 3 cap for that root, its default of 1 included (0.5.3: for MNQ always the agents' own 20, never `maxQty.MNQ`); `maxBracketTicks` and `maxTicksAway` are `config.txt`'s, null when not set), `instruments` (`[{root, name, tick, pointValue}]` of its roots ChartBridge serves now) | after `agentHello`; again after any rules, account or mode change, and whenever an enforced cap changes |
 | `agentState` | `mode`, `killed`, `standDown` (null or why), `trades`, `losses`, `pnlToday`, `owns`, `session` (`yyyy-MM-dd`, ChartBridge's 18:00 ET session date; compare counters only within one session) | after `agentHello`, and again whenever any field changes (`owns` recomputed on every order and position change of its account and roots) |
 | `tick`, `history`, `ticks`, `ready` | as the page's | |
-| `order`, `exec`, `position` | as the page's: `order` for its own orders, `position` for its account on its roots, `exec` for its own fills and, while it owns a pair, for every fill on its account and that root, its own or not (Anthony's Flatten or a close made in NinjaTrader arrives as `role` `other`, `cbId` null when the order is not ChartBridge's). `order` adds `orderName` (NinjaTrader's own order name: `CB#<tag> ag:<id> s<n> t<n>` for an entry; its legs are v2's, `CB#<tag> stop f<n> q<n> p<price>` and `CB#<tag> target f<n> q<n> p<price>`, no `ag:`, matched by the entry's tag; `CB#<tag> ag:<id> flat`; `CB#<tag> ag:<id> protect f<n>`; `CB#<tag> ag:<id> stop p<price>` for its stop placed again over a shut market; `name` stays the instrument), and `order.role` is `flat` for its flat-time close, `protect` for its protective exit and `stop` for the stop placed again. `exec` adds `cbId` (ChartBridge's order id, `o12`, or null when the order is not ChartBridge's) and `role` (`entry`, `stop`, `target`, `flat`, `protect` only for the agent's own orders: `ag:<id>` in the name, or legs carrying its entry's tag; `other` for every other order, a page's included) | |
+| `order`, `exec`, `position` | as the page's: `order` for its own orders, `position` for its account on its roots, `exec` for its own fills and, while it owns a pair, for every fill on its account and that root, its own or not (Anthony's Flatten or a close made in NinjaTrader arrives as `role` `other`, `cbId` null when the order is not ChartBridge's). `order` adds `orderName` (NinjaTrader's own order name: `CB#<tag> ag:<id> s<n> t<n>` for an entry; its legs are v2's, `CB#<tag> stop f<n> q<n> p<price>` and `CB#<tag> target f<n> q<n> p<price>`, no `ag:`, matched by the entry's tag; `CB#<tag> ag:<id> flat`; `CB#<tag> ag:<id> protect f<n>`; `CB#<tag> ag:<id> stop p<price>` for its stop placed again over a shut market; `name` stays the instrument), and `order.role` is `flat` for its flat-time close, `protect` for its protective exit and `stop` for the stop placed again (0.5.7: never `planId`, which is the page's). `exec` adds `cbId` (ChartBridge's order id, `o12`, or null when the order is not ChartBridge's) and `role` (`entry`, `stop`, `target`, `flat`, `protect` only for the agent's own orders: `ag:<id>` in the name, or legs carrying its entry's tag; `other` for every other order, a page's included) | |
 | `snapshot` | `roots` (the roots of `welcome.instruments`) | the last message of the snapshot after `agentHello` |
 | `answer` | `id`, `answer` (`proposed`, `accepted`, `rejected`, `not answered`, `placed`, `expired`, `withdrawn`, `refused`), `text` | each step of a plan's life |
 | `reject` | `id` (or null), `reason` | any refused message, rule or gate |
@@ -2422,7 +2423,11 @@ target are v2's bracket from each fill's own price (OCO, GTC), named as v2's leg
 `CB#<tag> target ...`), so the legs check, the missing-stop alarm and restart recovery cover it, and a runner knows its legs by
 the tag from the entry's `order` message even before the entry's `exec`. The orders ChartBridge places for the agent are named
 with `ag:<id>`: the flat-time close `CB#<tag> ag:<id> flat`, the protective exit `CB#<tag> ag:<id> protect f<n>`. v3 pages see
-`by: "agent:<id>"` on its orders and legs.
+`by: "agent:<id>"` on its orders and legs. 0.5.7 (DECISION 2026-10-14d, phase 2): and `planId`, the plan's `id`, on its
+entry, its legs and its flat close (each carries the entry's tag; the stop placed again over a shut market too), from the
+entry's first `order` message on, so the page takes R from that plan's own `riskDollars`; no plan known (an entry ChartBridge
+did not place for a plan, a day file from before 0.5.7): no `planId`, and the page matches the plan by root, side, kind,
+size, price and ticks as before. Kept across a restart in the day file (`#tagplan<TAB><tag><TAB><id>`).
 
 **Expiry.** A plan's entry lives `expireSec` from the moment ChartBridge received the plan. A proposal stays open until then
 (ruling 4); accepted later, the entry works only the time left (under 5 s left: refused as `expired`). ChartBridge's own timer
@@ -2637,7 +2642,9 @@ Where the contract left a detail open, the safest simple choice was taken and is
   roots raises a `status` error every 60 s until that pair is flat ("agent <id> had an open trade on <account> <root> and its
   legs are gone; ChartBridge no longer treats the position as the agent's: flatten or protect it by hand"; review A3).
   Ownership is not restored: Anthony decides. The pages have no acknowledge message, so the error ends only when the pair is
-  flat (lead's default). The same happens to the trade being followed when both readings of its contract show a position on
+  flat (lead's default). 0.5.7: while a flatten job of that agent runs on that root (its own cancels take the legs away) the
+  lost-trade error is held, never dropped: logged, not sent and not repeated; once no job runs there it is raised (then every
+  60 s) if the pair is still not flat, and forgotten if it is. The same happens to the trade being followed when both readings of its contract show a position on
   the other side (it ended where ChartBridge could not see it, and the account holds someone else's): the pair is not the
   agent's at once (the owner lock and the flatten), and once that has held for 3 s with no fill NinjaTrader shows ahead of its
   event the trade is ended with its realized part booked (what its fills closed, at the average of its opening fills; review
@@ -2689,7 +2696,9 @@ Where the contract left a detail open, the safest simple choice was taken and is
   default and a root without a `maxQty` line gets its ceiling. A rules change never lifts a loss stand-down for that day; the
   18:00 ET roll resets trades, losses, the stand-down and plan ids, and drops ended proposals (at most 50 ended ones are kept
   between rolls). The loss stand-down is kept in the day file (`standDown<TAB><why>`), so a restart keeps it; so are the
-  trades of an earlier session not yet flat (`carried<TAB><tag>`, 0.5.2).
+  trades of an earlier session not yet flat (`carried<TAB><tag>`, 0.5.2), and (0.5.7) the plan of each entry of today's trades,
+  its working entries and those carried over (`#tagplan<TAB><tag><TAB><plan id>`): it starts with `#` so a ChartBridge before
+  0.5.7 reads it as a comment (any other line it does not know stands the agent down); a malformed one is skipped.
 - **A start with a position** (review A-N5): 5 s after a start, an agent that owns a pair (its open trade, or its legs with a
   position) gets a `status` `error` to the pages ("holds a position or orders ... since ChartBridge started ... check
   NinjaTrader"); outside its trading hours it is flattened by its rules at once. A rules file that cannot be read gives the
