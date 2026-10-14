@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased: Layout 5 polish (after 1.23.0)
+
+- **Change the rules in the Rules card's header** (the review of #43, LOW): at 1366 x 768 the card's lines have about 69 px and
+  "more below" covered the button, so it was reached only by scrolling inside the card. It now sits at the right of the card's
+  header (the header stays 18 px, so the lines lose no room), in sight at every size. Its `data-parity` hook (LR02), its words
+  ("Change the window" when only the window can change), its tooltip, its closed state and its focus rule are unchanged, and it
+  still gives way to the form's own Set and Cancel. `smoke:agent-l5` now asks, at 1366 x 768, 1600 x 900 and 1920 x 1080, for
+  a floor under the card's lines (66, 116 and 280 px; they are 69, 123 and 303) and for Change the rules in sight without
+  scrolling, nothing over it. `smoke:agent-parity`: 128 of 128, `test/agent-parity.json` unchanged.
+- **`smoke:workspace`, "no status line under the charts"** failed every day from about 10:40 to 11:30 ET, on every main since
+  1.12.0 (6b47065, E2a: a compact chart's status line shows while it carries a note). The fake bridge's sample history is shifted
+  to end at the current minute, so its hour of no trading (17:00 to 18:00) lands over the 18:00 session start in that window,
+  and the default Range 40 chart rightly notes "Range bars start at 18:53 ET: NinjaTrader sent less tick history than asked".
+  The page is right; the check now asks for what E2a meant: no feed, local or fps readout under any chart, and a line only with
+  a note.
+
 ## 1.23.0 (2026-10-14): the Agent tab's Layout 5 (Tron)
 
 Anthony's decision 2026-10-14a: the Agent tab takes "Layout 5 Tron" as in the approved preview, keeping every piece of
