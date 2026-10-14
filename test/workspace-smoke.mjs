@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { TEST_PIN, enterPin, ticketOnSim101 } from './smoke-pin.mjs';
 import { run as ticketPart } from './workspace-ticket-part.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -57,7 +57,7 @@ const sockets = async page => (await allSockets(page)).filter(k => !k.auth);
 
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--test-controls', '--live-rate=150', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));   // DECISION 2026-10-14e: the ticket starts on None; Sim101 picked, as Anthony would
 try {
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());

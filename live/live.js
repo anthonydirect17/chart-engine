@@ -706,16 +706,45 @@ function create(storage) {
  * The order account when trading comes on (1.6.1, Anthony's ruling 2026-09-30: "the account I was using", not
  * Sim101). `allowed` is ChartBridge's list of trade accounts now; `wanted` is the account this tab is on: after a page
  * load the last one picked on this PC (live-account-v1 under the storage prefix), after a reconnect that keeps the
- * page the one it was on. It is used only when ChartBridge allows it now; otherwise Sim101 (or the first allowed, as
- * before), and `missed` names the account that could not be used, for the note "Last account ... not available".
- * Nothing about Armed is here: Armed is never saved and is off after every load and every reconnect.
+ * page the one it was on. It is used only when ChartBridge allows it now; otherwise None ('': DECISION 2026-10-14e, no
+ * Sim101 fallback: nothing is sent until an account is picked), and `missed` names the account that could not be used,
+ * for the note "Last account ... not available". '' wanted is None picked. Nothing about Armed is here: Armed is never
+ * saved and is off after every load and every reconnect.
  */
 function orderAccount(allowed, wanted) {
   const list = Array.isArray(allowed) ? allowed.filter(a => typeof a === 'string' && a) : [];
   const want = typeof wanted === 'string' ? wanted : '';
   if (want && list.includes(want)) return { account: want, missed: '' };
-  const account = list.includes('Sim101') ? 'Sim101' : list[0] || '';
-  return { account, missed: want && want !== account ? want : '' };
+  return { account: '', missed: want };
+}
+
+/*
+ * The ticket's daily reset (DECISION 2026-10-14e): ChartBridge puts the bot, the agents and the copier's leader on None in
+ * the 17:00 to 18:00 ET break; the ticket's account is each page's own, so the page does the same to it. A pick made before
+ * the latest 17:00 ET (New York time, daylight saving included) is reset once: to None when its account is flat with no
+ * working order (busy(account) false), else kept with a note naming it. resetDay(ms): the New York date of the latest 17:00
+ * ET at or before ms. ticketReset({ account, pickedAt, now, busy }): null when nothing is due (None already, or picked after
+ * that 17:00), else { account ('' for None), kept, note }; the caller stamps the pick with now either way, so it runs once.
+ */
+const ET_PARTS = (() => { try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit' }); } catch (e) { return null; } })();
+function etDateHour(ms) {
+  if (!ET_PARTS) return null;
+  const o = {};
+  for (const x of ET_PARTS.formatToParts(new Date(ms))) o[x.type] = x.value;
+  return { date: o.year + '-' + o.month + '-' + o.day, hour: +o.hour % 24 };
+}
+function resetDay(ms) {
+  const p = isFinite(ms) ? etDateHour(ms) : null;
+  if (!p) return '';
+  return p.hour >= 17 ? p.date : etDateHour(ms - (p.hour + 2) * 3600000).date;   // before 17:00: the day before (21:00 to 23:59 there, whatever daylight saving did)
+}
+function ticketReset(o) {
+  const x = o || {}, acct = typeof x.account === 'string' ? x.account : '';
+  if (!acct || !isFinite(x.now)) return null;
+  const due = resetDay(x.now);
+  if (!due || (isFinite(x.pickedAt) && x.pickedAt > 0 && (x.pickedAt > x.now || resetDay(x.pickedAt) === due))) return null;   // a pick "ahead" of now (the clock moved back): not due
+  if (typeof x.busy === 'function' && x.busy(acct)) return { account: acct, kept: true, note: 'Daily reset (17:00 ET): the order ticket stays on ' + acct + ': it has a position or a working order there.' };
+  return { account: '', kept: false, note: 'Daily reset (17:00 ET): the order ticket is on None (it was ' + acct + '): pick an account to trade.' };
 }
 
 /*
@@ -860,7 +889,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
+api = { staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });

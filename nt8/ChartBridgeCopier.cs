@@ -632,7 +632,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!hasLeader && !hasMode) return "copierSet needs leader or mode.";
             // 0.4.3: "leader": null is no leader (the page's "none"): the copier stands down and copies nothing until a leader is set
             // and Re-arm is pressed (WORK 2026-10-07: "none" could not be set, so the bot could not trade the old leader's account).
-            if (hasLeader && ChartBridgeOrders.CopierNull(text, "leader")) return ClearLeader(hasMode ? m : null, hasMode);
+            if (hasLeader && ChartBridgeOrders.CopierNull(text, "leader")) return ClearLeader(hasMode ? m : null, hasMode, "set by the page");
             if (hasLeader && string.IsNullOrEmpty(name)) return "leader must be an account name, or null for none.";
             if (hasMode && m != "executions" && m != "orders") return "mode must be executions or orders.";
             if (loadFailed) return "copier.txt could not be read at start: the copier's settings cannot change until it can (restart ChartBridge)";
@@ -664,7 +664,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // 0.4.3: no leader. Refused while the old leader has a position or a working entry (its exits are still being copied).
-        private static string ClearLeader(string m, bool hasMode)
+        private static string ClearLeader(string m, bool hasMode, string by)
         {
             if (hasMode && m != "executions" && m != "orders") return "mode must be executions or orders.";
             if (loadFailed) return "copier.txt could not be read at start: the copier's settings cannot change until it can (restart ChartBridge)";
@@ -681,10 +681,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (hasMode) mode = m;
                 armed = false; standDownWhy = "No leader is set.";
             }
-            Decision(null, "set", null, "no leader (was " + (old ?? "none") + "): the copier stands down, nothing is copied; mode " + mode + " (set by the page)");
+            Decision(null, "set", null, "no leader (was " + (old ?? "none") + "): the copier stands down, nothing is copied; mode " + mode + " (" + by + ")");
             Save();
             BroadcastState(true);
             return null;
+        }
+
+        // 0.5.7 the daily reset (ChartBridgeBranches.Run): "" when the leader went to none, a note when it is kept (its account
+        // has a position or a working order), null when nothing was to do. Followers keep their settings (they have no None).
+        public static string ResetToNone()
+        {
+            string l;
+            lock (Lk) l = leader;
+            if (l == null || ChartBridgeBranches.KeepThroughReset("copier", l)) return null;
+            if (!ChartBridgeBranches.Idle(Find(l))) return ChartBridgeBranches.SkipWords("the copier's leader", l);
+            string why = ClearLeader(null, false, "by the daily reset (17:00 ET)");
+            return why == null ? "" : "the copier's leader stays " + l + ": " + why;
         }
 
         // The copier cannot change while the leader has a position or a working ChartBridge entry.

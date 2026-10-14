@@ -651,6 +651,9 @@ function ticketArmed() { if (holds()) return core.TR.armed; const h = holder(); 
 function ticketAccount() { if (holds()) return core.TR.account; const h = holder(); return h && typeof h.account === 'string' && h.account ? h.account : core.TR.account; }
 const ticketQty = () => { if (holds() && TK.el) { const v = +tk('oQty').value; return Number.isInteger(v) ? v : 1; } const h = holder(); return h && Number.isInteger(h.qty) ? h.qty : 1; };
 const accountPick = () => { try { const v = JSON.parse(store.getItem('live-account-v1')); return typeof v === 'string' ? v : ''; } catch (e) { return ''; } };
+/* DECISION 2026-10-14e: when the account was last picked on this PC (live-account-at-v1, UTC ms), for the ticket's daily reset */
+const PICK_AT_KEY = 'live-account-at-v1';
+function notePick(a) { try { store.setItem('live-account-v1', JSON.stringify(a)); store.setItem(PICK_AT_KEY, String(Date.now())); } catch (e) { /* blocked */ } }
 
 /* notes: the ticket's own line in the ticket's window, else the top bar's */
 function tnote(text, level) {
@@ -699,7 +702,7 @@ const core = TC.create({
   tick: tickOf, served: r => !Object.keys(instruments).length || !!instruments[r], fmt: p => fmtPx(p),
   flash: tnote, later: tlater, destroyed: () => false,
   changed: () => renderOrders(), armed: on => ticketArmedUi(on),
-  applied: (pick, cameOn) => { if (TK.bar) TK.bar.syncTradeAccounts(); if (holds() && core.TR.enabled && core.TR.account && (cameOn || pick.missed)) ticketAccountNote(pick); deskCheck(); renderOrders(); },
+  applied: (pick, cameOn) => { if (TK.bar) TK.bar.syncTradeAccounts(); if (holds() && core.TR.enabled && (cameOn || pick.missed)) ticketAccountNote(pick); /* None too: it says pick an account */ deskCheck(); renderOrders(); },
   lost: () => {}, syncAccounts: () => { if (TK.bar) TK.bar.syncTradeAccounts(); },
   batch: () => { if (TK.bar) TK.bar.renderBatch(); }, unsent: renderUnsent, positionChanged: () => {},
   armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
@@ -975,7 +978,7 @@ function noTicketAccount() {
   const TR = core.TR;
   if (!TR.enabled || holds() || holder()) return;
   const a = LP.orderAccount(TR.accounts, accountPick()).account;
-  if (a && a !== TR.account) core.pickAccount(a);
+  if (a !== TR.account) core.pickAccount(a);                    // None ('') too: no Sim101 fallback (DECISION 2026-10-14e)
 }
 /* What Close and Flatten all here would act on, for KEYS's tooltip and the top bar's Flatten all */
 const closeTarget = () => ticketAccount() + ' ' + ticketRoot();
@@ -989,10 +992,35 @@ function publish() {
   if (k === TK.published) return;
   TK.published = k;
   link.publish(st);
-  try { store.setItem(TICKET_KEY, JSON.stringify({ root: TK.root, account: core.TR.account || readTicket().account || '' })); } catch (e) { /* blocked */ }
+  try { store.setItem(TICKET_KEY, JSON.stringify({ root: TK.root, account: core.TR.enabled ? core.TR.account : readTicket().account || '' })); } catch (e) { /* blocked */ }   // None ('') is kept as picked
 }
 setInterval(() => { if (link) link.check(); }, 3000);
 window.addEventListener('pagehide', () => { if (link) link.close(); });
+/* The ticket's daily reset (DECISION 2026-10-14e; LivePrefs.ticketReset): ChartBridge puts the bot, the agents and the copier's
+   leader on None in the 17:00 to 18:00 ET break, and this does the same to the ticket's account, once per day (the pick's
+   time, live-account-at-v1): flat with no working order there, None; else kept with a note naming it. Only in the window
+   with the ticket (or any window when no window has it), and only once ChartBridge's orders and positions have come in. */
+let tradingSince = 0;
+function ticketDailyReset() {
+  const TR = core.TR;
+  if (!TR.enabled) { tradingSince = 0; return; }
+  if (!tradingSince) tradingSince = Date.now();
+  if (Date.now() - tradingSince < 3000 || (holder() && !holds())) return;
+  const acct = holds() ? TR.account : accountPick(), at = +store.getItem(PICK_AT_KEY) || 0, now = Date.now();
+  const busy = a => [...TR.positions].some(([k, p]) => k.startsWith(a + '|') && p && p.qty) || [...TR.orders.values()].some(o => o.account === a && OT.isWorking(o));
+  const r = LP.ticketReset({ account: acct, pickedAt: at, now, busy });
+  if (!r) return;
+  try { store.setItem(PICK_AT_KEY, String(now)); } catch (e) { /* blocked */ }
+  if (!r.kept) {
+    notePick('');
+    try { store.setItem(TICKET_KEY, JSON.stringify({ root: TK.root, account: '' })); } catch (e) { /* blocked */ }
+    if (TR.account) core.pickAccount('');
+    if (holds() && TK.bar) TK.bar.render();
+    renderOrders();
+  }
+  tnote(r.note, r.kept ? 'warn' : '');
+}
+setInterval(ticketDailyReset, 5000);
 
 /* Take the ticket into this window (Add panel, or the placeholder's button): the lock if free, else ask to move it. */
 function takeTicket(onDone) {
@@ -1074,8 +1102,8 @@ function mountTicket(v) {
   TK.bar = TC.wire(id => map[id] || null, core, {
     U, LP, prefix: PREFIX, ticket: true, root: () => TK.root, flash: tnote, render: () => renderOrders(), listen: (t, type, fn) => { t.addEventListener(type, fn); v.cleanups.push(() => t.removeEventListener(type, fn)); },
     tick: tickOf, lastPrice: () => (TK.last[TK.root] ? TK.last[TK.root].p : null), pointValue: r => (instruments[r] || {}).pointValue || 0, precision: () => precisionOf(TK.root),
-    pickViewAccount: a => { store.setItem('live-account-v1', JSON.stringify(a)); renderOrders(); },
-    accountPicked: a => { store.setItem('live-account-v1', JSON.stringify(a)); renderOrders(); },
+    pickViewAccount: a => { notePick(a); renderOrders(); },
+    accountPicked: a => { notePick(a); renderOrders(); },
     clearAccountNote: () => { map.oAcctNote.textContent = ''; map.oAcctNote.title = ''; },
     armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
   });
@@ -1121,7 +1149,8 @@ function ticketArmedUi(on) {
 function ticketAccountNote(pick) {
   const el = tk('oAcctNote');
   if (!el) return;
-  const text = pick.missed ? 'Last account ' + pick.missed + ' not available, on ' + pick.account + '.' : 'On ' + pick.account + '. Armed is off.';
+  const on = pick.account || 'None: pick an account to trade';   // DECISION 2026-10-14e: no Sim101 fallback
+  const text = pick.missed ? 'Last account ' + pick.missed + ' not available, on ' + on + '.' : 'On ' + on + (pick.account ? '. Armed is off.' : '.');
   el.textContent = text; el.title = text; el.classList.toggle('warn', !!pick.missed);
   tlater(() => { if (el.textContent === text) { el.textContent = ''; el.title = ''; } }, pick.missed ? 15000 : 8000);
 }

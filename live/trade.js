@@ -155,6 +155,7 @@ function create(env) {
   }
   function applyTrading(t) {
     TR.v2 = true;
+    const wasOn = TR.enabled;                                      // DECISION 2026-10-14e: the account may be None ('') with trading on
     TR.enabled = !!t.enabled && !FRAMED;
     TR.reason = FRAMED ? FRAMED_REASON : t.enabled ? '' : (t.reason || 'Trading is not enabled in ChartBridge.');
     TR.accounts = Array.isArray(t.accounts) ? t.accounts.slice() : [];
@@ -166,7 +167,7 @@ function create(env) {
     // an account no longer on its list (review 2 S1; they cannot be cancelled from the page then)
     if (!TR.enabled) batchStop(() => true, 'trading went off (' + TR.reason.replace(/\.$/, '') + ')');
     else batchStop(e => !TR.accounts.includes(e.account), 'the account is no longer a trade account in ChartBridge');
-    const was = TR.account, cameOn = TR.enabled && !was;           // trading comes on: a load, a PIN entry, a reconnect
+    const was = TR.account, cameOn = TR.enabled && !wasOn;         // trading comes on: a load, a PIN entry, a reconnect
     const pick = LP.orderAccount(TR.accounts, TR.enabled ? env.wantedAccount() : '');
     TR.account = TR.enabled ? pick.account : '';                   // no order account while trading is off
     if (cameOn || !TR.enabled || TR.account !== was) setArmed(false);   // Armed always starts off; never restored
@@ -240,7 +241,7 @@ function create(env) {
     if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
     if (!TR.armed && armed !== false) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
     if (!open()) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
-    if (!TR.account) { flash('No account yet: nothing was sent.', 'warn'); return false; }   // 1.8.0: never blocked by a view loading
+    if (!TR.account) { flash('No account (None): nothing was sent. Pick an account to trade.', 'warn'); return false; }   // 1.8.0: never blocked by a view loading; DECISION 2026-10-14e: None sends nothing
     if (env.pickerAccount() !== TR.account) { env.syncAccounts(); flash('Nothing was sent: the account shown was not the order account. The picker is back on ' + TR.account + '; click again to act on ' + TR.account + '.', 'error'); return false; }
     return true;
   }
@@ -972,6 +973,7 @@ function wire($, core, ui) {
     if (ui.ticket) handBack(e.currentTarget);
     if (core.framed) { flash(core.framedReason, 'error'); return; }
     if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return; }
+    if (!TR.armed && !TR.account) { flash('No account (None): pick an account to trade.', 'warn'); return; }   // DECISION 2026-10-14e
     const blocked = !TR.armed && ui.armBlocked ? ui.armBlocked() : '';
     if (blocked) { flash(blocked, 'warn'); return; }
     core.setArmed(!TR.armed);
@@ -1060,7 +1062,7 @@ function wire($, core, ui) {
   /* ---------------- render: the bar's own part of the order state (the host adds the chart's lines) */
   function syncTradeAccounts() {
     const sel = $('oAcct');
-    sel.replaceChildren(...TR.accounts.map(a => new Option(a, a)));
+    sel.replaceChildren(new Option('None', ''), ...TR.accounts.map(a => new Option(a, a)));   // DECISION 2026-10-14e: None first, nothing trades on it
     sel.value = TR.account;
     sel.disabled = !TR.accounts.length;                            // enabled again after a trading-off spell with no accounts (review 2, S1); never locked by a Cancel all (review 2 S1)
   }

@@ -187,6 +187,7 @@ public static class AgentHarness
             WindowAnytime(); // 0.5.4: the window may change while the agent holds a position (DECISION 2026-10-10 ag)
             PlanIdOnOrders();   // 0.5.7: planId on an agent's orders to the page, kept in the day file (DECISION 2026-10-14d phase 2)
             LostHeldInFlatten(); // 0.5.7: no lost-trade error while ChartBridge's own flatten runs on that root: held, then raised if not flat
+            DailyReset();       // 0.5.7: the 17:00 ET reset to None for agents (DECISION 2026-10-14e)
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -280,6 +281,11 @@ public static class AgentHarness
     {
         File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSIM-B" });
         Config("agents = manrae, demob");
+        // 0.5.7 (DECISION 2026-10-14e): no account file is None (was Sim101); the rest of this harness has manrae on Sim101, chosen
+        ChartBridgeAgents.Start(false);
+        Check(M.Account == "-" && !M.Chosen && M.StripJson().Contains("\"account\":null"), "0.5.7: no agent-manrae-account.txt: None (account null to the pages), claiming nothing");
+        ChartBridgeAgents.Stop();
+        File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
         ChartBridgeAgents.Start(false);
         Check(ChartBridgeAgents.Enabled && ChartBridgeAgents.All().Length == 2 && M != null && D != null && M != D, "two agents, one object each");
         string[] lines = File.ReadAllLines(Path.Combine(Dir, "agent-manrae-secret.txt"));
@@ -304,7 +310,7 @@ public static class AgentHarness
         ChartBridgeAgents.Stop(); ChartBridgeAgents.Start(false);
         string fresh = File.ReadAllLines(Path.Combine(Dir, "agent-manrae-secret.txt"))[2];
         Check(fresh != secret && ChartBridgeAgents.UpgradeCheck("manrae", null, secret, true) == 403 && ChartBridgeAgents.UpgradeCheck("manrae", null, fresh, true) == 101, "deleted: a new secret at the next start, the old one refused");
-        Check(M.Account == "Sim101" && D.Account == "SIM-B", "no account file: Sim101; demob's file: SIM-B");
+        Check(M.Account == "Sim101" && D.Account == "SIM-B", "manrae's file: Sim101; demob's file: SIM-B");
         Check(Logged("agent channel ON for manrae: it may connect at ws://localhost:8765/agent/manrae"), "the Output window says where each agent connects");
 
         ac = new ChartBridgeClient(null, -100);
@@ -939,7 +945,7 @@ public static class AgentHarness
         Mode("manrae", "auto");
         A(Good(NewId()));
         Check(AgentReject().Contains("agent-manrae-account.txt") && FileText("agent-manrae-account.txt") == "# made-up\n# test\naccount\tSim101\naccount\tSIM-D\n", "a plan refused; the account file never written over");
-        File.Delete(acct);
+        File.WriteAllLines(acct, new[] { "# made-up", "# test", "account\tSim101" });   // 0.5.7: back on Sim101 (no file would be None)
         // the day file
         string day = Path.Combine(Dir, "agent-manrae-day.txt");
         string dayWas = FileText("agent-manrae-day.txt");
@@ -1329,62 +1335,61 @@ public static class AgentHarness
     // agents; it trades Sim101 while nothing else uses it, and stands down (its unfilled entry cancelled) the moment something does.
     static void ChosenAccounts()
     {
-        // the bot on, on a made-up SIM-Z; manrae back on its unchosen default
+        // the bot on, on a made-up SIM-Z; manrae with no account file: None (0.5.7, DECISION 2026-10-14e; until 0.5.6 its
+        // unchosen default Sim101)
         File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSIM-Z" });
         ChartBridgeSwitches.Note("bot", "on");
         ChartBridgeBot.Start(false);
         File.Delete(Path.Combine(Dir, "agent-manrae-account.txt"));
         Restart();
         SettleAll();
-        Check(M.Account == "Sim101" && !M.Chosen && M.AccountConflict() == null && ChartBridgeAgents.AgentOfAccount("Sim101") == null,
-              "manrae on its unchosen default Sim101: nothing else uses it, and it claims it against nobody");
-        // the bot chooses Sim101 while the agent sits on its default: accepted; the agent stands down
+        Check(M.Account == "-" && !M.Chosen && M.AccountConflict() == null && ChartBridgeAgents.AgentOfAccount("Sim101") == null && ChartBridgeAgents.AgentOfAccount("-") == null,
+              "0.5.7: manrae with no account file is on None: it claims no account against anyone");
+        Check(M.StripJson().Contains("\"account\":null") && M.StripJson().Contains("\"standDown\":\"agent manrae's account is None: no new entries until an account is chosen on the Agent tab\"") &&
+              Last(agentOut, "welcome").Contains("\"account\":null"), "0.5.7: None: the page and the agent see account null, and why nothing trades");
         P("{\"type\":\"botAccount\",\"cid\":\"b2\",\"account\":\"Sim101\"}");
-        Check(!PageReject().Contains("\"cid\":\"b2\"") && ChartBridgeBot.BotAccount == "Sim101", "botAccount Sim101 while an agent sits on its unchosen default: accepted: " + PageReject());
-        Tick();
-        Check(M.StripJson().Contains("\"standDown\":\"Sim101 is also the bot's account: choose an account for agent manrae"), "the agent stands down in plain words");
+        Check(!PageReject().Contains("\"cid\":\"b2\"") && ChartBridgeBot.BotAccount == "Sim101" && M.AccountConflict() == null, "0.5.7: the bot may take Sim101 while the agent is on None: " + PageReject());
         Mode("manrae", "auto");
-        Check(PageReject().Contains("auto refused: Sim101 is also the bot's account"), "its auto is refused");
         int calls = sim.Calls.Count;
         Last2();
         M.OnMessage(ac, Good(NewId()));
-        Check(AgentReject().Contains("Sim101 is also the bot's account") && sim.Calls.Count == calls, "check 2 refuses its plans");
-        // the reverse order: the bot moves away (to a made-up SIM-E); the agent CHOOSES Sim101; then the bot may not have it
+        Check(AgentReject().Contains("agent manrae's account is None: no new entries until an account is chosen on the Agent tab") && sim.Calls.Count == calls, "0.5.7: None: check 2 refuses its plans with that reason: " + AgentReject());
+        // the bot moves away (to a made-up SIM-E); the agent CHOOSES Sim101; then the bot may not have it
         NewAccount("SIM-E", Provider.Simulator);
         ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-B, SIM-C, SIM-D, SIM-E");
         P("{\"type\":\"botAccount\",\"cid\":\"b3\",\"account\":\"SIM-E\"}");
-        Check(!PageReject().Contains("\"cid\":\"b3\"") && ChartBridgeBot.BotAccount == "SIM-E" && M.AccountConflict() == null, "the bot moves to SIM-E: the agent on its default stands up: " + PageReject());
+        Check(!PageReject().Contains("\"cid\":\"b3\"") && ChartBridgeBot.BotAccount == "SIM-E", "the bot moves to SIM-E: " + PageReject());
         P(AccountMsg("manrae", "Sim101"));
         Check(M.Chosen && M.Account == "Sim101" && FileText("agent-manrae-account.txt").Contains("account\tSim101"), "manrae chooses Sim101 on the page: it is its own now");
         P("{\"type\":\"botAccount\",\"cid\":\"b4\",\"account\":\"Sim101\"}");
         Check(PageReject().Contains("Sim101 is agent manrae's account: the bot does not trade it") && ChartBridgeBot.BotAccount == "SIM-E", "then botAccount Sim101 is refused");
         P("{\"type\":\"copierFollower\",\"cid\":\"c9\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
         Check(PageReject().Contains("Sim101 is agent manrae's account: the copier does not trade it"), "and the copier may not take it either");
+        // None from the page: account null; saved as account<TAB>-, which a ChartBridge before 0.5.7 reads as an account NinjaTrader
+        // does not have (no break: nothing trades there either)
+        P("{\"type\":\"agentAccount\",\"cid\":\"an\",\"agent\":\"manrae\",\"account\":null}");
+        Check(M.Account == "-" && !M.Chosen && FileText("agent-manrae-account.txt").Contains("account\t-") && Last(agentOut, "welcome").Contains("\"account\":null") && ChartBridgeAgents.AgentOfAccount("Sim101") == null,
+              "0.5.7: agentAccount null: None, saved as account<TAB>-, the agent told, Sim101 free again: " + PageReject());
+        Restart();
+        Check(M.Account == "-" && !M.Chosen && Last(agentOut, "agentState").Contains("\"standDown\":\"agent manrae's account is None"), "0.5.7: a restart keeps None");
+        P("{\"type\":\"agentAccount\",\"cid\":\"an\",\"agent\":\"manrae\",\"account\":\"-\"}");
+        Check(PageReject().Contains("account must be an account name, or null for None"), "0.5.7: \"-\" is never an account name from the page");
         ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off");
         File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSIM-Z" });
-        // two agents: an unchosen default never blocks a chosen account; the unchosen one stands down
-        File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
+        // two agents on None clash with nobody; a chosen account is never blocked by an agent on None
+        File.Delete(Path.Combine(Dir, "agent-demob-account.txt"));
         File.Delete(Path.Combine(Dir, "agent-manrae-account.txt"));
         Restart();
-        Check(D.Chosen && !M.Chosen && D.AccountConflict() == null && M.AccountConflict() != null && M.AccountConflict().Contains("Sim101 is also agent demob's account"),
-              "demob CHOSE Sim101 (its file), manrae is on its default: manrae stands down, demob does not");
-        File.Delete(Path.Combine(Dir, "agent-demob-account.txt"));
+        Check(M.AccountConflict() == null && D.AccountConflict() == null && M.Account == "-" && D.Account == "-", "0.5.7: both on None: no clash (None is nobody's account)");
+        File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
         Restart();
-        Check(M.AccountConflict() != null && D.AccountConflict() != null, "both on their unchosen default Sim101: both stand down");
+        Check(D.Chosen && !M.Chosen && D.AccountConflict() == null && M.AccountConflict() == null, "0.5.7: demob chose Sim101, manrae on None: neither clashes");
+        P("{\"type\":\"copierFollower\",\"cid\":\"c10\",\"account\":\"SIM-D\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+        Check(!PageReject().Contains("\"cid\":\"c10\"") && M.AccountConflict() == null, "0.5.7: the copier takes an account while an agent is on None: no clash");
+        P("{\"type\":\"copierFollower\",\"cid\":\"c11\",\"account\":\"SIM-D\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
         File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSIM-B" });
+        File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
         Restart();
-        Mode("manrae", "auto");
-        // the copier takes Sim101 while manrae (unchosen) has a working entry: accepted; the entry is cancelled at once
-        Last2();
-        string id = NewId();
-        Order e = PlacedNow(id, Good(id));
-        Check(e != null && IsLive(e), "manrae on its unchosen default, nothing else on Sim101: it trades Sim101 (the contract's default)");
-        P("{\"type\":\"copierFollower\",\"cid\":\"c10\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
-        Check(!PageReject().Contains("\"cid\":\"c10\""), "copierFollower Sim101 while an agent sits on its default: accepted");
-        Tick();
-        Check(e != null && e.OrderState == OrderState.Cancelled && Answer().Contains("\"answer\":\"expired\"") && Answer().Contains("stands down: Sim101 is also a copier follower") &&
-              Last(page, "status").Contains("Agent manrae stands down: Sim101 is also a copier follower"),
-              "the moment the copier uses Sim101, manrae stands down and its unfilled entry is cancelled: " + Answer());
         Settle(sim);
     }
 
@@ -3060,6 +3065,32 @@ public static class AgentHarness
             Settle(sime);
             et = new DateTime(2026, 10, 9, 10, 0, 0);
         }
+    }
+
+    // ------------------------------------------------------------ 0.5.7: the daily reset to None, agents
+    static void DailyReset()
+    {
+        Fresh();   // manrae on SIM-E (chosen), auto; demob on SIM-B
+        Order e = PlacedOn(sime, Good(NewId()));
+        Check(e != null, "0.5.7 reset: manrae has a working entry: " + AgentReject());
+        Func<DateTime> was = ChartBridgeBranches.ClockUtc;
+        ChartBridgeBranches.Forget();
+        try { File.Delete(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+        ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 9, 21, 5, 0, DateTimeKind.Utc);   // 17:05 EDT
+        try
+        {
+            int s0 = N(page);
+            ChartBridgeBranches.Check();
+            Check(M.Account == "SIM-E" && Any(page, s0, "Daily reset (17:00 ET): agent manrae stays on SIM-E: it has a position or a working order there"),
+                  "0.5.7 reset: manrae with a working entry keeps SIM-E; the pages get a note naming it");
+            Check(D.Account == "-" && FileText("agent-demob-account.txt").Contains("account\t-") && Any(page, s0, "agent demob is on None now") && D.StripJson().Contains("\"account\":null"),
+                  "0.5.7 reset: demob, flat with nothing working on SIM-B: None, saved, the pages told");
+            Check(Logged("agent demob account None (nothing trades), was SIM-B, by the daily reset (17:00 ET)"), "0.5.7 reset: logged");
+        }
+        finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
+        Settle(sime);
+        File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSIM-B" });
+        Restart();
     }
 
     static void Review052()

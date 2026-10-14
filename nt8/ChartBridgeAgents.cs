@@ -500,7 +500,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The agent whose CHOSEN account (chosen on the page: agent-<id>-account.txt) this is, for the bot's and the copier's
-        // refusals, or null. An agent on its unchosen default (Sim101, no file) claims nothing against anyone (lead's default).
+        // refusals, or null. An agent on None (no file, or "-": 0.5.7) claims nothing against anyone (lead's default).
         public static string AgentOfAccount(string name)
         {
             if (string.IsNullOrEmpty(name)) return null;
@@ -817,8 +817,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string mode = "shadow";
         private bool killed;
         private Rules rules = new Rules();
-        private string account = "Sim101";
-        private bool chosen;   // the account was chosen on the page (agent-<id>-account.txt); false on the unchosen default
+        private string account = ChartBridgeBranches.None;   // 0.5.7 (DECISION 2026-10-14e): None until chosen; was Sim101
+        private bool chosen;   // an account was chosen on the page (agent-<id>-account.txt); false on None
         private string rulesBroken, accountBroken, dayBroken, lossStandDown;
         private string secret, secretState = "missing";
         private string session;
@@ -1005,7 +1005,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- the account file (agent-<id>-account.txt, as bot-account.txt)
         private void LoadAccount()
         {
-            string a = "Sim101", broken = null;
+            string a = ChartBridgeBranches.None, broken = null;   // 0.5.7: no file is None (was Sim101)
             try
             {
                 if (File.Exists(AccountFile))
@@ -1025,7 +1025,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex) { broken = "agent-" + Id + "-account.txt could not be read (" + ex.Message + ")"; }
             if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); }
-            lock (Sync) { account = a; accountBroken = broken; chosen = broken == null && a != null && File.Exists(AccountFile); }
+            lock (Sync) { account = a; accountBroken = broken; chosen = broken == null && a != null && !ChartBridgeBranches.IsNone(a) && File.Exists(AccountFile); }
         }
 
         private string SaveAccount(string nm)
@@ -1033,7 +1033,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 WriteWhole(AccountFile, new List<string> { "# ChartBridge account for agent " + Id + " (written by ChartBridge from the page's Agent tab; do not edit)",
-                    "# the one account the agent's orders go to; Sim101 when this file is missing", "account\t" + nm });
+                    "# the one account the agent's orders go to; - is None (nothing trades), as is a missing file", "account\t" + nm });
                 return null;
             }
             catch (Exception ex) { return ex.Message; }
@@ -1245,6 +1245,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (dayBroken != null) return dayBroken;
             if (rulesBroken != null) return rulesBroken;
             if (accountBroken != null) return accountBroken;
+            if (ChartBridgeBranches.IsNone(account)) return "agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";
             int losses = LossesLocked();
             if (lossStandDown == null && rules.MaxLosses > 0 && losses >= rules.MaxLosses) lossStandDown = losses + " losing trades today (maxLosses " + rules.MaxLosses + "): no new entries for agent " + Id + " until 18:00 ET";
             return lossStandDown;   // never lifted by a rules change; the 18:00 ET roll clears it (lead's default)
@@ -1257,10 +1258,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // The account is not usable by this agent: the bot's, the copier's leader or a follower (on or off), whether or not the bot
         // and the copier are switched on (lead's default), or another agent's. On such a clash the agent stands down and the other user of the account is left as it was (lead's
-        // default: both start on Sim101 when no file chose another).
+        // default). 0.5.7: None clashes with nobody.
         public string AccountConflict()
         {
             string acct = Account, bot = ChartBridgeAgents.BotAccountForAgents();   // on or off (lead's default); never a file read here
+            if (ChartBridgeBranches.IsNone(acct)) return null;
             if (bot == null) return "bot-account.txt cannot be read or understood, so ChartBridge cannot tell the bot's account: agent " + Id + " trades nothing until it is fixed";
             if (string.Equals(acct, bot, StringComparison.OrdinalIgnoreCase))
                 return acct + " is also the bot's account: choose an account for agent " + Id + " on the Agent tab (an agent never shares an account)";
@@ -1698,6 +1700,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // 2. not killed, not stood down, the files readable, the account tradable now
             if (k) return "the kill switch is on (release it on the Agent tab)";
             if (sd != null) return sd;
+            if (ChartBridgeBranches.IsNone(acct)) return "agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
             if (forAccount != null && forAccount != acct) return "agent " + Id + "'s account changed from " + forAccount + " to " + acct + " after this proposal: nothing placed";
             string aw = AccountProblemFor(acct, true) ?? AccountConflict();
             if (aw != null) return aw;
@@ -2872,6 +2875,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string m = S(d, "mode");
             if (m != "shadow" && m != "copilot" && m != "auto") return "mode must be shadow, copilot or auto";
+            if (m == "auto" && ChartBridgeBranches.IsNone(Account)) return "auto refused: agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
             if (m == "auto") { string why = AccountProblemFor(Account, true) ?? AccountConflict(); if (why != null) return "auto refused: " + why; }   // auto: its account must be tradable
             string old;
             List<Proposal> expired = new List<Proposal>();
@@ -2988,8 +2992,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string SetAccountLocked(Dictionary<string, Val> d)
         {
             string nm = S(d, "account"), keep = S(d, "keepMode");
-            if (!PlainName(nm)) return "account must be an account name";
             if (d.ContainsKey("keepMode") && keep != "shadow" && keep != "copilot" && keep != "auto") return "keepMode must be shadow, copilot or auto (the mode the page's question named)";
+            Val nv;
+            if (d.TryGetValue("account", out nv) && nv.K == 'z')   // 0.5.7: null is None, refused only while the agent is exposed
+            {
+                if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: choose None when it is flat";
+                return GoNone("set by the page", keep);
+            }
+            if (!PlainName(nm) || ChartBridgeBranches.IsNone(nm)) return "account must be an account name, or null for None";
             ChartBridgeAgents.RefreshFiles();   // a page's thread: the copies are read fresh
             string bot = ChartBridgeAgents.BotAccountForAgents();   // on or off (lead's default)
             if (bot == null) return "bot-account.txt cannot be read or understood, so ChartBridge cannot tell the bot's account: fix or delete it first";
@@ -3025,6 +3035,41 @@ namespace NinjaTrader.NinjaScript.AddOns
             ToAgent(WelcomeJson());
             Notify();
             return null;
+        }
+
+        // The agent on None: saved, the agent told (welcome); its mode kept as an account change keeps it (keepMode), else shadow.
+        private string GoNone(string by, string keep)
+        {
+            string old = Account;
+            bool broken;
+            lock (Sync) broken = accountBroken != null;
+            if (ChartBridgeBranches.IsNone(old) && !broken) return null;
+            string err = SaveAccount(ChartBridgeBranches.None);
+            if (err != null) return "agent-" + Id + "-account.txt could not be saved (" + err + "); nothing changed";
+            string wasMode;
+            bool kept;
+            lock (Sync) { account = ChartBridgeBranches.None; accountBroken = null; chosen = false; Sticky.Clear(); wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
+            string say = "account None (nothing trades), was " + old + ", " + by + "; " + (kept || wasMode == "shadow" ? "mode " + wasMode + (kept ? " kept" : "") : "mode shadow (was " + wasMode + ")");
+            Log("agent " + Id + " " + say); AgentLog(say);
+            ToAgent(WelcomeJson());
+            Notify();
+            return null;
+        }
+
+        // The daily reset (ChartBridgeBranches.Run): "" when the agent is on None now, a note when it keeps its account, null when
+        // nothing was to do. Its mode is kept (nothing trades on None anyway).
+        public string ResetToNone()
+        {
+            lock (PlaceGate)
+            {
+                string acct = Account;
+                if (ChartBridgeBranches.IsNone(acct) || ChartBridgeBranches.KeepThroughReset("agent:" + Id, acct)) return null;
+                if (Exposed() || !ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("agent " + Id, acct);
+                string keep;
+                lock (Sync) keep = mode;
+                string why = GoNone("by the daily reset (17:00 ET)", keep);
+                return why == null ? "" : "agent " + Id + " stays on " + acct + ": " + why;
+            }
         }
 
         private bool Exposed()
@@ -3356,7 +3401,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                    .Append(",\"pointValue\":").Append(CbJson.Num(inst.MasterInstrument.PointValue)).Append('}');
             }
             ins.Append(']');
-            return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"agent\":" + CbJson.Str(Id) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + CbJson.Str(Account) +
+            return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"agent\":" + CbJson.Str(Id) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + ChartBridgeBranches.Json(Account) +
                    ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"rules\":" + NoteWelcomeRules(EnforcedRulesJson(r)) + ",\"instruments\":" + ins + "}";
         }
 
@@ -3402,7 +3447,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"enabled\":true")
                  .Append(",\"connected\":").Append(client != null && helloed ? "true" : "false")
                  .Append(",\"mode\":").Append(CbJson.Str(mode))
-                 .Append(",\"account\":").Append(CbJson.Str(account))
+                 .Append(",\"account\":").Append(ChartBridgeBranches.Json(account))
                  .Append(",\"sim\":").Append(sim ? "true" : "false")
                  .Append(",\"rules\":").Append(RulesJson(r))
                  .Append(",\"position\":").Append(openTag != null && ledQty != 0 ? "{\"root\":" + CbJson.Str(openRoot) + ",\"qty\":" + ledQty.ToString(CultureInfo.InvariantCulture) + ",\"avgPrice\":" + CbJson.Num(ledAvg) + "}" : "null")

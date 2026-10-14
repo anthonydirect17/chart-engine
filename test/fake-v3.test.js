@@ -24,6 +24,7 @@ async function makeDesk(o) {
     config: Object.assign({ trading: true, tradeAccounts: ['Sim101', 'EVAL-A'], maxQty: { MNQ: 5, NQ: 2 }, port: 8765 }, o.config || {}),
     instruments: INSTR, knownAccounts: V.V3_ACCOUNTS.map(a => a.name), token: 'tok', switches: Object.assign({}, ALL_ON, o.switches || {}),
     accountList: V.V3_ACCOUNTS, graceMs: 1000, send: (c, m) => out.push(m), conns: () => [conn], now: () => clock, barTime: () => clock / 1000,
+    botAccount: 'botAccount' in o ? o.botAccount : 'Sim101',   // ChartBridge 0.5.7: None (null) until chosen; these checks have it chosen
   });
   desk.tick('MNQ', 25400); desk.tick('NQ', 25400); desk.tick('YM', 46200);
   desk.auth(conn, 'tok'); out.length = 0;
@@ -444,7 +445,7 @@ function get(port, p, unlock) {
 
 test('server --v3: hello lists v3 and quote-only roots; client gets accounts; auth names the switches; /bot needs its secret', async () => {
   const port = 18900 + Math.floor(Math.random() * 90);
-  const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port), '--v3', '--trading', '--test-controls', '--test-pin=5820', '--gone-grace-ms=300'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port), '--v3', '--trading', '--test-controls', '--test-pin=5820', '--gone-grace-ms=300', '--bot-account=Sim101'], { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise(r => child.stdout.once('data', r));
   try {
     const own = 'http://localhost:' + port;
@@ -506,7 +507,7 @@ test('server --v3: hello lists v3 and quote-only roots; client gets accounts; au
     await assert.rejects(wsConnect(port, '/bot', { 'X-ChartBridge-Bot': secret }), /409/);
     bot.send({ type: 'botHello', name: 'Demo Opening Fade' });
     const w = await bot.next('welcome');
-    assert.equal(w.account, 'Sim101'); assert.deepEqual(w.rails, { maxQty: 1, maxTrades: 5, maxLosses: 3 });
+    assert.equal(w.account, 'Sim101', 'chosen (--bot-account; no file is None since 0.5.7)'); assert.deepEqual(w.rails, { maxQty: 1, maxTrades: 5, maxLosses: 3 });
     assert.ok(await bot.next('tick'), 'the bot reads live ticks');
     bot.send({ type: 'signal', id: 's1', action: 'skipped', reason: 'Sample: range too small' });
     let sg; do { sg = await a.next('botSignal', 3000); } while (sg && sg.id !== 's1');
@@ -531,6 +532,7 @@ async function makeAgentDesk(o) {
     accountList: V.V3_ACCOUNTS.concat([{ name: 'SIM-AG1', sim: true, balance: 50000 }, { name: 'SIM-AG2', sim: true, balance: 50000 }]), graceMs: 1000,
     send: (c, m) => (c === agentConn ? toAgent : out).push(m), conns: () => [conn], now: () => clock, barTime: () => clock / 1000,
     agents: o.agents || ['demo'], agentAccounts: o.accounts || { demo: 'SIM-AG1' }, agentAnyTime: !!o.anyTime,
+    botAccount: 'botAccount' in o ? o.botAccount : 'Sim101',   // ChartBridge 0.5.7: None until chosen; these checks have Sim101 chosen
   });
   desk.tick('MNQ', 25400); desk.tick('NQ', 25400); desk.tick('YM', 46200);
   desk.auth(conn, 'tok'); out.length = 0;
@@ -877,7 +879,7 @@ test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; h
     assert.equal((await a.next('hello')).version, 'fake-0.5.4');
     a.send({ type: 'client', v: 3 }); a.send({ type: 'auth', token });
     const ag = await a.next('agent');
-    assert.equal(ag.agent, 'demo'); assert.equal(ag.mode, 'shadow'); assert.equal(ag.account, 'Sim101', 'no account file: Sim101');
+    assert.equal(ag.agent, 'demo'); assert.equal(ag.mode, 'shadow'); assert.equal(ag.account, null, 'no account file: None (ChartBridge 0.5.7)'); assert.equal(ag.standDown, 'agent demo\'s account is None: no new entries until an account is chosen on the Agent tab');
     const secret = (await post(port, '/test/agent-secret?agent=demo')).json.secret;
     await assert.rejects(wsConnect(port, '/agent/nobody', { 'X-ChartBridge-Agent': secret }), /404/);
     await assert.rejects(wsConnect(port, '/agent/demo', {}), /403/);
@@ -1213,17 +1215,18 @@ test('as built 6: the flat hours run to the next entryFrom; an account NinjaTrad
 });
 
 test('as built: only a chosen account is the agent\'s; a clash stands the agent down; rules, the skip, placed, checks 3 and 4, execs', async () => {
-  // demo sits on its unchosen default Sim101: the bot keeps Sim101, the copier may list it, demo stands down in plain words
+  // ChartBridge 0.5.7: demo with no account file is on None: stood down in plain words, claiming no account against anybody
   const d = await makeAgentDesk({ accounts: {} });
   d.hello();
-  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).standDown, 'Sim101 is also the bot\'s account: choose an account for agent demo on the Agent tab (an agent never shares an account)');
-  assert.match(reasonOf(d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' })), /auto refused: Sim101 is also the bot's account/);
+  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).account, null);
+  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).standDown, 'agent demo\'s account is None: no new entries until an account is chosen on the Agent tab');
+  assert.match(reasonOf(d.act({ type: 'agentMode', agent: 'demo', mode: 'auto' })), /auto refused: agent demo's account is None/);
   d.act({ type: 'botAccount', account: 'EVAL-A' });
   assert.equal(d.desk.botAccount, 'EVAL-A');
   d.act({ type: 'copierSet', leader: 'FUNDED-C' });
-  assert.equal(d.desk.agentMsg(d.desk.agents.get('demo')).standDown, null, 'nothing else on Sim101 now: no clash');
   d.act({ type: 'botAccount', account: 'Sim101' });
-  assert.equal(d.desk.botAccount, 'Sim101', 'an unchosen default claims Sim101 against nobody');
+  assert.equal(d.desk.botAccount, 'Sim101', 'an agent on None claims Sim101 against nobody');
+  assert.equal(reasonOf(d.act({ type: 'agentAccount', agent: 'demo', account: null })), null, 'None again: accepted (already None)');
   // chosen: the bot refuses it
   d.act({ type: 'botAccount', account: 'EVAL-A' });
   d.act({ type: 'agentAccount', agent: 'demo', account: 'SIM-AG1' });
@@ -1559,4 +1562,17 @@ test('ChartBridge 0.5.2: the full-session window (18:00 to 15:25, flat 15:55) in
     const why = x.plan({ price: 25390 }).why;
     if (open) assert.equal(why, null); else assert.match(why, /^the market is closed now/);
   }
+});
+
+test('ChartBridge 0.5.7 (DECISION 2026-10-14e): None for the bot and the agents, as ChartBridgeBot.cs and ChartBridgeAgents.cs', async () => {
+  const d = await makeDesk({ botAccount: null });
+  const bot = d.desk.botMsg();
+  assert.equal(bot.account, null, 'no bot-account.txt: None');
+  assert.equal(bot.standDown, 'the bot\'s account is None: no bot entries until an account is chosen on the Bot tab');
+  assert.match(reasonOf(d.act({ type: 'botMode', mode: 'auto' })), /^auto refused: the bot's account is None/);
+  assert.equal(reasonOf(d.act({ type: 'botAccount', account: 'EVAL-A' })), null, 'EVAL-A chosen');
+  assert.equal(d.desk.botAccount, 'EVAL-A');
+  assert.equal(reasonOf(d.act({ type: 'botAccount', account: null })), null, 'and None again (account null)');
+  assert.equal(d.desk.botAccount, null);
+  assert.match(reasonOf(d.act({ type: 'botAccount', account: '-' })), /account must be an account name, or null for None/);
 });

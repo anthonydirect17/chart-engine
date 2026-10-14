@@ -223,17 +223,17 @@ try {
     await click('W01');
     await until(async () => (await A()).shown, 'the tab opens');
 
-    /* demo on Sim101, the bot's account too: he stands down (ST11), until he has his own */
-    await until(async () => /STOOD DOWN/.test(await text('ST11')), 'demo stands down on Sim101', 8000);
-    await shows('ST11', /^STOOD DOWN: Sim101 is also the bot's account/, 'stood down on the bot\'s account');
+    /* demo with no account file is on None (ChartBridge 0.5.7, DECISION 2026-10-14e): he stands down (ST11), until he has his own */
+    await until(async () => /STOOD DOWN/.test(await text('ST11')), 'demo stands down on None', 8000);
+    await shows('ST11', /^STOOD DOWN: agent demo's account is None: no new entries until an account is chosen on the Agent tab$/, 'stood down on None');
     check((await P('attr', 'ST11', 'title')) === await text('ST11'), 'its title is the full text');
     /* Change account: the chooser focuses its select (rule: focus) */
     await click('LA04');
     await until(async () => (await info('LA05')).shown, 'the chooser opens');
     rule('focus', await P('focused', 'LA05-sel'), 'Change account focuses the chooser\'s select');
     const opts = await page.$$eval(H('LA05-sel') + ' option', o => o.map(x => x.textContent + (x.disabled ? ' [off]' : '')));
-    await shows('LA05', async x => (await info('LA05-sel')).shown && (await info('LA05-set')).shown && (await info('LA05-cancel')).shown && opts.some(t => /^SIM-AG1 \(SIM\)$/.test(t)) && opts.some(t => /^Sim101 \(SIM\), now/.test(t)) && opts.some(t => /^EVAL-A \(LIVE\)/.test(t)),
-      'the chooser: every tradable account, SIM first, the current one ", now", Set and Cancel: ' + opts.join(' | '));
+    await shows('LA05', async x => (await info('LA05-sel')).shown && (await info('LA05-set')).shown && (await info('LA05-cancel')).shown && opts[0] === 'None (nothing trades), now' && opts.some(t => /^SIM-AG1 \(SIM\)$/.test(t)) && opts.some(t => /^Sim101 \(SIM\)/.test(t)) && opts.some(t => /^EVAL-A \(LIVE\)/.test(t)),
+      'the chooser: None first (DECISION 2026-10-14e), every tradable account, SIM first, the current one ", now", Set and Cancel: ' + opts.join(' | '));
     await page.selectOption(H('LA05-sel'), 'SIM-AG1');
     await click('LA05-set');
     await until(async () => (await text('ST07')).includes('SIM-AG1'), 'demo trades SIM-AG1');

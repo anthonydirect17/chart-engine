@@ -91,16 +91,17 @@ test('modes: Research builds run in shadow only; auto only when the bot\'s accou
   assert.ok(m.shadow.ok && m.copilot.ok && m.auto.ok, 'auto on a LIVE account: allowed when ChartBridge says it is tradable');
   m = BC.modesAllowed({ entry: ready, tradable: false, account: 'EVAL-A' });
   assert.ok(m.copilot.ok); assert.equal(m.auto.ok, false); assert.match(m.auto.why, /Auto needs EVAL-A to be tradable/);
-  assert.match(BC.modesAllowed({ entry: ready, tradable: false }).auto.why, /Sim101/, 'the default account');
+  assert.match(BC.modesAllowed({ entry: ready, tradable: false }).auto.why, /None: choose its account first/, 'no account: None (DECISION 2026-10-14e)');
   m = BC.modesAllowed({ entry: research, tradable: true });
   assert.ok(m.shadow.ok); assert.equal(m.copilot.ok, false); assert.equal(m.auto.ok, false); assert.match(m.copilot.why, /Shadow only/);
   m = BC.modesAllowed({ entry: null, tradable: true });
   assert.ok(m.copilot.ok && m.auto.ok, 'a bot not in the library: ChartBridge decides');
   assert.equal(BC.MODE_NAME.auto, 'Auto', 'not "Sim auto": the bot trades the account Anthony chose');
-  assert.equal(BC.accountTradable({ list: [{ name: 'Sim101', tradable: true }] }, null), true);
-  assert.equal(BC.accountTradable({ list: [{ name: 'Sim101', tradable: false }] }, { enabled: true, accounts: ['Sim101'] }), false, 'the accounts list wins');
-  assert.equal(BC.accountTradable(null, { enabled: true, accounts: ['Sim101'] }), true);
-  assert.equal(BC.accountTradable(null, { enabled: false, accounts: ['Sim101'] }), false);
+  assert.equal(BC.accountTradable({ list: [{ name: 'Sim101', tradable: true }] }, null), false, 'no account named: None, never tradable (DECISION 2026-10-14e)');
+  assert.equal(BC.accountTradable({ list: [{ name: 'Sim101', tradable: true }] }, null, 'Sim101'), true);
+  assert.equal(BC.accountTradable({ list: [{ name: 'Sim101', tradable: false }] }, { enabled: true, accounts: ['Sim101'] }, 'Sim101'), false, 'the accounts list wins');
+  assert.equal(BC.accountTradable(null, { enabled: true, accounts: ['Sim101'] }, 'Sim101'), true);
+  assert.equal(BC.accountTradable(null, { enabled: false, accounts: ['Sim101'] }, 'Sim101'), false);
   assert.equal(BC.accountTradable({ list: [{ name: 'EVAL-A', tradable: true }] }, null, 'EVAL-A'), true);
   assert.equal(BC.botSwitchOn({ enabled: true, switches: { bot: true } }), true);
   assert.equal(BC.botSwitchOn({ enabled: true, switches: { bot: false } }), false);
@@ -110,9 +111,10 @@ test('modes: Research builds run in shadow only; auto only when the bot\'s accou
 });
 
 test('the bot\'s account (Anthony 2026-10-07): SIM or LIVE mark, the accounts to choose, the change and its one LIVE question', () => {
-  assert.deepEqual(BC.botAccount(null), { name: 'Sim101', sim: false, mark: '' }, 'before ChartBridge says: Sim101, unmarked');
-  assert.deepEqual(BC.botAccount({ account: 'Sim101', sim: true }), { name: 'Sim101', sim: true, mark: 'SIM' });
-  assert.deepEqual(BC.botAccount({ account: 'EVAL-A', sim: false }), { name: 'EVAL-A', sim: false, mark: 'LIVE' });
+  assert.deepEqual(BC.botAccount(null), { name: '', sim: false, mark: '', none: true, label: 'None' }, 'before ChartBridge says: None (DECISION 2026-10-14e), unmarked');
+  assert.deepEqual(BC.botAccount({ account: null, sim: false }), { name: '', sim: false, mark: '', none: true, label: 'None' }, 'account null is None');
+  assert.deepEqual(BC.botAccount({ account: 'Sim101', sim: true }), { name: 'Sim101', sim: true, mark: 'SIM', none: false, label: 'Sim101' });
+  assert.deepEqual(BC.botAccount({ account: 'EVAL-A', sim: false }), { name: 'EVAL-A', sim: false, mark: 'LIVE', none: false, label: 'EVAL-A' });
   const accounts = { list: [
     { name: 'Sim101', sim: true, tradable: true, state: 'active' }, { name: 'EVAL-A', sim: false, tradable: true, state: 'active' },
     { name: 'FUNDED-B', sim: false, tradable: false, state: 'active' }, { name: 'EVAL-B', sim: false, tradable: false, state: 'gone' }, { name: 'SIM-F1', sim: true, tradable: true, state: 'active' }] };
@@ -130,7 +132,13 @@ test('the bot\'s account (Anthony 2026-10-07): SIM or LIVE mark, the accounts to
   assert.match(BC.botAccountChange(bot, 'FUNDED-B', ch).error, /not tradable/);
   assert.match(BC.botAccountChange(bot, 'Sim101', ch).error, /already the bot's account/);
   assert.match(BC.botAccountChange(Object.assign({}, bot, { position: { qty: 1, avgPrice: 25000 } }), 'EVAL-A', ch).error, /flat/);
-  assert.match(BC.botAccountChange(bot, '', ch).error, /Choose an account/);
+  // None (DECISION 2026-10-14e): account null, never a LIVE question; refused while the bot holds a position
+  assert.deepEqual(BC.botAccountChange(bot, '', ch, 'c0'), { msg: { type: 'botAccount', cid: 'c0', account: null }, live: false, confirm: '' });
+  assert.match(BC.botAccountChange(Object.assign({}, bot, { position: { qty: 1, avgPrice: 25000 } }), '', ch).error, /choose None when it is flat/);
+  assert.match(BC.botAccountChange({ account: null }, '', ch).error, /None is already the bot's account/);
+  assert.match(BC.botAccountChange(bot, null, ch).error, /Choose an account, or None/);
+  assert.equal(BC.accountTradable(accounts, null, ''), false, 'None is never tradable');
+  assert.deepEqual(BC.modesAllowed({ tradable: false, account: '' }).auto, { ok: false, why: 'The bot\'s account is None: choose its account first (nothing trades on None).' });
   const st = BC.stripModel({ enabled: true, connected: true, name: 'Demo', mode: 'auto', account: 'EVAL-A', sim: false, trades: 0, maxTrades: 5, losses: 0, maxLosses: 3 });
   assert.equal(st.account, 'EVAL-A'); assert.equal(st.accountMark, 'LIVE'); assert.equal(st.mode, 'Auto');
 });
@@ -366,7 +374,7 @@ test('fake bridge: botRails as ChartBridgeBot.cs SetRails: limits, root, all key
   let clock = 1000000;
   const out = [];
   const conn = { origin: 'http://localhost:8765', authed: false, actions: [], v3: true };
-  const desk = new V.OrderDeskV3({ config: { trading: true, tradeAccounts: ['Sim101'], maxQty: { MNQ: 5 }, port: 8765 }, instruments: { MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 }, NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20 } },
+  const desk = new V.OrderDeskV3({ config: { trading: true, tradeAccounts: ['Sim101'], maxQty: { MNQ: 5 }, port: 8765 }, botAccount: 'Sim101', instruments: { MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 }, NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20 } },
     knownAccounts: ['Sim101'], token: 'tok', switches: { bot: true }, accountList: [{ name: 'Sim101', sim: true, balance: 1 }], send: (c, m) => out.push(m), conns: () => [conn], now: () => clock, barTime: () => clock / 1000 });
   desk.tick('MNQ', 25400); desk.tick('NQ', 25400); desk.auth(conn, 'tok'); out.length = 0;
   const act = m => { clock += 150; out.length = 0; desk.handle(conn, m, JSON.stringify(m)); return out.slice(); };

@@ -1283,7 +1283,7 @@ long as it's clear that we have a sim account chosen, I do not need the lock or 
   follower's stop at the leader's stop price, the mass disconnect and Re-arm, the sweep, the skips), and every account gate
   applies to each follower (trading on, its checkmark or `tradeAccounts`, Connected, not Gone, the caps). The `copier`
   message's `simOnly` is `false`; each follower still carries `sim`, and the page marks it SIM or LIVE.
-- **The bot trades the account Anthony chooses**, Sim or live (`botAccount`, below; Sim101 until he chooses another). Auto mode
+- **The bot trades the account Anthony chooses**, Sim or live (`botAccount`, below; None until he chooses one, 0.5.7: see "None and the daily reset"). Auto mode
   and accepted copilot proposals go to that account through every gate (its checkmark or `tradeAccounts`, Connected, the caps).
   `bot`, `welcome` and `botProposal` say `account` and `sim`, and the page shows SIM or LIVE plainly next to the mode, in the
   strip, the pop-out and on every proposal. The rails are unchanged (1 contract, micro or mini, 5 trades, 3 losing trades, the
@@ -1393,8 +1393,8 @@ made an account Gone.
 
 **Hide (archive) and Show (0.5.1).** Only Anthony, on the page, after confirming (`accountArchive` with `confirm: true`).
 Accepted for any account, Gone or not, that is flat with no working orders (as NinjaTrader shows it now, or as ChartBridge
-last saw it this session when NinjaTrader does not list it) and is not the bot's account (`botAccount`; Sim101 when none is
-chosen), a copier leader or follower (`copier.txt`, the copier on or off), or an agent's chosen account
+last saw it this session when NinjaTrader does not list it) and is not the bot's account (`botAccount`; none when the bot is
+on None, 0.5.7), a copier leader or follower (`copier.txt`, the copier on or off), or an agent's chosen account
 (`agent-<id>-account.txt`); otherwise refused with the plain reason ("EVAL-A has a position or working orders: only a flat
 account can be hidden (exits always work)", "Sim101 is the bot's account (the Bot tab): it cannot be hidden"). A file that
 cannot be read counts against it (ChartBridge cannot tell). An archived account leaves every list (`accounts`, the copier,
@@ -1530,8 +1530,8 @@ Where the contract above left a detail open, the build chose the safe simple opt
 - **Every state change checks first** (0.5.1): a checkmark, Hide, Show and the conversion change an account only if it is
   still in the state they found, checked under the lock, so a change made in between (a Hide while a check is on its way, a
   checkmark while the conversion looks) is never overwritten.
-- **Whose accounts** (0.5.1, for Hide and the conversion): the bot's (on: its memory; off: `bot-account.txt`, Sim101 when
-  there is none), the copier's leader and followers (on: its memory; off: `copier.txt`), an agent's chosen account (the agent
+- **Whose accounts** (0.5.1, for Hide and the conversion): the bot's (on: its memory; off: `bot-account.txt`; none when
+  there is none or it says None, 0.5.7), the copier's leader and followers (on: its memory; off: `copier.txt`), an agent's chosen account (the agent
   channel's memory and every `agent-<id>-account.txt`). Read once per check from copies kept by each file's time stamp (the
   folder's for the list of agent files), each file opened so its owner may replace or delete it meanwhile. A file that cannot
   be read or understood refuses Hide for every account and is read again next time.
@@ -2103,9 +2103,9 @@ default):
 - `auto`: ChartBridge places the bot's fired signals itself, **on the bot's account** (below), whatever the bot sends.
 
 **The bot's account (Anthony 2026-10-07: no Sim lock).** The bot trades the one account Anthony chooses on the page
-(`botAccount`), Sim or live; Sim101 until he chooses another. The bot itself never names an account. ChartBridge saves the
+(`botAccount`), Sim or live; None (nothing trades) until he chooses one (0.5.7; until 0.5.6 Sim101). The bot itself never names an account. ChartBridge saves the
 choice in `bot-account.txt` next to `config.txt` (two `#` lines, then `account<TAB><name>`, written whole through a temp file;
-no file: Sim101). A file that cannot be understood is never written over and stands the bot down (no new entries) until the
+no file: None; None is saved as `account<TAB>-`, 0.5.7). A file that cannot be understood is never written over and stands the bot down (no new entries) until the
 page chooses the account again or the file is deleted. `botAccount` is refused, in plain words, unless the account is in
 NinjaTrader under that exact name, never Backtest or Playback, and passes the account gates now (trading on, its checkmark or
 `tradeAccounts`, Connected); while the copier uses it (a follower that is on, or the leader); while the bot has a position
@@ -2152,7 +2152,7 @@ recovery cover them.
 | `botKill` | `cid` (optional), `on` (*bool*) | on: as the heartbeat loss, and no bot order until off |
 | `botSeen` | `id`, `at` (page UTC ms, whole number) | the moment the proposal showed; not rate counted |
 | `botAnswer` | `cid` (optional), `id`, `answer` (`accept` or `reject`), `at` (page UTC ms) | an expired or already answered proposal is refused |
-| `botAccount` | `cid` (optional), `account` | the bot's account (Anthony 2026-10-07); refused as above; saved in `bot-account.txt` |
+| `botAccount` | `cid` (optional), `account` (0.5.7: `null` is None) | the bot's account (Anthony 2026-10-07); refused as above; saved in `bot-account.txt` |
 
 | server to page | fields | when |
 |---|---|---|
@@ -2328,7 +2328,7 @@ Rulings this rests on (Anthony):
 **Agents and their files.** `config.txt`: `agents = manrae` (a comma list of ids; absent or empty: the channel is off and
 `/agent/...` answers 404). An id is 1 to 12 characters, `a-z` and `0-9`, starting with a letter. Per id, next to `config.txt`:
 `agent-<id>-secret.txt` (two `#` lines, then 64 hex characters, made by ChartBridge on first start, as `bot-secret.txt`),
-`agent-<id>-account.txt` (two `#` lines, then `account<TAB><name>`; no file: Sim101), `agent-<id>-rules.txt` (two `#`
+`agent-<id>-account.txt` (two `#` lines, then `account<TAB><name>`; no file: None, saved as `account<TAB>-`, 0.5.7; until 0.5.6 Sim101), `agent-<id>-rules.txt` (two `#`
 lines, then `key<TAB>value` lines; no file: the defaults), `agent-<id>-day.txt` (`session<TAB>yyyy-MM-dd`, then one line per
 trade, as `bot-day.txt`), `agent-<id>.log` (`<UTC ISO time><TAB><what>`: plans, proposals, placements, refusals, trades, mode
 changes). Files are written whole through a temp file. A file that exists but cannot be understood is never written over and
@@ -2463,7 +2463,7 @@ Conversely the bot, the copier and other agents refuse an agent's account. A LIV
 | `agentKill` | `cid` (optional), `agent`, `on` (*bool*) |
 | `agentSeen` | `agent`, `id`, `at` |
 | `agentAnswer` | `cid` (optional), `agent`, `id`, `answer` (`accept`/`reject`), `at` |
-| `agentAccount` | `cid` (optional), `agent`, `account`, `keepMode` (optional, 0.5.2: `shadow`, `copilot` or `auto`, the mode the page's question named; a 1.18.1 page sends it only to ChartBridge 0.5.2 or later, because 0.5.1 refuses a key it does not know) |
+| `agentAccount` | `cid` (optional), `agent`, `account` (0.5.7: `null` is None), `keepMode` (optional, 0.5.2: `shadow`, `copilot` or `auto`, the mode the page's question named; a 1.18.1 page sends it only to ChartBridge 0.5.2 or later, because 0.5.1 refuses a key it does not know) |
 | `agentRules` | `cid` (optional), `agent`, `roots`, `maxQtyNQ`, `maxQtyMNQ`, `maxQtyES`, `maxQtyMES` (each optional), `entryFrom`, `entryUntil`, `flatAt`, `maxExpireSec`, `maxTrades` (0 = none), `maxLosses` (0 = none) |
 
 | ChartBridge to page | fields | when |
@@ -2670,8 +2670,8 @@ Where the contract left a detail open, the safest simple choice was taken and is
 - **Only a chosen account is the agent's** (lead's default). An account chosen on the page (written to
   `agent-<id>-account.txt`) is the agent's, and it is the only one `botAccount`, `copierSet`, `copierFollower` and other agents
   refuse (`copierFollower` with `on: false` too, unless the account is already listed: it would list it). An agent with no
-  account file sits on its unchosen default, Sim101, and claims it against nobody: installing 0.5.0 with `agents = manrae`
-  never stops Anthony choosing Sim101 for the bot or the copier. Such an agent trades Sim101 only while nothing else uses it.
+  account file is on None (0.5.7; until 0.5.6 its unchosen default Sim101) and claims no account against anybody; it trades
+  nothing until an account is chosen.
 - **Account clashes** (lead's default): the bot's account and the copier's leader and followers count whether or not the bot
   and copier switches are on (read from `bot-account.txt` and `copier.txt` when off; a file that cannot be understood counts
   as a clash). Both files are read on ChartBridge's timer (when their time stamp changes), never on a NinjaTrader event
@@ -2679,8 +2679,8 @@ Where the contract left a detail open, the safest simple choice was taken and is
   from the second; with no good copy yet (the first read at a start) it counts as a clash at once (reviewer B). A clash stands the AGENT down in plain words ("Sim101 is also the bot's account: choose an account for agent
   manrae on the Agent tab"); the bot and the copier are left as they were. The moment the bot or the copier is set to the
   account an agent sits on, its plans are refused at check 2, its unfilled entries are cancelled and its open proposals
-  expire; an open position keeps its stop and target and the flat time still applies. Between agents: a chosen account
-  blocks an agent sitting there on its default; two agents on their unchosen default Sim101 both stand down.
+  expire; an open position keeps its stop and target and the flat time still applies. Between agents: a chosen account is
+  each agent's own. 0.5.7: an agent on None clashes with nobody (None is nobody's account).
 - **agentAccount** (0.5.2, Anthony 2026-10-08, and its review): a change KEEPS the agent's mode only when the message carries
   `keepMode` and it equals the agent's mode now; otherwise the agent goes to `shadow`, as until 0.5.1: no `keepMode` (a page
   before 1.18.1, whose question said the agent goes to Shadow) or another mode (another page changed it after the question was
@@ -2752,6 +2752,38 @@ What only NinjaTrader can show: the `/agent/<id>` upgrade through `HttpListener`
 directly), NinjaTrader's own order and execution event order, `TimeInForce.Day` at the broker, whether order names are kept
 whole (an entry up to 49 characters, `CB#<tag> ag:<12 characters> s<n> t<n>`; a protective exit up to 43), and the
 instruments' real trading hours (the shut hours are fixed; an early close is caught by the market-trading check).
+
+### None and the daily reset (0.5.7, DECISION 2026-10-14e)
+
+Every branch that trades offers None, and None means nothing trades: the order ticket, the bot (`botAccount`), each agent
+(`agentAccount`) and the copier's leader (`copierSet` with `"leader": null`, as since 0.4.3; followers have no None of their
+own). On None every new entry is refused with a plain reason ("the bot's account is None: no bot entries until an account is
+chosen on the Bot tab"; "agent <id>'s account is None: no new entries until an account is chosen on the Agent tab", check 2,
+also the strip's and `agentState`'s `standDown`); exits, flattens and the management of anything already open are never
+blocked. `bot`, `welcome`, the `agent` strip and the agent's `welcome` carry `"account": null` (and `sim` false) on None.
+`botAccount` and `agentAccount` take `"account": null` for None, refused only while that branch has a position, a working
+entry (or, for an agent, a proposal): "choose None when it is flat"; `"-"` is never an account name from the page. No
+`bot-account.txt` or `agent-<id>-account.txt` is None (until 0.5.6 Sim101); None is saved as `account<TAB>-`, which a
+ChartBridge before 0.5.7 reads as an account NinjaTrader does not have, so it refuses every entry there too and nothing
+breaks. None is nobody's account: no clash with the bot, the copier or another agent.
+
+The order ticket (chart 1.25.0): its picker offers None first; with None nothing is sent ("No account (None): nothing was
+sent. Pick an account to trade.") and Armed does not come on. `LivePrefs.orderAccount` has no Sim101 fallback: a last pick
+ChartBridge does not allow now gives None with the note naming it.
+
+**The daily reset.** Once per day in the 17:00 to 18:00 ET break (New York time, daylight saving included), ChartBridge puts
+every branch it holds that is flat with no working order on its account (no position on any contract, no order that may still
+fill) on None: the bot (while the bot channel is on), each agent, and the copier's leader (while the copier is on; the copier
+then stands down, "No leader is set."). A branch with a position or a working order is skipped and the pages get a `status`
+`warn` naming it ("Daily reset (17:00 ET): the bot stays on <account>: it has a position or a working order there ..."), also
+sent to a page that signs in during that break; the ones put on None get one `status` `info`. It runs on ChartBridge's 2 s
+poll timer, without a page. The New York date it ran is kept in `daily-reset.txt` next to `config.txt` (two `#` lines, then
+`day<TAB>yyyy-MM-dd`), so a restart in the same break does not run it again and a branch chosen again after the reset stays.
+`ChartBridgeBranches.KeepThroughReset` is the one place an exception would go (Anthony is still deciding whether a branch
+running a hero on Sim101 is left alone); for now there is none. The ticket's account is each page's own, so the page applies
+the same rule to it (`LivePrefs.ticketReset`, every 5 s in the window with the ticket): a pick made before the latest 17:00 ET
+(`live-account-at-v1`, the time of the last pick) goes to None when that account is flat with no working order, else it is
+kept with a note naming it; either way once.
 
 ### Tape timing and new `/diag` counters
 

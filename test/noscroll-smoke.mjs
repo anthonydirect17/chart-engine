@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { TEST_PIN, enterPin, ticketOnSim101 } from './smoke-pin.mjs';
 import { C, hostUrl, waitLive } from './chart-host.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -84,7 +84,7 @@ const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs
 // a mounted chart never has ChartBridge's PIN (only the workspace page asks for it): its own bridge, the PIN off
 const bridge2 = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT + 1), '--version=0.3.8', '--data-037', '--live-rate=40', '--pin-off'], { stdio: ['ignore', 'pipe', 'inherit'] });
 await Promise.all([bridge, bridge2].map(b => new Promise(r => b.stdout.once('data', r))));
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));   // DECISION 2026-10-14e: the ticket starts on None; Sim101 picked, as Anthony would
 try {
   for (const [w, h] of SIZES) {
     console.log(`\n${w}x${h}`);

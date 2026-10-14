@@ -157,7 +157,7 @@ function create(o) {
           '<div class="ag-pgrid"><span>Status</span><span data-k="status" data-parity="LM05">-</span><span>Heartbeat</span><span class="mono" data-k="beat" data-parity="LM06">-</span><span>Last plan</span><span data-k="last" data-parity="LM07">-</span><span>Build</span><span class="mono" data-k="buildRow" data-parity="LM08" title="The build id and stamp, as his hello says them">-</span></div>' +
         '</div>' +
         '<div class="ag-sec ag-card" data-no-motion><div class="ag-sechead"><span class="ag-ttl">His account</span><span class="ag-lbl">Room left</span></div>' +
-          '<div class="ag-pgrid"><span>Trades on</span><span data-parity="LA01"><span class="mono" data-k="account">Sim101</span> <span class="bt-acct ag-mark" data-k="accountMark"></span></span></div>' +
+          '<div class="ag-pgrid"><span>Trades on</span><span data-parity="LA01"><span class="mono" data-k="account">None</span> <span class="bt-acct ag-mark" data-k="accountMark"></span></span></div>' +
           '<div class="ag-room" data-k="room"></div>' +
           '<div class="ag-edit" data-k="acctEdit" data-parity="LA05" hidden><select class="ag-sel" data-k="acctSel" data-parity="LA05-sel" aria-label="The agent\'s account"></select>' +
             '<button type="button" class="ag-btn primary" data-act="acctSave" data-parity="LA05-set">Set</button><button type="button" class="ag-btn" data-act="acctCancel" data-parity="LA05-cancel">Cancel</button></div>' +
@@ -726,7 +726,7 @@ function create(o) {
       attr(btn, 'title', x.ok ? (m === 'auto' ? 'ChartBridge places ' + AC.agentName(a) + '\'s plans on ' + acc.name + (acc.mark ? ' (' + acc.mark + ')' : '') + ' by itself, inside its rules' : m === 'copilot' ? 'Each plan is a proposal for ' + acc.name + ': you accept or reject it' : 'Plans are shown and logged; nothing is placed') : x.why);
       put(btn, 'textContent', m === 'auto' && S.autoConfirm > now ? 'Confirm' : AC.MODE_NAME[m]);
     }
-    const ma = q('[data-k="modeAcct"]'); put(ma, 'textContent', acc.name + (acc.mark ? ' · ' + acc.mark : ''));
+    const ma = q('[data-k="modeAcct"]'); put(ma, 'textContent', acc.label + (acc.mark ? ' · ' + acc.mark : ''));
     const why = q('[data-k="modeWhy"]');
     if (!why.dataset.refused) { put(why, 'hidden', !(S.autoConfirm > now)); put(why, 'textContent', S.autoConfirm > now ? 'Click Confirm within 4 s: Auto on ' + acc.name + (acc.mark === 'LIVE' ? ', a LIVE account.' : '.') : ''); tog(why, 'live', acc.mark === 'LIVE'); }
     const kill = q('[data-k="kill"]');
@@ -734,7 +734,7 @@ function create(o) {
     tog(kill, 'on', !!a.killed); put(kill, 'disabled', !S.signedIn); attr(kill, 'aria-pressed', String(!!a.killed));
     put(q('[data-k="status"]'), 'textContent', AC.statusText(a)); attr(q('[data-k="status"]'), 'title', AC.statusText(a));   // one line in the column, the whole of it here
     const beat = q('[data-k="beat"]'); put(beat, 'textContent', AC.beatText(a)); put(beat, 'className', 'mono ' + (!a.connected ? 'neg' : a.lastBeatMs > 2500 ? 'warn' : 'pos'));
-    put(q('[data-k="account"]'), 'textContent', acc.name);
+    put(q('[data-k="account"]'), 'textContent', acc.label);
     renderRoom(a);
     renderHelper(a);
     const work = AC.workingEntries(S.orders.values(), a).length > 0, open = props.open(a.agent).length;
@@ -1211,6 +1211,7 @@ function create(o) {
   function ctxNow(a) { return { workingEntry: AC.workingEntries(S.orders.values(), a).length > 0, openProposals: props.open(a.agent).length, roots: servedRoots(), version: S.version, askedMode: S.acctAsk ? S.acctAskMode : a.mode }; }
   /* DECISION w: while a build that is not a hero runs, no LIVE account (it fails closed: his hello says so without the helper) */
   function liveBlocked(a, name) {
+    if (!name) return '';   // None trades nothing: never blocked (DECISION 2026-10-14e)
     const ch = AC.accountChoices(S.accounts, a, others()).find(x => x.name === name);
     return AH ? AH.accountBlock(a, helperOf(a.agent), ch ? ch.sim : undefined) : '';
   }
@@ -1299,7 +1300,8 @@ function create(o) {
     } else if (k === 'acctOpen') {
       S.acctEdit = true; S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', '');
       const sel = q('[data-k="acctSel"]'), list = AC.accountChoices(S.accounts, a, others());
-      sel.replaceChildren(...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.why ? ', ' + c.why : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.ok && !c.current; return op; }));
+      const none = AC.agentAccount(a).none;   // DECISION 2026-10-14e: None first (nothing trades on it)
+      sel.replaceChildren(new Option(AC.NONE_LABEL + ' (nothing trades)' + (none ? ', now' : ''), ''), ...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.why ? ', ' + c.why : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.ok && !c.current; return op; }));
       sel.value = AC.agentAccount(a).name;
       if (!list.some(c => c.ok)) put(q('[data-k="acctWhy"]'), 'textContent', 'No other account is free and tradable: check one on the Accounts tab.');
       renderPanel(); sel.focus();
@@ -1418,7 +1420,7 @@ function create(o) {
     linesSig = sig;
     const OT = window.OrderTicket, out = [];
     for (const x of list) { out.push(x); if (OT && OT.plannedLines && x.planned) { try { for (const l of OT.plannedLines(x, tickOf(r)).lines) out.push(l); } catch (e) { /* older order-ticket.js */ } } }
-    S.chart.setTrade({ root: r, account: a.account || 'Sim101', live: false, orders: out, position: pos, pointValue: (S.instruments[r] && +S.instruments[r].pointValue) || 0, qty: 1 });
+    S.chart.setTrade({ root: r, account: a.account || '', live: false, orders: out, position: pos, pointValue: (S.instruments[r] && +S.instruments[r].pointValue) || 0, qty: 1 });
     renderChartHead();
   }
   function renderTrips() { if (S.chart && S.chart.chart) { S.chart.chart.setLayers({ trades: true }); S.chart.chart.setTrades(trips()); } }

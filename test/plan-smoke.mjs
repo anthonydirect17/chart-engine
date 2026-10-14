@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { TEST_PIN, enterPin, ticketOnSim101 } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
@@ -66,7 +66,7 @@ const noPlanned = () => {
 };
 const strip = list => list.map(m => { const c = Object.assign({}, m); delete c.cid; return c; });
 
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));   // DECISION 2026-10-14e: the ticket starts on None; Sim101 picked, as Anthony would
 try {
   await startBridge(PORT, ['--trading', '--trade-accounts=Sim101', '--max-qty=MNQ:9,NQ:2,MES:2,ES:2', '--test-controls', '--version=0.3.8', '--test-pin=' + TEST_PIN]);
   const L = Math.round((await control('hold', { root: 'MNQ' })).last);

@@ -4,7 +4,7 @@
 // A local bot program on the trading PC (a rule program, never AI) connects on its own WebSocket path, /bot, with its own
 // permission level: the secret in bot-secret.txt next to config.txt, which ChartBridge makes on this PC and never prints.
 // It reads the live trades. It may send orders ONLY on the bot's account, the one Anthony chooses on the page (botAccount,
-// Sim101 by default, a Sim or a live account: Anthony 2026-10-07, no Sim lock), and only through ChartBridge: every bot order is
+// None by default since 0.5.7, a Sim or a live account: Anthony 2026-10-07, no Sim lock), and only through ChartBridge: every bot order is
 // built here from the bot's parameters (or a proposal's) and placed by ChartBridgeOrders.PlaceBotEntry, through every v2 gate
 // (trading on, the account's checkmark or tradeAccounts, Connected, the caps), inside the rails below. AI is never in the
 // order path. The bot itself never names an account.
@@ -16,7 +16,7 @@
 //   modes: shadow (nothing sent), copilot (a proposal to the signed-in pages; only Anthony's accept places it, from the
 //     proposal's own parameters; an unanswered proposal is never sent and expires as "not answered"), auto (on the bot's
 //     account); every start begins in shadow;
-//   the account: chosen on the page (botAccount), saved in bot-account.txt, Sim101 by default; refused while the bot has a
+//   the account: chosen on the page (botAccount), saved in bot-account.txt, None (nothing trades) by default; refused while the bot has a
 //     position or a working entry, when it does not pass the account gates, and when the copier uses it (a follower that is
 //     on, or the leader);
 //   rails: 1 contract, on the bot's root only (botRoot, default MNQ, or its micro/mini sibling set from the page); at most 5
@@ -47,7 +47,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     public static class ChartBridgeBot
     {
         // ---------------------------------------------------------- fixed rails (PROTOCOL.md "Bot channel", Rails)
-        public const string DefaultAccount = "Sim101";      // the bot's account until Anthony chooses another (botAccount)
+        public const string DefaultAccount = ChartBridgeBranches.None;   // 0.5.7 (DECISION 2026-10-14e): None until Anthony chooses an account (botAccount); was Sim101
         public const int MaxQty = 1;                      // "at most 1 contract"
         public const int MaxTradesLimit = 5, MaxLossesLimit = 3;   // the page may lower these, never raise them (botRails)
         public const int MaxActionsPerSecond = 10;        // gate 7 for the bot connection
@@ -151,14 +151,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string RailsFile { get { return Path.Combine(Folder, "bot-rails.txt"); } }
         private static string AccountFile { get { return Path.Combine(Folder, "bot-account.txt"); } }
 
-        // The account the bot trades: Sim101 until Anthony chooses another on the page (botAccount).
+        // The account the bot trades: None ("-", nothing trades) until Anthony chooses one on the page (botAccount).
         public static string BotAccount { get { lock (Sync) return account; } }
 
         // 0.5.0 agents (lead's default): the bot's account for the agents' refusals whether or not the bot is on: in memory when on,
-        // else read from bot-account.txt (Sim101 when there is none); null when that file cannot be understood.
+        // else read from bot-account.txt (None, "-", when there is none); null when that file cannot be understood.
         public static string AccountForAgents() { return Enabled ? BotAccount : ReadAccountFile(); }
 
-        // bot-account.txt as the agents read it (ChartBridgeAgents.RefreshFiles, on its timer's thread): Sim101 when there is none.
+        // bot-account.txt as the agents read it (ChartBridgeAgents.RefreshFiles, on its timer's thread): None ("-") when there is none.
         public static string ReadAccountFile()
         {
             try
@@ -315,7 +315,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static string EffectiveRoot() { lock (Sync) return railRoot ?? ConfigRoot; }
 
         // ---------------------------------------------------------- the bot's account (bot-account.txt; Anthony 2026-10-07)
-        // "account<TAB>NAME" after two # lines, written by ChartBridge from the page (botAccount) through a temp file. No file: Sim101.
+        // "account<TAB>NAME" after two # lines, written by ChartBridge from the page (botAccount) through a temp file. No file: None
+        // (0.5.7; was Sim101). None is saved as "account<TAB>-" (ChartBridgeBranches).
         // A file that cannot be understood stands the bot down (no new entries) until the page chooses the account again or the
         // file is deleted; nothing is guessed.
         private static void LoadAccount()
@@ -350,7 +351,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Directory.CreateDirectory(Folder);
                 string tmp = AccountFile + ".tmp";
                 File.WriteAllLines(tmp, new[] { "# ChartBridge bot account (written by ChartBridge from the page's Bot tab; do not edit)",
-                    "# the one account the bot's orders go to; Sim101 when this file is missing", "account\t" + name });
+                    "# the one account the bot's orders go to; - is None (nothing trades), as is a missing file", "account\t" + name });
                 if (File.Exists(AccountFile)) File.Replace(tmp, AccountFile, null); else File.Move(tmp, AccountFile);
                 return null;
             }
@@ -450,6 +451,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Rail: stand down after maxLosses losing trades (and while bot-rails.txt or bot-day.txt cannot be read). Call under Sync.
         private static string StandDownLocked()
         {
+            if (ChartBridgeBranches.IsNone(account) && accountBroken == null) return "the bot's account is None: no bot entries until an account is chosen on the Bot tab";   // 0.5.7: first, the plainest reason
             if (dayBroken != null) return dayBroken;
             if (railsBroken != null) return railsBroken;
             if (accountBroken != null) return accountBroken;
@@ -1330,6 +1332,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string m = S(d, "mode");
             if (m != "shadow" && m != "copilot" && m != "auto") return "mode must be shadow, copilot or auto";
+            if (m == "auto" && ChartBridgeBranches.IsNone(BotAccount)) return "auto refused: the bot's account is None: no bot entries until an account is chosen on the Bot tab";   // 0.5.7
             if (m == "auto") { string why = AccountProblem(true); if (why != null) return "auto refused: " + why; }   // auto: the bot's account must be tradable
             string old;
             List<Proposal> expired = new List<Proposal>();
@@ -1447,10 +1450,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // working entry (its trade would be split across two accounts), when the account does not pass the account gates now
         // (in NinjaTrader, never Backtest or Playback, its checkmark or tradeAccounts, Connected), and when the copier uses it (a
         // follower that is on, or the leader). Saved in bot-account.txt; open proposals expire (they were for the old account).
+        // 0.5.7 (DECISION 2026-10-14e): "account": null is None: refused only while the bot has a position or a working entry.
         private static string SetAccount(Dictionary<string, Val> d)
         {
+            Val v;
+            if (d.TryGetValue("account", out v) && v.K == 'z') return SetNone();
             string name = S(d, "account");
-            if (!PlainName(name)) return "account must be an account name";
+            if (!PlainName(name) || ChartBridgeBranches.IsNone(name)) return "account must be an account name, or null for None";
             string why = AccountProblemFor(name, true);
             if (why != null) return why;
             why = ChartBridgeCopier.BotAccountRefusal(name);
@@ -1480,6 +1486,47 @@ namespace NinjaTrader.NinjaScript.AddOns
             ToBot(WelcomeJson());   // so the bot knows its account
             Notify();
             return null;
+        }
+
+        private static string SetNone()
+        {
+            bool exposed;
+            lock (Sync) exposed = openTag != null;
+            if (exposed || WorkingEntries().Count > 0) return "the bot has a position or a working entry: choose None when it is flat";
+            return GoNone("set by the page");
+        }
+
+        // The bot on None: saved, open proposals end, the bot is told. Null, or why not.
+        private static string GoNone(string by)
+        {
+            string old = BotAccount;
+            bool broken;
+            lock (Sync) broken = accountBroken != null;
+            if (ChartBridgeBranches.IsNone(old) && !broken) return null;
+            string err = SaveAccount(ChartBridgeBranches.None);
+            if (err != null) return "bot-account.txt could not be saved (" + err + "); nothing changed";
+            List<Proposal> expired;
+            lock (Sync) { account = ChartBridgeBranches.None; accountBroken = null; expired = ExpireOpenLocked(); }
+            foreach (Proposal p in expired) { ToPages(ProposalJson(p)); NotAnsweredFor(p, "the bot's account changed to None"); }
+            Log("bot account None (nothing trades), was " + old + ", " + by);
+            BotLog("account None (nothing trades), was " + old + ", " + by);
+            ToBot(WelcomeJson());
+            Notify();
+            return null;
+        }
+        private static void NotAnsweredFor(Proposal p, string why) { ToBot(AnswerJson(p.S.Id, "not answered", why)); BotLog("proposal " + p.S.Id + " not answered (" + why + ")"); }
+
+        // The daily reset (ChartBridgeBranches.Run): "" when the bot is on None now, a note when it keeps its account, null when
+        // nothing was to do.
+        public static string ResetToNone()
+        {
+            string acct = BotAccount;
+            if (ChartBridgeBranches.IsNone(acct) || ChartBridgeBranches.KeepThroughReset("bot", acct)) return null;
+            bool exposed;
+            lock (Sync) exposed = openTag != null;
+            if (exposed || WorkingEntries().Count > 0 || !ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("the bot", acct);
+            string why = GoNone("by the daily reset (17:00 ET)");
+            return why == null ? "" : "the bot stays on " + acct + ": " + why;
         }
 
         // Under Sync: every open proposal becomes "not answered" (never sent).
@@ -1551,7 +1598,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"connected\":").Append(bot != null && helloed ? "true" : "false")
                  .Append(",\"name\":").Append(botName != null && bot != null ? CbJson.Str(botName) : "null")
                  .Append(",\"mode\":").Append(CbJson.Str(mode))
-                 .Append(",\"account\":").Append(CbJson.Str(account))
+                 .Append(",\"account\":").Append(ChartBridgeBranches.Json(account))
                  .Append(",\"sim\":").Append(simNow ? "true" : "false")
                  .Append(",\"root\":").Append(CbJson.Str(root))
                  .Append(",\"position\":{\"qty\":").Append(ledQty.ToString(CultureInfo.InvariantCulture)).Append(",\"avgPrice\":").Append(ledQty != 0 ? CbJson.Num(ledAvg) : "null").Append('}')
@@ -1588,7 +1635,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string instruments = inst == null ? "[]" :
                 "[{\"root\":" + CbJson.Str(root) + ",\"name\":" + CbJson.Str(inst.FullName) + ",\"tick\":" + CbJson.Num(inst.MasterInstrument.TickSize) +
                 ",\"pointValue\":" + CbJson.Num(inst.MasterInstrument.PointValue) + ",\"quoteOnly\":false}]";
-            return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + CbJson.Str(BotAccount) + ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"root\":" + CbJson.Str(root) +
+            return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + ChartBridgeBranches.Json(BotAccount) + ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"root\":" + CbJson.Str(root) +
                    ",\"rails\":{\"maxQty\":" + MaxQty + ",\"maxTrades\":" + t + ",\"maxLosses\":" + l + "},\"instruments\":" + instruments + "}";
         }
 

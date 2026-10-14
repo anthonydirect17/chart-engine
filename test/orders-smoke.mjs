@@ -94,8 +94,9 @@ try {
 
   // auth happened: the bar is on, lists only the allowed accounts, Sim101 first choice, qty capped at 5, Armed off
   await until(() => page.evaluate(() => !$tk('obar').hidden && !$tk('buyMkt').disabled), 'trading enabled after auth');
-  check(JSON.stringify(await page.$$eval(T('oAcct') + ' option', os => os.map(o => o.value))) === '["Sim101","DEMO-EVAL"]', 'trade accounts');
-  check(await page.inputValue(T('oAcct')) === 'Sim101', 'default account Sim101');
+  check(JSON.stringify(await page.$$eval(T('oAcct') + ' option', os => os.map(o => o.value))) === '["","Sim101","DEMO-EVAL"]' && (await page.$eval(T('oAcct') + ' option', o => o.textContent)) === 'None', 'None first, then the trade accounts (DECISION 2026-10-14e)');
+  check(await page.inputValue(T('oAcct')) === '', 'nothing picked yet: None, no Sim101 fallback (DECISION 2026-10-14e)');
+  await page.selectOption(T('oAcct'), 'Sim101'); await page.waitForTimeout(200);
   // one account picker (1.6.0): the order bar's, larger; no toolbar picker beside it; the chart marks its fills only
   const marks = p => p.evaluate(() => window.liveChart.getMarkers().map(m => m.side + m.qty + '@' + m.price));
   const markAccounts = fillAcct;
@@ -588,7 +589,9 @@ try {
     // a first visit (nothing picked yet): Sim101, Armed off, with a note
     const A = await openTab();
     let a = await acct(A);
-    check(a.shown === 'Sim101' && a.armed === 'false' && a.note === 'On Sim101. Armed is off.' && !a.warn && a.stored === null, '1.6.1 first visit: Sim101, Armed off, the note: ' + JSON.stringify(a));
+    check(a.shown === '' && a.armed === 'false' && a.note === 'On None: pick an account to trade.' && !a.warn && a.stored === null, '1.6.1 first visit (DECISION 2026-10-14e): None, Armed off, the note: ' + JSON.stringify(a));
+    await A.click(T('armBtn'));
+    check(await A.getAttribute(T('armBtn'), 'aria-checked') === 'false', 'None: Armed does not come on');
 
     // pick DEMO-EVAL and arm; a reload (with the PIN asked again) comes back on DEMO-EVAL with Armed off
     const box0 = await chartBox(A);
@@ -601,7 +604,7 @@ try {
     check(await unlockIfAsked(A), '1.6.1: the reload asks for the PIN again');
     await tradingOn(A);
     a = await acct(A);
-    check(a.shown === 'DEMO-EVAL' && a.armed === 'false' && a.note === 'On DEMO-EVAL. Armed is off.' && a.fills === 'DEMO-EVAL' && JSON.stringify(a.options) === '["Sim101","DEMO-EVAL"]',
+    check(a.shown === 'DEMO-EVAL' && a.armed === 'false' && a.note === 'On DEMO-EVAL. Armed is off.' && a.fills === 'DEMO-EVAL' && JSON.stringify(a.options) === '["","Sim101","DEMO-EVAL"]',
       '1.6.1 reload: back on DEMO-EVAL (the last account picked), Armed off, the note, its fills: ' + JSON.stringify(a));
     check(!(await A.title()).startsWith('ARMED'), '1.6.1: the title is not ARMED after the reload');
     const box1 = await chartBox(A);
@@ -652,22 +655,19 @@ try {
     check(!Object.keys(s5.positions).some(k => k.startsWith('Sim101|')) && (await acct(A)).shown === 'DEMO-EVAL', '1.6.1 nothing reached Sim101: ' + JSON.stringify(s5.positions));
     await A.click(T('armBtn'));
 
-    // the account last picked is not a trade account now (DEMO-EMPTY is known to ChartBridge, not allowed): Sim101, a note
+    // the account last picked is not a trade account now (DEMO-EMPTY is known to ChartBridge, not allowed): None, a note (DECISION 2026-10-14e: no Sim101 fallback)
     // the ticket's account (live-ticket-v1) and the last pick (live-account-v1) both DEMO-EMPTY
     await A.evaluate(() => { localStorage.setItem('live-account-v1', JSON.stringify('DEMO-EMPTY')); const t = JSON.parse(localStorage.getItem('live-ticket-v1') || '{}'); t.account = 'DEMO-EMPTY'; localStorage.setItem('live-ticket-v1', JSON.stringify(t)); });
     await reloadTab(A);
     a = await acct(A);
-    check(a.shown === 'Sim101' && a.armed === 'false' && a.note === 'Last account DEMO-EMPTY not available, on Sim101.' && a.warn && a.stored === 'DEMO-EMPTY' && a.fills === 'Sim101',
-      '1.6.1 not available: Sim101 with the note, storage keeps the pick: ' + JSON.stringify(a));
+    check(a.shown === '' && a.armed === 'false' && a.note === 'Last account DEMO-EMPTY not available, on None: pick an account to trade.' && a.warn && a.stored === 'DEMO-EMPTY',
+      '1.6.1 not available: None with the note, storage keeps the pick: ' + JSON.stringify(a));
     await shot(A, 'orders-1440-account-not-available.png');
     await A.evaluate(() => { window.__sent.length = 0; });
-    await A.click(T('armBtn')); await A.click(T('buyMkt'));
-    await until(async () => (await A.textContent(T('oPos'))).startsWith('LONG 1'), '1.6.1 Buy on the fallback');
-    await A.click(T('flattenBtn'));
-    await until(async () => (await A.textContent(T('oPos'))) === 'Flat', '1.6.1 Flatten on the fallback');
+    await A.click(T('armBtn')); await A.click(T('buyMkt'), { force: true }); await A.click(T('flattenBtn'));
+    await A.waitForTimeout(400);
     const sentF = await A.evaluate(() => window.__sent.filter(m => m.type === 'order' || m.type === 'flatten').map(m => m.account));
-    check(sentF.length === 2 && sentF.every(x => x === 'Sim101'), '1.6.1 on the fallback, orders go to Sim101, the account shown: ' + sentF.join());
-    await A.click(T('armBtn'));
+    check(sentF.length === 0 && await A.getAttribute(T('armBtn'), 'aria-checked') === 'false', '1.6.1 on None nothing is sent (no Sim101 fallback): ' + sentF.join());
 
     // review S5: the window's title and the chart's ARMED badge while Armed; the ticket keeps its size
     const obarBox = pg => pg.evaluate(() => { const r = $tk('obar').getBoundingClientRect(); return [r.width, r.height].join('x'); });
@@ -804,7 +804,7 @@ try {
     await A.waitForTimeout(3000);                                                     // past where the batch would have ended
     bb = await bar();
     const a17 = await acct(A);
-    check(/^14 cancels on DEMO-EVAL MNQ were not sent: the account is no longer a trade account in ChartBridge\./.test(bb.unsent) && (await sentOf('cancel')).length === 6 && a17.shown === 'Sim101' && a17.armed === 'false' && a17.note === 'Last account DEMO-EVAL not available, on Sim101.',
+    check(/^14 cancels on DEMO-EVAL MNQ were not sent: the account is no longer a trade account in ChartBridge\./.test(bb.unsent) && (await sentOf('cancel')).length === 6 && a17.shown === '' && a17.armed === 'false' && a17.note === 'Last account DEMO-EVAL not available, on None: pick an account to trade.',
       'R17 and N2: 6 sent, the note says why, the fallback note still up 3 s later: ' + JSON.stringify({ unsent: bb.unsent, note: a17.note, shown: a17.shown }));
     await A.click('#wsUnsentClose');
     check((await bar()).unsent === '', 'R17: Dismiss takes the note away');
@@ -1038,7 +1038,7 @@ try {
     const na = await open(browser, PORT + 4, 1440);
     await until(() => na.evaluate(() => !$tk('buyMkt').disabled), 'trading on after an empty hello');
     const r = await na.evaluate(() => ({ disabled: $tk('oAcct').disabled, options: [...$tk('oAcct').options].map(o => o.value), title: $tk('oAcct').title, toolbar: [...document.querySelectorAll('[id$="-acctWrap"]')].every(e => !e.getClientRects().length) }));
-    check(!r.disabled && JSON.stringify(r.options) === '["Sim101","DEMO-EVAL"]' && /^Orders go to this account/.test(r.title) && r.toolbar, 'empty hello, then trading: the ticket\'s picker is enabled with the trade accounts: ' + JSON.stringify(r));
+    check(!r.disabled && JSON.stringify(r.options) === '["","Sim101","DEMO-EVAL"]' && /^Orders go to this account/.test(r.title) && r.toolbar, 'empty hello, then trading: the ticket\'s picker is enabled with the trade accounts: ' + JSON.stringify(r));
     await na.selectOption(T('oAcct'), 'DEMO-EVAL');
     check(await na.inputValue(T('oAcct')) === 'DEMO-EVAL', 'and the order account can be changed');
     await na.close();

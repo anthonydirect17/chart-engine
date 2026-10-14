@@ -1083,17 +1083,17 @@ test('0.4.0 bot: the new file ships, is compile-checked and harnessed', () => {
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("bot \(B3\)", BotHarness\.Run\);/);
 });
 
-test('0.4.0 bot: on by default, the account Anthony chooses (Sim101 until then), 1 contract; orders only through ChartBridgeOrders.PlaceBotEntry', () => {
+test('0.4.0 bot: on by default, the account Anthony chooses (None until then, 0.5.7), 1 contract; orders only through ChartBridgeOrders.PlaceBotEntry', () => {
   // integration: one source of truth, the shared v3 switches (ChartBridgeV3.cs); the one v3 handshake and send (no stub left)
   assert.match(bcode, /public static bool Enabled \{ get \{ return ChartBridgeV3\.Bot; \} \}/);
   assert.match(bcode, /public static void ResetConfig\(\) \{ ConfigRoot = "MNQ";/, 'botRoot MNQ; the switch default (on) is ChartBridgeSwitches.Reset\'s only');
   assert.match(bcode, /if \(key == "bot"\) return true;/);
   assert.ok(!/Stub|SwitchOn/.test(bcode), 'no v3 stub or second switch parser left in the bot');
   assert.match(bodyOf(bcode, 'private static void ToPages(string json)'), /ChartBridgeV3\.SendToV3Traders\(json\);/);
-  assert.match(bcode, /public const string DefaultAccount = "Sim101";/);
+  assert.match(bcode, /public const string DefaultAccount = ChartBridgeBranches\.None;/, '0.5.7 (DECISION 2026-10-14e): None until chosen');
   assert.match(bcode, /public static string BotAccount \{ get \{ lock \(Sync\) return account; \} \}/);
-  assert.ok(!/account = /.test(bcode.replace(bodyOf(bcode, 'private static string SetAccount(Dictionary<string, Val> d)'), '').replace(bodyOf(bcode, 'private static void LoadAccount()'), '').replace(bodyOf(bcode, 'private static void Reset()'), '').replace(/private static string account = DefaultAccount;/, '')),
-    'the bot\'s account changes only by botAccount (the page), bot-account.txt at start, or the reset to Sim101');
+  assert.ok(!/account = /.test(bcode.replace(bodyOf(bcode, 'private static string SetAccount(Dictionary<string, Val> d)'), '').replace(bodyOf(bcode, 'private static void LoadAccount()'), '').replace(bodyOf(bcode, 'private static void Reset()'), '').replace(bodyOf(bcode, 'private static string GoNone(string by)'), '').replace(/private static string account = DefaultAccount;/, '')),
+    'the bot\'s account changes only by botAccount (the page), bot-account.txt at start, the reset to None, or GoNone (the page\'s None or the 17:00 ET reset)');
   // botAccount: every gate, refused while the bot has a position or a working entry, never a copier follower or leader, a temp-file write
   const setAcc = bodyOf(bcode, 'private static string SetAccount(Dictionary<string, Val> d)');
   for (const re of [/string why = AccountProblemFor\(name, true\);/, /why = ChartBridgeCopier\.BotAccountRefusal\(name\);/, /if \(exposed \|\| WorkingEntries\(\)\.Count > 0\) return "the bot has a position or a working entry: choose its account when it is flat";/, /string err = SaveAccount\(name\);/])

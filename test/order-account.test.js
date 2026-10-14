@@ -1,6 +1,6 @@
 'use strict';
 // The order account after a reload or a dropped connection (1.6.1, Anthony's ruling 2026-09-30): the account last
-// picked, when ChartBridge allows it now, else Sim101 with a note; Armed never restored. LivePrefs.orderAccount is the
+// picked, when ChartBridge allows it now, else None with a note (DECISION 2026-10-14e: no Sim101 fallback); Armed never restored. LivePrefs.orderAccount is the
 // rule; the checks on live.js below pin down that every order path sends for the account shown and nothing else.
 // The page itself is driven in test/orders-smoke.mjs (restore, fallback, every order path, two tabs, reconnect).
 const test = require('node:test');
@@ -17,25 +17,51 @@ test('orderAccount: the last pick when ChartBridge allows it now', () => {
   assert.deepEqual(LP.orderAccount(['Sim101', 'EVAL-1'], 'Sim101'), { account: 'Sim101', missed: '' });
 });
 
-test('orderAccount: not allowed now gives Sim101 (or the first allowed) and names the one missed', () => {
-  assert.deepEqual(LP.orderAccount(['Sim101', 'EVAL-1'], 'EVAL-9'), { account: 'Sim101', missed: 'EVAL-9' });
-  assert.deepEqual(LP.orderAccount(['EVAL-1', 'EVAL-2'], 'EVAL-9'), { account: 'EVAL-1', missed: 'EVAL-9' }, 'no Sim101: the first allowed, as before');
-  assert.deepEqual(LP.orderAccount(['EVAL-1', 'EVAL-2'], 'Sim101'), { account: 'EVAL-1', missed: 'Sim101' });
+test('orderAccount (DECISION 2026-10-14e): not allowed now is None, never a Sim101 fallback, and names the one missed', () => {
+  assert.deepEqual(LP.orderAccount(['Sim101', 'EVAL-1'], 'EVAL-9'), { account: '', missed: 'EVAL-9' });
+  assert.deepEqual(LP.orderAccount(['EVAL-1', 'EVAL-2'], 'EVAL-9'), { account: '', missed: 'EVAL-9' });
+  assert.deepEqual(LP.orderAccount(['EVAL-1', 'EVAL-2'], 'Sim101'), { account: '', missed: 'Sim101' });
   assert.deepEqual(LP.orderAccount([], 'EVAL-1'), { account: '', missed: 'EVAL-1' }, 'nothing allowed: no account, nothing can be sent');
 });
 
-test('orderAccount: nothing picked yet is Sim101 with no note; junk is nothing picked', () => {
-  assert.deepEqual(LP.orderAccount(['EVAL-1', 'Sim101'], ''), { account: 'Sim101', missed: '' });
-  for (const junk of [null, undefined, 42, true, {}, ['EVAL-1']]) assert.deepEqual(LP.orderAccount(['EVAL-1', 'Sim101'], junk), { account: 'Sim101', missed: '' }, String(junk));
+test('orderAccount: nothing picked (or None picked) is None with no note; junk is nothing picked', () => {
+  assert.deepEqual(LP.orderAccount(['EVAL-1', 'Sim101'], ''), { account: '', missed: '' });
+  for (const junk of [null, undefined, 42, true, {}, ['EVAL-1']]) assert.deepEqual(LP.orderAccount(['EVAL-1', 'Sim101'], junk), { account: '', missed: '' }, String(junk));
   assert.deepEqual(LP.orderAccount(null, 'EVAL-1'), { account: '', missed: 'EVAL-1' });
-  assert.deepEqual(LP.orderAccount(['', 7, 'Sim101'], 'EVAL-1'), { account: 'Sim101', missed: 'EVAL-1' }, 'junk in the list is not an account');
+  assert.deepEqual(LP.orderAccount(['', 7, 'Sim101'], 'Sim101'), { account: 'Sim101', missed: '' }, 'junk in the list is not an account');
+});
+
+test('the ticket\'s daily reset (DECISION 2026-10-14e): once after each 17:00 ET, New York time with daylight saving; flat goes None, busy is kept with a note', () => {
+  const at = (iso) => Date.parse(iso);
+  // summer (EDT, UTC-4): 17:00 New York is 21:00 UTC
+  assert.equal(LP.resetDay(at('2026-07-14T20:59:00Z')), '2026-07-13', '16:59 EDT: the break of the day before is the latest');
+  assert.equal(LP.resetDay(at('2026-07-14T21:00:00Z')), '2026-07-14', '17:00 EDT');
+  // winter (EST, UTC-5): 21:30 UTC is 16:30 New York; 22:00 UTC is 17:00
+  assert.equal(LP.resetDay(at('2026-12-15T21:30:00Z')), '2026-12-14');
+  assert.equal(LP.resetDay(at('2026-12-15T22:00:00Z')), '2026-12-15');
+  // the days daylight saving changes (2026-03-08 and 2026-11-01), early in the morning
+  assert.equal(LP.resetDay(at('2026-03-08T08:30:00Z')), '2026-03-07');
+  assert.equal(LP.resetDay(at('2026-11-01T06:30:00Z')), '2026-10-31');
+  const idle = () => false, busy = () => true;
+  const before = at('2026-07-14T20:00:00Z'), after = at('2026-07-14T21:05:00Z');
+  assert.deepEqual(LP.ticketReset({ account: 'Sim101', pickedAt: before, now: after, busy: idle }),
+    { account: '', kept: false, note: 'Daily reset (17:00 ET): the order ticket is on None (it was Sim101): pick an account to trade.' });
+  assert.deepEqual(LP.ticketReset({ account: 'Sim101', pickedAt: before, now: after, busy }),
+    { account: 'Sim101', kept: true, note: 'Daily reset (17:00 ET): the order ticket stays on Sim101: it has a position or a working order there.' });
+  assert.equal(LP.ticketReset({ account: 'Sim101', pickedAt: after, now: after + 60000, busy: idle }), null, 'picked after the 17:00: nothing due (once per day)');
+  assert.equal(LP.ticketReset({ account: 'Sim101', pickedAt: before, now: before + 60000, busy: idle }), null, 'before 17:00: nothing due');
+  assert.equal(LP.ticketReset({ account: '', pickedAt: before, now: after, busy: idle }), null, 'None already: nothing to do');
+  assert.deepEqual(LP.ticketReset({ account: 'Sim101', pickedAt: 0, now: after, busy: idle }).account, '', 'a pick with no time (before this version): due');
+  assert.equal(LP.ticketReset({ account: 'Sim101', pickedAt: after + 3600000, now: after, busy: idle }), null, 'a pick ahead of now (the clock moved back): not due');
+  // a page closed through the break: the next load does it (the latest 17:00 is after the pick)
+  assert.equal(LP.ticketReset({ account: 'Sim101', pickedAt: before, now: at('2026-07-15T13:00:00Z'), busy: idle }).account, '');
 });
 
 test('orderAccount: the result is always one of the allowed accounts, or none', () => {
   const lists = [[], ['Sim101'], ['A'], ['A', 'B'], ['B', 'Sim101', 'A']], wants = ['', 'A', 'B', 'Sim101', 'C'];
   for (const l of lists) for (const w of wants) {
     const r = LP.orderAccount(l, w);
-    assert.ok(r.account === '' ? l.length === 0 : l.includes(r.account), JSON.stringify([l, w, r]));
+    assert.ok(r.account === '' ? !l.includes(w) || w === '' : l.includes(r.account) && r.account === w, JSON.stringify([l, w, r]));
     assert.equal(r.missed !== '', w !== '' && w !== r.account, JSON.stringify([l, w, r]));
   }
 });
@@ -318,4 +344,14 @@ test('order-ticket.js is unchanged by 1.6.1 (defaultAccount stays for anything e
   const OT = require('../live/order-ticket.js');
   assert.equal(OT.defaultAccount(['EVAL-1', 'Sim101'], 'EVAL-1'), 'EVAL-1');
   assert.equal(OT.defaultAccount(['EVAL-1', 'Sim101'], 'X'), 'Sim101');
+});
+
+test('the ticket\'s daily reset is wired in the workspace: every pick is stamped, the reset runs every 5 s in the ticket\'s window, None is kept as picked', () => {
+  assert.match(WS, /function notePick\(a\) \{ try \{ store\.setItem\('live-account-v1', JSON\.stringify\(a\)\); store\.setItem\(PICK_AT_KEY, String\(Date\.now\(\)\)\);/);
+  assert.match(WS, /pickViewAccount: a => \{ notePick\(a\); renderOrders\(\); \},\n\s+accountPicked: a => \{ notePick\(a\); renderOrders\(\); \},/);
+  assert.match(WS, /const r = LP\.ticketReset\(\{ account: acct, pickedAt: at, now, busy \}\);/);
+  assert.match(WS, /setInterval\(ticketDailyReset, 5000\);/);
+  assert.match(WS, /account: core\.TR\.enabled \? core\.TR\.account : readTicket\(\)\.account \|\| ''/, 'None (\'\') is saved as picked, never replaced by the last account');
+  assert.match(CORE, /sel\.replaceChildren\(new Option\('None', ''\), \.\.\.TR\.accounts\.map\(a => new Option\(a, a\)\)\);/, 'the ticket\'s picker offers None first');
+  assert.match(CORE, /if \(!TR\.armed && !TR\.account\) \{ flash\('No account \(None\): pick an account to trade\.', 'warn'\); return; \}/, 'Armed does not come on with None');
 });

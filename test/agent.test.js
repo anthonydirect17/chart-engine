@@ -67,7 +67,7 @@ test('the strip: name, build, heartbeat, mode, SIM or LIVE, account, position, P
   assert.equal(AC.statusText(agent({ standDown: '3 losing trades today' })), 'Stood down: 3 losing trades today');
   assert.equal(AC.statusText(agent({ killed: true, standDown: 'x' })), 'Kill switch on: no agent orders');
   assert.equal(AC.statusText(agent({ connected: false })), 'Not connected: no agent program running');
-  assert.equal(AC.agentAccount({}).name, 'Sim101'); assert.equal(AC.agentAccount({}).mark, '');
+  assert.equal(AC.agentAccount({}).name, ''); assert.equal(AC.agentAccount({}).label, 'None'); assert.equal(AC.agentAccount({}).mark, '');   // DECISION 2026-10-14e: None
   const withPlan = AC.stripModel(agent({ lastPlan: { action: 'plan', at: T0, side: 'sell', qty: 1, root: 'NQ', setup: 'Sample fade', result: 'refused: outside the entry window' } }));
   assert.equal(withPlan.last, 'Last plan 10:00 Sell 1 NQ · Sample fade: refused: outside the entry window');
 });
@@ -225,6 +225,7 @@ test('ChartBridge 0.5.4 (DECISION 2026-10-10 ag): in a trade the window alone ma
   assert.equal(AC.rulesChange(agent({ position: pos }), form({ entryFrom: '18:00', entryUntil: '15:25' }), ctx).ask, undefined, '18:00 to 15:25 at 10:00: inside, no question');
   assert.equal(AC.windowFlattensNow(agent(), '10:30', '15:55', T0), false, 'flat: never asked');
   assert.match(AC.accountChange(inTrade, 'EVAL-A', [{ name: 'EVAL-A', sim: false, tradable: true }], { version: '0.5.4' }).error, /choose its account when it is flat/, 'the account still waits until flat');
+  assert.match(AC.accountChange(inTrade, '', [], { version: '0.5.4' }).error, /choose None when it is flat/, 'None waits until flat too (DECISION 2026-10-14e)');
 });
 
 test('account chooser: tradable accounts, SIM first; never the bot\'s, the copier\'s or another agent\'s; LIVE asked once', () => {
@@ -249,7 +250,12 @@ test('account chooser: tradable accounts, SIM first; never the bot\'s, the copie
   assert.match(AC.accountChange(a, 'Sim101', ch, {}).error, /the bot's account: an agent trades an account of its own/);
   assert.match(AC.accountChange(a, 'SIM-AG1', ch, {}).error, /already/);
   assert.match(AC.accountChange(a, 'EVAL-B', ch, {}).error, /not tradable/);
-  assert.match(AC.accountChange(a, '', ch, {}).error, /Choose/);
+  // None (DECISION 2026-10-14e): account null with its mode kept; never a LIVE question
+  assert.deepEqual(AC.accountChange(a, '', ch, {}, 'c0'), { msg: { type: 'agentAccount', cid: 'c0', agent: 'demo', account: null, keepMode: 'shadow' }, live: false, confirm: '', mode: 'shadow' });
+  assert.match(AC.accountChange(agent({ account: null }), '', ch, {}).error, /None is already/);
+  assert.match(AC.accountChange(a, null, ch, {}).error, /Choose an account, or None/);
+  assert.equal(AC.accountTradable({ list: [{ name: 'Sim101', tradable: true }] }, null, ''), false, 'None is never tradable');
+  assert.equal(AC.modesAllowed({ tradable: false, account: '' }).auto.why, 'The agent\'s account is None: choose its account first (nothing trades on None).');
   const live = AC.accountChange(a, 'EVAL-A', ch, { version: '0.5.2' }, 'c3');
   assert.deepEqual(live.msg, { type: 'agentAccount', cid: 'c3', agent: 'demo', account: 'EVAL-A', keepMode: 'shadow' });
   assert.equal(live.live, true);
@@ -295,7 +301,8 @@ test('modes and kill: auto needs the account tradable; the messages', () => {
   assert.deepEqual(AC.killMsg('demo', true), { type: 'agentKill', agent: 'demo', on: true });
   assert.ok(AC.accountTradable({ list: [{ name: 'SIM-AG1', tradable: true }] }, null, 'SIM-AG1'));
   assert.ok(!AC.accountTradable({ list: [{ name: 'SIM-AG1', tradable: true, state: 'gone' }] }, null, 'SIM-AG1'));
-  assert.ok(AC.accountTradable(null, { enabled: true, accounts: ['Sim101'] }, ''));
+  assert.ok(!AC.accountTradable(null, { enabled: true, accounts: ['Sim101'] }, ''), 'no account is None: never tradable (DECISION 2026-10-14e)');
+  assert.ok(AC.accountTradable(null, { enabled: true, accounts: ['Sim101'] }, 'Sim101'));
 });
 
 test('the agent\'s orders: by "agent:<id>" on its own account only; its fills claimed with the bot\'s ledger', () => {

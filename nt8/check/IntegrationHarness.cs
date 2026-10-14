@@ -576,6 +576,7 @@ public static class IntegrationHarness
             Msg("copierSet", "{\"type\":\"copierSet\",\"cid\":\"s11\",\"leader\":\"SIM-L\"}");
             Check(!Rejected(""), "X10: the copier's leader is SIM-L: " + Last());
             ChartBridgeSwitches.Note("bot", "on");
+            typeof(ChartBridgeBot).GetField("account", PS).SetValue(null, "Sim101");   // 0.5.7: None by default; Sim101 chosen for the bot, as Anthony would
             int leadCalls = lead.Calls.Count;
             Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"f9\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
             Check(Rejected("Sim101 is the bot's account: it cannot be a copier follower while the bot trades it (choose another account for the bot on the Bot tab first).") && Logged("copier refused Sim101"),
@@ -722,6 +723,8 @@ public static class IntegrationHarness
     static void AgentsWithTheLanes()
     {
         ChartBridgeAgents.ReadConfig("agents", "xa");
+        // 0.5.7: no account file is None (it clashes with nobody); xa on Sim101 by its file, as chosen on the Agent tab
+        File.WriteAllLines(Path.Combine(ChartBridgeConfig.Folder, "agent-xa-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
         ChartBridgeAgents.Start(false);
         try
         {
@@ -736,7 +739,7 @@ public static class IntegrationHarness
             string strip;
             lock (got) strip = got.FirstOrDefault(m => m.StartsWith("{\"type\":\"agent\",\"agent\":\"xa\"")) ?? "";
             Check(!before && strip != "", "X13: a page that signs in before its client message gets each agent's strip once it is v3 (the one handshake)");
-            // xa starts on Sim101 by default: Sim101 is the bot's account and a copier follower here (X10, X11): it stands down plainly
+            // xa is on Sim101 (its file): Sim101 is the bot's account and a copier follower here (X10, X11): it stands down plainly
             string sd = ChartBridgeAgents.Get("xa").AccountConflict() ?? "";
             Check(sd.StartsWith("Sim101 is also ") && sd.Contains("choose an account for agent xa on the Agent tab") && strip.Contains("\"standDown\":\"Sim101 is also"),
                   "X13: an agent on the bot's or the copier's account stands down in plain words: " + sd);

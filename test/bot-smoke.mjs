@@ -59,7 +59,7 @@ const DESK_KEYS = { rev: 3, keys: { buy: '', sell: '', be: '', close: '', flatte
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 let bridge = null;
 try {
-  bridge = await startBridge(PORT);
+  bridge = await startBridge(PORT, ['--bot-account=Sim101']);   // ChartBridge 0.5.7: None until chosen; Sim101 chosen here
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   await ctx.route('http://localhost:8800/api/chart-hotkeys', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(DESK_KEYS) }));
   await ctx.route('http://localhost:8800/api/chart-strategies', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ rev: 0, strategies: [] }) }));
@@ -313,12 +313,20 @@ try {
   const none = await page.textContent('[data-k="shelves"]');
   check(/No frozen builds on this PC/.test(none), 'the Library says so plainly: ' + none.trim());
   check((await B()).shown, '?tab=bot opens on the Bot tab');
+  /* DECISION 2026-10-14e (ChartBridge 0.5.7): no bot-account.txt is None: nothing trades, Auto closed with why; the chooser offers None first */
+  await until(async () => (await page.textContent('[data-k="account"]')) === 'None', 'the bot on None');
+  check((await page.textContent('[data-k="accountMark"]')) === '' && /None: choose its account first/.test(await page.getAttribute('.bt-modes [data-mode="auto"]', 'title') || ''),
+    'None: no mark, Auto closed with why: ' + await page.getAttribute('.bt-modes [data-mode="auto"]', 'title'));
+  await page.click('[data-act="acctOpen"]');
+  const opts0 = await page.$$eval('[data-k="acctSel"] option', o => o.map(x => x.textContent));
+  check(opts0[0] === 'None (nothing trades), now', 'the chooser: None first, now: ' + opts0.join(', '));
+  await page.click('[data-act="acctCancel"]');
   await page.screenshot({ path: path.join(SHOTS, 'bot-nolib.png') });
   bridge.kill();
 
   /* ---------------------------------------------------------------- the bot's account: Sim or LIVE (Anthony 2026-10-07) */
   console.log('the bot\'s account: the one Anthony chooses, Sim or LIVE');
-  bridge = await startBridge(PORT + 3);
+  bridge = await startBridge(PORT + 3, ['--bot-account=Sim101']);   // chosen (ChartBridge 0.5.7: None until then)
   let dialogs = 0;
   page.on('dialog', d => { dialogs++; d.dismiss().catch(() => {}); });
   await open('?layout=Main&tab=bot');
@@ -327,7 +335,7 @@ try {
   await until(async () => (await page.textContent('[data-k="accountMark"]')) === 'SIM', 'Sim101, marked SIM');
   await page.click('[data-act="acctOpen"]');
   const opts = await page.$$eval('[data-k="acctSel"] option', o => o.map(x => x.textContent + (x.disabled ? ' [off]' : '')));
-  check(opts.includes('EVAL-A (LIVE)') && opts.includes('Sim101 (SIM), now') && opts.some(x => /^SIM-F1 \(SIM\)/.test(x)) && !opts.some(x => /FUNDED-C|EVAL-B/.test(x)),
+  check(opts[0] === 'None (nothing trades)' && opts.includes('EVAL-A (LIVE)') && opts.includes('Sim101 (SIM), now') && opts.some(x => /^SIM-F1 \(SIM\)/.test(x)) && !opts.some(x => /FUNDED-C|EVAL-B/.test(x)),
     'Change account lists the tradable accounts, each marked SIM or LIVE (not FUNDED-C, not checked; not EVAL-B): ' + opts.join(', '));
   await page.selectOption('[data-k="acctSel"]', 'EVAL-A');
   await page.click('[data-act="acctSave"]');
@@ -376,6 +384,19 @@ try {
   await page.click('[data-act="acctSave"]');
   await until(async () => /copier's leader/.test(await page.textContent('[data-k="acctWhy"]')), 'ChartBridge\'s refusal shown under the button (the fake\'s copier leader is Sim101)');
   check(await page.isHidden('[data-k="acctAsk"]') && (await v3()).bot.account === 'EVAL-A', 'a Sim account is not asked about; refused, nothing changed');
+  /* None from the page (DECISION 2026-10-14e): account null, never asked about */
+  await page.click('[data-act="acctOpen"]');
+  await page.selectOption('[data-k="acctSel"]', '');
+  await page.click('[data-act="acctSave"]');
+  await until(async () => (await v3()).bot.account === null, 'None sent');
+  await until(async () => (await page.textContent('[data-k="account"]')) === 'None', 'the tab says None');
+  check(await page.isHidden('[data-k="acctAsk"]') && (await page.textContent('[data-k="accountMark"]')) === '', 'None: not asked about, no mark');
+  await page.click('[data-act="acctOpen"]');
+  await page.selectOption('[data-k="acctSel"]', 'EVAL-A');
+  await page.click('[data-act="acctSave"]');
+  await until(() => page.isVisible('[data-k="acctAsk"]'), 'EVAL-A again: asked');
+  await page.click('[data-act="acctYes"]');
+  await until(async () => (await v3()).bot.account === 'EVAL-A', 'EVAL-A again');
   const [pop2] = await Promise.all([ctx.waitForEvent('page'), page.click('.bt-pop')]);
   await pop2.waitForSelector('.cb-pin-key', { timeout: 15000 });
   await enterPin(pop2, TEST_PIN);

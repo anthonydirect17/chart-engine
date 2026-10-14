@@ -17,7 +17,8 @@ function rig(opts) {
     LP, prefs: LP.create(storage), fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve('{"token":"t"}') }),
     send: m => R.sent.push(JSON.parse(JSON.stringify(m))), open: () => R.open, sock: () => R,
     root: () => R.root, lastPrice: () => R.last, qty: () => R.qty, pickerAccount: () => (R.picker === null ? core.TR.account : R.picker),
-    wantedAccount: () => o.wanted || '', tick: () => 0.25, served: () => true, fmt: p => p.toFixed(2),
+    wantedAccount: () => (o.wanted === undefined ? 'Sim101' : o.wanted),   // picked on this PC (DECISION 2026-10-14e: '' is None, no Sim101 fallback)
+    tick: () => 0.25, served: () => true, fmt: p => p.toFixed(2),
     flash: (t, l) => R.notes.push((l ? l + ': ' : '') + t),
     later: (fn, ms) => { timers.push({ id: ++tid, at: clock + ms, fn }); return tid; },
     changed: () => { R.renders++; }, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {},
@@ -179,7 +180,7 @@ test('1.17.0: on a pair an AI agent owns, only a market exit that reduces is sen
   // a TradeCore with the workspace's agentOwner hook (the Agent tab answers it)
   const core = TC.create({ LP, prefs: LP.create({ getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) }),
     fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve('{"token":"t"}') }), send: m => sent.push(m), open: () => true, sock: () => ({}),
-    root: () => 'MNQ', lastPrice: () => 100, qty: () => 1, pickerAccount: () => core.TR.account, wantedAccount: () => '', tick: () => 0.25, served: () => true, fmt: p => p.toFixed(2),
+    root: () => 'MNQ', lastPrice: () => 100, qty: () => 1, pickerAccount: () => core.TR.account, wantedAccount: () => 'Sim101', tick: () => 0.25, served: () => true, fmt: p => p.toFixed(2),
     flash: (t, l) => notes.push((l ? l + ': ' : '') + t), later: () => 0, changed: () => {}, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {},
     batch: () => {}, unsent: () => {}, armBlocked: () => '', destroyed: () => false, now: () => (clock += 500),
     agentOwner: (account, root) => (account === 'Sim101' && root === 'MNQ' ? owner : '') });
@@ -366,4 +367,19 @@ test('a framed TradeCore never arms and never sends an order action, even if tra
   assert.deepEqual(R.sent.filter(m => m.type !== 'auth'), [], 'no order action sent: ' + JSON.stringify(R.sent));
   assert.ok(!R.sent.some(m => m.type === 'auth'), 'no sign-in from a frame');
   assert.ok(R.notes.filter(n => /inside another page/.test(n)).length >= 6, R.notes.join(' / '));
+});
+
+test('DECISION 2026-10-14e: the ticket on None (nothing picked, or None picked) sends nothing and says pick an account', () => {
+  const R = rig({ wanted: '' });
+  R.on();
+  assert.equal(R.core.TR.account, '', 'no Sim101 fallback: None');
+  R.core.setArmed(true);
+  R.core.sendOrder('buy', 'market', null);
+  assert.equal(R.sent.length, 0);
+  assert.match(R.notes.pop(), /No account \(None\): nothing was sent\. Pick an account to trade\./);
+  R.core.pickAccount('Sim101');
+  assert.equal(R.core.TR.account, 'Sim101');
+  const R2 = rig({ wanted: 'EVAL-9' });
+  R2.on();
+  assert.equal(R2.core.TR.account, '', 'a last pick ChartBridge does not allow now: None, never Sim101');
 });

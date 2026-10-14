@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { TEST_PIN, enterPin, ticketOnSim101 } from './smoke-pin.mjs';
 import { startDesk } from './fake-desk.mjs';
 import { checkKeysV3, SWITCHES } from './fake-v3.mjs';
 
@@ -73,7 +73,7 @@ function spies() {
   } catch (e) { /* blocked */ }
 }
 
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));   // DECISION 2026-10-14e: the ticket starts on None; Sim101 picked, as Anthony would
 let desk = null;
 try {
   /* ================ Part A: every v3 off line written ================ */

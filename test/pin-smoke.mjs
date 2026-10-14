@@ -6,6 +6,7 @@
 // only; sample data; nothing reaches a broker. Screenshots in test/out/ (and SHOTS_DIR when set).
 //   npm run smoke:pin        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
+import { ticketOnSim101 } from './smoke-pin.mjs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -72,7 +73,7 @@ async function typePin(p, pin) { await p.keyboard.type(pin); await notBusy(p); }
 const storedAnywhere = p => p.evaluate(() => JSON.stringify(Object.entries(localStorage)) + JSON.stringify(Object.entries(sessionStorage)) + document.cookie + location.href);
 const noSideScroll = async (p, w, what) => check(await p.evaluate(() => document.documentElement.scrollWidth) <= w, w + ' px: no sideways scroll (' + what + ')');
 
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));   // DECISION 2026-10-14e: the ticket starts on None; Sim101 picked, as Anthony would
 try {
   bridge = await startBridge();
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 }, deviceScaleFactor: 2 });
