@@ -214,8 +214,7 @@ function create(env) {
       case 'orders': TR.orders.clear(); announced.clear(); TR.moving.clear(); for (const o of m.list || []) if (served(o.root)) { TR.orders.set(o.id, o); announced.set(o.id, o); } unsentCheck(); env.changed(); return true;
       case 'order': onOrder(m); return true;
       case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); env.changed(); if (env.positionChanged) env.positionChanged(); return true;
-      case 'reject': if (typeof m.id === 'string') TR.moving.delete(m.id);   // a refused move: the line goes back
-        if (!onRefused(m)) flash('Refused by ChartBridge: ' + m.reason, 'error'); env.changed(); return true;
+      case 'reject': if (!onRefused(m)) flash('Refused by ChartBridge: ' + m.reason, 'error'); env.changed(); return true;
       /* 1.16.0 (protocol v3): a managed strategy's state, and a Merge's result (each shown plainly by the host) */
       case 'managed': if (!OS || typeof m.id !== 'string') return true;
         if (m.state === 'done') TR.managed.delete(m.id); else TR.managed.set(m.id, m);
@@ -547,6 +546,7 @@ function create(env) {
      page shows it. */
   const requeued = new Set();                                      // batch cancels already sent again once after a rate refusal
   function onRefused(m) {
+    if (typeof m.id === 'string') TR.moving.delete(m.id);          // a refused move: drawn at the confirmed price again (1.22.0)
     const wasBatch = typeof m.id === 'string' && cancelSent.has(m.id);
     if (typeof m.id === 'string') cancelSent.delete(m.id);         // a refused cancel can go again at once (review 3 N1)
     /* A Cancel all's cancel refused for the rate (the page keeps 6 in 1.1 s, but a busy PC can deliver two of its

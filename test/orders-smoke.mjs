@@ -1023,10 +1023,11 @@ try {
   const fr = await until(async () => { const f = host.frames().find(x => x !== host.mainFrame()); return f && await f.evaluate(wsLive).catch(() => false) ? f : null; }, 'framed page loads with --allow-frames', 15000);
   if (fr) {
     await fr.waitForTimeout(800);
-    // the workspace in a frame has no order ticket (and would refuse to trade: TradeCore's framed reason)
-    const fx = await fr.evaluate(() => ({ arm: !!document.querySelector('.tk [data-tk-id="armBtn"]'), off: (document.querySelector('.tk [data-tk-id="oOff"]') || {}).textContent || '',
+    // the workspace in a frame shows its refusal in the ticket's panel and no ticket (no Armed, no order button); a framed
+    // TradeCore never arms and never sends (test/trade-core.test.js, "a framed TradeCore ...")
+    const fx = await fr.evaluate(() => ({ arm: !!document.querySelector('[data-tk-id="armBtn"]'), buy: !!document.querySelector('[data-tk-id="buyMkt"]'),
       panel: (document.querySelector('.ws-panel[data-type="ticket"] .ws-body') || {}).textContent || '' }));
-    check(!fx.arm || /inside another page/.test(fx.off), 'framed page cannot trade: ' + JSON.stringify({ arm: fx.arm, off: fx.off, panel: fx.panel.trim().slice(0, 80) }));
+    check(!fx.arm && !fx.buy && /No order ticket in this browser/.test(fx.panel), 'framed page cannot trade: the ticket panel says "No order ticket in this browser", no Armed or Buy: ' + JSON.stringify({ arm: fx.arm, buy: fx.buy, panel: fx.panel.trim().slice(0, 80) }));
     await shot(host, 'orders-framed-refused.png');
   }
   await host.close();
