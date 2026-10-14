@@ -14,7 +14,8 @@
 //     plan's riskDollars after the trade ends;
 //   - ChartBridge's words above Accept and Reject (the last 5 s, "Accept sent.", a long refusal) move them 0 px at 1366 x 768,
 //     1600 x 900, 1920 x 1080 and in the pop-out, and a real proposal's last 5 s too (review of 84893d0);
-//   - the controls column cuts no line off at those sizes: the Rules card scrolls inside itself with "more below";
+//   - the controls column cuts no line off at those sizes: the Rules card scrolls inside itself with "more below", its lines
+//     keep a floor of height at each size, and Change the rules (in its header) is in sight without scrolling (review of #43);
 //   - the smaller screens keep board F's stacking (1000 x 800 and 390 x 844).
 //   npm run smoke:agent-l5   (CHROMIUM_PATH=/path/to/chrome; SHOTS=dir)
 // Screenshots (test/out): agent-l5-1366x768, -1600x900, -1920x1080, -max, -narrow (1000 x 800), -phone (390 x 844),
@@ -90,15 +91,21 @@ try {
     await pg.evaluate(() => { document.querySelector('[data-parity~="P03"]:not([data-parity~="P17"]) [data-parity~="P14"]').textContent = ''; });
     check(!out.length && !/-/.test(b0.replace(/,-/g, ',')), label + ': the last 5 s, "Accept sent." and a long refusal above Accept and Reject move them 0 px' + (out.length ? ': ' + out.join('; ') : ' (' + b0 + ')'));
   }
-  /* the controls column cuts no line off: it fits, and the Rules card's lines scroll inside it with "more below" when they are more */
-  async function leftFits(label) {
+  /* the controls column cuts no line off: it fits, and the Rules card's lines scroll inside it with "more below" when they are more.
+     Its lines keep at least `minH` px (the review of #43: 69 px at 1366 x 768; a squeeze below that fails here), and Change the
+     rules (LR02, in the card's header) is in sight without scrolling anything, nothing over it */
+  async function leftFits(label, minH) {
     const x = await page.evaluate(() => { const c = document.querySelector('.ag-left .ag-scroll'), b = document.querySelector('[data-k="rbody"]'), m = b.querySelector('.ag-rmore');
-      return { col: c.scrollHeight - c.clientHeight, over: b.scrollHeight - b.clientHeight, more: getComputedStyle(m).display !== 'none', h: b.clientHeight }; });
+      c.scrollTop = 0; b.scrollTop = 0;
+      const o = document.querySelector('[data-parity~="LR02"]'), r = o.getBoundingClientRect(), cr = c.getBoundingClientRect(), at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const lr02 = !!o.closest('.ag-rulescard > .ag-sechead') && r.height >= 20 && r.top >= Math.max(0, cr.top) - 1 && r.bottom <= Math.min(innerHeight, cr.bottom) + 1 && r.right <= Math.min(innerWidth, cr.right) + 1 && !!at && o.contains(at);
+      return { col: c.scrollHeight - c.clientHeight, over: b.scrollHeight - b.clientHeight, more: getComputedStyle(m).display !== 'none', h: b.clientHeight, lr02 }; });
     let end = { more: false, last: true };
     if (x.over > 2) end = await page.evaluate(async () => { const b = document.querySelector('[data-k="rbody"]'); b.scrollTop = b.scrollHeight; await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const br = b.getBoundingClientRect(), l = [...b.querySelectorAll('[data-parity~="LR02"], [data-parity~="LR09"]')].filter(e => e.getClientRects().length).pop(); const lr = l ? l.getBoundingClientRect() : null;
+      const br = b.getBoundingClientRect(), l = [...b.children].filter(e => !e.classList.contains('ag-rmore') && e.getClientRects().length).pop(); const lr = l ? l.getBoundingClientRect() : null;
       const r = { more: getComputedStyle(b.querySelector('.ag-rmore')).display !== 'none', last: !!lr && lr.bottom <= br.bottom + 1 }; b.scrollTop = 0; return r; });
-    check(x.col <= 1 && x.h >= 60 && (x.over <= 2 ? !x.more : x.more && !end.more && end.last), label + ': the controls column fits (nothing cut off); the Rules card ' + (x.over <= 2 ? 'shows all its lines' : 'scrolls inside itself with "more below", gone at its end where its last line is in sight') + ' ' + JSON.stringify(Object.assign(x, { end })));
+    check(x.col <= 1 && x.h >= minH && (x.over <= 2 ? !x.more : x.more && !end.more && end.last), label + ': the controls column fits (nothing cut off); the Rules card\'s lines ' + x.h + ' px (at least ' + minH + '), ' + (x.over <= 2 ? 'all shown' : 'scrolling inside it with "more below", gone at its end where its last line is in sight') + ' ' + JSON.stringify(Object.assign(x, { end })));
+    check(x.lr02, label + ': Change the rules (LR02) in the Rules card\'s header, in sight without scrolling, nothing over it');
   }
 
   await control('price', { root: 'MNQ', p: 25400 });
@@ -173,14 +180,14 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'agent-l5-proposal.png') });
 
   /* ------------------------------------------------------------------ the PC sizes: one screen, no scroll */
-  for (const [w, h] of [[1366, 768], [1600, 900], [1920, 1080]]) {
+  for (const [w, h, minH] of [[1366, 768, 66], [1600, 900, 116], [1920, 1080, 280]]) {
     await page.setViewportSize({ width: w, height: h }); await sleep(700);
     const f = await fits(), c = await box(H('SS-centre')), ch = await box('[data-panel="chart"]'), foot = await box(H('SS-foot')), bad = await hit(['P15', 'P16', 'LM04']);
     const share = ch.height / c.height;
     check(f.sw <= f.w && f.sh <= f.h && foot.bottom <= h + 1 && share >= 0.52 && share <= 0.68 && !bad.length,
       w + ' x ' + h + ': one screen with no page scroll, the chart ' + Math.round(share * 100) + ' % of the centre, Accept, Reject and the kill switch in sight' + (bad.length ? ': ' + bad.join('; ') : '') + ' ' + JSON.stringify(f));
     await wordsMoveNothing(page, w + ' x ' + h);
-    await leftFits(w + ' x ' + h);
+    await leftFits(w + ' x ' + h, minH);
     await page.screenshot({ path: path.join(SHOTS, 'agent-l5-' + w + 'x' + h + '.png') });
   }
   await page.setViewportSize({ width: 1600, height: 900 }); await sleep(500);

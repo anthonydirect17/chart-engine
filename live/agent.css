@@ -248,6 +248,9 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 /* the Rules card takes the column's last room; its lines scroll inside it when they are more, "more below" at its foot */
 .ag-view .ag-rulescard { flex: 1 1 0; min-height: 132px; display: flex; flex-direction: column; }
 .ag-view .ag-rulescard > .ag-sechead { flex: none; }
+/* Change the rules in the header: always in sight, whatever the card's lines (review of #43); the header stays 18 px, so the
+   lines lose no room to it */
+.ag-view .ag-rulescard > .ag-sechead > .ag-btn { flex: none; min-height: 22px; margin: -2px 0; padding: 0 8px; }
 .ag-view .ag-rbody { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; align-content: start;
   overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent; }
 .ag-view .ag-rmore { display: none; position: sticky; bottom: 0; padding: 14px 0 2px; text-align: center; font: 600 10px var(--f-ui); letter-spacing: .2em; text-transform: uppercase;
