@@ -1083,17 +1083,17 @@ test('0.4.0 bot: the new file ships, is compile-checked and harnessed', () => {
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("bot \(B3\)", BotHarness\.Run\);/);
 });
 
-test('0.4.0 bot: on by default, the account Anthony chooses (Sim101 until then), 1 contract; orders only through ChartBridgeOrders.PlaceBotEntry', () => {
+test('0.4.0 bot: on by default, the account Anthony chooses (None until then, 0.5.7), 1 contract; orders only through ChartBridgeOrders.PlaceBotEntry', () => {
   // integration: one source of truth, the shared v3 switches (ChartBridgeV3.cs); the one v3 handshake and send (no stub left)
   assert.match(bcode, /public static bool Enabled \{ get \{ return ChartBridgeV3\.Bot; \} \}/);
   assert.match(bcode, /public static void ResetConfig\(\) \{ ConfigRoot = "MNQ";/, 'botRoot MNQ; the switch default (on) is ChartBridgeSwitches.Reset\'s only');
   assert.match(bcode, /if \(key == "bot"\) return true;/);
   assert.ok(!/Stub|SwitchOn/.test(bcode), 'no v3 stub or second switch parser left in the bot');
   assert.match(bodyOf(bcode, 'private static void ToPages(string json)'), /ChartBridgeV3\.SendToV3Traders\(json\);/);
-  assert.match(bcode, /public const string DefaultAccount = "Sim101";/);
+  assert.match(bcode, /public const string DefaultAccount = ChartBridgeBranches\.None;/, '0.5.7 (DECISION 2026-10-14e): None until chosen');
   assert.match(bcode, /public static string BotAccount \{ get \{ lock \(Sync\) return account; \} \}/);
-  assert.ok(!/account = /.test(bcode.replace(bodyOf(bcode, 'private static string SetAccount(Dictionary<string, Val> d)'), '').replace(bodyOf(bcode, 'private static void LoadAccount()'), '').replace(bodyOf(bcode, 'private static void Reset()'), '').replace(/private static string account = DefaultAccount;/, '')),
-    'the bot\'s account changes only by botAccount (the page), bot-account.txt at start, or the reset to Sim101');
+  assert.ok(!/account = /.test(bcode.replace(bodyOf(bcode, 'private static string SetAccount(Dictionary<string, Val> d)'), '').replace(bodyOf(bcode, 'private static void LoadAccount()'), '').replace(bodyOf(bcode, 'private static void Reset()'), '').replace(bodyOf(bcode, 'private static string GoNoneLocked(string by)'), '').replace(/private static string account = DefaultAccount;/, '')),
+    'the bot\'s account changes only by botAccount (the page), bot-account.txt at start, the reset to None, or GoNone (the page\'s None or the 17:00 ET reset)');
   // botAccount: every gate, refused while the bot has a position or a working entry, never a copier follower or leader, a temp-file write
   const setAcc = bodyOf(bcode, 'private static string SetAccount(Dictionary<string, Val> d)');
   for (const re of [/string why = AccountProblemFor\(name, true\);/, /why = ChartBridgeCopier\.BotAccountRefusal\(name\);/, /if \(exposed \|\| WorkingEntries\(\)\.Count > 0\) return "the bot has a position or a working entry: choose its account when it is flat";/, /string err = SaveAccount\(name\);/])
@@ -1280,7 +1280,7 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.5\.[1-6]";/);
+  assert.match(code, /public const string Version = "0\.5\.[1-7]";/);
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1309,7 +1309,7 @@ test('ChartBridge 0.5.5: the accounts line\'s one-time conversion and notConnect
 });
 
 test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its own thread, and tells hello, the pages and /diag', () => {
-  assert.match(code, /public const string Version = "0\.5\.6";/);
+  assert.match(code, /public const string Version = "0\.5\.[6-7]";/);
   const clk = code.slice(code.indexOf('public static class ChartBridgeClock'));
   assert.ok(code.indexOf('public static class ChartBridgeClock') > code.indexOf('public static class ChartBridgeServer') && clk.length > 1000, 'ChartBridgeClock is the last class of ChartBridge.cs');
   // never sets the clock or a setting: no Win32 time call, no w32tm, no process, no registry, in any add-on file

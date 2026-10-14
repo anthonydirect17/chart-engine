@@ -687,6 +687,18 @@ public static class CopierHarness
         Msg("copierSet", "{\"type\":\"copierSet\",\"cid\":\"n\",\"leader\":\"Sim101\"}");
         if (wasArmed) Msg("copierRearm", "{\"type\":\"copierRearm\",\"cid\":\"r\"}");
         Check(State().Contains("\"leader\":{\"account\":\"Sim101\"") && (!wasArmed || State().Contains("\"armed\":true")), "0.4.3: the leader set again (and Re-armed as before)");
+        // 0.5.7: the daily reset (ChartBridgeBranches, 17:00 ET): a leader with a position keeps it (a note); flat, it goes to none
+        Pos(lead, mnq, 1);
+        string kept = ChartBridgeCopier.ResetToNone();
+        Check(kept != null && kept.Contains("the copier's leader stays on Sim101: it has a position or a working order there") && State().Contains("\"leader\":{\"account\":\"Sim101\""),
+              "0.5.7 reset: the leader with a position keeps it, with a note: " + kept);
+        Pos(lead, mnq, 0);
+        string done = ChartBridgeCopier.ResetToNone();
+        Check(done == "" && State().Contains("\"leader\":null") && State().Contains("\"standDownWhy\":\"No leader is set.\""),
+              "0.5.7 reset: the leader flat with nothing working: none, the copier stands down; followers keep theirs: " + State());
+        Check(ChartBridgeCopier.ResetToNone() == null, "0.5.7 reset: no leader: nothing to do");
+        Msg("copierSet", "{\"type\":\"copierSet\",\"cid\":\"n\",\"leader\":\"Sim101\"}");
+        if (wasArmed) Msg("copierRearm", "{\"type\":\"copierRearm\",\"cid\":\"r\"}");
     }
 
     // ------------------------------------------------------------ a scale-out: the stops shrink first, then the reduce

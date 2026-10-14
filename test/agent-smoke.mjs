@@ -70,7 +70,7 @@ const DESK_KEYS = { rev: 3, keys: { buy: '', sell: '', be: '', close: '', flatte
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 let bridge = null;
 try {
-  bridge = await startBridge(PORT, ['--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2']);   // config.txt's cap holds for agents (as built)
+  bridge = await startBridge(PORT, ['--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2', '--bot-account=Sim101']);   // config.txt's cap holds for agents (as built); the bot on Sim101 (chosen: None until then since ChartBridge 0.5.7)
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   /* the page's clock: the fake's, running on. Only Date is shifted; the timers stay real (Playwright's fake clock also takes
      over the timers, and the tab's 4 s confirm windows then never end) */
@@ -170,8 +170,8 @@ try {
   await page.selectOption('#agView [data-k="pick"]', 'demo');
   await until(async () => (await text('.ag-strip [data-k="name"]')) === 'Demo Agent', 'Demo Agent chosen');
   const strip = await text('.ag-strip');
-  check(/Demo Agent/.test(strip) && !/sample-build-1/.test(strip) && /CONNECTED · 0\.4 s ago/.test(strip) && /SHADOW/.test(strip) && /Sim101\s*SIM/.test(strip) && /Flat/.test(strip),
-    'the strip: name (DECISION 2026-10-09 v: no build in the header), connected and its heartbeat, mode, account with SIM, position: "' + strip + '"');
+  check(/Demo Agent/.test(strip) && !/sample-build-1/.test(strip) && /CONNECTED · 0\.4 s ago/.test(strip) && /SHADOW/.test(strip) && /Account\s*None/.test(strip) && /Flat/.test(strip),
+    'the strip: name (DECISION 2026-10-09 v: no build in the header), connected and its heartbeat, mode, account (None: no account file, DECISION 2026-10-14e), position: "' + strip + '"');
   check((await text('#agView [data-k="buildRow"]')) === 'sample-build-1', 'the build in the details (the Build row): ' + await text('#agView [data-k="buildRow"]'));
   const foot = await text('#agView .ag-foot');
   check(/\$0\.00/.test(foot) && /Today/.test(foot) && /0\s*Trades/.test(foot) && /0\s*Losses/.test(foot) && /09:45/.test(foot) && /15:55/.test(foot) && !/The light|in profit|under water/.test(foot),
@@ -184,15 +184,15 @@ try {
   await control('agent-note', { agent: 'demo', kind: 'look', text: 'Sample: price is pressing the made-up overnight high with shrinking volume' });
   await control('agent-note', { agent: 'demo', kind: 'thinking', text: 'Sample thinking: the push into the level is slowing; a pullback to the made-up VWAP gives a cleaner long with the stop under the morning low, and the target at the overnight high. ' + 'More sample words to make this long enough to collapse. '.repeat(3) });
   await control('agent-skip', { agent: 'demo', id: 'sk1', setup: 'Sample breakout', reason: 'Sample: no clean level within reach' });
-  await control('agent-plan', { agent: 'demo', id: 'r1' });              // refused: Sim101 is the bot's account
+  await control('agent-plan', { agent: 'demo', id: 'r1' });              // refused: demo is on None (DECISION 2026-10-14e)
   await control('agent-note', { agent: 'demo', kind: 'lesson', text: 'Sample lesson: wait for the second touch on a slow open' });
   await control('agent-note', { agent: 'demo', kind: 'status', text: 'Sample status: watching MNQ and NQ' });
   await until(async () => (await A()).feed.notes === 5 && (await A()).feed.plans === 2, 'five notes and two plans in the feed');
   const kinds = await page.evaluate(() => [...document.querySelectorAll('.ag-feed .ag-tag')].map(e => e.textContent));
   check(kinds[0] === 'STATUS' && kinds[1] === 'LESSON' && kinds.includes('REFUSED') && kinds.includes('PASS') && kinds.includes('THINKING') && kinds.includes('LOOK') && kinds[kinds.length - 1] === 'NOTEBOOK', 'newest first, every kind: ' + kinds.join(' '));
   check(await page.evaluate(() => [...document.querySelectorAll('.ag-feed > *')].every(e => e.tagName === 'BUTTON' && e.type === 'button' && e.getAttribute('aria-controls'))), 'every stream row is a real button');
-  check(/refused: Sim101 is also the bot's account: choose an account for agent demo on the Agent tab/.test(await text('.ag-feed')), 'a refused plan says why (the bot\'s account is never an agent\'s)');
-  check(/STOOD DOWN: Sim101 is also the bot's account/.test(await text('.ag-strip')), 'on its unchosen default Sim101, the bot\'s too, the agent stands down and the strip says so (as built)');
+  check(/refused: agent demo's account is None: no new entries until an account is chosen on the Agent tab/.test(await text('.ag-feed')), 'a refused plan says why (None: nothing trades)');
+  check(/STOOD DOWN: agent demo's account is None/.test(await text('.ag-strip')), 'on None (no account file, DECISION 2026-10-14e) the agent stands down and the strip says so');
   /* the decision drawer: his full record of one row */
   console.log('the decision drawer');
   const thinkRow = '.ag-feed .ag-rowb.t-judgment';
@@ -219,7 +219,7 @@ try {
   check(await page.evaluate(() => document.activeElement && document.activeElement.matches('.ag-feed .ag-rowb.t-judgment')), 'the focus goes back to its row');
   await page.click('.ag-feed .ag-rowb.t-no');                                          // the refused plan
   await until(() => visible('#agView [data-k="drawer"]'), 'a refused plan\'s record');
-  check(/refused by ChartBridge: Sim101 is also the bot's account/.test(await text('#agView [data-k="drawer"]')), 'a refused plan: ChartBridge\'s words under his rules');
+  check(/refused by ChartBridge: agent demo's account is None/.test(await text('#agView [data-k="drawer"]')), 'a refused plan: ChartBridge\'s words under his rules');
   await page.click('#agView [data-k="drawer"] [data-act="drawerClose"]');
   await until(async () => !(await visible('#agView [data-k="drawer"]')), 'Close closes it');
   await control('agent-note', { agent: 'demo', kind: 'lesson', text: 'Sample: a new lesson after the click' });
@@ -233,8 +233,8 @@ try {
   await page.click('#agView [data-act="acctOpen"]');
   const opts = await page.$$eval('#agView [data-k="acctSel"] option', o => o.map(x => ({ t: x.textContent, d: x.disabled })));
   const optText = opts.map(x => x.t + (x.d ? ' [off]' : '')).join(' | ');
-  check(opts.some(x => /^Sim101 \(SIM\), now/.test(x.t)) && opts.some(x => /^SIM-AG1 \(SIM\)$/.test(x.t) && !x.d) && opts.some(x => /^EVAL-A \(LIVE\)/.test(x.t) && !x.d) && opts.some(x => /SIM-F1 \(SIM\), a copier follower/.test(x.t) && x.d),
-    'the tradable accounts, SIM first, each marked; the copier\'s followers listed but not offered: ' + optText);
+  check(opts[0].t === 'None (nothing trades), now' && opts.some(x => /^Sim101 \(SIM\)/.test(x.t)) && opts.some(x => /^SIM-AG1 \(SIM\)$/.test(x.t) && !x.d) && opts.some(x => /^EVAL-A \(LIVE\)/.test(x.t) && !x.d) && opts.some(x => /SIM-F1 \(SIM\), a copier follower/.test(x.t) && x.d),
+    'None first (DECISION 2026-10-14e), then the tradable accounts, SIM first, each marked; the copier\'s followers listed but not offered: ' + optText);
   const before = (await sent()).length;
   await page.selectOption('#agView [data-k="acctSel"]', 'EVAL-A');
   await page.click('#agView [data-act="acctSave"]');

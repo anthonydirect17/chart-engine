@@ -185,6 +185,9 @@ public static class AgentHarness
             FullSession();   // 0.5.2: the window in session time (Anthony's rulings 2026-10-08 p and q)
             Review052();     // 0.5.2 review: the calendar's halts in the flatten, keepMode, a position from an earlier session
             WindowAnytime(); // 0.5.4: the window may change while the agent holds a position (DECISION 2026-10-10 ag)
+            PlanIdOnOrders();   // 0.5.7: planId on an agent's orders to the page, kept in the day file (DECISION 2026-10-14d phase 2)
+            LostHeldInFlatten(); // 0.5.7: no lost-trade error while ChartBridge's own flatten runs on that root: held, then raised if not flat
+            DailyReset();       // 0.5.7: the 17:00 ET reset to None for agents (DECISION 2026-10-14e)
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -278,6 +281,11 @@ public static class AgentHarness
     {
         File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSIM-B" });
         Config("agents = manrae, demob");
+        // 0.5.7 (DECISION 2026-10-14e): no account file is None (was Sim101); the rest of this harness has manrae on Sim101, chosen
+        ChartBridgeAgents.Start(false);
+        Check(M.Account == "-" && !M.Chosen && M.StripJson().Contains("\"account\":null"), "0.5.7: no agent-manrae-account.txt: None (account null to the pages), claiming nothing");
+        ChartBridgeAgents.Stop();
+        File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
         ChartBridgeAgents.Start(false);
         Check(ChartBridgeAgents.Enabled && ChartBridgeAgents.All().Length == 2 && M != null && D != null && M != D, "two agents, one object each");
         string[] lines = File.ReadAllLines(Path.Combine(Dir, "agent-manrae-secret.txt"));
@@ -302,7 +310,7 @@ public static class AgentHarness
         ChartBridgeAgents.Stop(); ChartBridgeAgents.Start(false);
         string fresh = File.ReadAllLines(Path.Combine(Dir, "agent-manrae-secret.txt"))[2];
         Check(fresh != secret && ChartBridgeAgents.UpgradeCheck("manrae", null, secret, true) == 403 && ChartBridgeAgents.UpgradeCheck("manrae", null, fresh, true) == 101, "deleted: a new secret at the next start, the old one refused");
-        Check(M.Account == "Sim101" && D.Account == "SIM-B", "no account file: Sim101; demob's file: SIM-B");
+        Check(M.Account == "Sim101" && D.Account == "SIM-B", "manrae's file: Sim101; demob's file: SIM-B");
         Check(Logged("agent channel ON for manrae: it may connect at ws://localhost:8765/agent/manrae"), "the Output window says where each agent connects");
 
         ac = new ChartBridgeClient(null, -100);
@@ -937,7 +945,7 @@ public static class AgentHarness
         Mode("manrae", "auto");
         A(Good(NewId()));
         Check(AgentReject().Contains("agent-manrae-account.txt") && FileText("agent-manrae-account.txt") == "# made-up\n# test\naccount\tSim101\naccount\tSIM-D\n", "a plan refused; the account file never written over");
-        File.Delete(acct);
+        File.WriteAllLines(acct, new[] { "# made-up", "# test", "account\tSim101" });   // 0.5.7: back on Sim101 (no file would be None)
         // the day file
         string day = Path.Combine(Dir, "agent-manrae-day.txt");
         string dayWas = FileText("agent-manrae-day.txt");
@@ -1327,62 +1335,61 @@ public static class AgentHarness
     // agents; it trades Sim101 while nothing else uses it, and stands down (its unfilled entry cancelled) the moment something does.
     static void ChosenAccounts()
     {
-        // the bot on, on a made-up SIM-Z; manrae back on its unchosen default
+        // the bot on, on a made-up SIM-Z; manrae with no account file: None (0.5.7, DECISION 2026-10-14e; until 0.5.6 its
+        // unchosen default Sim101)
         File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSIM-Z" });
         ChartBridgeSwitches.Note("bot", "on");
         ChartBridgeBot.Start(false);
         File.Delete(Path.Combine(Dir, "agent-manrae-account.txt"));
         Restart();
         SettleAll();
-        Check(M.Account == "Sim101" && !M.Chosen && M.AccountConflict() == null && ChartBridgeAgents.AgentOfAccount("Sim101") == null,
-              "manrae on its unchosen default Sim101: nothing else uses it, and it claims it against nobody");
-        // the bot chooses Sim101 while the agent sits on its default: accepted; the agent stands down
+        Check(M.Account == "-" && !M.Chosen && M.AccountConflict() == null && ChartBridgeAgents.AgentOfAccount("Sim101") == null && ChartBridgeAgents.AgentOfAccount("-") == null,
+              "0.5.7: manrae with no account file is on None: it claims no account against anyone");
+        Check(M.StripJson().Contains("\"account\":null") && M.StripJson().Contains("\"standDown\":\"agent manrae's account is None: no new entries until an account is chosen on the Agent tab\"") &&
+              Last(agentOut, "welcome").Contains("\"account\":null"), "0.5.7: None: the page and the agent see account null, and why nothing trades");
         P("{\"type\":\"botAccount\",\"cid\":\"b2\",\"account\":\"Sim101\"}");
-        Check(!PageReject().Contains("\"cid\":\"b2\"") && ChartBridgeBot.BotAccount == "Sim101", "botAccount Sim101 while an agent sits on its unchosen default: accepted: " + PageReject());
-        Tick();
-        Check(M.StripJson().Contains("\"standDown\":\"Sim101 is also the bot's account: choose an account for agent manrae"), "the agent stands down in plain words");
+        Check(!PageReject().Contains("\"cid\":\"b2\"") && ChartBridgeBot.BotAccount == "Sim101" && M.AccountConflict() == null, "0.5.7: the bot may take Sim101 while the agent is on None: " + PageReject());
         Mode("manrae", "auto");
-        Check(PageReject().Contains("auto refused: Sim101 is also the bot's account"), "its auto is refused");
         int calls = sim.Calls.Count;
         Last2();
         M.OnMessage(ac, Good(NewId()));
-        Check(AgentReject().Contains("Sim101 is also the bot's account") && sim.Calls.Count == calls, "check 2 refuses its plans");
-        // the reverse order: the bot moves away (to a made-up SIM-E); the agent CHOOSES Sim101; then the bot may not have it
+        Check(AgentReject().Contains("agent manrae's account is None: no new entries until an account is chosen on the Agent tab") && sim.Calls.Count == calls, "0.5.7: None: check 2 refuses its plans with that reason: " + AgentReject());
+        // the bot moves away (to a made-up SIM-E); the agent CHOOSES Sim101; then the bot may not have it
         NewAccount("SIM-E", Provider.Simulator);
         ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-B, SIM-C, SIM-D, SIM-E");
         P("{\"type\":\"botAccount\",\"cid\":\"b3\",\"account\":\"SIM-E\"}");
-        Check(!PageReject().Contains("\"cid\":\"b3\"") && ChartBridgeBot.BotAccount == "SIM-E" && M.AccountConflict() == null, "the bot moves to SIM-E: the agent on its default stands up: " + PageReject());
+        Check(!PageReject().Contains("\"cid\":\"b3\"") && ChartBridgeBot.BotAccount == "SIM-E", "the bot moves to SIM-E: " + PageReject());
         P(AccountMsg("manrae", "Sim101"));
         Check(M.Chosen && M.Account == "Sim101" && FileText("agent-manrae-account.txt").Contains("account\tSim101"), "manrae chooses Sim101 on the page: it is its own now");
         P("{\"type\":\"botAccount\",\"cid\":\"b4\",\"account\":\"Sim101\"}");
         Check(PageReject().Contains("Sim101 is agent manrae's account: the bot does not trade it") && ChartBridgeBot.BotAccount == "SIM-E", "then botAccount Sim101 is refused");
         P("{\"type\":\"copierFollower\",\"cid\":\"c9\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
         Check(PageReject().Contains("Sim101 is agent manrae's account: the copier does not trade it"), "and the copier may not take it either");
+        // None from the page: account null; saved as account<TAB>-, which a ChartBridge before 0.5.7 reads as an account NinjaTrader
+        // does not have (no break: nothing trades there either)
+        P("{\"type\":\"agentAccount\",\"cid\":\"an\",\"agent\":\"manrae\",\"account\":null}");
+        Check(M.Account == "-" && !M.Chosen && FileText("agent-manrae-account.txt").Contains("account\t-") && Last(agentOut, "welcome").Contains("\"account\":null") && ChartBridgeAgents.AgentOfAccount("Sim101") == null,
+              "0.5.7: agentAccount null: None, saved as account<TAB>-, the agent told, Sim101 free again: " + PageReject());
+        Restart();
+        Check(M.Account == "-" && !M.Chosen && Last(agentOut, "agentState").Contains("\"standDown\":\"agent manrae's account is None"), "0.5.7: a restart keeps None");
+        P("{\"type\":\"agentAccount\",\"cid\":\"an\",\"agent\":\"manrae\",\"account\":\"-\"}");
+        Check(PageReject().Contains("account must be an account name, or null for None"), "0.5.7: \"-\" is never an account name from the page");
         ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off");
         File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSIM-Z" });
-        // two agents: an unchosen default never blocks a chosen account; the unchosen one stands down
-        File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
+        // two agents on None clash with nobody; a chosen account is never blocked by an agent on None
+        File.Delete(Path.Combine(Dir, "agent-demob-account.txt"));
         File.Delete(Path.Combine(Dir, "agent-manrae-account.txt"));
         Restart();
-        Check(D.Chosen && !M.Chosen && D.AccountConflict() == null && M.AccountConflict() != null && M.AccountConflict().Contains("Sim101 is also agent demob's account"),
-              "demob CHOSE Sim101 (its file), manrae is on its default: manrae stands down, demob does not");
-        File.Delete(Path.Combine(Dir, "agent-demob-account.txt"));
+        Check(M.AccountConflict() == null && D.AccountConflict() == null && M.Account == "-" && D.Account == "-", "0.5.7: both on None: no clash (None is nobody's account)");
+        File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
         Restart();
-        Check(M.AccountConflict() != null && D.AccountConflict() != null, "both on their unchosen default Sim101: both stand down");
+        Check(D.Chosen && !M.Chosen && D.AccountConflict() == null && M.AccountConflict() == null, "0.5.7: demob chose Sim101, manrae on None: neither clashes");
+        P("{\"type\":\"copierFollower\",\"cid\":\"c10\",\"account\":\"SIM-D\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+        Check(!PageReject().Contains("\"cid\":\"c10\"") && M.AccountConflict() == null, "0.5.7: the copier takes an account while an agent is on None: no clash");
+        P("{\"type\":\"copierFollower\",\"cid\":\"c11\",\"account\":\"SIM-D\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
         File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSIM-B" });
+        File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
         Restart();
-        Mode("manrae", "auto");
-        // the copier takes Sim101 while manrae (unchosen) has a working entry: accepted; the entry is cancelled at once
-        Last2();
-        string id = NewId();
-        Order e = PlacedNow(id, Good(id));
-        Check(e != null && IsLive(e), "manrae on its unchosen default, nothing else on Sim101: it trades Sim101 (the contract's default)");
-        P("{\"type\":\"copierFollower\",\"cid\":\"c10\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
-        Check(!PageReject().Contains("\"cid\":\"c10\""), "copierFollower Sim101 while an agent sits on its default: accepted");
-        Tick();
-        Check(e != null && e.OrderState == OrderState.Cancelled && Answer().Contains("\"answer\":\"expired\"") && Answer().Contains("stands down: Sim101 is also a copier follower") &&
-              Last(page, "status").Contains("Agent manrae stands down: Sim101 is also a copier follower"),
-              "the moment the copier uses Sim101, manrae stands down and its unfilled entry is cancelled: " + Answer());
         Settle(sim);
     }
 
@@ -2526,8 +2533,12 @@ public static class AgentHarness
             string say = "agent manrae holds 1 on SIM-E MNQ with no trade record (ChartBridge restarted); only its own stop protects it";
             Check(IsLive(rs) && !sime.Calls.Skip(c0).Any() && ChartBridgeAgents.EntryCheck("page", sime, "MNQ") != null, "D1: after the restart its stop stays and the pair is still the agent's (the owner lock holds)");
             Check(page.Skip(s0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(say)) == 1, "D1: the lost-trade error at once");
+            int s1 = N(page);
             Advance(61000);
-            Check(page.Skip(s0).Count(x => x.Contains(say)) == 2, "D1: and every 60 s");
+            // 0.5.7: its flatten job waits for the open on MNQ: the lost-trade error is held (not repeated beside the job's own
+            // NOT FLAT error every 60 s), never dropped
+            Check(page.Skip(s0).Count(x => x.Contains(say)) == 2 && page.Skip(s1).Count(x => x.Contains("\"level\":\"error\"") && x.Contains("NOT FLAT") && x.Contains("MNQ on SIM-E still shows 1")) >= 1,
+                  "D1 (0.5.7, review of #47): its flatten job waits on MNQ: the lost-trade error is held 30 s at most, then every 60 s as before, beside the job's NOT FLAT error");
             et = new DateTime(2026, 10, 12, 18, 0, 30);
             for (int q = 0; q < 6; q++) { Last2(); Advance(1000); }
             Check(!IsLive(rs) && sime.Calls.Skip(c0).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")), "D1: at the open the flatten cancels that stop and closes the 1");
@@ -2939,6 +2950,237 @@ public static class AgentHarness
         int rjF = Count(page, "reject");
         P(Rules("MNQ", ",\"maxQtyMNQ\":5", "10:00", "14:00", "15:30", 900, 3, 2));
         Check(Count(page, "reject") == rjF && FileText("agent-manrae-rules.txt").Contains("maxTrades\t3"), "0.5.4: flat: every rule changes as before");
+    }
+
+    // ------------------------------------------------------------ 0.5.7: the plan id on an agent's orders
+    static string OrderMsgOf(int from, Order o)
+    {
+        string id = ChartBridgeOrders.AgentIdFor(o);
+        lock (page) return page.Skip(from).LastOrDefault(x => x.StartsWith("{\"type\":\"order\"") && x.Contains("\"id\":\"" + id + "\"")) ?? "";
+    }
+    static void ForgetPlanTags() { ((Dictionary<string, string>)typeof(ChartBridgeAgents).GetField("PlanTags", PS).GetValue(null)).Clear(); }
+
+    static void PlanIdOnOrders()
+    {
+        Fresh();   // SIM-E, auto, 10:00
+        string pid = NewId(), day = Path.Combine(Dir, "agent-manrae-day.txt");
+        int s0 = N(page);
+        Order e = PlacedOn(sime, Good(pid));
+        Check(e != null, "0.5.7: an entry placed for " + pid + ": " + AgentReject());
+        if (e == null) return;
+        string tag = Tag(e), m = OrderMsgOf(s0, e), first;
+        lock (page) first = page.Skip(s0).FirstOrDefault(x => x.StartsWith("{\"type\":\"order\"") && x.Contains("\"by\":\"agent:manrae\"")) ?? "";
+        Check(m.Contains("\"by\":\"agent:manrae\",\"planId\":\"" + pid + "\",\"tradable\":") && first.Contains("\"planId\":\"" + pid + "\""),
+              "0.5.7: the page's order message for its entry carries planId, from the first one: " + m);
+        Check(!Last(agentOut, "order").Contains("planId"), "0.5.7: the agent's own order message is unchanged (no planId)");
+        Check(File.ReadAllLines(day).Contains("#tagplan\t" + tag + "\t" + pid), "0.5.7: the day file keeps the entry's plan (#tagplan): " + FileText("agent-manrae-day.txt").Replace("\n", " | "));
+        Check(File.ReadAllLines(day).Where(l => l.Trim().Length > 0 && !l.StartsWith("#")).All(l => Regex.IsMatch(l, "^(session|trade|plan|entry|span|standDown|carried)\t")),
+              "0.5.7: every line a ChartBridge before 0.5.7 reads is one it knows (#tagplan is a comment to it)");
+        Fill(e, 1, 24999);
+        Advance(500);
+        List<Order> legs = Legs(sime, e);
+        Check(legs.Count == 2 && legs.All(l => OrderMsgOf(s0, l).Contains("\"planId\":\"" + pid + "\"")), "0.5.7: its stop and target carry the same planId: " + string.Join(" | ", legs.Select(l => OrderMsgOf(s0, l))));
+        // a restart: the plan of each tag is read back from the day file (the memory is gone)
+        ForgetPlanTags();
+        Restart();
+        Mode("manrae", "auto");
+        Check(Last(agentOut, "agentState").Contains("\"standDown\":null"), "0.5.7: a day file with #tagplan lines loads (no stand-down)");
+        int s1 = N(page);
+        Order stop = legs.FirstOrDefault(l => l.Name.Contains(" stop "));
+        if (stop != null) { stop.StopPrice = stop.StopPrice + 0.25; Update(stop); }
+        Check(stop != null && OrderMsgOf(s1, stop).Contains("\"planId\":\"" + pid + "\""), "0.5.7: after a restart its stop's order message still carries planId (read back from #tagplan): " + (stop != null ? OrderMsgOf(s1, stop) : "no stop"));
+        // a page order on another account: no planId
+        Settle(sime);
+        // older files: no #tagplan line loads as before (no planId known), and a malformed one is skipped, never fatal
+        Fresh();
+        ForgetPlanTags();
+        File.WriteAllLines(day, new[] { "# made-up", "# test", "session\t2026-10-09", "plan\tplan-old", "#tagplan\tZZZZ\tbad", "#tagplan\tabcdef12" });
+        Restart();
+        Mode("manrae", "auto");
+        Check(Last(agentOut, "agentState").Contains("\"standDown\":null"), "0.5.7: a day file without good #tagplan lines (older, or malformed) loads, no stand-down");
+        A(Good("plan-old"));
+        Check(AgentReject().Contains("plan id plan-old was already used today"), "0.5.7: and its other lines are read as before");
+        int s2 = N(page);
+        Order e2 = PlacedOn(sime, Good(NewId()));
+        Check(e2 != null && !OrderMsgOf(s2, e2).Contains("\"planId\":\"bad\""), "0.5.7: a malformed #tagplan line gives no planId");
+        // an entry placed without a plan id (the order path alone): no planId, never a wrong one
+        Settle(sime);
+        ForgetPlanTags();
+        Fresh();
+        Order direct;
+        int s3 = N(page);
+        string why = ChartBridgeOrders.PlaceAgentEntry("manrae", "{\"type\":\"order\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24999,\"bracket\":{\"stop\":8,\"target\":16}}", out direct);
+        Check(why == null && direct != null && OrderMsgOf(s3, direct).Contains("\"by\":\"agent:manrae\"") && !OrderMsgOf(s3, direct).Contains("planId"), "0.5.7: an agent order with no plan known carries no planId: " + (why ?? OrderMsgOf(s3, direct)));
+        Settle(sime);
+    }
+
+    // ------------------------------------------------------------ 0.5.7: the lost-trade error held while its own flatten runs
+    static void LostHeldInFlatten()
+    {
+        string lost = "agent manrae had an open trade on SIM-E MNQ and its legs are gone";
+        foreach (string how in new[] { "ends not flat", "ends flat", "runs on" })
+        {
+            string tagName = "0.5.7 (" + how + ")";
+            Fresh();
+            ReplayedSet().Remove("SIM-E");   // the stale record below is looked at only once the executions were read again
+            File.WriteAllLines(Path.Combine(Dir, "agent-manrae-day.txt"), new[] { "# made-up", "# test", "session\t2026-10-09", "trade\tabcdef12\topen" });
+            Restart();
+            Mode("manrae", "auto");
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, tagName + ": an entry was placed: " + AgentReject()); ReplayedSet().Add("SIM-E"); return; }
+            Fill(e, 1, 24999);
+            Advance(500);
+            Hold = (kd, o) => kd == "cancel";   // NinjaTrader does not confirm the flatten's cancels: the job keeps running
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            Last2();
+            Advance(1000);
+            int s0 = N(page);
+            ReplayedSet().Add("SIM-E");
+            Advance(1500);
+            Check(!FileText("agent-manrae-day.txt").Contains("abcdef12"), tagName + ": the stale record is dropped while its flatten job runs on MNQ");
+            Check(!Any(page, s0, lost) && Logged(lost + "; ChartBridge no longer treats the position as the agent's: flatten or protect it by hand (held while ChartBridge's own flatten runs on MNQ)"),
+                  tagName + ": the lost-trade error is held (logged, no alarm to the pages) while the job runs");
+            Advance(20000);
+            Check(!Any(page, s0, lost) && Any(page, s0, "NOT FLAT"), tagName + ": still held 21 s on (the job's own NOT FLAT error speaks meanwhile)");
+            if (how == "runs on")
+            {
+                // review of #47: a hold never lasts over 30 s: raised then, the job still running, and every 60 s as before
+                Advance(10000);
+                int n1 = page.Skip(s0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(lost));
+                Check(n1 == 1, tagName + ": 30 s on, the job still running, the held error is raised (" + n1 + ")");
+                Advance(61000);
+                Check(page.Skip(s0).Count(x => x.Contains(lost)) == 2, tagName + ": and every 60 s from then, the job still running");
+                Hold = null;
+                foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+                SetPos(sime, mnq, 0); ClearMoves();
+                Advance(1000);
+            }
+            else
+            {
+                Hold = null;
+                foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+                int s1 = N(page);
+                if (how == "ends flat")
+                {
+                    SetPos(sime, mnq, 0); ClearMoves();
+                    Advance(3000);
+                    Check(!Any(page, s0, lost) && Logged("agent manrae: the lost-trade error held on SIM-E MNQ is not raised: the pair is flat"), tagName + ": the job ends flat: the held error is never raised");
+                }
+                else
+                {
+                    SetPos(sime, mnq, -2); ClearMoves();   // his own short 2 meanwhile: the job ends, the pair not flat
+                    Advance(5000);
+                    int n = page.Skip(s1).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(lost));
+                    Check(n >= 1, tagName + ": the job ends with the pair not flat: the held error is raised then (" + n + ")");
+                    Advance(61000);
+                    Check(page.Skip(s1).Count(x => x.Contains(lost)) > n, tagName + ": and every 60 s from then, as before");
+                    SetPos(sime, mnq, 0); ClearMoves();
+                    Advance(1000);
+                }
+            }
+            Settle(sime);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        }
+
+        // review of #47: a job that does not own the pair (it never says NOT FLAT) holds nothing: the error goes at once
+        Fresh();
+        SetPos(sime, mnq, 1);
+        ClearMoves();
+        Type jt = typeof(ChartBridgeAgent).GetNestedType("FlatJob", BindingFlags.NonPublic);
+        object job = Activator.CreateInstance(jt, true);
+        jt.GetField("Root").SetValue(job, "MNQ"); jt.GetField("Inst").SetValue(job, mnq); jt.GetField("Owned").SetValue(job, false); jt.GetField("StartMs").SetValue(job, clock);
+        System.Collections.IDictionary flats = (System.Collections.IDictionary)typeof(ChartBridgeAgent).GetField("Flats", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
+        object sync = typeof(ChartBridgeAgent).GetField("Sync", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
+        lock (sync) flats["MNQ 12-26"] = job;
+        int u0 = N(page);
+        typeof(ChartBridgeAgent).GetMethod("TradeLost", BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(string), typeof(string) }, null).Invoke(M, new object[] { "MNQ", null });
+        Check(page.Skip(u0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(lost)) == 1, "0.5.7 (review of #47): a flatten job that does not own the pair holds nothing: the lost-trade error at once");
+        lock (sync) flats.Remove("MNQ 12-26");
+        Settle(sime);
+        Advance(1000);
+
+        // review of #47: None from the page while the agent's account still holds a position (a trade it lost: not Exposed)
+        Fresh();
+        SetPos(sime, mnq, 1);
+        ClearMoves();
+        Mode("manrae", "shadow");
+        P("{\"type\":\"agentAccount\",\"cid\":\"an\",\"agent\":\"manrae\",\"account\":null}");
+        Check(M.Account == "SIM-E" && PageReject().Contains("agent manrae's account SIM-E has a position or a working order: choose None when it is flat"),
+              "0.5.7 (review of #47): None is refused while the agent's account holds a position, even one it no longer owns: " + PageReject());
+        Settle(sime);
+        Advance(1000);
+        P("{\"type\":\"agentAccount\",\"cid\":\"an\",\"agent\":\"manrae\",\"account\":null}");
+        Check(M.Account == "-", "0.5.7: flat: None accepted");
+        File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSIM-E" });
+        Restart();
+    }
+
+    // ------------------------------------------------------------ 0.5.7: the daily reset to None, agents
+    static void DailyReset()
+    {
+        Fresh();   // manrae on SIM-E (chosen), auto; demob on SIM-B
+        Order e = PlacedOn(sime, Good(NewId()));
+        Check(e != null, "0.5.7 reset: manrae has a working entry: " + AgentReject());
+        Func<DateTime> was = ChartBridgeBranches.ClockUtc;
+        ChartBridgeBranches.Forget();
+        try { File.Delete(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+        ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 9, 21, 5, 0, DateTimeKind.Utc);   // 17:05 EDT
+        try
+        {
+            int s0 = N(page);
+            ChartBridgeBranches.Check();
+            Check(M.Account == "SIM-E" && Any(page, s0, "Daily reset (17:00 ET): agent manrae stays on SIM-E: it has a position or a working order there"),
+                  "0.5.7 reset: manrae with a working entry keeps SIM-E; the pages get a note naming it");
+            Check(D.Account == "-" && FileText("agent-demob-account.txt").Contains("account\t-") && page.Skip(s0).Any(x => x.Contains("Daily reset (17:00 ET): ") && x.Contains("agent demob") && x.Contains(" on None now")) && D.StripJson().Contains("\"account\":null"),
+                  "0.5.7 reset: demob, flat with nothing working on SIM-B: None, saved, the pages told");
+            Check(Logged("agent demob account None (nothing trades), was SIM-B, by the daily reset (17:00 ET)"), "0.5.7 reset: logged");
+        }
+        finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
+        Settle(sime);
+        File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSIM-B" });
+        Restart();
+
+        // the bot and the copier OFF (the ruling of 2026-10-14: a branch that is off is reset too, from its file, so it never comes
+        // back on with yesterday's account); a position or a working order on its account still skips it, with the note
+        bool botWas = ChartBridgeBot.Enabled, copierWas = ChartBridgeCopier.Enabled;
+        string botFile = Path.Combine(Dir, "bot-account.txt"), copFile = Path.Combine(Dir, "copier.txt");
+        string botBefore = FileText("bot-account.txt"), copBefore = File.Exists(copFile) ? FileText("copier.txt") : null;
+        ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off");
+        ChartBridgeCopier.Stop(); ChartBridgeSwitches.Note("copier", "off");
+        File.WriteAllLines(botFile, new[] { "# made-up", "# test", "account\tSIM-C" });
+        File.WriteAllLines(copFile, new[] { "# made-up", "leader\tSIM-D", "mode\texecutions", "follower\tEVAL-A\toff\t1\tmicro\t0" });
+        SetPos(simc, mnq, 1);
+        ChartBridgeBranches.Forget();
+        try { File.Delete(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+        ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 12, 21, 5, 0, DateTimeKind.Utc);   // a Monday, 17:05 EDT
+        try
+        {
+            Check(!ChartBridgeBot.Enabled && !ChartBridgeCopier.Enabled, "0.5.7 reset (off): the bot and the copier are off");
+            int s0 = N(page);
+            ChartBridgeBranches.Check();
+            Check(FileText("bot-account.txt").Contains("account\tSIM-C") && Any(page, s0, "Daily reset (17:00 ET): the bot (off) stays on SIM-C: it has a position or a working order there"),
+                  "0.5.7 reset (off): the bot off with a position on its account keeps it, with a note naming it");
+            Check(!FileText("copier.txt").Contains("leader\t") && FileText("copier.txt").Contains("follower\tEVAL-A\toff") && FileText("copier.txt").Contains("mode\texecutions") &&
+                  page.Skip(s0).Any(x => x.Contains("Daily reset (17:00 ET): ") && x.Contains(" and the copier's leader are on None now")),
+                  "0.5.7 reset (off): the copier off, its leader flat: the leader line goes, every other line stays: " + FileText("copier.txt").Replace("\n", " | "));
+            Settle(simc);
+            ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 13, 21, 5, 0, DateTimeKind.Utc);   // the next day, flat
+            ChartBridgeBranches.Check();
+            Check(FileText("bot-account.txt").Contains("account\t-") && Logged("bot account None (nothing trades), was SIM-C, by the daily reset (17:00 ET; the bot channel is off)"),
+                  "0.5.7 reset (off): the next day, flat: the bot off goes to None (bot-account.txt account<TAB>-)");
+            ChartBridgeAgents.RefreshFiles();
+            Check(ChartBridgeAgents.BotAccountForAgents() == "-", "0.5.7 reset (off): the agents read the bot's None (it clashes with nobody)");
+        }
+        finally
+        {
+            ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget();
+            Settle(simc);
+            File.WriteAllText(botFile, botBefore);
+            if (copBefore != null) File.WriteAllText(copFile, copBefore); else File.Delete(copFile);
+            if (copierWas) { ChartBridgeSwitches.Note("copier", "on"); }
+            if (botWas) { ChartBridgeSwitches.Note("bot", "on"); ChartBridgeBot.Start(false); }
+            Restart();
+        }
     }
 
     static void Review052()

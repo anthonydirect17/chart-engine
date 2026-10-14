@@ -128,7 +128,7 @@
 //   EVAL-B, FUNDED-C, SIM-F1, SIM-F2 and Sim101 (tradeAccounts Sim101, EVAL-A pre-checked unless --trade-accounts says
 //   otherwise); EVAL-A holds 2 MNQ and a working sell limit, FUNDED-C a working NQ buy limit, EVAL-B loses its connection
 //   and goes Gone after the grace; SIM-F1 (3 micro) and SIM-F2 (1 mini) are copier followers of Sim101, stood down until
-//   Re-arm; the bot trades Sim101 until the page chooses another account (botAccount; EVAL-A is a LIVE one). Sample data and
+//   Re-arm; the bot is on None until the page chooses an account (botAccount; EVAL-A is a LIVE one; ChartBridge 0.5.7). Sample data and
 //   made-up names only.
 //   --v3-off=copier,bot             those v3 switches off, as config.txt's off lines (every switch is on by default since
 //                                   Anthony's 2026-10-07 decision: no switches, no Sim locks)
@@ -143,7 +143,9 @@
 //   /test/restart?lost=1 (managed strategies resume, or with lost=1 cannot), /test/v3 (the v3 state as JSON).
 //   --agents=demo                   (with --v3) ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1, docs/AGENT_TAB.md):
 //                                   config.txt's `agents` list; hello says fake-0.5.4. The made-up accounts SIM-AG1 and SIM-AG2 (Sim, checked)
-//                                   are added for agents to take; every agent starts on Sim101 (no account file) in shadow.
+//                                   are added for agents to take; every agent starts on None (no account file; ChartBridge 0.5.7) in shadow.
+//   --agent-accounts=demo:SIM-AG1   an agent starts on that account, as if chosen (agent-<id>-account.txt)
+//   --bot-account=Sim101            the bot starts on that account, as if chosen (bot-account.txt); without it: None
 //                                   The agents listen on /agent/<id> (no Origin, header X-ChartBridge-Agent: the secret).
 //   --agent-any-time                no entry window and no flat time for the agents (smokes run at any hour)
 //   With --agents and --test-controls (POST): /test/agent-secret?agent= (tests only), /test/agent-connect?agent=&name=&build=
@@ -484,7 +486,8 @@ const deskOpts = {
 /* --v3 with --clock-offset: the desk's clock (fills, execs, proposals, expiries, the agents' flat hours) is the exchange clock too,
    so a smoke can run at a chosen time of day whatever the wall clock says (the page's clock pinned to the same offset) */
 const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { now: () => Date.now() + CLOCK_OFFSET * 1000, switches: Object.fromEntries(SWITCHES.map(k => [k, !V3_OFF.includes(k)])), accountList: V3_ACCOUNTS.concat(AGENT_ACCOUNTS),
-  graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ', agents: AGENTS, agentAnyTime: !!flag('agent-any-time') })) : new OrderDesk(deskOpts);
+  graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ', agents: AGENTS, agentAnyTime: !!flag('agent-any-time'), botAccount: flagValue('bot-account') || null,
+  agentAccounts: Object.fromEntries(flagValue('agent-accounts').split(',').map(x => x.split(':').map(y => y.trim())).filter(x => x.length === 2 && x[0] && x[1])) })) : new OrderDesk(deskOpts);
 const tapeStats = V3 ? new TapeStats() : null;          // 0.4.0: the tape counters are always on (no switch)
 const BOT_SECRET = crypto.randomBytes(32).toString('hex');   // ChartBridge keeps it in bot-secret.txt; never printed
 const AGENT_SECRETS = Object.fromEntries(AGENTS.map(id => [id, crypto.randomBytes(32).toString('hex')]));   // agent-<id>-secret.txt; never printed

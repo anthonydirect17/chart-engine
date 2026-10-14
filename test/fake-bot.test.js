@@ -52,7 +52,7 @@ test('fake-bot: reads its secret from a bot-secret.txt (two # lines, 64 hex), ne
 
 test('fake-bot against the fake bridge: refusals, welcome, ticks, shadow, copilot (unanswered never sent, accepted placed)', async () => {
   const { connectBot, wsConnect } = await import('./fake-bot.mjs');
-  const { port, child } = await bridge();
+  const { port, child } = await bridge(['--bot-account=Sim101']);   // ChartBridge 0.5.7: None until chosen; here Sim101 chosen
   try {
     const own = 'http://localhost:' + port;
     const secret = (await post(port, '/test/bot-secret')).json.secret;

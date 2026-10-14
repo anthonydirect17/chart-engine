@@ -1,5 +1,60 @@
 # Changelog
 
+## ChartBridge 0.5.7 and chart 1.25.0 (2026-10-14): the plan id on agent orders, no TradeLost alarm during a flatten, None in every tab
+
+DECISION 2026-10-14d (phase 2, the plan id) and 2026-10-14e (None in every tab, the daily reset), and the TradeLost hold.
+**It needs the recompile: the page needs ChartBridge 0.5.7** (`minChartBridge` raised to 0.5.7: None and planId); a PC on an
+older ChartBridge keeps the page it has, and the PC updater waits until ChartBridge 0.5.7 is compiled there. After #46.
+
+- **The plan id on an agent's orders** (DECISION 2026-10-14d: "R per trade: matched from the fill to its plan ... Phase 2:
+  ChartBridge sends the plan id with each agent order so R is exact"). ChartBridge notes each entry's plan id for its tag
+  before the order exists, and a v3 page's `order` message for the agent's entry, its legs and its flat close carries
+  `planId` (`ChartBridgeAccounts.ForPage`, next to `by`); the agent's own `order` is unchanged. The day file keeps it as
+  `#tagplan<TAB><tag><TAB><id>` for today's trades, working entries and carried trades: it starts with `#` because a
+  ChartBridge before 0.5.7 stands an agent down for any line it does not know and skips comments; a malformed one is skipped.
+  The Agent tab takes the plan of that id (placed or proposed only: a refused plan may repeat an id) and falls back to the
+  matching by root, side, kind, size, price and ticks; R still from the plan's own `riskDollars`. `smoke:agent-l5` adds a
+  trade where a lookalike plan a cent off leaves the matching "not reported" and planId gives +2.00 R.
+- **No TradeLost alarm while ChartBridge's own flatten runs on that root.** The lost-trade error ("its legs are gone") is
+  held while any flatten job of that agent is on that root (its own cancels take the legs away): logged, not sent, not
+  repeated, never dropped. Once no job runs there it is raised (then every 60 s, as before) if the pair is still not flat,
+  and forgotten if it is. The bot has no such alarm or flatten job of its own (its flatten is NinjaTrader's, already kept
+  apart from the missing-stop alarm).
+- **None in every tab** (DECISION 2026-10-14e: every branch offers None, and None means nothing trades). The order ticket's
+  picker offers None first and has no Sim101 fallback (`LivePrefs.orderAccount`): on None nothing is sent ("No account
+  (None): nothing was sent. Pick an account to trade.") and Armed stays off. The Bot and Agent tabs' pickers offer None and
+  show it; `botAccount` and `agentAccount` take `"account": null`, refused only while that branch has a position or a working
+  entry. No `bot-account.txt` or `agent-<id>-account.txt` is None (until 0.5.6 Sim101; this PC's bot and agents with no
+  account file start on None after the update); None is saved as `account<TAB>-`, which a ChartBridge before 0.5.7 reads as
+  an account NinjaTrader does not have, so nothing breaks. On None every new entry is refused with a plain reason; exits,
+  flattens and anything open are never blocked; None clashes with nobody. The copier's leader keeps its none; followers have
+  none of their own.
+- **The daily reset.** Once per day in the 17:00 to 18:00 ET break (New York time, daylight saving included), ChartBridge
+  puts the bot, each agent and the copier's leader on None when their account is flat with no working order, the bot and the
+  copier whether or not their switch is on (off: in their files), so no branch starts the day on yesterday's account. One
+  with a position or a working order is skipped and the pages get a note naming it (also on sign-in in that break). The day
+  it ran is kept in `daily-reset.txt`, so a restart in the break does not run it again. `ChartBridgeBranches.KeepThroughReset`
+  is the one place an exception would go (a hero on Sim101, still to decide); for now there is none. The ticket's account is
+  each page's own, so the workspace applies the same rule to it (`LivePrefs.ticketReset`, each pick stamped in
+  `live-account-at-v1`; a page closed through the break does it at its next load).
+- **Review of #47 (fixed before merge):**
+  - The ticket's daily reset waited 3 s after trading came on, not for ChartBridge's snapshot: on a slow reconnect it could
+    put the ticket on None while its account held a position. It now waits for the sign-in snapshot of orders and positions
+    (ChartBridge 0.5.7's `orders` list says how many `position` messages follow it: `positions`), never a timer, and never
+    resets while that account has a position or a working order. On None the ticket's Flatten all sends nothing and says to
+    pick an account, as every ticket action (whether it should cover every trade account then is Anthony's to decide).
+  - The bot's None from the page and its daily reset take the bot's PlaceGate (as the agent's do), in Place's lock order.
+  - The lost-trade hold is only for a flatten job that owns the pair (one that does not never says NOT FLAT) and lasts 30 s
+    at most; then the error is raised and repeats every 60 s as before.
+  - An agent's None from the page is refused while its account holds any position or working order (a trade it lost
+    included), the daily reset's own rule, so a lost-trade error can never repeat naming no account.
+- **Tests.** `check:orders` (AgentHarness: planId on the page's orders and through a restart, the day file with and without
+  `#tagplan`, the TradeLost hold ending flat and not flat, None for agents, the reset on and off; BotHarness: None, the file,
+  the reset in EDT and EST, once per day, a restart in the break; CopierHarness: the leader's reset). Unit tests for the
+  pickers, the ticket and `ticketReset`; the fake bridge follows (`--bot-account`, `--agent-accounts`); the smokes that trade
+  from the ticket pick Sim101 first (`smoke-pin.mjs` `ticketOnSim101`), and `smoke:orders`, `smoke:bot`, `smoke:agent` and
+  `smoke:agent-parity` check None. `test/agent-parity.json`: two of its test references renamed, its 128 items unchanged.
+
 ## ChartBridge 0.5.6 and chart 1.24.0 (2026-10-14): feed delay split, PC clock against real data delay
 
 Build list #77, Anthony's spec: "1) ChartBridge checks this PC's clock against an internet time server every few minutes,

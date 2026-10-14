@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { TEST_PIN, enterPin, ticketOnSim101 } from './smoke-pin.mjs';
 import { C as H, hostUrl, waitLive } from './chart-host.mjs';
 
 const require = createRequire(import.meta.url);
@@ -84,7 +84,7 @@ async function openPage(ctx, url) {
 const hostLive = async p => { await waitLive(p, 30000); await p.waitForFunction(() => window.liveChart && window.liveChart.lastBar(), null, { timeout: 30000 }); };
 const wsLive = p => p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
 
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));   // DECISION 2026-10-14e: the ticket starts on None; Sim101 picked, as Anthony would
 try {
   await startBridge(PORT, ['--trading', '--trade-accounts=Sim101', '--max-qty=MNQ:9', '--test-controls', '--version=0.3.8', '--data-037', '--live-rate=60', '--test-pin=' + TEST_PIN]);
   const L = Math.round((await control(PORT, 'hold', { root: 'MNQ' })).last);

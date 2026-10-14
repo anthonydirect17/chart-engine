@@ -16,7 +16,7 @@
  *     (ChartBridge 0.4.0 review 2). Only those are the bot's lines; a fill is the bot's only when one of those orders is
  *     seen to fill it (BotCore.botFillLedger). Anthony's own orders on the bot's account and root stay his.
  *   - The bot's account (Anthony 2026-10-07: no Sim lock): the account he chooses (`botAccount`, kept by ChartBridge in
- *     bot-account.txt, Sim101 by default), Sim or LIVE. The tab shows it plainly with a SIM or LIVE mark (LIVE in the house red
+ *     bot-account.txt, None by default since chart 1.25.0: nothing trades), Sim or LIVE. The tab shows it plainly with a SIM or LIVE mark (LIVE in the house red
  *     of the Armed warning, never animated) next to the mode, in the strip, the pop-out and on every copilot proposal. The
  *     panel's Change account lists the accounts ChartBridge says are tradable, each marked; a LIVE one is asked once in the
  *     page ("The bot will trade LIVE account X. Continue?"), never with a browser dialog.
@@ -120,7 +120,7 @@ function create(o) {
             '<span class="k">Heartbeat</span><span class="v mono" data-k="beat">-</span>' +
           '</div>' +
           '<div class="bt-sec bt-acct-sec" data-no-motion>' +
-            '<div class="bt-kv"><span class="k">Account</span><span class="v"><span class="mono" data-k="account">Sim101</span> <span class="bt-acct" data-k="accountMark"></span></span></div>' +
+            '<div class="bt-kv"><span class="k">Account</span><span class="v"><span class="mono" data-k="account">None</span> <span class="bt-acct" data-k="accountMark"></span></span></div>' +
             '<div class="bt-rails-edit" data-k="acctEdit" hidden><label>Account <select class="ws-sel" data-k="acctSel" aria-label="The bot\'s account"></select></label>' +
               '<button type="button" class="ws-btn primary" data-act="acctSave">Set</button><button type="button" class="ws-btn" data-act="acctCancel">Cancel</button></div>' +
             '<div class="bt-acct-ask" data-k="acctAsk" role="alertdialog" aria-label="Trade a LIVE account" hidden><span data-k="acctAskText"></span>' +
@@ -226,7 +226,7 @@ function create(o) {
     if (S.on && prev) for (const n of BC.noticesFrom(prev, m, BC.fmtUsd, v => fmtPx(v))) { notice(n); log.add({ k: 'n:' + n.kind + ':' + Date.now(), kind: 'notice', text: n.text, level: n.level }); }
     if (prev && prev.mode !== m.mode) log.add({ k: 'mode:' + Date.now(), kind: 'mode', text: 'Mode: ' + (BC.MODE_NAME[m.mode] || m.mode) });
     if (prev && prev.account !== m.account) {
-      const a = BC.botAccount(m), text = 'The bot now trades ' + a.name + (a.mark ? ' (' + a.mark + ')' : '');
+      const a = BC.botAccount(m), text = a.none ? 'The bot is on None: nothing trades until you choose its account' : 'The bot now trades ' + a.name + (a.mark ? ' (' + a.mark + ')' : '');
       log.add({ k: 'acct:' + Date.now(), kind: 'account', text, level: a.mark === 'LIVE' ? 'amber' : '' });
       notice({ kind: 'account', level: a.mark === 'LIVE' ? 'amber' : '', text });
     }
@@ -281,7 +281,7 @@ function create(o) {
   /** a proposal's account and its mark: ChartBridge's own words on the proposal, else the bot's account */
   function propAccount(p) {
     const b = BC.botAccount(S.bot);
-    const name = p && typeof p.account === 'string' && p.account ? p.account : b.name;
+    const name = p && typeof p.account === 'string' && p.account ? p.account : b.label;
     const mark = p && typeof p.sim === 'boolean' ? BC.accountMark(p.sim) : name === b.name ? b.mark : '';
     return { name, mark };
   }
@@ -593,7 +593,7 @@ function create(o) {
     const bot = S.bot || {}, sigs = log.list().filter(e => e.kind === 'signal').length;
     return '<span class="k">In the slot</span><span class="v">Yes, in ' + esc(BC.MODE_NAME[bot.mode] || '-') + '</span>' +
       '<span class="k">Signals today</span><span class="v mono">' + sigs + '</span>' +
-      '<span class="k">Trades today</span><span class="v mono">' + (isNum(bot.trades) ? bot.trades : '-') + ' (' + esc(BC.botAccount(bot).name) + ')</span>' +
+      '<span class="k">Trades today</span><span class="v mono">' + (isNum(bot.trades) ? bot.trades : '-') + ' (' + esc(BC.botAccount(bot).label) + ')</span>' +
       '<span class="k">Result today</span><span class="v mono ' + (bot.pnlToday > 0 ? 'pos' : bot.pnlToday < 0 ? 'neg' : '') + '">' + esc(BC.fmtUsd(bot.pnlToday) || '-') + '</span>';
   }
   function condHtml(b) {
@@ -722,7 +722,7 @@ function create(o) {
     const why = q('[data-k="modeWhy"]');
     if (!why.dataset.refused) { put(why, 'hidden', !research); put(why, 'textContent', research ? 'A Research build runs in Shadow only.' : ''); }
     put(q('[data-k="name"]'), 'textContent', b.name || (b.enabled ? 'No bot program connected' : '-'));
-    put(q('[data-k="account"]'), 'textContent', acc.name);
+    put(q('[data-k="account"]'), 'textContent', acc.label);
     for (const k of ['accountMark', 'modeAcct']) { const el = q('[data-k="' + k + '"]'); put(el, 'textContent', acc.mark); put(el, 'className', 'bt-acct' + (acc.mark === 'LIVE' ? ' live' : acc.mark ? ' sim' : '')); put(el, 'hidden', !acc.mark); }
     attr(q('[data-k="modeAcct"]'), 'title', acc.mark ? 'The bot trades ' + acc.name + (acc.mark === 'LIVE' ? ', a LIVE account' : ', a Sim account') : null);
     put(q('[data-k="acctOpen"]'), 'disabled', !S.signedIn || !!(b.position && b.position.qty));   // ChartBridge refuses a change unless the bot is flat
@@ -841,7 +841,7 @@ function create(o) {
     if (sendBot(r.msg, 'account')) {
       S.acctEdit = false; S.acctAsk = '';
       acctWhy('Sent. ChartBridge keeps it (bot-account.txt) until you change it again.');
-      log.add({ k: 'askacct:' + Date.now(), kind: 'account', text: 'Asked for the bot to trade ' + name + (r.live ? ' (LIVE)' : ' (SIM)') });
+      log.add({ k: 'askacct:' + Date.now(), kind: 'account', text: name ? 'Asked for the bot to trade ' + name + (r.live ? ' (LIVE)' : ' (SIM)') : 'Asked for the bot to be on None (nothing trades)' });
     }
     renderPanel();
   }
@@ -901,7 +901,8 @@ function create(o) {
     else if (a === 'acctOpen') {
       S.acctEdit = true; S.acctAsk = ''; acctWhy('');
       const sel = q('[data-k="acctSel"]'), cur = BC.botAccount(S.bot).name, list = BC.accountChoices(S.accounts, S.bot);
-      sel.replaceChildren(...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.tradable && !c.current; return op; }));
+      // DECISION 2026-10-14e: None first (nothing trades on it)
+      sel.replaceChildren(new Option(BC.NONE_LABEL + ' (nothing trades)' + (cur ? '' : ', now'), ''), ...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.tradable && !c.current; return op; }));
       sel.value = cur;
       if (!list.some(c => !c.current)) acctWhy('No other account is tradable in ChartBridge now: check one on the Accounts tab.');
       renderPanel();
@@ -971,7 +972,7 @@ function create(o) {
     const OT = window.OrderTicket, out = [];
     for (const x of list) { out.push(x); if (OT && OT.plannedLines && x.planned) { try { for (const l of OT.plannedLines(x, tickOf(r)).lines) out.push(l); } catch (e) { /* older order-ticket.js */ } } }
     const pos = S.bot && S.bot.position && S.bot.position.qty ? { qty: S.bot.position.qty, avgPrice: S.bot.position.avgPrice } : null;
-    S.chart.setTrade({ root: r, account: (S.bot && S.bot.account) || 'Sim101', live: false, orders: out, position: pos, pointValue: (S.instruments[r] && +S.instruments[r].pointValue) || 0, qty: 1 });
+    S.chart.setTrade({ root: r, account: (S.bot && S.bot.account) || '', live: false, orders: out, position: pos, pointValue: (S.instruments[r] && +S.instruments[r].pointValue) || 0, qty: 1 });
   }
   function renderTrips() {
     const tr = S.on ? trips() : [];

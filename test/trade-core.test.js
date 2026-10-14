@@ -17,7 +17,8 @@ function rig(opts) {
     LP, prefs: LP.create(storage), fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve('{"token":"t"}') }),
     send: m => R.sent.push(JSON.parse(JSON.stringify(m))), open: () => R.open, sock: () => R,
     root: () => R.root, lastPrice: () => R.last, qty: () => R.qty, pickerAccount: () => (R.picker === null ? core.TR.account : R.picker),
-    wantedAccount: () => o.wanted || '', tick: () => 0.25, served: () => true, fmt: p => p.toFixed(2),
+    wantedAccount: () => (o.wanted === undefined ? 'Sim101' : o.wanted),   // picked on this PC (DECISION 2026-10-14e: '' is None, no Sim101 fallback)
+    tick: () => 0.25, served: () => true, fmt: p => p.toFixed(2),
     flash: (t, l) => R.notes.push((l ? l + ': ' : '') + t),
     later: (fn, ms) => { timers.push({ id: ++tid, at: clock + ms, fn }); return tid; },
     changed: () => { R.renders++; }, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {},
@@ -179,7 +180,7 @@ test('1.17.0: on a pair an AI agent owns, only a market exit that reduces is sen
   // a TradeCore with the workspace's agentOwner hook (the Agent tab answers it)
   const core = TC.create({ LP, prefs: LP.create({ getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) }),
     fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve('{"token":"t"}') }), send: m => sent.push(m), open: () => true, sock: () => ({}),
-    root: () => 'MNQ', lastPrice: () => 100, qty: () => 1, pickerAccount: () => core.TR.account, wantedAccount: () => '', tick: () => 0.25, served: () => true, fmt: p => p.toFixed(2),
+    root: () => 'MNQ', lastPrice: () => 100, qty: () => 1, pickerAccount: () => core.TR.account, wantedAccount: () => 'Sim101', tick: () => 0.25, served: () => true, fmt: p => p.toFixed(2),
     flash: (t, l) => notes.push((l ? l + ': ' : '') + t), later: () => 0, changed: () => {}, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {},
     batch: () => {}, unsent: () => {}, armBlocked: () => '', destroyed: () => false, now: () => (clock += 500),
     agentOwner: (account, root) => (account === 'Sim101' && root === 'MNQ' ? owner : '') });
@@ -366,4 +367,50 @@ test('a framed TradeCore never arms and never sends an order action, even if tra
   assert.deepEqual(R.sent.filter(m => m.type !== 'auth'), [], 'no order action sent: ' + JSON.stringify(R.sent));
   assert.ok(!R.sent.some(m => m.type === 'auth'), 'no sign-in from a frame');
   assert.ok(R.notes.filter(n => /inside another page/.test(n)).length >= 6, R.notes.join(' / '));
+});
+
+test('DECISION 2026-10-14e: the ticket on None (nothing picked, or None picked) sends nothing and says pick an account', () => {
+  const R = rig({ wanted: '' });
+  R.on();
+  assert.equal(R.core.TR.account, '', 'no Sim101 fallback: None');
+  R.core.setArmed(true);
+  R.core.sendOrder('buy', 'market', null);
+  assert.equal(R.sent.length, 0);
+  assert.match(R.notes.pop(), /No account \(None\): nothing was sent\. Pick an account to trade\./);
+  R.core.pickAccount('Sim101');
+  assert.equal(R.core.TR.account, 'Sim101');
+  const R2 = rig({ wanted: 'EVAL-9' });
+  R2.on();
+  assert.equal(R2.core.TR.account, '', 'a last pick ChartBridge does not allow now: None, never Sim101');
+});
+
+test('review of #47: the sign-in snapshot is whole only once the orders list and the positions it counts are in; a drop starts over', () => {
+  const R = rig({});
+  R.on();
+  assert.equal(R.core.TR.snapReady, false, 'trading on is not enough');
+  R.core.message({ type: 'orders', list: [], positions: 2 });
+  assert.equal(R.core.TR.snapReady, false, 'the list, with 2 positions to come');
+  R.pos('Sim101', 'MNQ', 1);
+  assert.equal(R.core.TR.snapReady, false);
+  R.pos('EVAL-1', 'NQ', -1);
+  assert.equal(R.core.TR.snapReady, true, 'both positions in');
+  R.core.message({ type: 'orders', list: [] });
+  assert.equal(R.core.TR.snapReady, false, 'a list with no count (a ChartBridge before 0.5.7): never whole');
+  R.core.message({ type: 'orders', list: [], positions: 0 });
+  assert.equal(R.core.TR.snapReady, true, 'no position to come: whole at the list');
+  R.core.lost('the connection dropped');
+  assert.equal(R.core.TR.snapReady, false, 'a drop: not whole until the next sign-in snapshot');
+});
+
+test('review of #47: on None the ticket\'s Flatten all sends nothing and says to pick an account, as every ticket action', () => {
+  const R = rig({ wanted: '' });
+  R.on();
+  assert.equal(R.core.TR.account, '');
+  R.pos('Sim101', 'MNQ', 1); R.pos('EVAL-1', 'NQ', -2);
+  R.core.flattenAll();
+  assert.deepEqual(R.flattens(), [], 'nothing sent');
+  assert.match(R.notes.pop(), /No account \(None\): nothing was sent\. Pick an account to trade\./);
+  R.core.pickAccount('Sim101');
+  R.core.flattenAll();
+  assert.deepEqual(R.flattens(), ['Sim101 MNQ'], 'with an account picked: that account only');
 });

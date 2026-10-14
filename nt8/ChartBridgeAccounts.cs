@@ -502,14 +502,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Gate 2 for entries right now (the "tradable" flag): the checkmark (or tradeAccounts) and the master switch, Connected.
         private static bool TradableNow(string name, string connection) { return ChartBridgeOrders.AccountTradable(name) && connection == "connected"; }
 
-        // An order message as a page should get it: a v3 page also gets "tradable" (gate 2 for entries now, Gone included) and
-        // (review 2 finding 9) "by" for a bot or copier order (ChartBridgeV3.OrderBy; o null: none).
+        // An order message as a page should get it: a v3 page also gets "tradable" (gate 2 for entries now, Gone included),
+        // (review 2 finding 9) "by" for a bot or copier order (ChartBridgeV3.OrderBy; o null: none) and "planId" for an agent's
+        // entry, its legs and its flat close when ChartBridge knows the plan it came from (ChartBridgeAgents.PlanIdField).
         public static string ForPage(ChartBridgeClient c, Account a, string orderJson, Order o = null)
         {
             if (!IsV3(c) || a == null || !orderJson.EndsWith("}", StringComparison.Ordinal)) return orderJson;
             string gw, by = orderJson.Contains(",\"by\":") ? "" : ChartBridgeV3.OrderBy(o);
+            string plan = orderJson.Contains(",\"planId\":") ? "" : PlanIdOf(o);
             bool tradable = !Gone(a.Name, out gw) && TradableNow(a.Name, ConnectionText(a));
-            return orderJson.Substring(0, orderJson.Length - 1) + by + ",\"tradable\":" + (tradable ? "true" : "false") + "}";
+            return orderJson.Substring(0, orderJson.Length - 1) + by + plan + ",\"tradable\":" + (tradable ? "true" : "false") + "}";
+        }
+
+        private static string PlanIdOf(Order o)
+        {
+            try { return ChartBridgeAgents.PlanIdField(o); }
+            catch (Exception ex) { ChartBridgeServer.Log("order planId error: " + ex.Message); return ""; }
         }
 
         // A live order or position message: to every signed-in page that sees the account (NinjaTrader's thread: no lookups).
@@ -540,6 +548,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string alarm;
             lock (Mem) alarm = startAlarm;
             if (alarm != null) c.Send(Status("error", alarm));
+            ChartBridgeBranches.SignedIn(c);   // 0.5.7: the daily reset's notes during its break
         }
 
         // ---------------------------------------------------------- messages from the page
@@ -1354,5 +1363,127 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeServer.Log("NOTE: " + text);
             ChartBridgeServer.SendToTraders(Status("info", text));
         }
+    }
+
+    // ---------------------------------------------------------------- None and the daily reset (DECISION 2026-10-14e)
+    // Every branch (the order ticket, the bot, each agent, the copier's leader) may be on None, and None means nothing trades: a
+    // new entry is refused with a plain reason; exits, flattens and the management of anything already open are never blocked.
+    // The bot's and each agent's account files keep None as "account<TAB>-": a ChartBridge before 0.5.7 reads "-" as an account
+    // name NinjaTrader does not have, so it refuses every entry too and nothing breaks. No account file is None (no longer Sim101).
+    // The daily reset: once per day in the 17:00 to 18:00 ET break (New York time, daylight saving included), every branch
+    // ChartBridge holds (the bot and the copier on or off) that is flat with no working order on its account goes to None; one with a position or a working order
+    // is skipped and the pages get a note naming it. The day it ran is kept in daily-reset.txt, so a restart in the break does
+    // not run it again (a branch chosen again after the reset stays). The order ticket's account is each page's own: the page
+    // applies the same rule to it (live/live.js orderAccount, live/workspace.js).
+    public static class ChartBridgeBranches
+    {
+        public const string None = "-";                 // the account files' None
+        public static bool IsNone(string name) { return name == None; }
+        // An account name as JSON, null for None.
+        public static string Json(string name) { return IsNone(name) || name == null ? "null" : CbJson.Str(name); }
+
+        // Test hook: the UTC clock (unused in NinjaTrader).
+        public static Func<DateTime> ClockUtc;
+        private static DateTime NowUtc() { Func<DateTime> f = ClockUtc; return f != null ? f() : DateTime.UtcNow; }
+        private static readonly object Lk = new object();
+        private static string doneDay;                  // the New York date the reset last ran (daily-reset.txt)
+        private static bool loaded;
+        private static readonly List<string> Skipped = new List<string>();   // the notes of the last run, for pages that sign in during its break
+        private static string skippedDay;
+        private static string ResetFile { get { return Path.Combine(ChartBridgeConfig.Folder, "daily-reset.txt"); } }
+
+        // For the harness: forget the day (the file stays as it is).
+        public static void Forget() { lock (Lk) { loaded = false; doneDay = null; Skipped.Clear(); skippedDay = null; } }
+
+        // A branch on this account is flat with no working order: no position (any contract) and no order that may still fill.
+        public static bool Idle(Account a)
+        {
+            if (a == null) return true;   // not listed by NinjaTrader: nothing of it can be seen working (a branch on it trades nothing)
+            lock (a.Positions) if (a.Positions.Any(p => p.MarketPosition != MarketPosition.Flat && p.Quantity != 0)) return false;
+            lock (a.Orders) if (a.Orders.Any(o => ChartBridgeOrders.AgentMayFillState(o.OrderState))) return false;
+            return true;
+        }
+
+        // THE ONE PLACE for an exception to the reset (Anthony is still deciding whether a branch running a hero on Sim101 is left
+        // alone): true keeps that branch's account through the reset. The plain rule for now: no exception.
+        public static bool KeepThroughReset(string branch, string account) { return false; }
+
+        // Every 2 s (ChartBridge's poll timer): the reset once per day, in the break.
+        public static void Check()
+        {
+            DateTime et = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(NowUtc(), DateTimeKind.Utc), ChartBridgeTime.Eastern);
+            if (et.Hour != 17) return;
+            string day = et.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            lock (Lk)
+            {
+                if (!loaded) { doneDay = ReadDay(); loaded = true; }
+                if (doneDay == day) return;
+                doneDay = day;
+            }
+            WriteDay(day);
+            Run(day);
+        }
+
+        private static string ReadDay()
+        {
+            try
+            {
+                if (!File.Exists(ResetFile)) return null;
+                foreach (string raw in File.ReadAllLines(ResetFile))
+                {
+                    string[] p = raw.Trim().Split('\t');
+                    if (p.Length == 2 && p[0] == "day") return p[1];
+                }
+            }
+            catch (Exception ex) { ChartBridgeServer.Log("daily-reset.txt could not be read (" + ex.Message + "): the reset runs in this break"); }
+            return null;
+        }
+
+        private static void WriteDay(string day)
+        {
+            try
+            {
+                Directory.CreateDirectory(ChartBridgeConfig.Folder);
+                string tmp = ResetFile + ".tmp";
+                File.WriteAllLines(tmp, new[] { "# ChartBridge daily reset (written by ChartBridge; do not edit)", "# the New York date the 17:00 ET reset to None last ran", "day\t" + day });
+                if (File.Exists(ResetFile)) File.Replace(tmp, ResetFile, null); else File.Move(tmp, ResetFile);
+            }
+            catch (Exception ex) { ChartBridgeServer.Log("daily-reset.txt could not be saved (" + ex.Message + "); a restart in this break would run the reset again"); }
+        }
+
+        // Each branch: "" when it went to None (or was None), else why it was skipped.
+        private static void Run(string day)
+        {
+            List<string> done = new List<string>(), skipped = new List<string>();
+            Action<string, string> note = (branch, why) => { if (why == null) return; if (why.Length == 0) done.Add(branch); else skipped.Add(why); };
+            // on or off (the coordinator's ruling 2026-10-14: a branch that is off would come back on with yesterday's account)
+            note("the bot", ChartBridgeBot.ResetToNone());
+            foreach (ChartBridgeAgent a in ChartBridgeAgents.All()) note("agent " + a.Id, a.ResetToNone());
+            note("the copier's leader", ChartBridgeCopier.ResetToNone());
+            string head = "Daily reset (17:00 ET): ";
+            if (done.Count > 0)
+            {
+                string names = done.Count == 1 ? done[0] : string.Join(", ", done.Take(done.Count - 1)) + " and " + done[done.Count - 1];
+                string text = head + names + (done.Count == 1 ? " is" : " are") + " on None now: nothing trades until an account is chosen";
+                ChartBridgeServer.Log(text);
+                ChartBridgeServer.SendToTraders(StatusJson("info", text));
+            }
+            lock (Lk) { Skipped.Clear(); skippedDay = day; foreach (string w in skipped) Skipped.Add(head + w); }
+            foreach (string w in skipped) { ChartBridgeServer.Log(head + w); ChartBridgeServer.SendToTraders(StatusJson("warn", head + w)); }
+        }
+
+        // A page that signs in during the same break gets the skipped notes too.
+        public static void SignedIn(ChartBridgeClient c)
+        {
+            DateTime et = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(NowUtc(), DateTimeKind.Utc), ChartBridgeTime.Eastern);
+            List<string> notes;
+            lock (Lk) notes = et.Hour == 17 && skippedDay == et.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ? Skipped.ToList() : new List<string>();
+            foreach (string n in notes) c.Send(StatusJson("warn", n));
+        }
+
+        // "skipped" words for a branch that keeps its account.
+        public static string SkipWords(string branch, string account) { return branch + " stays on " + account + ": it has a position or a working order there (it goes to None at a later reset once flat, or choose None yourself)"; }
+
+        private static string StatusJson(string level, string text) { return "{\"type\":\"status\",\"level\":\"" + level + "\",\"text\":" + CbJson.Str(text) + "}"; }
     }
 }

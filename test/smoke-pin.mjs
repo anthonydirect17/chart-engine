@@ -16,3 +16,18 @@ export async function unlockIfAsked(p, pin = TEST_PIN, ms = 20000) {
   return true;
 }
 export async function enterPin(p, pin) { for (const d of pin) await p.click(`.cb-pin-key[data-k="${d}"]`); }
+
+// DECISION 2026-10-14e (chart 1.25.0): the order ticket starts on None (no Sim101 fallback). A smoke that trades from the ticket
+// without picking an account first calls this once on its browser: every page then starts as if Anthony had picked Sim101 on
+// this PC just now (live-account-v1 and its time live-account-at-v1), unless the page's storage already has a pick.
+// test/orders-smoke.mjs drives None itself and never calls it.
+export function ticketOnSim101(browser) {
+  const add = async ctx => {
+    await ctx.addInitScript(() => { try { if (localStorage.getItem('live-account-v1') === null) { localStorage.setItem('live-account-v1', JSON.stringify('Sim101')); localStorage.setItem('live-account-at-v1', String(Date.now())); } } catch (e) { /* no storage here (about:blank) */ } });
+    return ctx;
+  };
+  const newContext = browser.newContext.bind(browser);
+  browser.newContext = async o => add(await newContext(o));
+  browser.newPage = async o => (await add(await newContext(o))).newPage();
+  return browser;
+}

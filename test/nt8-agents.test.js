@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.5\.[0-6]";/);   // 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.5\.[0-7]";/);   // 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -80,7 +80,7 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   assert.match(bodies(acode, 'SendCancel'), /try \{ o\.Account\.Cancel\(new\[\] \{ o \}\); \}\s*catch \(Exception ex\)/);
   assert.match(bodies(acode, 'StepFlatten'), /may\.Where\(o => o != j\.Close && \(j\.Owned \|\| \(IsMine\(o\) && !\(IsReStop\(o\) && \(p1 != 0 \|\| p2 != 0\)\)\)\)\)/, 'a pair it does not own: only its own orders, never its stop placed again over a position');
   // every entry goes through ChartBridgeOrders.PlaceAgentEntry: the page's order path with the agent as its source
-  assert.match(bodies(acode, 'Place'), /ChartBridgeOrders\.PlaceAgentEntry\(Id, text, out placed\)/);
+  assert.match(bodies(acode, 'Place'), /ChartBridgeOrders\.PlaceAgentEntry\(Id, p\.Id, text, out placed\)/);
   assert.match(bodies(acode, 'Place'), /string why = Checks\(p, forAccount, forAccount != null, out acct\);/, 'every check again at the moment of placing, and the account they validated is the one used');
   for (const f of ['SetMode', 'SetKill', 'SetAccount', 'SetRules']) assert.match(bodies(acode, f), /lock \(PlaceGate\) return \w+Locked\(d\);/, f + ' waits for a placement under way');
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) \{ string agentWhy = ChartBridgeAgents\.PlacingProblem\(agent, kind, isBuy, price, limitPx, tick\);/, 'the order path asks the agent at the last moment');
@@ -88,7 +88,7 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(stopTicks < 1 \|\| targetTicks < 1\)\) return "every agent entry needs a stop and a target";/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) cap = AgentEntryCap\(agent, root, out capWhy\);/);   // 0.5.3 review: same cap, its words named
   assert.match(bodies(acode, 'AgentEntryCap'), /int own = ChartBridgeAgents\.CapFor\(agent, root\), conf = AgentCap\(root\);\s*if \(conf < own\) \{[^}]*return conf; \}[\s\S]*return own;/);
-  assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) name = "CB#" \+ tag \+ " ag:" \+ agent \+ " s" \+ stopTicks \+ " t" \+ targetTicks;/);
+  assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) \{ name = "CB#" \+ tag \+ " ag:" \+ agent \+ " s" \+ stopTicks \+ " t" \+ targetTicks;/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /TimeInForce\.Day/);
 });
 
@@ -102,7 +102,7 @@ test('0.5.0 agents: the owner lock is in the one choke point for page, bot and a
   const elig = bodies(ccode, 'Eligible');
   assert.ok(elig.indexOf('ChartBridgeAgents.EntryCheck("copier", a, fRoot)') > 0, 'the copier\'s entries ask too');
   // PlaceAgentEntry is the page's own strict reading and quote-only check
-  assert.match(bodies(acode, 'PlaceAgentEntry'), /TopLevel\("order", text, out bracketBody, out why\);\s*if \(why == null\) why = QuoteOnly\(top, null\);\s*return why \?\? PlaceOrder\(top, bracketBody, null, null, false, agentId, out placed\);/);
+  assert.match(bodies(acode, 'PlaceAgentEntry'), /TopLevel\("order", text, out bracketBody, out why\);\s*if \(why == null\) why = QuoteOnly\(top, null\);\s*return why \?\? PlaceOrder\(top, bracketBody, null, null, false, agentId, planId, out placed\);/);   // 0.5.7: planId
 });
 
 test('0.5.0 agents: the hard ceiling is a constant; the secret is never logged; every start is shadow', () => {
@@ -154,4 +154,38 @@ test('0.5.0 agents: the hooks in ChartBridge.cs', () => {
   assert.match(main, /",\\"order_id\\":" \+ CbJson\.Str\(orderId\) \+ FillBy\(account, orderId, order\) \+ "\}";/, 'fills to The Desk: "by" only when known');
   assert.match(bodies(main, 'FillBy'), /if \(order != null\) \{ try \{ string own = ChartBridgeV3\.SourceOf\(order\);/, 'the execution\'s own order first (no scan)');
   assert.match(bodies(main, 'FillBy'), /return by == null \? "" : ",\\"by\\":" \+ CbJson\.Str\(by\);/, 'no by key at all when unknown');
+});
+
+test('0.5.7 agents: planId on an agent\'s orders to a v3 page, kept in the day file as a line older ChartBridges skip', () => {
+  const acc = strip(read('ChartBridgeAccounts.cs')), harness = read(path.join('check', 'AgentHarness.cs'));
+  assert.match(acc, /string plan = orderJson\.Contains\(",\\"planId\\":"\) \? "" : PlanIdOf\(o\);\s*bool tradable[^\n]*\s*return orderJson\.Substring\(0, orderJson\.Length - 1\) \+ by \+ plan \+/, 'ForPage adds planId (with by and tradable)');
+  assert.match(bodies(acode, 'PlanIdField'), /AgentOf\(o\) == null\) return "";/, 'only an agent\'s orders');
+  assert.match(ocode, /if \(agent != null\) \{ name = "CB#" \+ tag \+ " ag:" \+ agent[^\n]*ChartBridgeAgents\.NotePlan\(tag, agentPlan\); \}/, 'noted before the order exists, so its first message carries it');
+  assert.match(acode, /PlaceAgentEntry\(Id, p\.Id, text, out placed\)/);
+  assert.match(acode, /internal const string TagPlanPrefix = "#tagplan\\t";/, 'a "#" line: a comment to a ChartBridge before 0.5.7');
+  assert.match(bodies(acode, 'LoadDay'), /ReadTagPlan\(line, out tagOfPlan, out tagPlanId\)\) \{ tagPlans\[tagOfPlan\] = tagPlanId; continue; \}\s*if \(line\.Length == 0 \|\| line\.StartsWith\("#"\)\) continue;/, 'read before the comment skip; a malformed one falls to it');
+  assert.match(bodies(acode, 'SaveDayLocked'), /lines\.Add\(TagPlanPrefix \+ kv\.Key/);
+  assert.match(harness, /PlanIdOnOrders\(\);/); assert.match(harness, /LostHeldInFlatten\(\);/);
+});
+
+test('0.5.7 agents: the lost-trade error is held while its own flatten job runs on that root, never dropped', () => {
+  const lost = bodies(acode, 'TradeLost'), rep = bodies(acode, 'RepeatTradeLost');
+  assert.match(lost, /held = HoldLocked\(root, Now\(\)\);[\s\S]*if \(held\) HeldLost\[root\] = text;/);
+  assert.match(lost, /if \(held\) \{[^\n]*return; \}\s*Log\(text\); AgentLog\(text\); ChartBridgeOrders\.AgentAlarm\(text\);/, 'held: no alarm');
+  // review of #47: only a job that owns the pair, and 30 s at most
+  assert.match(acode, /private bool FlattenRunsLocked\(string root\) \{ return Flats\.Values\.Any\(j => j\.Root == root && j\.Owned\); \}/);
+  assert.match(bodies(acode, 'HoldLocked'), /return now - since < ChartBridgeAgents\.LostHoldMaxMs;/);
+  assert.match(acode, /public const double LostHoldMaxMs = 30000;/);
+  assert.match(rep, /if \(flat\) \{[^\n]*HeldLost\.Remove\(root\);[\s\S]*else if \(HoldLocked\(root, now\)\) \{ \}[\s\S]*else if \(wasHeld\) \{ HeldLost\.Remove\(root\);[^\n]*LostTrades\[root\] = now;/, 'flat: forgotten; job: held; job gone or 30 s: raised');
+});
+
+test('0.5.7 None and the daily reset (DECISION 2026-10-14e): ChartBridge runs it without a page; one place for an exception; harnessed', () => {
+  const acc = strip(read('ChartBridgeAccounts.cs'));
+  assert.match(main, /try \{ ChartBridgeBranches\.Check\(\); \} catch \(Exception ex\) \{ Log\("daily reset error: " \+ ex\.Message\); \}/, 'on the 2 s poll timer');
+  assert.match(acc, /public const string None = "-";/);
+  assert.match(acc, /public static bool KeepThroughReset\(string branch, string account\) \{ return false; \}/, 'the one place an exception would go; none yet');
+  assert.match(bodies(acc, 'Check'), /if \(et\.Hour != 17\) return;[\s\S]*if \(doneDay == day\) return;[\s\S]*WriteDay\(day\);\s*Run\(day\);/, 'in the break, once per day, saved before it runs');
+  assert.match(acode, /private string account = ChartBridgeBranches\.None;/);
+  assert.match(bodies(acode, 'AccountConflict'), /if \(ChartBridgeBranches\.IsNone\(acct\)\) return null;/, 'None clashes with nobody');
+  for (const f of ['BotHarness.cs', 'AgentHarness.cs', 'CopierHarness.cs']) assert.match(read(path.join('check', f)), /0\.5\.7 reset/, f);
 });

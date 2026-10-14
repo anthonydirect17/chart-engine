@@ -4,6 +4,7 @@
 // send exactly what its ticket button sends. Screenshots in test/out/.
 //   npm run smoke:hotkeys        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
+import { ticketOnSim101 } from './smoke-pin.mjs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -52,7 +53,7 @@ const ORDER_TYPES = ['order', 'change', 'cancel', 'flatten'];
 const KEYS = { buy: 'Alt+KeyB', sell: 'Alt+KeyS', be: 'Alt+KeyK', close: 'Alt+KeyC', flattenAll: 'Shift+F9' };
 const SHOWN = { buy: 'Alt+B', sell: 'Alt+S', be: 'Alt+K', close: 'Alt+C', flattenAll: 'Shift+F9' };
 
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));   // DECISION 2026-10-14e: the ticket starts on None; Sim101 picked, as Anthony would
 try {
   await startBridge(PORT, ['--trading', '--trade-accounts=Sim101', '--max-qty=MNQ:9,NQ:2,MES:2,ES:2', '--test-controls', '--pin-off']);
   const L = Math.round((await control(PORT, 'hold', { root: 'MNQ' })).last);

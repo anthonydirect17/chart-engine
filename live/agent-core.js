@@ -56,7 +56,8 @@ const LATE_MS = 5000;
 /* the second click that confirms Auto and the kill switch's release (as the Bot tab) */
 const CONFIRM_MS = 4000;
 const NOTES_MAX = 200, PLANS_MAX = 50;
-const DEFAULT_ACCOUNT = 'Sim101';
+const DEFAULT_ACCOUNT = '';   // None: nothing trades until Anthony chooses an account (DECISION 2026-10-14e; was Sim101)
+const NONE_LABEL = 'None';
 
 const isInt = v => typeof v === 'number' && Number.isInteger(v);
 const isNum = v => typeof v === 'number' && isFinite(v);
@@ -259,11 +260,12 @@ function rulesChange(agent, form, ctx, cid) {
 /* ======================================================================== the account (contract sections 6 and 7) */
 /** SIM or LIVE: SIM only when ChartBridge says `sim: true`; anything else is LIVE (the careful side, as the Bot tab). */
 const accountMark = sim => (sim === true ? 'SIM' : 'LIVE');
-/** The agent's account from its `agent` message: { name, sim, mark }; Sim101 unmarked before ChartBridge says. */
+/** The agent's account from its `agent` message: { name, sim, mark, none, label }; None (account null, or before ChartBridge says) is name '' with label "None". */
 function agentAccount(agent) {
   const a = agent || {};
   const name = typeof a.account === 'string' && a.account ? a.account : DEFAULT_ACCOUNT;
-  return { name, sim: a.sim === true, mark: typeof a.sim === 'boolean' ? accountMark(a.sim) : '' };
+  if (!name) return { name: '', sim: false, mark: '', none: true, label: NONE_LABEL };   // account null: None, label what the page shows
+  return { name, sim: a.sim === true, mark: typeof a.sim === 'boolean' ? accountMark(a.sim) : '', none: false, label: name };
 }
 /**
  * The accounts the agent may take: every account in the v3 `accounts` list that ChartBridge says is tradable now, with its
@@ -304,8 +306,17 @@ function accountChoices(accountsMsg, agent, others) {
 function accountChange(agent, name, choices, ctx, cid) {
   const a = agent || {}, cur = agentAccount(a).name, c = ctx || {};
   if (!validId(a.agent)) return { error: 'No agent chosen.' };
-  if (typeof name !== 'string' || !name) return { error: 'Choose an account.' };
-  if (name === cur) return { error: name + ' is already ' + agentName(a) + '\'s account.' };
+  if (typeof name !== 'string') return { error: 'Choose an account, or None.' };
+  if (name === cur) return { error: (name || NONE_LABEL) + ' is already ' + agentName(a) + '\'s account.' };
+  const asked0 = MODES.includes(c.askedMode) ? c.askedMode : MODES.includes(a.mode) ? a.mode : 'shadow';
+  if (!name) {   // None (DECISION 2026-10-14e): nothing trades; ChartBridge refuses it only while the agent is exposed
+    const can0 = rulesChangeable(a, c);
+    if (!can0.ok) return { error: can0.why.replace('change its rules', 'choose None') };
+    const none = { type: 'agentAccount' };
+    if (cid) none.cid = cid;
+    none.agent = a.agent; none.account = null; none.keepMode = asked0;
+    return { msg: none, live: false, confirm: '', mode: asked0 };
+  }
   const ch = (choices || []).find(x => x.name === name);
   if (!ch || !ch.tradable) return { error: name + ' is not tradable in ChartBridge now (its checkmark on the Accounts tab, Connected).' };
   if (ch.why) return { error: name + ' is ' + ch.why + ': an agent trades an account of its own.' };
@@ -340,11 +351,12 @@ function liveQuestion(a, name) {
 function modesAllowed(o) {
   const x = o || {};
   return { shadow: { ok: true, why: '' }, copilot: { ok: true, why: '' },
-    auto: x.tradable ? { ok: true, why: '' } : { ok: false, why: 'Auto needs ' + (x.account || DEFAULT_ACCOUNT) + ' to be tradable in ChartBridge.' } };
+    auto: x.tradable ? { ok: true, why: '' } : !x.account ? { ok: false, why: 'The agent\'s account is None: choose its account first (nothing trades on None).' } : { ok: false, why: 'Auto needs ' + x.account + ' to be tradable in ChartBridge.' } };
 }
 /** Whether an account can trade now: the v3 `accounts` list (tradable), else the `trading` answer's accounts. */
 function accountTradable(accountsMsg, trading, name) {
   const n = name || DEFAULT_ACCOUNT;
+  if (!n) return false;   // None
   const list = accountsMsg && Array.isArray(accountsMsg.list) ? accountsMsg.list : null;
   if (list) { const a = list.find(x => x && x.name === n); if (a) return !!a.tradable && a.state !== 'gone'; }
   return !!(trading && trading.enabled && Array.isArray(trading.accounts) && trading.accounts.includes(n));
@@ -587,7 +599,7 @@ function stripModel(a, orders, fmtPrice) {
   const last = x.lastPlan ? planLine(x.lastPlan) : null;
   return {
     name: agentName(x), build: str(x.build), state: stateOf(x), connected: !!x.connected, beat: beatText(x), mode: MODE_NAME[x.mode] || '-',
-    account: acc.name, accountMark: acc.mark, position: positionText(x.position, fmtPrice),
+    account: acc.label, accountMark: acc.mark, position: positionText(x.position, fmtPrice),
     pnl: isNum(x.pnlToday) ? fmtUsd(x.pnlToday) || '$0.00' : '-', pnlTone: isNum(x.pnlToday) ? (x.pnlToday > 0 ? 'pos' : x.pnlToday < 0 ? 'neg' : '') : '',
     trades: (isInt(x.trades) ? x.trades : 0) + (isInt(r.maxTrades) ? ' of ' + r.maxTrades : ''), losses: (isInt(x.losses) ? x.losses : 0) + (isInt(r.maxLosses) ? ' of ' + r.maxLosses : ''),
     killed: !!x.killed, standDown: str(x.standDown), owns: ownsText(x, orders),
@@ -882,8 +894,10 @@ function ageText(at, now) {
 const sameNum = (a, b) => isNum(a) && isNum(b) && Math.abs(a - b) < 1e-7;
 /**
  * The risk in dollars of the plan an agent's entry order came from (Layout 5: R only from each plan's own riskDollars, the
- * lead's ruling). The page is not told which plan an order is, so the plan is found by what both carry: the agent's plans
- * placed or proposed (never a skip or a refusal) with the entry's root, side, kind, size and price (its limit price too for a
+ * lead's ruling). ChartBridge 0.5.7 and newer say which plan it is: the order's `planId` (DECISION 2026-10-14d, phase 2), and
+ * that plan's riskDollars is taken (his plans of that id placed or proposed, never a skip or a refusal: a refused plan may
+ * repeat an id; null when they differ). With no planId (an older ChartBridge), or none of his plans of that id here, the plan
+ * is found by what both carry: the agent's plans placed or proposed (never a skip or a refusal) with the entry's root, side, kind, size and price (its limit price too for a
  * stop-limit, when the order carries one), its stop ticks and its target ticks (the entry's `planned`, which ChartBridge puts on
  * every working entry it placed). Their riskDollars when every such plan says the same one; null when none matches, they
  * differ, or the entry does not say its stop ticks (a lookalike plan with another stop must never lend its risk; review of
@@ -893,11 +907,15 @@ const sameNum = (a, b) => isNum(a) && isNum(b) && Math.abs(a - b) < 1e-7;
 function entryRisk(order, plans) {
   const o = order || {};
   if (o.role !== 'entry' || !isInt(o.qty) || !(o.qty > 0)) return null;
+  const mine = (Array.isArray(plans) ? plans : []).filter(p => p && p.action !== 'skip' && (p.result === 'placed' || p.result === 'proposed') && isNum(p.riskDollars));
+  if (typeof o.planId === 'string' && o.planId) {
+    const byId = mine.filter(p => p.id === o.planId);
+    if (byId.length) return byId.some(p => p.riskDollars !== byId[0].riskDollars) ? null : byId[0].riskDollars;
+  }
   const pl = plainObj(o.planned) ? o.planned : {};
   if (!isInt(pl.stopTicks) || !(pl.stopTicks > 0)) return null;
   const st = pl.stopTicks, tt = isInt(pl.targetTicks) ? pl.targetTicks : null;
-  const c = (Array.isArray(plans) ? plans : []).filter(p => p && p.action !== 'skip' && (p.result === 'placed' || p.result === 'proposed') && isNum(p.riskDollars) &&
-    p.root === o.root && p.side === o.side && p.kind === o.kind && p.qty === o.qty && sameNum(p.price, o.price) &&
+  const c = mine.filter(p => p.root === o.root && p.side === o.side && p.kind === o.kind && p.qty === o.qty && sameNum(p.price, o.price) &&
     (o.kind !== 'stopLimit' || !isNum(o.limitPrice) || sameNum(p.limitPrice, o.limitPrice)) && p.stopTicks === st && (tt === null || p.targetTicks === tt));
   if (!c.length || c.some(p => p.riskDollars !== c[0].riskDollars)) return null;
   return c[0].riskDollars;
@@ -1066,7 +1084,7 @@ function copilotRouter(doc) {
 }
 
 return {
-  VERSION, MIN_BRIDGE, MODES, MODE_NAME, NOTE_KINDS, NOTE_NAME, PROPOSAL_STATES, RULE_ROOTS, CEILING, LIMITS, DEFAULT_RULES, LATE_MS, CONFIRM_MS, NOTES_MAX, PLANS_MAX, DEFAULT_ACCOUNT,
+  VERSION, MIN_BRIDGE, MODES, MODE_NAME, NOTE_KINDS, NOTE_NAME, PROPOSAL_STATES, RULE_ROOTS, CEILING, LIMITS, DEFAULT_RULES, LATE_MS, CONFIRM_MS, NOTES_MAX, PLANS_MAX, DEFAULT_ACCOUNT, NONE_LABEL,
   validId, parseVersion, atLeast, offText,
   createAgents, pickAgent, agentName,
   parseRules, rulesLines, rulesForm, rulesChangeable, rulesEditable, windowFlattensNow, WINDOW_ANYTIME, rulesChange, durationText,

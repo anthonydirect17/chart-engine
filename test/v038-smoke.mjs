@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { TEST_PIN, enterPin, ticketOnSim101 } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.env.V038_SMOKE_PORT || 8971);
@@ -103,7 +103,7 @@ const ticketSent = all => {
 };
 const norm = list => (list || []).map(m => JSON.stringify(Object.assign({}, m, m.cid ? { cid: 'C' } : {}, m.token ? { token: 'T' } : {})));
 
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));   // DECISION 2026-10-14e: the ticket starts on None; Sim101 picked, as Anthony would
 try {
   /* ================ Part A: chart 1.16.0 with a ChartBridge that has no v3 ================ */
   console.log('Part A: this page with a ChartBridge 0.3.8 (no v3)');

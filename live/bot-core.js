@@ -11,7 +11,7 @@
  *   orders      the legs it follows (isBotMark); a fill is claimed for the bot against those orders' filled contracts
  *               (botFillLedger), so Anthony's own orders on the bot's account and root are never taken as the bot's
  *   account     the account the bot trades (Anthony 2026-10-07: the one he chooses, Sim or LIVE; `botAccount`, kept by ChartBridge
- *               in bot-account.txt, Sim101 by default): its SIM or LIVE mark, the accounts he may choose, the change
+ *               in bot-account.txt, None by default: DECISION 2026-10-14e): its SIM or LIVE mark, the accounts he may choose, the change
  *   proposals   a copilot proposal's life on the page: shown (then `botSeen` once), answered once (`botAnswer`), and gone
  *               when ChartBridge says accepted, rejected, withdrawn or not answered (an expired one shows "not answered")
  *   library     the frozen Bot-Lab builds (`GET /bot-library`, docs/BOT_LIBRARY.md): read, checked, shelved
@@ -34,9 +34,10 @@ const VERSION = '1.0.0';
 const RAILS = Object.freeze({ maxQty: 1, maxTrades: 5, maxLosses: 3 });
 /* The most the page may ask for (ChartBridgeBot.cs MaxTradesLimit, MaxLossesLimit): ChartBridge's own limits. */
 const RAIL_MAX = Object.freeze({ maxTrades: 5, maxLosses: 3 });
-/* The bot's account until Anthony chooses another (ChartBridgeBot.cs DefaultAccount), and the roots it may trade (botRoot, or
-   its micro or mini: ChartBridgeBot.cs Sibling). */
-const BOT_ACCOUNT = 'Sim101';
+/* The bot's account until Anthony chooses one (ChartBridgeBot.cs DefaultAccount): '' is None, nothing trades (DECISION
+   2026-10-14e; was Sim101), and the roots it may trade (botRoot, or its micro or mini: ChartBridgeBot.cs Sibling). */
+const BOT_ACCOUNT = '';
+const NONE_LABEL = 'None';
 const ROOT_SIBLING = Object.freeze({ MNQ: 'NQ', NQ: 'MNQ', MES: 'ES', ES: 'MES' });
 /* How close to a limit (Anthony, addendum 2): amber at 70% used, red at 90%. */
 const AMBER = 0.7, RED = 0.9;
@@ -171,12 +172,14 @@ function confirmStep(armed, now) {
 /** SIM or LIVE: an account is SIM only when ChartBridge says `sim: true` (NinjaTrader's own simulator); anything else is LIVE
  *  (the careful side: an evaluation or funded account is real to NinjaTrader). */
 const accountMark = sim => (sim === true ? 'SIM' : 'LIVE');
-/** The bot's account from the `bot` message: { name, sim, mark }. Before ChartBridge says, Sim101 (its default) unmarked. */
+/** The bot's account from the `bot` message: { name, sim, mark, none, label }. account null (or before ChartBridge says) is
+ *  None: name '', no mark, label "None" (DECISION 2026-10-14e: nothing trades). label is what the page shows. */
 function botAccount(bot) {
   const b = bot || {};
   const name = typeof b.account === 'string' && b.account ? b.account : BOT_ACCOUNT;
+  if (!name) return { name: '', sim: false, mark: '', none: true, label: NONE_LABEL };
   const known = typeof b.sim === 'boolean';
-  return { name, sim: b.sim === true, mark: known ? accountMark(b.sim) : '' };
+  return { name, sim: b.sim === true, mark: known ? accountMark(b.sim) : '', none: false, label: name };
 }
 /**
  * The accounts Anthony may choose for the bot (botAccount): every account in the v3 `accounts` list that ChartBridge says is
@@ -202,8 +205,15 @@ function accountChoices(accountsMsg, bot) {
  */
 function botAccountChange(bot, name, choices, cid) {
   const cur = botAccount(bot).name, b = bot || {};
-  if (typeof name !== 'string' || !name) return { error: 'Choose an account.' };
-  if (name === cur) return { error: name + ' is already the bot\'s account.' };
+  if (typeof name !== 'string') return { error: 'Choose an account, or None.' };
+  if (name === cur) return { error: (name || NONE_LABEL) + ' is already the bot\'s account.' };
+  if (!name) {   // None (DECISION 2026-10-14e): nothing trades; ChartBridge refuses it only while the bot is exposed
+    if (b.position && isNum(b.position.qty) && b.position.qty !== 0) return { error: 'The bot has a position: choose None when it is flat.' };
+    const none = { type: 'botAccount' };
+    if (cid) none.cid = cid;
+    none.account = null;
+    return { msg: none, live: false, confirm: '' };
+  }
   const c = (choices || []).find(x => x.name === name);
   if (!c || !c.tradable) return { error: name + ' is not tradable in ChartBridge now (its checkmark on the Accounts tab, Connected).' };
   if (b.position && isNum(b.position.qty) && b.position.qty !== 0) return { error: 'The bot has a position: choose its account when it is flat.' };
@@ -226,12 +236,13 @@ function modesAllowed(o) {
   return {
     shadow: { ok: true, why: '' },
     copilot: research ? { ok: false, why: rs } : { ok: true, why: '' },
-    auto: research ? { ok: false, why: rs } : x.tradable ? { ok: true, why: '' } : { ok: false, why: 'Auto needs ' + (x.account || BOT_ACCOUNT) + ' to be tradable in ChartBridge.' },
+    auto: research ? { ok: false, why: rs } : x.tradable ? { ok: true, why: '' } : !x.account ? { ok: false, why: 'The bot\'s account is None: choose its account first (nothing trades on None).' } : { ok: false, why: 'Auto needs ' + x.account + ' to be tradable in ChartBridge.' },
   };
 }
-/** Whether an account (default Sim101) can trade now: the v3 `accounts` list (tradable) or the `trading` answer's accounts. */
+/** Whether an account can trade now: the v3 `accounts` list (tradable) or the `trading` answer's accounts. None: never. */
 function accountTradable(accountsMsg, trading, name) {
   const n = name || BOT_ACCOUNT;
+  if (!n) return false;
   const list = accountsMsg && Array.isArray(accountsMsg.list) ? accountsMsg.list : null;
   if (list) { const a = list.find(x => x && x.name === n); if (a) return !!a.tradable; }
   return !!(trading && trading.enabled && Array.isArray(trading.accounts) && trading.accounts.includes(n));
@@ -634,7 +645,7 @@ function stripModel(bot, fmtPrice) {
   const last = b.lastSignal ? signalLine(b.lastSignal) : null;
   const state = !b.enabled ? 'off' : b.killed ? 'killed' : b.standDown ? 'standDown' : !b.connected ? 'lost' : 'on';
   return {
-    name: typeof b.name === 'string' && b.name ? b.name : 'Bot', mode: MODE_NAME[b.mode] || '-', account: acc.name, accountMark: acc.mark,
+    name: typeof b.name === 'string' && b.name ? b.name : 'Bot', mode: MODE_NAME[b.mode] || '-', account: acc.label, accountMark: acc.mark,
     position: positionText(b.position, fmtPrice), pnl: isNum(b.pnlToday) ? fmtUsd(b.pnlToday) : '-',
     pnlTone: isNum(b.pnlToday) ? (b.pnlToday > 0 ? 'pos' : b.pnlToday < 0 ? 'neg' : '') : '',
     last: last ? 'Last signal ' + last.time + ' ' + last.title.toLowerCase() : 'No signal yet today',
@@ -652,7 +663,7 @@ function statusText(b) {
 }
 
 return {
-  VERSION, RAILS, RAIL_MAX, BOT_ACCOUNT, ROOT_SIBLING, isBotMark, botFillLedger, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
+  VERSION, RAILS, RAIL_MAX, BOT_ACCOUNT, NONE_LABEL, ROOT_SIBLING, isBotMark, botFillLedger, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
   railLevel, rails, railsChange, worse, CONFIRM_MS, DOUBLE_CLICK_MS, confirmStep,
   modesAllowed, accountTradable, botSwitchOn, accountMark, botAccount, accountChoices, botAccountChange,
   createProposals,

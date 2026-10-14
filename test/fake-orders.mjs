@@ -111,8 +111,11 @@ export class OrderDesk {
     conn.authed = true;
     this.send(conn, this.tradingMsg(conn));
     for (const w of this.config.warnings || []) this.send(conn, { type: 'status', level: 'warn', text: w });   // 0.3.7: e.g. a mistyped maxTicksAway
-    this.send(conn, { type: 'orders', list: [...this.orders.values()].filter(o => isWorking(o) && this.accounts.includes(o.account)).map(o => this.orderMsg(o)) });
-    for (const [k, p] of this.positions) if (p.qty && this.accounts.includes(k.split('|')[0])) { const [account, root] = k.split('|'); this.send(conn, { type: 'position', account, root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null }); }
+    const positions = [];
+    for (const [k, p] of this.positions) if (p.qty && this.accounts.includes(k.split('|')[0])) { const [account, root] = k.split('|'); positions.push({ type: 'position', account, root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null }); }
+    // ChartBridge 0.5.7 (review of #47): how many position messages follow, so the page knows its snapshot is whole
+    this.send(conn, { type: 'orders', list: [...this.orders.values()].filter(o => isWorking(o) && this.accounts.includes(o.account)).map(o => this.orderMsg(o)), positions: positions.length });
+    for (const m of positions) this.send(conn, m);
   }
 
   /* ---------------- page to server: order, change, plan (0.3.8), cancel, flatten */

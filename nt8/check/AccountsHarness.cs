@@ -564,8 +564,11 @@ public static class AccountsHarness
         Send(page, "{\"type\":\"accountArchive\",\"account\":\"FUNDED-B\",\"confirm\":true}");
         Check(Rejected("FUNDED-B has a position or working orders: only a flat account can be hidden (exits always work)"), "0.5.1: Hide of an account with a working order: refused, plain reason");
         fundedB.Orders.Remove(w);
+        // 0.5.7: no bot-account.txt is None (Sim101 is then nobody's); here Sim101 is chosen for the bot
+        File.WriteAllLines(Path.Combine(folder, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
         Send(page, "{\"type\":\"accountArchive\",\"account\":\"Sim101\",\"confirm\":true}");
-        Check(Rejected("Sim101 is the bot's account (the Bot tab): it cannot be hidden") && !File_("accounts.txt").Contains("archived"), "0.5.1: Hide of the bot's account (Sim101 when bot-account.txt names none): refused");
+        Check(Rejected("Sim101 is the bot's account (the Bot tab): it cannot be hidden") && !File_("accounts.txt").Contains("archived"), "0.5.1: Hide of the bot's account (Sim101 chosen in bot-account.txt): refused");
+        File.Delete(Path.Combine(folder, "bot-account.txt"));
         sent.Clear();
         Send(page, "{\"type\":\"accountArchive\",\"cid\":\"z\",\"account\":\"EVAL-A\",\"confirm\":true}");
         Check(!sent.Any(x => x.Contains("\"type\":\"reject\"")), "archive of a Gone account with confirm: accepted");

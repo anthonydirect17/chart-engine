@@ -437,6 +437,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     string list = OrdersListJson(client, notes.SentWorking);
                     List<string> positions = PositionJsons(client);
+                    // 0.5.7 (review of #47): how many position messages follow this list, so a page knows when its sign-in snapshot
+                    // of orders and positions is whole (the ticket's daily reset waits for it)
+                    list = list.Substring(0, list.Length - 1) + ",\"positions\":" + positions.Count.ToString(CultureInfo.InvariantCulture) + "}";
                     Action hook = SnapshotHook;
                     if (hook != null) hook();
                     client.Send(list);
@@ -674,13 +677,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             return false;
         }
 
-        private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, out Order placed) { return PlaceOrder(top, bracketBody, cid, strategyBody, bot, null, out placed); }
+        private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, out Order placed) { return PlaceOrder(top, bracketBody, cid, strategyBody, bot, null, null, out placed); }
 
-        // agent (0.5.0 agents): the agent id when an agent places it (ChartBridgeAgents.cs, PlaceAgentEntry), else null.
-        private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, string agent, out Order placed)
+        // agent (0.5.0 agents): the agent id when an agent places it (ChartBridgeAgents.cs, PlaceAgentEntry), else null; agentPlan:
+        // the id of the plan it comes from (noted for its tag before the order exists, so its first order message carries planId).
+        private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, string agent, string agentPlan, out Order placed)
         {
             string planTag, why;
-            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
+            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
             if (planTag != null)
             {
                 // The record is what a recompile reads. Its name holds the same ticks, so a failed write does not refuse the
@@ -692,7 +696,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return why;
         }
 
-        private static string PlaceOrderLocked(string top, string bracketBody, string cid, string strategyBody, bool bot, string agent, out string planTag, out Order placed)
+        private static string PlaceOrderLocked(string top, string bracketBody, string cid, string strategyBody, bool bot, string agent, string agentPlan, out string planTag, out Order placed)
         {
             planTag = null; placed = null;
             string accountName = Str(top, "account"), root = (Str(top, "root") ?? "").ToUpperInvariant();
@@ -799,7 +803,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
             // 0.3.8: a resting entry is named "atm": its ticks can change before the fill (plan), and travel with it when moved.
             string name = "CB#" + tag + (bot ? " bot" : kind == "market" ? "" : " atm") + (strat != null ? StrategyNamePart(strat) : " s" + stopTicks + " t" + targetTicks) + KindSuffix(kind);   // 0.4.0 bot: "bot" names a bot entry   // 0.4.0 B1: sg, sl, mit   // 0.4.0 fix1 (F5): "sg s20", the stop ticks in the name
-            if (agent != null) name = "CB#" + tag + " ag:" + agent + " s" + stopTicks + " t" + targetTicks;   // 0.5.0 agents: "CB#1a2b3c4d ag:manrae s8 t16" (any kind; recovery reads it as a v2 entry)
+            if (agent != null) { name = "CB#" + tag + " ag:" + agent + " s" + stopTicks + " t" + targetTicks; ChartBridgeAgents.NotePlan(tag, agentPlan); }   // 0.5.0 agents: "CB#1a2b3c4d ag:manrae s8 t16" (any kind; recovery reads it as a v2 entry); its plan id for "planId"
             if (kind != "market" && strat == null) { SetPlan(tag, stopTicks, targetTicks); planTag = tag; }   // in memory now; PlaceOrder writes the file after PlaceLock
             OrderType type = OrderTypeOf(kind);   // 0.4.0 B1: also StopLimit and MIT
             Order order = account.CreateOrder(inst, isBuy ? OrderAction.Buy : OrderAction.Sell, type, OrderEntry.Manual, TimeInForce.Day, qty,
