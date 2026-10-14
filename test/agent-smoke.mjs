@@ -12,7 +12,8 @@
 //     chart), the strip shows the owner lock; Accept closes in the last 5 s; an expired one ends;
 //   - one copilot key for the bot and the agents: the oldest open proposal across both is answered first;
 //   - the kill switch (on in one click, release in two), Auto asks a second click;
-//   - the pop-out window (agent.html); an older ChartBridge (0.4.0): "No agents on this ChartBridge (0.5.0 or later)".
+//   - the pop-out window (agent.html); a ChartBridge with no agents line (1.21.0: the version is not read): "No agents on this
+//     ChartBridge: none is named in its config.txt (agents = ...)."
 //   - board F (Anthony 2026-10-08): the light sits on the right panels, in the right colour, for watching, a look, a plan in
 //     copilot, his rules being checked, an entry placed, an open trade in profit and under water, and a flat exit; every
 //     stream row is a button whose drawer opens and closes (the same row, Close, Escape only from inside it); the Motion
@@ -650,8 +651,8 @@ try {
   await page.close();
   await bridge.kill(); bridge = null;
 
-  /* ---------------------------------------------------------------- an older ChartBridge */
-  console.log('an older ChartBridge (0.4.0): no agents');
+  /* ---------------------------------------------------------------- no agents line (1.21.0: the version is not read) */
+  console.log('a ChartBridge with no agents line: no agents');
   bridge = await startBridge(PORT + 1, []);
   const p2 = await ctx.newPage();
   p2.on('pageerror', e => fail('page error: ' + e.message));
@@ -659,8 +660,8 @@ try {
   await p2.waitForSelector('.cb-pin-key', { timeout: 15000 });
   await enterPin(p2, TEST_PIN);
   await p2.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
-  await p2.waitForFunction(() => /0\.5\.0 or later/.test(document.querySelector('#agView [data-k="offText"]').textContent), null, { timeout: 10000 });
-  check((await p2.textContent('#agView [data-k="offText"]')) === 'No agents on this ChartBridge (0.5.0 or later).', 'the tab says: No agents on this ChartBridge (0.5.0 or later).');
+  await p2.waitForFunction(() => /none is named/.test(document.querySelector('#agView [data-k="offText"]').textContent), null, { timeout: 10000 });
+  check((await p2.textContent('#agView [data-k="offText"]')) === 'No agents on this ChartBridge: none is named in its config.txt (agents = ...).', 'the tab says: none is named in its config.txt (the hello says fake-0.4.0; 1.21.0 does not read it)');
   check(!(await p2.evaluate(() => window.__socks.some(s => s.types.some(t => /^agent/.test(t))))), 'nothing agent is sent');
   check(await p2.isVisible('#wsBotTab'), 'the Bot tab is as it was');
   await p2.screenshot({ path: path.join(SHOTS, 'agent-none.png') });

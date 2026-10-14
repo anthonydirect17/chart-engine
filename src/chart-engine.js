@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.20.1
+ * chart-engine 1.21.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.20.1';
+const VERSION = '1.21.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -1134,8 +1134,8 @@ function create(container, options) {
   /* The delta pane (1.7.0): a CumulativeDelta the page keeps feeding, drawn in a pane below the plot while the 'delta'
      layer is on, on the plot's own bars, so it shares their x axis, scrolling, zoom and crosshair. `pane` is its view:
      mode 'cum' (candles of the running cumulative) or 'bar' (each bar's own delta around zero), the share of the
-     chart's height it asks for, a note drawn instead of anything else (the page's "Delta needs ChartBridge 0.3.4 on
-     this PC"), and its own eased value scale. */
+     chart's height it asks for, a note drawn instead of anything else (from the host; the live page set one for a
+     ChartBridge with no trade sides until chart 1.21.0), and its own eased value scale. */
   let delta = null;
   /* Chart signals (G1c): { absorption (an Absorption), bubbles (a LargePrints), divergence (a DeltaDivergence), version }
      the page keeps feeding; each drawn while its layer is on (the arrows with the delta pane). */
@@ -1679,7 +1679,7 @@ function create(container, options) {
    * the running delta in y (pane.lo to pane.hi); candles in the candle colors, or with bar delta one bar from zero per
    * bar (up color at or above zero). Bars with no delta (before the page had every trade, or with no trade in them)
    * stay blank. A session whose count starts late gets a dashed line at its first bar, and the title says from when.
-   * With a note (the page's "Delta needs ChartBridge 0.3.4 on this PC") only the title and the note are drawn.
+   * With a note (from the host; none from the live page since 1.21.0) only the title and the note are drawn.
    * `cx` is the bar under the pointer (over the plot or the pane), `hy` the pointer's y when it is over the pane.
    */
   /* ---------------- chart signals (G1c) */

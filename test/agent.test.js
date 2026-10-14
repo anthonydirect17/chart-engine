@@ -23,13 +23,13 @@ const proposal = o => Object.assign({ type: 'agentProposal', agent: 'demo', id: 
   stopTicks: 16, targetTicks: 32, expireSec: 600, riskDollars: 16, setup: 'Sample pullback', reason: 'Sample: a made-up reason', confidence: 0.62, expiresAt: T0 + 600000,
   state: 'open', seenAt: null, answeredAt: null }, o || {});
 
-test('versions and the tab with no agent: an older ChartBridge says 0.5.0 or later', () => {
-  assert.deepEqual(AC.parseVersion('fake-0.4.0'), [0, 4, 0]);
+test('the tab with no agent; 1.21.0: the version is no longer read (the page needs ChartBridge 0.5.2)', () => {
+  assert.deepEqual(AC.parseVersion('fake-0.4.0'), [0, 4, 0]);   // kept for checks above the page's minimum ChartBridge
   assert.ok(AC.atLeast('0.5.0', '0.5.0') && AC.atLeast('0.5.1', '0.5.0') && AC.atLeast('fake-0.5.0', '0.5.0'));
   assert.ok(!AC.atLeast('0.4.3', '0.5.0') && !AC.atLeast('', '0.5.0'));
   assert.equal(AC.offText({ v3: null }), 'Connecting to ChartBridge...');
   assert.equal(AC.offText({ v3: false, version: '0.3.8' }), 'No agents on this ChartBridge (0.5.0 or later).');
-  assert.equal(AC.offText({ v3: true, version: '0.4.3', trading: { enabled: true } }), 'No agents on this ChartBridge (0.5.0 or later).');
+  assert.match(AC.offText({ v3: true, version: '0.4.3', trading: { enabled: true } }), /none is named in its config\.txt/, 'a v3 ChartBridge has the agent channel, whatever its version says');
   assert.match(AC.offText({ v3: true, version: '0.5.0', trading: { enabled: true }, agents: 0 }), /none is named in its config\.txt/);
   assert.equal(AC.offText({ v3: true, version: '0.5.0', trading: { enabled: true }, agents: 1 }), '');
   assert.ok(AC.validId('manrae') && AC.validId('demo') && AC.validId('a1') && !AC.validId('1a') && !AC.validId('Demo') && !AC.validId('toolongagentid') && !AC.validId(''));
@@ -264,15 +264,14 @@ test('account chooser: tradable accounts, SIM first; never the bot\'s, the copie
   assert.equal(mis.msg.keepMode, 'auto');
   assert.equal(mis.confirm, 'Agent demo will trade LIVE account EVAL-A in Auto. Continue?');
   assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, { version: '0.5.2', askedMode: 'fast' }).msg.keepMode, 'copilot', 'not a mode: the agent\'s');
-  // version gating: 0.5.1 refuses a key it does not know and puts the agent in Shadow: no keepMode, and the question says Shadow
-  for (const version of ['0.5.1', '0.5.0', 'fake-0.5.0', '', undefined]) {
-    const old = AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, { version });
-    assert.ok(!('keepMode' in old.msg), 'no keepMode to ' + version);
-    assert.equal(old.mode, 'shadow');
-    assert.equal(old.confirm, 'Agent demo will trade LIVE account EVAL-A in Shadow (nothing is placed until you choose Copilot or Auto). This ChartBridge (before 0.5.2) puts it in Shadow when its account changes. Continue?');
+  // 1.21.0: keepMode goes whatever the version says (the page needs ChartBridge 0.5.2), and the question names the mode
+  for (const version of ['0.5.1', '', undefined]) {
+    const any = AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, { version });
+    assert.equal(any.msg.keepMode, 'auto', 'keepMode to ' + version);
+    assert.equal(any.mode, 'auto');
+    assert.equal(any.confirm, 'Agent demo will trade LIVE account EVAL-A in Auto. Continue?');
   }
-  assert.equal(AC.accountChange(a, 'EVAL-A', ch, { version: '0.5.1' }).confirm, 'Agent demo will trade LIVE account EVAL-A in Shadow (nothing is placed until you choose Copilot or Auto). Continue?', 'already in Shadow: nothing more to say');
-  assert.ok(AC.keepsMode('0.5.2') && !AC.keepsMode('0.5.1') && !AC.keepsMode(null));
+  assert.equal(AC.keepsMode, undefined);
   /* the 0.5.2 re-review: the open question stands only while the agent is in the mode it named when it opened */
   assert.equal(AC.askStale('shadow', agent({ mode: 'shadow' })), null);
   assert.equal(AC.askStale('shadow', agent({ mode: 'auto' })), 'demo went to Auto while the question said Shadow: nothing was sent. Choose Set to be asked again.');
@@ -468,9 +467,9 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.20.1');   // 1.20.1: the window at any time with ChartBridge 0.5.4 (after 1.20.0, On/Off)
-  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.20\.1'/);
-  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.20\.1/);
+  assert.equal(JSON.parse(read('package.json')).version, '1.21.0');   // 1.21.0: the page needs ChartBridge 0.5.2 (after 1.20.1, the window at any time)
+  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.21\.0'/);
+  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.21\.0/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 

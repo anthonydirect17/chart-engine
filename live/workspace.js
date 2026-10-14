@@ -2161,7 +2161,7 @@ function mountDataBox(v) {
     set(cells.dlt, dl === null ? '-' : W.fmtSignedNum(dl, 0) || '0', dl > 0 ? 'up' : dl < 0 ? 'dn' : d ? '' : 'mut');
     set(cells.big, d && d.big > 0 ? U.fmtPrice(d.big, 0) + ' contracts' : '-', d ? '' : 'mut');
     const why = { off: 'Buy and sell volume, delta and the largest print come from the chart\'s Cumulative delta: turn it on in Indicators.',
-      old: 'This ChartBridge sends no trade sides: no buy and sell volume.', htf: 'No buy and sell volume on 4h, 1D and 1W bars.',
+      htf: 'No buy and sell volume on 4h, 1D and 1W bars.',
       building: 'Counting the trades: buy and sell volume shortly.', before: 'Buy and sell volume count from ' + (x.deltaFrom !== null ? W.fmtClock(x.deltaFrom) + ' ET' : 'the page\'s opening') + ': none for this bar.' }[x.deltaWhy] || '';
     txt(cells.note, why); if (cells.note.hidden !== !why) cells.note.hidden = !why;
     const b = x.bubbles;

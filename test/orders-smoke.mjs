@@ -1081,16 +1081,6 @@ try {
     await cn.close();
   }
 
-  /* ---------------- ChartBridge 0.2 (protocol v1): read only exactly as before */
-  await startBridge(PORT + 2, ['--v1']);
-  const v1 = await open(browser, PORT + 2, 1440);
-  await v1.waitForTimeout(500);
-  check(await v1.isHidden('#obar'), 'no order bar with ChartBridge 0.2');
-  check(await v1.textContent('#statusRo') === 'Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.', 'v1 footer');
-  check(/Last fill (BUY|SELL)/.test(await v1.textContent('#legend')), 'v1 fills still shown');
-  check(await v1.isVisible('#acctPick') && JSON.stringify(await v1.$$eval('#acctPick option', os => os.map(o => o.value))) === '["DEMO-EVAL","Sim101","DEMO-EMPTY"]', 'no order bar: the compact account picker in the toolbar, no "All accounts"');
-  await shot(v1, 'orders-1440-v1-read-only.png');
-  await v1.close();
 } finally {
   await browser.close();
   for (const b of bridges) b.kill();
