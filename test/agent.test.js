@@ -467,10 +467,10 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.21.0');   // 1.21.0: the page needs ChartBridge 0.5.2 (after 1.20.1, the window at any time)
-  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.21\.0'/);
-  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.21\.0/);
-  for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
+  assert.equal(JSON.parse(read('package.json')).version, '1.23.0');   // 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.21.0 needs ChartBridge 0.5.2
+  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.23\.0'/);
+  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.23\.0/);
+  for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent-grid.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md', 'docs/MOTION.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 
 test('ChartBridge 0.5.0 as built (agent-channel 4d4a81f): every status line naming an agent is that agent\'s notice', () => {
@@ -653,11 +653,126 @@ test('board F wiring: fonts from this PC, the light in CSS only, no keydown on t
   assert.match(css, /prefers-reduced-motion: reduce/); assert.match(css, /\.ag-view\.ag-still \.ag-light \{ display: none !important; \}/);
   assert.match(css, /--f-body: "IBM Plex Sans"/, 'the hybrid: IBM Plex Sans for body text (already loaded by plex.css)');
   assert.match(css, /--f-ui: "Chakra Petch"/); assert.match(css, /--f-num: "JetBrains Mono"/);
+  /* Layout 5 (DECISION 2026-10-14a): Orbitron for the headers, from this PC (Latin subset, OFL beside it, installed); Chakra
+     Petch stays for buttons, chips, tabs and small labels, JetBrains Mono for numbers, IBM Plex Sans for body text */
+  assert.match(css, /--f-head: "Orbitron"/);
+  for (const f of ['Orbitron-Medium.woff2', 'Orbitron-Bold.woff2', 'OFL-orbitron.txt']) {
+    assert.ok(to.includes('fonts/' + f), f + ' installed');
+    if (/woff2$/.test(f)) { assert.equal(fs.readFileSync(path.join(root, 'live', 'fonts', f)).subarray(0, 4).toString('latin1'), 'wOF2'); assert.match(fonts, new RegExp(f.replace('.', '\\.'))); }
+  }
+  assert.match(read('live', 'fonts', 'OFL-orbitron.txt'), /SIL OPEN FONT LICENSE Version 1\.1/);
   for (const page of ['index.html', 'agent.html']) assert.match(read('live', page), /href="fonts\/plex\.css">\n<!--[^\n]*-->\n<link rel="stylesheet" href="fonts\/agent-fonts\.css">/, page + ': Plex and the tab\'s fonts');
   assert.match(css, /#c81fe0/); assert.doesNotMatch(css + js + read('live', 'agent-core.js'), /#ff4fd8/i, 'the old Judgment pink is gone');
   assert.doesNotMatch(js, /requestAnimationFrame|setInterval/, 'no per-frame script for the light');
+  /* Layout 5 (DECISION 2026-10-14a, the lead's ruling): the grid canvas is allowed motion, so live/agent-grid.js alone may
+     have a frame loop (requestAnimationFrame); it caps itself at 30 frames a second and 1.5 device pixels, pauses while the
+     window is hidden, the tab is closed, Motion is Off or reduced motion is asked, and has no interval, key or pointer handler.
+     Everything else in the tab stays as board F: no frame loop and no interval (agent.js, agent-core.js, agent-helper.js). */
+  const grid = read('live', 'agent-grid.js');
+  for (const f of ['agent-core.js', 'agent-helper.js']) assert.doesNotMatch(read('live', f), /requestAnimationFrame|setInterval/, f + ': no frame loop');
+  assert.match(grid, /const FPS = 30, FRAME_MS = 1000 \/ FPS, MAX_DPR = 1\.5/);
+  assert.match(grid, /visibilitychange/); assert.match(grid, /prefers-reduced-motion: reduce/); assert.match(grid, /S\.motion !== 'off'/);
+  assert.doesNotMatch(grid, /setInterval|addEventListener\('(key|pointer|mouse|click|wheel)/, 'no interval and no key or pointer handler');
+  assert.doesNotMatch(grid, /shadowBlur|filter\s*=/, 'no shadow blur and no filter');
   assert.doesNotMatch(js, /document\.addEventListener\('keydown'/, 'no keydown handler on the document');
   assert.doesNotMatch(js, /ChartMotion\.|window\.ChartMotion|data-in=|data-count=/, 'the ChartMotion kit is not used on the Agent tab');
   assert.match(js, /data-agans="accept" data-no-motion/); assert.match(js, /data-k="sPnl"/);
   for (const f of ['live/agent.css', 'live/fonts/agent-fonts.css', 'live/fonts/OFL-agent.txt']) assert.doesNotMatch(read(...f.split('/')), /[\u2013\u2014]/, f + ': no em or en dashes');
+});
+
+/* ======================================================================== Layout 5 (chart 1.23.0, DECISION 2026-10-14a) */
+test('Layout 5: the grid\'s steps say today\'s tracker words with their time, a step with nothing says nothing, no scores', () => {
+  const a = agent({ rules: RULES });
+  let L = AC.stepLines({ agent: a, now: T0 });
+  assert.deepEqual(L.map(x => x.words), ['Watching', '', '', '', ''], 'watching: only Screen');
+  const notes = [{ agent: 'demo', kind: 'look', text: 'x', at: T0 - 300000 }, { agent: 'demo', kind: 'thinking', text: 'y', at: T0 - 5000 }];
+  const plans = [{ agent: 'demo', id: 'r1', action: 'plan', result: 'refused: qty', at: T0 - 600000 }];
+  L = AC.stepLines({ agent: a, notes, plans, now: T0 });
+  assert.deepEqual(L.map(x => x.words), ['', 'A look', 'Thinking', 'Refused by ChartBridge: qty', ''], 'each step its newest word, whatever its hold; Screen says nothing while a newer step is lit');
+  assert.equal(L[1].at, T0 - 300000, 'a look 5 min ago is still his newest look');
+  L = AC.stepLines({ agent: agent({ position: { root: 'MNQ', qty: 1, avgPrice: 1 } }), notes, now: T0 });
+  assert.equal(L[4].words, 'In a trade, long 1 MNQ'); assert.equal(L[4].at, null, 'the state now on its own step, no time');
+  assert.deepEqual(AC.stepLines({ now: T0 }).map(x => x.words), ['', '', '', '', ''], 'no agent: nothing');
+  assert.equal(AC.ageText(T0 - 8000, T0), '8s'); assert.equal(AC.ageText(T0 - 240000, T0), '4m'); assert.equal(AC.ageText(T0 - 7200000, T0), '2h');
+  assert.equal(AC.ageText(null, T0), ''); assert.equal(AC.ageText(T0 + 60000, T0), '', 'a time ahead says nothing');
+  assert.equal(AC.lightState({ agent: a, notes, now: T0 }).phase, 'think', 'the light unchanged by the refactor (lightEvents)');
+});
+
+test('Layout 5: an entry\'s risk is its plan\'s own riskDollars (found by what both carry); his trades in R; never estimated', () => {
+  const plan = { agent: 'demo', id: 'c1', action: 'plan', result: 'proposed', root: 'MNQ', side: 'buy', kind: 'limit', price: 25390, qty: 2, stopTicks: 16, targetTicks: 32, riskDollars: 16 };
+  const order = { id: 'O1', by: 'agent:demo', role: 'entry', root: 'MNQ', side: 'buy', kind: 'limit', price: 25390, qty: 2, name: 'CB#a1 ag:demo s16 t32' };
+  assert.equal(AC.entryRisk(order, [plan]), 16);
+  assert.equal(AC.entryRisk(Object.assign({}, order, { name: '', planned: { stopTicks: 16, targetTicks: 32 } }), [plan]), 16, 'the ticks from planned');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { name: 'CB#a1 ag:demo s20 t32' }), [plan]), null, 'other stop ticks: not this plan');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { price: 25391 }), [plan]), null, 'another price');
+  assert.equal(AC.entryRisk(order, [plan, Object.assign({}, plan, { id: 'c2', riskDollars: 17 })]), null, 'two plans that disagree: not known');
+  assert.equal(AC.entryRisk(order, [plan, Object.assign({}, plan, { id: 'c2' })]), 16, 'two plans that agree: that risk');
+  assert.equal(AC.entryRisk(order, [Object.assign({}, plan, { result: 'refused: x' })]), null, 'a refused plan is never one');
+  assert.equal(AC.entryRisk(Object.assign({}, order, { role: 'stop' }), [plan]), null, 'only an entry');
+  const pv = r => (r === 'MNQ' ? 2 : 0);
+  const fills = [{ id: 'X1', root: 'MNQ', side: 'buy', qty: 2, p: 25390, u: T0, order: 'O1' }, { id: 'X2', root: 'MNQ', side: 'sell', qty: 2, p: 25398, u: T0 + 60000, order: 'T1' }];
+  let R = AC.tradesR(fills, { O1: { risk: 16, qty: 2 } }, pv);
+  assert.deepEqual(R.trades.map(t => [t.pnl, t.risk, t.r]), [[32, 16, 2]]); assert.equal(R.total, 2); assert.deepEqual(R.curve, [2]); assert.deepEqual(R.open, []);
+  R = AC.tradesR(fills.concat([{ id: 'X3', root: 'MNQ', side: 'sell', qty: 1, p: 25400, u: T0 + 120000, order: 'O2' }]), new Map([['O1', { risk: 16, qty: 2 }], ['O2', { risk: 10, qty: 2 }]]), pv);
+  assert.deepEqual(R.open, [{ root: 'MNQ', dir: -1, qty: 1, risk: 5 }], 'an open trade: half its entry filled, half its plan\'s risk');
+  R = AC.tradesR(fills, {}, pv);
+  assert.equal(R.total, null, 'a trade whose risk is not known: not reported'); assert.deepEqual(R.curve, []);
+  assert.equal(AC.tradesR(fills.map(f => Object.assign({}, f, { order: undefined })), { O1: { risk: 16, qty: 2 } }, pv).total, null, 'a fill kept before 1.23.0 (no order id): not known');
+  assert.equal(AC.tradesR([], {}, pv).total, 0, 'no trade: 0 R');
+});
+
+test('Layout 5: his heat at his own stop; flat is $0; not covered or not known is not reported', () => {
+  const a = agent({ position: { root: 'MNQ', qty: 2, avgPrice: 25390 } }), pv = () => 2;
+  const stop = { id: 'S1', by: 'agent:demo', account: 'SIM-AG1', role: 'stop', root: 'MNQ', state: 'working', price: 25386, qty: 2, filled: 0 };
+  assert.equal(AC.heatNow(a, [stop], pv), 16);
+  assert.equal(AC.heatNow(agent({ position: { root: 'MNQ', qty: 0 } }), [], pv), 0, 'flat');
+  assert.equal(AC.heatNow(a, [Object.assign({}, stop, { qty: 1 })], pv), null, 'a stop for half: not reported');
+  assert.equal(AC.heatNow(a, [Object.assign({}, stop, { by: 'bot' })], pv), null, 'only his own stop');
+  assert.equal(AC.heatNow(a, [Object.assign({}, stop, { price: 25395 })], pv), 0, 'a stop past the entry locks a gain: 0');
+  assert.equal(AC.heatNow(agent({ position: { root: 'MNQ', qty: -1, avgPrice: 25390 } }), [Object.assign({}, stop, { price: 25394, qty: 1 })], pv), 8, 'short');
+  assert.equal(AC.heatNow(a, [stop], () => 0), null, 'no point value');
+});
+
+test('Layout 5: the grid canvas draws at most 30 frames a second, at most 1.5 device pixels, and no frame while paused', () => {
+  let rafs = [], now = 0, draws = 0;
+  const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => ({ addColorStop() {} })), set: (t, k, v) => { t[k] = v; return true; } });
+  const fake = (w, h) => ({ clientWidth: w, clientHeight: h, width: 0, height: 0, getContext: () => ctx, getBoundingClientRect: () => ({ left: 0, top: 0, right: w, bottom: h }), getClientRects: () => [1] });
+  const saved = { window: global.window, document: global.document, RO: global.ResizeObserver };
+  const listeners = {};
+  global.document = { visibilityState: 'visible', addEventListener: (k, f) => { listeners[k] = f; }, removeEventListener() {}, createElement: () => fake(10, 10) };
+  global.window = { devicePixelRatio: 3, performance: { now: () => now }, requestAnimationFrame: f => { rafs.push(f); return rafs.length; }, cancelAnimationFrame: () => { rafs = []; }, matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) };
+  global.ResizeObserver = undefined;
+  try {
+    delete require.cache[require.resolve('../live/agent-grid.js')];
+    const AG = require('../live/agent-grid.js');
+    const cv = fake(600, 240), g = AG.create(cv, { steps: () => [], decision: () => null });
+    g.set({ steps: [{ color: '#5df2ff', lit: true, now: true }], shown: true, motion: 'full' });
+    g.layout();
+    assert.equal(cv.width, 900, 'at most 1.5 device pixels per CSS pixel on a screen of 3');
+    assert.equal(g.state().dpr, 1.5);
+    const frame = () => { const f = rafs.shift(); if (f) { now += 1000 / 60; f(now); } };
+    const before = g.state().frames;
+    for (let i = 0; i < 60; i++) frame();                           // one second of a 60 Hz screen
+    draws = g.state().frames - before;
+    assert.ok(draws <= 31 && draws >= 28, 'about 30 frames a second, never more: ' + draws);
+    g.set({ motion: 'off' });
+    assert.equal(rafs.length, 0, 'Motion Off: no frame scheduled');
+    const still = g.state().frames;
+    for (let i = 0; i < 10; i++) frame();
+    assert.equal(g.state().frames, still, 'and none drawn');
+    g.set({ motion: 'full' }); assert.equal(rafs.length, 1, 'Full: the loop again');
+    global.document.visibilityState = 'hidden'; listeners.visibilitychange();
+    assert.equal(rafs.length, 0, 'a hidden window: no frame scheduled');
+    global.document.visibilityState = 'visible'; listeners.visibilitychange();
+    g.set({ shown: false }); assert.equal(rafs.length, 0, 'the tab closed: none');
+    g.set({ shown: true }); g.fire(Date.now()); assert.ok(g.state().fired, 'a plan fired: the orange beam');
+    g.destroy(); assert.equal(rafs.length, 0, 'destroyed: none');
+  } finally { Object.assign(global, { window: saved.window, document: saved.document, ResizeObserver: saved.RO }); }
+});
+
+test('Layout 5 wiring: agent-grid.js loaded before agent.js on both pages and installed; the LM03 fix outranks workspace.css', () => {
+  for (const f of ['index.html', 'agent.html']) { const h = read('live', f); assert.ok(h.indexOf('src="agent-grid.js"') > 0 && h.indexOf('src="agent-grid.js"') < h.indexOf('src="agent.js"'), f); }
+  assert.ok(JSON.parse(read('nt8', 'install-files.json')).www.some(x => x.from === 'live/agent-grid.js' && x.to === 'agent-grid.js'));
+  /* workspace.css says [hidden] { display: none !important }: on a phone the mode's words keep their two lines while hidden */
+  assert.match(read('live', 'agent.css'), /\.ag-view \.ag-why\[hidden\] \{ display: block !important; visibility: hidden; \}/);
 });

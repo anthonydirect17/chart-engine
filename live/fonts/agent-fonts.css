@@ -6,6 +6,9 @@
  * to the fonts each page names after these. Licence: SIL Open Font License 1.1, in OFL-agent.txt beside them.
  * Loaded by live/index.html and live/agent.html (the Agent tab, inside .ag-view) and by the kit's pages (live/kit.html,
  * and any page on the kit, docs/KIT.md), always after plex.css. Listed in nt8/install-files.json.
+ * Orbitron 500 and 700 (chart 1.23.0, Layout 5, DECISION 2026-10-14a): the Agent tab's headers. The Latin subset only (npm
+ * @fontsource/orbitron 5.2.8, files/orbitron-latin-500-normal.woff2 and -700-, unchanged, renamed); SIL Open Font License
+ * 1.1, in OFL-orbitron.txt beside it. A face is fetched only when a page uses it, so the kit's pages never load it.
  */
 @font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 400; font-display: swap; src: url("ChakraPetch-Regular.woff2") format("woff2"); }
 @font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 500; font-display: swap; src: url("ChakraPetch-Medium.woff2") format("woff2"); }
@@ -13,3 +16,5 @@
 @font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 700; font-display: swap; src: url("ChakraPetch-Bold.woff2") format("woff2"); }
 @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("JetBrainsMono-Regular.woff2") format("woff2"); }
 @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 600; font-display: swap; src: url("JetBrainsMono-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "Orbitron"; font-style: normal; font-weight: 500; font-display: swap; src: url("Orbitron-Medium.woff2") format("woff2"); }
+@font-face { font-family: "Orbitron"; font-style: normal; font-weight: 700; font-display: swap; src: url("Orbitron-Bold.woff2") format("woff2"); }

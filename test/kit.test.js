@@ -484,7 +484,9 @@ test('installed: kit.css, kit.js and kit.html are in the www list, and the galle
   for (const f of KIT_FILES) assert.ok(!/fonts\.(googleapis|gstatic)\.com/.test(read(f)), f + ' has a web font address');
   // the fonts: the Agent tab's files, every face installed, and only the weights they have
   const faces = [...read('live/fonts/agent-fonts.css').matchAll(/font-family: "([^"]+)"; font-style: normal; font-weight: (\d+);[^}]*url\("([^"]+)"\)/g)].map(m => ({ family: m[1], weight: +m[2], file: m[3] }));
-  assert.deepStrictEqual(faces.map(f => f.family + ' ' + f.weight), ['Chakra Petch 400', 'Chakra Petch 500', 'Chakra Petch 600', 'Chakra Petch 700', 'JetBrains Mono 400', 'JetBrains Mono 600']);
+  /* chart 1.23.0, Layout 5 (DECISION 2026-10-14a): Orbitron 500 and 700 for the Agent tab's headers, in the same file (a face is
+     fetched only when a page uses it, so the kit's pages never load them) */
+  assert.deepStrictEqual(faces.map(f => f.family + ' ' + f.weight), ['Chakra Petch 400', 'Chakra Petch 500', 'Chakra Petch 600', 'Chakra Petch 700', 'JetBrains Mono 400', 'JetBrains Mono 600', 'Orbitron 500', 'Orbitron 700']);
   for (const f of faces) {
     assert.strictEqual(fs.readFileSync(path.join(root, 'live', 'fonts', f.file)).subarray(0, 4).toString('latin1'), 'wOF2', f.file);
     assert.ok(www.some(x => x.from === 'live/fonts/' + f.file && x.to === 'fonts/' + f.file), f.file + ' is installed');

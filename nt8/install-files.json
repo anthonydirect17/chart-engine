@@ -45,6 +45,7 @@
     { "from": "live/agent.js", "to": "agent.js" },
     { "from": "live/agent-core.js", "to": "agent-core.js" },
     { "from": "live/agent-helper.js", "to": "agent-helper.js" },
+    { "from": "live/agent-grid.js", "to": "agent-grid.js" },
     { "from": "live/agent.css", "to": "agent.css" },
     { "from": "src/chart-engine.js", "to": "src/chart-engine.js" },
     { "from": "live/fonts/plex.css", "to": "fonts/plex.css" },
@@ -65,6 +66,9 @@
     { "from": "live/fonts/ChakraPetch-SemiBold.woff2", "to": "fonts/ChakraPetch-SemiBold.woff2" },
     { "from": "live/fonts/ChakraPetch-Bold.woff2", "to": "fonts/ChakraPetch-Bold.woff2" },
     { "from": "live/fonts/JetBrainsMono-Regular.woff2", "to": "fonts/JetBrainsMono-Regular.woff2" },
-    { "from": "live/fonts/JetBrainsMono-SemiBold.woff2", "to": "fonts/JetBrainsMono-SemiBold.woff2" }
+    { "from": "live/fonts/JetBrainsMono-SemiBold.woff2", "to": "fonts/JetBrainsMono-SemiBold.woff2" },
+    { "from": "live/fonts/OFL-orbitron.txt", "to": "fonts/OFL-orbitron.txt" },
+    { "from": "live/fonts/Orbitron-Medium.woff2", "to": "fonts/Orbitron-Medium.woff2" },
+    { "from": "live/fonts/Orbitron-Bold.woff2", "to": "fonts/Orbitron-Bold.woff2" }
   ]
 }

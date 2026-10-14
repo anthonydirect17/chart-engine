@@ -1,4 +1,4 @@
-# The Agent tab (chart 1.17.0)
+# The Agent tab (chart 1.17.0; Layout 5 since 1.23.0)
 
 Where Anthony watches and controls his AI trading agents, next to the Bot tab. Manrae is the first agent; the tab serves
 any number of them. It is the page's side of ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1, 2026-10-08:
@@ -16,18 +16,20 @@ every one again.
 |---|---|
 | `live/agent-core.js` | `AgentCore`: the logic, no page in it (Node tests run it): agents and the picker, proposals and their countdown, the feed, the rule form and its checks, the account chooser, the agent's orders by its mark, the one copilot-key router, and board F's light (`lightState`), stream tones and drawer records (`rowTone`, `decisionRecord`), session trail (`sessionTrail`), room (`roomLines`) and Motion switch (`motionPref`) |
 | `live/agent.js` | `AgentDesk`: draws the tab from AgentCore on the window's one v3 connection |
+| `live/agent-grid.js` | `AgentGrid` (1.23.0, Layout 5): the grid panel's canvas, the tab's one frame loop (Motion, below) |
 | `live/agent-helper.js` | `AgentHelper` (1.20.0): On/Off, the spend readout, the hero picker and the names; its client for the PC helper on localhost:8767 |
 | `test/agent-helper.test.js`, `test/fake-helper.mjs`, `test/agent-onoff-smoke.mjs` | its unit tests, a fake PC helper, and `npm run smoke:onoff` |
 | `live/agent.css` | its look: board F (below), scoped to the tab |
-| `live/fonts/agent-fonts.css` | Chakra Petch and JetBrains Mono from this PC (Latin subset, `OFL-agent.txt` beside them) |
+| `live/fonts/agent-fonts.css` | Chakra Petch and JetBrains Mono from this PC (Latin subset, `OFL-agent.txt` beside them); 1.23.0: Orbitron 500 and 700 (`Orbitron-Medium.woff2`, `Orbitron-Bold.woff2`, `OFL-orbitron.txt`) |
 | `live/agent.html` | the tab in its own window (Pop out, for a third monitor), on its own v3 connection |
 | `test/agent.test.js` | AgentCore's unit tests, and the files' wiring |
 | `test/fake-v3.mjs`, `test/fake-bridge.mjs` | the fake ChartBridge speaks the agent channel (`--agents=demo`): the made-up "Demo Agent" |
 | `test/fake-v3.test.js` | the fake's agent tests, and its `/agent/<id>` socket |
 | `test/agent-smoke.mjs` | `npm run smoke:agent`: the workspace against the fake, screenshots in `test/out/agent-*.png` |
 | `test/agent-targets-smoke.mjs` | `npm run smoke:agent-targets` (also run by `smoke:agent`): Accept and Reject never covered, never dropped, never moving (below) |
-| `test/perf-agent.mjs` | `npm run perf:agent`: the light's cost in a trade over a busy chart (`docs/MOTION.md` R5) |
-| `test/agent-parity.json`, `test/agent-parity-smoke.mjs` | the parity list (128 items, before Layout 5) and `npm run smoke:agent-parity` (also run by `smoke:agent`): every item asserted through its `data-parity` hook (below) |
+| `test/perf-agent.mjs` | `npm run perf:agent`: the light's (and the grid canvas's) cost in a trade over a busy chart (`docs/MOTION.md` R5) |
+| `test/agent-l5-smoke.mjs` | `npm run smoke:agent-l5` (also run by `smoke:agent`): what Layout 5 adds (below), and its screenshots `test/out/agent-l5-*.png` |
+| `test/agent-parity.json`, `test/agent-parity-smoke.mjs` | the parity list (128 items, made before Layout 5, held by it) and `npm run smoke:agent-parity` (also run by `smoke:agent`): every item asserted through its `data-parity` hook (below) |
 | `live/kits/agent-board-f/` | board F saved as a kit (main commit `a90c3c4`): opens on its own against the fake; never installed, never loaded by the page (`test/agent-kit.test.js`); its `README.md` says how to put it back |
 
 Shared code changed (each change small and tested): `live/bot.js` hands its open proposals to the one copilot-key router
@@ -38,27 +40,88 @@ keeps one tab open at a time and lets the copilot keys work for agents; `live/in
 
 ## The look
 
-Board F of Anthony's mockups (2026-10-08: "love it, lets build F into the real agent tab"; the Judgment colour and the
-light's pace as he corrected them the same day). Board A's information in board F's look. Everything is scoped to the
-tab (`.ag-view`): the top bar, the corner proposals and notices, the chart and every other tab keep the page's look.
+**Layout 5 Tron** (chart 1.23.0, DECISION 2026-10-14a, the approved preview), after board F of Anthony's mockups (2026-10-08).
+Every item and control of board F is kept (`test/agent-parity.json`, 128 items); the look and the layout change. Everything is
+scoped to the tab (`.ag-view`): the top bar, the corner proposals and notices, the chart and every other tab keep the page's
+look.
 
-- **Ground and colours:** a blue-black ground (`#010307`) with two faint radial glows; cyan (`#5df2ff`) is the base colour
-  of lines, labels and figures. Purple (`#6d28d9`, `#7b5cff`, `#b69cff`, `#d8ccff`) and red (`#ff3b5c`) only on a few
-  buttons, chips and words: the agent's name, the SIM chip and Reject in purple; the kill switch, a LIVE account's chip
-  and the losses in red. Green and red for P&L.
-- **Fonts (Anthony's hybrid):** Chakra Petch for titles, section labels, tabs and buttons; IBM Plex Sans for body text
-  (his words, the proposal's reason, the stream's rows, notes, explanations); JetBrains Mono for every number. All three
-  come from this PC: IBM Plex as for the whole page (`fonts/plex.css`), Chakra Petch (400 to 700) and JetBrains Mono (400,
-  600) in `live/fonts` (Latin subset of npm `@fontsource` 5.2.5, SIL Open Font License, listed in
-  `nt8/install-files.json`). The page loads nothing from the internet (1.16.0); a missing font falls back to the
-  system's own (Segoe UI, Consolas).
-- **Panels:** thin cyan borders on a dark glass; the light (below) circles the ones where his attention is.
+| part | what |
+|---|---|
+| Ground | near-black `#02060c` with a soft blue glow from below and a still horizon grid under the panels (drawn once) |
+| Panels | a thin glowing cyan line with cut corners and a faint inner line, drawn behind each panel (`::before`, `::after`), so the light and the glow along its box are never clipped; the controls and the footer are cards inside one panel each |
+| Colours | cyan `#5df2ff` and white-hot for lines, labels and figures; **orange `#ff7a18` only for his action**: the proposal panel's frame while his proposal waits, the decision while it waits, the grid's beam when a plan arrives; purple and red on a few buttons, chips and words (his name, SIM, Reject, the kill switch, LIVE); green and red for P&L |
+| Fonts | Orbitron for headers (panel titles, his name, the step names, the decision, the footer's labels); Chakra Petch for buttons, chips, tabs and small labels; IBM Plex Sans for body text (his words, the reason, the stream's rows, notes); JetBrains Mono for every number. All from this PC: IBM Plex from `fonts/plex.css`, the others from `live/fonts` (Latin subsets of npm `@fontsource` 5.2.5, Orbitron 5.2.8, SIL Open Font License, listed in `nt8/install-files.json`). Nothing from the internet; a missing font falls back to the system's own |
+| No rez, no flicker | nothing animates in when the tab opens (only the light runs) |
+
+Layout at 1366 x 768, 1600 x 900 and 1920 x 1080, one screen with no page scroll (the controls scroll inside their column
+when they must, as board F's did):
+
+| row | left (290 px; 270 at 1500 px and narrower) | centre | right (370 px; 340) |
+|---|---|---|---|
+| strip (46 px) | his disc (initials), his name, `// AGENT DESK`, connected, mode, account | | position, today, Session R, picker, Motion, Pop out |
+| now line (24 px) | the newest word of each step that has one, still | | |
+| main | four cards: Agent (On/Off, spend, build), Mode (modes, kill switch, status, heartbeat, last plan, build), His account, Rules | the grid (about 40 %) over his chart (about 60 %) | the proposal's slot and the count line, then his stream (the drawer over both) |
+| footer (62 px) | today, trades and losses | his session trail | R curve, heat and if accepted |
+
 - **Only what is needed to understand and use the page** (Anthony 2026-10-08: "I dont need the labels in profit or under
   water, I also dont need the light legend on the bottom or any other embedded labeling like that"): section titles,
   field names, values and numbers, buttons, and the words that need him to act (ChartBridge's refusals, the LIVE account
   question, the kill switch, a lost connection, Accept's last 5 s). No legend of the light's colours, no step captions, no
   sentences that explain how the page works; a figure not reported says "not reported" (ChartBridge's own words in its
   tooltip), a sent change says "Sent." for a few seconds. The colours below are written here, not on the page.
+
+## The grid (Layout 5)
+
+The centre's top panel, "What he is doing now" with the light's line beside it (C01, C02):
+
+- **His five steps** (Screen, Eyes, Judgment, Checks, ChartBridge), each with today's tracker words and how long ago
+  (`AgentCore.stepLines`, `ageText`): the newest event that lights that step today (the light's own events, whatever their
+  hold: "A look", "Thinking", "A plan in Shadow", "He passed: ...", "Refused by ChartBridge: ...", "Placed by ChartBridge",
+  "Plan accepted", "Out of the trade: +$32.00"), and the state now on its own step ("A plan is waiting for you", "Entry placed,
+  waiting for a fill", "In a trade, long 1 MNQ", "Watching" on Screen while nothing newer is). A step with nothing yet says
+  nothing. No scores. The step now is marked (C03, `aria-current`).
+- **The decision** on the right: his newest plan as its stream row says it ("Buy 2 MNQ · Sample pullback", "11:00 · waiting
+  for you"), or "No plan yet today"; orange while his proposal waits.
+- **The canvas** behind them (`live/agent-grid.js`): each step's feed flows into a point-cloud sphere turning slowly inside
+  identity-disc rings (a step with words flows, the step now fastest), and lines funnel out of it into the decision. An
+  orange beam and an orange segment on the rings show only for 6 s after a plan arrives (an `agentPlan` message, not one sent
+  again at sign-in; never a skip or a refusal). It draws only that: no data of its own. Its motion is in Motion below.
+
+## The chart: Maximize and its strip (Layout 5)
+
+His chart is the centre's larger part (about 60 %). **Maximize** (the button in its head, a double click on its head bar, or
+Escape with the focus inside the chart's panel to restore) gives it the whole centre column: the grid makes way, the controls
+and the proposal keep their places (the kill switch, the mode, Accept and Reject never move and are never covered), and a thin
+strip under its head shows, at once (R3, `data-no-motion`): Position, Entry, Stop, Target, Open R, Session, Heat, Room. A double
+click inside the chart itself stays the chart's own (it resets the view). Nothing switches it by itself; the tab opens with the
+grid.
+
+| figure | from |
+|---|---|
+| Entry, stop, target | in a trade: his average price and his own working stop and target; with an entry working: its price and its planned stop and target ("(working)"); with a proposal open: its price and legs ("(proposed)"); else "-" |
+| Open R | his open P&L over the risk of the plan his open trade came from; "not reported" when either is not known; flat "-" |
+| Session | today's P&L and Session R |
+| Heat | below |
+| Room | the daily limit left (`roomDailyLoss` or The Desk's limit), else "not reported" |
+
+## His figures: R and heat (Layout 5, the lead's rulings)
+
+Only from real data; what is not known says "not reported", never estimated.
+
+- **Session R, the R curve, open R:** from his own fills (as the page claims them) and each plan's own `riskDollars`. The page
+  is not told which plan an entry order is, so `AgentCore.entryRisk` finds it by what both carry: his plans placed or proposed
+  with the entry's root, side, kind, size and price (its limit price for a stop-limit when the order carries one) and its stop
+  and target ticks (the order's `planned`, or its name "s16 t32"); their `riskDollars` when they all say the same, else not
+  known. Each entry's risk is kept for the trading day on this PC (`live-agent-risk-v1`, every read and write in a try: a
+  filled entry is not sent again after a reload); each fill now keeps the order id it came from. `AgentCore.tradesR` makes his
+  trades per root (flat to flat), each one's result before fees from its fills and its risk from its entry orders (in
+  proportion to the contracts taken from each); a trade whose risk is not known makes Session R and the curve say "not
+  reported". No trade: 0.00 R.
+- **Heat now:** what his open position loses at his own working stops (`by: "agent:<id>"`, role stop): from the average price
+  to each stop, for each stop's size, times the point value (`AgentCore.heatNow`); flat $0.00; a stop past the entry counts
+  $0; stops that do not cover the whole position: "not reported". **If accepted:** his open proposal's `riskDollars`, else "-".
+- Not drawn (no source): levels, regime, feed lag. The rules box shows only the rules the contract carries ("risk a trade" and
+  "daily limit" are not rules; the daily limit stays in his account's room).
 
 ## The light
 
@@ -70,17 +133,17 @@ P&L. Nothing is guessed: what the channel does not say is not shown.
 
 | state | colour | where | from |
 |---|---|---|---|
-| watching | cyan `#5df2ff` (Screen) | the tracker | nothing newer below |
-| a look | violet `#8f7bff` (Eyes) | the tracker and the stream | a `look` note in the last 2 min |
-| judgment at work | magenta `#c81fe0` (Judgment) | the tracker and the stream | a `thinking` note in the last 2 min |
-| a plan | magenta `#c81fe0` | the tracker and the proposal | a proposal open for you, or a Shadow plan in the last 2 min |
+| watching | cyan `#5df2ff` (Screen) | the grid | nothing newer below |
+| a look | violet `#8f7bff` (Eyes) | the grid and the stream | a `look` note in the last 2 min |
+| judgment at work | magenta `#c81fe0` (Judgment) | the grid and the stream | a `thinking` note in the last 2 min |
+| a plan | magenta `#c81fe0` | the grid and the proposal | a proposal open for you, or a Shadow plan in the last 2 min |
 | his rules being checked | gold `#ffd23f` (Checks) | his account and the proposal | you pressed Accept and ChartBridge has not answered yet |
 | placed | green `#3dff9a` (ChartBridge) | the proposal and the chart | his own entry works |
 | a go | green | the proposal and the stream | a plan placed or accepted in the last 30 s |
 | he passed, a plan ended | orange `#ff8a2a` | the proposal and the stream | a skip, or a proposal rejected, expired, withdrawn or not answered, in the last 30 s |
 | a hard no | red `#ff3b5c` | his account and the proposal | a plan ChartBridge refused, in the last 30 s |
 | in a trade | green at or above zero, red below | the chart and the P&L footer | a position; its open P&L (cyan while the P&L is not known yet) |
-| out of the trade | green for a gain, red for a loss | the tracker and the P&L footer | a flat exit this window saw, in the last 30 s |
+| out of the trade | green for a gain, red for a loss | the grid and the P&L footer | a flat exit this window saw, in the last 30 s |
 | kill switch on, stood down | red | his account | the `agent` message |
 | not connected, off | no light | | the `agent` message |
 
@@ -108,7 +171,7 @@ how a trade is going is the light's colour and the P&L figure, never words.
 
 ## Motion
 
-`docs/MOTION.md` R3 holds: only the border light and the panels' glow move or fade. The P&L figures (today, open), the
+`docs/MOTION.md` R3 holds: only the border light, the panels' glow and the grid canvas move or fade. The P&L figures (today, open), the
 position, the trades and losses, the chart and its price line, Accept and Reject, the kill switch and the mode change at
 once, with no transition, easing or count-up, and are marked `data-no-motion`. The ChartMotion kit is not used on the tab.
 
@@ -116,6 +179,11 @@ once, with no transition, easing or count-up, and are marked `data-no-motion`. T
   a try, Full when storage is blocked). Off hides the light and stops every animation and transition in the tab; the glow
   stays, still, on the panels where his attention is.
 - **The system's reduced motion** does the same, whatever the switch says.
+- **The grid canvas** (1.23.0, `live/agent-grid.js`, allowed motion by the lead's ruling for Layout 5): one canvas in the grid
+  panel, never over the chart; at most 30 frames a second and 1.5 device pixels per CSS pixel; paused (no frame scheduled,
+  one still frame shown) while the window is hidden, the tab is closed, Motion is Off or reduced motion is asked. It is the
+  tab's only frame loop: `test/agent.test.js` allows `requestAnimationFrame` in that file alone. Nothing rezzes in or
+  flickers when the tab opens.
 
 ## His stream and the decision drawer
 
@@ -142,16 +210,17 @@ decision in a drawer over the right column, outlined in that decision's colour:
 
 ## What the tab shows
 
-- **The strip:** the agent's initials and name (purple; 1.20.0: the build id and stamp are in the Build row under Status), connected with the heartbeat's
+- **The strip:** the agent's initials (in a disc since 1.23.0) and name (purple; 1.20.0: the build id and stamp are in the Build row under Status), connected with the heartbeat's
   age, the mode, the account with its SIM or LIVE mark, the position, KILLED or STOOD DOWN with why, and while ChartBridge
-  says the agent holds the owner lock, "OWNS SIM-AG1 MNQ"; the Motion switch and Pop out. With two or more agents, a
+  says the agent holds the owner lock, "OWNS SIM-AG1 MNQ"; 1.23.0: Today (as the footer) and Session R (above, hidden Today at
+  1500 px and narrower); the Motion switch and Pop out. With two or more agents, a
   picker (the choice is kept in this browser).
 - **Left:** the mode (Shadow, Copilot, Auto), the kill switch, status, heartbeat and the last plan; his account with its
   mark, the room left (max loss room from ChartBridge's `roomDrawdown`, daily limit left from `roomDailyLoss` or The
   Desk's limit, each with the limit and a meter when known, else ChartBridge's words why) and Change account; the rules in
   force and Change the rules, with ChartBridge's refusal under the button.
-- **Centre:** "What he is doing now", the tracker (Screen, Eyes, Judgment, Checks, ChartBridge) with a line in the light's
-  colour; under it a normal live chart (never animated, takes no orders) of the agent's root, with the agent's own working
+- **Centre:** "What he is doing now", the grid (1.23.0, above; before it the tracker), with the light's line in its colour; under
+  it a normal live chart (never animated, takes no orders) of the agent's root, with the agent's own working
   orders, stop and target as lines (`by: "agent:<id>"` only), its trades today as marks and the chart's own live price
   line; its header has the root, the bars, the indicators and the position with its open P&L.
 - **Right, the proposal:** each open proposal: side, quantity, root, kind and price (and limit price for a stop-limit),
@@ -181,7 +250,7 @@ decision in a drawer over the right column, outlined in that decision's colour:
   you, accepted in 1.3 s, rejected, expired, refused and why, skipped), and his fills and exits today, newest first, with
   filters (All, Plans, Notes, Thinking, Lessons). Each row opens the drawer above.
 - **The footer:** today's P&L (ChartBridge's `pnlToday`, with the open P&L beside it in a trade), trades and losing trades
-  (of the limit when the rules set one), his session as a light trail from the rules' `entryFrom` to `flatAt` (09:45 to
+  (of the limit when the rules set one), 1.23.0: his R curve and his heat with the risk if accepted (above), his session as a light trail from the rules' `entryFrom` to `flatAt` (09:45 to
   15:55 by default) with now and his fills (F) and exits (X, green or red by result).
 - **Corner:** an agent's proposal is answered only in the Agent tab (the re-review of c47a8a1: two agents' cards and the
   bot's ran the corner 207 px over the top bar at 1366 x 768). With the tab closed, one line of a fixed height (30 px) in
@@ -207,11 +276,14 @@ decision in a drawer over the right column, outlined in that decision's colour:
   going moves nothing in the tab (it pushed the whole tab down 46 px before). At 1100 px and narrower the chart sits far
   down the tab, so both are pinned at the top instead, in a band of their own of a fixed height above the tab's scrolling
   part (66 px, 96 px on a phone; they scroll inside it): always in sight, over no Accept or Reject, and moving nothing.
-- **Smaller screens:** at 1366 x 768 everything fits the window with no scroll; narrower than 1100 px the controls and the
-  proposal (with the stream under it) sit side by side at the top, the chart under them across both (the tab scrolls); on a
-  phone the controls, then the proposal and the stream, then the chart, the words under the mode, the account and the rules
-  keeping their two lines while empty so they move nothing under them; on a phone everything stacks, with no sideways scroll
-  (the workspace's top bar wraps while the tab is open there).
+- **Smaller screens:** at 1366 x 768, 1600 x 900 and 1920 x 1080 everything fits the window with no scroll; narrower than 1100
+  px (board F's rules, kept) the controls and the proposal (with the stream under it) sit side by side at the top, the grid
+  (240 px) and the chart under them across both (the tab scrolls; the now line is not shown); on a phone the controls, then
+  the proposal and the stream, then the grid and the chart, the words under the mode, the account and the rules keeping their
+  two lines while empty so they move nothing under them (1.23.0: the mode's words while hidden too: workspace.css's `[hidden]
+  { display: none !important }` had collapsed them; agent.css now outranks it there); on a phone everything stacks, with no
+  sideways scroll (the workspace's top bar wraps while the tab is open there; at 1000 px its own Add panel and gear buttons
+  run past the window, on main as before 1.23.0: not the tab's).
 
 ## On/Off, spend and the hero picker (chart 1.20.0)
 
@@ -567,7 +639,20 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
   of it `<id>-<part>`, a state `<id>-lit`, `W02-alert`, `W02-waiting`, `P17` on an ended card); no style reads them, and a
   redesign keeps them. Three fakes in turn: `--agents=demo` (the base state, then each condition), `--agents=demo,demotwo`
   with the fake PC helper (`test/fake-helper.mjs` on 8767), and no agents line. It ends with the count: "parity: 128 of
-  128 items hold".
+  128 items hold". Layout 5 (1.23.0) passes it unchanged, `test/agent-parity.json` untouched; two hooks moved to the element
+  that carries their item alone: C03 (and its `aria-current`, `.now`, `.done`) from the step's `<li>` to its head (number and
+  name), since the step now also holds its words and age. One check is stricter: on a phone the mode's words (LM03) keep two
+  lines while hidden too (the bug the kit's builder found: workspace.css's `[hidden]` collapsed them).
+- `npm run smoke:agent-l5` (`test/agent-l5-smoke.mjs`, run by `smoke:agent` too; 1.23.0): one screen with no page scroll at
+  1366 x 768, 1600 x 900 and 1920 x 1080 with the chart about 60 % of the centre and Accept, Reject and the kill switch in
+  sight; nothing animates in when the tab opens; the steps' words (only Screen's "Watching" at first, then "A look" and
+  "Thinking" with their ages, a step with nothing silent, no scores); the decision; the grid canvas at about 30 frames a
+  second at most, at most 1.5 device pixels on a screen of 2, no frame loop with Motion Off, with reduced motion and with the
+  tab closed, and its orange beam when a plan arrives; Maximize by the button, a double click on the head bar (not inside the
+  chart) and Escape only from inside the chart's panel, its strip's eight figures from real data, and Accept, Reject, the kill
+  switch, the mode and On neither moved nor covered; a trade: heat $16.00 at his own stop, the entry's risk kept from the plan,
+  open R in the strip, then +$32.00 on a $16.00 plan as +2.00 R with the R curve drawn; 1000 x 800 and 390 x 844 keep board F's
+  stacking. Screenshots `agent-l5-1366x768`, `-1600x900`, `-1920x1080`, `-max`, `-narrow`, `-phone`, `-proposal`, `-drawer`.
 - `npm run perf:agent` (R5, `test/perf-agent.mjs`, not part of `npm test`): the Agent tab in a trade at 1920 x 1080 while
   MNQ trades a busy tape (`--live-rate=200`), Motion Full and Motion Off taking turns. Gates: a chart's frame p95 under 4 ms
   and all charts per frame under 8 ms (the chart's own), the light on the chart and the footer with Full and none with

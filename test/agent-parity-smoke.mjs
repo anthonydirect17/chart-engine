@@ -698,10 +698,11 @@ try {
     await page.evaluate(() => window.scrollTo(0, 0));
     const ph = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, w: innerWidth }));
     const L2 = await P('box', 'SS-controls'), R2 = await P('box', 'SS-right'), C2 = await P('box', 'SS-centre');
-    /* the words under the account and the rules keep two lines even empty; the mode's words take two lines when they show
-       (while hidden they take none today: workspace.css [hidden] wins over agent.css; see the report) */
-    const twoLines = () => page.evaluate(ids => ids.map(id => { const e = document.querySelector('[data-parity~="' + id + '"]'); return e.getBoundingClientRect().height >= 2 * parseFloat(getComputedStyle(e).lineHeight) - 1; }), ['LA07', 'LR09']);
+    /* the words under the account and the rules keep two lines even empty, and the mode's words keep theirs while hidden too
+       (Layout 5, chart 1.23.0: before it workspace.css [hidden] won over agent.css and the hidden line took none) */
+    const twoLines = () => page.evaluate(ids => ids.map(id => { const e = document.querySelector('[data-parity~="' + id + '"]'); return e.getBoundingClientRect().height >= 2 * parseFloat(getComputedStyle(e).lineHeight) - 1; }), ['LA07', 'LR09', 'LM03']);
     const why2 = await twoLines();
+    why2.push(await page.evaluate(() => { const e = document.querySelector('[data-parity~="LM03"]'); return e.hidden && getComputedStyle(e).visibility === 'hidden'; }));
     await click('LM02-auto');
     await until(async () => (await info('LM03')).shown, 'Auto armed on a phone');
     why2.push(await page.evaluate(() => { const e = document.querySelector('[data-parity~="LM03"]'); return e.getBoundingClientRect().height >= 2 * parseFloat(getComputedStyle(e).lineHeight) - 1; }));

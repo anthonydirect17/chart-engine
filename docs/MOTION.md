@@ -24,6 +24,20 @@ As a second line of defense, a scene whose root sits inside `.chart-live`, a tic
 (`.ws-flat`) or any element marked `data-no-motion` is shown in its final state at once, and pieces inside a
 `data-no-motion` element are left alone. Mark any trading part of a page you build with `data-no-motion`.
 
+## Allowed motion on the Agent tab (Layout 5, chart 1.23.0)
+
+The Agent tab does not use the kit. Its motion is two things only (DECISION 2026-10-14a and the lead's rulings):
+
+| what | how | stops |
+|---|---|---|
+| The border light (`ag-orbit`) | pure CSS: thin strips along a lit panel's border turning one small conic gradient (below) | Motion Off, reduced motion |
+| The grid canvas (`live/agent-grid.js`) | one 2D canvas in the grid panel only: the five steps feed a point-cloud sphere inside identity-disc rings, lines funnel into the decision; an orange beam only for a few seconds after a plan arrives | Motion Off, reduced motion, a hidden window, the tab closed: then no frame is scheduled and one still frame shows |
+
+The grid canvas is the tab's one frame loop and the only module there allowed `requestAnimationFrame` (`test/agent.test.js`
+says so for that file alone): at most 30 frames a second, at most 1.5 device pixels per CSS pixel, sizes read only when the
+canvas changes size, what does not move drawn once per size on a canvas of its own, no shadow blur and no filter. It is never
+over the chart and never on an order surface. Nothing in the tab rezzes in or flickers when it opens.
+
 ## Loading it
 
 | Page | How |
@@ -130,9 +144,11 @@ mid-entrance (R3); Less motion in Settings shows the Bot tab in its final state 
 while the tab's live chart draws a busy tape. It holds the chart's gates (a chart's frame p95 under 4 ms, all charts per
 frame under 8 ms), keeps the kit's own loop under 4 ms at p95, and checks that the kit never runs inside a chart's frame.
 
-`npm run perf:agent` (R5, `test/perf-agent.mjs`): the Agent tab's flowing light (pure CSS, not the kit) while its agent is
-in a trade over a busy tape, Motion Full and Off taking turns. It holds the chart's gates (a chart's frame p95 under 4 ms, all
-charts per frame under 8 ms) and keeps the light's cost to at most 4 ms on the frame interval p95 over Motion Off's.
+`npm run perf:agent` (R5, `test/perf-agent.mjs`): the Agent tab's flowing light (pure CSS, not the kit) and, since 1.23.0, its
+grid canvas, while its agent is in a trade over a busy tape, Motion Full and Off taking turns. It holds the chart's gates (a chart's frame p95 under 4 ms, all
+charts per frame under 8 ms) and keeps the light's cost (with the grid canvas: Motion Off stops both) to at most 4 ms on the
+frame interval p95 over Motion Off's. `npm run smoke:agent-l5` checks the grid canvas's pace (at most 30 frames a second), its
+pixel ratio (at most 1.5) and its pauses (Motion Off, reduced motion, the tab closed).
 
 ## Keeping it cheap on a big page (the Bot tab)
 

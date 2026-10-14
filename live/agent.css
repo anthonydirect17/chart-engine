@@ -1,19 +1,22 @@
 /*
- * The Agent tab (live/agent.js; chart page 1.17.0). Its look is board F of Anthony's mockups (2026-10-08: "love it, lets
- * build F into the real agent tab"): a blue-black ground with faint glows, cyan panels, purple and red only on a few
- * buttons, chips and words, and one slow light that circles the panels where the agent's attention is. Fonts (Anthony's
- * hybrid, 2026-10-08): Chakra Petch for titles, section labels, tabs and buttons; IBM Plex Sans for body text (his words,
- * the proposal's reason, the stream's rows, notes); JetBrains Mono for every number. All three from this PC
- * (live/fonts/agent-fonts.css, live/fonts/plex.css); offline or missing, each falls back to the system's own.
+ * The Agent tab (live/agent.js; chart page 1.17.0, Layout 5 since 1.23.0). Its look is "Layout 5 Tron" (DECISION 2026-10-14a,
+ * the approved preview): a near-black ground with a faint horizon grid, panels framed by a thin glowing line with cut corners,
+ * cyan #5df2ff and white-hot for lines, labels and figures, orange #ff7a18 only for the agent's action (a proposal waiting, the
+ * decision) and warnings, purple and red only on a few buttons, chips and words, green and red for P&L. Fonts: Orbitron for
+ * the headers (panel titles, his name, the step names, the decision, the footer's labels), Chakra Petch for buttons, chips,
+ * tabs and small labels, IBM Plex Sans for body text (his words, the proposal's reason, the stream's rows, notes), JetBrains
+ * Mono for every number. All from this PC (live/fonts/agent-fonts.css, live/fonts/plex.css); offline or missing, each falls
+ * back to the system's own.
  *
- * Scoped to the tab: every board F rule sits under .ag-view. The tab button in the top bar, the agents' line in the corner and the
- * corner notices (they show wherever Anthony is) keep the page's own look, below.
+ * Scoped to the tab: every rule for the tab sits under .ag-view. The tab button in the top bar, the agents' line in the corner
+ * and the corner notices (they show wherever Anthony is) keep the page's own look, below.
  *
- * Motion (docs/MOTION.md R3): only the light (.ag-light) and the panels' glow move or fade. Figures, the price, the
- * position, Accept and Reject, the kill switch and the mode change at once: nothing else here has a transition. The light is
- * pure CSS and cheap: thin strips along the lit panel's border, each turning a small conic gradient with a transform (on the
- * compositor, no repaint and no blur per frame); none on a panel that is not lit. The Motion switch (.ag-still) and the
- * system's reduced motion hide it and stop every animation in the tab; the glow stays, still.
+ * Motion (docs/MOTION.md R3): only the light (.ag-light), the panels' glow and the grid canvas (live/agent-grid.js, in the grid
+ * panel only) move or fade. Figures, the price, the position, Accept and Reject, the kill switch and the mode change at once:
+ * nothing else here has a transition, and nothing rezzes in or flickers on load. The light is pure CSS and cheap: thin strips
+ * along the lit panel's border, each turning a small conic gradient with a transform (on the compositor, no repaint and no
+ * blur per frame); none on a panel that is not lit. The Motion switch (.ag-still) and the system's reduced motion hide it and
+ * stop every animation in the tab (the grid canvas then draws one still frame); the glow stays, still.
  */
 :root {
   --ag-line: #2A1F4D; --ag-line2: #1B1636; --ag-panel: #0B0E15; --ag-inset: #0E0B1C; --ag-raise: #15102B; --ag-hover: #0F1320;
@@ -46,22 +49,30 @@ body.ag-has-tab .ws-stat { flex: 0 1 auto; min-width: 0; overflow: hidden; }
 body.ag-on .ws-grid, body.ag-on #btStrip { display: none !important; }
 body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 
-/* ================================================================ board F, inside the tab only */
+/* ================================================================ Layout 5 Tron, inside the tab only */
 .ag-view {
-  --f-c: #5df2ff; --f-hot: #e8feff; --f-soft: #cfeff4; --f-dim: #7fb6c0; --f-line: rgba(93, 242, 255, .26); --f-line2: rgba(93, 242, 255, .12); --f-line3: rgba(93, 242, 255, .08);
-  --f-panel: rgba(0, 6, 12, .74); --f-ground: #010307;
-  --f-pu: #7b5cff; --f-pud: #6d28d9; --f-put: #b69cff; --f-pul: #d8ccff; --f-rd: #ff3b5c; --f-gr: #3dff9a; --f-or: #ff8a2a; --f-gold: #ffd23f;
+  --f-c: #5df2ff; --f-hot: #e8feff; --f-soft: #cfeff4; --f-dim: #7fa6b3; --f-faint: #3d5966; --f-line: rgba(93, 242, 255, .28); --f-line2: rgba(93, 242, 255, .12); --f-line3: rgba(93, 242, 255, .08);
+  --f-panel: #040c16; --f-ground: #02060c; --f-blue: #2e9bff;
+  --f-pu: #7b5cff; --f-pud: #6d28d9; --f-put: #b69cff; --f-pul: #d8ccff; --f-rd: #ff3b5c; --f-gr: #3dff9a; --f-or: #ff7a18; --f-gold: #ffd23f;
+  --f-head: "Orbitron", "Chakra Petch", "Segoe UI", system-ui, sans-serif;
   --f-ui: "Chakra Petch", "Segoe UI", system-ui, -apple-system, sans-serif;
   --f-num: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
   --f-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --cut: 9px;
   flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; position: relative; color: var(--f-c);
   overflow: clip;   /* the light's halo past the panels at the window's edge is clipped: it never makes the page scroll */
-  background: radial-gradient(900px 520px at 42% 38%, rgba(0, 150, 255, .07), transparent 65%), radial-gradient(520px 340px at 88% 92%, rgba(123, 92, 255, .05), transparent 70%), var(--f-ground);
+  /* the ground: a soft blue glow from below and a still horizon grid under the panels (drawn once, never animated) */
+  background:
+    linear-gradient(to bottom, var(--f-ground) 55%, transparent 100%),
+    repeating-linear-gradient(to right, rgba(46, 155, 255, .045) 0 1px, transparent 1px 64px),
+    repeating-linear-gradient(to bottom, rgba(46, 155, 255, .045) 0 1px, transparent 1px 32px),
+    radial-gradient(ellipse at 50% 120%, rgba(46, 155, 255, .12), transparent 60%), var(--f-ground);
   font: 13px/1.4 var(--f-ui);
 }
-/* body text in IBM Plex Sans (the hybrid): his words, the reason, the stream's rows, notes, ChartBridge's words */
+/* body text in IBM Plex Sans: his words, the reason, the stream's rows, notes, ChartBridge's words */
 .ag-view .ag-dquote, .ag-view .ag-quote, .ag-view .ag-rowb .ag-tx, .ag-view .ag-prop-note, .ag-view .ag-why, .ag-view .ag-help, .ag-view .ag-empty,
-.ag-view .ag-off-card p, .ag-view .ag-ask, .ag-view .ag-prop-msg, .ag-view .ag-pgrid > span:nth-child(even):not(.mono), .ag-view .ag-fact > span:first-child { font-family: var(--f-body); }
+.ag-view .ag-off-card p, .ag-view .ag-ask, .ag-view .ag-prop-msg, .ag-view .ag-pgrid > span:nth-child(even):not(.mono), .ag-view .ag-fact > span:first-child,
+.ag-view .ag-stepw, .ag-view .ag-dres, .ag-view .ag-nowline .ag-nw { font-family: var(--f-body); }
 .ag-view .ag-rowb .ag-tx.mono, .ag-view .ag-dquote.pre { font-family: var(--f-num); }
 /* the tones: a step of the tracker, or an outcome (AgentCore.LIGHT) */
 .ag-view .t-screen { --tc: #5df2ff; } .ag-view .t-eyes { --tc: #8f7bff; } .ag-view .t-judgment { --tc: #c81fe0; } .ag-view .t-checks { --tc: #ffd23f; }
@@ -72,9 +83,12 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .warn { color: var(--f-gold); }
 .ag-view :focus-visible { outline: 2px solid var(--f-hot); outline-offset: 1px; }
 .ag-view small { font-size: .78em; color: var(--f-dim); font-weight: 400; }
-.ag-view .ag-ttl, .ag-view .ag-k2 { font: 600 11px/1.3 var(--f-ui); letter-spacing: .2em; color: var(--f-dim); text-transform: uppercase; white-space: nowrap; }
-.ag-view .ag-k2 { color: var(--f-hot); }
+/* the headers, in Orbitron */
+.ag-view .ag-ttl, .ag-view .ag-k2 { font: 700 10.5px/1.3 var(--f-head); letter-spacing: .2em; color: var(--f-c); text-transform: uppercase; white-space: nowrap; }
+.ag-view .ag-ttl::before { content: "\25C6  "; color: var(--f-blue); }
+.ag-view .ag-k2 { font-weight: 500; font-size: 9.5px; letter-spacing: .16em; color: var(--f-dim); }
 .ag-view .ag-lbl { font: 500 10.5px/1.3 var(--f-ui); letter-spacing: .14em; color: var(--f-dim); text-transform: uppercase; }
+.ag-view .ag-hl { font-family: var(--f-head); font-size: 9px; letter-spacing: .16em; font-weight: 500; }
 .ag-view .ag-soft { color: var(--f-soft); font-weight: 500; }
 .ag-view .ag-hot { color: var(--f-hot); text-shadow: 0 0 10px rgba(93, 242, 255, .5); }
 .ag-fill { flex: 1 1 8px; }
@@ -84,21 +98,31 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-why:empty { display: none; }
 .ag-view .ag-why.live { color: #ffd0d8; }
 
-.ag-main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px 10px; box-sizing: border-box; --ag-lap: 13000ms; }
+.ag-main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 6px 10px 8px; box-sizing: border-box; --ag-lap: 13000ms; }
 .ag-main[hidden], .ag-off[hidden] { display: none; }
 .ag-off { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
 .ag-off-card { max-width: 540px; background: var(--f-panel); border: 1px solid var(--f-line); padding: 18px 20px; display: grid; gap: 8px; }
 .ag-off-card p { margin: 0; font-size: 14px; line-height: 1.5; color: var(--f-soft); }
 
-/* ---------------- a panel, and the light that circles it while it is lit */
-.ag-view .ag-panel { position: relative; border: 1px solid var(--f-line); background: var(--f-panel); box-sizing: border-box; min-width: 0; --ag-pc: var(--ag-to); transition: box-shadow 1.4s ease, --ag-pc 1.6s ease; }
+/* ---------------- a panel: a thin glowing frame with cut corners (drawn behind it by its ::before and ::after, so the light and
+   the glow, which run along its box, are never clipped), and the light that circles it while it is lit */
+.ag-view .ag-panel, .ag-view .ag-card { position: relative; isolation: isolate; box-sizing: border-box; min-width: 0; }
+.ag-view .ag-panel::before, .ag-view .ag-card::before { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: var(--f-line);
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut)); }
+.ag-view .ag-panel::after, .ag-view .ag-card::after { content: ""; position: absolute; inset: 1px; z-index: -1; pointer-events: none; background: var(--f-panel);
+  box-shadow: inset 0 0 0 2px var(--f-panel), inset 0 0 0 3px rgba(93, 242, 255, .07);
+  clip-path: polygon(calc(var(--cut) - .5px) 0, 100% 0, 100% calc(100% - var(--cut) + .5px), calc(100% - var(--cut) + .5px) 100%, 0 100%, 0 calc(var(--cut) - .5px)); }
+/* a panel that holds cards of its own (the controls, the footer): its frame is its cards' */
+.ag-view .ag-left.ag-panel::before, .ag-view .ag-left.ag-panel::after, .ag-view .ag-foot.ag-panel::before, .ag-view .ag-foot.ag-panel::after { display: none; }
+.ag-view .ag-panel { --ag-pc: var(--ag-to); transition: box-shadow 1.4s ease, --ag-pc 1.6s ease; }
 .ag-view .ag-panel.lit { box-shadow: 0 0 34px -4px var(--ag-pc), inset 0 0 22px -12px var(--ag-pc); }
-/* The light (look F, Anthony 2026-10-08): a comet circling the border, brighter at its head, with a soft halo. Drawn cheaply
-   (review of fc3101a: the old conic gradient was painted again every frame over the whole panel, with a 7 px blur): the line
-   is four 3 px strips along the border and the halo four soft 30 px strips across it; each strip clips its own copy of one
-   small conic gradient centred on the panel's centre, turned by a transform on the compositor. Only the strips' pixels are
-   drawn each frame; nothing is painted again and nothing is blurred. A conic gradient looks the same at any size about its
-   centre, so a 512 px one scaled 8 times covers any panel. The same angle, the same colours, the same laps (13 s, 9 s). */
+/* The light (look F, Anthony 2026-10-08, kept in Layout 5): a comet circling the border, brighter at its head, with a soft
+   halo. Drawn cheaply (review of fc3101a: the old conic gradient was painted again every frame over the whole panel, with a 7
+   px blur): the line is four 3 px strips along the border and the halo four soft 30 px strips across it; each strip clips its
+   own copy of one small conic gradient centred on the panel's centre, turned by a transform on the compositor. Only the
+   strips' pixels are drawn each frame; nothing is painted again and nothing is blurred. A conic gradient looks the same at any
+   size about its centre, so a 512 px one scaled 8 times covers any panel. The same angle, the same colours, the same laps
+   (13 s, 9 s). */
 .ag-light { position: absolute; inset: -2px; pointer-events: none; display: none; z-index: 4; container-type: size; }
 .ag-view .ag-panel.lit > .ag-light { display: block; }
 .ag-edge { position: absolute; overflow: hidden; }
@@ -130,25 +154,30 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
   -webkit-mask: linear-gradient(to right, transparent, rgba(0, 0, 0, .12) 18%, rgba(0, 0, 0, .45) 33%, #000 50%, rgba(0, 0, 0, .45) 67%, rgba(0, 0, 0, .12) 82%, transparent);
   mask: linear-gradient(to right, transparent, rgba(0, 0, 0, .12) 18%, rgba(0, 0, 0, .45) 33%, #000 50%, rgba(0, 0, 0, .45) 67%, rgba(0, 0, 0, .12) 82%, transparent); }
 @keyframes ag-orbit { to { transform: rotate(360deg); } }
-/* Motion Off, or the system's reduced motion: no light, no animation, no transition; the glow stays where his attention is */
+/* Motion Off, or the system's reduced motion: no light, no animation, no transition; the glow stays where his attention is (the
+   grid canvas draws one still frame: live/agent-grid.js) */
 .ag-view.ag-still .ag-light { display: none !important; }
 .ag-view.ag-still, .ag-view.ag-still * { animation: none !important; transition: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .ag-view .ag-light { display: none !important; }
   .ag-view, .ag-view * { animation: none !important; transition: none !important; }
 }
-/* the trading parts: Accept and Reject, the kill switch, the mode, the P&L figures, the position, the trades and losses:
-   never eased (R3). The chart draws its own price line and is left as the page has it. */
+/* the trading parts: Accept and Reject, the kill switch, the mode, the P&L figures, the position, the trades and losses, the
+   chart's strip: never eased (R3). The chart draws its own price line and is left as the page has it. */
 .ag-view .ag-acc, .ag-view .ag-rej, .ag-view .ag-kill, .ag-view .ag-modes button, .ag-view .ag-today, .ag-view .ag-count, .ag-view .ag-cpnl, .ag-view .ag-cpos,
-.ag-view .ag-kv, .ag-view .ag-kv *, .ag-view .ag-prop, .ag-view .ag-prop * { transition: none !important; animation: none !important; }
+.ag-view .ag-kv, .ag-view .ag-kv *, .ag-view .ag-prop, .ag-view .ag-prop *, .ag-view .ag-cstrip, .ag-view .ag-cstrip *, .ag-view .ag-fbox, .ag-view .ag-fbox * { transition: none !important; animation: none !important; }
 
-/* ---------------- the strip */
-.ag-view .ag-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 8px 14px; flex: none; }
-.ag-view .ag-badge { background: var(--f-pud); color: #f2eeff; font: 700 12px/1 var(--f-num); padding: 5px 7px; letter-spacing: .06em; }
-.ag-view .ag-brand { white-space: nowrap; font: 600 17px/1.2 var(--f-ui); letter-spacing: .16em; min-width: 0; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+/* ---------------- the strip: his disc and name, how he is, what he holds (one line of a fixed height: a chip coming moves nothing) */
+.ag-view .ag-strip { display: flex; flex-wrap: nowrap; align-items: center; gap: 14px; padding: 0 6px 0 4px; flex: none; height: 46px; min-width: 0; border-bottom: 1px solid var(--f-line2); }
+.ag-view .ag-strip::before, .ag-view .ag-strip::after { display: none; }
+.ag-view .ag-strip > * { flex: none; }
+.ag-view .ag-strip > .ag-chip { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ag-view .ag-badge { width: 28px; height: 28px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--f-c); display: grid; place-items: center; color: var(--f-hot);
+  box-shadow: 0 0 10px rgba(93, 242, 255, .55), inset 0 0 6px rgba(93, 242, 255, .45); font: 700 9.5px/1 var(--f-head); letter-spacing: .04em; }
+.ag-view .ag-brand { white-space: nowrap; font: 700 15px/1.2 var(--f-head); letter-spacing: .2em; min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto !important; }
 .ag-view .ag-name { color: var(--f-pul); text-shadow: 0 0 12px rgba(123, 92, 255, .8); text-transform: uppercase; }
-.ag-view .ag-desk { color: var(--f-dim); }
-.ag-view .ag-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; font: 500 11px/16px var(--f-ui); letter-spacing: .18em; text-transform: uppercase; white-space: nowrap;
+.ag-view .ag-desk { color: var(--f-dim); font-weight: 500; font-size: 12px; letter-spacing: .24em; }
+.ag-view .ag-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; font: 600 10.5px/16px var(--f-ui); letter-spacing: .16em; text-transform: uppercase; white-space: nowrap;
   border: 1px solid var(--f-pu); color: var(--f-pul); background: rgba(109, 40, 217, .16); }
 .ag-view .ag-chip[hidden] { display: none; }
 .ag-view .ag-build { letter-spacing: .06em; text-transform: none; max-width: 200px; overflow: hidden; text-overflow: ellipsis; font-family: var(--f-num); }
@@ -156,22 +185,29 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-mode.m-copilot { color: var(--f-hot); border-color: var(--f-c); background: rgba(93, 242, 255, .08); }
 .ag-view .ag-mode.m-auto { color: #fff; border-color: var(--f-pu); background: var(--f-pud); }
 .ag-view .ag-bad { color: #ffd0d8; border-color: var(--f-rd); background: rgba(255, 59, 92, .10); max-width: 380px; overflow: hidden; text-overflow: ellipsis; }
-.ag-view .ag-conn { display: inline-flex; align-items: center; gap: 8px; font: 500 11px/1 var(--f-ui); letter-spacing: .16em; color: var(--f-hot); white-space: nowrap; }
-.ag-view .ag-conn i { width: 7px; height: 7px; border-radius: 50%; background: var(--f-hot); box-shadow: 0 0 8px var(--f-c); display: inline-block; }
-.ag-view .ag-conn.bad { color: #ffd0d8; } .ag-view .ag-conn.bad i { background: var(--f-rd); box-shadow: 0 0 8px var(--f-rd); }
+.ag-view .ag-conn { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--f-line); font: 600 10px/1 var(--f-ui); letter-spacing: .16em; color: var(--f-c); white-space: nowrap; }
+.ag-view .ag-conn i { width: 6px; height: 6px; border-radius: 50%; background: var(--f-hot); box-shadow: 0 0 8px var(--f-c); display: inline-block; }
+.ag-view .ag-conn.bad { color: #ffd0d8; border-color: rgba(255, 59, 92, .55); } .ag-view .ag-conn.bad i { background: var(--f-rd); box-shadow: 0 0 8px var(--f-rd); }
 .ag-view .ag-conn.off { color: var(--f-dim); } .ag-view .ag-conn.off i { background: var(--f-dim); box-shadow: none; }
 .ag-view .ag-kv { display: inline-flex; align-items: baseline; gap: 7px; white-space: nowrap; font-size: 13px; }
 .ag-view .ag-kv .mono { font-weight: 600; color: var(--f-hot); }
+/* the stats on the right of the strip: a label over its figure */
+.ag-view .ag-stat { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.ag-view .ag-stat > .ag-lbl { font: 500 9px/1 var(--f-head); letter-spacing: .16em; }
+.ag-view .ag-stat > .mono { font-size: 14px; line-height: 1; }
+.ag-view .ag-stat.l { align-items: flex-start; }
+.ag-view .ag-stat > .ag-acctv { display: inline-flex; align-items: center; gap: 6px; }
 .ag-view .ag-pick { display: inline-flex; align-items: center; gap: 6px; }
 .ag-view .ag-pick[hidden] { display: none; }
 .ag-view .ag-pick .ag-sel { max-width: 200px; }
 .ag-view .ag-motion { display: inline-flex; align-items: center; }
 .ag-view .ag-motion .ag-lbl { margin-right: 7px; }
-.ag-view .ag-motion button { min-height: 26px; padding: 0 10px; background: transparent; border: 1px solid var(--f-line); color: var(--f-dim); font: 600 11px var(--f-ui); letter-spacing: .14em; text-transform: uppercase; cursor: pointer; }
+.ag-view .ag-motion button { min-height: 24px; padding: 0 9px; background: transparent; border: 1px solid var(--f-line); color: var(--f-dim); font: 600 10px var(--f-ui); letter-spacing: .14em; text-transform: uppercase; cursor: pointer; }
 .ag-view .ag-motion button + button { margin-left: -1px; }
-.ag-view .ag-motion button[aria-pressed="true"] { color: var(--f-ground); background: var(--f-c); border-color: var(--f-c); }
-.ag-view .ag-popbtn { height: 28px; padding: 0 12px; }
+.ag-view .ag-motion button[aria-pressed="true"] { color: var(--f-hot); background: rgba(93, 242, 255, .16); border-color: var(--f-c); }
+.ag-view .ag-popbtn { height: 26px; padding: 0 10px; }
 @media (max-width: 1700px) { .ag-view .ag-pick .ag-lbl { display: none; } }
+@media (max-width: 1500px) { .ag-view .ag-strip .ag-st-today, .ag-view .ag-motion > .ag-lbl { display: none; } .ag-view .ag-strip { gap: 11px; } }
 /* the SIM or LIVE mark: a purple chip, LIVE in red */
 .ag-view .ag-mark { display: inline-flex; align-items: center; height: 18px; padding: 0 7px; font: 700 10px/1 var(--f-ui); letter-spacing: .16em; text-transform: uppercase; vertical-align: middle;
   border: 1px solid var(--f-pu); color: var(--f-pul); background: rgba(109, 40, 217, .16); box-sizing: border-box; border-radius: 0; }
@@ -181,42 +217,49 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-sel { appearance: none; -webkit-appearance: none; background-color: rgba(0, 10, 18, .9);
   background-image: linear-gradient(45deg, transparent 50%, var(--f-c) 50%), linear-gradient(135deg, var(--f-c) 50%, transparent 50%);
   background-position: right 12px center, right 7px center; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
-  border: 1px solid var(--f-line); padding: 4px 24px 4px 8px; min-height: 28px; color: var(--f-hot); font: 13px var(--f-ui); cursor: pointer; max-width: 260px; }
+  border: 1px solid var(--f-line); padding: 3px 24px 3px 8px; min-height: 26px; color: var(--f-hot); font: 12.5px var(--f-ui); cursor: pointer; max-width: 260px; }
 .ag-view .ag-sel:hover, .ag-view .ag-sel:focus { border-color: var(--f-c); outline: none; }
 .ag-view .ag-sel option { background: #020910; color: var(--f-hot); }
-.ag-view .ag-sel.ag-small { min-height: 24px; padding: 1px 22px 1px 6px; font-size: 12px; }
+.ag-view .ag-sel.ag-small { min-height: 22px; padding: 1px 22px 1px 6px; font-size: 11.5px; }
 .ag-view .ag-sel[hidden] { display: none; }
+
+/* ---------------- the now line: the newest word of each step, still (no ticker) */
+.ag-view .ag-nowline { flex: none; height: 24px; display: flex; align-items: center; gap: 18px; padding: 0 10px; overflow: hidden; white-space: nowrap; border-top: 1px solid var(--f-line2); border-bottom: 1px solid var(--f-line2); margin-top: -8px; }
+.ag-view .ag-nowline > span { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.ag-view .ag-nowline b { font: 600 9px/1 var(--f-head); letter-spacing: .14em; color: var(--tc); text-transform: uppercase; }
+.ag-view .ag-nowline .ag-nw { font-size: 11.5px; color: var(--f-dim); overflow: hidden; text-overflow: ellipsis; }
+.ag-view .ag-nowline .ag-nw:empty { display: none; }
+.ag-view .ag-nowline > span:has(.ag-nw:empty) { display: none; }
 
 /* ---------------- left | centre | right */
 .ag-view .ag-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 290px minmax(0, 1fr) 370px; gap: 8px; }
 .ag-view .ag-col { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.ag-view .ag-scroll { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent; }
+.ag-view .ag-scroll { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent; display: flex; flex-direction: column; gap: 8px; }
 .ag-view .ag-centre, .ag-view .ag-right { gap: 8px; }
 .ag-view .ag-right { position: relative; }
-.ag-view .ag-sec { padding: 12px 14px; border-bottom: 1px solid var(--f-line2); display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; }
+/* the controls: four cards (Agent, Mode, his account, Rules) */
+.ag-view .ag-sec { padding: 9px 12px 10px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; flex: none; }
 .ag-view .ag-sec > * { min-width: 0; }
-.ag-view .ag-sec:last-child { border-bottom: 0; }
-.ag-view .ag-sechead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ag-view .ag-sechead { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 18px; }
 .ag-view .ag-sechead .ag-lbl { text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ag-view .ag-pgrid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 12px; font-size: 13px; align-items: baseline; color: var(--f-hot); }
-.ag-view .ag-pgrid > span:nth-child(odd) { color: var(--f-dim); font-size: 12.5px; }
-.ag-view .ag-pgrid > span:nth-child(even) { min-width: 0; overflow-wrap: anywhere; }
-.ag-view .ag-rules > span:nth-child(even) { text-align: right; }
+.ag-view .ag-pgrid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 12px; font-size: 12.5px; align-items: baseline; color: var(--f-hot); }
+.ag-view .ag-pgrid > span:nth-child(odd) { color: var(--f-dim); font-size: 12px; }
+.ag-view .ag-pgrid > span:nth-child(even) { min-width: 0; overflow-wrap: anywhere; text-align: right; }
 .ag-view .ag-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 /* buttons */
-.ag-view .ag-btn { min-height: 30px; padding: 0 12px; border: 1px solid var(--f-line); background: transparent; color: var(--f-hot); cursor: pointer; letter-spacing: .14em; font: 600 11.5px var(--f-ui); text-transform: uppercase; }
-.ag-view .ag-btn:hover { border-color: var(--f-c); }
-.ag-view .ag-btn.primary { background: var(--f-c); border-color: var(--f-c); color: var(--f-ground); }
+.ag-view .ag-btn { min-height: 26px; padding: 0 10px; border: 1px solid var(--f-line); background: rgba(93, 242, 255, .06); color: var(--f-c); cursor: pointer; letter-spacing: .14em; font: 600 10.5px var(--f-ui); text-transform: uppercase; }
+.ag-view .ag-btn:hover { border-color: var(--f-c); color: var(--f-hot); }
+.ag-view .ag-btn.primary { background: rgba(93, 242, 255, .2); border-color: var(--f-c); color: var(--f-hot); }
 .ag-view .ag-btn:disabled { opacity: .4; cursor: not-allowed; }
 .ag-view .ag-modes { display: flex; }
-.ag-view .ag-modes button { flex: 1; min-height: 40px; border: 1px solid var(--f-line); background: transparent; color: var(--f-dim); font: 600 12.5px var(--f-ui); letter-spacing: .16em; text-transform: uppercase; cursor: pointer; margin-left: -1px; }
+.ag-view .ag-modes button { flex: 1; min-height: 32px; border: 1px solid var(--f-line); background: transparent; color: var(--f-dim); font: 600 11px var(--f-ui); letter-spacing: .14em; text-transform: uppercase; cursor: pointer; margin-left: -1px; }
 .ag-view .ag-modes button:first-child { margin-left: 0; }
 .ag-view .ag-modes button:hover { border-color: var(--f-c); position: relative; }
-.ag-view .ag-modes button[aria-pressed="true"] { color: var(--f-ground); background: var(--f-c); border-color: var(--f-c); box-shadow: 0 0 14px rgba(93, 242, 255, .5); position: relative; }
-.ag-view .ag-modes button:disabled { color: rgba(127, 182, 192, .45); cursor: not-allowed; }
+.ag-view .ag-modes button[aria-pressed="true"] { color: var(--f-hot); background: rgba(93, 242, 255, .18); border-color: var(--f-c); box-shadow: 0 0 12px rgba(93, 242, 255, .35); position: relative; }
+.ag-view .ag-modes button:disabled { color: rgba(127, 166, 179, .45); cursor: not-allowed; }
 /* the kill switch: red, never animated, always the same place */
-.ag-view .ag-kill { font: 700 13.5px var(--f-ui); letter-spacing: .22em; text-transform: uppercase; color: #ffd0d8; background: rgba(255, 59, 92, .07); border: 1px solid var(--f-rd); min-height: 44px; width: 100%; cursor: pointer; }
+.ag-view .ag-kill { font: 700 12px var(--f-ui); letter-spacing: .22em; text-transform: uppercase; color: #ffd0d8; background: rgba(255, 59, 92, .08); border: 1px solid rgba(255, 59, 92, .7); min-height: 36px; width: 100%; cursor: pointer; }
 .ag-view .ag-kill:hover { background: rgba(255, 59, 92, .14); }
 .ag-view .ag-kill.on { background: var(--f-rd); color: #1a0006; box-shadow: 0 0 26px rgba(255, 59, 92, .8); }
 .ag-view .ag-kill:disabled { opacity: .5; cursor: not-allowed; }
@@ -226,10 +269,11 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-hpick { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ag-view .ag-hpick .ag-sel { flex: 1; min-width: 0; }
 .ag-view .ag-hrow { display: flex; align-items: center; gap: 12px; }
-.ag-view .ag-onoffbtns { flex: 0 0 auto; width: 150px; }
-.ag-view .ag-onoffbtns button[data-onoff="on"][aria-pressed="true"] { color: var(--f-ground); background: var(--f-c); }
+.ag-view .ag-onoffbtns { flex: 0 0 auto; width: 120px; }
+.ag-view .ag-onoffbtns button { min-height: 28px; }
+.ag-view .ag-onoffbtns button[data-onoff="on"][aria-pressed="true"] { color: var(--f-hot); background: rgba(93, 242, 255, .2); }
 .ag-view .ag-onoffbtns button[data-onoff="off"][aria-pressed="true"] { color: #fff; background: transparent; border-color: var(--f-dim); box-shadow: none; }
-.ag-view .ag-spend { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--f-hot); min-width: 0; }
+.ag-view .ag-spend { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--f-hot); min-width: 0; }
 .ag-view .ag-spend .mono { font-weight: 600; }
 .ag-view .ag-hset summary { cursor: pointer; }
 .ag-view .ag-hform { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 6px; }
@@ -242,11 +286,11 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-edit { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .ag-view .ag-edit .ag-sel { flex: 1 1 140px; }
 /* his account's room */
-.ag-view .ag-room { display: grid; gap: 9px; }
-.ag-view .ag-roomrow { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 10px; font-size: 13px; color: var(--f-c); margin-bottom: 5px; }
+.ag-view .ag-room { display: grid; gap: 6px; }
+.ag-view .ag-roomrow { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 10px; font-size: 12.5px; color: var(--f-dim); margin-bottom: 3px; }
 .ag-view .ag-roomrow > span:first-child { white-space: nowrap; }
-.ag-view .ag-meter2 { height: 6px; background: rgba(93, 242, 255, .07); }
-.ag-view .ag-meter2 i { display: block; height: 100%; background: var(--f-c); box-shadow: 0 0 10px rgba(93, 242, 255, .6); }
+.ag-view .ag-meter2 { height: 5px; background: rgba(93, 242, 255, .1); }
+.ag-view .ag-meter2 i { display: block; height: 100%; background: linear-gradient(90deg, var(--f-blue), var(--f-c)); box-shadow: 0 0 8px rgba(93, 242, 255, .5); }
 .ag-view .ag-meter2.pu i { background: var(--f-pu); box-shadow: 0 0 10px rgba(123, 92, 255, .7); }
 /* the rules form */
 .ag-view .ag-rform { display: grid; gap: 6px; padding: 9px; border: 1px solid var(--f-line2); background: rgba(0, 10, 18, .6); }
@@ -258,38 +302,65 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-in { width: 100%; height: 26px; box-sizing: border-box; background: #01070d; color: var(--f-hot); border: 1px solid var(--f-line); padding: 0 6px; font: 13px var(--f-num); }
 .ag-view .ag-in:focus { border-color: var(--f-c); outline: none; }
 
-/* ---------------- what he is doing now: the step tracker */
-.ag-view .ag-pipe { flex: none; padding: 10px 18px 9px; }
-.ag-view .ag-pipehead { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 7px; min-width: 0; }
-.ag-view .ag-said { font-size: 15px; letter-spacing: .04em; color: var(--ag-tone); text-shadow: 0 0 10px var(--ag-tone); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; text-align: right; }
-.ag-view .ag-steps { list-style: none; margin: 0; padding: 0; display: flex; position: relative; }
-.ag-view .ag-steps::before { content: ""; position: absolute; left: 10%; right: 10%; top: 15px; height: 2px; background: var(--f-line); }
-.ag-view .ag-step { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; position: relative; text-align: center; }
-.ag-view .ag-node { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--f-line); background: var(--f-ground); display: grid; place-items: center; font-size: 12px; font-weight: 600; color: var(--f-dim); box-sizing: border-box; }
-.ag-view .ag-step.done .ag-node { border-color: var(--tc); color: var(--tc); opacity: .85; }
-.ag-view .ag-step.now .ag-node { border-color: var(--tc); color: var(--f-ground); background: var(--tc); box-shadow: 0 0 0 5px rgba(255, 255, 255, .05), 0 0 20px var(--tc); }
-.ag-view .ag-stepname { font: 600 11px/1.2 var(--f-ui); letter-spacing: .18em; color: var(--f-hot); text-transform: uppercase; }
+/* ---------------- the grid: what he is doing now. His five steps on the left (today's tracker words and how long ago), the
+   canvas behind them (live/agent-grid.js: the steps feed the sphere, its lines funnel into the decision), the decision on the
+   right. The canvas is the panel's back layer: the words sit over it and take no colour from it. */
+.ag-view .ag-pipe { flex: 0 0 40%; min-height: 190px; display: flex; flex-direction: column; }
+.ag-view .ag-gridcv { position: absolute; inset: 1px; width: calc(100% - 2px); height: calc(100% - 2px); z-index: 0; pointer-events: none; display: block; }
+.ag-view .ag-pipehead { position: relative; z-index: 1; display: flex; align-items: baseline; gap: 10px; padding: 8px 12px 4px; min-width: 0; flex: none; }
+.ag-view .ag-said { font: 500 12.5px/1.2 var(--f-ui); letter-spacing: .04em; color: var(--ag-tone); text-shadow: 0 0 10px var(--ag-tone); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 46%; }
+.ag-view .ag-steps { position: relative; z-index: 1; list-style: none; margin: 0; padding: 0 0 8px 12px; width: 200px; flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; gap: 2px; }
+.ag-view .ag-step { border-left: 2px solid var(--tc); padding: 1px 0 1px 8px; background: linear-gradient(90deg, rgba(2, 6, 12, .88), rgba(2, 6, 12, 0)); min-width: 0; opacity: .55; }
+.ag-view .ag-step.lit, .ag-view .ag-step:has(.now) { opacity: 1; }
+.ag-view .ag-stepline { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.ag-view .ag-stephead { display: inline-flex; align-items: baseline; gap: 5px; color: var(--tc); }
+.ag-view .ag-node { font: 700 9.5px/1.2 var(--f-head); color: var(--tc); }
+.ag-view .ag-stepname { font: 700 9.5px/1.2 var(--f-head); letter-spacing: .14em; color: var(--tc); text-transform: uppercase; }
+.ag-view .ag-stephead.now .ag-stepname, .ag-view .ag-stephead.now .ag-node { color: var(--f-hot); text-shadow: 0 0 8px var(--tc); }
+.ag-view .ag-stepage { font: 10px/1.2 var(--f-num); color: var(--f-dim); }
+.ag-view .ag-stepw { font-size: 11px; line-height: 1.3; color: var(--f-hot); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 1.3em; }
+.ag-view .ag-decision { position: absolute; z-index: 1; right: 12px; top: 50%; transform: translateY(-38%); width: 210px; box-sizing: border-box; padding: 9px 12px; --cut: 8px; }
+.ag-view .ag-decision::before { background: rgba(93, 242, 255, .5); }
+.ag-view .ag-decision::after { background: rgba(2, 10, 18, .9); box-shadow: none; }
+.ag-view .ag-decision.act::before { background: var(--f-or); }
+.ag-view .ag-decision.act::after { background: rgba(20, 8, 0, .86); }
+.ag-view .ag-decision .ag-lbl { font: 700 9px/1 var(--f-head); letter-spacing: .18em; color: var(--f-c); }
+.ag-view .ag-decision.act .ag-lbl { color: var(--f-or); }
+.ag-view .ag-dline { font: 600 12.5px/1.3 var(--f-num); color: var(--f-hot); margin-top: 6px; overflow-wrap: anywhere; }
+.ag-view .ag-dres { font-size: 11.5px; color: var(--f-dim); margin-top: 3px; }
 
 /* ---------------- the chart panel (the chart itself is the page's: never restyled, never animated) */
 .ag-view .ag-chartpanel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.ag-view .ag-charthead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 12px 5px; border-bottom: 1px solid var(--f-line2); flex: none; min-height: 36px; box-sizing: border-box; }
-.ag-view .ag-charthead .ag-ttl { color: var(--f-hot); }
+.ag-view .ag-charthead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 5px 10px 4px 12px; flex: none; min-height: 34px; box-sizing: border-box; }
+.ag-view .ag-charthead .ag-ttl { color: var(--f-c); }
 .ag-view .ag-charthead .ws-lv.chart-live { display: contents; }
-.ag-view .ag-cpos { color: var(--f-dim); font-size: 13px; white-space: nowrap; }
-.ag-view .ag-cpnl { font-size: 13px; font-weight: 600; white-space: nowrap; }
-.ag-view .ag-chart { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ag-view .ag-cpos { color: var(--f-dim); font-size: 12px; white-space: nowrap; }
+.ag-view .ag-cpnl { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.ag-view .ag-maxbtn[aria-pressed="true"] { color: var(--f-hot); border-color: var(--f-c); background: rgba(93, 242, 255, .2); }
+.ag-view .ag-chart { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; margin: 0 4px 4px; }
 .ag-view .ag-chart > .chart-live { flex: 1 1 auto; min-height: 0; }
 /* the chart fits the panel (the workspace's panels do the same): its stage may be shorter than a page's own chart */
 .ag-view .ag-chart .chart-live .stage { min-height: 120px; }
 .ag-view .ag-cposwrap { display: inline-flex; gap: 10px; align-items: baseline; white-space: nowrap; }
+/* the thin strip while the chart is maximized: position, entry, stop, target, open R, session, heat, room (real figures only,
+   at once: R3) */
+.ag-view .ag-cstrip { flex: none; display: flex; flex-wrap: wrap; gap: 4px 22px; padding: 5px 14px; border-top: 1px solid var(--f-line2); border-bottom: 1px solid var(--f-line2); font: 12px/1.3 var(--f-num); color: var(--f-dim); }
+.ag-view .ag-cstrip[hidden] { display: none; }
+.ag-view .ag-cstrip b { color: var(--f-hot); font-weight: 600; margin-left: 6px; }
+/* maximized (the button, a double click on the chart's head, or Escape inside the chart's panel to restore): the chart takes the
+   whole centre column; the controls and the proposal keep their places (the kill switch, the mode, Accept and Reject are
+   never covered and never move) */
+.ag-view .ag-centre.ag-maxed > .ag-pipe { display: none; }
 
 /* ---------------- the proposal panel (its card: Accept cyan, Reject purple; never animated) */
-/* At its top, the shown agent's own proposal in a slot of a fixed height (look F: its Accept and Reject always in sight, the
-   card Anthony is looking at): reserved whenever the tab is shown, "None open" at the same height when it is empty, the card's
+/* At its top, the shown agent's own proposal in a slot of a fixed height (its Accept and Reject always in sight, the card
+   Anthony is looking at): reserved whenever the tab is shown, "None open" at the same height when it is empty, the card's
    words scrolling inside it with Accept and Reject at its foot. Its proposal arriving, ending or going moves nothing. Under it,
    one line of a fixed height counts the proposals open elsewhere (the bot's, the other agents'), each name a link to where it
-   is answered: no other proposal is a card on the tab (Anthony, 2026-10-08), so their coming and going moves nothing either. */
-.ag-view .ag-proppanel { flex: 0 0 auto; display: flex; flex-direction: column; padding: 12px 16px; gap: 10px; }
+   is answered: no other proposal is a card on the tab (Anthony, 2026-10-08), so their coming and going moves nothing either.
+   While his proposal waits, the panel's frame is orange (the agent's action), still. */
+.ag-view .ag-proppanel { flex: 0 0 auto; display: flex; flex-direction: column; padding: 8px 12px 10px; gap: 8px; }
+.ag-view .ag-proppanel:has(.ag-plist > .ag-prop:not(.ag-ended))::before { background: rgba(255, 122, 24, .6); }
 .ag-view .ag-slot { flex: none; height: clamp(190px, 30vh, 380px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent; }
 .ag-view .ag-slot > .ag-plist { display: grid; gap: 14px; }
 .ag-view .ag-slot > .ag-plist:empty { display: none; }
@@ -302,69 +373,76 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-proppanel .ag-prop .ag-prop-msg:empty { display: block; }
 /* the line of the other proposals (live/agent.js renderOthers): one line, always the same height, cut at its end when long; a
    count that rose is marked at once and stays still (R3: nothing here moves or fades) */
-.ag-view .ag-others { flex: none; display: block; height: 30px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--f-line2);
+.ag-view .ag-others { flex: none; display: block; height: 30px; box-sizing: border-box; padding: 0 10px; border: 1px solid var(--f-line);
   font: 500 12px/28px var(--f-body); color: var(--f-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ag-view .ag-others[hidden] { display: none; }
 .ag-view .ag-others .ag-oitem { color: var(--f-soft); padding: 1px 3px; }
 .ag-view .ag-others .ag-oitem.up { color: var(--f-hot); background: rgba(93, 242, 255, .14); box-shadow: inset 0 0 0 1px var(--f-c); }
-.ag-view .ag-others .ag-olink { appearance: none; background: none; border: 0; padding: 0; margin: 0; font: inherit; line-height: inherit; color: inherit;
+.ag-view .ag-others .ag-olink { appearance: none; background: none; border: 0; padding: 0; margin: 0; font: inherit; line-height: inherit; color: var(--f-c);
   text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--f-line); cursor: pointer; }
 .ag-view .ag-others .ag-olink:hover { color: var(--f-hot); text-decoration-color: currentColor; }
 .ag-view .ag-others .ag-osep { color: var(--f-dim); }
 .ag-view .ag-off-card .ag-others { margin-top: 12px; }
 .ag-view .ag-empty[hidden] { display: none; }
-.ag-view .ag-prop.inline { background: transparent; border: 0; border-radius: 0; padding: 0; gap: 9px; color: var(--f-c); font: 13px/1.4 var(--f-ui); box-shadow: none; display: grid; grid-template-columns: minmax(0, 1fr); }
+.ag-view .ag-prop.inline { background: transparent; border: 0; border-radius: 0; padding: 0; gap: 6px; color: var(--f-c); font: 13px/1.4 var(--f-ui); box-shadow: none; display: grid; grid-template-columns: minmax(0, 1fr); }
 .ag-view .ag-prop.inline + .ag-prop.inline { border-top: 1px solid var(--f-line2); padding-top: 14px; }
 .ag-view .ag-prop.ag-ended { opacity: .6; }
-.ag-view .ag-prop .ag-ttl { color: var(--f-hot); }
+.ag-view .ag-prop .ag-ttl { color: var(--f-soft); font-size: 9.5px; }
+.ag-view .ag-prop .ag-ttl::before { content: none; }
 .ag-view .ag-prop-h { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ag-view .ag-prop-h .ag-ttl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ag-view .ag-prop-h .ag-lbl, .ag-view .ag-prop-h .ag-cd, .ag-view .ag-prop-h .ag-mark { flex: none; white-space: nowrap; }
 .ag-view .ag-id { color: var(--f-dim); letter-spacing: .04em; text-transform: none; }
-.ag-view .ag-cd { font-weight: 600; font-size: 15px; color: var(--f-hot); }
+.ag-view .ag-cd { font-weight: 600; font-size: 13px; color: var(--f-hot); }
 .ag-view .ag-cd.late { color: var(--f-or); }
-.ag-view .ag-prop-big { font: 600 19px/1.25 var(--f-ui); color: var(--f-hot); text-shadow: 0 0 10px rgba(93, 242, 255, .6); }
-.ag-view .ag-prop-big.mono, .ag-view .ag-prop-big .mono { font-family: var(--f-ui); }
-.ag-view .ag-prop-big .pos, .ag-view .ag-prop-big .neg { color: var(--f-hot); }
+.ag-view .ag-prop-big { font: 600 16px/1.25 var(--f-num); color: var(--f-hot); }
+.ag-view .ag-prop-big .pos, .ag-view .ag-prop-big .neg { font: 700 13px/1.25 var(--f-head); letter-spacing: .12em; }
 .ag-view .ag-prop-setup { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ag-view .ag-prop-setup .ag-chip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; letter-spacing: .08em; text-transform: none; }
-.ag-view .ag-quote { border-left: 2px solid var(--f-c); padding: 2px 0 2px 12px; font-size: 13.5px; line-height: 1.5; color: var(--f-soft); display: block; }
-.ag-view .ag-prop .ag-pgrid { font-family: var(--f-num); font-size: 12.5px; }
+.ag-view .ag-prop-setup .ag-chip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; letter-spacing: .08em; text-transform: none; border-color: var(--f-line); color: var(--f-soft); background: transparent; }
+.ag-view .ag-quote { font-size: 12.5px; line-height: 1.45; color: var(--f-soft); display: block; }
+/* stop, target and risk; open until and the account: a label over each figure */
+.ag-view .ag-pfacts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px 10px; }
+.ag-view .ag-pfacts > div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ag-view .ag-pfacts > div > span:first-child { font: 500 9.5px/1.2 var(--f-ui); letter-spacing: .12em; text-transform: uppercase; color: var(--f-dim); }
+.ag-view .ag-pfacts > .ag-wide { grid-column: span 2; }
+.ag-view .ag-pfacts > div > span + span { font: 12px/1.3 var(--f-num); color: var(--f-hot); overflow-wrap: anywhere; }
 .ag-view .ag-prop-note { color: var(--f-dim); font-size: 12px; line-height: 1.45; }
 .ag-view .ag-prop-btns { display: flex; gap: 8px; }
 /* Accept and Reject never scroll out of sight: they stay at the foot of the proposal's box while its words scroll, with
    ChartBridge's words for this proposal right above them (a refusal, the last 5 s, "Waiting for ChartBridge") */
 .ag-view .ag-prop-foot { display: grid; gap: 6px; }
-.ag-view .ag-plist .ag-prop-foot { position: sticky; bottom: 0; z-index: 1; padding: 8px 0 2px; margin-top: -6px; background: linear-gradient(transparent, #00060c 10px); }
-.ag-view .inline .ag-acc, .ag-view .inline .ag-rej { flex: 1; min-height: 44px; padding: 0 12px; border-radius: 0; font: 700 13px var(--f-ui); letter-spacing: .2em; text-transform: uppercase; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
-.ag-view .inline .ag-acc { background: var(--f-c); color: var(--f-ground); border: 0; box-shadow: 0 0 14px rgba(93, 242, 255, .45); }
+.ag-view .ag-plist .ag-prop-foot { position: sticky; bottom: 0; z-index: 1; padding: 8px 0 2px; margin-top: -6px; background: linear-gradient(transparent, var(--f-panel) 10px); }
+.ag-view .ag-prop-msgrow { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.ag-view .ag-prop-msgrow .ag-prop-msg { flex: 1 1 auto; min-width: 0; }
+.ag-view .ag-prop-cd { flex: none; display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.ag-view .inline .ag-acc, .ag-view .inline .ag-rej { flex: 1; min-height: 40px; padding: 0 12px; border-radius: 0; font: 700 12px var(--f-ui); letter-spacing: .2em; text-transform: uppercase; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.ag-view .inline .ag-acc { background: rgba(93, 242, 255, .2); color: var(--f-hot); border: 1px solid var(--f-c); box-shadow: 0 0 12px rgba(93, 242, 255, .35); }
 .ag-view .inline .ag-rej { background: rgba(109, 40, 217, .18); color: var(--f-pul); border: 1px solid var(--f-pu); }
 .ag-view .inline .ag-acc:disabled, .ag-view .inline .ag-rej:disabled { opacity: .4; cursor: default; box-shadow: none; }
 .ag-view .ag-prop .bt-keycap { font: 600 10.5px/1 var(--f-num); border: 1px solid currentColor; border-bottom-width: 2px; border-radius: 3px; padding: 2px 5px; color: inherit; background: transparent; margin-left: 6px; text-transform: none; letter-spacing: 0; }
-.ag-view .ag-prop-msg { color: var(--f-soft); font-size: 12.5px; }
+.ag-view .ag-prop-msg { color: #ffc98f; font-size: 12px; }
 .ag-view .ag-prop-msg:empty { display: none; }
 .ag-view .ag-cm { display: inline-flex; align-items: center; gap: 8px; }
-.ag-view .ag-meter { width: 64px; height: 5px; background: rgba(93, 242, 255, .1); position: relative; overflow: hidden; display: inline-block; flex: none; }
+.ag-view .ag-meter { width: 56px; height: 4px; background: rgba(93, 242, 255, .1); position: relative; overflow: hidden; display: inline-block; flex: none; }
 .ag-view .ag-meter b { position: absolute; left: 0; top: 0; bottom: 0; background: var(--f-c); }
 
 /* ---------------- his stream: every row a button */
-.ag-view .ag-feedwrap { flex: 1 1 0; min-height: 120px; display: flex; flex-direction: column; padding: 10px 14px 0; }
-.ag-view .ag-loghead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding-bottom: 6px; }
-.ag-view .ag-filters { display: flex; align-items: baseline; border-bottom: 1px solid var(--f-line2); flex: none; min-width: 0; }
-.ag-view .ag-filters button { border: 0; background: transparent; color: var(--f-dim); padding: 5px 8px; font: 600 10.5px var(--f-ui); letter-spacing: .14em; text-transform: uppercase; border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; }
-.ag-view .ag-filters button:first-child { padding-left: 0; }
-.ag-view .ag-filters button[aria-selected="true"] { color: var(--f-hot); border-bottom-color: var(--f-c); }
+.ag-view .ag-feedwrap { flex: 1 1 0; min-height: 120px; display: flex; flex-direction: column; padding: 8px 10px 0 12px; }
+.ag-view .ag-loghead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding-bottom: 5px; }
+.ag-view .ag-filters { display: flex; align-items: baseline; gap: 4px; flex: none; min-width: 0; padding-bottom: 4px; }
+.ag-view .ag-filters button { border: 1px solid transparent; background: transparent; color: var(--f-dim); padding: 3px 7px; font: 600 10px var(--f-ui); letter-spacing: .12em; text-transform: uppercase; cursor: pointer; }
+.ag-view .ag-filters button[aria-selected="true"] { color: var(--f-hot); border-color: var(--f-line); }
 .ag-view .ag-feed { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 2px 0 8px; scrollbar-width: thin; scrollbar-color: var(--f-line) transparent; }
 .ag-view .ag-feed > .ag-empty { padding: 12px 0; }
-.ag-view .ag-rowb { display: grid; grid-template-columns: 60px 66px minmax(0, 1fr) 12px; gap: 8px; align-items: start; width: 100%; min-height: 40px; padding: 8px 6px; background: transparent; border: 0;
-  border-bottom: 1px solid var(--f-line2); color: var(--f-hot); font: 13px/1.35 var(--f-ui); text-align: left; cursor: pointer; box-sizing: border-box; }
-.ag-view .ag-rowb:hover { background: rgba(93, 242, 255, .06); }
-.ag-view .ag-rowb.sel { background: rgba(93, 242, 255, .10); box-shadow: inset 2px 0 0 var(--tc); }
+.ag-view .ag-rowb { display: grid; grid-template-columns: 58px 70px minmax(0, 1fr) 10px; gap: 6px; align-items: start; width: 100%; min-height: 30px; padding: 5px 4px 5px 6px; background: transparent; border: 0;
+  border-left: 2px solid transparent; color: var(--f-hot); font: 12px/1.35 var(--f-ui); text-align: left; cursor: pointer; box-sizing: border-box; }
+.ag-view .ag-rowb:hover { background: rgba(93, 242, 255, .05); border-left-color: var(--tc); }
+.ag-view .ag-rowb.sel { background: rgba(93, 242, 255, .10); border-left-color: var(--tc); }
 .ag-view .ag-rowb.sys .ag-tx { color: var(--f-dim); }
-.ag-view .ag-rowb .ag-t { color: var(--f-dim); font-size: 12px; }
-.ag-view .ag-tag { font: 600 10px/1 var(--f-num); letter-spacing: .08em; padding: 4px 0; text-align: center; border: 1px solid var(--tc); color: var(--tc); align-self: start; white-space: nowrap; overflow: hidden; }
+.ag-view .ag-rowb .ag-t { color: var(--f-dim); font-size: 11px; }
+.ag-view .ag-tag { font: 700 9px/1.6 var(--f-ui); letter-spacing: .12em; color: var(--tc); align-self: start; white-space: nowrap; overflow: hidden; }
 .ag-view .ag-rowb .ag-tx { min-width: 0; overflow-wrap: anywhere; }
-.ag-view .ag-rowb .ag-tx.mono { font-size: 12px; white-space: pre-line; max-height: 4.1em; overflow: hidden; }
+.ag-view .ag-rowb .ag-tx.mono { font-size: 11.5px; white-space: pre-line; max-height: 4.1em; overflow: hidden; }
 .ag-view .ag-chev { color: var(--f-dim); }
 
 /* ---------------- the decision drawer, over the right column, in that decision's colour */
@@ -381,8 +459,8 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
   color: var(--tc, var(--f-c)); background: linear-gradient(transparent, #01050b 60%); pointer-events: none; }
 .ag-view .ag-drawer.ag-more .ag-dmore { display: block; }
 .ag-view .ag-dhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
-.ag-view .ag-dtitle { font-size: 19px; font-weight: 600; margin-top: 6px; color: var(--tc); text-shadow: 0 0 10px var(--tc); overflow-wrap: anywhere; }
-.ag-view .ag-dclose { min-height: 44px; min-width: 64px; background: transparent; border: 1px solid var(--f-line); color: var(--f-hot); font: 600 12px var(--f-ui); letter-spacing: .18em; text-transform: uppercase; cursor: pointer; flex: none; }
+.ag-view .ag-dtitle { font: 700 15px/1.3 var(--f-head); letter-spacing: .06em; margin-top: 6px; color: var(--tc); text-shadow: 0 0 10px var(--tc); overflow-wrap: anywhere; }
+.ag-view .ag-dclose { min-height: 40px; min-width: 64px; background: transparent; border: 1px solid var(--f-line); color: var(--f-hot); font: 600 11px var(--f-ui); letter-spacing: .18em; text-transform: uppercase; cursor: pointer; flex: none; }
 .ag-view .ag-dclose:hover { border-color: var(--tc); }
 .ag-view .ag-dsec { display: grid; gap: 6px; }
 .ag-view .ag-dquote { font-size: 14px; line-height: 1.55; color: var(--f-hot); border-left: 2px solid var(--tc); padding: 2px 0 2px 12px; overflow-wrap: anywhere; }
@@ -391,23 +469,29 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-fact > span:first-child { color: var(--f-dim); flex: none; }
 .ag-view .ag-fact > span:last-child { color: var(--f-hot); text-align: right; min-width: 0; overflow-wrap: anywhere; }
 
-/* ---------------- the footer: today, trades, losses, his session, the light's colours */
-.ag-view .ag-foot { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 7px 18px 7px; }
-.ag-view .ag-footrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 28px; }
-.ag-view .ag-big { display: grid; gap: 3px; }
-.ag-view .ag-today { font-size: 26px; font-weight: 600; line-height: 1; color: var(--f-hot); }
-.ag-view .ag-today.pos { color: var(--f-gr); text-shadow: 0 0 12px rgba(61, 255, 154, .55); }
-.ag-view .ag-today.neg { color: var(--f-rd); text-shadow: 0 0 12px rgba(255, 59, 92, .55); }
-.ag-view .ag-count { font-size: 21px; line-height: 1; color: var(--f-hot); text-shadow: 0 0 10px rgba(93, 242, 255, .5); }
-.ag-view .ag-count small { font-size: 14px; text-shadow: none; }
-.ag-view .ag-losses { color: #ffd0d8; text-shadow: none; }
-.ag-view .ag-trail { flex: 1 1 380px; min-width: 240px; }
-.ag-view .ag-track { position: relative; height: 48px; margin: 0 14px; }
-.ag-view .ag-base { position: absolute; left: 0; right: 0; top: 16px; height: 2px; background: rgba(93, 242, 255, .14); }
-.ag-view .ag-done { position: absolute; left: 0; top: 16px; height: 2px; background: var(--f-hot); box-shadow: 0 0 8px var(--f-c); }
-.ag-view .ag-head { position: absolute; top: 9px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; background: #fff; box-shadow: 0 0 10px #fff, 0 0 22px var(--f-c); }
-.ag-view .ag-ev { position: absolute; top: 6px; margin-left: -11px; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--tc); color: var(--tc); background: var(--f-ground); font-size: 10px; font-weight: 600; display: grid; place-items: center; box-sizing: border-box; }
-.ag-view .ag-hour { position: absolute; top: 33px; font-size: 11px; color: var(--f-dim); transform: translateX(-50%); white-space: nowrap; }
+/* ---------------- the footer: today, trades and losses, his session, his R curve, his heat (each a card) */
+.ag-view .ag-foot { flex: none; display: grid; grid-template-columns: auto auto minmax(0, 1fr) 210px auto; gap: 8px; height: 62px; }
+.ag-view .ag-fbox { display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 0 14px; min-width: 0; height: 100%; box-sizing: border-box; }
+.ag-view .ag-fbox > .ag-lbl, .ag-view .ag-big > .ag-lbl { font: 500 9px/1 var(--f-head); letter-spacing: .16em; }
+.ag-view .ag-big { display: flex; flex-direction: column-reverse; justify-content: center; gap: 5px; }
+.ag-view .ag-fpair { flex-direction: row; align-items: center; gap: 18px; }
+.ag-view .ag-today { font-size: 22px; font-weight: 600; line-height: 1; color: var(--f-hot); }
+.ag-view .ag-today.pos { color: var(--f-gr); text-shadow: 0 0 12px rgba(61, 255, 154, .5); }
+.ag-view .ag-today.neg { color: var(--f-rd); text-shadow: 0 0 12px rgba(255, 59, 92, .5); }
+.ag-view .ag-count { font-size: 20px; line-height: 1; color: var(--f-hot); }
+.ag-view .ag-count small { font-size: 13px; }
+.ag-view .ag-losses { color: #ffd0d8; }
+.ag-view .ag-trail { padding: 0 14px; }
+.ag-view .ag-track { position: relative; height: 44px; margin: 0 10px; }
+.ag-view .ag-base { position: absolute; left: 0; right: 0; top: 14px; height: 2px; background: rgba(93, 242, 255, .18); }
+.ag-view .ag-done { position: absolute; left: 0; top: 14px; height: 2px; background: var(--f-c); box-shadow: 0 0 8px var(--f-c); }
+.ag-view .ag-head { position: absolute; top: 7px; width: 2px; height: 16px; margin-left: -1px; background: var(--f-hot); box-shadow: 0 0 8px var(--f-hot); }
+.ag-view .ag-ev { position: absolute; top: 5px; margin-left: -10px; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--tc); color: var(--tc); background: var(--f-ground); font-size: 9.5px; font-weight: 600; display: grid; place-items: center; box-sizing: border-box; }
+.ag-view .ag-hour { position: absolute; top: 30px; font-size: 10px; color: var(--f-faint); transform: translateX(-50%); white-space: nowrap; }
+.ag-view .ag-rbox { padding: 6px 12px 4px; gap: 2px; justify-content: flex-start; }
+.ag-view .ag-rbox svg { flex: 1 1 auto; min-height: 0; width: 100%; display: block; overflow: visible; }
+.ag-view .ag-rbox .ag-rsay { font: 11.5px/1.3 var(--f-num); color: var(--f-dim); }
+.ag-view .ag-big2 { font: 600 20px/1 var(--f-num); color: var(--f-hot); white-space: nowrap; }
 
 /* ---------------- off the Agent tab: the agents' line in the corner (the page's look; never animated). No agent's proposal
    is a card outside the tab (the re-review of c47a8a1): this one line counts them, "Demo Agent: 1 proposal · Second Demo
@@ -441,6 +525,7 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
 .ag-note.amber { border-left-color: var(--ag-warn); }
 .ag-note.red { border-left-color: var(--ag-sell); border-color: color-mix(in srgb, var(--ag-sell) 45%, transparent); }
 .ag-note .ag-ttl { flex: none; font: 500 10px/1.3 var(--ag-mono); letter-spacing: .14em; color: var(--ag-lav); text-transform: uppercase; white-space: nowrap; }
+.ag-note .ag-ttl::before { content: none; }
 
 /* While the Agent tab is shown (live/agent.js hideBox, placeNotes): the Bot tab's corner (the bot's proposals) and the agents'
    line are hidden; the tab counts them under its proposal instead. The
@@ -452,12 +537,15 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
 .ag-view .ag-over > .ws-alerts { position: absolute; left: 8px; right: 8px; top: 6px; padding: 0; pointer-events: auto; max-height: calc(100% - 50px); overflow: auto; }
 .ag-view .ag-over > .ws-alerts .ws-alert:first-child { margin-top: 0; }
 
-/* ---------------- smaller screens: narrower sides; then the chart on top with the controls and the stream below; a phone stacks */
+/* ---------------- smaller screens: narrower sides; then the controls and the proposal on top with the grid and the chart below;
+   a phone stacks (the board F rules, kept) */
 @media (max-width: 1500px) {
   .ag-view .ag-grid { grid-template-columns: 270px minmax(0, 1fr) 340px; }
+  .ag-view .ag-decision { width: 190px; }
+  .ag-view .ag-steps { width: 180px; }
 }
 @media (max-height: 820px) {
-  .ag-view .ag-pipe { padding: 8px 16px 7px; }
+  .ag-view .ag-sec { padding: 7px 11px 8px; gap: 6px; }
 }
 /* the tray: narrower than 1100 px, ChartBridge's line and the notices pinned above the tab's scrolling part, in a band of a
    fixed height (they scroll inside it), so they are always in sight, cover nothing, and coming or going move nothing */
@@ -469,41 +557,53 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
   .ag-view .ag-tray > .ws-alerts .ws-alert:first-child { margin-top: 0; }
   .ag-view .ag-tray > .ag-notes, .ag-view .ag-tray > .bt-notes { position: static; width: auto; max-height: none; flex-direction: column; margin-top: 4px; }
   .ag-main { overflow-y: auto; }
+  .ag-view .ag-strip { flex-wrap: wrap; height: auto; min-height: 46px; padding: 6px 4px; row-gap: 6px; }
+  .ag-view .ag-strip > .ag-fill { display: none; }
+  .ag-view .ag-nowline { display: none; }
   .ag-view .ag-grid { flex: none; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto; }
-  /* the controls and the proposal side by side at the top (its Accept and Reject in the window without scrolling), the chart
-     under them across both */
+  /* the controls and the proposal side by side at the top (its Accept and Reject in the window without scrolling), the grid and
+     the chart under them across both */
   .ag-view .ag-left { grid-row: 1; grid-column: 1; }
   .ag-view .ag-right { grid-row: 1; grid-column: 2; }
   .ag-view .ag-centre { grid-row: 2; grid-column: 1 / -1; }
-  .ag-view .ag-chartpanel { min-height: 380px; }
+  .ag-view .ag-pipe { flex: none; height: 240px; }
+  .ag-view .ag-chartpanel { flex: none; min-height: 380px; }
   .ag-view .ag-left { max-height: 640px; }
   /* the stream keeps its own height and scrolls */
   .ag-view .ag-feedwrap { flex: none; min-height: 320px; }
   .ag-view .ag-feed { max-height: 460px; }
+  .ag-view .ag-foot { height: auto; grid-template-columns: auto auto minmax(0, 1fr); }
+  .ag-view .ag-foot > .ag-trail { grid-column: 1 / -1; grid-row: 2; height: 52px; }
+  .ag-view .ag-fbox { height: 62px; }
 }
 @media (max-width: 720px) {
   .ag-main { padding: 8px 8px 10px; }
   .ag-view .ag-grid { grid-template-columns: minmax(0, 1fr); }
   .ag-view .ag-left, .ag-view .ag-right, .ag-view .ag-centre { grid-row: auto; grid-column: auto; }
-  /* a phone: the controls, then the proposal (its slot) and his stream, then the chart */
+  /* a phone: the controls, then the proposal (its slot) and his stream, then the grid and the chart */
   .ag-view .ag-left { order: 1; } .ag-view .ag-right { order: 2; } .ag-view .ag-centre { order: 3; }
   .ag-view .ag-tray { height: 96px; }
-  /* the words under the mode, the account and the rules keep their two lines even while empty: their coming and going never
-     moves the proposal under them */
+  /* the words under the mode, the account and the rules keep their two lines even while empty or hidden: their coming and
+     going never moves the proposal under them. The mode's words are hidden by the hidden attribute, which workspace.css
+     ([hidden] { display: none !important }) would collapse: this rule outranks it (it sits under .ag-view and is !important
+     too), so the line keeps its room, unseen */
   .ag-view .ag-why, .ag-view .ag-why:empty { display: block; min-height: 2.9em; }
-  .ag-view .ag-why[hidden] { display: block; visibility: hidden; }
+  .ag-view .ag-why[hidden] { display: block !important; visibility: hidden; }
   .ag-view .ag-left, .ag-view .ag-right { max-height: none; }
   .ag-view .ag-scroll { overflow: visible; }
   .ag-view .ag-feedwrap { min-height: 320px; }
   .ag-view .ag-feed { max-height: 460px; }
   .ag-view .ag-right { min-height: 420px; }
-  .ag-view .ag-pipehead { flex-wrap: wrap; }
-  .ag-view .ag-said { white-space: normal; text-align: left; }
-  .ag-view .ag-stepname { font-size: 9.5px; letter-spacing: .06em; }
+  .ag-view .ag-pipe { height: 250px; }
+  .ag-view .ag-steps { width: 150px; }
+  .ag-view .ag-decision { width: 140px; padding: 7px 9px; }
+  .ag-view .ag-said { display: none; }
   .ag-view .ag-rowb { grid-template-columns: 54px 62px minmax(0, 1fr) 10px; gap: 6px; }
-  .ag-view .ag-trail { flex-basis: 100%; min-width: 0; }
+  .ag-view .ag-foot { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ag-view .ag-foot > .ag-trail { grid-column: 1 / -1; grid-row: auto; }
   .ag-view .ag-hour.mid { display: none; }
   .ag-view .ag-strip { gap: 6px 10px; }
+  .ag-view .ag-strip > .ag-stat { align-items: flex-start; }
   /* the workspace's top bar wraps while the Agent tab is open on a phone (no sideways scroll) */
   body.ag-on .ws-top { flex-wrap: wrap; row-gap: 6px; height: auto; min-height: 40px; padding: 6px 12px; }
 }
