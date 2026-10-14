@@ -1,5 +1,5 @@
 /*
- * The trading workspace (live/index.html, ChartBridge's page since E2a; chart 1.21.0 removed the single chart page):
+ * The trading workspace (live/index.html, ChartBridge's page since E2a; chart 1.22.0 removed the single chart page):
  * independent panels on a 12 x 6 snap grid, one browser window per screen, each window with its own saved layout opened
  * from its URL (?layout=Main, ?layout=Second, any name).
  *
@@ -12,7 +12,7 @@
  *                  large-print floor by time of day, formatting). No DOM; it also loads in Node for test/workspace.test.js.
  *   the page       runs only in a browser, after live.js (ChartLive), feed.js (ChartFeed) and pin.js (ChartBridgePin).
  *
- * Saved in this browser's localStorage with no prefix (the keys the single chart page used until 1.21.0, so a PC keeps
+ * Saved in this browser's localStorage with no prefix (the keys the single chart page used until 1.22.0, so a PC keeps
  * its colors, color presets, indicator colors, Glide, Range style, bracket presets, Qty and hotkeys; each chart keeps its
  * own indicators and drawings under its paneId, the panel id). The workspace's own keys:
  *   live-workspace-v1     { v: 1, layouts: { <name>: { panels: [{ id, type: 'chart' | 'tape' | 'ticket', root, tf, range?,
@@ -487,7 +487,7 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.C
 'use strict';
 const W = window.WorkspaceCore, LP = window.LivePrefs, OT = window.OrderTicket, PIN = window.ChartBridgePin || null;
 const OS = window.OrderStrategies;                   // 1.16.0: Order Strategies, entry types, Merge, The Desk's shared settings
-const PREFIX = '';                                 // no prefix: the keys the single chart page used (until 1.21.0)
+const PREFIX = '';                                 // no prefix: the keys the single chart page used (until 1.22.0)
 const TAPE_MAX = 500, TAPE_ROW = 18;
 const TF_SHORT = { s15: '15s', s30: '30s', m1: '1m', m5: '5m', m15: '15m', h1: '1h', range: 'Range', h4: '4h', d1: '1D', w1: '1W' };
 /* 1.15.0: the 1 hour chart loads 30 days of 1-minute history (15 minute 10, the rest 5); 4h, 1D and 1W are NinjaTrader's
@@ -1217,7 +1217,7 @@ setInterval(syncKeys, 250);
    (nt8/PROTOCOL.md "Protocol v3"); with every switch off this page is the 1.15 page. The order path is TradeCore's
    (live/trade.js); the rules are OrderStrategies' (live/order-strategies.js). No motion on any of it.
    Saved here: live-strategy-v1 (the active strategy's id, every window of this browser), live-desk-cache-v1 (the last copy
-   read of both documents). (live-desk-sync-v1 told the single chart page the hotkeys were kept in The Desk; 1.21.0 no longer
+   read of both documents). (live-desk-sync-v1 told the single chart page the hotkeys were kept in The Desk; 1.22.0 no longer
    writes it.) The Desk's address is not kept here: it is ChartBridge's deskUrl (AccountsPage.deskBase). */
 const EXTRA_KEYS = [{ id: 'merge', sw: 'merge' }, { id: 'accept', sw: 'bot' }, { id: 'reject', sw: 'bot' }];
 /* 1.17.0: the copilot's keys answer the bot's proposals and every agent's (one handler, AgentCore.copilotRouter): on while the
@@ -2160,7 +2160,7 @@ function mountDataBox(v) {
     set(cells.dlt, dl === null ? '-' : W.fmtSignedNum(dl, 0) || '0', dl > 0 ? 'up' : dl < 0 ? 'dn' : d ? '' : 'mut');
     set(cells.big, d && d.big > 0 ? U.fmtPrice(d.big, 0) + ' contracts' : '-', d ? '' : 'mut');
     const why = { off: 'Buy and sell volume, delta and the largest print come from the chart\'s Cumulative delta: turn it on in Indicators.',
-      old: 'This ChartBridge sends no trade sides: no buy and sell volume.', htf: 'No buy and sell volume on 4h, 1D and 1W bars.',
+      htf: 'No buy and sell volume on 4h, 1D and 1W bars.',
       building: 'Counting the trades: buy and sell volume shortly.', before: 'Buy and sell volume count from ' + (x.deltaFrom !== null ? W.fmtClock(x.deltaFrom) + ' ET' : 'the page\'s opening') + ': none for this bar.' }[x.deltaWhy] || '';
     txt(cells.note, why); if (cells.note.hidden !== !why) cells.note.hidden = !why;
     const b = x.bubbles;
@@ -2638,7 +2638,7 @@ $('wsRangeMode').addEventListener('change', e => {
   for (const v of chartViews()) v.pane.refreshSettings();
 });
 
-/* Hotkeys: the 1.11.0 keys (live-hotkeys-v1, the single chart page's Settings until 1.21.0). Each box reads the keys pressed in it. */
+/* Hotkeys: the 1.11.0 keys (live-hotkeys-v1, the single chart page's Settings until 1.22.0). Each box reads the keys pressed in it. */
 const HKKEY = LP.KEYS.hotkeys;
 const readHotkeys = () => (HK = OT.cleanHotkeys(prefs.raw.get(HKKEY)));
 $('wsHotkeys').innerHTML = `<div class="hk-list" role="group" aria-labelledby="wsHkCap">${OT.HOTKEY_ACTIONS.map(a => `

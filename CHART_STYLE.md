@@ -187,7 +187,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   headers no longer show the change from the settlement (the Quote board has it). 1.16.0: the bubble under the mouse comes
   first, "Buy 142 · Bar 0:23 · ATR(14) 12.50" (short form "Buy 142 · 0:23 · ATR 12.50"), set when the bubble changes.
 - **No text inside a mounted chart (1.16.0, Anthony):** the workspace's charts (and a host's) have no legend and no **Aa**
-  toggle; the single chart page kept its legend as above until it was removed (1.21.0). A small badge, in the panel header (or the chart's top left
+  toggle; the single chart page kept its legend as above until it was removed (1.22.0). A small badge, in the panel header (or the chart's top left
   corner when a host does not place it), 9px pills: **ARMED · account** in the ARMED pill's colors while the chart takes
   orders, and the connection only when it is not LIVE (CONNECTING, LOADING, OFFLINE in the loss color).
 - **Stale feed (1.16.0):** no trade for 10 s in RTH (09:30 to 16:00 ET) or 60 s outside it, while the line is live and CME
@@ -287,8 +287,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   color, the pointer's value in the crosshair tag. The value scale fits the candles in view (12% free at the top and
   bottom), eased like the price scale. Numbers with thousands separators and a sign. Bars with no delta (before the page
   has every trade, or with no trade) stay blank; a session that counts from later than 18:00 gets a dashed
-  `#8392A5` line at its first counted bar. With ChartBridge 0.3.3 or older only the title and "Delta needs ChartBridge
-  0.3.4 on this PC" (500 12px Condensed, centered) are drawn. Legend: "Delta +12,345" (bull color above zero, bear
+  `#8392A5` line at its first counted bar. (A note from the page, drawn alone with the title in 500 12px Condensed,
+  centered, was the page's "Delta needs ChartBridge 0.3.4 on this PC" until chart 1.21.0; the page sets none now.) Legend: "Delta +12,345" (bull color above zero, bear
   below), "Bar delta +123" in bar mode, "Delta since 18:37:16.6 +1,234" for a later start ("Delta since 18:37:16.6, missed 32 s +1,234" after a gap), and "· 37 unknown" (the unknown
   side volume of the session, dim) when there is any. On by default on the main pane, without a chip (pin it from the
   menu for one); its own Indicators entry "Cumulative delta" (chip DELTA, letter D) in the Volume group.
@@ -401,7 +401,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   bracket box, the focus leaves the control so the hotkeys work at once. Flatten (button and hotkeys) works with Armed
   off, so it does not dim while disarmed (Buy, Sell, B/E and Cancel all still do). Escape (outside a key box) or a click outside closes it. No new
   colors; the order bar does not change.
-- **The single chart page's cleanup (1.14.0, Anthony: "the 1m format with everything on one line"; the page is gone since 1.21.0).** One toolbar line
+- **The single chart page's cleanup (1.14.0, Anthony: "the 1m format with everything on one line"; the page is gone since 1.22.0).** One toolbar line
   at 1366, 1920 and 2560 px: the instruments, Bars and the range size, Indicators and its chips (the workspace's 2-letter
   chips, VO VW LV FL, 30 px tall; up to ten pinned, those that do not fit behind a **+N** chip that opens a small
   list of them), a **⋯** `.btn` opening a small menu (Trend line, Price line,
@@ -492,7 +492,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Account** (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker (600 13px
   mono in the head text color, 34 px tall, at least 150 px wide) is the only account control: orders go to it and the
   chart marks its fills only. With trading off it still works (the fills follow it; no order can be sent). With no
-  order bar (a mounted chart, or ChartBridge 0.2) a compact picker (600 12px mono) sits in the toolbar after the
+  order bar (a mounted chart) a compact picker (600 12px mono) sits in the toolbar after the
   instruments. No "All accounts"; no colors per account. Saved in `live-account-v1` (the 1.5 fills choice is read once).
 - PIN pad (live page, 1.5.2, ChartBridge 0.3.2; `live/pin.css`): a centered card on `#0B1016` with a `#2A3645`
   border, radius 12 and the Colors panel's shadow, over the `#080B10` ground (at 90% with a light blur over the
@@ -534,7 +534,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   line (17 px: the name, bars, last price and change, the indicators' values); the bar's open, high, low, volume, the
   readouts and a hovered bubble come on a second line only while the crosshair is over the chart (the price scale does
   not move for it). A bigger panel shows the full header.
-- **Header text toggle (1.14.0; gone from the workspace in 1.16.0 and with the single chart page in 1.21.0):** **Aa**
+- **Header text toggle (1.14.0; gone from the workspace in 1.16.0 and with the single chart page in 1.22.0):** **Aa**
   (`.lg-tog`, the header's 22 px button style, pressed = on) next to Indicators. Off: no header text at all, not even on hover, nor the hovered
   bubble's; the price scale takes the room back with the 120 ms re-fit. Saved per chart (`live-legend-v1`).
 - **The NO STOP question (1.13.0)** takes no room and is never modal, so nothing resizes or scrolls: in the workspace a strip over the top bar from the left up to KEYS, one line, the text cut short with

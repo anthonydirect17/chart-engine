@@ -7,7 +7,7 @@
 //     bar, so the grid never resizes and the ticket never scrolls (1366x768, 1920x1080, 2560x1440); Armed off, the ticket
 //     on another instrument, or a Close in the other window drops it; an answer that reaches the ticket's window after a
 //     Close of its instrument (the drop arriving late) is refused (the F2 re-review); a reversal (Sell 3 while long 1) is
-//     asked, a reducing Sell is not. (Chart 1.21.0: the single chart page's own part went with that page; its Escape,
+//     asked, a reducing Sell is not. (Chart 1.22.0: the single chart page's own part went with that page; its Escape,
 //     Send, reversal and reducing checks run on the ticket here.)
 //   npm run smoke:nostop        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
@@ -180,7 +180,7 @@ try {
   check(await wsAsked(A), 'and A was not told "Send" by it: its own order with no stop is still asked');
   await A.click('#wsNoStopCancel');
 
-  // Escape is Cancel (the single chart page's checks until 1.21.0, now on the ticket)
+  // Escape is Cancel (the single chart page's checks until 1.22.0, now on the ticket)
   await clear(A); await clear(B); await A.bringToFront(); await wait(450);
   await A.click(tk('buyMkt')); await wait(250);
   await A.keyboard.press('Escape'); await wait(200);

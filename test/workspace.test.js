@@ -198,7 +198,7 @@ test('no en or em dashes in the workspace files', () => {
   }
 });
 
-test('the workspace is the page (index.html), installed; 1.21.0: the single chart page (single.html) is gone', () => {
+test('the workspace is the page (index.html), installed; 1.22.0: the single chart page (single.html) is gone', () => {
   const www = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).www;
   const to = www.map(f => f.to);
   for (const f of ['index.html', 'workspace.js', 'workspace.css', 'feed.js', 'update-notice.js', 'trade.js', 'ticket-link.js']) assert.ok(to.includes(f), f);

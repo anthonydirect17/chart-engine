@@ -1,5 +1,5 @@
 // PIN smoke test (ChartBridge 0.3.2): drives ChartBridge's own page, the workspace (live/index.html; the single chart page
-// until chart 1.21.0), in Chromium against the fake bridge with a pin file, the way Anthony uses it: set a PIN (keyboard),
+// until chart 1.22.0), in Chromium against the fake bridge with a pin file, the way Anthony uses it: set a PIN (keyboard),
 // nothing streams before; reload asks again; wrong PINs (20 in a row) never block the right one; a ChartBridge restart
 // mid-session keeps the open page unlocked and trading on its order ticket; change the PIN; a touch screen; the
 // forgotten-PIN recovery (delete the pin file). Made-up PINs
@@ -63,7 +63,7 @@ function spies() {
 }
 const title = p => p.textContent('#cbPinTitle').catch(() => null);
 const msg = p => p.textContent('#cbPinMsg').catch(() => null);
-/* the workspace's connection in its top bar (the single chart page's LIVE pill until chart 1.21.0): LIVE, OFFLINE or null */
+/* the workspace's connection in its top bar (the single chart page's LIVE pill until chart 1.22.0): LIVE, OFFLINE or null */
 const pill = p => p.evaluate(() => { const el = document.getElementById('wsConn'); return !el || !document.querySelector('.ws-panel') ? null : el.classList.contains('live') ? 'LIVE' : el.classList.contains('bad') ? 'OFFLINE' : 'WAIT'; });
 /* the order ticket's controls (the 1.11.0 ids, as TradeCore.wire finds them) */
 const T = k => `.ws-panel[data-type="ticket"] [data-tk-id="${k}"]`;
@@ -183,7 +183,7 @@ try {
   check(/PIN changed/.test(await page.textContent('.cb-pin-toast').catch(() => '')), 'change: a short note says so');
 
   /* ---------------- 5. a touch screen (a laptop's size: the workspace's smallest; the single chart page also fitted a phone
-     until 1.21.0): the new PIN, the old one refused */
+     until 1.22.0): the new PIN, the old one refused */
   const phoneCtx = await browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, hasTouch: true });
   await phoneCtx.addInitScript(() => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); });   // 1.13.0: answers the one NO STOP question with Send
   await phoneCtx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());

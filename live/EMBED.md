@@ -2,7 +2,7 @@
 
 The workspace (`live/index.html`, ChartBridge's page at `http://localhost:8765/`, a host of its own) and any other host
 page run the same code: each calls `ChartLive.mount`, so every change to the chart shows up in the host as soon as the
-host vendors the new files (The Desk stopped embedding the chart on 2026-09-30). Until 1.21.0 a single chart page,
+host vendors the new files (The Desk stopped embedding the chart on 2026-09-30). Until 1.22.0 a single chart page,
 `live/single.html`, booted itself with `data-mount="page"`; it is gone, and every chart is a mounted one.
 
 ## Files to vendor, in load order
@@ -62,8 +62,8 @@ marks that account's fills only (there is no "All accounts" any more). It lists 
 mounted chart still follows a pick made by another chart or tab with its prefix.
 
 `mount` returns `{ destroy(), chart, element, paneId, setIndicatorOption(id, key, value), indicatorOptions(id) }`, and
-`data()`, the chart's data for tests and the console (read it, never change it; 1.21.0, the single chart page's
-`window.liveData`). 1.16.0 (Anthony): a mounted chart has no text on it, no legend and no **Aa** toggle (1.21.0:
+`data()`, the chart's data for tests and the console (read it, never change it; 1.22.0, the single chart page's
+`window.liveData`). 1.16.0 (Anthony): a mounted chart has no text on it, no legend and no **Aa** toggle (1.22.0:
 `legendToggle`, `legendShown()` and `setLegendShown(on)`, empty since 1.16.0, are gone with the single chart page's
 legend). It has `badge`, a small element (in the chart's top left corner, unless the host places it in its own header, inside an
 element with the class `chart-live`) that shows **ARMED · account** while the chart takes orders (`setTrade`'s `live`) and
@@ -94,9 +94,8 @@ large-print floors in `live-tape-floors-v1`, the workspace's Time and Sales floo
 from the chart's opening only, from the trades' sides as ChartBridge sends them, so a relay must pass `s` through.
 
 Cumulative delta (1.7.0): a pane under the chart with market buys minus market sells, on for `paneId` `'main'` and off
-for any other pane until added from its Indicators menu. The side of each trade comes from ChartBridge 0.3.4 (every
-trade carries `s`); with ChartBridge 0.3.3 or older the pane draws nothing and says "Delta needs ChartBridge 0.3.4 on
-this PC". A relay must pass the `s` and `sm` fields of `tick` messages and the fourth and fifth places of each `ticks`
+for any other pane until added from its Indicators menu. The side of each trade comes from ChartBridge (every trade carries
+`s` since 0.3.4; chart 1.21.0 needs ChartBridge 0.5.2, so the note for 0.3.3 and older is gone). A relay must pass the `s` and `sm` fields of `tick` messages and the fourth and fifth places of each `ticks`
 trade through unchanged. The pane starts at about 20% of the chart's height; the line above it can be dragged (or
 focused with Tab and moved with the up and down arrow keys, Page Up, Page Down, Home and End), and its height is saved
 per pane (`live-pane-heights-v1`). The divider is an element inside the chart; nothing new listens on `document` or
@@ -108,7 +107,7 @@ so after a weekend load it shows what the view's ticks hold, with a quiet note.
 
 | Option | Default | What it does |
 |---|---|---|
-| `wsUrl` | none, required | ChartBridge's WebSocket URL, a string (`ws://localhost:8765/ws`), used for every connect and reconnect. The query string is never shown on screen. (Until 1.21.0 it could also be a function or a promise, for The Desk's relay and its single-use tickets; the relay is gone.) |
+| `wsUrl` | none, required | ChartBridge's WebSocket URL, a string (`ws://localhost:8765/ws`), used for every connect and reconnect. The query string is never shown on screen. (Until 1.22.0 it could also be a function or a promise, for The Desk's relay and its single-use tickets; the relay is gone.) |
 | `paneId` | `'main'` | Key for this chart's indicators (Volume bars, VWAP, Levels, Initial balance, Volume profile, Cumulative delta, Fills: on the chart, shown, pinned; and their options), the delta pane's height and drawings. `'main'` starts with the five on and pinned and the cumulative delta pane on without a chip (the volume profile off), any other id with none on (Anthony's rule for new panes). Give every pane its own id. |
 | `storagePrefix` | `'embed:'` | Put in front of every storage key, see below. |
 | `onStatus` | none | Called with `{ state, paneId, root, attempt, contract }` on every connection change (`contract`, 1.16.0: the contract's name, such as "MNQ 12-26", once known). `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
@@ -192,7 +191,7 @@ session counted from later than 18:00 with the start ("since 18:05 ET"). A relay
 ## Read-only guarantee
 
 A chart made with `ChartLive.mount` is always read only: there is no option to turn trading on (a `trading`
-option is ignored). (Until 1.21.0 the single chart page, booted by `live/single.html` with `data-mount="page"`, traded itself; it is gone.)
+option is ignored). (Until 1.22.0 the single chart page, booted by `live/single.html` with `data-mount="page"`, traded itself; it is gone.)
 The workspace (1.12.0) trades through its own order connection and TradeCore (`live/trade.js`), never through a chart:
 its charts are mounted with `trade` (below), which only hands the host the clicks; every point here still holds for
 the chart itself.
@@ -213,7 +212,7 @@ the chart itself.
 ## Storage prefix rule
 
 Every storage key the chart uses is `storagePrefix + <the key>`, in this browser's `localStorage` for the host's origin.
-The workspace (and, until 1.21.0, the single chart page) uses no prefix:
+The workspace (and, until 1.22.0, the single chart page) uses no prefix:
 
 | Key (no prefix) | What it holds | Shared by |
 |---|---|---|

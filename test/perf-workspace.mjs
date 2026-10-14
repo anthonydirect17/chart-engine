@@ -1,6 +1,6 @@
 // Workspace load benchmark: the default layout (4 charts and Time and Sales, live/index.html) against the fake
 // bridge feeding a busy tape, compared with one mounted chart with its own toolbar (test/chart-host.html; the single chart
-// page, live/single.html, until chart 1.21.0) on the same feed. Sample data only.
+// page, live/single.html, until chart 1.22.0) on the same feed. Sample data only.
 // Not part of `npm test`: it takes about 2 minutes per page.
 //
 //   node test/perf-workspace.mjs [--mode=both|workspace|chart] [--secs=120] [--warm=10] [--live-rate=300]
@@ -34,7 +34,7 @@ const VARIANT = arg('variant', 'default');
 /* --ticket (1.12.0): trading on; the workspace's ticket held and Armed, MNQ long with its stop and target working, so
    the order display path (every MNQ chart's lines, the Armed border, the ticket's P&L) runs under the load */
 const TICKET = !!arg('ticket', false);
-// --mode=single: the name before 1.21.0, now the one mounted chart
+// --mode=single: the name before 1.22.0, now the one mounted chart
 const MODE = arg('mode', 'both') === 'single' ? 'chart' : arg('mode', 'both'), SECS = +arg('secs', 120), WARM = +arg('warm', 10), LIVE_RATE = +arg('live-rate', 300), TICK_RATE = +arg('tick-rate', 15), PORT = +arg('port', 8834);
 
 const init = `(() => {

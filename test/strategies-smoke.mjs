@@ -128,7 +128,7 @@ try {
   await A.keyboard.press('Escape'); await A.evaluate(() => document.activeElement && document.activeElement.blur()); await wait(200);
   if (await visible(A, '#wsSettings')) { await A.click('#wsSet'); await wait(200); }
   check(desk.log.length === 0, 'The Desk was never asked (' + desk.log.length + ' requests)');
-  check((await A.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === null, 'live-desk-sync-v1 is never written (1.21.0: it told the single chart page, gone)');
+  check((await A.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === null, 'live-desk-sync-v1 is never written (1.22.0: it told the single chart page, gone)');
   // an order: the 1.15 order, a bracket and no strategy, and Num9 (a strategy's key on The Desk) does nothing
   await A.selectOption('.ws-panel[data-type="ticket"] [data-tk-id="oQty"]', '1');
   await tk(A, 'bStop').fill('8'); await tk(A, 'bStop').press('Tab'); await tk(A, 'bTarget').fill('16'); await tk(A, 'bTarget').press('Tab'); await wait(400);
@@ -162,7 +162,7 @@ try {
   check(desk.log.filter(x => x.method === 'GET').length >= 2, 'both documents read from The Desk');
   check((await notes(A)).some(t => /Hotkeys now come from The Desk, shared by every PC\. This browser had Sell MKT Alt\+X/.test(t)), 'this browser\'s different keys replaced, and said so: ' + (await notes(A)).slice(-1)[0]);
   check(JSON.parse(await A.evaluate(() => localStorage.getItem('live-hotkeys-v1'))).sell === 'F8', 'The Desk\'s Sell key in this browser\'s keys');
-  check((await A.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === null, 'shared keys: live-desk-sync-v1 still never written (1.21.0: it told the single chart page, gone)');
+  check((await A.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === null, 'shared keys: live-desk-sync-v1 still never written (1.22.0: it told the single chart page, gone)');
   check(await visible(A, '.ws-panel[data-type="ticket"] [data-tk-id="stratRow"]'), 'the Strategy picker on the ticket');
   check(JSON.stringify(await A.$$eval('.ws-panel[data-type="ticket"] [data-tk-id="strat"] option', o => o.map(x => x.textContent))) === '["None (the bracket)","Scalp 2 (Num9)"]', 'None and The Desk\'s strategy, with its key');
   check(await visible(A, '.ws-panel[data-type="ticket"] [data-tk-id="mergeBtn"]'), 'the Merge button on the ticket');

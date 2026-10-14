@@ -1,6 +1,6 @@
 // Live chart smoke test: a mounted chart with its own toolbar (test/chart-host.html) against the fake bridge
 // (test/fake-bridge.mjs) on the current protocol (trade sides; trading off, as ChartBridge starts), so the chart is
-// checked to work as before. Chart 1.21.0 moved it here from the single chart page (live/single.html, gone) and from
+// checked to work as before. Chart 1.22.0 moved it here from the single chart page (live/single.html, gone) and from
 // ChartBridge 0.2's protocol v1; the page's legend, Settings and small menu went with the page, so the contract and the
 // fills are read from the chart. Order entry: test/orders-smoke.mjs. Sample data only. Screenshots in test/out/.
 import { chromium } from 'playwright';
@@ -21,7 +21,7 @@ const fail = m => errors.push(m);
 const waitLive = pg => pg.waitForFunction(isLive, null, { timeout: 15000 });
 /* One account picker (1.6.0, Anthony): a mounted chart has no order bar, so it sits in the toolbar. */
 async function pickFillAccount(page, value) { await page.selectOption(H('acctPick'), value); }
-/* the fills marked for the picker's account (the page's legend said "Last fill" until 1.21.0) */
+/* the fills marked for the picker's account (the page's legend said "Last fill" until 1.22.0) */
 const fillMarks = page => page.evaluate(() => window.liveChart.getMarkers().length);
 /* The fills marked are always the picker's account's, and nobody else's (review B1). */
 async function fillsMatchPicker(page) {
@@ -85,7 +85,7 @@ try {
   if (lateMain !== /less tick history than asked/.test(await page.textContent(H('statusMsg')))) fail('partial history note wrong with the full backfill: ' + lateMain + ' "' + await page.textContent(H('statusMsg')) + '"');
   console.log('full history: first range bar mid-session ' + lateMain);
   await page.screenshot({ path: path.join(out, 'live-range.png') });
-  // Range style: in a mounted chart's toolbar (the single chart page had it in its Settings from 1.14.0 until 1.21.0)
+  // Range style: in a mounted chart's toolbar (the single chart page had it in its Settings from 1.14.0 until 1.22.0)
   await page.selectOption(H('rangeMode'), 'traded'); await page.waitForTimeout(400);
   if (await page.evaluate(() => window.liveData().cur.rangeMode) !== 'traded') fail('traded mode not in use: ' + await page.evaluate(() => window.liveData().cur.rangeMode));
   await page.screenshot({ path: path.join(out, 'live-range-traded.png') });
@@ -286,7 +286,7 @@ try {
   await phone.screenshot({ path: path.join(out, 'live-phone.png') });
   const phoneChips = await phone.evaluate(() => { const s = document.querySelector('[id$="-indChips"]'), cs = [...s.querySelectorAll('.ind-chip')];
     return { narrow: s.classList.contains('is-narrow'), tops: [...new Set(cs.map(c => Math.round(c.getBoundingClientRect().top)))].length, text: cs.map(c => c.innerText.trim()).join(''), fits: s.scrollWidth <= s.clientWidth + 1, n: cs.length }; });
-  // short chips on one line on a phone (the single chart page's were the workspace's 2-letter ones from 1.14.0 until 1.21.0)
+  // short chips on one line on a phone (the single chart page's were the workspace's 2-letter ones from 1.14.0 until 1.22.0)
   if (phoneChips.tops !== 1 || !phoneChips.fits || phoneChips.n !== 4) fail('phone: chips should be on one line: ' + JSON.stringify(phoneChips));
   await phone.click(H('indChips') + ' .ind-chip[data-id="levels"]'); await phone.click('body .chip-pop [data-act="popsw"]');
   if (await phone.evaluate(() => window.liveChart.getLayers().levels) !== false) fail('phone: the chip\'s switch did not hide Levels');

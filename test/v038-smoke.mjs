@@ -140,7 +140,7 @@ try {
   check(orders.length === 4 && orders.every(m => JSON.stringify(Object.keys(m).sort()) === '["account","bracket","cid","kind","qty","root","side","type"]' || JSON.stringify(Object.keys(m).sort()) === '["account","cid","kind","qty","root","side","type"]'),
     'each order is the 1.15 order (a bracket, or none on an order that reduces): ' + JSON.stringify(orders.map(m => Object.keys(m).join(','))));
   check(requests.every(u => !/\/bot-library|\/api\/chart-(hotkeys|strategies|accounts)|:8800\//.test(u)), 'The Desk and /bot-library never asked: ' + requests.filter(u => /bot-library|\/api\/chart-|8800/.test(u)).join(', '));
-  check((await page.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === null, 'live-desk-sync-v1 is never written (1.21.0: it told the single chart page, gone)');
+  check((await page.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === null, 'live-desk-sync-v1 is never written (1.22.0: it told the single chart page, gone)');
   const mine = ticketSent(all);
   await ctx.close(); await stopBridge();
 

@@ -1,5 +1,5 @@
 // Saved settings smoke test (B1: "NQ range set to 40 ticks was back to 20 after a reload"). Drives a mounted chart with its
-// toolbar (test/chart-host.html; the single chart page until chart 1.21.0) in Chromium against the fake bridge and checks
+// toolbar (test/chart-host.html; the single chart page until chart 1.22.0) in Chromium against the fake bridge and checks
 // what comes back after a reload:
 //   npm run smoke:settings        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 // Found on 1.3.1: (1) a size typed and not committed (no Enter, no click elsewhere) was never saved, and

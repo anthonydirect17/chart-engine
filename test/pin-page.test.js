@@ -37,7 +37,7 @@ test('pin.js asks for the PIN again only when ChartBridge says the unlock is gon
   assert.ok(!/attempt|tries|lockout|wrongCount/i.test(code(pin)), 'no attempt counting in the page either');
 });
 
-test('live.js never uses the PIN (1.21.0: the standalone page that did is gone); the workspace unlocks with it', () => {
+test('live.js never uses the PIN (1.22.0: the standalone page that did is gone); the workspace unlocks with it', () => {
   assert.ok(!/ChartBridgePin|\bPIN\b\s*[=.?]/.test(live.replace(/^\s*(\/\/|\*).*$/gm, '')), 'no PIN code in live.js');
   assert.match(live, /const WS_URL = opt\.wsUrl;/);
   assert.match(live, /function mount\(container, options\) \{\n\s+const opt = options \|\| \{\};/);

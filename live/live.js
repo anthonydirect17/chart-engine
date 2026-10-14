@@ -1,8 +1,9 @@
 /*
  * Live chart: connects to ChartBridge (NinjaTrader 8 add-on) and drives chart-engine, mounted by a host page with
- * ChartLive.mount (the workspace, live/index.html, ChartBridge's page). Protocol: nt8/PROTOCOL.md. A mounted chart is
+ * ChartLive.mount (the workspace, live/index.html, ChartBridge's page). Protocol: nt8/PROTOCOL.md, ChartBridge 0.5.2 or
+ * newer (live/COMPAT.json; 1.21.0 dropped the fallbacks for older ones). A mounted chart is
  * read only: it hands its order clicks and drags to its host (the workspace's order ticket, live/trade.js), which sends
- * them with every check. 1.21.0 (Anthony, 2026-10-10): the single chart page (live/single.html) is gone, and with it the
+ * them with every check. 1.22.0 (Anthony, 2026-10-10): the single chart page (live/single.html) is gone, and with it the
  * chart's own order bar, hotkeys, PIN boot and legend.
  */
 /*
@@ -72,7 +73,7 @@ const GRIDS = ['off', 'on'];
 const ROOMS = [0, 40, 80, 120, 160];
 const DEFAULT_ROOM = 80;
 /* 1.15.0 (Anthony's review of 1.14.0): the workspace's choices are 80, 120 and 160 px, 120 until one is picked; a value
-   saved before is kept (ROOMS and DEFAULT_ROOM were the single chart page's, gone in 1.21.0: still read as saved) */
+   saved before is kept (ROOMS and DEFAULT_ROOM were the single chart page's, gone in 1.22.0: still read as saved) */
 const ROOMS_WS = [80, 120, 160];
 const DEFAULT_ROOM_WS = 120;
 /* the ATR readout's period (Anthony's answer, review D2): editable in Settings, 14 by default, whole bars 2 to 100 */
@@ -871,7 +872,7 @@ return api;
  *   ChartLive.mount(container, { wsUrl, feed, view, trade, paneId, storagePrefix, onStatus, brand, ... })  ->  { destroy(), chart, element, paneId, ... }
  * live/EMBED.md lists the files a host loads and what each option does. Everything a chart needs is kept inside
  * the element it creates in `container` (class chart-live, element ids prefixed per mount); the only listeners on
- * document or window are removed again by destroy(), with the timers and the WebSocket. 1.21.0: the standalone page
+ * document or window are removed again by destroy(), with the timers and the WebSocket. 1.22.0: the standalone page
  * (live/single.html, booted with data-mount="page") is gone; every chart is a mounted one.
  */
 if (typeof document !== 'undefined') (() => {
@@ -945,7 +946,7 @@ const HOTKEY_IN_BOX = 'Hotkey ignored: a box has the focus.';
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-/* The chart's markup. `p` prefixes every id (one prefix per mount). A chart has no order bar of its own (1.21.0: that was
+/* The chart's markup. `p` prefixes every id (one prefix per mount). A chart has no order bar of its own (1.22.0: that was
    the single chart page's). 1.16.0 (Anthony): no text inside a chart (no legend), a small badge instead (the corner of the
    chart, or wherever its host puts it): ARMED while its orders are live (o.hosted: a host that trades through the chart),
    and the connection when it is not LIVE or the feed has gone quiet. */
@@ -1066,7 +1067,7 @@ function prefixedStorage(storage, prefix) {
  *   wsUrl          ChartBridge WebSocket URL (a string). Required unless `feed` is given.
  *   paneId         key for this chart's indicators and drawings (default 'main').
  *   storagePrefix  put in front of every storage key (default 'embed:'; the workspace uses '', the keys the single chart
- *                  page used until 1.21.0).
+ *                  page used until 1.22.0).
  *   onStatus       called with { state, paneId, root, attempt } on every connection state change
  *                  (state: 'connecting', 'loading', 'live' or 'offline').
  *   brand          show The Desk logo and "Live chart" in the toolbar (default false).
@@ -1095,7 +1096,7 @@ function mount(container, options) {
   if (!container || container.nodeType !== 1) throw new Error('ChartLive.mount needs a container element');
   const FEED = opt.feed && typeof opt.feed.open === 'function' ? opt.feed : null;   // the window's shared data (live/feed.js)
   if (!opt.wsUrl && !FEED) throw new Error('ChartLive.mount needs options.wsUrl');
-  if (!FEED && typeof opt.wsUrl !== 'string') throw new Error('ChartLive.mount needs options.wsUrl as a string (since chart 1.21.0 not a function or a promise)');
+  if (!FEED && typeof opt.wsUrl !== 'string') throw new Error('ChartLive.mount needs options.wsUrl as a string (since chart 1.22.0 not a function or a promise)');
   const VIEW = opt.view && typeof opt.view === 'object' ? opt.view : null;           // the host keeps root, tf and range
   const SLIM = opt.toolbar === false;                                               // the host shows its own header
   const COMPACT = opt.compact === true;                                             // a small panel: notes only on the status line
@@ -1171,7 +1172,7 @@ function mount(container, options) {
   const masked = k => { const m = layerMask(); return !!m && m[k] === false; };
   const maskLayers = partial => { const m = layerMask(), out = Object.assign({}, partial); if (m) for (const k of Object.keys(out)) if (m[k] === false) out[k] = false; return out; };
   /* a host's charts (the workspace, 1.15.0): compact order labels with the full one on hover, and Shift and Ctrl clicks
-     that place orders whatever drawing tool is armed (the single chart page drew as 1.14.0 until 1.21.0) */
+     that place orders whatever drawing tool is armed (the single chart page drew as 1.14.0 until 1.22.0) */
   const HOSTED = !!(opt.trade && typeof opt.trade.place === 'function');
   const chart = CE.create($('chart'), {
     barSeconds: 60, precision: 2, tick: 0.25, axisWidth: AXIS_W,
@@ -1191,7 +1192,7 @@ function mount(container, options) {
 
   /* ---------------- per-instrument data */
   const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
-    lv: [], lvSrc: null, ib: null, ibKey: '', vp: null, liveFrom: null, delta: null, sides: null,
+    lv: [], lvSrc: null, ib: null, ibKey: '', vp: null, liveFrom: null, delta: null,
     // the delta pane (1.7.0): the number of tick backfill trades (the store's trades before the first live one), and the
     // window the current delta was built with ({ from, by, why, journal })
     backfill: 0, deltaCov: null,
@@ -1204,7 +1205,7 @@ function mount(container, options) {
   const SIG = { absorption: null, bubbles: null, divergence: null, cd: null, version: 0, job: null, rangeFrom: undefined };
   const sigSum = () => (SIG.absorption ? SIG.absorption.version : 0) + (SIG.bubbles ? SIG.bubbles.version : 0) + (SIG.divergence ? SIG.divergence.version : 0);
   let sigFloors = prefs.largeFloors();
-  let bridgeVersion = '';                                      // ChartBridge's version from hello (the delta pane's first hint)
+  let bridgeVersion = '';                                      // ChartBridge's version from hello (shown in Settings)
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js).
      With ChartBridge 0.3.5 (hello "liveFirst") seconds and range views get ChartBridge's served window instead: the last
@@ -1228,7 +1229,7 @@ function mount(container, options) {
   /* The account (1.6.0, Anthony: one picker). The chart marks the fills of one account: its host's order account when the
      host trades through it (the workspace's ticket), else `viewAccount`, the last one picked in the toolbar's compact
      picker, saved in live-account-v1. The 1.5 fills choice (live-fill-account-v1) is read once when there is none yet; its
-     "All accounts" is gone and means none chosen. (1.21.0: the single chart page's order bar picker, and the account each
+     "All accounts" is gone and means none chosen. (1.22.0: the single chart page's order bar picker, and the account each
      of its tabs traded, are gone with that page.) */
   let viewAccount = (() => {
     const v = store.get('live-account-v1', null);
@@ -1250,7 +1251,7 @@ function mount(container, options) {
     D.vp = null; D.liveFrom = null; if (!keep) chart.setProfile(null); vpNote();
     D.window = false; D.table = null; D.sync = null; rangeNote();
     D.backfill = 0; D.deltaCov = null;
-    deltaJob = null; D.delta = null; D.sides = null; if (!keep) chart.setDelta(null); deltaView();   // a build of the old load stops
+    deltaJob = null; D.delta = null; if (!keep) chart.setDelta(null); deltaView();   // a build of the old load stops
     if (SIG.job || SIG.absorption || SIG.bubbles || SIG.divergence) { SIG.job = null; SIG.absorption = SIG.bubbles = SIG.divergence = SIG.cd = null; SIG.version++; }   // made again with the bars
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
@@ -1577,20 +1578,13 @@ function mount(container, options) {
    * Built from the TickStore with the bars (rebuild: a reload, a bar type or size change) or on its own when it is
    * shown, then each live trade is added after the bar builders in onTick, told which bar it made, so it holds exactly
    * the trades the store holds and the bars the chart shows, with no rebuild per trade. Hidden, there is no core.
-   * ChartBridge 0.3.3 or older sends no sides: the pane draws nothing but "Delta needs ChartBridge 0.3.4 on this PC".
-   * Whether a load has sides is read from its first trade (backfill or live); before any trade, from hello's version.
+   * Every ChartBridge this page works with (0.5.2 or newer, live/COMPAT.json) sends sides, so the pane never waits to
+   * learn whether they come (1.21.0: the note for ChartBridge 0.3.3 and older is gone).
    * It counts only trades with a measured side, from the start of that window (deltaCoverage): a session that started
    * before it counts from its first complete bar, and the pane's title and the legend say since when ("since 10:04 ET
    * (page opened)").
    * Nothing is added to the status line, so the chart's height stays as in 1.6.0 on every view.
    */
-  const OLD_BRIDGE = 'Delta needs ChartBridge 0.3.4 on this PC';
-  /* true: trades carry sides; false: this ChartBridge sends none; null: not known yet (no trade, no version). */
-  function bridgeSides() {
-    if (D.sides !== null) return D.sides;
-    const m = /(\d+)\.(\d+)\.(\d+)/.exec(bridgeVersion || '');
-    return m ? (+m[1] * 1e6 + +m[2] * 1e3 + +m[3]) >= 3004 : null;
-  }
   /*
    * The delta's window (1.7.0; Anthony, round 4: "Delta is a tool I use WHILE trading, not for historical look backs"):
    * only trades whose side was measured count. Those are the live trades, and the backfill trades inside ChartBridge's
@@ -1709,8 +1703,8 @@ function mount(container, options) {
   }
   const rangeBuilder = () => new BarBuilder({ mode: 'range', rangeTicks: ranges[D.root], rangeMode: S.rangeMode, tick: D.tick, sessionStart: SESSION });
   /* The delta is kept while it is on the chart, shown or hidden (review S5: showing it again is then at once; a trade
-     costs O(1)); not when it is off the chart or this ChartBridge sends no sides. */
-  const deltaWanted = () => IS.ind.delta.on && D.ready && bridgeSides() !== false && !masked('delta');
+     costs O(1)); not when it is off the chart. */
+  const deltaWanted = () => IS.ind.delta.on && D.ready && !masked('delta');
   /* Feeds a range bar builder and the delta core together: each trade goes to the delta with the bar it made. */
   const pairFeed = (builder, cd) => ({ addQuiet(t, p, v, s, sm) { builder.addQuiet(t, p, v); const b = builder.bars; cd.add(t, v, s, b[b.length - 1].t, sm); } });
   /*
@@ -1798,10 +1792,9 @@ function mount(container, options) {
   function deltaStop() { deltaJob = null; deltaSet(null); }
   function deltaSet(cd) { D.delta = cd; chart.setDelta(cd); deltaView(); if (typeof sigDivergence === 'function') sigDivergence(false); }
   const deltaBuilding = () => deltaJob !== null;
-  /* The pane's note (only for a ChartBridge that sends no sides, and then nothing else is drawn in it), and why a
-     session may count from later than 18:00, for its title. */
+  /* Why a session may count from later than 18:00, for the pane's title (the page sets no note since 1.21.0). */
   const deltaWhy = () => D.deltaCov ? D.deltaCov.why : '';
-  function deltaView() { chart.setDeltaView({ note: S.layers.delta && D.ready && bridgeSides() === false ? OLD_BRIDGE : '', reason: deltaWhy(), missed: countMissed() }); }
+  function deltaView() { chart.setDeltaView({ note: '', reason: deltaWhy(), missed: countMissed() }); }
   /* Written only when it changes (the badge, the notes): no layout for an unchanged value. */
   const put = (el, k, v) => { if (el && el[k] !== v) el[k] = v; };
   /*
@@ -1990,11 +1983,6 @@ function mount(container, options) {
     D.ticks.push(t, p, v, m.s, m.sm);                  // columns, not one array per trade (TickStore, bar-builder.js); the side since 1.7.0
     if (D.vp) D.vp.add(t, p, v);                       // the volume profile holds what the store holds (vpBuild)
     let deltaFed = false;
-    if (D.sides === null) {                            // the first trade of a load with no backfill says whether sides come
-      const before = bridgeSides();
-      D.sides = typeof m.s === 'number';
-      if (bridgeSides() !== before && IS.ind.delta.on) { deltaStart(); deltaFed = true; }   // built from the store, this trade in it
-    }
     // Over 2.5 million trades the trades of earlier sessions go (the first session left is partial now); the current
     // session's never do, so range bars built from the store stay all day (1.8.0; BB.trimCount).
     const drop = D.ticks.length > TRIM_CAP ? BB.trimCount(D.ticks, etNow(), SESSION, TRIM_CAP, TRIM_HARD, 500000) : 0;
@@ -2121,7 +2109,7 @@ function mount(container, options) {
   const precisionOf = () => Math.min(8, decimalsOf(D.tick));
 
   /* ---------------- connection */
-  /* A query string is never shown on screen. (1.21.0: wsUrl is a string; a function or a promise of one, for The Desk's
+  /* A query string is never shown on screen. (1.22.0: wsUrl is a string; a function or a promise of one, for The Desk's
      relay and its single-use tickets, went with that relay.) */
   let ws = null, wsTries = 0, everConnected = false, reconnectTimer = 0, connectSeq = 0, lastUrl = '', lastFastRetry = 0;
   /* ChartBridge 0.3.5 lists "liveFirst" and "profile" in hello's `features`. Only then does the page send its subscribe id,
@@ -2347,9 +2335,7 @@ function mount(container, options) {
         if (m.root !== D.root || stale(m)) return;
         if (m.load) adoptLoad(m.load);
         D.ticks.pushAll(m.ticks);
-        // 0.3.4: [t, p, v, s, sm]. ChartBridge 0.3.5's served window sends [t, p, v] (no side) though its live trades carry
-        // sides: then the first live trade says (onTick)
-        if (D.sides === null && m.ticks && m.ticks.length && !D.window) { const x = m.ticks[0]; D.sides = typeof x[3] === 'number'; }
+        // [t, p, v, s, sm] (0.3.4); ChartBridge 0.3.5's served window sends [t, p, v] (no side) though its live trades carry sides
         setStatus('Loading ' + D.root + ' ticks: ' + D.ticks.length.toLocaleString(), '');
         break;
       case 'ready':
@@ -2375,7 +2361,7 @@ function mount(container, options) {
     }
   }
 
-  /* ---------------- orders from the chart. A chart sends none itself (1.21.0: the single chart page's own order bar and its
+  /* ---------------- orders from the chart. A chart sends none itself (1.22.0: the single chart page's own order bar and its
      TradeCore are gone); a chart mounted with `trade` (the workspace) hands its order clicks and drags to the host, which
      sends them through its own TradeCore (live/trade.js) with every check (HOST, below). */
   /* The last price: the chart's, or while a view loads the last one seen for the instrument (1.8.0: orders keep working). */
@@ -2582,14 +2568,13 @@ function mount(container, options) {
     if (!e || !e.bar || destroyed) return null;
     const b = e.bar, i = e.index, bs = chart.bars(), next = i + 1 < bs.length ? bs[i + 1].t : Infinity;
     const cd = S.layers.delta && !masked('delta') ? D.delta : null, db = cd ? cd.at(b.t) : null;
-    const old = !!S.layers.delta && D.ready && bridgeSides() === false;
     return {
       root: D.root || S.root, name: D.name || D.root || S.root, tf: S.tf, range: S.tf === 'range' ? ranges[D.root || S.root] : null, tick: D.tick, dp: precisionOf(),
       index: i, t: b.t, end: barEnd(b, i), forming: !!e.forming, hovering: !!e.hovering,
       o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0,
       // buys, sells, unknown and the largest trade from the delta pane's core (null: not counted there); why not
       delta: db ? { buy: db.buy, sell: db.sell, unknown: db.unknown, big: db.big || 0 } : null,
-      deltaWhy: db ? '' : old ? 'old' : !S.layers.delta ? 'off' : masked('delta') ? 'htf' : deltaBuilding() || !cd ? 'building' : 'before',
+      deltaWhy: db ? '' : !S.layers.delta ? 'off' : masked('delta') ? 'htf' : deltaBuilding() || !cd ? 'building' : 'before',
       deltaFrom: cd && cd.session && cd.session.partial ? cd.session.from : null,
       bubbles: bubblesOn(b.t, next),
       bubble: hoverBub ? { side: hoverBub.side, v: hoverBub.v, p: hoverBub.p, t: hoverBub.t } : null,
@@ -2609,7 +2594,7 @@ function mount(container, options) {
   /* ---------------- readouts (1.14.0, Anthony's item 5), in the chart's corner (1.15.0): the time left in the bar (Range
      bars: the ticks left up and down) and the ATR of the chart's own closed bars (ATR_PERIOD, NinjaTrader's ATR). Once a
      second, on the second, and when the view changes; never on the tick path. (The change from the prior settlement was
-     the single chart page's legend, gone in 1.21.0; the workspace's Quote board shows it.) */
+     the single chart page's legend, gone in 1.22.0; the workspace's Quote board shows it.) */
   let cornerBar = '', cornerAtr = '', cornerAtrShort = '', cornerBub = '';   // the corner readout's parts (syncCorner)
   function readouts() {
     if (destroyed) return;
@@ -2665,7 +2650,7 @@ function mount(container, options) {
   function profileLines() { const o = S.options.vp; chart.setProfileLines({ poc: o.dpoc === 'on', vah: o.dvah === 'on', val: o.dval === 'on' }); }
   profileLines();
 
-  /* A small panel (a compact chart under 700 px wide or 400 px tall) is marked short (live.css). 1.21.0: the header text
+  /* A small panel (a compact chart under 700 px wide or 400 px tall) is marked short (live.css). 1.22.0: the header text
      (the legend) and its Aa toggle were the single chart page's, gone with it. */
   /* the price scale lock (1.14.0, review D2): saved per chart, off by default */
   chart.setScaleLock(prefs.scaleLocked(PANE));
@@ -2964,7 +2949,7 @@ function mount(container, options) {
     const b = e.target.closest('button'); if (!b) return;
     S.glide = b.dataset.v; chart.setMotion(GLIDE[S.glide]); saveSetting('glide'); syncButtons();
   });
-  /* grid lines, the room right of price and the ATR period are set in the workspace's Settings for every chart (1.21.0:
+  /* grid lines, the room right of price and the ATR period are set in the workspace's Settings for every chart (1.22.0:
      the single chart page's own Settings are gone) */
 
   /*
@@ -3662,7 +3647,7 @@ function mount(container, options) {
     timing: () => ({ draw: drawDelay, drawMax: drawMaxShown }),
     barInfo, onBar: fn => { if (typeof fn !== 'function') return () => {}; barSubs.add(fn); return () => barSubs.delete(fn); },
     badge: $('badge'),
-    /** The chart's data, for tests and the console: read it, never change it (that breaks the chart). 1.21.0: the single
+    /** The chart's data, for tests and the console: read it, never change it (that breaks the chart). 1.22.0: the single
         chart page's window.liveData, now on every mount (test/chart-host.html puts it back on window). */
     data: () => D };
 }

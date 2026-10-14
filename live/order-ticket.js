@@ -42,21 +42,12 @@ function cleanBracket(v, max) {
 }
 
 /*
- * The bracket's cap (1.13.0): ChartBridge before 0.3.7 takes at most 200 ticks; 0.3.7 and newer have no limit unless
- * config.txt sets maxBracketTicks (its `trading` message names it). NO_CAP keeps a typed number sane, nothing more.
+ * The bracket's cap (1.13.0): no limit unless config.txt sets maxBracketTicks (ChartBridge's `trading` message names it).
+ * NO_CAP keeps a typed number sane, nothing more. 1.21.0: the page needs ChartBridge 0.5.2 (live/COMPAT.json), so the
+ * 200-tick cap for ChartBridge before 0.3.7 is gone.
  */
 const NO_CAP = 100000;
-/** [major, minor, patch] of a version text ("0.3.8", "fake-0.3.7"), or null. */
-function versionOf(v) { const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(v || '')); return m ? [+m[1], +m[2], +m[3]] : null; }
-/** Whether version text v is at least `want` ("0.3.7"); false when v names no version. */
-function versionAtLeast(v, want) {
-  const a = versionOf(v), b = versionOf(want);
-  if (!a || !b) return false;
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
-  return true;
-}
-function bracketCap(version, maxBracketTicks) {
-  if (!versionAtLeast(version, '0.3.7')) return MAX_BRACKET_TICKS;
+function bracketCap(maxBracketTicks) {
   return Number.isInteger(maxBracketTicks) && maxBracketTicks > 0 ? maxBracketTicks : NO_CAP;
 }
 
@@ -486,5 +477,5 @@ function hotkeyAction(keys, combo) {
 }
 
 return { HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots,
-  MAX_BRACKET_TICKS, NO_CAP, versionOf, versionAtLeast, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, opensPosition, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, protectionLine, repeatGuard };
+  MAX_BRACKET_TICKS, NO_CAP, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, opensPosition, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, protectionLine, repeatGuard };
 });

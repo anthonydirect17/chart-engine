@@ -1,6 +1,6 @@
 // Planned stop and target, NO STOP and the deep red Armed (chart 1.13.0) against the fake bridge (ChartBridge 0.3.8's
 // protocol, sample data; nothing reaches a broker), in the workspace: one window on its own (the single chart page's part
-// until chart 1.21.0, now on the order ticket and an MNQ chart) and two windows:
+// until chart 1.22.0, now on the order ticket and an MNQ chart) and two windows:
 //   - a resting limit's planned stop and target drawn at the entry price minus and plus the ticks, labelled "SL plan" /
 //     "TP plan"; they follow the entry while it is dragged and redraw from the confirmed price after the drop;
 //   - dragging a planned line sends `plan` with the new ticks; across the entry it is refused on the page; its x sends
@@ -76,7 +76,7 @@ try {
   await ctx.addInitScript(spies);
 
   /* ================================================================ one window: the order ticket and an MNQ chart */
-  console.log('one window (the single chart page\'s part until 1.21.0)');
+  console.log('one window (the single chart page\'s part until 1.22.0)');
   async function openWs(layout, init) {
     const p = await ctx.newPage();
     if (init) await p.addInitScript(init);
@@ -237,8 +237,9 @@ try {
   await until(async () => !(await state()).orders.length, 'flat');
   await oldp.close();
 
-  // a mistyped limit in config.txt: the warning stays on the page until dismissed; an older ChartBridge keeps the 200 cap
-  for (const [port, flags, what] of [[PORT + 1, ['--version=0.3.8', '--max-ticks-away=abc', '--max-bracket-ticks=1.5'], 'warn'], [PORT + 2, ['--version=0.3.6'], 'cap']]) {
+  // a mistyped limit in config.txt: the warning stays on the page until dismissed (1.21.0: no page for ChartBridge 0.3.6 and
+  // its 200-tick cap any more)
+  for (const [port, flags, what] of [[PORT + 1, ['--version=0.3.8', '--max-ticks-away=abc', '--max-bracket-ticks=1.5'], 'warn']]) {
     await startBridge(port, ['--trading', '--trade-accounts=Sim101', '--test-controls', '--test-pin=' + TEST_PIN].concat(flags));
     const p = await ctx.newPage();
     p.on('pageerror', e => fail('pageerror: ' + e.message));
@@ -251,8 +252,6 @@ try {
       check(a.warn && /maxTicksAway = abc/.test(a.text) && /maxBracketTicks = 1\.5/.test(a.text), 'a mistyped maxTicksAway / maxBracketTicks: ChartBridge\'s warning stays on the page (' + JSON.stringify(a.text) + ')');
       await wait(7000);
       check(await p.isVisible('#wsAlert'), 'the warning is still there after 7 s');
-    } else {
-      check(await p.evaluate(s2 => document.querySelector(s2).max, tk('bStop')) === '200', 'ChartBridge 0.3.6: the bracket fields keep the 200-tick cap');
     }
     await p.close();
   }

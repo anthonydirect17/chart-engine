@@ -1,7 +1,7 @@
 /*
  * TradeCore: the order logic of the order ticket, in one place (chart 1.12.0). The workspace's order ticket
  * (live/workspace.js, index.html) calls these very functions (the single chart page's order bar did too until chart
- * 1.21.0, when that page went), so there is one order path: what Buy MKT, Sell MKT, B/E, Flatten (Close), Cancel all, Flatten all, a
+ * 1.22.0, when that page went), so there is one order path: what Buy MKT, Sell MKT, B/E, Flatten (Close), Cancel all, Flatten all, a
  * chart click and a drag send, and every check before it, is written once, here. It is the 1.11.0 code of live.js moved
  * out unchanged, with the chart's instrument, last price, Qty box and account picker read through `env`.
  *
@@ -81,7 +81,7 @@ function create(env) {
   const PIN = env.pin || null;
 
   const TR = {
-    v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, maxBracketTicks: 0, version: '', signInStarted: false,
+    v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, maxBracketTicks: 0, signInStarted: false,
     armed: false,                        // never saved: Armed is off after every page load
     account: '',
     orders: new Map(),                   // id -> latest order message (working ones; finished ones are dropped)
@@ -93,9 +93,9 @@ function create(env) {
   };
   const sw = k => !!OS && TR.switches[k] === true;
   let v3sw = null;                                    // the switches the window's v3 connection last read (null: none)
-  /* The bracket's cap (1.13.0): 200 ticks for ChartBridge before 0.3.7, none for 0.3.7 and newer unless config.txt sets
-     maxBracketTicks. Read as saved (up to OT.NO_CAP) and cut to the cap once ChartBridge says which it is. */
-  const cap = () => OT.bracketCap(TR.version, TR.maxBracketTicks);
+  /* The bracket's cap (1.13.0): none unless config.txt sets maxBracketTicks (1.21.0: no 200-tick cap for a ChartBridge
+     before 0.3.7). Read as saved (up to OT.NO_CAP) and cut to the cap once ChartBridge names one. */
+  const cap = () => OT.bracketCap(TR.maxBracketTicks);
   const brackets = {};
   for (const r of ROOTS) brackets[r] = OT.cleanBracket(prefs.bracket(r), OT.NO_CAP);
   const recap = () => { for (const r of ROOTS) brackets[r] = OT.cleanBracket(brackets[r], cap()); };
@@ -195,7 +195,6 @@ function create(env) {
   }
   /** ChartBridge's `hello`: protocol v2 carries `trading`; sign in. */
   function hello(m) {
-    TR.version = m && typeof m.version === 'string' ? m.version : '';   // 0.3.7 and newer: no 200-tick cap on the page
     recap();
     if (m && m.trading) { applyTrading(m.trading); signIn(); }
   }
@@ -906,7 +905,7 @@ function create(env) {
 }
 
 /*
- * The order ticket's controls wired to a core (the workspace's ticket; the single chart page's bar shared it until 1.21.0). `$(id)`
+ * The order ticket's controls wired to a core (the workspace's ticket; the single chart page's bar shared it until 1.22.0). `$(id)`
  * finds a control by its 1.11.0 id (obar, armBtn, armText, oAcct, oQty, oQtyCap, buyMkt, sellMkt, bPreset, bSaveBox,
  * bSaveName, bSaveOk, bSaveNo, bStop, bTarget, bUnit, flattenBtn, beBtn, cancelAllBtn, oPos, oLegs, oOther, oAcctNote,
  * oCancel, oOff, unsentBar, unsentText, unsentClose). A control marked data-keep stays on while trading is off.

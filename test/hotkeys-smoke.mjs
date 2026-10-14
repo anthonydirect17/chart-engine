@@ -1,5 +1,5 @@
 // Trading hotkeys smoke test (chart 1.11.0): drives the workspace (live/index.html, its order ticket and Settings; the
-// single chart page until chart 1.21.0) in Chromium against the fake bridge (protocol v2). Sample data only; nothing
+// single chart page until chart 1.22.0) in Chromium against the fake bridge (protocol v2). Sample data only; nothing
 // reaches a broker. Keys are set in Settings the way Anthony would (click a box, press the keys), and every hotkey must
 // send exactly what its ticket button sends. Screenshots in test/out/.
 //   npm run smoke:hotkeys        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
@@ -370,7 +370,7 @@ try {
   await page.click('#wsSet'); await page.click('#wsSet');
   check(JSON.stringify(await fields()) === JSON.stringify({ buy: '', sell: '', be: '', close: '', flattenAll: '' }), 'unreadable storage: no keys, no error');
   await page.screenshot({ path: path.join(out, 'hotkeys-1440-settings-empty.png') });
-  // the workspace's smallest screen is a laptop's (the single chart page also fitted a phone until 1.21.0)
+  // the workspace's smallest screen is a laptop's (the single chart page also fitted a phone until 1.22.0)
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.waitForTimeout(300);
   await page.keyboard.press('Escape'); await page.click('#wsSet'); await page.waitForTimeout(200);   // opened again at this size

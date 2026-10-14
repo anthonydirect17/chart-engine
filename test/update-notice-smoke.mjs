@@ -1,5 +1,5 @@
 // "Update ready: reload when flat" smoke (live/update-notice.js, the per-PC updater nt8/update-pc.ps1): the workspace
-// (live/index.html; the single chart page until chart 1.21.0) laid out as the updater installs it (nt8/install-files.json),
+// (live/index.html; the single chart page until chart 1.22.0) laid out as the updater installs it (nt8/install-files.json),
 // served by the fake bridge with trading on and an open position, and www/update.json written the way the updater writes
 // it. Checks: nothing shows while the build is the one the page loaded; a new build shows the notice in the top bar and
 // the page never reloads by itself; the notice covers neither the order ticket nor the charts, and neither moves; the

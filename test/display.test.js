@@ -413,7 +413,7 @@ test('Levels: each line its own toggle; the IB folded in (migrateIb) and old ind
   assert.deepEqual(LP.INDICATOR_COLORS.filter(c => c.id === 'vp').map(c => c.key), ['vpRow', 'vpValue', 'vpPoc'], 'the profile gear: rows, value area, POC');
 });
 
-test('chips: up to ten, the eleventh refused; 1.21.0: no header text toggle (it was the single chart page\'s)', () => {
+test('chips: up to ten, the eleventh refused; 1.22.0: no header text toggle (it was the single chart page\'s)', () => {
   assert.equal(LP.PIN_MAX, 10);
   let st = LP.defaultPane('main');
   for (const d of LP.INDICATORS) st = LP.Pane.add(st, d.id);

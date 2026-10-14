@@ -1,5 +1,5 @@
 // Order entry smoke test: drives the workspace's order ticket and its MNQ chart (live/index.html) in Chromium against the
-// fake bridge (protocol v2). Until chart 1.21.0 it drove the single chart page's order bar (live/single.html, gone); the
+// fake bridge (protocol v2). Until chart 1.22.0 it drove the single chart page's order bar (live/single.html, gone); the
 // ticket is the same TradeCore with the same controls, so the checks are the same, read from the ticket (its note line
 // for the page's status line, the workspace's alert and "Not sent" lines for the page's). The page's own parts went with
 // it: its legend, footer, title wording, tab account (sessionStorage) and phone layout.
@@ -530,12 +530,12 @@ try {
     await commit(T('bStop'), '40'); await commit(T('bTarget'), '80');
   }
 
-  // (until 1.21.0 the single chart page was checked at 400 px here; the workspace is not laid out for a phone)
+  // (until 1.22.0 the single chart page was checked at 400 px here; the workspace is not laid out for a phone)
   await page.close();
 
   /* ---------------- 1.6.1 (Anthony's ruling 2026-09-30): the order account after a reload or a dropped connection.
      The account last picked on this PC when ChartBridge allows it, else Sim101 with a note; Armed always off; every
-     order path sends for the account shown. (Until 1.21.0 the single chart page also kept each tab's own account, with
+     order path sends for the account shown. (Until 1.22.0 the single chart page also kept each tab's own account, with
      a ring on its picker and its own notes; the workspace has one order ticket, on the last account picked.) */
   {
     const P5 = PORT + 5;
@@ -756,7 +756,7 @@ try {
     await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
     await armOn(); await A.click(T('cancelAllBtn'));
     await A.waitForTimeout(300);
-    await A.selectOption(T('root'), 'NQ');                                            // the ticket's instrument (the page's toolbar until 1.21.0)
+    await A.selectOption(T('root'), 'NQ');                                            // the ticket's instrument (the page's toolbar until 1.22.0)
     bb = await bar();
     const armedAfter = await A.getAttribute(T('armBtn'), 'aria-checked');
     check(armedAfter === 'false' && !bb.arm && /^Cancelling on DEMO-EVAL MNQ: \d+ left/.test(bb.batch), 'R15: after the switch Armed is off and not locked, the state row still names DEMO-EVAL MNQ: ' + JSON.stringify(bb));
@@ -993,7 +993,7 @@ try {
     await commitA(T('bStop'), brKept[0]); await commitA(T('bTarget'), brKept[1]);
     await armOff();
 
-    // (until 1.21.0 a second tab at 400 px checked the page's account note and title here: the workspace has one ticket)
+    // (until 1.22.0 a second tab at 400 px checked the page's account note and title here: the workspace has one ticket)
     await ctx.close();
   }
 
@@ -1054,7 +1054,7 @@ try {
     check(await cn.evaluate(() => !document.getElementById('wsConn').classList.contains('live') && [...document.querySelectorAll('[id$="-acctWrap"]')].every(e => !e.getClientRects().length)), 'the workspace while connecting: no chart shows a toolbar account picker');
     await cn.close();
   }
-  // (until 1.21.0 the single chart page on ChartBridge 0.2's protocol v1 was checked here: read only, its legend and picker)
+  // (until 1.22.0 the single chart page on ChartBridge 0.2's protocol v1 was checked here: read only, its legend and picker)
 } finally {
   await browser.close();
   for (const b of bridges) b.kill();

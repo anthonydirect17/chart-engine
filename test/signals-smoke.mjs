@@ -1,5 +1,5 @@
 // Chart signals smoke (G1c): absorption bars, large-order bubbles and the delta pane's divergence arrows, on a mounted
-// chart with its own toolbar (test/chart-host.html; the single chart page, /single.html, until chart 1.21.0) and in the
+// chart with its own toolbar (test/chart-host.html; the single chart page, /single.html, until chart 1.22.0) and in the
 // workspace (/), against the fake bridge replaying a scripted tape (--scene=signals,
 // test/signals-scene.mjs: SAMPLE trades with sides, made up, never market data) on MNQ Range 40 in regular hours.
 //   npm run smoke:signals        (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)

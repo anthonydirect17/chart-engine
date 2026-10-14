@@ -2,7 +2,7 @@
 // bridge, in Chromium. Checks the read-only guarantee (only subscribe and ping sent, no GET /session, no order bar),
 // reconnecting to its wsUrl after a drop, destroy() taking everything down, mount again, two panes with their own
 // indicators, and storagePrefix keeping settings apart (the prefix 'desk:' beside the workspace's unprefixed keys). Chart
-// 1.21.0: wsUrl is a string (a function or a promise of one, for The Desk's relay tickets, is gone with the relay), and the
+// 1.22.0: wsUrl is a string (a function or a promise of one, for The Desk's relay tickets, is gone with the relay), and the
 // single chart page this compared with is gone.
 // Sample data only. Screenshots in test/out/ (and SHOTS_DIR when set).
 //   npm run smoke:embed        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
@@ -96,7 +96,7 @@ try {
   await page.evaluate(port => {
     document.getElementById('paneB').hidden = true;
     window.__status = { A: [], B: [] };
-    window.__urlA = 'ws://localhost:' + port + '/ws?pane=A';      // a string (1.21.0); the query marks the pane's connects
+    window.__urlA = 'ws://localhost:' + port + '/ws?pane=A';      // a string (1.22.0); the query marks the pane's connects
     window.__urlB = 'ws://localhost:' + port + '/ws?pane=B';
     // trading: true is ignored by mount(): a mounted chart is read only whatever the options say
     window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: window.__urlA, trading: true, paneId: 'main', storagePrefix: 'desk:', onStatus: s => window.__status.A.push(s.state) });
@@ -347,7 +347,7 @@ try {
   await page.evaluate(() => { window.__a.destroy(); window.__b.destroy(); });
 
   /* ---------------- storagePrefix: two prefixes keep their own settings. Pane B unprefixed (the workspace's own keys),
-     pane A on 'desk:' (until 1.21.0 this compared with the single chart page, which used the unprefixed keys) */
+     pane A on 'desk:' (until 1.22.0 this compared with the single chart page, which used the unprefixed keys) */
   {
     // instrument, bars and range settings are saved per prefix (the last pane to change them wins); indicators per pane
     const deskBefore = await page.evaluate(() => localStorage.getItem('desk:live-settings-v2'));
@@ -384,11 +384,11 @@ try {
   }
   await page.close();
 
-  /* ---------------- a plain string wsUrl against ChartBridge 0.2 (protocol v1), and no storagePrefix given */
-  await startBridge(PORT + 1, ['--v1']);
+  /* ---------------- a plain string wsUrl (1.21.0: on the current protocol; ChartBridge 0.2's v1 is gone), and no storagePrefix given */
+  await startBridge(PORT + 1, ['--pin-off']);   // the host page is on the bridge's own origin: no PIN here (a host never has one)
   {
     const p2 = await ctx.newPage();
-    p2.on('pageerror', e => fail('v1 pageerror: ' + e.message));
+    p2.on('pageerror', e => fail('string wsUrl pageerror: ' + e.message));
     await p2.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     await p2.goto(`http://localhost:${PORT + 1}/test/embed-host.html`);
     await p2.evaluate(port => {
@@ -401,9 +401,9 @@ try {
     await p2.waitForFunction(() => { const el = document.querySelector('#paneA [id$="-badge"]'); return el && el.dataset.conn === 'live'; }, null, { timeout: 15000 });
     await p2.click('#paneA .seg >> text="5m"'); await p2.waitForTimeout(300);
     const keys = await p2.evaluate(() => Object.keys(localStorage)), prefix = await p2.evaluate(() => ChartLive.EMBED_PREFIX);
-    check(prefix && keys.length > 0 && keys.every(k => k.startsWith(prefix)), 'string wsUrl on ChartBridge 0.2 works; with no storagePrefix every key starts with "' + prefix + '": ' + keys.join(','));
+    check(prefix && keys.length > 0 && keys.every(k => k.startsWith(prefix)), 'a string wsUrl works; with no storagePrefix every key starts with "' + prefix + '": ' + keys.join(','));
     check(await p2.evaluate(() => { try { ChartLive.mount(document.getElementById('paneB'), {}); return false; } catch (e) { return /wsUrl/.test(e.message); } }), 'mount without wsUrl throws');
-    check(await p2.evaluate(() => { try { ChartLive.mount(document.getElementById('paneB'), { wsUrl: () => 'ws://localhost:1/ws' }); return false; } catch (e) { return /as a string/.test(e.message); } }), 'mount with a function for wsUrl throws, saying it takes a string (1.21.0)');
+    check(await p2.evaluate(() => { try { ChartLive.mount(document.getElementById('paneB'), { wsUrl: () => 'ws://localhost:1/ws' }); return false; } catch (e) { return /as a string/.test(e.message); } }), 'mount with a function for wsUrl throws, saying it takes a string (1.22.0)');
     const gone = await p2.evaluate(() => { const sel = document.querySelector('#paneA [id$="-acctPick"]'); return { value: sel.value, text: sel.selectedOptions[0].textContent, marks: window.__a.chart.getMarkers().length }; });
     check(gone.value === 'GONE-ACCT' && gone.text === 'GONE-ACCT (no longer listed)' && gone.marks === 0, 'a saved account ChartBridge no longer lists is shown plainly, with no fills: ' + JSON.stringify(gone));
     const mig = await p2.evaluate(() => ({ layers: window.__a.chart.getLayers(), count: document.querySelector('#paneA .ind-count').textContent, v2: JSON.parse(localStorage.getItem(ChartLive.EMBED_PREFIX + 'live-indicators-v2')), plain: localStorage.getItem('live-indicators-v2') }));

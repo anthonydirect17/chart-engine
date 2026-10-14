@@ -1,5 +1,5 @@
 // Smoke helpers for ChartBridge 0.3.2's PIN on ChartBridge's own page (live/pin.js: the workspace; the single chart page
-// until chart 1.21.0, and in an older checkout). The fake bridge takes a made-up
+// until chart 1.22.0, and in an older checkout). The fake bridge takes a made-up
 // test PIN with --test-pin; these type it on the pad the way Anthony would (the pad's keys), in a page or a frame.
 export const TEST_PIN = '2468';                 // made-up, tests only
 

@@ -23,7 +23,7 @@
 // functions by self time); it slows the page, so its numbers are only for finding where the time goes.
 // ChartBridge 0.3.2's PIN: the fake bridge starts with a made-up test PIN, typed on the standalone page's pad before
 // the measurement (a page from an older --root has no pad and goes straight on). A checkout with no standalone chart
-// page (chart 1.21.0 and later) measures one mounted chart with its own toolbar (test/chart-host.html), and --embed a
+// page (chart 1.22.0 and later) measures one mounted chart with its own toolbar (test/chart-host.html), and --embed a
 // mounted chart in test/embed-host.html; a mounted chart never has the PIN, so both get a bridge with --pin-off, as does
 // a --root older than the PIN (no live/pin.js).
 import { chromium } from 'playwright';
@@ -35,8 +35,8 @@ import { TEST_PIN, unlockIfAsked } from './smoke-pin.mjs';
 
 const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name, d) => { const a = process.argv.slice(2).find(x => x === '--' + name || x.startsWith('--' + name + '=')); return a === undefined ? d : a.includes('=') ? a.slice(a.indexOf('=') + 1) : true; };
-// the standalone chart: live/single.html from the workspace (E2a) until chart 1.21.0, live/index.html before; since
-// 1.21.0 a mounted chart with its own toolbar (test/chart-host.html)
+// the standalone chart: live/single.html from the workspace (E2a) until chart 1.22.0, live/index.html before; since
+// 1.22.0 a mounted chart with its own toolbar (test/chart-host.html)
 const VIEW = arg('view', 'range'), SECS = +arg('secs', 30), ROOT = path.resolve(arg('root', here)), LABEL = arg('label', path.basename(ROOT));
 const PORT = +arg('port', 8830), TICK_RATE = +arg('tick-rate', 15), LIVE_RATE = +arg('live-rate', 100), RANGE = +arg('range', 40);
 const ET = arg('et', '');                  // a time of day in New York (HH:MM) for the page and the bridge clocks

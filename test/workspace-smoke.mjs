@@ -65,7 +65,7 @@ try {
   await ctx.route(/\/update\.json$/, r => r.fulfill({ contentType: 'application/json', body: JSON.stringify({ schema: 1,
     page: { version: '1.12.0', build: 'b2', installedAt: Date.now() + 3600000, state: '' }, chartBridge: { compiled: '0.3.5', ready: null, copied: null, mixed: null }, updater: null }) }));
   await ctx.addInitScript(spies);
-  // the general settings' instrument and bars (the single chart page's until 1.21.0), which the workspace must never change
+  // the general settings' instrument and bars (the single chart page's until 1.22.0), which the workspace must never change
   await ctx.addInitScript(() => { try { if (!localStorage.getItem('live-settings-v2')) localStorage.setItem('live-settings-v2', JSON.stringify({ root: 'NQ', tf: 'm5', glide: 'smooth', rangeMode: 'nt' })); } catch (e) {} });
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
@@ -255,7 +255,7 @@ try {
   const un = await page.evaluate(() => { const n = document.getElementById('updNote'); return n ? { text: n.querySelector('[role=status]').textContent, top: !!n.closest('#wsUpdate'), inChart: !!n.closest('.chart-live') } : null; });
   check(un && un.top && !un.inChart && /Update ready: reload when flat/.test(un.text), '"Update ready: reload when flat" in the top bar (' + (un && un.text) + ')');
 
-  /* 1.21.0: the single chart page is gone; its place here is a second workspace tab (Anthony opens the workspace in several
+  /* 1.22.0: the single chart page is gone; its place here is a second workspace tab (Anthony opens the workspace in several
      tabs): the general settings are one set for every tab, each tab keeps its own layout */
   console.log('settings shared with a second workspace tab');
   const sp = await ctx.newPage();

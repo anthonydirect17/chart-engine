@@ -581,25 +581,13 @@ test('server (ChartBridge 0.3.1 rule): a browser WebSocket only from ChartBridge
   } finally { child.kill(); }
 });
 
-test('server: trading off by default; --v1 behaves like ChartBridge 0.2 (no trading field, no /session)', async () => {
+test('server: trading off by default', async () => {
   const port = 18900 + Math.floor(Math.random() * 90);
-  let child = await startBridge(port, ['--test-pin=' + TEST_PIN]);
+  const child = await startBridge(port, ['--test-pin=' + TEST_PIN]);
   try {
     const a = await wsConnect(port, 'http://localhost:' + port, await unlockFor(port));
     const hello = await a.next('hello');
     assert.equal(hello.trading.enabled, false); assert.match(hello.trading.reason, /Trading is off/);
-    a.close();
-  } finally { child.kill(); }
-  await new Promise(r => setTimeout(r, 200));
-  child = await startBridge(port + 1, ['--v1', '--trading']);
-  try {
-    assert.equal((await get(port + 1, '/session')).status, 404);
-    assert.equal((await pinPost(port + 1, '/pin/status', {})).status, 404, 'ChartBridge 0.2 has no PIN: the page goes on without one');
-    const a = await wsConnect(port + 1, 'http://localhost:' + (port + 1));
-    const hello = await a.next('hello');
-    assert.equal(hello.trading, undefined);
-    a.send({ type: 'auth', token: 'x' });
-    assert.equal(await a.next('trading', 500), null);
     a.close();
   } finally { child.kill(); }
 });
@@ -693,7 +681,7 @@ test('server (0.3.2 PIN): a restarted bridge with the same pin file keeps an ope
   } finally { child.kill(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('server (0.3.2 PIN): allowOrigins pages and local programs keep 0.3.1 rules; no token in /test/received (1.21.0: no relay tickets)', async () => {
+test('server (0.3.2 PIN): allowOrigins pages and local programs keep 0.3.1 rules; no token in /test/received (1.22.0: no relay tickets)', async () => {
   const port = 19300 + Math.floor(Math.random() * 90);
   const child = await startBridge(port, ['--allow-origins=https://desk.example', '--test-pin=' + TEST_PIN, '--test-controls']);
   try {

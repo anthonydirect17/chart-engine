@@ -8,7 +8,7 @@
 //   - Time and Sales by category with ChartBridge 0.3.8's q (each its own color, editable in the gear, big trades brighter
 //     and bold, a tape that joins later colored the same), and by side with an older ChartBridge (no q);
 //   - panels resized from an edge and a corner, an overlap refused;
-//   - (until chart 1.21.0 the single chart page's layout, Settings, legend and order bar: gone with the page; a mounted
+//   - (until chart 1.22.0 the single chart page's layout, Settings, legend and order bar: gone with the page; a mounted
 //     chart with its own toolbar, test/chart-host.html, takes its chart checks);
 //   - the versions in the LIVE badge's tooltip and in Settings;
 //   - batch 2 (2026-10-02): the Levels gear's toggles (the IB in it, PD POC), the profile's developing lines and colors,
@@ -94,7 +94,7 @@ try {
   await ctx.addInitScript(tapeQ);
 
   /* ================================================================ a mounted chart with its own toolbar (test/chart-host.html;
-     the single chart page, /single.html, until chart 1.21.0: its Settings, legend and order bar went with it) */
+     the single chart page, /single.html, until chart 1.22.0: its Settings, legend and order bar went with it) */
   console.log('a mounted chart (test/chart-host.html)');
   await startBridge(PORT + 2, ['--test-controls', '--version=0.3.8', '--data-037', '--live-rate=60', '--pin-off']);   // a mounted chart never has the PIN
   const page = await ctx.newPage();
@@ -223,7 +223,7 @@ try {
   check(wAtr.length > 0 && wAtr.every(t => /ATR\(21\) /.test(t) || /ATR [\d,.]+$/.test(t)), 'workspace Settings: ATR period 21 on every chart\'s corner readout: ' + JSON.stringify(wAtr));
   await wp.fill('#wsAtr', '14'); await wp.keyboard.press('Enter');
   check(/^chart \d+\.\d+\.\d+ · ChartBridge \S+$/.test(wver.badge) && wver.badge.startsWith('chart ' + CE.VERSION + ' · ') && wver.set.startsWith(wver.badge), 'workspace versions: the LIVE badge\'s tooltip and Settings: "' + wver.badge + '"');
-  // the room right of price in Settings: every chart at once, saved (the single chart page's own Settings until 1.21.0)
+  // the room right of price in Settings: every chart at once, saved (the single chart page's own Settings until 1.22.0)
   await wp.click('#wsRoom [data-v="160"]'); await wp.waitForTimeout(700);
   const rooms = await W(ids => ids.map(id => Math.round(window.workspace.chart(id).room().px)), charts);
   check(rooms.every(r => r === 160) && await W(() => JSON.parse(localStorage.getItem('live-settings-v2')).room === 160), 'Settings: Room right 160 px on every chart at once, saved: ' + rooms.join(' '));
@@ -231,7 +231,7 @@ try {
   await wp.keyboard.press('Escape');
 
   // zoom to brackets: a working limit far below the price comes on screen, eased in with the axis re-fit (on the
-  // single chart page until 1.21.0)
+  // single chart page until 1.22.0)
   const mq = await W(() => window.workspace.panels().find(p => p.type === 'chart' && p.root === 'MNQ' && p.tf === 'range').id);
   const WC = (fn, a) => wp.evaluate(fn, a);
   await WC(i => window.workspace.chart(i).reset(), mq); await wp.waitForTimeout(600);

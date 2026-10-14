@@ -2,7 +2,7 @@
 // and the Jump to live pill over the plot) against the fake bridge (sample data; nothing reaches a broker), in Chromium:
 //   - a trend of +60 points in two minutes on MNQ (the fake's random walk held, a trade every 200 ms), watched on a big
 //     workspace panel (full header) and a small one (the short header), then on a mounted chart with its own toolbar
-//     (test/chart-host.html; /single.html until chart 1.21.0): the last price, the
+//     (test/chart-host.html; /single.html until chart 1.22.0): the last price, the
 //     forming bar's high and every visible high stay below the header plus a margin, all the time, by themselves;
 //   - the bars are never squashed more than the move needs: the scale is the fit of the bars in view (eased);
 //   - with the price scale squashed by hand (a drag on the price axis) the auto-fit takes over once the price nears
@@ -171,7 +171,7 @@ try {
   check(locks.length > 0 && locks.every(Boolean), 'every workspace chart has the lock in its corner under the price axis');
   await ctx.close();
 
-  /* ================================================================ a mounted chart (the single chart page until 1.21.0): the same
+  /* ================================================================ a mounted chart (the single chart page until 1.22.0): the same
      trend, then End. Its own bridge (the PIN off), its price where the workspace's trend left MNQ */
   console.log('a mounted chart (test/chart-host.html) 1366x768');
   await startBridge(PORT + 1, false);

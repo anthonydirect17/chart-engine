@@ -1,9 +1,9 @@
 # Changelog
 
-## 1.21.0 (2026-10-10): the single chart page removed
+## 1.22.0 (2026-10-10): the single chart page removed
 
 Anthony's cut (2026-10-10): the workspace is ChartBridge's only page. **The workspace, and the workspace open in several
-windows, work exactly as in 1.20.1**; its smokes run unchanged where they did not drive the single chart page. Page only,
+windows, work exactly as in 1.21.0**; its smokes run unchanged where they did not drive the single chart page. Page only,
 no recompile; no change to ChartBridge or the engine's drawing. The page is kept on the branch
 `archive/chart-single-page-2026-10-10` (main at 235a02b).
 
@@ -25,6 +25,60 @@ no recompile; no change to ChartBridge or the engine's drawing. The page is kept
   protocol (it ran on ChartBridge 0.2). The fake bridge's `--tickets` (the relay) is gone. Checks of the page's own parts
   went with it: its legend, footer, title wording, the tab's own account, its order bar on one line, its layout at 400 px
   and its Settings; a mounted chart's toolbar is checked at 1920x1080 and up (it wraps at 1366, as before).
+
+## 1.21.0 (2026-10-10): the page needs ChartBridge 0.5.2; the fallbacks for older ones go
+
+Anthony's approved cut C7 (2026-10-10), in one change with `live/COMPAT.json`'s `minChartBridge` raised from 0.3.2 to
+**0.5.2**: the PC updater installs this page only on a PC whose compiled ChartBridge is 0.5.2 or newer, so a PC on an older
+ChartBridge keeps the page it has instead of getting one it cannot talk to (every PC was sent 0.5.2 on 2026-10-09). Page
+only, no recompile.
+
+- **Orders (order path, independent review): no 200-tick bracket cap for a ChartBridge before 0.3.7.** The bracket boxes take
+  what ChartBridge takes: no limit unless `config.txt` sets `maxBracketTicks` (as with 0.3.7 and newer since 1.13.0).
+  `OrderTicket.bracketCap(maxBracketTicks)` no longer reads the version, and its version helpers (`versionOf`,
+  `versionAtLeast`) are gone with it; TradeCore keeps no version.
+- **The Agent tab:** `agentAccount` always carries `keepMode` and the LIVE question always names the mode the agent keeps
+  (until 1.21.0 an older ChartBridge got no `keepMode` and the question said Shadow). The tab no longer reads ChartBridge's
+  version: a v3 ChartBridge with no `agents` line says none is named there. `keepsMode` is gone from
+  `live/agent-core.js` (its `parseVersion` and `atLeast` stay for checks above 0.5.2).
+- **The delta pane:** every trade carries its side (ChartBridge 0.3.4 and newer), so the page no longer waits to learn whether
+  sides come, and the "Delta needs ChartBridge 0.3.4 on this PC" note, its legend line and the Data Box's "This ChartBridge
+  sends no trade sides" are gone. The engine's note stays (a host may still set one).
+- **Protocol v1 (ChartBridge 0.2):** no read-only page for it any more; comments say so.
+- **The fake bridge:** `--v1` (ChartBridge 0.2), `--no-sides` (0.3.3) and `--no-q` (0.3.7) are gone, with their tests and
+  smoke sections (the 0.3.3 delta note, the 0.3.6 bracket cap, orders-smoke's v1 page). `npm run smoke:live` is rewritten on
+  the current protocol (v2, trade sides, the PIN, trading off), not dropped: the order bar shows with trading off and its
+  account picker switches the fills, and the delta pane counts. embed-smoke's string `wsUrl` check runs on the current
+  protocol too.
+- Still in the page, to go with a later change that moves the fake bridge's defaults to 0.5.2 (most smokes run the fake as
+  0.3.4 today): the load without the served window (before 0.3.5), the "needs ChartBridge 0.3.7" notes for 4h, 1D and 1W, the
+  0.3.4.1 quote window in the delta count, and the fake's `--pin-off` and `--quote-hours`.
+
+## ChartBridge 0.5.5 (2026-10-10): the retired accounts line goes; one line for any unknown config.txt key
+
+Anthony's approved cuts (2026-10-10, items C1 to C4 of the cut list). ChartBridge only: recompile once (update-pc stages
+it); no page change, and every page keeps working with it.
+
+- **The one-time conversion of the `accounts` line is gone** (0.5.1 read the line once, on each PC's first 0.5.1 start, to
+  hide the connected accounts it did not name). All three PCs were sent 0.5.2 on 2026-10-09, and any 0.5.1 or later run writes
+  `accounts-detail.txt`, after which the conversion never runs again. Accounts follow NinjaTrader as since 0.5.1: an account seen Connected is listed,
+  unchecked when new. Nothing can trade that could not before: this code only ever hid accounts, never checked one.
+  `accounts-detail.txt` now holds the connected times only (its old `converted` line is skipped and dropped at the next
+  save; going back to 0.5.2 finds the file there and converts nothing either).
+- **Any config.txt key ChartBridge does not read is said once per load** in the Output window: "config.txt: `<key>` is not
+  a ChartBridge setting; the line does nothing". The retired `accounts` and `quoteHours` lines get this line instead of
+  their own special notes, and a mistyped key (`tradeAcounts`) is no longer silently ignored. A `maxQty.<ROOT>` value that is
+  not a whole number says so (the cap stays the default 1, as before). Every key ChartBridge reads, the v3 off-lines
+  included, is still read exactly as before, and `port`, `days`, `tickHours` and `rangeHours` with a value that is not a
+  number are still ignored without that line.
+- **`notConnectedYet` is gone from each account** in the `accounts` message (always false since 0.5.1; no page ever read it).
+- **Stale text fixed:** ChartBridge.cs's header names no version (the version is `ChartBridgeServer.Version`), the install
+  notes point at `nt8/install-files.json` instead of naming 4 of the 12 files, and gate 2 is described as the Account page's
+  checkmark (with `tradeAccounts` only for `accountChecks = off` and the first start's pre-check), in README and the headers.
+- Tests: `npm run check:orders` (the accounts section: the generic line for accounts, quoteHours, a mistyped key and a bad
+  maxQty value; no line for any key ChartBridge reads; no conversion on a run without `accounts-detail.txt`), and
+  `test/nt8-source.test.js`.
+
 ## ChartBridge 0.5.4 and chart 1.20.1 (2026-10-10): the agent's window can change at any time
 
 Anthony (2026-10-10, DECISION ag): "I don't want any restrictions. I will set the time and that's what the rule is ... I do

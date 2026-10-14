@@ -1,6 +1,6 @@
 /*
  * "Update ready: reload when flat" (the per-PC updater, nt8/update-pc.ps1). Only ChartBridge's own page loads this (the
- * workspace, live/index.html; the single chart page did too until chart 1.21.0); a chart mounted elsewhere does not.
+ * workspace, live/index.html; the single chart page did too until chart 1.22.0); a chart mounted elsewhere does not.
  *
  * The updater writes update.json next to the page files. This page reads it when it opens and then about once a
  * minute (no cache) and compares:
@@ -50,7 +50,7 @@
     const s = document.createElement('style');
     s.id = 'updNoticeStyle';
     // in the page's own place for it (the workspace's top bar, data-update-host). A long text ends in "...", and a shorter
-    // form is picked when it fits. (1.21.0: the single chart page's spot on its status line went with that page.)
+    // form is picked when it fits. (1.22.0: the single chart page's spot on its status line went with that page.)
     s.textContent = '[data-update-host] .upd-note { display: block; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info, #7FB2FF); }' +
       '[data-update-host] .upd-note .upd-vis::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }' +
       '[data-update-host] .upd-note.upd-stop { color: var(--warn, #E0B45A); font-weight: 600; }' +

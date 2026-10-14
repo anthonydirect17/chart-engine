@@ -1,12 +1,12 @@
 // Volume profile smoke (1.6.0): a mounted chart with its own toolbar (test/chart-host.html; the single chart page until
-// chart 1.21.0) on NQ Range 40 against the fake bridge (SAMPLE data
+// chart 1.22.0) on NQ Range 40 against the fake bridge (SAMPLE data
 // only, never market data), at 13:00 New York time on the most recent weekday with a regular session, so the full
 // session (from 18:00 the evening before) and RTH (from 9:30) differ.
 //   npm run smoke:vp        (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks: off by default and counted in the Indicators menu; on from the menu draws bars at the right edge of the plot
 // (POC row in its color reaching VP_WIDTH of the plot width, value-area rows, nothing in the left half); the profile
 // holds exactly the trades the page got (every backfill and live trade counted independently in the page) for the
-// session and for RTH; Session and RTH differ, with the profile's day (the single chart page's legend until 1.21.0, now worked out from
+// session and for RTH; Session and RTH differ, with the profile's day (the single chart page's legend until 1.22.0, now worked out from
 // the profile and its note: test/vp-smoke.mjs state()); both choices survive a reload; a mounted chart's
 // documented API (setIndicatorOption) and a new pane with the profile off; two tabs, where a stale tab's pick is saved
 // as it shows it (review S2). Screenshots, labelled as sample data.
@@ -112,7 +112,7 @@ const state = p => p.evaluate(() => {
     if (t >= rthFrom && t < rthTo && v > 0) rth += v;
   }
   for (const [t, pr] of window.__trades) if (t >= rthFrom && t < rthTo) { lo = Math.min(lo, pr); hi = Math.max(hi, pr); }
-  // the profile's readout, as the single chart page's legend showed it until 1.21.0: "POC p · VA a to b (Day)", and
+  // the profile's readout, as the single chart page's legend showed it until 1.22.0: "POC p · VA a to b (Day)", and
   // "(Day from 16:00)" when the ticks start after the session did (the same time the note gives)
   const noteEl = document.querySelector('[id$="-vpNote"]'), noteText = noteEl.hidden ? '' : noteEl.textContent;
   const fromM = /^Volume profile from (\d\d:\d\d(?::\d\d)?) ET: the tick history does not reach back/.exec(noteText), U = window.ChartEngine.util;

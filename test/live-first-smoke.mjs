@@ -1,5 +1,5 @@
 // 1.8.0 smoke: the served window and the session table (ChartBridge 0.3.5) on a mounted chart with its own toolbar
-// (test/chart-host.html; the single chart page until chart 1.21.0) against the fake bridge's tape
+// (test/chart-host.html; the single chart page until chart 1.22.0) against the fake bridge's tape
 // (sample data only, never market data). The market trades on during every load (150 trades a second, bursts of 450).
 //   npm run smoke:live-first      (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks, on NQ Range 40 at 10:45 ET on a weekday: the subscribe asks for the served window and the profile; the page's
@@ -256,7 +256,7 @@ try {
     const a = await exact(p, br);
     check(/^Volume profile building, from \d+:\d\d ET/.test(a.vpNote), 'the note: "' + a.vpNote + '"');
     await hold(p, br, false);
-    // Range: a new window load (1.5 s). (Until 1.21.0 a market order on the single chart page's order bar was checked to
+    // Range: a new window load (1.5 s). (Until 1.22.0 a market order on the single chart page's order bar was checked to
     // fill during it; the workspace's ticket never waits on a chart's load.)
     await p.click(H('tfSeg') + ' [data-v="range"]');
     const pill = await p.evaluate(() => document.querySelector('[id$="-badge"]').dataset.conn);

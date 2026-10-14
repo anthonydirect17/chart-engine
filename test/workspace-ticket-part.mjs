@@ -1,7 +1,7 @@
 // The workspace's order ticket (chart 1.12.0), run by test/workspace-smoke.mjs: two pages in one browser context are two
 // windows on one PC. Against the fake bridge with trading on (sample data; nothing reaches a broker):
 //   - the ticket's buttons send exactly what the 1.11.0 order bar sent (the sequence the single chart page's bar sent
-//     until chart 1.21.0, when that page went, written out here and compared message by message);
+//     until chart 1.22.0, when that page went, written out here and compared message by message);
 //   - chart clicks on every chart of the ticket's instrument, in both windows (the other window's forwarded and sent from
 //     the ticket's window), none on other instruments; drags and the x; the Armed border;
 //   - "Move the ticket here?" and Armed off after the move; the tie-break when two windows add it at once; the ticket's
@@ -74,7 +74,7 @@ export async function run({ browser, check, fail, shot, root, port }) {
     const info = p => p.evaluate(() => window.workspace.ticket());
     const panelsOf = async (p, type, rootName) => (await p.evaluate(() => window.workspace.panels())).filter(x => x.type === type && (!rootName || x.root === rootName));
 
-    /* ---------------- the 1.11.0 bar's messages (run on /single.html until 1.21.0; written out below) */
+    /* ---------------- the 1.11.0 bar's messages (run on /single.html until 1.22.0; written out below) */
     const SEQ = async (p, sel, chartClick) => {
       const msgs = [];
       const click = async s => { await p.click(s); await wait(450); };

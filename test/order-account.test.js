@@ -10,7 +10,7 @@ const path = require('node:path');
 const { LivePrefs: LP } = require('../live/live.js');
 
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'live', 'live.js'), 'utf8').replace(/\r\n/g, '\n');
-const PAGE = SRC.slice(SRC.indexOf('function mount(container, options)'));   // every chart (1.21.0: no standalone page)
+const PAGE = SRC.slice(SRC.indexOf('function mount(container, options)'));   // every chart (1.22.0: no standalone page)
 
 test('orderAccount: the last pick when ChartBridge allows it now', () => {
   assert.deepEqual(LP.orderAccount(['Sim101', 'EVAL-1', 'EVAL-2'], 'EVAL-2'), { account: 'EVAL-2', missed: '' });
@@ -41,8 +41,8 @@ test('orderAccount: the result is always one of the allowed accounts, or none', 
 });
 
 /* 1.12.0: the order logic moved unchanged from live.js into live/trade.js (TradeCore), which the workspace's ticket uses
-   (the single chart page's order bar did too until 1.21.0); the checks below read it there. A chart (live.js) sends no
-   order at all since 1.21.0: it hands clicks and drags to its host. */
+   (the single chart page's order bar did too until 1.22.0); the checks below read it there. A chart (live.js) sends no
+   order at all since 1.22.0: it hands clicks and drags to its host. */
 const CORE = fs.readFileSync(path.join(__dirname, '..', 'live', 'trade.js'), 'utf8').replace(/\r\n/g, '\n');
 const WS = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8').replace(/\r\n/g, '\n');
 const TC = require('../live/trade.js');
@@ -74,7 +74,7 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   // only Flatten and Flatten all skip the Armed check (Anthony 2026-10-01); every other ready() call keeps it
   assert.deepEqual((CORE.match(/ready\(false\)/g) || []).length, 2);
   assert.match(CORE, /if \(!TR\.armed && armed !== false\) \{ flash\('Armed is off: nothing was sent/);
-  // the buttons call the core's own functions: no second order path. 1.21.0: a chart (live.js) has no TradeCore, no order
+  // the buttons call the core's own functions: no second order path. 1.22.0: a chart (live.js) has no TradeCore, no order
   // bar and no trading hotkeys of its own; its clicks, drags and x go to its host (HOST.place, move, cancel, planAdd)
   for (const re of [/TradeCore|window\.TradeCore|\bTC\.(create|wire)\(/, /sendOrder|flattenHere|flattenAll|breakEven|cancelOrder|moveOrder|planMove|planRemove/, /type: '(order|flatten|cancel|change|plan|auth)'/])
     assert.doesNotMatch(PAGE.replace(/^\s*(\/\/|\*).*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, ''), re, 'live.js sends no order itself: ' + re);
@@ -106,7 +106,7 @@ test('trade.js: TR.account is set only from orderAccount, the picker, or cleared
   assert.doesNotMatch(PAGE + CORE + WS, /TR\.armed = (?!v;)/, 'TR.armed is set only in setArmed');
   assert.doesNotMatch(PAGE + WS, /store\.(get|set|getItem|setItem)\('[^']*arm/i, 'nothing about Armed in storage');
   assert.match(CORE, /if \(cameOn \|\| !TR\.enabled \|\| TR\.account !== was\) setArmed\(false\);/);
-  // 1.21.0: a chart's account picker only picks whose fills it marks (the single chart page's per-tab order account is gone)
+  // 1.22.0: a chart's account picker only picks whose fills it marks (the single chart page's per-tab order account is gone)
   assert.doesNotMatch(PAGE, /sessionStorage|saveTabAccount|tabAccount/);
 });
 

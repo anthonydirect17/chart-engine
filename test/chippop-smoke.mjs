@@ -1,6 +1,6 @@
 // The chip settings popover (chart 1.14.0, Anthony: he changes indicator settings many times a day) against the fake
 // bridge (sample data; nothing reaches a broker), in Chromium, on a mounted chart with its own toolbar
-// (test/chart-host.html; /single.html until chart 1.21.0) and in the workspace, at 1366x768,
+// (test/chart-host.html; /single.html until chart 1.22.0) and in the workspace, at 1366x768,
 // 1920x1080 and 2560x1440: a chip click opens its indicator's settings (the gear's card) dropped from the chip, with an
 // on/off switch at the top; an edit applies and is saved; the switch hides the indicator and keeps the chip, and turns
 // it back on; a click outside, Escape or the chip again closes it and the focus goes back to the page (the workspace's
@@ -93,7 +93,7 @@ try {
     await ctx.addInitScript(spies);
 
     /* ================================================================ a mounted chart with its own toolbar (test/chart-host.html;
-       the single chart page until 1.21.0, whose order bar and order keys went with it: the workspace part checks those) */
+       the single chart page until 1.22.0, whose order bar and order keys went with it: the workspace part checks those) */
     console.log(`a mounted chart ${w}x${h}`);
     const sp = await ctx.newPage();
     sp.on('pageerror', e => fail('page error: ' + e.message));

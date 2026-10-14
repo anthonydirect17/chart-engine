@@ -1,6 +1,6 @@
 // No scrolling, ever (chart 1.14.0, Anthony's item 1): every panel, menu, popover and dialog fits its content with no
 // scrollbar and nothing cut, at 1366x768, 1920x1080 and 2560x1440, in the workspace (live/index.html) and on a mounted
-// chart with its own toolbar (test/chart-host.html; the single chart page, /single.html, until chart 1.21.0), against the
+// chart with its own toolbar (test/chart-host.html; the single chart page, /single.html, until chart 1.22.0), against the
 // fake bridge (sample data; nothing reaches a broker).
 //   1.15.0: the Account panel (each tab) and the Quote board in Anthony's Main layout (under the ticket) with their figures
 //   never cut, the drawing ring, the bars picker with 4h, 1D and 1W.
@@ -175,9 +175,9 @@ try {
       await page.click('.tk [data-tk-id="armBtn"]');
     }
 
-    /* ---------------- a mounted chart with its own toolbar (test/chart-host.html), at 1920x1080 and up. Until 1.21.0 this
+    /* ---------------- a mounted chart with its own toolbar (test/chart-host.html), at 1920x1080 and up. Until 1.22.0 this
        part ran on the single chart page, whose slimmer toolbar (drawing tools and Glide in its Settings, the gears beside
-       the list) fitted 1366x768 too; a mounted chart's full toolbar wraps at 1366 wide, as it did before 1.21.0. */
+       the list) fitted 1366x768 too; a mounted chart's full toolbar wraps at 1366 wide, as it did before 1.22.0. */
     if (w < 1920) { await ctx.close(); continue; }
     await page.goto(hostUrl(PORT + 1));
     await waitLive(page, 30000);

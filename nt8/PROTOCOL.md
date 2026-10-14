@@ -437,7 +437,8 @@ Bid and Ask updates.
 **Backfill** (0.3.4 to 0.3.6; removed in 0.3.7). The Bid and Ask history that sided the by-date tick backfill (`quoteHours`,
 0.3.4.1: off by default after it froze NinjaTrader on the trading PC) went with that load: since 0.3.5 the served window's
 trades are `[t, p, v]` (no side) and the delta pane counts live trades from the page's open, so nothing asked for it any
-more. A `quoteHours` line in `config.txt` is now only noted once in the Output window ("no longer used") and does nothing.
+more. A `quoteHours` line in `config.txt` does nothing; 0.5.5 says so as for any key it does not read ("config.txt:
+quoteHours is not a ChartBridge setting; the line does nothing").
 The backfill's side join (`ClassifyBackfill`, `QuoteSeries`, `ContinueTickRule`, `BackfillSides`) is removed with it; the
 rules above now apply to live trades only.
 
@@ -1356,8 +1357,8 @@ it. **`accounts-detail.txt`** (0.5.1, next to it, same writing rules): a first l
 `# ChartBridge account details (written by ChartBridge; do not edit)`, then `connected\t<UTC ms>\t<account name>\t<session>`
 (the last time ChartBridge saw it Connected, and which NinjaTrader session saw it: the process id and start ticks, as
 `<id>-<ticks>`; the 4th field is left out when they cannot be read; saved at most once an hour per account, and at once the
-first time a session sees it) and `converted\t<UTC ms>` (the `accounts` line was converted, below). A line it does not
-understand is skipped. Read with three tries, as `accounts.txt`; a file that still cannot be read is **never rewritten that
+first time a session sees it). A line it does not understand is skipped (such as `converted\t<UTC ms>`, which 0.5.1 and
+0.5.2 wrote for the `accounts` line's conversion, below; 0.5.5 drops it at the next save). Read with three tries, as `accounts.txt`; a file that still cannot be read is **never rewritten that
 run** (one Output line) and only means an account counts as seen this session once it connects again. ChartBridge's stop
 saves both files and flushes `accounts.log` (on the thread that stops it, NinjaTrader's at an F5): it waits at most 200 ms for
 a save already under way and otherwise skips its own with an Output line (the next start reads both files again; at most the
@@ -1402,7 +1403,9 @@ account NinjaTrader shows with a position or working orders is listed again at o
 Hide is also how Anthony removes a connected account he does not want listed (a dead evaluation). Until 0.5.0 only a Gone
 account could be archived, and it came back on its own when it connected again.
 
-**The old `accounts` line (0.5.1, once).** The first 0.5.1 run that finds `accounts = ...` in `config.txt` converts it. It is
+**The old `accounts` line (0.5.1 and 0.5.2, once; removed in 0.5.5).** 0.5.5 converts nothing: an `accounts` line is a key
+it does not read, said once per load in the Output window ("config.txt: accounts is not a ChartBridge setting; the line
+does nothing"), and it can go. As built in 0.5.1 and 0.5.2: the first 0.5.1 run that finds `accounts = ...` in `config.txt` converts it. It is
 the first run when there is no `accounts-detail.txt` yet (any 0.5.1 run writes one, so its mere existence means "done") and
 `accounts.log` has no `converted` line; if `accounts.log` cannot be read (three tries) nothing is converted (ChartBridge
 cannot tell), said in the Output window. The conversion covers the **first 5 minutes** after ChartBridge starts: every account
@@ -1499,7 +1502,8 @@ Where the contract above left a detail open, the build chose the safe simple opt
   NinjaTrader opens). 0.5.1: an account not Connected yet this NinjaTrader session is not listed at all; it keeps its saved
   checkmark in `accounts.txt`, every order to it is refused by the normal gates (it is not Connected), and once it connects it
   is listed and trades at once with its checkmark. Then a drop (disconnected or disabled, for the grace) makes it Gone.
-  `"notConnectedYet"` (an added field in each `account` since 0.4.0) is always false since 0.5.1 and is kept for older pages.
+  `"notConnectedYet"` (an added field in each `account` from 0.4.0 to 0.5.2, always false since 0.5.1; no page read it) is
+  gone in 0.5.5.
 - **Seen this session** (0.5.1): Connected at a 1 s check, a 10 s watch, a page's sign-in or an `accounts` message in this
   ChartBridge run, or a `connected` line in `accounts-detail.txt` from this NinjaTrader process (same process id and start;
   so a recompile keeps a Gone account listed, even if the clock was set back). A line without the session field, or a
@@ -1517,7 +1521,7 @@ Where the contract above left a detail open, the build chose the safe simple opt
 - **Every account ChartBridge lists is written to `accounts.txt`** (as `off` until checked), so an account that later
   disappears can still be listed Gone and archived. 0.5.1: only accounts seen Connected are listed, so only those are written
   (and the tradeAccounts names of a first start).
-- **The conversion of the old `accounts` line** (0.5.1, lead's defaults and the review's rulings): a checked account is kept
+- **The conversion of the old `accounts` line** (0.5.1 and 0.5.2; removed in 0.5.5; lead's defaults and the review's rulings): a checked account is kept
   even when the line does not name it (0.5.0 always watched the accounts the chart may trade); an account Hide would refuse
   is not hidden; it covers the first 5 minutes after the start only; the marker is written when the conversion starts, so a
   recompile ends it. A first run that could not read `accounts.log` still writes `accounts-detail.txt`, so the line is never
@@ -2824,7 +2828,7 @@ Each choice below that the brief left open is marked **(lead's default)**.
 
 - **v3 page.** The ticket's switches, `managed` and the Merge result come from the window's v3 connection (see "The page's
   v3 connection" below); the ticket's own connection stays a v2 page and sends every order action, a strategy's `order`
-  and `merge` included. (The single chart page, `single.html`, had no v3 connection; it is gone since chart 1.21.0.) A control shows only while its switch is
+  and `merge` included. (The single chart page, `single.html`, had no v3 connection; it is gone since chart 1.22.0.) A control shows only while its switch is
   true: the Strategy picker on the ticket and Settings > Order Strategies (`strategies`), the Merge button and key
   (`merge`), the entry-type modifiers (`orderTypes`), Accept and Reject keys (`bot`). With every switch off the page is
   the 1.15 page: no new control, The Desk never asked, an order is the 1.15 order.
@@ -2833,7 +2837,7 @@ Each choice below that the brief left open is marked **(lead's default)**.
   (they need the shared keys). With all four off they stay this browser's, as in 1.15. On The Desk's first answer in a
   browser: when The Desk has none yet (rev 0) and the browser has keys, they are saved there; otherwise The Desk's keys are
   used and a note names the browser's keys they replaced. The Desk's keys are written to the browser's own keys
-  (`live-hotkeys-v1`, `live-ws-keys-v1`), so the 1.15 handlers use them. (Until chart 1.21.0 the single chart page then
+  (`live-hotkeys-v1`, `live-ws-keys-v1`), so the 1.15 handlers use them. (Until chart 1.22.0 the single chart page then
   showed them read only, told by `live-desk-sync-v1`; the page and the key are gone.) A key The Desk has that this browser keeps for itself (`hotkeyRefused`) is shown with why it does
   nothing here.
 - **The hotkeys document** has nine keys: The Desk's seven plus `accept` and `reject` (the copilot's one-key answers, no

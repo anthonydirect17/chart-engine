@@ -1,5 +1,5 @@
 // 1.5.3 smoke: the 1-hour Initial Balance and the chart background, on a mounted chart with its own toolbar
-// (test/chart-host.html; the single chart page until chart 1.21.0) and a host's pair of mounted charts, against the
+// (test/chart-host.html; the single chart page until chart 1.22.0) and a host's pair of mounted charts, against the
 // fake bridge (sample data only, never market data). The page and the bridge run on a chosen New York time of day on
 // the most recent weekday that has a regular session, so the IB phases can be seen whatever the time of the run:
 //   npm run smoke:ib        (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
@@ -230,7 +230,7 @@ try {
     check(base.theme === '#080B10' && base.canvas === '#080B10', 'default ground unchanged: ' + JSON.stringify(base));
     await a.screenshot({ path: path.join(SHOTS, 'bg-dark-default.png') });
     /* ---- the chart's chrome takes every ground (1.9.0: "white chart, white top bar"): its ground is the chrome's (the
-       chart's, or on a mid grey that grey moved to 9:1). (Until 1.21.0 this also swept the single chart page's order bar.) */
+       chart's, or on a mid grey that grey moved to 9:1). (Until 1.22.0 this also swept the single chart page's order bar.) */
     const rgbOf = h => { const c = U.parseColor(h); return 'rgb(' + c.r + ', ' + c.g + ', ' + c.b + ')'; };
     await a.click('.ce-theme-btn'); await a.keyboard.press('Escape');               // the Colors panel built (its hex box)
     const sweep = await a.evaluate(({ grounds }) => {

@@ -1,5 +1,5 @@
 // 1.9.0 smoke: color presets and the top bar following the chart, on a mounted chart with its toolbar (test/chart-host.html;
-// the single chart page until chart 1.21.0) against the fake bridge (sample data only, never market data):
+// the single chart page until chart 1.22.0) against the fake bridge (sample data only, never market data):
 //   npm run smoke:presets   (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks: the Colors panel's two preset groups (chart: bull, bear and background; indicator: every indicator color)
 // save, replace by name, pick, rename and delete, and survive a reload and a second tab; VWAP is no longer in the
@@ -7,7 +7,7 @@
 // saved before 1.9.0 survives a ground change and a reload (review R1); a chart preset brings its indicator preset
 // (the save row's "Indicator colors" select), a save never makes an indicator preset, a refused save writes nothing
 // and a full group keeps a link (review 2 S1, S2), and one deleted since is ignored; the toolbar follows every ground.
-// (1.21.0: the single chart page's order bar and its 21-ground contrast sweep went with that page.) Screenshots of each go
+// (1.22.0: the single chart page's order bar and its 21-ground contrast sweep went with that page.) Screenshots of each go
 // to SHOTS (default test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
