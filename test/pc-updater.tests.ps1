@@ -106,6 +106,17 @@ function Get-AddOnsPrint { return ((Get-ChildItem -LiteralPath $script:P.AddOns 
 function Get-WwwFile([string]$Rel) { return (Get-LocalPath $script:P.Www $Rel) }
 function Get-UpdateJson { return (Read-JsonFile (Join-Path $script:P.Www 'update.json')) }
 function Run-Update { $state = Read-State; $r = Invoke-Pass -State $state; [void](Complete-Run $state $r); return $r }
+function Rx([string]$Text) { return [regex]::Escape($Text) }
+# The ChartBridge versions these tests use, counted from this repo's live/COMPAT.json minChartBridge, so a raise there
+# moves them with it (written when it was 0.3.2: 0.3.1, 0.3.2, 0.3.3, 0.3.9, then 0.4.0 to 0.4.3). One below the page's
+# minimum, the minimum, the PC's own (one above: compatible), a newer one with a page that needs it, the minor after.
+$cbParts = @(((ConvertFrom-JsonText (Get-Text (Join-Path (Join-Path $repoRoot 'live') 'COMPAT.json')))['minChartBridge']).Split('.') | ForEach-Object { [int]$_ })
+$cbMajor = $cbParts[0]; $cbMinor = $cbParts[1]; $cbPatch = $cbParts[2]
+$vMin = "$cbMajor.$cbMinor.$cbPatch"
+$vBelow = if ($cbPatch -gt 0) { "$cbMajor.$cbMinor.$($cbPatch - 1)" } elseif ($cbMinor -gt 0) { "$cbMajor.$($cbMinor - 1).99" } else { "$($cbMajor - 1).99.99" }
+$vPc = "$cbMajor.$cbMinor.$($cbPatch + 1)"
+$vNeeds = "$cbMajor.$cbMinor.$($cbPatch + 7)"
+$vNext0 = "$cbMajor.$($cbMinor + 1).0"; $vNext1 = "$cbMajor.$($cbMinor + 1).1"; $vNext2 = "$cbMajor.$($cbMinor + 1).2"; $vNext3 = "$cbMajor.$($cbMinor + 1).3"
 
 [void](Invoke-Native (Get-GitExe) @('init', '-q', '--bare', '-b', 'main', $origin) 60)
 [void](Invoke-Native (Get-GitExe) @('clone', '-q', $origin, $src) 60)
@@ -248,17 +259,17 @@ Test 'a /diag version that is not a version (fake-0.2.0) counts as unknown' {
   Assert ((Run-Update).outcome -eq 'cb_unknown') 'and what it said is no version to fall back on'
 }
 Test 'the last version /diag showed counts when ChartBridge is not running' {
-  $script:FakeDiag = '0.3.1'
+  $script:FakeDiag = $vBelow
   [void](Get-CompiledChartBridge ($s = Read-State)); Save-State $s
   $script:FakeDiag = $null
   $c = Get-CompiledChartBridge (Read-State)
-  Assert ($c.version -eq '0.3.1' -and $c.source -eq 'recorded') "$($c.version) $($c.source)"
+  Assert ($c.version -eq $vBelow -and $c.source -eq 'recorded') "$($c.version) $($c.source)"
 }
 Test 'compat gate: page needs a newer ChartBridge, so no update' {
-  $script:FakeDiag = '0.3.1'
+  $script:FakeDiag = $vBelow
   $r = Run-Update
   Assert ($r.outcome -eq 'needs_chartbridge') $r.outcome
-  Assert ($r.reason -match '0\.3\.2' -and $r.reason -match '0\.3\.1') $r.reason
+  Assert ($r.reason -match (Rx $vMin) -and $r.reason -match (Rx $vBelow)) $r.reason
   Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'no page file'
 }
 
@@ -266,7 +277,7 @@ Test 'compat gate: page needs a newer ChartBridge, so no update' {
 
 $script:FirstBuild = $null
 Test 'green, compatible: staged, then installed file by file; nothing else in www touched' {
-  $script:FakeDiag = '0.3.3'
+  $script:FakeDiag = $vPc
   $r = Run-Update
   Assert ($r.outcome -eq 'updated') "$($r.outcome) $($r.reason)"
   foreach ($w in $manifest['www']) {
@@ -276,7 +287,7 @@ Test 'green, compatible: staged, then installed file by file; nothing else in ww
   Assert ((Get-Hash (Get-WwwFile 'anthony-notes.txt')) -eq $notesHash) 'a file of Anthony''s in www untouched'
   $u = Get-UpdateJson
   Assert ($u['page']['build'] -eq $r.stage.build -and $u['page']['commit'] -eq $c1 -and $u['page']['installedAt'] -gt 0) 'update.json'
-  Assert ($u['chartBridge']['compiled'] -eq '0.3.3') 'update.json compiled ChartBridge'
+  Assert ($u['chartBridge']['compiled'] -eq $vPc) 'update.json compiled ChartBridge'
   $s = Read-State
   Assert ($s['page']['build'] -eq $r.stage.build) 'state.json page'
   Assert (Test-Path (Join-Path $script:P.Previous 'previous.json')) 'previous kept'
@@ -364,16 +375,16 @@ Test 'pause: the automatic path does nothing; resume: it updates again' {
 
 $script:CbCommit = $null
 Test 'a new ChartBridge is staged and announced, and the automatic path writes no .cs file into AddOns' {
-  $script:CbCommit = Commit 'ChartBridge 0.3.9 and a page that needs it' { Set-CbVersion '0.3.9'; Set-MinCb '0.3.9'; Put (Get-LocalPath $src 'live/live.js') ((Get-Text (Get-LocalPath $src 'live/live.js')) + "`n/* needs 0.3.9 */`n") }
+  $script:CbCommit = Commit "ChartBridge $vNeeds and a page that needs it" { Set-CbVersion $vNeeds; Set-MinCb $vNeeds; Put (Get-LocalPath $src 'live/live.js') ((Get-Text (Get-LocalPath $src 'live/live.js')) + "`n/* needs $vNeeds */`n") }
   $script:Toasts = @()
   $r = Run-Update
   Assert ($r.outcome -eq 'needs_chartbridge') $r.outcome
-  Assert ((Read-JsonFile (Join-Path $script:P.Staged 'stage.json'))['chartBridgeVersion'] -eq '0.3.9') 'staged 0.3.9'
+  Assert ((Read-JsonFile (Join-Path $script:P.Staged 'stage.json'))['chartBridgeVersion'] -eq $vNeeds) "staged $vNeeds"
   Assert (Test-Path (Join-Path (Join-Path $script:P.Staged 'addons') 'ChartBridge.cs')) 'add-on staged under updater\staged'
-  Assert ((Get-UpdateJson)['chartBridge']['ready'] -eq '0.3.9') 'update.json: ready'
-  Assert ((Read-JsonFile $script:P.Status)['chartBridge']['ready'] -eq '0.3.9') 'status.json: ready'
-  Assert ($script:Toasts.Count -eq 1 -and $script:Toasts[0] -match '0\.3\.9') 'one notification'
-  Assert ((Get-Text (Get-WwwFile 'live.js')) -notmatch 'needs 0\.3\.9') 'page that needs 0.3.9 not installed'
+  Assert ((Get-UpdateJson)['chartBridge']['ready'] -eq $vNeeds) 'update.json: ready'
+  Assert ((Read-JsonFile $script:P.Status)['chartBridge']['ready'] -eq $vNeeds) 'status.json: ready'
+  Assert ($script:Toasts.Count -eq 1 -and $script:Toasts[0] -match (Rx $vNeeds)) 'one notification'
+  Assert ((Get-Text (Get-WwwFile 'live.js')) -notmatch "needs $(Rx $vNeeds)") "page that needs $vNeeds not installed"
   [void](Run-Update)
   Assert ($script:Toasts.Count -eq 1) 'not announced twice'
   Assert ((Get-AddOnsPrint) -eq $addOnsBefore) 'AddOns unchanged by every automatic run'
@@ -458,7 +469,7 @@ Test 'the task''s own copy of the updater is changed only by register or -Instal
   Assert ($args -match [regex]::Escape($dest) -and $args -match ' update -Repo ') $args
 }
 Test '-InstallChartBridge (Anthony, flat) copies the staged add-on files; the page that needs them waits for F5' {
-  Put (Join-Path $script:P.AddOns 'ChartBridge.cs') "// the ChartBridge compiled on this PC (older)`r`npublic const string Version = ""0.3.3"";`r`n"
+  Put (Join-Path $script:P.AddOns 'ChartBridge.cs') "// the ChartBridge compiled on this PC (older)`r`npublic const string Version = ""$vPc"";`r`n"
   $addOnsBefore2 = Get-AddOnsPrint
   $script:Yes = $true
   $code = Invoke-InstallChartBridge
@@ -472,9 +483,9 @@ Test '-InstallChartBridge (Anthony, flat) copies the staged add-on files; the pa
   Assert ($bk.Count -eq 1 -and (Get-Text $bk[0].FullName) -match 'older') 'the replaced ChartBridge.cs kept'
   Assert ($addOnsBefore2 -ne (Get-AddOnsPrint)) 'AddOns changed (by hand, with y)'
   Assert (@(Get-ChildItem -LiteralPath $script:P.AddOns -Filter '*.upd-tmp').Count -eq 0) 'no temporary file left in AddOns'
-  Assert ((Get-Text (Get-WwwFile 'live.js')) -notmatch 'needs 0\.3\.9') 'the page that needs 0.3.9 is not installed before F5'
-  Assert ((Read-State)['pendingPage']['needs'] -eq '0.3.9') 'the page waits for F5'
-  Assert ((Get-UpdateJson)['chartBridge']['copied'] -eq '0.3.9' -and -not (Get-UpdateJson)['chartBridge']['ready']) 'update.json: copied, waiting for F5'
+  Assert ((Get-Text (Get-WwwFile 'live.js')) -notmatch "needs $(Rx $vNeeds)") "the page that needs $vNeeds is not installed before F5"
+  Assert ((Read-State)['pendingPage']['needs'] -eq $vNeeds) 'the page waits for F5'
+  Assert ((Get-UpdateJson)['chartBridge']['copied'] -eq $vNeeds -and -not (Get-UpdateJson)['chartBridge']['ready']) 'update.json: copied, waiting for F5'
   $pin = Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')
   Assert ($pin['commit'] -eq (Read-JsonFile (Join-Path $script:P.Staged 'stage.json'))['commit']) 'the task''s updater is the staged commit''s'
   Assert ((Get-Hash (Join-Path $script:P.Bin 'update-pc.ps1')) -eq (Get-Hash (Join-Path (Join-Path $script:P.Staged 'bin') 'update-pc.ps1'))) 'the staged updater'
@@ -483,36 +494,36 @@ Test '-InstallChartBridge (Anthony, flat) copies the staged add-on files; the pa
 Test 'before F5 (ChartBridge not running): the lower of last seen and copied counts' {
   $script:FakeDiag = $null
   $c = Get-CompiledChartBridge (Read-State)
-  Assert ($c.version -eq '0.3.3' -and $c.source -eq 'recorded') "$($c.version) $($c.source)"
+  Assert ($c.version -eq $vPc -and $c.source -eq 'recorded') "$($c.version) $($c.source)"
 }
 Test 'after F5 /diag shows the new version: confirmed, the waiting page installs; without /diag the recorded version counts' {
-  $script:FakeDiag = '0.3.9'
+  $script:FakeDiag = $vNeeds
   $r = Run-Update
   Assert ($r.outcome -eq 'updated') $r.outcome
-  Assert ((Get-Text (Get-WwwFile 'live.js')) -match 'needs 0\.3\.9') 'the page that needs 0.3.9 installed after F5'
+  Assert ((Get-Text (Get-WwwFile 'live.js')) -match "needs $(Rx $vNeeds)") "the page that needs $vNeeds installed after F5"
   Assert (-not (Read-State).Contains('pendingPage')) 'nothing waits any more'
   $s = Read-State
   Assert ($s['chartBridge']['installed']['confirmed'] -eq $true) 'confirmed'
   Assert (-not (Get-UpdateJson)['chartBridge']['copied']) 'no longer waiting for F5'
   $script:FakeDiag = $null
   $c = Get-CompiledChartBridge (Read-State)
-  Assert ($c.version -eq '0.3.9' -and $c.source -eq 'recorded') "$($c.version) $($c.source)"
+  Assert ($c.version -eq $vNeeds -and $c.source -eq 'recorded') "$($c.version) $($c.source)"
 }
-Test 'Anthony goes back to 0.3.3 by hand: the newest /diag counts, and with NinjaTrader closed the lower one (the reviewer''s p2)' {
-  $script:FakeDiag = '0.3.3'
+Test 'Anthony goes back to the older ChartBridge by hand: the newest /diag counts, and with NinjaTrader closed the lower one (the reviewer''s p2)' {
+  $script:FakeDiag = $vPc
   $s = Read-State; [void](Get-CompiledChartBridge $s); Save-State $s
-  Assert ((Get-Text $script:P.Log) -match 'went down from 0\.3\.9 to 0\.3\.3') 'a downgrade is logged'
+  Assert ((Get-Text $script:P.Log) -match "went down from $(Rx $vNeeds) to $(Rx $vPc)") 'a downgrade is logged'
   $script:FakeDiag = $null
   $c = Get-CompiledChartBridge (Read-State)
-  Assert ($c.version -eq '0.3.3') "counts 0.3.3, got $($c.version) ($($c.detail))"
-  # a hand copy this tool never saw: AddOns\ChartBridge.cs says 0.3.2, so no more than that counts
-  $s = Read-State; $s['chartBridge']['diagVersion'] = '0.3.9'; Save-State $s
+  Assert ($c.version -eq $vPc) "counts $vPc, got $($c.version) ($($c.detail))"
+  # a hand copy this tool never saw: AddOns\ChartBridge.cs says the minimum (lower still), so no more than that counts
+  $s = Read-State; $s['chartBridge']['diagVersion'] = $vNeeds; Save-State $s
   $keep = Get-Text (Join-Path $script:P.AddOns 'ChartBridge.cs')
-  Put (Join-Path $script:P.AddOns 'ChartBridge.cs') ($keep -replace 'public const string Version = "[^"]+"', 'public const string Version = "0.3.2"')
+  Put (Join-Path $script:P.AddOns 'ChartBridge.cs') ($keep -replace 'public const string Version = "[^"]+"', "public const string Version = ""$vMin""")
   $c = Get-CompiledChartBridge (Read-State)
-  Assert ($c.version -eq '0.3.2') "the lower of recorded and AddOns: $($c.version)"
+  Assert ($c.version -eq $vMin) "the lower of recorded and AddOns: $($c.version)"
   Put (Join-Path $script:P.AddOns 'ChartBridge.cs') $keep
-  $script:FakeDiag = '0.3.9'
+  $script:FakeDiag = $vNeeds
   $s = Read-State; [void](Get-CompiledChartBridge $s); Save-State $s
 }
 
@@ -556,7 +567,7 @@ function Assert-Whole([string]$Why, [switch]$NoPrevious) {
 }
 
 Test 'the reviewer''s p1: cut off after one file, then CI pending for a newer commit: finished first, the rollback copy stays whole' {
-  $script:FakeCi = 'success'; $script:FakeDiag = '0.3.9'
+  $script:FakeCi = 'success'; $script:FakeDiag = $vNeeds
   [void](Run-Update)
   $base = Get-Marks
   [void](New-MarkCommit 100)
@@ -580,7 +591,7 @@ $k = 200
 foreach ($pt in $points) {
   $k++
   Test "a power loss at $pt; the next run (paused) finishes or undoes it first; never a mixed page" {
-    $script:FakeCi = 'success'; $script:FakeDiag = '0.3.9'
+    $script:FakeCi = 'success'; $script:FakeDiag = $vNeeds
     [void](Invoke-Resume); [void](Run-Update)
     $old = Get-Marks
     [void](New-MarkCommit $k)
@@ -641,18 +652,18 @@ Test 'the finish after a cut-off drops files the new build no longer has' {
   Assert ((Run-Update).outcome -eq 'updated') 'back'
 }
 Test '-InstallChartBridge after the .cs copy: a page that cannot be written now is not a STOP (the reviewer''s p4_icb)' {
-  $cb = Commit 'ChartBridge 0.4.0; the page works with 0.3.9' { Set-CbVersion '0.4.0'; Put (Get-LocalPath $src 'live/live.js') ((Get-Text (Get-LocalPath $src 'live/live.js')) + "`n/* p4 */`n") }
-  $script:FakeDiag = $null                                    # NinjaTrader closed (the last /diag said 0.3.9)
+  $cb = Commit "ChartBridge $vNext0; the page works with $vNeeds" { Set-CbVersion $vNext0; Put (Get-LocalPath $src 'live/live.js') ((Get-Text (Get-LocalPath $src 'live/live.js')) + "`n/* p4 */`n") }
+  $script:FakeDiag = $null                                    # NinjaTrader closed (the last /diag said $vNeeds)
   $script:HoldLiveJs = $true; $script:Yes = $true
   try { $code = Invoke-InstallChartBridge } finally { $script:HoldLiveJs = $false; $script:Yes = $false }
   Assert-Code $code 0 'OK: ChartBridge copied, press F5; the page follows'
   $s = Read-State
-  Assert ($s['chartBridge']['installed']['version'] -eq '0.4.0' -and -not $s['chartBridge']['installed']['confirmed']) 'recorded at once'
-  Assert ((Get-Text (Join-Path $script:P.AddOns 'ChartBridge.cs')) -match 'Version = "0\.4\.0"') 'the .cs files are in'
+  Assert ($s['chartBridge']['installed']['version'] -eq $vNext0 -and -not $s['chartBridge']['installed']['confirmed']) 'recorded at once'
+  Assert ((Get-Text (Join-Path $script:P.AddOns 'ChartBridge.cs')) -match "Version = ""$(Rx $vNext0)""") 'the .cs files are in'
   Assert ($s['pendingPage']['commit'] -eq $cb -and (Get-Text $script:P.Log) -match 'the page could not be written now') 'the page follows (it was tried and failed)'
-  Assert ((Get-UpdateJson)['chartBridge']['copied'] -eq '0.4.0') 'the page says: copied, press F5'
+  Assert ((Get-UpdateJson)['chartBridge']['copied'] -eq $vNext0) 'the page says: copied, press F5'
   Assert ((Read-JsonFile (Join-Path $script:P.Bin 'pinned.json'))['commit'] -eq $cb) 'the task''s updater followed'
-  $script:FakeDiag = '0.4.0'
+  $script:FakeDiag = $vNext0
   $r = Run-Update
   Assert ($r.outcome -match 'updated|up_to_date') "$($r.outcome) $($r.recovered)"
   Assert ((Get-Text (Get-WwwFile 'live.js')) -match '/\* p4 \*/' -and -not (Test-Path $script:P.Journal)) 'the page followed after F5'
@@ -669,7 +680,7 @@ Test '-InstallChartBridge never pins an older updater than the pinned one' {
   $pin['commit'] = $keep; Write-JsonAtomic $pj $pin
 }
 $script:AddOnNames = @('ChartBridge.cs', 'ChartBridgeOrders.cs', 'ChartBridgePin.cs')
-function Get-AddOnMarks { return (($script:AddOnNames | ForEach-Object { if ((Get-Text (Join-Path $script:P.AddOns $_)) -match '0\.4\.1') { 'new' } else { 'old' } }) -join '/') }
+function Get-AddOnMarks { return (($script:AddOnNames | ForEach-Object { if ((Get-Text (Join-Path $script:P.AddOns $_)) -match "Version = ""$(Rx $vNext1)""|// test commit: ChartBridge $(Rx $vNext1)") { 'new' } else { 'old' } }) -join '/') }
 Test 'Get-AddOnHashes: a file another program holds reads as unreadable, never a crash that hides a mix (review 4 SF1)' {
   if (-not (Test-Path $script:P.AddOns)) { New-Item -ItemType Directory -Force -Path $script:P.AddOns | Out-Null }
   Put (Join-Path $script:P.AddOns 'HeldProbe.cs') 'probe'
@@ -682,10 +693,10 @@ Test 'Get-AddOnHashes: a file another program holds reads as unreadable, never a
 }
 
 Test '-InstallChartBridge: an add-on file held past the retry puts back every file already replaced; AddOns exactly as before (the reviewer''s p5_addons)' {
-  $script:FakeDiag = '0.4.0'
-  [void](Commit 'ChartBridge 0.4.1 (three of the four add-on files change)' { Set-CbVersion '0.4.1'; foreach ($n in @('ChartBridgeOrders.cs', 'ChartBridgePin.cs')) { $f = Get-LocalPath $src "nt8/$n"; Put $f ((Get-Text $f) + "`n// 0.4.1`n") } })
+  $script:FakeDiag = $vNext0
+  [void](Commit "ChartBridge $vNext1 (three of the four add-on files change)" { Set-CbVersion $vNext1; foreach ($n in @('ChartBridgeOrders.cs', 'ChartBridgePin.cs')) { $f = Get-LocalPath $src "nt8/$n"; Put $f ((Get-Text $f) + "`n// test commit: ChartBridge $vNext1`n") } })
   [void](Run-Update)
-  Assert ((Read-JsonFile (Join-Path $script:P.Staged 'stage.json'))['chartBridgeVersion'] -eq '0.4.1') 'staged 0.4.1'
+  Assert ((Read-JsonFile (Join-Path $script:P.Staged 'stage.json'))['chartBridgeVersion'] -eq $vNext1) "staged $vNext1"
   $before = Get-AddOnsPrint
   # the record's fields, in a fixed order: a hashtable read back from JSON lists its keys in an order that depends on
   # insertion order when their hashes collide (always the same on Windows PowerShell 5.1), so JSON text is not compared
@@ -696,7 +707,7 @@ Test '-InstallChartBridge: an add-on file held past the retry puts back every fi
   try { $code = Invoke-InstallChartBridge } finally { $script:HoldAddOn = ''; $script:Yes = $false }
   $said = Get-Said
   Assert-Code $code 1 'STOP'
-  Assert ($said -match 'STOP: ChartBridge 0\.4\.1 was not copied and nothing changed in AddOns' -and $said -match 'NinjaScript Editor holds it' -and $said -match 'Close the NinjaScript Editor') "says nothing changed, and why: $said"
+  Assert ($said -match "STOP: ChartBridge $(Rx $vNext1) was not copied and nothing changed in AddOns" -and $said -match 'NinjaScript Editor holds it' -and $said -match 'Close the NinjaScript Editor') "says nothing changed, and why: $said"
   Assert ((Get-Text $script:P.Log) -match 'the add-on copy failed after 1 of \d+ files .*putting back: ChartBridge\.cs') 'ChartBridge.cs had been replaced (the reviewer''s mix), and was put back'
   Assert ((Get-AddOnsPrint) -eq $before) "AddOns exactly as before (every file's hash): $(Get-AddOnMarks)"
   Assert (@(Get-ChildItem -LiteralPath $script:P.AddOns | Where-Object { $_.Name -like '*.upd-*' }).Count -eq 0) 'no temporary file left in AddOns'
@@ -706,7 +717,7 @@ Test '-InstallChartBridge: an add-on file held past the retry puts back every fi
   Assert (-not $s['chartBridge'].Contains('mixed')) 'no mix recorded'
   Assert (-not $s['chartBridge'].Contains('copying')) 'no copy left open'
   $u = Get-UpdateJson
-  Assert (-not $u['chartBridge']['copied'] -and -not $u['chartBridge']['mixed'] -and $u['chartBridge']['ready'] -eq '0.4.1') 'the page still says: 0.4.1 ready'
+  Assert (-not $u['chartBridge']['copied'] -and -not $u['chartBridge']['mixed'] -and $u['chartBridge']['ready'] -eq $vNext1) "the page still says: $vNext1 ready"
   Assert ((Read-JsonFile $script:P.Status)['outcome'] -eq 'chartbridge_not_copied') 'status.json'
 }
 Test '-InstallChartBridge: the put-back fails too: DO NOT press F5 on the console, in update.log, status.json and on the page, until AddOns is whole again' {
@@ -719,7 +730,7 @@ Test '-InstallChartBridge: the put-back fails too: DO NOT press F5 on the consol
   Assert ($said -match '!!  DO NOT press F5: ChartBridge files are mixed\. Run update-pc\.ps1 status and report' -and $said -match 'STOP: DO NOT press F5: ChartBridge files are mixed\. Run update-pc\.ps1 status and report') "the console: $said"
   Assert ((Get-AddOnMarks) -eq 'new/old/old') "the mix the reviewer found: $(Get-AddOnMarks)"
   $mx = (Read-State)['chartBridge']['mixed']
-  Assert ($mx -and (@($mx['changed']) -join ',') -eq 'ChartBridge.cs' -and $mx['version'] -eq '0.4.1' -and (Test-Path (Join-Path $mx['backup'] 'ChartBridge.cs'))) 'recorded: what changed, and where the old files are'
+  Assert ($mx -and (@($mx['changed']) -join ',') -eq 'ChartBridge.cs' -and $mx['version'] -eq $vNext1 -and (Test-Path (Join-Path $mx['backup'] 'ChartBridge.cs'))) 'recorded: what changed, and where the old files are'
   Assert ((Get-Text $script:P.Log) -match 'ERROR STOP: DO NOT press F5: ChartBridge files are mixed\. Run update-pc\.ps1 status and report') 'update.log'
   $st = Read-JsonFile $script:P.Status
   Assert ($st['outcome'] -eq 'chartbridge_mixed' -and $st['alert'] -eq 'DO NOT press F5: ChartBridge files are mixed. Run update-pc.ps1 status and report' -and $st['chartBridge']['mixed'] -eq $true) 'status.json'
@@ -736,7 +747,7 @@ Test '-InstallChartBridge: the put-back fails too: DO NOT press F5 on the consol
   Assert ((Get-AddOnsPrint) -eq $before) 'as before'
   [void](Run-Update)
   Assert (-not (Read-State)['chartBridge'].Contains('mixed') -and -not (Get-UpdateJson)['chartBridge']['mixed'] -and -not (Read-JsonFile $script:P.Status)['alert']) 'whole again: cleared'
-  Assert ((Get-UpdateJson)['chartBridge']['ready'] -eq '0.4.1') 'and 0.4.1 is ready again'
+  Assert ((Get-UpdateJson)['chartBridge']['ready'] -eq $vNext1) "and $vNext1 is ready again"
 }
 Test '-InstallChartBridge cut off between its replaces (a power loss): the next run finds the mix from the hashes and says DO NOT press F5' {
   $before = Get-AddOnsPrint
@@ -753,40 +764,40 @@ Test '-InstallChartBridge cut off between its replaces (a power loss): the next 
   Assert ((Get-AddOnMarks) -eq 'new/new/new') "all three new: $(Get-AddOnMarks)"
   foreach ($n in $script:AddOnNames) { Assert (Get-TextSame (Join-Path $script:P.AddOns $n) (Get-LocalPath $src "nt8/$n")) "$n is the commit's" }
   $s = Read-State
-  Assert (-not $s['chartBridge'].Contains('mixed') -and $s['chartBridge']['installed']['version'] -eq '0.4.1' -and (Get-UpdateJson)['chartBridge']['copied'] -eq '0.4.1') 'copied, waiting for F5; no mix'
-  Assert (@(Get-ChildItem -Recurse -LiteralPath $script:P.PrevAddOns -Filter 'ChartBridge.cs' | Where-Object { (Get-Text $_.FullName) -match 'Version = "0\.4\.0"' }).Count -ge 1) 'the 0.4.0 files are kept'
-  $script:FakeDiag = '0.4.1'
+  Assert (-not $s['chartBridge'].Contains('mixed') -and $s['chartBridge']['installed']['version'] -eq $vNext1 -and (Get-UpdateJson)['chartBridge']['copied'] -eq $vNext1) 'copied, waiting for F5; no mix'
+  Assert (@(Get-ChildItem -Recurse -LiteralPath $script:P.PrevAddOns -Filter 'ChartBridge.cs' | Where-Object { (Get-Text $_.FullName) -match "Version = ""$(Rx $vNext0)""" }).Count -ge 1) "the $vNext0 files are kept"
+  $script:FakeDiag = $vNext1
   [void](Run-Update)
 }
 Test 'a cut after the last replace: the next run counts the copy (all files are the new ones)' {
-  [void](Commit 'ChartBridge 0.4.2' { Set-CbVersion '0.4.2' })
+  [void](Commit "ChartBridge $vNext2" { Set-CbVersion $vNext2 })
   [void](Run-Update)
   $script:CrashAt = 'addon:3'; $script:PowerLost = $false; $script:Yes = $true
   try { [void](Invoke-InstallChartBridge) } catch { } finally { $script:CrashAt = ''; $script:PowerLost = $false; $script:Yes = $false }
   [void](Run-Update)
   $s = Read-State
-  Assert (-not $s['chartBridge'].Contains('mixed') -and $s['chartBridge']['installed']['version'] -eq '0.4.2' -and (Get-UpdateJson)['chartBridge']['copied'] -eq '0.4.2') 'counted as copied, waiting for F5'
-  $script:FakeDiag = '0.4.2'
+  Assert (-not $s['chartBridge'].Contains('mixed') -and $s['chartBridge']['installed']['version'] -eq $vNext2 -and (Get-UpdateJson)['chartBridge']['copied'] -eq $vNext2) 'counted as copied, waiting for F5'
+  $script:FakeDiag = $vNext2
   [void](Run-Update)
 }
 Test '-InstallChartBridge: a commit that drops an add-on file (a revert of daily bars) takes it out of AddOns with the copy; a failed copy puts it back (review bars1 N2)' {
-  [void](Commit 'a revert: ChartBridgeBars.cs leaves the list (ChartBridge 0.4.3)' {
-    Set-CbVersion '0.4.3'
+  [void](Commit "a revert: ChartBridgeBars.cs leaves the list (ChartBridge $vNext3)" {
+    Set-CbVersion $vNext3
     Remove-Item -LiteralPath (Get-LocalPath $src 'nt8/ChartBridgeBars.cs') -Force
     $mf = Get-LocalPath $src 'nt8/install-files.json'
     Put $mf ((Get-Text $mf) -replace ',\s*"nt8/ChartBridgeBars\.cs"', '')
   })
   [void](Run-Update)
   $stage = Read-JsonFile (Join-Path $script:P.Staged 'stage.json')
-  Assert ($stage['chartBridgeVersion'] -eq '0.4.3' -and @($stage['addonFiles']).Count -eq @((Read-JsonFile (Get-LocalPath $src 'nt8/install-files.json'))['addons']).Count -and @($stage['addonFiles']) -notcontains 'ChartBridgeBars.cs') "staged 0.4.3 without ChartBridgeBars.cs: $(@($stage['addonFiles']) -join ', ')"
-  Assert (Test-Path -LiteralPath (Join-Path $script:P.AddOns 'ChartBridgeBars.cs')) 'the 0.4.2 install left ChartBridgeBars.cs in AddOns'
+  Assert ($stage['chartBridgeVersion'] -eq $vNext3 -and @($stage['addonFiles']).Count -eq @((Read-JsonFile (Get-LocalPath $src 'nt8/install-files.json'))['addons']).Count -and @($stage['addonFiles']) -notcontains 'ChartBridgeBars.cs') "staged $vNext3 without ChartBridgeBars.cs: $(@($stage['addonFiles']) -join ', ')"
+  Assert (Test-Path -LiteralPath (Join-Path $script:P.AddOns 'ChartBridgeBars.cs')) "the $vNext2 install left ChartBridgeBars.cs in AddOns"
   # the probe: the copy fails on its third file; the file taken out and the one replaced are both put back
   $before = Get-AddOnsPrint
   $script:HoldAddOn = 'ChartBridgeOrders.cs'; $script:Yes = $true
   try { $code = Invoke-InstallChartBridge } finally { $script:HoldAddOn = ''; $script:Yes = $false }
   Assert-Code $code 1 'STOP (nothing changed)'
   $log = Get-Text $script:P.Log
-  Assert ($log -match 'ChartBridgeBars\.cs is not in ChartBridge 0\.4\.3''s file list: taken out of AddOns' -and $log -match 'the add-on copy failed after 2 of \d+ files .*putting back: ChartBridgeBars\.cs, ChartBridge\.cs') 'taken out first, then put back with ChartBridge.cs'
+  Assert ($log -match "ChartBridgeBars\.cs is not in ChartBridge $(Rx $vNext3)'s file list: taken out of AddOns" -and $log -match 'the add-on copy failed after 2 of \d+ files .*putting back: ChartBridgeBars\.cs, ChartBridge\.cs') 'taken out first, then put back with ChartBridge.cs'
   Assert ((Get-AddOnsPrint) -eq $before) 'AddOns exactly as before, ChartBridgeBars.cs included'
   Assert (-not (Read-State)['chartBridge'].Contains('mixed')) 'no mix'
   # an install recorded before 0.3.7 has no file list: the list is read from that install's commit
@@ -794,34 +805,34 @@ Test '-InstallChartBridge: a commit that drops an add-on file (a revert of daily
   $script:Yes = $true
   try { $code = Invoke-InstallChartBridge } finally { $script:Yes = $false }
   Assert-Code $code 0 'OK'
-  Assert (-not (Test-Path -LiteralPath (Join-Path $script:P.AddOns 'ChartBridgeBars.cs'))) 'ChartBridgeBars.cs is gone from AddOns: NinjaTrader compiles one whole 0.4.3'
+  Assert (-not (Test-Path -LiteralPath (Join-Path $script:P.AddOns 'ChartBridgeBars.cs'))) "ChartBridgeBars.cs is gone from AddOns: NinjaTrader compiles one whole $vNext3"
   foreach ($n in $script:AddOnNames) { Assert (Get-TextSame (Join-Path $script:P.AddOns $n) (Get-LocalPath $src "nt8/$n")) "$n is the commit's" }
   Assert ((Get-Text (Join-Path $script:P.AddOns 'SomethingElse.cs')) -match 'another add-on') 'other add-ons untouched'
   $kept = @(Get-ChildItem -Recurse -LiteralPath $script:P.PrevAddOns -Filter 'ChartBridgeBars.cs')
   Assert ($kept.Count -ge 1) 'its copy is kept in the backup'
   $inst = (Read-State)['chartBridge']['installed']
-  Assert ($inst['version'] -eq '0.4.3' -and (@($inst['files']) -join ',') -eq ((@((Read-JsonFile (Get-LocalPath $src 'nt8/install-files.json'))['addons']) | ForEach-Object { Split-Path -Leaf $_ }) -join ',')) "the install records its file list: $(@($inst['files']) -join ',')"
-  $script:FakeDiag = '0.4.3'
+  Assert ($inst['version'] -eq $vNext3 -and (@($inst['files']) -join ',') -eq ((@((Read-JsonFile (Get-LocalPath $src 'nt8/install-files.json'))['addons']) | ForEach-Object { Split-Path -Leaf $_ }) -join ',')) "the install records its file list: $(@($inst['files']) -join ',')"
+  $script:FakeDiag = $vNext3
   [void](Run-Update)
 }
 Test 'status keeps what /diag said (a page waiting for F5 then follows on the next run)' {
-  $s = Read-State; $s['chartBridge']['diagVersion'] = '0.3.3'; Save-State $s
-  $script:FakeDiag = '0.4.0'
+  $s = Read-State; $s['chartBridge']['diagVersion'] = $vPc; Save-State $s
+  $script:FakeDiag = $vNext0
   [void](Invoke-Status)
-  Assert ((Read-State)['chartBridge']['diagVersion'] -eq '0.4.0') 'saved'
+  Assert ((Read-State)['chartBridge']['diagVersion'] -eq $vNext0) 'saved'
 }
 Test 'status takes the lock before it reads state.json: while a run works it saves nothing (review 3 N-e)' {
-  $s = Read-State; $s['chartBridge']['diagVersion'] = '0.3.3'; Save-State $s
-  $script:FakeDiag = '0.4.2'
+  $s = Read-State; $s['chartBridge']['diagVersion'] = $vPc; Save-State $s
+  $script:FakeDiag = $vNext2
   $held = Enter-Lock
   try {
     [void](Get-Said)
     [void](Invoke-Status)
     Assert ((Get-Said) -match 'another run is working') 'says so'
-    Assert ((Read-State)['chartBridge']['diagVersion'] -eq '0.3.3') 'nothing saved under a running run'
+    Assert ((Read-State)['chartBridge']['diagVersion'] -eq $vPc) 'nothing saved under a running run'
   } finally { $held.Dispose() }
   [void](Invoke-Status)
-  Assert ((Read-State)['chartBridge']['diagVersion'] -eq '0.4.2') 'saved once the lock is free'
+  Assert ((Read-State)['chartBridge']['diagVersion'] -eq $vNext2) 'saved once the lock is free'
 }
 Test 'register offline never pins an older updater than the pinned one (review 3 N-b)' {
   $keepSelf = $script:UpdaterSelf
@@ -852,7 +863,7 @@ Test 'register offline never pins an older updater than the pinned one (review 3
   [void](Invoke-PinForTask '17:05')
 }
 Test 'repair''s last resort (the clone''s page) passes the ChartBridge check, or says plainly it was not checked (review 3 N-c)' {
-  $script:FakeDiag = '0.4.2'
+  $script:FakeDiag = $vNext2
   [void](Run-Update)
   $cloneCompat = Get-LocalPath $clone 'live/COMPAT.json'
   $keepCompat = Get-Text $cloneCompat
@@ -865,7 +876,7 @@ Test 'repair''s last resort (the clone''s page) passes the ChartBridge check, or
     [void](Get-Said)
     Assert-Code (Invoke-Repair) 1 'refused'
     $said = Get-Said
-    Assert ($said -match 'nothing written' -and $said -match 'needs ChartBridge 9\.9\.9; this PC has 0\.4\.2' -and $said -match 'the clone \(main at [0-9a-f]{7}\)') "says why, with the clone's branch and commit: $said"
+    Assert ($said -match 'nothing written' -and $said -match "needs ChartBridge 9\.9\.9; this PC has $(Rx $vNext2)" -and $said -match 'the clone \(main at [0-9a-f]{7}\)') "says why, with the clone's branch and commit: $said"
     Assert ((Get-Text (Get-WwwFile 'live.js')) -eq 'spoiled www') 'nothing written'
     Put $cloneCompat $keepCompat
     $s = Read-State; $keepCb = $s['chartBridge']; $s['chartBridge'] = @{}; Save-State $s
@@ -874,11 +885,11 @@ Test 'repair''s last resort (the clone''s page) passes the ChartBridge check, or
     $said = Get-Said
     Assert ($said -match 'NOT checked against ChartBridge' -and $said -match 'the clone \(main at [0-9a-f]{7}\)') "and says plainly that it was not checked: $said"
     $s = Read-State; $s['chartBridge'] = $keepCb; Save-State $s
-    $script:FakeDiag = '0.4.2'
+    $script:FakeDiag = $vNext2
     Put (Get-WwwFile 'live.js') 'spoiled www'
     Assert-Code (Invoke-Repair) 0 'the version here known and new enough: written'
-    Assert ((Get-Said) -match 'It needs ChartBridge 0\.3\.2; this PC has 0\.4\.2: checked') 'says it was checked'
-  } finally { Put $cloneCompat $keepCompat; $script:FakeDiag = '0.4.2' }
+    Assert ((Get-Said) -match "It needs ChartBridge $(Rx $vMin); this PC has $(Rx $vNext2): checked") 'says it was checked'
+  } finally { Put $cloneCompat $keepCompat; $script:FakeDiag = $vNext2 }
   Remove-Dir $script:P.Staged
   Assert ((Run-Update).outcome -eq 'updated') 'installs again'
 }
@@ -900,7 +911,7 @@ Test 'a run cut off just after state.json is saved: the page reads installed (th
   $out = Invoke-Cut 'after-files'
   Assert ((Get-UpdateJson)['page']['state'] -eq 'installing') 'installing at the cut'
   $s = Read-State
-  Write-UpdateJson $s (Get-ChartBridgeNotice $s @{ version = '0.4.2'; source = 'diag' })
+  Write-UpdateJson $s (Get-ChartBridgeNotice $s @{ version = $vNext2; source = 'diag' })
   Assert ((Get-UpdateJson)['page']['state'] -eq '') 'the files are whole: installed'
   [void](Run-Update)
   Assert-Whole 'after the close (2)'
