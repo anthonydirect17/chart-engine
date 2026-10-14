@@ -27,7 +27,7 @@ test('install-files.json: one list, every file there, the add-ons are exactly nt
   const to = manifest.www.map(f => f.to);
   assert.strictEqual(new Set(to).size, to.length, 'no target twice');
   assert.ok(to.includes('update-notice.js') && to.includes('index.html') && to.includes('src/chart-engine.js'));
-  assert.ok(!to.includes('single.html') && !manifest.www.some(f => f.from === 'live/single.html'), '1.22.0: the single chart page is not installed');
+  assert.ok(manifest.www.some(f => f.from === 'live/single.html' && f.to === 'single.html'), '1.22.0: single.html stays installed, as a stub that opens the workspace');
   assert.ok(!to.includes('update.json'), 'update.json is the updater\'s own file');
   assert.ok(manifest.www.every(f => !f.to.endsWith('.cs') && !f.from.endsWith('.cs')), 'no .cs file goes to www');
   // every page file the workspace (index.html) loads is installed (1.22.0: the single chart page is gone)

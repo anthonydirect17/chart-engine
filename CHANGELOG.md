@@ -7,11 +7,13 @@ windows, work exactly as in 1.21.0**; its smokes run unchanged where they did no
 no recompile; no change to ChartBridge or the engine's drawing. The page is kept on the branch
 `archive/chart-single-page-2026-10-10` (main at 235a02b).
 
-- **`live/single.html` is gone**, and with it everything only it used in `live/live.js`: the page boot
+- **The single chart page is gone**, and with it everything only it used in `live/live.js`: the page boot
   (`data-mount="page"`), its order bar and order connection, its Settings and small menu, its legend and **Aa** toggle,
   the PIN boot, the tab's own account (`live-account-tab-v1`), the settlement readout, `window.liveChart` and
-  `window.liveData`. `nt8/install-files.json` no longer lists it, so `nt8/update-pc.ps1` deletes it from the PC (it drops
-  managed files that leave the manifest). Every chart is a mounted one (`ChartLive.mount`).
+  `window.liveData`. Every chart is a mounted one (`ChartLive.mount`).
+- **`live/single.html` is now a stub** that opens the workspace (`./`, a meta refresh and a link; no script). It stays in
+  `nt8/install-files.json`, so `nt8/update-pc.ps1` and `nt8/install.ps1` write it over the old page: an old copy on a PC
+  (install.ps1 never deletes a file) or a bookmark to `/single.html` opens the workspace instead of a blank page or a 404.
 - **`ChartLive.mount`:** `wsUrl` is a string only (a function or a promise of one served The Desk's relay and its
   single-use tickets; the relay is being removed); anything else throws at mount, saying so. `legendToggle`, `legendShown()` and `setLegendShown()`, empty since
   1.16.0, are gone; `data()` gives the chart's data for tests and the console (the page's `window.liveData`).

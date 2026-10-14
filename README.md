@@ -35,8 +35,9 @@ Indicators menu, drawing tools), Time and Sales, and the **order ticket** (see [
 ticket](#the-workspaces-order-ticket)). Each instrument's trades come in once per window, whatever the number of panels
 showing it. Colors sit in the top bar, everything general (Glide, Range style, hotkeys, large prints, the PIN) in
 Settings. The top bar also has **Flatten all** and **KEYS ON / OFF**. The workspace is ChartBridge's only page since
-1.22.0: the **single chart page** (`/single.html`) is gone (Anthony 2026-10-10; it is kept on the branch
-`archive/chart-single-page-2026-10-10`), and the PC updater deletes the file from the PC.
+1.22.0: the **single chart page** is gone (Anthony 2026-10-10; it is kept on the branch
+`archive/chart-single-page-2026-10-10`). `/single.html` is now a small stub, installed by `install.ps1` and the PC updater
+over the old page, that opens the workspace, so a bookmark to it still works.
 
 **The display round (1.14.0, Anthony's list):** nothing scrolls (every menu, popover and dialog fits at 1366x768 and up;
 Colors and Settings in two columns, an indicator's gear beside the list); panels resize from any edge or corner;

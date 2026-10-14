@@ -54,7 +54,7 @@ const LIVE_FIRST = !!arg('live-first', false);
 const DELTA_OFF = arg('delta', '1') === '0';
 const SIGNALS = !!arg('signals', false);
 
-const STANDALONE = fs.existsSync(path.join(ROOT, 'live', 'single.html')) ? 'live/single.html' : fs.existsSync(path.join(ROOT, 'test', 'chart-host.html')) ? 'test/chart-host.html' : 'live/';
+const STANDALONE = fs.existsSync(path.join(ROOT, 'live', 'single.html')) && /data-mount="page"/.test(fs.readFileSync(path.join(ROOT, 'live', 'single.html'), 'utf8')) ? 'live/single.html' : fs.existsSync(path.join(ROOT, 'test', 'chart-host.html')) ? 'test/chart-host.html' : 'live/';
 const PIN_OFF = EMBED || STANDALONE === 'test/chart-host.html' || !fs.existsSync(path.join(ROOT, 'live', 'pin.js'));
 const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--serve-root=' + ROOT,
   '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--clock-offset=' + OFFSET, PIN_OFF ? '--pin-off' : '--test-pin=' + TEST_PIN].concat(LIVE_FIRST ? ['--live-first'] : []), { stdio: ['ignore', 'pipe', 'inherit'] });

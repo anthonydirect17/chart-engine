@@ -204,8 +204,12 @@ test('the workspace is the page (index.html), installed; 1.22.0: the single char
   for (const f of ['index.html', 'workspace.js', 'workspace.css', 'feed.js', 'update-notice.js', 'trade.js', 'ticket-link.js']) assert.ok(to.includes(f), f);
   assert.ok(!to.includes('workspace.html'), 'no workspace.html any more');
   assert.deepStrictEqual(www.find(f => f.to === 'index.html').from, 'live/index.html');
-  assert.ok(!www.some(f => f.to === 'single.html' || f.from === 'live/single.html'), 'single.html is not installed');
-  assert.ok(!fs.existsSync(path.join(__dirname, '..', 'live', 'single.html')), 'and not in the repo');
+  // 1.22.0: single.html stays installed as a stub that sends an old copy on a PC, or a bookmark, to the workspace
+  assert.deepStrictEqual(www.find(f => f.to === 'single.html'), { from: 'live/single.html', to: 'single.html' }, 'the single.html stub is installed');
+  const stub = fs.readFileSync(path.join(__dirname, '..', 'live', 'single.html'), 'utf8');
+  assert.match(stub, /<meta http-equiv="refresh" content="0; url=\.\/">/, 'the stub opens the workspace (./)');
+  assert.match(stub, /<a href="\.\/"/, 'and links to it');
+  assert.ok(!/<script|<link|live\.js|data-mount/.test(stub), 'the stub loads nothing: no script, no stylesheet, no chart');
   const html = fs.readFileSync(path.join(__dirname, '..', 'live', 'index.html'), 'utf8');
   for (const m of html.matchAll(/<(?:script|link)[^>]+(?:src|href)="([^":]+)"/g)) assert.ok(to.includes(m[1].replace(/^\.\.\//, '')), m[1]);
   assert.match(html, /id="wsGrid"/, 'index.html is the workspace');
