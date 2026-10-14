@@ -12,7 +12,7 @@ only, no recompile.
   `OrderTicket.bracketCap(maxBracketTicks)` no longer reads the version, and its version helpers (`versionOf`,
   `versionAtLeast`) are gone with it; TradeCore keeps no version.
 - **The Agent tab:** `agentAccount` always carries `keepMode` and the LIVE question always names the mode the agent keeps
-  (until 1.19.0 an older ChartBridge got no `keepMode` and the question said Shadow). The tab no longer reads ChartBridge's
+  (until 1.21.0 an older ChartBridge got no `keepMode` and the question said Shadow). The tab no longer reads ChartBridge's
   version: a v3 ChartBridge with no `agents` line says none is named there. `keepsMode` is gone from
   `live/agent-core.js` (its `parseVersion` and `atLeast` stay for checks above 0.5.2).
 - **The delta pane:** every trade carries its side (ChartBridge 0.3.4 and newer), so the page no longer waits to learn whether

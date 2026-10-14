@@ -294,7 +294,7 @@ function accountChoices(accountsMsg, agent, others) {
  * every rule again (section 6). ctx: { workingEntry, openProposals, roots, version (ChartBridge's hello), askedMode (the mode
  * the shown question named; the agent's mode when no question was asked) }.
  * ChartBridge 0.5.2 and its review: the agent keeps its mode only when the message says which mode the page showed
- * (keepMode) and that is still its mode. Chart 1.21.0 needs ChartBridge 0.5.2, so keepMode always goes (until 1.19.0 it
+ * (keepMode) and that is still its mode. Chart 1.21.0 needs ChartBridge 0.5.2, so keepMode always goes (until 1.21.0 it
  * went only to 0.5.2 or later, and the question said Shadow for an older one).
  */
 function accountChange(agent, name, choices, ctx, cid) {

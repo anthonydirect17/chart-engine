@@ -267,7 +267,7 @@ New York times `HH:MM`, in session order from the 18:00 open (ChartBridge 0.5.2,
 
 The Agent tab button shows with any ChartBridge that speaks v3 (as the Bot tab's). Chart 1.21.0 needs ChartBridge 0.5.2
 (`live/COMPAT.json`), so the page no longer reads the version: with no `agents` line in config.txt the tab says none is
-named there. A ChartBridge without v3 (before 0.4.0) gets "No agents on this ChartBridge (0.5.0 or later)." Until 1.19.0 a
+named there. A ChartBridge without v3 (before 0.4.0) gets "No agents on this ChartBridge (0.5.0 or later)." Until 1.21.0 a
 v3 ChartBridge before 0.5.0 (by its hello's version) got that line too.
 
 ## The fake ChartBridge
@@ -344,7 +344,7 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
     Continue?"); not confirmed, nothing is sent and the account stays. The message carries `keepMode`, the mode the question
     named (for a SIM account, the mode shown), and ChartBridge keeps the mode only if it is still that one; otherwise the agent
     goes to Shadow (another page changed the mode meanwhile). `keepMode` always goes (chart 1.21.0 needs ChartBridge 0.5.2; until
-    1.19.0 it went only to 0.5.2 or later, by the hello's `version`, and to an older one the question said Shadow), and the
+    1.21.0 it went only to 0.5.2 or later, by the hello's `version`, and to an older one the question said Shadow), and the
     page says after sending that the mode is kept. The question records the mode once, when it opens, and is never redrawn with another: if the agent's mode changes
     while it is open (another page), it closes with a note ("demo went to Auto while the question said Shadow: nothing was
     sent. Choose Set to be asked again."), nothing is sent, and Set asks again naming the mode then (the 0.5.2 re-review).
