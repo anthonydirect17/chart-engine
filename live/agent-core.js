@@ -34,8 +34,9 @@
 'use strict';
 
 const VERSION = '1.0.0';
-/* the oldest ChartBridge with the agent channel */
-const MIN_BRIDGE = '0.5.0';
+/* the oldest ChartBridge the Agent tab works with: 0.5.0 has the agent channel, but 0.5.0 and 0.5.1 refuse every
+   agentAccount (keepMode, always sent since 1.21.0); 0.5.2 is the page's minimum (live/COMPAT.json) */
+const MIN_BRIDGE = '0.5.2';
 const MODES = ['shadow', 'copilot', 'auto'];
 const MODE_NAME = { shadow: 'Shadow', copilot: 'Copilot', auto: 'Auto' };
 const NOTE_KINDS = ['look', 'thinking', 'lesson', 'notebook', 'status'];
@@ -76,15 +77,16 @@ function atLeast(a, b) {
   return true;
 }
 /**
- * What the tab says when it has no agent to show. o: { v3 (true, false, null: not known yet), signedIn, trading (the
- * `trading` answer), agents (how many are known) }. '' when there is an agent to show. Chart 1.21.0 needs ChartBridge 0.5.2
- * (live/COMPAT.json), so the version is no longer read: a ChartBridge with v3 has the agent channel.
+ * What the tab says when it has no agent to show. o: { v3 (true, false, null: not known yet), version (hello's), signedIn,
+ * trading (the `trading` answer), agents (how many are known) }. '' when there is an agent to show. The version is read
+ * for this text only: a v3 ChartBridge before MIN_BRIDGE (0.4.x has no agent channel) is told to update, not to name
+ * agents in config.txt.
  */
 function offText(o) {
   const x = o || {};
   if (x.agents > 0) return '';
   if (x.v3 === null || x.v3 === undefined) return 'Connecting to ChartBridge...';
-  if (x.v3 === false) return 'No agents on this ChartBridge (' + MIN_BRIDGE + ' or later).';
+  if (x.v3 === false || !atLeast(x.version, MIN_BRIDGE)) return 'No agents on this ChartBridge (' + MIN_BRIDGE + ' or later).';
   if (!x.trading) return 'Signing in to ChartBridge...';
   if (!x.trading.enabled) return 'Trading is not enabled in ChartBridge on this PC, so the agent channel is off.';
   return 'No agents on this ChartBridge: none is named in its config.txt (agents = ...).';

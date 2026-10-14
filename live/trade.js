@@ -1,7 +1,7 @@
 /*
- * TradeCore: the order logic of the order bar, in one place (chart 1.12.0). The single chart page's order bar
- * (live/live.js, single.html) and the workspace's order ticket (live/workspace.js, index.html) both call these very
- * functions, so there is one order path: what Buy MKT, Sell MKT, B/E, Flatten (Close), Cancel all, Flatten all, a
+ * TradeCore: the order logic of the order ticket, in one place (chart 1.12.0). The workspace's order ticket
+ * (live/workspace.js, index.html) calls these very functions (the single chart page's order bar did too until chart
+ * 1.22.0, when that page went), so there is one order path: what Buy MKT, Sell MKT, B/E, Flatten (Close), Cancel all, Flatten all, a
  * chart click and a drag send, and every check before it, is written once, here. It is the 1.11.0 code of live.js moved
  * out unchanged, with the chart's instrument, last price, Qty box and account picker read through `env`.
  *
@@ -64,6 +64,7 @@ const CANCEL_CHUNK = 6, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;
 const BE_LIMIT = 10;
 const RATE_REFUSAL = /order actions/i;
 const FLATTEN_KEEP = 3000;                                         // a refusal this soon after a Flatten is about it
+const MOVE_WAIT = 5000;                                            // 1.22.0: a moved order drawn at the price asked for, this long at most
 
 function create(env) {
   const LP = env.LP, prefs = env.prefs, ROOTS = LP.ROOTS;
@@ -90,6 +91,14 @@ function create(env) {
        managed strategies by entry id (`managed`), and the last Merge result per 'account|root' (`merge`). This connection
        stays a v2 page (it never sends `client`); those three come from the window's v3 connection (live/accounts.js) */
     switches: OS ? OS.cleanSwitches(null) : {}, managed: new Map(), merges: new Map(),
+    /* 1.22.0 (F2 again, the workspace): an order dragged to a new price, id -> { price asked for, cid of its change,
+       plans: the planned lines dragged meanwhile }, until ChartBridge answers: an order message at that price, or the
+       order finished, or a reject with that change's cid, or MOVE_WAIT ms at most (an order message after a `plan` still
+       carries the old price, and a refused `plan` names the entry too, so neither ends the wait). The charts draw it there
+       meanwhile (chartOrders' movePending), as the single chart page's engine did, so a planned line dragged then is
+       measured from where the entry was dropped. Another workspace window that forwarded the drag keeps the same wait
+       (noteMoving, no cid: its own order messages or the time limit end it). */
+    moving: new Map(),
   };
   const sw = k => !!OS && TR.switches[k] === true;
   let v3sw = null;                                    // the switches the window's v3 connection last read (null: none)
@@ -168,7 +177,7 @@ function create(env) {
     TR.signInStarted = false;
     if (!TR.v2) return;
     batchStop(() => true, 'the connection to ChartBridge dropped');   // before the orders are cleared: count what was still working
-    TR.enabled = false; TR.reason = reason; TR.orders.clear(); announced.clear(); TR.positions.clear();
+    TR.enabled = false; TR.reason = reason; TR.orders.clear(); announced.clear(); TR.positions.clear(); TR.moving.clear();
     if (OS) TR.switches = OS.cleanSwitches(null);
     TR.managed.clear(); TR.merges.clear();                         // ChartBridge sends the managed ones again after auth
     const was = TR.account;
@@ -187,6 +196,8 @@ function create(env) {
     const prev = announced.get(o.id) || null;
     const ev = OT.orderEvent(o, prev, fmt);
     if (OT.isWorking(o)) TR.orders.set(o.id, o); else TR.orders.delete(o.id);
+    const mv = TR.moving.get(o.id);
+    if (mv && (!OT.isWorking(o) || o.price === mv.price)) TR.moving.delete(o.id);   // ChartBridge answered: drawn as it says
     if (!OT.isWorking(o)) announced.delete(o.id);
     else if (o.again !== true || !announced.has(o.id)) announced.set(o.id, o);   // an again re-send only seeds a missing entry (after a new orders list)
     if (ev) flash(ev.text, ev.level === 'error' ? 'error' : '');
@@ -202,7 +213,7 @@ function create(env) {
   function message(m) {
     switch (m && m.type) {
       case 'trading': applyTrading(m); if (!TR.signInStarted) signIn(); return true;
-      case 'orders': TR.orders.clear(); announced.clear(); for (const o of m.list || []) if (served(o.root)) { TR.orders.set(o.id, o); announced.set(o.id, o); } unsentCheck(); env.changed(); return true;
+      case 'orders': TR.orders.clear(); announced.clear(); TR.moving.clear(); for (const o of m.list || []) if (served(o.root)) { TR.orders.set(o.id, o); announced.set(o.id, o); } unsentCheck(); env.changed(); return true;
       case 'order': onOrder(m); return true;
       case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); env.changed(); if (env.positionChanged) env.positionChanged(); return true;
       case 'reject': if (!onRefused(m)) flash('Refused by ChartBridge: ' + m.reason, 'error'); env.changed(); return true;
@@ -537,6 +548,11 @@ function create(env) {
      page shows it. */
   const requeued = new Set();                                      // batch cancels already sent again once after a rate refusal
   function onRefused(m) {
+    /* a refused move (its change's cid): drawn at the confirmed price again, and a planned line dragged while it waited
+       is said where it really is (1.22.0) */
+    const mvNote = moveRefusal(m);
+    if (typeof m.id === 'string' && typeof m.cid === 'string' && TR.moving.has(m.id) && TR.moving.get(m.id).cid === m.cid) TR.moving.delete(m.id);
+    if (mvNote) { flash('Refused by ChartBridge: ' + m.reason + ' ' + mvNote, 'error'); return true; }
     const wasBatch = typeof m.id === 'string' && cancelSent.has(m.id);
     if (typeof m.id === 'string') cancelSent.delete(m.id);         // a refused cancel can go again at once (review 3 N1)
     /* A Cancel all's cancel refused for the rate (the page keeps 6 in 1.1 s, but a busy PC can deliver two of its
@@ -675,8 +691,32 @@ function create(env) {
     /* An order in a Cancel all under way (queued, or its cancel just sent) is not moved: Cancel all wins and cancels
        it (Anthony 2026-09-30), and no change goes out that could cross its cancel. The line goes back. */
     if (inCancelAll(id)) { env.changed(); flash('Not moved: order ' + id + ' is in the Cancel all under way, which cancels it.', 'warn'); return; }
-    send({ type: 'change', id, price });
+    send({ type: 'change', cid: (sentCid = newCid()), id, price });   // its cid: a forwarded drag's refusal goes back to its window
+    if (open()) noteMoving(id, price, sentCid);                    // drawn at the dropped price until the answer (F2)
     flash('Moving order ' + id + ' to ' + fmt(price), '');
+  }
+  /** 1.22.0: an order's move waits for ChartBridge's answer (see TR.moving). `cid`: the change's, in the window that sent
+      it; none in a workspace window that forwarded the drag. */
+  function noteMoving(id, price, cid) {
+    if (typeof id !== 'string' || !isFinite(price)) return;
+    const mv = { price: +price, cid: typeof cid === 'string' ? cid : null, plans: [] };
+    TR.moving.set(id, mv);
+    later(() => { if (TR.moving.get(id) === mv) { TR.moving.delete(id); env.changed(); } }, MOVE_WAIT);
+  }
+  /**
+   * 1.22.0: the words added to a refused move when a planned line was dragged while it waited: the line went as a distance
+   * from the dropped price, so with the entry still at its price it is not where it was dropped. '' when there is none
+   * (any other reject). Reads only; onRefused and the workspace's note to the window that forwarded the drag use it.
+   */
+  function moveRefusal(m) {
+    const mv = m && typeof m.id === 'string' && typeof m.cid === 'string' ? TR.moving.get(m.id) : null;
+    const o = mv && mv.cid === m.cid ? TR.orders.get(m.id) : null;
+    if (!o || !mv.plans.length || typeof o.price !== 'number') return '';
+    const t = tickOf(o.root), dir = o.side === 'sell' ? -1 : 1;
+    return 'Order ' + o.id + ' stays at ' + fmt(o.price) + ': ' + mv.plans.map(p => {
+      const at = Math.round((o.price + (p.which === 'stop' ? -1 : 1) * dir * p.ticks * t) / t) * t;
+      return 'its planned ' + whichName(p.which) + ' is ' + p.ticks + ' ticks from it, at ' + fmt(at) + ' (dropped at ' + fmt(p.dropped) + ')';
+    }).join('; ') + '.';
   }
   function cancelOrder(id) {
     if (!ready()) return;
@@ -714,6 +754,8 @@ function create(env) {
     if (r.error) { env.changed(); flash(r.error, 'warn'); return; }
     if (r.ticks > cap()) { env.changed(); flash('Not sent: ' + r.ticks + ' ticks is more than ChartBridge takes (' + cap() + ').', 'warn'); return; }
     sendPlan(o, p.which, r.ticks, 'Planned ' + whichName(p.which) + ' of order ' + o.id + ': ' + r.ticks + ' ticks from the fill.');
+    const mv = TR.moving.get(o.id);                                // dragged while the entry's move waits: kept for its refusal
+    if (mv) mv.plans = mv.plans.filter(x => x.which !== p.which).concat([{ which: p.which, ticks: r.ticks, dropped: price }]);
   }
   function planRemove(planId) {
     const p = OT.planIdOf(planId); if (!p) return;
@@ -728,13 +770,17 @@ function create(env) {
     sendPlan(o, which, t, 'Planned ' + whichName(which) + ' added to order ' + o.id + ': ' + t + ' ticks from the fill.');
   }
   /** What a chart of root r shows for one account: the working orders, each resting entry's planned lines (0.3.8), and on
-      an entry what can be added ("+SL", "+TP"). */
+      an entry what can be added ("+SL", "+TP"); an order whose move waits for its answer carries the price asked for
+      (movePending, 1.22.0). */
   function chartOrders(account, r) {
     const out = [];
     for (const o of working(account, r)) {
       // 1.16.0: a strategy's entry has no planned lines to drag (ChartBridge refuses `plan` on it: cancel and place again)
       const pl = o.by === 'strategy' ? { lines: [], adds: [] } : OT.plannedLines(o, tickOf(r));
-      out.push(pl.adds.length && o.planned ? Object.assign({}, o, { adds: pl.adds }) : o);
+      const extra = {};
+      if (pl.adds.length && o.planned) extra.adds = pl.adds;
+      if (TR.moving.has(o.id)) extra.movePending = TR.moving.get(o.id).price;   // the engine draws it (and its planned lines) there
+      out.push(Object.keys(extra).length ? Object.assign({}, o, extra) : o);
       for (const l of pl.lines) out.push(l);
     }
     return out;
@@ -891,7 +937,7 @@ function create(env) {
 
   return {
     TR, brackets, qtys, BK, cap, framed: FRAMED, allowNoStop, noStopAsked: () => !noStopOk,
-    planMove, planRemove, planAdd, chartOrders, framedReason: FRAMED_REASON, tradeMode,
+    planMove, planRemove, planAdd, chartOrders, framedReason: FRAMED_REASON, tradeMode, noteMoving, moveRefusal,
     hello, message, lost, signIn, applyTrading,
     ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAgent, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
     merge, managedOf, switchOn: sw, setSwitches, v3Lost, cancelFromList,
@@ -905,7 +951,7 @@ function create(env) {
 }
 
 /*
- * The order bar's controls wired to a core (the single chart page's bar and the workspace's ticket share it). `$(id)`
+ * The order ticket's controls wired to a core (the workspace's ticket; the single chart page's bar shared it until 1.22.0). `$(id)`
  * finds a control by its 1.11.0 id (obar, armBtn, armText, oAcct, oQty, oQtyCap, buyMkt, sellMkt, bPreset, bSaveBox,
  * bSaveName, bSaveOk, bSaveNo, bStop, bTarget, bUnit, flattenBtn, beBtn, cancelAllBtn, oPos, oLegs, oOther, oAcctNote,
  * oCancel, oOff, unsentBar, unsentText, unsentClose). A control marked data-keep stays on while trading is off.

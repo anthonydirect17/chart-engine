@@ -339,10 +339,12 @@ New York times `HH:MM`, in session order from the 18:00 open (ChartBridge 0.5.2,
 
 ## With an older ChartBridge
 
-The Agent tab button shows with any ChartBridge that speaks v3 (as the Bot tab's). Chart 1.21.0 needs ChartBridge 0.5.2
-(`live/COMPAT.json`), so the page no longer reads the version: with no `agents` line in config.txt the tab says none is
-named there. A ChartBridge without v3 (before 0.4.0) gets "No agents on this ChartBridge (0.5.0 or later)." Until 1.21.0 a
-v3 ChartBridge before 0.5.0 (by its hello's version) got that line too.
+The Agent tab button shows with any ChartBridge that speaks v3 (as the Bot tab's). The tab needs ChartBridge 0.5.2, the
+page's minimum (`live/COMPAT.json`; 0.5.0 and 0.5.1 refuse every account change, which always carries `keepMode`). A
+ChartBridge without v3 (before 0.4.0), or a v3 one before 0.5.2 by its hello's version (0.4.x has no agent channel), gets
+"No agents on this ChartBridge (0.5.2 or later)." (chart 1.22.0; until then it named 0.5.0, and 1.21.0 did not read the
+version, so a 0.4.x was told that none is named in config.txt). With 0.5.2 or later and no `agents` line in config.txt
+the tab says none is named there. The version is read for this text only.
 
 ## The fake ChartBridge
 
@@ -357,8 +359,9 @@ Everything there is sample data.
 Where the contract or the brief left a detail open, the safest simple choice, written here:
 
 1. **How the page knows of agents (lead's default):** there is no switch for the channel in `trading.switches`; the page
-   shows what `agent` messages tell it. The tab button shows with any v3 ChartBridge; older than 0.5.0 (hello's version)
-   it says "No agents on this ChartBridge (0.5.0 or later)."; 0.5.0 or later with no agent, "none is named in its config.txt".
+   shows what `agent` messages tell it. The tab button shows with any v3 ChartBridge; older than 0.5.2 (hello's version;
+   0.5.0 until chart 1.22.0) it says "No agents on this ChartBridge (0.5.2 or later)."; 0.5.2 or later with no agent, "none
+   is named in its config.txt".
 2. **Kill and Auto (lead's default):** as the Bot tab: the kill switch goes on in one click (stopping is never delayed) and
    its release asks a second click within 4 s; Auto asks a second click within 4 s. The contract's "a second click within 4
    s for Auto and for Kill, as for the bot" is read as the bot's behaviour. A second click under 400 ms after the first is

@@ -23,15 +23,19 @@ const proposal = o => Object.assign({ type: 'agentProposal', agent: 'demo', id: 
   stopTicks: 16, targetTicks: 32, expireSec: 600, riskDollars: 16, setup: 'Sample pullback', reason: 'Sample: a made-up reason', confidence: 0.62, expiresAt: T0 + 600000,
   state: 'open', seenAt: null, answeredAt: null }, o || {});
 
-test('the tab with no agent; 1.21.0: the version is no longer read (the page needs ChartBridge 0.5.2)', () => {
+test('the tab with no agent; 1.22.0: an older ChartBridge (before 0.5.2, the page\'s minimum) is told to update', () => {
   assert.deepEqual(AC.parseVersion('fake-0.4.0'), [0, 4, 0]);   // kept for checks above the page's minimum ChartBridge
   assert.ok(AC.atLeast('0.5.0', '0.5.0') && AC.atLeast('0.5.1', '0.5.0') && AC.atLeast('fake-0.5.0', '0.5.0'));
   assert.ok(!AC.atLeast('0.4.3', '0.5.0') && !AC.atLeast('', '0.5.0'));
   assert.equal(AC.offText({ v3: null }), 'Connecting to ChartBridge...');
-  assert.equal(AC.offText({ v3: false, version: '0.3.8' }), 'No agents on this ChartBridge (0.5.0 or later).');
-  assert.match(AC.offText({ v3: true, version: '0.4.3', trading: { enabled: true } }), /none is named in its config\.txt/, 'a v3 ChartBridge has the agent channel, whatever its version says');
-  assert.match(AC.offText({ v3: true, version: '0.5.0', trading: { enabled: true }, agents: 0 }), /none is named in its config\.txt/);
-  assert.equal(AC.offText({ v3: true, version: '0.5.0', trading: { enabled: true }, agents: 1 }), '');
+  assert.equal(AC.MIN_BRIDGE, '0.5.2', 'the page\'s minimum: 0.5.0 and 0.5.1 refuse agentAccount with keepMode');
+  assert.equal(AC.offText({ v3: false, version: '0.3.8' }), 'No agents on this ChartBridge (0.5.2 or later).');
+  assert.equal(AC.offText({ v3: true, version: '0.4.3', trading: { enabled: true } }), 'No agents on this ChartBridge (0.5.2 or later).', 'a v3 ChartBridge without the agent channel (0.4.x) is told to update, not to name agents');
+  assert.equal(AC.offText({ v3: true, version: '0.5.1', trading: { enabled: true } }), 'No agents on this ChartBridge (0.5.2 or later).');
+  assert.equal(AC.offText({ v3: true, trading: { enabled: true } }), 'No agents on this ChartBridge (0.5.2 or later).', 'no version: not known to have it');
+  assert.match(AC.offText({ v3: true, version: '0.5.2', trading: { enabled: true }, agents: 0 }), /none is named in its config\.txt/);
+  assert.match(AC.offText({ v3: true, version: 'fake-0.5.4', trading: { enabled: true }, agents: 0 }), /none is named in its config\.txt/);
+  assert.equal(AC.offText({ v3: true, version: '0.5.2', trading: { enabled: true }, agents: 1 }), '');
   assert.ok(AC.validId('manrae') && AC.validId('demo') && AC.validId('a1') && !AC.validId('1a') && !AC.validId('Demo') && !AC.validId('toolongagentid') && !AC.validId(''));
 });
 
@@ -467,7 +471,7 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.23.0');   // 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.21.0 needs ChartBridge 0.5.2
+  assert.equal(JSON.parse(read('package.json')).version, '1.23.0');   // 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.22.0 removed the single chart page; 1.21.0 needs ChartBridge 0.5.2
   assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.23\.0'/);
   assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.23\.0/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent-grid.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md', 'docs/MOTION.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
