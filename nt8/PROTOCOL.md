@@ -2773,8 +2773,9 @@ ChartBridge does not allow now gives None with the note naming it.
 
 **The daily reset.** Once per day in the 17:00 to 18:00 ET break (New York time, daylight saving included), ChartBridge puts
 every branch it holds that is flat with no working order on its account (no position on any contract, no order that may still
-fill) on None: the bot (while the bot channel is on), each agent, and the copier's leader (while the copier is on; the copier
-then stands down, "No leader is set."). A branch with a position or a working order is skipped and the pages get a `status`
+fill) on None: the bot, each agent, and the copier's leader (the copier then stands down, "No leader is set."). The bot and
+the copier are reset whether or not their switch is on (off: in `bot-account.txt`, and `copier.txt` loses only its `leader`
+line), so a branch turned on later never starts the day on yesterday's account. A branch with a position or a working order is skipped and the pages get a `status`
 `warn` naming it ("Daily reset (17:00 ET): the bot stays on <account>: it has a position or a working order there ..."), also
 sent to a page that signs in during that break; the ones put on None get one `status` `info`. It runs on ChartBridge's 2 s
 poll timer, without a page. The New York date it ran is kept in `daily-reset.txt` next to `config.txt` (two `#` lines, then

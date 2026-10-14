@@ -3083,7 +3083,7 @@ public static class AgentHarness
             ChartBridgeBranches.Check();
             Check(M.Account == "SIM-E" && Any(page, s0, "Daily reset (17:00 ET): agent manrae stays on SIM-E: it has a position or a working order there"),
                   "0.5.7 reset: manrae with a working entry keeps SIM-E; the pages get a note naming it");
-            Check(D.Account == "-" && FileText("agent-demob-account.txt").Contains("account\t-") && Any(page, s0, "agent demob is on None now") && D.StripJson().Contains("\"account\":null"),
+            Check(D.Account == "-" && FileText("agent-demob-account.txt").Contains("account\t-") && page.Skip(s0).Any(x => x.Contains("Daily reset (17:00 ET): ") && x.Contains("agent demob") && x.Contains(" on None now")) && D.StripJson().Contains("\"account\":null"),
                   "0.5.7 reset: demob, flat with nothing working on SIM-B: None, saved, the pages told");
             Check(Logged("agent demob account None (nothing trades), was SIM-B, by the daily reset (17:00 ET)"), "0.5.7 reset: logged");
         }
@@ -3091,6 +3091,48 @@ public static class AgentHarness
         Settle(sime);
         File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSIM-B" });
         Restart();
+
+        // the bot and the copier OFF (the ruling of 2026-10-14: a branch that is off is reset too, from its file, so it never comes
+        // back on with yesterday's account); a position or a working order on its account still skips it, with the note
+        bool botWas = ChartBridgeBot.Enabled, copierWas = ChartBridgeCopier.Enabled;
+        string botFile = Path.Combine(Dir, "bot-account.txt"), copFile = Path.Combine(Dir, "copier.txt");
+        string botBefore = FileText("bot-account.txt"), copBefore = File.Exists(copFile) ? FileText("copier.txt") : null;
+        ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off");
+        ChartBridgeCopier.Stop(); ChartBridgeSwitches.Note("copier", "off");
+        File.WriteAllLines(botFile, new[] { "# made-up", "# test", "account\tSIM-C" });
+        File.WriteAllLines(copFile, new[] { "# made-up", "leader\tSIM-D", "mode\texecutions", "follower\tEVAL-A\toff\t1\tmicro\t0" });
+        SetPos(simc, mnq, 1);
+        ChartBridgeBranches.Forget();
+        try { File.Delete(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+        ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 12, 21, 5, 0, DateTimeKind.Utc);   // a Monday, 17:05 EDT
+        try
+        {
+            Check(!ChartBridgeBot.Enabled && !ChartBridgeCopier.Enabled, "0.5.7 reset (off): the bot and the copier are off");
+            int s0 = N(page);
+            ChartBridgeBranches.Check();
+            Check(FileText("bot-account.txt").Contains("account\tSIM-C") && Any(page, s0, "Daily reset (17:00 ET): the bot (off) stays on SIM-C: it has a position or a working order there"),
+                  "0.5.7 reset (off): the bot off with a position on its account keeps it, with a note naming it");
+            Check(!FileText("copier.txt").Contains("leader\t") && FileText("copier.txt").Contains("follower\tEVAL-A\toff") && FileText("copier.txt").Contains("mode\texecutions") &&
+                  page.Skip(s0).Any(x => x.Contains("Daily reset (17:00 ET): ") && x.Contains(" and the copier's leader are on None now")),
+                  "0.5.7 reset (off): the copier off, its leader flat: the leader line goes, every other line stays: " + FileText("copier.txt").Replace("\n", " | "));
+            Settle(simc);
+            ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 13, 21, 5, 0, DateTimeKind.Utc);   // the next day, flat
+            ChartBridgeBranches.Check();
+            Check(FileText("bot-account.txt").Contains("account\t-") && Logged("bot account None (nothing trades), was SIM-C, by the daily reset (17:00 ET; the bot channel is off)"),
+                  "0.5.7 reset (off): the next day, flat: the bot off goes to None (bot-account.txt account<TAB>-)");
+            ChartBridgeAgents.RefreshFiles();
+            Check(ChartBridgeAgents.BotAccountForAgents() == "-", "0.5.7 reset (off): the agents read the bot's None (it clashes with nobody)");
+        }
+        finally
+        {
+            ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget();
+            Settle(simc);
+            File.WriteAllText(botFile, botBefore);
+            if (copBefore != null) File.WriteAllText(copFile, copBefore); else File.Delete(copFile);
+            if (copierWas) { ChartBridgeSwitches.Note("copier", "on"); }
+            if (botWas) { ChartBridgeSwitches.Note("bot", "on"); ChartBridgeBot.Start(false); }
+            Restart();
+        }
     }
 
     static void Review052()

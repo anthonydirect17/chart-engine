@@ -1520,6 +1520,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // nothing was to do.
         public static string ResetToNone()
         {
+            if (!Enabled) return ResetFileToNone();
             string acct = BotAccount;
             if (ChartBridgeBranches.IsNone(acct) || ChartBridgeBranches.KeepThroughReset("bot", acct)) return null;
             bool exposed;
@@ -1527,6 +1528,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (exposed || WorkingEntries().Count > 0 || !ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("the bot", acct);
             string why = GoNone("by the daily reset (17:00 ET)");
             return why == null ? "" : "the bot stays on " + acct + ": " + why;
+        }
+
+        // The bot channel off: bot-account.txt alone (it is read again when the bot is turned on). A file that cannot be understood
+        // is never written over (null: nothing to do).
+        private static string ResetFileToNone()
+        {
+            string acct = ReadAccountFile();
+            if (acct == null || ChartBridgeBranches.IsNone(acct) || ChartBridgeBranches.KeepThroughReset("bot", acct)) return null;
+            if (!ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("the bot (off)", acct);
+            string err = SaveAccount(ChartBridgeBranches.None);
+            if (err != null) return "the bot (off) stays on " + acct + ": bot-account.txt could not be saved (" + err + ")";
+            Log("bot account None (nothing trades), was " + acct + ", by the daily reset (17:00 ET; the bot channel is off)");
+            return "";
         }
 
         // Under Sync: every open proposal becomes "not answered" (never sent).

@@ -691,12 +691,37 @@ namespace NinjaTrader.NinjaScript.AddOns
         // has a position or a working order), null when nothing was to do. Followers keep their settings (they have no None).
         public static string ResetToNone()
         {
+            if (!Enabled) return ResetFileToNone();
             string l;
             lock (Lk) l = leader;
             if (l == null || ChartBridgeBranches.KeepThroughReset("copier", l)) return null;
             if (!ChartBridgeBranches.Idle(Find(l))) return ChartBridgeBranches.SkipWords("the copier's leader", l);
             string why = ClearLeader(null, false, "by the daily reset (17:00 ET)");
             return why == null ? "" : "the copier's leader stays " + l + ": " + why;
+        }
+
+        // The copier off: copier.txt alone loses its leader line (every other line kept as it is); read again when the copier is
+        // turned on. A file that cannot be read is never written over (null: nothing to do).
+        private static string ResetFileToNone()
+        {
+            lock (FileLock)
+            {
+                string[] lines;
+                try { if (!File.Exists(FilePath)) return null; lines = File.ReadAllLines(FilePath); }
+                catch (Exception) { return null; }
+                string l = lines.Select(x => x.Split('\t')).Where(p => p.Length == 2 && p[0] == "leader" && p[1].Length > 0).Select(p => p[1]).FirstOrDefault();
+                if (l == null || ChartBridgeBranches.KeepThroughReset("copier", l)) return null;
+                if (!ChartBridgeBranches.Idle(Find(l))) return ChartBridgeBranches.SkipWords("the copier's leader (the copier is off)", l);
+                try
+                {
+                    string tmp = FilePath + ".tmp";
+                    File.WriteAllLines(tmp, lines.Where(x => !x.StartsWith("leader\t", StringComparison.Ordinal)).ToArray());
+                    File.Replace(tmp, FilePath, null);
+                }
+                catch (Exception ex) { return "the copier's leader (the copier is off) stays " + l + ": copier.txt could not be saved (" + ex.Message + ")"; }
+                ChartBridgeServer.Log("copier: no leader (was " + l + "), by the daily reset (17:00 ET; the copier is off)");
+                return "";
+            }
         }
 
         // The copier cannot change while the leader has a position or a working ChartBridge entry.

@@ -1371,7 +1371,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // The bot's and each agent's account files keep None as "account<TAB>-": a ChartBridge before 0.5.7 reads "-" as an account
     // name NinjaTrader does not have, so it refuses every entry too and nothing breaks. No account file is None (no longer Sim101).
     // The daily reset: once per day in the 17:00 to 18:00 ET break (New York time, daylight saving included), every branch
-    // ChartBridge holds that is flat with no working order on its account goes to None; one with a position or a working order
+    // ChartBridge holds (the bot and the copier on or off) that is flat with no working order on its account goes to None; one with a position or a working order
     // is skipped and the pages get a note naming it. The day it ran is kept in daily-reset.txt, so a restart in the break does
     // not run it again (a branch chosen again after the reset stays). The order ticket's account is each page's own: the page
     // applies the same rule to it (live/live.js orderAccount, live/workspace.js).
@@ -1456,13 +1456,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             List<string> done = new List<string>(), skipped = new List<string>();
             Action<string, string> note = (branch, why) => { if (why == null) return; if (why.Length == 0) done.Add(branch); else skipped.Add(why); };
-            if (ChartBridgeBot.Enabled) note("the bot", ChartBridgeBot.ResetToNone());
+            // on or off (the coordinator's ruling 2026-10-14: a branch that is off would come back on with yesterday's account)
+            note("the bot", ChartBridgeBot.ResetToNone());
             foreach (ChartBridgeAgent a in ChartBridgeAgents.All()) note("agent " + a.Id, a.ResetToNone());
-            if (ChartBridgeCopier.Enabled) note("the copier's leader", ChartBridgeCopier.ResetToNone());
+            note("the copier's leader", ChartBridgeCopier.ResetToNone());
             string head = "Daily reset (17:00 ET): ";
             if (done.Count > 0)
             {
-                string text = head + string.Join(", ", done) + (done.Count == 1 ? " is" : " are") + " on None now: nothing trades until an account is chosen";
+                string names = done.Count == 1 ? done[0] : string.Join(", ", done.Take(done.Count - 1)) + " and " + done[done.Count - 1];
+                string text = head + names + (done.Count == 1 ? " is" : " are") + " on None now: nothing trades until an account is chosen";
                 ChartBridgeServer.Log(text);
                 ChartBridgeServer.SendToTraders(StatusJson("info", text));
             }
