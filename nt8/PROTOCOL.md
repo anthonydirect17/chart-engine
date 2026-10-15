@@ -2931,7 +2931,7 @@ config switch):
 | `groupId` | the group's id, null when not `prop` |
 | `groupSide` | the group's side now (`long`, `short`, `mixed`, or null when flat or not `prop`); while it is `long` the agent's sells are refused, and so on |
 | `noHedge` | the group's switch (null when not `prop`) |
-| `rules` | `prop`: `{dailyLoss, drawdown, drawdownType, target, size, lockAt}` (null for none); `personal`: `{floor, dailyLoss}` (null for none); `none`: null |
+| `rules` | `prop`: `{dailyLoss, drawdown, drawdownType, target, size, lockAt}`: `size` the account size and `lockAt` "floor stops at" (G1); `personal`: `{floor, dailyLoss}` (the account's own limits); `none`: null. Inside `rules` **0 means none**, said explicitly (the firm has no daily limit, no target, no lock; the account has no floor or daily limit of its own), never null: a rule is never "missing". Only the eight numbers below may be null, each with its `why` |
 | `balance`, `pnlToday`, `realizedToday`, `unrealized`, `floor`, `roomFloor`, `roomDaily`, `targetLeft` | dollars (2 decimals) or null, as the table above |
 | `src` | for each of those eight numbers that is not null: `ninjatrader`, `computed` or `settings` |
 | `why` | for each of those eight numbers that is null: the reason in plain words ("the account is not connected", "the group has no daily loss limit", "account-marks.txt could not be read", "no group and no floor of its own", ...) |

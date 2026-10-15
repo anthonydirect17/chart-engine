@@ -135,6 +135,8 @@ public static class GroupsHarness
         folder = Path.Combine(home, "ChartBridge");
         Directory.CreateDirectory(folder);
         NinjaTrader.Core.Globals.UserDataDir = home;
+        FieldInfo etf = typeof(ChartBridgeTime).GetField("et", PS);   // Linux names New York's zone differently from Windows (as PinHarness)
+        if (etf.GetValue(null) == null) etf.SetValue(null, TimeZoneInfo.FindSystemTimeZoneById("America/New_York"));
         ChartBridgeGroups.MarksWriteMs = 0;   // every change written at once here
         OrdersHarness.AllOffLines();   // accountChecks off: tradeAccounts is gate 2 (the check is the same either way)
         Account.All.Clear();
@@ -490,11 +492,11 @@ public static class GroupsHarness
         Pos(simA, mnq, 1);
         string st = State("SIM-A"), key;
         ChartBridgeGroups.AccountStateJson("SIM-A", out key);
-        Check(st.Contains("\"account\":\"SIM-A\",\"sim\":true,\"kind\":\"prop\",\"group\":\"Lucid Flex\",\"groupId\":\"g1\",\"groupSide\":\"long\",\"noHedge\":true,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":null}"),
-              "prop: the group, its side and its rules: " + st);
+        Check(st.Contains("\"account\":\"SIM-A\",\"sim\":true,\"kind\":\"prop\",\"group\":\"Lucid Flex\",\"groupId\":\"g1\",\"groupSide\":\"long\",\"noHedge\":true,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":0}"),
+              "prop: the group, its side and its rules (size and lockAt; 0 for none): " + st);
         Check(!key.Contains("\"at\":") && st.StartsWith(key.Substring(0, key.Length - 1)), "the key is the same text without at");
         string p = State("SIM-C");
-        Check(p.Contains("\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":{\"floor\":48000,\"dailyLoss\":null}"), "personal: its own floor, no daily limit: " + p);
+        Check(p.Contains("\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":{\"floor\":48000,\"dailyLoss\":0}"), "personal: its own floor, no daily limit (0: none, said explicitly): " + p);
         Flat();
     }
 

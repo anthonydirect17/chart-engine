@@ -562,6 +562,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- the groups message
         private static string Num(double? v) { return v.HasValue ? CbJson.Num(Math.Round(v.Value, 2)) : "null"; }
         private static string None0(double v) { return v > 0 ? CbJson.Num(Math.Round(v, 2)) : "null"; }
+        private static string Zero0(double v) { return v > 0 ? CbJson.Num(Math.Round(v, 2)) : "0"; }   // accountState.rules: 0 for none (Bot-Lab tells "no such rule" from "missing")
 
         public static string GroupsJson()
         {
@@ -822,9 +823,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"groupId\":").Append(n.GroupId == null ? "null" : CbJson.Str(n.GroupId)).Append(",\"groupSide\":").Append(n.Side == null ? "null" : CbJson.Str(n.Side))
                  .Append(",\"noHedge\":").Append(n.G == null ? "null" : n.G.NoHedge ? "true" : "false").Append(",\"rules\":");
                 if (n.G != null)
-                    b.Append("{\"dailyLoss\":").Append(None0(n.G.DailyLoss)).Append(",\"drawdown\":").Append(None0(n.G.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(n.G.Type))
-                     .Append(",\"target\":").Append(None0(n.G.Target)).Append(",\"size\":").Append(None0(n.G.Size)).Append(",\"lockAt\":").Append(None0(n.G.LockAt)).Append('}');
-                else b.Append("{\"floor\":").Append(Num(n.MyFloor)).Append(",\"dailyLoss\":").Append(Num(n.MyDaily)).Append('}');
+                    b.Append("{\"dailyLoss\":").Append(Zero0(n.G.DailyLoss)).Append(",\"drawdown\":").Append(Zero0(n.G.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(n.G.Type))
+                     .Append(",\"target\":").Append(Zero0(n.G.Target)).Append(",\"size\":").Append(Zero0(n.G.Size)).Append(",\"lockAt\":").Append(Zero0(n.G.LockAt)).Append('}');
+                else b.Append("{\"floor\":").Append(Zero0(n.MyFloor ?? 0)).Append(",\"dailyLoss\":").Append(Zero0(n.MyDaily ?? 0)).Append('}');   // rules: 0 is none (the firm or the account has no such rule), never null
                 foreach (string k in NumberKeys) b.Append(",\"").Append(k).Append("\":").Append(Num(Get(n, k)));
                 SrcWhy(b, n, NumberKeys);
                 b.Append(",\"session\":").Append(CbJson.Str(n.Session));

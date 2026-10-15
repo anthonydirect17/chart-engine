@@ -1746,7 +1746,7 @@ public static class AgentHarness
                 Fresh();
                 Account sime = Account.All.First(x => x.Name == "SIM-E");
                 string st = Last(agentOut, "accountState");
-                Check(st.StartsWith("{\"type\":\"accountState\",\"account\":\"SIM-E\",\"sim\":true,\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":{\"floor\":null,\"dailyLoss\":null}") &&
+                Check(st.StartsWith("{\"type\":\"accountState\",\"account\":\"SIM-E\",\"sim\":true,\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":{\"floor\":0,\"dailyLoss\":0}") &&
                       st.Contains("\"roomDaily\":\"no group and no daily limit of its own (the Accounts tab)\"") && st.Contains("\"session\":\""),
                       "0.5.8: accountState after the hello: personal, each null number with why: " + st);
                 int n = Count(agentOut, "accountState");
@@ -1756,7 +1756,7 @@ public static class AgentHarness
                 ChartBridgeGroups.StartNow();
                 Tick();
                 st = Last(agentOut, "accountState");
-                Check(Count(agentOut, "accountState") == n + 1 && st.Contains("\"kind\":\"prop\",\"group\":\"Lucid\",\"groupId\":\"g1\",\"groupSide\":null,\"noHedge\":true,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"intraday\",\"target\":3000,\"size\":50000,\"lockAt\":null}") &&
+                Check(Count(agentOut, "accountState") == n + 1 && st.Contains("\"kind\":\"prop\",\"group\":\"Lucid\",\"groupId\":\"g1\",\"groupSide\":null,\"noHedge\":true,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"intraday\",\"target\":3000,\"size\":50000,\"lockAt\":0}") &&
                       st.Contains("\"floor\":\"no intraday high is known for this account: put it in Lucid again and give its highest close\""), "0.5.8: in a group: sent again within the 1 s pass (prop, its rules; no high yet: floor null with why): " + st);
                 SetPos(simb, nq, -1);
                 Tick();

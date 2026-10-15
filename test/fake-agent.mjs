@@ -93,6 +93,7 @@ export function accountStateProblem(m) {
   if (m.kind === 'prop' && rk !== 'dailyLoss,drawdown,drawdownType,target,size,lockAt') return 'prop rules ' + rk;
   if (m.kind === 'personal' && rk !== 'floor,dailyLoss') return 'personal rules ' + rk;
   if (m.kind === 'none' && m.rules !== null) return 'rules on None';
+  for (const [k, v] of Object.entries(m.rules || {})) if (k !== 'drawdownType' && !(typeof v === 'number' && v >= 0)) return 'rules.' + k + ' must be a number (0 for none), never null';
   for (const k of ACCOUNT_STATE_NUMBERS) {
     const v = m[k];
     if (v !== null && !(typeof v === 'number' && isFinite(v) && Math.abs(Math.round(v * 100) - v * 100) < 1e-6)) return k + ' is not dollars';
