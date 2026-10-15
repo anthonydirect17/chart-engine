@@ -60,6 +60,8 @@ places an order) and page file `live/groups.js`, both in `install-files.json`. A
   - Re-review: the exits already working counted protective orders too, so with a lone ChartBridge stop (no target, no OCO id)
     or a stop typed into NinjaTrader on a long 2, Sell Mkt 1 and Sell Mkt 2 were refused. Only plain market or limit exit
     orders with no OCO id count now; stops, targets and ChartBridge's, the agent's and the copier's legs never do.
+  - A personal account whose limits Anthony never set sends `accountState.rules` null (the agent keeps its model numbers);
+    once My floor or My daily is saved, 0 included, `{floor, dailyLoss}`. The Accounts tab's boxes say "not set" until then.
 - **Tests.** `check:orders`: GroupsHarness (the files, the migration, an unreadable file, every refusal, side counting with
   both readings and ChartBridge's just sent, legs and exits, the exit rule, mixed, No hedging off, two opposite entries at once,
   the numbers for end of day, intraday, static and personal, the highs and the day start across a restart), and a group check in

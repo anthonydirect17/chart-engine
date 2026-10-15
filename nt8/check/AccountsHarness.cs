@@ -61,7 +61,7 @@ public static class AccountsHarness
         foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
         string e = Entry(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), ChartBridgeTime.NowUtcMs()), "EVAL-A");
         Check(e.Contains("\"roomDrawdown\":null,\"roomDrawdownWhy\":") && e.Contains("\"roomDailyLoss\":null,") && e.Contains("\"hideWhy\":") &&
-              e.Contains(",\"group\":null,\"myFloor\":null,\"myDailyLoss\":null,\"floor\":null,\"roomFloor\":null,\"roomDaily\":null,\"targetLeft\":null,\"src\":{},\"why\":{\"floor\":\"no group and no floor of its own (the Accounts tab)\""),
+              e.Contains(",\"group\":null,\"myFloor\":null,\"myDailyLoss\":null,\"myLimitsSet\":false,\"floor\":null,\"roomFloor\":null,\"roomDaily\":null,\"targetLeft\":null,\"src\":{},\"why\":{\"floor\":\"no group and no floor of its own (the Accounts tab)\""),
               "0.5.8: every 0.5.7 field stays; group, myFloor, myDailyLoss, floor, roomFloor, roomDaily, targetLeft, src and why added: " + e);
         SignIn(page);
         sent.Clear();

@@ -91,7 +91,7 @@ export function accountStateProblem(m) {
   if (m.kind !== 'prop' && (m.group !== null || m.groupId !== null || m.groupSide !== null || m.noHedge !== null)) return 'group fields set on a ' + m.kind + ' account';
   const rk = m.rules === null ? '' : Object.keys(m.rules).join();
   if (m.kind === 'prop' && rk !== 'dailyLoss,drawdown,drawdownType,target,size,lockAt') return 'prop rules ' + rk;
-  if (m.kind === 'personal' && rk !== 'floor,dailyLoss') return 'personal rules ' + rk;
+  if (m.kind === 'personal' && m.rules !== null && rk !== 'floor,dailyLoss') return 'personal rules ' + rk;   // null: never set by Anthony
   if (m.kind === 'none' && m.rules !== null) return 'rules on None';
   for (const [k, v] of Object.entries(m.rules || {})) if (k !== 'drawdownType' && !(typeof v === 'number' && v >= 0)) return 'rules.' + k + ' must be a number (0 for none), never null';
   for (const k of ACCOUNT_STATE_NUMBERS) {

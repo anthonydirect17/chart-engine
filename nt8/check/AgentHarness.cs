@@ -1746,7 +1746,7 @@ public static class AgentHarness
                 Fresh();
                 Account sime = Account.All.First(x => x.Name == "SIM-E");
                 string st = Last(agentOut, "accountState");
-                Check(st.StartsWith("{\"type\":\"accountState\",\"account\":\"SIM-E\",\"sim\":true,\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":{\"floor\":0,\"dailyLoss\":0}") &&
+                Check(st.StartsWith("{\"type\":\"accountState\",\"account\":\"SIM-E\",\"sim\":true,\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":null,") &&
                       st.Contains("\"roomDaily\":\"no group and no daily limit of its own (the Accounts tab)\"") && st.Contains("\"session\":\""),
                       "0.5.8: accountState after the hello: personal, each null number with why: " + st);
                 int n = Count(agentOut, "accountState");

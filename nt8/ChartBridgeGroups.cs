@@ -408,7 +408,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             foreach (KeyValuePair<string, string> kv in s.Members.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)) b.Append("member\t").Append(kv.Key).Append('\t').Append(kv.Value).Append('\n');
             foreach (KeyValuePair<string, double[]> kv in s.Personal.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
-                if (kv.Value[0] > 0 || kv.Value[1] > 0) b.Append("personal\t").Append(kv.Key).Append('\t').Append(MoneyText(kv.Value[0])).Append('\t').Append(MoneyText(kv.Value[1])).Append('\n');
+                b.Append("personal\t").Append(kv.Key).Append('\t').Append(MoneyText(kv.Value[0])).Append('\t').Append(MoneyText(kv.Value[1])).Append('\n');
             return b.ToString();
         }
 
@@ -715,6 +715,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             public string Name, Kind, GroupId, GroupName, Side, Session;
             public Group G;
+            public bool MySet;   // a personal line was ever saved (My floor or My daily, 0 included): rules are Anthony's, else null
             public double? MyFloor, MyDaily, Balance, Unrealized, Realized, Pnl, Floor, RoomFloor, RoomDaily, TargetLeft;
             public readonly Dictionary<string, string> Src = new Dictionary<string, string>(), Why = new Dictionary<string, string>();
             public void Set(string key, double? v, string src, string why) { if (v.HasValue) Src[key] = src; else Why[key] = why ?? "not known"; }
@@ -750,6 +751,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             n.GroupId = g != null ? g.Id : null; n.GroupName = g != null ? g.Name : null;
             n.MyFloor = mine != null && mine[0] > 0 ? mine[0] : (double?)null;
             n.MyDaily = mine != null && mine[1] > 0 ? mine[1] : (double?)null;
+            n.MySet = mine != null;
             if (members != null) { try { n.Side = SideOf(Holdings(members)); } catch (Exception) { n.Side = null; } }
             bool up = Up(a);
             string down = a == null ? "the account is not in NinjaTrader now" : "the account is not connected";
@@ -874,7 +876,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { n = Read(name, a, false); }
             catch (Exception ex) { ChartBridgeServer.Log("groups: the numbers of " + name + " could not be read (" + ex.Message + ")"); return; }
             b.Append(",\"group\":").Append(n.GroupId == null ? "null" : CbJson.Str(n.GroupId))
-             .Append(",\"myFloor\":").Append(Num(n.MyFloor)).Append(",\"myDailyLoss\":").Append(Num(n.MyDaily));
+             .Append(",\"myFloor\":").Append(Num(n.MyFloor)).Append(",\"myDailyLoss\":").Append(Num(n.MyDaily)).Append(",\"myLimitsSet\":").Append(n.MySet ? "true" : "false");
             foreach (string k in PageKeys) b.Append(",\"").Append(k).Append("\":").Append(Num(Get(n, k)));
             SrcWhy(b, n, PageKeys);
         }
@@ -904,6 +906,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (n.G != null)
                     b.Append("{\"dailyLoss\":").Append(Zero0(n.G.DailyLoss)).Append(",\"drawdown\":").Append(Zero0(n.G.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(n.G.Type))
                      .Append(",\"target\":").Append(Zero0(n.G.Target)).Append(",\"size\":").Append(Zero0(n.G.Size)).Append(",\"lockAt\":").Append(Zero0(n.G.LockAt)).Append('}');
+                else if (!n.MySet) b.Append("null");   // no limits ever set by Anthony: the agent keeps its model numbers
                 else b.Append("{\"floor\":").Append(Zero0(n.MyFloor ?? 0)).Append(",\"dailyLoss\":").Append(Zero0(n.MyDaily ?? 0)).Append('}');   // rules: 0 is none (the firm or the account has no such rule), never null
                 foreach (string k in NumberKeys) b.Append(",\"").Append(k).Append("\":").Append(Num(Get(n, k)));
                 SrcWhy(b, n, NumberKeys);
@@ -1126,7 +1129,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Mem) next = state.Clone();
                 string gid;
                 if (next.Members.TryGetValue(name, out gid)) return name + " is in group " + next.Groups[gid].Name + ": its group's rules apply (put it in None for limits of its own)";
-                if (floor > 0 || daily > 0) next.Personal[name] = new[] { floor, daily }; else next.Personal.Remove(name);
+                next.Personal[name] = new[] { floor, daily };   // 0 and 0 too: Anthony set "none", which is not "never set"
                 string err = Save(next);
                 if (err != null) return err;
             }

@@ -86,7 +86,7 @@ export function installGroups(Desk) {
       if (!up) { for (const k of ['roomFloor', 'roomDaily', 'targetLeft']) if (k !== 'targetLeft' || g) why[k] = 'the account is not connected'; roomFloor = roomDaily = null; if (g) targetLeft = null; }
       for (const [k, v] of [['floor', floor], ['roomFloor', roomFloor], ['roomDaily', roomDaily], ['targetLeft', targetLeft]]) if (v !== null) { src[k] = k === 'floor' && !g ? 'settings' : 'computed'; delete why[k]; }
       const r = v => (v === null ? null : +(+v).toFixed(2));
-      return Object.assign(msg, { group: id || null, myFloor: mine.floor || null, myDailyLoss: mine.daily || null, floor: r(floor), roomFloor: r(roomFloor), roomDaily: r(roomDaily), targetLeft: r(targetLeft), src, why });
+      return Object.assign(msg, { group: id || null, myFloor: mine.floor || null, myDailyLoss: mine.daily || null, myLimitsSet: this.gr.personal.has(a.name), floor: r(floor), roomFloor: r(roomFloor), roomDaily: r(roomDaily), targetLeft: r(targetLeft), src, why });
     },
     groupMoney(m, k, zeroOk) {
       const v = m[k];
@@ -143,7 +143,7 @@ export function installGroups(Desk) {
       if (id) return m.account + ' is in group ' + this.gr.list.get(id).name + ": its group's rules apply (put it in None for limits of its own)";
       return null;
     },
-    do_accountLimits(m) { if (m.floor > 0 || m.dailyLoss > 0) this.gr.personal.set(m.account, { floor: m.floor, daily: m.dailyLoss }); else this.gr.personal.delete(m.account); this.groupsChanged(); },
+    do_accountLimits(m) { this.gr.personal.set(m.account, { floor: m.floor, daily: m.dailyLoss }); this.groupsChanged(); },
     groupsChanged() { this.sendAccounts(); },   // sendAccounts sends the groups too
     groupSummary(id) { const g = this.gr.list.get(id); return g ? g.name + ' ' + usd(g.size) : ''; },
   });

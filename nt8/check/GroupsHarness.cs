@@ -174,7 +174,7 @@ public static class GroupsHarness
         O(Order("SIM-B", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1"));
         Check(Submits(simB) == b + 1, "no groups: a sell on one account while another is long goes, as in 0.5.7");
         string e = Entry(AccountsNow(), "SIM-A");
-        Check(e.Contains("\"group\":null,\"myFloor\":null,\"myDailyLoss\":null,\"floor\":null") && e.Contains("\"why\":{\"floor\":\"no group and no floor of its own (the Accounts tab)\""), "accounts: group null, personal, no floor, with why: " + e);
+        Check(e.Contains("\"group\":null,\"myFloor\":null,\"myDailyLoss\":null,\"myLimitsSet\":false,\"floor\":null") && e.Contains("\"why\":{\"floor\":\"no group and no floor of its own (the Accounts tab)\""), "accounts: group null, personal, no floor, with why: " + e);
         Check(!File.Exists(Path.Combine(folder, "groups.txt")), "nothing is written while nothing changes");
         Flat();
     }
@@ -385,7 +385,17 @@ public static class GroupsHarness
         Check(Rejection() == "" && FileText().Contains("personal\tSIM-D\t45000\t500.5"), "a personal account's own floor and daily limit: saved");
         Check(Entry(Last("accounts"), "SIM-D").Contains("\"myFloor\":45000,\"myDailyLoss\":500.5"), "and sent at once");
         Clear(); G("accountLimits", "{\"type\":\"accountLimits\",\"cid\":\"l\",\"account\":\"SIM-D\",\"floor\":0,\"dailyLoss\":0}");
-        Check(!FileText().Contains("personal\tSIM-D"), "both 0: no line");
+        Check(FileText().Contains("personal\tSIM-D\t-\t-"), "both 0: the line stays as none and none (set by Anthony, not never set)");
+        Check(State("SIM-D").Contains("\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":{\"floor\":0,\"dailyLoss\":0}"), "set to none: rules {floor 0, dailyLoss 0}");
+        Account simE = NewAccount("SIM-E");   // in no group, no limits ever set
+        try
+        {
+            Check(State("SIM-E").Contains("\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":null,") && Entry(AccountsNow(), "SIM-E").Contains("\"myLimitsSet\":false"), "never set: rules null (the agent keeps its model numbers); the accounts entry says not set");
+            Check(Entry(AccountsNow(), "SIM-D").Contains("\"myLimitsSet\":true"), "set to none: myLimitsSet true");
+            simE.Items[AccountItem.TrailingMaxDrawdown] = 812.5;
+            Check(State("SIM-E").Contains("\"roomFloor\":812.5,") && State("SIM-E").Contains("\"roomFloor\":\"ninjatrader\""), "never set: NinjaTrader's trailing drawdown is still sent as roomFloor (src ninjatrader)");
+        }
+        finally { Account.All.Remove(simE); }
         Clear(); G("accountLimits", "{\"type\":\"accountLimits\",\"cid\":\"l\",\"account\":\"SIM-D\",\"floor\":45000,\"dailyLoss\":500}");
         // joining would mix
         Pos(simA, mnq, 1); Pos(simD, nq, -1);

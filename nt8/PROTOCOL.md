@@ -2853,7 +2853,7 @@ places, changes or cancels an order) and the page's Settings and Accounts tab (`
 
     group<TAB><id><TAB><name><TAB>on|off<TAB><dailyLoss>|-<TAB><drawdown><TAB>eod|intraday|static<TAB><target>|-<TAB><size><TAB><lockAt>|-
     member<TAB><account><TAB><id>
-    personal<TAB><account><TAB><floor>|-<TAB><daily>|-
+    personal<TAB><account><TAB><floor>|-<TAB><daily>|-        (a saved line stays with - and -: set to none, not never set)
 
 `on|off` is the No hedging switch; `-` is none. Money is dollars with at most 2 decimals, a `.` for the point. Ids are `g1`,
 `g2`, ... in the order made (the next is one above the highest in the file), so a rename never touches membership; a deleted
@@ -2915,7 +2915,8 @@ config switch):
   `position` or `entry`, `root` the instrument's master name, `side` `long` or `short`, `qty` the contracts held or left to
   fill). `error`: null, or why `groups.txt` cannot be read (then `list` is empty and every entry is refused).
 - `accounts`: each entry gains `group` (its group id or null), `myFloor`, `myDailyLoss` (a personal account's own limits,
-  null for none), `floor`, `roomFloor`, `roomDaily`, `targetLeft`, and `src` and `why` for those four (as `accountState`
+  null for none), `myLimitsSet` (true once My floor or My daily was saved, 0 included; the tab says "not set" otherwise), `floor`,
+  `roomFloor`, `roomDaily`, `targetLeft`, and `src` and `why` for those four (as `accountState`
   below). Everything else stays exactly as it was (`pnlToday` is still NinjaTrader's realized plus unrealized; the day's P&L
   from the day start is in `accountState` and in `roomDaily`), so a 1.25 page works.
 - A noHedge group that turns mixed by itself (an order typed into NinjaTrader cannot be refused): one `status` `error` to every
@@ -2933,7 +2934,9 @@ config switch):
 | `groupId` | the group's id, null when not `prop` |
 | `groupSide` | the group's side now (`long`, `short`, `mixed`, or null when flat or not `prop`); while it is `long` the agent's sells are refused, and so on |
 | `noHedge` | the group's switch (null when not `prop`) |
-| `rules` | `prop`: `{dailyLoss, drawdown, drawdownType, target, size, lockAt}`: `size` the account size and `lockAt` "floor stops at" (G1); `personal`: `{floor, dailyLoss}` (the account's own limits); `none`: null. Inside `rules` **0 means none**, said explicitly (the firm has no daily limit, no target, no lock; the account has no floor or daily limit of its own), never null: a rule is never "missing". Only the eight numbers below may be null, each with its `why` |
+| `rules` | `prop`: `{dailyLoss, drawdown, drawdownType, target, size, lockAt}`: `size` the account size and `lockAt` "floor stops at" (G1); `personal`: `{floor, dailyLoss}` (the account's own limits, once Anthony has saved My floor or My daily, 0 included), or **null when
+no limits were ever set by Anthony: the agent keeps its model numbers** (NinjaTrader's trailing drawdown is still sent as
+`roomFloor`, `src` `ninjatrader`); `none`: null. Inside `rules` **0 means none**, said explicitly (the firm has no daily limit, no target, no lock; the account has no floor or daily limit of its own), never null: a rule is never "missing". Only the eight numbers below may be null, each with its `why` |
 | `balance`, `pnlToday`, `realizedToday`, `unrealized`, `floor`, `roomFloor`, `roomDaily`, `targetLeft` | dollars (2 decimals) or null, as the table above |
 | `src` | for each of those eight numbers that is not null: `ninjatrader`, `computed` or `settings` |
 | `why` | for each of those eight numbers that is null: the reason in plain words ("the account is not connected", "the group has no daily loss limit", "account-marks.txt could not be read", "no group and no floor of its own", ...) |
