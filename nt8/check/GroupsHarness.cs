@@ -546,6 +546,33 @@ public static class GroupsHarness
         }
         finally { ChartBridgeAgents.Stop(); ChartBridgeAgents.ResetConfig(); }
         Flat();
+        // re-review: protective orders never make a true exit look too big
+        Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+        Manual(simA, mnq, OrderAction.Sell, OrderType.StopMarket, 2, "", "CB#1a2b3c4d stop f2 q2 p24980");   // a bracket with a stop and no target: no OCO id
+        int e0 = Submits(simA);
+        Clear(); O(Order("SIM-A", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1"));
+        Check(Submits(simA) == e0 + 1 && Rejection() == "", "re-review: long 2 with a lone ChartBridge stop leg: Sell Mkt 1 goes: " + Rejection());
+        simA.Orders.Last().OrderState = OrderState.Filled;
+        Clear(); O(Order("SIM-A", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":2"));
+        Check(Submits(simA) == e0 + 2 && Rejection() == "", "re-review: long 2 with a lone ChartBridge stop leg: Sell Mkt 2 goes: " + Rejection());
+        Flat();
+        Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+        Manual(simA, mnq, OrderAction.Sell, OrderType.StopMarket, 2, "", "typed stop");                       // typed into NinjaTrader, no OCO id
+        Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "atm1", "Target1");                          // an ATM's target (OCO)
+        e0 = Submits(simA);
+        Clear(); O(Order("SIM-A", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":2"));
+        Check(Submits(simA) == e0 + 1 && Rejection() == "", "re-review: long 2 with a typed stop (no OCO) and an ATM target: Sell Mkt 2 goes: " + Rejection());
+        Clear(); O(Order("SIM-A", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":2"));
+        Check(Submits(simA) == e0 + 1 && Rejection().Contains("use Flatten"), "re-review: the double Sell Mkt 2 is still refused");
+        simA.Orders.Last().OrderState = OrderState.Cancelled;
+        Clear(); O(Order("SIM-A", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":3"));
+        Check(Submits(simA) == e0 + 1 && Rejection().Contains("Group Review is long"), "re-review: a reversal Sell Mkt 3 is still refused");
+        Clear(); ChartBridgeOrders.OnMessage(page, "flatten", "{\"type\":\"flatten\",\"cid\":\"f\",\"account\":\"SIM-A\",\"root\":\"MNQ\"}");
+        Check(Rejection() == "" && simA.Calls.Skip(0).Any(x => x.StartsWith("flatten MNQ")), "re-review: Flatten goes");
+        // a typed stop left behind once the position is flat counts as an entry for the group (fix 5)
+        Pos(simA, mnq, 0);
+        Check(ChartBridgeGroups.GroupsJson().Contains("{\"account\":\"SIM-A\",\"root\":\"MNQ\",\"side\":\"short\",\"what\":\"entry\",\"qty\":2}"), "re-review: a typed stop left after flat is a sell entry of 2 for the group (it could open a short)");
+        Flat();
         // item 5: two sells of 2 on a long 2: the second is an entry of 2 (the group is long and short)
         Pos(simA, mnq, 2);
         Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed 1");

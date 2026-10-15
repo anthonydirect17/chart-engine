@@ -2961,7 +2961,11 @@ follower; the copier holds the same lock); the agent's plan check 10b asks it to
 
 The account's own new order is exempt when it is an exit: no stop or target asked, no Order Strategy, the other side of its
 position on that instrument by both readings, and its contracts plus the exits already working on that side no more than the
-position. Review of #48: this exit rule is asked first, for every order (a page market exit too, which until then skipped the
+position. The exits already working are only plain market or limit orders with no OCO id that are not ChartBridge's legs (re-review
+of #48): ChartBridge's stops and targets (a lone stop has no OCO id), the agent's and the copier's legs, merged legs, and any
+stop, stop-limit, MIT or OCO order typed into NinjaTrader (an ATM's stop and target) never count, since they shrink with the
+position (the legs check, the copier's trim); a typed stop left behind once the position is flat counts as an entry. Review of
+#48: this exit rule is asked first, for every order (a page market exit too, which until then skipped the
 whole check), and before anything else, so an unreadable `groups.txt` refuses entries only, never an exit; an order on the other
 side that is too big with the exits already working is refused as an entry, the refusal saying to use Flatten (always allowed)
 or cancel the working exits. Otherwise: a buy is refused while the group holds a short anywhere, a sell while it holds a long, and both while it

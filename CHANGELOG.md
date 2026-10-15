@@ -57,6 +57,9 @@ places an order) and page file `live/groups.js`, both in `install-files.json`. A
     the part past the position counts as an entry.
   - A late first reading raised the end-of-day high to a midday balance: only a reading in the 17:00 to 18:05 ET window does.
   - PROTOCOL says plainly that an OCO pair of entries typed into NinjaTrader is not counted until one fills.
+  - Re-review: the exits already working counted protective orders too, so with a lone ChartBridge stop (no target, no OCO id)
+    or a stop typed into NinjaTrader on a long 2, Sell Mkt 1 and Sell Mkt 2 were refused. Only plain market or limit exit
+    orders with no OCO id count now; stops, targets and ChartBridge's, the agent's and the copier's legs never do.
 - **Tests.** `check:orders`: GroupsHarness (the files, the migration, an unreadable file, every refusal, side counting with
   both readings and ChartBridge's just sent, legs and exits, the exit rule, mixed, No hedging off, two opposite entries at once,
   the numbers for end of day, intraday, static and personal, the highs and the day start across a restart), and a group check in

@@ -144,9 +144,29 @@ namespace NinjaTrader.NinjaScript.AddOns
             int pn = SignedPosition(a, inst), pe = EffectivePosition(a, inst);
             int held = isBuy ? (pn < 0 && pe < 0 ? Math.Min(-pn, -pe) : 0) : (pn > 0 && pe > 0 ? Math.Min(pn, pe) : 0);
             if (held <= 0) return false;
-            int b, s, lb, ls;
-            PendingOrders(a, inst, out b, out s, out lb, out ls);
-            return (long)(isBuy ? lb : ls) + qty <= held;
+            return (long)GroupExitsWorking(a, inst, isBuy) + qty <= held;
+        }
+
+        // Re-review of #48: the exits already working on that side, for the exit rule: only plain MARKET or LIMIT orders with no OCO
+        // id that are not ChartBridge's own legs (a working sell market, a typed sell limit). Never a protective order: ChartBridge's
+        // stops and targets (a lone stop has no OCO id), the agent's and the copier's legs, merged legs, or any stop, stop-limit or
+        // MIT and any OCO order typed into NinjaTrader (an ATM's stop and target): those shrink with the position (the legs check,
+        // CheckLegs; the copier's TrimStops) and must never make a true exit look too big.
+        internal static int GroupExitsWorking(Account a, Instrument inst, bool isBuy)
+        {
+            List<Order> orders;
+            lock (a.Orders) orders = a.Orders.ToList();
+            lock (Sync) foreach (Order o in Ours) if (o.Account == a && !orders.Contains(o)) orders.Add(o);
+            int n = 0;
+            foreach (Order o in orders)
+            {
+                if (o == null || !MayFill(o.OrderState) || !SameInstrument(o.Instrument, inst) || IsBuy(o) != isBuy) continue;
+                if (o.OrderType != OrderType.Market && o.OrderType != OrderType.Limit) continue;
+                string name = o.Name ?? "";
+                if (!string.IsNullOrEmpty(o.Oco) || GroupNotEntryRx.IsMatch(name) || AgentMarketRx.IsMatch(name) || IsMergedLeg(o)) continue;
+                n += Math.Max(0, o.Quantity - o.Filled);
+            }
+            return n;
         }
     }
 
