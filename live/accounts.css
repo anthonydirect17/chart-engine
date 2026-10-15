@@ -18,7 +18,19 @@
 /* grids */
 .apg-acc-g .gr-row { grid-template-columns: minmax(64px, 1.1fr) 78px minmax(0, 1fr) minmax(0, .9fr) minmax(0, .9fr) minmax(0, 2.2fr) 44px; }
 .apg-acc-g.apg-hides .gr-row { grid-template-columns: minmax(64px, 1.1fr) 78px minmax(0, 1fr) minmax(0, .9fr) minmax(0, .9fr) minmax(0, 2.2fr) 44px 50px; }   /* 0.5.1: Hide */
-.apg-acc-g .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g .gr-row.apg-ask { grid-template-columns: minmax(0, 1fr); }
+/* 1.26.0 (ChartBridge 0.5.8): the Group dropdown and the Limits cell (the group's floor, or My floor and My daily) */
+.apg-acc-g.apg-grps .gr-row { grid-template-columns: minmax(64px, 1.1fr) 78px minmax(0, 1fr) minmax(0, .9fr) minmax(0, .9fr) minmax(0, 2fr) 116px 152px 44px; }
+.apg-acc-g.apg-grps.apg-hides .gr-row { grid-template-columns: minmax(64px, 1.1fr) 78px minmax(0, 1fr) minmax(0, .9fr) minmax(0, .9fr) minmax(0, 2fr) 116px 152px 44px 50px; }
+.ws-panel.gr-narrow .apg-acc-g.apg-grps .gr-row { grid-template-columns: minmax(56px, 1fr) 0 0 minmax(0, .9fr) 0 minmax(0, 1.4fr) 100px 0 36px; column-gap: 4px; }
+.ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-hides .gr-row { grid-template-columns: minmax(56px, 1fr) 0 0 minmax(0, .9fr) 0 minmax(0, 1.4fr) 100px 0 36px 46px; }
+.ws-panel.gr-narrow .apg-acc-g.apg-grps .gr-row > :nth-child(8) { visibility: hidden; }
+.apg .apg-sel.apg-grp { width: 110px; max-width: 110px; }
+.apg-my { display: flex; gap: 4px; justify-content: flex-end; }
+.apg-my .apg-ll-in { width: 64px; box-sizing: border-box; flex: none; }
+.apg-my { min-width: 0; overflow: hidden; }
+.apg-join .apg-high { width: 84px; }
+.apg-join .mut { color: var(--ws-muted); }
+.apg-acc-g .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g .gr-row.apg-ask, .apg-acc-g.apg-grps.apg-hides .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-hides .gr-row.apg-ask { grid-template-columns: minmax(0, 1fr); }
 .apg-arch-g .gr-row { grid-template-columns: minmax(64px, 1fr) 54px; }
 .apg-gone-g .gr-row { grid-template-columns: minmax(64px, 1fr) minmax(0, 1.3fr) 90px minmax(0, .8fr) minmax(0, 2fr); }
 .apg-pos-g .gr-row { grid-template-columns: minmax(64px, 1fr) 40px 40px repeat(4, minmax(0, 1fr)); }

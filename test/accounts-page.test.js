@@ -332,3 +332,22 @@ test('ChartBridge 0.5.1: Show only when ChartBridge has it (its accounts carry c
   assert.ok(!/\(canAct \? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show"/.test(js), 'Show is never offered on canAct alone');
   assert.match(js, /const hide = !canAct \? '' : a\.canHide === true/);
 });
+
+/* ---------------- 1.26.0 (ChartBridge 0.5.8): the Group dropdown, Limits, the highest close (live/groups.js has the words) */
+test('1.26.0: the Accounts tab gets Group and Limits only once ChartBridge sends groups; the page sends exactly the contract\'s messages', () => {
+  const src = read('live/accounts.js'), html = read('live/index.html'), files = JSON.parse(read('nt8/install-files.json'));
+  assert.match(src, /case 'groups': \{/);
+  assert.match(src, /const grpOn = !!S\.groups, canGroup = grpOn && S\.enabled && !S\.groupsError;/);
+  assert.match(src, /\(grpOn \? h\('Group'\) \+ h\('Limits', 'r'\) : ''\)/, 'the two headers, only with groups');
+  assert.match(src, /S\.groups = null; S\.groupsError = null;/, 'a drop forgets the groups (an older ChartBridge sends none)');
+  assert.match(src, /accountGroup: \(name, group, highText\) => \{\s*if \(!S\.groups/);
+  assert.match(src, /accountLimits: \(name, floorText, dailyText\) => \{\s*if \(!S\.groups/);
+  assert.match(src, /if \(!want\) \{ P\.join = null; F\.accountGroup\(name, null\);/, 'None at once');
+  assert.match(src, /P\.join = \{ account: name, group: want, prefill: String\(\+GroupsCore\.highCloseDefault\(g, acc\)/, 'a group asks the highest close first (G2 b)');
+  assert.ok(html.indexOf('<script src="groups.js"></script>') > html.indexOf('<script src="accounts.js"></script>') && html.indexOf('<script src="groups.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
+  assert.ok(html.indexOf('<div class="ws-col ws-col-groups" id="wsGroupsCol" hidden>') > html.indexOf('id="wsTypesSec"') && html.indexOf('id="wsGroupsSec"') > html.indexOf('id="wsGroupsCol"'), 'Settings: the groups in a third column, hidden until ChartBridge sends groups');
+  assert.ok(files.www.some(f => f.from === 'live/groups.js' && f.to === 'groups.js'));
+  // the room words from ChartBridge's own numbers
+  const s = AC.limitState({ roomFloor: 900, roomDaily: 400, targetLeft: null, src: { roomFloor: 'computed' } }, null, { dailyLoss: 1000, drawdown: 2500 });
+  assert.equal(AC.limitText(s), '$400.00 daily · $900.00 to floor (60% used)', 'the closer is the daily room: (1000 - 400) / 1000');
+});

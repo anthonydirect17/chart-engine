@@ -4,7 +4,11 @@
  *
  *   Accounts         every account ChartBridge watches (0.5.1: connected in NinjaTrader this session): connection, balance,
  *                    today's P&L, open position, the room to the trailing drawdown and the daily loss limit, the trading
- *                    checkmark, the Gone list, Hide on any flat account (an in-page confirm) and Show on a hidden one
+ *                    checkmark, the Gone list, Hide on any flat account (an in-page confirm) and Show on a hidden one;
+ *                    1.26.0 (ChartBridge 0.5.8, Anthony 2026-10-14): each account's Group dropdown (None and the groups made
+ *                    in Settings, live/groups.js), the highest close asked once when it joins a group (G2 b), My floor and
+ *                    My daily for an account in no group, and the room from ChartBridge's own numbers (roomFloor,
+ *                    roomDaily, targetLeft) before NinjaTrader's and The Desk's
  *   Positions        every open position on every account: average price, unrealized P&L, the attached stop and target
  *   Working orders   every working order on every account (Cancel only with `cancelFromList` on)
  *   Today's trades   per account, the fills and the flat-to-flat round trips, gross and net (The Desk's commission)
@@ -98,6 +102,9 @@ function fmtUsdPlain(v) { return !isNum(v) ? '' : (v < 0 ? '-' : '') + '$' + fmt
 
 /* ---------------- limits (item 15): the room used to the closer of the daily loss and the trailing drawdown */
 const AMBER = 0.70, RED = 0.90;
+/* 1.26.0 (ChartBridge 0.5.8): an account with ChartBridge's own numbers (roomFloor, roomDaily: its group's rules or its own
+   limits with NinjaTrader's balance and P&L) is read from those first; g is its group as the groups message gave it (the
+   limits for the percent: the group's daily loss and drawdown, or the account's own daily limit). */
 /**
  * The limit state of one account, from ChartBridge's `accounts` entry `a` and The Desk's row `d` (GET /api/chart-accounts,
  * or null). Never estimated (lead's default, written in nt8/PROTOCOL.md "Account page"):
@@ -110,16 +117,20 @@ const AMBER = 0.70, RED = 0.90;
  * Returns { level: '' | 'amber' | 'red', pct (0 to 1 or null), closer: 'dl' | 'dd' | null, dl, dd } with dl and dd each
  * { room, limit, pct, from: 'ninjatrader' | 'desk' } or null.
  */
-function limitState(a, d) {
-  a = a || {}; d = d || {};
+function limitState(a, d, g) {
+  a = a || {}; d = d || {}; g = g || null;
   const loss = isNum(a.pnlToday) ? Math.max(0, -a.pnlToday) : null;
   const deskDl = isNum(d.daily_loss_limit) && d.daily_loss_limit > 0 ? d.daily_loss_limit : null;
   const deskDd = isNum(d.trailing_drawdown) && d.trailing_drawdown > 0 ? d.trailing_drawdown : null;
-  let dl = null, dd = null;
-  if (isNum(a.roomDailyLoss)) dl = { room: a.roomDailyLoss, limit: deskDl !== null ? deskDl : loss !== null ? a.roomDailyLoss + loss : null, from: 'ninjatrader' };
+  const src = a.src && typeof a.src === 'object' ? a.src : {};
+  let dl = null, dd = null, tg = null, cb = false;
+  if (isNum(a.roomDaily)) { cb = true; dl = { room: a.roomDaily, limit: g && isNum(g.dailyLoss) && g.dailyLoss > 0 ? g.dailyLoss : isNum(a.myDailyLoss) && a.myDailyLoss > 0 ? a.myDailyLoss : deskDl, from: 'chartbridge' }; }
+  else if (isNum(a.roomDailyLoss)) dl = { room: a.roomDailyLoss, limit: deskDl !== null ? deskDl : loss !== null ? a.roomDailyLoss + loss : null, from: 'ninjatrader' };
   else if (deskDl !== null) dl = { room: loss !== null ? deskDl - loss : null, limit: deskDl, from: 'desk' };
-  if (isNum(a.roomDrawdown)) dd = { room: a.roomDrawdown, limit: deskDd, from: 'ninjatrader' };
+  if (isNum(a.roomFloor)) { cb = true; dd = { room: a.roomFloor, limit: g && isNum(g.drawdown) && g.drawdown > 0 ? g.drawdown : deskDd, from: src.roomFloor === 'ninjatrader' ? 'ninjatrader' : 'chartbridge', floor: isNum(a.floor) ? a.floor : null }; }
+  else if (isNum(a.roomDrawdown)) dd = { room: a.roomDrawdown, limit: deskDd, from: 'ninjatrader' };
   else if (deskDd !== null) dd = { room: null, limit: deskDd, from: 'desk' };
+  if (isNum(a.targetLeft)) { cb = true; tg = { left: a.targetLeft, target: g && isNum(g.target) ? g.target : null }; }
   for (const x of [dl, dd]) {
     if (!x) continue;
     x.pct = x.room !== null && x.room <= 0 ? 1 : x.room !== null && x.limit > 0 ? Math.min(1, Math.max(0, (x.limit - x.room) / x.limit)) : null;
@@ -130,11 +141,18 @@ function limitState(a, d) {
   let pct = c && c.pct !== null ? c.pct : other && other.pct !== null ? other.pct : null;
   if (c && c.room <= 0) pct = 1;
   const level = pct === null ? '' : pct >= RED - 1e-9 ? 'red' : pct >= AMBER - 1e-9 ? 'amber' : '';
-  return { level, pct, closer, dl, dd };
+  return { level, pct, closer, dl, dd, tg, cb };
 }
-/** The room cell's text: "DD $1,740.50 · DL $820.00" with the percent used of the closer, or '' with nothing known. */
+/** The room cell's text: "DD $1,740.50 · DL $820.00" with the percent used of the closer, or '' with nothing known. 1.26.0, from
+    ChartBridge's own numbers: "$900.00 daily · $1,700.00 to floor · $2,500.00 to target" (Anthony's mockup: "daily, to floor"). */
 function limitText(s) {
   if (!s) return '';
+  if (s.cb) {
+    const parts = [s.dl && s.dl.room !== null ? fmtUsdPlain(s.dl.room) + ' daily' : '', s.dd && s.dd.room !== null ? fmtUsdPlain(s.dd.room) + ' to floor' : '',
+      s.tg ? (s.tg.left <= 0 ? 'target reached' : fmtUsdPlain(s.tg.left) + ' to target') : ''].filter(Boolean);
+    const t2 = parts.join(' · ');
+    return t2 + (s.pct !== null && t2 ? ' (' + Math.round(s.pct * 100) + '% used)' : '');
+  }
   const part = (k, x) => x && x.room !== null ? k + ' ' + fmtUsdPlain(x.room) : x && x.limit !== null ? k + ' limit ' + fmtUsdPlain(x.limit) : '';
   const t = [part('DD', s.dd), part('DL', s.dl)].filter(Boolean).join(' · ');
   return t + (s.pct !== null && t ? ' (' + Math.round(s.pct * 100) + '% used)' : '');
@@ -399,6 +417,7 @@ function createFeed(env) {
     switches: Object.fromEntries(SWITCH_KEYS.map(k => [k, false])), tradeAccounts: [],
     accounts: [], archived: [], got: false, instruments: {}, orders: new Map(), positions: new Map(), fills: new Map(),
     copier: null, log: [], desk: new Map(), deskUrl: '', deskState: 'not asked', deskAt: 0,
+    groups: null, groupsError: null,   // 1.26.0: ChartBridge 0.5.8's groups (null: none sent, an older ChartBridge or not connected)
   };
   let ws = null, tries = 0, timer = 0, seq = 0, started = false, deskTimer = 0, changeQueued = false, stopped = false;
   const changed = () => { if (changeQueued) return; changeQueued = true; Promise.resolve().then(() => { changeQueued = false; env.changed(); }); };
@@ -438,7 +457,7 @@ function createFeed(env) {
       sock.onmessage = ev => { if (sock !== ws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } if (!m || typeof m !== 'object') return; message(m, sock); tell('message', m); };
       sock.onclose = () => {
         if (sock !== ws) return;
-        ws = null; S.open = false; S.signedIn = false; S.enabled = false; S.reason = 'Not connected to ChartBridge.'; S.trading = null;
+        ws = null; S.open = false; S.signedIn = false; S.enabled = false; S.reason = 'Not connected to ChartBridge.'; S.trading = null; S.groups = null; S.groupsError = null;
         S.switches = Object.fromEntries(SWITCH_KEYS.map(k => [k, false]));      // controls go until ChartBridge names them again
         changed(); tell('closed'); retry();
       };
@@ -487,7 +506,7 @@ function createFeed(env) {
         S.v3 = v3; S.version = typeof m.version === 'string' ? m.version : '';
         if (!v3) { S.reason = 'The Account page needs ChartBridge 0.4.0 or newer.'; changed(); return; }
         sock.send(JSON.stringify({ type: 'client', v: 3 }));      // first, right after hello (PROTOCOL.md "Telling the page what is on")
-        S.orders.clear(); S.positions.clear();
+        S.orders.clear(); S.positions.clear(); S.groups = null; S.groupsError = null;
         signIn(sock);
         changed();
         return;
@@ -517,6 +536,12 @@ function createFeed(env) {
       case 'execs': S.fills.clear(); for (const f of m.list || []) if (f && f.id) S.fills.set(f.account + '|' + f.id, f); changed(); return;
       case 'exec': if (m.id) { S.fills.set(m.account + '|' + m.id, m); changed(); } return;
       case 'copier': S.copier = m; changed(); return;
+      case 'groups': {   // 1.26.0 (ChartBridge 0.5.8): the groups, their rules, side and holders
+        const GC = typeof GroupsCore !== 'undefined' ? GroupsCore : null;
+        S.groups = GC ? GC.cleanGroups(m) : (Array.isArray(m.list) ? m.list.filter(g => g && typeof g.id === 'string') : []);
+        S.groupsError = typeof m.error === 'string' && m.error ? m.error : null;
+        changed(); return;
+      }
       case 'copierEvent': log(AC.logText(m), m.action === 'skip' || m.action === 'standDown' || m.action === 'refused' ? 'warn' : ''); changed(); return;
       case 'reject': {
         log(AC.logText(m), 'warn');
@@ -537,9 +562,10 @@ function createFeed(env) {
       .then(() => { changed(); if (!stopped) deskTimer = setTimeout(readDesk, DESK_EVERY_MS); });
   }
   const account = name => S.accounts.find(a => a.name === name) || null;
-  const limit = name => { const a = account(name); return a ? AC.limitState(a, S.desk.get(name)) : null; };
+  const groupOf = a => (a && a.group && S.groups ? S.groups.find(g => g.id === a.group) || null : null);
+  const limit = name => { const a = account(name); return a ? AC.limitState(a, S.desk.get(name), groupOf(a)) : null; };
   return {
-    S, start, startAny, stop, account, limit, post,
+    S, start, startAny, stop, account, limit, post, groupOf,
     listen(part) { subs.add(part); return () => subs.delete(part); },
     /** a refusal that came back on the order ticket's connection for an action of this page: true when it was one */
     takeReject(m) { if (!m || !m.cid || !mine.has(m.cid)) return false; message(m); return true; },
@@ -558,6 +584,20 @@ function createFeed(env) {
       return send(r.msg);
     },
     copierRearm: () => S.switches.copier && send({ type: 'copierRearm', cid: cid() }),
+    /* 1.26.0 (ChartBridge 0.5.8): an account's group (null: None; highText: the highest close typed, G2 b) and a personal
+       account's own floor and daily limit; each only once ChartBridge has sent groups (ChartBridge checks again) */
+    accountGroup: (name, group, highText) => {
+      if (!S.groups || typeof GroupsCore === 'undefined') return false;
+      const r = GroupsCore.joinMessage(name, group, highText, cid());
+      if (r.error) { env.note('Not sent: ' + r.error, true); return false; }
+      return send(r.msg);
+    },
+    accountLimits: (name, floorText, dailyText) => {
+      if (!S.groups || typeof GroupsCore === 'undefined') return false;
+      const r = GroupsCore.limitsMessage(name, floorText, dailyText, cid());
+      if (r.error) { env.note('Not sent: ' + r.error, true); return false; }
+      return send(r.msg);
+    },
     rateOf: name => { const d = S.desk.get(name); return d && d.commission ? r => (d.commission[r] === undefined ? null : d.commission[r]) : null; },
     _message: message,                                    // tests
   };
@@ -589,7 +629,7 @@ function mount(v, host) {
     '<p class="ac-foot apg-foot" data-foot></p></div>';
   const q = sel => v.body.querySelector(sel);
   const listEl = q('[data-list]'), footEl = q('[data-foot]');
-  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set() };
+  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null };
   q('.apg-tabs').addEventListener('click', e => {
     const b = e.target.closest('button[data-tab]'); if (!b) return;
     b.blur();
@@ -613,12 +653,32 @@ function mount(v, host) {
     else if (a === 'rearm') F.copierRearm();
     else if (a === 'mode') F.copierSet({ mode: b.dataset.v });
     else if (a === 'trd') { P.trd = b.dataset.v; render(); }
+    else if (a === 'join-no') { P.join = null; render(); }
+    else if (a === 'join-yes') {   // G2 (b): the highest close, asked once when an account joins a group
+      const j = P.join; P.join = null;
+      if (j && j.account === id) { const box = listEl.querySelector('[data-act="join-high"]'); F.accountGroup(j.account, j.group, box ? box.value : ''); }
+      render();
+    }
   });
   listEl.addEventListener('change', e => {
     const el = e.target, a = el.dataset.act;
     if (!a) return;
     if (a === 'trade') { const on = el.checked; el.checked = !on; F.accountTrade(el.dataset.id, on); return; }   // shown as ChartBridge says, not as clicked
     if (a === 'leader') { if (el.value) F.copierSet({ leader: el.value }); return; }
+    if (a === 'group') {   // 1.26.0: None goes at once; a group first asks for the highest close so far (G2 b)
+      const name = el.dataset.id, acc = S.accounts.find(x => x.name === name), want = el.value;
+      el.value = acc && acc.group ? acc.group : '';                                       // shown as ChartBridge says, not as picked
+      if (!want) { P.join = null; F.accountGroup(name, null); render(); return; }
+      const g = (S.groups || []).find(x => x.id === want);
+      if (g) { P.join = { account: name, group: want, prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)) }; render(); const box = listEl.querySelector('[data-act="join-high"]'); if (box) { box.focus(); box.select(); } }
+      return;
+    }
+    if (a === 'my-floor' || a === 'my-daily') {   // 1.26.0: a personal account's own limits, both sent together
+      const tr = el.closest('[data-k]'); if (!tr) return;
+      const f = tr.querySelector('[data-act="my-floor"]'), d = tr.querySelector('[data-act="my-daily"]');
+      F.accountLimits(el.dataset.id, f ? f.value : '', d ? d.value : '');
+      return;
+    }
     if (a === 'f-on' || a === 'f-qty' || a === 'f-size' || a === 'f-ll-on' || a === 'f-ll') {
       const tr = el.closest('[data-follower]'); if (!tr) return;
       const name = tr.dataset.follower, row = AC.followerRows(S.accounts, S.copier).find(r => r.account === name);
@@ -672,16 +732,22 @@ function mount(v, host) {
     if (!S.v3) html = `<p class="ac-empty">${esc(S.reason || 'The Account page needs ChartBridge 0.4.0 or newer.')}</p>`;
     else if (!S.got) html = `<p class="ac-empty">${esc(S.open ? 'Waiting for ChartBridge\'s accounts.' : S.reason || 'Connecting to ChartBridge.')}</p>`;
     else if (P.tab === 'acc') {
-      const lim = a => AC.limitState(a, S.desk.get(a.name));
+      const lim = a => AC.limitState(a, S.desk.get(a.name), F.groupOf(a));
       const canAct = sw.accountChecks && S.enabled;
+      const grpOn = !!S.groups, canGroup = grpOn && S.enabled && !S.groupsError;   // 1.26.0: ChartBridge 0.5.8 sends groups
+      const gName = id => { const g = (S.groups || []).find(x => x.id === id); return g ? g.name : id; };
+      /* G2 (b): the one question when an account joins a group, a row of its own under the account's */
+      const askJoin = a => !P.join || P.join.account !== a.name ? '' : row('join|' + a.name + '|' + P.join.group, `<span role="cell" class="apg-confirm apg-join">Put ${esc(a.name)} in ${esc(gName(P.join.group))}: highest close so far <input type="text" inputmode="decimal" class="oin apg-ll-in apg-high" data-act="join-high" value="${esc(P.join.prefill)}" aria-label="Highest close so far for ${esc(a.name)}, from the firm's dashboard" title="From the firm's dashboard. Optional: empty takes the larger of the account size and its balance. ChartBridge starts the trailing floor from it."> <span class="mut">(the firm's dashboard; optional)</span> <button type="button" class="ac-btn apg-yes" data-act="join-yes" data-id="${esc(a.name)}">Put in ${esc(gName(P.join.group))}</button><button type="button" class="ac-btn" data-act="join-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
       const canShow = canAct && accounts.some(a => a && 'canHide' in a);   // Show: ChartBridge 0.5.1 and later (its accounts carry canHide)
       /* the in-page confirm for Hide, a row of its own under the account's */
       const ask = a => P.confirm !== a.name ? '' : row('ask|' + a.name, `<span role="cell" class="apg-confirm">Hide ${esc(a.name)}? It leaves every list until you Show it; its history stays. <button type="button" class="ac-btn apg-yes" data-act="archive-yes" data-id="${esc(a.name)}">Hide</button><button type="button" class="ac-btn" data-act="archive-no" data-id="${esc(a.name)}">Keep</button></span>`, 'apg-ask');
       const accRow = a => {
         const s = lim(a), pos = (a.positions || []).filter(p => p.qty).map(p => p.root + ' ' + (p.qty > 0 ? '+' : '') + p.qty).join(', ');
         const lvl = s.level ? ' apg-' + s.level : '';
-        const roomTip = [s.dd ? 'Trailing drawdown: ' + (s.dd.room !== null ? AC.fmtUsdPlain(s.dd.room) + ' left' : 'room not reported') + (s.dd.limit ? ' of ' + AC.fmtUsdPlain(s.dd.limit) : '') + (s.dd.from === 'desk' ? ' (The Desk)' : ' (NinjaTrader)') : (a.roomDrawdownWhy || 'No trailing drawdown known'),
-          s.dl ? 'Daily loss: ' + (s.dl.room !== null ? AC.fmtUsdPlain(s.dl.room) + ' left' : 'room not known') + (s.dl.limit ? ' of ' + AC.fmtUsdPlain(s.dl.limit) : '') + (s.dl.from === 'desk' ? ' (The Desk)' : ' (NinjaTrader)') : (a.roomDailyLossWhy || 'No daily loss limit known'),
+        const why = a.why && typeof a.why === 'object' ? a.why : {}, from = x => (x.from === 'desk' ? ' (The Desk)' : x.from === 'chartbridge' ? ' (ChartBridge, from NinjaTrader\'s balance and P&L)' : ' (NinjaTrader)');
+        const roomTip = [s.dd ? (s.cb ? 'Room to the floor' + (s.dd.floor !== null && s.dd.floor !== undefined ? ' (' + AC.fmtUsdPlain(s.dd.floor) + ')' : '') + ': ' : 'Trailing drawdown: ') + (s.dd.room !== null ? AC.fmtUsdPlain(s.dd.room) + ' left' : 'room not reported') + (s.dd.limit ? ' of ' + AC.fmtUsdPlain(s.dd.limit) : '') + from(s.dd) : (why.roomFloor || a.roomDrawdownWhy || 'No trailing drawdown known'),
+          s.dl ? 'Daily loss: ' + (s.dl.room !== null ? AC.fmtUsdPlain(s.dl.room) + ' left' : 'room not known') + (s.dl.limit ? ' of ' + AC.fmtUsdPlain(s.dl.limit) : '') + (s.cb ? ' (open P&L counted)' : '') + from(s.dl) : (why.roomDaily || a.roomDailyLossWhy || 'No daily loss limit known'),
+          s.tg ? 'Profit target: ' + (s.tg.left <= 0 ? 'reached' : AC.fmtUsdPlain(s.tg.left) + ' left') + (s.tg.target ? ' of ' + AC.fmtUsdPlain(s.tg.target) : '') : '',
           s.level ? (s.level === 'red' ? 'RED: ' : 'AMBER: ') + Math.round(s.pct * 100) + '% of the room used to the closer limit' : ''].filter(Boolean).join('\n');
         /* the checkmark: a control only with accountChecks on; else what gate 2 says, read only */
         const canCheck = sw.accountChecks && S.enabled;
@@ -692,13 +758,18 @@ function mount(v, host) {
         const mark = canCheck
           ? `<span role="cell" class="r"><input type="checkbox" class="apg-chk" data-act="trade" data-id="${esc(a.name)}" ${pr({ checked: !!a.trade, disabled: !a.trade && (a.state !== 'active' || a.connection !== 'connected') })} aria-label="Trade on ${esc(a.name)}" title="Trading on ${esc(a.name)}: checked, ChartBridge takes entries for it. Unchecking always works; exits always work."></span>`
           : c(a.trade ? '✓' : '', 'r ' + (a.tradable ? 'up' : 'mut'), a.trade ? (a.tradable ? 'Trading is on for ' + a.name : 'Checked, but not tradable now') : 'Not checked for trading');
+        /* 1.26.0: the Group dropdown (None and every group) and the Limits cell: the group's floor, or My floor and My daily */
+        const grp = !grpOn ? '' : `<span role="cell"><select class="ws-sel apg-sel apg-grp" data-act="group" data-id="${esc(a.name)}" ${pr({ value: a.group || '', disabled: !canGroup })} aria-label="Group for ${esc(a.name)}" title="${esc(a.group ? GroupsCore.summary(F.groupOf(a)) : 'None: a personal account, in no group')}"><option value="">None</option>${(S.groups || []).map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('')}</select></span>`;
+        const lims = !grpOn ? '' : a.group
+          ? c(typeof a.floor === 'number' ? 'floor ' + AC.fmtUsdPlain(a.floor) : 'floor ?', 'r mut', typeof a.floor === 'number' ? 'The floor by its group\'s rules' : (why.floor || ''))
+          : `<span role="cell" class="apg-my"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-floor" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myFloor), disabled: !canGroup })} placeholder="floor $" maxlength="12" aria-label="My floor for ${esc(a.name)}" title="My floor: the balance this account must stay above (empty: none)"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-daily" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myDailyLoss), disabled: !canGroup })} placeholder="daily $" maxlength="12" aria-label="My daily limit for ${esc(a.name)}" title="My daily limit: the most this account may lose today, open P&amp;L counted (empty: none)"></span>`;
         return row(a.name, `${c(a.name, 'b', a.sim ? 'NinjaTrader Sim account' : '')}${c(CONN[a.connection] || a.connection, a.connection === 'connected' ? '' : 'warn')}` +
           `${c(AC.fmtUsdPlain(a.balance), 'r')}${c(AC.fmtUsd(a.pnlToday), 'r ' + (a.pnlToday > 0.004 ? 'up' : a.pnlToday < -0.004 ? 'dn' : ''))}${c(pos, 'r')}` +
-          `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${mark}${hide}`, 'apg-acc' + lvl) + ask(a);
+          `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${grp}${lims}${mark}${hide}`, 'apg-acc' + lvl) + ask(a) + askJoin(a);
       };
       html = !accounts.length ? '<p class="ac-empty">ChartBridge watches no account.</p>' :
-        `<div class="gr apg-g apg-acc-g${canAct ? ' apg-hides' : ''}" role="table" aria-label="Accounts">` +
-        row('h', h('Account') + h('Conn') + h('Balance', 'r') + h('Today', 'r') + h('Position', 'r') + h('Room', 'r') + h('Trade', 'r') + (canAct ? h('', 'r') : ''), 'gr-h') +
+        `<div class="gr apg-g apg-acc-g${canAct ? ' apg-hides' : ''}${grpOn ? ' apg-grps' : ''}" role="table" aria-label="Accounts">` +
+        row('h', h('Account') + h('Conn') + h('Balance', 'r') + h('Today', 'r') + h('Position', 'r') + h('Room', 'r') + (grpOn ? h('Group') + h('Limits', 'r') : '') + h('Trade', 'r') + (canAct ? h('', 'r') : ''), 'gr-h') +
         active.map(accRow).join('') + '</div>' +
         (gone.length ? '<h3 class="apg-h">Gone</h3><div class="gr apg-g apg-gone-g" role="table" aria-label="Gone accounts">' + gone.map(a => {
           const asking = P.confirm === a.name;
@@ -711,7 +782,8 @@ function mount(v, host) {
         /* hidden (archived) accounts: Show brings one back, unchecked (ChartBridge 0.5.1) */
         (S.archived.length ? '<h3 class="apg-h">Hidden</h3><div class="gr apg-g apg-arch-g" role="table" aria-label="Hidden accounts">' + S.archived.map(a =>
           row('a|' + a.name, c(a.name, 'b mut') + (canShow ? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show" data-act="unarchive" data-id="${esc(a.name)}" title="Show ${esc(a.name)}: back in the lists, unchecked">Show</button></span>` : ''), 'apg-arch')).join('') + '</div>' : '');
-      foot = (S.deskState === 'ok' ? 'Limits: NinjaTrader where it reports them, else The Desk.' : S.deskState === 'not asked' ? 'Limits: NinjaTrader where it reports them.' : S.deskState) +
+      foot = (grpOn ? (S.groupsError ? S.groupsError + ' ' : 'Room: ChartBridge from each group\'s rules or your own limits, NinjaTrader\'s balance and P&L. Groups are made in Settings. ') : '') +
+        (S.deskState === 'ok' ? 'Limits: NinjaTrader where it reports them, else The Desk.' : S.deskState === 'not asked' ? 'Limits: NinjaTrader where it reports them.' : S.deskState) +
         (sw.accountChecks ? '' : ' Checkmarks are read only (accountChecks = off in config.txt).') + (S.enabled ? '' : ' ' + (S.reason || ''));
     } else if (P.tab === 'pos') {
       html = !positions.length ? '<p class="ac-empty">Flat on every account.</p>' : '<div class="gr apg-g apg-pos-g" role="table" aria-label="Open positions">' +
