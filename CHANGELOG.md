@@ -1,5 +1,58 @@
 # Changelog
 
+## ChartBridge 0.5.8 and chart 1.26.0 (2026-10-15): prop groups (one direction per group) and real account state
+
+Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL). **It needs the recompile: the page needs
+ChartBridge 0.5.8** (`minChartBridge` raised to 0.5.8: groups and accountState); a PC on an older ChartBridge keeps the page it
+has, and the PC updater waits until ChartBridge 0.5.8 is compiled there. New add-on file `nt8/ChartBridgeGroups.cs` (it never
+places an order) and page file `live/groups.js`, both in `install-files.json`. After #47.
+
+- **Groups, made on the page and saved by ChartBridge.** Settings has a third column, Account groups (shown once ChartBridge
+  sends groups, so Settings still fits 1366x768 whole): each group as one row with its name, the firm's rules in a line, the No
+  hedging switch, Edit, Rename and Delete (an in-page confirm), and New group. Edit and New open the rules dialog of Anthony's
+  approved mockup, in the workspace's house style: group name, account size (G1), daily loss limit, drawdown size, drawdown
+  type (trails end of day, trails intraday, static), floor stops at (G1, the Lucid-style lock), profit target, No hedging. The
+  Accounts tab gets a Group dropdown (None and every group) and a Limits column: putting an account in a group asks once for its
+  highest close so far, prefilled with the larger of the account size and its balance (G2 b); an account in no group (a
+  personal account) has My floor and My daily. New accounts arrive in None. ChartBridge keeps it all in `groups.txt` (two `#`
+  lines, then `group`, `member` and `personal` lines; ids `g1`, `g2`, so a rename never touches membership) and each account's
+  highs and day start in `account-marks.txt`; nobody edits a file. No `groups.txt` (every PC today): no groups, exactly 0.5.7.
+  A `groups.txt` that cannot be read is never rewritten that run and refuses every new entry, with an alarm, as `accounts.txt`.
+  Messages: `groupSave`, `groupDelete`, `accountGroup` (with `highClose`), `accountLimits` from the page; `groups` (each with its
+  side and holders) and new `accounts` fields (`group`, `myFloor`, `myDailyLoss`, `floor`, `roomFloor`, `roomDaily`,
+  `targetLeft`, `src`, `why`) to it; every 0.5.7 field stays, `pnlToday` included, so a 1.25 page works.
+- **One direction for the whole group, every market (G3 a).** While any member holds a long (a position by either reading, or
+  a working buy entry, ChartBridge's own just sent included), no member may open a short in any market, and the other way round;
+  a mixed group refuses new entries on both sides. Checked by ChartBridge under its order lock (`PlaceLock`) for every entry:
+  the order ticket and chart clicks, the bot, every agent (and its plan check 10b), Order Strategies, and each copier follower
+  (skipped as "group"). The refusal names the group and the holders as NinjaTrader names the accounts ("Group Lucid is long
+  (... +2 MNQ; ... buy limit 1 NQ working): a sell on ... would hedge the group; prop firms ban hedged accounts. Exits and flattens
+  still work."). Exits, flattens, stops and targets are never blocked: an account's own order on the other side of its position,
+  with no stop, target or strategy, for no more than the position with its exits already working, is an exit. Legs, OCO parts,
+  merged legs and an agent's flat and protect orders are no entries. Two entries on opposite sides at the same moment: one
+  passes. A group made mixed by an order typed into NinjaTrader (which cannot be refused) raises one status error to the pages,
+  and one note when it is one direction again. Per group, the No hedging switch (on by default) turns the check off.
+- **Real account state (item 5).** With NinjaTrader's balance and P&L and the group's rules, ChartBridge works out each account's
+  floor (end of day: the highest end-of-day equity, raised in the 17:00 to 18:00 ET break and by each session's first reading;
+  intraday: the highest equity seen, every second; both stop at "floor stops at"; static: size less drawdown), the room to it
+  (NinjaTrader's trailing drawdown when it reports one), the daily room (open P&L counted, from the session's day start) and the
+  target left; for a personal account, from its own floor and daily limit. A number it cannot give is null with the reason,
+  never estimated. The Accounts tab's room shows them first ("$900.00 daily · $1,700.00 to floor · $2,500.00 to target").
+- **The agent's accountState** (for Bot-Lab, which builds its view from it and falls back to its model's numbers when anything
+  is missing): `account`, `sim`, `kind` (prop, personal, none), `group`, `groupId`, `groupSide`, `noHedge`, `rules` (the group's,
+  with `size` and `lockAt`, or the account's own; inside `rules` 0 says none, never null, the coordinator's note from the
+  Bot-Lab side), the eight numbers with `src` and `why`, `session`, `at`. Sent right after the snapshot on every `agentHello`,
+  then from the 1 s pass when anything but `at` changed, and at once on an account, group or rules change.
+- **F-ALL (a)**: the ticket's Flatten all on None does nothing, as built in 0.5.7.
+- **Tests.** `check:orders`: GroupsHarness (the files, the migration, an unreadable file, every refusal, side counting with
+  both readings and ChartBridge's just sent, legs and exits, the exit rule, mixed, No hedging off, two opposite entries at once,
+  the numbers for end of day, intraday, static and personal, the highs and the day start across a restart), and a group check in
+  OrdersHarness's ticket path, AccountsHarness (the new fields, `accountGroup` refused when it would mix), CopierHarness (a
+  "group" skip), BotHarness (a bot entry refused), AgentHarness (accountState after the snapshot, on a change, None, plan check
+  10b) and IntegrationHarness X14. Node: `groups.test.js`, `accounts-page.test.js`, `nt8-source.test.js` (ChartBridgeGroups.cs
+  never places an order; every entry path asks it), `fake-agent` (`accountStateProblem`). `smoke:accounts` section 4 at
+  1366x768 (the Group dropdowns, the highest close question, My floor, Settings' groups column, the rules dialog, Delete).
+
 ## ChartBridge 0.5.7 and chart 1.25.0 (2026-10-14): the plan id on agent orders, no TradeLost alarm during a flatten, None in every tab
 
 DECISION 2026-10-14d (phase 2, the plan id) and 2026-10-14e (None in every tab, the daily reset), and the TradeLost hold.
