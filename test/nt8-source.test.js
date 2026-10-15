@@ -1376,7 +1376,7 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   const place = o.slice(o.indexOf('private static string PlaceOrderLocked('), o.indexOf('private static string PriceText('));
   const ig = place.indexOf('ChartBridgeGroups.EntryCheck(');
   assert.ok(ig > 0 && ig < place.indexOf('account.CreateOrder(') && ig < place.indexOf('account.Submit(') && ig > place.indexOf('bool wantsLegs ='), 'the group check comes before the order exists');
-  assert.match(place, /string groupWhy = pageReduces \? null : ChartBridgeGroups\.EntryCheck\(agent != null \? "agent:" \+ agent : bot \? "bot" : "page", account, root, isBuy, qty, wantsLegs, strat != null\);\s*if \(groupWhy != null\) return groupWhy;/);
+  assert.match(place, /string groupWhy = ChartBridgeGroups\.EntryCheck\(agent != null \? "agent:" \+ agent : bot \? "bot" : "page", account, root, isBuy, qty, wantsLegs, strat != null\);\s*if \(groupWhy != null\) return groupWhy;/);
   assert.match(o, /lock \(PlaceLock\) why = PlaceOrderLocked\(/);
   // the copier's Eligible (under the same lock) and the agent's plan check 10b
   const c = strip(read('ChartBridgeCopier.cs'));

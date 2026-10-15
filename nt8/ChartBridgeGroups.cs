@@ -94,6 +94,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<Order> orders;
             lock (a.Orders) orders = a.Orders.ToList();
             lock (Sync) foreach (Order o in Ours) if (o.Account == a && !orders.Contains(o)) orders.Add(o);
+            // Review of #48 (item 5): orders on the other side of a position are exits only up to the position, summed per contract
+            // (two sells of 2 on a long 2: the second is an entry of 2); orders are taken in the list's order.
+            Dictionary<string, int> exitLeft = new Dictionary<string, int>();
             foreach (Order o in orders)
             {
                 if (o == null || !MayFill(o.OrderState)) continue;
@@ -106,8 +109,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 int l, mv;
                 listed.TryGetValue(full, out l); moved.TryGetValue(full, out mv);
                 int e = l + mv, held = l > 0 && e > 0 ? Math.Min(l, e) : l < 0 && e < 0 ? -Math.Min(-l, -e) : 0;
-                if (held != 0 && (buy ? held < 0 : held > 0) && left <= Math.Abs(held)) continue;   // an exit of that position
-                list.Add(new GroupHolding { Account = a.Name, Root = MasterName(o.Instrument), What = "entry", Side = buy ? 1 : -1, Qty = left, Kind = GroupKindWord(o.OrderType) });
+                int entryQty = left;
+                if (held != 0 && (buy ? held < 0 : held > 0))
+                {
+                    int room;
+                    if (!exitLeft.TryGetValue(full, out room)) room = Math.Abs(held);
+                    int asExit = Math.Min(room, left);
+                    exitLeft[full] = room - asExit;
+                    entryQty = left - asExit;   // the part past the position would open the other side
+                }
+                if (entryQty <= 0) continue;
+                list.Add(new GroupHolding { Account = a.Name, Root = MasterName(o.Instrument), What = "entry", Side = buy ? 1 : -1, Qty = entryQty, Kind = GroupKindWord(o.OrderType) });
             }
             return list;
         }
@@ -115,6 +127,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string GroupKindWord(OrderType t)
         {
             return t == OrderType.Limit ? "limit" : t == OrderType.StopMarket ? "stop" : t == OrderType.StopLimit ? "stop limit" : t == OrderType.MIT ? "MIT" : "market";
+        }
+
+        // The order is on the other side of the account's position on this contract by both readings (an exit, or an exit too big).
+        internal static bool GroupOpposite(Account a, Instrument inst, bool isBuy)
+        {
+            int pn = SignedPosition(a, inst), pe = EffectivePosition(a, inst);
+            return isBuy ? pn < 0 && pe < 0 : pn > 0 && pe > 0;
         }
 
         // The account's own new order is an exit of its position on this contract: the other side by both readings, and its
@@ -137,7 +156,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const string Header = "# ChartBridge account groups (written by ChartBridge; do not edit)";
         public const string Header2 = "# group<TAB>id<TAB>name<TAB>on|off<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>target|-<TAB>size<TAB>lockAt|-, member<TAB>account<TAB>id, personal<TAB>account<TAB>floor|-<TAB>daily|-";
         public const string MarksHeader = "# ChartBridge account marks (written by ChartBridge; do not edit)";
-        public const string MarksHeader2 = "# mark<TAB>account<TAB>peakEod|-<TAB>peakIntraday|-<TAB>dayStartBalance|-<TAB>session";
+        public const string MarksHeader2 = "# mark<TAB>account<TAB>peakEod|-<TAB>peakIntraday|-<TAB>dayStartBalance|-<TAB>session<TAB>dayStartAt (UTC ms)|-";
         public const string ReadFailedText = "groups.txt could not be read: every new entry is refused until it can (exits always work)";
         public const double MaxMoney = 100000000;
         public static double MarksWriteMs = 5000;  // account-marks.txt at most every 5 s while something changed (the harness sets 0)
@@ -179,7 +198,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private sealed class Mark
         {
             public string Name, Session;
-            public double? PeakEod, PeakIntraday, DayStart;
+            public double? PeakEod, PeakIntraday, DayStart, DayStartAt;   // DayStartAt: UTC ms of the day start's reading (review of #48)
             public Mark Clone() { return (Mark)MemberwiseClone(); }
         }
 
@@ -399,10 +418,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
                 string[] p = line.Split('\t');
                 double pe, pi, ds;
-                if (p.Length != 6 || p[0] != "mark" || p[1].Length == 0 || !FileMoney(p[2], true, out pe) || !FileMoney(p[3], true, out pi) || !FileMoney(p[4], true, out ds) ||
+ long at = 0;
+                if ((p.Length != 6 && p.Length != 7) || (p.Length == 7 && p[6] != "-" && !long.TryParse(p[6], NumberStyles.None, CultureInfo.InvariantCulture, out at)) || p[0] != "mark" || p[1].Length == 0 || !FileMoney(p[2], true, out pe) || !FileMoney(p[3], true, out pi) || !FileMoney(p[4], true, out ds) ||
                     !Regex.IsMatch(p[5], "^(?:-|[0-9]{4}-[0-9]{2}-[0-9]{2})$") || d.ContainsKey(p[1]))
                 { why = "line " + (i + 1) + " is not a mark line"; return null; }
-                d[p[1]] = new Mark { Name = p[1], PeakEod = pe > 0 ? pe : (double?)null, PeakIntraday = pi > 0 ? pi : (double?)null, DayStart = ds > 0 ? ds : (double?)null, Session = p[5] == "-" ? null : p[5] };
+                d[p[1]] = new Mark { Name = p[1], PeakEod = pe > 0 ? pe : (double?)null, PeakIntraday = pi > 0 ? pi : (double?)null, DayStart = ds > 0 ? ds : (double?)null, Session = p[5] == "-" ? null : p[5], DayStartAt = at > 0 ? at : (double?)null };
             }
             return d;
         }
@@ -420,7 +440,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     StringBuilder b = new StringBuilder(MarksHeader).Append('\n').Append(MarksHeader2).Append('\n');
                     foreach (Mark m in Marks.Values.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
                         b.Append("mark\t").Append(m.Name).Append('\t').Append(MoneyText(m.PeakEod ?? 0)).Append('\t').Append(MoneyText(m.PeakIntraday ?? 0)).Append('\t')
-                         .Append(MoneyText(m.DayStart ?? 0)).Append('\t').Append(m.Session ?? "-").Append('\n');
+                         .Append(MoneyText(m.DayStart ?? 0)).Append('\t').Append(m.Session ?? "-").Append('\t').Append(m.DayStartAt.HasValue ? ((long)m.DayStartAt.Value).ToString(CultureInfo.InvariantCulture) : "-").Append('\n');
                     text = b.ToString();
                     marksDirty = false; marksWrittenMs = t;
                 }
@@ -447,6 +467,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             EnsureLoaded();
             string session = SessionNow();
+            DateTime etNow = NowEt();
+            bool closeWindow = etNow.Hour == 17 || (etNow.Hour == 18 && etNow.Minute < 5);
+            double nowMs = (NowUtc() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
             foreach (Account a in all)
             {
                 if (a == null || a.Name == null || ChartBridgeOrders.IsNeverTradable(a.Name) || !Up(a) || !ChartBridgeAccounts.Listed(a.Name)) continue;
@@ -459,8 +482,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (!Marks.TryGetValue(a.Name, out m)) { Marks[a.Name] = m = new Mark { Name = a.Name }; marksDirty = true; }
                     if (m.Session != session)
                     {
-                        m.Session = session; m.DayStart = Math.Round(bal.Value, 2); marksDirty = true;
-                        if (m.PeakEod.HasValue && bal.Value > m.PeakEod.Value) m.PeakEod = Math.Round(bal.Value, 2);
+                        m.Session = session; m.DayStart = Math.Round(bal.Value, 2); m.DayStartAt = nowMs; marksDirty = true;
+                        // review of #48 (item 6): only a reading in the 17:00 to 18:05 ET window is a close; a late first reading
+                        // (ChartBridge started at midday) never raises the end-of-day high
+                        if (closeWindow && m.PeakEod.HasValue && bal.Value > m.PeakEod.Value) m.PeakEod = Math.Round(bal.Value, 2);
                     }
                     if (m.PeakIntraday.HasValue && un.HasValue && bal.Value + un.Value > m.PeakIntraday.Value + 0.004) { m.PeakIntraday = Math.Round(bal.Value + un.Value, 2); marksDirty = true; }
                 }
@@ -498,6 +523,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static string EntryCheck(string source, Account a, string root, bool isBuy, int qty, bool wantsLegs, bool strategy)
         {
             if (a == null || a.Name == null) return null;
+            // Review of #48 (items 1 and 2): a true exit of the account's own position passes first, whatever else holds (an
+            // unreadable groups.txt included): no stop, target or strategy, the other side of its position by both readings, and
+            // its contracts plus the exits already working on that side at most the position. Everything else is an entry.
+            Instrument inst = root != null ? ChartBridgeServer.InstrumentFor(root) : null;
+            bool exit = false, opposite = false;
+            try
+            {
+                if (!wantsLegs && !strategy && inst != null) { exit = ChartBridgeOrders.GroupExitOf(a, inst, isBuy, qty); opposite = !exit && ChartBridgeOrders.GroupOpposite(a, inst, isBuy); }
+            }
+            catch (Exception) { exit = false; }
+            if (exit) return null;
             EnsureLoaded();
             Group g;
             List<string> members;
@@ -512,11 +548,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!g.NoHedge) return null;
             try
             {
-                Instrument inst = root != null ? ChartBridgeServer.InstrumentFor(root) : null;
-                if (!wantsLegs && !strategy && inst != null && ChartBridgeOrders.GroupExitOf(a, inst, isBuy, qty)) return null;   // an exit of its own position
                 List<ChartBridgeOrders.GroupHolding> held = Holdings(members);
                 bool longs = held.Any(h => h.Side > 0), shorts = held.Any(h => h.Side < 0);
-                string tail = "; prop firms ban hedged accounts. Exits and flattens still work.";
+                string tail = "; prop firms ban hedged accounts. Exits and flattens still work." + (opposite ? " With the exits already working this order could take " + a.Name + " past flat: use Flatten, or cancel the working exits first." : "");
                 if (longs && shorts)
                     return "Group " + g.Name + " is long and short (" + HolderText(held) + "): no new entry on either side until it is one direction" + tail;
                 if (isBuy && shorts) return "Group " + g.Name + " is short (" + HolderText(held) + "): a buy on " + a.Name + " would hedge the group" + tail;
@@ -704,8 +738,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             double? ntReal = up ? Item(a, AccountItem.RealizedProfitLoss) : null;
             n.Set("balance", n.Balance, "ninjatrader", up ? "NinjaTrader gives no balance for this account" : down);
             n.Set("unrealized", n.Unrealized, "ninjatrader", up ? "NinjaTrader gives no open P&L for this account" : down);
-            string realSrc = null, realWhy;
-            if (n.Balance.HasValue && marksErr == null && mark != null && mark.DayStart.HasValue && mark.Session == n.Session) { n.Realized = n.Balance.Value - mark.DayStart.Value; realSrc = "computed"; realWhy = null; }
+            string realSrc = null, realWhy = null;
+            if (n.Balance.HasValue && marksErr == null && mark != null && mark.DayStart.HasValue && mark.Session == n.Session)
+            {
+                double comp = n.Balance.Value - mark.DayStart.Value;
+                // review of #48 (item 3): a day start read more than 2 minutes after the session's 18:00 ET start (ChartBridge started
+                // mid-session) can miss losses before it: the smaller of it and NinjaTrader's realized, which only understates the room
+                bool late = !mark.DayStartAt.HasValue || mark.DayStartAt.Value - SessionStartMs(n.Session) > LateDayStartMs;
+                if (!late) { n.Realized = comp; realSrc = "computed"; }
+                else if (ntReal.HasValue) { n.Realized = Math.Min(comp, ntReal.Value); realSrc = ntReal.Value < comp ? "ninjatrader" : "computed"; }
+                else realWhy = "ChartBridge started mid-session (its first reading came after 18:02 ET) and NinjaTrader gives no realized P&L: today's P&L is not known";
+            }
             else if (ntReal.HasValue) { n.Realized = ntReal; realSrc = "ninjatrader"; realWhy = null; }
             else realWhy = up ? "NinjaTrader gives no realized P&L for this account" : down;
             n.Set("realizedToday", n.Realized, realSrc, realWhy);
@@ -738,8 +781,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                 }
                 n.Set("floor", n.Floor, "computed", floorWhy);
-                if (ntRoom.HasValue) { n.RoomFloor = ntRoom; n.Set("roomFloor", n.RoomFloor, "ninjatrader", null); }
-                else { n.RoomFloor = n.Floor.HasValue && equity.HasValue ? equity.Value - n.Floor.Value : (double?)null; n.Set("roomFloor", n.RoomFloor, "computed", n.Floor.HasValue ? eqWhy : floorWhy); }
+                SetRoomFloor(n, ntRoom, equity, n.Floor.HasValue ? eqWhy : floorWhy);
                 if (g.DailyLoss > 0) { n.RoomDaily = n.Pnl.HasValue ? g.DailyLoss + n.Pnl.Value : (double?)null; n.Set("roomDaily", n.RoomDaily, "computed", n.Why.ContainsKey("pnlToday") ? n.Why["pnlToday"] : null); }
                 else n.Set("roomDaily", null, null, "group " + g.Name + " has no daily loss limit");
                 if (g.Target > 0) { n.TargetLeft = n.Balance.HasValue ? g.Size + g.Target - n.Balance.Value : (double?)null; n.Set("targetLeft", n.TargetLeft, "computed", up ? "NinjaTrader gives no balance for this account" : down); }
@@ -750,13 +792,30 @@ namespace NinjaTrader.NinjaScript.AddOns
                 n.Floor = n.MyFloor;
                 string floorWhy = "no group and no floor of its own (the Accounts tab)";
                 n.Set("floor", n.Floor, "settings", floorWhy);
-                if (ntRoom.HasValue) { n.RoomFloor = ntRoom; n.Set("roomFloor", n.RoomFloor, "ninjatrader", null); }
-                else { n.RoomFloor = n.Floor.HasValue && equity.HasValue ? equity.Value - n.Floor.Value : (double?)null; n.Set("roomFloor", n.RoomFloor, "computed", n.Floor.HasValue ? eqWhy : floorWhy); }
+                SetRoomFloor(n, ntRoom, equity, n.Floor.HasValue ? eqWhy : floorWhy);
                 if (n.MyDaily.HasValue) { n.RoomDaily = n.Pnl.HasValue ? n.MyDaily.Value + n.Pnl.Value : (double?)null; n.Set("roomDaily", n.RoomDaily, "computed", n.Why.ContainsKey("pnlToday") ? n.Why["pnlToday"] : null); }
                 else n.Set("roomDaily", null, null, "no group and no daily limit of its own (the Accounts tab)");
                 n.Set("targetLeft", null, null, "a personal account has no profit target");
             }
             return n;
+        }
+
+        public const double LateDayStartMs = 120000;   // review of #48: a day start read more than 2 minutes after 18:00 ET is late
+        // 18:00 ET of the evening before a session date (the session's start), UTC ms.
+        private static double SessionStartMs(string session)
+        {
+            DateTime d = DateTime.ParseExact(session, "yyyy-MM-dd", CultureInfo.InvariantCulture).AddDays(-1).AddHours(18);
+            DateTime utc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(d, DateTimeKind.Unspecified), ChartBridgeTime.Eastern);
+            return (utc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+        }
+
+        // Review of #48 (item 4): with NinjaTrader's trailing drawdown and the computed room both known, the smaller (src says which).
+        private static void SetRoomFloor(Numbers n, double? ntRoom, double? equity, string why)
+        {
+            double? comp = n.Floor.HasValue && equity.HasValue ? equity.Value - n.Floor.Value : (double?)null;
+            if (ntRoom.HasValue && comp.HasValue) { n.RoomFloor = Math.Min(ntRoom.Value, comp.Value); n.Set("roomFloor", n.RoomFloor, ntRoom.Value < comp.Value ? "ninjatrader" : "computed", null); }
+            else if (ntRoom.HasValue) { n.RoomFloor = ntRoom; n.Set("roomFloor", n.RoomFloor, "ninjatrader", null); }
+            else { n.RoomFloor = comp; n.Set("roomFloor", comp, "computed", why); }
         }
 
         private static double? Get(Numbers n, string key)

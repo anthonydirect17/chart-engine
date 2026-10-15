@@ -113,10 +113,12 @@ public static class GroupsHarness
             AgentState();
             Deleting();
             Unreadable();
+            ReviewFixes();   // the order-path review of #48, items 1 to 6
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally
         {
+            try { ChartBridgeAgents.Stop(); ChartBridgeAgents.ResetConfig(); } catch (Exception) { }
             ChartBridgeGroups.ClockUtc = null; ChartBridgeBranches.ClockUtc = null; ChartBridgeAccounts.ReadFault = null; ChartBridgeGroups.MarksWriteMs = 5000;
             OrdersHarness.AllOffLines();
             ChartBridgeAccounts.Clear();
@@ -403,8 +405,9 @@ public static class GroupsHarness
         // static (Apex, g2): size 50000, drawdown 2500, no daily, no target
         Clear(); G("groupSave", Save(",\"group\":\"g2\"", "Apex", "true", "1000", "2500", "static", "3000", "50000", "0"));
         Clear(); G("accountGroup", Join("SIM-D", "\"g2\"", null));
+        ClockEt(2026, 10, 13, 18, 1);
+        Money(simD, 49000, 0, 0); Tick();   // the day starts at 49000, read at 18:01 ET (on time: the computed P&L counts)
         ClockEt(2026, 10, 14, 10, 0);
-        Money(simD, 49000, 0, 0); Tick();   // the day starts at 49000
         Money(simD, 48500, -100, -999);    // lost 500 since, 100 open
         string e = Entry(AccountsNow(), "SIM-D");
         Check(e.Contains("\"group\":\"g2\"") && e.Contains("\"floor\":47500,\"roomFloor\":900,\"roomDaily\":400,\"targetLeft\":4500") && e.Contains("\"src\":{\"floor\":\"computed\",\"roomFloor\":\"computed\",\"roomDaily\":\"computed\",\"targetLeft\":\"computed\"}"),
@@ -431,7 +434,10 @@ public static class GroupsHarness
         // NinjaTrader's trailing drawdown wins when it reports one
         simB.Items[AccountItem.TrailingMaxDrawdown] = 1234.5;
         e = Entry(AccountsNow(), "SIM-B");
-        Check(e.Contains("\"roomFloor\":1234.5,") && e.Contains("\"roomFloor\":\"ninjatrader\""), "NinjaTrader's trailing drawdown reported: roomFloor is its figure: " + e);
+        Check(e.Contains("\"roomFloor\":900,") && e.Contains("\"roomFloor\":\"computed\""), "review item 4: NinjaTrader's 1234.50 and the computed 900 both known: the smaller (computed): " + e);
+        simB.Items[AccountItem.TrailingMaxDrawdown] = 700;
+        e = Entry(AccountsNow(), "SIM-B");
+        Check(e.Contains("\"roomFloor\":700,") && e.Contains("\"roomFloor\":\"ninjatrader\""), "review item 4: NinjaTrader's 700 is smaller: its figure, src ninjatrader: " + e);
         simB.Items.Remove(AccountItem.TrailingMaxDrawdown);
         // personal: SIM-C leaves the group, its own floor
         Clear(); G("accountGroup", Join("SIM-C", "null", null));
@@ -510,6 +516,83 @@ public static class GroupsHarness
         Check(!Last("groups").Contains("Lucid Flex") && Entry(Last("accounts"), "SIM-A").Contains("\"group\":null"), "the pages told at once");
         Clear(); G("groupSave", Save("", "Topstep", "true", "0", "2000", "eod", "0", "50000", "0"));
         Check(FileText().Contains("group\tg3\tTopstep"), "a new group takes the next id (g3)");
+    }
+
+    // ------------------------------------------------------------ the order-path review of #48 (each check fails on a889b8f)
+    static void ReviewFixes()
+    {
+        Flat();
+        ChartBridgeGroups.ClockUtc = null; ClockEt(2026, 10, 14, 10, 0);
+        Clear(); G("groupSave", Save("", "Review", "true", "0", "2000", "eod", "0", "50000", "0"));
+        Money(simA, 50000, 0, 0); Money(simC, 50000, 0, 0);
+        G("accountGroup", Join("SIM-A", "\"g1\"", null)); G("accountGroup", Join("SIM-C", "\"g1\"", null));
+        Check(ChartBridgeGroups.GroupOf("SIM-A") == "g1" && ChartBridgeGroups.GroupOf("SIM-C") == "g1", "review: SIM-A and SIM-C in Review");
+        // item 1: with agents on, a page market sell of 2 on a long 2 is pageReduces; a second while the first works would flip SIM-A short
+        ChartBridgeAgents.ReadConfig("agents", "rv");
+        ChartBridgeAgents.Start(false);
+        try
+        {
+            Check(ChartBridgeAgents.Enabled, "review item 1: the agent channel is on (pageReduces in play)");
+            Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+            int a0 = Submits(simA);
+            Clear(); O(Order("SIM-A", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":2"));
+            Check(Submits(simA) == a0 + 1 && Rejection() == "", "review item 1: the first market sell of the whole long 2: a true exit, it goes");
+            Clear(); O(Order("SIM-A", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":2"));
+            Check(Submits(simA) == a0 + 1 && Rejection().Contains("Group Review is long") && Rejection().Contains("could take SIM-A past flat: use Flatten"),
+                  "review item 1: a second sell of 2 while the first works (it would leave SIM-A short 2 beside SIM-C long): refused, saying to use Flatten: " + Rejection());
+            simA.Orders.Last().OrderState = OrderState.Cancelled;
+            Clear(); O(Order("SIM-A", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":2"));
+            Check(Submits(simA) == a0 + 2 && Rejection() == "", "review item 1: once the first is cancelled, the exit goes again (a true exit is never refused)");
+        }
+        finally { ChartBridgeAgents.Stop(); ChartBridgeAgents.ResetConfig(); }
+        Flat();
+        // item 5: two sells of 2 on a long 2: the second is an entry of 2 (the group is long and short)
+        Pos(simA, mnq, 2);
+        Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed 1");
+        Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed 2");
+        string gj = ChartBridgeGroups.GroupsJson();
+        Check(gj.Contains("\"side\":\"mixed\"") && gj.Contains("{\"account\":\"SIM-A\",\"root\":\"MNQ\",\"side\":\"short\",\"what\":\"entry\",\"qty\":2}"), "review item 5: opposite orders summed: past the position they are an entry (mixed): " + gj);
+        Flat();
+        Pos(simA, mnq, 2);
+        Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 1, "", "typed 1");
+        Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed 2");
+        gj = ChartBridgeGroups.GroupsJson();
+        Check(gj.Contains("\"side\":\"short\",\"what\":\"entry\",\"qty\":1}"), "review item 5: 1 + 2 sells on a long 2: 1 contract past it counts");
+        Flat();
+        // item 2: an unreadable groups.txt refuses entries but never an exit
+        string file = Path.Combine(folder, "groups.txt"), was = File.ReadAllText(file);
+        File.WriteAllText(file, "broken\n");
+        ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+        Pos(simD, mnq, 1);
+        int d0 = Submits(simD);
+        Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1"));
+        Check(Submits(simD) == d0 + 1 && Rejection() == "", "review item 2: groups.txt unreadable: the sell of SIM-D's long 1 (an exit) goes");
+        Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(Submits(simD) == d0 + 1 && Rejection().Contains("groups.txt could not be read"), "review item 2: an entry is still refused");
+        File.WriteAllText(file, was);
+        ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+        Flat();
+        // item 6: a late first reading (10:00 ET) never raises the end-of-day high; item 3: a late day start takes the smaller P&L
+        Clear(); G("accountGroup", Join("SIM-B", "\"g1\"", "50000"));
+        Money(simB, 52000, 0, -400);
+        ClockEt(2026, 10, 16, 10, 0); Tick();
+        Check(MarksText().Contains("mark\tSIM-B\t50000\t"), "review item 6: a first reading at 10:00 ET (52000) does not raise the end-of-day high (50000): " + MarksText().Replace("\t", "<TAB>"));
+        Money(simB, 51900, -50, -400);
+        string st = State("SIM-B");
+        Check(st.Contains("\"pnlToday\":-450,\"realizedToday\":-400,") && st.Contains("\"realizedToday\":\"ninjatrader\"") && st.Contains("\"pnlToday\":\"ninjatrader\""),
+              "review item 3: a day start read mid-session: the smaller of the computed (-100) and NinjaTrader's (-400): " + st);
+        simB.Items[AccountItem.RealizedProfitLoss] = double.NaN;
+        st = State("SIM-B");
+        Check(st.Contains("\"pnlToday\":null") && st.Contains("\"roomDaily\":null") && st.Contains("started mid-session"), "review item 3: no NinjaTrader realized to compare: today's P&L and the daily room null, with why: " + st);
+        simB.Items[AccountItem.RealizedProfitLoss] = 0;
+        ClockEt(2026, 10, 16, 18, 1); Money(simB, 52000, 0, 0); Tick();
+        Money(simB, 51900, 0, -999);
+        st = State("SIM-B");
+        Check(st.Contains("\"realizedToday\":-100,") && st.Contains("\"realizedToday\":\"computed\"") && MarksText().Contains("mark\tSIM-B\t52000\t"), "review items 3 and 6: read at 18:01 ET: on time, the computed P&L, and the close raises the end-of-day high: " + st);
+        ClockEt(2026, 10, 14, 10, 0);
+        Flat();
     }
 
     // ------------------------------------------------------------ an unreadable groups.txt: every entry refused, never rewritten

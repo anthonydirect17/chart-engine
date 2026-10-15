@@ -44,6 +44,19 @@ places an order) and page file `live/groups.js`, both in `install-files.json`. A
   Bot-Lab side), the eight numbers with `src` and `why`, `session`, `at`. Sent right after the snapshot on every `agentHello`,
   then from the 1 s pass when anything but `at` changed, and at once on an account, group or rules change.
 - **F-ALL (a)**: the ticket's Flatten all on None does nothing, as built in 0.5.7.
+- **Review of #48 (fixed before merge):**
+  - A page market exit skipped the group check (the agents' `pageReduces`), so a second Sell Mkt 2 on a long 2 while the first
+    still worked could flip the account short beside a member's long. Every order now asks the check; its own exit rule passes
+    a true exit and counts the exits already working; one too big is refused, saying to use Flatten or cancel the working exits.
+  - An unreadable `groups.txt` refused exits too: the exit rule now comes first, and only entries are refused.
+  - A ChartBridge started mid-session took its first reading as the day start, so earlier losses were missed: a day start read
+    more than 2 minutes after 18:00 ET takes the smaller of it and NinjaTrader's realized P&L (null, with why, when NinjaTrader
+    gives none), which can only understate the daily room. `account-marks.txt` keeps when the day start was read.
+  - NinjaTrader's trailing drawdown overrode the computed room: with both, the smaller.
+  - Orders on the other side of a position were each taken as an exit when no more than the position: they are summed now, and
+    the part past the position counts as an entry.
+  - A late first reading raised the end-of-day high to a midday balance: only a reading in the 17:00 to 18:05 ET window does.
+  - PROTOCOL says plainly that an OCO pair of entries typed into NinjaTrader is not counted until one fills.
 - **Tests.** `check:orders`: GroupsHarness (the files, the migration, an unreadable file, every refusal, side counting with
   both readings and ChartBridge's just sent, legs and exits, the exit rule, mixed, No hedging off, two opposite entries at once,
   the numbers for end of day, intraday, static and personal, the highs and the day start across a restart), and a group check in
@@ -52,6 +65,7 @@ places an order) and page file `live/groups.js`, both in `install-files.json`. A
   10b) and IntegrationHarness X14. Node: `groups.test.js`, `accounts-page.test.js`, `nt8-source.test.js` (ChartBridgeGroups.cs
   never places an order; every entry path asks it), `fake-agent` (`accountStateProblem`). `smoke:accounts` section 4 at
   1366x768 (the Group dropdowns, the highest close question, My floor, Settings' groups column, the rules dialog, Delete).
+  The review's fixes each have a GroupsHarness check that fails on the code before them.
 
 ## ChartBridge 0.5.7 and chart 1.25.0 (2026-10-14): the plan id on agent orders, no TradeLost alarm during a flatten, None in every tab
 

@@ -2865,11 +2865,13 @@ always work)"), every page gets that `status` `error` as it signs in, and the pa
 (every PC before 0.5.8): no groups, every account personal with no limits, ChartBridge behaves exactly as 0.5.7.
 `account-marks.txt`: two `#` lines, then
 
-    mark<TAB><account><TAB><peakEod>|-<TAB><peakIntraday>|-<TAB><dayStartBalance>|-<TAB><session>
+    mark<TAB><account><TAB><peakEod>|-<TAB><peakIntraday>|-<TAB><dayStartBalance>|-<TAB><session><TAB><dayStartAt>|-
 
 per account seen connected this NinjaTrader session. `peakEod`, the highest end-of-day equity (balance plus open P&L): raised
 in the 17:00 to 18:00 ET break by the same 2 s check that runs the daily reset (whether or not the reset ran a branch), and by
-each session's first reading (`dayStartBalance`, the close before it). `peakIntraday`, the highest equity seen, raised by the
+each session's first reading (`dayStartBalance`, the close before it) only when that reading falls in the 17:00 to 18:05 ET
+window (review of #48: a ChartBridge started at midday never takes a midday balance for a close). `dayStartAt` is the UTC ms of
+that reading. `peakIntraday`, the highest equity seen, raised by the
 1 s accounts check. The highs are kept only for an account in a group: joining sets both (G2), leaving or a deleted group
 clears them. `dayStartBalance`, the balance at the first reading of each session (`session`, `yyyy-MM-dd`, ChartBridge's
 18:00 ET session date, as `agentState.session`). Written at most every 5 s while something changed, and at the stop. A file
@@ -2883,10 +2885,10 @@ day start, no high from it). ChartBridge 0.5.7 and older never read either file,
 |---|---|---|
 | `balance` | NinjaTrader's `CashValue` | `ninjatrader` |
 | `unrealized` | NinjaTrader's `UnrealizedProfitLoss` | `ninjatrader` |
-| `realizedToday` | `balance - dayStartBalance`; without a day start, NinjaTrader's `RealizedProfitLoss` (it does not always start over at 18:00 ET) | `computed` / `ninjatrader` |
+| `realizedToday` | `balance - dayStartBalance`; without a day start, NinjaTrader's `RealizedProfitLoss` (it does not always start over at 18:00 ET). Review of #48: a day start read more than 2 minutes after the session's 18:00 ET start (ChartBridge started mid-session) takes the smaller of the two, which can only understate the room; with no NinjaTrader figure then, null ("ChartBridge started mid-session ...") and so is `roomDaily` | `computed` / `ninjatrader` (whichever is smaller) |
 | `pnlToday` | `realizedToday + unrealized` (open P&L counted) | `computed` / `ninjatrader` |
 | `floor` | group `eod`: `max(peakEod, size) - drawdown`; `intraday`: `max(peakIntraday, size) - drawdown`; both never above `lockAt` when it is set; `static`: `size - drawdown`. Personal: "my floor" | `computed` / `settings` |
-| `roomFloor` | NinjaTrader's trailing drawdown left when it reports one (`TrailingMaxDrawdown`, as `roomDrawdown`); else `equity - floor` | `ninjatrader` / `computed` |
+| `roomFloor` | `equity - floor`, and NinjaTrader's trailing drawdown left when it reports one (`TrailingMaxDrawdown`, as `roomDrawdown`): with both, the smaller (review of #48) | `computed` / `ninjatrader` (whichever is smaller) |
 | `roomDaily` | `dailyLoss + pnlToday` (group), `myDailyLoss + pnlToday` (personal) | `computed` |
 | `targetLeft` | `size + target - balance` (group with a target) | `computed` |
 
@@ -2951,12 +2953,18 @@ follower; the copier holds the same lock); the agent's plan check 10b asks it to
 - positions, by either reading (NinjaTrader's list, and fills reported but not yet in it), each a long or a short;
 - working entries: every order that may still fill on NinjaTrader's list, and ChartBridge's own just sent (between `Submit`
   and NinjaTrader's list), except ChartBridge's legs and exits (`CB#<tag> stop|target|exit ...`, merged legs, an agent's
-  `flat`, `protect` and stop placed again), any order with an OCO id, and an order on the other side of that account's
-  position on that instrument for no more than the position (an exit).
+  `flat`, `protect` and stop placed again), any order with an OCO id, and orders on the other side of that account's position
+  on that instrument up to the position, summed (review of #48: two sells of 2 on a long 2, the second is an entry of 2).
+  **Not counted** (review of #48, item 7): an order with an OCO id, so an OCO pair of entries typed into NinjaTrader itself (a
+  breakout bracket, buy stop above and sell stop below) is not seen as working entries until one of them fills; its fill is then
+  a position and counts. Counting OCO orders would also count every stop and target of an open position as entries.
 
 The account's own new order is exempt when it is an exit: no stop or target asked, no Order Strategy, the other side of its
 position on that instrument by both readings, and its contracts plus the exits already working on that side no more than the
-position. Otherwise: a buy is refused while the group holds a short anywhere, a sell while it holds a long, and both while it
+position. Review of #48: this exit rule is asked first, for every order (a page market exit too, which until then skipped the
+whole check), and before anything else, so an unreadable `groups.txt` refuses entries only, never an exit; an order on the other
+side that is too big with the exits already working is refused as an entry, the refusal saying to use Flatten (always allowed)
+or cancel the working exits. Otherwise: a buy is refused while the group holds a short anywhere, a sell while it holds a long, and both while it
 is mixed. The refusal names the group and the holders, as NinjaTrader names the accounts (made-up names here):
 "Group Lucid is long (SIM-A +2 MNQ; SIM-B buy limit 1 NQ working): a sell on SIM-C would hedge the group; prop firms ban hedged
 accounts. Exits and flattens still work." Two entries on opposite sides at the same moment: one passes, the other is refused
