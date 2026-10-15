@@ -2856,7 +2856,8 @@ places, changes or cancels an order) and the page's Settings and Accounts tab (`
     personal<TAB><account><TAB><floor>|-<TAB><daily>|-
 
 `on|off` is the No hedging switch; `-` is none. Money is dollars with at most 2 decimals, a `.` for the point. Ids are `g1`,
-`g2`, ... in the order made, never used again, so a rename never touches membership. A `group` line may carry more fields after
+`g2`, ... in the order made (the next is one above the highest in the file), so a rename never touches membership; a deleted
+group's members go to None with it, so no line ever points at a group that is gone. A `group` line may carry more fields after
 `lockAt` (a later ChartBridge's); they are kept as read. Anything else (a line ChartBridge does not know, a group id twice, a
 member of a group that is not there, an account twice, a name twice) makes the file unreadable: it is **never rewritten that
 run**, every entry on every account is refused ("groups.txt could not be read: every new entry is refused until it can (exits
@@ -2869,10 +2870,12 @@ always work)"), every page gets that `status` `error` as it signs in, and the pa
 per account seen connected this NinjaTrader session. `peakEod`, the highest end-of-day equity (balance plus open P&L): raised
 in the 17:00 to 18:00 ET break by the same 2 s check that runs the daily reset (whether or not the reset ran a branch), and by
 each session's first reading (`dayStartBalance`, the close before it). `peakIntraday`, the highest equity seen, raised by the
-1 s accounts check. `dayStartBalance`, the balance at the first reading of each session (`session`, `yyyy-MM-dd`, ChartBridge's
+1 s accounts check. The highs are kept only for an account in a group: joining sets both (G2), leaving or a deleted group
+clears them. `dayStartBalance`, the balance at the first reading of each session (`session`, `yyyy-MM-dd`, ChartBridge's
 18:00 ET session date, as `agentState.session`). Written at most every 5 s while something changed, and at the stop. A file
-that cannot be read is not rewritten that run: the trailing floors and the computed P&L are null with that reason (a static
-floor still works). ChartBridge 0.5.7 and older never read either file, so going back is safe (they behave as before).
+that cannot be read is not rewritten that run: the trailing floors are null with that reason (a static floor still works) and
+`realizedToday` and `pnlToday` fall back to NinjaTrader's. A balance of 0 is taken as NinjaTrader not having given one yet (no
+day start, no high from it). ChartBridge 0.5.7 and older never read either file, so going back is safe (they behave as before).
 
 **The numbers** (per account; `equity` = balance + unrealized):
 
@@ -2910,8 +2913,9 @@ config switch):
   `position` or `entry`, `root` the instrument's master name, `side` `long` or `short`, `qty` the contracts held or left to
   fill). `error`: null, or why `groups.txt` cannot be read (then `list` is empty and every entry is refused).
 - `accounts`: each entry gains `group` (its group id or null), `myFloor`, `myDailyLoss` (a personal account's own limits,
-  null for none), `floor`, `roomFloor`, `roomDaily`, `targetLeft`, `src` and `why` (as `accountState` below). `pnlToday` is
-  the number above (`src.pnlToday` says which). `roomDrawdown` and `roomDailyLoss` stay as they were, so a 1.25 page works.
+  null for none), `floor`, `roomFloor`, `roomDaily`, `targetLeft`, and `src` and `why` for those four (as `accountState`
+  below). Everything else stays exactly as it was (`pnlToday` is still NinjaTrader's realized plus unrealized; the day's P&L
+  from the day start is in `accountState` and in `roomDaily`), so a 1.25 page works.
 - A noHedge group that turns mixed by itself (an order typed into NinjaTrader cannot be refused): one `status` `error` to every
   signed-in page ("Group <name> is now long and short (...): no new entries on either side until it is one direction; close one
   side in NinjaTrader") when it turns mixed, and one `status` `info` when it is one direction again.

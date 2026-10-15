@@ -107,6 +107,7 @@ public static class BotHarness
             WithdrawDuringPlacement();   // review 2 finding 7
             Auto();
             Size();
+            GroupRefusal();   // 0.5.8: one direction per group refuses a bot entry too
             Losses();
             FiveTrades();
             KillSwitch();
@@ -432,6 +433,28 @@ public static class BotHarness
         Bot(Sig(NewId(), Market("sell")));
         Check(BotReject().Contains("reduces the position") && sim.Calls.Count == n, "a bot entry never reduces a position (every entry has a stop)");
         sim.Positions.Clear();
+    }
+
+    // ------------------------------------------------------------ 0.5.8: Sim101 in a group that is short: the bot's buy is refused
+    static void GroupRefusal()
+    {
+        string file = Path.Combine(home, "ChartBridge", "groups.txt");
+        File.WriteAllText(file, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t-\t50000\t-\nmember\tSim101\tg1\nmember\tEVAL-A\tg1\n");
+        ChartBridgeGroups.StartNow();
+        try
+        {
+            eval.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Short, Quantity = 1, AveragePrice = 25000 });
+            int n = sim.Calls.Count;
+            Bot(Sig(NewId(), Market("buy")));
+            Check(BotReject().Contains("Group Lucid is short (EVAL-A -1 MNQ): a buy on Sim101 would hedge the group") && sim.Calls.Count == n, "0.5.8: the bot's buy while its account's group is short: refused, nothing sent: " + BotReject());
+            Check(Last(page, "botSignal").Contains("refused: Group Lucid is short"), "0.5.8: the page sees it refused");
+        }
+        finally
+        {
+            eval.Positions.Clear();
+            File.Delete(file);
+            ChartBridgeGroups.StartNow();
+        }
     }
 
     static Order AutoTrade(string side)

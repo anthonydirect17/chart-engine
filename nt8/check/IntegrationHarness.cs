@@ -187,6 +187,7 @@ public static class IntegrationHarness
             StrategyOnTheLeader();
             MergeStrategyLegs();
             BotNoStrategy();
+            GroupsWithTheLanes();   // X14: 0.5.8, one direction per group across the lanes
             MergedThenRestart();   // fix1 (F4); it restarts ChartBridge's memory (the copier's is its own)
             Sim101NeverAFollowerWithTheBot();
             MergeNeverOnAFollower();   // X12 (last: SIM-G stays listed as a follower)   // X10, X11: review 2 findings 3 and 9 (last: Sim101 stays listed as a follower)
@@ -524,6 +525,37 @@ public static class IntegrationHarness
                   "X8: with strategies and orderTypes on, a bot order with a strategy or an MIT is refused, nothing sent: " + why1 + " / " + why2);
         }
         finally { ChartBridgeSwitches.Note("orderTypes", "off"); }
+    }
+
+    // ------------------------------------------------------------ X14 (0.5.8): one direction per group across the lanes
+    // Sim101 (the copier's leader) and SIM-L in one group, SIM-L short: a strategy entry on the leader is refused (a strategy is
+    // never an exit) and nothing is copied; a bot entry there is refused the same way; SIM-L's own buy of its short is an exit.
+    static void GroupsWithTheLanes()
+    {
+        string file = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "ChartBridge", "groups.txt");
+        File.WriteAllText(file, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t-\t50000\t-\nmember\tSim101\tg1\nmember\tSIM-L\tg1\n");
+        ChartBridgeGroups.StartNow();
+        try
+        {
+            Trade(25000);
+            SetPos(other, -1);
+            Booked();   // the short as filled long ago (no fill pending in the other reading)
+            int n = lead.Calls.Count, copies = CopyEntries(f1), o0 = other.Calls.Count;
+            lock (sent) sent.Clear();
+            Msg("order", StratOrder("Sim101", 1, NoBe));
+            Check(Rejected("Group Lucid is short (SIM-L -1 MNQ): a buy on Sim101 would hedge the group") && lead.Calls.Count == n && CopyEntries(f1) == copies, "X14: a strategy entry on the leader while its group is short: refused, nothing sent, nothing copied: " + Last());
+            Order placed;
+            string why = ChartBridgeOrders.PlaceBotEntry("{\"type\":\"order\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}}", out placed);
+            Check(why != null && why.Contains("Group Lucid is short") && lead.Calls.Count == n, "X14: a bot entry on the group's account: refused the same way: " + why);
+            Msg("order", "{\"type\":\"order\",\"cid\":\"x14\",\"account\":\"SIM-L\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1}");
+            Check(other.Calls.Count == o0 + 1 && other.Calls.Last().Contains(" Buy Market 1 "), "X14: SIM-L's buy of its own short: an exit, it goes: " + Last() + " | " + string.Join(" | ", other.Orders.Where(IsLive).Select(x => x.Name + " " + x.OrderAction + " " + x.Quantity)));
+        }
+        finally
+        {
+            Clean(lead, f1, other);
+            File.Delete(file);
+            ChartBridgeGroups.StartNow();
+        }
     }
 
     // ------------------------------------------------------------ X9 (review 2 finding 8): the leader entry is registered before Submit
