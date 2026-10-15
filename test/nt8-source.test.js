@@ -1280,7 +1280,7 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.5\.[1-7]";/);
+  assert.match(code, /public const string Version = "0\.5\.[1-8]";/);
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1309,7 +1309,7 @@ test('ChartBridge 0.5.5: the accounts line\'s one-time conversion and notConnect
 });
 
 test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its own thread, and tells hello, the pages and /diag', () => {
-  assert.match(code, /public const string Version = "0\.5\.[6-7]";/);
+  assert.match(code, /public const string Version = "0\.5\.[6-8]";/);
   const clk = code.slice(code.indexOf('public static class ChartBridgeClock'));
   assert.ok(code.indexOf('public static class ChartBridgeClock') > code.indexOf('public static class ChartBridgeServer') && clk.length > 1000, 'ChartBridgeClock is the last class of ChartBridge.cs');
   // never sets the clock or a setting: no Win32 time call, no w32tm, no process, no registry, in any add-on file
@@ -1352,11 +1352,62 @@ test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its o
   assert.match(bodyOf(code, 'private static string DiagJson()'), /\\"clockOffsetMs\\"[^\n]*\n\s*b\.Append\(",\\"pcClock\\":"\)\.Append\(ChartBridgeClock\.DiagJson\(\)\);/);
   assert.match(bodyOf(code, 'public static double NowUtcMs()'), /if \(stepped != 0\) ChartBridgeClock\.PcClockChanged\(stepped\);/);
   // the harness runs it (npm run check:orders); C# 5
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/AgentHarness\.cs check\/ClockHarness\.cs &&/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/AgentHarness\.cs check\/ClockHarness\.cs( check\/\w+\.cs)* &&/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("time check \(0\.5\.6\)", ClockHarness\.Run\);/);
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(clk) && !/\?\.\w/.test(clk) && !/\bnameof\(/.test(clk), 'C# 5');
   // documented
   const proto = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'PROTOCOL.md'), 'utf8');
   assert.match(proto, /\| `pcClock` \|/);
   assert.match(proto, /### This PC's clock against a time server \(0\.5\.6\)/);
+});
+
+test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and every entry path asks its one-direction check', () => {
+  const read = f => fs.readFileSync(path.join(__dirname, '..', 'nt8', f), 'utf8');
+  const strip = s => s.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+  const g = strip(read('ChartBridgeGroups.cs'));
+  const files = JSON.parse(read('install-files.json'));
+  assert.ok(files.addons.includes('nt8/ChartBridgeGroups.cs'), 'install-files.json addons');
+  assert.ok(/ChartBridgeGroups\.cs check\/Nt8Stubs\.cs/.test(read('check/check.sh')) && /ChartBridgeGroups\.cs check\/Nt8Stubs\.cs/.test(read('check/orders.sh')) && /check\/GroupsHarness\.cs/.test(read('check/orders.sh')), 'compile-checked and harnessed');
+  for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/, /CancelAllOrders/, /\bAtm\w*\./, /\bOrderAction\./])
+    assert.ok(!re.test(g), 'ChartBridgeGroups.cs must never place, change or cancel an order: ' + re);
+  assert.ok(!/\$@?"[^"\n]*\{/.test(g) && !/\?\.[A-Za-z]/.test(g), 'C# 5 only: no string interpolation or ?.');
+  // PlaceOrderLocked: the check runs under PlaceLock, after every gate, before the order is made (pageReduces exits skip it)
+  const o = strip(read('ChartBridgeOrders.cs'));
+  const place = o.slice(o.indexOf('private static string PlaceOrderLocked('), o.indexOf('private static string PriceText('));
+  const ig = place.indexOf('ChartBridgeGroups.EntryCheck(');
+  assert.ok(ig > 0 && ig < place.indexOf('account.CreateOrder(') && ig < place.indexOf('account.Submit(') && ig > place.indexOf('bool wantsLegs ='), 'the group check comes before the order exists');
+  assert.match(place, /string groupWhy = pageReduces \? null : ChartBridgeGroups\.EntryCheck\(agent != null \? "agent:" \+ agent : bot \? "bot" : "page", account, root, isBuy, qty, wantsLegs, strat != null\);\s*if \(groupWhy != null\) return groupWhy;/);
+  assert.match(o, /lock \(PlaceLock\) why = PlaceOrderLocked\(/);
+  // the copier's Eligible (under the same lock) and the agent's plan check 10b
+  const c = strip(read('ChartBridgeCopier.cs'));
+  const elig = c.slice(c.indexOf('private static Account Eligible('), c.indexOf('private static void Skip('));
+  assert.match(elig, /string grp = ChartBridgeGroups\.EntryCheck\("copier", a, fRoot, le\.Buy, fq, true, false\);[^\n]*\n\s*if \(grp != null\) \{ label = "group"; why = grp; return null; \}\s*return a;/);
+  const a = strip(read('ChartBridgeAgents.cs'));
+  assert.ok(a.indexOf('ChartBridgeGroups.EntryCheck("agent:" + Id') > a.indexOf('// 10. the owner lock') || /string groupWhy = ChartBridgeGroups\.EntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Qty, true, false\);/.test(a), 'check 10b');
+  // accountState after the snapshot, from the 1 s pass and on every change; the end-of-day highs in the 17:00 ET break
+  assert.match(a, /Snapshot\(served\);\s*lock \(Sync\) snapshotSent = true;[^\n]*\n\s*SendAccountState\(true\);/);
+  assert.match(a, /SendState\(false\);[^\n]*\n\s*SendAccountState\(false\);/);
+  const acc = strip(read('ChartBridgeAccounts.cs'));
+  assert.match(acc, /if \(et\.Hour != 17\) return;\s*try \{ ChartBridgeGroups\.EodMark\(\); \}/);
+  assert.match(acc, /ChartBridgeGroups\.AppendAccountFields\(b, name, a\);/);
+  assert.match(acc, /ChartBridgeGroups\.StartNow\(\);[^\n]*\n\s*if \(!On\) return;/, 'groups.txt is read whether or not accountChecks is on');
+  // the page messages, through ChartBridge.cs's dispatch; strict keys
+  assert.match(code, /else if \(ChartBridgeGroups\.Handles\(type\)\) ChartBridgeGroups\.OnMessage\(client, type, text\);/);
+  assert.match(g, /\{ "groupSave", new\[\] \{ "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt" \} \}/);
+  assert.match(g, /\{ "accountGroup", new\[\] \{ "type", "cid", "account", "group", "highClose" \} \}/);
+  // accounts.txt keeps its 0.5.0 format: groups live in their own file
+  assert.ok(!/groups/.test(acc.slice(acc.indexOf('private static void Save()'), acc.indexOf('private static void SaveDetails()'))), 'accounts.txt is not touched');
+});
+
+test('ChartBridge 0.5.8: accountState carries the PROTOCOL table\'s fields, in its order', () => {
+  const g = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeGroups.cs'), 'utf8');
+  const proto = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'PROTOCOL.md'), 'utf8');
+  const body = g.slice(g.indexOf('public static string AccountStateJson('), g.indexOf('// ---------------------------------------------------------- messages from the page'));
+  const keys = [...body.matchAll(/\\"([a-zA-Z]+)\\":/g)].map(m => m[1]);
+  for (const k of ['type', 'account', 'sim', 'kind', 'group', 'groupId', 'groupSide', 'noHedge', 'rules', 'session', 'at']) assert.ok(keys.includes(k), 'accountState has ' + k);
+  assert.match(g, /NumberKeys = \{ "balance", "pnlToday", "realizedToday", "unrealized", "floor", "roomFloor", "roomDaily", "targetLeft" \}/);
+  const sec = proto.slice(proto.indexOf('### Prop groups and account state (0.5.8)'), proto.indexOf('### Tape timing and new `/diag` counters'));
+  for (const k of ['account', 'sim', 'kind', 'group', 'groupId', 'groupSide', 'noHedge', 'rules', 'src', 'why', 'session', 'at', 'roomFloor', 'roomDaily', 'targetLeft'])
+    assert.ok(sec.includes('`' + k + '`'), 'PROTOCOL names ' + k);
+  for (const t of ['groupSave', 'groupDelete', 'accountGroup', 'accountLimits', 'highClose', 'groups.txt', 'account-marks.txt']) assert.ok(sec.includes(t), 'PROTOCOL: ' + t);
 });

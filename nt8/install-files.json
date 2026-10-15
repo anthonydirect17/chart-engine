@@ -12,7 +12,8 @@
     "nt8/ChartBridgeCopier.cs",
     "nt8/ChartBridgeBot.cs",
     "nt8/ChartBridgeStrategies.cs",
-    "nt8/ChartBridgeAgents.cs"
+    "nt8/ChartBridgeAgents.cs",
+    "nt8/ChartBridgeGroups.cs"
   ],
   "www": [
     { "from": "live/index.html", "to": "index.html" },

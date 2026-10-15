@@ -75,6 +75,35 @@ export async function connectAgent({ port, id, secret, name, build, silent, host
   });
 }
 
+// 0.5.8 (PROTOCOL.md "Prop groups and account state"): accountState, the agent's account in real numbers, in the contract's
+// field order. accountStateProblem(m) says what is wrong with one (null when it follows the contract): every field there, the
+// eight numbers each a number of at most 2 decimals or null, src for each number given and why for each one not.
+export const ACCOUNT_STATE_KEYS = ['type', 'account', 'sim', 'kind', 'group', 'groupId', 'groupSide', 'noHedge', 'rules', 'balance', 'pnlToday', 'realizedToday',
+  'unrealized', 'floor', 'roomFloor', 'roomDaily', 'targetLeft', 'src', 'why', 'session', 'at'];
+export const ACCOUNT_STATE_NUMBERS = ['balance', 'pnlToday', 'realizedToday', 'unrealized', 'floor', 'roomFloor', 'roomDaily', 'targetLeft'];
+export function accountStateProblem(m) {
+  if (!m || m.type !== 'accountState') return 'not an accountState';
+  const keys = Object.keys(m);
+  if (keys.join() !== ACCOUNT_STATE_KEYS.join()) return 'fields ' + keys.join() + ' are not the contract\'s ' + ACCOUNT_STATE_KEYS.join();
+  if (!['prop', 'personal', 'none'].includes(m.kind)) return 'kind ' + m.kind;
+  if ((m.kind === 'none') !== (m.account === null)) return 'account null exactly when kind is none';
+  if (![null, 'long', 'short', 'mixed'].includes(m.groupSide)) return 'groupSide ' + m.groupSide;
+  if (m.kind !== 'prop' && (m.group !== null || m.groupId !== null || m.groupSide !== null || m.noHedge !== null)) return 'group fields set on a ' + m.kind + ' account';
+  const rk = m.rules === null ? '' : Object.keys(m.rules).join();
+  if (m.kind === 'prop' && rk !== 'dailyLoss,drawdown,drawdownType,target,size,lockAt') return 'prop rules ' + rk;
+  if (m.kind === 'personal' && rk !== 'floor,dailyLoss') return 'personal rules ' + rk;
+  if (m.kind === 'none' && m.rules !== null) return 'rules on None';
+  for (const k of ACCOUNT_STATE_NUMBERS) {
+    const v = m[k];
+    if (v !== null && !(typeof v === 'number' && isFinite(v) && Math.abs(Math.round(v * 100) - v * 100) < 1e-6)) return k + ' is not dollars';
+    if (v !== null && !['ninjatrader', 'computed', 'settings'].includes(m.src[k])) return 'src.' + k;
+    if (v === null && !(typeof m.why[k] === 'string' && m.why[k].length > 0)) return 'why.' + k;
+    if (v === null && k in m.src) return 'src.' + k + ' for a null number';
+  }
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(m.session) || !Number.isInteger(m.at)) return 'session or at';
+  return null;
+}
+
 function flagValue(args, name) { const a = args.find(x => x.startsWith('--' + name + '=')); return a ? a.slice(a.indexOf('=') + 1) : ''; }
 
 async function main() {
@@ -100,7 +129,7 @@ async function main() {
     if (after > 0) setTimeout(() => { agent.withdraw(pid); console.log('fake-agent: withdrew', pid); }, after);
   }
   const seconds = +(flagValue(args, 'seconds') || 10);
-  const shown = new Set(['welcome', 'agentState', 'answer', 'reject', 'order', 'position', 'exec']);
+  const shown = new Set(['welcome', 'agentState', 'accountState', 'answer', 'reject', 'order', 'position', 'exec']);
   const t = setInterval(() => { for (const m of agent.received.splice(0)) if (shown.has(m.type)) console.log('fake-agent:', JSON.stringify(m)); }, 200);
   setTimeout(() => { clearInterval(t); agent.close(); process.exit(0); }, seconds * 1000);
 }
