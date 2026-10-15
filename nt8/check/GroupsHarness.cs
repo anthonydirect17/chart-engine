@@ -114,6 +114,8 @@ public static class GroupsHarness
             Deleting();
             Unreadable();
             ReviewFixes();   // the order-path review of #48, items 1 to 6
+            LeftoverExits(); // Q-EXIT (b), Anthony 2026-10-15: an exit left behind when a position goes flat is cancelled
+            Consistency();   // CON (a), Anthony 2026-10-15: the group's consistency percent, informational
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally
@@ -204,14 +206,14 @@ public static class GroupsHarness
             Check(Rejection().Contains(x[1]) && (x[1].StartsWith("unknown key") || Rejection().Contains("\"cid\":\"s\"")) && !File.Exists(Path.Combine(folder, "groups.txt")), "groupSave refused: " + x[1] + " (" + Rejection() + ")");
         }
         Clear(); G("groupSave", Save("", "Lucid", "true", "1000", "2000", "eod", "3000", "50000", "50100"));
-        Check(Rejection() == "" && Last("groups").Contains("{\"id\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"members\":[],\"side\":null,\"holders\":[]}"),
+        Check(Rejection() == "" && Last("groups").Contains("{\"id\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":null,\"members\":[],\"side\":null,\"holders\":[]}"),
               "groupSave: g1 made, the page told at once: " + Last("groups"));
         string[] lines = FileText().Split('\n');
-        Check(lines[0] == ChartBridgeGroups.Header && lines[1].StartsWith("# ") && lines[2] == "group\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t50100", "groups.txt: two # lines, then the group line: " + FileText().Replace("\t", "<TAB>"));
+        Check(lines[0] == ChartBridgeGroups.Header && lines[1].StartsWith("# ") && lines[2] == "group\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t50100\t-", "groups.txt: two # lines, then the group line: " + FileText().Replace("\t", "<TAB>"));
         Clear(); G("groupSave", Save("", "LUCID", "true", "0", "2500", "intraday", "0", "50000", "0"));
         Check(Rejection().Contains("a group named LUCID is there already"), "a name twice (any case): refused");
         Clear(); G("groupSave", Save("", "Apex", "true", "0", "2500", "static", "0", "50000", "0"));
-        Check(Rejection() == "" && FileText().Contains("group\tg2\tApex\ton\t-\t2500\tstatic\t-\t50000\t-"), "g2 made, none written as -: " + FileText().Replace("\t", "<TAB>"));
+        Check(Rejection() == "" && FileText().Contains("group\tg2\tApex\ton\t-\t2500\tstatic\t-\t50000\t-\t-"), "g2 made, none written as -: " + FileText().Replace("\t", "<TAB>"));
         Check(Logged("groups: group g2 made: Apex"), "the Output window says what changed");
     }
 
@@ -508,7 +510,7 @@ public static class GroupsHarness
         Pos(simA, mnq, 1);
         string st = State("SIM-A"), key;
         ChartBridgeGroups.AccountStateJson("SIM-A", out key);
-        Check(st.Contains("\"account\":\"SIM-A\",\"sim\":true,\"kind\":\"prop\",\"group\":\"Lucid Flex\",\"groupId\":\"g1\",\"groupSide\":\"long\",\"noHedge\":true,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":0}"),
+        Check(st.Contains("\"account\":\"SIM-A\",\"sim\":true,\"kind\":\"prop\",\"group\":\"Lucid Flex\",\"groupId\":\"g1\",\"groupSide\":\"long\",\"noHedge\":true,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":0,\"consistency\":0}"),
               "prop: the group, its side and its rules (size and lockAt; 0 for none): " + st);
         Check(!key.Contains("\"at\":") && st.StartsWith(key.Substring(0, key.Length - 1)), "the key is the same text without at");
         string p = State("SIM-C");
@@ -630,6 +632,92 @@ public static class GroupsHarness
         Check(st.Contains("\"realizedToday\":-100,") && st.Contains("\"realizedToday\":\"computed\"") && MarksText().Contains("mark\tSIM-B\t52000\t"), "review items 3 and 6: read at 18:01 ET: on time, the computed P&L, and the close raises the end-of-day high: " + st);
         ClockEt(2026, 10, 14, 10, 0);
         Flat();
+    }
+
+    // ------------------------------------------------------------ Q-EXIT (b) (Anthony 2026-10-15): exits left behind are cancelled when flat
+    static bool Cancelled(Account a, Order o) { return a.Calls.Contains("cancel " + o.Name); }
+    static void LeftoverExits()
+    {
+        Flat(); Tick();   // the first pass since the start ran with nothing to look at
+        Check(ChartBridgeGroups.GroupOf("SIM-A") == "g1" && ChartBridgeGroups.GroupOf("SIM-C") == "g1", "Q-EXIT: SIM-A and SIM-C in Review (No hedging on)");
+        // the reviewer's repro: long 2, a lone stop leg 2, a resting Sell Lmt 2 accepted; the stop fills
+        Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+        Order leg = Manual(simA, mnq, OrderAction.Sell, OrderType.StopMarket, 2, "", "CB#1a2b3c4d stop f2 q2 p24980");
+        int a0 = Submits(simA);
+        Clear(); O(Order("SIM-A", "MNQ", "\"side\":\"sell\",\"kind\":\"limit\",\"qty\":2,\"price\":25010"));
+        Order lim = simA.Orders.Last();
+        Check(Submits(simA) == a0 + 1 && Rejection() == "", "Q-EXIT: the resting Sell Lmt 2 beside the stop is accepted (exits are never blocked)");
+        Tick();
+        Check(!Cancelled(simA, lim), "Q-EXIT: while SIM-A is long, nothing is cancelled");
+        leg.OrderState = OrderState.Filled; Pos(simA, mnq, 0);
+        Clear(); Tick();
+        Check(Cancelled(simA, lim) && !Cancelled(simA, leg) && Any("SIM-A went flat on MNQ: cancelled the sell limit 2 left from the long, so it cannot open a short"), "Q-EXIT: the stop fills, SIM-A is flat: the sell limit 2 left behind is cancelled, the pages told");
+        Clear(); Tick();
+        Check(!Any("went flat"), "Q-EXIT: once");
+        // an exit typed into NinjaTrader, likewise
+        Flat(); Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+        Order typed = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed exit");
+        Tick();
+        Pos(simA, mnq, 0); Clear(); Tick();
+        Check(Cancelled(simA, typed) && Any("cancelled the sell limit 2 left from the long"), "Q-EXIT: a limit exit typed into NinjaTrader, left after flat: cancelled");
+        // partial fills: a part filled while the position is still held stays; the rest goes once flat
+        Flat(); Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+        Order part = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed part");
+        Tick();
+        part.Filled = 1; part.OrderState = OrderState.PartFilled; Pos(simA, mnq, 1); Tick();
+        Check(!Cancelled(simA, part), "Q-EXIT: part filled, SIM-A still long 1: nothing cancelled");
+        Pos(simA, mnq, 0); Clear(); Tick();
+        Check(Cancelled(simA, part) && Any("cancelled the sell limit 1 left from the long"), "Q-EXIT: flat by its stop: the rest (1) is cancelled");
+        // an entry placed on a flat account afterwards is not this rule's: the group check judges it
+        Flat(); Pos(simC, mnq, 1); Tick();
+        Order later = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 1, "", "typed later");
+        Clear(); Tick();
+        Check(!Cancelled(simA, later) && ChartBridgeGroups.GroupsJson().Contains("\"side\":\"mixed\""), "Q-EXIT: a sell limit placed on the flat account later is not cancelled by this (the group shows mixed)");
+        Clear(); O(Order("SIM-A", "MNQ", "\"side\":\"sell\",\"kind\":\"limit\",\"qty\":1,\"price\":25010"));
+        Check(Rejection().Contains("Group Review is long and short"), "Q-EXIT: a new sell entry on the flat account is judged by the group check");
+        // an account in no group, and No hedging off: untouched
+        Flat(); Pos(simD, mnq, 2);
+        Order nog = Manual(simD, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed d");
+        Tick(); Pos(simD, mnq, 0); Tick();
+        Check(!Cancelled(simD, nog), "Q-EXIT: an account in no group: untouched");
+        Flat();
+        G("groupSave", Save(",\"group\":\"g1\"", "Review", "false", "0", "2000", "eod", "0", "50000", "0"));
+        Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+        Order off = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed off");
+        Tick(); Pos(simA, mnq, 0); Tick();
+        Check(!Cancelled(simA, off), "Q-EXIT: No hedging off: untouched");
+        G("groupSave", Save(",\"group\":\"g1\"", "Review", "true", "0", "2000", "eod", "0", "50000", "0"));
+        // after a start: an order on a flat account against its group's side is cancelled once, the same way
+        Flat(); Pos(simC, mnq, 1);
+        Order before = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 1, "", "typed before");
+        ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+        Clear(); Tick();
+        Check(Cancelled(simA, before) && Any("SIM-A is flat on MNQ: cancelled the sell limit 1 left from before ChartBridge started (Review is long), so it cannot open a short"), "Q-EXIT: after a start, the leftover against the group's side: cancelled once, with the note");
+        Order after = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 1, "", "typed after");
+        Clear(); Tick();
+        Check(!Cancelled(simA, after), "Q-EXIT: only on the first look after the start");
+        Flat();
+    }
+
+    // ------------------------------------------------------------ CON (a) (Anthony 2026-10-15): the consistency percent, informational
+    static void Consistency()
+    {
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Review", "true", "0", "2000", "eod", "0", "50000", "0").Replace("}", ",\"consistency\":101}"));
+        Check(Rejection().Contains("consistency must be a percent from 0 (none) to 100"), "CON: 101 percent refused");
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Review", "true", "0", "2000", "eod", "0", "50000", "0").Replace("}", ",\"consistency\":40}"));
+        Check(Rejection() == "" && FileText().Contains("group\tg1\tReview\ton\t-\t2000\teod\t-\t50000\t-\t40\n"), "CON: saved as the 11th field: " + FileText().Replace("\t", "<TAB>"));
+        Check(Last("groups").Contains("\"lockAt\":null,\"consistency\":40,"), "CON: in the groups message");
+        Check(State("SIM-A").Contains("\"lockAt\":0,\"consistency\":40}"), "CON: in accountState.rules (0 none): " + State("SIM-A"));
+        G("accountLimits", "{\"type\":\"accountLimits\",\"cid\":\"l\",\"account\":\"SIM-D\",\"floor\":45000,\"dailyLoss\":0}");
+        Check(State("SIM-D").Contains("\"rules\":{\"floor\":45000,\"dailyLoss\":0}") && !State("SIM-D").Contains("consistency"), "CON: personal rules never have it: " + State("SIM-D"));
+        // a 0.5.8 group line written before consistency (10 fields) reads as none
+        string p = Path.Combine(folder, "groups.txt");
+        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tOld\ton\t-\t2000\teod\t-\t50000\t-\nmember\tSIM-A\tg1\n");
+        ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"name\":\"Old\"") && ChartBridgeGroups.GroupsJson().Contains("\"consistency\":null"), "CON: a group line with 10 fields reads, consistency none");
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Old", "true", "0", "2000", "eod", "0", "50000", "0"));
+        Check(FileText().Contains("group\tg1\tOld\ton\t-\t2000\teod\t-\t50000\t-\t-\n"), "CON: groupSave without it: none");
     }
 
     // ------------------------------------------------------------ an unreadable groups.txt: every entry refused, never rewritten

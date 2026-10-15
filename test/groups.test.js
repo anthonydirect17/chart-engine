@@ -35,7 +35,8 @@ test('groups: the rules line, the members and the side in words', () => {
 test('groups: the rules dialog checks as ChartBridge does, and builds groupSave with every field', () => {
   const f = { name: 'Apex', size: '50,000', dailyLoss: '', drawdown: '2500', drawdownType: 'intraday', lockAt: '', target: '3000', noHedge: true };
   const r = GC.groupMessage(f, [lucid], null, 'c1');
-  assert.deepEqual(r.msg, { type: 'groupSave', cid: 'c1', name: 'Apex', noHedge: true, dailyLoss: 0, drawdown: 2500, drawdownType: 'intraday', target: 3000, size: 50000, lockAt: 0 });
+  assert.deepEqual(r.msg, { type: 'groupSave', cid: 'c1', name: 'Apex', noHedge: true, dailyLoss: 0, drawdown: 2500, drawdownType: 'intraday', target: 3000, size: 50000, lockAt: 0, consistency: 0 });
+  assert.equal(GC.groupMessage(Object.assign({}, f, { consistency: '40%' }), [lucid]).msg.consistency, 40, 'CON (a): the consistency percent');
   const bad = (change, field, words) => { const x = GC.groupMessage(Object.assign({}, f, change), [lucid], null); assert.equal(x.field, field, JSON.stringify(x)); assert.match(x.error, words); };
   bad({ name: '' }, 'name', /1 to 30/);
   bad({ name: 'x'.repeat(31) }, 'name', /1 to 30/);
@@ -47,11 +48,13 @@ test('groups: the rules dialog checks as ChartBridge does, and builds groupSave 
   bad({ drawdownType: 'static', lockAt: '50100' }, 'lockAt', /trailing drawdown only/);
   bad({ lockAt: '47500' }, 'lockAt', /above the starting floor \(\$47,500\)/);
   bad({ drawdownType: 'daily' }, 'drawdownType', /end of day, intraday or static/);
+  bad({ consistency: '101' }, 'consistency', /1 to 100/);
   assert.equal(GC.groupMessage(Object.assign({}, f, { name: 'Lucid' }), [lucid], 'g1').msg.group, 'g1', 'its own name is fine when editing it');
   // Rename and the switch send the whole group (the contract asks every field)
-  assert.deepEqual(GC.saveFrom(lucid, { name: 'Lucid Flex' }, 'c2'), { type: 'groupSave', cid: 'c2', group: 'g1', name: 'Lucid Flex', noHedge: true, dailyLoss: 1000, drawdown: 2000, drawdownType: 'eod', target: 3000, size: 50000, lockAt: 50100 });
+  assert.deepEqual(GC.saveFrom(lucid, { name: 'Lucid Flex' }, 'c2'), { type: 'groupSave', cid: 'c2', group: 'g1', name: 'Lucid Flex', noHedge: true, dailyLoss: 1000, drawdown: 2000, drawdownType: 'eod', target: 3000, size: 50000, lockAt: 50100, consistency: 0 });
+  assert.equal(GC.summary(Object.assign({}, lucid, { consistency: 40 })), '$50,000 · daily $1,000 · drawdown $2,000 end of day, stops at $50,100 · target $3,000 · consistency 40%');
   assert.equal(GC.saveFrom(Object.assign({}, lucid, { dailyLoss: null, target: null, lockAt: null }), { noHedge: false }).dailyLoss, 0);
-  assert.deepEqual(GC.formOf(lucid), { name: 'Lucid', size: '50000', dailyLoss: '1000', drawdown: '2000', drawdownType: 'eod', lockAt: '50100', target: '3000', noHedge: true });
+  assert.deepEqual(GC.formOf(lucid), { name: 'Lucid', size: '50000', dailyLoss: '1000', drawdown: '2000', drawdownType: 'eod', lockAt: '50100', target: '3000', consistency: '', noHedge: true });
 });
 
 test('groups: G2 (b) the highest close prefill, accountGroup and accountLimits', () => {

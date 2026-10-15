@@ -62,6 +62,14 @@ places an order) and page file `live/groups.js`, both in `install-files.json`. A
     orders with no OCO id count now; stops, targets and ChartBridge's, the agent's and the copier's legs never do.
   - A personal account whose limits Anthony never set sends `accountState.rules` null (the agent keeps its model numbers);
     once My floor or My daily is saved, 0 included, `{floor, dailyLoss}`. The Accounts tab's boxes say "not set" until then.
+- **Q-EXIT (b), Anthony 2026-10-15: exits left behind.** Resting exits are still always accepted; when an account in a group with
+  No hedging on goes flat on an instrument, ChartBridge cancels the working orders there that were exits of the position just
+  closed (the page's and ones typed into NinjaTrader; never its own legs or an ATM's), since they would now open the other side,
+  and tells the pages ("SIM-A went flat on MNQ: cancelled the sell limit 2 left from the long, so it cannot open a short"). After a
+  start, an order on a flat account against its group's side is cancelled once the same way.
+- **CON (a), Anthony 2026-10-15: consistency percent.** Each group's rules get an optional consistency percent (no single day
+  over that share of the profit): the rules dialog, `groupSave`, `groups.txt` (an 11th field; older lines read as none), the
+  `groups` message and `accountState.rules.consistency` (0 none). Informational only: nothing is blocked or flattened by it.
 - **Tests.** `check:orders`: GroupsHarness (the files, the migration, an unreadable file, every refusal, side counting with
   both readings and ChartBridge's just sent, legs and exits, the exit rule, mixed, No hedging off, two opposite entries at once,
   the numbers for end of day, intraday, static and personal, the highs and the day start across a restart), and a group check in

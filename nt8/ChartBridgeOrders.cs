@@ -811,6 +811,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             OrderType type = OrderTypeOf(kind);   // 0.4.0 B1: also StopLimit and MIT
             Order order = account.CreateOrder(inst, isBuy ? OrderAction.Buy : OrderAction.Sell, type, OrderEntry.Manual, TimeInForce.Day, qty,
                 kind == "limit" ? price : kind == "stopLimit" ? limitPx : 0, kind == "stop" || NewKind(kind) ? price : 0, "", name, NinjaTrader.Core.Globals.MaxDate, null);
+            ChartBridgeGroups.NoteNewOrder(account, inst, order, isBuy);   // 0.5.8 Q-EXIT (b): an order on the other side of a position is an exit of it
             lock (Sync)
             {
                 IdFor(order);
@@ -836,6 +837,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // A price in a planned_brackets.txt line kept from 0.3.7: 0 for none, else the price with no trailing zeros.
         private static string PriceText(double p) { return p > 0 ? p.ToString("0.########", CultureInfo.InvariantCulture) : "0"; }
         private static string TicksText(int t) { return t > 0 ? t.ToString(CultureInfo.InvariantCulture) : "none"; }
+
+        // 0.5.8 Q-EXIT (b) (Anthony 2026-10-15): the one order call of the groups: an exit left working after its position went flat
+        // (it would now open the other side) is cancelled. ChartBridgeGroups.Leftovers decides; this only sends the cancel.
+        internal static string GroupCancelLeftover(Account a, Order o)
+        {
+            try { if (!IsWorking(o.OrderState)) return "no longer working"; a.Cancel(new[] { o }); return null; }
+            catch (Exception ex) { return ex.Message; }
+        }
 
         private static string ChangeOrder(string top, string id)
         {

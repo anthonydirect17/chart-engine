@@ -53,7 +53,7 @@ function summary(g) {
   if (!g) return '';
   return [usd(g.size), 'daily ' + (isNum(g.dailyLoss) && g.dailyLoss > 0 ? usd(g.dailyLoss) : 'none'),
     'drawdown ' + usd(g.drawdown) + ' ' + (TYPE_WORD[g.drawdownType] || g.drawdownType) + (isNum(g.lockAt) && g.lockAt > 0 ? ', stops at ' + usd(g.lockAt) : ''),
-    'target ' + (isNum(g.target) && g.target > 0 ? usd(g.target) : 'none')].join(' · ');
+    'target ' + (isNum(g.target) && g.target > 0 ? usd(g.target) : 'none')].concat(isNum(g.consistency) && g.consistency > 0 ? ['consistency ' + g.consistency + '%'] : []).join(' · ');
 }
 /** "3 accounts" */
 const membersText = g => { const n = g && Array.isArray(g.members) ? g.members.length : 0; return n + (n === 1 ? ' account' : ' accounts'); };
@@ -87,24 +87,29 @@ function groupMessage(f, others, id, cid) {
     if (need && !(v > 0)) return { error: label + ': more than $0.', field: k };
     n[k] = v;
   }
+  /* CON (a), Anthony 2026-10-15: the consistency percent (no day over N percent of the profit), informational; empty is none */
+  const ct = String(f.consistency === undefined || f.consistency === null ? '' : f.consistency).trim().replace(/%$/, '').trim();
+  const con = ct === '' ? 0 : /^(?:[1-9][0-9]?|100)(?:\.[0-9]{1,2})?$/.test(ct) && Number(ct) <= 100 ? Number(ct) : NaN;
+  if (!isFinite(con)) return { error: 'Consistency: a percent from 1 to 100, or empty for none.', field: 'consistency' };
   const type = f.drawdownType;
   if (!TYPES.some(t => t[0] === type)) return { error: 'Drawdown type: end of day, intraday or static.', field: 'drawdownType' };
   if (n.drawdown >= n.size) return { error: 'The drawdown must be less than the account size.', field: 'drawdown' };
   if (n.lockAt > 0 && type === 'static') return { error: 'Floor stops at is for a trailing drawdown only (leave it empty for static).', field: 'lockAt' };
   if (n.lockAt > 0 && n.lockAt <= n.size - n.drawdown) return { error: 'Floor stops at must be above the starting floor (' + usd(n.size - n.drawdown) + ').', field: 'lockAt' };
   return { msg: Object.assign({ type: 'groupSave' }, cid ? { cid } : {}, id ? { group: id } : {}, { name, noHedge: f.noHedge !== false,
-    dailyLoss: n.dailyLoss, drawdown: n.drawdown, drawdownType: type, target: n.target, size: n.size, lockAt: n.lockAt }) };
+    dailyLoss: n.dailyLoss, drawdown: n.drawdown, drawdownType: type, target: n.target, size: n.size, lockAt: n.lockAt, consistency: con }) };
 }
 /** groupSave for a group as ChartBridge sent it, with one change (a new name, the switch): every field, as the contract asks. */
 function saveFrom(g, change, cid) {
   const x = Object.assign({}, g, change || {});
   return Object.assign({ type: 'groupSave' }, cid ? { cid } : {}, { group: g.id, name: x.name, noHedge: x.noHedge !== false, dailyLoss: x.dailyLoss || 0, drawdown: x.drawdown,
-    drawdownType: x.drawdownType, target: x.target || 0, size: x.size, lockAt: x.lockAt || 0 });
+    drawdownType: x.drawdownType, target: x.target || 0, size: x.size, lockAt: x.lockAt || 0, consistency: x.consistency || 0 });
 }
 /** The rules dialog's boxes from a group (null: a new group's defaults: a 50,000 account, a 2,000 end-of-day drawdown, no hedging). */
 function formOf(g) {
-  if (!g) return { name: '', size: '50000', dailyLoss: '', drawdown: '2000', drawdownType: 'eod', lockAt: '', target: '', noHedge: true };
-  return { name: g.name, size: moneyBox(g.size), dailyLoss: moneyBox(g.dailyLoss), drawdown: moneyBox(g.drawdown), drawdownType: g.drawdownType, lockAt: moneyBox(g.lockAt), target: moneyBox(g.target), noHedge: g.noHedge !== false };
+  if (!g) return { name: '', size: '50000', dailyLoss: '', drawdown: '2000', drawdownType: 'eod', lockAt: '', target: '', consistency: '', noHedge: true };
+  return { name: g.name, size: moneyBox(g.size), dailyLoss: moneyBox(g.dailyLoss), drawdown: moneyBox(g.drawdown), drawdownType: g.drawdownType, lockAt: moneyBox(g.lockAt), target: moneyBox(g.target),
+    consistency: isNum(g.consistency) && g.consistency > 0 ? String(g.consistency) : '', noHedge: g.noHedge !== false };
 }
 
 /** G2 (b): the "highest close so far" box's prefill: the larger of the group's account size and the account's balance now. */
@@ -134,7 +139,7 @@ function cleanGroups(m) {
   const list = m && Array.isArray(m.list) ? m.list : [];
   return list.filter(g => g && typeof g.id === 'string' && /^g[1-9][0-9]{0,8}$/.test(g.id) && typeof g.name === 'string')
     .map(g => ({ id: g.id, name: g.name, noHedge: g.noHedge !== false, dailyLoss: isNum(g.dailyLoss) ? g.dailyLoss : null, drawdown: isNum(g.drawdown) ? g.drawdown : null,
-      drawdownType: g.drawdownType, target: isNum(g.target) ? g.target : null, size: isNum(g.size) ? g.size : null, lockAt: isNum(g.lockAt) ? g.lockAt : null,
+      drawdownType: g.drawdownType, target: isNum(g.target) ? g.target : null, size: isNum(g.size) ? g.size : null, lockAt: isNum(g.lockAt) ? g.lockAt : null, consistency: isNum(g.consistency) ? g.consistency : null,
       members: Array.isArray(g.members) ? g.members.filter(x => typeof x === 'string') : [], side: ['long', 'short', 'mixed'].includes(g.side) ? g.side : null,
       holders: Array.isArray(g.holders) ? g.holders.filter(h => h && typeof h.account === 'string') : [] }));
 }
@@ -223,8 +228,8 @@ function mountSettings(host) {
       <p class="ws-help">Set once. With NinjaTrader's balance these give each account its room, so the agent sizes on real numbers.</p>
       <div class="gp-grid">${box('size', 'Account size', '$')}${box('dailyLoss', 'Daily loss limit', '$ or none')}${box('drawdown', 'Drawdown size', '$')}
         <div class="gp-f"><label for="gp-drawdownType">Drawdown type</label><select class="ws-sel gp-in" id="gp-drawdownType">${GC.TYPES.map(t => `<option value="${t[0]}"${t[0] === f.drawdownType ? ' selected' : ''}>${t[1]}</option>`).join('')}</select></div>
-        ${box('lockAt', 'Floor stops at', '$ or none')}${box('target', 'Profit target', '$ or none')}</div>
-      <p class="ws-help">Daily room counts open P&amp;L, the way the firm does. If a number is missing, the agent uses its model numbers and says so.</p>
+        ${box('lockAt', 'Floor stops at', '$ or none')}${box('target', 'Profit target', '$ or none')}${box('consistency', 'Consistency %', '% or none')}</div>
+      <p class="ws-help">Daily room counts open P&amp;L, the way the firm does. If a number is missing, the agent uses its model numbers and says so. Consistency (no single day over that share of the profit) is shown to the agent only; nothing is blocked by it.</p>
       <h3 class="gp-h">One direction</h3>
       <label class="gp-hedge"><input type="checkbox" id="gp-noHedge"${f.noHedge ? ' checked' : ''}> No hedging inside this group <span>counts positions and working entries; covers agents, bots, copier followers and your ticket; exits always go</span></label>
       <p class="ws-err" id="gp-err" role="alert"></p>
@@ -241,7 +246,7 @@ function mountSettings(host) {
     host.showDialog(d, () => {
       for (const el of d.querySelectorAll('.gp-in')) el.removeAttribute('aria-invalid');
       const form = { name: $d('name').value, size: $d('size').value, dailyLoss: $d('dailyLoss').value, drawdown: $d('drawdown').value, drawdownType: $d('drawdownType').value,
-        lockAt: $d('lockAt').value, target: $d('target').value, noHedge: $d('noHedge').checked };
+        lockAt: $d('lockAt').value, target: $d('target').value, consistency: $d('consistency').value, noHedge: $d('noHedge').checked };
       const r = GC.groupMessage(form, groups(), g ? g.id : null, cid());
       if (r.error) { $d('err').textContent = r.error; if (r.field && $d(r.field)) { $d(r.field).setAttribute('aria-invalid', 'true'); $d(r.field).focus(); } return false; }
       return post(r.msg, (g ? 'Save ' : 'New group ') + r.msg.name + ': sent to ChartBridge.');

@@ -8,7 +8,7 @@ const MONEY = /^(?:0|[1-9][0-9]{0,8})(?:\.[0-9]{1,2})?$/;
 const usd = v => '$' + (+v).toLocaleString('en-US', { maximumFractionDigits: 2 });
 
 export const GROUP_KEYS = {
-  groupSave: ['type', 'cid', 'group', 'name', 'noHedge', 'dailyLoss', 'drawdown', 'drawdownType', 'target', 'size', 'lockAt'],
+  groupSave: ['type', 'cid', 'group', 'name', 'noHedge', 'dailyLoss', 'drawdown', 'drawdownType', 'target', 'size', 'lockAt', 'consistency'],
   groupDelete: ['type', 'cid', 'group'],
   accountGroup: ['type', 'cid', 'account', 'group', 'highClose'],
   accountLimits: ['type', 'cid', 'account', 'floor', 'dailyLoss'],
@@ -33,7 +33,7 @@ export function installGroups(Desk) {
         const holders = members.flatMap(a => this.groupHoldings(a));
         const longs = holders.some(h => h.side === 'long'), shorts = holders.some(h => h.side === 'short');
         return { id: g.id, name: g.name, noHedge: g.noHedge, dailyLoss: g.dailyLoss || null, drawdown: g.drawdown, drawdownType: g.drawdownType, target: g.target || null,
-          size: g.size, lockAt: g.lockAt || null, members, side: longs && shorts ? 'mixed' : longs ? 'long' : shorts ? 'short' : null, holders };
+          size: g.size, lockAt: g.lockAt || null, consistency: g.consistency || null, members, side: longs && shorts ? 'mixed' : longs ? 'long' : shorts ? 'short' : null, holders };
       });
       return { type: 'groups', list, error: null };
     },
@@ -109,7 +109,7 @@ export function installGroups(Desk) {
     },
     do_groupSave(m) {
       const id = m.group || 'g' + this.gr.next++;
-      this.gr.list.set(id, { id, name: m.name, noHedge: m.noHedge, dailyLoss: m.dailyLoss, drawdown: m.drawdown, drawdownType: m.drawdownType, target: m.target, size: m.size, lockAt: m.lockAt });
+      this.gr.list.set(id, { id, name: m.name, noHedge: m.noHedge, dailyLoss: m.dailyLoss, drawdown: m.drawdown, drawdownType: m.drawdownType, target: m.target, size: m.size, lockAt: m.lockAt, consistency: m.consistency || 0 });
       this.groupsChanged();
     },
     check_groupDelete(m) { return this.gr.list.has(m.group) ? null : 'no group ' + m.group; },

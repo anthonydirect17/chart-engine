@@ -183,7 +183,7 @@ test('fake-agent: accountStateProblem() holds an accountState to the 0.5.8 contr
   const why = k => 'made up: ' + k;
   // made-up accounts and money (SIM-A), the shapes ChartBridgeGroups.AccountStateJson writes
   const prop = { type: 'accountState', account: 'SIM-A', sim: true, kind: 'prop', group: 'Lucid', groupId: 'g1', groupSide: 'long', noHedge: true,
-    rules: { dailyLoss: 1000, drawdown: 2000, drawdownType: 'eod', target: 3000, size: 50000, lockAt: 0 },
+    rules: { dailyLoss: 1000, drawdown: 2000, drawdownType: 'eod', target: 3000, size: 50000, lockAt: 0, consistency: 0 },
     balance: 50500, pnlToday: -100, realizedToday: -300, unrealized: 200, floor: 49000, roomFloor: 1700, roomDaily: 900, targetLeft: 2500,
     src: { balance: 'ninjatrader', pnlToday: 'computed', realizedToday: 'computed', unrealized: 'ninjatrader', floor: 'computed', roomFloor: 'computed', roomDaily: 'computed', targetLeft: 'computed' },
     why: {}, session: '2026-10-15', at: 1792022603526 };

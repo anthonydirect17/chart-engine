@@ -2827,8 +2827,9 @@ kept with a note naming it; either way once.
 
 ### Prop groups and account state (0.5.8)
 
-Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL). Built in `nt8/ChartBridgeGroups.cs` (it never
-places, changes or cancels an order) and the page's Settings and Accounts tab (`live/groups.js`, `live/accounts.js`).
+Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL) and 2026-10-15 (Q-EXIT b, CON a). Built in
+`nt8/ChartBridgeGroups.cs` (it never places or changes an order; the one cancel, Q-EXIT's below, goes through
+`ChartBridgeOrders.GroupCancelLeftover`) and the page's Settings and Accounts tab (`live/groups.js`, `live/accounts.js`).
 
 - **Groups** are made, renamed and deleted on the page (Settings, Account groups); each account picks its group from a
   dropdown on the Accounts tab. ChartBridge saves everything; nobody edits a file. A new account arrives in no group (None).
@@ -2851,14 +2852,15 @@ places, changes or cancels an order) and the page's Settings and Accounts tab (`
 **Files** (next to `config.txt`; written whole through a temp file, off NinjaTrader's thread; Anthony never edits them).
 `groups.txt`: two `#` lines, then one line per group, member and personal account:
 
-    group<TAB><id><TAB><name><TAB>on|off<TAB><dailyLoss>|-<TAB><drawdown><TAB>eod|intraday|static<TAB><target>|-<TAB><size><TAB><lockAt>|-
+    group<TAB><id><TAB><name><TAB>on|off<TAB><dailyLoss>|-<TAB><drawdown><TAB>eod|intraday|static<TAB><target>|-<TAB><size><TAB><lockAt>|-<TAB><consistency>|-
     member<TAB><account><TAB><id>
     personal<TAB><account><TAB><floor>|-<TAB><daily>|-        (a saved line stays with - and -: set to none, not never set)
 
 `on|off` is the No hedging switch; `-` is none. Money is dollars with at most 2 decimals, a `.` for the point. Ids are `g1`,
 `g2`, ... in the order made (the next is one above the highest in the file), so a rename never touches membership; a deleted
 group's members go to None with it, so no line ever points at a group that is gone. A `group` line may carry more fields after
-`lockAt` (a later ChartBridge's); they are kept as read. Anything else (a line ChartBridge does not know, a group id twice, a
+`lockAt` (a later ChartBridge's); they are kept as read. `consistency` (CON a, 2026-10-15) is Lucid's consistency rule, no single day over that percent of the profit (1 to 100, at most 2
+decimals; `-` none); a group line of 10 fields (written before it) reads as none. Anything else (a line ChartBridge does not know, a group id twice, a
 member of a group that is not there, an account twice, a name twice) makes the file unreadable: it is **never rewritten that
 run**, every entry on every account is refused ("groups.txt could not be read: every new entry is refused until it can (exits
 always work)"), every page gets that `status` `error` as it signs in, and the page's group changes are refused. No `groups.txt`
@@ -2901,7 +2903,7 @@ config switch):
 
 | message | fields (no others) | notes |
 |---|---|---|
-| `groupSave` | `cid` (optional), `group` (optional: the id to change; absent makes a new group), `name` (1 to 30 characters, no tab, unique ignoring case), `noHedge` (bool), `dailyLoss` (0 for none), `drawdown` (more than 0), `drawdownType` (`eod`, `intraday`, `static`), `target` (0 for none), `size` (more than 0, more than `drawdown`), `lockAt` (0 for none; `eod` and `intraday` only, above `size - drawdown`) | every field every time: Rename and the No hedging switch send the whole group. Money: plain numbers, at most 2 decimals, at most 100,000,000 |
+| `groupSave` | `cid` (optional), `group` (optional: the id to change; absent makes a new group), `name` (1 to 30 characters, no tab, unique ignoring case), `noHedge` (bool), `dailyLoss` (0 for none), `drawdown` (more than 0), `drawdownType` (`eod`, `intraday`, `static`), `target` (0 for none), `size` (more than 0, more than `drawdown`), `lockAt` (0 for none; `eod` and `intraday` only, above `size - drawdown`), `consistency` (optional, 0 or absent for none, else a percent above 0 and at most 100) | every field every time: Rename and the No hedging switch send the whole group. Money: plain numbers, at most 2 decimals, at most 100,000,000 |
 | `groupDelete` | `cid` (optional), `group` | its members go to None (personal, their own limits kept) |
 | `accountGroup` | `cid` (optional), `account`, `group` (an id, or `null` for None), `highClose` (optional, more than 0: G2 b, joining a group only) | refused when the move would leave the target group mixed (the account holds the other side, or the group is mixed already, with No hedging on). Joining: both trailing highs start at `highClose`, or without it at the larger of the account size and the balance now (the page always asks, prefilled so) |
 | `accountLimits` | `cid` (optional), `account`, `floor` (0 for none), `dailyLoss` (0 for none) | personal accounts only: refused for an account in a group ("its group's rules apply") |
@@ -2910,7 +2912,7 @@ config switch):
 
 - `groups`: `{"type":"groups","list":[...],"error":null}` after `client`, after every group change, and when a group's side or
   holders change (the 1 s check). Each group: `id`, `name`, `noHedge`, `dailyLoss` (null for none), `drawdown`,
-  `drawdownType`, `target` (null for none), `size`, `lockAt` (null for none), `members` (account names), `side` (`long`,
+  `drawdownType`, `target` (null for none), `size`, `lockAt` (null for none), `consistency` (null for none), `members` (account names), `side` (`long`,
   `short`, `mixed`, or null when the group holds nothing), `holders` (`[{account, root, side, what, qty}]`: `what`
   `position` or `entry`, `root` the instrument's master name, `side` `long` or `short`, `qty` the contracts held or left to
   fill). `error`: null, or why `groups.txt` cannot be read (then `list` is empty and every entry is refused).
@@ -2934,7 +2936,7 @@ config switch):
 | `groupId` | the group's id, null when not `prop` |
 | `groupSide` | the group's side now (`long`, `short`, `mixed`, or null when flat or not `prop`); while it is `long` the agent's sells are refused, and so on |
 | `noHedge` | the group's switch (null when not `prop`) |
-| `rules` | `prop`: `{dailyLoss, drawdown, drawdownType, target, size, lockAt}`: `size` the account size and `lockAt` "floor stops at" (G1); `personal`: `{floor, dailyLoss}` (the account's own limits, once Anthony has saved My floor or My daily, 0 included), or **null when
+| `rules` | `prop`: `{dailyLoss, drawdown, drawdownType, target, size, lockAt, consistency}`: `size` the account size, `lockAt` "floor stops at" (G1), `consistency` the consistency percent (CON a: informational, no gate or flatten in ChartBridge uses it; personal rules never have it); `personal`: `{floor, dailyLoss}` (the account's own limits, once Anthony has saved My floor or My daily, 0 included), or **null when
 no limits were ever set by Anthony: the agent keeps its model numbers** (NinjaTrader's trailing drawdown is still sent as
 `roomFloor`, `src` `ninjatrader`); `none`: null. Inside `rules` **0 means none**, said explicitly (the firm has no daily limit, no target, no lock; the account has no floor or daily limit of its own), never null: a rule is never "missing". Only the eight numbers below may be null, each with its `why` |
 | `balance`, `pnlToday`, `realizedToday`, `unrealized`, `floor`, `roomFloor`, `roomDaily`, `targetLeft` | dollars (2 decimals) or null, as the table above |
@@ -2946,6 +2948,16 @@ no limits were ever set by Anthony: the agent keeps its model numbers** (NinjaTr
 Sent after the snapshot (right after the `snapshot` message) on every `agentHello`; then from the agent's 1 s pass whenever
 any field but `at` changed; and at once on any account, group or rules change (`agentAccount`, `groupSave`, `groupDelete`,
 `accountGroup`, `accountLimits`). A ChartBridge before 0.5.8 never sends it: the runner keeps its model's numbers and says so.
+
+**Exits left behind (Q-EXIT b, Anthony 2026-10-15).** Resting exits are always accepted. When an account in a group with No
+hedging on goes flat on an instrument (both readings 0), ChartBridge cancels the working orders there that were exits of the
+position just closed: orders placed while a position existed, on its other side (the page's, and orders typed into NinjaTrader,
+seen by the 1 s check), never ChartBridge's own legs (the legs check keeps those) nor an order with an OCO id (an ATM's). Only
+such orders, which would now open a position, are cancelled, each logged with a `status` `warn` to the pages ("SIM-A went flat on
+MNQ: cancelled the sell limit 2 left from the long, so it cannot open a short"). Nothing is cancelled while the account still
+holds a position there (a part-filled exit keeps working until then). After a start ChartBridge cannot know where an order came
+from: on its first look, an order on a flat account on the other side of its group's side is cancelled once, the same way ("...
+left from before ChartBridge started (Lucid is long) ..."). An entry placed on a flat account later is the group check's.
 
 **The one-direction check** (`ChartBridgeGroups.EntryCheck(source, account, root, isBuy, qty, wantsLegs, strategy)`, null or
 the refusal). It runs under `PlaceLock` for every entry that passes `PlaceOrderLocked` (the page's ticket and chart clicks,

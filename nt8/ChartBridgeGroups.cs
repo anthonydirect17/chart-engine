@@ -1,7 +1,8 @@
 // ChartBridge prop groups and real account state (ChartBridge 0.5.8). Part of the ChartBridge add-on; install it with the
 // other files. See nt8/PROTOCOL.md, "Prop groups and account state (0.5.8)".
 //
-// This file never places, changes or cancels an order (no Submit, Change, Cancel or Flatten here). It holds:
+// This file never places, changes or cancels an order itself (no Submit, Change, Cancel or Flatten here; Q-EXIT's cancel of an exit
+// left behind goes through ChartBridgeOrders.GroupCancelLeftover). It holds:
 //   - the groups (Anthony 2026-10-14): made, renamed and deleted on the page's Settings, an account's group picked on the
 //     Accounts tab, all saved by ChartBridge in groups.txt next to config.txt (two # lines, then group, member and personal
 //     lines). No groups.txt: no groups, every account personal with no limits, exactly as 0.5.7. A groups.txt that cannot be
@@ -130,6 +131,25 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The order is on the other side of the account's position on this contract by both readings (an exit, or an exit too big).
+        // Q-EXIT (b): the working orders that may be an exit left behind: working, no OCO id (an ATM's are the ATM's), not ChartBridge's
+        // own legs (CheckLegs keeps those), on any instrument; with each, both readings of that account's position on its contract.
+        internal sealed class GroupLeftCandidate { public Order O; public int Listed, Effective; }
+        internal static List<GroupLeftCandidate> GroupLeftCandidates(Account a)
+        {
+            List<GroupLeftCandidate> list = new List<GroupLeftCandidate>();
+            List<Order> orders;
+            lock (a.Orders) orders = a.Orders.ToList();
+            foreach (Order o in orders)
+            {
+                if (o == null || o.Instrument == null || !IsWorking(o.OrderState) || !string.IsNullOrEmpty(o.Oco)) continue;
+                string name = o.Name ?? "";
+                if (GroupNotEntryRx.IsMatch(name) || AgentMarketRx.IsMatch(name) || IsMergedLeg(o)) continue;
+                list.Add(new GroupLeftCandidate { O = o, Listed = SignedPosition(a, o.Instrument), Effective = EffectivePosition(a, o.Instrument) });
+            }
+            return list;
+        }
+        internal static bool GroupIsBuy(Order o) { return IsBuy(o); }
+
         internal static bool GroupOpposite(Account a, Instrument inst, bool isBuy)
         {
             int pn = SignedPosition(a, inst), pe = EffectivePosition(a, inst);
@@ -174,7 +194,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     public static class ChartBridgeGroups
     {
         public const string Header = "# ChartBridge account groups (written by ChartBridge; do not edit)";
-        public const string Header2 = "# group<TAB>id<TAB>name<TAB>on|off<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>target|-<TAB>size<TAB>lockAt|-, member<TAB>account<TAB>id, personal<TAB>account<TAB>floor|-<TAB>daily|-";
+        public const string Header2 = "# group<TAB>id<TAB>name<TAB>on|off<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>target|-<TAB>size<TAB>lockAt|-<TAB>consistency|-, member<TAB>account<TAB>id, personal<TAB>account<TAB>floor|-<TAB>daily|-";
         public const string MarksHeader = "# ChartBridge account marks (written by ChartBridge; do not edit)";
         public const string MarksHeader2 = "# mark<TAB>account<TAB>peakEod|-<TAB>peakIntraday|-<TAB>dayStartBalance|-<TAB>session<TAB>dayStartAt (UTC ms)|-";
         public const string ReadFailedText = "groups.txt could not be read: every new entry is refused until it can (exits always work)";
@@ -197,6 +217,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public string Id, Name, Type;
             public bool NoHedge;
             public double DailyLoss, Drawdown, Target, Size, LockAt;   // 0: none (DailyLoss, Target, LockAt)
+            public double Consistency;   // CON (a), Anthony 2026-10-15: Lucid's consistency percent, 0 none; informational only
             public string[] Extra = new string[0];                   // fields after lockAt, kept as read (a later ChartBridge's)
             public Group Clone() { Group g = (Group)MemberwiseClone(); g.Extra = (string[])Extra.Clone(); return g; }
         }
@@ -241,6 +262,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (Mem)
             {
+                ExitOf.Clear(); LeftCancelled.Clear(); leftStarted = false;
                 state = new State(); loaded = false; readError = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
                 marksSaveFailed = false; lastGroupsJson = null; LastSide.Clear();
             }
@@ -337,6 +359,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             return v > 0 && v <= MaxMoney;
         }
 
+        private static bool FilePercent(string t, out double v)
+        {
+            v = 0;
+            if (t == "-") return true;
+            if (!Regex.IsMatch(t ?? "", "^(?:[1-9][0-9]?|100)(?:\\.[0-9]{1,2})?$")) return false;
+            v = double.Parse(t, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
+            return v > 0 && v <= 100;
+        }
+
         private static string NameProblem(string name)
         {
             if (name == null) return "name must be a plain string";
@@ -369,7 +400,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (s.Groups.ContainsKey(p[1])) { why = at + " names group " + p[1] + " twice"; return null; }
                     if (s.Groups.Values.Any(x => string.Equals(x.Name, p[2], StringComparison.OrdinalIgnoreCase))) { why = at + " names a group name twice"; return null; }
                     g.Id = p[1]; g.Name = p[2]; g.NoHedge = p[3] == "on"; g.DailyLoss = dl; g.Drawdown = dd; g.Type = p[6]; g.Target = tg; g.Size = sz; g.LockAt = lk;
-                    g.Extra = p.Skip(10).ToArray();
+                    double con = 0;
+                    if (p.Length >= 11 && !FilePercent(p[10], out con)) { why = at + " is not a group line (consistency)"; return null; }
+                    g.Consistency = con;
+                    g.Extra = p.Skip(11).ToArray();   // a group line of 10 fields (no consistency) reads as none
                     s.Groups[g.Id] = g;
                     maxId = Math.Max(maxId, int.Parse(g.Id.Substring(1), CultureInfo.InvariantCulture));
                 }
@@ -402,7 +436,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (Group g in s.Groups.Values.OrderBy(x => int.Parse(x.Id.Substring(1), CultureInfo.InvariantCulture)))
             {
                 b.Append("group\t").Append(g.Id).Append('\t').Append(g.Name).Append('\t').Append(g.NoHedge ? "on" : "off").Append('\t').Append(MoneyText(g.DailyLoss)).Append('\t')
-                 .Append(MoneyText(g.Drawdown)).Append('\t').Append(g.Type).Append('\t').Append(MoneyText(g.Target)).Append('\t').Append(MoneyText(g.Size)).Append('\t').Append(MoneyText(g.LockAt));
+                 .Append(MoneyText(g.Drawdown)).Append('\t').Append(g.Type).Append('\t').Append(MoneyText(g.Target)).Append('\t').Append(MoneyText(g.Size)).Append('\t').Append(MoneyText(g.LockAt))
+                 .Append('\t').Append(g.Consistency > 0 ? g.Consistency.ToString("0.##", CultureInfo.InvariantCulture) : "-");
                 foreach (string x in g.Extra) b.Append('\t').Append(x);
                 b.Append('\n');
             }
@@ -511,6 +546,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
             SaveMarks(false);
+            try { Leftovers(); } catch (Exception ex) { ChartBridgeServer.Log("groups: leftover exits check error: " + ex.Message); }   // Q-EXIT (b)
             SendGroups(false);
         }
 
@@ -535,6 +571,83 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
             SaveMarks(true);   // only when a high rose (marksDirty)
+        }
+
+        // ---------------------------------------------------------- Q-EXIT (b): exits left behind when a position goes flat
+        // Anthony 2026-10-15: resting exits are always accepted; when an account in a group with No hedging on goes flat on an
+        // instrument, the working orders there that were exits of the position just closed (placed while a position existed, on its
+        // other side: the page's and orders typed into NinjaTrader; never ChartBridge's legs, which CheckLegs keeps, nor an ATM's)
+        // would now open the other side: ChartBridge cancels them, logs each, and tells the pages. After a start ChartBridge cannot
+        // know where an order came from: an order on a flat account against its group's side is cancelled once, the same way.
+        private static readonly Dictionary<Order, int> ExitOf = new Dictionary<Order, int>();       // order -> the side of the position it exits
+        private static readonly HashSet<Order> LeftCancelled = new HashSet<Order>();
+        private static bool leftStarted;   // the first pass since the start ran (the orders from before it were looked at once)
+
+        // PlaceOrderLocked, as each order is made: on the other side of the account's position by both readings, it exits that position.
+        public static void NoteNewOrder(Account a, Instrument inst, Order o, bool isBuy)
+        {
+            try { if (ChartBridgeOrders.GroupOpposite(a, inst, isBuy)) lock (Mem) ExitOf[o] = isBuy ? -1 : 1; }
+            catch (Exception) { }
+        }
+
+        public static void Leftovers()
+        {
+            List<KeyValuePair<string, List<string>>> groups = new List<KeyValuePair<string, List<string>>>();
+            lock (Mem)
+            {
+                if (!loaded || readError != null) return;
+                foreach (Group g in state.Groups.Values)
+                    if (g.NoHedge) groups.Add(new KeyValuePair<string, List<string>>(g.Name, state.Members.Where(kv => kv.Value == g.Id).Select(kv => kv.Key).ToList()));
+            }
+            List<string[]> said = new List<string[]>();
+            foreach (KeyValuePair<string, List<string>> grp in groups)
+                foreach (string name in grp.Value)
+                {
+                    Account a = Find(name);
+                    if (a == null || !Up(a)) continue;
+                    List<ChartBridgeOrders.GroupLeftCandidate> cands;
+                    try { cands = ChartBridgeOrders.GroupLeftCandidates(a); } catch (Exception) { continue; }
+                    string others = null;
+                    foreach (ChartBridgeOrders.GroupLeftCandidate c in cands)
+                    {
+                        Order o = c.O;
+                        bool buy = ChartBridgeOrders.GroupIsBuy(o);
+                        bool first;
+                        lock (Mem) first = !leftStarted;
+                        if (c.Listed != 0 && Math.Sign(c.Listed) == Math.Sign(c.Effective))
+                        {
+                            if (Math.Sign(c.Listed) == (buy ? -1 : 1)) lock (Mem) ExitOf[o] = Math.Sign(c.Listed);   // an exit of the position held now
+                            continue;
+                        }
+                        if (c.Listed != 0 || c.Effective != 0) continue;   // not flat by both readings: nothing is cancelled
+                        int side;
+                        bool marked, done;
+                        lock (Mem) { marked = ExitOf.TryGetValue(o, out side); done = LeftCancelled.Contains(o); }
+                        if (done) continue;
+                        string why = null;
+                        if (marked) why = a.Name + " went flat on " + MasterName(o) + ": cancelled the " + OrderWords(o) + " left from the " + (side > 0 ? "long" : "short") + ", so it cannot open a " + (side > 0 ? "short" : "long");
+                        else if (first)
+                        {
+                            if (others == null) { List<string> rest = grp.Value.Where(x => !x.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList(); others = SideOf(Holdings(rest)) ?? ""; }
+                            if ((others == "long" && !buy) || (others == "short" && buy) || others == "mixed")
+                                why = a.Name + " is flat on " + MasterName(o) + ": cancelled the " + OrderWords(o) + " left from before ChartBridge started (" + grp.Key + " is " + (others == "mixed" ? "long and short" : others) + "), so it cannot open a " + (buy ? "long" : "short");
+                        }
+                        if (why == null) continue;
+                        lock (Mem) LeftCancelled.Add(o);
+                        string err = ChartBridgeOrders.GroupCancelLeftover(a, o);
+                        said.Add(new[] { err == null ? "warn" : "error", err == null ? why : why.Replace(": cancelled the ", ": could not cancel the ") + " (" + err + "); cancel it in NinjaTrader" });
+                    }
+                }
+            lock (Mem) leftStarted = true;
+            lock (Mem) foreach (Order o in ExitOf.Keys.Where(x => !ChartBridgeOrders.AgentMayFillState(x.OrderState)).ToList()) { ExitOf.Remove(o); LeftCancelled.Remove(o); }
+            foreach (string[] s in said) { ChartBridgeServer.Log((s[0] == "error" ? "ALERT: " : "NOTE: ") + s[1]); ChartBridgeServer.SendToTraders(StatusJson(s[0], s[1])); }
+        }
+
+        private static string MasterName(Order o) { return o.Instrument != null && o.Instrument.MasterInstrument != null ? o.Instrument.MasterInstrument.Name : o.Instrument != null ? o.Instrument.FullName : "?"; }
+        private static string OrderWords(Order o)
+        {
+            string kind = o.OrderType == OrderType.Limit ? "limit" : o.OrderType == OrderType.StopMarket ? "stop" : o.OrderType == OrderType.StopLimit ? "stop limit" : o.OrderType == OrderType.MIT ? "MIT" : "market";
+            return (ChartBridgeOrders.GroupIsBuy(o) ? "buy " : "sell ") + kind + " " + Math.Max(0, o.Quantity - o.Filled);
         }
 
         // ---------------------------------------------------------- the one-direction check (G3 a)
@@ -643,6 +756,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 b.Append("{\"id\":").Append(CbJson.Str(g.Id)).Append(",\"name\":").Append(CbJson.Str(g.Name)).Append(",\"noHedge\":").Append(g.NoHedge ? "true" : "false")
                  .Append(",\"dailyLoss\":").Append(None0(g.DailyLoss)).Append(",\"drawdown\":").Append(None0(g.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(g.Type))
                  .Append(",\"target\":").Append(None0(g.Target)).Append(",\"size\":").Append(None0(g.Size)).Append(",\"lockAt\":").Append(None0(g.LockAt))
+                 .Append(",\"consistency\":").Append(None0(g.Consistency))
                  .Append(",\"members\":[").Append(string.Join(",", members[g.Id].Select(x => CbJson.Str(x)))).Append("]")
                  .Append(",\"side\":").Append(side == null ? "null" : CbJson.Str(side)).Append(",\"holders\":[");
                 for (int k = 0; k < held.Count; k++)
@@ -905,7 +1019,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"noHedge\":").Append(n.G == null ? "null" : n.G.NoHedge ? "true" : "false").Append(",\"rules\":");
                 if (n.G != null)
                     b.Append("{\"dailyLoss\":").Append(Zero0(n.G.DailyLoss)).Append(",\"drawdown\":").Append(Zero0(n.G.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(n.G.Type))
-                     .Append(",\"target\":").Append(Zero0(n.G.Target)).Append(",\"size\":").Append(Zero0(n.G.Size)).Append(",\"lockAt\":").Append(Zero0(n.G.LockAt)).Append('}');
+                     .Append(",\"target\":").Append(Zero0(n.G.Target)).Append(",\"size\":").Append(Zero0(n.G.Size)).Append(",\"lockAt\":").Append(Zero0(n.G.LockAt))
+                     .Append(",\"consistency\":").Append(Zero0(n.G.Consistency)).Append('}');   // CON (a): informational, 0 none
                 else if (!n.MySet) b.Append("null");   // no limits ever set by Anthony: the agent keeps its model numbers
                 else b.Append("{\"floor\":").Append(Zero0(n.MyFloor ?? 0)).Append(",\"dailyLoss\":").Append(Zero0(n.MyDaily ?? 0)).Append('}');   // rules: 0 is none (the firm or the account has no such rule), never null
                 foreach (string k in NumberKeys) b.Append(",\"").Append(k).Append("\":").Append(Num(Get(n, k)));
@@ -919,7 +1034,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- messages from the page
         private static readonly Dictionary<string, string[]> Keys = new Dictionary<string, string[]>
         {
-            { "groupSave", new[] { "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt" } },
+            { "groupSave", new[] { "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt", "consistency" } },
             { "groupDelete", new[] { "type", "cid", "group" } },
             { "accountGroup", new[] { "type", "cid", "account", "group", "highClose" } },
             { "accountLimits", new[] { "type", "cid", "account", "floor", "dailyLoss" } },
@@ -986,6 +1101,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 (why = Money(m, "size", false, out sz)) != null || (why = Money(m, "lockAt", true, out lk)) != null) return why;
             if (dd >= sz) return "the drawdown must be less than the account size";
             if (lk > 0 && type == "static") return "floor stops at applies to a trailing drawdown only (end of day or intraday); 0 for none";
+            double con = 0;   // CON (a): optional, 0 or absent none, else more than 0 and at most 100 (2 decimals)
+            if (m.ContainsKey("consistency"))
+            {
+                string raw = m["consistency"];
+                if (raw != "0" && !FilePercent(raw, out con)) return "consistency must be a percent from 0 (none) to 100, at most 2 decimals";
+            }
             if (lk > 0 && lk <= sz - dd) return "floor stops at must be above the starting floor (" + (sz - dd).ToString("0.##", CultureInfo.InvariantCulture) + ")";
             string said;
             lock (SaveLock)
@@ -997,7 +1118,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else g = new Group { Id = "g" + next.Next.ToString(CultureInfo.InvariantCulture) };
                 if (next.Groups.Values.Any(x => x.Id != g.Id && string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase))) return "a group named " + name + " is there already";
                 string was = id != null ? g.Name : null;
-                g.Name = name; g.NoHedge = noHedge.Value; g.DailyLoss = dl; g.Drawdown = dd; g.Type = type; g.Target = tg; g.Size = sz; g.LockAt = lk;
+                g.Name = name; g.NoHedge = noHedge.Value; g.DailyLoss = dl; g.Drawdown = dd; g.Type = type; g.Target = tg; g.Size = sz; g.LockAt = lk; g.Consistency = con;
                 if (id == null) { next.Groups[g.Id] = g; next.Next++; }
                 string err = Save(next);
                 if (err != null) return err;
@@ -1012,7 +1133,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Func<double, string> d = v => "$" + v.ToString("#,0.##", CultureInfo.InvariantCulture);
             return "size " + d(g.Size) + ", daily loss " + (g.DailyLoss > 0 ? d(g.DailyLoss) : "none") + ", drawdown " + d(g.Drawdown) + " " + g.Type +
-                   (g.LockAt > 0 ? " (floor stops at " + d(g.LockAt) + ")" : "") + ", target " + (g.Target > 0 ? d(g.Target) : "none") + ", no hedging " + (g.NoHedge ? "on" : "off");
+                   (g.LockAt > 0 ? " (floor stops at " + d(g.LockAt) + ")" : "") + ", target " + (g.Target > 0 ? d(g.Target) : "none") + ", consistency " + (g.Consistency > 0 ? g.Consistency.ToString("0.##", CultureInfo.InvariantCulture) + "%" : "none") + ", no hedging " + (g.NoHedge ? "on" : "off");
         }
 
         private static string GroupDelete(Dictionary<string, string> m)

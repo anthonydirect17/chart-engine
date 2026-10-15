@@ -107,14 +107,14 @@ const fnBody = name => fnBodies(name).join('\n');
 
 test('order calls appear only in the gated functions and the bracket upkeep of ChartBridgeOrders.cs', () => {
   const fromPage = ['PlaceOrderLocked', 'ChangeOrder', 'CancelOrder', 'Flatten'];
-  const upkeep = ['PlaceLegs', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs'];
+  const upkeep = ['PlaceLegs', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'GroupCancelLeftover'];   // 0.5.8 Q-EXIT (b): a cancel only (checked below)
   let rest = ocode;
   for (const f of fromPage.concat(upkeep)) for (const b of fnBodies(f)) rest = rest.replace(b, '');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
     assert.ok(!re.test(rest), 'order call outside the gated functions: ' + re);
   assert.ok(!/CancelAllOrders|StartAtmStrategy|\bAtm\w*\./.test(ocode), 'no ATM or cancel-all calls');
   // only PlaceOrderLocked and PlaceLegs create orders; the rest of the upkeep only cancels or shrinks
-  for (const f of ['ChangeOrder', 'PlanOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'KeepBracket', 'ScanEntries'])
+  for (const f of ['ChangeOrder', 'PlanOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'KeepBracket', 'ScanEntries', 'GroupCancelLeftover'])
     assert.ok(!/\.CreateOrder\s*\(|\.Submit\s*\(/.test(fnBody(f)), f + ' creates orders');
   assert.match(fnBody('PlaceOrder'), /lock \(PlaceLock\) why = PlaceOrderLocked\(/);
   // 0.3.7: planned_brackets.txt is written outside PlaceLock, and only WritePlans touches it; NinjaTrader's paths only read memory
@@ -1393,7 +1393,10 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   assert.match(acc, /ChartBridgeGroups\.StartNow\(\);[^\n]*\n\s*if \(!On\) return;/, 'groups.txt is read whether or not accountChecks is on');
   // the page messages, through ChartBridge.cs's dispatch; strict keys
   assert.match(code, /else if \(ChartBridgeGroups\.Handles\(type\)\) ChartBridgeGroups\.OnMessage\(client, type, text\);/);
-  assert.match(g, /\{ "groupSave", new\[\] \{ "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt" \} \}/);
+  assert.match(g, /\{ "groupSave", new\[\] \{ "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt", "consistency" \} \}/);
+  // Q-EXIT (b): the one order call for the groups is in ChartBridgeOrders.cs (GroupCancelLeftover), a cancel only
+  const oo = strip(read('ChartBridgeOrders.cs')), gc = oo.slice(oo.indexOf('internal static string GroupCancelLeftover('), oo.indexOf('private static string ChangeOrder('));
+  assert.ok(gc.length > 0 && gc.length < 600 && /a\.Cancel\(new\[\] \{ o \}\)/.test(gc) && !/Submit|CreateOrder|\.Change\(|Flatten/.test(gc), 'GroupCancelLeftover only cancels');
   assert.match(g, /\{ "accountGroup", new\[\] \{ "type", "cid", "account", "group", "highClose" \} \}/);
   // accounts.txt keeps its 0.5.0 format: groups live in their own file
   assert.ok(!/groups/.test(acc.slice(acc.indexOf('private static void Save()'), acc.indexOf('private static void SaveDetails()'))), 'accounts.txt is not touched');

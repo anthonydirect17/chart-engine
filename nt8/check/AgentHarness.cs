@@ -1756,7 +1756,7 @@ public static class AgentHarness
                 ChartBridgeGroups.StartNow();
                 Tick();
                 st = Last(agentOut, "accountState");
-                Check(Count(agentOut, "accountState") == n + 1 && st.Contains("\"kind\":\"prop\",\"group\":\"Lucid\",\"groupId\":\"g1\",\"groupSide\":null,\"noHedge\":true,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"intraday\",\"target\":3000,\"size\":50000,\"lockAt\":0}") &&
+                Check(Count(agentOut, "accountState") == n + 1 && st.Contains("\"kind\":\"prop\",\"group\":\"Lucid\",\"groupId\":\"g1\",\"groupSide\":null,\"noHedge\":true,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"intraday\",\"target\":3000,\"size\":50000,\"lockAt\":0,\"consistency\":0}") &&
                       st.Contains("\"floor\":\"no intraday high is known for this account: put it in Lucid again and give its highest close\""), "0.5.8: in a group: sent again within the 1 s pass (prop, its rules; no high yet: floor null with why): " + st);
                 SetPos(simb, nq, -1);
                 Tick();
