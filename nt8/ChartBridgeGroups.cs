@@ -162,6 +162,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             return list;
         }
         internal static bool GroupIsBuy(Order o) { return IsBuy(o); }
+        // the position on this contract both readings agree it is at least (0 when they differ in side)
+        internal static int GroupHeld(Account a, Instrument inst) { int pn = SignedPosition(a, inst), pe = EffectivePosition(a, inst); return pn > 0 && pe > 0 ? Math.Min(pn, pe) : pn < 0 && pe < 0 ? Math.Min(-pn, -pe) : 0; }
 
         internal static bool GroupOpposite(Account a, Instrument inst, bool isBuy)
         {
@@ -275,7 +277,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (Mem)
             {
-                ExitOf.Clear(); LeftCancelled.Clear(); LeftLooked.Clear(); PosSide.Clear();
+                ExitOf.Clear(); ExitHeld.Clear(); FlatSince.Clear(); LeftCancelled.Clear(); LeftLooked.Clear(); PosSide.Clear();
                 state = new State(); loaded = false; readError = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
                 marksSaveFailed = false; lastGroupsJson = null; LastSide.Clear();
             }
@@ -593,6 +595,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // would now open the other side: ChartBridge cancels them, logs each, and tells the pages. After a start ChartBridge cannot
         // know where an order came from: an order on a flat account against its group's side is cancelled once, the same way.
         private static readonly Dictionary<Order, int> ExitOf = new Dictionary<Order, int>();       // order -> the side of the position it exits
+        private static readonly Dictionary<Order, int> ExitHeld = new Dictionary<Order, int>();     // order -> the largest position it was an exit of
+        private static readonly Dictionary<string, double> FlatSince = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);   // account|contract -> first seen flat (ms)
+        public static double LeftSettleMs = 300;   // re-review 3: flat by both readings this long before anything is cancelled (the harness sets 0)
+        private static double NowMs() { return (NowUtc() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
         private static readonly HashSet<Order> LeftCancelled = new HashSet<Order>();
         private static readonly HashSet<string> LeftLooked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // accounts looked at (connected) since the start
         private static readonly Dictionary<string, int> PosSide = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);   // account|contract: the side of the last position seen
@@ -603,13 +609,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void PositionWentFlat()
         {
             if (LeftoversInline) { try { Leftovers(); } catch (Exception) { } return; }
-            ThreadPool.QueueUserWorkItem(delegate { try { Leftovers(); } catch (Exception ex) { ChartBridgeServer.Log("groups: leftover exits check error: " + ex.Message); } });
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                try { Leftovers(); Thread.Sleep((int)LeftSettleMs + 50); Leftovers(); }   // the first pass notes the flat; the second, once it settled, may cancel
+                catch (Exception ex) { ChartBridgeServer.Log("groups: leftover exits check error: " + ex.Message); }
+            });
         }
 
         // PlaceOrderLocked, as each order is made: on the other side of the account's position by both readings, it exits that position.
         public static void NoteNewOrder(Account a, Instrument inst, Order o, bool isBuy)
         {
-            try { if (ChartBridgeOrders.GroupOpposite(a, inst, isBuy)) lock (Mem) ExitOf[o] = isBuy ? -1 : 1; }
+            try { if (ChartBridgeOrders.GroupOpposite(a, inst, isBuy)) { int h = ChartBridgeOrders.GroupHeld(a, inst); lock (Mem) { ExitOf[o] = isBuy ? -1 : 1; ExitHeld[o] = h; } } }
             catch (Exception) { }
         }
 
@@ -645,17 +655,39 @@ namespace NinjaTrader.NinjaScript.AddOns
                             lock (Mem)
                             {
                                 PosSide[skey] = Math.Sign(c.Listed);
-                                if (Math.Sign(c.Listed) == (buy ? -1 : 1)) ExitOf[o] = Math.Sign(c.Listed);   // an exit of the position held now
+                                FlatSince.Remove(skey);
+                                if (Math.Sign(c.Listed) == (buy ? -1 : 1))
+                                {
+                                    ExitOf[o] = Math.Sign(c.Listed);   // an exit of the position held now
+                                    int h, now = Math.Min(Math.Abs(c.Listed), Math.Abs(c.Effective));
+                                    ExitHeld[o] = ExitHeld.TryGetValue(o, out h) ? Math.Max(h, now) : now;
+                                }
                             }
                             continue;
                         }
-                        if (c.Listed != 0 || c.Effective != 0) continue;   // not flat by both readings: nothing is cancelled
+                        if (c.Listed != 0 || c.Effective != 0) { lock (Mem) FlatSince.Remove(skey); continue; }   // not flat by both readings: nothing is cancelled
+                        // re-review 3: flat and steady for LeftSettleMs first (a fill on its way never makes a live order look left behind)
+                        double t0, tn = NowMs();
+                        bool settled;
+                        lock (Mem) { if (!FlatSince.TryGetValue(skey, out t0)) { FlatSince[skey] = t0 = tn; } settled = tn - t0 >= LeftSettleMs; }
+                        if (!settled) continue;
                         int side, closed;
                         bool marked, done;
-                        lock (Mem) { marked = ExitOf.TryGetValue(o, out side); done = LeftCancelled.Contains(o); if (!PosSide.TryGetValue(skey, out closed)) closed = side; }
+                        int heldWas;
+                        lock (Mem) { marked = ExitOf.TryGetValue(o, out side); done = LeftCancelled.Contains(o); if (!PosSide.TryGetValue(skey, out closed)) closed = side; if (!ExitHeld.TryGetValue(o, out heldWas)) heldWas = 0; }
                         if (done) continue;
+                        // re-review 3 (coordinator, Anthony's intent): a marked order whose own fills took the position through flat is a
+                        // reversal's entry, not a leftover: judged as the after-start look is (cancelled only when the group's other members
+                        // hold its other side, or the group is mixed)
+                        bool reversal = marked && o.Filled > 0 && heldWas > 0 && o.Filled >= heldWas;
                         string why = null;
-                        if (marked) why = a.Name + " went flat on " + MasterName(o) + ": cancelled the " + OrderWords(o) + " left from the " + (closed > 0 ? "long" : "short") + ", so it cannot open a " + (buy ? "long" : "short");
+                        if (reversal)
+                        {
+                            if (others == null) { List<string> rest = grp.Value.Where(x => !x.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList(); others = SideOf(Holdings(rest)) ?? ""; }
+                            if ((others == "long" && !buy) || (others == "short" && buy) || others == "mixed")
+                                why = a.Name + " went through flat on " + MasterName(o) + ": cancelled the rest of the " + OrderWords(o) + " (" + grp.Key + " is " + (others == "mixed" ? "long and short" : others) + "), so it cannot open a " + (buy ? "long" : "short");
+                        }
+                        else if (marked) why = a.Name + " went flat on " + MasterName(o) + ": cancelled the " + OrderWords(o) + " left from the " + (closed > 0 ? "long" : "short") + ", so it cannot open a " + (buy ? "long" : "short");
                         else if (first)
                         {
                             if (others == null) { List<string> rest = grp.Value.Where(x => !x.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList(); others = SideOf(Holdings(rest)) ?? ""; }
@@ -668,7 +700,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         said.Add(new[] { err == null ? "warn" : "error", err == null ? why : why.Replace(": cancelled the ", ": could not cancel the ") + " (" + err + "); cancel it in NinjaTrader" });
                     }
                 }
-            lock (Mem) foreach (Order o in ExitOf.Keys.Where(x => !ChartBridgeOrders.AgentMayFillState(x.OrderState)).ToList()) { ExitOf.Remove(o); LeftCancelled.Remove(o); }
+            lock (Mem) foreach (Order o in ExitOf.Keys.Where(x => !ChartBridgeOrders.AgentMayFillState(x.OrderState)).ToList()) { ExitOf.Remove(o); ExitHeld.Remove(o); LeftCancelled.Remove(o); }
             foreach (string[] s in said) { ChartBridgeServer.Log((s[0] == "error" ? "ALERT: " : "NOTE: ") + s[1]); ChartBridgeServer.SendToTraders(StatusJson(s[0], s[1])); }
         }
 

@@ -69,7 +69,9 @@ places an order) and page file `live/groups.js`, both in `install-files.json`. A
   start, an order on a flat account against its group's side is cancelled once the same way.
   Re-review: a typed OCO pair left after flat counts (once per OCO id at its largest) and is cancelled; the pass runs at once on
   the position update to flat, not only every second; the after-start look is per account, once it is connected; the note names
-  the position just closed and the side the order would open.
+  the position just closed and the side the order would open. Re-review 3: a resting reversal whose own fills took the position
+  through flat keeps its rest unless the group's other members hold the other side (then it is cancelled with a note), and nothing
+  is cancelled until the account has been flat for 300 ms.
 - **CON (a), Anthony 2026-10-15: consistency percent.** Each group's rules get an optional consistency percent (no single day
   over that share of the profit): the rules dialog, `groupSave`, `groups.txt` (an 11th field; older lines read as none), the
   `groups` message and `accountState.rules.consistency` (0 none). Informational only: nothing is blocked or flattened by it.

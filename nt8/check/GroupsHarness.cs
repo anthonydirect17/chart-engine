@@ -121,7 +121,7 @@ public static class GroupsHarness
         finally
         {
             try { ChartBridgeAgents.Stop(); ChartBridgeAgents.ResetConfig(); } catch (Exception) { }
-            ChartBridgeGroups.ClockUtc = null; ChartBridgeBranches.ClockUtc = null; ChartBridgeAccounts.ReadFault = null; ChartBridgeGroups.MarksWriteMs = 5000;
+            ChartBridgeGroups.ClockUtc = null; ChartBridgeBranches.ClockUtc = null; ChartBridgeAccounts.ReadFault = null; ChartBridgeGroups.MarksWriteMs = 5000; ChartBridgeGroups.LeftSettleMs = 300;
             OrdersHarness.AllOffLines();
             ChartBridgeAccounts.Clear();
             ChartBridgeOrders.ResetConfig();
@@ -142,6 +142,7 @@ public static class GroupsHarness
         FieldInfo etf = typeof(ChartBridgeTime).GetField("et", PS);   // Linux names New York's zone differently from Windows (as PinHarness)
         if (etf.GetValue(null) == null) etf.SetValue(null, TimeZoneInfo.FindSystemTimeZoneById("America/New_York"));
         ChartBridgeGroups.MarksWriteMs = 0;   // every change written at once here
+        ChartBridgeGroups.LeftSettleMs = 0;   // flat counts as settled at once here (the settle has a check of its own)
         OrdersHarness.AllOffLines();   // accountChecks off: tradeAccounts is gate 2 (the check is the same either way)
         Account.All.Clear();
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
@@ -730,6 +731,37 @@ public static class GroupsHarness
         Pos(simA, mnq, -1); Tick();
         Pos(simA, mnq, 0); Clear(); Tick();
         Check(Cancelled(simA, flip) && Any("SIM-A went flat on MNQ: cancelled the sell limit 1 left from the short, so it cannot open a short"), "re-review 2: the note names the short just closed and the order's own side");
+        Flat();
+        // re-review 3: a resting reversal typed into NinjaTrader that fills through flat keeps its rest when alone
+        Pos(simA, mnq, 2);
+        Order rev = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 4, "", "typed reversal");
+        Tick();
+        rev.Filled = 2; rev.OrderState = OrderState.PartFilled; Pos(simA, mnq, 0);
+        Clear(); Tick();
+        Check(!Cancelled(simA, rev), "re-review 3: SIM-A the only holder: the reversal's rest (2) is not cut at flat");
+        Flat();
+        Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+        Order rev2 = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 4, "", "typed reversal 2");
+        Tick();
+        rev2.Filled = 2; rev2.OrderState = OrderState.PartFilled; Pos(simA, mnq, 0);
+        Clear(); Tick();
+        Check(Cancelled(simA, rev2) && Any("SIM-A went through flat on MNQ: cancelled the rest of the sell limit 2 (Review is long), so it cannot open a short"), "re-review 3: with SIM-C long 1 the reversal's rest would hedge: cancelled, with the note");
+        Flat();
+        // re-review 3: the settle: flat but not yet steady, nothing is cancelled
+        ChartBridgeGroups.LeftSettleMs = 300;
+        try
+        {
+            Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+            Order st = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed settle");
+            ClockEt(2026, 10, 14, 10, 0); Tick();
+            Pos(simA, mnq, 0); Tick();
+            Check(!Cancelled(simA, st), "re-review 3: just flat (not steady 300 ms): nothing cancelled yet");
+            DateTime steadyAt = ChartBridgeGroups.ClockUtc().AddMilliseconds(400);
+            ChartBridgeGroups.ClockUtc = () => steadyAt;
+            Tick();
+            Check(Cancelled(simA, st), "re-review 3: flat and steady: the leftover is cancelled");
+        }
+        finally { ChartBridgeGroups.LeftSettleMs = 0; ClockEt(2026, 10, 14, 10, 0); }
         Flat();
         // item 3: after a start, an account not connected at the first pass is looked at once it connects
         Pos(simC, mnq, 1);
