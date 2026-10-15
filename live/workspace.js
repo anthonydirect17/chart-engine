@@ -720,7 +720,7 @@ const tlater = (fn, ms) => { const id = setTimeout(() => { tTimers.delete(id); f
    nt8/PROTOCOL.md "The page's v3 connection (chart 1.16.0)". */
 const AF = window.AccountsPage ? window.AccountsPage.createFeed({
   wsUrl, pin: PIN, framed: FRAMED, fetch: (u, o) => fetch(u, o), note: (text, warn) => note(text, !!warn, warn ? 8000 : 4000),
-  changed: () => { syncV3(); renderLimits(); renderAccountPages(); },
+  changed: () => { syncV3(); renderLimits(); renderAccountPages(); if (groupsUi) groupsUi.render(); },
   orderSend: obj => !!obj && obj.type === 'cancel' && obj.from === 'list' && core.cancelFromList(obj.id, obj.cid),
 }) : null;
 /* the v3 connection's switches to the ticket (each control shows only while its switch is on), only when they change */
@@ -2808,7 +2808,15 @@ $('wsHotkeys').addEventListener('click', e => { const b = e.target.closest('butt
 
 $('wsPin').addEventListener('click', () => { closePops(); if (PIN) PIN.openChange(); });
 
+/* 1.26.0 (ChartBridge 0.5.8): Settings, Account groups (live/groups.js), on the window's v3 connection (AF) */
+let groupsUi = null;
+function startGroups() {
+  if (!window.GroupsPage || !AF || groupsUi) return;
+  groupsUi = window.GroupsPage.mountSettings({ feed: AF, sec: $('wsGroupsCol'), wide: on => $('wsSettings').classList.toggle('ws-has-groups', on), list: $('wsGroups'), add: $('wsGroupNew'), note: $('wsGroupsNote'), dialog: $('wsDialog'), showDialog: (d, ok, cancel) => showDialog(d, ok, cancel) });
+}
+startGroups();
 function renderSettings() {
+  startGroups(); if (groupsUi) groupsUi.render();
   for (const a of OT.HOTKEY_ACTIONS) hkNote(a.id, '', '');
   for (const a of W.VIEW_KEYS.concat(EXTRA_KEYS)) hkNote(a.id, '', '');
   renderGeneral(); renderHotkeys();
