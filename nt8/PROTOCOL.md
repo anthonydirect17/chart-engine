@@ -2959,7 +2959,8 @@ MNQ: cancelled the sell limit 2 left from the long, so it cannot open a short").
 holds a position there (a part-filled exit keeps working until then). After a start ChartBridge cannot know where an order came
 from: on its first look at each account (once that account is connected), an order on a flat account on the other side of its
 group's side is cancelled once, the same way. The note names the position just closed and the side the order would open.
-Re-review 3: nothing is cancelled until the contract has been flat by both readings for 300 ms; and a marked order whose own fills
+Re-review 3 and 4: a leftover with no fill of its own is cancelled at once; a marked order with fills of its own and the after-start
+look wait until the contract has been flat by both readings for 150 ms. A marked order whose own fills
 took the position through flat (a resting reversal, e.g. a sell limit 4 on a long 2 filled 2) is the reversal's entry, not a
 leftover: its rest is cancelled only when the group's other members hold the side it would open against, or the group is mixed ("...
 left from before ChartBridge started (Lucid is long) ..."). An entry placed on a flat account later is the group check's.

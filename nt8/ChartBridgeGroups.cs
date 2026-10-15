@@ -597,7 +597,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<Order, int> ExitOf = new Dictionary<Order, int>();       // order -> the side of the position it exits
         private static readonly Dictionary<Order, int> ExitHeld = new Dictionary<Order, int>();     // order -> the largest position it was an exit of
         private static readonly Dictionary<string, double> FlatSince = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);   // account|contract -> first seen flat (ms)
-        public static double LeftSettleMs = 300;   // re-review 3: flat by both readings this long before anything is cancelled (the harness sets 0)
+        public static double LeftSettleMs = 150;   // re-review 3 and 4: flat by both readings this long before a reversal's rest or an after-start look is cancelled (the harness sets 0)
         private static double NowMs() { return (NowUtc() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
         private static readonly HashSet<Order> LeftCancelled = new HashSet<Order>();
         private static readonly HashSet<string> LeftLooked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // accounts looked at (connected) since the start
@@ -670,12 +670,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                         double t0, tn = NowMs();
                         bool settled;
                         lock (Mem) { if (!FlatSince.TryGetValue(skey, out t0)) { FlatSince[skey] = t0 = tn; } settled = tn - t0 >= LeftSettleMs; }
-                        if (!settled) continue;
                         int side, closed;
                         bool marked, done;
                         int heldWas;
                         lock (Mem) { marked = ExitOf.TryGetValue(o, out side); done = LeftCancelled.Contains(o); if (!PosSide.TryGetValue(skey, out closed)) closed = side; if (!ExitHeld.TryGetValue(o, out heldWas)) heldWas = 0; }
                         if (done) continue;
+                        // re-review 4: a marked leftover with no fill of its own is cancelled at once (a typed stop may trigger within
+                        // moments); the settle is only for a marked order with fills of its own (another part fill may follow) and for the
+                        // unmarked after-start look
+                        if (!settled && (!marked || o.Filled > 0)) continue;
                         // re-review 3 (coordinator, Anthony's intent): a marked order whose own fills took the position through flat is a
                         // reversal's entry, not a leftover: judged as the after-start look is (cancelled only when the group's other members
                         // hold its other side, or the group is mixed)

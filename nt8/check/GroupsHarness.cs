@@ -121,7 +121,7 @@ public static class GroupsHarness
         finally
         {
             try { ChartBridgeAgents.Stop(); ChartBridgeAgents.ResetConfig(); } catch (Exception) { }
-            ChartBridgeGroups.ClockUtc = null; ChartBridgeBranches.ClockUtc = null; ChartBridgeAccounts.ReadFault = null; ChartBridgeGroups.MarksWriteMs = 5000; ChartBridgeGroups.LeftSettleMs = 300;
+            ChartBridgeGroups.ClockUtc = null; ChartBridgeBranches.ClockUtc = null; ChartBridgeAccounts.ReadFault = null; ChartBridgeGroups.MarksWriteMs = 5000; ChartBridgeGroups.LeftSettleMs = 150;
             OrdersHarness.AllOffLines();
             ChartBridgeAccounts.Clear();
             ChartBridgeOrders.ResetConfig();
@@ -748,18 +748,20 @@ public static class GroupsHarness
         Check(Cancelled(simA, rev2) && Any("SIM-A went through flat on MNQ: cancelled the rest of the sell limit 2 (Review is long), so it cannot open a short"), "re-review 3: with SIM-C long 1 the reversal's rest would hedge: cancelled, with the note");
         Flat();
         // re-review 3: the settle: flat but not yet steady, nothing is cancelled
-        ChartBridgeGroups.LeftSettleMs = 300;
+        ChartBridgeGroups.LeftSettleMs = 150;
         try
         {
             Pos(simA, mnq, 2); Pos(simC, mnq, 1);
-            Order st = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed settle");
+            Order zero = Manual(simA, mnq, OrderAction.Sell, OrderType.StopMarket, 2, "", "typed stop below");
+            Order st = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 4, "", "typed settle");
             ClockEt(2026, 10, 14, 10, 0); Tick();
-            Pos(simA, mnq, 0); Tick();
-            Check(!Cancelled(simA, st), "re-review 3: just flat (not steady 300 ms): nothing cancelled yet");
+            st.Filled = 2; st.OrderState = OrderState.PartFilled; Pos(simA, mnq, 0); Tick();
+            Check(Cancelled(simA, zero), "re-review 4: a leftover with no fill of its own is cancelled at once, no settle");
+            Check(!Cancelled(simA, st), "re-review 3: a reversal's rest waits for the settle (150 ms): nothing cancelled yet");
             DateTime steadyAt = ChartBridgeGroups.ClockUtc().AddMilliseconds(400);
             ChartBridgeGroups.ClockUtc = () => steadyAt;
             Tick();
-            Check(Cancelled(simA, st), "re-review 3: flat and steady: the leftover is cancelled");
+            Check(Cancelled(simA, st), "re-review 3: flat and steady, SIM-C long: the reversal's rest is cancelled");
         }
         finally { ChartBridgeGroups.LeftSettleMs = 0; ClockEt(2026, 10, 14, 10, 0); }
         Flat();
