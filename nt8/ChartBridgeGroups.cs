@@ -98,17 +98,29 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Review of #48 (item 5): orders on the other side of a position are exits only up to the position, summed per contract
             // (two sells of 2 on a long 2: the second is an entry of 2); orders are taken in the list's order.
             Dictionary<string, int> exitLeft = new Dictionary<string, int>();
+            // Re-review 2 of #48 (item 1): an OCO order is protective while a position is held (never counted); once both readings
+            // of that contract are 0, OCO orders count, once per OCO id and side at the largest (only one of them can fill).
+            Dictionary<string, GroupHolding> ocoFlat = new Dictionary<string, GroupHolding>();
             foreach (Order o in orders)
             {
                 if (o == null || !MayFill(o.OrderState)) continue;
                 string name = o.Name ?? "";
-                if (!string.IsNullOrEmpty(o.Oco) || GroupNotEntryRx.IsMatch(name) || AgentMarketRx.IsMatch(name) || IsMergedLeg(o)) continue;
+                if (GroupNotEntryRx.IsMatch(name) || AgentMarketRx.IsMatch(name) || IsMergedLeg(o)) continue;
                 int left = Math.Max(0, o.Quantity - o.Filled);
                 if (left == 0) continue;
                 bool buy = IsBuy(o);
                 string full = o.Instrument != null ? o.Instrument.FullName ?? "" : "";
                 int l, mv;
                 listed.TryGetValue(full, out l); moved.TryGetValue(full, out mv);
+                if (!string.IsNullOrEmpty(o.Oco))
+                {
+                    if (l != 0 || l + mv != 0) continue;
+                    string k = full + "|" + o.Oco + "|" + (buy ? "b" : "s");
+                    GroupHolding was;
+                    if (!ocoFlat.TryGetValue(k, out was) || left > was.Qty)
+                        ocoFlat[k] = new GroupHolding { Account = a.Name, Root = MasterName(o.Instrument), What = "entry", Side = buy ? 1 : -1, Qty = left, Kind = GroupKindWord(o.OrderType) };
+                    continue;
+                }
                 int e = l + mv, held = l > 0 && e > 0 ? Math.Min(l, e) : l < 0 && e < 0 ? -Math.Min(-l, -e) : 0;
                 int entryQty = left;
                 if (held != 0 && (buy ? held < 0 : held > 0))
@@ -122,6 +134,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (entryQty <= 0) continue;
                 list.Add(new GroupHolding { Account = a.Name, Root = MasterName(o.Instrument), What = "entry", Side = buy ? 1 : -1, Qty = entryQty, Kind = GroupKindWord(o.OrderType) });
             }
+            list.AddRange(ocoFlat.Values);
             return list;
         }
 
@@ -141,7 +154,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (a.Orders) orders = a.Orders.ToList();
             foreach (Order o in orders)
             {
-                if (o == null || o.Instrument == null || !IsWorking(o.OrderState) || !string.IsNullOrEmpty(o.Oco)) continue;
+                if (o == null || o.Instrument == null || !IsWorking(o.OrderState)) continue;   // OCO orders too (re-review 2: a typed OCO pair); an ATM's on a flat account are harmless to cancel
                 string name = o.Name ?? "";
                 if (GroupNotEntryRx.IsMatch(name) || AgentMarketRx.IsMatch(name) || IsMergedLeg(o)) continue;
                 list.Add(new GroupLeftCandidate { O = o, Listed = SignedPosition(a, o.Instrument), Effective = EffectivePosition(a, o.Instrument) });
@@ -262,7 +275,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (Mem)
             {
-                ExitOf.Clear(); LeftCancelled.Clear(); leftStarted = false;
+                ExitOf.Clear(); LeftCancelled.Clear(); LeftLooked.Clear(); PosSide.Clear();
                 state = new State(); loaded = false; readError = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
                 marksSaveFailed = false; lastGroupsJson = null; LastSide.Clear();
             }
@@ -581,7 +594,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         // know where an order came from: an order on a flat account against its group's side is cancelled once, the same way.
         private static readonly Dictionary<Order, int> ExitOf = new Dictionary<Order, int>();       // order -> the side of the position it exits
         private static readonly HashSet<Order> LeftCancelled = new HashSet<Order>();
-        private static bool leftStarted;   // the first pass since the start ran (the orders from before it were looked at once)
+        private static readonly HashSet<string> LeftLooked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // accounts looked at (connected) since the start
+        private static readonly Dictionary<string, int> PosSide = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);   // account|contract: the side of the last position seen
+        private static readonly object LeftLock = new object();   // one pass at a time (the 1 s check and a position update)
+        public static bool LeftoversInline;   // the harness: a position update runs the pass on its own thread
+
+        // Re-review 2 (item 2): a position went flat: the pass at once, off NinjaTrader's thread (it may cancel).
+        public static void PositionWentFlat()
+        {
+            if (LeftoversInline) { try { Leftovers(); } catch (Exception) { } return; }
+            ThreadPool.QueueUserWorkItem(delegate { try { Leftovers(); } catch (Exception ex) { ChartBridgeServer.Log("groups: leftover exits check error: " + ex.Message); } });
+        }
 
         // PlaceOrderLocked, as each order is made: on the other side of the account's position by both readings, it exits that position.
         public static void NoteNewOrder(Account a, Instrument inst, Order o, bool isBuy)
@@ -590,7 +613,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception) { }
         }
 
-        public static void Leftovers()
+        public static void Leftovers() { lock (LeftLock) LeftoversLocked(); }
+
+        private static void LeftoversLocked()
         {
             List<KeyValuePair<string, List<string>>> groups = new List<KeyValuePair<string, List<string>>>();
             lock (Mem)
@@ -607,25 +632,30 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (a == null || !Up(a)) continue;
                     List<ChartBridgeOrders.GroupLeftCandidate> cands;
                     try { cands = ChartBridgeOrders.GroupLeftCandidates(a); } catch (Exception) { continue; }
+                    bool first;
+                    lock (Mem) first = LeftLooked.Add(a.Name);   // re-review 2 (item 3): the after-start look, per account, once it is connected
                     string others = null;
                     foreach (ChartBridgeOrders.GroupLeftCandidate c in cands)
                     {
                         Order o = c.O;
                         bool buy = ChartBridgeOrders.GroupIsBuy(o);
-                        bool first;
-                        lock (Mem) first = !leftStarted;
+                        string skey = a.Name + "|" + o.Instrument.FullName;
                         if (c.Listed != 0 && Math.Sign(c.Listed) == Math.Sign(c.Effective))
                         {
-                            if (Math.Sign(c.Listed) == (buy ? -1 : 1)) lock (Mem) ExitOf[o] = Math.Sign(c.Listed);   // an exit of the position held now
+                            lock (Mem)
+                            {
+                                PosSide[skey] = Math.Sign(c.Listed);
+                                if (Math.Sign(c.Listed) == (buy ? -1 : 1)) ExitOf[o] = Math.Sign(c.Listed);   // an exit of the position held now
+                            }
                             continue;
                         }
                         if (c.Listed != 0 || c.Effective != 0) continue;   // not flat by both readings: nothing is cancelled
-                        int side;
+                        int side, closed;
                         bool marked, done;
-                        lock (Mem) { marked = ExitOf.TryGetValue(o, out side); done = LeftCancelled.Contains(o); }
+                        lock (Mem) { marked = ExitOf.TryGetValue(o, out side); done = LeftCancelled.Contains(o); if (!PosSide.TryGetValue(skey, out closed)) closed = side; }
                         if (done) continue;
                         string why = null;
-                        if (marked) why = a.Name + " went flat on " + MasterName(o) + ": cancelled the " + OrderWords(o) + " left from the " + (side > 0 ? "long" : "short") + ", so it cannot open a " + (side > 0 ? "short" : "long");
+                        if (marked) why = a.Name + " went flat on " + MasterName(o) + ": cancelled the " + OrderWords(o) + " left from the " + (closed > 0 ? "long" : "short") + ", so it cannot open a " + (buy ? "long" : "short");
                         else if (first)
                         {
                             if (others == null) { List<string> rest = grp.Value.Where(x => !x.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList(); others = SideOf(Holdings(rest)) ?? ""; }
@@ -638,7 +668,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                         said.Add(new[] { err == null ? "warn" : "error", err == null ? why : why.Replace(": cancelled the ", ": could not cancel the ") + " (" + err + "); cancel it in NinjaTrader" });
                     }
                 }
-            lock (Mem) leftStarted = true;
             lock (Mem) foreach (Order o in ExitOf.Keys.Where(x => !ChartBridgeOrders.AgentMayFillState(x.OrderState)).ToList()) { ExitOf.Remove(o); LeftCancelled.Remove(o); }
             foreach (string[] s in said) { ChartBridgeServer.Log((s[0] == "error" ? "ALERT: " : "NOTE: ") + s[1]); ChartBridgeServer.SendToTraders(StatusJson(s[0], s[1])); }
         }

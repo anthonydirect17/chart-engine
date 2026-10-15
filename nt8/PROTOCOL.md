@@ -2952,11 +2952,13 @@ any field but `at` changed; and at once on any account, group or rules change (`
 **Exits left behind (Q-EXIT b, Anthony 2026-10-15).** Resting exits are always accepted. When an account in a group with No
 hedging on goes flat on an instrument (both readings 0), ChartBridge cancels the working orders there that were exits of the
 position just closed: orders placed while a position existed, on its other side (the page's, and orders typed into NinjaTrader,
-seen by the 1 s check), never ChartBridge's own legs (the legs check keeps those) nor an order with an OCO id (an ATM's). Only
+seen by the 1 s check and at once on the position update to flat), never ChartBridge's own legs (the legs check keeps those);
+OCO orders too (a typed OCO pair; an ATM's legs on a flat account are cancelled by the ATM anyway). Only
 such orders, which would now open a position, are cancelled, each logged with a `status` `warn` to the pages ("SIM-A went flat on
 MNQ: cancelled the sell limit 2 left from the long, so it cannot open a short"). Nothing is cancelled while the account still
 holds a position there (a part-filled exit keeps working until then). After a start ChartBridge cannot know where an order came
-from: on its first look, an order on a flat account on the other side of its group's side is cancelled once, the same way ("...
+from: on its first look at each account (once that account is connected), an order on a flat account on the other side of its
+group's side is cancelled once, the same way. The note names the position just closed and the side the order would open ("...
 left from before ChartBridge started (Lucid is long) ..."). An entry placed on a flat account later is the group check's.
 
 **The one-direction check** (`ChartBridgeGroups.EntryCheck(source, account, root, isBuy, qty, wantsLegs, strategy)`, null or
@@ -2970,9 +2972,9 @@ follower; the copier holds the same lock); the agent's plan check 10b asks it to
   and NinjaTrader's list), except ChartBridge's legs and exits (`CB#<tag> stop|target|exit ...`, merged legs, an agent's
   `flat`, `protect` and stop placed again), any order with an OCO id, and orders on the other side of that account's position
   on that instrument up to the position, summed (review of #48: two sells of 2 on a long 2, the second is an entry of 2).
-  **Not counted** (review of #48, item 7): an order with an OCO id, so an OCO pair of entries typed into NinjaTrader itself (a
-  breakout bracket, buy stop above and sell stop below) is not seen as working entries until one of them fills; its fill is then
-  a position and counts. Counting OCO orders would also count every stop and target of an open position as entries.
+  OCO orders (re-review 2 of #48): while that account holds a position on the contract they are protective and never counted;
+  once both readings are 0 they count, once per OCO id and side at the largest order (only one of a pair can fill), so a typed OCO
+  pair left after flat, or a breakout pair typed on a flat account, shows the side it would open.
 
 The account's own new order is exempt when it is an exit: no stop or target asked, no Order Strategy, the other side of its
 position on that instrument by both readings, and its contracts plus the exits already working on that side no more than the

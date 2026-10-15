@@ -67,6 +67,9 @@ places an order) and page file `live/groups.js`, both in `install-files.json`. A
   closed (the page's and ones typed into NinjaTrader; never its own legs or an ATM's), since they would now open the other side,
   and tells the pages ("SIM-A went flat on MNQ: cancelled the sell limit 2 left from the long, so it cannot open a short"). After a
   start, an order on a flat account against its group's side is cancelled once the same way.
+  Re-review: a typed OCO pair left after flat counts (once per OCO id at its largest) and is cancelled; the pass runs at once on
+  the position update to flat, not only every second; the after-start look is per account, once it is connected; the note names
+  the position just closed and the side the order would open.
 - **CON (a), Anthony 2026-10-15: consistency percent.** Each group's rules get an optional consistency percent (no single day
   over that share of the profit): the rules dialog, `groupSave`, `groups.txt` (an 11th field; older lines read as none), the
   `groups` message and `accountState.rules.consistency` (0 none). Informational only: nothing is blocked or flattened by it.

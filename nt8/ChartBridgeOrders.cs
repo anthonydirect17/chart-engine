@@ -1665,6 +1665,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (e.MarketPosition == MarketPosition.Flat && SignedPosition(account, inst) == 0 && Steady(account, now))
                 CancelLeftoverLegs(account, inst, Where(account, inst), now);
             ChartBridgeCopier.OnPositionUpdate(account, inst, e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0);   // 0.4.0 copier: the leader's exits
+            if (e.MarketPosition == MarketPosition.Flat) ChartBridgeGroups.PositionWentFlat();   // 0.5.8 Q-EXIT (b): exits left behind, at once (not only the 1 s check)
         }
 
         // Flat: any ChartBridge stop or target still working would open a new position if it filled. Legs

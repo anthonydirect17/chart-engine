@@ -698,6 +698,51 @@ public static class GroupsHarness
         Clear(); Tick();
         Check(!Cancelled(simA, after), "Q-EXIT: only on the first look after the start");
         Flat();
+        // re-review 2, item 1: a typed OCO pair (sell stop 2 and sell limit 2, not ChartBridge's) left after flat: counted once, cancelled
+        Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+        Order ocoStop = Manual(simA, mnq, OrderAction.Sell, OrderType.StopMarket, 2, "pair1", "typed oco stop");
+        Order ocoLim = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "pair1", "typed oco limit");
+        Tick();
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"side\":\"long\""), "re-review 2: while SIM-A is long, its OCO pair is protective (not counted)");
+        Pos(simA, mnq, 0);
+        string gj2 = ChartBridgeGroups.GroupsJson();
+        Check(gj2.Contains("\"side\":\"mixed\"") && gj2.Contains("{\"account\":\"SIM-A\",\"root\":\"MNQ\",\"side\":\"short\",\"what\":\"entry\",\"qty\":2}") && !gj2.Contains("\"qty\":4"), "re-review 2: flat: the OCO pair counts once, at its largest (a sell entry of 2): " + gj2);
+        Clear(); Tick();
+        Check(Cancelled(simA, ocoStop) && Cancelled(simA, ocoLim), "re-review 2: and both legs of the typed OCO pair are cancelled");
+        Flat();
+        // item 2: a position update to flat runs the pass at once (no 1 s check)
+        ChartBridgeGroups.LeftoversInline = true;
+        try
+        {
+            Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+            Order ev = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed ev");
+            Tick();
+            Pos(simA, mnq, 0);
+            ChartBridgeOrders.OnPositionUpdate(simA, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Flat, Quantity = 0, AveragePrice = 0 });
+            Check(Cancelled(simA, ev), "re-review 2: the position update to flat cancels it at once");
+        }
+        finally { ChartBridgeGroups.LeftoversInline = false; }
+        Flat();
+        // item 4: a marked exit that became an add to a short is named from the short just closed and its own side
+        Pos(simA, mnq, 2); Pos(simC, mnq, 1);
+        Order flip = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 1, "", "typed flip");
+        Tick();
+        Pos(simA, mnq, -1); Tick();
+        Pos(simA, mnq, 0); Clear(); Tick();
+        Check(Cancelled(simA, flip) && Any("SIM-A went flat on MNQ: cancelled the sell limit 1 left from the short, so it cannot open a short"), "re-review 2: the note names the short just closed and the order's own side");
+        Flat();
+        // item 3: after a start, an account not connected at the first pass is looked at once it connects
+        Pos(simC, mnq, 1);
+        Order late = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 1, "", "typed late");
+        simA.Connection.Status = ConnectionStatus.Disconnected;
+        ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+        Tick();
+        Check(!Cancelled(simA, late), "re-review 2: SIM-A not connected at the first pass: nothing yet");
+        simA.Connection.Status = ConnectionStatus.Connected;
+        Clear(); Tick();
+        Check(Cancelled(simA, late) && Any("left from before ChartBridge started"), "re-review 2: once it connects, its after-start look runs");
+        Flat();
     }
 
     // ------------------------------------------------------------ CON (a) (Anthony 2026-10-15): the consistency percent, informational
