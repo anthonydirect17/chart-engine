@@ -1872,9 +1872,10 @@ public static class AgentHarness
             List<string> got;
             lock (agentOut) got = agentOut.Skip(n).ToList();
             List<string> pos = got.Where(x => x.StartsWith("{\"type\":\"position\"")).ToList(), ord = got.Where(x => x.StartsWith("{\"type\":\"order\"")).ToList();
-            Check(got.Count == 7 && got[0].StartsWith("{\"type\":\"welcome\"") && got[1].StartsWith("{\"type\":\"agentState\"") && pos.Count == 2 && pos.Any(x => x.Contains("\"root\":\"NQ\",\"qty\":0,")) &&
-                  pos.Any(x => x.Contains("\"root\":\"MNQ\",\"qty\":1,")) && ord.Count == 2 && got[6] == "{\"type\":\"snapshot\",\"roots\":[\"NQ\",\"MNQ\"]}",
-                  "10.4: welcome, agentState, a position per root (flat included), its stop and target, then snapshot: " + string.Join(" | ", got.Select(x => x.Length > 60 ? x.Substring(0, 60) : x)));
+            Check(got.Count == 8 && got[0].StartsWith("{\"type\":\"welcome\"") && got[1].StartsWith("{\"type\":\"agentState\"") && pos.Count == 2 && pos.Any(x => x.Contains("\"root\":\"NQ\",\"qty\":0,")) &&
+                  pos.Any(x => x.Contains("\"root\":\"MNQ\",\"qty\":1,")) && ord.Count == 2 && got[6] == "{\"type\":\"snapshot\",\"roots\":[\"NQ\",\"MNQ\"]}" &&
+                  got[7].StartsWith("{\"type\":\"accountState\",\"account\":\"SIM-E\","),
+                  "10.4: welcome, agentState, a position per root (flat included), its stop and target, then snapshot, then (0.5.8) accountState: " + string.Join(" | ", got.Select(x => x.Length > 60 ? x.Substring(0, 60) : x)));
             Instrument nqI = Named()["NQ"];
             Named().Remove("NQ");   // NQ not served (NinjaTrader has not found the contract)
             try
@@ -1883,7 +1884,7 @@ public static class AgentHarness
                 A(HelloMsg());
                 lock (agentOut) got = agentOut.Skip(n).ToList();
                 Check(!got[0].Contains("\"root\":\"NQ\"") && got[0].Contains("\"root\":\"MNQ\"") && !got.Any(x => x.StartsWith("{\"type\":\"position\"") && x.Contains("\"NQ\"")) &&
-                      got.Last() == "{\"type\":\"snapshot\",\"roots\":[\"MNQ\"]}", "10.4: a root not served: welcome lists only MNQ, the snapshot covers only MNQ: " + got.Last());
+                      got[got.Count - 2] == "{\"type\":\"snapshot\",\"roots\":[\"MNQ\"]}" && got.Last().StartsWith("{\"type\":\"accountState\""), "10.4: a root not served: welcome lists only MNQ, the snapshot covers only MNQ (then accountState): " + got[got.Count - 2]);
             }
             finally { Named()["NQ"] = nqI; }
         });
