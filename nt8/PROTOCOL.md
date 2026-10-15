@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -2422,6 +2422,7 @@ not even the window. A change is saved, logged and sent to the agent in a new `w
 |---|---|---|
 | `welcome` | `version`, `agent`, `mode`, `account`, `sim`, `rules` (`{roots: [..], maxQty: {ROOT: n}, entryFrom, entryUntil, flatAt, maxExpireSec, maxTrades, maxLosses, maxBracketTicks, maxTicksAway}`, null for none; `maxQty` per root is the cap really enforced: the smallest of the agent's rule, the hard ceiling and `config.txt`'s gate 3 cap for that root, its default of 1 included (0.5.3: for MNQ always the agents' own 20, never `maxQty.MNQ`); `maxBracketTicks` and `maxTicksAway` are `config.txt`'s, null when not set), `instruments` (`[{root, name, tick, pointValue}]` of its roots ChartBridge serves now) | after `agentHello`; again after any rules, account or mode change, and whenever an enforced cap changes |
 | `agentState` | `mode`, `killed`, `standDown` (null or why), `trades`, `losses`, `pnlToday`, `owns`, `session` (`yyyy-MM-dd`, ChartBridge's 18:00 ET session date; compare counters only within one session) | after `agentHello`, and again whenever any field changes (`owns` recomputed on every order and position change of its account and roots) |
+| `accountState` | the agent's account in real numbers: `account`, `sim`, `kind`, `group`, `groupId`, `groupSide`, `noHedge`, `rules`, `balance`, `pnlToday`, `realizedToday`, `unrealized`, `floor`, `roomFloor`, `roomDaily`, `targetLeft`, `src`, `why`, `session`, `at` (0.5.8: "Prop groups and account state") | after the snapshot on every `agentHello`; again when any field but `at` changes, and at once on an account, group or rules change |
 | `tick`, `history`, `ticks`, `ready` | as the page's | |
 | `order`, `exec`, `position` | as the page's: `order` for its own orders, `position` for its account on its roots, `exec` for its own fills and, while it owns a pair, for every fill on its account and that root, its own or not (Anthony's Flatten or a close made in NinjaTrader arrives as `role` `other`, `cbId` null when the order is not ChartBridge's). `order` adds `orderName` (NinjaTrader's own order name: `CB#<tag> ag:<id> s<n> t<n>` for an entry; its legs are v2's, `CB#<tag> stop f<n> q<n> p<price>` and `CB#<tag> target f<n> q<n> p<price>`, no `ag:`, matched by the entry's tag; `CB#<tag> ag:<id> flat`; `CB#<tag> ag:<id> protect f<n>`; `CB#<tag> ag:<id> stop p<price>` for its stop placed again over a shut market; `name` stays the instrument), and `order.role` is `flat` for its flat-time close, `protect` for its protective exit and `stop` for the stop placed again (0.5.7: never `planId`, which is the page's). `exec` adds `cbId` (ChartBridge's order id, `o12`, or null when the order is not ChartBridge's) and `role` (`entry`, `stop`, `target`, `flat`, `protect` only for the agent's own orders: `ag:<id>` in the name, or legs carrying its entry's tag; `other` for every other order, a page's included) | |
 | `snapshot` | `roots` (the roots of `welcome.instruments`) | the last message of the snapshot after `agentHello` |
@@ -2823,6 +2824,177 @@ the same rule to it (`LivePrefs.ticketReset`, every 5 s in the window with the t
 sign-in snapshot of orders and positions is whole, never on a timer): a pick made before the latest 17:00 ET
 (`live-account-at-v1`, the time of the last pick) goes to None when that account is flat with no working order, else it is
 kept with a note naming it; either way once.
+
+### Prop groups and account state (0.5.8)
+
+Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL) and 2026-10-15 (Q-EXIT b, CON a). Built in
+`nt8/ChartBridgeGroups.cs` (it never places or changes an order; the one cancel, Q-EXIT's below, goes through
+`ChartBridgeOrders.GroupCancelLeftover`) and the page's Settings and Accounts tab (`live/groups.js`, `live/accounts.js`).
+
+- **Groups** are made, renamed and deleted on the page (Settings, Account groups); each account picks its group from a
+  dropdown on the Accounts tab. ChartBridge saves everything; nobody edits a file. A new account arrives in no group (None).
+  An account in no group is a **personal** account: it may have "my floor" and "my daily limit" of its own.
+- **One direction per group** (G3 a, zero tolerance: prop firms ban hedged accounts): the whole group, every market. While any
+  member is long anything (a position, or a working buy entry), no member may open a short in any market, and the other way
+  round. Refused for every source: an agent, the bot, a copier follower and Anthony's own order ticket. Exits, flattens, stops
+  and targets are never blocked. Each group has a **No hedging** switch, on by default; off, its members are not checked.
+- **The firm's rules** sit on the group: account size (G1, the starting balance), daily loss limit (or none), drawdown size,
+  drawdown type (`eod`: trails the end-of-day high; `intraday`: trails the intraday high; `static`), "floor stops at" (G1, the
+  Lucid-style lock: once a trailing floor reaches it, it stops rising; none allowed), profit target (or none).
+- **Real account state**: with NinjaTrader's live balance and P&L and these rules, ChartBridge works out per account the
+  floor, the room to the floor, the daily room (open P&L counted) and the target left, and sends them to the pages
+  (`accounts`) and to each agent (`accountState`). A number ChartBridge cannot give is null with the reason; it is never
+  estimated. Bots are not in scope.
+- **G2 (b)**: when an account is put into a group, the page asks once for its "highest close so far" (from the firm's
+  dashboard; optional, prefilled with the larger of the account size and its balance now); ChartBridge starts both trailing
+  highs from it.
+
+**Files** (next to `config.txt`; written whole through a temp file, off NinjaTrader's thread; Anthony never edits them).
+`groups.txt`: two `#` lines, then one line per group, member and personal account:
+
+    group<TAB><id><TAB><name><TAB>on|off<TAB><dailyLoss>|-<TAB><drawdown><TAB>eod|intraday|static<TAB><target>|-<TAB><size><TAB><lockAt>|-<TAB><consistency>|-
+    member<TAB><account><TAB><id>
+    personal<TAB><account><TAB><floor>|-<TAB><daily>|-        (a saved line stays with - and -: set to none, not never set)
+
+`on|off` is the No hedging switch; `-` is none. Money is dollars with at most 2 decimals, a `.` for the point. Ids are `g1`,
+`g2`, ... in the order made (the next is one above the highest in the file), so a rename never touches membership; a deleted
+group's members go to None with it, so no line ever points at a group that is gone. A `group` line may carry more fields after
+`lockAt` (a later ChartBridge's); they are kept as read. `consistency` (CON a, 2026-10-15) is Lucid's consistency rule, no single day over that percent of the profit (1 to 100, at most 2
+decimals; `-` none); a group line of 10 fields (written before it) reads as none. Anything else (a line ChartBridge does not know, a group id twice, a
+member of a group that is not there, an account twice, a name twice) makes the file unreadable: it is **never rewritten that
+run**, every entry on every account is refused ("groups.txt could not be read: every new entry is refused until it can (exits
+always work)"), every page gets that `status` `error` as it signs in, and the page's group changes are refused. No `groups.txt`
+(every PC before 0.5.8): no groups, every account personal with no limits, ChartBridge behaves exactly as 0.5.7.
+`account-marks.txt`: two `#` lines, then
+
+    mark<TAB><account><TAB><peakEod>|-<TAB><peakIntraday>|-<TAB><dayStartBalance>|-<TAB><session><TAB><dayStartAt>|-
+
+per account seen connected this NinjaTrader session. `peakEod`, the highest end-of-day equity (balance plus open P&L): raised
+in the 17:00 to 18:00 ET break by the same 2 s check that runs the daily reset (whether or not the reset ran a branch), and by
+each session's first reading (`dayStartBalance`, the close before it) only when that reading falls in the 17:00 to 18:05 ET
+window (review of #48: a ChartBridge started at midday never takes a midday balance for a close). `dayStartAt` is the UTC ms of
+that reading. `peakIntraday`, the highest equity seen, raised by the
+1 s accounts check. The highs are kept only for an account in a group: joining sets both (G2), leaving or a deleted group
+clears them. `dayStartBalance`, the balance at the first reading of each session (`session`, `yyyy-MM-dd`, ChartBridge's
+18:00 ET session date, as `agentState.session`). Written at most every 5 s while something changed, and at the stop. A file
+that cannot be read is not rewritten that run: the trailing floors are null with that reason (a static floor still works) and
+`realizedToday` and `pnlToday` fall back to NinjaTrader's. A balance of 0 is taken as NinjaTrader not having given one yet (no
+day start, no high from it). ChartBridge 0.5.7 and older never read either file, so going back is safe (they behave as before).
+
+**The numbers** (per account; `equity` = balance + unrealized):
+
+| field | value | `src` |
+|---|---|---|
+| `balance` | NinjaTrader's `CashValue` | `ninjatrader` |
+| `unrealized` | NinjaTrader's `UnrealizedProfitLoss` | `ninjatrader` |
+| `realizedToday` | `balance - dayStartBalance`; without a day start, NinjaTrader's `RealizedProfitLoss` (it does not always start over at 18:00 ET). Review of #48: a day start read more than 2 minutes after the session's 18:00 ET start (ChartBridge started mid-session) takes the smaller of the two, which can only understate the room; with no NinjaTrader figure then, null ("ChartBridge started mid-session ...") and so is `roomDaily` | `computed` / `ninjatrader` (whichever is smaller) |
+| `pnlToday` | `realizedToday + unrealized` (open P&L counted) | `computed` / `ninjatrader` |
+| `floor` | group `eod`: `max(peakEod, size) - drawdown`; `intraday`: `max(peakIntraday, size) - drawdown`; both never above `lockAt` when it is set; `static`: `size - drawdown`. Personal: "my floor" | `computed` / `settings` |
+| `roomFloor` | `equity - floor`, and NinjaTrader's trailing drawdown left when it reports one (`TrailingMaxDrawdown`, as `roomDrawdown`): with both, the smaller (review of #48) | `computed` / `ninjatrader` (whichever is smaller) |
+| `roomDaily` | `dailyLoss + pnlToday` (group), `myDailyLoss + pnlToday` (personal) | `computed` |
+| `targetLeft` | `size + target - balance` (group with a target) | `computed` |
+
+At or below 0, a room is used up. ChartBridge never acts on these numbers itself (the agent's runner does: Bot-Lab's size gate
+and safety flatten); the page shows them. A ChartBridge started in the middle of a session takes its first reading as that
+session's start (losses before it are not in `pnlToday`).
+
+**Page to ChartBridge** (signed-in v3 pages, gates 1, 4, 7 and 8 as every v3 action; `reject` with `cid` when refused; no
+config switch):
+
+| message | fields (no others) | notes |
+|---|---|---|
+| `groupSave` | `cid` (optional), `group` (optional: the id to change; absent makes a new group), `name` (1 to 30 characters, no tab, unique ignoring case), `noHedge` (bool), `dailyLoss` (0 for none), `drawdown` (more than 0), `drawdownType` (`eod`, `intraday`, `static`), `target` (0 for none), `size` (more than 0, more than `drawdown`), `lockAt` (0 for none; `eod` and `intraday` only, above `size - drawdown`), `consistency` (optional, 0 or absent for none, else a percent above 0 and at most 100) | every field every time: Rename and the No hedging switch send the whole group. Money: plain numbers, at most 2 decimals, at most 100,000,000 |
+| `groupDelete` | `cid` (optional), `group` | its members go to None (personal, their own limits kept) |
+| `accountGroup` | `cid` (optional), `account`, `group` (an id, or `null` for None), `highClose` (optional, more than 0: G2 b, joining a group only) | refused when the move would leave the target group mixed (the account holds the other side, or the group is mixed already, with No hedging on). Joining: both trailing highs start at `highClose`, or without it at the larger of the account size and the balance now (the page always asks, prefilled so) |
+| `accountLimits` | `cid` (optional), `account`, `floor` (0 for none), `dailyLoss` (0 for none) | personal accounts only: refused for an account in a group ("its group's rules apply") |
+
+**ChartBridge to page** (to every v3 page on ChartBridge's own origin, signed in or not, as `accounts`):
+
+- `groups`: `{"type":"groups","list":[...],"error":null}` after `client`, after every group change, and when a group's side or
+  holders change (the 1 s check). Each group: `id`, `name`, `noHedge`, `dailyLoss` (null for none), `drawdown`,
+  `drawdownType`, `target` (null for none), `size`, `lockAt` (null for none), `consistency` (null for none), `members` (account names), `side` (`long`,
+  `short`, `mixed`, or null when the group holds nothing), `holders` (`[{account, root, side, what, qty}]`: `what`
+  `position` or `entry`, `root` the instrument's master name, `side` `long` or `short`, `qty` the contracts held or left to
+  fill). `error`: null, or why `groups.txt` cannot be read (then `list` is empty and every entry is refused).
+- `accounts`: each entry gains `group` (its group id or null), `myFloor`, `myDailyLoss` (a personal account's own limits,
+  null for none), `myLimitsSet` (true once My floor or My daily was saved, 0 included; the tab says "not set" otherwise), `floor`,
+  `roomFloor`, `roomDaily`, `targetLeft`, and `src` and `why` for those four (as `accountState`
+  below). Everything else stays exactly as it was (`pnlToday` is still NinjaTrader's realized plus unrealized; the day's P&L
+  from the day start is in `accountState` and in `roomDaily`), so a 1.25 page works.
+- A noHedge group that turns mixed by itself (an order typed into NinjaTrader cannot be refused): one `status` `error` to every
+  signed-in page ("Group <name> is now long and short (...): no new entries on either side until it is one direction; close one
+  side in NinjaTrader") when it turns mixed, and one `status` `info` when it is one direction again.
+
+**ChartBridge to the agent: `accountState`** (the agent channel, `ws://localhost:<port>/agent/<id>`):
+
+| field | value |
+|---|---|
+| `account` | the agent's account now (null on None); a runner ignores an `accountState` for another account than its `welcome`'s |
+| `sim` | as `welcome.sim` |
+| `kind` | `prop` (in a group), `personal` (in no group), `none` (the agent is on None) |
+| `group` | the group's name, null when not `prop` |
+| `groupId` | the group's id, null when not `prop` |
+| `groupSide` | the group's side now (`long`, `short`, `mixed`, or null when flat or not `prop`); while it is `long` the agent's sells are refused, and so on |
+| `noHedge` | the group's switch (null when not `prop`) |
+| `rules` | `prop`: `{dailyLoss, drawdown, drawdownType, target, size, lockAt, consistency}`: `size` the account size, `lockAt` "floor stops at" (G1), `consistency` the consistency percent (CON a: informational, no gate or flatten in ChartBridge uses it; personal rules never have it); `personal`: `{floor, dailyLoss}` (the account's own limits, once Anthony has saved My floor or My daily, 0 included), or **null when
+no limits were ever set by Anthony: the agent keeps its model numbers** (NinjaTrader's trailing drawdown is still sent as
+`roomFloor`, `src` `ninjatrader`); `none`: null. Inside `rules` **0 means none**, said explicitly (the firm has no daily limit, no target, no lock; the account has no floor or daily limit of its own), never null: a rule is never "missing". Only the eight numbers below may be null, each with its `why` |
+| `balance`, `pnlToday`, `realizedToday`, `unrealized`, `floor`, `roomFloor`, `roomDaily`, `targetLeft` | dollars (2 decimals) or null, as the table above |
+| `src` | for each of those eight numbers that is not null: `ninjatrader`, `computed` or `settings` |
+| `why` | for each of those eight numbers that is null: the reason in plain words ("the account is not connected", "the group has no daily loss limit", "account-marks.txt could not be read", "no group and no floor of its own", ...) |
+| `session` | ChartBridge's 18:00 ET session date, `yyyy-MM-dd` |
+| `at` | UTC ms when it was read |
+
+Sent after the snapshot (right after the `snapshot` message) on every `agentHello`; then from the agent's 1 s pass whenever
+any field but `at` changed; and at once on any account, group or rules change (`agentAccount`, `groupSave`, `groupDelete`,
+`accountGroup`, `accountLimits`). A ChartBridge before 0.5.8 never sends it: the runner keeps its model's numbers and says so.
+
+**Exits left behind (Q-EXIT b, Anthony 2026-10-15).** Resting exits are always accepted. When an account in a group with No
+hedging on goes flat on an instrument (both readings 0), ChartBridge cancels the working orders there that were exits of the
+position just closed: orders placed while a position existed, on its other side (the page's, and orders typed into NinjaTrader,
+seen by the 1 s check and at once on the position update to flat), never ChartBridge's own legs (the legs check keeps those);
+OCO orders too (a typed OCO pair; an ATM's legs on a flat account are cancelled by the ATM anyway). Only
+such orders, which would now open a position, are cancelled, each logged with a `status` `warn` to the pages ("SIM-A went flat on
+MNQ: cancelled the sell limit 2 left from the long, so it cannot open a short"). Nothing is cancelled while the account still
+holds a position there (a part-filled exit keeps working until then). After a start ChartBridge cannot know where an order came
+from: on its first look at each account (once that account is connected), an order on a flat account on the other side of its
+group's side is cancelled once, the same way. The note names the position just closed and the side the order would open.
+Re-review 3 and 4: a leftover with no fill of its own is cancelled at once; a marked order with fills of its own and the after-start
+look wait until the contract has been flat by both readings for 150 ms. A marked order whose own fills
+took the position through flat (a resting reversal, e.g. a sell limit 4 on a long 2 filled 2) is the reversal's entry, not a
+leftover: its rest is cancelled only when the group's other members hold the side it would open against, or the group is mixed ("...
+left from before ChartBridge started (Lucid is long) ..."). An entry placed on a flat account later is the group check's.
+
+**The one-direction check** (`ChartBridgeGroups.EntryCheck(source, account, root, isBuy, qty, wantsLegs, strategy)`, null or
+the refusal). It runs under `PlaceLock` for every entry that passes `PlaceOrderLocked` (the page's ticket and chart clicks,
+the bot, every agent, Order Strategies), just before the order is made, and in the copier's `Eligible` (a `group` skip on that
+follower; the copier holds the same lock); the agent's plan check 10b asks it too (advisory: the binding check is the one under
+`PlaceLock`). Nothing else places an entry. It counts, over every member of the account's group and every instrument:
+
+- positions, by either reading (NinjaTrader's list, and fills reported but not yet in it), each a long or a short;
+- working entries: every order that may still fill on NinjaTrader's list, and ChartBridge's own just sent (between `Submit`
+  and NinjaTrader's list), except ChartBridge's legs and exits (`CB#<tag> stop|target|exit ...`, merged legs, an agent's
+  `flat`, `protect` and stop placed again), any order with an OCO id, and orders on the other side of that account's position
+  on that instrument up to the position, summed (review of #48: two sells of 2 on a long 2, the second is an entry of 2).
+  OCO orders (re-review 2 of #48): while that account holds a position on the contract they are protective and never counted;
+  once both readings are 0 they count, once per OCO id and side at the largest order (only one of a pair can fill), so a typed OCO
+  pair left after flat, or a breakout pair typed on a flat account, shows the side it would open.
+
+The account's own new order is exempt when it is an exit: no stop or target asked, no Order Strategy, the other side of its
+position on that instrument by both readings, and its contracts plus the exits already working on that side no more than the
+position. The exits already working are only plain market or limit orders with no OCO id that are not ChartBridge's legs (re-review
+of #48): ChartBridge's stops and targets (a lone stop has no OCO id), the agent's and the copier's legs, merged legs, and any
+stop, stop-limit, MIT or OCO order typed into NinjaTrader (an ATM's stop and target) never count, since they shrink with the
+position (the legs check, the copier's trim); a typed stop left behind once the position is flat counts as an entry. Review of
+#48: this exit rule is asked first, for every order (a page market exit too, which until then skipped the
+whole check), and before anything else, so an unreadable `groups.txt` refuses entries only, never an exit; an order on the other
+side that is too big with the exits already working is refused as an entry, the refusal saying to use Flatten (always allowed)
+or cancel the working exits. Otherwise: a buy is refused while the group holds a short anywhere, a sell while it holds a long, and both while it
+is mixed. The refusal names the group and the holders, as NinjaTrader names the accounts (made-up names here):
+"Group Lucid is long (SIM-A +2 MNQ; SIM-B buy limit 1 NQ working): a sell on SIM-C would hedge the group; prop firms ban hedged
+accounts. Exits and flattens still work." Two entries on opposite sides at the same moment: one passes, the other is refused
+(one lock). `noHedge` off: not checked. Lock order: `PlaceLock`, then the groups' own lock, which only copies the membership
+and is never held across a NinjaTrader collection. An unreadable `groups.txt` refuses every entry here.
 
 ### Tape timing and new `/diag` counters
 

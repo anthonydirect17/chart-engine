@@ -239,6 +239,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static bool Enabled { get { return Volatile.Read(ref agents).Length > 0; } }
         public static ChartBridgeAgent[] All() { return Volatile.Read(ref agents); }
+
+        // 0.5.8: a group, rules or limits change: every agent its accountState again (when it changed).
+        public static void AccountStatesChanged() { foreach (ChartBridgeAgent a in All() ?? new ChartBridgeAgent[0]) a.SendAccountState(false); }
         public static ChartBridgeAgent Get(string id)
         {
             foreach (ChartBridgeAgent a in All()) if (a.Id == id) return a;
@@ -1555,12 +1558,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             string nm = S(d, "name"), bd = S(d, "build");
             if (nm == null || nm.Length < 1 || nm.Length > 40) { ToAgent(Reject(null, "agentHello needs a name of 1 to 40 characters")); return; }
             if (bd == null || bd.Length < 1 || bd.Length > 40) { ToAgent(Reject(null, "agentHello needs a build of 1 to 40 characters")); return; }
-            lock (Sync) { helloed = true; welcomeSent = false; name = nm; build = bd; }   // a second hello too: its welcome first
+            lock (Sync) { helloed = true; welcomeSent = false; snapshotSent = false; name = nm; build = bd; }   // a second hello too: its welcome first
             List<string> served = ServedRoots();   // welcome.instruments and the snapshot cover exactly these roots (section 10)
             ToAgent(WelcomeJson(served));
             lock (Sync) welcomeSent = true;   // only now may agentState go (review D4, E3: helloed stays set for the mute check and ticks)
             SendState(true);
             Snapshot(served);
+            lock (Sync) snapshotSent = true;   // 0.5.8: accountState goes after the snapshot
+            SendAccountState(true);
             Log("agent " + Id + " (\"" + nm + "\", build " + bd + ") said hello");
             AgentLog("hello: \"" + nm + "\", build " + bd);
             Notify();
@@ -1755,6 +1760,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             Account a = FindAccount(acct);
             string lockWhy = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root);
             if (lockWhy != null) return lockWhy;
+            // 10b. 0.5.8 (G3 a): one direction per group (advisory here; the binding check runs under PlaceLock in PlaceOrderLocked)
+            string groupWhy = ChartBridgeGroups.EntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Qty, true, false);
+            if (groupWhy != null) return groupWhy;
             // 11. the price (v2 gate 5): on the grid, a fresh last trade, the side of the market; a stop-limit's limit within 20 ticks
             bool buy = p.Side == "buy";
             string bad = ChartBridgeOrders.AgentPriceProblem(root, tick, p.Kind == "limit" ? "limit" : "stop", buy, p.Price);
@@ -2428,6 +2436,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             StepFlatten(now);
             WelcomeIfCapsChanged();
             SendState(false);   // a change no event carries (the session's roll, the clock, a file): within one pass
+            SendAccountState(false);   // 0.5.8: its account's real numbers, when any field but "at" changed
             if (strip) ToPages(StripJson());
         }
 
@@ -3215,6 +3224,33 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             ToPages(StripJson());
             SendState(false);
+            SendAccountState(false);   // 0.5.8: an account or rules change reaches accountState at once
+        }
+
+        // 0.5.8: accountState (PROTOCOL.md "Prop groups and account state"): after the snapshot of every hello, then whenever any
+        // field but "at" changed. Built with no lock of the agent's held (it reads NinjaTrader's collections), as agentState.
+        private readonly object AccountStateLock = new object();
+        private string lastAccountStateKey;
+        private long accountStateSeq, lastAccountStateSeq;
+        private bool snapshotSent;
+
+        internal void SendAccountState(bool force)
+        {
+            ChartBridgeClient c;
+            string acct;
+            lock (Sync) { c = helloed && welcomeSent && snapshotSent ? client : null; acct = account; }
+            if (c == null) return;
+            long seq = Interlocked.Increment(ref accountStateSeq);
+            string key, json;
+            try { json = ChartBridgeGroups.AccountStateJson(acct, out key); }
+            catch (Exception ex) { Log("agent " + Id + " accountState error: " + ex.Message); return; }
+            lock (AccountStateLock)
+            {
+                if (seq < lastAccountStateSeq) return;   // a newer one was sent meanwhile
+                lock (Sync) { if (client != c) return; if (!force && key == lastAccountStateKey) return; lastAccountStateKey = key; }
+                lastAccountStateSeq = seq;
+                c.Send(json);
+            }
         }
 
         // agentState to the agent: always after its hello, else only when a field changed (section 10). The state is built with no

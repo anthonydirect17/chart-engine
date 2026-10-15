@@ -11,6 +11,7 @@
 // ChartBridge 0.5.7 (DECISION 2026-10-14e), Sim or LIVE; o.botAccount starts it on one, as if chosen).
 import { OrderDesk, KEYS as V2_KEYS, allowedAccounts, onTickGrid } from './fake-orders.mjs';
 import { createRequire } from 'node:module';
+import { installGroups, GROUP_KEYS, GROUP_TYPES } from './fake-groups.mjs';   // 0.5.8: prop groups
 const ENGINE = createRequire(import.meta.url)('../src/chart-engine.js');   // ChartBridgeCme is a port of the engine's CME calendar
 
 export const SWITCHES = ['accountChecks', 'orderTypes', 'strategies', 'merge', 'cancelFromList', 'copier', 'bot'];
@@ -85,15 +86,16 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   agentAccount: ['type', 'cid', 'agent', 'account', 'keepMode'],
   agentRules: ['type', 'cid', 'agent', 'roots', 'maxQtyNQ', 'maxQtyMNQ', 'maxQtyES', 'maxQtyMES', 'entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses'],
 });
+Object.assign(KEYS, GROUP_KEYS);   // 0.5.8: groupSave, groupDelete, accountGroup, accountLimits
 export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep'];
-export const BOOL_KEYS = { accountTrade: ['on'], accountArchive: ['confirm'], copierFollower: ['on'], botKill: ['on'], agentKill: ['on'] };
+export const BOOL_KEYS = { groupSave: ['noHedge'], accountTrade: ['on'], accountArchive: ['confirm'], copierFollower: ['on'], botKill: ['on'], agentKill: ['on'] };
 export const BOT_KEYS = {
   botHello: ['type', 'name'], beat: ['type'], withdraw: ['type', 'id', 'reason'], flatten: ['type'],
   signal: ['type', 'id', 'action', 'side', 'kind', 'price', 'stopTicks', 'targetTicks', 'reason'],
 };
 const BOT_NONE_WHY = 'the bot\'s account is None: no bot entries until an account is chosen on the Bot tab';   // ChartBridge 0.5.7
 export const AGENT_PAGE_TYPES = ['agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules'];
-const V3_TYPES = ['accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount'].concat(AGENT_PAGE_TYPES);
+const V3_TYPES = GROUP_TYPES.concat(['accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount']).concat(AGENT_PAGE_TYPES);
 const SWITCH_OF = { accountTrade: 'accountChecks', accountArchive: null, accountUnarchive: null, merge: 'merge', copierGet: 'copier', copierSet: 'copier', copierFollower: 'copier', copierRearm: 'copier', botMode: 'bot', botKill: 'bot', botSeen: 'bot', botAnswer: 'bot', botRails: 'bot', botAccount: 'bot' };
 
 const isInt = v => typeof v === 'number' && Number.isInteger(v);
@@ -180,6 +182,7 @@ export class OrderDeskV3 extends OrderDesk {
     this.bot = { connected: false, simulated: false, name: null, mode: 'shadow', killed: false, standDown: null, trades: 0, losses: 0, lastBeat: 0, lastSignal: null, conn: null, maxTrades: 5, maxLosses: 3,
       proposals: new Map(), signals: [], stats: { signals: 0, proposals: 0, answered: 0, notAnswered: 0, placed: 0, refused: 0, heartbeatLost: 0 } };
     this.agentsInit(o);
+    this.groupsInit(o);   // 0.5.8
     this.refreshAccounts();
   }
 
@@ -229,7 +232,7 @@ export class OrderDeskV3 extends OrderDesk {
     }
     return { realized: +a.realized.toFixed(2), unrealized: +unreal.toFixed(2), today: +(a.realized + unreal).toFixed(2) };
   }
-  accountMsg(a) {
+  accountMsg058(a) {
     const p = this.pnl(a.name), positions = [];
     for (const [k, x] of this.positions) { const [acc, root] = k.split('|'); if (acc === a.name && x.qty) positions.push({ root, name: this.instruments[root].name, qty: x.qty, avgPrice: x.avgPrice }); }
     const off = a.connection !== 'connected' ? 'the account is not connected' : null, room = this.room(a);
@@ -240,6 +243,7 @@ export class OrderDeskV3 extends OrderDesk {
       roomDailyLoss: null, roomDailyLossWhy: off || 'NinjaTrader does not report a daily loss limit for this account',
       canHide: this.hideWhy(a) === null, hideWhy: this.hideWhy(a) };
   }
+  accountMsg(a) { return this.groupFields(a, this.accountMsg058(a)); }   // 0.5.8: the group fields (test/fake-groups.mjs)
   /** ChartBridge 0.5.1's Hide rule (ChartBridgeAccounts.HideRefusal): flat, no working orders, not the bot's or the copier's */
   hideWhy(a) {
     if (!this.sw.accountChecks) return 'accountChecks is off';
@@ -257,7 +261,7 @@ export class OrderDeskV3 extends OrderDesk {
       archived: [...this.acct.values()].filter(a => a.state === 'archived').map(a => ({ name: a.name, at: a.archivedAt })) };
   }
   /** to v3 pages from the own origin, signed in or not */
-  sendAccounts() { const m = this.accountsMsg(); for (const c of this.conns()) if (c.v3 && c.origin === this.origin()) this.send(c, m); }
+  sendAccounts() { const m = this.accountsMsg(); for (const c of this.conns()) if (c.v3 && c.origin === this.origin()) this.send(c, m); if (this.gr) this.sendGroups(); }
   broadcastV3(msg) { for (const c of this.conns()) if (c.authed && c.v3) this.send(c, msg); }
 
   /** the page's `client` message */
@@ -265,6 +269,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (m.v !== 3 || Object.keys(m).some(k => k !== 'type' && k !== 'v')) return this.send(conn, { type: 'status', level: 'warn', text: 'ChartBridge refused a client message: v must be 3' });
     conn.v3 = true;
     if (conn.origin === this.origin()) this.send(conn, this.accountsMsg());
+    if (conn.origin === this.origin() && this.gr.on) this.send(conn, this.groupsMsg());   // 0.5.8
   }
 
   /* ---------------- connection and auth: v3 pages see every watched account */
@@ -332,7 +337,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (typeof m.cid === 'string') ref.cid = m.cid;
     if (typeof m.id === 'string') ref.id = m.id;
     if (m.type === 'botSeen') { const why = this.blocked(conn) || checkKeysV3(m, text) || this.check_botSeen(m); if (why) this.send(conn, Object.assign({ type: 'reject' }, ref, { reason: why })); else this.do_botSeen(m); return !why; }
-    let why = this.checkAction(conn) || checkKeysV3(m, text);
+    let why = this.checkAction(conn) || (GROUP_TYPES.includes(m.type) && !this.gr.on ? 'Unknown message type ' + m.type + '.' : null) || checkKeysV3(m, text);
     if (!why && V3_TYPES.includes(m.type) && SWITCH_OF[m.type] && !this.sw[SWITCH_OF[m.type]]) why = m.type + ' is off (' + SWITCH_OF[m.type] + ' = off in config.txt).';
     if (!why && (m.type === 'accountArchive' || m.type === 'accountUnarchive') && !this.sw.accountChecks) why = m.type + ' is off (accountChecks = off in config.txt).';
     if (!why && AGENT_PAGE_TYPES.includes(m.type)) why = this.agentPageCheck(m);
@@ -354,6 +359,7 @@ export class OrderDeskV3 extends OrderDesk {
     const q = this.quoteOnly(m.root); if (q) return q;
     const e = this.checkEntryAccount(m.account); if (e) return e;
     const lock = this.agentLockFor(m.account, m.root, this._orderSource || 'page', m); if (lock) return lock;   // 0.5.0: the owner lock (section 6)
+    const grp = this.groupEntryCheck(m); if (grp) return grp;   // 0.5.8: one direction per group (G3 a)
     if ((m.kind === 'stopLimit' || m.kind === 'mit') && !this.sw.orderTypes) return 'Stop-limit and MIT orders are off (orderTypes = off in config.txt).';
     if (m.strategy !== undefined && !this.sw.strategies) return 'Order Strategies are off (strategies = off in config.txt).';
     if ((m.limitOffset !== undefined || m.limitPrice !== undefined) && m.kind !== 'stopLimit') return 'limitOffset and limitPrice go on a stopLimit order only.';
@@ -2057,3 +2063,4 @@ export class TapeStats {
     return { failed: this.failed, roots };
   }
 }
+installGroups(OrderDeskV3);   // 0.5.8

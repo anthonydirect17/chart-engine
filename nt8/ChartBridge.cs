@@ -1870,7 +1870,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.5.7";
+        public const string Version = "0.5.8";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -2235,6 +2235,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (type == "weekProfile") OnWeekProfileMessage(client, text); // 0.3.7: the last 5 sessions' volume at price (strict)
             else if (type == "auth" || type == "order" || type == "change" || type == "plan" || type == "cancel" || type == "flatten")
                 ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
+            else if (ChartBridgeGroups.Handles(type)) ChartBridgeGroups.OnMessage(client, type, text);   // 0.5.8: groupSave, groupDelete, accountGroup, accountLimits (ChartBridgeGroups.cs; no order calls)
             else if (type == "client" || type == "accountTrade" || type == "accountArchive" || type == "accountUnarchive")
                 ChartBridgeAccounts.OnMessage(client, type, text);   // 0.4.0 accounts: v3 page, the checkmark and Archive (ChartBridgeAccounts.cs; no order calls)
             else if (type == "merge") ChartBridgeOrders.OnMessage(client, type, text);   // 0.4.0 B4: Merge stops and targets (ChartBridgeMerge.cs)

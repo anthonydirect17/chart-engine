@@ -71,7 +71,8 @@ const AP = '.ws-panel[data-id="ap"]';
 const tab = async (page, id) => { await page.click(`${AP} .ac-tab[data-tab="${id}"]`); await wait(150); };
 const rows = (page, sel) => page.$$eval(`${AP} ${sel} .gr-row:not(.gr-h)`, els => els.map(e => ({ k: e.dataset.k, text: e.textContent, cls: e.className })));
 const quoteRows = page => page.$$eval('.ws-panel[data-id="qb"] [data-root]', els => els.map(e => ({ root: e.dataset.root, cls: e.className, last: e.querySelector('[data-q="last"]').textContent, chg: e.querySelector('[data-q="chg"]').textContent })));
-const controlsOnPage = page => page.$$eval(`${AP} .ac-list input, ${AP} .ac-list select, ${AP} .ac-list button[data-act="archive"], ${AP} .ac-list button[data-act="unarchive"], ${AP} .ac-list button[data-act="cancel"], ${AP} .ac-list button[data-act="rearm"], ${AP} .ac-list button[data-act="mode"]`, els => els.length);
+/* 1.26.0: the Group dropdown and My floor and My daily have no config switch (ChartBridge 0.5.8 has none for groups): not counted here */
+const controlsOnPage = page => page.$$eval(`${AP} .ac-list input:not([data-act^="my-"]), ${AP} .ac-list select:not(.apg-grp), ${AP} .ac-list button[data-act="archive"], ${AP} .ac-list button[data-act="unarchive"], ${AP} .ac-list button[data-act="cancel"], ${AP} .ac-list button[data-act="rearm"], ${AP} .ac-list button[data-act="mode"]`, els => els.length);
 
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 try {
@@ -236,6 +237,69 @@ try {
   check((await rows(p2, '.apg-ord-g')).length >= 1 && !(await p2.$(`${AP} button[data-act="cancel"]`)), 'Working orders listed with no Cancel');
   await p2.screenshot({ path: path.join(out, 'accounts-5-switches-off.png') });
   await ctx2.close();
+
+  /* ================================================================ 4. ChartBridge 0.5.8: groups (1.26.0, Anthony 2026-10-14) */
+  {   // a block of its own: its names never meet the sections above
+  console.log('ChartBridge 0.5.8: groups, at 1366 x 768');
+  const GP_PORT = PORT + 3;
+  await startBridge(GP_PORT, ['--v3', '--trading', '--test-controls', '--data-037', '--groups', '--test-pin=' + TEST_PIN]);
+  const ctx4 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  await ctx4.addInitScript(seed, [{ Acc: { panels: [{ id: 'ap', type: 'accounts', x: 0, y: 0, w: 12, h: 6 }] } }]);
+  const p4 = await openWs(ctx4, GP_PORT, 'Acc');
+  await until(async () => (await p4.$$(`${AP} select.apg-grp`)).length >= 3, 'the Group dropdowns');
+  const heads4 = await p4.$$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]`, els => els.map(e => e.textContent));
+  check(heads4.includes('Group') && heads4.includes('Limits'), 'the Accounts tab gets Group and Limits (' + heads4.join(', ') + ')');
+  const grp = await p4.$eval(`${AP} select.apg-grp[data-id="EVAL-A"]`, e => ({ v: e.value, opts: [...e.options].map(o => o.textContent) }));
+  check(grp.v === 'g1' && grp.opts.join() === 'None,Lucid,Apex', 'EVAL-A in Lucid; the dropdown offers None and every group (' + JSON.stringify(grp) + ')');
+  const roomA = await p4.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-room`, e => e.textContent);
+  check(/daily · .* to floor · .* to target/.test(roomA), 'the room from ChartBridge\'s own numbers: daily, to floor, to target (' + roomA + ')');
+  check(await p4.$(`${AP} .gr-row[data-k="Sim101"] input[data-act="my-floor"]`) !== null && await p4.$(`${AP} .gr-row[data-k="EVAL-A"] input[data-act="my-floor"]`) === null, 'My floor and My daily only for an account in no group');
+  // G2 (b): putting SIM-F1 in Lucid asks for its highest close once, prefilled
+  await p4.selectOption(`${AP} select.apg-grp[data-id="SIM-F1"]`, 'g1');
+  const ask = await until(() => p4.$(`${AP} .apg-join`), 'the highest close question');
+  const pre = ask ? await p4.$eval(`${AP} [data-act="join-high"]`, e => e.value) : '';
+  check(pre === '50000', 'the highest close so far, prefilled with the larger of the size and the balance (' + pre + ')');
+  await p4.screenshot({ path: path.join(out, 'accounts-6-groups-1366.png') });
+  await p4.fill(`${AP} [data-act="join-high"]`, '50500');
+  await p4.click(`${AP} [data-act="join-yes"]`);
+  await until(async () => (await p4.$eval(`${AP} select.apg-grp[data-id="SIM-F1"]`, e => e.value)) === 'g1', 'SIM-F1 in Lucid');
+  const r4 = await control(GP_PORT, 'received');
+  check(r4.types.accountGroup === 1, 'one accountGroup sent');
+  // My floor on a personal account
+  await p4.fill(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, '95000');
+  await p4.press(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, 'Enter');
+  await p4.click(`${AP} .apg-foot`);
+  await until(async () => /to floor/.test(await p4.$eval(`${AP} .gr-row[data-k="Sim101"] .apg-room`, e => e.textContent)), 'Sim101\'s room to its own floor');
+  // Settings: the groups section, the rules dialog, and no scrolling at 1366 x 768
+  await p4.click('#wsSet');
+  await until(async () => !(await p4.$eval('#wsGroupsSec', e => e.hidden)), 'the Account groups section in Settings');
+  const gRows = await p4.$$eval('#wsGroups .gp-row', els => els.map(e => e.textContent));
+  check(gRows.length === 2 && /Lucid/.test(gRows[0]) && /\$50,000 · daily \$1,000 · drawdown \$2,000 end of day, stops at \$50,100 · target \$3,000/.test(gRows[0]), 'each group: its name and the firm\'s rules in a line (' + gRows[0] + ')');
+  /* the groups have a column of their own: Settings is no taller and no wider than the window (the other two columns as before) */
+  const fits = await p4.evaluate(() => { const s = document.getElementById('wsSettings').getBoundingClientRect(), c = document.getElementById('wsGroupsCol'), last = c.lastElementChild.getBoundingClientRect();
+    return { ok: s.left >= 0 && s.right <= innerWidth && last.bottom <= innerHeight, w: Math.round(s.width), bottom: Math.round(last.bottom) }; });
+  check(fits.ok, 'Settings at 1366 x 768: the groups in a third column, no wider than the window and nothing below it (' + JSON.stringify(fits) + ')');
+  await p4.screenshot({ path: path.join(out, 'accounts-7-settings-groups-1366.png') });
+  await p4.click('#wsGroups [data-gp="hedge"][data-id="g2"]');
+  await until(async () => (await p4.$eval('#wsGroups [data-gp="hedge"][data-id="g2"]', e => e.getAttribute('aria-checked'))) === 'false', 'No hedging off for Apex (the whole group sent again)');
+  await p4.click('#wsGroups [data-gp="edit"][data-id="g1"]');
+  await until(() => p4.$('#wsDialog[open] .ws-gp'), 'the rules dialog');
+  const dlgFits = await p4.evaluate(() => { const r = document.querySelector('#wsDialog').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; });
+  check(dlgFits, 'the rules dialog fits 1366 x 768');
+  await p4.screenshot({ path: path.join(out, 'accounts-8-group-rules-1366.png') });
+  await p4.fill('#gp-drawdown', '60000');
+  await p4.click('#wsDialog button[type="submit"]');
+  check(/less than the account size/.test(await p4.$eval('#gp-err', e => e.textContent)), 'the dialog checks as ChartBridge does (drawdown under the size), nothing sent');
+  await p4.fill('#gp-drawdown', '2500');
+  await p4.click('#wsDialog button[type="submit"]');
+  await p4.click('#wsSet');   // the dialog closed Settings (one pop at a time): open it again
+  await until(async () => /drawdown \$2,500/.test(await p4.$eval('#wsGroups .gp-row', e => e.textContent)), 'Lucid saved with its new drawdown');
+  await p4.click('#wsGroups [data-gp="del"][data-id="g2"]');
+  check(/Delete Apex\? Its 1 account go to None\.|Delete Apex\? Its 1 account/.test(await p4.$eval('#wsGroups .gp-ask', e => e.textContent)), 'Delete asks in the page first');
+  await p4.click('#wsGroups [data-gp="del-yes"]');
+  await until(async () => (await p4.$$('#wsGroups .gp-row')).length === 1, 'Apex deleted');
+  await ctx4.close();
+  }
 
   /* ================================================================ 3. ChartBridge 0.3.8: no v3 */
   console.log('ChartBridge 0.3.8 (no v3)');

@@ -154,6 +154,7 @@ public static class CopierHarness
             ShortsAndContracts();
             RealFollowerAllowed();
             PositionLimit();
+            GroupSkip();   // 0.5.8: one direction per group (G3 a): a follower whose group holds the other side is skipped
             DailyLoss();
             ConnectionDrop();
             MassDisconnect();
@@ -892,6 +893,30 @@ public static class CopierHarness
         LeaderEntry(1);
         Check(f1.Calls.Count == c1 + 1 && !Regex.IsMatch(State(), "\"account\":\"SIM-F1\"[^}]*\\}[^}]*\"skipped\":\"position limit\""), "the next entry within the limit clears the highlight");
         Reset();
+    }
+
+    // ------------------------------------------------------------ 0.5.8: a follower whose group holds the other side: skipped "group"
+    static void GroupSkip()
+    {
+        string file = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "ChartBridge", "groups.txt");
+        File.WriteAllText(file, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t-\t50000\t-\nmember\tSIM-F1\tg1\nmember\tEVAL-A\tg1\n");
+        ChartBridgeGroups.StartNow();
+        try
+        {
+            Pos(evalA, nq, -1);
+            int b1 = f1.Calls.Count, b3 = f3.Calls.Count;
+            sent.Clear();
+            LeaderEntry(1);
+            Check(After(f1, b1).Count == 0 && EventSaid("skip", "SIM-F1", "Group Lucid is short (EVAL-A -1 NQ): a buy on SIM-F1 would hedge the group"), "0.5.8: SIM-F1's group is short: the leader's buy is not copied to it (skipped)");
+            Check(After(f3, b3).Count == 1, "0.5.8: a follower in no group is copied as before");
+            Check(Regex.IsMatch(State(), "\"account\":\"SIM-F1\"[^}]*\\}[^}]*\"skipped\":\"group\""), "0.5.8: the page sees SIM-F1 skipped: group");
+        }
+        finally
+        {
+            Reset(); Pos(evalA, nq, 0);
+            File.Delete(file);
+            ChartBridgeGroups.StartNow();
+        }
     }
 
     // ------------------------------------------------------------ the follower daily loss limit (an option, off by default; flat dollars, no buffer)

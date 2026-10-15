@@ -188,6 +188,7 @@ public static class AgentHarness
             PlanIdOnOrders();   // 0.5.7: planId on an agent's orders to the page, kept in the day file (DECISION 2026-10-14d phase 2)
             LostHeldInFlatten(); // 0.5.7: no lost-trade error while ChartBridge's own flatten runs on that root: held, then raised if not flat
             DailyReset();       // 0.5.7: the 17:00 ET reset to None for agents (DECISION 2026-10-14e)
+            GroupsAndAccountState();   // 0.5.8: plan check 10b (one direction per group) and accountState
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -1734,6 +1735,48 @@ public static class AgentHarness
     }
 
     // ------------------------------------------------------------ contract section 10, reviewer B's second nits, reviewer A's second round
+    // ------------------------------------------------------------ 0.5.8: accountState (after the snapshot, on a change, null with why, None) and check 10b
+    static void GroupsAndAccountState()
+    {
+        string file = Path.Combine(Dir, "groups.txt");
+        Part("0.5.8 groups", () =>
+        {
+            try
+            {
+                Fresh();
+                Account sime = Account.All.First(x => x.Name == "SIM-E");
+                string st = Last(agentOut, "accountState");
+                Check(st.StartsWith("{\"type\":\"accountState\",\"account\":\"SIM-E\",\"sim\":true,\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":null,") &&
+                      st.Contains("\"roomDaily\":\"no group and no daily limit of its own (the Accounts tab)\"") && st.Contains("\"session\":\""),
+                      "0.5.8: accountState after the hello: personal, each null number with why: " + st);
+                int n = Count(agentOut, "accountState");
+                Tick();
+                Check(Count(agentOut, "accountState") == n, "nothing changed: not sent again (at alone does not count)");
+                File.WriteAllText(file, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\tintraday\t3000\t50000\t-\nmember\tSIM-E\tg1\nmember\tSIM-B\tg1\n");
+                ChartBridgeGroups.StartNow();
+                Tick();
+                st = Last(agentOut, "accountState");
+                Check(Count(agentOut, "accountState") == n + 1 && st.Contains("\"kind\":\"prop\",\"group\":\"Lucid\",\"groupId\":\"g1\",\"groupSide\":null,\"noHedge\":true,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"intraday\",\"target\":3000,\"size\":50000,\"lockAt\":0,\"consistency\":0}") &&
+                      st.Contains("\"floor\":\"no intraday high is known for this account: put it in Lucid again and give its highest close\""), "0.5.8: in a group: sent again within the 1 s pass (prop, its rules; no high yet: floor null with why): " + st);
+                SetPos(simb, nq, -1);
+                Tick();
+                Check(Last(agentOut, "accountState").Contains("\"groupSide\":\"short\""), "0.5.8: another member goes short: groupSide short, sent again");
+                int o = sime.Orders.Count;
+                A(Good(NewId()));
+                Check(AgentReject().Contains("Group Lucid is short (SIM-B -1 NQ): a buy on SIM-E would hedge the group") && sime.Orders.Count == o, "0.5.8 check 10b: the agent's buy plan while its group is short: refused, nothing placed: " + AgentReject());
+                Settle(simb);
+                P("{\"type\":\"agentAccount\",\"cid\":\"gn\",\"agent\":\"manrae\",\"account\":null}");
+                st = Last(agentOut, "accountState");
+                Check(st.StartsWith("{\"type\":\"accountState\",\"account\":null,\"sim\":false,\"kind\":\"none\",") && st.Contains("\"why\":{\"balance\":\"the agent's account is None\""), "0.5.8: None: accountState at once, kind none, every number null with why: " + st);
+            }
+            finally
+            {
+                try { File.Delete(file); } catch (Exception) { }
+                ChartBridgeGroups.StartNow();
+            }
+        });
+    }
+
     static void Part(string name, Action body) { try { body(); } catch (Exception ex) { Check(false, name + " threw: " + ex.GetType().Name + ": " + ex.Message); } }
     static void ClearMoves() { ((System.Collections.IDictionary)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null)).Clear(); }
     static HashSet<string> ReplayedSet() { return (HashSet<string>)typeof(ChartBridgeServer).GetField("Replayed", PS).GetValue(null); }
@@ -1872,9 +1915,10 @@ public static class AgentHarness
             List<string> got;
             lock (agentOut) got = agentOut.Skip(n).ToList();
             List<string> pos = got.Where(x => x.StartsWith("{\"type\":\"position\"")).ToList(), ord = got.Where(x => x.StartsWith("{\"type\":\"order\"")).ToList();
-            Check(got.Count == 7 && got[0].StartsWith("{\"type\":\"welcome\"") && got[1].StartsWith("{\"type\":\"agentState\"") && pos.Count == 2 && pos.Any(x => x.Contains("\"root\":\"NQ\",\"qty\":0,")) &&
-                  pos.Any(x => x.Contains("\"root\":\"MNQ\",\"qty\":1,")) && ord.Count == 2 && got[6] == "{\"type\":\"snapshot\",\"roots\":[\"NQ\",\"MNQ\"]}",
-                  "10.4: welcome, agentState, a position per root (flat included), its stop and target, then snapshot: " + string.Join(" | ", got.Select(x => x.Length > 60 ? x.Substring(0, 60) : x)));
+            Check(got.Count == 8 && got[0].StartsWith("{\"type\":\"welcome\"") && got[1].StartsWith("{\"type\":\"agentState\"") && pos.Count == 2 && pos.Any(x => x.Contains("\"root\":\"NQ\",\"qty\":0,")) &&
+                  pos.Any(x => x.Contains("\"root\":\"MNQ\",\"qty\":1,")) && ord.Count == 2 && got[6] == "{\"type\":\"snapshot\",\"roots\":[\"NQ\",\"MNQ\"]}" &&
+                  got[7].StartsWith("{\"type\":\"accountState\",\"account\":\"SIM-E\","),
+                  "10.4: welcome, agentState, a position per root (flat included), its stop and target, then snapshot, then (0.5.8) accountState: " + string.Join(" | ", got.Select(x => x.Length > 60 ? x.Substring(0, 60) : x)));
             Instrument nqI = Named()["NQ"];
             Named().Remove("NQ");   // NQ not served (NinjaTrader has not found the contract)
             try
@@ -1883,7 +1927,7 @@ public static class AgentHarness
                 A(HelloMsg());
                 lock (agentOut) got = agentOut.Skip(n).ToList();
                 Check(!got[0].Contains("\"root\":\"NQ\"") && got[0].Contains("\"root\":\"MNQ\"") && !got.Any(x => x.StartsWith("{\"type\":\"position\"") && x.Contains("\"NQ\"")) &&
-                      got.Last() == "{\"type\":\"snapshot\",\"roots\":[\"MNQ\"]}", "10.4: a root not served: welcome lists only MNQ, the snapshot covers only MNQ: " + got.Last());
+                      got[got.Count - 2] == "{\"type\":\"snapshot\",\"roots\":[\"MNQ\"]}" && got.Last().StartsWith("{\"type\":\"accountState\""), "10.4: a root not served: welcome lists only MNQ, the snapshot covers only MNQ (then accountState): " + got[got.Count - 2]);
             }
             finally { Named()["NQ"] = nqI; }
         });

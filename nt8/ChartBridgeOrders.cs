@@ -798,6 +798,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             // could open a new position; one stale reading must not block a fresh entry).
             bool reduces = ((posNow > 0 && !isBuy) || (posNow < 0 && isBuy)) && ((posEff > 0 && !isBuy) || (posEff < 0 && isBuy));
             if (wantsLegs && reduces) return (strat != null ? "a strategy" : "a bracket") + " can only go on an order that opens or adds; this order reduces the position";
+            // 0.5.8 (G3 a): one direction for the whole group, every market, every source; review of #48: asked for every order, a page exit (pageReduces) too: the check's own exit rule passes a true exit and counts the exits already working
+            string groupWhy = ChartBridgeGroups.EntryCheck(agent != null ? "agent:" + agent : bot ? "bot" : "page", account, root, isBuy, qty, wantsLegs, strat != null);
+            if (groupWhy != null) return groupWhy;
             string copierWhy = bot ? ChartBridgeCopier.BotEntryCheck(account) : ChartBridgeCopier.LeaderEntryCheck(account, stopTicks > 0);   // 0.4.0 copier: a leader entry needs a stop while armed (integration: a bot entry is never a leader entry, and never on the leader's account; a strategy's stop counts)
             if (copierWhy != null) return copierWhy;   // 0.4.0 copier:
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
@@ -808,6 +811,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             OrderType type = OrderTypeOf(kind);   // 0.4.0 B1: also StopLimit and MIT
             Order order = account.CreateOrder(inst, isBuy ? OrderAction.Buy : OrderAction.Sell, type, OrderEntry.Manual, TimeInForce.Day, qty,
                 kind == "limit" ? price : kind == "stopLimit" ? limitPx : 0, kind == "stop" || NewKind(kind) ? price : 0, "", name, NinjaTrader.Core.Globals.MaxDate, null);
+            ChartBridgeGroups.NoteNewOrder(account, inst, order, isBuy);   // 0.5.8 Q-EXIT (b): an order on the other side of a position is an exit of it
             lock (Sync)
             {
                 IdFor(order);
@@ -833,6 +837,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // A price in a planned_brackets.txt line kept from 0.3.7: 0 for none, else the price with no trailing zeros.
         private static string PriceText(double p) { return p > 0 ? p.ToString("0.########", CultureInfo.InvariantCulture) : "0"; }
         private static string TicksText(int t) { return t > 0 ? t.ToString(CultureInfo.InvariantCulture) : "none"; }
+
+        // 0.5.8 Q-EXIT (b) (Anthony 2026-10-15): the one order call of the groups: an exit left working after its position went flat
+        // (it would now open the other side) is cancelled. ChartBridgeGroups.Leftovers decides; this only sends the cancel.
+        internal static string GroupCancelLeftover(Account a, Order o)
+        {
+            try { if (!IsWorking(o.OrderState)) return "no longer working"; a.Cancel(new[] { o }); return null; }
+            catch (Exception ex) { return ex.Message; }
+        }
 
         private static string ChangeOrder(string top, string id)
         {
@@ -1653,6 +1665,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (e.MarketPosition == MarketPosition.Flat && SignedPosition(account, inst) == 0 && Steady(account, now))
                 CancelLeftoverLegs(account, inst, Where(account, inst), now);
             ChartBridgeCopier.OnPositionUpdate(account, inst, e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0);   // 0.4.0 copier: the leader's exits
+            if (e.MarketPosition == MarketPosition.Flat) ChartBridgeGroups.PositionWentFlat();   // 0.5.8 Q-EXIT (b): exits left behind, at once (not only the 1 s check)
         }
 
         // Flat: any ChartBridge stop or target still working would open a new position if it filled. Legs

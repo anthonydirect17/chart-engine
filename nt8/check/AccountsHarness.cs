@@ -54,6 +54,38 @@ public static class AccountsHarness
     static string Order(string account, string rest) { return "{\"type\":\"order\",\"cid\":\"a\",\"account\":\"" + account + "\",\"root\":\"MNQ\"," + rest + "}"; }
     static string Trade(string account, string on) { return "{\"type\":\"accountTrade\",\"cid\":\"t\",\"account\":\"" + account + "\",\"on\":" + on + "}"; }
     static Account NewAccount(string name, Provider p) { Account a = new Account { Name = name, Provider = p, Connection = new Connection { Status = ConnectionStatus.Connected } }; Account.All.Add(a); return a; }
+    // ------------------------------------------------------------ 0.5.8: the accounts message's new fields; accountGroup through the dispatch
+    static void GroupFields()
+    {
+        Restart();
+        foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+        string e = Entry(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), ChartBridgeTime.NowUtcMs()), "EVAL-A");
+        Check(e.Contains("\"roomDrawdown\":null,\"roomDrawdownWhy\":") && e.Contains("\"roomDailyLoss\":null,") && e.Contains("\"hideWhy\":") &&
+              e.Contains(",\"group\":null,\"myFloor\":null,\"myDailyLoss\":null,\"myLimitsSet\":false,\"floor\":null,\"roomFloor\":null,\"roomDaily\":null,\"targetLeft\":null,\"src\":{},\"why\":{\"floor\":\"no group and no floor of its own (the Accounts tab)\""),
+              "0.5.8: every 0.5.7 field stays; group, myFloor, myDailyLoss, floor, roomFloor, roomDaily, targetLeft, src and why added: " + e);
+        SignIn(page);
+        sent.Clear();
+        Send(page, "{\"type\":\"groupSave\",\"cid\":\"gs\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":0,\"size\":50000,\"lockAt\":0}");
+        Check(sent.Any(x => x.StartsWith("{\"type\":\"groups\",\"list\":[{\"id\":\"g1\",\"name\":\"Lucid\"")), "0.5.8: groupSave through ChartBridge's own dispatch: the page gets the groups");
+        evalA.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
+        fundedB.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Short, Quantity = 1, AveragePrice = 25000 });
+        try
+        {
+            Send(page, "{\"type\":\"accountGroup\",\"cid\":\"ag\",\"account\":\"EVAL-A\",\"group\":\"g1\",\"highClose\":50500}");
+            Check(Entry(Accounts(), "EVAL-A").Contains("\"group\":\"g1\"") && Entry(Accounts(), "EVAL-A").Contains("\"floor\":48500,"), "0.5.8: EVAL-A joins g1 with its highest close: the accounts message at once, its floor 50500 - 2000");
+            Send(page, "{\"type\":\"accountGroup\",\"cid\":\"ag2\",\"account\":\"FUNDED-B\",\"group\":\"g1\"}");
+            Check(Rejected("FUNDED-B is short (FUNDED-B -1 MNQ) and Lucid is long (EVAL-A +1 MNQ") && Rejected("joining would hedge the group") && Entry(Accounts(), "FUNDED-B").Contains("\"group\":null"), "0.5.8: accountGroup refused when the move would mix the group: " + Last(sent));
+            Send(page, "{\"type\":\"accountLimits\",\"cid\":\"al\",\"account\":\"EVAL-A\",\"floor\":1,\"dailyLoss\":0}");
+            Check(Rejected("its group's rules apply"), "0.5.8: accountLimits on a group's account: refused");
+        }
+        finally
+        {
+            evalA.Positions.Clear(); fundedB.Positions.Clear();
+            try { File.Delete(Path.Combine(folder, "groups.txt")); File.Delete(Path.Combine(folder, "account-marks.txt")); } catch (Exception) { }
+            Restart();
+        }
+    }
+
     static Order Working(Account a, OrderAction action, OrderType type, double limit, double stop, string name)
     {
         Order o = new Order { Account = a, Instrument = mnq, OrderAction = action, OrderType = type, Quantity = 1, LimitPrice = limit, StopPrice = stop, Name = name, OrderState = OrderState.Working };
@@ -91,6 +123,7 @@ public static class AccountsHarness
             Missing();
             FollowNinjaTrader();
             ListedAndSaved();
+            GroupFields();   // 0.5.8: the new fields, and accountGroup refused when it would mix the group
         }
         catch (Exception ex) { Check(false, "accounts harness threw: " + ex); }
         finally

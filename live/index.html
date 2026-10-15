@@ -163,6 +163,14 @@
     <button type="button" class="ws-btn" id="wsLaptop">Laptop: two blank tabs, Main and Second</button>
   </section>
   <p class="ws-ver" id="wsVersion"></p>
+  </div><div class="ws-col ws-col-groups" id="wsGroupsCol" hidden>
+  <!-- 1.26.0 (ChartBridge 0.5.8, Anthony 2026-10-14): the account groups (live/groups.js), a third column, shown once ChartBridge sends groups, so Settings still fits 1366x768 whole -->
+  <section class="ws-sec" id="wsGroupsSec">
+    <h2>Account groups <span>one direction per group, the firm's rules</span></h2>
+    <div class="gp-list" id="wsGroups" role="list" aria-label="Account groups"></div>
+    <p class="ws-help">Each account picks its group on the Accounts tab (Group). Personal accounts sit in no group and may have a floor and a daily limit of their own there.</p>
+    <div class="ws-field"><button type="button" class="ws-btn" id="wsGroupNew">+ New group</button><span class="ws-help" id="wsGroupsNote" role="status"></span></div>
+  </section>
   </div></div>
 </div>
 
@@ -193,6 +201,8 @@
 <script src="ticket-link.js"></script>
 <!-- the Account page (1.16.0) and the window's one v3 connection to ChartBridge 0.4.0 (createFeed: shared by the Account page, the ticket's 0.4.0 parts and the Bot tab), opened only when ChartBridge speaks v3 -->
 <script src="accounts.js"></script>
+<!-- 1.26.0: the account groups (Settings, and the words the Accounts tab uses), before workspace.js -->
+<script src="groups.js"></script>
 <!-- 1.16.0: the motion kit, then the Bot tab's logic and page (before workspace.js, which creates the Bot tab) -->
 <script src="motion.js"></script>
 <script src="bot-core.js"></script>

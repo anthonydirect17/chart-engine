@@ -487,6 +487,10 @@ const deskOpts = {
    so a smoke can run at a chosen time of day whatever the wall clock says (the page's clock pinned to the same offset) */
 const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { now: () => Date.now() + CLOCK_OFFSET * 1000, switches: Object.fromEntries(SWITCHES.map(k => [k, !V3_OFF.includes(k)])), accountList: V3_ACCOUNTS.concat(AGENT_ACCOUNTS),
   graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ', agents: AGENTS, agentAnyTime: !!flag('agent-any-time'), botAccount: flagValue('bot-account') || null,
+  /* 0.5.8: --no-groups is a ChartBridge before 0.5.8 (no groups message); --groups seeds two made-up groups (sample data) */
+  groups: !flag('no-groups'), groupsSeed: flag('groups') ? [
+    { name: 'Lucid', size: 50000, drawdown: 2000, drawdownType: 'eod', dailyLoss: 1000, target: 3000, lockAt: 50100, members: ['EVAL-A', 'EVAL-B'], highClose: 51240.5 },
+    { name: 'Apex', size: 50000, drawdown: 2500, drawdownType: 'intraday', target: 3000, members: ['FUNDED-C'] }] : [],
   agentAccounts: Object.fromEntries(flagValue('agent-accounts').split(',').map(x => x.split(':').map(y => y.trim())).filter(x => x.length === 2 && x[0] && x[1])) })) : new OrderDesk(deskOpts);
 const tapeStats = V3 ? new TapeStats() : null;          // 0.4.0: the tape counters are always on (no switch)
 const BOT_SECRET = crypto.randomBytes(32).toString('hex');   // ChartBridge keeps it in bot-secret.txt; never printed
@@ -503,7 +507,7 @@ function onMessage(c, text) {
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (V3 && m.type === 'client') desk.client(c, m);
   else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm',
-    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules'].includes(m.type)) desk.handle(c, m, text);
+    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'groupSave', 'groupDelete', 'accountGroup', 'accountLimits'].includes(m.type)) desk.handle(c, m, text);
   else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */

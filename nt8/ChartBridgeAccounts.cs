@@ -134,6 +134,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             timer = null;
             UnwatchStatus();
             FinalSave();   // 0.5.1: what is in memory (a first connected time, a log line) is not lost at a stop
+            ChartBridgeGroups.Stop();   // 0.5.8: the account marks (highs, day start) as they are
             Clear();
         }
 
@@ -165,6 +166,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lastPruneMs = -1;
             }
             lock (ListedLock) ListedBefore.Clear();
+            ChartBridgeGroups.Clear();   // 0.5.8: read again at the next start (or at first use)
         }
 
         // Reads accounts.txt (accountChecks on only). Public for the harness, which runs it on its own thread.
@@ -173,6 +175,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Clear();
             SessionStartMs = SessionStart(now);
             SessionId = ProcessSession();
+            ChartBridgeGroups.StartNow();   // 0.5.8: groups.txt and account-marks.txt, whether or not accountChecks is on
             if (!On) return;
             string path = FilePath;
             if (!File.Exists(path)) { NoFile(now); AfterRead(now); return; }
@@ -548,6 +551,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string alarm;
             lock (Mem) alarm = startAlarm;
             if (alarm != null) c.Send(Status("error", alarm));
+            ChartBridgeGroups.SignedIn(c);     // 0.5.8: the groups.txt alarm
             ChartBridgeBranches.SignedIn(c);   // 0.5.7: the daily reset's notes during its break
         }
 
@@ -582,6 +586,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (!ChartBridgeV3.OnClient(client, text)) return;
             if (ChartBridgeOrders.OriginAllowed(client.Origin)) client.Send(AccountsJson(Snapshot(), ChartBridgeTime.NowUtcMs()));   // signed in or not
+            ChartBridgeGroups.OnClient(client);   // 0.5.8: the groups, to ChartBridge's own page (signed in or not, as accounts)
             ChartBridgeV3.TellLanes(client);   // integration: a page that signed in before its client message gets each lane's v3 state now
         }
 
@@ -900,6 +905,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     else lock (Mem) lastAccountsJson = null;
                     TellNewlyListed();
                 }
+                try { ChartBridgeGroups.Tick(all, now); } catch (Exception ex) { ChartBridgeServer.Log("groups check error: " + ex.Message); }   // 0.5.8: the marks and the groups message
             }
             finally { Interlocked.Exchange(ref ticking, 0); }
         }
@@ -1096,8 +1102,9 @@ namespace NinjaTrader.NinjaScript.AddOns
              .Append(",\"roomDailyLoss\":null")
              .Append(",\"roomDailyLossWhy\":").Append(CbJson.Str(dlWhy))
              .Append(",\"canHide\":").Append(hideWhy == null ? "true" : "false")
-             .Append(",\"hideWhy\":").Append(hideWhy == null ? "null" : CbJson.Str(hideWhy))
-             .Append('}');
+             .Append(",\"hideWhy\":").Append(hideWhy == null ? "null" : CbJson.Str(hideWhy));
+            ChartBridgeGroups.AppendAccountFields(b, name, a);   // 0.5.8: group, myFloor, myDailyLoss, floor, roomFloor, roomDaily, targetLeft, src, why
+            b.Append('}');
         }
 
         private static string Money(double? v) { return v.HasValue ? CbJson.Num(Math.Round(v.Value, 2)) : "null"; }
@@ -1116,6 +1123,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             return string.Join(",", items);
         }
+
+        // 0.5.8: after a group change (ChartBridgeGroups): the accounts message at once.
+        public static void SendAccountsNow() { SendAccounts(AccountsJson(Snapshot(), ChartBridgeTime.NowUtcMs()), true); }
 
         // To every v3 page on ChartBridge's own origin, signed in or not. Unchanged text is not sent again unless forced.
         private static void SendAccounts(string json, bool force)
@@ -1413,6 +1423,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             DateTime et = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(NowUtc(), DateTimeKind.Utc), ChartBridgeTime.Eastern);
             if (et.Hour != 17) return;
+            try { ChartBridgeGroups.EodMark(); } catch (Exception ex) { ChartBridgeServer.Log("groups: end-of-day highs error: " + ex.Message); }   // 0.5.8: every 2 s in the break (the day's close)
             string day = et.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             lock (Lk)
             {

@@ -1,5 +1,90 @@
 # Changelog
 
+## ChartBridge 0.5.8 and chart 1.26.0 (2026-10-15): prop groups (one direction per group) and real account state
+
+Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL). **It needs the recompile: the page needs
+ChartBridge 0.5.8** (`minChartBridge` raised to 0.5.8: groups and accountState); a PC on an older ChartBridge keeps the page it
+has, and the PC updater waits until ChartBridge 0.5.8 is compiled there. New add-on file `nt8/ChartBridgeGroups.cs` (it never
+places an order) and page file `live/groups.js`, both in `install-files.json`. After #47.
+
+- **Groups, made on the page and saved by ChartBridge.** Settings has a third column, Account groups (shown once ChartBridge
+  sends groups, so Settings still fits 1366x768 whole): each group as one row with its name, the firm's rules in a line, the No
+  hedging switch, Edit, Rename and Delete (an in-page confirm), and New group. Edit and New open the rules dialog of Anthony's
+  approved mockup, in the workspace's house style: group name, account size (G1), daily loss limit, drawdown size, drawdown
+  type (trails end of day, trails intraday, static), floor stops at (G1, the Lucid-style lock), profit target, No hedging. The
+  Accounts tab gets a Group dropdown (None and every group) and a Limits column: putting an account in a group asks once for its
+  highest close so far, prefilled with the larger of the account size and its balance (G2 b); an account in no group (a
+  personal account) has My floor and My daily. New accounts arrive in None. ChartBridge keeps it all in `groups.txt` (two `#`
+  lines, then `group`, `member` and `personal` lines; ids `g1`, `g2`, so a rename never touches membership) and each account's
+  highs and day start in `account-marks.txt`; nobody edits a file. No `groups.txt` (every PC today): no groups, exactly 0.5.7.
+  A `groups.txt` that cannot be read is never rewritten that run and refuses every new entry, with an alarm, as `accounts.txt`.
+  Messages: `groupSave`, `groupDelete`, `accountGroup` (with `highClose`), `accountLimits` from the page; `groups` (each with its
+  side and holders) and new `accounts` fields (`group`, `myFloor`, `myDailyLoss`, `floor`, `roomFloor`, `roomDaily`,
+  `targetLeft`, `src`, `why`) to it; every 0.5.7 field stays, `pnlToday` included, so a 1.25 page works.
+- **One direction for the whole group, every market (G3 a).** While any member holds a long (a position by either reading, or
+  a working buy entry, ChartBridge's own just sent included), no member may open a short in any market, and the other way round;
+  a mixed group refuses new entries on both sides. Checked by ChartBridge under its order lock (`PlaceLock`) for every entry:
+  the order ticket and chart clicks, the bot, every agent (and its plan check 10b), Order Strategies, and each copier follower
+  (skipped as "group"). The refusal names the group and the holders as NinjaTrader names the accounts ("Group Lucid is long
+  (... +2 MNQ; ... buy limit 1 NQ working): a sell on ... would hedge the group; prop firms ban hedged accounts. Exits and flattens
+  still work."). Exits, flattens, stops and targets are never blocked: an account's own order on the other side of its position,
+  with no stop, target or strategy, for no more than the position with its exits already working, is an exit. Legs, OCO parts,
+  merged legs and an agent's flat and protect orders are no entries. Two entries on opposite sides at the same moment: one
+  passes. A group made mixed by an order typed into NinjaTrader (which cannot be refused) raises one status error to the pages,
+  and one note when it is one direction again. Per group, the No hedging switch (on by default) turns the check off.
+- **Real account state (item 5).** With NinjaTrader's balance and P&L and the group's rules, ChartBridge works out each account's
+  floor (end of day: the highest end-of-day equity, raised in the 17:00 to 18:00 ET break and by each session's first reading;
+  intraday: the highest equity seen, every second; both stop at "floor stops at"; static: size less drawdown), the room to it
+  (NinjaTrader's trailing drawdown when it reports one), the daily room (open P&L counted, from the session's day start) and the
+  target left; for a personal account, from its own floor and daily limit. A number it cannot give is null with the reason,
+  never estimated. The Accounts tab's room shows them first ("$900.00 daily · $1,700.00 to floor · $2,500.00 to target").
+- **The agent's accountState** (for Bot-Lab, which builds its view from it and falls back to its model's numbers when anything
+  is missing): `account`, `sim`, `kind` (prop, personal, none), `group`, `groupId`, `groupSide`, `noHedge`, `rules` (the group's,
+  with `size` and `lockAt`, or the account's own; inside `rules` 0 says none, never null, the coordinator's note from the
+  Bot-Lab side), the eight numbers with `src` and `why`, `session`, `at`. Sent right after the snapshot on every `agentHello`,
+  then from the 1 s pass when anything but `at` changed, and at once on an account, group or rules change.
+- **F-ALL (a)**: the ticket's Flatten all on None does nothing, as built in 0.5.7.
+- **Review of #48 (fixed before merge):**
+  - A page market exit skipped the group check (the agents' `pageReduces`), so a second Sell Mkt 2 on a long 2 while the first
+    still worked could flip the account short beside a member's long. Every order now asks the check; its own exit rule passes
+    a true exit and counts the exits already working; one too big is refused, saying to use Flatten or cancel the working exits.
+  - An unreadable `groups.txt` refused exits too: the exit rule now comes first, and only entries are refused.
+  - A ChartBridge started mid-session took its first reading as the day start, so earlier losses were missed: a day start read
+    more than 2 minutes after 18:00 ET takes the smaller of it and NinjaTrader's realized P&L (null, with why, when NinjaTrader
+    gives none), which can only understate the daily room. `account-marks.txt` keeps when the day start was read.
+  - NinjaTrader's trailing drawdown overrode the computed room: with both, the smaller.
+  - Orders on the other side of a position were each taken as an exit when no more than the position: they are summed now, and
+    the part past the position counts as an entry.
+  - A late first reading raised the end-of-day high to a midday balance: only a reading in the 17:00 to 18:05 ET window does.
+  - PROTOCOL says plainly that an OCO pair of entries typed into NinjaTrader is not counted until one fills.
+  - Re-review: the exits already working counted protective orders too, so with a lone ChartBridge stop (no target, no OCO id)
+    or a stop typed into NinjaTrader on a long 2, Sell Mkt 1 and Sell Mkt 2 were refused. Only plain market or limit exit
+    orders with no OCO id count now; stops, targets and ChartBridge's, the agent's and the copier's legs never do.
+  - A personal account whose limits Anthony never set sends `accountState.rules` null (the agent keeps its model numbers);
+    once My floor or My daily is saved, 0 included, `{floor, dailyLoss}`. The Accounts tab's boxes say "not set" until then.
+- **Q-EXIT (b), Anthony 2026-10-15: exits left behind.** Resting exits are still always accepted; when an account in a group with
+  No hedging on goes flat on an instrument, ChartBridge cancels the working orders there that were exits of the position just
+  closed (the page's and ones typed into NinjaTrader; never its own legs or an ATM's), since they would now open the other side,
+  and tells the pages ("SIM-A went flat on MNQ: cancelled the sell limit 2 left from the long, so it cannot open a short"). After a
+  start, an order on a flat account against its group's side is cancelled once the same way.
+  Re-review: a typed OCO pair left after flat counts (once per OCO id at its largest) and is cancelled; the pass runs at once on
+  the position update to flat, not only every second; the after-start look is per account, once it is connected; the note names
+  the position just closed and the side the order would open. Re-review 3: a resting reversal whose own fills took the position
+  through flat keeps its rest unless the group's other members hold the other side (then it is cancelled with a note). A leftover
+  with no fill of its own is cancelled at once; only a reversal's rest and the after-start look wait until flat for 150 ms.
+- **CON (a), Anthony 2026-10-15: consistency percent.** Each group's rules get an optional consistency percent (no single day
+  over that share of the profit): the rules dialog, `groupSave`, `groups.txt` (an 11th field; older lines read as none), the
+  `groups` message and `accountState.rules.consistency` (0 none). Informational only: nothing is blocked or flattened by it.
+- **Tests.** `check:orders`: GroupsHarness (the files, the migration, an unreadable file, every refusal, side counting with
+  both readings and ChartBridge's just sent, legs and exits, the exit rule, mixed, No hedging off, two opposite entries at once,
+  the numbers for end of day, intraday, static and personal, the highs and the day start across a restart), and a group check in
+  OrdersHarness's ticket path, AccountsHarness (the new fields, `accountGroup` refused when it would mix), CopierHarness (a
+  "group" skip), BotHarness (a bot entry refused), AgentHarness (accountState after the snapshot, on a change, None, plan check
+  10b) and IntegrationHarness X14. Node: `groups.test.js`, `accounts-page.test.js`, `nt8-source.test.js` (ChartBridgeGroups.cs
+  never places an order; every entry path asks it), `fake-agent` (`accountStateProblem`). `smoke:accounts` section 4 at
+  1366x768 (the Group dropdowns, the highest close question, My floor, Settings' groups column, the rules dialog, Delete).
+  The review's fixes each have a GroupsHarness check that fails on the code before them.
+
 ## ChartBridge 0.5.7 and chart 1.25.0 (2026-10-14): the plan id on agent orders, no TradeLost alarm during a flatten, None in every tab
 
 DECISION 2026-10-14d (phase 2, the plan id) and 2026-10-14e (None in every tab, the daily reset), and the TradeLost hold.
