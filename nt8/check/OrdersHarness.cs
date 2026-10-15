@@ -884,6 +884,7 @@ public static class OrdersHarness
         Section("cross-lane rules (integration)", IntegrationHarness.Run);   // 0.4.0: the rules that hold only with every lane together (check/IntegrationHarness.cs)
         Section("agents (0.5.0)", AgentHarness.Run);   // 0.5.0: the agent channel (check/AgentHarness.cs)
         Section("time check (0.5.6)", ClockHarness.Run);   // 0.5.6: this PC's clock against a time server, SNTP (check/ClockHarness.cs)
+        Section("groups (0.5.8)", GroupsHarness.Run);   // 0.5.8: prop groups, one direction per group, the account numbers (check/GroupsHarness.cs)
 
         Console.WriteLine("== total: " + checks + " checks");
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");

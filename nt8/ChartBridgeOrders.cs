@@ -798,6 +798,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             // could open a new position; one stale reading must not block a fresh entry).
             bool reduces = ((posNow > 0 && !isBuy) || (posNow < 0 && isBuy)) && ((posEff > 0 && !isBuy) || (posEff < 0 && isBuy));
             if (wantsLegs && reduces) return (strat != null ? "a strategy" : "a bracket") + " can only go on an order that opens or adds; this order reduces the position";
+            // 0.5.8 (G3 a): one direction for the whole group, every market, every source (exits pass: pageReduces, or the check's own exit rule)
+            string groupWhy = pageReduces ? null : ChartBridgeGroups.EntryCheck(agent != null ? "agent:" + agent : bot ? "bot" : "page", account, root, isBuy, qty, wantsLegs, strat != null);
+            if (groupWhy != null) return groupWhy;
             string copierWhy = bot ? ChartBridgeCopier.BotEntryCheck(account) : ChartBridgeCopier.LeaderEntryCheck(account, stopTicks > 0);   // 0.4.0 copier: a leader entry needs a stop while armed (integration: a bot entry is never a leader entry, and never on the leader's account; a strategy's stop counts)
             if (copierWhy != null) return copierWhy;   // 0.4.0 copier:
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);

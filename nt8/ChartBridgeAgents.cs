@@ -1755,6 +1755,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             Account a = FindAccount(acct);
             string lockWhy = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root);
             if (lockWhy != null) return lockWhy;
+            // 10b. 0.5.8 (G3 a): one direction per group (advisory here; the binding check runs under PlaceLock in PlaceOrderLocked)
+            string groupWhy = ChartBridgeGroups.EntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Qty, true, false);
+            if (groupWhy != null) return groupWhy;
             // 11. the price (v2 gate 5): on the grid, a fresh last trade, the side of the market; a stop-limit's limit within 20 ticks
             bool buy = p.Side == "buy";
             string bad = ChartBridgeOrders.AgentPriceProblem(root, tick, p.Kind == "limit" ? "limit" : "stop", buy, p.Price);
