@@ -238,3 +238,14 @@ test('0.6.0 group trading: the contract fields; the day file\'s #seat lines read
   assert.match(bodies(acode, 'SeatsWelcomeFields'), /",\\"group\\":"[\s\S]*",\\"seats\\":"[\s\S]*",\\"seatsRev\\":"/);
   assert.match(bodies(acode, 'AnswerJson'), /\(account != null \? ",\\"account\\":" \+ CbJson\.Str\(account\) : ""\)/, 'answer.account only for one seat of a group plan');
 });
+
+test('0.6.0 fix round 1: accountState for every seat followed; not connected stops a fan-out; JoinRefusal again under the save; a private check build', () => {
+  assert.match(bodies(acode, 'SendAccountState'), /List<string> accts = AllSeats\(\)\.Select\(x => x\.Name\)\.ToList\(\);/, 'a seat that left while holding his trade keeps its accountState until flat');
+  const pp = acode.slice(acode.indexOf('public string PlacingProblem()'), acode.indexOf('private string StateJson()'));
+  assert.match(pp, /lock \(Sync\) \{ m = mode; k = killed; on = client != null && helloed; \}[\s\S]*if \(!on\) return "agent " \+ Id \+ " is not connected: nothing more is placed";/, 'asked per seat under PlaceLock (PlaceOrderLocked), only the agent\'s Sync taken');
+  const ag = strip(read('ChartBridgeGroups.cs')), body = ag.slice(ag.indexOf('private static string AccountGroup('), ag.indexOf('private static string AccountLimits('));
+  const lk = body.indexOf('lock (ChartBridgeOrders.GroupPlaceLock)'), again = body.indexOf('ChartBridgeAgents.JoinRefusal(name, id, false)'), save = body.indexOf('string err = Save(next);');
+  assert.ok(lk > 0 && again > lk && again < save, 'JoinRefusal again under PlaceLock and SaveLock, before the membership is saved');
+  assert.match(bodies(acode, 'JoinRefusal'), /if \(refresh\) RefreshFiles\(\);/, 'no file read under the locks');
+  assert.match(read(path.join('check', 'check.sh')), /-out:"\$\{CHARTBRIDGE_CHECK_DLL:-\/tmp\/chartbridge-check\.dll\}"/, 'check:nt8 builds to a private path when CHARTBRIDGE_CHECK_DLL is set');
+});

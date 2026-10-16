@@ -868,6 +868,15 @@ function create(o) {
   /* the Flatten of a job, his position and account read again right before it goes */
   function jobFlatten(j) {
     const a = agents.get(j.agent);
+    if (Array.isArray(j.seats)) {   // 1.27.0: a group: the page's Flatten on every seat that still holds his trade (read again now)
+      const held = a ? AH.seatsHeld(a) : [];
+      const same = held.length === j.seats.length && j.seats.every(x => held.some(h => h.account === x.account && h.root === x.root));
+      if (!a || AH.offStep(a) !== 'ask' || !same) { H.job = null; H.lines[j.agent] = 'His seats changed before the Flatten: nothing was sent. He stays on, in Shadow.'; return; }
+      const failed = j.seats.filter(x => o.flatten(x.account, x.root) === false);
+      if (failed.length === j.seats.length) { H.job = null; H.lines[j.agent] = 'The Flatten was not sent (see the chart\'s line): he stays on, in Shadow.'; }
+      else { H.flatSent = true; if (failed.length) H.lines[j.agent] = 'The Flatten for ' + failed.map(x => x.account + ' ' + x.root).join(', ') + ' was not sent: flatten it in NinjaTrader; he turns off once every seat is flat.'; }
+      return;
+    }
     if (!a || AH.offStep(a) !== 'ask' || a.account !== j.account || !a.position || a.position.root !== j.root) { H.job = null; H.lines[j.agent] = 'His position changed before the Flatten: nothing was sent. He stays on, in Shadow.'; }
     else if (o.flatten(j.account, j.root) === false) { H.job = null; H.lines[j.agent] = 'The Flatten was not sent (see the chart\'s line): he stays on, in Shadow.'; }
     else H.flatSent = true;
@@ -879,7 +888,7 @@ function create(o) {
     const j = H.job; if (!j) return;
     const r = AH.flatOffStep(j, agents.get(j.agent) || null, Date.now(), H.flatSent);
     H.job = r.job; H.lines[j.agent] = r.line;
-    if (r.action === 'flatten') { jobFlatten(r.job); if (H.job) H.lines[j.agent] = 'Flatten sent for ' + j.account + ' ' + j.root + ' (he is in Shadow): turning him off once flat...'; }
+    if (r.action === 'flatten') { jobFlatten(r.job); if (H.job) H.lines[j.agent] = 'Flatten sent for ' + AH.jobWhere(j) + ' (he is in Shadow): turning him off once flat...'; }
     else if (r.action === 'off') { H.job = null; helperOff(j.agent, 'Flat. '); }
     if (H.job) flatLoop();
     renderPanel();

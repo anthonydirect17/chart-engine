@@ -1262,6 +1262,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (id == cur) return id == null ? null : name + " is in " + next.Groups[id].Name + " already";
                 Group g = null;
                 if (id != null && !next.Groups.TryGetValue(id, out g)) return "no group " + id;
+                // 0.6.0: again here, under the lock that saves the membership (PlaceLock, then SaveLock; memory only, no file read), so an
+                // agent that chose this group, or a copier or bot change, since the first check cannot slip past it
+                if (id != null) { string taken = ChartBridgeAgents.JoinRefusal(name, id, false); if (taken != null) return taken; }
                 if (g != null && g.NoHedge)
                 {
                     List<string> others = next.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList();

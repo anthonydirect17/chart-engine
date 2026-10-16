@@ -2040,6 +2040,28 @@ public static class AgentHarness
             Check(e.All(x => x != null && x.OrderState == OrderState.Cancelled), "0.6.0: withdraw cancels the plan's entry on every seat");
         });
 
+        Part("fix 3: the socket drops during a fan-out", () =>
+        {
+            GroupFresh();
+            long rev = Rev();
+            ChartBridgeClient was = ac;
+            // the agent's socket drops (Lose) right as SIM-A's entry is submitted: SIM-B and SIM-C are not placed, SIM-A's is cancelled
+            Hold = (kind, o) =>
+            {
+                if (kind == "submit" && o.Account == sima && ChartBridgeAgents.IsEntryName(o.Name))
+                    typeof(ChartBridgeAgent).GetMethod("Lose", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, new object[] { was, "agent manrae disconnected", false });
+                return false;
+            };
+            int na = OrdersOn(sima), nb = OrdersOn(simb), nc = OrdersOn(simc);
+            Last2();
+            M.OnMessage(was, GPlan(NewId(), "1,1,1", rev));
+            Hold = null;
+            Order ea = EntryAfter(sima, na);
+            Check(ea != null && ea.OrderState == OrderState.Cancelled && EntryAfter(simb, nb) == null && EntryAfter(simc, nc) == null,
+                  "fix 3: after the socket dropped at seat 1 of 3, seats 2 and 3 are not placed (\"is not connected\") and seat 1's entry is cancelled");
+            Check(Logged("plan ") && Logged("SIM-B refused: agent manrae is not connected: nothing more is placed"), "fix 3: the refusal is said per seat");
+        });
+
         Part("0.6.0 per-seat flatten", () =>
         {
             GroupFresh();
@@ -2109,7 +2131,9 @@ public static class AgentHarness
             if (e.Any(x => x == null)) { Check(false, "0.6.0 join: placed: " + AgentReject()); return; }
             foreach (Order x in e) Fill(x, 1, 24999);
             long r0 = Rev();
+            int as0 = N(agentOut);
             P("{\"type\":\"accountGroup\",\"cid\":\"lv\",\"account\":\"SIM-C\",\"group\":null}");
+            Check(Any(agentOut, as0, "{\"type\":\"accountState\",\"account\":\"SIM-C\",\"sim\":true,\"kind\":\"personal\""), "fix 1: a seat that left while holding his trade still gets its accountState (now personal)");
             Check(Rev() > r0 && Last(agentOut, "welcome").Contains("\"seats\":[\"SIM-A\",\"SIM-B\"]"), "0.6.0: SIM-C leaves the group: seatsRev up, a fresh welcome: " + Last(agentOut, "welcome"));
             Check(ChartBridgeAgents.OwnerAgent("SIM-C", "MNQ") == "manrae" && ChartBridgeAgents.AgentOfAccount("SIM-C") == "manrae" && !M.IsEntrySeat("SIM-C") && M.HasSeat("SIM-C"),
                   "0.6.0: holding the agent's trade, SIM-C stays its own and protected until flat");
@@ -2128,6 +2152,10 @@ public static class AgentHarness
             Check(Abc().All(Flat), "0.6.0: flatAt closes the seat that left too");
             Advance(1000);
             Check(!M.HasSeat("SIM-C") && ChartBridgeAgents.OwnerAgent("SIM-C", "MNQ") == null && ChartBridgeAgents.AgentOfAccount("SIM-C") == null, "0.6.0: flat, the seat that left is no longer the agent's");
+            int as1 = N(agentOut);
+            simc.Items[AccountItem.CashValue] = 49321; Tick(); Tick();
+            Check(!Any(agentOut, as1, "{\"type\":\"accountState\",\"account\":\"SIM-C\""), "fix 1: once flat and dropped, it gets no accountState (its balance changed)");
+            simc.Items.Remove(AccountItem.CashValue);
             et = new DateTime(2026, 10, 9, 10, 0, 0);
             P("{\"type\":\"accountGroup\",\"cid\":\"j2\",\"account\":\"SIM-D\",\"group\":null}");
             P("{\"type\":\"accountGroup\",\"cid\":\"j3\",\"account\":\"SIM-C\",\"group\":\"g1\"}");

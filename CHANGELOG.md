@@ -37,7 +37,10 @@ from the copier, which stays exactly as it is. The protocol is in PROTOCOL.md, "
   naming them. His account card shows the seats table for a group (account, SIM or LIVE, position, the last plan's size, P&L, R
   from each seat's own risk, daily room, floor room, why it is not in the trade) and the group's total. The Accounts tab marks each
   seat with its hero's name; the copier's leader picker and follower rows show a seat with the reason. Off on a group in a trade
-  sends nothing and says to flatten every seat first.
+  works as for one account: Shadow first, then the page's Flatten on every seat holding his trade, then Off once every seat is flat.
+- Review fixes: a seat that left the group while holding the trade keeps its accountState until flat; once the agent's socket
+  drops, a fan-out places no further seat (checked per seat under `PlaceLock`); a join is checked again under the lock that saves
+  the membership.
 - Tests: the Mono harness's group cases (fan-out to 3 seats with different sizes; each kind of sit-out; a seat rejected by the
   broker; a partial fill; per-seat flatten; flatAt with the per-seat cap; Kill, heartbeat and leaving Auto; a stale seatsRev;
   join and leave while exposed; a group deleted while exposed; the 17:00 reset; the copier and the bot refusing a seat; restart

@@ -533,12 +533,15 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // 0.6.0: an account joining a group that an agent trades (ChartBridgeGroups.AccountGroup): refused for the bot's account, the
         // copier's leader or a follower (on or off), and another agent's account. Null when it may join.
-        public static string JoinRefusal(string name, string groupId)
+        public static string JoinRefusal(string name, string groupId) { return JoinRefusal(name, groupId, true); }
+        // refresh false: memory only (the copies of bot-account.txt and copier.txt as they are, the copier's and the agents' memory),
+        // for the check again under ChartBridgeGroups' save (PlaceLock, then its SaveLock: no file read under them).
+        public static string JoinRefusal(string name, string groupId, bool refresh)
         {
             if (!Enabled || string.IsNullOrEmpty(name) || string.IsNullOrEmpty(groupId)) return null;
             List<ChartBridgeAgent> on = All().Where(a => a.OnGroup(groupId)).ToList();
             if (on.Count == 0) return null;
-            RefreshFiles();   // a page's thread: the copies are read fresh
+            if (refresh) RefreshFiles();   // a page's thread: the copies are read fresh
             string who = "agent " + on[0].Id, gname = ChartBridgeGroups.NameOf(groupId) ?? groupId;
             string bot = BotAccountForAgents();
             if (bot == null) return "bot-account.txt cannot be read or understood, so ChartBridge cannot tell the bot's account: " + name + " cannot join " + gname + ", which " + who + " trades, until it is fixed";
@@ -3896,13 +3899,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         private long accountStateSeq, lastAccountStateSeq;
         private bool snapshotSent;
 
-        // 0.6.0: one accountState per seat (a group: each member, in seat order), each sent when it changed.
+        // 0.6.0: one accountState per seat it follows (AllSeats: the seats in seat order, then any that left while it holds the
+        // agent's trade, until flat), each sent when it changed; with no seat, its account (None's state on None or an empty group).
         internal void SendAccountState(bool force)
         {
             ChartBridgeClient c;
-            List<string> accts;
-            lock (Sync) { c = helloed && welcomeSent && snapshotSent ? client : null; accts = groupId != null && seatNames.Count > 0 ? seatNames.ToList() : new List<string> { groupId != null ? ChartBridgeBranches.None : account }; }
+            lock (Sync) c = helloed && welcomeSent && snapshotSent ? client : null;
             if (c == null) return;
+            List<string> accts = AllSeats().Select(x => x.Name).ToList();
+            if (accts.Count == 0) lock (Sync) accts.Add(groupId != null ? ChartBridgeBranches.None : account);
             long seq = Interlocked.Increment(ref accountStateSeq);
             List<string[]> built = new List<string[]>();
             foreach (string acct in accts)
@@ -4217,14 +4222,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         private bool OwnsAny() { return RulesNow().Roots.Any(x => Owns(x)); }   // 0.6.0: any seat
 
         // What the order path asks at the last moment (ChartBridgeAgents.PlacingProblem): killed, shadow, outside the window.
+        // 0.6.0: and the agent connected (its hello said): asked per seat under PlaceLock, so once the socket drops (Lose) no further
+        // seat is placed. Only the agent's Sync is taken here (as before), never a lock Lose waits on.
         public string PlacingProblem()
         {
             Rules r = RulesNow();
             string m;
-            bool k;
-            lock (Sync) { m = mode; k = killed; }
+            bool k, on;
+            lock (Sync) { m = mode; k = killed; on = client != null && helloed; }
             if (k) return "the kill switch is on (release it on the Agent tab)";
             if (m == "shadow") return "agent " + Id + " is in shadow: nothing is placed";
+            if (!on) return "agent " + Id + " is not connected: nothing more is placed";   // 0.6.0: a fan-out stops at the seat after its socket dropped
             DateTime et = NowEt();
             if (!InWindow(r, et)) return WindowRefusal(r, et);   // 0.5.2: session time, the market open
             return null;

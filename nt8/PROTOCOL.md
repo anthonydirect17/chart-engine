@@ -3017,7 +3017,7 @@ taken: it sits out each trade until it is. `agent-<id>-account.txt` saves `group
 understand that line and stands the agent down (safe). The page's picker is one list: None first, then each group ("Group Lucid:
 SIM-A, SIM-B, SIM-C"), then single accounts; a group with a member that cannot be taken is shown with the reason, not offered.
 
-**Membership.** An account joining a group an agent trades is refused (`accountGroup`) when it is the bot's, the copier's leader or a
+**Membership.** An account joining a group an agent trades is refused (`accountGroup`, checked again under the lock that saves the membership) when it is the bot's, the copier's leader or a
 follower, or another agent's. Any change of the seats (an account joins or leaves, the agent's account or group changes) puts
 `seatsRev` up and sends a fresh `welcome` and `accountState`; a joined account is a seat from the next plan. A seat that leaves the
 group, or every seat when its group is deleted (the agent then goes to None, saved), while it holds the agent's trade stays the
@@ -3030,7 +3030,7 @@ agent's (owned, protected, flattened at flatAt) until flat, and takes no new ent
 | `flatten` | optional `account`: that seat only; without it, every seat (one message for the whole group: the 10 a second limit) |
 | `answer` | optional `account`: one `placed` or `refused` answer per seat (a seat that sits out: `refused`, "not in this trade: <why>"), then the plan-level answer without `account` (`placed` when at least one seat was placed, naming each seat); an `expired` answer per seat whose entry is cancelled, and `refused` for a seat whose entry NinjaTrader rejects |
 | `agentState` | for a group, `seats`: `[{account, owns, position, pnlToday, trades, out}]` (`position` `{root, qty, avgPrice}` or null; `out` the "not in this trade" reason of the last plan placed, or null). `owns` is any seat. `trades` and `losses` count per plan (below) |
-| `accountState` | one per seat (each keyed by its `account`), in seat order after the snapshot |
+| `accountState` | one per seat it follows (each keyed by its `account`), in seat order after the snapshot; a seat that left the group while it holds the agent's trade keeps getting its own until flat |
 | snapshot | one `position` per (seat, root) and the working orders of every seat; `order`, `exec` and `position` already carry `account` |
 | `agent` (pages) | for a group `group`, `seatsRev` and `seats` (as `agentState`'s, with `sim`, `seat` (false: it left the group), `lastPlan`, `size` and `risk` of the last plan on it, and `lastPnl`: its trade's dollars once closed) |
 | `agentPlan`, `agentProposal` (pages) | `sizes`, `seatsRev` and (once checked) `seats`: `[{account, size, risk, out, placed}]`; a group's proposal has `account` null and `group` |
@@ -3049,7 +3049,7 @@ of group Lucid can take this plan: SIM-A: ...; SIM-B: ...").
 `ChartBridgeOrders.PlaceAgentEntry` with that seat's account and size (every v2 gate, the owner lock and the one-direction check
 under `PlaceLock` for each seat; `PlaceLock` is never held across seats, because `PlaceOrder` writes the plans file after it lets
 the lock go), each in its own try, all with the plan's id. A seat the order path refuses, or whose entry NinjaTrader rejects at once,
-is refused there; the others go on. Each seat's entry is its own (its own tag, legs from each of its fills, its own ledger).
+is refused there; the others go on. The order path asks the agent at the last moment for each seat (`PlacingProblem`, under `PlaceLock`): once its socket has dropped, no further seat is placed ("agent <id> is not connected"), and the drop cancels any seat's entry already placed. Each seat's entry is its own (its own tag, legs from each of its fills, its own ledger).
 
 **Counting (Q3 a).** maxTrades and maxLosses count one per plan: a group plan's seat trades (tags with a `#seat` line) are one
 trade; it is a loss when their sum is below 0, once every one of them has closed. Every other trade counts by itself, as before.

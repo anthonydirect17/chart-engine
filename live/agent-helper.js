@@ -112,19 +112,34 @@ function accountBlock(a, h, sim) {
   return b && sim !== true ? b + ' is not a hero: it trades a Sim account only. Turn him Off and pick a hero first.' : '';
 }
 
-/** Off pressed: 'off' (send it), 'ask' (he holds a position: "Flatten and turn him off?"). a: his `agent` message. */
+/** Chart 1.27.0 (ChartBridge 0.6.0): a hero on a group (its strip carries group and seats). */
+const onGroup = a => !!(a && a.group && Array.isArray(a.seats));
+/** The seats holding his trade now (a group): [{ account, root, qty }]. */
+function seatsHeld(a) {
+  return onGroup(a) ? a.seats.filter(x => x && typeof x.account === 'string' && x.position && isNum(x.position.qty) && x.position.qty !== 0)
+    .map(x => ({ account: x.account, root: str(x.position.root), qty: x.position.qty })) : [];
+}
+const heldText = h => (h.qty > 0 ? 'long ' : 'short ') + Math.abs(h.qty) + (h.root ? ' ' + h.root : '') + ' on ' + h.account;
+
+/** Off pressed: 'off' (send it), 'ask' (he holds a position: "Flatten and turn him off?"). a: his `agent` message. A group:
+ *  'ask' while any seat holds his trade. */
 function offStep(a) {
+  if (onGroup(a) && seatsHeld(a).length) return 'ask';
   const p = a && a.position;
   return p && isNum(p.qty) && p.qty !== 0 ? 'ask' : 'off';
 }
 
-/** The question for Off in a trade. */
+/** The question for Off in a trade (a group: every seat holding his trade). */
 function offQuestion(a, name) {
+  const held = seatsHeld(a);
+  if (held.length) return (name || 'He') + ' holds ' + held.map(heldText).join(', ') + '. Flatten and turn him off?';
   const p = (a && a.position) || {};
   return (name || 'He') + ' holds ' + (p.qty > 0 ? 'long ' : 'short ') + Math.abs(p.qty || 0) + (p.root ? ' ' + p.root : '') + ' on ' + str(a && a.account) + '. Flatten and turn him off?';
 }
+/** What the job flattens, in words: "SIM-A MNQ" or, for a group, "SIM-A MNQ, SIM-B MNQ". */
+const jobWhere = j => (Array.isArray(j.seats) && j.seats.length ? j.seats.map(x => x.account + ' ' + x.root).join(', ') : j.account + ' ' + j.root);
 
-/** Is he flat now (his `agent` message)? */
+/** Is he flat now (his `agent` message)? A group: every seat. */
 function flat(a) { return offStep(a) === 'off'; }
 
 /**
@@ -135,8 +150,14 @@ function flat(a) { return offStep(a) === 'off'; }
 function flatOffStart(a, now) {
   const x = a || {}, p = x.position || {};
   if (flat(x)) return { job: { agent: str(x.agent), account: str(x.account), root: str(p.root), phase: 'off', until: 0 }, action: 'off' };
-  // chart 1.27.0 (ChartBridge 0.6.0): a group's trade is on several accounts; this flattens one, so nothing is guessed: nothing sent
-  if (x.group && Array.isArray(x.seats) && x.seats.length) return { error: 'He trades group ' + str(x.group.name || x.group.id) + ' (' + x.seats.map(s => s && s.account).filter(Boolean).join(', ') + '): nothing was sent. Flatten every seat on the main page or in NinjaTrader, then press Off.' };
+  // chart 1.27.0 (ChartBridge 0.6.0): a group, as one account: Shadow first (no new entries), then the page's Flatten on every
+  // seat holding his trade (one per seat and root), then Off once every seat is flat
+  if (onGroup(x)) {
+    const held = seatsHeld(x);
+    if (held.some(h => !h.root)) return { error: 'A seat\'s instrument is not known: nothing was sent. Flatten in NinjaTrader, then press Off.' };
+    const gj = { agent: str(x.agent), account: '', root: '', seats: held.map(h => ({ account: h.account, root: h.root })), phase: x.mode === 'shadow' ? 'flatten' : 'shadow', until: now + (x.mode === 'shadow' ? FLAT_WAIT_MS : SHADOW_WAIT_MS) };
+    return { job: gj, action: gj.phase };
+  }
   if (!str(x.account)) return { error: 'His account is not known yet: nothing was sent. Flatten in NinjaTrader, then press Off.' };
   if (!str(p.root)) return { error: 'His position\'s instrument is not known: nothing was sent. Flatten in NinjaTrader, then press Off.' };
   const job = { agent: str(x.agent), account: x.account, root: p.root, phase: x.mode === 'shadow' ? 'flatten' : 'shadow', until: now + (x.mode === 'shadow' ? FLAT_WAIT_MS : SHADOW_WAIT_MS) };
@@ -152,18 +173,18 @@ function flatOffStep(job, a, now, sent) {
   const j = job, x = a || {};
   if (!j) return { action: '', job: null, line: '' };
   if (!a) {                                     // no word from ChartBridge (the connection dropped): never read as flat
-    if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not answer: ' + (j.phase === 'shadow' ? 'nothing was flattened and he stays on' : 'he may still hold ' + j.account + ' ' + j.root + ' and stays on') + '. Check NinjaTrader, then press Off.' };
+    if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not answer: ' + (j.phase === 'shadow' ? 'nothing was flattened and he stays on' : 'he may still hold ' + jobWhere(j) + ' and stays on') + '. Check NinjaTrader, then press Off.' };
     return { action: '', job: j, line: 'Waiting for ChartBridge (the connection dropped): nothing is read as flat meanwhile...' };
   }
   if (j.phase === 'shadow') {
-    if (x.mode === 'shadow') return { action: flat(x) ? 'off' : 'flatten', job: Object.assign({}, j, { phase: flat(x) ? 'off' : 'flatten', until: now + FLAT_WAIT_MS }), line: flat(x) ? 'In Shadow and flat: turning him off...' : 'In Shadow: flattening ' + j.account + ' ' + j.root + '...' };
+    if (x.mode === 'shadow') return { action: flat(x) ? 'off' : 'flatten', job: Object.assign({}, j, { phase: flat(x) ? 'off' : 'flatten', until: now + FLAT_WAIT_MS }), line: flat(x) ? 'In Shadow and flat: turning him off...' : 'In Shadow: flattening ' + jobWhere(j) + '...' };
     if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not put him in Shadow within ' + SHADOW_WAIT_MS / 1000 + ' s: nothing was flattened and he stays on.' };
     return { action: '', job: j, line: 'Putting him in Shadow first (no new entries)...' };
   }
   if (j.phase === 'flatten') {
     if (sent && flat(x)) return { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'Flat: turning him off...' };
-    if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + FLAT_WAIT_MS / 1000 + ' s after the Flatten for ' + j.account + ' ' + j.root + ': he stays on, in Shadow. Flatten in NinjaTrader, then press Off.' };
-    return { action: '', job: j, line: 'Flatten sent for ' + j.account + ' ' + j.root + ' (he is in Shadow): turning him off once flat...' };
+    if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + FLAT_WAIT_MS / 1000 + ' s after the Flatten for ' + jobWhere(j) + ': he stays on, in Shadow. Flatten in NinjaTrader, then press Off.' };
+    return { action: '', job: j, line: 'Flatten sent for ' + jobWhere(j) + ' (he is in Shadow): turning him off once flat...' };
   }
   return { action: '', job: j, line: 'Turning him off...' };
 }
@@ -222,5 +243,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
 });
