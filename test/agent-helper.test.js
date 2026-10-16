@@ -183,3 +183,69 @@ test('wiring: loaded before agent.js on both pages, installed, the workspace pas
   const js = read('live', 'agent-helper.js');
   assert.doesNotMatch(js, /type: ?'(order|flatten|agentAnswer)'/);
 });
+
+/* chart 1.29.1: a missed GET /status (a timeout, no connection, a 500) keeps the last good answer for one poll only */
+test('the missed-poll grace: one miss keeps the last good answer, the second in a row is down', () => {
+  const T = 1000000, ok = { reach: 'ok', body: STATUS }, down = { reach: 'down', body: null };
+  let st = AH.pollStep(null, ok, T);
+  assert.deepEqual(st, { reach: 'ok', status: STATUS, why: '', okAt: T, misses: 0, slow: false });
+  /* one miss: the old answer stays, the agent is still On and his spend still shows; slow says so */
+  const one = AH.pollStep(st, down, T + AH.POLL_MS + 4000);
+  assert.equal(one.reach, 'ok'); assert.equal(one.status, STATUS); assert.equal(one.slow, true); assert.equal(one.misses, 1);
+  assert.equal(AH.stateText(one.status.agents.demo, one.reach), 'On: sample-build-2.');
+  assert.deepEqual(AH.spendText(one.status.agents.demo.spend), { session: '$1.84', overall: '$1,234.50' });
+  /* a 500 is a miss as well, and so is a 200 with no agents */
+  assert.equal(AH.pollStep(st, { reach: 'down', body: { error: 'HTTP 500' } }, T + 3000).slow, true);
+  assert.equal(AH.pollStep(st, { reach: 'ok', body: { v: 1 } }, T + 3000).slow, true);
+  /* the second miss in a row: down, no status, the words as before */
+  const two = AH.pollStep(one, down, T + 6000);
+  assert.deepEqual(two, { reach: 'down', status: null, why: '', okAt: T, misses: 2, slow: false });
+  assert.equal(AH.stateText(null, two.reach), 'The PC helper is not running on this PC (tools\\manrae_helper.ps1 register).');
+  assert.equal(AH.pollStep(two, down, T + 9000).reach, 'down', 'stays down');
+  /* a helper really gone (no connection at once, every POLL_MS): down on the second poll, about 6 s after the last answer */
+  assert.equal(AH.pollStep(AH.pollStep(st, down, T + AH.POLL_MS), down, T + 2 * AH.POLL_MS).reach, 'down');
+  /* a good answer too old for the grace (the tab was hidden, polls stopped): the first miss is down */
+  assert.equal(AH.pollStep(st, down, T + AH.MISS_GRACE_MS + 1).reach, 'down');
+  assert.equal(AH.pollStep(st, down, T + AH.MISS_GRACE_MS).reach, 'ok', 'arrived at most MISS_GRACE_MS before the miss');
+  /* no good answer yet (a PC with no helper): down at once */
+  assert.equal(AH.pollStep(null, down, T).reach, 'down');
+  assert.equal(AH.pollStep({ reach: '', status: null, okAt: 0, misses: 0 }, down, T).reach, 'down');
+});
+
+test('the missed-poll grace: recovery, and 401, 403, 400, 409 exactly as before', () => {
+  const T = 1000000, ok = { reach: 'ok', body: STATUS }, down = { reach: 'down', body: null };
+  const st = AH.pollStep(null, ok, T), one = AH.pollStep(st, down, T + 3000), two = AH.pollStep(one, down, T + 6000);
+  /* recovery: the next good answer ends the grace or the down, and a fresh miss after it gets the grace again */
+  for (const [from, at] of [[one, T + 6000], [two, T + 9000]]) {
+    const back = AH.pollStep(from, ok, at);
+    assert.deepEqual(back, { reach: 'ok', status: STATUS, why: '', okAt: at, misses: 0, slow: false });
+    assert.equal(AH.pollStep(back, down, at + 3000).slow, true);
+  }
+  /* the page refused: never held, from a good answer or from the grace */
+  for (const from of [st, one]) {
+    assert.deepEqual(AH.pollStep(from, { reach: 'locked', body: { error: 'unlock' } }, T + 3000), { reach: 'locked', status: null, why: 'unlock', okAt: 0, misses: 0, slow: false });
+    assert.deepEqual(AH.pollStep(from, { reach: 'forbidden', body: { error: 'only ChartBridge\'s own page' } }, T + 3000), { reach: 'forbidden', status: null, why: 'only ChartBridge\'s own page', okAt: 0, misses: 0, slow: false });
+    assert.deepEqual(AH.pollStep(from, { reach: 'refused', body: { error: 'bad request' } }, T + 3000), { reach: 'refused', status: null, why: 'bad request', okAt: 0, misses: 0, slow: false });
+  }
+  assert.equal(AH.stateText(null, 'forbidden', 'only ChartBridge\'s own page'), 'The PC helper refused this page: only ChartBridge\'s own page.');
+  assert.equal(AH.stateText(null, 'locked'), 'Unlock ChartBridge\'s page with its PIN.');
+  /* a miss after a refusal is down at once (no good answer to keep) */
+  assert.equal(AH.pollStep(AH.pollStep(st, { reach: 'locked', body: null }, T + 3000), down, T + 6000).reach, 'down');
+  /* nothing starts on an old answer: Assign hero's free slot is refused while slow (the page passes reach 'slow') */
+  assert.match(AH.freeSlot([{ agent: 'demo' }], STATUS, 'slow').error, /not answering/);
+  assert.match(AH.slotFree({ agent: 'demo' }, STATUS, 'slow'), /not answering/);
+  assert.match(AH.SLOW_TEXT, /slow/); assert.doesNotMatch(AH.SLOW_TEXT, /not running/);
+});
+
+test('the missed-poll grace is wired: agent.js folds every poll through pollStep and holds On while slow', () => {
+  const js = read('live', 'agent.js');
+  assert.match(js, /const st = AH\.pollStep\(H, r, Date\.now\(\)\);/);
+  assert.match(js, /isOn \? on \|\| !sel\.value \|\| H\.slow : !on/);
+  assert.match(js, /if \(H\.slow\) \{ helperSay\(SLOW_SENT\); renderPanel\(\); return; \}/);
+  assert.match(js, /function assignPressed[^]*?if \(H\.slow\) \{ boardSay\(SLOW_SENT\); return; \}[^]*?AH\.assignStart\(/);
+  assert.match(js, /else if \(k === 'bYes'\) \{ if \(B\.ask && H\.slow\) boardSay\(SLOW_SENT\);/);
+  assert.match(js, /H\.reach !== 'ok' \|\| H\.slow \|\| !r\.startBuild/);
+  assert.match(js, /AH\.assignStart\(g, agents\.list\(\), H\.status, helperReach\(\)/);
+  assert.equal(AH.POLL_MS, 3000); assert.equal(AH.TIMEOUT_MS, 4000); assert.equal(AH.MISS_GRACE_MS, 8000);
+  assert.ok(AH.POLL_MS + AH.TIMEOUT_MS <= AH.MISS_GRACE_MS, 'a poll that times out right after a good answer still gets the grace');
+});

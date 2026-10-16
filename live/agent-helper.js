@@ -25,6 +25,9 @@
  *              (absent: "tier unknown", with why). tierFit says how a hero's tier fits a group's Type (Evals, Funded, not set):
  *              shown only, never enforced; every hero is listed for every group.
  *   Proving    chart 1.29.0 (SPEC CE-2): a league seat's "PROVING n of 100" from its build row's liveN (proving).
+ *   Missed poll chart 1.29.1: one GET /status that times out, fails to connect or answers 5xx keeps the last good answer
+ *              (pollStep) while that answer arrived at most MISS_GRACE_MS before the miss; the next miss in a row is 'down'. In the grace slow is
+ *              true: the page shows "PC helper slow" and nothing starts on the old answer (On, Start in Shadow, Assign wait).
  *   Assign     the heroes-on-duty board's Assign hero (freeSlot, assignStart, assignStep): a free slot is an agent id on None
  *              and Off; agentAccount {group} first (ChartBridge checks it), then POST /on with the group's default hero, in Shadow.
  *
@@ -41,6 +44,7 @@ const PORT = 8767;
 const BASE = 'http://localhost:' + PORT;
 const POLL_MS = 3000;
 const TIMEOUT_MS = 4000;
+const MISS_GRACE_MS = 8000;
 const FLAT_WAIT_MS = 30000;
 const SHADOW_WAIT_MS = 10000;
 const HHMM = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
@@ -69,6 +73,27 @@ function stateText(h, reach, why) {
   if (h.running) return 'On' + (h.runningBuild ? ': ' + (h.hero || h.runningBuild) : '') + '.';
   return 'On, not running yet: ' + str(h.why) + '.';
 }
+
+/**
+ * Chart 1.29.1: one GET /status answer r ({ reach, body } from the client) folded into the poll's state prev at time now:
+ * { reach, status, why, okAt, misses, slow }. A miss is reach 'down' (no answer in TIMEOUT_MS, no connection, or an HTTP
+ * status the client reads as down, 500 too) or a 200 with no agents. One miss right after a good answer that arrived at most
+ * MISS_GRACE_MS before the miss (okAt, counted from its arrival) keeps that answer (reach 'ok', the old status, slow true); a second miss in a row, or a miss after an old or no good
+ * answer, is 'down' (status null), as before. Every real answer (ok, locked 401, forbidden 403, refused 400 or 409) is taken
+ * as it comes, exactly as before the grace, and ends it.
+ */
+function pollStep(prev, r, now) {
+  const p = prev || {}, x = r || {}, b = x.body || null;
+  const why = b && typeof b.error === 'string' ? b.error : '';
+  const miss = x.reach === 'down' || (x.reach === 'ok' && !(b && b.agents)) || !x.reach;
+  if (!miss) return { reach: x.reach, status: x.reach === 'ok' ? b : null, why, okAt: x.reach === 'ok' ? now : 0, misses: 0, slow: false };
+  const misses = (p.misses || 0) + 1;
+  if (misses === 1 && p.reach === 'ok' && p.status && isNum(p.okAt) && p.okAt > 0 && now - p.okAt <= MISS_GRACE_MS)
+    return { reach: 'ok', status: p.status, why: p.why || '', okAt: p.okAt, misses, slow: true };
+  return { reach: 'down', status: null, why, okAt: p.okAt || 0, misses, slow: false };
+}
+/** The quiet note while one poll was missed (pollStep's slow). */
+const SLOW_TEXT = 'PC helper slow';
 
 /* ---------------- tiers (chart 1.28.0, SPEC CE-1): shown only, nothing enforced */
 const TIERS = ['Not ready', 'Acceptable', 'Good', 'Great', 'Exceptional'];
@@ -397,5 +422,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
 });

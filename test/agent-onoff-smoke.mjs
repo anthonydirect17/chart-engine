@@ -16,7 +16,7 @@
 //     LIVE account stay closed;
 //   - every helper call carries the PIN unlock; a PC with no helper says so and offers no On.
 //   npm run smoke:onoff      (CHROMIUM_PATH=/path/to/chrome; ONOFF_SMOKE_PORT; SHOTS=dir)
-// Screenshots: agent-onoff-off, agent-onoff-on, agent-onoff-ask, agent-onoff-notflat (.png in test/out).
+// Screenshots: agent-onoff-off, agent-onoff-slow, agent-onoff-on, agent-onoff-ask, agent-onoff-notflat (.png in test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -121,10 +121,41 @@ try {
   await until(async () => (await text('#agView [data-k="hWhy"]')) === 'The PC helper refused this page: only ChartBridge\'s own page.', 'a 403 says what was refused', 15000);
   helper.setForbid(false);
   await until(async () => /^On/.test(await text('#agView [data-k="hWhy"]')), 'the helper answers again', 15000);
+  /* chart 1.29.1: one missed poll (a 500) never flips the tab; two in a row say not running; the next answer brings it back */
+  console.log('one missed poll keeps the tab, two in a row say not running');
+  const seen = async () => ({ why: await text('#agView [data-k="hWhy"]'), note: await text('#agView [data-k="hNote"]'), sess: await text('#agView [data-k="hSess"]'),
+    pick: await page.evaluate(() => document.querySelector('#agView [data-k="hPick"]').value), off: await disabled('#agView [data-onoff="off"]'), on: await disabled('#agView [data-onoff="on"]') });
+  const statusAsks = () => helper.calls.filter(c => c.route === 'GET /status').length;
+  const asked0 = statusAsks();
+  helper.setFail(1);
+  const marks = [];
+  const t0 = Date.now();
+  let shot = false;
+  while (Date.now() - t0 < 7500) {
+    const m = await seen(); marks.push(m);
+    if (!shot && /slow/.test(m.note || '')) { shot = true; await page.screenshot({ path: path.join(SHOTS, 'agent-onoff-slow.png'), clip: { x: 0, y: 0, width: 760, height: 900 } }); }
+    await sleep(100);
+  }
+  check(statusAsks() >= asked0 + 2, 'the helper was asked at least twice in 7.5 s (' + (statusAsks() - asked0) + ')');
+  check(marks.every(m => /^On/.test(m.why) && m.sess === '$1.84' && m.pick === 'sample-build-2' && !m.off), 'one 500: the line, the spend, the build and Off stay as the last good answer at every sample (' + marks.length + ' samples): ' + [...new Set(marks.map(m => m.why))].join(' | '));
+  const slow = marks.find(m => /slow/.test(m.note || ''));
+  check(!!slow && slow.on, 'in the grace a quiet note says the helper is slow, and On is held: ' + (slow ? slow.note : 'never seen'));
+  check(marks.some(m => !/slow/.test(m.note || '')) && /slow/.test(marks[0].note || '') === false, 'the note goes again with the next answer');
+  helper.setFail(2);
+  await until(async () => /PC helper is not running on this PC/.test(await text('#agView [data-k="hWhy"]')), 'two 500s in a row: not running', 15000);
+  check((await text('#agView [data-k="hSess"]')) === '-', 'down: the spend shows -');
+  await until(async () => /^On/.test(await text('#agView [data-k="hWhy"]')), 'the next good answer brings the tab back', 15000);
   console.log('Off when flat: at once');
   await page.click('#agView [data-onoff="off"]');
   await until(async () => !(await agentNow()).connected, 'Off: the helper ended him');
   check(!(await visible('#agView [data-k="hAsk"]')) && helper.calls.filter(c => c.route === 'POST /off').length === 1, 'flat: no question, one POST /off');
+  /* chart 1.29.1: with him Off, one missed poll holds On (nothing starts on an old answer) and the next answer opens it again */
+  await until(async () => !(await disabled('#agView [data-onoff="on"]')), 'On offered while he is Off');
+  helper.setFail(1);
+  const graceOn = await until(async () => /slow/.test((await text('#agView [data-k="hNote"]')) || '') ? { on: await disabled('#agView [data-onoff="on"]') } : null, 'the grace while he is Off', 10000);
+  check(!!graceOn && graceOn.on === true && /^Off/.test(await text('#agView [data-k="hWhy"]')), 'he is Off and one 500: On is held during the grace, the line still says Off');
+  await until(async () => !/slow/.test((await text('#agView [data-k="hNote"]')) || '') && !(await disabled('#agView [data-onoff="on"]')), 'the next answer offers On again', 10000);
+  check(helper.calls.filter(c => c.route === 'POST /on').length === 1, 'nothing was started during the grace (one POST /on in all so far)');
 
   console.log('On with a hero: his name in the header, the build and stamp in the details');
   await until(async () => !(await disabled('#agView [data-k="hPick"]')), 'the picker opens again');

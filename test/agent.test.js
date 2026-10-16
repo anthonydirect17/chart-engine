@@ -478,9 +478,9 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.29.0');   // 1.29.0: group stand-downs and league seats (needs ChartBridge 0.6.2); 1.28.0: the heroes-on-duty board and a group's default hero (needs ChartBridge 0.6.1); 1.27.0: group trading (needs ChartBridge 0.6.0); 1.26.0: prop groups and real account state (needs ChartBridge 0.5.8); 1.25.0: the plan id, None in every tab (needs ChartBridge 0.5.7); 1.24.0: the feed delay split (ChartBridge 0.5.6's clock check); 1.23.1: Layout 5 polish (Change the rules in the Rules header); 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.22.0 removed the single chart page; 1.21.0 needs ChartBridge 0.5.2
-  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.29\.0'/);
-  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.29\.0/);
+  assert.equal(JSON.parse(read('package.json')).version, '1.29.1');   // 1.29.1: one missed PC helper poll no longer flips the Agent tab (page only); 1.29.0: group stand-downs and league seats (needs ChartBridge 0.6.2); 1.28.0: the heroes-on-duty board and a group's default hero (needs ChartBridge 0.6.1); 1.27.0: group trading (needs ChartBridge 0.6.0); 1.26.0: prop groups and real account state (needs ChartBridge 0.5.8); 1.25.0: the plan id, None in every tab (needs ChartBridge 0.5.7); 1.24.0: the feed delay split (ChartBridge 0.5.6's clock check); 1.23.1: Layout 5 polish (Change the rules in the Rules header); 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.22.0 removed the single chart page; 1.21.0 needs ChartBridge 0.5.2
+  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.29\.1'/);
+  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.29\.1/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent-grid.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md', 'docs/MOTION.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 
