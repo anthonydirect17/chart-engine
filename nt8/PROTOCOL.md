@@ -2676,6 +2676,14 @@ Where the contract left a detail open, the safest simple choice was taken and is
   trading: the stop and target stay" every 10 s, and it tries again each pass. Only the cancel step waits for it: once its
   cancels were sent, the market close goes whatever the feed shows. A close that ends unfilled in open hours (rejected,
   cancelled) puts the stop back at once (as below), the error says so, and the next try waits 30 s with that stop in place.
+  0.6.3 (audit C7, Anthony's decision): no trade because NinjaTrader's **data feed is down** (a drop of the data connection
+  seen, no trade or Connected since; the same state as `/diag` `gate.feedDown`) is not a halt: with the account Connected and
+  the market open by the calendar (not shut, above) the flatten goes anyway, and the pages get one alarm naming it ("Agent
+  <id>: flattening <root> on <account> (<why>) with NinjaTrader's data feed down: no trade seen for 5 s because the data
+  connection is lost, the account is Connected and the market is open by the calendar, so the close goes without a fresh
+  price; check the fill in NinjaTrader"). With the feed down and the account not Connected nothing can go: NOT FLAT says "no
+  trade seen for 5 s: NinjaTrader's data feed is down and <account> is not Connected, so ChartBridge cannot close it now; act
+  in NinjaTrader now". The feed up and no trade is a real halt: as before.
   A stop placed again is cancelled only once the market trades again (review E2): with no fresh trade the stop stays and NOT
   FLAT says "market not trading: its stop placed again at <price> stays". When the shut hours arrive after its legs were
   already cancelled (the close not filled), the job places the stop again (lead's default: a position is never left without a

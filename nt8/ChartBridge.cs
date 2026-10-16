@@ -3464,6 +3464,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The feed (review 3 S-A, S-B, S-E): up since listening began, or since the first trade or Connected after a drop.
         private static long feedUpSinceUtcTicks, firstTradeUtcTicks;
         private static int feedDown;
+        // 0.6.3 (audit C7): NinjaTrader's data connection is down (a drop seen, no trade or Connected since): the agents' flat time
+        // reads it to tell a lost feed from a halt.
+        public static bool FeedDown { get { return Volatile.Read(ref feedDown) != 0; } }
         private static void FeedUp()
         {
             long now = ChartBridgeTime.ToUtc(NowNt()).Ticks;

@@ -1166,6 +1166,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public string Tag;             // the tag of that stop
             public Order ReStop;           // the stop placed again
             public bool ReStopTried;       // tried in this shut spell (once)
+            public bool FeedSaid;          // 0.6.3 (audit C7): the flatten without a fresh price (the data feed down) was said once
             public bool CloseHandled;      // its last close's end was looked at (a close that did not fill: the stop placed again; review D3)
             public double HoldUntilMs;     // after a close that could not go: the stop stays, the next try waits until then
             public bool GateAgain;         // a stop was placed again: its cancel waits for a trading market too (review E2)
@@ -1771,14 +1772,31 @@ namespace NinjaTrader.NinjaScript.AddOns
                     double lastPx;
                     if (j.Owned && (p1 != 0 || p2 != 0) && (!j.CancelsSent || j.GateAgain) && !ChartBridgeOrders.AgentFreshLast(j.Root, ChartBridgeAgents.TradingFreshMs, out lastPx))
                     {
-                        if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)
+                        // 0.6.3 (audit C7, Anthony's decision): no trade seen because the data feed is down, the account Connected and
+                        // the market open by the calendar (not shut, above): the flatten goes anyway, saying so. The feed up and no
+                        // trade is a real halt: as before, the stop and target stay and ChartBridge tries again when it trades.
+                        bool feedDown = ChartBridgeServer.FeedDown, acctUp = ChartBridgeAccounts.ConnectionText(a) == "connected";
+                        if (feedDown && acctUp)
                         {
-                            j.LastErrorMs = now;
-                            string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
-                                          " still shows " + p1 + "; market not trading: " + (j.GateAgain ? "its stop placed again at " + CbJson.Num(j.StopPx) + " stays; ChartBridge tries again when it trades" : "the stop and target stay; ChartBridge tries again when it trades");
-                            ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
+                            if (!j.FeedSaid)
+                            {
+                                j.FeedSaid = true;
+                                string text = "Agent " + Id + ": flattening " + j.Root + " on " + a.Name + " (" + j.Why + ") with NinjaTrader's data feed down: no trade seen for 5 s because the data connection is lost, the account is Connected and the market is open by the calendar, so the close goes without a fresh price; check the fill in NinjaTrader";
+                                ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
+                            }
                         }
-                        continue;
+                        else
+                        {
+                            if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)
+                            {
+                                j.LastErrorMs = now;
+                                string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
+                                              " still shows " + p1 + "; " + (feedDown ? "no trade seen for 5 s: NinjaTrader's data feed is down and " + a.Name + " is not Connected, so ChartBridge cannot close it now; act in NinjaTrader now"
+                                              : "market not trading: " + (j.GateAgain ? "its stop placed again at " + CbJson.Num(j.StopPx) + " stays; ChartBridge tries again when it trades" : "the stop and target stay; ChartBridge tries again when it trades"));
+                                ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
+                            }
+                            continue;
+                        }
                     }
                     string exitWhy;
                     bool up = ChartBridgeAccounts.ExitAllowed(a, out exitWhy);

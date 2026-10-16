@@ -2990,6 +2990,49 @@ public static class AgentHarness
             et = new DateTime(2026, 10, 9, 10, 0, 0);
         });
 
+        // 0.6.3 (audit C7, Anthony's decision): at the flat time with the data feed down, the account Connected and the market open by
+        // the calendar, the flatten goes anyway and says why; the account not Connected: nothing can go, the text names the feed
+        Part("0.6.3 C7 feed down", () =>
+        {
+            FieldInfo fd = typeof(ChartBridgeServer).GetField("feedDown", PS);
+            try
+            {
+                Fresh();
+                Order e = PlacedOn(sime, Good(NewId()));
+                if (e == null) { Check(false, "0.6.3 C7: an entry was placed: " + AgentReject()); return; }
+                Fill(e, 1, 24999);
+                StaleLast("MNQ", 60000);
+                fd.SetValue(null, 1);   // NinjaTrader's data connection lost; the order connection still up
+                sime.Connection.Status = ConnectionStatus.ConnectionLost;
+                et = new DateTime(2026, 10, 9, 15, 55, 0);
+                int c0 = sime.Calls.Count, s0 = N(page);
+                Advance(12000);
+                Check(sime.Calls.Count == c0 && Legs(sime, e).Count(IsLive) == 2 && Any(page, s0, "no trade seen for 5 s: NinjaTrader's data feed is down and SIM-E is not Connected, so ChartBridge cannot close it now; act in NinjaTrader now"),
+                      "0.6.3 C7: feed down and the account not Connected: nothing sent, NOT FLAT names the feed loss (not a halt)");
+                sime.Connection.Status = ConnectionStatus.Connected;
+                int c1 = sime.Calls.Count, s1 = N(page);
+                Advance(6000);
+                Check(sime.Calls.Skip(c1).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")) && Any(page, s1, "with NinjaTrader's data feed down: no trade seen for 5 s because the data connection is lost, the account is Connected and the market is open by the calendar, so the close goes without a fresh price"),
+                      "0.6.3 C7: feed down, the account Connected, the market open by the calendar: the flatten goes anyway and says why: " + string.Join(" | ", sime.Calls.Skip(c1)));
+                Check(!Any(page, s1, "market not trading"), "0.6.3 C7: never called a halt while the feed is down");
+                SetPos(sime, mnq, 0); ClearMoves();
+                // the feed up and no trade: a real halt, as before
+                fd.SetValue(null, 0);
+                Fresh();
+                Order e2 = PlacedOn(sime, Good(NewId()));
+                if (e2 == null) { Check(false, "0.6.3 C7: a second entry was placed: " + AgentReject()); return; }
+                Fill(e2, 1, 24999);
+                StaleLast("MNQ", 60000);
+                et = new DateTime(2026, 10, 9, 15, 55, 0);
+                int c2 = sime.Calls.Count, s2 = N(page);
+                Advance(12000);
+                Check(sime.Calls.Count == c2 && Any(page, s2, "market not trading: the stop and target stay"), "0.6.3 C7: the feed up and no trade: a real halt, nothing cancelled (as before)");
+                Last2(); Advance(5000);
+                SetPos(sime, mnq, 0); ClearMoves();
+            }
+            finally { fd.SetValue(null, 0); sime.Connection.Status = ConnectionStatus.Connected; et = new DateTime(2026, 10, 9, 10, 0, 0); }
+        });
+
         // C1: the shut hours arrive after its legs were cancelled: its stop goes back at the agent's stop price, said truthfully
         Part("C1 shut", () =>
         {
