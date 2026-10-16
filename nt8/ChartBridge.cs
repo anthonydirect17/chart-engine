@@ -555,9 +555,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The last good copy's lines (null: none, or it does not read).
-        public static string[] ReadBackup(string path)
+        public static string[] ReadBackup(string path) { return ReadAny(BackupOf(path)); }
+        // A file's lines (null: none, or it does not read).
+        public static string[] ReadAny(string b)
         {
-            string b = BackupOf(path);
             try
             {
                 if (!File.Exists(b)) return null;

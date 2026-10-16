@@ -517,6 +517,8 @@ public static class BotHarness
         ChartBridgeBot.Check();
     }
 
+    // 0.6.3 (review HIGH 1): the daily reset acts only on accounts Connected for a few seconds; the harness's are, unless a case says not
+    static void SteadyAll() { Dictionary<Account, double> cs = (Dictionary<Account, double>)typeof(ChartBridgeOrders).GetField("ConnectedSince", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null); lock (cs) foreach (Account a in Account.All) if (a.Connection != null && a.Connection.Status == ConnectionStatus.Connected) cs[a] = 0; }
     static void Reconnect()
     {
         bc = new ChartBridgeClient(null, ChartBridgeBot.BotClientId);
@@ -908,10 +910,10 @@ public static class BotHarness
         try
         {
             int s0 = page.Count;
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101" && !File.Exists(Path.Combine(home, "ChartBridge", "daily-reset.txt")), "0.5.7 reset: 16:59 New York (EDT): not yet");
             utc = new DateTime(2026, 7, 14, 21, 0, 0, DateTimeKind.Utc);   // 17:00 EDT
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101" && page.Skip(s0).Any(x => x.Contains("\"level\":\"warn\"") && x.Contains("Daily reset (17:00 ET): the bot stays on Sim101: it has a position or a working order there")),
                   "0.5.7 reset: 17:00 EDT: the bot with a working entry is skipped, the pages get a note naming it");
             Check(File_("daily-reset.txt").Contains("day\t2026-07-14"), "0.5.7 reset: the day it ran is saved (daily-reset.txt)");
@@ -924,21 +926,21 @@ public static class BotHarness
             working.OrderState = OrderState.Cancelled; Update(working);
             Settle();
             utc = new DateTime(2026, 7, 14, 21, 30, 0, DateTimeKind.Utc);   // 17:30 EDT, now flat: once per day, not again
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101" && page.Skip(s1).Count(x => x.Contains("Daily reset")) == 0, "0.5.7 reset: once per day: not again in the same break");
             // a restart in the break: the saved day holds
             ChartBridgeBranches.Forget();
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101", "0.5.7 reset: a restart in the same break does not run it again (daily-reset.txt)");
             // the next day, flat: None. Winter (EST): 21:30 UTC is 16:30 New York, not the break; 22:00 UTC is 17:00
             File.WriteAllText(Path.Combine(home, "ChartBridge", "daily-reset.txt"), "day\t2026-12-14\n");   // 0.6.3: the 14th's break was seen (else this is a missed break, caught up)
             ChartBridgeBranches.Forget();
             utc = new DateTime(2026, 12, 15, 21, 30, 0, DateTimeKind.Utc);
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101", "0.5.7 reset: 21:30 UTC in December is 16:30 EST: not the break (daylight saving)");
             int s2 = page.Count;
             utc = new DateTime(2026, 12, 15, 22, 0, 0, DateTimeKind.Utc);
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "-" && File_("bot-account.txt").Contains("account\t-") && page.Skip(s2).Any(x => x.Contains("Daily reset (17:00 ET): the bot is on None now")) &&
                   File_("bot.log").Contains("account None (nothing trades), was Sim101, by the daily reset (17:00 ET)"),
                   "0.5.7 reset: 17:00 EST, the bot flat with no working order: None, saved, the pages told");
@@ -951,7 +953,7 @@ public static class BotHarness
             ChartBridgeBranches.Forget();
             try { File.Delete(Path.Combine(home, "ChartBridge", "daily-reset.txt")); } catch (Exception) { }
             Page(AccountMsg("Sim101"));
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101", "0.5.7 reset: never outside the break (18:00 EST)");
 
             // 0.6.3 (audit C1): a break missed while ChartBridge was off is caught up on the next Check (and at start)
@@ -959,17 +961,17 @@ public static class BotHarness
             File.WriteAllText(rf, "day\t2026-12-14\n");
             ChartBridgeBranches.Forget();
             utc = new DateTime(2026, 12, 15, 21, 30, 0, DateTimeKind.Utc);   // 16:30 EST: the 17:00 of the 14th is the latest; done
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101" && File_("daily-reset.txt").Contains("day\t2026-12-14"), "0.6.3 C1: 16:30, the last reset is the latest 17:00 (the day before): nothing");
             int s3 = page.Count;
             utc = new DateTime(2026, 12, 16, 0, 0, 0, DateTimeKind.Utc);    // 19:00 EST on the 15th: the PC was off from 16:30, the break was missed
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "-" && File_("daily-reset.txt").Contains("day\t2026-12-15") &&
                   page.Skip(s3).Any(x => x.Contains("Daily reset (17:00 ET, caught up now: ChartBridge was not running at 17:00 ET on 2026-12-15): the bot is on None now")),
                   "0.6.3 C1: the clock jumps from 16:30 to 19:00: the missed reset runs now, the bot is on None, the pages are told it was caught up");
             Page(AccountMsg("Sim101"));
             ChartBridgeBranches.Forget();
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101", "0.6.3 C1: caught up once: a restart the same evening does not run it again, the account chosen after it stays");
             // a weekend: off from Friday 16:30 to Monday 09:00 (the latest 17:00 is Sunday's); the skip rule holds (a working entry)
             File.WriteAllText(rf, "day\t2026-12-17\n");
@@ -979,7 +981,7 @@ public static class BotHarness
             Order busy = Newest(sim);
             int s4 = page.Count;
             utc = new DateTime(2026, 12, 21, 14, 0, 0, DateTimeKind.Utc);   // Monday 09:00 EST
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(busy != null && ChartBridgeBot.BotAccount == "Sim101" && File_("daily-reset.txt").Contains("day\t2026-12-20") &&
                   page.Skip(s4).Any(x => x.Contains("\"level\":\"warn\"") && x.Contains("caught up now: ChartBridge was not running at 17:00 ET on 2026-12-20): the bot stays on Sim101: it has a position or a working order there")),
                   "0.6.3 C1: a weekend off: caught up Monday morning, the bot with a working entry is skipped with the same note");
@@ -992,11 +994,11 @@ public static class BotHarness
             Settle();
             File.WriteAllText(rf, "day\t2027-01-05\n");   // a day ahead of now (the clock moved back): not due
             ChartBridgeBranches.Forget();
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101", "0.6.3 C1: a saved day ahead of now (the clock moved back) is not a missed break");
             try { File.Delete(rf); } catch (Exception) { }
             ChartBridgeBranches.Forget();
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101", "0.6.3 C1: no daily-reset.txt is not a missed break: it waits for the next break, as before");
         }
         finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }

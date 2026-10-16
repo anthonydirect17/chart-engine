@@ -1704,6 +1704,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // seconds, and any connection status event (see WatchConnections) starts every clock again, so a
         // drop shorter than 2 seconds is not missed. While NinjaTrader reconnects it can show orders
         // before positions; nothing that cancels legs may act on that picture.
+        // 0.6.3 (review HIGH 1): Connected for at least ms on the same clock (ChartBridgeAgent.ReconnectSettleMs for the daily reset).
+        internal static bool UpFor(Account a, double ms)
+        {
+            double now = ChartBridgeTime.NowUtcMs();
+            Steady(a, now);   // starts the clock on a first look
+            lock (ConnectedSince) { double since; return StatusOf(a) == "Connected" && ConnectedSince.TryGetValue(a, out since) && now - since >= ms; }
+        }
+
         private static bool Steady(Account a, double now)
         {
             bool up = StatusOf(a) == "Connected";

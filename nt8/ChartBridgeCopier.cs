@@ -702,6 +702,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             string l;
             lock (Lk) l = leader;
             if (l == null || ChartBridgeBranches.KeepThroughReset("copier", l)) return null;
+            string unk = ChartBridgeBranches.UnknownWhy(Find(l), l);   // 0.6.3 (review HIGH 1)
+            if (unk != null) return ChartBridgeBranches.WaitWords("the copier's leader", l, unk);
             if (!ChartBridgeBranches.Idle(Find(l))) return ChartBridgeBranches.SkipWords("the copier's leader", l);
             string why = ClearLeader(null, false, "by the daily reset (17:00 ET)");
             return why == null ? "" : "the copier's leader stays " + l + ": " + why;
@@ -718,6 +720,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 catch (Exception) { return null; }
                 string l = lines.Select(x => x.Split('\t')).Where(p => p.Length == 2 && p[0] == "leader" && p[1].Length > 0).Select(p => p[1]).FirstOrDefault();
                 if (l == null || ChartBridgeBranches.KeepThroughReset("copier", l)) return null;
+                string unk = ChartBridgeBranches.UnknownWhy(Find(l), l);   // 0.6.3 (review HIGH 1)
+                if (unk != null) return ChartBridgeBranches.WaitWords("the copier's leader (the copier is off)", l, unk);
                 if (!ChartBridgeBranches.Idle(Find(l))) return ChartBridgeBranches.SkipWords("the copier's leader (the copier is off)", l);
                 try
                 {

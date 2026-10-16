@@ -2289,13 +2289,13 @@ public static class AgentHarness
             try
             {
                 int s0 = N(page);
-                ChartBridgeBranches.Check();
+                SteadyAll(); ChartBridgeBranches.Check();
                 Check(M.GroupId == "g1" && Any(page, s0, "Daily reset (17:00 ET): agent manrae stays on group Lucid (SIM-A, SIM-B, SIM-C): SIM-A, SIM-B, SIM-C have a position or a working order"),
                       "0.6.0 reset: a seat exposed: the agent stays on its group, the note names the accounts holding something");
                 Close(simb, mnq, 25000);   // its trade closes (an execution), then every seat is flat with nothing working
                 SettleAll(); Settle(sima);
                 ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 12, 21, 5, 0, DateTimeKind.Utc);   // a Monday, flat
-                ChartBridgeBranches.Check();
+                SteadyAll(); ChartBridgeBranches.Check();
                 Check(M.GroupId == null && FileText("agent-manrae-account.txt").Contains("account\t-"), "0.6.0 reset: every seat flat and idle: None");
             }
             finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
@@ -2393,6 +2393,8 @@ public static class AgentHarness
         return seats[account];
     }
 
+    // 0.6.3 (review HIGH 1): the daily reset acts only on accounts Connected for a few seconds; the harness's are, unless a case says not
+    static void SteadyAll() { Dictionary<Account, double> cs = (Dictionary<Account, double>)typeof(ChartBridgeOrders).GetField("ConnectedSince", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null); lock (cs) foreach (Account a in Account.All) if (a.Connection != null && a.Connection.Status == ConnectionStatus.Connected) cs[a] = 0; }
     static void Part(string name, Action body) { try { body(); } catch (Exception ex) { Check(false, name + " threw: " + ex.GetType().Name + ": " + ex.Message); } }
     static void ClearMoves() { ((System.Collections.IDictionary)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null)).Clear(); }
     static HashSet<string> ReplayedSet() { return (HashSet<string>)typeof(ChartBridgeServer).GetField("Replayed", PS).GetValue(null); }
@@ -2990,6 +2992,79 @@ public static class AgentHarness
             Check(sime.Calls.Skip(c0).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")), "C1: trading again: the flatten cancels and closes");
             SetPos(sime, mnq, 0); ClearMoves();
             et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // 0.6.3 (review HIGH 1): a caught-up reset at start never puts a branch on None while its account is not known yet
+        Part("0.6.3 H1 not listed at start", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "H1: an entry was placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            Func<DateTime> was = ChartBridgeBranches.ClockUtc;
+            string rf = Path.Combine(Dir, "daily-reset.txt");
+            File.WriteAllLines(rf, new[] { "# t", "# t", "day\t2026-10-08" });
+            lock (Account.All) Account.All.Remove(sime);   // NinjaTrader just started: the broker connection is not up yet
+            bool back = false;
+            try
+            {
+                et = new DateTime(2026, 10, 12, 9, 0, 0);
+                Restart();
+                ChartBridgeBranches.Forget();
+                ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 12, 13, 0, 0, DateTimeKind.Utc);   // Monday 09:00 EDT
+                int s0 = N(page);
+                SteadyAll(); ChartBridgeBranches.Check();
+                Check(M.Account == "SIM-E" && Any(page, s0, "agent manrae stays on SIM-E for now: SIM-E is not in NinjaTrader yet, so its positions and orders are not known; its reset runs once they are") &&
+                      File.ReadAllText(rf).Contains("day\t2026-10-11") && File.ReadAllText(rf).Contains("pending\tagent:manrae"),
+                      "0.6.3 H1: SIM-E not listed at the caught-up reset: manrae keeps SIM-E, said, and kept pending (daily-reset.txt)");
+                ChartBridgeBranches.Forget();   // a restart before it is listed: still pending (from the file)
+                SteadyAll(); ChartBridgeBranches.Check();
+                Check(M.Account == "SIM-E" && File.ReadAllText(rf).Contains("pending\tagent:manrae"), "0.6.3 H1: a restart keeps it pending");
+                lock (Account.All) Account.All.Add(sime); back = true;
+                int s1 = N(page);
+                SteadyAll(); ChartBridgeBranches.Check();
+                Check(M.Account == "SIM-E" && Any(page, s1, "agent manrae stays on SIM-E: it has a position or a working order there") && !File.ReadAllText(rf).Contains("pending\tagent:manrae"),
+                      "0.6.3 H1: listed with its position: the reset runs now and keeps SIM-E (a position), nothing pending");
+            }
+            finally { if (!back) lock (Account.All) Account.All.Add(sime); ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
+            et = new DateTime(2026, 10, 12, 16, 0, 0);
+            int c0 = sime.Calls.Count;
+            Last2();
+            Advance(12000);
+            Check(sime.Calls.Skip(c0).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")), "0.6.3 H1: and its flat time still closes it: " + string.Join(" | ", sime.Calls.Skip(c0)));
+            SetPos(sime, mnq, 0); ClearMoves(); Advance(6000);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // 0.6.3 (review HIGH 1): woken from sleep: the account listed but not Connected, then only just Connected: pending; settled and flat: None
+        Part("0.6.3 H1 wake", () =>
+        {
+            Fresh();
+            Func<DateTime> was = ChartBridgeBranches.ClockUtc;
+            string rf = Path.Combine(Dir, "daily-reset.txt");
+            File.WriteAllLines(rf, new[] { "# t", "# t", "day\t2026-10-11" });
+            Dictionary<Account, double> cs = (Dictionary<Account, double>)typeof(ChartBridgeOrders).GetField("ConnectedSince", PS).GetValue(null);
+            try
+            {
+                ChartBridgeBranches.Forget();
+                ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 13, 12, 0, 0, DateTimeKind.Utc);   // Tuesday 08:00 EDT: the 12th's 17:00 was missed
+                sime.Connection.Status = ConnectionStatus.ConnectionLost;
+                int s0 = N(page);
+                SteadyAll(); ChartBridgeBranches.Check();
+                Check(M.Account == "SIM-E" && Any(page, s0, "agent manrae stays on SIM-E for now: SIM-E is not Connected"), "0.6.3 H1: woken, SIM-E not Connected yet: manrae keeps SIM-E, pending");
+                sime.Connection.Status = ConnectionStatus.Connected;
+                lock (cs) cs.Remove(sime);   // Connected this moment
+                ChartBridgeBranches.Check();
+                Check(M.Account == "SIM-E" && File.ReadAllText(rf).Contains("pending\tagent:manrae"), "0.6.3 H1: only just Connected: still pending (it settles first)");
+                lock (cs) cs[sime] = 0;   // Connected for a while now
+                int s1 = N(page);
+                ChartBridgeBranches.Check();
+                Check(M.Account == "-" && Any(page, s1, "agent manrae is on None now") && !File.ReadAllText(rf).Contains("pending\tagent:manrae"), "0.6.3 H1: settled and flat: None now, the pending line gone");
+            }
+            finally { sime.Connection.Status = ConnectionStatus.Connected; lock (cs) cs[sime] = 0; ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
+            P(AccountMsg("manrae", "SIM-E")); P(AccountMsg("demob", "SIM-B"));   // the caught-up reset put both on None
+            Check(M.Account == "SIM-E" && D.Account == "SIM-B", "0.6.3 H1: back on SIM-E and SIM-B for the cases after: " + PageReject());
+            Mode("manrae", "auto");
         });
 
         // 0.6.3 (audit C10): the laptop wakes at 16:40 with a position: the flatten names the real time, not 15:55
@@ -3897,12 +3972,14 @@ public static class AgentHarness
         try
         {
             int s0 = N(page);
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(M.Account == "SIM-E" && Any(page, s0, "Daily reset (17:00 ET): agent manrae stays on SIM-E: it has a position or a working order there"),
                   "0.5.7 reset: manrae with a working entry keeps SIM-E; the pages get a note naming it");
             Check(D.Account == "-" && FileText("agent-demob-account.txt").Contains("account\t-") && page.Skip(s0).Any(x => x.Contains("Daily reset (17:00 ET): ") && x.Contains("agent demob") && x.Contains(" on None now")) && D.StripJson().Contains("\"account\":null"),
                   "0.5.7 reset: demob, flat with nothing working on SIM-B: None, saved, the pages told");
             Check(Logged("agent demob account None (nothing trades), was SIM-B, by the daily reset (17:00 ET)"), "0.5.7 reset: logged");
+            Check(Any(page, s0, "Daily reset (17:00 ET): the bot (off) stays on SIM-Z for now: SIM-Z is not in NinjaTrader yet"),
+                  "0.6.3 H1: in the 17:00 break too, a branch on an account NinjaTrader does not list is kept (was: counted as idle and put on None)");
         }
         finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
         Settle(sime);
@@ -3926,7 +4003,7 @@ public static class AgentHarness
         {
             Check(!ChartBridgeBot.Enabled && !ChartBridgeCopier.Enabled, "0.5.7 reset (off): the bot and the copier are off");
             int s0 = N(page);
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(FileText("bot-account.txt").Contains("account\tSIM-C") && Any(page, s0, "Daily reset (17:00 ET): the bot (off) stays on SIM-C: it has a position or a working order there"),
                   "0.5.7 reset (off): the bot off with a position on its account keeps it, with a note naming it");
             Check(!FileText("copier.txt").Contains("leader\t") && FileText("copier.txt").Contains("follower\tEVAL-A\toff") && FileText("copier.txt").Contains("mode\texecutions") &&
@@ -3934,7 +4011,7 @@ public static class AgentHarness
                   "0.5.7 reset (off): the copier off, its leader flat: the leader line goes, every other line stays: " + FileText("copier.txt").Replace("\n", " | "));
             Settle(simc);
             ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 13, 21, 5, 0, DateTimeKind.Utc);   // the next day, flat
-            ChartBridgeBranches.Check();
+            SteadyAll(); ChartBridgeBranches.Check();
             Check(FileText("bot-account.txt").Contains("account\t-") && Logged("bot account None (nothing trades), was SIM-C, by the daily reset (17:00 ET; the bot channel is off)"),
                   "0.5.7 reset (off): the next day, flat: the bot off goes to None (bot-account.txt account<TAB>-)");
             ChartBridgeAgents.RefreshFiles();
@@ -4554,7 +4631,7 @@ public static class AgentHarness
             ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 9, 21, 5, 0, DateTimeKind.Utc);   // 17:05 EDT
             try
             {
-                ChartBridgeBranches.Check();
+                SteadyAll(); ChartBridgeBranches.Check();
                 Check(M.Account == "-" && !M.League && FileText("agent-manrae-account.txt").Contains("account\t-"), "0.6.2: the 17:00 reset puts the league seat on None (league off)");
             }
             finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }

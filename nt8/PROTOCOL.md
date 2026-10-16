@@ -2883,6 +2883,13 @@ with the same Idle and skip rules; its notes read "Daily reset (17:00 ET, caught
 ET on <date>): ...", and a page that signs in before the next 17:00 gets the skipped notes too. No `daily-reset.txt` (or one
 that does not read) is not a missed break: the reset waits for the next break, as before. A day ahead of now (the clock moved
 back) is not due.
+0.6.3 (review HIGH 1): **a branch whose account is not known yet is never put on None**, in the break or caught up: its account
+not listed by NinjaTrader, not Connected, or Connected for less than 3 s (a position there may not be shown yet). It keeps its
+account, the pages get one `status` `warn` ("<branch> stays on <account> for now: <why>, so its positions and orders are not
+known; its reset runs once they are"), and it stays pending: `daily-reset.txt` gets a `pending<TAB><key>` line (`bot`,
+`agent:<id>`, `copier`) after the day line, and every 2 s check tries that branch again (only that one, so a branch chosen again
+after its reset stays), also after a restart, until it is known; then the usual Idle and skip rules apply and the line goes.
+A ChartBridge before 0.6.3 reads only the day line.
 `ChartBridgeBranches.KeepThroughReset` is the one place an exception would go (Anthony is still deciding whether a branch
 running a hero on Sim101 is left alone); for now there is none. The ticket's account is each page's own, so the page applies
 the same rule to it (`LivePrefs.ticketReset`, every 5 s in the window with the ticket, and only once that connection's

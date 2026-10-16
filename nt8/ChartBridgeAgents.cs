@@ -4243,10 +4243,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (NoneNow() || ChartBridgeBranches.KeepThroughReset("agent:" + Id, GroupNow() ? KeyNow() : acct)) return null;
                 if (GroupNow())   // 0.6.0: None only when no seat is exposed and every member is idle; else the words name the accounts holding something
                 {
+                    List<string> unk = AllSeats().Select(x => ChartBridgeBranches.UnknownWhy(FindAccount(x.Name), x.Name)).Where(w => w != null).ToList();
+                    if (unk.Count > 0) return ChartBridgeBranches.WaitWords("agent " + Id, AccountWords(), string.Join("; ", unk));   // 0.6.3 (review HIGH 1)
                     List<string> busy = AllSeats().Where(x => x.Exposed() || !ChartBridgeBranches.Idle(FindAccount(x.Name))).Select(x => x.Name).ToList();
                     if (busy.Count > 0 || Exposed()) return "agent " + Id + " stays on " + AccountWords() + ": " + (busy.Count > 0 ? string.Join(", ", busy) + (busy.Count == 1 ? " has" : " have") : "it has") + " a position or a working order (it goes to None at a later reset once flat, or choose None yourself)";
                 }
-                else if (Exposed() || !ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("agent " + Id, acct);
+                else
+                {
+                    string unk = ChartBridgeBranches.UnknownWhy(FindAccount(acct), acct);   // 0.6.3 (review HIGH 1): never None on an account not known yet
+                    if (unk != null) return ChartBridgeBranches.WaitWords("agent " + Id, acct, unk);
+                    if (Exposed() || !ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("agent " + Id, acct);
+                }
                 string keep;
                 lock (Sync) keep = mode;
                 string why = GoNone("by the daily reset (17:00 ET)", keep);

@@ -1537,6 +1537,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string acct = BotAccount;
             if (ChartBridgeBranches.IsNone(acct) || ChartBridgeBranches.KeepThroughReset("bot", acct)) return null;
+            string unk = ChartBridgeBranches.UnknownWhy(FindAccount(acct), acct);   // 0.6.3 (review HIGH 1)
+            if (unk != null) return ChartBridgeBranches.WaitWords("the bot", acct, unk);
             bool exposed;
             lock (Sync) exposed = openTag != null;
             if (exposed || WorkingEntries().Count > 0 || !ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("the bot", acct);
@@ -1550,6 +1552,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string acct = ReadAccountFile();
             if (acct == null || ChartBridgeBranches.IsNone(acct) || ChartBridgeBranches.KeepThroughReset("bot", acct)) return null;
+            string unk = ChartBridgeBranches.UnknownWhy(FindAccount(acct), acct);   // 0.6.3 (review HIGH 1)
+            if (unk != null) return ChartBridgeBranches.WaitWords("the bot (off)", acct, unk);
             if (!ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("the bot (off)", acct);
             string err = SaveAccount(ChartBridgeBranches.None);
             if (err != null) return "the bot (off) stays on " + acct + ": bot-account.txt could not be saved (" + err + ")";
