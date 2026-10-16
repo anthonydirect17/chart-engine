@@ -4232,6 +4232,56 @@ public static class AgentHarness
             Restart(); Mode("manrae", "auto");
         });
 
+        Part("0.6.2 unreadable file: a group agent's plan refused whole", () =>
+        {
+            NoStandDowns();
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
+            GroupFresh();   // manrae on g1 (SIM-A, SIM-B, SIM-C)
+            File.WriteAllText(SdFile, "# made-up\n# test\nstandDown\tsample-build-1\n");
+            Restart(); Mode("manrae", "auto"); Last2();
+            int calls = Abc().Sum(a => a.Calls.Count(c => c.StartsWith("submit")));
+            Order[] e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
+            Check(e.All(x => x == null) && Abc().Sum(a => a.Calls.Count(c => c.StartsWith("submit"))) == calls && AgentReject().Contains("agent-standdowns.txt has a line ChartBridge does not understand"),
+                  "round 7: unreadable file: a group agent's plan is refused whole, nothing submitted on SIM-A to SIM-C: " + AgentReject());
+            NoStandDowns(); Restart();
+        });
+
+        Part("0.6.2 unreadable file: the backstop cancels the in-group entry only", () =>
+        {
+            NoStandDowns();
+            WriteGroup("SIM-A", "SIM-B", "SIM-C", "SIM-E");   // SIM-E in Lucid; SIM-D in no group
+            File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSIM-D" });
+            Fresh();   // manrae on SIM-E, auto
+            Action demob = () =>
+            {
+                dc = new ChartBridgeClient(null, -101);
+                dc.Tap = x => { lock (demobOut) demobOut.Add(x); };
+                D.Attach(dc);
+                B("{\"type\":\"agentHello\",\"name\":\"Demo B\",\"build\":\"sample-b\"}");
+                Mode("demob", "auto");
+            };
+            demob();
+            Order em = PlacedOn(sime, Good(NewId()));
+            Last2();
+            int nd; lock (simd.Orders) nd = simd.Orders.Count;
+            B(Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 16, 600));
+            Order ed; lock (simd.Orders) ed = simd.Orders.Skip(nd).FirstOrDefault(x => ChartBridgeAgents.IsEntryName(x.Name));
+            Check(em != null && ed != null, "round 7 setup: a resting entry on SIM-E (in Lucid, manrae) and one on SIM-D (no group, demob): " + AgentReject() + " " + Last(demobOut, "reject"));
+            if (em == null || ed == null) return;
+            File.WriteAllText(SdFile, "# made-up\n# test\nstandDown\tsample-build-1\n");
+            // the restart: every start is Shadow, and Shadow's backstop cancels every entry by design, so each agent is put back in Auto
+            // (with its hello) before the one pass, which then shows the broken-file rule alone
+            Restart(); Mode("manrae", "auto"); demob(); Last2();
+            Tick();
+            Check(em.OrderState == OrderState.Cancelled && sime.Calls.Any(c => c == "cancel " + em.Name), "round 7: one pass: the in-group entry (SIM-E) is cancelled by the backstop");
+            Check(IsLive(ed) && !simd.Calls.Any(c => c == "cancel " + ed.Name), "round 7: one pass: the no-group entry (SIM-D) keeps working");
+            Settle(sime); Settle(simd);
+            try { File.Delete(Path.Combine(Dir, "agent-demob-account.txt")); } catch (Exception) { }
+            NoStandDowns();
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
+            Restart(); Mode("manrae", "auto");
+        });
+
         Part("0.6.2 a file that cannot be written", () =>
         {
             NoStandDowns();
