@@ -24,6 +24,8 @@
  *               tab's Motion switch kept in this browser (motionPref)
  *   Layout 5    (chart 1.23.0, DECISION 2026-10-14a) the grid's step words (stepLines, ageText), his trades in R from each
  *               plan's own riskDollars (entryRisk, tradesR) and his heat at his own stop (heatNow)
+ *   the board   chart 1.28.0 (SPEC CE-1, DECISION 2026-10-15k): the heroes-on-duty board's rows (boardRows): one per agent
+ *               slot that is on or has an account or a group, and one "NO HERO" row per group no agent trades
  *
  * Nothing here sends an order. The page never builds an order for an agent: ChartBridge places every agent order itself,
  * from the plan's parameters, inside the agent's rules (AI is never in the order path).
@@ -967,6 +969,90 @@ function roomLines(account, limit) {
   ];
 }
 
+/* ======================================================================== the heroes-on-duty board (chart 1.28.0) */
+/** "+1.40 R", "-0.60 R", "0.00 R"; null: "not reported" (never estimated). */
+const rWords = v => (isNum(v) ? (+Math.abs(v).toFixed(2) === 0 ? '' : v > 0 ? '+' : '-') + Math.abs(v).toFixed(2) + ' R' : 'not reported');
+/** His position in the board's words: one account's, or a group's summed per root over its seats ("LONG 5 MNQ", "FLAT"). */
+function boardPosition(a) {
+  const x = a || {}, seats = Array.isArray(x.seats) && x.group ? x.seats : null, by = new Map();
+  for (const p of seats ? seats.map(s => s && s.position) : [x.position]) if (p && isNum(p.qty) && p.qty) by.set(p.root || '', (by.get(p.root || '') || 0) + p.qty);
+  const parts = [...by].filter(([, q]) => q).map(([r, q]) => (q > 0 ? 'LONG ' : 'SHORT ') + Math.abs(q) + (r ? ' ' + r : ''));
+  const sum = [...by.values()].reduce((t, q) => t + q, 0);
+  return { text: parts.length ? parts.join(' · ') : 'FLAT', tone: !parts.length ? '' : sum > 0 ? 'pos' : sum < 0 ? 'neg' : '' };
+}
+/**
+ * The room bar for the accounts he trades (ChartBridge's own numbers from the `accounts` message, as accountState's): the
+ * tightest daily room among them and its limit (the group's daily loss limit, or the account's own My daily), and the tightest
+ * room to the floor, with whose. { pct (daily room over its limit, 0 to 100, or null), daily, limit, floor, of, text, why }.
+ */
+function boardRoom(names, accountsMsg, group) {
+  const accs = new Map((accountsMsg && Array.isArray(accountsMsg.list) ? accountsMsg.list : []).filter(x => x && typeof x.name === 'string').map(x => [x.name, x]));
+  const list = (names || []).map(n => accs.get(n)).filter(Boolean);
+  const least = k => list.filter(x => isNum(x[k])).reduce((m, x) => (m === null || x[k] < m[k] ? x : m), null);
+  const ld = least('roomDaily'), lf = least('roomFloor');
+  const limit = ld ? (group && isNum(group.dailyLoss) && group.dailyLoss > 0 ? group.dailyLoss : isNum(ld.myDailyLoss) && ld.myDailyLoss > 0 ? ld.myDailyLoss : null) : null;
+  const usd = v => fmtUsd(v).replace(/^\+/, '') || '$0.00';
+  const multi = names && names.length > 1;
+  const bits = [];
+  if (ld) bits.push('daily room ' + usd(ld.roomDaily) + (limit ? ' of ' + usd(limit) : '') + (multi ? ' (' + ld.name + ')' : ''));
+  if (lf) bits.push('floor ' + usd(lf.roomFloor) + ' away' + (multi ? ' (' + lf.name + ')' : ''));
+  /* fix round 1: why a number is not reported comes from the tightest seat (by the number that is known), else from a seat that
+     says why, never just the first */
+  const whyOf = (x, k) => (x && x.why && typeof x.why[k] === 'string' ? x.why[k] : '');
+  const ws = ld || lf || list.find(x => whyOf(x, 'roomDaily') || whyOf(x, 'roomFloor')) || null;
+  if (!ld && lf && whyOf(ws, 'roomDaily')) bits.unshift('daily room not reported (' + whyOf(ws, 'roomDaily') + ')');
+  const why = !list.length || !ws ? 'not reported' : whyOf(ws, 'roomDaily') || whyOf(ws, 'roomFloor') || 'not reported';
+  return { pct: ld && limit ? Math.round(Math.max(0, Math.min(100, ld.roomDaily / limit * 100))) : null, daily: ld ? ld.roomDaily : null, limit, floor: lf ? lf.roomFloor : null,
+    of: ld ? ld.name : lf ? lf.name : '', text: bits.length ? bits.join(', ') : 'room ' + (why === 'not reported' ? 'not reported' : 'not reported: ' + why), why: bits.length ? '' : why, whyOf: ws ? ws.name : '' };
+}
+/**
+ * The board (SPEC CE-1 piece 2): { heroes, noHero }. o: { agents (every `agent` message), groups (the `groups` message),
+ * accounts (the `accounts` message), status and reach (the PC helper's GET /status), rOf (a => his R today, or null), AH
+ * (AgentHelper: tierChip, tierFit, tierOf) }. A hero row per agent slot that is on (the helper says so, or he is connected) or
+ * has an account or a group: { agent, name, build, chip, fit, kind ('group', 'account', 'none'), group, accounts, where, sub,
+ * mode, position, posTone, r, rText, room, killed, standDown, connected, on, off (seated but Off: the warning), startBuild,
+ * noHeroOn (a group whose only hero is Off) }. A NO HERO row per group no agent trades:
+ * { id, name, members, accountType, hero (the default hero's build), heroName }.
+ */
+function boardRows(o) {
+  const x = o || {}, AH = x.AH || null, st = x.status || null, reach = x.reach || '';
+  const agents = (Array.isArray(x.agents) ? x.agents : []).filter(a => a && validId(a.agent)).sort((a, b) => (a.agent < b.agent ? -1 : a.agent > b.agent ? 1 : 0));
+  const groups = x.groups && Array.isArray(x.groups.list) ? x.groups.list.filter(g => g && validGroupId(g.id)) : [];
+  const builds = st && Array.isArray(st.builds) ? st.builds : [];
+  const buildRow = b => builds.find(r => r && r.build === b) || null;
+  const heroes = [];
+  for (const a of agents) {
+    const h = st && st.agents ? st.agents[a.agent] || null : null, acc = agentAccount(a), on = !!(h && h.on) || !!a.connected;
+    if (!on && acc.none) continue;
+    const g = acc.group ? groups.find(y => y.id === acc.group.id) || null : null;
+    const build = (h && (h.runningBuild || h.build)) || str(a.build).split(' ')[0] || '';
+    const row = build ? buildRow(build) : null, type = g ? g.accountType || '' : '';
+    const chip = AH ? AH.tierChip(row, reach) : { text: 'tier unknown', tone: 'unknown', title: '' };
+    const fit = AH && acc.group ? AH.tierFit(AH.tierOf(row), type) : { warn: '', note: '' };
+    const accounts = acc.group ? acc.seats : acc.none ? [] : [acc.name];
+    const pos = boardPosition(a), r = typeof x.rOf === 'function' ? x.rOf(a) : null;
+    heroes.push({ agent: a.agent, name: (h && h.hero) || agentName(a), build, chip, fit, kind: acc.group ? 'group' : acc.none ? 'none' : 'account',
+      group: acc.group ? { id: acc.group.id, name: acc.group.name, accountType: type || null } : null, accounts,
+      where: acc.group ? acc.group.name : acc.none ? NONE_LABEL : acc.name,
+      sub: acc.group ? (accounts.length ? 'leads ' + accounts.length + (accounts.length === 1 ? ' account: ' : ' accounts: ') + accounts.join(', ') : 'no accounts') + (g ? ' · ' + (type === 'eval' ? 'Evals' : type === 'funded' ? 'Funded' : 'type not set') : '')
+        : acc.none ? 'nothing trades' : (acc.mark || 'one account') + ' · one account',
+      mode: MODES.includes(a.mode) ? a.mode : '', modeName: MODE_NAME[a.mode] || '-', position: pos.text, posTone: pos.tone, r: isNum(r) ? r : null, rText: rWords(isNum(r) ? r : null),
+      room: acc.none ? { pct: null, text: 'None: nothing trades', why: '' } : boardRoom(accounts, x.accounts, g), killed: !!a.killed, standDown: str(a.standDown), connected: !!a.connected, on,
+      /* fix round 1: seated (a group or an account) but Off: not started, nothing trades; Start in Shadow with this build (his
+         last, else the group's default hero); on a group the group still has no hero on duty */
+      off: !on && !acc.none ? 'Off: not started (nothing trades)' : '',
+      /* fix round 2: on a group, its default hero when the helper offers that build, else his last build */
+      startBuild: !on && !acc.none ? (g && typeof g.hero === 'string' && buildRow(g.hero) ? g.hero : build) : '', noHeroOn: !on && !!acc.group });
+  }
+  const taken = new Set(agents.filter(a => a.group && validGroupId(a.group.id)).map(a => a.group.id));
+  const noHero = groups.filter(g => !taken.has(g.id)).map(g => {
+    const hr = g.hero ? buildRow(g.hero) : null;
+    return { id: g.id, name: typeof g.name === 'string' && g.name ? g.name : g.id, members: Array.isArray(g.members) ? g.members.filter(m => typeof m === 'string') : [],
+      accountType: g.accountType || null, hero: typeof g.hero === 'string' ? g.hero : null, heroName: hr && hr.hero ? String(hr.hero) : '' };
+  });
+  return { heroes, noHero };
+}
+
 /* ======================================================================== Layout 5 (DECISION 2026-10-14a): the grid, R, heat */
 /**
  * The grid's five steps (Layout 5): each step's words and when, today's tracker words only (the light's own events, x as
@@ -1195,6 +1281,7 @@ return {
   agentOfOrder, isAgentMark, workingEntries, ownsText, pairOwner, pageExitPasses, lockText, statusAgent, KILL_REPEAT_MS, killOnRepeat,
   fmtUsd, positionText, beatText, statusText, stateOf, stripModel, noticesFrom, etClock, etClockSec,
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
+  boardRows, boardRoom, boardPosition, rWords,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
 };
 });

@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -2852,7 +2852,7 @@ Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL) and
 **Files** (next to `config.txt`; written whole through a temp file, off NinjaTrader's thread; Anthony never edits them).
 `groups.txt`: two `#` lines, then one line per group, member and personal account:
 
-    group<TAB><id><TAB><name><TAB>on|off<TAB><dailyLoss>|-<TAB><drawdown><TAB>eod|intraday|static<TAB><target>|-<TAB><size><TAB><lockAt>|-<TAB><consistency>|-
+    group<TAB><id><TAB><name><TAB>on|off<TAB><dailyLoss>|-<TAB><drawdown><TAB>eod|intraday|static<TAB><target>|-<TAB><size><TAB><lockAt>|-<TAB><consistency>|-<TAB>eval|funded|-<TAB><hero>|-
     member<TAB><account><TAB><id>
     personal<TAB><account><TAB><floor>|-<TAB><daily>|-        (a saved line stays with - and -: set to none, not never set)
 
@@ -2860,7 +2860,11 @@ Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL) and
 `g2`, ... in the order made (the next is one above the highest in the file), so a rename never touches membership; a deleted
 group's members go to None with it, so no line ever points at a group that is gone. A `group` line may carry more fields after
 `lockAt` (a later ChartBridge's); they are kept as read. `consistency` (CON a, 2026-10-15) is Lucid's consistency rule, no single day over that percent of the profit (1 to 100, at most 2
-decimals; `-` none); a group line of 10 fields (written before it) reads as none. Anything else (a line ChartBridge does not know, a group id twice, a
+decimals; `-` none); a group line of 10 fields (written before it) reads as none. 0.6.1: then the group's Type (`eval`,
+`funded`, or `-` not set) and its default hero (a build name, 1 to 64 letters, digits, dots, underscores or hyphens, a letter or
+digit first; `-` none); a line of 10 or 11 fields (written before them) reads as not set and none. A ChartBridge 0.5.8 or 0.6.0
+keeps them as read: it keeps every field after the ones it knows and writes them back on each save (checked in its source:
+`g.Extra = p.Skip(11)` and the save loop over `Extra`). Anything else (a line ChartBridge does not know, a group id twice, a
 member of a group that is not there, an account twice, a name twice) makes the file unreadable: it is **never rewritten that
 run**, every entry on every account is refused ("groups.txt could not be read: every new entry is refused until it can (exits
 always work)"), every page gets that `status` `error` as it signs in, and the page's group changes are refused. No `groups.txt`
@@ -2903,7 +2907,7 @@ config switch):
 
 | message | fields (no others) | notes |
 |---|---|---|
-| `groupSave` | `cid` (optional), `group` (optional: the id to change; absent makes a new group), `name` (1 to 30 characters, no tab, unique ignoring case), `noHedge` (bool), `dailyLoss` (0 for none), `drawdown` (more than 0), `drawdownType` (`eod`, `intraday`, `static`), `target` (0 for none), `size` (more than 0, more than `drawdown`), `lockAt` (0 for none; `eod` and `intraday` only, above `size - drawdown`), `consistency` (optional, 0 or absent for none, else a percent above 0 and at most 100) | every field every time: Rename and the No hedging switch send the whole group. Money: plain numbers, at most 2 decimals, at most 100,000,000 |
+| `groupSave` | `cid` (optional), `group` (optional: the id to change; absent makes a new group), `name` (1 to 30 characters, no tab, unique ignoring case), `noHedge` (bool), `dailyLoss` (0 for none), `drawdown` (more than 0), `drawdownType` (`eod`, `intraday`, `static`), `target` (0 for none), `size` (more than 0, more than `drawdown`), `lockAt` (0 for none; `eod` and `intraday` only, above `size - drawdown`), `consistency` (optional, 0 or absent for none, else a percent above 0 and at most 100), `accountType` (0.6.1, optional: `eval`, `funded` or `-` for not set; absent keeps the group's), `hero` (0.6.1, optional: a build name of 1 to 64 safe characters, or `-` for none; absent keeps the group's) | every field every time (but `accountType` and `hero`): Rename and the No hedging switch send the whole group. Money: plain numbers, at most 2 decimals, at most 100,000,000 |
 | `groupDelete` | `cid` (optional), `group` | its members go to None (personal, their own limits kept) |
 | `accountGroup` | `cid` (optional), `account`, `group` (an id, or `null` for None), `highClose` (optional, more than 0: G2 b, joining a group only) | refused when the move would leave the target group mixed (the account holds the other side, or the group is mixed already, with No hedging on). Joining: both trailing highs start at `highClose`, or without it at the larger of the account size and the balance now (the page always asks, prefilled so) |
 | `accountLimits` | `cid` (optional), `account`, `floor` (0 for none), `dailyLoss` (0 for none) | personal accounts only: refused for an account in a group ("its group's rules apply") |
@@ -2912,7 +2916,7 @@ config switch):
 
 - `groups`: `{"type":"groups","list":[...],"error":null}` after `client`, after every group change, and when a group's side or
   holders change (the 1 s check). Each group: `id`, `name`, `noHedge`, `dailyLoss` (null for none), `drawdown`,
-  `drawdownType`, `target` (null for none), `size`, `lockAt` (null for none), `consistency` (null for none), `members` (account names), `side` (`long`,
+  `drawdownType`, `target` (null for none), `size`, `lockAt` (null for none), `consistency` (null for none), `accountType` (0.6.1: `eval`, `funded`, or null for not set), `hero` (0.6.1: the default hero's build name, or null), `members` (account names), `side` (`long`,
   `short`, `mixed`, or null when the group holds nothing), `holders` (`[{account, root, side, what, qty}]`: `what`
   `position` or `entry`, `root` the instrument's master name, `side` `long` or `short`, `qty` the contracts held or left to
   fill). `error`: null, or why `groups.txt` cannot be read (then `list` is empty and every entry is refused).
@@ -3064,6 +3068,38 @@ One direction per group and exits never blocked (0.5.8) are unchanged: no hedgin
 **Restart.** The day file adds `#seat<TAB><tag><TAB><account>` for each group seat's entry tag still of today (its trade, its
 working entry, a trade carried over); a ChartBridge before 0.6.0 reads it as a comment. A restart restores the seat to tag mapping,
 and a seat that holds something of the agent's (one that left the group too) is followed again.
+
+### A group's Type and default hero (0.6.1)
+
+SPEC CE-1, Phase 4 pieces 3 and 2 (DECISION 2026-10-15k). ChartBridge stores two fields per group and checks their shapes only; it
+does not know heroes or tiers, and nothing in the order path reads them (no new trading restriction).
+
+- **Fields.** `groups.txt` gains the Type and the default hero after `consistency` (above). `groupSave` takes them as `accountType`
+  and `hero` (the message's own `type` is its kind, so the group's Type travels as `accountType` on the wire); both optional, absent
+  keeps what the group has (a new group: not set and none), so a page before 1.28.0 (the No hedging switch, Rename) never drops
+  them. `-` clears. Refused, with nothing saved: `accountType must be eval, funded or - (not set)`; `hero must be a build name of 1
+  to 64 letters, digits, dots, underscores or hyphens, or - (none)`. The `groups` message carries both (null for not set and none).
+  A type or hero in `groups.txt` that ChartBridge cannot read makes the file unreadable, as every other field.
+- **The page (1.28.0).** Settings, Account groups: the rules dialog's Type (Evals, Funded, Not set) and Hero on duty (None, then
+  every hero the PC helper lists, each with its tier and, when its tier does not fit the Type, a warning; he can pick any). The
+  Agent tab's build picker, for an agent on a group, preselects the group's default hero (after a build he picked, or the one he
+  runs) and lists every hero with its fit warning. Tier fit, shown only, never enforced: Not ready fits nothing ("Not ready: gym and
+  Sim only"); Acceptable fits Evals ("Acceptable: evals only; funded only when no Good or better hero is on duty"; guidance "at most 3
+  evals at once"); Good, Great and Exceptional fit both; no tier: "tier unknown"; no Type: no fit warning ("type not set").
+- **The PC helper's `GET /status` `builds` rows** (Bot-Lab fills these later; all optional): `hero` (name or null), `tier` (`Not
+  ready`, `Acceptable`, `Good`, `Great`, `Exceptional`, or absent), `edge`, `examEdge`, `liveEdge` (R), `liveN`, `standingAt`,
+  `standingNote`. Absent: "tier unknown (no rating on this PC yet)"; the helper not answering: "tier unknown (the PC helper is not
+  answering)".
+- **The heroes-on-duty board** (the Agent tab's Board): one row per agent slot that is on (the helper says so, or it is connected)
+  or has an account or a group: hero name and build, tier chip, the group and the accounts it leads (or the one account), mode,
+  position (a group's summed per root over its seats), today's R (this page's record of his fills, from each plan's own risk), the
+  room (the tightest seat's daily room and floor room, ChartBridge's own `accounts` numbers, as `accountState`), and its own Kill
+  (`agentKill` on, one click). KILL ALL AGENTS sends `agentKill` on to every agent not killed, in one click. A NO HERO row per group
+  no agent trades, with Assign hero: a free slot is an agent id on None and Off (the helper says it is not on); the page sends the
+  existing `agentAccount` `{agent, group, keepMode: "shadow"}` (a LIVE member asked once in the page), waits up to 10 s for the
+  `agent` message naming the group, then the helper's existing `POST /on` with the group's default hero in Shadow (no default hero
+  the helper has: he picks one). No free slot: "add an agent id to config.txt (agents = ...)"; ChartBridge never writes config.txt.
+  Every start is Shadow; Auto stays one click and Confirm on his desk.
 
 ### Tape timing and new `/diag` counters
 

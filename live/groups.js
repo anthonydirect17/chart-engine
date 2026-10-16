@@ -19,6 +19,10 @@
  *   GroupsCore   the pure parts (money words, the rules line, the form's checks and the messages). No DOM; it also loads in
  *                Node for test/groups.test.js.
  *   GroupsPage   runs only in a browser: mountSettings (the Settings section and its dialogs), used by workspace.js.
+ * Chart 1.28.0 (ChartBridge 0.6.1, SPEC CE-1): each group's Type (Evals, Funded or not set) and its default hero (a build name)
+ * in the rules dialog; ChartBridge saves both in groups.txt and checks only their shapes. The heroes and their tiers come from
+ * the PC helper's GET /status (host.heroes, live/agent-helper.js), every hero for every group with a warning when its tier
+ * does not fit the Type (shown only, nothing enforced). The message's own "type" is its kind, so the Type travels as accountType.
  * Made-up names only in tests and docs (Lucid, Apex, SIM-A, SIM-B).
  */
 (function (root, factory) {
@@ -31,6 +35,9 @@ const NAME_MAX = 30, MONEY_MAX = 100000000;
 const TYPES = [['eod', 'Trails end of day'], ['intraday', 'Trails intraday'], ['static', 'Static']];
 const TYPE_WORD = { eod: 'end of day', intraday: 'intraday', static: 'static' };
 const isNum = v => typeof v === 'number' && isFinite(v);
+/* 1.28.0: the group's Type and its default hero's shape (ChartBridge 0.6.1 checks the same) */
+const ACCOUNT_TYPES = [['', 'Not set'], ['eval', 'Evals'], ['funded', 'Funded']];
+const HERO_RX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** Dollars as Settings shows them: whole dollars with separators, cents only when there are any: $50,000, $1,000.50. */
 function usd(v) {
@@ -55,6 +62,10 @@ function summary(g) {
     'drawdown ' + usd(g.drawdown) + ' ' + (TYPE_WORD[g.drawdownType] || g.drawdownType) + (isNum(g.lockAt) && g.lockAt > 0 ? ', stops at ' + usd(g.lockAt) : ''),
     'target ' + (isNum(g.target) && g.target > 0 ? usd(g.target) : 'none')].concat(isNum(g.consistency) && g.consistency > 0 ? ['consistency ' + g.consistency + '%'] : []).join(' · ');
 }
+/** 1.28.0: the Type in a word ("Evals", "Funded", "type not set"), and the default hero's words ("hero Demo", "no hero"); heroName:
+ *  the hero's name for a build (the PC helper's), else the build itself. */
+const typeText = g => (g && g.accountType === 'eval' ? 'Evals' : g && g.accountType === 'funded' ? 'Funded' : 'type not set');
+const heroText = (g, heroName) => (g && g.hero ? 'hero ' + ((heroName && heroName(g.hero)) || g.hero) : 'no hero');
 /** "3 accounts" */
 const membersText = g => { const n = g && Array.isArray(g.members) ? g.members.length : 0; return n + (n === 1 ? ' account' : ' accounts'); };
 /** The group's side as ChartBridge reports it, in words: "long (SIM-A +2 MNQ; SIM-B buy 1 NQ)", "flat", "long and short (...)". */
@@ -96,14 +107,17 @@ function groupMessage(f, others, id, cid) {
   if (n.drawdown >= n.size) return { error: 'The drawdown must be less than the account size.', field: 'drawdown' };
   if (n.lockAt > 0 && type === 'static') return { error: 'Floor stops at is for a trailing drawdown only (leave it empty for static).', field: 'lockAt' };
   if (n.lockAt > 0 && n.lockAt <= n.size - n.drawdown) return { error: 'Floor stops at must be above the starting floor (' + usd(n.size - n.drawdown) + ').', field: 'lockAt' };
+  const at = f.accountType === undefined || f.accountType === null ? '' : f.accountType, hero = String(f.hero === undefined || f.hero === null ? '' : f.hero).trim();
+  if (!ACCOUNT_TYPES.some(t => t[0] === at)) return { error: 'Type: Evals, Funded or not set.', field: 'accountType' };
+  if (hero && !HERO_RX.test(hero)) return { error: 'Hero on duty: a build name of 1 to 64 letters, digits, dots, underscores or hyphens, or none.', field: 'hero' };
   return { msg: Object.assign({ type: 'groupSave' }, cid ? { cid } : {}, id ? { group: id } : {}, { name, noHedge: f.noHedge !== false,
-    dailyLoss: n.dailyLoss, drawdown: n.drawdown, drawdownType: type, target: n.target, size: n.size, lockAt: n.lockAt, consistency: con }) };
+    dailyLoss: n.dailyLoss, drawdown: n.drawdown, drawdownType: type, target: n.target, size: n.size, lockAt: n.lockAt, consistency: con }, f.accountType !== undefined ? { accountType: at || '-' } : {}, f.hero !== undefined ? { hero: hero || '-' } : {}) };   // 1.28.0: absent keeps them (ChartBridge 0.6.1)
 }
 /** groupSave for a group as ChartBridge sent it, with one change (a new name, the switch): every field, as the contract asks. */
 function saveFrom(g, change, cid) {
   const x = Object.assign({}, g, change || {});
   return Object.assign({ type: 'groupSave' }, cid ? { cid } : {}, { group: g.id, name: x.name, noHedge: x.noHedge !== false, dailyLoss: x.dailyLoss || 0, drawdown: x.drawdown,
-    drawdownType: x.drawdownType, target: x.target || 0, size: x.size, lockAt: x.lockAt || 0, consistency: x.consistency || 0 });
+    drawdownType: x.drawdownType, target: x.target || 0, size: x.size, lockAt: x.lockAt || 0, consistency: x.consistency || 0 });   // 1.28.0: no accountType or hero: ChartBridge 0.6.1 keeps the group's own
 }
 /** The rules dialog's boxes from a group (null: a new group's defaults: a 50,000 account, a 2,000 end-of-day drawdown, no hedging). */
 function formOf(g) {
@@ -140,11 +154,12 @@ function cleanGroups(m) {
   return list.filter(g => g && typeof g.id === 'string' && /^g[1-9][0-9]{0,8}$/.test(g.id) && typeof g.name === 'string')
     .map(g => ({ id: g.id, name: g.name, noHedge: g.noHedge !== false, dailyLoss: isNum(g.dailyLoss) ? g.dailyLoss : null, drawdown: isNum(g.drawdown) ? g.drawdown : null,
       drawdownType: g.drawdownType, target: isNum(g.target) ? g.target : null, size: isNum(g.size) ? g.size : null, lockAt: isNum(g.lockAt) ? g.lockAt : null, consistency: isNum(g.consistency) ? g.consistency : null,
+      accountType: g.accountType === 'eval' || g.accountType === 'funded' ? g.accountType : null, hero: typeof g.hero === 'string' && HERO_RX.test(g.hero) ? g.hero : null,
       members: Array.isArray(g.members) ? g.members.filter(x => typeof x === 'string') : [], side: ['long', 'short', 'mixed'].includes(g.side) ? g.side : null,
       holders: Array.isArray(g.holders) ? g.holders.filter(h => h && typeof h.account === 'string') : [] }));
 }
 
-return { NAME_MAX, MONEY_MAX, TYPES, TYPE_WORD, usd, parseMoney, moneyBox, summary, membersText, sideText, groupMessage, saveFrom, formOf,
+return { NAME_MAX, MONEY_MAX, TYPES, TYPE_WORD, ACCOUNT_TYPES, HERO_RX, typeText, heroText, usd, parseMoney, moneyBox, summary, membersText, sideText, groupMessage, saveFrom, formOf,
   highCloseDefault, joinMessage, limitsMessage, cleanGroups };
 });
 
@@ -159,10 +174,19 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;'
  *   feed            the window's createFeed (live/accounts.js): S.groups (null until ChartBridge 0.5.8 sends them), post()
  *   sec, list, add, note    the section, its rows, the New group button and its status line
  *   dialog          the page's <dialog> (#wsDialog); showDialog(d, onOk, onCancel) as workspace.js's
+ *   heroes          (1.28.0, optional) () => Promise of the PC helper's GET /status ({ reach, body }, AgentHelper.createClient):
+ *                   the heroes and tiers for Hero on duty; without it, or with the helper not answering, only the hero saved
  * Returns { render }.
  */
 function mountSettings(host) {
-  const F = host.feed, P = { confirm: '', seq: 0 };
+  const F = host.feed, P = { confirm: '', seq: 0, heroes: null };
+  const AH = window.AgentHelper || null;
+  const heroName = b => { const st = P.heroes && P.heroes.status, r = st && Array.isArray(st.builds) ? st.builds.find(x => x && x.build === b && x.hero) : null; return r ? String(r.hero) : ''; };
+  function askHeroes() {
+    if (typeof host.heroes !== 'function') return Promise.resolve(P.heroes);
+    return Promise.resolve(host.heroes()).then(r => { P.heroes = { reach: r && r.reach === 'ok' && r.body ? 'ok' : (r && r.reach) || 'down', status: r && r.reach === 'ok' ? r.body : null }; render(); return P.heroes; },
+      () => { P.heroes = { reach: 'down', status: null }; return P.heroes; });
+  }
   const cid = () => 'gp' + Date.now().toString(36) + '-' + (++P.seq);
   const say = (text, warn) => { host.note.textContent = text || ''; host.note.className = 'ws-help' + (warn ? ' ws-warn' : ''); };
   const groups = () => (F && F.S.groups) || [];
@@ -181,7 +205,7 @@ function mountSettings(host) {
     const rows = list.map(g => {
       if (P.confirm === g.id) return `<div class="gp-row gp-ask" role="listitem"><span class="gp-askt">Delete ${esc(g.name)}? ${g.members.length ? 'Its ' + esc(GC.membersText(g)) + ' go to None.' : 'It has no accounts.'}</span>` +
         `<button type="button" class="ws-btn gp-yes" data-gp="del-yes" data-id="${esc(g.id)}">Delete</button><button type="button" class="ws-btn" data-gp="del-no">Keep</button></div>`;
-      return `<div class="gp-row" role="listitem" data-id="${esc(g.id)}"><span class="gp-txt"><b class="gp-name">${esc(g.name)}</b><span class="gp-sum" title="${esc(GC.summary(g) + ' · ' + GC.membersText(g) + ' · ' + GC.sideText(g))}">${esc(GC.summary(g))} · ${esc(GC.membersText(g))}${g.side ? ' · ' + esc(g.side === 'mixed' ? 'long and short' : g.side) : ''}</span></span>` +
+      return `<div class="gp-row" role="listitem" data-id="${esc(g.id)}"><span class="gp-txt"><b class="gp-name">${esc(g.name)}</b><span class="gp-sum" title="${esc(GC.summary(g) + ' · ' + GC.membersText(g) + ' · ' + GC.sideText(g))}">${esc(GC.summary(g))} · ${esc(GC.membersText(g))} · ${esc(GC.typeText(g))} · ${esc(GC.heroText(g, heroName))}${g.side ? ' · ' + esc(g.side === 'mixed' ? 'long and short' : g.side) : ''}</span></span>` +
         `<button type="button" class="gp-switch" role="switch" aria-checked="${g.noHedge}" data-gp="hedge" data-id="${esc(g.id)}" title="No hedging inside this group: counts positions and working entries; covers agents, bots, copier followers and your ticket; exits always go"><span class="gp-knob" aria-hidden="true"></span><span class="visually-hidden">No hedging in ${esc(g.name)}</span></button>` +
         `<button type="button" class="ws-btn gp-b" data-gp="edit" data-id="${esc(g.id)}">Edit</button><button type="button" class="ws-btn gp-b" data-gp="rename" data-id="${esc(g.id)}">Rename</button><button type="button" class="ws-btn gp-b" data-gp="del" data-id="${esc(g.id)}">Delete</button></div>`;
     }).join('');
@@ -228,16 +252,38 @@ function mountSettings(host) {
       <p class="ws-help">Set once. With NinjaTrader's balance these give each account its room, so the agent sizes on real numbers.</p>
       <div class="gp-grid">${box('size', 'Account size', '$')}${box('dailyLoss', 'Daily loss limit', '$ or none')}${box('drawdown', 'Drawdown size', '$')}
         <div class="gp-f"><label for="gp-drawdownType">Drawdown type</label><select class="ws-sel gp-in" id="gp-drawdownType">${GC.TYPES.map(t => `<option value="${t[0]}"${t[0] === f.drawdownType ? ' selected' : ''}>${t[1]}</option>`).join('')}</select></div>
-        ${box('lockAt', 'Floor stops at', '$ or none')}${box('target', 'Profit target', '$ or none')}${box('consistency', 'Consistency %', '% or none')}</div>
+        ${box('lockAt', 'Floor stops at', '$ or none')}${box('target', 'Profit target', '$ or none')}${box('consistency', 'Consistency %', '% or none')}
+        <div class="gp-f"><label for="gp-accountType">Type</label><select class="ws-sel gp-in" id="gp-accountType" title="Evals or Funded: the Agent tab and this dialog warn when a hero's tier does not fit it (shown only)">${GC.ACCOUNT_TYPES.map(t => `<option value="${t[0]}"${t[0] === (g && g.accountType || '') ? ' selected' : ''}>${t[1]}</option>`).join('')}</select></div></div>
       <p class="ws-help">Daily room counts open P&amp;L, the way the firm does. If a number is missing, the agent uses its model numbers and says so. Consistency (no single day over that share of the profit) is shown to the agent only; nothing is blocked by it.</p>
       <h3 class="gp-h">One direction</h3>
       <label class="gp-hedge"><input type="checkbox" id="gp-noHedge"${f.noHedge ? ' checked' : ''}> No hedging inside this group <span>counts positions and working entries; covers agents, bots, copier followers and your ticket; exits always go</span></label>
+      <h3 class="gp-h">Hero on duty</h3>
+      <div class="gp-herorow"><select class="ws-sel gp-in" id="gp-hero" aria-label="The group's default hero"></select><span class="ws-help gp-herowhy" id="gp-heroWhy" role="status"></span></div>
+      <p class="ws-help">The Agent tab picks this hero first when an agent takes this group; you can pick another there. Every hero is listed; a tier that does not fit the Type is a warning, nothing is blocked.</p>
       <p class="ws-err" id="gp-err" role="alert"></p>
       <div class="ws-dlg-btns">${g ? '<button type="button" class="ws-btn gp-del" id="gp-del">Delete group</button><span class="sg-fill"></span>' : ''}<button type="button" class="ws-btn" data-act="cancel">Close</button><button type="submit" class="ws-btn primary">Save</button></div>
     </form>`;
     const $d = id => d.querySelector('#gp-' + id);
     const lockSync = () => { const st = $d('drawdownType').value === 'static'; $d('lockAt').disabled = st; if (st) $d('lockAt').value = ''; };
     $d('drawdownType').addEventListener('change', lockSync); lockSync();
+    /* 1.28.0: Hero on duty: None, then every hero the PC helper knows (its tier, and a warning when it does not fit the Type) */
+    let heroWant = g && g.hero ? g.hero : '';
+    const heroFill = () => {
+      const sel = $d('hero'); if (!sel) return;
+      const type = $d('accountType').value, H = P.heroes, reach = H ? H.reach : '';
+      const opts = AH ? AH.heroOptions(H && H.status, type, reach) : [];
+      const list = [{ build: '', label: 'None' }].concat(opts);
+      if (heroWant && !opts.some(o => o.build === heroWant)) list.push({ build: heroWant, label: heroWant + ' (' + (reach === 'ok' ? 'not on this PC\'s helper now' : H ? 'tier unknown (the PC helper is not answering)' : 'asking the PC helper...') + ')' });
+      sel.replaceChildren(...list.map(o => new Option(o.label, o.build)));
+      sel.value = heroWant;
+      const o = opts.find(x => x.build === heroWant);
+      $d('heroWhy').textContent = !heroWant ? '' : o ? (o.fit.warn || o.fit.note || 'fits ' + (type === 'eval' ? 'Evals' : 'Funded')) : '';
+      $d('heroWhy').classList.toggle('ws-warn', !!(o && o.fit.warn));
+    };
+    $d('hero').addEventListener('change', () => { heroWant = $d('hero').value; heroFill(); });
+    $d('accountType').addEventListener('change', heroFill);
+    heroFill();
+    askHeroes().then(() => { if (d.open && $d('hero')) heroFill(); });
     let delAsked = false;
     if (g) $d('del').addEventListener('click', () => {
       if (!delAsked) { delAsked = true; $d('del').textContent = 'Delete ' + g.name + '? Click again'; $d('err').textContent = g.members.length ? 'Its ' + GC.membersText(g) + ' go to None.' : ''; return; }
@@ -246,7 +292,7 @@ function mountSettings(host) {
     host.showDialog(d, () => {
       for (const el of d.querySelectorAll('.gp-in')) el.removeAttribute('aria-invalid');
       const form = { name: $d('name').value, size: $d('size').value, dailyLoss: $d('dailyLoss').value, drawdown: $d('drawdown').value, drawdownType: $d('drawdownType').value,
-        lockAt: $d('lockAt').value, target: $d('target').value, consistency: $d('consistency').value, noHedge: $d('noHedge').checked };
+        lockAt: $d('lockAt').value, target: $d('target').value, consistency: $d('consistency').value, noHedge: $d('noHedge').checked, accountType: $d('accountType').value, hero: $d('hero').value };
       const r = GC.groupMessage(form, groups(), g ? g.id : null, cid());
       if (r.error) { $d('err').textContent = r.error; if (r.field && $d(r.field)) { $d(r.field).setAttribute('aria-invalid', 'true'); $d(r.field).focus(); } return false; }
       return post(r.msg, (g ? 'Save ' : 'New group ') + r.msg.name + ': sent to ChartBridge.');

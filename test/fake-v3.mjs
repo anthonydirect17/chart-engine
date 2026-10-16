@@ -83,7 +83,7 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   agentKill: ['type', 'cid', 'agent', 'on'],
   agentSeen: ['type', 'agent', 'id', 'at'],
   agentAnswer: ['type', 'cid', 'agent', 'id', 'answer', 'at'],
-  agentAccount: ['type', 'cid', 'agent', 'account', 'keepMode'],
+  agentAccount: ['type', 'cid', 'agent', 'account', 'group', 'keepMode'],   // 0.6.0: group in place of account
   agentRules: ['type', 'cid', 'agent', 'roots', 'maxQtyNQ', 'maxQtyMNQ', 'maxQtyES', 'maxQtyMES', 'entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses'],
 });
 Object.assign(KEYS, GROUP_KEYS);   // 0.5.8: groupSave, groupDelete, accountGroup, accountLimits
@@ -1366,6 +1366,16 @@ Object.assign(OrderDeskV3.prototype, {
   check_agentAccount(m) {
     const a = this.agents.get(m.agent), name = m.account, x = typeof name === 'string' ? this.acct.get(name) : null;
     if (m.keepMode !== undefined && !['shadow', 'copilot', 'auto'].includes(m.keepMode)) return 'keepMode must be shadow, copilot or auto (the mode the page\'s question named)';
+    /* ChartBridge 0.6.0: a whole group (simulated: its members become his seats, nothing more is checked than this) */
+    if (m.group !== undefined) {
+      if (m.account !== undefined) return 'agentAccount takes account or group, never both';
+      const g = this.gr && typeof m.group === 'string' ? this.gr.list.get(m.group) : null;
+      if (!g) return 'no group ' + m.group;
+      if (![...this.gr.members.values()].includes(g.id)) return 'group ' + g.name + ' has no accounts';
+      if (a.groupView && a.groupView.group.id === g.id) return 'group ' + g.name + ' is already ' + a.id + '\'s';
+      if (a.trade || this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length) return a.id + ' has a position, a working entry or a proposal: choose its account when it is flat';
+      return null;
+    }
     if (name === null) return a.trade || this.agentWorkingEntries(a).length || this.agentOpenProposals(a).length ? a.id + ' has a position, a working entry or a proposal: choose None when it is flat' : null;   // 0.5.7: None
     if (typeof name !== 'string' || !name || name.trim() !== name || name === '-') return 'account must be an account name, or null for None';
     if (/^(Backtest|Playback)/i.test(name)) return name + ' is a Backtest or Playback account: an agent never trades one';
@@ -1386,6 +1396,17 @@ Object.assign(OrderDeskV3.prototype, {
   },
   do_agentAccount(m) {
     const a = this.agents.get(m.agent), old = a.account;
+    if (m.group !== undefined) {   // 0.6.0, simulated: the group's members as his seats (sample view, no trade)
+      const g = this.gr.list.get(m.group), members = [...this.gr.members].filter(([, id]) => id === g.id).map(([x]) => x).sort();
+      a.groupView = { group: { id: g.id, name: g.name }, rev: 1, seats: members.map(x => ({ account: x, owns: false, position: null, pnlToday: 0, trades: 0, sim: !!(this.acct.get(x) || {}).sim, seat: true, out: null, lastPlan: null, size: null, risk: null, lastPnl: null })) };
+      a.account = null; a.chosen = true;
+      if (!(m.keepMode !== undefined && m.keepMode === a.mode)) a.mode = 'shadow';
+      this.agentLogLine(a, 'group ' + g.name + ', was ' + (old || '-') + ', set by the page');
+      this.agentToAgent(a, this.agentWelcome(a));
+      this.agentNotify(a);
+      return;
+    }
+    a.groupView = null;
     a.account = m.account; a.chosen = m.account !== null;   // written to agent-<id>-account.txt: now the agent's (None: "-", claiming nothing)
     /* ChartBridge 0.5.2 (Anthony 2026-10-08, and its review): the mode is kept only when the page says which mode its question
        named (keepMode) and that is the mode now; without it (a page before 1.18.1) or when another page changed the mode since,

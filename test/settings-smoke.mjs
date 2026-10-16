@@ -2,6 +2,9 @@
 // toolbar (test/chart-host.html; the single chart page until chart 1.22.0) in Chromium against the fake bridge and checks
 // what comes back after a reload:
 //   npm run smoke:settings        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
+// Chart 1.28.0 (ChartBridge 0.6.1, SPEC CE-1): Settings, Account groups: the rules dialog's Type and Hero on duty (every hero
+// listed with its tier fit, from the fake PC helper's made-up builds: sample data only), saved and kept; screenshot
+// test/out/settings-group-editor.png.
 // Found on 1.3.1: (1) a size typed and not committed (no Enter, no click elsewhere) was never saved, and
 // (2) a second chart tab wrote its whole in-memory copy of the sizes back, putting NQ back to 20.
 import { chromium } from 'playwright';
@@ -9,6 +12,9 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { C, hostUrl, waitLive, view } from './chart-host.mjs';
+import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { startFakeHelper } from './fake-helper.mjs';
+import fs from 'node:fs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.env.SETTINGS_SMOKE_PORT || 8793);
@@ -128,6 +134,51 @@ try {
     const lvNames = await p.evaluate(() => window.liveChart.getLevels().filter(l => l.layer !== 'ib').map(l => l.name));
     check(lvNames.length === 0, 'only the IB lines of Levels drawn: ' + JSON.stringify(lvNames));
     await ctx.close();
+  }
+  // 6. 1.28.0: a group's Type and default hero in the rules dialog (Settings, Account groups), at 1366 x 768
+  {
+    const GP = PORT + 1, out = path.join(root, 'test', 'out');
+    fs.mkdirSync(out, { recursive: true });
+    const gb = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(GP), '--v3', '--trading', '--test-controls', '--board-groups', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
+    await new Promise(r => gb.stdout.once('data', r));
+    const helper = await startFakeHelper({ bridgePort: GP, agents: ['demo'], builds: [
+      { build: 'sample-build-1', stamp: 'aaaaaaaaaaaa', hero: 'Sample Hero A', here: true, shadowOk: true, tier: 'Good', edge: 0.1 },
+      { build: 'sample-build-2', stamp: 'bbbbbbbbbbbb', hero: 'Sample Hero B', here: true, shadowOk: true, tier: 'Acceptable', edge: 0.05 },
+      { build: 'sample-build-3', stamp: 'cccccccccccc', hero: 'Sample Hero C', here: true, shadowOk: true },
+      { build: 'sample-build-9', stamp: 'dddddddddddd', hero: null, here: true, shadowOk: true, tier: 'Good' }] });
+    try {
+      const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+      const p = await ctx.newPage();
+      p.on('pageerror', e => fail('pageerror: ' + e.message));
+      await p.goto(`http://localhost:${GP}/live/?layout=Main`);
+      await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
+      await p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
+      await p.click('#wsSet');
+      await p.waitForFunction(() => !document.getElementById('wsGroupsSec').hidden && document.querySelectorAll('#wsGroups .gp-row').length === 2, null, { timeout: 15000 });
+      const row = await p.$eval('#wsGroups .gp-row', e => e.textContent);
+      check(/Funded · hero sample-build-3/.test(row), 'the group\'s row: its Type and its default hero (the build, until the helper names it): ' + row);
+      await p.click('#wsGroups [data-gp="edit"][data-id="g1"]');
+      await p.waitForFunction(() => { const s = document.getElementById('gp-hero'); return s && s.options.length === 4; }, null, { timeout: 10000 });
+      const dlg = await p.evaluate(() => ({ type: document.getElementById('gp-accountType').value, hero: document.getElementById('gp-hero').value, opts: [...document.getElementById('gp-hero').options].map(o => o.textContent),
+        why: document.getElementById('gp-heroWhy').textContent, fits: (r => r.top >= 0 && r.bottom <= innerHeight)(document.getElementById('wsDialog').getBoundingClientRect()) }));
+      check(dlg.type === 'funded' && dlg.hero === 'sample-build-3', 'the dialog opens on Group A\'s Type (Funded) and default hero (sample-build-3): ' + JSON.stringify(dlg));
+      check(dlg.opts.join(' | ') === 'None | Sample Hero A (sample-build-1) · Good +0.10R | Sample Hero B (sample-build-2) · Acceptable +0.05R · Acceptable: evals only; funded only when no Good or better hero is on duty | Sample Hero C (sample-build-3) · tier unknown',
+        'every hero listed with its tier and its fit for Funded; a build that is not a hero is not: ' + JSON.stringify(dlg.opts));
+      check(dlg.why === 'tier unknown' && dlg.fits, 'the chosen hero\'s warning beside it; the dialog fits 1366 x 768');
+      await p.selectOption('#gp-accountType', 'eval');
+      await p.selectOption('#gp-hero', 'sample-build-2');
+      check(await p.textContent('#gp-heroWhy') === 'Acceptable: at most 3 evals at once', 'Evals: Acceptable fits, with its guidance line (shown only)');
+      await p.screenshot({ path: path.join(out, 'settings-group-editor.png') });
+      await p.click('#wsDialog button[type="submit"]');
+      await p.click('#wsSet');
+      await p.waitForFunction(() => /Evals · hero Sample Hero B/.test(document.querySelector('#wsGroups .gp-row').textContent), null, { timeout: 10000 }).catch(() => {});
+      const row2 = await p.$eval('#wsGroups .gp-row', e => e.textContent);
+      check(/Evals · hero Sample Hero B/.test(row2), 'saved: ChartBridge sends it back, the row names the hero: ' + row2);
+      await p.click('#wsGroups [data-gp="hedge"][data-id="g1"]');
+      await p.waitForTimeout(600);
+      check(/Evals · hero Sample Hero B/.test(await p.$eval('#wsGroups .gp-row', e => e.textContent)), 'the No hedging switch keeps the Type and the hero');
+      await ctx.close();
+    } finally { await helper.close(); gb.kill(); }
   }
 } finally {
   await browser.close();

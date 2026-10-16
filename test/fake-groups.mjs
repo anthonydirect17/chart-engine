@@ -8,7 +8,7 @@ const MONEY = /^(?:0|[1-9][0-9]{0,8})(?:\.[0-9]{1,2})?$/;
 const usd = v => '$' + (+v).toLocaleString('en-US', { maximumFractionDigits: 2 });
 
 export const GROUP_KEYS = {
-  groupSave: ['type', 'cid', 'group', 'name', 'noHedge', 'dailyLoss', 'drawdown', 'drawdownType', 'target', 'size', 'lockAt', 'consistency'],
+  groupSave: ['type', 'cid', 'group', 'name', 'noHedge', 'dailyLoss', 'drawdown', 'drawdownType', 'target', 'size', 'lockAt', 'consistency', 'accountType', 'hero'],
   groupDelete: ['type', 'cid', 'group'],
   accountGroup: ['type', 'cid', 'account', 'group', 'highClose'],
   accountLimits: ['type', 'cid', 'account', 'floor', 'dailyLoss'],
@@ -23,7 +23,7 @@ export function installGroups(Desk) {
       this.gr = { on: o.groups !== false, list: new Map(), members: new Map(), personal: new Map(), peaks: new Map(), next: 1 };
       for (const s of o.groupsSeed || []) {
         const id = 'g' + this.gr.next++;
-        this.gr.list.set(id, { id, name: s.name, noHedge: s.noHedge !== false, dailyLoss: s.dailyLoss || 0, drawdown: s.drawdown, drawdownType: s.drawdownType || 'eod', target: s.target || 0, size: s.size, lockAt: s.lockAt || 0 });
+        this.gr.list.set(id, { id, name: s.name, noHedge: s.noHedge !== false, dailyLoss: s.dailyLoss || 0, drawdown: s.drawdown, drawdownType: s.drawdownType || 'eod', target: s.target || 0, size: s.size, lockAt: s.lockAt || 0, accountType: s.accountType || null, hero: s.hero || null });
         for (const a of s.members || []) { this.gr.members.set(a, id); this.gr.peaks.set(a, Math.max(s.size, s.highClose || 0)); }
       }
     },
@@ -33,7 +33,7 @@ export function installGroups(Desk) {
         const holders = members.flatMap(a => this.groupHoldings(a));
         const longs = holders.some(h => h.side === 'long'), shorts = holders.some(h => h.side === 'short');
         return { id: g.id, name: g.name, noHedge: g.noHedge, dailyLoss: g.dailyLoss || null, drawdown: g.drawdown, drawdownType: g.drawdownType, target: g.target || null,
-          size: g.size, lockAt: g.lockAt || null, consistency: g.consistency || null, members, side: longs && shorts ? 'mixed' : longs ? 'long' : shorts ? 'short' : null, holders };
+          size: g.size, lockAt: g.lockAt || null, consistency: g.consistency || null, accountType: g.accountType || null, hero: g.hero || null, members, side: longs && shorts ? 'mixed' : longs ? 'long' : shorts ? 'short' : null, holders };
       });
       return { type: 'groups', list, error: null };
     },
@@ -103,13 +103,16 @@ export function installGroups(Desk) {
       if (m.drawdown >= m.size) return 'the drawdown must be less than the account size';
       if (m.lockAt > 0 && m.drawdownType === 'static') return 'floor stops at applies to a trailing drawdown only (end of day or intraday); 0 for none';
       if (m.lockAt > 0 && m.lockAt <= m.size - m.drawdown) return 'floor stops at must be above the starting floor (' + (m.size - m.drawdown) + ')';
+      if (m.accountType !== undefined && !['eval', 'funded', '-'].includes(m.accountType)) return 'accountType must be eval, funded or - (not set)';   // 0.6.1
+      if (m.hero !== undefined && (typeof m.hero !== 'string' || !(m.hero === '-' || /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(m.hero)))) return 'hero must be a build name of 1 to 64 letters, digits, dots, underscores or hyphens, or - (none)';
       if (m.group !== undefined && !this.gr.list.has(m.group)) return 'no group ' + m.group;
       if ([...this.gr.list.values()].some(g => g.id !== m.group && g.name.toLowerCase() === name.toLowerCase())) return 'a group named ' + name + ' is there already';
       return null;
     },
     do_groupSave(m) {
-      const id = m.group || 'g' + this.gr.next++;
-      this.gr.list.set(id, { id, name: m.name, noHedge: m.noHedge, dailyLoss: m.dailyLoss, drawdown: m.drawdown, drawdownType: m.drawdownType, target: m.target, size: m.size, lockAt: m.lockAt, consistency: m.consistency || 0 });
+      const id = m.group || 'g' + this.gr.next++, was = this.gr.list.get(id) || {};
+      const keep = (k, v) => (v === undefined ? was[k] || null : v === '-' ? null : v);   // 0.6.1: absent keeps, - clears
+      this.gr.list.set(id, { accountType: keep('accountType', m.accountType), hero: keep('hero', m.hero), id, name: m.name, noHedge: m.noHedge, dailyLoss: m.dailyLoss, drawdown: m.drawdown, drawdownType: m.drawdownType, target: m.target, size: m.size, lockAt: m.lockAt, consistency: m.consistency || 0 });
       this.groupsChanged();
     },
     check_groupDelete(m) { return this.gr.list.has(m.group) ? null : 'no group ' + m.group; },

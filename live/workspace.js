@@ -2812,8 +2812,11 @@ $('wsPin').addEventListener('click', () => { closePops(); if (PIN) PIN.openChang
 let groupsUi = null;
 function startGroups() {
   if (!window.GroupsPage || !AF || groupsUi) return;
-  groupsUi = window.GroupsPage.mountSettings({ feed: AF, sec: $('wsGroupsCol'), wide: on => $('wsSettings').classList.toggle('ws-has-groups', on), list: $('wsGroups'), add: $('wsGroupNew'), note: $('wsGroupsNote'), dialog: $('wsDialog'), showDialog: (d, ok, cancel) => showDialog(d, ok, cancel) });
+  groupsUi = window.GroupsPage.mountSettings({ feed: AF, sec: $('wsGroupsCol'), wide: on => $('wsSettings').classList.toggle('ws-has-groups', on), list: $('wsGroups'), add: $('wsGroupNew'), note: $('wsGroupsNote'), dialog: $('wsDialog'), showDialog: (d, ok, cancel) => showDialog(d, ok, cancel),
+    /* 1.28.0: the heroes and their tiers for Hero on duty, from the PC helper (asked when the rules dialog opens) */
+    heroes: () => (heroHelper ? heroHelper.status() : Promise.resolve({ reach: 'down', body: null })) });
 }
+const heroHelper = window.AgentHelper && typeof fetch === 'function' ? window.AgentHelper.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (PIN ? PIN.headers() : {}) }) : null;
 startGroups();
 function renderSettings() {
   startGroups(); if (groupsUi) groupsUi.render();
