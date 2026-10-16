@@ -1319,7 +1319,7 @@ Object.assign(OrderDeskV3.prototype, {
   agentsDiag() {
     const out = {};
     for (const a of this.agents.values()) out[a.id] = { connected: a.connected, mode: a.mode, killed: a.killed, plans: a.stats.plans, proposals: a.stats.proposals, placed: a.stats.placed,
-      refused: a.stats.refused, heartbeatLost: a.stats.heartbeatLost, flattenedAt: a.stats.flattenedAt, secretFile: 'ok' };
+      refused: a.stats.refused, heartbeatLost: a.stats.heartbeatLost, flattenedAt: a.stats.flattenedAt, secretFile: 'ok', league: !!a.league && !a.groupView };   // 0.6.2
     return out;
   },
 

@@ -897,7 +897,7 @@ test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; h
     let n; do { n = await a.next('agentNote', 3000); } while (n && n.kind !== 'thinking');
     assert.equal(n && n.text, 'Sample: thinking about a made-up level');
     const diag = JSON.parse((await get(port, '/diag')).body);
-    assert.deepEqual(Object.keys(diag.agents.demo), ['connected', 'mode', 'killed', 'plans', 'proposals', 'placed', 'refused', 'heartbeatLost', 'flattenedAt', 'secretFile']);
+    assert.deepEqual(Object.keys(diag.agents.demo), ['connected', 'mode', 'killed', 'plans', 'proposals', 'placed', 'refused', 'heartbeatLost', 'flattenedAt', 'secretFile', 'league']);   // 0.6.2: league
     a.close(); ws.close();
   } finally { child.kill(); }
 });

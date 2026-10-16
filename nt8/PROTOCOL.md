@@ -2509,7 +2509,7 @@ Conversely the bot, the copier and other agents refuse an agent's account. A LIV
 
 A v3 page that signs in gets every agent's `agent`, its open proposals, its last 200 notes and its last 50 plans. `/diag`
 `agents` (only with the channel on): per id `connected`, `mode`, `killed`, `plans`, `proposals`, `placed`, `refused`,
-`heartbeatLost`, `flattenedAt`, `secretFile`. These messages ride the order lane (never behind market data).
+`heartbeatLost`, `flattenedAt`, `secretFile`. 0.6.2: and `league` (true for a league seat, false otherwise; the welcome's own flag, never an account name). These messages ride the order lane (never behind market data).
 
 **Fills to The Desk.** ChartBridge's fills to The Desk (`POST /api/fills`, `postFills = true`) add `by` when ChartBridge knows
 the source: exactly `agent:<id>`, `bot` or `copier`; no `by` key at all otherwise (The Desk refuses any other value, an empty

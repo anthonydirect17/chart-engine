@@ -4661,7 +4661,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 return "{\"connected\":" + (client != null ? "true" : "false") + ",\"mode\":" + CbJson.Str(mode) + ",\"killed\":" + (killed ? "true" : "false") +
                        ",\"plans\":" + nPlans + ",\"proposals\":" + nProposals + ",\"placed\":" + nPlaced + ",\"refused\":" + nRefused + ",\"heartbeatLost\":" + nHeartbeatLost +
-                       ",\"flattenedAt\":" + Str(flattenedAt) + ",\"secretFile\":" + CbJson.Str(secretState) + "}";
+                       ",\"flattenedAt\":" + Str(flattenedAt) + ",\"secretFile\":" + CbJson.Str(secretState) +
+                       ",\"league\":" + (league ? "true" : "false") + "}";   // 0.6.2: a league seat (the welcome's own flag; never the account)
             }
         }
 

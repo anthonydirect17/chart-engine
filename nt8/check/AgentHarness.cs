@@ -4255,11 +4255,16 @@ public static class AgentHarness
             // every start is shadow; the league line survives a restart
             Restart();
             Check(M.League && Last(agentOut, "welcome").Contains("\"mode\":\"shadow\",\"account\":\"SIM-D\",\"sim\":true,\"league\":true"), "0.6.2: a league seat starts in Shadow like every agent: " + Last(agentOut, "welcome"));
+            Check(ChartBridgeAgents.DiagJson().Contains("\"manrae\":{") && M.DiagJson().EndsWith(",\"league\":true}") && !M.DiagJson().Contains("SIM-D"), "/diag: a league seat: league true (no account name): " + M.DiagJson());
             // the same account without league: an ordinary seat again
             Mode("manrae", "auto");
             P("{\"type\":\"agentAccount\",\"cid\":\"l7\",\"agent\":\"manrae\",\"account\":\"SIM-D\",\"keepMode\":\"auto\"}");
             Check(!Rejected("l7") && !M.League && FileText("agent-manrae-account.txt").EndsWith("account\tSIM-D\n"), "0.6.2: the same account without league: no longer a league seat");
+            Check(M.DiagJson().EndsWith(",\"league\":false}"), "/diag: changed while running: one account, league false");
+            P("{\"type\":\"agentAccount\",\"cid\":\"l9\",\"agent\":\"manrae\",\"account\":null}");
+            Check(!Rejected("l9") && M.DiagJson().EndsWith(",\"league\":false}"), "/diag: None: league false");
             P("{\"type\":\"agentAccount\",\"cid\":\"l8\",\"agent\":\"manrae\",\"account\":\"SIM-D\",\"league\":true,\"keepMode\":\"auto\"}");
+            Check(!Rejected("l8") && M.DiagJson().EndsWith(",\"league\":true}"), "/diag: changed while running: None to a league seat, league true");
             // the 17:00 reset puts a league seat on None like every agent
             Func<DateTime> was = ChartBridgeBranches.ClockUtc;
             ChartBridgeBranches.Forget();
