@@ -2677,7 +2677,7 @@ public static class AgentHarness
             et = new DateTime(2026, 10, 12, 19, 0, 0);   // Monday 19:00: the market open
             int c9 = sime.Calls.Count, s0 = N(page);
             Account.All.Add(sime);
-            Advance(5000);
+            Advance(8000);   // 0.6.3 (audit C8): back in the list, it is looked at again only once settled (3 s), then the usual grace
             List<string> s9 = sime.Calls.Skip(c9).ToList();
             Check(!s9.Any(c => c.Contains(" ag:manrae flat ")) && Any(page, s0, "SIM-E MNQ is no longer agent manrae's: ChartBridge did not close it"),
                   "A1 (RA9): back in the list, his short 2 is not the agent's: the job ends with a warning, nothing closed: " + string.Join(" | ", s9));
@@ -3376,6 +3376,43 @@ public static class AgentHarness
             Advance(4000);
             Check(ChartBridgeAgents.OwnerAgent("SIM-E", "MNQ") == null && Last(agentOut, "agentState").Contains("\"trades\":1") &&
                   Any(page, s0, "its own executions leave 1 open: some were not seen; check NinjaTrader's fills"), "E1: after 5 s flat it is ended, booked from its executions, with a warning: " + Last(agentOut, "agentState"));
+        });
+
+        // 0.6.3 (audit C8): the account loses its connection and NinjaTrader empties its positions and orders meanwhile: nothing is
+        // ended, dropped or released; back Connected with the position, the trade is the agent's again; flat after it, the 5 s grace
+        // starts only a few seconds after it is Connected again
+        Part("0.6.3 C8 reconnect", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "0.6.3 C8: an entry was placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            string tradesBefore = Regex.Match(Last(agentOut, "agentState"), "\"trades\":[0-9]+,\"losses\":[0-9]+").Value;
+            List<Order> legs = Live(sime).ToList();
+            sime.Connection.Status = ConnectionStatus.ConnectionLost;
+            sime.Orders.RemoveAll(o => legs.Contains(o));
+            SetPos(sime, mnq, 0);   // a resync shows nothing while it is not Connected
+            int s0 = N(page);
+            Advance(20000);
+            Check(ChartBridgeAgents.OwnerAgent("SIM-E", "MNQ") == "manrae" && Last(agentOut, "agentState").Contains(tradesBefore) && !Any(page, s0, "was ended"),
+                  "0.6.3 C8: 20 s not Connected with the positions emptied: the trade is not ended, nothing counted (" + tradesBefore + ")");
+            sime.Connection.Status = ConnectionStatus.Connected;
+            sime.Orders.AddRange(legs);
+            SetPos(sime, mnq, 1);
+            Advance(8000);
+            Check(ChartBridgeAgents.OwnerAgent("SIM-E", "MNQ") == "manrae" && Last(agentOut, "agentState").Contains(tradesBefore) && !Any(page, s0, "was ended"),
+                  "0.6.3 C8: Connected again with its position and legs: still the agent's trade, nothing booked");
+            // Connected again but flat (it ended at the broker meanwhile): ended only after the settle and the 5 s grace
+            sime.Connection.Status = ConnectionStatus.ConnectionLost;
+            Advance(2000);
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            SetPos(sime, mnq, 0); ClearMoves();
+            sime.Connection.Status = ConnectionStatus.Connected;
+            int s1 = N(page);
+            Advance(6000);
+            Check(ChartBridgeAgents.OwnerAgent("SIM-E", "MNQ") == "manrae" && !Any(page, s1, "was ended"), "0.6.3 C8: 6 s after it is back flat, not ended yet (3 s to settle, then the 5 s grace)");
+            Advance(4000);
+            Check(ChartBridgeAgents.OwnerAgent("SIM-E", "MNQ") == null && Any(page, s1, "was ended: the pair is flat by both readings"), "0.6.3 C8: after the settle and the grace, flat: ended and booked");
         });
 
         // E2: the retry after a rejected close: the stop placed again is cancelled only once the market trades

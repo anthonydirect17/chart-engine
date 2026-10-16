@@ -1285,7 +1285,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (legsWork && (p1 != 0 || p2 != 0)) return true;   // its own stop or target protects a position there (after a restart too)
                 if (!stick) return false;
                 bool unnoted = ChartBridgeOrders.AgentUnnotedFill(a, inst, Now()) != null;   // a fill NinjaTrader shows whose event is not through yet
-                if (p1 == 0 && p2 == 0 && !mineWorks && !unnoted) { lock (Sync) { if (!(openTag != null && openRoot == root)) Sticky.Remove(root); } return false; }   // flat by both readings, nothing of it working: the lock clears
+                if (p1 == 0 && p2 == 0 && !mineWorks && !unnoted && SettledUp(a, Now())) { lock (Sync) { if (!(openTag != null && openRoot == root)) Sticky.Remove(root); } return false; }   // flat by both readings, nothing of it working: the lock clears (0.6.3 C8: only while Connected and settled)
                 return true;
             }
 
@@ -1463,6 +1463,23 @@ namespace NinjaTrader.NinjaScript.AddOns
             // shows ahead of its event, for 5 s: ended, booked from its own executions; a warning when those do not net to zero.
             private double ghostSince = -1;
 
+            // 0.6.3 (audit C8): positions and orders read while the account is not Connected (lost, reconnecting, resyncing) are not
+            // the account's: nothing is ended, dropped or released then, and the 5 s grace starts again only once it has been
+            // Connected for ReconnectSettleMs. upSince: when it was seen Connected again (0: never seen down; -1: not Connected now).
+            public static double ReconnectSettleMs = 3000;
+            private double upSince;
+            private readonly object UpLock = new object();
+            internal bool SettledUp(Account a, double now)
+            {
+                bool up = a != null && ChartBridgeAccounts.ConnectionText(a) == "connected";
+                lock (UpLock)
+                {
+                    if (!up) { upSince = -1; ghostSince = -1; return false; }
+                    if (upSince < 0) { upSince = now; ghostSince = -1; }
+                    return upSince == 0 || now - upSince >= ReconnectSettleMs;
+                }
+            }
+
             public void EndGhostTrade(double now)
             {
                 string key, root;
@@ -1472,6 +1489,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (li == null) li = ChartBridgeServer.InstrumentFor(root);
                 Account a = FindAccount(Account);
                 if (a == null || li == null) { ghostSince = -1; return; }
+                if (!SettledUp(a, now)) return;   // 0.6.3 (audit C8): not while it is not Connected, nor in the first seconds back
                 int p1 = ChartBridgeOrders.AgentListed(a, li), p2 = ChartBridgeOrders.AgentEffective(a, li);
                 bool busy = p1 != 0 || p2 != 0 || ChartBridgeOrders.AgentMayFill(a, li).Any(o => IsMine(o)) || ChartBridgeOrders.AgentUnnotedFill(a, li, now) != null;
                 if (busy) { ghostSince = -1; return; }
@@ -1503,6 +1521,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public void DropLedgerAgainst(List<string> roots)
             {
                 Account a = FindAccount(Account);
+                if (!SettledUp(a, Now())) return;   // 0.6.3 (audit C8): what an account not Connected shows is not what it holds
                 foreach (string root in roots)
                 {
                     string why = LedgerAgainst(root, a, true);

@@ -2732,7 +2732,10 @@ Where the contract left a detail open, the safest simple choice was taken and is
   result and contracts grow by the matched part, and only a true net opens a trade again (review E1). An open trade whose pair
   is flat by both readings, with nothing of the agent working there and no fill NinjaTrader shows ahead of its event, for 5 s,
   is ended and booked from its executions; when those do not net to zero the pages get a warning ("its own executions leave
-  <n> open: some were not seen; check NinjaTrader's fills"). An unowned pair's flatten only ever cancels the agent's own entry and legs (review A-N2). The check is in `PlaceOrderLocked`
+  <n> open: some were not seen; check NinjaTrader's fills"). 0.6.3 (audit C8): none of these (the trade ended on a flat pair,
+  the trade dropped against the other side, the owner lock released when flat) happens while the account is not Connected
+  (lost, reconnecting, or a resync emptying its positions and orders): what it shows then is not what it holds. Once it is
+  Connected again the account must stay Connected for 3 s before they are looked at, and the 5 s (or 3 s) grace starts then. An unowned pair's flatten only ever cancels the agent's own entry and legs (review A-N2). The check is in `PlaceOrderLocked`
   right after the account and the instrument are found (the page, Order Strategies, the bot and every agent) and in the
   copier's `Eligible` (a skip labelled `agent`).
 - **A page order that only reduces** the agent's position passes the owner lock as an exit (lead's default, review A-S5): a
