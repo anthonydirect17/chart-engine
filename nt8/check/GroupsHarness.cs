@@ -18,7 +18,9 @@ public static class GroupsHarness
 {
     static Action<bool, string> Check;
     // 0.6.3 (audit C3): a file broken on purpose, with no last good copy (.bak) to fall back to (the backup cases are their own)
-    static void Corrupt(string path, string text) { try { File.Delete(path + ".bak"); } catch (Exception) { } File.WriteAllText(path, text); }
+    // 0.6.3 (review MED 5): a file gone means no copy beside it either (a .bak or .tmp left would be used, or stand the agent down)
+    static void Gone(string path) { File.Delete(path); File.Delete(path + ".bak"); File.Delete(path + ".tmp"); }
+    static void Corrupt(string path, string text) { try { Gone(path + ".bak"); } catch (Exception) { } File.WriteAllText(path, text); }
     const BindingFlags PS = BindingFlags.NonPublic | BindingFlags.Static;
     static readonly List<string> sent = new List<string>();
     static ChartBridgeClient page;
@@ -186,6 +188,15 @@ public static class GroupsHarness
         lc.Tap = x => { lock (late) late.Add(x); };
         ChartBridgeAccounts.SignedIn(lc);
         Check(late.Any(x => x.Contains("account-marks.txt could not be read") && x.Contains("last good copy")) && late.Any(x => x.Contains("groups.txt could not be read")), "0.6.3 C3: a page that signs in later gets the notes too");
+        // 0.6.3 (review MED 5): the files missing after a cut-off replace, a copy beside each
+        File.WriteAllText(p + ".bak", was); File.Delete(p);
+        File.WriteAllText(mp + ".bak", mwas); File.Delete(mp);
+        Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+        gj = ChartBridgeGroups.GroupsJson();
+        Check(gj.Contains("\"error\":\"groups.txt could not be read") && gj.Contains("(groups.txt is missing (a save cut off?) but groups.txt.bak is there and holds ") && !File.Exists(p),
+              "0.6.3 MED 5: groups.txt missing with its .bak: unreadable with the alarm (never no groups on its own), not written: " + gj);
+        Check(Any("account-marks.txt is missing (a save cut off?): ChartBridge uses account-marks.txt.bak and writes the file again"), "0.6.3 MED 5: account-marks.txt missing: its .bak used automatically");
         File.WriteAllText(p, was); File.WriteAllText(mp, mwas);
         Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
@@ -1006,7 +1017,7 @@ public static class GroupsHarness
         ChartBridgeAccounts.ReadFault = null;
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Check(ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == null && ChartBridgeGroups.GroupOf("SIM-B") == null && FileText() == was, "readable again after a start: as saved");
-        File.Delete(p); File.Delete(Path.Combine(folder, "account-marks.txt"));
+        Gone(p); Gone(Path.Combine(folder, "account-marks.txt"));
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Check(ChartBridgeGroups.GroupsJson() == "{\"type\":\"groups\",\"list\":[],\"error\":null}", "both files gone: no groups (0.5.7's behaviour)");
     }
@@ -1078,12 +1089,12 @@ public static class GroupsHarness
             why = ChartBridgeAgents.StandDownsBroken();
             Check(why != null && why.Contains("(its last good copy, agent-standdowns.txt.bak, holds 1 stand-down (build sample-build-1 on group ") && why.Contains("to use it, copy agent-standdowns.txt.bak over agent-standdowns.txt and restart ChartBridge)") &&
                   ChartBridgeAgents.StandDownsOf(null).Count == 0, "0.6.3 MED 3: agent-standdowns.txt unreadable with a good .bak: refused as unreadable, the alarm names the copy: " + why);
-            try { File.Delete(sd + ".bak"); } catch (Exception) { }
+            try { Gone(sd + ".bak"); } catch (Exception) { }
         }
         finally
         {
             ChartBridgeAgents.Stop(); ChartBridgeAgents.ResetConfig();
-            try { File.Delete(sd); } catch (Exception) { }
+            try { Gone(sd); } catch (Exception) { }
             Clear(); G("groupDelete", "{\"type\":\"groupDelete\",\"cid\":\"d\",\"group\":\"" + gid + "\"}");
         }
     }

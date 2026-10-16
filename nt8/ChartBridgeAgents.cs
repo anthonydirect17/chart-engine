@@ -632,9 +632,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             };
             try
             {
-                if (File.Exists(SdPath)) broken = ChartBridgeAgent.ParseOrBackup(SdPath, StandDownsFileName, parse,
-                    () => list.Count == 0 ? "holds no stand-down" : "holds " + list.Count + " stand-down" + (list.Count == 1 ? "" : "s") + " (" + string.Join("; ", list.Select(x => "build " + x.Build + " on group " + (ChartBridgeGroups.NameOf(x.Group) ?? x.Group))) + ")",
-                    null);
+                Func<string> held = () => list.Count == 0 ? "holds no stand-down" : "holds " + list.Count + " stand-down" + (list.Count == 1 ? "" : "s") + " (" + string.Join("; ", list.Select(x => "build " + x.Build + " on group " + (ChartBridgeGroups.NameOf(x.Group) ?? x.Group))) + ")";
+                if (File.Exists(SdPath)) broken = ChartBridgeAgent.ParseOrBackup(SdPath, StandDownsFileName, parse, held, null);
+                else broken = ChartBridgeAgent.MissingWithCopy(SdPath, StandDownsFileName, parse, held, null);   // 0.6.3 (review MED 5)
             }
             catch (IOException ex) { io = StandDownsFileName + " could not be read yet (" + ex.Message + "): every new agent entry on an account in a prop group is refused until it is read (accounts in no group keep trading; exits always work; ChartBridge tries again)"; }
             catch (Exception ex) { broken = StandDownsFileName + " could not be read (" + ex.Message + ")"; }
@@ -2226,6 +2226,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             return held == null ? why : why + " (its last good copy, " + name + ".bak, " + held + ": " + (use != null ? use + ", or copy " : "to use it, copy ") + name + ".bak over " + name + " and restart ChartBridge)";
         }
 
+        // 0.6.3 (review MED 5): the file is missing but a copy left by a cut-off replace (.bak, .tmp) is understood: the same stand-down
+        // as a file not understood (MED 3), with what the copy holds and how to use it; null when there is no such copy (no file, as
+        // before). parse is run on an empty file after, so the state is "no file".
+        internal static string MissingWithCopy(string path, string name, Func<string[], string> parse, Func<string> describe, string use)
+        {
+            string found = null;
+            bool tried = false;
+            foreach (string alt in ChartBridgeFiles.LeftOvers(path))
+            {
+                string[] b = ChartBridgeFiles.ReadAny(alt);
+                if (b == null) continue;
+                tried = true;
+                if (parse(b) != null) continue;
+                string f = Path.GetFileName(alt);
+                found = name + " is missing (a save cut off?) but " + f + " is there and " + describe() + ": " + (use != null ? use + ", or copy " : "to use it, copy ") + f + " to " + name + " and restart ChartBridge; to start with no file, delete it";
+                break;
+            }
+            if (tried) parse(new string[0]);
+            return found;
+        }
+
         // A file's lines; the harness's ChartBridgeAccounts.ReadFault fails a read by file name (an IOException, as a sharing lock).
         internal static string[] ReadAll(string path)
         {
@@ -2330,13 +2351,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             };
             try
             {
-                if (File.Exists(RulesFile)) broken = ParseOrBackup(RulesFile, "agent-" + Id + "-rules.txt", parse,
-                    () => "has roots " + string.Join(", ", r.Roots) + ", entries " + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + ", flat at " + Hm(r.FlatAt) + ", maxTrades " + (r.MaxTrades > 0 ? r.MaxTrades.ToString(CultureInfo.InvariantCulture) : "none") + ", maxLosses " + (r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "none"),
-                    "set those rules again on the Agent tab");
+                Func<string> held = () => "has roots " + string.Join(", ", r.Roots) + ", entries " + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + ", flat at " + Hm(r.FlatAt) + ", maxTrades " + (r.MaxTrades > 0 ? r.MaxTrades.ToString(CultureInfo.InvariantCulture) : "none") + ", maxLosses " + (r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "none");
+                if (File.Exists(RulesFile)) broken = ParseOrBackup(RulesFile, "agent-" + Id + "-rules.txt", parse, held, "set those rules again on the Agent tab");
+                else broken = MissingWithCopy(RulesFile, "agent-" + Id + "-rules.txt", parse, held, "set those rules again on the Agent tab");   // 0.6.3 (review MED 5)
             }
             catch (IOException ex) { io = IoWords("agent-" + Id + "-rules.txt", Id, ex.Message); }
             catch (Exception ex) { broken = "agent-" + Id + "-rules.txt could not be read (" + ex.Message + ")"; }
-            if (broken != null) { broken += ": no new entries for agent " + Id + " until its rules are set on the Agent tab or the file is deleted"; Log(broken); r = new Rules(); if (broken.Contains(".bak, ")) ChartBridgeOrders.AgentAlarm(broken); }
+            if (broken != null) { broken += ": no new entries for agent " + Id + " until its rules are set on the Agent tab or the file is deleted"; Log(broken); r = new Rules(); if (broken.Contains("and restart ChartBridge")) ChartBridgeOrders.AgentAlarm(broken); }
             if (io != null) { broken = io; if (!IoPending("rules")) Log(io); r = new Rules(); }
             lock (Sync) { rules = r; rulesBroken = broken; }
             IoState("rules", io != null, null);
@@ -2394,13 +2415,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             };
             try
             {
-                if (File.Exists(AccountFile)) broken = ParseOrBackup(AccountFile, "agent-" + Id + "-account.txt", parse,
-                    () => grp != null ? "names group " + (ChartBridgeGroups.NameOf(grp) ?? grp) : lg ? "names the league seat " + a : ChartBridgeBranches.IsNone(a) ? "names None" : "names account " + a,
-                    "choose it again on the Agent tab");
+                Func<string> held = () => grp != null ? "names group " + (ChartBridgeGroups.NameOf(grp) ?? grp) : lg ? "names the league seat " + a : ChartBridgeBranches.IsNone(a) ? "names None" : "names account " + a;
+                if (File.Exists(AccountFile)) broken = ParseOrBackup(AccountFile, "agent-" + Id + "-account.txt", parse, held, "choose it again on the Agent tab");
+                else broken = MissingWithCopy(AccountFile, "agent-" + Id + "-account.txt", parse, held, "choose it again on the Agent tab");   // 0.6.3 (review MED 5)
             }
             catch (IOException ex) { io = IoWords("agent-" + Id + "-account.txt", Id, ex.Message); }
             catch (Exception ex) { broken = "agent-" + Id + "-account.txt could not be read (" + ex.Message + ")"; }
-            if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); if (broken.Contains(".bak, ")) ChartBridgeOrders.AgentAlarm(broken); }
+            if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); if (broken.Contains("and restart ChartBridge")) ChartBridgeOrders.AgentAlarm(broken); }
             if (io != null) { broken = io; if (!IoPending("account")) Log(io); a = ChartBridgeBranches.None; grp = null; lg = false; }
             lock (Sync) { account = a; groupId = grp; accountBroken = broken; league = broken == null && lg && grp == null; chosen = broken == null && (grp != null || (a != null && !ChartBridgeBranches.IsNone(a))) && File.Exists(AccountFile); }
             IoState("account", io != null, null);
@@ -2463,7 +2484,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private void LoadDay()
         {
-            string today = SessionOf(NowEt()), fileSession = null, broken = null, held = null, damaged = null, io = null;
+            string today = SessionOf(NowEt()), fileSession = null, broken = null, held = null, damaged = null, io = null, leftNote = null;
             Dictionary<string, double> trades = new Dictionary<string, double>(), expiry = new Dictionary<string, double>();
             Dictionary<string, int[]> spans = new Dictionary<string, int[]>();
             HashSet<string> ids = new HashSet<string>(), carriedTags = new HashSet<string>();
@@ -2517,6 +2538,20 @@ namespace NinjaTrader.NinjaScript.AddOns
                                   " are kept and the file is written again from them";
                     }
                 }
+                else
+                {
+                    // 0.6.3 (review MED 5): no day file but a copy left by a cut-off save: used when it is today's session (MED 2), said so,
+                    // and written again; a copy of another session is ignored (a new day)
+                    foreach (string alt in ChartBridgeFiles.LeftOvers(DayFile))
+                    {
+                        string[] b = ChartBridgeFiles.ReadAny(alt);
+                        string bs = b == null ? null : b.Select(x => x.Trim().Split('\t')).Where(x => x.Length == 2 && x[0] == "session").Select(x => x[1]).FirstOrDefault();
+                        if (bs != today) continue;
+                        read(b, true);
+                        leftNote = "agent-" + Id + "-day.txt is missing (a save cut off?): ChartBridge uses " + Path.GetFileName(alt) + " (today's session: its trades, losses and plan ids) and writes the file again";
+                        break;
+                    }
+                }
             }
             catch (IOException ex) { broken = "agent-" + Id + "-day.txt could not be read"; io = IoWords("agent-" + Id + "-day.txt", Id, ex.Message); }
             catch (Exception ex) { broken = "agent-" + Id + "-day.txt could not be read (" + ex.Message + ")"; }
@@ -2568,6 +2603,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (io != null) { if (!IoPending("day")) Log(io); }
             else if (broken != null) Log(broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)");
             IoState("day", io != null, null);
+            if (leftNote != null) { ChartBridgeFiles.Note(leftNote); SaveDay(); }
             if (damaged != null)
             {
                 string said;

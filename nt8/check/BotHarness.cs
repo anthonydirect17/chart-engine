@@ -230,7 +230,7 @@ public static class BotHarness
         ChartBridgeBot.Stop(); ChartBridgeBot.Start(false);
         Check(ChartBridgeBot.UpgradeCheck(null, secret, true) == 403 && ChartBridgeBot.UpgradeCheck(null, "abc", true) == 403 && File_("bot-secret.txt") == "# torn\nabc\n" &&
               ChartBridgeBot.DiagJson().Contains("\"secretFile\":\"unreadable\""), "a broken bot-secret.txt: every bot refused, the file left as it is");
-        File.Delete(Path.Combine(home, "ChartBridge", "bot-secret.txt"));
+        Gone(Path.Combine(home, "ChartBridge", "bot-secret.txt"));
         ChartBridgeBot.Stop(); ChartBridgeBot.Start(false);
         string fresh = File.ReadAllLines(Path.Combine(home, "ChartBridge", "bot-secret.txt"))[2];
         Check(fresh != secret && ChartBridgeBot.UpgradeCheck(null, secret, true) == 403 && ChartBridgeBot.UpgradeCheck(null, fresh, true) == 101, "deleted: a new secret at the next start, the old one refused");
@@ -452,7 +452,7 @@ public static class BotHarness
         finally
         {
             eval.Positions.Clear();
-            File.Delete(file);
+            Gone(file);
             ChartBridgeGroups.StartNow();
         }
     }
@@ -518,6 +518,8 @@ public static class BotHarness
     }
 
     // 0.6.3 (review HIGH 1): the daily reset acts only on accounts Connected for a few seconds; the harness's are, unless a case says not
+    // 0.6.3 (review MED 5): a file gone means no copy beside it either (a .bak or .tmp left would be used, or stand the agent down)
+    static void Gone(string path) { File.Delete(path); File.Delete(path + ".bak"); File.Delete(path + ".tmp"); }
     static void SteadyAll() { Dictionary<Account, double> cs = (Dictionary<Account, double>)typeof(ChartBridgeOrders).GetField("ConnectedSince", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null); lock (cs) foreach (Account a in Account.All) if (a.Connection != null && a.Connection.Status == ConnectionStatus.Connected) cs[a] = 0; }
     static void Reconnect()
     {
@@ -739,7 +741,7 @@ public static class BotHarness
         Settle();
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
         // 0.5.7 (DECISION 2026-10-14e): no bot-account.txt is None, never Sim101
-        File.Delete(AccountFile());
+        Gone(AccountFile());
         ChartBridgeBot.Stop(); ChartBridgeBot.Start(false); Reconnect();
         Check(ChartBridgeBot.BotAccount == "-" && !File.Exists(AccountFile()) && ChartBridgeBot.StripJson().Contains("\"account\":null,\"sim\":false") && Last(botOut, "welcome").Contains("\"account\":null"),
               "0.5.7: the bot's account is None until Anthony chooses one (no bot-account.txt): the page and the bot see account null");
@@ -903,7 +905,7 @@ public static class BotHarness
         FieldInfo etf = typeof(ChartBridgeTime).GetField("et", PS);   // Linux names New York's zone differently from Windows
         if (etf.GetValue(null) == null) etf.SetValue(null, TimeZoneInfo.FindSystemTimeZoneById("America/New_York"));
         ChartBridgeBranches.Forget();
-        try { File.Delete(Path.Combine(home, "ChartBridge", "daily-reset.txt")); } catch (Exception) { }
+        try { Gone(Path.Combine(home, "ChartBridge", "daily-reset.txt")); } catch (Exception) { }
         Func<DateTime> was = ChartBridgeBranches.ClockUtc;
         DateTime utc = new DateTime(2026, 7, 14, 20, 59, 0, DateTimeKind.Utc);   // 16:59 EDT
         ChartBridgeBranches.ClockUtc = () => utc;
@@ -951,7 +953,7 @@ public static class BotHarness
             Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
             utc = new DateTime(2026, 12, 15, 23, 0, 0, DateTimeKind.Utc);   // 18:00 EST: the break is over
             ChartBridgeBranches.Forget();
-            try { File.Delete(Path.Combine(home, "ChartBridge", "daily-reset.txt")); } catch (Exception) { }
+            try { Gone(Path.Combine(home, "ChartBridge", "daily-reset.txt")); } catch (Exception) { }
             Page(AccountMsg("Sim101"));
             SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101", "0.5.7 reset: never outside the break (18:00 EST)");
@@ -992,11 +994,17 @@ public static class BotHarness
             Check(lateOut2.Any(x => x.Contains("the bot stays on Sim101")), "0.6.3 C1: a page that signs in after a caught-up reset gets the skipped note too");
             busy.OrderState = OrderState.Cancelled; Update(busy);
             Settle();
+            // 0.6.3 (review MED 5): daily-reset.txt missing after a cut-off replace: its .bak gives the day (no reset run again)
+            File.WriteAllText(rf + ".bak", "day\t2026-12-20\n"); File.Delete(rf);
+            ChartBridgeBranches.Forget();
+            SteadyAll(); ChartBridgeBranches.Check();
+            Check(ChartBridgeBot.BotAccount == "Sim101" && NinjaTrader.Code.Output.Lines.Any(x => x.Contains("daily-reset.txt is missing: daily-reset.txt.bak is used (2026-12-20)")), "0.6.3 MED 5: daily-reset.txt missing: its .bak gives the day, the reset is not run again");
+            Gone(rf + ".bak");
             File.WriteAllText(rf, "day\t2027-01-05\n");   // a day ahead of now (the clock moved back): not due
             ChartBridgeBranches.Forget();
             SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101", "0.6.3 C1: a saved day ahead of now (the clock moved back) is not a missed break");
-            try { File.Delete(rf); } catch (Exception) { }
+            try { Gone(rf); } catch (Exception) { }
             ChartBridgeBranches.Forget();
             SteadyAll(); ChartBridgeBranches.Check();
             Check(ChartBridgeBot.BotAccount == "Sim101", "0.6.3 C1: no daily-reset.txt is not a missed break: it waits for the next break, as before");

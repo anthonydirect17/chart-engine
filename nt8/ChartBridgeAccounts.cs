@@ -1504,7 +1504,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 string[] lines = File.Exists(ResetFile) ? File.ReadAllLines(ResetFile) : null;
                 string d = DayIn(lines);
-                if (d == null && lines != null)
+                if (d == null)
                 {
                     // 0.6.3 (audit C3, review MED 5): no day line (a power cut), or no file left by a replace that was cut off: the
                     // last good copy (.bak), or the temp file that was about to replace it

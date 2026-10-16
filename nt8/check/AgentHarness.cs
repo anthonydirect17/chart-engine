@@ -23,7 +23,9 @@ public static class AgentHarness
 {
     static Action<bool, string> Check;
     // 0.6.3 (audit C3): a file broken on purpose, with no last good copy (.bak) to fall back to (the backup cases are their own)
-    static void Corrupt(string path, string text) { try { File.Delete(path + ".bak"); } catch (Exception) { } File.WriteAllText(path, text); }
+    // 0.6.3 (review MED 5): a file gone means no copy beside it either (a .bak or .tmp left would be used, or stand the agent down)
+    static void Gone(string path) { File.Delete(path); File.Delete(path + ".bak"); File.Delete(path + ".tmp"); }
+    static void Corrupt(string path, string text) { try { Gone(path + ".bak"); } catch (Exception) { } File.WriteAllText(path, text); }
     const BindingFlags PS = BindingFlags.NonPublic | BindingFlags.Static;
     static readonly List<string> page = new List<string>(), agentOut = new List<string>(), demobOut = new List<string>();
     static ChartBridgeClient pc, ac, dc;
@@ -312,7 +314,7 @@ public static class AgentHarness
         ChartBridgeAgents.Stop(); ChartBridgeAgents.Start(false);
         Check(ChartBridgeAgents.UpgradeCheck("manrae", null, secret, true) == 403 && FileText("agent-manrae-secret.txt") == "# torn\nabc\n" && M.DiagJson().Contains("\"secretFile\":\"unreadable\"") &&
               ChartBridgeAgents.UpgradeCheck("demob", null, secret2, true) == 101, "a broken secret file: every connection for that id refused, the file left as it is; the other agent unaffected");
-        File.Delete(Path.Combine(Dir, "agent-manrae-secret.txt"));
+        Gone(Path.Combine(Dir, "agent-manrae-secret.txt"));
         ChartBridgeAgents.Stop(); ChartBridgeAgents.Start(false);
         string fresh = File.ReadAllLines(Path.Combine(Dir, "agent-manrae-secret.txt"))[2];
         Check(fresh != secret && ChartBridgeAgents.UpgradeCheck("manrae", null, secret, true) == 403 && ChartBridgeAgents.UpgradeCheck("manrae", null, fresh, true) == 101, "deleted: a new secret at the next start, the old one refused");
@@ -955,7 +957,7 @@ public static class AgentHarness
         Check(Last(agentOut, "agentState").Contains("agent-manrae-rules.txt has a line ChartBridge does not understand"), "a line it does not know: stands down");
         P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));
         Check(Last(agentOut, "agentState").Contains("\"standDown\":null") && FileText("agent-manrae-rules.txt").Contains("maxQty.NQ\t2"), "the page sets the rules: written, the agent stands up");
-        File.Delete(rules);
+        Gone(rules);
         // the account file
         string acct = Path.Combine(Dir, "agent-manrae-account.txt");
         Corrupt(acct, "# made-up\n# test\naccount\tSim101\naccount\tSIM-D\n");
@@ -1023,7 +1025,31 @@ public static class AgentHarness
             File.WriteAllText(day, noSession);
             Restart();
             Check(FileText("agent-manrae-day.txt").Contains("ab00000a") && FileText("agent-manrae-day.txt").Contains("session\t2026-10-08"), "0.6.3 MED 2: no session line and today's .bak: its lines fill in");
-            File.WriteAllText(day, cur); try { File.Delete(day + ".bak"); } catch (Exception) { }
+            File.WriteAllText(day, cur); try { Gone(day + ".bak"); } catch (Exception) { }
+            Restart();
+        }
+        // 0.6.3 (review MED 5): a replace cut off: the day file missing with a copy beside it
+        {
+            string cur = File.ReadAllText(day);
+            string want = Regex.Match(Last(agentOut, "agentState"), "\"trades\":[0-9]+,\"losses\":[0-9]+").Value;
+            File.WriteAllText(day + ".bak", cur); File.Delete(day);
+            Restart();
+            Check(Last(agentOut, "agentState").Contains(want) && Last(agentOut, "agentState").Contains("\"standDown\":null") && File.Exists(day) &&
+                  Logged("agent-manrae-day.txt is missing (a save cut off?): ChartBridge uses agent-manrae-day.txt.bak (today's session"),
+                  "0.6.3 MED 5: the day file missing, today's .bak beside it: its counts used (" + want + "), said, and the file written again");
+            File.WriteAllText(day + ".tmp", "# old\n# old\nsession\t2026-10-07\ntrade\tab00000b\t-50\n"); Gone(day + ".bak"); File.Delete(day);
+            Restart();
+            Check(!FileText("agent-manrae-day.txt").Contains("ab00000b") && !Last(agentOut, "agentState").Contains(want), "0.6.3 MED 5: a leftover .tmp of another session is ignored (a new day)");
+            File.WriteAllText(day, cur); Gone(day + ".tmp"); Gone(day + ".bak");
+            Restart();
+            // the account file missing with a .bak: stood down with the alarm (MED 3), not "no file is None" on its own
+            string af = Path.Combine(Dir, "agent-manrae-account.txt");
+            string was = File.ReadAllText(af);
+            File.WriteAllText(af + ".bak", was); File.Delete(af);
+            Restart();
+            Check(Last(agentOut, "agentState").Contains("agent-manrae-account.txt is missing (a save cut off?) but agent-manrae-account.txt.bak is there and names account ") &&
+                  Logged("ALERT: agent-manrae-account.txt is missing (a save cut off?)"), "0.6.3 MED 5: the account file missing with its .bak: stood down with the alarm, never None or the copy on its own");
+            File.WriteAllText(af, was); Gone(af + ".bak");
             Restart();
         }
         // 0.6.3 (review MED 3): a rules file read but not understood, with a good copy: never used on its own; the agent stands down
@@ -1047,10 +1073,10 @@ public static class AgentHarness
             Check(M.Account == "-" && Last(agentOut, "agentState").Contains("agent-manrae-account.txt has a line ChartBridge does not understand (its last good copy, agent-manrae-account.txt.bak, names account SIM-D: choose it again on the Agent tab") &&
                   Logged("ALERT: agent-manrae-account.txt has a line ChartBridge does not understand (its last good copy"),
                   "0.6.3 MED 3: a damaged account file: no account and stood down (as 0.6.2), never the older SIM-D on its own; the alarm names it");
-            File.WriteAllText(af, was); try { File.Delete(af + ".bak"); } catch (Exception) { }
+            File.WriteAllText(af, was); try { Gone(af + ".bak"); } catch (Exception) { }
             Restart();
         }
-        File.Delete(rules); File.Delete(rules + ".bak");
+        Gone(rules); Gone(rules + ".bak");
         // 0.6.3 (audit C4): a file held open at NinjaTrader's start (an IOException) is read again, the alarm only after a minute
         Func<string, string> faultWas = ChartBridgeAccounts.ReadFault;
         try
@@ -1092,7 +1118,7 @@ public static class AgentHarness
             ChartBridgeAccounts.ReadFault = null;
             Advance(1000);
             Check(ChartBridgeAgents.StandDownsBroken() == null && Logged("agent-standdowns.txt could be read now"), "0.6.3 C4: agent-standdowns.txt freed: read on the next check");
-            if (!hadSd) File.Delete(sdf);
+            if (!hadSd) Gone(sdf);
         }
         finally { ChartBridgeAccounts.ReadFault = faultWas; }
         Restart();
@@ -1422,7 +1448,7 @@ public static class AgentHarness
         id = NewId();
         e = PlacedNow(id, Plan(id, "MNQ", "buy", "limit", "24999", 1, 6, 12, 600));
         ChartBridgeOrders.Clear();
-        File.Delete(Path.Combine(Dir, "planned_brackets.txt"));
+        Gone(Path.Combine(Dir, "planned_brackets.txt"));
         ChartBridgeOrders.LoadPlansNow();
         Fill(e, 1, 24999);
         legs = Legs(sim, e);
@@ -1476,7 +1502,7 @@ public static class AgentHarness
         File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSIM-Z" });
         ChartBridgeSwitches.Note("bot", "on");
         ChartBridgeBot.Start(false);
-        File.Delete(Path.Combine(Dir, "agent-manrae-account.txt"));
+        Gone(Path.Combine(Dir, "agent-manrae-account.txt"));
         Restart();
         SettleAll();
         Check(M.Account == "-" && !M.Chosen && M.AccountConflict() == null && ChartBridgeAgents.AgentOfAccount("Sim101") == null && ChartBridgeAgents.AgentOfAccount("-") == null,
@@ -1513,8 +1539,8 @@ public static class AgentHarness
         ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off");
         File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSIM-Z" });
         // two agents on None clash with nobody; a chosen account is never blocked by an agent on None
-        File.Delete(Path.Combine(Dir, "agent-demob-account.txt"));
-        File.Delete(Path.Combine(Dir, "agent-manrae-account.txt"));
+        Gone(Path.Combine(Dir, "agent-demob-account.txt"));
+        Gone(Path.Combine(Dir, "agent-manrae-account.txt"));
         Restart();
         Check(M.AccountConflict() == null && D.AccountConflict() == null && M.Account == "-" && D.Account == "-", "0.5.7: both on None: no clash (None is nobody's account)");
         File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
@@ -1537,7 +1563,7 @@ public static class AgentHarness
     {
         Hold = null;
         foreach (Account a in Account.All.ToList()) Settle(a);
-        foreach (string f in new[] { "agent-manrae-day.txt", "agent-manrae-rules.txt" }) { try { File.Delete(Path.Combine(Dir, f)); } catch (Exception) { } }
+        foreach (string f in new[] { "agent-manrae-day.txt", "agent-manrae-rules.txt" }) { try { Gone(Path.Combine(Dir, f)); } catch (Exception) { } }
         File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSIM-E" });
         et = new DateTime(2026, 10, 9, 10, 0, 0);
         Restart();
@@ -1906,7 +1932,7 @@ public static class AgentHarness
             }
             finally
             {
-                try { File.Delete(file); } catch (Exception) { }
+                try { Gone(file); } catch (Exception) { }
                 ChartBridgeGroups.StartNow();
             }
         });
@@ -1929,7 +1955,7 @@ public static class AgentHarness
     {
         Hold = null;
         foreach (Account a in Account.All.ToList()) Settle(a);
-        foreach (string f in new[] { "agent-manrae-day.txt", "agent-manrae-rules.txt" }) { try { File.Delete(Path.Combine(Dir, f)); } catch (Exception) { } }
+        foreach (string f in new[] { "agent-manrae-day.txt", "agent-manrae-rules.txt" }) { try { Gone(Path.Combine(Dir, f)); } catch (Exception) { } }
         File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "group\tg1" });
         et = new DateTime(2026, 10, 9, 10, 0, 0);
         Restart();
@@ -1975,7 +2001,7 @@ public static class AgentHarness
             sima = Account.All.FirstOrDefault(x => x.Name == "SIM-A") ?? NewAccount("SIM-A", Provider.Simulator);
             es = new Instrument { FullName = "ES 12-26", MasterInstrument = new MasterInstrument { Name = "ES", TickSize = 0.25, PointValue = 50 } };
             ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-A, SIM-B, SIM-C, SIM-D, SIM-E");
-            try { File.Delete(Path.Combine(Dir, "agent-demob-account.txt")); } catch (Exception) { }
+            try { Gone(Path.Combine(Dir, "agent-demob-account.txt")); } catch (Exception) { }
             WriteGroup("SIM-A", "SIM-B", "SIM-C");
             Check(string.Join(",", ChartBridgeGroups.MembersOf("g1")) == "SIM-A,SIM-B,SIM-C" && ChartBridgeGroups.NameOf("g1") == "Lucid", "0.6.0: group Lucid holds SIM-A, SIM-B, SIM-C (seat order: by name)");
         });
@@ -1997,7 +2023,7 @@ public static class AgentHarness
             Restart(); Mode("manrae", "auto");
             P("{\"type\":\"agentAccount\",\"cid\":\"gc\",\"agent\":\"manrae\",\"group\":\"g1\",\"keepMode\":\"auto\"}");
             Check(PageReject().Contains("group Lucid: SIM-C is agent demob's account: each agent has its own") && M.Account == "SIM-E", "0.6.0: a group with another agent's account: refused, nothing changed: " + PageReject());
-            File.Delete(Path.Combine(Dir, "agent-demob-account.txt"));
+            Gone(Path.Combine(Dir, "agent-demob-account.txt"));
             Restart(); Mode("manrae", "auto");
             int w0 = Count(agentOut, "welcome"), s0 = Count(agentOut, "accountState");
             P("{\"type\":\"agentAccount\",\"cid\":\"gd\",\"agent\":\"manrae\",\"group\":\"g1\",\"keepMode\":\"auto\"}");
@@ -2324,7 +2350,7 @@ public static class AgentHarness
             if (e[1] != null) Fill(e[1], 1, 24999);
             Func<DateTime> was = ChartBridgeBranches.ClockUtc;
             ChartBridgeBranches.Forget();
-            try { File.Delete(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+            try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
             ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 9, 21, 5, 0, DateTimeKind.Utc);   // 17:05 EDT
             try
             {
@@ -2420,7 +2446,7 @@ public static class AgentHarness
 
         Part("0.6.0 clean up", () =>
         {
-            try { File.Delete(GroupsFile); } catch (Exception) { }
+            try { Gone(GroupsFile); } catch (Exception) { }
             ChartBridgeGroups.StartNow();
             SettleAll(); Settle(sima);
         });
@@ -3828,7 +3854,7 @@ public static class AgentHarness
         Check(Count(page, "reject") == rj3 + 1 && PageReject().Contains("agent-manrae-rules.txt could not be read: agent manrae has a position, a working entry or an open proposal, so its rules cannot change until it is flat") &&
               FileText("agent-manrae-rules.txt").Contains("whatever\tthing"),
               "0.5.4: the rules file unreadable while exposed: even a window change is refused, the file is left alone: " + PageReject());
-        File.Delete(rf);
+        Gone(rf);
         typeof(ChartBridgeAgent).GetMethod("LoadRules", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, null);
         Settle(sime);
         // and the exposure looks at every root an agent may trade then: a pair it owns outside the placeholder roots (NQ, MNQ),
@@ -3844,7 +3870,7 @@ public static class AgentHarness
         Check(Count(page, "reject") == rj4 + 1 && PageReject().Contains("agent-manrae-rules.txt could not be read"),
               "0.5.4: the rules file unreadable: an ES pair it owns counts as exposed too (every root an agent may trade): " + PageReject());
         lock (sync) sticky.Clear();
-        File.Delete(rf);
+        Gone(rf);
         typeof(ChartBridgeAgent).GetMethod("LoadRules", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, null);
         // flat again: every rule may change, as before
         Fresh();
@@ -4025,7 +4051,7 @@ public static class AgentHarness
         Check(e != null, "0.5.7 reset: manrae has a working entry: " + AgentReject());
         Func<DateTime> was = ChartBridgeBranches.ClockUtc;
         ChartBridgeBranches.Forget();
-        try { File.Delete(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+        try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
         ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 9, 21, 5, 0, DateTimeKind.Utc);   // 17:05 EDT
         try
         {
@@ -4055,7 +4081,7 @@ public static class AgentHarness
         File.WriteAllLines(copFile, new[] { "# made-up", "leader\tSIM-D", "mode\texecutions", "follower\tEVAL-A\toff\t1\tmicro\t0" });
         SetPos(simc, mnq, 1);
         ChartBridgeBranches.Forget();
-        try { File.Delete(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+        try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
         ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 12, 21, 5, 0, DateTimeKind.Utc);   // a Monday, 17:05 EDT
         try
         {
@@ -4080,7 +4106,7 @@ public static class AgentHarness
             ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget();
             Settle(simc);
             File.WriteAllText(botFile, botBefore);
-            if (copBefore != null) File.WriteAllText(copFile, copBefore); else File.Delete(copFile);
+            if (copBefore != null) File.WriteAllText(copFile, copBefore); else Gone(copFile);
             if (copierWas) { ChartBridgeSwitches.Note("copier", "on"); }
             if (botWas) { ChartBridgeSwitches.Note("bot", "on"); ChartBridgeBot.Start(false); }
             Restart();
@@ -4239,7 +4265,7 @@ public static class AgentHarness
     {
         return "{\"type\":\"standDown\",\"group\":\"" + gid + "\",\"kind\":\"" + kind + "\",\"why\":\"" + why + "\"}";
     }
-    static void NoStandDowns() { try { File.Delete(SdFile); } catch (Exception) { } }
+    static void NoStandDowns() { try { Gone(SdFile); } catch (Exception) { } }
     static string Clear(string build, string gid, string cid = "sc") { return "{\"type\":\"agentStandDownClear\",\"cid\":\"" + cid + "\",\"build\":\"" + build + "\",\"group\":\"" + gid + "\"}"; }
     static bool Rejected(string cid) { return PageReject().Contains("\"cid\":\"" + cid + "\""); }
     const string SdWords = "build sample-build-1 stands down on group Lucid (edge watch: made-up: live mean below the exam mean by more than 2 SE): no new entries from it on that group";
@@ -4611,7 +4637,7 @@ public static class AgentHarness
             Check(em.OrderState == OrderState.Cancelled && sime.Calls.Any(c => c == "cancel " + em.Name), "round 7: one pass: the in-group entry (SIM-E) is cancelled by the backstop");
             Check(IsLive(ed) && !simd.Calls.Any(c => c == "cancel " + ed.Name), "round 7: one pass: the no-group entry (SIM-D) keeps working");
             Settle(sime); Settle(simd);
-            try { File.Delete(Path.Combine(Dir, "agent-demob-account.txt")); } catch (Exception) { }
+            try { Gone(Path.Combine(Dir, "agent-demob-account.txt")); } catch (Exception) { }
             NoStandDowns();
             WriteGroup("SIM-A", "SIM-B", "SIM-C");
             Restart(); Mode("manrae", "auto");
@@ -4685,7 +4711,7 @@ public static class AgentHarness
             // the 17:00 reset puts a league seat on None like every agent
             Func<DateTime> was = ChartBridgeBranches.ClockUtc;
             ChartBridgeBranches.Forget();
-            try { File.Delete(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+            try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
             ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 9, 21, 5, 0, DateTimeKind.Utc);   // 17:05 EDT
             try
             {
@@ -4751,7 +4777,7 @@ public static class AgentHarness
             string groupsWas = File.ReadAllText(GroupsFile);
             try
             {
-                File.Delete(GroupsFile);
+                Gone(GroupsFile);
                 ChartBridgeGroups.StartNow();
                 string text = "# made-up\n# test\nstandDown\tsample-build-1\tg1\t1791467200000\tedge watch\tmade-up: kept\n";
                 Corrupt(SdFile, text);

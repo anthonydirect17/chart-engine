@@ -554,6 +554,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        // 0.6.3 (review MED 5): a File.Replace cut off (a power cut between its steps) can leave no file with the copy beside it:
+        // the copies to look at when the file is missing, the last good copy first, then the temp file that was about to replace it.
+        public static string[] LeftOvers(string path) { return File.Exists(path) ? new string[0] : new[] { BackupOf(path), path + ".tmp" }.Where(File.Exists).ToArray(); }
+
         // The last good copy's lines (null: none, or it does not read).
         public static string[] ReadBackup(string path) { return ReadAny(BackupOf(path)); }
         // A file's lines (null: none, or it does not read).

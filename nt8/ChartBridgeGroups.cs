@@ -323,7 +323,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             string[] lines = null;
             bool exists = File.Exists(FilePath);
             List<string> notes = new List<string>();
-            if (exists)
+            if (!exists)
+            {
+                // 0.6.3 (review MED 5): no groups.txt but a copy beside it (a save cut off): never "no groups" on its own (every account
+                // would trade with no limits): unreadable, as MED 3, and the alarm says what the copy holds
+                foreach (string alt in ChartBridgeFiles.LeftOvers(FilePath))
+                {
+                    string[] b = ChartBridgeFiles.ReadAny(alt);
+                    string berr;
+                    State bs = b != null ? Parse(b, out berr) : null;
+                    if (bs == null) continue;
+                    exists = true;
+                    err = "groups.txt is missing (a save cut off?) but " + Path.GetFileName(alt) + " is there and holds " + bs.Groups.Count + " group" + (bs.Groups.Count == 1 ? "" : "s") + (bs.Groups.Count > 0 ? " (" + string.Join(", ", bs.Groups.Values.Select(g => g.Name)) + ")" : "") + " with " + bs.Members.Count + " account" + (bs.Members.Count == 1 ? "" : "s") + " in them: to go back to it, copy " + Path.GetFileName(alt) + " to groups.txt; to start with no groups, delete it";
+                    break;
+                }
+            }
+            if (exists && err == null)
             {
                 lines = ReadLines(FilePath, out err);
                 if (lines != null) s = Parse(lines, out err);
@@ -337,6 +352,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             string merr = null;
             Dictionary<string, Mark> marks = null;
+            bool marksLeft = false;
             if (File.Exists(MarksPath))
             {
                 string[] ml = ReadLines(MarksPath, out merr);
@@ -349,6 +365,19 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (bm != null) { notes.Add(ChartBridgeFiles.BackupNote("account-marks.txt", merr)); marks = bm; merr = null; }
                 }
             }
+            else
+            {
+                // 0.6.3 (review MED 5): no file, but a copy left by a replace that was cut off: used, said so (the marks are written again)
+                foreach (string alt in ChartBridgeFiles.LeftOvers(MarksPath))
+                {
+                    string berr;
+                    string[] b = ChartBridgeFiles.ReadAny(alt);
+                    Dictionary<string, Mark> bm = b != null ? ParseMarks(b, out berr) : null;
+                    if (bm == null) continue;
+                    notes.Add("account-marks.txt is missing (a save cut off?): ChartBridge uses " + Path.GetFileName(alt) + " and writes the file again");
+                    marks = bm; marksLeft = true; break;
+                }
+            }
             lock (Mem)
             {
                 if (loaded) return;   // another thread read them meanwhile
@@ -359,6 +388,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Marks.Clear();
                 if (marks != null) foreach (KeyValuePair<string, Mark> kv in marks) Marks[kv.Key] = kv.Value;
                 marksError = merr != null && marks == null ? merr : null;
+                if (marksLeft) marksDirty = true;
             }
             if (exists && s == null) Alarm(ReadFailedText + " (" + err + "); fix or delete the file, then recompile");
             else if (exists) ChartBridgeServer.Log("groups: " + s.Groups.Count + " group" + (s.Groups.Count == 1 ? "" : "s") + ", " + s.Members.Count + " account" + (s.Members.Count == 1 ? "" : "s") + " in them (groups.txt)");
