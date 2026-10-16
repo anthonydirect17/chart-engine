@@ -3925,6 +3925,18 @@ public static class AgentHarness
         return found == null && foundGroup == null ? "stands down" : "reads " + (found ?? foundGroup);
     }
 
+    // A new connection whose hello names this build (fix round 1: one build per connection).
+    static void RestartAs(string build)
+    {
+        ChartBridgeAgents.Stop();
+        ChartBridgeAgents.Start(false);
+        ac = new ChartBridgeClient(null, -100);
+        ac.Tap = x => { lock (agentOut) agentOut.Add(x); };
+        M.Attach(ac);
+        A("{\"type\":\"agentHello\",\"name\":\"Manrae\",\"build\":\"" + build + "\"}");
+    }
+    static int LogLines(string has) { lock (NinjaTrader.Code.Output.Lines) return NinjaTrader.Code.Output.Lines.Count(x => x.Contains(has)); }
+
     static void StandDownsAndLeague()
     {
         Part("0.6.2 setup", () =>
@@ -3979,11 +3991,11 @@ public static class AgentHarness
             Check(e != null && !M.StripJson().Contains("\"standDown\":\"build"), "0.6.2: SIM-D is in no group: the same build places there: " + AgentReject());
             Settle(simd);
             P("{\"type\":\"agentAccount\",\"cid\":\"sd2\",\"agent\":\"manrae\",\"account\":\"SIM-E\",\"keepMode\":\"auto\"}");
-            A("{\"type\":\"agentHello\",\"name\":\"Manrae\",\"build\":\"sample-build-2\"}");
+            RestartAs("sample-build-2"); Mode("manrae", "auto"); Last2();   // fix round 1: a build changes only with a new connection
             e = PlacedOn(sime, Good(NewId()));
             Check(e != null, "0.6.2: another build on the same group places (a stand-down is the build's): " + AgentReject());
             Settle(sime);
-            A("{\"type\":\"agentHello\",\"name\":\"Manrae\",\"build\":\"sample-build-1\"}");
+            Restart(); Mode("manrae", "auto"); Last2();
             WriteGroup("SIM-A", "SIM-B", "SIM-C");   // SIM-E leaves Lucid
             e = PlacedOn(sime, Good(NewId()));
             Check(e != null, "0.6.2: SIM-E left the group: its entries go again (the group is read at each check): " + AgentReject());
@@ -4261,6 +4273,67 @@ public static class AgentHarness
             finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
             File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSIM-E" });
             Restart();
+        });
+
+        Part("0.6.2 fix round 1: the hello's build", () =>
+        {
+            NoStandDowns();
+            GroupFresh();
+            ChartBridgeAgents.Stop(); ChartBridgeAgents.Start(false);
+            ac = new ChartBridgeClient(null, -100);
+            ac.Tap = x => { lock (agentOut) agentOut.Add(x); };
+            M.Attach(ac);
+            string cut = ("sample-build-" + new string('x', 26) + " aaaaaaaaaaaa").Substring(0, 40);   // a 39-character name, then the space before its stamp
+            int w0 = Count(agentOut, "welcome");
+            A("{\"type\":\"agentHello\",\"name\":\"Manrae\",\"build\":\"" + cut + "\"}");
+            Check(cut.Length == 40 && cut.EndsWith(" ") && AgentReject().Contains("agentHello needs a build of 1 to 40 characters with no space at either end") && Count(agentOut, "welcome") == w0 && M.Build == null &&
+                  Logged("hello refused: agentHello needs a build"), "fix 1: a 39-character build cut on the space before its stamp is refused at hello (no welcome), logged: " + AgentReject());
+            A("{\"type\":\"agentHello\",\"name\":\"Manrae\",\"build\":\"sample-build-1\"}");
+            Check(Count(agentOut, "welcome") == w0 + 1 && M.Build == "sample-build-1", "fix 1: a valid hello is welcomed");
+            A("{\"type\":\"agentHello\",\"name\":\"Manrae\",\"build\":\"sample-build-2\"}");
+            Check(AgentReject().Contains("agentHello cannot change the build on this connection (it said build sample-build-1)") && M.Build == "sample-build-1" && Count(agentOut, "welcome") == w0 + 1 &&
+                  Logged("hello refused: agentHello cannot change the build"), "fix 1: a build change mid-connection is refused and logged; the first build stays: " + AgentReject());
+            A("{\"type\":\"agentHello\",\"name\":\"Manrae\",\"build\":\"sample-build-1\"}");
+            Check(Count(agentOut, "welcome") == w0 + 2, "fix 1: a second hello with the same build is welcomed again (as before)");
+            Mode("manrae", "auto");
+            A(SD("g1"));
+            A(GPlan(NewId(), "1,1,1", Rev()));
+            Check(FileText("agent-standdowns.txt").Contains("standDown\tsample-build-1\tg1\t") && AgentReject().Contains(SdWords), "fix 1: a valid hero is stood down normally: " + AgentReject());
+        });
+
+        Part("0.6.2 fix round 1: a missing groups.txt keeps every stand-down", () =>
+        {
+            string groupsWas = File.ReadAllText(GroupsFile);
+            try
+            {
+                File.Delete(GroupsFile);
+                ChartBridgeGroups.StartNow();
+                string text = "# made-up\n# test\nstandDown\tsample-build-1\tg1\t1791467200000\tedge watch\tmade-up: kept\n";
+                File.WriteAllText(SdFile, text);
+                Restart();
+                Check(FileText("agent-standdowns.txt") == text && ChartBridgeAgents.StandDownsOf(null).Count == 1 && !Logged("dropped: the group is gone (made-up: kept)"),
+                      "fix 2: no groups.txt: the line is kept and the file is not rewritten");
+            }
+            finally { File.WriteAllText(GroupsFile, groupsWas); ChartBridgeGroups.StartNow(); NoStandDowns(); Restart(); }
+        });
+
+        Part("0.6.2 fix round 1: at most 200; a repeat logged once", () =>
+        {
+            NoStandDowns();
+            GroupFresh();
+            int r0 = LogLines("it stands down already (kept as first raised)");
+            A(SD("g1")); A(SD("g1", "blow streak", "made-up: again")); A(SD("g1", "tier drop", "made-up: and again"));
+            Check(LogLines("it stands down already (kept as first raised)") == r0 + 1, "fix 3: a repeat raise is logged once per build and group");
+            List<string> lines = new List<string> { "# made-up", "# test" };
+            for (int i = 0; i < 200; i++) lines.Add("standDown\tcap-" + i + "\tg1\t1791467200000\tedge watch\tmade-up: filler");
+            File.WriteAllLines(SdFile, lines.ToArray());
+            Restart(); Mode("manrae", "auto");
+            int s0 = N(page);
+            A(SD("g1"));
+            Check(AgentReject().Contains("was refused: 200 stand-downs are in force already") && ChartBridgeAgents.StandDownsOf("sample-build-1").Count == 0 && ChartBridgeAgents.StandDownsOf(null).Count == 200 &&
+                  Logged("ALERT: agent manrae: the stand-down of build sample-build-1 on group g1 was refused: 200") && Any(page, s0, "200 stand-downs are in force already"),
+                  "fix 3: a 201st raise is refused, logged and alarmed: " + AgentReject());
+            NoStandDowns(); Restart();
         });
     }
 }

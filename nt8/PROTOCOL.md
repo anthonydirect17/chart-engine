@@ -3115,7 +3115,7 @@ one line per stand-down:
 `build` is the agent's `agentHello` build exactly (1 to 40 characters); `kind` 1 to 40, `why` 1 to 200 (plain strings: no tab, quote,
 backslash or control character, nothing a reader would trim). One line per build and group. It is read once at the start (when the
 agent channel is on) and survives restarts and the 18:00 roll (nothing rolls it). A line whose group is not in `groups.txt` is dropped at
-the start (only when `groups.txt` reads). A group deleted on the page (`groupDelete`) drops its lines at once, in memory and the file,
+the start (only when `groups.txt` exists and reads: with no `groups.txt` every line is kept and the file is not rewritten). A group deleted on the page (`groupDelete`) drops its lines at once, in memory and the file,
 under the groups' own save, so a group made later never inherits one. A file that cannot be understood (a line it does not know, a build
 and group twice) or read is **never written over that run** and **every agent entry is refused** ("agent-standdowns.txt has a line
 ChartBridge does not understand: every new agent entry is refused until it can be read (exits always work); fix or delete the file, then
@@ -3141,7 +3141,8 @@ unreadable file stops it.
 
 | direction | message | notes |
 |---|---|---|
-| agent to ChartBridge | `standDown` `{group, kind, why}` (no other keys) | raise only: there is no clear from the agent. The group must be in `groups.txt` (lead's default: any group, not only the one it trades; while `groups.txt` cannot be read it is taken, since a stand-down only refuses). Raised again while in force: kept as first raised, logged. Refused with `reject` |
+| agent to ChartBridge | `standDown` `{group, kind, why}` (no other keys) | raise only: there is no clear from the agent. The group must be in `groups.txt` (lead's default: any group, not only the one it trades; while `groups.txt` cannot be read it is taken, since a stand-down only refuses). Raised again while in force: kept as first raised, logged once per build and group. At most 200 stand-downs in force: a further raise is refused, logged, with an alarm to the pages. Refused with `reject` |
+| agent to ChartBridge | `agentHello` (0.6.2) | the build must read back the same (1 to 40 characters, no space at either end, so a build cut at 40 on the space before its stamp is refused), and it is one build per connection: a second hello with another build is refused and logged (reconnect to run another build) |
 | ChartBridge to the agent | `agentState.groupStandDown` | `{group, kind, why, at}` for the group it is on now (its group, or its one account's group), or null |
 | page to ChartBridge | `agentStandDownClear` `{cid, build, group}` (no `agent` key) | signed-in v3 pages only (the agent messages' gates), counted in gate 7. Logged "stand-down of build B on group Lucid (g1) cleared on the page (it was ...)" in the Output window and each agent of that build's log; a `status` `info` to the pages. A clear holds until the runner's next re-rating raises it again |
 | ChartBridge to page | `agent.standDowns` | `[{group, why, kind, at}]`: every stand-down of the agent's build (its last hello's) |

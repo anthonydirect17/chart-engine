@@ -15,6 +15,9 @@ else changes, and exits are never gated.
   and the stop placed again always go. A file that cannot be read refuses every agent entry (exits pass) and is never written over.
   `agentState.groupStandDown` to the runner; `agent.standDowns` and `agentStandDowns` (every stand-down, a hero not connected too) to
   the pages.
+- Fix round 1: `agentHello` refuses a build with a space at either end (a build cut on the space before its stamp) and a
+  second hello with another build on the same connection; a missing `groups.txt` keeps every stand-down (the file is not rewritten);
+  at most 200 stand-downs (a further raise refused, logged, alarmed); a repeat raise logged once per build and group.
 - **Clear stand-down (chart 1.29.0).** The Board shows each stand-down as an amber row under its hero (the group, the kind and why,
   since when) with Clear stand-down: one click sends `agentStandDownClear {cid, build, group}` (signed-in v3 pages only, gate 7),
   which ChartBridge logs "cleared on the page".

@@ -630,14 +630,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (broken != null)
             {
                 broken += ": every new agent entry is refused until it can be read (exits always work); fix or delete the file, then recompile";
-                lock (SdLock) { sdList = new List<GroupStandDown>(); sdBroken = broken; }
+                lock (SdLock) { sdList = new List<GroupStandDown>(); sdBroken = broken; sdRepeatSaid.Clear(); }
                 ChartBridgeOrders.AgentAlarm(broken);   // logged and to every signed-in page; a page that signs in later gets agentStandDowns.error
                 try { ChartBridgeV3.SendToV3Traders(StandDownsMessage()); } catch (Exception) { }
                 return;
             }
-            List<GroupStandDown> gone = ChartBridgeGroups.Unreadable() ? new List<GroupStandDown>() : list.Where(x => ChartBridgeGroups.NameOf(x.Group) == null).ToList();
+            // fix round 1: only when groups.txt exists and was read (a missing groups.txt keeps every line, and the file is not rewritten)
+            bool groupsRead = File.Exists(Path.Combine(ChartBridgeConfig.Folder, "groups.txt")) && !ChartBridgeGroups.Unreadable();
+            List<GroupStandDown> gone = !groupsRead ? new List<GroupStandDown>() : list.Where(x => ChartBridgeGroups.NameOf(x.Group) == null).ToList();
             foreach (GroupStandDown s in gone) list.Remove(s);
-            lock (SdLock) { sdList = list; sdBroken = null; }
+            lock (SdLock) { sdList = list; sdBroken = null; sdRepeatSaid.Clear(); }
             if (gone.Count > 0)
             {
                 lock (SdFileLock) { string err = WriteStandDowns(list); if (err != null) ChartBridgeServer.Log(StandDownsFileName + " could not be saved (" + err + ")"); }
@@ -687,9 +689,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // The agent's standDown (raise only). Null when it holds (fresh false: it was in force already, kept as first raised).
         // In memory first (the gate holds at once, even if the file cannot be written), then the file.
-        internal static string RaiseStandDown(string agentId, string build, string gid, string kind, string why, out bool fresh)
+        // Fix round 1: at most MaxStandDowns in force (a further raise is refused, logged, with an alarm); sayAgain: a repeat raise of
+        // one in force, true only the first time for that build and group (logged once).
+        public const int MaxStandDowns = 200;
+        private static readonly HashSet<string> sdRepeatSaid = new HashSet<string>();   // under SdLock: build<TAB>group said again once
+        internal static string RaiseStandDown(string agentId, string build, string gid, string kind, string why, out bool fresh, out bool sayAgain)
         {
-            fresh = false;
+            fresh = false; sayAgain = false;
             string err = null;
             bool write;
             lock (SdFileLock)
@@ -697,7 +703,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 List<GroupStandDown> snap;
                 lock (SdLock)
                 {
-                    if (sdList.Any(x => x.Build == build && x.Group == gid)) return null;
+                    if (sdList.Any(x => x.Build == build && x.Group == gid)) { sayAgain = sdRepeatSaid.Add(build + "\t" + gid); return null; }
+                    if (sdList.Count >= MaxStandDowns)
+                    {
+                        string full = "the stand-down of build " + build + " on group " + gid + " was refused: " + MaxStandDowns + " stand-downs are in force already (" + StandDownsFileName + "); clear some on the Agent tab's Board";
+                        ChartBridgeOrders.AgentAlarm("agent " + agentId + ": " + full);
+                        return full;
+                    }
                     List<GroupStandDown> next = sdList.ToList();
                     next.Add(new GroupStandDown { Build = build, Group = gid, Kind = kind, Why = why, At = Math.Floor(Now()) });
                     sdList = next; fresh = true; write = sdBroken == null; snap = next.ToList();
@@ -727,7 +739,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string err = WriteStandDowns(next);
                 if (err != null) return StandDownsFileName + " could not be saved (" + err + "): the stand-down stays";
                 GroupStandDown gone = was;
-                lock (SdLock) sdList = sdList.Where(x => x != gone).ToList();
+                lock (SdLock) { sdList = sdList.Where(x => x != gone).ToList(); sdRepeatSaid.Remove(gone.Build + "\t" + gone.Group); }
             }
             return null;
         }
@@ -747,6 +759,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (gone.Count == 0) return;
                     next = sdList.Where(x => x.Group != gid).ToList();
                     sdList = next; write = sdBroken == null;
+                    sdRepeatSaid.RemoveWhere(k => k.EndsWith("\t" + gid, StringComparison.Ordinal));
                 }
                 string err = write ? WriteStandDowns(next) : null;
                 if (err != null) ChartBridgeServer.Log(StandDownsFileName + " could not be saved (" + err + ") after group " + gid + " was deleted");
@@ -2783,6 +2796,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             string nm = S(d, "name"), bd = S(d, "build");
             if (nm == null || nm.Length < 1 || nm.Length > 40) { ToAgent(Reject(null, "agentHello needs a name of 1 to 40 characters")); return; }
             if (bd == null || bd.Length < 1 || bd.Length > 40) { ToAgent(Reject(null, "agentHello needs a build of 1 to 40 characters")); return; }
+            // 0.6.2 (fix round 1): the build names the hero a stand-down holds (agent-standdowns.txt), so it must read back the same: no
+            // space at either end (a build cut at 40 characters on the space before its stamp is refused), no tab or control character
+            if (!ChartBridgeAgents.SdText(bd, 40)) { string w = "agentHello needs a build of 1 to 40 characters with no space at either end (send the build name without a cut stamp)"; ToAgent(Reject(null, w)); Log("agent " + Id + " hello refused: " + w); AgentLog("hello refused: " + w); return; }
+            // and one build for the whole connection: a second hello with another build is refused (a stand-down could not follow it)
+            string had;
+            lock (Sync) had = helloed ? build : null;
+            if (had != null && had != bd) { string w = "agentHello cannot change the build on this connection (it said build " + had + "): reconnect to run another build"; ToAgent(Reject(null, w)); Log("agent " + Id + " hello refused: " + w); AgentLog("hello refused: " + w); return; }
             lock (Sync) { helloed = true; welcomeSent = false; snapshotSent = false; name = nm; build = bd; }   // a second hello too: its welcome first
             List<string> served = ServedRoots();   // welcome.instruments and the snapshot cover exactly these roots (section 10)
             ToAgent(WelcomeJson(served));
@@ -4557,9 +4577,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                          !ChartBridgeAgents.SdText(bd, 40) ? "standDown needs the build of agentHello (1 to 40 characters, no spaces at its ends)" :
                          !ChartBridgeGroups.Unreadable() && ChartBridgeGroups.NameOf(gid) == null ? "there is no group " + gid : null;   // groups.txt unreadable: taken (a stand-down only refuses)
             if (bad != null) { ToAgent(Reject(null, bad)); return; }
-            bool fresh;
-            ChartBridgeAgents.RaiseStandDown(Id, bd, gid, kind, why, out fresh);
+            bool fresh, sayAgain;
+            string full = ChartBridgeAgents.RaiseStandDown(Id, bd, gid, kind, why, out fresh, out sayAgain);
+            if (full != null) { ToAgent(Reject(null, full)); return; }   // fix round 1: at most MaxStandDowns (logged and an alarm there)
             string gname = ChartBridgeGroups.NameOf(gid) ?? gid;
+            if (!fresh && !sayAgain) { Notify(); return; }   // fix round 1: a repeat raise is logged once per build and group
             string text = fresh ? "agent " + Id + " stood down build " + bd + " on group " + gname + " (" + kind + ": " + why + "): no new entries from it on " + gname + " until Anthony clears it on the Agent tab's Board; exits always work"
                                 : "agent " + Id + " stood down build " + bd + " on group " + gname + " again (" + kind + ": " + why + "): it stands down already (kept as first raised)";
             Log(text); AgentLog(text);
