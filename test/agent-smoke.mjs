@@ -648,6 +648,27 @@ try {
   await sleep(1500);
   await pop.screenshot({ path: path.join(SHOTS, 'agent-popout.png') });
   await pop.close();
+
+  /* ---------------------------------------------------------------- 1.27.0 (ChartBridge 0.6.0): a hero on a whole prop group */
+  console.log('1.27.0: a hero on a group (a sample view: made-up sizes and P&L)');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await control('agent-withdraw', { agent: 'demo', id: 'n1' });
+  await page.click('#agView [data-mode="shadow"]');
+  await control('agent-group', { agent: 'demo', name: 'Lucid', members: 'SIM-F1,SIM-F2', sizes: '3,2', out: 'SIM-F2 is not connected' });
+  await until(() => page.isVisible('#agView [data-k="seats"]'), 'the seats table on His account');
+  const seats = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#agView [data-k="seats"] tr[data-seat]')].map(r => r.dataset.seat), total: !!document.querySelector('#agView [data-k="seats"] tr.ag-total'),
+    out: (document.querySelector('#agView [data-k="seats"] tr.ag-outwhy') || {}).textContent || '', account: document.querySelector('#agView [data-k="account"]').textContent }));
+  check(seats.rows.join(',') === 'SIM-F1,SIM-F2' && seats.total && seats.out === 'Not in this trade: SIM-F2 is not connected' && seats.account === 'Group Lucid: SIM-F1, SIM-F2',
+    'a group: His account names it and shows a row per seat, why one sat out, and the group total: ' + JSON.stringify(seats));
+  await page.screenshot({ path: path.join(SHOTS, 'agent-group.png') });
+  await page.click('#agView [data-act="acctOpen"]');
+  await until(() => page.isVisible('#agView [data-k="acctSel"]'), 'the picker open');
+  const gOpts = await page.evaluate(() => [...document.querySelectorAll('#agView [data-k="acctSel"] option')].map(o => o.textContent));
+  const gi = gOpts.findIndex(t => /^Group /.test(t)), si = gOpts.findIndex(t => !/^(None|Group )/.test(t));
+  check(/^None/.test(gOpts[0]) && gi === 1 && si > gi && gOpts.some(t => t === 'Group Lucid: SIM-F1, SIM-F2 (SIM), now'), 'the one picker: None first, then the groups, then single accounts: ' + JSON.stringify(gOpts));
+  await page.screenshot({ path: path.join(SHOTS, 'agent-group-picker.png'), clip: { x: 0, y: 0, width: 640, height: 1000 } });
+  await page.click('#agView [data-act="acctCancel"]');
+  await control('agent-group', { agent: 'demo', on: '0' });
   await page.close();
   await bridge.kill(); bridge = null;
 

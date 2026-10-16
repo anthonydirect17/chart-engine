@@ -12,7 +12,8 @@
  *   feed        the agent's notes (`agentNote`) and plans (`agentPlan`), newest first, kept as ChartBridge keeps them
  *   rules       the rule set as `agent` carries it, the form's values and the page's change (`agentRules`, flat keys)
  *   account     the agent's account, the accounts it may take (never the bot's, the copier's or another agent's), the
- *               change (`agentAccount`; a LIVE one is asked once in the page)
+ *               change (`agentAccount`; a LIVE one is asked once in the page). Chart 1.27.0 (ChartBridge 0.6.0): or a whole
+ *               prop group (each member a seat): the picker lists None, then the groups, then single accounts
  *   the agent's which orders are the agent's: a v3 page's order message says `by: "agent:<id>"`
  *   orders
  *   copilot     the one handler of the workspace's `chart-copilot-key` event, shared by the Bot tab and the Agent tab:
@@ -260,12 +261,40 @@ function rulesChange(agent, form, ctx, cid) {
 /* ======================================================================== the account (contract sections 6 and 7) */
 /** SIM or LIVE: SIM only when ChartBridge says `sim: true`; anything else is LIVE (the careful side, as the Bot tab). */
 const accountMark = sim => (sim === true ? 'SIM' : 'LIVE');
-/** The agent's account from its `agent` message: { name, sim, mark, none, label }; None (account null, or before ChartBridge says) is name '' with label "None". */
+/** "Group Lucid: SIM-A, SIM-B, SIM-C" (the picker's words for a group). */
+function groupLabel(name, members) { const m = Array.isArray(members) ? members : []; return 'Group ' + (name || '?') + ': ' + (m.length ? m.join(', ') : 'no accounts'); }
+const validGroupId = id => typeof id === 'string' && /^g[1-9][0-9]{0,8}$/.test(id);
+/** The agent's account from its `agent` message: { name, value, sim, mark, none, label, group, seats }; None (account null, or
+ *  before ChartBridge says) is name '' with label "None". value is what the picker holds: the account's name, '' for None, or
+ *  "group:<id>" for a group (ChartBridge 0.6.0: `group` {id, name} and `seats` on the strip; name is '' then, seats the
+ *  accounts it trades now, in seat order). */
 function agentAccount(agent) {
   const a = agent || {};
+  if (a.group && validGroupId(a.group.id)) {
+    const seats = Array.isArray(a.seats) ? a.seats.filter(x => x && typeof x.account === 'string' && x.seat !== false).map(x => x.account) : [];
+    const gname = typeof a.group.name === 'string' && a.group.name ? a.group.name : a.group.id;
+    return { name: '', value: 'group:' + a.group.id, group: { id: a.group.id, name: gname }, seats, sim: a.sim === true, mark: typeof a.sim === 'boolean' ? accountMark(a.sim) : '', none: false, label: groupLabel(gname, seats) };
+  }
   const name = typeof a.account === 'string' && a.account ? a.account : DEFAULT_ACCOUNT;
-  if (!name) return { name: '', sim: false, mark: '', none: true, label: NONE_LABEL };   // account null: None, label what the page shows
-  return { name, sim: a.sim === true, mark: typeof a.sim === 'boolean' ? accountMark(a.sim) : '', none: false, label: name };
+  if (!name) return { name: '', value: '', sim: false, mark: '', none: true, label: NONE_LABEL };   // account null: None, label what the page shows
+  return { name, value: name, sim: a.sim === true, mark: typeof a.sim === 'boolean' ? accountMark(a.sim) : '', none: false, label: name };
+}
+/* The accounts the agent may never take, with why: the bot's, the copier's leader or a follower, another agent's account and
+   (0.6.0) every seat of another agent's group. Map name -> why. */
+function takenAccounts(others, me) {
+  const o = others || {}, taken = new Map();
+  const botAcc = o.bot && o.bot.enabled !== false && typeof o.bot.account === 'string' ? o.bot.account : '';
+  const cp = o.copier && o.copier.enabled !== false ? o.copier : null;
+  const leader = cp && cp.leader && typeof cp.leader.account === 'string' ? cp.leader.account : '';
+  for (const x of Array.isArray(o.agents) ? o.agents : []) {
+    if (!x || x.agent === me) continue;
+    if (typeof x.account === 'string' && x.account) taken.set(x.account, agentName(x) + '\'s account');
+    for (const s of Array.isArray(x.seats) ? x.seats : []) if (s && typeof s.account === 'string' && s.account) taken.set(s.account, 'a seat of ' + agentName(x));
+  }
+  for (const f of cp && Array.isArray(cp.followers) ? cp.followers : []) if (f && f.account) taken.set(f.account, 'a copier follower');
+  if (leader) taken.set(leader, 'the copier\'s leader');
+  if (botAcc) taken.set(botAcc, 'the bot\'s account');
+  return taken;
 }
 /**
  * The accounts the agent may take: every account in the v3 `accounts` list that ChartBridge says is tradable now, with its
@@ -275,25 +304,84 @@ function agentAccount(agent) {
  * Each: { name, sim, mark, tradable, current, why, ok }.
  */
 function accountChoices(accountsMsg, agent, others) {
-  const o = others || {}, cur = agentAccount(agent).name, me = agent && agent.agent;
+  const cur = agentAccount(agent).name, me = agent && agent.agent;
   const list = accountsMsg && Array.isArray(accountsMsg.list) ? accountsMsg.list : [];
-  const botAcc = o.bot && o.bot.enabled !== false && typeof o.bot.account === 'string' ? o.bot.account : '';
-  const cp = o.copier && o.copier.enabled !== false ? o.copier : null;
-  const leader = cp && cp.leader && typeof cp.leader.account === 'string' ? cp.leader.account : '';
-  const followers = new Set(cp && Array.isArray(cp.followers) ? cp.followers.map(f => f && f.account).filter(Boolean) : []);
-  const taken = new Map();
-  for (const x of Array.isArray(o.agents) ? o.agents : []) if (x && x.agent !== me && typeof x.account === 'string' && x.account) taken.set(x.account, agentName(x));
+  const taken = takenAccounts(others, me);
   const out = [];
   for (const a of list) {
     if (!a || typeof a.name !== 'string' || !a.name) continue;
     const current = a.name === cur, tradable = a.tradable === true && a.state !== 'gone';
     if (!current && !tradable) continue;
-    const why = a.name === botAcc ? 'the bot\'s account' : a.name === leader ? 'the copier\'s leader' : followers.has(a.name) ? 'a copier follower'
-      : taken.has(a.name) ? taken.get(a.name) + '\'s account' : '';
-    out.push({ name: a.name, sim: a.sim === true, mark: accountMark(a.sim), tradable, current, why, ok: tradable && !why && !current });
+    const why = taken.get(a.name) || '';
+    out.push({ kind: 'account', value: a.name, name: a.name, sim: a.sim === true, mark: accountMark(a.sim), tradable, current, why, ok: tradable && !why && !current });
   }
   return out.sort((x, y) => (x.sim !== y.sim ? (x.sim ? -1 : 1) : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
 }
+/**
+ * Chart 1.27.0 (ChartBridge 0.6.0): the groups the agent may trade as a whole, from the `groups` message: each { kind 'group',
+ * id, name, members, value ("group:<id>"), label ("Group Lucid: SIM-A, SIM-B"), sim (every member Sim), mark, live (its LIVE
+ * members), tradable (a member tradable now), current, why, ok }. A group with a member that cannot be taken (the bot's, the
+ * copier's, another agent's, not in ChartBridge's accounts), or with no accounts, is listed with why, not offered. A member
+ * that is not tradable or connected now is no reason: it sits out each trade until it is (ChartBridge says why).
+ */
+function groupChoices(groupsMsg, accountsMsg, agent, others) {
+  const me = agent && agent.agent, cur = agentAccount(agent).group, taken = takenAccounts(others, me);
+  const accs = new Map((accountsMsg && Array.isArray(accountsMsg.list) ? accountsMsg.list : []).filter(x => x && typeof x.name === 'string').map(x => [x.name, x]));
+  const out = [];
+  for (const g of groupsMsg && Array.isArray(groupsMsg.list) ? groupsMsg.list : []) {
+    if (!g || !validGroupId(g.id)) continue;
+    const members = Array.isArray(g.members) ? g.members.filter(x => typeof x === 'string' && x) : [];
+    let why = members.length ? '' : 'it has no accounts';
+    for (const m of members) {
+      if (why) break;
+      if (taken.has(m)) why = m + ' is ' + taken.get(m);
+      else if (!accs.has(m)) why = m + ' is not in ChartBridge\'s accounts';
+    }
+    const current = !!cur && cur.id === g.id, live = members.filter(m => !(accs.get(m) && accs.get(m).sim === true));
+    const name = typeof g.name === 'string' && g.name ? g.name : g.id;
+    out.push({ kind: 'group', id: g.id, name, members, value: 'group:' + g.id, label: groupLabel(name, members), sim: members.length > 0 && !live.length, mark: accountMark(members.length > 0 && !live.length), live,
+      tradable: members.some(m => accs.get(m) && accs.get(m).tradable === true && accs.get(m).state !== 'gone'), current, why, ok: !why && !current });
+  }
+  return out;
+}
+/**
+ * The Agent tab's one picker (Anthony 2026-10-15): None first, then the groups ("Group Lucid: SIM-A, SIM-B, SIM-C"), then single
+ * accounts, each with text (the option's words) and value ('' None, "group:<id>", or the account's name). One that cannot be
+ * taken shows why and is not offered (ok false).
+ */
+function pickerChoices(accountsMsg, groupsMsg, agent, others) {
+  const none = agentAccount(agent).none;
+  const head = { kind: 'none', value: '', name: '', label: NONE_LABEL, text: NONE_LABEL + ' (nothing trades)' + (none ? ', now' : ''), sim: true, mark: '', tradable: true, current: none, why: '', ok: !none };
+  const groups = groupChoices(groupsMsg, accountsMsg, agent, others).map(g => Object.assign(g, { text: g.label + ' (' + (g.live.length ? 'LIVE' : 'SIM') + ')' + (g.current ? ', now' : g.why ? ', cannot be taken: ' + g.why : '') }));
+  const singles = accountChoices(accountsMsg, agent, others).map(c => Object.assign(c, { label: c.name, text: c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.why ? ', ' + c.why : c.tradable ? '' : ', not tradable') }));
+  return [head].concat(groups, singles);
+}
+/**
+ * Chart 1.27.0: the Agent tab's seats table for a group, from the strip's `seats` (ChartBridge 0.6.0) and the `accounts` message
+ * (each account's daily room and room to its floor, ChartBridge's own numbers, null when not reported): { rows, total }. A row:
+ * { account, mark (SIM or LIVE), seat (false: it left the group and still holds his trade), position (words), size (the last
+ * plan's on it, null for none), pnl (today there), lastPnl, risk, r (its last trade's dollars over its own risk), daily, floor,
+ * out (why it is not in the last trade, '' when it is) }. The total: the dollars summed, the sizes summed, the group's R (the
+ * dollars summed over the risk summed, only seats with both), and the tightest daily room and floor room, with whose they are.
+ */
+function seatRows(agent, accountsMsg, fmtPrice) {
+  const a = agent || {}, seats = Array.isArray(a.seats) ? a.seats : [];
+  const accs = new Map((accountsMsg && Array.isArray(accountsMsg.list) ? accountsMsg.list : []).filter(x => x && typeof x.name === 'string').map(x => [x.name, x]));
+  const rows = seats.filter(x => x && typeof x.account === 'string' && x.account).map(x => {
+    const acc = accs.get(x.account) || {}, risk = isNum(x.risk) && x.risk > 0 ? x.risk : null, lastPnl = isNum(x.lastPnl) ? x.lastPnl : null;
+    return { account: x.account, mark: accountMark(x.sim), seat: x.seat !== false, position: positionText(x.position, fmtPrice), size: isInt(x.size) && x.size > 0 ? x.size : null,
+      pnl: isNum(x.pnlToday) ? x.pnlToday : null, lastPnl, risk, r: risk !== null && lastPnl !== null ? lastPnl / risk : null,
+      daily: isNum(acc.roomDaily) ? acc.roomDaily : null, floor: isNum(acc.roomFloor) ? acc.roomFloor : null, out: str(x.out) };
+  });
+  const both = rows.filter(x => x.r !== null), riskSum = both.reduce((t, x) => t + x.risk, 0);
+  const least = k => rows.filter(x => x[k] !== null).reduce((m, x) => (m === null || x[k] < m[k] ? x : m), null);
+  const ld = least('daily'), lf = least('floor');
+  const total = { pnl: rows.some(x => x.pnl !== null) ? Math.round(rows.reduce((t, x) => t + (x.pnl || 0), 0) * 100) / 100 : null, size: rows.some(x => x.size) ? rows.reduce((t, x) => t + (x.size || 0), 0) : null,
+    r: riskSum > 0 ? both.reduce((t, x) => t + x.lastPnl, 0) / riskSum : null, daily: ld ? ld.daily : null, dailyOf: ld ? ld.account : '', floor: lf ? lf.floor : null, floorOf: lf ? lf.account : '' };
+  return { rows, total };
+}
+/** Is any seat of a group tradable now (Auto needs one)? seats: the account names. */
+function groupTradable(accountsMsg, trading, seats) { return (Array.isArray(seats) ? seats : []).some(n => accountTradable(accountsMsg, trading, n)); }
 /**
  * The page's change of the agent's account: { error } or { msg, live, confirm }. confirm, for a LIVE account, is the one
  * question the page asks first, in the page ("Agent demo will trade LIVE account X in Auto. Continue?"). ChartBridge checks
@@ -304,11 +392,22 @@ function accountChoices(accountsMsg, agent, others) {
  * went only to 0.5.2 or later, and the question said Shadow for an older one).
  */
 function accountChange(agent, name, choices, ctx, cid) {
-  const a = agent || {}, cur = agentAccount(a).name, c = ctx || {};
+  const a = agent || {}, cur = agentAccount(a), c = ctx || {};
   if (!validId(a.agent)) return { error: 'No agent chosen.' };
   if (typeof name !== 'string') return { error: 'Choose an account, or None.' };
-  if (name === cur) return { error: (name || NONE_LABEL) + ' is already ' + agentName(a) + '\'s account.' };
+  if (name === cur.value) return { error: (name ? cur.label : NONE_LABEL) + ' is already ' + agentName(a) + '\'s account.' };
   const asked0 = MODES.includes(c.askedMode) ? c.askedMode : MODES.includes(a.mode) ? a.mode : 'shadow';
+  if (name.startsWith('group:')) {   // chart 1.27.0 (ChartBridge 0.6.0): a whole group, each member a seat
+    const id = name.slice(6), g = (choices || []).find(x => x && x.kind === 'group' && x.id === id);
+    if (!g) return { error: 'There is no group ' + id + ' on this ChartBridge.' };
+    if (g.why) return { error: 'Group ' + g.name + ' cannot be taken: ' + g.why + '.' };
+    const can1 = rulesChangeable(a, c);
+    if (!can1.ok) return { error: can1.why.replace('change its rules', 'choose its account') };
+    const gm = { type: 'agentAccount' };
+    if (cid) gm.cid = cid;
+    gm.agent = a.agent; gm.group = id; gm.keepMode = asked0;
+    return { msg: gm, live: g.live.length > 0, confirm: g.live.length ? liveQuestion(Object.assign({}, a, { mode: asked0 }), name, g) : '', mode: asked0 };
+  }
   if (!name) {   // None (DECISION 2026-10-14e): nothing trades; ChartBridge refuses it only while the agent is exposed
     const can0 = rulesChangeable(a, c);
     if (!can0.ok) return { error: can0.why.replace('change its rules', 'choose None') };
@@ -339,8 +438,9 @@ function askStale(askedMode, agent) {
 }
 /** The one question before an agent takes a LIVE account: it names the mode the agent will be in (ChartBridge 0.5.2, Anthony
  *  2026-10-08: an account change keeps the mode; the review's S5). Not confirmed: nothing is sent, the account stays. */
-function liveQuestion(a, name) {
-  const who = 'Agent ' + (a && validId(a.agent) ? a.agent : agentName(a)) + ' will trade LIVE account ' + name;
+function liveQuestion(a, name, group) {
+  const g = group && group.kind === 'group' ? group : null;
+  const who = 'Agent ' + (a && validId(a.agent) ? a.agent : agentName(a)) + (g ? ' will trade group ' + g.name + ' (' + g.members.join(', ') + '), with LIVE account' + (g.live.length > 1 ? 's ' : ' ') + g.live.join(', ') + ',' : ' will trade LIVE account ' + name);
   const mode = MODE_NAME[a && a.mode] || 'Shadow';
   return who + ' in ' + mode + (mode === 'Shadow' ? ' (nothing is placed until you choose Copilot or Auto)' : '') + '. Continue?';
 }
@@ -1088,7 +1188,7 @@ return {
   validId, parseVersion, atLeast, offText,
   createAgents, pickAgent, agentName,
   parseRules, rulesLines, rulesForm, rulesChangeable, rulesEditable, windowFlattensNow, WINDOW_ANYTIME, rulesChange, durationText,
-  accountMark, agentAccount, accountChoices, accountChange, liveQuestion, askStale,
+  accountMark, agentAccount, accountChoices, accountChange, liveQuestion, askStale, groupLabel, groupChoices, pickerChoices, groupTradable, seatRows,
   modesAllowed, accountTradable, modeMsg, killMsg,
   countdown, createProposals, endText, legPrices,
   createFeed, planLine,

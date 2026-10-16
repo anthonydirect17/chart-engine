@@ -135,6 +135,8 @@ function flat(a) { return offStep(a) === 'off'; }
 function flatOffStart(a, now) {
   const x = a || {}, p = x.position || {};
   if (flat(x)) return { job: { agent: str(x.agent), account: str(x.account), root: str(p.root), phase: 'off', until: 0 }, action: 'off' };
+  // chart 1.27.0 (ChartBridge 0.6.0): a group's trade is on several accounts; this flattens one, so nothing is guessed: nothing sent
+  if (x.group && Array.isArray(x.seats) && x.seats.length) return { error: 'He trades group ' + str(x.group.name || x.group.id) + ' (' + x.seats.map(s => s && s.account).filter(Boolean).join(', ') + '): nothing was sent. Flatten every seat on the main page or in NinjaTrader, then press Off.' };
   if (!str(x.account)) return { error: 'His account is not known yet: nothing was sent. Flatten in NinjaTrader, then press Off.' };
   if (!str(p.root)) return { error: 'His position\'s instrument is not known: nothing was sent. Flatten in NinjaTrader, then press Off.' };
   const job = { agent: str(x.agent), account: x.account, root: p.root, phase: x.mode === 'shadow' ? 'flatten' : 'shadow', until: now + (x.mode === 'shadow' ? FLAT_WAIT_MS : SHADOW_WAIT_MS) };

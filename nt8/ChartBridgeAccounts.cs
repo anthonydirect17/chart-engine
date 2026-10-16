@@ -771,6 +771,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             return found;
         }
 
+        // 0.6.0: "group<TAB>gN" after # lines (agent-<id>-account.txt for an agent on a group), or null.
+        private static string GroupLine(string[] lines)
+        {
+            string found = null;
+            foreach (string raw in lines)
+            {
+                string line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith("#")) continue;
+                string[] p = line.Split('\t');
+                if (found == null && p.Length == 2 && p[0] == "group" && System.Text.RegularExpressions.Regex.IsMatch(p[1], "^g[1-9][0-9]{0,8}$")) found = p[1];
+                else return null;
+            }
+            return found;
+        }
+
         private static Claims ReadClaims()
         {
             Claims c = new Claims();
@@ -822,6 +837,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     try { lines = Cached(f); }
                     catch (Exception ex) { c.AgentError = file + " could not be read (" + ex.Message + ")"; continue; }
                     if (lines == null) continue;   // deleted since the listing
+                    string gid = GroupLine(lines);   // 0.6.0: an agent on a group claims every member
+                    if (gid != null)
+                    {
+                        if (ChartBridgeGroups.Unreadable()) { c.AgentError = "groups.txt could not be read (agent " + id + " trades a group)"; continue; }
+                        foreach (string m in ChartBridgeGroups.MembersOf(gid) ?? new List<string>()) if (!c.Agent.ContainsKey(m)) c.Agent[m] = id;
+                        continue;
+                    }
                     string acct = AccountLine(lines);
                     if (acct == null) { c.AgentError = file + " cannot be understood"; continue; }
                     if (!c.Agent.ContainsKey(acct)) c.Agent[acct] = id;

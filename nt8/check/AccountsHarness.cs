@@ -874,6 +874,15 @@ public static class AccountsHarness
         Send(page, Hide("TEST-EVAL-2"));
         Check(Rejected("TEST-EVAL-2 is agent a1's account (the Agent tab): it cannot be hidden"), "0.5.1: Hide of an agent's account (agent-<id>-account.txt): refused");
         File.Delete(agent);
+        // 0.6.0: an agent on a group (group<TAB>g1) claims each member of it
+        string groups = Path.Combine(folder, "groups.txt");
+        File.WriteAllText(groups, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t-\t50000\t-\nmember\tTEST-EVAL-2\tg1\n");
+        ChartBridgeGroups.StartNow();
+        File.WriteAllLines(agent, new[] { "# ChartBridge account for agent a1", "group\tg1" });
+        Send(page, Hide("TEST-EVAL-2"));
+        Check(Rejected("TEST-EVAL-2 is agent a1's account (the Agent tab): it cannot be hidden"), "0.6.0: Hide of a member of the group an agent trades (agent-<id>-account.txt group<TAB>g1): refused");
+        File.Delete(agent); File.Delete(groups);
+        ChartBridgeGroups.StartNow();
         Send(page, Trade("TEST-EVAL-2", "true"));
         sent.Clear();
         Send(page, Hide("TEST-EVAL-2"));

@@ -63,7 +63,7 @@ function create(o) {
   const writeJson = (k, v) => { try { storage.setItem(k, JSON.stringify(v)); } catch (e) { /* blocked */ } };
 
   const S = {
-    v3: null, version: '', instruments: {}, trading: null, signedIn: false, accounts: null, bot: null, copier: null,
+    v3: null, version: '', instruments: {}, trading: null, signedIn: false, accounts: null, groups: null, bot: null, copier: null,
     chosen: String(readJson(KEYS.chosen) || ''), shown: popout, layout: '', cidSeq: 0,
     orders: new Map(), pending: new Map(), propEnds: [],
     keys: { accept: '', reject: '', notes: [], from: '' },
@@ -266,6 +266,7 @@ function create(o) {
       case 'bot': S.bot = m; return;
       case 'botProposal': botProps.update(m); renderOthers(); return;   // counted under the proposal while the tab is shown
       case 'copier': S.copier = m; return;
+      case 'groups': S.groups = m; renderPanel(); return;   // 1.27.0: the picker's groups (ChartBridge 0.6.0)
       case 'agent': onAgent(m); if (H.job && m.agent === H.job.agent) jobStep(); return;
       case 'agentProposal': onProposal(m); return;
       case 'agentPlan': if (feed.plan(m)) { firePlan(m); renderFeed(); renderStrip(); renderLive(); } return;
@@ -407,7 +408,7 @@ function create(o) {
   }
   function propHtml(p) {
     const a = agents.get(p.agent) || { agent: p.agent }, r = p.root, lp = AC.legPrices(p, tickOf(r));
-    const acc = { name: p.account || AC.agentAccount(a).name, mark: AC.accountMark(p.sim) };   // no sim: LIVE, as an unknown account anywhere
+    const acc = { name: p.group && p.group.name ? 'Group ' + p.group.name : p.account || AC.agentAccount(a).name, mark: AC.accountMark(p.sim) };   // no sim: LIVE, as an unknown account anywhere; 1.27.0: a group's proposal names the group
     const kc = k => (k ? ' <span class="bt-keycap" data-parity="K02">' + esc(k) + '</span>' : '');
     /* Layout 5: the head (who, his account's mark), the big line, setup and confidence, stop, target, risk, open until and the
        account (a label over each figure), his reason; the foot: ChartBridge's words and the countdown, then Accept and Reject */
@@ -714,7 +715,8 @@ function create(o) {
   function renderPanel() {
     if (!view) return;
     const a = cur(); if (!a) return;
-    const acc = AC.agentAccount(a), tradable = AC.accountTradable(S.accounts, S.trading, acc.name), allowed = AC.modesAllowed({ tradable, account: acc.name });
+    const acc = AC.agentAccount(a), accWord = acc.group ? acc.label : acc.name;   // 1.27.0: a group: Auto needs one seat tradable
+    const tradable = acc.group ? AC.groupTradable(S.accounts, S.trading, acc.seats) : AC.accountTradable(S.accounts, S.trading, acc.name), allowed = AC.modesAllowed({ tradable, account: accWord });
     const hb = AH ? AH.modeBlock(helperOf(a.agent), a) : {};    // DECISION w: a build that is not a hero stays in Shadow on Sim (fails closed)
     if (H.job && H.job.agent === a.agent) for (const m of AC.MODES) allowed[m] = { ok: false, why: 'Turning him off (Shadow, Flatten, Off): the mode waits until that ends.' };
     for (const m of ['copilot', 'auto']) if (hb[m] && allowed[m].ok && a.mode !== m) allowed[m] = { ok: false, why: hb[m] };
@@ -723,12 +725,12 @@ function create(o) {
       const m = btn.dataset.mode, x = allowed[m];
       attr(btn, 'aria-pressed', String(a.mode === m));
       put(btn, 'disabled', !x.ok || !S.signedIn);
-      attr(btn, 'title', x.ok ? (m === 'auto' ? 'ChartBridge places ' + AC.agentName(a) + '\'s plans on ' + acc.name + (acc.mark ? ' (' + acc.mark + ')' : '') + ' by itself, inside its rules' : m === 'copilot' ? 'Each plan is a proposal for ' + acc.name + ': you accept or reject it' : 'Plans are shown and logged; nothing is placed') : x.why);
+      attr(btn, 'title', x.ok ? (m === 'auto' ? 'ChartBridge places ' + AC.agentName(a) + '\'s plans on ' + accWord + (acc.mark ? ' (' + acc.mark + ')' : '') + ' by itself, inside its rules' : m === 'copilot' ? 'Each plan is a proposal for ' + accWord + ': you accept or reject it' : 'Plans are shown and logged; nothing is placed') : x.why);
       put(btn, 'textContent', m === 'auto' && S.autoConfirm > now ? 'Confirm' : AC.MODE_NAME[m]);
     }
     const ma = q('[data-k="modeAcct"]'); put(ma, 'textContent', acc.label + (acc.mark ? ' · ' + acc.mark : ''));
     const why = q('[data-k="modeWhy"]');
-    if (!why.dataset.refused) { put(why, 'hidden', !(S.autoConfirm > now)); put(why, 'textContent', S.autoConfirm > now ? 'Click Confirm within 4 s: Auto on ' + acc.name + (acc.mark === 'LIVE' ? ', a LIVE account.' : '.') : ''); tog(why, 'live', acc.mark === 'LIVE'); }
+    if (!why.dataset.refused) { put(why, 'hidden', !(S.autoConfirm > now)); put(why, 'textContent', S.autoConfirm > now ? 'Click Confirm within 4 s: Auto on ' + accWord + (acc.mark === 'LIVE' ? ', a LIVE account.' : '.') : ''); tog(why, 'live', acc.mark === 'LIVE'); }
     const kill = q('[data-k="kill"]');
     put(kill, 'textContent', a.killed ? (S.killConfirm > now ? 'Release: click again' : 'Kill switch on · Release') : 'Kill switch');
     tog(kill, 'on', !!a.killed); put(kill, 'disabled', !S.signedIn); attr(kill, 'aria-pressed', String(!!a.killed));
@@ -746,7 +748,7 @@ function create(o) {
     if (S.acctAsk) { const stale = AC.askStale(S.acctAskMode, a); if (stale) { S.acctAsk = ''; S.acctAskMode = ''; put(q('[data-k="acctWhy"]'), 'textContent', stale); } }
     put(q('[data-k="acctEdit"]'), 'hidden', !S.acctEdit || !!S.acctAsk);
     put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
-    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(Object.assign({}, a, { mode: S.acctAskMode }), S.acctAsk));   // keepMode: the mode this question names
+    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(Object.assign({}, a, { mode: S.acctAskMode }), S.acctAsk, choicesFor(a).find(x => x.value === S.acctAsk)));   // keepMode: the mode this question names; 1.27.0: a group names its LIVE members
     setHtml(q('[data-k="rules"]'), AC.rulesLines(a.rules).map(([k, v]) => '<span>' + esc(k) + '</span><span class="mono">' + esc(v) + '</span>').join('') || '<span>Rules</span><span>not known yet</span>');
     /* ChartBridge 0.5.4 (DECISION 2026-10-10 ag): in a trade, or with an entry or a proposal open, the window alone may change */
     const ce = AC.rulesEditable(a, { workingEntry: work, openProposals: open, version: S.version });
@@ -1171,12 +1173,33 @@ function create(o) {
   }
   /* his account's room (the Account page's figures: ChartBridge's, else The Desk's limits; never estimated) */
   function renderRoom(a) {
+    if (AC.agentAccount(a).group || (Array.isArray(a.seats) && a.seats.length)) { renderSeats(a); return; }   // 1.27.0: a group: its seats table
     const name = AC.agentAccount(a).name, accs = S.accounts && Array.isArray(S.accounts.list) ? S.accounts.list : [], acc = accs.find(x => x && x.name === name) || null;
     const lim = V3 && typeof V3.limit === 'function' ? V3.limit(name) : acc && window.AccountsCore ? window.AccountsCore.limitState(acc, null) : null;
     const lines = AC.roomLines(acc, lim);
     setHtml(q('[data-k="room"]'), lines.map(l => '<div class="ag-roomline" data-parity="' + (l.key === 'dl' ? 'LA03' : 'LA02') + '" data-no-motion><div class="ag-roomrow"><span>' + esc(l.label) + '</span><span class="mono ag-hot">' +
       (l.room !== null ? esc(AC.fmtUsd(l.room).replace(/^\+/, '')) + (l.limit ? ' <small>of ' + esc(AC.fmtUsd(l.limit).replace(/^\+/, '')) + '</small>' : '') : '<small' + (l.said ? ' title="' + esc(l.said) + '"' : '') + '>' + esc(l.why) + '</small>') + '</span></div>' +
       (l.leftPct !== null ? '<div class="ag-meter2' + (l.key === 'dl' ? ' pu' : '') + '"><i style="width:' + l.leftPct + '%"></i></div>' : '') + '</div>').join(''));
+  }
+  /* 1.27.0 (ChartBridge 0.6.0): a group's seats: each account, SIM or LIVE, position, the last plan's size on it, P&L today, R of
+     its last trade (its own dollars over its own risk), daily room, room to its floor, and why it is not in the last trade; then
+     the group's total (the dollars summed, the group's R, the tightest room and whose it is). ChartBridge's numbers only. */
+  function renderSeats(a) {
+    const t = AC.seatRows(a, S.accounts, (p, r) => fmtPx(p, r));
+    const money = v => (v === null ? '-' : esc(AC.fmtUsd(v) || '$0.00'));
+    const plain = v => (v === null ? 'not reported' : esc((AC.fmtUsd(v) || '$0.00').replace(/^\+/, '')));
+    const tone = v => (v === null ? '' : v > 0 ? ' pos' : v < 0 ? ' neg' : '');
+    const rT = v => (v === null ? '-' : esc(BC.fmtR(v, 2) || '0.00 R'));
+    /* the column is narrow: four columns (account, the last plan's size, P&L today, R), and under each seat a small line with
+       SIM or LIVE, its position and both rooms, then why it is not in the trade */
+    const head = '<tr><th>Account</th><th class="r">Size</th><th class="r">P&amp;L</th><th class="r">R</th></tr>';
+    const rows = t.rows.map(x => '<tr data-seat="' + esc(x.account) + '"' + (x.out ? ' class="ag-out"' : '') + '><td class="mono">' + esc(x.account) + '</td>' +
+      '<td class="mono r">' + (x.size || '-') + '</td><td class="mono r' + tone(x.pnl) + '">' + money(x.pnl) + '</td><td class="mono r' + tone(x.r) + '">' + rT(x.r) + '</td></tr>' +
+      '<tr class="ag-seatsub"><td colspan="4">' + markHtml(x.mark) + ' ' + esc(x.position) + (x.seat ? '' : ' · left the group: his trade until flat') + ' · daily room ' + plain(x.daily) + ' · to floor ' + plain(x.floor) + '</td></tr>' +
+      (x.out ? '<tr class="ag-outwhy"><td colspan="4">Not in this trade: ' + esc(x.out) + '</td></tr>' : '')).join('');
+    const tot = '<tr class="ag-total"><td>Group</td><td class="mono r">' + (t.total.size || '-') + '</td><td class="mono r' + tone(t.total.pnl) + '">' + money(t.total.pnl) + '</td><td class="mono r' + tone(t.total.r) + '">' + rT(t.total.r) + '</td></tr>' +
+      '<tr class="ag-seatsub"><td colspan="4">Tightest: daily room ' + plain(t.total.daily) + (t.total.dailyOf ? ' (' + esc(t.total.dailyOf) + ')' : '') + ' · to floor ' + plain(t.total.floor) + (t.total.floorOf ? ' (' + esc(t.total.floorOf) + ')' : '') + '</td></tr>';
+    setHtml(q('[data-k="room"]'), t.rows.length ? '<table class="ag-seats" data-k="seats" aria-label="His seats">' + head + rows + tot + '</table>' : '<p class="ag-why">The group has no accounts: nothing trades.</p>');
   }
   /* the Motion switch: Full moves the light, Off keeps it still (the glow stays); the system's reduced motion keeps it still too */
   function renderMotion() {
@@ -1208,18 +1231,20 @@ function create(o) {
     setTimeout(() => { if (el.textContent === t) put(el, 'textContent', ''); }, 6000);
   }
   function others() { return { bot: S.bot, copier: S.copier, agents: agents.list() }; }
+  /* 1.27.0: the one picker's choices: None, the groups, single accounts (AC.pickerChoices) */
+  function choicesFor(a) { return AC.pickerChoices(S.accounts, S.groups, a, others()); }
   function ctxNow(a) { return { workingEntry: AC.workingEntries(S.orders.values(), a).length > 0, openProposals: props.open(a.agent).length, roots: servedRoots(), version: S.version, askedMode: S.acctAsk ? S.acctAskMode : a.mode }; }
   /* DECISION w: while a build that is not a hero runs, no LIVE account (it fails closed: his hello says so without the helper) */
   function liveBlocked(a, name) {
     if (!name) return '';   // None trades nothing: never blocked (DECISION 2026-10-14e)
-    const ch = AC.accountChoices(S.accounts, a, others()).find(x => x.name === name);
+    const ch = choicesFor(a).find(x => x.value === name);   // 1.27.0: a group is Sim only when every member is
     return AH ? AH.accountBlock(a, helperOf(a.agent), ch ? ch.sim : undefined) : '';
   }
   function sendAccount(name) {
     const a = cur(); if (!a) return;
     const blocked = liveBlocked(a, name);
     if (blocked) { S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', blocked); renderPanel(); return; }
-    const r = AC.accountChange(a, name, AC.accountChoices(S.accounts, a, others()), ctxNow(a));
+    const r = AC.accountChange(a, name, choicesFor(a), ctxNow(a));
     if (r.error) { put(q('[data-k="acctWhy"]'), 'textContent', r.error); return; }
     if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; sentLine('acctWhy', 'Sent: its mode (' + AC.MODE_NAME[r.msg.keepMode] + ') is kept.'); }
     renderPanel();
@@ -1299,18 +1324,19 @@ function create(o) {
       renderPanel();
     } else if (k === 'acctOpen') {
       S.acctEdit = true; S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', '');
-      const sel = q('[data-k="acctSel"]'), list = AC.accountChoices(S.accounts, a, others());
-      const none = AC.agentAccount(a).none;   // DECISION 2026-10-14e: None first (nothing trades on it)
-      sel.replaceChildren(new Option(AC.NONE_LABEL + ' (nothing trades)' + (none ? ', now' : ''), ''), ...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.why ? ', ' + c.why : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.ok && !c.current; return op; }));
-      sel.value = AC.agentAccount(a).name;
-      if (!list.some(c => c.ok)) put(q('[data-k="acctWhy"]'), 'textContent', 'No other account is free and tradable: check one on the Accounts tab.');
+      /* 1.27.0 (Anthony 2026-10-15): one list: None first (DECISION 2026-10-14e: nothing trades on it), then the groups, then
+         single accounts; one that cannot be taken shows why and is not offered */
+      const sel = q('[data-k="acctSel"]'), list = choicesFor(a);
+      sel.replaceChildren(...list.map(c => { const op = new Option(c.text, c.value); op.disabled = !c.ok && !c.current; return op; }));
+      sel.value = AC.agentAccount(a).value;
+      if (!list.some(c => c.ok && c.kind !== 'none')) put(q('[data-k="acctWhy"]'), 'textContent', 'No other account or group is free and tradable: check one on the Accounts tab.');
       renderPanel(); sel.focus();
     } else if (k === 'acctCancel' || k === 'acctNo') { S.acctEdit = false; S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', ''); renderPanel(); }
     else if (k === 'acctSave') {
       const name = q('[data-k="acctSel"]').value;
       const blocked = liveBlocked(a, name);
       if (blocked) { put(q('[data-k="acctWhy"]'), 'textContent', blocked); return; }
-      const r = AC.accountChange(a, name, AC.accountChoices(S.accounts, a, others()), ctxNow(a));
+      const r = AC.accountChange(a, name, choicesFor(a), ctxNow(a));
       if (r.error) { put(q('[data-k="acctWhy"]'), 'textContent', r.error); return; }
       if (r.live) { S.acctAsk = name; S.acctAskMode = a.mode; put(q('[data-k="acctWhy"]'), 'textContent', ''); renderPanel();   // the mode recorded once, as the question opens
         const y = q('[data-act="acctYes"]'); if (y) y.focus(); return; }   // asked once, in the page

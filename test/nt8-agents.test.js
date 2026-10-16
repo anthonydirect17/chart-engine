@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.5\.[0-8]";/);   // 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.0)";/);   // 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -188,4 +188,53 @@ test('0.5.7 None and the daily reset (DECISION 2026-10-14e): ChartBridge runs it
   assert.match(acode, /private string account = ChartBridgeBranches\.None;/);
   assert.match(bodies(acode, 'AccountConflict'), /if \(ChartBridgeBranches\.IsNone\(acct\)\) return null;/, 'None clashes with nobody');
   for (const f of ['BotHarness.cs', 'AgentHarness.cs', 'CopierHarness.cs']) assert.match(read(path.join('check', f)), /0\.5\.7 reset/, f);
+});
+
+test('0.6.0 group trading: one plan, each seat through PlaceAgentEntry on its own account and size, never PlaceLock across seats', () => {
+  const place = bodies(acode, 'Place'), seats = bodies(acode, 'PlaceSeatsLocked');
+  assert.match(place, /lock \(PlaceGate\)[\s\S]*string why = Checks\(p, forAccount, forAccount != null, out acct\);[\s\S]*if \(seats\)\s*\{\s*why = PlaceSeatsLocked\(p, out placed\);/, 'every check again under the gate, then seat by seat');
+  assert.match(seats, /if \(p\.Outs\[i\] != null\) continue;/, 'a seat that sits out gets nothing');
+  assert.match(seats, /CbJson\.Str\(seat\)[\s\S]*p\.Sizes\[i\]\.ToString\(CultureInfo\.InvariantCulture\)/, 'that seat\'s account and its own size');
+  assert.match(seats, /try \{ why = ChartBridgeOrders\.PlaceAgentEntry\(Id, p\.Id, text, out o\); \}\s*catch \(Exception ex\)/, 'each in its own try, with the plan\'s id');
+  assert.ok(!/AgentPlaceLock|PlaceLock\)/.test(seats), 'PlaceLock is taken by PlaceOrder per seat, never held across seats (its plans file write runs outside it)');
+  assert.match(seats, /if \(why == null && o\.OrderState == OrderState\.Rejected\) why = "NinjaTrader rejected its entry";/);
+  assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(/.test(seats), 'no order call of its own');
+  const checks = bodies(acode, 'Checks');
+  assert.match(checks, /outs\[i\] = p\.Sizes\[i\] == 0 \? "its size is 0 \(no room for 1 contract\)" : AccountProblemFor\(seats\[i\], true\);/, 'Q1 b: size 0, not tradable or not connected: that seat sits out');
+  assert.match(checks, /outs\[i\] = ChartBridgeAgents\.EntryCheck\("agent:" \+ Id, a, root\) \?\? ChartBridgeGroups\.EntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Sizes\[i\], true, false\);/, 'Q1 b: the owner lock and the one-direction check per seat');
+  assert.match(checks, /if \(outs\.All\(x => x != null\)\)\s*return "no seat of "/, 'refused only when no seat can take it');
+  assert.match(bodies(acode, 'GroupPlanProblem'), /if \(p\.SeatsRev != rev\) return "the group changed; size again";/, 'a stale seatsRev refuses the whole plan');
+  assert.match(checks, /open = Seats\.Values\.Any\(x => x\.openTag != null \|\| x\.Sticky\.Count > 0\);/, 'one at a time across every seat');
+  assert.match(checks, /trades = TradesLocked\(\);/, 'Q3 a: maxTrades per plan');
+  assert.match(bodies(acode, 'UnitsLocked'), /SeatOfTag\.ContainsKey\(t8\) && PlanOfTag\.TryGetValue\(t8, out pid\) \? "plan\\t" \+ pid : kv\.Key;/, 'a group\'s plan is one trade; any other trade counts by itself, as before');
+  assert.match(bodies(acode, 'LossesLocked'), /v\.All\(x => !double\.IsNaN\(x\)\) && v\.Sum\(\) < 0/, 'a loss once every seat closed, when their sum is below 0');
+});
+
+test('0.6.0 group trading: every single-account field is a seat\'s; the owner lock, the clash rules and the entry seat count every seat', () => {
+  const seat = acode.slice(acode.indexOf('private sealed class Seat'), acode.indexOf('// ---------------------------------------------------------- state (under Sync)'));
+  for (const f of ['public string openTag, openRoot;', 'public Instrument openInst;', 'public int ledQty;', 'public double ledCash, ledAvg;', 'LostTrades', 'HeldLost', 'HeldSince', 'public readonly HashSet<string> Sticky', 'public readonly Dictionary<string, FlatJob> Flats', 'AgainstSince'])
+    assert.ok(seat.includes(f), 'a seat\'s own: ' + f);
+  const agentState = acode.slice(acode.indexOf('// ---------------------------------------------------------- state (under Sync)'), acode.indexOf('public string Account { get'));
+  for (const f of [/\bopenTag\b/, /\bledQty\b/, /\bSticky\b/, /Dictionary<string, FlatJob> Flats/, /\bLostTrades\b/]) assert.ok(!f.test(agentState), 'no single-account field left on the agent: ' + f);
+  assert.match(bodies(acode, 'OwnerAgent'), /if \(a\.OwnsOn\(account, root\)\) return a\.Id;/);
+  assert.match(bodies(acode, 'EntryCheck'), /if \(!ag\.IsEntrySeat\(account\.Name\)\) return "agent " \+ id \+ " trades its own account "/, 'a seat it trades now; never one that left the group');
+  assert.match(bodies(acode, 'AgentOfAccount'), /if \(a\.Claims\(name\)\) return a\.Id;/);
+  assert.match(bodies(acode, 'AccountConflict'), /foreach \(string seat in SeatNames\(\)\) \{ string w = AccountConflict\(seat\); if \(w != null\) return w; \}/);
+  assert.match(bodies(ccode, 'Eligible'), /string seat = ChartBridgeAgents\.AccountTakenWhy\(a\.Name, "the copier"\);[^\n]*\n\s*if \(seat != null\) \{ label = "agent"; why = seat; return null; \}/, 'the copier never copies to a seat');
+  assert.match(strip(read('ChartBridgeGroups.cs')), /if \(id != null\) \{ string taken = ChartBridgeAgents\.JoinRefusal\(name, id\); if \(taken != null\) return taken; \}/, 'joining a group an agent trades');
+  for (const f of ['OnExec', 'OnPosition']) assert.match(bodies(acode, f), /HasSeat\(|SeatFor\(account\)|acct/, f + ' per seat');
+  assert.match(bodies(acode, 'FlattenRunsLocked'), /return Flats\.Values\.Any\(j => j\.Root == root && j\.Owned\);/, 'a seat\'s own jobs');
+});
+
+test('0.6.0 group trading: the contract fields; the day file\'s #seat lines read before the comment skip (an older ChartBridge skips them)', () => {
+  assert.match(acode, /\{ "plan", new\[\] \{[^}]*"confidence", "seatsRev", "sizes" \} \}/);
+  assert.match(acode, /\{ "flatten", new\[\] \{ "type", "account" \} \}/);
+  assert.match(acode, /\{ "agentAccount", new\[\] \{ "type", "cid", "agent", "account", "group", "keepMode" \} \}/);
+  assert.match(acode, /internal const string SeatPrefix = "#seat\\t";/);
+  const load = bodies(acode, 'LoadDay');
+  assert.ok(load.indexOf('ReadSeatLine(line,') > 0 && load.indexOf('ReadSeatLine(line,') < load.indexOf('if (line.Length == 0 || line.StartsWith("#")) continue;'), '#seat read before the comment skip');
+  assert.match(bodies(acode, 'SaveDayLocked'), /lines\.Add\(SeatPrefix \+ kv\.Key \+ "\\t" \+ kv\.Value\);/);
+  assert.match(bodies(acode, 'SaveGroup'), /"group\\t" \+ gid/, 'agent-<id>-account.txt group<TAB><id> (an older ChartBridge stands the agent down on it)');
+  assert.match(bodies(acode, 'SeatsWelcomeFields'), /",\\"group\\":"[\s\S]*",\\"seats\\":"[\s\S]*",\\"seatsRev\\":"/);
+  assert.match(bodies(acode, 'AnswerJson'), /\(account != null \? ",\\"account\\":" \+ CbJson\.Str\(account\) : ""\)/, 'answer.account only for one seat of a group plan');
 });

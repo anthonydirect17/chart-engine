@@ -107,9 +107,9 @@ test('fake-agent: clean() makes model text plain (quotes, newlines, backslashes,
 test('fake-agent: a sample plan carries every field the contract asks for, and its riskDollars add up (check 5)', async () => {
   const { samplePlan, riskDollars } = await import('./fake-agent.mjs');
   const keys = agentKeys();
-  assert.deepEqual(keys.plan, ['type', 'id', 'root', 'side', 'kind', 'price', 'limitPrice', 'qty', 'stopTicks', 'targetTicks', 'expireSec', 'riskDollars', 'setup', 'reason', 'confidence'], 'the C# plan keys are the contract\'s');
+  assert.deepEqual(keys.plan, ['type', 'id', 'root', 'side', 'kind', 'price', 'limitPrice', 'qty', 'stopTicks', 'targetTicks', 'expireSec', 'riskDollars', 'setup', 'reason', 'confidence', 'seatsRev', 'sizes'], 'the C# plan keys are the contract\'s (0.6.0: seatsRev and sizes, a group\'s plan only)');
   const p = samplePlan('s1');
-  assert.deepEqual(Object.keys(p).sort(), keys.plan.filter(k => k !== 'limitPrice').sort());
+  assert.deepEqual(Object.keys(p).sort(), keys.plan.filter(k => !['limitPrice', 'seatsRev', 'sizes'].includes(k)).sort());
   assert.equal(p.riskDollars, 12 * 0.25 * 2 * 1);
   assert.equal(samplePlan('s2', { root: 'NQ', qty: 2, stopTicks: 8 }).riskDollars, 80);
   const sl = samplePlan('s3', { kind: 'stopLimit', price: 25001, limitPrice: 25002 });

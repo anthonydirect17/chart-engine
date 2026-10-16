@@ -478,9 +478,9 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.26.0');   // 1.26.0: prop groups and real account state (needs ChartBridge 0.5.8); 1.25.0: the plan id, None in every tab (needs ChartBridge 0.5.7); 1.24.0: the feed delay split (ChartBridge 0.5.6's clock check); 1.23.1: Layout 5 polish (Change the rules in the Rules header); 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.22.0 removed the single chart page; 1.21.0 needs ChartBridge 0.5.2
-  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.26\.0'/);
-  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.26\.0/);
+  assert.equal(JSON.parse(read('package.json')).version, '1.27.0');   // 1.27.0: group trading (needs ChartBridge 0.6.0); 1.26.0: prop groups and real account state (needs ChartBridge 0.5.8); 1.25.0: the plan id, None in every tab (needs ChartBridge 0.5.7); 1.24.0: the feed delay split (ChartBridge 0.5.6's clock check); 1.23.1: Layout 5 polish (Change the rules in the Rules header); 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.22.0 removed the single chart page; 1.21.0 needs ChartBridge 0.5.2
+  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.27\.0'/);
+  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.27\.0/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent-grid.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md', 'docs/MOTION.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 
@@ -818,4 +818,105 @@ test('Layout 5 wiring: agent-grid.js loaded before agent.js on both pages and in
   assert.ok(JSON.parse(read('nt8', 'install-files.json')).www.some(x => x.from === 'live/agent-grid.js' && x.to === 'agent-grid.js'));
   /* workspace.css says [hidden] { display: none !important }: on a phone the mode's words keep their two lines while hidden */
   assert.match(read('live', 'agent.css'), /\.ag-view \.ag-why\[hidden\] \{ display: block !important; visibility: hidden; \}/);
+});
+
+/* ======================================================================== chart 1.27.0 (ChartBridge 0.6.0): group trading */
+// Made-up accounts SIM-A, SIM-B, SIM-C (a made-up group "Lucid"), EVAL-A (LIVE).
+const G_ACCOUNTS = { list: [
+  { name: 'SIM-A', sim: true, tradable: true, state: 'active', roomDaily: 900, roomFloor: 1700 }, { name: 'SIM-B', sim: true, tradable: true, state: 'active', roomDaily: 400, roomFloor: 2100 },
+  { name: 'SIM-C', sim: true, tradable: false, state: 'active', roomDaily: null, roomFloor: 1500 }, { name: 'EVAL-A', sim: false, tradable: true, state: 'active' },
+  { name: 'Sim101', sim: true, tradable: true, state: 'active' } ] };
+const G_GROUPS = { type: 'groups', list: [
+  { id: 'g1', name: 'Lucid', members: ['SIM-A', 'SIM-B', 'SIM-C'] }, { id: 'g2', name: 'Mixed', members: ['SIM-A', 'EVAL-A'] },
+  { id: 'g3', name: 'Taken', members: ['SIM-B', 'Sim101'] }, { id: 'g4', name: 'Empty', members: [] } ], error: null };
+const onGroup = o => agent(Object.assign({ account: null, sim: true, group: { id: 'g1', name: 'Lucid' }, seatsRev: 7,
+  seats: [{ account: 'SIM-A', owns: false, position: null, pnlToday: 0, trades: 0, out: null, sim: true, seat: true, lastPlan: null, size: 0, risk: 0, lastPnl: null },
+    { account: 'SIM-B', owns: false, position: null, pnlToday: 0, trades: 0, out: null, sim: true, seat: true, lastPlan: null, size: 0, risk: 0, lastPnl: null },
+    { account: 'SIM-C', owns: false, position: null, pnlToday: 0, trades: 0, out: null, sim: true, seat: true, lastPlan: null, size: 0, risk: 0, lastPnl: null }] }, o || {}));
+
+test('1.27.0 the picker: None first, then the groups, then single accounts; a group with a member that cannot be taken shows why', () => {
+  const a = agent({ account: 'SIM-A' });
+  const others = { bot: { enabled: true, account: 'Sim101' }, copier: null, agents: [a, agent({ agent: 'other', name: 'Other', account: null, group: { id: 'g9', name: 'X' }, seats: [{ account: 'EVAL-B', seat: true }] })] };
+  const ch = AC.pickerChoices(G_ACCOUNTS, G_GROUPS, a, others);
+  assert.deepEqual(ch.map(c => c.kind + ':' + c.value), ['none:', 'group:group:g1', 'group:group:g2', 'group:group:g3', 'group:group:g4', 'account:SIM-A', 'account:SIM-B', 'account:Sim101', 'account:EVAL-A']);
+  const by = Object.fromEntries(ch.map(c => [c.value, c]));
+  assert.equal(by['group:g1'].text, 'Group Lucid: SIM-A, SIM-B, SIM-C (SIM)');
+  assert.ok(by['group:g1'].ok && by['group:g1'].tradable, 'a member not tradable now (SIM-C) is no reason: it sits out each trade');
+  assert.equal(by['group:g2'].text, 'Group Mixed: SIM-A, EVAL-A (LIVE)');
+  assert.deepEqual(by['group:g2'].live, ['EVAL-A']);
+  assert.ok(!by['group:g3'].ok && by['group:g3'].text === 'Group Taken: SIM-B, Sim101 (SIM), cannot be taken: Sim101 is the bot\'s account', 'shown with the reason, not offered');
+  assert.ok(!by['group:g4'].ok && /it has no accounts/.test(by['group:g4'].text));
+  assert.equal(ch[0].text, 'None (nothing trades)');
+  // another agent's seats are taken for this one, as single accounts and as members
+  const ch2 = AC.pickerChoices({ list: G_ACCOUNTS.list.concat([{ name: 'EVAL-B', sim: false, tradable: true, state: 'active' }]) }, { list: [{ id: 'g5', name: 'Theirs', members: ['EVAL-B'] }] }, a, others);
+  assert.equal(ch2.find(c => c.value === 'EVAL-B').why, 'a seat of Other');
+  assert.match(ch2.find(c => c.value === 'group:g5').why, /^EVAL-B is a seat of Other$/);
+  // the agent on a group: its group is current
+  const g = onGroup();
+  const ch3 = AC.pickerChoices(G_ACCOUNTS, G_GROUPS, g, { agents: [g] });
+  assert.ok(ch3.find(c => c.value === 'group:g1').current && /, now$/.test(ch3.find(c => c.value === 'group:g1').text));
+});
+
+test('1.27.0 the agent on a group: its account words, Auto with any seat tradable, the change messages', () => {
+  const g = onGroup();
+  const acc = AC.agentAccount(g);
+  assert.deepEqual([acc.name, acc.value, acc.label, acc.none, acc.mark], ['', 'group:g1', 'Group Lucid: SIM-A, SIM-B, SIM-C', false, 'SIM']);
+  assert.deepEqual(acc.seats, ['SIM-A', 'SIM-B', 'SIM-C']);
+  assert.equal(AC.agentAccount(onGroup({ seats: [{ account: 'SIM-A', seat: true }, { account: 'SIM-X', seat: false }] })).label, 'Group Lucid: SIM-A', 'a seat that left the group is not in its words');
+  assert.ok(AC.groupTradable(G_ACCOUNTS, null, ['SIM-C', 'SIM-B']) && !AC.groupTradable(G_ACCOUNTS, null, ['SIM-C']) && !AC.groupTradable(G_ACCOUNTS, null, []));
+  assert.equal(AC.stripModel(g, [], null).account, 'Group Lucid: SIM-A, SIM-B, SIM-C');
+  const a = agent({ account: 'SIM-A', mode: 'auto' });
+  const ch = AC.pickerChoices(G_ACCOUNTS, G_GROUPS, a, { bot: { enabled: true, account: 'Sim101' }, agents: [a] });
+  assert.deepEqual(AC.accountChange(a, 'group:g1', ch, {}, 'c9'), { msg: { type: 'agentAccount', cid: 'c9', agent: 'demo', group: 'g1', keepMode: 'auto' }, live: false, confirm: '', mode: 'auto' });
+  const live = AC.accountChange(a, 'group:g2', ch, {});
+  assert.ok(live.live && live.confirm === 'Agent demo will trade group Mixed (SIM-A, EVAL-A), with LIVE account EVAL-A, in Auto. Continue?', live.confirm);
+  assert.equal(AC.liveQuestion(Object.assign({}, a, { mode: 'shadow' }), 'group:g2', ch.find(c => c.value === 'group:g2')), 'Agent demo will trade group Mixed (SIM-A, EVAL-A), with LIVE account EVAL-A, in Shadow (nothing is placed until you choose Copilot or Auto). Continue?');
+  assert.match(AC.accountChange(a, 'group:g3', ch, {}).error, /^Group Taken cannot be taken: Sim101 is the bot's account\.$/);
+  assert.match(AC.accountChange(a, 'group:g7', ch, {}).error, /There is no group g7/);
+  assert.match(AC.accountChange(agent({ account: 'SIM-A', position: { root: 'MNQ', qty: 1 } }), 'group:g1', ch, {}).error, /choose its account when it is flat/);
+  // from a group: None and a single account, as before; the group itself is already its own
+  const gc = AC.pickerChoices(G_ACCOUNTS, G_GROUPS, g, { agents: [g] });
+  assert.deepEqual(AC.accountChange(g, '', gc, {}).msg, { type: 'agentAccount', agent: 'demo', account: null, keepMode: 'shadow' });
+  assert.deepEqual(AC.accountChange(g, 'SIM-B', gc, {}).msg, { type: 'agentAccount', agent: 'demo', account: 'SIM-B', keepMode: 'shadow' });
+  assert.match(AC.accountChange(g, 'group:g1', gc, {}).error, /^Group Lucid: SIM-A, SIM-B, SIM-C is already Demo Agent's account\.$/);
+  // one account: exactly as before (its value is its name)
+  assert.equal(AC.agentAccount(agent()).value, 'SIM-AG1');
+  assert.match(AC.accountChange(agent(), 'SIM-AG1', [], {}).error, /SIM-AG1 is already Demo Agent's account/);
+});
+
+test('1.27.0 the seats table: each seat\'s size, P&L, R from its own risk, rooms, why it sat out; the group\'s total', () => {
+  const g = onGroup({ seats: [
+    { account: 'SIM-A', owns: false, position: null, pnlToday: 40, trades: 1, out: null, sim: true, seat: true, lastPlan: 'p1', size: 5, risk: 20, lastPnl: 40 },
+    { account: 'SIM-B', owns: true, position: { root: 'MNQ', qty: 3, avgPrice: 24999 }, pnlToday: -6, trades: 1, out: null, sim: true, seat: true, lastPlan: 'p1', size: 3, risk: 12, lastPnl: -6 },
+    { account: 'SIM-C', owns: false, position: null, pnlToday: 0, trades: 0, out: 'SIM-C is not connected', sim: true, seat: true, lastPlan: 'p1', size: 4, risk: 16, lastPnl: null }] });
+  const t = AC.seatRows(g, G_ACCOUNTS, p => String(p));
+  assert.deepEqual(t.rows.map(x => [x.account, x.mark, x.position, x.size, x.pnl, x.r, x.daily, x.floor, x.out]), [
+    ['SIM-A', 'SIM', 'Flat', 5, 40, 2, 900, 1700, ''], ['SIM-B', 'SIM', 'Long 3 MNQ @ 24999', 3, -6, -0.5, 400, 2100, ''], ['SIM-C', 'SIM', 'Flat', 4, 0, null, null, 1500, 'SIM-C is not connected']]);
+  assert.deepEqual(t.total, { pnl: 34, size: 12, r: 34 / 32, daily: 400, dailyOf: 'SIM-B', floor: 1500, floorOf: 'SIM-C' }, 'group R = the dollars summed over the risk summed (seats with both); the tightest room and whose');
+  assert.deepEqual(AC.seatRows(agent(), G_ACCOUNTS).rows, [], 'one account: no seats table');
+});
+
+test('1.27.0 the Agent tab draws the picker from pickerChoices and a group\'s seats table; Off never flattens a group by itself', () => {
+  const js = read('live', 'agent.js'), helper = require('../live/agent-helper.js');
+  assert.match(js, /case 'groups': S\.groups = m; renderPanel\(\); return;/);
+  assert.match(js, /function choicesFor\(a\) \{ return AC\.pickerChoices\(S\.accounts, S\.groups, a, others\(\)\); \}/);
+  assert.ok(!/AC\.accountChoices\(/.test(js), 'every account choice goes through the one picker');
+  assert.match(js, /sel\.replaceChildren\(\.\.\.list\.map\(c => \{ const op = new Option\(c\.text, c\.value\); op\.disabled = !c\.ok && !c\.current; return op; \}\)\);/);
+  assert.match(js, /AC\.groupTradable\(S\.accounts, S\.trading, acc\.seats\)/);
+  assert.match(js, /function renderSeats\(a\) \{\s*const t = AC\.seatRows\(a, S\.accounts/);
+  const st = helper.flatOffStart(onGroup({ position: { root: 'MNQ', qty: 2 } }), 0);
+  assert.match(st.error, /^He trades group Lucid \(SIM-A, SIM-B, SIM-C\): nothing was sent\. Flatten every seat/);
+  assert.equal(helper.flatOffStart(onGroup(), 0).action, 'off', 'a flat group turns off as before');
+});
+
+test('1.27.0 the Accounts tab marks each seat with its hero\'s name; the copier\'s pickers show seats with the reason', () => {
+  const heroes = new Map([['manrae', { agent: 'manrae', name: 'Manrae', account: null, seats: [{ account: 'SIM-A' }, { account: 'SIM-B' }] }], ['demo', { agent: 'demo', name: '', account: 'SIM-AG1', seats: null }]]);
+  assert.equal(ACC.heroOf(heroes, 'SIM-B'), 'Manrae');
+  assert.equal(ACC.heroOf(heroes, 'SIM-AG1'), 'demo', 'no name yet: the id');
+  assert.equal(ACC.heroOf(heroes, 'SIM-C'), '');
+  const js = read('live', 'accounts.js');
+  assert.match(js, /case 'agent': if \(typeof m\.agent === 'string'\) \{ S\.heroes\.set\(m\.agent, \{ agent: m\.agent, name: m\.name, account: m\.account, seats: m\.seats \}\); changed\(\); \} return;/);
+  assert.match(js, /hero \? ' · ' \+ hero \+ '\\'s seat' : ''/);
+  assert.match(js, /\$\{hero && a\.name !== leader \? ' disabled' : ''\}/, 'the leader picker: a seat is shown, not offered');
+  assert.match(js, /const last = hero \? hero \+ '\\'s seat: the copier never trades it'/);
 });

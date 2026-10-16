@@ -1247,6 +1247,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             Account a = Find(name);
             if (a == null && !ChartBridgeAccounts.Listed(name)) return "no account " + name;
             if (a != null) name = a.Name;
+            // 0.6.0 (group trading): a group an agent trades takes no account that is the bot's, the copier's leader or a follower, or
+            // another agent's (asked before the order lock: it reads the copier's and the bot's memory)
+            if (id != null) { string taken = ChartBridgeAgents.JoinRefusal(name, id); if (taken != null) return taken; }
             string said;
             double seed = 0;
             lock (ChartBridgeOrders.GroupPlaceLock)   // no entry passes the check while the membership changes
@@ -1333,6 +1336,30 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // For the harness and the PC: the group id of an account, or null.
         public static string GroupOf(string account) { EnsureLoaded(); lock (Mem) { string id; return account != null && state.Members.TryGetValue(account, out id) ? id : null; } }
+
+        // 0.6.0 (group trading): a group's members in seat order (by name, ignoring case, as the groups message lists them), or null
+        // when there is no such group (or groups.txt could not be read: no group is known then, so an agent on one trades nothing).
+        public static List<string> MembersOf(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            EnsureLoaded();
+            lock (Mem)
+            {
+                if (readError != null || !state.Groups.ContainsKey(id)) return null;
+                return state.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+            }
+        }
+
+        // 0.6.0: a group's name, or null when there is no such group.
+        public static string NameOf(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            EnsureLoaded();
+            lock (Mem) { Group g; return state.Groups.TryGetValue(id, out g) ? g.Name : null; }
+        }
+
+        // 0.6.0: groups.txt could not be read (no group is known this run).
+        public static bool Unreadable() { EnsureLoaded(); lock (Mem) return readError != null; }
 
         // ---------------------------------------------------------- telling the pages
         private static string Reject(string cid, string reason) { return "{\"type\":\"reject\"" + (cid != null ? ",\"cid\":" + CbJson.Str(cid) : "") + ",\"reason\":" + CbJson.Str(reason) + "}"; }

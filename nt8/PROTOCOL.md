@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -2412,11 +2412,11 @@ not even the window. A change is saved, logged and sent to the agent in a new `w
 | `agentHello` | `name` (1 to 40), `build` (1 to 40) | first message |
 | `beat` | none | |
 | `subscribe` | `root`, `days`, `tickHours`, `sub` (as the page's) | answered as for a page: `history`, `ticks`, `ready`, then live `tick` for that root (the agent gets live `tick` for every served root anyway) |
-| `plan` | `id` (1 to 40, unique per agent per trading day), `root`, `side` (`buy`/`sell`), `kind` (`limit`/`stopLimit`), `price`, `limitPrice` (stopLimit only, and then required), `qty`, `stopTicks`, `targetTicks`, `expireSec`, `riskDollars`, `setup` (1 to 40), `reason` (1 to 200), `confidence` (0 to 1) | one entry plan; checked, then by mode: logged, proposed or placed |
+| `plan` | `id` (1 to 40, unique per agent per trading day), `root`, `side` (`buy`/`sell`), `kind` (`limit`/`stopLimit`), `price`, `limitPrice` (stopLimit only, and then required), `qty`, `stopTicks`, `targetTicks`, `expireSec`, `riskDollars`, `setup` (1 to 40), `reason` (1 to 200), `confidence` (0 to 1); 0.6.0: `seatsRev` and `sizes` ("Group trading (0.6.0)") | one entry plan; checked, then by mode: logged, proposed or placed |
 | `skip` | `id`, `setup` (optional), `reason` | a decision not to trade; logged and shown |
 | `withdraw` | `id`, `reason` | expires an open proposal, cancels an unfilled entry |
 | `note` | `kind` (`look`, `thinking`, `lesson`, `notebook`, `status`), `text` (1 to 1,000) | display only, never the order path; the last 200 per agent are kept for pages that sign in later |
-| `flatten` | none | auto only, not while killed: cancel the agent's orders on its account and root, then market out |
+| `flatten` | `account` (optional, 0.6.0: one seat; without it, every seat) | auto only, not while killed: cancel the agent's orders on its account and root, then market out |
 
 | ChartBridge to the agent | fields | when |
 |---|---|---|
@@ -2497,7 +2497,7 @@ Conversely the bot, the copier and other agents refuse an agent's account. A LIV
 | `agentKill` | `cid` (optional), `agent`, `on` (*bool*) |
 | `agentSeen` | `agent`, `id`, `at` |
 | `agentAnswer` | `cid` (optional), `agent`, `id`, `answer` (`accept`/`reject`), `at` |
-| `agentAccount` | `cid` (optional), `agent`, `account` (0.5.7: `null` is None), `keepMode` (optional, 0.5.2: `shadow`, `copilot` or `auto`, the mode the page's question named; a 1.18.1 page sends it only to ChartBridge 0.5.2 or later, because 0.5.1 refuses a key it does not know) |
+| `agentAccount` | `cid` (optional), `agent`, `account` (0.5.7: `null` is None) or (0.6.0) `group` (a group id: every member a seat; never both), `keepMode` (optional, 0.5.2: `shadow`, `copilot` or `auto`, the mode the page's question named; a 1.18.1 page sends it only to ChartBridge 0.5.2 or later, because 0.5.1 refuses a key it does not know) |
 | `agentRules` | `cid` (optional), `agent`, `roots`, `maxQtyNQ`, `maxQtyMNQ`, `maxQtyES`, `maxQtyMES` (each optional), `entryFrom`, `entryUntil`, `flatAt`, `maxExpireSec`, `maxTrades` (0 = none), `maxLosses` (0 = none) |
 
 | ChartBridge to page | fields | when |
@@ -2995,6 +2995,75 @@ is mixed. The refusal names the group and the holders, as NinjaTrader names the 
 accounts. Exits and flattens still work." Two entries on opposite sides at the same moment: one passes, the other is refused
 (one lock). `noHedge` off: not checked. Lock order: `PlaceLock`, then the groups' own lock, which only copies the membership
 and is never held across a NinjaTrader collection. An unreadable `groups.txt` refuses every entry here.
+
+### Group trading (0.6.0)
+
+Phase 4 piece 1 (Anthony's decisions of 2026-10-15, Q1 b, Q2 a, Q3 a): one agent (a hero) trades a whole prop group from the
+Agent tab. Separate from the copier: the copier stays exactly as it is (the bot's and discretionary trades). One brain: the runner
+makes one set of model calls per decision and sends one plan; ChartBridge places it on every account of the group that can take
+it (AI is never in the order path). Built in `nt8/ChartBridgeAgents.cs` (`ChartBridgeAgent.Seat`). Made-up names below.
+
+**Seats.** Each account an agent trades is a seat: its one account (exactly as before), or every member of the group it trades,
+in the group's order (by name, as the `groups` message lists them). ChartBridge keeps per seat everything it followed for the one
+account: the open trade and its ledger (tag, root, contract, quantity, cash, average), the roots it owns until flat (the owner
+lock, per (account, root) as before), the flatten jobs, the lost-trade errors (per (seat, root), with the 0.5.7 hold). A seat is
+never a copier leader or follower, never the bot's, never another agent's: the copier and the bot never touch one.
+
+**Choosing a group.** `agentAccount` may carry `group` (the group id) in place of `account` (never both). It is refused while the
+agent has a position, a working entry or a proposal; while any member, or any seat it trades now, holds a position or a working
+order on its roots; when the group has no account; and when a member is the bot's account, the copier's leader or a follower (on or
+off), another agent's account, Backtest or Playback, or not in NinjaTrader. A member that is not tradable or not connected now is
+taken: it sits out each trade until it is. `agent-<id>-account.txt` saves `group<TAB><id>`; a ChartBridge before 0.6.0 does not
+understand that line and stands the agent down (safe). The page's picker is one list: None first, then each group ("Group Lucid:
+SIM-A, SIM-B, SIM-C"), then single accounts; a group with a member that cannot be taken is shown with the reason, not offered.
+
+**Membership.** An account joining a group an agent trades is refused (`accountGroup`) when it is the bot's, the copier's leader or a
+follower, or another agent's. Any change of the seats (an account joins or leaves, the agent's account or group changes) puts
+`seatsRev` up and sends a fresh `welcome` and `accountState`; a joined account is a seat from the next plan. A seat that leaves the
+group, or every seat when its group is deleted (the agent then goes to None, saved), while it holds the agent's trade stays the
+agent's (owned, protected, flattened at flatAt) until flat, and takes no new entry; it is dropped once flat with nothing working.
+
+| message | 0.6.0 adds |
+|---|---|
+| `welcome` | `group` (`{id, name}` or null), `seats` (the member accounts in seat order; null for one account), `seatsRev` (an integer, up on every change of the seats). For a group `account` is null and `sim` is true only when every seat is Sim |
+| `plan` | `seatsRev` (the one it was sized for) and `sizes`: a plain string of whole numbers in seat order, "5,3,4"; 0 means that seat sits this trade out (the runner found no room for 1 contract). `qty` stays and equals the first size that is not 0; `riskDollars` is stopTicks x tick x point value x the sum of the sizes. Without `sizes` (one account) the plan is exactly as before; a plan with `sizes` for one account is refused |
+| `flatten` | optional `account`: that seat only; without it, every seat (one message for the whole group: the 10 a second limit) |
+| `answer` | optional `account`: one `placed` or `refused` answer per seat (a seat that sits out: `refused`, "not in this trade: <why>"), then the plan-level answer without `account` (`placed` when at least one seat was placed, naming each seat); an `expired` answer per seat whose entry is cancelled, and `refused` for a seat whose entry NinjaTrader rejects |
+| `agentState` | for a group, `seats`: `[{account, owns, position, pnlToday, trades, out}]` (`position` `{root, qty, avgPrice}` or null; `out` the "not in this trade" reason of the last plan placed, or null). `owns` is any seat. `trades` and `losses` count per plan (below) |
+| `accountState` | one per seat (each keyed by its `account`), in seat order after the snapshot |
+| snapshot | one `position` per (seat, root) and the working orders of every seat; `order`, `exec` and `position` already carry `account` |
+| `agent` (pages) | for a group `group`, `seatsRev` and `seats` (as `agentState`'s, with `sim`, `seat` (false: it left the group), `lastPlan`, `size` and `risk` of the last plan on it, and `lastPnl`: its trade's dollars once closed) |
+| `agentPlan`, `agentProposal` (pages) | `sizes`, `seatsRev` and (once checked) `seats`: `[{account, size, risk, out, placed}]`; a group's proposal has `account` null and `group` |
+
+**Checks on a group's plan** (the contract's checks 1 to 11, in order, in every mode, and again at the moment of placing under
+the agent's gate): plan-level as for one account, with these in check 2: `groups.txt` readable, the group has accounts, `sizes`
+and `seatsRev` present, a plan with another `seatsRev` refused whole ("the group changed; size again"), one size per seat, `qty`
+the first size that is not 0, no clash on any seat (a clash stands the whole agent down, as for one account). Check 4 holds every
+size to the same caps (ChartBridge never resizes); check 5 is the sum. Check 8 (one at a time) counts every seat: one position and
+one entry at a time for the whole group. Check 9 counts per plan (Q3 a). Per seat (Q1 b): its size 0, not tradable or not
+connected (check 2's account rule), a position or order that is not the agent's (the owner lock, check 10), and the one-direction
+check (10b) make that seat sit the trade out; the plan is placed on the others, and refused only when no seat can take it ("no seat
+of group Lucid can take this plan: SIM-A: ...; SIM-B: ...").
+
+**Placing.** Under the agent's gate, after every check passed again: seat by seat, in seat order, through
+`ChartBridgeOrders.PlaceAgentEntry` with that seat's account and size (every v2 gate, the owner lock and the one-direction check
+under `PlaceLock` for each seat; `PlaceLock` is never held across seats, because `PlaceOrder` writes the plans file after it lets
+the lock go), each in its own try, all with the plan's id. A seat the order path refuses, or whose entry NinjaTrader rejects at once,
+is refused there; the others go on. Each seat's entry is its own (its own tag, legs from each of its fills, its own ledger).
+
+**Counting (Q3 a).** maxTrades and maxLosses count one per plan: a group plan's seat trades (tags with a `#seat` line) are one
+trade; it is a loss when their sum is below 0, once every one of them has closed. Every other trade counts by itself, as before.
+`pnlToday` is the sum of every seat.
+
+**Timers and stops.** Kill, the heartbeat lost, no connection for 5 s, leaving Auto, a withdraw, the plan's expiry and the window
+cancel unfilled entries on every seat. flatAt (and a position outside its hours) runs per (seat, root): each seat's job closes at
+most its own trade there (the per-seat close cap). TradeLost per (seat, root), with the 0.5.7 hold. The 17:00 reset puts the agent on
+None only when no seat is exposed and every member is idle; otherwise it stays, and the note names the accounts holding something.
+One direction per group and exits never blocked (0.5.8) are unchanged: no hedging inside a prop group, ever.
+
+**Restart.** The day file adds `#seat<TAB><tag><TAB><account>` for each group seat's entry tag still of today (its trade, its
+working entry, a trade carried over); a ChartBridge before 0.6.0 reads it as a comment. A restart restores the seat to tag mapping,
+and a seat that holds something of the agent's (one that left the group too) is followed again.
 
 ### Tape timing and new `/diag` counters
 
