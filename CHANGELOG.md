@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.30.0 (2026-10-16): account types from The Desk's ledger
+## 1.30.0 (2026-10-16): account types from The Desk's ledger, and the Settings cleanup
 
 Page only, no recompile (ChartBridge 0.6.2 as for 1.29.0; `minChartBridge` stays 0.6.2). After 1.29.1. Wave 5 (Anthony 2026-10-16: "a
 repository of all the different firms and account types ... when a new account was added, I could just select the account type from a
@@ -32,6 +32,17 @@ drop down"). The ledger lives on The Desk; the page reads it and copies a type's
   the links with storage blocked, the member warning, the chart-accounts rows, the wiring, and the fake Desk against the contract);
   `test/fake-desk.mjs` answers the spec's account-type routes; `smoke:settings` adds the whole flow at 1366 x 768 against the fake Desk
   (screenshots `settings-types-accounts-tab.png`, `settings-group-type-filled.png`, `settings-types-differ.png`).
+- **The Settings cleanup.** Every section is collapsible from its header row (the heading as before, the whole row a button with a
+  small caret; no motion: a section opens and closes at once): Charts, Hotkeys, Order Strategies, Entry types, Large prints, The
+  Desk, ChartBridge PIN, Layout and Account groups. Open or closed is remembered per section in this browser
+  (`live-settings-sections-v1`, try/catch; another window's change is followed), and Collapse all / Expand all sits at the top.
+  The order, most used first: the first column what is changed while trading (Charts, Hotkeys); the second Order Strategies and
+  Entry types, then what is set once (Large prints, The Desk, the PIN, Layout); the Account groups keep their own column. Every
+  section starts open, as before. Settings is placed again whenever a section opens or closes, so it stays whole at 1366 x 768 in
+  its fullest form (ChartBridge v3 with The Desk and the groups) open, partly closed or all closed. Nothing else changes in look.
+- Tests: `test/workspace.test.js` (the kept state, junk and defaults, the label, the order and the wiring); `smoke:settings` adds the
+  sections at 1366 x 768 (screenshots `settings-sections-open-default-1366.png`, `settings-sections-charts-closed-1366.png`,
+  `settings-sections-closed-1366.png`, `settings-sections-open-1366.png`).
 
 ## 1.29.1 (2026-10-16): one missed PC helper poll no longer flips the Agent tab
 

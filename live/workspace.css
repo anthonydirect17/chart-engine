@@ -553,3 +553,15 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .gp-differ .ws-btn.gp-upd { flex: none; }
 .gp-differ .ws-btn.gp-upd { height: 20px; padding: 0 6px; font-size: 11px; }
 .ws-gp .gp-ftype .gp-herorow .gp-in { width: 320px; max-width: 60%; flex: none; }
+
+/* ---------------- 1.30.0 (wave 5): Settings, every section collapsible from its header row (the heading as before, the whole
+   row a button, a small caret), and Collapse all / Expand all at the top. No motion: a section opens and closes at once. */
+.ws-set-top { display: flex; justify-content: flex-end; padding: 2px 12px 4px; border-bottom: 1px solid var(--ws-line); }
+.ws-set-top .ws-set-all { height: 22px; padding: 0 8px; font-size: 11px; }
+.ws-sec h2 .ws-sec-hd { display: flex; align-items: baseline; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.ws-sec h2 .ws-sec-hd::after { content: ''; align-self: center; margin-left: auto; width: 5px; height: 5px; border-right: 1.5px solid var(--ws-muted); border-bottom: 1.5px solid var(--ws-muted); transform: translateY(-2px) rotate(45deg); }
+.ws-sec.ws-sec-closed h2 .ws-sec-hd::after { transform: rotate(-45deg); }
+.ws-sec h2 .ws-sec-hd:hover, .ws-sec h2 .ws-sec-hd:hover::after { color: var(--ws-soft); border-color: var(--ws-soft); }
+.ws-sec h2 .ws-sec-hd:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 2px; border-radius: 2px; }
+.ws-sec.ws-sec-closed h2 { margin-bottom: 0; }
+.ws-sec-body[hidden] { display: none; }

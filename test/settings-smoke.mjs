@@ -8,7 +8,8 @@
 // Chart 1.30.0 (wave 5): account types from The Desk's ledger (test/fake-desk.mjs, made-up values): the Accounts tab's Account
 // type dropdown and Apply its rules, the rules dialog's fill, the group's link and "rules differ: Update", the member of another
 // type, and the last good list "as of" with The Desk down; screenshots settings-types-accounts-tab.png,
-// settings-group-type-filled.png, settings-types-differ.png.
+// settings-group-type-filled.png, settings-types-differ.png. The Settings cleanup: every section collapsible and remembered,
+// Collapse all / Expand all, the order, and the 1366 x 768 rule open and closed; screenshots settings-sections-*.png.
 // Found on 1.3.1: (1) a size typed and not committed (no Enter, no click elsewhere) was never saved, and
 // (2) a second chart tab wrote its whole in-memory copy of the sizes back, putting NQ back to 20.
 import { chromium } from 'playwright';
@@ -297,6 +298,63 @@ try {
       check(n2 === 3 && /The Desk is not reachable: the list as of/.test(why2), 'the dialog still fills from the copy, and says as of when: ' + why2);
       await p.click('#wsDialog [data-act="cancel"]');
       await ctx.close();
+
+      // 8. 1.30.0: the Settings cleanup: every section collapsible, remembered, Collapse all / Expand all, the order, and the
+      //    1366 x 768 no-scroll rule in the fullest Settings (v3, The Desk, groups): every section open (the default), some
+      //    closed, all closed
+      desk.down = false;
+      const ctx8 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+      const q = await ctx8.newPage();
+      q.on('pageerror', e => fail('pageerror: ' + e.message));
+      const open8 = async () => {
+        await q.goto(`http://localhost:${TP}/live/?layout=Main`);
+        await q.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(q, TEST_PIN);
+        await q.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
+        await q.click('#wsSet');
+        await until(async () => !(await q.$eval('#wsGroupsCol', e => e.hidden)) && !(await q.$eval('#wsDeskSec', e => e.hidden)), 'Settings with The Desk and the groups');
+        await q.waitForTimeout(300);
+      };
+      const secs = () => q.$$eval('#wsSettings .ws-sec[data-sec]', els => els.map(e => ({ id: e.dataset.sec, open: e.querySelector('.ws-sec-hd').getAttribute('aria-expanded') === 'true', body: !e.querySelector('.ws-sec-body').hidden,
+        shown: !e.hidden && !e.closest('[hidden]'), col: [...e.closest('.ws-cols').children].indexOf(e.closest('.ws-col')) })));
+      const fits = () => q.evaluate(() => { const s = document.getElementById('wsSettings'), r = s.getBoundingClientRect(); return { ok: s.scrollHeight <= s.clientHeight + 1 && r.bottom <= innerHeight + 1 && r.left >= 0 && r.right <= innerWidth, bottom: Math.round(r.bottom), sh: s.scrollHeight, ch: s.clientHeight }; });
+      await open8();
+      let ss = await secs();
+      check(ss.map(x => x.id + '@' + x.col).join(' ') === 'charts@0 hotkeys@0 strategies@1 entry@1 prints@1 desk@1 pin@1 layout@1 groups@2', 'the order: Charts, Hotkeys | Order Strategies, Entry types, Large prints, The Desk, PIN, Layout | Account groups: ' + ss.map(x => x.id + '@' + x.col).join(' '));
+      check(ss.every(x => x.open && x.body), 'the default: every section open, as before: ' + JSON.stringify(ss.map(x => [x.id, x.open])));
+      let f = await fits();
+      check(f.ok, 'Settings at 1366 x 768 with every section open: no scroll, nothing off screen: ' + JSON.stringify(f));
+      check(await q.textContent('#wsSecAll') === 'Collapse all', 'Collapse all at the top while sections are open');
+      await q.screenshot({ path: path.join(out, 'settings-sections-open-default-1366.png') });
+      /* a header row closes its section and opens it again; remembered across a reload; Settings placed again, still whole */
+      await q.click('#wsSettings .ws-sec[data-sec="charts"] .ws-sec-hd');
+      await q.click('#wsSettings .ws-sec[data-sec="desk"] .ws-sec-hd');
+      ss = await secs();
+      check(!ss.find(x => x.id === 'charts').open && !ss.find(x => x.id === 'charts').body && await q.isHidden('#wsGlide') && await q.isHidden('#wsDeskTry'), 'a click on a header row closes its section (Charts, The Desk)');
+      f = await fits();
+      check(f.ok, 'two sections closed: placed again, fits: ' + JSON.stringify(f));
+      await q.click('#wsSettings .ws-sec[data-sec="desk"] .ws-sec-hd');
+      check((await secs()).find(x => x.id === 'desk').open && await q.isVisible('#wsDeskTry'), 'and opens it again');
+      check(JSON.parse(await q.evaluate(() => localStorage.getItem('live-settings-sections-v1'))).charts === false, 'kept in this browser (live-settings-sections-v1)');
+      await open8();
+      ss = await secs();
+      check(!ss.find(x => x.id === 'charts').open && ss.find(x => x.id === 'desk').open && ss.find(x => x.id === 'hotkeys').open, 'after a reload: Charts still closed, the others open');
+      await q.screenshot({ path: path.join(out, 'settings-sections-charts-closed-1366.png') });
+      /* Collapse all, then Expand all */
+      await q.click('#wsSecAll');
+      ss = await secs();
+      check(ss.every(x => !x.open && !x.body) && await q.textContent('#wsSecAll') === 'Expand all', 'Collapse all closes every section; the button says Expand all');
+      f = await fits();
+      check(f.ok, 'every section closed: fits: ' + JSON.stringify(f));
+      await q.screenshot({ path: path.join(out, 'settings-sections-closed-1366.png') });
+      await q.click('#wsSecAll');
+      ss = await secs();
+      check(ss.every(x => x.open && x.body) && await q.textContent('#wsSecAll') === 'Collapse all', 'Expand all opens every section');
+      f = await fits();
+      check(f.ok, 'every section open again: placed again, no scroll, nothing cut: ' + JSON.stringify(f));
+      await q.screenshot({ path: path.join(out, 'settings-sections-open-1366.png') });
+      /* the hotkey boxes and the groups still work inside their sections */
+      check(await q.isVisible('#wsGroups [data-gp="edit"][data-id="g1"]') && await q.isVisible('#wsPin') && await q.isVisible('#wsFloors input'), 'the controls inside the sections show again (Edit, Change PIN, the floors)');
+      await ctx8.close();
     } finally { tb.kill(); await desk.close(); }
   }
 } finally {
