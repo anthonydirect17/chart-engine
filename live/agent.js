@@ -868,7 +868,8 @@ function create(o) {
   }
   async function helperOn(a) {
     const build = q('[data-k="hPick"]').value;
-    if (!build || H.slow) return;   // 1.29.1: never on an old answer
+    if (!build) return;
+    if (H.slow) { helperSay(SLOW_SENT); renderPanel(); return; }   // 1.29.1: never on an old answer; the press is told why
     delete H.lines[a.agent];
     H.busy = true; helperSay('Asking the PC helper to start him...'); renderPanel();
     const r = await HC.on(a.agent, build, a.mode, a.sim);
@@ -1007,6 +1008,7 @@ function create(o) {
     const raw = S.groups && Array.isArray(S.groups.list) ? S.groups.list.find(x => x && x.id === gid) : null;
     if (!AH || !HC) { boardSay('This page has no PC helper client: Assign hero needs it.'); return; }
     if (!raw) { boardSay('That group is not on this ChartBridge any more.'); return; }
+    if (H.slow) { boardSay(SLOW_SENT); return; }   // 1.29.1: never on an old answer
     B.pick = null; B.ask = null;
     const g = { id: raw.id, name: raw.name, hero: raw.hero || null, members: raw.members || [] };
     const st = AH.assignStart(g, agents.list(), H.status, helperReach(), assignRows(g));
@@ -1500,7 +1502,7 @@ function create(o) {
       else if (k === 'bKill') { const x = agents.get(act.dataset.agent); if (x && !x.killed) { if (sendAgent(AC.killMsg(x.agent, true), 'kill')) boardSay('Kill switch on sent for ' + AC.agentName(x) + '.'); } }
       else if (k === 'bAssign') assignPressed(act.dataset.gid);
       else if (k === 'bPickGo') { const sel = q('[data-k="bPickSel"]'); if (B.pick && sel) assignGo(B.pick.gid, B.pick.agent, sel.value, B.pick.killed); }
-      else if (k === 'bYes') { if (B.ask) { const x = B.ask; const ag = agents.get(x.agent); const why = AH.slotFree(ag || { agent: x.agent }, H.status, helperReach()); if (!ag || why) { B.ask = null; boardSay('Nothing was sent: ' + (why || 'that agent is gone') + '. Press Assign hero again.'); } else assignSend(x.gid, x.agent, x.build, x.msg, x.killed); } }   // fix round 1: the free slot asked again at Continue
+      else if (k === 'bYes') { if (B.ask && H.slow) boardSay(SLOW_SENT); else if (B.ask) { const x = B.ask; const ag = agents.get(x.agent); const why = AH.slotFree(ag || { agent: x.agent }, H.status, helperReach()); if (!ag || why) { B.ask = null; boardSay('Nothing was sent: ' + (why || 'that agent is gone') + '. Press Assign hero again.'); } else assignSend(x.gid, x.agent, x.build, x.msg, x.killed); } }   // fix round 1: the free slot asked again at Continue
       else if (k === 'bCancel') { B.pick = null; B.ask = null; boardSay('Nothing was sent.'); }
       else if (k === 'bStart') boardStart(act.dataset.agent, act.dataset.build);
       else if (k === 'bSdClear') { const m = AC.standDownClearMsg(act.dataset.build, act.dataset.gid); if (m && sendAgent(m, 'sdClear')) boardSay('Clear stand-down sent for ' + act.dataset.build + '.'); }   // 1.29.0: one click

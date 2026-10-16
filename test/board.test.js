@@ -266,7 +266,7 @@ test('fix round 1: at Continue the free slot is asked again; when it no longer h
   assert.equal(AH.slotFree(free, null, 'down'), 'the PC helper is not answering, so his Off cannot be checked');
   assert.equal(AH.slotFree(free, STATUS, 'slow'), 'the PC helper is not answering, so his Off cannot be checked', '1.29.1: an old answer (one missed poll) never passes');
   const js = read('live/agent.js');
-  assert.match(js, /else if \(k === 'bYes'\) \{ if \(B\.ask\) \{ const x = B\.ask; const ag = agents\.get\(x\.agent\); const why = AH\.slotFree\(ag \|\| \{ agent: x\.agent \}, H\.status, helperReach\(\)\); if \(!ag \|\| why\) \{ B\.ask = null; boardSay\('Nothing was sent: '/);
+  assert.match(js, /else if \(k === 'bYes'\) \{ if \(B\.ask && H\.slow\) boardSay\(SLOW_SENT\); else if \(B\.ask\) \{ const x = B\.ask; const ag = agents\.get\(x\.agent\); const why = AH\.slotFree\(ag \|\| \{ agent: x\.agent \}, H\.status, helperReach\(\)\); if \(!ag \|\| why\) \{ B\.ask = null; boardSay\('Nothing was sent: '/);
 });
 
 test('fix round 1: the room\'s why comes from the tightest seat, not the first', () => {

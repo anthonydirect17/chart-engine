@@ -206,7 +206,7 @@ test('the missed-poll grace: one miss keeps the last good answer, the second in 
   assert.equal(AH.pollStep(AH.pollStep(st, down, T + AH.POLL_MS), down, T + 2 * AH.POLL_MS).reach, 'down');
   /* a good answer too old for the grace (the tab was hidden, polls stopped): the first miss is down */
   assert.equal(AH.pollStep(st, down, T + AH.MISS_GRACE_MS + 1).reach, 'down');
-  assert.equal(AH.pollStep(st, down, T + AH.MISS_GRACE_MS).reach, 'ok', 'at most MISS_GRACE_MS old');
+  assert.equal(AH.pollStep(st, down, T + AH.MISS_GRACE_MS).reach, 'ok', 'arrived at most MISS_GRACE_MS before the miss');
   /* no good answer yet (a PC with no helper): down at once */
   assert.equal(AH.pollStep(null, down, T).reach, 'down');
   assert.equal(AH.pollStep({ reach: '', status: null, okAt: 0, misses: 0 }, down, T).reach, 'down');
@@ -241,7 +241,9 @@ test('the missed-poll grace is wired: agent.js folds every poll through pollStep
   const js = read('live', 'agent.js');
   assert.match(js, /const st = AH\.pollStep\(H, r, Date\.now\(\)\);/);
   assert.match(js, /isOn \? on \|\| !sel\.value \|\| H\.slow : !on/);
-  assert.match(js, /if \(!build \|\| H\.slow\) return;/);
+  assert.match(js, /if \(H\.slow\) \{ helperSay\(SLOW_SENT\); renderPanel\(\); return; \}/);
+  assert.match(js, /function assignPressed[^]*?if \(H\.slow\) \{ boardSay\(SLOW_SENT\); return; \}[^]*?AH\.assignStart\(/);
+  assert.match(js, /else if \(k === 'bYes'\) \{ if \(B\.ask && H\.slow\) boardSay\(SLOW_SENT\);/);
   assert.match(js, /H\.reach !== 'ok' \|\| H\.slow \|\| !r\.startBuild/);
   assert.match(js, /AH\.assignStart\(g, agents\.list\(\), H\.status, helperReach\(\)/);
   assert.equal(AH.POLL_MS, 3000); assert.equal(AH.TIMEOUT_MS, 4000); assert.equal(AH.MISS_GRACE_MS, 8000);

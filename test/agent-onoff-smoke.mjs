@@ -149,6 +149,13 @@ try {
   await page.click('#agView [data-onoff="off"]');
   await until(async () => !(await agentNow()).connected, 'Off: the helper ended him');
   check(!(await visible('#agView [data-k="hAsk"]')) && helper.calls.filter(c => c.route === 'POST /off').length === 1, 'flat: no question, one POST /off');
+  /* chart 1.29.1: with him Off, one missed poll holds On (nothing starts on an old answer) and the next answer opens it again */
+  await until(async () => !(await disabled('#agView [data-onoff="on"]')), 'On offered while he is Off');
+  helper.setFail(1);
+  const graceOn = await until(async () => /slow/.test((await text('#agView [data-k="hNote"]')) || '') ? { on: await disabled('#agView [data-onoff="on"]') } : null, 'the grace while he is Off', 10000);
+  check(!!graceOn && graceOn.on === true && /^Off/.test(await text('#agView [data-k="hWhy"]')), 'he is Off and one 500: On is held during the grace, the line still says Off');
+  await until(async () => !/slow/.test((await text('#agView [data-k="hNote"]')) || '') && !(await disabled('#agView [data-onoff="on"]')), 'the next answer offers On again', 10000);
+  check(helper.calls.filter(c => c.route === 'POST /on').length === 1, 'nothing was started during the grace (one POST /on in all so far)');
 
   console.log('On with a hero: his name in the header, the build and stamp in the details');
   await until(async () => !(await disabled('#agView [data-k="hPick"]')), 'the picker opens again');

@@ -26,7 +26,7 @@
  *              shown only, never enforced; every hero is listed for every group.
  *   Proving    chart 1.29.0 (SPEC CE-2): a league seat's "PROVING n of 100" from its build row's liveN (proving).
  *   Missed poll chart 1.29.1: one GET /status that times out, fails to connect or answers 5xx keeps the last good answer
- *              (pollStep) while that answer is at most MISS_GRACE_MS old; the next miss in a row is 'down'. In the grace slow is
+ *              (pollStep) while that answer arrived at most MISS_GRACE_MS before the miss; the next miss in a row is 'down'. In the grace slow is
  *              true: the page shows "PC helper slow" and nothing starts on the old answer (On, Start in Shadow, Assign wait).
  *   Assign     the heroes-on-duty board's Assign hero (freeSlot, assignStart, assignStep): a free slot is an agent id on None
  *              and Off; agentAccount {group} first (ChartBridge checks it), then POST /on with the group's default hero, in Shadow.
@@ -77,8 +77,8 @@ function stateText(h, reach, why) {
 /**
  * Chart 1.29.1: one GET /status answer r ({ reach, body } from the client) folded into the poll's state prev at time now:
  * { reach, status, why, okAt, misses, slow }. A miss is reach 'down' (no answer in TIMEOUT_MS, no connection, or an HTTP
- * status the client reads as down, 500 too) or a 200 with no agents. One miss right after a good answer at most MISS_GRACE_MS
- * old keeps that answer (reach 'ok', the old status, slow true); a second miss in a row, or a miss after an old or no good
+ * status the client reads as down, 500 too) or a 200 with no agents. One miss right after a good answer that arrived at most
+ * MISS_GRACE_MS before the miss (okAt, counted from its arrival) keeps that answer (reach 'ok', the old status, slow true); a second miss in a row, or a miss after an old or no good
  * answer, is 'down' (status null), as before. Every real answer (ok, locked 401, forbidden 403, refused 400 or 409) is taken
  * as it comes, exactly as before the grace, and ends it.
  */
