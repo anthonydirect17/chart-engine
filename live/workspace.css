@@ -543,3 +543,28 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .gp-herorow { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .ws-gp .gp-herorow .gp-in { width: 320px; max-width: 60%; flex: none; }
 .gp-herowhy { margin: 0; min-width: 0; }
+/* 1.30.0 (wave 5): a group filled from an account type (The Desk's ledger): the rules-differ line with Update, and the
+   members of another type (warnings only); the rules dialog's Account type select at the top */
+.gp-row:has(.gp-tlines) { flex-wrap: wrap; }
+.gp-row:has(.gp-tlines) .gp-txt { flex-basis: 0; }
+.gp-tlines { flex: 1 0 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gp-differ { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; color: var(--ws-warn); }
+.gp-differ .gp-dt { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gp-differ .ws-btn.gp-upd { flex: none; }
+.gp-differ .ws-btn.gp-upd { height: 20px; padding: 0 6px; font-size: 11px; }
+.ws-gp .gp-ftype .gp-herorow .gp-in { width: 320px; max-width: 60%; flex: none; }
+
+/* ---------------- 1.30.0 (wave 5): Settings, every section collapsible from its header row (the heading as before, the whole
+   row a button, a small caret), and Collapse all / Expand all in the first header row (no row of its own). No motion: a section opens and closes at once. */
+.ws-sec h2.ws-sec-hrow { display: flex; align-items: center; gap: 8px; }
+.ws-sec h2.ws-sec-hrow .ws-sec-hd { flex: 1 1 auto; width: auto; min-width: 0; }
+.ws-sec h2 .ws-set-all { flex: none; height: 16px; margin: -1px 0; padding: 0 6px; border: 1px solid var(--ws-line2); border-radius: 4px; background: var(--ws-field); color: var(--ws-text2); font: 400 10.5px/14px var(--ws-sans); cursor: pointer; }
+.ws-sec h2 .ws-set-all:hover { color: var(--ws-text); }
+.ws-sec h2 .ws-set-all:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
+.ws-sec h2 .ws-sec-hd { display: flex; align-items: baseline; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.ws-sec h2 .ws-sec-hd::after { content: ''; align-self: center; margin-left: auto; width: 5px; height: 5px; border-right: 1.5px solid var(--ws-muted); border-bottom: 1.5px solid var(--ws-muted); transform: translateY(-2px) rotate(45deg); }
+.ws-sec.ws-sec-closed h2 .ws-sec-hd::after { transform: rotate(-45deg); }
+.ws-sec h2 .ws-sec-hd:hover, .ws-sec h2 .ws-sec-hd:hover::after { color: var(--ws-soft); border-color: var(--ws-soft); }
+.ws-sec h2 .ws-sec-hd:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 2px; border-radius: 2px; }
+.ws-sec.ws-sec-closed h2 { margin-bottom: 0; }
+.ws-sec-body[hidden] { display: none; }

@@ -4,6 +4,11 @@
 // localhost page (the real one allows http://localhost:8765 and http://127.0.0.1:8765 only; a test page has another port).
 // Sample data only. With `down` set it answers nothing (the connection is dropped), as a Desk that is not running.
 //   const desk = await startDesk(port, { hotkeys, strategies });  desk.docs, desk.log, desk.down = true, desk.bump(which), desk.close()
+// Chart 1.30.0 (wave 5, SPEC "account types"): the account types ledger as the spec's API contract gives it, for the chart page only:
+//   GET /api/account-types ({"v":1,"types":[...every field...],"asOf"}; archived left out unless ?all=1), GET /api/chart-accounts
+//   (rows gain "accountType": {id, firm, name, version, status} or null) and PUT /api/accounts/{account}/account-type
+//   ({"account_type": id|null}; 404 for an unknown type, 409 for an archived one, errors as {"detail"}, as The Desk's). Seed { types, accounts }; desk.editType(id, change) is an edit on The Desk
+//   (version + 1; a checked type goes back to not_checked). Made-up firm values and SIM-A style accounts only.
 import http from 'node:http';
 
 export const KEY_IDS = ['buy', 'sell', 'be', 'close', 'flattenAll', 'merge', 'maximize', 'accept', 'reject'];
@@ -36,7 +41,11 @@ function check(which, d) {
 
 export async function startDesk(port, seed) {
   const docs = Object.assign(emptyDocs(), JSON.parse(JSON.stringify(seed || {})));
-  const desk = { docs, log: [], down: false, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)) };
+  const types = JSON.parse(JSON.stringify((seed && seed.types) || [])), accounts = JSON.parse(JSON.stringify((seed && seed.accounts) || []));
+  delete docs.types; delete docs.accounts;
+  const desk = { docs, types, accounts, log: [], down: false, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)),
+    editType(id, change) { const t = types.find(x => x.id === id); Object.assign(t, change, { version: t.version + 1, status: 'not_checked', updated_at: new Date().toISOString() }); } };
+  const typeLink = id => { const t = types.find(x => x.id === id); return t ? { id: t.id, firm: t.firm, name: t.name, version: t.version, status: t.status } : null; };
   const server = http.createServer((req, res) => {
     const origin = req.headers.origin || '';
     if (desk.down) { req.socket.destroy(); return; }
@@ -44,6 +53,34 @@ export async function startDesk(port, seed) {
     const send = (status, body) => { res.writeHead(status, Object.assign({ 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, cors)); res.end(JSON.stringify(body)); };
     const m = /^\/api\/chart-(hotkeys|strategies)$/.exec(req.url.split('?')[0]);
     if (req.method === 'OPTIONS') { if (!cors['Access-Control-Allow-Origin']) { res.writeHead(403); res.end(); return; } res.writeHead(204, cors); res.end(); return; }
+    const [urlPath, query] = req.url.split('?');
+    if (urlPath === '/api/account-types' && req.method === 'GET') {
+      desk.log.push({ method: 'GET', which: 'account-types' });
+      return send(200, { v: 1, types: types.filter(t => !t.archived || /(^|&)all=1(&|$)/.test(query || '')), asOf: new Date().toISOString() });
+    }
+    if (urlPath === '/api/chart-accounts' && req.method === 'GET') {
+      desk.log.push({ method: 'GET', which: 'chart-accounts' });
+      return send(200, { accounts: accounts.map(a => Object.assign({}, a, { accountType: typeLink(a.account_type || null) })) });
+    }
+    const at = /^\/api\/accounts\/([^/]+)\/account-type$/.exec(urlPath);
+    if (at && req.method === 'PUT') {
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', () => {
+        let d; try { d = JSON.parse(body); } catch (e) { return send(400, { detail: 'Bad JSON' }); }
+        const name = decodeURIComponent(at[1]);
+        desk.log.push({ method: 'PUT', which: 'account-type', account: name, body: d });
+        if (!d || typeof d !== 'object' || !('account_type' in d) || (d.account_type !== null && typeof d.account_type !== 'string')) return send(400, { detail: 'account_type must be a type id or null' });
+        const want = d.account_type === null ? null : types.find(t => t.id === d.account_type);
+        if (d.account_type !== null && !want) return send(404, { detail: 'no account type ' + d.account_type });
+        if (want && want.archived) return send(409, { detail: 'account type ' + d.account_type + ' is archived' });
+        let row = accounts.find(a => a.account === name);
+        if (!row) { row = { account: name, firm: null, archived: false, daily_loss_limit: null, trailing_drawdown: null, account_size: null }; accounts.push(row); }
+        row.account_type = d.account_type;
+        send(200, { account: name, account_type: d.account_type });
+      });
+      return;
+    }
     if (!m) return send(404, { detail: 'Not found' });
     const which = m[1];
     if (req.method === 'GET') { desk.log.push({ method: 'GET', which }); return send(200, docs[which]); }

@@ -42,7 +42,7 @@ const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range', 'h4', 'd1', 'w1'];
    what they need */
 const HTF_TFS = ['h4', 'd1', 'w1'];
 const RANGE_MIN = 1, RANGE_MAX = 400;
-const KEYS = { store: 'live-workspace-v1', floors: 'live-tape-floors-v1', tapeColors: 'live-tape-colors-v1', viewKeys: 'live-ws-keys-v1', laptop: 'live-ws-laptop-v1' };
+const KEYS = { store: 'live-workspace-v1', floors: 'live-tape-floors-v1', tapeColors: 'live-tape-colors-v1', viewKeys: 'live-ws-keys-v1', laptop: 'live-ws-laptop-v1', sections: 'live-settings-sections-v1' };
 /* 1.16.0 (Anthony): the laptop preset: two layout tabs, both blank to start, arranged by hand; tight margins (the grid's gap
    and padding, px) */
 const LAPTOP_TABS = ['Main', 'Second'];
@@ -459,7 +459,27 @@ function setFloor(storage, root, which, value) {
   try { storage.setItem(KEYS.floors, JSON.stringify(out)); return true; } catch (e) { return false; }
 }
 
+/* ---------------- 1.30.0 (wave 5): Settings, every section collapsible, open or closed remembered per section in this browser.
+   The order (most used first): the first column what changes while trading (Charts, Hotkeys), the second Order Strategies and
+   Entry types, then what is set once (Large prints, The Desk, ChartBridge PIN, Layout), the third the Account groups.
+   Every section starts open, as before (The Desk's line says when its hotkeys are read only, so it is not hidden by default);
+   the fullest Settings (ChartBridge v3 with The Desk and the groups) still fits 1366 x 768 whole with the Collapse all row, moved
+   up as any tall popover is, and is placed again whenever a section opens or closes. */
+const SETTINGS_SECTIONS = ['charts', 'hotkeys', 'strategies', 'entry', 'prints', 'desk', 'pin', 'layout', 'groups'];
+const SECTIONS_CLOSED = [];
+/** Each section open (true) or closed, from what this browser kept (a JSON string or null): kept answers first, else the default. */
+function sectionsOpen(raw) {
+  let kept = {};
+  try { const j = typeof raw === 'string' ? JSON.parse(raw) : raw; if (j && typeof j === 'object' && !Array.isArray(j)) kept = j; } catch (e) { /* none kept */ }
+  return Object.fromEntries(SETTINGS_SECTIONS.map(id => [id, typeof kept[id] === 'boolean' ? kept[id] : !SECTIONS_CLOSED.includes(id)]));
+}
+/** What to keep after a change (only the known sections, as booleans). */
+const sectionsKeep = (open, change) => JSON.stringify(Object.fromEntries(SETTINGS_SECTIONS.map(id => [id, Object.prototype.hasOwnProperty.call(change || {}, id) ? !!change[id] : !!open[id]])));
+/** "Collapse all" while any of the shown sections is open, else "Expand all". */
+const sectionsAllLabel = (open, shown) => ((shown || SETTINGS_SECTIONS).some(id => open[id]) ? 'Collapse all' : 'Expand all');
+
 return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS, TYPES, KEYS, DEFAULT_NAME, DEFAULT_FLOORS, RTH_START, RTH_END,
+  SETTINGS_SECTIONS, SECTIONS_CLOSED, sectionsOpen, sectionsKeep, sectionsAllLabel,
   layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
   isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout, LAPTOP_TABS, GAP, GAP_TIGHT, VIEW_KEYS, cleanViewKeys, fmtSpan,
   readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor, HTF_TFS,
@@ -2450,8 +2470,22 @@ let pop = null;
 function openPop(el, anchor, onClose, align) {
   closePops();
   el.hidden = false;
+  if (anchor) { anchor.setAttribute('aria-expanded', 'true'); raise(anchor, true); }
+  placePop(el, anchor, align);
+  pop = { el, anchor, onClose, align };
+  /* 1.30.0: Settings is placed again whenever its size changes while open (the groups column, a section, a longer note), so it
+     never covers the top bar when it fits under the gear; one placement per frame. No ResizeObserver: placed on open and on the
+     changes this page makes, as before. */
+  if (el === $('wsSettings') && typeof ResizeObserver === 'function') {
+    let queued = false;
+    const ro = new ResizeObserver(() => { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; if (pop && pop.el === el) placePop(el, pop.anchor, pop.align); }); });
+    ro.observe(el);
+    pop.ro = ro;
+  }
+}
+/* 1.30.0: placed again when its height changes while open (a Settings section opened or closed) */
+function placePop(el, anchor, align) {
   if (anchor) {
-    anchor.setAttribute('aria-expanded', 'true'); raise(anchor, true);
     const a = anchor.getBoundingClientRect(), w = el.offsetWidth;
     /* 1.14.0 (no scrolling, ever): under its button when it fits, else moved up until it does; only one taller than the
        window scrolls */
@@ -2462,11 +2496,11 @@ function openPop(el, anchor, onClose, align) {
     const x = align === 'left' ? a.left : a.right - w;
     el.style.left = Math.round(Math.max(8, Math.min(window.innerWidth - w - 8, x))) + 'px';
   }
-  pop = { el, anchor, onClose };
 }
 function closePops() {
   if (!pop) return;
-  const { el, anchor, onClose } = pop; pop = null;
+  const { el, anchor, onClose, ro } = pop; pop = null;
+  if (ro) ro.disconnect();
   el.hidden = true;
   if (anchor) { anchor.setAttribute('aria-expanded', 'false'); raise(anchor, false); }
   if (onClose) onClose();
@@ -2812,13 +2846,40 @@ $('wsPin').addEventListener('click', () => { closePops(); if (PIN) PIN.openChang
 let groupsUi = null;
 function startGroups() {
   if (!window.GroupsPage || !AF || groupsUi) return;
-  groupsUi = window.GroupsPage.mountSettings({ feed: AF, sec: $('wsGroupsCol'), wide: on => $('wsSettings').classList.toggle('ws-has-groups', on), list: $('wsGroups'), add: $('wsGroupNew'), note: $('wsGroupsNote'), dialog: $('wsDialog'), showDialog: (d, ok, cancel) => showDialog(d, ok, cancel),
+  groupsUi = window.GroupsPage.mountSettings({ feed: AF, sec: $('wsGroupsCol'), wide: on => { if ($('wsSettings').classList.contains('ws-has-groups') === on) return; $('wsSettings').classList.toggle('ws-has-groups', on); Promise.resolve().then(() => { if (pop && pop.el === $('wsSettings')) placePop(pop.el, pop.anchor, pop.align); }); }, /* 1.30.0: placed again for its new size (after this script's start: pop is declared below) */ list: $('wsGroups'), add: $('wsGroupNew'), note: $('wsGroupsNote'), dialog: $('wsDialog'), showDialog: (d, ok, cancel) => showDialog(d, ok, cancel),
     /* 1.28.0: the heroes and their tiers for Hero on duty, from the PC helper (asked when the rules dialog opens) */
     heroes: () => (heroHelper ? heroHelper.status() : Promise.resolve({ reach: 'down', body: null })) });
 }
 const heroHelper = window.AgentHelper && typeof fetch === 'function' ? window.AgentHelper.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (PIN ? PIN.headers() : {}) }) : null;
 startGroups();
+/* 1.30.0 (wave 5): Settings, every section collapsible from its header row, remembered per section (W.KEYS.sections, this browser;
+   the page works without storage), and Collapse all / Expand all in the first header row */
+const setSecs = () => [...$('wsSettings').querySelectorAll('.ws-sec[data-sec]')];
+function applySections() {
+  const open = W.sectionsOpen(store.getItem(W.KEYS.sections));
+  for (const sec of setSecs()) {
+    const on = open[sec.dataset.sec] !== false, b = sec.querySelector('.ws-sec-hd'), body = sec.querySelector('.ws-sec-body');
+    sec.classList.toggle('ws-sec-closed', !on);
+    if (b) b.setAttribute('aria-expanded', String(on));
+    if (body && body.hidden === on) body.hidden = !on;
+  }
+  const shown = setSecs().filter(sec => !sec.hidden && !sec.closest('.ws-col[hidden]')).map(sec => sec.dataset.sec);   // Settings itself may be closed
+  $('wsSecAll').textContent = W.sectionsAllLabel(open, shown);
+}
+function keepSections(change) {
+  store.setItem(W.KEYS.sections, W.sectionsKeep(W.sectionsOpen(store.getItem(W.KEYS.sections)), change)); sectionsChanged();
+}
+/* the sections as kept, and Settings placed again for its new height if open (moved up only when it must, never cut) */
+function sectionsChanged() { applySections(); if (pop && pop.el === $('wsSettings')) placePop(pop.el, pop.anchor, pop.align); }
+$('wsSettings').addEventListener('click', e => {
+  const b = e.target.closest('.ws-sec-hd'); if (!b) return;
+  const sec = b.closest('.ws-sec[data-sec]'); if (!sec) return;
+  keepSections({ [sec.dataset.sec]: b.getAttribute('aria-expanded') !== 'true' });
+});
+$('wsSecAll').addEventListener('click', () => { const open = $('wsSecAll').textContent === 'Expand all'; keepSections(Object.fromEntries(W.SETTINGS_SECTIONS.map(id => [id, open]))); });
+applySections();
 function renderSettings() {
+  applySections();
   startGroups(); if (groupsUi) groupsUi.render();
   for (const a of OT.HOTKEY_ACTIONS) hkNote(a.id, '', '');
   for (const a of W.VIEW_KEYS.concat(EXTRA_KEYS)) hkNote(a.id, '', '');
@@ -3029,6 +3090,7 @@ window.addEventListener('storage', e => {
   else if (k === LP.KEYS.colors || k === LP.KEYS.indicatorColors) { for (const v of chartViews()) v.pane.refreshColors(); }
   else if (k === HKKEY || k === W.KEYS.viewKeys) { readHotkeys(); if (pop && pop.el === $('wsSettings')) renderHotkeys(); }
   else if (k === W.KEYS.laptop) syncLaptop();
+  else if (k === W.KEYS.sections) sectionsChanged();   // another window's change: placed again as here
   else if (k === LP.KEYS.bracketPresets && TK.bar) { core.readPresets(); TK.bar.render(); }
   else if (k === TICKET_KEY && !holds()) { const r = readTicket().root; if (W.ROOTS.includes(r)) TK.root = r; renderOrders(); }
   else if (k === 'live-account-v1' && !holds() && !holder()) { noTicketAccount(); renderOrders(); }

@@ -5,6 +5,11 @@
 // Chart 1.28.0 (ChartBridge 0.6.1, SPEC CE-1): Settings, Account groups: the rules dialog's Type and Hero on duty (every hero
 // listed with its tier fit, from the fake PC helper's made-up builds: sample data only), saved and kept; screenshot
 // test/out/settings-group-editor.png.
+// Chart 1.30.0 (wave 5): account types from The Desk's ledger (test/fake-desk.mjs, made-up values): the Accounts tab's Account
+// type dropdown and Apply its rules, the rules dialog's fill, the group's link and "rules differ: Update", the member of another
+// type, and the last good list "as of" with The Desk down; screenshots settings-types-accounts-tab.png,
+// settings-group-type-filled.png, settings-types-differ.png. The Settings cleanup: every section collapsible and remembered,
+// Collapse all / Expand all, the order, and the 1366 x 768 rule open and closed; screenshots settings-sections-*.png.
 // Found on 1.3.1: (1) a size typed and not committed (no Enter, no click elsewhere) was never saved, and
 // (2) a second chart tab wrote its whole in-memory copy of the sizes back, putting NQ back to 20.
 import { chromium } from 'playwright';
@@ -14,6 +19,7 @@ import path from 'node:path';
 import { C, hostUrl, waitLive, view } from './chart-host.mjs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 import { startFakeHelper } from './fake-helper.mjs';
+import { startDesk } from './fake-desk.mjs';
 import fs from 'node:fs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -179,6 +185,222 @@ try {
       check(/Evals · hero Sample Hero B/.test(await p.$eval('#wsGroups .gp-row', e => e.textContent)), 'the No hedging switch keeps the Type and the hero');
       await ctx.close();
     } finally { await helper.close(); gb.kill(); }
+  }
+  // 7. 1.30.0 (wave 5): account types from The Desk's ledger (the fake Desk, made-up values; SIM-A style accounts), at 1366 x 768
+  {
+    const TP = PORT + 2, DP = PORT + 3, out = path.join(root, 'test', 'out');
+    fs.mkdirSync(out, { recursive: true });
+    const T = (o) => Object.assign({ firm: 'Lucid', account_type: 'eval', account_size: 50000, daily_loss: null, drawdown: 2000, drawdown_type: 'eod', lock_at: 50100, profit_target: 3000,
+      consistency_pct: 50, max_nq: null, max_mnq: null, notes: 'sample values for the test', sources: [], status: 'not_checked', checked_at: null, version: 1, archived: false,
+      created_at: '2026-10-16T12:00:00Z', updated_at: '2026-10-16T12:00:00Z' }, o);
+    const desk = await startDesk(DP, {
+      types: [T({ id: 'lucid-50k-flex-no-dll', name: '50K Flex, no DLL' }),
+        T({ id: 'lucid-150k-daily-dll', name: '150K, daily DLL', account_type: 'funded', account_size: 150000, daily_loss: 3000, drawdown: 4500, lock_at: 150100, profit_target: 9000, consistency_pct: null, status: 'checked', checked_at: '2026-10-16T13:00:00Z', version: 2 }),
+        T({ id: 'lucid-25k-static-sample', name: '25K static', account_type: 'eval', account_size: 25000, daily_loss: null, drawdown: 1500, drawdown_type: 'static', lock_at: null, profit_target: 1500, consistency_pct: null })],
+      accounts: [{ account: 'SIM-A', firm: 'Lucid', archived: false, account_type: 'lucid-50k-flex-no-dll' }, { account: 'SIM-B', firm: 'Lucid', archived: false, account_type: 'lucid-150k-daily-dll' },
+        { account: 'Sim101', firm: null, archived: false, account_type: 'lucid-150k-daily-dll' }, { account: 'SIM-F1', firm: 'Lucid', archived: false, account_type: 'lucid-25k-static-sample' }] });
+    const tb = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(TP), '--v3', '--trading', '--test-controls', '--board-groups', '--test-pin=' + TEST_PIN, '--desk-url=http://127.0.0.1:' + DP], { stdio: ['ignore', 'pipe', 'inherit'] });
+    await new Promise(r => tb.stdout.once('data', r));
+    const received = async () => (await fetch(`http://127.0.0.1:${TP}/test/received`, { method: 'POST' })).json();
+    const until = async (fn, what, ms) => { const end = Date.now() + (ms || 10000); for (;;) { let v = null; try { v = await fn(); } catch (e) { v = null; } if (v) return v; if (Date.now() > end) { fail('timed out: ' + what); return null; } await new Promise(r => setTimeout(r, 100)); } };
+    try {
+      const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+      await ctx.addInitScript(() => { try { if (!localStorage.getItem('live-workspace-v1')) localStorage.setItem('live-workspace-v1', JSON.stringify({ v: 1, layouts: { Types: { panels: [{ id: 'ap', type: 'accounts', x: 0, y: 0, w: 12, h: 6 }] } } })); } catch (e) { /* blocked */ } });
+      const p = await ctx.newPage();
+      p.on('pageerror', e => fail('pageerror: ' + e.message));
+      const open = async () => {
+        await p.goto(`http://localhost:${TP}/live/?layout=Types`);
+        await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
+        await p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
+      };
+      await open();
+      const AP = '.ws-panel[data-id="ap"]';
+      /* the Accounts tab: each account's Account type, "Not set" then every type, "(not checked)" until checked */
+      await until(async () => (await p.$$(`${AP} select.apg-tsel`)).length >= 4, 'the Account type dropdowns');
+      const dd = await p.$eval(`${AP} select.apg-tsel[data-id="SIM-A"]`, e => ({ v: e.value, opts: [...e.options].map(o => o.textContent), dis: e.disabled }));
+      check(dd.v === 'lucid-50k-flex-no-dll' && dd.opts.join(' | ') === 'Not set | Lucid 150K, daily DLL | Lucid 25K static (not checked) | Lucid 50K Flex, no DLL (not checked)' && !dd.dis,
+        'Accounts tab: SIM-A shows its type from The Desk; Not set then every type, "(not checked)" on the one not checked: ' + JSON.stringify(dd));
+      check((await p.$$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]`, els => els.map(e => e.textContent))).includes('Account type'), 'the Account type column');
+      /* the Room keeps its width: measured with the column, then with the 1.29 grid (the class off for a moment) */
+      const roomW = await p.evaluate(sel => { const g = document.querySelector(sel), h = () => Math.round(g.querySelector('.gr-h [role="columnheader"]:nth-child(6)').getBoundingClientRect().width);
+        const w = h(); g.classList.remove('apg-types'); const w0 = h(); g.classList.add('apg-types'); return { w, w0 }; }, `${AP} .apg-acc-g`);
+      check(roomW.w >= roomW.w0, 'the Room column at 1366 is no narrower than without the Account type column: ' + JSON.stringify(roomW));
+      /* choosing one calls PUT /api/accounts/{account}/account-type, then shows what The Desk says */
+      /* the pick is shown from the click until The Desk's rows say it: sampled every 15 ms, never the old value in between */
+      await p.evaluate(sel => { const e = document.querySelector(sel); window.__seen = []; window.__sampler = setInterval(() => { const x = document.querySelector(sel); window.__seen.push(x ? x.value : '?'); }, 15); }, `${AP} select.apg-tsel[data-id="SIM-C"]`);
+      await p.selectOption(`${AP} select.apg-tsel[data-id="SIM-C"]`, 'lucid-50k-flex-no-dll');
+      await until(async () => (await p.$eval(`${AP} select.apg-tsel[data-id="SIM-C"]`, e => e.value)) === 'lucid-50k-flex-no-dll' && desk.accounts.some(a => a.account === 'SIM-C' && a.account_type === 'lucid-50k-flex-no-dll'), 'SIM-C saved on The Desk');
+      await p.waitForTimeout(800);   // past the next read of The Desk's rows
+      const seen = await p.evaluate(() => { clearInterval(window.__sampler); return window.__seen; });
+      const firstNew = seen.indexOf('lucid-50k-flex-no-dll');
+      check(firstNew >= 0 && seen.slice(firstNew).every(v => v === 'lucid-50k-flex-no-dll'), 'the picked type stays shown until The Desk\'s rows are read again (no flash of the old value; ' + seen.length + ' samples)');
+      const put = desk.log.filter(x => x.method === 'PUT' && x.which === 'account-type');
+      check(put.length === 1 && put[0].account === 'SIM-C' && JSON.stringify(put[0].body) === '{"account_type":"lucid-50k-flex-no-dll"}', 'one PUT with the spec\'s body: ' + JSON.stringify(put));
+      /* Apply its rules: only for an account in no group, and it asks first */
+      check(await p.$(`${AP} [data-act="apply-type"][data-id="SIM-A"]`) === null && await p.$(`${AP} [data-act="apply-type"][data-id="Sim101"]`) !== null, 'Apply its rules only on an account in no group (Sim101), not on SIM-A in Group A');
+      /* a trailing type (Sim101: 150K, end of day): My floor is never set from it (ChartBridge trails a floor only in a group); the
+         account's own My floor is sent again unchanged; My daily from the type */
+      const askText = () => p.$eval(`${AP} .apg-applyask`, e => e.textContent.replace(/\s+/g, ' '));
+      await p.fill(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, '96000'); await p.press(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, 'Enter'); await p.click(`${AP} .apg-foot`);
+      await until(async () => (await received()).types.accountLimits === 1, 'My floor 96,000 typed by hand');
+      await p.click(`${AP} [data-act="apply-type"][data-id="Sim101"]`);
+      const ask = await until(askText, 'the Apply its rules question');
+      check(/Apply its rules from Lucid 150K, daily DLL to Sim101: My floor stays as it is \(\$96,000\)\. A trailing floor is tracked only in a group: put this account in a group \(a one-account group is fine\) so ChartBridge trails it from its highest close\. My daily \$3,000 \(its daily loss limit\)\./.test(ask || ''), 'trailing: the question says My floor stays and why: ' + ask);
+      check(await p.$(`${AP} [data-act="apply-high"]`) === null, 'no highest-close box in Apply');
+      check((await received()).types.accountLimits === 1, 'nothing sent before the answer (never applied silently)');
+      await p.screenshot({ path: path.join(out, 'settings-types-accounts-tab.png') });
+      await p.click(`${AP} [data-act="apply-yes"][data-id="Sim101"]`);
+      await until(async () => (await p.$eval(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, e => e.value)) === '3000', 'Sim101\'s My daily from its type');
+      check((await received()).types.accountLimits === 2 && await p.$eval(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, e => e.value) === '96000', 'one accountLimits sent; a trailing type never changes My floor (96,000 as it was)');
+      /* a static type (SIM-F1: 25K static, drawdown 1,500): account size less the drawdown; My daily none, saying what it replaces */
+      await p.fill(`${AP} input[data-act="my-daily"][data-id="SIM-F1"]`, '400'); await p.press(`${AP} input[data-act="my-daily"][data-id="SIM-F1"]`, 'Enter'); await p.click(`${AP} .apg-foot`);
+      await until(async () => (await received()).types.accountLimits === 3, 'SIM-F1 My daily 400 by hand');
+      await until(async () => /to floor|daily/.test(await p.$eval(`${AP} .gr-row[data-k="SIM-F1"] .apg-room`, e => e.textContent)), 'SIM-F1\'s own limits back from ChartBridge');
+      await p.click(`${AP} [data-act="apply-type"][data-id="SIM-F1"]`);
+      const t4 = await until(askText, 'the static question');
+      check(/to SIM-F1: My floor \$23,500 \(a static drawdown: account size \$25,000 less the drawdown \$1,500\), My daily none \(it has no daily loss limit; it replaces your \$400\)\./.test(t4 || ''), 'static: size less the drawdown; My daily none says what it replaces: ' + t4);
+      await p.click(`${AP} [data-act="apply-yes"][data-id="SIM-F1"]`);
+      await until(async () => (await p.$eval(`${AP} input[data-act="my-floor"][data-id="SIM-F1"]`, e => e.value)) === '23500', 'SIM-F1\'s My floor from its static type');
+      /* the join question for an intraday group (Group B) asks the highest balance so far (intraday) */
+      await p.selectOption(`${AP} select.apg-grp[data-id="SIM-F2"]`, 'g2');
+      const jq = await until(() => p.$eval(`${AP} .apg-join`, e => e.textContent.replace(/\s+/g, ' ')), 'the join question');
+      check(/Put SIM-F2 in Group B: highest balance so far \(intraday\)/.test(jq || ''), 'an intraday group asks the highest balance so far (intraday): ' + jq);
+      await p.click(`${AP} [data-act="join-no"]`);
+      await p.selectOption(`${AP} select.apg-grp[data-id="SIM-F2"]`, 'g1');
+      check(/Put SIM-F2 in Group A: highest close so far /.test(await until(() => p.$eval(`${AP} .apg-join`, e => e.textContent.replace(/\s+/g, ' ')), 'the eod join question') || ''), 'an end-of-day group asks the highest close so far, as before');
+      await p.click(`${AP} [data-act="join-no"]`);
+
+      /* Settings, the rules dialog: the Account type select at the top fills every box and the Type; Save sends groupSave */
+      await p.click('#wsSet');
+      await until(async () => (await p.$$('#wsGroups .gp-row')).length === 2, 'the groups in Settings');
+      await p.click('#wsGroups [data-gp="edit"][data-id="g1"]');
+      await until(() => p.$('#wsDialog[open] #gp-fromType'), 'the rules dialog with Account type');
+      const opts = await p.$$eval('#gp-fromType option', els => els.map(e => e.textContent));
+      check(opts.join(' | ') === 'Not set | Lucid 150K, daily DLL | Lucid 25K static (not checked) | Lucid 50K Flex, no DLL (not checked)', 'the dialog lists every type, "(not checked)" beside the one not checked: ' + opts.join(' | '));
+      await p.selectOption('#gp-fromType', 'lucid-50k-flex-no-dll');
+      const filled = await p.evaluate(() => Object.fromEntries(['name', 'size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 'target', 'consistency', 'accountType'].map(k => [k, document.getElementById('gp-' + k).value])));
+      check(JSON.stringify(filled) === JSON.stringify({ name: 'Group A', size: '50000', dailyLoss: '', drawdown: '2000', drawdownType: 'eod', lockAt: '50100', target: '3000', consistency: '50', accountType: 'eval' }),
+        'every rule box and the Type filled from the type; the name kept (Anthony names his groups): ' + JSON.stringify(filled));
+      const why = await p.textContent('#gp-fromWhy');
+      check(/Filled from Lucid 50K Flex, no DLL \(not checked\), version 1/.test(why), 'the line under it says where from, "(not checked)" included: ' + why);
+      const dfit = await p.evaluate(() => (r => r.top >= 0 && r.bottom <= innerHeight)(document.getElementById('wsDialog').getBoundingClientRect()));
+      check(dfit, 'the rules dialog with the Account type still fits 1366 x 768');
+      await p.fill('#gp-target', '3500');   // Anthony can still edit any box
+      await p.screenshot({ path: path.join(out, 'settings-group-type-filled.png') });
+      const before = (await received()).types.groupSave || 0;
+      await p.click('#wsDialog button[type="submit"]');
+      await until(async () => ((await received()).types.groupSave || 0) === before + 1, 'groupSave sent');
+      const link = await p.evaluate(() => JSON.parse(localStorage.getItem('live-group-types-v1') || '{}'));
+      check(link.g1 && link.g1.id === 'lucid-50k-flex-no-dll' && link.g1.version === 1, 'the group remembers its type and version (this browser, keyed by group id): ' + JSON.stringify(link));
+      /* the target typed by hand differs from the type: the row says so, with Update; nothing is blocked */
+      await p.click('#wsSet');
+      await until(async () => /Evals/.test(await p.$eval('#wsGroups .gp-row[data-id="g1"]', e => e.textContent)), 'Group A saved as Evals');
+      const rowA = await until(async () => { const t = await p.$eval('#wsGroups .gp-row[data-id="g1"]', e => e.textContent); return /rules differ from/.test(t) ? t : null; }, 'the rules differ line');
+      check(/from Lucid 50K Flex, no DLL \(not checked\)/.test(rowA || '') && /rules differ from Lucid 50K Flex, no DLL \(not checked\): Update/.test(rowA || ''), 'Group A: "rules differ from <type>: Update" after a box was changed by hand: ' + rowA);
+      /* SIM-B (in Group A) is of another type: a warning in Settings and on the Accounts tab */
+      check(/SIM-B is Lucid 150K, daily DLL: not the group's type/.test(rowA || ''), 'Settings: the member of another type is named (a warning only)');
+      await p.screenshot({ path: path.join(out, 'settings-types-differ.png') });
+      /* Update: one click refills and asks Save */
+      await p.click('#wsGroups [data-gp="update"][data-id="g1"]');
+      await until(() => p.$('#wsDialog[open] #gp-fromType'), 'the dialog refilled');
+      check(await p.inputValue('#gp-target') === '3000' && await p.evaluate(() => document.activeElement && document.activeElement.type === 'submit'), 'Update refills the boxes from the type and puts Save in focus');
+      await p.click('#wsDialog button[type="submit"]');
+      await p.click('#wsSet');
+      await until(async () => !/rules differ/.test(await p.$eval('#wsGroups .gp-row[data-id="g1"]', e => e.textContent)), 'no differ line once saved from the type');
+      await p.keyboard.press('Escape');
+      const warn = await until(() => p.$eval(`${AP} .apg-twarn`, e => e.textContent), 'the Accounts tab warning for SIM-B');
+      check(/SIM-B is Lucid 150K, daily DLL; its group Group A was filled from Lucid 50K Flex, no DLL\. A warning only: nothing is blocked\./.test(warn || ''), 'Accounts tab: SIM-B\'s warning row: ' + warn);
+      check(await p.$eval(`${AP} select.apg-tsel[data-id="SIM-B"]`, e => e.classList.contains('apg-toff') && !e.disabled), 'SIM-B\'s dropdown marked, still usable');
+      /* The Desk edits the type (version 2): after a reload the page reads it and the group differs from the current version */
+      desk.editType('lucid-50k-flex-no-dll', { drawdown: 2500 });
+      await open();
+      await p.click('#wsSet');
+      const rowB = await until(async () => { const t = await p.$eval('#wsGroups .gp-row[data-id="g1"]', e => e.textContent); return /rules differ from/.test(t) ? t : null; }, 'the differ line after the type changed on The Desk');
+      check(!!rowB, 'a new version of the type on The Desk: "rules differ" on Group A');
+      await p.keyboard.press('Escape');
+      /* The Desk not reachable: the last good list from this browser, "as of" its time; the dropdowns read only */
+      desk.down = true;
+      await open();
+      await until(async () => (await p.$$(`${AP} select.apg-tsel`)).length >= 4, 'the Account type dropdowns from the copy');
+      const foot = await until(async () => { const t = await p.$eval(`${AP} .apg-foot`, e => e.textContent); return /as of/.test(t) ? t : null; }, 'the as-of note', 15000);
+      check(/Account types: The Desk is not reachable; the list as of [A-Z][a-z]{2} \d{1,2} \d\d:\d\d ET\./.test(foot || ''), 'The Desk down: the cached list "as of <time>": ' + foot);
+      check(await p.$eval(`${AP} select.apg-tsel[data-id="SIM-A"]`, e => e.disabled && e.options.length === 4), 'the cached list still offered, read only while The Desk is down');
+      await p.click('#wsSet');
+      await p.click('#wsGroups [data-gp="edit"][data-id="g2"]');
+      await until(() => p.$('#wsDialog[open] #gp-fromType'), 'the dialog with The Desk down');
+      const why2 = await p.textContent('#gp-fromWhy'), n2 = await p.$$eval('#gp-fromType option', els => els.length);
+      check(n2 === 4 && /The Desk is not reachable: the list as of/.test(why2), 'the dialog still fills from the copy, and says as of when: ' + why2);
+      await p.click('#wsDialog [data-act="cancel"]');
+      await ctx.close();
+
+      // 8. 1.30.0: the Settings cleanup: every section collapsible, remembered, Collapse all / Expand all, the order, and the
+      //    1366 x 768 no-scroll rule in the fullest Settings (v3, The Desk, groups): every section open (the default), some
+      //    closed, all closed
+      desk.down = false;
+      const ctx8 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+      const q = await ctx8.newPage();
+      q.on('pageerror', e => fail('pageerror: ' + e.message));
+      const open8 = async () => {
+        await q.goto(`http://localhost:${TP}/live/?layout=Main`);
+        await q.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(q, TEST_PIN);
+        await q.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
+        await q.click('#wsSet');
+        await until(async () => !(await q.$eval('#wsGroupsCol', e => e.hidden)) && !(await q.$eval('#wsDeskSec', e => e.hidden)), 'Settings with The Desk and the groups');
+        await q.waitForTimeout(300);
+      };
+      const secs = () => q.$$eval('#wsSettings .ws-sec[data-sec]', els => els.map(e => ({ id: e.dataset.sec, open: e.querySelector('.ws-sec-hd').getAttribute('aria-expanded') === 'true', body: !e.querySelector('.ws-sec-body').hidden,
+        shown: !e.hidden && !e.closest('[hidden]'), col: [...e.closest('.ws-cols').children].indexOf(e.closest('.ws-col')) })));
+      /* fits: no scroll at all (scrollHeight equal to clientHeight), on screen, and under the gear (the top bar never covered) */
+      const fits = () => q.evaluate(() => { const s = document.getElementById('wsSettings'), r = s.getBoundingClientRect(), g = document.getElementById('wsSet').getBoundingClientRect();
+        return { ok: s.scrollHeight <= s.clientHeight && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth && r.top >= g.bottom, top: Math.round(r.top), gear: Math.round(g.bottom), bottom: Math.round(r.bottom), sh: s.scrollHeight, ch: s.clientHeight }; });
+      await open8();
+      let ss = await secs();
+      check(ss.map(x => x.id + '@' + x.col).join(' ') === 'charts@0 hotkeys@0 strategies@1 entry@1 prints@1 desk@1 pin@1 layout@1 groups@2', 'the order: Charts, Hotkeys | Order Strategies, Entry types, Large prints, The Desk, PIN, Layout | Account groups: ' + ss.map(x => x.id + '@' + x.col).join(' '));
+      check(ss.every(x => x.open && x.body), 'the default: every section open, as before: ' + JSON.stringify(ss.map(x => [x.id, x.open])));
+      let f = await fits();
+      check(f.ok, 'Settings at 1366 x 768 with every section open (the fullest case): under the gear, no scroll, nothing off screen: ' + JSON.stringify(f));
+      check(await q.textContent('#wsSecAll') === 'Collapse all' && await q.$eval('#wsSecAll', e => !!e.closest('.ws-sec[data-sec="charts"] h2')), 'Collapse all in the first header row (no row of its own) while sections are open');
+      await q.screenshot({ path: path.join(out, 'settings-sections-open-default-1366.png') });
+      /* a header row closes its section and opens it again; remembered across a reload; Settings placed again, still whole */
+      await q.click('#wsSettings .ws-sec[data-sec="charts"] .ws-sec-hd');
+      await q.click('#wsSettings .ws-sec[data-sec="desk"] .ws-sec-hd');
+      ss = await secs();
+      check(!ss.find(x => x.id === 'charts').open && !ss.find(x => x.id === 'charts').body && await q.isHidden('#wsGlide') && await q.isHidden('#wsDeskTry'), 'a click on a header row closes its section (Charts, The Desk)');
+      f = await fits();
+      check(f.ok, 'two sections closed: placed again, fits: ' + JSON.stringify(f));
+      await q.click('#wsSettings .ws-sec[data-sec="desk"] .ws-sec-hd');
+      check((await secs()).find(x => x.id === 'desk').open && await q.isVisible('#wsDeskTry'), 'and opens it again');
+      check(JSON.parse(await q.evaluate(() => localStorage.getItem('live-settings-sections-v1'))).charts === false, 'kept in this browser (live-settings-sections-v1)');
+      await open8();
+      ss = await secs();
+      check(!ss.find(x => x.id === 'charts').open && ss.find(x => x.id === 'desk').open && ss.find(x => x.id === 'hotkeys').open, 'after a reload: Charts still closed, the others open');
+      await q.screenshot({ path: path.join(out, 'settings-sections-charts-closed-1366.png') });
+      /* Collapse all, then Expand all */
+      await q.click('#wsSecAll');
+      ss = await secs();
+      check(ss.every(x => !x.open && !x.body) && await q.textContent('#wsSecAll') === 'Expand all', 'Collapse all closes every section; the button says Expand all');
+      f = await fits();
+      check(f.ok, 'every section closed: fits: ' + JSON.stringify(f));
+      await q.screenshot({ path: path.join(out, 'settings-sections-closed-1366.png') });
+      await q.click('#wsSecAll');
+      ss = await secs();
+      check(ss.every(x => x.open && x.body) && await q.textContent('#wsSecAll') === 'Collapse all', 'Expand all opens every section');
+      f = await fits();
+      check(f.ok, 'every section open again: placed again under the gear, no scroll, nothing cut: ' + JSON.stringify(f));
+      /* any size change while open places it again (a ResizeObserver): 120 px more content moves it up; taken away, back under the gear */
+      await q.evaluate(() => { const d = document.createElement('div'); d.id = 'smokeGrow'; d.style.height = '120px'; document.getElementById('wsSecBody-hotkeys').appendChild(d); });
+      await q.waitForTimeout(250);
+      const grown = await q.evaluate(() => { const r = document.getElementById('wsSettings').getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), ih: innerHeight }; });
+      check(grown.bottom <= grown.ih && grown.top < 36, 'grown while open: placed again, nothing off screen: ' + JSON.stringify(grown));
+      await q.evaluate(() => document.getElementById('smokeGrow').remove());
+      await q.waitForTimeout(250);
+      f = await fits();
+      check(f.ok, 'shrunk again: back under the gear: ' + JSON.stringify(f));
+      await q.screenshot({ path: path.join(out, 'settings-sections-open-1366.png') });
+      /* the hotkey boxes and the groups still work inside their sections */
+      check(await q.isVisible('#wsGroups [data-gp="edit"][data-id="g1"]') && await q.isVisible('#wsPin') && await q.isVisible('#wsFloors input'), 'the controls inside the sections show again (Edit, Change PIN, the floors)');
+      await ctx8.close();
+    } finally { tb.kill(); await desk.close(); }
   }
 } finally {
   await browser.close();

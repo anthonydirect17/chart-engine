@@ -237,3 +237,36 @@ test('Quote board rows (1.16.0): cleanPanel keeps the hidden rows, sanitised; no
   const st = W.cleanStore(JSON.stringify({ v: 1, layouts: { Main: { panels: [qb(['ZN', 'bad root'], 'q1')] } } }));
   assert.deepStrictEqual(st.layouts.Main.panels[0].hide, ['ZN']);
 });
+
+/* 1.30.0 (wave 5): the Settings cleanup: every section collapsible, remembered per section, Collapse all / Expand all, the order */
+test('1.30.0 Settings sections: open by default, kept answers win, junk and blocked storage read as the default', () => {
+  const W2 = require('../live/workspace.js');
+  assert.deepStrictEqual(W2.SETTINGS_SECTIONS, ['charts', 'hotkeys', 'strategies', 'entry', 'prints', 'desk', 'pin', 'layout', 'groups']);
+  const all = W2.sectionsOpen(null);
+  assert.ok(W2.SETTINGS_SECTIONS.every(id => all[id] === true), 'every section starts open, as before');
+  assert.strictEqual(W2.sectionsOpen('{"charts":false,"desk":true,"nope":false}').charts, false);
+  assert.ok(!('nope' in W2.sectionsOpen('{"nope":false}')), 'only the known sections');
+  assert.deepStrictEqual(W2.sectionsOpen('{not json'), all); assert.deepStrictEqual(W2.sectionsOpen('[1,2]'), all); assert.deepStrictEqual(W2.sectionsOpen('{"charts":"no"}'), all);
+  const kept = JSON.parse(W2.sectionsKeep(all, { hotkeys: false }));
+  assert.strictEqual(kept.hotkeys, false); assert.strictEqual(kept.charts, true); assert.strictEqual(Object.keys(kept).length, W2.SETTINGS_SECTIONS.length);
+  assert.strictEqual(W2.sectionsAllLabel(all), 'Collapse all');
+  const closed = W2.sectionsOpen(W2.sectionsKeep(all, Object.fromEntries(W2.SETTINGS_SECTIONS.map(id => [id, false]))));
+  assert.strictEqual(W2.sectionsAllLabel(closed), 'Expand all');
+  assert.strictEqual(W2.sectionsAllLabel(Object.assign({}, closed, { groups: true }), ['charts', 'hotkeys']), 'Expand all', 'only the sections shown count (the groups column may be hidden)');
+  assert.strictEqual(W2.KEYS.sections, 'live-settings-sections-v1');
+});
+test('1.30.0 Settings sections: each a header row button over its body, in the order chosen, Collapse all at the top', () => {
+  const html = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'index.html'), 'utf8');
+  const set = html.slice(html.indexOf('id="wsSettings"'), html.indexOf('id="wsGear"'));
+  const ids = [...set.matchAll(/<section class="ws-sec" data-sec="([a-z]+)"/g)].map(m => m[1]);
+  assert.deepStrictEqual(ids, ['charts', 'hotkeys', 'strategies', 'entry', 'prints', 'desk', 'pin', 'layout', 'groups']);
+  for (const id of ids) assert.match(set, new RegExp(`<button type="button" class="ws-sec-hd" aria-expanded="true" aria-controls="wsSecBody-${id}">[^]*?<div class="ws-sec-body" id="wsSecBody-${id}">`));
+  assert.match(set, /<h2 class="ws-sec-hrow"><button type="button" class="ws-sec-hd"[^>]*aria-controls="wsSecBody-charts">Charts <span>every chart<\/span><\/button><button type="button" class="ws-set-all" id="wsSecAll"/, 'Collapse all in the first header row, not a row of its own');
+  assert.ok(!/ws-set-top/.test(set));
+  const js = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
+  assert.match(js, /function sectionsChanged\(\) \{ applySections\(\); if \(pop && pop\.el === \$\('wsSettings'\)\) placePop\(pop\.el, pop\.anchor, pop\.align\); \}/, 'placed again after a section opens or closes');
+  assert.match(js, /store\.setItem\(W\.KEYS\.sections, [^\n]*\); sectionsChanged\(\);/);
+  assert.match(js, /if \(el === \$\('wsSettings'\) && typeof ResizeObserver === 'function'\) \{[^]*?ro\.observe\(el\);\s*pop\.ro = ro;/, 'Settings watched for size changes while open (guarded)');
+  assert.match(js, /const \{ el, anchor, onClose, ro \} = pop; pop = null;\s*if \(ro\) ro\.disconnect\(\);/, 'and let go when closed');
+  assert.match(js, /else if \(k === W\.KEYS\.sections\) sectionsChanged\(\);/, 'another window\'s change followed, and placed again the same way');
+});
