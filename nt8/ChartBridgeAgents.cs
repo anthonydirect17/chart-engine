@@ -4481,11 +4481,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> seats;
             long rev;
             lock (Sync) { gid = groupId; seats = seatNames.ToList(); rev = seatsRev; }
-            return ",\"group\":" + (gid != null ? GroupJson(gid) : "null") + ",\"seats\":" + (gid != null ? "[" + string.Join(",", seats.Select(x => CbJson.Str(x))) + "]" : "null") +
+            return ",\"group\":" + (gid != null ? WelcomeGroupJson(gid) : "null") + ",\"seats\":" + (gid != null ? "[" + string.Join(",", seats.Select(x => CbJson.Str(x))) + "]" : "null") +
                    ",\"seatsRev\":" + rev.ToString(CultureInfo.InvariantCulture);
         }
 
         private static string GroupJson(string gid) { return "{\"id\":" + CbJson.Str(gid) + ",\"name\":" + Str(ChartBridgeGroups.NameOf(gid)) + "}"; }
+        // 0.6.2: the agent's welcome.group adds the group's account Type ("eval", "funded", or null when not set) for its runner.
+        private static string WelcomeGroupJson(string gid) { return "{\"id\":" + CbJson.Str(gid) + ",\"name\":" + Str(ChartBridgeGroups.NameOf(gid)) + ",\"accountType\":" + Str(ChartBridgeGroups.TypeOf(gid)) + "}"; }
 
         // 0.6.0: each seat for agentState and the strip (a group only): its account, whether the agent owns anything there, its open
         // trade, today's P&L and trades there, and why it is not in the last plan's trade (null: it is). strip: also SIM or LIVE, the
@@ -4606,13 +4608,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string StateJson()
         {
             string sd = StandDown(), gsd = GroupStandDownJson();   // 0.6.2: groupStandDown, the stand-down on the group it is on now
+            string gtype = GroupNow() ? Str(ChartBridgeGroups.TypeOf(GroupId)) : "null";   // 0.6.2: groupType, the Type of the group it trades (a change in Settings reaches the runner without a reconnect)
             bool owns = OwnsAny();
             string seats = GroupNow() || AllSeats().Any(x => !IsEntrySeat(x.Name)) ? ",\"seats\":" + SeatsJson(false) : "";   // 0.6.0: a group's seats (one account: as before)
             lock (Sync)
             {
                 return "{\"type\":\"agentState\",\"mode\":" + CbJson.Str(mode) + ",\"killed\":" + (killed ? "true" : "false") + ",\"standDown\":" + Str(sd) +
                        ",\"trades\":" + TradesLocked() + ",\"losses\":" + LossesLocked() + ",\"pnlToday\":" + CbJson.Num(Math.Round(Trades.Values.Where(v => !double.IsNaN(v)).Sum(), 2)) +
-                       ",\"owns\":" + (owns ? "true" : "false") + ",\"session\":" + Str(session) + ",\"groupStandDown\":" + gsd + seats + "}";
+                       ",\"owns\":" + (owns ? "true" : "false") + ",\"session\":" + Str(session) + ",\"groupStandDown\":" + gsd + ",\"groupType\":" + gtype + seats + "}";
             }
         }
 

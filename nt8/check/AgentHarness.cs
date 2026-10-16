@@ -349,7 +349,7 @@ public static class AgentHarness
               w.Contains("{\"root\":\"MNQ\",\"name\":\"MNQ 12-26\",\"tick\":0.25,\"pointValue\":2}") && w.Contains("{\"root\":\"NQ\",\"name\":\"NQ 12-26\",\"tick\":0.25,\"pointValue\":20}"),
               "welcome: version, agent, shadow, Sim101 (sim), the default rules, its roots' instruments: " + w);
         string st = Last(agentOut, "agentState");
-        Check(Regex.IsMatch(st, "^\\{\"type\":\"agentState\",\"mode\":\"shadow\",\"killed\":false,\"standDown\":null,\"trades\":0,\"losses\":0,\"pnlToday\":0,\"owns\":false,\"session\":\"[0-9]{4}-[0-9]{2}-[0-9]{2}\",\"groupStandDown\":null\\}$"), "agentState (with its session; 0.6.2: groupStandDown null): " + st);
+        Check(Regex.IsMatch(st, "^\\{\"type\":\"agentState\",\"mode\":\"shadow\",\"killed\":false,\"standDown\":null,\"trades\":0,\"losses\":0,\"pnlToday\":0,\"owns\":false,\"session\":\"[0-9]{4}-[0-9]{2}-[0-9]{2}\",\"groupStandDown\":null,\"groupType\":null\\}$"), "agentState (with its session; 0.6.2: groupStandDown and groupType null): " + st);
         string strip = Last(page, "agent");
         Check(strip.Contains("\"agent\":\"manrae\",\"name\":\"Manrae\",\"build\":\"sample-build-1\",\"enabled\":true,\"connected\":true,\"mode\":\"shadow\"") && strip.Contains("\"lastPlan\":null"), "the page's strip: " + strip);
         ChartBridgeAgents.OnTick("MNQ", "{\"type\":\"tick\",\"root\":\"MNQ\",\"p\":25000.25,\"v\":1}");
@@ -1872,7 +1872,7 @@ public static class AgentHarness
             string w = Last(agentOut, "welcome");
             Check(!PageReject().Contains("\"cid\":\"gd\"") && M.GroupId == "g1" && FileText("agent-manrae-account.txt").Contains("group\tg1") && M.DiagJson().Contains("\"mode\":\"auto\""),
                   "0.6.0: the group chosen: saved as group<TAB>g1, its mode kept: " + PageReject());
-            Check(Count(agentOut, "welcome") == w0 + 1 && w.Contains("\"account\":null") && w.Contains("\"group\":{\"id\":\"g1\",\"name\":\"Lucid\"},\"seats\":[\"SIM-A\",\"SIM-B\",\"SIM-C\"],\"seatsRev\":") && Rev() > r1,
+            Check(Count(agentOut, "welcome") == w0 + 1 && w.Contains("\"account\":null") && w.Contains("\"group\":{\"id\":\"g1\",\"name\":\"Lucid\",\"accountType\":null},\"seats\":[\"SIM-A\",\"SIM-B\",\"SIM-C\"],\"seatsRev\":") && Rev() > r1,
                   "0.6.0: welcome: account null, group {id, name}, seats in order, seatsRev up: " + w);
             Check(ChartBridgeAgents.AgentOfAccount("SIM-B") == "manrae" && ChartBridgeAgents.AgentOfAccount("SIM-E") == null, "0.6.0: every seat is the agent's (the bot, the copier, other agents); its old account no longer");
             Restart();
@@ -2328,7 +2328,7 @@ public static class AgentHarness
             Fill(e, 1, 24999);
             List<Order> legs = Legs(sime, e);
             Check(legs.Count == 2 && legs.All(o => o.Name.StartsWith("CB#" + Tag(e) + " ")), "the legs of an agent entry carry the entry's tag (v2 naming): " + string.Join(" | ", legs.Select(o => o.Name)));
-            Check(Last(agentOut, "agentState").Contains("\"owns\":true") && Regex.IsMatch(Last(agentOut, "agentState"), "\"session\":\"2026-10-09\",\"groupStandDown\":null\\}$"), "10.1: agentState after the fill: owns true, session 2026-10-09: " + Last(agentOut, "agentState"));
+            Check(Last(agentOut, "agentState").Contains("\"owns\":true") && Regex.IsMatch(Last(agentOut, "agentState"), "\"session\":\"2026-10-09\",\"groupStandDown\":null,\"groupType\":null\\}$"), "10.1: agentState after the fill: owns true, session 2026-10-09: " + Last(agentOut, "agentState"));
             Order stop = legs.First(o => o.Name.Contains(" stop ")), target = legs.First(o => o.Name.Contains(" target "));
             target.OrderId = "T31"; target.Filled = 1; target.AverageFillPrice = 25003; target.OrderState = OrderState.Filled; Update(target);
             Deliver("SIM-E", mnq, MarketPosition.Short, 1, 25003, "T31");
@@ -4273,6 +4273,29 @@ public static class AgentHarness
             finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
             File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSIM-E" });
             Restart();
+        });
+
+        Part("0.6.2 the group's Type for the runner", () =>
+        {
+            NoStandDowns();
+            GroupFresh();   // groups.txt from WriteGroup: no Type field (not set)
+            Check(Last(agentOut, "welcome").Contains("\"group\":{\"id\":\"g1\",\"name\":\"Lucid\",\"accountType\":null},\"seats\":") && Last(agentOut, "agentState").Contains("\"groupType\":null"),
+                  "Type: not set: welcome.group.accountType null, agentState.groupType null: " + Last(agentOut, "welcome"));
+            int n = Count(agentOut, "agentState");
+            OnClient(pc, "{\"type\":\"groupSave\",\"cid\":\"gt1\",\"group\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"intraday\",\"target\":3000,\"size\":50000,\"lockAt\":0,\"accountType\":\"eval\"}");
+            Tick();
+            Check(!Rejected("gt1") && Count(agentOut, "agentState") > n && Last(agentOut, "agentState").Contains("\"groupType\":\"eval\""), "Type: changed in Settings while connected: agentState.groupType eval, no reconnect: " + PageReject());
+            Restart();
+            Check(Last(agentOut, "welcome").Contains("\"group\":{\"id\":\"g1\",\"name\":\"Lucid\",\"accountType\":\"eval\"}") && Last(agentOut, "agentState").Contains("\"groupType\":\"eval\""), "Type: set: welcome.group.accountType eval");
+            OnClient(pc, "{\"type\":\"groupSave\",\"cid\":\"gt2\",\"group\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"intraday\",\"target\":3000,\"size\":50000,\"lockAt\":0,\"accountType\":\"funded\"}");
+            Tick();
+            Check(Last(agentOut, "agentState").Contains("\"groupType\":\"funded\""), "Type: eval to funded while connected: groupType funded");
+            OnClient(pc, "{\"type\":\"groupSave\",\"cid\":\"gt3\",\"group\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"intraday\",\"target\":3000,\"size\":50000,\"lockAt\":0,\"accountType\":\"-\"}");
+            Tick();
+            Check(Last(agentOut, "agentState").Contains("\"groupType\":null"), "Type: cleared (-) while connected: groupType null");
+            Fresh();   // one account: no group
+            Check(Last(agentOut, "welcome").Contains("\"group\":null") && Last(agentOut, "agentState").Contains("\"groupType\":null"), "Type: one account: group null, groupType null");
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
         });
 
         Part("0.6.2 fix round 1: the hello's build", () =>

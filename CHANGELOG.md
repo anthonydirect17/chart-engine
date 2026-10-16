@@ -19,6 +19,8 @@ else changes, and exits are never gated.
   second hello with another build on the same connection; a missing `groups.txt` keeps every stand-down (the file is not rewritten);
   at most 200 stand-downs for a group ChartBridge cannot find (groups.txt unreadable; a raise for a known group is always taken),
   refused, logged and alarmed once per build and group; a repeat raise logged once per build and group.
+- **The group's Type for the runner.** The agent's `welcome.group` is `{id, name, accountType}` (`eval`, `funded`, or null) and
+  `agentState` gains `groupType` (the same value), so a Type changed in Settings reaches the runner without a reconnect.
 - **Clear stand-down (chart 1.29.0).** The Board shows each stand-down as an amber row under its hero (the group, the kind and why,
   since when) with Clear stand-down: one click sends `agentStandDownClear {cid, build, group}` (signed-in v3 pages only, gate 7),
   which ChartBridge logs "cleared on the page".

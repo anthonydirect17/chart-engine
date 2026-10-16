@@ -1378,6 +1378,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        // 0.6.2: a group's account Type ("eval", "funded"), or null when not set or there is no such group (the agent's welcome.group and
+        // agentState.groupType; nothing in the order path reads it).
+        public static string TypeOf(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            EnsureLoaded();
+            lock (Mem) { Group g; return state.Groups.TryGetValue(id, out g) ? g.AccountType : null; }
+        }
+
         // 0.6.0: a group's name, or null when there is no such group.
         public static string NameOf(string id)
         {
