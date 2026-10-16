@@ -1209,9 +1209,12 @@ Object.assign(OrderDeskV3.prototype, {
   },
   agentRulesOut(a) { const r = a.rules; return { roots: r.roots.slice(), maxQty: Object.assign({}, r.maxQty), entryFrom: r.entryFrom, entryUntil: r.entryUntil, flatAt: r.flatAt, maxExpireSec: r.maxExpireSec, maxTrades: r.maxTrades, maxLosses: r.maxLosses }; },
   agentMsg(a) {
-    return { type: 'agent', agent: a.id, name: a.name, build: a.build, enabled: true, connected: a.connected, mode: a.mode, account: a.account, sim: this.agentSim(a), rules: this.agentRulesOut(a),
+    const m = { type: 'agent', agent: a.id, name: a.name, build: a.build, enabled: true, connected: a.connected, mode: a.mode, account: a.account, sim: this.agentSim(a), rules: this.agentRulesOut(a),
       position: this.agentPosition(a), pnlToday: +a.pnl.toFixed(2), trades: a.trades, losses: a.losses, killed: a.killed, standDown: this.agentStoodDown(a), owns: this.agentOwns(a),
       lastBeatMs: a.connected ? (a.simulated ? 400 : this.now() - a.lastBeat) : null, lastPlan: a.lastPlan };
+    // ChartBridge 0.6.0 (group trading): a sample group view set by the smoke's /test/agent-group (made-up numbers): account
+    // null, group, seatsRev and each seat, as ChartBridgeAgents.cs's strip carries them
+    return a.groupView ? Object.assign(m, { account: null, sim: true, group: a.groupView.group, seatsRev: a.groupView.rev, seats: a.groupView.seats }) : m;
   },
   /** agentState (section 10, as built): with its session (the day file's, rolled at 18:00 ET); sent after every hello and
    *  again whenever a field changed */

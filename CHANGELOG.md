@@ -1,5 +1,51 @@
 # Changelog
 
+## ChartBridge 0.6.0 and chart 1.27.0 (2026-10-15): one hero trades a whole prop group from the Agent tab
+
+Anthony's decisions of 2026-10-15 (Phase 4 piece 1, Q1 b, Q2 a, Q3 a). **It needs the recompile: the page needs ChartBridge
+0.6.0** (`minChartBridge` raised to 0.6.0); a PC on an older ChartBridge keeps the page it has, and the PC updater waits. Separate
+from the copier, which stays exactly as it is. The protocol is in PROTOCOL.md, "Group trading (0.6.0)", shared with Bot-Lab's runner.
+
+- **Seats.** An agent trades one account (exactly as before) or a whole prop group: each member is a seat. ChartBridge keeps
+  everything it followed for the one account per seat now: the open trade and its ledger, the roots it owns until flat, the
+  flatten jobs, the lost-trade errors and their 0.5.7 hold. `agentAccount` may carry `group` (the group id) in place of
+  `account`; `agent-<id>-account.txt` saves `group<TAB><id>` (an older ChartBridge stands the agent down on that line: safe).
+  Choosing a group is refused while the agent is exposed, while a member or a seat holds anything on its roots, and when a member
+  is the bot's, the copier's leader or a follower, another agent's, Backtest or Playback, or not in NinjaTrader. A member that is
+  not tradable or connected now is taken: it sits out each trade until it is.
+- **One plan, every seat.** `plan` adds `seatsRev` and `sizes` ("5,3,4" in seat order; 0: the runner found no room for 1
+  contract). ChartBridge never resizes: each size is checked against the agent's caps and the hard ceiling, `riskDollars` is the
+  sum over the sizes, `qty` the first size that is not 0. Every check runs again under the agent's gate at the moment of placing;
+  then seat by seat through the page's own order path (`PlaceAgentEntry`, every v2 gate, the owner lock and the one-direction check
+  under `PlaceLock` for each), each in its own try, all with the plan's id. A seat that cannot take it (its size 0, not tradable
+  or not connected, a position or order that is not the agent's, the one-direction check) sits that trade out; the plan is
+  refused only when no seat can take it. A plan sized for another `seatsRev` is refused whole ("the group changed; size again").
+  One answer per seat (`answer.account`) and the plan's own; an entry NinjaTrader rejects is refused on that seat only.
+- **The rest per seat.** One direction per group and exits never blocked, unchanged. Kill, heartbeat loss, leaving Auto, a
+  withdraw and the expiry cancel unfilled entries on every seat; flatAt runs per (seat, root) with each seat's own close cap; the
+  agent's `flatten` may name one seat (`account`), else every seat at once. maxTrades and maxLosses count one per plan: a loss when
+  the group's net for that plan is below 0, once every seat closed. The 17:00 reset goes to None only when no seat is exposed and
+  every member is idle; otherwise the note names the accounts holding something. A seat that leaves the group, or a deleted group
+  (the agent goes to None), while it holds the agent's trade stays owned and protected until flat, and takes no new entry.
+- **The clash rules count every seat**: the owner lock, the bot's account, the copier's leader and followers (and the copier's
+  Eligible), other agents; an account cannot join a group an agent trades if it is the bot's, the copier's or another agent's.
+- **Messages.** `welcome` adds `group`, `seats` and `seatsRev` (up on every membership change, with a fresh welcome and
+  accountState); `agentState` adds `seats` for a group; one `accountState` per seat; the snapshot covers every seat. Day file:
+  `#seat<TAB><tag><TAB><account>` (a comment to an older ChartBridge), so a restart brings back each seat's trade.
+- **The page (1.27.0).** The Agent tab's picker is one list: None, then each group ("Group Lucid: SIM-A, SIM-B, SIM-C"), then
+  single accounts; a group with a member that cannot be taken is shown with why, not offered. A group with a LIVE member asks once,
+  naming them. His account card shows the seats table for a group (account, SIM or LIVE, position, the last plan's size, P&L, R
+  from each seat's own risk, daily room, floor room, why it is not in the trade) and the group's total. The Accounts tab marks each
+  seat with its hero's name; the copier's leader picker and follower rows show a seat with the reason. Off on a group in a trade
+  works as for one account: Shadow first, then the page's Flatten on every seat holding his trade, then Off once every seat is flat.
+- Review fixes: a seat that left the group while holding the trade keeps its accountState until flat; once the agent's socket
+  drops, a fan-out places no further seat (checked per seat under `PlaceLock`); a join is checked again under the lock that saves
+  the membership.
+- Tests: the Mono harness's group cases (fan-out to 3 seats with different sizes; each kind of sit-out; a seat rejected by the
+  broker; a partial fill; per-seat flatten; flatAt with the per-seat cap; Kill, heartbeat and leaving Auto; a stale seatsRev;
+  join and leave while exposed; a group deleted while exposed; the 17:00 reset; the copier and the bot refusing a seat; restart
+  recovery of the seat to tag mapping; maxTrades and maxLosses per plan; copilot and withdraw); every 0.5.8 check unchanged.
+
 ## ChartBridge 0.5.8 and chart 1.26.0 (2026-10-15): prop groups (one direction per group) and real account state
 
 Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL). **It needs the recompile: the page needs

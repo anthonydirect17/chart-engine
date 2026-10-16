@@ -189,6 +189,7 @@ public static class AgentHarness
             LostHeldInFlatten(); // 0.5.7: no lost-trade error while ChartBridge's own flatten runs on that root: held, then raised if not flat
             DailyReset();       // 0.5.7: the 17:00 ET reset to None for agents (DECISION 2026-10-14e)
             GroupsAndAccountState();   // 0.5.8: plan check 10b (one direction per group) and accountState
+            GroupTrading();   // 0.6.0: one agent trades a whole prop group (seats)
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -1777,6 +1778,527 @@ public static class AgentHarness
         });
     }
 
+    // ------------------------------------------------------------ 0.6.0: group trading (made-up accounts SIM-A, SIM-B, SIM-C)
+    // One agent trades a whole prop group: one plan, placed on every seat that can take it with the runner's size for it.
+    static Account sima;
+    static Instrument es;
+    static string GroupsFile { get { return Path.Combine(Dir, "groups.txt"); } }
+    static void WriteGroup(params string[] members)
+    {
+        string t = ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\tintraday\t3000\t50000\t-\n";
+        foreach (string m in members) t += "member\t" + m + "\tg1\n";
+        File.WriteAllText(GroupsFile, t);
+        ChartBridgeGroups.StartNow();
+    }
+    // manrae on group g1 (its account file), auto, 10:00 on a Friday, every account flat
+    static void GroupFresh()
+    {
+        Hold = null;
+        foreach (Account a in Account.All.ToList()) Settle(a);
+        foreach (string f in new[] { "agent-manrae-day.txt", "agent-manrae-rules.txt" }) { try { File.Delete(Path.Combine(Dir, f)); } catch (Exception) { } }
+        File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "group\tg1" });
+        et = new DateTime(2026, 10, 9, 10, 0, 0);
+        Restart();
+        Mode("manrae", "auto");
+        Last2();
+    }
+    static long Rev() { Match m = Regex.Match(Last(agentOut, "welcome"), "\"seatsRev\":([0-9]+)"); return m.Success ? long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) : -1; }
+    // A made-up group plan: sizes in seat order, qty the first size that is not 0, riskDollars the sum over the sizes.
+    static string GPlan(string id, string sizes, long rev, string side = "buy", string price = "24999", string riskText = null, int qty = 0)
+    {
+        int[] z = sizes.Split(',').Select(x => int.Parse(x, CultureInfo.InvariantCulture)).ToArray();
+        int first = qty > 0 ? qty : Math.Max(1, z.FirstOrDefault(x => x > 0));
+        string risk = riskText ?? (8 * 0.25 * 2 * z.Sum()).ToString("0.##", CultureInfo.InvariantCulture);
+        string body = Plan(id, "MNQ", side, "limit", price, first, 8, 16, 600, null, risk);
+        return body.Substring(0, body.Length - 1) + ",\"sizes\":\"" + sizes + "\",\"seatsRev\":" + rev.ToString(CultureInfo.InvariantCulture) + "}";
+    }
+    static int OrdersOn(Account a) { lock (a.Orders) return a.Orders.Count; }
+    static Order EntryAfter(Account a, int n) { lock (a.Orders) return a.Orders.Skip(n).FirstOrDefault(x => ChartBridgeAgents.IsEntryName(x.Name)); }
+    static List<string> AnswersFrom(int from) { lock (agentOut) return agentOut.Skip(from).Where(x => x.StartsWith("{\"type\":\"answer\"")).ToList(); }
+    static Order FlatOn(Account a) { lock (a.Orders) return a.Orders.LastOrDefault(o => (o.Name ?? "").EndsWith(" ag:manrae flat") && IsLive(o)); }
+    static Account[] Abc() { return new[] { sima, simb, simc }; }
+    // Each seat's entry of one plan: placed on SIM-A, SIM-B, SIM-C (null where none was).
+    static Order[] PlaceAll(string plan)
+    {
+        Last2();
+        int na = OrdersOn(sima), nb = OrdersOn(simb), nc = OrdersOn(simc);
+        A(plan);
+        return new[] { EntryAfter(sima, na), EntryAfter(simb, nb), EntryAfter(simc, nc) };
+    }
+    static bool Flat(Account a) { return PosOf(a, mnq) == 0; }
+    // The flatten's closes go out (cancels first, then the market close), and each fills at price.
+    static void FlattenFills(double price)
+    {
+        for (int i = 0; i < 3; i++) { Last2(); Advance(1000); }
+        foreach (Account a in Abc()) { Order fl = FlatOn(a); if (fl != null) Fills(fl, "F" + a.Name, price); }
+        Last2(); Advance(1500);
+    }
+
+    static void GroupTrading()
+    {
+        Part("0.6.0 setup", () =>
+        {
+            sima = Account.All.FirstOrDefault(x => x.Name == "SIM-A") ?? NewAccount("SIM-A", Provider.Simulator);
+            es = new Instrument { FullName = "ES 12-26", MasterInstrument = new MasterInstrument { Name = "ES", TickSize = 0.25, PointValue = 50 } };
+            ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-A, SIM-B, SIM-C, SIM-D, SIM-E");
+            try { File.Delete(Path.Combine(Dir, "agent-demob-account.txt")); } catch (Exception) { }
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
+            Check(string.Join(",", ChartBridgeGroups.MembersOf("g1")) == "SIM-A,SIM-B,SIM-C" && ChartBridgeGroups.NameOf("g1") == "Lucid", "0.6.0: group Lucid holds SIM-A, SIM-B, SIM-C (seat order: by name)");
+        });
+
+        Part("0.6.0 choose a group", () =>
+        {
+            Fresh();   // manrae on SIM-E (one account), auto
+            Check(Last(agentOut, "welcome").Contains("\"group\":null,\"seats\":null,\"seatsRev\":") && !Last(agentOut, "agentState").Contains("seats") && !Last(page, "agent").Contains("\"seats\""),
+                  "0.6.0: one account: welcome says group null and seats null (with its seatsRev); agentState and the strip are as before: " + Last(agentOut, "welcome"));
+            long r1 = Rev();
+            A(GPlan(NewId(), "1", r1));
+            Check(AgentReject().Contains("sizes is for a group: agent manrae trades one account (SIM-E); send qty alone"), "0.6.0: one account: a plan with sizes is refused: " + AgentReject());
+            P("{\"type\":\"agentAccount\",\"cid\":\"ga\",\"agent\":\"manrae\",\"account\":\"SIM-A\",\"group\":\"g1\"}");
+            Check(PageReject().Contains("agentAccount takes account or group, not both"), "0.6.0: account and group together: refused");
+            P("{\"type\":\"agentAccount\",\"cid\":\"gb\",\"agent\":\"manrae\",\"group\":\"g9\"}");
+            Check(PageReject().Contains("there is no group g9"), "0.6.0: a group that is not there: refused: " + PageReject());
+            // another agent's account in the group: it cannot be taken
+            File.WriteAllLines(Path.Combine(Dir, "agent-demob-account.txt"), new[] { "# made-up", "# test", "account\tSIM-C" });
+            Restart(); Mode("manrae", "auto");
+            P("{\"type\":\"agentAccount\",\"cid\":\"gc\",\"agent\":\"manrae\",\"group\":\"g1\",\"keepMode\":\"auto\"}");
+            Check(PageReject().Contains("group Lucid: SIM-C is agent demob's account: each agent has its own") && M.Account == "SIM-E", "0.6.0: a group with another agent's account: refused, nothing changed: " + PageReject());
+            File.Delete(Path.Combine(Dir, "agent-demob-account.txt"));
+            Restart(); Mode("manrae", "auto");
+            int w0 = Count(agentOut, "welcome"), s0 = Count(agentOut, "accountState");
+            P("{\"type\":\"agentAccount\",\"cid\":\"gd\",\"agent\":\"manrae\",\"group\":\"g1\",\"keepMode\":\"auto\"}");
+            string w = Last(agentOut, "welcome");
+            Check(!PageReject().Contains("\"cid\":\"gd\"") && M.GroupId == "g1" && FileText("agent-manrae-account.txt").Contains("group\tg1") && M.DiagJson().Contains("\"mode\":\"auto\""),
+                  "0.6.0: the group chosen: saved as group<TAB>g1, its mode kept: " + PageReject());
+            Check(Count(agentOut, "welcome") == w0 + 1 && w.Contains("\"account\":null") && w.Contains("\"group\":{\"id\":\"g1\",\"name\":\"Lucid\"},\"seats\":[\"SIM-A\",\"SIM-B\",\"SIM-C\"],\"seatsRev\":") && Rev() > r1,
+                  "0.6.0: welcome: account null, group {id, name}, seats in order, seatsRev up: " + w);
+            Check(ChartBridgeAgents.AgentOfAccount("SIM-B") == "manrae" && ChartBridgeAgents.AgentOfAccount("SIM-E") == null, "0.6.0: every seat is the agent's (the bot, the copier, other agents); its old account no longer");
+            Restart();
+            List<string> st;
+            lock (agentOut) st = agentOut.Skip(agentOut.FindLastIndex(x => x.StartsWith("{\"type\":\"snapshot\""))).Where(x => x.StartsWith("{\"type\":\"accountState\"")).ToList();
+            Check(st.Count == 3 && st[0].Contains("\"account\":\"SIM-A\"") && st[1].Contains("\"account\":\"SIM-B\"") && st[2].Contains("\"account\":\"SIM-C\"") && st.All(x => x.Contains("\"group\":\"Lucid\"")),
+                  "0.6.0: after a restart and hello: one accountState per seat, in seat order, right after the snapshot");
+            Check(M.GroupId == "g1" && Last(agentOut, "welcome").Contains("\"seats\":[\"SIM-A\",\"SIM-B\",\"SIM-C\"]") && Last(agentOut, "welcome").Contains("\"mode\":\"shadow\""), "0.6.0: the group survives a restart (in shadow, as every start)");
+            string strip = Last(page, "agent");
+            Check(strip.Contains("\"account\":null") && strip.Contains("\"group\":{\"id\":\"g1\",\"name\":\"Lucid\"}") && strip.Contains("\"seats\":[{\"account\":\"SIM-A\",\"owns\":false,\"position\":null,\"pnlToday\":0,\"trades\":0,\"out\":null,\"sim\":true"),
+                  "0.6.0: the pages' strip carries the group and each seat: " + strip);
+        });
+
+        Part("0.6.0 fan-out", () =>
+        {
+            GroupFresh();
+            long rev = Rev();
+            int a0 = N(agentOut);
+            string id = NewId();
+            Order[] e = PlaceAll(GPlan(id, "5,3,4", rev));
+            Check(e.All(x => x != null) && e[0].Quantity == 5 && e[1].Quantity == 3 && e[2].Quantity == 4 && e.All(x => x.LimitPrice == 24999 && x.TimeInForce == TimeInForce.Day) &&
+                  e.Select(Tag).Distinct().Count() == 3 && e.All(x => Regex.IsMatch(x.Name, "^CB#[0-9a-f]{8} ag:manrae s8 t16$")), "0.6.0: one plan, three seats, each its own size and tag: " + AgentReject());
+            if (e.Any(x => x == null)) return;
+            List<string> ans = AnswersFrom(a0);
+            Check(ans.Count == 4 && ans[0].Contains("\"answer\":\"placed\"") && ans[0].EndsWith(",\"account\":\"SIM-A\"}") && ans[1].EndsWith(",\"account\":\"SIM-B\"}") && ans[2].EndsWith(",\"account\":\"SIM-C\"}") &&
+                  ans[2].Contains("(4)") && !ans[3].Contains("\"account\"") && ans[3].Contains("placed on SIM-A 5 (order "), "0.6.0: one placed answer per seat, then the plan's: " + string.Join(" | ", ans));
+            string ap = Last(page, "agentPlan");
+            Check(ap.Contains("\"sizes\":\"5,3,4\",\"seatsRev\":" + rev) && ap.Contains("\"seats\":[{\"account\":\"SIM-A\",\"size\":5,\"risk\":20,\"out\":null,\"placed\":true},{\"account\":\"SIM-B\",\"size\":3,\"risk\":12,"),
+                  "0.6.0: the pages' agentPlan: sizes, seatsRev, each seat's size, its own risk and result: " + ap);
+            string day = FileText("agent-manrae-day.txt");
+            Check(day.Contains("#seat\t" + Tag(e[0]) + "\tSIM-A") && day.Contains("#seat\t" + Tag(e[1]) + "\tSIM-B") && day.Contains("#seat\t" + Tag(e[2]) + "\tSIM-C") && day.Contains("#tagplan\t" + Tag(e[1]) + "\t" + id),
+                  "0.6.0: the day file: a #seat line per seat's tag (and its #tagplan): " + day.Replace("\n", " | "));
+            Fill(e[0], 5, 24999); Fill(e[1], 3, 24999); Fill(e[2], 4, 24999);
+            Check(Legs(sima, e[0]).Count == 2 && Legs(simb, e[1]).Count == 2 && Legs(simc, e[2]).Count == 2 && Legs(simb, e[1]).All(o => o.Quantity == 3),
+                  "0.6.0: each seat's fill gets its own stop and target");
+            Check(Abc().All(a => ChartBridgeAgents.OwnerAgent(a.Name, "MNQ") == "manrae"), "0.6.0: the owner lock on every seat");
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains("\"trades\":1,") && st.Contains("\"owns\":true") && st.Contains("\"seats\":[{\"account\":\"SIM-A\",\"owns\":true,\"position\":{\"root\":\"MNQ\",\"qty\":5,\"avgPrice\":24999},\"pnlToday\":0,\"trades\":1,\"out\":null}") &&
+                  st.Contains("{\"account\":\"SIM-C\",\"owns\":true,\"position\":{\"root\":\"MNQ\",\"qty\":4,"), "0.6.0: agentState: one trade (one plan), each seat's position: " + st);
+            A(GPlan(NewId(), "1,1,1", rev));
+            Check(AgentReject().Contains("one at a time: agent manrae already has a position"), "0.6.0: one at a time across the group: " + AgentReject());
+            foreach (int i in new[] { 0, 1, 2 })
+            {
+                Account a = Abc()[i];
+                List<Order> legs = Legs(a, e[i]);
+                LegFill(a, legs.First(o => o.Name.Contains(" target ")), legs.First(o => o.Name.Contains(" stop ")), 25003, "T" + a.Name);
+            }
+            Tick();
+            st = Last(agentOut, "agentState");
+            Check(st.Contains("\"trades\":1,\"losses\":0,\"pnlToday\":96,") && st.Contains("{\"account\":\"SIM-B\",\"owns\":false,\"position\":null,\"pnlToday\":24,\"trades\":1,\"out\":null}"),
+                  "0.6.0: all closed: one trade, its dollars per seat and in all: " + st);
+            Check(Last(page, "agent").Contains("{\"account\":\"SIM-B\",\"owns\":false,\"position\":null,\"pnlToday\":24,\"trades\":1,\"out\":null,\"sim\":true,\"seat\":true,\"lastPlan\":\"" + id + "\",\"size\":3,\"risk\":12,\"lastPnl\":24}"),
+                  "0.6.0: the strip: each seat's size, its own risk and its dollars for the page's R: " + Last(page, "agent"));
+        });
+
+        Part("0.6.0 plan refusals", () =>
+        {
+            GroupFresh();
+            long rev = Rev();
+            int calls = Abc().Sum(a => a.Calls.Count);
+            Action<string, string, string> refuse = (plan, has, label) => { clock += 1000; A(plan); Check(AgentReject().Contains(has), "0.6.0 refused (" + label + "): " + AgentReject()); };
+            refuse(GPlan(NewId(), "1,1,1", rev - 1), "the group changed; size again", "a stale seatsRev, refused whole");
+            refuse(Good(NewId()), "a plan for a group needs sizes (one per seat, in welcome.seats order) and seatsRev", "no sizes");
+            refuse(GPlan(NewId(), "1,1", rev), "sizes has 2 sizes for 3 seats (SIM-A, SIM-B, SIM-C)", "one size short");
+            refuse(GPlan(NewId(), "0,0,0", rev), "every size is 0: no seat takes this plan", "every size 0");
+            refuse(GPlan(NewId(), "2,1,1", rev, "buy", "24999", null, 1), "qty must be the first seat's size that is not 0 (2)", "qty not the first size");
+            refuse(GPlan(NewId(), "1,21,1", rev), "sizes: SIM-B's 21 is over 20 (the hard ceiling of 20 for MNQ)", "a seat over the ceiling");
+            refuse(GPlan(NewId(), "1,1,1", rev, "buy", "24999", "4"), "riskDollars 4 is not stopTicks x tick x point value x the sum of sizes (12.00)", "riskDollars of one seat");
+            string bad = GPlan(NewId(), "1,1,1", rev).Replace("\"sizes\":\"1,1,1\"", "\"sizes\":\"1,x\"");
+            refuse(bad, "sizes must be whole numbers in seat order", "sizes not numbers");
+            Check(Abc().Sum(a => a.Calls.Count) == calls, "0.6.0: nothing of a refused group plan reached NinjaTrader");
+        });
+
+        Part("0.6.0 a seat sits out", () =>
+        {
+            GroupFresh();
+            long rev = Rev();
+            simc.Connection.Status = ConnectionStatus.Disconnected;
+            int a0 = N(agentOut);
+            Order[] e = PlaceAll(GPlan(NewId(), "2,0,1", rev));
+            simc.Connection.Status = ConnectionStatus.Connected;
+            List<string> ans = AnswersFrom(a0);
+            Check(e[0] != null && e[0].Quantity == 2 && e[1] == null && e[2] == null, "0.6.0 Q1 b: SIM-B sized 0 and SIM-C not connected sit it out; SIM-A takes it: " + AgentReject());
+            Check(ans.Count == 4 && ans[1].Contains("\"answer\":\"refused\",\"text\":\"not in this trade: its size is 0 (no room for 1 contract)\",\"account\":\"SIM-B\"") &&
+                  ans[2].Contains("\"text\":\"not in this trade: SIM-C is not connected\",\"account\":\"SIM-C\"") && ans[3].Contains("placed on SIM-A 2 (order ") && ans[3].Contains("SIM-C not in this trade: SIM-C is not connected"),
+                  "0.6.0: a refused answer per seat sitting out, with why; the plan's answer names them: " + string.Join(" | ", ans));
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains("{\"account\":\"SIM-B\",\"owns\":false,\"position\":null,\"pnlToday\":0,\"trades\":0,\"out\":\"its size is 0 (no room for 1 contract)\"}") && st.Contains("\"out\":\"SIM-C is not connected\"}"),
+                  "0.6.0: agentState.seats: each seat's \"not in this trade\" reason: " + st);
+            // a position that is not the agent's
+            GroupFresh();
+            SetPos(simb, mnq, 1); ClearMoves();
+            a0 = N(agentOut);
+            e = PlaceAll(GPlan(NewId(), "1,1,1", rev = Rev()));
+            Check(e[0] != null && e[1] == null && e[2] != null && AnswersFrom(a0).Any(x => x.Contains("not in this trade: SIM-B MNQ has a position or a working order that is not agent manrae's") && x.Contains("\"account\":\"SIM-B\"")),
+                  "0.6.0 Q1 b: SIM-B holds a position that is not the agent's: it sits out (the owner lock); the others take it");
+            // the one-direction check: SIM-B holds a long in another market (ES): a sell would hedge the group on every seat
+            GroupFresh();
+            simb.Positions.Add(new Position { Instrument = es, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 6000 });
+            int calls = Abc().Sum(a => a.Calls.Count);
+            clock += 1000;
+            e = PlaceAll(GPlan(NewId(), "1,1,1", rev = Rev(), "sell", "25001"));
+            Check(e.All(x => x == null) && Abc().Sum(a => a.Calls.Count) == calls && AgentReject().Contains("no seat of group Lucid can take this plan: SIM-A: Group Lucid is long (SIM-B +1 ES): a sell on SIM-A would hedge the group") &&
+                  AgentReject().Contains("; SIM-C: Group Lucid is long (SIM-B +1 ES): a sell on SIM-C would hedge"), "0.6.0 Q1 b: the one-direction check sits each seat out; no seat left: the plan is refused, naming each: " + AgentReject());
+            e = PlaceAll(GPlan(NewId(), "1,1,1", rev));
+            Check(e.All(x => x != null), "0.6.0: a buy, the group's own side: every seat takes it: " + AgentReject());
+            simb.Positions.RemoveAll(x => x.Instrument == es);
+        });
+
+        Part("0.6.0 broker reject", () =>
+        {
+            GroupFresh();
+            long rev = Rev();
+            Hold = (kind, o) => { if (kind == "submit" && o.Account == simb && ChartBridgeAgents.IsEntryName(o.Name)) { o.OrderState = OrderState.Rejected; Update(o); return true; } return false; };
+            int a0 = N(agentOut);
+            Order[] e = PlaceAll(GPlan(NewId(), "1,2,1", rev));
+            Hold = null;
+            List<string> ans = AnswersFrom(a0);
+            Check(e[0] != null && e[2] != null && ans.Count == 4 && ans[1].Contains("\"text\":\"refused: NinjaTrader rejected its entry\",\"account\":\"SIM-B\"") && ans[3].Contains("SIM-B not in this trade: NinjaTrader rejected its entry"),
+                  "0.6.0: NinjaTrader rejects SIM-B's entry at once: SIM-B refused, SIM-A and SIM-C placed: " + string.Join(" | ", ans));
+            GroupFresh();
+            e = PlaceAll(GPlan(NewId(), "1,2,1", rev = Rev()));
+            Check(e.All(x => x != null), "0.6.0: placed on all three");
+            if (e.Any(x => x == null)) return;
+            e[1].OrderState = OrderState.Rejected; Update(e[1]);
+            Check(Answer().Contains("\"answer\":\"refused\",\"text\":\"NinjaTrader rejected its entry\",\"account\":\"SIM-B\""), "0.6.0: a rejection that comes later: that seat's refused answer, with its account: " + Answer());
+            Fill(e[0], 1, 24999); Fill(e[2], 1, 24999);
+            string st = Last(agentOut, "agentState");
+            Check(ChartBridgeAgents.OwnerAgent("SIM-A", "MNQ") == "manrae" && ChartBridgeAgents.OwnerAgent("SIM-C", "MNQ") == "manrae" && ChartBridgeAgents.OwnerAgent("SIM-B", "MNQ") == null &&
+                  st.Contains("\"out\":\"refused: NinjaTrader rejected its entry\""), "0.6.0: the others fill and are the agent's; SIM-B is not: " + st);
+        });
+
+        Part("0.6.0 partial fill", () =>
+        {
+            GroupFresh();
+            Order[] e = PlaceAll(GPlan(NewId(), "5,3,4", Rev()));
+            if (e.Any(x => x == null)) { Check(false, "0.6.0 partial: placed: " + AgentReject()); return; }
+            Fill(e[0], 2, 24999); Fill(e[1], 3, 24999); Fill(e[2], 4, 24999);
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains("{\"account\":\"SIM-A\",\"owns\":true,\"position\":{\"root\":\"MNQ\",\"qty\":2,") && st.Contains("{\"account\":\"SIM-B\",\"owns\":true,\"position\":{\"root\":\"MNQ\",\"qty\":3,"), "0.6.0: SIM-A part filled (2 of 5): its ledger holds 2: " + st);
+            int a0 = N(agentOut);
+            Advance(601000);
+            List<string> ans = AnswersFrom(a0);
+            Check(sima.Calls.Any(c => c == "cancel " + e[0].Name) && ans.Count == 1 && ans[0].Contains("\"answer\":\"expired\"") && ans[0].Contains("the rest cancelled, the 2 filled keep their stop and target") && ans[0].EndsWith(",\"account\":\"SIM-A\"}"),
+                  "0.6.0: at the plan's expiry the rest of SIM-A's entry is cancelled, with SIM-A's expired answer; the others were filled: " + string.Join(" | ", ans));
+            Check(Legs(sima, e[0]).Where(IsLive).Count() == 2 && Legs(sima, e[0]).All(o => o.Quantity == 2), "0.6.0: SIM-A's 2 keep their stop and target");
+        });
+
+        Part("0.6.0 copilot and withdraw", () =>
+        {
+            GroupFresh();
+            Mode("manrae", "copilot");
+            string id = NewId();
+            int na = OrdersOn(sima);
+            A(GPlan(id, "2,1,1", Rev()));
+            string pr = Last(page, "agentProposal");
+            Check(OrdersOn(sima) == na && pr.Contains("\"account\":null,\"group\":{\"id\":\"g1\",\"name\":\"Lucid\"}") && pr.Contains("\"sizes\":\"2,1,1\"") && pr.Contains("\"state\":\"open\""),
+                  "0.6.0 copilot: a group's proposal names the group (account null) and its sizes; nothing placed: " + pr);
+            int a0 = N(agentOut), nb = OrdersOn(simb), nc = OrdersOn(simc);
+            P("{\"type\":\"agentAnswer\",\"cid\":\"ac1\",\"agent\":\"manrae\",\"id\":\"" + id + "\",\"answer\":\"accept\",\"at\":" + ((long)clock).ToString(CultureInfo.InvariantCulture) + "}");
+            List<string> ans = AnswersFrom(a0);
+            Order[] e = { EntryAfter(sima, na), EntryAfter(simb, nb), EntryAfter(simc, nc) };
+            Check(e.All(x => x != null) && e[0].Quantity == 2 && ans.Count == 5 && ans[0].Contains("\"answer\":\"accepted\"") && ans[1].EndsWith("\"account\":\"SIM-A\"}") && ans[4].Contains("placed on SIM-A 2 (order "),
+                  "0.6.0 copilot: accepted: placed on every seat, an answer per seat, then the plan's: " + string.Join(" | ", ans) + " " + PageReject());
+            Mode("manrae", "auto");
+            A("{\"type\":\"withdraw\",\"id\":\"" + id + "\",\"reason\":\"made-up: the level broke\"}");
+            Check(e.All(x => x != null && x.OrderState == OrderState.Cancelled), "0.6.0: withdraw cancels the plan's entry on every seat");
+        });
+
+        Part("fix 3: the socket drops during a fan-out", () =>
+        {
+            GroupFresh();
+            long rev = Rev();
+            ChartBridgeClient was = ac;
+            // the agent's socket drops (Lose) right as SIM-A's entry is submitted: SIM-B and SIM-C are not placed, SIM-A's is cancelled
+            Hold = (kind, o) =>
+            {
+                if (kind == "submit" && o.Account == sima && ChartBridgeAgents.IsEntryName(o.Name))
+                    typeof(ChartBridgeAgent).GetMethod("Lose", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, new object[] { was, "agent manrae disconnected", false });
+                return false;
+            };
+            int na = OrdersOn(sima), nb = OrdersOn(simb), nc = OrdersOn(simc);
+            Last2();
+            M.OnMessage(was, GPlan(NewId(), "1,1,1", rev));
+            Hold = null;
+            Order ea = EntryAfter(sima, na);
+            Check(ea != null && ea.OrderState == OrderState.Cancelled && EntryAfter(simb, nb) == null && EntryAfter(simc, nc) == null,
+                  "fix 3: after the socket dropped at seat 1 of 3, seats 2 and 3 are not placed (\"is not connected\") and seat 1's entry is cancelled");
+            Check(Logged("plan ") && Logged("SIM-B refused: agent manrae is not connected: nothing more is placed"), "fix 3: the refusal is said per seat");
+        });
+
+        Part("0.6.0 per-seat flatten", () =>
+        {
+            GroupFresh();
+            Order[] e = PlaceAll(GPlan(NewId(), "2,3,4", Rev()));
+            if (e.Any(x => x == null)) { Check(false, "0.6.0 flatten: placed: " + AgentReject()); return; }
+            Fill(e[0], 2, 24999); Fill(e[1], 3, 24999); Fill(e[2], 4, 24999);
+            A("{\"type\":\"flatten\",\"account\":\"SIM-X\"}");
+            Check(AgentReject().Contains("account must be one of agent manrae's seats (SIM-A, SIM-B, SIM-C)"), "0.6.0: flatten of an account that is no seat: refused: " + AgentReject());
+            int ca = sima.Calls.Count, cc = simc.Calls.Count;
+            A("{\"type\":\"flatten\",\"account\":\"SIM-B\"}");
+            for (int i = 0; i < 3; i++) { Last2(); Advance(1000); }
+            Order fb = FlatOn(simb);
+            Check(fb != null && fb.Quantity == 3 && fb.OrderAction == OrderAction.Sell && sima.Calls.Count == ca && simc.Calls.Count == cc, "0.6.0: flatten SIM-B: its legs cancelled and its 3 closed at market; SIM-A and SIM-C untouched");
+            if (fb != null) Fills(fb, "FB", 25000);
+            Last2(); Advance(1500);
+            Check(Flat(simb) && ChartBridgeAgents.OwnerAgent("SIM-B", "MNQ") == null && !Flat(sima) && !Flat(simc), "0.6.0: SIM-B flat and no longer owned; the others hold");
+            A("{\"type\":\"flatten\"}");
+            FlattenFills(25000);
+            Check(Abc().All(Flat) && Abc().All(a => ChartBridgeAgents.OwnerAgent(a.Name, "MNQ") == null), "0.6.0: flatten without account: every seat (one message for the whole group)");
+        });
+
+        Part("0.6.0 flatAt across seats", () =>
+        {
+            GroupFresh();
+            Order[] e = PlaceAll(GPlan(NewId(), "2,3,4", Rev()));
+            if (e.Any(x => x == null)) { Check(false, "0.6.0 flatAt: placed: " + AgentReject()); return; }
+            Fill(e[0], 2, 24999); Fill(e[1], 3, 24999); Fill(e[2], 4, 24999);
+            SetPos(simb, mnq, 4); ClearMoves();   // one more contract on SIM-B that is not the agent's (its trade holds 3)
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            int s0 = N(page);
+            for (int i = 0; i < 3; i++) { Last2(); Advance(1000); }
+            Order fa = FlatOn(sima), fb = FlatOn(simb), fc = FlatOn(simc);
+            Check(fa != null && fb != null && fc != null && fa.Quantity == 2 && fb.Quantity == 3 && fc.Quantity == 4, "0.6.0: at flatAt every seat is closed, each to its own trade (SIM-B: 3, never its 4): " +
+                  (fa != null ? fa.Quantity : -1) + " " + (fb != null ? fb.Quantity : -1) + " " + (fc != null ? fc.Quantity : -1));
+            Check(page.Skip(s0).Any(x => x.Contains("manrae flattened at 15:55 by its rules")), "0.6.0: the pages are told");
+            foreach (Order f in new[] { fa, fb, fc }) if (f != null) Fills(f, "F" + f.Account.Name, 25000);
+            for (int i = 0; i < 4; i++) { Last2(); Advance(1000); }   // the next close of a job waits 3 s
+            Check(Flat(sima) && Flat(simc) && PosOf(simb, mnq) == 1 && Logged("SIM-B MNQ: agent manrae's 3 closed; the rest (1) is not agent manrae's: ChartBridge did not close it"),
+                  "0.6.0: the per-seat close cap: SIM-B's other contract is left and said");
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        Part("0.6.0 kill and heartbeat", () =>
+        {
+            GroupFresh();
+            Order[] e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
+            int a0 = N(agentOut);
+            P("{\"type\":\"agentKill\",\"cid\":\"k1\",\"agent\":\"manrae\",\"on\":true}");
+            List<string> ans = AnswersFrom(a0);
+            Check(e.All(x => x != null && x.OrderState == OrderState.Cancelled) && ans.Count == 3 && ans.All(x => x.Contains("\"answer\":\"expired\"") && x.Contains("the kill switch is on")) &&
+                  ans[0].EndsWith("\"account\":\"SIM-A\"}") && ans[2].EndsWith("\"account\":\"SIM-C\"}"), "0.6.0: Kill cancels the unfilled entry on every seat, an expired answer per seat: " + string.Join(" | ", ans));
+            P("{\"type\":\"agentKill\",\"cid\":\"k2\",\"agent\":\"manrae\",\"on\":false}");
+            GroupFresh();
+            e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
+            Silent(6000);
+            Check(e.All(x => x != null && x.OrderState == OrderState.Cancelled), "0.6.0: heartbeat lost: every seat's unfilled entry cancelled");
+            GroupFresh();
+            e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
+            Mode("manrae", "shadow");
+            Check(e.All(x => x != null && x.OrderState == OrderState.Cancelled), "0.6.0: leaving Auto: every seat's unfilled entry cancelled");
+        });
+
+        Part("0.6.0 join and leave while exposed", () =>
+        {
+            GroupFresh();
+            Order[] e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
+            if (e.Any(x => x == null)) { Check(false, "0.6.0 join: placed: " + AgentReject()); return; }
+            foreach (Order x in e) Fill(x, 1, 24999);
+            long r0 = Rev();
+            int as0 = N(agentOut);
+            P("{\"type\":\"accountGroup\",\"cid\":\"lv\",\"account\":\"SIM-C\",\"group\":null}");
+            Check(Any(agentOut, as0, "{\"type\":\"accountState\",\"account\":\"SIM-C\",\"sim\":true,\"kind\":\"personal\""), "fix 1: a seat that left while holding his trade still gets its accountState (now personal)");
+            Check(Rev() > r0 && Last(agentOut, "welcome").Contains("\"seats\":[\"SIM-A\",\"SIM-B\"]"), "0.6.0: SIM-C leaves the group: seatsRev up, a fresh welcome: " + Last(agentOut, "welcome"));
+            Check(ChartBridgeAgents.OwnerAgent("SIM-C", "MNQ") == "manrae" && ChartBridgeAgents.AgentOfAccount("SIM-C") == "manrae" && !M.IsEntrySeat("SIM-C") && M.HasSeat("SIM-C"),
+                  "0.6.0: holding the agent's trade, SIM-C stays its own and protected until flat");
+            Last2();
+            P("{\"type\":\"order\",\"cid\":\"pc1\",\"account\":\"SIM-C\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24999}");
+            Check(PageReject().Contains("SIM-C MNQ belongs to agent manrae"), "0.6.0: the page's entry there is refused (the owner lock): " + PageReject());
+            Check((ChartBridgeAgents.EntryCheck("agent:manrae", simc, "NQ") ?? "").Contains("agent manrae trades its own account group Lucid (SIM-A, SIM-B) only"), "0.6.0: and no new entry of the agent's own there");
+            P("{\"type\":\"accountGroup\",\"cid\":\"jn\",\"account\":\"SIM-D\",\"group\":\"g1\",\"highClose\":50000}");
+            long r1 = Rev();
+            Check(r1 > Rev() - 1 && r1 > r0 && Last(agentOut, "welcome").Contains("\"seats\":[\"SIM-A\",\"SIM-B\",\"SIM-D\"]") && Last(agentOut, "accountState").Contains("\"account\":\"SIM-D\""),
+                  "0.6.0: SIM-D joins: a seat from the next plan (seatsRev up, a fresh welcome and its accountState): " + PageReject());
+            A(GPlan(NewId(), "1,1,1", r0));
+            Check(AgentReject().Contains("the group changed; size again"), "0.6.0: a plan sized before the change is refused whole");
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            FlattenFills(25000);
+            Check(Abc().All(Flat), "0.6.0: flatAt closes the seat that left too");
+            Advance(1000);
+            Check(!M.HasSeat("SIM-C") && ChartBridgeAgents.OwnerAgent("SIM-C", "MNQ") == null && ChartBridgeAgents.AgentOfAccount("SIM-C") == null, "0.6.0: flat, the seat that left is no longer the agent's");
+            int as1 = N(agentOut);
+            simc.Items[AccountItem.CashValue] = 49321; Tick(); Tick();
+            Check(!Any(agentOut, as1, "{\"type\":\"accountState\",\"account\":\"SIM-C\""), "fix 1: once flat and dropped, it gets no accountState (its balance changed)");
+            simc.Items.Remove(AccountItem.CashValue);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+            P("{\"type\":\"accountGroup\",\"cid\":\"j2\",\"account\":\"SIM-D\",\"group\":null}");
+            P("{\"type\":\"accountGroup\",\"cid\":\"j3\",\"account\":\"SIM-C\",\"group\":\"g1\"}");
+            Check(string.Join(",", ChartBridgeGroups.MembersOf("g1")) == "SIM-A,SIM-B,SIM-C", "0.6.0: the group back to SIM-A, SIM-B, SIM-C: " + PageReject());
+        });
+
+        Part("0.6.0 group deleted while exposed", () =>
+        {
+            GroupFresh();
+            Order[] e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
+            if (e.Any(x => x == null)) { Check(false, "0.6.0 delete: placed: " + AgentReject()); return; }
+            foreach (Order x in e) Fill(x, 1, 24999);
+            P("{\"type\":\"groupDelete\",\"cid\":\"gdel\",\"group\":\"g1\"}");
+            Check(M.GroupId == null && FileText("agent-manrae-account.txt").Contains("account\t-") && Last(agentOut, "welcome").Contains("\"account\":null") && Last(agentOut, "welcome").Contains("\"group\":null,\"seats\":null"),
+                  "0.6.0: its group deleted: the agent goes to None (saved, a fresh welcome): " + PageReject());
+            Check(Abc().All(a => ChartBridgeAgents.OwnerAgent(a.Name, "MNQ") == "manrae") && Logged("SIM-A, SIM-B, SIM-C still hold its trade: owned and protected until flat, no new entry"),
+                  "0.6.0: each seat holding its trade stays the agent's until flat");
+            A(GPlan(NewId(), "1,1,1", Rev()));
+            Check(AgentReject().Contains("account is None"), "0.6.0: no new entry on None: " + AgentReject());
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            FlattenFills(25000);
+            Advance(1000);
+            Check(Abc().All(Flat) && Abc().All(a => ChartBridgeAgents.OwnerAgent(a.Name, "MNQ") == null && !M.HasSeat(a.Name)), "0.6.0: flattened at flatAt, then no longer the agent's");
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
+        });
+
+        Part("0.6.0 the 17:00 reset", () =>
+        {
+            GroupFresh();
+            Order[] e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
+            if (e[1] != null) Fill(e[1], 1, 24999);
+            Func<DateTime> was = ChartBridgeBranches.ClockUtc;
+            ChartBridgeBranches.Forget();
+            try { File.Delete(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+            ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 9, 21, 5, 0, DateTimeKind.Utc);   // 17:05 EDT
+            try
+            {
+                int s0 = N(page);
+                ChartBridgeBranches.Check();
+                Check(M.GroupId == "g1" && Any(page, s0, "Daily reset (17:00 ET): agent manrae stays on group Lucid (SIM-A, SIM-B, SIM-C): SIM-A, SIM-B, SIM-C have a position or a working order"),
+                      "0.6.0 reset: a seat exposed: the agent stays on its group, the note names the accounts holding something");
+                Close(simb, mnq, 25000);   // its trade closes (an execution), then every seat is flat with nothing working
+                SettleAll(); Settle(sima);
+                ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 12, 21, 5, 0, DateTimeKind.Utc);   // a Monday, flat
+                ChartBridgeBranches.Check();
+                Check(M.GroupId == null && FileText("agent-manrae-account.txt").Contains("account\t-"), "0.6.0 reset: every seat flat and idle: None");
+            }
+            finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
+        });
+
+        Part("0.6.0 the copier and the bot", () =>
+        {
+            GroupFresh();
+            ChartBridgeSwitches.Note("copier", "on");
+            ChartBridgeCopier.HarnessManual = true;
+            ChartBridgeCopier.Start();
+            try
+            {
+                P("{\"type\":\"copierFollower\",\"cid\":\"cf1\",\"account\":\"SIM-A\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+                Check(PageReject().Contains("SIM-A is a seat of agent manrae (group Lucid): the copier does not trade it"), "0.6.0: a seat is never a copier follower: " + PageReject());
+                P("{\"type\":\"copierSet\",\"cid\":\"cf2\",\"leader\":\"SIM-B\",\"mode\":\"executions\"}");
+                Check(PageReject().Contains("SIM-B is a seat of agent manrae (group Lucid): the copier does not trade it"), "0.6.0: nor the copier's leader: " + PageReject());
+                P("{\"type\":\"copierFollower\",\"cid\":\"cf3\",\"account\":\"SIM-D\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+                P("{\"type\":\"accountGroup\",\"cid\":\"cf4\",\"account\":\"SIM-D\",\"group\":\"g1\"}");
+                Check(PageReject().Contains("SIM-D is a copier follower: it cannot join Lucid, which agent manrae trades") && ChartBridgeGroups.GroupOf("SIM-D") == null, "0.6.0: a copier follower cannot join a group an agent trades: " + PageReject());
+            }
+            finally
+            {
+                ChartBridgeCopier.Stop(); ChartBridgeCopier.HarnessManual = false; ChartBridgeSwitches.Note("copier", "off");
+                File.WriteAllText(Path.Combine(Dir, "copier.txt"), "# made-up\n# touched\n");
+            }
+            ChartBridgeSwitches.Note("bot", "on");
+            ChartBridgeBot.Start(false);
+            try
+            {
+                P("{\"type\":\"botAccount\",\"cid\":\"bt1\",\"account\":\"SIM-B\"}");
+                Check(PageReject().Contains("SIM-B is a seat of agent manrae (group Lucid): the bot does not trade it"), "0.6.0: a seat is never the bot's: " + PageReject());
+                P("{\"type\":\"botAccount\",\"cid\":\"bt2\",\"account\":\"SIM-D\"}");
+                P("{\"type\":\"accountGroup\",\"cid\":\"bt3\",\"account\":\"SIM-D\",\"group\":\"g1\"}");
+                Check(PageReject().Contains("SIM-D is the bot's account: it cannot join Lucid, which agent manrae trades") && ChartBridgeGroups.GroupOf("SIM-D") == null, "0.6.0: the bot's account cannot join it: " + PageReject());
+                P("{\"type\":\"botAccount\",\"cid\":\"bt4\",\"account\":null}");
+            }
+            finally { ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off"); }
+        });
+
+        Part("0.6.0 restart recovery", () =>
+        {
+            GroupFresh();
+            Order[] e = PlaceAll(GPlan(NewId(), "1,2,1", Rev()));
+            if (e.Any(x => x == null)) { Check(false, "0.6.0 restart: placed: " + AgentReject()); return; }
+            Fill(e[0], 1, 24999); Fill(e[1], 2, 24999); Fill(e[2], 1, 24999);
+            P("{\"type\":\"accountGroup\",\"cid\":\"rr1\",\"account\":\"SIM-C\",\"group\":null}");
+            Restart();
+            Check(M.HasSeat("SIM-C") && !M.IsEntrySeat("SIM-C") && Abc().All(a => ChartBridgeAgents.OwnerAgent(a.Name, "MNQ") == "manrae"),
+                  "0.6.0: after a restart the day file's #seat lines bring back each seat's trade, the one that left the group too");
+            Check(agentOut.Any(x => x.StartsWith("{\"type\":\"position\",\"account\":\"SIM-C\",\"root\":\"MNQ\",\"qty\":1")), "0.6.0: the snapshot covers every seat it follows");
+            SettleAll(); Settle(sima);
+            Advance(1000);
+            Check(!M.HasSeat("SIM-C"), "0.6.0: flat: the seat that left is dropped");
+            P("{\"type\":\"accountGroup\",\"cid\":\"rr2\",\"account\":\"SIM-C\",\"group\":\"g1\"}");
+        });
+
+        Part("0.6.0 maxTrades and maxLosses per plan", () =>
+        {
+            GroupFresh();
+            P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 2, 1));
+            Check(FileText("agent-manrae-rules.txt").Contains("maxTrades\t2") && FileText("agent-manrae-rules.txt").Contains("maxLosses\t1"), "0.6.0: maxTrades 2, maxLosses 1: " + PageReject());
+            Order[] e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
+            if (e.Any(x => x == null)) { Check(false, "0.6.0 counts: placed: " + AgentReject()); return; }
+            foreach (Order x in e) Fill(x, 1, 24999);
+            Close(sima, mnq, 24997); Close(simb, mnq, 25003); Close(simc, mnq, 25003);   // -4, +8, +8: one seat lost, the plan won
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains("\"trades\":1,\"losses\":0,\"pnlToday\":12,"), "0.6.0 Q3 a: one plan is one trade; the group's net is above 0: no loss: " + st);
+            e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
+            if (e.Any(x => x == null)) { Check(false, "0.6.0 counts: placed again: " + AgentReject()); return; }
+            foreach (Order x in e) Fill(x, 1, 24999);
+            int s0 = N(page);
+            Close(sima, mnq, 24997); Close(simb, mnq, 24997);
+            Check(Last(agentOut, "agentState").Contains("\"losses\":0,"), "0.6.0: a loss counts only once every seat of the plan has closed");
+            Close(simc, mnq, 25000);   // -4, -4, +2: the group's net is -6
+            st = Last(agentOut, "agentState");
+            Check(st.Contains("\"trades\":2,\"losses\":1,\"pnlToday\":6,") && st.Contains("1 losing trades today (maxLosses 1)") && Any(page, s0, "Agent manrae stands down: 1 losing trades today"),
+                  "0.6.0 Q3 a: the group's net below 0 is one loss; maxLosses stands it down, said when the last seat closed (itself a gain): " + st);
+            A(GPlan(NewId(), "1,1,1", Rev()));
+            Check(AgentReject().Contains("agent manrae has made 2 trades today (maxTrades 2)"), "0.6.0: maxTrades counts plans, not seats: " + AgentReject());
+        });
+
+        Part("0.6.0 clean up", () =>
+        {
+            try { File.Delete(GroupsFile); } catch (Exception) { }
+            ChartBridgeGroups.StartNow();
+            SettleAll(); Settle(sima);
+        });
+    }
+
+    // 0.6.0: an agent's seat object (ChartBridgeAgent.Seat: its ledger, Sticky, Flats), for the checks that look inside.
+    static object SeatObj(ChartBridgeAgent a, string account)
+    {
+        System.Collections.IDictionary seats = (System.Collections.IDictionary)typeof(ChartBridgeAgent).GetField("Seats", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(a);
+        return seats[account];
+    }
+
     static void Part(string name, Action body) { try { body(); } catch (Exception ex) { Check(false, name + " threw: " + ex.GetType().Name + ": " + ex.Message); } }
     static void ClearMoves() { ((System.Collections.IDictionary)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null)).Clear(); }
     static HashSet<string> ReplayedSet() { return (HashSet<string>)typeof(ChartBridgeServer).GetField("Replayed", PS).GetValue(null); }
@@ -2979,7 +3501,7 @@ public static class AgentHarness
         Fresh();
         File.WriteAllText(rf, "# made-up\n# test\nroots\tMNQ\nwhatever\tthing\n");
         typeof(ChartBridgeAgent).GetMethod("LoadRules", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, null);
-        HashSet<string> sticky = (HashSet<string>)typeof(ChartBridgeAgent).GetField("Sticky", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
+        HashSet<string> sticky = (HashSet<string>)SeatObj(M, "SIM-E").GetType().GetField("Sticky").GetValue(SeatObj(M, "SIM-E"));   // 0.6.0: the seat's own
         object sync = typeof(ChartBridgeAgent).GetField("Sync", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
         lock (sync) sticky.Add("ES");
         int rj4 = Count(page, "reject");
@@ -3133,11 +3655,12 @@ public static class AgentHarness
         Type jt = typeof(ChartBridgeAgent).GetNestedType("FlatJob", BindingFlags.NonPublic);
         object job = Activator.CreateInstance(jt, true);
         jt.GetField("Root").SetValue(job, "MNQ"); jt.GetField("Inst").SetValue(job, mnq); jt.GetField("Owned").SetValue(job, false); jt.GetField("StartMs").SetValue(job, clock);
-        System.Collections.IDictionary flats = (System.Collections.IDictionary)typeof(ChartBridgeAgent).GetField("Flats", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
+        object seatE = SeatObj(M, "SIM-E");   // 0.6.0: the flatten jobs and TradeLost are the seat's own
+        System.Collections.IDictionary flats = (System.Collections.IDictionary)seatE.GetType().GetField("Flats").GetValue(seatE);
         object sync = typeof(ChartBridgeAgent).GetField("Sync", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
         lock (sync) flats["MNQ 12-26"] = job;
         int u0 = N(page);
-        typeof(ChartBridgeAgent).GetMethod("TradeLost", BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(string), typeof(string) }, null).Invoke(M, new object[] { "MNQ", null });
+        seatE.GetType().GetMethod("TradeLost", BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(string), typeof(string) }, null).Invoke(seatE, new object[] { "MNQ", null });
         Check(page.Skip(u0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(lost)) == 1, "0.5.7 (review of #47): a flatten job that does not own the pair holds nothing: the lost-trade error at once");
         lock (sync) flats.Remove("MNQ 12-26");
         Settle(sime);

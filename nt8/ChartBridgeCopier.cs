@@ -1087,6 +1087,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (cap != null) { label = "position limit"; why = a.Name + ": " + cap; return null; }
             string owned = ChartBridgeAgents.EntryCheck("copier", a, fRoot);   // 0.5.0 agents: the owner lock (an agent's account and root refuses the copier's entries)
             if (owned != null) { label = "agent"; why = owned; return null; }
+            string seat = ChartBridgeAgents.AccountTakenWhy(a.Name, "the copier");   // 0.6.0: an agent's seat (a group it trades) is never copied to
+            if (seat != null) { label = "agent"; why = seat; return null; }
             string grp = ChartBridgeGroups.EntryCheck("copier", a, fRoot, le.Buy, fq, true, false);   // 0.5.8 (G3 a): one direction per group (a copy is always an entry)
             if (grp != null) { label = "group"; why = grp; return null; }
             return a;

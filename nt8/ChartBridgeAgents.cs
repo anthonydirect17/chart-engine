@@ -22,6 +22,11 @@
 //   the owner lock: an (account, root) an agent owns refuses entries from every other source (PlaceOrderLocked and the copier's
 //     Eligible ask EntryCheck), and an agent is refused wherever anything else holds a position or a working order;
 //   accounts: never the bot's, never the copier's leader or a follower, never another agent's.
+// 0.6.0 (group trading, Anthony 2026-10-15): an agent trades one account or a whole prop group. Each account it trades is a SEAT
+// (ChartBridgeAgent.Seat: its own open trade, ledger, owner locks, flatten jobs and lost-trade errors). One plan, one decision:
+// ChartBridge places it on every seat that can take it, each with the size the runner gave it (plan.sizes), each checked on its
+// own; a seat that cannot take it sits that trade out. A seat that leaves the group while it holds the agent's trade stays the
+// agent's (owned, protected, flattened at flatAt) until flat, and takes no new entry.
 // Written in C# 5 syntax (NinjaTrader 8 compiles NinjaScript as C# 5).
 #region Using declarations
 using System;
@@ -241,7 +246,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static ChartBridgeAgent[] All() { return Volatile.Read(ref agents); }
 
         // 0.5.8: a group, rules or limits change: every agent its accountState again (when it changed).
-        public static void AccountStatesChanged() { foreach (ChartBridgeAgent a in All() ?? new ChartBridgeAgent[0]) a.SendAccountState(false); }
+        // 0.6.0: and a group's membership: each agent on a group reads its seats again (seatsRev up, welcome) first.
+        public static void AccountStatesChanged() { foreach (ChartBridgeAgent a in All() ?? new ChartBridgeAgent[0]) { a.RefreshSeats(); a.SendAccountState(false); } }
         public static ChartBridgeAgent Get(string id)
         {
             foreach (ChartBridgeAgent a in All()) if (a.Id == id) return a;
@@ -441,10 +447,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- the owner lock (PROTOCOL.md "Agent channel", section 6)
         // The agent that owns (account, root) now, or null. Built to the ruling's question only: whether an agent owns it.
+        // 0.6.0: per (account, root) still: any seat of an agent (one it trades now, or one that left its group while it holds the
+        // agent's trade).
         public static string OwnerAgent(string account, string root)
         {
             if (string.IsNullOrEmpty(account) || string.IsNullOrEmpty(root)) return null;
-            foreach (ChartBridgeAgent a in All()) if (a.Account == account && a.Owns(root)) return a.Id;
+            foreach (ChartBridgeAgent a in All()) if (a.OwnsOn(account, root)) return a.Id;
             return null;
         }
 
@@ -459,7 +467,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string id = source.Substring(6);
                 ChartBridgeAgent ag = Get(id);
                 if (ag == null) return "there is no agent " + id + " (agents in config.txt)";
-                if (ag.Account != account.Name) return "agent " + id + " trades its own account " + ag.Account + " only";
+                if (!ag.IsEntrySeat(account.Name)) return "agent " + id + " trades its own account " + ag.AccountWords() + " only";   // 0.6.0: a seat it trades now (never one that left its group)
                 string conflict = ag.AccountConflict();
                 if (conflict != null) return conflict;
                 if (owner != null && owner != id) return account.Name + " " + root + " belongs to agent " + owner + " until it is flat";
@@ -505,17 +513,44 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // The agent whose CHOSEN account (chosen on the page: agent-<id>-account.txt) this is, for the bot's and the copier's
         // refusals, or null. An agent on None (no file, or "-": 0.5.7) claims nothing against anyone (lead's default).
+        // 0.6.0: every seat counts: each account of the group it trades, and a seat that left while it holds the agent's trade.
         public static string AgentOfAccount(string name)
         {
             if (string.IsNullOrEmpty(name)) return null;
-            foreach (ChartBridgeAgent a in All()) if (a.Chosen && string.Equals(a.Account, name, StringComparison.OrdinalIgnoreCase)) return a.Id;
+            foreach (ChartBridgeAgent a in All()) if (a.Claims(name)) return a.Id;
             return null;
         }
 
         public static string AccountTakenWhy(string name, string by)
         {
             string id = AgentOfAccount(name);
-            return id == null ? null : name + " is agent " + id + "'s account: " + by + " does not trade it (choose another account for agent " + id + " on the Agent tab first)";
+            if (id == null) return null;
+            ChartBridgeAgent a = Get(id);
+            string g = a != null ? a.GroupWordsFor(name) : null;
+            return g != null ? name + " is a seat of agent " + id + " (" + g + "): " + by + " does not trade it (choose another account for agent " + id + " on the Agent tab first)"
+                             : name + " is agent " + id + "'s account: " + by + " does not trade it (choose another account for agent " + id + " on the Agent tab first)";
+        }
+
+        // 0.6.0: an account joining a group that an agent trades (ChartBridgeGroups.AccountGroup): refused for the bot's account, the
+        // copier's leader or a follower (on or off), and another agent's account. Null when it may join.
+        public static string JoinRefusal(string name, string groupId) { return JoinRefusal(name, groupId, true); }
+        // refresh false: memory only (the copies of bot-account.txt and copier.txt as they are, the copier's and the agents' memory),
+        // for the check again under ChartBridgeGroups' save (PlaceLock, then its SaveLock: no file read under them).
+        public static string JoinRefusal(string name, string groupId, bool refresh)
+        {
+            if (!Enabled || string.IsNullOrEmpty(name) || string.IsNullOrEmpty(groupId)) return null;
+            List<ChartBridgeAgent> on = All().Where(a => a.OnGroup(groupId)).ToList();
+            if (on.Count == 0) return null;
+            if (refresh) RefreshFiles();   // a page's thread: the copies are read fresh
+            string who = "agent " + on[0].Id, gname = ChartBridgeGroups.NameOf(groupId) ?? groupId;
+            string bot = BotAccountForAgents();
+            if (bot == null) return "bot-account.txt cannot be read or understood, so ChartBridge cannot tell the bot's account: " + name + " cannot join " + gname + ", which " + who + " trades, until it is fixed";
+            if (string.Equals(name, bot, StringComparison.OrdinalIgnoreCase)) return name + " is the bot's account: it cannot join " + gname + ", which " + who + " trades (an agent never shares an account)";
+            string cw = CopierUses(name);
+            if (cw != null) return cw + ": it cannot join " + gname + ", which " + who + " trades (an agent never shares an account)";
+            string other = AgentOfAccount(name);
+            if (other != null && on.All(a => a.Id != other)) return name + " is agent " + other + "'s account: it cannot join " + gname + ", which " + who + " trades (each agent has its own accounts)";
+            return null;
         }
 
         // ---------------------------------------------------------- the /agent/<id> WebSocket (ChartBridgeServer.Handle)
@@ -587,16 +622,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (a != null) a.OnOrderUpdate(o, json);
         }
 
+        // 0.6.0: to the agent of that seat (its ledger is the seat's own).
         public static void OnExec(string account, Instrument inst, MarketPosition side, int qty, double price, string orderId, string json)
         {
             if (!Enabled) return;
-            foreach (ChartBridgeAgent a in All()) if (a.Account == account) a.OnExec(inst, side, qty, price, orderId, json);
+            foreach (ChartBridgeAgent a in All()) if (a.HasSeat(account)) a.OnExec(account, inst, side, qty, price, orderId, json);
         }
 
         public static void OnPosition(Account account, PositionEventArgs e)
         {
             if (!Enabled || account == null || e == null || e.Position == null) return;
-            foreach (ChartBridgeAgent a in All()) if (a.Account == account.Name) { a.OnPosition(e); a.StateChanged(e.Position.Instrument); }
+            foreach (ChartBridgeAgent a in All()) if (a.HasSeat(account.Name)) { a.OnPosition(account.Name, e); a.StateChanged(e.Position.Instrument); }
         }
 
         // Every order update on any account (ChartBridgeOrders.OnOrderUpdate): an agent on that account and root sends agentState
@@ -606,7 +642,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void OnAccountChange(Account account, Instrument inst, Order o)
         {
             if (!Enabled || account == null) return;
-            foreach (ChartBridgeAgent a in All()) if (a.Account == account.Name) { a.NoteOrderId(o); a.StateChanged(inst); }
+            foreach (ChartBridgeAgent a in All()) if (a.HasSeat(account.Name)) { a.NoteOrderId(o); a.StateChanged(inst); }
         }
 
         // ChartBridgeOrders.Auth and the v3 handshake: a signed-in v3 page gets every agent's strip, its open proposals, its last
@@ -624,7 +660,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "agentKill", new[] { "type", "cid", "agent", "on" } },
             { "agentSeen", new[] { "type", "agent", "id", "at" } },
             { "agentAnswer", new[] { "type", "cid", "agent", "id", "answer", "at" } },
-            { "agentAccount", new[] { "type", "cid", "agent", "account", "keepMode" } },   // 0.5.2: keepMode, the mode the page's question named
+            { "agentAccount", new[] { "type", "cid", "agent", "account", "group", "keepMode" } },   // 0.5.2: keepMode, the mode the page's question named; 0.6.0: group (a group id) in place of account
             { "agentRules", new[] { "type", "cid", "agent", "roots", "maxQtyNQ", "maxQtyMNQ", "maxQtyES", "maxQtyMES", "entryFrom", "entryUntil", "flatAt", "maxExpireSec", "maxTrades", "maxLosses" } },
         };
 
@@ -777,12 +813,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             public int Qty, StopTicks, TargetTicks, ExpireSec;
             public bool HasQty, HasStop, HasTarget, HasExpire;
             public double Price, Limit, Risk, Conf, At, ExpiresAt;
+            // 0.6.0 (a group): sizes in seat order (0: that seat sits it out, the runner's call), the seatsRev it was sized for; and,
+            // from the checks, the seats it was checked on, why each that cannot take it sits out, and each seat's result
+            public string SizesText;
+            public int[] Sizes;
+            public bool BadSizes, HasSeatsRev, BadSeatsRev;
+            public long SeatsRev;
+            public string[] SeatNames, Outs, Results;
+            public Order[] Orders;
         }
 
         private class Proposal
         {
             public Plan P;
-            public string Account;
+            public string Account;   // 0.6.0: the account, or "group:<id>" (KeyNow)
             public bool Sim;
             public string State = "open";                 // open, accepting, accepted, rejected, withdrawn, not answered, expired
             public double SeenAt = -1, AnsweredAt = -1;
@@ -811,6 +855,745 @@ namespace NinjaTrader.NinjaScript.AddOns
             public Order Close;
         }
 
+        // ---------------------------------------------------------- a seat (0.6.0): one account the agent trades
+        // Everything ChartBridge follows per account lives here: the open trade and its ledger, the roots it owns until flat
+        // (Sticky), the flatten jobs, the lost-trade errors, the contract-against clock. A single account is one seat; a group is one
+        // seat per member, in the group's order. A seat that left the group while it holds the agent's trade stays (owned, protected,
+        // flattened at flatAt) until flat, and takes no new entry (ChartBridgeAgents.EntryCheck asks IsEntrySeat). Every field is
+        // under the agent's Sync, as before; the code below is the 0.5.8 single-account code, one copy per seat.
+        private sealed class Seat
+        {
+            public readonly string Name;   // the account (NinjaTrader's name)
+            private readonly ChartBridgeAgent ag;
+            private readonly object Sync;
+            public Seat(ChartBridgeAgent agent, string name) { ag = agent; Name = name; Sync = agent.Sync; }
+
+            public string openTag, openRoot;
+            public Instrument openInst;   // the contract of the open trade (the flatten looks at it too, any month; review A5)
+            public int ledQty;
+            public double ledCash, ledAvg;
+            public readonly Dictionary<string, double> LostTrades = new Dictionary<string, double>();   // root -> last error (review A3)
+            public readonly Dictionary<string, string> LostTradeText = new Dictionary<string, string>();
+            public readonly Dictionary<string, string> HeldLost = new Dictionary<string, string>();   // root -> a lost-trade error held while ChartBridge's own flatten runs there (0.5.7)
+            public readonly Dictionary<string, double> HeldSince = new Dictionary<string, double>();   // root -> when the hold began (review of #47: at most 30 s)
+            public readonly HashSet<string> Sticky = new HashSet<string>();   // roots it owns until flat by both readings with no entry
+            public readonly Dictionary<string, FlatJob> Flats = new Dictionary<string, FlatJob>();   // the contract's full name -> its flatten job
+            // the last plan on this seat (agentState.seats, the page's seats table): why it sat out, its size and risk
+            public string Out, LastPlanId;
+            public int LastSize;
+            public double LastRisk;
+
+            private string Id { get { return ag.Id; } }
+            private string Account { get { return Name; } }
+            private Dictionary<string, double> Trades { get { return ag.Trades; } }
+            private Dictionary<string, int[]> Spans { get { return ag.Spans; } }
+            private Dictionary<string, int> EntrySeen { get { return ag.EntrySeen; } }
+            private HashSet<string> Carried { get { return ag.Carried; } }
+            private Dictionary<string, ExcessFill> ExcessByTag { get { return ag.ExcessByTag; } }
+            private Rules RulesNow() { return ag.RulesNow(); }
+            private List<string> FlatRoots() { return ag.FlatRoots(); }
+            private string MonthRoot(Instrument inst) { return ag.MonthRoot(inst); }
+            private bool IsMine(Order o) { return ag.IsMine(o); }
+            private bool IsMyEntry(Order o) { return ag.IsMyEntry(o); }
+            private string CbIdOf(Order o) { return ag.CbIdOf(o); }
+            private void RollDay() { ag.RollDay(); }
+            private string StandDownLocked() { return ag.StandDownLocked(); }
+            private void SaveDay() { ag.SaveDay(); }
+            private void Notify() { ag.Notify(); }
+            private void Log(string text) { ag.Log(text); }
+            private void AgentLog(string text) { ag.AgentLog(text); }
+
+            // Its own entries working on this account: NinjaTrader's list (by name, after a restart too) and those just sent.
+            public List<Order> WorkingEntries()
+            {
+                List<Order> list = new List<Order>();
+                Account a = FindAccount(Name);
+                if (a != null) lock (a.Orders) foreach (Order o in a.Orders) if (IsMyEntry(o) && ChartBridgeOrders.IsWorking(o.OrderState)) list.Add(o);
+                lock (Sync) foreach (Order o in ag.Placed) if (o.Account != null && o.Account.Name == Name && !list.Contains(o) && ChartBridgeOrders.IsWorking(o.OrderState)) list.Add(o);
+                return list;
+            }
+
+            // Anything of the agent's here: its open trade, a working entry, a root it owns, a flatten job, a lost-trade error not yet flat.
+            public bool Exposed()
+            {
+                bool ex;
+                lock (Sync) ex = openTag != null || Flats.Count > 0 || LostTrades.Count > 0 || HeldLost.Count > 0;
+                return ex || WorkingEntries().Count > 0 || FlatRoots().Any(r => Owns(r));
+            }
+
+            // Its open trade as the strip shows it ({root, qty, avgPrice}), or null. Under Sync.
+            public string PositionJsonLocked()
+            {
+                return openTag != null && ledQty != 0 ? "{\"root\":" + CbJson.Str(openRoot) + ",\"qty\":" + ledQty.ToString(CultureInfo.InvariantCulture) + ",\"avgPrice\":" + CbJson.Num(ledAvg) + "}" : "null";
+            }
+
+            // 0.5.2 re-check: does the agent own a position on root from an earlier session? Its open trade's tag is carried, or (no
+            // trade record yet: after a start, before the executions are read again) the position is held under its own legs of a
+            // carried trade. A position of this session (its own record, or legs of a tag not carried) never counts.
+            public bool FromBefore(string root)
+            {
+                if (!Owns(root)) return false;
+                string open;
+                HashSet<string> carried;
+                lock (Sync) { open = openTag != null && openRoot == root ? openTag : null; carried = new HashSet<string>(Carried.Select(t => t.Length > 8 ? t.Substring(0, 8) : t)); }
+                if (open != null) return carried.Contains(open.Length > 8 ? open.Substring(0, 8) : open);
+                Account a = FindAccount(Account);
+                Instrument inst = ChartBridgeServer.InstrumentFor(root);
+                if (a == null || inst == null) return false;
+                if (ChartBridgeOrders.AgentListed(a, inst) == 0 && ChartBridgeOrders.AgentEffective(a, inst) == 0) return false;
+                return ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && LegRx.IsMatch(o.Name ?? "") && carried.Contains(ChartBridgeAgents.TagOf(o.Name) ?? ""));
+            }
+
+
+            public bool Owns(string root)
+            {
+                string acct;
+                bool open, stick;
+                lock (Sync) { acct = Name; open = openTag != null && openRoot == root; stick = Sticky.Contains(root); }
+                Account a = FindAccount(acct);
+                if (open && LedgerAgainst(root, a) == null) return true;   // its open trade, unless the account holds the other side (review A1)
+                Instrument inst = ChartBridgeServer.InstrumentFor(root);
+                if (open) return a != null && inst != null && ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && ChartBridgeAgents.IsAgentEntry(o));
+                if (a == null || inst == null) return stick;
+                List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
+                bool entryWorks = may.Any(o => IsMine(o) && ChartBridgeAgents.IsAgentEntry(o)), mineWorks = may.Any(o => IsMine(o));
+                if (entryWorks) return true;
+                int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
+                int held = p1 != 0 ? p1 : p2;
+                // its own stop or target that would close what the account holds (a sell for a long, a buy for a short) protects it there
+                bool legsWork = held != 0 && may.Any(o => IsMine(o) && LegRx.IsMatch(o.Name ?? "") && (o.OrderAction == OrderAction.Sell) == (held > 0));
+                if (legsWork && (p1 != 0 || p2 != 0)) return true;   // its own stop or target protects a position there (after a restart too)
+                if (!stick) return false;
+                bool unnoted = ChartBridgeOrders.AgentUnnotedFill(a, inst, Now()) != null;   // a fill NinjaTrader shows whose event is not through yet
+                if (p1 == 0 && p2 == 0 && !mineWorks && !unnoted) { lock (Sync) { if (!(openTag != null && openRoot == root)) Sticky.Remove(root); } return false; }   // flat by both readings, nothing of it working: the lock clears
+                return true;
+            }
+
+
+            // Its open trade on this root is against what the account holds: both readings of the trade's contract show a position on
+            // the other side (it ended where ChartBridge could not see it, and the account holds someone else's). The text, or null.
+            private string LedgerAgainst(string root, Account a) { return LedgerAgainst(root, a, false); }
+
+            // forDrop: the trade is ended only once this has held for 3 s with no unnoted fill (review A C4).
+            private string LedgerAgainst(string root, Account a, bool forDrop)
+            {
+                Instrument li;
+                int q;
+                lock (Sync) { if (openTag == null || openRoot != root) return null; li = openInst; q = ledQty; }
+                if (a == null || q == 0) { lock (Sync) AgainstSince.Remove(root); return null; }
+                if (li == null) li = ChartBridgeServer.InstrumentFor(root);
+                if (li == null) return null;
+                int p1 = ChartBridgeOrders.AgentListed(a, li), p2 = ChartBridgeOrders.AgentEffective(a, li);
+                double now = Now();
+                if (p1 == 0 || p2 == 0 || Math.Sign(p1) == Math.Sign(q) || Math.Sign(p2) == Math.Sign(q)) { lock (Sync) AgainstSince.Remove(root); return null; }
+                string text = "its trade holds " + q + " but " + a.Name + " " + root + " shows " + p1;
+                if (!forDrop) return text;   // the owner lock and the flatten: at once (never the agent's while the account holds the other side)
+                // review A C4: only once it has held for 3 s with no fill NinjaTrader shows ahead of its event (a late execution of the
+                // agent's own close would otherwise read as someone else's position for a moment)
+                bool unnoted = ChartBridgeOrders.AgentUnnotedFill(a, li, now) != null;
+                lock (Sync)
+                {
+                    double since;
+                    if (unnoted || !AgainstSince.TryGetValue(root, out since)) { AgainstSince[root] = now; return null; }
+                    if (now - since < ChartBridgeAgents.AgainstGraceMs) return null;
+                }
+                return text;
+            }
+
+            private readonly Dictionary<string, double> AgainstSince = new Dictionary<string, double>();   // root -> since when its trade is against the account
+
+            // The contract a flatten job closes: the served one by Owns, another month only while its own open trade holds it.
+            private bool OwnsContract(string root, Instrument inst, Account a)
+            {
+                Instrument served = ChartBridgeServer.InstrumentFor(root);
+                if (served == null || ChartBridgeAgents.SameContract(inst, served)) return Owns(root);
+                lock (Sync) if (!(openTag != null && openRoot == root && ChartBridgeAgents.SameContract(openInst, inst) && ledQty != 0)) return false;
+                return LedgerAgainst(root, a) == null;
+            }
+
+            // The most a flatten may close on that contract: its open trade's own quantity there; with no trade followed (after a restart
+            // before the executions are read, or none), the agent's stop legs' contracts when the job started (review A1).
+            private int CloseCap(string root, Instrument inst, FlatJob j)
+            {
+                lock (Sync)
+                    if (openTag != null && openRoot == root && (openInst == null || ChartBridgeAgents.SameContract(openInst, inst)) && ledQty != 0) return Math.Abs(ledQty);
+                return Math.Max(0, j.LegQty - j.ClosedQty);   // each close's fill comes off it (review A C2)
+            }
+
+            // Every execution on this agent's account (ChartBridgeServer.Deliver). Follows the agent's trade: it opens with the first fill
+            // of its entry (a trade, even part filled) and closes when that position is flat again, whatever closed it; its realized
+            // dollars come from those executions (as the bot's).
+            public void OnExec(Instrument inst, MarketPosition side, int qty, double price, string orderId, string json)
+            {
+                if (inst == null || qty <= 0) return;
+                string root = ChartBridgeServer.RootFor(inst) ?? MonthRoot(inst);   // any contract month of its roots (review A5)
+                if (root == null) return;
+                Rules r = RulesNow();
+                if (!r.Roots.Contains(root)) return;
+                Order o = ag.FindOrder(orderId, Name);
+                string entryTag = IsMyEntry(o) ? ChartBridgeAgents.TagOf(o.Name) : null;
+                bool mine = o != null && IsMine(o);
+                // section 10 item 7: while it owns the pair, every fill there reaches the agent, its own or not (Anthony's Flatten, a close
+                // in NinjaTrader: role other, cbId null when the order is not ChartBridge's), read before this fill is booked
+                bool tell = mine || OwnsContract(root, inst, FindAccount(Account));
+                if (tell && json != null && json.EndsWith("}", StringComparison.Ordinal))   // section 10: ChartBridge's id and the order's role
+                    json = json.Substring(0, json.Length - 1) + ",\"cbId\":" + Str(CbIdOf(o)) + ",\"role\":" + CbJson.Str(mine ? ChartBridgeOrders.AgentRoleFor(o) : "other") + "}";   // 10.7: a role only for its own orders (ag:<id>, or legs of its entry's tag)
+                RollDay();
+                string closedTag = null, opened = null, netted = null, sdWas = null;
+                bool spanChanged = false;
+                double pnl = 0;
+                ChartBridgeClient c;
+                lock (Sync)
+                {
+                    // review E1: a late execution of an entry whose trade the crossing rule just closed (the close bigger than the trade)
+                    // nets against that close: the trade's result and its contracts grow by the matched part; only the true net (any rest
+                    // of this fill) may open a trade again
+                    ExcessFill ex;
+                    if (entryTag != null && openTag == null && ExcessByTag.TryGetValue(entryTag, out ex) && ex.Qty > 0 && (side == MarketPosition.Long ? 1 : -1) == ex.TradeSign)
+                    {
+                        int m = Math.Min(qty, ex.Qty);
+                        double was;
+                        if (Trades.TryGetValue(ex.Key, out was) && !double.IsNaN(was)) Trades[ex.Key] = Math.Round(was + m * (ex.Price - price) * ex.TradeSign * ex.Pv, 2);
+                        int[] sp0;
+                        if (Spans.TryGetValue(ex.Key, out sp0)) sp0[1] += m;
+                        int seen0;
+                        EntrySeen.TryGetValue(entryTag, out seen0);
+                        EntrySeen[entryTag] = seen0 + m;
+                        ex.Qty -= m;
+                        qty -= m;
+                        netted = ex.Key;
+                    }
+                    if (entryTag != null && qty > 0)
+                    {
+                        // A trade opens with the first fill of its entry (counted once, also after a restart: the executions are read again
+                        // then). Each trade knows which of its entry's contracts it covers (Spans: first, count; in the day file), so the
+                        // same entry filling again after its first part already closed (a part fill, then the rest) opens a NEW trade,
+                        // "<tag>-2", whose result counts in losses, pnlToday and maxLosses (review A-S3), and a replay never counts twice.
+                        int seen;
+                        EntrySeen.TryGetValue(entryTag, out seen);
+                        seen += qty;
+                        EntrySeen[entryTag] = seen;
+                        string inSpan = null;
+                        foreach (KeyValuePair<string, int[]> sp in Spans)
+                            if ((sp.Key == entryTag || sp.Key.StartsWith(entryTag + "-", StringComparison.Ordinal)) && seen > sp.Value[0] && seen <= sp.Value[0] + sp.Value[1]) inSpan = sp.Key;
+                        double was;
+                        if (inSpan != null)
+                        {
+                            if (openTag == null && Trades.TryGetValue(inSpan, out was) && double.IsNaN(was)) { openTag = inSpan; openRoot = root; openInst = inst; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Add(root); }
+                        }
+                        else if (openTag != null && (openTag == entryTag || openTag.StartsWith(entryTag + "-", StringComparison.Ordinal)))
+                        {
+                            int[] sp;
+                            if (Spans.TryGetValue(openTag, out sp)) sp[1] = seen - sp[0];   // more of the same entry while its trade is open
+                            spanChanged = true;
+                        }
+                        else if (openTag == null)
+                        {
+                            string key = entryTag;
+                            for (int n = 2; Trades.ContainsKey(key); n++) key = entryTag + "-" + n.ToString(CultureInfo.InvariantCulture);
+                            openTag = key; openRoot = root; openInst = inst; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Add(root);
+                            Trades[key] = double.NaN; Spans[key] = new[] { seen - qty, qty }; opened = key;
+                        }
+                    }
+                    if (qty > 0 && openTag != null && root == openRoot && (openInst == null || ChartBridgeAgents.SameContract(inst, openInst)))
+                    {
+                        int signed = side == MarketPosition.Long ? qty : -qty;
+                        // review D5: a fill bigger than the trade on the other side closes the trade at that fill's own price; the rest is
+                        // not the agent's (its trade never crosses zero, so its result is always from its actual executions); the rest is
+                        // kept for a late execution of the same entry to net against (review E1)
+                        if (ledQty != 0 && Math.Sign(signed) != Math.Sign(ledQty) && Math.Abs(signed) > Math.Abs(ledQty))
+                        {
+                            string tag8 = openTag.Length > 8 ? openTag.Substring(0, 8) : openTag;
+                            ExcessByTag[tag8] = new ExcessFill { Key = openTag, Qty = Math.Abs(signed) - Math.Abs(ledQty), Price = price, TradeSign = Math.Sign(ledQty), Pv = inst.MasterInstrument.PointValue };
+                            signed = -ledQty;
+                        }
+                        if (ledQty == 0 || Math.Sign(signed) == Math.Sign(ledQty)) ledAvg = (ledAvg * Math.Abs(ledQty) + price * qty) / (Math.Abs(ledQty) + qty);
+                        ledQty += signed;
+                        ledCash -= signed * price;
+                        if (ledQty == 0)
+                        {
+                            sdWas = ag.lossStandDown;   // 0.6.0: a group's plan can reach maxLosses on a seat's close that is not itself a loss
+                            pnl = Math.Round(ledCash * inst.MasterInstrument.PointValue, 2);
+                            Trades[openTag] = pnl;
+                            closedTag = openTag; openTag = null; openRoot = null; openInst = null; ledAvg = 0;
+                        }
+                    }
+                    c = ag.HelloedClientLocked();
+                }
+                if (tell && c != null && json != null) c.Send(json);
+                if (netted != null) { AgentLog("a late fill of its entry netted against the close of trade " + netted); SaveDay(); Notify(); }
+                if (spanChanged && opened == null && closedTag == null) SaveDay();
+                if (opened == null && closedTag == null) return;
+                SaveDay();
+                if (opened != null) AgentLog("trade " + opened + " opened on " + root);
+                if (closedTag != null)
+                {
+                    AgentLog("trade " + closedTag + " closed: " + pnl.ToString("0.##", CultureInfo.InvariantCulture) + " dollars");
+                    string sd;
+                    lock (Sync) sd = StandDownLocked();
+                    bool groupTrade;
+                    lock (Sync) groupTrade = ag.SeatOfTag.ContainsKey(closedTag.Length > 8 ? closedTag.Substring(0, 8) : closedTag);
+                    if (sd != null && (pnl < 0 || (groupTrade && sdWas == null))) { SaveDay(); Log("agent " + Id + " stands down: " + sd); ToPages(StatusJson("warn", "Agent " + Id + " stands down: " + sd)); }
+                }
+                Notify();
+            }
+
+
+            // Review E1: its open trade while the pair is flat by both readings, with nothing of the agent working and no fill NinjaTrader
+            // shows ahead of its event, for 5 s: ended, booked from its own executions; a warning when those do not net to zero.
+            private double ghostSince = -1;
+
+            public void EndGhostTrade(double now)
+            {
+                string key, root;
+                Instrument li;
+                lock (Sync) { key = openTag; root = openRoot; li = openInst; }
+                if (key == null) { ghostSince = -1; return; }
+                if (li == null) li = ChartBridgeServer.InstrumentFor(root);
+                Account a = FindAccount(Account);
+                if (a == null || li == null) { ghostSince = -1; return; }
+                int p1 = ChartBridgeOrders.AgentListed(a, li), p2 = ChartBridgeOrders.AgentEffective(a, li);
+                bool busy = p1 != 0 || p2 != 0 || ChartBridgeOrders.AgentMayFill(a, li).Any(o => IsMine(o)) || ChartBridgeOrders.AgentUnnotedFill(a, li, now) != null;
+                if (busy) { ghostSince = -1; return; }
+                if (ghostSince < 0) { ghostSince = now; return; }
+                if (now - ghostSince < ChartBridgeAgents.GhostGraceMs) return;
+                ghostSince = -1;
+                double realized;
+                int left;
+                lock (Sync)
+                {
+                    if (openTag != key) return;
+                    double pv = li.MasterInstrument != null ? li.MasterInstrument.PointValue : 0;
+                    left = ledQty;
+                    realized = Math.Round((ledCash + ledQty * ledAvg) * pv, 2);
+                    Trades[key] = realized; openTag = null; openRoot = null; openInst = null; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Remove(root);
+                    StandDownLocked();
+                }
+                string text = "Agent " + Id + ": its trade " + key + " on " + a.Name + " " + root + " was ended: the pair is flat by both readings with nothing of it working; " +
+                              realized.ToString("0.##", CultureInfo.InvariantCulture) + " dollars booked from its executions" + (left != 0 ? " (its own executions leave " + left + " open: some were not seen; check NinjaTrader's fills)" : "");
+                Log(text); AgentLog(text);
+                if (left != 0) ChartBridgeOrders.AgentWarn(text);
+                SaveDay();
+                Notify();
+            }
+
+
+            // Review A1 and A3: its open trade ended where ChartBridge could not see it while the account holds a position: the trade is
+            // dropped (ownership is not restored: Anthony decides), and the pages get an error every 60 s until that pair is flat.
+            public void DropLedgerAgainst(List<string> roots)
+            {
+                Account a = FindAccount(Account);
+                foreach (string root in roots)
+                {
+                    string why = LedgerAgainst(root, a, true);
+                    if (why == null) continue;
+                    string key;
+                    double realized;
+                    lock (Sync)
+                    {
+                        if (openTag == null || openRoot != root) continue;
+                        // the realized part is booked first (review A C4): what its fills so far closed, at the average of its opening fills
+                        Instrument li = openInst ?? ChartBridgeServer.InstrumentFor(root);
+                        double pv = li != null && li.MasterInstrument != null ? li.MasterInstrument.PointValue : 0;
+                        realized = Math.Round((ledCash + ledQty * ledAvg) * pv, 2);
+                        key = openTag; Trades[key] = realized; openTag = null; openRoot = null; openInst = null; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Remove(root); AgainstSince.Remove(root);
+                        StandDownLocked();
+                    }
+                    string text = "Agent " + Id + ": its open trade " + key + " on " + root + " was ended (" + why + "); its realized part, " + realized.ToString("0.##", CultureInfo.InvariantCulture) + " dollars, is booked";
+                    Log(text); AgentLog(text);
+                    SaveDay();
+                    TradeLost(root);
+                    Notify();
+                }
+            }
+
+            // Review D1: a position whose only working orders there are the agent's own stop (a leg, or the stop placed again) with no
+            // trade followed (a restart lost it: the executions read again did not give it back): the A3 error every 60 s until flat.
+            // The pair stays the agent's (its stop protects it) and its flat hours close it.
+            public void WarnHeldByStopOnly(List<string> roots)
+            {
+                Account a = FindAccount(Account);
+                if (a == null) return;
+                foreach (string root in roots)
+                {
+                    bool followed, told;
+                    lock (Sync) { followed = openTag != null && openRoot == root; told = LostTrades.ContainsKey(root) || HeldLost.ContainsKey(root); }
+                    if (followed || told) continue;
+                    Instrument inst = ChartBridgeServer.InstrumentFor(root);
+                    if (inst == null) continue;
+                    int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
+                    if (p1 == 0 && p2 == 0) continue;
+                    List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
+                    if (may.Count == 0 || !may.All(o => IsMine(o) && LegRx.IsMatch(o.Name ?? ""))) continue;
+                    TradeLost(root, "agent " + Id + " holds " + p1 + " on " + Account + " " + root + " with no trade record (ChartBridge restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader");
+                }
+            }
+
+            public void TradeLost(string root) { TradeLost(root, null); }
+
+            // 0.5.7: while ChartBridge's own flatten job runs on that root (its cancels take the legs away), the error is HELD, never
+            // dropped: RepeatTradeLost raises it once no job runs there and the pair is still not flat, and forgets it if it is flat.
+            private void TradeLost(string root, string say)
+            {
+                string text = say ?? "agent " + Id + " had an open trade on " + Account + " " + root + " and its legs are gone; ChartBridge no longer treats the position as the agent's: flatten or protect it by hand";
+                bool held, already;
+                lock (Sync)
+                {
+                    held = HoldLocked(root, Now());
+                    already = HeldLost.ContainsKey(root);
+                    if (held) HeldLost[root] = text;
+                    else { HeldLost.Remove(root); LostTrades[root] = Now(); LostTradeText[root] = text; }
+                }
+                if (held) { if (!already) { string h = text + " (held while ChartBridge's own flatten runs on " + root + ")"; Log(h); AgentLog(h); } return; }
+                Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
+            }
+
+            // Under Sync: a flatten job of this agent that owns the pair runs on a contract of that root (review of #47: a job that does
+            // not own it never says NOT FLAT, so it holds nothing).
+            private bool FlattenRunsLocked(string root) { return Flats.Values.Any(j => j.Root == root && j.Owned); }
+
+            // Under Sync: hold the lost-trade error on that root now: its own flatten runs there, and the hold is under 30 s old (review
+            // of #47: after that it is raised and repeats as before, whatever the job does). Starts the hold's clock.
+            private bool HoldLocked(string root, double now)
+            {
+                if (!FlattenRunsLocked(root)) return false;
+                double since;
+                if (!HeldSince.TryGetValue(root, out since)) { HeldSince[root] = now; return true; }
+                return now - since < ChartBridgeAgents.LostHoldMaxMs;
+            }
+
+            // Every pass: each lost-trade error again every 60 s until that pair is flat by both readings (lead's default: the pages have
+            // no acknowledge message for it, so it ends only when the pair is flat). 0.5.7: none while a flatten job runs on that root;
+            // an error held meanwhile is raised once the job ends with the pair still not flat.
+            public void RepeatTradeLost(double now)
+            {
+                List<string> roots;
+                lock (Sync) roots = LostTrades.Keys.Concat(HeldLost.Keys).Distinct().ToList();
+                if (roots.Count == 0) return;
+                Account a = FindAccount(Account);
+                foreach (string root in roots)
+                {
+                    Instrument inst = ChartBridgeServer.InstrumentFor(root);
+                    bool flat = a != null && inst != null && ChartBridgeOrders.AgentListed(a, inst) == 0 && ChartBridgeOrders.AgentEffective(a, inst) == 0;
+                    string text = null, raise = null, dropped = null;
+                    lock (Sync)
+                    {
+                        string h;
+                        bool wasHeld = HeldLost.TryGetValue(root, out h);
+                        if (flat) { LostTrades.Remove(root); LostTradeText.Remove(root); HeldLost.Remove(root); HeldSince.Remove(root); if (wasHeld) dropped = h; }
+                        else if (HoldLocked(root, now)) { }   // held: neither repeated nor dropped (at most 30 s)
+                        else if (wasHeld) { HeldLost.Remove(root); if (!FlattenRunsLocked(root)) HeldSince.Remove(root); LostTrades[root] = now; LostTradeText[root] = h; raise = h; }
+                        else
+                        {
+                            if (!FlattenRunsLocked(root)) HeldSince.Remove(root);   // no job there now: a later job may hold again
+                            if (now - LostTrades[root] >= ChartBridgeAgents.LostTradeEveryMs) { LostTrades[root] = now; text = LostTradeText[root]; }
+                        }
+                    }
+                    if (dropped != null) { string d = "agent " + Id + ": the lost-trade error held on " + Account + " " + root + " is not raised: the pair is flat"; Log(d); AgentLog(d); }
+                    if (raise != null) { Log(raise); AgentLog(raise); ChartBridgeOrders.AgentAlarm(raise); }
+                    if (text != null) { AgentLog(text); ChartBridgeOrders.AgentAlarm(text); }
+                }
+            }
+
+
+            // ---------------------------------------------------------- the flatten (flatAt, or the agent's own in auto)
+            // Per root it owns or has orders working on: every order that may fill on that contract of its account is cancelled; once
+            // NinjaTrader confirms each one done, every fill there has come through, and both position readings agree, what it holds is
+            // closed at market ("CB#<tag> ag:<id> flat"). Readings still apart after 3 s: the smaller is closed (never more than either
+            // shows). Not flat 10 s after the start: a status error to the pages, every 10 s until flat. Returns how many roots started.
+            public int StartFlatten(string why, bool byRules)
+            {
+                Account a = FindAccount(Account);   // null: not listed by NinjaTrader; a pair it still owns gets its job (and its errors)
+                string acctName = Account;
+                int started = 0;
+                foreach (string root in FlatRoots())
+                {
+                    foreach (Instrument inst in FlatContracts(root))
+                    {
+                        string key = inst.FullName ?? root;
+                        bool busy;
+                        lock (Sync) busy = Flats.ContainsKey(key);
+                        if (busy) continue;
+                        List<Order> may = a != null ? ChartBridgeOrders.AgentMayFill(a, inst) : new List<Order>();
+                        bool mineWorking = may.Any(o => IsMine(o)), owned = OwnsContract(root, inst, a);
+                        if (!owned && !mineWorking) continue;
+                        List<Order> stops = may.Where(o => IsMine(o) && StopLegRx.IsMatch(o.Name ?? "") && o.StopPrice > 0).ToList();
+                        int legQty = stops.Sum(o => Math.Max(0, o.Quantity - o.Filled));
+                        int startQty = a != null ? ChartBridgeOrders.AgentListed(a, inst) : 0;
+                        // the stop nearest the market (lead's default: the most protective of its stops), to place again over a shut market
+                        Order near = stops.Count == 0 ? null : stops.Any(o => o.OrderAction == OrderAction.Sell) ? stops.OrderByDescending(o => o.StopPrice).First() : stops.OrderBy(o => o.StopPrice).First();
+                        lock (Sync)
+                        {
+                            Flats[key] = new FlatJob { Root = root, Inst = inst, Why = why, StartMs = Now(), Owned = owned, StartQty = startQty, LegQty = legQty, WasMissing = a == null,
+                                                       StopPx = near != null ? near.StopPrice : 0, Tag = near != null ? ChartBridgeAgents.TagOf(near.Name) : null };
+                            if (owned) Sticky.Add(root);   // its pair until flat: cancelling its own legs never makes it someone else's
+                        }
+                        started++;
+                        string where = root + (ChartBridgeAgents.SameContract(inst, ChartBridgeServer.InstrumentFor(root)) ? "" : " (" + inst.FullName + ")");
+                        string text = byRules ? why : "Agent " + Id + ": " + why + ": " + where + " on " + acctName;
+                        Log(text); AgentLog(text + " (" + where + " on " + acctName + ")");
+                        ChartBridgeServer.SendToTraders(StatusJson("info", text));
+                    }
+                }
+                if (started > 0) Notify();
+                return started;
+            }
+
+            private static readonly Regex StopLegRx = new Regex("^CB#[0-9a-f]{8} (?:stop |mstop |ag:[a-z][a-z0-9]{0,11} stop p)");
+
+            // The contracts a flatten looks at on a root: the served one, and another month while its own open trade holds it (review A5).
+            private List<Instrument> FlatContracts(string root)
+            {
+                List<Instrument> list = new List<Instrument>();
+                Instrument served = ChartBridgeServer.InstrumentFor(root);
+                if (served != null) list.Add(served);
+                lock (Sync)
+                    if (openTag != null && openRoot == root && openInst != null && ledQty != 0 && !ChartBridgeAgents.SameContract(openInst, served)) list.Add(openInst);
+                return list;
+            }
+
+            // Review A1: the pair is no longer the agent's: the job ends and nothing of the account's is closed.
+            private void DropJob(FlatJob j, string key, Account a) { DropJob(j, key, a, null); }
+
+            private void DropJob(FlatJob j, string key, Account a, string say)
+            {
+                lock (Sync) { Flats.Remove(key); if (!(openTag != null && openRoot == j.Root)) Sticky.Remove(j.Root); }
+                string text = say ?? (a != null ? a.Name : Account) + " " + j.Root + " is no longer agent " + Id + "'s: ChartBridge did not close it";
+                Log(text); AgentLog(text + " (its flatten: " + j.Why + ")");
+                ChartBridgeServer.SendToTraders(StatusJson("warn", text));
+                Notify();
+            }
+
+            public void StepFlatten(double now)
+            {
+                List<FlatJob> jobs;
+                lock (Sync) jobs = Flats.Values.ToList();
+                if (jobs.Count == 0) return;
+                Account a = FindAccount(Account);
+                DateTime etShut = NowEt();
+                bool shut = ChartBridgeAgents.MarketShut(etShut) || ChartBridgeCme.Closed(etShut);   // 0.5.2 review: the calendar's halts too (13:00 NYSE holiday, 13:15 early close, CME holidays): no order while closed
+                foreach (FlatJob j in jobs)
+                {
+                    Instrument inst = j.Inst;
+                    string key = inst != null ? inst.FullName ?? j.Root : j.Root;
+                    if (inst == null) { lock (Sync) Flats.Remove(key); continue; }
+                    double errEvery = shut ? ChartBridgeAgents.ShutErrorEveryMs : ChartBridgeAgents.FlatErrorEveryMs;
+                    if (a == null)
+                    {
+                        // the account left NinjaTrader's list: the job stays (resumed when it is back, after 18:00 too), and it is loud
+                        j.WasMissing = true;
+                        if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= errEvery)
+                        {
+                            j.LastErrorMs = now;
+                            string text = "Agent " + Id + ": NOT FLAT? its flatten (" + j.Why + ") waits: " + Account + " (account not listed by NinjaTrader); it goes on when the account is back; check NinjaTrader now";
+                            ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
+                        }
+                        continue;
+                    }
+                    int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
+                    // review A1: back from missing, or the position is not what the job started with: is the pair still the agent's?
+                    if (j.Owned && (p1 != 0 || p2 != 0) && (j.WasMissing || p1 != j.StartQty))
+                    {
+                        j.WasMissing = false;
+                        bool flipped = j.StartQty != 0 && p1 != 0 && Math.Sign(p1) != Math.Sign(j.StartQty);
+                        if (flipped || !OwnsContract(j.Root, inst, a)) { DropJob(j, key, a); continue; }
+                    }
+                    j.WasMissing = false;
+                    if (j.Close != null && !j.CloseCounted && !ChartBridgeOrders.AgentMayFillState(j.Close.OrderState)) { j.ClosedQty += j.Close.Filled; j.CloseCounted = true; }   // review A C2
+                    if (shut)
+                    {
+                        // review A2: no order at all while the market is shut (its stop and target stay); the job goes on at the open
+                        if ((p1 == 0 && p2 == 0) || !j.Owned)
+                        {
+                            if (ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && o != j.Close)) continue;   // its own orders wait for the open
+                            string at = Iso(now);
+                            lock (Sync) { Flats.Remove(key); ag.flattenedAt = at; }
+                            AgentLog("flat on " + j.Root + " " + a.Name + " (" + j.Why + ")");
+                            Notify();
+                            continue;
+                        }
+                        string legsSay = "its stop and target stay";
+                        if (j.CancelsSent)
+                        {
+                            bool stopWorks = ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && (StopLegRx.IsMatch(o.Name ?? "") || o == j.ReStop));
+                            bool closeStill = j.Close != null && ChartBridgeOrders.AgentMayFillState(j.Close.OrderState);
+                            if (closeStill && !stopWorks) legsSay = "its stop and target were cancelled and its market close still works (it may fill at the open), so its stop is not placed again beside it; act in NinjaTrader now";   // review D2
+                            else if (stopWorks) legsSay = j.ReStop != null && ChartBridgeOrders.AgentMayFillState(j.ReStop.OrderState) ? "ChartBridge placed its stop again at " + CbJson.Num(j.StopPx) : "its stop stays";
+                            else if (!j.ReStopTried) { j.ReStopTried = true; j.ReStopSay = ReStop(a, inst, j, p1, p2); legsSay = j.ReStopSay; }   // once per shut spell
+                            else legsSay = j.ReStopSay ?? "its stop and target were already cancelled; act in NinjaTrader now";
+                        }
+                        if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= errEvery)
+                        {
+                            j.LastErrorMs = now;
+                            string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
+                                          " still shows " + p1 + "; the market is shut, so ChartBridge sends no close until it opens; " + legsSay + (legsSay.Contains("act in NinjaTrader") ? "" : "; act in NinjaTrader if you need to");
+                            ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
+                        }
+                        continue;
+                    }
+                    j.ReStopTried = false;
+                    // review A C1: an early close or a halt: before any leg is cancelled the market must be trading in fact (a trade on that
+                    // root in the last 5 s); otherwise the stop and target stay and the job tries again
+                    // review D3: a close that ended without filling (rejected, cancelled) in open hours: the stop goes back at once, and
+                    // the next try waits 30 s with it in place
+                    if (j.Owned && j.Close != null && !j.CloseHandled && !ChartBridgeOrders.AgentMayFillState(j.Close.OrderState))
+                    {
+                        j.CloseHandled = true;
+                        if (j.Close.Filled < j.Close.Quantity && (p1 != 0 || p2 != 0))
+                        {
+                            string say = ReStop(a, inst, j, p1, p2);
+                            j.HoldUntilMs = now + ChartBridgeAgents.CloseRetryHoldMs;
+                            string text = "Agent " + Id + ": NOT FLAT: its market close on " + j.Root + " " + a.Name + " ended unfilled (" + j.Close.OrderState + "); " + say + "; ChartBridge tries again in 30 s";
+                            j.LastErrorMs = now;
+                            ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
+                        }
+                    }
+                    if (now < j.HoldUntilMs) continue;
+                    double lastPx;
+                    if (j.Owned && (p1 != 0 || p2 != 0) && (!j.CancelsSent || j.GateAgain) && !ChartBridgeOrders.AgentFreshLast(j.Root, ChartBridgeAgents.TradingFreshMs, out lastPx))
+                    {
+                        if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)
+                        {
+                            j.LastErrorMs = now;
+                            string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
+                                          " still shows " + p1 + "; market not trading: " + (j.GateAgain ? "its stop placed again at " + CbJson.Num(j.StopPx) + " stays; ChartBridge tries again when it trades" : "the stop and target stay; ChartBridge tries again when it trades");
+                            ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
+                        }
+                        continue;
+                    }
+                    string exitWhy;
+                    bool up = ChartBridgeAccounts.ExitAllowed(a, out exitWhy);
+                    List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
+                    // not its pair: only its own orders, and never its stop placed again while the account holds a position there (review
+                    // D1; flat, that stop could only open one, so it goes: lead's default)
+                    List<Order> others = may.Where(o => o != j.Close && (j.Owned || (IsMine(o) && !(IsReStop(o) && (p1 != 0 || p2 != 0))))).ToList();
+                    bool closeWorks = j.Close != null && may.Contains(j.Close);
+                    if (up && others.Count > 0)
+                    {
+                        if (now - j.LastCancelMs >= ChartBridgeAgents.FlatRetryMs)
+                        {
+                            j.LastCancelMs = now;
+                            j.CancelsSent = true;
+                            j.GateAgain = false;
+                            if (j.Owned) ChartBridgeOrders.AgentFlattening(a, inst);   // never marks the page's brackets on a pair it does not own
+                            try { a.Cancel(others.ToArray()); }
+                            catch (Exception ex) { Log("agent " + Id + " flatten: the cancels could not be sent (" + ex.Message + "); tried again in 3 s"); }
+                            Log("agent " + Id + " flatten: cancel sent for " + others.Count + " order(s) on " + j.Root + " " + a.Name);
+                        }
+                    }
+                    else if (up && !closeWorks)
+                    {
+                        if ((p1 == 0 && p2 == 0) || !j.Owned)
+                        {
+                            string at = Iso(now);
+                            lock (Sync) { Flats.Remove(key); ag.flattenedAt = at; }
+                            AgentLog("flat on " + j.Root + " " + a.Name + " (" + j.Why + ")");
+                            Notify();
+                            continue;
+                        }
+                        string unnoted = ChartBridgeOrders.AgentUnnotedFill(a, inst, now);
+                        int qty = 0, dir = 0;
+                        if (unnoted == null && p1 == p2) { qty = Math.Abs(p1); dir = Math.Sign(p1); j.ApartSinceMs = -1; }
+                        else
+                        {
+                            if (j.ApartSinceMs < 0) j.ApartSinceMs = now;
+                            if (now - j.ApartSinceMs >= ChartBridgeAgents.FlatRetryMs && Math.Sign(p1) == Math.Sign(p2) && p1 != 0)
+                            { qty = Math.Min(Math.Abs(p1), Math.Abs(p2)); dir = Math.Sign(p1); }
+                        }
+                        if (qty > 0 && now - j.LastCloseMs >= ChartBridgeAgents.FlatRetryMs)
+                        {
+                            // review A1: asked again before every close, and never more than the agent's own trade holds
+                            if (!OwnsContract(j.Root, inst, a)) { DropJob(j, key, a); continue; }
+                            int cap = CloseCap(j.Root, inst, j);
+                            if (cap <= 0 && j.ClosedQty > 0)
+                            {
+                                DropJob(j, key, a, (a.Name + " " + j.Root + ": agent " + Id + "'s " + j.ClosedQty + " closed; the rest (" + p1 + ") is not agent " + Id + "'s: ChartBridge did not close it"));
+                                continue;
+                            }
+                            qty = Math.Min(qty, cap);
+                            if (qty > 0) { j.LastCloseMs = now; j.CloseCounted = false; j.CloseHandled = false; j.Close = SendClose(a, inst, dir, qty, j.Root, j); }
+                        }
+                    }
+                    bool flat = (p1 == 0 && p2 == 0) || !j.Owned;
+                    if (!flat && now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)
+                    {
+                        j.LastErrorMs = now;
+                        string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
+                                      " still shows " + p1 + (p2 != p1 ? " (or " + p2 + " with fills not yet in the position)" : "") + (up ? "" : "; the account is not connected (" + exitWhy + ")") + "; act in NinjaTrader now";
+                        ChartBridgeOrders.AgentAlarm(text);
+                        AgentLog(text);
+                    }
+                }
+            }
+
+            // Review A C1 (lead's default: a position is never left without a stop over a closed market): the job paused for the shut
+            // hours after its legs were cancelled. While it still holds a position, its stop goes back at the agent's own stop price
+            // (the one nearest the market when the job started), unless that price is already through the last trade. Says what it did.
+            private string ReStop(Account a, Instrument inst, FlatJob j, int p1, int p2)
+            {
+                if (j.Close != null && ChartBridgeOrders.AgentMayFillState(j.Close.OrderState)) return "its market close still works, so its stop is not placed again beside it; act in NinjaTrader now";   // review D2
+                if (!j.Owned || p1 == 0 || p2 == 0 || Math.Sign(p1) != Math.Sign(p2)) return "its stop and target were already cancelled; act in NinjaTrader now";
+                if (j.StopPx <= 0) return "its stop and target were already cancelled and ChartBridge knows no stop price for it; act in NinjaTrader now";
+                double last;
+                ChartBridgeOrders.AgentFreshLast(j.Root, double.MaxValue, out last);
+                int dir = Math.Sign(p1);
+                if (last > 0 && (dir > 0 ? j.StopPx >= last : j.StopPx <= last))
+                    return "its stop and target were already cancelled and its stop price " + CbJson.Num(j.StopPx) + " is through the last trade " + CbJson.Num(last) + ", so it was not placed again; act in NinjaTrader now";
+                int qty = Math.Min(Math.Min(Math.Abs(p1), Math.Abs(p2)), CloseCap(j.Root, inst, j));
+                if (qty <= 0) return "its stop and target were already cancelled; act in NinjaTrader now";
+                Order x = SendStop(a, inst, dir, qty, j);
+                if (x == null) return "its stop and target were already cancelled and its stop could not be placed again; act in NinjaTrader now";
+                j.ReStop = x;
+                j.GateAgain = true;
+                return "its stop and target had been cancelled: ChartBridge placed its stop again at " + CbJson.Num(j.StopPx) + " for " + qty;
+            }
+
+            // The stop placed again: a stop market at the agent's stop price, GTC, "CB#<tag> ag:<id> stop p<price>" (role stop).
+            private Order SendStop(Account a, Instrument inst, int dir, int qty, FlatJob j)
+            {
+                string tag = j.Tag ?? Guid.NewGuid().ToString("N").Substring(0, 8);
+                Order x;
+                lock (ChartBridgeOrders.AgentPlaceLock)
+                {
+                    int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
+                    if (Math.Sign(p1) != dir || Math.Sign(p2) != dir || qty > Math.Min(Math.Abs(p1), Math.Abs(p2))) return null;   // changed meanwhile
+                    x = a.CreateOrder(inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.StopMarket, OrderEntry.Manual, TimeInForce.Gtc, qty, 0, j.StopPx, "",
+                        "CB#" + tag + " ag:" + Id + " stop p" + j.StopPx.ToString("0.########", CultureInfo.InvariantCulture), NinjaTrader.Core.Globals.MaxDate, null);
+                    ChartBridgeAgents.NoteTag(tag, Id);
+                    ChartBridgeOrders.AgentSent(x);
+                    try { a.Submit(new[] { x }); }
+                    catch (Exception ex) { ChartBridgeOrders.AgentUnsent(x); Log("agent " + Id + " flatten: the stop could not be placed again (" + ex.Message + ")"); return null; }
+                }
+                string text = "agent " + Id + " flatten: its legs were cancelled and its close cannot go now: stop " + (dir > 0 ? "sell " : "buy ") + qty + " " + j.Root + " at " + CbJson.Num(j.StopPx) + " placed again on " + a.Name;
+                Log(text); AgentLog(text);
+                return x;
+            }
+
+            // The flatten's one market order: closes what the position holds, never more (an exit: no entry gate, a Connected account).
+            // Under the order lock, the position and the orders that may fill are read again first: nothing new may slip in between.
+            private Order SendClose(Account a, Instrument inst, int dir, int qty, string root, FlatJob j)
+            {
+                string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
+                Order x;
+                lock (ChartBridgeOrders.AgentPlaceLock)
+                {
+                    int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
+                    bool other = ChartBridgeOrders.AgentMayFill(a, inst).Any(o => o != j.Close);
+                    if (other || Math.Sign(p1) != dir || Math.Sign(p2) != dir || qty > Math.Min(Math.Abs(p1), Math.Abs(p2))) return null;   // changed meanwhile: the next pass looks again
+                    x = a.CreateOrder(inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
+                        "CB#" + tag + " ag:" + Id + " flat", NinjaTrader.Core.Globals.MaxDate, null);
+                    ChartBridgeAgents.NoteTag(tag, Id);
+                    ChartBridgeOrders.AgentSent(x);
+                    try { a.Submit(new[] { x }); }
+                    catch (Exception ex) { ChartBridgeOrders.AgentUnsent(x); Log("agent " + Id + " flatten: the close could not be sent (" + ex.Message + ")"); return null; }
+                }
+                string text = "agent " + Id + " flatten: " + (dir > 0 ? "sell " : "buy ") + qty + " " + root + " at market on " + a.Name;
+                Log(text); AgentLog(text);
+                return x;
+            }
+
+        }
+
         // ---------------------------------------------------------- state (under Sync)
         private ChartBridgeClient client;
         private bool claimed;
@@ -834,17 +1617,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly Dictionary<string, double> Expiry = new Dictionary<string, double>();   // entry tag -> its plan's expiry (UTC ms)
         private readonly Dictionary<string, int[]> Spans = new Dictionary<string, int[]>();    // trade key -> { entry contracts before it, contracts it covers }
         private readonly Dictionary<string, int> EntrySeen = new Dictionary<string, int>();     // entry tag -> its contracts seen filling this run
-        private string openTag, openRoot;
-        private Instrument openInst;   // the contract of the open trade (the flatten looks at it too, any month; review A5)
-        private int ledQty;
-        private readonly Dictionary<string, double> LostTrades = new Dictionary<string, double>();   // root -> last error (review A3)
-        private readonly Dictionary<string, string> LostTradeText = new Dictionary<string, string>();
-        private readonly Dictionary<string, string> HeldLost = new Dictionary<string, string>();   // root -> a lost-trade error held while ChartBridge's own flatten runs there (0.5.7)
-        private readonly Dictionary<string, double> HeldSince = new Dictionary<string, double>();   // root -> when the hold began (review of #47: at most 30 s)
-        private double ledCash, ledAvg;
-        private readonly HashSet<string> Sticky = new HashSet<string>();   // roots it owns until flat by both readings with no entry
+        // 0.6.0: the open trade, its ledger, the roots owned until flat, the flatten jobs and the lost-trade errors are each seat's own
+        // (Seat); a single account is one seat.
+        private string groupId;   // the group it trades (agent-<id>-account.txt group<TAB><id>), or null: one account (or None)
+        private List<string> seatNames = new List<string>();   // the accounts it trades now, in seat order (welcome.seats)
+        private long seatsRev = 1;   // up on every change of seatNames (welcome.seatsRev; a plan with another is refused)
+        private readonly Dictionary<string, Seat> Seats = new Dictionary<string, Seat>(StringComparer.Ordinal);   // every seat it follows: now, and one that left while it holds its trade
+        private readonly Dictionary<string, string> SeatOfTag = new Dictionary<string, string>();   // entry tag -> its seat (a group's plans only; the day file's #seat lines)
         private readonly Dictionary<string, Proposal> Proposals = new Dictionary<string, Proposal>();
-        private readonly Dictionary<string, Order> EntryOfPlan = new Dictionary<string, Order>();
+        private readonly Dictionary<string, List<Order>> EntryOfPlan = new Dictionary<string, List<Order>>();   // 0.6.0: one entry per seat
         private readonly Dictionary<string, string> PlanOfTag = new Dictionary<string, string>();
         private readonly List<Order> Placed = new List<Order>();
         private class CancelTry { public double FirstMs, LastMs; public int Tries; public string Why; public bool GaveUp; }
@@ -853,12 +1634,130 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly Queue<double> Actions = new Queue<double>();
         private readonly LinkedList<string> Notes = new LinkedList<string>(), PlansShown = new LinkedList<string>();
         private string lastPlanJson;
-        private readonly Dictionary<string, FlatJob> Flats = new Dictionary<string, FlatJob>();
         private string flattenedAt;
         private long nPlans, nProposals, nPlaced, nRefused, nHeartbeatLost;
 
         public string Account { get { lock (Sync) return account; } }
         public bool Chosen { get { lock (Sync) return chosen; } }
+
+        // ---------------------------------------------------------- 0.6.0: the seats
+        public string GroupId { get { lock (Sync) return groupId; } }
+        public bool OnGroup(string gid) { lock (Sync) return groupId != null && groupId == gid; }
+        private bool GroupNow() { lock (Sync) return groupId != null; }
+        // No account and no group: nothing trades.
+        private bool NoneNow() { lock (Sync) return groupId == null && ChartBridgeBranches.IsNone(account); }
+        // An account it follows (a seat now, or one that left while it holds its trade): its fills, orders and positions come here.
+        public bool HasSeat(string acct) { lock (Sync) return acct != null && Seats.ContainsKey(acct); }
+        // An account it may enter on now: a seat of its account or group (never one that left the group).
+        public bool IsEntrySeat(string acct) { lock (Sync) return acct != null && seatNames.Contains(acct); }
+        private List<string> SeatNames() { lock (Sync) return seatNames.ToList(); }
+        private Seat SeatFor(string acct) { lock (Sync) { Seat s; return acct != null && Seats.TryGetValue(acct, out s) ? s : null; } }
+        // Every seat it follows: the seats now in seat order, then any that left (by name).
+        private List<Seat> AllSeats()
+        {
+            lock (Sync)
+            {
+                List<Seat> list = seatNames.Where(n => Seats.ContainsKey(n)).Select(n => Seats[n]).ToList();
+                list.AddRange(Seats.Values.Where(x => !seatNames.Contains(x.Name)).OrderBy(x => x.Name, StringComparer.Ordinal));
+                return list;
+            }
+        }
+        // The agent owns (account, root): a seat of it does (the owner lock, ChartBridgeAgents.OwnerAgent).
+        public bool OwnsOn(string acct, string root) { Seat s = SeatFor(acct); return s != null && s.Owns(root); }
+        // Any seat owns root.
+        public bool Owns(string root) { return AllSeats().Any(s => s.Owns(root)); }
+        // The account is this agent's against the bot, the copier and other agents: a seat of the account or group chosen, or a seat
+        // that left while it holds the agent's trade (0.5.7: an agent on None claims nothing else).
+        public bool Claims(string acct)
+        {
+            if (string.IsNullOrEmpty(acct)) return false;
+            Seat held = null;
+            lock (Sync)
+            {
+                if (chosen && seatNames.Any(x => string.Equals(x, acct, StringComparison.OrdinalIgnoreCase))) return true;
+                foreach (Seat x in Seats.Values) if (!seatNames.Contains(x.Name) && string.Equals(x.Name, acct, StringComparison.OrdinalIgnoreCase)) held = x;
+            }
+            return held != null && held.Exposed();
+        }
+        // The words for what it trades: the account, "group Lucid (SIM-A, SIM-B)", or None's "-".
+        public string AccountWords()
+        {
+            string g, a;
+            List<string> seats;
+            lock (Sync) { g = groupId; a = account; seats = seatNames.ToList(); }
+            return g == null ? a : "group " + (ChartBridgeGroups.NameOf(g) ?? g) + " (" + (seats.Count > 0 ? string.Join(", ", seats) : "no accounts") + ")";
+        }
+        // For the bot's and the copier's refusals: "group Lucid" when acct is a seat of the group it trades, "it holds agent X's trade"
+        // for a seat that left, null for its own single account.
+        public string GroupWordsFor(string acct)
+        {
+            string g;
+            bool now;
+            lock (Sync) { g = groupId; now = seatNames.Any(x => string.Equals(x, acct, StringComparison.OrdinalIgnoreCase)); }
+            if (now) return g == null ? null : "group " + (ChartBridgeGroups.NameOf(g) ?? g);
+            return "it holds agent " + Id + "'s trade until flat";
+        }
+        // The key a proposal keeps of what it was made for (an account, or "group:<id>"): accepted only while it is still that.
+        private string KeyNow() { lock (Sync) return groupId != null ? "group:" + groupId : account; }
+        private static string KeyWords(string key) { return key != null && key.StartsWith("group:", StringComparison.Ordinal) ? "group " + (ChartBridgeGroups.NameOf(key.Substring(6)) ?? key.Substring(6)) : key; }
+        // The client of a hello'd agent, or null. Under Sync.
+        private ChartBridgeClient HelloedClientLocked() { return helloed ? client : null; }
+
+        // The seats now: the group's members (groups.txt, in its order), or the one account, or none (None). A change puts seatsRev
+        // up, makes the new seats, and (tell) tells the agent (welcome, accountState) and the pages. The group deleted: the agent goes
+        // to None (its seats still holding its trade stay its own until flat). True when the seats changed.
+        internal bool RefreshSeats() { return RefreshSeats(true); }
+        private bool RefreshSeats(bool tell)
+        {
+            string gid, acct;
+            lock (Sync) { gid = groupId; acct = account; }
+            List<string> want;
+            if (gid != null)
+            {
+                want = ChartBridgeGroups.MembersOf(gid);
+                if (want == null && !ChartBridgeGroups.Unreadable())
+                {
+                    string why;
+                    lock (PlaceGate) { lock (Sync) if (groupId != gid) return false; string keep; lock (Sync) keep = mode; why = GoNone("its group " + gid + " was deleted", keep); }
+                    if (why != null) Log("agent " + Id + ": its group " + gid + " was deleted, but " + why);
+                    return true;
+                }
+                if (want == null) want = new List<string>();   // groups.txt cannot be read: no seat (every entry is refused anyway)
+            }
+            else want = ChartBridgeBranches.IsNone(acct) ? new List<string>() : new List<string> { acct };
+            bool changed;
+            string was;
+            lock (Sync)
+            {
+                if (groupId != gid || account != acct) return false;   // changed meanwhile: the caller of that change refreshes
+                changed = !want.SequenceEqual(seatNames);
+                was = string.Join(", ", seatNames);
+                if (changed)
+                {
+                    seatNames = want;
+                    seatsRev++;
+                    foreach (string n in want) if (!Seats.ContainsKey(n)) Seats[n] = new Seat(this, n);
+                }
+            }
+            if (!changed) return false;
+            if (gid != null) { string t = "group " + (ChartBridgeGroups.NameOf(gid) ?? gid) + "'s seats are now " + (want.Count > 0 ? string.Join(", ", want) : "none") + " (were " + (was.Length > 0 ? was : "none") + "); seatsRev " + SeatsRevNow(); Log("agent " + Id + " " + t); AgentLog(t); }
+            PruneSeats();
+            if (tell) { ToAgent(WelcomeJson()); Notify(); }
+            return true;
+        }
+        private long SeatsRevNow() { lock (Sync) return seatsRev; }
+
+        // A seat it no longer trades is dropped once nothing of the agent is left on it (flat by both readings, nothing working).
+        private void PruneSeats()
+        {
+            List<Seat> gone;
+            lock (Sync) gone = Seats.Values.Where(x => !seatNames.Contains(x.Name)).ToList();
+            foreach (Seat x in gone)
+            {
+                if (x.Exposed()) continue;
+                lock (Sync) { if (seatNames.Contains(x.Name)) continue; Seats.Remove(x.Name); }
+            }
+        }
         public int MaxQtyFor(string root) { lock (Sync) return rules.Roots.Contains(root ?? "") ? rules.QtyFor(root) : 0; }
         private Rules RulesNow() { lock (Sync) return rules.Copy(); }
 
@@ -878,9 +1777,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             LoadSecret();
             LoadRules();
             LoadAccount();
+            RefreshSeats(false);   // 0.6.0: its seats (a group's members, or its one account)
             LoadDay();
             lock (Sync) { noClientSinceMs = Now(); startedMs = noClientSinceMs; mode = "shadow"; }
-            Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + Account + (SimNow() ? " (Sim)" : " (LIVE)") + ", starting in shadow)");
+            Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + AccountWords() + (SimNow() ? " (Sim)" : " (LIVE)") + ", starting in shadow)");
         }
 
         public void Stop()
@@ -1010,27 +1910,29 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- the account file (agent-<id>-account.txt, as bot-account.txt)
         private void LoadAccount()
         {
-            string a = ChartBridgeBranches.None, broken = null;   // 0.5.7: no file is None (was Sim101)
+            string a = ChartBridgeBranches.None, broken = null, grp = null;   // 0.5.7: no file is None (was Sim101)
             try
             {
                 if (File.Exists(AccountFile))
                 {
-                    string found = null;
+                    string found = null, foundGroup = null;
                     foreach (string raw in File.ReadAllLines(AccountFile))
                     {
                         string line = raw.Trim();
                         if (line.Length == 0 || line.StartsWith("#")) continue;
                         string[] p = line.Split('\t');
-                        if (found == null && p.Length == 2 && p[0] == "account" && PlainName(p[1])) found = p[1];
+                        if (found == null && foundGroup == null && p.Length == 2 && p[0] == "account" && PlainName(p[1])) found = p[1];
+                        else if (found == null && foundGroup == null && p.Length == 2 && p[0] == "group" && GroupIdRx.IsMatch(p[1])) foundGroup = p[1];   // 0.6.0: a group (an older ChartBridge stands the agent down on it)
                         else { broken = "agent-" + Id + "-account.txt has a line ChartBridge does not understand"; break; }
                     }
-                    if (broken == null && found == null) broken = "agent-" + Id + "-account.txt names no account";
-                    if (broken == null) a = found;
+                    if (broken == null && found == null && foundGroup == null) broken = "agent-" + Id + "-account.txt names no account";
+                    if (broken == null && foundGroup != null) grp = foundGroup;
+                    else if (broken == null) a = found;
                 }
             }
             catch (Exception ex) { broken = "agent-" + Id + "-account.txt could not be read (" + ex.Message + ")"; }
             if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); }
-            lock (Sync) { account = a; accountBroken = broken; chosen = broken == null && a != null && !ChartBridgeBranches.IsNone(a) && File.Exists(AccountFile); }
+            lock (Sync) { account = a; groupId = grp; accountBroken = broken; chosen = broken == null && (grp != null || (a != null && !ChartBridgeBranches.IsNone(a))) && File.Exists(AccountFile); }
         }
 
         private string SaveAccount(string nm)
@@ -1039,6 +1941,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 WriteWhole(AccountFile, new List<string> { "# ChartBridge account for agent " + Id + " (written by ChartBridge from the page's Agent tab; do not edit)",
                     "# the one account the agent's orders go to; - is None (nothing trades), as is a missing file", "account\t" + nm });
+                return null;
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
+
+        // 0.6.0: the group it trades, as group<TAB><id> (a ChartBridge before 0.6.0 does not understand the line and stands the agent
+        // down: safe).
+        private static readonly Regex GroupIdRx = new Regex("^g[1-9][0-9]{0,8}$");
+        private string SaveGroup(string gid)
+        {
+            try
+            {
+                WriteWhole(AccountFile, new List<string> { "# ChartBridge account for agent " + Id + " (written by ChartBridge from the page's Agent tab; do not edit)",
+                    "# the group whose accounts the agent's orders go to (each member is a seat); account<TAB>- is None", "group\t" + gid });
                 return null;
             }
             catch (Exception ex) { return ex.Message; }
@@ -1067,7 +1983,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Dictionary<string, double> trades = new Dictionary<string, double>(), expiry = new Dictionary<string, double>();
             Dictionary<string, int[]> spans = new Dictionary<string, int[]>();
             HashSet<string> ids = new HashSet<string>(), carriedTags = new HashSet<string>();
-            Dictionary<string, string> tagPlans = new Dictionary<string, string>();
+            Dictionary<string, string> tagPlans = new Dictionary<string, string>(), tagSeats = new Dictionary<string, string>();
             try
             {
                 if (File.Exists(DayFile))
@@ -1075,6 +1991,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     foreach (string raw in File.ReadAllLines(DayFile))
                     {
                         string line = raw.Trim();
+                        string seatTag, seatAcct;
+                        if (ReadSeatLine(line, out seatTag, out seatAcct)) { tagSeats[seatTag] = seatAcct; continue; }   // 0.6.0: #seat<TAB><tag><TAB><account>
                         string tagPlanId, tagOfPlan;
                         if (ReadTagPlan(line, out tagOfPlan, out tagPlanId)) { tagPlans[tagOfPlan] = tagPlanId; continue; }
                         if (line.Length == 0 || line.StartsWith("#")) continue;
@@ -1098,7 +2016,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Lead's default (review A-N3, A-S4): an entry line whose order is no longer listed is dropped; an open trade of an
             // earlier session is dropped (it counts only in its own session; a position it left keeps its legs, and the flat hours
             // and the owner rules still see it by those legs).
-            HashSet<string> listed = ListedTags();
+            HashSet<string> listed = ListedTags(tagSeats.Values);
             int stale = 0;
             lock (Sync)
             {
@@ -1125,6 +2043,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                     foreach (KeyValuePair<string, string> kv in tagPlans) PlanOfTag[kv.Key] = kv.Value;
                     foreach (string t in carriedTags) Carried.Add(t);
                     if (fileSession != today) foreach (KeyValuePair<string, double> kv in trades) if (double.IsNaN(kv.Value)) Carried.Add(kv.Key);
+                    // 0.6.0: each group seat's tag, and a seat that holds something of its own is followed again (restart recovery),
+                    // also one no longer in the group (it stays the agent's until flat)
+                    HashSet<string> kept = new HashSet<string>(Trades.Where(kv => double.IsNaN(kv.Value)).Select(kv => kv.Key).Concat(Expiry.Keys).Concat(Carried).Select(k => k.Length > 8 ? k.Substring(0, 8) : k));
+                    foreach (KeyValuePair<string, string> kv in tagSeats)
+                    {
+                        SeatOfTag[kv.Key] = kv.Value;
+                        if ((kept.Contains(kv.Key) || listed.Contains(kv.Key)) && !Seats.ContainsKey(kv.Value)) Seats[kv.Value] = new Seat(this, kv.Value);
+                    }
                 }
             }
             if (broken == null) foreach (KeyValuePair<string, string> kv in tagPlans) ChartBridgeAgents.NotePlan(kv.Key, kv.Value);
@@ -1150,14 +2076,34 @@ namespace NinjaTrader.NinjaScript.AddOns
             return true;
         }
 
-        // The tags of every order listed on this agent's account (entry lines and stale records are checked against them).
-        private HashSet<string> ListedTags()
+        // The tags of every order listed on this agent's accounts (entry lines and stale records are checked against them). 0.6.0:
+        // every seat, and (more) the accounts the day file names for its seats.
+        private HashSet<string> ListedTags() { return ListedTags(null); }
+        private HashSet<string> ListedTags(IEnumerable<string> more)
         {
             HashSet<string> tags = new HashSet<string>();
-            Account a = FindAccount(Account);
-            if (a == null) return tags;
-            lock (a.Orders) foreach (Order o in a.Orders) { string t = ChartBridgeAgents.TagOf(o.Name); if (t != null) tags.Add(t); }
+            HashSet<string> names;
+            lock (Sync) { names = new HashSet<string>(seatNames.Concat(Seats.Keys)); }
+            if (more != null) foreach (string m in more) names.Add(m);
+            foreach (string n in names)
+            {
+                Account a = FindAccount(n);
+                if (a == null) continue;
+                lock (a.Orders) foreach (Order o in a.Orders) { string t = ChartBridgeAgents.TagOf(o.Name); if (t != null) tags.Add(t); }
+            }
             return tags;
+        }
+
+        // 0.6.0: the day file's "#seat<TAB><tag><TAB><account>" lines (a comment to a ChartBridge before 0.6.0): a group seat's entry tag.
+        internal const string SeatPrefix = "#seat\t";
+        private static bool ReadSeatLine(string line, out string tag, out string acct)
+        {
+            tag = null; acct = null;
+            if (!line.StartsWith(SeatPrefix, StringComparison.Ordinal)) return false;
+            string[] p = line.Substring(SeatPrefix.Length).Split('\t');
+            if (p.Length != 2 || !EntryTagRx.IsMatch(p[0]) || !PlainName(p[1])) return false;   // malformed: read as a comment
+            tag = p[0]; acct = p[1];
+            return true;
         }
 
         // The day file is appended to and written whole under one lock (review B), so an appended plan id is never lost to a whole
@@ -1210,6 +2156,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // 0.5.7: the plan of each entry still of today (its trade, its working entry, a trade carried over)
                 HashSet<string> keep = new HashSet<string>(Trades.Keys.Concat(Expiry.Keys).Concat(Carried).Select(k => k.Length > 8 ? k.Substring(0, 8) : k));
                 foreach (KeyValuePair<string, string> kv in PlanOfTag) if (keep.Contains(kv.Key) && TagPlanWritable(kv.Value)) lines.Add(TagPlanPrefix + kv.Key + "\t" + kv.Value);
+                foreach (KeyValuePair<string, string> kv in SeatOfTag) if (keep.Contains(kv.Key) && PlainName(kv.Value)) lines.Add(SeatPrefix + kv.Key + "\t" + kv.Value);   // 0.6.0: each group seat's tag
             }
             try { TryIo(delegate { WriteWhole(DayFile, lines); }); }
             catch (Exception ex) { Log("agent-" + Id + "-day.txt could not be saved (" + ex.Message + "); a restart would forget today's trades and plan ids"); }
@@ -1227,7 +2174,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (string k in Expiry.Keys.ToList()) if (!listed.Contains(k)) Expiry.Remove(k);   // review A-N3
                 session = today;
                 // a trade the ledger still follows goes on into the new day; any other open record is dropped (review A-S4)
-                List<KeyValuePair<string, double>> open = Trades.Where(kv => double.IsNaN(kv.Value) && kv.Key == openTag).ToList();
+                HashSet<string> followed = OpenTagsLocked();   // 0.6.0: every seat's open trade
+                List<KeyValuePair<string, double>> open = Trades.Where(kv => double.IsNaN(kv.Value) && followed.Contains(kv.Key)).ToList();
                 foreach (KeyValuePair<string, double> kv in open) Carried.Add(kv.Key);   // 0.5.2 review: a trade of the session before: flattened (its flat time has passed); saved below
                 Trades.Clear();
                 foreach (KeyValuePair<string, double> kv in open) Trades[kv.Key] = kv.Value;
@@ -1242,7 +2190,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             Notify();
         }
 
-        private int LossesLocked() { return Trades.Values.Count(v => v < 0); }
+        // 0.6.0 (Q3 a): a group's plan counts once, for maxTrades and maxLosses: its seats' trades (tags with a #seat line) are one
+        // trade, a loss when their sum is below 0 once every one of them has closed. Every other trade counts by itself, as before.
+        private Dictionary<string, List<double>> UnitsLocked()
+        {
+            Dictionary<string, List<double>> u = new Dictionary<string, List<double>>();
+            foreach (KeyValuePair<string, double> kv in Trades)
+            {
+                string t8 = kv.Key.Length > 8 ? kv.Key.Substring(0, 8) : kv.Key, pid;
+                string key = SeatOfTag.ContainsKey(t8) && PlanOfTag.TryGetValue(t8, out pid) ? "plan\t" + pid : kv.Key;
+                List<double> l;
+                if (!u.TryGetValue(key, out l)) u[key] = l = new List<double>();
+                l.Add(kv.Value);
+            }
+            return u;
+        }
+        private int TradesLocked() { return UnitsLocked().Count; }
+        private int LossesLocked() { return UnitsLocked().Values.Count(v => v.All(x => !double.IsNaN(x)) && v.Sum() < 0); }
+        // The open trade of every seat. Under Sync.
+        private HashSet<string> OpenTagsLocked() { return new HashSet<string>(Seats.Values.Where(x => x.openTag != null).Select(x => x.openTag)); }
 
         // Why no new entry may go now (files, losses), or null. Under Sync.
         private string StandDownLocked()
@@ -1250,7 +2216,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (dayBroken != null) return dayBroken;
             if (rulesBroken != null) return rulesBroken;
             if (accountBroken != null) return accountBroken;
-            if (ChartBridgeBranches.IsNone(account)) return "agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";
+            if (groupId == null && ChartBridgeBranches.IsNone(account)) return "agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";
             int losses = LossesLocked();
             if (lossStandDown == null && rules.MaxLosses > 0 && losses >= rules.MaxLosses) lossStandDown = losses + " losing trades today (maxLosses " + rules.MaxLosses + "): no new entries for agent " + Id + " until 18:00 ET";
             return lossStandDown;   // never lifted by a rules change; the 18:00 ET roll clears it (lead's default)
@@ -1264,9 +2230,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The account is not usable by this agent: the bot's, the copier's leader or a follower (on or off), whether or not the bot
         // and the copier are switched on (lead's default), or another agent's. On such a clash the agent stands down and the other user of the account is left as it was (lead's
         // default). 0.5.7: None clashes with nobody.
+        // 0.6.0: every seat it trades (a clash on any seat stands the whole agent down, as for its one account).
         public string AccountConflict()
         {
-            string acct = Account, bot = ChartBridgeAgents.BotAccountForAgents();   // on or off (lead's default); never a file read here
+            foreach (string seat in SeatNames()) { string w = AccountConflict(seat); if (w != null) return w; }
+            return null;
+        }
+
+        private string AccountConflict(string acct)
+        {
+            string bot = ChartBridgeAgents.BotAccountForAgents();   // on or off (lead's default); never a file read here
             if (ChartBridgeBranches.IsNone(acct)) return null;
             if (bot == null) return "bot-account.txt cannot be read or understood, so ChartBridge cannot tell the bot's account: agent " + Id + " trades nothing until it is fixed";
             if (string.Equals(acct, bot, StringComparison.OrdinalIgnoreCase))
@@ -1275,7 +2248,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (cw != null) return cw.Replace(" is the copier's", " is also the copier's").Replace(" is a copier follower", " is also a copier follower") + ": choose an account for agent " + Id + " on the Agent tab (an agent never shares an account)";
             bool mine = Chosen;
             foreach (ChartBridgeAgent other in ChartBridgeAgents.All())
-                if (other != this && string.Equals(other.Account, acct, StringComparison.OrdinalIgnoreCase) && (other.Chosen || !mine))
+                if (other != this && other.SeatNames().Any(x => string.Equals(x, acct, StringComparison.OrdinalIgnoreCase)) && (other.Chosen || !mine))
                     return acct + " is also agent " + other.Id + "'s account: choose an account for agent " + Id + " on the Agent tab (an agent never shares an account)";
             return null;
         }
@@ -1402,11 +2375,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "agentHello", new[] { "type", "name", "build" } },
             { "beat", new[] { "type" } },
             { "subscribe", new[] { "type", "root", "days", "tickHours", "sub" } },
-            { "plan", new[] { "type", "id", "root", "side", "kind", "price", "limitPrice", "qty", "stopTicks", "targetTicks", "expireSec", "riskDollars", "setup", "reason", "confidence" } },
+            { "plan", new[] { "type", "id", "root", "side", "kind", "price", "limitPrice", "qty", "stopTicks", "targetTicks", "expireSec", "riskDollars", "setup", "reason", "confidence", "seatsRev", "sizes" } },   // 0.6.0: seatsRev, sizes
             { "skip", new[] { "type", "id", "setup", "reason" } },
             { "withdraw", new[] { "type", "id", "reason" } },
             { "note", new[] { "type", "kind", "text" } },
-            { "flatten", new[] { "type" } },
+            { "flatten", new[] { "type", "account" } },   // 0.6.0: account (one seat); without it, every seat
         };
 
         // ---------------------------------------------------------- the connection
@@ -1521,7 +2494,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (type == "withdraw") OnWithdraw(d);
             else if (type == "note") OnNote(d);
             else if (type == "subscribe") OnSubscribe(c, d);
-            else if (type == "flatten") OnAgentFlatten();
+            else if (type == "flatten") OnAgentFlatten(d);
         }
 
         // Over the rate: one reject a second at most, nothing else (no plan shown, no id used, no file written).
@@ -1573,24 +2546,30 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Contract addition (after agentState, at every hello): one position per root of the agent (flat included) and one order per
         // working order of its own, so a runner that reconnects sees fills it missed.
+        // 0.6.0: one position per (seat, root) and the working orders of every seat (one account: as before).
         private void Snapshot(List<string> served)
         {
-            Account a = FindAccount(Account);
-            string acct = Account;
-            List<Instrument> insts = new List<Instrument>();
-            foreach (string root in served)
+            List<string> accts = AllSeats().Select(x => x.Name).ToList();
+            if (accts.Count == 0) accts.Add(Account);   // None: one flat position per root, as before
+            List<Instrument> insts = served.Select(x => ChartBridgeServer.InstrumentFor(x)).Where(x => x != null).ToList();
+            foreach (string acct in accts)
             {
-                Instrument inst = ChartBridgeServer.InstrumentFor(root);
-                if (inst == null) continue;
-                insts.Add(inst);
-                int q = a != null ? ChartBridgeOrders.AgentListed(a, inst) : 0;
-                double avg = 0;
-                if (a != null && q != 0) lock (a.Positions) { Position ps = a.Positions.FirstOrDefault(x => x.Instrument == inst || (x.Instrument != null && x.Instrument.FullName == inst.FullName)); if (ps != null) avg = ps.AveragePrice; }
-                ToAgent("{\"type\":\"position\",\"account\":" + CbJson.Str(acct) + ",\"root\":" + CbJson.Str(root) + ",\"qty\":" + q.ToString(CultureInfo.InvariantCulture) +
-                        ",\"avgPrice\":" + (q != 0 ? CbJson.Num(avg) : "null") + "}");
+                Account a = FindAccount(acct);
+                foreach (string root in served)
+                {
+                    Instrument inst = ChartBridgeServer.InstrumentFor(root);
+                    if (inst == null) continue;
+                    int q = a != null ? ChartBridgeOrders.AgentListed(a, inst) : 0;
+                    double avg = 0;
+                    if (a != null && q != 0) lock (a.Positions) { Position ps = a.Positions.FirstOrDefault(x => x.Instrument == inst || (x.Instrument != null && x.Instrument.FullName == inst.FullName)); if (ps != null) avg = ps.AveragePrice; }
+                    ToAgent("{\"type\":\"position\",\"account\":" + CbJson.Str(acct) + ",\"root\":" + CbJson.Str(root) + ",\"qty\":" + q.ToString(CultureInfo.InvariantCulture) +
+                            ",\"avgPrice\":" + (q != 0 ? CbJson.Num(avg) : "null") + "}");
+                }
             }
-            if (a != null)
+            foreach (string acct in accts)
             {
+                Account a = FindAccount(acct);
+                if (a == null) continue;
                 List<Order> orders;
                 lock (a.Orders) orders = a.Orders.ToList();
                 foreach (Order o in orders)
@@ -1632,6 +2611,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Whole(d, "targetTicks", out w) == 1) { p.TargetTicks = w; p.HasTarget = true; }
             if (Whole(d, "expireSec", out w) == 1) { p.ExpireSec = w; p.HasExpire = true; }
             if (p.HasExpire) p.ExpiresAt = p.At + p.ExpireSec * 1000.0;
+            // 0.6.0: sizes "5,3,4" (whole numbers in seat order) and seatsRev (a whole number)
+            if (d.ContainsKey("sizes"))
+            {
+                string st = S(d, "sizes");
+                if (st != null && SizesRx.IsMatch(st)) { p.SizesText = st; p.Sizes = st.Split(',').Select(t => int.Parse(t, CultureInfo.InvariantCulture)).ToArray(); }
+                else p.BadSizes = true;
+            }
+            int hr = Whole(d, "seatsRev", out w);
+            if (hr == 1) { p.SeatsRev = w; p.HasSeatsRev = true; } else if (hr < 0) p.BadSeatsRev = true;
             return p;
         }
 
@@ -1652,8 +2640,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (p.Setup == null || p.Setup.Length < 1 || p.Setup.Length > 40) return "setup must be 1 to 40 characters";
             if (p.Reason == null || p.Reason.Length < 1 || p.Reason.Length > 200) return "reason must be 1 to 200 characters";
             if (p.ConfText == null || p.Conf < 0 || p.Conf > 1) return "confidence must be a number from 0 to 1";
+            if (p.BadSizes) return "sizes must be whole numbers in seat order, like \"5,3,4\" (0: that seat sits this trade out)";   // 0.6.0
+            if (p.BadSeatsRev) return "seatsRev must be a whole number (welcome.seatsRev)";
             return null;
         }
+        private static readonly Regex SizesRx = new Regex("^(?:0|[1-9][0-9]{0,5})(?:,(?:0|[1-9][0-9]{0,5})){0,63}$");
 
         private void OnPlan(Dictionary<string, Val> d)
         {
@@ -1672,7 +2663,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (m == "shadow") p.Result = "shadow";
             else if (m == "copilot")
             {
-                Proposal pr = new Proposal { P = p, Account = Account, Sim = SimNow() };
+                Proposal pr = new Proposal { P = p, Account = KeyNow(), Sim = SimNow() };
                 lock (Sync) { Proposals[p.Id] = pr; nProposals++; }
                 p.Result = "proposed";
                 ToPages(ProposalJson(pr));
@@ -1683,13 +2674,52 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Order placed;
                 why = Place(p, null, out placed);
                 p.Result = why == null ? "placed" : "refused: " + why;
-                if (why == null) ToAgent(AnswerJson(p.Id, "placed", "placed on " + Account + " as order " + ChartBridgeOrders.AgentIdFor(placed) + "; it works until " + Iso(p.ExpiresAt)));
+                if (why == null && p.SeatNames != null) SeatAnswers(p);   // 0.6.0: one answer per seat, then the plan's
+                if (why == null) ToAgent(AnswerJson(p.Id, "placed", p.SeatNames != null ? PlacedWords(p) : "placed on " + Account + " as order " + ChartBridgeOrders.AgentIdFor(placed) + "; it works until " + Iso(p.ExpiresAt)));
             }
             if (why != null) { lock (Sync) nRefused++; ToAgent(Reject(p.Id, why)); }
             ShowPlan(p, fresh);
             AgentLog("plan " + (p.Id ?? "(no id)") + " " + p.Side + " " + p.Qty + " " + p.Root + " " + p.Kind + " @ " + (p.PriceText ?? "?") + (p.LimitText != null ? " limit " + p.LimitText : "") +
-                     " stop " + p.StopTicks + " target " + p.TargetTicks + " expire " + p.ExpireSec + "s risk " + (p.RiskText ?? "?") + " (" + (p.Setup ?? "") + ": " + (p.Reason ?? "") + "): " + p.Result);
+                     " stop " + p.StopTicks + " target " + p.TargetTicks + " expire " + p.ExpireSec + "s risk " + (p.RiskText ?? "?") + (p.SizesText != null ? " sizes " + p.SizesText : "") + " (" + (p.Setup ?? "") + ": " + (p.Reason ?? "") + "): " + p.Result + SeatsSaid(p));
             Notify();
+        }
+
+        // 0.6.0: a group plan's result per seat for the log ("; SIM-C not in this trade: ...").
+        private static string SeatsSaid(Plan p)
+        {
+            if (p.SeatNames == null) return "";
+            StringBuilder b = new StringBuilder();
+            for (int i = 0; i < p.SeatNames.Length; i++)
+            {
+                string r = p.Results != null ? p.Results[i] : null;
+                if (p.Outs[i] != null) b.Append("; ").Append(p.SeatNames[i]).Append(" not in this trade: ").Append(p.Outs[i]);
+                else if (r != null && r != "placed") b.Append("; ").Append(p.SeatNames[i]).Append(" refused: ").Append(r);
+                else if (r == "placed") b.Append("; ").Append(p.SeatNames[i]).Append(" ").Append(p.Sizes[i]);
+            }
+            return b.ToString();
+        }
+
+        // 0.6.0: the plan-level answer's words for a group: where it went, and which seats sat it out.
+        private string PlacedWords(Plan p)
+        {
+            List<string> on = new List<string>(), off = new List<string>();
+            for (int i = 0; i < p.SeatNames.Length; i++)
+            {
+                if (p.Results != null && p.Results[i] == "placed") on.Add(p.SeatNames[i] + " " + p.Sizes[i] + " (order " + ChartBridgeOrders.AgentIdFor(p.Orders[i]) + ")");
+                else off.Add(p.SeatNames[i] + " not in this trade: " + (p.Outs[i] ?? p.Results[i] ?? "not placed"));
+            }
+            return "placed on " + string.Join(", ", on) + "; it works until " + Iso(p.ExpiresAt) + (off.Count > 0 ? "; " + string.Join("; ", off) : "");
+        }
+
+        // 0.6.0: one answer per seat (with its account): placed, or refused with why (not in this trade, or the order path's refusal).
+        private void SeatAnswers(Plan p)
+        {
+            for (int i = 0; i < p.SeatNames.Length; i++)
+            {
+                string seat = p.SeatNames[i], r = p.Results != null ? p.Results[i] : null;
+                if (r == "placed") ToAgent(AnswerJson(p.Id, "placed", "placed on " + seat + " as order " + ChartBridgeOrders.AgentIdFor(p.Orders[i]) + " (" + p.Sizes[i] + "); it works until " + Iso(p.ExpiresAt), seat));
+                else ToAgent(AnswerJson(p.Id, "refused", p.Outs[i] != null ? "not in this trade: " + p.Outs[i] : "refused: " + (r ?? "not placed"), seat));
+            }
         }
 
         // Checks 2 to 11 of the contract, in order (the id, check 1, is the caller's). forAccount: a proposal's account (placed only
@@ -1697,20 +2727,42 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string Checks(Plan p, string forAccount, bool placing) { string used; return Checks(p, forAccount, placing, out used); }
 
         // used: the account the checks validated (Place sends there, never a fresh read).
+        // 0.6.0 (a group): the plan-level checks are as for one account; the checks of one account (tradable and connected, the owner
+        // lock, the one-direction check) and a size of 0 make that seat sit this trade out (Q1 b: p.Outs, in seat order); the plan is
+        // refused only when no seat can take it. One at a time, maxTrades and maxLosses count the whole group (one plan, one trade).
         private string Checks(Plan p, string forAccount, bool placing, out string used)
         {
             Rules r = RulesNow();
-            string acct = Account, sd;
-            used = acct;
+            string acct = Account, sd, gid;
+            List<string> seats;
+            long rev;
             bool k;
-            lock (Sync) { k = killed; sd = FilesBrokenLocked(); }
+            lock (Sync) { k = killed; sd = FilesBrokenLocked(); gid = groupId; seats = seatNames.ToList(); rev = seatsRev; }
+            bool grp = gid != null;
+            used = grp ? "group:" + gid : acct;
+            p.SeatNames = null; p.Outs = null; p.Results = null; p.Orders = null;
             // 2. not killed, not stood down, the files readable, the account tradable now
             if (k) return "the kill switch is on (release it on the Agent tab)";
             if (sd != null) return sd;
-            if (ChartBridgeBranches.IsNone(acct)) return "agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
-            if (forAccount != null && forAccount != acct) return "agent " + Id + "'s account changed from " + forAccount + " to " + acct + " after this proposal: nothing placed";
-            string aw = AccountProblemFor(acct, true) ?? AccountConflict();
-            if (aw != null) return aw;
+            if (!grp && ChartBridgeBranches.IsNone(acct)) return "agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
+            if (forAccount != null && forAccount != used) return "agent " + Id + "'s account changed from " + KeyWords(forAccount) + " to " + KeyWords(used) + " after this proposal: nothing placed";
+            string[] outs = null;
+            if (grp)
+            {
+                string gw = GroupPlanProblem(p, gid, seats, rev);
+                if (gw != null) return gw;
+                string cw = AccountConflict();
+                if (cw != null) return cw;
+                outs = new string[seats.Count];
+                for (int i = 0; i < seats.Count; i++) outs[i] = p.Sizes[i] == 0 ? "its size is 0 (no room for 1 contract)" : AccountProblemFor(seats[i], true);
+            }
+            else
+            {
+                if (p.SizesText != null) return "sizes is for a group: agent " + Id + " trades one account (" + acct + "); send qty alone";   // 0.6.0
+                if (p.HasSeatsRev && p.SeatsRev != rev) return "agent " + Id + "'s account changed (seatsRev " + rev + "): size again";
+                string aw = AccountProblemFor(acct, true) ?? AccountConflict();
+                if (aw != null) return aw;
+            }
             // 3. the root and the kind
             string root = (p.Root ?? "").ToUpperInvariant();
             if (!r.Roots.Contains(root)) return root + " is not one of agent " + Id + "'s roots (" + string.Join(", ", r.Roots) + ")";
@@ -1727,42 +2779,59 @@ namespace NinjaTrader.NinjaScript.AddOns
             string capWhy;
             cap = ChartBridgeOrders.AgentEntryCap(Id, root, out capWhy);   // 0.5.3 review: the words name the cap that applied (MNQ never maxQty.MNQ)
             if (p.Qty > cap) return "qty " + p.Qty + " is over the " + root + " cap of " + cap + " (" + capWhy + ")";
+            if (grp)   // 0.6.0: every seat's size against the same caps (ChartBridge never resizes: a size over a cap refuses the plan)
+                for (int i = 0; i < seats.Count; i++)
+                {
+                    if (p.Sizes[i] > ceiling) return "sizes: " + seats[i] + "'s " + p.Sizes[i] + " is over " + ceiling + " (" + ChartBridgeAgents.CapWords(Id, root, ceiling) + ")";
+                    if (p.Sizes[i] > cap) return "sizes: " + seats[i] + "'s " + p.Sizes[i] + " is over the " + root + " cap of " + cap + " (" + capWhy + ")";
+                }
             if (p.StopTicks < 1 || p.TargetTicks < 1) return "every agent entry needs a stop and a target: stopTicks and targetTicks must be whole numbers of 1 or more";
             int mb = ChartBridgeOrders.AgentMaxBracketTicks;
             if (mb > 0 && (p.StopTicks > mb || p.TargetTicks > mb)) return "stopTicks and targetTicks must be at most " + mb + " (maxBracketTicks in config.txt)";
-            // 5. the risk in dollars
+            // 5. the risk in dollars (0.6.0, a group: the sum over its seats' sizes)
             double tick = inst.MasterInstrument.TickSize, pv = inst.MasterInstrument.PointValue;
-            double risk = Math.Round(p.StopTicks * tick * pv * p.Qty, 2);
-            if (Math.Abs(p.Risk - risk) > 0.01 + 1e-9) return "riskDollars " + p.RiskText + " is not stopTicks x tick x point value x qty (" + risk.ToString("0.00", CultureInfo.InvariantCulture) + ")";
+            double risk = Math.Round(p.StopTicks * tick * pv * (grp ? p.Sizes.Sum() : p.Qty), 2);
+            if (Math.Abs(p.Risk - risk) > 0.01 + 1e-9) return "riskDollars " + p.RiskText + " is not stopTicks x tick x point value x " + (grp ? "the sum of sizes" : "qty") + " (" + risk.ToString("0.00", CultureInfo.InvariantCulture) + ")";
             // 6. the expiry
             if (p.ExpireSec < 60 || p.ExpireSec > r.MaxExpireSec) return "expireSec must be from 60 to " + r.MaxExpireSec;
             // 7. the entry window (session time, 0.5.2; never while the market is closed)
             DateTime et = NowEt();
             if (!InWindow(r, et)) return WindowRefusal(r, et);
-            // 8. one at a time (Owns first: it clears a lock whose position is flat by both readings)
+            // 8. one at a time (Owns first: it clears a lock whose position is flat by both readings); 0.6.0: on every seat
             bool entry = WorkingEntries().Count > 0, owns = r.Roots.Any(x => Owns(x)), open, proposal;
             lock (Sync)
             {
-                open = openTag != null || Sticky.Count > 0;
+                open = Seats.Values.Any(x => x.openTag != null || x.Sticky.Count > 0);
                 proposal = Proposals.Values.Any(x => x.State == "open" || x.State == "accepting") && !placing;
             }
             if (entry) return "one at a time: agent " + Id + " already has a working entry";
             if (open || owns) return "one at a time: agent " + Id + " already has a position";
             if (proposal) return "one at a time: agent " + Id + " already has an open proposal";
             ClearCarried();   // 0.5.2 re-check: flat by check 8, so nothing from an earlier session is left (never left to the next pass)
-            // 9. maxTrades, maxLosses
+            // 9. maxTrades, maxLosses (0.6.0: a group's plan counts once)
             int trades;
             string lossWhy;
-            lock (Sync) { trades = Trades.Count; StandDownLocked(); lossWhy = lossStandDown; }
+            lock (Sync) { trades = TradesLocked(); StandDownLocked(); lossWhy = lossStandDown; }
             if (r.MaxTrades > 0 && trades >= r.MaxTrades) return "agent " + Id + " has made " + trades + " trades today (maxTrades " + r.MaxTrades + ")";
             if (lossWhy != null) return lossWhy;
-            // 10. the owner lock
-            Account a = FindAccount(acct);
-            string lockWhy = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root);
-            if (lockWhy != null) return lockWhy;
-            // 10b. 0.5.8 (G3 a): one direction per group (advisory here; the binding check runs under PlaceLock in PlaceOrderLocked)
-            string groupWhy = ChartBridgeGroups.EntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Qty, true, false);
-            if (groupWhy != null) return groupWhy;
+            if (!grp)
+            {
+                // 10. the owner lock
+                Account a = FindAccount(acct);
+                string lockWhy = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root);
+                if (lockWhy != null) return lockWhy;
+                // 10b. 0.5.8 (G3 a): one direction per group (advisory here; the binding check runs under PlaceLock in PlaceOrderLocked)
+                string groupWhy = ChartBridgeGroups.EntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Qty, true, false);
+                if (groupWhy != null) return groupWhy;
+            }
+            else
+                for (int i = 0; i < seats.Count; i++)
+                {
+                    if (outs[i] != null) continue;
+                    // 10 and 10b on each seat (0.6.0): a position or order that is not the agent's, or the one-direction check, sits it out
+                    Account a = FindAccount(seats[i]);
+                    outs[i] = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root) ?? ChartBridgeGroups.EntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Sizes[i], true, false);
+                }
             // 11. the price (v2 gate 5): on the grid, a fresh last trade, the side of the market; a stop-limit's limit within 20 ticks
             bool buy = p.Side == "buy";
             string bad = ChartBridgeOrders.AgentPriceProblem(root, tick, p.Kind == "limit" ? "limit" : "stop", buy, p.Price);
@@ -1774,36 +2843,131 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (p.Limit < lo - 1e-9 || p.Limit > hi + 1e-9)
                     return "a " + p.Side + " stop-limit's limitPrice must be from its price " + (buy ? "up to " : "down to ") + ChartBridgeAgents.StopLimitMaxTicks + " ticks " + (buy ? "above" : "below") + " it";
             }
+            if (grp)
+            {
+                p.SeatNames = seats.ToArray(); p.Outs = outs;
+                if (outs.All(x => x != null))
+                    return "no seat of " + KeyWords(used) + " can take this plan: " + string.Join("; ", seats.Select((x, i) => x + ": " + outs[i]));
+            }
+            return null;
+        }
+
+        // 0.6.0: a group plan's own checks (part of check 2): groups.txt readable, seats there, sizes for each, the seatsRev it was
+        // sized for, qty the first seat's size that is not 0. Null when it may go on.
+        private string GroupPlanProblem(Plan p, string gid, List<string> seats, long rev)
+        {
+            if (ChartBridgeGroups.Unreadable()) return ChartBridgeGroups.ReadFailedText;
+            if (seats.Count == 0) return "group " + (ChartBridgeGroups.NameOf(gid) ?? gid) + " has no accounts: agent " + Id + " trades nothing until it has";
+            if (p.SizesText == null || !p.HasSeatsRev) return "a plan for a group needs sizes (one per seat, in welcome.seats order) and seatsRev";
+            if (p.SeatsRev != rev) return "the group changed; size again";
+            if (p.Sizes.Length != seats.Count) return "sizes has " + p.Sizes.Length + " sizes for " + seats.Count + " seats (" + string.Join(", ", seats) + ")";
+            int first = p.Sizes.FirstOrDefault(x => x > 0);
+            if (first == 0) return "every size is 0: no seat takes this plan";
+            if (p.Qty != first) return "qty must be the first seat's size that is not 0 (" + first + ")";
             return null;
         }
 
         // Placing (auto, or an accepted proposal): every check again at this moment, then ChartBridgeOrders.PlaceAgentEntry builds the
         // order from the plan's own parameters on the agent's own account, through every v2 gate and the owner lock.
+        // 0.6.0 (a group): then seat by seat (PlaceSeatsLocked), each through PlaceAgentEntry with its own account and size.
         private string Place(Plan p, string forAccount, out Order placed)
         {
             placed = null;
+            bool seats;
             lock (PlaceGate)
             {
                 string acct;
                 string why = Checks(p, forAccount, forAccount != null, out acct);
                 if (why != null) return why;
-                string root = p.Root.ToUpperInvariant();
-                string text = "{\"type\":\"order\",\"account\":" + CbJson.Str(acct) + ",\"root\":\"" + root + "\",\"side\":\"" + p.Side + "\",\"kind\":\"" + p.Kind + "\",\"qty\":" +
-                              p.Qty.ToString(CultureInfo.InvariantCulture) + ",\"price\":" + p.PriceText + (p.Kind == "stopLimit" ? ",\"limitPrice\":" + p.LimitText : "") +
-                              ",\"bracket\":{\"stop\":" + p.StopTicks.ToString(CultureInfo.InvariantCulture) + ",\"target\":" + p.TargetTicks.ToString(CultureInfo.InvariantCulture) + "}}";
-                why = ChartBridgeOrders.PlaceAgentEntry(Id, p.Id, text, out placed);
-                if (why != null) { placed = null; return why; }
-                string tag = ChartBridgeAgents.TagOf(placed.Name);
-                ChartBridgeAgents.NoteTag(tag, Id);
-                lock (Sync)
+                seats = p.SeatNames != null;
+                if (seats)
                 {
-                    Placed.Add(placed); MyTags.Add(tag); Sticky.Add(root); nPlaced++;
-                    EntryOfPlan[p.Id] = placed; PlanOfTag[tag] = p.Id; Expiry[tag] = p.ExpiresAt;
+                    why = PlaceSeatsLocked(p, out placed);
+                    if (why != null) { placed = null; return why; }
+                }
+                else
+                {
+                    string root = p.Root.ToUpperInvariant();
+                    string text = "{\"type\":\"order\",\"account\":" + CbJson.Str(acct) + ",\"root\":\"" + root + "\",\"side\":\"" + p.Side + "\",\"kind\":\"" + p.Kind + "\",\"qty\":" +
+                                  p.Qty.ToString(CultureInfo.InvariantCulture) + ",\"price\":" + p.PriceText + (p.Kind == "stopLimit" ? ",\"limitPrice\":" + p.LimitText : "") +
+                                  ",\"bracket\":{\"stop\":" + p.StopTicks.ToString(CultureInfo.InvariantCulture) + ",\"target\":" + p.TargetTicks.ToString(CultureInfo.InvariantCulture) + "}}";
+                    why = ChartBridgeOrders.PlaceAgentEntry(Id, p.Id, text, out placed);
+                    if (why != null) { placed = null; return why; }
+                    string tag = ChartBridgeAgents.TagOf(placed.Name);
+                    ChartBridgeAgents.NoteTag(tag, Id);
+                    Seat s = SeatFor(acct);
+                    lock (Sync)
+                    {
+                        Placed.Add(placed); MyTags.Add(tag); if (s != null) s.Sticky.Add(root); nPlaced++;
+                        EntryOfPlan[p.Id] = new List<Order> { placed }; PlanOfTag[tag] = p.Id; Expiry[tag] = p.ExpiresAt;
+                    }
                 }
             }
             SaveDay();
+            if (seats)
+            {
+                for (int i = 0; i < p.SeatNames.Length; i++)
+                    if (p.Results[i] == "placed")
+                        AgentLog("placed " + p.Side + " " + p.Sizes[i] + " " + p.Root + " " + p.Kind + " @ " + p.PriceText + (p.LimitText != null ? " limit " + p.LimitText : "") + " stop " + p.StopTicks +
+                                 " target " + p.TargetTicks + " on " + p.SeatNames[i] + (SeatSim(p.SeatNames[i]) ? " (Sim)" : " (LIVE)") + " (plan " + p.Id + ", until " + Iso(p.ExpiresAt) + ")");
+                return null;
+            }
             AgentLog("placed " + p.Side + " " + p.Qty + " " + p.Root + " " + p.Kind + " @ " + p.PriceText + (p.LimitText != null ? " limit " + p.LimitText : "") + " stop " + p.StopTicks +
                      " target " + p.TargetTicks + " on " + Account + (SimNow() ? " (Sim)" : " (LIVE)") + " (plan " + p.Id + ", until " + Iso(p.ExpiresAt) + ")");
+            return null;
+        }
+
+        // 0.6.0: a group plan, under PlaceGate after every check passed again: each seat that can take it, in seat order, through
+        // ChartBridgeOrders.PlaceAgentEntry with that seat's account and size (each runs every v2 gate, the owner lock and the
+        // one-direction check under PlaceLock), each in its own try, all with the plan's id. A seat the order path refuses is refused
+        // there and the others go on. PlaceLock is taken per seat by PlaceOrder, never held across seats: PlaceOrder writes the plans
+        // file after it lets PlaceLock go, and that write must never run under PlaceLock. Null when at least one seat was placed.
+        private string PlaceSeatsLocked(Plan p, out Order first)
+        {
+            first = null;
+            string root = p.Root.ToUpperInvariant();
+            Instrument inst = ChartBridgeServer.InstrumentFor(root);
+            double tick = inst != null ? inst.MasterInstrument.TickSize : 0, pv = inst != null ? inst.MasterInstrument.PointValue : 0;
+            int n = p.SeatNames.Length, count = 0;
+            p.Results = new string[n]; p.Orders = new Order[n];
+            for (int i = 0; i < n; i++)
+            {
+                string seat = p.SeatNames[i];
+                Seat s = SeatFor(seat);
+                if (s != null) lock (Sync) { s.Out = p.Outs[i]; s.LastSize = p.Sizes[i]; s.LastRisk = Math.Round(p.StopTicks * tick * pv * p.Sizes[i], 2); s.LastPlanId = p.Id; }
+                if (p.Outs[i] != null) continue;
+                string text = "{\"type\":\"order\",\"account\":" + CbJson.Str(seat) + ",\"root\":\"" + root + "\",\"side\":\"" + p.Side + "\",\"kind\":\"" + p.Kind + "\",\"qty\":" +
+                              p.Sizes[i].ToString(CultureInfo.InvariantCulture) + ",\"price\":" + p.PriceText + (p.Kind == "stopLimit" ? ",\"limitPrice\":" + p.LimitText : "") +
+                              ",\"bracket\":{\"stop\":" + p.StopTicks.ToString(CultureInfo.InvariantCulture) + ",\"target\":" + p.TargetTicks.ToString(CultureInfo.InvariantCulture) + "}}";
+                Order o = null;
+                string why;
+                try { why = ChartBridgeOrders.PlaceAgentEntry(Id, p.Id, text, out o); }
+                catch (Exception ex) { why = "ChartBridge error: " + ex.Message; o = null; }
+                if (why == null && o == null) why = "nothing was placed";
+                if (why == null && o.OrderState == OrderState.Rejected) why = "NinjaTrader rejected its entry";   // at once, inside Submit: that seat only
+                if (why != null)
+                {
+                    p.Results[i] = why;
+                    if (s != null) lock (Sync) s.Out = "refused: " + why;
+                    Log("agent " + Id + " plan " + p.Id + ": " + seat + " refused: " + why);
+                    continue;
+                }
+                string tag = ChartBridgeAgents.TagOf(o.Name);
+                ChartBridgeAgents.NoteTag(tag, Id);
+                lock (Sync)
+                {
+                    Placed.Add(o); MyTags.Add(tag); if (s != null) s.Sticky.Add(root);
+                    List<Order> l;
+                    if (!EntryOfPlan.TryGetValue(p.Id, out l)) EntryOfPlan[p.Id] = l = new List<Order>();
+                    l.Add(o);
+                    PlanOfTag[tag] = p.Id; SeatOfTag[tag] = seat; Expiry[tag] = p.ExpiresAt;
+                }
+                p.Results[i] = "placed"; p.Orders[i] = o; count++;
+                if (first == null) first = o;
+            }
+            if (count == 0)
+                return "no seat took it: " + string.Join("; ", p.SeatNames.Select((x, i) => x + ": " + (p.Outs[i] ?? p.Results[i])));
+            lock (Sync) nPlaced++;
             return null;
         }
 
@@ -1829,7 +2993,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
-        private bool SimNow() { Account a = FindAccount(Account); return a != null && ChartBridgeBot.IsSim(a); }
+        // 0.6.0: a group is Sim only when every seat is (the careful side).
+        private bool SimNow()
+        {
+            if (!GroupNow()) { Account a = FindAccount(Account); return a != null && ChartBridgeBot.IsSim(a); }
+            List<string> seats = SeatNames();
+            return seats.Count > 0 && seats.All(SeatSim);
+        }
 
         private void OnSkip(Dictionary<string, Val> d)
         {
@@ -1856,12 +3026,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             string id = S(d, "id"), reason = S(d, "reason");
             if (id == null || reason == null || reason.Length < 1) { ToAgent(Reject(id, "withdraw needs an id and a reason")); return; }
             Proposal p;
-            Order entry;
+            List<Order> entries;
             string was = null;
             lock (Sync)
             {
                 Proposals.TryGetValue(id, out p);
-                EntryOfPlan.TryGetValue(id, out entry);
+                EntryOfPlan.TryGetValue(id, out entries);
+                entries = entries != null ? entries.ToList() : new List<Order>();
                 if (p != null && p.State == "open") { p.State = "withdrawn"; was = "open"; }
                 else if (p != null && p.State == "accepting") { p.WithdrawnWhy = reason; was = "accepting"; }
             }
@@ -1874,73 +3045,38 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Notify();
                 return;
             }
-            bool cancelled = entry != null && Cancel(entry, "withdrawn by the agent: " + reason);
+            // 0.6.0: every seat's unfilled entry of that plan
+            List<Order> gone = entries.Where(e => Cancel(e, "withdrawn by the agent: " + reason)).ToList();
+            bool cancelled = gone.Count > 0;
             if (!cancelled) { ToAgent(Reject(id, "nothing to withdraw for " + id)); return; }
+            Order entry = gone[0];
+            int filled = gone.Sum(e => e.Filled);
             if (p != null) { lock (Sync) p.State = "withdrawn"; ToPages(ProposalJson(p)); }
-            ToAgent(AnswerJson(id, "withdrawn", "its unfilled entry cancelled (" + reason + ")" + (entry.Filled > 0 ? "; the " + entry.Filled + " filled keep their stop and target" : "")));
+            ToAgent(AnswerJson(id, "withdrawn", (gone.Count > 1 ? "its " + gone.Count + " unfilled entries cancelled (" : "its unfilled entry cancelled (") + reason + ")" + (filled > 0 ? "; the " + filled + " filled keep their stop and target" : "")));
             AgentLog("withdraw " + id + ": its unfilled entry cancelled (" + reason + ")");
             Notify();
         }
 
-        // flatten from the agent: auto only, not while killed: cancel its orders on its account and roots, then market out.
-        private void OnAgentFlatten()
+        // flatten from the agent: auto only, not while killed: cancel its orders on its account and roots, then market out. 0.6.0:
+        // every seat at once (one message for the whole group), or account: that seat only.
+        private void OnAgentFlatten(Dictionary<string, Val> d)
         {
-            string m;
+            string m, seat = S(d, "account");
             bool k;
             lock (Sync) { m = mode; k = killed; }
             string why = m != "auto" ? "flatten is for auto mode only" : k ? "the kill switch is on" : null;
-            if (why == null && StartFlatten("flatten from agent " + Id, false) == 0) why = "agent " + Id + " has nothing to flatten";
+            if (why == null && d.ContainsKey("account") && (seat == null || !HasSeat(seat))) why = "account must be one of agent " + Id + "'s seats (" + string.Join(", ", AllSeats().Select(x => x.Name)) + ")";
+            if (why == null && StartFlatten("flatten from agent " + Id, false, seat) == 0) why = "agent " + Id + " has nothing to flatten" + (seat != null ? " on " + seat : "");
             if (why != null) { ToAgent(Reject(null, why)); return; }
-            AgentLog("flatten from the agent (auto) on " + Account);
+            AgentLog("flatten from the agent (auto) on " + (seat ?? AccountWords()));
         }
 
         // ---------------------------------------------------------- the agent's orders
-        // 0.5.2 re-check: does the agent own a position on root from an earlier session? Its open trade's tag is carried, or (no
-        // trade record yet: after a start, before the executions are read again) the position is held under its own legs of a
-        // carried trade. A position of this session (its own record, or legs of a tag not carried) never counts.
-        private bool FromBefore(string root)
-        {
-            if (!Owns(root)) return false;
-            string open;
-            HashSet<string> carried;
-            lock (Sync) { open = openTag != null && openRoot == root ? openTag : null; carried = new HashSet<string>(Carried.Select(t => t.Length > 8 ? t.Substring(0, 8) : t)); }
-            if (open != null) return carried.Contains(open.Length > 8 ? open.Substring(0, 8) : open);
-            Account a = FindAccount(Account);
-            Instrument inst = ChartBridgeServer.InstrumentFor(root);
-            if (a == null || inst == null) return false;
-            if (ChartBridgeOrders.AgentListed(a, inst) == 0 && ChartBridgeOrders.AgentEffective(a, inst) == 0) return false;
-            return ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && LegRx.IsMatch(o.Name ?? "") && carried.Contains(ChartBridgeAgents.TagOf(o.Name) ?? ""));
-        }
-
         private void ClearCarried()
         {
             bool had;
             lock (Sync) { had = Carried.Count > 0; Carried.Clear(); }
             if (had) SaveDay();
-        }
-
-        public bool Owns(string root)
-        {
-            string acct;
-            bool open, stick;
-            lock (Sync) { acct = account; open = openTag != null && openRoot == root; stick = Sticky.Contains(root); }
-            Account a = FindAccount(acct);
-            if (open && LedgerAgainst(root, a) == null) return true;   // its open trade, unless the account holds the other side (review A1)
-            Instrument inst = ChartBridgeServer.InstrumentFor(root);
-            if (open) return a != null && inst != null && ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && ChartBridgeAgents.IsAgentEntry(o));
-            if (a == null || inst == null) return stick;
-            List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
-            bool entryWorks = may.Any(o => IsMine(o) && ChartBridgeAgents.IsAgentEntry(o)), mineWorks = may.Any(o => IsMine(o));
-            if (entryWorks) return true;
-            int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
-            int held = p1 != 0 ? p1 : p2;
-            // its own stop or target that would close what the account holds (a sell for a long, a buy for a short) protects it there
-            bool legsWork = held != 0 && may.Any(o => IsMine(o) && LegRx.IsMatch(o.Name ?? "") && (o.OrderAction == OrderAction.Sell) == (held > 0));
-            if (legsWork && (p1 != 0 || p2 != 0)) return true;   // its own stop or target protects a position there (after a restart too)
-            if (!stick) return false;
-            bool unnoted = ChartBridgeOrders.AgentUnnotedFill(a, inst, Now()) != null;   // a fill NinjaTrader shows whose event is not through yet
-            if (p1 == 0 && p2 == 0 && !mineWorks && !unnoted) { lock (Sync) { if (!(openTag != null && openRoot == root)) Sticky.Remove(root); } return false; }   // flat by both readings, nothing of it working: the lock clears
-            return true;
         }
 
         private bool IsMine(Order o) { return o != null && ChartBridgeAgents.AgentOf(o) == Id; }
@@ -1953,70 +3089,34 @@ namespace NinjaTrader.NinjaScript.AddOns
             return FlatRoots().Contains(m) ? m : null;
         }
 
-        // Its open trade on this root is against what the account holds: both readings of the trade's contract show a position on
-        // the other side (it ended where ChartBridge could not see it, and the account holds someone else's). The text, or null.
-        private string LedgerAgainst(string root, Account a) { return LedgerAgainst(root, a, false); }
-
-        // forDrop: the trade is ended only once this has held for 3 s with no unnoted fill (review A C4).
-        private string LedgerAgainst(string root, Account a, bool forDrop)
-        {
-            Instrument li;
-            int q;
-            lock (Sync) { if (openTag == null || openRoot != root) return null; li = openInst; q = ledQty; }
-            if (a == null || q == 0) { lock (Sync) AgainstSince.Remove(root); return null; }
-            if (li == null) li = ChartBridgeServer.InstrumentFor(root);
-            if (li == null) return null;
-            int p1 = ChartBridgeOrders.AgentListed(a, li), p2 = ChartBridgeOrders.AgentEffective(a, li);
-            double now = Now();
-            if (p1 == 0 || p2 == 0 || Math.Sign(p1) == Math.Sign(q) || Math.Sign(p2) == Math.Sign(q)) { lock (Sync) AgainstSince.Remove(root); return null; }
-            string text = "its trade holds " + q + " but " + a.Name + " " + root + " shows " + p1;
-            if (!forDrop) return text;   // the owner lock and the flatten: at once (never the agent's while the account holds the other side)
-            // review A C4: only once it has held for 3 s with no fill NinjaTrader shows ahead of its event (a late execution of the
-            // agent's own close would otherwise read as someone else's position for a moment)
-            bool unnoted = ChartBridgeOrders.AgentUnnotedFill(a, li, now) != null;
-            lock (Sync)
-            {
-                double since;
-                if (unnoted || !AgainstSince.TryGetValue(root, out since)) { AgainstSince[root] = now; return null; }
-                if (now - since < ChartBridgeAgents.AgainstGraceMs) return null;
-            }
-            return text;
-        }
-
-        private readonly Dictionary<string, double> AgainstSince = new Dictionary<string, double>();   // root -> since when its trade is against the account
-
-        // The contract a flatten job closes: the served one by Owns, another month only while its own open trade holds it.
-        private bool OwnsContract(string root, Instrument inst, Account a)
-        {
-            Instrument served = ChartBridgeServer.InstrumentFor(root);
-            if (served == null || ChartBridgeAgents.SameContract(inst, served)) return Owns(root);
-            lock (Sync) if (!(openTag != null && openRoot == root && ChartBridgeAgents.SameContract(openInst, inst) && ledQty != 0)) return false;
-            return LedgerAgainst(root, a) == null;
-        }
-
-        // The most a flatten may close on that contract: its open trade's own quantity there; with no trade followed (after a restart
-        // before the executions are read, or none), the agent's stop legs' contracts when the job started (review A1).
-        private int CloseCap(string root, Instrument inst, FlatJob j)
-        {
-            lock (Sync)
-                if (openTag != null && openRoot == root && (openInst == null || ChartBridgeAgents.SameContract(openInst, inst)) && ledQty != 0) return Math.Abs(ledQty);
-            return Math.Max(0, j.LegQty - j.ClosedQty);   // each close's fill comes off it (review A C2)
-        }
         // Its protective orders: v2's legs, and the stop placed again over a shut market ("CB#<tag> ag:<id> stop p<price>"; review D1).
         private static readonly Regex LegRx = new Regex("^CB#[0-9a-f]{8} (?:(?:stop|target) |ag:[a-z][a-z0-9]{0,11} stop p)");
         private static readonly Regex ReStopRx = new Regex("^CB#[0-9a-f]{8} ag:[a-z][a-z0-9]{0,11} stop p");
         private static bool IsReStop(Order o) { return o != null && ReStopRx.IsMatch(o.Name ?? ""); }
         private bool IsMyEntry(Order o) { if (o == null) return false; Match m = ChartBridgeAgents.EntryRx.Match(o.Name ?? ""); return m.Success && m.Groups[2].Value == Id; }
 
-        // Every working entry of this agent on its account: those NinjaTrader lists (also after a restart, by name) and those just sent.
+        // Every working entry of this agent on its accounts (0.6.0: every seat it follows): those NinjaTrader lists (also after a
+        // restart, by name) and those just sent.
         private List<Order> WorkingEntries()
         {
             List<Order> list = new List<Order>();
-            Account a = FindAccount(Account);
-            if (a != null) lock (a.Orders) foreach (Order o in a.Orders) if (IsMyEntry(o) && ChartBridgeOrders.IsWorking(o.OrderState)) list.Add(o);
+            foreach (Seat x in AllSeats())
+            {
+                Account a = FindAccount(x.Name);
+                if (a != null) lock (a.Orders) foreach (Order o in a.Orders) if (IsMyEntry(o) && ChartBridgeOrders.IsWorking(o.OrderState)) list.Add(o);
+            }
             lock (Sync) foreach (Order o in Placed) if (!list.Contains(o) && ChartBridgeOrders.IsWorking(o.OrderState)) list.Add(o);
             return list;
         }
+
+        // 0.6.0: a seat (made when missing: a single account chosen just now).
+        private Seat EnsureSeat(string acct)
+        {
+            lock (Sync) { Seat s; if (!Seats.TryGetValue(acct, out s)) Seats[acct] = s = new Seat(this, acct); return s; }
+        }
+        private static bool SeatSim(string acct) { Account a = FindAccount(acct); return a != null && ChartBridgeBot.IsSim(a); }
+        // 0.6.0: the seat of a group entry's tag (its answers carry it as account), or null (one account: as before).
+        private string SeatOfTagNow(string tag) { string s; lock (Sync) return tag != null && SeatOfTag.TryGetValue(tag, out s) ? s : null; }
 
         // Cancel an unfilled (or part-filled) entry of this agent: never a stop or a target; the filled part keeps its legs. True only
         // the first time (for the answer); while the order still works the cancel is sent again every 3 s (ResendCancels), with a
@@ -2087,8 +3187,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             string tag = ChartBridgeAgents.TagOf(o.Name), planId;
             lock (Sync) PlanOfTag.TryGetValue(tag ?? "", out planId);
             if (planId == null) return;
-            ToAgent(AnswerJson(planId, answer, why + (o.Filled > 0 ? "; the rest cancelled, the " + o.Filled + " filled keep their stop and target" : "; its entry cancelled")));
-            AgentLog("plan " + planId + " " + answer + ": " + why + (o.Filled > 0 ? " (" + o.Filled + " filled keep their legs)" : ""));
+            string seat = SeatOfTagNow(tag);   // 0.6.0: a group's seat answers with its account
+            ToAgent(AnswerJson(planId, answer, why + (o.Filled > 0 ? "; the rest cancelled, the " + o.Filled + " filled keep their stop and target" : "; its entry cancelled"), seat));
+            AgentLog("plan " + planId + " " + answer + (seat != null ? " on " + seat : "") + ": " + why + (o.Filled > 0 ? " (" + o.Filled + " filled keep their legs)" : ""));
         }
 
         // ChartBridgeOrders.OnOrderUpdate: the agent sees its own orders; done entries are forgotten.
@@ -2112,164 +3213,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (c != null && json != null) c.Send(json);
             if (done && IsMyEntry(o)) SaveDay();
-            if (rejectedEntry && planId != null) { ToAgent(AnswerJson(planId, "refused", "NinjaTrader rejected its entry")); AgentLog("plan " + planId + ": NinjaTrader rejected its entry"); }
+            if (rejectedEntry && planId != null)
+            {
+                string seat = SeatOfTagNow(tag);   // 0.6.0: on a group, that seat only (the others keep theirs)
+                Seat x = seat != null ? SeatFor(seat) : null;
+                if (x != null) lock (Sync) x.Out = "refused: NinjaTrader rejected its entry";
+                ToAgent(AnswerJson(planId, "refused", "NinjaTrader rejected its entry", seat)); AgentLog("plan " + planId + ": NinjaTrader rejected its entry" + (seat != null ? " on " + seat : ""));
+            }
         }
 
-        // Every execution on this agent's account (ChartBridgeServer.Deliver). Follows the agent's trade: it opens with the first fill
-        // of its entry (a trade, even part filled) and closes when that position is flat again, whatever closed it; its realized
-        // dollars come from those executions (as the bot's).
-        public void OnExec(Instrument inst, MarketPosition side, int qty, double price, string orderId, string json)
+        // Every execution on one of its seats (ChartBridgeServer.Deliver): that seat follows its trade (Seat.OnExec).
+        public void OnExec(string account, Instrument inst, MarketPosition side, int qty, double price, string orderId, string json)
         {
-            if (inst == null || qty <= 0) return;
-            string root = ChartBridgeServer.RootFor(inst) ?? MonthRoot(inst);   // any contract month of its roots (review A5)
-            if (root == null) return;
-            Rules r = RulesNow();
-            if (!r.Roots.Contains(root)) return;
-            Order o = FindOrder(orderId);
-            string entryTag = IsMyEntry(o) ? ChartBridgeAgents.TagOf(o.Name) : null;
-            bool mine = o != null && IsMine(o);
-            // section 10 item 7: while it owns the pair, every fill there reaches the agent, its own or not (Anthony's Flatten, a close
-            // in NinjaTrader: role other, cbId null when the order is not ChartBridge's), read before this fill is booked
-            bool tell = mine || OwnsContract(root, inst, FindAccount(Account));
-            if (tell && json != null && json.EndsWith("}", StringComparison.Ordinal))   // section 10: ChartBridge's id and the order's role
-                json = json.Substring(0, json.Length - 1) + ",\"cbId\":" + Str(CbIdOf(o)) + ",\"role\":" + CbJson.Str(mine ? ChartBridgeOrders.AgentRoleFor(o) : "other") + "}";   // 10.7: a role only for its own orders (ag:<id>, or legs of its entry's tag)
-            RollDay();
-            string closedTag = null, opened = null, netted = null;
-            bool spanChanged = false;
-            double pnl = 0;
-            ChartBridgeClient c;
-            lock (Sync)
-            {
-                // review E1: a late execution of an entry whose trade the crossing rule just closed (the close bigger than the trade)
-                // nets against that close: the trade's result and its contracts grow by the matched part; only the true net (any rest
-                // of this fill) may open a trade again
-                ExcessFill ex;
-                if (entryTag != null && openTag == null && ExcessByTag.TryGetValue(entryTag, out ex) && ex.Qty > 0 && (side == MarketPosition.Long ? 1 : -1) == ex.TradeSign)
-                {
-                    int m = Math.Min(qty, ex.Qty);
-                    double was;
-                    if (Trades.TryGetValue(ex.Key, out was) && !double.IsNaN(was)) Trades[ex.Key] = Math.Round(was + m * (ex.Price - price) * ex.TradeSign * ex.Pv, 2);
-                    int[] sp0;
-                    if (Spans.TryGetValue(ex.Key, out sp0)) sp0[1] += m;
-                    int seen0;
-                    EntrySeen.TryGetValue(entryTag, out seen0);
-                    EntrySeen[entryTag] = seen0 + m;
-                    ex.Qty -= m;
-                    qty -= m;
-                    netted = ex.Key;
-                }
-                if (entryTag != null && qty > 0)
-                {
-                    // A trade opens with the first fill of its entry (counted once, also after a restart: the executions are read again
-                    // then). Each trade knows which of its entry's contracts it covers (Spans: first, count; in the day file), so the
-                    // same entry filling again after its first part already closed (a part fill, then the rest) opens a NEW trade,
-                    // "<tag>-2", whose result counts in losses, pnlToday and maxLosses (review A-S3), and a replay never counts twice.
-                    int seen;
-                    EntrySeen.TryGetValue(entryTag, out seen);
-                    seen += qty;
-                    EntrySeen[entryTag] = seen;
-                    string inSpan = null;
-                    foreach (KeyValuePair<string, int[]> sp in Spans)
-                        if ((sp.Key == entryTag || sp.Key.StartsWith(entryTag + "-", StringComparison.Ordinal)) && seen > sp.Value[0] && seen <= sp.Value[0] + sp.Value[1]) inSpan = sp.Key;
-                    double was;
-                    if (inSpan != null)
-                    {
-                        if (openTag == null && Trades.TryGetValue(inSpan, out was) && double.IsNaN(was)) { openTag = inSpan; openRoot = root; openInst = inst; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Add(root); }
-                    }
-                    else if (openTag != null && (openTag == entryTag || openTag.StartsWith(entryTag + "-", StringComparison.Ordinal)))
-                    {
-                        int[] sp;
-                        if (Spans.TryGetValue(openTag, out sp)) sp[1] = seen - sp[0];   // more of the same entry while its trade is open
-                        spanChanged = true;
-                    }
-                    else if (openTag == null)
-                    {
-                        string key = entryTag;
-                        for (int n = 2; Trades.ContainsKey(key); n++) key = entryTag + "-" + n.ToString(CultureInfo.InvariantCulture);
-                        openTag = key; openRoot = root; openInst = inst; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Add(root);
-                        Trades[key] = double.NaN; Spans[key] = new[] { seen - qty, qty }; opened = key;
-                    }
-                }
-                if (qty > 0 && openTag != null && root == openRoot && (openInst == null || ChartBridgeAgents.SameContract(inst, openInst)))
-                {
-                    int signed = side == MarketPosition.Long ? qty : -qty;
-                    // review D5: a fill bigger than the trade on the other side closes the trade at that fill's own price; the rest is
-                    // not the agent's (its trade never crosses zero, so its result is always from its actual executions); the rest is
-                    // kept for a late execution of the same entry to net against (review E1)
-                    if (ledQty != 0 && Math.Sign(signed) != Math.Sign(ledQty) && Math.Abs(signed) > Math.Abs(ledQty))
-                    {
-                        string tag8 = openTag.Length > 8 ? openTag.Substring(0, 8) : openTag;
-                        ExcessByTag[tag8] = new ExcessFill { Key = openTag, Qty = Math.Abs(signed) - Math.Abs(ledQty), Price = price, TradeSign = Math.Sign(ledQty), Pv = inst.MasterInstrument.PointValue };
-                        signed = -ledQty;
-                    }
-                    if (ledQty == 0 || Math.Sign(signed) == Math.Sign(ledQty)) ledAvg = (ledAvg * Math.Abs(ledQty) + price * qty) / (Math.Abs(ledQty) + qty);
-                    ledQty += signed;
-                    ledCash -= signed * price;
-                    if (ledQty == 0)
-                    {
-                        pnl = Math.Round(ledCash * inst.MasterInstrument.PointValue, 2);
-                        Trades[openTag] = pnl;
-                        closedTag = openTag; openTag = null; openRoot = null; openInst = null; ledAvg = 0;
-                    }
-                }
-                c = helloed ? client : null;
-            }
-            if (tell && c != null && json != null) c.Send(json);
-            if (netted != null) { AgentLog("a late fill of its entry netted against the close of trade " + netted); SaveDay(); Notify(); }
-            if (spanChanged && opened == null && closedTag == null) SaveDay();
-            if (opened == null && closedTag == null) return;
-            SaveDay();
-            if (opened != null) AgentLog("trade " + opened + " opened on " + root);
-            if (closedTag != null)
-            {
-                AgentLog("trade " + closedTag + " closed: " + pnl.ToString("0.##", CultureInfo.InvariantCulture) + " dollars");
-                string sd;
-                lock (Sync) sd = StandDownLocked();
-                if (sd != null && pnl < 0) { SaveDay(); Log("agent " + Id + " stands down: " + sd); ToPages(StatusJson("warn", "Agent " + Id + " stands down: " + sd)); }
-            }
-            Notify();
+            Seat x = SeatFor(account);
+            if (x != null) x.OnExec(inst, side, qty, price, orderId, json);
         }
 
         private class ExcessFill { public string Key; public int Qty, TradeSign; public double Price, Pv; }
         private readonly Dictionary<string, ExcessFill> ExcessByTag = new Dictionary<string, ExcessFill>();   // entry tag -> the close's part beyond its trade
-
-        // Review E1: its open trade while the pair is flat by both readings, with nothing of the agent working and no fill NinjaTrader
-        // shows ahead of its event, for 5 s: ended, booked from its own executions; a warning when those do not net to zero.
-        private double ghostSince = -1;
-
-        private void EndGhostTrade(double now)
-        {
-            string key, root;
-            Instrument li;
-            lock (Sync) { key = openTag; root = openRoot; li = openInst; }
-            if (key == null) { ghostSince = -1; return; }
-            if (li == null) li = ChartBridgeServer.InstrumentFor(root);
-            Account a = FindAccount(Account);
-            if (a == null || li == null) { ghostSince = -1; return; }
-            int p1 = ChartBridgeOrders.AgentListed(a, li), p2 = ChartBridgeOrders.AgentEffective(a, li);
-            bool busy = p1 != 0 || p2 != 0 || ChartBridgeOrders.AgentMayFill(a, li).Any(o => IsMine(o)) || ChartBridgeOrders.AgentUnnotedFill(a, li, now) != null;
-            if (busy) { ghostSince = -1; return; }
-            if (ghostSince < 0) { ghostSince = now; return; }
-            if (now - ghostSince < ChartBridgeAgents.GhostGraceMs) return;
-            ghostSince = -1;
-            double realized;
-            int left;
-            lock (Sync)
-            {
-                if (openTag != key) return;
-                double pv = li.MasterInstrument != null ? li.MasterInstrument.PointValue : 0;
-                left = ledQty;
-                realized = Math.Round((ledCash + ledQty * ledAvg) * pv, 2);
-                Trades[key] = realized; openTag = null; openRoot = null; openInst = null; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Remove(root);
-                StandDownLocked();
-            }
-            string text = "Agent " + Id + ": its trade " + key + " on " + a.Name + " " + root + " was ended: the pair is flat by both readings with nothing of it working; " +
-                          realized.ToString("0.##", CultureInfo.InvariantCulture) + " dollars booked from its executions" + (left != 0 ? " (its own executions leave " + left + " open: some were not seen; check NinjaTrader's fills)" : "");
-            Log(text); AgentLog(text);
-            if (left != 0) ChartBridgeOrders.AgentWarn(text);
-            SaveDay();
-            Notify();
-        }
 
         // ChartBridge's id for an order of this agent ("o12"), as its order messages carried it (kept here: ChartBridge forgets a done
         // order's id); null for an order that is not ChartBridge's.
@@ -2300,17 +3261,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             return id;
         }
 
-        private Order FindOrder(string orderId)
+        private Order FindOrder(string orderId, string acct)
         {
             if (string.IsNullOrEmpty(orderId)) return null;
-            Account a = FindAccount(Account);
+            Account a = FindAccount(acct);
             if (a != null) lock (a.Orders) foreach (Order o in a.Orders) if (o.OrderId == orderId) return o;
             lock (Sync) foreach (Order o in Placed) if (o.OrderId == orderId) return o;
             return null;
         }
 
-        // The account's position on the agent's roots, to the agent.
-        public void OnPosition(PositionEventArgs e)
+        // The account's position on the agent's roots, to the agent (0.6.0: each seat's, with its account).
+        public void OnPosition(string acct, PositionEventArgs e)
         {
             string root = ChartBridgeServer.RootFor(e.Position.Instrument);
             if (root == null || !RulesNow().Roots.Contains(root)) return;
@@ -2318,7 +3279,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) c = helloed ? client : null;
             if (c == null) return;
             int q = e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0;
-            c.Send("{\"type\":\"position\",\"account\":" + CbJson.Str(Account) + ",\"root\":" + CbJson.Str(root) + ",\"qty\":" + q.ToString(CultureInfo.InvariantCulture) +
+            c.Send("{\"type\":\"position\",\"account\":" + CbJson.Str(acct) + ",\"root\":" + CbJson.Str(root) + ",\"qty\":" + q.ToString(CultureInfo.InvariantCulture) +
                    ",\"avgPrice\":" + (q != 0 ? CbJson.Num(e.AveragePrice) : "null") + "}");
         }
 
@@ -2333,6 +3294,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public void Check(double now)
         {
             RollDay();
+            RefreshSeats();   // 0.6.0: a group's membership (and a deleted group: None)
             ChartBridgeClient silent = null, mute = null;
             bool none, strip = false;
             lock (Sync)
@@ -2406,34 +3368,36 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (cancelled > 0 || ended.Count > 0) Notify();
             // every pass: a lock whose pair is flat by both readings, with nothing of the agent working there, clears; an open trade
             // record that nothing listed belongs to any more is dropped (once the executions have been read again after a start)
+            // 0.6.0: on every seat it follows (each its own ledger, locks, jobs and errors)
             List<string> roots = FlatRoots();
-            DropLedgerAgainst(roots);
-            EndGhostTrade(now);
-            foreach (string root in roots) Owns(root);
-            if (ChartBridgeServer.ExecutionsReplayed(Account)) { DropStaleRecords(roots); WarnHeldByStopOnly(roots); }
-            RepeatTradeLost(now);   // only once the session's executions were read again (review B)
+            List<Seat> seats = AllSeats();
+            foreach (Seat x in seats) { x.DropLedgerAgainst(roots); x.EndGhostTrade(now); foreach (string root in roots) x.Owns(root); }
+            DropStaleRecords(roots);   // each record once its seat's executions were read again (ExecutionsReplayed)
+            foreach (Seat x in seats) { if (ChartBridgeServer.ExecutionsReplayed(x.Name)) x.WarnHeldByStopOnly(roots); x.RepeatTradeLost(now); }   // only once the session's executions were read again (review B)
             // the flat time (ruling 2): from flatAt until the next entryFrom in session order (0.5.2: with an 18:00 entryFrom a
             // position held across midnight is inside the session and stays; with 09:45 one held overnight is flattened, as
             // before) and while the market is closed, whatever the agent does or whether it is there
             bool flatHours = FlatHours(r, etNow), fromBefore;
             lock (Sync) fromBefore = Carried.Count > 0;
-            if (fromBefore && !roots.Any(x => Owns(x))) { ClearCarried(); fromBefore = false; }   // flat: nothing left from the session before
+            if (fromBefore && !seats.Any(x => roots.Any(y => x.Owns(y)))) { ClearCarried(); fromBefore = false; }   // flat: nothing left from the session before
             // 0.5.2 re-check: only a position that is in fact from an earlier session, never because Carried is merely not empty
-            if (fromBefore) fromBefore = roots.Any(x => FromBefore(x));
+            if (fromBefore) fromBefore = seats.Any(x => roots.Any(y => x.FromBefore(y)));
             flatHours = flatHours || fromBefore;   // 0.5.2 review: a position whose trade began in an earlier session is flattened, the market open
             if (!startTold && now - startedMs >= ChartBridgeAgents.SilenceMs)
             {
                 startTold = true;
-                List<string> held = roots.Where(x => Owns(x)).ToList();
-                if (held.Count > 0)
+                foreach (Seat x in seats)
                 {
-                    string text = "Agent " + Id + " holds a position or orders on " + string.Join(", ", held) + " on " + Account + " since ChartBridge started: its stop and target stay, and it is flattened at " +
+                    List<string> held = roots.Where(y => x.Owns(y)).ToList();
+                    if (held.Count == 0) continue;
+                    string text = "Agent " + Id + " holds a position or orders on " + string.Join(", ", held) + " on " + x.Name + " since ChartBridge started: its stop and target stay, and it is flattened at " +
                                   Hm(r.FlatAt) + (flatHours ? " (now: outside its trading hours)" : "") + "; check NinjaTrader";
                     Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
                 }
             }
             if (flatHours) StartFlatten(AtFlatTime(r, etNow) ? Id + " flattened at " + Hm(r.FlatAt) + " by its rules" : fromBefore && !FlatHours(r, etNow) ? Id + " held a position from an earlier session (its " + Hm(r.FlatAt) + " flatten did not finish): flattened by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + (ChartBridgeCme.Closed(etNow) ? ", or the market closed" : "") + "): flattened by its rules", true);
-            StepFlatten(now);
+            foreach (Seat x in seats) x.StepFlatten(now);
+            PruneSeats();   // 0.6.0: a seat that left the group, now flat with nothing of the agent's there, is dropped
             WelcomeIfCapsChanged();
             SendState(false);   // a change no event carries (the session's roll, the clock, a file): within one pass
             SendAccountState(false);   // 0.5.8: its account's real numbers, when any field but "at" changed
@@ -2448,439 +3412,43 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // An open trade record counts only while something of it is listed (its entry or its legs, by tag) or the ledger follows it;
         // otherwise it is dropped with a warning, so it can never make the agent own a position it did not place.
+        // 0.6.0: a record of a group's seat is looked at on that seat (its #seat line); any other on every seat it follows (one
+        // account: that one), each only once the executions of those seats were read again after a start.
         private void DropStaleRecords(List<string> roots)
         {
             List<string> open;
-            lock (Sync) open = Trades.Where(kv => double.IsNaN(kv.Value) && kv.Key != openTag).Select(kv => kv.Key).ToList();
+            lock (Sync) { HashSet<string> followed = OpenTagsLocked(); open = Trades.Where(kv => double.IsNaN(kv.Value) && !followed.Contains(kv.Key)).Select(kv => kv.Key).ToList(); }
             if (open.Count == 0) return;
-            Account a = FindAccount(Account);
-            List<Order> orders = new List<Order>();
-            if (a != null) lock (a.Orders) orders = a.Orders.ToList();
             foreach (string key in open)
             {
                 string tag = key.Length > 8 ? key.Substring(0, 8) : key;
+                string seat = SeatOfTagNow(tag);
+                List<Seat> where = seat != null ? AllSeats().Where(x => x.Name == seat).ToList() : AllSeats();
+                if (where.Count == 0 || !where.All(x => ChartBridgeServer.ExecutionsReplayed(x.Name))) continue;
+                List<Order> orders = new List<Order>();
+                foreach (Seat x in where) { Account sa = FindAccount(x.Name); if (sa != null) lock (sa.Orders) orders.AddRange(sa.Orders); }
                 if (orders.Any(o => ChartBridgeAgents.TagOf(o.Name) == tag && ChartBridgeOrders.AgentMayFillState(o.OrderState))) continue;
                 lock (Sync) { double v; if (Trades.TryGetValue(key, out v) && double.IsNaN(v)) Trades.Remove(key); }
                 string text = "Agent " + Id + ": the day file's open trade " + key + " matches nothing ChartBridge sees (no order of it listed, no fill of it this session): dropped, so it never claims a position it did not place";
                 Log(text); AgentLog(text); ChartBridgeOrders.AgentWarn(text);
                 SaveDay();
                 // review A3: a position on its roots there is never left without a word: an error every 60 s until that pair is flat
-                if (a != null) foreach (string root in roots) { Instrument inst = ChartBridgeServer.InstrumentFor(root); if (inst != null && (ChartBridgeOrders.AgentListed(a, inst) != 0 || ChartBridgeOrders.AgentEffective(a, inst) != 0)) TradeLost(root); }
+                foreach (Seat x in where)
+                {
+                    Account a = FindAccount(x.Name);
+                    if (a != null) foreach (string root in roots) { Instrument inst = ChartBridgeServer.InstrumentFor(root); if (inst != null && (ChartBridgeOrders.AgentListed(a, inst) != 0 || ChartBridgeOrders.AgentEffective(a, inst) != 0)) x.TradeLost(root); }
+                }
                 Notify();
             }
         }
 
-        // Review A1 and A3: its open trade ended where ChartBridge could not see it while the account holds a position: the trade is
-        // dropped (ownership is not restored: Anthony decides), and the pages get an error every 60 s until that pair is flat.
-        private void DropLedgerAgainst(List<string> roots)
+        // The flatten on every seat it follows (onlySeat: that one). Returns how many (seat, contract) jobs started.
+        private int StartFlatten(string why, bool byRules) { return StartFlatten(why, byRules, null); }
+        private int StartFlatten(string why, bool byRules, string onlySeat)
         {
-            Account a = FindAccount(Account);
-            foreach (string root in roots)
-            {
-                string why = LedgerAgainst(root, a, true);
-                if (why == null) continue;
-                string key;
-                double realized;
-                lock (Sync)
-                {
-                    if (openTag == null || openRoot != root) continue;
-                    // the realized part is booked first (review A C4): what its fills so far closed, at the average of its opening fills
-                    Instrument li = openInst ?? ChartBridgeServer.InstrumentFor(root);
-                    double pv = li != null && li.MasterInstrument != null ? li.MasterInstrument.PointValue : 0;
-                    realized = Math.Round((ledCash + ledQty * ledAvg) * pv, 2);
-                    key = openTag; Trades[key] = realized; openTag = null; openRoot = null; openInst = null; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Remove(root); AgainstSince.Remove(root);
-                    StandDownLocked();
-                }
-                string text = "Agent " + Id + ": its open trade " + key + " on " + root + " was ended (" + why + "); its realized part, " + realized.ToString("0.##", CultureInfo.InvariantCulture) + " dollars, is booked";
-                Log(text); AgentLog(text);
-                SaveDay();
-                TradeLost(root);
-                Notify();
-            }
-        }
-
-        // Review D1: a position whose only working orders there are the agent's own stop (a leg, or the stop placed again) with no
-        // trade followed (a restart lost it: the executions read again did not give it back): the A3 error every 60 s until flat.
-        // The pair stays the agent's (its stop protects it) and its flat hours close it.
-        private void WarnHeldByStopOnly(List<string> roots)
-        {
-            Account a = FindAccount(Account);
-            if (a == null) return;
-            foreach (string root in roots)
-            {
-                bool followed, told;
-                lock (Sync) { followed = openTag != null && openRoot == root; told = LostTrades.ContainsKey(root) || HeldLost.ContainsKey(root); }
-                if (followed || told) continue;
-                Instrument inst = ChartBridgeServer.InstrumentFor(root);
-                if (inst == null) continue;
-                int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
-                if (p1 == 0 && p2 == 0) continue;
-                List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
-                if (may.Count == 0 || !may.All(o => IsMine(o) && LegRx.IsMatch(o.Name ?? ""))) continue;
-                TradeLost(root, "agent " + Id + " holds " + p1 + " on " + Account + " " + root + " with no trade record (ChartBridge restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader");
-            }
-        }
-
-        private void TradeLost(string root) { TradeLost(root, null); }
-
-        // 0.5.7: while ChartBridge's own flatten job runs on that root (its cancels take the legs away), the error is HELD, never
-        // dropped: RepeatTradeLost raises it once no job runs there and the pair is still not flat, and forgets it if it is flat.
-        private void TradeLost(string root, string say)
-        {
-            string text = say ?? "agent " + Id + " had an open trade on " + Account + " " + root + " and its legs are gone; ChartBridge no longer treats the position as the agent's: flatten or protect it by hand";
-            bool held, already;
-            lock (Sync)
-            {
-                held = HoldLocked(root, Now());
-                already = HeldLost.ContainsKey(root);
-                if (held) HeldLost[root] = text;
-                else { HeldLost.Remove(root); LostTrades[root] = Now(); LostTradeText[root] = text; }
-            }
-            if (held) { if (!already) { string h = text + " (held while ChartBridge's own flatten runs on " + root + ")"; Log(h); AgentLog(h); } return; }
-            Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
-        }
-
-        // Under Sync: a flatten job of this agent that owns the pair runs on a contract of that root (review of #47: a job that does
-        // not own it never says NOT FLAT, so it holds nothing).
-        private bool FlattenRunsLocked(string root) { return Flats.Values.Any(j => j.Root == root && j.Owned); }
-
-        // Under Sync: hold the lost-trade error on that root now: its own flatten runs there, and the hold is under 30 s old (review
-        // of #47: after that it is raised and repeats as before, whatever the job does). Starts the hold's clock.
-        private bool HoldLocked(string root, double now)
-        {
-            if (!FlattenRunsLocked(root)) return false;
-            double since;
-            if (!HeldSince.TryGetValue(root, out since)) { HeldSince[root] = now; return true; }
-            return now - since < ChartBridgeAgents.LostHoldMaxMs;
-        }
-
-        // Every pass: each lost-trade error again every 60 s until that pair is flat by both readings (lead's default: the pages have
-        // no acknowledge message for it, so it ends only when the pair is flat). 0.5.7: none while a flatten job runs on that root;
-        // an error held meanwhile is raised once the job ends with the pair still not flat.
-        private void RepeatTradeLost(double now)
-        {
-            List<string> roots;
-            lock (Sync) roots = LostTrades.Keys.Concat(HeldLost.Keys).Distinct().ToList();
-            if (roots.Count == 0) return;
-            Account a = FindAccount(Account);
-            foreach (string root in roots)
-            {
-                Instrument inst = ChartBridgeServer.InstrumentFor(root);
-                bool flat = a != null && inst != null && ChartBridgeOrders.AgentListed(a, inst) == 0 && ChartBridgeOrders.AgentEffective(a, inst) == 0;
-                string text = null, raise = null, dropped = null;
-                lock (Sync)
-                {
-                    string h;
-                    bool wasHeld = HeldLost.TryGetValue(root, out h);
-                    if (flat) { LostTrades.Remove(root); LostTradeText.Remove(root); HeldLost.Remove(root); HeldSince.Remove(root); if (wasHeld) dropped = h; }
-                    else if (HoldLocked(root, now)) { }   // held: neither repeated nor dropped (at most 30 s)
-                    else if (wasHeld) { HeldLost.Remove(root); if (!FlattenRunsLocked(root)) HeldSince.Remove(root); LostTrades[root] = now; LostTradeText[root] = h; raise = h; }
-                    else
-                    {
-                        if (!FlattenRunsLocked(root)) HeldSince.Remove(root);   // no job there now: a later job may hold again
-                        if (now - LostTrades[root] >= ChartBridgeAgents.LostTradeEveryMs) { LostTrades[root] = now; text = LostTradeText[root]; }
-                    }
-                }
-                if (dropped != null) { string d = "agent " + Id + ": the lost-trade error held on " + Account + " " + root + " is not raised: the pair is flat"; Log(d); AgentLog(d); }
-                if (raise != null) { Log(raise); AgentLog(raise); ChartBridgeOrders.AgentAlarm(raise); }
-                if (text != null) { AgentLog(text); ChartBridgeOrders.AgentAlarm(text); }
-            }
-        }
-
-        // ---------------------------------------------------------- the flatten (flatAt, or the agent's own in auto)
-        // Per root it owns or has orders working on: every order that may fill on that contract of its account is cancelled; once
-        // NinjaTrader confirms each one done, every fill there has come through, and both position readings agree, what it holds is
-        // closed at market ("CB#<tag> ag:<id> flat"). Readings still apart after 3 s: the smaller is closed (never more than either
-        // shows). Not flat 10 s after the start: a status error to the pages, every 10 s until flat. Returns how many roots started.
-        private int StartFlatten(string why, bool byRules)
-        {
-            Account a = FindAccount(Account);   // null: not listed by NinjaTrader; a pair it still owns gets its job (and its errors)
-            string acctName = Account;
-            int started = 0;
-            foreach (string root in FlatRoots())
-            {
-                foreach (Instrument inst in FlatContracts(root))
-                {
-                    string key = inst.FullName ?? root;
-                    bool busy;
-                    lock (Sync) busy = Flats.ContainsKey(key);
-                    if (busy) continue;
-                    List<Order> may = a != null ? ChartBridgeOrders.AgentMayFill(a, inst) : new List<Order>();
-                    bool mineWorking = may.Any(o => IsMine(o)), owned = OwnsContract(root, inst, a);
-                    if (!owned && !mineWorking) continue;
-                    List<Order> stops = may.Where(o => IsMine(o) && StopLegRx.IsMatch(o.Name ?? "") && o.StopPrice > 0).ToList();
-                    int legQty = stops.Sum(o => Math.Max(0, o.Quantity - o.Filled));
-                    int startQty = a != null ? ChartBridgeOrders.AgentListed(a, inst) : 0;
-                    // the stop nearest the market (lead's default: the most protective of its stops), to place again over a shut market
-                    Order near = stops.Count == 0 ? null : stops.Any(o => o.OrderAction == OrderAction.Sell) ? stops.OrderByDescending(o => o.StopPrice).First() : stops.OrderBy(o => o.StopPrice).First();
-                    lock (Sync)
-                    {
-                        Flats[key] = new FlatJob { Root = root, Inst = inst, Why = why, StartMs = Now(), Owned = owned, StartQty = startQty, LegQty = legQty, WasMissing = a == null,
-                                                   StopPx = near != null ? near.StopPrice : 0, Tag = near != null ? ChartBridgeAgents.TagOf(near.Name) : null };
-                        if (owned) Sticky.Add(root);   // its pair until flat: cancelling its own legs never makes it someone else's
-                    }
-                    started++;
-                    string where = root + (ChartBridgeAgents.SameContract(inst, ChartBridgeServer.InstrumentFor(root)) ? "" : " (" + inst.FullName + ")");
-                    string text = byRules ? why : "Agent " + Id + ": " + why + ": " + where + " on " + acctName;
-                    Log(text); AgentLog(text + " (" + where + " on " + acctName + ")");
-                    ChartBridgeServer.SendToTraders(StatusJson("info", text));
-                }
-            }
-            if (started > 0) Notify();
-            return started;
-        }
-
-        private static readonly Regex StopLegRx = new Regex("^CB#[0-9a-f]{8} (?:stop |mstop |ag:[a-z][a-z0-9]{0,11} stop p)");
-
-        // The contracts a flatten looks at on a root: the served one, and another month while its own open trade holds it (review A5).
-        private List<Instrument> FlatContracts(string root)
-        {
-            List<Instrument> list = new List<Instrument>();
-            Instrument served = ChartBridgeServer.InstrumentFor(root);
-            if (served != null) list.Add(served);
-            lock (Sync)
-                if (openTag != null && openRoot == root && openInst != null && ledQty != 0 && !ChartBridgeAgents.SameContract(openInst, served)) list.Add(openInst);
-            return list;
-        }
-
-        // Review A1: the pair is no longer the agent's: the job ends and nothing of the account's is closed.
-        private void DropJob(FlatJob j, string key, Account a) { DropJob(j, key, a, null); }
-
-        private void DropJob(FlatJob j, string key, Account a, string say)
-        {
-            lock (Sync) { Flats.Remove(key); if (!(openTag != null && openRoot == j.Root)) Sticky.Remove(j.Root); }
-            string text = say ?? (a != null ? a.Name : Account) + " " + j.Root + " is no longer agent " + Id + "'s: ChartBridge did not close it";
-            Log(text); AgentLog(text + " (its flatten: " + j.Why + ")");
-            ChartBridgeServer.SendToTraders(StatusJson("warn", text));
-            Notify();
-        }
-
-        private void StepFlatten(double now)
-        {
-            List<FlatJob> jobs;
-            lock (Sync) jobs = Flats.Values.ToList();
-            if (jobs.Count == 0) return;
-            Account a = FindAccount(Account);
-            DateTime etShut = NowEt();
-            bool shut = ChartBridgeAgents.MarketShut(etShut) || ChartBridgeCme.Closed(etShut);   // 0.5.2 review: the calendar's halts too (13:00 NYSE holiday, 13:15 early close, CME holidays): no order while closed
-            foreach (FlatJob j in jobs)
-            {
-                Instrument inst = j.Inst;
-                string key = inst != null ? inst.FullName ?? j.Root : j.Root;
-                if (inst == null) { lock (Sync) Flats.Remove(key); continue; }
-                double errEvery = shut ? ChartBridgeAgents.ShutErrorEveryMs : ChartBridgeAgents.FlatErrorEveryMs;
-                if (a == null)
-                {
-                    // the account left NinjaTrader's list: the job stays (resumed when it is back, after 18:00 too), and it is loud
-                    j.WasMissing = true;
-                    if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= errEvery)
-                    {
-                        j.LastErrorMs = now;
-                        string text = "Agent " + Id + ": NOT FLAT? its flatten (" + j.Why + ") waits: " + Account + " (account not listed by NinjaTrader); it goes on when the account is back; check NinjaTrader now";
-                        ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
-                    }
-                    continue;
-                }
-                int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
-                // review A1: back from missing, or the position is not what the job started with: is the pair still the agent's?
-                if (j.Owned && (p1 != 0 || p2 != 0) && (j.WasMissing || p1 != j.StartQty))
-                {
-                    j.WasMissing = false;
-                    bool flipped = j.StartQty != 0 && p1 != 0 && Math.Sign(p1) != Math.Sign(j.StartQty);
-                    if (flipped || !OwnsContract(j.Root, inst, a)) { DropJob(j, key, a); continue; }
-                }
-                j.WasMissing = false;
-                if (j.Close != null && !j.CloseCounted && !ChartBridgeOrders.AgentMayFillState(j.Close.OrderState)) { j.ClosedQty += j.Close.Filled; j.CloseCounted = true; }   // review A C2
-                if (shut)
-                {
-                    // review A2: no order at all while the market is shut (its stop and target stay); the job goes on at the open
-                    if ((p1 == 0 && p2 == 0) || !j.Owned)
-                    {
-                        if (ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && o != j.Close)) continue;   // its own orders wait for the open
-                        string at = Iso(now);
-                        lock (Sync) { Flats.Remove(key); flattenedAt = at; }
-                        AgentLog("flat on " + j.Root + " " + a.Name + " (" + j.Why + ")");
-                        Notify();
-                        continue;
-                    }
-                    string legsSay = "its stop and target stay";
-                    if (j.CancelsSent)
-                    {
-                        bool stopWorks = ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && (StopLegRx.IsMatch(o.Name ?? "") || o == j.ReStop));
-                        bool closeStill = j.Close != null && ChartBridgeOrders.AgentMayFillState(j.Close.OrderState);
-                        if (closeStill && !stopWorks) legsSay = "its stop and target were cancelled and its market close still works (it may fill at the open), so its stop is not placed again beside it; act in NinjaTrader now";   // review D2
-                        else if (stopWorks) legsSay = j.ReStop != null && ChartBridgeOrders.AgentMayFillState(j.ReStop.OrderState) ? "ChartBridge placed its stop again at " + CbJson.Num(j.StopPx) : "its stop stays";
-                        else if (!j.ReStopTried) { j.ReStopTried = true; j.ReStopSay = ReStop(a, inst, j, p1, p2); legsSay = j.ReStopSay; }   // once per shut spell
-                        else legsSay = j.ReStopSay ?? "its stop and target were already cancelled; act in NinjaTrader now";
-                    }
-                    if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= errEvery)
-                    {
-                        j.LastErrorMs = now;
-                        string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
-                                      " still shows " + p1 + "; the market is shut, so ChartBridge sends no close until it opens; " + legsSay + (legsSay.Contains("act in NinjaTrader") ? "" : "; act in NinjaTrader if you need to");
-                        ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
-                    }
-                    continue;
-                }
-                j.ReStopTried = false;
-                // review A C1: an early close or a halt: before any leg is cancelled the market must be trading in fact (a trade on that
-                // root in the last 5 s); otherwise the stop and target stay and the job tries again
-                // review D3: a close that ended without filling (rejected, cancelled) in open hours: the stop goes back at once, and
-                // the next try waits 30 s with it in place
-                if (j.Owned && j.Close != null && !j.CloseHandled && !ChartBridgeOrders.AgentMayFillState(j.Close.OrderState))
-                {
-                    j.CloseHandled = true;
-                    if (j.Close.Filled < j.Close.Quantity && (p1 != 0 || p2 != 0))
-                    {
-                        string say = ReStop(a, inst, j, p1, p2);
-                        j.HoldUntilMs = now + ChartBridgeAgents.CloseRetryHoldMs;
-                        string text = "Agent " + Id + ": NOT FLAT: its market close on " + j.Root + " " + a.Name + " ended unfilled (" + j.Close.OrderState + "); " + say + "; ChartBridge tries again in 30 s";
-                        j.LastErrorMs = now;
-                        ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
-                    }
-                }
-                if (now < j.HoldUntilMs) continue;
-                double lastPx;
-                if (j.Owned && (p1 != 0 || p2 != 0) && (!j.CancelsSent || j.GateAgain) && !ChartBridgeOrders.AgentFreshLast(j.Root, ChartBridgeAgents.TradingFreshMs, out lastPx))
-                {
-                    if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)
-                    {
-                        j.LastErrorMs = now;
-                        string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
-                                      " still shows " + p1 + "; market not trading: " + (j.GateAgain ? "its stop placed again at " + CbJson.Num(j.StopPx) + " stays; ChartBridge tries again when it trades" : "the stop and target stay; ChartBridge tries again when it trades");
-                        ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
-                    }
-                    continue;
-                }
-                string exitWhy;
-                bool up = ChartBridgeAccounts.ExitAllowed(a, out exitWhy);
-                List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
-                // not its pair: only its own orders, and never its stop placed again while the account holds a position there (review
-                // D1; flat, that stop could only open one, so it goes: lead's default)
-                List<Order> others = may.Where(o => o != j.Close && (j.Owned || (IsMine(o) && !(IsReStop(o) && (p1 != 0 || p2 != 0))))).ToList();
-                bool closeWorks = j.Close != null && may.Contains(j.Close);
-                if (up && others.Count > 0)
-                {
-                    if (now - j.LastCancelMs >= ChartBridgeAgents.FlatRetryMs)
-                    {
-                        j.LastCancelMs = now;
-                        j.CancelsSent = true;
-                        j.GateAgain = false;
-                        if (j.Owned) ChartBridgeOrders.AgentFlattening(a, inst);   // never marks the page's brackets on a pair it does not own
-                        try { a.Cancel(others.ToArray()); }
-                        catch (Exception ex) { Log("agent " + Id + " flatten: the cancels could not be sent (" + ex.Message + "); tried again in 3 s"); }
-                        Log("agent " + Id + " flatten: cancel sent for " + others.Count + " order(s) on " + j.Root + " " + a.Name);
-                    }
-                }
-                else if (up && !closeWorks)
-                {
-                    if ((p1 == 0 && p2 == 0) || !j.Owned)
-                    {
-                        string at = Iso(now);
-                        lock (Sync) { Flats.Remove(key); flattenedAt = at; }
-                        AgentLog("flat on " + j.Root + " " + a.Name + " (" + j.Why + ")");
-                        Notify();
-                        continue;
-                    }
-                    string unnoted = ChartBridgeOrders.AgentUnnotedFill(a, inst, now);
-                    int qty = 0, dir = 0;
-                    if (unnoted == null && p1 == p2) { qty = Math.Abs(p1); dir = Math.Sign(p1); j.ApartSinceMs = -1; }
-                    else
-                    {
-                        if (j.ApartSinceMs < 0) j.ApartSinceMs = now;
-                        if (now - j.ApartSinceMs >= ChartBridgeAgents.FlatRetryMs && Math.Sign(p1) == Math.Sign(p2) && p1 != 0)
-                        { qty = Math.Min(Math.Abs(p1), Math.Abs(p2)); dir = Math.Sign(p1); }
-                    }
-                    if (qty > 0 && now - j.LastCloseMs >= ChartBridgeAgents.FlatRetryMs)
-                    {
-                        // review A1: asked again before every close, and never more than the agent's own trade holds
-                        if (!OwnsContract(j.Root, inst, a)) { DropJob(j, key, a); continue; }
-                        int cap = CloseCap(j.Root, inst, j);
-                        if (cap <= 0 && j.ClosedQty > 0)
-                        {
-                            DropJob(j, key, a, (a.Name + " " + j.Root + ": agent " + Id + "'s " + j.ClosedQty + " closed; the rest (" + p1 + ") is not agent " + Id + "'s: ChartBridge did not close it"));
-                            continue;
-                        }
-                        qty = Math.Min(qty, cap);
-                        if (qty > 0) { j.LastCloseMs = now; j.CloseCounted = false; j.CloseHandled = false; j.Close = SendClose(a, inst, dir, qty, j.Root, j); }
-                    }
-                }
-                bool flat = (p1 == 0 && p2 == 0) || !j.Owned;
-                if (!flat && now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)
-                {
-                    j.LastErrorMs = now;
-                    string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
-                                  " still shows " + p1 + (p2 != p1 ? " (or " + p2 + " with fills not yet in the position)" : "") + (up ? "" : "; the account is not connected (" + exitWhy + ")") + "; act in NinjaTrader now";
-                    ChartBridgeOrders.AgentAlarm(text);
-                    AgentLog(text);
-                }
-            }
-        }
-
-        // Review A C1 (lead's default: a position is never left without a stop over a closed market): the job paused for the shut
-        // hours after its legs were cancelled. While it still holds a position, its stop goes back at the agent's own stop price
-        // (the one nearest the market when the job started), unless that price is already through the last trade. Says what it did.
-        private string ReStop(Account a, Instrument inst, FlatJob j, int p1, int p2)
-        {
-            if (j.Close != null && ChartBridgeOrders.AgentMayFillState(j.Close.OrderState)) return "its market close still works, so its stop is not placed again beside it; act in NinjaTrader now";   // review D2
-            if (!j.Owned || p1 == 0 || p2 == 0 || Math.Sign(p1) != Math.Sign(p2)) return "its stop and target were already cancelled; act in NinjaTrader now";
-            if (j.StopPx <= 0) return "its stop and target were already cancelled and ChartBridge knows no stop price for it; act in NinjaTrader now";
-            double last;
-            ChartBridgeOrders.AgentFreshLast(j.Root, double.MaxValue, out last);
-            int dir = Math.Sign(p1);
-            if (last > 0 && (dir > 0 ? j.StopPx >= last : j.StopPx <= last))
-                return "its stop and target were already cancelled and its stop price " + CbJson.Num(j.StopPx) + " is through the last trade " + CbJson.Num(last) + ", so it was not placed again; act in NinjaTrader now";
-            int qty = Math.Min(Math.Min(Math.Abs(p1), Math.Abs(p2)), CloseCap(j.Root, inst, j));
-            if (qty <= 0) return "its stop and target were already cancelled; act in NinjaTrader now";
-            Order x = SendStop(a, inst, dir, qty, j);
-            if (x == null) return "its stop and target were already cancelled and its stop could not be placed again; act in NinjaTrader now";
-            j.ReStop = x;
-            j.GateAgain = true;
-            return "its stop and target had been cancelled: ChartBridge placed its stop again at " + CbJson.Num(j.StopPx) + " for " + qty;
-        }
-
-        // The stop placed again: a stop market at the agent's stop price, GTC, "CB#<tag> ag:<id> stop p<price>" (role stop).
-        private Order SendStop(Account a, Instrument inst, int dir, int qty, FlatJob j)
-        {
-            string tag = j.Tag ?? Guid.NewGuid().ToString("N").Substring(0, 8);
-            Order x;
-            lock (ChartBridgeOrders.AgentPlaceLock)
-            {
-                int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
-                if (Math.Sign(p1) != dir || Math.Sign(p2) != dir || qty > Math.Min(Math.Abs(p1), Math.Abs(p2))) return null;   // changed meanwhile
-                x = a.CreateOrder(inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.StopMarket, OrderEntry.Manual, TimeInForce.Gtc, qty, 0, j.StopPx, "",
-                    "CB#" + tag + " ag:" + Id + " stop p" + j.StopPx.ToString("0.########", CultureInfo.InvariantCulture), NinjaTrader.Core.Globals.MaxDate, null);
-                ChartBridgeAgents.NoteTag(tag, Id);
-                ChartBridgeOrders.AgentSent(x);
-                try { a.Submit(new[] { x }); }
-                catch (Exception ex) { ChartBridgeOrders.AgentUnsent(x); Log("agent " + Id + " flatten: the stop could not be placed again (" + ex.Message + ")"); return null; }
-            }
-            string text = "agent " + Id + " flatten: its legs were cancelled and its close cannot go now: stop " + (dir > 0 ? "sell " : "buy ") + qty + " " + j.Root + " at " + CbJson.Num(j.StopPx) + " placed again on " + a.Name;
-            Log(text); AgentLog(text);
-            return x;
-        }
-
-        // The flatten's one market order: closes what the position holds, never more (an exit: no entry gate, a Connected account).
-        // Under the order lock, the position and the orders that may fill are read again first: nothing new may slip in between.
-        private Order SendClose(Account a, Instrument inst, int dir, int qty, string root, FlatJob j)
-        {
-            string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
-            Order x;
-            lock (ChartBridgeOrders.AgentPlaceLock)
-            {
-                int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
-                bool other = ChartBridgeOrders.AgentMayFill(a, inst).Any(o => o != j.Close);
-                if (other || Math.Sign(p1) != dir || Math.Sign(p2) != dir || qty > Math.Min(Math.Abs(p1), Math.Abs(p2))) return null;   // changed meanwhile: the next pass looks again
-                x = a.CreateOrder(inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
-                    "CB#" + tag + " ag:" + Id + " flat", NinjaTrader.Core.Globals.MaxDate, null);
-                ChartBridgeAgents.NoteTag(tag, Id);
-                ChartBridgeOrders.AgentSent(x);
-                try { a.Submit(new[] { x }); }
-                catch (Exception ex) { ChartBridgeOrders.AgentUnsent(x); Log("agent " + Id + " flatten: the close could not be sent (" + ex.Message + ")"); return null; }
-            }
-            string text = "agent " + Id + " flatten: " + (dir > 0 ? "sell " : "buy ") + qty + " " + root + " at market on " + a.Name;
-            Log(text); AgentLog(text);
-            return x;
+            int n = 0;
+            foreach (Seat x in AllSeats()) if (onlySeat == null || x.Name == onlySeat) n += x.StartFlatten(why, byRules);
+            return n;
         }
 
         // ---------------------------------------------------------- messages from the page
@@ -2901,8 +3469,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string m = S(d, "mode");
             if (m != "shadow" && m != "copilot" && m != "auto") return "mode must be shadow, copilot or auto";
-            if (m == "auto" && ChartBridgeBranches.IsNone(Account)) return "auto refused: agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
-            if (m == "auto") { string why = AccountProblemFor(Account, true) ?? AccountConflict(); if (why != null) return "auto refused: " + why; }   // auto: its account must be tradable
+            if (m == "auto" && NoneNow()) return "auto refused: agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
+            if (m == "auto") { string why = AutoProblem(); if (why != null) return "auto refused: " + why; }   // auto: its account must be tradable
             string old;
             List<Proposal> expired = new List<Proposal>();
             lock (Sync)
@@ -2917,6 +3485,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             ToAgent(WelcomeJson());
             Notify();
             return null;
+        }
+
+        // Auto needs its account tradable (0.6.0, a group: at least one seat tradable, and no clash on any).
+        private string AutoProblem()
+        {
+            if (!GroupNow()) return AccountProblemFor(Account, true) ?? AccountConflict();
+            if (ChartBridgeGroups.Unreadable()) return ChartBridgeGroups.ReadFailedText;
+            string cw = AccountConflict();
+            if (cw != null) return cw;
+            List<string> seats = SeatNames();
+            if (seats.Count == 0) return AccountWords() + " has no accounts";
+            List<string> whys = seats.Select(x => AccountProblemFor(x, true)).ToList();
+            return whys.All(x => x != null) ? "no account of " + AccountWords() + " is tradable now (" + string.Join("; ", whys) + ")" : null;
         }
 
         private string SetKill(Dictionary<string, Val> d) { lock (PlaceGate) return SetKillLocked(d); }   // never between a placement's checks and its order
@@ -2994,16 +3575,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             Order placed;
             string why = Place(p.P, p.Account, out placed), withdrawn;
             lock (Sync) { p.State = why == null ? "accepted" : "rejected"; p.Entry = placed; withdrawn = p.WithdrawnWhy; }
-            bool cancelled = why == null && withdrawn != null && placed != null && Cancel(placed, "withdrawn by the agent during placement: " + withdrawn);
+            bool cancelled = false;
+            if (why == null && withdrawn != null && placed != null)   // 0.6.0: every seat's entry of it
+                foreach (Order e in p.P.Orders != null ? p.P.Orders.Where(x => x != null).ToList() : new List<Order> { placed })
+                    if (Cancel(e, "withdrawn by the agent during placement: " + withdrawn)) cancelled = true;
             if (cancelled) lock (Sync) p.State = "withdrawn";
             ToPages(ProposalJson(p));
             if (why == null)
             {
                 ToAgent(AnswerJson(id, "accepted", "accepted on the page"));
-                ToAgent(AnswerJson(id, cancelled ? "withdrawn" : "placed", cancelled ? "withdrawn during placement: its entry is cancelled" : "placed on " + p.Account + " as order " + ChartBridgeOrders.AgentIdFor(placed) + "; it works until " + Iso(p.P.ExpiresAt)));
+                if (p.P.SeatNames != null && !cancelled) SeatAnswers(p.P);   // 0.6.0: one answer per seat, then the plan's
+                ToAgent(AnswerJson(id, cancelled ? "withdrawn" : "placed", cancelled ? "withdrawn during placement: its entry is cancelled" : p.P.SeatNames != null ? PlacedWords(p.P) : "placed on " + p.Account + " as order " + ChartBridgeOrders.AgentIdFor(placed) + "; it works until " + Iso(p.P.ExpiresAt)));
             }
             else { lock (Sync) nRefused++; ToAgent(AnswerJson(id, "refused", why)); }
-            AgentLog("proposal " + id + " accepted on the page" + (why == null ? ": placed on " + p.Account + (cancelled ? " and withdrawn during placement" : "") : " but refused: " + why));
+            AgentLog("proposal " + id + " accepted on the page" + (why == null ? ": placed on " + KeyWords(p.Account) + (cancelled ? " and withdrawn during placement" : "") + SeatsSaid(p.P) : " but refused: " + why));
             Notify();
             return why == null ? null : "accepted, but refused: " + why;
         }
@@ -3019,6 +3604,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string nm = S(d, "account"), keep = S(d, "keepMode");
             if (d.ContainsKey("keepMode") && keep != "shadow" && keep != "copilot" && keep != "auto") return "keepMode must be shadow, copilot or auto (the mode the page's question named)";
+            if (d.ContainsKey("group"))   // 0.6.0: a whole group (every member a seat)
+            {
+                if (d.ContainsKey("account")) return "agentAccount takes account or group, not both";
+                string gid = S(d, "group");
+                if (gid == null || !GroupIdRx.IsMatch(gid)) return "group must be a group id (a plain string such as g1)";
+                return SetGroupLocked(gid, keep);
+            }
             Val nv;
             if (d.TryGetValue("account", out nv) && nv.K == 'z')   // 0.5.7: null is None, refused while the agent is exposed
             {
@@ -3026,6 +3618,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // review of #47: and while its account holds any position or working order (a trade it lost included): the reset's rule
                 string cur = Account;
                 if (!ChartBridgeBranches.IsNone(cur) && !ChartBridgeBranches.Idle(FindAccount(cur))) return "agent " + Id + "'s account " + cur + " has a position or a working order: choose None when it is flat";
+                List<string> busy = SeatNames().Where(x => !ChartBridgeBranches.Idle(FindAccount(x))).ToList();   // 0.6.0: a group's seats too
+                if (GroupNow() && busy.Count > 0) return "agent " + Id + "'s " + AccountWords() + ": " + string.Join(", ", busy) + (busy.Count == 1 ? " has" : " have") + " a position or a working order: choose None when every seat is flat";
                 return GoNone("set by the page", keep);
             }
             if (!PlainName(nm) || ChartBridgeBranches.IsNone(nm)) return "account must be an account name, or null for None";
@@ -3036,19 +3630,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             string cw = ChartBridgeAgents.CopierUses(nm);
             if (cw != null) return cw + ": an agent never trades it";
             foreach (ChartBridgeAgent other in ChartBridgeAgents.All())
-                if (other != this && other.Chosen && string.Equals(other.Account, nm, StringComparison.OrdinalIgnoreCase)) return nm + " is agent " + other.Id + "'s account: each agent has its own";
+                if (other != this && other.Claims(nm)) return nm + " is agent " + other.Id + "'s account: each agent has its own";   // 0.6.0: a seat of another agent's group too
             string why = AccountProblemFor(nm, true);
             if (why != null) return why;
             if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: choose its account when it is flat";
             string old = Account;
-            bool broken;
+            bool broken, wasGroup = GroupNow();
             lock (Sync) broken = accountBroken != null;
-            if (nm == old && !broken && Chosen) return null;   // already its chosen account (choosing its unchosen default writes the file: it is then its own)
+            if (nm == old && !broken && Chosen && !wasGroup) return null;   // already its chosen account (choosing its unchosen default writes the file: it is then its own)
             foreach (string root in RulesNow().Roots)
             {
                 if (ChartBridgeOrders.AgentHoldsOnRoot(FindAccount(nm), root)) return nm + " holds a position or a working order on " + root + ": choose agent " + Id + "'s account when both accounts are flat on its roots";
                 if (nm != old && ChartBridgeOrders.AgentHoldsOnRoot(FindAccount(old), root)) return "agent " + Id + "'s account " + old + " holds a position or a working order on " + root + ": choose its account when both accounts are flat on its roots";
+                if (wasGroup) foreach (string x in SeatNames()) if (x != nm && ChartBridgeOrders.AgentHoldsOnRoot(FindAccount(x), root)) return "agent " + Id + "'s seat " + x + " holds a position or a working order on " + root + ": choose its account when every seat is flat on its roots";
             }
+            if (wasGroup) old = AccountWords();
             string err = SaveAccount(nm);
             if (err != null) return "agent-" + Id + "-account.txt could not be saved (" + err + "); nothing changed";
             // 0.5.2 (Anthony 2026-10-08): the mode is kept only when the page says which mode its question named (keepMode) and that is
@@ -3056,7 +3652,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // the question (another page) puts the agent in shadow, as until 0.5.1.
             string wasMode;
             bool kept;
-            lock (Sync) { account = nm; accountBroken = null; chosen = true; Sticky.Clear(); wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
+            lock (Sync) { account = nm; groupId = null; accountBroken = null; chosen = true; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
+            RefreshSeats(false);   // 0.6.0: its one seat (seatsRev up); the old seats are dropped (nothing of the agent's is left there)
             string mark = SimNow() ? "Sim" : "LIVE";
             string modeSay = kept ? "mode " + wasMode + " kept" : wasMode == "shadow" ? "mode shadow" : "mode shadow (was " + wasMode + (keep == null ? ": the page did not say which mode it showed" : ": the page's question named " + keep) + ")";
             Log("agent " + Id + " account " + nm + " (" + mark + "), was " + old + ", set by the page; " + modeSay);
@@ -3067,18 +3664,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The agent on None: saved, the agent told (welcome); its mode kept as an account change keeps it (keepMode), else shadow.
+        // 0.6.0: from a group too; a seat that still holds the agent's trade (its group was deleted) stays its own until flat.
         private string GoNone(string by, string keep)
         {
-            string old = Account;
+            string old = GroupNow() ? AccountWords() : Account;
             bool broken;
             lock (Sync) broken = accountBroken != null;
-            if (ChartBridgeBranches.IsNone(old) && !broken) return null;
+            if (NoneNow() && !broken) return null;
             string err = SaveAccount(ChartBridgeBranches.None);
             if (err != null) return "agent-" + Id + "-account.txt could not be saved (" + err + "); nothing changed";
             string wasMode;
             bool kept;
-            lock (Sync) { account = ChartBridgeBranches.None; accountBroken = null; chosen = false; Sticky.Clear(); wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
-            string say = "account None (nothing trades), was " + old + ", " + by + "; " + (kept || wasMode == "shadow" ? "mode " + wasMode + (kept ? " kept" : "") : "mode shadow (was " + wasMode + ")");
+            lock (Sync) { account = ChartBridgeBranches.None; groupId = null; accountBroken = null; chosen = false; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
+            RefreshSeats(false);   // no seat now (seatsRev up); a seat with nothing of the agent's left is dropped
+            List<string> held = AllSeats().Select(x => x.Name).ToList();
+            string say = "account None (nothing trades), was " + old + ", " + by + "; " + (kept || wasMode == "shadow" ? "mode " + wasMode + (kept ? " kept" : "") : "mode shadow (was " + wasMode + ")") +
+                         (held.Count > 0 ? "; " + string.Join(", ", held) + " still " + (held.Count == 1 ? "holds" : "hold") + " its trade: owned and protected until flat, no new entry" : "");
             Log("agent " + Id + " " + say); AgentLog(say);
             ToAgent(WelcomeJson());
             Notify();
@@ -3092,8 +3693,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (PlaceGate)
             {
                 string acct = Account;
-                if (ChartBridgeBranches.IsNone(acct) || ChartBridgeBranches.KeepThroughReset("agent:" + Id, acct)) return null;
-                if (Exposed() || !ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("agent " + Id, acct);
+                if (NoneNow() || ChartBridgeBranches.KeepThroughReset("agent:" + Id, GroupNow() ? KeyNow() : acct)) return null;
+                if (GroupNow())   // 0.6.0: None only when no seat is exposed and every member is idle; else the words name the accounts holding something
+                {
+                    List<string> busy = AllSeats().Where(x => x.Exposed() || !ChartBridgeBranches.Idle(FindAccount(x.Name))).Select(x => x.Name).ToList();
+                    if (busy.Count > 0 || Exposed()) return "agent " + Id + " stays on " + AccountWords() + ": " + (busy.Count > 0 ? string.Join(", ", busy) + (busy.Count == 1 ? " has" : " have") : "it has") + " a position or a working order (it goes to None at a later reset once flat, or choose None yourself)";
+                }
+                else if (Exposed() || !ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("agent " + Id, acct);
                 string keep;
                 lock (Sync) keep = mode;
                 string why = GoNone("by the daily reset (17:00 ET)", keep);
@@ -3101,11 +3707,70 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        // 0.6.0: on any seat it follows.
         private bool Exposed()
         {
             bool ex;
-            lock (Sync) ex = openTag != null || Proposals.Values.Any(p => p.State == "open" || p.State == "accepting");
+            lock (Sync) ex = Seats.Values.Any(x => x.openTag != null) || Proposals.Values.Any(p => p.State == "open" || p.State == "accepting");
             return ex || WorkingEntries().Count > 0 || FlatRoots().Any(r => Owns(r));   // rules file unreadable: every root an agent may trade
+        }
+
+        // 0.6.0: agentAccount with a group: every member a seat. Refused when the group has no account, when a member is the bot's, the
+        // copier's leader or a follower (on or off), another agent's, Backtest or Playback, or not in NinjaTrader; while this agent has
+        // a position, a working entry or a proposal; and while a member, or a seat it trades now, holds any position or working order
+        // on its roots (as for one account). A member that is not tradable or connected now is taken: it sits out each trade until it is.
+        private string SetGroupLocked(string gid, string keep)
+        {
+            ChartBridgeAgents.RefreshFiles();   // a page's thread: the copies are read fresh
+            if (ChartBridgeGroups.Unreadable()) return ChartBridgeGroups.ReadFailedText + "; nothing changed";
+            List<string> members = ChartBridgeGroups.MembersOf(gid);
+            string gname = ChartBridgeGroups.NameOf(gid);
+            if (members == null) return "there is no group " + gid;
+            if (members.Count == 0) return "group " + gname + " has no accounts: put accounts in it on the Accounts tab first";
+            string bot = ChartBridgeAgents.BotAccountForAgents();
+            if (bot == null) return "bot-account.txt cannot be read or understood, so ChartBridge cannot tell the bot's account: fix or delete it first";
+            foreach (string m in members)
+            {
+                string w = MemberProblem(m, bot);
+                if (w != null) return "group " + gname + ": " + w;
+            }
+            if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: choose its account when it is flat";
+            string old = GroupNow() ? AccountWords() : Account;
+            bool broken;
+            lock (Sync) broken = accountBroken != null;
+            if (OnGroup(gid) && !broken && Chosen) return null;   // already its group
+            List<string> now = SeatNames();
+            foreach (string root in RulesNow().Roots)
+            {
+                foreach (string m in members) if (ChartBridgeOrders.AgentHoldsOnRoot(FindAccount(m), root)) return m + " holds a position or a working order on " + root + ": choose group " + gname + " for agent " + Id + " when every account in it is flat on its roots";
+                foreach (string x in now) if (!members.Contains(x) && ChartBridgeOrders.AgentHoldsOnRoot(FindAccount(x), root)) return "agent " + Id + "'s account " + x + " holds a position or a working order on " + root + ": choose its account when it is flat on its roots";
+            }
+            string err = SaveGroup(gid);
+            if (err != null) return "agent-" + Id + "-account.txt could not be saved (" + err + "); nothing changed";
+            string wasMode;
+            bool kept;
+            lock (Sync) { account = ChartBridgeBranches.None; groupId = gid; accountBroken = null; chosen = true; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
+            RefreshSeats(false);
+            string mark = SimNow() ? "Sim" : "LIVE";
+            string modeSay = kept ? "mode " + wasMode + " kept" : wasMode == "shadow" ? "mode shadow" : "mode shadow (was " + wasMode + (keep == null ? ": the page did not say which mode it showed" : ": the page's question named " + keep) + ")";
+            Log("agent " + Id + " account " + AccountWords() + " (" + mark + "), was " + old + ", set by the page; seatsRev " + SeatsRevNow() + "; " + modeSay);
+            AgentLog("account " + AccountWords() + " (" + mark + "), was " + old + ", set by the page; seatsRev " + SeatsRevNow() + "; " + modeSay);
+            ToAgent(WelcomeJson());
+            Notify();
+            return null;
+        }
+
+        // Why a group's member cannot be one of this agent's seats, or null (the same rules as one account; not its tradability now).
+        private string MemberProblem(string m, string bot)
+        {
+            if (!PlainName(m)) return m + " is not an account name ChartBridge can trade";
+            string why = AccountProblemFor(m, false);
+            if (why != null) return why;
+            if (string.Equals(m, bot, StringComparison.OrdinalIgnoreCase)) return m + " is the bot's account: an agent never trades it";
+            string cw = ChartBridgeAgents.CopierUses(m);
+            if (cw != null) return cw + ": an agent never trades it";
+            foreach (ChartBridgeAgent other in ChartBridgeAgents.All()) if (other != this && other.Claims(m)) return m + " is agent " + other.Id + "'s account: each agent has its own";
+            return null;
         }
 
         // agentRules: flat keys (the strict parser allows no nesting): roots "NQ,MNQ", maxQty<ROOT> for a root named (left out: the
@@ -3230,26 +3895,45 @@ namespace NinjaTrader.NinjaScript.AddOns
         // 0.5.8: accountState (PROTOCOL.md "Prop groups and account state"): after the snapshot of every hello, then whenever any
         // field but "at" changed. Built with no lock of the agent's held (it reads NinjaTrader's collections), as agentState.
         private readonly object AccountStateLock = new object();
-        private string lastAccountStateKey;
+        private readonly Dictionary<string, string> lastAccountStateKeys = new Dictionary<string, string>();   // 0.6.0: per account
         private long accountStateSeq, lastAccountStateSeq;
         private bool snapshotSent;
 
+        // 0.6.0: one accountState per seat it follows (AllSeats: the seats in seat order, then any that left while it holds the
+        // agent's trade, until flat), each sent when it changed; with no seat, its account (None's state on None or an empty group).
         internal void SendAccountState(bool force)
         {
             ChartBridgeClient c;
-            string acct;
-            lock (Sync) { c = helloed && welcomeSent && snapshotSent ? client : null; acct = account; }
+            lock (Sync) c = helloed && welcomeSent && snapshotSent ? client : null;
             if (c == null) return;
+            List<string> accts = AllSeats().Select(x => x.Name).ToList();
+            if (accts.Count == 0) lock (Sync) accts.Add(groupId != null ? ChartBridgeBranches.None : account);
             long seq = Interlocked.Increment(ref accountStateSeq);
-            string key, json;
-            try { json = ChartBridgeGroups.AccountStateJson(acct, out key); }
-            catch (Exception ex) { Log("agent " + Id + " accountState error: " + ex.Message); return; }
+            List<string[]> built = new List<string[]>();
+            foreach (string acct in accts)
+            {
+                string key, json;
+                try { json = ChartBridgeGroups.AccountStateJson(acct, out key); }
+                catch (Exception ex) { Log("agent " + Id + " accountState error: " + ex.Message); return; }
+                built.Add(new[] { acct, key, json });
+            }
             lock (AccountStateLock)
             {
                 if (seq < lastAccountStateSeq) return;   // a newer one was sent meanwhile
-                lock (Sync) { if (client != c) return; if (!force && key == lastAccountStateKey) return; lastAccountStateKey = key; }
+                List<string> send = new List<string>();
+                lock (Sync)
+                {
+                    if (client != c) return;
+                    foreach (string[] x in built)
+                    {
+                        string was;
+                        lastAccountStateKeys.TryGetValue(x[0], out was);
+                        if (force || x[1] != was) { lastAccountStateKeys[x[0]] = x[1]; send.Add(x[2]); }
+                    }
+                    foreach (string k in lastAccountStateKeys.Keys.Where(k => !accts.Contains(k)).ToList()) lastAccountStateKeys.Remove(k);
+                }
                 lastAccountStateSeq = seq;
-                c.Send(json);
+                foreach (string j in send) c.Send(j);
             }
         }
 
@@ -3363,9 +4047,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static string StatusJson(string level, string text) { return "{\"type\":\"status\",\"level\":" + CbJson.Str(level) + ",\"text\":" + CbJson.Str(text) + "}"; }
 
-        private static string AnswerJson(string id, string answer, string text)
+        private static string AnswerJson(string id, string answer, string text) { return AnswerJson(id, answer, text, null); }
+        // 0.6.0: account, for one seat of a group plan (a plan-level answer, and every answer for one account, has none).
+        private static string AnswerJson(string id, string answer, string text, string account)
         {
-            return "{\"type\":\"answer\",\"id\":" + CbJson.Str(id) + ",\"answer\":" + CbJson.Str(answer) + ",\"text\":" + CbJson.Str(text) + "}";
+            return "{\"type\":\"answer\",\"id\":" + CbJson.Str(id) + ",\"answer\":" + CbJson.Str(answer) + ",\"text\":" + CbJson.Str(text) + (account != null ? ",\"account\":" + CbJson.Str(account) : "") + "}";
         }
 
         private static string Ms(double v) { return v >= 0 ? v.ToString("0", CultureInfo.InvariantCulture) : "null"; }
@@ -3420,7 +4106,30 @@ namespace NinjaTrader.NinjaScript.AddOns
             return ",\"root\":" + Str(p.Root) + ",\"side\":" + Str(p.Side) + ",\"kind\":" + Str(p.Kind) + ",\"price\":" + Raw(p.PriceText) + ",\"limitPrice\":" + Raw(p.LimitText) +
                    ",\"qty\":" + (p.HasQty ? p.Qty.ToString(CultureInfo.InvariantCulture) : "null") + ",\"stopTicks\":" + (p.HasStop ? p.StopTicks.ToString(CultureInfo.InvariantCulture) : "null") +
                    ",\"targetTicks\":" + (p.HasTarget ? p.TargetTicks.ToString(CultureInfo.InvariantCulture) : "null") + ",\"expireSec\":" + (p.HasExpire ? p.ExpireSec.ToString(CultureInfo.InvariantCulture) : "null") +
-                   ",\"riskDollars\":" + Raw(p.RiskText) + ",\"setup\":" + Str(p.Setup) + ",\"reason\":" + Str(p.Reason) + ",\"confidence\":" + Raw(p.ConfText);
+                   ",\"riskDollars\":" + Raw(p.RiskText) + ",\"setup\":" + Str(p.Setup) + ",\"reason\":" + Str(p.Reason) + ",\"confidence\":" + Raw(p.ConfText) + SeatFields(p);
+        }
+
+        // 0.6.0: a group plan's sizes, seatsRev and, once checked, each seat: its size, its risk and why it is not in this trade (null:
+        // it is), and its result once placed. Nothing for a plan on one account (as before).
+        private static string SeatFields(Plan p)
+        {
+            if (p.SizesText == null && p.SeatNames == null) return "";
+            StringBuilder b = new StringBuilder();
+            b.Append(",\"sizes\":").Append(Str(p.SizesText)).Append(",\"seatsRev\":").Append(p.HasSeatsRev ? p.SeatsRev.ToString(CultureInfo.InvariantCulture) : "null");
+            if (p.SeatNames == null) return b.ToString();
+            Instrument inst = ChartBridgeServer.InstrumentFor((p.Root ?? "").ToUpperInvariant());
+            double tick = inst != null ? inst.MasterInstrument.TickSize : 0, pv = inst != null ? inst.MasterInstrument.PointValue : 0;
+            b.Append(",\"seats\":[");
+            for (int i = 0; i < p.SeatNames.Length; i++)
+            {
+                if (i > 0) b.Append(',');
+                string r = p.Results != null ? p.Results[i] : null;
+                b.Append("{\"account\":").Append(CbJson.Str(p.SeatNames[i])).Append(",\"size\":").Append(p.Sizes[i].ToString(CultureInfo.InvariantCulture))
+                 .Append(",\"risk\":").Append(CbJson.Num(Math.Round(p.StopTicks * tick * pv * p.Sizes[i], 2)))
+                 .Append(",\"out\":").Append(Str(p.Outs[i] ?? (r != null && r != "placed" ? "refused: " + r : null)))
+                 .Append(",\"placed\":").Append(r == "placed" ? "true" : "false").Append('}');
+            }
+            return b.Append(']').ToString();
         }
 
         private string PlanJson(Plan p)
@@ -3434,7 +4143,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             string state;
             double seen, answered;
             lock (Sync) { state = pr.State == "accepting" ? "open" : pr.State; seen = pr.SeenAt; answered = pr.AnsweredAt; }
-            return "{\"type\":\"agentProposal\",\"agent\":" + CbJson.Str(Id) + ",\"id\":" + CbJson.Str(pr.P.Id) + ",\"at\":" + Ms(pr.P.At) + ",\"account\":" + CbJson.Str(pr.Account) +
+            bool grp = pr.Account != null && pr.Account.StartsWith("group:", StringComparison.Ordinal);   // 0.6.0: a group's proposal names the group, account null
+            return "{\"type\":\"agentProposal\",\"agent\":" + CbJson.Str(Id) + ",\"id\":" + CbJson.Str(pr.P.Id) + ",\"at\":" + Ms(pr.P.At) + ",\"account\":" + (grp ? "null" : CbJson.Str(pr.Account)) +
+                   (grp ? ",\"group\":" + GroupJson(pr.Account.Substring(6)) : "") +
                    ",\"sim\":" + (pr.Sim ? "true" : "false") + PlanFields(pr.P) + ",\"expiresAt\":" + Ms(pr.P.ExpiresAt) + ",\"state\":" + CbJson.Str(state) +
                    ",\"seenAt\":" + Ms(seen) + ",\"answeredAt\":" + Ms(answered) + "}";
         }
@@ -3458,20 +4169,70 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             ins.Append(']');
             return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"agent\":" + CbJson.Str(Id) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + ChartBridgeBranches.Json(Account) +
-                   ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"rules\":" + NoteWelcomeRules(EnforcedRulesJson(r)) + ",\"instruments\":" + ins + "}";
+                   ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"rules\":" + NoteWelcomeRules(EnforcedRulesJson(r)) + ",\"instruments\":" + ins + SeatsWelcomeFields() + "}";
         }
 
-        private bool OwnsAny() { return RulesNow().Roots.Any(x => Owns(x)); }
+        // 0.6.0: welcome's group ({id, name} or null), seats (the member accounts in seat order, null for one account) and seatsRev.
+        private string SeatsWelcomeFields()
+        {
+            string gid;
+            List<string> seats;
+            long rev;
+            lock (Sync) { gid = groupId; seats = seatNames.ToList(); rev = seatsRev; }
+            return ",\"group\":" + (gid != null ? GroupJson(gid) : "null") + ",\"seats\":" + (gid != null ? "[" + string.Join(",", seats.Select(x => CbJson.Str(x))) + "]" : "null") +
+                   ",\"seatsRev\":" + rev.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static string GroupJson(string gid) { return "{\"id\":" + CbJson.Str(gid) + ",\"name\":" + Str(ChartBridgeGroups.NameOf(gid)) + "}"; }
+
+        // 0.6.0: each seat for agentState and the strip (a group only): its account, whether the agent owns anything there, its open
+        // trade, today's P&L and trades there, and why it is not in the last plan's trade (null: it is). strip: also SIM or LIVE, the
+        // last plan's size and risk on it, and its last closed trade's dollars (the page's R).
+        private string SeatsJson(bool strip)
+        {
+            List<Seat> seats = AllSeats();
+            List<bool> owns = seats.Select(x => FlatRoots().Any(y => x.Owns(y))).ToList();
+            List<bool> sims = strip ? seats.Select(x => SeatSim(x.Name)).ToList() : null;
+            StringBuilder b = new StringBuilder("[");
+            lock (Sync)
+            {
+                for (int i = 0; i < seats.Count; i++)
+                {
+                    Seat x = seats[i];
+                    List<KeyValuePair<string, double>> mine = Trades.Where(kv => { string s8; return SeatOfTag.TryGetValue(kv.Key.Length > 8 ? kv.Key.Substring(0, 8) : kv.Key, out s8) && s8 == x.Name; }).ToList();
+                    if (i > 0) b.Append(',');
+                    b.Append("{\"account\":").Append(CbJson.Str(x.Name)).Append(",\"owns\":").Append(owns[i] ? "true" : "false").Append(",\"position\":").Append(x.PositionJsonLocked())
+                     .Append(",\"pnlToday\":").Append(CbJson.Num(Math.Round(mine.Where(kv => !double.IsNaN(kv.Value)).Sum(kv => kv.Value), 2))).Append(",\"trades\":").Append(mine.Count)
+                     .Append(",\"out\":").Append(Str(x.Out));
+                    if (strip)
+                    {
+                        List<KeyValuePair<string, double>> last = x.LastPlanId == null ? new List<KeyValuePair<string, double>>() :
+                            mine.Where(kv => { string pid; return PlanOfTag.TryGetValue(kv.Key.Length > 8 ? kv.Key.Substring(0, 8) : kv.Key, out pid) && pid == x.LastPlanId; }).ToList();
+                        bool closed = last.Count > 0 && last.All(kv => !double.IsNaN(kv.Value));
+                        b.Append(",\"sim\":").Append(sims[i] ? "true" : "false").Append(",\"seat\":").Append(seatNames.Contains(x.Name) ? "true" : "false")
+                         .Append(",\"lastPlan\":").Append(Str(x.LastPlanId)).Append(",\"size\":").Append(x.LastSize.ToString(CultureInfo.InvariantCulture))
+                         .Append(",\"risk\":").Append(CbJson.Num(x.LastRisk)).Append(",\"lastPnl\":").Append(closed ? CbJson.Num(Math.Round(last.Sum(kv => kv.Value), 2)) : "null");
+                    }
+                    b.Append('}');
+                }
+            }
+            return b.Append(']').ToString();
+        }
+
+        private bool OwnsAny() { return RulesNow().Roots.Any(x => Owns(x)); }   // 0.6.0: any seat
 
         // What the order path asks at the last moment (ChartBridgeAgents.PlacingProblem): killed, shadow, outside the window.
+        // 0.6.0: and the agent connected (its hello said): asked per seat under PlaceLock, so once the socket drops (Lose) no further
+        // seat is placed. Only the agent's Sync is taken here (as before), never a lock Lose waits on.
         public string PlacingProblem()
         {
             Rules r = RulesNow();
             string m;
-            bool k;
-            lock (Sync) { m = mode; k = killed; }
+            bool k, on;
+            lock (Sync) { m = mode; k = killed; on = client != null && helloed; }
             if (k) return "the kill switch is on (release it on the Agent tab)";
             if (m == "shadow") return "agent " + Id + " is in shadow: nothing is placed";
+            if (!on) return "agent " + Id + " is not connected: nothing more is placed";   // 0.6.0: a fan-out stops at the seat after its socket dropped
             DateTime et = NowEt();
             if (!InWindow(r, et)) return WindowRefusal(r, et);   // 0.5.2: session time, the market open
             return null;
@@ -3481,11 +4242,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string sd = StandDown();
             bool owns = OwnsAny();
+            string seats = GroupNow() || AllSeats().Any(x => !IsEntrySeat(x.Name)) ? ",\"seats\":" + SeatsJson(false) : "";   // 0.6.0: a group's seats (one account: as before)
             lock (Sync)
             {
                 return "{\"type\":\"agentState\",\"mode\":" + CbJson.Str(mode) + ",\"killed\":" + (killed ? "true" : "false") + ",\"standDown\":" + Str(sd) +
-                       ",\"trades\":" + Trades.Count + ",\"losses\":" + LossesLocked() + ",\"pnlToday\":" + CbJson.Num(Math.Round(Trades.Values.Where(v => !double.IsNaN(v)).Sum(), 2)) +
-                       ",\"owns\":" + (owns ? "true" : "false") + ",\"session\":" + Str(session) + "}";
+                       ",\"trades\":" + TradesLocked() + ",\"losses\":" + LossesLocked() + ",\"pnlToday\":" + CbJson.Num(Math.Round(Trades.Values.Where(v => !double.IsNaN(v)).Sum(), 2)) +
+                       ",\"owns\":" + (owns ? "true" : "false") + ",\"session\":" + Str(session) + seats + "}";
             }
         }
 
@@ -3494,6 +4256,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool sim = SimNow(), owns = OwnsAny();
             string sd = StandDown();
             Rules r = RulesNow();
+            string gid = GroupId, seats = gid != null || AllSeats().Any(x => !IsEntrySeat(x.Name)) ? SeatsJson(true) : null;   // 0.6.0
+            Seat pos = AllSeats().FirstOrDefault(x => { lock (Sync) return x.openTag != null && x.ledQty != 0; });
             StringBuilder b = new StringBuilder("{\"type\":\"agent\"");
             lock (Sync)
             {
@@ -3506,15 +4270,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"account\":").Append(ChartBridgeBranches.Json(account))
                  .Append(",\"sim\":").Append(sim ? "true" : "false")
                  .Append(",\"rules\":").Append(RulesJson(r))
-                 .Append(",\"position\":").Append(openTag != null && ledQty != 0 ? "{\"root\":" + CbJson.Str(openRoot) + ",\"qty\":" + ledQty.ToString(CultureInfo.InvariantCulture) + ",\"avgPrice\":" + CbJson.Num(ledAvg) + "}" : "null")
+                 .Append(",\"position\":").Append(pos != null ? pos.PositionJsonLocked() : "null")
                  .Append(",\"pnlToday\":").Append(CbJson.Num(Math.Round(Trades.Values.Where(v => !double.IsNaN(v)).Sum(), 2)))
-                 .Append(",\"trades\":").Append(Trades.Count)
+                 .Append(",\"trades\":").Append(TradesLocked())
                  .Append(",\"losses\":").Append(LossesLocked())
                  .Append(",\"killed\":").Append(killed ? "true" : "false")
                  .Append(",\"standDown\":").Append(Str(sd))
                  .Append(",\"owns\":").Append(owns ? "true" : "false")
                  .Append(",\"lastBeatMs\":").Append(client != null ? Ms(Math.Max(0, now - lastMsgMs)) : "null")
                  .Append(",\"lastPlan\":").Append(lastPlanJson ?? "null");
+                if (gid != null) b.Append(",\"group\":").Append(GroupJson(gid)).Append(",\"seatsRev\":").Append(seatsRev.ToString(CultureInfo.InvariantCulture));   // 0.6.0
+                if (seats != null) b.Append(",\"seats\":").Append(seats);
             }
             return b.Append('}').ToString();
         }

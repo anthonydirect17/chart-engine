@@ -984,6 +984,19 @@ function agentControl(p, q, req, res) {
   const hello = () => { if (!a.connected) { desk.agentConnect(id, null); desk.agentMessage(id, { type: 'agentHello', name: q.get('name') || 'Demo Agent', build: q.get('build') || 'sample-build-1' }); } };
   if (p === '/test/agent-connect') { if (q.get('on') === '0') desk.agentDrop(id, 'no heartbeat for 5 s'); else hello(); return json(200, desk.agentMsg(a)); }
   hello();
+  // 1.27.0 (ChartBridge 0.6.0): a sample group view for the Agent tab (made-up sizes, P&L and risk; nothing is placed)
+  if (p === '/test/agent-group') {
+    if (q.get('on') === '0') { a.groupView = null; desk.agentNotify(a); return json(200, desk.agentMsg(a)); }
+    const name = q.get('name') || 'Lucid', members = (q.get('members') || 'SIM-F1,SIM-F2').split(','), sizes = (q.get('sizes') || '').split(',').map(Number);
+    let g = [...desk.gr.list.values()].find(x => x.name === name);
+    if (!g) { g = { id: 'g' + desk.gr.next++, name, noHedge: true, dailyLoss: 1000, drawdown: 2000, drawdownType: 'eod', target: 3000, size: 50000, lockAt: 0 }; desk.gr.list.set(g.id, g); }
+    for (const m of members) { desk.gr.members.set(m, g.id); desk.gr.peaks.set(m, 50000); }
+    const pnl = [40, -6, 0];
+    a.groupView = { group: { id: g.id, name }, rev: 2, seats: members.map((m, i) => ({ account: m, owns: false, position: null, pnlToday: pnl[i] || 0, trades: 1, sim: true, seat: true,
+      out: i === members.length - 1 && q.get('out') ? q.get('out') : null, lastPlan: 'sample-1', size: sizes[i] || 1, risk: (sizes[i] || 1) * 4, lastPnl: i === members.length - 1 && q.get('out') ? null : pnl[i] || 0 })) };
+    desk.sendGroups(); desk.agentNotify(a);
+    return json(200, desk.agentMsg(a));
+  }
   if (p === '/test/agent-plan' || p === '/test/agent-proposal') {
     const root = q.get('root') || 'MNQ', ins = INSTR[root], side = q.get('side') || 'buy', kind = q.get('kind') || 'limit', qty = +(q.get('qty') || 2), stop = +(q.get('stop') || 16);
     const price = q.get('p') ? +q.get('p') : rqr(last[root] + (kind === 'stopLimit' ? 1 : -1) * (side === 'buy' ? 4 : -4) * ins.tick, root);

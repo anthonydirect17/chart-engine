@@ -303,6 +303,20 @@ function followerRows(accounts, copier) {
       lossLimit: Number.isInteger(f.lossLimit) && f.lossLimit >= 1 ? f.lossLimit : null, skipped: typeof f.skipped === 'string' && f.skipped ? f.skipped : null }));
   return rows.sort((a, b) => (a.account < b.account ? -1 : a.account > b.account ? 1 : 0));
 }
+/**
+ * 1.27.0 (ChartBridge 0.6.0): the hero whose seat an account is, from the `agent` messages (heroes: agent id -> the message):
+ * its name, or ''. A seat: the account an agent trades, each account of the group it trades, and one that left the group while
+ * it still holds that agent's trade. The copier and the bot never trade a seat (ChartBridge refuses them).
+ */
+function heroOf(heroes, account) {
+  for (const m of heroes && typeof heroes.values === 'function' ? heroes.values() : []) {
+    if (!m || typeof account !== 'string' || !account) continue;
+    const name = typeof m.name === 'string' && m.name ? m.name : m.agent;
+    if (m.account === account) return name;
+    if (Array.isArray(m.seats) && m.seats.some(x => x && x.account === account)) return name;
+  }
+  return '';
+}
 /** The `copierFollower` message for a row (every key, as the contract requires), or a plain reason it cannot be sent. */
 function followerMessage(row, cid) {
   const qty = +row.qty, ll = row.lossLimit === null || row.lossLimit === '' || row.lossLimit === undefined ? null : Number(row.lossLimit);
@@ -358,7 +372,7 @@ const isWorking = o => !!o && WORKING.has(o.state);
 
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, accountMark, followerRows, followerMessage,
-  accountMark, accountChange, logText, orderName, attachedLegs, isWorking };
+  accountMark, accountChange, logText, orderName, attachedLegs, isWorking, heroOf };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -418,6 +432,7 @@ function createFeed(env) {
     accounts: [], archived: [], got: false, instruments: {}, orders: new Map(), positions: new Map(), fills: new Map(),
     copier: null, log: [], desk: new Map(), deskUrl: '', deskState: 'not asked', deskAt: 0,
     groups: null, groupsError: null,   // 1.26.0: ChartBridge 0.5.8's groups (null: none sent, an older ChartBridge or not connected)
+    heroes: new Map(),   // 1.27.0: each agent's `agent` message (its account, or its group's seats), for the seat marks
   };
   let ws = null, tries = 0, timer = 0, seq = 0, started = false, deskTimer = 0, changeQueued = false, stopped = false;
   const changed = () => { if (changeQueued) return; changeQueued = true; Promise.resolve().then(() => { changeQueued = false; env.changed(); }); };
@@ -457,7 +472,7 @@ function createFeed(env) {
       sock.onmessage = ev => { if (sock !== ws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } if (!m || typeof m !== 'object') return; message(m, sock); tell('message', m); };
       sock.onclose = () => {
         if (sock !== ws) return;
-        ws = null; S.open = false; S.signedIn = false; S.enabled = false; S.reason = 'Not connected to ChartBridge.'; S.trading = null; S.groups = null; S.groupsError = null;
+        ws = null; S.open = false; S.signedIn = false; S.enabled = false; S.reason = 'Not connected to ChartBridge.'; S.trading = null; S.groups = null; S.groupsError = null; S.heroes.clear();
         S.switches = Object.fromEntries(SWITCH_KEYS.map(k => [k, false]));      // controls go until ChartBridge names them again
         changed(); tell('closed'); retry();
       };
@@ -536,6 +551,7 @@ function createFeed(env) {
       case 'execs': S.fills.clear(); for (const f of m.list || []) if (f && f.id) S.fills.set(f.account + '|' + f.id, f); changed(); return;
       case 'exec': if (m.id) { S.fills.set(m.account + '|' + m.id, m); changed(); } return;
       case 'copier': S.copier = m; changed(); return;
+      case 'agent': if (typeof m.agent === 'string') { S.heroes.set(m.agent, { agent: m.agent, name: m.name, account: m.account, seats: m.seats }); changed(); } return;   // 1.27.0: seats marked with the hero's name
       case 'groups': {   // 1.26.0 (ChartBridge 0.5.8): the groups, their rules, side and holders
         const GC = typeof GroupsCore !== 'undefined' ? GroupsCore : null;
         S.groups = GC ? GC.cleanGroups(m) : (Array.isArray(m.list) ? m.list.filter(g => g && typeof g.id === 'string') : []);
@@ -763,7 +779,8 @@ function mount(v, host) {
         const lims = !grpOn ? '' : a.group
           ? c(typeof a.floor === 'number' ? 'floor ' + AC.fmtUsdPlain(a.floor) : 'floor ?', 'r mut', typeof a.floor === 'number' ? 'The floor by its group\'s rules' : (why.floor || ''))
           : `<span role="cell" class="apg-my"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-floor" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myFloor), disabled: !canGroup })} placeholder="${a.myLimitsSet === false ? 'not set' : 'floor $'}" maxlength="12" aria-label="My floor for ${esc(a.name)}" title="My floor: the balance this account must stay above (empty: none)"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-daily" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myDailyLoss), disabled: !canGroup })} placeholder="${a.myLimitsSet === false ? 'not set' : 'daily $'}" maxlength="12" aria-label="My daily limit for ${esc(a.name)}" title="My daily limit: the most this account may lose today, open P&amp;L counted (empty: none)"></span>`;
-        return row(a.name, `${c(a.name, 'b', a.sim ? 'NinjaTrader Sim account' : '')}${c(CONN[a.connection] || a.connection, a.connection === 'connected' ? '' : 'warn')}` +
+        const hero = AC.heroOf(S.heroes, a.name);   // 1.27.0: a seat shows its hero's name
+        return row(a.name, `${c(a.name + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', (a.sim ? 'NinjaTrader Sim account' : '') + (hero ? (a.sim ? '. ' : '') + 'A seat of ' + hero + ' (the Agent tab): the copier and the bot never trade it' : ''))}${c(CONN[a.connection] || a.connection, a.connection === 'connected' ? '' : 'warn')}` +
           `${c(AC.fmtUsdPlain(a.balance), 'r')}${c(AC.fmtUsd(a.pnlToday), 'r ' + (a.pnlToday > 0.004 ? 'up' : a.pnlToday < -0.004 ? 'dn' : ''))}${c(pos, 'r')}` +
           `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${grp}${lims}${mark}${hide}`, 'apg-acc' + lvl) + ask(a) + askJoin(a);
       };
@@ -832,17 +849,18 @@ function mount(v, host) {
       const pick = accounts.filter(a => a.state !== 'gone');
       html = `<div class="apg-cop-top"><span class="apg-arm ${C.armed ? 'on' : 'off'}" role="status">${C.armed ? 'ARMED' : 'STOOD DOWN'}</span>` +
         (C.armed ? '' : `<span class="apg-why">${esc(C.standDownWhy || 'Nothing is copied until Re-arm.')}</span><button type="button" class="ac-btn apg-rearm" data-act="rearm" title="Copy again: needs the leader Connected and fewer than 3 followers not Connected">Re-arm</button>`) +
-        `<label class="apg-lbl">Leader <select class="ws-sel apg-sel" data-act="leader" ${pr({ value: leader })} aria-label="Leader account"><option value="">none</option>${pick.map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('')}</select></label>` +
+        `<label class="apg-lbl">Leader <select class="ws-sel apg-sel" data-act="leader" ${pr({ value: leader })} aria-label="Leader account"><option value="">none</option>${pick.map(a => { const hero = AC.heroOf(S.heroes, a.name); return `<option value="${esc(a.name)}"${hero && a.name !== leader ? ' disabled' : ''}>${esc(a.name + (hero ? ' (' + hero + '\'s seat: never the copier\'s)' : ''))}</option>`; }).join('')}</select></label>` +
         `<span class="ws-seg apg-seg" role="group" aria-label="Copy mode"><button type="button" data-act="mode" data-v="executions" aria-pressed="${C.mode === 'executions'}" title="Each leader fill: a market order on every follower">Executions</button><button type="button" data-act="mode" data-v="orders" aria-pressed="${C.mode === 'orders'}" title="Each leader entry order placed on every follower">Orders</button></span>` +
         `<span class="apg-sim">Sim or LIVE followers; every account gate applies</span></div>` +
         (!rows.length ? '<p class="ac-empty">No account to copy to.</p>' : '<div class="gr apg-g apg-cop-g" role="table" aria-label="Copier followers">' +
         row('h', h('Follower') + h('On') + h('Qty') + h('Size') + h('Daily loss') + h('Pos', 'r') + h('Slip', 'r') + h('Last'), 'gr-h') +
         rows.map(r => {
-          const dis = false;   // Anthony 2026-10-07: no Sim lock (ChartBridge's account gates decide each copy)
+          const hero = AC.heroOf(S.heroes, r.account);   // 1.27.0: a hero's seat is never a follower (ChartBridge refuses it)
+          const dis = !!hero && !r.on;   // Anthony 2026-10-07: no Sim lock (ChartBridge's account gates decide each copy); turning one off always works
           const qtyOpts = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<option value="${n}">${n}</option>`).join('');
           const llOn = r.lossLimit !== null || P.llPending.has(r.account);
           const pos = r.position && r.position.qty ? (r.position.qty > 0 ? '+' : '') + r.position.qty + ' ' + (r.root || '') : '';
-          const last = r.skipped ? 'Skipped: ' + r.skipped : r.lastAction ? r.lastAction + (r.lastAt ? ' ' + hms(r.lastAt) : '') : '';
+          const last = hero ? hero + '\'s seat: the copier never trades it' : r.skipped ? 'Skipped: ' + r.skipped : r.lastAction ? r.lastAction + (r.lastAt ? ' ' + hms(r.lastAt) : '') : '';
           return row('f|' + r.account + '|' + r.mark, `<span role="cell" class="apg-fol">${ci(r.account, 'b', r.mark === 'LIVE' ? 'A LIVE account: copies to it are real orders' : 'NinjaTrader Sim account')}<span class="apg-mark ${r.mark === 'LIVE' ? 'live' : 'sim'}">${r.mark}</span></span>` +
             `<span role="cell"><input type="checkbox" data-act="f-on" ${pr({ checked: r.on, disabled: dis })} aria-label="Copy to ${esc(r.account)}"></span>` +
             `<span role="cell"><select class="ws-sel apg-sel" data-act="f-qty" ${pr({ value: String(r.qty), disabled: dis })} aria-label="Contracts per leader contract">${qtyOpts}</select></span>` +
