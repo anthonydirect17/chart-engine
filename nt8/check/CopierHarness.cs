@@ -5,6 +5,7 @@
 // mode and the sweep; the stop already traded; copier.txt and copier.log; /diag; a restart. Made-up accounts (Sim101 as the
 // leader, SIM-F1 to SIM-F4, EVAL-A as a real account) and made-up prices; nothing here is market data.
 using System;
+using System.Threading;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -26,6 +27,7 @@ public static class CopierHarness
 
     static System.Collections.Concurrent.ConcurrentDictionary<int, ChartBridgeClient> Clients() { return (System.Collections.Concurrent.ConcurrentDictionary<int, ChartBridgeClient>)typeof(ChartBridgeServer).GetField("Clients", PS).GetValue(null); }
     static Dictionary<string, Instrument> Named() { return (Dictionary<string, Instrument>)typeof(ChartBridgeServer).GetField("Instruments", PS).GetValue(null); }
+    static int Logs(string has) { lock (NinjaTrader.Code.Output.Lines) return NinjaTrader.Code.Output.Lines.Count(x => x.Contains(has)); }
     static bool Logged(string has) { lock (NinjaTrader.Code.Output.Lines) return NinjaTrader.Code.Output.Lines.Any(x => x.Contains(has)); }
     static string Last() { return sent.Count > 0 ? sent[sent.Count - 1] : ""; }
     static bool Rejected(string has) { return sent.Any(m => m.Contains("\"type\":\"reject\"") && m.Contains(has)); }
@@ -1018,13 +1020,40 @@ public static class CopierHarness
         ChartBridgeCopier.Tick(Now());
         sent.Clear(); Msg("copierRearm", "{\"type\":\"copierRearm\",\"cid\":\"r\"}");
         Check(!Rejected("") && State().Contains("\"armed\":true"), "all back: Re-arm accepted");
-        // the leader leaving Connected alone stands it down too
-        lead.Connection.Status = ConnectionStatus.ConnectionLost; ChartBridgeCopier.ConnectionChanged();
-        Check(State().Contains("\"standDownWhy\":\"the leader Sim101 left Connected\""), "the leader left Connected: stands down");
-        sent.Clear(); Msg("copierRearm", "{\"type\":\"copierRearm\"}");
-        Check(Rejected("The leader Sim101 is not connected."), "Re-arm refused while the leader is not connected");
-        lead.Connection.Status = ConnectionStatus.Connected;
-        ChartBridgeCopier.Tick(Now());
+        // the leader leaving Connected alone stands it down too: 0.6.3 (audit C9, Anthony's decision) only once it has stayed down
+        // LeaderDownMs (10 s; 400 ms here), and stood down by that it re-arms by itself once the leader is back and every follower matches
+        ChartBridgeCopier.LeaderDownMs = 400;
+        try
+        {
+            foreach (Account a in new[] { lead, f1, f2, f3, f4 }) Pos(a, mnq, 0);
+            lead.Connection.Status = ConnectionStatus.ConnectionLost; ChartBridgeCopier.ConnectionChanged();
+            lead.Connection.Status = ConnectionStatus.Connected; ChartBridgeCopier.ConnectionChanged();
+            sent.Clear(); ChartBridgeCopier.Tick(Now());
+            Check(!EventSaid("standDown", null, null) && (State() == "" || State().Contains("\"armed\":true")), "0.6.3 C9: a leader blip shorter than LeaderDownMs is not a drop: still armed");
+            lead.Connection.Status = ConnectionStatus.ConnectionLost; ChartBridgeCopier.ConnectionChanged();
+            Thread.Sleep(450);
+            sent.Clear(); ChartBridgeCopier.ConnectionChanged();
+            Check(State().Contains("\"armed\":false") && State().Contains("\"standDownWhy\":\"the leader Sim101 left Connected (not Connected for 0 s): it re-arms by itself once the leader is Connected again and every follower matches its position\"") &&
+                  EventSaid("standDown", null, "the leader Sim101 left Connected"), "0.6.3 C9: the leader down for LeaderDownMs: stands down, the status line says it re-arms by itself: " + State());
+            sent.Clear(); Msg("copierRearm", "{\"type\":\"copierRearm\"}");
+            Check(Rejected("The leader Sim101 is not connected."), "Re-arm refused while the leader is not connected");
+            lead.Connection.Status = ConnectionStatus.Connected;
+            sent.Clear(); ChartBridgeCopier.Tick(Now());
+            Check(State().Contains("\"armed\":true") && EventSaid("rearm", null, "Re-armed by itself: the leader Sim101 is Connected again and every follower matches its position"),
+                  "0.6.3 C9: the leader back and every follower flat with it: re-armed by itself, with a status line");
+            // back, but a follower does not match: stays stood down (as today) until they match
+            Pos(f1, mnq, 1);
+            lead.Connection.Status = ConnectionStatus.ConnectionLost; ChartBridgeCopier.ConnectionChanged();
+            Thread.Sleep(450); ChartBridgeCopier.ConnectionChanged();
+            lead.Connection.Status = ConnectionStatus.Connected;
+            sent.Clear(); ChartBridgeCopier.Tick(Now()); ChartBridgeCopier.Tick(Now());
+            Check(!State().Contains("\"armed\":true") && Logged("the leader Sim101 is Connected again but SIM-F1 is long on MNQ where the leader is flat: the copier stays stood down until they match or you press Re-arm") &&
+                  Logs("the leader Sim101 is Connected again but SIM-F1") == 1, "0.6.3 C9: back, but SIM-F1 is long where the leader is flat: stays stood down, said once");
+            Pos(f1, mnq, 0);
+            sent.Clear(); ChartBridgeCopier.Tick(Now());
+            Check(State().Contains("\"armed\":true"), "0.6.3 C9: SIM-F1 flat again (it matches): re-armed by itself");
+        }
+        finally { ChartBridgeCopier.LeaderDownMs = 10000; lead.Connection.Status = ConnectionStatus.Connected; }
         Msg("copierRearm", "{\"type\":\"copierRearm\"}");
         Msg("copierFollower", Follower("SIM-F4", "false", "1", "micro", "null"));
         Check(State().Contains("\"armed\":true"), "Re-armed");
@@ -1095,7 +1124,7 @@ public static class CopierHarness
         Check(v2.Trader && !v2sent.Any(m => m.Contains("\"type\":\"copier")), "a signed-in v2 page (never sent client v3) gets no copier message");
         Check(ChartBridgeClient.OrderLane("{\"type\":\"copier\",\"enabled\":true}") && ChartBridgeClient.OrderLane("{\"type\":\"copierEvent\",\"at\":1}"), "copier and copierEvent go in the order lane");
         string diag = ChartBridgeCopier.DiagJson();
-        Check(Regex.IsMatch(diag, "\"decisions\":[1-9]") && diag.Contains("\"skipped\":") && diag.Contains("\"standDowns\":2") && Regex.IsMatch(diag, "\"leaderMsMedian\":[0-9]"), "/diag copier: decisions, skipped, standDowns, median leaderMs: " + diag);
+        Check(Regex.IsMatch(diag, "\"decisions\":[1-9]") && diag.Contains("\"skipped\":") && diag.Contains("\"standDowns\":3") && Regex.IsMatch(diag, "\"leaderMsMedian\":[0-9]"), "/diag copier: decisions, skipped, standDowns, median leaderMs: " + diag);
         Check(!diag.Contains("SIM-") && !diag.Contains("Sim101") && !diag.Contains("EVAL"), "/diag copier never names an account");
         MethodInfo onClient = typeof(ChartBridgeServer).GetMethod("OnClientMessage", PS);
         sent.Clear();

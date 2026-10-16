@@ -1969,6 +1969,15 @@ follower's `qty` again; a scale-out reduces it by the same share.)
   **stands down**: nothing new is copied until Anthony presses Re-arm (`copierRearm`). While stood down, exits on the
   leader are still copied to connected followers that hold a copier position, and their stops still follow (closing always
   works). After every ChartBridge start the copier starts stood down (lead's default: a restart is a reason to look).
+  0.6.3 (audit C9, Anthony's decision): **the leader** counts as gone only once it has not been Connected for about 10 s
+  (`LeaderDownMs`), so a blip is not a stand-down ("the leader <name> left Connected (not Connected for 10 s): it re-arms by
+  itself once the leader is Connected again and every follower matches its position", a `status` `warn` and a `copierEvent`
+  `standDown`). Stood down by the leader, the copier **re-arms by itself** once the leader is Connected (and steady) again and
+  every follower that is on holds the leader's side on each market (NQ with MNQ, ES with MES; flat where the leader is flat):
+  a `status` `info` and a `copierEvent` `rearm` "Re-armed by itself: ...". If a follower does not match (or is not
+  Connected) it says so once ("the leader <name> is Connected again but <follower> is long on MNQ where the leader is flat:
+  the copier stays stood down until they match or you press Re-arm") and stays stood down, as before, re-arming by itself only
+  once they match. Followers (3 or more within 10 s) stand it down as before, until Re-arm.
 - **Every copy decision is logged with its timing**: `copier.log` next to `config.txt` and the `copierEvent` message
   (`leaderMs` from the leader's event to the follower's order sent, `fillMs` to its fill).
 - **Saved** in `copier.txt` next to `config.txt` (leader, mode, one line per follower), written by ChartBridge only.
