@@ -2940,6 +2940,7 @@ config switch):
 | `groupId` | the group's id, null when not `prop` |
 | `groupSide` | the group's side now (`long`, `short`, `mixed`, or null when flat or not `prop`); while it is `long` the agent's sells are refused, and so on |
 | `noHedge` | the group's switch (null when not `prop`) |
+| `accountType` | 0.6.2: the group's Type from `groups.txt` (`eval`, `funded`, or null when not set), so a hero on one account inside a prop group knows it; always present, null when not `prop`. Informational: nothing in the order path reads it |
 | `rules` | `prop`: `{dailyLoss, drawdown, drawdownType, target, size, lockAt, consistency}`: `size` the account size, `lockAt` "floor stops at" (G1), `consistency` the consistency percent (CON a: informational, no gate or flatten in ChartBridge uses it; personal rules never have it); `personal`: `{floor, dailyLoss}` (the account's own limits, once Anthony has saved My floor or My daily, 0 included), or **null when
 no limits were ever set by Anthony: the agent keeps its model numbers** (NinjaTrader's trailing drawdown is still sent as
 `roomFloor`, `src` `ninjatrader`); `none`: null. Inside `rules` **0 means none**, said explicitly (the firm has no daily limit, no target, no lock; the account has no floor or daily limit of its own), never null: a rule is never "missing". Only the eight numbers below may be null, each with its `why` |

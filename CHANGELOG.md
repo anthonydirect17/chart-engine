@@ -21,6 +21,8 @@ else changes, and exits are never gated.
   refused, logged and alarmed once per build and group; a repeat raise logged once per build and group.
 - **The group's Type for the runner.** The agent's `welcome.group` is `{id, name, accountType}` (`eval`, `funded`, or null) and
   `agentState` gains `groupType` (the same value), so a Type changed in Settings reaches the runner without a reconnect.
+  `accountState` gains `accountType` (after `noHedge`; the account's group Type, null when not set or not prop), so a hero on one
+  account inside a prop group knows it too.
 - **Clear stand-down (chart 1.29.0).** The Board shows each stand-down as an amber row under its hero (the group, the kind and why,
   since when) with Clear stand-down: one click sends `agentStandDownClear {cid, build, group}` (signed-in v3 pages only, gate 7),
   which ChartBridge logs "cleared on the page".

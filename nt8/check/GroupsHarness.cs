@@ -117,6 +117,7 @@ public static class GroupsHarness
             LeftoverExits(); // Q-EXIT (b), Anthony 2026-10-15: an exit left behind when a position goes flat is cancelled
             Consistency();   // CON (a), Anthony 2026-10-15: the group's consistency percent, informational
             TypeAndHero();   // 0.6.1 (SPEC CE-1): each group's Type and default hero, shapes only
+            AccountTypeInState();   // 0.6.2: accountState.accountType
             StandDowns();    // 0.6.2 (SPEC CE-2): a deleted group's stand-downs go with it; agent-standdowns.txt gates agent entries only
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
@@ -392,11 +393,11 @@ public static class GroupsHarness
         Check(Entry(Last("accounts"), "SIM-D").Contains("\"myFloor\":45000,\"myDailyLoss\":500.5"), "and sent at once");
         Clear(); G("accountLimits", "{\"type\":\"accountLimits\",\"cid\":\"l\",\"account\":\"SIM-D\",\"floor\":0,\"dailyLoss\":0}");
         Check(FileText().Contains("personal\tSIM-D\t-\t-"), "both 0: the line stays as none and none (set by Anthony, not never set)");
-        Check(State("SIM-D").Contains("\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":{\"floor\":0,\"dailyLoss\":0}"), "set to none: rules {floor 0, dailyLoss 0}");
+        Check(State("SIM-D").Contains("\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"accountType\":null,\"rules\":{\"floor\":0,\"dailyLoss\":0}"), "set to none: rules {floor 0, dailyLoss 0}");
         Account simE = NewAccount("SIM-E");   // in no group, no limits ever set
         try
         {
-            Check(State("SIM-E").Contains("\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":null,") && Entry(AccountsNow(), "SIM-E").Contains("\"myLimitsSet\":false"), "never set: rules null (the agent keeps its model numbers); the accounts entry says not set");
+            Check(State("SIM-E").Contains("\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"accountType\":null,\"rules\":null,") && Entry(AccountsNow(), "SIM-E").Contains("\"myLimitsSet\":false"), "never set: rules null (the agent keeps its model numbers); the accounts entry says not set");
             Check(Entry(AccountsNow(), "SIM-D").Contains("\"myLimitsSet\":true"), "set to none: myLimitsSet true");
             simE.Items[AccountItem.TrailingMaxDrawdown] = 812.5;
             Check(State("SIM-E").Contains("\"roomFloor\":812.5,") && State("SIM-E").Contains("\"roomFloor\":\"ninjatrader\""), "never set: NinjaTrader's trailing drawdown is still sent as roomFloor (src ninjatrader)");
@@ -508,17 +509,17 @@ public static class GroupsHarness
     static void AgentState()
     {
         string none = State(ChartBridgeBranches.None);
-        Check(none.StartsWith("{\"type\":\"accountState\",\"account\":null,\"sim\":false,\"kind\":\"none\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":null,\"balance\":null,") &&
+        Check(none.StartsWith("{\"type\":\"accountState\",\"account\":null,\"sim\":false,\"kind\":\"none\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"accountType\":null,\"rules\":null,\"balance\":null,") &&
               none.Contains("\"src\":{},\"why\":{\"balance\":\"the agent's account is None\"") && Regex.IsMatch(none, ",\"session\":\"[0-9-]{10}\",\"at\":[0-9]+\\}$"), "None: kind none, every number null with why: " + none);
         Flat();
         Pos(simA, mnq, 1);
         string st = State("SIM-A"), key;
         ChartBridgeGroups.AccountStateJson("SIM-A", out key);
-        Check(st.Contains("\"account\":\"SIM-A\",\"sim\":true,\"kind\":\"prop\",\"group\":\"Lucid Flex\",\"groupId\":\"g1\",\"groupSide\":\"long\",\"noHedge\":true,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":0,\"consistency\":0}"),
+        Check(st.Contains("\"account\":\"SIM-A\",\"sim\":true,\"kind\":\"prop\",\"group\":\"Lucid Flex\",\"groupId\":\"g1\",\"groupSide\":\"long\",\"noHedge\":true,\"accountType\":null,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":0,\"consistency\":0}"),
               "prop: the group, its side and its rules (size and lockAt; 0 for none): " + st);
         Check(!key.Contains("\"at\":") && st.StartsWith(key.Substring(0, key.Length - 1)), "the key is the same text without at");
         string p = State("SIM-C");
-        Check(p.Contains("\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":{\"floor\":48000,\"dailyLoss\":0}"), "personal: its own floor, no daily limit (0: none, said explicitly): " + p);
+        Check(p.Contains("\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"accountType\":null,\"rules\":{\"floor\":48000,\"dailyLoss\":0}"), "personal: its own floor, no daily limit (0: none, said explicitly): " + p);
         Flat();
     }
 
@@ -902,6 +903,34 @@ public static class GroupsHarness
         File.Delete(p); File.Delete(Path.Combine(folder, "account-marks.txt"));
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Check(ChartBridgeGroups.GroupsJson() == "{\"type\":\"groups\",\"list\":[],\"error\":null}", "both files gone: no groups (0.5.7's behaviour)");
+    }
+
+    // ------------------------------------------------------------ 0.6.2: accountState.accountType (the group's Type, for a hero on one account)
+    static void AccountTypeInState()
+    {
+        Flat();
+        Clear(); G("groupSave", Save("", "Type Group", "true", "1000", "2000", "eod", "0", "50000", "0"));
+        Match gm = Regex.Match(FileText(), "group\t(g[0-9]+)\tType Group\t");
+        Check(gm.Success, "AT: a made-up group");
+        if (!gm.Success) return;
+        string gid = gm.Groups[1].Value;
+        try
+        {
+            Clear(); G("accountGroup", Join("SIM-D", "\"" + gid + "\"", "50000"));
+            Check(Rejection() == "" && State("SIM-D").Contains("\"kind\":\"prop\",\"group\":\"Type Group\",\"groupId\":\"" + gid + "\",\"groupSide\":null,\"noHedge\":true,\"accountType\":null,\"rules\":{"),
+                  "AT: a prop account whose group has no Type: accountType null: " + State("SIM-D"));
+            Func<string, string> typed = t => Save(",\"group\":\"" + gid + "\"", "Type Group", "true", "1000", "2000", "eod", "0", "50000", "0").TrimEnd('}') + ",\"accountType\":\"" + t + "\"}";
+            Clear(); G("groupSave", typed("eval"));
+            Check(Rejection() == "" && State("SIM-D").Contains("\"noHedge\":true,\"accountType\":\"eval\",\"rules\":{"), "AT: a prop account in an eval group: accountType eval");
+            Clear(); G("groupSave", typed("funded"));
+            Check(State("SIM-D").Contains("\"accountType\":\"funded\""), "AT: funded");
+            Clear(); G("groupSave", typed("-"));
+            Check(State("SIM-D").Contains("\"noHedge\":true,\"accountType\":null,\"rules\":{"), "AT: the Type cleared: null");
+            Clear(); G("accountGroup", Join("SIM-D", "null", null));
+            Check(State("SIM-D").Contains("\"kind\":\"personal\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"accountType\":null,"), "AT: a personal account: accountType null (always present)");
+            Check(State(ChartBridgeBranches.None).Contains("\"noHedge\":null,\"accountType\":null,\"rules\":null"), "AT: None: accountType null");
+        }
+        finally { Clear(); G("groupDelete", "{\"type\":\"groupDelete\",\"cid\":\"d\",\"group\":\"" + gid + "\"}"); }
     }
 
     // ------------------------------------------------------------ 0.6.2: stand-downs and groups (agent-standdowns.txt)

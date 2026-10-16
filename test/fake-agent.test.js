@@ -182,23 +182,26 @@ test('fake-agent: accountStateProblem() holds an accountState to the 0.5.8 contr
   const { accountStateProblem, ACCOUNT_STATE_KEYS } = await import('./fake-agent.mjs');
   const why = k => 'made up: ' + k;
   // made-up accounts and money (SIM-A), the shapes ChartBridgeGroups.AccountStateJson writes
-  const prop = { type: 'accountState', account: 'SIM-A', sim: true, kind: 'prop', group: 'Lucid', groupId: 'g1', groupSide: 'long', noHedge: true,
+  const prop = { type: 'accountState', account: 'SIM-A', sim: true, kind: 'prop', group: 'Lucid', groupId: 'g1', groupSide: 'long', noHedge: true, accountType: 'eval',
     rules: { dailyLoss: 1000, drawdown: 2000, drawdownType: 'eod', target: 3000, size: 50000, lockAt: 0, consistency: 0 },
     balance: 50500, pnlToday: -100, realizedToday: -300, unrealized: 200, floor: 49000, roomFloor: 1700, roomDaily: 900, targetLeft: 2500,
     src: { balance: 'ninjatrader', pnlToday: 'computed', realizedToday: 'computed', unrealized: 'ninjatrader', floor: 'computed', roomFloor: 'computed', roomDaily: 'computed', targetLeft: 'computed' },
     why: {}, session: '2026-10-15', at: 1792022603526 };
   assert.equal(accountStateProblem(prop), null);
-  const none = { type: 'accountState', account: null, sim: false, kind: 'none', group: null, groupId: null, groupSide: null, noHedge: null, rules: null,
+  const none = { type: 'accountState', account: null, sim: false, kind: 'none', group: null, groupId: null, groupSide: null, noHedge: null, accountType: null, rules: null,
     balance: null, pnlToday: null, realizedToday: null, unrealized: null, floor: null, roomFloor: null, roomDaily: null, targetLeft: null,
     src: {}, why: Object.fromEntries(['balance', 'pnlToday', 'realizedToday', 'unrealized', 'floor', 'roomFloor', 'roomDaily', 'targetLeft'].map(k => [k, "the agent's account is None"])), session: '2026-10-15', at: 1 };
   assert.equal(accountStateProblem(none), null);
-  const personal = Object.assign({}, prop, { kind: 'personal', group: null, groupId: null, groupSide: null, noHedge: null, rules: { floor: 48000, dailyLoss: 0 },
+  const personal = Object.assign({}, prop, { kind: 'personal', group: null, groupId: null, groupSide: null, noHedge: null, accountType: null, rules: { floor: 48000, dailyLoss: 0 },
     targetLeft: null, src: Object.assign({}, prop.src, { floor: 'settings' }), why: { targetLeft: why('targetLeft') } });
   delete personal.src.targetLeft;
   assert.equal(accountStateProblem(personal), null);
   assert.match(accountStateProblem(Object.assign({}, prop, { roomDaily: null })), /why\.roomDaily/);
   assert.match(accountStateProblem(Object.assign({}, prop, { floor: 49000.123 })), /floor is not dollars/);
   assert.match(accountStateProblem(Object.assign({}, prop, { groupSide: 'flat' })), /groupSide/);
+  assert.equal(accountStateProblem(Object.assign({}, prop, { accountType: null })), null, '0.6.2: a prop account whose group has no Type: null');
+  assert.match(accountStateProblem(Object.assign({}, prop, { accountType: 'gym' })), /accountType gym/);
+  assert.match(accountStateProblem(Object.assign({}, personal, { accountType: 'eval' })), /group fields set on a personal account/);
   assert.match(accountStateProblem(Object.assign({}, prop, { rules: Object.assign({}, prop.rules, { target: null }) })), /rules\.target/, 'a rule of none is 0, never null');
   const { at, ...noAt } = prop;
   assert.match(accountStateProblem(noAt), /are not the contract's/);

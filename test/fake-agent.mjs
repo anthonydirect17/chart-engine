@@ -78,7 +78,7 @@ export async function connectAgent({ port, id, secret, name, build, silent, host
 // 0.5.8 (PROTOCOL.md "Prop groups and account state"): accountState, the agent's account in real numbers, in the contract's
 // field order. accountStateProblem(m) says what is wrong with one (null when it follows the contract): every field there, the
 // eight numbers each a number of at most 2 decimals or null, src for each number given and why for each one not.
-export const ACCOUNT_STATE_KEYS = ['type', 'account', 'sim', 'kind', 'group', 'groupId', 'groupSide', 'noHedge', 'rules', 'balance', 'pnlToday', 'realizedToday',
+export const ACCOUNT_STATE_KEYS = ['type', 'account', 'sim', 'kind', 'group', 'groupId', 'groupSide', 'noHedge', 'accountType', 'rules', 'balance', 'pnlToday', 'realizedToday',
   'unrealized', 'floor', 'roomFloor', 'roomDaily', 'targetLeft', 'src', 'why', 'session', 'at'];
 export const ACCOUNT_STATE_NUMBERS = ['balance', 'pnlToday', 'realizedToday', 'unrealized', 'floor', 'roomFloor', 'roomDaily', 'targetLeft'];
 export function accountStateProblem(m) {
@@ -88,7 +88,8 @@ export function accountStateProblem(m) {
   if (!['prop', 'personal', 'none'].includes(m.kind)) return 'kind ' + m.kind;
   if ((m.kind === 'none') !== (m.account === null)) return 'account null exactly when kind is none';
   if (![null, 'long', 'short', 'mixed'].includes(m.groupSide)) return 'groupSide ' + m.groupSide;
-  if (m.kind !== 'prop' && (m.group !== null || m.groupId !== null || m.groupSide !== null || m.noHedge !== null)) return 'group fields set on a ' + m.kind + ' account';
+  if (m.kind !== 'prop' && (m.group !== null || m.groupId !== null || m.groupSide !== null || m.noHedge !== null || m.accountType !== null)) return 'group fields set on a ' + m.kind + ' account';
+  if (![null, 'eval', 'funded'].includes(m.accountType)) return 'accountType ' + m.accountType;   // 0.6.2: the group's Type, null when not set or not prop
   const rk = m.rules === null ? '' : Object.keys(m.rules).join();
   if (m.kind === 'prop' && rk !== 'dailyLoss,drawdown,drawdownType,target,size,lockAt,consistency') return 'prop rules ' + rk;
   if (m.kind === 'personal' && m.rules !== null && rk !== 'floor,dailyLoss') return 'personal rules ' + rk;   // null: never set by Anthony
