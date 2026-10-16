@@ -88,6 +88,82 @@ public static class GroupsHarness
     }
     static string State(string account) { string key; return ChartBridgeGroups.AccountStateJson(account, out key); }
 
+    // 0.6.3 (audit C2): the PC off at the close, or asleep while a position was open
+    static void Restart() { ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs()); foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a); }
+    static void MissedCloses()
+    {
+        Flat();
+        ChartBridgeGroups.GapMs = 1e12;   // the harness clock jumps: watched unless a case says otherwise (a restart is always a gap)
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid Flex", "true", "1000", "2000", "eod", "3000", "50000", "0"));
+        ClockEt(2026, 10, 20, 9, 0);
+        Money(simC, 51000, 0, 0);
+        Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "51000"));
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-C") == "g1", "C2 setup: SIM-C in an EOD group, highest close 51000");
+        ClockEt(2026, 10, 20, 16, 30); Money(simC, 51200, 0, 0); Tick();
+        Check(MarksText().Contains("mark\tSIM-C\t51000\t51200\t") && MarksText().Contains("\t2026-10-19\t51200\tflat\t-\t-\n"), "0.6.3 C2: the last close seen, the last balance and flat are saved (account-marks.txt): " + MarksText().Replace("\t", "<TAB>"));
+        // the laptop off from 16:30 to 19:00, nothing traded: the balance is that close
+        ClockEt(2026, 10, 20, 19, 0); Restart(); Tick();
+        string e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":49200,") && MarksText().Contains("mark\tSIM-C\t51200\t") && MarksText().Contains("\t2026-10-20\t51200\tflat\t-\t-\n"),
+              "0.6.3 C2: off over the close, nothing traded: the first reading (51200) is taken as the close, floor 49200: " + e);
+        // off over the close and the account traded (a target filled at the broker): floor and room null with the reason, never a guess
+        ClockEt(2026, 10, 21, 16, 30); Tick();
+        ClockEt(2026, 10, 21, 19, 0); Restart(); Money(simC, 51800, 0, 0); Clear(); Tick();
+        e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":null,\"roomFloor\":null,") && e.Contains("ChartBridge was not running at the close of 2026-10-21: put the account in Lucid Flex again and give the highest close from the firm's dashboard") &&
+              Any("SIM-C: ChartBridge was not running at the close of 2026-10-21"), "0.6.3 C2: off over the close and it traded: floor and roomFloor null with the reason, the pages told: " + e);
+        Check(State("SIM-C").Contains("\"roomFloor\":null") && State("SIM-C").Contains("not running at the close of 2026-10-21"), "0.6.3 C2: the agents' accountState too: " + State("SIM-C"));
+        Restart(); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":null,") && MarksText().Contains("\tflat\t2026-10-21\t2026-10-21\n"), "0.6.3 C2: the missed close survives a restart (account-marks.txt)");
+        G("accountGroup", Join("SIM-C", "null", null)); Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "52000"));
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50000,") && MarksText().Contains("\t51800\tflat\t-\t-\n"), "0.6.3 C2: put in the group again with the highest close (52000): floor 50000, the missed close cleared");
+        // a weekend off with nothing traded: every close missed was that balance
+        ClockEt(2026, 10, 23, 16, 30); Tick();
+        ClockEt(2026, 10, 26, 8, 0); Restart(); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50000,") && MarksText().Contains("\t2026-10-23\t51800\tflat\t-\t-\n"), "0.6.3 C2: Friday 16:30 to Monday 08:00, nothing traded: no close missed, floor stays 50000");
+        // asleep over the close with a position open (no restart: a gap in the 1 s readings), the same balance: not known
+        ChartBridgeGroups.GapMs = 10000;
+        Pos(simC, mnq, 1);
+        ClockEt(2026, 10, 26, 16, 30); Money(simC, 51800, 150, 0); Tick();
+        ClockEt(2026, 10, 26, 19, 0); Clear(); Tick();
+        e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":null,\"roomFloor\":null,") && e.Contains("not running at the close of 2026-10-26"), "0.6.3 C2: asleep over the close holding a position: floor and room null: " + e);
+        Pos(simC, mnq, 0); Money(simC, 51800, 0, 0);
+        G("accountGroup", Join("SIM-C", "null", null)); Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "52000"));
+        ChartBridgeGroups.GapMs = 1e12;
+        // started in the break after a missed close the day before: this reading is today's close, the one before is missed
+        ClockEt(2026, 10, 27, 16, 0); Tick();
+        ClockEt(2026, 10, 27, 17, 20); Restart(); Money(simC, 52300, 0, 0); Tick();
+        e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":50300,") && MarksText().Contains("mark\tSIM-C\t52300\t"), "0.6.3 C2: restarted at 17:20 ET: the reading is the day's close (52300), nothing before it missed: floor 50300: " + e);
+        // intraday: off while a position was open
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid Flex", "true", "1000", "2000", "intraday", "3000", "50000", "0"));
+        G("accountGroup", Join("SIM-C", "null", null)); Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "52300"));
+        ChartBridgeGroups.GapMs = 10000;
+        ClockEt(2026, 10, 28, 10, 0); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50300,"), "0.6.3 C2 intraday: floor 50300 while watched");
+        ClockEt(2026, 10, 28, 10, 30); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50300,"), "0.6.3 C2 intraday: a gap while flat with nothing traded misses no high");
+        Pos(simC, mnq, 1); Money(simC, 52300, 40, 0); Tick();
+        ClockEt(2026, 10, 28, 11, 0); Money(simC, 52300, -20, 0); Clear(); Tick();
+        e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":null,\"roomFloor\":null,") && e.Contains("its intraday high may be missed: put it in Lucid Flex again and give the highest balance from the firm's dashboard") && Any("its intraday high may have been missed"),
+              "0.6.3 C2 intraday: 30 minutes unwatched holding a position: floor and room null with the reason: " + e);
+        Pos(simC, mnq, 0); Money(simC, 52300, 0, 0);
+        G("accountGroup", Join("SIM-C", "null", null)); Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "52500"));
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50500,"), "0.6.3 C2 intraday: put in the group again with its highest balance: known again");
+        // a 0.6.2 file (7 fields): read as before, no gap check at its first reading
+        string mp = Path.Combine(folder, "account-marks.txt");
+        File.WriteAllText(mp, ChartBridgeGroups.MarksHeader + "\n" + "# old\n" + "mark\tSIM-C\t52500\t52500\t52300\t2026-10-28\t-\n");
+        ClockEt(2026, 10, 28, 19, 0); Restart(); Money(simC, 52900, 0, 0); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50900,") && MarksText().Contains("mark\tSIM-C\t52500\t52900\t52900\t2026-10-29\t") && MarksText().Contains("\t2026-10-28\t52900\tflat\t-\t-\n"),
+              "0.6.3 C2: a 0.6.2 account-marks.txt (7 fields) reads as 0.6.2 did and is written with the new fields: " + MarksText().Replace("\t", "<TAB>"));
+        Clear(); G("accountGroup", Join("SIM-C", "null", null));
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid Flex", "true", "1000", "2000", "eod", "3000", "50000", "0"));
+        ChartBridgeGroups.GapMs = 10000;
+        Flat();
+    }
+
     public static void Run(Action<bool, string> check)
     {
         Check = check;
@@ -119,6 +195,7 @@ public static class GroupsHarness
             TypeAndHero();   // 0.6.1 (SPEC CE-1): each group's Type and default hero, shapes only
             AccountTypeInState();   // 0.6.2: accountState.accountType
             StandDowns();    // 0.6.2 (SPEC CE-2): a deleted group's stand-downs go with it; agent-standdowns.txt gates agent entries only
+            MissedCloses();  // 0.6.3 (audit C2): a close or an intraday high ChartBridge did not see never overstates the room
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally

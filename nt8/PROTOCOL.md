@@ -2878,7 +2878,7 @@ always work)"), every page gets that `status` `error` as it signs in, and the pa
 (every PC before 0.5.8): no groups, every account personal with no limits, ChartBridge behaves exactly as 0.5.7.
 `account-marks.txt`: two `#` lines, then
 
-    mark<TAB><account><TAB><peakEod>|-<TAB><peakIntraday>|-<TAB><dayStartBalance>|-<TAB><session><TAB><dayStartAt>|-
+    mark<TAB><account><TAB><peakEod>|-<TAB><peakIntraday>|-<TAB><dayStartBalance>|-<TAB><session><TAB><dayStartAt>|-<TAB><closeSeen>|-<TAB><lastBalance>|-<TAB>flat|open|-<TAB><eodMissed>|-<TAB><intradayMissed>|-
 
 per account seen connected this NinjaTrader session. `peakEod`, the highest end-of-day equity (balance plus open P&L): raised
 in the 17:00 to 18:00 ET break by the same 2 s check that runs the daily reset (whether or not the reset ran a branch), and by
@@ -2891,6 +2891,22 @@ clears them. `dayStartBalance`, the balance at the first reading of each session
 that cannot be read is not rewritten that run: the trailing floors are null with that reason (a static floor still works) and
 `realizedToday` and `pnlToday` fall back to NinjaTrader's. A balance of 0 is taken as NinjaTrader not having given one yet (no
 day start, no high from it). ChartBridge 0.5.7 and older never read either file, so going back is safe (they behave as before).
+0.6.3 (audit C2): each `mark` line has five more fields, `closeSeen|-` (the trading day of the last close seen: in the 17:00
+to 18:00 ET break, a session's first reading in the 17:00 to 18:05 ET window, or caught up), `lastBalance|-` and `flat|open|-`
+(the last reading: its balance and whether the account had no position), `eodMissed|-` and `intradayMissed|-` (the close, or
+the day, a high may have been missed on). **A close or a high ChartBridge did not see never overstates the room.** At the first
+reading after a gap ChartBridge did not watch (its first reading of the account this run, or none for 10 s, a PC asleep or the
+account not connected): when the account was flat at both ends and the balance is the same, nothing traded, so every close it
+missed was that balance (the end-of-day high is raised to it, if higher) and no high was missed. Otherwise a missed close (the
+latest trading day whose close, 17:00 or the halt of an NYSE holiday or early close, fell after `closeSeen`) is kept as
+`eodMissed`, and any such gap (a position open at either end, or the balance changed) as `intradayMissed`; the pages get a
+`status` `warn` naming the account. For a group of that drawdown type `floor` and `roomFloor` are then null with the reason
+("ChartBridge was not running at the close of <date>: put the account in <group> again and give the highest close from the
+firm's dashboard", or the intraday one), in `accounts` and in every agent's `accountState`, until the account is put in its
+group again (leave, then join with `highClose`), which clears both. A reading in the close window is that day's close. A line
+of 6 or 7 fields (0.6.2 and older) reads as it did, with no gap check at its first reading, and is written back with 12; a
+ChartBridge 0.5.8 to 0.6.2 reads a 12 field line as not a mark line, so after going back its trailing floors are null with
+that reason (never a guess) and the file is not rewritten that run.
 
 **The numbers** (per account; `equity` = balance + unrealized):
 
