@@ -4328,12 +4328,26 @@ public static class AgentHarness
             for (int i = 0; i < 200; i++) lines.Add("standDown\tcap-" + i + "\tg1\t1791467200000\tedge watch\tmade-up: filler");
             File.WriteAllLines(SdFile, lines.ToArray());
             Restart(); Mode("manrae", "auto");
-            int s0 = N(page);
             A(SD("g1"));
-            Check(AgentReject().Contains("was refused: 200 stand-downs are in force already") && ChartBridgeAgents.StandDownsOf("sample-build-1").Count == 0 && ChartBridgeAgents.StandDownsOf(null).Count == 200 &&
-                  Logged("ALERT: agent manrae: the stand-down of build sample-build-1 on group g1 was refused: 200") && Any(page, s0, "200 stand-downs are in force already"),
-                  "fix 3: a 201st raise is refused, logged and alarmed: " + AgentReject());
-            NoStandDowns(); Restart();
+            Check(ChartBridgeAgents.StandDownsOf("sample-build-1").Count == 1 && ChartBridgeAgents.StandDownsOf(null).Count == 201 && !Logged("201 stand-downs") && !AgentReject().Contains("stand-downs are in force already"),
+                  "fix round 2: with 200 in force, a raise for a group in groups.txt is always taken (the cap never refuses a real stand-down)");
+            // the cap holds only for a group ChartBridge cannot find (groups.txt unreadable); refused, alarmed once per build and group
+            string groupsWas = File.ReadAllText(GroupsFile);
+            try
+            {
+                File.WriteAllText(GroupsFile, "no header\n");
+                ChartBridgeGroups.StartNow();
+                Restart();
+                int s0 = N(page);
+                string alarm = "ALERT: agent manrae: the stand-down of build sample-build-1 on group g5 (a group ChartBridge cannot find: groups.txt cannot be read) was refused: 200";
+                int a0 = LogLines(alarm);
+                A(SD("g5"));
+                Check(AgentReject().Contains("was refused: 200 stand-downs are in force already") && ChartBridgeAgents.StandDownsOf(null).Count == 201 && LogLines(alarm) == a0 + 1 &&
+                      Any(page, s0, "200 stand-downs are in force already"), "fix 3: an unknown group past the cap: refused, logged and alarmed: " + AgentReject());
+                A(SD("g5", "blow streak", "made-up: again"));
+                Check(AgentReject().Contains("was refused: 200") && LogLines(alarm) == a0 + 1, "fix round 2: the alarm once per build and group");
+            }
+            finally { File.WriteAllText(GroupsFile, groupsWas); ChartBridgeGroups.StartNow(); NoStandDowns(); Restart(); }
         });
     }
 }

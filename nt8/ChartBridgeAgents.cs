@@ -630,7 +630,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (broken != null)
             {
                 broken += ": every new agent entry is refused until it can be read (exits always work); fix or delete the file, then recompile";
-                lock (SdLock) { sdList = new List<GroupStandDown>(); sdBroken = broken; sdRepeatSaid.Clear(); }
+                lock (SdLock) { sdList = new List<GroupStandDown>(); sdBroken = broken; sdRepeatSaid.Clear(); sdCapAlarmed.Clear(); }
                 ChartBridgeOrders.AgentAlarm(broken);   // logged and to every signed-in page; a page that signs in later gets agentStandDowns.error
                 try { ChartBridgeV3.SendToV3Traders(StandDownsMessage()); } catch (Exception) { }
                 return;
@@ -639,7 +639,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool groupsRead = File.Exists(Path.Combine(ChartBridgeConfig.Folder, "groups.txt")) && !ChartBridgeGroups.Unreadable();
             List<GroupStandDown> gone = !groupsRead ? new List<GroupStandDown>() : list.Where(x => ChartBridgeGroups.NameOf(x.Group) == null).ToList();
             foreach (GroupStandDown s in gone) list.Remove(s);
-            lock (SdLock) { sdList = list; sdBroken = null; sdRepeatSaid.Clear(); }
+            lock (SdLock) { sdList = list; sdBroken = null; sdRepeatSaid.Clear(); sdCapAlarmed.Clear(); }
             if (gone.Count > 0)
             {
                 lock (SdFileLock) { string err = WriteStandDowns(list); if (err != null) ChartBridgeServer.Log(StandDownsFileName + " could not be saved (" + err + ")"); }
@@ -689,32 +689,46 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // The agent's standDown (raise only). Null when it holds (fresh false: it was in force already, kept as first raised).
         // In memory first (the gate holds at once, even if the file cannot be written), then the file.
-        // Fix round 1: at most MaxStandDowns in force (a further raise is refused, logged, with an alarm); sayAgain: a repeat raise of
-        // one in force, true only the first time for that build and group (logged once).
+        // Fix round 1: at most MaxStandDowns in force for a group id ChartBridge does not know (only possible while groups.txt cannot be
+        // read); a raise for a group in groups.txt is always taken (fix round 2: the cap never refuses a real stand-down). A refused one
+        // is logged and alarmed once per build and group, the alarm sent after both stand-down locks are let go. sayAgain: a repeat
+        // raise of one in force, true only the first time for that build and group (logged once).
         public const int MaxStandDowns = 200;
         private static readonly HashSet<string> sdRepeatSaid = new HashSet<string>();   // under SdLock: build<TAB>group said again once
+        private static readonly HashSet<string> sdCapAlarmed = new HashSet<string>();   // under SdLock: build<TAB>group refused by the cap, alarmed once
         internal static string RaiseStandDown(string agentId, string build, string gid, string kind, string why, out bool fresh, out bool sayAgain)
         {
             fresh = false; sayAgain = false;
-            string err = null;
-            bool write;
+            string err = null, full = null, alarm = null;
+            bool write = false;
+            bool known = !ChartBridgeGroups.Unreadable() && ChartBridgeGroups.NameOf(gid) != null;   // read before the locks (the groups' own lock)
             lock (SdFileLock)
             {
                 List<GroupStandDown> snap;
                 lock (SdLock)
                 {
                     if (sdList.Any(x => x.Build == build && x.Group == gid)) { sayAgain = sdRepeatSaid.Add(build + "\t" + gid); return null; }
-                    if (sdList.Count >= MaxStandDowns)
+                    if (!known && sdList.Count >= MaxStandDowns)
                     {
-                        string full = "the stand-down of build " + build + " on group " + gid + " was refused: " + MaxStandDowns + " stand-downs are in force already (" + StandDownsFileName + "); clear some on the Agent tab's Board";
-                        ChartBridgeOrders.AgentAlarm("agent " + agentId + ": " + full);
-                        return full;
+                        full = "the stand-down of build " + build + " on group " + gid + " (a group ChartBridge cannot find: groups.txt cannot be read) was refused: " + MaxStandDowns +
+                               " stand-downs are in force already (" + StandDownsFileName + "); clear some on the Agent tab's Board";
+                        if (sdCapAlarmed.Add(build + "\t" + gid)) alarm = "agent " + agentId + ": " + full;
                     }
-                    List<GroupStandDown> next = sdList.ToList();
-                    next.Add(new GroupStandDown { Build = build, Group = gid, Kind = kind, Why = why, At = Math.Floor(Now()) });
-                    sdList = next; fresh = true; write = sdBroken == null; snap = next.ToList();
+                    if (full == null)
+                    {
+                        List<GroupStandDown> next = sdList.ToList();
+                        next.Add(new GroupStandDown { Build = build, Group = gid, Kind = kind, Why = why, At = Math.Floor(Now()) });
+                        sdList = next; fresh = true; write = sdBroken == null; snap = next.ToList();
+                    }
+                    else snap = null;
                 }
                 if (write) err = WriteStandDowns(snap);
+            }
+            if (full != null)
+            {
+                if (alarm != null) ChartBridgeOrders.AgentAlarm(alarm);   // both stand-down locks let go
+                else ChartBridgeServer.Log("agent " + agentId + ": " + full);
+                return full;
             }
             if (!write) ChartBridgeServer.Log("agent " + agentId + ": the stand-down of build " + build + " on group " + gid + " holds in memory only: " + StandDownsFileName + " could not be read at start, so it is not written");
             if (err != null) ChartBridgeOrders.AgentAlarm("agent " + agentId + ": " + StandDownsFileName + " could not be saved (" + err + "): the stand-down of build " + build + " on group " + gid + " holds until ChartBridge restarts, then it is lost: stand the hero down again or keep it Off");
