@@ -2155,7 +2155,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): a kill switch survives a restart until the page releases it
             lock (Sync) { noClientSinceMs = Now(); startedMs = noClientSinceMs; mode = "shadow"; killed = kill.HasValue; killedAt = kill ?? 0; }
             if (kill.HasValue) Log("agent " + Id + ": its kill switch is still on (" + KilledWords(kill.Value) + "; kept through the restart): every agent order is refused until it is released on the page");
-            Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + AccountWords() + (SimNow() ? " (Sim)" : " (LIVE)") + (League ? ", a league seat" : "") + ", starting in shadow)");
+            Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + AccountWords() + " (" + AcctMark() + ")" + (League ? ", a league seat" : "") + ", starting in shadow)");
         }
 
         public void Stop()
@@ -3515,6 +3515,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // 0.6.0: a group is Sim only when every seat is (the careful side).
+        // 0.6.3: the account's mark in texts: None (nothing trades), no accounts (a group with none), Sim, or LIVE.
+        internal string AcctMark()
+        {
+            if (!GroupNow()) { string a; lock (Sync) a = account; if (a == null || ChartBridgeBranches.IsNone(a)) return "None"; }
+            else if (SeatNames().Count == 0) return "no accounts";
+            return SimNow() ? "Sim" : "LIVE";
+        }
+
         private bool SimNow()
         {
             if (!GroupNow()) { Account a = FindAccount(Account); return a != null && ChartBridgeBot.IsSim(a); }
@@ -4193,7 +4201,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool kept;
             lock (Sync) { account = nm; groupId = null; accountBroken = null; chosen = true; league = lg; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
             RefreshSeats(false);   // 0.6.0: its one seat (seatsRev up); the old seats are dropped (nothing of the agent's is left there)
-            string mark = (SimNow() ? "Sim" : "LIVE") + (lg ? ", a league seat" : "");
+            string mark = AcctMark() + (lg ? ", a league seat" : "");
             string modeSay = kept ? "mode " + wasMode + " kept" : wasMode == "shadow" ? "mode shadow" : "mode shadow (was " + wasMode + (keep == null ? ": the page did not say which mode it showed" : ": the page's question named " + keep) + ")";
             Log("agent " + Id + " account " + nm + " (" + mark + "), was " + old + ", set by the page; " + modeSay);
             AgentLog("account " + nm + " (" + mark + "), was " + old + ", set by the page; " + modeSay);
@@ -4290,7 +4298,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool kept;
             lock (Sync) { account = ChartBridgeBranches.None; groupId = gid; accountBroken = null; chosen = true; league = false; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
             RefreshSeats(false);
-            string mark = SimNow() ? "Sim" : "LIVE";
+            string mark = AcctMark();
             string modeSay = kept ? "mode " + wasMode + " kept" : wasMode == "shadow" ? "mode shadow" : "mode shadow (was " + wasMode + (keep == null ? ": the page did not say which mode it showed" : ": the page's question named " + keep) + ")";
             Log("agent " + Id + " account " + AccountWords() + " (" + mark + "), was " + old + ", set by the page; seatsRev " + SeatsRevNow() + "; " + modeSay);
             AgentLog("account " + AccountWords() + " (" + mark + "), was " + old + ", set by the page; seatsRev " + SeatsRevNow() + "; " + modeSay);

@@ -198,8 +198,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) { noBotSinceMs = Now(); killed = kill.HasValue; killedAt = kill ?? 0; }
             if (kill.HasValue) Log("the bot's kill switch is still on (" + ChartBridgeAgent.KilledWords(kill.Value) + "; kept through the restart): every bot order is refused until it is released on the page");
             if (withTimer) timer = new Timer(delegate { try { Check(); } catch (Exception ex) { ChartBridgeServer.Log("bot check error: " + ex.Message); } }, null, (int)CheckEveryMs, (int)CheckEveryMs);
-            Account ba = FindAccount();
-            Log("the bot channel is ON: a bot may connect at ws://localhost:" + ChartBridgeConfig.Port + "/bot (account " + BotAccount + (ba != null && IsSim(ba) ? " (Sim)" : " (LIVE)") + ", " + EffectiveRoot() + ", starting in shadow)");
+            Log("the bot channel is ON: a bot may connect at ws://localhost:" + ChartBridgeConfig.Port + "/bot (account " + BotAccount + " (" + AcctMark() + "), " + EffectiveRoot() + ", starting in shadow)");
         }
 
         public static void Stop()
@@ -1062,6 +1061,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Is the bot's account on NinjaTrader's simulator now (for the SIM or LIVE mark; it refuses nothing).
         private static bool SimNow() { Account a = FindAccount(); return a != null && IsSim(a); }
+        // 0.6.3: the account's mark in texts: None (nothing trades), Sim or LIVE.
+        private static string AcctMark() { string b = BotAccount; return b == null || ChartBridgeBranches.IsNone(b) ? "None" : SimNow() ? "Sim" : "LIVE"; }
 
         private static string RootProblem(out string root)
         {
@@ -1482,7 +1483,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<Proposal> expired;
             lock (Sync) { account = name; accountBroken = null; expired = ExpireOpenLocked(); }
             foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToBot(AnswerJson(p.S.Id, "not answered", "the bot's account changed to " + name)); BotLog("proposal " + p.S.Id + " not answered (the bot's account changed to " + name + ")"); }
-            string mark = SimNow() ? "Sim" : "LIVE";
+            string mark = AcctMark();
             Log("bot account " + name + " (" + mark + "), was " + old + ", set by the page");
             BotLog("account " + name + " (" + mark + "), was " + old + ", set by the page");
             ToBot(WelcomeJson());   // so the bot knows its account

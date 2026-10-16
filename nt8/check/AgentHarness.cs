@@ -1023,6 +1023,8 @@ public static class AgentHarness
             A(Good(NewId()));
             Check(AgentReject().Contains("could not be read yet (The process cannot access the file") && AgentReject().Contains("until it is read (ChartBridge tries again; exits always work)") &&
                   !Logged("ALERT: agent-manrae-day.txt could not be read"), "0.6.3 C4: a day and account file held open at the start: not read yet, no entries meanwhile, no alarm yet: " + AgentReject());
+            Check(Logged("agent channel ON for manrae: it may connect at ws://localhost:8765/agent/manrae (account - (None), starting in shadow)") && !Logged("(account - (LIVE)"),
+                  "0.6.3: an agent on None (its account file not read yet) starts as \"account - (None)\", never LIVE");
             Advance(30000);
             Check(Last(agentOut, "agentState").Contains("could not be read yet") && !Logged("could not be read for a minute"), "0.6.3 C4: still held after 30 s: tried again, no alarm yet");
             Advance(31000);

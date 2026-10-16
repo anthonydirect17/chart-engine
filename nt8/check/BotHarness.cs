@@ -942,6 +942,11 @@ public static class BotHarness
             Check(ChartBridgeBot.BotAccount == "-" && File_("bot-account.txt").Contains("account\t-") && page.Skip(s2).Any(x => x.Contains("Daily reset (17:00 ET): the bot is on None now")) &&
                   File_("bot.log").Contains("account None (nothing trades), was Sim101, by the daily reset (17:00 ET)"),
                   "0.5.7 reset: 17:00 EST, the bot flat with no working order: None, saved, the pages told");
+            // 0.6.3: a bot on None is "account - (None)" in the Output window, never LIVE; its welcome says None (account null, sim false)
+            ChartBridgeBot.Stop(); ChartBridgeBot.Start(false); Reconnect();
+            Check(NinjaTrader.Code.Output.Lines.Any(x => x.Contains("/bot (account - (None), ")) && !NinjaTrader.Code.Output.Lines.Any(x => x.Contains("/bot (account - (LIVE)")) &&
+                  Last(botOut, "welcome").Contains("\"account\":null,\"sim\":false"), "0.6.3: the bot on None starts as \"account - (None)\", not LIVE; its welcome names no account");
+            Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
             utc = new DateTime(2026, 12, 15, 23, 0, 0, DateTimeKind.Utc);   // 18:00 EST: the break is over
             ChartBridgeBranches.Forget();
             try { File.Delete(Path.Combine(home, "ChartBridge", "daily-reset.txt")); } catch (Exception) { }
