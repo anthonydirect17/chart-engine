@@ -190,12 +190,14 @@ public static class AgentHarness
             DailyReset();       // 0.5.7: the 17:00 ET reset to None for agents (DECISION 2026-10-14e)
             GroupsAndAccountState();   // 0.5.8: plan check 10b (one direction per group) and accountState
             GroupTrading();   // 0.6.0: one agent trades a whole prop group (seats)
+            StandDownsAndLeague();   // 0.6.2 (SPEC CE-2): a hero stood down on a group (agent-standdowns.txt) and league seats (Sim only)
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
         {
             Hold = null;
             ChartBridgeAgents.CopierReadFault = null;
+            ChartBridgeAgents.StandDownWriteFault = null;
             ChartBridgeAgents.Stop();
             ChartBridgeAgents.ResetConfig();
             ChartBridgeAgents.ClockMs = null; ChartBridgeAgents.ClockEt = null;
@@ -347,7 +349,7 @@ public static class AgentHarness
               w.Contains("{\"root\":\"MNQ\",\"name\":\"MNQ 12-26\",\"tick\":0.25,\"pointValue\":2}") && w.Contains("{\"root\":\"NQ\",\"name\":\"NQ 12-26\",\"tick\":0.25,\"pointValue\":20}"),
               "welcome: version, agent, shadow, Sim101 (sim), the default rules, its roots' instruments: " + w);
         string st = Last(agentOut, "agentState");
-        Check(Regex.IsMatch(st, "^\\{\"type\":\"agentState\",\"mode\":\"shadow\",\"killed\":false,\"standDown\":null,\"trades\":0,\"losses\":0,\"pnlToday\":0,\"owns\":false,\"session\":\"[0-9]{4}-[0-9]{2}-[0-9]{2}\"\\}$"), "agentState (with its session): " + st);
+        Check(Regex.IsMatch(st, "^\\{\"type\":\"agentState\",\"mode\":\"shadow\",\"killed\":false,\"standDown\":null,\"trades\":0,\"losses\":0,\"pnlToday\":0,\"owns\":false,\"session\":\"[0-9]{4}-[0-9]{2}-[0-9]{2}\",\"groupStandDown\":null\\}$"), "agentState (with its session; 0.6.2: groupStandDown null): " + st);
         string strip = Last(page, "agent");
         Check(strip.Contains("\"agent\":\"manrae\",\"name\":\"Manrae\",\"build\":\"sample-build-1\",\"enabled\":true,\"connected\":true,\"mode\":\"shadow\"") && strip.Contains("\"lastPlan\":null"), "the page's strip: " + strip);
         ChartBridgeAgents.OnTick("MNQ", "{\"type\":\"tick\",\"root\":\"MNQ\",\"p\":25000.25,\"v\":1}");
@@ -2326,7 +2328,7 @@ public static class AgentHarness
             Fill(e, 1, 24999);
             List<Order> legs = Legs(sime, e);
             Check(legs.Count == 2 && legs.All(o => o.Name.StartsWith("CB#" + Tag(e) + " ")), "the legs of an agent entry carry the entry's tag (v2 naming): " + string.Join(" | ", legs.Select(o => o.Name)));
-            Check(Last(agentOut, "agentState").Contains("\"owns\":true") && Regex.IsMatch(Last(agentOut, "agentState"), "\"session\":\"2026-10-09\"\\}$"), "10.1: agentState after the fill: owns true, session 2026-10-09: " + Last(agentOut, "agentState"));
+            Check(Last(agentOut, "agentState").Contains("\"owns\":true") && Regex.IsMatch(Last(agentOut, "agentState"), "\"session\":\"2026-10-09\",\"groupStandDown\":null\\}$"), "10.1: agentState after the fill: owns true, session 2026-10-09: " + Last(agentOut, "agentState"));
             Order stop = legs.First(o => o.Name.Contains(" stop ")), target = legs.First(o => o.Name.Contains(" target "));
             target.OrderId = "T31"; target.Filled = 1; target.AverageFillPrice = 25003; target.OrderState = OrderState.Filled; Update(target);
             Deliver("SIM-E", mnq, MarketPosition.Short, 1, 25003, "T31");
@@ -3893,5 +3895,372 @@ public static class AgentHarness
         Advance(2000);
         if (putBack) CarriedOf(M).Clear();   // the harness's Settle leaves the ledger's trade open, so that pass never finds it flat
         else Check(CarriedOf(M).Count == 0, label + ": flat: Carried is empty");
+    }
+
+    // ------------------------------------------------------------ 0.6.2 (SPEC CE-2): stand-downs on a group, and league seats
+    // Made-up builds (sample-build-1 is manrae's hello), made-up kinds and whys; nothing here is a real rating.
+    static string SdFile { get { return Path.Combine(Dir, "agent-standdowns.txt"); } }
+    static string SD(string gid, string kind = "edge watch", string why = "made-up: live mean below the exam mean by more than 2 SE")
+    {
+        return "{\"type\":\"standDown\",\"group\":\"" + gid + "\",\"kind\":\"" + kind + "\",\"why\":\"" + why + "\"}";
+    }
+    static void NoStandDowns() { try { File.Delete(SdFile); } catch (Exception) { } }
+    static string Clear(string build, string gid, string cid = "sc") { return "{\"type\":\"agentStandDownClear\",\"cid\":\"" + cid + "\",\"build\":\"" + build + "\",\"group\":\"" + gid + "\"}"; }
+    static bool Rejected(string cid) { return PageReject().Contains("\"cid\":\"" + cid + "\""); }
+    const string SdWords = "build sample-build-1 stands down on group Lucid (edge watch: made-up: live mean below the exam mean by more than 2 SE): no new entries from it on that group";
+    // The 0.6.1 reader of agent-<id>-account.txt, line for line (ChartBridgeAgent.LoadAccount at a771b92): only account<TAB><name> and
+    // group<TAB><id> are understood; any other line stands the agent down. An older ChartBridge reading league<TAB><account>.
+    static string OldReader(string text)
+    {
+        string found = null, foundGroup = null;
+        foreach (string raw in text.Split('\n'))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith("#")) continue;
+            string[] p = line.Split('\t');
+            if (found == null && foundGroup == null && p.Length == 2 && p[0] == "account" && p[1].Length > 0) found = p[1];
+            else if (found == null && foundGroup == null && p.Length == 2 && p[0] == "group" && Regex.IsMatch(p[1], "^g[1-9][0-9]{0,8}$")) foundGroup = p[1];
+            else return "stands down";
+        }
+        return found == null && foundGroup == null ? "stands down" : "reads " + (found ?? foundGroup);
+    }
+
+    static void StandDownsAndLeague()
+    {
+        Part("0.6.2 setup", () =>
+        {
+            NoStandDowns();
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
+            ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-A, SIM-B, SIM-C, SIM-D, SIM-E, SIM-U");
+            Check(ChartBridgeGroups.NameOf("g1") == "Lucid", "0.6.2: group Lucid (g1) holds SIM-A, SIM-B, SIM-C");
+        });
+
+        Part("0.6.2 raise, then a group pick is refused whole", () =>
+        {
+            GroupFresh();
+            long rev = Rev();
+            int s0 = N(page);
+            A(SD("g1"));
+            string file = FileText("agent-standdowns.txt");
+            Check(Regex.IsMatch(file, "^#[^\n]*\n#[^\n]*\nstandDown\tsample-build-1\tg1\t[0-9]{13}\tedge watch\tmade-up: live mean below the exam mean by more than 2 SE\n$"),
+                  "0.6.2: agent-standdowns.txt: two # lines, then standDown<TAB><build><TAB><group><TAB><UTC ms><TAB><kind><TAB><why>: " + file.Replace("\n", " | ").Replace("\t", " > "));
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains("\"groupStandDown\":{\"group\":\"g1\",\"kind\":\"edge watch\",\"why\":\"made-up: live mean below the exam mean by more than 2 SE\",\"at\":") && st.Contains("\"standDown\":\"" + SdWords),
+                  "0.6.2: agentState.groupStandDown to the runner, and standDown says why: " + st);
+            M.OnMessage(ac, "{\"type\":\"beat\"}"); Tick(); clock += 1100; Tick();
+            string strip = Last(page, "agent");
+            Check(strip.Contains("\"standDowns\":[{\"group\":\"g1\",\"why\":\"made-up: live mean below the exam mean by more than 2 SE\",\"kind\":\"edge watch\",\"at\":") && strip.Contains("\"league\":false"),
+                  "0.6.2: the pages' agent.standDowns [{group, why, kind, at}] (and league false): " + strip);
+            string list = Last(page, "agentStandDowns");
+            Check(list.StartsWith("{\"type\":\"agentStandDowns\",\"list\":[{\"build\":\"sample-build-1\",\"group\":\"g1\",\"name\":\"Lucid\",\"why\":") && list.EndsWith("],\"error\":null}") &&
+                  Any(page, s0, "Agent manrae stood down build sample-build-1 on group Lucid (edge watch: "), "0.6.2: the pages' agentStandDowns list and a status warning: " + list);
+            int calls = Abc().Sum(a => a.Calls.Count);
+            clock += 1000;
+            A(GPlan(NewId(), "1,1,1", rev));
+            Check(AgentReject().Contains(SdWords) && Abc().Sum(a => a.Calls.Count) == calls, "0.6.2: a plan for the group is refused whole at check 2, nothing placed: " + AgentReject());
+            A(SD("g1", "blow streak", "made-up: 3 eval blows in a row"));
+            Check(Regex.Matches(FileText("agent-standdowns.txt"), "standDown\t").Count == 1 && FileText("agent-standdowns.txt").Contains("\tedge watch\t") && Logged("it stands down already (kept as first raised)"),
+                  "0.6.2: raised again: one stand-down, kept as first raised");
+            A(SD("g9"));
+            Check(AgentReject().Contains("there is no group g9"), "0.6.2: a group that is not there: refused: " + AgentReject());
+            A(SD("g1", "", "x"));
+            Check(AgentReject().Contains("standDown needs a kind of 1 to 40 characters"), "0.6.2: a kind is needed: " + AgentReject());
+        });
+
+        Part("0.6.2 one account inside the group; outside it, and another build, unaffected", () =>
+        {
+            WriteGroup("SIM-A", "SIM-B", "SIM-C", "SIM-E");
+            Fresh();   // manrae on SIM-E (one account, in Lucid now), auto
+            Check(M.StripJson().Contains("\"standDowns\":[{\"group\":\"g1\""), "0.6.2: the stand-down survives the restart (Fresh restarts)");
+            Order e = PlacedOn(sime, Good(NewId()));
+            Check(e == null && AgentReject().Contains(SdWords), "0.6.2: one account inside the group: refused at check 2: " + AgentReject());
+            P("{\"type\":\"agentAccount\",\"cid\":\"sd1\",\"agent\":\"manrae\",\"account\":\"SIM-D\",\"keepMode\":\"auto\"}");
+            e = PlacedOn(simd, Good(NewId()));
+            Check(e != null && !M.StripJson().Contains("\"standDown\":\"build"), "0.6.2: SIM-D is in no group: the same build places there: " + AgentReject());
+            Settle(simd);
+            P("{\"type\":\"agentAccount\",\"cid\":\"sd2\",\"agent\":\"manrae\",\"account\":\"SIM-E\",\"keepMode\":\"auto\"}");
+            A("{\"type\":\"agentHello\",\"name\":\"Manrae\",\"build\":\"sample-build-2\"}");
+            e = PlacedOn(sime, Good(NewId()));
+            Check(e != null, "0.6.2: another build on the same group places (a stand-down is the build's): " + AgentReject());
+            Settle(sime);
+            A("{\"type\":\"agentHello\",\"name\":\"Manrae\",\"build\":\"sample-build-1\"}");
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");   // SIM-E leaves Lucid
+            e = PlacedOn(sime, Good(NewId()));
+            Check(e != null, "0.6.2: SIM-E left the group: its entries go again (the group is read at each check): " + AgentReject());
+            Settle(sime);
+            // the gate under PlaceLock for this seat (PlacingProblem): SIM-E back in Lucid, asked directly
+            WriteGroup("SIM-A", "SIM-B", "SIM-C", "SIM-E");
+            Check((ChartBridgeAgents.PlacingProblem("manrae", "SIM-E", "limit", true, 24999, 0, 0.25) ?? "").Contains(SdWords) && ChartBridgeAgents.PlacingProblem("manrae", "SIM-D", "limit", true, 24999, 0, 0.25) == null,
+                  "0.6.2: PlacingProblem per seat: SIM-E (in Lucid) refused, SIM-D (no group) passes");
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
+        });
+
+        Part("0.6.2 exits pass: legs, the agent's flatten, flatAt", () =>
+        {
+            NoStandDowns();
+            GroupFresh();
+            Order[] e = PlaceAll(GPlan(NewId(), "2,3,4", Rev()));
+            if (e.Any(x => x == null)) { Check(false, "0.6.2 exits: placed: " + AgentReject()); return; }
+            Fill(e[0], 2, 24999); Fill(e[1], 3, 24999); Fill(e[2], 4, 24999);
+            A(SD("g1"));
+            Advance(2000);
+            Check(Abc().All(a => Legs(a, e[Array.IndexOf(Abc(), a)]).Count(IsLive) == 2) && PosOf(simb, mnq) == 3, "0.6.2: stood down with a position: every seat keeps its stop and target");
+            A("{\"type\":\"flatten\",\"account\":\"SIM-B\"}");
+            for (int i = 0; i < 3; i++) { Last2(); Advance(1000); }
+            Order fb = FlatOn(simb);
+            Check(fb != null && fb.Quantity == 3, "0.6.2: the agent's own flatten goes while stood down");
+            if (fb != null) Fills(fb, "SDB", 25000);
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            FlattenFills(25000);
+            Check(Abc().All(Flat), "0.6.2: flatAt closes every seat while stood down");
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        Part("0.6.2 exits pass: protect and the stop placed again", () =>
+        {
+            NoStandDowns();
+            WriteGroup("SIM-A", "SIM-B", "SIM-C", "SIM-E");
+            Fresh();   // manrae on SIM-E (in Lucid)
+            Order e = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 2, 8, 16, 600));
+            if (e == null) { Check(false, "0.6.2 protect: placed: " + AgentReject()); return; }
+            Hold = (kind, o) => kind == "cancel" && o == e;   // the broker has not acted on the cancel when the fill comes
+            A(SD("g1"));
+            Check(sime.Calls.Any(c => c == "cancel " + e.Name), "0.6.2: raising it cancels the unfilled entry on the group");
+            ChartBridgeOrders.NoteLast("MNQ", 24996);   // the stop level already traded when the late fill is handled
+            Fill(e, 1, 24999);
+            lock (sime.Executions) sime.Executions.Add(new Execution { Order = e, OrderId = e.OrderId, Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, Price = 24999, Time = DateTime.Now, ExecutionId = "XSD1" });
+            Hold = null;
+            Order px;
+            lock (sime.Orders) px = sime.Orders.LastOrDefault(o => (o.Name ?? "").Contains(" protect "));
+            Check(px != null && px.OrderType == OrderType.Market, "0.6.2: the protective exit still goes while stood down: " + (px != null ? px.Name : "none"));
+            if (px != null) Fills(px, "PSD1", 24996);
+            e.OrderState = OrderState.Cancelled; Update(e);
+            Settle(sime);
+            // the stop placed again over the shut market (C1's case), stood down
+            NoStandDowns();
+            Restart(); Mode("manrae", "auto"); Last2();
+            e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "0.6.2 restop: placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            A(SD("g1"));
+            et = new DateTime(2026, 10, 12, 16, 59, 59);
+            Hold = (kd, o) => kd == "submit" && (o.Name ?? "").EndsWith(" ag:manrae flat");
+            Advance(1000);
+            Hold = null;
+            foreach (Order o in Live(sime).Where(x => (x.Name ?? "").EndsWith(" ag:manrae flat"))) { o.OrderState = OrderState.Rejected; Update(o); }
+            et = new DateTime(2026, 10, 12, 17, 0, 30);
+            Advance(11000);
+            Order rs;
+            lock (sime.Orders) rs = sime.Orders.LastOrDefault(o => IsLive(o) && (o.Name ?? "") == "CB#" + Tag(e) + " ag:manrae stop p24997");
+            Check(rs != null && rs.OrderType == OrderType.StopMarket, "0.6.2: over the shut market its stop is placed again while stood down");
+            et = new DateTime(2026, 10, 12, 18, 0, 30);
+            Last2();
+            Advance(5000);
+            Order fl = FlatOn(sime);
+            if (fl != null) Fills(fl, "FSD2", 25000);
+            Settle(sime);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
+        });
+
+        Part("0.6.2 raise mid fan-out", () =>
+        {
+            NoStandDowns();
+            GroupFresh();
+            long rev = Rev();
+            ChartBridgeClient was = ac;
+            Hold = (kind, o) => { if (kind == "submit" && o.Account == sima && ChartBridgeAgents.IsEntryName(o.Name)) M.OnMessage(was, SD("g1")); return false; };
+            int na = OrdersOn(sima), nb = OrdersOn(simb), nc = OrdersOn(simc);
+            Last2();
+            M.OnMessage(was, GPlan(NewId(), "1,1,1", rev));
+            Hold = null;
+            Order ea = EntryAfter(sima, na);
+            Check(ea != null && ea.OrderState == OrderState.Cancelled && EntryAfter(simb, nb) == null && EntryAfter(simc, nc) == null,
+                  "0.6.2: raised at seat 1 of 3: seats 2 and 3 are not placed (PlacingProblem under PlaceLock) and seat 1's entry is cancelled");
+            Check(Logged("SIM-B refused: " + SdWords), "0.6.2: the refusal is said per seat");
+        });
+
+        Part("0.6.2 open proposals expire", () =>
+        {
+            NoStandDowns();
+            GroupFresh();
+            Mode("manrae", "copilot");
+            string id = NewId();
+            A(GPlan(id, "1,1,1", Rev()));
+            Check(Last(page, "agentProposal").Contains("\"state\":\"open\""), "0.6.2 copilot: a proposal open");
+            int a0 = N(agentOut);
+            A(SD("g1"));
+            Check(Last(page, "agentProposal").Contains("\"id\":\"" + id + "\"") && Last(page, "agentProposal").Contains("\"state\":\"expired\"") &&
+                  AnswersFrom(a0).Any(x => x.Contains("\"answer\":\"expired\"") && x.Contains("stands down: " + SdWords)), "0.6.2: raising it expires the open proposal: " + string.Join(" | ", AnswersFrom(a0)));
+            Mode("manrae", "auto");
+        });
+
+        Part("0.6.2 a restart and the 18:00 roll keep it; a deleted group drops it", () =>
+        {
+            GroupFresh();   // a restart
+            A(GPlan(NewId(), "1,1,1", Rev()));
+            Check(AgentReject().Contains(SdWords), "0.6.2: after a restart the stand-down holds: " + AgentReject());
+            et = new DateTime(2026, 10, 12, 10, 0, 0);   // Monday: the 18:00 roll has run
+            Tick();
+            Check(FileText("agent-manrae-day.txt").Contains("session\t2026-10-12"), "0.6.2: the day rolled");
+            clock += 1000;
+            A(GPlan(NewId(), "1,1,1", Rev()));
+            Check(AgentReject().Contains(SdWords) && FileText("agent-standdowns.txt").Contains("standDown\tsample-build-1\tg1\t"), "0.6.2: after the 18:00 roll the stand-down holds: " + AgentReject());
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+            // a line for a group that is gone is dropped at the start
+            File.AppendAllText(SdFile, "standDown\tsample-build-1\tg7\t1791467200000\tblow streak\tmade-up: a group since deleted\n");
+            Restart();
+            Check(!FileText("agent-standdowns.txt").Contains("\tg7\t") && FileText("agent-standdowns.txt").Contains("\tg1\t") && Logged("agent stand-down of build sample-build-1 on group g7 dropped: the group is gone"),
+                  "0.6.2: at the start, a stand-down on a group that is not there is dropped");
+            int s0 = N(page);
+            OnClient(pc, "{\"type\":\"groupDelete\",\"cid\":\"gdel\",\"group\":\"g1\"}");
+            Check(!Rejected("gdel") && !FileText("agent-standdowns.txt").Contains("standDown\t") && ChartBridgeAgents.StandDownsOf(null).Count == 0 &&
+                  page.Skip(s0).Any(x => x.StartsWith("{\"type\":\"agentStandDowns\",\"list\":[],")), "0.6.2: Lucid deleted: its stand-down is dropped (memory, file, the pages): " + PageReject());
+            Check(Logged("agent stand-down of build sample-build-1 on group g1 dropped: the group was deleted"), "0.6.2: logged");
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
+        });
+
+        Part("0.6.2 the agent cannot clear; the page clears", () =>
+        {
+            NoStandDowns();
+            GroupFresh();
+            A(SD("g1"));
+            A("{\"type\":\"agentStandDownClear\",\"build\":\"sample-build-1\",\"group\":\"g1\"}");
+            Check(AgentReject().Contains("unknown agent message type agentStandDownClear"), "0.6.2: the agent has no clear message: " + AgentReject());
+            A("{\"type\":\"standDown\",\"group\":\"g1\",\"kind\":\"edge watch\",\"why\":\"x\",\"clear\":true}");
+            Check(AgentReject().Contains("unknown key \\\"clear\\\" in standDown") && FileText("agent-standdowns.txt").Contains("standDown\tsample-build-1\tg1\t"), "0.6.2: standDown takes no clear key; the stand-down stays: " + AgentReject());
+            // signed-in v3 pages only
+            List<string> other = new List<string>();
+            ChartBridgeClient pv = new ChartBridgeClient(null, 602) { Origin = "http://localhost:8765" };
+            pv.Tap = x => { lock (other) other.Add(x); };
+            Clients()[602] = pv;
+            OnClient(pv, Clear("sample-build-1", "g1", "nv"));
+            Check(other.Any(x => x.Contains("\"cid\":\"nv\"") && x.Contains("this connection may not trade")) && FileText("agent-standdowns.txt").Contains("\tg1\t"), "0.6.2: a page not signed in cannot clear");
+            ChartBridgeClient dummy; Clients().TryRemove(602, out dummy);
+            P(Clear("sample-build-2", "g1", "c1"));
+            Check(Rejected("c1") && PageReject().Contains("no stand-down of build sample-build-2 on group g1"), "0.6.2: a clear for another build: refused: " + PageReject());
+            P(Clear("sample-build-1", "lucid", "c2"));
+            Check(Rejected("c2") && PageReject().Contains("group must be a group id"), "0.6.2: a group that is no id: refused");
+            P("{\"type\":\"agentStandDownClear\",\"cid\":\"c3\",\"agent\":\"manrae\",\"build\":\"sample-build-1\",\"group\":\"g1\"}");
+            Check(Rejected("c3") && PageReject().Contains("unknown key \\\"agent\\\" in agentStandDownClear"), "0.6.2: strict keys");
+            // gate 7: counted with every other order action
+            lock (pc.Actions) pc.Actions.Clear();
+            for (int i = 0; i < 10; i++) OnClient(pc, Clear("sample-build-9", "g1", "r" + i));
+            OnClient(pc, Clear("sample-build-1", "g1", "r10"));
+            Check(Rejected("r10") && PageReject().Contains("too many order actions") && FileText("agent-standdowns.txt").Contains("\tg1\t"), "0.6.2: gate 7 counts the clear");
+            clock += 1500;
+            int s0 = N(page);
+            P(Clear("sample-build-1", "g1", "c4"));
+            Check(!Rejected("c4") && !FileText("agent-standdowns.txt").Contains("standDown\t") && Logged("cleared on the page") && FileText("agent-manrae.log").Contains("cleared on the page") &&
+                  Any(page, s0, "cleared on the page"), "0.6.2: the page's clear: gone from the file, logged \"cleared on the page\", the pages told: " + PageReject());
+            Check(Last(agentOut, "agentState").Contains("\"groupStandDown\":null"), "0.6.2: the runner sees groupStandDown null");
+            Order[] e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
+            Check(e.All(x => x != null), "0.6.2: after the clear the hero trades the group again: " + AgentReject());
+            SettleAll();
+        });
+
+        Part("0.6.2 an unreadable file refuses entries, never exits", () =>
+        {
+            NoStandDowns();
+            Fresh();   // manrae on SIM-E (in no group now)
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "0.6.2 unreadable: placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            File.WriteAllText(SdFile, "# made-up\n# test\nstandDown\tsample-build-1\n");
+            Restart(); Mode("manrae", "auto"); Last2();
+            string text = FileText("agent-standdowns.txt");
+            Check(Logged("agent-standdowns.txt has a line ChartBridge does not understand: every new agent entry is refused until it can be read (exits always work)"), "0.6.2: unreadable: said at the start");
+            int c0 = sime.Calls.Count;
+            Advance(1000);
+            A(Good(NewId()));
+            Check(AgentReject().Contains("agent-standdowns.txt has a line ChartBridge does not understand"), "0.6.2: unreadable: every agent entry refused (an account in no group too): " + AgentReject());
+            Check(Legs(sime, e).Count(IsLive) == 2 && Last(page, "agentStandDowns").Contains("\"error\":\"agent-standdowns.txt has a line"), "0.6.2: unreadable: the legs stay; the pages are told why");
+            A(SD("g1"));
+            P(Clear("sample-build-1", "g1", "u1"));
+            Check(FileText("agent-standdowns.txt") == text && Rejected("u1") && PageReject().Contains("nothing was cleared"), "0.6.2: unreadable: never written over; a raise holds in memory, a clear is refused");
+            A("{\"type\":\"flatten\"}");
+            for (int i = 0; i < 3; i++) { Last2(); Advance(1000); }
+            Order fl = FlatOn(sime);
+            Check(fl != null && fl.Quantity == 1, "0.6.2: unreadable: the agent's flatten still goes (exits pass)");
+            if (fl != null) Fills(fl, "FU1", 25000);
+            Settle(sime);
+            NoStandDowns();
+            Restart(); Mode("manrae", "auto");
+        });
+
+        Part("0.6.2 a file that cannot be written", () =>
+        {
+            NoStandDowns();
+            GroupFresh();
+            ChartBridgeAgents.StandDownWriteFault = () => "disk full (made up)";
+            int s0 = N(page);
+            A(SD("g1"));
+            Check(!File.Exists(SdFile) && Any(page, s0, "agent-standdowns.txt could not be saved (disk full (made up))") && ChartBridgeAgents.StandDownsOf("sample-build-1").Count == 1,
+                  "0.6.2: a raise that cannot be written holds in memory, with an error to the pages");
+            P(Clear("sample-build-1", "g1", "w1"));
+            Check(Rejected("w1") && PageReject().Contains("the stand-down stays") && ChartBridgeAgents.StandDownsOf("sample-build-1").Count == 1, "0.6.2: a clear that cannot be written: refused, the stand-down stays");
+            ChartBridgeAgents.StandDownWriteFault = null;
+            P(Clear("sample-build-1", "g1", "w2"));
+            Check(!Rejected("w2") && ChartBridgeAgents.StandDownsOf(null).Count == 0, "0.6.2: written again: cleared");
+        });
+
+        Part("0.6.2 league seats", () =>
+        {
+            NoStandDowns();
+            Fresh();   // manrae on SIM-E, auto
+            Account simu = Account.All.FirstOrDefault(x => x.Name == "SIM-U") ?? NewAccount("SIM-U", Provider.Unknown);
+            P("{\"type\":\"agentAccount\",\"cid\":\"l1\",\"agent\":\"manrae\",\"account\":\"EVAL-A\",\"league\":true,\"keepMode\":\"auto\"}");
+            Check(Rejected("l1") && PageReject().Contains("agent manrae is a league seat: Sim accounts only") && M.Account == "SIM-E", "0.6.2: league on a LIVE account: refused at agentAccount: " + PageReject());
+            P("{\"type\":\"agentAccount\",\"cid\":\"l2\",\"agent\":\"manrae\",\"account\":\"SIM-U\",\"league\":true,\"keepMode\":\"auto\"}");
+            Check(Rejected("l2") && PageReject().Contains("agent manrae is a league seat: Sim accounts only"), "0.6.2: league on an account whose provider is unknown: refused: " + PageReject());
+            P("{\"type\":\"agentAccount\",\"cid\":\"l3\",\"agent\":\"manrae\",\"group\":\"g1\",\"league\":true}");
+            Check(Rejected("l3") && PageReject().Contains("a league seat is one Sim account, never a group"), "0.6.2: league on a group: refused");
+            P("{\"type\":\"agentAccount\",\"cid\":\"l4\",\"agent\":\"manrae\",\"account\":null,\"league\":true}");
+            Check(Rejected("l4") && PageReject().Contains("a league seat needs its Sim account"), "0.6.2: league on None: refused");
+            P("{\"type\":\"agentAccount\",\"cid\":\"l5\",\"agent\":\"manrae\",\"account\":\"SIM-D\",\"league\":\"yes\"}");
+            Check(Rejected("l5") && PageReject().Contains("league must be true or false"), "0.6.2: league is a bool");
+            P("{\"type\":\"agentAccount\",\"cid\":\"l6\",\"agent\":\"manrae\",\"account\":\"SIM-D\",\"league\":true,\"keepMode\":\"auto\"}");
+            Check(!Rejected("l6") && M.League && M.Account == "SIM-D" && FileText("agent-manrae-account.txt").EndsWith("league\tSIM-D\n") && Last(agentOut, "welcome").Contains("\"league\":true") &&
+                  M.StripJson().Contains("\"league\":true"), "0.6.2: league on a Sim account: saved as league<TAB>SIM-D, welcome and agent carry league: " + PageReject());
+            Check(OldReader(FileText("agent-manrae-account.txt")) == "stands down" && OldReader("# x\n# y\naccount\tSIM-D\n") == "reads SIM-D", "0.6.2: a ChartBridge before 0.6.2 reading the league line stands the agent down");
+            Order e = PlacedOn(simd, Good(NewId()));
+            Check(e != null, "0.6.2: a league seat places on its Sim account: " + AgentReject());
+            Settle(simd);
+            // check 2: the provider read fresh
+            simd.Provider = Provider.Rithmic;
+            int c0 = simd.Calls.Count;
+            A(Good(NewId()));
+            Check(AgentReject().Contains("agent manrae is a league seat: Sim accounts only") && simd.Calls.Count == c0, "0.6.2: the account no longer Sim: refused at check 2: " + AgentReject());
+            simd.Provider = Provider.Simulator;
+            // per placement under PlaceLock: Sim at check 2, not Sim when the order path asks (the provider changed in between)
+            string at = null;
+            simd.ProviderRead = pv => { string tr = Environment.StackTrace; if (tr.Contains("PlacingProblem")) { at = at ?? tr; return Provider.Rithmic; } return pv; };
+            c0 = simd.Calls.Count;
+            A(Good(NewId()));
+            simd.ProviderRead = null;
+            Check(at != null && AgentReject().Contains("agent manrae is a league seat: Sim accounts only") && simd.Calls.Count == c0, "0.6.2: not Sim when placed (PlacingProblem, under PlaceLock): refused, nothing sent: " + AgentReject());
+            Check((ChartBridgeAgents.PlacingProblem("manrae", "SIM-D", "limit", true, 24999, 0, 0.25)) == null, "0.6.2: Sim again: the gate passes");
+            // every start is shadow; the league line survives a restart
+            Restart();
+            Check(M.League && Last(agentOut, "welcome").Contains("\"mode\":\"shadow\",\"account\":\"SIM-D\",\"sim\":true,\"league\":true"), "0.6.2: a league seat starts in Shadow like every agent: " + Last(agentOut, "welcome"));
+            // the same account without league: an ordinary seat again
+            Mode("manrae", "auto");
+            P("{\"type\":\"agentAccount\",\"cid\":\"l7\",\"agent\":\"manrae\",\"account\":\"SIM-D\",\"keepMode\":\"auto\"}");
+            Check(!Rejected("l7") && !M.League && FileText("agent-manrae-account.txt").EndsWith("account\tSIM-D\n"), "0.6.2: the same account without league: no longer a league seat");
+            P("{\"type\":\"agentAccount\",\"cid\":\"l8\",\"agent\":\"manrae\",\"account\":\"SIM-D\",\"league\":true,\"keepMode\":\"auto\"}");
+            // the 17:00 reset puts a league seat on None like every agent
+            Func<DateTime> was = ChartBridgeBranches.ClockUtc;
+            ChartBridgeBranches.Forget();
+            try { File.Delete(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+            ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 9, 21, 5, 0, DateTimeKind.Utc);   // 17:05 EDT
+            try
+            {
+                ChartBridgeBranches.Check();
+                Check(M.Account == "-" && !M.League && FileText("agent-manrae-account.txt").Contains("account\t-"), "0.6.2: the 17:00 reset puts the league seat on None (league off)");
+            }
+            finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
+            File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSIM-E" });
+            Restart();
+        });
     }
 }

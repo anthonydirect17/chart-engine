@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.[01])";/);   // 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.[0-2])";/);   // 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -83,7 +83,7 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   assert.match(bodies(acode, 'Place'), /ChartBridgeOrders\.PlaceAgentEntry\(Id, p\.Id, text, out placed\)/);
   assert.match(bodies(acode, 'Place'), /string why = Checks\(p, forAccount, forAccount != null, out acct\);/, 'every check again at the moment of placing, and the account they validated is the one used');
   for (const f of ['SetMode', 'SetKill', 'SetAccount', 'SetRules']) assert.match(bodies(acode, f), /lock \(PlaceGate\) return \w+Locked\(d\);/, f + ' waits for a placement under way');
-  assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) \{ string agentWhy = ChartBridgeAgents\.PlacingProblem\(agent, kind, isBuy, price, limitPx, tick\);/, 'the order path asks the agent at the last moment');
+  assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) \{ string agentWhy = ChartBridgeAgents\.PlacingProblem\(agent, account\.Name, kind, isBuy, price, limitPx, tick\);/, 'the order path asks the agent at the last moment');
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(\(kind != "limit" && kind != "stopLimit"\) \|\| strategyBody != null \|\| bracketBody == null\)\) return/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(stopTicks < 1 \|\| targetTicks < 1\)\) return "every agent entry needs a stop and a target";/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) cap = AgentEntryCap\(agent, root, out capWhy\);/);   // 0.5.3 review: same cap, its words named
@@ -229,7 +229,7 @@ test('0.6.0 group trading: every single-account field is a seat\'s; the owner lo
 test('0.6.0 group trading: the contract fields; the day file\'s #seat lines read before the comment skip (an older ChartBridge skips them)', () => {
   assert.match(acode, /\{ "plan", new\[\] \{[^}]*"confidence", "seatsRev", "sizes" \} \}/);
   assert.match(acode, /\{ "flatten", new\[\] \{ "type", "account" \} \}/);
-  assert.match(acode, /\{ "agentAccount", new\[\] \{ "type", "cid", "agent", "account", "group", "keepMode" \} \}/);
+  assert.match(acode, /\{ "agentAccount", new\[\] \{ "type", "cid", "agent", "account", "group", "keepMode", "league" \} \}/);
   assert.match(acode, /internal const string SeatPrefix = "#seat\\t";/);
   const load = bodies(acode, 'LoadDay');
   assert.ok(load.indexOf('ReadSeatLine(line,') > 0 && load.indexOf('ReadSeatLine(line,') < load.indexOf('if (line.Length == 0 || line.StartsWith("#")) continue;'), '#seat read before the comment skip');
@@ -241,11 +241,34 @@ test('0.6.0 group trading: the contract fields; the day file\'s #seat lines read
 
 test('0.6.0 fix round 1: accountState for every seat followed; not connected stops a fan-out; JoinRefusal again under the save; a private check build', () => {
   assert.match(bodies(acode, 'SendAccountState'), /List<string> accts = AllSeats\(\)\.Select\(x => x\.Name\)\.ToList\(\);/, 'a seat that left while holding his trade keeps its accountState until flat');
-  const pp = acode.slice(acode.indexOf('public string PlacingProblem()'), acode.indexOf('private string StateJson()'));
-  assert.match(pp, /lock \(Sync\) \{ m = mode; k = killed; on = client != null && helloed; \}[\s\S]*if \(!on\) return "agent " \+ Id \+ " is not connected: nothing more is placed";/, 'asked per seat under PlaceLock (PlaceOrderLocked), only the agent\'s Sync taken');
+  const pp = acode.slice(acode.indexOf('public string PlacingProblem(string acct)'), acode.indexOf('private string StateJson()'));
+  assert.match(pp, /lock \(Sync\) \{ m = mode; k = killed; on = client != null && helloed; bd = build; gid = groupId; lg = league; \}[\s\S]*if \(!on\) return "agent " \+ Id \+ " is not connected: nothing more is placed";/, 'asked per seat under PlaceLock (PlaceOrderLocked), only the agent\'s Sync taken');
   const ag = strip(read('ChartBridgeGroups.cs')), body = ag.slice(ag.indexOf('private static string AccountGroup('), ag.indexOf('private static string AccountLimits('));
   const lk = body.indexOf('lock (ChartBridgeOrders.GroupPlaceLock)'), again = body.indexOf('ChartBridgeAgents.JoinRefusal(name, id, false)'), save = body.indexOf('string err = Save(next);');
   assert.ok(lk > 0 && again > lk && again < save, 'JoinRefusal again under PlaceLock and SaveLock, before the membership is saved');
   assert.match(bodies(acode, 'JoinRefusal'), /if \(refresh\) RefreshFiles\(\);/, 'no file read under the locks');
   assert.match(read(path.join('check', 'check.sh')), /-out:"\$\{CHARTBRIDGE_CHECK_DLL:-\/tmp\/chartbridge-check\.dll\}"/, 'check:nt8 builds to a private path when CHARTBRIDGE_CHECK_DLL is set');
+});
+
+test('0.6.2 (SPEC CE-2): group stand-downs gate entries only; league seats are Sim only, read fresh at every gate', () => {
+  const pp = acode.slice(acode.indexOf('public string PlacingProblem(string acct)'), acode.indexOf('private string GroupNowForLatch()'));
+  assert.match(pp, /ChartBridgeAgents\.StandDownRefusal\(bd, ChartBridgeGroups\.GroupOf\(acct\)\)/, 'per seat under PlaceLock: the seat\'s own group');
+  assert.match(pp, /if \(lg\) \{ Account a = FindAccount\(acct\); if \(gid != null \|\| a == null \|\| !ChartBridgeBot\.IsSim\(a\)\) return LeagueRefusal; \}/, 'a league seat: Sim read fresh at placement');
+  const ch = bodies(acode, 'Checks');
+  const latch = ch.indexOf('string latch = LatchProblem();'), check3 = ch.indexOf('if (!r.Roots.Contains(root))');
+  assert.ok(latch > 0 && latch < check3, 'check 2: the stand-down before any other plan check');
+  assert.match(ch, /if \(lg && \(grp \|\| !SeatSim\(acct\)\)\) return LeagueRefusal;/, 'check 2: a league seat on a Sim account only');
+  assert.match(acode, /private string LeagueRefusal \{ get \{ return "agent " \+ Id \+ " is a league seat: Sim accounts only"; \} \}/, 'the refusal text');
+  assert.match(bodies(acode, 'SaveLeague'), /"league\\t" \+ nm/, 'saved as league<TAB><account> (an older ChartBridge stands the agent down on it)');
+  assert.match(acode, /\{ "standDown", new\[\] \{ "type", "group", "kind", "why" \} \}/, 'the agent raises only');
+  assert.ok(!/"standDownClear"|"clearStandDown"/.test(acode.slice(acode.indexOf('AgentKeys'), acode.indexOf('public bool Busy()'))), 'the agent has no clear message');
+  assert.match(acode, /\{ "agentStandDownClear", new\[\] \{ "type", "cid", "build", "group" \} \}/, 'the page clears');
+  const om = bodies(acode, 'OnPageMessage'), rate = om.indexOf('RateOk(client.Actions)'), clear = om.indexOf('if (type == "agentStandDownClear")');
+  assert.ok(rate > 0 && clear > rate, 'the clear is counted in gate 7, after the sign-in and v3 gates');
+  assert.match(bodies(acode, 'StandDown'), /return sd \?\? LatchProblem\(\) \?\? AccountConflict\(\);/, 'the backstop cancels a stood-down agent\'s entries');
+  const flat = acode.slice(acode.indexOf('private int StartFlatten(string why, bool byRules, string onlySeat)'), acode.indexOf('public string OnPage('));
+  assert.ok(!/StandDownRefusal|LatchProblem/.test(flat), 'never the flatten');
+  const g = strip(read('ChartBridgeGroups.cs')), del = g.slice(g.indexOf('private static string GroupDelete('), g.indexOf('private static void ForgetHighs('));
+  assert.ok(del.indexOf('ChartBridgeAgents.GroupDeleted(id)') > del.indexOf('string err = Save(next);'), 'a deleted group\'s stand-downs go under its save');
+  assert.match(bodies(acode, 'WriteStandDowns'), /"standDown\\t" \+ s\.Build \+ "\\t" \+ s\.Group \+ "\\t" \+ s\.At\.ToString\("0", CultureInfo\.InvariantCulture\) \+ "\\t" \+ s\.Kind \+ "\\t" \+ s\.Why/);
 });

@@ -1242,6 +1242,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (string a in left) next.Members.Remove(a);
                 string err = Save(next);
                 if (err != null) return err;
+                try { ChartBridgeAgents.GroupDeleted(id); } catch (Exception ex) { ChartBridgeServer.Log("groups: the stand-downs of group " + id + " not dropped (" + ex.Message + ")"); }   // 0.6.2: under the save, before a later group could take the id
             }
             ForgetHighs(left);
             ChartBridgeServer.Log("groups: group " + id + " (" + name + ") deleted by the page" + (left.Count > 0 ? "; " + string.Join(", ", left) + " now in no group" : ""));

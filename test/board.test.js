@@ -130,7 +130,7 @@ test('the board: helper rows without a tier, and the helper not answering', () =
   assert.equal(D.heroes[0].chip.title, 'Tier unknown (the PC helper is not answering)');
   assert.equal(D.heroes[0].name, 'Sample Hero B', 'his hello\'s name');
   assert.equal(D.heroes[0].build, 'sample-b', 'the build from his hello');
-  assert.deepEqual(AC.boardRows({}), { heroes: [], noHero: [] });
+  assert.deepEqual(AC.boardRows({}), { heroes: [], noHero: [], standDowns: [], sdError: '' });   // 1.29.0: and no stand-downs
 });
 
 test('Assign hero: a free slot (None and Off), the default hero, a pick when there is none, no free slot', () => {

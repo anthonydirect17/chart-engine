@@ -68,7 +68,7 @@ function create(o) {
   const writeJson = (k, v) => { try { storage.setItem(k, JSON.stringify(v)); } catch (e) { /* blocked */ } };
 
   const S = {
-    v3: null, version: '', instruments: {}, trading: null, signedIn: false, accounts: null, groups: null, bot: null, copier: null,
+    v3: null, version: '', instruments: {}, trading: null, signedIn: false, accounts: null, groups: null, standDowns: null, bot: null, copier: null,
     chosen: String(readJson(KEYS.chosen) || ''), shown: popout, layout: '', cidSeq: 0,
     orders: new Map(), pending: new Map(), propEnds: [],
     keys: { accept: '', reject: '', notes: [], from: '' },
@@ -286,6 +286,7 @@ function create(o) {
       case 'bot': S.bot = m; return;
       case 'botProposal': botProps.update(m); renderOthers(); return;   // counted under the proposal while the tab is shown
       case 'copier': S.copier = m; return;
+      case 'agentStandDowns': S.standDowns = m; renderBoard(); return;   // 1.29.0 (ChartBridge 0.6.2): every stand-down in force, a hero not connected too
       case 'groups': S.groups = m; renderPanel(); return;   // 1.27.0: the picker's groups (ChartBridge 0.6.0); 1.28.0: the board's too (renderPanel draws it)
       case 'agent': onAgent(m); if (H.job && m.agent === H.job.agent) jobStep(); if (B.job && m.agent === B.job.agent) assignTick(); if (B.start && m.agent === B.start.agent) startTick(); return;
       case 'agentProposal': onProposal(m); return;
@@ -662,6 +663,7 @@ function create(o) {
     } else if (x.kind === 'rules') rulesWhy(why, 'refused');
     else if (x.kind === 'account') put(q('[data-k="acctWhy"]'), 'textContent', why);
     else if (x.kind === 'mode' || x.kind === 'kill') { modeWhy(why); if (S.board) boardSay(why); }
+    else if (x.kind === 'sdClear') boardSay(why + ' The stand-down stays.');   // 1.29.0
     else if (x.kind === 'startShadow') { if (B.start && B.start.cid === m.cid) { B.start = null; B.starting = false; } boardSay(why + ' He was not put in Shadow, so nothing was started.'); }
     else if (x.kind === 'assign') { if (B.job && B.job.cid === m.cid) B.job = null; boardSay(why + ' Nothing was started.'); }
     else notice({ kind: 'refused', level: 'amber', text: why });
@@ -935,14 +937,15 @@ function create(o) {
   /* ---------------- the heroes-on-duty board (chart 1.28.0, SPEC CE-1 piece 2): AgentCore.boardRows draws from ChartBridge's
      agent, groups and accounts messages and the PC helper's GET /status; nothing here moves (R3) */
   function boardSay(t) { B.line = t || ''; B.lineAt = Date.now(); renderBoard(); }
-  function boardModel() { return AC.boardRows({ agents: agents.list(), groups: S.groups, accounts: S.accounts, status: H.status, reach: H.reach, rOf: a => rNow(a).total, AH }); }
+  function boardModel() { return AC.boardRows({ agents: agents.list(), groups: S.groups, accounts: S.accounts, standDowns: S.standDowns, status: H.status, reach: H.reach, rOf: a => rNow(a).total, AH }); }
   function renderBoard() {
     if (!view || !S.board || !agents.size()) return;
     const M = boardModel(), can = S.signedIn;
     const heroHtml = r => '<div class="ag-bgrid ag-brow' + (r.killed ? ' ag-bkilled' : '') + '" role="listitem" data-brow="hero" data-agent="' + esc(r.agent) + '">' +
       '<div class="ag-bcell"><span class="ag-bname">' + esc(r.name) + '</span><span class="ag-bsub mono">' + esc(r.build || 'no build') + ' · ' + esc(r.agent) + '</span>' +
         (r.noHeroOn ? '<span class="ag-tier tier-unknown ag-bnohero" title="Its only agent is Off: no hero is on duty for this group">No hero on duty</span>' : '') + '</div>' +
-      '<div class="ag-bcell"><span class="ag-tier tier-' + esc(r.chip.tone) + '" title="' + esc(r.chip.title) + '">' + esc(r.chip.text) + '</span>' + (r.fit.warn ? '<span class="ag-bwarn">' + esc(r.fit.warn) + '</span>' : r.fit.note && r.kind === 'group' ? '<span class="ag-bsub">' + esc(r.fit.note) + '</span>' : '') + '</div>' +
+      '<div class="ag-bcell"><span class="ag-tier tier-' + esc(r.chip.tone) + '" title="' + esc(r.chip.title) + '">' + esc(r.chip.text) + '</span>' +
+        (r.proving ? '<span class="ag-tier tier-league" data-k="proving" title="' + esc(r.proving.title) + '">' + esc(r.proving.text) + '</span>' : '') + (r.fit.warn ? '<span class="ag-bwarn">' + esc(r.fit.warn) + '</span>' : r.fit.note && r.kind === 'group' ? '<span class="ag-bsub">' + esc(r.fit.note) + '</span>' : '') + '</div>' +
       '<div class="ag-bcell"><span class="ag-bwhere">' + esc(r.where) + '</span><span class="ag-bsub">' + esc(r.sub) + '</span></div>' +
       '<div class="ag-bcell"><span class="ag-chip ag-mode m-' + esc(r.mode) + '">' + esc(r.modeName) + '</span>' + (r.off ? '<span class="ag-bwarn ag-boff">' + esc(r.off) + '</span>' : '') + (r.killed ? '<span class="ag-bwarn">kill switch on</span>' : r.standDown ? '<span class="ag-bwarn">stood down</span>' : !r.connected ? '<span class="ag-bsub">not connected</span>' : '') + '</div>' +
       '<div class="ag-bcell mono ag-bbig ' + r.posTone + '">' + esc(r.position) + '</div>' +
@@ -951,7 +954,14 @@ function create(o) {
       '<div class="ag-bcell ag-bctl">' + (r.off ? '<button type="button" class="ag-btn primary" data-act="bStart" data-agent="' + esc(r.agent) + '" data-build="' + esc(r.startBuild) + '"' + (!HC || H.reach !== 'ok' || !r.startBuild || B.starting ? ' disabled' : '') +
         ' title="' + esc(r.startBuild ? 'Shadow first, then the PC helper starts him with ' + r.startBuild + '. To free the slot instead, set None on his desk.' : 'No build known: pick one on his desk. To free the slot instead, set None on his desk.') + '">Start in Shadow</button>' : '') +
         '<button type="button" class="ag-btn" data-act="bOpen" data-agent="' + esc(r.agent) + '" title="His desk">Open</button>' +
-        '<button type="button" class="ag-bkill" data-act="bKill" data-agent="' + esc(r.agent) + '"' + (r.killed || !can ? ' disabled' : '') + ' title="' + (r.killed ? 'His kill switch is on: release it on his desk (two clicks)' : 'His kill switch on, in one click') + '">' + (r.killed ? 'Killed' : 'Kill') + '</button></div></div>';
+        '<button type="button" class="ag-bkill" data-act="bKill" data-agent="' + esc(r.agent) + '"' + (r.killed || !can ? ' disabled' : '') + ' title="' + (r.killed ? 'His kill switch is on: release it on his desk (two clicks)' : 'His kill switch on, in one click') + '">' + (r.killed ? 'Killed' : 'Kill') + '</button></div></div>' +
+      r.standDowns.map(s => sdHtml(s, r.name)).join('');
+    /* 1.29.0 (ChartBridge 0.6.2, SPEC CE-2): a stand-down, amber: the hero, the group, the kind and why, since when, and Clear
+       stand-down (one click; ChartBridge logs it "cleared on the page"; the agent can never clear one) */
+    const sdHtml = (s, who) => '<div class="ag-brow ag-bsd" role="listitem" data-brow="standdown" data-build="' + esc(s.build) + '" data-gid="' + esc(s.group) + '">' +
+      '<span class="ag-bsdtag">Stood down</span><div class="ag-bsdtext"><span class="ag-bsdwhat">' + esc((who || 'Build ' + s.build) + ' on ' + s.name) + '</span>' + (who ? '<span class="ag-bsub mono">build ' + esc(s.build) + '</span>' : '') +
+      '<span class="ag-bsdwhy">' + esc(s.kind + ': ' + s.why) + '</span><span class="ag-bsub">' + esc((s.when ? 'Since ' + s.when + '. ' : '') + 'No new trades from this hero on ' + s.name + ' until you clear it; exits, stops and targets always work.') + '</span></div>' +
+      '<button type="button" class="ag-btn ag-bsdclear" data-act="bSdClear" data-build="' + esc(s.build) + '" data-gid="' + esc(s.group) + '"' + (!can ? ' disabled' : '') + ' title="Clear it: new trades from this hero on ' + esc(s.name) + ' may go again (a later re-rating may stand him down again)">Clear stand-down</button></div>';
     const pickHtml = g => {
       const rows = assignRows(g);
       return '<div class="ag-bpick"><select class="ag-sel" data-k="bPickSel" aria-label="The hero for ' + esc(g.name) + '">' + rows.map(r => '<option value="' + esc(r.build) + '">' + esc(r.label) + '</option>').join('') + '</select>' +
@@ -963,7 +973,8 @@ function create(o) {
       '<div class="ag-bcell ag-bspan">' + (B.pick && B.pick.gid === g.id ? pickHtml(g) : B.ask && B.ask.gid === g.id ? '<div class="ag-ask" role="alertdialog" aria-label="Trade a LIVE account"><span>' + esc(B.ask.text) + '</span><button type="button" class="ag-btn ag-live-go" data-act="bYes">Continue</button><button type="button" class="ag-btn" data-act="bCancel">Cancel</button></div>'
         : '<span class="ag-bsub">Pick a hero for this group, or leave it to you and the ticket. Default hero: ' + esc(g.hero ? (g.heroName ? g.heroName + ' (' + g.hero + ')' : g.hero) : 'none (Settings, Account groups)') + '.</span>') + '</div>' +
       '<div class="ag-bcell ag-bctl"><button type="button" class="ag-btn ag-bassign" data-act="bAssign" data-gid="' + esc(g.id) + '"' + (!can || B.job ? ' disabled' : '') + '>Assign hero</button></div></div>';
-    const html = M.heroes.map(heroHtml).join('') + M.noHero.map(noHeroHtml).join('') || '<p class="ag-empty">No agent is on and no group is made: turn an agent On on his desk, or make a group in Settings.</p>';
+    const sdErr = M.sdError ? '<div class="ag-brow ag-bsd" role="listitem" data-brow="sderror"><span class="ag-bsdtag">Stand-downs</span><div class="ag-bsdtext"><span class="ag-bsdwhy">' + esc(M.sdError) + '</span></div></div>' : '';
+    const html = sdErr + M.heroes.map(heroHtml).join('') + M.standDowns.map(s => sdHtml(s, '')).join('') + M.noHero.map(noHeroHtml).join('') || '<p class="ag-empty">No agent is on and no group is made: turn an agent On on his desk, or make a group in Settings.</p>';
     const box = q('[data-k="bRows"]');
     if (box.dataset.html !== html) { const keep = box.querySelector('[data-k="bPickSel"]'), v = keep ? keep.value : ''; box.dataset.html = html; box.innerHTML = html; const ns = box.querySelector('[data-k="bPickSel"]'); if (ns && v && [...ns.options].some(o => o.value === v)) ns.value = v; }
     const kAll = q('[data-act="killAll"]'), live = agents.list().filter(a => !a.killed);
@@ -1470,7 +1481,7 @@ function create(o) {
     if (mo) { S.motion = AC.setMotionPref(storage, mo.dataset.motion); renderMotion(); return; }
     if (act && act.dataset.act === 'drawerClose') { closeDrawer(); return; }
     /* 1.28.0: the board */
-    if (act && ['board', 'boardClose', 'killAll', 'bOpen', 'bKill', 'bAssign', 'bPickGo', 'bYes', 'bCancel', 'bStart'].includes(act.dataset.act)) {
+    if (act && ['board', 'boardClose', 'killAll', 'bOpen', 'bKill', 'bAssign', 'bPickGo', 'bYes', 'bCancel', 'bStart', 'bSdClear'].includes(act.dataset.act)) {
       const k = act.dataset.act;
       if (k === 'board' || k === 'boardClose') { S.board = k === 'board'; writeJson(KEYS.board, S.board); render(); }
       else if (k === 'killAll') killAll();
@@ -1481,6 +1492,7 @@ function create(o) {
       else if (k === 'bYes') { if (B.ask) { const x = B.ask; const ag = agents.get(x.agent); const why = AH.slotFree(ag || { agent: x.agent }, H.status, H.reach); if (!ag || why) { B.ask = null; boardSay('Nothing was sent: ' + (why || 'that agent is gone') + '. Press Assign hero again.'); } else assignSend(x.gid, x.agent, x.build, x.msg, x.killed); } }   // fix round 1: the free slot asked again at Continue
       else if (k === 'bCancel') { B.pick = null; B.ask = null; boardSay('Nothing was sent.'); }
       else if (k === 'bStart') boardStart(act.dataset.agent, act.dataset.build);
+      else if (k === 'bSdClear') { const m = AC.standDownClearMsg(act.dataset.build, act.dataset.gid); if (m && sendAgent(m, 'sdClear')) boardSay('Clear stand-down sent for ' + act.dataset.build + '.'); }   // 1.29.0: one click
       return;
     }
     if (!a) return;

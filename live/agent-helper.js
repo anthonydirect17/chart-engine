@@ -24,6 +24,7 @@
  *              Acceptable, Good, Great, Exceptional), edge, examEdge, liveEdge, liveN, standingAt, standingNote; all optional
  *              (absent: "tier unknown", with why). tierFit says how a hero's tier fits a group's Type (Evals, Funded, not set):
  *              shown only, never enforced; every hero is listed for every group.
+ *   Proving    chart 1.29.0 (SPEC CE-2): a league seat's "PROVING n of 100" from its build row's liveN (proving).
  *   Assign     the heroes-on-duty board's Assign hero (freeSlot, assignStart, assignStep): a free slot is an agent id on None
  *              and Off; agentAccount {group} first (ChartBridge checks it), then POST /on with the group's default hero, in Shadow.
  *
@@ -92,6 +93,16 @@ function tierChip(row, reach) {
   const bits = [isNum(r.examEdge) ? 'exam edge ' + fmtEdge(r.examEdge) : '', isNum(r.liveEdge) ? 'live edge ' + fmtEdge(r.liveEdge) + (isNum(r.liveN) ? ' over ' + r.liveN + ' trades' : '') : '',
     str(r.standingAt) ? 'standing of ' + str(r.standingAt) : '', str(r.standingNote)].filter(Boolean);
   return { text: t + (e ? ' ' + e : ''), tone: t === 'Not ready' ? 'no' : t === 'Acceptable' ? 'ok' : 'top', title: t + (e ? ', edge ' + e : '') + (bits.length ? ': ' + bits.join('; ') : '') };
+}
+/**
+ * Chart 1.29.0 (SPEC CE-2): a league seat's record toward promotion, "PROVING n of 100" (n: the build row's liveN, the helper's
+ * count of his live trades; read only, never computed here). No liveN: the words say it is not reported. { n, text, title }.
+ */
+const PROVING_OF = 100;
+function proving(row) {
+  const n = row && isNum(row.liveN) && row.liveN >= 0 ? Math.floor(row.liveN) : null;
+  return n !== null ? { n, text: 'PROVING ' + n + ' of ' + PROVING_OF, title: 'A league seat: ' + n + ' live trades of the ' + PROVING_OF + ' that build his record (the PC helper\'s count)' }
+    : { n: null, text: 'PROVING (live trades not reported)', title: 'A league seat: the PC helper does not report his live trades yet' };
 }
 /**
  * How a tier fits a group's Type (DECISION 2026-10-15k), shown only: { warn, note }. warn: the fit warning ('' when it fits);
@@ -386,5 +397,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
 });

@@ -83,18 +83,20 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   agentKill: ['type', 'cid', 'agent', 'on'],
   agentSeen: ['type', 'agent', 'id', 'at'],
   agentAnswer: ['type', 'cid', 'agent', 'id', 'answer', 'at'],
-  agentAccount: ['type', 'cid', 'agent', 'account', 'group', 'keepMode'],   // 0.6.0: group in place of account
+  agentAccount: ['type', 'cid', 'agent', 'account', 'group', 'keepMode', 'league'],   // 0.6.0: group in place of account; 0.6.2: league (a league seat, Sim only)
+  agentStandDownClear: ['type', 'cid', 'build', 'group'],   // 0.6.2 (SPEC CE-2): Anthony's Clear stand-down on the board
   agentRules: ['type', 'cid', 'agent', 'roots', 'maxQtyNQ', 'maxQtyMNQ', 'maxQtyES', 'maxQtyMES', 'entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses'],
 });
 Object.assign(KEYS, GROUP_KEYS);   // 0.5.8: groupSave, groupDelete, accountGroup, accountLimits
 export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep'];
 export const BOOL_KEYS = { groupSave: ['noHedge'], accountTrade: ['on'], accountArchive: ['confirm'], copierFollower: ['on'], botKill: ['on'], agentKill: ['on'] };
+const OPT_BOOL_KEYS = { agentAccount: ['league'] };   // 0.6.2: true or false when present
 export const BOT_KEYS = {
   botHello: ['type', 'name'], beat: ['type'], withdraw: ['type', 'id', 'reason'], flatten: ['type'],
   signal: ['type', 'id', 'action', 'side', 'kind', 'price', 'stopTicks', 'targetTicks', 'reason'],
 };
 const BOT_NONE_WHY = 'the bot\'s account is None: no bot entries until an account is chosen on the Bot tab';   // ChartBridge 0.5.7
-export const AGENT_PAGE_TYPES = ['agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules'];
+export const AGENT_PAGE_TYPES = ['agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear'];
 const V3_TYPES = GROUP_TYPES.concat(['accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount']).concat(AGENT_PAGE_TYPES);
 const SWITCH_OF = { accountTrade: 'accountChecks', accountArchive: null, accountUnarchive: null, merge: 'merge', copierGet: 'copier', copierSet: 'copier', copierFollower: 'copier', copierRearm: 'copier', botMode: 'bot', botKill: 'bot', botSeen: 'bot', botAnswer: 'bot', botRails: 'bot', botAccount: 'bot' };
 
@@ -113,10 +115,11 @@ export function checkKeysV3(m, text) {
   for (const k of Object.keys(m)) if (!allowed.includes(k) && !(m.type === 'flatten' && k === 'bracket')) return 'Unknown key "' + k + '" in ' + m.type + '.';
   for (const [k, v] of Object.entries(m)) {
     if (v !== null && typeof v === 'object' && !(m.type === 'order' && (k === 'bracket' || k === 'strategy'))) return 'The message has an unexpected nested object or list.';
-    if (typeof v === 'boolean' && !(BOOL_KEYS[m.type] || []).includes(k)) return k + ' cannot be true or false.';
+    if (typeof v === 'boolean' && !(BOOL_KEYS[m.type] || []).includes(k) && !(OPT_BOOL_KEYS[m.type] || []).includes(k)) return k + ' cannot be true or false.';
     if (typeof v === 'string' && v.length > 200) return k + ' is over 200 characters.';
   }
   for (const k of BOOL_KEYS[m.type] || []) if (typeof m[k] !== 'boolean') return k + ' must be true or false.';
+  for (const k of OPT_BOOL_KEYS[m.type] || []) if (m[k] !== undefined && typeof m[k] !== 'boolean') return k + ' must be true or false.';
   if (m.bracket !== undefined && m.strategy !== undefined) return 'An order takes a bracket or a strategy, not both.';
   if (m.strategy !== undefined) {
     const s = m.strategy;
@@ -1191,7 +1194,37 @@ Object.assign(OrderDeskV3.prototype, {
     for (const b of this.agents.values()) if (b !== a && b.account === acct && (b.chosen || !a.chosen)) return acct + ' is also agent ' + b.id + '\'s account' + tail;
     return null;
   },
-  agentStoodDown(a) { return (a.account ? null : 'agent ' + a.id + '\'s account is None: no new entries until an account is chosen on the Agent tab') || this.agentClash(a) || a.standDown; },
+  agentStoodDown(a) { return (a.account || a.groupView ? null : 'agent ' + a.id + '\'s account is None: no new entries until an account is chosen on the Agent tab') || this.agentSdWords(a) || this.agentClash(a) || a.standDown; },
+  /* ChartBridge 0.6.2 (SPEC CE-2, agent-standdowns.txt), simulated: stand-downs per build and group; the agent raises, the page clears */
+  agentGroupOf(a) { return a.groupView ? a.groupView.group.id : this.gr && a.account ? this.gr.members.get(a.account) || null : null; },
+  agentSdWords(a) {
+    const gid = this.agentGroupOf(a), s = gid ? (this.standDowns || []).find(x => x.build === a.build && x.group === gid) : null;
+    const g = s && this.gr ? this.gr.list.get(gid) : null;
+    return s ? 'build ' + s.build + ' stands down on group ' + (g ? g.name : gid) + ' (' + s.kind + ': ' + s.why + '): no new entries from it on that group until Anthony clears it on the Agent tab\'s Board (exits always work)' : null;
+  },
+  standDownsMsg() { return { type: 'agentStandDowns', list: (this.standDowns || []).map(s => ({ build: s.build, group: s.group, name: this.gr && this.gr.list.get(s.group) ? this.gr.list.get(s.group).name : null, why: s.why, kind: s.kind, at: s.at })), error: null }; },
+  /** the runner's standDown {group, kind, why} (the fake bridge's /test/agent-standdown stands in for it) */
+  agentStandDown(a, group, kind, why) {
+    this.standDowns = this.standDowns || [];
+    if (!this.standDowns.some(x => x.build === a.build && x.group === group)) this.standDowns.push({ build: a.build, group, kind, why, at: this.now() });
+    const g = this.gr ? this.gr.list.get(group) : null;
+    this.broadcastV3({ type: 'status', level: 'warn', text: 'Agent ' + a.id + ' stood down build ' + a.build + ' on group ' + (g ? g.name : group) + ' (' + kind + ': ' + why + '): no new entries from it on ' + (g ? g.name : group) + ' until Anthony clears it on the Agent tab\'s Board; exits always work' });
+    this.broadcastV3(this.standDownsMsg());
+    for (const x of this.agents.values()) this.agentNotify(x);
+  },
+  check_agentStandDownClear(m) {
+    if (typeof m.build !== 'string' || !m.build || m.build.length > 40) return 'build must be the build\'s name (1 to 40 characters)';
+    if (typeof m.group !== 'string' || !/^g[1-9][0-9]{0,8}$/.test(m.group)) return 'group must be a group id (a plain string such as g1)';
+    return (this.standDowns || []).some(x => x.build === m.build && x.group === m.group) ? null : 'no stand-down of build ' + m.build + ' on group ' + m.group;
+  },
+  do_agentStandDownClear(m) {
+    const was = this.standDowns.find(x => x.build === m.build && x.group === m.group), g = this.gr ? this.gr.list.get(m.group) : null;
+    this.standDowns = this.standDowns.filter(x => x !== was);
+    this.log.push({ file: 'agent-standdowns.txt', line: 'stand-down of build ' + m.build + ' on group ' + (g ? g.name : m.group) + ' (' + m.group + ') cleared on the page' });
+    this.broadcastV3({ type: 'status', level: 'info', text: 'Agent stand-down of build ' + m.build + ' on group ' + (g ? g.name : m.group) + ' (' + m.group + ') cleared on the page (it was ' + was.kind + ': ' + was.why + '); new entries from it may go there again' });
+    this.broadcastV3(this.standDownsMsg());
+    for (const x of this.agents.values()) this.agentNotify(x);
+  },
   /** NinjaTrader lists the account (the fake: known, not archived, not hidden with /test/agent-unlist) */
   agentListed(name) { const x = this.acct.get(name); return !!x && x.state !== 'archived' && !this.unlisted.has(name); },
   agentOutside(a, t) {
@@ -1209,8 +1242,10 @@ Object.assign(OrderDeskV3.prototype, {
   },
   agentRulesOut(a) { const r = a.rules; return { roots: r.roots.slice(), maxQty: Object.assign({}, r.maxQty), entryFrom: r.entryFrom, entryUntil: r.entryUntil, flatAt: r.flatAt, maxExpireSec: r.maxExpireSec, maxTrades: r.maxTrades, maxLosses: r.maxLosses }; },
   agentMsg(a) {
-    const m = { type: 'agent', agent: a.id, name: a.name, build: a.build, enabled: true, connected: a.connected, mode: a.mode, account: a.account, sim: this.agentSim(a), rules: this.agentRulesOut(a),
-      position: this.agentPosition(a), pnlToday: +a.pnl.toFixed(2), trades: a.trades, losses: a.losses, killed: a.killed, standDown: this.agentStoodDown(a), owns: this.agentOwns(a),
+    const m = { type: 'agent', agent: a.id, name: a.name, build: a.build, enabled: true, connected: a.connected, mode: a.mode, account: a.account, sim: this.agentSim(a),
+      league: !!a.league && !a.groupView, rules: this.agentRulesOut(a),   // 0.6.2: league, in ChartBridge's order
+      position: this.agentPosition(a), pnlToday: +a.pnl.toFixed(2), trades: a.trades, losses: a.losses, killed: a.killed, standDown: this.agentStoodDown(a),
+      standDowns: (this.standDowns || []).filter(s => s.build === a.build).map(s => ({ group: s.group, why: s.why, kind: s.kind, at: s.at })), owns: this.agentOwns(a),   // 0.6.2
       lastBeatMs: a.connected ? (a.simulated ? 400 : this.now() - a.lastBeat) : null, lastPlan: a.lastPlan };
     // ChartBridge 0.6.0 (group trading): a sample group view set by the smoke's /test/agent-group (made-up numbers): account
     // null, group, seatsRev and each seat, as ChartBridgeAgents.cs's strip carries them
@@ -1271,6 +1306,7 @@ Object.assign(OrderDeskV3.prototype, {
   /** a v3 page that signs in gets every agent's `agent`, its open proposals, its last 200 notes and last 50 plans */
   agentsOnAuth(conn) {
     if (!conn.v3 || !conn.authed) return;
+    this.send(conn, this.standDownsMsg());   // 0.6.2: every stand-down in force
     for (const a of this.agents.values()) {
       this.send(conn, this.agentMsg(a));
       for (const p of this.agentOpenProposals(a)) this.send(conn, p);
@@ -1290,6 +1326,7 @@ Object.assign(OrderDeskV3.prototype, {
   /* ---------------- page to server (section 7) */
   agentPageCheck(m) {
     if (!this.agents.size) return m.type + ' is refused: there are no agents on this ChartBridge (agents in config.txt).';
+    if (m.type === 'agentStandDownClear') return null;   // 0.6.2: no agent key (a stand-down is the build's on the group)
     if (typeof m.agent !== 'string' || !this.agents.has(m.agent)) return 'No agent ' + m.agent + '.';
     return null;
   },
@@ -1367,6 +1404,8 @@ Object.assign(OrderDeskV3.prototype, {
     const a = this.agents.get(m.agent), name = m.account, x = typeof name === 'string' ? this.acct.get(name) : null;
     if (m.keepMode !== undefined && !['shadow', 'copilot', 'auto'].includes(m.keepMode)) return 'keepMode must be shadow, copilot or auto (the mode the page\'s question named)';
     /* ChartBridge 0.6.0: a whole group (simulated: its members become his seats, nothing more is checked than this) */
+    if (m.league === true && m.group !== undefined) return 'a league seat is one Sim account, never a group';   // 0.6.2
+    if (m.league === true && name === null) return 'a league seat needs its Sim account (league goes with an account, never None)';
     if (m.group !== undefined) {
       if (m.account !== undefined) return 'agentAccount takes account or group, never both';
       const g = this.gr && typeof m.group === 'string' ? this.gr.list.get(m.group) : null;
@@ -1380,7 +1419,8 @@ Object.assign(OrderDeskV3.prototype, {
     if (typeof name !== 'string' || !name || name.trim() !== name || name === '-') return 'account must be an account name, or null for None';
     if (/^(Backtest|Playback)/i.test(name)) return name + ' is a Backtest or Playback account: an agent never trades one';
     if (!x || x.state === 'archived') return name + ' is not in NinjaTrader';
-    if (name === a.account) return name + ' is already ' + a.id + '\'s account';
+    if (name === a.account && (m.league === true) === !!a.league) return name + ' is already ' + a.id + '\'s account';
+    if (m.league === true && !(x && x.sim)) return 'agent ' + a.id + ' is a league seat: Sim accounts only (' + name + ' is not NinjaTrader\'s simulator)';   // 0.6.2
     /* the bot's and the copier's accounts whether or not those switches are on (lead's default) */
     if (name === this.botAccount) return name + ' is the bot\'s account: an agent trades an account of its own';
     if (name === this.copier.leader) return name + ' is the copier\'s leader: an agent trades an account of its own';
@@ -1399,7 +1439,7 @@ Object.assign(OrderDeskV3.prototype, {
     if (m.group !== undefined) {   // 0.6.0, simulated: the group's members as his seats (sample view, no trade)
       const g = this.gr.list.get(m.group), members = [...this.gr.members].filter(([, id]) => id === g.id).map(([x]) => x).sort();
       a.groupView = { group: { id: g.id, name: g.name }, rev: 1, seats: members.map(x => ({ account: x, owns: false, position: null, pnlToday: 0, trades: 0, sim: !!(this.acct.get(x) || {}).sim, seat: true, out: null, lastPlan: null, size: null, risk: null, lastPnl: null })) };
-      a.account = null; a.chosen = true;
+      a.account = null; a.chosen = true; a.league = false;
       if (!(m.keepMode !== undefined && m.keepMode === a.mode)) a.mode = 'shadow';
       this.agentLogLine(a, 'group ' + g.name + ', was ' + (old || '-') + ', set by the page');
       this.agentToAgent(a, this.agentWelcome(a));
@@ -1407,7 +1447,7 @@ Object.assign(OrderDeskV3.prototype, {
       return;
     }
     a.groupView = null;
-    a.account = m.account; a.chosen = m.account !== null;   // written to agent-<id>-account.txt: now the agent's (None: "-", claiming nothing)
+    a.account = m.account; a.chosen = m.account !== null; a.league = m.league === true && m.account !== null;   // 0.6.2: league<TAB><account>   // written to agent-<id>-account.txt: now the agent's (None: "-", claiming nothing)
     /* ChartBridge 0.5.2 (Anthony 2026-10-08, and its review): the mode is kept only when the page says which mode its question
        named (keepMode) and that is the mode now; without it (a page before 1.18.1) or when another page changed the mode since,
        shadow, as until 0.5.1 */

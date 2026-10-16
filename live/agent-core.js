@@ -25,7 +25,8 @@
  *   Layout 5    (chart 1.23.0, DECISION 2026-10-14a) the grid's step words (stepLines, ageText), his trades in R from each
  *               plan's own riskDollars (entryRisk, tradesR) and his heat at his own stop (heatNow)
  *   the board   chart 1.28.0 (SPEC CE-1, DECISION 2026-10-15k): the heroes-on-duty board's rows (boardRows): one per agent
- *               slot that is on or has an account or a group, and one "NO HERO" row per group no agent trades
+ *               slot that is on or has an account or a group, and one "NO HERO" row per group no agent trades; chart 1.29.0
+ *               (SPEC CE-2): a hero's stand-downs on a group (amber, Clear stand-down), a league seat's PROVING n of 100
  *
  * Nothing here sends an order. The page never builds an order for an agent: ChartBridge places every agent order itself,
  * from the plan's parameters, inside the agent's rules (AI is never in the order path).
@@ -278,8 +279,10 @@ function agentAccount(agent) {
     return { name: '', value: 'group:' + a.group.id, group: { id: a.group.id, name: gname }, seats, sim: a.sim === true, mark: typeof a.sim === 'boolean' ? accountMark(a.sim) : '', none: false, label: groupLabel(gname, seats) };
   }
   const name = typeof a.account === 'string' && a.account ? a.account : DEFAULT_ACCOUNT;
-  if (!name) return { name: '', value: '', sim: false, mark: '', none: true, label: NONE_LABEL };   // account null: None, label what the page shows
-  return { name, value: name, sim: a.sim === true, mark: typeof a.sim === 'boolean' ? accountMark(a.sim) : '', none: false, label: name };
+  if (!name) return { name: '', value: '', sim: false, mark: '', none: true, label: NONE_LABEL, league: false };   // account null: None, label what the page shows
+  /* chart 1.29.0 (ChartBridge 0.6.2): a league seat, its one Sim account (the strip's league true): value "league:<name>" */
+  const league = a.league === true;
+  return { name, value: league ? 'league:' + name : name, sim: a.sim === true, mark: typeof a.sim === 'boolean' ? accountMark(a.sim) : '', none: false, label: league ? 'League seat: ' + name : name, league };
 }
 /* The accounts the agent may never take, with why: the bot's, the copier's leader or a follower, another agent's account and
    (0.6.0) every seat of another agent's group. Map name -> why. */
@@ -306,7 +309,7 @@ function takenAccounts(others, me) {
  * Each: { name, sim, mark, tradable, current, why, ok }.
  */
 function accountChoices(accountsMsg, agent, others) {
-  const cur = agentAccount(agent).name, me = agent && agent.agent;
+  const acc0 = agentAccount(agent), cur = acc0.league ? '' : acc0.name, me = agent && agent.agent;   // 1.29.0: a league seat's account is current as a league seat, not here
   const list = accountsMsg && Array.isArray(accountsMsg.list) ? accountsMsg.list : [];
   const taken = takenAccounts(others, me);
   const out = [];
@@ -347,16 +350,37 @@ function groupChoices(groupsMsg, accountsMsg, agent, others) {
   return out;
 }
 /**
+ * Chart 1.29.0 (ChartBridge 0.6.2, SPEC CE-2): a league seat on each account ChartBridge lists as tradable: { kind 'league',
+ * value ("league:<name>"), name, sim, mark, tradable, current, why (another's account), simWhy (not Sim: a league seat is a Sim
+ * account only, shown with the reason, never offered), ok }. ChartBridge checks Sim again at agentAccount, at plan check 2 and at
+ * every placement.
+ */
+function leagueChoices(accountsMsg, agent, others) {
+  const acc = agentAccount(agent), me = agent && agent.agent, taken = takenAccounts(others, me);
+  const out = [];
+  for (const a of accountsMsg && Array.isArray(accountsMsg.list) ? accountsMsg.list : []) {
+    if (!a || typeof a.name !== 'string' || !a.name) continue;
+    const current = acc.league && a.name === acc.name, tradable = a.tradable === true && a.state !== 'gone';
+    if (!current && !tradable) continue;
+    const sim = a.sim === true, why = taken.get(a.name) || '', simWhy = sim ? '' : 'a league seat is a Sim account only (' + a.name + ' is LIVE)';
+    out.push({ kind: 'league', value: 'league:' + a.name, name: a.name, sim, mark: accountMark(a.sim), tradable, current, why, simWhy, ok: tradable && sim && !why && !current });
+  }
+  return out.sort((x, y) => (x.sim !== y.sim ? (x.sim ? -1 : 1) : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+}
+/**
  * The Agent tab's one picker (Anthony 2026-10-15): None first, then the groups ("Group Lucid: SIM-A, SIM-B, SIM-C"), then single
  * accounts, each with text (the option's words) and value ('' None, "group:<id>", or the account's name). One that cannot be
- * taken shows why and is not offered (ok false).
+ * taken shows why and is not offered (ok false). Chart 1.29.0: then a league seat on each account ("League seat: SIM-A (SIM)";
+ * a LIVE one listed with the reason, not offered).
  */
 function pickerChoices(accountsMsg, groupsMsg, agent, others) {
   const none = agentAccount(agent).none;
   const head = { kind: 'none', value: '', name: '', label: NONE_LABEL, text: NONE_LABEL + ' (nothing trades)' + (none ? ', now' : ''), sim: true, mark: '', tradable: true, current: none, why: '', ok: !none };
   const groups = groupChoices(groupsMsg, accountsMsg, agent, others).map(g => Object.assign(g, { text: g.label + ' (' + (g.live.length ? 'LIVE' : 'SIM') + ')' + (g.current ? ', now' : g.why ? ', cannot be taken: ' + g.why : '') }));
   const singles = accountChoices(accountsMsg, agent, others).map(c => Object.assign(c, { label: c.name, text: c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.why ? ', ' + c.why : c.tradable ? '' : ', not tradable') }));
-  return [head].concat(groups, singles);
+  const league = leagueChoices(accountsMsg, agent, others).map(c => Object.assign(c, { label: 'League seat: ' + c.name,
+    text: 'League seat: ' + c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.simWhy ? ', cannot be: ' + c.simWhy : c.why ? ', ' + c.why : c.tradable ? '' : ', not tradable') }));
+  return [head].concat(groups, singles, league);
 }
 /**
  * Chart 1.27.0: the Agent tab's seats table for a group, from the strip's `seats` (ChartBridge 0.6.0) and the `accounts` message
@@ -418,7 +442,19 @@ function accountChange(agent, name, choices, ctx, cid) {
     none.agent = a.agent; none.account = null; none.keepMode = asked0;
     return { msg: none, live: false, confirm: '', mode: asked0 };
   }
-  const ch = (choices || []).find(x => x.name === name);
+  if (name.startsWith('league:')) {   // chart 1.29.0 (ChartBridge 0.6.2): a league seat, one Sim account (never LIVE, never a group)
+    const acct = name.slice(7), lc = (choices || []).find(x => x && x.kind === 'league' && x.name === acct);
+    if (!lc || !lc.tradable) return { error: acct + ' is not tradable in ChartBridge now (its checkmark on the Accounts tab, Connected).' };
+    if (lc.simWhy) return { error: 'A league seat is a Sim account only: ' + acct + ' is LIVE.' };
+    if (lc.why) return { error: acct + ' is ' + lc.why + ': an agent trades an account of its own.' };
+    const can2 = rulesChangeable(a, c);
+    if (!can2.ok) return { error: can2.why.replace('change its rules', 'choose its account') };
+    const lm = { type: 'agentAccount' };
+    if (cid) lm.cid = cid;
+    lm.agent = a.agent; lm.account = acct; lm.league = true; lm.keepMode = asked0;
+    return { msg: lm, live: false, confirm: '', mode: asked0 };
+  }
+  const ch = (choices || []).find(x => x.name === name && x.kind !== 'league');
   if (!ch || !ch.tradable) return { error: name + ' is not tradable in ChartBridge now (its checkmark on the Accounts tab, Connected).' };
   if (ch.why) return { error: name + ' is ' + ch.why + ': an agent trades an account of its own.' };
   const can = rulesChangeable(a, c);
@@ -1005,6 +1041,17 @@ function boardRoom(names, accountsMsg, group) {
   return { pct: ld && limit ? Math.round(Math.max(0, Math.min(100, ld.roomDaily / limit * 100))) : null, daily: ld ? ld.roomDaily : null, limit, floor: lf ? lf.roomFloor : null,
     of: ld ? ld.name : lf ? lf.name : '', text: bits.length ? bits.join(', ') : 'room ' + (why === 'not reported' ? 'not reported' : 'not reported: ' + why), why: bits.length ? '' : why, whyOf: ws ? ws.name : '' };
 }
+/* chart 1.29.0 (SPEC CE-2): when a stand-down was raised, in New York time ("Oct 16, 10:42 ET"); '' when not known */
+function sdWhen(at) {
+  if (!isNum(at)) return '';
+  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at)) + ' ET'; }
+  catch (e) { return new Date(at).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'; }
+}
+/* one stand-down for the board: { build, group, name (the group's), kind, why, at, when } */
+function sdRow(s, build, groups) {
+  const g = (groups || []).find(y => y && y.id === s.group);
+  return { build: str(build), group: str(s.group), name: g && typeof g.name === 'string' && g.name ? g.name : typeof s.name === 'string' && s.name ? s.name : str(s.group), kind: str(s.kind), why: str(s.why), at: isNum(s.at) ? s.at : null, when: sdWhen(s.at) };
+}
 /**
  * The board (SPEC CE-1 piece 2): { heroes, noHero }. o: { agents (every `agent` message), groups (the `groups` message),
  * accounts (the `accounts` message), status and reach (the PC helper's GET /status), rOf (a => his R today, or null), AH
@@ -1013,6 +1060,10 @@ function boardRoom(names, accountsMsg, group) {
  * mode, position, posTone, r, rText, room, killed, standDown, connected, on, off (seated but Off: the warning), startBuild,
  * noHeroOn (a group whose only hero is Off) }. A NO HERO row per group no agent trades:
  * { id, name, members, accountType, hero (the default hero's build), heroName }.
+ * Chart 1.29.0 (ChartBridge 0.6.2, SPEC CE-2): o.standDowns is the `agentStandDowns` message. A hero row adds league (a league
+ * seat), proving ("PROVING n of 100", AH.proving from his build row's liveN) and standDowns (each of his build's stand-downs,
+ * from his `agent` message's standDowns: { build, group, name, kind, why, at, when }). The result adds standDowns (those no hero
+ * row shows: a hero not connected or not seated) and sdError (agent-standdowns.txt cannot be read: every agent entry is refused).
  */
 function boardRows(o) {
   const x = o || {}, AH = x.AH || null, st = x.status || null, reach = x.reach || '';
@@ -1031,18 +1082,22 @@ function boardRows(o) {
     const fit = AH && acc.group ? AH.tierFit(AH.tierOf(row), type) : { warn: '', note: '' };
     const accounts = acc.group ? acc.seats : acc.none ? [] : [acc.name];
     const pos = boardPosition(a), r = typeof x.rOf === 'function' ? x.rOf(a) : null;
+    const league = acc.league === true && !acc.group;
+    const proving = league ? (AH && typeof AH.proving === 'function' ? AH.proving(row) : { n: null, text: 'PROVING (live trades not reported)', title: '' }) : null;
+    const sds = (Array.isArray(a.standDowns) ? a.standDowns : []).filter(s => s && validGroupId(s.group)).map(s => sdRow(s, a.build, groups));
     heroes.push({ agent: a.agent, name: (h && h.hero) || agentName(a), build, chip, fit, kind: acc.group ? 'group' : acc.none ? 'none' : 'account',
       group: acc.group ? { id: acc.group.id, name: acc.group.name, accountType: type || null } : null, accounts,
       where: acc.group ? acc.group.name : acc.none ? NONE_LABEL : acc.name,
       sub: acc.group ? (accounts.length ? 'leads ' + accounts.length + (accounts.length === 1 ? ' account: ' : ' accounts: ') + accounts.join(', ') : 'no accounts') + (g ? ' · ' + (type === 'eval' ? 'Evals' : type === 'funded' ? 'Funded' : 'type not set') : '')
-        : acc.none ? 'nothing trades' : (acc.mark || 'one account') + ' · one account',
+        : acc.none ? 'nothing trades' : (acc.mark || 'one account') + (acc.league ? ' · league seat (Sim only)' : ' · one account'),
       mode: MODES.includes(a.mode) ? a.mode : '', modeName: MODE_NAME[a.mode] || '-', position: pos.text, posTone: pos.tone, r: isNum(r) ? r : null, rText: rWords(isNum(r) ? r : null),
       room: acc.none ? { pct: null, text: 'None: nothing trades', why: '' } : boardRoom(accounts, x.accounts, g), killed: !!a.killed, standDown: str(a.standDown), connected: !!a.connected, on,
       /* fix round 1: seated (a group or an account) but Off: not started, nothing trades; Start in Shadow with this build (his
          last, else the group's default hero); on a group the group still has no hero on duty */
       off: !on && !acc.none ? 'Off: not started (nothing trades)' : '',
       /* fix round 2: on a group, its default hero when the helper offers that build, else his last build */
-      startBuild: !on && !acc.none ? (g && typeof g.hero === 'string' && buildRow(g.hero) ? g.hero : build) : '', noHeroOn: !on && !!acc.group });
+      startBuild: !on && !acc.none ? (g && typeof g.hero === 'string' && buildRow(g.hero) ? g.hero : build) : '', noHeroOn: !on && !!acc.group,
+      league, proving, standDowns: sds });
   }
   const taken = new Set(agents.filter(a => a.group && validGroupId(a.group.id)).map(a => a.group.id));
   const noHero = groups.filter(g => !taken.has(g.id)).map(g => {
@@ -1050,7 +1105,16 @@ function boardRows(o) {
     return { id: g.id, name: typeof g.name === 'string' && g.name ? g.name : g.id, members: Array.isArray(g.members) ? g.members.filter(m => typeof m === 'string') : [],
       accountType: g.accountType || null, hero: typeof g.hero === 'string' ? g.hero : null, heroName: hr && hr.hero ? String(hr.hero) : '' };
   });
-  return { heroes, noHero };
+  const sdMsg = x.standDowns && typeof x.standDowns === 'object' ? x.standDowns : null;
+  const shown = new Set([].concat(...heroes.map(h => h.standDowns.map(s => s.build + '\t' + s.group))));
+  const standDowns = (sdMsg && Array.isArray(sdMsg.list) ? sdMsg.list : []).filter(s => s && typeof s.build === 'string' && s.build && validGroupId(s.group) && !shown.has(s.build + '\t' + s.group)).map(s => sdRow(s, s.build, groups));
+  return { heroes, noHero, standDowns, sdError: sdMsg ? str(sdMsg.error) : '' };
+}
+/** Chart 1.29.0: Anthony's Clear stand-down (one click on the board): { type: 'agentStandDownClear', build, group }. ChartBridge
+ *  checks it and logs it "cleared on the page"; the agent can never clear one. */
+function standDownClearMsg(build, group) {
+  if (typeof build !== 'string' || !build || build.length > 40 || !validGroupId(group)) return null;
+  return { type: 'agentStandDownClear', build, group };
 }
 
 /* ======================================================================== Layout 5 (DECISION 2026-10-14a): the grid, R, heat */
@@ -1281,7 +1345,7 @@ return {
   agentOfOrder, isAgentMark, workingEntries, ownsText, pairOwner, pageExitPasses, lockText, statusAgent, KILL_REPEAT_MS, killOnRepeat,
   fmtUsd, positionText, beatText, statusText, stateOf, stripModel, noticesFrom, etClock, etClockSec,
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
-  boardRows, boardRoom, boardPosition, rWords,
+  boardRows, boardRoom, boardPosition, rWords, leagueChoices, standDownClearMsg, sdWhen,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
 };
 });

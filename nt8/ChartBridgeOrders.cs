@@ -764,7 +764,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (Has(top, "price")) return "a market order takes no price";
             string newKind = OrderTypesOn ? NewKindProblem(top, kind, root, tick, isBuy, price, out limitPx) : null;   // 0.4.0 B1: a stop-limit's limit
             if (newKind != null) return newKind;
-            if (agent != null) { string agentWhy = ChartBridgeAgents.PlacingProblem(agent, kind, isBuy, price, limitPx, tick); if (agentWhy != null) return agentWhy; }   // 0.5.0 agents: its window, mode, kill and stop-limit band, here too
+            if (agent != null) { string agentWhy = ChartBridgeAgents.PlacingProblem(agent, account.Name, kind, isBuy, price, limitPx, tick); if (agentWhy != null) return agentWhy; }   // 0.5.0 agents: its window, mode, kill and stop-limit band, here too; 0.6.2: a stand-down on this seat's group, a league seat's Sim
             int stopTicks = 0, targetTicks = 0;
             if (bracketBody != null)
             {

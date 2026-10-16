@@ -714,3 +714,14 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
 .ag-view .ag-boff { font-weight: 600; }
 .ag-view .ag-bctl { flex-wrap: wrap; }
 .ag-view .ag-bctl > button { white-space: nowrap; }
+/* 1.29.0 (ChartBridge 0.6.2, SPEC CE-2): a stand-down row, amber (the tab's warning color), under its hero; Clear stand-down is one
+   click. A league seat's PROVING chip in the same amber line (never green or red: those stay for trade sides and P&L). */
+.ag-view .ag-brow.ag-bsd { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: -4px; padding: 10px 14px; background: rgba(255, 194, 102, .08); border-color: rgba(255, 194, 102, .65); }
+.ag-view .ag-bsdtag { padding: 3px 8px; font: 700 11px/16px var(--f-head); letter-spacing: .14em; text-transform: uppercase; color: #1a1206; background: var(--ag-warn); white-space: nowrap; }
+.ag-view .ag-bsdtext { display: flex; flex-direction: column; gap: 3px; flex: 1 1 260px; min-width: 0; }
+.ag-view .ag-bsdtext > * { overflow-wrap: anywhere; }
+.ag-view .ag-bsdwhat { font: 500 13.5px/1.25 var(--f-head); letter-spacing: .05em; color: var(--ag-warn); text-transform: uppercase; }
+.ag-view .ag-bsdwhy { font: 13px/1.35 var(--f-body); color: var(--f-hot); }
+.ag-view .ag-bsdclear { min-height: 32px; color: var(--ag-warn); border-color: rgba(255, 194, 102, .7); background: transparent; }
+.ag-view .ag-bsdclear:disabled { opacity: .5; cursor: not-allowed; }
+.ag-view .ag-tier.tier-league { color: var(--ag-warn); border-color: rgba(255, 194, 102, .55); border-style: dashed; }

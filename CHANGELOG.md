@@ -1,5 +1,34 @@
 # Changelog
 
+## ChartBridge 0.6.2 and chart 1.29.0 (2026-10-16): group stand-downs, Clear stand-down, and league seats
+
+SPEC CE-2, Phase 4 pieces 5 and 4 (DECISIONS 2026-10-15i, 15j, 15k, 16m). **It needs the recompile: the page needs ChartBridge 0.6.2**
+(`minChartBridge` raised to 0.6.2); a PC on an older ChartBridge keeps the page it has, and the PC updater waits. Order-path change
+(Anthony approved order-path edits for Phase 4): new entries can now be refused by a stand-down and by a league seat's Sim check; nothing
+else changes, and exits are never gated.
+
+- **Group stand-downs (ChartBridge 0.6.2).** The runner sends `standDown {group, kind, why}` on the agent channel (raise only; the agent
+  has no clear). ChartBridge keeps it in `agent-standdowns.txt` (written only by ChartBridge; survives restarts and the 18:00 roll; a
+  deleted group's lines go with it) and refuses every new entry from that build on that group: the whole plan at check 2 for a group,
+  the one seat for an account inside the group, and again per seat under `PlaceLock`. Raising it cancels that build's unfilled entries
+  there and expires its open proposals; positions keep their stop and target; Flatten, the agent's flatten, protect, the legs, flatAt
+  and the stop placed again always go. A file that cannot be read refuses every agent entry (exits pass) and is never written over.
+  `agentState.groupStandDown` to the runner; `agent.standDowns` and `agentStandDowns` (every stand-down, a hero not connected too) to
+  the pages.
+- **Clear stand-down (chart 1.29.0).** The Board shows each stand-down as an amber row under its hero (the group, the kind and why,
+  since when) with Clear stand-down: one click sends `agentStandDownClear {cid, build, group}` (signed-in v3 pages only, gate 7),
+  which ChartBridge logs "cleared on the page".
+- **League seats.** `agentAccount {account, league: true}` makes the agent a league seat on one Sim account (never a group, never None);
+  ChartBridge reads Sim fresh at `agentAccount`, at plan check 2 and per placement under `PlaceLock` (an unknown provider is no Sim:
+  "agent <id> is a league seat: Sim accounts only"). Saved as `league<TAB><account>` (a ChartBridge before 0.6.2 stands the agent down
+  on it). `welcome` and `agent` carry `league`. It starts in Shadow and goes to None at the 17:00 reset like every agent. The Agent
+  tab's picker lists a league seat on each account (a LIVE one with the reason, never offered); the Board shows PROVING n of 100 from
+  the PC helper's `liveN`.
+- PROTOCOL.md "Group stand-downs and league seats (0.6.2)". Tests: AgentHarness (raise and refuse, one account inside the group, other
+  builds and accounts unaffected, exits, raise mid fan-out, proposals expired, restart, the roll, a deleted group, unreadable and
+  unwritable files, the agent cannot clear, the page clear and gate 7, league at agentAccount, check 2 and placement, the old reader),
+  GroupsHarness (the delete hook; page orders never gated), test/standdown.test.js, and the board smoke's league and stand-down rows.
+
 ## ChartBridge 0.6.1 and chart 1.28.0 (2026-10-16): a group's default hero, and the heroes-on-duty board
 
 SPEC CE-1, Phase 4 pieces 3 and 2 (DECISION 2026-10-15k). **It needs the recompile: the page needs ChartBridge 0.6.1**

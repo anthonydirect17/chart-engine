@@ -117,6 +117,7 @@ public static class GroupsHarness
             LeftoverExits(); // Q-EXIT (b), Anthony 2026-10-15: an exit left behind when a position goes flat is cancelled
             Consistency();   // CON (a), Anthony 2026-10-15: the group's consistency percent, informational
             TypeAndHero();   // 0.6.1 (SPEC CE-1): each group's Type and default hero, shapes only
+            StandDowns();    // 0.6.2 (SPEC CE-2): a deleted group's stand-downs go with it; agent-standdowns.txt gates agent entries only
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally
@@ -901,5 +902,46 @@ public static class GroupsHarness
         File.Delete(p); File.Delete(Path.Combine(folder, "account-marks.txt"));
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Check(ChartBridgeGroups.GroupsJson() == "{\"type\":\"groups\",\"list\":[],\"error\":null}", "both files gone: no groups (0.5.7's behaviour)");
+    }
+
+    // ------------------------------------------------------------ 0.6.2: stand-downs and groups (agent-standdowns.txt)
+    static void StandDowns()
+    {
+        string sd = Path.Combine(folder, "agent-standdowns.txt");
+        Clear(); G("groupSave", Save("", "Stand Group", "true", "0", "2000", "eod", "0", "50000", "0"));
+        Match gm = Regex.Match(FileText(), "group\t(g[0-9]+)\tStand Group\t");
+        Check(gm.Success, "SD: a made-up group to stand a hero down on");
+        if (!gm.Success) return;
+        string gid = gm.Groups[1].Value;
+        try
+        {
+            File.WriteAllText(sd, "# made-up\n# test\nstandDown\tsample-build-1\t" + gid + "\t1791467200000\tedge watch\tmade-up: below the exam mean\nstandDown\tsample-build-2\t" + gid + "\t1791467200001\tblow streak\tmade-up: three blows\n");
+            ChartBridgeAgents.ReadConfig("agents", "sdx");
+            ChartBridgeAgents.Start(false);
+            Check(ChartBridgeAgents.StandDownsOf(null).Count == 2 && (ChartBridgeAgents.StandDownRefusal("sample-build-1", gid) ?? "").Contains("build sample-build-1 stands down on group Stand Group (edge watch: made-up: below the exam mean)") &&
+                  ChartBridgeAgents.StandDownRefusal("sample-build-1", null) == null && ChartBridgeAgents.StandDownRefusal("sample-build-3", gid) == null, "SD: read at the start; only that build on that group is refused");
+            int d = Submits(simD);
+            Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+            Check(Submits(simD) == d + 1, "SD: a page order is never gated by a stand-down (agent entries only): " + Rejection());
+            Flat();
+            Clear(); G("groupDelete", "{\"type\":\"groupDelete\",\"cid\":\"d\",\"group\":\"" + gid + "\"}");
+            Check(Rejection() == "" && ChartBridgeAgents.StandDownsOf(null).Count == 0 && !File.ReadAllText(sd).Contains("standDown\t") && Any("{\"type\":\"agentStandDowns\",\"list\":[],\"error\":null}"),
+                  "SD: the group deleted: both its stand-downs dropped at once (memory, the file, the pages)");
+            // unreadable: every agent entry refused (any group or none); the page's own orders and exits are not touched
+            File.WriteAllText(sd, "# made-up\n# test\nstandDown\tbad line\n");
+            ChartBridgeAgents.Start(false);
+            string why = ChartBridgeAgents.StandDownRefusal("sample-build-1", null);
+            Check(why != null && why.Contains("agent-standdowns.txt has a line ChartBridge does not understand: every new agent entry is refused until it can be read (exits always work)"), "SD: unreadable: every agent entry refused: " + why);
+            d = Submits(simD);
+            Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+            Check(Submits(simD) == d + 1, "SD: unreadable: a page order still goes (the file gates agent entries only)");
+            Flat();
+        }
+        finally
+        {
+            ChartBridgeAgents.Stop(); ChartBridgeAgents.ResetConfig();
+            try { File.Delete(sd); } catch (Exception) { }
+            Clear(); G("groupDelete", "{\"type\":\"groupDelete\",\"cid\":\"d\",\"group\":\"" + gid + "\"}");
+        }
     }
 }

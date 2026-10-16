@@ -42,8 +42,16 @@ public static class ClockHarness
     {
         Check = check;
         string serverWas = ChartBridgeClock.Server; int portWas = ChartBridgeClock.Port;
+        // 0.6.2: only this harness's own pages while it runs (an earlier harness's page, restored with its queue never drained, could
+        // be closed for lag by the status this harness sends, and its Output line would be counted with the clock's own)
+        Dictionary<int, ChartBridgeClient> clientsWas = Clients().ToDictionary(kv => kv.Key, kv => kv.Value);
+        Clients().Clear();
         try { Stamps(); Formula(); NoAnswers(); Told(); Asked(); }
-        finally { ChartBridgeClock.FaultForHarness = null; ChartBridgeClock.Stop(); ChartBridgeClock.Server = serverWas; ChartBridgeClock.Port = portWas; ChartBridgeClock.Reset(); }
+        finally
+        {
+            ChartBridgeClock.FaultForHarness = null; ChartBridgeClock.Stop(); ChartBridgeClock.Server = serverWas; ChartBridgeClock.Port = portWas; ChartBridgeClock.Reset();
+            Clients().Clear(); foreach (KeyValuePair<int, ChartBridgeClient> kv in clientsWas) Clients()[kv.Key] = kv.Value;
+        }
     }
 
     static void Stamps()
