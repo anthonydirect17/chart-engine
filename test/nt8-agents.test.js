@@ -181,10 +181,13 @@ test('0.5.7 agents: the lost-trade error is held while its own flatten job runs 
 
 test('0.5.7 None and the daily reset (DECISION 2026-10-14e): ChartBridge runs it without a page; one place for an exception; harnessed', () => {
   const acc = strip(read('ChartBridgeAccounts.cs'));
-  assert.match(main, /try \{ ChartBridgeBranches\.Check\(\); \} catch \(Exception ex\) \{ Log\("daily reset error: " \+ ex\.Message\); \}/, 'on the 2 s poll timer');
+  assert.match(main, /try \{ ChartBridgeBranches\.Poll\(\); \} catch \(Exception ex\) \{ Log\("daily reset error: " \+ ex\.Message\); \} \}, null, 2000, 2000\);/, 'on the 2 s poll timer');
+  assert.match(main, /ChartBridgeCopier\.Start\(\);[^\n]*\n\s*try \{ ChartBridgeBranches\.Poll\(\); \}/, '0.6.3 (audit C1): and once at start, every branch loaded');
+  assert.match(acc, /public static void Poll\(\) \{ if \(!HarnessManual\) Check\(\); \}/);
   assert.match(acc, /public const string None = "-";/);
   assert.match(acc, /public static bool KeepThroughReset\(string branch, string account\) \{ return false; \}/, 'the one place an exception would go; none yet');
-  assert.match(bodies(acc, 'Check'), /if \(et\.Hour != 17\) return;[\s\S]*if \(doneDay == day\) return;[\s\S]*WriteDay\(day\);\s*Run\(day\);/, 'in the break, once per day, saved before it runs');
+  assert.match(bodies(acc, 'Check'), /string day = DueDay\(et\);[\s\S]*if \(doneDay == day\) return;\s*if \(!inBreak && \(doneDay == null \|\| string\.CompareOrdinal\(doneDay, day\) > 0\)\) return;[\s\S]*WriteDay\(day\);\s*Run\(day, missed\);/, 'in the break, or a missed break caught up; once per day, saved before it runs');
+  assert.match(read(path.join('check', 'BotHarness.cs')), /0\.6\.3 C1: the clock jumps from 16:30 to 19:00/);
   assert.match(acode, /private string account = ChartBridgeBranches\.None;/);
   assert.match(bodies(acode, 'AccountConflict'), /if \(ChartBridgeBranches\.IsNone\(acct\)\) return null;/, 'None clashes with nobody');
   for (const f of ['BotHarness.cs', 'AgentHarness.cs', 'CopierHarness.cs']) assert.match(read(path.join('check', f)), /0\.5\.7 reset/, f);

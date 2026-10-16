@@ -1345,7 +1345,7 @@ test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its o
   assert.match(load, /ChartBridgeClock\.ResetConfig\(\);/);
   assert.match(load, /else if \(ChartBridgeAgents\.ReadConfig\(key, val\)\) \{ \}[^\n]*\n\s*else if \(ChartBridgeClock\.ReadConfig\(key, val\)\) \{ \}/);
   // started and stopped with ChartBridge; hello, the pages after hello, /diag; the PC clock's steps followed
-  assert.match(bodyOf(code, 'public static bool Start()'), /ChartBridgeCopier\.Start\(\);\s*ChartBridgeClock\.Start\(\);\s*return true;/);
+  assert.match(bodyOf(code, 'public static bool Start()'), /ChartBridgeCopier\.Start\(\);\s*try \{ ChartBridgeBranches\.Poll\(\); \} catch \(Exception ex\) \{ Log\(\"daily reset error: \" \+ ex\.Message\); \}\s*ChartBridgeClock\.Start\(\);\s*return true;/);
   assert.match(bodyOf(code, 'public static void Stop()'), /ChartBridgeClock\.Stop\(\);/);
   assert.match(bodyOf(code, 'private static string HelloJsonFor('), /b\.Append\(",\\"pcClock\\":"\)\.Append\(ChartBridgeClock\.Json\(\)\);/);
   assert.match(bodyOf(code, 'private static async Task RunClient('), /int clockSeen = ChartBridgeClock\.Changes;\s*client\.Send\(HelloJsonFor\(seen\)\);[\s\S]*if \(ChartBridgeClock\.Changes != clockSeen\) client\.Send\(ChartBridgeClock\.MessageJson\(\)\);/);
@@ -1388,7 +1388,7 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   assert.match(a, /Snapshot\(served\);\s*lock \(Sync\) snapshotSent = true;[^\n]*\n\s*SendAccountState\(true\);/);
   assert.match(a, /SendState\(false\);[^\n]*\n\s*SendAccountState\(false\);/);
   const acc = strip(read('ChartBridgeAccounts.cs'));
-  assert.match(acc, /if \(et\.Hour != 17\) return;\s*try \{ ChartBridgeGroups\.EodMark\(\); \}/);
+  assert.match(acc, /bool inBreak = et\.Hour == 17;\s*if \(inBreak\) \{ try \{ ChartBridgeGroups\.EodMark\(\); \}/);
   assert.match(acc, /ChartBridgeGroups\.AppendAccountFields\(b, name, a\);/);
   assert.match(acc, /ChartBridgeGroups\.StartNow\(\);[^\n]*\n\s*if \(!On\) return;/, 'groups.txt is read whether or not accountChecks is on');
   // the page messages, through ChartBridge.cs's dispatch; strict keys

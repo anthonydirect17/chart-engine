@@ -2818,6 +2818,13 @@ line), so a branch turned on later never starts the day on yesterday's account. 
 sent to a page that signs in during that break; the ones put on None get one `status` `info`. It runs on ChartBridge's 2 s
 poll timer, without a page. The New York date it ran is kept in `daily-reset.txt` next to `config.txt` (two `#` lines, then
 `day<TAB>yyyy-MM-dd`), so a restart in the same break does not run it again and a branch chosen again after the reset stays.
+0.6.3 (audit C1): **a missed break is caught up.** At start (once every branch is loaded) and on every 2 s check, when the day
+in `daily-reset.txt` is older than the New York date of the latest 17:00 ET at or before now (the page's `resetDay` rule), the
+break was missed (ChartBridge or the PC was off from before 17:00 to after 18:00, or over a weekend) and the reset runs then,
+with the same Idle and skip rules; its notes read "Daily reset (17:00 ET, caught up now: ChartBridge was not running at 17:00
+ET on <date>): ...", and a page that signs in before the next 17:00 gets the skipped notes too. No `daily-reset.txt` (or one
+that does not read) is not a missed break: the reset waits for the next break, as before. A day ahead of now (the clock moved
+back) is not due.
 `ChartBridgeBranches.KeepThroughReset` is the one place an exception would go (Anthony is still deciding whether a branch
 running a hero on Sim101 is left alone); for now there is none. The ticket's account is each page's own, so the page applies
 the same rule to it (`LivePrefs.ticketReset`, every 5 s in the window with the ticket, and only once that connection's

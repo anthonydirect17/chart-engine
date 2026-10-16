@@ -81,6 +81,7 @@ public static class OrdersHarness
 
     public static int Main()
     {
+        ChartBridgeBranches.HarnessManual = true;   // 0.6.3: the 2 s timer never runs the reset on this PC's clock while a harness runs (each case calls Check)
         AllOffLines();
         // 0.3.7: ChartBridge's folder (planned_brackets.txt) in a fresh directory, never a shared /tmp/nt8 from an earlier run
         string home = Path.Combine(Path.GetTempPath(), "cb-orders-" + Guid.NewGuid().ToString("N"));

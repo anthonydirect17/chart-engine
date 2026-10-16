@@ -1422,10 +1422,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static bool loaded;
         private static readonly List<string> Skipped = new List<string>();   // the notes of the last run, for pages that sign in during its break
         private static string skippedDay;
+        private static bool skippedLate;                // 0.6.3: the last run caught up a missed break
         private static string ResetFile { get { return Path.Combine(ChartBridgeConfig.Folder, "daily-reset.txt"); } }
 
         // For the harness: forget the day (the file stays as it is).
-        public static void Forget() { lock (Lk) { loaded = false; doneDay = null; Skipped.Clear(); skippedDay = null; } }
+        public static void Forget() { lock (Lk) { loaded = false; doneDay = null; Skipped.Clear(); skippedDay = null; skippedLate = false; } }
 
         // A branch on this account is flat with no working order: no position (any contract) and no order that may still fill.
         public static bool Idle(Account a)
@@ -1440,21 +1441,37 @@ namespace NinjaTrader.NinjaScript.AddOns
         // alone): true keeps that branch's account through the reset. The plain rule for now: no exception.
         public static bool KeepThroughReset(string branch, string account) { return false; }
 
-        // Every 2 s (ChartBridge's poll timer): the reset once per day, in the break.
+        // Every 2 s (ChartBridge's poll timer) and once at start: the reset once per day, in the break. 0.6.3 (audit C1): when the
+        // last reset saved in daily-reset.txt is older than the latest 17:00 ET at or before now (the page's resetDay rule), that
+        // break was missed (ChartBridge or the PC was off) and the reset runs now, with the same Idle and skip rules. No
+        // daily-reset.txt (or one that does not read) is not a missed break: it runs in the next break, as before. A day ahead
+        // of now (the clock moved back) is not due.
+        public static void Poll() { if (!HarnessManual) Check(); }
+        public static bool HarnessManual;               // test hook: the harness calls Check itself (its clock is a stand-in)
         public static void Check()
         {
             DateTime et = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(NowUtc(), DateTimeKind.Utc), ChartBridgeTime.Eastern);
-            if (et.Hour != 17) return;
-            try { ChartBridgeGroups.EodMark(); } catch (Exception ex) { ChartBridgeServer.Log("groups: end-of-day highs error: " + ex.Message); }   // 0.5.8: every 2 s in the break (the day's close)
-            string day = et.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            bool inBreak = et.Hour == 17;
+            if (inBreak) { try { ChartBridgeGroups.EodMark(); } catch (Exception ex) { ChartBridgeServer.Log("groups: end-of-day highs error: " + ex.Message); } }   // 0.5.8: every 2 s in the break (the day's close)
+            string day = DueDay(et);
+            string missed;
             lock (Lk)
             {
                 if (!loaded) { doneDay = ReadDay(); loaded = true; }
                 if (doneDay == day) return;
+                if (!inBreak && (doneDay == null || string.CompareOrdinal(doneDay, day) > 0)) return;
+                missed = inBreak ? null : day;
                 doneDay = day;
             }
             WriteDay(day);
-            Run(day);
+            Run(day, missed);
+        }
+
+        // The New York date of the latest 17:00 ET at or before this New York time (live/live.js resetDay).
+        public static string DueDay(DateTime et)
+        {
+            DateTime d = et.Hour >= 17 ? et.Date : et.Date.AddDays(-1);
+            return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         }
 
         private static string ReadDay()
@@ -1485,7 +1502,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // Each branch: "" when it went to None (or was None), else why it was skipped.
-        private static void Run(string day)
+        private static void Run(string day, string missed)
         {
             List<string> done = new List<string>(), skipped = new List<string>();
             Action<string, string> note = (branch, why) => { if (why == null) return; if (why.Length == 0) done.Add(branch); else skipped.Add(why); };
@@ -1493,7 +1510,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             note("the bot", ChartBridgeBot.ResetToNone());
             foreach (ChartBridgeAgent a in ChartBridgeAgents.All()) note("agent " + a.Id, a.ResetToNone());
             note("the copier's leader", ChartBridgeCopier.ResetToNone());
-            string head = "Daily reset (17:00 ET): ";
+            string head = missed == null ? "Daily reset (17:00 ET): " : "Daily reset (17:00 ET, caught up now: ChartBridge was not running at 17:00 ET on " + missed + "): ";
             if (done.Count > 0)
             {
                 string names = done.Count == 1 ? done[0] : string.Join(", ", done.Take(done.Count - 1)) + " and " + done[done.Count - 1];
@@ -1501,16 +1518,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeServer.Log(text);
                 ChartBridgeServer.SendToTraders(StatusJson("info", text));
             }
-            lock (Lk) { Skipped.Clear(); skippedDay = day; foreach (string w in skipped) Skipped.Add(head + w); }
+            lock (Lk) { Skipped.Clear(); skippedDay = day; skippedLate = missed != null; foreach (string w in skipped) Skipped.Add(head + w); }
             foreach (string w in skipped) { ChartBridgeServer.Log(head + w); ChartBridgeServer.SendToTraders(StatusJson("warn", head + w)); }
         }
 
-        // A page that signs in during the same break gets the skipped notes too.
+        // A page that signs in during the same break gets the skipped notes too (a reset caught up late: until the next 17:00).
         public static void SignedIn(ChartBridgeClient c)
         {
             DateTime et = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(NowUtc(), DateTimeKind.Utc), ChartBridgeTime.Eastern);
             List<string> notes;
-            lock (Lk) notes = et.Hour == 17 && skippedDay == et.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ? Skipped.ToList() : new List<string>();
+            lock (Lk) notes = (et.Hour == 17 || skippedLate) && skippedDay == DueDay(et) ? Skipped.ToList() : new List<string>();
             foreach (string n in notes) c.Send(StatusJson("warn", n));
         }
 
