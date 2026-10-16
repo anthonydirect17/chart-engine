@@ -239,9 +239,16 @@ function typeLimits(t) {
 function applyWords(l, own) {
   const of = own && isNum(own.floor) && own.floor > 0 ? own.floor : null, od = own && isNum(own.daily) && own.daily > 0 ? own.daily : null;
   const daily = 'My daily ' + (l.daily ? usd(+l.daily) + ' (' + l.dailyHow + ')' : 'none (' + l.dailyHow + (od ? '; it replaces your ' + usd(od) : '') + ')') + '.';
-  if (l.floor !== null) return 'My floor ' + usd(+l.floor) + ' (' + l.floorHow + '), ' + daily;
+  if (l.floor !== null) return 'My floor ' + usd(+l.floor) + ' (' + l.floorHow + (of && of > +l.floor ? '; it replaces your ' + usd(of) : '') + '), ' + daily;   // a stricter floor of his own is named
   const stays = 'My floor stays as it is (' + (of ? usd(of) : 'none') + ')';
   return (l.trailing ? stays + '. ' + l.floorHow : stays + ': ' + l.floorHow + '.') + ' ' + daily;
+}
+/** What Apply sends (the accountLimits boxes): the type's floor, or the account's own My floor again as it is; { error } when the
+ *  account is not on ChartBridge's list any more (nothing sent: never an empty box that would clear My floor). */
+function applySend(l, acc) {
+  if (!l || l.error) return { error: (l && l.error) || 'no type' };
+  if (!acc || typeof acc !== 'object') return { error: 'the account is not on ChartBridge\'s list now' };
+  return { floor: l.floor !== null ? l.floor : moneyBox(acc.myFloor), daily: l.daily };
 }
 /** "Oct 16 14:02 ET" for an ISO time or ms ('' when it cannot be read). */
 function asOfText(at) {
@@ -285,7 +292,7 @@ function membersOff(g, link, typeOfAccount) {
 
 return { NAME_MAX, MONEY_MAX, TYPES, TYPE_WORD, ACCOUNT_TYPES, HERO_RX, typeText, heroText, usd, parseMoney, moneyBox, summary, membersText, sideText, groupMessage, saveFrom, formOf,
   highCloseDefault, highWord, joinMessage, limitsMessage, cleanGroups,
-  TYPE_ID_RX, TYPES_CACHE_KEY, LINKS_KEY, cleanTypes, typeLabel, typeForm, rulesDiffer, typeLimits, applyWords, TRAILING_FLOOR_WORDS, asOfText, readTypesCache, writeTypesCache, readLinks, saveLink, membersOff };
+  TYPE_ID_RX, TYPES_CACHE_KEY, LINKS_KEY, cleanTypes, typeLabel, typeForm, rulesDiffer, typeLimits, applyWords, applySend, TRAILING_FLOOR_WORDS, asOfText, readTypesCache, writeTypesCache, readLinks, saveLink, membersOff };
 });
 
 /* ======================================================================== GroupsPage (browser only) */

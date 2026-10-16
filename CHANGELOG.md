@@ -39,7 +39,7 @@ drop down"). The ledger lives on The Desk; the page reads it and copies a type's
   account whose own type is not the group's is named under the group in Settings, and on the Accounts tab with a warning row under
   it and its dropdown marked. Nothing is refused anywhere.
 - Tests: `test/account-types.test.js` (the list read clean, "(not checked)", the fill, the differ check, Apply's numbers (a trailing
-  type above its start, the cap at floor stops at, no answer, static), the copy and
+  type never sets My floor, static, what My floor and My daily replace, an account gone sends nothing), the copy and
   the links with storage blocked, the member warning, the chart-accounts rows, the wiring, and the fake Desk against the contract);
   `test/fake-desk.mjs` answers the spec's account-type routes; `smoke:settings` adds the whole flow at 1366 x 768 against the fake Desk
   (screenshots `settings-types-accounts-tab.png`, `settings-group-type-filled.png`, `settings-types-differ.png`).

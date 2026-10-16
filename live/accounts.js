@@ -720,10 +720,11 @@ function mount(v, host) {
       const t = P.apply === id ? typeFor(id) : null, acc = S.accounts.find(x => x.name === id);
       const l = t ? GroupsCore.typeLimits(t) : { error: 'Its type is not on The Desk\'s list now.' };
       P.apply = '';
-      if (l.error) { host.note('Not sent: ' + l.error, true); render(); return; }
-      /* a trailing type (or one with no drawdown type): My floor is never set from the type; the account's own is sent again as it is */
-      const floor = l.floor !== null ? l.floor : GroupsCore.moneyBox(acc && acc.myFloor);
-      if (F.accountLimits(id, floor, l.daily)) host.note((l.floor !== null ? 'My floor and My daily' : 'My daily (My floor as it was)') + ' from ' + GroupsCore.typeLabel(t) + ' for ' + id + ': sent to ChartBridge.');
+      /* a trailing type (or one with no drawdown type): My floor is never set from the type; the account's own is sent again as it
+         is; an account gone from ChartBridge's list sends nothing (never an empty floor) */
+      const x = GroupsCore.applySend(l, acc);
+      if (x.error) { host.note('Not sent: ' + x.error + '.', true); render(); return; }
+      if (F.accountLimits(id, x.floor, x.daily)) host.note((l.floor !== null ? 'My floor and My daily' : 'My daily (My floor as it was)') + ' from ' + GroupsCore.typeLabel(t) + ' for ' + id + ': sent to ChartBridge.');
       render();
     }
     else if (a === 'join-yes') {   // G2 (b): the highest close, asked once when an account joins a group

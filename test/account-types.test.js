@@ -210,3 +210,19 @@ test('the fake Desk answers the spec\'s account-type routes (GET list, chart-acc
     assert.equal(t.version, 4); assert.equal(t.drawdown, 2500); assert.equal(t.status, 'not_checked');
   } finally { await desk.close(); }
 });
+
+test('account types (review nits): a static Apply names a stricter My floor it replaces; an account gone sends nothing', () => {
+  const t = GC.cleanTypes({ types: [row({ drawdown_type: 'static', lock_at: null, daily_loss: 1000 })] }).types[0];   // floor 48,000
+  const l = GC.typeLimits(t);
+  assert.equal(GC.applyWords(l, { floor: 49000, daily: null }), 'My floor $48,000 (a static drawdown: account size $50,000 less the drawdown $2,000; it replaces your $49,000), My daily $1,000 (its daily loss limit).', 'a higher floor of his own is named, never lowered quietly');
+  assert.ok(!/replaces/.test(GC.applyWords(l, { floor: 47000, daily: null })), 'a lower floor of his own: nothing to warn about');
+  assert.ok(!/replaces/.test(GC.applyWords(l, { floor: 48000, daily: null })), 'the same floor');
+  /* what is sent */
+  assert.deepEqual(GC.applySend(l, { name: 'Sim101', myFloor: 49000 }), { floor: '48000', daily: '1000' });
+  const tr = GC.typeLimits(Object.assign({}, t, { drawdownType: 'eod' }));
+  assert.deepEqual(GC.applySend(tr, { name: 'Sim101', myFloor: 49000 }), { floor: '49000', daily: '1000' }, 'trailing: his own floor again');
+  assert.deepEqual(GC.applySend(tr, { name: 'Sim101', myFloor: null }), { floor: '', daily: '1000' }, 'none stays none');
+  for (const gone of [undefined, null]) assert.deepEqual(GC.applySend(tr, gone), { error: 'the account is not on ChartBridge\'s list now' }, 'an account gone: nothing sent, never an empty floor');
+  assert.ok(GC.applySend({ error: 'x' }, { myFloor: 1 }).error);
+  assert.match(fs.readFileSync(path.join(ROOT, 'live', 'accounts.js'), 'utf8'), /const x = GroupsCore\.applySend\(l, acc\);\s*if \(x\.error\) \{ host\.note\('Not sent: ' \+ x\.error \+ '\.', true\); render\(\); return; \}\s*if \(F\.accountLimits\(id, x\.floor, x\.daily\)\)/, 'apply-yes sends only what applySend gives');
+});
