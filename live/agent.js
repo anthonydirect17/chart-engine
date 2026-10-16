@@ -81,7 +81,7 @@ function create(o) {
   /* 1.28.0: Assign hero (the board): B.pick, a build to pick for a group with no default hero ({ gid, agent }); B.ask, the one
      LIVE question ({ gid, agent, build, msg, text }); B.job, under way ({ agent, group, groupName, build, until }); B.line, the
      board's last word */
-  const B = { pick: null, ask: null, job: null, line: '', lineAt: 0, starting: false };
+  const B = { pick: null, ask: null, job: null, start: null, line: '', lineAt: 0, starting: false };
   /* On/Off (live/agent-helper.js): H.ask, the open "Flatten and turn him off?" for one agent ({ agent, text }), closed when
      another agent is shown (choose); H.job, a Flatten-and-off under way for one agent (Shadow, Flatten, Off), its line in
      H.lines[agent] until it ends (a give-up's until the next On or Off for that agent) */
@@ -287,7 +287,7 @@ function create(o) {
       case 'botProposal': botProps.update(m); renderOthers(); return;   // counted under the proposal while the tab is shown
       case 'copier': S.copier = m; return;
       case 'groups': S.groups = m; renderPanel(); return;   // 1.27.0: the picker's groups (ChartBridge 0.6.0); 1.28.0: the board's too (renderPanel draws it)
-      case 'agent': onAgent(m); if (H.job && m.agent === H.job.agent) jobStep(); if (B.job && m.agent === B.job.agent) assignTick(); return;
+      case 'agent': onAgent(m); if (H.job && m.agent === H.job.agent) jobStep(); if (B.job && m.agent === B.job.agent) assignTick(); if (B.start && m.agent === B.start.agent) startTick(); return;
       case 'agentProposal': onProposal(m); return;
       case 'agentPlan': if (feed.plan(m)) { firePlan(m); renderFeed(); renderStrip(); renderLive(); } return;
       case 'agentNote': if (feed.note(m)) { renderFeed(); renderLive(); } return;
@@ -662,6 +662,7 @@ function create(o) {
     } else if (x.kind === 'rules') rulesWhy(why, 'refused');
     else if (x.kind === 'account') put(q('[data-k="acctWhy"]'), 'textContent', why);
     else if (x.kind === 'mode' || x.kind === 'kill') { modeWhy(why); if (S.board) boardSay(why); }
+    else if (x.kind === 'startShadow') { if (B.start && B.start.cid === m.cid) { B.start = null; B.starting = false; } boardSay(why + ' He was not put in Shadow, so nothing was started.'); }
     else if (x.kind === 'assign') { if (B.job && B.job.cid === m.cid) B.job = null; boardSay(why + ' Nothing was started.'); }
     else notice({ kind: 'refused', level: 'amber', text: why });
   }
@@ -948,7 +949,7 @@ function create(o) {
       '<div class="ag-bcell mono ag-bbig ' + (r.r > 0 ? 'pos' : r.r < 0 ? 'neg' : '') + '" title="His closed trades today in R, from each plan\'s own risk (this browser\'s record of his fills)">' + esc(r.rText) + '</div>' +
       '<div class="ag-bcell">' + (r.off ? '<span class="ag-bsub">Start him in Shadow, or set None on his desk to free the slot.</span>' : '') + (r.room.pct !== null ? '<div class="ag-meter2"><i style="width:' + r.room.pct + '%"></i></div>' : '') + '<span class="ag-bsub mono">' + esc(r.room.text) + '</span></div>' +
       '<div class="ag-bcell ag-bctl">' + (r.off ? '<button type="button" class="ag-btn primary" data-act="bStart" data-agent="' + esc(r.agent) + '" data-build="' + esc(r.startBuild) + '"' + (!HC || H.reach !== 'ok' || !r.startBuild || B.starting ? ' disabled' : '') +
-        ' title="' + esc(r.startBuild ? 'The PC helper starts him with ' + r.startBuild + ', in Shadow. To free the slot instead, set None on his desk.' : 'No build known: pick one on his desk. To free the slot instead, set None on his desk.') + '">Start in Shadow</button>' : '') +
+        ' title="' + esc(r.startBuild ? 'Shadow first, then the PC helper starts him with ' + r.startBuild + '. To free the slot instead, set None on his desk.' : 'No build known: pick one on his desk. To free the slot instead, set None on his desk.') + '">Start in Shadow</button>' : '') +
         '<button type="button" class="ag-btn" data-act="bOpen" data-agent="' + esc(r.agent) + '" title="His desk">Open</button>' +
         '<button type="button" class="ag-bkill" data-act="bKill" data-agent="' + esc(r.agent) + '"' + (r.killed || !can ? ' disabled' : '') + ' title="' + (r.killed ? 'His kill switch is on: release it on his desk (two clicks)' : 'His kill switch on, in one click') + '">' + (r.killed ? 'Killed' : 'Kill') + '</button></div></div>';
     const pickHtml = g => {
@@ -1020,15 +1021,42 @@ function create(o) {
     boardSay(r.line);
     assignTimer = setTimeout(assignTick, 1000);
   }
-  /* fix round 1: a seated slot that is Off (the helper refused On, or the wait ran out): Start in Shadow, the helper's POST /on */
-  async function boardStart(id, build) {
+  /* fix round 1: a seated slot that is Off (the helper refused On, or the wait ran out): Start in Shadow. Fix round 2: really in
+     Shadow: ChartBridge keeps his mode across runner stops, so the existing agentMode shadow goes first and the helper's POST /on
+     only once his agent message shows Shadow (AgentHelper.startBegin, startStep: the desk's wait and words); not confirmed:
+     nothing is started. The On is the desk's own: his mode (Shadow then) and his sim, so the helper's heroes-only check runs as
+     for the desk's On */
+  let startTimer = 0;
+  function boardStart(id, build) {
     const a = agents.get(id);
     if (!a || !build || !HC) { boardSay('Nothing was sent: no build known for agent ' + id + '. Pick one on his desk, or set None there to free the slot.'); return; }
-    B.starting = true; boardSay('Asking the PC helper to start agent ' + id + ' with ' + build + ', in Shadow...');
-    const r = await HC.on(id, build, 'shadow', a.sim === true);
+    if (B.start) return;
+    const st = AH.startBegin(a, build, Date.now());
+    B.start = st.job; B.starting = true;
+    if (st.action === 'shadow') {
+      const c = cid(), m = Object.assign({ type: 'agentMode', cid: c }, AC.modeMsg(id, 'shadow'));
+      if (!S.signedIn || !sendRaw(m)) { B.start = null; B.starting = false; boardSay('Shadow could not be sent (not signed in to ChartBridge): nothing was started.'); return; }
+      S.pending.set(c, { kind: 'startShadow' }); setTimeout(() => S.pending.delete(c), 15000);
+      B.start.cid = c;
+    }
+    startTick();
+  }
+  function startTick() {
+    clearTimeout(startTimer);
+    const j = B.start; if (!j) return;
+    const r = AH.startStep(j, agents.get(j.agent), Date.now());
+    boardSay(r.line);
+    if (r.action === 'on') { B.start = null; startOn(j); return; }
+    if (r.action === 'giveup') { B.start = null; B.starting = false; renderBoard(); return; }
+    startTimer = setTimeout(startTick, 1000);
+  }
+  async function startOn(j) {
+    const a = agents.get(j.agent);
+    if (!a || a.mode !== 'shadow') { B.starting = false; boardSay('He is not in Shadow now: nothing was started.'); return; }
+    const r = await HC.on(a.agent, j.build, a.mode, a.sim);   // the desk's own On (helperOn): his mode, Shadow here, and his sim
     B.starting = false;
-    boardSay(r.reach === 'ok' ? 'Agent ' + id + ' starts with ' + build + ', in Shadow.' + (a.killed ? ' His kill switch is on: nothing trades until you release it on his desk (two clicks).' : '')
-      : 'The PC helper did not start agent ' + id + ': ' + (r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach)) + '. He stays Off; set None on his desk to free the slot.');
+    boardSay(r.reach === 'ok' ? 'Agent ' + j.agent + ' starts with ' + j.build + ', in Shadow.' + (a.killed ? ' His kill switch is on: nothing trades until you release it on his desk (two clicks).' : '')
+      : 'The PC helper did not start agent ' + j.agent + ': ' + (r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach)) + '. He stays Off; set None on his desk to free the slot.');
     await pollHelper();
   }
   async function assignOn(j) {
@@ -1670,7 +1698,7 @@ function create(o) {
     board: () => Object.assign({ shown: S.board, line: B.line, job: B.job ? Object.assign({}, B.job) : null }, boardModel()),
     /** Layout 5, read only (tests): the grid canvas, the chart maximized, his trades in R, his heat */
     layout5: () => { const a = cur(); return { grid: GRID ? GRID.state() : null, max: S.max, r: a ? rNow(a) : null, heat: a ? AC.heatNow(a, S.orders.values(), pointValue) : null, risks: risksDay().map }; },
-    destroy() { if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (rulesObs) rulesObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); clearTimeout(assignTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
+    destroy() { if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (rulesObs) rulesObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); clearTimeout(assignTimer); clearTimeout(startTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
   };
   return api;
 }

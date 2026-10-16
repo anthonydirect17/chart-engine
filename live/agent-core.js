@@ -1040,7 +1040,9 @@ function boardRows(o) {
       room: acc.none ? { pct: null, text: 'None: nothing trades', why: '' } : boardRoom(accounts, x.accounts, g), killed: !!a.killed, standDown: str(a.standDown), connected: !!a.connected, on,
       /* fix round 1: seated (a group or an account) but Off: not started, nothing trades; Start in Shadow with this build (his
          last, else the group's default hero); on a group the group still has no hero on duty */
-      off: !on && !acc.none ? 'Off: not started (nothing trades)' : '', startBuild: !on && !acc.none ? build || (g && typeof g.hero === 'string' ? g.hero : '') : '', noHeroOn: !on && !!acc.group });
+      off: !on && !acc.none ? 'Off: not started (nothing trades)' : '',
+      /* fix round 2: on a group, its default hero when the helper offers that build, else his last build */
+      startBuild: !on && !acc.none ? (g && typeof g.hero === 'string' && buildRow(g.hero) ? g.hero : build) : '', noHeroOn: !on && !!acc.group });
   }
   const taken = new Set(agents.filter(a => a.group && validGroupId(a.group.id)).map(a => a.group.id));
   const noHero = groups.filter(g => !taken.has(g.id)).map(g => {

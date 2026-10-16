@@ -227,15 +227,17 @@ test('fix round 1: a slot seated on a group but Off says so, offers Start in Sha
   assert.ok(r, 'still a row: it has a group');
   assert.equal(r.on, false);
   assert.equal(r.off, 'Off: not started (nothing trades)');
-  assert.equal(r.startBuild, 'sample-b', 'no build of his own: the group\'s default hero');
+  assert.equal(r.startBuild, 'sample-b', 'the group\'s default hero (the helper offers it)');
   assert.equal(r.noHeroOn, true, 'its group keeps the no hero marker while its only agent is Off');
   assert.ok(!M.noHero.some(g => g.id === 'g1'), 'no second NO HERO row (Assign would take another slot)');
   const s = M.heroes.find(x => x.agent === 'demotwo');
   assert.deepEqual([s.off, s.noHeroOn], ['', false], 'an agent that is on: no warning');
   st.agents.demo.build = 'sample-a';
-  assert.equal(AC.boardRows({ agents: ag, groups, accounts, status: st, reach: 'ok', AH }).heroes[0].startBuild, 'sample-a', 'his last build first');
+  assert.equal(AC.boardRows({ agents: ag, groups, accounts, status: st, reach: 'ok', AH }).heroes[0].startBuild, 'sample-b', 'fix round 2: on a group, its default hero before his last build');
+  const noDef = { type: 'groups', list: groups.list.map(g => Object.assign({}, g, { hero: g.id === 'g1' ? 'not-on-this-pc' : g.hero })) };
+  assert.equal(AC.boardRows({ agents: ag, groups: noDef, accounts, status: st, reach: 'ok', AH }).heroes[0].startBuild, 'sample-a', 'a default hero the helper does not offer: his last build');
   const js = read('live/agent.js');
-  assert.match(js, /async function boardStart\(id, build\) \{[\s\S]*?await HC\.on\(id, build, 'shadow', a\.sim === true\);/, 'Start in Shadow is the helper\'s existing POST /on, in Shadow');
+  assert.match(js, /async function startOn\(j\) \{[\s\S]*?if \(!a \|\| a\.mode !== 'shadow'\) \{[\s\S]*?await HC\.on\(a\.agent, j\.build, a\.mode, a\.sim\);/, 'Start in Shadow is the helper\'s existing POST /on, as the desk\'s own On, only in Shadow');
   assert.match(js, /set None on his desk to free the slot/);
 });
 
@@ -274,4 +276,24 @@ test('fix round 1: the room\'s why comes from the tightest seat, not the first',
   assert.equal(r.text, 'daily room not reported (SIM-B started mid-session), floor $900.00 away (SIM-B)');
   const none = AC.boardRoom(['SIM-A', 'SIM-B'], { list: [{ name: 'SIM-A', roomDaily: null, roomFloor: null }, { name: 'SIM-B', roomDaily: null, roomFloor: null, why: { roomFloor: 'SIM-B is not connected' } }] }, null);
   assert.equal(none.text, 'room not reported: SIM-B is not connected', 'nothing known: a seat that says why');
+});
+
+/* ======================================================================== fix round 2 */
+test('fix round 2: Start in Shadow puts an agent left in Auto in Shadow first; POST /on only once Shadow shows; never without it', () => {
+  const auto = { agent: 'demothree', mode: 'auto', sim: true };
+  const b = AH.startBegin(auto, 'sample-a', 0);
+  assert.equal(b.action, 'shadow', 'left in Auto: agentMode shadow first');
+  assert.deepEqual(AH.startStep(b.job, auto, 5000), { action: '', line: 'Putting him in Shadow first (no new entries)...' }, 'still Auto: wait, nothing started');
+  assert.equal(AH.startStep(b.job, Object.assign({}, auto, { mode: 'shadow' }), 6000).action, 'on', 'Shadow shows: now the POST /on');
+  assert.deepEqual(AH.startStep(b.job, auto, AH.SHADOW_WAIT_MS + 1), { action: 'giveup', line: 'ChartBridge did not put him in Shadow within 10 s: nothing was started.' }, 'Shadow never confirmed: no POST /on');
+  assert.equal(AH.startStep(b.job, null, AH.SHADOW_WAIT_MS + 1).action, 'giveup', 'ChartBridge gone: nothing started');
+  assert.equal(AH.startStep(b.job, Object.assign({}, auto, { mode: 'copilot' }), 1000).action, '', 'Copilot is not Shadow');
+  const sh = AH.startBegin({ agent: 'demothree', mode: 'shadow' }, 'sample-a', 0);
+  assert.equal(sh.action, 'on', 'already in Shadow: straight on');
+  assert.equal(AH.startStep(sh.job, { agent: 'demothree', mode: 'shadow' }, 1).action, 'on');
+  const js = read('live/agent.js');
+  const fn = js.slice(js.indexOf('function boardStart(id, build) {'), js.indexOf('async function startOn(j) {'));
+  assert.ok(fn.indexOf("AC.modeMsg(id, 'shadow')") > 0 && !/HC\.on\(/.test(fn), 'the click sends agentMode shadow (the existing message), never the POST /on itself');
+  assert.match(js, /if \(B\.start && m\.agent === B\.start\.agent\) startTick\(\);/, 'each agent message moves the step');
+  assert.match(js, /x\.kind === 'startShadow'\) \{ if \(B\.start && B\.start\.cid === m\.cid\) \{ B\.start = null;/, 'a refused agentMode ends it: nothing started');
 });

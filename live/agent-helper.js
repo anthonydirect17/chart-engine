@@ -307,6 +307,24 @@ function assignStep(job, a, now) {
   return { action: '', line: 'Asking ChartBridge to put agent ' + job.agent + ' on ' + job.groupName + '...' };
 }
 
+/**
+ * Fix round 2: the board's Start in Shadow really starts in Shadow. ChartBridge keeps an agent's mode across runner stops, so an
+ * agent left in Auto is first put in Shadow (the existing agentMode), and the helper's POST /on goes only once his `agent` message
+ * shows Shadow. startBegin(a, build, now): { job, action } with action 'shadow' (send agentMode shadow first) or 'on' (in Shadow
+ * already: straight on). startStep(job, a, now): { action ('' wait, 'on', 'giveup'), line }, the desk's Shadow wait and words.
+ */
+function startBegin(a, build, now) {
+  const x = a || {}, inShadow = x.mode === 'shadow';
+  return { job: { agent: str(x.agent), build, until: now + SHADOW_WAIT_MS, phase: inShadow ? 'on' : 'shadow' }, action: inShadow ? 'on' : 'shadow' };
+}
+function startStep(job, a, now) {
+  if (!job) return { action: '', line: '' };
+  if (!a) return now > job.until ? { action: 'giveup', line: 'ChartBridge did not answer: he was not put in Shadow, so nothing was started.' } : { action: '', line: 'Waiting for ChartBridge (the connection dropped): nothing is started meanwhile...' };
+  if (a.mode === 'shadow') return { action: 'on', line: 'In Shadow: asking the PC helper to start agent ' + job.agent + ' with ' + job.build + '...' };
+  if (now > job.until) return { action: 'giveup', line: 'ChartBridge did not put him in Shadow within ' + SHADOW_WAIT_MS / 1000 + ' s: nothing was started.' };
+  return { action: '', line: 'Putting him in Shadow first (no new entries)...' };
+}
+
 /** The header and details (DECISION v): { name, build } where name is the hello's name (a hero's name, or the build id of
  *  a build that is not a hero) and build the build id and stamp for the details row. */
 function names(a) {
@@ -361,5 +379,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
 });

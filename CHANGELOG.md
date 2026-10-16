@@ -30,6 +30,10 @@ the order path: no new trading restriction, and single-account and group trading
   takes a slot whose kill switch is off first (a killed one only when no other is free, and the line says his kill switch is on;
   a Kill is never undone) and asks the free slot again at Continue (nothing is sent when it no longer holds). The room's why comes
   from the tightest seat. The new tests and seeds use made-up SIM-A to SIM-D and Group A, Group B (fake bridge `--board-groups`).
+- Fix round 2: Start in Shadow really starts in Shadow. ChartBridge keeps an agent's mode across runner stops, so an agent left
+  in Auto is first sent the existing `agentMode` shadow; the helper's `POST /on` goes only once his `agent` message shows Shadow
+  (the desk's 10 s wait; not confirmed: nothing is started, with why), as the desk's own On (his mode and sim, so the helper's
+  heroes-only check runs). On a group, Start uses the group's default hero when the helper offers it, else his last build.
 - Tests: the Mono harness's Type and hero cases (round trip, absent keeps, `-` clears, every refused shape, a 0.6.0 line, fields
   after the hero kept, an unreadable type or hero); test/board.test.js (tier fit, the chips, preselect, the board's rows from fake
   agents and helper rows with and without tiers, Kill all, Assign hero with and without a free slot, groupSave's shapes);

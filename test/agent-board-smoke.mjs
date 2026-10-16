@@ -61,9 +61,10 @@ try {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   for (const api of ['chart-hotkeys', 'chart-strategies', 'chart-accounts'])
     await ctx.route('http://localhost:8800/api/' + api, r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(api === 'chart-accounts' ? { accounts: [] } : api === 'chart-strategies' ? { rev: 0, strategies: [] } : { rev: 1, keys: {}, modifiers: {} }) }));
+  /* every agent message the page sends; window.__dropMode: an agentMode never reaches ChartBridge (Shadow never confirmed) */
   await ctx.addInitScript(() => {
     const Real = window.WebSocket, socks = window.__socks = [];
-    function Spy(url, p) { const s = p === undefined ? new Real(url) : new Real(url, p); const rec = { msgs: [] }; const send = s.send.bind(s); s.send = d => { try { const m = JSON.parse(d); if (/^agent/.test(m.type)) rec.msgs.push(m); } catch (e) { /* not JSON */ } return send(d); }; socks.push(rec); return s; }
+    function Spy(url, p) { const s = p === undefined ? new Real(url) : new Real(url, p); const rec = { msgs: [] }; const send = s.send.bind(s); s.send = d => { let m = null; try { m = JSON.parse(d); if (/^agent/.test(m.type)) rec.msgs.push(m); } catch (e) { /* not JSON */ } if (m && m.type === 'agentMode' && window.__dropMode) return; return send(d); }; socks.push(rec); return s; }
     Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
     window.WebSocket = Spy;
   });
@@ -124,7 +125,7 @@ try {
   await sleep(3500);
 
   /* Assign hero with a free slot: agentAccount {group}, the LIVE member asked once in the page, then POST /on in Shadow */
-  const onsBefore = helper.calls.filter(c => c.route === 'POST /on').length;
+  const onsBefore = helper.calls.length;   // an index into every call the helper got
   await page.click('#agView [data-act="bAssign"][data-gid="g2"]');
   let ask = await until(() => page.$('#agView [data-brow="none"] .ag-ask'), 'the LIVE question for SIM-D');
   let askText = ask ? await ask.innerText() : '';
@@ -150,16 +151,32 @@ try {
   await sleep(500);
   await page.screenshot({ path: path.join(SHOTS, 'agent-board-assigned.png') });
 
-  /* fix round 1: seated on Group B but Off (as when the helper refuses On or the wait runs out): the row says so, Start in Shadow */
+  /* fix round 1: seated on Group B but Off (as when the helper refuses On or the wait runs out): the row says so, Start in Shadow.
+     Fix round 2: he was left in Auto (ChartBridge keeps the mode across runner stops) */
+  await control('agent-mode', { agent: 'demothree', mode: 'auto' });
   Object.assign(helper.status.demothree, { on: false, running: false, runningBuild: null, build: 'sample-build-1' });
   await control('agent-connect', { agent: 'demothree', on: '0' });
   const offRow = await until(async () => { const t = await page.$eval('#agView [data-brow="hero"][data-agent="demothree"]', e => e.innerText.replace(/\s+/g, ' ')).catch(() => ''); return /Off: not started \(nothing trades\)/.test(t) ? t : null; }, 'the Off warning on his row', 15000);
   check(offRow && /No hero on duty/i.test(offRow) && /Start in Shadow/i.test(offRow) && /set None on his desk to free the slot/.test(offRow), 'a seated slot that is Off: the warning, No hero on duty, Start in Shadow and the hint: ' + offRow);
   await page.screenshot({ path: path.join(SHOTS, 'agent-board-off.png') });
-  const ons1 = helper.calls.filter(c => c.route === 'POST /on').length;
+  check(await page.evaluate(() => window.workspace.agent().agents.find(a => a.agent === 'demothree').mode) === 'auto', 'he was left in Auto');
+  /* Shadow never confirmed (the agentMode never reaches ChartBridge): nothing is started */
+  const ons1 = helper.calls.length, m1 = (await sent()).length;
+  await page.evaluate(() => { window.__dropMode = true; });
+  await page.click('#agView [data-act="bStart"][data-agent="demothree"]');
+  const gave = await until(async () => { const t = await page.textContent('#agView [data-k="bLine"]'); return /did not put him in Shadow within 10 s: nothing was started/.test(t) ? t : null; }, 'the give-up words', 16000);
+  const firstSent = (await sent()).slice(m1);
+  check(gave && firstSent.length === 1 && firstSent[0].type === 'agentMode' && firstSent[0].mode === 'shadow' && firstSent[0].agent === 'demothree' && helper.calls.slice(ons1).every(c => c.route !== 'POST /on'),
+    'left in Auto, Shadow never confirmed: agentMode shadow was the only thing sent, no POST /on: ' + gave + ' ' + JSON.stringify(firstSent) + ' ' + JSON.stringify(helper.calls.slice(ons1).filter(c => c.route !== 'GET /status')));
+  await page.evaluate(() => { window.__dropMode = false; });
+  /* Shadow confirmed: then, and only then, the POST /on */
+  const m2 = (await sent()).length;
   await page.click('#agView [data-act="bStart"][data-agent="demothree"]');
   const on2 = await until(() => helper.calls.slice(ons1).find(c => c.route === 'POST /on'), 'Start in Shadow\'s POST /on');
-  check(on2 && on2.body.agent === 'demothree' && on2.body.build === 'sample-build-1' && on2.body.mode === 'shadow', 'Start in Shadow: the helper\'s POST /on with his build, in Shadow: ' + JSON.stringify(on2 && on2.body));
+  const modeSent = (await sent()).slice(m2).find(m => m.type === 'agentMode');
+  check(modeSent && modeSent.mode === 'shadow' && on2 && on2.at >= 0 && on2.body.agent === 'demothree' && on2.body.build === 'sample-build-1' && on2.body.mode === 'shadow',
+    'left in Auto: agentMode shadow first, then the helper\'s POST /on with his build in Shadow once Shadow shows: ' + JSON.stringify(on2 && on2.body));
+  check(await page.evaluate(() => window.workspace.agent().agents.find(a => a.agent === 'demothree').mode) === 'shadow', 'he is in Shadow');
   await until(async () => !(await page.$('#agView [data-brow="hero"][data-agent="demothree"] .ag-boff')), 'the warning gone once he is on');
 
   /* KILL ALL AGENTS: agentKill on to every agent, one click */
