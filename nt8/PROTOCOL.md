@@ -2389,7 +2389,8 @@ that reads but is not understood (the agents' rules and account, `agent-standdow
 could not be read (<why>): ChartBridge uses its last good copy (<file>.bak), so the last change before the problem may be
 missing: check it on the page"), also to every page that signs in later that run. Without a good copy each behaves as before.
 **A day file** (`agent-<id>-day.txt`) with lines it cannot read (NULs, a half line, a line it does not know) or no session
-line keeps every line that reads, and fills what it lacks from its `.bak`: today's trades, losses and plan ids are never
+line keeps every line that reads, and fills what it lacks from its `.bak` (review MED 2: only a `.bak` of the same session,
+the file's own, or today's when the file's session line is the damaged one; a copy of another session is ignored): today's trades, losses and plan ids are never
 reset. The agent stands down for this run only ("agent-<id>-day.txt has N lines ChartBridge could not read (a power cut?): the
 trades, losses and plan ids from the lines that read ... are kept and the file is written again from them: no new entries for
 agent <id> this run: check today's trades in NinjaTrader (the next start goes on with these counts)", an alarm to the pages);

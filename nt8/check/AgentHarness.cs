@@ -1003,6 +1003,29 @@ public static class AgentHarness
         Check(st2.Contains(tradesNow) && st2.Contains("and from its last good copy (agent-manrae-day.txt.bak) are kept"), "0.6.3 C3: a day file of zeros: the counts come from its last good copy: " + st2);
         Restart();
         Check(Last(agentOut, "agentState").Contains("\"standDown\":null"), "0.6.3 C3: and the start after that is clean");
+        // 0.6.3 (review MED 2, the review's probe 1): a .bak of another session is never merged into today's day file
+        {
+            string cur = File.ReadAllText(day);
+            string want = Regex.Match(Last(agentOut, "agentState"), "\"trades\":[0-9]+,\"losses\":[0-9]+").Value;
+            File.WriteAllText(day + ".bak", "# old\n# old\nsession\t2026-10-07\ntrade\tab000001\t-50\ntrade\tab000002\t-50\ntrade\tab000003\t-50\nstandDown\tmaxLosses 3 reached yesterday\n");
+            File.WriteAllText(day, cur + "plan\tplan-x\0\0\0\n");
+            Restart();
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains(want) && !st.Contains("maxLosses 3 reached yesterday") && !FileText("agent-manrae-day.txt").Contains("ab000001"),
+                  "0.6.3 MED 2: a torn day file with yesterday's .bak: today's counts only (" + want + "), yesterday's trades and stand-down not merged: " + st);
+            // the session line itself is the damaged one: a .bak of today is used, one of another day is not
+            string noSession = string.Join("\n", cur.Split('\n').Where(x => !x.StartsWith("session\t"))) + "\n\0\0\0\n";
+            File.WriteAllText(day + ".bak", "# old\n# old\nsession\t2026-10-07\ntrade\tab000009\t-50\n");
+            File.WriteAllText(day, noSession);
+            Restart();
+            Check(Last(agentOut, "agentState").Contains(want) && !FileText("agent-manrae-day.txt").Contains("ab000009"), "0.6.3 MED 2: no session line and another day's .bak: today's lines only");
+            File.WriteAllText(day + ".bak", "# old\n# old\nsession\t2026-10-08\ntrade\tab00000a\t-50\n");
+            File.WriteAllText(day, noSession);
+            Restart();
+            Check(FileText("agent-manrae-day.txt").Contains("ab00000a") && FileText("agent-manrae-day.txt").Contains("session\t2026-10-08"), "0.6.3 MED 2: no session line and today's .bak: its lines fill in");
+            File.WriteAllText(day, cur); try { File.Delete(day + ".bak"); } catch (Exception) { }
+            Restart();
+        }
         // a rules file read but not understood, with a good copy: the copy is used, said to the pages
         P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));
         P(Rules("NQ,MNQ", ",\"maxQtyNQ\":1,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));

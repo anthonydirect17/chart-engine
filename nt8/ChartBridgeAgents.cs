@@ -2495,8 +2495,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                     bool noSession = fileSession == null;
                     if (bad > 0 || noSession)
                     {
+                        // 0.6.3 (review MED 2): the last good copy only when it is the same session (the file's, or today when the
+                        // file's session line is the damaged one); a copy of another session is ignored
                         string[] b = ChartBridgeFiles.ReadBackup(DayFile);
-                        bool fromBackup = b != null && read(b, false) >= 0 && b.Length > 0;
+                        string want = fileSession ?? today, bakSession = b == null ? null : b.Select(x => x.Trim().Split('\t')).Where(x => x.Length == 2 && x[0] == "session").Select(x => x[1]).FirstOrDefault();
+                        bool fromBackup = b != null && bakSession == want && read(b, false) >= 0;
                         if (fileSession == null) fileSession = today;   // no session line anywhere: counted as today's (never forgotten)
                         damaged = "agent-" + Id + "-day.txt has " + (bad > 0 ? bad + " line" + (bad == 1 ? "" : "s") + " ChartBridge could not read" : "no session line") +
                                   " (a power cut?): the trades, losses and plan ids from the lines that read" + (fromBackup ? " and from its last good copy (agent-" + Id + "-day.txt.bak)" : "") +
