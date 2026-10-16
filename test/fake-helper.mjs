@@ -15,7 +15,7 @@ export const BUILDS = [
   { build: 'sample-build-4', stamp: 'dddddddddddd', hero: null, here: true, shadowOk: false, trades: 2, meanR: -0.1, dollars: -50, frozenAt: '2026-10-09' },
 ];
 
-export async function startFakeHelper({ bridgePort, port = 8767, agents = ['demo'] }) {
+export async function startFakeHelper({ bridgePort, port = 8767, agents = ['demo'], builds = BUILDS }) {   // builds: the rows GET /status lists (1.28.0: with tiers for the board smoke)
   const origin = 'http://localhost:' + bridgePort, hosts = ['localhost:' + port, '127.0.0.1:' + port];
   const calls = [];
   let down = false, forbid = false;
@@ -46,11 +46,11 @@ export async function startFakeHelper({ bridgePort, port = 8767, agents = ['demo
       try { body = JSON.parse(raw); } catch (e) { return send(400, { error: 'send one small JSON object' }); }
     }
     calls.push({ route, body, at: Date.now() });
-    if (route === 'GET /status') return send(200, { v: 1, agents: state, builds: BUILDS, buildsNote: null, bar: { min_trades: null, min_mean_r: null }, barSet: false, session: '2026-10-12' });
+    if (route === 'GET /status') return send(200, { v: 1, agents: state, builds, buildsNote: null, bar: { min_trades: null, min_mean_r: null }, barSet: false, session: '2026-10-12' });
     const a = body && state[body.agent];
     if (!a) return send(409, { error: 'no such agent on this PC' });
     if (route === 'POST /on') {
-      const b = BUILDS.find(x => x.build === body.build);
+      const b = builds.find(x => x.build === body.build);
       if (!b) return send(409, { error: 'that build is not on this PC or in The Desk\'s store' });
       if (!b.shadowOk) return send(409, { error: b.build + ' is not a hero and does not pass the Shadow bar' });
       if (!b.hero && !(body.mode === 'shadow' && body.sim === true)) return send(409, { error: b.build + ' is not a hero: it runs only in Shadow on a Sim account' });

@@ -1,5 +1,34 @@
 # Changelog
 
+## ChartBridge 0.6.1 and chart 1.28.0 (2026-10-16): a group's default hero, and the heroes-on-duty board
+
+SPEC CE-1, Phase 4 pieces 3 and 2 (DECISION 2026-10-15k). **It needs the recompile: the page needs ChartBridge 0.6.1**
+(`minChartBridge` raised to 0.6.1); a PC on an older ChartBridge keeps the page it has, and the PC updater waits. Nothing new in
+the order path: no new trading restriction, and single-account and group trading work exactly as in 0.6.0.
+
+- **A group's Type and default hero (ChartBridge 0.6.1).** `groups.txt` gains two fields after `consistency`: the Type (`eval`,
+  `funded`, `-`) and the default hero (a build name, `-` for none); a 0.6.0 line reads as not set and none, and a 0.5.8 or 0.6.0
+  ChartBridge keeps the two fields as read. `groupSave` takes them as `accountType` (the message's `type` is its kind) and `hero`,
+  both optional (absent keeps them, `-` clears), shapes only; the `groups` message carries both. ChartBridge never knows heroes.
+- **Settings, Account groups (chart 1.28.0).** The rules dialog has Type (Evals, Funded, Not set) and Hero on duty: None, then every
+  hero the PC helper lists with its tier, and a warning beside it when its tier does not fit the Type (shown only; he can pick any).
+  Each group's row says its Type and hero. The No hedging switch and Rename keep them.
+- **The Agent tab's picker.** For an agent on a group, the build picker preselects the group's default hero (after a build he
+  picked or the one he runs; the picker stays) and lists every hero with its fit warning for the group's Type. Tier fit: Not ready
+  fits nothing; Acceptable fits Evals (guidance: at most 3 evals at once); Good, Great and Exceptional fit both; no tier says "tier
+  unknown" with why (no rating on this PC yet, or the PC helper is not answering); no Type: no fit warning ("type not set").
+- **The heroes-on-duty board.** The Agent tab's strip has Board (kept in this browser): one row per agent slot that is on or has an
+  account or a group (hero name and build, tier chip, the group and the accounts it leads or the one account, mode, position,
+  today's R, the room of the tightest seat from ChartBridge's own numbers, its own Kill and Open); KILL ALL AGENTS (the existing
+  `agentKill` on to every agent, one click); a NO HERO row per group no agent trades with Assign hero: a free slot (an agent id on
+  None and Off) gets the existing `agentAccount {group}` (a LIVE member asked once in the page), then the PC helper's existing
+  `POST /on` with the group's default hero, in Shadow (no default hero the helper has: he picks one; no free slot: "add an agent id
+  to config.txt", which ChartBridge never writes). The Tron kit's look; nothing on the board moves.
+- Tests: the Mono harness's Type and hero cases (round trip, absent keeps, `-` clears, every refused shape, a 0.6.0 line, fields
+  after the hero kept, an unreadable type or hero); test/board.test.js (tier fit, the chips, preselect, the board's rows from fake
+  agents and helper rows with and without tiers, Kill all, Assign hero with and without a free slot, groupSave's shapes);
+  `npm run smoke:agent-board` (in smoke:agent) and the group editor in smoke:settings, with screenshots.
+
 ## ChartBridge 0.6.0 and chart 1.27.0 (2026-10-15): one hero trades a whole prop group from the Agent tab
 
 Anthony's decisions of 2026-10-15 (Phase 4 piece 1, Q1 b, Q2 a, Q3 a). **It needs the recompile: the page needs ChartBridge

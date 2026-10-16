@@ -20,6 +20,12 @@
  *              builds that pass the Shadow bar (pickerRows). A build that is not a hero keeps the mode at Shadow on Sim:
  *              modeBlock says why Copilot and Auto are closed (the runner refuses them too).
  *   Names      DECISION v: a hero's name (Manrae, Manrae 2) in the header; the build id and stamp in the details.
+ *   Tiers      chart 1.28.0 (SPEC CE-1, DECISION 2026-10-15k): each build row of GET /status may carry tier (Not ready,
+ *              Acceptable, Good, Great, Exceptional), edge, examEdge, liveEdge, liveN, standingAt, standingNote; all optional
+ *              (absent: "tier unknown", with why). tierFit says how a hero's tier fits a group's Type (Evals, Funded, not set):
+ *              shown only, never enforced; every hero is listed for every group.
+ *   Assign     the heroes-on-duty board's Assign hero (freeSlot, assignStart, assignStep): a free slot is an agent id on None
+ *              and Off; agentAccount {group} first (ChartBridge checks it), then POST /on with the group's default hero, in Shadow.
  *
  * Nothing here sends an order.
  */
@@ -63,20 +69,81 @@ function stateText(h, reach, why) {
   return 'On, not running yet: ' + str(h.why) + '.';
 }
 
+/* ---------------- tiers (chart 1.28.0, SPEC CE-1): shown only, nothing enforced */
+const TIERS = ['Not ready', 'Acceptable', 'Good', 'Great', 'Exceptional'];
+const TYPE_NAME = { eval: 'Evals', funded: 'Funded' };
+/** A build row's tier as one of TIERS (any case), or '' (absent or not one of them: tier unknown). */
+function tierOf(row) {
+  const t = row && typeof row.tier === 'string' ? row.tier.trim().toLowerCase() : '';
+  return TIERS.find(x => x.toLowerCase() === t) || '';
+}
+const fmtEdge = v => (isNum(v) ? (v > 0 ? '+' : v < 0 ? '-' : '') + Math.abs(v).toFixed(2) + 'R' : '');
 /**
- * The picker's rows for the agent shown: [{ build, label, hero, stamp, title }]. mode and sim from ChartBridge's `agent`
- * message (sim true for a Sim account). Copilot, Auto or anything but a Sim account: heroes only. Shadow on Sim: heroes and
- * the builds over the bar (shadowOk from the helper).
+ * The tier chip of a build row: { text, tone, title }. tone: 'top' (Good, Great, Exceptional), 'ok' (Acceptable), 'no' (Not
+ * ready), 'unknown'. reach: the helper's ('ok' when it answered). "GOOD +0.10R"; unknown: "TIER UNKNOWN" with why in title.
  */
-function pickerRows(status, mode, sim) {
+function tierChip(row, reach) {
+  const t = tierOf(row);
+  if (!t) {
+    const why = reach && reach !== 'ok' ? 'the PC helper is not answering' : 'no rating on this PC yet';
+    return { text: 'tier unknown', tone: 'unknown', title: 'Tier unknown (' + why + ')' };
+  }
+  const r = row || {}, e = fmtEdge(r.edge);
+  const bits = [isNum(r.examEdge) ? 'exam edge ' + fmtEdge(r.examEdge) : '', isNum(r.liveEdge) ? 'live edge ' + fmtEdge(r.liveEdge) + (isNum(r.liveN) ? ' over ' + r.liveN + ' trades' : '') : '',
+    str(r.standingAt) ? 'standing of ' + str(r.standingAt) : '', str(r.standingNote)].filter(Boolean);
+  return { text: t + (e ? ' ' + e : ''), tone: t === 'Not ready' ? 'no' : t === 'Acceptable' ? 'ok' : 'top', title: t + (e ? ', edge ' + e : '') + (bits.length ? ': ' + bits.join('; ') : '') };
+}
+/**
+ * How a tier fits a group's Type (DECISION 2026-10-15k), shown only: { warn, note }. warn: the fit warning ('' when it fits);
+ * note: a guidance line (Acceptable "at most 3 evals at once") or "type not set". Not ready fits nothing, whatever the Type;
+ * with no Type there is no other fit warning; with a Type and no tier: "tier unknown".
+ */
+function tierFit(tier, accountType) {
+  const t = TIERS.includes(tier) ? tier : '', type = accountType === 'eval' || accountType === 'funded' ? accountType : '';
+  if (t === 'Not ready') return { warn: 'Not ready: gym and Sim only', note: '' };
+  if (!type) return { warn: '', note: 'type not set' };
+  if (!t) return { warn: 'tier unknown', note: '' };
+  if (t === 'Acceptable') return type === 'funded' ? { warn: 'Acceptable: evals only; funded only when no Good or better hero is on duty', note: '' } : { warn: '', note: 'Acceptable: at most 3 evals at once' };
+  return { warn: '', note: '' };
+}
+/** The heroes the helper knows, for Settings' Hero on duty: [{ build, hero, tier, chip, fit, label }], every hero for every
+ *  group (no filter), with its fit for the group's Type. */
+function heroOptions(status, accountType, reach) {
+  const rows = status && Array.isArray(status.builds) ? status.builds : [];
+  return rows.filter(r => r && typeof r.build === 'string' && r.hero).map(r => {
+    const chip = tierChip(r, reach), fit = tierFit(tierOf(r), accountType);
+    return { build: r.build, hero: String(r.hero), tier: tierOf(r), chip, fit, label: r.hero + ' (' + r.build + ') · ' + chip.text + (fit.warn && fit.warn !== chip.text ? ' · ' + fit.warn : '') };
+  });
+}
+
+/**
+ * The picker's rows for the agent shown: [{ build, label, hero, stamp, title, warn }]. mode and sim from ChartBridge's `agent`
+ * message (sim true for a Sim account). Copilot, Auto or anything but a Sim account: heroes only. Shadow on Sim: heroes and
+ * the builds over the bar (shadowOk from the helper). group (chart 1.28.0): the group he trades ({ accountType }), or absent
+ * for one account: then each hero's label adds its tier fit warning for the group's Type (listed all the same).
+ */
+function pickerRows(status, mode, sim, group) {
   const rows = status && Array.isArray(status.builds) ? status.builds : [];
   const heroesOnly = mode !== 'shadow' || sim !== true;
-  return rows.filter(r => r && typeof r.build === 'string' && (r.hero || (!heroesOnly && r.shadowOk))).map(r => ({
-    build: r.build, hero: r.hero || null, stamp: str(r.stamp),
-    label: r.hero ? r.hero + ' (' + r.build + ')' : r.build + ' (Shadow only)',
-    title: (r.hero ? 'Hero ' + r.hero + ': ' : 'Not a hero, Shadow on Sim only: ') + r.build + (r.stamp ? ' ' + r.stamp : '') +
-      (isNum(r.trades) ? ', ' + r.trades + ' trades' : '') + (isNum(r.meanR) ? ', mean R ' + r.meanR : '') + (r.here === false ? ', fetched from The Desk on On' : ''),
-  }));
+  return rows.filter(r => r && typeof r.build === 'string' && (r.hero || (!heroesOnly && r.shadowOk))).map(r => {
+    const fit = group && r.hero ? tierFit(tierOf(r), group.accountType) : { warn: '', note: '' };
+    return {
+      build: r.build, hero: r.hero || null, stamp: str(r.stamp), warn: fit.warn,
+      label: (r.hero ? r.hero + ' (' + r.build + ')' : r.build + ' (Shadow only)') + (fit.warn ? ', ' + fit.warn : ''),
+      title: (r.hero ? 'Hero ' + r.hero + ': ' : 'Not a hero, Shadow on Sim only: ') + r.build + (r.stamp ? ' ' + r.stamp : '') +
+        (isNum(r.trades) ? ', ' + r.trades + ' trades' : '') + (isNum(r.meanR) ? ', mean R ' + r.meanR : '') + (r.here === false ? ', fetched from The Desk on On' : '') +
+        (group && r.hero ? '. ' + tierChip(r).title + (fit.warn ? '. ' + fit.warn : fit.note ? '. ' + fit.note : '') : ''),
+    };
+  });
+}
+/**
+ * The build the picker shows (piece 3): the one picked here, else the one he runs, else the default hero of the group he trades
+ * (when the picker offers it), else the helper's last build, else the first row; '' with no rows. He can always pick another.
+ */
+function preselect(rows, picked, h, groupHero) {
+  const has = b => !!b && (rows || []).some(r => r.build === b);
+  for (const b of [picked, h && h.runningBuild, groupHero, h && h.build]) if (has(b)) return b;
+  return rows && rows[0] ? rows[0].build : '';
 }
 
 /** Why the picker is short, or '': the heroes-only rule in force, or no bar set yet. */
@@ -189,6 +256,46 @@ function flatOffStep(job, a, now, sent) {
   return { action: '', job: j, line: 'Turning him off...' };
 }
 
+/* ---------------- Assign hero (the heroes-on-duty board, SPEC CE-1) */
+const ASSIGN_WAIT_MS = 10000;
+/**
+ * A free slot for Assign hero: an agent id ChartBridge knows that is on None and Off (the helper says it is not on and runs
+ * nothing): { agent } or { error }. agents: every `agent` message; status/reach: the helper's GET /status. ChartBridge never
+ * writes config.txt: with no free slot he adds an agent id there himself.
+ */
+function freeSlot(agents, status, reach) {
+  if (reach !== 'ok' || !status || !status.agents) return { error: 'The PC helper is not answering: an agent\'s Off cannot be checked, so nothing was sent.' };
+  for (const a of Array.isArray(agents) ? agents : []) {
+    if (!a || typeof a.agent !== 'string') continue;
+    const h = status.agents[a.agent], none = !(a.group && a.group.id) && !(typeof a.account === 'string' && a.account);
+    if (h && !h.on && !h.running && none && !a.connected) return { agent: a.agent };
+  }
+  return { error: 'No free agent (an agent id on None and Off): add an agent id to config.txt (agents = ...); ChartBridge never writes config.txt.' };
+}
+/**
+ * Assign hero pressed for group g ({ id, name, hero, members }): { agent, build, need } or { error }. need 'pick' when the group
+ * has no default hero the helper offers (he picks a build, from rows). rows: pickerRows for Shadow on the group.
+ */
+function assignStart(g, agents, status, reach, rows) {
+  if (!g || typeof g.id !== 'string') return { error: 'No such group.' };
+  if (!Array.isArray(g.members) || !g.members.length) return { error: 'Group ' + g.name + ' has no accounts: put accounts in it on the Accounts tab first.' };
+  const slot = freeSlot(agents, status, reach);
+  if (slot.error) return slot;
+  const def = g.hero && (rows || []).some(r => r.build === g.hero) ? g.hero : '';
+  return { agent: slot.agent, build: def, need: def ? '' : 'pick' };
+}
+/**
+ * An Assign under way ({ agent, group, build, until }), at each `agent` message and each second: { action, line }. action: ''
+ * (wait), 'on' (ChartBridge put him on the group: POST /on now), 'giveup' (not on the group in time: nothing started).
+ */
+function assignStep(job, a, now) {
+  if (!job) return { action: '', line: '' };
+  const x = a || {};
+  if (x.group && x.group.id === job.group) return { action: 'on', line: 'On ' + job.groupName + ': starting ' + job.build + ' in Shadow...' };
+  if (now > job.until) return { action: 'giveup', line: 'ChartBridge did not put agent ' + job.agent + ' on ' + job.groupName + ' within ' + ASSIGN_WAIT_MS / 1000 + ' s: nothing was started.' };
+  return { action: '', line: 'Asking ChartBridge to put agent ' + job.agent + ' on ' + job.groupName + '...' };
+}
+
 /** The header and details (DECISION v): { name, build } where name is the hello's name (a hero's name, or the build id of
  *  a build that is not a hero) and build the build id and stamp for the details row. */
 function names(a) {
@@ -243,5 +350,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
 });

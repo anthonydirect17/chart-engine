@@ -116,6 +116,7 @@ public static class GroupsHarness
             ReviewFixes();   // the order-path review of #48, items 1 to 6
             LeftoverExits(); // Q-EXIT (b), Anthony 2026-10-15: an exit left behind when a position goes flat is cancelled
             Consistency();   // CON (a), Anthony 2026-10-15: the group's consistency percent, informational
+            TypeAndHero();   // 0.6.1 (SPEC CE-1): each group's Type and default hero, shapes only
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally
@@ -207,10 +208,11 @@ public static class GroupsHarness
             Check(Rejection().Contains(x[1]) && (x[1].StartsWith("unknown key") || Rejection().Contains("\"cid\":\"s\"")) && !File.Exists(Path.Combine(folder, "groups.txt")), "groupSave refused: " + x[1] + " (" + Rejection() + ")");
         }
         Clear(); G("groupSave", Save("", "Lucid", "true", "1000", "2000", "eod", "3000", "50000", "50100"));
-        Check(Rejection() == "" && Last("groups").Contains("{\"id\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":null,\"members\":[],\"side\":null,\"holders\":[]}"),
+        Check(Rejection() == "" && Last("groups").Contains("{\"id\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":null,\"accountType\":null,\"hero\":null,\"members\":[],\"side\":null,\"holders\":[]}"),
               "groupSave: g1 made, the page told at once: " + Last("groups"));
         string[] lines = FileText().Split('\n');
-        Check(lines[0] == ChartBridgeGroups.Header && lines[1].StartsWith("# ") && lines[2] == "group\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t50100\t-", "groups.txt: two # lines, then the group line: " + FileText().Replace("\t", "<TAB>"));
+        Check(lines[0] == ChartBridgeGroups.Header && lines[1].StartsWith("# ") && lines[2] == "group\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t50100\t-\t-\t-",   // 0.6.1: then type and hero, - for not set and none
+              "groups.txt: two # lines, then the group line: " + FileText().Replace("\t", "<TAB>"));
         Clear(); G("groupSave", Save("", "LUCID", "true", "0", "2500", "intraday", "0", "50000", "0"));
         Check(Rejection().Contains("a group named LUCID is there already"), "a name twice (any case): refused");
         Clear(); G("groupSave", Save("", "Apex", "true", "0", "2500", "static", "0", "50000", "0"));
@@ -785,7 +787,7 @@ public static class GroupsHarness
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Review", "true", "0", "2000", "eod", "0", "50000", "0").Replace("}", ",\"consistency\":101}"));
         Check(Rejection().Contains("consistency must be a percent from 0 (none) to 100"), "CON: 101 percent refused");
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Review", "true", "0", "2000", "eod", "0", "50000", "0").Replace("}", ",\"consistency\":40}"));
-        Check(Rejection() == "" && FileText().Contains("group\tg1\tReview\ton\t-\t2000\teod\t-\t50000\t-\t40\n"), "CON: saved as the 11th field: " + FileText().Replace("\t", "<TAB>"));
+        Check(Rejection() == "" && FileText().Contains("group\tg1\tReview\ton\t-\t2000\teod\t-\t50000\t-\t40\t-\t-\n"), "CON: saved as the 11th field: " + FileText().Replace("\t", "<TAB>"));
         Check(Last("groups").Contains("\"lockAt\":null,\"consistency\":40,"), "CON: in the groups message");
         Check(State("SIM-A").Contains("\"lockAt\":0,\"consistency\":40}"), "CON: in accountState.rules (0 none): " + State("SIM-A"));
         G("accountLimits", "{\"type\":\"accountLimits\",\"cid\":\"l\",\"account\":\"SIM-D\",\"floor\":45000,\"dailyLoss\":0}");
@@ -796,7 +798,74 @@ public static class GroupsHarness
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Check(ChartBridgeGroups.GroupsJson().Contains("\"name\":\"Old\"") && ChartBridgeGroups.GroupsJson().Contains("\"consistency\":null"), "CON: a group line with 10 fields reads, consistency none");
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Old", "true", "0", "2000", "eod", "0", "50000", "0"));
-        Check(FileText().Contains("group\tg1\tOld\ton\t-\t2000\teod\t-\t50000\t-\t-\n"), "CON: groupSave without it: none");
+        Check(FileText().Contains("group\tg1\tOld\ton\t-\t2000\teod\t-\t50000\t-\t-\t-\t-\n"), "CON: groupSave without it: none (0.6.1: then type and hero, not set and none)");
+    }
+
+    // ------------------------------------------------------------ 0.6.1 (SPEC CE-1, Anthony 2026-10-15): a group's Type and default hero
+    // Shown on the page only: ChartBridge checks the shapes (eval, funded or -; a build name of 1 to 64 safe characters or -) and
+    // saves them as the 12th and 13th fields; it never knows which hero trades a group. Absent in a groupSave: kept as they are.
+    static void TypeAndHero()
+    {
+        string p = Path.Combine(folder, "groups.txt");
+        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-\nmember\tSIM-A\tg1\n");   // 11 fields: written by 0.6.0
+        ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        string j0 = ChartBridgeGroups.GroupsJson();
+        Check(j0.Contains("\"consistency\":null,\"accountType\":null,\"hero\":null,\"members\":[\"SIM-A\"]"), "TH: a 0.6.0 line (11 fields) reads as type not set and no hero: " + j0);
+        string save = Save(",\"group\":\"g1\"", "Lucid", "true", "1000", "2000", "eod", "3000", "50000", "0");
+        Clear(); G("groupSave", save.Replace("}", ",\"accountType\":\"funded\",\"hero\":\"sample-build-1\"}"));
+        Check(Rejection() == "" && FileText().Contains("group\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-\tfunded\tsample-build-1\n"), "TH: saved as the 12th and 13th fields: " + FileText().Replace("\t", "<TAB>"));
+        Check(Last("groups").Contains("\"consistency\":null,\"accountType\":\"funded\",\"hero\":\"sample-build-1\",\"members\":[\"SIM-A\"]"), "TH: in the groups message: " + Last("groups"));
+        Check(Logged("type funded, hero sample-build-1"), "TH: the Output window says them");
+        ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"accountType\":\"funded\",\"hero\":\"sample-build-1\""), "TH: round trip: read back after a start");
+        Clear(); G("groupSave", save);
+        Check(Rejection() == "" && FileText().Contains("\t-\t-\tfunded\tsample-build-1\n"), "TH: a save without them (an older page's, the No hedging switch) keeps them");
+        Clear(); G("groupSave", save.Replace("}", ",\"accountType\":\"eval\"}"));
+        Check(Rejection() == "" && FileText().Contains("\teval\tsample-build-1\n"), "TH: the type alone changes, the hero stays");
+        string[][] bad = {
+            new[] { ",\"accountType\":\"evals\"", "accountType must be eval, funded or - (not set)" },
+            new[] { ",\"accountType\":1", "accountType must be eval, funded or - (not set)" },
+            new[] { ",\"accountType\":null", "accountType must be eval, funded or - (not set)" },
+            new[] { ",\"hero\":\"\"", "hero must be a build name" },
+            new[] { ",\"hero\":\"two words\"", "hero must be a build name" },
+            new[] { ",\"hero\":\"-lead\"", "hero must be a build name" },
+            new[] { ",\"hero\":\"" + new string('a', 65) + "\"", "hero must be a build name" },
+            new[] { ",\"hero\":\"a/b\"", "hero must be a build name" },
+            new[] { ",\"hero\":7", "hero must be a build name" },
+        };
+        string before = FileText();
+        foreach (string[] x in bad)
+        {
+            Clear(); G("groupSave", save.Replace("}", x[0] + "}"));
+            Check(Rejection().Contains(x[1]) && Rejection().Contains("\"cid\":\"s\"") && FileText() == before, "TH: refused (" + x[0].Substring(1) + "): " + x[1] + ", nothing saved");
+        }
+        Clear(); G("groupSave", save.Replace("}", ",\"hero\":\"" + new string('b', 64) + "\"}"));
+        Check(Rejection() == "" && FileText().Contains("\t" + new string('b', 64) + "\n"), "TH: a build name of 64 characters is taken");
+        Clear(); G("groupSave", save.Replace("}", ",\"accountType\":\"-\",\"hero\":\"-\"}"));
+        Check(Rejection() == "" && FileText().Contains("\t50000\t-\t-\t-\t-\n") && Last("groups").Contains("\"accountType\":null,\"hero\":null"), "TH: - and - clear them: not set and none");
+        Clear(); G("groupSave", Save("", "Apex", "true", "0", "2500", "static", "0", "50000", "0").Replace("}", ",\"accountType\":\"eval\",\"hero\":\"sample.build_2\"}"));
+        Check(Rejection() == "" && FileText().Contains("group\tg2\tApex\ton\t-\t2500\tstatic\t-\t50000\t-\t-\teval\tsample.build_2\n"), "TH: a new group with both: " + FileText().Replace("\t", "<TAB>"));
+        Clear(); G("groupSave", Save("", "Topstep", "true", "0", "2000", "eod", "0", "50000", "0"));
+        Check(Rejection() == "" && FileText().Contains("group\tg3\tTopstep\ton\t-\t2000\teod\t-\t50000\t-\t-\t-\t-\n"), "TH: a new group without them: not set and none");
+        // a later ChartBridge's fields after the hero are kept as read
+        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-\tfunded\tsample-build-1\tlater\tmore\nmember\tSIM-A\tg1\n");
+        ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        Clear(); G("groupSave", save);
+        Check(Rejection() == "" && FileText().Contains("\tfunded\tsample-build-1\tlater\tmore\n"), "TH: fields after the hero (a later ChartBridge's) are kept: " + FileText().Replace("\t", "<TAB>"));
+        // a type or hero ChartBridge cannot read makes the file unreadable (never rewritten), as every other field
+        foreach (string broken in new[] { "\tfunded\tsample-build-1", "\tlive\t-", "\teval\ttwo words" })
+        {
+            string text = ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-" + (broken == "\tfunded\tsample-build-1" ? "\tfunded\tsample build" : broken) + "\n";
+            File.WriteAllText(p, text);
+            Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+            Check(ChartBridgeGroups.GroupsJson().Contains("\"list\":[],\"error\":\"groups.txt could not be read") && ChartBridgeGroups.GroupsJson().Contains("is not a group line ("), "TH: a bad type or hero (" + text.Split('\n')[2].Replace("\t", " ") + "): unreadable, with why: " + ChartBridgeGroups.GroupsJson());
+            Clear(); G("groupSave", save);
+            Check(File.ReadAllText(p) == text, "TH: unreadable: never rewritten");
+        }
+        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-\tfunded\tsample-build-1\nmember\tSIM-A\tg1\n");
+        ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        Flat();
+        Check(ChartBridgeGroups.EntryCheck("page", simA, "MNQ", true, 1, true, false) == null && ChartBridgeGroups.GroupOf("SIM-A") == "g1", "TH: a type and a hero change nothing in the order path (an entry on a member passes as before)");
     }
 
     // ------------------------------------------------------------ an unreadable groups.txt: every entry refused, never rewritten

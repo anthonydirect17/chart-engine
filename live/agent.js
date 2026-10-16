@@ -28,6 +28,11 @@
  *     system's reduced motion stop both, and the glow stays, still. The ChartMotion kit is not used here.
  *   - Keys: no keydown handler on the document. Escape closes the drawer only from inside it, and restores a maximized chart
  *     only from inside the chart's panel; the trading hotkeys work as everywhere (a stream row is a button, not a box).
+ *   - The heroes-on-duty board (chart 1.28.0, SPEC CE-1 piece 2; the strip's Board button, kept in this browser): a row per
+ *     agent slot that is on or has an account or a group (AgentCore.boardRows), its own Kill (on in one click, as the Kill
+ *     switch), KILL ALL AGENTS (agentKill on to every agent, one click), and a NO HERO row per group no agent trades with
+ *     Assign hero: a free slot (an agent id on None and Off) gets agentAccount {group} (ChartBridge checks it; a LIVE member is
+ *     asked once in the page), then the helper's POST /on with the group's default hero, in Shadow. Nothing else is new.
  *   - His figures (Layout 5): Session R, the R curve and open R only from his own fills and each plan's riskDollars (the plan
  *     his entry came from, AgentCore.entryRisk); heat only at his own working stop; what is not known says "not reported".
  */
@@ -44,7 +49,7 @@ const attr = (el, k, v) => { if (!el) return; const s = v === null || v === unde
 const tog = (el, cls, on) => { if (el && el.classList.contains(cls) !== !!on) el.classList.toggle(cls, !!on); };
 const setHtml = (el, html) => { if (el && el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; } };
 const TF_NAMES = { s15: '15 sec', s30: '30 sec', m1: '1 min', m5: '5 min', m15: '15 min' };
-const KEYS = { chosen: 'live-agent-chosen-v1', chart: 'live-agent-chart-v1', fills: 'live-agent-fills-v1', feed: 'live-agent-feed-v1', risk: 'live-agent-risk-v1' };   // the Motion switch: AgentCore.MOTION_KEY
+const KEYS = { board: 'live-agent-board-v1', chosen: 'live-agent-chosen-v1', chart: 'live-agent-chart-v1', fills: 'live-agent-fills-v1', feed: 'live-agent-feed-v1', risk: 'live-agent-risk-v1' };   // the Motion switch: AgentCore.MOTION_KEY
 const FILTERS = [['all', 'All'], ['plans', 'Plans'], ['notes', 'Notes'], ['thinking', 'Thinking'], ['lesson', 'Lessons']];
 let drawerSeq = 0;
 /* a panel the light may circle: its light, drawn only while the panel is lit: the line (four 3 px strips along the border) and
@@ -71,7 +76,12 @@ function create(o) {
     chart: null, chartRoot: '', chartTf: 'm1', contract: '',
     motion: AC.motionPref(storage), drawer: '', exits: new Map(), lightSig: '', lightColor: '', lightSlot: 0,
     max: false,                                   // Layout 5: the chart maximized over the centre column (never kept: each open starts with the grid)
+    board: readJson(KEYS.board) === true,         // 1.28.0: the heroes-on-duty board in place of the desk (kept in this browser)
   };
+  /* 1.28.0: Assign hero (the board): B.pick, a build to pick for a group with no default hero ({ gid, agent }); B.ask, the one
+     LIVE question ({ gid, agent, build, msg, text }); B.job, under way ({ agent, group, groupName, build, until }); B.line, the
+     board's last word */
+  const B = { pick: null, ask: null, job: null, line: '', lineAt: 0 };
   /* On/Off (live/agent-helper.js): H.ask, the open "Flatten and turn him off?" for one agent ({ agent, text }), closed when
      another agent is shown (choose); H.job, a Flatten-and-off under way for one agent (Shadow, Flatten, Off), its line in
      H.lines[agent] until it ends (a give-up's until the next On or Off for that agent) */
@@ -109,6 +119,15 @@ function create(o) {
         '<div class="ag-others" data-k="others" data-where="off" data-parity="O04" aria-label="Proposals open elsewhere"></div></div></div>' +
       /* narrower than 1100 px: ChartBridge's line and the notices, pinned at the top in a band of their own (agent.css) */
       '<div class="ag-tray" data-k="tray" data-parity="N04" aria-label="ChartBridge and notices"></div>' +
+      /* 1.28.0 (SPEC CE-1 piece 2): the heroes-on-duty board, in place of the desk while it is open */
+      '<section class="ag-board" data-k="board" data-no-motion aria-label="Heroes on duty" hidden>' +
+        '<div class="ag-bhead"><h2 class="ag-btitle">Heroes on duty</h2><span class="ag-bnote">One hero per group: one brain, every account of the group. Every start is Shadow.</span><span class="ag-fill"></span>' +
+          '<button type="button" class="ag-btn" data-act="boardClose" title="Back to the agent shown">Desk</button>' +
+          '<button type="button" class="ag-bkillall" data-act="killAll" title="The kill switch on for every agent, in one click: ChartBridge cancels their unfilled entries and places nothing more for them; a position keeps its stop and target">Kill all agents</button></div>' +
+        '<p class="ag-why ag-bline" data-k="bLine" role="status"></p>' +
+        '<div class="ag-bgrid ag-bcols" aria-hidden="true"><span>Hero</span><span>Tier</span><span>Group and accounts</span><span>Mode</span><span>Position</span><span>Today</span><span>Room left</span><span class="r">Control</span></div>' +
+        '<div class="ag-brows" data-k="bRows" role="list"></div>' +
+      '</section>' +
       '<div class="ag-main" data-k="main" hidden>' +
       /* the strip: who (his disc and name only: DECISION 2026-10-09 v), how it is, what it holds; one line of a fixed height */
       '<header class="ag-strip ag-panel" data-k="strip" data-parity="glow" data-no-motion>' +
@@ -126,6 +145,7 @@ function create(o) {
         '<label class="ag-pick" data-k="pickWrap" data-parity="ST12" hidden><span class="ag-lbl" data-k="pickN" data-parity="ST12-n">Agents</span><select class="ag-sel" data-k="pick" data-parity="ST12-pick" aria-label="Agent shown"></select></label>' +
         '<span class="ag-motion" data-parity="ST13" role="group" aria-label="Motion of the light" title="The light around the panels and the grid: Full moves them, Off keeps them still (kept in this browser). Your system\'s reduced motion keeps them still too."><span class="ag-lbl">Motion</span>' +
           '<button type="button" data-motion="full" data-parity="ST13-full" aria-pressed="true">Full</button><button type="button" data-motion="off" data-parity="ST13-off" aria-pressed="false">Off</button></span>' +
+        '<button type="button" class="ws-btn ag-boardbtn" data-act="board" title="Heroes on duty: every agent slot, every group, Kill all agents">Board</button>' +
         (popout ? '' : '<button type="button" class="ws-btn ag-popbtn" data-act="popout" data-parity="ST14" title="Open the Agent tab in its own window (for a third monitor)">Pop out</button>') +
       '</header>' +
       /* the newest word of each step, still (the grid's words in one line); empty steps say nothing */
@@ -266,8 +286,8 @@ function create(o) {
       case 'bot': S.bot = m; return;
       case 'botProposal': botProps.update(m); renderOthers(); return;   // counted under the proposal while the tab is shown
       case 'copier': S.copier = m; return;
-      case 'groups': S.groups = m; renderPanel(); return;   // 1.27.0: the picker's groups (ChartBridge 0.6.0)
-      case 'agent': onAgent(m); if (H.job && m.agent === H.job.agent) jobStep(); return;
+      case 'groups': S.groups = m; renderPanel(); return;   // 1.27.0: the picker's groups (ChartBridge 0.6.0); 1.28.0: the board's too (renderPanel draws it)
+      case 'agent': onAgent(m); if (H.job && m.agent === H.job.agent) jobStep(); if (B.job && m.agent === B.job.agent) assignTick(); return;
       case 'agentProposal': onProposal(m); return;
       case 'agentPlan': if (feed.plan(m)) { firePlan(m); renderFeed(); renderStrip(); renderLive(); } return;
       case 'agentNote': if (feed.note(m)) { renderFeed(); renderLive(); } return;
@@ -289,6 +309,8 @@ function create(o) {
     if (want !== S.chosen) choose(want, true);
     if (r.prev) for (const n of AC.noticesFrom(r.prev, r.next, (p, root) => fmtPx(p, root))) notice(n);
     if (r.prev && (r.prev.account !== m.account)) renderTrips();
+    const gid = x => (x && x.group && x.group.id) || '';
+    if (r.prev && gid(r.prev) !== gid(m)) delete H.pick[m.agent];   // 1.28.0: a new group: its default hero is preselected again
     /* a flat exit this window saw: the light shows how it went, then goes back to the tracker */
     const qa = r.prev && r.prev.position && isNum(r.prev.position.qty) ? r.prev.position.qty : 0, qb = m.position && isNum(m.position.qty) ? m.position.qty : 0;
     if (qa && !qb) {
@@ -639,7 +661,8 @@ function create(o) {
       renderLive();
     } else if (x.kind === 'rules') rulesWhy(why, 'refused');
     else if (x.kind === 'account') put(q('[data-k="acctWhy"]'), 'textContent', why);
-    else if (x.kind === 'mode' || x.kind === 'kill') modeWhy(why);
+    else if (x.kind === 'mode' || x.kind === 'kill') { modeWhy(why); if (S.board) boardSay(why); }
+    else if (x.kind === 'assign') { if (B.job && B.job.cid === m.cid) B.job = null; boardSay(why + ' Nothing was started.'); }
     else notice({ kind: 'refused', level: 'amber', text: why });
   }
   function onStatus(m) {
@@ -674,10 +697,10 @@ function create(o) {
       attr(tabBtn, 'title', off ? 'Agents: ' + AC.offText(offCtx()) : 'Agent tab: ' + agents.size() + (agents.size() === 1 ? ' agent' : ' agents'));
     }
     if (view) {
-      put(q('[data-k="off"]'), 'hidden', !off); put(q('[data-k="main"]'), 'hidden', off);
+      put(q('[data-k="off"]'), 'hidden', !off); put(q('[data-k="main"]'), 'hidden', off || S.board); put(q('[data-k="board"]'), 'hidden', off || !S.board);
       put(q('[data-k="offText"]'), 'textContent', AC.offText(offCtx()));
       if (off) unmountChart(); else if (S.shown) mountChart();
-      if (off && GRID) GRID.set({ shown: false });
+      if (GRID) GRID.set({ shown: !off && S.shown && !S.board });   // 1.28.0: the board in place of the desk: the grid's loop rests
     }
     placeCards(); placeNotes();
     renderStrip(); renderPanel(); renderFeed(); renderChartLines(); renderLive();
@@ -713,6 +736,7 @@ function create(o) {
     put(q('[data-k="last"]'), 'textContent', m.last); attr(q('[data-k="last"]'), 'title', m.last);   // one line in the column, the whole of it here
   }
   function renderPanel() {
+    renderBoard();                                // 1.28.0: the board follows the same messages (accounts, groups, the helper)
     if (!view) return;
     const a = cur(); if (!a) return;
     const acc = AC.agentAccount(a), accWord = acc.group ? acc.label : acc.name;   // 1.27.0: a group: Auto needs one seat tradable
@@ -775,6 +799,8 @@ function create(o) {
      page's PIN unlock (AgentHelper). It never sends an order; Flatten-and-off is this page's own Flatten (o.flatten), then Off */
   const HC = AH && typeof fetch === 'function' ? AH.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (typeof o.headers === 'function' ? o.headers() : {}) }) : null;
   function helperOf(id) { return H.status && H.status.agents ? H.status.agents[id] || null : null; }
+  /* the group he trades as the groups message has it (its Type and default hero), or null */
+  function groupOf(a) { const id = a && a.group && a.group.id; return id && S.groups && Array.isArray(S.groups.list) ? S.groups.list.find(g => g && g.id === id) || null : null; }
   async function pollHelper() {
     if (!HC || !S.shown) return;
     const r = await HC.status();
@@ -793,8 +819,10 @@ function create(o) {
     put(sec, 'hidden', !HC);
     if (!HC) return;
     const h = helperOf(a.agent), reach = H.reach === 'ok' && !h ? 'none' : H.reach, mine = H.job && H.job.agent === a.agent;
-    const rows = AH.pickerRows(H.status, a.mode, a.sim), sel = q('[data-k="hPick"]');
-    const want = H.pick[a.agent] || (h && (h.runningBuild || h.build)) || (rows[0] && rows[0].build) || '';
+    /* 1.28.0 (SPEC CE-1 piece 3): on a group, every hero listed with its tier fit for the group's Type, and the group's default
+       hero preselected (the picker stays: he can pick another) */
+    const grp = groupOf(a), rows = AH.pickerRows(H.status, a.mode, a.sim, grp ? { accountType: grp.accountType || '' } : undefined), sel = q('[data-k="hPick"]');
+    const want = AH.preselect(rows, H.pick[a.agent], h, grp && grp.hero);
     const opts = rows.map(r => '<option value="' + esc(r.build) + '" title="' + esc(r.title) + '">' + esc(r.label) + '</option>').join('') ||
       '<option value="">' + (H.reach === 'ok' ? 'No build to offer' : '-') + '</option>';
     if (sel.dataset.html !== opts) { sel.dataset.html = opts; sel.innerHTML = opts; }
@@ -802,7 +830,8 @@ function create(o) {
     const running = !!(h && h.running);
     put(sel, 'disabled', !h || running || H.busy || mine);
     attr(sel, 'title', running ? 'Turn him Off to change the build' : null);
-    put(q('[data-k="hNote"]'), 'textContent', H.reach === 'ok' ? AH.pickerNote(H.status, a.mode, a.sim) : '');
+    const selRow = rows.find(r => r.build === sel.value);
+    put(q('[data-k="hNote"]'), 'textContent', H.reach === 'ok' ? (selRow && selRow.warn) || AH.pickerNote(H.status, a.mode, a.sim) : '');
     const on = !!(h && h.on), asking = !!(H.ask && H.ask.agent === a.agent);
     for (const b of q('[data-k="hBtns"]').children) {
       const isOn = b.dataset.onoff === 'on';
@@ -899,6 +928,100 @@ function create(o) {
     const x = await HC.settings(r.body);
     put(q('[data-k="hSetWhy"]'), 'textContent', x.reach === 'ok' ? 'Set. A new cap takes effect at his next start.' : x.body && x.body.error ? x.body.error : AH.stateText(null, x.reach));
     H.setFilled = '';
+    await pollHelper();
+  }
+
+  /* ---------------- the heroes-on-duty board (chart 1.28.0, SPEC CE-1 piece 2): AgentCore.boardRows draws from ChartBridge's
+     agent, groups and accounts messages and the PC helper's GET /status; nothing here moves (R3) */
+  function boardSay(t) { B.line = t || ''; B.lineAt = Date.now(); renderBoard(); }
+  function boardModel() { return AC.boardRows({ agents: agents.list(), groups: S.groups, accounts: S.accounts, status: H.status, reach: H.reach, rOf: a => rNow(a).total, AH }); }
+  function renderBoard() {
+    if (!view || !S.board || !agents.size()) return;
+    const M = boardModel(), can = S.signedIn;
+    const heroHtml = r => '<div class="ag-bgrid ag-brow' + (r.killed ? ' ag-bkilled' : '') + '" role="listitem" data-brow="hero" data-agent="' + esc(r.agent) + '">' +
+      '<div class="ag-bcell"><span class="ag-bname">' + esc(r.name) + '</span><span class="ag-bsub mono">' + esc(r.build || 'no build') + ' · ' + esc(r.agent) + '</span></div>' +
+      '<div class="ag-bcell"><span class="ag-tier tier-' + esc(r.chip.tone) + '" title="' + esc(r.chip.title) + '">' + esc(r.chip.text) + '</span>' + (r.fit.warn ? '<span class="ag-bwarn">' + esc(r.fit.warn) + '</span>' : r.fit.note && r.kind === 'group' ? '<span class="ag-bsub">' + esc(r.fit.note) + '</span>' : '') + '</div>' +
+      '<div class="ag-bcell"><span class="ag-bwhere">' + esc(r.where) + '</span><span class="ag-bsub">' + esc(r.sub) + '</span></div>' +
+      '<div class="ag-bcell"><span class="ag-chip ag-mode m-' + esc(r.mode) + '">' + esc(r.modeName) + '</span>' + (r.killed ? '<span class="ag-bwarn">kill switch on</span>' : r.standDown ? '<span class="ag-bwarn">stood down</span>' : !r.connected ? '<span class="ag-bsub">not connected</span>' : '') + '</div>' +
+      '<div class="ag-bcell mono ag-bbig ' + r.posTone + '">' + esc(r.position) + '</div>' +
+      '<div class="ag-bcell mono ag-bbig ' + (r.r > 0 ? 'pos' : r.r < 0 ? 'neg' : '') + '" title="His closed trades today in R, from each plan\'s own risk (this browser\'s record of his fills)">' + esc(r.rText) + '</div>' +
+      '<div class="ag-bcell">' + (r.room.pct !== null ? '<div class="ag-meter2"><i style="width:' + r.room.pct + '%"></i></div>' : '') + '<span class="ag-bsub mono">' + esc(r.room.text) + '</span></div>' +
+      '<div class="ag-bcell ag-bctl"><button type="button" class="ag-btn" data-act="bOpen" data-agent="' + esc(r.agent) + '" title="His desk">Open</button>' +
+        '<button type="button" class="ag-bkill" data-act="bKill" data-agent="' + esc(r.agent) + '"' + (r.killed || !can ? ' disabled' : '') + ' title="' + (r.killed ? 'His kill switch is on: release it on his desk (two clicks)' : 'His kill switch on, in one click') + '">' + (r.killed ? 'Killed' : 'Kill') + '</button></div></div>';
+    const pickHtml = g => {
+      const rows = assignRows(g);
+      return '<div class="ag-bpick"><select class="ag-sel" data-k="bPickSel" aria-label="The hero for ' + esc(g.name) + '">' + rows.map(r => '<option value="' + esc(r.build) + '">' + esc(r.label) + '</option>').join('') + '</select>' +
+        '<button type="button" class="ag-btn primary" data-act="bPickGo" data-gid="' + esc(g.id) + '"' + (rows.length ? '' : ' disabled') + '>Start in Shadow</button><button type="button" class="ag-btn" data-act="bCancel">Cancel</button></div>';
+    };
+    const noHeroHtml = g => '<div class="ag-bgrid ag-brow ag-bnone" role="listitem" data-brow="none" data-gid="' + esc(g.id) + '">' +
+      '<div class="ag-bcell"><span class="ag-bname ag-dim">No hero</span></div><div class="ag-bcell"></div>' +
+      '<div class="ag-bcell"><span class="ag-bwhere">' + esc(g.name) + '</span><span class="ag-bsub">' + esc(g.members.length + (g.members.length === 1 ? ' account' : ' accounts') + (g.members.length ? ': ' + g.members.join(', ') : '')) + ' · ' + (g.accountType === 'eval' ? 'Evals' : g.accountType === 'funded' ? 'Funded' : 'type not set') + '</span></div>' +
+      '<div class="ag-bcell ag-bspan">' + (B.pick && B.pick.gid === g.id ? pickHtml(g) : B.ask && B.ask.gid === g.id ? '<div class="ag-ask" role="alertdialog" aria-label="Trade a LIVE account"><span>' + esc(B.ask.text) + '</span><button type="button" class="ag-btn ag-live-go" data-act="bYes">Continue</button><button type="button" class="ag-btn" data-act="bCancel">Cancel</button></div>'
+        : '<span class="ag-bsub">Pick a hero for this group, or leave it to you and the ticket. Default hero: ' + esc(g.hero ? (g.heroName ? g.heroName + ' (' + g.hero + ')' : g.hero) : 'none (Settings, Account groups)') + '.</span>') + '</div>' +
+      '<div class="ag-bcell ag-bctl"><button type="button" class="ag-btn ag-bassign" data-act="bAssign" data-gid="' + esc(g.id) + '"' + (!can || B.job ? ' disabled' : '') + '>Assign hero</button></div></div>';
+    const html = M.heroes.map(heroHtml).join('') + M.noHero.map(noHeroHtml).join('') || '<p class="ag-empty">No agent is on and no group is made: turn an agent On on his desk, or make a group in Settings.</p>';
+    const box = q('[data-k="bRows"]');
+    if (box.dataset.html !== html) { const keep = box.querySelector('[data-k="bPickSel"]'), v = keep ? keep.value : ''; box.dataset.html = html; box.innerHTML = html; const ns = box.querySelector('[data-k="bPickSel"]'); if (ns && v && [...ns.options].some(o => o.value === v)) ns.value = v; }
+    const kAll = q('[data-act="killAll"]'), live = agents.list().filter(a => !a.killed);
+    put(kAll, 'disabled', !can || !live.length); put(kAll, 'textContent', live.length ? 'Kill all agents' : 'All agents killed');
+    put(q('[data-k="bLine"]'), 'textContent', B.line);
+  }
+  /* the heroes the helper offers for Shadow on group g (every hero, with its tier fit for the group's Type) */
+  function assignRows(g) {
+    const raw = S.groups && Array.isArray(S.groups.list) ? S.groups.list.find(x => x && x.id === g.id) : null;
+    const accs = S.accounts && Array.isArray(S.accounts.list) ? S.accounts.list : [], sim = !!raw && raw.members.length > 0 && raw.members.every(m => (accs.find(x => x && x.name === m) || {}).sim === true);
+    return AH ? AH.pickerRows(H.status, 'shadow', sim, { accountType: (raw && raw.accountType) || '' }).filter(r => r.hero) : [];
+  }
+  function killAll() {
+    const list = agents.list().filter(a => !a.killed);
+    if (!list.length) { boardSay('Every agent\'s kill switch is on already.'); return; }
+    let n = 0;
+    for (const a of list) if (sendAgent(AC.killMsg(a.agent, true), 'kill')) n++;
+    boardSay(n ? 'Kill switch on sent for ' + list.slice(0, n).map(a => AC.agentName(a)).join(', ') + '. Release each on his desk (two clicks).' : 'Not sent: not signed in to ChartBridge.');
+  }
+  function assignPressed(gid) {
+    const raw = S.groups && Array.isArray(S.groups.list) ? S.groups.list.find(x => x && x.id === gid) : null;
+    if (!AH || !HC) { boardSay('This page has no PC helper client: Assign hero needs it.'); return; }
+    if (!raw) { boardSay('That group is not on this ChartBridge any more.'); return; }
+    B.pick = null; B.ask = null;
+    const g = { id: raw.id, name: raw.name, hero: raw.hero || null, members: raw.members || [] };
+    const st = AH.assignStart(g, agents.list(), H.status, H.reach, assignRows(g));
+    if (st.error) { boardSay(st.error); return; }
+    if (st.need === 'pick') { B.pick = { gid, agent: st.agent }; boardSay(g.hero ? 'The default hero ' + g.hero + ' is not on this PC\'s helper: pick a hero for agent ' + st.agent + '.' : 'Group ' + g.name + ' has no default hero: pick one for agent ' + st.agent + '.'); return; }
+    assignGo(gid, st.agent, st.build);
+  }
+  function assignGo(gid, id, build) {
+    const a = agents.get(id), raw = S.groups && S.groups.list ? S.groups.list.find(x => x && x.id === gid) : null;
+    if (!a || !raw || !build) { B.pick = null; boardSay('Nothing was sent: the agent or the group changed.'); return; }
+    const r = AC.accountChange(a, 'group:' + gid, choicesFor(a), Object.assign(ctxNow(a), { askedMode: 'shadow' }));   // every start is Shadow
+    if (r.error) { B.pick = null; boardSay(r.error); return; }
+    if (r.confirm) { B.pick = null; B.ask = { gid, agent: id, build, msg: r.msg, text: r.confirm }; renderBoard(); return; }   // a LIVE member: asked once, in the page
+    assignSend(gid, id, build, r.msg);
+  }
+  let assignTimer = 0;
+  function assignSend(gid, id, build, msg) {
+    B.pick = null; B.ask = null;
+    const raw = S.groups.list.find(x => x && x.id === gid), c = cid();
+    const m = Object.assign({ type: msg.type, cid: c }, msg);
+    if (!S.signedIn || !sendRaw(m)) { boardSay('Not sent: not signed in to ChartBridge.'); return; }
+    S.pending.set(c, { kind: 'assign' }); setTimeout(() => S.pending.delete(c), 15000);
+    B.job = { agent: id, group: gid, groupName: raw ? raw.name : gid, build, until: Date.now() + AH.ASSIGN_WAIT_MS, cid: c };
+    assignTick();
+  }
+  function assignTick() {
+    clearTimeout(assignTimer);
+    const j = B.job; if (!j) return;
+    const r = AH.assignStep(j, agents.get(j.agent), Date.now());
+    if (r.action === 'on') { B.job = null; boardSay(r.line); assignOn(j); return; }
+    if (r.action === 'giveup') { B.job = null; boardSay(r.line); return; }
+    boardSay(r.line);
+    assignTimer = setTimeout(assignTick, 1000);
+  }
+  async function assignOn(j) {
+    const a = agents.get(j.agent);
+    const r = await HC.on(j.agent, j.build, 'shadow', !!(a && a.sim === true));
+    boardSay(r.reach === 'ok' ? 'Agent ' + j.agent + ' is on ' + j.groupName + ' with ' + j.build + ', in Shadow. Auto is one click (and Confirm) on his desk.'
+      : 'Agent ' + j.agent + ' is on ' + j.groupName + ', but the PC helper did not start him: ' + (r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach)) + '. Nothing trades: he is Off.');
     await pollHelper();
   }
 
@@ -1303,6 +1426,19 @@ function create(o) {
     if (row) { openDrawer(row.dataset.row); return; }
     if (mo) { S.motion = AC.setMotionPref(storage, mo.dataset.motion); renderMotion(); return; }
     if (act && act.dataset.act === 'drawerClose') { closeDrawer(); return; }
+    /* 1.28.0: the board */
+    if (act && ['board', 'boardClose', 'killAll', 'bOpen', 'bKill', 'bAssign', 'bPickGo', 'bYes', 'bCancel'].includes(act.dataset.act)) {
+      const k = act.dataset.act;
+      if (k === 'board' || k === 'boardClose') { S.board = k === 'board'; writeJson(KEYS.board, S.board); render(); }
+      else if (k === 'killAll') killAll();
+      else if (k === 'bOpen') { S.board = false; writeJson(KEYS.board, false); choose(act.dataset.agent, true); unmountChart(); render(); }
+      else if (k === 'bKill') { const x = agents.get(act.dataset.agent); if (x && !x.killed) { if (sendAgent(AC.killMsg(x.agent, true), 'kill')) boardSay('Kill switch on sent for ' + AC.agentName(x) + '.'); } }
+      else if (k === 'bAssign') assignPressed(act.dataset.gid);
+      else if (k === 'bPickGo') { const sel = q('[data-k="bPickSel"]'); if (B.pick && sel) assignGo(B.pick.gid, B.pick.agent, sel.value); }
+      else if (k === 'bYes') { if (B.ask) { const x = B.ask; const ag = agents.get(x.agent); if (!ag || !AC.agentAccount(ag).none) { B.ask = null; boardSay('Agent ' + x.agent + ' changed meanwhile: nothing was sent.'); } else assignSend(x.gid, x.agent, x.build, x.msg); } }
+      else if (k === 'bCancel') { B.pick = null; B.ask = null; boardSay('Nothing was sent.'); }
+      return;
+    }
     if (!a) return;
     if (mode && !mode.disabled) {
       const m = mode.dataset.mode;
@@ -1515,9 +1651,11 @@ function create(o) {
       others: otherCounts().map(x => ({ key: x.key, name: x.name, n: x.n })), corner: cornerLine && !cornerLine.hidden ? cornerLine.textContent : '', offText: AC.offText(offCtx()),
       feed: S.chosen ? feed.counts(S.chosen) : { notes: 0, plans: 0 }, light: cur() ? lightNow(cur()) : null, drawer: S.drawer, motion: S.motion, chart: !!S.chart, chartRoot: S.chartRoot, orders: [...S.orders.values()].map(x => ({ id: x.id, by: x.by, role: x.role, root: x.root, planId: x.planId })), trips: trips() }),
     chart: () => (S.chart ? S.chart.chart : null),
+    /** 1.28.0, read only (tests): the board's rows and its line */
+    board: () => Object.assign({ shown: S.board, line: B.line, job: B.job ? Object.assign({}, B.job) : null }, boardModel()),
     /** Layout 5, read only (tests): the grid canvas, the chart maximized, his trades in R, his heat */
     layout5: () => { const a = cur(); return { grid: GRID ? GRID.state() : null, max: S.max, r: a ? rNow(a) : null, heat: a ? AC.heatNow(a, S.orders.values(), pointValue) : null, risks: risksDay().map }; },
-    destroy() { if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (rulesObs) rulesObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
+    destroy() { if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (rulesObs) rulesObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); clearTimeout(assignTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
   };
   return api;
 }

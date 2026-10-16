@@ -1,5 +1,6 @@
-// ChartBridge prop groups and real account state (ChartBridge 0.5.8). Part of the ChartBridge add-on; install it with the
-// other files. See nt8/PROTOCOL.md, "Prop groups and account state (0.5.8)".
+// ChartBridge prop groups and real account state (ChartBridge 0.5.8; 0.6.1: each group's Type and default hero). Part of the
+// ChartBridge add-on; install it with the other files. See nt8/PROTOCOL.md, "Prop groups and account state (0.5.8)" and
+// "A group's Type and default hero (0.6.1)".
 //
 // This file never places, changes or cancels an order itself (no Submit, Change, Cancel or Flatten here; Q-EXIT's cancel of an exit
 // left behind goes through ChartBridgeOrders.GroupCancelLeftover). It holds:
@@ -209,7 +210,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     public static class ChartBridgeGroups
     {
         public const string Header = "# ChartBridge account groups (written by ChartBridge; do not edit)";
-        public const string Header2 = "# group<TAB>id<TAB>name<TAB>on|off<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>target|-<TAB>size<TAB>lockAt|-<TAB>consistency|-, member<TAB>account<TAB>id, personal<TAB>account<TAB>floor|-<TAB>daily|-";
+        public const string Header2 = "# group<TAB>id<TAB>name<TAB>on|off<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>target|-<TAB>size<TAB>lockAt|-<TAB>consistency|-<TAB>eval|funded|-<TAB>hero|-, member<TAB>account<TAB>id, personal<TAB>account<TAB>floor|-<TAB>daily|-";
         public const string MarksHeader = "# ChartBridge account marks (written by ChartBridge; do not edit)";
         public const string MarksHeader2 = "# mark<TAB>account<TAB>peakEod|-<TAB>peakIntraday|-<TAB>dayStartBalance|-<TAB>session<TAB>dayStartAt (UTC ms)|-";
         public const string ReadFailedText = "groups.txt could not be read: every new entry is refused until it can (exits always work)";
@@ -233,7 +234,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool NoHedge;
             public double DailyLoss, Drawdown, Target, Size, LockAt;   // 0: none (DailyLoss, Target, LockAt)
             public double Consistency;   // CON (a), Anthony 2026-10-15: Lucid's consistency percent, 0 none; informational only
-            public string[] Extra = new string[0];                   // fields after lockAt, kept as read (a later ChartBridge's)
+            // 0.6.1 (SPEC CE-1, Anthony 2026-10-15): the account type (eval, funded, or null: not set) and the default hero (a build
+            // name, or null). Shown on the page only: ChartBridge checks their shape, never which hero trades the group.
+            public string AccountType, Hero;
+            public string[] Extra = new string[0];                   // fields after hero, kept as read (a later ChartBridge's)
             public Group Clone() { Group g = (Group)MemberwiseClone(); g.Extra = (string[])Extra.Clone(); return g; }
         }
         private sealed class State
@@ -364,6 +368,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- groups.txt: the whole file or nothing
         private static readonly Regex IdRx = new Regex("^g[1-9][0-9]{0,8}$");
         private static readonly Regex MoneyRx = new Regex("^(?:0|[1-9][0-9]{0,8})(?:\\.[0-9]{1,2})?$");
+        // 0.6.1: a hero's build name, 1 to 64 safe characters (letters, digits, dot, underscore, hyphen; a letter or digit first)
+        public static readonly Regex HeroRx = new Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$");
+        private static bool FileType(string t, out string v) { v = null; if (t == "-") return true; if (t == "eval" || t == "funded") { v = t; return true; } return false; }
+        private static bool FileHero(string t, out string v) { v = null; if (t == "-") return true; if (t != null && HeroRx.IsMatch(t)) { v = t; return true; } return false; }
 
         private static bool FileMoney(string t, bool dashOk, out double v)
         {
@@ -418,7 +426,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     double con = 0;
                     if (p.Length >= 11 && !FilePercent(p[10], out con)) { why = at + " is not a group line (consistency)"; return null; }
                     g.Consistency = con;
-                    g.Extra = p.Skip(11).ToArray();   // a group line of 10 fields (no consistency) reads as none
+                    // 0.6.1: the type and the hero; a line written before them (10 or 11 fields) reads as not set and none
+                    string at2 = null, hr = null;
+                    if (p.Length >= 12 && !FileType(p[11], out at2)) { why = at + " is not a group line (type)"; return null; }
+                    if (p.Length >= 13 && !FileHero(p[12], out hr)) { why = at + " is not a group line (hero)"; return null; }
+                    g.AccountType = p.Length >= 12 ? at2 : null; g.Hero = p.Length >= 13 ? hr : null;
+                    g.Extra = p.Skip(13).ToArray();
                     s.Groups[g.Id] = g;
                     maxId = Math.Max(maxId, int.Parse(g.Id.Substring(1), CultureInfo.InvariantCulture));
                 }
@@ -452,7 +465,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 b.Append("group\t").Append(g.Id).Append('\t').Append(g.Name).Append('\t').Append(g.NoHedge ? "on" : "off").Append('\t').Append(MoneyText(g.DailyLoss)).Append('\t')
                  .Append(MoneyText(g.Drawdown)).Append('\t').Append(g.Type).Append('\t').Append(MoneyText(g.Target)).Append('\t').Append(MoneyText(g.Size)).Append('\t').Append(MoneyText(g.LockAt))
-                 .Append('\t').Append(g.Consistency > 0 ? g.Consistency.ToString("0.##", CultureInfo.InvariantCulture) : "-");
+                 .Append('\t').Append(g.Consistency > 0 ? g.Consistency.ToString("0.##", CultureInfo.InvariantCulture) : "-")
+                 .Append('\t').Append(g.AccountType ?? "-").Append('\t').Append(g.Hero ?? "-");
                 foreach (string x in g.Extra) b.Append('\t').Append(x);
                 b.Append('\n');
             }
@@ -821,6 +835,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"dailyLoss\":").Append(None0(g.DailyLoss)).Append(",\"drawdown\":").Append(None0(g.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(g.Type))
                  .Append(",\"target\":").Append(None0(g.Target)).Append(",\"size\":").Append(None0(g.Size)).Append(",\"lockAt\":").Append(None0(g.LockAt))
                  .Append(",\"consistency\":").Append(None0(g.Consistency))
+                 .Append(",\"accountType\":").Append(g.AccountType == null ? "null" : CbJson.Str(g.AccountType)).Append(",\"hero\":").Append(g.Hero == null ? "null" : CbJson.Str(g.Hero))
                  .Append(",\"members\":[").Append(string.Join(",", members[g.Id].Select(x => CbJson.Str(x)))).Append("]")
                  .Append(",\"side\":").Append(side == null ? "null" : CbJson.Str(side)).Append(",\"holders\":[");
                 for (int k = 0; k < held.Count; k++)
@@ -1098,7 +1113,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- messages from the page
         private static readonly Dictionary<string, string[]> Keys = new Dictionary<string, string[]>
         {
-            { "groupSave", new[] { "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt", "consistency" } },
+            { "groupSave", new[] { "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt", "consistency", "accountType", "hero" } },
             { "groupDelete", new[] { "type", "cid", "group" } },
             { "accountGroup", new[] { "type", "cid", "account", "group", "highClose" } },
             { "accountLimits", new[] { "type", "cid", "account", "floor", "dailyLoss" } },
@@ -1172,6 +1187,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (raw != "0" && !FilePercent(raw, out con)) return "consistency must be a percent from 0 (none) to 100, at most 2 decimals";
             }
             if (lk > 0 && lk <= sz - dd) return "floor stops at must be above the starting floor (" + (sz - dd).ToString("0.##", CultureInfo.InvariantCulture) + ")";
+            // 0.6.1: optional; absent keeps what the group has (a new group: not set and none), so an older page's save never drops them.
+            // The message's own "type" is its kind, so the group's type travels as accountType. Shapes only: ChartBridge does not know heroes
+            string atype = null, hero = null;
+            bool hasType = m.ContainsKey("accountType"), hasHero = m.ContainsKey("hero");
+            if (hasType && !FileType(ChartBridgeV3.Str(m, "accountType"), out atype)) return "accountType must be eval, funded or - (not set)";
+            if (hasHero && !FileHero(ChartBridgeV3.Str(m, "hero"), out hero)) return "hero must be a build name of 1 to 64 letters, digits, dots, underscores or hyphens, or - (none)";
             string said;
             lock (SaveLock)
             {
@@ -1183,6 +1204,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (next.Groups.Values.Any(x => x.Id != g.Id && string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase))) return "a group named " + name + " is there already";
                 string was = id != null ? g.Name : null;
                 g.Name = name; g.NoHedge = noHedge.Value; g.DailyLoss = dl; g.Drawdown = dd; g.Type = type; g.Target = tg; g.Size = sz; g.LockAt = lk; g.Consistency = con;
+                if (hasType) g.AccountType = atype;
+                if (hasHero) g.Hero = hero;
                 if (id == null) { next.Groups[g.Id] = g; next.Next++; }
                 string err = Save(next);
                 if (err != null) return err;
@@ -1197,7 +1220,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Func<double, string> d = v => "$" + v.ToString("#,0.##", CultureInfo.InvariantCulture);
             return "size " + d(g.Size) + ", daily loss " + (g.DailyLoss > 0 ? d(g.DailyLoss) : "none") + ", drawdown " + d(g.Drawdown) + " " + g.Type +
-                   (g.LockAt > 0 ? " (floor stops at " + d(g.LockAt) + ")" : "") + ", target " + (g.Target > 0 ? d(g.Target) : "none") + ", consistency " + (g.Consistency > 0 ? g.Consistency.ToString("0.##", CultureInfo.InvariantCulture) + "%" : "none") + ", no hedging " + (g.NoHedge ? "on" : "off");
+                   (g.LockAt > 0 ? " (floor stops at " + d(g.LockAt) + ")" : "") + ", target " + (g.Target > 0 ? d(g.Target) : "none") + ", consistency " + (g.Consistency > 0 ? g.Consistency.ToString("0.##", CultureInfo.InvariantCulture) + "%" : "none") + ", no hedging " + (g.NoHedge ? "on" : "off") +
+                   ", type " + (g.AccountType ?? "not set") + ", hero " + (g.Hero ?? "none");
         }
 
         private static string GroupDelete(Dictionary<string, string> m)

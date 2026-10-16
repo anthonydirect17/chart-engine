@@ -203,7 +203,7 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-motion button { min-height: 24px; padding: 0 9px; background: transparent; border: 1px solid var(--f-line); color: var(--f-dim); font: 600 10px var(--f-ui); letter-spacing: .14em; text-transform: uppercase; cursor: pointer; }
 .ag-view .ag-motion button + button { margin-left: -1px; }
 .ag-view .ag-motion button[aria-pressed="true"] { color: var(--f-hot); background: rgba(93, 242, 255, .16); border-color: var(--f-c); }
-.ag-view .ag-popbtn { height: 26px; padding: 0 10px; }
+.ag-view .ag-popbtn, .ag-view .ag-boardbtn { height: 26px; padding: 0 10px; }
 @media (max-width: 1700px) { .ag-view .ag-pick .ag-lbl { display: none; } }
 @media (max-width: 1500px) { .ag-view .ag-strip .ag-st-today, .ag-view .ag-motion > .ag-lbl { display: none; } .ag-view .ag-strip { gap: 11px; } }
 /* the SIM or LIVE mark: a purple chip, LIVE in red */
@@ -659,3 +659,53 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
 .ag-view .ag-seats tr.ag-outwhy td { color: var(--ag-warn); font-size: 11px; white-space: normal; padding-top: 0; }
 .ag-view .ag-seats tr.ag-total td { color: var(--ag-text); font-weight: 600; border-bottom: 0; border-top: 1px solid var(--ag-line); }
 .ag-view .ag-seats small { color: var(--ag-dim); }
+
+/* ================================================================ 1.28.0 (SPEC CE-1 piece 2): the heroes-on-duty board
+   In place of the desk while open (the strip's Board button). The Tron kit's own parts (the cut-corner panel line, Orbitron
+   headers, Chakra Petch controls, JetBrains Mono figures); nothing here moves or has a transition (R3). The tier chips keep to
+   cyan, amber and grey: green and red stay for trade sides and P&L (the kill buttons keep the tab's own red). */
+.ag-view .ag-board { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 18px 18px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; }
+.ag-view .ag-board[hidden] { display: none; }
+.ag-view .ag-bhead { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.ag-view .ag-btitle { margin: 0; font: 500 17px/1.2 var(--f-head); letter-spacing: .16em; text-transform: uppercase; color: var(--f-hot); }
+.ag-view .ag-bnote { font: 13px/1.3 var(--f-body); color: var(--f-dim); min-width: 0; }
+.ag-view .ag-bkillall { min-height: 34px; padding: 0 16px; font: 700 11.5px var(--f-head); letter-spacing: .14em; text-transform: uppercase; color: #ff5c7a; background: #2a0f17; border: 1px solid var(--f-rd); cursor: pointer; }
+.ag-view .ag-bkillall:hover { background: rgba(255, 59, 92, .18); }
+.ag-view .ag-bkillall:disabled { opacity: .5; cursor: not-allowed; }
+.ag-view .ag-bline { margin: 0; min-height: 18px; }
+.ag-view .ag-bgrid { display: grid; grid-template-columns: minmax(130px, 1.3fr) minmax(120px, 1fr) minmax(170px, 1.6fr) minmax(96px, .8fr) minmax(96px, .9fr) minmax(86px, .8fr) minmax(150px, 1.5fr) 150px; column-gap: 12px; align-items: center; }
+.ag-view .ag-bcols { padding: 6px 14px; border-bottom: 1px solid var(--f-line2); font: 600 10.5px var(--f-ui); letter-spacing: .14em; text-transform: uppercase; color: var(--f-dim); }
+.ag-view .ag-bcols .r { text-align: right; }
+.ag-view .ag-brows { display: flex; flex-direction: column; gap: 8px; }
+.ag-view .ag-brow { padding: 12px 14px; background: var(--f-panel); border: 1px solid var(--f-line); clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut)); }
+.ag-view .ag-brow.ag-bnone { background: transparent; border-style: dashed; border-color: var(--f-line2); }
+.ag-view .ag-brow.ag-bkilled { border-color: rgba(255, 59, 92, .55); }
+.ag-view .ag-bcell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ag-view .ag-bcell > * { min-width: 0; overflow-wrap: anywhere; }
+.ag-view .ag-bspan { grid-column: span 4; }
+.ag-view .ag-bname { font: 500 14.5px/1.2 var(--f-head); letter-spacing: .06em; color: var(--f-hot); text-transform: uppercase; }
+.ag-view .ag-bname.ag-dim { color: var(--ag-dim); font-size: 13px; }
+.ag-view .ag-bsub { font: 11.5px/1.35 var(--f-body); color: var(--f-dim); }
+.ag-view .ag-bsub.mono { font-family: var(--f-num); font-size: 11px; }
+.ag-view .ag-bwhere { font: 14px/1.2 var(--f-body); color: var(--f-hot); }
+.ag-view .ag-bwarn { font: 11.5px/1.35 var(--f-body); color: var(--ag-warn); }
+.ag-view .ag-bbig { font-size: 13.5px; color: var(--f-soft); }
+.ag-view .ag-bbig.pos { color: var(--f-gr); } .ag-view .ag-bbig.neg { color: var(--f-rd); }
+.ag-view .ag-tier { align-self: flex-start; padding: 3px 8px; font: 600 11px/16px var(--f-ui); letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; border: 1px solid var(--f-line); color: var(--f-dim); }
+.ag-view .ag-tier.tier-top { color: var(--f-c); border-color: rgba(93, 242, 255, .6); }
+.ag-view .ag-tier.tier-ok { color: var(--ag-warn); border-color: rgba(255, 194, 102, .55); }
+.ag-view .ag-tier.tier-no { color: var(--f-dim); border-style: dashed; }
+.ag-view .ag-tier.tier-unknown { color: var(--f-faint); border-color: var(--f-line2); text-transform: none; letter-spacing: .04em; }
+.ag-view .ag-bctl { flex-direction: row; justify-content: flex-end; align-items: center; gap: 6px; }
+.ag-view .ag-bkill { min-height: 32px; padding: 0 14px; font: 600 11px var(--f-head); letter-spacing: .12em; text-transform: uppercase; color: #ff5c7a; background: #2a0f17; border: 1px solid var(--f-rd); cursor: pointer; }
+.ag-view .ag-bkill:disabled { opacity: .5; cursor: not-allowed; }
+.ag-view .ag-bassign { min-height: 32px; color: var(--f-put); border-color: var(--f-pu); background: transparent; }
+.ag-view .ag-bpick { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ag-view .ag-bpick .ag-sel { max-width: 340px; }
+.ag-view .ag-brow .ag-meter2 { width: 100%; }
+@media (max-width: 1100px) {
+  .ag-view .ag-bgrid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); row-gap: 8px; }
+  .ag-view .ag-bcols { display: none; }
+  .ag-view .ag-bspan { grid-column: span 2; }
+  .ag-view .ag-bctl { grid-column: span 2; justify-content: flex-start; }
+}

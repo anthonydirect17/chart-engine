@@ -539,3 +539,7 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .gp-hedge { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; color: var(--ws-text) !important; }
 .gp-hedge input { height: auto !important; margin: 0; accent-color: var(--ws-accent); }
 .gp-hedge span { color: var(--ws-muted); font-size: 11px; }
+/* 1.28.0: the group's Hero on duty: its picker and its tier fit on one line */
+.gp-herorow { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ws-gp .gp-herorow .gp-in { width: 320px; max-width: 60%; flex: none; }
+.gp-herowhy { margin: 0; min-width: 0; }

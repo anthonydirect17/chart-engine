@@ -489,8 +489,8 @@ const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { now: () => Date.now(
   graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ', agents: AGENTS, agentAnyTime: !!flag('agent-any-time'), botAccount: flagValue('bot-account') || null,
   /* 0.5.8: --no-groups is a ChartBridge before 0.5.8 (no groups message); --groups seeds two made-up groups (sample data) */
   groups: !flag('no-groups'), groupsSeed: flag('groups') ? [
-    { name: 'Lucid', size: 50000, drawdown: 2000, drawdownType: 'eod', dailyLoss: 1000, target: 3000, lockAt: 50100, members: ['EVAL-A', 'EVAL-B'], highClose: 51240.5 },
-    { name: 'Apex', size: 50000, drawdown: 2500, drawdownType: 'intraday', target: 3000, members: ['FUNDED-C'] }] : [],
+    { name: 'Lucid', size: 50000, drawdown: 2000, drawdownType: 'eod', dailyLoss: 1000, target: 3000, lockAt: 50100, members: ['EVAL-A', 'EVAL-B'], highClose: 51240.5, accountType: 'funded', hero: 'sample-build-3' },
+    { name: 'Apex', size: 50000, drawdown: 2500, drawdownType: 'intraday', target: 3000, members: ['FUNDED-C'], accountType: 'eval', hero: 'sample-build-1' }] : [],   // 0.6.1: each group's Type and default hero (made-up builds)
   agentAccounts: Object.fromEntries(flagValue('agent-accounts').split(',').map(x => x.split(':').map(y => y.trim())).filter(x => x.length === 2 && x[0] && x[1])) })) : new OrderDesk(deskOpts);
 const tapeStats = V3 ? new TapeStats() : null;          // 0.4.0: the tape counters are always on (no switch)
 const BOT_SECRET = crypto.randomBytes(32).toString('hex');   // ChartBridge keeps it in bot-secret.txt; never printed
