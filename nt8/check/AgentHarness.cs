@@ -2990,6 +2990,34 @@ public static class AgentHarness
             et = new DateTime(2026, 10, 9, 10, 0, 0);
         });
 
+        // 0.6.3 (audit C10): the laptop wakes at 16:40 with a position: the flatten names the real time, not 15:55
+        Part("0.6.3 C10 late", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "0.6.3 C10: an entry was placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            Last2();
+            et = new DateTime(2026, 10, 9, 15, 55, 30);   // within a minute of 15:55: as before
+            int s0 = N(page);
+            Advance(1000);
+            Check(Any(page, s0, "manrae flattened at 15:55 by its rules") && !Any(page, s0, "flat time passed"), "0.6.3 C10: on time (within a minute): \"flattened at 15:55\" as before");
+            SetPos(sime, mnq, 0); ClearMoves(); Advance(6000);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+            Fresh();
+            Order e2 = PlacedOn(sime, Good(NewId()));
+            if (e2 == null) { Check(false, "0.6.3 C10: a second entry was placed: " + AgentReject()); return; }
+            Fill(e2, 1, 24999);
+            Last2();
+            et = new DateTime(2026, 10, 9, 16, 40, 0);   // asleep from before 15:55 to 16:40
+            int s1 = N(page);
+            Advance(1000);
+            Check(Any(page, s1, "manrae flattened at 16:40 by its rules (its 15:55 flat time passed while ChartBridge was not running or not watching)") && !Any(page, s1, "flattened at 15:55"),
+                  "0.6.3 C10: woken at 16:40: the flatten names 16:40 and why");
+            SetPos(sime, mnq, 0); ClearMoves(); Advance(6000);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
         // 0.6.3 (audit C7, Anthony's decision): at the flat time with the data feed down, the account Connected and the market open by
         // the calendar, the flatten goes anyway and says why; the account not Connected: nothing can go, the text names the feed
         Part("0.6.3 C7 feed down", () =>

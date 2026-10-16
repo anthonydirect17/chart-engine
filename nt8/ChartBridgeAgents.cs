@@ -1101,6 +1101,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
         // From flatAt up to the session's end (18:00): the flat time itself (else the agent held a position outside its hours).
         public static bool AtFlatTime(Rules r, DateTime et) { return SessionSec(et) >= Sm(r.FlatAt) * 60; }
+        // 0.6.3 (audit C10): a flatten that starts more than a minute after flatAt names the real time and why.
+        public static double LateFlatSec = 60;
+        private string FlatWords(Rules r, DateTime et)
+        {
+            if (SessionSec(et) - Sm(r.FlatAt) * 60 <= LateFlatSec) return Id + " flattened at " + Hm(r.FlatAt) + " by its rules";
+            return Id + " flattened at " + et.ToString("HH:mm", CultureInfo.InvariantCulture) + " by its rules (its " + Hm(r.FlatAt) + " flat time passed while ChartBridge was not running or not watching)";
+        }
         public static string WindowText(Rules r) { return Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + " New York time"; }
 
         // Why a rule set is not allowed, or null (the page's agentRules and the rules file share it). 0.5.2: in session order,
@@ -3900,7 +3907,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
                 }
             }
-            if (flatHours) StartFlatten(AtFlatTime(r, etNow) ? Id + " flattened at " + Hm(r.FlatAt) + " by its rules" : fromBefore && !FlatHours(r, etNow) ? Id + " held a position from an earlier session (its " + Hm(r.FlatAt) + " flatten did not finish): flattened by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + (ChartBridgeCme.Closed(etNow) ? ", or the market closed" : "") + "): flattened by its rules", true);
+            if (flatHours) StartFlatten(AtFlatTime(r, etNow) ? FlatWords(r, etNow) : fromBefore && !FlatHours(r, etNow) ? Id + " held a position from an earlier session (its " + Hm(r.FlatAt) + " flatten did not finish): flattened by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + (ChartBridgeCme.Closed(etNow) ? ", or the market closed" : "") + "): flattened by its rules", true);
             foreach (Seat x in seats) x.StepFlatten(now);
             PruneSeats();   // 0.6.0: a seat that left the group, now flat with nothing of the agent's there, is dropped
             WelcomeIfCapsChanged();

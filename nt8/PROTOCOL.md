@@ -2657,7 +2657,10 @@ Where the contract left a detail open, the safest simple choice was taken and is
   a closed market (0.5.2 review: the calendar's closures and halts too, see "The market shut") the job sends nothing and
   closes the position at the next open. A position whose trade record began in an earlier session (0.5.2 review: a restart
   after 18:00 with a flatten that did not finish) is flattened at once, whatever the window says ("held a position from an
-  earlier session (its 15:55 flatten did not finish): flattened by its rules"); the closed-market rule still applies. The
+  earlier session (its 15:55 flatten did not finish): flattened by its rules"); the closed-market rule still applies. 0.6.3
+  (audit C10): a flatten at the flat time that starts more than a minute after `flatAt` names the real time: "<id> flattened at
+  16:40 by its rules (its 15:55 flat time passed while ChartBridge was not running or not watching)"; within the minute it says
+  "<id> flattened at 15:55 by its rules", as before. The
   roll keeps such a record as `carried<TAB><tag>` in the day file (a dropped stale record too, at a start), so a roll while
   running followed by a restart still flattens it (the 0.5.2 re-review). Only that position counts: the agent's open trade
   whose tag is carried, or (no trade record yet, after a start) a position under its own legs of a carried tag; a trade of
