@@ -163,7 +163,7 @@ test('0.5.7 agents: planId on an agent\'s orders to a v3 page, kept in the day f
   assert.match(ocode, /if \(agent != null\) \{ name = "CB#" \+ tag \+ " ag:" \+ agent[^\n]*ChartBridgeAgents\.NotePlan\(tag, agentPlan\); \}/, 'noted before the order exists, so its first message carries it');
   assert.match(acode, /PlaceAgentEntry\(Id, p\.Id, text, out placed\)/);
   assert.match(acode, /internal const string TagPlanPrefix = "#tagplan\\t";/, 'a "#" line: a comment to a ChartBridge before 0.5.7');
-  assert.match(bodies(acode, 'LoadDay'), /ReadTagPlan\(line, out tagOfPlan, out tagPlanId\)\) \{ tagPlans\[tagOfPlan\] = tagPlanId; continue; \}\s*if \(line\.Length == 0 \|\| line\.StartsWith\("#"\)\) continue;/, 'read before the comment skip; a malformed one falls to it');
+  assert.match(bodies(acode, 'LoadDay'), /ReadTagPlan\(line, out tagOfPlan, out tagPlanId\)\) \{ if \(first \|\| !tagPlans\.ContainsKey\(tagOfPlan\)\) tagPlans\[tagOfPlan\] = tagPlanId; continue; \}\s*if \(line\.Length == 0 \|\| line\.StartsWith\("#"\)\) continue;/, 'read before the comment skip; a malformed one falls to it');
   assert.match(bodies(acode, 'SaveDayLocked'), /lines\.Add\(TagPlanPrefix \+ kv\.Key/);
   assert.match(harness, /PlanIdOnOrders\(\);/); assert.match(harness, /LostHeldInFlatten\(\);/);
 });

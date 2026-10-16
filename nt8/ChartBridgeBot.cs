@@ -302,11 +302,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Directory.CreateDirectory(Folder);
-                string tmp = RailsFile + ".tmp";
-                File.WriteAllLines(tmp, new[] { "# ChartBridge bot rails (written by ChartBridge from the page; do not edit)",
+                ChartBridgeFiles.WriteLines(RailsFile, new[] { "# ChartBridge bot rails (written by ChartBridge from the page; do not edit)",
                     "# maxTrades 1 to 5, maxLosses 1 to 3, root botRoot or its micro/mini sibling",
-                    "maxTrades\t" + t.ToString(CultureInfo.InvariantCulture), "maxLosses\t" + l.ToString(CultureInfo.InvariantCulture), "root\t" + r });
-                if (File.Exists(RailsFile)) File.Replace(tmp, RailsFile, null); else File.Move(tmp, RailsFile);
+                    "maxTrades\t" + t.ToString(CultureInfo.InvariantCulture), "maxLosses\t" + l.ToString(CultureInfo.InvariantCulture), "root\t" + r });   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                 return null;
             }
             catch (Exception ex) { return ex.Message; }
@@ -349,10 +347,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Directory.CreateDirectory(Folder);
-                string tmp = AccountFile + ".tmp";
-                File.WriteAllLines(tmp, new[] { "# ChartBridge bot account (written by ChartBridge from the page's Bot tab; do not edit)",
-                    "# the one account the bot's orders go to; - is None (nothing trades), as is a missing file", "account\t" + name });
-                if (File.Exists(AccountFile)) File.Replace(tmp, AccountFile, null); else File.Move(tmp, AccountFile);
+                ChartBridgeFiles.WriteLines(AccountFile, new[] { "# ChartBridge bot account (written by ChartBridge from the page's Bot tab; do not edit)",
+                    "# the one account the bot's orders go to; - is None (nothing trades), as is a missing file", "account\t" + name });   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                 return null;
             }
             catch (Exception ex) { return ex.Message; }
@@ -418,9 +414,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Directory.CreateDirectory(Folder);
-                string tmp = DayFile + ".tmp";
-                File.WriteAllLines(tmp, lines.ToArray());
-                if (File.Exists(DayFile)) File.Replace(tmp, DayFile, null); else File.Move(tmp, DayFile);
+                ChartBridgeFiles.WriteLines(DayFile, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
             }
             catch (Exception ex) { Log("bot-day.txt could not be saved (" + ex.Message + "); a restart would forget today's bot trades"); }
         }

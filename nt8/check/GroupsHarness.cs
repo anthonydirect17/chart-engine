@@ -17,6 +17,8 @@ using NinjaTrader.NinjaScript.AddOns;
 public static class GroupsHarness
 {
     static Action<bool, string> Check;
+    // 0.6.3 (audit C3): a file broken on purpose, with no last good copy (.bak) to fall back to (the backup cases are their own)
+    static void Corrupt(string path, string text) { try { File.Delete(path + ".bak"); } catch (Exception) { } File.WriteAllText(path, text); }
     const BindingFlags PS = BindingFlags.NonPublic | BindingFlags.Static;
     static readonly List<string> sent = new List<string>();
     static ChartBridgeClient page;
@@ -164,6 +166,32 @@ public static class GroupsHarness
         Flat();
     }
 
+    static void Backups()
+    {
+        string p = Path.Combine(folder, "groups.txt"), mp = Path.Combine(folder, "account-marks.txt");
+        string was = File.ReadAllText(p), mwas = File.ReadAllText(mp);
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid Flex", "true", "1000", "2000", "eod", "3000", "50000", "0"));   // a save: the copy before it is groups.txt.bak
+        Check(File.Exists(p + ".bak") && File.Exists(mp + ".bak"), "0.6.3 C3: groups.txt and account-marks.txt keep the copy each save replaces (.bak)");
+        File.WriteAllText(p, new string('\0', 48));
+        File.WriteAllText(mp, "mark\thalf");
+        Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+        string gj = ChartBridgeGroups.GroupsJson();
+        Check(!gj.Contains("\"error\":\"groups.txt") && gj.Contains("\"name\":\"Lucid Flex\"") && Any("groups.txt could not be read (the first two lines are not ChartBridge's): ChartBridge uses its last good copy (groups.txt.bak)"),
+              "0.6.3 C3: a groups.txt of zeros: its last good copy is read, the pages told (entries are not all refused): " + gj);
+        Check(Any("account-marks.txt could not be read (the first line is not ChartBridge's): ChartBridge uses its last good copy (account-marks.txt.bak)") && !Entry(AccountsNow(), "SIM-A").Contains("account-marks.txt could not be read"),
+              "0.6.3 C3: a torn account-marks.txt: its last good copy is read");
+        List<string> late = new List<string>();
+        ChartBridgeClient lc = new ChartBridgeClient(null, 777) { Origin = "http://localhost:8765" };
+        lc.Tap = x => { lock (late) late.Add(x); };
+        ChartBridgeAccounts.SignedIn(lc);
+        Check(late.Any(x => x.Contains("groups.txt could not be read") && x.Contains("last good copy")), "0.6.3 C3: a page that signs in later gets the note too");
+        File.WriteAllText(p, was); File.WriteAllText(mp, mwas);
+        Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+        ChartBridgeFiles.ClearNotes();
+    }
+
     public static void Run(Action<bool, string> check)
     {
         Check = check;
@@ -196,6 +224,7 @@ public static class GroupsHarness
             AccountTypeInState();   // 0.6.2: accountState.accountType
             StandDowns();    // 0.6.2 (SPEC CE-2): a deleted group's stand-downs go with it; agent-standdowns.txt gates agent entries only
             MissedCloses();  // 0.6.3 (audit C2): a close or an intraday high ChartBridge did not see never overstates the room
+            Backups();       // 0.6.3 (audit C3): groups.txt and account-marks.txt fall back to their last good copy
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally
@@ -568,7 +597,7 @@ public static class GroupsHarness
         Check(Entry(AccountsNow(), "SIM-A").Contains("\"floor\":51600,") && State("SIM-A").Contains("\"realizedToday\":-300"), "after a restart: the same highs and day start (account-marks.txt)");
         // an unreadable marks file: trailing floors null with why, a static one still works
         string mp = Path.Combine(folder, "account-marks.txt"), was = File.ReadAllText(mp);
-        File.WriteAllText(mp, "not ours\n");
+        Corrupt(mp, "not ours\n");
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
         Tick();
@@ -682,7 +711,7 @@ public static class GroupsHarness
         Flat();
         // item 2: an unreadable groups.txt refuses entries but never an exit
         string file = Path.Combine(folder, "groups.txt"), was = File.ReadAllText(file);
-        File.WriteAllText(file, "broken\n");
+        Corrupt(file, "broken\n");
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
         Pos(simD, mnq, 1);
@@ -935,7 +964,7 @@ public static class GroupsHarness
         foreach (string broken in new[] { "\tfunded\tsample-build-1", "\tlive\t-", "\teval\ttwo words" })
         {
             string text = ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-" + (broken == "\tfunded\tsample-build-1" ? "\tfunded\tsample build" : broken) + "\n";
-            File.WriteAllText(p, text);
+            Corrupt(p, text);
             Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
             Check(ChartBridgeGroups.GroupsJson().Contains("\"list\":[],\"error\":\"groups.txt could not be read") && ChartBridgeGroups.GroupsJson().Contains("is not a group line ("), "TH: a bad type or hero (" + text.Split('\n')[2].Replace("\t", " ") + "): unreadable, with why: " + ChartBridgeGroups.GroupsJson());
             Clear(); G("groupSave", save);
@@ -954,7 +983,7 @@ public static class GroupsHarness
         string[] broken = { "no header\n", ChartBridgeGroups.Header + "\n#\nmember\tSIM-A\tg5\n", ChartBridgeGroups.Header + "\n#\ngroup\tg1\tA\ton\t-\t2000\teod\t-\t50000\t-\ngroup\tg1\tB\ton\t-\t2000\teod\t-\t50000\t-\n", ChartBridgeGroups.Header + "\n#\nhero\tg1\n" };
         foreach (string text in broken)
         {
-            File.WriteAllText(p, text);
+            Corrupt(p, text);
             Clear();
             ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
             foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
@@ -1034,7 +1063,7 @@ public static class GroupsHarness
             Check(Rejection() == "" && ChartBridgeAgents.StandDownsOf(null).Count == 0 && !File.ReadAllText(sd).Contains("standDown\t") && Any("{\"type\":\"agentStandDowns\",\"list\":[],\"error\":null}"),
                   "SD: the group deleted: both its stand-downs dropped at once (memory, the file, the pages)");
             // unreadable: every agent entry refused (any group or none); the page's own orders and exits are not touched
-            File.WriteAllText(sd, "# made-up\n# test\nstandDown\tbad line\n");
+            Corrupt(sd, "# made-up\n# test\nstandDown\tbad line\n");
             ChartBridgeAgents.Start(false);
             string why = ChartBridgeAgents.StandDownsBroken();
             Check(why != null && why.Contains("agent-standdowns.txt has a line ChartBridge does not understand: every new agent entry on an account in a prop group is refused") && ChartBridgeAgents.BrokenRefusal("SIM-D") == null,

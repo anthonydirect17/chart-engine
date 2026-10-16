@@ -435,9 +435,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (running) lines.Add(me + "\t" + ((long)ChartBridgeTime.NowUtcMs()).ToString(CultureInfo.InvariantCulture));
                     Directory.CreateDirectory(ChartBridgeConfig.Folder);
                     if (lines.Count == 0) { if (File.Exists(MergeMarkerFile)) File.Delete(MergeMarkerFile); return; }
-                    string tmp = MergeMarkerFile + ".tmp";
-                    File.WriteAllLines(tmp, lines.ToArray());
-                    if (File.Exists(MergeMarkerFile)) File.Replace(tmp, MergeMarkerFile, null); else File.Move(tmp, MergeMarkerFile);
+                    ChartBridgeFiles.WriteLines(MergeMarkerFile, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                 }
             }
             catch (Exception ex) { ChartBridgeServer.Log("merge: merge_swap.txt could not be written (" + ex.Message + ")"); }

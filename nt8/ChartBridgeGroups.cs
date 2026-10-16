@@ -322,10 +322,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             State s = null;
             string[] lines = null;
             bool exists = File.Exists(FilePath);
+            List<string> notes = new List<string>();
             if (exists)
             {
                 lines = ReadLines(FilePath, out err);
                 if (lines != null) s = Parse(lines, out err);
+                if (lines != null && s == null)   // 0.6.3 (audit C3): read but not understood: the last good copy, said so
+                {
+                    string[] b = ChartBridgeFiles.ReadBackup(FilePath);
+                    string berr;
+                    State bs = b != null ? Parse(b, out berr) : null;
+                    if (bs != null) { notes.Add(ChartBridgeFiles.BackupNote("groups.txt", err)); s = bs; err = null; }
+                }
             }
             string merr = null;
             Dictionary<string, Mark> marks = null;
@@ -333,6 +341,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 string[] ml = ReadLines(MarksPath, out merr);
                 if (ml != null) marks = ParseMarks(ml, out merr);
+                if (ml != null && marks == null)
+                {
+                    string[] b = ChartBridgeFiles.ReadBackup(MarksPath);
+                    string berr;
+                    Dictionary<string, Mark> bm = b != null ? ParseMarks(b, out berr) : null;
+                    if (bm != null) { notes.Add(ChartBridgeFiles.BackupNote("account-marks.txt", merr)); marks = bm; merr = null; }
+                }
             }
             lock (Mem)
             {
@@ -347,6 +362,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (exists && s == null) Alarm(ReadFailedText + " (" + err + "); fix or delete the file, then recompile");
             else if (exists) ChartBridgeServer.Log("groups: " + s.Groups.Count + " group" + (s.Groups.Count == 1 ? "" : "s") + ", " + s.Members.Count + " account" + (s.Members.Count == 1 ? "" : "s") + " in them (groups.txt)");
+            foreach (string w in notes) ChartBridgeFiles.Note(w);
             if (merr != null && marks == null) ChartBridgeServer.Log("account-marks.txt could not be read (" + merr + "): it is not rewritten this run; the trailing floors and the computed P&L are not given until it can be read");
         }
 
@@ -491,9 +507,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                string tmp = path + ".tmp";
-                File.WriteAllText(tmp, text);
-                if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path);
+                ChartBridgeFiles.WriteWhole(path, text);   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                 return null;
             }
             catch (Exception ex) { return ex.Message; }

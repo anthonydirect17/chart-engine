@@ -714,9 +714,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!ChartBridgeBranches.Idle(Find(l))) return ChartBridgeBranches.SkipWords("the copier's leader (the copier is off)", l);
                 try
                 {
-                    string tmp = FilePath + ".tmp";
-                    File.WriteAllLines(tmp, lines.Where(x => !x.StartsWith("leader\t", StringComparison.Ordinal)).ToArray());
-                    File.Replace(tmp, FilePath, null);
+                    ChartBridgeFiles.WriteLines(FilePath, lines.Where(x => !x.StartsWith("leader\t", StringComparison.Ordinal)).ToArray());   // 0.6.3 (audit C3)
                 }
                 catch (Exception ex) { return "the copier's leader (the copier is off) stays " + l + ": copier.txt could not be saved (" + ex.Message + ")"; }
                 ChartBridgeServer.Log("copier: no leader (was " + l + "), by the daily reset (17:00 ET; the copier is off)");
@@ -2390,9 +2388,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string fault = WriteFault != null ? WriteFault() : null;
                     if (fault != null) return fault;
                     Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                    string tmp = FilePath + ".tmp";
-                    File.WriteAllLines(tmp, lines.ToArray());
-                    if (File.Exists(FilePath)) File.Replace(tmp, FilePath, null); else File.Move(tmp, FilePath);
+                    ChartBridgeFiles.WriteLines(FilePath, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                     return null;
                 }
                 catch (Exception ex) { return ex.Message; }

@@ -614,18 +614,23 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             List<GroupStandDown> list = new List<GroupStandDown>();
             string broken = null;
+            Func<string[], string> parse = all =>
+            {
+                list = new List<GroupStandDown>();
+                foreach (string raw in all)
+                {
+                    string line = raw.TrimEnd('\r');
+                    if (line.Trim().Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+                    GroupStandDown s = ReadSdLine(line);
+                    if (s == null) return StandDownsFileName + " has a line ChartBridge does not understand";
+                    if (list.Any(x => x.Build == s.Build && x.Group == s.Group)) return StandDownsFileName + " names build " + s.Build + " on group " + s.Group + " twice";
+                    list.Add(s);
+                }
+                return null;
+            };
             try
             {
-                if (File.Exists(SdPath))
-                    foreach (string raw in File.ReadAllLines(SdPath))
-                    {
-                        string line = raw.TrimEnd('\r');
-                        if (line.Trim().Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
-                        GroupStandDown s = ReadSdLine(line);
-                        if (s == null) { broken = StandDownsFileName + " has a line ChartBridge does not understand"; break; }
-                        if (list.Any(x => x.Build == s.Build && x.Group == s.Group)) { broken = StandDownsFileName + " names build " + s.Build + " on group " + s.Group + " twice"; break; }
-                        list.Add(s);
-                    }
+                if (File.Exists(SdPath)) broken = ChartBridgeAgent.ParseOrBackup(SdPath, StandDownsFileName, parse);
             }
             catch (Exception ex) { broken = StandDownsFileName + " could not be read (" + ex.Message + ")"; }
             if (broken != null)
@@ -1880,6 +1885,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private bool chosen;   // an account was chosen on the page (agent-<id>-account.txt); false on None
         private bool league;   // 0.6.2: a league seat (agent-<id>-account.txt league<TAB><account>): one account, entries only while it is Sim
         private string rulesBroken, accountBroken, dayBroken, lossStandDown;
+        private bool dayRepaired;   // 0.6.3 (audit C3): dayBroken is a damaged file kept from its lines (saves go on)
         private string secret, secretState = "missing";
         private string session;
         // 0.5.2 review: the tags of trade records from an earlier session (dropped at a start, or carried over at the roll): a position
@@ -2109,6 +2115,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             return diff == 0;
         }
 
+        // 0.6.3 (audit C3): a file read but not understood (a power cut, a hand edit) falls back to its last good copy (.bak), said so
+        // to the pages; null when one of them parsed, else the main file's problem (parse is run again on it, so its state is the
+        // main file's). An IOException is thrown to the caller as before.
+        internal static string ParseOrBackup(string path, string name, Func<string[], string> parse)
+        {
+            string[] lines = File.ReadAllLines(path);
+            string why = parse(lines);
+            if (why == null) return null;
+            string[] b = ChartBridgeFiles.ReadBackup(path);
+            if (b != null && parse(b) == null) { ChartBridgeFiles.Note(ChartBridgeFiles.BackupNote(name, why)); return null; }
+            return parse(lines);
+        }
+
         // ---------------------------------------------------------- the rules file (agent-<id>-rules.txt)
         // Two # lines, then key<TAB>value lines; no file: the defaults. A file that cannot be understood (a line it does not know,
         // a key twice, a value out of range) is never written over and stands the agent down until the page sets the rules or the
@@ -2117,18 +2136,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Rules r = new Rules();
             string broken = null;
-            try
+            Func<string[], string> parse = all =>
             {
-                if (File.Exists(RulesFile))
-                {
+                    string broken1 = null;
+                    r = new Rules();
                     HashSet<string> seen = new HashSet<string>();
                     Dictionary<string, int> qty = new Dictionary<string, int>();
-                    foreach (string raw in File.ReadAllLines(RulesFile))
+                    foreach (string raw in all)
                     {
                         string line = raw.Trim();
                         if (line.Length == 0 || line.StartsWith("#")) continue;
                         string[] p = line.Split('\t');
-                        if (p.Length != 2 || !seen.Add(p[0])) { broken = "agent-" + Id + "-rules.txt has a line ChartBridge does not understand"; break; }
+                        if (p.Length != 2 || !seen.Add(p[0])) { broken1 = "agent-" + Id + "-rules.txt has a line ChartBridge does not understand"; break; }
                         string k = p[0], v = p[1].Trim();
                         int n;
                         if (k == "roots") r.Roots = v.Split(',').Select(x => x.Trim().ToUpperInvariant()).Where(x => x.Length > 0).ToList();
@@ -2140,19 +2159,23 @@ namespace NinjaTrader.NinjaScript.AddOns
                         else if ((k == "maxTrades" || k == "maxLosses") && (v == "none" || int.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out n)))
                         {
                             int val = v == "none" ? 0 : int.Parse(v, CultureInfo.InvariantCulture);
-                            if (v != "none" && val < 1) { broken = "agent-" + Id + "-rules.txt: " + k + " must be none or a whole number of 1 or more"; break; }
+                            if (v != "none" && val < 1) { broken1 = "agent-" + Id + "-rules.txt: " + k + " must be none or a whole number of 1 or more"; break; }
                             if (k == "maxTrades") r.MaxTrades = val; else r.MaxLosses = val;
                         }
-                        else { broken = "agent-" + Id + "-rules.txt has a line ChartBridge does not understand"; break; }
+                        else { broken1 = "agent-" + Id + "-rules.txt has a line ChartBridge does not understand"; break; }
                     }
-                    if (broken == null)
+                    if (broken1 == null)
                     {
                         r.MaxQty = new Dictionary<string, int>();
                         foreach (string root in r.Roots) r.MaxQty[root] = qty.ContainsKey(root) ? qty[root] : DefaultQty(root);
                         string bad = RulesProblem(r);
-                        if (bad != null) broken = "agent-" + Id + "-rules.txt: " + bad;
+                        if (bad != null) broken1 = "agent-" + Id + "-rules.txt: " + bad;
                     }
-                }
+                    return broken1;
+            };
+            try
+            {
+                if (File.Exists(RulesFile)) broken = ParseOrBackup(RulesFile, "agent-" + Id + "-rules.txt", parse);
             }
             catch (Exception ex) { broken = "agent-" + Id + "-rules.txt could not be read (" + ex.Message + ")"; }
             if (broken != null) { broken += ": no new entries for agent " + Id + " until its rules are set on the Agent tab or the file is deleted"; Log(broken); r = new Rules(); }
@@ -2180,9 +2203,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal static void WriteWhole(string file, List<string> lines)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(file));
-            string tmp = file + ".tmp";
-            File.WriteAllLines(tmp, lines.ToArray());
-            if (File.Exists(file)) File.Replace(tmp, file, null); else File.Move(tmp, file);
+            ChartBridgeFiles.WriteLines(file, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
         }
 
         // ---------------------------------------------------------- the account file (agent-<id>-account.txt, as bot-account.txt)
@@ -2190,12 +2211,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string a = ChartBridgeBranches.None, broken = null, grp = null;   // 0.5.7: no file is None (was Sim101)
             bool lg = false;
-            try
+            Func<string[], string> parse = all =>
             {
-                if (File.Exists(AccountFile))
-                {
+                    string broken1 = null;
+                    a = ChartBridgeBranches.None; grp = null; lg = false;
                     string found = null, foundGroup = null;
-                    foreach (string raw in File.ReadAllLines(AccountFile))
+                    foreach (string raw in all)
                     {
                         string line = raw.Trim();
                         if (line.Length == 0 || line.StartsWith("#")) continue;
@@ -2203,12 +2224,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (found == null && foundGroup == null && p.Length == 2 && p[0] == "account" && PlainName(p[1])) found = p[1];
                         else if (found == null && foundGroup == null && p.Length == 2 && p[0] == "group" && GroupIdRx.IsMatch(p[1])) foundGroup = p[1];   // 0.6.0: a group (an older ChartBridge stands the agent down on it)
                         else if (found == null && foundGroup == null && p.Length == 2 && p[0] == "league" && PlainName(p[1]) && !ChartBridgeBranches.IsNone(p[1])) { found = p[1]; lg = true; }   // 0.6.2: a league seat (an older ChartBridge stands the agent down on it)
-                        else { broken = "agent-" + Id + "-account.txt has a line ChartBridge does not understand"; break; }
+                        else { broken1 = "agent-" + Id + "-account.txt has a line ChartBridge does not understand"; break; }
                     }
-                    if (broken == null && found == null && foundGroup == null) broken = "agent-" + Id + "-account.txt names no account";
-                    if (broken == null && foundGroup != null) grp = foundGroup;
-                    else if (broken == null) a = found;
-                }
+                    if (broken1 == null && found == null && foundGroup == null) broken1 = "agent-" + Id + "-account.txt names no account";
+                    if (broken1 == null && foundGroup != null) grp = foundGroup;
+                    else if (broken1 == null) a = found;
+                    if (broken1 != null) { a = ChartBridgeBranches.None; grp = null; lg = false; }
+                    return broken1;
+            };
+            try
+            {
+                if (File.Exists(AccountFile)) broken = ParseOrBackup(AccountFile, "agent-" + Id + "-account.txt", parse);
             }
             catch (Exception ex) { broken = "agent-" + Id + "-account.txt could not be read (" + ex.Message + ")"; }
             if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); }
@@ -2272,37 +2298,56 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private void LoadDay()
         {
-            string today = SessionOf(NowEt()), fileSession = null, broken = null, held = null;
+            string today = SessionOf(NowEt()), fileSession = null, broken = null, held = null, damaged = null;
             Dictionary<string, double> trades = new Dictionary<string, double>(), expiry = new Dictionary<string, double>();
             Dictionary<string, int[]> spans = new Dictionary<string, int[]>();
             HashSet<string> ids = new HashSet<string>(), carriedTags = new HashSet<string>();
             Dictionary<string, string> tagPlans = new Dictionary<string, string>(), tagSeats = new Dictionary<string, string>();
+            // 0.6.3 (audit C3): every line that reads is kept; a line that does not (a power cut's NULs or half line) is counted, never
+            // a reason to forget the day. first: the file itself (a later line wins, as appended); else its last good copy, which
+            // only fills what the file lacks.
+            Func<string[], bool, int> read = (all, first) =>
+            {
+                int bad = 0;
+                foreach (string raw in all)
+                {
+                    if (raw.IndexOf('\0') >= 0) { if (raw.Trim('\0', ' ', '\t', '\r').Length > 0 || first) bad++; continue; }
+                    string line = raw.Trim();
+                    string seatTag, seatAcct;
+                    if (ReadSeatLine(line, out seatTag, out seatAcct)) { if (first || !tagSeats.ContainsKey(seatTag)) tagSeats[seatTag] = seatAcct; continue; }   // 0.6.0: #seat<TAB><tag><TAB><account>
+                    string tagPlanId, tagOfPlan;
+                    if (ReadTagPlan(line, out tagOfPlan, out tagPlanId)) { if (first || !tagPlans.ContainsKey(tagOfPlan)) tagPlans[tagOfPlan] = tagPlanId; continue; }
+                    if (line.Length == 0 || line.StartsWith("#")) continue;
+                    string[] p = line.Split('\t');
+                    double v;
+                    if (p.Length == 2 && p[0] == "session" && Regex.IsMatch(p[1], "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) { if (first || fileSession == null) fileSession = p[1]; }
+                    else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && p[2] == "open") { if (first || !trades.ContainsKey(p[1])) trades[p[1]] = double.NaN; }
+                    else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && double.TryParse(p[2], NumberStyles.Float, CultureInfo.InvariantCulture, out v) && !double.IsNaN(v) && !double.IsInfinity(v)) { if (first || !trades.ContainsKey(p[1])) trades[p[1]] = v; }
+                    else if (p.Length == 2 && p[0] == "plan" && p[1].Length >= 1 && p[1].Length <= 40) ids.Add(p[1]);
+                    else if (p.Length == 3 && p[0] == "entry" && Regex.IsMatch(p[1], "^[0-9a-f]{8}$") && Regex.IsMatch(p[2], "^[0-9]{1,15}$")) { if (first || !expiry.ContainsKey(p[1])) expiry[p[1]] = double.Parse(p[2], CultureInfo.InvariantCulture); }
+                    else if (p.Length == 2 && p[0] == "standDown" && p[1].Length > 0) { if (first || held == null) held = p[1]; }
+                    else if (p.Length == 2 && p[0] == "carried" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$")) carriedTags.Add(p[1]);   // 0.5.2 review
+                    else if (p.Length == 4 && p[0] == "span" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && Regex.IsMatch(p[2], "^[0-9]{1,6}$") && Regex.IsMatch(p[3], "^[0-9]{1,6}$"))
+                    { if (first || !spans.ContainsKey(p[1])) spans[p[1]] = new[] { int.Parse(p[2], CultureInfo.InvariantCulture), int.Parse(p[3], CultureInfo.InvariantCulture) }; }
+                    else bad++;
+                }
+                return bad;
+            };
             try
             {
                 if (File.Exists(DayFile))
                 {
-                    foreach (string raw in File.ReadAllLines(DayFile))
+                    int bad = read(File.ReadAllLines(DayFile), true);
+                    bool noSession = fileSession == null;
+                    if (bad > 0 || noSession)
                     {
-                        string line = raw.Trim();
-                        string seatTag, seatAcct;
-                        if (ReadSeatLine(line, out seatTag, out seatAcct)) { tagSeats[seatTag] = seatAcct; continue; }   // 0.6.0: #seat<TAB><tag><TAB><account>
-                        string tagPlanId, tagOfPlan;
-                        if (ReadTagPlan(line, out tagOfPlan, out tagPlanId)) { tagPlans[tagOfPlan] = tagPlanId; continue; }
-                        if (line.Length == 0 || line.StartsWith("#")) continue;
-                        string[] p = line.Split('\t');
-                        double v;
-                        if (p.Length == 2 && p[0] == "session" && Regex.IsMatch(p[1], "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) fileSession = p[1];
-                        else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && p[2] == "open") trades[p[1]] = double.NaN;
-                        else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && double.TryParse(p[2], NumberStyles.Float, CultureInfo.InvariantCulture, out v) && !double.IsNaN(v) && !double.IsInfinity(v)) trades[p[1]] = v;
-                        else if (p.Length == 2 && p[0] == "plan" && p[1].Length >= 1 && p[1].Length <= 40) ids.Add(p[1]);
-                        else if (p.Length == 3 && p[0] == "entry" && Regex.IsMatch(p[1], "^[0-9a-f]{8}$") && Regex.IsMatch(p[2], "^[0-9]{1,15}$")) expiry[p[1]] = double.Parse(p[2], CultureInfo.InvariantCulture);
-                        else if (p.Length == 2 && p[0] == "standDown" && p[1].Length > 0) held = p[1];
-                        else if (p.Length == 2 && p[0] == "carried" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$")) carriedTags.Add(p[1]);   // 0.5.2 review
-                        else if (p.Length == 4 && p[0] == "span" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && Regex.IsMatch(p[2], "^[0-9]{1,6}$") && Regex.IsMatch(p[3], "^[0-9]{1,6}$"))
-                            spans[p[1]] = new[] { int.Parse(p[2], CultureInfo.InvariantCulture), int.Parse(p[3], CultureInfo.InvariantCulture) };
-                        else { broken = "agent-" + Id + "-day.txt has a line ChartBridge does not understand"; break; }
+                        string[] b = ChartBridgeFiles.ReadBackup(DayFile);
+                        bool fromBackup = b != null && read(b, false) >= 0 && b.Length > 0;
+                        if (fileSession == null) fileSession = today;   // no session line anywhere: counted as today's (never forgotten)
+                        damaged = "agent-" + Id + "-day.txt has " + (bad > 0 ? bad + " line" + (bad == 1 ? "" : "s") + " ChartBridge could not read" : "no session line") +
+                                  " (a power cut?): the trades, losses and plan ids from the lines that read" + (fromBackup ? " and from its last good copy (agent-" + Id + "-day.txt.bak)" : "") +
+                                  " are kept and the file is written again from them";
                     }
-                    if (broken == null && fileSession == null) broken = "agent-" + Id + "-day.txt has no session line";
                 }
             }
             catch (Exception ex) { broken = "agent-" + Id + "-day.txt could not be read (" + ex.Message + ")"; }
@@ -2315,9 +2360,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 session = today;
                 Trades.Clear(); PlanIds.Clear(); Expiry.Clear(); Spans.Clear(); EntrySeen.Clear(); lossStandDown = null;
+                dayRepaired = false;
                 if (broken != null) dayBroken = broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)";
                 else
                 {
+                    // 0.6.3 (audit C3): a damaged file keeps today's counts (never reset) and stands the agent down for this run only
+                    if (damaged != null) { dayBroken = damaged + ": no new entries for agent " + Id + " this run: check today's trades in NinjaTrader (the next start goes on with these counts)"; dayRepaired = true; }
                     foreach (KeyValuePair<string, double> kv in expiry) if (listed.Contains(kv.Key)) Expiry[kv.Key] = kv.Value;
                     if (fileSession == today)
                     {
@@ -2348,6 +2396,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (broken == null) foreach (KeyValuePair<string, string> kv in tagPlans) ChartBridgeAgents.NotePlan(kv.Key, kv.Value);
             if (broken != null) Log(broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)");
+            if (damaged != null)
+            {
+                string said;
+                lock (Sync) said = dayBroken;
+                try { File.Copy(DayFile, DayFile + ".unreadable", true); } catch (Exception) { }   // the file as it was, for a look
+                SaveDay();   // written again from what was kept, so the next start reads it whole
+                ChartBridgeOrders.AgentAlarm(said);
+            }
             if (stale > 0) Log("agent-" + Id + "-day.txt: " + stale + " open trade(s) from the session of " + fileSession + " dropped (a record counts only in its own session)");
         }
 
@@ -2421,7 +2477,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try
                 {
                     if (!File.Exists(DayFile)) { SaveDay(); return; }   // the whole file (with this id) the first time
-                    TryIo(delegate { File.AppendAllText(DayFile, line + Environment.NewLine); });
+                    TryIo(delegate { ChartBridgeFiles.Append(DayFile, line + Environment.NewLine); });   // 0.6.3 (audit C3): written through, flushed
                 }
                 catch (Exception ex) { Log("agent-" + Id + "-day.txt could not be appended to (" + ex.Message + "); a restart would forget a plan id"); }
             }
@@ -2437,7 +2493,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> lines = new List<string> { "# ChartBridge day for agent " + Id + " (written by ChartBridge; do not edit)", "# session, its trades (tag and open or realized dollars), plan ids used, entries and their expiry, the plan of each entry (#tagplan)" };
             lock (Sync)
             {
-                if (dayBroken != null) return;   // never written over a file that could not be read
+                if (dayBroken != null && !dayRepaired) return;   // never written over a file that could not be read (0.6.3: one kept from its lines is)
                 lines.Add("session\t" + session);
                 foreach (KeyValuePair<string, double> kv in Trades)
                     lines.Add("trade\t" + kv.Key + "\t" + (double.IsNaN(kv.Value) ? "open" : kv.Value.ToString("0.##", CultureInfo.InvariantCulture)));

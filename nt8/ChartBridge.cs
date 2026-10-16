@@ -518,6 +518,78 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
     }
 
+    // ------------------------------------------------------------------ 0.6.3 (audit C3): state files that survive a power cut
+    // A whole file goes to a temp file opened write-through and flushed to the disk (Flush(true)) before it replaces the file, and
+    // the copy it replaces is kept as <file>.bak (File.Replace's backup), so a power cut leaves the old file or the new one, never
+    // a file of zeros, and a file that will not read can fall back to the last good copy (each loader says so). An append is
+    // written through and flushed the same way.
+    public static class ChartBridgeFiles
+    {
+        private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
+        public static string BackupOf(string path) { return path + ".bak"; }
+
+        public static void WriteWhole(string path, string text)
+        {
+            string dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            string tmp = path + ".tmp";
+            byte[] bytes = Utf8.GetBytes(text);
+            using (FileStream fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            {
+                fs.Write(bytes, 0, bytes.Length);
+                fs.Flush(true);
+            }
+            if (File.Exists(path)) File.Replace(tmp, path, BackupOf(path), true); else File.Move(tmp, path);
+        }
+
+        public static void WriteLines(string path, IEnumerable<string> lines) { WriteWhole(path, string.Concat(lines.Select(l => l + Environment.NewLine))); }
+
+        public static void Append(string path, string text)
+        {
+            byte[] bytes = Utf8.GetBytes(text);
+            using (FileStream fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read, 4096, FileOptions.WriteThrough))
+            {
+                fs.Write(bytes, 0, bytes.Length);
+                fs.Flush(true);
+            }
+        }
+
+        // The last good copy's lines (null: none, or it does not read).
+        public static string[] ReadBackup(string path)
+        {
+            string b = BackupOf(path);
+            try
+            {
+                if (!File.Exists(b)) return null;
+                List<string> lines = new List<string>();
+                using (FileStream fs = new FileStream(b, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (StreamReader r = new StreamReader(fs))
+                {
+                    string l;
+                    while ((l = r.ReadLine()) != null) lines.Add(l);
+                }
+                return lines.ToArray();
+            }
+            catch (Exception) { return null; }
+        }
+
+        // A loader's note (a backup taken, a file kept from the lines that read): logged, to the pages now, and to each page that
+        // signs in later this run (ChartBridgeAccounts.SignedIn).
+        private static readonly List<string> Notes = new List<string>();
+        public static void Note(string text)
+        {
+            ChartBridgeServer.Log("NOTE: " + text);
+            lock (Notes) { if (!Notes.Contains(text)) Notes.Add(text); }
+            ChartBridgeServer.SendToTraders(NoteJson(text));
+        }
+        public static void ClearNotes() { lock (Notes) Notes.Clear(); }
+        public static void SignedIn(ChartBridgeClient c) { List<string> n; lock (Notes) n = Notes.ToList(); foreach (string t in n) c.Send(NoteJson(t)); }
+        private static string NoteJson(string text) { return "{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(text) + "}"; }
+
+        // The words the loaders use when the backup is taken.
+        public static string BackupNote(string name, string why) { return name + " could not be read (" + why + "): ChartBridge uses its last good copy (" + name + ".bak), so the last change before the problem may be missing: check it on the page"; }
+    }
+
     // ------------------------------------------------------------------ JSON writing (no dependencies)
     public static class CbJson
     {
@@ -1905,6 +1977,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (listener != null) return false;     // another instance already runs it
                 try
                 {
+                    ChartBridgeFiles.ClearNotes();   // 0.6.3: this run's file notes only
                     ChartBridgeConfig.Load();
                     Directory.CreateDirectory(ChartBridgeConfig.WwwFolder);
                     cts = new CancellationTokenSource();

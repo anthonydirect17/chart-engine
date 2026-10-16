@@ -1300,9 +1300,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string fault = ManagedWriteFault != null ? ManagedWriteFault() : null;
                     if (fault != null) throw new IOException(fault);
                     Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                    string tmp = ManagedFile + ".tmp";
-                    File.WriteAllLines(tmp, lines.ToArray());
-                    if (File.Exists(ManagedFile)) File.Replace(tmp, ManagedFile, null); else File.Move(tmp, ManagedFile);
+                    ChartBridgeFiles.WriteLines(ManagedFile, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                     return null;
                 }
                 catch (Exception ex) { lock (StratLock) saveDirty = true; return ex.Message; }

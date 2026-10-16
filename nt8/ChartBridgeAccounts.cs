@@ -553,6 +553,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (alarm != null) c.Send(Status("error", alarm));
             ChartBridgeGroups.SignedIn(c);     // 0.5.8: the groups.txt alarm
             ChartBridgeBranches.SignedIn(c);   // 0.5.7: the daily reset's notes during its break
+            ChartBridgeFiles.SignedIn(c);      // 0.6.3 (audit C3): a file read from its backup, or kept from the lines that read
         }
 
         // ---------------------------------------------------------- messages from the page
@@ -1290,9 +1291,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try
                 {
                     Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                    string tmp = FilePath + ".tmp";
-                    File.WriteAllText(tmp, text);
-                    if (File.Exists(FilePath)) File.Replace(tmp, FilePath, null); else File.Move(tmp, FilePath);
+                    ChartBridgeFiles.WriteWhole(FilePath, text);   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                 }
                 catch (Exception ex) { err = ex.Message; }
                 bool alarm;
@@ -1329,9 +1328,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                string tmp = DetailPath + ".tmp";
-                File.WriteAllText(tmp, text);
-                if (File.Exists(DetailPath)) File.Replace(tmp, DetailPath, null); else File.Move(tmp, DetailPath);
+                ChartBridgeFiles.WriteWhole(DetailPath, text);   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
             }
             catch (Exception ex)
             {
@@ -1479,13 +1476,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 if (!File.Exists(ResetFile)) return null;
-                foreach (string raw in File.ReadAllLines(ResetFile))
-                {
-                    string[] p = raw.Trim().Split('\t');
-                    if (p.Length == 2 && p[0] == "day") return p[1];
-                }
+                string d = DayIn(File.ReadAllLines(ResetFile));
+                if (d != null) return d;
+                d = DayIn(ChartBridgeFiles.ReadBackup(ResetFile));   // 0.6.3 (audit C3): no day line (a power cut): the last good copy
+                if (d != null) ChartBridgeServer.Log("daily-reset.txt names no day: its last good copy (daily-reset.txt.bak) is used");
+                return d;
             }
             catch (Exception ex) { ChartBridgeServer.Log("daily-reset.txt could not be read (" + ex.Message + "): the reset runs in this break"); }
+            return null;
+        }
+
+        private static string DayIn(string[] lines)
+        {
+            if (lines == null) return null;
+            foreach (string raw in lines)
+            {
+                string[] p = raw.Trim().Split('\t');
+                if (p.Length == 2 && p[0] == "day" && System.Text.RegularExpressions.Regex.IsMatch(p[1], "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) return p[1];
+            }
             return null;
         }
 
@@ -1494,9 +1502,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                string tmp = ResetFile + ".tmp";
-                File.WriteAllLines(tmp, new[] { "# ChartBridge daily reset (written by ChartBridge; do not edit)", "# the New York date the 17:00 ET reset to None last ran", "day\t" + day });
-                if (File.Exists(ResetFile)) File.Replace(tmp, ResetFile, null); else File.Move(tmp, ResetFile);
+                ChartBridgeFiles.WriteLines(ResetFile, new[] { "# ChartBridge daily reset (written by ChartBridge; do not edit)", "# the New York date the 17:00 ET reset to None last ran", "day\t" + day });   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
             }
             catch (Exception ex) { ChartBridgeServer.Log("daily-reset.txt could not be saved (" + ex.Message + "); a restart in this break would run the reset again"); }
         }

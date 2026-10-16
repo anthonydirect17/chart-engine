@@ -2235,9 +2235,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string fault = PlanWriteFault != null ? PlanWriteFault() : null;
                     if (fault != null) return fault;
                     Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                    string tmp = PlanFile + ".tmp";
-                    File.WriteAllLines(tmp, lines.ToArray());
-                    if (File.Exists(PlanFile)) File.Replace(tmp, PlanFile, null); else File.Move(tmp, PlanFile);
+                    ChartBridgeFiles.WriteLines(PlanFile, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                     return null;
                 }
                 catch (Exception ex) { return ex.Message; }

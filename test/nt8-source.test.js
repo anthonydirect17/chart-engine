@@ -856,7 +856,7 @@ test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and t
   assert.match(acode, /\.Append\(",\\"roomDailyLoss\\":null"\)/);
   // accounts.txt: written whole via a temp file, never rewritten after a failed read; only from the timer or a page's thread
   assert.match(acode, /if \(!loaded \|\| readError != null \|\| !dirty\) return;/);
-  assert.match(acode, /if \(File\.Exists\(FilePath\)\) File\.Replace\(tmp, FilePath, null\); else File\.Move\(tmp, FilePath\);/);
+  assert.match(acode, /ChartBridgeFiles\.WriteWhole\(FilePath, text\);/, '0.6.3 (audit C3): through a temp file, write-through, the old copy kept');
   assert.ok(!/Save\(\)|FlushLog\(\)/.test(bodyOf(acode, 'public static void StartNow(')), 'no write at start (NinjaTrader\'s thread)');
   assert.match(acode, /public const double GraceMs = 10000;/);
   // the main file: client, accountTrade, accountArchive and accountUnarchive (0.5.1) go to ChartBridgeAccounts; "accounts" rides the order lane
@@ -1099,7 +1099,7 @@ test('0.4.0 bot: on by default, the account Anthony chooses (None until then, 0.
   for (const re of [/string why = AccountProblemFor\(name, true\);/, /why = ChartBridgeCopier\.BotAccountRefusal\(name\);/, /if \(exposed \|\| WorkingEntries\(\)\.Count > 0\) return "the bot has a position or a working entry: choose its account when it is flat";/, /string err = SaveAccount\(name\);/])
     assert.match(setAcc, re, 'SetAccount: ' + re);
   assert.ok(setAcc.indexOf('SaveAccount(name)') > setAcc.indexOf('WorkingEntries()'), 'saved only after every refusal');
-  assert.match(bodyOf(bcode, 'private static string SaveAccount(string name)'), /File\.WriteAllLines\(tmp,[\s\S]*if \(File\.Exists\(AccountFile\)\) File\.Replace\(tmp, AccountFile, null\); else File\.Move\(tmp, AccountFile\);/);
+  assert.match(bodyOf(bcode, 'private static string SaveAccount(string name)'), /ChartBridgeFiles\.WriteLines\(AccountFile, /);
   const prob = bodyOf(bcode, 'private static string AccountProblemFor(string name, bool gates)');
   for (const re of [/IsNeverTradable\(name \?\? ""\)/, /if \(gates && !ChartBridgeOrders\.AccountTradable\(name\)\)/, /a\.Connection\.Status != ConnectionStatus\.Connected/]) assert.match(prob, re, 'AccountProblemFor: ' + re);
   assert.ok(!/IsSim\(/.test(prob), 'no Sim lock');
@@ -1274,7 +1274,9 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
   assert.ok(fnBody('Flatten').indexOf('StopManaging(account, inst);') < fnBody('Flatten').indexOf('account.Flatten('));
   // managed.txt: whole, through a temp file; never rewritten when it could not be read
   const w = sBodies('WriteManagedOnce');
-  assert.match(w, /string tmp = ManagedFile \+ "\.tmp";\s*File\.WriteAllLines\(tmp, lines\.ToArray\(\)\);\s*if \(File\.Exists\(ManagedFile\)\) File\.Replace\(tmp, ManagedFile, null\); else File\.Move\(tmp, ManagedFile\);/);
+  assert.match(w, /ChartBridgeFiles\.WriteLines\(ManagedFile, lines\.ToArray\(\)\);/);
+  const files = bodyOf(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridge.cs'), 'utf8'), 'public static void WriteWhole(string path, string text)');
+  assert.match(files, /FileOptions\.WriteThrough[\s\S]*fs\.Flush\(true\);[\s\S]*File\.Replace\(tmp, path, BackupOf\(path\), true\)/, '0.6.3 (audit C3): flushed to the disk before the replace, the old copy kept');
   assert.match(w, /if \(managedReadFailed\)/);
 });
 

@@ -22,6 +22,8 @@ using NinjaTrader.NinjaScript.AddOns;
 public static class AgentHarness
 {
     static Action<bool, string> Check;
+    // 0.6.3 (audit C3): a file broken on purpose, with no last good copy (.bak) to fall back to (the backup cases are their own)
+    static void Corrupt(string path, string text) { try { File.Delete(path + ".bak"); } catch (Exception) { } File.WriteAllText(path, text); }
     const BindingFlags PS = BindingFlags.NonPublic | BindingFlags.Static;
     static readonly List<string> page = new List<string>(), agentOut = new List<string>(), demobOut = new List<string>();
     static ChartBridgeClient pc, ac, dc;
@@ -910,7 +912,7 @@ public static class AgentHarness
         Check(ChartBridgeAgents.HardCeiling("NQ") == 2 && ChartBridgeAgents.HardCeiling("ES") == 2 && ChartBridgeAgents.HardCeiling("MNQ") == 20 && ChartBridgeAgents.HardCeiling("MES") == 20 && ChartBridgeAgents.HardCeiling("YM") == 0,
               "the hard ceiling: minis 2, micros 20, nothing else");
         // a rules file over the ceiling cannot be understood: stands down, never written over
-        File.WriteAllLines(file, new[] { "# made-up", "# test", "roots\tMNQ", "maxQty.MNQ\t25" });
+        Corrupt(file, "# made-up\n# test\nroots\tMNQ\nmaxQty.MNQ\t25\n");
     }
 
     // ------------------------------------------------------------ files that cannot be read: stand down, never written over
@@ -935,7 +937,7 @@ public static class AgentHarness
         Last2();
         A(Good(NewId()));
         Check(AgentReject().Contains("agent-manrae-rules.txt") && FileText("agent-manrae-rules.txt") == before, "check 2: a plan refused; the file is never written over");
-        File.WriteAllText(rules, "# made-up\n# test\nroots\tMNQ\nwhatever\tthing\n");
+        Corrupt(rules, "# made-up\n# test\nroots\tMNQ\nwhatever\tthing\n");
         Restart();
         Check(Last(agentOut, "agentState").Contains("agent-manrae-rules.txt has a line ChartBridge does not understand"), "a line it does not know: stands down");
         P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));
@@ -943,7 +945,7 @@ public static class AgentHarness
         File.Delete(rules);
         // the account file
         string acct = Path.Combine(Dir, "agent-manrae-account.txt");
-        File.WriteAllText(acct, "# made-up\n# test\naccount\tSim101\naccount\tSIM-D\n");
+        Corrupt(acct, "# made-up\n# test\naccount\tSim101\naccount\tSIM-D\n");
         Restart();
         Check(Last(agentOut, "agentState").Contains("agent-manrae-account.txt has a line ChartBridge does not understand"), "an account file it cannot understand: stands down");
         Mode("manrae", "auto");
@@ -953,17 +955,49 @@ public static class AgentHarness
         // the day file
         string day = Path.Combine(Dir, "agent-manrae-day.txt");
         string dayWas = FileText("agent-manrae-day.txt");
-        File.WriteAllText(day, "# torn\nnonsense\n");
+        Corrupt(day, "# torn\nnonsense\n");
         Restart();
         Mode("manrae", "auto");
         A(Good(NewId()));
-        Check(AgentReject().Contains("agent-manrae-day.txt has a line ChartBridge does not understand") && FileText("agent-manrae-day.txt") == "# torn\nnonsense\n", "a day file it cannot read: stands down this run, never written over");
+        Check(AgentReject().Contains("agent-manrae-day.txt has 1 line ChartBridge could not read (a power cut?): the trades, losses and plan ids from the lines that read are kept") &&
+              AgentReject().Contains("no new entries for agent manrae this run: check today's trades in NinjaTrader") && !AgentReject().Contains("delete it"),
+              "0.6.3 C3: a day file with a line it cannot read: stands down this run, the alarm no longer says delete it: " + AgentReject());
+        Check(FileText("agent-manrae-day.txt.unreadable") == "# torn\nnonsense\n" && FileText("agent-manrae-day.txt").Contains("session\t") && !FileText("agent-manrae-day.txt").Contains("nonsense"),
+              "0.6.3 C3: the file as it was is kept (.unreadable), and it is written again from what read");
         File.WriteAllText(day, dayWas);
         Restart();
         Mode("manrae", "auto");
-        Check(Last(agentOut, "agentState").Contains("\"trades\":") && !Last(agentOut, "agentState").Contains("\"trades\":0"), "a restart remembers today's trades (agent-manrae-day.txt)");
+        string st0 = Last(agentOut, "agentState");
+        Check(st0.Contains("\"trades\":") && !st0.Contains("\"trades\":0"), "a restart remembers today's trades (agent-manrae-day.txt)");
         A(Good("plan-2"));
         Check(AgentReject().Contains("plan id plan-2 was already used today"), "a restart remembers today's plan ids");
+        // 0.6.3 (audit C3): a power cut a moment after an append: a half line and NULs at the end; every line before it is kept
+        string tradesNow = Regex.Match(st0, "\"trades\":[0-9]+,\"losses\":[0-9]+").Value;
+        File.AppendAllText(day, "plan\tplan-hal\0\0\0\0\0\0\n\0\0\0\0");
+        Restart();
+        string st1 = Last(agentOut, "agentState");
+        Check(tradesNow.Length > 0 && st1.Contains(tradesNow) && st1.Contains("agent-manrae-day.txt has 2 lines ChartBridge could not read") && Logged("agent-manrae-day.txt has 2 lines ChartBridge could not read"),
+              "0.6.3 C3: a torn append: today's trades and losses are kept (" + tradesNow + "), never reset; the agent stands down this run, the pages told: " + st1);
+        Check(FileText("agent-manrae-day.txt").Contains("plan\tplan-2\n") || FileText("agent-manrae-day.txt").Contains("plan\tplan-2\r\n"), "0.6.3 C3: the plan ids that read are kept (plan-2)");
+        Check(FileText("agent-manrae-day.txt").IndexOf('\0') < 0 && !FileText("agent-manrae-day.txt").Contains("plan-hal"), "0.6.3 C3: written again without the torn line");
+        Restart();
+        Check(Last(agentOut, "agentState").Contains("\"standDown\":null") && Last(agentOut, "agentState").Contains(tradesNow), "0.6.3 C3: the next start reads it whole and goes on with these counts");
+        // a file of zeros (the rename kept, the data lost): its last good copy (.bak) gives the day, said so
+        Check(File.Exists(day + ".bak"), "0.6.3 C3: every whole write keeps the copy it replaces (agent-manrae-day.txt.bak)");
+        File.WriteAllText(day, new string('\0', 64));
+        Restart();
+        string st2 = Last(agentOut, "agentState");
+        Check(st2.Contains(tradesNow) && st2.Contains("and from its last good copy (agent-manrae-day.txt.bak) are kept"), "0.6.3 C3: a day file of zeros: the counts come from its last good copy: " + st2);
+        Restart();
+        Check(Last(agentOut, "agentState").Contains("\"standDown\":null"), "0.6.3 C3: and the start after that is clean");
+        // a rules file read but not understood, with a good copy: the copy is used, said to the pages
+        P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));
+        P(Rules("NQ,MNQ", ",\"maxQtyNQ\":1,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));
+        File.WriteAllText(rules, new string('\0', 40));
+        Restart();
+        Check(Last(agentOut, "agentState").Contains("\"standDown\":null") && Logged("agent-manrae-rules.txt could not be read (agent-manrae-rules.txt has a line ChartBridge does not understand): ChartBridge uses its last good copy (agent-manrae-rules.txt.bak)"),
+              "0.6.3 C3: a rules file of zeros: its last good copy is used and the pages are told");
+        File.Delete(rules); File.Delete(rules + ".bak");
     }
 
     // ------------------------------------------------------------ account exclusivity, every direction
@@ -3488,7 +3522,7 @@ public static class AgentHarness
         Order e3 = PlacedOn(sime, Good(NewId()));
         Check(e3 != null, "0.5.4: a working entry");
         string rf = Path.Combine(Dir, "agent-manrae-rules.txt");
-        File.WriteAllText(rf, "# made-up\n# test\nroots\tMNQ\nwhatever\tthing\n");
+        Corrupt(rf, "# made-up\n# test\nroots\tMNQ\nwhatever\tthing\n");
         typeof(ChartBridgeAgent).GetMethod("LoadRules", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, null);
         int rj3 = Count(page, "reject");
         SessionRules("09:45", "15:20", "15:58");
@@ -3501,7 +3535,7 @@ public static class AgentHarness
         // and the exposure looks at every root an agent may trade then: a pair it owns outside the placeholder roots (NQ, MNQ),
         // here ES, still counts
         Fresh();
-        File.WriteAllText(rf, "# made-up\n# test\nroots\tMNQ\nwhatever\tthing\n");
+        Corrupt(rf, "# made-up\n# test\nroots\tMNQ\nwhatever\tthing\n");
         typeof(ChartBridgeAgent).GetMethod("LoadRules", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(M, null);
         HashSet<string> sticky = (HashSet<string>)SeatObj(M, "SIM-E").GetType().GetField("Sticky").GetValue(SeatObj(M, "SIM-E"));   // 0.6.0: the seat's own
         object sync = typeof(ChartBridgeAgent).GetField("Sync", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
@@ -4181,7 +4215,7 @@ public static class AgentHarness
             Order e = PlacedOn(sime, Good(NewId()));
             if (e == null) { Check(false, "0.6.2 unreadable: placed: " + AgentReject()); return; }
             Fill(e, 1, 24999);
-            File.WriteAllText(SdFile, "# made-up\n# test\nstandDown\tsample-build-1\n");
+            Corrupt(SdFile, "# made-up\n# test\nstandDown\tsample-build-1\n");
             Restart(); Mode("manrae", "auto"); Last2();
             string text = FileText("agent-standdowns.txt");
             Check(Logged("agent-standdowns.txt has a line ChartBridge does not understand: every new agent entry on an account in a prop group is refused until it can be read (accounts in no group keep trading; exits always work)") &&
@@ -4216,7 +4250,7 @@ public static class AgentHarness
             string groupsWas = File.ReadAllText(GroupsFile);
             try
             {
-                File.WriteAllText(GroupsFile, "no header\n");
+                Corrupt(GroupsFile, "no header\n");
                 ChartBridgeGroups.StartNow();
                 clock += 1000;
                 A(Good(NewId()));
@@ -4237,7 +4271,7 @@ public static class AgentHarness
             NoStandDowns();
             WriteGroup("SIM-A", "SIM-B", "SIM-C");
             GroupFresh();   // manrae on g1 (SIM-A, SIM-B, SIM-C)
-            File.WriteAllText(SdFile, "# made-up\n# test\nstandDown\tsample-build-1\n");
+            Corrupt(SdFile, "# made-up\n# test\nstandDown\tsample-build-1\n");
             Restart(); Mode("manrae", "auto"); Last2();
             int calls = Abc().Sum(a => a.Calls.Count(c => c.StartsWith("submit")));
             Order[] e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
@@ -4268,7 +4302,7 @@ public static class AgentHarness
             Order ed; lock (simd.Orders) ed = simd.Orders.Skip(nd).FirstOrDefault(x => ChartBridgeAgents.IsEntryName(x.Name));
             Check(em != null && ed != null, "round 7 setup: a resting entry on SIM-E (in Lucid, manrae) and one on SIM-D (no group, demob): " + AgentReject() + " " + Last(demobOut, "reject"));
             if (em == null || ed == null) return;
-            File.WriteAllText(SdFile, "# made-up\n# test\nstandDown\tsample-build-1\n");
+            Corrupt(SdFile, "# made-up\n# test\nstandDown\tsample-build-1\n");
             // the restart: every start is Shadow, and Shadow's backstop cancels every entry by design, so each agent is put back in Auto
             // (with its hello) before the one pass, which then shows the broken-file rule alone
             Restart(); Mode("manrae", "auto"); demob(); Last2();
@@ -4419,7 +4453,7 @@ public static class AgentHarness
                 File.Delete(GroupsFile);
                 ChartBridgeGroups.StartNow();
                 string text = "# made-up\n# test\nstandDown\tsample-build-1\tg1\t1791467200000\tedge watch\tmade-up: kept\n";
-                File.WriteAllText(SdFile, text);
+                Corrupt(SdFile, text);
                 Restart();
                 Check(FileText("agent-standdowns.txt") == text && ChartBridgeAgents.StandDownsOf(null).Count == 1 && !Logged("dropped: the group is gone (made-up: kept)"),
                       "fix 2: no groups.txt: the line is kept and the file is not rewritten");
@@ -4445,7 +4479,7 @@ public static class AgentHarness
             string groupsWas = File.ReadAllText(GroupsFile);
             try
             {
-                File.WriteAllText(GroupsFile, "no header\n");
+                Corrupt(GroupsFile, "no header\n");
                 ChartBridgeGroups.StartNow();
                 Restart();
                 int s0 = N(page);

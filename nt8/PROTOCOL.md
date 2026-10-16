@@ -2368,6 +2368,23 @@ changes). Files are written whole through a temp file. A file that exists but ca
 stands that agent down (no new entries) until the page fixes it or the file is deleted; a secret file that cannot be read
 refuses every connection for that id. The secret is never printed (Output window, `/diag`, logs, pages).
 
+**Files and power cuts (0.6.3, audit C3).** Every state file ChartBridge writes whole (the agents' rules, account and day,
+`agent-standdowns.txt`, `groups.txt`, `account-marks.txt`, `daily-reset.txt`, `accounts.txt`, the bot's rails, account and day,
+`copier.txt`, `managed.txt`, `planned_brackets.txt`, the merge marker) goes to a temp file opened write-through and flushed to
+the disk (`Flush(true)`) before it replaces the file, and the copy it replaces is kept as `<file>.bak`. An append to a day file
+is written through and flushed the same way. So a power cut leaves the old file or the new one, never a file of zeros. A file
+that reads but is not understood (the agents' rules and account, `agent-standdowns.txt`, `groups.txt`, `account-marks.txt`,
+`daily-reset.txt`) falls back to its `.bak` when that one is understood: logged and a `status` `warn` to the pages ("<file>
+could not be read (<why>): ChartBridge uses its last good copy (<file>.bak), so the last change before the problem may be
+missing: check it on the page"), also to every page that signs in later that run. Without a good copy each behaves as before.
+**A day file** (`agent-<id>-day.txt`) with lines it cannot read (NULs, a half line, a line it does not know) or no session
+line keeps every line that reads, and fills what it lacks from its `.bak`: today's trades, losses and plan ids are never
+reset. The agent stands down for this run only ("agent-<id>-day.txt has N lines ChartBridge could not read (a power cut?): the
+trades, losses and plan ids from the lines that read ... are kept and the file is written again from them: no new entries for
+agent <id> this run: check today's trades in NinjaTrader (the next start goes on with these counts)", an alarm to the pages);
+the file as it was is kept as `agent-<id>-day.txt.unreadable` and the day file is written again at once from what was kept, so
+the next start reads it whole. The alarm no longer says to delete it.
+
 **Connection.** `ws://localhost:<port>/agent/<id>`. Loopback only (as every request), **no** `Origin` header (any `Origin`:
 403), header `X-ChartBridge-Agent: <secret>` (constant-time compare; wrong or missing: 403), 400 for a non-upgrade, 404 for an
 id not in `agents`, 409 while that id is connected. Ids are independent: two agents connect at once. The first message is
