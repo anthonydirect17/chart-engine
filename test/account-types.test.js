@@ -224,5 +224,6 @@ test('account types (review nits): a static Apply names a stricter My floor it r
   assert.deepEqual(GC.applySend(tr, { name: 'Sim101', myFloor: null }), { floor: '', daily: '1000' }, 'none stays none');
   for (const gone of [undefined, null]) assert.deepEqual(GC.applySend(tr, gone), { error: 'the account is not on ChartBridge\'s list now' }, 'an account gone: nothing sent, never an empty floor');
   assert.ok(GC.applySend({ error: 'x' }, { myFloor: 1 }).error);
-  assert.match(fs.readFileSync(path.join(ROOT, 'live', 'accounts.js'), 'utf8'), /const x = GroupsCore\.applySend\(l, acc\);\s*if \(x\.error\) \{ host\.note\('Not sent: ' \+ x\.error \+ '\.', true\); render\(\); return; \}\s*if \(F\.accountLimits\(id, x\.floor, x\.daily\)\)/, 'apply-yes sends only what applySend gives');
+  assert.match(GC.applySend({ error: 'Its type is not on The Desk\'s list now.' }, null).error, /now\.$/, 'an error ending in a full stop gets no second one (apply-yes adds one only when missing)');
+  assert.match(fs.readFileSync(path.join(ROOT, 'live', 'accounts.js'), 'utf8'), /const x = GroupsCore\.applySend\(l, acc\);\s*if \(x\.error\) \{ host\.note\('Not sent: ' \+ x\.error \+ \(\/\[\.!\?\]\$\/\.test\(x\.error\) \? '' : '\.'\), true\); render\(\); return; \}\s*if \(F\.accountLimits\(id, x\.floor, x\.daily\)\)/, 'apply-yes sends only what applySend gives');
 });

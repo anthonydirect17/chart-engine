@@ -387,6 +387,15 @@ try {
       check(ss.every(x => x.open && x.body) && await q.textContent('#wsSecAll') === 'Collapse all', 'Expand all opens every section');
       f = await fits();
       check(f.ok, 'every section open again: placed again under the gear, no scroll, nothing cut: ' + JSON.stringify(f));
+      /* any size change while open places it again (a ResizeObserver): 120 px more content moves it up; taken away, back under the gear */
+      await q.evaluate(() => { const d = document.createElement('div'); d.id = 'smokeGrow'; d.style.height = '120px'; document.getElementById('wsSecBody-hotkeys').appendChild(d); });
+      await q.waitForTimeout(250);
+      const grown = await q.evaluate(() => { const r = document.getElementById('wsSettings').getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), ih: innerHeight }; });
+      check(grown.bottom <= grown.ih && grown.top < 36, 'grown while open: placed again, nothing off screen: ' + JSON.stringify(grown));
+      await q.evaluate(() => document.getElementById('smokeGrow').remove());
+      await q.waitForTimeout(250);
+      f = await fits();
+      check(f.ok, 'shrunk again: back under the gear: ' + JSON.stringify(f));
       await q.screenshot({ path: path.join(out, 'settings-sections-open-1366.png') });
       /* the hotkey boxes and the groups still work inside their sections */
       check(await q.isVisible('#wsGroups [data-gp="edit"][data-id="g1"]') && await q.isVisible('#wsPin') && await q.isVisible('#wsFloors input'), 'the controls inside the sections show again (Edit, Change PIN, the floors)');

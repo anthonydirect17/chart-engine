@@ -266,5 +266,7 @@ test('1.30.0 Settings sections: each a header row button over its body, in the o
   const js = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
   assert.match(js, /function sectionsChanged\(\) \{ applySections\(\); if \(pop && pop\.el === \$\('wsSettings'\)\) placePop\(pop\.el, pop\.anchor, pop\.align\); \}/, 'placed again after a section opens or closes');
   assert.match(js, /store\.setItem\(W\.KEYS\.sections, [^\n]*\); sectionsChanged\(\);/);
+  assert.match(js, /if \(el === \$\('wsSettings'\) && typeof ResizeObserver === 'function'\) \{[^]*?ro\.observe\(el\);\s*pop\.ro = ro;/, 'Settings watched for size changes while open (guarded)');
+  assert.match(js, /const \{ el, anchor, onClose, ro \} = pop; pop = null;\s*if \(ro\) ro\.disconnect\(\);/, 'and let go when closed');
   assert.match(js, /else if \(k === W\.KEYS\.sections\) sectionsChanged\(\);/, 'another window\'s change followed, and placed again the same way');
 });

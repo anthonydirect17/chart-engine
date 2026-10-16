@@ -2473,6 +2473,15 @@ function openPop(el, anchor, onClose, align) {
   if (anchor) { anchor.setAttribute('aria-expanded', 'true'); raise(anchor, true); }
   placePop(el, anchor, align);
   pop = { el, anchor, onClose, align };
+  /* 1.30.0: Settings is placed again whenever its size changes while open (the groups column, a section, a longer note), so it
+     never covers the top bar when it fits under the gear; one placement per frame. No ResizeObserver: placed on open and on the
+     changes this page makes, as before. */
+  if (el === $('wsSettings') && typeof ResizeObserver === 'function') {
+    let queued = false;
+    const ro = new ResizeObserver(() => { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; if (pop && pop.el === el) placePop(el, pop.anchor, pop.align); }); });
+    ro.observe(el);
+    pop.ro = ro;
+  }
 }
 /* 1.30.0: placed again when its height changes while open (a Settings section opened or closed) */
 function placePop(el, anchor, align) {
@@ -2490,7 +2499,8 @@ function placePop(el, anchor, align) {
 }
 function closePops() {
   if (!pop) return;
-  const { el, anchor, onClose } = pop; pop = null;
+  const { el, anchor, onClose, ro } = pop; pop = null;
+  if (ro) ro.disconnect();
   el.hidden = true;
   if (anchor) { anchor.setAttribute('aria-expanded', 'false'); raise(anchor, false); }
   if (onClose) onClose();
