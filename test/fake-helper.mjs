@@ -4,7 +4,8 @@
 // /off, /settings). "Running" the agent is the fake bridge's /test/agent-connect (its hello with the build's name), "off" is
 // /test/agent-connect?on=0. The builds, names, stamps and dollars are made up: sample data only.
 //   const h = await startFakeHelper({ bridgePort, port });  h.calls (every route asked, in order), h.status (its state),
-//   h.setDown(true) (answers nothing, as a PC with no helper), h.setForbid(true) (403, as for another page), h.close()
+//   h.setDown(true) (answers nothing, as a PC with no helper), h.setForbid(true) (403, as for another page),
+//   h.setFail(n) (the next n GET /status answer 500, as the helper's one-poll misses of chart 1.29.1), h.close()
 import http from 'node:http';
 
 const UNLOCK = 'x-chartbridge-unlock';
@@ -18,7 +19,7 @@ export const BUILDS = [
 export async function startFakeHelper({ bridgePort, port = 8767, agents = ['demo'], builds = BUILDS }) {   // builds: the rows GET /status lists (1.28.0: with tiers for the board smoke)
   const origin = 'http://localhost:' + bridgePort, hosts = ['localhost:' + port, '127.0.0.1:' + port];
   const calls = [];
-  let down = false, forbid = false;
+  let down = false, forbid = false, fail = 0;
   const state = Object.fromEntries(agents.map(a => [a, { on: false, running: false, why: 'off', build: null, runningBuild: null, hero: null, since: null,
     autoOn: '', cap: null, lastExit: null, spend: { session: 1.8412, overall: 1234.5, date: '2026-10-12' } }]));
   const control = (what, q) => fetch('http://127.0.0.1:' + bridgePort + '/test/' + what + '?' + new URLSearchParams(q), { method: 'POST' }).then(r => r.json());
@@ -46,6 +47,7 @@ export async function startFakeHelper({ bridgePort, port = 8767, agents = ['demo
       try { body = JSON.parse(raw); } catch (e) { return send(400, { error: 'send one small JSON object' }); }
     }
     calls.push({ route, body, at: Date.now() });
+    if (route === 'GET /status' && fail > 0) { fail--; return send(500, { error: 'made-up server error' }); }
     if (route === 'GET /status') return send(200, { v: 1, agents: state, builds, buildsNote: null, bar: { min_trades: null, min_mean_r: null }, barSet: false, session: '2026-10-12' });
     const a = body && state[body.agent];
     if (!a) return send(409, { error: 'no such agent on this PC' });
@@ -69,5 +71,5 @@ export async function startFakeHelper({ bridgePort, port = 8767, agents = ['demo
     return send(404, { error: 'no such route' });
   });
   await new Promise((res, rej) => { server.once('error', rej); server.listen(port, '127.0.0.1', res); });
-  return { calls, status: state, setDown: v => { down = !!v; }, setForbid: v => { forbid = !!v; }, close: () => new Promise(r => server.close(r)) };
+  return { calls, status: state, setDown: v => { down = !!v; }, setForbid: v => { forbid = !!v; }, setFail: n => { fail = n | 0; }, close: () => new Promise(r => server.close(r)) };
 }

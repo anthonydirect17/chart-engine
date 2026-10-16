@@ -85,7 +85,9 @@ function create(o) {
   /* On/Off (live/agent-helper.js): H.ask, the open "Flatten and turn him off?" for one agent ({ agent, text }), closed when
      another agent is shown (choose); H.job, a Flatten-and-off under way for one agent (Shadow, Flatten, Off), its line in
      H.lines[agent] until it ends (a give-up's until the next On or Off for that agent) */
-  const H = { reach: '', why: '', status: null, pick: {}, busy: false, ask: null, job: null, flatSent: false, lines: {}, said: '', saidAt: 0, setFilled: '' };
+  /* 1.29.1: H.okAt, H.misses, H.slow: the missed-poll grace (AgentHelper.pollStep): one missed GET /status keeps the last good
+     answer, slow true, and nothing starts on it */
+  const H = { reach: '', why: '', status: null, okAt: 0, misses: 0, slow: false, pick: {}, busy: false, ask: null, job: null, flatSent: false, lines: {}, said: '', saidAt: 0, setFilled: '' };
   { const v = readJson(KEYS.chart); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; }
   { const v = readJson(KEYS.feed); if (v && FILTERS.some(f => f[0] === v.filter)) S.feedFilter = v.filter; }
 
@@ -807,15 +809,20 @@ function create(o) {
   async function pollHelper() {
     if (!HC || !S.shown) return;
     const r = await HC.status();
-    H.reach = r.reach === 'ok' ? (r.body && r.body.agents ? 'ok' : 'down') : r.reach;
-    H.why = r.body && typeof r.body.error === 'string' ? r.body.error : '';
-    if (r.reach === 'ok' && r.body) H.status = r.body; else if (r.reach !== 'ok') H.status = null;
+    /* 1.29.1: one miss (a timeout, no connection, a 5xx) keeps the last good answer for one poll; the second in a row is down.
+       401, 403, 400, 409 and every good answer are taken as they come, as before */
+    const st = AH.pollStep(H, r, Date.now());
+    H.reach = st.reach; H.status = st.status; H.why = st.why; H.okAt = st.okAt; H.misses = st.misses; H.slow = st.slow;
     renderPanel();
   }
   /* asked every few seconds while the tab is shown (a timeout set again each time: no interval on this page) */
   let helperTimer = 0;
   function helperLoop() { clearTimeout(helperTimer); if (!HC) return; helperTimer = setTimeout(() => { pollHelper().then(helperLoop, helperLoop); }, AH.POLL_MS); }
   helperLoop();
+  /* 1.29.1: the reach for a check that starts something (Assign hero's free slot): 'slow' in the missed-poll grace, so an old
+     answer never passes it */
+  function helperReach() { return H.slow ? 'slow' : H.reach; }
+  const SLOW_SENT = 'The PC helper is slow to answer: nothing was sent. Try again in a moment.';
   function helperSay(t) { H.said = t || ''; H.saidAt = Date.now(); }
   function renderHelper(a) {
     const sec = q('[data-k="hSec"]'); if (!sec) return;
@@ -834,12 +841,14 @@ function create(o) {
     put(sel, 'disabled', !h || running || H.busy || mine);
     attr(sel, 'title', running ? 'Turn him Off to change the build' : null);
     const selRow = rows.find(r => r.build === sel.value);
-    put(q('[data-k="hNote"]'), 'textContent', H.reach === 'ok' ? (selRow && selRow.warn) || AH.pickerNote(H.status, a.mode, a.sim) : '');
+    put(q('[data-k="hNote"]'), 'textContent', H.reach === 'ok' ? (H.slow ? AH.SLOW_TEXT : (selRow && selRow.warn) || AH.pickerNote(H.status, a.mode, a.sim)) : '');
     const on = !!(h && h.on), asking = !!(H.ask && H.ask.agent === a.agent);
     for (const b of q('[data-k="hBtns"]').children) {
       const isOn = b.dataset.onoff === 'on';
       attr(b, 'aria-pressed', String(isOn === on && !!h));
-      put(b, 'disabled', !h || H.busy || mine || asking || (isOn ? on || !sel.value : !on));
+      /* 1.29.1: in the missed-poll grace On waits for a fresh answer (nothing starts on an old one); Off stays as the last good
+         answer allows (it ends only the agent shown, and the helper itself answers it) */
+      put(b, 'disabled', !h || H.busy || mine || asking || (isOn ? on || !sel.value || H.slow : !on));
     }
     const sp = AH.spendText(h && h.spend);
     put(q('[data-k="hSess"]'), 'textContent', sp.session); put(q('[data-k="hAll"]'), 'textContent', sp.overall);
@@ -859,7 +868,7 @@ function create(o) {
   }
   async function helperOn(a) {
     const build = q('[data-k="hPick"]').value;
-    if (!build) return;
+    if (!build || H.slow) return;   // 1.29.1: never on an old answer
     delete H.lines[a.agent];
     H.busy = true; helperSay('Asking the PC helper to start him...'); renderPanel();
     const r = await HC.on(a.agent, build, a.mode, a.sim);
@@ -951,7 +960,7 @@ function create(o) {
       '<div class="ag-bcell mono ag-bbig ' + r.posTone + '">' + esc(r.position) + '</div>' +
       '<div class="ag-bcell mono ag-bbig ' + (r.r > 0 ? 'pos' : r.r < 0 ? 'neg' : '') + '" title="His closed trades today in R, from each plan\'s own risk (this browser\'s record of his fills)">' + esc(r.rText) + '</div>' +
       '<div class="ag-bcell">' + (r.off ? '<span class="ag-bsub">Start him in Shadow, or set None on his desk to free the slot.</span>' : '') + (r.room.pct !== null ? '<div class="ag-meter2"><i style="width:' + r.room.pct + '%"></i></div>' : '') + '<span class="ag-bsub mono">' + esc(r.room.text) + '</span></div>' +
-      '<div class="ag-bcell ag-bctl">' + (r.off ? '<button type="button" class="ag-btn primary" data-act="bStart" data-agent="' + esc(r.agent) + '" data-build="' + esc(r.startBuild) + '"' + (!HC || H.reach !== 'ok' || !r.startBuild || B.starting ? ' disabled' : '') +
+      '<div class="ag-bcell ag-bctl">' + (r.off ? '<button type="button" class="ag-btn primary" data-act="bStart" data-agent="' + esc(r.agent) + '" data-build="' + esc(r.startBuild) + '"' + (!HC || H.reach !== 'ok' || H.slow || !r.startBuild || B.starting ? ' disabled' : '') +
         ' title="' + esc(r.startBuild ? 'Shadow first, then the PC helper starts him with ' + r.startBuild + '. To free the slot instead, set None on his desk.' : 'No build known: pick one on his desk. To free the slot instead, set None on his desk.') + '">Start in Shadow</button>' : '') +
         '<button type="button" class="ag-btn" data-act="bOpen" data-agent="' + esc(r.agent) + '" title="His desk">Open</button>' +
         '<button type="button" class="ag-bkill" data-act="bKill" data-agent="' + esc(r.agent) + '"' + (r.killed || !can ? ' disabled' : '') + ' title="' + (r.killed ? 'His kill switch is on: release it on his desk (two clicks)' : 'His kill switch on, in one click') + '">' + (r.killed ? 'Killed' : 'Kill') + '</button></div></div>' +
@@ -1000,13 +1009,14 @@ function create(o) {
     if (!raw) { boardSay('That group is not on this ChartBridge any more.'); return; }
     B.pick = null; B.ask = null;
     const g = { id: raw.id, name: raw.name, hero: raw.hero || null, members: raw.members || [] };
-    const st = AH.assignStart(g, agents.list(), H.status, H.reach, assignRows(g));
+    const st = AH.assignStart(g, agents.list(), H.status, helperReach(), assignRows(g));
     if (st.error) { boardSay(st.error); return; }
     if (st.need === 'pick') { B.pick = { gid, agent: st.agent, killed: !!st.killed }; boardSay(g.hero ? 'The default hero ' + g.hero + ' is not on this PC\'s helper: pick a hero for agent ' + st.agent + '.' : 'Group ' + g.name + ' has no default hero: pick one for agent ' + st.agent + '.'); return; }
     assignGo(gid, st.agent, st.build, !!st.killed);
   }
   function assignGo(gid, id, build, killed) {
     const a = agents.get(id), raw = S.groups && S.groups.list ? S.groups.list.find(x => x && x.id === gid) : null;
+    if (H.slow) { boardSay(SLOW_SENT); return; }   // 1.29.1: the pick stays; nothing goes on an old answer
     if (!a || !raw || !build) { B.pick = null; boardSay('Nothing was sent: the agent or the group changed.'); return; }
     const r = AC.accountChange(a, 'group:' + gid, choicesFor(a), Object.assign(ctxNow(a), { askedMode: 'shadow' }));   // every start is Shadow
     if (r.error) { B.pick = null; boardSay(r.error); return; }
@@ -1042,6 +1052,7 @@ function create(o) {
     const a = agents.get(id);
     if (!a || !build || !HC) { boardSay('Nothing was sent: no build known for agent ' + id + '. Pick one on his desk, or set None there to free the slot.'); return; }
     if (B.start) return;
+    if (H.slow) { boardSay(SLOW_SENT); return; }   // 1.29.1: never on an old answer
     const st = AH.startBegin(a, build, Date.now());
     B.start = st.job; B.starting = true;
     if (st.action === 'shadow') {
@@ -1489,7 +1500,7 @@ function create(o) {
       else if (k === 'bKill') { const x = agents.get(act.dataset.agent); if (x && !x.killed) { if (sendAgent(AC.killMsg(x.agent, true), 'kill')) boardSay('Kill switch on sent for ' + AC.agentName(x) + '.'); } }
       else if (k === 'bAssign') assignPressed(act.dataset.gid);
       else if (k === 'bPickGo') { const sel = q('[data-k="bPickSel"]'); if (B.pick && sel) assignGo(B.pick.gid, B.pick.agent, sel.value, B.pick.killed); }
-      else if (k === 'bYes') { if (B.ask) { const x = B.ask; const ag = agents.get(x.agent); const why = AH.slotFree(ag || { agent: x.agent }, H.status, H.reach); if (!ag || why) { B.ask = null; boardSay('Nothing was sent: ' + (why || 'that agent is gone') + '. Press Assign hero again.'); } else assignSend(x.gid, x.agent, x.build, x.msg, x.killed); } }   // fix round 1: the free slot asked again at Continue
+      else if (k === 'bYes') { if (B.ask) { const x = B.ask; const ag = agents.get(x.agent); const why = AH.slotFree(ag || { agent: x.agent }, H.status, helperReach()); if (!ag || why) { B.ask = null; boardSay('Nothing was sent: ' + (why || 'that agent is gone') + '. Press Assign hero again.'); } else assignSend(x.gid, x.agent, x.build, x.msg, x.killed); } }   // fix round 1: the free slot asked again at Continue
       else if (k === 'bCancel') { B.pick = null; B.ask = null; boardSay('Nothing was sent.'); }
       else if (k === 'bStart') boardStart(act.dataset.agent, act.dataset.build);
       else if (k === 'bSdClear') { const m = AC.standDownClearMsg(act.dataset.build, act.dataset.gid); if (m && sendAgent(m, 'sdClear')) boardSay('Clear stand-down sent for ' + act.dataset.build + '.'); }   // 1.29.0: one click

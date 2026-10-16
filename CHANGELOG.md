@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.29.1 (2026-10-16): one missed PC helper poll no longer flips the Agent tab
+
+Page only, no recompile (ChartBridge 0.6.2 as for 1.29.0; `minChartBridge` stays 0.6.2). After 1.29.0 (#51).
+
+- **The missed-poll grace (live/agent-helper.js `pollStep`).** On the laptop install (page 1.29.0, ChartBridge 0.6.2, the Bot-Lab
+  PC helper on 127.0.0.1:8767), about once a minute while an agent was On the Agent tab flipped for one poll to Build `-`, On and
+  Off greyed, Session and Overall `-` and "The PC helper is not running on this PC", then came back on the next poll, while the
+  helper stayed up and answered every /status. Any one failed GET /status (the 4 s timeout, a network error, or an HTTP status the
+  client reads as down, a 500 too) set the reach to down. Now one miss right after a good answer keeps that answer (the build,
+  On or Off, the spend, the line) for one poll, as long as the answer is at most 8 s old; the second miss in a row is down and
+  says "not running" as before. The 8 s covers the worst single miss (3 s poll plus the 4 s timeout after a good answer); a helper
+  really gone (connection refused at once) says not running on the second poll, about 6 s after its last answer, and an answer
+  older than 8 s (the tab was hidden, polls stopped) is never kept. 401 (the PIN), 403 (refused), 400 and 409 and every good
+  answer are taken as they come, exactly as before, and end the grace.
+- **Nothing starts on an old answer.** In the grace the Agent card's header label says "PC helper slow" (the existing label,
+  short enough for its one line, no new colour) while the last answer stays on screen, On is held (greyed) and does nothing if pressed, the
+  board's Start in Shadow is held, and Assign hero (and its Continue and pick) sends nothing and says the helper is slow. Off stays
+  as the last good answer allows: it ends only the agent shown, his position comes from ChartBridge (not the helper), and the
+  helper itself answers it (a failed Off says so, as before). The On/Off job flow (Shadow, Flatten, Off) is unchanged.
+- Tests: `test/agent-helper.test.js` (one miss keeps the answer, a 500 and a 200 with no agents are misses, two in a row are down,
+  an old answer is never kept, recovery, 401, 403, 400 and 409 unchanged, Assign refused while slow, the wiring);
+  `smoke:onoff` adds one 500 (the tab holds at every 100 ms sample, the slow note shows, On is held) and two in a row (not
+  running, then back), with the fake helper's new `setFail(n)`; screenshot `agent-onoff-slow.png`.
+
 ## ChartBridge 0.6.2 and chart 1.29.0 (2026-10-16): group stand-downs, Clear stand-down, and league seats
 
 SPEC CE-2, Phase 4 pieces 5 and 4 (DECISIONS 2026-10-15i, 15j, 15k, 16m). **It needs the recompile: the page needs ChartBridge 0.6.2**
