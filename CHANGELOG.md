@@ -15,12 +15,18 @@ drop down"). The ledger lives on The Desk; the page reads it and copies a type's
   then every type as "<firm> <name>". Choosing one sends PUT /api/accounts/{account}/account-type `{"account_type": id|null}` and shows
   what The Desk says after (a refusal goes to the window's note). Read only while The Desk is not reachable.
 - **Apply its rules** (an account in no group with a type) asks first and only then sends the existing accountLimits; the question
-  shows each number and how it was worked out. A trailing type (end of day or intraday) asks for the account's highest close so far,
-  the same one-time question and check as joining a group (the firm's dashboard; empty to start, never prefilled): My floor is that
-  close less the drawdown, capped at "floor stops at" when the type has one. Not given: My floor is not taken from the type and stays
-  as it is (none, or the account's own), and the question says so; never guessed, since a starting floor would understate the floor
-  of an account that has made money and so overstate its room. A static type: account size less the drawdown. My daily: the type's
-  daily loss limit (none: empty).
+  shows each number and how it was worked out. A static type: My floor is the account size less the drawdown. A trailing type (end
+  of day or intraday) never sets My floor: ChartBridge does not trail My floor (an account in no group keeps its floor as typed), so
+  any fixed floor would go stale after a new high and overstate the room. My floor is sent again exactly as it was, and the question
+  says "A trailing floor is tracked only in a group: put this account in a group (a one-account group is fine) so ChartBridge trails
+  it from its highest close." My daily: the type's daily loss limit; when the type has none and the account has its own, the question
+  says "My daily none (it replaces your $X)".
+- **The join question for an intraday group** asks "highest balance so far (intraday)" (end of day: "highest close so far", as
+  before). The message is the same `highClose`, which ChartBridge 0.6.2 takes as the start of both its highs.
+- A type's "floor stops at" is ignored at or below the starting floor (size less the drawdown) and on a static drawdown, also in this
+  browser's copy of the list. Filling from a type with no Type (Evals or Funded) set keeps the group's own Type, and that is not a
+  difference. The Account type column is narrow at 1366 x 768 (names cut, whole in the tooltip) so the Room keeps its width; a picked
+  type stays shown until The Desk's rows are read again.
 - **Settings, Account groups, the rules dialog.** An Account type select at the top fills every rule box (size, daily loss, drawdown
   and its type, floor stops at, target, consistency) and the group's Type (Evals, Funded, not set) from the type; the name is never
   touched (Anthony names his groups). Any box can still be changed; Save sends groupSave as before, so the rules are on the PC. A type
@@ -40,11 +46,13 @@ drop down"). The ledger lives on The Desk; the page reads it and copies a type's
 - **The Settings cleanup.** Every section is collapsible from its header row (the heading as before, the whole row a button with a
   small caret; no motion: a section opens and closes at once): Charts, Hotkeys, Order Strategies, Entry types, Large prints, The
   Desk, ChartBridge PIN, Layout and Account groups. Open or closed is remembered per section in this browser
-  (`live-settings-sections-v1`, try/catch; another window's change is followed), and Collapse all / Expand all sits at the top.
-  The order, most used first: the first column what is changed while trading (Charts, Hotkeys); the second Order Strategies and
-  Entry types, then what is set once (Large prints, The Desk, the PIN, Layout); the Account groups keep their own column. Every
-  section starts open, as before. Settings is placed again whenever a section opens or closes, so it stays whole at 1366 x 768 in
-  its fullest form (ChartBridge v3 with The Desk and the groups) open, partly closed or all closed. Nothing else changes in look.
+  (`live-settings-sections-v1`, try/catch; another window's change is followed), and Collapse all / Expand all sits in the first
+  header row (Charts), with no row of its own. The order, most used first: the first column what is changed while trading (Charts,
+  Hotkeys); the second Order Strategies and Entry types, then what is set once (Large prints, The Desk, the PIN, Layout); the Account
+  groups keep their own column. Every section starts open, as before. Settings is placed again whenever a section opens or closes,
+  another window changes them, or the groups column comes or goes, so in its fullest form (ChartBridge v3 with The Desk and the
+  groups) it sits under the gear at 1366 x 768 and never covers the top bar (1.29 placed it before the groups column showed, over
+  the top bar), with no scroll, open, partly closed or all closed. Nothing else changes in look.
 - Tests: `test/workspace.test.js` (the kept state, junk and defaults, the label, the order and the wiring); `smoke:settings` adds the
   sections at 1366 x 768 (screenshots `settings-sections-open-default-1366.png`, `settings-sections-charts-closed-1366.png`,
   `settings-sections-closed-1366.png`, `settings-sections-open-1366.png`).

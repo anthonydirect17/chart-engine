@@ -648,7 +648,7 @@ function createFeed(env) {
        account's own floor and daily limit; each only once ChartBridge has sent groups (ChartBridge checks again) */
     accountGroup: (name, group, highText) => {
       if (!S.groups || typeof GroupsCore === 'undefined') return false;
-      const r = GroupsCore.joinMessage(name, group, highText, cid());
+      const hw = GroupsCore.highWord((S.groups || []).find(x => x.id === group)), r = GroupsCore.joinMessage(name, group, highText, cid(), hw.charAt(0).toUpperCase() + hw.slice(1));
       if (r.error) { env.note('Not sent: ' + r.error, true); return false; }
       return send(r.msg);
     },
@@ -689,7 +689,7 @@ function mount(v, host) {
     '<p class="ac-foot apg-foot" data-foot></p></div>';
   const q = sel => v.body.querySelector(sel);
   const listEl = q('[data-list]'), footEl = q('[data-foot]');
-  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, apply: '', applyHigh: '', typePending: new Map() };
+  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, apply: '', typePending: new Map() };
   q('.apg-tabs').addEventListener('click', e => {
     const b = e.target.closest('button[data-tab]'); if (!b) return;
     b.blur();
@@ -714,16 +714,16 @@ function mount(v, host) {
     else if (a === 'mode') F.copierSet({ mode: b.dataset.v });
     else if (a === 'trd') { P.trd = b.dataset.v; render(); }
     else if (a === 'join-no') { P.join = null; render(); }
-    else if (a === 'apply-type') { P.apply = P.apply === id ? '' : id; P.applyHigh = ''; render(); if (P.apply) { const box = listEl.querySelector('[data-act="apply-high"]'); if (box) box.focus(); } }   // 1.30.0: asks first, never applied silently
-    else if (a === 'apply-no') { P.apply = ''; P.applyHigh = ''; render(); }
+    else if (a === 'apply-type') { P.apply = P.apply === id ? '' : id; render(); }   // 1.30.0: asks first, never applied silently
+    else if (a === 'apply-no') { P.apply = ''; render(); }
     else if (a === 'apply-yes') {
       const t = P.apply === id ? typeFor(id) : null, acc = S.accounts.find(x => x.name === id);
-      const l = t ? GroupsCore.typeLimits(t, P.applyHigh) : { error: 'Its type is not on The Desk\'s list now.' };
-      if (l.error) { host.note('Not sent: ' + l.error, true); return; }   // the question stays, to correct the box
-      P.apply = ''; P.applyHigh = '';
-      /* a trailing type with no highest close: My floor is not taken from the type; the account's own stays as it is */
+      const l = t ? GroupsCore.typeLimits(t) : { error: 'Its type is not on The Desk\'s list now.' };
+      P.apply = '';
+      if (l.error) { host.note('Not sent: ' + l.error, true); render(); return; }
+      /* a trailing type (or one with no drawdown type): My floor is never set from the type; the account's own is sent again as it is */
       const floor = l.floor !== null ? l.floor : GroupsCore.moneyBox(acc && acc.myFloor);
-      if (F.accountLimits(id, floor, l.daily)) host.note((l.floor !== null ? 'My floor and My daily' : 'My daily (My floor not set from the type: no highest close given)') + ' from ' + GroupsCore.typeLabel(t) + ' for ' + id + ': sent to ChartBridge.');
+      if (F.accountLimits(id, floor, l.daily)) host.note((l.floor !== null ? 'My floor and My daily' : 'My daily (My floor as it was)') + ' from ' + GroupsCore.typeLabel(t) + ' for ' + id + ': sent to ChartBridge.');
       render();
     }
     else if (a === 'join-yes') {   // G2 (b): the highest close, asked once when an account joins a group
@@ -732,8 +732,6 @@ function mount(v, host) {
       render();
     }
   });
-  /* 1.30.0: the highest close typed for Apply its rules: the question's numbers follow it (the box itself is never rebuilt) */
-  listEl.addEventListener('input', e => { if (e.target.dataset.act === 'apply-high') { P.applyHigh = e.target.value; render(); } });
   listEl.addEventListener('change', e => {
     const el = e.target, a = el.dataset.act;
     if (!a) return;
@@ -749,10 +747,11 @@ function mount(v, host) {
     }
     if (a === 'acct-type') {   // 1.30.0: the account's type, saved on The Desk; shown as The Desk says once it answers
       const name = el.dataset.id, want = el.value;
-      P.typePending.set(name, want); render();
+      P.typePending.set(name, { v: want, after: null }); render();
       F.setAccountType(name, want || null).then(r => {
-        P.typePending.delete(name);
-        if (!r.ok) host.note('Account type for ' + name + ' not saved: ' + r.error, true);
+        /* saved: shown as picked until The Desk's rows are read again (no flash of the old value); refused: back at once */
+        if (r.ok) { const pd = P.typePending.get(name); if (pd) pd.after = S.deskAt; }
+        else { P.typePending.delete(name); host.note('Account type for ' + name + ' not saved: ' + r.error, true); }
         render();
       });
       return;
@@ -828,7 +827,9 @@ function mount(v, host) {
       const typeOpts = typesOn ? '<option value="">Not set</option>' + S.types.map(t => `<option value="${esc(t.id)}">${esc(GroupsCore.typeLabel(t))}</option>`).join('') : '';
       const typeCell = a => {
         if (!typesOn) return '';
-        const at = F.typeOf(a.name), pend = P.typePending.has(a.name), val = pend ? P.typePending.get(a.name) : at ? at.id : '';
+        const pd = P.typePending.get(a.name);
+        if (pd && pd.after !== null && S.deskAt > pd.after) P.typePending.delete(a.name);   // The Desk's rows read since the save
+        const at = F.typeOf(a.name), pend = P.typePending.has(a.name), val = pend ? P.typePending.get(a.name).v : at ? at.id : '';
         const gone = at && !S.types.some(t => t.id === at.id) ? `<option value="${esc(at.id)}">${esc((at.firm ? at.firm + ' ' : '') + at.name + ' (not on The Desk\'s list now)')}</option>` : '';
         const t = typeFor(a.name), canApply = !a.group && !!t && canGroup;
         const off = a.group && links[a.group] && at && at.id !== links[a.group].id;
@@ -837,20 +838,14 @@ function mount(v, host) {
           (canApply ? `<button type="button" class="ac-btn apg-apply" data-act="apply-type" data-id="${esc(a.name)}" aria-label="Apply its rules to ${esc(a.name)}" title="Apply its rules: My floor and My daily from ${esc(GroupsCore.typeLabel(t))} (asks first)">Apply</button>` : '') + '</span>';
       };
       /* 1.30.0: "Apply its rules" asks first, a row of its own (never applied silently) */
-      /* the question: for a trailing type the highest close so far, asked as when an account joins a group (G2 b), never
-         guessed; then the numbers and how each was worked out, following the box as it is typed (a value cell, not rebuilt) */
+      /* the question: the numbers as they will be sent and how each was worked out; a trailing type never sets My floor (ChartBridge
+         trails a floor only in a group), so the account's own is sent again unchanged and the question says why */
       const askApply = a => {
         if (P.apply !== a.name) return '';
-        const t = typeFor(a.name);
-        if (!t) return row('apply|' + a.name, `<span role="cell" class="apg-confirm apg-applyask">Its type is not on The Desk's list now. <button type="button" class="ac-btn" data-act="apply-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
-        const base = GroupsCore.typeLimits(t, '');
-        if (base.error) return row('apply|' + a.name, `<span role="cell" class="apg-confirm apg-applyask">${esc(base.error)} <button type="button" class="ac-btn" data-act="apply-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
-        const l = GroupsCore.typeLimits(t, P.applyHigh), own = GroupsCore.moneyBox(a.myFloor);
-        const words = l.error ? l.error : 'My floor ' + (l.floor !== null ? GroupsCore.usd(+l.floor) + ' (' + l.floorHow + ')' : 'not set from the type (' + l.floorHow.replace(/^not set from the type: /, '') + '; it stays ' + (own ? GroupsCore.usd(+own) : 'none') + ')') +
-          ', My daily ' + (l.daily ? GroupsCore.usd(+l.daily) : 'none') + ' (' + l.dailyHow + ').';
-        const high = !base.trailing ? '' : `highest close so far <input type="text" inputmode="decimal" class="oin apg-ll-in apg-high" data-act="apply-high" data-id="${esc(a.name)}" ${pr({ value: P.applyHigh })} placeholder="$" aria-label="Highest close so far for ${esc(a.name)}, from the firm's dashboard" title="From the firm's dashboard. Optional: empty leaves My floor as it is; the floor is never guessed."> <span class="mut">(the firm's dashboard; optional)</span> `;
-        return row('apply|' + a.name, `<span role="cell" class="apg-confirm apg-applyask apg-join">Apply its rules from ${esc(GroupsCore.typeLabel(t))} to ${esc(a.name)}: ${high}${ci(words, 'apg-applysum' + (l.error ? ' warn' : ''))} ` +
-          `<button type="button" class="ac-btn apg-yes" data-act="apply-yes" data-id="${esc(a.name)}">Apply its rules</button><button type="button" class="ac-btn" data-act="apply-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
+        const t = typeFor(a.name), l = t ? GroupsCore.typeLimits(t) : { error: 'Its type is not on The Desk\'s list now.' };
+        const words = l.error ? l.error : `Apply its rules from ${GroupsCore.typeLabel(t)} to ${a.name}: ` + GroupsCore.applyWords(l, { floor: a.myFloor, daily: a.myDailyLoss });
+        return row('apply|' + a.name, `<span role="cell" class="apg-confirm apg-applyask"><span class="apg-applysum">${esc(words)}</span> ` +
+          (l.error ? '' : `<button type="button" class="ac-btn apg-yes" data-act="apply-yes" data-id="${esc(a.name)}">Apply its rules</button>`) + `<button type="button" class="ac-btn" data-act="apply-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
       };
       /* 1.30.0: a member whose type is not the one its group was filled from: a warning row (nothing is blocked) */
       const typeWarn = a => {
@@ -860,7 +855,7 @@ function mount(v, host) {
         return row('toff|' + a.name, `<span role="cell" class="apg-confirm apg-twarn">${esc(a.name)} is ${esc((at.firm ? at.firm + ' ' : '') + at.name)}; its group ${esc(gName(a.group))} was filled from ${esc(l.label)}. A warning only: nothing is blocked.</span>`, 'apg-ask');
       };
       /* G2 (b): the one question when an account joins a group, a row of its own under the account's */
-      const askJoin = a => !P.join || P.join.account !== a.name ? '' : row('join|' + a.name + '|' + P.join.group, `<span role="cell" class="apg-confirm apg-join">Put ${esc(a.name)} in ${esc(gName(P.join.group))}: highest close so far <input type="text" inputmode="decimal" class="oin apg-ll-in apg-high" data-act="join-high" value="${esc(P.join.prefill)}" aria-label="Highest close so far for ${esc(a.name)}, from the firm's dashboard" title="From the firm's dashboard. Optional: empty takes the larger of the account size and its balance. ChartBridge starts the trailing floor from it."> <span class="mut">(the firm's dashboard; optional)</span> <button type="button" class="ac-btn apg-yes" data-act="join-yes" data-id="${esc(a.name)}">Put in ${esc(gName(P.join.group))}</button><button type="button" class="ac-btn" data-act="join-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
+      const askJoin = a => { if (!P.join || P.join.account !== a.name) return ''; const jg = (S.groups || []).find(x => x.id === P.join.group), hw = GroupsCore.highWord(jg); return row('join|' + a.name + '|' + P.join.group, `<span role="cell" class="apg-confirm apg-join">Put ${esc(a.name)} in ${esc(gName(P.join.group))}: ${esc(hw)} <input type="text" inputmode="decimal" class="oin apg-ll-in apg-high" data-act="join-high" value="${esc(P.join.prefill)}" aria-label="${esc(hw.charAt(0).toUpperCase() + hw.slice(1))} for ${esc(a.name)}, from the firm's dashboard" title="From the firm's dashboard. Optional: empty takes the larger of the account size and its balance. ChartBridge starts the trailing floor from it."> <span class="mut">(the firm's dashboard; optional)</span> <button type="button" class="ac-btn apg-yes" data-act="join-yes" data-id="${esc(a.name)}">Put in ${esc(gName(P.join.group))}</button><button type="button" class="ac-btn" data-act="join-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask'); };
       const canShow = canAct && accounts.some(a => a && 'canHide' in a);   // Show: ChartBridge 0.5.1 and later (its accounts carry canHide)
       /* the in-page confirm for Hide, a row of its own under the account's */
       const ask = a => P.confirm !== a.name ? '' : row('ask|' + a.name, `<span role="cell" class="apg-confirm">Hide ${esc(a.name)}? It leaves every list until you Show it; its history stays. <button type="button" class="ac-btn apg-yes" data-act="archive-yes" data-id="${esc(a.name)}">Hide</button><button type="button" class="ac-btn" data-act="archive-no" data-id="${esc(a.name)}">Keep</button></span>`, 'apg-ask');

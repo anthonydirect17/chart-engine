@@ -69,40 +69,67 @@ test('account types: a group\'s rules differ from its type\'s current version (n
   assert.deepEqual(GC.rulesDiffer(null, t), []); assert.deepEqual(GC.rulesDiffer(g, null), []);
 });
 
-test('account types: Apply its rules, a trailing type: the highest close so far less the drawdown, capped where the floor stops; never guessed', () => {
+test('account types: Apply its rules, a trailing type never sets My floor (ChartBridge trails a floor only in a group); My daily from it', () => {
   const t = GC.cleanTypes({ types: [row({ daily_loss: 1000 })] }).types[0];   // 50,000, drawdown 2,000 end of day, floor stops at 50,100
-  /* a highest close above the start: the floor trails up with it (not the starting 48,000, which would overstate the room) */
-  const up = GC.typeLimits(t, '50,060');
-  assert.deepEqual(up, { trailing: true, floor: '48060', daily: '1000', dailyHow: 'its daily loss limit', floorHow: 'the highest close so far $50,060 less the drawdown $2,000' });
-  assert.deepEqual(GC.limitsMessage('Sim101', up.floor, up.daily, 'c1').msg, { type: 'accountLimits', cid: 'c1', account: 'Sim101', floor: 48060, dailyLoss: 1000 }, 'the existing accountLimits message');
-  /* the cap at "floor stops at" */
-  const cap = GC.typeLimits(t, '53000');
-  assert.equal(cap.floor, '50100');
-  assert.equal(cap.floorHow, 'the highest close so far $53,000 less the drawdown $2,000 is $51,000, capped where the floor stops, $50,100');
-  assert.equal(GC.typeLimits(Object.assign({}, t, { lockAt: null }), '53000').floor, '51000', 'no floor stop: no cap');
-  /* no answer: My floor is not taken from the type, and it says so */
-  for (const none of ['', '  ', null, undefined]) {
-    const n = GC.typeLimits(t, none);
-    assert.equal(n.floor, null); assert.equal(n.trailing, true);
-    assert.equal(n.floorHow, 'not set from the type: a trailing drawdown needs the highest close so far');
-    assert.equal(n.daily, '1000', 'My daily still from the type');
+  for (const dt of ['eod', 'intraday']) {
+    const l = GC.typeLimits(Object.assign({}, t, { drawdownType: dt }));
+    assert.deepEqual(l, { trailing: true, floor: null, floorHow: GC.TRAILING_FLOOR_WORDS, daily: '1000', dailyHow: 'its daily loss limit' });
   }
-  /* the same check as the join question; and a close not above the drawdown */
-  assert.deepEqual(GC.typeLimits(t, 'abc'), { error: 'Highest close so far: dollars above $0, or empty.', field: 'high' });
-  assert.equal(GC.typeLimits(t, '-5').field, 'high');
-  assert.equal(GC.joinMessage('Sim101', 'g1', 'abc').error, 'Highest close so far: dollars above $0, or empty.', 'the same words as joining a group');
-  assert.match(GC.typeLimits(t, '1500').error, /more than the drawdown \$2,000/);
-  assert.equal(GC.typeLimits(Object.assign({}, t, { drawdownType: 'intraday' }), '50500').floor, '48500', 'intraday trails too');
+  assert.equal(GC.TRAILING_FLOOR_WORDS, 'A trailing floor is tracked only in a group: put this account in a group (a one-account group is fine) so ChartBridge trails it from its highest close.');
+  /* the question: My floor stays as it is (re-sent unchanged), why, and My daily */
+  assert.equal(GC.applyWords(GC.typeLimits(t), { floor: 48500, daily: 700 }),
+    'My floor stays as it is ($48,500). A trailing floor is tracked only in a group: put this account in a group (a one-account group is fine) so ChartBridge trails it from its highest close. My daily $1,000 (its daily loss limit).');
+  assert.match(GC.applyWords(GC.typeLimits(t), { floor: null, daily: null }), /^My floor stays as it is \(none\)\. A trailing floor/);
+  /* what is sent: My floor exactly as it was, whatever the type says */
+  const sent = (own) => { const l = GC.typeLimits(t); return GC.limitsMessage('Sim101', l.floor !== null ? l.floor : GC.moneyBox(own), l.daily, 'c1').msg; };
+  assert.deepEqual(sent(48500), { type: 'accountLimits', cid: 'c1', account: 'Sim101', floor: 48500, dailyLoss: 1000 });
+  assert.deepEqual(sent(null), { type: 'accountLimits', cid: 'c1', account: 'Sim101', floor: 0, dailyLoss: 1000 }, 'none stays none');
+  assert.equal(GC.typeLimits(Object.assign({}, t, { drawdownType: null })).floor, null, 'no drawdown type: no floor from it either');
+  assert.match(GC.applyWords(GC.typeLimits(Object.assign({}, t, { drawdownType: null })), { floor: 47000 }), /^My floor stays as it is \(\$47,000\): it has no drawdown type, so no floor is taken from it\./);
 });
 
-test('account types: Apply its rules, a static type: account size less the drawdown; My daily as the type\'s', () => {
+test('account types: Apply its rules, a static type: account size less the drawdown; My daily as the type\'s, saying what it replaces', () => {
   const t = GC.cleanTypes({ types: [row({ drawdown_type: 'static', lock_at: null, daily_loss: 1000 })] }).types[0];
-  assert.deepEqual(GC.typeLimits(t, '99999'), { trailing: false, floor: '48000', daily: '1000', dailyHow: 'its daily loss limit', floorHow: 'a static drawdown: account size $50,000 less the drawdown $2,000' }, 'a highest close is not asked or used');
+  assert.deepEqual(GC.typeLimits(t), { trailing: false, floor: '48000', daily: '1000', dailyHow: 'its daily loss limit', floorHow: 'a static drawdown: account size $50,000 less the drawdown $2,000' });
+  assert.equal(GC.applyWords(GC.typeLimits(t), { floor: 47000, daily: 700 }), 'My floor $48,000 (a static drawdown: account size $50,000 less the drawdown $2,000), My daily $1,000 (its daily loss limit).');
   const nd = GC.typeLimits(Object.assign({}, t, { dailyLoss: null }));
   assert.equal(nd.daily, ''); assert.equal(nd.dailyHow, 'it has no daily loss limit');
+  assert.match(GC.applyWords(nd, { floor: null, daily: 700 }), /My daily none \(it has no daily loss limit; it replaces your \$700\)\.$/);
+  assert.match(GC.applyWords(nd, { floor: null, daily: null }), /My daily none \(it has no daily loss limit\)\.$/);
   assert.match(GC.typeLimits(Object.assign({}, t, { size: null })).error, /has no account size and drawdown/);
   assert.ok(GC.typeLimits(null).error);
-  assert.deepEqual(GC.typeLimits(Object.assign({}, t, { drawdownType: null })).floor, null, 'no drawdown type: no floor from it');
+});
+
+test('account types: "floor stops at" ignored at or below the starting floor, on a static drawdown, and in this browser\'s copy too', () => {
+  const at = o => GC.cleanTypes({ types: [row(o)] }).types[0].lockAt;
+  assert.equal(at({}), 50100);
+  assert.equal(at({ lock_at: 48000 }), null, 'at the starting floor');
+  assert.equal(at({ lock_at: 47000 }), null, 'below it');
+  assert.equal(at({ drawdown_type: 'static', lock_at: 50100 }), null);
+  const st = memStore(); GC.writeTypesCache(st, { v: 1, types: [row({ lock_at: 47000 })] });
+  assert.equal(GC.readTypesCache(st).types[0].lockAt, null);
+  /* a type object from elsewhere: typeForm and rulesDiffer check again */
+  const raw = { id: 'x', firm: 'F', name: 'N', size: 50000, drawdown: 2000, drawdownType: 'eod', lockAt: 47000, accountType: 'eval' };
+  assert.equal(GC.typeForm(raw).lockAt, '');
+  assert.deepEqual(GC.rulesDiffer({ size: 50000, drawdown: 2000, drawdownType: 'eod', lockAt: null, accountType: 'eval' }, raw), []);
+});
+
+test('account types: a type with no Type set keeps the group\'s own (not filled, not a difference)', () => {
+  const t = GC.cleanTypes({ types: [row({ account_type: '' })] }).types[0];
+  const g = { size: 50000, dailyLoss: null, drawdown: 2000, drawdownType: 'eod', lockAt: 50100, target: 3000, consistency: 50, accountType: 'funded' };
+  assert.deepEqual(GC.rulesDiffer(g, t), []);
+  assert.equal(GC.typeForm(t).accountType, '');
+  assert.match(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'groups.js'), 'utf8'), /if \(v\.accountType\) \$d\('accountType'\)\.value = v\.accountType;/);
+});
+
+test('groups: the join question for an intraday group asks the highest balance so far (intraday); ChartBridge reads it as before', () => {
+  assert.equal(GC.highWord({ drawdownType: 'intraday' }), 'highest balance so far (intraday)');
+  assert.equal(GC.highWord({ drawdownType: 'eod' }), 'highest close so far');
+  assert.equal(GC.highWord(null), 'highest close so far');
+  assert.equal(GC.joinMessage('SIM-A', 'g2', 'x', 'c', 'Highest balance so far (intraday)').error, 'Highest balance so far (intraday): dollars above $0, or empty.');
+  assert.deepEqual(GC.joinMessage('SIM-A', 'g2', '51000', 'c', 'Highest balance so far (intraday)').msg, { type: 'accountGroup', cid: 'c', account: 'SIM-A', group: 'g2', highClose: 51000 }, 'the same highClose key: ChartBridge seeds both highs from it');
+  const cs = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'nt8', 'ChartBridgeGroups.cs'), 'utf8');
+  assert.match(cs, /mk\.PeakEod = Math\.Round\(seed, 2\); mk\.PeakIntraday = Math\.Round\(seed, 2\);/, 'ChartBridge 0.6.2 starts the intraday high from the same number');
 });
 
 test('account types: this browser\'s copy of the list (the cache), and a page that works without storage', () => {

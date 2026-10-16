@@ -221,46 +221,54 @@ try {
       check(dd.v === 'lucid-50k-flex-no-dll' && dd.opts.join(' | ') === 'Not set | Lucid 150K, daily DLL | Lucid 25K static (not checked) | Lucid 50K Flex, no DLL (not checked)' && !dd.dis,
         'Accounts tab: SIM-A shows its type from The Desk; Not set then every type, "(not checked)" on the one not checked: ' + JSON.stringify(dd));
       check((await p.$$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]`, els => els.map(e => e.textContent))).includes('Account type'), 'the Account type column');
+      /* the Room keeps its width: measured with the column, then with the 1.29 grid (the class off for a moment) */
+      const roomW = await p.evaluate(sel => { const g = document.querySelector(sel), h = () => Math.round(g.querySelector('.gr-h [role="columnheader"]:nth-child(6)').getBoundingClientRect().width);
+        const w = h(); g.classList.remove('apg-types'); const w0 = h(); g.classList.add('apg-types'); return { w, w0 }; }, `${AP} .apg-acc-g`);
+      check(roomW.w >= roomW.w0, 'the Room column at 1366 is no narrower than without the Account type column: ' + JSON.stringify(roomW));
       /* choosing one calls PUT /api/accounts/{account}/account-type, then shows what The Desk says */
+      /* the pick is shown from the click until The Desk's rows say it: sampled every 15 ms, never the old value in between */
+      await p.evaluate(sel => { const e = document.querySelector(sel); window.__seen = []; window.__sampler = setInterval(() => { const x = document.querySelector(sel); window.__seen.push(x ? x.value : '?'); }, 15); }, `${AP} select.apg-tsel[data-id="SIM-C"]`);
       await p.selectOption(`${AP} select.apg-tsel[data-id="SIM-C"]`, 'lucid-50k-flex-no-dll');
       await until(async () => (await p.$eval(`${AP} select.apg-tsel[data-id="SIM-C"]`, e => e.value)) === 'lucid-50k-flex-no-dll' && desk.accounts.some(a => a.account === 'SIM-C' && a.account_type === 'lucid-50k-flex-no-dll'), 'SIM-C saved on The Desk');
+      await p.waitForTimeout(800);   // past the next read of The Desk's rows
+      const seen = await p.evaluate(() => { clearInterval(window.__sampler); return window.__seen; });
+      const firstNew = seen.indexOf('lucid-50k-flex-no-dll');
+      check(firstNew >= 0 && seen.slice(firstNew).every(v => v === 'lucid-50k-flex-no-dll'), 'the picked type stays shown until The Desk\'s rows are read again (no flash of the old value; ' + seen.length + ' samples)');
       const put = desk.log.filter(x => x.method === 'PUT' && x.which === 'account-type');
       check(put.length === 1 && put[0].account === 'SIM-C' && JSON.stringify(put[0].body) === '{"account_type":"lucid-50k-flex-no-dll"}', 'one PUT with the spec\'s body: ' + JSON.stringify(put));
       /* Apply its rules: only for an account in no group, and it asks first */
       check(await p.$(`${AP} [data-act="apply-type"][data-id="SIM-A"]`) === null && await p.$(`${AP} [data-act="apply-type"][data-id="Sim101"]`) !== null, 'Apply its rules only on an account in no group (Sim101), not on SIM-A in Group A');
-      /* a trailing type (Sim101: 150K, end of day, drawdown 4,500, floor stops at 150,100): the highest close so far is asked, as
-         when an account joins a group; no answer leaves My floor as it is, never guessed */
+      /* a trailing type (Sim101: 150K, end of day): My floor is never set from it (ChartBridge trails a floor only in a group); the
+         account's own My floor is sent again unchanged; My daily from the type */
       const askText = () => p.$eval(`${AP} .apg-applyask`, e => e.textContent.replace(/\s+/g, ' '));
+      await p.fill(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, '96000'); await p.press(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, 'Enter'); await p.click(`${AP} .apg-foot`);
+      await until(async () => (await received()).types.accountLimits === 1, 'My floor 96,000 typed by hand');
       await p.click(`${AP} [data-act="apply-type"][data-id="Sim101"]`);
       const ask = await until(askText, 'the Apply its rules question');
-      check(/Apply its rules from Lucid 150K, daily DLL to Sim101: highest close so far \(the firm's dashboard; optional\) My floor not set from the type \(a trailing drawdown needs the highest close so far; it stays none\), My daily \$3,000 \(its daily loss limit\)\./.test(ask || ''), 'trailing: it asks for the highest close so far; until then My floor is not set from the type: ' + ask);
-      check(await p.$eval(`${AP} [data-act="apply-high"]`, e => e.value === '' && document.activeElement === e), 'the box starts empty (no guess) and has the focus');
-      check(!(await received()).types.accountLimits, 'nothing sent before the answer (never applied silently)');
-      await p.keyboard.type('152000');
-      const t1 = await until(async () => { const t = await askText(); return /My floor \$147,500/.test(t) ? t : null; }, 'the numbers following the box');
-      check(/My floor \$147,500 \(the highest close so far \$152,000 less the drawdown \$4,500\)/.test(t1 || ''), 'a highest close above the start: the floor trails with it: ' + t1);
-      await p.fill(`${AP} [data-act="apply-high"]`, '156000');
-      const t2 = await until(async () => { const t = await askText(); return /capped/.test(t) ? t : null; }, 'the cap');
-      check(/My floor \$150,100 \(the highest close so far \$156,000 less the drawdown \$4,500 is \$151,500, capped where the floor stops, \$150,100\)/.test(t2 || ''), 'capped where the floor stops: ' + t2);
+      check(/Apply its rules from Lucid 150K, daily DLL to Sim101: My floor stays as it is \(\$96,000\)\. A trailing floor is tracked only in a group: put this account in a group \(a one-account group is fine\) so ChartBridge trails it from its highest close\. My daily \$3,000 \(its daily loss limit\)\./.test(ask || ''), 'trailing: the question says My floor stays and why: ' + ask);
+      check(await p.$(`${AP} [data-act="apply-high"]`) === null, 'no highest-close box in Apply');
+      check((await received()).types.accountLimits === 1, 'nothing sent before the answer (never applied silently)');
       await p.screenshot({ path: path.join(out, 'settings-types-accounts-tab.png') });
       await p.click(`${AP} [data-act="apply-yes"][data-id="Sim101"]`);
-      await until(async () => (await p.$eval(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, e => e.value)) === '150100' && (await p.$eval(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, e => e.value)) === '3000', 'Sim101\'s My floor (capped) and My daily from its type');
-      check((await received()).types.accountLimits === 1, 'one accountLimits sent (the existing message)');
-      /* no answer: My floor stays as it is (150,100 now), My daily from the type */
-      await p.fill(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, '500'); await p.press(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, 'Enter'); await p.click(`${AP} .apg-foot`);
-      await until(async () => (await p.$eval(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, e => e.value)) === '500', 'My daily 500 by hand');
-      await p.click(`${AP} [data-act="apply-type"][data-id="Sim101"]`);
-      const t3 = await until(askText, 'the question again');
-      check(/My floor not set from the type \(a trailing drawdown needs the highest close so far; it stays \$150,100\)/.test(t3 || ''), 'no answer: says My floor stays as it is: ' + t3);
-      await p.click(`${AP} [data-act="apply-yes"][data-id="Sim101"]`);
-      await until(async () => (await p.$eval(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, e => e.value)) === '3000', 'My daily from the type again');
-      check(await p.$eval(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, e => e.value) === '150100', 'no answer: My floor left as it was, never guessed');
-      /* a static type (SIM-F1: 25K static, drawdown 1,500): account size less the drawdown, nothing asked */
+      await until(async () => (await p.$eval(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, e => e.value)) === '3000', 'Sim101\'s My daily from its type');
+      check((await received()).types.accountLimits === 2 && await p.$eval(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, e => e.value) === '96000', 'one accountLimits sent; a trailing type never changes My floor (96,000 as it was)');
+      /* a static type (SIM-F1: 25K static, drawdown 1,500): account size less the drawdown; My daily none, saying what it replaces */
+      await p.fill(`${AP} input[data-act="my-daily"][data-id="SIM-F1"]`, '400'); await p.press(`${AP} input[data-act="my-daily"][data-id="SIM-F1"]`, 'Enter'); await p.click(`${AP} .apg-foot`);
+      await until(async () => (await received()).types.accountLimits === 3, 'SIM-F1 My daily 400 by hand');
+      await until(async () => /to floor|daily/.test(await p.$eval(`${AP} .gr-row[data-k="SIM-F1"] .apg-room`, e => e.textContent)), 'SIM-F1\'s own limits back from ChartBridge');
       await p.click(`${AP} [data-act="apply-type"][data-id="SIM-F1"]`);
       const t4 = await until(askText, 'the static question');
-      check(/to SIM-F1: My floor \$23,500 \(a static drawdown: account size \$25,000 less the drawdown \$1,500\), My daily none \(it has no daily loss limit\)\./.test(t4 || '') && await p.$(`${AP} [data-act="apply-high"]`) === null, 'static: size less the drawdown, no highest close asked: ' + t4);
+      check(/to SIM-F1: My floor \$23,500 \(a static drawdown: account size \$25,000 less the drawdown \$1,500\), My daily none \(it has no daily loss limit; it replaces your \$400\)\./.test(t4 || ''), 'static: size less the drawdown; My daily none says what it replaces: ' + t4);
       await p.click(`${AP} [data-act="apply-yes"][data-id="SIM-F1"]`);
       await until(async () => (await p.$eval(`${AP} input[data-act="my-floor"][data-id="SIM-F1"]`, e => e.value)) === '23500', 'SIM-F1\'s My floor from its static type');
+      /* the join question for an intraday group (Group B) asks the highest balance so far (intraday) */
+      await p.selectOption(`${AP} select.apg-grp[data-id="SIM-F2"]`, 'g2');
+      const jq = await until(() => p.$eval(`${AP} .apg-join`, e => e.textContent.replace(/\s+/g, ' ')), 'the join question');
+      check(/Put SIM-F2 in Group B: highest balance so far \(intraday\)/.test(jq || ''), 'an intraday group asks the highest balance so far (intraday): ' + jq);
+      await p.click(`${AP} [data-act="join-no"]`);
+      await p.selectOption(`${AP} select.apg-grp[data-id="SIM-F2"]`, 'g1');
+      check(/Put SIM-F2 in Group A: highest close so far /.test(await until(() => p.$eval(`${AP} .apg-join`, e => e.textContent.replace(/\s+/g, ' ')), 'the eod join question') || ''), 'an end-of-day group asks the highest close so far, as before');
+      await p.click(`${AP} [data-act="join-no"]`);
 
       /* Settings, the rules dialog: the Account type select at the top fills every box and the Type; Save sends groupSave */
       await p.click('#wsSet');
@@ -342,14 +350,16 @@ try {
       };
       const secs = () => q.$$eval('#wsSettings .ws-sec[data-sec]', els => els.map(e => ({ id: e.dataset.sec, open: e.querySelector('.ws-sec-hd').getAttribute('aria-expanded') === 'true', body: !e.querySelector('.ws-sec-body').hidden,
         shown: !e.hidden && !e.closest('[hidden]'), col: [...e.closest('.ws-cols').children].indexOf(e.closest('.ws-col')) })));
-      const fits = () => q.evaluate(() => { const s = document.getElementById('wsSettings'), r = s.getBoundingClientRect(); return { ok: s.scrollHeight <= s.clientHeight + 1 && r.bottom <= innerHeight + 1 && r.left >= 0 && r.right <= innerWidth, bottom: Math.round(r.bottom), sh: s.scrollHeight, ch: s.clientHeight }; });
+      /* fits: no scroll at all (scrollHeight equal to clientHeight), on screen, and under the gear (the top bar never covered) */
+      const fits = () => q.evaluate(() => { const s = document.getElementById('wsSettings'), r = s.getBoundingClientRect(), g = document.getElementById('wsSet').getBoundingClientRect();
+        return { ok: s.scrollHeight <= s.clientHeight && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth && r.top >= g.bottom, top: Math.round(r.top), gear: Math.round(g.bottom), bottom: Math.round(r.bottom), sh: s.scrollHeight, ch: s.clientHeight }; });
       await open8();
       let ss = await secs();
       check(ss.map(x => x.id + '@' + x.col).join(' ') === 'charts@0 hotkeys@0 strategies@1 entry@1 prints@1 desk@1 pin@1 layout@1 groups@2', 'the order: Charts, Hotkeys | Order Strategies, Entry types, Large prints, The Desk, PIN, Layout | Account groups: ' + ss.map(x => x.id + '@' + x.col).join(' '));
       check(ss.every(x => x.open && x.body), 'the default: every section open, as before: ' + JSON.stringify(ss.map(x => [x.id, x.open])));
       let f = await fits();
-      check(f.ok, 'Settings at 1366 x 768 with every section open: no scroll, nothing off screen: ' + JSON.stringify(f));
-      check(await q.textContent('#wsSecAll') === 'Collapse all', 'Collapse all at the top while sections are open');
+      check(f.ok, 'Settings at 1366 x 768 with every section open (the fullest case): under the gear, no scroll, nothing off screen: ' + JSON.stringify(f));
+      check(await q.textContent('#wsSecAll') === 'Collapse all' && await q.$eval('#wsSecAll', e => !!e.closest('.ws-sec[data-sec="charts"] h2')), 'Collapse all in the first header row (no row of its own) while sections are open');
       await q.screenshot({ path: path.join(out, 'settings-sections-open-default-1366.png') });
       /* a header row closes its section and opens it again; remembered across a reload; Settings placed again, still whole */
       await q.click('#wsSettings .ws-sec[data-sec="charts"] .ws-sec-hd');
@@ -376,7 +386,7 @@ try {
       ss = await secs();
       check(ss.every(x => x.open && x.body) && await q.textContent('#wsSecAll') === 'Collapse all', 'Expand all opens every section');
       f = await fits();
-      check(f.ok, 'every section open again: placed again, no scroll, nothing cut: ' + JSON.stringify(f));
+      check(f.ok, 'every section open again: placed again under the gear, no scroll, nothing cut: ' + JSON.stringify(f));
       await q.screenshot({ path: path.join(out, 'settings-sections-open-1366.png') });
       /* the hotkey boxes and the groups still work inside their sections */
       check(await q.isVisible('#wsGroups [data-gp="edit"][data-id="g1"]') && await q.isVisible('#wsPin') && await q.isVisible('#wsFloors input'), 'the controls inside the sections show again (Edit, Change PIN, the floors)');

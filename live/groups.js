@@ -132,17 +132,20 @@ function formOf(g) {
     consistency: isNum(g.consistency) && g.consistency > 0 ? String(g.consistency) : '', noHedge: g.noHedge !== false };
 }
 
+/** The join question's words for a group: an intraday drawdown trails the balance with open P&L, so "highest balance so far
+ *  (intraday)"; ChartBridge takes the one number as the start of both its highs (highClose), so only the words differ. */
+const highWord = g => (g && g.drawdownType === 'intraday' ? 'highest balance so far (intraday)' : 'highest close so far');
 /** G2 (b): the "highest close so far" box's prefill: the larger of the group's account size and the account's balance now. */
 function highCloseDefault(g, account) {
   const size = g && isNum(g.size) ? g.size : 0, bal = account && isNum(account.balance) ? account.balance : 0;
   return Math.max(size, bal);
 }
 /** accountGroup: into a group with the highest close typed ('' : none, ChartBridge then takes the prefill's rule), or out (group null). */
-function joinMessage(account, groupId, highText, cid) {
+function joinMessage(account, groupId, highText, cid, word) {
   const m = Object.assign({ type: 'accountGroup' }, cid ? { cid } : {}, { account, group: groupId || null });
   if (groupId && highText !== undefined && highText !== null && String(highText).trim() !== '') {
     const v = parseMoney(highText);
-    if (!(v > 0) || v > MONEY_MAX) return { error: 'Highest close so far: dollars above $0, or empty.' };
+    if (!(v > 0) || v > MONEY_MAX) return { error: (word || 'Highest close so far') + ': dollars above $0, or empty.' };
     m.highClose = v;
   }
   return { msg: m };
@@ -172,6 +175,9 @@ const TYPE_ID_RX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 const TYPES_CACHE_KEY = 'live-account-types-v1';   // the last good list, for when The Desk is not reachable
 const LINKS_KEY = 'live-group-types-v1';           // { g1: { id, version, label } }: the type each group was filled from
 const posMoney = v => (isNum(v) && v > 0 && v <= MONEY_MAX ? v : null);
+/* "floor stops at" only where it can mean something: a trailing drawdown, above the starting floor (size less the drawdown); else
+   none. Checked again on every use, since this browser's copy of the list is not checked by The Desk again. */
+const lockOf = t => (t && isNum(t.lockAt) && t.lockAt > 0 && t.drawdownType !== 'static' && !(isNum(t.size) && isNum(t.drawdown) && t.lockAt <= t.size - t.drawdown) ? t.lockAt : null);
 /** The Desk's answer ({ v, types, asOf }) clean: { types: [...] by firm then name, archived left out, asOf } or null for a bad shape. */
 function cleanTypes(json) {
   if (!json || typeof json !== 'object' || !Array.isArray(json.types)) return null;
@@ -186,6 +192,7 @@ function cleanTypes(json) {
       drawdownType: TYPES.some(x => x[0] === t.drawdown_type) ? t.drawdown_type : null, lockAt: posMoney(t.lock_at), target: posMoney(t.profit_target),
       consistency: isNum(t.consistency_pct) && t.consistency_pct > 0 && t.consistency_pct <= 100 ? t.consistency_pct : null,
       status: t.status === 'checked' ? 'checked' : 'not_checked', version: Number.isInteger(t.version) && t.version >= 0 ? t.version : 0 });
+    out[out.length - 1].lockAt = lockOf(out[out.length - 1]);
   }
   out.sort((a, b) => a.firm.localeCompare(b.firm, 'en', { sensitivity: 'base' }) || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }) || (a.id < b.id ? -1 : 1));
   return { types: out, asOf: typeof json.asOf === 'string' && json.asOf.length <= 40 ? json.asOf : '' };
@@ -195,7 +202,7 @@ const typeLabel = t => (t ? t.firm + ' ' + t.name + (t.status === 'checked' ? ''
 /** The rules dialog's boxes and Type from a type; missing: what the type has no value for that a group needs. */
 function typeForm(t) {
   const f = { size: moneyBox(t.size), dailyLoss: moneyBox(t.dailyLoss), drawdown: moneyBox(t.drawdown), drawdownType: t.drawdownType || null,
-    lockAt: t.drawdownType === 'static' ? '' : moneyBox(t.lockAt), target: moneyBox(t.target), consistency: isNum(t.consistency) && t.consistency > 0 ? String(t.consistency) : '', accountType: t.accountType || '' };
+    lockAt: moneyBox(lockOf(t)), target: moneyBox(t.target), consistency: isNum(t.consistency) && t.consistency > 0 ? String(t.consistency) : '', accountType: t.accountType || '' };
   f.missing = [[!t.size, 'account size'], [!t.drawdown, 'drawdown size'], [!t.drawdownType, 'drawdown type']].filter(x => x[0]).map(x => x[1]);
   return f;
 }
@@ -206,32 +213,35 @@ const RULE_WORDS = [['size', 'account size'], ['dailyLoss', 'daily loss limit'],
 function rulesDiffer(g, t) {
   if (!g || !t) return [];
   const gv = { size: r2(g.size), dailyLoss: r2(g.dailyLoss), drawdown: r2(g.drawdown), drawdownType: g.drawdownType || '', lockAt: r2(g.lockAt), target: r2(g.target), consistency: r2(g.consistency), accountType: g.accountType || '' };
-  const tv = { size: r2(t.size), dailyLoss: r2(t.dailyLoss), drawdown: r2(t.drawdown), drawdownType: t.drawdownType || '', lockAt: t.drawdownType === 'static' ? 0 : r2(t.lockAt), target: r2(t.target), consistency: r2(t.consistency), accountType: t.accountType || '' };
-  return RULE_WORDS.filter(([k]) => gv[k] !== tv[k]).map(x => x[1]);
+  const tv = { size: r2(t.size), dailyLoss: r2(t.dailyLoss), drawdown: r2(t.drawdown), drawdownType: t.drawdownType || '', lockAt: r2(lockOf(t)), target: r2(t.target), consistency: r2(t.consistency), accountType: t.accountType || '' };
+  /* a type with no Type (Evals or Funded) set leaves the group's own Type as it is: not a difference */
+  return RULE_WORDS.filter(([k]) => gv[k] !== tv[k] && !(k === 'accountType' && !tv.accountType)).map(x => x[1]);
 }
 /**
  * "Apply its rules" for an account in no group: My floor and My daily from a type, each with how it was worked out.
  *   static drawdown      My floor = account size less the drawdown
- *   trailing (eod, intraday)  My floor = the highest close so far less the drawdown, capped at "floor stops at" when the type
- *                        has one: the same one-time question as joining a group (G2 b; the firm's dashboard; the same check as
- *                        joinMessage). Not given: My floor is not taken from the type (floor null) and the answer says so;
- *                        never guessed (a starting floor would understate it once the account has made money)
+ *   trailing (eod, intraday)  My floor is never set from the type: ChartBridge does not trail My floor (an account in no group
+ *                        keeps the floor as typed), so any fixed floor would go stale after a new high and overstate the room.
+ *                        floor null: the account's own My floor is sent again unchanged, and the question says why
  *   My daily             the type's daily loss limit (none: empty)
- * Returns { trailing, floor (box text, or null: not from the type), floorHow, daily, dailyHow } or { error, field }.
+ * Returns { trailing, floor (box text, or null: not from the type), floorHow, daily, dailyHow } or { error }.
  */
-function typeLimits(t, highText) {
+const TRAILING_FLOOR_WORDS = 'A trailing floor is tracked only in a group: put this account in a group (a one-account group is fine) so ChartBridge trails it from its highest close.';
+function typeLimits(t) {
   if (!t || !(t.size > 0) || !(t.drawdown > 0) || t.drawdown >= t.size) return { error: typeLabel(t) + ' has no account size and drawdown to take a floor from.' };
   const daily = moneyBox(t.dailyLoss), dailyHow = t.dailyLoss > 0 ? 'its daily loss limit' : 'it has no daily loss limit';
   if (t.drawdownType === 'static') return { trailing: false, floor: moneyBox(t.size - t.drawdown), floorHow: 'a static drawdown: account size ' + usd(t.size) + ' less the drawdown ' + usd(t.drawdown), daily, dailyHow };
-  if (t.drawdownType !== 'eod' && t.drawdownType !== 'intraday') return { trailing: false, floor: null, floorHow: 'not set from the type: it has no drawdown type', daily, dailyHow };
-  const txt = highText === undefined || highText === null ? '' : String(highText).trim();
-  if (txt === '') return { trailing: true, floor: null, floorHow: 'not set from the type: a trailing drawdown needs the highest close so far', daily, dailyHow };
-  const high = parseMoney(txt);
-  if (!(high > 0) || high > MONEY_MAX) return { error: 'Highest close so far: dollars above $0, or empty.', field: 'high' };
-  const raw = Math.round((high - t.drawdown) * 100) / 100, capped = t.lockAt > 0 && raw > t.lockAt;
-  if (!(raw > 0)) return { error: 'Highest close so far: more than the drawdown ' + usd(t.drawdown) + '.', field: 'high' };
-  return { trailing: true, floor: moneyBox(capped ? t.lockAt : raw), daily, dailyHow,
-    floorHow: 'the highest close so far ' + usd(high) + ' less the drawdown ' + usd(t.drawdown) + (capped ? ' is ' + usd(raw) + ', capped where the floor stops, ' + usd(t.lockAt) : '') };
+  if (t.drawdownType === 'eod' || t.drawdownType === 'intraday') return { trailing: true, floor: null, floorHow: TRAILING_FLOOR_WORDS, daily, dailyHow };
+  return { trailing: false, floor: null, floorHow: 'it has no drawdown type, so no floor is taken from it', daily, dailyHow };
+}
+/** The question's words: My floor and My daily as they will be sent, and how each was worked out. own: the account's My floor
+ *  and My daily now (numbers or null). */
+function applyWords(l, own) {
+  const of = own && isNum(own.floor) && own.floor > 0 ? own.floor : null, od = own && isNum(own.daily) && own.daily > 0 ? own.daily : null;
+  const daily = 'My daily ' + (l.daily ? usd(+l.daily) + ' (' + l.dailyHow + ')' : 'none (' + l.dailyHow + (od ? '; it replaces your ' + usd(od) : '') + ')') + '.';
+  if (l.floor !== null) return 'My floor ' + usd(+l.floor) + ' (' + l.floorHow + '), ' + daily;
+  const stays = 'My floor stays as it is (' + (of ? usd(of) : 'none') + ')';
+  return (l.trailing ? stays + '. ' + l.floorHow : stays + ': ' + l.floorHow + '.') + ' ' + daily;
 }
 /** "Oct 16 14:02 ET" for an ISO time or ms ('' when it cannot be read). */
 function asOfText(at) {
@@ -274,8 +284,8 @@ function membersOff(g, link, typeOfAccount) {
 }
 
 return { NAME_MAX, MONEY_MAX, TYPES, TYPE_WORD, ACCOUNT_TYPES, HERO_RX, typeText, heroText, usd, parseMoney, moneyBox, summary, membersText, sideText, groupMessage, saveFrom, formOf,
-  highCloseDefault, joinMessage, limitsMessage, cleanGroups,
-  TYPE_ID_RX, TYPES_CACHE_KEY, LINKS_KEY, cleanTypes, typeLabel, typeForm, rulesDiffer, typeLimits, asOfText, readTypesCache, writeTypesCache, readLinks, saveLink, membersOff };
+  highCloseDefault, highWord, joinMessage, limitsMessage, cleanGroups,
+  TYPE_ID_RX, TYPES_CACHE_KEY, LINKS_KEY, cleanTypes, typeLabel, typeForm, rulesDiffer, typeLimits, applyWords, TRAILING_FLOOR_WORDS, asOfText, readTypesCache, writeTypesCache, readLinks, saveLink, membersOff };
 });
 
 /* ======================================================================== GroupsPage (browser only) */
@@ -429,7 +439,7 @@ function mountSettings(host) {
       const v = GC.typeForm(t);
       for (const k of ['size', 'dailyLoss', 'drawdown', 'lockAt', 'target', 'consistency']) $d(k).value = v[k];
       if (v.drawdownType) $d('drawdownType').value = v.drawdownType;
-      $d('accountType').value = v.accountType;
+      if (v.accountType) $d('accountType').value = v.accountType;   // a type with no Type set keeps the group's own
       lockSync(); $d('lockAt').value = $d('drawdownType').value === 'static' ? '' : v.lockAt;
       for (const el of d.querySelectorAll('.gp-in')) el.removeAttribute('aria-invalid');
       filled = { id: t.id, version: t.version, label: t.firm + ' ' + t.name };

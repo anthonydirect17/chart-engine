@@ -555,9 +555,12 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .ws-gp .gp-ftype .gp-herorow .gp-in { width: 320px; max-width: 60%; flex: none; }
 
 /* ---------------- 1.30.0 (wave 5): Settings, every section collapsible from its header row (the heading as before, the whole
-   row a button, a small caret), and Collapse all / Expand all at the top. No motion: a section opens and closes at once. */
-.ws-set-top { display: flex; justify-content: flex-end; padding: 2px 12px 4px; border-bottom: 1px solid var(--ws-line); }
-.ws-set-top .ws-set-all { height: 22px; padding: 0 8px; font-size: 11px; }
+   row a button, a small caret), and Collapse all / Expand all in the first header row (no row of its own). No motion: a section opens and closes at once. */
+.ws-sec h2.ws-sec-hrow { display: flex; align-items: center; gap: 8px; }
+.ws-sec h2.ws-sec-hrow .ws-sec-hd { flex: 1 1 auto; width: auto; min-width: 0; }
+.ws-sec h2 .ws-set-all { flex: none; height: 16px; margin: -1px 0; padding: 0 6px; border: 1px solid var(--ws-line2); border-radius: 4px; background: var(--ws-field); color: var(--ws-text2); font: 400 10.5px/14px var(--ws-sans); cursor: pointer; }
+.ws-sec h2 .ws-set-all:hover { color: var(--ws-text); }
+.ws-sec h2 .ws-set-all:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
 .ws-sec h2 .ws-sec-hd { display: flex; align-items: baseline; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .ws-sec h2 .ws-sec-hd::after { content: ''; align-self: center; margin-left: auto; width: 5px; height: 5px; border-right: 1.5px solid var(--ws-muted); border-bottom: 1.5px solid var(--ws-muted); transform: translateY(-2px) rotate(45deg); }
 .ws-sec.ws-sec-closed h2 .ws-sec-hd::after { transform: rotate(-45deg); }

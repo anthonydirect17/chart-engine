@@ -2836,14 +2836,14 @@ $('wsPin').addEventListener('click', () => { closePops(); if (PIN) PIN.openChang
 let groupsUi = null;
 function startGroups() {
   if (!window.GroupsPage || !AF || groupsUi) return;
-  groupsUi = window.GroupsPage.mountSettings({ feed: AF, sec: $('wsGroupsCol'), wide: on => $('wsSettings').classList.toggle('ws-has-groups', on), list: $('wsGroups'), add: $('wsGroupNew'), note: $('wsGroupsNote'), dialog: $('wsDialog'), showDialog: (d, ok, cancel) => showDialog(d, ok, cancel),
+  groupsUi = window.GroupsPage.mountSettings({ feed: AF, sec: $('wsGroupsCol'), wide: on => { if ($('wsSettings').classList.contains('ws-has-groups') === on) return; $('wsSettings').classList.toggle('ws-has-groups', on); Promise.resolve().then(() => { if (pop && pop.el === $('wsSettings')) placePop(pop.el, pop.anchor, pop.align); }); }, /* 1.30.0: placed again for its new size (after this script's start: pop is declared below) */ list: $('wsGroups'), add: $('wsGroupNew'), note: $('wsGroupsNote'), dialog: $('wsDialog'), showDialog: (d, ok, cancel) => showDialog(d, ok, cancel),
     /* 1.28.0: the heroes and their tiers for Hero on duty, from the PC helper (asked when the rules dialog opens) */
     heroes: () => (heroHelper ? heroHelper.status() : Promise.resolve({ reach: 'down', body: null })) });
 }
 const heroHelper = window.AgentHelper && typeof fetch === 'function' ? window.AgentHelper.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (PIN ? PIN.headers() : {}) }) : null;
 startGroups();
 /* 1.30.0 (wave 5): Settings, every section collapsible from its header row, remembered per section (W.KEYS.sections, this browser;
-   the page works without storage), and Collapse all / Expand all at the top */
+   the page works without storage), and Collapse all / Expand all in the first header row */
 const setSecs = () => [...$('wsSettings').querySelectorAll('.ws-sec[data-sec]')];
 function applySections() {
   const open = W.sectionsOpen(store.getItem(W.KEYS.sections));
@@ -2857,9 +2857,10 @@ function applySections() {
   $('wsSecAll').textContent = W.sectionsAllLabel(open, shown);
 }
 function keepSections(change) {
-  store.setItem(W.KEYS.sections, W.sectionsKeep(W.sectionsOpen(store.getItem(W.KEYS.sections)), change)); applySections();
-  if (pop && pop.el === $('wsSettings')) placePop(pop.el, pop.anchor, pop.align);   // its new height: moved up, never cut
+  store.setItem(W.KEYS.sections, W.sectionsKeep(W.sectionsOpen(store.getItem(W.KEYS.sections)), change)); sectionsChanged();
 }
+/* the sections as kept, and Settings placed again for its new height if open (moved up only when it must, never cut) */
+function sectionsChanged() { applySections(); if (pop && pop.el === $('wsSettings')) placePop(pop.el, pop.anchor, pop.align); }
 $('wsSettings').addEventListener('click', e => {
   const b = e.target.closest('.ws-sec-hd'); if (!b) return;
   const sec = b.closest('.ws-sec[data-sec]'); if (!sec) return;
@@ -3079,7 +3080,7 @@ window.addEventListener('storage', e => {
   else if (k === LP.KEYS.colors || k === LP.KEYS.indicatorColors) { for (const v of chartViews()) v.pane.refreshColors(); }
   else if (k === HKKEY || k === W.KEYS.viewKeys) { readHotkeys(); if (pop && pop.el === $('wsSettings')) renderHotkeys(); }
   else if (k === W.KEYS.laptop) syncLaptop();
-  else if (k === W.KEYS.sections) applySections();
+  else if (k === W.KEYS.sections) sectionsChanged();   // another window's change: placed again as here
   else if (k === LP.KEYS.bracketPresets && TK.bar) { core.readPresets(); TK.bar.render(); }
   else if (k === TICKET_KEY && !holds()) { const r = readTicket().root; if (W.ROOTS.includes(r)) TK.root = r; renderOrders(); }
   else if (k === 'live-account-v1' && !holds() && !holder()) { noTicketAccount(); renderOrders(); }

@@ -31,8 +31,10 @@
 .apg-join .apg-high { width: 84px; }
 .apg-join .mut { color: var(--ws-muted); }
 /* 1.30.0: the Account type column (The Desk's ledger) between Group and Limits, its dropdown and Apply */
-.apg-acc-g.apg-grps.apg-types .gr-row { grid-template-columns: minmax(64px, 1.1fr) 78px minmax(0, 1fr) minmax(0, .9fr) minmax(0, .9fr) minmax(0, 2fr) 116px 184px 152px 44px; }
-.apg-acc-g.apg-grps.apg-types.apg-hides .gr-row { grid-template-columns: minmax(64px, 1.1fr) 78px minmax(0, 1fr) minmax(0, .9fr) minmax(0, .9fr) minmax(0, 2fr) 116px 184px 152px 44px 50px; }
+/* the Room keeps at least its 1.29 width at 1366: the type column is narrow (names cut, whole in the tooltip) and the short figures
+   (balance, today, position) give up a little */
+.apg-acc-g.apg-grps.apg-types .gr-row { grid-template-columns: minmax(64px, 1fr) 78px minmax(0, .8fr) minmax(0, .7fr) minmax(0, .7fr) minmax(0, 2.4fr) 116px 128px 152px 44px; }
+.apg-acc-g.apg-grps.apg-types.apg-hides .gr-row { grid-template-columns: minmax(64px, 1fr) 78px minmax(0, .8fr) minmax(0, .7fr) minmax(0, .7fr) minmax(0, 2.4fr) 116px 128px 152px 44px 50px; }
 .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types .gr-row { grid-template-columns: minmax(56px, 1fr) 0 0 minmax(0, .9fr) 0 minmax(0, 1.4fr) 100px 0 0 36px; column-gap: 4px; }
 .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types.apg-hides .gr-row { grid-template-columns: minmax(56px, 1fr) 0 0 minmax(0, .9fr) 0 minmax(0, 1.4fr) 100px 0 0 36px 46px; }
 .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types .gr-row > :nth-child(9) { visibility: hidden; }
@@ -120,3 +122,4 @@
 /* 1.30.0: Apply its rules: the question's numbers take the room, its buttons stay on one line */
 .apg-applyask .apg-applysum { flex: 1 1 auto; min-width: 0; }
 .apg-applyask .ac-btn { flex: none; white-space: nowrap; }
+.apg-type .ac-btn.apg-apply { padding: 2px 5px; }

@@ -106,13 +106,13 @@
 
 <div class="ws-pop ws-settings" id="wsSettings" role="dialog" aria-label="Settings" hidden>
   <!-- 1.30.0 (wave 5): every section collapsible from its header row (remembered per section in this browser), Collapse all /
-       Expand all here, and the sections most used first: Charts and Hotkeys; Order Strategies and Entry types, then what is set
-       once (Large prints, The Desk, the PIN, Layout); the Account groups in their own column -->
-  <div class="ws-set-top"><button type="button" class="ws-btn ws-set-all" id="wsSecAll">Collapse all</button></div>
+       Expand all in the first header row (no row of its own, so the fullest Settings still fits under the gear), and the sections
+       most used first: Charts and Hotkeys; Order Strategies and Entry types, then what is set once (Large prints, The Desk, the
+       PIN, Layout); the Account groups in their own column -->
   <!-- 1.14.0: two columns, so Settings fits a 1366x768 screen whole (Anthony: no scrolling, ever) -->
   <div class="ws-cols"><div class="ws-col">
   <section class="ws-sec" data-sec="charts">
-    <h2><button type="button" class="ws-sec-hd" aria-expanded="true" aria-controls="wsSecBody-charts">Charts <span>every chart</span></button></h2>
+    <h2 class="ws-sec-hrow"><button type="button" class="ws-sec-hd" aria-expanded="true" aria-controls="wsSecBody-charts">Charts <span>every chart</span></button><button type="button" class="ws-set-all" id="wsSecAll" title="Every Settings section at once; each one is remembered in this browser">Collapse all</button></h2>
     <div class="ws-sec-body" id="wsSecBody-charts">
     <div class="ws-field"><span class="ws-flabel" id="wsGlideLbl">Glide</span>
       <span class="ws-seg" id="wsGlide" role="group" aria-labelledby="wsGlideLbl"><button type="button" data-v="smooth">Smooth</button><button type="button" data-v="fast">Fast</button><button type="button" data-v="off">Off</button></span></div>

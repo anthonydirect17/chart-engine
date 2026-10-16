@@ -261,8 +261,10 @@ test('1.30.0 Settings sections: each a header row button over its body, in the o
   const ids = [...set.matchAll(/<section class="ws-sec" data-sec="([a-z]+)"/g)].map(m => m[1]);
   assert.deepStrictEqual(ids, ['charts', 'hotkeys', 'strategies', 'entry', 'prints', 'desk', 'pin', 'layout', 'groups']);
   for (const id of ids) assert.match(set, new RegExp(`<button type="button" class="ws-sec-hd" aria-expanded="true" aria-controls="wsSecBody-${id}">[^]*?<div class="ws-sec-body" id="wsSecBody-${id}">`));
-  assert.ok(set.indexOf('id="wsSecAll"') < set.indexOf('data-sec="charts"'), 'Collapse all above the sections');
+  assert.match(set, /<h2 class="ws-sec-hrow"><button type="button" class="ws-sec-hd"[^>]*aria-controls="wsSecBody-charts">Charts <span>every chart<\/span><\/button><button type="button" class="ws-set-all" id="wsSecAll"/, 'Collapse all in the first header row, not a row of its own');
+  assert.ok(!/ws-set-top/.test(set));
   const js = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
-  assert.match(js, /if \(pop && pop\.el === \$\('wsSettings'\)\) placePop\(pop\.el, pop\.anchor, pop\.align\);/, 'placed again after a section opens or closes');
-  assert.match(js, /else if \(k === W\.KEYS\.sections\) applySections\(\);/, 'another window\'s change followed');
+  assert.match(js, /function sectionsChanged\(\) \{ applySections\(\); if \(pop && pop\.el === \$\('wsSettings'\)\) placePop\(pop\.el, pop\.anchor, pop\.align\); \}/, 'placed again after a section opens or closes');
+  assert.match(js, /store\.setItem\(W\.KEYS\.sections, [^\n]*\); sectionsChanged\(\);/);
+  assert.match(js, /else if \(k === W\.KEYS\.sections\) sectionsChanged\(\);/, 'another window\'s change followed, and placed again the same way');
 });
