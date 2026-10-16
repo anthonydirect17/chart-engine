@@ -3161,6 +3161,24 @@ public static class AgentHarness
                       "0.6.3 C7: feed down, the account Connected, the market open by the calendar: the flatten goes anyway and says why: " + string.Join(" | ", sime.Calls.Skip(c1)));
                 Check(!Any(page, s1, "market not trading"), "0.6.3 C7: never called a halt while the feed is down");
                 SetPos(sime, mnq, 0); ClearMoves();
+                // 0.6.3 (review MED 4, the review's probe 3): the agent's own flatten mid-session with the feed down waits for a trade, as in 0.6.2
+                Fresh();
+                Order e3 = PlacedOn(sime, Good(NewId()));
+                if (e3 == null) { Check(false, "0.6.3 MED 4: an entry was placed: " + AgentReject()); return; }
+                Fill(e3, 1, 24999);
+                StaleLast("MNQ", 60000);
+                et = new DateTime(2026, 10, 9, 11, 0, 0);
+                Mode("manrae", "auto");
+                int c3 = sime.Calls.Count, s3 = N(page);
+                A("{\"type\":\"flatten\"}");
+                Advance(12000);
+                Check(sime.Calls.Count == c3 && !Any(page, s3, "with NinjaTrader's data feed down: no trade seen") && Any(page, s3, "NinjaTrader's data feed is down (not the flat time, so it waits for a trade)"),
+                      "0.6.3 MED 4: the agent's own flatten at 11:00 with the feed down: nothing sent (it waits for a trade), said: " + string.Join(" | ", sime.Calls.Skip(c3)));
+                fd.SetValue(null, 0);
+                Last2(); Advance(5000);
+                Check(sime.Calls.Skip(c3).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")), "0.6.3 MED 4: trading again: it closes");
+                SetPos(sime, mnq, 0); ClearMoves();
+                fd.SetValue(null, 1);
                 // the feed up and no trade: a real halt, as before
                 fd.SetValue(null, 0);
                 Fresh();

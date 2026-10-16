@@ -2702,7 +2702,10 @@ Where the contract left a detail open, the safest simple choice was taken and is
   connection is lost, the account is Connected and the market is open by the calendar, so the close goes without a fresh
   price; check the fill in NinjaTrader"). With the feed down and the account not Connected nothing can go: NOT FLAT says "no
   trade seen for 5 s: NinjaTrader's data feed is down and <account> is not Connected, so ChartBridge cannot close it now; act
-  in NinjaTrader now". The feed up and no trade is a real halt: as before.
+  in NinjaTrader now". The feed up and no trade is a real halt: as before. Review MED 4: only the job the agent's rules start
+  at its flat time (from `flatAt`, not an earlier session's position, not outside its hours, not the agent's own `flatten`) goes
+  with the feed down; every other flatten waits for a trade as in 0.6.2, and its NOT FLAT says "NinjaTrader's data feed is down
+  (not the flat time, so it waits for a trade) ...".
   A stop placed again is cancelled only once the market trades again (review E2): with no fresh trade the stop stays and NOT
   FLAT says "market not trading: its stop placed again at <price> stays". When the shut hours arrive after its legs were
   already cancelled (the close not filled), the job places the stop again (lead's default: a position is never left without a

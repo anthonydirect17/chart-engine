@@ -1176,6 +1176,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public Order ReStop;           // the stop placed again
             public bool ReStopTried;       // tried in this shut spell (once)
             public bool FeedSaid;          // 0.6.3 (audit C7): the flatten without a fresh price (the data feed down) was said once
+            public bool AtFlatTime;        // 0.6.3 (review MED 4): started by its rules at the flat time: the only job the feed-down close is for
             public bool CloseHandled;      // its last close's end was looked at (a close that did not fill: the stop placed again; review D3)
             public double HoldUntilMs;     // after a close that could not go: the stop stays, the next try waits until then
             public bool GateAgain;         // a stop was placed again: its cancel waits for a trading market too (review E2)
@@ -1649,7 +1650,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // NinjaTrader confirms each one done, every fill there has come through, and both position readings agree, what it holds is
             // closed at market ("CB#<tag> ag:<id> flat"). Readings still apart after 3 s: the smaller is closed (never more than either
             // shows). Not flat 10 s after the start: a status error to the pages, every 10 s until flat. Returns how many roots started.
-            public int StartFlatten(string why, bool byRules)
+            public int StartFlatten(string why, bool byRules, bool atFlatTime)
             {
                 Account a = FindAccount(Account);   // null: not listed by NinjaTrader; a pair it still owns gets its job (and its errors)
                 string acctName = Account;
@@ -1672,7 +1673,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         Order near = stops.Count == 0 ? null : stops.Any(o => o.OrderAction == OrderAction.Sell) ? stops.OrderByDescending(o => o.StopPrice).First() : stops.OrderBy(o => o.StopPrice).First();
                         lock (Sync)
                         {
-                            Flats[key] = new FlatJob { Root = root, Inst = inst, Why = why, StartMs = Now(), Owned = owned, StartQty = startQty, LegQty = legQty, WasMissing = a == null,
+                            Flats[key] = new FlatJob { Root = root, Inst = inst, Why = why, StartMs = Now(), Owned = owned, StartQty = startQty, LegQty = legQty, WasMissing = a == null, AtFlatTime = byRules && atFlatTime,
                                                        StopPx = near != null ? near.StopPrice : 0, Tag = near != null ? ChartBridgeAgents.TagOf(near.Name) : null };
                             if (owned) Sticky.Add(root);   // its pair until flat: cancelling its own legs never makes it someone else's
                         }
@@ -1804,7 +1805,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         // the market open by the calendar (not shut, above): the flatten goes anyway, saying so. The feed up and no
                         // trade is a real halt: as before, the stop and target stay and ChartBridge tries again when it trades.
                         bool feedDown = ChartBridgeServer.FeedDown, acctUp = ChartBridgeAccounts.ConnectionText(a) == "connected";
-                        if (feedDown && acctUp)
+                        if (feedDown && acctUp && j.AtFlatTime)   // 0.6.3 (review MED 4): the flat time's job only; any other flatten waits for a trade, as in 0.6.2
                         {
                             if (!j.FeedSaid)
                             {
@@ -1819,7 +1820,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                             {
                                 j.LastErrorMs = now;
                                 string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
-                                              " still shows " + p1 + "; " + (feedDown ? "no trade seen for 5 s: NinjaTrader's data feed is down and " + a.Name + " is not Connected, so ChartBridge cannot close it now; act in NinjaTrader now"
+                                              " still shows " + p1 + "; " + (feedDown && !acctUp ? "no trade seen for 5 s: NinjaTrader's data feed is down and " + a.Name + " is not Connected, so ChartBridge cannot close it now; act in NinjaTrader now"
+                                              : feedDown ? "no trade seen for 5 s: NinjaTrader's data feed is down (not the flat time, so it waits for a trade): the stop and target stay; ChartBridge tries again when it trades; act in NinjaTrader if you need to"
                                               : "market not trading: " + (j.GateAgain ? "its stop placed again at " + CbJson.Num(j.StopPx) + " stays; ChartBridge tries again when it trades" : "the stop and target stay; ChartBridge tries again when it trades"));
                                 ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
                             }
@@ -3927,7 +3929,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
                 }
             }
-            if (flatHours) StartFlatten(AtFlatTime(r, etNow) ? FlatWords(r, etNow) : fromBefore && !FlatHours(r, etNow) ? Id + " held a position from an earlier session (its " + Hm(r.FlatAt) + " flatten did not finish): flattened by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + (ChartBridgeCme.Closed(etNow) ? ", or the market closed" : "") + "): flattened by its rules", true);
+            if (flatHours) StartFlatten(AtFlatTime(r, etNow) ? FlatWords(r, etNow) : fromBefore && !FlatHours(r, etNow) ? Id + " held a position from an earlier session (its " + Hm(r.FlatAt) + " flatten did not finish): flattened by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + (ChartBridgeCme.Closed(etNow) ? ", or the market closed" : "") + "): flattened by its rules", true, null, AtFlatTime(r, etNow));   // 0.6.3 (review MED 4): marked when it is the flat time
             foreach (Seat x in seats) x.StepFlatten(now);
             PruneSeats();   // 0.6.0: a seat that left the group, now flat with nothing of the agent's there, is dropped
             WelcomeIfCapsChanged();
@@ -3990,11 +3992,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The flatten on every seat it follows (onlySeat: that one). Returns how many (seat, contract) jobs started.
-        private int StartFlatten(string why, bool byRules) { return StartFlatten(why, byRules, null); }
-        private int StartFlatten(string why, bool byRules, string onlySeat)
+        private int StartFlatten(string why, bool byRules) { return StartFlatten(why, byRules, null, false); }
+        private int StartFlatten(string why, bool byRules, string onlySeat) { return StartFlatten(why, byRules, onlySeat, false); }
+        private int StartFlatten(string why, bool byRules, string onlySeat, bool atFlatTime)
         {
             int n = 0;
-            foreach (Seat x in AllSeats()) if (onlySeat == null || x.Name == onlySeat) n += x.StartFlatten(why, byRules);
+            foreach (Seat x in AllSeats()) if (onlySeat == null || x.Name == onlySeat) n += x.StartFlatten(why, byRules, atFlatTime);
             return n;
         }
 
