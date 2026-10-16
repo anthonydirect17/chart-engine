@@ -117,3 +117,6 @@
 .gr-qb .gr-row.qb-q { padding-top: 1px; padding-bottom: 1px; font-size: 11px; }
 .gr-qb .gr-row.qb-q .b { font-weight: 500; color: var(--ws-text2); }
 .gr-qb .gr-row.qb-first { border-top: 1px solid var(--ws-line2); }
+/* 1.30.0: Apply its rules: the question's numbers take the room, its buttons stay on one line */
+.apg-applyask .apg-applysum { flex: 1 1 auto; min-width: 0; }
+.apg-applyask .ac-btn { flex: none; white-space: nowrap; }

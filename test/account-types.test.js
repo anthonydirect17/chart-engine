@@ -69,13 +69,40 @@ test('account types: a group\'s rules differ from its type\'s current version (n
   assert.deepEqual(GC.rulesDiffer(null, t), []); assert.deepEqual(GC.rulesDiffer(g, null), []);
 });
 
-test('account types: Apply its rules gives My floor (the starting floor) and My daily, as the accountLimits message', () => {
-  const t = GC.cleanTypes({ types: [row({ daily_loss: 1000 })] }).types[0];
-  assert.deepEqual(GC.typeLimits(t), { floor: '48000', daily: '1000' });
-  assert.deepEqual(GC.limitsMessage('Sim101', '48000', '1000', 'c1').msg, { type: 'accountLimits', cid: 'c1', account: 'Sim101', floor: 48000, dailyLoss: 1000 });
-  assert.deepEqual(GC.typeLimits(Object.assign({}, t, { dailyLoss: null })), { floor: '48000', daily: '' }, 'no daily limit: My daily empty (none)');
+test('account types: Apply its rules, a trailing type: the highest close so far less the drawdown, capped where the floor stops; never guessed', () => {
+  const t = GC.cleanTypes({ types: [row({ daily_loss: 1000 })] }).types[0];   // 50,000, drawdown 2,000 end of day, floor stops at 50,100
+  /* a highest close above the start: the floor trails up with it (not the starting 48,000, which would overstate the room) */
+  const up = GC.typeLimits(t, '50,060');
+  assert.deepEqual(up, { trailing: true, floor: '48060', daily: '1000', dailyHow: 'its daily loss limit', floorHow: 'the highest close so far $50,060 less the drawdown $2,000' });
+  assert.deepEqual(GC.limitsMessage('Sim101', up.floor, up.daily, 'c1').msg, { type: 'accountLimits', cid: 'c1', account: 'Sim101', floor: 48060, dailyLoss: 1000 }, 'the existing accountLimits message');
+  /* the cap at "floor stops at" */
+  const cap = GC.typeLimits(t, '53000');
+  assert.equal(cap.floor, '50100');
+  assert.equal(cap.floorHow, 'the highest close so far $53,000 less the drawdown $2,000 is $51,000, capped where the floor stops, $50,100');
+  assert.equal(GC.typeLimits(Object.assign({}, t, { lockAt: null }), '53000').floor, '51000', 'no floor stop: no cap');
+  /* no answer: My floor is not taken from the type, and it says so */
+  for (const none of ['', '  ', null, undefined]) {
+    const n = GC.typeLimits(t, none);
+    assert.equal(n.floor, null); assert.equal(n.trailing, true);
+    assert.equal(n.floorHow, 'not set from the type: a trailing drawdown needs the highest close so far');
+    assert.equal(n.daily, '1000', 'My daily still from the type');
+  }
+  /* the same check as the join question; and a close not above the drawdown */
+  assert.deepEqual(GC.typeLimits(t, 'abc'), { error: 'Highest close so far: dollars above $0, or empty.', field: 'high' });
+  assert.equal(GC.typeLimits(t, '-5').field, 'high');
+  assert.equal(GC.joinMessage('Sim101', 'g1', 'abc').error, 'Highest close so far: dollars above $0, or empty.', 'the same words as joining a group');
+  assert.match(GC.typeLimits(t, '1500').error, /more than the drawdown \$2,000/);
+  assert.equal(GC.typeLimits(Object.assign({}, t, { drawdownType: 'intraday' }), '50500').floor, '48500', 'intraday trails too');
+});
+
+test('account types: Apply its rules, a static type: account size less the drawdown; My daily as the type\'s', () => {
+  const t = GC.cleanTypes({ types: [row({ drawdown_type: 'static', lock_at: null, daily_loss: 1000 })] }).types[0];
+  assert.deepEqual(GC.typeLimits(t, '99999'), { trailing: false, floor: '48000', daily: '1000', dailyHow: 'its daily loss limit', floorHow: 'a static drawdown: account size $50,000 less the drawdown $2,000' }, 'a highest close is not asked or used');
+  const nd = GC.typeLimits(Object.assign({}, t, { dailyLoss: null }));
+  assert.equal(nd.daily, ''); assert.equal(nd.dailyHow, 'it has no daily loss limit');
   assert.match(GC.typeLimits(Object.assign({}, t, { size: null })).error, /has no account size and drawdown/);
   assert.ok(GC.typeLimits(null).error);
+  assert.deepEqual(GC.typeLimits(Object.assign({}, t, { drawdownType: null })).floor, null, 'no drawdown type: no floor from it');
 });
 
 test('account types: this browser\'s copy of the list (the cache), and a page that works without storage', () => {

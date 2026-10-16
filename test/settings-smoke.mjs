@@ -195,9 +195,10 @@ try {
       created_at: '2026-10-16T12:00:00Z', updated_at: '2026-10-16T12:00:00Z' }, o);
     const desk = await startDesk(DP, {
       types: [T({ id: 'lucid-50k-flex-no-dll', name: '50K Flex, no DLL' }),
-        T({ id: 'lucid-150k-daily-dll', name: '150K, daily DLL', account_type: 'funded', account_size: 150000, daily_loss: 3000, drawdown: 4500, lock_at: 150100, profit_target: 9000, consistency_pct: null, status: 'checked', checked_at: '2026-10-16T13:00:00Z', version: 2 })],
+        T({ id: 'lucid-150k-daily-dll', name: '150K, daily DLL', account_type: 'funded', account_size: 150000, daily_loss: 3000, drawdown: 4500, lock_at: 150100, profit_target: 9000, consistency_pct: null, status: 'checked', checked_at: '2026-10-16T13:00:00Z', version: 2 }),
+        T({ id: 'lucid-25k-static-sample', name: '25K static', account_type: 'eval', account_size: 25000, daily_loss: null, drawdown: 1500, drawdown_type: 'static', lock_at: null, profit_target: 1500, consistency_pct: null })],
       accounts: [{ account: 'SIM-A', firm: 'Lucid', archived: false, account_type: 'lucid-50k-flex-no-dll' }, { account: 'SIM-B', firm: 'Lucid', archived: false, account_type: 'lucid-150k-daily-dll' },
-        { account: 'Sim101', firm: null, archived: false, account_type: 'lucid-150k-daily-dll' }] });
+        { account: 'Sim101', firm: null, archived: false, account_type: 'lucid-150k-daily-dll' }, { account: 'SIM-F1', firm: 'Lucid', archived: false, account_type: 'lucid-25k-static-sample' }] });
     const tb = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(TP), '--v3', '--trading', '--test-controls', '--board-groups', '--test-pin=' + TEST_PIN, '--desk-url=http://127.0.0.1:' + DP], { stdio: ['ignore', 'pipe', 'inherit'] });
     await new Promise(r => tb.stdout.once('data', r));
     const received = async () => (await fetch(`http://127.0.0.1:${TP}/test/received`, { method: 'POST' })).json();
@@ -217,7 +218,7 @@ try {
       /* the Accounts tab: each account's Account type, "Not set" then every type, "(not checked)" until checked */
       await until(async () => (await p.$$(`${AP} select.apg-tsel`)).length >= 4, 'the Account type dropdowns');
       const dd = await p.$eval(`${AP} select.apg-tsel[data-id="SIM-A"]`, e => ({ v: e.value, opts: [...e.options].map(o => o.textContent), dis: e.disabled }));
-      check(dd.v === 'lucid-50k-flex-no-dll' && dd.opts.join(' | ') === 'Not set | Lucid 150K, daily DLL | Lucid 50K Flex, no DLL (not checked)' && !dd.dis,
+      check(dd.v === 'lucid-50k-flex-no-dll' && dd.opts.join(' | ') === 'Not set | Lucid 150K, daily DLL | Lucid 25K static (not checked) | Lucid 50K Flex, no DLL (not checked)' && !dd.dis,
         'Accounts tab: SIM-A shows its type from The Desk; Not set then every type, "(not checked)" on the one not checked: ' + JSON.stringify(dd));
       check((await p.$$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]`, els => els.map(e => e.textContent))).includes('Account type'), 'the Account type column');
       /* choosing one calls PUT /api/accounts/{account}/account-type, then shows what The Desk says */
@@ -227,14 +228,39 @@ try {
       check(put.length === 1 && put[0].account === 'SIM-C' && JSON.stringify(put[0].body) === '{"account_type":"lucid-50k-flex-no-dll"}', 'one PUT with the spec\'s body: ' + JSON.stringify(put));
       /* Apply its rules: only for an account in no group, and it asks first */
       check(await p.$(`${AP} [data-act="apply-type"][data-id="SIM-A"]`) === null && await p.$(`${AP} [data-act="apply-type"][data-id="Sim101"]`) !== null, 'Apply its rules only on an account in no group (Sim101), not on SIM-A in Group A');
+      /* a trailing type (Sim101: 150K, end of day, drawdown 4,500, floor stops at 150,100): the highest close so far is asked, as
+         when an account joins a group; no answer leaves My floor as it is, never guessed */
+      const askText = () => p.$eval(`${AP} .apg-applyask`, e => e.textContent.replace(/\s+/g, ' '));
       await p.click(`${AP} [data-act="apply-type"][data-id="Sim101"]`);
-      const ask = await until(() => p.$eval(`${AP} .apg-applyask`, e => e.textContent), 'the Apply its rules question');
-      check(/Apply its rules from Lucid 150K, daily DLL to Sim101: My floor \$145,500 \(account size \$150,000 less the drawdown \$4,500\), My daily \$3,000/.test(ask || ''), 'it asks first, with the numbers: ' + ask);
+      const ask = await until(askText, 'the Apply its rules question');
+      check(/Apply its rules from Lucid 150K, daily DLL to Sim101: highest close so far \(the firm's dashboard; optional\) My floor not set from the type \(a trailing drawdown needs the highest close so far; it stays none\), My daily \$3,000 \(its daily loss limit\)\./.test(ask || ''), 'trailing: it asks for the highest close so far; until then My floor is not set from the type: ' + ask);
+      check(await p.$eval(`${AP} [data-act="apply-high"]`, e => e.value === '' && document.activeElement === e), 'the box starts empty (no guess) and has the focus');
       check(!(await received()).types.accountLimits, 'nothing sent before the answer (never applied silently)');
+      await p.keyboard.type('152000');
+      const t1 = await until(async () => { const t = await askText(); return /My floor \$147,500/.test(t) ? t : null; }, 'the numbers following the box');
+      check(/My floor \$147,500 \(the highest close so far \$152,000 less the drawdown \$4,500\)/.test(t1 || ''), 'a highest close above the start: the floor trails with it: ' + t1);
+      await p.fill(`${AP} [data-act="apply-high"]`, '156000');
+      const t2 = await until(async () => { const t = await askText(); return /capped/.test(t) ? t : null; }, 'the cap');
+      check(/My floor \$150,100 \(the highest close so far \$156,000 less the drawdown \$4,500 is \$151,500, capped where the floor stops, \$150,100\)/.test(t2 || ''), 'capped where the floor stops: ' + t2);
       await p.screenshot({ path: path.join(out, 'settings-types-accounts-tab.png') });
       await p.click(`${AP} [data-act="apply-yes"][data-id="Sim101"]`);
-      await until(async () => (await p.$eval(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, e => e.value)) === '145500' && (await p.$eval(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, e => e.value)) === '3000', 'Sim101\'s My floor and My daily from its type');
+      await until(async () => (await p.$eval(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, e => e.value)) === '150100' && (await p.$eval(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, e => e.value)) === '3000', 'Sim101\'s My floor (capped) and My daily from its type');
       check((await received()).types.accountLimits === 1, 'one accountLimits sent (the existing message)');
+      /* no answer: My floor stays as it is (150,100 now), My daily from the type */
+      await p.fill(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, '500'); await p.press(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, 'Enter'); await p.click(`${AP} .apg-foot`);
+      await until(async () => (await p.$eval(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, e => e.value)) === '500', 'My daily 500 by hand');
+      await p.click(`${AP} [data-act="apply-type"][data-id="Sim101"]`);
+      const t3 = await until(askText, 'the question again');
+      check(/My floor not set from the type \(a trailing drawdown needs the highest close so far; it stays \$150,100\)/.test(t3 || ''), 'no answer: says My floor stays as it is: ' + t3);
+      await p.click(`${AP} [data-act="apply-yes"][data-id="Sim101"]`);
+      await until(async () => (await p.$eval(`${AP} input[data-act="my-daily"][data-id="Sim101"]`, e => e.value)) === '3000', 'My daily from the type again');
+      check(await p.$eval(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, e => e.value) === '150100', 'no answer: My floor left as it was, never guessed');
+      /* a static type (SIM-F1: 25K static, drawdown 1,500): account size less the drawdown, nothing asked */
+      await p.click(`${AP} [data-act="apply-type"][data-id="SIM-F1"]`);
+      const t4 = await until(askText, 'the static question');
+      check(/to SIM-F1: My floor \$23,500 \(a static drawdown: account size \$25,000 less the drawdown \$1,500\), My daily none \(it has no daily loss limit\)\./.test(t4 || '') && await p.$(`${AP} [data-act="apply-high"]`) === null, 'static: size less the drawdown, no highest close asked: ' + t4);
+      await p.click(`${AP} [data-act="apply-yes"][data-id="SIM-F1"]`);
+      await until(async () => (await p.$eval(`${AP} input[data-act="my-floor"][data-id="SIM-F1"]`, e => e.value)) === '23500', 'SIM-F1\'s My floor from its static type');
 
       /* Settings, the rules dialog: the Account type select at the top fills every box and the Type; Save sends groupSave */
       await p.click('#wsSet');
@@ -242,7 +268,7 @@ try {
       await p.click('#wsGroups [data-gp="edit"][data-id="g1"]');
       await until(() => p.$('#wsDialog[open] #gp-fromType'), 'the rules dialog with Account type');
       const opts = await p.$$eval('#gp-fromType option', els => els.map(e => e.textContent));
-      check(opts.join(' | ') === 'Not set | Lucid 150K, daily DLL | Lucid 50K Flex, no DLL (not checked)', 'the dialog lists every type, "(not checked)" beside the one not checked: ' + opts.join(' | '));
+      check(opts.join(' | ') === 'Not set | Lucid 150K, daily DLL | Lucid 25K static (not checked) | Lucid 50K Flex, no DLL (not checked)', 'the dialog lists every type, "(not checked)" beside the one not checked: ' + opts.join(' | '));
       await p.selectOption('#gp-fromType', 'lucid-50k-flex-no-dll');
       const filled = await p.evaluate(() => Object.fromEntries(['name', 'size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 'target', 'consistency', 'accountType'].map(k => [k, document.getElementById('gp-' + k).value])));
       check(JSON.stringify(filled) === JSON.stringify({ name: 'Group A', size: '50000', dailyLoss: '', drawdown: '2000', drawdownType: 'eod', lockAt: '50100', target: '3000', consistency: '50', accountType: 'eval' }),
@@ -290,12 +316,12 @@ try {
       await until(async () => (await p.$$(`${AP} select.apg-tsel`)).length >= 4, 'the Account type dropdowns from the copy');
       const foot = await until(async () => { const t = await p.$eval(`${AP} .apg-foot`, e => e.textContent); return /as of/.test(t) ? t : null; }, 'the as-of note', 15000);
       check(/Account types: The Desk is not reachable; the list as of [A-Z][a-z]{2} \d{1,2} \d\d:\d\d ET\./.test(foot || ''), 'The Desk down: the cached list "as of <time>": ' + foot);
-      check(await p.$eval(`${AP} select.apg-tsel[data-id="SIM-A"]`, e => e.disabled && e.options.length === 3), 'the cached list still offered, read only while The Desk is down');
+      check(await p.$eval(`${AP} select.apg-tsel[data-id="SIM-A"]`, e => e.disabled && e.options.length === 4), 'the cached list still offered, read only while The Desk is down');
       await p.click('#wsSet');
       await p.click('#wsGroups [data-gp="edit"][data-id="g2"]');
       await until(() => p.$('#wsDialog[open] #gp-fromType'), 'the dialog with The Desk down');
       const why2 = await p.textContent('#gp-fromWhy'), n2 = await p.$$eval('#gp-fromType option', els => els.length);
-      check(n2 === 3 && /The Desk is not reachable: the list as of/.test(why2), 'the dialog still fills from the copy, and says as of when: ' + why2);
+      check(n2 === 4 && /The Desk is not reachable: the list as of/.test(why2), 'the dialog still fills from the copy, and says as of when: ' + why2);
       await p.click('#wsDialog [data-act="cancel"]');
       await ctx.close();
 

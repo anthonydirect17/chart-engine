@@ -209,11 +209,29 @@ function rulesDiffer(g, t) {
   const tv = { size: r2(t.size), dailyLoss: r2(t.dailyLoss), drawdown: r2(t.drawdown), drawdownType: t.drawdownType || '', lockAt: t.drawdownType === 'static' ? 0 : r2(t.lockAt), target: r2(t.target), consistency: r2(t.consistency), accountType: t.accountType || '' };
   return RULE_WORDS.filter(([k]) => gv[k] !== tv[k]).map(x => x[1]);
 }
-/** "Apply its rules" for an account in no group: My floor at the type's starting floor (account size less the drawdown) and
- *  My daily at its daily loss limit (none: empty). { floor, daily } as box text, or { error }. */
-function typeLimits(t) {
+/**
+ * "Apply its rules" for an account in no group: My floor and My daily from a type, each with how it was worked out.
+ *   static drawdown      My floor = account size less the drawdown
+ *   trailing (eod, intraday)  My floor = the highest close so far less the drawdown, capped at "floor stops at" when the type
+ *                        has one: the same one-time question as joining a group (G2 b; the firm's dashboard; the same check as
+ *                        joinMessage). Not given: My floor is not taken from the type (floor null) and the answer says so;
+ *                        never guessed (a starting floor would understate it once the account has made money)
+ *   My daily             the type's daily loss limit (none: empty)
+ * Returns { trailing, floor (box text, or null: not from the type), floorHow, daily, dailyHow } or { error, field }.
+ */
+function typeLimits(t, highText) {
   if (!t || !(t.size > 0) || !(t.drawdown > 0) || t.drawdown >= t.size) return { error: typeLabel(t) + ' has no account size and drawdown to take a floor from.' };
-  return { floor: moneyBox(t.size - t.drawdown), daily: moneyBox(t.dailyLoss) };
+  const daily = moneyBox(t.dailyLoss), dailyHow = t.dailyLoss > 0 ? 'its daily loss limit' : 'it has no daily loss limit';
+  if (t.drawdownType === 'static') return { trailing: false, floor: moneyBox(t.size - t.drawdown), floorHow: 'a static drawdown: account size ' + usd(t.size) + ' less the drawdown ' + usd(t.drawdown), daily, dailyHow };
+  if (t.drawdownType !== 'eod' && t.drawdownType !== 'intraday') return { trailing: false, floor: null, floorHow: 'not set from the type: it has no drawdown type', daily, dailyHow };
+  const txt = highText === undefined || highText === null ? '' : String(highText).trim();
+  if (txt === '') return { trailing: true, floor: null, floorHow: 'not set from the type: a trailing drawdown needs the highest close so far', daily, dailyHow };
+  const high = parseMoney(txt);
+  if (!(high > 0) || high > MONEY_MAX) return { error: 'Highest close so far: dollars above $0, or empty.', field: 'high' };
+  const raw = Math.round((high - t.drawdown) * 100) / 100, capped = t.lockAt > 0 && raw > t.lockAt;
+  if (!(raw > 0)) return { error: 'Highest close so far: more than the drawdown ' + usd(t.drawdown) + '.', field: 'high' };
+  return { trailing: true, floor: moneyBox(capped ? t.lockAt : raw), daily, dailyHow,
+    floorHow: 'the highest close so far ' + usd(high) + ' less the drawdown ' + usd(t.drawdown) + (capped ? ' is ' + usd(raw) + ', capped where the floor stops, ' + usd(t.lockAt) : '') };
 }
 /** "Oct 16 14:02 ET" for an ISO time or ms ('' when it cannot be read). */
 function asOfText(at) {

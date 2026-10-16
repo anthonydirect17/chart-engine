@@ -13,10 +13,14 @@ drop down"). The ledger lives on The Desk; the page reads it and copies a type's
   when The Desk says exactly that; every other type shows "(not checked)" after its name wherever it is offered.
 - **Accounts tab: Account type.** A column between Group and Limits (once ChartBridge sends groups and the list is known): "Not set",
   then every type as "<firm> <name>". Choosing one sends PUT /api/accounts/{account}/account-type `{"account_type": id|null}` and shows
-  what The Desk says after (a refusal goes to the window's note). Read only while The Desk is not reachable. For an account in no
-  group with a type, Apply asks first ("Apply its rules from <type> to <account>: My floor ... My daily ...") and only then sends the
-  existing accountLimits: My floor at the type's starting floor (account size less the drawdown), My daily at its daily loss limit
-  (none: empty).
+  what The Desk says after (a refusal goes to the window's note). Read only while The Desk is not reachable.
+- **Apply its rules** (an account in no group with a type) asks first and only then sends the existing accountLimits; the question
+  shows each number and how it was worked out. A trailing type (end of day or intraday) asks for the account's highest close so far,
+  the same one-time question and check as joining a group (the firm's dashboard; empty to start, never prefilled): My floor is that
+  close less the drawdown, capped at "floor stops at" when the type has one. Not given: My floor is not taken from the type and stays
+  as it is (none, or the account's own), and the question says so; never guessed, since a starting floor would understate the floor
+  of an account that has made money and so overstate its room. A static type: account size less the drawdown. My daily: the type's
+  daily loss limit (none: empty).
 - **Settings, Account groups, the rules dialog.** An Account type select at the top fills every rule box (size, daily loss, drawdown
   and its type, floor stops at, target, consistency) and the group's Type (Evals, Funded, not set) from the type; the name is never
   touched (Anthony names his groups). Any box can still be changed; Save sends groupSave as before, so the rules are on the PC. A type
@@ -28,7 +32,8 @@ drop down"). The ledger lives on The Desk; the page reads it and copies a type's
   by hand) shows "rules differ from <type>: Update" in Settings; Update refills the dialog from the type and puts Save in focus. A member
   account whose own type is not the group's is named under the group in Settings, and on the Accounts tab with a warning row under
   it and its dropdown marked. Nothing is refused anywhere.
-- Tests: `test/account-types.test.js` (the list read clean, "(not checked)", the fill, the differ check, Apply's numbers, the copy and
+- Tests: `test/account-types.test.js` (the list read clean, "(not checked)", the fill, the differ check, Apply's numbers (a trailing
+  type above its start, the cap at floor stops at, no answer, static), the copy and
   the links with storage blocked, the member warning, the chart-accounts rows, the wiring, and the fake Desk against the contract);
   `test/fake-desk.mjs` answers the spec's account-type routes; `smoke:settings` adds the whole flow at 1366 x 768 against the fake Desk
   (screenshots `settings-types-accounts-tab.png`, `settings-group-type-filled.png`, `settings-types-differ.png`).
