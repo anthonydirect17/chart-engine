@@ -280,9 +280,13 @@ test('the Account page\'s connection: client v3 right after hello, then auth; it
     s.deliver({ type: 'bot', enabled: true });
     assert.equal(F.feed.post({ type: 'botKill', cid: 'b1', on: true }), true, 'another part posts on the same connection');
     assert.deepEqual(F.sent[F.sent.length - 1], { type: 'botKill', cid: 'b1', on: true });
+    s.deliver({ type: 'groups', list: [] });
+    assert.equal(F.feed.S.lostAt, null);
     s.onclose();
     assert.ok(Object.values(F.feed.S.switches).every(x => x === false));
-    assert.deepEqual(heard, ['bot', '(closed)']);
+    // 1.31.0 (audit C6): the last snapshot is kept, marked as of the drop; the group columns stay (hadGroups) while not known
+    assert.ok(typeof F.feed.S.lostAt === 'number' && F.feed.S.accounts.length === 1 && F.feed.S.groups === null && F.feed.S.hadGroups === true);
+    assert.deepEqual(heard, ['bot', 'groups', '(closed)']);
     assert.equal(F.feed.post({ type: 'botKill', cid: 'b2', on: true }), false, 'nothing sent while closed');
     off();
   } finally { F.feed.stop(); global.WebSocket = G; if (G === undefined) delete global.WebSocket; }
@@ -325,6 +329,15 @@ test('the Account page is a workspace panel: its type, the Add menu, its files i
   for (const t of [ws, bot, read('live/order-strategies.js')]) assert.doesNotMatch(t, /live-desk-url-v1/);
 });
 
+test('1.31.0 (audit C6): after a drop the Accounts tab dims the last snapshot as of the drop, Conn unknown, the group columns kept', () => {
+  const js = read('live/accounts.js');
+  assert.match(js, /if \(S\.got && S\.lostAt === null\) S\.lostAt = Date\.now\(\);/, 'the drop time, once');
+  assert.match(js, /S\.accounts = list; S\.got = true; S\.lostAt = null;/, 'a fresh accounts list is current again');
+  assert.match(js, /const grpKnown = !!S\.groups, grpOn = grpKnown \|\| S\.hadGroups,/);
+  assert.match(js, /stale \? c\('unknown', 'warn'/);
+  assert.match(js, /'As of ' \+ hms\(S\.lostAt\) \+ ' ET \(not connected\): ChartBridge\\'s last balances, positions and orders, not current\.'/);
+  assert.match(read('live/accounts.css'), /\.apg-stale \.gr-row:not\(\.gr-h\) \{ opacity: \.5; \}/);
+});
 test('ChartBridge 0.5.1: Show only when ChartBridge has it (its accounts carry canHide); Hide only where canHide is true', () => {
   const js = read('live/accounts.js');
   assert.match(js, /const canShow = canAct && accounts\.some\(a => a && 'canHide' in a\);/);
@@ -337,7 +350,7 @@ test('ChartBridge 0.5.1: Show only when ChartBridge has it (its accounts carry c
 test('1.26.0: the Accounts tab gets Group and Limits only once ChartBridge sends groups; the page sends exactly the contract\'s messages', () => {
   const src = read('live/accounts.js'), html = read('live/index.html'), files = JSON.parse(read('nt8/install-files.json'));
   assert.match(src, /case 'groups': \{/);
-  assert.match(src, /const grpOn = !!S\.groups, canGroup = grpOn && S\.enabled && !S\.groupsError;/);
+  assert.match(src, /const grpKnown = !!S\.groups, grpOn = grpKnown \|\| S\.hadGroups, canGroup = grpKnown && S\.enabled && !S\.groupsError;/);   // 1.31.0: kept while not known after groups came once
   assert.match(src, /\(grpOn \? h\('Group'\) \+ \(typesOn \? h\('Account type'\) : ''\) \+ h\('Limits', 'r'\) : ''\)/, 'the two headers, only with groups (1.30.0: Account type between them once The Desk\'s types are known)');
   assert.match(src, /S\.groups = null; S\.groupsError = null;/, 'a drop forgets the groups (an older ChartBridge sends none)');
   assert.match(src, /accountGroup: \(name, group, highText\) => \{\s*if \(!S\.groups/);
