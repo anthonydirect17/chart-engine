@@ -435,7 +435,20 @@ public static class AgentHarness
         // 2. killed, stood down, the account
         P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":true}");
         refuse(Plan(NewId(), "ES", "buy", "market", "24999", 0, 0, 0, 1), "the kill switch is on", "check 2 before 3 and 4: killed");
+        // 0.6.3 (audit C5, Anthony's decision): saved per agent; a restart keeps it until the page releases it
+        string kf = Path.Combine(Dir, "agent-manrae-kill.txt");
+        Check(File.Exists(kf) && !File.Exists(Path.Combine(Dir, "agent-demob-kill.txt")), "0.6.3 C5: the kill switch is saved for that agent only (agent-manrae-kill.txt)");
+        Restart();
+        Check(Last(agentOut, "welcome").Contains("\"killed\":true") && Last(agentOut, "agentState").Contains("\"killed\":true") && Last(page, "agent").Contains("\"killed\":true,\"killedAt\":") &&
+              Logged("agent manrae: its kill switch is still on (on since") && D != null && !D.Killed,
+              "0.6.3 C5: after a restart manrae is still killed (welcome, agentState, the Board's agent row), demob is not: " + Last(agentOut, "welcome"));
+        Mode("manrae", "auto");
+        refuse(Good(NewId()), "the kill switch is on", "0.6.3 C5: still killed after the restart: a plan refused");
         P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        Check(!File.Exists(kf), "0.6.3 C5: released on the page: the file is gone");
+        Restart();
+        Check(Last(agentOut, "welcome").Contains("\"killed\":false"), "0.6.3 C5: released, then a restart: not killed");
+        Mode("manrae", "auto");   // as before the restarts
         ChartBridgeOrders.ReadConfig("tradeAccounts", "EVAL-A, SIM-B, SIM-C, SIM-D");
         refuse(Good(NewId()), "Sim101 may not trade from the chart (tradeAccounts in config.txt): the agent needs it tradable", "check 2: the account not tradable now");
         ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-B, SIM-C, SIM-D");

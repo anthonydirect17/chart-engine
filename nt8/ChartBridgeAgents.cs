@@ -2092,6 +2092,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string AccountFile { get { return Path.Combine(Folder, "agent-" + Id + "-account.txt"); } }
         private string RulesFile { get { return Path.Combine(Folder, "agent-" + Id + "-rules.txt"); } }
         private string DayFile { get { return Path.Combine(Folder, "agent-" + Id + "-day.txt"); } }
+        private string KillFile { get { return Path.Combine(Folder, "agent-" + Id + "-kill.txt"); } }   // 0.6.3 (audit C5)
+        private double killedAt;   // the UTC ms the kill switch went on (0: not known), while killed
+        public bool Killed { get { lock (Sync) return killed; } }
         private string LogFile { get { return Path.Combine(Folder, "agent-" + Id + ".log"); } }
 
         private static double Now() { return ChartBridgeAgents.Now(); }
@@ -2105,7 +2108,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             LoadAccount();
             RefreshSeats(false);   // 0.6.0: its seats (a group's members, or its one account)
             LoadDay();
-            lock (Sync) { noClientSinceMs = Now(); startedMs = noClientSinceMs; mode = "shadow"; }
+            double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): a kill switch survives a restart until the page releases it
+            lock (Sync) { noClientSinceMs = Now(); startedMs = noClientSinceMs; mode = "shadow"; killed = kill.HasValue; killedAt = kill ?? 0; }
+            if (kill.HasValue) Log("agent " + Id + ": its kill switch is still on (" + KilledWords(kill.Value) + "; kept through the restart): every agent order is refused until it is released on the page");
             Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + AccountWords() + (SimNow() ? " (Sim)" : " (LIVE)") + (League ? ", a league seat" : "") + ", starting in shadow)");
         }
 
@@ -3978,16 +3983,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             return whys.All(x => x != null) ? "no account of " + AccountWords() + " is tradable now (" + string.Join("; ", whys) + ")" : null;
         }
 
-        private string SetKill(Dictionary<string, Val> d) { lock (PlaceGate) return SetKillLocked(d); }   // never between a placement's checks and its order
+        private string SetKill(Dictionary<string, Val> d) { lock (PlaceGate) return SetKillLocked(d); }
+        internal static string KilledWords(double at) { return at > 0 ? "on since " + DateTime.SpecifyKind(new DateTime(1970, 1, 1).AddMilliseconds(at), DateTimeKind.Utc).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC" : "on"; }   // never between a placement's checks and its order
 
         private string SetKillLocked(Dictionary<string, Val> d)
         {
             bool on;
             if (!Bool(d, "on", out on)) return "on must be true or false";
             List<Proposal> expired = new List<Proposal>();
-            lock (Sync) { killed = on; if (on) expired = ExpireOpenLocked("not answered"); }
+            // 0.6.3 (audit C5): saved, so a restart keeps it; a release whose file cannot be removed is refused (it would come back)
+            string saveErr = null;
+            if (on) { bool was; lock (Sync) was = killed; if (!was) saveErr = ChartBridgeFiles.SaveKill(KillFile, "agent " + Id, ChartBridgeAgents.Now()); }
+            else { string err = ChartBridgeFiles.ClearKill(KillFile); if (err != null) return "agent-" + Id + "-kill.txt could not be removed (" + err + "): the kill switch stays on"; }
+            lock (Sync) { if (on && !killed) killedAt = ChartBridgeAgents.Now(); killed = on; if (!on) killedAt = 0; if (on) expired = ExpireOpenLocked("not answered"); }
             if (on)
             {
+                if (saveErr != null) { string w = "agent-" + Id + "-kill.txt could not be saved (" + saveErr + "): the kill switch is on now but a restart would release it"; ToPages(StatusJson("warn", w)); Log(w); }
                 int n = CancelUnfilled("the kill switch is on");
                 foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "the kill switch is on")); }
                 string text = "Agent " + Id + ": the kill switch is on: " + n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled; any position keeps its stop and target; every agent order is refused until it is released";
@@ -4653,7 +4664,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             ins.Append(']');
             return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"agent\":" + CbJson.Str(Id) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + ChartBridgeBranches.Json(Account) +
-                   ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"league\":" + (League ? "true" : "false") + ",\"rules\":" + NoteWelcomeRules(EnforcedRulesJson(r)) + ",\"instruments\":" + ins + SeatsWelcomeFields() + "}";
+                   ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"league\":" + (League ? "true" : "false") + ",\"killed\":" + (Killed ? "true" : "false") + ",\"rules\":" + NoteWelcomeRules(EnforcedRulesJson(r)) + ",\"instruments\":" + ins + SeatsWelcomeFields() + "}";
         }
 
         // 0.6.0: welcome's group ({id, name} or null), seats (the member accounts in seat order, null for one account) and seatsRev.
@@ -4834,6 +4845,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"trades\":").Append(TradesLocked())
                  .Append(",\"losses\":").Append(LossesLocked())
                  .Append(",\"killed\":").Append(killed ? "true" : "false")
+                 .Append(",\"killedAt\":").Append(killed && killedAt > 0 ? Ms(killedAt) : "null")   // 0.6.3 (audit C5)
                  .Append(",\"standDown\":").Append(Str(sd))
                  .Append(",\"standDowns\":").Append(sds)   // 0.6.2
                  .Append(",\"owns\":").Append(owns ? "true" : "false")

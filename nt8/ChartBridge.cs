@@ -586,6 +586,35 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void SignedIn(ChartBridgeClient c) { List<string> n; lock (Notes) n = Notes.ToList(); foreach (string t in n) c.Send(NoteJson(t)); }
         private static string NoteJson(string text) { return "{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(text) + "}"; }
 
+        // 0.6.3 (audit C5, Anthony's decision): a kill switch kept in a file (agent-<id>-kill.txt, bot-kill.txt) so a restart never
+        // releases it. Written only by the page's kill message; released only by it. The file there at all is a kill switch on
+        // (one that does not read says so with a time of 0). KillSince: null when there is no file, else the UTC ms it went on.
+        public static double? KillSince(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return null;
+                foreach (string raw in File.ReadAllLines(path))
+                {
+                    string[] p = raw.Trim().Split('\t');
+                    double v;
+                    if (p.Length == 2 && p[0] == "killed" && double.TryParse(p[1], NumberStyles.None, CultureInfo.InvariantCulture, out v)) return v;
+                }
+                return 0;
+            }
+            catch (Exception) { return 0; }   // there but not readable: still on (the careful side)
+        }
+        public static string SaveKill(string path, string who, double atMs)
+        {
+            try { WriteLines(path, new[] { "# ChartBridge kill switch for " + who + " (written only by the page's kill message; released only there; do not edit)", "# while this file is here the kill switch is on, also after a restart", "killed\t" + atMs.ToString("0", CultureInfo.InvariantCulture) }); return null; }
+            catch (Exception ex) { return ex.Message; }
+        }
+        public static string ClearKill(string path)
+        {
+            try { if (File.Exists(path)) File.Delete(path); string b = BackupOf(path); if (File.Exists(b)) File.Delete(b); return null; }
+            catch (Exception ex) { return ex.Message; }
+        }
+
         // The words the loaders use when the backup is taken.
         public static string BackupNote(string name, string why) { return name + " could not be read (" + why + "): ChartBridge uses its last good copy (" + name + ".bak), so the last change before the problem may be missing: check it on the page"; }
     }

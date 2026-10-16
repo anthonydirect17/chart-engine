@@ -541,9 +541,23 @@ public static class BotHarness
         int m = sim.Calls.Count;
         Bot(Sig(NewId(), Market("buy")));
         Check(BotReject().Contains("the kill switch is on") && sim.Calls.Count == m, "kill switch on: every bot order refused");
+        // 0.6.3 (audit C5, Anthony's decision): saved; a restart keeps it until the page releases it
+        string kf = Path.Combine(home, "ChartBridge", "bot-kill.txt");
+        Check(File.Exists(kf) && File.ReadAllText(kf).Contains("killed\t"), "0.6.3 C5: the bot's kill switch is saved (bot-kill.txt)");
+        ChartBridgeBot.Stop(); ChartBridgeBot.Start(false); Reconnect();
+        Check(Last(botOut, "welcome").Contains("\"killed\":true") && Last(page, "bot").Contains("\"killed\":true") && Last(page, "bot").Contains("\"killedAt\":") && !Last(page, "bot").Contains("\"killedAt\":null"),
+              "0.6.3 C5: after a restart the bot is still killed: its welcome and the page say so: " + Last(botOut, "welcome"));
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+        m = sim.Calls.Count;
+        Bot(Sig(NewId(), Market("buy")));
+        Check(BotReject().Contains("the kill switch is on") && sim.Calls.Count == m, "0.6.3 C5: still killed after the restart: every bot order refused");
         Page("{\"type\":\"botKill\",\"cid\":\"k\",\"on\":\"yes\"}");
         Check(PageReject().Contains("on must be true or false"), "botKill: on must be a bool");
         Page("{\"type\":\"botKill\",\"cid\":\"k\",\"on\":false}");
+        Check(!File.Exists(kf), "0.6.3 C5: released on the page: bot-kill.txt is gone");
+        ChartBridgeBot.Stop(); ChartBridgeBot.Start(false); Reconnect();
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+        Check(Last(botOut, "welcome").Contains("\"killed\":false"), "0.6.3 C5: released, then a restart: not killed");
         Order again = AutoTrade("buy");
         Check(again != null && Last(page, "bot").Contains("\"killed\":false"), "kill switch off: the bot may place again");
         Settle();

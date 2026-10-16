@@ -178,6 +178,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception) { return null; }
         }
         private static string DayFile { get { return Path.Combine(Folder, "bot-day.txt"); } }
+        private static string KillFile { get { return Path.Combine(Folder, "bot-kill.txt"); } }   // 0.6.3 (audit C5)
+        private static double killedAt;
         private static string LogFile { get { return Path.Combine(Folder, "bot.log"); } }
 
         // ---------------------------------------------------------- start and stop (ChartBridgeServer.Start and Stop)
@@ -192,7 +194,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             LoadRails();
             LoadAccount();
             LoadDay();
-            lock (Sync) noBotSinceMs = Now();
+            double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): the kill switch survives a restart until the page releases it
+            lock (Sync) { noBotSinceMs = Now(); killed = kill.HasValue; killedAt = kill ?? 0; }
+            if (kill.HasValue) Log("the bot's kill switch is still on (" + ChartBridgeAgent.KilledWords(kill.Value) + "; kept through the restart): every bot order is refused until it is released on the page");
             if (withTimer) timer = new Timer(delegate { try { Check(); } catch (Exception ex) { ChartBridgeServer.Log("bot check error: " + ex.Message); } }, null, (int)CheckEveryMs, (int)CheckEveryMs);
             Account ba = FindAccount();
             Log("the bot channel is ON: a bot may connect at ws://localhost:" + ChartBridgeConfig.Port + "/bot (account " + BotAccount + (ba != null && IsSim(ba) ? " (Sim)" : " (LIVE)") + ", " + EffectiveRoot() + ", starting in shadow)");
@@ -1348,9 +1352,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool on;
             if (!Bool(d, "on", out on)) return "on must be true or false";
             List<Proposal> expired = new List<Proposal>();
-            lock (Sync) { killed = on; if (on) expired = ExpireOpenLocked(); }
+            string saveErr = null;   // 0.6.3 (audit C5): saved, so a restart keeps it; a release whose file cannot be removed is refused
+            if (on) { bool was; lock (Sync) was = killed; if (!was) saveErr = ChartBridgeFiles.SaveKill(KillFile, "the bot", Now()); }
+            else { string err = ChartBridgeFiles.ClearKill(KillFile); if (err != null) return "bot-kill.txt could not be removed (" + err + "): the kill switch stays on"; }
+            lock (Sync) { if (on && !killed) killedAt = Now(); killed = on; if (!on) killedAt = 0; if (on) expired = ExpireOpenLocked(); }
             if (on)
             {
+                if (saveErr != null) { string w = "bot-kill.txt could not be saved (" + saveErr + "): the kill switch is on now but a restart would release it"; ToPages(StatusJson("warn", w)); Log(w); }
                 // As the heartbeat loss: unfilled entries cancelled, the position keeps its stop and target, nothing flattened.
                 int n = CancelUnfilled();
                 foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToBot(AnswerJson(p.S.Id, "not answered", "the kill switch is on")); }
@@ -1628,6 +1636,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"maxLosses\":").Append(maxLosses)
                  .Append(",\"maxQty\":").Append(MaxQty)
                  .Append(",\"killed\":").Append(killed ? "true" : "false")
+                 .Append(",\"killedAt\":").Append(killed && killedAt > 0 ? Ms(killedAt) : "null")   // 0.6.3 (audit C5)
                  .Append(",\"standDown\":").Append(sd != null ? CbJson.Str(sd) : "null")
                  .Append(",\"lastBeatMs\":").Append(bot != null ? Ms(Math.Max(0, now - lastMsgMs)) : "null")
                  .Append(",\"lastSignal\":").Append(lastSignalJson ?? "null");
@@ -1649,13 +1658,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string root = EffectiveRoot(), m;
             int t, l;
-            lock (Sync) { m = mode; t = maxTrades; l = maxLosses; }
+            bool k;
+            lock (Sync) { m = mode; t = maxTrades; l = maxLosses; k = killed; }
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
             string instruments = inst == null ? "[]" :
                 "[{\"root\":" + CbJson.Str(root) + ",\"name\":" + CbJson.Str(inst.FullName) + ",\"tick\":" + CbJson.Num(inst.MasterInstrument.TickSize) +
                 ",\"pointValue\":" + CbJson.Num(inst.MasterInstrument.PointValue) + ",\"quoteOnly\":false}]";
             return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + ChartBridgeBranches.Json(BotAccount) + ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"root\":" + CbJson.Str(root) +
-                   ",\"rails\":{\"maxQty\":" + MaxQty + ",\"maxTrades\":" + t + ",\"maxLosses\":" + l + "},\"instruments\":" + instruments + "}";
+                   ",\"killed\":" + (k ? "true" : "false") + ",\"rails\":{\"maxQty\":" + MaxQty + ",\"maxTrades\":" + t + ",\"maxLosses\":" + l + "},\"instruments\":" + instruments + "}";
         }
 
         private static string SignalJson(Signal s)

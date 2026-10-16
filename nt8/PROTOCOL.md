@@ -2124,7 +2124,9 @@ address (as every request), **no** `Origin` header (any `Origin`, so any browser
 The secret is never printed in the Output window, `/diag` or any log; deleting the file makes a new one at the next start.
 
 **Modes** (set from the page, `botMode`; every ChartBridge start begins in `shadow`, auto never survives a restart, lead's
-default):
+default). 0.6.3 (audit C5, Anthony's decision): the bot's kill switch survives a restart: `botKill` on writes `bot-kill.txt`
+(as the agents' `agent-<id>-kill.txt`), off removes it, the bot's `welcome` carries `"killed"`, and the page's `bot` message
+carries `killedAt` (UTC ms, or null):
 
 - `shadow`: the bot's signals are shown and logged; no orders.
 - `copilot`: a fired signal becomes a **proposal** to every signed-in v3 page, with its reason. Anthony accepts or rejects
@@ -2402,7 +2404,15 @@ included) and one `order` for each working order of the agent's own on those roo
 `{"type":"snapshot","roots":[...]}` (the same roots), after every `agentHello`. `welcome.instruments` lists only the roots
 ChartBridge serves at that moment (NinjaTrader connected, the contract found). A runner without a complete snapshot is "not
 ready" (no plans; it reconnects after 30 s), which is not a stand-down. Every start
-of ChartBridge puts every agent in `shadow`; `auto` never survives a restart. Heartbeat: any message counts; `beat` at least
+of ChartBridge puts every agent in `shadow`; `auto` never survives a restart. 0.6.3 (audit C5, Anthony's decision): **the kill
+switch does survive a restart.** `agentKill` on writes `agent-<id>-kill.txt` (two `#` lines, then `killed<TAB><UTC ms>`), one
+per agent; `agentKill` off removes it (a release whose file cannot be removed is refused: "agent-<id>-kill.txt could not be
+removed (...): the kill switch stays on"). Only the page's kill message writes or removes it. At every start a file that is
+there (even one that does not read) is the kill switch on: the Output window says "agent <id>: its kill switch is still on (on
+since <time> UTC; kept through the restart) ...", `welcome` carries `"killed": true`, `agentState` carries `killed` true, and the page's `agent`
+rows carry `killed` and `killedAt` (UTC ms, null when not known or not killed), and the Board and the agent's desk show "kill
+switch on since <time>" until Anthony releases it. A kill that cannot be saved still holds in memory and the pages get a
+`status` `warn` that a restart would release it. Heartbeat: any message counts; `beat` at least
 every 2 s when idle. 5 s of silence (or a disconnect, or no connection for 5 s after a start): ChartBridge closes the socket,
 cancels that agent's unfilled entries, expires its open proposals as `not answered`, keeps any position's stop and target and
 warns the pages. The flat time still runs. Limits: 10 messages a second (`beat` not counted), 64 KB a message. Strict parser

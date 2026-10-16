@@ -740,7 +740,7 @@ function stripModel(a, orders, fmtPrice) {
     account: acc.label, accountMark: acc.mark, position: positionText(x.position, fmtPrice),
     pnl: isNum(x.pnlToday) ? fmtUsd(x.pnlToday) || '$0.00' : '-', pnlTone: isNum(x.pnlToday) ? (x.pnlToday > 0 ? 'pos' : x.pnlToday < 0 ? 'neg' : '') : '',
     trades: (isInt(x.trades) ? x.trades : 0) + (isInt(r.maxTrades) ? ' of ' + r.maxTrades : ''), losses: (isInt(x.losses) ? x.losses : 0) + (isInt(r.maxLosses) ? ' of ' + r.maxLosses : ''),
-    killed: !!x.killed, standDown: str(x.standDown), owns: ownsText(x, orders),
+    killed: !!x.killed, killedWhen: x.killed ? sdWhen(x.killedAt) : '', standDown: str(x.standDown), owns: ownsText(x, orders),   /* 1.31.0 (audit C5): the kill switch is kept through a restart; since when */
     last: last ? 'Last plan ' + (isNum(x.lastPlan.at) ? etClock(x.lastPlan.at) + ' ' : '') + last.title + ': ' + last.result : 'No plan yet today',
   };
 }
@@ -1091,7 +1091,7 @@ function boardRows(o) {
       sub: acc.group ? (accounts.length ? 'leads ' + accounts.length + (accounts.length === 1 ? ' account: ' : ' accounts: ') + accounts.join(', ') : 'no accounts') + (g ? ' · ' + (type === 'eval' ? 'Evals' : type === 'funded' ? 'Funded' : 'type not set') : '')
         : acc.none ? 'nothing trades' : (acc.mark || 'one account') + (acc.league ? ' · league seat (Sim only)' : ' · one account'),
       mode: MODES.includes(a.mode) ? a.mode : '', modeName: MODE_NAME[a.mode] || '-', position: pos.text, posTone: pos.tone, r: isNum(r) ? r : null, rText: rWords(isNum(r) ? r : null),
-      room: acc.none ? { pct: null, text: 'None: nothing trades', why: '' } : boardRoom(accounts, x.accounts, g), killed: !!a.killed, standDown: str(a.standDown), connected: !!a.connected, on,
+      room: acc.none ? { pct: null, text: 'None: nothing trades', why: '' } : boardRoom(accounts, x.accounts, g), killed: !!a.killed, killedWhen: a.killed ? sdWhen(a.killedAt) : '', standDown: str(a.standDown), connected: !!a.connected, on,
       /* fix round 1: seated (a group or an account) but Off: not started, nothing trades; Start in Shadow with this build (his
          last, else the group's default hero); on a group the group still has no hero on duty */
       off: !on && !acc.none ? 'Off: not started (nothing trades)' : '',
