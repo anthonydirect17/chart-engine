@@ -2384,10 +2384,16 @@ refuses every connection for that id. The secret is never printed (Output window
 `copier.txt`, `managed.txt`, `planned_brackets.txt`, the merge marker) goes to a temp file opened write-through and flushed to
 the disk (`Flush(true)`) before it replaces the file, and the copy it replaces is kept as `<file>.bak`. An append to a day file
 is written through and flushed the same way. So a power cut leaves the old file or the new one, never a file of zeros. A file
-that reads but is not understood (the agents' rules and account, `agent-standdowns.txt`, `groups.txt`, `account-marks.txt`,
-`daily-reset.txt`) falls back to its `.bak` when that one is understood: logged and a `status` `warn` to the pages ("<file>
-could not be read (<why>): ChartBridge uses its last good copy (<file>.bak), so the last change before the problem may be
-missing: check it on the page"), also to every page that signs in later that run. Without a good copy each behaves as before.
+that reads but is not understood falls back to its `.bak` on its own only for ChartBridge's own records, `daily-reset.txt` and
+`account-marks.txt` (logged and a `status` `warn` to the pages: "<file> could not be read (<why>): ChartBridge uses its last good
+copy (<file>.bak) ...", also to every page that signs in later that run). Review MED 3: the files that hold Anthony's choices
+(an agent's account and rules, `agent-standdowns.txt`, `groups.txt`) never take their `.bak` on their own: the agent stands down
+or the file is unreadable exactly as in 0.6.2 (no new entries; exits always work), and when the `.bak` is understood the alarm
+to the pages says what it holds and how to use it ("agent-<id>-account.txt has a line ChartBridge does not understand (its
+last good copy, agent-<id>-account.txt.bak, names account <name>: choose it again on the Agent tab, or copy
+agent-<id>-account.txt.bak over agent-<id>-account.txt and restart ChartBridge)"; the rules name their roots, window and
+limits; the stand-downs name each build and group; groups.txt names its groups and how many accounts, "to go back to it, copy
+groups.txt.bak over groups.txt"). Choosing the account or setting the rules again on the Agent tab is the page's way back.
 **A day file** (`agent-<id>-day.txt`) with lines it cannot read (NULs, a half line, a line it does not know) or no session
 line keeps every line that reads, and fills what it lacks from its `.bak` (review MED 2: only a `.bak` of the same session,
 the file's own, or today's when the file's session line is the damaged one; a copy of another session is ignored): today's trades, losses and plan ids are never

@@ -177,15 +177,15 @@ public static class GroupsHarness
         Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
         string gj = ChartBridgeGroups.GroupsJson();
-        Check(!gj.Contains("\"error\":\"groups.txt") && gj.Contains("\"name\":\"Lucid Flex\"") && Any("groups.txt could not be read (the first two lines are not ChartBridge's): ChartBridge uses its last good copy (groups.txt.bak)"),
-              "0.6.3 C3: a groups.txt of zeros: its last good copy is read, the pages told (entries are not all refused): " + gj);
+        Check(gj.Contains("\"error\":\"groups.txt could not be read") && Any("its last good copy, groups.txt.bak, holds ") && Any("to go back to it, copy groups.txt.bak over groups.txt"),
+              "0.6.3 MED 3: a groups.txt of zeros: unreadable as in 0.6.2 (every entry refused), never the .bak on its own; the alarm says what the copy holds and how to go back: " + gj);
         Check(Any("account-marks.txt could not be read (the first line is not ChartBridge's): ChartBridge uses its last good copy (account-marks.txt.bak)") && !Entry(AccountsNow(), "SIM-A").Contains("account-marks.txt could not be read"),
-              "0.6.3 C3: a torn account-marks.txt: its last good copy is read");
+              "0.6.3 C3: a torn account-marks.txt: its last good copy is read (kept automatic)");
         List<string> late = new List<string>();
         ChartBridgeClient lc = new ChartBridgeClient(null, 777) { Origin = "http://localhost:8765" };
         lc.Tap = x => { lock (late) late.Add(x); };
         ChartBridgeAccounts.SignedIn(lc);
-        Check(late.Any(x => x.Contains("groups.txt could not be read") && x.Contains("last good copy")), "0.6.3 C3: a page that signs in later gets the note too");
+        Check(late.Any(x => x.Contains("account-marks.txt could not be read") && x.Contains("last good copy")) && late.Any(x => x.Contains("groups.txt could not be read")), "0.6.3 C3: a page that signs in later gets the notes too");
         File.WriteAllText(p, was); File.WriteAllText(mp, mwas);
         Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
@@ -1072,6 +1072,13 @@ public static class GroupsHarness
             Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
             Check(Submits(simD) == d + 1, "SD: unreadable: a page order still goes (the file gates agent entries only)");
             Flat();
+            // 0.6.3 (review MED 3): with a good .bak it is still unreadable (never the copy on its own); the alarm says what the copy holds
+            File.WriteAllText(sd + ".bak", "# made-up\n# test\nstandDown\tsample-build-1\t" + gid + "\t1791467200000\tedge watch\tmade-up: below the exam mean\n");
+            ChartBridgeAgents.Start(false);
+            why = ChartBridgeAgents.StandDownsBroken();
+            Check(why != null && why.Contains("(its last good copy, agent-standdowns.txt.bak, holds 1 stand-down (build sample-build-1 on group ") && why.Contains("to use it, copy agent-standdowns.txt.bak over agent-standdowns.txt and restart ChartBridge)") &&
+                  ChartBridgeAgents.StandDownsOf(null).Count == 0, "0.6.3 MED 3: agent-standdowns.txt unreadable with a good .bak: refused as unreadable, the alarm names the copy: " + why);
+            try { File.Delete(sd + ".bak"); } catch (Exception) { }
         }
         finally
         {

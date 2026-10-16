@@ -327,12 +327,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 lines = ReadLines(FilePath, out err);
                 if (lines != null) s = Parse(lines, out err);
-                if (lines != null && s == null)   // 0.6.3 (audit C3): read but not understood: the last good copy, said so
+                if (lines != null && s == null)   // 0.6.3 (review MED 3): never the last good copy on its own: the alarm says what it holds
                 {
                     string[] b = ChartBridgeFiles.ReadBackup(FilePath);
                     string berr;
                     State bs = b != null ? Parse(b, out berr) : null;
-                    if (bs != null) { notes.Add(ChartBridgeFiles.BackupNote("groups.txt", err)); s = bs; err = null; }
+                    if (bs != null) err += "; its last good copy, groups.txt.bak, holds " + bs.Groups.Count + " group" + (bs.Groups.Count == 1 ? "" : "s") + (bs.Groups.Count > 0 ? " (" + string.Join(", ", bs.Groups.Values.Select(g => g.Name)) + ")" : "") + " with " + bs.Members.Count + " account" + (bs.Members.Count == 1 ? "" : "s") + " in them: to go back to it, copy groups.txt.bak over groups.txt";
                 }
             }
             string merr = null;

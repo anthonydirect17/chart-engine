@@ -632,7 +632,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             };
             try
             {
-                if (File.Exists(SdPath)) broken = ChartBridgeAgent.ParseOrBackup(SdPath, StandDownsFileName, parse);
+                if (File.Exists(SdPath)) broken = ChartBridgeAgent.ParseOrBackup(SdPath, StandDownsFileName, parse,
+                    () => list.Count == 0 ? "holds no stand-down" : "holds " + list.Count + " stand-down" + (list.Count == 1 ? "" : "s") + " (" + string.Join("; ", list.Select(x => "build " + x.Build + " on group " + (ChartBridgeGroups.NameOf(x.Group) ?? x.Group))) + ")",
+                    null);
             }
             catch (IOException ex) { io = StandDownsFileName + " could not be read yet (" + ex.Message + "): every new agent entry on an account in a prop group is refused until it is read (accounts in no group keep trading; exits always work; ChartBridge tries again)"; }
             catch (Exception ex) { broken = StandDownsFileName + " could not be read (" + ex.Message + ")"; }
@@ -2206,17 +2208,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             return diff == 0;
         }
 
-        // 0.6.3 (audit C3): a file read but not understood (a power cut, a hand edit) falls back to its last good copy (.bak), said so
-        // to the pages; null when one of them parsed, else the main file's problem (parse is run again on it, so its state is the
-        // main file's). An IOException is thrown to the caller as before.
-        internal static string ParseOrBackup(string path, string name, Func<string[], string> parse)
+        // 0.6.3 (audit C3, review MED 3): a file of Anthony's choices (an agent's account and rules, agent-standdowns.txt) read but not
+        // understood is never replaced by its last good copy (.bak) on its own: the main file's problem is returned as before (the
+        // caller stands the agent down), and when the .bak is understood the words say what it holds and how to use it (describe
+        // reads the parse's state for the .bak; parse is run again on the main file after, so the state is the main file's). Null
+        // when the main file parsed. An IOException is thrown to the caller as before.
+        internal static string ParseOrBackup(string path, string name, Func<string[], string> parse, Func<string> describe, string use)
         {
             string[] lines = ReadAll(path);
             string why = parse(lines);
             if (why == null) return null;
             string[] b = ChartBridgeFiles.ReadBackup(path);
-            if (b != null && parse(b) == null) { ChartBridgeFiles.Note(ChartBridgeFiles.BackupNote(name, why)); return null; }
-            return parse(lines);
+            string held = b != null && parse(b) == null ? describe() : null;
+            why = parse(lines);
+            return held == null ? why : why + " (its last good copy, " + name + ".bak, " + held + ": " + (use != null ? use + ", or copy " : "to use it, copy ") + name + ".bak over " + name + " and restart ChartBridge)";
         }
 
         // A file's lines; the harness's ChartBridgeAccounts.ReadFault fails a read by file name (an IOException, as a sharing lock).
@@ -2323,11 +2328,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             };
             try
             {
-                if (File.Exists(RulesFile)) broken = ParseOrBackup(RulesFile, "agent-" + Id + "-rules.txt", parse);
+                if (File.Exists(RulesFile)) broken = ParseOrBackup(RulesFile, "agent-" + Id + "-rules.txt", parse,
+                    () => "has roots " + string.Join(", ", r.Roots) + ", entries " + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + ", flat at " + Hm(r.FlatAt) + ", maxTrades " + (r.MaxTrades > 0 ? r.MaxTrades.ToString(CultureInfo.InvariantCulture) : "none") + ", maxLosses " + (r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "none"),
+                    "set those rules again on the Agent tab");
             }
             catch (IOException ex) { io = IoWords("agent-" + Id + "-rules.txt", Id, ex.Message); }
             catch (Exception ex) { broken = "agent-" + Id + "-rules.txt could not be read (" + ex.Message + ")"; }
-            if (broken != null) { broken += ": no new entries for agent " + Id + " until its rules are set on the Agent tab or the file is deleted"; Log(broken); r = new Rules(); }
+            if (broken != null) { broken += ": no new entries for agent " + Id + " until its rules are set on the Agent tab or the file is deleted"; Log(broken); r = new Rules(); if (broken.Contains(".bak, ")) ChartBridgeOrders.AgentAlarm(broken); }
             if (io != null) { broken = io; if (!IoPending("rules")) Log(io); r = new Rules(); }
             lock (Sync) { rules = r; rulesBroken = broken; }
             IoState("rules", io != null, null);
@@ -2385,11 +2392,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             };
             try
             {
-                if (File.Exists(AccountFile)) broken = ParseOrBackup(AccountFile, "agent-" + Id + "-account.txt", parse);
+                if (File.Exists(AccountFile)) broken = ParseOrBackup(AccountFile, "agent-" + Id + "-account.txt", parse,
+                    () => grp != null ? "names group " + (ChartBridgeGroups.NameOf(grp) ?? grp) : lg ? "names the league seat " + a : ChartBridgeBranches.IsNone(a) ? "names None" : "names account " + a,
+                    "choose it again on the Agent tab");
             }
             catch (IOException ex) { io = IoWords("agent-" + Id + "-account.txt", Id, ex.Message); }
             catch (Exception ex) { broken = "agent-" + Id + "-account.txt could not be read (" + ex.Message + ")"; }
-            if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); }
+            if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); if (broken.Contains(".bak, ")) ChartBridgeOrders.AgentAlarm(broken); }
             if (io != null) { broken = io; if (!IoPending("account")) Log(io); a = ChartBridgeBranches.None; grp = null; lg = false; }
             lock (Sync) { account = a; groupId = grp; accountBroken = broken; league = broken == null && lg && grp == null; chosen = broken == null && (grp != null || (a != null && !ChartBridgeBranches.IsNone(a))) && File.Exists(AccountFile); }
             IoState("account", io != null, null);

@@ -1026,13 +1026,30 @@ public static class AgentHarness
             File.WriteAllText(day, cur); try { File.Delete(day + ".bak"); } catch (Exception) { }
             Restart();
         }
-        // a rules file read but not understood, with a good copy: the copy is used, said to the pages
+        // 0.6.3 (review MED 3): a rules file read but not understood, with a good copy: never used on its own; the agent stands down
+        // as in 0.6.2 and the alarm says what the copy holds and how to use it
         P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));
         P(Rules("NQ,MNQ", ",\"maxQtyNQ\":1,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));
         File.WriteAllText(rules, new string('\0', 40));
         Restart();
-        Check(Last(agentOut, "agentState").Contains("\"standDown\":null") && Logged("agent-manrae-rules.txt could not be read (agent-manrae-rules.txt has a line ChartBridge does not understand): ChartBridge uses its last good copy (agent-manrae-rules.txt.bak)"),
-              "0.6.3 C3: a rules file of zeros: its last good copy is used and the pages are told");
+        Check(Last(agentOut, "agentState").Contains("\"standDown\":\"agent-manrae-rules.txt has a line ChartBridge does not understand") &&
+              Logged("ALERT: agent-manrae-rules.txt has a line ChartBridge does not understand (its last good copy, agent-manrae-rules.txt.bak, has roots NQ, MNQ, entries 09:45 to 15:00, flat at 15:55, maxTrades none, maxLosses none: set those rules again on the Agent tab, or copy agent-manrae-rules.txt.bak over agent-manrae-rules.txt and restart ChartBridge)"),
+              "0.6.3 MED 3: a rules file of zeros: stands down (as 0.6.2), the .bak is not applied; the alarm says what it holds and how to use it");
+        P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));
+        Check(Last(agentOut, "agentState").Contains("\"standDown\":null"), "0.6.3 MED 3: set again on the Agent tab: it stands up");
+        // the review's probe 2: a damaged account file with an older account in its .bak
+        {
+            string af = Path.Combine(Dir, "agent-manrae-account.txt");
+            string was = File.ReadAllText(af);
+            File.WriteAllText(af + ".bak", "# old\n# old\naccount\tSIM-D\n");
+            File.WriteAllText(af, "# made-up\n# test\naccount\tSim101\nbroken line\n");
+            Restart();
+            Check(M.Account == "-" && Last(agentOut, "agentState").Contains("agent-manrae-account.txt has a line ChartBridge does not understand (its last good copy, agent-manrae-account.txt.bak, names account SIM-D: choose it again on the Agent tab") &&
+                  Logged("ALERT: agent-manrae-account.txt has a line ChartBridge does not understand (its last good copy"),
+                  "0.6.3 MED 3: a damaged account file: no account and stood down (as 0.6.2), never the older SIM-D on its own; the alarm names it");
+            File.WriteAllText(af, was); try { File.Delete(af + ".bak"); } catch (Exception) { }
+            Restart();
+        }
         File.Delete(rules); File.Delete(rules + ".bak");
         // 0.6.3 (audit C4): a file held open at NinjaTrader's start (an IOException) is read again, the alarm only after a minute
         Func<string, string> faultWas = ChartBridgeAccounts.ReadFault;
