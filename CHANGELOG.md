@@ -9,10 +9,10 @@ Page only, no recompile (ChartBridge 0.6.2 as for 1.29.0; `minChartBridge` stays
   Off greyed, Session and Overall `-` and "The PC helper is not running on this PC", then came back on the next poll, while the
   helper stayed up and answered every /status. Any one failed GET /status (the 4 s timeout, a network error, or an HTTP status the
   client reads as down, a 500 too) set the reach to down. Now one miss right after a good answer keeps that answer (the build,
-  On or Off, the spend, the line) for one poll, as long as the answer is at most 8 s old; the second miss in a row is down and
+  On or Off, the spend, the line) for one poll, as long as that answer arrived at most 8 s before the miss; the second miss in a row is down and
   says "not running" as before. The 8 s covers the worst single miss (3 s poll plus the 4 s timeout after a good answer); a helper
   really gone (connection refused at once) says not running on the second poll, about 6 s after its last answer, and an answer
-  older than 8 s (the tab was hidden, polls stopped) is never kept. 401 (the PIN), 403 (refused), 400 and 409 and every good
+  that arrived more than 8 s before the miss (the tab was hidden, polls stopped) is never kept. 401 (the PIN), 403 (refused), 400 and 409 and every good
   answer are taken as they come, exactly as before, and end the grace.
 - **Nothing starts on an old answer.** In the grace the Agent card's header label says "PC helper slow" (the existing label,
   short enough for its one line, no new colour) while the last answer stays on screen, On is held (greyed) and does nothing if pressed, the
