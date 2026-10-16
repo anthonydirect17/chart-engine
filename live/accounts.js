@@ -8,7 +8,10 @@
  *                    1.26.0 (ChartBridge 0.5.8, Anthony 2026-10-14): each account's Group dropdown (None and the groups made
  *                    in Settings, live/groups.js), the highest close asked once when it joins a group (G2 b), My floor and
  *                    My daily for an account in no group, and the room from ChartBridge's own numbers (roomFloor,
- *                    roomDaily, targetLeft) before NinjaTrader's and The Desk's
+ *                    roomDaily, targetLeft) before NinjaTrader's and The Desk's; 1.30.0 (wave 5): each account's Account type
+ *                    from The Desk's ledger (GET /api/account-types; PUT /api/accounts/{account}/account-type), the last good
+ *                    list kept in this browser and shown "as of" its time while The Desk is not reachable, and Apply its rules
+ *                    (asks first) for an account in no group: My floor and My daily from its type (accountLimits)
  *   Positions        every open position on every account: average price, unrealized P&L, the attached stop and target
  *   Working orders   every working order on every account (Cancel only with `cancelFromList` on)
  *   Today's trades   per account, the fills and the flat-to-flat round trips, gross and net (The Desk's commission)
@@ -265,7 +268,11 @@ function cleanDesk(json) {
     if (r.commission && typeof r.commission === 'object' && !Array.isArray(r.commission))
       for (const k of Object.keys(r.commission)) if (/^[A-Z0-9]{1,6}$/.test(k) && isNum(r.commission[k]) && r.commission[k] >= 0 && r.commission[k] <= 100) com[k] = r.commission[k];
     out.set(r.account, { daily_loss_limit: n(r.daily_loss_limit), trailing_drawdown: n(r.trailing_drawdown), account_size: n(r.account_size),
-      archived: r.archived === true, firm: typeof r.firm === 'string' ? r.firm : null, commission: Object.keys(com).length ? com : null });
+      archived: r.archived === true, firm: typeof r.firm === 'string' ? r.firm : null, commission: Object.keys(com).length ? com : null,
+      /* 1.30.0: the account's type on The Desk's ledger ({ id, firm, name, version, status }) or null */
+      accountType: r.accountType && typeof r.accountType === 'object' && typeof r.accountType.id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(r.accountType.id)
+        ? { id: r.accountType.id, firm: typeof r.accountType.firm === 'string' ? r.accountType.firm : '', name: typeof r.accountType.name === 'string' ? r.accountType.name : r.accountType.id,
+          version: Number.isInteger(r.accountType.version) ? r.accountType.version : 0, status: r.accountType.status === 'checked' ? 'checked' : 'not_checked' } : null });
   }
   return out;
 }
@@ -432,9 +439,14 @@ function createFeed(env) {
     accounts: [], archived: [], got: false, instruments: {}, orders: new Map(), positions: new Map(), fills: new Map(),
     copier: null, log: [], desk: new Map(), deskUrl: '', deskState: 'not asked', deskAt: 0,
     groups: null, groupsError: null,   // 1.26.0: ChartBridge 0.5.8's groups (null: none sent, an older ChartBridge or not connected)
+    /* 1.30.0: The Desk's account types (GET /api/account-types): null until read or found in this browser's copy; typesState
+       'not asked', 'ok' (The Desk answered), 'cache' (not reachable: the last good list, as of typesAsOf) or 'none' (neither) */
+    types: null, typesState: 'not asked', typesAsOf: '', typesError: '',
     heroes: new Map(),   // 1.27.0: each agent's `agent` message (its account, or its group's seats), for the seat marks
   };
   let ws = null, tries = 0, timer = 0, seq = 0, started = false, deskTimer = 0, changeQueued = false, stopped = false;
+  /* 1.30.0: this browser's storage for the account types' copy and the groups' links (every call wrapped; works without it) */
+  const store = env.storage !== undefined ? env.storage : (() => { try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch (e) { return null; } })();
   const changed = () => { if (changeQueued) return; changeQueued = true; Promise.resolve().then(() => { changeQueued = false; env.changed(); }); };
   const log = (text, level) => { if (!text) return; S.log.unshift({ at: Date.now(), text, level: level || '' }); if (S.log.length > LOG_MAX) S.log.length = LOG_MAX; };
   const cid = () => 'ap' + Date.now().toString(36) + '-' + (++seq);
@@ -572,16 +584,48 @@ function createFeed(env) {
   function readDesk() {
     clearTimeout(deskTimer);
     if (stopped) return;
-    deskBase(env.fetch).then(url => { S.deskUrl = url; return env.fetch(url + '/api/chart-accounts', { cache: 'no-store', mode: 'cors', credentials: 'omit' }); })
+    const limits = deskBase(env.fetch).then(url => { S.deskUrl = url; return env.fetch(url + '/api/chart-accounts', { cache: 'no-store', mode: 'cors', credentials: 'omit' }); })
       .then(r => (r.ok ? r.json() : Promise.reject(new Error('The Desk answered ' + r.status))))
-      .then(j => { S.desk = AC.cleanDesk(j); S.deskState = 'ok'; S.deskAt = Date.now(); }, e => { S.deskState = 'The Desk\'s limits could not be read (' + (e && e.message ? e.message : 'not reachable') + ').'; })
-      .then(() => { changed(); if (!stopped) deskTimer = setTimeout(readDesk, DESK_EVERY_MS); });
+      .then(j => { S.desk = AC.cleanDesk(j); S.deskState = 'ok'; S.deskAt = Date.now(); }, e => { S.deskState = 'The Desk\'s limits could not be read (' + (e && e.message ? e.message : 'not reachable') + ').'; });
+    Promise.all([limits, readTypes()]).then(() => { changed(); if (!stopped) deskTimer = setTimeout(readDesk, DESK_EVERY_MS); });
+  }
+  /* 1.30.0: The Desk's account types, now and with the limits every minute; the last good list kept in this browser and shown
+     "as of" its time while The Desk is not reachable. Never throws. */
+  function readTypes() {
+    const GC = typeof GroupsCore !== 'undefined' ? GroupsCore : null;
+    if (!GC) return Promise.resolve();
+    if (!S.types) { const c = GC.readTypesCache(store); if (c) { S.types = c.types; S.typesAsOf = c.asOf || (c.savedAt ? new Date(c.savedAt).toISOString() : ''); } }
+    return deskBase(env.fetch).then(url => env.fetch(url + '/api/account-types', { cache: 'no-store', mode: 'cors', credentials: 'omit' }))
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error('The Desk answered ' + r.status))))
+      .then(j => {
+        const c = GC.cleanTypes(j);
+        if (!c) throw new Error('an answer the page cannot read');
+        S.types = c.types; S.typesAsOf = c.asOf || new Date().toISOString(); S.typesState = 'ok'; S.typesError = '';
+        GC.writeTypesCache(store, j);
+      }).catch(e => {
+        S.typesError = e && e.message ? e.message : 'not reachable';
+        if (!S.types) { const c = GC.readTypesCache(store); if (c) { S.types = c.types; S.typesAsOf = c.asOf || (c.savedAt ? new Date(c.savedAt).toISOString() : ''); } }
+        S.typesState = S.types ? 'cache' : 'none';
+      });
+  }
+  /* 1.30.0: an account's type on The Desk (PUT /api/accounts/{account}/account-type, id or null); then the rows again.
+     Resolves { ok } or { ok: false, error }; never rejects. */
+  function setAccountType(name, id) {
+    if (env.desk === false) return Promise.resolve({ ok: false, error: 'this window does not read The Desk' });
+    return deskBase(env.fetch).then(url => env.fetch(url + '/api/accounts/' + encodeURIComponent(name) + '/account-type', { method: 'PUT', mode: 'cors', credentials: 'omit', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account_type: id || null }) }))
+      .then(r => {
+        if (r.ok) { readDesk(); return { ok: true }; }
+        return r.json().then(j => j && typeof j.detail === 'string' ? j.detail : '', () => '').then(d => ({ ok: false, error: 'The Desk answered ' + r.status + (d ? ': ' + d : '') }));
+      }, e => ({ ok: false, error: 'The Desk is not reachable (' + (e && e.message ? e.message : 'no answer') + ')' }));
   }
   const account = name => S.accounts.find(a => a.name === name) || null;
   const groupOf = a => (a && a.group && S.groups ? S.groups.find(g => g.id === a.group) || null : null);
   const limit = name => { const a = account(name); return a ? AC.limitState(a, S.desk.get(name), groupOf(a)) : null; };
   return {
-    S, start, startAny, stop, account, limit, post, groupOf,
+    S, start, startAny, stop, account, limit, post, groupOf, store, setAccountType, readTypes,
+    /** 1.30.0: an account's type on The Desk ({ id, firm, name, version, status }) or null */
+    typeOf: name => { const d = S.desk.get(name); return d && d.accountType ? d.accountType : null; },
     listen(part) { subs.add(part); return () => subs.delete(part); },
     /** a refusal that came back on the order ticket's connection for an action of this page: true when it was one */
     takeReject(m) { if (!m || !m.cid || !mine.has(m.cid)) return false; message(m); return true; },
@@ -645,7 +689,7 @@ function mount(v, host) {
     '<p class="ac-foot apg-foot" data-foot></p></div>';
   const q = sel => v.body.querySelector(sel);
   const listEl = q('[data-list]'), footEl = q('[data-foot]');
-  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null };
+  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, apply: '', typePending: new Map() };
   q('.apg-tabs').addEventListener('click', e => {
     const b = e.target.closest('button[data-tab]'); if (!b) return;
     b.blur();
@@ -670,6 +714,15 @@ function mount(v, host) {
     else if (a === 'mode') F.copierSet({ mode: b.dataset.v });
     else if (a === 'trd') { P.trd = b.dataset.v; render(); }
     else if (a === 'join-no') { P.join = null; render(); }
+    else if (a === 'apply-type') { P.apply = P.apply === id ? '' : id; render(); }   // 1.30.0: asks first, never applied silently
+    else if (a === 'apply-no') { P.apply = ''; render(); }
+    else if (a === 'apply-yes') {
+      const t = P.apply === id ? typeFor(id) : null; P.apply = '';
+      const l = t ? GroupsCore.typeLimits(t) : { error: 'no type' };
+      if (!l.error && F.accountLimits(id, l.floor, l.daily)) host.note('My floor and My daily from ' + GroupsCore.typeLabel(t) + ' for ' + id + ': sent to ChartBridge.');
+      else if (l.error) host.note('Not sent: ' + l.error, true);
+      render();
+    }
     else if (a === 'join-yes') {   // G2 (b): the highest close, asked once when an account joins a group
       const j = P.join; P.join = null;
       if (j && j.account === id) { const box = listEl.querySelector('[data-act="join-high"]'); F.accountGroup(j.account, j.group, box ? box.value : ''); }
@@ -687,6 +740,16 @@ function mount(v, host) {
       if (!want) { P.join = null; F.accountGroup(name, null); render(); return; }
       const g = (S.groups || []).find(x => x.id === want);
       if (g) { P.join = { account: name, group: want, prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)) }; render(); const box = listEl.querySelector('[data-act="join-high"]'); if (box) { box.focus(); box.select(); } }
+      return;
+    }
+    if (a === 'acct-type') {   // 1.30.0: the account's type, saved on The Desk; shown as The Desk says once it answers
+      const name = el.dataset.id, want = el.value;
+      P.typePending.set(name, want); render();
+      F.setAccountType(name, want || null).then(r => {
+        P.typePending.delete(name);
+        if (!r.ok) host.note('Account type for ' + name + ' not saved: ' + r.error, true);
+        render();
+      });
       return;
     }
     if (a === 'my-floor' || a === 'my-daily') {   // 1.26.0: a personal account's own limits, both sent together
@@ -710,6 +773,8 @@ function mount(v, host) {
     }
   });
 
+  /* 1.30.0: the account's type from The Desk's list (its current version), or null */
+  const typeFor = name => { const at = F.typeOf(name); return at && S.types ? S.types.find(t => t.id === at.id) || null : null; };
   /* the prices of the instruments with an open position (unrealized P&L): watched while this panel shows */
   function watchPositions(roots) {
     for (const r of roots) if (!P.offs.has(r)) P.offs.set(r, host.watchQuote(r));
@@ -752,6 +817,34 @@ function mount(v, host) {
       const canAct = sw.accountChecks && S.enabled;
       const grpOn = !!S.groups, canGroup = grpOn && S.enabled && !S.groupsError;   // 1.26.0: ChartBridge 0.5.8 sends groups
       const gName = id => { const g = (S.groups || []).find(x => x.id === id); return g ? g.name : id; };
+      /* 1.30.0: the Account type column (The Desk's ledger), once its list is known (read now, or this browser's copy) */
+      const typesOn = grpOn && !!S.types, canType = typesOn && S.typesState === 'ok' && S.deskState === 'ok';
+      const links = typesOn ? GroupsCore.readLinks(F.store) : {};
+      const typeOpts = typesOn ? '<option value="">Not set</option>' + S.types.map(t => `<option value="${esc(t.id)}">${esc(GroupsCore.typeLabel(t))}</option>`).join('') : '';
+      const typeCell = a => {
+        if (!typesOn) return '';
+        const at = F.typeOf(a.name), pend = P.typePending.has(a.name), val = pend ? P.typePending.get(a.name) : at ? at.id : '';
+        const gone = at && !S.types.some(t => t.id === at.id) ? `<option value="${esc(at.id)}">${esc((at.firm ? at.firm + ' ' : '') + at.name + ' (not on The Desk\'s list now)')}</option>` : '';
+        const t = typeFor(a.name), canApply = !a.group && !!t && canGroup;
+        const off = a.group && links[a.group] && at && at.id !== links[a.group].id;
+        const cur = S.types.find(x => x.id === val), tip = (cur ? GroupsCore.typeLabel(cur) + '. ' : '') + (S.typesState === 'ok' ? 'The account\'s type on The Desk\'s ledger (saved on The Desk)' : 'The Desk is not reachable: the list as of ' + GroupsCore.asOfText(S.typesAsOf) + '; the type cannot be changed now');
+        return `<span role="cell" class="apg-type"><select class="ws-sel apg-sel apg-tsel${off ? ' apg-toff' : ''}" data-act="acct-type" data-id="${esc(a.name)}" ${pr({ value: val, disabled: !canType || pend })} aria-label="Account type for ${esc(a.name)}" title="${esc(tip)}">${typeOpts}${gone}</select>` +
+          (canApply ? `<button type="button" class="ac-btn apg-apply" data-act="apply-type" data-id="${esc(a.name)}" aria-label="Apply its rules to ${esc(a.name)}" title="Apply its rules: My floor and My daily from ${esc(GroupsCore.typeLabel(t))} (asks first)">Apply</button>` : '') + '</span>';
+      };
+      /* 1.30.0: "Apply its rules" asks first, a row of its own (never applied silently) */
+      const askApply = a => {
+        if (P.apply !== a.name) return '';
+        const t = typeFor(a.name), l = t ? GroupsCore.typeLimits(t) : { error: 'Its type is not on The Desk\'s list now.' };
+        return row('apply|' + a.name, `<span role="cell" class="apg-confirm apg-applyask">` + (l.error ? esc(l.error) + ' ' : `Apply its rules from ${esc(GroupsCore.typeLabel(t))} to ${esc(a.name)}: My floor ${esc(GroupsCore.usd(+l.floor))} (account size ${esc(GroupsCore.usd(t.size))} less the drawdown ${esc(GroupsCore.usd(t.drawdown))}), My daily ${l.daily ? esc(GroupsCore.usd(+l.daily)) : 'none'}. ` +
+          `<button type="button" class="ac-btn apg-yes" data-act="apply-yes" data-id="${esc(a.name)}">Apply its rules</button>`) + `<button type="button" class="ac-btn" data-act="apply-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
+      };
+      /* 1.30.0: a member whose type is not the one its group was filled from: a warning row (nothing is blocked) */
+      const typeWarn = a => {
+        if (!typesOn || !a.group || !links[a.group]) return '';
+        const at = F.typeOf(a.name), l = links[a.group];
+        if (!at || at.id === l.id) return '';
+        return row('toff|' + a.name, `<span role="cell" class="apg-confirm apg-twarn">${esc(a.name)} is ${esc((at.firm ? at.firm + ' ' : '') + at.name)}; its group ${esc(gName(a.group))} was filled from ${esc(l.label)}. A warning only: nothing is blocked.</span>`, 'apg-ask');
+      };
       /* G2 (b): the one question when an account joins a group, a row of its own under the account's */
       const askJoin = a => !P.join || P.join.account !== a.name ? '' : row('join|' + a.name + '|' + P.join.group, `<span role="cell" class="apg-confirm apg-join">Put ${esc(a.name)} in ${esc(gName(P.join.group))}: highest close so far <input type="text" inputmode="decimal" class="oin apg-ll-in apg-high" data-act="join-high" value="${esc(P.join.prefill)}" aria-label="Highest close so far for ${esc(a.name)}, from the firm's dashboard" title="From the firm's dashboard. Optional: empty takes the larger of the account size and its balance. ChartBridge starts the trailing floor from it."> <span class="mut">(the firm's dashboard; optional)</span> <button type="button" class="ac-btn apg-yes" data-act="join-yes" data-id="${esc(a.name)}">Put in ${esc(gName(P.join.group))}</button><button type="button" class="ac-btn" data-act="join-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
       const canShow = canAct && accounts.some(a => a && 'canHide' in a);   // Show: ChartBridge 0.5.1 and later (its accounts carry canHide)
@@ -782,11 +875,11 @@ function mount(v, host) {
         const hero = AC.heroOf(S.heroes, a.name);   // 1.27.0: a seat shows its hero's name
         return row(a.name, `${c(a.name + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', (a.sim ? 'NinjaTrader Sim account' : '') + (hero ? (a.sim ? '. ' : '') + 'A seat of ' + hero + ' (the Agent tab): the copier and the bot never trade it' : ''))}${c(CONN[a.connection] || a.connection, a.connection === 'connected' ? '' : 'warn')}` +
           `${c(AC.fmtUsdPlain(a.balance), 'r')}${c(AC.fmtUsd(a.pnlToday), 'r ' + (a.pnlToday > 0.004 ? 'up' : a.pnlToday < -0.004 ? 'dn' : ''))}${c(pos, 'r')}` +
-          `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${grp}${lims}${mark}${hide}`, 'apg-acc' + lvl) + ask(a) + askJoin(a);
+          `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${grp}${typeCell(a)}${lims}${mark}${hide}`, 'apg-acc' + lvl) + ask(a) + askJoin(a) + askApply(a) + typeWarn(a);
       };
       html = !accounts.length ? '<p class="ac-empty">ChartBridge watches no account.</p>' :
-        `<div class="gr apg-g apg-acc-g${canAct ? ' apg-hides' : ''}${grpOn ? ' apg-grps' : ''}" role="table" aria-label="Accounts">` +
-        row('h', h('Account') + h('Conn') + h('Balance', 'r') + h('Today', 'r') + h('Position', 'r') + h('Room', 'r') + (grpOn ? h('Group') + h('Limits', 'r') : '') + h('Trade', 'r') + (canAct ? h('', 'r') : ''), 'gr-h') +
+        `<div class="gr apg-g apg-acc-g${canAct ? ' apg-hides' : ''}${grpOn ? ' apg-grps' : ''}${typesOn ? ' apg-types' : ''}" role="table" aria-label="Accounts">` +
+        row('h', h('Account') + h('Conn') + h('Balance', 'r') + h('Today', 'r') + h('Position', 'r') + h('Room', 'r') + (grpOn ? h('Group') + (typesOn ? h('Account type') : '') + h('Limits', 'r') : '') + h('Trade', 'r') + (canAct ? h('', 'r') : ''), 'gr-h') +
         active.map(accRow).join('') + '</div>' +
         (gone.length ? '<h3 class="apg-h">Gone</h3><div class="gr apg-g apg-gone-g" role="table" aria-label="Gone accounts">' + gone.map(a => {
           const asking = P.confirm === a.name;
@@ -801,6 +894,7 @@ function mount(v, host) {
           row('a|' + a.name, c(a.name, 'b mut') + (canShow ? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show" data-act="unarchive" data-id="${esc(a.name)}" title="Show ${esc(a.name)}: back in the lists, unchecked">Show</button></span>` : ''), 'apg-arch')).join('') + '</div>' : '');
       foot = (grpOn ? (S.groupsError ? S.groupsError + ' ' : 'Room: ChartBridge from each group\'s rules or your own limits, NinjaTrader\'s balance and P&L. Groups are made in Settings. ') : '') +
         (S.deskState === 'ok' ? 'Limits: NinjaTrader where it reports them, else The Desk.' : S.deskState === 'not asked' ? 'Limits: NinjaTrader where it reports them.' : S.deskState) +
+        (!grpOn ? '' : S.typesState === 'cache' ? ' Account types: The Desk is not reachable; the list as of ' + GroupsCore.asOfText(S.typesAsOf) + '.' : S.typesState === 'none' ? ' Account types: The Desk is not reachable and this browser has no copy.' : '') +
         (sw.accountChecks ? '' : ' Checkmarks are read only (accountChecks = off in config.txt).') + (S.enabled ? '' : ' ' + (S.reason || ''));
     } else if (P.tab === 'pos') {
       html = !positions.length ? '<p class="ac-empty">Flat on every account.</p>' : '<div class="gr apg-g apg-pos-g" role="table" aria-label="Open positions">' +

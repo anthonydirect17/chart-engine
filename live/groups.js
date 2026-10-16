@@ -23,6 +23,12 @@
  * in the rules dialog; ChartBridge saves both in groups.txt and checks only their shapes. The heroes and their tiers come from
  * the PC helper's GET /status (host.heroes, live/agent-helper.js), every hero for every group with a warning when its tier
  * does not fit the Type (shown only, nothing enforced). The message's own "type" is its kind, so the Type travels as accountType.
+ * Chart 1.30.0 (wave 5, Anthony 2026-10-16): account types, the one ledger on The Desk (GET /api/account-types, read by the feed in
+ * live/accounts.js). The rules dialog's Account type select at the top fills every rule box and the Type (never the name); Save sends
+ * groupSave as before. The group remembers the type and version it was filled from in this browser's storage, keyed by group id
+ * (LINKS_KEY): groups.txt has no place for it, since ChartBridge 0.6.2's groupSave refuses any key it does not know and keeps a
+ * line's extra fields only as written there. A group whose rules differ from its type's current values shows "rules differ from
+ * <type>: Update", and a member whose own type is another is named; warnings only, nothing is blocked.
  * Made-up names only in tests and docs (Lucid, Apex, SIM-A, SIM-B).
  */
 (function (root, factory) {
@@ -159,8 +165,99 @@ function cleanGroups(m) {
       holders: Array.isArray(g.holders) ? g.holders.filter(h => h && typeof h.account === 'string') : [] }));
 }
 
+/* ---------------- 1.30.0 (wave 5, Anthony 2026-10-16): account types, the one ledger on The Desk (GET /api/account-types).
+   Money in dollars, as The Desk's prop tables and GET /api/chart-accounts. A type's status is "checked" only when The Desk says
+   exactly that; anything else reads as not checked. */
+const TYPE_ID_RX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
+const TYPES_CACHE_KEY = 'live-account-types-v1';   // the last good list, for when The Desk is not reachable
+const LINKS_KEY = 'live-group-types-v1';           // { g1: { id, version, label } }: the type each group was filled from
+const posMoney = v => (isNum(v) && v > 0 && v <= MONEY_MAX ? v : null);
+/** The Desk's answer ({ v, types, asOf }) clean: { types: [...] by firm then name, archived left out, asOf } or null for a bad shape. */
+function cleanTypes(json) {
+  if (!json || typeof json !== 'object' || !Array.isArray(json.types)) return null;
+  const seen = new Set(), out = [];
+  for (const t of json.types) {
+    if (!t || typeof t !== 'object' || typeof t.id !== 'string' || !TYPE_ID_RX.test(t.id) || seen.has(t.id) || t.archived === true) continue;
+    const firm = typeof t.firm === 'string' ? t.firm.trim() : '', name = typeof t.name === 'string' ? t.name.trim() : '';
+    if (!firm || firm.length > 40 || !name || name.length > 60 || /[\u0000-\u001f\u007f]/.test(firm + name)) continue;
+    seen.add(t.id);
+    out.push({ id: t.id, firm, name, accountType: t.account_type === 'eval' || t.account_type === 'funded' ? t.account_type : '',
+      size: posMoney(t.account_size), dailyLoss: posMoney(t.daily_loss), drawdown: posMoney(t.drawdown),
+      drawdownType: TYPES.some(x => x[0] === t.drawdown_type) ? t.drawdown_type : null, lockAt: posMoney(t.lock_at), target: posMoney(t.profit_target),
+      consistency: isNum(t.consistency_pct) && t.consistency_pct > 0 && t.consistency_pct <= 100 ? t.consistency_pct : null,
+      status: t.status === 'checked' ? 'checked' : 'not_checked', version: Number.isInteger(t.version) && t.version >= 0 ? t.version : 0 });
+  }
+  out.sort((a, b) => a.firm.localeCompare(b.firm, 'en', { sensitivity: 'base' }) || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }) || (a.id < b.id ? -1 : 1));
+  return { types: out, asOf: typeof json.asOf === 'string' && json.asOf.length <= 40 ? json.asOf : '' };
+}
+/** "Lucid 50K Flex, no DLL", with " (not checked)" until Anthony marks the type checked on The Desk. */
+const typeLabel = t => (t ? t.firm + ' ' + t.name + (t.status === 'checked' ? '' : ' (not checked)') : '');
+/** The rules dialog's boxes and Type from a type; missing: what the type has no value for that a group needs. */
+function typeForm(t) {
+  const f = { size: moneyBox(t.size), dailyLoss: moneyBox(t.dailyLoss), drawdown: moneyBox(t.drawdown), drawdownType: t.drawdownType || null,
+    lockAt: t.drawdownType === 'static' ? '' : moneyBox(t.lockAt), target: moneyBox(t.target), consistency: isNum(t.consistency) && t.consistency > 0 ? String(t.consistency) : '', accountType: t.accountType || '' };
+  f.missing = [[!t.size, 'account size'], [!t.drawdown, 'drawdown size'], [!t.drawdownType, 'drawdown type']].filter(x => x[0]).map(x => x[1]);
+  return f;
+}
+const r2 = v => (isNum(v) && v > 0 ? Math.round(v * 100) / 100 : 0);
+const RULE_WORDS = [['size', 'account size'], ['dailyLoss', 'daily loss limit'], ['drawdown', 'drawdown size'], ['drawdownType', 'drawdown type'], ['lockAt', 'floor stops at'],
+  ['target', 'profit target'], ['consistency', 'consistency'], ['accountType', 'Type']];
+/** What a group's rules (as ChartBridge sent them) differ in from a type's current values: [] when they match. */
+function rulesDiffer(g, t) {
+  if (!g || !t) return [];
+  const gv = { size: r2(g.size), dailyLoss: r2(g.dailyLoss), drawdown: r2(g.drawdown), drawdownType: g.drawdownType || '', lockAt: r2(g.lockAt), target: r2(g.target), consistency: r2(g.consistency), accountType: g.accountType || '' };
+  const tv = { size: r2(t.size), dailyLoss: r2(t.dailyLoss), drawdown: r2(t.drawdown), drawdownType: t.drawdownType || '', lockAt: t.drawdownType === 'static' ? 0 : r2(t.lockAt), target: r2(t.target), consistency: r2(t.consistency), accountType: t.accountType || '' };
+  return RULE_WORDS.filter(([k]) => gv[k] !== tv[k]).map(x => x[1]);
+}
+/** "Apply its rules" for an account in no group: My floor at the type's starting floor (account size less the drawdown) and
+ *  My daily at its daily loss limit (none: empty). { floor, daily } as box text, or { error }. */
+function typeLimits(t) {
+  if (!t || !(t.size > 0) || !(t.drawdown > 0) || t.drawdown >= t.size) return { error: typeLabel(t) + ' has no account size and drawdown to take a floor from.' };
+  return { floor: moneyBox(t.size - t.drawdown), daily: moneyBox(t.dailyLoss) };
+}
+/** "Oct 16 14:02 ET" for an ISO time or ms ('' when it cannot be read). */
+function asOfText(at) {
+  const ms = typeof at === 'number' ? at : Date.parse(at || '');
+  if (!isFinite(ms)) return '';
+  try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms)).replace(',', '') + ' ET'; }
+  catch (e) { return new Date(ms).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'; }
+}
+/* the page's own storage ({ getItem, setItem, removeItem } or null); every call wrapped: the page works without it */
+const sget = (st, k) => { try { return st ? st.getItem(k) : null; } catch (e) { return null; } };
+const sset = (st, k, v) => { try { if (!st) return false; st.setItem(k, v); return true; } catch (e) { return false; } };
+/** The last good list kept in this browser: { types, asOf, savedAt } or null. */
+function readTypesCache(st) {
+  try { const j = JSON.parse(sget(st, TYPES_CACHE_KEY)); const c = j && j.v === 1 ? cleanTypes(j.desk) : null; return c ? { types: c.types, asOf: c.asOf, savedAt: isNum(j.savedAt) ? j.savedAt : 0 } : null; } catch (e) { return null; }
+}
+const writeTypesCache = (st, desk, now) => sset(st, TYPES_CACHE_KEY, JSON.stringify({ v: 1, savedAt: isNum(now) ? now : Date.now(), desk }));
+/** Each group's link to the type it was filled from: { g1: { id, version, label } }; bad entries dropped. */
+function readLinks(st) {
+  const out = {};
+  try {
+    const j = JSON.parse(sget(st, LINKS_KEY));
+    if (j && typeof j === 'object' && !Array.isArray(j)) for (const k of Object.keys(j)) {
+      const l = j[k];
+      if (/^g[1-9][0-9]{0,8}$/.test(k) && l && typeof l.id === 'string' && TYPE_ID_RX.test(l.id) && Number.isInteger(l.version) && l.version >= 0)
+        out[k] = { id: l.id, version: l.version, label: typeof l.label === 'string' ? l.label.slice(0, 120) : l.id };
+    }
+  } catch (e) { /* none */ }
+  return out;
+}
+/** Sets (link) or removes (null) one group's link; true when written. */
+function saveLink(st, gid, link) {
+  const all = readLinks(st);
+  if (link) all[gid] = { id: link.id, version: link.version, label: link.label || link.id }; else delete all[gid];
+  return sset(st, LINKS_KEY, JSON.stringify(all));
+}
+/** The member accounts whose own type (The Desk's accountType) is not the type the group was filled from: [{ account, type }]. */
+function membersOff(g, link, typeOfAccount) {
+  if (!g || !link) return [];
+  return (g.members || []).map(a => ({ account: a, type: typeOfAccount(a) })).filter(x => x.type && x.type.id !== link.id);
+}
+
 return { NAME_MAX, MONEY_MAX, TYPES, TYPE_WORD, ACCOUNT_TYPES, HERO_RX, typeText, heroText, usd, parseMoney, moneyBox, summary, membersText, sideText, groupMessage, saveFrom, formOf,
-  highCloseDefault, joinMessage, limitsMessage, cleanGroups };
+  highCloseDefault, joinMessage, limitsMessage, cleanGroups,
+  TYPE_ID_RX, TYPES_CACHE_KEY, LINKS_KEY, cleanTypes, typeLabel, typeForm, rulesDiffer, typeLimits, asOfText, readTypesCache, writeTypesCache, readLinks, saveLink, membersOff };
 });
 
 /* ======================================================================== GroupsPage (browser only) */
@@ -190,6 +287,21 @@ function mountSettings(host) {
   const cid = () => 'gp' + Date.now().toString(36) + '-' + (++P.seq);
   const say = (text, warn) => { host.note.textContent = text || ''; host.note.className = 'ws-help' + (warn ? ' ws-warn' : ''); };
   const groups = () => (F && F.S.groups) || [];
+  /* 1.30.0: The Desk's account types (the feed's list, read now or this browser's copy) and each group's link to the type it
+     was filled from (this browser's storage, keyed by group id: groups.txt has no place for it without a ChartBridge change) */
+  const types = () => (F && F.S.types) || null;
+  const typeById = id => { const ts = types(); return ts && id ? ts.find(t => t.id === id) || null : null; };
+  const st = () => (F && F.store) || null;
+  const typeOfAccount = a => (F && typeof F.typeOf === 'function' ? F.typeOf(a) : null);
+  const typesNote = () => { const S = F && F.S; if (!S) return ''; return S.typesState === 'cache' ? 'The Desk is not reachable: the list as of ' + GC.asOfText(S.typesAsOf) + '.' : S.typesState === 'none' ? 'The Desk is not reachable and this browser has no copy of its account types.' : !types() ? 'Reading The Desk\'s account types...' : ''; };
+  /* a new group's link waits for ChartBridge's answer (its id), found by its name; links of groups that are gone are dropped */
+  function syncLinks() {
+    const list = F && F.S.groups;
+    if (!list || F.S.groupsError) return;
+    if (P.pendingLink) { const g = list.find(x => x.name.toLowerCase() === P.pendingLink.name); if (g) { GC.saveLink(st(), g.id, P.pendingLink.link); P.pendingLink = null; } }
+    const links = GC.readLinks(st());
+    for (const id of Object.keys(links)) if (!list.some(g => g.id === id)) GC.saveLink(st(), id, null);
+  }
   const can = () => !!(F && F.S.groups && F.S.signedIn && F.S.enabled);
   function post(msg, done) {
     if (!can() || !F.post(msg)) { say('Not sent: not connected to ChartBridge.', true); return false; }
@@ -201,13 +313,24 @@ function mountSettings(host) {
     if (host.sec.hidden === show) host.sec.hidden = !show;
     if (host.wide) host.wide(show);   // the workspace's third Settings column
     if (!show) return;
-    const list = groups(), err = F.S.groupsError;
+    syncLinks();
+    const list = groups(), err = F.S.groupsError, links = GC.readLinks(st());
+    /* 1.30.0: under a group filled from a type: "rules differ from <type>: Update" when its rules are not the type's current ones, and
+       the members whose own type is another (warnings only, nothing blocked) */
+    const typeLines = g => {
+      const l = links[g.id]; if (!l) return '';
+      const t = typeById(l.id), diff = t ? GC.rulesDiffer(g, t) : [], off = GC.membersOff(g, l, typeOfAccount);
+      const lines = (diff.length ? `<span class="gp-differ ws-warn" title="${esc('Differs in: ' + diff.join(', ') + '. Filled from version ' + l.version + '; the type is at version ' + t.version + '.')}"><span class="gp-dt">rules differ from ${esc(GC.typeLabel(t))}:</span> <button type="button" class="ws-btn gp-b gp-upd" data-gp="update" data-id="${esc(g.id)}">Update</button></span>` : '') +
+        (off.length ? `<span class="gp-differ ws-warn"><span class="gp-dt">${esc(off.slice(0, 3).map(x => x.account + ' is ' + (x.type.firm ? x.type.firm + ' ' : '') + x.type.name).join('; ') + (off.length > 3 ? '; and ' + (off.length - 3) + ' more' : ''))}: not the group's type</span></span>` : '');
+      return lines ? '<span class="gp-tlines">' + lines + '</span>' : '';
+    };
+    const fromText = g => { const l = links[g.id]; if (!l) return ''; const t = typeById(l.id); return ' · from ' + (t ? GC.typeLabel(t) : l.label); };
     const rows = list.map(g => {
       if (P.confirm === g.id) return `<div class="gp-row gp-ask" role="listitem"><span class="gp-askt">Delete ${esc(g.name)}? ${g.members.length ? 'Its ' + esc(GC.membersText(g)) + ' go to None.' : 'It has no accounts.'}</span>` +
         `<button type="button" class="ws-btn gp-yes" data-gp="del-yes" data-id="${esc(g.id)}">Delete</button><button type="button" class="ws-btn" data-gp="del-no">Keep</button></div>`;
-      return `<div class="gp-row" role="listitem" data-id="${esc(g.id)}"><span class="gp-txt"><b class="gp-name">${esc(g.name)}</b><span class="gp-sum" title="${esc(GC.summary(g) + ' · ' + GC.membersText(g) + ' · ' + GC.sideText(g))}">${esc(GC.summary(g))} · ${esc(GC.membersText(g))} · ${esc(GC.typeText(g))} · ${esc(GC.heroText(g, heroName))}${g.side ? ' · ' + esc(g.side === 'mixed' ? 'long and short' : g.side) : ''}</span></span>` +
+      return `<div class="gp-row" role="listitem" data-id="${esc(g.id)}"><span class="gp-txt"><b class="gp-name">${esc(g.name)}</b><span class="gp-sum" title="${esc(GC.summary(g) + ' · ' + GC.membersText(g) + ' · ' + GC.sideText(g))}">${esc(GC.summary(g))} · ${esc(GC.membersText(g))} · ${esc(GC.typeText(g))} · ${esc(GC.heroText(g, heroName))}${g.side ? ' · ' + esc(g.side === 'mixed' ? 'long and short' : g.side) : ''}${esc(fromText(g))}</span></span>` +
         `<button type="button" class="gp-switch" role="switch" aria-checked="${g.noHedge}" data-gp="hedge" data-id="${esc(g.id)}" title="No hedging inside this group: counts positions and working entries; covers agents, bots, copier followers and your ticket; exits always go"><span class="gp-knob" aria-hidden="true"></span><span class="visually-hidden">No hedging in ${esc(g.name)}</span></button>` +
-        `<button type="button" class="ws-btn gp-b" data-gp="edit" data-id="${esc(g.id)}">Edit</button><button type="button" class="ws-btn gp-b" data-gp="rename" data-id="${esc(g.id)}">Rename</button><button type="button" class="ws-btn gp-b" data-gp="del" data-id="${esc(g.id)}">Delete</button></div>`;
+        `<button type="button" class="ws-btn gp-b" data-gp="edit" data-id="${esc(g.id)}">Edit</button><button type="button" class="ws-btn gp-b" data-gp="rename" data-id="${esc(g.id)}">Rename</button><button type="button" class="ws-btn gp-b" data-gp="del" data-id="${esc(g.id)}">Delete</button>${typeLines(g)}</div>`;
     }).join('');
     const html = (err ? `<p class="ws-help ws-warn" role="alert">${esc(err)}</p>` : '') + (rows || '<p class="ws-help gp-none">No groups yet. Personal accounts sit in no group.</p>');
     if (host.list.dataset.html !== html) { host.list.dataset.html = html; host.list.innerHTML = html; }
@@ -220,9 +343,10 @@ function mountSettings(host) {
     if (!g) return;
     if (act === 'hedge') post(GC.saveFrom(g, { noHedge: !g.noHedge }, cid()), 'No hedging ' + (g.noHedge ? 'off' : 'on') + ' for ' + g.name + ': sent to ChartBridge.');
     else if (act === 'edit') openRules(g);
+    else if (act === 'update') { const l = GC.readLinks(st())[g.id], t = l ? typeById(l.id) : null; if (t) openRules(g, t); }
     else if (act === 'rename') openRename(g);
     else if (act === 'del') { P.confirm = g.id; render(); }
-    else if (act === 'del-yes') { P.confirm = ''; post({ type: 'groupDelete', cid: cid(), group: g.id }, 'Delete ' + g.name + ': sent to ChartBridge.'); render(); }
+    else if (act === 'del-yes') { P.confirm = ''; if (post({ type: 'groupDelete', cid: cid(), group: g.id }, 'Delete ' + g.name + ': sent to ChartBridge.')) GC.saveLink(st(), g.id, null); render(); }
   });
   host.add.addEventListener('click', () => openRules(null));
 
@@ -242,11 +366,18 @@ function mountSettings(host) {
   }
 
   /* Edit and New: the firm's rules (Anthony's approved mockup: the name, the firm's rules, one direction) */
-  function openRules(g) {
+  function openRules(g, refill) {
     const d = host.dialog, f = GC.formOf(g);
+    /* 1.30.0: the Account type select at the top: Not set, then every type of The Desk's ledger ("(not checked)" until checked) */
+    const ts = types() || [], link = g ? GC.readLinks(st())[g.id] || null : null;
+    const startType = refill ? refill.id : link && ts.some(t => t.id === link.id) ? link.id : '';
+    const typeSel = `<div class="gp-f gp-ftype"><label for="gp-fromType">Account type</label><div class="gp-herorow"><select class="ws-sel gp-in" id="gp-fromType" title="Fills every rule box and the Type from The Desk's ledger; you can still change any box">` +
+      '<option value="">Not set</option>' + ts.map(t => `<option value="${esc(t.id)}"${t.id === startType ? ' selected' : ''}>${esc(GC.typeLabel(t))}</option>`).join('') +
+      `</select><span class="ws-help gp-herowhy" id="gp-fromWhy" role="status"></span></div></div>`;
     const box = (k, label, help) => `<div class="gp-f"><label for="gp-${k}">${label}</label><input class="ws-in gp-in" id="gp-${k}" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${help}" value="${esc(f[k])}"></div>`;
     d.innerHTML = `<form class="ws-dlg ws-gp" method="dialog" aria-label="${g ? 'Edit ' + esc(g.name) : 'New group'}">
       <h2>${g ? 'Edit ' + esc(g.name) : 'New group'} <span>${g ? esc(GC.membersText(g)) : 'shows in every account\'s Group dropdown'}</span></h2>
+      ${typeSel}
       <div class="gp-f gp-fname"><label for="gp-name">Group name</label><input class="ws-in gp-in" id="gp-name" type="text" maxlength="${GC.NAME_MAX}" autocomplete="off" spellcheck="false" value="${esc(f.name)}"></div>
       <h3 class="gp-h">The firm's rules</h3>
       <p class="ws-help">Set once. With NinjaTrader's balance these give each account its room, so the agent sizes on real numbers.</p>
@@ -266,6 +397,29 @@ function mountSettings(host) {
     const $d = id => d.querySelector('#gp-' + id);
     const lockSync = () => { const st = $d('drawdownType').value === 'static'; $d('lockAt').disabled = st; if (st) $d('lockAt').value = ''; };
     $d('drawdownType').addEventListener('change', lockSync); lockSync();
+    /* 1.30.0: choosing a type fills the boxes and the Type (never the name: Anthony names his groups); Save sends groupSave as before */
+    let filled = null;
+    const fromWhy = (text, warn) => { $d('fromWhy').textContent = text; $d('fromWhy').classList.toggle('ws-warn', !!warn); };
+    const fromIdle = () => {
+      const id = $d('fromType').value, t = typeById(id), note = typesNote();
+      if (!ts.length) { $d('fromType').disabled = true; fromWhy(note || 'The Desk has no account types yet.', !!note); return; }
+      if (!id) { fromWhy(note, !!note); return; }
+      const diff = t && g ? GC.rulesDiffer(g, t) : [];
+      fromWhy((diff.length ? 'Rules differ from ' + GC.typeLabel(t) + ' (' + diff.join(', ') + ').' : 'Filled from ' + (link ? link.label : GC.typeLabel(t)) + '.') + (note ? ' ' + note : ''), diff.length > 0);
+    };
+    const fill = t => {
+      const v = GC.typeForm(t);
+      for (const k of ['size', 'dailyLoss', 'drawdown', 'lockAt', 'target', 'consistency']) $d(k).value = v[k];
+      if (v.drawdownType) $d('drawdownType').value = v.drawdownType;
+      $d('accountType').value = v.accountType;
+      lockSync(); $d('lockAt').value = $d('drawdownType').value === 'static' ? '' : v.lockAt;
+      for (const el of d.querySelectorAll('.gp-in')) el.removeAttribute('aria-invalid');
+      filled = { id: t.id, version: t.version, label: t.firm + ' ' + t.name };
+      const note = typesNote();
+      fromWhy('Filled from ' + GC.typeLabel(t) + ', version ' + t.version + (v.missing.length ? '; it has no ' + v.missing.join(', ') + ': type ' + (v.missing.length > 1 ? 'them' : 'it') : '') + '. Change any box, then Save.' + (note ? ' ' + note : ''), v.missing.length > 0 || t.status !== 'checked');
+    };
+    $d('fromType').addEventListener('change', () => { const t = typeById($d('fromType').value); if (t) fill(t); else { filled = null; fromIdle(); } });
+    if (refill) fill(refill); else fromIdle();
     /* 1.28.0: Hero on duty: None, then every hero the PC helper knows (its tier, and a warning when it does not fit the Type) */
     let heroWant = g && g.hero ? g.hero : '';
     const heroFill = () => {
@@ -282,12 +436,13 @@ function mountSettings(host) {
     };
     $d('hero').addEventListener('change', () => { heroWant = $d('hero').value; heroFill(); });
     $d('accountType').addEventListener('change', heroFill);
+    $d('fromType').addEventListener('change', heroFill);   // 1.30.0: a fill may change the Type
     heroFill();
     askHeroes().then(() => { if (d.open && $d('hero')) heroFill(); });
     let delAsked = false;
     if (g) $d('del').addEventListener('click', () => {
       if (!delAsked) { delAsked = true; $d('del').textContent = 'Delete ' + g.name + '? Click again'; $d('err').textContent = g.members.length ? 'Its ' + GC.membersText(g) + ' go to None.' : ''; return; }
-      if (post({ type: 'groupDelete', cid: cid(), group: g.id }, 'Delete ' + g.name + ': sent to ChartBridge.')) d.close();
+      if (post({ type: 'groupDelete', cid: cid(), group: g.id }, 'Delete ' + g.name + ': sent to ChartBridge.')) { GC.saveLink(st(), g.id, null); d.close(); }
     });
     host.showDialog(d, () => {
       for (const el of d.querySelectorAll('.gp-in')) el.removeAttribute('aria-invalid');
@@ -295,9 +450,14 @@ function mountSettings(host) {
         lockAt: $d('lockAt').value, target: $d('target').value, consistency: $d('consistency').value, noHedge: $d('noHedge').checked, accountType: $d('accountType').value, hero: $d('hero').value };
       const r = GC.groupMessage(form, groups(), g ? g.id : null, cid());
       if (r.error) { $d('err').textContent = r.error; if (r.field && $d(r.field)) { $d(r.field).setAttribute('aria-invalid', 'true'); $d(r.field).focus(); } return false; }
-      return post(r.msg, (g ? 'Save ' : 'New group ') + r.msg.name + ': sent to ChartBridge.');
+      if (!post(r.msg, (g ? 'Save ' : 'New group ') + r.msg.name + ': sent to ChartBridge.')) return false;
+      /* 1.30.0: the group remembers the type and version it was filled from (Not set: no link; unchanged: the link it had) */
+      const chosen = $d('fromType').value;
+      const next = !chosen ? null : filled && filled.id === chosen ? filled : link && link.id === chosen ? link : null;
+      if (g) GC.saveLink(st(), g.id, next); else P.pendingLink = next ? { name: r.msg.name.toLowerCase(), link: next } : null;
+      return true;
     });
-    $d('name').focus();
+    if (refill) d.querySelector('button[type="submit"]').focus(); else $d('name').focus();
   }
   render();
   return { render, state: P };

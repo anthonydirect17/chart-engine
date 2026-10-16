@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.30.0 (2026-10-16): account types from The Desk's ledger
+
+Page only, no recompile (ChartBridge 0.6.2 as for 1.29.0; `minChartBridge` stays 0.6.2). After 1.29.1. Wave 5 (Anthony 2026-10-16: "a
+repository of all the different firms and account types ... when a new account was added, I could just select the account type from a
+drop down"). The ledger lives on The Desk; the page reads it and copies a type's rules to ChartBridge only when Anthony applies them.
+
+- **The Desk's list (live/accounts.js `readTypes`).** GET /api/account-types from The Desk's address (`deskBase()`, as the limits),
+  with the limits now and every minute. The last good list is kept in this browser (`live-account-types-v1`, every read and write in
+  try/catch; the page works without it) and used while The Desk is not reachable, with "the list as of <time> ET" on the Accounts tab
+  and in the rules dialog. Money is read in dollars, as GET /api/chart-accounts and The Desk's prop tables. A type is "checked" only
+  when The Desk says exactly that; every other type shows "(not checked)" after its name wherever it is offered.
+- **Accounts tab: Account type.** A column between Group and Limits (once ChartBridge sends groups and the list is known): "Not set",
+  then every type as "<firm> <name>". Choosing one sends PUT /api/accounts/{account}/account-type `{"account_type": id|null}` and shows
+  what The Desk says after (a refusal goes to the window's note). Read only while The Desk is not reachable. For an account in no
+  group with a type, Apply asks first ("Apply its rules from <type> to <account>: My floor ... My daily ...") and only then sends the
+  existing accountLimits: My floor at the type's starting floor (account size less the drawdown), My daily at its daily loss limit
+  (none: empty).
+- **Settings, Account groups, the rules dialog.** An Account type select at the top fills every rule box (size, daily loss, drawdown
+  and its type, floor stops at, target, consistency) and the group's Type (Evals, Funded, not set) from the type; the name is never
+  touched (Anthony names his groups). Any box can still be changed; Save sends groupSave as before, so the rules are on the PC. A type
+  missing a value a group needs says so.
+- **The group's link to its type.** Kept in this browser (`live-group-types-v1`, keyed by group id: the type's id, its version and
+  name). groups.txt cannot carry it without a ChartBridge change: ChartBridge 0.6.2's groupSave refuses any key it does not know. A new
+  group's link is kept once ChartBridge answers with its id; a deleted group's link goes with it.
+- **Warnings, never blocks.** A group whose rules differ from its type's current values (a new version on The Desk, or a box changed
+  by hand) shows "rules differ from <type>: Update" in Settings; Update refills the dialog from the type and puts Save in focus. A member
+  account whose own type is not the group's is named under the group in Settings, and on the Accounts tab with a warning row under
+  it and its dropdown marked. Nothing is refused anywhere.
+- Tests: `test/account-types.test.js` (the list read clean, "(not checked)", the fill, the differ check, Apply's numbers, the copy and
+  the links with storage blocked, the member warning, the chart-accounts rows, the wiring, and the fake Desk against the contract);
+  `test/fake-desk.mjs` answers the spec's account-type routes; `smoke:settings` adds the whole flow at 1366 x 768 against the fake Desk
+  (screenshots `settings-types-accounts-tab.png`, `settings-group-type-filled.png`, `settings-types-differ.png`).
+
 ## 1.29.1 (2026-10-16): one missed PC helper poll no longer flips the Agent tab
 
 Page only, no recompile (ChartBridge 0.6.2 as for 1.29.0; `minChartBridge` stays 0.6.2). After 1.29.0 (#51).

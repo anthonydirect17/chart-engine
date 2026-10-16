@@ -543,3 +543,13 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .gp-herorow { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .ws-gp .gp-herorow .gp-in { width: 320px; max-width: 60%; flex: none; }
 .gp-herowhy { margin: 0; min-width: 0; }
+/* 1.30.0 (wave 5): a group filled from an account type (The Desk's ledger): the rules-differ line with Update, and the
+   members of another type (warnings only); the rules dialog's Account type select at the top */
+.gp-row:has(.gp-tlines) { flex-wrap: wrap; }
+.gp-row:has(.gp-tlines) .gp-txt { flex-basis: 0; }
+.gp-tlines { flex: 1 0 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gp-differ { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; color: var(--ws-warn); }
+.gp-differ .gp-dt { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gp-differ .ws-btn.gp-upd { flex: none; }
+.gp-differ .ws-btn.gp-upd { height: 20px; padding: 0 6px; font-size: 11px; }
+.ws-gp .gp-ftype .gp-herorow .gp-in { width: 320px; max-width: 60%; flex: none; }

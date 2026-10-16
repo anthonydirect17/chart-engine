@@ -30,7 +30,20 @@
 .apg-my { min-width: 0; overflow: hidden; }
 .apg-join .apg-high { width: 84px; }
 .apg-join .mut { color: var(--ws-muted); }
-.apg-acc-g .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g .gr-row.apg-ask, .apg-acc-g.apg-grps.apg-hides .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-hides .gr-row.apg-ask { grid-template-columns: minmax(0, 1fr); }
+/* 1.30.0: the Account type column (The Desk's ledger) between Group and Limits, its dropdown and Apply */
+.apg-acc-g.apg-grps.apg-types .gr-row { grid-template-columns: minmax(64px, 1.1fr) 78px minmax(0, 1fr) minmax(0, .9fr) minmax(0, .9fr) minmax(0, 2fr) 116px 184px 152px 44px; }
+.apg-acc-g.apg-grps.apg-types.apg-hides .gr-row { grid-template-columns: minmax(64px, 1.1fr) 78px minmax(0, 1fr) minmax(0, .9fr) minmax(0, .9fr) minmax(0, 2fr) 116px 184px 152px 44px 50px; }
+.ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types .gr-row { grid-template-columns: minmax(56px, 1fr) 0 0 minmax(0, .9fr) 0 minmax(0, 1.4fr) 100px 0 0 36px; column-gap: 4px; }
+.ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types.apg-hides .gr-row { grid-template-columns: minmax(56px, 1fr) 0 0 minmax(0, .9fr) 0 minmax(0, 1.4fr) 100px 0 0 36px 46px; }
+.ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types .gr-row > :nth-child(9) { visibility: hidden; }
+.apg-type { display: flex; gap: 4px; align-items: center; min-width: 0; overflow: hidden; }
+.apg .apg-sel.apg-tsel { flex: 1 1 auto; min-width: 0; width: 100%; }
+.apg .apg-sel.apg-tsel.apg-toff { border-color: var(--ws-warn); }
+.apg .ac-btn.apg-apply { flex: none; }
+.apg-twarn { color: var(--ws-warn-text); }
+.apg-acc-g .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g .gr-row.apg-ask, .apg-acc-g.apg-grps.apg-hides .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-hides .gr-row.apg-ask,
+.apg-acc-g.apg-grps.apg-types .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types .gr-row.apg-ask,
+.apg-acc-g.apg-grps.apg-types.apg-hides .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types.apg-hides .gr-row.apg-ask { grid-template-columns: minmax(0, 1fr); }
 .apg-arch-g .gr-row { grid-template-columns: minmax(64px, 1fr) 54px; }
 .apg-gone-g .gr-row { grid-template-columns: minmax(64px, 1fr) minmax(0, 1.3fr) 90px minmax(0, .8fr) minmax(0, 2fr); }
 .apg-pos-g .gr-row { grid-template-columns: minmax(64px, 1fr) 40px 40px repeat(4, minmax(0, 1fr)); }

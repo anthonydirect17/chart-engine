@@ -338,7 +338,7 @@ test('1.26.0: the Accounts tab gets Group and Limits only once ChartBridge sends
   const src = read('live/accounts.js'), html = read('live/index.html'), files = JSON.parse(read('nt8/install-files.json'));
   assert.match(src, /case 'groups': \{/);
   assert.match(src, /const grpOn = !!S\.groups, canGroup = grpOn && S\.enabled && !S\.groupsError;/);
-  assert.match(src, /\(grpOn \? h\('Group'\) \+ h\('Limits', 'r'\) : ''\)/, 'the two headers, only with groups');
+  assert.match(src, /\(grpOn \? h\('Group'\) \+ \(typesOn \? h\('Account type'\) : ''\) \+ h\('Limits', 'r'\) : ''\)/, 'the two headers, only with groups (1.30.0: Account type between them once The Desk\'s types are known)');
   assert.match(src, /S\.groups = null; S\.groupsError = null;/, 'a drop forgets the groups (an older ChartBridge sends none)');
   assert.match(src, /accountGroup: \(name, group, highText\) => \{\s*if \(!S\.groups/);
   assert.match(src, /accountLimits: \(name, floorText, dailyText\) => \{\s*if \(!S\.groups/);
