@@ -3118,9 +3118,15 @@ backslash or control character, nothing a reader would trim). One line per build
 agent channel is on) and survives restarts and the 18:00 roll (nothing rolls it). A line whose group is not in `groups.txt` is dropped at
 the start (only when `groups.txt` exists and reads: with no `groups.txt` every line is kept and the file is not rewritten). A group deleted on the page (`groupDelete`) drops its lines at once, in memory and the file,
 under the groups' own save, so a group made later never inherits one. A file that cannot be understood (a line it does not know, a build
-and group twice) or read is **never written over that run** and **every agent entry is refused** ("agent-standdowns.txt has a line
-ChartBridge does not understand: every new agent entry is refused until it can be read (exits always work); fix or delete the file, then
-recompile"; an alarm to the pages, and `agentStandDowns.error`); a raise then holds in memory only and a clear is refused. A raise that
+and group twice) or read is **never written over that run**. Anthony's ruling (2026-10-16): while it cannot be read, an agent entry is
+refused only on an account in a prop group (any group in `groups.txt`): "agent-standdowns.txt has a line ChartBridge does not
+understand: every new agent entry on an account in a prop group is refused until it can be read (accounts in no group keep trading;
+exits always work); fix or delete the file, then recompile (SIM-E is in group Lucid)". An account in no group (a Sim league seat, a
+personal account) keeps trading, and exits always go. With `groups.txt` unreadable too (membership unknown), every account that is not
+Sim is refused ("... groups.txt cannot be read either, so EVAL-A (not Sim) is refused ...") and a Sim account is allowed by this rule
+(`groups.txt`'s own rule still refuses every entry while it cannot be read). Checked at plan check 2 (an agent on a group: the whole
+plan; on one account: by that account) and per seat under `PlaceLock` (`ChartBridgeAgents.BrokenRefusal`). The pages get the alarm at
+the start and `agentStandDowns.error`; a raise then holds in memory only and a clear is refused. A raise that
 cannot be written holds in memory (the gate holds at once) with an alarm that a restart would lose it; a clear that cannot be written is
 refused and the stand-down stays.
 
@@ -3137,8 +3143,8 @@ refused and the stand-down stays.
 Raising it cancels that build's unfilled entries on that group (answers `expired`) and expires its open proposals (`expired`, "agent
 <id> stands down: ..."). Positions keep their stop and target. Never gated: exits, Flatten, the agent's own `flatten`, the protective
 exit, the legs, flatAt, the stop placed again over a shut market, cancels. Another build on the same group, and the same build on an
-account in no group or in another group, trade as before. A league seat (no group) is never stood down by a group's line; only the
-unreadable file stops it.
+account in no group or in another group, trade as before. A league seat (no group) is never stood down by a group's line, nor by the unreadable file (only a
+not-Sim account while `groups.txt` cannot be read either).
 
 | direction | message | notes |
 |---|---|---|

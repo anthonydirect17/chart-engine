@@ -959,8 +959,9 @@ public static class GroupsHarness
             // unreadable: every agent entry refused (any group or none); the page's own orders and exits are not touched
             File.WriteAllText(sd, "# made-up\n# test\nstandDown\tbad line\n");
             ChartBridgeAgents.Start(false);
-            string why = ChartBridgeAgents.StandDownRefusal("sample-build-1", null);
-            Check(why != null && why.Contains("agent-standdowns.txt has a line ChartBridge does not understand: every new agent entry is refused until it can be read (exits always work)"), "SD: unreadable: every agent entry refused: " + why);
+            string why = ChartBridgeAgents.StandDownsBroken();
+            Check(why != null && why.Contains("agent-standdowns.txt has a line ChartBridge does not understand: every new agent entry on an account in a prop group is refused") && ChartBridgeAgents.BrokenRefusal("SIM-D") == null,
+                  "SD: unreadable: an account in no group is not refused by it (Anthony 2026-10-16): " + why);
             d = Submits(simD);
             Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
             Check(Submits(simD) == d + 1, "SD: unreadable: a page order still goes (the file gates agent entries only)");

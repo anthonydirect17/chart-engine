@@ -12,7 +12,9 @@ else changes, and exits are never gated.
   deleted group's lines go with it) and refuses every new entry from that build on that group: the whole plan at check 2 for a group,
   the one seat for an account inside the group, and again per seat under `PlaceLock`. Raising it cancels that build's unfilled entries
   there and expires its open proposals; positions keep their stop and target; Flatten, the agent's flatten, protect, the legs, flatAt
-  and the stop placed again always go. A file that cannot be read refuses every agent entry (exits pass) and is never written over.
+  and the stop placed again always go. A file that cannot be read is never written over and (Anthony 2026-10-16) refuses agent entries only on accounts in a prop
+  group: accounts in no group (a Sim league seat, a personal account) keep trading and exits always go; with `groups.txt` unreadable
+  too, accounts that are not Sim are refused and Sim accounts allowed. The pages still get the reason and the alarm.
   `agentState.groupStandDown` to the runner; `agent.standDowns` and `agentStandDowns` (every stand-down, a hero not connected too) to
   the pages.
 - Fix round 1: `agentHello` refuses a build with a space at either end (a build cut on the space before its stamp) and a

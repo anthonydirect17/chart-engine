@@ -4171,21 +4171,27 @@ public static class AgentHarness
             SettleAll();
         });
 
-        Part("0.6.2 an unreadable file refuses entries, never exits", () =>
+        Part("0.6.2 an unreadable file refuses entries on prop-group accounts, never exits", () =>
         {
+            // Anthony 2026-10-16: an account in a prop group is refused; an account in no group keeps trading; exits always go; with
+            // groups.txt unreadable too, a Sim account is allowed and any other refused
             NoStandDowns();
-            Fresh();   // manrae on SIM-E (in no group now)
+            WriteGroup("SIM-A", "SIM-B", "SIM-C", "SIM-E");
+            Fresh();   // manrae on SIM-E (in Lucid)
             Order e = PlacedOn(sime, Good(NewId()));
             if (e == null) { Check(false, "0.6.2 unreadable: placed: " + AgentReject()); return; }
             Fill(e, 1, 24999);
             File.WriteAllText(SdFile, "# made-up\n# test\nstandDown\tsample-build-1\n");
             Restart(); Mode("manrae", "auto"); Last2();
             string text = FileText("agent-standdowns.txt");
-            Check(Logged("agent-standdowns.txt has a line ChartBridge does not understand: every new agent entry is refused until it can be read (exits always work)"), "0.6.2: unreadable: said at the start");
+            Check(Logged("agent-standdowns.txt has a line ChartBridge does not understand: every new agent entry on an account in a prop group is refused until it can be read (accounts in no group keep trading; exits always work)") &&
+                  Logged("ALERT: agent-standdowns.txt has a line"), "0.6.2: unreadable: said at the start, with the alarm");
             int c0 = sime.Calls.Count;
             Advance(1000);
             A(Good(NewId()));
-            Check(AgentReject().Contains("agent-standdowns.txt has a line ChartBridge does not understand"), "0.6.2: unreadable: every agent entry refused (an account in no group too): " + AgentReject());
+            Check(AgentReject().Contains("agent-standdowns.txt has a line ChartBridge does not understand") && AgentReject().Contains("(SIM-E is in group Lucid)") && sime.Calls.Skip(c0).All(c => !c.StartsWith("submit")),
+                  "0.6.2: unreadable: a seat in a prop group is refused: " + AgentReject());
+            Check((ChartBridgeAgents.PlacingProblem("manrae", "SIM-E", "limit", true, 24999, 0, 0.25) ?? "").Contains("agent-standdowns.txt has a line"), "0.6.2: unreadable: refused per seat under PlaceLock too");
             Check(Legs(sime, e).Count(IsLive) == 2 && Last(page, "agentStandDowns").Contains("\"error\":\"agent-standdowns.txt has a line"), "0.6.2: unreadable: the legs stay; the pages are told why");
             A(SD("g1"));
             P(Clear("sample-build-1", "g1", "u1"));
@@ -4196,7 +4202,33 @@ public static class AgentHarness
             Check(fl != null && fl.Quantity == 1, "0.6.2: unreadable: the agent's flatten still goes (exits pass)");
             if (fl != null) Fills(fl, "FU1", 25000);
             Settle(sime);
+            // a Sim league seat in no group keeps trading
+            P("{\"type\":\"agentAccount\",\"cid\":\"u2\",\"agent\":\"manrae\",\"account\":\"SIM-D\",\"league\":true,\"keepMode\":\"auto\"}");
+            Order ld = PlacedOn(simd, Good(NewId()));
+            Check(!Rejected("u2") && M.League && ld != null, "0.6.2: unreadable: a Sim league seat in no group keeps trading: " + AgentReject());
+            Settle(simd);
+            // a personal account in no group (EVAL-A, LIVE to NinjaTrader) keeps trading
+            P("{\"type\":\"agentAccount\",\"cid\":\"u3\",\"agent\":\"manrae\",\"account\":\"EVAL-A\",\"keepMode\":\"auto\"}");
+            Order pe = PlacedOn(eval, Good(NewId()));
+            Check(!Rejected("u3") && pe != null, "0.6.2: unreadable: a personal account in no group keeps trading: " + AgentReject() + " " + PageReject());
+            Settle(eval);
+            // groups.txt unreadable too: membership unknown: not Sim refused, Sim allowed
+            string groupsWas = File.ReadAllText(GroupsFile);
+            try
+            {
+                File.WriteAllText(GroupsFile, "no header\n");
+                ChartBridgeGroups.StartNow();
+                clock += 1000;
+                A(Good(NewId()));
+                Check(AgentReject().Contains("groups.txt cannot be read either, so EVAL-A (not Sim) is refused") && (ChartBridgeAgents.PlacingProblem("manrae", "EVAL-A", "limit", true, 24999, 0, 0.25) ?? "").Contains("(not Sim) is refused"),
+                      "0.6.2: both unreadable: an account that is not Sim is refused (check 2 and per seat): " + AgentReject());
+                Check(ChartBridgeAgents.BrokenRefusal("SIM-D") == null && ChartBridgeAgents.BrokenRefusal("EVAL-A") != null,
+                      "0.6.2: both unreadable: a Sim account is allowed by the stand-down file's rule (groups.txt's own rule still refuses every entry while it cannot be read)");
+            }
+            finally { File.WriteAllText(GroupsFile, groupsWas); ChartBridgeGroups.StartNow(); }
             NoStandDowns();
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
+            File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSIM-E" });
             Restart(); Mode("manrae", "auto");
         });
 

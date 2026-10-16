@@ -565,7 +565,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The file is written only by ChartBridge (two # lines, then standDown<TAB><build><TAB><group id><TAB><UTC ms><TAB><kind><TAB>
         // <why>), whole through a temp file. It survives restarts and the 18:00 roll (nothing rolls it); a deleted group's lines are
         // dropped (GroupDeleted, under the groups' save, before a later group could take the same id). A file that cannot be read is
-        // never written over that run, and EVERY agent entry is refused until it can (exits pass).
+        // never written over that run, and (Anthony 2026-10-16) agent entries on accounts in a prop group are refused until it can; accounts in
+        // no group keep trading, exits pass; with groups.txt unreadable too, only Sim accounts take agent entries (BrokenRefusal).
         public sealed class GroupStandDown { public string Build, Group, Kind, Why; public double At; }
         public const string StandDownsFileName = "agent-standdowns.txt";
         private static readonly object SdLock = new object();       // the memory copy only (a leaf: nothing is called under it)
@@ -629,7 +630,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception ex) { broken = StandDownsFileName + " could not be read (" + ex.Message + ")"; }
             if (broken != null)
             {
-                broken += ": every new agent entry is refused until it can be read (exits always work); fix or delete the file, then recompile";
+                broken += ": every new agent entry on an account in a prop group is refused until it can be read (accounts in no group keep trading; exits always work); fix or delete the file, then recompile";
                 lock (SdLock) { sdList = new List<GroupStandDown>(); sdBroken = broken; sdRepeatSaid.Clear(); sdCapAlarmed.Clear(); }
                 ChartBridgeOrders.AgentAlarm(broken);   // logged and to every signed-in page; a page that signs in later gets agentStandDowns.error
                 try { ChartBridgeV3.SendToV3Traders(StandDownsMessage()); } catch (Exception) { }
@@ -649,17 +650,32 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { ChartBridgeV3.SendToV3Traders(StandDownsMessage()); } catch (Exception) { }   // pages signed in already (a page that signs in later gets it in AfterAuth)
         }
 
-        // The file could not be read at start (every agent entry refused), or null.
+        // The file could not be read at start, or null.
         public static string StandDownsBroken() { lock (SdLock) return sdBroken; }
 
-        // Why an agent entry of `build` on group `gid` (null: no group) is refused by a stand-down, or null. The unreadable file refuses
-        // every agent entry, a group or not. Words name the build, the group, the kind and the why.
+        // Anthony 2026-10-16: while agent-standdowns.txt cannot be read, an agent entry is refused only on an account in a prop group (any
+        // group in groups.txt): an account in no group (a Sim league seat, a personal account) keeps trading, exits always go. With
+        // groups.txt unreadable too (membership unknown), every account that is not Sim is refused (the careful side for prop accounts)
+        // and a Sim account is allowed. acct: the account the entry goes to. Null when it may go on.
+        public static string BrokenRefusal(string acct)
+        {
+            string broken = StandDownsBroken();
+            if (broken == null || string.IsNullOrEmpty(acct) || ChartBridgeBranches.IsNone(acct)) return null;
+            if (ChartBridgeGroups.Unreadable())
+            {
+                Account a = null;
+                lock (Account.All) foreach (Account x in Account.All) if (x.Name == acct) { a = x; break; }
+                return a != null && ChartBridgeBot.IsSim(a) ? null : broken + "; groups.txt cannot be read either, so " + acct + " (not Sim) is refused: only Sim accounts take agent entries until both files read";
+            }
+            return ChartBridgeGroups.GroupOf(acct) != null ? broken + " (" + acct + " is in group " + (ChartBridgeGroups.NameOf(ChartBridgeGroups.GroupOf(acct)) ?? ChartBridgeGroups.GroupOf(acct)) + ")" : null;
+        }
+
+        // Why an agent entry of `build` on group `gid` (null: no group) is refused by a stand-down, or null. Words name the build, the
+        // group, the kind and the why. (The unreadable file is BrokenRefusal's, per account.)
         public static string StandDownRefusal(string build, string gid)
         {
-            string broken;
             GroupStandDown hit = null;
-            lock (SdLock) { broken = sdBroken; if (build != null && gid != null) hit = sdList.FirstOrDefault(x => x.Build == build && x.Group == gid); }
-            if (broken != null) return broken;
+            lock (SdLock) { if (build != null && gid != null) hit = sdList.FirstOrDefault(x => x.Build == build && x.Group == gid); }
             if (hit == null) return null;
             return "build " + build + " stands down on group " + (ChartBridgeGroups.NameOf(gid) ?? gid) + " (" + hit.Kind + ": " + hit.Why + "): no new entries from it on that group until Anthony clears it on the Agent tab's Board (exits always work)";
         }
@@ -3033,7 +3049,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!grp && ChartBridgeBranches.IsNone(acct)) return "agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
             if (forAccount != null && forAccount != used) return "agent " + Id + "'s account changed from " + KeyWords(forAccount) + " to " + KeyWords(used) + " after this proposal: nothing placed";
             // 0.6.2: a stand-down of its build on its group (a group pick: the whole plan; one account inside a group: its one seat), or
-            // agent-standdowns.txt unreadable (every agent entry)
+            // agent-standdowns.txt unreadable (an account in a prop group: BrokenRefusal)
             string latch = LatchProblem();
             if (latch != null) return latch;
             if (lg && (grp || !SeatSim(acct))) return LeagueRefusal;   // 0.6.2: a league seat enters only while its account is Sim (read fresh)
@@ -4542,21 +4558,29 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!on) return "agent " + Id + " is not connected: nothing more is placed";   // 0.6.0: a fan-out stops at the seat after its socket dropped
             DateTime et = NowEt();
             if (!InWindow(r, et)) return WindowRefusal(r, et);   // 0.5.2: session time, the market open
-            string sd = ChartBridgeAgents.StandDownRefusal(bd, ChartBridgeGroups.GroupOf(acct)) ?? (gid != null ? ChartBridgeAgents.StandDownRefusal(bd, gid) : null);
+            string sd = ChartBridgeAgents.BrokenRefusal(acct) ?? ChartBridgeAgents.StandDownRefusal(bd, ChartBridgeGroups.GroupOf(acct)) ?? (gid != null ? ChartBridgeAgents.StandDownRefusal(bd, gid) : null);
             if (sd != null) return sd;
             if (lg) { Account a = FindAccount(acct); if (gid != null || a == null || !ChartBridgeBot.IsSim(a)) return LeagueRefusal; }
             return null;
         }
 
         // 0.6.2: a stand-down of its build (its last hello's) on the group it trades, or on the group its one account is in; or
-        // agent-standdowns.txt unreadable (every agent entry). Null otherwise (None, a personal account or a league seat in no group).
+        // agent-standdowns.txt unreadable (an account in a prop group: BrokenRefusal). Null otherwise (None, a personal account or a league seat in no group).
         private string GroupNowForLatch()
         {
             string gid, acct;
             lock (Sync) { gid = groupId; acct = account; }
             return gid ?? (ChartBridgeBranches.IsNone(acct) ? null : ChartBridgeGroups.GroupOf(acct));
         }
-        private string LatchProblem() { return ChartBridgeAgents.StandDownRefusal(Build, GroupNowForLatch()); }
+        // agent-standdowns.txt unreadable (Anthony 2026-10-16): on a group, the whole agent (every seat is in the group); on one account,
+        // by that account (BrokenRefusal: in a prop group refused, in no group allowed; groups.txt unreadable too: Sim only).
+        private string LatchProblem()
+        {
+            string gid, acct;
+            lock (Sync) { gid = groupId; acct = account; }
+            string broken = gid != null ? ChartBridgeAgents.StandDownsBroken() : ChartBridgeAgents.BrokenRefusal(acct);
+            return broken ?? ChartBridgeAgents.StandDownRefusal(Build, GroupNowForLatch());
+        }
 
         // agentState.groupStandDown: the stand-down on the group it is on now, {group, kind, why, at}, or null.
         private string GroupStandDownJson()
