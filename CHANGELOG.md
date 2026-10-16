@@ -1,5 +1,51 @@
 # Changelog
 
+## ChartBridge 0.6.3 and chart 1.31.0 (2026-10-16): the audit fixes for ChartBridge and the chart page
+
+Audit C (the live-only quirks of a laptop: off at the wrong hour, asleep, a power cut, flaky Wi-Fi), all ten findings, approved by
+Anthony on 2026-10-16 with his decisions on C5, C7 and C9. **ChartBridge 0.6.3 is a recompile for its own fixes; the page works with
+ChartBridge 0.6.2** (`minChartBridge` stays 0.6.2). Order path: exits always go; the only behaviour that changes on the order path is
+what Anthony decided (the kill switch kept through a restart, the flat time closing with the data feed down, the copier's leader
+re-arming by itself).
+
+- **C1: a missed 17:00 ET reset is caught up.** At start and on every 2 s check, when `daily-reset.txt` names a day older than the
+  latest 17:00 ET at or before now (the page's `resetDay` rule), the reset to None runs then, with the same Idle and skip rules and
+  notes that say it was caught up. No file is not a missed break; a day ahead of now is not due.
+- **C2: a close or a high ChartBridge did not see never overstates the room.** `account-marks.txt` keeps the last close seen, the last
+  reading's balance and flat state, and any missed close or day (12 fields; a 0.6.2 file reads as before). After a gap (a restart, a PC
+  asleep, an account not connected for 10 s): nothing traded means the missed close was that balance; otherwise the trailing `floor`
+  and `roomFloor` are null with the reason (in `accounts` and `accountState`) until the account is put in its group again with the
+  highest close. Going back to 0.6.2 makes it read the file as not understood: its trailing floors are null (never a guess).
+- **C3: state files survive a power cut.** Every state file is written through a temp file opened write-through and flushed
+  (`Flush(true)`) before the replace, which keeps the old copy as `.bak`; day-file appends are flushed too. A file that reads but is not
+  understood falls back to its `.bak` with a note to the pages. A damaged agent day file keeps the trades, losses and plan ids that
+  read (and its `.bak`), never resets them, stands the agent down for this run only and is written again at once; the alarm no longer
+  says to delete it.
+- **C4: a file held open at the start is read again** (agent rules, account, day, `agent-standdowns.txt`): no new entries meanwhile,
+  read on every 500 ms check, the alarm only after a minute, and the stand-down gone by itself once it reads.
+- **C5 (Anthony's decision): the kill switch survives a restart.** `agent-<id>-kill.txt` per agent and `bot-kill.txt`, written and
+  removed only by the page's kill message. `welcome` carries `killed`; the page's `agent` rows and `bot` carry `killedAt`; the Board
+  and the agent's desk say "kill switch on since <time>".
+- **C6: the Accounts tab after ChartBridge drops** keeps the last rows dimmed and marked "as of hh:mm:ss ET (not connected)", Conn
+  unknown, and the Accounts, Positions and Working orders footers say so. Group, Account type and Limits stay, "not known (not
+  connected)".
+- **C7 (Anthony's decision): the flat time with the data feed down.** No trade because NinjaTrader's data feed is down, with the
+  account Connected and the market open by the calendar: the flatten goes anyway and the pages are told why. The feed up and no trade
+  is a real halt, as before.
+- **C8: nothing ends a trade while the account is not Connected** (the ghost-trade end, the drop against the other side, the owner
+  lock's release); once Connected again it must stay so for 3 s before they look.
+- **C9 (Anthony's decision): the copier's leader** counts as gone only after about 10 s not Connected, and stood down by that the
+  copier re-arms by itself once the leader is back and every follower matches its position, with a status line each time.
+- **C10: a late flatten names the real time** ("flattened at 16:40 by its rules (its 15:55 flat time passed while ChartBridge was not
+  running or not watching)").
+- An account on None is "account - (None)" in the Output window and the logs, never "(LIVE)".
+- `nt8/update-pc.ps1` (the ops audit): a git that times out is ended with the programs it started (taskkill /T, as
+  `botlab_update.ps1`), and a stale lock on `refs/remotes/origin/main` or `packed-refs` (older than 10 minutes) is removed before the
+  fetch, so one ended fetch no longer means `fetch_failed` for good.
+- Tests: harness cases for every finding (BotHarness, GroupsHarness, AgentHarness, CopierHarness), the PowerShell tests for the
+  updater, and `smoke:accounts` drops the fake ChartBridge (accounts-9-dropped-1366.png). The harness runs the daily reset only when a
+  case calls it (`ChartBridgeBranches.HarnessManual`), never on the test PC's own clock.
+
 ## 1.30.0 (2026-10-16): account types from The Desk's ledger, and the Settings cleanup
 
 Page only, no recompile (ChartBridge 0.6.2 as for 1.29.0; `minChartBridge` stays 0.6.2). After 1.29.1. Wave 5 (Anthony 2026-10-16: "a
