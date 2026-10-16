@@ -2433,7 +2433,7 @@ not even the window. A change is saved, logged and sent to the agent in a new `w
 `refused: <why>` to the pages, one log line):
 
 1. Strict message; `id` new today for this agent.
-2. Not killed, not stood down, the account file and rules file readable, the account tradable now (gate 2, Connected).
+2. Not killed, not stood down, the account file and rules file readable, the account tradable now (gate 2, Connected). 0.6.2: and no stand-down of its build on its group, `agent-standdowns.txt` readable, and a league seat's account Sim ("Group stand-downs and league seats (0.6.2)").
 3. `root` in `roots`; `kind` `limit` or `stopLimit` (`market`, `stop`, `mit` refused).
 4. `qty` a whole number from 1 to `maxQty.<root>`; `stopTicks` and `targetTicks` whole numbers of 1 or more.
 5. `riskDollars` equals `stopTicks` x tick x point value x `qty` within $0.01.
@@ -2497,7 +2497,7 @@ Conversely the bot, the copier and other agents refuse an agent's account. A LIV
 | `agentKill` | `cid` (optional), `agent`, `on` (*bool*) |
 | `agentSeen` | `agent`, `id`, `at` |
 | `agentAnswer` | `cid` (optional), `agent`, `id`, `answer` (`accept`/`reject`), `at` |
-| `agentAccount` | `cid` (optional), `agent`, `account` (0.5.7: `null` is None) or (0.6.0) `group` (a group id: every member a seat; never both), `keepMode` (optional, 0.5.2: `shadow`, `copilot` or `auto`, the mode the page's question named; a 1.18.1 page sends it only to ChartBridge 0.5.2 or later, because 0.5.1 refuses a key it does not know) |
+| `agentAccount` | `cid` (optional), `agent`, `account` (0.5.7: `null` is None) or (0.6.0) `group` (a group id: every member a seat; never both), `keepMode` (optional, 0.5.2: `shadow`, `copilot` or `auto`, the mode the page's question named; a 1.18.1 page sends it only to ChartBridge 0.5.2 or later, because 0.5.1 refuses a key it does not know), `league` (optional, 0.6.2: true makes the one account a league seat, Sim only) |
 | `agentRules` | `cid` (optional), `agent`, `roots`, `maxQtyNQ`, `maxQtyMNQ`, `maxQtyES`, `maxQtyMES` (each optional), `entryFrom`, `entryUntil`, `flatAt`, `maxExpireSec`, `maxTrades` (0 = none), `maxLosses` (0 = none) |
 
 | ChartBridge to page | fields | when |
@@ -2509,7 +2509,7 @@ Conversely the bot, the copier and other agents refuse an agent's account. A LIV
 
 A v3 page that signs in gets every agent's `agent`, its open proposals, its last 200 notes and its last 50 plans. `/diag`
 `agents` (only with the channel on): per id `connected`, `mode`, `killed`, `plans`, `proposals`, `placed`, `refused`,
-`heartbeatLost`, `flattenedAt`, `secretFile`. These messages ride the order lane (never behind market data).
+`heartbeatLost`, `flattenedAt`, `secretFile`. 0.6.2: and `league` (true for a league seat, false otherwise; the welcome's own flag, never an account name). These messages ride the order lane (never behind market data).
 
 **Fills to The Desk.** ChartBridge's fills to The Desk (`POST /api/fills`, `postFills = true`) add `by` when ChartBridge knows
 the source: exactly `agent:<id>`, `bot` or `copier`; no `by` key at all otherwise (The Desk refuses any other value, an empty
@@ -2940,6 +2940,7 @@ config switch):
 | `groupId` | the group's id, null when not `prop` |
 | `groupSide` | the group's side now (`long`, `short`, `mixed`, or null when flat or not `prop`); while it is `long` the agent's sells are refused, and so on |
 | `noHedge` | the group's switch (null when not `prop`) |
+| `accountType` | 0.6.2: the group's Type from `groups.txt` (`eval`, `funded`, or null when not set), so a hero on one account inside a prop group knows it; always present, null when not `prop`. Informational: nothing in the order path reads it |
 | `rules` | `prop`: `{dailyLoss, drawdown, drawdownType, target, size, lockAt, consistency}`: `size` the account size, `lockAt` "floor stops at" (G1), `consistency` the consistency percent (CON a: informational, no gate or flatten in ChartBridge uses it; personal rules never have it); `personal`: `{floor, dailyLoss}` (the account's own limits, once Anthony has saved My floor or My daily, 0 included), or **null when
 no limits were ever set by Anthony: the agent keeps its model numbers** (NinjaTrader's trailing drawdown is still sent as
 `roomFloor`, `src` `ninjatrader`); `none`: null. Inside `rules` **0 means none**, said explicitly (the firm has no daily limit, no target, no lock; the account has no floor or daily limit of its own), never null: a rule is never "missing". Only the eight numbers below may be null, each with its `why` |
@@ -3100,6 +3101,78 @@ does not know heroes or tiers, and nothing in the order path reads them (no new 
   `agent` message naming the group, then the helper's existing `POST /on` with the group's default hero in Shadow (no default hero
   the helper has: he picks one). No free slot: "add an agent id to config.txt (agents = ...)"; ChartBridge never writes config.txt.
   Every start is Shadow; Auto stays one click and Confirm on his desk.
+
+### Group stand-downs and league seats (0.6.2)
+
+SPEC CE-2, Phase 4 pieces 5 and 4 (DECISIONS 2026-10-15i, 15j, 15k and 16m). Built in `nt8/ChartBridgeAgents.cs`. ChartBridge does not
+rate heroes: the runner decides a stand-down (edge watch, a tier drop, below Acceptable, a blow streak) and raises it; ChartBridge holds
+it and gates entries; only Anthony clears it, on the Board. Made-up names below.
+
+**The file.** `agent-standdowns.txt` next to `config.txt`, written only by ChartBridge, whole through a temp file: two `#` lines, then
+one line per stand-down:
+
+    standDown<TAB><build><TAB><group id><TAB><UTC ms><TAB><kind><TAB><why>
+
+`build` is the agent's `agentHello` build exactly (1 to 40 characters); `kind` 1 to 40, `why` 1 to 200 (plain strings: no tab, quote,
+backslash or control character, nothing a reader would trim). One line per build and group. It is read once at the start (when the
+agent channel is on) and survives restarts and the 18:00 roll (nothing rolls it). A line whose group is not in `groups.txt` is dropped at
+the start (only when `groups.txt` exists and reads: with no `groups.txt` every line is kept and the file is not rewritten). A group deleted on the page (`groupDelete`) drops its lines at once, in memory and the file,
+under the groups' own save, so a group made later never inherits one. A file that cannot be understood (a line it does not know, a build
+and group twice) or read is **never written over that run**. Anthony's ruling (2026-10-16): while it cannot be read, an agent entry is
+refused only on an account in a prop group (any group in `groups.txt`): "agent-standdowns.txt has a line ChartBridge does not
+understand: every new agent entry on an account in a prop group is refused until it can be read (accounts in no group keep trading;
+exits always work); fix or delete the file, then recompile (SIM-E is in group Lucid)". An account in no group (a Sim league seat, a
+personal account) keeps trading, and exits always go. With `groups.txt` unreadable too (membership unknown), every account that is not
+Sim is refused ("... groups.txt cannot be read either, so EVAL-A (not Sim) is refused ...") and a Sim account is allowed by this rule
+(`groups.txt`'s own rule still refuses every entry while it cannot be read). Checked at plan check 2 (an agent on a group: the whole
+plan; on one account: by that account) and per seat under `PlaceLock` (`ChartBridgeAgents.BrokenRefusal`). The pages get the alarm at
+the start and `agentStandDowns.error`; a raise then holds in memory only and a clear is refused. A raise that
+cannot be written holds in memory (the gate holds at once) with an alarm that a restart would lose it; a clear that cannot be written is
+refused and the stand-down stays.
+
+**What it gates: entries only.** While build B stands down on group G, no new entry from an agent whose build is B goes on any seat in G:
+
+- plan check 2 (after the files, before any other check): an agent on G refuses the whole plan; an agent on one account that is a member
+  of G refuses it (its one seat); refused as "build B stands down on group Lucid (edge watch: ...): no new entries from it on that group
+  until Anthony clears it on the Agent tab's Board (exits always work)";
+- again per seat under `PlaceLock` (`ChartBridgeAgents.PlacingProblem(id, account, ...)` from `PlaceOrderLocked`): the seat's own group
+  and the group the agent trades, read at that moment, so a stand-down raised mid fan-out stops the seats not yet placed;
+- the backstop and `agentState.standDown` / the strip's `standDown` carry the words, so every pass cancels a stood-down agent's
+  unfilled entries.
+
+Raising it cancels that build's unfilled entries on that group (answers `expired`) and expires its open proposals (`expired`, "agent
+<id> stands down: ..."). Positions keep their stop and target. Never gated: exits, Flatten, the agent's own `flatten`, the protective
+exit, the legs, flatAt, the stop placed again over a shut market, cancels. Another build on the same group, and the same build on an
+account in no group or in another group, trade as before. A league seat (no group) is never stood down by a group's line, nor by the unreadable file (only a
+not-Sim account while `groups.txt` cannot be read either).
+
+| direction | message | notes |
+|---|---|---|
+| agent to ChartBridge | `standDown` `{group, kind, why}` (no other keys) | raise only: there is no clear from the agent. The group must be in `groups.txt` (lead's default: any group, not only the one it trades; while `groups.txt` cannot be read it is taken, since a stand-down only refuses). Raised again while in force: kept as first raised, logged once per build and group. A raise for a group in `groups.txt` is always taken; only while `groups.txt` cannot be read (a group ChartBridge cannot find) is a raise refused once 200 stand-downs are in force, logged, with one alarm per build and group. Refused with `reject` |
+| agent to ChartBridge | `agentHello` (0.6.2) | the build must read back the same (1 to 40 characters, no space at either end, so a build cut at 40 on the space before its stamp is refused), and it is one build per connection: a second hello with another build is refused and logged (reconnect to run another build) |
+| ChartBridge to the agent | `welcome.group` (0.6.2) | `{id, name, accountType}`: `accountType` the group's Type from `groups.txt` (`eval`, `funded`, or null when not set); `group` stays null for one account. Order path untouched |
+| ChartBridge to the agent | `agentState.groupType` (0.6.2) | the same value (null for one account or None), so a Type changed in Settings reaches the runner within a pass, without a reconnect |
+| ChartBridge to the agent | `agentState.groupStandDown` | `{group, kind, why, at}` for the group it is on now (its group, or its one account's group), or null |
+| page to ChartBridge | `agentStandDownClear` `{cid, build, group}` (no `agent` key) | signed-in v3 pages only (the agent messages' gates), counted in gate 7. Logged "stand-down of build B on group Lucid (g1) cleared on the page (it was ...)" in the Output window and each agent of that build's log; a `status` `info` to the pages. A clear holds until the runner's next re-rating raises it again |
+| ChartBridge to page | `agent.standDowns` | `[{group, why, kind, at}]`: every stand-down of the agent's build (its last hello's) |
+| ChartBridge to page | `agentStandDowns` | `{list: [{build, group, name, why, kind, at}], error}`: every stand-down in force (so a hero not connected is seen too), after sign-in and on every change; `error` why the file cannot be read, or null |
+
+**League seats.** `agentAccount` gains `league` (optional bool): `{agent, account, league: true}` makes the agent a league seat on that one
+account. Refused: with `group` ("a league seat is one Sim account, never a group"), with `account: null` ("a league seat needs its Sim
+account ..."), and on an account that is not NinjaTrader's simulator ("agent <id> is a league seat: Sim accounts only (EVAL-A is not
+NinjaTrader's simulator)"); the provider is read fresh from NinjaTrader each time and an unknown provider is no Sim. The same account
+with `league` absent or false is a plain seat again. Saved as `league<TAB><account>` in `agent-<id>-account.txt`; a ChartBridge before
+0.6.2 does not understand the line and stands the agent down (as the group line). A league seat's entries are refused whenever its
+account is not Sim, read fresh at plan check 2 and again per placement under `PlaceLock` ("agent <id> is a league seat: Sim accounts
+only"), so a provider changed after the start is caught. `welcome` and `agent` carry `league` (true or false). A league seat starts in
+Shadow like every agent, and the 17:00 reset puts it on None (league off) like every agent. No other new trading restriction.
+
+**The page (1.29.0).** The Board shows each stand-down as an amber row under its hero (the hero, the group, the kind and why, since when
+in New York time, "No new trades from this hero on Lucid until you clear it; exits, stops and targets always work") with **Clear
+stand-down** (one click, `agentStandDownClear`); a stand-down of a hero no row shows gets its own amber row; the unreadable file's
+error leads the board. A league seat's row shows PROVING n of 100 (n the PC helper's `liveN` for its build; "PROVING (live trades not
+reported)" without it) and "league seat (Sim only)". The Agent tab's account picker lists a league seat on every tradable account after
+the single accounts: Sim offered ("League seat: SIM-A (SIM)"), a LIVE one listed with the reason and never offered.
 
 ### Tape timing and new `/diag` counters
 

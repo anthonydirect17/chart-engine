@@ -513,7 +513,7 @@ function onMessage(c, text) {
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (V3 && m.type === 'client') desk.client(c, m);
   else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm',
-    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'groupSave', 'groupDelete', 'accountGroup', 'accountLimits'].includes(m.type)) desk.handle(c, m, text);
+    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear', 'groupSave', 'groupDelete', 'accountGroup', 'accountLimits'].includes(m.type)) desk.handle(c, m, text);
   else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */
@@ -990,6 +990,8 @@ function agentControl(p, q, req, res) {
   const hello = () => { if (!a.connected) { desk.agentConnect(id, null); desk.agentMessage(id, { type: 'agentHello', name: q.get('name') || 'Demo Agent', build: q.get('build') || 'sample-build-1' }); } };
   if (p === '/test/agent-connect') { if (q.get('on') === '0') desk.agentDrop(id, 'no heartbeat for 5 s'); else hello(); return json(200, desk.agentMsg(a)); }
   hello();
+  // 1.29.0 (ChartBridge 0.6.2): the runner's standDown {group, kind, why} for this agent's build (made-up kind and why)
+  if (p === '/test/agent-standdown') { desk.agentStandDown(a, q.get('group') || 'g1', q.get('kind') || 'edge watch', q.get('why') || 'sample: live mean below the exam mean by more than 2 SE'); return json(200, desk.agentMsg(a)); }
   // 1.27.0 (ChartBridge 0.6.0): a sample group view for the Agent tab (made-up sizes, P&L and risk; nothing is placed)
   if (p === '/test/agent-group') {
     if (q.get('on') === '0') { a.groupView = null; desk.agentNotify(a); return json(200, desk.agentMsg(a)); }

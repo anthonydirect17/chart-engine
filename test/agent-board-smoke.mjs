@@ -11,7 +11,9 @@
 //     in Shadow; a seated slot that is Off says so, with Start in Shadow and No hero on duty;
 //   - KILL ALL AGENTS: agentKill on to every agent, in one click.
 //   npm run smoke:agent-board   (CHROMIUM_PATH=/path/to/chrome; AGENT_BOARD_PORT, else the first free port from 9011; SHOTS=dir)
-// Screenshots: agent-board, agent-board-assign-ask, agent-board-assigned, agent-board-off, agent-board-killed, agent-board-picker (.png in test/out).
+//   - 1.29.0 (SPEC CE-2): a league seat in the picker (Sim only, a LIVE one listed with the reason) and its PROVING n of 100; an
+//     amber stand-down row with its why, kind and time, and Clear stand-down (agentStandDownClear, one click).
+// Screenshots: agent-board, agent-board-assign-ask, agent-board-assigned, agent-board-off, agent-board-standdown, agent-board-killed, agent-board-picker (.png in test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -178,6 +180,45 @@ try {
     'left in Auto: agentMode shadow first, then the helper\'s POST /on with his build in Shadow once Shadow shows: ' + JSON.stringify(on2 && on2.body));
   check(await page.evaluate(() => window.workspace.agent().agents.find(a => a.agent === 'demothree').mode) === 'shadow', 'he is in Shadow');
   await until(async () => !(await page.$('#agView [data-brow="hero"][data-agent="demothree"] .ag-boff')), 'the warning gone once he is on');
+
+  /* ---------------- chart 1.29.0 (ChartBridge 0.6.2, SPEC CE-2): a league seat in the picker, its PROVING chip; a stand-down */
+  console.log('CE-2: a league seat and a stand-down on the board');
+  await page.click('#agView [data-act="boardClose"]');
+  await until(() => page.isVisible('#agView [data-k="main"]'), 'his desk again');
+  await page.selectOption('#agView [data-k="pick"]', 'demotwo');
+  await page.click('#agView [data-act="acctOpen"]');
+  const lopts = await until(async () => { const o = await page.$$eval('#agView [data-k="acctSel"] option', els => els.map(e => ({ v: e.value, t: e.textContent, d: e.disabled }))); return o.some(x => x.v.startsWith('league:')) ? o : null; }, 'the league seats in the picker');
+  const lsim = lopts && lopts.find(x => x.v.startsWith('league:') && !x.d), lacct = lsim ? lsim.v.slice(7) : '', llive = lopts && lopts.filter(x => x.v.startsWith('league:') && /\(LIVE\)/.test(x.t));
+  check(lsim && lsim.t === 'League seat: ' + lacct + ' (SIM)', 'the picker offers a league seat on a Sim account: ' + JSON.stringify(lsim));
+  check(llive && llive.length > 0 && llive.every(x => x.d && /cannot be: a league seat is a Sim account only \(.+ is LIVE\)/.test(x.t)), 'a LIVE account is listed as a league seat with the reason, never offered: ' + JSON.stringify(llive));
+  check(lopts && lopts.some(x => x.v === 'league:Sim101' && x.d && /the copier's leader/.test(x.t)), 'another\'s account (the copier\'s leader) is listed with why, never offered');
+  await page.selectOption('#agView [data-k="acctSel"]', 'league:' + lacct);
+  const l0 = (await sent()).length;
+  await page.click('#agView [data-act="acctSave"]');
+  const lmsg = await until(async () => (await sent()).slice(l0).find(m => m.type === 'agentAccount' && m.agent === 'demotwo'), 'agentAccount league sent');
+  check(lmsg && lmsg.account === lacct && lmsg.league === true && lmsg.group === undefined, 'agentAccount {agent, account, league: true, keepMode}: ' + JSON.stringify(lmsg));
+  await until(async () => (await page.evaluate(() => window.workspace.agent().agents.find(a => a.agent === 'demotwo').league)) === true, 'ChartBridge says demotwo is a league seat');
+  await page.click('#agView [data-act="board"]');
+  await until(() => page.isVisible('#agView [data-k="board"]'), 'the board again');
+  const lrow = await until(async () => { const t = await page.$eval('#agView [data-brow="hero"][data-agent="demotwo"]', e => e.innerText.replace(/\s+/g, ' ')).catch(() => ''); return /PROVING 30 of 100/i.test(t) ? t : null; }, 'the league row\'s PROVING chip');
+  check(lrow && /league seat \(Sim only\)/.test(lrow) && lrow.includes(lacct), 'a league seat\'s row: PROVING n of 100 (n the helper\'s liveN), league seat (Sim only): ' + lrow);
+  const gidA = await page.$eval('#agView [data-brow="hero"][data-agent="demo"]', e => e.innerText).then(() => page.evaluate(() => { const g = window.workspace.agent().agents.find(a => a.agent === 'demo').group; return g && g.id; }));
+  await control('agent-standdown', { agent: 'demo', group: gidA, kind: 'edge watch', why: 'sample: live mean below the exam mean by more than 2 SE' });
+  const sdRowT = await until(async () => { const t = await page.$eval('#agView [data-brow="standdown"][data-gid="' + gidA + '"]', e => e.innerText.replace(/\s+/g, ' ')).catch(() => ''); return t || null; }, 'the amber stand-down row');
+  check(sdRowT && /Stood down/i.test(sdRowT) && /Sample Hero B on Group A/i.test(sdRowT) && /build sample-build-2 bbbbbbbbbbbb/.test(sdRowT) && /edge watch: sample: live mean below the exam mean by more than 2 SE/.test(sdRowT) && /Since [A-Z][a-z]{2} [0-9]{1,2}, [0-9]{2}:[0-9]{2} ET/.test(sdRowT) &&
+    /No new trades from this hero on Group A until you clear it; exits, stops and targets always work/.test(sdRowT) && /Clear stand-down/i.test(sdRowT), 'the amber row: the hero, the group, the kind and why, since when, and Clear stand-down: ' + sdRowT);
+  const amber = await page.$eval('#agView [data-brow="standdown"]', e => getComputedStyle(e).borderTopColor);
+  check(/rgba?\(255, 194, 102/.test(amber), 'amber (the tab\'s warning color): ' + amber);
+  check(/stood down/i.test(await page.$eval('#agView [data-brow="hero"][data-agent="demo"]', e => e.innerText)), 'his row says stood down');
+  check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll with the stand-down row');
+  await page.screenshot({ path: path.join(SHOTS, 'agent-board-standdown.png') });
+  const c0 = (await sent()).length;
+  await page.click('#agView [data-act="bSdClear"][data-gid="' + gidA + '"]');
+  const cmsg = await until(async () => (await sent()).slice(c0).find(m => m.type === 'agentStandDownClear'), 'agentStandDownClear sent');
+  check(cmsg && cmsg.build === 'sample-build-2 bbbbbbbbbbbb' && cmsg.group === gidA && cmsg.agent === undefined && typeof cmsg.cid === 'string', 'one click: agentStandDownClear {cid, build, group}: ' + JSON.stringify(cmsg));
+  await until(async () => !(await page.$('#agView [data-brow="standdown"]')), 'the amber row gone once ChartBridge clears it');
+  const clog = await control('agents');
+  check(clog.log.some(l => l.file === 'agent-standdowns.txt' && /cleared on the page/.test(l.line)), 'the fake bridge logged it "cleared on the page"');
 
   /* KILL ALL AGENTS: agentKill on to every agent, one click */
   const k0 = (await sent()).filter(m => m.type === 'agentKill').length;

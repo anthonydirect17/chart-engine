@@ -27,6 +27,9 @@
 // ChartBridge places it on every seat that can take it, each with the size the runner gave it (plan.sizes), each checked on its
 // own; a seat that cannot take it sits that trade out. A seat that leaves the group while it holds the agent's trade stays the
 // agent's (owned, protected, flattened at flatAt) until flat, and takes no new entry.
+// 0.6.2 (SPEC CE-2): a hero (a build) stood down on a prop group (the runner's standDown; agent-standdowns.txt, written only here)
+// takes no new entry on any seat in that group until Anthony clears it on the Board (agentStandDownClear); only entries are gated.
+// A league seat is one Sim account: its entries are refused whenever the account is not Sim (read fresh at every gate).
 // Written in C# 5 syntax (NinjaTrader 8 compiles NinjaScript as C# 5).
 #region Using declarations
 using System;
@@ -273,6 +276,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (list.Count == 0) return;
             ResetFiles();
             RefreshFiles();
+            LoadStandDowns();   // 0.6.2: the group stand-downs, before any agent can enter
             foreach (ChartBridgeAgent a in list) a.Start();
             RecoverTags();
             if (withTimer) timer = new Timer(delegate { try { Check(); } catch (Exception ex) { ChartBridgeServer.Log("agent check error: " + ex.Message); } }, null, (int)CheckEveryMs, (int)CheckEveryMs);
@@ -482,11 +486,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Defense in depth (review A-N4): PlaceOrderLocked asks the agent itself, under the order lock, just before the order is
         // made: not killed, not in shadow, inside its entry window, and a stop-limit's limit within 20 ticks on the right side.
-        public static string PlacingProblem(string id, string kind, bool isBuy, double price, double limitPx, double tick)
+        // 0.6.2: and, for this seat (account), no stand-down of its build on the seat's group, and a league seat's account Sim.
+        public static string PlacingProblem(string id, string account, string kind, bool isBuy, double price, double limitPx, double tick)
         {
             ChartBridgeAgent a = Get(id);
             if (a == null) return "there is no agent " + id + " (agents in config.txt)";
-            string why = a.PlacingProblem();
+            string why = a.PlacingProblem(account);   // 0.6.2: and, for this seat, a stand-down on its group and a league seat's Sim
             if (why != null) return why;
             if (kind == "stopLimit")
             {
@@ -550,6 +555,270 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (cw != null) return cw + ": it cannot join " + gname + ", which " + who + " trades (an agent never shares an account)";
             string other = AgentOfAccount(name);
             if (other != null && on.All(a => a.Id != other)) return name + " is agent " + other + "'s account: it cannot join " + gname + ", which " + who + " trades (each agent has its own accounts)";
+            return null;
+        }
+
+        // ---------------------------------------------------------- 0.6.2: group stand-downs (agent-standdowns.txt; SPEC CE-2)
+        // A hero (a build) stood down on a prop group: NO NEW ENTRIES from that build on any seat in that group until Anthony clears
+        // it on the Agent tab's Board (agentStandDownClear). Raised by the agent (its runner's standDown {group, kind, why}); the agent
+        // can never clear one. Only entries are gated: exits, Flatten, protect, the legs, flatAt and the stop placed again always go.
+        // The file is written only by ChartBridge (two # lines, then standDown<TAB><build><TAB><group id><TAB><UTC ms><TAB><kind><TAB>
+        // <why>), whole through a temp file. It survives restarts and the 18:00 roll (nothing rolls it); a deleted group's lines are
+        // dropped (GroupDeleted, under the groups' save, before a later group could take the same id). A file that cannot be read is
+        // never written over that run, and (Anthony 2026-10-16) agent entries on accounts in a prop group are refused until it can; accounts in
+        // no group keep trading, exits pass; with groups.txt unreadable too, only Sim accounts take agent entries (BrokenRefusal).
+        public sealed class GroupStandDown { public string Build, Group, Kind, Why; public double At; }
+        public const string StandDownsFileName = "agent-standdowns.txt";
+        private static readonly object SdLock = new object();       // the memory copy only (a leaf: nothing is called under it)
+        private static readonly object SdFileLock = new object();   // one write of the file at a time (never under PlaceLock)
+        private static List<GroupStandDown> sdList = new List<GroupStandDown>();
+        private static string sdBroken;
+        public static Func<string> StandDownWriteFault;   // test hook: a non-null answer fails a write of the file (unused in NinjaTrader)
+        private static string SdPath { get { return Path.Combine(ChartBridgeConfig.Folder, StandDownsFileName); } }
+        private static readonly Regex SdGroupRx = new Regex("^g[1-9][0-9]{0,8}$");
+
+        // A plain string of 1 to max characters that reads back the same from the file: no tab or control character, no quote, no
+        // backslash (the strict parser's plain strings already are), nothing a reader would trim.
+        internal static bool SdText(string s, int max)
+        {
+            if (string.IsNullOrEmpty(s) || s.Length > max || s.Trim() != s) return false;
+            foreach (char ch in s) if (ch < 0x20 || ch == 0x7f || ch == '"' || ch == '\\') return false;
+            return true;
+        }
+
+        private static GroupStandDown ReadSdLine(string line)
+        {
+            string[] p = line.Split('\t');
+            if (p.Length != 6 || p[0] != "standDown" || !SdText(p[1], 40) || !SdGroupRx.IsMatch(p[2]) || !Regex.IsMatch(p[3], "^[0-9]{1,15}$") || !SdText(p[4], 40) || !SdText(p[5], 200)) return null;
+            return new GroupStandDown { Build = p[1], Group = p[2], At = double.Parse(p[3], CultureInfo.InvariantCulture), Kind = p[4], Why = p[5] };
+        }
+
+        private static string WriteStandDowns(List<GroupStandDown> list)
+        {
+            try
+            {
+                Func<string> fault = StandDownWriteFault;
+                if (fault != null && fault() != null) throw new IOException(fault());
+                List<string> lines = new List<string> { "# ChartBridge stand-downs (written only by ChartBridge; Anthony clears one on the Agent tab's Board; do not edit)",
+                    "# standDown<TAB><build><TAB><group id><TAB><UTC ms><TAB><kind><TAB><why>: no new entries from that build on that group until it is cleared" };
+                foreach (GroupStandDown s in list)
+                    lines.Add("standDown\t" + s.Build + "\t" + s.Group + "\t" + s.At.ToString("0", CultureInfo.InvariantCulture) + "\t" + s.Kind + "\t" + s.Why);
+                ChartBridgeAgent.WriteWhole(SdPath, lines);
+                return null;
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
+
+        // At start (Start): the file read once; a group that is gone has its lines dropped (groups.txt readable only: never guessed).
+        internal static void LoadStandDowns()
+        {
+            List<GroupStandDown> list = new List<GroupStandDown>();
+            string broken = null;
+            try
+            {
+                if (File.Exists(SdPath))
+                    foreach (string raw in File.ReadAllLines(SdPath))
+                    {
+                        string line = raw.TrimEnd('\r');
+                        if (line.Trim().Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+                        GroupStandDown s = ReadSdLine(line);
+                        if (s == null) { broken = StandDownsFileName + " has a line ChartBridge does not understand"; break; }
+                        if (list.Any(x => x.Build == s.Build && x.Group == s.Group)) { broken = StandDownsFileName + " names build " + s.Build + " on group " + s.Group + " twice"; break; }
+                        list.Add(s);
+                    }
+            }
+            catch (Exception ex) { broken = StandDownsFileName + " could not be read (" + ex.Message + ")"; }
+            if (broken != null)
+            {
+                broken += ": every new agent entry on an account in a prop group is refused until it can be read (accounts in no group keep trading; exits always work); fix or delete the file, then recompile";
+                lock (SdLock) { sdList = new List<GroupStandDown>(); sdBroken = broken; sdRepeatSaid.Clear(); sdCapAlarmed.Clear(); }
+                ChartBridgeOrders.AgentAlarm(broken);   // logged and to every signed-in page; a page that signs in later gets agentStandDowns.error
+                try { ChartBridgeV3.SendToV3Traders(StandDownsMessage()); } catch (Exception) { }
+                return;
+            }
+            // fix round 1: only when groups.txt exists and was read (a missing groups.txt keeps every line, and the file is not rewritten)
+            bool groupsRead = File.Exists(Path.Combine(ChartBridgeConfig.Folder, "groups.txt")) && !ChartBridgeGroups.Unreadable();
+            List<GroupStandDown> gone = !groupsRead ? new List<GroupStandDown>() : list.Where(x => ChartBridgeGroups.NameOf(x.Group) == null).ToList();
+            foreach (GroupStandDown s in gone) list.Remove(s);
+            lock (SdLock) { sdList = list; sdBroken = null; sdRepeatSaid.Clear(); sdCapAlarmed.Clear(); }
+            if (gone.Count > 0)
+            {
+                lock (SdFileLock) { string err = WriteStandDowns(list); if (err != null) ChartBridgeServer.Log(StandDownsFileName + " could not be saved (" + err + ")"); }
+                foreach (GroupStandDown s in gone) ChartBridgeServer.Log("agent stand-down of build " + s.Build + " on group " + s.Group + " dropped: the group is gone");
+            }
+            if (list.Count > 0) ChartBridgeServer.Log(StandDownsFileName + ": " + list.Count + " stand-down" + (list.Count == 1 ? "" : "s") + " in force (" + string.Join("; ", list.Select(x => "build " + x.Build + " on group " + x.Group)) + ")");
+            try { ChartBridgeV3.SendToV3Traders(StandDownsMessage()); } catch (Exception) { }   // pages signed in already (a page that signs in later gets it in AfterAuth)
+        }
+
+        // The file could not be read at start, or null.
+        public static string StandDownsBroken() { lock (SdLock) return sdBroken; }
+
+        // Anthony 2026-10-16: while agent-standdowns.txt cannot be read, an agent entry is refused only on an account in a prop group (any
+        // group in groups.txt): an account in no group (a Sim league seat, a personal account) keeps trading, exits always go. With
+        // groups.txt unreadable too (membership unknown), every account that is not Sim is refused (the careful side for prop accounts)
+        // and a Sim account is allowed. acct: the account the entry goes to. Null when it may go on.
+        public static string BrokenRefusal(string acct)
+        {
+            string broken = StandDownsBroken();
+            if (broken == null || string.IsNullOrEmpty(acct) || ChartBridgeBranches.IsNone(acct)) return null;
+            if (ChartBridgeGroups.Unreadable())
+            {
+                Account a = null;
+                lock (Account.All) foreach (Account x in Account.All) if (x.Name == acct) { a = x; break; }
+                return a != null && ChartBridgeBot.IsSim(a) ? null : broken + "; groups.txt cannot be read either, so " + acct + " (not Sim) is refused: only Sim accounts take agent entries until both files read";
+            }
+            return ChartBridgeGroups.GroupOf(acct) != null ? broken + " (" + acct + " is in group " + (ChartBridgeGroups.NameOf(ChartBridgeGroups.GroupOf(acct)) ?? ChartBridgeGroups.GroupOf(acct)) + ")" : null;
+        }
+
+        // Why an agent entry of `build` on group `gid` (null: no group) is refused by a stand-down, or null. Words name the build, the
+        // group, the kind and the why. (The unreadable file is BrokenRefusal's, per account.)
+        public static string StandDownRefusal(string build, string gid)
+        {
+            GroupStandDown hit = null;
+            lock (SdLock) { if (build != null && gid != null) hit = sdList.FirstOrDefault(x => x.Build == build && x.Group == gid); }
+            if (hit == null) return null;
+            return "build " + build + " stands down on group " + (ChartBridgeGroups.NameOf(gid) ?? gid) + " (" + hit.Kind + ": " + hit.Why + "): no new entries from it on that group until Anthony clears it on the Agent tab's Board (exits always work)";
+        }
+
+        // The stand-downs of one build, or every one (build null), as copies.
+        public static List<GroupStandDown> StandDownsOf(string build)
+        {
+            lock (SdLock) return sdList.Where(x => build == null || x.Build == build).Select(x => new GroupStandDown { Build = x.Build, Group = x.Group, Kind = x.Kind, Why = x.Why, At = x.At }).ToList();
+        }
+
+        // agent.standDowns and agentState.groupStandDown: {group, why, kind, at}.
+        internal static string StandDownJson(GroupStandDown s)
+        {
+            return "{\"group\":" + CbJson.Str(s.Group) + ",\"why\":" + CbJson.Str(s.Why) + ",\"kind\":" + CbJson.Str(s.Kind) + ",\"at\":" + s.At.ToString("0", CultureInfo.InvariantCulture) + "}";
+        }
+
+        // The pages' agentStandDowns: every stand-down in force (so a hero not connected is seen too), each with its build and its
+        // group's name; error: why the file cannot be read (then every agent entry is refused), or null.
+        public static string StandDownsMessage()
+        {
+            List<GroupStandDown> all = StandDownsOf(null);
+            string broken = StandDownsBroken();
+            return "{\"type\":\"agentStandDowns\",\"list\":[" + string.Join(",", all.Select(s => "{\"build\":" + CbJson.Str(s.Build) + ",\"group\":" + CbJson.Str(s.Group) + ",\"name\":" +
+                   (ChartBridgeGroups.NameOf(s.Group) != null ? CbJson.Str(ChartBridgeGroups.NameOf(s.Group)) : "null") + ",\"why\":" + CbJson.Str(s.Why) + ",\"kind\":" + CbJson.Str(s.Kind) +
+                   ",\"at\":" + s.At.ToString("0", CultureInfo.InvariantCulture) + "}").ToArray()) + "],\"error\":" + (broken != null ? CbJson.Str(broken) : "null") + "}";
+        }
+
+        // The agent's standDown (raise only). Null when it holds (fresh false: it was in force already, kept as first raised).
+        // In memory first (the gate holds at once, even if the file cannot be written), then the file.
+        // Fix round 1: at most MaxStandDowns in force for a group id ChartBridge does not know (only possible while groups.txt cannot be
+        // read); a raise for a group in groups.txt is always taken (fix round 2: the cap never refuses a real stand-down). A refused one
+        // is logged and alarmed once per build and group, the alarm sent after both stand-down locks are let go. sayAgain: a repeat
+        // raise of one in force, true only the first time for that build and group (logged once).
+        public const int MaxStandDowns = 200;
+        private static readonly HashSet<string> sdRepeatSaid = new HashSet<string>();   // under SdLock: build<TAB>group said again once
+        private static readonly HashSet<string> sdCapAlarmed = new HashSet<string>();   // under SdLock: build<TAB>group refused by the cap, alarmed once
+        internal static string RaiseStandDown(string agentId, string build, string gid, string kind, string why, out bool fresh, out bool sayAgain)
+        {
+            fresh = false; sayAgain = false;
+            string err = null, full = null, alarm = null;
+            bool write = false;
+            bool known = !ChartBridgeGroups.Unreadable() && ChartBridgeGroups.NameOf(gid) != null;   // read before the locks (the groups' own lock)
+            lock (SdFileLock)
+            {
+                List<GroupStandDown> snap;
+                lock (SdLock)
+                {
+                    if (sdList.Any(x => x.Build == build && x.Group == gid)) { sayAgain = sdRepeatSaid.Add(build + "\t" + gid); return null; }
+                    if (!known && sdList.Count >= MaxStandDowns)
+                    {
+                        full = "the stand-down of build " + build + " on group " + gid + " (a group ChartBridge cannot find: groups.txt cannot be read) was refused: " + MaxStandDowns +
+                               " stand-downs are in force already (" + StandDownsFileName + "); clear some on the Agent tab's Board";
+                        if (sdCapAlarmed.Add(build + "\t" + gid)) alarm = "agent " + agentId + ": " + full;
+                    }
+                    if (full == null)
+                    {
+                        List<GroupStandDown> next = sdList.ToList();
+                        next.Add(new GroupStandDown { Build = build, Group = gid, Kind = kind, Why = why, At = Math.Floor(Now()) });
+                        sdList = next; fresh = true; write = sdBroken == null; snap = next.ToList();
+                    }
+                    else snap = null;
+                }
+                if (write) err = WriteStandDowns(snap);
+            }
+            if (full != null)
+            {
+                if (alarm != null) ChartBridgeOrders.AgentAlarm(alarm);   // both stand-down locks let go
+                else ChartBridgeServer.Log("agent " + agentId + ": " + full);
+                return full;
+            }
+            if (!write) ChartBridgeServer.Log("agent " + agentId + ": the stand-down of build " + build + " on group " + gid + " holds in memory only: " + StandDownsFileName + " could not be read at start, so it is not written");
+            if (err != null) ChartBridgeOrders.AgentAlarm("agent " + agentId + ": " + StandDownsFileName + " could not be saved (" + err + "): the stand-down of build " + build + " on group " + gid + " holds until ChartBridge restarts, then it is lost: stand the hero down again or keep it Off");
+            return null;
+        }
+
+        // Anthony's clear (the page). Refused when there is none, or the file cannot be read or written (the stand-down then stays).
+        internal static string ClearStandDown(string build, string gid, out GroupStandDown was)
+        {
+            was = null;
+            lock (SdFileLock)
+            {
+                List<GroupStandDown> next;
+                lock (SdLock)
+                {
+                    if (sdBroken != null) return sdBroken + "; nothing was cleared";
+                    was = sdList.FirstOrDefault(x => x.Build == build && x.Group == gid);
+                    if (was == null) return "no stand-down of build " + build + " on group " + gid;
+                    GroupStandDown w = was;
+                    next = sdList.Where(x => x != w).ToList();
+                }
+                string err = WriteStandDowns(next);
+                if (err != null) return StandDownsFileName + " could not be saved (" + err + "): the stand-down stays";
+                GroupStandDown gone = was;
+                lock (SdLock) { sdList = sdList.Where(x => x != gone).ToList(); sdRepeatSaid.Remove(gone.Build + "\t" + gone.Group); }
+            }
+            return null;
+        }
+
+        // 0.6.2: a group deleted (ChartBridgeGroups.GroupDelete, under its save): its stand-downs go with it, in memory at once and in
+        // the file, so a group made later with the same id never inherits one.
+        public static void GroupDeleted(string gid)
+        {
+            List<GroupStandDown> gone;
+            lock (SdFileLock)
+            {
+                List<GroupStandDown> next;
+                bool write;
+                lock (SdLock)
+                {
+                    gone = sdList.Where(x => x.Group == gid).ToList();
+                    if (gone.Count == 0) return;
+                    next = sdList.Where(x => x.Group != gid).ToList();
+                    sdList = next; write = sdBroken == null;
+                    sdRepeatSaid.RemoveWhere(k => k.EndsWith("\t" + gid, StringComparison.Ordinal));
+                }
+                string err = write ? WriteStandDowns(next) : null;
+                if (err != null) ChartBridgeServer.Log(StandDownsFileName + " could not be saved (" + err + ") after group " + gid + " was deleted");
+            }
+            foreach (GroupStandDown s in gone) ChartBridgeServer.Log("agent stand-down of build " + s.Build + " on group " + gid + " dropped: the group was deleted");
+            try { ChartBridgeV3.SendToV3Traders(StandDownsMessage()); } catch (Exception) { }
+        }
+
+        // A stand-down raised or cleared: every agent sweeps (its entries on that group cancelled, its proposals expired) and is told.
+        internal static void StandDownsChanged()
+        {
+            ChartBridgeV3.SendToV3Traders(StandDownsMessage());
+            foreach (ChartBridgeAgent a in All()) a.AfterStandDownChange();
+        }
+
+        // agentStandDownClear {cid, build, group}: signed-in v3 pages only (OnPageMessage's gates), counted in gate 7.
+        private static string PageClear(Dictionary<string, ChartBridgeAgent.Val> d)
+        {
+            string build = ChartBridgeAgent.S(d, "build"), gid = ChartBridgeAgent.S(d, "group");
+            if (!SdText(build, 40)) return "build must be the build's name (1 to 40 characters)";
+            if (gid == null || !SdGroupRx.IsMatch(gid)) return "group must be a group id (a plain string such as g1)";
+            GroupStandDown was;
+            string why = ClearStandDown(build, gid, out was);
+            if (why != null) return why;
+            string text = "stand-down of build " + build + " on group " + (ChartBridgeGroups.NameOf(gid) ?? gid) + " (" + gid + ") cleared on the page (it was " + was.Kind + ": " + was.Why + "); new entries from it may go there again";
+            ChartBridgeServer.Log("agent " + text);
+            foreach (ChartBridgeAgent a in All()) a.NoteCleared(build, text);
+            ChartBridgeV3.SendToV3Traders("{\"type\":\"status\",\"level\":\"info\",\"text\":" + CbJson.Str("Agent " + text) + "}");
+            StandDownsChanged();
             return null;
         }
 
@@ -651,6 +920,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (!Enabled || client == null || !client.Trader || !ChartBridgeV3.IsV3(client)) return;
             foreach (ChartBridgeAgent a in All()) a.Replay(client);
+            client.Send(StandDownsMessage());   // 0.6.2: every stand-down in force (a hero not connected too)
         }
 
         // ---------------------------------------------------------- messages from the page
@@ -660,8 +930,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "agentKill", new[] { "type", "cid", "agent", "on" } },
             { "agentSeen", new[] { "type", "agent", "id", "at" } },
             { "agentAnswer", new[] { "type", "cid", "agent", "id", "answer", "at" } },
-            { "agentAccount", new[] { "type", "cid", "agent", "account", "group", "keepMode" } },   // 0.5.2: keepMode, the mode the page's question named; 0.6.0: group (a group id) in place of account
+            { "agentAccount", new[] { "type", "cid", "agent", "account", "group", "keepMode", "league" } },   // 0.5.2: keepMode, the mode the page's question named; 0.6.0: group (a group id) in place of account
             { "agentRules", new[] { "type", "cid", "agent", "roots", "maxQtyNQ", "maxQtyMNQ", "maxQtyES", "maxQtyMES", "entryFrom", "entryUntil", "flatAt", "maxExpireSec", "maxTrades", "maxLosses" } },
+            { "agentStandDownClear", new[] { "type", "cid", "build", "group" } },   // 0.6.2: Anthony's Clear stand-down (the Board); no agent key: a stand-down is the build's on the group
         };
 
         public static void OnPageMessage(ChartBridgeClient client, string type, string text)
@@ -682,6 +953,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (odd != null) { PageReject(client, cid, id, "unknown key \"" + odd + "\" in " + type); return; }
                 if (d.ContainsKey("cid") && cid == null) { PageReject(client, cid, id, "cid must be a plain string"); return; }
                 if (!RateOk(client.Actions)) { PageReject(client, cid, id, "too many order actions (more than " + MaxActionsPerSecond + " a second)"); return; }
+                if (type == "agentStandDownClear") { why = PageClear(d); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.2
                 ChartBridgeAgent a = Get(ChartBridgeAgent.S(d, "agent") ?? "");
                 if (a == null) { PageReject(client, cid, id, "there is no agent " + (ChartBridgeAgent.S(d, "agent") ?? "(none)") + " (agents in config.txt)"); return; }
                 why = a.OnPage(type, d);
@@ -1606,6 +1878,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private Rules rules = new Rules();
         private string account = ChartBridgeBranches.None;   // 0.5.7 (DECISION 2026-10-14e): None until chosen; was Sim101
         private bool chosen;   // an account was chosen on the page (agent-<id>-account.txt); false on None
+        private bool league;   // 0.6.2: a league seat (agent-<id>-account.txt league<TAB><account>): one account, entries only while it is Sim
         private string rulesBroken, accountBroken, dayBroken, lossStandDown;
         private string secret, secretState = "missing";
         private string session;
@@ -1639,6 +1912,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public string Account { get { lock (Sync) return account; } }
         public bool Chosen { get { lock (Sync) return chosen; } }
+        public bool League { get { lock (Sync) return league; } }
+        public string Build { get { lock (Sync) return build; } }
+        // 0.6.2 (SPEC CE-2): the refusal for a league seat on an account that is not NinjaTrader's simulator (read fresh each time;
+        // an unknown provider is no Sim)
+        private string LeagueRefusal { get { return "agent " + Id + " is a league seat: Sim accounts only"; } }
 
         // ---------------------------------------------------------- 0.6.0: the seats
         public string GroupId { get { lock (Sync) return groupId; } }
@@ -1780,7 +2058,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             RefreshSeats(false);   // 0.6.0: its seats (a group's members, or its one account)
             LoadDay();
             lock (Sync) { noClientSinceMs = Now(); startedMs = noClientSinceMs; mode = "shadow"; }
-            Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + AccountWords() + (SimNow() ? " (Sim)" : " (LIVE)") + ", starting in shadow)");
+            Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + AccountWords() + (SimNow() ? " (Sim)" : " (LIVE)") + (League ? ", a league seat" : "") + ", starting in shadow)");
         }
 
         public void Stop()
@@ -1899,7 +2177,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception ex) { return ex.Message; }
         }
 
-        private static void WriteWhole(string file, List<string> lines)
+        internal static void WriteWhole(string file, List<string> lines)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(file));
             string tmp = file + ".tmp";
@@ -1911,6 +2189,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private void LoadAccount()
         {
             string a = ChartBridgeBranches.None, broken = null, grp = null;   // 0.5.7: no file is None (was Sim101)
+            bool lg = false;
             try
             {
                 if (File.Exists(AccountFile))
@@ -1923,6 +2202,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         string[] p = line.Split('\t');
                         if (found == null && foundGroup == null && p.Length == 2 && p[0] == "account" && PlainName(p[1])) found = p[1];
                         else if (found == null && foundGroup == null && p.Length == 2 && p[0] == "group" && GroupIdRx.IsMatch(p[1])) foundGroup = p[1];   // 0.6.0: a group (an older ChartBridge stands the agent down on it)
+                        else if (found == null && foundGroup == null && p.Length == 2 && p[0] == "league" && PlainName(p[1]) && !ChartBridgeBranches.IsNone(p[1])) { found = p[1]; lg = true; }   // 0.6.2: a league seat (an older ChartBridge stands the agent down on it)
                         else { broken = "agent-" + Id + "-account.txt has a line ChartBridge does not understand"; break; }
                     }
                     if (broken == null && found == null && foundGroup == null) broken = "agent-" + Id + "-account.txt names no account";
@@ -1932,7 +2212,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex) { broken = "agent-" + Id + "-account.txt could not be read (" + ex.Message + ")"; }
             if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); }
-            lock (Sync) { account = a; groupId = grp; accountBroken = broken; chosen = broken == null && (grp != null || (a != null && !ChartBridgeBranches.IsNone(a))) && File.Exists(AccountFile); }
+            lock (Sync) { account = a; groupId = grp; accountBroken = broken; league = broken == null && lg && grp == null; chosen = broken == null && (grp != null || (a != null && !ChartBridgeBranches.IsNone(a))) && File.Exists(AccountFile); }
         }
 
         private string SaveAccount(string nm)
@@ -1941,6 +2221,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 WriteWhole(AccountFile, new List<string> { "# ChartBridge account for agent " + Id + " (written by ChartBridge from the page's Agent tab; do not edit)",
                     "# the one account the agent's orders go to; - is None (nothing trades), as is a missing file", "account\t" + nm });
+                return null;
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
+
+        // 0.6.2: a league seat, as league<TAB><account> (a ChartBridge before 0.6.2 does not understand the line and stands the agent
+        // down: safe, as the group line before it).
+        private string SaveLeague(string nm)
+        {
+            try
+            {
+                WriteWhole(AccountFile, new List<string> { "# ChartBridge account for agent " + Id + " (written by ChartBridge from the page's Agent tab; do not edit)",
+                    "# a league seat: the one Sim account the agent's orders go to (ChartBridge refuses its entries whenever the account is not Sim); account<TAB>- is None", "league\t" + nm });
                 return null;
             }
             catch (Exception ex) { return ex.Message; }
@@ -2222,7 +2515,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return lossStandDown;   // never lifted by a rules change; the 18:00 ET roll clears it (lead's default)
         }
 
-        private string StandDown() { string sd; lock (Sync) sd = StandDownLocked(); return sd ?? AccountConflict(); }
+        private string StandDown() { string sd; lock (Sync) sd = StandDownLocked(); return sd ?? LatchProblem() ?? AccountConflict(); }   // 0.6.2: a stand-down on its group (the backstop cancels its entries)
 
         // A file that cannot be read (check 2), or null. Under Sync.
         private string FilesBrokenLocked() { return dayBroken ?? rulesBroken ?? accountBroken; }
@@ -2380,6 +2673,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "withdraw", new[] { "type", "id", "reason" } },
             { "note", new[] { "type", "kind", "text" } },
             { "flatten", new[] { "type", "account" } },   // 0.6.0: account (one seat); without it, every seat
+            { "standDown", new[] { "type", "group", "kind", "why" } },   // 0.6.2: raise only (there is no clear from the agent)
         };
 
         // ---------------------------------------------------------- the connection
@@ -2495,6 +2789,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (type == "note") OnNote(d);
             else if (type == "subscribe") OnSubscribe(c, d);
             else if (type == "flatten") OnAgentFlatten(d);
+            else if (type == "standDown") OnStandDown(d);
         }
 
         // Over the rate: one reject a second at most, nothing else (no plan shown, no id used, no file written).
@@ -2531,6 +2826,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             string nm = S(d, "name"), bd = S(d, "build");
             if (nm == null || nm.Length < 1 || nm.Length > 40) { ToAgent(Reject(null, "agentHello needs a name of 1 to 40 characters")); return; }
             if (bd == null || bd.Length < 1 || bd.Length > 40) { ToAgent(Reject(null, "agentHello needs a build of 1 to 40 characters")); return; }
+            // 0.6.2 (fix round 1): the build names the hero a stand-down holds (agent-standdowns.txt), so it must read back the same: no
+            // space at either end (a build cut at 40 characters on the space before its stamp is refused), no tab or control character
+            if (!ChartBridgeAgents.SdText(bd, 40)) { string w = "agentHello needs a build of 1 to 40 characters with no space at either end (send the build name without a cut stamp)"; ToAgent(Reject(null, w)); Log("agent " + Id + " hello refused: " + w); AgentLog("hello refused: " + w); return; }
+            // and one build for the whole connection: a second hello with another build is refused (a stand-down could not follow it)
+            string had;
+            lock (Sync) had = helloed ? build : null;
+            if (had != null && had != bd) { string w = "agentHello cannot change the build on this connection (it said build " + had + "): reconnect to run another build"; ToAgent(Reject(null, w)); Log("agent " + Id + " hello refused: " + w); AgentLog("hello refused: " + w); return; }
             lock (Sync) { helloed = true; welcomeSent = false; snapshotSent = false; name = nm; build = bd; }   // a second hello too: its welcome first
             List<string> served = ServedRoots();   // welcome.instruments and the snapshot cover exactly these roots (section 10)
             ToAgent(WelcomeJson(served));
@@ -2736,8 +3038,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             string acct = Account, sd, gid;
             List<string> seats;
             long rev;
-            bool k;
-            lock (Sync) { k = killed; sd = FilesBrokenLocked(); gid = groupId; seats = seatNames.ToList(); rev = seatsRev; }
+            bool k, lg;
+            lock (Sync) { k = killed; sd = FilesBrokenLocked(); gid = groupId; seats = seatNames.ToList(); rev = seatsRev; lg = league; }
             bool grp = gid != null;
             used = grp ? "group:" + gid : acct;
             p.SeatNames = null; p.Outs = null; p.Results = null; p.Orders = null;
@@ -2746,6 +3048,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (sd != null) return sd;
             if (!grp && ChartBridgeBranches.IsNone(acct)) return "agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
             if (forAccount != null && forAccount != used) return "agent " + Id + "'s account changed from " + KeyWords(forAccount) + " to " + KeyWords(used) + " after this proposal: nothing placed";
+            // 0.6.2: a stand-down of its build on its group (a group pick: the whole plan; one account inside a group: its one seat), or
+            // agent-standdowns.txt unreadable (an account in a prop group: BrokenRefusal)
+            string latch = LatchProblem();
+            if (latch != null) return latch;
+            if (lg && (grp || !SeatSim(acct))) return LeagueRefusal;   // 0.6.2: a league seat enters only while its account is Sim (read fresh)
             string[] outs = null;
             if (grp)
             {
@@ -3316,19 +3623,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             // A clash with the bot, the copier or another agent (set after this agent's entries went out): it stands down, its
             // unfilled entries are cancelled and its open proposals expire; a position keeps its legs, the flat time still runs.
-            string clash = AccountConflict();
-            if (clash != null)
-            {
-                List<Proposal> gone;
-                lock (Sync) gone = ExpireOpenLocked("expired");
-                foreach (Proposal p in gone) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "expired", "agent " + Id + " stands down: " + clash)); }
-                int n = CancelUnfilled("agent " + Id + " stands down: " + clash);
-                if (n > 0 || gone.Count > 0)
-                {
-                    string text = "Agent " + Id + " stands down: " + clash + ": " + n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled; any position keeps its stop and target; its flat time still runs";
-                    Log(text); AgentLog(text); ToPages(StatusJson("warn", text)); Notify();
-                }
-            }
+            // 0.6.2: and a stand-down of its build on its group (agent-standdowns.txt), the same way.
+            string clash = LatchProblem() ?? AccountConflict();
+            if (clash != null) Sweep(clash);
             Rules r = RulesNow();
             DateTime etNow = NowEt();
             bool inWindow = InWindow(r, etNow);   // 0.5.2: session time, the market open
@@ -3402,6 +3699,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             SendState(false);   // a change no event carries (the session's roll, the clock, a file): within one pass
             SendAccountState(false);   // 0.5.8: its account's real numbers, when any field but "at" changed
             if (strip) ToPages(StripJson());
+        }
+
+        // A stand-down (a clash, or 0.6.2 a stand-down on its group): its open proposals expire, its unfilled entries are cancelled; a
+        // position keeps its stop and target and the flat time still runs.
+        private void Sweep(string clash)
+        {
+            List<Proposal> gone;
+            lock (Sync) gone = ExpireOpenLocked("expired");
+            foreach (Proposal p in gone) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "expired", "agent " + Id + " stands down: " + clash)); }
+            int n = CancelUnfilled("agent " + Id + " stands down: " + clash);
+            if (n > 0 || gone.Count > 0)
+            {
+                string text = "Agent " + Id + " stands down: " + clash + ": " + n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled; any position keeps its stop and target; its flat time still runs";
+                Log(text); AgentLog(text); ToPages(StatusJson("warn", text)); Notify();
+            }
         }
 
         // The roots a flatten looks at: its rules' roots, or (rules file unreadable) every root an agent may trade.
@@ -3604,9 +3916,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string nm = S(d, "account"), keep = S(d, "keepMode");
             if (d.ContainsKey("keepMode") && keep != "shadow" && keep != "copilot" && keep != "auto") return "keepMode must be shadow, copilot or auto (the mode the page's question named)";
+            bool lg = false;   // 0.6.2: league (a league seat: one Sim account, never a group)
+            if (d.ContainsKey("league") && !Bool(d, "league", out lg)) return "league must be true or false";
             if (d.ContainsKey("group"))   // 0.6.0: a whole group (every member a seat)
             {
                 if (d.ContainsKey("account")) return "agentAccount takes account or group, not both";
+                if (lg) return "a league seat is one Sim account, never a group";
                 string gid = S(d, "group");
                 if (gid == null || !GroupIdRx.IsMatch(gid)) return "group must be a group id (a plain string such as g1)";
                 return SetGroupLocked(gid, keep);
@@ -3614,6 +3929,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Val nv;
             if (d.TryGetValue("account", out nv) && nv.K == 'z')   // 0.5.7: null is None, refused while the agent is exposed
             {
+                if (lg) return "a league seat needs its Sim account (league goes with an account, never None)";
                 if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: choose None when it is flat";
                 // review of #47: and while its account holds any position or working order (a trade it lost included): the reset's rule
                 string cur = Account;
@@ -3633,11 +3949,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (other != this && other.Claims(nm)) return nm + " is agent " + other.Id + "'s account: each agent has its own";   // 0.6.0: a seat of another agent's group too
             string why = AccountProblemFor(nm, true);
             if (why != null) return why;
+            if (lg && !SeatSim(nm)) return LeagueRefusal + " (" + nm + " is not NinjaTrader's simulator)";   // 0.6.2: read fresh; an unknown provider is no Sim
             if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: choose its account when it is flat";
             string old = Account;
-            bool broken, wasGroup = GroupNow();
+            bool broken, wasGroup = GroupNow(), wasLeague = League;
             lock (Sync) broken = accountBroken != null;
-            if (nm == old && !broken && Chosen && !wasGroup) return null;   // already its chosen account (choosing its unchosen default writes the file: it is then its own)
+            if (nm == old && !broken && Chosen && !wasGroup && lg == wasLeague) return null;   // already its chosen account (choosing its unchosen default writes the file: it is then its own); 0.6.2: and as a league seat or not
             foreach (string root in RulesNow().Roots)
             {
                 if (ChartBridgeOrders.AgentHoldsOnRoot(FindAccount(nm), root)) return nm + " holds a position or a working order on " + root + ": choose agent " + Id + "'s account when both accounts are flat on its roots";
@@ -3645,16 +3962,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (wasGroup) foreach (string x in SeatNames()) if (x != nm && ChartBridgeOrders.AgentHoldsOnRoot(FindAccount(x), root)) return "agent " + Id + "'s seat " + x + " holds a position or a working order on " + root + ": choose its account when every seat is flat on its roots";
             }
             if (wasGroup) old = AccountWords();
-            string err = SaveAccount(nm);
+            else if (wasLeague) old += " (league seat)";
+            string err = lg ? SaveLeague(nm) : SaveAccount(nm);
             if (err != null) return "agent-" + Id + "-account.txt could not be saved (" + err + "); nothing changed";
             // 0.5.2 (Anthony 2026-10-08): the mode is kept only when the page says which mode its question named (keepMode) and that is
             // still the agent's mode; an older page (no keepMode, its question says the agent goes to Shadow) or a mode changed since
             // the question (another page) puts the agent in shadow, as until 0.5.1.
             string wasMode;
             bool kept;
-            lock (Sync) { account = nm; groupId = null; accountBroken = null; chosen = true; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
+            lock (Sync) { account = nm; groupId = null; accountBroken = null; chosen = true; league = lg; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
             RefreshSeats(false);   // 0.6.0: its one seat (seatsRev up); the old seats are dropped (nothing of the agent's is left there)
-            string mark = SimNow() ? "Sim" : "LIVE";
+            string mark = (SimNow() ? "Sim" : "LIVE") + (lg ? ", a league seat" : "");
             string modeSay = kept ? "mode " + wasMode + " kept" : wasMode == "shadow" ? "mode shadow" : "mode shadow (was " + wasMode + (keep == null ? ": the page did not say which mode it showed" : ": the page's question named " + keep) + ")";
             Log("agent " + Id + " account " + nm + " (" + mark + "), was " + old + ", set by the page; " + modeSay);
             AgentLog("account " + nm + " (" + mark + "), was " + old + ", set by the page; " + modeSay);
@@ -3675,7 +3993,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (err != null) return "agent-" + Id + "-account.txt could not be saved (" + err + "); nothing changed";
             string wasMode;
             bool kept;
-            lock (Sync) { account = ChartBridgeBranches.None; groupId = null; accountBroken = null; chosen = false; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
+            lock (Sync) { account = ChartBridgeBranches.None; groupId = null; accountBroken = null; chosen = false; league = false; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
             RefreshSeats(false);   // no seat now (seatsRev up); a seat with nothing of the agent's left is dropped
             List<string> held = AllSeats().Select(x => x.Name).ToList();
             string say = "account None (nothing trades), was " + old + ", " + by + "; " + (kept || wasMode == "shadow" ? "mode " + wasMode + (kept ? " kept" : "") : "mode shadow (was " + wasMode + ")") +
@@ -3749,7 +4067,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (err != null) return "agent-" + Id + "-account.txt could not be saved (" + err + "); nothing changed";
             string wasMode;
             bool kept;
-            lock (Sync) { account = ChartBridgeBranches.None; groupId = gid; accountBroken = null; chosen = true; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
+            lock (Sync) { account = ChartBridgeBranches.None; groupId = gid; accountBroken = null; chosen = true; league = false; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
             RefreshSeats(false);
             string mark = SimNow() ? "Sim" : "LIVE";
             string modeSay = kept ? "mode " + wasMode + " kept" : wasMode == "shadow" ? "mode shadow" : "mode shadow (was " + wasMode + (keep == null ? ": the page did not say which mode it showed" : ": the page's question named " + keep) + ")";
@@ -4169,7 +4487,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             ins.Append(']');
             return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"agent\":" + CbJson.Str(Id) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + ChartBridgeBranches.Json(Account) +
-                   ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"rules\":" + NoteWelcomeRules(EnforcedRulesJson(r)) + ",\"instruments\":" + ins + SeatsWelcomeFields() + "}";
+                   ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"league\":" + (League ? "true" : "false") + ",\"rules\":" + NoteWelcomeRules(EnforcedRulesJson(r)) + ",\"instruments\":" + ins + SeatsWelcomeFields() + "}";
         }
 
         // 0.6.0: welcome's group ({id, name} or null), seats (the member accounts in seat order, null for one account) and seatsRev.
@@ -4179,11 +4497,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> seats;
             long rev;
             lock (Sync) { gid = groupId; seats = seatNames.ToList(); rev = seatsRev; }
-            return ",\"group\":" + (gid != null ? GroupJson(gid) : "null") + ",\"seats\":" + (gid != null ? "[" + string.Join(",", seats.Select(x => CbJson.Str(x))) + "]" : "null") +
+            return ",\"group\":" + (gid != null ? WelcomeGroupJson(gid) : "null") + ",\"seats\":" + (gid != null ? "[" + string.Join(",", seats.Select(x => CbJson.Str(x))) + "]" : "null") +
                    ",\"seatsRev\":" + rev.ToString(CultureInfo.InvariantCulture);
         }
 
         private static string GroupJson(string gid) { return "{\"id\":" + CbJson.Str(gid) + ",\"name\":" + Str(ChartBridgeGroups.NameOf(gid)) + "}"; }
+        // 0.6.2: the agent's welcome.group adds the group's account Type ("eval", "funded", or null when not set) for its runner.
+        private static string WelcomeGroupJson(string gid) { return "{\"id\":" + CbJson.Str(gid) + ",\"name\":" + Str(ChartBridgeGroups.NameOf(gid)) + ",\"accountType\":" + Str(ChartBridgeGroups.TypeOf(gid)) + "}"; }
 
         // 0.6.0: each seat for agentState and the strip (a group only): its account, whether the agent owns anything there, its open
         // trade, today's P&L and trades there, and why it is not in the last plan's trade (null: it is). strip: also SIM or LIVE, the
@@ -4224,37 +4544,109 @@ namespace NinjaTrader.NinjaScript.AddOns
         // What the order path asks at the last moment (ChartBridgeAgents.PlacingProblem): killed, shadow, outside the window.
         // 0.6.0: and the agent connected (its hello said): asked per seat under PlaceLock, so once the socket drops (Lose) no further
         // seat is placed. Only the agent's Sync is taken here (as before), never a lock Lose waits on.
-        public string PlacingProblem()
+        // 0.6.2 (SPEC CE-2): and, for this seat (acct, under PlaceLock), a stand-down of its build on the seat's group or on the group
+        // it trades (raised mid fan-out: no further seat is placed), agent-standdowns.txt unreadable, and a league seat whose account is
+        // not Sim now (read fresh: a provider changed after the start is caught here).
+        public string PlacingProblem(string acct)
         {
             Rules r = RulesNow();
-            string m;
-            bool k, on;
-            lock (Sync) { m = mode; k = killed; on = client != null && helloed; }
+            string m, bd, gid;
+            bool k, on, lg;
+            lock (Sync) { m = mode; k = killed; on = client != null && helloed; bd = build; gid = groupId; lg = league; }
             if (k) return "the kill switch is on (release it on the Agent tab)";
             if (m == "shadow") return "agent " + Id + " is in shadow: nothing is placed";
             if (!on) return "agent " + Id + " is not connected: nothing more is placed";   // 0.6.0: a fan-out stops at the seat after its socket dropped
             DateTime et = NowEt();
             if (!InWindow(r, et)) return WindowRefusal(r, et);   // 0.5.2: session time, the market open
+            string sd = ChartBridgeAgents.BrokenRefusal(acct) ?? ChartBridgeAgents.StandDownRefusal(bd, ChartBridgeGroups.GroupOf(acct)) ?? (gid != null ? ChartBridgeAgents.StandDownRefusal(bd, gid) : null);
+            if (sd != null) return sd;
+            if (lg) { Account a = FindAccount(acct); if (gid != null || a == null || !ChartBridgeBot.IsSim(a)) return LeagueRefusal; }
             return null;
+        }
+
+        // 0.6.2: a stand-down of its build (its last hello's) on the group it trades, or on the group its one account is in; or
+        // agent-standdowns.txt unreadable (an account in a prop group: BrokenRefusal). Null otherwise (None, a personal account or a league seat in no group).
+        private string GroupNowForLatch()
+        {
+            string gid, acct;
+            lock (Sync) { gid = groupId; acct = account; }
+            return gid ?? (ChartBridgeBranches.IsNone(acct) ? null : ChartBridgeGroups.GroupOf(acct));
+        }
+        // agent-standdowns.txt unreadable (Anthony 2026-10-16): on a group, the whole agent (every seat is in the group); on one account,
+        // by that account (BrokenRefusal: in a prop group refused, in no group allowed; groups.txt unreadable too: Sim only).
+        private string LatchProblem()
+        {
+            string gid, acct;
+            lock (Sync) { gid = groupId; acct = account; }
+            string broken = gid != null ? ChartBridgeAgents.StandDownsBroken() : ChartBridgeAgents.BrokenRefusal(acct);
+            return broken ?? ChartBridgeAgents.StandDownRefusal(Build, GroupNowForLatch());
+        }
+
+        // agentState.groupStandDown: the stand-down on the group it is on now, {group, kind, why, at}, or null.
+        private string GroupStandDownJson()
+        {
+            string gid = GroupNowForLatch(), bd = Build;
+            ChartBridgeAgents.GroupStandDown s = gid == null || bd == null ? null : ChartBridgeAgents.StandDownsOf(bd).FirstOrDefault(x => x.Group == gid);
+            return s == null ? "null" : "{\"group\":" + CbJson.Str(s.Group) + ",\"kind\":" + CbJson.Str(s.Kind) + ",\"why\":" + CbJson.Str(s.Why) + ",\"at\":" + s.At.ToString("0", CultureInfo.InvariantCulture) + "}";
+        }
+        // agent.standDowns (the pages): every stand-down of its build, on any group.
+        private string StandDownsJson()
+        {
+            string bd = Build;
+            return "[" + (bd == null ? "" : string.Join(",", ChartBridgeAgents.StandDownsOf(bd).Select(ChartBridgeAgents.StandDownJson).ToArray())) + "]";
+        }
+
+        // 0.6.2: a stand-down raised or cleared (any agent's): this agent sweeps when it now stands down (its unfilled entries
+        // cancelled, its open proposals expired; positions keep their stop and target), and the agent and the pages are told.
+        internal void AfterStandDownChange()
+        {
+            string w = LatchProblem();
+            if (w != null) Sweep(w);
+            Notify();
+        }
+        internal void NoteCleared(string bd, string text) { if (bd != null && bd == Build) AgentLog(text); }
+
+        // The agent's standDown {group, kind, why} (0.6.2, raise only: there is no clear from the agent). The stand-down is its build's
+        // (its hello's) on that group: no new entries from that build on any seat in the group until Anthony clears it on the Board.
+        private void OnStandDown(Dictionary<string, Val> d)
+        {
+            string gid = S(d, "group"), kind = S(d, "kind"), why = S(d, "why"), bd = Build;
+            string bad = gid == null || !GroupIdRx.IsMatch(gid) ? "standDown needs group (a group id such as g1)" :
+                         !ChartBridgeAgents.SdText(kind, 40) ? "standDown needs a kind of 1 to 40 characters" :
+                         !ChartBridgeAgents.SdText(why, 200) ? "standDown needs a why of 1 to 200 characters" :
+                         !ChartBridgeAgents.SdText(bd, 40) ? "standDown needs the build of agentHello (1 to 40 characters, no spaces at its ends)" :
+                         !ChartBridgeGroups.Unreadable() && ChartBridgeGroups.NameOf(gid) == null ? "there is no group " + gid : null;   // groups.txt unreadable: taken (a stand-down only refuses)
+            if (bad != null) { ToAgent(Reject(null, bad)); return; }
+            bool fresh, sayAgain;
+            string full = ChartBridgeAgents.RaiseStandDown(Id, bd, gid, kind, why, out fresh, out sayAgain);
+            if (full != null) { ToAgent(Reject(null, full)); return; }   // fix round 1: at most MaxStandDowns (logged and an alarm there)
+            string gname = ChartBridgeGroups.NameOf(gid) ?? gid;
+            if (!fresh && !sayAgain) { Notify(); return; }   // fix round 1: a repeat raise is logged once per build and group
+            string text = fresh ? "agent " + Id + " stood down build " + bd + " on group " + gname + " (" + kind + ": " + why + "): no new entries from it on " + gname + " until Anthony clears it on the Agent tab's Board; exits always work"
+                                : "agent " + Id + " stood down build " + bd + " on group " + gname + " again (" + kind + ": " + why + "): it stands down already (kept as first raised)";
+            Log(text); AgentLog(text);
+            if (fresh) { ToPages(StatusJson("warn", "Agent " + text.Substring(6))); ChartBridgeAgents.StandDownsChanged(); }
+            else Notify();
         }
 
         private string StateJson()
         {
-            string sd = StandDown();
+            string sd = StandDown(), gsd = GroupStandDownJson();   // 0.6.2: groupStandDown, the stand-down on the group it is on now
+            string gtype = GroupNow() ? Str(ChartBridgeGroups.TypeOf(GroupId)) : "null";   // 0.6.2: groupType, the Type of the group it trades (a change in Settings reaches the runner without a reconnect)
             bool owns = OwnsAny();
             string seats = GroupNow() || AllSeats().Any(x => !IsEntrySeat(x.Name)) ? ",\"seats\":" + SeatsJson(false) : "";   // 0.6.0: a group's seats (one account: as before)
             lock (Sync)
             {
                 return "{\"type\":\"agentState\",\"mode\":" + CbJson.Str(mode) + ",\"killed\":" + (killed ? "true" : "false") + ",\"standDown\":" + Str(sd) +
                        ",\"trades\":" + TradesLocked() + ",\"losses\":" + LossesLocked() + ",\"pnlToday\":" + CbJson.Num(Math.Round(Trades.Values.Where(v => !double.IsNaN(v)).Sum(), 2)) +
-                       ",\"owns\":" + (owns ? "true" : "false") + ",\"session\":" + Str(session) + seats + "}";
+                       ",\"owns\":" + (owns ? "true" : "false") + ",\"session\":" + Str(session) + ",\"groupStandDown\":" + gsd + ",\"groupType\":" + gtype + seats + "}";
             }
         }
 
         public string StripJson()
         {
             bool sim = SimNow(), owns = OwnsAny();
-            string sd = StandDown();
+            string sd = StandDown(), sds = StandDownsJson();   // 0.6.2: standDowns, every stand-down of its build
             Rules r = RulesNow();
             string gid = GroupId, seats = gid != null || AllSeats().Any(x => !IsEntrySeat(x.Name)) ? SeatsJson(true) : null;   // 0.6.0
             Seat pos = AllSeats().FirstOrDefault(x => { lock (Sync) return x.openTag != null && x.ledQty != 0; });
@@ -4269,6 +4661,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"mode\":").Append(CbJson.Str(mode))
                  .Append(",\"account\":").Append(ChartBridgeBranches.Json(account))
                  .Append(",\"sim\":").Append(sim ? "true" : "false")
+                 .Append(",\"league\":").Append(league ? "true" : "false")   // 0.6.2
                  .Append(",\"rules\":").Append(RulesJson(r))
                  .Append(",\"position\":").Append(pos != null ? pos.PositionJsonLocked() : "null")
                  .Append(",\"pnlToday\":").Append(CbJson.Num(Math.Round(Trades.Values.Where(v => !double.IsNaN(v)).Sum(), 2)))
@@ -4276,6 +4669,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"losses\":").Append(LossesLocked())
                  .Append(",\"killed\":").Append(killed ? "true" : "false")
                  .Append(",\"standDown\":").Append(Str(sd))
+                 .Append(",\"standDowns\":").Append(sds)   // 0.6.2
                  .Append(",\"owns\":").Append(owns ? "true" : "false")
                  .Append(",\"lastBeatMs\":").Append(client != null ? Ms(Math.Max(0, now - lastMsgMs)) : "null")
                  .Append(",\"lastPlan\":").Append(lastPlanJson ?? "null");
@@ -4291,7 +4685,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 return "{\"connected\":" + (client != null ? "true" : "false") + ",\"mode\":" + CbJson.Str(mode) + ",\"killed\":" + (killed ? "true" : "false") +
                        ",\"plans\":" + nPlans + ",\"proposals\":" + nProposals + ",\"placed\":" + nPlaced + ",\"refused\":" + nRefused + ",\"heartbeatLost\":" + nHeartbeatLost +
-                       ",\"flattenedAt\":" + Str(flattenedAt) + ",\"secretFile\":" + CbJson.Str(secretState) + "}";
+                       ",\"flattenedAt\":" + Str(flattenedAt) + ",\"secretFile\":" + CbJson.Str(secretState) +
+                       ",\"league\":" + (league ? "true" : "false") + "}";   // 0.6.2: a league seat (the welcome's own flag; never the account)
             }
         }
 

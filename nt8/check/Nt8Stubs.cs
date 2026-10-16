@@ -158,7 +158,10 @@ namespace NinjaTrader.Cbi
         public static List<Account> All = new List<Account>();
         public string Name { get; set; }
         public Connection Connection { get; set; }
-        public Provider Provider { get; set; }
+        private Provider provider;
+        // 0.6.2: the harness may answer each read of Provider (the league seat's Sim check reads it fresh at every gate)
+        public Func<Provider, Provider> ProviderRead;
+        public Provider Provider { get { Func<Provider, Provider> h = ProviderRead; return h != null ? h(provider) : provider; } set { provider = value; } }
         public Currency Denomination { get; set; }
         public readonly Dictionary<AccountItem, double> Items = new Dictionary<AccountItem, double>();   // the harness sets what Get answers (0 when unset, as NinjaTrader)
         public Exception GetThrows;                                                                       // the harness: Get throws this

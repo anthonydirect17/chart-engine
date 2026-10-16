@@ -597,7 +597,7 @@ test('agents: agentHello first, welcome then agentState; every start in shadow; 
   assert.deepEqual(Object.keys(st), ['type', 'mode', 'killed', 'standDown', 'trades', 'losses', 'pnlToday', 'owns', 'session']);
   assert.equal(st.session, '2026-10-08', 'its session: the day of the 18:00 ET session');
   const ag = d.take('agent').pop();
-  assert.deepEqual(Object.keys(ag), ['type', 'agent', 'name', 'build', 'enabled', 'connected', 'mode', 'account', 'sim', 'rules', 'position', 'pnlToday', 'trades', 'losses', 'killed', 'standDown', 'owns', 'lastBeatMs', 'lastPlan']);
+  assert.deepEqual(Object.keys(ag), ['type', 'agent', 'name', 'build', 'enabled', 'connected', 'mode', 'account', 'sim', 'league', 'rules', 'position', 'pnlToday', 'trades', 'losses', 'killed', 'standDown', 'standDowns', 'owns', 'lastBeatMs', 'lastPlan']);   // 0.6.2: league, standDowns
   assert.equal(ag.name, 'Demo Agent'); assert.equal(ag.build, 'sample-build-1'); assert.equal(ag.connected, true);
   for (const k of ['look', 'thinking', 'lesson', 'notebook', 'status']) d.say({ type: 'note', kind: k, text: 'Sample ' + k });
   const notes = d.take('agentNote');
@@ -897,7 +897,7 @@ test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; h
     let n; do { n = await a.next('agentNote', 3000); } while (n && n.kind !== 'thinking');
     assert.equal(n && n.text, 'Sample: thinking about a made-up level');
     const diag = JSON.parse((await get(port, '/diag')).body);
-    assert.deepEqual(Object.keys(diag.agents.demo), ['connected', 'mode', 'killed', 'plans', 'proposals', 'placed', 'refused', 'heartbeatLost', 'flattenedAt', 'secretFile']);
+    assert.deepEqual(Object.keys(diag.agents.demo), ['connected', 'mode', 'killed', 'plans', 'proposals', 'placed', 'refused', 'heartbeatLost', 'flattenedAt', 'secretFile', 'league']);   // 0.6.2: league
     a.close(); ws.close();
   } finally { child.kill(); }
 });

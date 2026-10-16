@@ -1083,7 +1083,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 Numbers none = new Numbers { Kind = "none", Session = SessionNow() };
                 foreach (string k in NumberKeys) none.Why[k] = "the agent's account is None";
-                b.Append(",\"account\":null,\"sim\":false,\"kind\":\"none\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"rules\":null");
+                b.Append(",\"account\":null,\"sim\":false,\"kind\":\"none\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"accountType\":null,\"rules\":null");   // 0.6.2: accountType null when not prop
                 foreach (string k in NumberKeys) b.Append(",\"").Append(k).Append("\":null");
                 SrcWhy(b, none, NumberKeys);
                 b.Append(",\"session\":").Append(CbJson.Str(none.Session));
@@ -1095,7 +1095,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 b.Append(",\"account\":").Append(CbJson.Str(a != null ? a.Name : account)).Append(",\"sim\":").Append(a != null && ChartBridgeAccounts.IsSim(a) ? "true" : "false")
                  .Append(",\"kind\":").Append(CbJson.Str(n.Kind)).Append(",\"group\":").Append(n.GroupName == null ? "null" : CbJson.Str(n.GroupName))
                  .Append(",\"groupId\":").Append(n.GroupId == null ? "null" : CbJson.Str(n.GroupId)).Append(",\"groupSide\":").Append(n.Side == null ? "null" : CbJson.Str(n.Side))
-                 .Append(",\"noHedge\":").Append(n.G == null ? "null" : n.G.NoHedge ? "true" : "false").Append(",\"rules\":");
+                 .Append(",\"noHedge\":").Append(n.G == null ? "null" : n.G.NoHedge ? "true" : "false")
+                 .Append(",\"accountType\":").Append(n.G == null || n.G.AccountType == null ? "null" : CbJson.Str(n.G.AccountType))   // 0.6.2: the group's Type (eval, funded; null not set, or not prop)
+                 .Append(",\"rules\":");
                 if (n.G != null)
                     b.Append("{\"dailyLoss\":").Append(Zero0(n.G.DailyLoss)).Append(",\"drawdown\":").Append(Zero0(n.G.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(n.G.Type))
                      .Append(",\"target\":").Append(Zero0(n.G.Target)).Append(",\"size\":").Append(Zero0(n.G.Size)).Append(",\"lockAt\":").Append(Zero0(n.G.LockAt))
@@ -1242,6 +1244,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (string a in left) next.Members.Remove(a);
                 string err = Save(next);
                 if (err != null) return err;
+                try { ChartBridgeAgents.GroupDeleted(id); } catch (Exception ex) { ChartBridgeServer.Log("groups: the stand-downs of group " + id + " not dropped (" + ex.Message + ")"); }   // 0.6.2: under the save, before a later group could take the id
             }
             ForgetHighs(left);
             ChartBridgeServer.Log("groups: group " + id + " (" + name + ") deleted by the page" + (left.Count > 0 ? "; " + string.Join(", ", left) + " now in no group" : ""));
@@ -1375,6 +1378,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (readError != null || !state.Groups.ContainsKey(id)) return null;
                 return state.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
             }
+        }
+
+        // 0.6.2: a group's account Type ("eval", "funded"), or null when not set or there is no such group (the agent's welcome.group and
+        // agentState.groupType; nothing in the order path reads it).
+        public static string TypeOf(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return null;
+            EnsureLoaded();
+            lock (Mem) { Group g; return state.Groups.TryGetValue(id, out g) ? g.AccountType : null; }
         }
 
         // 0.6.0: a group's name, or null when there is no such group.
