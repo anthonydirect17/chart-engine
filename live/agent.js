@@ -81,7 +81,7 @@ function create(o) {
   /* 1.28.0: Assign hero (the board): B.pick, a build to pick for a group with no default hero ({ gid, agent }); B.ask, the one
      LIVE question ({ gid, agent, build, msg, text }); B.job, under way ({ agent, group, groupName, build, until }); B.line, the
      board's last word */
-  const B = { pick: null, ask: null, job: null, line: '', lineAt: 0 };
+  const B = { pick: null, ask: null, job: null, line: '', lineAt: 0, starting: false };
   /* On/Off (live/agent-helper.js): H.ask, the open "Flatten and turn him off?" for one agent ({ agent, text }), closed when
      another agent is shown (choose); H.job, a Flatten-and-off under way for one agent (Shadow, Flatten, Off), its line in
      H.lines[agent] until it ends (a give-up's until the next On or Off for that agent) */
@@ -939,14 +939,17 @@ function create(o) {
     if (!view || !S.board || !agents.size()) return;
     const M = boardModel(), can = S.signedIn;
     const heroHtml = r => '<div class="ag-bgrid ag-brow' + (r.killed ? ' ag-bkilled' : '') + '" role="listitem" data-brow="hero" data-agent="' + esc(r.agent) + '">' +
-      '<div class="ag-bcell"><span class="ag-bname">' + esc(r.name) + '</span><span class="ag-bsub mono">' + esc(r.build || 'no build') + ' · ' + esc(r.agent) + '</span></div>' +
+      '<div class="ag-bcell"><span class="ag-bname">' + esc(r.name) + '</span><span class="ag-bsub mono">' + esc(r.build || 'no build') + ' · ' + esc(r.agent) + '</span>' +
+        (r.noHeroOn ? '<span class="ag-tier tier-unknown ag-bnohero" title="Its only agent is Off: no hero is on duty for this group">No hero on duty</span>' : '') + '</div>' +
       '<div class="ag-bcell"><span class="ag-tier tier-' + esc(r.chip.tone) + '" title="' + esc(r.chip.title) + '">' + esc(r.chip.text) + '</span>' + (r.fit.warn ? '<span class="ag-bwarn">' + esc(r.fit.warn) + '</span>' : r.fit.note && r.kind === 'group' ? '<span class="ag-bsub">' + esc(r.fit.note) + '</span>' : '') + '</div>' +
       '<div class="ag-bcell"><span class="ag-bwhere">' + esc(r.where) + '</span><span class="ag-bsub">' + esc(r.sub) + '</span></div>' +
-      '<div class="ag-bcell"><span class="ag-chip ag-mode m-' + esc(r.mode) + '">' + esc(r.modeName) + '</span>' + (r.killed ? '<span class="ag-bwarn">kill switch on</span>' : r.standDown ? '<span class="ag-bwarn">stood down</span>' : !r.connected ? '<span class="ag-bsub">not connected</span>' : '') + '</div>' +
+      '<div class="ag-bcell"><span class="ag-chip ag-mode m-' + esc(r.mode) + '">' + esc(r.modeName) + '</span>' + (r.off ? '<span class="ag-bwarn ag-boff">' + esc(r.off) + '</span>' : '') + (r.killed ? '<span class="ag-bwarn">kill switch on</span>' : r.standDown ? '<span class="ag-bwarn">stood down</span>' : !r.connected ? '<span class="ag-bsub">not connected</span>' : '') + '</div>' +
       '<div class="ag-bcell mono ag-bbig ' + r.posTone + '">' + esc(r.position) + '</div>' +
       '<div class="ag-bcell mono ag-bbig ' + (r.r > 0 ? 'pos' : r.r < 0 ? 'neg' : '') + '" title="His closed trades today in R, from each plan\'s own risk (this browser\'s record of his fills)">' + esc(r.rText) + '</div>' +
-      '<div class="ag-bcell">' + (r.room.pct !== null ? '<div class="ag-meter2"><i style="width:' + r.room.pct + '%"></i></div>' : '') + '<span class="ag-bsub mono">' + esc(r.room.text) + '</span></div>' +
-      '<div class="ag-bcell ag-bctl"><button type="button" class="ag-btn" data-act="bOpen" data-agent="' + esc(r.agent) + '" title="His desk">Open</button>' +
+      '<div class="ag-bcell">' + (r.off ? '<span class="ag-bsub">Start him in Shadow, or set None on his desk to free the slot.</span>' : '') + (r.room.pct !== null ? '<div class="ag-meter2"><i style="width:' + r.room.pct + '%"></i></div>' : '') + '<span class="ag-bsub mono">' + esc(r.room.text) + '</span></div>' +
+      '<div class="ag-bcell ag-bctl">' + (r.off ? '<button type="button" class="ag-btn primary" data-act="bStart" data-agent="' + esc(r.agent) + '" data-build="' + esc(r.startBuild) + '"' + (!HC || H.reach !== 'ok' || !r.startBuild || B.starting ? ' disabled' : '') +
+        ' title="' + esc(r.startBuild ? 'The PC helper starts him with ' + r.startBuild + ', in Shadow. To free the slot instead, set None on his desk.' : 'No build known: pick one on his desk. To free the slot instead, set None on his desk.') + '">Start in Shadow</button>' : '') +
+        '<button type="button" class="ag-btn" data-act="bOpen" data-agent="' + esc(r.agent) + '" title="His desk">Open</button>' +
         '<button type="button" class="ag-bkill" data-act="bKill" data-agent="' + esc(r.agent) + '"' + (r.killed || !can ? ' disabled' : '') + ' title="' + (r.killed ? 'His kill switch is on: release it on his desk (two clicks)' : 'His kill switch on, in one click') + '">' + (r.killed ? 'Killed' : 'Kill') + '</button></div></div>';
     const pickHtml = g => {
       const rows = assignRows(g);
@@ -987,25 +990,25 @@ function create(o) {
     const g = { id: raw.id, name: raw.name, hero: raw.hero || null, members: raw.members || [] };
     const st = AH.assignStart(g, agents.list(), H.status, H.reach, assignRows(g));
     if (st.error) { boardSay(st.error); return; }
-    if (st.need === 'pick') { B.pick = { gid, agent: st.agent }; boardSay(g.hero ? 'The default hero ' + g.hero + ' is not on this PC\'s helper: pick a hero for agent ' + st.agent + '.' : 'Group ' + g.name + ' has no default hero: pick one for agent ' + st.agent + '.'); return; }
-    assignGo(gid, st.agent, st.build);
+    if (st.need === 'pick') { B.pick = { gid, agent: st.agent, killed: !!st.killed }; boardSay(g.hero ? 'The default hero ' + g.hero + ' is not on this PC\'s helper: pick a hero for agent ' + st.agent + '.' : 'Group ' + g.name + ' has no default hero: pick one for agent ' + st.agent + '.'); return; }
+    assignGo(gid, st.agent, st.build, !!st.killed);
   }
-  function assignGo(gid, id, build) {
+  function assignGo(gid, id, build, killed) {
     const a = agents.get(id), raw = S.groups && S.groups.list ? S.groups.list.find(x => x && x.id === gid) : null;
     if (!a || !raw || !build) { B.pick = null; boardSay('Nothing was sent: the agent or the group changed.'); return; }
     const r = AC.accountChange(a, 'group:' + gid, choicesFor(a), Object.assign(ctxNow(a), { askedMode: 'shadow' }));   // every start is Shadow
     if (r.error) { B.pick = null; boardSay(r.error); return; }
-    if (r.confirm) { B.pick = null; B.ask = { gid, agent: id, build, msg: r.msg, text: r.confirm }; renderBoard(); return; }   // a LIVE member: asked once, in the page
-    assignSend(gid, id, build, r.msg);
+    if (r.confirm) { B.pick = null; B.ask = { gid, agent: id, build, msg: r.msg, text: r.confirm, killed }; renderBoard(); return; }   // a LIVE member: asked once, in the page
+    assignSend(gid, id, build, r.msg, killed);
   }
   let assignTimer = 0;
-  function assignSend(gid, id, build, msg) {
+  function assignSend(gid, id, build, msg, killed) {
     B.pick = null; B.ask = null;
     const raw = S.groups.list.find(x => x && x.id === gid), c = cid();
     const m = Object.assign({ type: msg.type, cid: c }, msg);
     if (!S.signedIn || !sendRaw(m)) { boardSay('Not sent: not signed in to ChartBridge.'); return; }
     S.pending.set(c, { kind: 'assign' }); setTimeout(() => S.pending.delete(c), 15000);
-    B.job = { agent: id, group: gid, groupName: raw ? raw.name : gid, build, until: Date.now() + AH.ASSIGN_WAIT_MS, cid: c };
+    B.job = { agent: id, group: gid, groupName: raw ? raw.name : gid, build, until: Date.now() + AH.ASSIGN_WAIT_MS, cid: c, killed: !!killed };
     assignTick();
   }
   function assignTick() {
@@ -1017,10 +1020,21 @@ function create(o) {
     boardSay(r.line);
     assignTimer = setTimeout(assignTick, 1000);
   }
+  /* fix round 1: a seated slot that is Off (the helper refused On, or the wait ran out): Start in Shadow, the helper's POST /on */
+  async function boardStart(id, build) {
+    const a = agents.get(id);
+    if (!a || !build || !HC) { boardSay('Nothing was sent: no build known for agent ' + id + '. Pick one on his desk, or set None there to free the slot.'); return; }
+    B.starting = true; boardSay('Asking the PC helper to start agent ' + id + ' with ' + build + ', in Shadow...');
+    const r = await HC.on(id, build, 'shadow', a.sim === true);
+    B.starting = false;
+    boardSay(r.reach === 'ok' ? 'Agent ' + id + ' starts with ' + build + ', in Shadow.' + (a.killed ? ' His kill switch is on: nothing trades until you release it on his desk (two clicks).' : '')
+      : 'The PC helper did not start agent ' + id + ': ' + (r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach)) + '. He stays Off; set None on his desk to free the slot.');
+    await pollHelper();
+  }
   async function assignOn(j) {
     const a = agents.get(j.agent);
     const r = await HC.on(j.agent, j.build, 'shadow', !!(a && a.sim === true));
-    boardSay(r.reach === 'ok' ? 'Agent ' + j.agent + ' is on ' + j.groupName + ' with ' + j.build + ', in Shadow. Auto is one click (and Confirm) on his desk.'
+    boardSay(r.reach === 'ok' ? 'Agent ' + j.agent + ' is on ' + j.groupName + ' with ' + j.build + ', in Shadow. ' + (j.killed || (a && a.killed) ? 'His kill switch is on: nothing trades until you release it on his desk (two clicks).' : 'Auto is one click (and Confirm) on his desk.')
       : 'Agent ' + j.agent + ' is on ' + j.groupName + ', but the PC helper did not start him: ' + (r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach)) + '. Nothing trades: he is Off.');
     await pollHelper();
   }
@@ -1427,16 +1441,17 @@ function create(o) {
     if (mo) { S.motion = AC.setMotionPref(storage, mo.dataset.motion); renderMotion(); return; }
     if (act && act.dataset.act === 'drawerClose') { closeDrawer(); return; }
     /* 1.28.0: the board */
-    if (act && ['board', 'boardClose', 'killAll', 'bOpen', 'bKill', 'bAssign', 'bPickGo', 'bYes', 'bCancel'].includes(act.dataset.act)) {
+    if (act && ['board', 'boardClose', 'killAll', 'bOpen', 'bKill', 'bAssign', 'bPickGo', 'bYes', 'bCancel', 'bStart'].includes(act.dataset.act)) {
       const k = act.dataset.act;
       if (k === 'board' || k === 'boardClose') { S.board = k === 'board'; writeJson(KEYS.board, S.board); render(); }
       else if (k === 'killAll') killAll();
       else if (k === 'bOpen') { S.board = false; writeJson(KEYS.board, false); choose(act.dataset.agent, true); unmountChart(); render(); }
       else if (k === 'bKill') { const x = agents.get(act.dataset.agent); if (x && !x.killed) { if (sendAgent(AC.killMsg(x.agent, true), 'kill')) boardSay('Kill switch on sent for ' + AC.agentName(x) + '.'); } }
       else if (k === 'bAssign') assignPressed(act.dataset.gid);
-      else if (k === 'bPickGo') { const sel = q('[data-k="bPickSel"]'); if (B.pick && sel) assignGo(B.pick.gid, B.pick.agent, sel.value); }
-      else if (k === 'bYes') { if (B.ask) { const x = B.ask; const ag = agents.get(x.agent); if (!ag || !AC.agentAccount(ag).none) { B.ask = null; boardSay('Agent ' + x.agent + ' changed meanwhile: nothing was sent.'); } else assignSend(x.gid, x.agent, x.build, x.msg); } }
+      else if (k === 'bPickGo') { const sel = q('[data-k="bPickSel"]'); if (B.pick && sel) assignGo(B.pick.gid, B.pick.agent, sel.value, B.pick.killed); }
+      else if (k === 'bYes') { if (B.ask) { const x = B.ask; const ag = agents.get(x.agent); const why = AH.slotFree(ag || { agent: x.agent }, H.status, H.reach); if (!ag || why) { B.ask = null; boardSay('Nothing was sent: ' + (why || 'that agent is gone') + '. Press Assign hero again.'); } else assignSend(x.gid, x.agent, x.build, x.msg, x.killed); } }   // fix round 1: the free slot asked again at Continue
       else if (k === 'bCancel') { B.pick = null; B.ask = null; boardSay('Nothing was sent.'); }
+      else if (k === 'bStart') boardStart(act.dataset.agent, act.dataset.build);
       return;
     }
     if (!a) return;

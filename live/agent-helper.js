@@ -265,12 +265,23 @@ const ASSIGN_WAIT_MS = 10000;
  */
 function freeSlot(agents, status, reach) {
   if (reach !== 'ok' || !status || !status.agents) return { error: 'The PC helper is not answering: an agent\'s Off cannot be checked, so nothing was sent.' };
-  for (const a of Array.isArray(agents) ? agents : []) {
-    if (!a || typeof a.agent !== 'string') continue;
-    const h = status.agents[a.agent], none = !(a.group && a.group.id) && !(typeof a.account === 'string' && a.account);
-    if (h && !h.on && !h.running && none && !a.connected) return { agent: a.agent };
-  }
+  const free = (Array.isArray(agents) ? agents : []).filter(a => slotFree(a, status, reach) === '');
+  /* fix round 1: a slot whose kill switch is off first; a killed one only when no other is free (the Kill is never undone here) */
+  const pick = free.find(a => !a.killed) || free[0];
+  if (pick) return pick.killed ? { agent: pick.agent, killed: true } : { agent: pick.agent };
   return { error: 'No free agent (an agent id on None and Off): add an agent id to config.txt (agents = ...); ChartBridge never writes config.txt.' };
+}
+/** Is this agent still a free slot (on None, not connected, Off in the helper)? '' when it is, else why not (fix round 1: asked
+ *  again at Continue, right before agentAccount goes). */
+function slotFree(a, status, reach) {
+  if (!a || typeof a.agent !== 'string') return 'that agent is not on this ChartBridge any more';
+  if (reach !== 'ok' || !status || !status.agents) return 'the PC helper is not answering, so his Off cannot be checked';
+  const h = status.agents[a.agent];
+  if (!h) return 'this PC\'s helper does not run agent ' + a.agent;
+  if ((a.group && a.group.id) || (typeof a.account === 'string' && a.account)) return 'agent ' + a.agent + ' is no longer on None';
+  if (a.connected) return 'agent ' + a.agent + ' is connected now';
+  if (h.on || h.running) return 'agent ' + a.agent + ' is On in the helper now';
+  return '';
 }
 /**
  * Assign hero pressed for group g ({ id, name, hero, members }): { agent, build, need } or { error }. need 'pick' when the group
@@ -282,7 +293,7 @@ function assignStart(g, agents, status, reach, rows) {
   const slot = freeSlot(agents, status, reach);
   if (slot.error) return slot;
   const def = g.hero && (rows || []).some(r => r.build === g.hero) ? g.hero : '';
-  return { agent: slot.agent, build: def, need: def ? '' : 'pick' };
+  return Object.assign({ agent: slot.agent, build: def, need: def ? '' : 'pick' }, slot.killed ? { killed: true } : {});
 }
 /**
  * An Assign under way ({ agent, group, build, until }), at each `agent` message and each second: { action, line }. action: ''
@@ -350,5 +361,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
 });

@@ -78,15 +78,15 @@ test('the Agent tab picker: on a group every hero is listed with its warning, an
 
 /* the agents, groups and accounts as ChartBridge sends them (made-up) */
 const groups = { type: 'groups', list: [
-  { id: 'g1', name: 'Lucid', members: ['SIM-A', 'SIM-B'], dailyLoss: 1000, accountType: 'funded', hero: 'sample-b' },
-  { id: 'g2', name: 'Apex', members: ['SIM-C'], dailyLoss: null, accountType: null, hero: 'sample-c' },
-  { id: 'g3', name: 'Empty', members: [], accountType: 'eval', hero: null }] };
+  { id: 'g1', name: 'Group A', members: ['SIM-A', 'SIM-B'], dailyLoss: 1000, accountType: 'funded', hero: 'sample-b' },
+  { id: 'g2', name: 'Group B', members: ['SIM-C'], dailyLoss: null, accountType: null, hero: 'sample-c' },
+  { id: 'g3', name: 'Group C', members: [], accountType: 'eval', hero: null }] };
 const accounts = { type: 'accounts', list: [
   { name: 'SIM-A', sim: true, tradable: true, roomDaily: 800, roomFloor: 1500 }, { name: 'SIM-B', sim: true, tradable: true, roomDaily: 600, roomFloor: 2100 },
-  { name: 'SIM-C', sim: true, tradable: true, roomDaily: null, roomFloor: null, why: { roomDaily: 'group Apex has no daily loss limit' } },
+  { name: 'SIM-C', sim: true, tradable: true, roomDaily: null, roomFloor: null, why: { roomDaily: 'group Group B has no daily loss limit' } },
   { name: 'Sim101', sim: true, tradable: true, roomDaily: null, roomFloor: null, why: { roomDaily: 'no group and no daily limit of its own (the Accounts tab)' } }] };
 const agentsNow = () => [
-  { agent: 'demo', name: 'Sample Hero B', build: 'sample-b x', connected: true, mode: 'auto', account: null, sim: true, group: { id: 'g1', name: 'Lucid' },
+  { agent: 'demo', name: 'Sample Hero B', build: 'sample-b x', connected: true, mode: 'auto', account: null, sim: true, group: { id: 'g1', name: 'Group A' },
     seats: [{ account: 'SIM-A', position: { root: 'MNQ', qty: 3 } }, { account: 'SIM-B', position: { root: 'MNQ', qty: 2 } }] },
   { agent: 'demotwo', name: 'Sample Hero A', build: 'sample-a x', connected: true, mode: 'shadow', account: 'Sim101', sim: true, position: { root: 'MNQ', qty: -1 }, killed: true },
   { agent: 'demothree', name: '', build: '', connected: false, mode: 'shadow', account: null, sim: false },
@@ -98,7 +98,7 @@ test('the board: a group hero row, a single account row, a slot on None and Off 
   const M = AC.boardRows({ agents: agentsNow(), groups, accounts, status: st, reach: 'ok', rOf: a => (a.agent === 'demo' ? 1.4 : null), AH });
   assert.deepEqual(M.heroes.map(r => r.agent), ['demo', 'demotwo'], 'demothree is on None and Off: no row');
   const g = M.heroes[0];
-  assert.equal(g.kind, 'group'); assert.equal(g.where, 'Lucid'); assert.equal(g.sub, 'leads 2 accounts: SIM-A, SIM-B · Funded');
+  assert.equal(g.kind, 'group'); assert.equal(g.where, 'Group A'); assert.equal(g.sub, 'leads 2 accounts: SIM-A, SIM-B · Funded');
   assert.equal(g.name, 'Sample Hero B'); assert.equal(g.build, 'sample-b');
   assert.equal(g.chip.text, 'Acceptable +0.05R');
   assert.equal(g.fit.warn, 'Acceptable: evals only; funded only when no Good or better hero is on duty', 'the fit for the group\'s Type, shown');
@@ -111,8 +111,8 @@ test('the board: a group hero row, a single account row, a slot on None and Off 
   assert.equal(s.chip.text, 'Good +0.10R'); assert.deepEqual(s.fit, { warn: '', note: '' }, 'one account: no group Type, no fit line');
   assert.equal(s.position, 'SHORT 1 MNQ'); assert.equal(s.rText, 'not reported'); assert.equal(s.killed, true);
   assert.equal(s.room.text, 'room not reported: no group and no daily limit of its own (the Accounts tab)');
-  assert.deepEqual(M.noHero, [{ id: 'g2', name: 'Apex', members: ['SIM-C'], accountType: null, hero: 'sample-c', heroName: 'Sample Hero C' },
-    { id: 'g3', name: 'Empty', members: [], accountType: 'eval', hero: null, heroName: '' }]);
+  assert.deepEqual(M.noHero, [{ id: 'g2', name: 'Group B', members: ['SIM-C'], accountType: null, hero: 'sample-c', heroName: 'Sample Hero C' },
+    { id: 'g3', name: 'Group C', members: [], accountType: 'eval', hero: null, heroName: '' }]);
   // a slot on None that is on (the helper says so) has a row: None, nothing trades
   const on3 = JSON.parse(JSON.stringify(st)); on3.agents.demothree.on = true;
   const M3 = AC.boardRows({ agents: agentsNow(), groups, accounts, status: on3, reach: 'ok', AH });
@@ -136,7 +136,7 @@ test('the board: helper rows without a tier, and the helper not answering', () =
 test('Assign hero: a free slot (None and Off), the default hero, a pick when there is none, no free slot', () => {
   const rows = AH.pickerRows(STATUS, 'shadow', true, { accountType: '' }).filter(r => r.hero);
   assert.deepEqual(AH.freeSlot(agentsNow(), STATUS, 'ok'), { agent: 'demothree' });
-  assert.deepEqual(AH.assignStart(groups.list[1], agentsNow(), STATUS, 'ok', rows), { agent: 'demothree', build: 'sample-c', need: '' }, 'Apex: its default hero');
+  assert.deepEqual(AH.assignStart(groups.list[1], agentsNow(), STATUS, 'ok', rows), { agent: 'demothree', build: 'sample-c', need: '' }, 'Group B: its default hero');
   assert.deepEqual(AH.assignStart(Object.assign({}, groups.list[1], { hero: null }), agentsNow(), STATUS, 'ok', rows), { agent: 'demothree', build: '', need: 'pick' }, 'no default hero: he picks a build');
   assert.deepEqual(AH.assignStart(Object.assign({}, groups.list[1], { hero: 'not-on-this-pc' }), agentsNow(), STATUS, 'ok', rows).need, 'pick', 'a default hero the helper does not have: he picks');
   assert.match(AH.assignStart(groups.list[2], agentsNow(), STATUS, 'ok', rows).error, /has no accounts/);
@@ -146,10 +146,10 @@ test('Assign hero: a free slot (None and Off), the default hero, a pick when the
   assert.match(AH.freeSlot(onAcc, STATUS, 'ok').error, /add an agent id to config\.txt/, 'an agent on an account is not free');
   assert.match(AH.freeSlot(agentsNow(), null, 'down').error, /not answering/);
   // the job: wait for ChartBridge to put him on the group, then On; give up after 10 s
-  const job = { agent: 'demothree', group: 'g2', groupName: 'Apex', build: 'sample-c', until: 10000 };
+  const job = { agent: 'demothree', group: 'g2', groupName: 'Group B', build: 'sample-c', until: 10000 };
   assert.equal(AH.assignStep(job, agentsNow()[2], 5000).action, '');
-  assert.equal(AH.assignStep(job, Object.assign(agentsNow()[2], { group: { id: 'g2', name: 'Apex' } }), 6000).action, 'on');
-  assert.deepEqual(AH.assignStep(job, agentsNow()[2], 10001), { action: 'giveup', line: 'ChartBridge did not put agent demothree on Apex within 10 s: nothing was started.' });
+  assert.equal(AH.assignStep(job, Object.assign(agentsNow()[2], { group: { id: 'g2', name: 'Group B' } }), 6000).action, 'on');
+  assert.deepEqual(AH.assignStep(job, agentsNow()[2], 10001), { action: 'giveup', line: 'ChartBridge did not put agent demothree on Group B within 10 s: nothing was started.' });
   // the agentAccount it sends is the existing one, with group and keepMode shadow (every start is Shadow)
   const slot = agentsNow()[2], choices = AC.pickerChoices(accounts, groups, slot, { agents: agentsNow() });
   const r = AC.accountChange(slot, 'group:g2', choices, { askedMode: 'shadow' });
@@ -171,16 +171,16 @@ test('the page: Kill all is the existing agentKill per agent; Assign hero is age
 });
 
 test('Settings: groupSave carries accountType and hero in the shapes ChartBridge 0.6.1 checks; the switch and Rename keep them', () => {
-  const f = { name: 'Apex', size: '50000', dailyLoss: '', drawdown: '2500', drawdownType: 'intraday', lockAt: '', target: '', noHedge: true };
+  const f = { name: 'Group B', size: '50000', dailyLoss: '', drawdown: '2500', drawdownType: 'intraday', lockAt: '', target: '', noHedge: true };
   assert.deepEqual(GC.groupMessage(Object.assign({}, f, { accountType: 'funded', hero: 'sample-b' }), [], null, 'c').msg,
-    { type: 'groupSave', cid: 'c', name: 'Apex', noHedge: true, dailyLoss: 0, drawdown: 2500, drawdownType: 'intraday', target: 0, size: 50000, lockAt: 0, consistency: 0, accountType: 'funded', hero: 'sample-b' });
+    { type: 'groupSave', cid: 'c', name: 'Group B', noHedge: true, dailyLoss: 0, drawdown: 2500, drawdownType: 'intraday', target: 0, size: 50000, lockAt: 0, consistency: 0, accountType: 'funded', hero: 'sample-b' });
   const none = GC.groupMessage(Object.assign({}, f, { accountType: '', hero: '' }), []).msg;
   assert.equal(none.accountType, '-'); assert.equal(none.hero, '-');
   assert.equal(GC.groupMessage(f, []).msg.accountType, undefined, 'a form without them: absent (ChartBridge keeps the group\'s)');
   assert.equal(GC.groupMessage(Object.assign({}, f, { accountType: 'live' }), []).field, 'accountType');
   for (const h of ['two words', '-x', 'a'.repeat(65), 'a/b']) assert.equal(GC.groupMessage(Object.assign({}, f, { hero: h }), []).field, 'hero', h);
   assert.equal(GC.groupMessage(Object.assign({}, f, { hero: 'b'.repeat(64) }), []).msg.hero, 'b'.repeat(64));
-  const g = GC.cleanGroups({ list: [{ id: 'g1', name: 'Lucid', accountType: 'eval', hero: 'sample-a', members: [] }, { id: 'g2', name: 'Apex', accountType: 'nope', hero: 'bad name', members: [] }, { id: 'g3', name: 'Old', members: [] }] });
+  const g = GC.cleanGroups({ list: [{ id: 'g1', name: 'Group A', accountType: 'eval', hero: 'sample-a', members: [] }, { id: 'g2', name: 'Group B', accountType: 'nope', hero: 'bad name', members: [] }, { id: 'g3', name: 'Old', members: [] }] });
   assert.deepEqual(g.map(x => [x.accountType, x.hero]), [['eval', 'sample-a'], [null, null], [null, null]], 'a 0.6.0 groups message (no fields): not set, none');
   const saved = GC.saveFrom(g[0], { noHedge: false }, 'c2');
   assert.ok(!('accountType' in saved) && !('hero' in saved), 'the No hedging switch and Rename send no Type or hero: ChartBridge keeps them');
@@ -198,7 +198,7 @@ test('the fake bridge: groupSave accountType and hero (absent keeps, - clears, s
     accountList: [{ name: 'SIM-A', balance: 50000, sim: true }, { name: 'SIM-B', balance: 50000, sim: true }], ownOrigin: 'http://localhost:8765', agents: ['demo'] });
   desk.origin = () => 'http://localhost:8765';
   const say = m => { const before = sent.length; desk.handle(conn, m, JSON.stringify(m)); return sent.slice(before); };
-  const base = { type: 'groupSave', name: 'Lucid', noHedge: true, dailyLoss: 1000, drawdown: 2000, drawdownType: 'eod', target: 0, size: 50000, lockAt: 0 };
+  const base = { type: 'groupSave', name: 'Group A', noHedge: true, dailyLoss: 1000, drawdown: 2000, drawdownType: 'eod', target: 0, size: 50000, lockAt: 0 };
   let r = say(Object.assign({ cid: 'a' }, base, { accountType: 'funded', hero: 'sample-a' }));
   let g = r.find(m => m.type === 'groups').list[0];
   assert.deepEqual([g.accountType, g.hero], ['funded', 'sample-a']);
@@ -215,4 +215,63 @@ test('the fake bridge: groupSave accountType and hero (absent keeps, - clears, s
   const a = r.find(m => m.type === 'agent');
   assert.ok(a && a.group.id === 'g1' && a.account === null && a.seats.map(x => x.account).join() === 'SIM-A,SIM-B' && a.mode === 'shadow', JSON.stringify(r));
   assert.match(say({ type: 'agentAccount', cid: 'i', agent: 'demo', group: 'g9' })[0].reason, /no group g9/);
+});
+
+/* ======================================================================== fix round 1 */
+test('fix round 1: a slot seated on a group but Off says so, offers Start in Shadow, and its group still shows no hero on duty', () => {
+  const st = JSON.parse(JSON.stringify(STATUS));
+  st.agents.demo = { on: false, running: false, build: null, hero: null };   // the helper refused On, or the wait ran out
+  const ag = agentsNow(); ag[0].connected = false; ag[0].build = '';
+  const M = AC.boardRows({ agents: ag, groups, accounts, status: st, reach: 'ok', AH });
+  const r = M.heroes.find(x => x.agent === 'demo');
+  assert.ok(r, 'still a row: it has a group');
+  assert.equal(r.on, false);
+  assert.equal(r.off, 'Off: not started (nothing trades)');
+  assert.equal(r.startBuild, 'sample-b', 'no build of his own: the group\'s default hero');
+  assert.equal(r.noHeroOn, true, 'its group keeps the no hero marker while its only agent is Off');
+  assert.ok(!M.noHero.some(g => g.id === 'g1'), 'no second NO HERO row (Assign would take another slot)');
+  const s = M.heroes.find(x => x.agent === 'demotwo');
+  assert.deepEqual([s.off, s.noHeroOn], ['', false], 'an agent that is on: no warning');
+  st.agents.demo.build = 'sample-a';
+  assert.equal(AC.boardRows({ agents: ag, groups, accounts, status: st, reach: 'ok', AH }).heroes[0].startBuild, 'sample-a', 'his last build first');
+  const js = read('live/agent.js');
+  assert.match(js, /async function boardStart\(id, build\) \{[\s\S]*?await HC\.on\(id, build, 'shadow', a\.sim === true\);/, 'Start in Shadow is the helper\'s existing POST /on, in Shadow');
+  assert.match(js, /set None on his desk to free the slot/);
+});
+
+test('fix round 1: a free slot whose kill switch is off first; a killed one only when no other is free (the Kill is never undone)', () => {
+  const st = JSON.parse(JSON.stringify(STATUS));
+  st.agents.demofour = { on: false, running: false };
+  const ag = agentsNow(); ag[2].killed = true;
+  ag.push({ agent: 'demofour', connected: false, mode: 'shadow', account: null, killed: false });
+  assert.deepEqual(AH.freeSlot(ag, st, 'ok'), { agent: 'demofour' });
+  assert.deepEqual(AH.freeSlot(agentsNow().map(a => Object.assign(a, { killed: a.agent === 'demothree' })), STATUS, 'ok'), { agent: 'demothree', killed: true });
+  const rows = AH.pickerRows(STATUS, 'shadow', true, {}).filter(r => r.hero);
+  assert.equal(AH.assignStart(groups.list[1], agentsNow().map(a => Object.assign(a, { killed: true })), STATUS, 'ok', rows).killed, true);
+  const js = read('live/agent.js');
+  assert.match(js, /His kill switch is on: nothing trades until you release it on his desk \(two clicks\)\./, 'the success line says so');
+  assert.ok(!/killMsg\([^)]*false\)[^\n]*assign/i.test(js), 'Assign never releases a Kill');
+});
+
+test('fix round 1: at Continue the free slot is asked again; when it no longer holds nothing is sent', () => {
+  const free = agentsNow()[2];
+  assert.equal(AH.slotFree(free, STATUS, 'ok'), '');
+  assert.equal(AH.slotFree(Object.assign({}, free, { connected: true }), STATUS, 'ok'), 'agent demothree is connected now');
+  assert.equal(AH.slotFree(Object.assign({}, free, { account: 'SIM-C' }), STATUS, 'ok'), 'agent demothree is no longer on None');
+  assert.equal(AH.slotFree(Object.assign({}, free, { group: { id: 'g2' } }), STATUS, 'ok'), 'agent demothree is no longer on None');
+  const on = JSON.parse(JSON.stringify(STATUS)); on.agents.demothree.on = true;
+  assert.equal(AH.slotFree(free, on, 'ok'), 'agent demothree is On in the helper now');
+  assert.equal(AH.slotFree(free, null, 'down'), 'the PC helper is not answering, so his Off cannot be checked');
+  const js = read('live/agent.js');
+  assert.match(js, /else if \(k === 'bYes'\) \{ if \(B\.ask\) \{ const x = B\.ask; const ag = agents\.get\(x\.agent\); const why = AH\.slotFree\(ag \|\| \{ agent: x\.agent \}, H\.status, H\.reach\); if \(!ag \|\| why\) \{ B\.ask = null; boardSay\('Nothing was sent: '/);
+});
+
+test('fix round 1: the room\'s why comes from the tightest seat, not the first', () => {
+  const accs = { list: [
+    { name: 'SIM-A', roomDaily: null, roomFloor: 3000, why: { roomDaily: 'the first seat\'s reason' } },
+    { name: 'SIM-B', roomDaily: null, roomFloor: 900, why: { roomDaily: 'SIM-B started mid-session' } }] };
+  const r = AC.boardRoom(['SIM-A', 'SIM-B'], accs, null);
+  assert.equal(r.text, 'daily room not reported (SIM-B started mid-session), floor $900.00 away (SIM-B)');
+  const none = AC.boardRoom(['SIM-A', 'SIM-B'], { list: [{ name: 'SIM-A', roomDaily: null, roomFloor: null }, { name: 'SIM-B', roomDaily: null, roomFloor: null, why: { roomFloor: 'SIM-B is not connected' } }] }, null);
+  assert.equal(none.text, 'room not reported: SIM-B is not connected', 'nothing known: a seat that says why');
 });

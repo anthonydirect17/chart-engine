@@ -996,16 +996,22 @@ function boardRoom(names, accountsMsg, group) {
   const bits = [];
   if (ld) bits.push('daily room ' + usd(ld.roomDaily) + (limit ? ' of ' + usd(limit) : '') + (multi ? ' (' + ld.name + ')' : ''));
   if (lf) bits.push('floor ' + usd(lf.roomFloor) + ' away' + (multi ? ' (' + lf.name + ')' : ''));
-  const first = list[0], why = !list.length ? 'not reported' : (first.why && (first.why.roomDaily || first.why.roomFloor)) || 'not reported';
+  /* fix round 1: why a number is not reported comes from the tightest seat (by the number that is known), else from a seat that
+     says why, never just the first */
+  const whyOf = (x, k) => (x && x.why && typeof x.why[k] === 'string' ? x.why[k] : '');
+  const ws = ld || lf || list.find(x => whyOf(x, 'roomDaily') || whyOf(x, 'roomFloor')) || null;
+  if (!ld && lf && whyOf(ws, 'roomDaily')) bits.unshift('daily room not reported (' + whyOf(ws, 'roomDaily') + ')');
+  const why = !list.length || !ws ? 'not reported' : whyOf(ws, 'roomDaily') || whyOf(ws, 'roomFloor') || 'not reported';
   return { pct: ld && limit ? Math.round(Math.max(0, Math.min(100, ld.roomDaily / limit * 100))) : null, daily: ld ? ld.roomDaily : null, limit, floor: lf ? lf.roomFloor : null,
-    of: ld ? ld.name : lf ? lf.name : '', text: bits.length ? bits.join(', ') : 'room ' + (why === 'not reported' ? 'not reported' : 'not reported: ' + why), why: bits.length ? '' : why };
+    of: ld ? ld.name : lf ? lf.name : '', text: bits.length ? bits.join(', ') : 'room ' + (why === 'not reported' ? 'not reported' : 'not reported: ' + why), why: bits.length ? '' : why, whyOf: ws ? ws.name : '' };
 }
 /**
  * The board (SPEC CE-1 piece 2): { heroes, noHero }. o: { agents (every `agent` message), groups (the `groups` message),
  * accounts (the `accounts` message), status and reach (the PC helper's GET /status), rOf (a => his R today, or null), AH
  * (AgentHelper: tierChip, tierFit, tierOf) }. A hero row per agent slot that is on (the helper says so, or he is connected) or
  * has an account or a group: { agent, name, build, chip, fit, kind ('group', 'account', 'none'), group, accounts, where, sub,
- * mode, position, posTone, r, rText, room, killed, standDown, connected, on }. A NO HERO row per group no agent trades:
+ * mode, position, posTone, r, rText, room, killed, standDown, connected, on, off (seated but Off: the warning), startBuild,
+ * noHeroOn (a group whose only hero is Off) }. A NO HERO row per group no agent trades:
  * { id, name, members, accountType, hero (the default hero's build), heroName }.
  */
 function boardRows(o) {
@@ -1031,7 +1037,10 @@ function boardRows(o) {
       sub: acc.group ? (accounts.length ? 'leads ' + accounts.length + (accounts.length === 1 ? ' account: ' : ' accounts: ') + accounts.join(', ') : 'no accounts') + (g ? ' · ' + (type === 'eval' ? 'Evals' : type === 'funded' ? 'Funded' : 'type not set') : '')
         : acc.none ? 'nothing trades' : (acc.mark || 'one account') + ' · one account',
       mode: MODES.includes(a.mode) ? a.mode : '', modeName: MODE_NAME[a.mode] || '-', position: pos.text, posTone: pos.tone, r: isNum(r) ? r : null, rText: rWords(isNum(r) ? r : null),
-      room: acc.none ? { pct: null, text: 'None: nothing trades', why: '' } : boardRoom(accounts, x.accounts, g), killed: !!a.killed, standDown: str(a.standDown), connected: !!a.connected, on });
+      room: acc.none ? { pct: null, text: 'None: nothing trades', why: '' } : boardRoom(accounts, x.accounts, g), killed: !!a.killed, standDown: str(a.standDown), connected: !!a.connected, on,
+      /* fix round 1: seated (a group or an account) but Off: not started, nothing trades; Start in Shadow with this build (his
+         last, else the group's default hero); on a group the group still has no hero on duty */
+      off: !on && !acc.none ? 'Off: not started (nothing trades)' : '', startBuild: !on && !acc.none ? build || (g && typeof g.hero === 'string' ? g.hero : '') : '', noHeroOn: !on && !!acc.group });
   }
   const taken = new Set(agents.filter(a => a.group && validGroupId(a.group.id)).map(a => a.group.id));
   const noHero = groups.filter(g => !taken.has(g.id)).map(g => {

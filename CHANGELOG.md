@@ -24,6 +24,12 @@ the order path: no new trading restriction, and single-account and group trading
   None and Off) gets the existing `agentAccount {group}` (a LIVE member asked once in the page), then the PC helper's existing
   `POST /on` with the group's default hero, in Shadow (no default hero the helper has: he picks one; no free slot: "add an agent id
   to config.txt", which ChartBridge never writes). The Tron kit's look; nothing on the board moves.
+- Fix round 1: a slot seated on a group (or an account) but Off in the helper (it refused On, or the 10 s wait ran out) says
+  "Off: not started (nothing trades)" on its row, with Start in Shadow (the helper's POST /on with his build, else the group's
+  default hero) and the hint to set None on his desk to free the slot; its group shows No hero on duty meanwhile. Assign hero
+  takes a slot whose kill switch is off first (a killed one only when no other is free, and the line says his kill switch is on;
+  a Kill is never undone) and asks the free slot again at Continue (nothing is sent when it no longer holds). The room's why comes
+  from the tightest seat. The new tests and seeds use made-up SIM-A to SIM-D and Group A, Group B (fake bridge `--board-groups`).
 - Tests: the Mono harness's Type and hero cases (round trip, absent keeps, `-` clears, every refused shape, a 0.6.0 line, fields
   after the hero kept, an unreadable type or hero); test/board.test.js (tier fit, the chips, preselect, the board's rows from fake
   agents and helper rows with and without tiers, Kill all, Assign hero with and without a free slot, groupSave's shapes);

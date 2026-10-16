@@ -709,3 +709,8 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
   .ag-view .ag-bspan { grid-column: span 2; }
   .ag-view .ag-bctl { grid-column: span 2; justify-content: flex-start; }
 }
+/* fix round 1: a seated slot that is Off, and its group's marker */
+.ag-view .ag-bnohero { margin-top: 2px; }
+.ag-view .ag-boff { font-weight: 600; }
+.ag-view .ag-bctl { flex-wrap: wrap; }
+.ag-view .ag-bctl > button { white-space: nowrap; }

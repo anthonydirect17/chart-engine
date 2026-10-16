@@ -139,7 +139,7 @@ try {
   {
     const GP = PORT + 1, out = path.join(root, 'test', 'out');
     fs.mkdirSync(out, { recursive: true });
-    const gb = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(GP), '--v3', '--trading', '--test-controls', '--groups', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
+    const gb = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(GP), '--v3', '--trading', '--test-controls', '--board-groups', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
     await new Promise(r => gb.stdout.once('data', r));
     const helper = await startFakeHelper({ bridgePort: GP, agents: ['demo'], builds: [
       { build: 'sample-build-1', stamp: 'aaaaaaaaaaaa', hero: 'Sample Hero A', here: true, shadowOk: true, tier: 'Good', edge: 0.1 },
@@ -161,7 +161,7 @@ try {
       await p.waitForFunction(() => { const s = document.getElementById('gp-hero'); return s && s.options.length === 4; }, null, { timeout: 10000 });
       const dlg = await p.evaluate(() => ({ type: document.getElementById('gp-accountType').value, hero: document.getElementById('gp-hero').value, opts: [...document.getElementById('gp-hero').options].map(o => o.textContent),
         why: document.getElementById('gp-heroWhy').textContent, fits: (r => r.top >= 0 && r.bottom <= innerHeight)(document.getElementById('wsDialog').getBoundingClientRect()) }));
-      check(dlg.type === 'funded' && dlg.hero === 'sample-build-3', 'the dialog opens on Lucid\'s Type (Funded) and default hero (sample-build-3): ' + JSON.stringify(dlg));
+      check(dlg.type === 'funded' && dlg.hero === 'sample-build-3', 'the dialog opens on Group A\'s Type (Funded) and default hero (sample-build-3): ' + JSON.stringify(dlg));
       check(dlg.opts.join(' | ') === 'None | Sample Hero A (sample-build-1) · Good +0.10R | Sample Hero B (sample-build-2) · Acceptable +0.05R · Acceptable: evals only; funded only when no Good or better hero is on duty | Sample Hero C (sample-build-3) · tier unknown',
         'every hero listed with its tier and its fit for Funded; a build that is not a hero is not: ' + JSON.stringify(dlg.opts));
       check(dlg.why === 'tier unknown' && dlg.fits, 'the chosen hero\'s warning beside it; the dialog fits 1366 x 768');

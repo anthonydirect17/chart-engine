@@ -190,7 +190,8 @@ const V3 = !!flag('v3') && !flag('v1');
 const V3_OFF = flagValue('v3-off').split(',').map(x => x.trim()).filter(Boolean);
 const QUOTE = (V3 && !V3_OFF.includes('quoteRoots')) || (!!flag('quote-roots') && !flag('v1'));
 const AGENTS = V3 ? flagValue('agents').split(',').map(x => x.trim()).filter(Boolean) : [];   // 0.5.0: config.txt `agents`
-const AGENT_ACCOUNTS = AGENTS.length ? [{ name: 'SIM-AG1', sim: true, balance: 50000 }, { name: 'SIM-AG2', sim: true, balance: 50000 }] : [];   // made-up Sim accounts for agents to take
+const AGENT_ACCOUNTS = (AGENTS.length ? [{ name: 'SIM-AG1', sim: true, balance: 50000 }, { name: 'SIM-AG2', sim: true, balance: 50000 }] : [])   // made-up Sim accounts for agents to take
+  .concat(process.argv.includes('--board-groups') ? [{ name: 'SIM-A', sim: true, balance: 50000 }, { name: 'SIM-B', sim: true, balance: 50400 }, { name: 'SIM-C', sim: true, balance: 50000 }, { name: 'SIM-D', sim: false, balance: 51000 }] : []);   // 0.6.1: --board-groups' made-up accounts
 let htfFail = '';                                  // /test/htf?fail=: the error every htf request gets (none when '')
 const TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
@@ -489,8 +490,13 @@ const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { now: () => Date.now(
   graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ', agents: AGENTS, agentAnyTime: !!flag('agent-any-time'), botAccount: flagValue('bot-account') || null,
   /* 0.5.8: --no-groups is a ChartBridge before 0.5.8 (no groups message); --groups seeds two made-up groups (sample data) */
   groups: !flag('no-groups'), groupsSeed: flag('groups') ? [
-    { name: 'Lucid', size: 50000, drawdown: 2000, drawdownType: 'eod', dailyLoss: 1000, target: 3000, lockAt: 50100, members: ['EVAL-A', 'EVAL-B'], highClose: 51240.5, accountType: 'funded', hero: 'sample-build-3' },
-    { name: 'Apex', size: 50000, drawdown: 2500, drawdownType: 'intraday', target: 3000, members: ['FUNDED-C'], accountType: 'eval', hero: 'sample-build-1' }] : [],   // 0.6.1: each group's Type and default hero (made-up builds)
+    { name: 'Lucid', size: 50000, drawdown: 2000, drawdownType: 'eod', dailyLoss: 1000, target: 3000, lockAt: 50100, members: ['EVAL-A', 'EVAL-B'], highClose: 51240.5 },
+    { name: 'Apex', size: 50000, drawdown: 2500, drawdownType: 'intraday', target: 3000, members: ['FUNDED-C'] }]
+    /* 0.6.1: --board-groups seeds two made-up groups with a Type and a default hero (made-up builds) on SIM-A to SIM-D (SIM-D is a
+       made-up LIVE account, for the one LIVE question) */
+    : flag('board-groups') ? [
+    { name: 'Group A', size: 50000, drawdown: 2000, drawdownType: 'eod', dailyLoss: 1000, target: 3000, members: ['SIM-A', 'SIM-B'], accountType: 'funded', hero: 'sample-build-3' },
+    { name: 'Group B', size: 50000, drawdown: 2500, drawdownType: 'intraday', target: 3000, members: ['SIM-C', 'SIM-D'], accountType: 'eval', hero: 'sample-build-1' }] : [],
   agentAccounts: Object.fromEntries(flagValue('agent-accounts').split(',').map(x => x.split(':').map(y => y.trim())).filter(x => x.length === 2 && x[0] && x[1])) })) : new OrderDesk(deskOpts);
 const tapeStats = V3 ? new TapeStats() : null;          // 0.4.0: the tape counters are always on (no switch)
 const BOT_SECRET = crypto.randomBytes(32).toString('hex');   // ChartBridge keeps it in bot-secret.txt; never printed
