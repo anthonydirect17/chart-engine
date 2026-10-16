@@ -2384,6 +2384,14 @@ trades, losses and plan ids from the lines that read ... are kept and the file i
 agent <id> this run: check today's trades in NinjaTrader (the next start goes on with these counts)", an alarm to the pages);
 the file as it was is kept as `agent-<id>-day.txt.unreadable` and the day file is written again at once from what was kept, so
 the next start reads it whole. The alarm no longer says to delete it.
+**A file held open (0.6.3, audit C4).** An agent's rules, account or day file, or `agent-standdowns.txt`, that exists but
+cannot be opened at the start (an IOException: Defender, a backup tool or OneDrive holding it while NinjaTrader starts) is
+"not read yet": no new entries meanwhile ("<file> could not be read yet (<why>): no new entries for agent <id> until it is read
+(ChartBridge tries again; exits always work)"; for the stand-downs, every agent entry on an account in a prop group, as when it
+cannot be read, and a raise made meanwhile is kept and saved once it reads). It is read again on every 500 ms check; after a
+minute the pages get the alarm ("... could not be read for a minute ... ChartBridge keeps trying ...") and it is tried every 5 s
+from then. Once a read succeeds the stand-down is gone by itself (logged, and a `status` `info` to the pages if the alarm went).
+A file that reads but is not understood is not retried (above).
 
 **Connection.** `ws://localhost:<port>/agent/<id>`. Loopback only (as every request), **no** `Origin` header (any `Origin`:
 403), header `X-ChartBridge-Agent: <secret>` (constant-time compare; wrong or missing: 403), 400 for a non-upgrade, 404 for an

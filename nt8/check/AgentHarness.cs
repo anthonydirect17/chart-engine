@@ -998,6 +998,49 @@ public static class AgentHarness
         Check(Last(agentOut, "agentState").Contains("\"standDown\":null") && Logged("agent-manrae-rules.txt could not be read (agent-manrae-rules.txt has a line ChartBridge does not understand): ChartBridge uses its last good copy (agent-manrae-rules.txt.bak)"),
               "0.6.3 C3: a rules file of zeros: its last good copy is used and the pages are told");
         File.Delete(rules); File.Delete(rules + ".bak");
+        // 0.6.3 (audit C4): a file held open at NinjaTrader's start (an IOException) is read again, the alarm only after a minute
+        Func<string, string> faultWas = ChartBridgeAccounts.ReadFault;
+        try
+        {
+            string held = "agent-manrae-day.txt";
+            ChartBridgeAccounts.ReadFault = n => n == held || n == "agent-manrae-account.txt" ? "The process cannot access the file because it is being used by another process" : null;
+            int l0 = LogCount();
+            Restart();
+            Mode("manrae", "auto");
+            A(Good(NewId()));
+            Check(AgentReject().Contains("could not be read yet (The process cannot access the file") && AgentReject().Contains("until it is read (ChartBridge tries again; exits always work)") &&
+                  !Logged("ALERT: agent-manrae-day.txt could not be read"), "0.6.3 C4: a day and account file held open at the start: not read yet, no entries meanwhile, no alarm yet: " + AgentReject());
+            Advance(30000);
+            Check(Last(agentOut, "agentState").Contains("could not be read yet") && !Logged("could not be read for a minute"), "0.6.3 C4: still held after 30 s: tried again, no alarm yet");
+            Advance(31000);
+            Check(Logged("ALERT: agent-manrae-day.txt could not be read for a minute (The process cannot access") && Logged("ChartBridge keeps trying; exits always work"), "0.6.3 C4: held for a minute: now the alarm, and ChartBridge keeps trying");
+            held = null;   // the day file freed; the account file still held
+            Advance(6000);
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains("agent-manrae-account.txt could not be read yet") && Logged("agent-manrae-day.txt could be read now"), "0.6.3 C4: the day file freed: read, the account file is still waited for: " + st);
+            ChartBridgeAccounts.ReadFault = null;
+            Advance(6000);
+            st = Last(agentOut, "agentState");
+            Check(st.Contains("\"standDown\":null") && st.Contains(tradesNow), "0.6.3 C4: both read: the stand-down is gone by itself, today's counts as before: " + st);
+            Mode("manrae", "auto");
+            int r0 = N(agentOut);
+            A(Good(NewId()));
+            Check(!Any(agentOut, r0, "could not be read"), "0.6.3 C4: entries go on once read");
+            // agent-standdowns.txt held at the start: prop entries refused meanwhile, read again on the check
+            string sdf = Path.Combine(Dir, "agent-standdowns.txt");
+            bool hadSd = File.Exists(sdf);
+            if (!hadSd) File.WriteAllText(sdf, "# made-up\n# test\n");
+            ChartBridgeAccounts.ReadFault = n => n == "agent-standdowns.txt" ? "locked" : null;
+            Restart();
+            Check(ChartBridgeAgents.StandDownsBroken() != null && ChartBridgeAgents.StandDownsBroken().Contains("agent-standdowns.txt could not be read yet (locked)") && !Logged("ALERT: agent-standdowns.txt could not be read yet"),
+                  "0.6.3 C4: agent-standdowns.txt held at the start: not read yet (prop entries refused meanwhile), no alarm yet");
+            ChartBridgeAccounts.ReadFault = null;
+            Advance(1000);
+            Check(ChartBridgeAgents.StandDownsBroken() == null && Logged("agent-standdowns.txt could be read now"), "0.6.3 C4: agent-standdowns.txt freed: read on the next check");
+            if (!hadSd) File.Delete(sdf);
+        }
+        finally { ChartBridgeAccounts.ReadFault = faultWas; }
+        Restart();
     }
 
     // ------------------------------------------------------------ account exclusivity, every direction
