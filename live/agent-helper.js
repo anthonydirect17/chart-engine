@@ -325,6 +325,13 @@ function startStep(job, a, now) {
   return { action: '', line: 'Putting him in Shadow first (no new entries)...' };
 }
 
+/** Round 3: the last check before any board On (Assign hero's and Start in Shadow's): '' when his latest `agent` message says
+ *  Shadow, else why nothing is started. The On then passes his own mode and sim, as the desk's On. */
+function onGate(a) {
+  if (!a) return 'ChartBridge no longer tells of him: nothing was started.';
+  return a.mode === 'shadow' ? '' : 'He is in ' + (a.mode === 'auto' ? 'Auto' : a.mode === 'copilot' ? 'Copilot' : 'another mode') + ' now, not Shadow: nothing was started. Every start is Shadow; try again.';
+}
+
 /** The header and details (DECISION v): { name, build } where name is the hello's name (a hero's name, or the build id of
  *  a build that is not a hero) and build the build id and stamp for the details row. */
 function names(a) {
@@ -379,5 +386,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
 });

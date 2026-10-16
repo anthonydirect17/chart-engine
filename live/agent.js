@@ -1051,8 +1051,8 @@ function create(o) {
     startTimer = setTimeout(startTick, 1000);
   }
   async function startOn(j) {
-    const a = agents.get(j.agent);
-    if (!a || a.mode !== 'shadow') { B.starting = false; boardSay('He is not in Shadow now: nothing was started.'); return; }
+    const a = agents.get(j.agent), gate = AH.onGate(a);
+    if (gate) { B.starting = false; boardSay(gate); return; }
     const r = await HC.on(a.agent, j.build, a.mode, a.sim);   // the desk's own On (helperOn): his mode, Shadow here, and his sim
     B.starting = false;
     boardSay(r.reach === 'ok' ? 'Agent ' + j.agent + ' starts with ' + j.build + ', in Shadow.' + (a.killed ? ' His kill switch is on: nothing trades until you release it on his desk (two clicks).' : '')
@@ -1060,8 +1060,9 @@ function create(o) {
     await pollHelper();
   }
   async function assignOn(j) {
-    const a = agents.get(j.agent);
-    const r = await HC.on(j.agent, j.build, 'shadow', !!(a && a.sim === true));
+    const a = agents.get(j.agent), gate = AH.onGate(a);   // round 3: as startOn: only in Shadow, his own mode and sim
+    if (gate) { boardSay('Agent ' + j.agent + ' is on ' + j.groupName + ', but ' + gate.charAt(0).toLowerCase() + gate.slice(1)); return; }
+    const r = await HC.on(a.agent, j.build, a.mode, a.sim);
     boardSay(r.reach === 'ok' ? 'Agent ' + j.agent + ' is on ' + j.groupName + ' with ' + j.build + ', in Shadow. ' + (j.killed || (a && a.killed) ? 'His kill switch is on: nothing trades until you release it on his desk (two clicks).' : 'Auto is one click (and Confirm) on his desk.')
       : 'Agent ' + j.agent + ' is on ' + j.groupName + ', but the PC helper did not start him: ' + (r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach)) + '. Nothing trades: he is Off.');
     await pollHelper();

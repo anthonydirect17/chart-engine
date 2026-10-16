@@ -161,7 +161,7 @@ test('the page: Kill all is the existing agentKill per agent; Assign hero is age
   const js = read('live/agent.js');
   assert.match(js, /function killAll\(\) \{[\s\S]*?for \(const a of list\) if \(sendAgent\(AC\.killMsg\(a\.agent, true\), 'kill'\)\) n\+\+;/);
   assert.match(js, /AC\.accountChange\(a, 'group:' \+ gid, choicesFor\(a\), Object\.assign\(ctxNow\(a\), \{ askedMode: 'shadow' \}\)\)/);
-  assert.match(js, /await HC\.on\(j\.agent, j\.build, 'shadow', /);
+  assert.match(js, /async function assignOn\(j\) \{[\s\S]*?await HC\.on\(a\.agent, j\.build, a\.mode, a\.sim\);/, 'round 3: in Shadow only (onGate), his own mode and sim');
   assert.ok(!/config\.txt'?\)?\s*=/.test(js) && !/writeFile|POST \/config/.test(js), 'the page never writes config.txt');
   const kill = AC.killMsg('demo', true);
   assert.deepEqual(kill, { type: 'agentKill', agent: 'demo', on: true });
@@ -237,7 +237,7 @@ test('fix round 1: a slot seated on a group but Off says so, offers Start in Sha
   const noDef = { type: 'groups', list: groups.list.map(g => Object.assign({}, g, { hero: g.id === 'g1' ? 'not-on-this-pc' : g.hero })) };
   assert.equal(AC.boardRows({ agents: ag, groups: noDef, accounts, status: st, reach: 'ok', AH }).heroes[0].startBuild, 'sample-a', 'a default hero the helper does not offer: his last build');
   const js = read('live/agent.js');
-  assert.match(js, /async function startOn\(j\) \{[\s\S]*?if \(!a \|\| a\.mode !== 'shadow'\) \{[\s\S]*?await HC\.on\(a\.agent, j\.build, a\.mode, a\.sim\);/, 'Start in Shadow is the helper\'s existing POST /on, as the desk\'s own On, only in Shadow');
+  assert.match(js, /async function startOn\(j\) \{[\s\S]*?gate = AH\.onGate\(a\);\s*if \(gate\) \{[^}]*return; \}\s*const r = await HC\.on\(a\.agent, j\.build, a\.mode, a\.sim\);/, 'Start in Shadow is the helper\'s existing POST /on, as the desk\'s own On, only in Shadow');
   assert.match(js, /set None on his desk to free the slot/);
 });
 
@@ -296,4 +296,20 @@ test('fix round 2: Start in Shadow puts an agent left in Auto in Shadow first; P
   assert.ok(fn.indexOf("AC.modeMsg(id, 'shadow')") > 0 && !/HC\.on\(/.test(fn), 'the click sends agentMode shadow (the existing message), never the POST /on itself');
   assert.match(js, /if \(B\.start && m\.agent === B\.start\.agent\) startTick\(\);/, 'each agent message moves the step');
   assert.match(js, /x\.kind === 'startShadow'\) \{ if \(B\.start && B\.start\.cid === m\.cid\) \{ B\.start = null;/, 'a refused agentMode ends it: nothing started');
+});
+
+/* ======================================================================== round 3 */
+test('round 3: Assign hero\'s On matches Start in Shadow: only when his latest agent message says Shadow, with his own mode and sim', () => {
+  assert.equal(AH.onGate({ agent: 'demothree', mode: 'shadow' }), '');
+  assert.equal(AH.onGate({ agent: 'demothree', mode: 'auto' }), 'He is in Auto now, not Shadow: nothing was started. Every start is Shadow; try again.', 'mode changed to Auto before the On: no POST /on');
+  assert.match(AH.onGate({ agent: 'demothree', mode: 'copilot' }), /^He is in Copilot now/);
+  assert.match(AH.onGate(null), /nothing was started/);
+  const js = read('live/agent.js');
+  for (const fn of ['assignOn', 'startOn']) {
+    const body = js.slice(js.indexOf('async function ' + fn + '(j) {'), js.indexOf('await pollHelper();', js.indexOf('async function ' + fn + '(j) {')));
+    const g = body.indexOf('AH.onGate(a)'), ret = body.indexOf('return;', g), on = body.indexOf('HC.on(');
+    assert.ok(g > 0 && ret > g && on > ret, fn + ': the gate and its return come before the only HC.on');
+    assert.match(body, /HC\.on\(a\.agent, j\.build, a\.mode, a\.sim\)/, fn + ': his own mode and sim, never a literal shadow');
+    assert.ok(!/HC\.on\([^)]*'shadow'/.test(body), fn + ': no literal shadow');
+  }
 });
