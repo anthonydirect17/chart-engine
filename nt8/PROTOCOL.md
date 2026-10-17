@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -1969,6 +1969,15 @@ follower's `qty` again; a scale-out reduces it by the same share.)
   **stands down**: nothing new is copied until Anthony presses Re-arm (`copierRearm`). While stood down, exits on the
   leader are still copied to connected followers that hold a copier position, and their stops still follow (closing always
   works). After every ChartBridge start the copier starts stood down (lead's default: a restart is a reason to look).
+  0.6.3 (audit C9, Anthony's decision): **the leader** counts as gone only once it has not been Connected for about 10 s
+  (`LeaderDownMs`), so a blip is not a stand-down ("the leader <name> left Connected (not Connected for 10 s): it re-arms by
+  itself once the leader is Connected again and every follower matches its position", a `status` `warn` and a `copierEvent`
+  `standDown`). Stood down by the leader, the copier **re-arms by itself** once the leader is Connected (and steady) again and
+  every follower that is on holds the leader's side on each market (NQ with MNQ, ES with MES; flat where the leader is flat):
+  a `status` `info` and a `copierEvent` `rearm` "Re-armed by itself: ...". If a follower does not match (or is not
+  Connected) it says so once ("the leader <name> is Connected again but <follower> is long on MNQ where the leader is flat:
+  the copier stays stood down until they match or you press Re-arm") and stays stood down, as before, re-arming by itself only
+  once they match. Followers (3 or more within 10 s) stand it down as before, until Re-arm.
 - **Every copy decision is logged with its timing**: `copier.log` next to `config.txt` and the `copierEvent` message
   (`leaderMs` from the leader's event to the follower's order sent, `fillMs` to its fill).
 - **Saved** in `copier.txt` next to `config.txt` (leader, mode, one line per follower), written by ChartBridge only.
@@ -2124,7 +2133,9 @@ address (as every request), **no** `Origin` header (any `Origin`, so any browser
 The secret is never printed in the Output window, `/diag` or any log; deleting the file makes a new one at the next start.
 
 **Modes** (set from the page, `botMode`; every ChartBridge start begins in `shadow`, auto never survives a restart, lead's
-default):
+default). 0.6.3 (audit C5, Anthony's decision): the bot's kill switch survives a restart: `botKill` on writes `bot-kill.txt`
+(as the agents' `agent-<id>-kill.txt`), off removes it, the bot's `welcome` carries `"killed"`, and the page's `bot` message
+carries `killedAt` (UTC ms, or null):
 
 - `shadow`: the bot's signals are shown and logged; no orders.
 - `copilot`: a fired signal becomes a **proposal** to every signed-in v3 page, with its reason. Anthony accepts or rejects
@@ -2368,6 +2379,51 @@ changes). Files are written whole through a temp file. A file that exists but ca
 stands that agent down (no new entries) until the page fixes it or the file is deleted; a secret file that cannot be read
 refuses every connection for that id. The secret is never printed (Output window, `/diag`, logs, pages).
 
+**Files and power cuts (0.6.3, audit C3).** Every state file ChartBridge writes whole (the agents' rules, account and day,
+`agent-standdowns.txt`, `groups.txt`, `account-marks.txt`, `daily-reset.txt`, `accounts.txt`, the bot's rails, account and day,
+`copier.txt`, `managed.txt`, `planned_brackets.txt`, the merge marker) goes to a temp file opened write-through and flushed to
+the disk (`Flush(true)`) before it replaces the file, and the copy it replaces is kept as `<file>.bak`. An append to a day file
+is written through and flushed the same way. So a power cut leaves the old file or the new one, never a file of zeros. A file
+that reads but is not understood falls back to its `.bak` on its own only for ChartBridge's own records, `daily-reset.txt` and
+`account-marks.txt` (logged and a `status` `warn` to the pages: "<file> could not be read (<why>): ChartBridge uses its last good
+copy (<file>.bak) ...", also to every page that signs in later that run). Review MED 3: the files that hold Anthony's choices
+(an agent's account and rules, `agent-standdowns.txt`, `groups.txt`) never take their `.bak` on their own: the agent stands down
+or the file is unreadable exactly as in 0.6.2 (no new entries; exits always work), and when the `.bak` is understood the alarm
+to the pages says what it holds and how to use it ("agent-<id>-account.txt has a line ChartBridge does not understand (its
+last good copy, agent-<id>-account.txt.bak, names account <name>: choose it again on the Agent tab, or copy
+agent-<id>-account.txt.bak over agent-<id>-account.txt and restart ChartBridge)"; the rules name their roots, window and
+limits; the stand-downs name each build and group; groups.txt names its groups and how many accounts, "to go back to it, copy
+groups.txt.bak over groups.txt"). Choosing the account or setting the rules again on the Agent tab is the page's way back.
+Review MED 5: a replace cut off between its steps can leave **no file with a copy beside it** (`<file>.bak`, or the
+`<file>.tmp` that was about to replace it). `daily-reset.txt` and `account-marks.txt` then use that copy on their own, said so
+("account-marks.txt is missing (a save cut off?): ChartBridge uses account-marks.txt.bak and writes the file again"). An
+agent's day file uses it only when it is today's session (MED 2), said so, and is written again. For the files of Anthony's
+choices a missing file with an understood copy is not "no file": the agent stands down (or groups.txt is unreadable) with the
+alarm "<file> is missing (a save cut off?) but <copy> is there and <what it holds>: <how to use it>, or copy <copy> to <file>
+and restart ChartBridge; to start with no file, delete <file>.bak (and <file>.tmp) and restart ChartBridge; choosing on the
+Agent tab clears this too (it writes <file> again)" (review round 2, LOW E; the stand-downs have no Agent tab choice).
+**A day file** (`agent-<id>-day.txt`) with lines it cannot read (NULs, a half line, a line it does not know) or no session
+line keeps every line that reads, and fills what it lacks from its `.bak` (review MED 2: only a `.bak` of the same session,
+the file's own, or today's when the file's session line is the damaged one; a copy of another session is ignored): today's trades, losses and plan ids are never
+reset. The agent stands down for this run only ("agent-<id>-day.txt has N lines ChartBridge could not read (a power cut?): the
+trades, losses and plan ids from the lines that read ... are kept and the file is written again from them: no new entries for
+agent <id> this run: check today's trades in NinjaTrader (the next start goes on with these counts)", an alarm to the pages);
+the file as it was is kept as `agent-<id>-day.txt.unreadable` and the day file is written again at once from what was kept, so
+the next start reads it whole (review LOW 11: the damaged file is moved out of the way first, so it never becomes the new `.bak`
+and the good `.bak` is kept). The alarm no longer says to delete it.
+**A file held open (0.6.3, audit C4).** An agent's rules, account or day file, or `agent-standdowns.txt`, that exists but
+cannot be opened at the start (an IOException: Defender, a backup tool or OneDrive holding it while NinjaTrader starts) is
+"not read yet": no new entries meanwhile ("<file> could not be read yet (<why>): no new entries for agent <id> until it is read
+(ChartBridge tries again; exits always work)"; for the stand-downs, every agent entry on an account in a prop group, as when it
+cannot be read, and a raise made meanwhile is kept and saved once it reads). It is read again on every 500 ms check; after a
+minute the pages get the alarm ("... could not be read for a minute ... ChartBridge keeps trying ...") and it is tried every 5 s
+from then. Review LOW 6: a day file read after a wait keeps what was booked in memory meanwhile (a trade that ended, a plan id,
+a loss stand-down of that session) and saves it, as the stand-downs keep a raise. Review LOW 7: the account file read after a wait can change the agent's
+account only from the None it had while unread; once Anthony chooses an account on the page meanwhile, the wait ends and the
+file is not read again: his choice stands, and if the file then names another account the pages get an alarm (ChartBridge never
+switches it on its own). Once a read succeeds the stand-down is gone by itself (logged, and a `status` `info` to the pages if the alarm went).
+A file that reads but is not understood is not retried (above).
+
 **Connection.** `ws://localhost:<port>/agent/<id>`. Loopback only (as every request), **no** `Origin` header (any `Origin`:
 403), header `X-ChartBridge-Agent: <secret>` (constant-time compare; wrong or missing: 403), 400 for a non-upgrade, 404 for an
 id not in `agents`, 409 while that id is connected. Ids are independent: two agents connect at once. The first message is
@@ -2377,7 +2433,17 @@ included) and one `order` for each working order of the agent's own on those roo
 `{"type":"snapshot","roots":[...]}` (the same roots), after every `agentHello`. `welcome.instruments` lists only the roots
 ChartBridge serves at that moment (NinjaTrader connected, the contract found). A runner without a complete snapshot is "not
 ready" (no plans; it reconnects after 30 s), which is not a stand-down. Every start
-of ChartBridge puts every agent in `shadow`; `auto` never survives a restart. Heartbeat: any message counts; `beat` at least
+of ChartBridge puts every agent in `shadow`; `auto` never survives a restart. 0.6.3 (audit C5, Anthony's decision): **the kill
+switch does survive a restart.** `agentKill` on writes `agent-<id>-kill.txt` (two `#` lines, then `killed<TAB><UTC ms>`), one
+per agent; `agentKill` off removes it (a release whose file cannot be removed is refused: "agent-<id>-kill.txt could not be
+removed (...): the kill switch stays on"). Only the page's kill message writes or removes it. At every start a file that is
+there (even one that does not read, or one held open: it is read again on every check, as the agents' files, review of C5)
+is the kill switch on: the Output window says "agent <id>: its kill switch is still on (on
+since <time> UTC; kept through the restart) ...", `welcome` carries `"killed": true`, `agentState` carries `killed` true, and the page's `agent`
+rows carry `killed` and `killedAt` (UTC ms, null when not known or not killed), and the Board and the agent's desk show "kill
+switch on since <time>" until Anthony releases it. A kill that cannot be saved still holds in memory and the pages get a
+`status` `warn` that a restart would release it. Going back to 0.6.2 (review LOW 10): 0.6.2 ignores the kill files, so a kill
+released while 0.6.2 runs is still in the file and comes back on when 0.6.3 starts (release it on the page then). Heartbeat: any message counts; `beat` at least
 every 2 s when idle. 5 s of silence (or a disconnect, or no connection for 5 s after a start): ChartBridge closes the socket,
 cancels that agent's unfilled entries, expires its open proposals as `not answered`, keeps any position's stop and target and
 warns the pages. The flat time still runs. Limits: 10 messages a second (`beat` not counted), 64 KB a message. Strict parser
@@ -2613,7 +2679,10 @@ Where the contract left a detail open, the safest simple choice was taken and is
   a closed market (0.5.2 review: the calendar's closures and halts too, see "The market shut") the job sends nothing and
   closes the position at the next open. A position whose trade record began in an earlier session (0.5.2 review: a restart
   after 18:00 with a flatten that did not finish) is flattened at once, whatever the window says ("held a position from an
-  earlier session (its 15:55 flatten did not finish): flattened by its rules"); the closed-market rule still applies. The
+  earlier session (its 15:55 flatten did not finish): flattened by its rules"); the closed-market rule still applies. 0.6.3
+  (audit C10): a flatten at the flat time that starts more than a minute after `flatAt` names the real time: "<id> flattened at
+  16:40 by its rules (its 15:55 flat time passed while ChartBridge was not running or not watching)"; within the minute it says
+  "<id> flattened at 15:55 by its rules", as before. The
   roll keeps such a record as `carried<TAB><tag>` in the day file (a dropped stale record too, at a start), so a roll while
   running followed by a restart still flattens it (the 0.5.2 re-review). Only that position counts: the agent's open trade
   whose tag is carried, or (no trade record yet, after a start) a position under its own legs of a carried tag; a trade of
@@ -2641,6 +2710,18 @@ Where the contract left a detail open, the safest simple choice was taken and is
   trading: the stop and target stay" every 10 s, and it tries again each pass. Only the cancel step waits for it: once its
   cancels were sent, the market close goes whatever the feed shows. A close that ends unfilled in open hours (rejected,
   cancelled) puts the stop back at once (as below), the error says so, and the next try waits 30 s with that stop in place.
+  0.6.3 (audit C7, Anthony's decision): no trade because NinjaTrader's **data feed is down** (a drop of the data connection
+  seen, no trade or Connected since; the same state as `/diag` `gate.feedDown`) is not a halt: with the account Connected and
+  the market open by the calendar (not shut, above) the flatten goes anyway, and the pages get one alarm naming it ("Agent
+  <id>: flattening <root> on <account> (<why>) with NinjaTrader's data feed down: no trade seen for 5 s because the data
+  connection is lost, the account is Connected and the market is open by the calendar, so the close goes without a fresh
+  price; check the fill in NinjaTrader"). Review LOW 9: no trade at all since ChartBridge started listening, 5 s or more after
+  that start, counts as the feed down too (a start with no data ever). With the feed down and the account not Connected nothing can go: NOT FLAT says "no
+  trade seen for 5 s: NinjaTrader's data feed is down and <account> is not Connected, so ChartBridge cannot close it now; act
+  in NinjaTrader now". The feed up and no trade is a real halt: as before. Review MED 4: only the job the agent's rules start
+  at its flat time (from `flatAt`, not an earlier session's position, not outside its hours, not the agent's own `flatten`) goes
+  with the feed down; every other flatten waits for a trade as in 0.6.2, and its NOT FLAT says "NinjaTrader's data feed is down
+  (not the flat time, so it waits for a trade) ...".
   A stop placed again is cancelled only once the market trades again (review E2): with no fresh trade the stop stays and NOT
   FLAT says "market not trading: its stop placed again at <price> stays". When the shut hours arrive after its legs were
   already cancelled (the close not filled), the job places the stop again (lead's default: a position is never left without a
@@ -2689,7 +2770,10 @@ Where the contract left a detail open, the safest simple choice was taken and is
   result and contracts grow by the matched part, and only a true net opens a trade again (review E1). An open trade whose pair
   is flat by both readings, with nothing of the agent working there and no fill NinjaTrader shows ahead of its event, for 5 s,
   is ended and booked from its executions; when those do not net to zero the pages get a warning ("its own executions leave
-  <n> open: some were not seen; check NinjaTrader's fills"). An unowned pair's flatten only ever cancels the agent's own entry and legs (review A-N2). The check is in `PlaceOrderLocked`
+  <n> open: some were not seen; check NinjaTrader's fills"). 0.6.3 (audit C8): none of these (the trade ended on a flat pair,
+  the trade dropped against the other side, the owner lock released when flat) happens while the account is not Connected
+  (lost, reconnecting, or a resync emptying its positions and orders): what it shows then is not what it holds. Once it is
+  Connected again the account must stay Connected for 3 s before they are looked at, and the 5 s (or 3 s) grace starts then. An unowned pair's flatten only ever cancels the agent's own entry and legs (review A-N2). The check is in `PlaceOrderLocked`
   right after the account and the instrument are found (the page, Order Strategies, the bot and every agent) and in the
   copier's `Eligible` (a skip labelled `agent`).
 - **A page order that only reduces** the agent's position passes the owner lock as an exit (lead's default, review A-S5): a
@@ -2818,6 +2902,30 @@ line), so a branch turned on later never starts the day on yesterday's account. 
 sent to a page that signs in during that break; the ones put on None get one `status` `info`. It runs on ChartBridge's 2 s
 poll timer, without a page. The New York date it ran is kept in `daily-reset.txt` next to `config.txt` (two `#` lines, then
 `day<TAB>yyyy-MM-dd`), so a restart in the same break does not run it again and a branch chosen again after the reset stays.
+0.6.3 (audit C1): **a missed break is caught up.** At start (once every branch is loaded) and on every 2 s check, when the day
+in `daily-reset.txt` is older than the New York date of the latest 17:00 ET at or before now (the page's `resetDay` rule), the
+break was missed (ChartBridge or the PC was off from before 17:00 to after 18:00, or over a weekend) and the reset runs then,
+with the same Idle and skip rules; its notes read "Daily reset (17:00 ET, caught up now: ChartBridge was not running at 17:00
+ET on <date>): ...", and a page that signs in before the next 17:00 gets the skipped notes too. No `daily-reset.txt` (or one
+that does not read) is not a missed break: the reset waits for the next break, as before. A day ahead of now (the clock moved
+back) is not due.
+0.6.3 (review HIGH 1): **a branch whose account is not known yet is never put on None**, in the break or caught up: its account
+not listed by NinjaTrader, not Connected, or Connected for less than 30 s (review round 2, MED B: `SteadyMs`, ChartBridge's own
+rule while NinjaTrader reconnects, as positions can arrive after Connected). It keeps its
+account, the pages get one `status` `warn` ("<branch> stays on <account> for now: <why>, so its positions and orders are not
+known; its reset runs once they are"), and it stays pending: `daily-reset.txt` gets a `pending<TAB><key>` line (`bot`,
+`agent:<id>`, `copier`) after the day line (and `missed<TAB>yyyy-MM-dd` for a caught-up run, so a retry after a restart still
+says it was caught up; review round 2, LOW D), and every 2 s check tries that branch again (only that one, so a branch chosen again
+after its reset stays), also after a restart, until it is known; then the usual Idle and skip rules apply and the line goes.
+Review round 2 (MED A): **Anthony's choice always wins over a pending reset**: when the page sets a pending branch's account
+(`agentAccount` with an account, a group, a league seat or None, `botAccount`, `copierSet` with `leader`), its pending line goes
+and `daily-reset.txt` is written again; a retry already running leaves alone a branch that is no longer pending (checked under
+the same lock the page's choice takes). Review round 2 (LOW C): **while a branch's reset is pending it takes no new entries**
+(the 17:00 rule, enforced in the short window after a reconnect): an agent's plan is refused at check 2 and a bot signal is
+refused, both with "waiting for the daily reset: <account> was <branch>'s account before the 17:00 ET reset and is not known
+yet ...", which is also the status (`agentState` and the strip's `standDown`, `bot.standDown`); the copier copies no new leader
+entry. Exits, legs and flattens are never affected, and a working entry is not cancelled for it. A ChartBridge before 0.6.3
+reads only the day line.
 `ChartBridgeBranches.KeepThroughReset` is the one place an exception would go (Anthony is still deciding whether a branch
 running a hero on Sim101 is left alone); for now there is none. The ticket's account is each page's own, so the page applies
 the same rule to it (`LivePrefs.ticketReset`, every 5 s in the window with the ticket, and only once that connection's
@@ -2871,7 +2979,7 @@ always work)"), every page gets that `status` `error` as it signs in, and the pa
 (every PC before 0.5.8): no groups, every account personal with no limits, ChartBridge behaves exactly as 0.5.7.
 `account-marks.txt`: two `#` lines, then
 
-    mark<TAB><account><TAB><peakEod>|-<TAB><peakIntraday>|-<TAB><dayStartBalance>|-<TAB><session><TAB><dayStartAt>|-
+    mark<TAB><account><TAB><peakEod>|-<TAB><peakIntraday>|-<TAB><dayStartBalance>|-<TAB><session><TAB><dayStartAt>|-<TAB><closeSeen>|-<TAB><lastBalance>|-<TAB>flat|open|-<TAB><eodMissed>|-<TAB><intradayMissed>|-
 
 per account seen connected this NinjaTrader session. `peakEod`, the highest end-of-day equity (balance plus open P&L): raised
 in the 17:00 to 18:00 ET break by the same 2 s check that runs the daily reset (whether or not the reset ran a branch), and by
@@ -2884,6 +2992,25 @@ clears them. `dayStartBalance`, the balance at the first reading of each session
 that cannot be read is not rewritten that run: the trailing floors are null with that reason (a static floor still works) and
 `realizedToday` and `pnlToday` fall back to NinjaTrader's. A balance of 0 is taken as NinjaTrader not having given one yet (no
 day start, no high from it). ChartBridge 0.5.7 and older never read either file, so going back is safe (they behave as before).
+0.6.3 (audit C2): each `mark` line has five more fields, `closeSeen|-` (the trading day of the last close seen: in the 17:00
+to 18:00 ET break, a session's first reading in the 17:00 to 18:05 ET window, or caught up), `lastBalance|-` and `flat|open|-`
+(the last reading: its balance and whether the account had no position), `eodMissed|-` and `intradayMissed|-` (the close, or
+the day, a high may have been missed on). **A close or a high ChartBridge did not see never overstates the room.** At the first
+reading after a gap ChartBridge did not watch (its first reading of the account this run, or none for 10 s, a PC asleep or the
+account not connected): when the account was flat at both ends and the balance is the same, nothing traded, so every close it
+missed was that balance (the end-of-day high is raised to it, if higher) and no high was missed. Otherwise a missed close (the
+latest trading day whose close, 17:00 or the halt of an NYSE holiday or early close, fell after `closeSeen`) is kept as
+`eodMissed`, and any such gap (a position open at either end, or the balance changed) as `intradayMissed`; the pages get a
+`status` `warn` naming the account, only for its group's drawdown type (review LOW 8: an EOD group's account never hears of
+intraday highs). For a group of that drawdown type `floor` is then null, and so is `roomFloor` unless NinjaTrader reports its
+own trailing room (then that figure, `src` `ninjatrader`; review LOW 8), with the reason
+("ChartBridge was not running at the close of <date>: put the account in <group> again and give the highest close from the
+firm's dashboard", or the intraday one), in `accounts` and in every agent's `accountState`, until the account is put in its
+group again (leave, then join with `highClose`), which clears both. A reading in the close window is that day's close. A line
+of 6 or 7 fields (0.6.2 and older) reads as it did, with no gap check at its first reading, and is written back with 12; a
+ChartBridge 0.5.8 to 0.6.2 reads a 12 field line as not a mark line, so after going back (review LOW 10) its trailing floors
+and its computed `realizedToday` and `pnlToday` are not given, with that reason (never a guess), and it never rewrites the file:
+that lasts until `account-marks.txt` is deleted.
 
 **The numbers** (per account; `equity` = balance + unrealized):
 

@@ -276,6 +276,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (list.Count == 0) return;
             ResetFiles();
             RefreshFiles();
+            lock (SdLock) { sdIoSince = double.NaN; sdIoAlarmed = false; }
             LoadStandDowns();   // 0.6.2: the group stand-downs, before any agent can enter
             foreach (ChartBridgeAgent a in list) a.Start();
             RecoverTags();
@@ -379,6 +380,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 RefreshFiles();
                 double now = Now();
+                try { RetryStandDowns(now); } catch (Exception ex) { ChartBridgeServer.Log("agent stand-downs retry error: " + ex.Message); }   // 0.6.3 (audit C4)
                 if (now - lastTagScan >= 2000) { lastTagScan = now; RecoverTags(); }
                 foreach (ChartBridgeAgent a in All())
                 {
@@ -613,29 +615,58 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal static void LoadStandDowns()
         {
             List<GroupStandDown> list = new List<GroupStandDown>();
-            string broken = null;
+            string broken = null, io = null;
+            Func<string[], string> parse = all =>
+            {
+                list = new List<GroupStandDown>();
+                foreach (string raw in all)
+                {
+                    string line = raw.TrimEnd('\r');
+                    if (line.Trim().Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+                    GroupStandDown s = ReadSdLine(line);
+                    if (s == null) return StandDownsFileName + " has a line ChartBridge does not understand";
+                    if (list.Any(x => x.Build == s.Build && x.Group == s.Group)) return StandDownsFileName + " names build " + s.Build + " on group " + s.Group + " twice";
+                    list.Add(s);
+                }
+                return null;
+            };
             try
             {
-                if (File.Exists(SdPath))
-                    foreach (string raw in File.ReadAllLines(SdPath))
-                    {
-                        string line = raw.TrimEnd('\r');
-                        if (line.Trim().Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
-                        GroupStandDown s = ReadSdLine(line);
-                        if (s == null) { broken = StandDownsFileName + " has a line ChartBridge does not understand"; break; }
-                        if (list.Any(x => x.Build == s.Build && x.Group == s.Group)) { broken = StandDownsFileName + " names build " + s.Build + " on group " + s.Group + " twice"; break; }
-                        list.Add(s);
-                    }
+                Func<string> held = () => list.Count == 0 ? "holds no stand-down" : "holds " + list.Count + " stand-down" + (list.Count == 1 ? "" : "s") + " (" + string.Join("; ", list.Select(x => "build " + x.Build + " on group " + (ChartBridgeGroups.NameOf(x.Group) ?? x.Group))) + ")";
+                if (File.Exists(SdPath)) broken = ChartBridgeAgent.ParseOrBackup(SdPath, StandDownsFileName, parse, held, null);
+                else broken = ChartBridgeAgent.MissingWithCopy(SdPath, StandDownsFileName, parse, held, null);   // 0.6.3 (review MED 5)
             }
+            catch (IOException ex) { io = StandDownsFileName + " could not be read yet (" + ex.Message + "): every new agent entry on an account in a prop group is refused until it is read (accounts in no group keep trading; exits always work; ChartBridge tries again)"; }
             catch (Exception ex) { broken = StandDownsFileName + " could not be read (" + ex.Message + ")"; }
+            if (io != null)
+            {
+                // 0.6.3 (audit C4): not read yet: refused as unreadable meanwhile (raises kept in memory), read again on the 500 ms
+                // check, the alarm after IoRetryMs
+                bool first;
+                lock (SdLock)
+                {
+                    first = double.IsNaN(sdIoSince);
+                    if (first) { sdIoSince = Now(); sdList = new List<GroupStandDown>(); sdRepeatSaid.Clear(); sdCapAlarmed.Clear(); }
+                    sdBroken = io;
+                }
+                if (first) { ChartBridgeServer.Log(io); try { ChartBridgeV3.SendToV3Traders(StandDownsMessage()); } catch (Exception) { } }
+                return;
+            }
             if (broken != null)
             {
                 broken += ": every new agent entry on an account in a prop group is refused until it can be read (accounts in no group keep trading; exits always work); fix or delete the file, then recompile";
-                lock (SdLock) { sdList = new List<GroupStandDown>(); sdBroken = broken; sdRepeatSaid.Clear(); sdCapAlarmed.Clear(); }
+                lock (SdLock) { sdList = new List<GroupStandDown>(); sdBroken = broken; sdRepeatSaid.Clear(); sdCapAlarmed.Clear(); sdIoSince = double.NaN; }
                 ChartBridgeOrders.AgentAlarm(broken);   // logged and to every signed-in page; a page that signs in later gets agentStandDowns.error
                 try { ChartBridgeV3.SendToV3Traders(StandDownsMessage()); } catch (Exception) { }
                 return;
             }
+            // 0.6.3 (audit C4): read after a wait: a stand-down raised meanwhile (memory only) is kept and saved
+            List<GroupStandDown> raised;
+            bool waited;
+            lock (SdLock) { waited = !double.IsNaN(sdIoSince); raised = waited ? sdList.Where(m => !list.Any(x => x.Build == m.Build && x.Group == m.Group)).ToList() : new List<GroupStandDown>(); sdIoSince = double.NaN; sdIoAlarmed = false; }
+            list.AddRange(raised);
+            if (raised.Count > 0) lock (SdFileLock) { string err = WriteStandDowns(list); if (err != null) ChartBridgeServer.Log(StandDownsFileName + " could not be saved (" + err + ")"); }
+            if (waited) ChartBridgeServer.Log(StandDownsFileName + " could be read now");
             // fix round 1: only when groups.txt exists and was read (a missing groups.txt keeps every line, and the file is not rewritten)
             bool groupsRead = File.Exists(Path.Combine(ChartBridgeConfig.Folder, "groups.txt")) && !ChartBridgeGroups.Unreadable();
             List<GroupStandDown> gone = !groupsRead ? new List<GroupStandDown>() : list.Where(x => ChartBridgeGroups.NameOf(x.Group) == null).ToList();
@@ -648,6 +679,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (list.Count > 0) ChartBridgeServer.Log(StandDownsFileName + ": " + list.Count + " stand-down" + (list.Count == 1 ? "" : "s") + " in force (" + string.Join("; ", list.Select(x => "build " + x.Build + " on group " + x.Group)) + ")");
             try { ChartBridgeV3.SendToV3Traders(StandDownsMessage()); } catch (Exception) { }   // pages signed in already (a page that signs in later gets it in AfterAuth)
+        }
+
+        private static double sdIoSince = double.NaN, sdIoLastTry;
+        private static bool sdIoAlarmed;
+        // 0.6.3 (audit C4): the 500 ms check reads a file that could not be opened again (every 5 s after IoRetryMs, with the alarm).
+        private static void RetryStandDowns(double now)
+        {
+            double since;
+            lock (SdLock) since = sdIoSince;
+            if (double.IsNaN(since)) return;
+            bool alarmed;
+            lock (SdLock) alarmed = sdIoAlarmed;
+            if (alarmed && now - sdIoLastTry < 5000) return;
+            sdIoLastTry = now;
+            LoadStandDowns();
+            string alarm = null;
+            lock (SdLock) if (!double.IsNaN(sdIoSince) && now - sdIoSince >= ChartBridgeAgent.IoRetryMs && !sdIoAlarmed) { sdIoAlarmed = true; alarm = sdBroken; }
+            if (alarm != null) ChartBridgeOrders.AgentAlarm(alarm.Replace(" could not be read yet (", " could not be read for a minute (").Replace("ChartBridge tries again)", "ChartBridge keeps trying)"));
         }
 
         // The file could not be read at start, or null.
@@ -1054,6 +1103,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
         // From flatAt up to the session's end (18:00): the flat time itself (else the agent held a position outside its hours).
         public static bool AtFlatTime(Rules r, DateTime et) { return SessionSec(et) >= Sm(r.FlatAt) * 60; }
+        // 0.6.3 (audit C10): a flatten that starts more than a minute after flatAt names the real time and why.
+        public static double LateFlatSec = 60;
+        private string FlatWords(Rules r, DateTime et)
+        {
+            if (SessionSec(et) - Sm(r.FlatAt) * 60 <= LateFlatSec) return Id + " flattened at " + Hm(r.FlatAt) + " by its rules";
+            return Id + " flattened at " + et.ToString("HH:mm", CultureInfo.InvariantCulture) + " by its rules (its " + Hm(r.FlatAt) + " flat time passed while ChartBridge was not running or not watching)";
+        }
         public static string WindowText(Rules r) { return Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + " New York time"; }
 
         // Why a rule set is not allowed, or null (the page's agentRules and the rules file share it). 0.5.2: in session order,
@@ -1119,6 +1175,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             public string Tag;             // the tag of that stop
             public Order ReStop;           // the stop placed again
             public bool ReStopTried;       // tried in this shut spell (once)
+            public bool FeedSaid;          // 0.6.3 (audit C7): the flatten without a fresh price (the data feed down) was said once
+            public bool AtFlatTime;        // 0.6.3 (review MED 4): started by its rules at the flat time: the only job the feed-down close is for
             public bool CloseHandled;      // its last close's end was looked at (a close that did not fill: the stop placed again; review D3)
             public double HoldUntilMs;     // after a close that could not go: the stop stays, the next try waits until then
             public bool GateAgain;         // a stop was placed again: its cancel waits for a trading market too (review E2)
@@ -1237,7 +1295,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (legsWork && (p1 != 0 || p2 != 0)) return true;   // its own stop or target protects a position there (after a restart too)
                 if (!stick) return false;
                 bool unnoted = ChartBridgeOrders.AgentUnnotedFill(a, inst, Now()) != null;   // a fill NinjaTrader shows whose event is not through yet
-                if (p1 == 0 && p2 == 0 && !mineWorks && !unnoted) { lock (Sync) { if (!(openTag != null && openRoot == root)) Sticky.Remove(root); } return false; }   // flat by both readings, nothing of it working: the lock clears
+                if (p1 == 0 && p2 == 0 && !mineWorks && !unnoted && SettledUp(a, Now())) { lock (Sync) { if (!(openTag != null && openRoot == root)) Sticky.Remove(root); } return false; }   // flat by both readings, nothing of it working: the lock clears (0.6.3 C8: only while Connected and settled)
                 return true;
             }
 
@@ -1415,6 +1473,23 @@ namespace NinjaTrader.NinjaScript.AddOns
             // shows ahead of its event, for 5 s: ended, booked from its own executions; a warning when those do not net to zero.
             private double ghostSince = -1;
 
+            // 0.6.3 (audit C8): positions and orders read while the account is not Connected (lost, reconnecting, resyncing) are not
+            // the account's: nothing is ended, dropped or released then, and the 5 s grace starts again only once it has been
+            // Connected for ReconnectSettleMs. upSince: when it was seen Connected again (0: never seen down; -1: not Connected now).
+            public static double ReconnectSettleMs = 3000;
+            private double upSince;
+            private readonly object UpLock = new object();
+            internal bool SettledUp(Account a, double now)
+            {
+                bool up = a != null && ChartBridgeAccounts.ConnectionText(a) == "connected";
+                lock (UpLock)
+                {
+                    if (!up) { upSince = -1; ghostSince = -1; return false; }
+                    if (upSince < 0) { upSince = now; ghostSince = -1; }
+                    return upSince == 0 || now - upSince >= ReconnectSettleMs;
+                }
+            }
+
             public void EndGhostTrade(double now)
             {
                 string key, root;
@@ -1424,6 +1499,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (li == null) li = ChartBridgeServer.InstrumentFor(root);
                 Account a = FindAccount(Account);
                 if (a == null || li == null) { ghostSince = -1; return; }
+                if (!SettledUp(a, now)) return;   // 0.6.3 (audit C8): not while it is not Connected, nor in the first seconds back
                 int p1 = ChartBridgeOrders.AgentListed(a, li), p2 = ChartBridgeOrders.AgentEffective(a, li);
                 bool busy = p1 != 0 || p2 != 0 || ChartBridgeOrders.AgentMayFill(a, li).Any(o => IsMine(o)) || ChartBridgeOrders.AgentUnnotedFill(a, li, now) != null;
                 if (busy) { ghostSince = -1; return; }
@@ -1455,6 +1531,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public void DropLedgerAgainst(List<string> roots)
             {
                 Account a = FindAccount(Account);
+                if (!SettledUp(a, Now())) return;   // 0.6.3 (audit C8): what an account not Connected shows is not what it holds
                 foreach (string root in roots)
                 {
                     string why = LedgerAgainst(root, a, true);
@@ -1573,7 +1650,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // NinjaTrader confirms each one done, every fill there has come through, and both position readings agree, what it holds is
             // closed at market ("CB#<tag> ag:<id> flat"). Readings still apart after 3 s: the smaller is closed (never more than either
             // shows). Not flat 10 s after the start: a status error to the pages, every 10 s until flat. Returns how many roots started.
-            public int StartFlatten(string why, bool byRules)
+            public int StartFlatten(string why, bool byRules, bool atFlatTime)
             {
                 Account a = FindAccount(Account);   // null: not listed by NinjaTrader; a pair it still owns gets its job (and its errors)
                 string acctName = Account;
@@ -1596,7 +1673,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         Order near = stops.Count == 0 ? null : stops.Any(o => o.OrderAction == OrderAction.Sell) ? stops.OrderByDescending(o => o.StopPrice).First() : stops.OrderBy(o => o.StopPrice).First();
                         lock (Sync)
                         {
-                            Flats[key] = new FlatJob { Root = root, Inst = inst, Why = why, StartMs = Now(), Owned = owned, StartQty = startQty, LegQty = legQty, WasMissing = a == null,
+                            Flats[key] = new FlatJob { Root = root, Inst = inst, Why = why, StartMs = Now(), Owned = owned, StartQty = startQty, LegQty = legQty, WasMissing = a == null, AtFlatTime = byRules && atFlatTime,
                                                        StopPx = near != null ? near.StopPrice : 0, Tag = near != null ? ChartBridgeAgents.TagOf(near.Name) : null };
                             if (owned) Sticky.Add(root);   // its pair until flat: cancelling its own legs never makes it someone else's
                         }
@@ -1724,14 +1801,32 @@ namespace NinjaTrader.NinjaScript.AddOns
                     double lastPx;
                     if (j.Owned && (p1 != 0 || p2 != 0) && (!j.CancelsSent || j.GateAgain) && !ChartBridgeOrders.AgentFreshLast(j.Root, ChartBridgeAgents.TradingFreshMs, out lastPx))
                     {
-                        if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)
+                        // 0.6.3 (audit C7, Anthony's decision): no trade seen because the data feed is down, the account Connected and
+                        // the market open by the calendar (not shut, above): the flatten goes anyway, saying so. The feed up and no
+                        // trade is a real halt: as before, the stop and target stay and ChartBridge tries again when it trades.
+                        bool feedDown = ChartBridgeServer.FeedDown, acctUp = ChartBridgeAccounts.ConnectionText(a) == "connected";
+                        if (feedDown && acctUp && j.AtFlatTime)   // 0.6.3 (review MED 4): the flat time's job only; any other flatten waits for a trade, as in 0.6.2
                         {
-                            j.LastErrorMs = now;
-                            string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
-                                          " still shows " + p1 + "; market not trading: " + (j.GateAgain ? "its stop placed again at " + CbJson.Num(j.StopPx) + " stays; ChartBridge tries again when it trades" : "the stop and target stay; ChartBridge tries again when it trades");
-                            ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
+                            if (!j.FeedSaid)
+                            {
+                                j.FeedSaid = true;
+                                string text = "Agent " + Id + ": flattening " + j.Root + " on " + a.Name + " (" + j.Why + ") with NinjaTrader's data feed down: no trade seen for 5 s because the data connection is lost, the account is Connected and the market is open by the calendar, so the close goes without a fresh price; check the fill in NinjaTrader";
+                                ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
+                            }
                         }
-                        continue;
+                        else
+                        {
+                            if (now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)
+                            {
+                                j.LastErrorMs = now;
+                                string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
+                                              " still shows " + p1 + "; " + (feedDown && !acctUp ? "no trade seen for 5 s: NinjaTrader's data feed is down and " + a.Name + " is not Connected, so ChartBridge cannot close it now; act in NinjaTrader now"
+                                              : feedDown ? "no trade seen for 5 s: NinjaTrader's data feed is down (not the flat time, so it waits for a trade): the stop and target stay; ChartBridge tries again when it trades; act in NinjaTrader if you need to"
+                                              : "market not trading: " + (j.GateAgain ? "its stop placed again at " + CbJson.Num(j.StopPx) + " stays; ChartBridge tries again when it trades" : "the stop and target stay; ChartBridge tries again when it trades"));
+                                ChartBridgeOrders.AgentAlarm(text); AgentLog(text);
+                            }
+                            continue;
+                        }
                     }
                     string exitWhy;
                     bool up = ChartBridgeAccounts.ExitAllowed(a, out exitWhy);
@@ -1880,6 +1975,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private bool chosen;   // an account was chosen on the page (agent-<id>-account.txt); false on None
         private bool league;   // 0.6.2: a league seat (agent-<id>-account.txt league<TAB><account>): one account, entries only while it is Sim
         private string rulesBroken, accountBroken, dayBroken, lossStandDown;
+        private bool dayRepaired;   // 0.6.3 (audit C3): dayBroken is a damaged file kept from its lines (saves go on)
         private string secret, secretState = "missing";
         private string session;
         // 0.5.2 review: the tags of trade records from an earlier session (dropped at a start, or carried over at the roll): a position
@@ -2044,6 +2140,21 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string AccountFile { get { return Path.Combine(Folder, "agent-" + Id + "-account.txt"); } }
         private string RulesFile { get { return Path.Combine(Folder, "agent-" + Id + "-rules.txt"); } }
         private string DayFile { get { return Path.Combine(Folder, "agent-" + Id + "-day.txt"); } }
+        private string KillFile { get { return Path.Combine(Folder, "agent-" + Id + "-kill.txt"); } }   // 0.6.3 (audit C5)
+        private double killedAt;   // the UTC ms the kill switch went on (0: not known), while killed
+        public bool Killed { get { lock (Sync) return killed; } }
+        private bool killReadPending;   // review (C5): the kill file was held open at the start: on meanwhile, read again on the check
+        private void RetryKill()
+        {
+            bool pending;
+            lock (Sync) pending = killReadPending && killed;
+            if (!pending) return;
+            double? k = ChartBridgeFiles.KillSince(KillFile);
+            if (k == -1) return;
+            lock (Sync) { killReadPending = false; if (k.HasValue) killedAt = k.Value; }
+            Log("agent " + Id + ": agent-" + Id + "-kill.txt read now: " + (k.HasValue ? "the kill switch stays on (" + KilledWords(k.Value) + ")" : "it is gone, but the kill switch stays on until it is released on the page"));
+            Notify();
+        }
         private string LogFile { get { return Path.Combine(Folder, "agent-" + Id + ".log"); } }
 
         private static double Now() { return ChartBridgeAgents.Now(); }
@@ -2057,8 +2168,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             LoadAccount();
             RefreshSeats(false);   // 0.6.0: its seats (a group's members, or its one account)
             LoadDay();
-            lock (Sync) { noClientSinceMs = Now(); startedMs = noClientSinceMs; mode = "shadow"; }
-            Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + AccountWords() + (SimNow() ? " (Sim)" : " (LIVE)") + (League ? ", a league seat" : "") + ", starting in shadow)");
+            double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): a kill switch survives a restart until the page releases it
+            lock (Sync) { noClientSinceMs = Now(); startedMs = noClientSinceMs; mode = "shadow"; killed = kill.HasValue; killedAt = Math.Max(0, kill ?? 0); killReadPending = kill == -1; }
+            if (kill == -1) Log("agent " + Id + ": agent-" + Id + "-kill.txt is there but could not be read yet (held open): the kill switch is on; ChartBridge reads it again");
+            if (kill.HasValue) Log("agent " + Id + ": its kill switch is still on (" + KilledWords(kill.Value) + "; kept through the restart): every agent order is refused until it is released on the page");
+            Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + AccountWords() + " (" + AcctMark() + ")" + (League ? ", a league seat" : "") + ", starting in shadow)");
         }
 
         public void Stop()
@@ -2109,6 +2223,118 @@ namespace NinjaTrader.NinjaScript.AddOns
             return diff == 0;
         }
 
+        // 0.6.3 (audit C3, review MED 3): a file of Anthony's choices (an agent's account and rules, agent-standdowns.txt) read but not
+        // understood is never replaced by its last good copy (.bak) on its own: the main file's problem is returned as before (the
+        // caller stands the agent down), and when the .bak is understood the words say what it holds and how to use it (describe
+        // reads the parse's state for the .bak; parse is run again on the main file after, so the state is the main file's). Null
+        // when the main file parsed. An IOException is thrown to the caller as before.
+        internal static string ParseOrBackup(string path, string name, Func<string[], string> parse, Func<string> describe, string use)
+        {
+            string[] lines = ReadAll(path);
+            string why = parse(lines);
+            if (why == null) return null;
+            string[] b = ChartBridgeFiles.ReadBackup(path);
+            string held = b != null && parse(b) == null ? describe() : null;
+            why = parse(lines);
+            return held == null ? why : why + " (its last good copy, " + name + ".bak, " + held + ": " + (use != null ? use + ", or copy " : "to use it, copy ") + name + ".bak over " + name + " and restart ChartBridge)";
+        }
+
+        // 0.6.3 (review MED 5): the file is missing but a copy left by a cut-off replace (.bak, .tmp) is understood: the same stand-down
+        // as a file not understood (MED 3), with what the copy holds and how to use it; null when there is no such copy (no file, as
+        // before). parse is run on an empty file after, so the state is "no file".
+        internal static string MissingWithCopy(string path, string name, Func<string[], string> parse, Func<string> describe, string use)
+        {
+            string found = null;
+            bool tried = false;
+            foreach (string alt in ChartBridgeFiles.LeftOvers(path))
+            {
+                string[] b = ChartBridgeFiles.ReadAny(alt);
+                if (b == null) continue;
+                tried = true;
+                if (parse(b) != null) continue;
+                string f = Path.GetFileName(alt);
+                found = name + " is missing (a save cut off?) but " + f + " is there and " + describe() + ": " + (use != null ? use + ", or copy " : "to use it, copy ") + f + " to " + name + " and restart ChartBridge; to start with no file, delete " + name + ".bak (and " + name + ".tmp) and restart ChartBridge" +
+                        (use != null ? "; choosing on the Agent tab clears this too (it writes " + name + " again)" : "");   // review round 2 (LOW E): the exact files
+                break;
+            }
+            if (tried) parse(new string[0]);
+            return found;
+        }
+
+        // A file's lines; the harness's ChartBridgeAccounts.ReadFault fails a read by file name (an IOException, as a sharing lock).
+        internal static string[] ReadAll(string path)
+        {
+            Func<string, string> fault = ChartBridgeAccounts.ReadFault;
+            string why = fault != null ? fault(Path.GetFileName(path)) : null;
+            if (why != null) throw new IOException(why);
+            return File.ReadAllLines(path);
+        }
+
+        // 0.6.3 (audit C4): a file that exists but cannot be opened (an IOException: Defender, a backup tool or OneDrive holding it at
+        // NinjaTrader's start) is "not read yet": no new entries for the agent meanwhile, read again on every 500 ms check, the alarm
+        // only after IoRetryMs (then tried every 5 s), and the stand-down gone once a read succeeds. kind: rules, account or day.
+        public static double IoRetryMs = 60000;
+        private readonly Dictionary<string, double> ioSince = new Dictionary<string, double>();
+        private readonly HashSet<string> ioAlarmed = new HashSet<string>();
+        private double ioLastTry;
+        private void IoState(string kind, bool failed, string why)
+        {
+            bool was;
+            lock (Sync)
+            {
+                was = ioSince.ContainsKey(kind);
+                if (failed) { if (!was) ioSince[kind] = Now(); return; }
+                ioSince.Remove(kind);
+                if (ioAlarmed.Remove(kind)) why = "read";
+            }
+            if (was) { Log("agent-" + Id + "-" + kind + ".txt could be read now: its stand-down is gone"); if (why == "read") ChartBridgeServer.SendToTraders("{\"type\":\"status\",\"level\":\"info\",\"text\":" + CbJson.Str("agent-" + Id + "-" + kind + ".txt could be read now: agent " + Id + " is no longer stood down for it") + "}"); }
+        }
+        private bool IoPending(string kind) { lock (Sync) return ioSince.ContainsKey(kind); }
+        private static string IoWords(string file, string id, string msg) { return file + " could not be read yet (" + msg + "): no new entries for agent " + id + " until it is read (ChartBridge tries again; exits always work)"; }
+        private void RetryIo(double now)
+        {
+            List<string> kinds;
+            lock (Sync)
+            {
+                if (ioSince.Count == 0) return;
+                bool late = ioSince.Keys.All(k => ioAlarmed.Contains(k));   // alarmed: every 5 s from then
+                if (late && now - ioLastTry < 5000) return;
+                ioLastTry = now;
+                kinds = ioSince.Keys.ToList();
+            }
+            foreach (string k in kinds)
+            {
+                if (k == "rules") LoadRules();
+                else if (k == "account")
+                {
+                    // 0.6.3 (review LOW 7): an account the page chose meanwhile is never switched by a later read: the wait ends there
+                    bool picked;
+                    lock (Sync) picked = chosen && accountBroken == null;
+                    if (picked)
+                    {
+                        IoState("account", false, null);
+                        Log("agent-" + Id + "-account.txt: the account chosen on the page meanwhile (" + AccountWords() + ") stands; the file is not read again");
+                        string line, text = null;
+                        lock (Sync) line = groupId != null ? "group\t" + groupId : (league ? "league\t" : "account\t") + account;
+                        try { text = string.Join("\n", ReadAll(AccountFile).Select(x => x.Trim())); } catch (Exception) { }
+                        if (text != null && !text.Split('\n').Contains(line))
+                            ChartBridgeOrders.AgentAlarm("agent " + Id + ": agent-" + Id + "-account.txt could be read now and does not name " + AccountWords() + ", which was chosen on the page while it was held: " + AccountWords() + " stands (ChartBridge never switches it on its own); choose again on the Agent tab if you meant another");
+                        continue;
+                    }
+                    LoadAccount(); RefreshSeats(false);
+                }
+                else LoadDay();
+            }
+            List<string> alarm = new List<string>();
+            lock (Sync)
+            {
+                foreach (KeyValuePair<string, double> kv in ioSince)
+                    if (now - kv.Value >= IoRetryMs && ioAlarmed.Add(kv.Key)) alarm.Add(kv.Key == "rules" ? rulesBroken : kv.Key == "account" ? accountBroken : dayBroken);
+            }
+            foreach (string w in alarm) if (w != null) ChartBridgeOrders.AgentAlarm(w.Replace(" could not be read yet (", " could not be read for a minute (").Replace("(ChartBridge tries again;", "(ChartBridge keeps trying;"));
+            Notify();
+        }
+
         // ---------------------------------------------------------- the rules file (agent-<id>-rules.txt)
         // Two # lines, then key<TAB>value lines; no file: the defaults. A file that cannot be understood (a line it does not know,
         // a key twice, a value out of range) is never written over and stands the agent down until the page sets the rules or the
@@ -2116,19 +2342,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         private void LoadRules()
         {
             Rules r = new Rules();
-            string broken = null;
-            try
+            string broken = null, io = null;
+            Func<string[], string> parse = all =>
             {
-                if (File.Exists(RulesFile))
-                {
+                    string broken1 = null;
+                    r = new Rules();
                     HashSet<string> seen = new HashSet<string>();
                     Dictionary<string, int> qty = new Dictionary<string, int>();
-                    foreach (string raw in File.ReadAllLines(RulesFile))
+                    foreach (string raw in all)
                     {
                         string line = raw.Trim();
                         if (line.Length == 0 || line.StartsWith("#")) continue;
                         string[] p = line.Split('\t');
-                        if (p.Length != 2 || !seen.Add(p[0])) { broken = "agent-" + Id + "-rules.txt has a line ChartBridge does not understand"; break; }
+                        if (p.Length != 2 || !seen.Add(p[0])) { broken1 = "agent-" + Id + "-rules.txt has a line ChartBridge does not understand"; break; }
                         string k = p[0], v = p[1].Trim();
                         int n;
                         if (k == "roots") r.Roots = v.Split(',').Select(x => x.Trim().ToUpperInvariant()).Where(x => x.Length > 0).ToList();
@@ -2140,23 +2366,32 @@ namespace NinjaTrader.NinjaScript.AddOns
                         else if ((k == "maxTrades" || k == "maxLosses") && (v == "none" || int.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out n)))
                         {
                             int val = v == "none" ? 0 : int.Parse(v, CultureInfo.InvariantCulture);
-                            if (v != "none" && val < 1) { broken = "agent-" + Id + "-rules.txt: " + k + " must be none or a whole number of 1 or more"; break; }
+                            if (v != "none" && val < 1) { broken1 = "agent-" + Id + "-rules.txt: " + k + " must be none or a whole number of 1 or more"; break; }
                             if (k == "maxTrades") r.MaxTrades = val; else r.MaxLosses = val;
                         }
-                        else { broken = "agent-" + Id + "-rules.txt has a line ChartBridge does not understand"; break; }
+                        else { broken1 = "agent-" + Id + "-rules.txt has a line ChartBridge does not understand"; break; }
                     }
-                    if (broken == null)
+                    if (broken1 == null)
                     {
                         r.MaxQty = new Dictionary<string, int>();
                         foreach (string root in r.Roots) r.MaxQty[root] = qty.ContainsKey(root) ? qty[root] : DefaultQty(root);
                         string bad = RulesProblem(r);
-                        if (bad != null) broken = "agent-" + Id + "-rules.txt: " + bad;
+                        if (bad != null) broken1 = "agent-" + Id + "-rules.txt: " + bad;
                     }
-                }
+                    return broken1;
+            };
+            try
+            {
+                Func<string> held = () => "has roots " + string.Join(", ", r.Roots) + ", entries " + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + ", flat at " + Hm(r.FlatAt) + ", maxTrades " + (r.MaxTrades > 0 ? r.MaxTrades.ToString(CultureInfo.InvariantCulture) : "none") + ", maxLosses " + (r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "none");
+                if (File.Exists(RulesFile)) broken = ParseOrBackup(RulesFile, "agent-" + Id + "-rules.txt", parse, held, "set those rules again on the Agent tab");
+                else broken = MissingWithCopy(RulesFile, "agent-" + Id + "-rules.txt", parse, held, "set those rules again on the Agent tab");   // 0.6.3 (review MED 5)
             }
+            catch (IOException ex) { io = IoWords("agent-" + Id + "-rules.txt", Id, ex.Message); }
             catch (Exception ex) { broken = "agent-" + Id + "-rules.txt could not be read (" + ex.Message + ")"; }
-            if (broken != null) { broken += ": no new entries for agent " + Id + " until its rules are set on the Agent tab or the file is deleted"; Log(broken); r = new Rules(); }
+            if (broken != null) { broken += ": no new entries for agent " + Id + " until its rules are set on the Agent tab or the file is deleted"; Log(broken); r = new Rules(); if (broken.Contains("and restart ChartBridge")) ChartBridgeOrders.AgentAlarm(broken); }
+            if (io != null) { broken = io; if (!IoPending("rules")) Log(io); r = new Rules(); }
             lock (Sync) { rules = r; rulesBroken = broken; }
+            IoState("rules", io != null, null);
         }
 
         private string SaveRules(Rules r)
@@ -2180,22 +2415,20 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal static void WriteWhole(string file, List<string> lines)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(file));
-            string tmp = file + ".tmp";
-            File.WriteAllLines(tmp, lines.ToArray());
-            if (File.Exists(file)) File.Replace(tmp, file, null); else File.Move(tmp, file);
+            ChartBridgeFiles.WriteLines(file, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
         }
 
         // ---------------------------------------------------------- the account file (agent-<id>-account.txt, as bot-account.txt)
         private void LoadAccount()
         {
-            string a = ChartBridgeBranches.None, broken = null, grp = null;   // 0.5.7: no file is None (was Sim101)
+            string a = ChartBridgeBranches.None, broken = null, grp = null, io = null;   // 0.5.7: no file is None (was Sim101)
             bool lg = false;
-            try
+            Func<string[], string> parse = all =>
             {
-                if (File.Exists(AccountFile))
-                {
+                    string broken1 = null;
+                    a = ChartBridgeBranches.None; grp = null; lg = false;
                     string found = null, foundGroup = null;
-                    foreach (string raw in File.ReadAllLines(AccountFile))
+                    foreach (string raw in all)
                     {
                         string line = raw.Trim();
                         if (line.Length == 0 || line.StartsWith("#")) continue;
@@ -2203,16 +2436,26 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (found == null && foundGroup == null && p.Length == 2 && p[0] == "account" && PlainName(p[1])) found = p[1];
                         else if (found == null && foundGroup == null && p.Length == 2 && p[0] == "group" && GroupIdRx.IsMatch(p[1])) foundGroup = p[1];   // 0.6.0: a group (an older ChartBridge stands the agent down on it)
                         else if (found == null && foundGroup == null && p.Length == 2 && p[0] == "league" && PlainName(p[1]) && !ChartBridgeBranches.IsNone(p[1])) { found = p[1]; lg = true; }   // 0.6.2: a league seat (an older ChartBridge stands the agent down on it)
-                        else { broken = "agent-" + Id + "-account.txt has a line ChartBridge does not understand"; break; }
+                        else { broken1 = "agent-" + Id + "-account.txt has a line ChartBridge does not understand"; break; }
                     }
-                    if (broken == null && found == null && foundGroup == null) broken = "agent-" + Id + "-account.txt names no account";
-                    if (broken == null && foundGroup != null) grp = foundGroup;
-                    else if (broken == null) a = found;
-                }
+                    if (broken1 == null && found == null && foundGroup == null) broken1 = "agent-" + Id + "-account.txt names no account";
+                    if (broken1 == null && foundGroup != null) grp = foundGroup;
+                    else if (broken1 == null) a = found;
+                    if (broken1 != null) { a = ChartBridgeBranches.None; grp = null; lg = false; }
+                    return broken1;
+            };
+            try
+            {
+                Func<string> held = () => grp != null ? "names group " + (ChartBridgeGroups.NameOf(grp) ?? grp) : lg ? "names the league seat " + a : ChartBridgeBranches.IsNone(a) ? "names None" : "names account " + a;
+                if (File.Exists(AccountFile)) broken = ParseOrBackup(AccountFile, "agent-" + Id + "-account.txt", parse, held, "choose it again on the Agent tab");
+                else broken = MissingWithCopy(AccountFile, "agent-" + Id + "-account.txt", parse, held, "choose it again on the Agent tab");   // 0.6.3 (review MED 5)
             }
+            catch (IOException ex) { io = IoWords("agent-" + Id + "-account.txt", Id, ex.Message); }
             catch (Exception ex) { broken = "agent-" + Id + "-account.txt could not be read (" + ex.Message + ")"; }
-            if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); }
+            if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); if (broken.Contains("and restart ChartBridge")) ChartBridgeOrders.AgentAlarm(broken); }
+            if (io != null) { broken = io; if (!IoPending("account")) Log(io); a = ChartBridgeBranches.None; grp = null; lg = false; }
             lock (Sync) { account = a; groupId = grp; accountBroken = broken; league = broken == null && lg && grp == null; chosen = broken == null && (grp != null || (a != null && !ChartBridgeBranches.IsNone(a))) && File.Exists(AccountFile); }
+            IoState("account", io != null, null);
         }
 
         private string SaveAccount(string nm)
@@ -2272,39 +2515,80 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private void LoadDay()
         {
-            string today = SessionOf(NowEt()), fileSession = null, broken = null, held = null;
+            string today = SessionOf(NowEt()), fileSession = null, broken = null, held = null, damaged = null, io = null, leftNote = null;
+            // 0.6.3 (review LOW 6): read again after it was held open: what was booked in memory meanwhile (a trade that ended, a plan
+            // id, a loss stand-down) is merged in, never dropped (as the stand-downs' retry keeps a raise)
+            Dictionary<string, double> memTrades = null; HashSet<string> memIds = null; string memHeld = null; string memSession = null;
+            if (IoPending("day")) lock (Sync) { memTrades = new Dictionary<string, double>(Trades); memIds = new HashSet<string>(PlanIds); memHeld = lossStandDown; memSession = session; }
             Dictionary<string, double> trades = new Dictionary<string, double>(), expiry = new Dictionary<string, double>();
             Dictionary<string, int[]> spans = new Dictionary<string, int[]>();
             HashSet<string> ids = new HashSet<string>(), carriedTags = new HashSet<string>();
             Dictionary<string, string> tagPlans = new Dictionary<string, string>(), tagSeats = new Dictionary<string, string>();
+            // 0.6.3 (audit C3): every line that reads is kept; a line that does not (a power cut's NULs or half line) is counted, never
+            // a reason to forget the day. first: the file itself (a later line wins, as appended); else its last good copy, which
+            // only fills what the file lacks.
+            Func<string[], bool, int> read = (all, first) =>
+            {
+                int bad = 0;
+                foreach (string raw in all)
+                {
+                    if (raw.IndexOf('\0') >= 0) { if (raw.Trim('\0', ' ', '\t', '\r').Length > 0 || first) bad++; continue; }
+                    string line = raw.Trim();
+                    string seatTag, seatAcct;
+                    if (ReadSeatLine(line, out seatTag, out seatAcct)) { if (first || !tagSeats.ContainsKey(seatTag)) tagSeats[seatTag] = seatAcct; continue; }   // 0.6.0: #seat<TAB><tag><TAB><account>
+                    string tagPlanId, tagOfPlan;
+                    if (ReadTagPlan(line, out tagOfPlan, out tagPlanId)) { if (first || !tagPlans.ContainsKey(tagOfPlan)) tagPlans[tagOfPlan] = tagPlanId; continue; }
+                    if (line.Length == 0 || line.StartsWith("#")) continue;
+                    string[] p = line.Split('\t');
+                    double v;
+                    if (p.Length == 2 && p[0] == "session" && Regex.IsMatch(p[1], "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) { if (first || fileSession == null) fileSession = p[1]; }
+                    else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && p[2] == "open") { if (first || !trades.ContainsKey(p[1])) trades[p[1]] = double.NaN; }
+                    else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && double.TryParse(p[2], NumberStyles.Float, CultureInfo.InvariantCulture, out v) && !double.IsNaN(v) && !double.IsInfinity(v)) { if (first || !trades.ContainsKey(p[1])) trades[p[1]] = v; }
+                    else if (p.Length == 2 && p[0] == "plan" && p[1].Length >= 1 && p[1].Length <= 40) ids.Add(p[1]);
+                    else if (p.Length == 3 && p[0] == "entry" && Regex.IsMatch(p[1], "^[0-9a-f]{8}$") && Regex.IsMatch(p[2], "^[0-9]{1,15}$")) { if (first || !expiry.ContainsKey(p[1])) expiry[p[1]] = double.Parse(p[2], CultureInfo.InvariantCulture); }
+                    else if (p.Length == 2 && p[0] == "standDown" && p[1].Length > 0) { if (first || held == null) held = p[1]; }
+                    else if (p.Length == 2 && p[0] == "carried" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$")) carriedTags.Add(p[1]);   // 0.5.2 review
+                    else if (p.Length == 4 && p[0] == "span" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && Regex.IsMatch(p[2], "^[0-9]{1,6}$") && Regex.IsMatch(p[3], "^[0-9]{1,6}$"))
+                    { if (first || !spans.ContainsKey(p[1])) spans[p[1]] = new[] { int.Parse(p[2], CultureInfo.InvariantCulture), int.Parse(p[3], CultureInfo.InvariantCulture) }; }
+                    else bad++;
+                }
+                return bad;
+            };
             try
             {
                 if (File.Exists(DayFile))
                 {
-                    foreach (string raw in File.ReadAllLines(DayFile))
+                    int bad = read(ReadAll(DayFile), true);
+                    bool noSession = fileSession == null;
+                    if (bad > 0 || noSession)
                     {
-                        string line = raw.Trim();
-                        string seatTag, seatAcct;
-                        if (ReadSeatLine(line, out seatTag, out seatAcct)) { tagSeats[seatTag] = seatAcct; continue; }   // 0.6.0: #seat<TAB><tag><TAB><account>
-                        string tagPlanId, tagOfPlan;
-                        if (ReadTagPlan(line, out tagOfPlan, out tagPlanId)) { tagPlans[tagOfPlan] = tagPlanId; continue; }
-                        if (line.Length == 0 || line.StartsWith("#")) continue;
-                        string[] p = line.Split('\t');
-                        double v;
-                        if (p.Length == 2 && p[0] == "session" && Regex.IsMatch(p[1], "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) fileSession = p[1];
-                        else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && p[2] == "open") trades[p[1]] = double.NaN;
-                        else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && double.TryParse(p[2], NumberStyles.Float, CultureInfo.InvariantCulture, out v) && !double.IsNaN(v) && !double.IsInfinity(v)) trades[p[1]] = v;
-                        else if (p.Length == 2 && p[0] == "plan" && p[1].Length >= 1 && p[1].Length <= 40) ids.Add(p[1]);
-                        else if (p.Length == 3 && p[0] == "entry" && Regex.IsMatch(p[1], "^[0-9a-f]{8}$") && Regex.IsMatch(p[2], "^[0-9]{1,15}$")) expiry[p[1]] = double.Parse(p[2], CultureInfo.InvariantCulture);
-                        else if (p.Length == 2 && p[0] == "standDown" && p[1].Length > 0) held = p[1];
-                        else if (p.Length == 2 && p[0] == "carried" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$")) carriedTags.Add(p[1]);   // 0.5.2 review
-                        else if (p.Length == 4 && p[0] == "span" && Regex.IsMatch(p[1], "^[0-9a-f]{8}(?:-[0-9]{1,4}){0,1}$") && Regex.IsMatch(p[2], "^[0-9]{1,6}$") && Regex.IsMatch(p[3], "^[0-9]{1,6}$"))
-                            spans[p[1]] = new[] { int.Parse(p[2], CultureInfo.InvariantCulture), int.Parse(p[3], CultureInfo.InvariantCulture) };
-                        else { broken = "agent-" + Id + "-day.txt has a line ChartBridge does not understand"; break; }
+                        // 0.6.3 (review MED 2): the last good copy only when it is the same session (the file's, or today when the
+                        // file's session line is the damaged one); a copy of another session is ignored
+                        string[] b = ChartBridgeFiles.ReadBackup(DayFile);
+                        string want = fileSession ?? today, bakSession = b == null ? null : b.Select(x => x.Trim().Split('\t')).Where(x => x.Length == 2 && x[0] == "session").Select(x => x[1]).FirstOrDefault();
+                        bool fromBackup = b != null && bakSession == want && read(b, false) >= 0;
+                        if (fileSession == null) fileSession = today;   // no session line anywhere: counted as today's (never forgotten)
+                        damaged = "agent-" + Id + "-day.txt has " + (bad > 0 ? bad + " line" + (bad == 1 ? "" : "s") + " ChartBridge could not read" : "no session line") +
+                                  " (a power cut?): the trades, losses and plan ids from the lines that read" + (fromBackup ? " and from its last good copy (agent-" + Id + "-day.txt.bak)" : "") +
+                                  " are kept and the file is written again from them";
                     }
-                    if (broken == null && fileSession == null) broken = "agent-" + Id + "-day.txt has no session line";
+                }
+                else
+                {
+                    // 0.6.3 (review MED 5): no day file but a copy left by a cut-off save: used when it is today's session (MED 2), said so,
+                    // and written again; a copy of another session is ignored (a new day)
+                    foreach (string alt in ChartBridgeFiles.LeftOvers(DayFile))
+                    {
+                        string[] b = ChartBridgeFiles.ReadAny(alt);
+                        string bs = b == null ? null : b.Select(x => x.Trim().Split('\t')).Where(x => x.Length == 2 && x[0] == "session").Select(x => x[1]).FirstOrDefault();
+                        if (bs != today) continue;
+                        read(b, true);
+                        leftNote = "agent-" + Id + "-day.txt is missing (a save cut off?): ChartBridge uses " + Path.GetFileName(alt) + " (today's session: its trades, losses and plan ids) and writes the file again";
+                        break;
+                    }
                 }
             }
+            catch (IOException ex) { broken = "agent-" + Id + "-day.txt could not be read"; io = IoWords("agent-" + Id + "-day.txt", Id, ex.Message); }
             catch (Exception ex) { broken = "agent-" + Id + "-day.txt could not be read (" + ex.Message + ")"; }
             // Lead's default (review A-N3, A-S4): an entry line whose order is no longer listed is dropped; an open trade of an
             // earlier session is dropped (it counts only in its own session; a position it left keeps its legs, and the flat hours
@@ -2315,9 +2599,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 session = today;
                 Trades.Clear(); PlanIds.Clear(); Expiry.Clear(); Spans.Clear(); EntrySeen.Clear(); lossStandDown = null;
-                if (broken != null) dayBroken = broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)";
+                dayRepaired = false; dayBroken = null;
+                if (io != null) dayBroken = io;
+                else if (broken != null) dayBroken = broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)";
                 else
                 {
+                    // 0.6.3 (audit C3): a damaged file keeps today's counts (never reset) and stands the agent down for this run only
+                    if (damaged != null) { dayBroken = damaged + ": no new entries for agent " + Id + " this run: check today's trades in NinjaTrader (the next start goes on with these counts)"; dayRepaired = true; }
                     foreach (KeyValuePair<string, double> kv in expiry) if (listed.Contains(kv.Key)) Expiry[kv.Key] = kv.Value;
                     if (fileSession == today)
                     {
@@ -2347,7 +2635,33 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
             if (broken == null) foreach (KeyValuePair<string, string> kv in tagPlans) ChartBridgeAgents.NotePlan(kv.Key, kv.Value);
-            if (broken != null) Log(broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)");
+            if (io != null) { if (!IoPending("day")) Log(io); }
+            else if (broken != null) Log(broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)");
+            IoState("day", io != null, null);
+            if (leftNote != null) { ChartBridgeFiles.Note(leftNote); SaveDay(); }
+            if (memTrades != null && io == null && broken == null && memSession == today)
+            {
+                int n = 0;
+                lock (Sync)
+                {
+                    foreach (KeyValuePair<string, double> kv in memTrades) { double v; if (!Trades.TryGetValue(kv.Key, out v) || (double.IsNaN(v) && !double.IsNaN(kv.Value))) { Trades[kv.Key] = kv.Value; n++; } }
+                    foreach (string id in memIds) if (PlanIds.Add(id)) n++;
+                    if (lossStandDown == null && memHeld != null) { lossStandDown = memHeld; n++; }
+                }
+                if (n > 0) { SaveDay(); Log("agent-" + Id + "-day.txt read after a wait: " + n + " record(s) made meanwhile kept and saved"); }
+            }
+            if (damaged != null)
+            {
+                string said;
+                lock (Sync) said = dayBroken;
+                // the file as it was, for a look; then out of the way (review LOW 11), so writing it again does not turn the damaged file into
+                // the new .bak over the good one (a cut-off write then finds the good .bak: MED 5)
+                bool kept = false;
+                try { File.Copy(DayFile, DayFile + ".unreadable", true); kept = true; } catch (Exception) { }
+                if (kept) { try { File.Delete(DayFile); } catch (Exception) { } }
+                SaveDay();   // written again from what was kept, so the next start reads it whole
+                ChartBridgeOrders.AgentAlarm(said);
+            }
             if (stale > 0) Log("agent-" + Id + "-day.txt: " + stale + " open trade(s) from the session of " + fileSession + " dropped (a record counts only in its own session)");
         }
 
@@ -2421,7 +2735,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try
                 {
                     if (!File.Exists(DayFile)) { SaveDay(); return; }   // the whole file (with this id) the first time
-                    TryIo(delegate { File.AppendAllText(DayFile, line + Environment.NewLine); });
+                    TryIo(delegate { ChartBridgeFiles.Append(DayFile, line + Environment.NewLine); });   // 0.6.3 (audit C3): written through, flushed
                 }
                 catch (Exception ex) { Log("agent-" + Id + "-day.txt could not be appended to (" + ex.Message + "); a restart would forget a plan id"); }
             }
@@ -2437,7 +2751,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> lines = new List<string> { "# ChartBridge day for agent " + Id + " (written by ChartBridge; do not edit)", "# session, its trades (tag and open or realized dollars), plan ids used, entries and their expiry, the plan of each entry (#tagplan)" };
             lock (Sync)
             {
-                if (dayBroken != null) return;   // never written over a file that could not be read
+                if (dayBroken != null && !dayRepaired) return;   // never written over a file that could not be read (0.6.3: one kept from its lines is)
                 lines.Add("session\t" + session);
                 foreach (KeyValuePair<string, double> kv in Trades)
                     lines.Add("trade\t" + kv.Key + "\t" + (double.IsNaN(kv.Value) ? "open" : kv.Value.ToString("0.##", CultureInfo.InvariantCulture)));
@@ -2515,7 +2829,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             return lossStandDown;   // never lifted by a rules change; the 18:00 ET roll clears it (lead's default)
         }
 
-        private string StandDown() { string sd; lock (Sync) sd = StandDownLocked(); return sd ?? LatchProblem() ?? AccountConflict(); }   // 0.6.2: a stand-down on its group (the backstop cancels its entries)
+        private string StandDown() { string sd; lock (Sync) sd = StandDownLocked(); return sd ?? LatchProblem() ?? AccountConflict(); }
+        // 0.6.3 (review round 2, LOW C): its daily reset is pending: no new entries (check 2) and the status says so; never the backstop
+        // (a working entry is not cancelled for it: the 17:00 rule keeps a branch with a working order)
+        private string PendingWords() { return ChartBridgeBranches.WaitingWords("agent:" + Id, "agent " + Id, AccountWords()); }   // 0.6.2: a stand-down on its group (the backstop cancels its entries)
 
         // A file that cannot be read (check 2), or null. Under Sync.
         private string FilesBrokenLocked() { return dayBroken ?? rulesBroken ?? accountBroken; }
@@ -3046,6 +3363,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // 2. not killed, not stood down, the files readable, the account tradable now
             if (k) return "the kill switch is on (release it on the Agent tab)";
             if (sd != null) return sd;
+            string wait = PendingWords();   // 0.6.3 (review round 2, LOW C)
+            if (wait != null) return wait;
             if (!grp && ChartBridgeBranches.IsNone(acct)) return "agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
             if (forAccount != null && forAccount != used) return "agent " + Id + "'s account changed from " + KeyWords(forAccount) + " to " + KeyWords(used) + " after this proposal: nothing placed";
             // 0.6.2: a stand-down of its build on its group (a group pick: the whole plan; one account inside a group: its one seat), or
@@ -3301,6 +3620,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // 0.6.0: a group is Sim only when every seat is (the careful side).
+        // 0.6.3: the account's mark in texts: None (nothing trades), no accounts (a group with none), Sim, or LIVE.
+        internal string AcctMark()
+        {
+            if (!GroupNow()) { string a; lock (Sync) a = account; if (a == null || ChartBridgeBranches.IsNone(a)) return "None"; }
+            else if (SeatNames().Count == 0) return "no accounts";
+            return SimNow() ? "Sim" : "LIVE";
+        }
+
         private bool SimNow()
         {
             if (!GroupNow()) { Account a = FindAccount(Account); return a != null && ChartBridgeBot.IsSim(a); }
@@ -3600,6 +3927,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- the timer: heartbeat, expiries, the window, the flat time
         public void Check(double now)
         {
+            RetryIo(now);   // 0.6.3 (audit C4)
+            RetryKill();    // review (C5): a kill file held open at the start
             RollDay();
             RefreshSeats();   // 0.6.0: a group's membership (and a deleted group: None)
             ChartBridgeClient silent = null, mute = null;
@@ -3692,7 +4021,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
                 }
             }
-            if (flatHours) StartFlatten(AtFlatTime(r, etNow) ? Id + " flattened at " + Hm(r.FlatAt) + " by its rules" : fromBefore && !FlatHours(r, etNow) ? Id + " held a position from an earlier session (its " + Hm(r.FlatAt) + " flatten did not finish): flattened by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + (ChartBridgeCme.Closed(etNow) ? ", or the market closed" : "") + "): flattened by its rules", true);
+            if (flatHours) StartFlatten(AtFlatTime(r, etNow) ? FlatWords(r, etNow) : fromBefore && !FlatHours(r, etNow) ? Id + " held a position from an earlier session (its " + Hm(r.FlatAt) + " flatten did not finish): flattened by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + (ChartBridgeCme.Closed(etNow) ? ", or the market closed" : "") + "): flattened by its rules", true, null, AtFlatTime(r, etNow));   // 0.6.3 (review MED 4): marked when it is the flat time
             foreach (Seat x in seats) x.StepFlatten(now);
             PruneSeats();   // 0.6.0: a seat that left the group, now flat with nothing of the agent's there, is dropped
             WelcomeIfCapsChanged();
@@ -3755,11 +4084,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The flatten on every seat it follows (onlySeat: that one). Returns how many (seat, contract) jobs started.
-        private int StartFlatten(string why, bool byRules) { return StartFlatten(why, byRules, null); }
-        private int StartFlatten(string why, bool byRules, string onlySeat)
+        private int StartFlatten(string why, bool byRules) { return StartFlatten(why, byRules, null, false); }
+        private int StartFlatten(string why, bool byRules, string onlySeat) { return StartFlatten(why, byRules, onlySeat, false); }
+        private int StartFlatten(string why, bool byRules, string onlySeat, bool atFlatTime)
         {
             int n = 0;
-            foreach (Seat x in AllSeats()) if (onlySeat == null || x.Name == onlySeat) n += x.StartFlatten(why, byRules);
+            foreach (Seat x in AllSeats()) if (onlySeat == null || x.Name == onlySeat) n += x.StartFlatten(why, byRules, atFlatTime);
             return n;
         }
 
@@ -3812,16 +4142,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             return whys.All(x => x != null) ? "no account of " + AccountWords() + " is tradable now (" + string.Join("; ", whys) + ")" : null;
         }
 
-        private string SetKill(Dictionary<string, Val> d) { lock (PlaceGate) return SetKillLocked(d); }   // never between a placement's checks and its order
+        private string SetKill(Dictionary<string, Val> d) { lock (PlaceGate) return SetKillLocked(d); }
+        internal static string KilledWords(double at) { return at > 0 ? "on since " + DateTime.SpecifyKind(new DateTime(1970, 1, 1).AddMilliseconds(at), DateTimeKind.Utc).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC" : "on"; }   // never between a placement's checks and its order
 
         private string SetKillLocked(Dictionary<string, Val> d)
         {
             bool on;
             if (!Bool(d, "on", out on)) return "on must be true or false";
             List<Proposal> expired = new List<Proposal>();
-            lock (Sync) { killed = on; if (on) expired = ExpireOpenLocked("not answered"); }
+            // 0.6.3 (audit C5): saved, so a restart keeps it; a release whose file cannot be removed is refused (it would come back)
+            string saveErr = null;
+            if (on) { bool was; lock (Sync) was = killed; if (!was) saveErr = ChartBridgeFiles.SaveKill(KillFile, "agent " + Id, ChartBridgeAgents.Now()); }
+            else { string err = ChartBridgeFiles.ClearKill(KillFile); if (err != null) return "agent-" + Id + "-kill.txt could not be removed (" + err + "): the kill switch stays on"; }
+            lock (Sync) { if (on && !killed) killedAt = ChartBridgeAgents.Now(); killed = on; if (!on) killedAt = 0; if (on) expired = ExpireOpenLocked("not answered"); }
             if (on)
             {
+                if (saveErr != null) { string w = "agent-" + Id + "-kill.txt could not be saved (" + saveErr + "): the kill switch is on now but a restart would release it"; ToPages(StatusJson("warn", w)); Log(w); }
                 int n = CancelUnfilled("the kill switch is on");
                 foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "the kill switch is on")); }
                 string text = "Agent " + Id + ": the kill switch is on: " + n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled; any position keeps its stop and target; every agent order is refused until it is released";
@@ -3910,7 +4246,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         // the new account holds any position or working order on the agent's roots (as botAccount). Saved; the agent gets welcome.
         // 0.5.2 (Anthony 2026-10-08): the agent keeps its mode when keepMode names it (until 0.5.1, and for a page that does not
         // send keepMode or names another mode, a change puts it in shadow).
-        private string SetAccount(Dictionary<string, Val> d) { lock (PlaceGate) return SetAccountLocked(d); }   // never between a placement's checks and its order
+        private string SetAccount(Dictionary<string, Val> d)
+        {
+            string why;
+            bool dropped = false;
+            lock (PlaceGate)
+            {
+                why = SetAccountLocked(d);
+                if (why == null) dropped = ChartBridgeBranches.Chosen("agent:" + Id);   // 0.6.3 (review round 2, MED A): the page's choice wins over a pending reset
+            }
+            if (dropped) Notify();   // the status no longer waits for the reset
+            return why;
+        }   // never between a placement's checks and its order
 
         private string SetAccountLocked(Dictionary<string, Val> d)
         {
@@ -3972,7 +4319,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool kept;
             lock (Sync) { account = nm; groupId = null; accountBroken = null; chosen = true; league = lg; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
             RefreshSeats(false);   // 0.6.0: its one seat (seatsRev up); the old seats are dropped (nothing of the agent's is left there)
-            string mark = (SimNow() ? "Sim" : "LIVE") + (lg ? ", a league seat" : "");
+            string mark = AcctMark() + (lg ? ", a league seat" : "");
             string modeSay = kept ? "mode " + wasMode + " kept" : wasMode == "shadow" ? "mode shadow" : "mode shadow (was " + wasMode + (keep == null ? ": the page did not say which mode it showed" : ": the page's question named " + keep) + ")";
             Log("agent " + Id + " account " + nm + " (" + mark + "), was " + old + ", set by the page; " + modeSay);
             AgentLog("account " + nm + " (" + mark + "), was " + old + ", set by the page; " + modeSay);
@@ -4010,14 +4357,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (PlaceGate)
             {
+                if (ChartBridgeBranches.DroppedWhileRetrying("agent:" + Id)) return null;   // 0.6.3 (review round 2, MED A): chosen on the page meanwhile
                 string acct = Account;
                 if (NoneNow() || ChartBridgeBranches.KeepThroughReset("agent:" + Id, GroupNow() ? KeyNow() : acct)) return null;
                 if (GroupNow())   // 0.6.0: None only when no seat is exposed and every member is idle; else the words name the accounts holding something
                 {
+                    List<string> unk = AllSeats().Select(x => ChartBridgeBranches.UnknownWhy(FindAccount(x.Name), x.Name)).Where(w => w != null).ToList();
+                    if (unk.Count > 0) return ChartBridgeBranches.WaitWords("agent " + Id, AccountWords(), string.Join("; ", unk));   // 0.6.3 (review HIGH 1)
                     List<string> busy = AllSeats().Where(x => x.Exposed() || !ChartBridgeBranches.Idle(FindAccount(x.Name))).Select(x => x.Name).ToList();
                     if (busy.Count > 0 || Exposed()) return "agent " + Id + " stays on " + AccountWords() + ": " + (busy.Count > 0 ? string.Join(", ", busy) + (busy.Count == 1 ? " has" : " have") : "it has") + " a position or a working order (it goes to None at a later reset once flat, or choose None yourself)";
                 }
-                else if (Exposed() || !ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("agent " + Id, acct);
+                else
+                {
+                    string unk = ChartBridgeBranches.UnknownWhy(FindAccount(acct), acct);   // 0.6.3 (review HIGH 1): never None on an account not known yet
+                    if (unk != null) return ChartBridgeBranches.WaitWords("agent " + Id, acct, unk);
+                    if (Exposed() || !ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("agent " + Id, acct);
+                }
                 string keep;
                 lock (Sync) keep = mode;
                 string why = GoNone("by the daily reset (17:00 ET)", keep);
@@ -4069,7 +4424,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool kept;
             lock (Sync) { account = ChartBridgeBranches.None; groupId = gid; accountBroken = null; chosen = true; league = false; wasMode = mode; kept = keep != null && keep == mode; if (!kept) mode = "shadow"; }
             RefreshSeats(false);
-            string mark = SimNow() ? "Sim" : "LIVE";
+            string mark = AcctMark();
             string modeSay = kept ? "mode " + wasMode + " kept" : wasMode == "shadow" ? "mode shadow" : "mode shadow (was " + wasMode + (keep == null ? ": the page did not say which mode it showed" : ": the page's question named " + keep) + ")";
             Log("agent " + Id + " account " + AccountWords() + " (" + mark + "), was " + old + ", set by the page; seatsRev " + SeatsRevNow() + "; " + modeSay);
             AgentLog("account " + AccountWords() + " (" + mark + "), was " + old + ", set by the page; seatsRev " + SeatsRevNow() + "; " + modeSay);
@@ -4487,7 +4842,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             ins.Append(']');
             return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"agent\":" + CbJson.Str(Id) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + ChartBridgeBranches.Json(Account) +
-                   ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"league\":" + (League ? "true" : "false") + ",\"rules\":" + NoteWelcomeRules(EnforcedRulesJson(r)) + ",\"instruments\":" + ins + SeatsWelcomeFields() + "}";
+                   ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"league\":" + (League ? "true" : "false") + ",\"killed\":" + (Killed ? "true" : "false") + ",\"rules\":" + NoteWelcomeRules(EnforcedRulesJson(r)) + ",\"instruments\":" + ins + SeatsWelcomeFields() + "}";
         }
 
         // 0.6.0: welcome's group ({id, name} or null), seats (the member accounts in seat order, null for one account) and seatsRev.
@@ -4631,7 +4986,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private string StateJson()
         {
-            string sd = StandDown(), gsd = GroupStandDownJson();   // 0.6.2: groupStandDown, the stand-down on the group it is on now
+            string sd = StandDown() ?? PendingWords(), gsd = GroupStandDownJson();   // 0.6.2: groupStandDown, the stand-down on the group it is on now
             string gtype = GroupNow() ? Str(ChartBridgeGroups.TypeOf(GroupId)) : "null";   // 0.6.2: groupType, the Type of the group it trades (a change in Settings reaches the runner without a reconnect)
             bool owns = OwnsAny();
             string seats = GroupNow() || AllSeats().Any(x => !IsEntrySeat(x.Name)) ? ",\"seats\":" + SeatsJson(false) : "";   // 0.6.0: a group's seats (one account: as before)
@@ -4646,7 +5001,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public string StripJson()
         {
             bool sim = SimNow(), owns = OwnsAny();
-            string sd = StandDown(), sds = StandDownsJson();   // 0.6.2: standDowns, every stand-down of its build
+            string sd = StandDown() ?? PendingWords(), sds = StandDownsJson();   // 0.6.2: standDowns, every stand-down of its build
             Rules r = RulesNow();
             string gid = GroupId, seats = gid != null || AllSeats().Any(x => !IsEntrySeat(x.Name)) ? SeatsJson(true) : null;   // 0.6.0
             Seat pos = AllSeats().FirstOrDefault(x => { lock (Sync) return x.openTag != null && x.ledQty != 0; });
@@ -4668,6 +5023,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"trades\":").Append(TradesLocked())
                  .Append(",\"losses\":").Append(LossesLocked())
                  .Append(",\"killed\":").Append(killed ? "true" : "false")
+                 .Append(",\"killedAt\":").Append(killed && killedAt > 0 ? Ms(killedAt) : "null")   // 0.6.3 (audit C5)
                  .Append(",\"standDown\":").Append(Str(sd))
                  .Append(",\"standDowns\":").Append(sds)   // 0.6.2
                  .Append(",\"owns\":").Append(owns ? "true" : "false")

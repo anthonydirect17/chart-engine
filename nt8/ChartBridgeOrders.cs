@@ -1704,6 +1704,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // seconds, and any connection status event (see WatchConnections) starts every clock again, so a
         // drop shorter than 2 seconds is not missed. While NinjaTrader reconnects it can show orders
         // before positions; nothing that cancels legs may act on that picture.
+        // 0.6.3 (review HIGH 1): Connected for at least ms on the same clock (ChartBridgeAgent.ReconnectSettleMs for the daily reset).
+        internal static bool UpFor(Account a, double ms)
+        {
+            double now = ChartBridgeTime.NowUtcMs();
+            Steady(a, now);   // starts the clock on a first look
+            lock (ConnectedSince) { double since; return StatusOf(a) == "Connected" && ConnectedSince.TryGetValue(a, out since) && now - since >= ms; }
+        }
+
         private static bool Steady(Account a, double now)
         {
             bool up = StatusOf(a) == "Connected";
@@ -2235,9 +2243,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string fault = PlanWriteFault != null ? PlanWriteFault() : null;
                     if (fault != null) return fault;
                     Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                    string tmp = PlanFile + ".tmp";
-                    File.WriteAllLines(tmp, lines.ToArray());
-                    if (File.Exists(PlanFile)) File.Replace(tmp, PlanFile, null); else File.Move(tmp, PlanFile);
+                    ChartBridgeFiles.WriteLines(PlanFile, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                     return null;
                 }
                 catch (Exception ex) { return ex.Message; }

@@ -553,6 +553,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (alarm != null) c.Send(Status("error", alarm));
             ChartBridgeGroups.SignedIn(c);     // 0.5.8: the groups.txt alarm
             ChartBridgeBranches.SignedIn(c);   // 0.5.7: the daily reset's notes during its break
+            ChartBridgeFiles.SignedIn(c);      // 0.6.3 (audit C3): a file read from its backup, or kept from the lines that read
         }
 
         // ---------------------------------------------------------- messages from the page
@@ -1290,9 +1291,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try
                 {
                     Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                    string tmp = FilePath + ".tmp";
-                    File.WriteAllText(tmp, text);
-                    if (File.Exists(FilePath)) File.Replace(tmp, FilePath, null); else File.Move(tmp, FilePath);
+                    ChartBridgeFiles.WriteWhole(FilePath, text);   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                 }
                 catch (Exception ex) { err = ex.Message; }
                 bool alarm;
@@ -1329,9 +1328,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                string tmp = DetailPath + ".tmp";
-                File.WriteAllText(tmp, text);
-                if (File.Exists(DetailPath)) File.Replace(tmp, DetailPath, null); else File.Move(tmp, DetailPath);
+                ChartBridgeFiles.WriteWhole(DetailPath, text);   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
             }
             catch (Exception ex)
             {
@@ -1422,10 +1419,56 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static bool loaded;
         private static readonly List<string> Skipped = new List<string>();   // the notes of the last run, for pages that sign in during its break
         private static string skippedDay;
+        private static bool skippedLate;                // 0.6.3: the last run caught up a missed break
         private static string ResetFile { get { return Path.Combine(ChartBridgeConfig.Folder, "daily-reset.txt"); } }
 
+        // 0.6.3 (review HIGH 1): the branches whose account was not known yet at the run (NinjaTrader does not list it, it is not
+        // Connected, or not steady yet): tried again on every 2 s check for that day, kept in daily-reset.txt as pending lines.
+        private static readonly HashSet<string> Pending = new HashSet<string>();
+        private static readonly HashSet<string> PendingSaid = new HashSet<string>();
+        private static string pendingMissed;
+
         // For the harness: forget the day (the file stays as it is).
-        public static void Forget() { lock (Lk) { loaded = false; doneDay = null; Skipped.Clear(); skippedDay = null; } }
+        public static void Forget() { lock (Lk) { loaded = false; doneDay = null; Skipped.Clear(); skippedDay = null; skippedLate = false; Pending.Clear(); PendingSaid.Clear(); pendingMissed = null; } }
+
+        // 0.6.3 (review HIGH 1): what a branch on this account would see is not known yet: null when known, else why. A position
+        // there may simply not be shown yet, so the reset never counts such an account as idle.
+        // review round 2 (MED B): the repo's own rule, ChartBridgeOrders.SteadyMs (30 s): while NinjaTrader reconnects, positions can
+        // arrive after Connected, so a position that comes late is never read as idle
+        public static double SettleMs = ChartBridgeOrders.SteadyMs;
+        public static string UnknownWhy(Account a, string name)
+        {
+            if (a == null) return name + " is not in NinjaTrader yet";
+            if (ChartBridgeAccounts.ConnectionText(a) != "connected") return name + " is not Connected";
+            if (!ChartBridgeOrders.UpFor(a, SettleMs)) return name + " has only just connected";
+            return null;
+        }
+        // 0.6.3 (review round 2, MED A): Anthony chose this branch's account on the page (an account, a group, a league seat or None):
+        // his choice always wins over a pending reset, so the branch leaves Pending and daily-reset.txt is written again.
+        public static bool Chosen(string key)
+        {
+            string day;
+            List<string> keep;
+            lock (Lk) { if (!Pending.Remove(key)) return false; day = doneDay; keep = Pending.ToList(); }
+            if (day != null) WriteDay(day, keep);
+            ChartBridgeServer.Log("daily reset: " + key + "'s account was chosen on the page: its pending reset is dropped (the choice stands)");
+            return true;
+        }
+        public static bool IsPending(string key) { lock (Lk) return Pending.Contains(key); }
+        // Review round 2 (LOW C): while a branch's reset is pending it takes no new entries (the 17:00 rule, enforced in the short
+        // window after a reconnect); exits, legs and flattens are never affected. The status words, or null.
+        public static string WaitingWords(string key, string branch, string account)
+        {
+            if (!IsPending(key)) return null;
+            return "waiting for the daily reset: " + account + " was " + branch + "'s account before the 17:00 ET reset and is not known yet (not in NinjaTrader, not Connected, or Connected under 30 s); no new entries until its reset has run or an account is chosen on the page (exits always work)";
+        }
+        // A retry of pending branches is running on this thread: a branch no longer pending (chosen on the page meanwhile) is left
+        // alone. Asked by each branch's reset under the same lock its page choice takes (the agent's and the bot's PlaceGate).
+        [ThreadStatic] private static bool retrying;
+        public static bool DroppedWhileRetrying(string key) { return retrying && !IsPending(key); }
+
+        // The words a branch returns for that: "?" first, so Run keeps it pending.
+        public static string WaitWords(string branch, string account, string why) { return "?" + branch + " stays on " + account + " for now: " + why + ", so its positions and orders are not known; its reset runs once they are"; }
 
         // A branch on this account is flat with no working order: no position (any contract) and no order that may still fill.
         public static bool Idle(Account a)
@@ -1440,60 +1483,135 @@ namespace NinjaTrader.NinjaScript.AddOns
         // alone): true keeps that branch's account through the reset. The plain rule for now: no exception.
         public static bool KeepThroughReset(string branch, string account) { return false; }
 
-        // Every 2 s (ChartBridge's poll timer): the reset once per day, in the break.
+        // Every 2 s (ChartBridge's poll timer) and once at start: the reset once per day, in the break. 0.6.3 (audit C1): when the
+        // last reset saved in daily-reset.txt is older than the latest 17:00 ET at or before now (the page's resetDay rule), that
+        // break was missed (ChartBridge or the PC was off) and the reset runs now, with the same Idle and skip rules. No
+        // daily-reset.txt (or one that does not read) is not a missed break: it runs in the next break, as before. A day ahead
+        // of now (the clock moved back) is not due.
+        public static void Poll() { if (!HarnessManual) Check(); }
+        public static bool HarnessManual;               // test hook: the harness calls Check itself (its clock is a stand-in)
         public static void Check()
         {
             DateTime et = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(NowUtc(), DateTimeKind.Utc), ChartBridgeTime.Eastern);
-            if (et.Hour != 17) return;
-            try { ChartBridgeGroups.EodMark(); } catch (Exception ex) { ChartBridgeServer.Log("groups: end-of-day highs error: " + ex.Message); }   // 0.5.8: every 2 s in the break (the day's close)
-            string day = et.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            bool inBreak = et.Hour == 17;
+            if (inBreak) { try { ChartBridgeGroups.EodMark(); } catch (Exception ex) { ChartBridgeServer.Log("groups: end-of-day highs error: " + ex.Message); } }   // 0.5.8: every 2 s in the break (the day's close)
+            string day = DueDay(et);
+            string missed;
+            HashSet<string> retry = null;
             lock (Lk)
             {
-                if (!loaded) { doneDay = ReadDay(); loaded = true; }
-                if (doneDay == day) return;
-                doneDay = day;
+                if (!loaded) { List<string> pend; string miss; doneDay = ReadDay(out pend, out miss); loaded = true; Pending.Clear(); if (doneDay != null) { foreach (string k in pend) Pending.Add(k); pendingMissed = miss; } }
+                if (doneDay == day && Pending.Count > 0) retry = new HashSet<string>(Pending);
             }
-            WriteDay(day);
-            Run(day);
+            if (retry != null) { Run(day, pendingMissed, retry); return; }
+            lock (Lk)
+            {
+                if (doneDay == day) return;
+                if (!inBreak && (doneDay == null || string.CompareOrdinal(doneDay, day) > 0)) return;
+                missed = inBreak ? null : day;
+                doneDay = day;
+                Pending.Clear(); PendingSaid.Clear(); pendingMissed = missed;
+            }
+            WriteDay(day, null);
+            Run(day, missed, null);
         }
 
-        private static string ReadDay()
+        // The New York date of the latest 17:00 ET at or before this New York time (live/live.js resetDay).
+        public static string DueDay(DateTime et)
         {
+            DateTime d = et.Hour >= 17 ? et.Date : et.Date.AddDays(-1);
+            return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        private static string ReadDay(out List<string> pending, out string missed)
+        {
+            pending = new List<string>();
+            missed = null;
             try
             {
-                if (!File.Exists(ResetFile)) return null;
-                foreach (string raw in File.ReadAllLines(ResetFile))
+                string[] lines = File.Exists(ResetFile) ? File.ReadAllLines(ResetFile) : null;
+                string d = DayIn(lines);
+                if (d == null)
                 {
-                    string[] p = raw.Trim().Split('\t');
-                    if (p.Length == 2 && p[0] == "day") return p[1];
+                    // 0.6.3 (audit C3, review MED 5): no day line (a power cut), or no file left by a replace that was cut off: the
+                    // last good copy (.bak), or the temp file that was about to replace it
+                    foreach (string alt in new[] { ChartBridgeFiles.BackupOf(ResetFile), ResetFile + ".tmp" })
+                    {
+                        string[] al = ChartBridgeFiles.ReadAny(alt);
+                        string ad = DayIn(al);
+                        if (ad == null) continue;
+                        ChartBridgeServer.Log("daily-reset.txt " + (lines == null ? "is missing" : "names no day") + ": " + Path.GetFileName(alt) + " is used (" + ad + ")");
+                        lines = al; d = ad; break;
+                    }
                 }
+                if (d != null) foreach (string raw in lines) { string[] p = raw.Trim().Split('\t'); if (p.Length == 2 && p[0] == "pending" && p[1].Length > 0) pending.Add(p[1]); if (p.Length == 2 && p[0] == "missed" && System.Text.RegularExpressions.Regex.IsMatch(p[1], "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) missed = p[1]; }   // review round 2 (LOW D): a caught-up run
+                return d;
             }
             catch (Exception ex) { ChartBridgeServer.Log("daily-reset.txt could not be read (" + ex.Message + "): the reset runs in this break"); }
             return null;
         }
 
-        private static void WriteDay(string day)
+        private static string DayIn(string[] lines)
+        {
+            if (lines == null) return null;
+            foreach (string raw in lines)
+            {
+                string[] p = raw.Trim().Split('\t');
+                if (p.Length == 2 && p[0] == "day" && System.Text.RegularExpressions.Regex.IsMatch(p[1], "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) return p[1];
+            }
+            return null;
+        }
+
+        // pending (0.6.3): the branches still to reset that day, "pending<TAB><key>" lines (a ChartBridge before 0.6.3 reads only the
+        // day line).
+        private static void WriteDay(string day, IEnumerable<string> pending)
         {
             try
             {
                 Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                string tmp = ResetFile + ".tmp";
-                File.WriteAllLines(tmp, new[] { "# ChartBridge daily reset (written by ChartBridge; do not edit)", "# the New York date the 17:00 ET reset to None last ran", "day\t" + day });
-                if (File.Exists(ResetFile)) File.Replace(tmp, ResetFile, null); else File.Move(tmp, ResetFile);
+                List<string> lines = new List<string> { "# ChartBridge daily reset (written by ChartBridge; do not edit)", "# the New York date the 17:00 ET reset to None last ran (pending: a branch whose account was not known yet)", "day\t" + day };
+                if (pending != null) foreach (string k in pending.OrderBy(x => x, StringComparer.Ordinal)) lines.Add("pending\t" + k);
+                string miss;
+                lock (Lk) miss = pendingMissed;
+                if (pending != null && pending.Any() && miss != null) lines.Add("missed\t" + miss);   // review round 2 (LOW D): a retry after a restart still says caught up
+                ChartBridgeFiles.WriteLines(ResetFile, lines);   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
             }
             catch (Exception ex) { ChartBridgeServer.Log("daily-reset.txt could not be saved (" + ex.Message + "); a restart in this break would run the reset again"); }
         }
 
-        // Each branch: "" when it went to None (or was None), else why it was skipped.
-        private static void Run(string day)
+        // Each branch: "" when it went to None (or was None), "?..." when its account is not known yet (kept pending and tried
+        // again), else why it was skipped. only: the pending branches to try again (null: every branch).
+        private static void Run(string day, string missed, HashSet<string> only)
         {
-            List<string> done = new List<string>(), skipped = new List<string>();
-            Action<string, string> note = (branch, why) => { if (why == null) return; if (why.Length == 0) done.Add(branch); else skipped.Add(why); };
+            List<string> done = new List<string>(), skipped = new List<string>(), waits = new List<string>();
+            HashSet<string> pend = new HashSet<string>();
+            Action<string, string, Func<string>> one = (key, branch, reset) =>
+            {
+                if (only != null && !only.Contains(key)) return;
+                string why;
+                retrying = only != null;
+                try { why = reset(); } finally { retrying = false; }
+                if (why == null) return;
+                if (why.Length == 0) done.Add(branch);
+                else if (why[0] == '?') { pend.Add(key); bool say; lock (Lk) say = PendingSaid.Add(key); if (say) waits.Add(why.Substring(1)); }
+                else skipped.Add(why);
+            };
             // on or off (the coordinator's ruling 2026-10-14: a branch that is off would come back on with yesterday's account)
-            note("the bot", ChartBridgeBot.ResetToNone());
-            foreach (ChartBridgeAgent a in ChartBridgeAgents.All()) note("agent " + a.Id, a.ResetToNone());
-            note("the copier's leader", ChartBridgeCopier.ResetToNone());
-            string head = "Daily reset (17:00 ET): ";
+            one("bot", "the bot", ChartBridgeBot.ResetToNone);
+            foreach (ChartBridgeAgent a in ChartBridgeAgents.All()) { ChartBridgeAgent x = a; one("agent:" + x.Id, "agent " + x.Id, x.ResetToNone); }
+            one("copier", "the copier's leader", ChartBridgeCopier.ResetToNone);
+            bool changed;
+            lock (Lk)
+            {
+                HashSet<string> before = new HashSet<string>(Pending);
+                if (only != null) Pending.RemoveWhere(k => only.Contains(k) && !pend.Contains(k));
+                foreach (string k in pend) Pending.Add(k);
+                changed = !before.SetEquals(Pending);
+            }
+            if (changed || (only == null && pend.Count > 0)) { List<string> keep; lock (Lk) keep = Pending.ToList(); WriteDay(day, keep); }
+            string head = missed == null ? "Daily reset (17:00 ET): " : "Daily reset (17:00 ET, caught up now: ChartBridge was not running at 17:00 ET on " + missed + "): ";
+            foreach (string w in waits) { ChartBridgeServer.Log(head + w); ChartBridgeServer.SendToTraders(StatusJson("warn", head + w)); }
+            if (only != null && done.Count == 0 && skipped.Count == 0) return;
             if (done.Count > 0)
             {
                 string names = done.Count == 1 ? done[0] : string.Join(", ", done.Take(done.Count - 1)) + " and " + done[done.Count - 1];
@@ -1501,16 +1619,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeServer.Log(text);
                 ChartBridgeServer.SendToTraders(StatusJson("info", text));
             }
-            lock (Lk) { Skipped.Clear(); skippedDay = day; foreach (string w in skipped) Skipped.Add(head + w); }
+            lock (Lk) { if (only == null) Skipped.Clear(); skippedDay = day; skippedLate = missed != null; foreach (string w in skipped) Skipped.Add(head + w); }
             foreach (string w in skipped) { ChartBridgeServer.Log(head + w); ChartBridgeServer.SendToTraders(StatusJson("warn", head + w)); }
         }
 
-        // A page that signs in during the same break gets the skipped notes too.
+        // A page that signs in during the same break gets the skipped notes too (a reset caught up late: until the next 17:00).
         public static void SignedIn(ChartBridgeClient c)
         {
             DateTime et = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(NowUtc(), DateTimeKind.Utc), ChartBridgeTime.Eastern);
             List<string> notes;
-            lock (Lk) notes = et.Hour == 17 && skippedDay == et.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ? Skipped.ToList() : new List<string>();
+            lock (Lk) notes = (et.Hour == 17 || skippedLate) && skippedDay == DueDay(et) ? Skipped.ToList() : new List<string>();
             foreach (string n in notes) c.Send(StatusJson("warn", n));
         }
 

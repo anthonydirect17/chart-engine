@@ -178,6 +178,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception) { return null; }
         }
         private static string DayFile { get { return Path.Combine(Folder, "bot-day.txt"); } }
+        private static string KillFile { get { return Path.Combine(Folder, "bot-kill.txt"); } }   // 0.6.3 (audit C5)
+        private static double killedAt;
+        private static bool killReadPending;   // review (C5): bot-kill.txt held open at the start: on meanwhile, read again on the check
         private static string LogFile { get { return Path.Combine(Folder, "bot.log"); } }
 
         // ---------------------------------------------------------- start and stop (ChartBridgeServer.Start and Stop)
@@ -192,10 +195,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             LoadRails();
             LoadAccount();
             LoadDay();
-            lock (Sync) noBotSinceMs = Now();
+            double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): the kill switch survives a restart until the page releases it
+            lock (Sync) { noBotSinceMs = Now(); killed = kill.HasValue; killedAt = Math.Max(0, kill ?? 0); killReadPending = kill == -1; }
+            if (kill == -1) Log("bot-kill.txt is there but could not be read yet (held open): the kill switch is on; ChartBridge reads it again");
+            if (kill.HasValue) Log("the bot's kill switch is still on (" + ChartBridgeAgent.KilledWords(kill.Value) + "; kept through the restart): every bot order is refused until it is released on the page");
             if (withTimer) timer = new Timer(delegate { try { Check(); } catch (Exception ex) { ChartBridgeServer.Log("bot check error: " + ex.Message); } }, null, (int)CheckEveryMs, (int)CheckEveryMs);
-            Account ba = FindAccount();
-            Log("the bot channel is ON: a bot may connect at ws://localhost:" + ChartBridgeConfig.Port + "/bot (account " + BotAccount + (ba != null && IsSim(ba) ? " (Sim)" : " (LIVE)") + ", " + EffectiveRoot() + ", starting in shadow)");
+            Log("the bot channel is ON: a bot may connect at ws://localhost:" + ChartBridgeConfig.Port + "/bot (account " + BotAccount + " (" + AcctMark() + "), " + EffectiveRoot() + ", starting in shadow)");
         }
 
         public static void Stop()
@@ -302,11 +307,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Directory.CreateDirectory(Folder);
-                string tmp = RailsFile + ".tmp";
-                File.WriteAllLines(tmp, new[] { "# ChartBridge bot rails (written by ChartBridge from the page; do not edit)",
+                ChartBridgeFiles.WriteLines(RailsFile, new[] { "# ChartBridge bot rails (written by ChartBridge from the page; do not edit)",
                     "# maxTrades 1 to 5, maxLosses 1 to 3, root botRoot or its micro/mini sibling",
-                    "maxTrades\t" + t.ToString(CultureInfo.InvariantCulture), "maxLosses\t" + l.ToString(CultureInfo.InvariantCulture), "root\t" + r });
-                if (File.Exists(RailsFile)) File.Replace(tmp, RailsFile, null); else File.Move(tmp, RailsFile);
+                    "maxTrades\t" + t.ToString(CultureInfo.InvariantCulture), "maxLosses\t" + l.ToString(CultureInfo.InvariantCulture), "root\t" + r });   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                 return null;
             }
             catch (Exception ex) { return ex.Message; }
@@ -349,10 +352,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Directory.CreateDirectory(Folder);
-                string tmp = AccountFile + ".tmp";
-                File.WriteAllLines(tmp, new[] { "# ChartBridge bot account (written by ChartBridge from the page's Bot tab; do not edit)",
-                    "# the one account the bot's orders go to; - is None (nothing trades), as is a missing file", "account\t" + name });
-                if (File.Exists(AccountFile)) File.Replace(tmp, AccountFile, null); else File.Move(tmp, AccountFile);
+                ChartBridgeFiles.WriteLines(AccountFile, new[] { "# ChartBridge bot account (written by ChartBridge from the page's Bot tab; do not edit)",
+                    "# the one account the bot's orders go to; - is None (nothing trades), as is a missing file", "account\t" + name });   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                 return null;
             }
             catch (Exception ex) { return ex.Message; }
@@ -418,9 +419,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Directory.CreateDirectory(Folder);
-                string tmp = DayFile + ".tmp";
-                File.WriteAllLines(tmp, lines.ToArray());
-                if (File.Exists(DayFile)) File.Replace(tmp, DayFile, null); else File.Move(tmp, DayFile);
+                ChartBridgeFiles.WriteLines(DayFile, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
             }
             catch (Exception ex) { Log("bot-day.txt could not be saved (" + ex.Message + "); a restart would forget today's bot trades"); }
         }
@@ -455,6 +454,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (dayBroken != null) return dayBroken;
             if (railsBroken != null) return railsBroken;
             if (accountBroken != null) return accountBroken;
+            string wait = ChartBridgeBranches.WaitingWords("bot", "the bot", account);   // 0.6.3 (review round 2, LOW C)
+            if (wait != null) return wait;
             int losses = Trades.Values.Count(v => v < 0);
             if (losses >= maxLosses) return losses + " losing trades today: no new bot entries until 18:00 ET";
             return null;
@@ -1064,6 +1065,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Is the bot's account on NinjaTrader's simulator now (for the SIM or LIVE mark; it refuses nothing).
         private static bool SimNow() { Account a = FindAccount(); return a != null && IsSim(a); }
+        // 0.6.3: the account's mark in texts: None (nothing trades), Sim or LIVE.
+        private static string AcctMark() { string b = BotAccount; return b == null || ChartBridgeBranches.IsNone(b) ? "None" : SimNow() ? "Sim" : "LIVE"; }
 
         private static string RootProblem(out string root)
         {
@@ -1267,6 +1270,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void Check()
         {
             if (!Enabled) return;
+            bool kp;
+            lock (Sync) kp = killReadPending && killed;
+            if (kp)
+            {
+                double? k = ChartBridgeFiles.KillSince(KillFile);
+                if (k != -1) { lock (Sync) { killReadPending = false; if (k.HasValue) killedAt = k.Value; } Log("bot-kill.txt read now: the kill switch stays on until it is released on the page"); Notify(); }
+            }
             RollDay();
             double now = Now();
             ChartBridgeClient silent = null;
@@ -1310,7 +1320,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (type == "botSeen") why = Seen(d);
                 else if (type == "botAnswer") why = AnswerProposal(d);
                 else if (type == "botRails") why = SetRails(d);
-                else if (type == "botAccount") why = SetAccount(d);
+                else if (type == "botAccount") { bool dropped = false; lock (PlaceGate) { why = SetAccount(d); if (why == null) dropped = ChartBridgeBranches.Chosen("bot"); } if (dropped) Notify(); }   // 0.6.3 (review round 2, MED A): under PlaceGate, as the reset
                 if (why != null) PageReject(client, cid, id, why);
             }
             catch (Exception ex)
@@ -1354,9 +1364,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool on;
             if (!Bool(d, "on", out on)) return "on must be true or false";
             List<Proposal> expired = new List<Proposal>();
-            lock (Sync) { killed = on; if (on) expired = ExpireOpenLocked(); }
+            string saveErr = null;   // 0.6.3 (audit C5): saved, so a restart keeps it; a release whose file cannot be removed is refused
+            if (on) { bool was; lock (Sync) was = killed; if (!was) saveErr = ChartBridgeFiles.SaveKill(KillFile, "the bot", Now()); }
+            else { string err = ChartBridgeFiles.ClearKill(KillFile); if (err != null) return "bot-kill.txt could not be removed (" + err + "): the kill switch stays on"; }
+            lock (Sync) { if (on && !killed) killedAt = Now(); killed = on; if (!on) killedAt = 0; if (on) expired = ExpireOpenLocked(); }
             if (on)
             {
+                if (saveErr != null) { string w = "bot-kill.txt could not be saved (" + saveErr + "): the kill switch is on now but a restart would release it"; ToPages(StatusJson("warn", w)); Log(w); }
                 // As the heartbeat loss: unfilled entries cancelled, the position keeps its stop and target, nothing flattened.
                 int n = CancelUnfilled();
                 foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToBot(AnswerJson(p.S.Id, "not answered", "the kill switch is on")); }
@@ -1480,7 +1494,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<Proposal> expired;
             lock (Sync) { account = name; accountBroken = null; expired = ExpireOpenLocked(); }
             foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToBot(AnswerJson(p.S.Id, "not answered", "the bot's account changed to " + name)); BotLog("proposal " + p.S.Id + " not answered (the bot's account changed to " + name + ")"); }
-            string mark = SimNow() ? "Sim" : "LIVE";
+            string mark = AcctMark();
             Log("bot account " + name + " (" + mark + "), was " + old + ", set by the page");
             BotLog("account " + name + " (" + mark + "), was " + old + ", set by the page");
             ToBot(WelcomeJson());   // so the bot knows its account
@@ -1527,13 +1541,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         // nothing was to do.
         public static string ResetToNone()
         {
+            if (!Enabled && ChartBridgeBranches.DroppedWhileRetrying("bot")) return null;   // 0.6.3 (review round 2, MED A)
             if (!Enabled) return ResetFileToNone();
             lock (PlaceGate) return ResetToNoneLocked();
         }
         private static string ResetToNoneLocked()
         {
+            if (ChartBridgeBranches.DroppedWhileRetrying("bot")) return null;   // 0.6.3 (review round 2, MED A)
             string acct = BotAccount;
             if (ChartBridgeBranches.IsNone(acct) || ChartBridgeBranches.KeepThroughReset("bot", acct)) return null;
+            string unk = ChartBridgeBranches.UnknownWhy(FindAccount(acct), acct);   // 0.6.3 (review HIGH 1)
+            if (unk != null) return ChartBridgeBranches.WaitWords("the bot", acct, unk);
             bool exposed;
             lock (Sync) exposed = openTag != null;
             if (exposed || WorkingEntries().Count > 0 || !ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("the bot", acct);
@@ -1547,6 +1565,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string acct = ReadAccountFile();
             if (acct == null || ChartBridgeBranches.IsNone(acct) || ChartBridgeBranches.KeepThroughReset("bot", acct)) return null;
+            string unk = ChartBridgeBranches.UnknownWhy(FindAccount(acct), acct);   // 0.6.3 (review HIGH 1)
+            if (unk != null) return ChartBridgeBranches.WaitWords("the bot (off)", acct, unk);
             if (!ChartBridgeBranches.Idle(FindAccount(acct))) return ChartBridgeBranches.SkipWords("the bot (off)", acct);
             string err = SaveAccount(ChartBridgeBranches.None);
             if (err != null) return "the bot (off) stays on " + acct + ": bot-account.txt could not be saved (" + err + ")";
@@ -1634,6 +1654,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"maxLosses\":").Append(maxLosses)
                  .Append(",\"maxQty\":").Append(MaxQty)
                  .Append(",\"killed\":").Append(killed ? "true" : "false")
+                 .Append(",\"killedAt\":").Append(killed && killedAt > 0 ? Ms(killedAt) : "null")   // 0.6.3 (audit C5)
                  .Append(",\"standDown\":").Append(sd != null ? CbJson.Str(sd) : "null")
                  .Append(",\"lastBeatMs\":").Append(bot != null ? Ms(Math.Max(0, now - lastMsgMs)) : "null")
                  .Append(",\"lastSignal\":").Append(lastSignalJson ?? "null");
@@ -1655,13 +1676,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string root = EffectiveRoot(), m;
             int t, l;
-            lock (Sync) { m = mode; t = maxTrades; l = maxLosses; }
+            bool k;
+            lock (Sync) { m = mode; t = maxTrades; l = maxLosses; k = killed; }
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
             string instruments = inst == null ? "[]" :
                 "[{\"root\":" + CbJson.Str(root) + ",\"name\":" + CbJson.Str(inst.FullName) + ",\"tick\":" + CbJson.Num(inst.MasterInstrument.TickSize) +
                 ",\"pointValue\":" + CbJson.Num(inst.MasterInstrument.PointValue) + ",\"quoteOnly\":false}]";
             return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + ChartBridgeBranches.Json(BotAccount) + ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"root\":" + CbJson.Str(root) +
-                   ",\"rails\":{\"maxQty\":" + MaxQty + ",\"maxTrades\":" + t + ",\"maxLosses\":" + l + "},\"instruments\":" + instruments + "}";
+                   ",\"killed\":" + (k ? "true" : "false") + ",\"rails\":{\"maxQty\":" + MaxQty + ",\"maxTrades\":" + t + ",\"maxLosses\":" + l + "},\"instruments\":" + instruments + "}";
         }
 
         private static string SignalJson(Signal s)

@@ -856,7 +856,7 @@ test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and t
   assert.match(acode, /\.Append\(",\\"roomDailyLoss\\":null"\)/);
   // accounts.txt: written whole via a temp file, never rewritten after a failed read; only from the timer or a page's thread
   assert.match(acode, /if \(!loaded \|\| readError != null \|\| !dirty\) return;/);
-  assert.match(acode, /if \(File\.Exists\(FilePath\)\) File\.Replace\(tmp, FilePath, null\); else File\.Move\(tmp, FilePath\);/);
+  assert.match(acode, /ChartBridgeFiles\.WriteWhole\(FilePath, text\);/, '0.6.3 (audit C3): through a temp file, write-through, the old copy kept');
   assert.ok(!/Save\(\)|FlushLog\(\)/.test(bodyOf(acode, 'public static void StartNow(')), 'no write at start (NinjaTrader\'s thread)');
   assert.match(acode, /public const double GraceMs = 10000;/);
   // the main file: client, accountTrade, accountArchive and accountUnarchive (0.5.1) go to ChartBridgeAccounts; "accounts" rides the order lane
@@ -1099,7 +1099,7 @@ test('0.4.0 bot: on by default, the account Anthony chooses (None until then, 0.
   for (const re of [/string why = AccountProblemFor\(name, true\);/, /why = ChartBridgeCopier\.BotAccountRefusal\(name\);/, /if \(exposed \|\| WorkingEntries\(\)\.Count > 0\) return "the bot has a position or a working entry: choose its account when it is flat";/, /string err = SaveAccount\(name\);/])
     assert.match(setAcc, re, 'SetAccount: ' + re);
   assert.ok(setAcc.indexOf('SaveAccount(name)') > setAcc.indexOf('WorkingEntries()'), 'saved only after every refusal');
-  assert.match(bodyOf(bcode, 'private static string SaveAccount(string name)'), /File\.WriteAllLines\(tmp,[\s\S]*if \(File\.Exists\(AccountFile\)\) File\.Replace\(tmp, AccountFile, null\); else File\.Move\(tmp, AccountFile\);/);
+  assert.match(bodyOf(bcode, 'private static string SaveAccount(string name)'), /ChartBridgeFiles\.WriteLines\(AccountFile, /);
   const prob = bodyOf(bcode, 'private static string AccountProblemFor(string name, bool gates)');
   for (const re of [/IsNeverTradable\(name \?\? ""\)/, /if \(gates && !ChartBridgeOrders\.AccountTradable\(name\)\)/, /a\.Connection\.Status != ConnectionStatus\.Connected/]) assert.match(prob, re, 'AccountProblemFor: ' + re);
   assert.ok(!/IsSim\(/.test(prob), 'no Sim lock');
@@ -1274,13 +1274,15 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
   assert.ok(fnBody('Flatten').indexOf('StopManaging(account, inst);') < fnBody('Flatten').indexOf('account.Flatten('));
   // managed.txt: whole, through a temp file; never rewritten when it could not be read
   const w = sBodies('WriteManagedOnce');
-  assert.match(w, /string tmp = ManagedFile \+ "\.tmp";\s*File\.WriteAllLines\(tmp, lines\.ToArray\(\)\);\s*if \(File\.Exists\(ManagedFile\)\) File\.Replace\(tmp, ManagedFile, null\); else File\.Move\(tmp, ManagedFile\);/);
+  assert.match(w, /ChartBridgeFiles\.WriteLines\(ManagedFile, lines\.ToArray\(\)\);/);
+  const files = bodyOf(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridge.cs'), 'utf8'), 'public static void WriteWhole(string path, string text)');
+  assert.match(files, /FileOptions\.WriteThrough[\s\S]*fs\.Flush\(true\);[\s\S]*File\.Replace\(tmp, path, BackupOf\(path\), true\)/, '0.6.3 (audit C3): flushed to the disk before the replace, the old copy kept');
   assert.match(w, /if \(managedReadFailed\)/);
 });
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.[0-2])";/);
+  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.[0-3])";/);
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1309,7 +1311,7 @@ test('ChartBridge 0.5.5: the accounts line\'s one-time conversion and notConnect
 });
 
 test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its own thread, and tells hello, the pages and /diag', () => {
-  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.[0-2])";/);
+  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.[0-3])";/);
   const clk = code.slice(code.indexOf('public static class ChartBridgeClock'));
   assert.ok(code.indexOf('public static class ChartBridgeClock') > code.indexOf('public static class ChartBridgeServer') && clk.length > 1000, 'ChartBridgeClock is the last class of ChartBridge.cs');
   // never sets the clock or a setting: no Win32 time call, no w32tm, no process, no registry, in any add-on file
@@ -1345,7 +1347,7 @@ test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its o
   assert.match(load, /ChartBridgeClock\.ResetConfig\(\);/);
   assert.match(load, /else if \(ChartBridgeAgents\.ReadConfig\(key, val\)\) \{ \}[^\n]*\n\s*else if \(ChartBridgeClock\.ReadConfig\(key, val\)\) \{ \}/);
   // started and stopped with ChartBridge; hello, the pages after hello, /diag; the PC clock's steps followed
-  assert.match(bodyOf(code, 'public static bool Start()'), /ChartBridgeCopier\.Start\(\);\s*ChartBridgeClock\.Start\(\);\s*return true;/);
+  assert.match(bodyOf(code, 'public static bool Start()'), /ChartBridgeCopier\.Start\(\);\s*try \{ ChartBridgeBranches\.Poll\(\); \} catch \(Exception ex\) \{ Log\(\"daily reset error: \" \+ ex\.Message\); \}\s*ChartBridgeClock\.Start\(\);\s*return true;/);
   assert.match(bodyOf(code, 'public static void Stop()'), /ChartBridgeClock\.Stop\(\);/);
   assert.match(bodyOf(code, 'private static string HelloJsonFor('), /b\.Append\(",\\"pcClock\\":"\)\.Append\(ChartBridgeClock\.Json\(\)\);/);
   assert.match(bodyOf(code, 'private static async Task RunClient('), /int clockSeen = ChartBridgeClock\.Changes;\s*client\.Send\(HelloJsonFor\(seen\)\);[\s\S]*if \(ChartBridgeClock\.Changes != clockSeen\) client\.Send\(ChartBridgeClock\.MessageJson\(\)\);/);
@@ -1388,7 +1390,7 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   assert.match(a, /Snapshot\(served\);\s*lock \(Sync\) snapshotSent = true;[^\n]*\n\s*SendAccountState\(true\);/);
   assert.match(a, /SendState\(false\);[^\n]*\n\s*SendAccountState\(false\);/);
   const acc = strip(read('ChartBridgeAccounts.cs'));
-  assert.match(acc, /if \(et\.Hour != 17\) return;\s*try \{ ChartBridgeGroups\.EodMark\(\); \}/);
+  assert.match(acc, /bool inBreak = et\.Hour == 17;\s*if \(inBreak\) \{ try \{ ChartBridgeGroups\.EodMark\(\); \}/);
   assert.match(acc, /ChartBridgeGroups\.AppendAccountFields\(b, name, a\);/);
   assert.match(acc, /ChartBridgeGroups\.StartNow\(\);[^\n]*\n\s*if \(!On\) return;/, 'groups.txt is read whether or not accountChecks is on');
   // the page messages, through ChartBridge.cs's dispatch; strict keys

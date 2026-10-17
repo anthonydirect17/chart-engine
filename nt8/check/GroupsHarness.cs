@@ -17,6 +17,10 @@ using NinjaTrader.NinjaScript.AddOns;
 public static class GroupsHarness
 {
     static Action<bool, string> Check;
+    // 0.6.3 (audit C3): a file broken on purpose, with no last good copy (.bak) to fall back to (the backup cases are their own)
+    // 0.6.3 (review MED 5): a file gone means no copy beside it either (a .bak or .tmp left would be used, or stand the agent down)
+    static void Gone(string path) { File.Delete(path); File.Delete(path + ".bak"); File.Delete(path + ".tmp"); }
+    static void Corrupt(string path, string text) { try { Gone(path + ".bak"); } catch (Exception) { } File.WriteAllText(path, text); }
     const BindingFlags PS = BindingFlags.NonPublic | BindingFlags.Static;
     static readonly List<string> sent = new List<string>();
     static ChartBridgeClient page;
@@ -88,6 +92,122 @@ public static class GroupsHarness
     }
     static string State(string account) { string key; return ChartBridgeGroups.AccountStateJson(account, out key); }
 
+    // 0.6.3 (audit C2): the PC off at the close, or asleep while a position was open
+    static void Restart() { ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs()); foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a); }
+    static void MissedCloses()
+    {
+        Flat();
+        ChartBridgeGroups.GapMs = 1e12;   // the harness clock jumps: watched unless a case says otherwise (a restart is always a gap)
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid Flex", "true", "1000", "2000", "eod", "3000", "50000", "0"));
+        ClockEt(2026, 10, 20, 9, 0);
+        Money(simC, 51000, 0, 0);
+        Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "51000"));
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-C") == "g1", "C2 setup: SIM-C in an EOD group, highest close 51000");
+        ClockEt(2026, 10, 20, 16, 30); Money(simC, 51200, 0, 0); Tick();
+        Check(MarksText().Contains("mark\tSIM-C\t51000\t51200\t") && MarksText().Contains("\t2026-10-19\t51200\tflat\t-\t-\n"), "0.6.3 C2: the last close seen, the last balance and flat are saved (account-marks.txt): " + MarksText().Replace("\t", "<TAB>"));
+        // the laptop off from 16:30 to 19:00, nothing traded: the balance is that close
+        ClockEt(2026, 10, 20, 19, 0); Restart(); Tick();
+        string e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":49200,") && MarksText().Contains("mark\tSIM-C\t51200\t") && MarksText().Contains("\t2026-10-20\t51200\tflat\t-\t-\n"),
+              "0.6.3 C2: off over the close, nothing traded: the first reading (51200) is taken as the close, floor 49200: " + e);
+        // off over the close and the account traded (a target filled at the broker): floor and room null with the reason, never a guess
+        ClockEt(2026, 10, 21, 16, 30); Tick();
+        ClockEt(2026, 10, 21, 19, 0); Restart(); Money(simC, 51800, 0, 0); Clear(); Tick();
+        e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":null,\"roomFloor\":null,") && e.Contains("ChartBridge was not running at the close of 2026-10-21: put the account in Lucid Flex again and give the highest close from the firm's dashboard") &&
+              Any("SIM-C: ChartBridge was not running at the close of 2026-10-21"), "0.6.3 C2: off over the close and it traded: floor and roomFloor null with the reason, the pages told: " + e);
+        Check(State("SIM-C").Contains("\"roomFloor\":null") && State("SIM-C").Contains("not running at the close of 2026-10-21"), "0.6.3 C2: the agents' accountState too: " + State("SIM-C"));
+        Check(!Any("its intraday high may have been missed"), "0.6.3 LOW 8: an EOD group's account never gets the intraday-high warning");
+        simC.Items[AccountItem.TrailingMaxDrawdown] = 700;   // NinjaTrader reports the firm's own trailing room
+        e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":null,\"roomFloor\":700,") && e.Contains("\"roomFloor\":\"ninjatrader\""), "0.6.3 LOW 8: the floor not known, but NinjaTrader's own trailing room (700) is given, src ninjatrader: " + e);
+        simC.Items.Remove(AccountItem.TrailingMaxDrawdown);
+        Restart(); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":null,") && MarksText().Contains("\tflat\t2026-10-21\t2026-10-21\n"), "0.6.3 C2: the missed close survives a restart (account-marks.txt)");
+        G("accountGroup", Join("SIM-C", "null", null)); Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "52000"));
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50000,") && MarksText().Contains("\t51800\tflat\t-\t-\n"), "0.6.3 C2: put in the group again with the highest close (52000): floor 50000, the missed close cleared");
+        // a weekend off with nothing traded: every close missed was that balance
+        ClockEt(2026, 10, 23, 16, 30); Tick();
+        ClockEt(2026, 10, 26, 8, 0); Restart(); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50000,") && MarksText().Contains("\t2026-10-23\t51800\tflat\t-\t-\n"), "0.6.3 C2: Friday 16:30 to Monday 08:00, nothing traded: no close missed, floor stays 50000");
+        // asleep over the close with a position open (no restart: a gap in the 1 s readings), the same balance: not known
+        ChartBridgeGroups.GapMs = 10000;
+        Pos(simC, mnq, 1);
+        ClockEt(2026, 10, 26, 16, 30); Money(simC, 51800, 150, 0); Tick();
+        ClockEt(2026, 10, 26, 19, 0); Clear(); Tick();
+        e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":null,\"roomFloor\":null,") && e.Contains("not running at the close of 2026-10-26"), "0.6.3 C2: asleep over the close holding a position: floor and room null: " + e);
+        Pos(simC, mnq, 0); Money(simC, 51800, 0, 0);
+        G("accountGroup", Join("SIM-C", "null", null)); Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "52000"));
+        ChartBridgeGroups.GapMs = 1e12;
+        // started in the break after a missed close the day before: this reading is today's close, the one before is missed
+        ClockEt(2026, 10, 27, 16, 0); Tick();
+        ClockEt(2026, 10, 27, 17, 20); Restart(); Money(simC, 52300, 0, 0); Tick();
+        e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":50300,") && MarksText().Contains("mark\tSIM-C\t52300\t"), "0.6.3 C2: restarted at 17:20 ET: the reading is the day's close (52300), nothing before it missed: floor 50300: " + e);
+        // intraday: off while a position was open
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid Flex", "true", "1000", "2000", "intraday", "3000", "50000", "0"));
+        G("accountGroup", Join("SIM-C", "null", null)); Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "52300"));
+        ChartBridgeGroups.GapMs = 10000;
+        ClockEt(2026, 10, 28, 10, 0); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50300,"), "0.6.3 C2 intraday: floor 50300 while watched");
+        ClockEt(2026, 10, 28, 10, 30); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50300,"), "0.6.3 C2 intraday: a gap while flat with nothing traded misses no high");
+        Pos(simC, mnq, 1); Money(simC, 52300, 40, 0); Tick();
+        ClockEt(2026, 10, 28, 11, 0); Money(simC, 52300, -20, 0); Clear(); Tick();
+        e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":null,\"roomFloor\":null,") && e.Contains("its intraday high may be missed: put it in Lucid Flex again and give the highest balance from the firm's dashboard") && Any("its intraday high may have been missed"),
+              "0.6.3 C2 intraday: 30 minutes unwatched holding a position: floor and room null with the reason: " + e);
+        Pos(simC, mnq, 0); Money(simC, 52300, 0, 0);
+        G("accountGroup", Join("SIM-C", "null", null)); Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "52500"));
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50500,"), "0.6.3 C2 intraday: put in the group again with its highest balance: known again");
+        // a 0.6.2 file (7 fields): read as before, no gap check at its first reading
+        string mp = Path.Combine(folder, "account-marks.txt");
+        File.WriteAllText(mp, ChartBridgeGroups.MarksHeader + "\n" + "# old\n" + "mark\tSIM-C\t52500\t52500\t52300\t2026-10-28\t-\n");
+        ClockEt(2026, 10, 28, 19, 0); Restart(); Money(simC, 52900, 0, 0); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":50900,") && MarksText().Contains("mark\tSIM-C\t52500\t52900\t52900\t2026-10-29\t") && MarksText().Contains("\t2026-10-28\t52900\tflat\t-\t-\n"),
+              "0.6.3 C2: a 0.6.2 account-marks.txt (7 fields) reads as 0.6.2 did and is written with the new fields: " + MarksText().Replace("\t", "<TAB>"));
+        Clear(); G("accountGroup", Join("SIM-C", "null", null));
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid Flex", "true", "1000", "2000", "eod", "3000", "50000", "0"));
+        ChartBridgeGroups.GapMs = 10000;
+        Flat();
+    }
+
+    static void Backups()
+    {
+        string p = Path.Combine(folder, "groups.txt"), mp = Path.Combine(folder, "account-marks.txt");
+        string was = File.ReadAllText(p), mwas = File.ReadAllText(mp);
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid Flex", "true", "1000", "2000", "eod", "3000", "50000", "0"));   // a save: the copy before it is groups.txt.bak
+        Check(File.Exists(p + ".bak") && File.Exists(mp + ".bak"), "0.6.3 C3: groups.txt and account-marks.txt keep the copy each save replaces (.bak)");
+        File.WriteAllText(p, new string('\0', 48));
+        File.WriteAllText(mp, "mark\thalf");
+        Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+        string gj = ChartBridgeGroups.GroupsJson();
+        Check(gj.Contains("\"error\":\"groups.txt could not be read") && Any("its last good copy, groups.txt.bak, holds ") && Any("to go back to it, copy groups.txt.bak over groups.txt"),
+              "0.6.3 MED 3: a groups.txt of zeros: unreadable as in 0.6.2 (every entry refused), never the .bak on its own; the alarm says what the copy holds and how to go back: " + gj);
+        Check(Any("account-marks.txt could not be read (the first line is not ChartBridge's): ChartBridge uses its last good copy (account-marks.txt.bak)") && !Entry(AccountsNow(), "SIM-A").Contains("account-marks.txt could not be read"),
+              "0.6.3 C3: a torn account-marks.txt: its last good copy is read (kept automatic)");
+        List<string> late = new List<string>();
+        ChartBridgeClient lc = new ChartBridgeClient(null, 777) { Origin = "http://localhost:8765" };
+        lc.Tap = x => { lock (late) late.Add(x); };
+        ChartBridgeAccounts.SignedIn(lc);
+        Check(late.Any(x => x.Contains("account-marks.txt could not be read") && x.Contains("last good copy")) && late.Any(x => x.Contains("groups.txt could not be read")), "0.6.3 C3: a page that signs in later gets the notes too");
+        // 0.6.3 (review MED 5): the files missing after a cut-off replace, a copy beside each
+        File.WriteAllText(p + ".bak", was); File.Delete(p);
+        File.WriteAllText(mp + ".bak", mwas); File.Delete(mp);
+        Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+        gj = ChartBridgeGroups.GroupsJson();
+        Check(gj.Contains("\"error\":\"groups.txt could not be read") && gj.Contains("(groups.txt is missing (a save cut off?) but groups.txt.bak is there and holds ") && !File.Exists(p),
+              "0.6.3 MED 5: groups.txt missing with its .bak: unreadable with the alarm (never no groups on its own), not written: " + gj);
+        Check(Any("account-marks.txt is missing (a save cut off?): ChartBridge uses account-marks.txt.bak and writes the file again"), "0.6.3 MED 5: account-marks.txt missing: its .bak used automatically");
+        File.WriteAllText(p, was); File.WriteAllText(mp, mwas);
+        Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+        ChartBridgeFiles.ClearNotes();
+    }
+
     public static void Run(Action<bool, string> check)
     {
         Check = check;
@@ -119,6 +239,8 @@ public static class GroupsHarness
             TypeAndHero();   // 0.6.1 (SPEC CE-1): each group's Type and default hero, shapes only
             AccountTypeInState();   // 0.6.2: accountState.accountType
             StandDowns();    // 0.6.2 (SPEC CE-2): a deleted group's stand-downs go with it; agent-standdowns.txt gates agent entries only
+            MissedCloses();  // 0.6.3 (audit C2): a close or an intraday high ChartBridge did not see never overstates the room
+            Backups();       // 0.6.3 (audit C3): groups.txt and account-marks.txt fall back to their last good copy
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally
@@ -491,7 +613,7 @@ public static class GroupsHarness
         Check(Entry(AccountsNow(), "SIM-A").Contains("\"floor\":51600,") && State("SIM-A").Contains("\"realizedToday\":-300"), "after a restart: the same highs and day start (account-marks.txt)");
         // an unreadable marks file: trailing floors null with why, a static one still works
         string mp = Path.Combine(folder, "account-marks.txt"), was = File.ReadAllText(mp);
-        File.WriteAllText(mp, "not ours\n");
+        Corrupt(mp, "not ours\n");
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
         Tick();
@@ -605,7 +727,7 @@ public static class GroupsHarness
         Flat();
         // item 2: an unreadable groups.txt refuses entries but never an exit
         string file = Path.Combine(folder, "groups.txt"), was = File.ReadAllText(file);
-        File.WriteAllText(file, "broken\n");
+        Corrupt(file, "broken\n");
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
         Pos(simD, mnq, 1);
@@ -858,7 +980,7 @@ public static class GroupsHarness
         foreach (string broken in new[] { "\tfunded\tsample-build-1", "\tlive\t-", "\teval\ttwo words" })
         {
             string text = ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-" + (broken == "\tfunded\tsample-build-1" ? "\tfunded\tsample build" : broken) + "\n";
-            File.WriteAllText(p, text);
+            Corrupt(p, text);
             Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
             Check(ChartBridgeGroups.GroupsJson().Contains("\"list\":[],\"error\":\"groups.txt could not be read") && ChartBridgeGroups.GroupsJson().Contains("is not a group line ("), "TH: a bad type or hero (" + text.Split('\n')[2].Replace("\t", " ") + "): unreadable, with why: " + ChartBridgeGroups.GroupsJson());
             Clear(); G("groupSave", save);
@@ -877,7 +999,7 @@ public static class GroupsHarness
         string[] broken = { "no header\n", ChartBridgeGroups.Header + "\n#\nmember\tSIM-A\tg5\n", ChartBridgeGroups.Header + "\n#\ngroup\tg1\tA\ton\t-\t2000\teod\t-\t50000\t-\ngroup\tg1\tB\ton\t-\t2000\teod\t-\t50000\t-\n", ChartBridgeGroups.Header + "\n#\nhero\tg1\n" };
         foreach (string text in broken)
         {
-            File.WriteAllText(p, text);
+            Corrupt(p, text);
             Clear();
             ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
             foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
@@ -900,7 +1022,7 @@ public static class GroupsHarness
         ChartBridgeAccounts.ReadFault = null;
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Check(ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == null && ChartBridgeGroups.GroupOf("SIM-B") == null && FileText() == was, "readable again after a start: as saved");
-        File.Delete(p); File.Delete(Path.Combine(folder, "account-marks.txt"));
+        Gone(p); Gone(Path.Combine(folder, "account-marks.txt"));
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Check(ChartBridgeGroups.GroupsJson() == "{\"type\":\"groups\",\"list\":[],\"error\":null}", "both files gone: no groups (0.5.7's behaviour)");
     }
@@ -957,7 +1079,7 @@ public static class GroupsHarness
             Check(Rejection() == "" && ChartBridgeAgents.StandDownsOf(null).Count == 0 && !File.ReadAllText(sd).Contains("standDown\t") && Any("{\"type\":\"agentStandDowns\",\"list\":[],\"error\":null}"),
                   "SD: the group deleted: both its stand-downs dropped at once (memory, the file, the pages)");
             // unreadable: every agent entry refused (any group or none); the page's own orders and exits are not touched
-            File.WriteAllText(sd, "# made-up\n# test\nstandDown\tbad line\n");
+            Corrupt(sd, "# made-up\n# test\nstandDown\tbad line\n");
             ChartBridgeAgents.Start(false);
             string why = ChartBridgeAgents.StandDownsBroken();
             Check(why != null && why.Contains("agent-standdowns.txt has a line ChartBridge does not understand: every new agent entry on an account in a prop group is refused") && ChartBridgeAgents.BrokenRefusal("SIM-D") == null,
@@ -966,11 +1088,18 @@ public static class GroupsHarness
             Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
             Check(Submits(simD) == d + 1, "SD: unreadable: a page order still goes (the file gates agent entries only)");
             Flat();
+            // 0.6.3 (review MED 3): with a good .bak it is still unreadable (never the copy on its own); the alarm says what the copy holds
+            File.WriteAllText(sd + ".bak", "# made-up\n# test\nstandDown\tsample-build-1\t" + gid + "\t1791467200000\tedge watch\tmade-up: below the exam mean\n");
+            ChartBridgeAgents.Start(false);
+            why = ChartBridgeAgents.StandDownsBroken();
+            Check(why != null && why.Contains("(its last good copy, agent-standdowns.txt.bak, holds 1 stand-down (build sample-build-1 on group ") && why.Contains("to use it, copy agent-standdowns.txt.bak over agent-standdowns.txt and restart ChartBridge)") &&
+                  ChartBridgeAgents.StandDownsOf(null).Count == 0, "0.6.3 MED 3: agent-standdowns.txt unreadable with a good .bak: refused as unreadable, the alarm names the copy: " + why);
+            try { Gone(sd + ".bak"); } catch (Exception) { }
         }
         finally
         {
             ChartBridgeAgents.Stop(); ChartBridgeAgents.ResetConfig();
-            try { File.Delete(sd); } catch (Exception) { }
+            try { Gone(sd); } catch (Exception) { }
             Clear(); G("groupDelete", "{\"type\":\"groupDelete\",\"cid\":\"d\",\"group\":\"" + gid + "\"}");
         }
     }

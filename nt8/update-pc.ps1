@@ -64,6 +64,8 @@ $script:RequiredChecks = @('unit (ubuntu-latest)', 'unit (windows-latest)')   # 
 $script:GoodConclusions = @('success', 'neutral', 'skipped')
 $script:Remote = 'origin'
 $script:Branch = 'main'
+$script:IsWin = ([Environment]::OSVersion.Platform -eq 'Win32NT')
+$script:StaleLockMinutes = 10       # a ref lock older than this was left by an ended fetch (the fetch's time limit is 3 minutes)
 $script:ManifestPath = 'nt8/install-files.json'
 $script:CompatPath = 'live/COMPAT.json'
 $script:SelfPath = 'nt8/update-pc.ps1'
@@ -282,11 +284,22 @@ function Invoke-Native([string]$Exe, [string[]]$ArgList, [int]$TimeoutSec = 120)
   $out = $p.StandardOutput.ReadToEndAsync()
   $err = $p.StandardError.ReadToEndAsync()
   if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-    try { $p.Kill() } catch { }
+    Stop-ProcessTree $p
     return @{ code = -1; out = ''; err = "timed out after $TimeoutSec s" }
   }
   $p.WaitForExit()
   return @{ code = $p.ExitCode; out = $out.Result; err = $err.Result }
+}
+
+# A git that timed out is ended with everything it started (git-remote-https, Git Credential Manager): ending git.exe
+# alone leaves them holding the fetch, and a ref lock behind (as botlab_update.ps1). Windows: taskkill /T; .NET Core: Kill(true).
+function Stop-ProcessTree($Proc) {
+  if ($script:IsWin) {
+    try { [void](Invoke-Native (Join-Path $env:SystemRoot 'System32\taskkill.exe') @('/T', '/F', '/PID', [string]$Proc.Id) 30) } catch { }
+  } else {
+    try { $Proc.Kill($true) } catch { }
+  }
+  try { if (-not $Proc.HasExited) { $Proc.Kill() } } catch { }
 }
 
 function Get-GitExe {
@@ -1004,7 +1017,33 @@ function Test-NetworkDown([string]$Err) {
 
 # git fetch of main. With -Wait (the `update` run), a network that is not up yet is waited for: tried again every
 # FetchRetrySec for up to FetchWaitSec. Returns the last git result with waitedSec and offline (still no network).
-function Invoke-Fetch([switch]$Wait) {
+# The path of a file in the clone's git folder (rev-parse --git-path), or null.
+function Get-GitPath([string]$Rel) {
+  $r = Invoke-Git @('rev-parse', '--git-path', $Rel) 30
+  if ($r.code -ne 0) { return $null }
+  $p = $r.out.Trim()
+  if (-not [IO.Path]::IsPathRooted($p)) { $p = Join-Path $script:P.Repo $p }
+  return $p
+}
+
+# A fetch that was ended (a timeout, a power cut) can leave a ref lock behind, and every later fetch then fails on it
+# (fetch_failed for good). A lock of the refs this updater writes (origin/main, packed-refs), older than StaleLockMinutes
+# (far past the fetch's time limit), is removed and logged; a younger one is left (another git may be working) and the
+# fetch says why it failed. As botlab_update.ps1's Clear-StaleRefLocks.
+function Clear-StaleRefLocks([switch]$ReportOnly) {
+  foreach ($rel in @("refs/remotes/$($script:Remote)/$($script:Branch).lock", 'packed-refs.lock')) {
+    $lock = Get-GitPath $rel
+    if (-not $lock -or -not (Test-Path -LiteralPath $lock)) { continue }
+    $age = ((Get-Date) - (Get-Item -LiteralPath $lock).LastWriteTime).TotalMinutes
+    if ($age -lt $script:StaleLockMinutes) { Write-Log "a git lock is there ($rel, $([int]$age) min old): left, another git may be working" 'WARN'; continue }
+    if ($ReportOnly) { Write-Host "a stale git lock ($rel, $([int]$age) min old) would be removed"; continue }
+    try { Remove-Item -LiteralPath $lock -Force; Write-Log "removed a stale git lock ($rel, $([int]$age) min old, left by a fetch that was ended)" 'WARN' }
+    catch { Write-Log "a stale git lock ($rel) could not be removed: $($_.Exception.Message)" 'WARN' }
+  }
+}
+
+function Invoke-Fetch([switch]$Wait, [switch]$DryRun) {
+  Clear-StaleRefLocks -ReportOnly:$DryRun
   $start = Get-NowMs
   for ($try = 1; ; $try++) {
     $f = Invoke-Git @('fetch', '--quiet', $script:Remote, $script:Branch) 180
@@ -1053,7 +1092,7 @@ function Invoke-Pass([switch]$DryRun, [switch]$StageOnly, $State) {
     $r.outcome = 'paused'; $r.reason = "paused by hand ($($script:P.Paused)); run update-pc.ps1 resume to turn updates back on"; return $r
   }
   $r.compiled = Get-CompiledChartBridge $State
-  try { $f = Invoke-Fetch -Wait:(-not $DryRun -and -not $StageOnly) } finally { if (-not $DryRun -and -not $StageOnly) { Clear-NetWait } }
+  try { $f = Invoke-Fetch -Wait:(-not $DryRun -and -not $StageOnly) -DryRun:$DryRun } finally { if (-not $DryRun -and -not $StageOnly) { Clear-NetWait } }
   if ($f.code -ne 0 -and $f.offline) {
     # 0.3.8: quietly (not a stop): nothing was changed, and the next run (sign-in or the daily one) tries again
     $r.outcome = 'offline'; $r.reason = "the network was not up: git fetch could not reach $($script:Remote) ($($f.tries) tries over $($f.waitedSec) s; $(Get-LastLine $f.err)); nothing changed, the next run tries again"

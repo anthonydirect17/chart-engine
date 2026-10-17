@@ -355,6 +355,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static string leader, mode = "executions", lastLeaderRoot = "MNQ";
         private static bool armed, loadFailed;
+        // 0.6.3 (audit C9, Anthony's decision): the leader counts as gone only after LeaderDownMs not Connected; stood down by that, the
+        // copier re-arms by itself once the leader is Connected (and steady) again and every follower that is on holds the leader's
+        // side on each market (flat where it is flat), with a status line each time. Otherwise it stays stood down until Re-arm.
+        public static double LeaderDownMs = 10000;
+        private static double leaderDownSince = double.NaN;
+        private static bool leaderStood, mismatchSaid;
         private static string standDownWhy = StartWhy, saveFailed;
         private static readonly List<Follower> Followers = new List<Follower>();
         private static readonly Dictionary<string, LeaderEntry> LeaderByTag = new Dictionary<string, LeaderEntry>();
@@ -386,6 +392,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void ResetState()
         {
             leader = null; mode = "executions"; lastLeaderRoot = "MNQ"; armed = false; standDownWhy = StartWhy; loadFailed = false; saveFailed = null;
+            leaderDownSince = double.NaN; leaderStood = false; mismatchSaid = false;
             Followers.Clear(); LeaderByTag.Clear(); LeaderByOrder.Clear(); FEntries.Clear(); FStops.Clear(); LeaderStopPrice.Clear(); Copies.Clear(); Placed.Clear(); NakedSaid.Clear();
             LeaderPos.Clear(); WasUp.Clear(); Drops.Clear(); Reduces.Clear(); Waits.Clear(); FlattenSeq.Clear(); SweepFlat.Clear(); LeaderMs.Clear(); CopierTags.Clear();
             decisions = 0; skippedCount = 0; standDowns = 0; lastStateSent = null;
@@ -612,7 +619,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (why == null)
                 {
                     if (type == "copierGet") { client.Send(StateJson()); return; }
-                    if (type == "copierSet") why = SetLeader(text);
+                    if (type == "copierSet") { why = SetLeader(text); if (why == null && ChartBridgeOrders.CopierHas(text, "leader")) ChartBridgeBranches.Chosen("copier"); }   // 0.6.3 (review round 2, MED A)
                     else if (type == "copierFollower") why = SetFollower(text);
                     else if (type == "copierRearm") why = Rearm();
                 }
@@ -654,7 +661,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             lock (Lk)
             {
-                if (hasLeader) { leader = a.Name; LeaderPos.Clear(); }
+                if (hasLeader) { leader = a.Name; LeaderPos.Clear(); leaderDownSince = double.NaN; leaderStood = false; }
                 if (hasMode) mode = m;
             }
             Decision(null, "set", null, "leader " + (hasLeader ? a.Name : old ?? "(none)") + ", mode " + (hasMode ? m : mode) + " (set by the page)");
@@ -677,7 +684,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (busyWhy != null) return busyWhy;
             lock (Lk)
             {
-                leader = null; LeaderPos.Clear();
+                leader = null; LeaderPos.Clear(); leaderDownSince = double.NaN; leaderStood = false;
                 if (hasMode) mode = m;
                 armed = false; standDownWhy = "No leader is set.";
             }
@@ -691,10 +698,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // has a position or a working order), null when nothing was to do. Followers keep their settings (they have no None).
         public static string ResetToNone()
         {
+            if (ChartBridgeBranches.DroppedWhileRetrying("copier")) return null;   // 0.6.3 (review round 2, MED A)
             if (!Enabled) return ResetFileToNone();
             string l;
             lock (Lk) l = leader;
             if (l == null || ChartBridgeBranches.KeepThroughReset("copier", l)) return null;
+            string unk = ChartBridgeBranches.UnknownWhy(Find(l), l);   // 0.6.3 (review HIGH 1)
+            if (unk != null) return ChartBridgeBranches.WaitWords("the copier's leader", l, unk);
             if (!ChartBridgeBranches.Idle(Find(l))) return ChartBridgeBranches.SkipWords("the copier's leader", l);
             string why = ClearLeader(null, false, "by the daily reset (17:00 ET)");
             return why == null ? "" : "the copier's leader stays " + l + ": " + why;
@@ -711,12 +721,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 catch (Exception) { return null; }
                 string l = lines.Select(x => x.Split('\t')).Where(p => p.Length == 2 && p[0] == "leader" && p[1].Length > 0).Select(p => p[1]).FirstOrDefault();
                 if (l == null || ChartBridgeBranches.KeepThroughReset("copier", l)) return null;
+                string unk = ChartBridgeBranches.UnknownWhy(Find(l), l);   // 0.6.3 (review HIGH 1)
+                if (unk != null) return ChartBridgeBranches.WaitWords("the copier's leader (the copier is off)", l, unk);
                 if (!ChartBridgeBranches.Idle(Find(l))) return ChartBridgeBranches.SkipWords("the copier's leader (the copier is off)", l);
                 try
                 {
-                    string tmp = FilePath + ".tmp";
-                    File.WriteAllLines(tmp, lines.Where(x => !x.StartsWith("leader\t", StringComparison.Ordinal)).ToArray());
-                    File.Replace(tmp, FilePath, null);
+                    ChartBridgeFiles.WriteLines(FilePath, lines.Where(x => !x.StartsWith("leader\t", StringComparison.Ordinal)).ToArray());   // 0.6.3 (audit C3)
                 }
                 catch (Exception ex) { return "the copier's leader (the copier is off) stays " + l + ": copier.txt could not be saved (" + ex.Message + ")"; }
                 ChartBridgeServer.Log("copier: no leader (was " + l + "), by the daily reset (17:00 ET; the copier is off)");
@@ -796,7 +806,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!Up(Find(l))) return "The leader " + l + " is not connected.";
             int down = names.Count(n => !Up(Find(n)));
             if (down >= MassFollowers) return down + " followers are not connected.";
-            lock (Lk) { armed = true; standDownWhy = null; Drops.Clear(); }
+            lock (Lk) { armed = true; standDownWhy = null; Drops.Clear(); leaderStood = false; leaderDownSince = double.NaN; }
             Event(null, "rearm", null, 0, double.NaN, null, null, null, "Re-armed by the page");
             BroadcastState(true);
             return null;
@@ -905,7 +915,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Lk)
                 {
                     if (!IsLeader(entry.Account.Name)) return;
-                    LeaderEntry le = new LeaderEntry { Entry = entry, Tag = tag, Kind = kind, Price = price, Inst = entry.Instrument, Root = root, Buy = ChartBridgeOrders.CopierIsBuy(entry), Copy = armed && Followers.Any(f => f.On) };
+                    LeaderEntry le = new LeaderEntry { Entry = entry, Tag = tag, Kind = kind, Price = price, Inst = entry.Instrument, Root = root, Buy = ChartBridgeOrders.CopierIsBuy(entry), Copy = armed && Followers.Any(f => f.On) && !ChartBridgeBranches.IsPending("copier") };   // 0.6.3 (review round 2, LOW C): not while the leader's reset is pending
                     LeaderByTag[tag] = le; LeaderByOrder[entry] = le;
                     lastLeaderRoot = root;
                 }
@@ -940,7 +950,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (entry.OrderState == OrderState.Rejected) { LeaderEntryDropped(entry); return; }
                 if (m != "orders") return;
                 if (le.Copy) Work(() => PlaceOrdersCopies(le, Stopwatch.GetTimestamp()));
-                else Event(null, "skip", le.Root, 0, double.NaN, null, null, null, "the copier is stood down (or no follower is on): the leader's entry is not copied");
+                else Event(null, "skip", le.Root, 0, double.NaN, null, null, null, ChartBridgeBranches.IsPending("copier") ? "waiting for the daily reset of the leader's account: the leader's entry is not copied" : "the copier is stood down (or no follower is on): the leader's entry is not copied");
             }
             catch (Exception ex) { ChartBridgeServer.Log("copier error: " + ex.Message); }
         }
@@ -1886,7 +1896,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (string n in names) { Account a = Find(n); if (a != null && Up(a) && ChartBridgeServer.IsWatched(a)) ChartBridgeOrders.CopierWatchUnnoted(a, now); }   // fourth review (3): watched only
         }
 
-        // S6: the leader, or 3 or more followers, leaving Connected within 10 s: stand down until Re-arm.
+        // S6: the leader not Connected for LeaderDownMs (0.6.3, audit C9), or 3 or more followers leaving Connected within 10 s:
+        // stand down. Stood down by the leader, it re-arms by itself once the leader is back and every follower matches it.
         private static void SampleConnections(double now)
         {
             string l;
@@ -1901,23 +1912,93 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     known = WasUp.TryGetValue(n, out was);
                     WasUp[n] = up;
+                    if (IsLeader(n)) { if (up) leaderDownSince = double.NaN; else if (double.IsNaN(leaderDownSince) && (!known || was)) leaderDownSince = now; continue; }
                     if (known && was && !up) Drops.Add(new KeyValuePair<string, double>(n, now));
                 }
             }
+            bool tryRearm;
+            lock (Lk) tryRearm = !armed && leaderStood && l != null && double.IsNaN(leaderDownSince);
+            if (tryRearm) { AutoRearm(l); return; }
             lock (Lk)
             {
                 Drops.RemoveAll(d => now - d.Value > MassWindowMs);
                 if (!armed) return;
                 int followersDown = Drops.Where(d => !IsLeader(d.Key)).Select(d => d.Key.ToUpperInvariant()).Distinct().Count();
-                if (l != null && Drops.Any(d => IsLeader(d.Key))) why = "the leader " + l + " left Connected";
-                else if (followersDown >= MassFollowers) why = followersDown + " followers left Connected within 10 s";
+                if (l != null && !double.IsNaN(leaderDownSince) && now - leaderDownSince >= LeaderDownMs)
+                {
+                    why = "the leader " + l + " left Connected (not Connected for " + (LeaderDownMs / 1000).ToString("0", CultureInfo.InvariantCulture) + " s)";
+                    leaderStood = true; mismatchSaid = false;
+                }
+                else if (followersDown >= MassFollowers) { why = followersDown + " followers left Connected within 10 s"; leaderStood = false; }
                 if (why == null) return;
-                armed = false; standDownWhy = why; standDowns++;
+                armed = false; standDownWhy = why + (leaderStood ? ": it re-arms by itself once the leader is Connected again and every follower matches its position" : ""); standDowns++;
+            }
+            if (leaderStood)
+            {
+                ChartBridgeOrders.CopierWarn("copier: " + why + ": the copier stands down; it re-arms by itself once the leader is Connected again and every follower matches its position (or press Re-arm)");
+                Event(null, "standDown", null, 0, double.NaN, null, null, null, why + ": the copier stands down until the leader is back and every follower matches it");
+                BroadcastState(true);
+                return;
             }
             ChartBridgeOrders.CopierWarn("copier: " + why + ": the copier stands down until Re-arm");
             Event(null, "standDown", null, 0, double.NaN, null, null, null, why + ": the copier stands down until Re-arm");
             BroadcastState(true);
         }
+
+        // 0.6.3 (audit C9): the leader Connected (and steady) again: re-armed by itself when every follower that is on holds the
+        // leader's side on each market (NQ with MNQ, ES with MES; flat where the leader is flat), else one status line and it stays
+        // stood down until Re-arm or until they match.
+        private static void AutoRearm(string l)
+        {
+            Account la = Find(l);
+            if (la == null || !Up(la) || !ChartBridgeOrders.CopierSteady(la) || loadFailed) return;
+            List<Follower> on;
+            lock (Lk) on = Followers.Where(f => f.On).ToList();
+            Dictionary<string, int> lead = Sides(la);
+            List<string> off = new List<string>();
+            foreach (Follower f in on)
+            {
+                Account fa = Find(f.Name);
+                if (fa == null || !Up(fa)) { off.Add(f.Name + " is not Connected"); continue; }
+                Dictionary<string, int> mine = Sides(fa);
+                foreach (string fam in lead.Keys.Union(mine.Keys))
+                {
+                    int ls, fs;
+                    lead.TryGetValue(fam, out ls); mine.TryGetValue(fam, out fs);
+                    if (ls != fs) off.Add(f.Name + " is " + SideWord(fs) + " on " + fam + " where the leader is " + SideWord(ls));
+                }
+            }
+            if (off.Count > 0)
+            {
+                bool say;
+                lock (Lk) { say = !mismatchSaid; mismatchSaid = true; }
+                if (say) ChartBridgeOrders.CopierWarn("copier: the leader " + l + " is Connected again but " + string.Join("; ", off) + ": the copier stays stood down until they match or you press Re-arm");
+                return;
+            }
+            lock (Lk) { if (armed || !leaderStood) return; armed = true; standDownWhy = null; Drops.Clear(); leaderStood = false; mismatchSaid = false; }
+            string text = "the leader " + l + " is Connected again and every follower matches its position: the copier re-armed by itself";
+            ChartBridgeServer.Log("copier: " + text);
+            ChartBridgeServer.SendToTraders("{\"type\":\"status\",\"level\":\"info\",\"text\":" + CbJson.Str("Copier: " + text) + "}");
+            Event(null, "rearm", null, 0, double.NaN, null, null, null, "Re-armed by itself: " + text);
+            BroadcastState(true);
+        }
+
+        // An account's side on each market family (MNQ for NQ and MNQ, MES for ES and MES): +1, -1, or absent when flat.
+        private static Dictionary<string, int> Sides(Account a)
+        {
+            Dictionary<string, int> net = new Dictionary<string, int>();
+            lock (a.Positions)
+                foreach (Position p in a.Positions)
+                {
+                    if (p == null || p.Instrument == null || p.MarketPosition == MarketPosition.Flat || p.Quantity == 0) continue;
+                    string fam = FollowerRoot(ChartBridgeServer.RootFor(p.Instrument), "micro") ?? ChartBridgeServer.RootFor(p.Instrument) ?? p.Instrument.FullName;
+                    int q = p.MarketPosition == MarketPosition.Long ? p.Quantity : -p.Quantity, was;
+                    net.TryGetValue(fam, out was);
+                    net[fam] = was + q;
+                }
+            return net.Where(kv => kv.Value != 0).ToDictionary(kv => kv.Key, kv => Math.Sign(kv.Value));
+        }
+        private static string SideWord(int s) { return s > 0 ? "long" : s < 0 ? "short" : "flat"; }
 
         // S7: a copier order on a follower that is flat by both readings is cancelled, unless it was sent in the last 3 s (its
         // fill or position change may still be on its way) or it is an orders-mode entry whose leader entry is still working.
@@ -2390,9 +2471,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string fault = WriteFault != null ? WriteFault() : null;
                     if (fault != null) return fault;
                     Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                    string tmp = FilePath + ".tmp";
-                    File.WriteAllLines(tmp, lines.ToArray());
-                    if (File.Exists(FilePath)) File.Replace(tmp, FilePath, null); else File.Move(tmp, FilePath);
+                    ChartBridgeFiles.WriteLines(FilePath, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                     return null;
                 }
                 catch (Exception ex) { return ex.Message; }

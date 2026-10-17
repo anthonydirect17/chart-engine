@@ -212,7 +212,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const string Header = "# ChartBridge account groups (written by ChartBridge; do not edit)";
         public const string Header2 = "# group<TAB>id<TAB>name<TAB>on|off<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>target|-<TAB>size<TAB>lockAt|-<TAB>consistency|-<TAB>eval|funded|-<TAB>hero|-, member<TAB>account<TAB>id, personal<TAB>account<TAB>floor|-<TAB>daily|-";
         public const string MarksHeader = "# ChartBridge account marks (written by ChartBridge; do not edit)";
-        public const string MarksHeader2 = "# mark<TAB>account<TAB>peakEod|-<TAB>peakIntraday|-<TAB>dayStartBalance|-<TAB>session<TAB>dayStartAt (UTC ms)|-";
+        public const string MarksHeader2 = "# mark<TAB>account<TAB>peakEod|-<TAB>peakIntraday|-<TAB>dayStartBalance|-<TAB>session<TAB>dayStartAt (UTC ms)|-<TAB>closeSeen|-<TAB>lastBalance|-<TAB>flat|open|-<TAB>eodMissed|-<TAB>intradayMissed|-";
+        public static double GapMs = 10000;   // 0.6.3 (audit C2): no reading of a connected account for this long is a gap ChartBridge did not watch
         public const string ReadFailedText = "groups.txt could not be read: every new entry is refused until it can (exits always work)";
         public const double MaxMoney = 100000000;
         public static double MarksWriteMs = 5000;  // account-marks.txt at most every 5 s while something changed (the harness sets 0)
@@ -259,6 +260,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             public string Name, Session;
             public double? PeakEod, PeakIntraday, DayStart, DayStartAt;   // DayStartAt: UTC ms of the day start's reading (review of #48)
+            // 0.6.3 (audit C2): the trading day of the last close seen (or caught up), the balance and flat state of the last reading,
+            // and the close (or day) a high may have been missed on: a missed one makes that trailing floor null until the account is
+            // put in its group again with its highest close. Legacy: read from a 6 or 7 field line (0.6.2 or older), no gap check at
+            // its first reading. Seen and LastAt: memory only (the first reading this run, the UTC ms of the last).
+            public string CloseSeen, EodMissed, IntradayMissed;
+            public double? LastBal;
+            public bool LastFlat, Legacy, Seen;
+            public double LastAt;
             public Mark Clone() { return (Mark)MemberwiseClone(); }
         }
 
@@ -313,17 +322,61 @@ namespace NinjaTrader.NinjaScript.AddOns
             State s = null;
             string[] lines = null;
             bool exists = File.Exists(FilePath);
-            if (exists)
+            List<string> notes = new List<string>();
+            if (!exists)
+            {
+                // 0.6.3 (review MED 5): no groups.txt but a copy beside it (a save cut off): never "no groups" on its own (every account
+                // would trade with no limits): unreadable, as MED 3, and the alarm says what the copy holds
+                foreach (string alt in ChartBridgeFiles.LeftOvers(FilePath))
+                {
+                    string[] b = ChartBridgeFiles.ReadAny(alt);
+                    string berr;
+                    State bs = b != null ? Parse(b, out berr) : null;
+                    if (bs == null) continue;
+                    exists = true;
+                    err = "groups.txt is missing (a save cut off?) but " + Path.GetFileName(alt) + " is there and holds " + bs.Groups.Count + " group" + (bs.Groups.Count == 1 ? "" : "s") + (bs.Groups.Count > 0 ? " (" + string.Join(", ", bs.Groups.Values.Select(g => g.Name)) + ")" : "") + " with " + bs.Members.Count + " account" + (bs.Members.Count == 1 ? "" : "s") + " in them: to go back to it, copy " + Path.GetFileName(alt) + " to groups.txt; to start with no groups, delete it";
+                    break;
+                }
+            }
+            if (exists && err == null)
             {
                 lines = ReadLines(FilePath, out err);
                 if (lines != null) s = Parse(lines, out err);
+                if (lines != null && s == null)   // 0.6.3 (review MED 3): never the last good copy on its own: the alarm says what it holds
+                {
+                    string[] b = ChartBridgeFiles.ReadBackup(FilePath);
+                    string berr;
+                    State bs = b != null ? Parse(b, out berr) : null;
+                    if (bs != null) err += "; its last good copy, groups.txt.bak, holds " + bs.Groups.Count + " group" + (bs.Groups.Count == 1 ? "" : "s") + (bs.Groups.Count > 0 ? " (" + string.Join(", ", bs.Groups.Values.Select(g => g.Name)) + ")" : "") + " with " + bs.Members.Count + " account" + (bs.Members.Count == 1 ? "" : "s") + " in them: to go back to it, copy groups.txt.bak over groups.txt";
+                }
             }
             string merr = null;
             Dictionary<string, Mark> marks = null;
+            bool marksLeft = false;
             if (File.Exists(MarksPath))
             {
                 string[] ml = ReadLines(MarksPath, out merr);
                 if (ml != null) marks = ParseMarks(ml, out merr);
+                if (ml != null && marks == null)
+                {
+                    string[] b = ChartBridgeFiles.ReadBackup(MarksPath);
+                    string berr;
+                    Dictionary<string, Mark> bm = b != null ? ParseMarks(b, out berr) : null;
+                    if (bm != null) { notes.Add(ChartBridgeFiles.BackupNote("account-marks.txt", merr)); marks = bm; merr = null; }
+                }
+            }
+            else
+            {
+                // 0.6.3 (review MED 5): no file, but a copy left by a replace that was cut off: used, said so (the marks are written again)
+                foreach (string alt in ChartBridgeFiles.LeftOvers(MarksPath))
+                {
+                    string berr;
+                    string[] b = ChartBridgeFiles.ReadAny(alt);
+                    Dictionary<string, Mark> bm = b != null ? ParseMarks(b, out berr) : null;
+                    if (bm == null) continue;
+                    notes.Add("account-marks.txt is missing (a save cut off?): ChartBridge uses " + Path.GetFileName(alt) + " and writes the file again");
+                    marks = bm; marksLeft = true; break;
+                }
             }
             lock (Mem)
             {
@@ -335,9 +388,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Marks.Clear();
                 if (marks != null) foreach (KeyValuePair<string, Mark> kv in marks) Marks[kv.Key] = kv.Value;
                 marksError = merr != null && marks == null ? merr : null;
+                if (marksLeft) marksDirty = true;
             }
             if (exists && s == null) Alarm(ReadFailedText + " (" + err + "); fix or delete the file, then recompile");
             else if (exists) ChartBridgeServer.Log("groups: " + s.Groups.Count + " group" + (s.Groups.Count == 1 ? "" : "s") + ", " + s.Members.Count + " account" + (s.Members.Count == 1 ? "" : "s") + " in them (groups.txt)");
+            foreach (string w in notes) ChartBridgeFiles.Note(w);
             if (merr != null && marks == null) ChartBridgeServer.Log("account-marks.txt could not be read (" + merr + "): it is not rewritten this run; the trailing floors and the computed P&L are not given until it can be read");
         }
 
@@ -482,9 +537,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                string tmp = path + ".tmp";
-                File.WriteAllText(tmp, text);
-                if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path);
+                ChartBridgeFiles.WriteWhole(path, text);   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
                 return null;
             }
             catch (Exception ex) { return ex.Message; }
@@ -503,13 +556,21 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string[] p = line.Split('\t');
                 double pe, pi, ds;
  long at = 0;
-                if ((p.Length != 6 && p.Length != 7) || (p.Length == 7 && p[6] != "-" && !long.TryParse(p[6], NumberStyles.None, CultureInfo.InvariantCulture, out at)) || p[0] != "mark" || p[1].Length == 0 || !FileMoney(p[2], true, out pe) || !FileMoney(p[3], true, out pi) || !FileMoney(p[4], true, out ds) ||
-                    !Regex.IsMatch(p[5], "^(?:-|[0-9]{4}-[0-9]{2}-[0-9]{2})$") || d.ContainsKey(p[1]))
+                double lb = 0;
+                const string DayRx = "^(?:-|[0-9]{4}-[0-9]{2}-[0-9]{2})$";
+                if ((p.Length != 6 && p.Length != 7 && p.Length != 12) || (p.Length >= 7 && p[6] != "-" && !long.TryParse(p[6], NumberStyles.None, CultureInfo.InvariantCulture, out at)) || p[0] != "mark" || p[1].Length == 0 || !FileMoney(p[2], true, out pe) || !FileMoney(p[3], true, out pi) || !FileMoney(p[4], true, out ds) ||
+                    !Regex.IsMatch(p[5], DayRx) || d.ContainsKey(p[1]) ||
+                    (p.Length == 12 && (!Regex.IsMatch(p[7], DayRx) || !FileMoney(p[8], true, out lb) || (p[9] != "flat" && p[9] != "open" && p[9] != "-") || !Regex.IsMatch(p[10], DayRx) || !Regex.IsMatch(p[11], DayRx))))
                 { why = "line " + (i + 1) + " is not a mark line"; return null; }
-                d[p[1]] = new Mark { Name = p[1], PeakEod = pe > 0 ? pe : (double?)null, PeakIntraday = pi > 0 ? pi : (double?)null, DayStart = ds > 0 ? ds : (double?)null, Session = p[5] == "-" ? null : p[5], DayStartAt = at > 0 ? at : (double?)null };
+                Mark mk = new Mark { Name = p[1], PeakEod = pe > 0 ? pe : (double?)null, PeakIntraday = pi > 0 ? pi : (double?)null, DayStart = ds > 0 ? ds : (double?)null, Session = p[5] == "-" ? null : p[5], DayStartAt = at > 0 ? at : (double?)null };
+                if (p.Length == 12) { mk.CloseSeen = Dash(p[7]); mk.LastBal = lb > 0 ? lb : (double?)null; mk.LastFlat = p[9] == "flat"; mk.EodMissed = Dash(p[10]); mk.IntradayMissed = Dash(p[11]); }
+                else mk.Legacy = true;
+                d[p[1]] = mk;
             }
             return d;
         }
+
+        private static string Dash(string t) { return t == "-" ? null : t; }
 
         private static void SaveMarks(bool now)
         {
@@ -524,7 +585,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     StringBuilder b = new StringBuilder(MarksHeader).Append('\n').Append(MarksHeader2).Append('\n');
                     foreach (Mark m in Marks.Values.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
                         b.Append("mark\t").Append(m.Name).Append('\t').Append(MoneyText(m.PeakEod ?? 0)).Append('\t').Append(MoneyText(m.PeakIntraday ?? 0)).Append('\t')
-                         .Append(MoneyText(m.DayStart ?? 0)).Append('\t').Append(m.Session ?? "-").Append('\t').Append(m.DayStartAt.HasValue ? ((long)m.DayStartAt.Value).ToString(CultureInfo.InvariantCulture) : "-").Append('\n');
+                         .Append(MoneyText(m.DayStart ?? 0)).Append('\t').Append(m.Session ?? "-").Append('\t').Append(m.DayStartAt.HasValue ? ((long)m.DayStartAt.Value).ToString(CultureInfo.InvariantCulture) : "-")
+                         .Append('\t').Append(m.CloseSeen ?? "-").Append('\t').Append(MoneyText(m.LastBal ?? 0)).Append('\t').Append(m.LastBal.HasValue ? (m.LastFlat ? "flat" : "open") : "-")
+                         .Append('\t').Append(m.EodMissed ?? "-").Append('\t').Append(m.IntradayMissed ?? "-").Append('\n');
                     text = b.ToString();
                     marksDirty = false; marksWrittenMs = t;
                 }
@@ -554,27 +617,37 @@ namespace NinjaTrader.NinjaScript.AddOns
             DateTime etNow = NowEt();
             bool closeWindow = etNow.Hour == 17 || (etNow.Hour == 18 && etNow.Minute < 5);
             double nowMs = (NowUtc() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+            List<string> notes = new List<string>();
             foreach (Account a in all)
             {
                 if (a == null || a.Name == null || ChartBridgeOrders.IsNeverTradable(a.Name) || !Up(a) || !ChartBridgeAccounts.Listed(a.Name)) continue;
                 double? bal = Item(a, AccountItem.CashValue), un = Item(a, AccountItem.UnrealizedProfitLoss);
                 if (!bal.HasValue || bal.Value <= 0) continue;   // 0: NinjaTrader has not given a balance yet
+                bool flat = IsFlat(a);
                 lock (Mem)
                 {
                     if (marksError != null) break;
                     Mark m;
-                    if (!Marks.TryGetValue(a.Name, out m)) { Marks[a.Name] = m = new Mark { Name = a.Name }; marksDirty = true; }
+                    if (!Marks.TryGetValue(a.Name, out m)) { Marks[a.Name] = m = new Mark { Name = a.Name, CloseSeen = LatestClose(etNow), Seen = true, LastAt = nowMs }; marksDirty = true; }
+                    // 0.6.3 (audit C2): the first reading after a gap (this run's first, or none for GapMs): the closes and highs it did not see
+                    double balR = Math.Round(bal.Value, 2);
+                    if ((!m.Seen || nowMs - m.LastAt > GapMs) && !m.Legacy) { string note = AfterGap(m, balR, flat, un, etNow, closeWindow); if (note != null) notes.Add(note); }
+                    if (m.Legacy && m.CloseSeen == null) m.CloseSeen = LatestClose(etNow);   // a 0.6.2 file: as 0.6.2 (it saw what it saw)
+                    m.Seen = true; m.Legacy = false; m.LastAt = nowMs;
+                    if (m.LastBal != balR || m.LastFlat != flat) { m.LastBal = balR; m.LastFlat = flat; marksDirty = true; }
                     if (m.Session != session)
                     {
                         m.Session = session; m.DayStart = Math.Round(bal.Value, 2); m.DayStartAt = nowMs; marksDirty = true;
                         // review of #48 (item 6): only a reading in the 17:00 to 18:05 ET window is a close; a late first reading
                         // (ChartBridge started at midday) never raises the end-of-day high
                         if (closeWindow && m.PeakEod.HasValue && bal.Value > m.PeakEod.Value) m.PeakEod = Math.Round(bal.Value, 2);
+                        if (closeWindow) { string c = LatestClose(etNow); if (m.CloseSeen == null || string.CompareOrdinal(c, m.CloseSeen) > 0) m.CloseSeen = c; }
                     }
                     if (m.PeakIntraday.HasValue && un.HasValue && bal.Value + un.Value > m.PeakIntraday.Value + 0.004) { m.PeakIntraday = Math.Round(bal.Value + un.Value, 2); marksDirty = true; }
                 }
             }
             SaveMarks(false);
+            foreach (string w in notes) { ChartBridgeServer.Log("NOTE: " + w); ChartBridgeServer.SendToTraders("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(w) + "}"); }
             try { Leftovers(); } catch (Exception ex) { ChartBridgeServer.Log("groups: leftover exits check error: " + ex.Message); }   // Q-EXIT (b)
             SendGroups(false);
         }
@@ -594,12 +667,73 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Mem)
                 {
                     Mark m;
-                    if (marksError != null || !Marks.TryGetValue(a.Name, out m) || !m.PeakEod.HasValue) continue;
+                    if (marksError != null || !Marks.TryGetValue(a.Name, out m)) continue;
+                    string c = SessionNow();   // 0.6.3 (audit C2): in the break, the day's close is seen
+                    if (m.CloseSeen == null || string.CompareOrdinal(c, m.CloseSeen) > 0) { m.CloseSeen = c; marksDirty = true; }
+                    if (!m.PeakEod.HasValue) continue;
                     double eq = Math.Round(bal.Value + un.Value, 2);
                     if (eq > m.PeakEod.Value + 0.004) { m.PeakEod = eq; marksDirty = true; ChartBridgeServer.Log("groups: " + a.Name + "'s end-of-day high is " + eq.ToString("0.00", CultureInfo.InvariantCulture)); }
                 }
             }
-            SaveMarks(true);   // only when a high rose (marksDirty)
+            SaveMarks(true);   // only when a high rose or a close was first seen (marksDirty)
+        }
+
+        // 0.6.3 (audit C2): the trading day of the latest close at or before New York time et (17:00, or 13:00 or 13:15 on an NYSE
+        // holiday or early close; a day with no Globex session has none).
+        public static string LatestClose(DateTime et)
+        {
+            DateTime d = et.Date;
+            for (int i = 0; i < 40; i++, d = d.AddDays(-1))
+                if (ChartBridgeCme.SessionDay(d) && (d < et.Date || et.TimeOfDay >= ChartBridgeCme.SessionClose(d))) break;
+            return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        private static bool IsFlat(Account a)
+        {
+            lock (a.Positions) return !a.Positions.Any(p => p.MarketPosition != MarketPosition.Flat && p.Quantity != 0);
+        }
+
+        // 0.6.3 (audit C2): the first reading after a gap ChartBridge did not watch. Nothing traded (flat at both ends, the balance
+        // the same): every close it missed was that balance and no high was missed. Otherwise a missed close (an EOD group) or a
+        // possible intraday high is recorded and that floor is null until the account is put in its group again with its highest
+        // close; never a guess. In the close window this reading is the day's close. Under Mem; a note for the pages, or null.
+        private static string AfterGap(Mark m, double bal, bool flat, double? un, DateTime etNow, bool closeWindow)
+        {
+            string c = LatestClose(etNow);
+            bool covers = closeWindow && c == etNow.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            bool same = m.LastBal.HasValue && m.LastFlat && flat && Math.Abs(m.LastBal.Value - bal) < 0.005;
+            string missed = null, seen = m.CloseSeen;
+            DateTime d = DateTime.ParseExact(c, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+            for (int i = 0; i < 40; i++, d = d.AddDays(-1))
+            {
+                string ds = d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                if (seen != null && string.CompareOrdinal(ds, seen) <= 0) break;
+                if (!ChartBridgeCme.SessionDay(d) || (covers && ds == c)) continue;
+                missed = ds; break;   // the latest close missed
+            }
+            string note = null;
+            // review LOW 8: the warning only for the drawdown type of the account's group (an EOD group never hears of intraday highs)
+            string gid, type = null;
+            Group grp;
+            if (state.Members.TryGetValue(m.Name, out gid) && state.Groups.TryGetValue(gid, out grp)) type = grp.Type;
+            if (covers && m.PeakEod.HasValue && un.HasValue && bal + un.Value > m.PeakEod.Value + 0.004) m.PeakEod = Math.Round(bal + un.Value, 2);
+            if (missed != null && m.PeakEod.HasValue)
+            {
+                if (same) { if (bal > m.PeakEod.Value + 0.004) m.PeakEod = bal; ChartBridgeServer.Log("groups: " + m.Name + ": ChartBridge was not running at the close of " + missed + "; nothing traded since its last reading, so its balance " + bal.ToString("0.00", CultureInfo.InvariantCulture) + " is taken as that close"); }
+                else if (m.EodMissed == null || string.CompareOrdinal(missed, m.EodMissed) > 0)
+                {
+                    m.EodMissed = missed;
+                    if (type == "eod") note = m.Name + ": ChartBridge was not running at the close of " + missed + " and the account traded or held a position meanwhile: its end-of-day floor and room are not known until it is put in its group again with the highest close from the firm's dashboard";
+                }
+            }
+            if (!same && m.PeakIntraday.HasValue && m.IntradayMissed == null)
+            {
+                m.IntradayMissed = etNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                if (note == null && type == "intraday") note = m.Name + ": ChartBridge was not watching while the account held a position or traded: its intraday high may have been missed, so an intraday-trailing floor and room are not known until it is put in its group again with the highest balance from the firm's dashboard";
+            }
+            if (m.CloseSeen == null || string.CompareOrdinal(c, m.CloseSeen) > 0) m.CloseSeen = c;
+            marksDirty = true;
+            return note;
         }
 
         // ---------------------------------------------------------- Q-EXIT (b): exits left behind when a position goes flat
@@ -982,12 +1116,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (g != null)
             {
                 string floorWhy = null;
+                bool missedHigh = false;
                 if (g.Type == "static") n.Floor = g.Size - g.Drawdown;
                 else if (marksErr != null) floorWhy = "account-marks.txt could not be read (" + marksErr + ")";
                 else
                 {
                     double? peak = mark == null ? null : g.Type == "eod" ? mark.PeakEod : mark.PeakIntraday;
-                    if (!peak.HasValue) floorWhy = "no " + (g.Type == "eod" ? "end-of-day" : "intraday") + " high is known for this account: put it in " + g.Name + " again and give its highest close";
+                    string gone = mark == null ? null : g.Type == "eod" ? mark.EodMissed : mark.IntradayMissed;
+                    if (gone != null) { floorWhy = g.Type == "eod" ? "ChartBridge was not running at the close of " + gone + ": put the account in " + g.Name + " again and give the highest close from the firm's dashboard"
+                                                                  : "ChartBridge was not watching on " + gone + " while the account held a position or traded, so its intraday high may be missed: put it in " + g.Name + " again and give the highest balance from the firm's dashboard"; missedHigh = true; }
+                    else if (!peak.HasValue) floorWhy = "no " + (g.Type == "eod" ? "end-of-day" : "intraday") + " high is known for this account: put it in " + g.Name + " again and give its highest close";
                     else
                     {
                         double f = Math.Max(peak.Value, g.Size) - g.Drawdown;
@@ -996,7 +1134,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                 }
                 n.Set("floor", n.Floor, "computed", floorWhy);
-                SetRoomFloor(n, ntRoom, equity, n.Floor.HasValue ? eqWhy : floorWhy);
+                // 0.6.3 (audit C2): never a room from a high that may be too low; review LOW 8: NinjaTrader's own trailing figure when it gives one
+                if (missedHigh && ntRoom.HasValue) { n.RoomFloor = ntRoom; n.Set("roomFloor", ntRoom, "ninjatrader", null); }
+                else if (missedHigh) n.Set("roomFloor", null, null, floorWhy);
+                else SetRoomFloor(n, ntRoom, equity, n.Floor.HasValue ? eqWhy : floorWhy);
                 if (g.DailyLoss > 0) { n.RoomDaily = n.Pnl.HasValue ? g.DailyLoss + n.Pnl.Value : (double?)null; n.Set("roomDaily", n.RoomDaily, "computed", n.Why.ContainsKey("pnlToday") ? n.Why["pnlToday"] : null); }
                 else n.Set("roomDaily", null, null, "group " + g.Name + " has no daily loss limit");
                 if (g.Target > 0) { n.TargetLeft = n.Balance.HasValue ? g.Size + g.Target - n.Balance.Value : (double?)null; n.Set("targetLeft", n.TargetLeft, "computed", up ? "NinjaTrader gives no balance for this account" : down); }
@@ -1254,7 +1395,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static void ForgetHighs(IEnumerable<string> accounts)
         {
-            lock (Mem) foreach (string a in accounts) { Mark mk; if (Marks.TryGetValue(a, out mk) && (mk.PeakEod.HasValue || mk.PeakIntraday.HasValue)) { mk.PeakEod = null; mk.PeakIntraday = null; marksDirty = true; } }
+            lock (Mem) foreach (string a in accounts) { Mark mk; if (Marks.TryGetValue(a, out mk) && (mk.PeakEod.HasValue || mk.PeakIntraday.HasValue || mk.EodMissed != null || mk.IntradayMissed != null)) { mk.PeakEod = null; mk.PeakIntraday = null; mk.EodMissed = null; mk.IntradayMissed = null; marksDirty = true; } }
             SaveMarks(true);
         }
 
@@ -1314,6 +1455,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (id != null)
             {
+                bool flatNow = a == null || IsFlat(a);
+                double? balNow = Up(a) ? Item(a, AccountItem.CashValue) : null;
                 lock (Mem)
                 {
                     if (marksError == null)
@@ -1321,6 +1464,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                         Mark mk;
                         if (!Marks.TryGetValue(name, out mk)) Marks[name] = mk = new Mark { Name = name };
                         mk.PeakEod = Math.Round(seed, 2); mk.PeakIntraday = Math.Round(seed, 2); marksDirty = true;
+                        mk.EodMissed = null; mk.IntradayMissed = null; mk.CloseSeen = LatestClose(NowEt());   // 0.6.3: the highs given now are the ones known
+                        mk.Seen = true; mk.Legacy = false; mk.LastAt = NowMs(); if (balNow.HasValue && balNow.Value > 0) { mk.LastBal = Math.Round(balNow.Value, 2); mk.LastFlat = flatNow; }
                     }
                 }
                 SaveMarks(true);

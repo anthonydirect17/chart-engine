@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.[0-2])";/);   // 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.[0-3])";/);   // 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -82,7 +82,8 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   // every entry goes through ChartBridgeOrders.PlaceAgentEntry: the page's order path with the agent as its source
   assert.match(bodies(acode, 'Place'), /ChartBridgeOrders\.PlaceAgentEntry\(Id, p\.Id, text, out placed\)/);
   assert.match(bodies(acode, 'Place'), /string why = Checks\(p, forAccount, forAccount != null, out acct\);/, 'every check again at the moment of placing, and the account they validated is the one used');
-  for (const f of ['SetMode', 'SetKill', 'SetAccount', 'SetRules']) assert.match(bodies(acode, f), /lock \(PlaceGate\) return \w+Locked\(d\);/, f + ' waits for a placement under way');
+  for (const f of ['SetMode', 'SetKill', 'SetRules']) assert.match(bodies(acode, f), /lock \(PlaceGate\) return \w+Locked\(d\);/, f + ' waits for a placement under way');
+  assert.match(bodies(acode, 'SetAccount'), /lock \(PlaceGate\)\s*\{\s*why = SetAccountLocked\(d\);\s*if \(why == null\) dropped = ChartBridgeBranches\.Chosen\("agent:" \+ Id\);/, 'SetAccount waits for a placement under way (0.6.3: and drops a pending reset under the same lock)');
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) \{ string agentWhy = ChartBridgeAgents\.PlacingProblem\(agent, account\.Name, kind, isBuy, price, limitPx, tick\);/, 'the order path asks the agent at the last moment');
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(\(kind != "limit" && kind != "stopLimit"\) \|\| strategyBody != null \|\| bracketBody == null\)\) return/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(stopTicks < 1 \|\| targetTicks < 1\)\) return "every agent entry needs a stop and a target";/);
@@ -163,7 +164,7 @@ test('0.5.7 agents: planId on an agent\'s orders to a v3 page, kept in the day f
   assert.match(ocode, /if \(agent != null\) \{ name = "CB#" \+ tag \+ " ag:" \+ agent[^\n]*ChartBridgeAgents\.NotePlan\(tag, agentPlan\); \}/, 'noted before the order exists, so its first message carries it');
   assert.match(acode, /PlaceAgentEntry\(Id, p\.Id, text, out placed\)/);
   assert.match(acode, /internal const string TagPlanPrefix = "#tagplan\\t";/, 'a "#" line: a comment to a ChartBridge before 0.5.7');
-  assert.match(bodies(acode, 'LoadDay'), /ReadTagPlan\(line, out tagOfPlan, out tagPlanId\)\) \{ tagPlans\[tagOfPlan\] = tagPlanId; continue; \}\s*if \(line\.Length == 0 \|\| line\.StartsWith\("#"\)\) continue;/, 'read before the comment skip; a malformed one falls to it');
+  assert.match(bodies(acode, 'LoadDay'), /ReadTagPlan\(line, out tagOfPlan, out tagPlanId\)\) \{ if \(first \|\| !tagPlans\.ContainsKey\(tagOfPlan\)\) tagPlans\[tagOfPlan\] = tagPlanId; continue; \}\s*if \(line\.Length == 0 \|\| line\.StartsWith\("#"\)\) continue;/, 'read before the comment skip; a malformed one falls to it');
   assert.match(bodies(acode, 'SaveDayLocked'), /lines\.Add\(TagPlanPrefix \+ kv\.Key/);
   assert.match(harness, /PlanIdOnOrders\(\);/); assert.match(harness, /LostHeldInFlatten\(\);/);
 });
@@ -181,10 +182,14 @@ test('0.5.7 agents: the lost-trade error is held while its own flatten job runs 
 
 test('0.5.7 None and the daily reset (DECISION 2026-10-14e): ChartBridge runs it without a page; one place for an exception; harnessed', () => {
   const acc = strip(read('ChartBridgeAccounts.cs'));
-  assert.match(main, /try \{ ChartBridgeBranches\.Check\(\); \} catch \(Exception ex\) \{ Log\("daily reset error: " \+ ex\.Message\); \}/, 'on the 2 s poll timer');
+  assert.match(main, /try \{ ChartBridgeBranches\.Poll\(\); \} catch \(Exception ex\) \{ Log\("daily reset error: " \+ ex\.Message\); \} \}, null, 2000, 2000\);/, 'on the 2 s poll timer');
+  assert.match(main, /ChartBridgeCopier\.Start\(\);[^\n]*\n\s*try \{ ChartBridgeBranches\.Poll\(\); \}/, '0.6.3 (audit C1): and once at start, every branch loaded');
+  assert.match(acc, /public static void Poll\(\) \{ if \(!HarnessManual\) Check\(\); \}/);
   assert.match(acc, /public const string None = "-";/);
   assert.match(acc, /public static bool KeepThroughReset\(string branch, string account\) \{ return false; \}/, 'the one place an exception would go; none yet');
-  assert.match(bodies(acc, 'Check'), /if \(et\.Hour != 17\) return;[\s\S]*if \(doneDay == day\) return;[\s\S]*WriteDay\(day\);\s*Run\(day\);/, 'in the break, once per day, saved before it runs');
+  assert.match(bodies(acc, 'Check'), /string day = DueDay\(et\);[\s\S]*if \(doneDay == day\) return;\s*if \(!inBreak && \(doneDay == null \|\| string\.CompareOrdinal\(doneDay, day\) > 0\)\) return;[\s\S]*WriteDay\(day, null\);\s*Run\(day, missed, null\);/, 'in the break, or a missed break caught up; once per day, saved before it runs');
+  assert.match(acc, /if \(a == null\) return name \+ " is not in NinjaTrader yet";/, '0.6.3 (review HIGH 1): an account not listed is not known, never idle');
+  assert.match(read(path.join('check', 'BotHarness.cs')), /0\.6\.3 C1: the clock jumps from 16:30 to 19:00/);
   assert.match(acode, /private string account = ChartBridgeBranches\.None;/);
   assert.match(bodies(acode, 'AccountConflict'), /if \(ChartBridgeBranches\.IsNone\(acct\)\) return null;/, 'None clashes with nobody');
   for (const f of ['BotHarness.cs', 'AgentHarness.cs', 'CopierHarness.cs']) assert.match(read(path.join('check', f)), /0\.5\.7 reset/, f);

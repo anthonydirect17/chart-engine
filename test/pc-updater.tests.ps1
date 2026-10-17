@@ -273,6 +273,46 @@ Test 'compat gate: page needs a newer ChartBridge, so no update' {
   Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'no page file'
 }
 
+# ---------------------------------------------------------------------------------------------- 0.6.3: ended fetches (ops audit)
+
+Test 'a stale origin/main ref lock (a fetch that was ended) is removed before the fetch; a young one is left and named' {
+  $lock = Get-GitPath "refs/remotes/origin/main.lock"
+  Assert ($lock -and [IO.Path]::IsPathRooted($lock)) "the lock's path in the clone: $lock"
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $lock) | Out-Null
+  Put $lock "left by an ended fetch`n"
+  (Get-Item -LiteralPath $lock).LastWriteTime = (Get-Date).AddMinutes(-30)
+  [void](Get-Said)
+  $f = Invoke-Fetch
+  Assert ($f.code -eq 0) "the fetch went: $($f.err)"
+  Assert (-not (Test-Path -LiteralPath $lock)) 'the stale lock is gone'
+  Assert ((Get-Said) -match 'removed a stale git lock \(refs/remotes/origin/main\.lock, 30 min old') 'the log says it was removed'
+  Put $lock "another git working now`n"
+  $f = Invoke-Fetch
+  Assert (Test-Path -LiteralPath $lock) 'a young lock is left (another git may be working)'
+  Assert ((Get-Said) -match 'a git lock is there \(refs/remotes/origin/main\.lock, 0 min old\): left') 'and named'
+  Remove-Item -LiteralPath $lock -Force
+  Put $lock "old`n"; (Get-Item -LiteralPath $lock).LastWriteTime = (Get-Date).AddMinutes(-30)
+  [void](Invoke-Fetch -DryRun)
+  Assert ((Test-Path -LiteralPath $lock) -and ((Get-Said) -match 'would be removed')) 'a dry run only says so'
+  Remove-Item -LiteralPath $lock -Force
+}
+
+Test 'a program that times out is ended with the programs it started (taskkill /T on Windows, Kill(true) elsewhere)' {
+  $body = ${function:Stop-ProcessTree}.ToString()
+  Assert ($body -match "@\('/T', '/F', '/PID'" -and $body -match 'Kill\(\$true\)') 'taskkill /T /F on Windows, the whole tree elsewhere'
+  Assert (${function:Invoke-Native}.ToString() -match 'Stop-ProcessTree \$p') 'Invoke-Native ends the tree on its time limit'
+  if ($IsWin) { return }
+  $pidFile = Join-Path $tmpRoot 'child.pid'
+  $r = Invoke-Native '/bin/sh' @('-c', "sleep 60 & echo `$! > '$pidFile'; wait") 2
+  Assert ($r.code -eq -1 -and $r.err -match 'timed out') "timed out: $($r.err)"
+  $child = [int](Get-Text $pidFile).Trim()
+  Start-Sleep -Milliseconds 300
+  # gone, or a zombie (ended, waiting for a parent to reap it: no init reaps in some containers)
+  $stat = "/proc/$child/stat"
+  $state = if (Test-Path -LiteralPath $stat) { ((Get-Text $stat) -split '\) ')[1].Substring(0, 1) } else { 'gone' }
+  Assert ($state -eq 'gone' -or $state -eq 'Z') "the child it started (pid $child) is ended too (state $state)"
+}
+
 # ---------------------------------------------------------------------------------------------- staging and the swap
 
 $script:FirstBuild = $null

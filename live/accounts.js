@@ -443,6 +443,9 @@ function createFeed(env) {
        'not asked', 'ok' (The Desk answered), 'cache' (not reachable: the last good list, as of typesAsOf) or 'none' (neither) */
     types: null, typesState: 'not asked', typesAsOf: '', typesError: '',
     heroes: new Map(),   // 1.27.0: each agent's `agent` message (its account, or its group's seats), for the seat marks
+    /* 1.31.0 (audit C6): when ChartBridge dropped (ms), until its next accounts list: the rows stay, dimmed and marked as of then;
+       hadGroups: ChartBridge sent groups this page session (the Group, Account type and Limits columns stay while not known) */
+    lostAt: null, hadGroups: false,
   };
   let ws = null, tries = 0, timer = 0, seq = 0, started = false, deskTimer = 0, changeQueued = false, stopped = false;
   /* 1.30.0: this browser's storage for the account types' copy and the groups' links (every call wrapped; works without it) */
@@ -485,6 +488,7 @@ function createFeed(env) {
       sock.onclose = () => {
         if (sock !== ws) return;
         ws = null; S.open = false; S.signedIn = false; S.enabled = false; S.reason = 'Not connected to ChartBridge.'; S.trading = null; S.groups = null; S.groupsError = null; S.heroes.clear();
+        if (S.got && S.lostAt === null) S.lostAt = Date.now();   // 1.31.0 (audit C6): the last snapshot is kept but marked stale
         S.switches = Object.fromEntries(SWITCH_KEYS.map(k => [k, false]));      // controls go until ChartBridge names them again
         changed(); tell('closed'); retry();
       };
@@ -554,7 +558,7 @@ function createFeed(env) {
         const was = new Set(S.archived.map(a => a.name));
         S.archived = Array.isArray(m.archived) ? m.archived.filter(a => a && typeof a.name === 'string') : [];
         if (S.got) for (const a of S.archived) if (!was.has(a.name)) log(a.name + ': archived');
-        S.accounts = list; S.got = true;
+        S.accounts = list; S.got = true; S.lostAt = null;
         changed(); return;
       }
       case 'orders': S.orders.clear(); for (const o of m.list || []) if (o && o.id) S.orders.set(o.id, o); changed(); return;
@@ -568,6 +572,7 @@ function createFeed(env) {
         const GC = typeof GroupsCore !== 'undefined' ? GroupsCore : null;
         S.groups = GC ? GC.cleanGroups(m) : (Array.isArray(m.list) ? m.list.filter(g => g && typeof g.id === 'string') : []);
         S.groupsError = typeof m.error === 'string' && m.error ? m.error : null;
+        S.hadGroups = true;
         changed(); return;
       }
       case 'copierEvent': log(AC.logText(m), m.action === 'skip' || m.action === 'standDown' || m.action === 'refused' ? 'warn' : ''); changed(); return;
@@ -815,12 +820,15 @@ function mount(v, host) {
     for (const t of TABS) { const el = v.body.querySelector(`[data-ct="${t.id}"]`), x = String(counts[t.id]); if (el.textContent !== x) el.textContent = x; }
 
     let html, foot = '';
+    /* 1.31.0 (audit C6): after a drop the last snapshot is shown dimmed, as of the drop; nothing in it is current */
+    const stale = S.lostAt !== null && S.got, NK = stale || !S.open ? 'not known (not connected)' : 'not known yet';
+    const staleWords = stale ? 'As of ' + hms(S.lostAt) + ' ET (not connected): ChartBridge\'s last balances, positions and orders, not current.' : '';
     if (!S.v3) html = `<p class="ac-empty">${esc(S.reason || 'The Account page needs ChartBridge 0.4.0 or newer.')}</p>`;
     else if (!S.got) html = `<p class="ac-empty">${esc(S.open ? 'Waiting for ChartBridge\'s accounts.' : S.reason || 'Connecting to ChartBridge.')}</p>`;
     else if (P.tab === 'acc') {
       const lim = a => AC.limitState(a, S.desk.get(a.name), F.groupOf(a));
       const canAct = sw.accountChecks && S.enabled;
-      const grpOn = !!S.groups, canGroup = grpOn && S.enabled && !S.groupsError;   // 1.26.0: ChartBridge 0.5.8 sends groups
+      const grpKnown = !!S.groups, grpOn = grpKnown || S.hadGroups, canGroup = grpKnown && S.enabled && !S.groupsError;   // 1.26.0: ChartBridge 0.5.8 sends groups; 1.31.0: the columns stay while not known
       const gName = id => { const g = (S.groups || []).find(x => x.id === id); return g ? g.name : id; };
       /* 1.30.0: the Account type column (The Desk's ledger), once its list is known (read now, or this browser's copy) */
       const typesOn = grpOn && !!S.types, canType = typesOn && S.typesState === 'ok' && S.deskState === 'ok';
@@ -828,6 +836,7 @@ function mount(v, host) {
       const typeOpts = typesOn ? '<option value="">Not set</option>' + S.types.map(t => `<option value="${esc(t.id)}">${esc(GroupsCore.typeLabel(t))}</option>`).join('') : '';
       const typeCell = a => {
         if (!typesOn) return '';
+        if (!grpKnown) return c(NK, 'mut apg-nk', 'Not connected to ChartBridge: the account\'s group, type and limits are not known now');
         const pd = P.typePending.get(a.name);
         if (pd && pd.after !== null && S.deskAt > pd.after) P.typePending.delete(a.name);   // The Desk's rows read since the save
         const at = F.typeOf(a.name), pend = P.typePending.has(a.name), val = pend ? P.typePending.get(a.name).v : at ? at.id : '';
@@ -878,17 +887,18 @@ function mount(v, host) {
           ? `<span role="cell" class="r"><input type="checkbox" class="apg-chk" data-act="trade" data-id="${esc(a.name)}" ${pr({ checked: !!a.trade, disabled: !a.trade && (a.state !== 'active' || a.connection !== 'connected') })} aria-label="Trade on ${esc(a.name)}" title="Trading on ${esc(a.name)}: checked, ChartBridge takes entries for it. Unchecking always works; exits always work."></span>`
           : c(a.trade ? '✓' : '', 'r ' + (a.tradable ? 'up' : 'mut'), a.trade ? (a.tradable ? 'Trading is on for ' + a.name : 'Checked, but not tradable now') : 'Not checked for trading');
         /* 1.26.0: the Group dropdown (None and every group) and the Limits cell: the group's floor, or My floor and My daily */
-        const grp = !grpOn ? '' : `<span role="cell"><select class="ws-sel apg-sel apg-grp" data-act="group" data-id="${esc(a.name)}" ${pr({ value: a.group || '', disabled: !canGroup })} aria-label="Group for ${esc(a.name)}" title="${esc(a.group ? GroupsCore.summary(F.groupOf(a)) : 'None: a personal account, in no group')}"><option value="">None</option>${(S.groups || []).map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('')}</select></span>`;
-        const lims = !grpOn ? '' : a.group
+        const grp = !grpOn ? '' : !grpKnown ? c(NK, 'mut apg-nk', 'Not connected to ChartBridge: the account\'s group is not known now') : `<span role="cell"><select class="ws-sel apg-sel apg-grp" data-act="group" data-id="${esc(a.name)}" ${pr({ value: a.group || '', disabled: !canGroup })} aria-label="Group for ${esc(a.name)}" title="${esc(a.group ? GroupsCore.summary(F.groupOf(a)) : 'None: a personal account, in no group')}"><option value="">None</option>${(S.groups || []).map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('')}</select></span>`;
+        const lims = !grpOn ? '' : !grpKnown ? c(NK, 'r mut apg-nk', 'Not connected to ChartBridge: the limits are not known now') : a.group
           ? c(typeof a.floor === 'number' ? 'floor ' + AC.fmtUsdPlain(a.floor) : 'floor ?', 'r mut', typeof a.floor === 'number' ? 'The floor by its group\'s rules' : (why.floor || ''))
           : `<span role="cell" class="apg-my"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-floor" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myFloor), disabled: !canGroup })} placeholder="${a.myLimitsSet === false ? 'not set' : 'floor $'}" maxlength="12" aria-label="My floor for ${esc(a.name)}" title="My floor: the balance this account must stay above (empty: none)"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-daily" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myDailyLoss), disabled: !canGroup })} placeholder="${a.myLimitsSet === false ? 'not set' : 'daily $'}" maxlength="12" aria-label="My daily limit for ${esc(a.name)}" title="My daily limit: the most this account may lose today, open P&amp;L counted (empty: none)"></span>`;
         const hero = AC.heroOf(S.heroes, a.name);   // 1.27.0: a seat shows its hero's name
-        return row(a.name, `${c(a.name + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', (a.sim ? 'NinjaTrader Sim account' : '') + (hero ? (a.sim ? '. ' : '') + 'A seat of ' + hero + ' (the Agent tab): the copier and the bot never trade it' : ''))}${c(CONN[a.connection] || a.connection, a.connection === 'connected' ? '' : 'warn')}` +
+        return row(a.name, `${c(a.name + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', (a.sim ? 'NinjaTrader Sim account' : '') + (hero ? (a.sim ? '. ' : '') + 'A seat of ' + hero + ' (the Agent tab): the copier and the bot never trade it' : ''))}${stale ? c('unknown', 'warn', 'Not connected to ChartBridge since ' + hms(S.lostAt) + ' ET: this account\'s connection is not known') : c(CONN[a.connection] || a.connection, a.connection === 'connected' ? '' : 'warn')}` +
           `${c(AC.fmtUsdPlain(a.balance), 'r')}${c(AC.fmtUsd(a.pnlToday), 'r ' + (a.pnlToday > 0.004 ? 'up' : a.pnlToday < -0.004 ? 'dn' : ''))}${c(pos, 'r')}` +
           `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${grp}${typeCell(a)}${lims}${mark}${hide}`, 'apg-acc' + lvl) + ask(a) + askJoin(a) + askApply(a) + typeWarn(a);
       };
       html = !accounts.length ? '<p class="ac-empty">ChartBridge watches no account.</p>' :
-        `<div class="gr apg-g apg-acc-g${canAct ? ' apg-hides' : ''}${grpOn ? ' apg-grps' : ''}${typesOn ? ' apg-types' : ''}" role="table" aria-label="Accounts">` +
+        (stale ? `<p class="apg-stalenote" role="status">${esc(staleWords)}</p>` : '') +
+        `<div class="gr apg-g apg-acc-g${canAct ? ' apg-hides' : ''}${grpOn ? ' apg-grps' : ''}${typesOn ? ' apg-types' : ''}${stale ? ' apg-stale' : ''}" role="table" aria-label="Accounts${stale ? ' as of ' + esc(hms(S.lostAt)) + ' ET (not connected)' : ''}">` +
         row('h', h('Account') + h('Conn') + h('Balance', 'r') + h('Today', 'r') + h('Position', 'r') + h('Room', 'r') + (grpOn ? h('Group') + (typesOn ? h('Account type') : '') + h('Limits', 'r') : '') + h('Trade', 'r') + (canAct ? h('', 'r') : ''), 'gr-h') +
         active.map(accRow).join('') + '</div>' +
         (gone.length ? '<h3 class="apg-h">Gone</h3><div class="gr apg-g apg-gone-g" role="table" aria-label="Gone accounts">' + gone.map(a => {
@@ -906,6 +916,7 @@ function mount(v, host) {
         (S.deskState === 'ok' ? 'Limits: NinjaTrader where it reports them, else The Desk.' : S.deskState === 'not asked' ? 'Limits: NinjaTrader where it reports them.' : S.deskState) +
         (!grpOn ? '' : S.typesState === 'cache' ? ' Account types: The Desk is not reachable; the list as of ' + GroupsCore.asOfText(S.typesAsOf) + '.' : S.typesState === 'none' ? ' Account types: The Desk is not reachable and this browser has no copy.' : '') +
         (sw.accountChecks ? '' : ' Checkmarks are read only (accountChecks = off in config.txt).') + (S.enabled ? '' : ' ' + (S.reason || ''));
+      if (stale) foot = staleWords + (grpKnown ? '' : ' Groups, account types and limits are not known until ChartBridge is back.');
     } else if (P.tab === 'pos') {
       html = !positions.length ? '<p class="ac-empty">Flat on every account.</p>' : '<div class="gr apg-g apg-pos-g" role="table" aria-label="Open positions">' +
         row('h', h('Account') + h('Inst') + h('Qty', 'r') + h('Avg', 'r') + h('Unrealized', 'r') + h('Stop', 'r') + h('Target', 'r'), 'gr-h') +
@@ -918,7 +929,8 @@ function mount(v, host) {
             c(AC.priceText(p.avgPrice, instr(p.root)), 'r') + c(un === null ? '' : AC.fmtUsd(un), 'r ' + (un > 0.004 ? 'up' : un < -0.004 ? 'dn' : '')) +
             c(leg(legs.stop) || 'none', 'r' + (legs.stop.length ? '' : ' warn'), legs.stop.length ? '' : 'No working stop on ' + p.account + ' ' + p.root) + c(leg(legs.target), 'r'));
         }).join('') + '</div>';
-      foot = 'Every account ChartBridge watches. Unrealized from the last trade.';
+      foot = stale ? staleWords + ' Unrealized from the last trade on the chart.' : 'Every account ChartBridge watches. Unrealized from the last trade.';
+      if (stale && positions.length) html = html.replace('class="gr apg-g apg-pos-g"', 'class="gr apg-g apg-pos-g apg-stale"');
     } else if (P.tab === 'ord') {
       const can = sw.cancelFromList && S.enabled;
       const list = orders.slice().sort((a, b) => (a.account < b.account ? -1 : a.account > b.account ? 1 : a.root < b.root ? -1 : a.root > b.root ? 1 : 0));
@@ -927,7 +939,8 @@ function mount(v, host) {
         list.map(o => row(o.id, c(o.account, 'b') + c(o.root, 'b') + c(AC.orderName(o), o.side === 'sell' ? 'dn' : 'up') + c(String(Math.max(0, (+o.qty || 0) - (+o.filled || 0))), 'r') +
           c(typeof o.price === 'number' ? AC.priceText(o.price, instr(o.root)) : 'market', 'r') +
           (can ? `<span role="cell" class="r"><button type="button" class="ac-x" data-act="cancel" data-id="${esc(o.id)}" aria-label="Cancel this ${esc(o.root)} order on ${esc(o.account)}" title="Cancel it (one order; a bracket leg takes its partner)">×</button></span>` : ''))).join('') + '</div>';
-      foot = can ? 'Cancel works on any account ChartBridge watches (closing always works).' : 'Every account ChartBridge watches.';
+      foot = stale ? staleWords : can ? 'Cancel works on any account ChartBridge watches (closing always works).' : 'Every account ChartBridge watches.';
+      if (stale && list.length) html = html.replace('class="gr apg-g apg-ord-g', 'class="gr apg-g apg-stale apg-ord-g');
     } else if (P.tab === 'trd') {
       const seg = `<span class="ws-seg apg-seg" role="group" aria-label="Show"><button type="button" data-act="trd" data-v="trips" aria-pressed="${P.trd === 'trips'}">Round trips</button><button type="button" data-act="trd" data-v="fills" aria-pressed="${P.trd === 'fills'}">Fills</button></span>`;
       html = '<div class="apg-bar">' + seg + '</div>' + (!groups.length ? '<p class="ac-empty">No fills today.</p>' : groups.map(g => {

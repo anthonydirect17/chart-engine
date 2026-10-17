@@ -123,3 +123,8 @@
 .apg-applyask .apg-applysum { flex: 1 1 auto; min-width: 0; }
 .apg-applyask .ac-btn { flex: none; white-space: nowrap; }
 .apg-type .ac-btn.apg-apply { padding: 2px 5px; }
+
+/* 1.31.0 (audit C6): after a drop, the last snapshot dimmed and marked as of then */
+.apg-stale .gr-row:not(.gr-h) { opacity: .5; }
+.apg-stalenote { margin: 0 8px 6px; color: var(--warn); font-size: 12px; }
+.apg-nk { font-style: italic; }

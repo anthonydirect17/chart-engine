@@ -298,6 +298,23 @@ try {
   check(/Delete Apex\? Its 1 account go to None\.|Delete Apex\? Its 1 account/.test(await p4.$eval('#wsGroups .gp-ask', e => e.textContent)), 'Delete asks in the page first');
   await p4.click('#wsGroups [data-gp="del-yes"]');
   await until(async () => (await p4.$$('#wsGroups .gp-row')).length === 1, 'Apex deleted');
+  /* 1.31.0 (audit C6): ChartBridge drops: the rows stay, dimmed, as of the drop; Conn unknown; the group columns stay */
+  await p4.keyboard.press('Escape');   // Settings closed again
+  const gpBridge = bridges[bridges.length - 1];
+  gpBridge.kill();
+  await until(() => p4.$(`${AP} .apg-acc-g.apg-stale`), 'the Accounts rows marked stale after the drop');
+  const st = await p4.evaluate(ap => {
+    const q = s => document.querySelector(ap + ' ' + s);
+    const heads = [...document.querySelectorAll(ap + ' .apg-acc-g .gr-h [role="columnheader"]')].map(e => e.textContent);
+    const row = q('.gr-row[data-k="EVAL-A"]'), cells = row ? [...row.querySelectorAll('[role="cell"]')].map(e => e.textContent) : [];
+    return { heads, cells, note: (q('.apg-stalenote') || {}).textContent || '', foot: (q('.apg-foot') || {}).textContent || '', op: row ? getComputedStyle(row).opacity : '' };
+  }, AP);
+  check(st.heads.includes('Group') && st.heads.includes('Limits') && st.cells.filter(x => x === 'not known (not connected)').length >= 2,
+    'after the drop the Group and Limits columns stay, "not known (not connected)" (' + JSON.stringify(st.cells) + ')');
+  check(st.cells[1] === 'unknown' && +st.op < 0.9, 'Conn is unknown and the row is dimmed (' + st.cells[1] + ', opacity ' + st.op + ')');
+  check(/^As of \d\d:\d\d:\d\d ET \(not connected\)/.test(st.note) && /As of \d\d:\d\d:\d\d ET \(not connected\): ChartBridge's last balances, positions and orders, not current\./.test(st.foot),
+    'the note and the footer say as of when, not connected (' + st.foot + ')');
+  await p4.screenshot({ path: path.join(out, 'accounts-9-dropped-1366.png') });
   await ctx4.close();
   }
 

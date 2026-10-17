@@ -736,7 +736,7 @@ function create(o) {
     put(q('[data-k="sPos"]'), 'textContent', m.position);
     const ow = q('[data-k="sOwns"]'); put(ow, 'hidden', !m.owns); put(ow, 'textContent', m.owns.toUpperCase());
     const st = q('[data-k="sState"]');
-    const stText = m.killed ? 'KILLED' : m.standDown ? 'STOOD DOWN: ' + m.standDown : '';
+    const stText = m.killed ? 'KILLED' + (m.killedWhen ? ' since ' + m.killedWhen + ' (kept through a restart until you release it)' : '') : m.standDown ? 'STOOD DOWN: ' + m.standDown : '';
     put(st, 'hidden', !stText); put(st, 'textContent', stText); attr(st, 'title', stText || null);
     put(q('[data-k="last"]'), 'textContent', m.last); attr(q('[data-k="last"]'), 'title', m.last);   // one line in the column, the whole of it here
   }
@@ -957,7 +957,7 @@ function create(o) {
       '<div class="ag-bcell"><span class="ag-tier tier-' + esc(r.chip.tone) + '" title="' + esc(r.chip.title) + '">' + esc(r.chip.text) + '</span>' +
         (r.proving ? '<span class="ag-tier tier-league" data-k="proving" title="' + esc(r.proving.title) + '">' + esc(r.proving.text) + '</span>' : '') + (r.fit.warn ? '<span class="ag-bwarn">' + esc(r.fit.warn) + '</span>' : r.fit.note && r.kind === 'group' ? '<span class="ag-bsub">' + esc(r.fit.note) + '</span>' : '') + '</div>' +
       '<div class="ag-bcell"><span class="ag-bwhere">' + esc(r.where) + '</span><span class="ag-bsub">' + esc(r.sub) + '</span></div>' +
-      '<div class="ag-bcell"><span class="ag-chip ag-mode m-' + esc(r.mode) + '">' + esc(r.modeName) + '</span>' + (r.off ? '<span class="ag-bwarn ag-boff">' + esc(r.off) + '</span>' : '') + (r.killed ? '<span class="ag-bwarn">kill switch on</span>' : r.standDown ? '<span class="ag-bwarn">stood down</span>' : !r.connected ? '<span class="ag-bsub">not connected</span>' : '') + '</div>' +
+      '<div class="ag-bcell"><span class="ag-chip ag-mode m-' + esc(r.mode) + '">' + esc(r.modeName) + '</span>' + (r.off ? '<span class="ag-bwarn ag-boff">' + esc(r.off) + '</span>' : '') + (r.killed ? '<span class="ag-bwarn" title="Kept through a restart of ChartBridge or NinjaTrader until you release it on his desk">kill switch on' + (r.killedWhen ? ' since ' + esc(r.killedWhen) : '') + '</span>' : r.standDown ? '<span class="ag-bwarn">stood down</span>' : !r.connected ? '<span class="ag-bsub">not connected</span>' : '') + '</div>' +
       '<div class="ag-bcell mono ag-bbig ' + r.posTone + '">' + esc(r.position) + '</div>' +
       '<div class="ag-bcell mono ag-bbig ' + (r.r > 0 ? 'pos' : r.r < 0 ? 'neg' : '') + '" title="His closed trades today in R, from each plan\'s own risk (this browser\'s record of his fills)">' + esc(r.rText) + '</div>' +
       '<div class="ag-bcell">' + (r.off ? '<span class="ag-bsub">Start him in Shadow, or set None on his desk to free the slot.</span>' : '') + (r.room.pct !== null ? '<div class="ag-meter2"><i style="width:' + r.room.pct + '%"></i></div>' : '') + '<span class="ag-bsub mono">' + esc(r.room.text) + '</span></div>' +
