@@ -2986,7 +2986,9 @@ account not connected): when the account was flat at both ends and the balance i
 missed was that balance (the end-of-day high is raised to it, if higher) and no high was missed. Otherwise a missed close (the
 latest trading day whose close, 17:00 or the halt of an NYSE holiday or early close, fell after `closeSeen`) is kept as
 `eodMissed`, and any such gap (a position open at either end, or the balance changed) as `intradayMissed`; the pages get a
-`status` `warn` naming the account. For a group of that drawdown type `floor` and `roomFloor` are then null with the reason
+`status` `warn` naming the account, only for its group's drawdown type (review LOW 8: an EOD group's account never hears of
+intraday highs). For a group of that drawdown type `floor` is then null, and so is `roomFloor` unless NinjaTrader reports its
+own trailing room (then that figure, `src` `ninjatrader`; review LOW 8), with the reason
 ("ChartBridge was not running at the close of <date>: put the account in <group> again and give the highest close from the
 firm's dashboard", or the intraday one), in `accounts` and in every agent's `accountState`, until the account is put in its
 group again (leave, then join with `highClose`), which clears both. A reading in the close window is that day's close. A line

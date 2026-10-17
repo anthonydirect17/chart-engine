@@ -712,6 +712,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 missed = ds; break;   // the latest close missed
             }
             string note = null;
+            // review LOW 8: the warning only for the drawdown type of the account's group (an EOD group never hears of intraday highs)
+            string gid, type = null;
+            Group grp;
+            if (state.Members.TryGetValue(m.Name, out gid) && state.Groups.TryGetValue(gid, out grp)) type = grp.Type;
             if (covers && m.PeakEod.HasValue && un.HasValue && bal + un.Value > m.PeakEod.Value + 0.004) m.PeakEod = Math.Round(bal + un.Value, 2);
             if (missed != null && m.PeakEod.HasValue)
             {
@@ -719,13 +723,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (m.EodMissed == null || string.CompareOrdinal(missed, m.EodMissed) > 0)
                 {
                     m.EodMissed = missed;
-                    note = m.Name + ": ChartBridge was not running at the close of " + missed + " and the account traded or held a position meanwhile: its end-of-day floor and room are not known until it is put in its group again with the highest close from the firm's dashboard";
+                    if (type == "eod") note = m.Name + ": ChartBridge was not running at the close of " + missed + " and the account traded or held a position meanwhile: its end-of-day floor and room are not known until it is put in its group again with the highest close from the firm's dashboard";
                 }
             }
             if (!same && m.PeakIntraday.HasValue && m.IntradayMissed == null)
             {
                 m.IntradayMissed = etNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-                if (note == null) note = m.Name + ": ChartBridge was not watching while the account held a position or traded: its intraday high may have been missed, so an intraday-trailing floor and room are not known until it is put in its group again with the highest balance from the firm's dashboard";
+                if (note == null && type == "intraday") note = m.Name + ": ChartBridge was not watching while the account held a position or traded: its intraday high may have been missed, so an intraday-trailing floor and room are not known until it is put in its group again with the highest balance from the firm's dashboard";
             }
             if (m.CloseSeen == null || string.CompareOrdinal(c, m.CloseSeen) > 0) m.CloseSeen = c;
             marksDirty = true;
@@ -1130,7 +1134,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                 }
                 n.Set("floor", n.Floor, "computed", floorWhy);
-                if (missedHigh) n.Set("roomFloor", null, null, floorWhy);   // 0.6.3 (audit C2): never a room from a high that may be too low
+                // 0.6.3 (audit C2): never a room from a high that may be too low; review LOW 8: NinjaTrader's own trailing figure when it gives one
+                if (missedHigh && ntRoom.HasValue) { n.RoomFloor = ntRoom; n.Set("roomFloor", ntRoom, "ninjatrader", null); }
+                else if (missedHigh) n.Set("roomFloor", null, null, floorWhy);
                 else SetRoomFloor(n, ntRoom, equity, n.Floor.HasValue ? eqWhy : floorWhy);
                 if (g.DailyLoss > 0) { n.RoomDaily = n.Pnl.HasValue ? g.DailyLoss + n.Pnl.Value : (double?)null; n.Set("roomDaily", n.RoomDaily, "computed", n.Why.ContainsKey("pnlToday") ? n.Why["pnlToday"] : null); }
                 else n.Set("roomDaily", null, null, "group " + g.Name + " has no daily loss limit");

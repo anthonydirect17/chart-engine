@@ -117,6 +117,11 @@ public static class GroupsHarness
         Check(e.Contains("\"floor\":null,\"roomFloor\":null,") && e.Contains("ChartBridge was not running at the close of 2026-10-21: put the account in Lucid Flex again and give the highest close from the firm's dashboard") &&
               Any("SIM-C: ChartBridge was not running at the close of 2026-10-21"), "0.6.3 C2: off over the close and it traded: floor and roomFloor null with the reason, the pages told: " + e);
         Check(State("SIM-C").Contains("\"roomFloor\":null") && State("SIM-C").Contains("not running at the close of 2026-10-21"), "0.6.3 C2: the agents' accountState too: " + State("SIM-C"));
+        Check(!Any("its intraday high may have been missed"), "0.6.3 LOW 8: an EOD group's account never gets the intraday-high warning");
+        simC.Items[AccountItem.TrailingMaxDrawdown] = 700;   // NinjaTrader reports the firm's own trailing room
+        e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":null,\"roomFloor\":700,") && e.Contains("\"roomFloor\":\"ninjatrader\""), "0.6.3 LOW 8: the floor not known, but NinjaTrader's own trailing room (700) is given, src ninjatrader: " + e);
+        simC.Items.Remove(AccountItem.TrailingMaxDrawdown);
         Restart(); Tick();
         Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":null,") && MarksText().Contains("\tflat\t2026-10-21\t2026-10-21\n"), "0.6.3 C2: the missed close survives a restart (account-marks.txt)");
         G("accountGroup", Join("SIM-C", "null", null)); Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "52000"));
