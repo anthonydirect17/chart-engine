@@ -52,6 +52,10 @@ re-arming by itself).
   after a wait never switches an account chosen on the page. LOW 8: NinjaTrader's own trailing room when a high may be missed,
   and the warnings by the group's drawdown type. LOW 9: no trade since the start counts as the feed down. LOW 11: a day file
   repair keeps the good `.bak`. A kill file held open at the start is read again, killed meanwhile.
+- **The review's second round.** A page choice (an agent's account, group, league seat or None, the bot's account, the copier's
+  leader) always wins over a pending reset; the reset's settle is `SteadyMs` (30 s), as the rest of ChartBridge; a branch whose
+  reset is pending takes no new entries ("waiting for the daily reset"), exits, legs and flattens never affected; a retried
+  catch-up after a restart still says caught up; the missing-file alarm names the exact files to delete.
 - **Going back to ChartBridge 0.6.2** (review LOW 10): 0.6.2 reads the 12-field `account-marks.txt` as a file it does not
   understand and never rewrites it, so its trailing floors and its computed `realizedToday` and `pnlToday` are not given until
   that file is deleted. 0.6.2 ignores `agent-<id>-kill.txt` and `bot-kill.txt`: a kill switch on stays on in the file, so a kill
