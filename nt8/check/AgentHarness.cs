@@ -1095,10 +1095,18 @@ public static class AgentHarness
             Check(Last(agentOut, "agentState").Contains("could not be read yet") && !Logged("could not be read for a minute"), "0.6.3 C4: still held after 30 s: tried again, no alarm yet");
             Advance(31000);
             Check(Logged("ALERT: agent-manrae-day.txt could not be read for a minute (The process cannot access") && Logged("ChartBridge keeps trying; exits always work"), "0.6.3 C4: held for a minute: now the alarm, and ChartBridge keeps trying");
+            // 0.6.3 (review LOW 6): a trade booked in memory while the day file is held is merged into the read that follows
+            Dictionary<string, double> tr = (Dictionary<string, double>)typeof(ChartBridgeAgent).GetField("Trades", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(M);
+            string tag = "feed1234";
+            lock (tr) tr[tag] = -12;   // a carried trade that ended while the file was held
             held = null;   // the day file freed; the account file still held
             Advance(6000);
             string st = Last(agentOut, "agentState");
             Check(st.Contains("agent-manrae-account.txt could not be read yet") && Logged("agent-manrae-day.txt could be read now"), "0.6.3 C4: the day file freed: read, the account file is still waited for: " + st);
+            Check(FileText("agent-manrae-day.txt").Contains("trade\t" + tag + "\t-12") && Logged("agent-manrae-day.txt read after a wait: 1 record(s) made meanwhile kept and saved"),
+                  "0.6.3 LOW 6: a trade booked while the day file was held is kept when it is read, and saved");
+            lock (tr) tr.Remove(tag);
+            File.WriteAllText(Path.Combine(Dir, "agent-manrae-day.txt"), FileText("agent-manrae-day.txt").Replace("trade\t" + tag + "\t-12\n", "").Replace("trade\t" + tag + "\t-12\r\n", ""));
             ChartBridgeAccounts.ReadFault = null;
             Advance(6000);
             st = Last(agentOut, "agentState");

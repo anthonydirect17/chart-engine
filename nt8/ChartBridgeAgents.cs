@@ -2485,6 +2485,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private void LoadDay()
         {
             string today = SessionOf(NowEt()), fileSession = null, broken = null, held = null, damaged = null, io = null, leftNote = null;
+            // 0.6.3 (review LOW 6): read again after it was held open: what was booked in memory meanwhile (a trade that ended, a plan
+            // id, a loss stand-down) is merged in, never dropped (as the stand-downs' retry keeps a raise)
+            Dictionary<string, double> memTrades = null; HashSet<string> memIds = null; string memHeld = null; string memSession = null;
+            if (IoPending("day")) lock (Sync) { memTrades = new Dictionary<string, double>(Trades); memIds = new HashSet<string>(PlanIds); memHeld = lossStandDown; memSession = session; }
             Dictionary<string, double> trades = new Dictionary<string, double>(), expiry = new Dictionary<string, double>();
             Dictionary<string, int[]> spans = new Dictionary<string, int[]>();
             HashSet<string> ids = new HashSet<string>(), carriedTags = new HashSet<string>();
@@ -2604,6 +2608,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (broken != null) Log(broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)");
             IoState("day", io != null, null);
             if (leftNote != null) { ChartBridgeFiles.Note(leftNote); SaveDay(); }
+            if (memTrades != null && io == null && broken == null && memSession == today)
+            {
+                int n = 0;
+                lock (Sync)
+                {
+                    foreach (KeyValuePair<string, double> kv in memTrades) { double v; if (!Trades.TryGetValue(kv.Key, out v) || (double.IsNaN(v) && !double.IsNaN(kv.Value))) { Trades[kv.Key] = kv.Value; n++; } }
+                    foreach (string id in memIds) if (PlanIds.Add(id)) n++;
+                    if (lossStandDown == null && memHeld != null) { lossStandDown = memHeld; n++; }
+                }
+                if (n > 0) { SaveDay(); Log("agent-" + Id + "-day.txt read after a wait: " + n + " record(s) made meanwhile kept and saved"); }
+            }
             if (damaged != null)
             {
                 string said;
