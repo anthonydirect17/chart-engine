@@ -1500,7 +1500,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             HashSet<string> retry = null;
             lock (Lk)
             {
-                if (!loaded) { List<string> pend; doneDay = ReadDay(out pend); loaded = true; Pending.Clear(); if (doneDay != null) foreach (string k in pend) Pending.Add(k); }
+                if (!loaded) { List<string> pend; string miss; doneDay = ReadDay(out pend, out miss); loaded = true; Pending.Clear(); if (doneDay != null) { foreach (string k in pend) Pending.Add(k); pendingMissed = miss; } }
                 if (doneDay == day && Pending.Count > 0) retry = new HashSet<string>(Pending);
             }
             if (retry != null) { Run(day, pendingMissed, retry); return; }
@@ -1523,9 +1523,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         }
 
-        private static string ReadDay(out List<string> pending)
+        private static string ReadDay(out List<string> pending, out string missed)
         {
             pending = new List<string>();
+            missed = null;
             try
             {
                 string[] lines = File.Exists(ResetFile) ? File.ReadAllLines(ResetFile) : null;
@@ -1543,7 +1544,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         lines = al; d = ad; break;
                     }
                 }
-                if (d != null) foreach (string raw in lines) { string[] p = raw.Trim().Split('\t'); if (p.Length == 2 && p[0] == "pending" && p[1].Length > 0) pending.Add(p[1]); }
+                if (d != null) foreach (string raw in lines) { string[] p = raw.Trim().Split('\t'); if (p.Length == 2 && p[0] == "pending" && p[1].Length > 0) pending.Add(p[1]); if (p.Length == 2 && p[0] == "missed" && System.Text.RegularExpressions.Regex.IsMatch(p[1], "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) missed = p[1]; }   // review round 2 (LOW D): a caught-up run
                 return d;
             }
             catch (Exception ex) { ChartBridgeServer.Log("daily-reset.txt could not be read (" + ex.Message + "): the reset runs in this break"); }
@@ -1570,6 +1571,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Directory.CreateDirectory(ChartBridgeConfig.Folder);
                 List<string> lines = new List<string> { "# ChartBridge daily reset (written by ChartBridge; do not edit)", "# the New York date the 17:00 ET reset to None last ran (pending: a branch whose account was not known yet)", "day\t" + day };
                 if (pending != null) foreach (string k in pending.OrderBy(x => x, StringComparer.Ordinal)) lines.Add("pending\t" + k);
+                string miss;
+                lock (Lk) miss = pendingMissed;
+                if (pending != null && pending.Any() && miss != null) lines.Add("missed\t" + miss);   // review round 2 (LOW D): a retry after a restart still says caught up
                 ChartBridgeFiles.WriteLines(ResetFile, lines);   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
             }
             catch (Exception ex) { ChartBridgeServer.Log("daily-reset.txt could not be saved (" + ex.Message + "); a restart in this break would run the reset again"); }

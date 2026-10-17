@@ -2913,7 +2913,8 @@ not listed by NinjaTrader, not Connected, or Connected for less than 30 s (revie
 rule while NinjaTrader reconnects, as positions can arrive after Connected). It keeps its
 account, the pages get one `status` `warn` ("<branch> stays on <account> for now: <why>, so its positions and orders are not
 known; its reset runs once they are"), and it stays pending: `daily-reset.txt` gets a `pending<TAB><key>` line (`bot`,
-`agent:<id>`, `copier`) after the day line, and every 2 s check tries that branch again (only that one, so a branch chosen again
+`agent:<id>`, `copier`) after the day line (and `missed<TAB>yyyy-MM-dd` for a caught-up run, so a retry after a restart still
+says it was caught up; review round 2, LOW D), and every 2 s check tries that branch again (only that one, so a branch chosen again
 after its reset stays), also after a restart, until it is known; then the usual Idle and skip rules apply and the line goes.
 Review round 2 (MED A): **Anthony's choice always wins over a pending reset**: when the page sets a pending branch's account
 (`agentAccount` with an account, a group, a league seat or None, `botAccount`, `copierSet` with `leader`), its pending line goes

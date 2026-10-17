@@ -3129,9 +3129,11 @@ public static class AgentHarness
                 ChartBridgeBranches.Forget();   // a restart before it is listed: still pending (from the file)
                 SteadyAll(); ChartBridgeBranches.Check();
                 Check(M.Account == "SIM-E" && File.ReadAllText(rf).Contains("pending\tagent:manrae"), "0.6.3 H1: a restart keeps it pending");
+                Check(File.ReadAllText(rf).Contains("missed\t2026-10-11"), "0.6.3 LOW D: the caught-up day is saved with the pending lines");
                 lock (Account.All) Account.All.Add(sime); back = true;
                 int s1 = N(page);
                 SteadyAll(); ChartBridgeBranches.Check();
+                Check(Any(page, s1, "Daily reset (17:00 ET, caught up now: ChartBridge was not running at 17:00 ET on 2026-10-11): agent manrae stays on SIM-E"), "0.6.3 LOW D: retried after a restart, it still says caught up");
                 Check(M.Account == "SIM-E" && Any(page, s1, "agent manrae stays on SIM-E: it has a position or a working order there") && !File.ReadAllText(rf).Contains("pending\tagent:manrae"),
                       "0.6.3 H1: listed with its position: the reset runs now and keeps SIM-E (a position), nothing pending");
             }
