@@ -994,6 +994,26 @@ public static class BotHarness
             Check(lateOut2.Any(x => x.Contains("the bot stays on Sim101")), "0.6.3 C1: a page that signs in after a caught-up reset gets the skipped note too");
             busy.OrderState = OrderState.Cancelled; Update(busy);
             Settle();
+            // 0.6.3 (review round 2, LOW C and MED A): the bot's reset pending (Sim101 not Connected): no new entries; a page choice ends it
+            {
+                File.WriteAllText(rf, "day\t2026-12-17\n");
+                ChartBridgeBranches.Forget();
+                sim.Connection.Status = ConnectionStatus.ConnectionLost;
+                ChartBridgeBranches.Check();
+                sim.Connection.Status = ConnectionStatus.Connected;
+                Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");   // a bot message to the page
+                Check(ChartBridgeBot.BotAccount == "Sim101" && File_("daily-reset.txt").Contains("pending\tbot") && Last(page, "bot").Contains("waiting for the daily reset: Sim101 was the bot's account"),
+                      "0.6.3 LOW C: the bot's reset pending: it keeps Sim101 and its status says it waits for the daily reset");
+                Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+                int m0 = sim.Calls.Count;
+                Bot(Sig(NewId(), Market("buy")));
+                Check(BotReject().Contains("waiting for the daily reset") && sim.Calls.Count == m0, "0.6.3 LOW C: a bot signal is refused while it waits, nothing placed");
+                Page(AccountMsg("Sim101"));
+                Check(!File_("daily-reset.txt").Contains("pending\tbot") && Last(page, "bot").Contains("\"standDown\":null"), "0.6.3 MED A: the bot's account chosen on the page: the pending reset is dropped: " + File_("daily-reset.txt").Replace("\n", " | ") + " || " + Last(page, "bot"));
+                SteadyAll(); ChartBridgeBranches.Check();
+                Check(ChartBridgeBot.BotAccount == "Sim101", "0.6.3 MED A: and never undone by the next check");
+                Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
+            }
             // 0.6.3 (review MED 5): daily-reset.txt missing after a cut-off replace: its .bak gives the day (no reset run again)
             File.WriteAllText(rf + ".bak", "day\t2026-12-20\n"); File.Delete(rf);
             ChartBridgeBranches.Forget();

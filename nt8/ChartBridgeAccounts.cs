@@ -1445,15 +1445,23 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
         // 0.6.3 (review round 2, MED A): Anthony chose this branch's account on the page (an account, a group, a league seat or None):
         // his choice always wins over a pending reset, so the branch leaves Pending and daily-reset.txt is written again.
-        public static void Chosen(string key)
+        public static bool Chosen(string key)
         {
             string day;
             List<string> keep;
-            lock (Lk) { if (!Pending.Remove(key)) return; day = doneDay; keep = Pending.ToList(); }
+            lock (Lk) { if (!Pending.Remove(key)) return false; day = doneDay; keep = Pending.ToList(); }
             if (day != null) WriteDay(day, keep);
             ChartBridgeServer.Log("daily reset: " + key + "'s account was chosen on the page: its pending reset is dropped (the choice stands)");
+            return true;
         }
         public static bool IsPending(string key) { lock (Lk) return Pending.Contains(key); }
+        // Review round 2 (LOW C): while a branch's reset is pending it takes no new entries (the 17:00 rule, enforced in the short
+        // window after a reconnect); exits, legs and flattens are never affected. The status words, or null.
+        public static string WaitingWords(string key, string branch, string account)
+        {
+            if (!IsPending(key)) return null;
+            return "waiting for the daily reset: " + account + " was " + branch + "'s account before the 17:00 ET reset and is not known yet (not in NinjaTrader, not Connected, or Connected under 30 s); no new entries until its reset has run or an account is chosen on the page (exits always work)";
+        }
         // A retry of pending branches is running on this thread: a branch no longer pending (chosen on the page meanwhile) is left
         // alone. Asked by each branch's reset under the same lock its page choice takes (the agent's and the bot's PlaceGate).
         [ThreadStatic] private static bool retrying;

@@ -454,6 +454,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (dayBroken != null) return dayBroken;
             if (railsBroken != null) return railsBroken;
             if (accountBroken != null) return accountBroken;
+            string wait = ChartBridgeBranches.WaitingWords("bot", "the bot", account);   // 0.6.3 (review round 2, LOW C)
+            if (wait != null) return wait;
             int losses = Trades.Values.Count(v => v < 0);
             if (losses >= maxLosses) return losses + " losing trades today: no new bot entries until 18:00 ET";
             return null;
@@ -1318,7 +1320,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (type == "botSeen") why = Seen(d);
                 else if (type == "botAnswer") why = AnswerProposal(d);
                 else if (type == "botRails") why = SetRails(d);
-                else if (type == "botAccount") { lock (PlaceGate) { why = SetAccount(d); if (why == null) ChartBridgeBranches.Chosen("bot"); } }   // 0.6.3 (review round 2, MED A): under PlaceGate, as the reset
+                else if (type == "botAccount") { bool dropped = false; lock (PlaceGate) { why = SetAccount(d); if (why == null) dropped = ChartBridgeBranches.Chosen("bot"); } if (dropped) Notify(); }   // 0.6.3 (review round 2, MED A): under PlaceGate, as the reset
                 if (why != null) PageReject(client, cid, id, why);
             }
             catch (Exception ex)

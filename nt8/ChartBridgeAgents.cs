@@ -2828,7 +2828,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             return lossStandDown;   // never lifted by a rules change; the 18:00 ET roll clears it (lead's default)
         }
 
-        private string StandDown() { string sd; lock (Sync) sd = StandDownLocked(); return sd ?? LatchProblem() ?? AccountConflict(); }   // 0.6.2: a stand-down on its group (the backstop cancels its entries)
+        private string StandDown() { string sd; lock (Sync) sd = StandDownLocked(); return sd ?? LatchProblem() ?? AccountConflict(); }
+        // 0.6.3 (review round 2, LOW C): its daily reset is pending: no new entries (check 2) and the status says so; never the backstop
+        // (a working entry is not cancelled for it: the 17:00 rule keeps a branch with a working order)
+        private string PendingWords() { return ChartBridgeBranches.WaitingWords("agent:" + Id, "agent " + Id, AccountWords()); }   // 0.6.2: a stand-down on its group (the backstop cancels its entries)
 
         // A file that cannot be read (check 2), or null. Under Sync.
         private string FilesBrokenLocked() { return dayBroken ?? rulesBroken ?? accountBroken; }
@@ -3359,6 +3362,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // 2. not killed, not stood down, the files readable, the account tradable now
             if (k) return "the kill switch is on (release it on the Agent tab)";
             if (sd != null) return sd;
+            string wait = PendingWords();   // 0.6.3 (review round 2, LOW C)
+            if (wait != null) return wait;
             if (!grp && ChartBridgeBranches.IsNone(acct)) return "agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
             if (forAccount != null && forAccount != used) return "agent " + Id + "'s account changed from " + KeyWords(forAccount) + " to " + KeyWords(used) + " after this proposal: nothing placed";
             // 0.6.2: a stand-down of its build on its group (a group pick: the whole plan; one account inside a group: its one seat), or
@@ -4242,12 +4247,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         // send keepMode or names another mode, a change puts it in shadow).
         private string SetAccount(Dictionary<string, Val> d)
         {
+            string why;
+            bool dropped = false;
             lock (PlaceGate)
             {
-                string why = SetAccountLocked(d);
-                if (why == null) ChartBridgeBranches.Chosen("agent:" + Id);   // 0.6.3 (review round 2, MED A): the page's choice wins over a pending reset
-                return why;
+                why = SetAccountLocked(d);
+                if (why == null) dropped = ChartBridgeBranches.Chosen("agent:" + Id);   // 0.6.3 (review round 2, MED A): the page's choice wins over a pending reset
             }
+            if (dropped) Notify();   // the status no longer waits for the reset
+            return why;
         }   // never between a placement's checks and its order
 
         private string SetAccountLocked(Dictionary<string, Val> d)
@@ -4977,7 +4985,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private string StateJson()
         {
-            string sd = StandDown(), gsd = GroupStandDownJson();   // 0.6.2: groupStandDown, the stand-down on the group it is on now
+            string sd = StandDown() ?? PendingWords(), gsd = GroupStandDownJson();   // 0.6.2: groupStandDown, the stand-down on the group it is on now
             string gtype = GroupNow() ? Str(ChartBridgeGroups.TypeOf(GroupId)) : "null";   // 0.6.2: groupType, the Type of the group it trades (a change in Settings reaches the runner without a reconnect)
             bool owns = OwnsAny();
             string seats = GroupNow() || AllSeats().Any(x => !IsEntrySeat(x.Name)) ? ",\"seats\":" + SeatsJson(false) : "";   // 0.6.0: a group's seats (one account: as before)
@@ -4992,7 +5000,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public string StripJson()
         {
             bool sim = SimNow(), owns = OwnsAny();
-            string sd = StandDown(), sds = StandDownsJson();   // 0.6.2: standDowns, every stand-down of its build
+            string sd = StandDown() ?? PendingWords(), sds = StandDownsJson();   // 0.6.2: standDowns, every stand-down of its build
             Rules r = RulesNow();
             string gid = GroupId, seats = gid != null || AllSeats().Any(x => !IsEntrySeat(x.Name)) ? SeatsJson(true) : null;   // 0.6.0
             Seat pos = AllSeats().FirstOrDefault(x => { lock (Sync) return x.openTag != null && x.ledQty != 0; });

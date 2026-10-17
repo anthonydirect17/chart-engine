@@ -83,7 +83,7 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   assert.match(bodies(acode, 'Place'), /ChartBridgeOrders\.PlaceAgentEntry\(Id, p\.Id, text, out placed\)/);
   assert.match(bodies(acode, 'Place'), /string why = Checks\(p, forAccount, forAccount != null, out acct\);/, 'every check again at the moment of placing, and the account they validated is the one used');
   for (const f of ['SetMode', 'SetKill', 'SetRules']) assert.match(bodies(acode, f), /lock \(PlaceGate\) return \w+Locked\(d\);/, f + ' waits for a placement under way');
-  assert.match(bodies(acode, 'SetAccount'), /lock \(PlaceGate\)\s*\{\s*string why = SetAccountLocked\(d\);\s*if \(why == null\) ChartBridgeBranches\.Chosen\("agent:" \+ Id\);/, 'SetAccount waits for a placement under way (0.6.3: and drops a pending reset under the same lock)');
+  assert.match(bodies(acode, 'SetAccount'), /lock \(PlaceGate\)\s*\{\s*why = SetAccountLocked\(d\);\s*if \(why == null\) dropped = ChartBridgeBranches\.Chosen\("agent:" \+ Id\);/, 'SetAccount waits for a placement under way (0.6.3: and drops a pending reset under the same lock)');
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) \{ string agentWhy = ChartBridgeAgents\.PlacingProblem\(agent, account\.Name, kind, isBuy, price, limitPx, tick\);/, 'the order path asks the agent at the last moment');
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(\(kind != "limit" && kind != "stopLimit"\) \|\| strategyBody != null \|\| bracketBody == null\)\) return/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(stopTicks < 1 \|\| targetTicks < 1\)\) return "every agent entry needs a stop and a target";/);

@@ -2918,7 +2918,12 @@ after its reset stays), also after a restart, until it is known; then the usual 
 Review round 2 (MED A): **Anthony's choice always wins over a pending reset**: when the page sets a pending branch's account
 (`agentAccount` with an account, a group, a league seat or None, `botAccount`, `copierSet` with `leader`), its pending line goes
 and `daily-reset.txt` is written again; a retry already running leaves alone a branch that is no longer pending (checked under
-the same lock the page's choice takes). A ChartBridge before 0.6.3 reads only the day line.
+the same lock the page's choice takes). Review round 2 (LOW C): **while a branch's reset is pending it takes no new entries**
+(the 17:00 rule, enforced in the short window after a reconnect): an agent's plan is refused at check 2 and a bot signal is
+refused, both with "waiting for the daily reset: <account> was <branch>'s account before the 17:00 ET reset and is not known
+yet ...", which is also the status (`agentState` and the strip's `standDown`, `bot.standDown`); the copier copies no new leader
+entry. Exits, legs and flattens are never affected, and a working entry is not cancelled for it. A ChartBridge before 0.6.3
+reads only the day line.
 `ChartBridgeBranches.KeepThroughReset` is the one place an exception would go (Anthony is still deciding whether a branch
 running a hero on Sim101 is left alone); for now there is none. The ticket's account is each page's own, so the page applies
 the same rule to it (`LivePrefs.ticketReset`, every 5 s in the window with the ticket, and only once that connection's

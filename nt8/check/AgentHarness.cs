@@ -3169,6 +3169,11 @@ public static class AgentHarness
                 ChartBridgeBranches.Check();
                 Check(M.Account == "SIM-E" && File.ReadAllText(rf).Contains("pending\tagent:manrae") && ChartBridgeBranches.SettleMs == ChartBridgeOrders.SteadyMs,
                       "0.6.3 MED B: Connected 10 s: still pending (the reset waits SteadyMs, 30 s, as the rest of ChartBridge: a position can arrive late)");
+                Mode("manrae", "auto");
+                A(Good(NewId()));
+                Check(AgentReject().Contains("waiting for the daily reset: SIM-E was agent manrae's account before the 17:00 ET reset and is not known yet") &&
+                      Last(agentOut, "agentState").Contains("\"standDown\":\"waiting for the daily reset: SIM-E"),
+                      "0.6.3 LOW C: while its reset is pending a plan is refused, and the status says it waits for the daily reset: " + AgentReject());
                 // 0.6.3 (review round 2, MED A, the review's probe 5): Anthony chooses on the page while manrae's reset is pending: his choice wins
                 File.WriteAllLines(Path.Combine(Dir, "daily-reset.txt.keep"), File.ReadAllLines(rf));
                 P(AccountMsg("manrae", "SIM-D"));

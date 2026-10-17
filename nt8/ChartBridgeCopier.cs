@@ -915,7 +915,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Lk)
                 {
                     if (!IsLeader(entry.Account.Name)) return;
-                    LeaderEntry le = new LeaderEntry { Entry = entry, Tag = tag, Kind = kind, Price = price, Inst = entry.Instrument, Root = root, Buy = ChartBridgeOrders.CopierIsBuy(entry), Copy = armed && Followers.Any(f => f.On) };
+                    LeaderEntry le = new LeaderEntry { Entry = entry, Tag = tag, Kind = kind, Price = price, Inst = entry.Instrument, Root = root, Buy = ChartBridgeOrders.CopierIsBuy(entry), Copy = armed && Followers.Any(f => f.On) && !ChartBridgeBranches.IsPending("copier") };   // 0.6.3 (review round 2, LOW C): not while the leader's reset is pending
                     LeaderByTag[tag] = le; LeaderByOrder[entry] = le;
                     lastLeaderRoot = root;
                 }
@@ -950,7 +950,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (entry.OrderState == OrderState.Rejected) { LeaderEntryDropped(entry); return; }
                 if (m != "orders") return;
                 if (le.Copy) Work(() => PlaceOrdersCopies(le, Stopwatch.GetTimestamp()));
-                else Event(null, "skip", le.Root, 0, double.NaN, null, null, null, "the copier is stood down (or no follower is on): the leader's entry is not copied");
+                else Event(null, "skip", le.Root, 0, double.NaN, null, null, null, ChartBridgeBranches.IsPending("copier") ? "waiting for the daily reset of the leader's account: the leader's entry is not copied" : "the copier is stood down (or no follower is on): the leader's entry is not copied");
             }
             catch (Exception ex) { ChartBridgeServer.Log("copier error: " + ex.Message); }
         }
