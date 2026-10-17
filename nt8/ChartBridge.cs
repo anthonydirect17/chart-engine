@@ -3471,7 +3471,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static int feedDown;
         // 0.6.3 (audit C7): NinjaTrader's data connection is down (a drop seen, no trade or Connected since): the agents' flat time
         // reads it to tell a lost feed from a halt.
-        public static bool FeedDown { get { return Volatile.Read(ref feedDown) != 0; } }
+        // Review LOW 9: no trade at all since ChartBridge started listening (feedDown starts at 0) counts too, once 5 s have passed
+        // since that start: a start with no data ever is a feed that is not up.
+        public static bool FeedDown
+        {
+            get
+            {
+                if (Volatile.Read(ref feedDown) != 0) return true;
+                long since = Interlocked.Read(ref listeningSinceUtcTicks);
+                return Interlocked.Read(ref firstTradeUtcTicks) == 0 && since > 0 && ChartBridgeTime.ToUtc(NowNt()).Ticks - since >= TimeSpan.TicksPerSecond * 5;
+            }
+        }
         private static void FeedUp()
         {
             long now = ChartBridgeTime.ToUtc(NowNt()).Ticks;

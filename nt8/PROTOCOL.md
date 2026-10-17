@@ -2711,7 +2711,8 @@ Where the contract left a detail open, the safest simple choice was taken and is
   the market open by the calendar (not shut, above) the flatten goes anyway, and the pages get one alarm naming it ("Agent
   <id>: flattening <root> on <account> (<why>) with NinjaTrader's data feed down: no trade seen for 5 s because the data
   connection is lost, the account is Connected and the market is open by the calendar, so the close goes without a fresh
-  price; check the fill in NinjaTrader"). With the feed down and the account not Connected nothing can go: NOT FLAT says "no
+  price; check the fill in NinjaTrader"). Review LOW 9: no trade at all since ChartBridge started listening, 5 s or more after
+  that start, counts as the feed down too (a start with no data ever). With the feed down and the account not Connected nothing can go: NOT FLAT says "no
   trade seen for 5 s: NinjaTrader's data feed is down and <account> is not Connected, so ChartBridge cannot close it now; act
   in NinjaTrader now". The feed up and no trade is a real halt: as before. Review MED 4: only the job the agent's rules start
   at its flat time (from `flatAt`, not an earlier session's position, not outside its hours, not the agent's own `flatten`) goes

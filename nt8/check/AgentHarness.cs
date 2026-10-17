@@ -3244,6 +3244,31 @@ public static class AgentHarness
                 Check(sime.Calls.Count == c2 && Any(page, s2, "market not trading: the stop and target stay"), "0.6.3 C7: the feed up and no trade: a real halt, nothing cancelled (as before)");
                 Last2(); Advance(5000);
                 SetPos(sime, mnq, 0); ClearMoves();
+                // 0.6.3 (review LOW 9): a start with no trade ever (feedDown never set): from the start time it counts as feed down
+                FieldInfo ft = typeof(ChartBridgeServer).GetField("firstTradeUtcTicks", PS), fl = typeof(ChartBridgeServer).GetField("listeningSinceUtcTicks", PS);
+                long ftWas = (long)ft.GetValue(null), flWas = (long)fl.GetValue(null);
+                try
+                {
+                    DateTime nowNt = (DateTime)typeof(ChartBridgeServer).GetMethod("NowNt", PS).Invoke(null, null);
+                    ft.SetValue(null, 0L); fl.SetValue(null, ChartBridgeTime.ToUtc(nowNt).Ticks - TimeSpan.TicksPerMinute);   // listening for a minute, no trade ever
+                    Check(ChartBridgeServer.FeedDown, "0.6.3 LOW 9: no trade since the start a minute ago: the feed counts as down");
+                    fl.SetValue(null, ChartBridgeTime.ToUtc(nowNt).Ticks - TimeSpan.TicksPerSecond);
+                    Check(!ChartBridgeServer.FeedDown, "0.6.3 LOW 9: a second after the start: not yet");
+                    fl.SetValue(null, ChartBridgeTime.ToUtc(nowNt).Ticks - TimeSpan.TicksPerMinute);
+                    et = new DateTime(2026, 10, 9, 10, 0, 0);
+                    Fresh();
+                    Order e4 = PlacedOn(sime, Good(NewId()));
+                    if (e4 == null) { Check(false, "0.6.3 LOW 9: an entry was placed: " + AgentReject()); return; }
+                    Fill(e4, 1, 24999);
+                    StaleLast("MNQ", 60000);
+                    et = new DateTime(2026, 10, 9, 15, 55, 0);
+                    int c4 = sime.Calls.Count, s4 = N(page);
+                    Advance(6000);
+                    Check(sime.Calls.Skip(c4).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")) && Any(page, s4, "with NinjaTrader's data feed down"),
+                          "0.6.3 LOW 9: no data since the start, the flat time, the account Connected: the flatten goes and says the feed is down");
+                    SetPos(sime, mnq, 0); ClearMoves();
+                }
+                finally { ft.SetValue(null, ftWas); fl.SetValue(null, flWas); }
             }
             finally { fd.SetValue(null, 0); sime.Connection.Status = ConnectionStatus.Connected; et = new DateTime(2026, 10, 9, 10, 0, 0); }
         });
