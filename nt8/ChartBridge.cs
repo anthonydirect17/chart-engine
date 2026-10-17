@@ -594,11 +594,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         // 0.6.3 (audit C5, Anthony's decision): a kill switch kept in a file (agent-<id>-kill.txt, bot-kill.txt) so a restart never
         // releases it. Written only by the page's kill message; released only by it. The file there at all is a kill switch on
         // (one that does not read says so with a time of 0). KillSince: null when there is no file, else the UTC ms it went on.
+        // Review (C5): -1 when the file is there but held open (an IOException): still on, read again as the agents' files (C4).
+        public static Func<string, string> KillReadFault;   // test hook: a non-null answer fails the read by file name
         public static double? KillSince(string path)
         {
             try
             {
                 if (!File.Exists(path)) return null;
+                Func<string, string> fault = KillReadFault;
+                string why = fault != null ? fault(Path.GetFileName(path)) : null;
+                if (why != null) throw new IOException(why);
                 foreach (string raw in File.ReadAllLines(path))
                 {
                     string[] p = raw.Trim().Split('\t');
@@ -607,6 +612,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 return 0;
             }
+            catch (IOException) { return -1; }   // held open: still on; read again
             catch (Exception) { return 0; }   // there but not readable: still on (the careful side)
         }
         public static string SaveKill(string path, string who, double atMs)

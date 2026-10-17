@@ -2436,7 +2436,8 @@ of ChartBridge puts every agent in `shadow`; `auto` never survives a restart. 0.
 switch does survive a restart.** `agentKill` on writes `agent-<id>-kill.txt` (two `#` lines, then `killed<TAB><UTC ms>`), one
 per agent; `agentKill` off removes it (a release whose file cannot be removed is refused: "agent-<id>-kill.txt could not be
 removed (...): the kill switch stays on"). Only the page's kill message writes or removes it. At every start a file that is
-there (even one that does not read) is the kill switch on: the Output window says "agent <id>: its kill switch is still on (on
+there (even one that does not read, or one held open: it is read again on every check, as the agents' files, review of C5)
+is the kill switch on: the Output window says "agent <id>: its kill switch is still on (on
 since <time> UTC; kept through the restart) ...", `welcome` carries `"killed": true`, `agentState` carries `killed` true, and the page's `agent`
 rows carry `killed` and `killedAt` (UTC ms, null when not known or not killed), and the Board and the agent's desk show "kill
 switch on since <time>" until Anthony releases it. A kill that cannot be saved still holds in memory and the pages get a

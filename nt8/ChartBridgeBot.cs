@@ -180,6 +180,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string DayFile { get { return Path.Combine(Folder, "bot-day.txt"); } }
         private static string KillFile { get { return Path.Combine(Folder, "bot-kill.txt"); } }   // 0.6.3 (audit C5)
         private static double killedAt;
+        private static bool killReadPending;   // review (C5): bot-kill.txt held open at the start: on meanwhile, read again on the check
         private static string LogFile { get { return Path.Combine(Folder, "bot.log"); } }
 
         // ---------------------------------------------------------- start and stop (ChartBridgeServer.Start and Stop)
@@ -195,7 +196,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             LoadAccount();
             LoadDay();
             double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): the kill switch survives a restart until the page releases it
-            lock (Sync) { noBotSinceMs = Now(); killed = kill.HasValue; killedAt = kill ?? 0; }
+            lock (Sync) { noBotSinceMs = Now(); killed = kill.HasValue; killedAt = Math.Max(0, kill ?? 0); killReadPending = kill == -1; }
+            if (kill == -1) Log("bot-kill.txt is there but could not be read yet (held open): the kill switch is on; ChartBridge reads it again");
             if (kill.HasValue) Log("the bot's kill switch is still on (" + ChartBridgeAgent.KilledWords(kill.Value) + "; kept through the restart): every bot order is refused until it is released on the page");
             if (withTimer) timer = new Timer(delegate { try { Check(); } catch (Exception ex) { ChartBridgeServer.Log("bot check error: " + ex.Message); } }, null, (int)CheckEveryMs, (int)CheckEveryMs);
             Log("the bot channel is ON: a bot may connect at ws://localhost:" + ChartBridgeConfig.Port + "/bot (account " + BotAccount + " (" + AcctMark() + "), " + EffectiveRoot() + ", starting in shadow)");
@@ -1266,6 +1268,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void Check()
         {
             if (!Enabled) return;
+            bool kp;
+            lock (Sync) kp = killReadPending && killed;
+            if (kp)
+            {
+                double? k = ChartBridgeFiles.KillSince(KillFile);
+                if (k != -1) { lock (Sync) { killReadPending = false; if (k.HasValue) killedAt = k.Value; } Log("bot-kill.txt read now: the kill switch stays on until it is released on the page"); Notify(); }
+            }
             RollDay();
             double now = Now();
             ChartBridgeClient silent = null;

@@ -2143,6 +2143,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string KillFile { get { return Path.Combine(Folder, "agent-" + Id + "-kill.txt"); } }   // 0.6.3 (audit C5)
         private double killedAt;   // the UTC ms the kill switch went on (0: not known), while killed
         public bool Killed { get { lock (Sync) return killed; } }
+        private bool killReadPending;   // review (C5): the kill file was held open at the start: on meanwhile, read again on the check
+        private void RetryKill()
+        {
+            bool pending;
+            lock (Sync) pending = killReadPending && killed;
+            if (!pending) return;
+            double? k = ChartBridgeFiles.KillSince(KillFile);
+            if (k == -1) return;
+            lock (Sync) { killReadPending = false; if (k.HasValue) killedAt = k.Value; }
+            Log("agent " + Id + ": agent-" + Id + "-kill.txt read now: " + (k.HasValue ? "the kill switch stays on (" + KilledWords(k.Value) + ")" : "it is gone, but the kill switch stays on until it is released on the page"));
+            Notify();
+        }
         private string LogFile { get { return Path.Combine(Folder, "agent-" + Id + ".log"); } }
 
         private static double Now() { return ChartBridgeAgents.Now(); }
@@ -2157,7 +2169,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             RefreshSeats(false);   // 0.6.0: its seats (a group's members, or its one account)
             LoadDay();
             double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): a kill switch survives a restart until the page releases it
-            lock (Sync) { noClientSinceMs = Now(); startedMs = noClientSinceMs; mode = "shadow"; killed = kill.HasValue; killedAt = kill ?? 0; }
+            lock (Sync) { noClientSinceMs = Now(); startedMs = noClientSinceMs; mode = "shadow"; killed = kill.HasValue; killedAt = Math.Max(0, kill ?? 0); killReadPending = kill == -1; }
+            if (kill == -1) Log("agent " + Id + ": agent-" + Id + "-kill.txt is there but could not be read yet (held open): the kill switch is on; ChartBridge reads it again");
             if (kill.HasValue) Log("agent " + Id + ": its kill switch is still on (" + KilledWords(kill.Value) + "; kept through the restart): every agent order is refused until it is released on the page");
             Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + AccountWords() + " (" + AcctMark() + ")" + (League ? ", a league seat" : "") + ", starting in shadow)");
         }
@@ -3909,6 +3922,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public void Check(double now)
         {
             RetryIo(now);   // 0.6.3 (audit C4)
+            RetryKill();    // review (C5): a kill file held open at the start
             RollDay();
             RefreshSeats();   // 0.6.0: a group's membership (and a deleted group: None)
             ChartBridgeClient silent = null, mute = null;

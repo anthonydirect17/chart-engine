@@ -444,6 +444,19 @@ public static class AgentHarness
         Check(Last(agentOut, "welcome").Contains("\"killed\":true") && Last(agentOut, "agentState").Contains("\"killed\":true") && Last(page, "agent").Contains("\"killed\":true,\"killedAt\":") &&
               Logged("agent manrae: its kill switch is still on (on since") && D != null && !D.Killed,
               "0.6.3 C5: after a restart manrae is still killed (welcome, agentState, the Board's agent row), demob is not: " + Last(agentOut, "welcome"));
+        // review (C5): the kill file held open at the start: killed meanwhile, read again on the check
+        ChartBridgeFiles.KillReadFault = n => n == "agent-manrae-kill.txt" ? "held" : null;
+        try
+        {
+            Restart();
+            Check(M.Killed && Logged("agent manrae: agent-manrae-kill.txt is there but could not be read yet (held open): the kill switch is on") && Last(page, "agent").Contains("\"killed\":true,\"killedAt\":null"),
+                  "0.6.3 C5 review: the kill file held open at the start: killed meanwhile (time not known yet)");
+            ChartBridgeFiles.KillReadFault = null;
+            Advance(1000);
+            Check(M.Killed && Logged("agent manrae: agent-manrae-kill.txt read now: the kill switch stays on (on since") && Regex.IsMatch(Last(page, "agent"), "\"killedAt\":[0-9]"),
+                  "0.6.3 C5 review: read on the next check: still killed, with its time");
+        }
+        finally { ChartBridgeFiles.KillReadFault = null; }
         Mode("manrae", "auto");
         refuse(Good(NewId()), "the kill switch is on", "0.6.3 C5: still killed after the restart: a plan refused");
         P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
