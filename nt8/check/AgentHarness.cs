@@ -1115,6 +1115,24 @@ public static class AgentHarness
             int r0 = N(agentOut);
             A(Good(NewId()));
             Check(!Any(agentOut, r0, "could not be read"), "0.6.3 C4: entries go on once read");
+            // 0.6.3 (review LOW 7): the account chosen on the page while its file is held is never switched by the read that follows
+            {
+                string af = Path.Combine(Dir, "agent-manrae-account.txt");
+                string was = File.ReadAllText(af);
+                ChartBridgeAccounts.ReadFault = n => n == "agent-manrae-account.txt" ? "held" : null;
+                Restart();
+                Check(M.Account == "-" && Last(agentOut, "agentState").Contains("agent-manrae-account.txt could not be read yet (held)"), "0.6.3 LOW 7: the account file held at the start: None and stood down meanwhile");
+                P(AccountMsg("manrae", "SIM-C"));
+                Check(M.Account == "SIM-C", "0.6.3 LOW 7: Anthony chooses SIM-C on the page meanwhile: " + PageReject());
+                File.WriteAllText(af, "# made-up\n# test\naccount\tSIM-D\n");   // what the held read would now find (another account)
+                ChartBridgeAccounts.ReadFault = null;
+                Advance(6000);
+                Check(M.Account == "SIM-C" && Logged("agent-manrae-account.txt: the account chosen on the page meanwhile (SIM-C) stands; the file is not read again") &&
+                      Logged("ALERT: agent manrae: agent-manrae-account.txt could be read now and does not name SIM-C, which was chosen on the page while it was held: SIM-C stands"),
+                      "0.6.3 LOW 7: the read after it never switches the account chosen on the page (still SIM-C, said)");
+                File.WriteAllText(af, was);
+                Restart();
+            }
             // agent-standdowns.txt held at the start: prop entries refused meanwhile, read again on the check
             string sdf = Path.Combine(Dir, "agent-standdowns.txt");
             bool hadSd = File.Exists(sdf);

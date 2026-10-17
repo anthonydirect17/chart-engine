@@ -2291,7 +2291,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (string k in kinds)
             {
                 if (k == "rules") LoadRules();
-                else if (k == "account") { LoadAccount(); RefreshSeats(false); }
+                else if (k == "account")
+                {
+                    // 0.6.3 (review LOW 7): an account the page chose meanwhile is never switched by a later read: the wait ends there
+                    bool picked;
+                    lock (Sync) picked = chosen && accountBroken == null;
+                    if (picked)
+                    {
+                        IoState("account", false, null);
+                        Log("agent-" + Id + "-account.txt: the account chosen on the page meanwhile (" + AccountWords() + ") stands; the file is not read again");
+                        string line, text = null;
+                        lock (Sync) line = groupId != null ? "group\t" + groupId : (league ? "league\t" : "account\t") + account;
+                        try { text = string.Join("\n", ReadAll(AccountFile).Select(x => x.Trim())); } catch (Exception) { }
+                        if (text != null && !text.Split('\n').Contains(line))
+                            ChartBridgeOrders.AgentAlarm("agent " + Id + ": agent-" + Id + "-account.txt could be read now and does not name " + AccountWords() + ", which was chosen on the page while it was held: " + AccountWords() + " stands (ChartBridge never switches it on its own); choose again on the Agent tab if you meant another");
+                        continue;
+                    }
+                    LoadAccount(); RefreshSeats(false);
+                }
                 else LoadDay();
             }
             List<string> alarm = new List<string>();

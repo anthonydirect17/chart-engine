@@ -2416,7 +2416,10 @@ cannot be opened at the start (an IOException: Defender, a backup tool or OneDri
 cannot be read, and a raise made meanwhile is kept and saved once it reads). It is read again on every 500 ms check; after a
 minute the pages get the alarm ("... could not be read for a minute ... ChartBridge keeps trying ...") and it is tried every 5 s
 from then. Review LOW 6: a day file read after a wait keeps what was booked in memory meanwhile (a trade that ended, a plan id,
-a loss stand-down of that session) and saves it, as the stand-downs keep a raise. Once a read succeeds the stand-down is gone by itself (logged, and a `status` `info` to the pages if the alarm went).
+a loss stand-down of that session) and saves it, as the stand-downs keep a raise. Review LOW 7: the account file read after a wait can change the agent's
+account only from the None it had while unread; once Anthony chooses an account on the page meanwhile, the wait ends and the
+file is not read again: his choice stands, and if the file then names another account the pages get an alarm (ChartBridge never
+switches it on its own). Once a read succeeds the stand-down is gone by itself (logged, and a `status` `info` to the pages if the alarm went).
 A file that reads but is not understood is not retried (above).
 
 **Connection.** `ws://localhost:<port>/agent/<id>`. Loopback only (as every request), **no** `Origin` header (any `Origin`:
