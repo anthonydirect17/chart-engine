@@ -2441,7 +2441,8 @@ is the kill switch on: the Output window says "agent <id>: its kill switch is st
 since <time> UTC; kept through the restart) ...", `welcome` carries `"killed": true`, `agentState` carries `killed` true, and the page's `agent`
 rows carry `killed` and `killedAt` (UTC ms, null when not known or not killed), and the Board and the agent's desk show "kill
 switch on since <time>" until Anthony releases it. A kill that cannot be saved still holds in memory and the pages get a
-`status` `warn` that a restart would release it. Heartbeat: any message counts; `beat` at least
+`status` `warn` that a restart would release it. Going back to 0.6.2 (review LOW 10): 0.6.2 ignores the kill files, so a kill
+released while 0.6.2 runs is still in the file and comes back on when 0.6.3 starts (release it on the page then). Heartbeat: any message counts; `beat` at least
 every 2 s when idle. 5 s of silence (or a disconnect, or no connection for 5 s after a start): ChartBridge closes the socket,
 cancels that agent's unfilled entries, expires its open proposals as `not answered`, keeps any position's stop and target and
 warns the pages. The flat time still runs. Limits: 10 messages a second (`beat` not counted), 64 KB a message. Strict parser
@@ -2996,8 +2997,9 @@ own trailing room (then that figure, `src` `ninjatrader`; review LOW 8), with th
 firm's dashboard", or the intraday one), in `accounts` and in every agent's `accountState`, until the account is put in its
 group again (leave, then join with `highClose`), which clears both. A reading in the close window is that day's close. A line
 of 6 or 7 fields (0.6.2 and older) reads as it did, with no gap check at its first reading, and is written back with 12; a
-ChartBridge 0.5.8 to 0.6.2 reads a 12 field line as not a mark line, so after going back its trailing floors are null with
-that reason (never a guess) and the file is not rewritten that run.
+ChartBridge 0.5.8 to 0.6.2 reads a 12 field line as not a mark line, so after going back (review LOW 10) its trailing floors
+and its computed `realizedToday` and `pnlToday` are not given, with that reason (never a guess), and it never rewrites the file:
+that lasts until `account-marks.txt` is deleted.
 
 **The numbers** (per account; `equity` = balance + unrealized):
 

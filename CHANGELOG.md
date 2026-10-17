@@ -42,6 +42,21 @@ re-arming by itself).
 - `nt8/update-pc.ps1` (the ops audit): a git that times out is ended with the programs it started (taskkill /T, as
   `botlab_update.ps1`), and a stale lock on `refs/remotes/origin/main` or `packed-refs` (older than 10 minutes) is removed before the
   fetch, so one ended fetch no longer means `fetch_failed` for good.
+- **The independent review's fixes.** HIGH 1: a branch whose account is not known yet (not listed by NinjaTrader, not Connected,
+  or Connected under 3 s) is never put on None by the daily reset, caught up or in the break; it keeps its account and stays
+  pending in `daily-reset.txt` until it is known. MED 2: a day `.bak` of another session is never merged. MED 3: an agent's
+  account and rules, `agent-standdowns.txt` and `groups.txt` never take their `.bak` on their own: they stand down as in 0.6.2
+  and the alarm says what the copy holds and how to use it (`daily-reset.txt` and `account-marks.txt` still fall back on their
+  own). MED 4: only the flat time's job closes with the data feed down. MED 5: a file missing after a cut-off replace with a
+  `.bak` or `.tmp` beside it: the same rules. LOW 6: a day file read after a wait keeps what was booked meanwhile. LOW 7: a read
+  after a wait never switches an account chosen on the page. LOW 8: NinjaTrader's own trailing room when a high may be missed,
+  and the warnings by the group's drawdown type. LOW 9: no trade since the start counts as the feed down. LOW 11: a day file
+  repair keeps the good `.bak`. A kill file held open at the start is read again, killed meanwhile.
+- **Going back to ChartBridge 0.6.2** (review LOW 10): 0.6.2 reads the 12-field `account-marks.txt` as a file it does not
+  understand and never rewrites it, so its trailing floors and its computed `realizedToday` and `pnlToday` are not given until
+  that file is deleted. 0.6.2 ignores `agent-<id>-kill.txt` and `bot-kill.txt`: a kill switch on stays on in the file, so a kill
+  released under 0.6.2 comes back on when 0.6.3 starts again (release it on the page then). 0.6.2 reads only the day line of
+  `daily-reset.txt` (a pending branch is not tried again by it).
 - Tests: harness cases for every finding (BotHarness, GroupsHarness, AgentHarness, CopierHarness), the PowerShell tests for the
   updater, and `smoke:accounts` drops the fake ChartBridge (accounts-9-dropped-1366.png). The harness runs the daily reset only when a
   case calls it (`ChartBridgeBranches.HarnessManual`), never on the test PC's own clock.
