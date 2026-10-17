@@ -2253,7 +2253,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 tried = true;
                 if (parse(b) != null) continue;
                 string f = Path.GetFileName(alt);
-                found = name + " is missing (a save cut off?) but " + f + " is there and " + describe() + ": " + (use != null ? use + ", or copy " : "to use it, copy ") + f + " to " + name + " and restart ChartBridge; to start with no file, delete it";
+                found = name + " is missing (a save cut off?) but " + f + " is there and " + describe() + ": " + (use != null ? use + ", or copy " : "to use it, copy ") + f + " to " + name + " and restart ChartBridge; to start with no file, delete " + name + ".bak (and " + name + ".tmp) and restart ChartBridge" +
+                        (use != null ? "; choosing on the Agent tab clears this too (it writes " + name + " again)" : "");   // review round 2 (LOW E): the exact files
                 break;
             }
             if (tried) parse(new string[0]);

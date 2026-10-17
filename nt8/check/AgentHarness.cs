@@ -1066,6 +1066,10 @@ public static class AgentHarness
             Restart();
             Check(Last(agentOut, "agentState").Contains("agent-manrae-account.txt is missing (a save cut off?) but agent-manrae-account.txt.bak is there and names account ") &&
                   Logged("ALERT: agent-manrae-account.txt is missing (a save cut off?)"), "0.6.3 MED 5: the account file missing with its .bak: stood down with the alarm, never None or the copy on its own");
+            Check(Logged("to start with no file, delete agent-manrae-account.txt.bak (and agent-manrae-account.txt.tmp) and restart ChartBridge; choosing on the Agent tab clears this too (it writes agent-manrae-account.txt again)"),
+                  "0.6.3 LOW E: the alarm names the exact files to delete, and that choosing on the Agent tab clears it");
+            P(AccountMsg("manrae", "Sim101"));
+            Check(Last(agentOut, "agentState").Contains("\"standDown\":null") && File.Exists(af), "0.6.3 LOW E: choosing on the Agent tab clears it: " + PageReject());
             File.WriteAllText(af, was); Gone(af + ".bak");
             Restart();
         }

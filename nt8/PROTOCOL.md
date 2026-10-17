@@ -2400,7 +2400,8 @@ Review MED 5: a replace cut off between its steps can leave **no file with a cop
 agent's day file uses it only when it is today's session (MED 2), said so, and is written again. For the files of Anthony's
 choices a missing file with an understood copy is not "no file": the agent stands down (or groups.txt is unreadable) with the
 alarm "<file> is missing (a save cut off?) but <copy> is there and <what it holds>: <how to use it>, or copy <copy> to <file>
-and restart ChartBridge; to start with no file, delete it".
+and restart ChartBridge; to start with no file, delete <file>.bak (and <file>.tmp) and restart ChartBridge; choosing on the
+Agent tab clears this too (it writes <file> again)" (review round 2, LOW E; the stand-downs have no Agent tab choice).
 **A day file** (`agent-<id>-day.txt`) with lines it cannot read (NULs, a half line, a line it does not know) or no session
 line keeps every line that reads, and fills what it lacks from its `.bak` (review MED 2: only a `.bak` of the same session,
 the file's own, or today's when the file's session line is the damaged one; a copy of another session is ignored): today's trades, losses and plan ids are never
