@@ -1433,7 +1433,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // 0.6.3 (review HIGH 1): what a branch on this account would see is not known yet: null when known, else why. A position
         // there may simply not be shown yet, so the reset never counts such an account as idle.
-        public static double SettleMs = 3000;   // as the agents' settle after a reconnect (audit C8)
+        // review round 2 (MED B): the repo's own rule, ChartBridgeOrders.SteadyMs (30 s): while NinjaTrader reconnects, positions can
+        // arrive after Connected, so a position that comes late is never read as idle
+        public static double SettleMs = ChartBridgeOrders.SteadyMs;
         public static string UnknownWhy(Account a, string name)
         {
             if (a == null) return name + " is not in NinjaTrader yet";

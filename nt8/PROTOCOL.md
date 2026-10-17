@@ -2909,7 +2909,8 @@ ET on <date>): ...", and a page that signs in before the next 17:00 gets the ski
 that does not read) is not a missed break: the reset waits for the next break, as before. A day ahead of now (the clock moved
 back) is not due.
 0.6.3 (review HIGH 1): **a branch whose account is not known yet is never put on None**, in the break or caught up: its account
-not listed by NinjaTrader, not Connected, or Connected for less than 3 s (a position there may not be shown yet). It keeps its
+not listed by NinjaTrader, not Connected, or Connected for less than 30 s (review round 2, MED B: `SteadyMs`, ChartBridge's own
+rule while NinjaTrader reconnects, as positions can arrive after Connected). It keeps its
 account, the pages get one `status` `warn` ("<branch> stays on <account> for now: <why>, so its positions and orders are not
 known; its reset runs once they are"), and it stays pending: `daily-reset.txt` gets a `pending<TAB><key>` line (`bot`,
 `agent:<id>`, `copier`) after the day line, and every 2 s check tries that branch again (only that one, so a branch chosen again

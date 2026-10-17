@@ -43,7 +43,7 @@ re-arming by itself).
   `botlab_update.ps1`), and a stale lock on `refs/remotes/origin/main` or `packed-refs` (older than 10 minutes) is removed before the
   fetch, so one ended fetch no longer means `fetch_failed` for good.
 - **The independent review's fixes.** HIGH 1: a branch whose account is not known yet (not listed by NinjaTrader, not Connected,
-  or Connected under 3 s) is never put on None by the daily reset, caught up or in the break; it keeps its account and stays
+  or Connected under 30 s) is never put on None by the daily reset, caught up or in the break; it keeps its account and stays
   pending in `daily-reset.txt` until it is known. MED 2: a day `.bak` of another session is never merged. MED 3: an agent's
   account and rules, `agent-standdowns.txt` and `groups.txt` never take their `.bak` on their own: they stand down as in 0.6.2
   and the alarm says what the copy holds and how to use it (`daily-reset.txt` and `account-marks.txt` still fall back on their

@@ -3165,6 +3165,10 @@ public static class AgentHarness
                 lock (cs) cs.Remove(sime);   // Connected this moment
                 ChartBridgeBranches.Check();
                 Check(M.Account == "SIM-E" && File.ReadAllText(rf).Contains("pending\tagent:manrae"), "0.6.3 H1: only just Connected: still pending (it settles first)");
+                lock (cs) cs[sime] = ChartBridgeTime.NowUtcMs() - 10000;   // Connected 10 s ago: past the old 3 s, short of SteadyMs
+                ChartBridgeBranches.Check();
+                Check(M.Account == "SIM-E" && File.ReadAllText(rf).Contains("pending\tagent:manrae") && ChartBridgeBranches.SettleMs == ChartBridgeOrders.SteadyMs,
+                      "0.6.3 MED B: Connected 10 s: still pending (the reset waits SteadyMs, 30 s, as the rest of ChartBridge: a position can arrive late)");
                 // 0.6.3 (review round 2, MED A, the review's probe 5): Anthony chooses on the page while manrae's reset is pending: his choice wins
                 File.WriteAllLines(Path.Combine(Dir, "daily-reset.txt.keep"), File.ReadAllLines(rf));
                 P(AccountMsg("manrae", "SIM-D"));
