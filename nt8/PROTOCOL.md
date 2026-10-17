@@ -2914,7 +2914,10 @@ account, the pages get one `status` `warn` ("<branch> stays on <account> for now
 known; its reset runs once they are"), and it stays pending: `daily-reset.txt` gets a `pending<TAB><key>` line (`bot`,
 `agent:<id>`, `copier`) after the day line, and every 2 s check tries that branch again (only that one, so a branch chosen again
 after its reset stays), also after a restart, until it is known; then the usual Idle and skip rules apply and the line goes.
-A ChartBridge before 0.6.3 reads only the day line.
+Review round 2 (MED A): **Anthony's choice always wins over a pending reset**: when the page sets a pending branch's account
+(`agentAccount` with an account, a group, a league seat or None, `botAccount`, `copierSet` with `leader`), its pending line goes
+and `daily-reset.txt` is written again; a retry already running leaves alone a branch that is no longer pending (checked under
+the same lock the page's choice takes). A ChartBridge before 0.6.3 reads only the day line.
 `ChartBridgeBranches.KeepThroughReset` is the one place an exception would go (Anthony is still deciding whether a branch
 running a hero on Sim101 is left alone); for now there is none. The ticket's account is each page's own, so the page applies
 the same rule to it (`LivePrefs.ticketReset`, every 5 s in the window with the ticket, and only once that connection's

@@ -619,7 +619,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (why == null)
                 {
                     if (type == "copierGet") { client.Send(StateJson()); return; }
-                    if (type == "copierSet") why = SetLeader(text);
+                    if (type == "copierSet") { why = SetLeader(text); if (why == null && ChartBridgeOrders.CopierHas(text, "leader")) ChartBridgeBranches.Chosen("copier"); }   // 0.6.3 (review round 2, MED A)
                     else if (type == "copierFollower") why = SetFollower(text);
                     else if (type == "copierRearm") why = Rearm();
                 }
@@ -698,6 +698,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // has a position or a working order), null when nothing was to do. Followers keep their settings (they have no None).
         public static string ResetToNone()
         {
+            if (ChartBridgeBranches.DroppedWhileRetrying("copier")) return null;   // 0.6.3 (review round 2, MED A)
             if (!Enabled) return ResetFileToNone();
             string l;
             lock (Lk) l = leader;

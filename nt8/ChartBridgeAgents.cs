@@ -4240,7 +4240,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         // the new account holds any position or working order on the agent's roots (as botAccount). Saved; the agent gets welcome.
         // 0.5.2 (Anthony 2026-10-08): the agent keeps its mode when keepMode names it (until 0.5.1, and for a page that does not
         // send keepMode or names another mode, a change puts it in shadow).
-        private string SetAccount(Dictionary<string, Val> d) { lock (PlaceGate) return SetAccountLocked(d); }   // never between a placement's checks and its order
+        private string SetAccount(Dictionary<string, Val> d)
+        {
+            lock (PlaceGate)
+            {
+                string why = SetAccountLocked(d);
+                if (why == null) ChartBridgeBranches.Chosen("agent:" + Id);   // 0.6.3 (review round 2, MED A): the page's choice wins over a pending reset
+                return why;
+            }
+        }   // never between a placement's checks and its order
 
         private string SetAccountLocked(Dictionary<string, Val> d)
         {
@@ -4340,6 +4348,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (PlaceGate)
             {
+                if (ChartBridgeBranches.DroppedWhileRetrying("agent:" + Id)) return null;   // 0.6.3 (review round 2, MED A): chosen on the page meanwhile
                 string acct = Account;
                 if (NoneNow() || ChartBridgeBranches.KeepThroughReset("agent:" + Id, GroupNow() ? KeyNow() : acct)) return null;
                 if (GroupNow())   // 0.6.0: None only when no seat is exposed and every member is idle; else the words name the accounts holding something

@@ -1441,6 +1441,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!ChartBridgeOrders.UpFor(a, SettleMs)) return name + " has only just connected";
             return null;
         }
+        // 0.6.3 (review round 2, MED A): Anthony chose this branch's account on the page (an account, a group, a league seat or None):
+        // his choice always wins over a pending reset, so the branch leaves Pending and daily-reset.txt is written again.
+        public static void Chosen(string key)
+        {
+            string day;
+            List<string> keep;
+            lock (Lk) { if (!Pending.Remove(key)) return; day = doneDay; keep = Pending.ToList(); }
+            if (day != null) WriteDay(day, keep);
+            ChartBridgeServer.Log("daily reset: " + key + "'s account was chosen on the page: its pending reset is dropped (the choice stands)");
+        }
+        public static bool IsPending(string key) { lock (Lk) return Pending.Contains(key); }
+        // A retry of pending branches is running on this thread: a branch no longer pending (chosen on the page meanwhile) is left
+        // alone. Asked by each branch's reset under the same lock its page choice takes (the agent's and the bot's PlaceGate).
+        [ThreadStatic] private static bool retrying;
+        public static bool DroppedWhileRetrying(string key) { return retrying && !IsPending(key); }
+
         // The words a branch returns for that: "?" first, so Run keeps it pending.
         public static string WaitWords(string branch, string account, string why) { return "?" + branch + " stays on " + account + " for now: " + why + ", so its positions and orders are not known; its reset runs once they are"; }
 
@@ -1558,7 +1574,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             Action<string, string, Func<string>> one = (key, branch, reset) =>
             {
                 if (only != null && !only.Contains(key)) return;
-                string why = reset();
+                string why;
+                retrying = only != null;
+                try { why = reset(); } finally { retrying = false; }
                 if (why == null) return;
                 if (why.Length == 0) done.Add(branch);
                 else if (why[0] == '?') { pend.Add(key); bool say; lock (Lk) say = PendingSaid.Add(key); if (say) waits.Add(why.Substring(1)); }

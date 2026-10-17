@@ -3165,6 +3165,19 @@ public static class AgentHarness
                 lock (cs) cs.Remove(sime);   // Connected this moment
                 ChartBridgeBranches.Check();
                 Check(M.Account == "SIM-E" && File.ReadAllText(rf).Contains("pending\tagent:manrae"), "0.6.3 H1: only just Connected: still pending (it settles first)");
+                // 0.6.3 (review round 2, MED A, the review's probe 5): Anthony chooses on the page while manrae's reset is pending: his choice wins
+                File.WriteAllLines(Path.Combine(Dir, "daily-reset.txt.keep"), File.ReadAllLines(rf));
+                P(AccountMsg("manrae", "SIM-D"));
+                Check(M.Account == "SIM-D" && !File.ReadAllText(rf).Contains("pending\tagent:manrae") && Logged("daily reset: agent:manrae's account was chosen on the page: its pending reset is dropped"),
+                      "0.6.3 MED A: SIM-D chosen on the page while the reset is pending: the pending line goes: " + PageReject());
+                lock (cs) cs[sime] = 0;
+                ChartBridgeBranches.Check(); ChartBridgeBranches.Check();
+                Check(M.Account == "SIM-D", "0.6.3 MED A: the next checks never undo his choice (still SIM-D)");
+                P(AccountMsg("manrae", "SIM-E"));
+                File.WriteAllLines(rf, File.ReadAllLines(Path.Combine(Dir, "daily-reset.txt.keep"))); Gone(Path.Combine(Dir, "daily-reset.txt.keep"));
+                ChartBridgeBranches.Forget();
+                lock (cs) cs.Remove(sime);
+                ChartBridgeBranches.Check();   // pending again from the file (only just connected)
                 lock (cs) cs[sime] = 0;   // Connected for a while now
                 int s1 = N(page);
                 ChartBridgeBranches.Check();

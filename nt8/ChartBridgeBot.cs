@@ -1318,7 +1318,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (type == "botSeen") why = Seen(d);
                 else if (type == "botAnswer") why = AnswerProposal(d);
                 else if (type == "botRails") why = SetRails(d);
-                else if (type == "botAccount") why = SetAccount(d);
+                else if (type == "botAccount") { lock (PlaceGate) { why = SetAccount(d); if (why == null) ChartBridgeBranches.Chosen("bot"); } }   // 0.6.3 (review round 2, MED A): under PlaceGate, as the reset
                 if (why != null) PageReject(client, cid, id, why);
             }
             catch (Exception ex)
@@ -1539,11 +1539,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // nothing was to do.
         public static string ResetToNone()
         {
+            if (!Enabled && ChartBridgeBranches.DroppedWhileRetrying("bot")) return null;   // 0.6.3 (review round 2, MED A)
             if (!Enabled) return ResetFileToNone();
             lock (PlaceGate) return ResetToNoneLocked();
         }
         private static string ResetToNoneLocked()
         {
+            if (ChartBridgeBranches.DroppedWhileRetrying("bot")) return null;   // 0.6.3 (review round 2, MED A)
             string acct = BotAccount;
             if (ChartBridgeBranches.IsNone(acct) || ChartBridgeBranches.KeepThroughReset("bot", acct)) return null;
             string unk = ChartBridgeBranches.UnknownWhy(FindAccount(acct), acct);   // 0.6.3 (review HIGH 1)
