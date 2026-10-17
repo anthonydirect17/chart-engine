@@ -2640,7 +2640,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 string said;
                 lock (Sync) said = dayBroken;
-                try { File.Copy(DayFile, DayFile + ".unreadable", true); } catch (Exception) { }   // the file as it was, for a look
+                // the file as it was, for a look; then out of the way (review LOW 11), so writing it again does not turn the damaged file into
+                // the new .bak over the good one (a cut-off write then finds the good .bak: MED 5)
+                bool kept = false;
+                try { File.Copy(DayFile, DayFile + ".unreadable", true); kept = true; } catch (Exception) { }
+                if (kept) { try { File.Delete(DayFile); } catch (Exception) { } }
                 SaveDay();   // written again from what was kept, so the next start reads it whole
                 ChartBridgeOrders.AgentAlarm(said);
             }

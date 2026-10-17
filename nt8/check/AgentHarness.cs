@@ -988,6 +988,8 @@ public static class AgentHarness
         Check(AgentReject().Contains("plan id plan-2 was already used today"), "a restart remembers today's plan ids");
         // 0.6.3 (audit C3): a power cut a moment after an append: a half line and NULs at the end; every line before it is kept
         string tradesNow = Regex.Match(st0, "\"trades\":[0-9]+,\"losses\":[0-9]+").Value;
+        File.WriteAllText(day + ".bak", FileText("agent-manrae-day.txt"));   // the last good copy, as the last whole write left it
+        string goodBak = FileText("agent-manrae-day.txt.bak");
         File.AppendAllText(day, "plan\tplan-hal\0\0\0\0\0\0\n\0\0\0\0");
         Restart();
         string st1 = Last(agentOut, "agentState");
@@ -995,6 +997,8 @@ public static class AgentHarness
               "0.6.3 C3: a torn append: today's trades and losses are kept (" + tradesNow + "), never reset; the agent stands down this run, the pages told: " + st1);
         Check(FileText("agent-manrae-day.txt").Contains("plan\tplan-2\n") || FileText("agent-manrae-day.txt").Contains("plan\tplan-2\r\n"), "0.6.3 C3: the plan ids that read are kept (plan-2)");
         Check(FileText("agent-manrae-day.txt").IndexOf('\0') < 0 && !FileText("agent-manrae-day.txt").Contains("plan-hal"), "0.6.3 C3: written again without the torn line");
+        Check(FileText("agent-manrae-day.txt.bak") == goodBak,
+              "0.6.3 LOW 11: the repair keeps the good .bak (the damaged file never becomes the new .bak)");
         Restart();
         Check(Last(agentOut, "agentState").Contains("\"standDown\":null") && Last(agentOut, "agentState").Contains(tradesNow), "0.6.3 C3: the next start reads it whole and goes on with these counts");
         // a file of zeros (the rename kept, the data lost): its last good copy (.bak) gives the day, said so

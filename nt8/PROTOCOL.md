@@ -2408,7 +2408,8 @@ reset. The agent stands down for this run only ("agent-<id>-day.txt has N lines 
 trades, losses and plan ids from the lines that read ... are kept and the file is written again from them: no new entries for
 agent <id> this run: check today's trades in NinjaTrader (the next start goes on with these counts)", an alarm to the pages);
 the file as it was is kept as `agent-<id>-day.txt.unreadable` and the day file is written again at once from what was kept, so
-the next start reads it whole. The alarm no longer says to delete it.
+the next start reads it whole (review LOW 11: the damaged file is moved out of the way first, so it never becomes the new `.bak`
+and the good `.bak` is kept). The alarm no longer says to delete it.
 **A file held open (0.6.3, audit C4).** An agent's rules, account or day file, or `agent-standdowns.txt`, that exists but
 cannot be opened at the start (an IOException: Defender, a backup tool or OneDrive holding it while NinjaTrader starts) is
 "not read yet": no new entries meanwhile ("<file> could not be read yet (<why>): no new entries for agent <id> until it is read
