@@ -1,5 +1,46 @@
 # Changelog
 
+## ChartBridge 0.6.5 and chart 1.33.0 (2026-10-19): one group of accounts of different types and sizes, each with its own rules
+
+Anthony's PRIORITY ask (FROM_WORK_2026-10-19_PRIORITY_multi_account_groups, "build it into the current build"): his three Lucid
+accounts in one group (a 150K Flex eval, a 50K Flex eval, a 25K Daily intraday eval; three 50K Flex evals join tomorrow). A group had
+one rule set, so two of three floors had the wrong numbers. **ChartBridge 0.6.5 is a recompile** (outside market hours); **the page
+works with ChartBridge 0.6.2** (`minChartBridge` stays 0.6.2: with 0.5.8 to 0.6.4 it joins exactly as 1.32.0). nt8/PROTOCOL.md "Each
+member's own rules and the risk percent (0.6.5)".
+
+- **Each member carries its own rules** (ChartBridgeGroups.cs): account size, daily loss, drawdown amount and type, floor stops at,
+  target, consistency, max minis and micros, and The Desk's type id, in a `rules` line per member in `groups.txt`. The group keeps what
+  is shared (name, Type, hero, No hedging, risk) and its own rules for a member with none of its own. Floor, room, daily room and target
+  left per member: its floor trails from its own highest close (EOD) or highest balance (intraday) and stops at its own lock.
+  `accountGroup` takes the rules with the join (all or none); `memberRules` (new) changes them later; leaving or a deleted group drops
+  them. ChartBridge holds them all, so it works while The Desk is down.
+- **Migration.** A member with no rules line inherits the group's rules: a 0.6.4 file loads, gives the same numbers and is written
+  back line for line (risk off adds no field). A ChartBridge before 0.6.5 reads a rules line as a line it does not know: the whole
+  file unreadable, every entry refused with its alarm, never rewritten (the 0.5.8 rule; never a floor from the wrong rules).
+- **The join is automatic** (Anthony: "I shouldnt have to manually assign the account types ... so its all automatic"). Picking a
+  group takes the account's rules from its type on The Desk, a number set on the account itself on The Desk winning, and shows one
+  compact row: the rules taken, the risk dollars and the highest close question, prefilled from The Desk's seed floor plus the
+  drawdown when The Desk sends `seed_floor` (desk/reorg-prop-roi; read if present, else asked as before). Only an account with no type
+  on The Desk gets the full rules form; Edit rules opens it on any join; a member's Rules (its Limits cell) changes its rules later.
+  The type picker is 1.32.0's (Firm > Plan > Size), not repeated.
+- **The group's risk percent** (of each account's max loss, its drawdown amount: 10% is $200 on a 50K, $450 on a 150K): set in the
+  rules dialog (Risk % of max loss), stored, sent and shown (the Settings row lists each member's dollars). **Nothing sizes an order by
+  it yet**: ChartBridge has no path that sends one entry to a group and sizes it (the copier gives each follower a fixed quantity and its
+  followers are any accounts, not a group; group trading places the sizes the runner sends and never resizes). Open questions for
+  Anthony before item 3 is built: which path takes the risk sizing (the copier's followers in a group, group trading, or a new ticket
+  that sends one entry to every member); with the copier, whether the leader's own size is risk sized too, whether a risk-sized
+  follower takes the entry's own contract or its saved micro or mini, and how an add is sized; how the stop distance is read for a
+  market entry (the leader's fill, or the ticket's planned stop); whether a member with no known room (its floor null, or no balance)
+  sits out or takes the fixed quantity; and what "ChartBridge's hard ceiling" is (the per-root `maxQty` gate, or a new cap). Max size
+  is stored and shown; nothing enforces it yet either.
+- Tests: `test/member-rules.test.js` (The Desk's rules with an account's own numbers winning, the seed floor, the form's checks, the
+  messages, the display and the risk dollars, the fake bridge's mirror of the harness, the old ChartBridge's key lists, the source);
+  the Mono harness `GroupsHarness.MemberRules` (the migration of a 0.6.4 file, every refusal, three types in one group with each floor,
+  daily room and target, EOD and intraday trailing to each lock, a restart, memberRules, leaving and joining again, the risk percent,
+  unreadable rules lines); `npm run smoke:member-rules` at 1366 x 768 (screenshots `member-rules-join-auto-1366.png`,
+  `member-rules-join-form-1366.png`, `member-rules-edit-1366.png`, `member-rules-accounts-1366.png`, `member-rules-dialog-1366.png`).
+  `smoke:settings`: the join question for an account with no type is now the full form with the same question.
+
 ## 1.32.0 (2026-10-19): the account type picker as Firm, Plan and Size
 
 Page only, no recompile (ChartBridge 0.6.2 as for 1.31.0; `minChartBridge` stays 0.6.2). The Desk's list of account types now holds

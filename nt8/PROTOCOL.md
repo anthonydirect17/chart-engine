@@ -3315,6 +3315,69 @@ error leads the board. A league seat's row shows PROVING n of 100 (n the PC help
 reported)" without it) and "league seat (Sim only)". The Agent tab's account picker lists a league seat on every tradable account after
 the single accounts: Sim offered ("League seat: SIM-A (SIM)"), a LIVE one listed with the reason and never offered.
 
+### Each member's own rules and the risk percent (0.6.5)
+
+Anthony's ask of 2026-10-19 (PRIORITY, "build it into the current build"): trade accounts of different types and sizes in one group
+(a 150K Flex eval, a 50K Flex eval and a 25K Daily intraday eval, more 50K evals joining). Before 0.6.5 a group had one rule set, so
+two of three floors had the wrong numbers. Built in `nt8/ChartBridgeGroups.cs`, the page's Accounts tab and Settings (`live/accounts.js`,
+`live/groups.js`, chart 1.33.0). Made-up names and money below.
+
+- **What the member holds, what the group holds.** Each member account carries its own rules: account size, daily loss (or none),
+  drawdown amount and type (`eod`, `intraday`, `static`), floor stops at (or none), profit target (or none), consistency (or none),
+  max size in minis and in micros (or none), and The Desk's account type id it came from (or none). The group holds what is shared:
+  name, Type (Evals, Funded), hero on duty, No hedging, and the risk percent. The group's own rules stay: they are the rules of a
+  member with none of its own (every member of a 0.6.4 or older file), and the Settings dialog still edits them.
+- **Numbers per member.** Floor, room, daily room and target left (the table in 0.5.8) come from the member's own rules: its floor
+  trails from its own highest close (`eod`) or highest balance (`intraday`) in `account-marks.txt`, stops at its own lock, never
+  below its own size less its drawdown; room is equity less its floor; daily room is its own daily loss plus today's P&L. A
+  member with no daily loss or target of its own gets `why` "SIM-A's rules in Lucid have no daily loss limit" (a member on the
+  group's rules: "group Lucid has no daily loss limit", as before). The missed-close warning (0.6.3) follows the member's own
+  drawdown type. `accountState.rules` carries the member's own seven numbers (the same keys as before; max size is not in it).
+  ChartBridge holds every member's rules in `groups.txt`, so all of it works while The Desk is down.
+- **Max size** is stored and shown; ChartBridge enforces nothing with it (the copier, group trading and every gate are unchanged).
+- **The risk percent** (`riskPct`, Anthony: of each account's max loss, its drawdown amount: 10% is $200 on a 50K with a $2,000 max
+  loss, $450 on a 150K with $4,500): stored, sent and shown (the Settings row lists each member's dollars). **Nothing in the order path
+  reads it.** No path in ChartBridge sizes one entry onto a group: the copier sends a fixed quantity per follower (followers are any
+  accounts, not a group), and group trading (0.6.0) places the sizes the runner sends ("ChartBridge never resizes"). Sizing an entry
+  per member from the risk percent waits for Anthony's answers on which path and how (the CHANGELOG lists the questions).
+
+**groups.txt.** A `group` line may carry a 14th field, `riskPct|-` (more than 0, at most 100, at most 2 decimals; `-` off), written
+only when the risk is on or a later ChartBridge's fields follow it, so a group with risk off is written exactly as 0.6.4 writes it.
+One line per member with rules of its own, after the member lines:
+
+    rules<TAB><account><TAB><size><TAB><dailyLoss>|-<TAB><drawdown><TAB>eod|intraday|static<TAB><lockAt>|-<TAB><target>|-<TAB><consistency>|-<TAB><maxMinis>|-<TAB><maxMicros>|-<TAB><typeId>|-
+
+Checked as `groupSave` checks (the drawdown below the size, a lock only on a trailing drawdown and above the starting floor), max size
+whole contracts 1 to 1000; fields after `typeId` are kept as read. A rules line for an account in no group, one ChartBridge cannot read,
+or an account given rules twice makes the file unreadable (the 0.5.8 rule: every entry refused, never rewritten that run).
+**Migration:** a member with no rules line inherits the group's rules, so a 0.6.4 file loads, gives the same numbers and is written back
+line for line as 0.6.4 writes it (only the second `#` line, the format note, names the new line). **Going back:** a ChartBridge 0.5.8 to 0.6.4 knows group, member and personal lines only, so a file with a rules line
+reads as unreadable there (every entry refused with its alarm, the file never rewritten): it never trails a floor from the wrong
+rules. Before going back, put each member with rules of its own in None and in its group again from a 1.32.0 page (it joins on the
+group's rules, so its rules line goes).
+A group with risk on and no rules line reads in 0.6.1 to 0.6.4 as before (the 14th field kept as read).
+
+| message | 0.6.5 adds |
+|---|---|
+| `groupSave` | `riskPct` (optional: 0 off, else above 0 and at most 100, at most 2 decimals; absent keeps the group's, so a page before 1.33.0 never drops it). Refused: "riskPct must be a percent of each member's max loss from 0 (off) to 100, at most 2 decimals" |
+| `accountGroup` | the member's own rules, all or none, joining a group only: `size`, `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target` (all needed once any is there), `consistency`, `maxMinis`, `maxMicros` (whole, 0 or absent none), `typeId` (The Desk's type id, or `-`). None sent (a page before 1.33.0): the group's rules apply, and any rules the account had go. The seed of both highs without `highClose`: the larger of its own size and its balance. Refused with `groupSave`'s words, and "rules go with joining a group only" |
+| `memberRules` (new) | `cid` (optional), `account`, and the same rule keys (size, dailyLoss, drawdown, drawdownType, lockAt, target needed): a member's rules changed later. Its highs stay as they are. Refused for an account in no group ("SIM-C is in no group: its own rules are for a member of a group (My floor and My daily are for an account in no group)") |
+| `groups` | each group gains, after `holders`, `riskPct` (null off) and `ownRules` (the members with rules of their own). A page tells a 0.6.5 ChartBridge by `riskPct` being there |
+| `accounts` | each entry gains `rules`: a member's rules `{size, dailyLoss, drawdown, drawdownType, lockAt, target, consistency, maxMinis, maxMicros, typeId, own}` (null for none; `own` false: its group's), null in no group |
+
+Leaving a group (None), and a deleted group, drop the member's rules line; joining the group it is in already is refused and keeps them.
+
+**The page (1.33.0).** Anthony (2026-10-19): "I shouldnt have to manually assign the account types ... so its all automatic". Picking a
+group on the Accounts tab takes the account's rules from its type on The Desk (GET /api/chart-accounts `accountType`, GET
+/api/account-types; each number set on the account itself on The Desk, its `source` `account`, wins over the type's) and shows one
+compact row: the rules taken, the risk dollars, and the "highest close so far" (EOD) or "highest balance so far (intraday)" question,
+prefilled from The Desk's seed floor plus the drawdown when The Desk sends one (`seed_floor`, with `seed_date` and `seed_balance`, per
+prop account), else as before. Put in sends `accountGroup` with the rules; Edit rules opens the full form. Only an account with no type
+on The Desk (or The Desk not reachable, or a type missing a size, drawdown or drawdown type) gets the full form, prefilled with the
+group's rules and the reason. A member's Limits cell shows its floor and Rules (the same form, sent as `memberRules`). Settings: the
+group's row says how many members have rules of their own and the risk with each member's dollars; the rules dialog has Risk % of max
+loss. With a ChartBridge 0.5.8 to 0.6.4 (no `riskPct` in `groups`) the page joins exactly as 1.32.0 did and sends no new key.
+
 ### Tape timing and new `/diag` counters
 
 The tape counters and the hardening counters are built and documented in "0.4.0 hardening and markets" above (`/diag`
