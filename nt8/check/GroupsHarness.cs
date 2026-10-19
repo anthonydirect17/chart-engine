@@ -334,7 +334,7 @@ public static class GroupsHarness
             Check(Rejection().Contains(x[1]) && (x[1].StartsWith("unknown key") || Rejection().Contains("\"cid\":\"s\"")) && !File.Exists(Path.Combine(folder, "groups.txt")), "groupSave refused: " + x[1] + " (" + Rejection() + ")");
         }
         Clear(); G("groupSave", Save("", "Lucid", "true", "1000", "2000", "eod", "3000", "50000", "50100"));
-        Check(Rejection() == "" && Last("groups").Contains("{\"id\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":null,\"accountType\":null,\"hero\":null,\"members\":[],\"side\":null,\"holders\":[],\"riskPct\":null,\"ownRules\":[]}"),
+        Check(Rejection() == "" && Last("groups").Contains("{\"id\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":null,\"accountType\":null,\"hero\":null,\"members\":[],\"side\":null,\"holders\":[],\"riskPct\":null,\"ownRules\":[],\"tradeOut\":[]}"),
               "groupSave: g1 made, the page told at once: " + Last("groups"));
         string[] lines = FileText().Split('\n');
         Check(lines[0] == ChartBridgeGroups.Header && lines[1].StartsWith("# ") && lines[2] == "group\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t50100\t-\t-\t-",   // 0.6.1: then type and hero, - for not set and none
@@ -444,7 +444,7 @@ public static class GroupsHarness
         Check(g.Contains("\"side\":\"long\",\"holders\":[{\"account\":\"SIM-A\",\"root\":\"MNQ\",\"side\":\"long\",\"what\":\"position\",\"qty\":2}]"), "legs, OCO parts and an exit of the position are no entries: only the long counts: " + g);
         Manual(simB, nq, OrderAction.Sell, OrderType.Limit, 1, "", "CB#22222222 ag:manrae flat");
         Manual(simB, nq, OrderAction.Sell, OrderType.StopMarket, 1, "", "CB#22222222 mstop q1 p24900");
-        Check(!ChartBridgeGroups.GroupsJson().Contains("\"account\":\"SIM-B\""), "an agent's flat close and a merged stop are no entries either");
+        Check(!Regex.IsMatch(ChartBridgeGroups.GroupsJson(), "\"holders\":\\[[^\\]]*\"account\":\"SIM-B\""), "an agent's flat close and a merged stop are no entries either (0.6.5: tradeOut may name SIM-B, not holders)");
         Manual(simB, nq, OrderAction.Sell, OrderType.Limit, 1, "", "typed in NinjaTrader");
         Check(ChartBridgeGroups.GroupsJson().Contains("\"side\":\"mixed\""), "a plain sell limit with no position is an entry: the group is mixed");
         Flat();
@@ -1127,7 +1127,7 @@ public static class GroupsHarness
               "0.6.5 migration: a 0.6.4 file's member inherits the group's rules (floor 51000-2000, rules own false): " + e);
         Check(FileText() == old.Replace("# group...", ChartBridgeGroups.Header2) || FileText().Replace(ChartBridgeGroups.Header2, "# group...") == old, "0.6.5 migration: saved again, the file is byte for byte what 0.6.4 writes (no rules line, 13 fields): " + FileText().Replace("\t", "<TAB>"));
         Check(State("SIM-A").Contains("\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":0,\"maxMinis\":0,\"maxMicros\":0}"), "0.6.5 migration: accountState's rules as before: " + State("SIM-A"));
-        Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[]}"), "0.6.5 migration: risk off, no member with rules of its own");
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[],\"tradeOut\":[]}"), "0.6.5 migration: risk off, no member with rules of its own");
         // the refusals: all or none, with joining only, the same checks as groupSave's
         string[][] bad = {
             new[] { JoinRules("SIM-C", "\"g1\"", null, ",\"size\":150000"), "dailyLoss is needed" },
@@ -1168,7 +1168,7 @@ public static class GroupsHarness
         Check(b.Contains("\"floor\":49000,\"roomFloor\":1500,\"roomDaily\":null,\"targetLeft\":2500"), "0.6.5 mixed: SIM-B (50K, eod 2000): floor 49000, its own target: " + b);
         Check(c.Contains("\"floor\":24000,\"roomFloor\":1000,\"roomDaily\":500,\"targetLeft\":1250"), "0.6.5 mixed: SIM-C (25K, intraday 1000, daily 500): floor 24000, daily room 500: " + c);
         Check(AccountsNow().Contains("\"rules\":{\"size\":25000,\"dailyLoss\":500,\"drawdown\":1000,\"drawdownType\":\"intraday\",\"lockAt\":25100,\"target\":1250,\"consistency\":null,\"maxMinis\":2,\"maxMicros\":20,\"typeId\":\"lucid-daily-25k-eval\",\"own\":true}"), "0.6.5: the accounts message carries each member's rules (own true)");
-        Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[\"SIM-A\",\"SIM-B\",\"SIM-C\"]}"), "0.6.5: the groups message names the members with rules of their own");
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[\"SIM-A\",\"SIM-B\",\"SIM-C\"],\"tradeOut\":[]}"), "0.6.5: the groups message names the members with rules of their own");
         Check(State("SIM-A").Contains("\"rules\":{\"dailyLoss\":0,\"drawdown\":4500,\"drawdownType\":\"eod\",\"target\":9000,\"size\":150000,\"lockAt\":150100,\"consistency\":50,\"maxMinis\":10,\"maxMicros\":100}") &&
               State("SIM-C").Contains("\"rules\":{\"dailyLoss\":500,\"drawdown\":1000,\"drawdownType\":\"intraday\",\"target\":1250,\"size\":25000,\"lockAt\":25100,\"consistency\":0,\"maxMinis\":2,\"maxMicros\":20}"), "0.6.5: each agent's accountState carries its member's own rules (the same seven keys): " + State("SIM-A"));
         // each floor trails from its own high and stops at its own lock
@@ -1216,7 +1216,7 @@ public static class GroupsHarness
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0").Replace("}", ",\"riskPct\":101}"));
         Check(Rejection().Contains("riskPct must be a percent of each member's max loss from 0 (off) to 100"), "0.6.5 risk: above 100 refused");
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0").Replace("}", ",\"riskPct\":10}"));
-        Check(Rejection() == "" && FileText().Contains("\teval\t-\t10\n") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":10,\"ownRules\":[\"SIM-A\",\"SIM-B\"]}") && Logged("risk 10% of each member's max loss"), "0.6.5 risk: 10 saved as the 14th field, in the groups message: " + FileText().Replace("\t", "<TAB>"));
+        Check(Rejection() == "" && FileText().Contains("\teval\t-\t10\n") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":10,\"ownRules\":[\"SIM-A\",\"SIM-B\"],\"tradeOut\":[]}") && Logged("risk 10% of each member's max loss"), "0.6.5 risk: 10 saved as the 14th field, in the groups message: " + FileText().Replace("\t", "<TAB>"));
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0"));
         Check(FileText().Contains("\teval\t-\t10\n"), "0.6.5 risk: a save without it (a page before 1.33.0) keeps it");
         Flat();
@@ -1319,17 +1319,17 @@ public static class GroupsHarness
         foreach (string[] x in new[] {
             new[] { GE("groupPreview", "buy", "market", "{\"stop\":0,\"target\":40}", ""), "a group entry needs a stop: each member is sized from its stop loss (set the bracket's stop)" },
             new[] { GE("groupPreview", "buy", "market", null, ""), "a group entry needs a stop" },
-            new[] { GE("groupOrder", "buy", "market", null, ",\"sizes\":\"4,2,1,2\""), "a group entry needs a stop" },
+            new[] { GE("groupOrder", "buy", "market", null, ",\"sizes\":\"SIM-A:4,SIM-B:2,SIM-C:1,SIM-D:2\""), "a group entry needs a stop" },
             new[] { GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"qty\":3"), "unknown key \\\"qty\\\"" },
-            new[] { GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"4,2\""), "the group's accounts changed since the preview (4 now, 2 confirmed)" },
-            new[] { GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"5,2,1,2\""), "the sizes changed since the preview (SIM-A 5 confirmed, 4 now): nothing was sent" },
+            new[] { GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"SIM-A:4,SIM-B:2\""), "the group's accounts changed since the preview (SIM-A, SIM-B, SIM-C, SIM-D now, SIM-A, SIM-B confirmed)" },
+            new[] { GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"SIM-A:5,SIM-B:2,SIM-C:1,SIM-D:2\""), "the sizes changed since the preview (SIM-A 5 confirmed, 4 now): nothing was sent" },
             new[] { GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"four\""), "sizes must be the sizes confirmed" } })
         {
             Clear(); GP(x[0].Contains("groupOrder") ? "groupOrder" : "groupPreview", x[0]);
             Check(Rejection().Contains(x[1]) && All() == s0, "GE refused, nothing placed: " + x[1] + " (" + Rejection() + ")");
         }
         // the entry: the sizes confirmed, one entry with its bracket on each member
-        Clear(); GP("groupOrder", GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"4,2,1,2\""));
+        Clear(); GP("groupOrder", GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"SIM-A:4,SIM-B:2,SIM-C:1,SIM-D:2\""));
         string gp = Last("groupPlaced");
         Func<Account, Order> last = a => a.Orders.LastOrDefault();
         Check(Rejection() == "" && gp.Contains("\"placed\":4,") && Submits(simA) == a0 + 1 && Submits(simB) == b0 + 1 && Submits(simC) == c0 + 1 && Submits(simD) == d0 + 1 &&
@@ -1349,7 +1349,7 @@ public static class GroupsHarness
         Check(Seat(pv, "SIM-A").Contains("\"size\":5,") && Seat(pv, "SIM-B").Contains("\"size\":2,"), "GE add: SIM-A long 4: its max 10 less 4 = 6, the cap 9 less 4 = 5; SIM-B long 2: its max 4 less 2 = 2: " + pv);
         Pos(simB, nq, 4); simB.Orders.Last().Quantity = 4;
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "limit", "{\"stop\":4,\"target\":8}", ",\"price\":24990"));
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis; it holds or has working 4)"), "GE add: SIM-B at its max size sits out: " + Seat(Last("groupPreview"), "SIM-B"));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis; it holds or has working 4 in mini equivalents, every instrument)"), "GE add: SIM-B at its max size sits out: " + Seat(Last("groupPreview"), "SIM-B"));
         // answer 4: the room cap counts ALL the open stop risk on that side: SIM-B room 650 (equity 49650, floor 49000), long 1 NQ with its
         // stop 25 points under the last price ($500): (650 - 500) / $100 = 1, where the room alone would give 2
         Flat();
@@ -1378,7 +1378,7 @@ public static class GroupsHarness
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", strat));
         Check(Rejection().Contains("bracket and strategy on one order are refused"), "GE: a bracket and a strategy together: refused: " + Rejection());
         int sa = Submits(simA);
-        Clear(); GP("groupOrder", GE("groupOrder", "buy", "market", null, strat + ",\"sizes\":\"4,2,1,2\""));
+        Clear(); GP("groupOrder", GE("groupOrder", "buy", "market", null, strat + ",\"sizes\":\"SIM-A:4,SIM-B:2,SIM-C:1,SIM-D:2\""));
         Check(Rejection() == "" && Last("groupPlaced").Contains("\"placed\":4,") && Submits(simA) == sa + 1 && simA.Orders.Last().Quantity == 4 && simA.Orders.Last().Name.Contains(" sg s20"),
               "GE answer 2: placed with the strategy on every member (its own managed entry, \"sg s20\"): " + Last("groupPlaced") + " " + simA.Orders.Last().Name);
         ChartBridgeSwitches.Note("strategies", "off");
@@ -1393,6 +1393,75 @@ public static class GroupsHarness
         foreach (string id in ids) { Clear(); lock (page.Actions) page.Actions.Clear(); ChartBridgeOrders.OnMessage(page, "change", "{\"type\":\"change\",\"cid\":\"m\",\"id\":\"" + id + "\",\"price\":24985}"); res.Add(Rejection()); }
         Check(res[0] == "" && res[1] == "" && oa.StopPriceChanged == 24985 && ob.StopPriceChanged == 24985 && res[2].Contains("that order is no longer working") && oc.StopPriceChanged != 24985,
               "GE answer 1: the group's stops to one price: SIM-A and SIM-B moved to 24985, SIM-C's stop already traded is refused as on one account (" + string.Join(" | ", res) + ")");
+        // review 2: the names go with the sizes: the same sizes in another order is refused whole
+        Flat();
+        s0 = All();
+        Clear(); GP("groupOrder", GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"SIM-B:2,SIM-A:4,SIM-C:1,SIM-D:2\""));
+        Check(Rejection().Contains("the group's accounts changed since the preview (SIM-A, SIM-B, SIM-C, SIM-D now, SIM-B, SIM-A, SIM-C, SIM-D confirmed)") && All() == s0, "GE review 2: names and sizes compared; another order refused whole: " + Rejection());
+        // review 1a: a working entry counts at its own stop: SIM-B (room 650) with a resting buy limit 1 NQ, bracket stop 100 ticks ($500)
+        Money(simB, 49650, 0, 0); Tick();
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24900,\"bracket\":{\"stop\":100,\"target\":0}"));
+        Check(Rejection() == "", "GE review 1a setup: a resting buy limit 1 NQ on SIM-B with a 100 tick stop: " + Rejection());
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":1,"), "GE review 1a: the working entry's $500 stop risk counts: (650 - 500) / 100 = 1: " + Seat(Last("groupPreview"), "SIM-B"));
+        Flat();
+        Manual(simB, nq, OrderAction.Buy, OrderType.Limit, 2, null, "typed entry");
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("its open stop risk is not known (a working buy limit 2 NQ has no stop ChartBridge knows)"), "GE review 1a: an entry with no stop ChartBridge knows: it sits out: " + Seat(Last("groupPreview"), "SIM-B"));
+        Flat();
+        // review 5: both sides: SIM-B short 1 NQ with its buy stop 25 points above ($500) counts for a buy entry too
+        Pos(simB, nq, -1); Order ss = Manual(simB, nq, OrderAction.Buy, OrderType.StopMarket, 1, null, "typed stop"); ss.StopPrice = 25025;
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":1,"), "GE review 5: a short's stop risk ($500) counts for a buy entry: 1: " + Seat(Last("groupPreview"), "SIM-B"));
+        Flat();
+        // review 5: another contract month is measured from its own price: none known, it sits out
+        Instrument nqSep = new Instrument { FullName = "NQ 09-26", MasterInstrument = new MasterInstrument { Name = "NQ", TickSize = 0.25, PointValue = 20 } };
+        Pos(simB, nqSep, 1); Manual(simB, nqSep, OrderAction.Sell, OrderType.StopMarket, 1, null, "typed stop");
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("its open stop risk is not known (no recent price for NQ 09-26 to measure its stops from)"), "GE review 5: another contract month with no price: it sits out: " + Seat(Last("groupPreview"), "SIM-B"));
+        simB.Positions.Clear(); Flat();
+        Money(simB, 50500, 0, 0); Tick();
+        // review 3: the max size counts every instrument in mini equivalents: SIM-B (4 minis) holds 30 MNQ (3 minis) with a stop: NQ 1 left
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Pos(simB, mnq, 30); Manual(simB, mnq, OrderAction.Sell, OrderType.StopMarket, 30, null, "typed stop").StopPrice = 24995;
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":1,"), "GE review 3: 30 MNQ held is 3 of its 4 minis: 1 NQ left: " + Seat(Last("groupPreview"), "SIM-B"));
+
+        Pos(simB, mnq, 40); simB.Orders.Last().Quantity = 40;
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis; it holds or has working 4 in mini equivalents, every instrument)"), "GE review 3: 40 MNQ is its 4 minis: no NQ: " + Seat(Last("groupPreview"), "SIM-B"));
+        Flat();
+        // review 6: a strategy's stop-limit ticks size too (20 + 4 = 24 ticks)
+        ChartBridgeSwitches.Note("strategies", "On");
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", null, ",\"strategy\":{\"name\":\"Scalp\",\"stop\":20,\"stopLimit\":4,\"t1\":40,\"t1Share\":100}"));
+        Check(Last("groupPreview").Contains("\"stopTicks\":24,") && Seat(Last("groupPreview"), "SIM-A").Contains("\"size\":3,"), "GE review 6: a stop-limit strategy sizes from 24 ticks: SIM-A 450 / 120 = 3: " + Last("groupPreview") + Rejection());
+        ChartBridgeSwitches.Note("strategies", "off");
+        // review 7: the bracket's cap (maxBracketTicks) refuses a preview PlaceOrder would refuse
+        ChartBridgeOrders.ReadConfig("maxBracketTicks", "50");
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":60,\"target\":0}", ""));
+        Check(Rejection().Contains("bracket ticks must be from 0 to 50 (maxBracketTicks in config.txt)"), "GE review 7: a stop over maxBracketTicks: refused at the preview: " + Rejection());
+        ChartBridgeOrders.ReadConfig("maxBracketTicks", "0");
+        // review 4: the bot's account sits out, and the groups message names it (tradeOut) for the page
+        FieldInfo botAcct = typeof(ChartBridgeBot).GetField("account", PS);
+        object botWas = botAcct.GetValue(null);
+        ChartBridgeSwitches.Note("bot", "On"); botAcct.SetValue(null, "SIM-D");
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-D").Contains("SIM-D is the bot's account") && ChartBridgeGroups.GroupsJson().Contains("\"tradeOut\":[{\"account\":\"SIM-D\",\"why\":\"SIM-D is the bot's account\"}]"),
+              "GE review 4: the bot's account sits out, named in the groups message's tradeOut: " + Seat(Last("groupPreview"), "SIM-D"));
+        botAcct.SetValue(null, botWas); ChartBridgeSwitches.Note("bot", "off");
+        // review 1b: two group entries at once (two windows): one lock from the sizing to the last order; SIM-B's room 250 takes 2 at
+        // $100, so the second sees the first's working entries ($200 stop risk) and its sizes changed: refused whole
+        Money(simB, 49250, 0, 0); Tick();
+        s0 = All();
+        string both = GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"SIM-A:4,SIM-B:2,SIM-C:1,SIM-D:2\"");
+        Clear();
+        Thread t1 = new Thread(() => ChartBridgeOrders.OnMessage(page, "groupOrder", both)), t2 = new Thread(() => ChartBridgeOrders.OnMessage(page, "groupOrder", both));
+        lock (page.Actions) page.Actions.Clear();
+        t1.Start(); t2.Start(); t1.Join(); t2.Join();
+        int placedMsgs; string rej;
+        lock (sent) { placedMsgs = sent.Count(m => m.StartsWith("{\"type\":\"groupPlaced\"")); rej = sent.LastOrDefault(m => m.StartsWith("{\"type\":\"reject\"")) ?? ""; }
+        Check(placedMsgs == 1 && rej.Contains("the sizes changed since the preview (SIM-B 2 confirmed, 0 now)") && All() == s0 + 4, "GE review 1b: two at once: one placed, the other refused whole (" + rej + ")");
+        Money(simB, 50500, 0, 0); Tick();
         // a member another lane trades sits out: the copier's leader
         Flat();
         // the group's risk off: refused whole
@@ -1404,7 +1473,7 @@ public static class GroupsHarness
         Pos(simA, nq, 1);
         s0 = All();
         Clear(); GP("groupPreview", GE("groupPreview", "sell", "market", "{\"stop\":20,\"target\":40}", ""));
-        string sizes = string.Join(",", new[] { "SIM-A", "SIM-B", "SIM-C", "SIM-D" }.Select(n => Regex.Match(Seat(Last("groupPreview"), n), "\"size\":([0-9]+)").Groups[1].Value));
+        string sizes = string.Join(",", new[] { "SIM-A", "SIM-B", "SIM-C", "SIM-D" }.Select(n => n + ":" + Regex.Match(Seat(Last("groupPreview"), n), "\"size\":([0-9]+)").Groups[1].Value));
         Clear(); GP("groupOrder", GE("groupOrder", "sell", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"" + sizes + "\""));
         gp = Last("groupPlaced");
         Check(All() == s0 && gp.Contains("refused: Group Lucid is long") , "GE: a sell while the group is long: every member refused by the one-direction check, said per member: " + gp);

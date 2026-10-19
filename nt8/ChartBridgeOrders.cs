@@ -236,6 +236,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public int StopTicks, TargetTicks;      // ticks from each fill (0 = none); a resting entry's change with plan (read and written under Sync)
             public bool Resting;                    // a limit or stop entry: its ticks can be changed (plan), and are kept in planned_brackets.txt
             public bool PlanLost;                   // recovered without its planned_brackets.txt record: the name's ticks, with an alarm
+            public int RiskTicks;                   // 0.6.5 (review 1, 6): a strategy entry's stop risk, its stop plus a stop-limit's ticks (0: StopTicks)
             public string Converted;                // 0.3.7 planned prices turned into ticks at recovery: what to tell the page
             public bool ValueEstimated;             // recovered: CoveredValue partly unknown (contracts handled with no legs before a
                                                     // recompile); the next increment's price comes from NinjaTrader's executions, never an estimate
@@ -698,7 +699,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, string agent, string agentPlan, out Order placed)
         {
             string planTag, why;
-            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
+            // 0.6.5 (review 1b): a page entry takes the group entry lock first (GroupEntryLock, then PlaceLock), so a group entry's sizing
+            // and its placing never interleave with another entry on a member
+            if (!bot && agent == null) { lock (GroupEntryLock) lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed); }
+            else lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
             if (planTag != null)
             {
                 // The record is what a recompile reads. Its name holds the same ticks, so a failed write does not refuse the
@@ -831,7 +835,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 IdFor(order);
                 Ours.Add(order);
                 if (!string.IsNullOrEmpty(cid)) CidOf[order] = cid;
-                if (strat != null) { BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = strat.Stop }; NewManaged(tag, order, account, inst, isBuy, root, strat); }   // 0.4.0 B1
+                if (strat != null) { BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = strat.Stop, RiskTicks = strat.Stop + Math.Max(0, strat.StopLimit) }; NewManaged(tag, order, account, inst, isBuy, root, strat); }   // 0.4.0 B1
                 else if (kind != "market")
                     BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, Resting = true, StopTicks = stopTicks, TargetTicks = targetTicks };
                 else if (stopTicks > 0 || targetTicks > 0)

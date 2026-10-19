@@ -25,6 +25,8 @@ const RULE_KEYS = ['size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 't
 const TYPE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
  const MICRO_ROOTS = ['MNQ', 'MES', 'M2K', 'MYM', 'MGC', 'MCL', 'SIL', 'MBT', 'MET', 'M6E'];
 const usd2 = v => '$' + (+v).toLocaleString('en-US', { maximumFractionDigits: 2 });
+export const miniEquivalent = root => (MICRO_ROOTS.includes(root) ? 0.1 : 1);
+export const maxMiniEquivalents = (minis, micros) => (minis > 0 ? minis : micros > 0 ? micros / 10 : -1);
 /** 0.6.5: one member's contracts, exactly ChartBridgeOrders.GroupSize (its guards in its order, its words) */
 export function groupSize(o) {
   const budget = Math.round(o.riskPct * o.drawdown) / 100, per = o.stopTicks * o.tickValue;
@@ -36,7 +38,7 @@ export function groupSize(o) {
   let n = Math.floor(budget / per + 1e-9);
   if (n < 1) return out('its risk ' + usd2(budget) + ' (' + +o.riskPct.toFixed(2) + '% of its max loss ' + usd2(o.drawdown) + ') is less than one contract\'s stop (' + usd2(per) + ' at ' + o.stopTicks + ' ticks)');
   const held = Math.max(0, o.held);
-  if (o.maxSize > 0 && o.maxSize - held < n) { n = o.maxSize - held; if (n < 1) return out('it is at its max size (' + o.maxWords + '; it holds or has working ' + held + ')'); }
+  if (o.maxLeft >= 0 && o.maxLeft < n) { n = o.maxLeft; if (n < 1) return out('it is at its max size (' + o.maxWords + ')'); }   // review 3: every instrument, in mini equivalents
   if (o.cap - held < n) { n = o.cap - held; if (n < 1) return out('it is at the cap of ' + o.cap + ' (' + o.capWords + '; it holds or has working ' + held + ')'); }
   const byFloor = Math.floor((o.roomFloor - open) / per + 1e-9);
   if (byFloor < n) { n = byFloor; if (n < 1) return out('its room to the floor ' + usd2(o.roomFloor) + less + ' is less than one contract\'s stop (' + usd2(per) + ')'); }
@@ -69,7 +71,7 @@ export function installGroups(Desk) {
         const longs = holders.some(h => h.side === 'long'), shorts = holders.some(h => h.side === 'short');
         return Object.assign({ id: g.id, name: g.name, noHedge: g.noHedge, dailyLoss: g.dailyLoss || null, drawdown: g.drawdown, drawdownType: g.drawdownType, target: g.target || null,
           size: g.size, lockAt: g.lockAt || null, consistency: g.consistency || null, accountType: g.accountType || null, hero: g.hero || null, members, side: longs && shorts ? 'mixed' : longs ? 'long' : shorts ? 'short' : null, holders },
-          this.gr.perMember ? { riskPct: g.riskPct || null, ownRules: members.filter(a => this.gr.own.has(a)) } : {});   // 0.6.5, after holders as ChartBridge writes them
+          this.gr.perMember ? { riskPct: g.riskPct || null, ownRules: members.filter(a => this.gr.own.has(a)), tradeOut: members.map(a => ({ account: a, why: this.groupTakenWhy(a) })).filter(x => x.why) } : {});   // review 4: tradeOut   // 0.6.5, after holders as ChartBridge writes them
       });
       return { type: 'groups', list, error: null };
     },
@@ -220,7 +222,7 @@ export function installGroups(Desk) {
       const g = this.gr.list.get(m.group);
       if (!g) return { error: 'no group ' + m.group };
       if (!(g.riskPct > 0)) return { error: 'group ' + g.name + ' has no risk percent: set Risk % of max loss in Settings, Account groups' };
-      const stop = m.strategy && isNum(m.strategy.stop) ? m.strategy.stop : m.bracket && isNum(m.bracket.stop) ? m.bracket.stop : 0;   // answer 2: a strategy's stop sizes too
+      const stop = m.strategy && isNum(m.strategy.stop) ? m.strategy.stop + Math.max(0, isNum(m.strategy.stopLimit) ? m.strategy.stopLimit : 0) : m.bracket && isNum(m.bracket.stop) ? m.bracket.stop : 0;   // answer 2: a strategy's stop sizes too
       if (!(stop >= 1)) return { error: 'a group entry needs a stop: each member is sized from its stop loss (set the bracket\'s stop)' };
       const members = [...this.gr.members].filter(([, id]) => id === g.id).map(([a]) => a).sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1);
       if (!members.length) return { error: 'group ' + g.name + ' has no accounts' };
@@ -230,16 +232,17 @@ export function installGroups(Desk) {
       const seats = members.map(name => {
         const s = { account: name, size: 0, risk: 0, budget: 0, out: null }, a = this.acct.get(name);
         /* never an account another lane trades (ChartBridgeAgents.CopierUses, AccountTakenWhy, the bot's) */
-        const cp = this.sw.copier && this.copier ? (this.copier.leader === name ? name + ' is the copier\'s leader' : this.copier.followers.has(name) ? name + ' is a copier follower' : null) : null;
-        const taken = cp || (this.botAccount && this.botAccount.toLowerCase() === name.toLowerCase() ? name + ' is the bot\'s account' : null);
+        const taken = this.groupTakenWhy(name);
         if (taken) { s.out = taken; return s; }
         if (!a) { s.out = 'it is not in NinjaTrader now'; return s; }
         const f = this.groupFields(a, this.accountMsg058(a)), r = this.groupRulesOf(name, g);
         const pos = (this.positions.get(name + '|' + m.root) || {}).qty || 0;
         const pend = [...this.orders.values()].filter(o => o.account === name && o.root === m.root && (o.state === 'working' || o.state === 'partFilled') && o.side === m.side).reduce((t, o) => t + o.qty - (o.filled || 0), 0);
-        const held = buy ? pos + pend : -pos + pend, maxSize = micro ? r.maxMicros : r.maxMinis;
-        const z = groupSize({ riskPct: g.riskPct, drawdown: r.drawdown, stopTicks: stop, tickValue, maxSize, maxWords: maxSize + (micro ? ' micros' : ' minis'), cap: this.capFor(m.root), capWords: 'maxQty.' + m.root + ' in config.txt',
-          held, roomFloor: f.roomFloor, floorWhy: f.why.roomFloor, hasDaily: r.dailyLoss > 0, roomDaily: f.roomDaily, dailyWhy: f.why.roomDaily, ...this.groupOpenRisk(name, buy) });
+        const held = buy ? pos + pend : -pos + pend, risk = this.groupOpenRisk(name), maxEq = maxMiniEquivalents(r.maxMinis, r.maxMicros);
+        const maxLeft = maxEq < 0 ? -1 : Math.max(0, Math.floor((maxEq - risk.usedMini) / miniEquivalent(m.root) + 1e-9));
+        const maxWords = maxEq < 0 ? '' : (r.maxMinis > 0 ? r.maxMinis + ' minis' : r.maxMicros + ' micros') + '; it holds or has working ' + +risk.usedMini.toFixed(1) + ' in mini equivalents, every instrument';
+        const z = groupSize({ riskPct: g.riskPct, drawdown: r.drawdown, stopTicks: stop, tickValue, maxLeft, maxWords, cap: this.capFor(m.root), capWords: 'maxQty.' + m.root + ' in config.txt',
+          held, roomFloor: f.roomFloor, floorWhy: f.why.roomFloor, hasDaily: r.dailyLoss > 0, roomDaily: f.roomDaily, dailyWhy: f.why.roomDaily, openRisk: risk.openRisk, openWhy: risk.openWhy });
         s.size = z.size; s.budget = z.budget; s.out = z.why; s.risk = Math.round(z.size * stop * tickValue * 100) / 100;
         return s;
       });
@@ -247,20 +250,45 @@ export function installGroups(Desk) {
     },
     /* answer 4 (ChartBridgeOrders.OpenStopRisk): the loss if every position on that side is stopped at its working stops, from the last
        price; { openRisk } or { openRisk: null, openWhy } */
-    groupOpenRisk(account, buy) {
-      let total = 0;
-      for (const [k, p] of this.positions) {
-        const [acc, root] = k.split('|'), held = buy ? Math.max(p.qty || 0, 0) : Math.max(-(p.qty || 0), 0);
-        if (acc !== account || !held) continue;
-        const last = this.last[root], pv = (this.instruments[root] || {}).pointValue, dir = buy ? 1 : -1;
-        if (!(last > 0) || !pv) return { openRisk: null, openWhy: 'no recent ' + root + ' price to measure its ' + root + ' stops from' };
-        const stops = [...this.orders.values()].filter(o => o.account === account && o.root === root && (o.state === 'working' || o.state === 'partFilled') && (o.side === 'buy') !== buy && (o.kind === 'stop' || o.kind === 'stopLimit' || o.role === 'stop'))
-          .map(o => [Math.max(0, (last - o.price) * dir), o.qty - (o.filled || 0)]).filter(x => x[1] > 0).sort((a, b) => b[0] - a[0]);
-        let left = held;
-        for (const [d, q] of stops) { if (left <= 0) break; const n = Math.min(left, q); total += n * d * pv; left -= n; }
-        if (left > 0) return { openRisk: null, openWhy: 'it holds ' + held + ' ' + root + ' with no working stop for ' + left + ' of them' };
+    groupOpenRisk(account) {
+      /* ChartBridgeOrders.OpenStopRisk (answer 4, review 1 and 5): every position on both sides at its working stops from its own last
+         price, every working entry at its own stop; usedMini every instrument in mini equivalents (review 3) */
+      let total = 0, usedMini = 0, unknown = null;
+      const roots = new Set();
+      for (const [k] of this.positions) { const [acc, root] = k.split('|'); if (acc === account) roots.add(root); }
+      for (const o of this.orders.values()) if (o.account === account && (o.state === 'working' || o.state === 'partFilled')) roots.add(o.root);
+      for (const root of roots) {
+        const pos = (this.positions.get(account + '|' + root) || {}).qty || 0, ins = this.instruments[root] || {}, pv = ins.pointValue, tick = ins.tick;
+        const heldL = Math.max(pos, 0), heldS = Math.max(-pos, 0);
+        usedMini += (heldL + heldS) * miniEquivalent(root);
+        const on = [...this.orders.values()].filter(o => o.account === account && o.root === root && (o.state === 'working' || o.state === 'partFilled'));
+        for (const dir of [1, -1]) {
+          const held = dir > 0 ? heldL : heldS;
+          if (!held) continue;
+          const last = this.last[root];
+          if (!(last > 0) || !pv) { unknown = unknown || 'no recent price for ' + ((ins.name) || root) + ' to measure its stops from'; continue; }
+          const stops = on.filter(o => (o.side === 'buy') === (dir < 0) && (o.kind === 'stop' || o.kind === 'stopLimit')).map(o => [Math.max(0, (last - o.price) * dir), o.qty - (o.filled || 0)]).filter(x => x[1] > 0).sort((a, b) => b[0] - a[0]);
+          let left = held;
+          for (const [d, q] of stops) { if (left <= 0) break; const n = Math.min(left, q); total += n * d * pv; left -= n; }
+          if (left > 0) unknown = unknown || 'it holds ' + held + ' ' + root + ' with no working stop for ' + left + ' of them';
+        }
+        let exitBuy = heldS, exitSell = heldL;
+        for (const o of on) {
+          if (o.role && o.role !== 'entry') continue;   // legs are never entries
+          let rest = o.qty - (o.filled || 0);
+          if (o.side === 'buy') { const x = Math.min(exitBuy, rest); exitBuy -= x; rest -= x; } else { const x = Math.min(exitSell, rest); exitSell -= x; rest -= x; }
+          if (rest <= 0) continue;
+          usedMini += rest * miniEquivalent(root);
+          const t = o.strategy ? o.strategy.stop + Math.max(0, o.strategy.stopLimit || 0) : o.bracket && o.bracket.stop > 0 ? o.bracket.stop : o.planned && o.planned.stopTicks > 0 ? o.planned.stopTicks : 0;
+          if (!(t >= 1) || !pv) { unknown = unknown || 'a working ' + o.side + ' ' + (o.kind === 'stopLimit' ? 'stop limit' : o.kind) + ' ' + rest + ' ' + root + ' has no stop ChartBridge knows'; continue; }
+          total += rest * t * tick * pv;
+        }
       }
-      return { openRisk: total, openWhy: null };
+      return unknown ? { openRisk: null, openWhy: unknown, usedMini } : { openRisk: total, openWhy: null, usedMini };
+    },
+    groupTakenWhy(name) {
+      const cp = this.sw.copier && this.copier ? (this.copier.leader === name ? name + ' is the copier\'s leader' : this.copier.followers.has(name) ? name + ' is a copier follower' : null) : null;
+      return cp || (this.botAccount && this.botAccount.toLowerCase() === name.toLowerCase() ? name + ' is the bot\'s account' : null);
     },
     groupEntryWhy(m) {
       if (typeof m.group !== 'string') return m.type + ' needs group (a group id)';
@@ -271,6 +299,7 @@ export function installGroups(Desk) {
       if (m.strategy !== undefined) { const w = m.strategy && typeof m.strategy === 'object' ? checkStrategy(m.strategy, this.config.maxBracketTicks) : 'A strategy must be one flat object.'; if (w) return w; return this.groupPlan(m).error || null; }
       if (!m.bracket) return 'a group entry needs a stop: each member is sized from its stop loss (set the bracket\'s stop)';
       if (!isNum(m.bracket.stop) || !isNum(m.bracket.target) || !Number.isInteger(m.bracket.stop) || !Number.isInteger(m.bracket.target) || m.bracket.stop < 0 || m.bracket.target < 0) return 'bracket needs both stop and target as whole numbers of ticks (0 for none)';
+      if (this.config.maxBracketTicks > 0 && (m.bracket.stop > this.config.maxBracketTicks || m.bracket.target > this.config.maxBracketTicks)) return 'bracket ticks must be from 0 to ' + this.config.maxBracketTicks + ' (maxBracketTicks in config.txt)';   // review 7
       const p = this.groupPlan(m);
       return p.error || null;
     },
@@ -280,10 +309,10 @@ export function installGroups(Desk) {
     check_groupOrder(m) {
       if (!this.gr.perMember) return 'Unknown message type groupOrder.';
       const why = this.groupEntryWhy(m); if (why) return why;
-      if (typeof m.sizes !== 'string' || !/^(?:0|[1-9][0-9]{0,3})(?:,(?:0|[1-9][0-9]{0,3})){0,99}$/.test(m.sizes)) return 'sizes must be the sizes confirmed, in seat order ("4,0,2")';
-      const p = this.groupPlan(m), want = m.sizes.split(',');
-      if (want.length !== p.seats.length) return 'the group\'s accounts changed since the preview (' + p.seats.length + ' now, ' + want.length + ' confirmed): nothing was sent; look again and send';
-      const changed = p.seats.map((s, i) => (String(s.size) !== want[i] ? s.account + ' ' + want[i] + ' confirmed, ' + s.size + ' now' : null)).filter(Boolean);
+      if (typeof m.sizes !== 'string' || !/^[^,:"]{1,200}:(?:0|[1-9][0-9]{0,3})(?:,[^,:"]{1,200}:(?:0|[1-9][0-9]{0,3})){0,99}$/.test(m.sizes)) return 'sizes must be the sizes confirmed with their accounts, in seat order ("SIM-A:4,SIM-B:0")';
+      const p = this.groupPlan(m), want = m.sizes.split(',').map(x => x.split(':'));   // review 2: the names go with the sizes
+      if (want.length !== p.seats.length || want.some((w, i) => w[0].toLowerCase() !== p.seats[i].account.toLowerCase())) return 'the group\'s accounts changed since the preview (' + p.seats.map(x => x.account).join(', ') + ' now, ' + want.map(w => w[0]).join(', ') + ' confirmed): nothing was sent; look again and send';
+      const changed = p.seats.map((s, i) => (String(s.size) !== want[i][1] ? s.account + ' ' + want[i][1] + ' confirmed, ' + s.size + ' now' : null)).filter(Boolean);
       if (changed.length) return 'the sizes changed since the preview (' + changed.join('; ') + '): nothing was sent; look again and send';
       if (p.seats.every(s => s.size < 1)) return 'no account of group ' + p.name + ' can take this entry: ' + p.seats.map(s => s.account + ': ' + s.out).join('; ');
       return null;
