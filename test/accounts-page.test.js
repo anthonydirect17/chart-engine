@@ -366,10 +366,11 @@ test('1.26.0: the Accounts tab gets Group and Limits only once ChartBridge sends
   assert.match(src, /const grpKnown = !!S\.groups, grpOn = grpKnown \|\| S\.hadGroups, canGroup = grpKnown && S\.enabled && !S\.groupsError;/);   // 1.31.0: kept while not known after groups came once
   assert.match(src, /\(grpOn \? h\('Group'\) \+ \(typesOn \? h\('Account type'\) : ''\) \+ h\('Limits', 'r'\) : ''\)/, 'the two headers, only with groups (1.30.0: Account type between them once The Desk\'s types are known)');
   assert.match(src, /S\.groups = null; S\.groupsError = null;/, 'a drop forgets the groups (an older ChartBridge sends none)');
-  assert.match(src, /accountGroup: \(name, group, highText\) => \{\s*if \(!S\.groups/);
+  assert.match(src, /accountGroup: \(name, group, highText, rules\) => \{[^\n]*\n\s*if \(!S\.groups/);
   assert.match(src, /accountLimits: \(name, floorText, dailyText\) => \{\s*if \(!S\.groups/);
   assert.match(src, /if \(!want\) \{ P\.join = null; F\.accountGroup\(name, null\);/, 'None at once');
-  assert.match(src, /P\.join = \{ account: name, group: want, prefill: String\(\+GroupsCore\.highCloseDefault\(g, acc\)/, 'a group asks the highest close first (G2 b)');
+  assert.match(src, /P\.join = joinPlan\(name, g, acc\)/, 'a group asks first (G2 b; 1.33.0: with the rules taken from The Desk)');
+  assert.match(src, /if \(!g\.perMember\) return Object\.assign\(base, \{ mode: 'old', prefill: String\(\+GroupsCore\.highCloseDefault\(g, acc\)/, 'an older ChartBridge: the 1.26.0 question exactly');
   assert.ok(html.indexOf('<script src="groups.js"></script>') > html.indexOf('<script src="accounts.js"></script>') && html.indexOf('<script src="groups.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
   assert.ok(html.indexOf('<div class="ws-col ws-col-groups" id="wsGroupsCol" hidden>') > html.indexOf('id="wsTypesSec"') && html.indexOf('id="wsGroupsSec"') > html.indexOf('id="wsGroupsCol"'), 'Settings: the groups in a third column, hidden until ChartBridge sends groups');
   assert.ok(files.www.some(f => f.from === 'live/groups.js' && f.to === 'groups.js'));

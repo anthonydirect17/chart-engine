@@ -54,7 +54,7 @@ test('groups: the rules dialog checks as ChartBridge does, and builds groupSave 
   assert.deepEqual(GC.saveFrom(lucid, { name: 'Lucid Flex' }, 'c2'), { type: 'groupSave', cid: 'c2', group: 'g1', name: 'Lucid Flex', noHedge: true, dailyLoss: 1000, drawdown: 2000, drawdownType: 'eod', target: 3000, size: 50000, lockAt: 50100, consistency: 0 });
   assert.equal(GC.summary(Object.assign({}, lucid, { consistency: 40 })), '$50,000 · daily $1,000 · drawdown $2,000 end of day, stops at $50,100 · target $3,000 · consistency 40%');
   assert.equal(GC.saveFrom(Object.assign({}, lucid, { dailyLoss: null, target: null, lockAt: null }), { noHedge: false }).dailyLoss, 0);
-  assert.deepEqual(GC.formOf(lucid), { name: 'Lucid', size: '50000', dailyLoss: '1000', drawdown: '2000', drawdownType: 'eod', lockAt: '50100', target: '3000', consistency: '', noHedge: true });
+  assert.deepEqual(GC.formOf(lucid), { name: 'Lucid', size: '50000', dailyLoss: '1000', drawdown: '2000', drawdownType: 'eod', lockAt: '50100', target: '3000', consistency: '', noHedge: true, riskPct: '' });   // 1.33.0: the risk box
 });
 
 test('groups: G2 (b) the highest close prefill, accountGroup and accountLimits', () => {

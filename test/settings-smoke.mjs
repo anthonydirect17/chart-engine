@@ -400,10 +400,11 @@ try {
       /* the join question for an intraday group (Group B) asks the highest balance so far (intraday) */
       await p.selectOption(`${AP} select.apg-grp[data-id="SIM-F2"]`, 'g2');
       const jq = await until(() => p.$eval(`${AP} .apg-join`, e => e.textContent.replace(/\s+/g, ' ')), 'the join question');
-      check(/Put SIM-F2 in Group B: highest balance so far \(intraday\)/.test(jq || ''), 'an intraday group asks the highest balance so far (intraday): ' + jq);
+      /* 1.33.0 (ChartBridge 0.6.5): SIM-F2 has no type on The Desk, so the join row is the full rules form, with the same question */
+      check(/Put SIM-F2 in Group B with these rules \(no account type on The Desk\):.* highest balance so far \(intraday\)/.test(jq || ''), 'an intraday group asks the highest balance so far (intraday): ' + jq);
       await p.click(`${AP} [data-act="join-no"]`);
       await p.selectOption(`${AP} select.apg-grp[data-id="SIM-F2"]`, 'g1');
-      check(/Put SIM-F2 in Group A: highest close so far /.test(await until(() => p.$eval(`${AP} .apg-join`, e => e.textContent.replace(/\s+/g, ' ')), 'the eod join question') || ''), 'an end-of-day group asks the highest close so far, as before');
+      check(/Put SIM-F2 in Group A with these rules \(no account type on The Desk\):.* highest close so far /.test(await until(() => p.$eval(`${AP} .apg-join`, e => e.textContent.replace(/\s+/g, ' ')), 'the eod join question') || ''), 'an end-of-day group asks the highest close so far, as before');
       await p.click(`${AP} [data-act="join-no"]`);
 
       /* Settings, the rules dialog: the Account type select at the top fills every box and the Type; Save sends groupSave */
