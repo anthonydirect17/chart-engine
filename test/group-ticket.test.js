@@ -1,0 +1,101 @@
+'use strict';
+// Chart 1.33.0 (ChartBridge 0.6.5, Anthony 2026-10-19): the order ticket on a group (live/trade.js). The entry asks ChartBridge for
+// the sizes and sends them after one confirm (a strategy may go with it); the group's chart lines, one per level labelled with the
+// group and its member count, each account in the tooltip; a group stop dragged moves every member's stop to the same price, each
+// member's result said. A fake clock and connection; made-up accounts and prices.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { LivePrefs: LP } = require('../live/live.js');
+const TC = require('../live/trade.js');
+
+function rig() {
+  let clock = 5000, timers = [], tid = 0;
+  const store = new Map();
+  const storage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
+  const R = { sent: [], notes: [], root: 'NQ', last: 25000, strategy: null, confirm: null };
+  const groups = [{ id: 'g1', name: 'Lucid', perMember: true, riskPct: 10, members: ['SIM-A', 'SIM-B', 'SIM-C'] }];
+  const env = {
+    LP, prefs: LP.create(storage), fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve('{"token":"t"}') }),
+    send: m => R.sent.push(JSON.parse(JSON.stringify(m))), open: () => true, sock: () => R,
+    root: () => R.root, lastPrice: () => R.last, qty: () => 1, pickerAccount: () => core.TR.account, wantedAccount: () => 'group:g1',
+    tick: () => 0.25, served: () => true, fmt: p => p.toFixed(2), flash: (t, l) => R.notes.push((l ? l + ': ' : '') + t),
+    later: (fn, ms) => { timers.push({ id: ++tid, at: clock + ms, fn }); return tid; },
+    changed: () => {}, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {}, batch: () => {}, unsent: () => {}, armBlocked: () => '', destroyed: () => false, now: () => clock,
+    groups: () => groups, confirmGroup: (m, send, cancel) => { R.confirm = { m, send, cancel }; return true; }, strategy: () => R.strategy,
+  };
+  const core = TC.create(env);
+  R.core = core;
+  R.advance = ms => { const end = clock + ms; for (;;) { timers.sort((a, b) => a.at - b.at || a.id - b.id); const t = timers[0]; if (!t || t.at > end) break; timers.shift(); clock = t.at; t.fn(); } clock = end; };
+  core.applyTrading({ enabled: true, accounts: ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'], maxQty: { NQ: 9 } });
+  return R;
+}
+const order = (id, account, role, side, kind, price, qty, extra) => Object.assign({ type: 'order', id, account, root: 'NQ', role, side, kind, price, qty, filled: 0, state: 'working' }, extra || {});
+
+test('a group stays the ticket\'s account, and the picker lists it', () => {
+  const R = rig();
+  assert.equal(R.core.TR.account, 'group:g1');
+  assert.deepEqual(R.core.groupChoices(), [{ value: 'group:g1', label: 'Group Lucid (3)' }]);
+});
+
+test('the entry: no stop refused; the preview, one confirm, then the sizes shown; a strategy goes in place of the bracket (answer 2)', () => {
+  const R = rig();
+  R.core.setArmed(true);
+  R.core.setBracket('NQ', 'stop', 0, true);
+  R.core.sendOrder('buy', 'market', null);
+  assert.equal(R.sent.length, 0); assert.match(R.notes.pop(), /a group entry needs a stop/);
+  R.core.setBracket('NQ', 'stop', 20, true); R.core.setBracket('NQ', 'target', 40, true);
+  R.core.sendOrder('buy', 'market', null);
+  const pv = R.sent.pop();
+  assert.deepEqual(Object.assign({}, pv, { cid: 'x' }), { type: 'groupPreview', cid: 'x', group: 'g1', root: 'NQ', side: 'buy', kind: 'market', bracket: { stop: 20, target: 40 } });
+  R.core.message({ type: 'groupPreview', cid: pv.cid, group: 'g1', name: 'Lucid', root: 'NQ', side: 'buy', kind: 'market', stopTicks: 20, riskPct: 10, members: [
+    { account: 'SIM-A', size: 4, risk: 400, budget: 450, out: null }, { account: 'SIM-B', size: 0, risk: 0, budget: 200, out: 'its daily room $80 is less than one contract\'s stop ($100)' }, { account: 'SIM-C', size: 1, risk: 100, budget: 100, out: null }] });
+  assert.ok(R.confirm, 'one confirm');
+  assert.equal(R.sent.length, 0, 'nothing sent before Send');
+  R.confirm.send();
+  const go = R.sent.pop();
+  assert.equal(go.type, 'groupOrder'); assert.equal(go.sizes, '4,0,1'); assert.deepEqual(go.bracket, { stop: 20, target: 40 });
+  R.advance(6000);
+  R.strategy = { name: 'Scalp', wire: { name: 'Scalp', stop: 16, t1: 32, t1Share: 100 } };
+  R.core.setSwitches({ strategies: true });
+  R.core.setBracket('NQ', 'stop', 0, true);
+  R.core.sendOrder('buy', 'market', null);
+  const sp = R.sent.pop();
+  assert.equal(sp.type, 'groupPreview'); assert.deepEqual(sp.strategy, { name: 'Scalp', stop: 16, t1: 32, t1Share: 100 }); assert.equal(sp.bracket, undefined, 'the strategy in place of the bracket (its stop sizes)');
+});
+
+test('answer 1: one chart line per level, labelled with the group and its count, each account in the tooltip; a drag moves each to the same price', () => {
+  const R = rig();
+  R.core.setArmed(true);
+  R.core.message({ type: 'orders', list: [order('o1', 'SIM-A', 'stop', 'sell', 'stop', 24980, 4), order('o2', 'SIM-B', 'stop', 'sell', 'stop', 24980, 2), order('o3', 'SIM-C', 'stop', 'sell', 'stop', 24980, 1),
+    order('o4', 'SIM-A', 'target', 'sell', 'limit', 25040, 4), order('o5', 'SIM-D', 'stop', 'sell', 'stop', 24980, 3)] });
+  const lines = R.core.chartOrders('group:g1', 'NQ');
+  const stop = lines.find(l => l.role === 'stop');
+  assert.equal(lines.length, 2, 'the stops at one level are one line; SIM-D is no member');
+  assert.equal(stop.qty, 7); assert.equal(stop.group, 'Lucid ×3'); assert.equal(stop.groupTip, 'Group Lucid: SIM-A SELL STP 4 @ 24980.00\nSIM-B SELL STP 2 @ 24980.00\nSIM-C SELL STP 1 @ 24980.00');
+  assert.ok(stop.id.startsWith('G~stop~sell~stop~'));
+  R.sent.length = 0;
+  R.core.moveOrder(stop.id, 24990);
+  assert.deepEqual(R.sent.map(m => [m.type, m.id, m.price]), [['change', 'o1', 24990], ['change', 'o2', 24990], ['change', 'o3', 24990]], 'every member\'s stop to the price dropped at');
+  const refused = R.sent[2];
+  R.core.message({ type: 'reject', cid: refused.cid, id: 'o3', reason: 'that order is no longer working' });
+  R.advance(2000);
+  assert.equal(R.notes.pop(), 'warn: Group stops to 24990.00: SIM-A, SIM-B moved; SIM-C: refused (that order is no longer working).', 'each member\'s result said');
+  R.sent.length = 0;
+  R.core.cancelOrder(lines.find(l => l.role === 'target').id);
+  assert.deepEqual(R.sent.map(m => m.type + ' ' + m.id), ['cancel o4'], 'the x on a group line cancels each member\'s order there');
+});
+
+test('answer 1: Close, Cancel all and B/E act on each member', () => {
+  const R = rig();
+  R.core.setArmed(true);
+  R.core.message({ type: 'position', account: 'SIM-A', root: 'NQ', qty: 2, avgPrice: 24990 });
+  R.core.message({ type: 'position', account: 'SIM-B', root: 'NQ', qty: 1, avgPrice: 24995 });
+  R.core.message({ type: 'orders', list: [order('o1', 'SIM-A', 'stop', 'sell', 'stop', 24980, 2), order('o2', 'SIM-B', 'stop', 'sell', 'stop', 24980, 1)] });
+  R.sent.length = 0;
+  R.core.breakEven();
+  assert.deepEqual(R.sent.map(m => m.id + ' ' + m.price), ['o1 24990', 'o2 24995'], 'each member\'s stop to its own break-even');
+  R.sent.length = 0;
+  R.advance(1000);
+  R.core.flattenHere();
+  assert.deepEqual(R.sent.filter(m => m.type === 'flatten').map(m => m.account).sort(), ['SIM-A', 'SIM-B', 'SIM-C']);
+});

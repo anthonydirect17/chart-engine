@@ -2505,6 +2505,15 @@ function mount(container, options) {
     };
     const inR = (r, pt) => !!r && pt.x >= r.x && pt.x <= r.x + r.w && pt.y >= r.y && pt.y <= r.y + r.h;
     const onOrder = pt => chart.orderHandles().some(h => inR(h.box, pt) || inR(h.xbox, pt) || inR(h.tag, pt));
+    /* 1.33.0 (Anthony 2026-10-19): a group's line (a group on the order ticket) lists each account's order in its tooltip */
+    host.addEventListener('pointermove', e => {
+      if (e.target !== cv) return;
+      const r = cv.getBoundingClientRect(), pt = { x: e.clientX - r.left, y: e.clientY - r.top };
+      const h = HOST ? chart.orderHandles().find(x => inR(x.box, pt) || inR(x.tag, pt)) : null;
+      const o = h ? HT.orders.find(x => x && x.id === h.id && typeof x.groupTip === 'string') : null;
+      const tip = o ? o.groupTip : '';
+      if (cv.title !== tip && (tip || cv.dataset.groupTip)) { cv.title = tip; cv.dataset.groupTip = tip ? '1' : ''; }
+    });
     let press = null;
     host.addEventListener('pointerdown', e => {
       if (e.target !== cv || e.pointerType === 'touch') return;

@@ -37,10 +37,18 @@ member's own rules and the risk percent (0.6.5)".
   the copier's leader or a follower, the bot's account or an agent's sits out (as a group trading seat). The group's risk off: a
   group entry is refused. The copier, the agents and single account tickets are unchanged. `accountState.rules` gains `maxMinis`
   and `maxMicros` (0 none).
-- **Open questions for Anthony** (built the safe way meanwhile): what the charts show for a group ticket and how a dragged stop
-  applies (today a group ticket draws no order lines and a drag is refused; B/E, Close and Cancel all work); whether an Order
-  Strategy may go with a group entry (today refused: sizing reads the bracket's stop); whether the copier, bot and agent sit outs
-  are right; whether the room cap should also count the stop risk of a position already held (today only the new entry's stop).
+- **Anthony's answers (2026-10-19), built.** (1) A group ticket's charts draw the group's order lines: one line per level (the
+  members' orders of one role, side and kind at one price, and their planned lines), its quantity the sum, labelled with the group
+  and how many accounts it covers ("STP 9 · Lucid ×4"; the engine's `group` field, CHART_STYLE.md), each account's order in its
+  tooltip. Dragging a group stop or target moves EVERY member's order to the same price, the price dropped at: one `change` per
+  member, each ChartBridge's single path (a stop already traded is refused for that member as on one account), and the ticket says
+  each member's result ("Group stops to 25,406.75: SIM-A, SIM-B moved; SIM-C: refused (...)"); its x cancels each, a planned
+  line's drag or +SL / +TP sends `plan` to each. (2) An Order Strategy may go with a group entry: its stop sizes each member (the
+  same formula and guards) and its targets and stop management run on each member's own entry. (3) The copier, bot and agent sit
+  outs stay. (4) The room cap counts ALL the member's open stop risk on that side: each position it holds there at its working
+  stops, measured from the last price (a stop past the price in profit risks 0), comes off its room to the floor and its daily
+  room before the new entry's stop; a position with no working stop for some of its contracts makes the risk not known, so it sits
+  out and says why.
 - Tests: `test/member-rules.test.js` (The Desk's rules with an account's own numbers winning, the seed floor, the form's checks, the
   messages, the display and the risk dollars, the fake bridge's mirror of the harness, the old ChartBridge's key lists, the source);
   the Mono harness `GroupsHarness.MemberRules` (the migration of a 0.6.4 file, every refusal, three types in one group with each floor,
@@ -50,7 +58,10 @@ member's own rules and the risk percent (0.6.5)".
   `smoke:settings`: the join question for an account with no type is now the full form with the same question. The group ticket:
   `GroupsHarness.GroupEntries` (each guard with its words, rounds to 0, a room not known, adds, no stop, the sizes changed, risk off,
   the placing, one direction per member), the fake's `groupSize`, `groupPreview` and `groupOrder` with the same numbers, and
-  `npm run smoke:group-ticket` (screenshots `group-ticket-confirm-1366.png`, `group-ticket-placed-1366.png`).
+  `npm run smoke:group-ticket` (screenshots `group-ticket-confirm-1366.png`, `group-ticket-placed-1366.png`,
+  `group-ticket-lines-1366.png`, `group-ticket-moved-1366.png`), `test/group-ticket.test.js` (the lines, the drag to one price with a
+  member refused, a strategy in place of the bracket, B/E and Close per member) and harness cases for the strategy sizing, the
+  open stop risk cap and the move with one member's stop already traded.
 
 ## 1.32.0 (2026-10-19): the account type picker as Firm, Plan and Size
 

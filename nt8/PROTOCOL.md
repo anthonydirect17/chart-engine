@@ -3345,7 +3345,14 @@ two of three floors had the wrong numbers. Built in `nt8/ChartBridgeGroups.cs`, 
 | `groupPreview` | `cid`, `group`, `root`, `side`, `kind` (as `order`), `price` (not market), `limitOffset` (stopLimit), `bracket` `{stop, target}` with `stop` at least 1 | `groupPreview` `{cid, group, name, root, side, kind, stopTicks, riskPct, members: [{account, size, risk, budget, out}]}` in seat order (by name); nothing is placed |
 | `groupOrder` | the same and `sizes` (the sizes confirmed, in seat order: "4,2,1,2") | refused whole when the members or any size changed since ("the sizes changed since the preview (SIM-A 5 confirmed, 4 now): nothing was sent; look again and send"); else each member with a size gets its own `order` (its account, that qty, the bracket) through the order path, then `groupPlaced` `{..., placed, members}` with `out` "refused: <why>" for a member the order path refused |
 
-Each member: budget = riskPct x its drawdown / 100; contracts = floor(budget / (stopTicks x tick x point value)). It sits out with
+A `strategy` object (an Order Strategy, as on `order`; never with `bracket`) may go in place of the bracket: its `stop` sizes each
+member, and each member's entry is its own managed strategy entry. Each member: budget = riskPct x its drawdown / 100; contracts =
+floor(budget / (stopTicks x tick x point value)). The room caps count all its open stop risk on that side first (Anthony's answer 4):
+for every position it holds on that side, each working stop (stop or stop-limit on the other side, the farthest first, up to the
+position) times its distance from the last price (0 past the price in profit) times the point value; a contract held with no working
+stop, or no recent price, makes it not known ("its open stop risk is not known (it holds 4 NQ with no working stop for 4 of them)"),
+and it sits out. A group's order lines on the page are moved by one `change` per member to the same price, each checked as on one
+account. It sits out with
 its reason when its room to the floor, or its daily room under a daily loss rule, is not known; when it is the copier's leader or a
 follower, the bot's account or an agent's; when it rounds to 0. Never above its max size (MaxMinis, or MaxMicros for MNQ, MES and the
 other micros) nor `maxQty.<root>` less what it holds and has working on that side (an add is sized the same way); the stop loss

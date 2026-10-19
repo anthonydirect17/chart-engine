@@ -83,11 +83,40 @@ try {
   const note1 = await p.$eval(tk('note'), e => e.textContent).catch(() => '');
   check(JSON.stringify(pos) === '[4,2,1,2]' || /placed SIM-A 4, SIM-B 2, SIM-C 1, SIM-D 2/.test(note1), 'every member got its own entry at its own size: ' + JSON.stringify(pos) + ' ' + note1);
   await p.screenshot({ path: path.join(out, 'group-ticket-placed-1366.png') });
+  /* answer 1: the group's lines on an MNQ chart: one per level, "STP n · Lucid ×4", each account in the tooltip; a drag moves each */
+  await p.click(tk('flattenBtn')); await wait(800);
+  await p.selectOption(tk('root'), 'MNQ'); await wait(800);
+  await p.fill(tk('bStop'), '20'); await p.press(tk('bStop'), 'Tab'); await p.fill(tk('bTarget'), '40'); await p.press(tk('bTarget'), 'Tab');
+  if (!(await p.evaluate(() => window.workspace.ticket().armed))) { await p.click(tk('armBtn')); await wait(300); }
+  await clearSent();
+  await p.click(tk('buyMkt'));
+  await wait(800); console.log('  info: ' + await p.$eval(tk('note'), e => e.textContent).catch(() => ''));
+  await until(() => p.$eval('#wsDialog', d => d.open && !!d.querySelector('.ws-gq')), 'the MNQ confirm');
+  await p.click('#gqSend');
+  const cid = await p.evaluate(() => { const c = window.workspace.panels().find(x => x.type === 'chart' && x.root === 'MNQ' && window.workspace.chart(x.id)); return c ? c.id : null; });
+  const stopLine = await until(async () => { const hs = await p.evaluate(i => window.workspace.chart(i).orderHandles(), cid); return hs.find(h => /^G~stop~/.test(h.id)); }, 'the group stop line on the MNQ chart', 10000);
+  check(!!stopLine, 'the group\'s stop line is drawn: ' + JSON.stringify(stopLine && stopLine.id));
+  if (stopLine) {
+    const box = await p.locator('.ws-panel[data-id="' + cid + '"] canvas').first().boundingBox();
+    await p.mouse.move(box.x + stopLine.box.x + 8, box.y + stopLine.box.y + stopLine.box.h / 2); await wait(300);
+    const tip = await p.$eval('.ws-panel[data-id="' + cid + '"] canvas', c => c.title);
+    check(/^Group Lucid: SIM-A SELL STP \d+ @ [0-9.,]+\nSIM-B SELL STP \d+ @ [0-9.,]+\nSIM-C SELL STP \d+ @ [0-9.,]+\nSIM-D SELL STP \d+ @ [0-9.,]+$/.test(tip), 'its tooltip lists each account\'s stop: ' + JSON.stringify(tip));
+    await p.screenshot({ path: path.join(out, 'group-ticket-lines-1366.png') });
+    await clearSent();
+    await p.mouse.down(); await p.mouse.move(box.x + stopLine.box.x + 8, box.y + stopLine.box.y + stopLine.box.h / 2 + 30, { steps: 6 }); await p.mouse.up(); await wait(700);
+    const ch = await sent(['change']);
+    const prices = [...new Set(ch.map(m => m.price))];
+    check(ch.length === 4 && prices.length === 1, 'a drag of the group stop: one change per member, all to the same price: ' + JSON.stringify(ch.map(m => m.id + ' ' + m.price)));
+    await wait(2000);
+    const note2 = await p.$eval(tk('note'), e => e.textContent).catch(() => '');
+    check(/^Group stops to [0-9.,]+: SIM-A, SIM-B, SIM-C, SIM-D moved\.$/.test(note2), 'each member\'s result said: ' + note2);
+    await p.screenshot({ path: path.join(out, 'group-ticket-moved-1366.png') });
+  }
   /* Close: every member's own position */
   await clearSent();
   await p.click(tk('flattenBtn')); await wait(500);
   const fl = (await sent(['flatten'])).map(m => m.account + ' ' + m.root).sort();
-  check(JSON.stringify(fl) === JSON.stringify(['SIM-A NQ', 'SIM-B NQ', 'SIM-C NQ', 'SIM-D NQ']), 'Close on the group: a Flatten for every member: ' + JSON.stringify(fl));
+  check(JSON.stringify(fl) === JSON.stringify(['SIM-A MNQ', 'SIM-B MNQ', 'SIM-C MNQ', 'SIM-D MNQ']), 'Close on the group: a Flatten for every member: ' + JSON.stringify(fl));
   await ctx.close();
 } catch (e) { fail('threw: ' + (e && e.stack || e)); }
 finally { await browser.close(); bridge.kill(); }

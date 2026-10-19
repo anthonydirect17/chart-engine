@@ -116,8 +116,8 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   // 1.13.0: a planned line's drag, x and "+SL" / "+TP" go through ready() too (the gates of a leg's drag)
   assert.match(CORE, /function planTarget\(entryId\) \{\n\s+if \(!ready\(\)\) \{ env\.changed\(\); return null; \}\n\s+if \(notShown\(entryId\)\) return null;/);
   for (const f of ['planMove', 'planRemove', 'planAdd']) assert.match(CORE.slice(CORE.indexOf('function ' + f + '(')), /^\s+const o = planTarget\(/m, f);
-  assert.match(CORE, /function moveOrder\(id, price\) \{\n\s+if \(!ready\(\)\) \{ env\.changed\(\); return; \}\n\s+if \(notShown\(id\)\) return;/);
-  assert.match(CORE, /function cancelOrder\(id\) \{\n\s+if \(!ready\(\)\) return;\n\s+if \(notShown\(id\)\) return;/);
+  assert.match(CORE, /function moveOrder\(id, price\) \{\n(?:\s+if \(isGroupLine\(id\)\) \{ groupMove\(id, price\); return; \}[^\n]*\n)?\s+if \(!ready\(\)\) \{ env\.changed\(\); return; \}\n\s+if \(notShown\(id\)\) return;/);
+  assert.match(CORE, /function cancelOrder\(id\) \{\n(?:\s+if \(isGroupLine\(id\)\) \{ groupCancel\(id\); return; \}[^\n]*\n)?\s+if \(!ready\(\)\) return;\n\s+if \(notShown\(id\)\) return;/);
   assert.match(CORE, /const notShown = id => \{ const o = TR\.orders\.get\(id\); if \(o && o\.account === TR\.account\) return false;/);
   // the workspace sends only through the same core: its ticket's buttons (TradeCore.wire), chart clicks, keys, forwards
   assert.match(WS, /const core = TC\.create\(\{/);
