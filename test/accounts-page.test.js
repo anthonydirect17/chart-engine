@@ -150,6 +150,19 @@ test('The Desk\'s rows (GET /api/chart-accounts): numbers above 0 or null, the o
 });
 
 /* ---------------- the copier's rows */
+test('1.32.1 (WORK 2026-10-19): the Leader picker\'s none sends leader null, and the page shows none once ChartBridge says so', () => {
+  assert.deepEqual(AC.leaderSet(''), { leader: null }, 'none: null (before 1.32.1 nothing was sent, so the picker snapped back)');
+  assert.deepEqual(AC.leaderSet(undefined), { leader: null });
+  assert.deepEqual(AC.leaderSet('Sim101'), { leader: 'Sim101' });
+  const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'accounts.js'), 'utf8');
+  assert.match(src, /if \(a === 'leader'\) \{[^}]*F\.copierSet\(AC\.leaderSet\(want\)\);/, 'the picker sends through leaderSet, none included');
+  assert.doesNotMatch(src, /if \(el\.value\) F\.copierSet\(\{ leader: el\.value \}\)/, 'never only when a name is picked');
+  // a re-render with ChartBridge's copier message after none: no leader, so every account is a follower row and the picker is none
+  const rows = AC.followerRows([{ name: 'Sim101', sim: true }, { name: 'EVAL-A', sim: false }], { leader: null, followers: [] });
+  assert.deepEqual(rows.map(r => r.account), ['EVAL-A', 'Sim101']);
+  assert.match(src, /leader = C\.leader \? C\.leader\.account : ''/, 'the picker reads none from leader null');
+});
+
 test('Copier rows (Anthony 2026-10-07: no Sim lock): every account but the leader, Sim or LIVE, each marked; a saved follower\'s settings, else off', () => {
   const accounts = [{ name: 'EVAL-A', sim: false }, { name: 'SIM-F1', sim: true, connection: 'connected' }, { name: 'SIM-F2', sim: true }, { name: 'Sim101', sim: true }, { name: 'FUNDED-B', sim: false, state: 'archived' }];
   const copier = { leader: { account: 'Sim101' }, followers: [{ account: 'SIM-F2', sim: true, on: true, qty: 3, size: 'mini', lossLimit: 500, root: 'NQ', skipped: 'position limit', slippageTicks: 2 },

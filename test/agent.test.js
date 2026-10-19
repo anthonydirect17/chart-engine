@@ -478,9 +478,9 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.32.0');   // 1.32.0: the account type picker as Firm, Plan and Size (page only); 1.31.0: the audit fixes (the Accounts tab after a drop, the kill switch's time; ChartBridge 0.6.3, page works with 0.6.2); 1.30.0: account types from The Desk's ledger and the Settings cleanup (page only); 1.29.1: one missed PC helper poll no longer flips the Agent tab (page only); 1.29.0: group stand-downs and league seats (needs ChartBridge 0.6.2); 1.28.0: the heroes-on-duty board and a group's default hero (needs ChartBridge 0.6.1); 1.27.0: group trading (needs ChartBridge 0.6.0); 1.26.0: prop groups and real account state (needs ChartBridge 0.5.8); 1.25.0: the plan id, None in every tab (needs ChartBridge 0.5.7); 1.24.0: the feed delay split (ChartBridge 0.5.6's clock check); 1.23.1: Layout 5 polish (Change the rules in the Rules header); 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.22.0 removed the single chart page; 1.21.0 needs ChartBridge 0.5.2
-  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.32\.0'/);
-  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.32\.0/);
+  assert.equal(JSON.parse(read('package.json')).version, '1.32.1');   // 1.32.1: the copier's leader back to none and Merge on an off follower (ChartBridge 0.6.4, page works with 0.6.2); 1.32.0: the account type picker as Firm, Plan and Size (page only); 1.31.0: the audit fixes (the Accounts tab after a drop, the kill switch's time; ChartBridge 0.6.3, page works with 0.6.2); 1.30.0: account types from The Desk's ledger and the Settings cleanup (page only); 1.29.1: one missed PC helper poll no longer flips the Agent tab (page only); 1.29.0: group stand-downs and league seats (needs ChartBridge 0.6.2); 1.28.0: the heroes-on-duty board and a group's default hero (needs ChartBridge 0.6.1); 1.27.0: group trading (needs ChartBridge 0.6.0); 1.26.0: prop groups and real account state (needs ChartBridge 0.5.8); 1.25.0: the plan id, None in every tab (needs ChartBridge 0.5.7); 1.24.0: the feed delay split (ChartBridge 0.5.6's clock check); 1.23.1: Layout 5 polish (Change the rules in the Rules header); 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.22.0 removed the single chart page; 1.21.0 needs ChartBridge 0.5.2
+  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.32\.1'/);
+  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.32\.1/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent-grid.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md', 'docs/MOTION.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 
@@ -490,6 +490,8 @@ test('ChartBridge 0.5.0 as built (agent-channel 4d4a81f): every status line nami
   const lines = {
     lost: 'agent demo had an open trade on SIM-AG1 MNQ and its legs are gone; ChartBridge no longer treats the position as the agent\'s: flatten or protect it by hand',
     noRecord: 'agent demo holds 1 on SIM-AG1 MNQ with no trade record (ChartBridge restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader',
+    noRecordRunning: 'agent demo holds 1 on SIM-AG1 MNQ with no trade record (opened while ChartBridge was running); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader',   // 0.6.4
+    noRecordCleared: 'agent demo: the no-trade-record error on SIM-AG1 MNQ is cleared: ChartBridge follows its trade 1a2b3c4d there now',   // 0.6.4, an info line
     noLonger: 'SIM-AG1 MNQ is no longer agent demo\'s: ChartBridge did not close it',
     rest: 'SIM-AG1 MNQ: agent demo\'s 1 closed; the rest (2) is not agent demo\'s: ChartBridge did not close it',
     flatTime: 'demo flattened at 15:55 by its rules',

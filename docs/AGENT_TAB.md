@@ -522,7 +522,12 @@ Where the contract or the brief left a detail open, the safest simple choice, wr
       the rest is not the agent's: the lost-trade error "agent <id> had an open trade on <account> <root> and its legs are
       gone; ChartBridge no longer treats the position as the agent's: flatten or protect it by hand" every 60 s until that
       pair is flat (and "agent <id> holds N on <account> <root> with no trade record (ChartBridge restarted); only its own
-      stop protects it: ..." for a record lost over a restart, `/test/agent-lose-trade?restart=1`).
+      stop protects it: ..." for a record lost over a restart, `/test/agent-lose-trade?restart=1`, raised by the every-second
+      check once that has held 5 s). 0.6.4: the same check raises "... with no trade record (opened while ChartBridge was
+      running) ..." for a position its own stop and target alone protect with no record that was not there at the start,
+      only once that has held on every check for 5 s (a fresh fill looks the same until its execution opens the record), N
+      being what the account holds; it ends once a trade record follows there or the pair is flat, with one `info` line
+      "agent <id>: the no-trade-record error on <account> <root> is cleared: ...".
     - The kill switch on: the agent's unfilled entries are cancelled (each `answer` `expired`), its open proposals end
       `not answered`, a position keeps its stop and target, and the pages get a `status` `warn`. Mode changes: leaving
       copilot ends the open proposals `not answered`; leaving auto cancels the unfilled entries; the agent gets a new

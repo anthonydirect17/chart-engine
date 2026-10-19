@@ -3518,13 +3518,16 @@ public static class AgentHarness
             Advance(6000);
             string say = "agent manrae holds 1 on SIM-E MNQ with no trade record (ChartBridge restarted); only its own stop protects it";
             Check(IsLive(rs) && !sime.Calls.Skip(c0).Any() && ChartBridgeAgents.EntryCheck("page", sime, "MNQ") != null, "D1: after the restart its stop stays and the pair is still the agent's (the owner lock holds)");
-            Check(page.Skip(s0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(say)) == 1, "D1: the lost-trade error at once");
+            // 0.6.4: the error once the state has held 5 s on every pass; its flatten job (17:00, the market shut) already runs on MNQ,
+            // so it is held (logged, not sent) as in 0.5.7; the position was there when this run began watching: "ChartBridge restarted"
+            Check(!Any(page, s0, say) && Logged(say + ": ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader (held while ChartBridge's own flatten runs on MNQ)"),
+                  "D1 (0.6.4): the lost-trade error after 5 s, held while its flatten job runs, and it says ChartBridge restarted");
             int s1 = N(page);
             Advance(61000);
             // 0.5.7: its flatten job waits for the open on MNQ: the lost-trade error is held (not repeated beside the job's own
             // NOT FLAT error every 60 s), never dropped
-            Check(page.Skip(s0).Count(x => x.Contains(say)) == 2 && page.Skip(s1).Count(x => x.Contains("\"level\":\"error\"") && x.Contains("NOT FLAT") && x.Contains("MNQ on SIM-E still shows 1")) >= 1,
-                  "D1 (0.5.7, review of #47): its flatten job waits on MNQ: the lost-trade error is held 30 s at most, then every 60 s as before, beside the job's NOT FLAT error");
+            Check(page.Skip(s0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(say)) == 1 && page.Skip(s1).Count(x => x.Contains("\"level\":\"error\"") && x.Contains("NOT FLAT") && x.Contains("MNQ on SIM-E still shows 1")) >= 1,
+                  "D1 (0.5.7, review of #47): its flatten job waits on MNQ: the lost-trade error is held 30 s at most, then raised (every 60 s as before), beside the job's NOT FLAT error");
             et = new DateTime(2026, 10, 12, 18, 0, 30);
             for (int q = 0; q < 6; q++) { Last2(); Advance(1000); }
             Check(!IsLive(rs) && sime.Calls.Skip(c0).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")), "D1: at the open the flatten cancels that stop and closes the 1");
@@ -3552,6 +3555,75 @@ public static class AgentHarness
             for (int q = 0; q < 3; q++) { Last2(); Advance(1000); }
             Check(!IsLive(rs), "D1 (lead's default): flat, that stop could only open a position: it is cancelled");
             et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // 0.6.4 (WORK 2026-10-19, the false alarm): the entry fills, NinjaTrader shows it filled with its legs working and the fill
+        // ahead of the position, and a pass runs before the execution event that opens the trade record (26 ms later at WORK):
+        // no lost-trade error, then or later
+        Part("0.6.4 race", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "0.6.4 race: an entry was placed: " + AgentReject()); return; }
+            Advance(3000);   // it works a while first (39 s at WORK)
+            int s0 = N(page);
+            e.OrderId = "NT" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            e.Filled = 1; e.AverageFillPrice = 24999; e.OrderState = OrderState.Filled; Update(e);   // the order event: its legs go on
+            Tick();   // a pass in between: the entry gone, only its legs working, the account long 1 by the effective reading, no record
+            clock += 26;
+            Deliver(sime.Name, mnq, MarketPosition.Long, 1, 24999, e.OrderId);   // the execution: the trade record opens
+            SetPos(sime, mnq, 1);
+            Advance(6000);
+            Check(Legs(sime, e).Count == 2 && Last(page, "agent").Contains("\"position\":{\"root\":\"MNQ\""), "0.6.4 race setup: its legs work and the trade is followed");
+            Check(!Any(page, s0, "with no trade record"), "0.6.4 race: a pass between the fill and its trade record raises no lost-trade error");
+            Advance(61000);
+            Check(!Any(page, s0, "with no trade record") && !Any(page, s0, "no-trade-record"), "0.6.4 race: nor a minute later");
+            Close(sime, mnq, 25003);
+            Advance(1000);
+        });
+
+        // 0.6.4: the execution event is late for more than 5 s (the poll finds it later): the error goes, naming what the account
+        // holds by the effective reading (the listed position still 0) and no restart (the position opened while ChartBridge ran);
+        // once the trade record follows it ends, said once
+        Part("0.6.4 clear", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "0.6.4 clear: an entry was placed: " + AgentReject()); return; }
+            int s0 = N(page);
+            e.OrderId = "NT" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            e.Filled = 1; e.AverageFillPrice = 24999; e.OrderState = OrderState.Filled; Update(e);
+            Advance(3000);
+            Check(!Any(page, s0, "with no trade record"), "0.6.4: 3 s with no trade record: no error yet");
+            Advance(3000);
+            string say = "agent manrae holds 1 on SIM-E MNQ with no trade record (opened while ChartBridge was running); only its own stop protects it";
+            Check(PosOf(sime, mnq) == 0 && page.Skip(s0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(say)) == 1,
+                  "0.6.4: after 5 s on every pass the error, holds 1 (the effective reading; NinjaTrader's listed position still 0) and no restart: " + Last(page, "status"));
+            SetPos(sime, mnq, 1);
+            int s1 = N(page);
+            Deliver(sime.Name, mnq, MarketPosition.Long, 1, 24999, e.OrderId);   // the execution at last: the trade record opens
+            Advance(1000);
+            string cleared = "agent manrae: the no-trade-record error on SIM-E MNQ is cleared: ChartBridge follows its trade ";
+            Check(page.Skip(s1).Count(x => x.Contains("\"level\":\"info\"") && x.Contains(cleared)) == 1, "0.6.4: the trade record follows: the error is cleared, said once as info");
+            Advance(61000);
+            Check(!Any(page, s1, "with no trade record") && page.Skip(s1).Count(x => x.Contains(cleared)) == 1, "0.6.4: no repeat a minute later, and the clear said only once");
+            Close(sime, mnq, 25003);
+            Advance(1000);
+
+            // the same error, then the pair flat (no record ever): cleared, said once
+            e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "0.6.4 clear flat: an entry was placed: " + AgentReject()); return; }
+            e.OrderId = "NT" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            e.Filled = 1; e.AverageFillPrice = 24999; e.OrderState = OrderState.Filled; Update(e);
+            SetPos(sime, mnq, 1);
+            int s2 = N(page);
+            Advance(6000);
+            Check(page.Skip(s2).Count(x => x.Contains("\"level\":\"error\"") && x.Contains(say)) == 1, "0.6.4 clear flat: the error (no record)");
+            Settle(sime);
+            Advance(2000);
+            Check(page.Skip(s2).Count(x => x.Contains("\"level\":\"info\"") && x.Contains("agent manrae: the no-trade-record error on SIM-E MNQ is cleared: the pair is flat")) == 1, "0.6.4: the pair flat: cleared, said once");
+            Advance(61000);
+            Check(page.Skip(s2).Count(x => x.Contains(say)) == 1, "0.6.4: flat: never repeated");
         });
 
         // D3: the trade check gates only the cancels; a close that cannot go in open hours puts the stop back at once

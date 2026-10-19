@@ -875,13 +875,37 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Integration (lead's default): Merge is refused on a copier follower while the copier is on. The copier closes, shrinks and
         // moves a follower's orders on its own (its "flatten this follower" goes to NinjaTrader directly and would not end a swap),
-        // so the copier and Merge never act on the same account. Any listed follower, on or off: an off follower may still hold
-        // a copier position whose exits and stop moves the copier follows.
+        // so the copier and Merge never act on the same account. 0.6.4 (WORK 2026-10-19: the page lists every account as a follower
+        // row, so Merge was refused on every account): a follower that is ON, or one that is off while the copier still follows
+        // something of its own there (a copied position, a copier entry, stop or close that may fill, a reduce or a wait). An off
+        // follower with nothing of the copier on it is the account's own: Merge goes.
         public static string MergeRefusal(Account account)
         {
             if (!Enabled || account == null) return null;
-            lock (Lk) { if (FollowerNamed(account.Name) == null) return null; }
-            return account.Name + " is a copier follower: Merge is refused on it while the copier is on (the copier manages its orders).";
+            bool on, held;
+            lock (Lk)
+            {
+                Follower f = FollowerNamed(account.Name);
+                if (f == null) return null;
+                on = f.On;
+                held = !on && CopierOnAccountLocked(account.Name);
+            }
+            if (on) return account.Name + " is a copier follower: Merge is refused on it while the copier is on (the copier manages its orders).";
+            if (held) return account.Name + " is a copier follower (off) that still holds a copier position or orders: Merge is refused on it until the copier's part there is flat and done (the copier manages those orders).";
+            return null;
+        }
+
+        // 0.6.4, under Lk: anything the copier still follows on that account (any contract).
+        private static bool CopierOnAccountLocked(string name)
+        {
+            Func<Account, bool> me = a => a != null && a.Name != null && a.Name.Equals(name, StringComparison.OrdinalIgnoreCase);
+            Func<Order, bool> live = o => o != null && !ChartBridgeOrders.CopierDone(o);
+            return Copies.Values.Any(c => me(c.A)) ||
+                   FEntries.Values.Any(fe => me(fe.A) && live(fe.Order)) ||
+                   FStops.Keys.Any(o => o != null && me(o.Account) && live(o)) ||
+                   Placed.Keys.Any(o => o != null && me(o.Account) && live(o)) ||
+                   Reduces.Any(r => r.C != null && me(r.C.A)) ||
+                   Waits.Any(w => w.Fe != null && me(w.Fe.A));
         }
 
         // Integration (lead's default): with the copier on, the bot never trades the leader's account. Only the page's entries
