@@ -11,6 +11,17 @@
 //   (version + 1; a checked type goes back to not_checked). Made-up firm values and SIM-A style accounts only.
 import http from 'node:http';
 
+/* Chart 1.32.0: a few more firms and plans for the type picker (Firm, Plan, Size), named as The Desk names its types ("<Plan>
+   <Size>K <rest>"). Real firm names, made-up values and ids (sample data only); each row takes the caller's defaults for the rest. */
+export function sampleFirmTypes() {
+  const t = (id, firm, name, size, o) => Object.assign({ id, firm, name, account_size: size, drawdown: Math.round(size * 0.04), drawdown_type: 'eod', lock_at: null, daily_loss: null, notes: 'sample values for the test' }, o || {});
+  return [t('sample-topstep-tc-100k', 'Topstep', 'Trading Combine 100K', 100000), t('sample-topstep-tc-50k', 'Topstep', 'Trading Combine 50K', 50000),
+    t('sample-topstep-xfa-50k', 'Topstep', 'Express Funded 50K', 50000, { account_type: 'funded' }),
+    t('sample-bulenox-m25-f', 'Bulenox', 'Master 25K Funded', 25000, { account_type: 'funded' }), t('sample-bulenox-m25-o2', 'Bulenox', 'Master 25K Option 2 EOD', 25000),
+    t('sample-bulenox-legacy', 'Bulenox', 'Legacy plan', 50000),
+    t('sample-fundednext-d50', 'FundedNext', 'Direct 50K Account', 50000, { account_type: 'funded', drawdown_type: 'static' })];
+}
+
 export const KEY_IDS = ['buy', 'sell', 'be', 'close', 'flattenAll', 'merge', 'maximize', 'accept', 'reject'];
 const exact = (o, keys) => !!o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).length === keys.length && keys.every(k => Object.prototype.hasOwnProperty.call(o, k));
 const COMBO = /^(Ctrl\+)?(Alt\+)?(Shift\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Num[0-9]|Num[-+*/.]|[-=[\];',./\\`])$/;

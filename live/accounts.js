@@ -694,7 +694,7 @@ function mount(v, host) {
     '<p class="ac-foot apg-foot" data-foot></p></div>';
   const q = sel => v.body.querySelector(sel);
   const listEl = q('[data-list]'), footEl = q('[data-foot]');
-  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, apply: '', typePending: new Map() };
+  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, apply: '', typePending: new Map(), typeBrowse: new Map() };
   q('.apg-tabs').addEventListener('click', e => {
     const b = e.target.closest('button[data-tab]'); if (!b) return;
     b.blur();
@@ -751,8 +751,19 @@ function mount(v, host) {
       if (g) { P.join = { account: name, group: want, prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)) }; render(); const box = listEl.querySelector('[data-act="join-high"]'); if (box) { box.focus(); box.select(); } }
       return;
     }
-    if (a === 'acct-type') {   // 1.30.0: the account's type, saved on The Desk; shown as The Desk says once it answers
-      const name = el.dataset.id, want = el.value;
+    if (a === 'acct-firm' || a === 'acct-plan' || a === 'acct-type') {   // 1.30.0: the account's type, saved on The Desk; shown as The Desk says once it answers
+      /* 1.32.0: Firm, then Plan, then Size; Firm and Plan only move the picker, the last select (or Not set) sends */
+      const name = el.dataset.id, tree = typeTreeNow();
+      const r = GroupsCore.cascadePick(tree, pickState(name, tree), a === 'acct-firm' ? 'firm' : a === 'acct-plan' ? 'plan' : 'type', el.value);
+      if (r.send === undefined) {
+        if (r.state.firm) P.typeBrowse.set(name, { firm: r.state.firm, plan: r.state.plan }); else P.typeBrowse.delete(name);
+        render();
+        const next = listEl.querySelector(`select[data-act="${a === 'acct-firm' ? (r.state.plan ? 'acct-type' : 'acct-plan') : 'acct-type'}"][data-id="${CSS.escape(name)}"]`);
+        if (next && !next.disabled && a !== 'acct-type') next.focus();
+        return;
+      }
+      P.typeBrowse.delete(name);
+      const want = r.send || '';
       P.typePending.set(name, { v: want, after: null }); render();
       F.setAccountType(name, want || null).then(r => {
         /* saved: shown as picked until The Desk's rows are read again (no flash of the old value); refused: back at once */
@@ -785,6 +796,15 @@ function mount(v, host) {
 
   /* 1.30.0: the account's type from The Desk's list (its current version), or null */
   const typeFor = name => { const at = F.typeOf(name); return at && S.types ? S.types.find(t => t.id === at.id) || null : null; };
+  /* 1.32.0: the picker's tree (firms of the accounts with a type on The Desk first) and where an account's picker stands: its
+     type (or the one just picked, until The Desk's rows say it), moved by Firm and Plan without sending */
+  const typeTreeNow = () => GroupsCore.typeTree(S.types || [], GroupsCore.usedFirms([...S.desk.values()]));
+  const typeVal = name => { const at = F.typeOf(name), pd = P.typePending.get(name); return pd ? pd.v : at ? at.id : ''; };
+  const goneOf = name => { const at = F.typeOf(name); return at && !(S.types || []).some(t => t.id === at.id) ? { firm: at.firm, name: at.name } : null; };
+  const pickState = (name, tree) => {
+    const id = typeVal(name), b = P.typeBrowse.get(name);
+    return Object.assign(GroupsCore.cascadeStart(tree, id, goneOf(name)), b ? { firm: b.firm, plan: b.plan } : {}, { id });
+  };
   /* the prices of the instruments with an open position (unrealized P&L): watched while this panel shows */
   function watchPositions(roots) {
     for (const r of roots) if (!P.offs.has(r)) P.offs.set(r, host.watchQuote(r));
@@ -833,18 +853,25 @@ function mount(v, host) {
       /* 1.30.0: the Account type column (The Desk's ledger), once its list is known (read now, or this browser's copy) */
       const typesOn = grpOn && !!S.types, canType = typesOn && S.typesState === 'ok' && S.deskState === 'ok';
       const links = typesOn ? GroupsCore.readLinks(F.store) : {};
-      const typeOpts = typesOn ? '<option value="">Not set</option>' + S.types.map(t => `<option value="${esc(t.id)}">${esc(GroupsCore.typeLabel(t))}</option>`).join('') : '';
+      const tree = typesOn ? typeTreeNow() : [];
+      const opts = list => list.map(o => `<option value="${esc(o.value)}" title="${esc(o.title)}">${esc(o.label)}</option>`).join('');
       const typeCell = a => {
         if (!typesOn) return '';
         if (!grpKnown) return c(NK, 'mut apg-nk', 'Not connected to ChartBridge: the account\'s group, type and limits are not known now');
         const pd = P.typePending.get(a.name);
         if (pd && pd.after !== null && S.deskAt > pd.after) P.typePending.delete(a.name);   // The Desk's rows read since the save
-        const at = F.typeOf(a.name), pend = P.typePending.has(a.name), val = pend ? P.typePending.get(a.name).v : at ? at.id : '';
-        const gone = at && !S.types.some(t => t.id === at.id) ? `<option value="${esc(at.id)}">${esc((at.firm ? at.firm + ' ' : '') + at.name + ' (not on The Desk\'s list now)')}</option>` : '';
+        const at = F.typeOf(a.name), pend = P.typePending.has(a.name), val = typeVal(a.name);
+        if (!canType) P.typeBrowse.delete(a.name);   // read only: the picker shows the saved type
+        const vw = GroupsCore.cascadeView(tree, pickState(a.name, tree), goneOf(a.name));
         const t = typeFor(a.name), canApply = !a.group && !!t && canGroup;
         const off = a.group && links[a.group] && at && at.id !== links[a.group].id;
-        const cur = S.types.find(x => x.id === val), tip = (cur ? GroupsCore.typeLabel(cur) + '. ' : '') + (S.typesState === 'ok' ? 'The account\'s type on The Desk\'s ledger (saved on The Desk)' : 'The Desk is not reachable: the list as of ' + GroupsCore.asOfText(S.typesAsOf) + '; the type cannot be changed now');
-        return `<span role="cell" class="apg-type"><select class="ws-sel apg-sel apg-tsel${off ? ' apg-toff' : ''}" data-act="acct-type" data-id="${esc(a.name)}" ${pr({ value: val, disabled: !canType || pend })} aria-label="Account type for ${esc(a.name)}" title="${esc(tip)}">${typeOpts}${gone}</select>` +
+        const cur = S.types.find(x => x.id === val), g = goneOf(a.name);
+        const tip = (cur ? GroupsCore.typeLabel(cur) + '. ' : g && val === at.id ? (g.firm ? g.firm + ' ' : '') + g.name + ' (not on The Desk\'s list now). ' : '') + (S.typesState === 'ok' ? 'The account\'s type on The Desk\'s ledger (saved on The Desk): pick the firm, then the plan, then the size; only the size (or Not set) saves' : 'The Desk is not reachable: the list as of ' + GroupsCore.asOfText(S.typesAsOf) + '; the type cannot be changed now');
+        const ro = !canType || pend, sel = (act, cls, part, v, label) => `<select class="ws-sel apg-sel apg-tpick ${cls}${off ? ' apg-toff' : ''}" data-act="${act}" data-id="${esc(a.name)}" ${pr({ value: v.value, disabled: ro || (act !== 'acct-firm' && !vw.firm.value) || (act === 'acct-type' && !vw.plan.value) })} aria-label="${label} for ${esc(a.name)}" title="${esc(part ? part + '. ' + tip : tip)}">${opts(v.options)}</select>`;
+        const optOf = (v) => v.options.find(o => o.value === v.value);
+        return `<span role="cell" class="apg-type">` + sel('acct-firm', 'apg-tfirm', vw.firm.value ? 'Firm: ' + vw.firm.value : '', vw.firm, 'Account type firm') +
+          sel('acct-plan', 'apg-tplan', vw.plan.value ? 'Plan: ' + vw.plan.value : '', vw.plan, 'Account type plan') +
+          sel('acct-type', 'apg-tsel', vw.type.value && optOf(vw.type) && !cur ? optOf(vw.type).title : '', vw.type, 'Account type size and stage') +
           (canApply ? `<button type="button" class="ac-btn apg-apply" data-act="apply-type" data-id="${esc(a.name)}" aria-label="Apply its rules to ${esc(a.name)}" title="Apply its rules: My floor and My daily from ${esc(GroupsCore.typeLabel(t))} (asks first)">Apply</button>` : '') + '</span>';
       };
       /* 1.30.0: "Apply its rules" asks first, a row of its own (never applied silently) */

@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.32.0 (2026-10-19): the account type picker as Firm, Plan and Size
+
+Page only, no recompile (ChartBridge 0.6.2 as for 1.31.0; `minChartBridge` stays 0.6.2). The Desk's list of account types now holds
+about 208 types from 9 firms, and one flat dropdown of them was not usable (Anthony 2026-10-19: "far to many accounts for just a drop
+down"). He chose Firm > Plan > Size, with "firms I actually trade first".
+
+- **The picker's pure parts (live/groups.js GroupsCore).** `typeParts` splits a type's name as The Desk writes it ("<Plan> <Size>K
+  <rest>", e.g. "LucidFlex 50K Eval", "Trading Combine 50K", "Master 25K Option 2 EOD"): the plan is the text before the first
+  "<number>K" token; a name with no size token (or nothing before it) is plan "Other" and shows its whole name. `typeTree` sorts:
+  the firms in use first (the firms of the accounts whose type is set on The Desk, from the GET /api/chart-accounts rows the page
+  already reads), then the other firms A to Z; within a firm the plans A to Z; within a plan by the size number, then Eval,
+  Challenge or Test before Funded, Qualified, Sim-Funded or Account (any other words between them), then the rest A to Z.
+  `cascadeView` gives the three selects' options and `cascadePick` each choice and what it sends.
+- **Accounts tab, Account type.** Three compact selects in the same cell: Firm ("Not set", then the firms), Plan (that firm's plans)
+  and Size (that plan's sizes and stages, "50K Eval", with "(not checked)" until checked). Changing Firm or Plan sends nothing; only
+  the Size select, or "Not set" on the Firm select, sends the PUT /api/accounts/{account}/account-type of 1.30.0. A firm with one plan
+  takes it at once, and going back to the account's own firm shows its own plan and type again. The whole name is in each select's
+  tooltip and each option's. A type no longer on The Desk's list shows where it was, "(not on The Desk's list now)", as before. Read
+  only while The Desk is not reachable, as before; Apply is unchanged. The column is 196 px at 1366 x 768 (it was 128 px) and the
+  Room is no narrower than without the column.
+- **Settings, the rules dialog.** The same three selects in the place of the one Account type select. Choosing the size fills every
+  rule box and the Type as in 1.30.0; "Not set" clears the link; Firm and Plan alone fill nothing and keep the type chosen last for
+  Save. Update opens on the group's type.
+- Tests: `test/account-types.test.js` (the split, the order, the send rules, the selects as data with a type gone, the wiring);
+  `test/fake-desk.mjs` gives `sampleFirmTypes()` (Topstep, Bulenox and FundedNext types, made-up values); `smoke:settings` runs the
+  picker against the fake Desk at 1366 x 768 (the order with a firm in use, nothing sent for Firm and Plan, one PUT for the size, null
+  for Not set, the cell fits, the dialog's fill), screenshot `settings-types-cascade-1366.png` beside the 1.30.0 ones.
+
 ## ChartBridge 0.6.3 and chart 1.31.0 (2026-10-16): the audit fixes for ChartBridge and the chart page
 
 Audit C (the live-only quirks of a laptop: off at the wrong hour, asleep, a power cut, flaky Wi-Fi), all ten findings, approved by
