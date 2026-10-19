@@ -299,7 +299,7 @@ test('fake review 3, 4, 6, 7: mini equivalents, the bot\'s account left out, a s
   assert.equal(f.act(GE('groupPreview'))[0].members[1].size, 1, '30 MNQ is 3 of its 4 minis: 1 NQ left');
   f.desk.positions.set('SIM-B|MNQ', { qty: 40, avgPrice: 25000 });
   [...f.desk.orders.values()].find(o => o.account === 'SIM-B' && o.root === 'MNQ').qty = 40;
-  assert.equal(f.act(GE('groupPreview'))[0].members[1].out, 'it is at its max size (4 minis; it holds or has working 4 in mini equivalents, every instrument)');
+  assert.equal(f.act(GE('groupPreview'))[0].members[1].out, 'it is at its max size (4 minis / 40 micros; it holds or has working 4 in mini equivalents, every instrument)');
   const b = await geDesk({ botAccount: 'SIM-D' });
   assert.equal(b.act(GE('groupPreview'))[0].members[3].out, 'SIM-D is the bot\'s account');
   assert.deepEqual(b.desk.groupsMsg().list[0].tradeOut, [{ account: 'SIM-D', why: 'SIM-D is the bot\'s account' }], 'review 4: named for the page');
@@ -308,4 +308,16 @@ test('fake review 3, 4, 6, 7: mini equivalents, the bot\'s account left out, a s
   assert.equal(pv.stopTicks, 24); assert.equal(pv.members[0].size, 3, 'review 6: 450 / (24 x $5) = 3');
   const c = await geDesk({ config: { trading: true, tradeAccounts: ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'], maxQty: { NQ: 9 }, port: 8765, maxBracketTicks: 50 } });
   assert.equal(c.reject(c.act(GE('groupPreview', { bracket: { stop: 60, target: 0 } }))), 'bracket ticks must be from 0 to 50 (maxBracketTicks in config.txt)', 'review 7');
+});
+
+test('fake re-review 1 and 2: an adding side OCO entry counts, a closing side OCO set is one exit; both max limits, the smaller', async () => {
+  const f = await geDesk();
+  f.desk.positions.set('SIM-B|NQ', { qty: 1, avgPrice: 25000 });
+  f.desk.newOrder({ account: 'SIM-B', root: 'NQ', side: 'sell', kind: 'stop', qty: 1, price: 24990, role: 'entry', oco: 'x1' });
+  f.desk.newOrder({ account: 'SIM-B', root: 'NQ', side: 'sell', kind: 'limit', qty: 1, price: 25040, role: 'entry', oco: 'x1' });
+  assert.equal(f.act(GE('groupPreview'))[0].members[1].size, 2, 'the typed stop and target on the long: one exit');
+  f.desk.newOrder({ account: 'SIM-B', root: 'NQ', side: 'buy', kind: 'limit', qty: 1, price: 24950, role: 'entry', oco: 'y1' });
+  assert.equal(f.act(GE('groupPreview'))[0].members[1].out, 'its open stop risk is not known (a working buy limit 1 NQ has no stop ChartBridge knows)');
+  const { maxMiniEquivalents } = await import('./fake-groups.mjs');
+  assert.equal(maxMiniEquivalents(4, 20), 2); assert.equal(maxMiniEquivalents(4, 0), 4); assert.equal(maxMiniEquivalents(0, 30), 3); assert.equal(maxMiniEquivalents(0, 0), -1);
 });

@@ -1349,7 +1349,7 @@ public static class GroupsHarness
         Check(Seat(pv, "SIM-A").Contains("\"size\":5,") && Seat(pv, "SIM-B").Contains("\"size\":2,"), "GE add: SIM-A long 4: its max 10 less 4 = 6, the cap 9 less 4 = 5; SIM-B long 2: its max 4 less 2 = 2: " + pv);
         Pos(simB, nq, 4); simB.Orders.Last().Quantity = 4;
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "limit", "{\"stop\":4,\"target\":8}", ",\"price\":24990"));
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis; it holds or has working 4 in mini equivalents, every instrument)"), "GE add: SIM-B at its max size sits out: " + Seat(Last("groupPreview"), "SIM-B"));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis / 40 micros; it holds or has working 4 in mini equivalents, every instrument)"), "GE add: SIM-B at its max size sits out: " + Seat(Last("groupPreview"), "SIM-B"));
         // answer 4: the room cap counts ALL the open stop risk on that side: SIM-B room 650 (equity 49650, floor 49000), long 1 NQ with its
         // stop 25 points under the last price ($500): (650 - 500) / $100 = 1, where the room alone would give 2
         Flat();
@@ -1429,7 +1429,7 @@ public static class GroupsHarness
 
         Pos(simB, mnq, 40); simB.Orders.Last().Quantity = 40;
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis; it holds or has working 4 in mini equivalents, every instrument)"), "GE review 3: 40 MNQ is its 4 minis: no NQ: " + Seat(Last("groupPreview"), "SIM-B"));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis / 40 micros; it holds or has working 4 in mini equivalents, every instrument)"), "GE review 3: 40 MNQ is its 4 minis: no NQ: " + Seat(Last("groupPreview"), "SIM-B"));
         Flat();
         // review 6: a strategy's stop-limit ticks size too (20 + 4 = 24 ticks)
         ChartBridgeSwitches.Note("strategies", "On");
@@ -1449,6 +1449,36 @@ public static class GroupsHarness
         Check(Seat(Last("groupPreview"), "SIM-D").Contains("SIM-D is the bot's account") && ChartBridgeGroups.GroupsJson().Contains("\"tradeOut\":[{\"account\":\"SIM-D\",\"why\":\"SIM-D is the bot's account\"}]"),
               "GE review 4: the bot's account sits out, named in the groups message's tradeOut: " + Seat(Last("groupPreview"), "SIM-D"));
         botAcct.SetValue(null, botWas); ChartBridgeSwitches.Note("bot", "off");
+        // re-review 1: an OCO order on the ADDING side counts (a typed buy limit pair while long 1, no stop known: it sits out); a closing
+        // side OCO set (a typed stop and target on the long) is one exit, so the long alone counts
+        Flat();
+        Pos(simB, nq, 1);
+        Manual(simB, nq, OrderAction.Sell, OrderType.StopMarket, 1, "x1", "typed stop").StopPrice = 24990;
+        Manual(simB, nq, OrderAction.Sell, OrderType.Limit, 1, "x1", "typed target").LimitPrice = 25040;
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":2,"), "GE re-review 1: a closing side OCO stop and target are one exit (the long's $200 stop risk, room 1500): 2: " + Seat(Last("groupPreview"), "SIM-B"));
+        Manual(simB, nq, OrderAction.Buy, OrderType.Limit, 1, "y1", "typed entry a"); Manual(simB, nq, OrderAction.Buy, OrderType.StopMarket, 1, "y1", "typed entry b").StopPrice = 25050;
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("its open stop risk is not known (a working buy limit 1 NQ has no stop ChartBridge knows)"), "GE re-review 1: an adding side OCO entry counts (no stop known: it sits out): " + Seat(Last("groupPreview"), "SIM-B"));
+        Flat();
+        // re-review 2: both limits set, the smaller: 4 minis / 20 micros is 2 mini equivalents; holding 2 NQ it is at its max size
+        G("memberRules", MR("SIM-B", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":20")));
+        Pos(simB, nq, 2); Manual(simB, nq, OrderAction.Sell, OrderType.StopMarket, 2, null, "typed stop").StopPrice = 24995;
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis / 20 micros; it holds or has working 2 in mini equivalents, every instrument)"), "GE re-review 2: the smaller of 4 minis and 20 micros: " + Seat(Last("groupPreview"), "SIM-B"));
+        G("memberRules", MR("SIM-B", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":40")));
+        // re-review 3: a page market exit never waits on the group entry lock (an entry does)
+        object gel = typeof(ChartBridgeOrders).GetField("GroupEntryLock", PS).GetValue(null);
+        ManualResetEvent held = new ManualResetEvent(false), release = new ManualResetEvent(false);
+        Thread holder = new Thread(() => { lock (gel) { held.Set(); release.WaitOne(3000); } });
+        holder.Start(); held.WaitOne();
+        int bx = Submits(simB);
+        DateTime t0 = DateTime.UtcNow;
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1"));
+        double waited = (DateTime.UtcNow - t0).TotalMilliseconds;
+        release.Set(); holder.Join();
+        Check(Submits(simB) == bx + 1 && waited < 1000, "GE re-review 3: a market exit went at once while a group entry held its lock (" + waited.ToString("0") + " ms; " + Rejection() + ")");
+        Flat();
         // review 1b: two group entries at once (two windows): one lock from the sizing to the last order; SIM-B's room 250 takes 2 at
         // $100, so the second sees the first's working entries ($200 stop risk) and its sizes changed: refused whole
         Money(simB, 49250, 0, 0); Tick();

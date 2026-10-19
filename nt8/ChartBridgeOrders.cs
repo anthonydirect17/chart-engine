@@ -701,7 +701,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             string planTag, why;
             // 0.6.5 (review 1b): a page entry takes the group entry lock first (GroupEntryLock, then PlaceLock), so a group entry's sizing
             // and its placing never interleave with another entry on a member
-            if (!bot && agent == null) { lock (GroupEntryLock) lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed); }
+            // re-review 3: only entries wait on it: a page market exit (no bracket or strategy, the other side of the position by both
+            // readings, at most the position) never does
+            if (!bot && agent == null && !LooksLikeExit(top, bracketBody, strategyBody)) { lock (GroupEntryLock) lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed); }
             else lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
             if (planTag != null)
             {
@@ -712,6 +714,20 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (err != null) PlanSaveAlarm("the planned stop and target of entry CB#" + planTag + " could not be saved (" + err + ")");
             }
             return why;
+        }
+
+        private static bool LooksLikeExit(string top, string bracketBody, string strategyBody)
+        {
+            if (bracketBody != null || strategyBody != null || Str(top, "kind") != "market") return false;
+            int q;
+            if (Int(top, "qty", out q) != 1 || q < 1) return false;
+            string name = Str(top, "account");
+            Instrument inst = ChartBridgeServer.InstrumentFor((Str(top, "root") ?? "").ToUpperInvariant());
+            Account a = null;
+            lock (Account.All) foreach (Account x in Account.All) if (x.Name != null && name != null && x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { a = x; break; }
+            if (a == null || inst == null) return false;
+            int pn = SignedPosition(a, inst), pe = EffectivePosition(a, inst), along = Str(top, "side") == "buy" ? -1 : 1;
+            return pn * along > 0 && pe * along > 0 && q <= Math.Min(Math.Abs(pn), Math.Abs(pe));
         }
 
         private static string PlaceOrderLocked(string top, string bracketBody, string cid, string strategyBody, bool bot, string agent, string agentPlan, out string planTag, out Order placed)

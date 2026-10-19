@@ -185,7 +185,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Review 3: the mini equivalents of a root (10 micros = 1 mini).
         public static double MiniEquivalent(string root) { return MicroRoots.Contains(root ?? "") ? 0.1 : 1; }
         // Review 3: the max size in mini equivalents (maxMinis; else maxMicros / 10 when only micros are set; -1 none).
-        public static double MaxMiniEquivalents(int maxMinis, int maxMicros) { return maxMinis > 0 ? maxMinis : maxMicros > 0 ? maxMicros / 10.0 : -1; }
+        public static double MaxMiniEquivalents(int maxMinis, int maxMicros) { return maxMinis > 0 && maxMicros > 0 ? Math.Min(maxMinis, maxMicros / 10.0) : maxMinis > 0 ? maxMinis : maxMicros > 0 ? maxMicros / 10.0 : -1; }   // re-review 2: both set: the smaller
 
         // Answer 4 and review 1 and 5: what an account holds and has working, every instrument, both sides. risk: the loss if every
         // position is stopped at its working stops (each contract month from its own last price; the farthest stops first, up to the
@@ -232,16 +232,27 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // the working entries: ChartBridge's legs, merged legs and an agent's flat or protect are never entries; an order on the
                 // closing side of a position counts as its exit up to the position (its stop risk is the position's, above)
                 int exitLeftBuy = heldS, exitLeftSell = heldL;
-                foreach (Order o in on)
+                List<Order> cand = on.Where(o => { string nm = o.Name ?? ""; return !GroupNotEntryRx.IsMatch(nm) && !AgentMarketRx.IsMatch(nm) && !IsMergedLeg(o) && Math.Max(0, o.Quantity - o.Filled) > 0; }).ToList();
+                // re-review 1: an OCO set on the CLOSING side of a position (an ATM's or a typed stop and target) is one exit, up to the
+                // position: each set takes the exit allowance once, at its largest; any OCO order on the adding side counts as an entry
+                Dictionary<Order, int> rests = cand.ToDictionary(o => o, o => Math.Max(0, o.Quantity - o.Filled));
+                foreach (IGrouping<string, Order> set in cand.Where(o => !string.IsNullOrEmpty(o.Oco) && (IsBuy(o) ? heldS : heldL) > 0).GroupBy(o => (IsBuy(o) ? "b|" : "s|") + o.Oco))
                 {
-                    string name = o.Name ?? "";
-                    if (GroupNotEntryRx.IsMatch(name) || AgentMarketRx.IsMatch(name) || IsMergedLeg(o)) continue;
-                    if (!string.IsNullOrEmpty(o.Oco) && (pn != 0 || pe != 0)) continue;   // an ATM's or typed OCO legs, protective while a position is held
-                    int rest = Math.Max(0, o.Quantity - o.Filled);
+                    bool sb = set.Key[0] == 'b';
+                    int big = set.Max(o => rests[o]), x = Math.Min(sb ? exitLeftBuy : exitLeftSell, big);
+                    if (sb) exitLeftBuy -= x; else exitLeftSell -= x;
+                    foreach (Order o in set) rests[o] = Math.Max(0, rests[o] - x);
+                }
+                foreach (Order o in cand)
+                {
+                    int rest = rests[o];
                     if (rest == 0) continue;
                     bool buy = IsBuy(o);
-                    if (buy) { int x = Math.Min(exitLeftBuy, rest); exitLeftBuy -= x; rest -= x; }
-                    else { int x = Math.Min(exitLeftSell, rest); exitLeftSell -= x; rest -= x; }
+                    if (string.IsNullOrEmpty(o.Oco))
+                    {
+                        if (buy) { int x = Math.Min(exitLeftBuy, rest); exitLeftBuy -= x; rest -= x; }
+                        else { int x = Math.Min(exitLeftSell, rest); exitLeftSell -= x; rest -= x; }
+                    }
                     if (rest == 0) continue;
                     usedMini += rest * MiniEquivalent(root);
                     Bracket br;
@@ -293,7 +304,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 double? openRisk = OpenStopRisk(a, out openWhy, out usedMini);
                 double maxEq = MaxMiniEquivalents(n.R.MaxMinis, n.R.MaxMicros);
                 int maxLeft = maxEq < 0 ? -1 : Math.Max(0, (int)Math.Floor((maxEq - usedMini) / MiniEquivalent(root) + 1e-9));
-                string maxWords = maxEq < 0 ? "" : (n.R.MaxMinis > 0 ? n.R.MaxMinis + " minis" : n.R.MaxMicros + " micros") + "; it holds or has working " + usedMini.ToString("0.#", CultureInfo.InvariantCulture) + " in mini equivalents, every instrument";
+                string maxWords = maxEq < 0 ? "" : (n.R.MaxMinis > 0 && n.R.MaxMicros > 0 ? n.R.MaxMinis + " minis / " + n.R.MaxMicros + " micros" : n.R.MaxMinis > 0 ? n.R.MaxMinis + " minis" : n.R.MaxMicros + " micros") + "; it holds or has working " + usedMini.ToString("0.#", CultureInfo.InvariantCulture) + " in mini equivalents, every instrument";
                 s.Size = GroupSize(riskPct, n.R.Drawdown, stopTicks, tickValue, maxLeft, maxWords, CapFor(root), "maxQty." + root + " in config.txt", held,
                                    n.RoomFloor, floorWhy, n.R.DailyLoss > 0, n.RoomDaily, dailyWhy, openRisk, openWhy, out budget, out why);
                 s.Budget = budget; s.Out = why; s.Risk = Math.Round(s.Size * stopTicks * tickValue * 100) / 100;
@@ -346,13 +357,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (MaxBracketTicks > 0 && (stopTicks > MaxBracketTicks || targetTicks > MaxBracketTicks))   // review 7: never a size PlaceOrder would refuse
                     return "bracket ticks must be from 0 to " + MaxBracketTicks + " (maxBracketTicks in config.txt)";
             }
-            if (type == "groupOrder") { lock (GroupEntryLock) return GroupPlaceLocked(client, top, bracketBody, cid, strategyBody, gid, root, side, kind, stopTicks); }
-            return GroupPlaceLocked(client, top, bracketBody, cid, strategyBody, gid, root, side, kind, stopTicks, true);
+            string answer, why;
+            if (type == "groupOrder") { lock (GroupEntryLock) why = GroupPlaceLocked(top, bracketBody, cid, strategyBody, gid, root, side, kind, stopTicks, false, out answer); }
+            else why = GroupPlaceLocked(top, bracketBody, cid, strategyBody, gid, root, side, kind, stopTicks, true, out answer);
+            if (answer != null) client.Send(answer);   // re-review 3: sent once the lock is let go
+            return why;
         }
 
         // review 1b: a groupOrder runs whole under GroupEntryLock (its sizing again, the check, every member's order); a preview never places
-        private static string GroupPlaceLocked(ChartBridgeClient client, string top, string bracketBody, string cid, string strategyBody, string gid, string root, string side, string kind, int stopTicks, bool preview = false)
+        private static string GroupPlaceLocked(string top, string bracketBody, string cid, string strategyBody, string gid, string root, string side, string kind, int stopTicks, bool preview, out string answer)
         {
+            answer = null;
             string type = preview ? "groupPreview" : "groupOrder";
             string name, err;
             double risk;
@@ -360,7 +375,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (seats == null) return err;
             string head = "\"cid\":" + (cid == null ? "null" : CbJson.Str(cid)) + ",\"group\":" + CbJson.Str(gid) + ",\"name\":" + CbJson.Str(name) + ",\"root\":" + CbJson.Str(root) + ",\"side\":" + CbJson.Str(side) +
                           ",\"kind\":" + CbJson.Str(kind) + ",\"stopTicks\":" + stopTicks.ToString(CultureInfo.InvariantCulture) + ",\"riskPct\":" + CbJson.Num(risk);
-            if (type == "groupPreview") { client.Send("{\"type\":\"groupPreview\"," + head + ",\"members\":" + SeatsJson(seats) + "}"); return null; }
+            if (type == "groupPreview") { answer = "{\"type\":\"groupPreview\"," + head + ",\"members\":" + SeatsJson(seats) + "}"; return null; }
             string sizes = Str(top, "sizes");
             if (sizes == null || !SizesRx.IsMatch(sizes)) return "sizes must be the sizes confirmed with their accounts, in seat order (\"SIM-A:4,SIM-B:0\")";
             string[][] want = sizes.Split(',').Select(x => x.Split(':')).ToArray();
@@ -386,7 +401,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             int placed = seats.Count(s => s.Size > 0);
             ChartBridgeServer.Log("group entry on " + name + ": " + side + " " + root + " " + kind + (strategyBody != null ? " with a strategy" : "") + ", stop " + stopTicks + " ticks, risk " + risk.ToString("0.##", CultureInfo.InvariantCulture) + "%: " +
                 string.Join("; ", seats.Select(s => s.Account + " " + (s.Size > 0 ? s.Size + " (" + Usd(s.Risk) + ")" : "out: " + s.Out))));
-            client.Send("{\"type\":\"groupPlaced\"," + head + ",\"placed\":" + placed.ToString(CultureInfo.InvariantCulture) + ",\"members\":" + SeatsJson(seats) + "}");
+            answer = "{\"type\":\"groupPlaced\"," + head + ",\"placed\":" + placed.ToString(CultureInfo.InvariantCulture) + ",\"members\":" + SeatsJson(seats) + "}";
             return null;
         }
 

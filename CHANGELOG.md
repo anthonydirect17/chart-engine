@@ -57,6 +57,11 @@ member's own rules and the risk percent (0.6.5)".
   agent's accounts (`tradeOut`) and say so; one id per planned group level; the ticket shows the group's risk in place of QTY and
   each member's position; a member that leaves the group mid trade is named (its own stops stay); the join row shows the seed's
   date ("highest close from The Desk's seed of 2026-10-17").
+- **The re-review of c360a20, fixed.** A closing side OCO set (an ATM's or a typed stop and target) is one exit up to the position;
+  every OCO order on the adding side counts in the open stop risk and the max size. With both max limits set, the smaller (4 minis /
+  20 micros is 2 mini equivalents). A page market exit never waits on the group entry lock (only entries take it), and a group
+  entry's answer is sent after the lock is let go. The ticket redraws for the groups only when membership, tradeOut or a member's
+  positions change.
 - Tests: `test/member-rules.test.js` (The Desk's rules with an account's own numbers winning, the seed floor, the form's checks, the
   messages, the display and the risk dollars, the fake bridge's mirror of the harness, the old ChartBridge's key lists, the source);
   the Mono harness `GroupsHarness.MemberRules` (the migration of a 0.6.4 file, every refusal, three types in one group with each floor,

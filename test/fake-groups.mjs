@@ -26,7 +26,7 @@ const TYPE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
  const MICRO_ROOTS = ['MNQ', 'MES', 'M2K', 'MYM', 'MGC', 'MCL', 'SIL', 'MBT', 'MET', 'M6E'];
 const usd2 = v => '$' + (+v).toLocaleString('en-US', { maximumFractionDigits: 2 });
 export const miniEquivalent = root => (MICRO_ROOTS.includes(root) ? 0.1 : 1);
-export const maxMiniEquivalents = (minis, micros) => (minis > 0 ? minis : micros > 0 ? micros / 10 : -1);
+export const maxMiniEquivalents = (minis, micros) => (minis > 0 && micros > 0 ? Math.min(minis, micros / 10) : minis > 0 ? minis : micros > 0 ? micros / 10 : -1);   // re-review 2: both set: the smaller
 /** 0.6.5: one member's contracts, exactly ChartBridgeOrders.GroupSize (its guards in its order, its words) */
 export function groupSize(o) {
   const budget = Math.round(o.riskPct * o.drawdown) / 100, per = o.stopTicks * o.tickValue;
@@ -240,7 +240,7 @@ export function installGroups(Desk) {
         const pend = [...this.orders.values()].filter(o => o.account === name && o.root === m.root && (o.state === 'working' || o.state === 'partFilled') && o.side === m.side).reduce((t, o) => t + o.qty - (o.filled || 0), 0);
         const held = buy ? pos + pend : -pos + pend, risk = this.groupOpenRisk(name), maxEq = maxMiniEquivalents(r.maxMinis, r.maxMicros);
         const maxLeft = maxEq < 0 ? -1 : Math.max(0, Math.floor((maxEq - risk.usedMini) / miniEquivalent(m.root) + 1e-9));
-        const maxWords = maxEq < 0 ? '' : (r.maxMinis > 0 ? r.maxMinis + ' minis' : r.maxMicros + ' micros') + '; it holds or has working ' + +risk.usedMini.toFixed(1) + ' in mini equivalents, every instrument';
+        const maxWords = maxEq < 0 ? '' : (r.maxMinis > 0 && r.maxMicros > 0 ? r.maxMinis + ' minis / ' + r.maxMicros + ' micros' : r.maxMinis > 0 ? r.maxMinis + ' minis' : r.maxMicros + ' micros') + '; it holds or has working ' + +risk.usedMini.toFixed(1) + ' in mini equivalents, every instrument';
         const z = groupSize({ riskPct: g.riskPct, drawdown: r.drawdown, stopTicks: stop, tickValue, maxLeft, maxWords, cap: this.capFor(m.root), capWords: 'maxQty.' + m.root + ' in config.txt',
           held, roomFloor: f.roomFloor, floorWhy: f.why.roomFloor, hasDaily: r.dailyLoss > 0, roomDaily: f.roomDaily, dailyWhy: f.why.roomDaily, openRisk: risk.openRisk, openWhy: risk.openWhy });
         s.size = z.size; s.budget = z.budget; s.out = z.why; s.risk = Math.round(z.size * stop * tickValue * 100) / 100;
@@ -273,10 +273,15 @@ export function installGroups(Desk) {
           if (left > 0) unknown = unknown || 'it holds ' + held + ' ' + root + ' with no working stop for ' + left + ' of them';
         }
         let exitBuy = heldS, exitSell = heldL;
-        for (const o of on) {
-          if (o.role && o.role !== 'entry') continue;   // legs are never entries
-          let rest = o.qty - (o.filled || 0);
-          if (o.side === 'buy') { const x = Math.min(exitBuy, rest); exitBuy -= x; rest -= x; } else { const x = Math.min(exitSell, rest); exitSell -= x; rest -= x; }
+        const cand = on.filter(o => !(o.role && o.role !== 'entry') && o.qty - (o.filled || 0) > 0), rests = new Map(cand.map(o => [o, o.qty - (o.filled || 0)]));   // legs are never entries
+        /* re-review 1: a closing side OCO set is one exit up to the position (at its largest); adding side OCO orders all count */
+        const sets = new Map();
+        for (const o of cand) if (o.oco && (o.side === 'buy' ? heldS : heldL) > 0) { const k = o.side + '|' + o.oco; if (!sets.has(k)) sets.set(k, []); sets.get(k).push(o); }
+        for (const [k, set] of sets) { const sb = k.startsWith('buy'), big = Math.max(...set.map(o => rests.get(o))), x = Math.min(sb ? exitBuy : exitSell, big); if (sb) exitBuy -= x; else exitSell -= x; for (const o of set) rests.set(o, Math.max(0, rests.get(o) - x)); }
+        for (const o of cand) {
+          let rest = rests.get(o);
+          if (!rest) continue;
+          if (!o.oco) { if (o.side === 'buy') { const x = Math.min(exitBuy, rest); exitBuy -= x; rest -= x; } else { const x = Math.min(exitSell, rest); exitSell -= x; rest -= x; } }
           if (rest <= 0) continue;
           usedMini += rest * miniEquivalent(root);
           const t = o.strategy ? o.strategy.stop + Math.max(0, o.strategy.stopLimit || 0) : o.bracket && o.bracket.stop > 0 ? o.bracket.stop : o.planned && o.planned.stopTicks > 0 ? o.planned.stopTicks : 0;

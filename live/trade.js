@@ -140,7 +140,12 @@ function create(env) {
      stay); account -> group name, until it is flat with nothing working */
   const groupLeft = new Map();
   let groupSeen = new Map();
+  let groupKey = '';
   function groupsChanged() {
+    /* re-review 3: only when a group's members, tradeOut or a member's positions change (not on every accounts update) */
+    const k = JSON.stringify(groupsNow().map(g => [g.id, g.members, outOf(g)])) + '|' + [...TR.positions].filter(([, v]) => v.qty).map(([x, v]) => x + v.qty).join() + '|' + [...groupLeft.keys()].join();
+    if (k === groupKey) return;
+    groupKey = k;
     const now = new Map(groupsNow().map(g => [g.id, new Set(g.members)]));
     for (const [id, was] of groupSeen) {
       const g = groupsNow().find(x => x.id === id), nowSet = now.get(id) || new Set();
