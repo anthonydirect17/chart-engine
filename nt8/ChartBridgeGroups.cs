@@ -1,4 +1,5 @@
-// ChartBridge prop groups and real account state (ChartBridge 0.5.8; 0.6.1: each group's Type and default hero). Part of the
+// ChartBridge prop groups and real account state (ChartBridge 0.5.8; 0.6.1: each group's Type and default hero; 0.6.5: each member's
+// own rules and the group's risk percent). Part of the
 // ChartBridge add-on; install it with the other files. See nt8/PROTOCOL.md, "Prop groups and account state (0.5.8)" and
 // "A group's Type and default hero (0.6.1)".
 //
@@ -210,7 +211,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     public static class ChartBridgeGroups
     {
         public const string Header = "# ChartBridge account groups (written by ChartBridge; do not edit)";
-        public const string Header2 = "# group<TAB>id<TAB>name<TAB>on|off<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>target|-<TAB>size<TAB>lockAt|-<TAB>consistency|-<TAB>eval|funded|-<TAB>hero|-, member<TAB>account<TAB>id, personal<TAB>account<TAB>floor|-<TAB>daily|-";
+        public const string Header2 = "# group<TAB>id<TAB>name<TAB>on|off<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>target|-<TAB>size<TAB>lockAt|-<TAB>consistency|-<TAB>eval|funded|-<TAB>hero|-<TAB>riskPct|-, member<TAB>account<TAB>id, rules<TAB>account<TAB>size<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>lockAt|-<TAB>target|-<TAB>consistency|-<TAB>maxMinis|-<TAB>maxMicros|-<TAB>typeId|-, personal<TAB>account<TAB>floor|-<TAB>daily|-";
         public const string MarksHeader = "# ChartBridge account marks (written by ChartBridge; do not edit)";
         public const string MarksHeader2 = "# mark<TAB>account<TAB>peakEod|-<TAB>peakIntraday|-<TAB>dayStartBalance|-<TAB>session<TAB>dayStartAt (UTC ms)|-<TAB>closeSeen|-<TAB>lastBalance|-<TAB>flat|open|-<TAB>eodMissed|-<TAB>intradayMissed|-";
         public static double GapMs = 10000;   // 0.6.3 (audit C2): no reading of a connected account for this long is a gap ChartBridge did not watch
@@ -238,21 +239,41 @@ namespace NinjaTrader.NinjaScript.AddOns
             // 0.6.1 (SPEC CE-1, Anthony 2026-10-15): the account type (eval, funded, or null: not set) and the default hero (a build
             // name, or null). Shown on the page only: ChartBridge checks their shape, never which hero trades the group.
             public string AccountType, Hero;
-            public string[] Extra = new string[0];                   // fields after hero, kept as read (a later ChartBridge's)
+            // 0.6.5 (Anthony 2026-10-19): the group's risk percent, of each member's max loss (its drawdown amount): 0 off. Stored and
+            // shown; nothing in the order path reads it (no path in ChartBridge sizes one entry onto a group: PROTOCOL.md)
+            public double RiskPct;
+            public string[] Extra = new string[0];                   // fields after riskPct, kept as read (a later ChartBridge's)
             public Group Clone() { Group g = (Group)MemberwiseClone(); g.Extra = (string[])Extra.Clone(); return g; }
+            // the group's own rules: the rules of every member that has none of its own (every member of a 0.6.4 or older file)
+            public Rules Default() { return new Rules { Size = Size, DailyLoss = DailyLoss, Drawdown = Drawdown, Type = Type, LockAt = LockAt, Target = Target, Consistency = Consistency }; }
+        }
+        // 0.6.5 (Anthony 2026-10-19, PRIORITY): one member's rules. A member with a rules line has its own (a group may hold accounts of
+        // different types and sizes); one without inherits the group's (Default), exactly as 0.6.4.
+        public sealed class Rules
+        {
+            public double Size, DailyLoss, Drawdown, LockAt, Target, Consistency;   // 0: none (DailyLoss, LockAt, Target, Consistency)
+            public string Type, TypeId;             // Type: eod, intraday, static; TypeId: The Desk's account type it came from, or null
+            public int MaxMinis, MaxMicros;         // the firm's max size (0: none); shown and sent, never enforced by ChartBridge
+            public bool Own;                        // from a rules line (else the group's)
+            public string[] Extra = new string[0];  // fields after typeId, kept as read (a later ChartBridge's)
+            public Rules Clone() { Rules r = (Rules)MemberwiseClone(); r.Extra = (string[])Extra.Clone(); return r; }
         }
         private sealed class State
         {
             public readonly Dictionary<string, Group> Groups = new Dictionary<string, Group>(StringComparer.Ordinal);
             public readonly Dictionary<string, string> Members = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // account -> group id
             public readonly Dictionary<string, double[]> Personal = new Dictionary<string, double[]>(StringComparer.OrdinalIgnoreCase);   // account -> {floor, daily}, 0 none
+            public readonly Dictionary<string, Rules> Own = new Dictionary<string, Rules>(StringComparer.OrdinalIgnoreCase);   // 0.6.5: a member -> its own rules
             public int Next = 1;
+            // 0.6.5: the rules of a member of group g: its own, else the group's
+            public Rules RulesOf(string account, Group g) { Rules r; return account != null && Own.TryGetValue(account, out r) ? r.Clone() : g.Default(); }
             public State Clone()
             {
                 State s = new State { Next = Next };
                 foreach (KeyValuePair<string, Group> kv in Groups) s.Groups[kv.Key] = kv.Value.Clone();
                 foreach (KeyValuePair<string, string> kv in Members) s.Members[kv.Key] = kv.Value;
                 foreach (KeyValuePair<string, double[]> kv in Personal) s.Personal[kv.Key] = (double[])kv.Value.Clone();
+                foreach (KeyValuePair<string, Rules> kv in Own) s.Own[kv.Key] = kv.Value.Clone();
                 return s;
             }
         }
@@ -461,6 +482,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             State s = new State();
             if (lines.Length < 2 || lines[0].TrimEnd('\r') != Header || !lines[1].StartsWith("#", StringComparison.Ordinal)) { why = "the first two lines are not ChartBridge's"; return null; }
             List<string[]> members = new List<string[]>();
+            Dictionary<string, string> rulesAt = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             int maxId = 0;
             for (int i = 2; i < lines.Length; i++)
             {
@@ -486,7 +508,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (p.Length >= 12 && !FileType(p[11], out at2)) { why = at + " is not a group line (type)"; return null; }
                     if (p.Length >= 13 && !FileHero(p[12], out hr)) { why = at + " is not a group line (hero)"; return null; }
                     g.AccountType = p.Length >= 12 ? at2 : null; g.Hero = p.Length >= 13 ? hr : null;
-                    g.Extra = p.Skip(13).ToArray();
+                    // 0.6.5: the risk percent; a line written before it (10 to 13 fields) reads as off
+                    double rp = 0;
+                    if (p.Length >= 14 && !FileRisk(p[13], out rp)) { why = at + " is not a group line (risk)"; return null; }
+                    g.RiskPct = rp;
+                    g.Extra = p.Skip(14).ToArray();
                     s.Groups[g.Id] = g;
                     maxId = Math.Max(maxId, int.Parse(g.Id.Substring(1), CultureInfo.InvariantCulture));
                 }
@@ -497,6 +523,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                     s.Members[p[1]] = p[2];
                     members.Add(new[] { p[1], p[2], at });
                 }
+                else if (p[0] == "rules")
+                {
+                    // 0.6.5: a member's own rules (the same checks as groupSave's); its account must be a member (checked below)
+                    Rules r;
+                    string bad;
+                    if (p.Length < 12 || p[1].Length == 0 || p[1] != p[1].Trim() || (r = FileRules(p, out bad)) == null) { why = at + " is not a rules line"; return null; }
+                    if (s.Own.ContainsKey(p[1])) { why = at + " gives an account rules twice"; return null; }
+                    s.Own[p[1]] = r;
+                    rulesAt[p[1]] = at;
+                }
                 else if (p[0] == "personal")
                 {
                     double f, d;
@@ -504,14 +540,56 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (s.Personal.ContainsKey(p[1])) { why = at + " names an account twice"; return null; }
                     s.Personal[p[1]] = new[] { f, d };
                 }
-                else { why = at + " is not a group, member or personal line"; return null; }
+                else { why = at + " is not a group, member, rules or personal line"; return null; }
             }
             foreach (string[] m in members) if (!s.Groups.ContainsKey(m[1])) { why = m[2] + " puts an account in group " + m[1] + ", which is not there"; return null; }
+            foreach (KeyValuePair<string, string> kv in rulesAt) if (!s.Members.ContainsKey(kv.Key)) { why = kv.Value + " gives rules to an account in no group"; return null; }
             s.Next = maxId + 1;
             return s;
         }
 
         private static string MoneyText(double v) { return v > 0 ? v.ToString("0.##", CultureInfo.InvariantCulture) : "-"; }
+        private static string PctText(double v) { return v > 0 ? v.ToString("0.##", CultureInfo.InvariantCulture) : "-"; }
+
+        // 0.6.5: the risk percent (of each member's max loss): more than 0, at most 100, at most 2 decimals; - off
+        private static readonly Regex RiskRx = new Regex("^(?:0|[1-9][0-9]?|100)(?:\\.[0-9]{1,2})?$");
+        private static bool FileRisk(string t, out double v)
+        {
+            v = 0;
+            if (t == "-") return true;
+            if (!RiskRx.IsMatch(t ?? "")) return false;
+            v = double.Parse(t, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
+            return v > 0 && v <= 100;
+        }
+        // 0.6.5: a max size: a whole number of contracts, 1 to 1000 (The Desk's own cap); - none
+        public const int MaxSizeMax = 1000;
+        private static readonly Regex SizeRx = new Regex("^[1-9][0-9]{0,3}$");
+        private static bool FileSize(string t, out int v) { v = 0; if (t == "-") return true; if (!SizeRx.IsMatch(t ?? "")) return false; v = int.Parse(t, CultureInfo.InvariantCulture); return v <= MaxSizeMax; }
+        // 0.6.5: The Desk's account type id, as the page's checks (letters, digits, dot, underscore, hyphen; 1 to 120)
+        public static readonly Regex TypeIdRx = new Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$");
+        // The rules that make sense together (groupSave's checks): null when they do, else why.
+        private static string RulesProblem(Rules r)
+        {
+            if (r.Type != "eod" && r.Type != "intraday" && r.Type != "static") return "drawdownType must be eod, intraday or static";
+            if (r.Drawdown >= r.Size) return "the drawdown must be less than the account size";
+            if (r.LockAt > 0 && r.Type == "static") return "floor stops at applies to a trailing drawdown only (end of day or intraday); 0 for none";
+            if (r.LockAt > 0 && r.LockAt <= r.Size - r.Drawdown) return "floor stops at must be above the starting floor (" + (r.Size - r.Drawdown).ToString("0.##", CultureInfo.InvariantCulture) + ")";
+            return null;
+        }
+        // A rules line: rules, account, size, dailyLoss|-, drawdown, type, lockAt|-, target|-, consistency|-, maxMinis|-, maxMicros|-, typeId|-.
+        private static Rules FileRules(string[] p, out string why)
+        {
+            why = null;
+            Rules r = new Rules { Own = true };
+            double sz, dl, dd, lk, tg, con;
+            int mm, mu;
+            if (!FileMoney(p[2], false, out sz) || !FileMoney(p[3], true, out dl) || !FileMoney(p[4], false, out dd) || !FileMoney(p[6], true, out lk) || !FileMoney(p[7], true, out tg) ||
+                !FilePercent(p[8], out con) || !FileSize(p[9], out mm) || !FileSize(p[10], out mu) || (p[11] != "-" && !TypeIdRx.IsMatch(p[11]))) { why = "a field"; return null; }
+            r.Size = sz; r.DailyLoss = dl; r.Drawdown = dd; r.Type = p[5]; r.LockAt = lk; r.Target = tg; r.Consistency = con; r.MaxMinis = mm; r.MaxMicros = mu; r.TypeId = p[11] == "-" ? null : p[11];
+            r.Extra = p.Skip(12).ToArray();
+            if ((why = RulesProblem(r)) != null) return null;
+            return r;
+        }
 
         private static string Serialize(State s)
         {
@@ -522,10 +600,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(MoneyText(g.Drawdown)).Append('\t').Append(g.Type).Append('\t').Append(MoneyText(g.Target)).Append('\t').Append(MoneyText(g.Size)).Append('\t').Append(MoneyText(g.LockAt))
                  .Append('\t').Append(g.Consistency > 0 ? g.Consistency.ToString("0.##", CultureInfo.InvariantCulture) : "-")
                  .Append('\t').Append(g.AccountType ?? "-").Append('\t').Append(g.Hero ?? "-");
+                if (g.RiskPct > 0 || g.Extra.Length > 0) b.Append('\t').Append(PctText(g.RiskPct));   // 0.6.5: off and nothing after it: the line exactly as 0.6.4 wrote it
                 foreach (string x in g.Extra) b.Append('\t').Append(x);
                 b.Append('\n');
             }
             foreach (KeyValuePair<string, string> kv in s.Members.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)) b.Append("member\t").Append(kv.Key).Append('\t').Append(kv.Value).Append('\n');
+            // 0.6.5: a member's own rules. A ChartBridge 0.6.4 or older does not know this line: it reads the whole file as unreadable
+            // (every entry refused, an alarm, never rewritten), so it never trails a floor from the wrong rules
+            foreach (KeyValuePair<string, Rules> kv in s.Own.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                Rules r = kv.Value;
+                b.Append("rules\t").Append(kv.Key).Append('\t').Append(MoneyText(r.Size)).Append('\t').Append(MoneyText(r.DailyLoss)).Append('\t').Append(MoneyText(r.Drawdown)).Append('\t').Append(r.Type)
+                 .Append('\t').Append(MoneyText(r.LockAt)).Append('\t').Append(MoneyText(r.Target)).Append('\t').Append(PctText(r.Consistency))
+                 .Append('\t').Append(r.MaxMinis > 0 ? r.MaxMinis.ToString(CultureInfo.InvariantCulture) : "-").Append('\t').Append(r.MaxMicros > 0 ? r.MaxMicros.ToString(CultureInfo.InvariantCulture) : "-").Append('\t').Append(r.TypeId ?? "-");
+                foreach (string x in r.Extra) b.Append('\t').Append(x);
+                b.Append('\n');
+            }
             foreach (KeyValuePair<string, double[]> kv in s.Personal.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
                 b.Append("personal\t").Append(kv.Key).Append('\t').Append(MoneyText(kv.Value[0])).Append('\t').Append(MoneyText(kv.Value[1])).Append('\n');
             return b.ToString();
@@ -715,7 +805,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // review LOW 8: the warning only for the drawdown type of the account's group (an EOD group never hears of intraday highs)
             string gid, type = null;
             Group grp;
-            if (state.Members.TryGetValue(m.Name, out gid) && state.Groups.TryGetValue(gid, out grp)) type = grp.Type;
+            if (state.Members.TryGetValue(m.Name, out gid) && state.Groups.TryGetValue(gid, out grp)) type = state.RulesOf(m.Name, grp).Type;   // 0.6.5: the member's own drawdown type
             if (covers && m.PeakEod.HasValue && un.HasValue && bal + un.Value > m.PeakEod.Value + 0.004) m.PeakEod = Math.Round(bal + un.Value, 2);
             if (missed != null && m.PeakEod.HasValue)
             {
@@ -949,9 +1039,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<Group> groups;
             Dictionary<string, List<string>> members = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             string err;
+            HashSet<string> own;
             lock (Mem)
             {
                 err = readError;
+                own = new HashSet<string>(state.Own.Keys, StringComparer.OrdinalIgnoreCase);
                 groups = state.Groups.Values.Select(x => x.Clone()).OrderBy(x => int.Parse(x.Id.Substring(1), CultureInfo.InvariantCulture)).ToList();
                 foreach (Group g in groups) members[g.Id] = state.Members.Where(kv => kv.Value == g.Id).Select(kv => kv.Key).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
             }
@@ -979,7 +1071,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     b.Append("{\"account\":").Append(CbJson.Str(h.Account)).Append(",\"root\":").Append(CbJson.Str(h.Root)).Append(",\"side\":").Append(h.Side > 0 ? "\"long\"" : "\"short\"")
                      .Append(",\"what\":").Append(CbJson.Str(h.What)).Append(",\"qty\":").Append(h.Qty.ToString(CultureInfo.InvariantCulture)).Append('}');
                 }
-                b.Append("]}");
+                b.Append("]");
+                b.Append(",\"riskPct\":").Append(None0(g.RiskPct))   // 0.6.5: the risk percent of each member's max loss, null off
+                 .Append(",\"ownRules\":[").Append(string.Join(",", members[g.Id].Where(x => own.Contains(x)).Select(x => CbJson.Str(x)))).Append("]}");   // 0.6.5: the members with rules of their own
             }
             b.Append("],\"error\":").Append(err == null ? "null" : CbJson.Str(ReadFailedText + " (" + err + ")")).Append('}');
             NoteSides(sides);
@@ -1042,6 +1136,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             public string Name, Kind, GroupId, GroupName, Side, Session;
             public Group G;
+            public Rules R;      // 0.6.5: the member's rules (its own, or its group's); null when not in a group
             public bool MySet;   // a personal line was ever saved (My floor or My daily, 0 included): rules are Anthony's, else null
             public double? MyFloor, MyDaily, Balance, Unrealized, Realized, Pnl, Floor, RoomFloor, RoomDaily, TargetLeft;
             public readonly Dictionary<string, string> Src = new Dictionary<string, string>(), Why = new Dictionary<string, string>();
@@ -1066,6 +1161,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string id;
                 if (name != null && state.Members.TryGetValue(name, out id) && state.Groups.TryGetValue(id, out g))
                 {
+                    n.R = state.RulesOf(name, g);   // 0.6.5
                     g = g.Clone();
                     if (withSide) members = state.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList();
                 }
@@ -1115,21 +1211,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (g != null)
             {
+                // 0.6.5: every number from the member's own rules (its own size, drawdown and type, lock, daily loss and target),
+                // or its group's when it has none of its own (as 0.6.4)
+                Rules r = n.R;
+                string whose = r.Own ? n.Name + "'s rules in " + g.Name : "group " + g.Name;
                 string floorWhy = null;
                 bool missedHigh = false;
-                if (g.Type == "static") n.Floor = g.Size - g.Drawdown;
+                if (r.Type == "static") n.Floor = r.Size - r.Drawdown;
                 else if (marksErr != null) floorWhy = "account-marks.txt could not be read (" + marksErr + ")";
                 else
                 {
-                    double? peak = mark == null ? null : g.Type == "eod" ? mark.PeakEod : mark.PeakIntraday;
-                    string gone = mark == null ? null : g.Type == "eod" ? mark.EodMissed : mark.IntradayMissed;
-                    if (gone != null) { floorWhy = g.Type == "eod" ? "ChartBridge was not running at the close of " + gone + ": put the account in " + g.Name + " again and give the highest close from the firm's dashboard"
+                    double? peak = mark == null ? null : r.Type == "eod" ? mark.PeakEod : mark.PeakIntraday;
+                    string gone = mark == null ? null : r.Type == "eod" ? mark.EodMissed : mark.IntradayMissed;
+                    if (gone != null) { floorWhy = r.Type == "eod" ? "ChartBridge was not running at the close of " + gone + ": put the account in " + g.Name + " again and give the highest close from the firm's dashboard"
                                                                   : "ChartBridge was not watching on " + gone + " while the account held a position or traded, so its intraday high may be missed: put it in " + g.Name + " again and give the highest balance from the firm's dashboard"; missedHigh = true; }
-                    else if (!peak.HasValue) floorWhy = "no " + (g.Type == "eod" ? "end-of-day" : "intraday") + " high is known for this account: put it in " + g.Name + " again and give its highest close";
+                    else if (!peak.HasValue) floorWhy = "no " + (r.Type == "eod" ? "end-of-day" : "intraday") + " high is known for this account: put it in " + g.Name + " again and give its highest close";
                     else
                     {
-                        double f = Math.Max(peak.Value, g.Size) - g.Drawdown;
-                        if (g.LockAt > 0) f = Math.Min(f, g.LockAt);
+                        double f = Math.Max(peak.Value, r.Size) - r.Drawdown;
+                        if (r.LockAt > 0) f = Math.Min(f, r.LockAt);
                         n.Floor = f;
                     }
                 }
@@ -1138,10 +1238,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (missedHigh && ntRoom.HasValue) { n.RoomFloor = ntRoom; n.Set("roomFloor", ntRoom, "ninjatrader", null); }
                 else if (missedHigh) n.Set("roomFloor", null, null, floorWhy);
                 else SetRoomFloor(n, ntRoom, equity, n.Floor.HasValue ? eqWhy : floorWhy);
-                if (g.DailyLoss > 0) { n.RoomDaily = n.Pnl.HasValue ? g.DailyLoss + n.Pnl.Value : (double?)null; n.Set("roomDaily", n.RoomDaily, "computed", n.Why.ContainsKey("pnlToday") ? n.Why["pnlToday"] : null); }
-                else n.Set("roomDaily", null, null, "group " + g.Name + " has no daily loss limit");
-                if (g.Target > 0) { n.TargetLeft = n.Balance.HasValue ? g.Size + g.Target - n.Balance.Value : (double?)null; n.Set("targetLeft", n.TargetLeft, "computed", up ? "NinjaTrader gives no balance for this account" : down); }
-                else n.Set("targetLeft", null, null, "group " + g.Name + " has no profit target");
+                if (r.DailyLoss > 0) { n.RoomDaily = n.Pnl.HasValue ? r.DailyLoss + n.Pnl.Value : (double?)null; n.Set("roomDaily", n.RoomDaily, "computed", n.Why.ContainsKey("pnlToday") ? n.Why["pnlToday"] : null); }
+                else n.Set("roomDaily", null, null, whose + (r.Own ? " have" : " has") + " no daily loss limit");
+                if (r.Target > 0) { n.TargetLeft = n.Balance.HasValue ? r.Size + r.Target - n.Balance.Value : (double?)null; n.Set("targetLeft", n.TargetLeft, "computed", up ? "NinjaTrader gives no balance for this account" : down); }
+                else n.Set("targetLeft", null, null, whose + (r.Own ? " have" : " has") + " no profit target");
             }
             else
             {
@@ -1213,6 +1313,19 @@ namespace NinjaTrader.NinjaScript.AddOns
              .Append(",\"myFloor\":").Append(Num(n.MyFloor)).Append(",\"myDailyLoss\":").Append(Num(n.MyDaily)).Append(",\"myLimitsSet\":").Append(n.MySet ? "true" : "false");
             foreach (string k in PageKeys) b.Append(",\"").Append(k).Append("\":").Append(Num(Get(n, k)));
             SrcWhy(b, n, PageKeys);
+            b.Append(",\"rules\":");   // 0.6.5: a member's rules (own true: its own; false: its group's), null in no group
+            if (n.R == null) b.Append("null"); else RulesJson(b, n.R, true);
+        }
+
+        // 0.6.5: a member's rules as the accounts message carries them (null for none, as the groups message)
+        private static void RulesJson(StringBuilder b, Rules r, bool withOwn)
+        {
+            b.Append("{\"size\":").Append(None0(r.Size)).Append(",\"dailyLoss\":").Append(None0(r.DailyLoss)).Append(",\"drawdown\":").Append(None0(r.Drawdown))
+             .Append(",\"drawdownType\":").Append(CbJson.Str(r.Type)).Append(",\"lockAt\":").Append(None0(r.LockAt)).Append(",\"target\":").Append(None0(r.Target))
+             .Append(",\"consistency\":").Append(None0(r.Consistency)).Append(",\"maxMinis\":").Append(r.MaxMinis > 0 ? r.MaxMinis.ToString(CultureInfo.InvariantCulture) : "null")
+             .Append(",\"maxMicros\":").Append(r.MaxMicros > 0 ? r.MaxMicros.ToString(CultureInfo.InvariantCulture) : "null").Append(",\"typeId\":").Append(r.TypeId == null ? "null" : CbJson.Str(r.TypeId));
+            if (withOwn) b.Append(",\"own\":").Append(r.Own ? "true" : "false");
+            b.Append('}');
         }
 
         // The agent's accountState (PROTOCOL.md): its account's numbers. key: the same text without "at" (sent again only when it
@@ -1239,10 +1352,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"noHedge\":").Append(n.G == null ? "null" : n.G.NoHedge ? "true" : "false")
                  .Append(",\"accountType\":").Append(n.G == null || n.G.AccountType == null ? "null" : CbJson.Str(n.G.AccountType))   // 0.6.2: the group's Type (eval, funded; null not set, or not prop)
                  .Append(",\"rules\":");
-                if (n.G != null)
-                    b.Append("{\"dailyLoss\":").Append(Zero0(n.G.DailyLoss)).Append(",\"drawdown\":").Append(Zero0(n.G.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(n.G.Type))
-                     .Append(",\"target\":").Append(Zero0(n.G.Target)).Append(",\"size\":").Append(Zero0(n.G.Size)).Append(",\"lockAt\":").Append(Zero0(n.G.LockAt))
-                     .Append(",\"consistency\":").Append(Zero0(n.G.Consistency)).Append('}');   // CON (a): informational, 0 none
+                if (n.G != null)   // 0.6.5: the member's own rules (or its group's), the same seven keys as before
+                    b.Append("{\"dailyLoss\":").Append(Zero0(n.R.DailyLoss)).Append(",\"drawdown\":").Append(Zero0(n.R.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(n.R.Type))
+                     .Append(",\"target\":").Append(Zero0(n.R.Target)).Append(",\"size\":").Append(Zero0(n.R.Size)).Append(",\"lockAt\":").Append(Zero0(n.R.LockAt))
+                     .Append(",\"consistency\":").Append(Zero0(n.R.Consistency)).Append('}');   // CON (a): informational, 0 none
                 else if (!n.MySet) b.Append("null");   // no limits ever set by Anthony: the agent keeps its model numbers
                 else b.Append("{\"floor\":").Append(Zero0(n.MyFloor ?? 0)).Append(",\"dailyLoss\":").Append(Zero0(n.MyDaily ?? 0)).Append('}');   // rules: 0 is none (the firm or the account has no such rule), never null
                 foreach (string k in NumberKeys) b.Append(",\"").Append(k).Append("\":").Append(Num(Get(n, k)));
@@ -1256,9 +1369,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- messages from the page
         private static readonly Dictionary<string, string[]> Keys = new Dictionary<string, string[]>
         {
-            { "groupSave", new[] { "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt", "consistency", "accountType", "hero" } },
+            { "groupSave", new[] { "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt", "consistency", "accountType", "hero", "riskPct" } },
             { "groupDelete", new[] { "type", "cid", "group" } },
-            { "accountGroup", new[] { "type", "cid", "account", "group", "highClose" } },
+            // 0.6.5: joining may carry the account's own rules (all of them, or none: the group's apply)
+            { "accountGroup", new[] { "type", "cid", "account", "group", "highClose", "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" } },
+            { "memberRules", new[] { "type", "cid", "account", "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" } },
             { "accountLimits", new[] { "type", "cid", "account", "floor", "dailyLoss" } },
         };
 
@@ -1279,7 +1394,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     EnsureLoaded();
                     lock (Mem) if (readError != null) why = ReadFailedText + "; nothing was changed";
                 }
-                if (why == null) why = type == "groupSave" ? GroupSave(m) : type == "groupDelete" ? GroupDelete(m) : type == "accountGroup" ? AccountGroup(m) : AccountLimits(m);
+                if (why == null) why = type == "groupSave" ? GroupSave(m) : type == "groupDelete" ? GroupDelete(m) : type == "accountGroup" ? AccountGroup(m) : type == "memberRules" ? MemberRules(m) : AccountLimits(m);
                 if (why != null) client.Send(Reject(cid, why));
             }
             catch (Exception ex)
@@ -1299,6 +1414,35 @@ namespace NinjaTrader.NinjaScript.AddOns
             v = double.Parse(raw, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
             if (v > MaxMoney) return key + " must be at most 100,000,000";
             if (!zeroOk && v <= 0) return key + " must be more than 0";
+            return null;
+        }
+
+        // 0.6.5: a member's rules from a message (accountGroup, memberRules): the same fields and checks as groupSave's, with the max
+        // size (whole contracts, 0 or absent none) and The Desk's type id (optional). r null and no error: the message has none.
+        public static readonly string[] RuleKeys = { "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" };
+        private static string RulesFrom(Dictionary<string, string> m, bool needed, out Rules r)
+        {
+            r = null;
+            if (!RuleKeys.Any(k => m.ContainsKey(k))) return needed ? "size is needed" : null;
+            string why, type = ChartBridgeV3.Str(m, "drawdownType");
+            double sz, dl, dd, lk, tg, con = 0;
+            if ((why = Money(m, "size", false, out sz)) != null || (why = Money(m, "dailyLoss", true, out dl)) != null || (why = Money(m, "drawdown", false, out dd)) != null) return why;
+            if (!m.ContainsKey("drawdownType")) return "drawdownType is needed";
+            if ((why = Money(m, "lockAt", true, out lk)) != null || (why = Money(m, "target", true, out tg)) != null) return why;
+            if (m.ContainsKey("consistency") && m["consistency"] != "0" && !FilePercent(m["consistency"], out con)) return "consistency must be a percent from 0 (none) to 100, at most 2 decimals";
+            int mm = 0, mu = 0;
+            foreach (string k in new[] { "maxMinis", "maxMicros" })
+            {
+                if (!m.ContainsKey(k)) continue;
+                int? v = ChartBridgeV3.Whole(m, k);
+                if (!v.HasValue || v.Value < 0 || v.Value > MaxSizeMax) return k + " must be a whole number of contracts from 0 (none) to " + MaxSizeMax;
+                if (k == "maxMinis") mm = v.Value; else mu = v.Value;
+            }
+            string tid = null;
+            if (m.ContainsKey("typeId")) { tid = ChartBridgeV3.Str(m, "typeId"); if (tid == null || (tid != "-" && !TypeIdRx.IsMatch(tid))) return "typeId must be The Desk's account type id (1 to 120 letters, digits, dots, underscores or hyphens), or - (none)"; if (tid == "-") tid = null; }
+            Rules x = new Rules { Own = true, Size = sz, DailyLoss = dl, Drawdown = dd, Type = type, LockAt = lk, Target = tg, Consistency = con, MaxMinis = mm, MaxMicros = mu, TypeId = tid };
+            if ((why = RulesProblem(x)) != null) return why;
+            r = x;
             return null;
         }
 
@@ -1336,6 +1480,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool hasType = m.ContainsKey("accountType"), hasHero = m.ContainsKey("hero");
             if (hasType && !FileType(ChartBridgeV3.Str(m, "accountType"), out atype)) return "accountType must be eval, funded or - (not set)";
             if (hasHero && !FileHero(ChartBridgeV3.Str(m, "hero"), out hero)) return "hero must be a build name of 1 to 64 letters, digits, dots, underscores or hyphens, or - (none)";
+            // 0.6.5: optional; absent keeps the group's (a page before 1.33.0 never drops it); 0 off
+            double risk = 0;
+            bool hasRisk = m.ContainsKey("riskPct");
+            if (hasRisk && m["riskPct"] != "0" && !FileRisk(m["riskPct"], out risk)) return "riskPct must be a percent of each member's max loss from 0 (off) to 100, at most 2 decimals";
             string said;
             lock (SaveLock)
             {
@@ -1349,6 +1497,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 g.Name = name; g.NoHedge = noHedge.Value; g.DailyLoss = dl; g.Drawdown = dd; g.Type = type; g.Target = tg; g.Size = sz; g.LockAt = lk; g.Consistency = con;
                 if (hasType) g.AccountType = atype;
                 if (hasHero) g.Hero = hero;
+                if (hasRisk) g.RiskPct = risk;
                 if (id == null) { next.Groups[g.Id] = g; next.Next++; }
                 string err = Save(next);
                 if (err != null) return err;
@@ -1364,7 +1513,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             Func<double, string> d = v => "$" + v.ToString("#,0.##", CultureInfo.InvariantCulture);
             return "size " + d(g.Size) + ", daily loss " + (g.DailyLoss > 0 ? d(g.DailyLoss) : "none") + ", drawdown " + d(g.Drawdown) + " " + g.Type +
                    (g.LockAt > 0 ? " (floor stops at " + d(g.LockAt) + ")" : "") + ", target " + (g.Target > 0 ? d(g.Target) : "none") + ", consistency " + (g.Consistency > 0 ? g.Consistency.ToString("0.##", CultureInfo.InvariantCulture) + "%" : "none") + ", no hedging " + (g.NoHedge ? "on" : "off") +
-                   ", type " + (g.AccountType ?? "not set") + ", hero " + (g.Hero ?? "none");
+                   ", type " + (g.AccountType ?? "not set") + ", hero " + (g.Hero ?? "none") + ", risk " + (g.RiskPct > 0 ? g.RiskPct.ToString("0.##", CultureInfo.InvariantCulture) + "% of each member's max loss" : "off");
+        }
+        private static string MemberWords(Rules r)
+        {
+            Func<double, string> d = v => "$" + v.ToString("#,0.##", CultureInfo.InvariantCulture);
+            return "size " + d(r.Size) + ", daily loss " + (r.DailyLoss > 0 ? d(r.DailyLoss) : "none") + ", drawdown " + d(r.Drawdown) + " " + r.Type + (r.LockAt > 0 ? " (floor stops at " + d(r.LockAt) + ")" : "") +
+                   ", target " + (r.Target > 0 ? d(r.Target) : "none") + ", consistency " + (r.Consistency > 0 ? r.Consistency.ToString("0.##", CultureInfo.InvariantCulture) + "%" : "none") +
+                   ", max " + (r.MaxMinis > 0 ? r.MaxMinis.ToString(CultureInfo.InvariantCulture) : "-") + " minis / " + (r.MaxMicros > 0 ? r.MaxMicros.ToString(CultureInfo.InvariantCulture) : "-") + " micros" + (r.TypeId != null ? ", type " + r.TypeId : "");
         }
 
         private static string GroupDelete(Dictionary<string, string> m)
@@ -1382,7 +1538,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 name = g.Name;
                 left = next.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList();
                 next.Groups.Remove(id);
-                foreach (string a in left) next.Members.Remove(a);
+                foreach (string a in left) { next.Members.Remove(a); next.Own.Remove(a); }   // 0.6.5: its members' own rules go with it
                 string err = Save(next);
                 if (err != null) return err;
                 try { ChartBridgeAgents.GroupDeleted(id); } catch (Exception ex) { ChartBridgeServer.Log("groups: the stand-downs of group " + id + " not dropped (" + ex.Message + ")"); }   // 0.6.2: under the save, before a later group could take the id
@@ -1411,6 +1567,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (id == null) return "highClose goes with joining a group only";
                 if ((why = Money(m, "highClose", false, out high)) != null) return why;
             }
+            // 0.6.5: the account's own rules, all or none (none: the group's apply, as 0.6.4); with joining a group only
+            Rules own;
+            if (id == null && RuleKeys.Any(k => m.ContainsKey(k))) return "rules go with joining a group only";
+            if ((why = RulesFrom(m, false, out own)) != null) return why;
             if (ChartBridgeOrders.IsNeverTradable(name)) return name + " is never in a group (Backtest and Playback)";
             Account a = Find(name);
             if (a == null && !ChartBridgeAccounts.Listed(name)) return "no account " + name;
@@ -1443,14 +1603,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (ms != null && ts != null && ms != ts) return name + " is " + ms + " (" + HolderText(mine) + ") and " + g.Name + " is " + ts + " (" + HolderText(theirs) + "): joining would hedge the group; prop firms ban hedged accounts";
                 }
                 if (id == null) next.Members.Remove(name); else next.Members[name] = id;
+                // 0.6.5: its own rules when the page sent them; none sent (a page before 1.33.0): the group's, so any it had go
+                if (own != null) next.Own[name] = own; else next.Own.Remove(name);
                 string err = Save(next);
                 if (err != null) return err;
                 if (g != null)
                 {
                     double? bal = Up(a) ? Item(a, AccountItem.CashValue) : null;
-                    seed = high > 0 ? high : Math.Max(g.Size, bal.HasValue && bal.Value > 0 ? bal.Value : 0);
+                    seed = high > 0 ? high : Math.Max(own != null ? own.Size : g.Size, bal.HasValue && bal.Value > 0 ? bal.Value : 0);   // 0.6.5: its own account size
                 }
-                said = name + (g != null ? " joined " + g.Name + " (its highs start at " + seed.ToString("0.00", CultureInfo.InvariantCulture) + (high > 0 ? ", the highest close given" : ", no highest close given: the larger of the account size and its balance") + ")" : " is in no group now") +
+                said = name + (g != null ? " joined " + g.Name + (own != null ? " with its own rules (" + MemberWords(own) + ")" : " with the group's rules") + " (its highs start at " + seed.ToString("0.00", CultureInfo.InvariantCulture) + (high > 0 ? ", the highest close given" : ", no highest close given: the larger of the account size and its balance") + ")" : " is in no group now") +
                        (cur != null && next.Groups.ContainsKey(cur) ? ", left " + next.Groups[cur].Name : "");
             }
             if (id != null)
@@ -1497,6 +1659,34 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (err != null) return err;
             }
             ChartBridgeServer.Log("groups: " + name + "'s own limits: floor " + (floor > 0 ? floor.ToString("0.##", CultureInfo.InvariantCulture) : "none") + ", daily " + (daily > 0 ? daily.ToString("0.##", CultureInfo.InvariantCulture) : "none") + " (by the page)");
+            Changed();
+            return null;
+        }
+
+        // 0.6.5: a member's rules changed later (the Accounts tab's Rules). Its highs stay as they are (they are the account's, not the
+        // rules'); a new size or drawdown applies to the floor from now on.
+        private static string MemberRules(Dictionary<string, string> m)
+        {
+            string name = ChartBridgeV3.Str(m, "account"), why;
+            if (name == null) return "memberRules needs account (a plain string)";
+            Rules r;
+            if ((why = RulesFrom(m, true, out r)) != null) return why;
+            Account a = Find(name);
+            if (a == null && !ChartBridgeAccounts.Listed(name)) return "no account " + name;
+            if (a != null) name = a.Name;
+            string gname;
+            lock (SaveLock)
+            {
+                State next;
+                lock (Mem) next = state.Clone();
+                string gid;
+                if (!next.Members.TryGetValue(name, out gid)) return name + " is in no group: its own rules are for a member of a group (My floor and My daily are for an account in no group)";
+                gname = next.Groups[gid].Name;
+                next.Own[name] = r;
+                string err = Save(next);
+                if (err != null) return err;
+            }
+            ChartBridgeServer.Log("groups: " + name + "'s own rules in " + gname + ": " + MemberWords(r) + " (by the page)");
             Changed();
             return null;
         }

@@ -1282,7 +1282,7 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.[0-4])";/);
+  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.[0-5])";/);
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1311,7 +1311,7 @@ test('ChartBridge 0.5.5: the accounts line\'s one-time conversion and notConnect
 });
 
 test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its own thread, and tells hello, the pages and /diag', () => {
-  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.[0-4])";/);
+  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.[0-5])";/);
   const clk = code.slice(code.indexOf('public static class ChartBridgeClock'));
   assert.ok(code.indexOf('public static class ChartBridgeClock') > code.indexOf('public static class ChartBridgeServer') && clk.length > 1000, 'ChartBridgeClock is the last class of ChartBridge.cs');
   // never sets the clock or a setting: no Win32 time call, no w32tm, no process, no registry, in any add-on file
@@ -1395,11 +1395,12 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   assert.match(acc, /ChartBridgeGroups\.StartNow\(\);[^\n]*\n\s*if \(!On\) return;/, 'groups.txt is read whether or not accountChecks is on');
   // the page messages, through ChartBridge.cs's dispatch; strict keys
   assert.match(code, /else if \(ChartBridgeGroups\.Handles\(type\)\) ChartBridgeGroups\.OnMessage\(client, type, text\);/);
-  assert.match(g, /\{ "groupSave", new\[\] \{ "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt", "consistency", "accountType", "hero" \} \}/);
+  assert.match(g, /\{ "groupSave", new\[\] \{ "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt", "consistency", "accountType", "hero", "riskPct" \} \}/);   // 0.6.5: riskPct
   // Q-EXIT (b): the one order call for the groups is in ChartBridgeOrders.cs (GroupCancelLeftover), a cancel only
   const oo = strip(read('ChartBridgeOrders.cs')), gc = oo.slice(oo.indexOf('internal static string GroupCancelLeftover('), oo.indexOf('private static string ChangeOrder('));
   assert.ok(gc.length > 0 && gc.length < 600 && /a\.Cancel\(new\[\] \{ o \}\)/.test(gc) && !/Submit|CreateOrder|\.Change\(|Flatten/.test(gc), 'GroupCancelLeftover only cancels');
-  assert.match(g, /\{ "accountGroup", new\[\] \{ "type", "cid", "account", "group", "highClose" \} \}/);
+  assert.match(g, /\{ "accountGroup", new\[\] \{ "type", "cid", "account", "group", "highClose", "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" \} \}/);   // 0.6.5: the member's own rules
+  assert.match(g, /\{ "memberRules", new\[\] \{ "type", "cid", "account", "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" \} \}/);   // 0.6.5
   // accounts.txt keeps its 0.5.0 format: groups live in their own file
   assert.ok(!/groups/.test(acc.slice(acc.indexOf('private static void Save()'), acc.indexOf('private static void SaveDetails()'))), 'accounts.txt is not touched');
 });

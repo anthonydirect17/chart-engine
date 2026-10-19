@@ -241,6 +241,7 @@ public static class GroupsHarness
             StandDowns();    // 0.6.2 (SPEC CE-2): a deleted group's stand-downs go with it; agent-standdowns.txt gates agent entries only
             MissedCloses();  // 0.6.3 (audit C2): a close or an intraday high ChartBridge did not see never overstates the room
             Backups();       // 0.6.3 (audit C3): groups.txt and account-marks.txt fall back to their last good copy
+            MemberRules();   // 0.6.5 (Anthony 2026-10-19, PRIORITY): each member's own rules, the old file, the risk percent
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally
@@ -332,7 +333,7 @@ public static class GroupsHarness
             Check(Rejection().Contains(x[1]) && (x[1].StartsWith("unknown key") || Rejection().Contains("\"cid\":\"s\"")) && !File.Exists(Path.Combine(folder, "groups.txt")), "groupSave refused: " + x[1] + " (" + Rejection() + ")");
         }
         Clear(); G("groupSave", Save("", "Lucid", "true", "1000", "2000", "eod", "3000", "50000", "50100"));
-        Check(Rejection() == "" && Last("groups").Contains("{\"id\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":null,\"accountType\":null,\"hero\":null,\"members\":[],\"side\":null,\"holders\":[]}"),
+        Check(Rejection() == "" && Last("groups").Contains("{\"id\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":null,\"accountType\":null,\"hero\":null,\"members\":[],\"side\":null,\"holders\":[],\"riskPct\":null,\"ownRules\":[]}"),
               "groupSave: g1 made, the page told at once: " + Last("groups"));
         string[] lines = FileText().Split('\n');
         Check(lines[0] == ChartBridgeGroups.Header && lines[1].StartsWith("# ") && lines[2] == "group\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t50100\t-\t-\t-",   // 0.6.1: then type and hero, - for not set and none
@@ -971,11 +972,11 @@ public static class GroupsHarness
         Check(Rejection() == "" && FileText().Contains("group\tg2\tApex\ton\t-\t2500\tstatic\t-\t50000\t-\t-\teval\tsample.build_2\n"), "TH: a new group with both: " + FileText().Replace("\t", "<TAB>"));
         Clear(); G("groupSave", Save("", "Topstep", "true", "0", "2000", "eod", "0", "50000", "0"));
         Check(Rejection() == "" && FileText().Contains("group\tg3\tTopstep\ton\t-\t2000\teod\t-\t50000\t-\t-\t-\t-\n"), "TH: a new group without them: not set and none");
-        // a later ChartBridge's fields after the hero are kept as read
-        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-\tfunded\tsample-build-1\tlater\tmore\nmember\tSIM-A\tg1\n");
+        // a later ChartBridge's fields after the risk percent (0.6.5: the 14th field) are kept as read
+        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-\tfunded\tsample-build-1\t-\tlater\tmore\nmember\tSIM-A\tg1\n");
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Clear(); G("groupSave", save);
-        Check(Rejection() == "" && FileText().Contains("\tfunded\tsample-build-1\tlater\tmore\n"), "TH: fields after the hero (a later ChartBridge's) are kept: " + FileText().Replace("\t", "<TAB>"));
+        Check(Rejection() == "" && FileText().Contains("\tfunded\tsample-build-1\t-\tlater\tmore\n"), "TH: fields after the risk percent (a later ChartBridge's) are kept: " + FileText().Replace("\t", "<TAB>"));
         // a type or hero ChartBridge cannot read makes the file unreadable (never rewritten), as every other field
         foreach (string broken in new[] { "\tfunded\tsample-build-1", "\tlive\t-", "\teval\ttwo words" })
         {
@@ -1103,4 +1104,151 @@ public static class GroupsHarness
             Clear(); G("groupDelete", "{\"type\":\"groupDelete\",\"cid\":\"d\",\"group\":\"" + gid + "\"}");
         }
     }
+    // ------------------------------------------------------------ 0.6.5 (Anthony 2026-10-19, PRIORITY): mixed accounts in one group
+    static string JoinRules(string account, string group, string high, string rules) { return "{\"type\":\"accountGroup\",\"cid\":\"j\",\"account\":\"" + account + "\",\"group\":" + group + (high != null ? ",\"highClose\":" + high : "") + rules + "}"; }
+    static string R(string size, string dl, string dd, string type, string lk, string tg, string extra) { return ",\"size\":" + size + ",\"dailyLoss\":" + dl + ",\"drawdown\":" + dd + ",\"drawdownType\":\"" + type + "\",\"lockAt\":" + lk + ",\"target\":" + tg + extra; }
+    static string MR(string account, string rules) { return "{\"type\":\"memberRules\",\"cid\":\"r\",\"account\":\"" + account + "\"" + rules + "}"; }
+    static void MemberRules()
+    {
+        Flat();
+        ChartBridgeGroups.GapMs = 1e12;
+        ClockEt(2026, 10, 20, 10, 0);
+        string p = Path.Combine(folder, "groups.txt"), mp = Path.Combine(folder, "account-marks.txt");
+        Gone(p); Gone(mp);
+        // migration: a file as 0.6.4 wrote it (13 fields, no rules lines) loads and behaves exactly as before
+        string old = ChartBridgeGroups.Header + "\n# group...\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t50100\t-\teval\t-\nmember\tSIM-A\tg1\nmember\tSIM-B\tg1\n";
+        File.WriteAllText(p, old);
+        Restart();
+        Money(simA, 50500, 0, 0); Money(simB, 50000, 0, 0);
+        Clear(); G("accountGroup", Join("SIM-A", "null", null)); G("accountGroup", Join("SIM-A", "\"g1\"", "51000"));
+        string e = Entry(AccountsNow(), "SIM-A"), full = AccountsNow();
+        Check(e.Contains("\"floor\":49000,\"roomFloor\":1500,") && full.Contains("\"rules\":{\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":50100,\"target\":3000,\"consistency\":null,\"maxMinis\":null,\"maxMicros\":null,\"typeId\":null,\"own\":false}"),
+              "0.6.5 migration: a 0.6.4 file's member inherits the group's rules (floor 51000-2000, rules own false): " + e);
+        Check(FileText() == old.Replace("# group...", ChartBridgeGroups.Header2) || FileText().Replace(ChartBridgeGroups.Header2, "# group...") == old, "0.6.5 migration: saved again, the file is byte for byte what 0.6.4 writes (no rules line, 13 fields): " + FileText().Replace("\t", "<TAB>"));
+        Check(State("SIM-A").Contains("\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":0}"), "0.6.5 migration: accountState's rules as before: " + State("SIM-A"));
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[]}"), "0.6.5 migration: risk off, no member with rules of its own");
+        // the refusals: all or none, with joining only, the same checks as groupSave's
+        string[][] bad = {
+            new[] { JoinRules("SIM-C", "\"g1\"", null, ",\"size\":150000"), "dailyLoss is needed" },
+            new[] { JoinRules("SIM-C", "\"g1\"", null, ",\"size\":150000,\"dailyLoss\":0,\"drawdown\":4500,\"lockAt\":0,\"target\":0"), "drawdownType is needed" },
+            new[] { JoinRules("SIM-C", "\"g1\"", null, R("150000", "0", "150000", "eod", "0", "0", "")), "less than the account size" },
+            new[] { JoinRules("SIM-C", "\"g1\"", null, R("150000", "0", "4500", "static", "150100", "0", "")), "trailing drawdown only" },
+            new[] { JoinRules("SIM-C", "\"g1\"", null, R("150000", "0", "4500", "eod", "145000", "0", "")), "above the starting floor (145500)" },
+            new[] { JoinRules("SIM-C", "\"g1\"", null, R("150000", "0", "4500", "daily", "0", "0", "")), "drawdownType must be eod, intraday or static" },
+            new[] { JoinRules("SIM-C", "\"g1\"", null, R("150000", "0", "4500", "eod", "0", "0", ",\"maxMinis\":1001")), "maxMinis must be a whole number of contracts from 0 (none) to 1000" },
+            new[] { JoinRules("SIM-C", "\"g1\"", null, R("150000", "0", "4500", "eod", "0", "0", ",\"maxMicros\":2.5")), "maxMicros must be a whole number" },
+            new[] { JoinRules("SIM-C", "\"g1\"", null, R("150000", "0", "4500", "eod", "0", "0", ",\"typeId\":\"two words\"")), "typeId must be The Desk's account type id" },
+            new[] { JoinRules("SIM-C", "\"g1\"", null, R("150000", "0", "4500", "eod", "0", "0", ",\"consistency\":101")), "consistency must be a percent" },
+            new[] { JoinRules("SIM-C", "null", null, R("150000", "0", "4500", "eod", "0", "0", "")), "rules go with joining a group only" },
+            new[] { MR("SIM-C", R("150000", "0", "4500", "eod", "0", "0", "")), "SIM-C is in no group" },
+            new[] { MR("SIM-A", ""), "size is needed" },
+            new[] { MR("SIM-A", R("150000", "0", "4500", "eod", "0", "0", ",\"color\":1")), "unknown key" },
+        };
+        string before = FileText();
+        foreach (string[] x in bad)
+        {
+            Clear(); G(x[0].Contains("memberRules") ? "memberRules" : "accountGroup", x[0]);
+            Check(Rejection().Contains(x[1]) && FileText() == before && ChartBridgeGroups.GroupOf("SIM-C") == null, "0.6.5 refused (" + x[1] + "), nothing saved: " + Rejection());
+        }
+        // Anthony's three Lucid accounts in one group: a 150K Flex eval, a 50K Flex eval, a 25K Daily intraday eval (made-up money)
+        Money(simA, 150500, 0, 0); Money(simB, 50500, 0, 0); Money(simC, 25000, 0, 0);
+        Clear(); G("accountGroup", Join("SIM-A", "null", null)); G("accountGroup", Join("SIM-B", "null", null));
+        Clear(); G("accountGroup", JoinRules("SIM-A", "\"g1\"", "151000", R("150000", "0", "4500", "eod", "150100", "9000", ",\"consistency\":50,\"maxMinis\":10,\"maxMicros\":100,\"typeId\":\"lucid-flex-150k-eval\"")));
+        Clear(); G("accountGroup", JoinRules("SIM-B", "\"g1\"", "51000", R("50000", "0", "2000", "eod", "50100", "3000", ",\"consistency\":50,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"lucid-flex-50k-eval\"")));
+        Clear(); G("accountGroup", JoinRules("SIM-C", "\"g1\"", null, R("25000", "500", "1000", "intraday", "25100", "1250", ",\"maxMinis\":2,\"maxMicros\":20,\"typeId\":\"lucid-daily-25k-eval\"")));
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-C") == "g1" && Logged("SIM-C joined Lucid with its own rules (size $25,000, daily loss $500, drawdown $1,000 intraday (floor stops at $25,100), target $1,250, consistency none, max 2 minis / 20 micros, type lucid-daily-25k-eval)"),
+              "0.6.5: three accounts of three types join one group, each with its own rules, logged");
+        Check(FileText().Contains("rules\tSIM-A\t150000\t-\t4500\teod\t150100\t9000\t50\t10\t100\tlucid-flex-150k-eval\n") && FileText().Contains("rules\tSIM-B\t50000\t-\t2000\teod\t50100\t3000\t50\t4\t40\tlucid-flex-50k-eval\n") &&
+              FileText().Contains("rules\tSIM-C\t25000\t500\t1000\tintraday\t25100\t1250\t-\t2\t20\tlucid-daily-25k-eval\n"), "0.6.5: one rules line per member in groups.txt: " + FileText().Replace("\t", "<TAB>"));
+        Check(MarksText().Contains("mark\tSIM-C\t25000\t25000\t"), "0.6.5: no highest close given: the larger of its OWN size (25000) and its balance, not the group's 50000: " + MarksText().Replace("\t", "<TAB>"));
+        string a = Entry(AccountsNow(), "SIM-A"), b = Entry(AccountsNow(), "SIM-B"), c = Entry(AccountsNow(), "SIM-C");
+        Check(a.Contains("\"floor\":146500,\"roomFloor\":4000,\"roomDaily\":null,\"targetLeft\":8500"), "0.6.5 mixed: SIM-A (150K, eod 4500): floor 151000-4500 = 146500, room 4000, no daily loss, target 159000-150500: " + a);
+        Check(a.Contains("\"roomDaily\":\"SIM-A's rules in Lucid have no daily loss limit\""), "0.6.5 mixed: the why names the member's own rules: " + a);
+        Check(b.Contains("\"floor\":49000,\"roomFloor\":1500,\"roomDaily\":null,\"targetLeft\":2500"), "0.6.5 mixed: SIM-B (50K, eod 2000): floor 49000, its own target: " + b);
+        Check(c.Contains("\"floor\":24000,\"roomFloor\":1000,\"roomDaily\":500,\"targetLeft\":1250"), "0.6.5 mixed: SIM-C (25K, intraday 1000, daily 500): floor 24000, daily room 500: " + c);
+        Check(AccountsNow().Contains("\"rules\":{\"size\":25000,\"dailyLoss\":500,\"drawdown\":1000,\"drawdownType\":\"intraday\",\"lockAt\":25100,\"target\":1250,\"consistency\":null,\"maxMinis\":2,\"maxMicros\":20,\"typeId\":\"lucid-daily-25k-eval\",\"own\":true}"), "0.6.5: the accounts message carries each member's rules (own true)");
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[\"SIM-A\",\"SIM-B\",\"SIM-C\"]}"), "0.6.5: the groups message names the members with rules of their own");
+        Check(State("SIM-A").Contains("\"rules\":{\"dailyLoss\":0,\"drawdown\":4500,\"drawdownType\":\"eod\",\"target\":9000,\"size\":150000,\"lockAt\":150100,\"consistency\":50}") &&
+              State("SIM-C").Contains("\"rules\":{\"dailyLoss\":500,\"drawdown\":1000,\"drawdownType\":\"intraday\",\"target\":1250,\"size\":25000,\"lockAt\":25100,\"consistency\":0}"), "0.6.5: each agent's accountState carries its member's own rules (the same seven keys): " + State("SIM-A"));
+        // each floor trails from its own high and stops at its own lock
+        Money(simC, 25000, 700, 200); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":24700,"), "0.6.5 intraday: SIM-C's high follows its equity (25700): floor 24700");
+        Money(simC, 25000, 1200, 200); Tick();
+        Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":25100,"), "0.6.5 intraday: 26200-1000 = 25200 stops at its own lock 25100");
+        Money(simC, 25000, -300, 200); Tick();
+        e = Entry(AccountsNow(), "SIM-C");
+        Check(e.Contains("\"floor\":25100,\"roomFloor\":-400,") , "0.6.5 intraday: equity down, the floor stays at its lock (room 24700-25100): " + e);
+        Check(Entry(AccountsNow(), "SIM-A").Contains("\"floor\":146500,") && Entry(AccountsNow(), "SIM-B").Contains("\"floor\":49000,"), "0.6.5: SIM-C's intraday high moves only SIM-C's floor (the eod members do not trail intraday)");
+        ClockEt(2026, 10, 20, 17, 10);
+        Money(simA, 156000, 0, 0); Money(simB, 52000, 0, 0);
+        ChartBridgeGroups.EodMark();
+        a = Entry(AccountsNow(), "SIM-A"); b = Entry(AccountsNow(), "SIM-B");
+        Check(a.Contains("\"floor\":150100,") && b.Contains("\"floor\":50000,"), "0.6.5 eod: at the close SIM-A 156000-4500 = 151500 stops at its lock 150100; SIM-B 52000-2000 = 50000 (below its lock 50100): " + a + " | " + b);
+        Money(simB, 53000, 0, 0); ChartBridgeGroups.EodMark();
+        Check(Entry(AccountsNow(), "SIM-B").Contains("\"floor\":50100,"), "0.6.5 eod: SIM-B 53000-2000 = 51000 stops at its own lock 50100");
+        ClockEt(2026, 10, 21, 10, 0);
+        // a restart reads the rules lines back
+        string f1 = FileText();
+        Restart(); Tick();
+        Check(Entry(AccountsNow(), "SIM-A").Contains("\"floor\":150100,") && Entry(AccountsNow(), "SIM-C").Contains("\"floor\":25100,") && AccountsNow().Contains("\"typeId\":\"lucid-flex-150k-eval\",\"own\":true"), "0.6.5: after a restart, every member's own rules and floor as before");
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "1000", "2000", "eod", "3000", "50000", "50100").Replace("}", ",\"accountType\":\"eval\"}"));
+        Check(FileText() == f1, "0.6.5: a group save with the same values writes the same file (the members' rules untouched)");
+        // a member's rules edited later: its highs stay, the new rules apply from now
+        Clear(); G("memberRules", MR("SIM-B", R("50000", "1000", "2500", "eod", "0", "3000", ",\"maxMinis\":4,\"maxMicros\":40")));
+        b = Entry(AccountsNow(), "SIM-B");
+        Check(Rejection() == "" && b.Contains("\"floor\":50500,") && FileText().Contains("rules\tSIM-B\t50000\t1000\t2500\teod\t-\t3000\t-\t4\t40\t-\n") && MarksText().Contains("mark\tSIM-B\t53000\t"),
+              "0.6.5 memberRules: SIM-B's drawdown 2500 and no lock: floor 53000-2500 = 50500, its high kept: " + b);
+        Check(Logged("SIM-B's own rules in Lucid: size $50,000, daily loss $1,000, drawdown $2,500 eod"), "0.6.5 memberRules: logged");
+        Check(Entry(AccountsNow(), "SIM-A").Contains("\"floor\":150100,"), "0.6.5 memberRules: the other members unchanged");
+        // the group's rules change: a member with its own keeps them
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0"));
+        Check(Entry(AccountsNow(), "SIM-A").Contains("\"floor\":150100,") && Entry(AccountsNow(), "SIM-C").Contains("\"floor\":25100,"), "0.6.5: the group's own rules changed: members with their own keep them");
+        // leaving drops its rules; joining again without rules (a page before 1.33.0): the group's rules, as 0.6.4
+        Clear(); G("accountGroup", Join("SIM-C", "null", null));
+        Check(!FileText().Contains("rules\tSIM-C") && AccountsNow().Contains("\"rules\":null"), "0.6.5: leaving the group drops its rules line");
+        Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", null));
+        c = Entry(AccountsNow(), "SIM-C");
+        Check(!FileText().Contains("rules\tSIM-C") && c.Contains("\"floor\":57000,") && Logged("SIM-C joined Lucid with the group's rules"), "0.6.5: joined with no rules: the group's (static 60000-3000): " + c);
+        Clear(); G("accountGroup", Join("SIM-A", "\"g1\"", null));
+        Check(Rejection().Contains("SIM-A is in Lucid already") && FileText().Contains("rules\tSIM-A\t"), "0.6.5: joining the group it is in again: refused, its rules kept");
+        // the risk percent: stored and shown, nothing in the order path reads it
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0").Replace("}", ",\"riskPct\":101}"));
+        Check(Rejection().Contains("riskPct must be a percent of each member's max loss from 0 (off) to 100"), "0.6.5 risk: above 100 refused");
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0").Replace("}", ",\"riskPct\":10}"));
+        Check(Rejection() == "" && FileText().Contains("\teval\t-\t10\n") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":10,\"ownRules\":[\"SIM-A\",\"SIM-B\"]}") && Logged("risk 10% of each member's max loss"), "0.6.5 risk: 10 saved as the 14th field, in the groups message: " + FileText().Replace("\t", "<TAB>"));
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0"));
+        Check(FileText().Contains("\teval\t-\t10\n"), "0.6.5 risk: a save without it (a page before 1.33.0) keeps it");
+        Flat();
+        Check(ChartBridgeGroups.EntryCheck("page", simA, "MNQ", true, 1, true, false) == null, "0.6.5 risk: nothing in the order path reads it (an entry on a member passes as before)");
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0").Replace("}", ",\"riskPct\":0}"));
+        Check(FileText().Contains("\teval\t-\n") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null"), "0.6.5 risk: 0 is off, and the line is 13 fields again (as 0.6.4 writes it)");
+        // a rules line ChartBridge cannot read, or for an account in no group: the whole file unreadable, never rewritten
+        foreach (string[] broken in new[] {
+            new[] { "rules\tSIM-D\t50000\t-\t2000\teod\t-\t-\t-\t-\t-\t-\n", "gives rules to an account in no group" },
+            new[] { "rules\tSIM-A\t50000\t-\t50000\teod\t-\t-\t-\t-\t-\t-\n", "is not a rules line" },
+            new[] { "rules\tSIM-A\t50000\t-\t2000\tdaily\t-\t-\t-\t-\t-\t-\n", "is not a rules line" },
+            new[] { "rules\tSIM-A\t50000\t-\t2000\teod\t-\t-\t-\t-\t-\n", "is not a rules line" },
+            new[] { "rules\tSIM-A\t50000\t-\t2000\teod\t-\t-\t-\t-\t-\t-\nrules\tSIM-A\t50000\t-\t2000\teod\t-\t-\t-\t-\t-\t-\n", "gives an account rules twice" } })
+        {
+            string text = ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-\t-\t-\nmember\tSIM-A\tg1\n" + broken[0];
+            Corrupt(p, text);
+            Clear(); Restart();
+            Check(ChartBridgeGroups.GroupsJson().Contains("\"list\":[],\"error\":\"groups.txt could not be read") && ChartBridgeGroups.GroupsJson().Contains(broken[1]) &&
+                  ChartBridgeGroups.EntryCheck("page", simA, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText && Entry(AccountsNow(), "SIM-A").Contains("\"floor\":null,"), "0.6.5: " + broken[1] + ": unreadable, every entry refused, no floor: " + ChartBridgeGroups.GroupsJson());
+            Clear(); G("memberRules", MR("SIM-A", R("50000", "0", "2000", "eod", "0", "0", "")));
+            Check(File.ReadAllText(p) == text, "0.6.5: unreadable: never rewritten");
+        }
+        // a ChartBridge before 0.6.5 never misreads the new file: it knows group, member and personal lines only, so a rules line makes
+        // it read the whole file as unreadable (every entry refused, an alarm, never rewritten): the same as any line it does not know
+        Corrupt(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-\t-\t-\nmember\tSIM-A\tg1\nweird\tline\n");
+        Restart();
+        Check(ChartBridgeGroups.GroupsJson().Contains("is not a group, member, rules or personal line"), "0.6.5: a line ChartBridge does not know: unreadable, as in every version");
+        // deleting the group drops its members' rules
+        File.WriteAllText(p, f1); Restart();
+        Clear(); G("groupDelete", "{\"type\":\"groupDelete\",\"cid\":\"d\",\"group\":\"g1\"}");
+        Check(Rejection() == "" && !FileText().Contains("rules\t"), "0.6.5: groupDelete drops its members' rules lines");
+        ChartBridgeGroups.GapMs = 10000;
+        ClockEt(2026, 10, 14, 10, 0);
+    }
+
 }

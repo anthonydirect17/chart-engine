@@ -340,7 +340,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (typeof m.cid === 'string') ref.cid = m.cid;
     if (typeof m.id === 'string') ref.id = m.id;
     if (m.type === 'botSeen') { const why = this.blocked(conn) || checkKeysV3(m, text) || this.check_botSeen(m); if (why) this.send(conn, Object.assign({ type: 'reject' }, ref, { reason: why })); else this.do_botSeen(m); return !why; }
-    let why = this.checkAction(conn) || (GROUP_TYPES.includes(m.type) && !this.gr.on ? 'Unknown message type ' + m.type + '.' : null) || checkKeysV3(m, text);
+    let why = this.checkAction(conn) || (GROUP_TYPES.includes(m.type) && !this.gr.on ? 'Unknown message type ' + m.type + '.' : null) || (this.gr && this.gr.on && !this.gr.perMember ? this.groupOldKeys(m) : null) || checkKeysV3(m, text);   // 0.6.5: groupRules false is a ChartBridge 0.5.8 to 0.6.4
     if (!why && V3_TYPES.includes(m.type) && SWITCH_OF[m.type] && !this.sw[SWITCH_OF[m.type]]) why = m.type + ' is off (' + SWITCH_OF[m.type] + ' = off in config.txt).';
     if (!why && (m.type === 'accountArchive' || m.type === 'accountUnarchive') && !this.sw.accountChecks) why = m.type + ' is off (accountChecks = off in config.txt).';
     if (!why && AGENT_PAGE_TYPES.includes(m.type)) why = this.agentPageCheck(m);

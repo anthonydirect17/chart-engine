@@ -1,6 +1,7 @@
 // Reference behaviour for ChartBridge 0.5.8's prop groups (nt8/PROTOCOL.md "Prop groups and account state (0.5.8)") in the
 // fake bridge (test/fake-v3.mjs): groupSave, groupDelete, accountGroup (highClose), accountLimits, the groups message, the
-// accounts message's new fields and the one-direction check on the page's entries. Everything simulated: made-up groups
+// accounts message's new fields and the one-direction check on the page's entries. 0.6.5 (Anthony 2026-10-19): each member's own
+// rules (accountGroup with the rule keys, memberRules), the groups message's riskPct and ownRules, the accounts entry's rules. Everything simulated: made-up groups
 // (Lucid, Apex), made-up accounts and money; nothing reaches a broker. ChartBridgeGroups.cs is the real thing (its Mono
 // harness, nt8/check/GroupsHarness.cs); this keeps the page's smokes honest about the messages and the words.
 const isNum = v => typeof v === 'number' && isFinite(v);
@@ -8,23 +9,33 @@ const MONEY = /^(?:0|[1-9][0-9]{0,8})(?:\.[0-9]{1,2})?$/;
 const usd = v => '$' + (+v).toLocaleString('en-US', { maximumFractionDigits: 2 });
 
 export const GROUP_KEYS = {
-  groupSave: ['type', 'cid', 'group', 'name', 'noHedge', 'dailyLoss', 'drawdown', 'drawdownType', 'target', 'size', 'lockAt', 'consistency', 'accountType', 'hero'],
+  groupSave: ['type', 'cid', 'group', 'name', 'noHedge', 'dailyLoss', 'drawdown', 'drawdownType', 'target', 'size', 'lockAt', 'consistency', 'accountType', 'hero', 'riskPct'],
   groupDelete: ['type', 'cid', 'group'],
-  accountGroup: ['type', 'cid', 'account', 'group', 'highClose'],
+  accountGroup: ['type', 'cid', 'account', 'group', 'highClose', 'size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 'target', 'consistency', 'maxMinis', 'maxMicros', 'typeId'],   // 0.6.5: the member's own rules
+  memberRules: ['type', 'cid', 'account', 'size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 'target', 'consistency', 'maxMinis', 'maxMicros', 'typeId'],   // 0.6.5
   accountLimits: ['type', 'cid', 'account', 'floor', 'dailyLoss'],
 };
 export const GROUP_TYPES = Object.keys(GROUP_KEYS);
+/* 0.6.5: the rule keys a join or memberRules may carry (all of them, or none: the group's apply) */
+const RULE_KEYS = ['size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 'target', 'consistency', 'maxMinis', 'maxMicros', 'typeId'];
+const TYPE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
+const PCT = /^(?:0|[1-9][0-9]?|100)(?:\.[0-9]{1,2})?$/;
 
 /** Adds the groups to OrderDeskV3's prototype. o.groups: false is a ChartBridge before 0.5.8 (no groups message, every group
  *  message unknown); o.groupsSeed: [{ name, size, drawdown, drawdownType, dailyLoss, target, lockAt, noHedge, members }]. */
 export function installGroups(Desk) {
   Object.assign(Desk.prototype, {
     groupsInit(o) {
-      this.gr = { on: o.groups !== false, list: new Map(), members: new Map(), personal: new Map(), peaks: new Map(), next: 1 };
+      this.gr = { on: o.groups !== false, perMember: o.groupRules !== false, list: new Map(), members: new Map(), personal: new Map(), peaks: new Map(), own: new Map(), next: 1 };   // groupRules false: a ChartBridge 0.5.8 to 0.6.4 (one rule set per group)
       for (const s of o.groupsSeed || []) {
         const id = 'g' + this.gr.next++;
-        this.gr.list.set(id, { id, name: s.name, noHedge: s.noHedge !== false, dailyLoss: s.dailyLoss || 0, drawdown: s.drawdown, drawdownType: s.drawdownType || 'eod', target: s.target || 0, size: s.size, lockAt: s.lockAt || 0, accountType: s.accountType || null, hero: s.hero || null });
-        for (const a of s.members || []) { this.gr.members.set(a, id); this.gr.peaks.set(a, Math.max(s.size, s.highClose || 0)); }
+        this.gr.list.set(id, { id, name: s.name, noHedge: s.noHedge !== false, dailyLoss: s.dailyLoss || 0, drawdown: s.drawdown, drawdownType: s.drawdownType || 'eod', target: s.target || 0, size: s.size, lockAt: s.lockAt || 0, accountType: s.accountType || null, hero: s.hero || null, riskPct: s.riskPct || 0 });
+        for (const a of s.members || []) {
+          this.gr.members.set(a, id);
+          const r = s.rules && s.rules[a];   // 0.6.5: a seeded member's own rules
+          if (r && this.gr.perMember) this.gr.own.set(a, Object.assign({ dailyLoss: 0, lockAt: 0, target: 0, consistency: 0, maxMinis: 0, maxMicros: 0, typeId: null }, r));
+          this.gr.peaks.set(a, Math.max(r ? r.size : s.size, s.highClose || 0));
+        }
       }
     },
     groupsMsg() {
@@ -32,8 +43,9 @@ export function installGroups(Desk) {
         const members = [...this.gr.members].filter(([, id]) => id === g.id).map(([a]) => a).sort();
         const holders = members.flatMap(a => this.groupHoldings(a));
         const longs = holders.some(h => h.side === 'long'), shorts = holders.some(h => h.side === 'short');
-        return { id: g.id, name: g.name, noHedge: g.noHedge, dailyLoss: g.dailyLoss || null, drawdown: g.drawdown, drawdownType: g.drawdownType, target: g.target || null,
-          size: g.size, lockAt: g.lockAt || null, consistency: g.consistency || null, accountType: g.accountType || null, hero: g.hero || null, members, side: longs && shorts ? 'mixed' : longs ? 'long' : shorts ? 'short' : null, holders };
+        return Object.assign({ id: g.id, name: g.name, noHedge: g.noHedge, dailyLoss: g.dailyLoss || null, drawdown: g.drawdown, drawdownType: g.drawdownType, target: g.target || null,
+          size: g.size, lockAt: g.lockAt || null, consistency: g.consistency || null, accountType: g.accountType || null, hero: g.hero || null, members, side: longs && shorts ? 'mixed' : longs ? 'long' : shorts ? 'short' : null, holders },
+          this.gr.perMember ? { riskPct: g.riskPct || null, ownRules: members.filter(a => this.gr.own.has(a)) } : {});   // 0.6.5, after holders as ChartBridge writes them
       });
       return { type: 'groups', list, error: null };
     },
@@ -70,12 +82,13 @@ export function installGroups(Desk) {
       const id = this.gr.members.get(a.name), g = id ? this.gr.list.get(id) : null, mine = this.gr.personal.get(a.name) || { floor: 0, daily: 0 };
       const up = a.connection === 'connected', eq = msg.balance + msg.unrealized, src = {}, why = {};
       let floor = null, roomFloor = null, roomDaily = null, targetLeft = null;
+      const r = g ? this.groupRulesOf(a.name, g) : null;   // 0.6.5: the member's own rules, else its group's
       if (g) {
-        const peak = Math.max(this.gr.peaks.get(a.name) || g.size, g.size);
-        floor = g.drawdownType === 'static' ? g.size - g.drawdown : Math.min(peak - g.drawdown, g.lockAt > 0 ? g.lockAt : Infinity);
-        roomDaily = g.dailyLoss > 0 ? g.dailyLoss + msg.pnlToday : null; targetLeft = g.target > 0 ? g.size + g.target - msg.balance : null;
-        if (roomDaily === null) why.roomDaily = 'group ' + g.name + ' has no daily loss limit';
-        if (targetLeft === null) why.targetLeft = 'group ' + g.name + ' has no profit target';
+        const peak = Math.max(this.gr.peaks.get(a.name) || r.size, r.size), whose = r.own ? a.name + '\'s rules in ' + g.name + ' have' : 'group ' + g.name + ' has';
+        floor = r.drawdownType === 'static' ? r.size - r.drawdown : Math.min(peak - r.drawdown, r.lockAt > 0 ? r.lockAt : Infinity);
+        roomDaily = r.dailyLoss > 0 ? r.dailyLoss + msg.pnlToday : null; targetLeft = r.target > 0 ? r.size + r.target - msg.balance : null;
+        if (roomDaily === null) why.roomDaily = whose + ' no daily loss limit';
+        if (targetLeft === null) why.targetLeft = whose + ' no profit target';
       } else {
         floor = mine.floor > 0 ? mine.floor : null; roomDaily = mine.daily > 0 ? mine.daily + msg.pnlToday : null;
         if (floor === null) why.floor = 'no group and no floor of its own (the Accounts tab)';
@@ -85,8 +98,31 @@ export function installGroups(Desk) {
       if (floor !== null) roomFloor = +(eq - floor).toFixed(2); else why.roomFloor = why.floor;
       if (!up) { for (const k of ['roomFloor', 'roomDaily', 'targetLeft']) if (k !== 'targetLeft' || g) why[k] = 'the account is not connected'; roomFloor = roomDaily = null; if (g) targetLeft = null; }
       for (const [k, v] of [['floor', floor], ['roomFloor', roomFloor], ['roomDaily', roomDaily], ['targetLeft', targetLeft]]) if (v !== null) { src[k] = k === 'floor' && !g ? 'settings' : 'computed'; delete why[k]; }
-      const r = v => (v === null ? null : +(+v).toFixed(2));
-      return Object.assign(msg, { group: id || null, myFloor: mine.floor || null, myDailyLoss: mine.daily || null, myLimitsSet: this.gr.personal.has(a.name), floor: r(floor), roomFloor: r(roomFloor), roomDaily: r(roomDaily), targetLeft: r(targetLeft), src, why });
+      const r2 = v => (v === null ? null : +(+v).toFixed(2)), nz = v => (v > 0 ? v : null);
+      return Object.assign(msg, { group: id || null, myFloor: mine.floor || null, myDailyLoss: mine.daily || null, myLimitsSet: this.gr.personal.has(a.name), floor: r2(floor), roomFloor: r2(roomFloor), roomDaily: r2(roomDaily), targetLeft: r2(targetLeft), src, why },
+        this.gr.perMember ? { rules: r ? { size: r.size, dailyLoss: nz(r.dailyLoss), drawdown: r.drawdown, drawdownType: r.drawdownType, lockAt: nz(r.lockAt), target: nz(r.target), consistency: nz(r.consistency), maxMinis: nz(r.maxMinis), maxMicros: nz(r.maxMicros), typeId: r.typeId || null, own: !!r.own } : null } : {});   // 0.6.5
+    },
+    /** 0.6.5: a member's rules: its own, else its group's (own false) */
+    groupRulesOf(account, g) {
+      const o = this.gr.own.get(account);
+      if (o) return Object.assign({ own: true }, o);
+      return { own: false, size: g.size, dailyLoss: g.dailyLoss || 0, drawdown: g.drawdown, drawdownType: g.drawdownType, lockAt: g.lockAt || 0, target: g.target || 0, consistency: g.consistency || 0, maxMinis: 0, maxMicros: 0, typeId: null };
+    },
+    /** 0.6.5: the rule keys of a message (ChartBridge's RulesFrom, its words): { rules } or { error }; none and not needed: {} */
+    groupRulesFrom(m, needed) {
+      if (!RULE_KEYS.some(k => k in m)) return needed ? { error: 'size is needed' } : {};
+      for (const [k, z] of [['size', false], ['dailyLoss', true], ['drawdown', false]]) { if (!(k in m)) return { error: k + ' is needed' }; const w = this.groupMoney(m, k, z); if (w) return { error: w }; }
+      if (!('drawdownType' in m)) return { error: 'drawdownType is needed' };
+      for (const k of ['lockAt', 'target']) { if (!(k in m)) return { error: k + ' is needed' }; const w = this.groupMoney(m, k, true); if (w) return { error: w }; }
+      if ('consistency' in m && m.consistency !== 0 && !(isNum(m.consistency) && PCT.test(String(m.consistency)) && m.consistency > 0 && m.consistency <= 100)) return { error: 'consistency must be a percent from 0 (none) to 100, at most 2 decimals' };
+      for (const k of ['maxMinis', 'maxMicros']) if (k in m && !(Number.isInteger(m[k]) && m[k] >= 0 && m[k] <= 1000)) return { error: k + ' must be a whole number of contracts from 0 (none) to 1000' };
+      if ('typeId' in m && !(typeof m.typeId === 'string' && (m.typeId === '-' || TYPE_ID.test(m.typeId)))) return { error: 'typeId must be The Desk\'s account type id (1 to 120 letters, digits, dots, underscores or hyphens), or - (none)' };
+      const t = m.drawdownType;
+      if (!['eod', 'intraday', 'static'].includes(t)) return { error: 'drawdownType must be eod, intraday or static' };
+      if (m.drawdown >= m.size) return { error: 'the drawdown must be less than the account size' };
+      if (m.lockAt > 0 && t === 'static') return { error: 'floor stops at applies to a trailing drawdown only (end of day or intraday); 0 for none' };
+      if (m.lockAt > 0 && m.lockAt <= m.size - m.drawdown) return { error: 'floor stops at must be above the starting floor (' + (m.size - m.drawdown) + ')' };
+      return { rules: { size: m.size, dailyLoss: m.dailyLoss, drawdown: m.drawdown, drawdownType: t, lockAt: m.lockAt, target: m.target, consistency: m.consistency || 0, maxMinis: m.maxMinis || 0, maxMicros: m.maxMicros || 0, typeId: m.typeId && m.typeId !== '-' ? m.typeId : null } };
     },
     groupMoney(m, k, zeroOk) {
       const v = m[k];
@@ -105,6 +141,7 @@ export function installGroups(Desk) {
       if (m.lockAt > 0 && m.lockAt <= m.size - m.drawdown) return 'floor stops at must be above the starting floor (' + (m.size - m.drawdown) + ')';
       if (m.accountType !== undefined && !['eval', 'funded', '-'].includes(m.accountType)) return 'accountType must be eval, funded or - (not set)';   // 0.6.1
       if (m.hero !== undefined && (typeof m.hero !== 'string' || !(m.hero === '-' || /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(m.hero)))) return 'hero must be a build name of 1 to 64 letters, digits, dots, underscores or hyphens, or - (none)';
+      if (m.riskPct !== undefined && m.riskPct !== 0 && !(isNum(m.riskPct) && PCT.test(String(m.riskPct)) && m.riskPct > 0 && m.riskPct <= 100)) return 'riskPct must be a percent of each member\'s max loss from 0 (off) to 100, at most 2 decimals';   // 0.6.5
       if (m.group !== undefined && !this.gr.list.has(m.group)) return 'no group ' + m.group;
       if ([...this.gr.list.values()].some(g => g.id !== m.group && g.name.toLowerCase() === name.toLowerCase())) return 'a group named ' + name + ' is there already';
       return null;
@@ -112,16 +149,18 @@ export function installGroups(Desk) {
     do_groupSave(m) {
       const id = m.group || 'g' + this.gr.next++, was = this.gr.list.get(id) || {};
       const keep = (k, v) => (v === undefined ? was[k] || null : v === '-' ? null : v);   // 0.6.1: absent keeps, - clears
-      this.gr.list.set(id, { accountType: keep('accountType', m.accountType), hero: keep('hero', m.hero), id, name: m.name, noHedge: m.noHedge, dailyLoss: m.dailyLoss, drawdown: m.drawdown, drawdownType: m.drawdownType, target: m.target, size: m.size, lockAt: m.lockAt, consistency: m.consistency || 0 });
+      this.gr.list.set(id, { riskPct: m.riskPct === undefined ? was.riskPct || 0 : m.riskPct, accountType: keep('accountType', m.accountType), hero: keep('hero', m.hero), id, name: m.name, noHedge: m.noHedge, dailyLoss: m.dailyLoss, drawdown: m.drawdown, drawdownType: m.drawdownType, target: m.target, size: m.size, lockAt: m.lockAt, consistency: m.consistency || 0 });
       this.groupsChanged();
     },
     check_groupDelete(m) { return this.gr.list.has(m.group) ? null : 'no group ' + m.group; },
-    do_groupDelete(m) { this.gr.list.delete(m.group); for (const [a, id] of [...this.gr.members]) if (id === m.group) { this.gr.members.delete(a); this.gr.peaks.delete(a); } this.groupsChanged(); },
+    do_groupDelete(m) { this.gr.list.delete(m.group); for (const [a, id] of [...this.gr.members]) if (id === m.group) { this.gr.members.delete(a); this.gr.peaks.delete(a); this.gr.own.delete(a); } this.groupsChanged(); },
     check_accountGroup(m) {
       if (typeof m.account !== 'string' || !this.acct.has(m.account)) return 'no account ' + m.account;
       if (!('group' in m) || (m.group !== null && typeof m.group !== 'string')) return 'group must be a group id or null (None)';
       if (m.highClose !== undefined && m.group === null) return 'highClose goes with joining a group only';
       if (m.highClose !== undefined) { const w = this.groupMoney(m, 'highClose', false); if (w) return w; }
+      if (m.group === null && RULE_KEYS.some(k => k in m)) return 'rules go with joining a group only';   // 0.6.5
+      const rr = this.groupRulesFrom(m, false); if (rr.error) return rr.error;
       if (m.group === null) return null;
       const g = this.gr.list.get(m.group);
       if (!g) return 'no group ' + m.group;
@@ -136,9 +175,31 @@ export function installGroups(Desk) {
     },
     do_accountGroup(m) {
       if (m.group === null) { this.gr.members.delete(m.account); this.gr.peaks.delete(m.account); }
-      else { const g = this.gr.list.get(m.group), a = this.acct.get(m.account); this.gr.members.set(m.account, m.group); this.gr.peaks.set(m.account, m.highClose || Math.max(g.size, a.balance + this.pnl(a.name).realized)); }
+      else {
+        const g = this.gr.list.get(m.group), a = this.acct.get(m.account), own = this.groupRulesFrom(m, false).rules;
+        this.gr.members.set(m.account, m.group);
+        if (own) this.gr.own.set(m.account, own); else this.gr.own.delete(m.account);   // 0.6.5: no rules sent: the group's apply
+        this.gr.peaks.set(m.account, m.highClose || Math.max(own ? own.size : g.size, a.balance + this.pnl(a.name).realized));
+      }
+      if (m.group === null) this.gr.own.delete(m.account);
       this.groupsChanged();
     },
+    /** a ChartBridge before 0.6.5 (o.groupRules false): memberRules and the new keys are unknown to it, in its words */
+    groupOldKeys(m) {
+      if (m.type === 'memberRules') return 'Unknown message type memberRules.';
+      const extra = m.type === 'groupSave' ? ['riskPct'] : m.type === 'accountGroup' ? RULE_KEYS : [];
+      const k = Object.keys(m).find(x => extra.includes(x));
+      return k ? 'Unknown key "' + k + '" in ' + m.type + '.' : null;
+    },
+    check_memberRules(m) {   // 0.6.5
+      if (!this.gr.perMember) return 'unknown message type memberRules';
+      if (typeof m.account !== 'string') return 'memberRules needs account (a plain string)';
+      const rr = this.groupRulesFrom(m, true); if (rr.error) return rr.error;
+      if (!this.acct.has(m.account)) return 'no account ' + m.account;
+      if (!this.gr.members.has(m.account)) return m.account + ' is in no group: its own rules are for a member of a group (My floor and My daily are for an account in no group)';
+      return null;
+    },
+    do_memberRules(m) { this.gr.own.set(m.account, this.groupRulesFrom(m, true).rules); this.groupsChanged(); },
     check_accountLimits(m) {
       if (typeof m.account !== 'string' || !this.acct.has(m.account)) return 'no account ' + m.account;
       for (const k of ['floor', 'dailyLoss']) { if (!(k in m)) return k + ' is needed'; const w = this.groupMoney(m, k, true); if (w) return w; }
