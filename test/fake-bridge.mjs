@@ -520,7 +520,7 @@ function onMessage(c, text) {
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (V3 && m.type === 'client') desk.client(c, m);
   else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm',
-    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear', 'groupSave', 'groupDelete', 'accountGroup', 'memberRules', 'accountLimits'].includes(m.type)) desk.handle(c, m, text);
+    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear', 'groupSave', 'groupDelete', 'accountGroup', 'memberRules', 'accountLimits', 'groupPreview', 'groupOrder'].includes(m.type)) desk.handle(c, m, text);
   else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */

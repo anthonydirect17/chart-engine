@@ -166,13 +166,80 @@ test('fake: a ChartBridge before 0.6.5 (groupRules false) knows none of it, as i
   assert.equal('rules' in f.entry('SIM-C'), false);
 });
 
-test('ChartBridge 0.6.5 source: rules lines, the old file kept as written, nothing in the order path reads the risk percent', () => {
+test('ChartBridge 0.6.5 source: rules lines, the old file kept as written, only a group entry reads the risk percent', () => {
   const g = read('nt8/ChartBridgeGroups.cs');
   assert.match(g, /else if \(p\[0\] == "rules"\)/);
   assert.match(g, /gives rules to an account in no group/);
   assert.match(g, /if \(g\.RiskPct > 0 \|\| g\.Extra\.Length > 0\) b\.Append\('\\t'\)\.Append\(PctText\(g\.RiskPct\)\);/, 'risk off: the group line as 0.6.4 writes it');
   assert.match(g, /public Rules RulesOf\(string account, Group g\) \{ Rules r; return account != null && Own\.TryGetValue\(account, out r\) \? r\.Clone\(\) : g\.Default\(\); \}/, 'no rules line: the group\'s rules (migration)');
-  assert.equal((g.match(/RiskPct/g) || []).length, 8, 'RiskPct only where it is read, written, saved and sent');
-  for (const f of ['ChartBridgeOrders.cs', 'ChartBridgeCopier.cs', 'ChartBridgeAgents.cs', 'ChartBridgeBot.cs']) assert.doesNotMatch(read('nt8/' + f), /RiskPct|riskPct|MaxMinis|MaxMicros/, f + ': no order path reads the risk percent or the max size');
+  for (const f of ['ChartBridgeCopier.cs', 'ChartBridgeAgents.cs', 'ChartBridgeBot.cs']) assert.doesNotMatch(read('nt8/' + f), /RiskPct|riskPct|MaxMinis|MaxMicros/, f + ': the copier, the agents and the bot never read the risk percent or the max size');
+  assert.match(g, /if \(g\.RiskPct <= 0\) \{ err = "group " \+ g\.Name \+ " has no risk percent/, 'a group entry only with the risk percent on');
   for (const f of ['nt8/ChartBridgeGroups.cs', 'live/groups.js', 'live/accounts.js', 'test/fake-groups.mjs', 'nt8/check/GroupsHarness.cs']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
+});
+
+/* ---------------- 0.6.5 (Anthony 2026-10-19): trade the group from the ticket, each member sized from the group's risk percent */
+test('groupSize: each guard, in ChartBridge\'s order and words (the harness\'s numbers)', async () => {
+  const { groupSize } = await import('./fake-groups.mjs');
+  const base = { riskPct: 10, drawdown: 4500, stopTicks: 20, tickValue: 5, maxSize: 10, maxWords: '10 minis', cap: 9, capWords: 'maxQty.NQ in config.txt', held: 0, roomFloor: 4000, hasDaily: false, roomDaily: null };
+  const g = o => groupSize(Object.assign({}, base, o));
+  assert.deepEqual(g({}), { size: 4, budget: 450, why: null }, '10% of $4,500 = $450 / ($100 a contract) = 4');
+  assert.equal(g({ stopTicks: 4 }).size, 9, '22 by risk, its max 10, the cap 9 (maxQty, the hard ceiling)');
+  assert.deepEqual(g({ stopTicks: 4, maxSize: 2, maxWords: '2 minis' }).size, 2, 'its max size');
+  assert.equal(g({ stopTicks: 4, held: 4 }).size, 5, 'an add: what it holds counts against the cap');
+  assert.equal(g({ stopTicks: 4, held: 10 }).why, 'it is at its max size (10 minis; it holds or has working 10)');
+  assert.equal(g({ stopTicks: 4, maxSize: 0, held: 9 }).why, 'it is at the cap of 9 (maxQty.NQ in config.txt; it holds or has working 9)');
+  assert.deepEqual(g({ roomFloor: 150 }), { size: 1, budget: 450, why: null }, 'the room to its floor $150: 1 contract of $100');
+  assert.equal(g({ roomFloor: 80 }).why, 'its room to the floor $80 is less than one contract\'s stop ($100)');
+  assert.equal(g({ hasDaily: true, roomDaily: 80 }).why, 'its daily room $80 is less than one contract\'s stop ($100)');
+  assert.equal(g({ roomFloor: null, floorWhy: 'the account is not connected' }).why, 'its room to the floor is not known (the account is not connected)');
+  assert.equal(g({ hasDaily: true, roomDaily: null, dailyWhy: 'x' }).why, 'its daily room is not known (x)');
+  assert.equal(g({ drawdown: 2000, stopTicks: 50 }).why, 'its risk $200 (10% of its max loss $2,000) is less than one contract\'s stop ($250 at 50 ticks)', 'rounds to 0');
+  assert.equal(g({ riskPct: 10, drawdown: 2000, stopTicks: 40, tickValue: 0.5, maxSize: 40, cap: 100 }).size, 10, 'micros: $200 / ($20 a contract) = 10');
+});
+
+async function geDesk(o) {
+  const V = await import('./fake-v3.mjs');
+  const out = [], conn = { origin: 'http://localhost:8765', authed: false, actions: [], v3: true };
+  const accts = [{ name: 'SIM-A', sim: true, balance: 150500 }, { name: 'SIM-B', sim: true, balance: 50500 }, { name: 'SIM-C', sim: true, balance: 25000 }, { name: 'SIM-D', sim: true, balance: 50000 }];
+  let clock = 1000000;
+  const desk = new V.OrderDeskV3(Object.assign({ config: { trading: true, tradeAccounts: accts.map(a => a.name), maxQty: { NQ: 9, MNQ: 9 }, port: 8765 },
+    instruments: { NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20 }, MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 } },
+    knownAccounts: accts.map(a => a.name), token: 'tok', switches: { accountChecks: true }, accountList: accts, graceMs: 1000, send: (c, m) => out.push(m), conns: () => [conn], now: () => clock, barTime: () => clock / 1000,
+    groupsSeed: [{ name: 'Lucid', size: 50000, drawdown: 2000, drawdownType: 'eod', target: 3000, riskPct: 10, members: ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'], highClose: 0,
+      rules: { 'SIM-A': { size: 150000, drawdown: 4500, drawdownType: 'eod', lockAt: 150100, target: 9000, maxMinis: 10, maxMicros: 100 },
+        'SIM-B': { size: 50000, drawdown: 2000, drawdownType: 'eod', lockAt: 50100, target: 3000, maxMinis: 4, maxMicros: 40 },
+        'SIM-C': { size: 25000, dailyLoss: 500, drawdown: 1000, drawdownType: 'intraday', lockAt: 25100, target: 1250, maxMinis: 2, maxMicros: 20 } } }] }, o || {}));
+  desk.gr.peaks.set('SIM-A', 151000); desk.gr.peaks.set('SIM-B', 51000);
+  desk.tick('NQ', 25000); desk.tick('MNQ', 25000); desk.auth(conn, 'tok'); out.length = 0;
+  const act = m => { clock += 150; out.length = 0; desk.handle(conn, m, JSON.stringify(m)); return out.slice(); };
+  return { desk, act, reject: r => (r.find(m => m.type === 'reject') || {}).reason || null };
+}
+const GE = (type, o) => Object.assign({ type, cid: 'ge', group: 'g1', root: 'NQ', side: 'buy', kind: 'market', bracket: { stop: 20, target: 40 } }, o || {});
+const sizesOf = r => (r.find(m => m.type === 'groupPreview' || m.type === 'groupPlaced') || { members: [] }).members.map(s => s.size).join(',');
+
+test('fake 0.6.5 groupPreview and groupOrder: the harness\'s sizes, guards, refusals and placing', async () => {
+  const f = await geDesk();
+  const pv = f.act(GE('groupPreview'));
+  assert.deepEqual(pv[0], { type: 'groupPreview', cid: 'ge', group: 'g1', name: 'Lucid', root: 'NQ', side: 'buy', kind: 'market', stopTicks: 20, riskPct: 10, members: [
+    { account: 'SIM-A', size: 4, risk: 400, budget: 450, out: null }, { account: 'SIM-B', size: 2, risk: 200, budget: 200, out: null },
+    { account: 'SIM-C', size: 1, risk: 100, budget: 100, out: null }, { account: 'SIM-D', size: 2, risk: 200, budget: 200, out: null }] });
+  assert.equal(sizesOf(f.act(GE('groupPreview', { bracket: { stop: 4, target: 8 } }))), '9,4,2,9', 'the cap 9 (SIM-A, SIM-D), the max size (SIM-B 4, SIM-C 2)');
+  const zero = f.act(GE('groupPreview', { bracket: { stop: 50, target: 0 } }))[0].members[1];
+  assert.equal(zero.out, 'its risk $200 (10% of its max loss $2,000) is less than one contract\'s stop ($250 at 50 ticks)');
+  assert.equal(f.reject(f.act(GE('groupPreview', { bracket: { stop: 0, target: 40 } }))), 'a group entry needs a stop: each member is sized from its stop loss (set the bracket\'s stop)');
+  assert.equal(f.reject(f.act(GE('groupPreview', { bracket: undefined }))), 'a group entry needs a stop: each member is sized from its stop loss (set the bracket\'s stop)');
+  assert.equal(f.reject(f.act(GE('groupOrder', { sizes: '5,2,1,2' }))), 'the sizes changed since the preview (SIM-A 5 confirmed, 4 now): nothing was sent; look again and send');
+  assert.equal(f.desk.orders.size, 0, 'nothing placed by a preview or a refusal');
+  const placed = f.act(GE('groupOrder', { sizes: '4,2,1,2' })), gp = placed.find(m => m.type === 'groupPlaced');
+  assert.equal(gp.placed, 4);
+  const entries = [...f.desk.orders.values()].filter(o => o.role === 'entry' || o.qty);
+  assert.deepEqual(['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'].map(a => entries.filter(o => o.account === a && o.root === 'NQ').reduce((t, o) => t + (o.role === 'entry' || !o.role ? o.qty : 0), 0) || (f.desk.positions.get(a + '|NQ') || {}).qty), [4, 2, 1, 2], 'each member\'s own entry at its own size');
+  f.desk.gr.list.get('g1').riskPct = 0;
+  assert.equal(f.reject(f.act(GE('groupPreview'))), 'group Lucid has no risk percent: set Risk % of max loss in Settings, Account groups');
+});
+
+test('fake: a ChartBridge before 0.6.5 knows no group entry', async () => {
+  const f = await geDesk({ groupRules: false });
+  assert.equal(f.reject(f.act(GE('groupPreview'))), 'Unknown message type groupPreview.');
+  assert.equal(f.reject(f.act(GE('groupOrder', { sizes: '1' }))), 'Unknown message type groupOrder.');
 });

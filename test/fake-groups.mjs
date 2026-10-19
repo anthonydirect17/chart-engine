@@ -13,12 +13,33 @@ export const GROUP_KEYS = {
   groupDelete: ['type', 'cid', 'group'],
   accountGroup: ['type', 'cid', 'account', 'group', 'highClose', 'size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 'target', 'consistency', 'maxMinis', 'maxMicros', 'typeId'],   // 0.6.5: the member's own rules
   memberRules: ['type', 'cid', 'account', 'size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 'target', 'consistency', 'maxMinis', 'maxMicros', 'typeId'],   // 0.6.5
+  /* 0.6.5 (Anthony 2026-10-19): trade the group from the ticket (ChartBridgeGroups.cs GroupEntry, on the order connection) */
+  groupPreview: ['type', 'cid', 'group', 'root', 'side', 'kind', 'price', 'limitOffset', 'bracket'],
+  groupOrder: ['type', 'cid', 'group', 'root', 'side', 'kind', 'price', 'limitOffset', 'bracket', 'sizes'],
   accountLimits: ['type', 'cid', 'account', 'floor', 'dailyLoss'],
 };
 export const GROUP_TYPES = Object.keys(GROUP_KEYS);
 /* 0.6.5: the rule keys a join or memberRules may carry (all of them, or none: the group's apply) */
 const RULE_KEYS = ['size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 'target', 'consistency', 'maxMinis', 'maxMicros', 'typeId'];
 const TYPE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
+ const MICRO_ROOTS = ['MNQ', 'MES', 'M2K', 'MYM', 'MGC', 'MCL', 'SIL', 'MBT', 'MET', 'M6E'];
+const usd2 = v => '$' + (+v).toLocaleString('en-US', { maximumFractionDigits: 2 });
+/** 0.6.5: one member's contracts, exactly ChartBridgeOrders.GroupSize (its guards in its order, its words) */
+export function groupSize(o) {
+  const budget = Math.round(o.riskPct * o.drawdown) / 100, per = o.stopTicks * o.tickValue;
+  const out = (why) => ({ size: 0, budget, why });
+  if (!isNum(o.roomFloor)) return out('its room to the floor is not known (' + (o.floorWhy || 'not known') + ')');
+  if (o.hasDaily && !isNum(o.roomDaily)) return out('its daily room is not known (' + (o.dailyWhy || 'not known') + ')');
+  let n = Math.floor(budget / per + 1e-9);
+  if (n < 1) return out('its risk ' + usd2(budget) + ' (' + +o.riskPct.toFixed(2) + '% of its max loss ' + usd2(o.drawdown) + ') is less than one contract\'s stop (' + usd2(per) + ' at ' + o.stopTicks + ' ticks)');
+  const held = Math.max(0, o.held);
+  if (o.maxSize > 0 && o.maxSize - held < n) { n = o.maxSize - held; if (n < 1) return out('it is at its max size (' + o.maxWords + '; it holds or has working ' + held + ')'); }
+  if (o.cap - held < n) { n = o.cap - held; if (n < 1) return out('it is at the cap of ' + o.cap + ' (' + o.capWords + '; it holds or has working ' + held + ')'); }
+  const byFloor = Math.floor(o.roomFloor / per + 1e-9);
+  if (byFloor < n) { n = byFloor; if (n < 1) return out('its room to the floor ' + usd2(o.roomFloor) + ' is less than one contract\'s stop (' + usd2(per) + ')'); }
+  if (o.hasDaily) { const byDay = Math.floor(o.roomDaily / per + 1e-9); if (byDay < n) { n = byDay; if (n < 1) return out('its daily room ' + usd2(o.roomDaily) + ' is less than one contract\'s stop (' + usd2(per) + ')'); } }
+  return { size: n, budget, why: null };
+}
 const PCT = /^(?:0|[1-9][0-9]?|100)(?:\.[0-9]{1,2})?$/;
 
 /** Adds the groups to OrderDeskV3's prototype. o.groups: false is a ChartBridge before 0.5.8 (no groups message, every group
@@ -186,10 +207,76 @@ export function installGroups(Desk) {
     },
     /** a ChartBridge before 0.6.5 (o.groupRules false): memberRules and the new keys are unknown to it, in its words */
     groupOldKeys(m) {
-      if (m.type === 'memberRules') return 'Unknown message type memberRules.';
+      if (m.type === 'memberRules' || m.type === 'groupPreview' || m.type === 'groupOrder') return 'Unknown message type ' + m.type + '.';
       const extra = m.type === 'groupSave' ? ['riskPct'] : m.type === 'accountGroup' ? RULE_KEYS : [];
       const k = Object.keys(m).find(x => extra.includes(x));
       return k ? 'Unknown key "' + k + '" in ' + m.type + '.' : null;
+    },
+    /* 0.6.5: every member's size for one group entry, in seat order: { seats, name, riskPct } or { error } */
+    groupPlan(m) {
+      const g = this.gr.list.get(m.group);
+      if (!g) return { error: 'no group ' + m.group };
+      if (!(g.riskPct > 0)) return { error: 'group ' + g.name + ' has no risk percent: set Risk % of max loss in Settings, Account groups' };
+      const stop = m.bracket && isNum(m.bracket.stop) ? m.bracket.stop : 0;
+      if (!(stop >= 1)) return { error: 'a group entry needs a stop: each member is sized from its stop loss (set the bracket\'s stop)' };
+      const members = [...this.gr.members].filter(([, id]) => id === g.id).map(([a]) => a).sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1);
+      if (!members.length) return { error: 'group ' + g.name + ' has no accounts' };
+      const ins = this.instruments[m.root];
+      if (!ins || ins.quoteOnly) return { error: 'instrument ' + m.root + ' is not served by ChartBridge' };
+      const tickValue = ins.tick * ins.pointValue, micro = MICRO_ROOTS.includes(m.root), buy = m.side === 'buy';
+      const seats = members.map(name => {
+        const s = { account: name, size: 0, risk: 0, budget: 0, out: null }, a = this.acct.get(name);
+        /* never an account another lane trades (ChartBridgeAgents.CopierUses, AccountTakenWhy, the bot's) */
+        const cp = this.sw.copier && this.copier ? (this.copier.leader === name ? name + ' is the copier\'s leader' : this.copier.followers.has(name) ? name + ' is a copier follower' : null) : null;
+        const taken = cp || (this.botAccount && this.botAccount.toLowerCase() === name.toLowerCase() ? name + ' is the bot\'s account' : null);
+        if (taken) { s.out = taken; return s; }
+        if (!a) { s.out = 'it is not in NinjaTrader now'; return s; }
+        const f = this.groupFields(a, this.accountMsg058(a)), r = this.groupRulesOf(name, g);
+        const pos = (this.positions.get(name + '|' + m.root) || {}).qty || 0;
+        const pend = [...this.orders.values()].filter(o => o.account === name && o.root === m.root && (o.state === 'working' || o.state === 'partFilled') && o.side === m.side).reduce((t, o) => t + o.qty - (o.filled || 0), 0);
+        const held = buy ? pos + pend : -pos + pend, maxSize = micro ? r.maxMicros : r.maxMinis;
+        const z = groupSize({ riskPct: g.riskPct, drawdown: r.drawdown, stopTicks: stop, tickValue, maxSize, maxWords: maxSize + (micro ? ' micros' : ' minis'), cap: this.capFor(m.root), capWords: 'maxQty.' + m.root + ' in config.txt',
+          held, roomFloor: f.roomFloor, floorWhy: f.why.roomFloor, hasDaily: r.dailyLoss > 0, roomDaily: f.roomDaily, dailyWhy: f.why.roomDaily });
+        s.size = z.size; s.budget = z.budget; s.out = z.why; s.risk = Math.round(z.size * stop * tickValue * 100) / 100;
+        return s;
+      });
+      return { seats, name: g.name, riskPct: g.riskPct, stop };
+    },
+    groupEntryWhy(m) {
+      if (typeof m.group !== 'string') return m.type + ' needs group (a group id)';
+      if (m.side !== 'buy' && m.side !== 'sell') return 'side must be buy or sell';
+      if (!['market', 'limit', 'stop'].includes(m.kind) && !(this.sw.orderTypes && (m.kind === 'stopLimit' || m.kind === 'mit'))) return 'kind must be market, limit or stop';
+      if (!m.bracket) return 'a group entry needs a stop: each member is sized from its stop loss (set the bracket\'s stop)';
+      if (!isNum(m.bracket.stop) || !isNum(m.bracket.target) || !Number.isInteger(m.bracket.stop) || !Number.isInteger(m.bracket.target) || m.bracket.stop < 0 || m.bracket.target < 0) return 'bracket needs both stop and target as whole numbers of ticks (0 for none)';
+      const p = this.groupPlan(m);
+      return p.error || null;
+    },
+    groupHead(m, p) { return { cid: m.cid !== undefined ? m.cid : null, group: m.group, name: p.name, root: m.root, side: m.side, kind: m.kind, stopTicks: p.stop, riskPct: p.riskPct }; },
+    check_groupPreview(m) { return this.gr.perMember ? this.groupEntryWhy(m) : 'Unknown message type groupPreview.'; },
+    do_groupPreview(m, conn) { const p = this.groupPlan(m); this.send(conn, Object.assign({ type: 'groupPreview' }, this.groupHead(m, p), { members: p.seats })); },
+    check_groupOrder(m) {
+      if (!this.gr.perMember) return 'Unknown message type groupOrder.';
+      const why = this.groupEntryWhy(m); if (why) return why;
+      if (typeof m.sizes !== 'string' || !/^(?:0|[1-9][0-9]{0,3})(?:,(?:0|[1-9][0-9]{0,3})){0,99}$/.test(m.sizes)) return 'sizes must be the sizes confirmed, in seat order ("4,0,2")';
+      const p = this.groupPlan(m), want = m.sizes.split(',');
+      if (want.length !== p.seats.length) return 'the group\'s accounts changed since the preview (' + p.seats.length + ' now, ' + want.length + ' confirmed): nothing was sent; look again and send';
+      const changed = p.seats.map((s, i) => (String(s.size) !== want[i] ? s.account + ' ' + want[i] + ' confirmed, ' + s.size + ' now' : null)).filter(Boolean);
+      if (changed.length) return 'the sizes changed since the preview (' + changed.join('; ') + '): nothing was sent; look again and send';
+      if (p.seats.every(s => s.size < 1)) return 'no account of group ' + p.name + ' can take this entry: ' + p.seats.map(s => s.account + ': ' + s.out).join('; ');
+      return null;
+    },
+    do_groupOrder(m, conn) {
+      const p = this.groupPlan(m);
+      p.seats.forEach((s, i) => {
+        if (s.size < 1) return;
+        const om = Object.assign({ type: 'order', cid: m.cid !== undefined ? m.cid + ':' + (i + 1) : undefined, account: s.account, root: m.root, side: m.side, kind: m.kind, qty: s.size, bracket: { stop: m.bracket.stop, target: m.bracket.target } },
+          m.price !== undefined ? { price: m.price } : {}, m.limitOffset !== undefined ? { limitOffset: m.limitOffset } : {});
+        if (om.cid === undefined) delete om.cid;
+        const why = this.check_order(om);
+        if (why) { s.out = 'refused: ' + why; s.size = 0; s.risk = 0; } else this.do_order(om);
+      });
+      (this.log || (this.log = [])).push({ file: 'Output', line: 'group entry on ' + p.name + ': ' + m.side + ' ' + m.root + ' ' + m.kind + ', stop ' + p.stop + ' ticks, risk ' + p.riskPct + '%: ' + p.seats.map(s => s.account + ' ' + (s.size > 0 ? s.size + ' (' + usd2(s.risk) + ')' : 'out: ' + s.out)).join('; ') });
+      this.send(conn, Object.assign({ type: 'groupPlaced' }, this.groupHead(m, p), { placed: p.seats.filter(s => s.size > 0).length, members: p.seats }));
     },
     check_memberRules(m) {   // 0.6.5
       if (!this.gr.perMember) return 'unknown message type memberRules';

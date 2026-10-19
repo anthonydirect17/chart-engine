@@ -242,6 +242,7 @@ public static class GroupsHarness
             MissedCloses();  // 0.6.3 (audit C2): a close or an intraday high ChartBridge did not see never overstates the room
             Backups();       // 0.6.3 (audit C3): groups.txt and account-marks.txt fall back to their last good copy
             MemberRules();   // 0.6.5 (Anthony 2026-10-19, PRIORITY): each member's own rules, the old file, the risk percent
+            GroupEntries();  // 0.6.5 (Anthony 2026-10-19): trade the group from the ticket, each member sized from the risk percent
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally
@@ -638,7 +639,7 @@ public static class GroupsHarness
         Pos(simA, mnq, 1);
         string st = State("SIM-A"), key;
         ChartBridgeGroups.AccountStateJson("SIM-A", out key);
-        Check(st.Contains("\"account\":\"SIM-A\",\"sim\":true,\"kind\":\"prop\",\"group\":\"Lucid Flex\",\"groupId\":\"g1\",\"groupSide\":\"long\",\"noHedge\":true,\"accountType\":null,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":0,\"consistency\":0}"),
+        Check(st.Contains("\"account\":\"SIM-A\",\"sim\":true,\"kind\":\"prop\",\"group\":\"Lucid Flex\",\"groupId\":\"g1\",\"groupSide\":\"long\",\"noHedge\":true,\"accountType\":null,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":0,\"consistency\":0,\"maxMinis\":0,\"maxMicros\":0}"),
               "prop: the group, its side and its rules (size and lockAt; 0 for none): " + st);
         Check(!key.Contains("\"at\":") && st.StartsWith(key.Substring(0, key.Length - 1)), "the key is the same text without at");
         string p = State("SIM-C");
@@ -914,7 +915,7 @@ public static class GroupsHarness
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Review", "true", "0", "2000", "eod", "0", "50000", "0").Replace("}", ",\"consistency\":40}"));
         Check(Rejection() == "" && FileText().Contains("group\tg1\tReview\ton\t-\t2000\teod\t-\t50000\t-\t40\t-\t-\n"), "CON: saved as the 11th field: " + FileText().Replace("\t", "<TAB>"));
         Check(Last("groups").Contains("\"lockAt\":null,\"consistency\":40,"), "CON: in the groups message");
-        Check(State("SIM-A").Contains("\"lockAt\":0,\"consistency\":40}"), "CON: in accountState.rules (0 none): " + State("SIM-A"));
+        Check(State("SIM-A").Contains("\"lockAt\":0,\"consistency\":40,\"maxMinis\":0,\"maxMicros\":0}"), "CON: in accountState.rules (0 none): " + State("SIM-A"));
         G("accountLimits", "{\"type\":\"accountLimits\",\"cid\":\"l\",\"account\":\"SIM-D\",\"floor\":45000,\"dailyLoss\":0}");
         Check(State("SIM-D").Contains("\"rules\":{\"floor\":45000,\"dailyLoss\":0}") && !State("SIM-D").Contains("consistency"), "CON: personal rules never have it: " + State("SIM-D"));
         // a 0.5.8 group line written before consistency (10 fields) reads as none
@@ -1125,7 +1126,7 @@ public static class GroupsHarness
         Check(e.Contains("\"floor\":49000,\"roomFloor\":1500,") && full.Contains("\"rules\":{\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":50100,\"target\":3000,\"consistency\":null,\"maxMinis\":null,\"maxMicros\":null,\"typeId\":null,\"own\":false}"),
               "0.6.5 migration: a 0.6.4 file's member inherits the group's rules (floor 51000-2000, rules own false): " + e);
         Check(FileText() == old.Replace("# group...", ChartBridgeGroups.Header2) || FileText().Replace(ChartBridgeGroups.Header2, "# group...") == old, "0.6.5 migration: saved again, the file is byte for byte what 0.6.4 writes (no rules line, 13 fields): " + FileText().Replace("\t", "<TAB>"));
-        Check(State("SIM-A").Contains("\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":0}"), "0.6.5 migration: accountState's rules as before: " + State("SIM-A"));
+        Check(State("SIM-A").Contains("\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":0,\"maxMinis\":0,\"maxMicros\":0}"), "0.6.5 migration: accountState's rules as before: " + State("SIM-A"));
         Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[]}"), "0.6.5 migration: risk off, no member with rules of its own");
         // the refusals: all or none, with joining only, the same checks as groupSave's
         string[][] bad = {
@@ -1168,8 +1169,8 @@ public static class GroupsHarness
         Check(c.Contains("\"floor\":24000,\"roomFloor\":1000,\"roomDaily\":500,\"targetLeft\":1250"), "0.6.5 mixed: SIM-C (25K, intraday 1000, daily 500): floor 24000, daily room 500: " + c);
         Check(AccountsNow().Contains("\"rules\":{\"size\":25000,\"dailyLoss\":500,\"drawdown\":1000,\"drawdownType\":\"intraday\",\"lockAt\":25100,\"target\":1250,\"consistency\":null,\"maxMinis\":2,\"maxMicros\":20,\"typeId\":\"lucid-daily-25k-eval\",\"own\":true}"), "0.6.5: the accounts message carries each member's rules (own true)");
         Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[\"SIM-A\",\"SIM-B\",\"SIM-C\"]}"), "0.6.5: the groups message names the members with rules of their own");
-        Check(State("SIM-A").Contains("\"rules\":{\"dailyLoss\":0,\"drawdown\":4500,\"drawdownType\":\"eod\",\"target\":9000,\"size\":150000,\"lockAt\":150100,\"consistency\":50}") &&
-              State("SIM-C").Contains("\"rules\":{\"dailyLoss\":500,\"drawdown\":1000,\"drawdownType\":\"intraday\",\"target\":1250,\"size\":25000,\"lockAt\":25100,\"consistency\":0}"), "0.6.5: each agent's accountState carries its member's own rules (the same seven keys): " + State("SIM-A"));
+        Check(State("SIM-A").Contains("\"rules\":{\"dailyLoss\":0,\"drawdown\":4500,\"drawdownType\":\"eod\",\"target\":9000,\"size\":150000,\"lockAt\":150100,\"consistency\":50,\"maxMinis\":10,\"maxMicros\":100}") &&
+              State("SIM-C").Contains("\"rules\":{\"dailyLoss\":500,\"drawdown\":1000,\"drawdownType\":\"intraday\",\"target\":1250,\"size\":25000,\"lockAt\":25100,\"consistency\":0,\"maxMinis\":2,\"maxMicros\":20}"), "0.6.5: each agent's accountState carries its member's own rules (the same seven keys): " + State("SIM-A"));
         // each floor trails from its own high and stops at its own lock
         Money(simC, 25000, 700, 200); Tick();
         Check(Entry(AccountsNow(), "SIM-C").Contains("\"floor\":24700,"), "0.6.5 intraday: SIM-C's high follows its equity (25700): floor 24700");
@@ -1247,6 +1248,111 @@ public static class GroupsHarness
         File.WriteAllText(p, f1); Restart();
         Clear(); G("groupDelete", "{\"type\":\"groupDelete\",\"cid\":\"d\",\"group\":\"g1\"}");
         Check(Rejection() == "" && !FileText().Contains("rules\t"), "0.6.5: groupDelete drops its members' rules lines");
+        ChartBridgeGroups.GapMs = 10000;
+        ClockEt(2026, 10, 14, 10, 0);
+    }
+
+    // ------------------------------------------------------------ 0.6.5 (Anthony 2026-10-19): trade the group from the ticket
+    static void GP(string type, string json) { lock (page.Actions) page.Actions.Clear(); ChartBridgeOrders.OnMessage(page, type, json); }
+    static string GE(string type, string side, string kind, string bracket, string extra) { return "{\"type\":\"" + type + "\",\"cid\":\"ge\",\"group\":\"g1\",\"root\":\"NQ\",\"side\":\"" + side + "\",\"kind\":\"" + kind + "\"" + (bracket != null ? ",\"bracket\":" + bracket : "") + extra + "}"; }
+    static string Seat(string json, string account) { Match m = Regex.Match(json, "\\{\"account\":\"" + Regex.Escape(account) + "\",\"size\":[0-9]+,\"risk\":[0-9.]+,\"budget\":[0-9.]+,\"out\":(?:null|\"[^\"]*\")\\}"); return m.Success ? m.Value : "(none) " + json; }
+    static void GroupEntries()
+    {
+        Flat();
+        ChartBridgeGroups.GapMs = 1e12;
+        Func<int> All = () => Submits(simA) + Submits(simB) + Submits(simC) + Submits(simD);
+        int s0 = All(), a0 = Submits(simA), b0 = Submits(simB), c0 = Submits(simC), d0 = Submits(simD);
+        string p = Path.Combine(folder, "groups.txt"), mp = Path.Combine(folder, "account-marks.txt");
+        Gone(p); Gone(mp);
+        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\t10\n");
+        ClockEt(2026, 10, 20, 9, 0); Restart();
+        foreach (Account a in new[] { simA, simB, simC, simD }) a.Connection.Status = ConnectionStatus.Connected;
+        ClockEt(2026, 10, 19, 18, 1);
+        Money(simA, 150500, 0, 0); Money(simB, 50500, 0, 0); Money(simC, 25000, 0, 0); Money(simD, 50000, 0, 0);
+        Clear(); G("accountGroup", JoinRules("SIM-A", "\"g1\"", "151000", R("150000", "0", "4500", "eod", "150100", "9000", ",\"maxMinis\":10,\"maxMicros\":100")));
+        G("accountGroup", JoinRules("SIM-B", "\"g1\"", "51000", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":40")));
+        G("accountGroup", JoinRules("SIM-C", "\"g1\"", null, R("25000", "500", "1000", "intraday", "25100", "1250", ",\"maxMinis\":2,\"maxMicros\":20")));
+        G("accountGroup", Join("SIM-D", "\"g1\"", null));
+        Tick();   // the session's day start at 18:01 ET (on time: the computed P&L counts)
+        ClockEt(2026, 10, 20, 10, 0); Tick();
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-D") == "g1", "GE setup: Lucid (risk 10%) with SIM-A 150K, SIM-B 50K, SIM-C 25K intraday (each its own rules) and SIM-D (the group's rules)");
+        // the preview: NQ, a 20 tick stop: $100 a contract
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        string pv = Last("groupPreview");
+        Check(pv.StartsWith("{\"type\":\"groupPreview\",\"cid\":\"ge\",\"group\":\"g1\",\"name\":\"Lucid\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"market\",\"stopTicks\":20,\"riskPct\":10,\"members\":["), "GE preview: the group, the stop and the risk: " + pv);
+        Check(Seat(pv, "SIM-A") == "{\"account\":\"SIM-A\",\"size\":4,\"risk\":400,\"budget\":450,\"out\":null}" && Seat(pv, "SIM-B") == "{\"account\":\"SIM-B\",\"size\":2,\"risk\":200,\"budget\":200,\"out\":null}" &&
+              Seat(pv, "SIM-C") == "{\"account\":\"SIM-C\",\"size\":1,\"risk\":100,\"budget\":100,\"out\":null}" && Seat(pv, "SIM-D") == "{\"account\":\"SIM-D\",\"size\":2,\"risk\":200,\"budget\":200,\"out\":null}",
+              "GE sizes: 10% of each max loss ($450, $200, $100, $200) / $100 a contract = 4, 2, 1, 2 (SIM-D on the group's $2,000): " + pv);
+        Check(All() == s0, "GE preview: nothing is placed");
+        // the guards: the cap (maxQty.NQ 9) and the max size (SIM-C 2 minis) at a 4 tick stop ($20 a contract)
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":4,\"target\":8}", ""));
+        pv = Last("groupPreview");
+        Check(Seat(pv, "SIM-A").Contains("\"size\":9,\"risk\":180,") && Seat(pv, "SIM-C").Contains("\"size\":2,\"risk\":40,") && Seat(pv, "SIM-B").Contains("\"size\":4,"),
+              "GE guards: SIM-A 450/20 = 22, its max 10 minis, then the cap of 9 (maxQty.NQ, the hard ceiling); SIM-C 5, its max 2 minis; SIM-B 10, its max 4: " + pv);
+        // rounds to 0: a 50 tick stop ($250 a contract) is more than SIM-B's $200
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":50,\"target\":0}", ""));
+        pv = Last("groupPreview");
+        Check(Seat(pv, "SIM-B") == "{\"account\":\"SIM-B\",\"size\":0,\"risk\":0,\"budget\":200,\"out\":\"its risk $200 (10% of its max loss $2,000) is less than one contract's stop ($250 at 50 ticks)\"}" && Seat(pv, "SIM-A").Contains("\"size\":1,"),
+              "GE rounds to 0: SIM-B sits out and says why; SIM-A 450/250 = 1: " + pv);
+        // the room caps: SIM-B's room to its floor 150 (equity 49150, floor 49000), SIM-C's daily room 80 (lost 420 of 500)
+        Money(simB, 49150, 0, 0); Money(simC, 24580, 0, 0); Tick();
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        pv = Last("groupPreview");
+        Check(Seat(pv, "SIM-B").Contains("\"size\":1,\"risk\":100,") , "GE room cap: SIM-B $200 would be 2, its room to the floor $150 holds it to 1: " + Seat(pv, "SIM-B"));
+        Check(Seat(pv, "SIM-C").Contains("\"size\":0,") && Seat(pv, "SIM-C").Contains("its daily room $80 is less than one contract's stop ($100)"), "GE daily room: SIM-C sits out, its daily room $80: " + Seat(pv, "SIM-C"));
+        // a room not known: SIM-D not connected
+        simD.Connection.Status = ConnectionStatus.Disconnected;
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        pv = Last("groupPreview");
+        Check(Seat(pv, "SIM-D").Contains("\"size\":0,") && Seat(pv, "SIM-D").Contains("its room to the floor is not known (the account is not connected)"), "GE room not known: SIM-D sits out and says why: " + Seat(pv, "SIM-D"));
+        simD.Connection.Status = ConnectionStatus.Connected;
+        Money(simB, 50500, 0, 0); Money(simC, 25000, 0, 0); Tick();
+        // refusals: no stop, no bracket, risk off, a bad sizes list
+        foreach (string[] x in new[] {
+            new[] { GE("groupPreview", "buy", "market", "{\"stop\":0,\"target\":40}", ""), "a group entry needs a stop: each member is sized from its stop loss (set the bracket's stop)" },
+            new[] { GE("groupPreview", "buy", "market", null, ""), "a group entry needs a stop" },
+            new[] { GE("groupOrder", "buy", "market", null, ",\"sizes\":\"4,2,1,2\""), "a group entry needs a stop" },
+            new[] { GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"qty\":3"), "unknown key \\\"qty\\\"" },
+            new[] { GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"4,2\""), "the group's accounts changed since the preview (4 now, 2 confirmed)" },
+            new[] { GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"5,2,1,2\""), "the sizes changed since the preview (SIM-A 5 confirmed, 4 now): nothing was sent" },
+            new[] { GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"four\""), "sizes must be the sizes confirmed" } })
+        {
+            Clear(); GP(x[0].Contains("groupOrder") ? "groupOrder" : "groupPreview", x[0]);
+            Check(Rejection().Contains(x[1]) && All() == s0, "GE refused, nothing placed: " + x[1] + " (" + Rejection() + ")");
+        }
+        // the entry: the sizes confirmed, one entry with its bracket on each member
+        Clear(); GP("groupOrder", GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"4,2,1,2\""));
+        string gp = Last("groupPlaced");
+        Func<Account, Order> last = a => a.Orders.LastOrDefault();
+        Check(Rejection() == "" && gp.Contains("\"placed\":4,") && Submits(simA) == a0 + 1 && Submits(simB) == b0 + 1 && Submits(simC) == c0 + 1 && Submits(simD) == d0 + 1 &&
+              last(simA).Quantity == 4 && last(simB).Quantity == 2 && last(simC).Quantity == 1 && last(simD).Quantity == 2 && last(simA).Name.EndsWith(" s20 t40") && last(simA).OrderType == OrderType.Market && last(simA).Instrument == nq,
+              "GE placed: NQ market 4, 2, 1, 2, each with its own bracket (s20 t40): " + gp);
+        Check(Logged("group entry on Lucid: buy NQ market, stop 20 ticks, risk 10%: SIM-A 4 ($400); SIM-B 2 ($200); SIM-C 1 ($100); SIM-D 2 ($200)"), "GE: the Output window says each member's size and risk");
+        s0 = All();
+        // an add: sized the same way from the add's own stop, what each holds counted against its max size and the cap
+        Flat();
+        Pos(simA, nq, 4); Pos(simB, nq, 2);
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "limit", "{\"stop\":4,\"target\":8}", ",\"price\":24990"));
+        pv = Last("groupPreview");
+        Check(Seat(pv, "SIM-A").Contains("\"size\":5,") && Seat(pv, "SIM-B").Contains("\"size\":2,"), "GE add: SIM-A long 4: its max 10 less 4 = 6, the cap 9 less 4 = 5; SIM-B long 2: its max 4 less 2 = 2: " + pv);
+        Pos(simB, nq, 4);
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "limit", "{\"stop\":4,\"target\":8}", ",\"price\":24990"));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis; it holds or has working 4)"), "GE add: SIM-B at its max size sits out: " + Seat(Last("groupPreview"), "SIM-B"));
+        // a member another lane trades sits out: the copier's leader
+        Flat();
+        // the group's risk off: refused whole
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "0", "2000", "eod", "3000", "50000", "0").Replace("}", ",\"riskPct\":0}"));
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        Check(Rejection().Contains("group Lucid has no risk percent: set Risk % of max loss in Settings, Account groups"), "GE: risk off, refused: " + Rejection());
+        // the one-direction check holds per member: SIM-A long, a sell group entry is refused on every member
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "0", "2000", "eod", "3000", "50000", "0").Replace("}", ",\"riskPct\":10}"));
+        Pos(simA, nq, 1);
+        Clear(); GP("groupPreview", GE("groupPreview", "sell", "market", "{\"stop\":20,\"target\":40}", ""));
+        string sizes = string.Join(",", new[] { "SIM-A", "SIM-B", "SIM-C", "SIM-D" }.Select(n => Regex.Match(Seat(Last("groupPreview"), n), "\"size\":([0-9]+)").Groups[1].Value));
+        Clear(); GP("groupOrder", GE("groupOrder", "sell", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"" + sizes + "\""));
+        gp = Last("groupPlaced");
+        Check(All() == s0 && gp.Contains("refused: Group Lucid is long") , "GE: a sell while the group is long: every member refused by the one-direction check, said per member: " + gp);
+        Flat();
         ChartBridgeGroups.GapMs = 10000;
         ClockEt(2026, 10, 14, 10, 0);
     }

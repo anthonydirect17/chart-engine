@@ -303,6 +303,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "cancel", new[] { "type", "cid", "id", "from" } },   // 0.4.0 accounts: "from": "list" (the Working orders tab), refused unless cancelFromList is on
             { "flatten", new[] { "type", "cid", "account", "root" } },
             { "merge", new[] { "type", "cid", "account", "root" } },   // 0.4.0 B4
+            // 0.6.5 (Anthony 2026-10-19): trade the group from the ticket (ChartBridgeGroups.cs, GroupEntry)
+            { "groupPreview", new[] { "type", "cid", "group", "root", "side", "kind", "price", "limitOffset", "bracket" } },
+            { "groupOrder", new[] { "type", "cid", "group", "root", "side", "kind", "price", "limitOffset", "bracket", "sizes" } },
         };
         private static readonly string[] BracketKeys = { "stop", "target" };
         private static readonly Regex BracketRx = new Regex("\"bracket\"\\s*:\\s*\\{([^{}]*)\\}");
@@ -319,7 +322,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Has(top, "bracket")) { why = "bracket must be an object like {\"stop\":8,\"target\":16}"; return null; }
             // 0.3.7: a bracket object belongs on order only; on plan, change or cancel it is refused. On flatten it is
             // still ignored, so Flatten is never refused for anything new.
-            if (bracketBody != null && type != "order" && type != "flatten") { why = "unknown key \"bracket\" in " + type; return null; }
+            if (bracketBody != null && type != "order" && type != "flatten" && type != "groupPreview" && type != "groupOrder") { why = "unknown key \"bracket\" in " + type; return null; }
             if (Duplicate(top) || (bracketBody != null && Duplicate(bracketBody))) { why = "message has a key twice"; return null; }
             string[] allowed;
             if (!Keys.TryGetValue(type, out allowed)) { why = "unknown message type " + type; return null; }
@@ -386,7 +389,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (why == null && type == "order" && StrategiesOn) why = CutStrategy(ref text, out strategyBody);
                 string bracketBody = null, top = why == null ? TopLevel(type, text, out bracketBody, out why) : null;
                 if (why == null) why = QuoteOnly(top, id);   // 0.4.0: a quote-only market: refused before any other order code runs
-                if (why == null && type != "flatten" && type != "merge") why = MergeFreezeWhy(type, top, id);   // 0.4.0 B4: a Merge swap freezes its account and root
+                if (why == null && type != "flatten" && type != "merge" && type != "groupPreview" && type != "groupOrder") why = MergeFreezeWhy(type, top, id);   // 0.6.5: a group entry asks it per member   // 0.4.0 B4: a Merge swap freezes its account and root
                 if (why != null) { Reject(client, cid, id, why); return; }
                 if (type == "order") why = PlaceOrder(top, bracketBody, cid, strategyBody);
                 else if (type == "change") why = ChangeOrder(top, id);
@@ -394,6 +397,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (type == "cancel") why = CancelOrder(top, id);   // 0.4.0 accounts: top for "from"
                 else if (type == "flatten") why = Flatten(top);
                 else if (type == "merge") why = MergeStart(client, top, cid);   // 0.4.0 B4
+                else if (type == "groupPreview" || type == "groupOrder") why = GroupEntry(client, type, top, bracketBody, cid);   // 0.6.5
                 if (why != null) Reject(client, cid, id, why);
             }
             catch (Exception ex)

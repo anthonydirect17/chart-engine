@@ -184,7 +184,7 @@ test('strict messages: known keys only, bracket must be an object', () => {
 
 test('every order message passes the gate first; auth checks origin and token', () => {
   const on = fnBody('OnMessage');
-  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string strategyBody = null;\s*if \(why == null && type == "order" && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why == null\) why = QuoteOnly\(top, id\);\s*if \(why == null && type != "flatten" && type != "merge"\) why = MergeFreezeWhy\(type, top, id\);\s*if \(why != null\) \{ Reject/);   // 0.4.0: a quote-only market is refused right after the gate; B1: a strategy is cut out only after the gate passed; 0.4.0 B4: then the Merge freeze
+  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string strategyBody = null;\s*if \(why == null && type == "order" && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why == null\) why = QuoteOnly\(top, id\);\s*if \(why == null && type != "flatten" && type != "merge" && type != "groupPreview" && type != "groupOrder"\) why = MergeFreezeWhy\(type, top, id\);[^\n]*\s*if \(why != null\) \{ Reject/);   // 0.4.0: a quote-only market is refused right after the gate; B1: a strategy is cut out only after the gate passed; 0.4.0 B4: then the Merge freeze
   const gate = fnBody('Gate');
   assert.match(gate, /if \(!Enabled\) return/);
   assert.match(gate, /if \(!client\.Trader \|\| !OriginAllowed\(client\.Origin\)\) return/);
@@ -244,7 +244,7 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
 
 test('the main file routes order messages only to ChartBridgeOrders, and ships both files', () => {
   assert.match(code, /ChartBridgeOrders\.OnMessage\(client, type, text\)/);
-  assert.match(code, /type == "auth" \|\| type == "order" \|\| type == "change" \|\| type == "plan" \|\| type == "cancel" \|\| type == "flatten"\)\s*ChartBridgeOrders\.OnMessage/);   // 0.3.7: plan
+  assert.match(code, /type == "auth" \|\| type == "order" \|\| type == "change" \|\| type == "plan" \|\| type == "cancel" \|\| type == "flatten" \|\| type == "groupPreview" \|\| type == "groupOrder"\)[^\n]*\s*ChartBridgeOrders\.OnMessage/);   // 0.3.7: plan
   // /session: the Host check, then (0.3.2) the PIN unlock, then the order sign-in token
   assert.match(code, /if \(path == "\/session"\)[^\n]*\n\s*\{\s*if \(ctx\.Request\.Headers\["Host"\] != "localhost:" \+ ChartBridgeConfig\.Port\) \{ ctx\.Response\.StatusCode = 403;[^\n]*\n\s*if \(!ChartBridgePin\.TokenValid\(ctx\.Request\.Headers\[ChartBridgePin\.Header\]\)\) \{ Refuse\(ctx\); return; \}[^\n]*\n\s*ServeText\(ctx, ChartBridgeOrders\.SessionJson\(\), "application\/json"\);/);
   assert.match(code, /ChartBridgeOrders\.WatchConnections\(\);\s*try \{ ChartBridgeOrders\.Resume\(\); \}/);
@@ -557,7 +557,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(bodyOf(code, 'public void Close()'), /try \{ if \(Socket != null\) Socket\.Abort\(\); \} catch \(Exception\) \{ \}/);
   assert.match(code, /long waited = Stopwatch\.GetTimestamp\(\) - q\.At - \(Interlocked\.Read\(ref bulkSpent\) - q\.Bulk\);/);
   for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
-  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",\s*"bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock" \};/);   // 0.4.0: accounts (B2), merge (B4), copier (B5), the bot channel (B3) and managed (B1) in the order lane; 0.5.6: pcClock (after hello, in order)
+  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",\s*"bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock", "groupPreview", "groupPlaced" \};/);   // 0.4.0: accounts (B2), merge (B4), copier (B5), the bot channel (B3) and managed (B1) in the order lane; 0.5.6: pcClock (after hello, in order)
   assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
   const md2 = bodyOf(code, 'private static void OnMarketData(');

@@ -114,7 +114,7 @@ export function checkKeysV3(m, text) {
   if (!allowed) return 'Unknown message type ' + m.type + '.';
   for (const k of Object.keys(m)) if (!allowed.includes(k) && !(m.type === 'flatten' && k === 'bracket')) return 'Unknown key "' + k + '" in ' + m.type + '.';
   for (const [k, v] of Object.entries(m)) {
-    if (v !== null && typeof v === 'object' && !(m.type === 'order' && (k === 'bracket' || k === 'strategy'))) return 'The message has an unexpected nested object or list.';
+    if (v !== null && typeof v === 'object' && !(m.type === 'order' && (k === 'bracket' || k === 'strategy')) && !((m.type === 'groupPreview' || m.type === 'groupOrder') && k === 'bracket')) return 'The message has an unexpected nested object or list.';
     if (typeof v === 'boolean' && !(BOOL_KEYS[m.type] || []).includes(k) && !(OPT_BOOL_KEYS[m.type] || []).includes(k)) return k + ' cannot be true or false.';
     if (typeof v === 'string' && v.length > 200) return k + ' is over 200 characters.';
   }

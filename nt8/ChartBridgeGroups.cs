@@ -140,6 +140,140 @@ namespace NinjaTrader.NinjaScript.AddOns
             return list;
         }
 
+        // ---------------------------------------------------------- 0.6.5: trade the group from the ticket (Anthony 2026-10-19)
+        // The ticket may pick a group in place of one account: one entry with its bracket stop goes to every member, each member sized
+        // from the group's risk percent of its own max loss (its drawdown amount). No leader, no follower: the copier is untouched.
+        // groupPreview answers each member's size, dollar risk and budget, or why it sits out; groupOrder carries the sizes Anthony saw
+        // and confirmed: ChartBridge works them out again and refuses the whole entry if any changed (nothing is ever placed at a size
+        // he did not see), then places each member's entry through PlaceOrder (every gate, the one-direction check, its own legs).
+        public sealed class GroupSeat { public string Account, Out; public int Size; public double Risk, Budget; }
+        // micro contracts (the max size in micros applies); every other root is a mini
+        public static readonly HashSet<string> MicroRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "MNQ", "MES", "M2K", "MYM", "MGC", "MCL", "SIL", "MBT", "MET", "M6E" };
+        private static string Usd(double v) { return "$" + v.ToString("#,0.##", CultureInfo.InvariantCulture); }
+
+        // One member's contracts (pure, for the harness): floor(budget / (stopTicks x tickValue)), budget = riskPct of its drawdown;
+        // never above its max size or the maxQty cap less what it already holds and has working on that side; capped so the stop loss
+        // fits its room to its floor and (with a daily loss rule) its daily room. A room not known: it sits out. 0 always says why.
+        public static int GroupSize(double riskPct, double drawdown, int stopTicks, double tickValue, int maxSize, string maxWords, int cap, string capWords, int held,
+                                    double? roomFloor, string floorWhy, bool hasDaily, double? roomDaily, string dailyWhy, out double budget, out string why)
+        {
+            why = null;
+            budget = Math.Round(riskPct * drawdown) / 100;
+            double per = stopTicks * tickValue;
+            if (!roomFloor.HasValue) { why = "its room to the floor is not known (" + (floorWhy ?? "not known") + ")"; return 0; }
+            if (hasDaily && !roomDaily.HasValue) { why = "its daily room is not known (" + (dailyWhy ?? "not known") + ")"; return 0; }
+            int n = (int)Math.Floor(budget / per + 1e-9);
+            if (n < 1) { why = "its risk " + Usd(budget) + " (" + riskPct.ToString("0.##", CultureInfo.InvariantCulture) + "% of its max loss " + Usd(drawdown) + ") is less than one contract's stop (" + Usd(per) + " at " + stopTicks + " ticks)"; return 0; }
+            held = Math.Max(0, held);
+            if (maxSize > 0 && maxSize - held < n) { n = maxSize - held; if (n < 1) { why = "it is at its max size (" + maxWords + "; it holds or has working " + held + ")"; return 0; } }
+            if (cap - held < n) { n = cap - held; if (n < 1) { why = "it is at the cap of " + cap + " (" + capWords + "; it holds or has working " + held + ")"; return 0; } }
+            int byFloor = (int)Math.Floor(roomFloor.Value / per + 1e-9);
+            if (byFloor < n) { n = byFloor; if (n < 1) { why = "its room to the floor " + Usd(roomFloor.Value) + " is less than one contract's stop (" + Usd(per) + ")"; return 0; } }
+            if (hasDaily)
+            {
+                int byDay = (int)Math.Floor(roomDaily.Value / per + 1e-9);
+                if (byDay < n) { n = byDay; if (n < 1) { why = "its daily room " + Usd(roomDaily.Value) + " is less than one contract's stop (" + Usd(per) + ")"; return 0; } }
+            }
+            return n;
+        }
+
+        // Every member's size for one entry, in seat order (by name); null with err when the entry cannot go to the group at all.
+        internal static List<GroupSeat> GroupPlan(string gid, string root, bool isBuy, int stopTicks, out string groupName, out double riskPct, out string err)
+        {
+            groupName = null; riskPct = 0; err = null;
+            ChartBridgeGroups.RiskGroup g = ChartBridgeGroups.RiskGroupOf(gid, out err);
+            if (g == null) return null;
+            groupName = g.Name; riskPct = g.RiskPct;
+            if (g.RiskPct <= 0) { err = "group " + g.Name + " has no risk percent: set Risk % of max loss in Settings, Account groups"; return null; }
+            if (stopTicks < 1) { err = "a group entry needs a stop: each member is sized from its stop loss (set the bracket's stop)"; return null; }
+            if (g.Members.Count == 0) { err = "group " + g.Name + " has no accounts"; return null; }
+            Instrument inst = ChartBridgeServer.InstrumentFor(root);
+            if (inst == null || inst.MasterInstrument == null) { err = "instrument " + root + " is not served by ChartBridge"; return null; }
+            double tickValue = inst.MasterInstrument.TickSize * inst.MasterInstrument.PointValue;
+            bool micro = MicroRoots.Contains(root);
+            List<GroupSeat> seats = new List<GroupSeat>();
+            foreach (string name in g.Members)
+            {
+                GroupSeat s = new GroupSeat { Account = name };
+                seats.Add(s);
+                Account a = null;
+                lock (Account.All) foreach (Account x in Account.All) if (x.Name != null && x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { a = x; break; }
+                // never an account another lane trades (as a group trading seat): the copier's leader or a follower, the bot's, an agent's
+                string taken = ChartBridgeAgents.CopierUses(name) ?? ChartBridgeAgents.AccountTakenWhy(name, "a group entry");
+                string bot = ChartBridgeAgents.BotAccountForAgents();
+                if (taken == null && bot != null && string.Equals(bot, name, StringComparison.OrdinalIgnoreCase)) taken = name + " is the bot's account";
+                if (taken != null) { s.Out = taken; continue; }
+                if (a == null) { s.Out = "it is not in NinjaTrader now"; continue; }
+                ChartBridgeGroups.Numbers n = ChartBridgeGroups.Read(name, a, false);
+                if (n.R == null) { s.Out = "it is not in group " + g.Name + " now"; continue; }
+                int posNow = SignedPosition(a, inst), posEff = EffectivePosition(a, inst), pb, ps;
+                PendingOrders(a, inst, out pb, out ps);
+                int pos = isBuy ? Math.Max(posNow, posEff) : Math.Min(posNow, posEff), held = isBuy ? pos + pb : -pos + ps;
+                int maxSize = micro ? n.R.MaxMicros : n.R.MaxMinis;
+                string floorWhy, dailyWhy;
+                n.Why.TryGetValue("roomFloor", out floorWhy); n.Why.TryGetValue("roomDaily", out dailyWhy);
+                double budget;
+                string why;
+                s.Size = GroupSize(riskPct, n.R.Drawdown, stopTicks, tickValue, maxSize, maxSize + (micro ? " micros" : " minis"), CapFor(root), "maxQty." + root + " in config.txt", held,
+                                   n.RoomFloor, floorWhy, n.R.DailyLoss > 0, n.RoomDaily, dailyWhy, out budget, out why);
+                s.Budget = budget; s.Out = why; s.Risk = Math.Round(s.Size * stopTicks * tickValue * 100) / 100;
+            }
+            return seats;
+        }
+
+        private static readonly Regex SizesRx = new Regex("^(?:0|[1-9][0-9]{0,3})(?:,(?:0|[1-9][0-9]{0,3})){0,99}$");
+        private static string SeatsJson(List<GroupSeat> seats)
+        {
+            return "[" + string.Join(",", seats.Select(s => "{\"account\":" + CbJson.Str(s.Account) + ",\"size\":" + s.Size.ToString(CultureInfo.InvariantCulture) + ",\"risk\":" + CbJson.Num(s.Risk) +
+                ",\"budget\":" + CbJson.Num(s.Budget) + ",\"out\":" + (s.Out == null ? "null" : CbJson.Str(s.Out)) + "}")) + "]";
+        }
+
+        // groupPreview and groupOrder (the order connection's gates have passed in OnMessage).
+        private static string GroupEntry(ChartBridgeClient client, string type, string top, string bracketBody, string cid)
+        {
+            string gid = Str(top, "group"), root = (Str(top, "root") ?? "").ToUpperInvariant(), side = Str(top, "side"), kind = Str(top, "kind");
+            if (gid == null) return type + " needs group (a group id)";
+            if (side != "buy" && side != "sell") return "side must be buy or sell";
+            if (kind != "market" && kind != "limit" && kind != "stop" && !(OrderTypesOn && NewKind(kind))) return "kind must be market, limit or stop";
+            int stopTicks = 0, targetTicks = 0;
+            if (bracketBody == null) return "a group entry needs a stop: each member is sized from its stop loss (set the bracket's stop)";
+            if (Int("{" + bracketBody + "}", "stop", out stopTicks) != 1 || Int("{" + bracketBody + "}", "target", out targetTicks) != 1 || stopTicks < 0 || targetTicks < 0)
+                return "bracket needs both stop and target as whole numbers of ticks (0 for none)";
+            string name, err;
+            double risk;
+            List<GroupSeat> seats = GroupPlan(gid, root, side == "buy", stopTicks, out name, out risk, out err);
+            if (seats == null) return err;
+            string head = "\"cid\":" + (cid == null ? "null" : CbJson.Str(cid)) + ",\"group\":" + CbJson.Str(gid) + ",\"name\":" + CbJson.Str(name) + ",\"root\":" + CbJson.Str(root) + ",\"side\":" + CbJson.Str(side) +
+                          ",\"kind\":" + CbJson.Str(kind) + ",\"stopTicks\":" + stopTicks.ToString(CultureInfo.InvariantCulture) + ",\"riskPct\":" + CbJson.Num(risk);
+            if (type == "groupPreview") { client.Send("{\"type\":\"groupPreview\"," + head + ",\"members\":" + SeatsJson(seats) + "}"); return null; }
+            string sizes = Str(top, "sizes");
+            if (sizes == null || !SizesRx.IsMatch(sizes)) return "sizes must be the sizes confirmed, in seat order (\"4,0,2\")";
+            string[] want = sizes.Split(',');
+            if (want.Length != seats.Count) return "the group's accounts changed since the preview (" + seats.Count + " now, " + want.Length + " confirmed): nothing was sent; look again and send";
+            List<string> changed = new List<string>();
+            for (int i = 0; i < seats.Count; i++) if (want[i] != seats[i].Size.ToString(CultureInfo.InvariantCulture)) changed.Add(seats[i].Account + " " + want[i] + " confirmed, " + seats[i].Size + " now");
+            if (changed.Count > 0) return "the sizes changed since the preview (" + string.Join("; ", changed) + "): nothing was sent; look again and send";
+            if (seats.All(s => s.Size < 1)) return "no account of group " + name + " can take this entry: " + string.Join("; ", seats.Select(s => s.Account + ": " + s.Out));
+            string price = Has(top, "price") ? Regex.Match(top, "\"price\"\\s*:\\s*([0-9.]+)").Groups[1].Value : null;
+            string lo = Has(top, "limitOffset") ? Regex.Match(top, "\"limitOffset\"\\s*:\\s*(-?[0-9.]+)").Groups[1].Value : null;
+            for (int i = 0; i < seats.Count; i++)
+            {
+                GroupSeat s = seats[i];
+                if (s.Size < 1) continue;
+                string one = "{\"type\":\"order\",\"account\":" + CbJson.Str(s.Account) + ",\"root\":" + CbJson.Str(root) + ",\"side\":" + CbJson.Str(side) + ",\"kind\":" + CbJson.Str(kind) +
+                             ",\"qty\":" + s.Size.ToString(CultureInfo.InvariantCulture) + (price != null ? ",\"price\":" + price : "") + (lo != null ? ",\"limitOffset\":" + lo : "") + "}";
+                string why;
+                try { why = MergeFreezeWhy("order", one, null) ?? PlaceOrder(one, bracketBody, cid != null ? cid + ":" + (i + 1) : null, null); }
+                catch (Exception ex) { why = "ChartBridge error: " + ex.Message; }
+                if (why != null) { s.Out = "refused: " + why; s.Size = 0; s.Risk = 0; }
+            }
+            int placed = seats.Count(s => s.Size > 0);
+            ChartBridgeServer.Log("group entry on " + name + ": " + side + " " + root + " " + kind + ", stop " + stopTicks + " ticks, risk " + risk.ToString("0.##", CultureInfo.InvariantCulture) + "%: " +
+                string.Join("; ", seats.Select(s => s.Account + " " + (s.Size > 0 ? s.Size + " (" + Usd(s.Risk) + ")" : "out: " + s.Out))));
+            client.Send("{\"type\":\"groupPlaced\"," + head + ",\"placed\":" + placed.ToString(CultureInfo.InvariantCulture) + ",\"members\":" + SeatsJson(seats) + "}");
+            return null;
+        }
+
         private static string GroupKindWord(OrderType t)
         {
             return t == OrderType.Limit ? "limit" : t == OrderType.StopMarket ? "stop" : t == OrderType.StopLimit ? "stop limit" : t == OrderType.MIT ? "MIT" : "market";
@@ -1355,7 +1489,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (n.G != null)   // 0.6.5: the member's own rules (or its group's), the same seven keys as before
                     b.Append("{\"dailyLoss\":").Append(Zero0(n.R.DailyLoss)).Append(",\"drawdown\":").Append(Zero0(n.R.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(n.R.Type))
                      .Append(",\"target\":").Append(Zero0(n.R.Target)).Append(",\"size\":").Append(Zero0(n.R.Size)).Append(",\"lockAt\":").Append(Zero0(n.R.LockAt))
-                     .Append(",\"consistency\":").Append(Zero0(n.R.Consistency)).Append('}');   // CON (a): informational, 0 none
+                     .Append(",\"consistency\":").Append(Zero0(n.R.Consistency))   // CON (a): informational, 0 none
+                     .Append(",\"maxMinis\":").Append(n.R.MaxMinis.ToString(CultureInfo.InvariantCulture)).Append(",\"maxMicros\":").Append(n.R.MaxMicros.ToString(CultureInfo.InvariantCulture)).Append('}');   // 0.6.5 (Anthony 2026-10-19): the member's max size, 0 none
                 else if (!n.MySet) b.Append("null");   // no limits ever set by Anthony: the agent keeps its model numbers
                 else b.Append("{\"floor\":").Append(Zero0(n.MyFloor ?? 0)).Append(",\"dailyLoss\":").Append(Zero0(n.MyDaily ?? 0)).Append('}');   // rules: 0 is none (the firm or the account has no such rule), never null
                 foreach (string k in NumberKeys) b.Append(",\"").Append(k).Append("\":").Append(Num(Get(n, k)));
@@ -1712,6 +1847,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (readError != null || !state.Groups.ContainsKey(id)) return null;
                 return state.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+            }
+        }
+
+        // 0.6.5: a group's name, risk percent and members in seat order (by name), or null with why (no such group, groups.txt unreadable).
+        public sealed class RiskGroup { public string Id, Name; public double RiskPct; public List<string> Members; }
+        public static RiskGroup RiskGroupOf(string id, out string why)
+        {
+            why = null;
+            EnsureLoaded();
+            lock (Mem)
+            {
+                if (readError != null) { why = ReadFailedText; return null; }
+                Group g;
+                if (id == null || !state.Groups.TryGetValue(id, out g)) { why = "no group " + id; return null; }
+                return new RiskGroup { Id = g.Id, Name = g.Name, RiskPct = g.RiskPct, Members = state.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() };
             }
         }
 

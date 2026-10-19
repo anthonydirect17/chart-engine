@@ -119,5 +119,6 @@ test('the fake bridge\'s groups (test/fake-groups.mjs): the contract\'s messages
   // the fake's keys are the C#'s
   const cs = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeGroups.cs'), 'utf8');
   const { GROUP_KEYS } = await import('./fake-groups.mjs');
-  for (const [type, keys] of Object.entries(GROUP_KEYS)) assert.ok(cs.includes('{ "' + type + '", new[] { ' + keys.map(k => '"' + k + '"').join(', ') + ' } }'), type);
+  const ord = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeOrders.cs'), 'utf8');   // 0.6.5: groupPreview and groupOrder are the order connection's
+  for (const [type, keys] of Object.entries(GROUP_KEYS)) assert.ok((type.startsWith('groupP') || type === 'groupOrder' ? ord : cs).includes('{ "' + type + '", new[] { ' + keys.map(k => '"' + k + '"').join(', ') + ' } }'), type);
 });

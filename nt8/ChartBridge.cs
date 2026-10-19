@@ -1572,7 +1572,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public Action<string> Tap;              // test hook: sees every message sent (unused in NinjaTrader)
 
         private static readonly string[] OrderLaneTypes = { "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",
-            "bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock" };   // 0.4.0 accounts: "accounts" in the order lane   // 0.4.0 B4: merge   // 0.4.0 copier: copier, copierEvent   // 0.4.0 bot: the bot's messages never wait behind market data   // 0.4.0 B1: managed   // 0.5.6: pcClock, in order after hello
+            "bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock", "groupPreview", "groupPlaced" };   // 0.6.5: a group entry's preview and result   // 0.4.0 accounts: "accounts" in the order lane   // 0.4.0 B4: merge   // 0.4.0 copier: copier, copierEvent   // 0.4.0 bot: the bot's messages never wait behind market data   // 0.4.0 B1: managed   // 0.5.6: pcClock, in order after hello
 
         // The message's type, read from its start ({"type":"...), as every message ChartBridge sends begins.
         public static string TypeOf(string json)
@@ -2347,7 +2347,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             else if (type == "htf") OnHtfMessage(client, text);                 // 0.3.7: 4h, 1D, 1W bars (strict)
             else if (type == "weekProfile") OnWeekProfileMessage(client, text); // 0.3.7: the last 5 sessions' volume at price (strict)
-            else if (type == "auth" || type == "order" || type == "change" || type == "plan" || type == "cancel" || type == "flatten")
+            else if (type == "auth" || type == "order" || type == "change" || type == "plan" || type == "cancel" || type == "flatten" || type == "groupPreview" || type == "groupOrder")   // 0.6.5: groupPreview, groupOrder
                 ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
             else if (ChartBridgeGroups.Handles(type)) ChartBridgeGroups.OnMessage(client, type, text);   // 0.5.8: groupSave, groupDelete, accountGroup, accountLimits (ChartBridgeGroups.cs; no order calls)
             else if (type == "client" || type == "accountTrade" || type == "accountArchive" || type == "accountUnarchive")

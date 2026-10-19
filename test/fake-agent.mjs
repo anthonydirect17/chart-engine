@@ -91,7 +91,7 @@ export function accountStateProblem(m) {
   if (m.kind !== 'prop' && (m.group !== null || m.groupId !== null || m.groupSide !== null || m.noHedge !== null || m.accountType !== null)) return 'group fields set on a ' + m.kind + ' account';
   if (![null, 'eval', 'funded'].includes(m.accountType)) return 'accountType ' + m.accountType;   // 0.6.2: the group's Type, null when not set or not prop
   const rk = m.rules === null ? '' : Object.keys(m.rules).join();
-  if (m.kind === 'prop' && rk !== 'dailyLoss,drawdown,drawdownType,target,size,lockAt,consistency') return 'prop rules ' + rk;
+  if (m.kind === 'prop' && rk !== 'dailyLoss,drawdown,drawdownType,target,size,lockAt,consistency,maxMinis,maxMicros') return 'prop rules ' + rk;   // 0.6.5: the member's max size (0 none)
   if (m.kind === 'personal' && m.rules !== null && rk !== 'floor,dailyLoss') return 'personal rules ' + rk;   // null: never set by Anthony
   if (m.kind === 'none' && m.rules !== null) return 'rules on None';
   for (const [k, v] of Object.entries(m.rules || {})) if (k !== 'drawdownType' && !(typeof v === 'number' && v >= 0)) return 'rules.' + k + ' must be a number (0 for none), never null';
