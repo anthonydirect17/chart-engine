@@ -20,10 +20,14 @@ known" while The Desk is not reachable.
   the cell's end where it is long, with the firm and the whole label in its tooltip ("Lucid LucidFlex 50K Eval (not checked)"), and a
   small Change button; with no type, "Not set" and Set. A type no longer on The Desk's list shows as before, "(not on The Desk's list
   now)". Change (or Set) opens a row under that account, as Apply's question does: Firm, Plan and Size at full width with full labels
-  (Size: "50K Eval", "(not checked)" until checked), then "Not set" (only when a type is set) and Cancel. Firm and Plan send nothing;
-  a firm with one plan takes it at once, and going back to the account's own firm shows its own plan and type again. The Size select
-  sends the PUT /api/accounts/{account}/account-type of 1.30.0 and closes the row; Not set sends null and closes it; Cancel closes it
-  and sends nothing. One row open at a time (Change on another account closes the first). Read only (no Change or Set, no row) while
+  (Size: "50K Eval", "(not checked)" until checked), then Save, "Not set" (only when a type is set) and Cancel. No select sends
+  anything (in Chromium an arrow key on a closed select fires change, so a select that sent could save a wrong type by accident);
+  a firm with one plan takes it at once, and going back to the account's own firm shows its own plan and type again. Firm and Plan
+  keep the focus where it is, so the arrow keys move through the firms and plans. Save is enabled once a Size other than the
+  account's own is chosen; Save (a click, or Enter on it: the one button on the Account page that works by keyboard) sends the PUT
+  /api/accounts/{account}/account-type of 1.30.0 and closes the row; Not set sends null and closes it; Cancel closes it and sends
+  nothing. After Save, Not set or Cancel the focus goes to that account's Change or Set button (after a save, once it is back). When
+  the list is drawn again, the control with the focus keeps it. One row open at a time (Change on another account closes the first). Read only (no Change or Set, no row) while
   The Desk is not reachable, as before; Apply and its question row are unchanged. While no Desk rows have been read (The Desk not
   reachable since the page opened) each cell says "not known", not "Not set", with the tooltip "The Desk is not reachable, so the
   account's type cannot be read now"; when The Desk stops answering later, its last rows show as before.
@@ -35,15 +39,20 @@ known" while The Desk is not reachable.
   ("LucidDaily 150K Eval Intraday DLL Off") may still cut, whole in the tooltip.
 - **Settings, the rules dialog.** The same three selects in the place of the one Account type select. Choosing the size fills every
   rule box and the Type as in 1.30.0; "Not set" clears the link; Firm and Plan alone fill nothing and keep the type chosen last for
-  Save. Update opens on the group's type.
+  Save. Firm and Plan keep the focus where it is; after a Firm or Plan change with Size still blank, a line under the selects says
+  "still: <the type chosen last>" (what Save keeps), gone once a Size is chosen. Update opens on the group's type.
 - Tests: `test/account-types.test.js` (the split, the order with a row's firm counted, the send rules, the selects as data with a
-  type gone, the wiring: only the last select or Not set sends, Cancel sends nothing, one open row);
+  type gone, the wiring: no select sends or moves the focus, Save sends the Size chosen, Not set sends null, Cancel sends nothing, the focus back
+  on Change or Set, one open row, the dialog's "still:" line);
   `test/fake-desk.mjs` gives `sampleFirmTypes()` (Topstep, Bulenox and FundedNext types, made-up values); `smoke:settings` runs the
   Accounts tab against the fake Desk at 1366 x 768 (text and Change or Set, the cell fits, the 244 px column, the three names whole
   beside Change and beside Change and Apply, the Room's text first in its tooltip, the row's order with a firm in use from a row's
-  firm, nothing sent for Firm, Plan or Cancel, one row at a time, one PUT for the size, null for Not set, "not known" and read only
-  with The Desk down) and the dialog's fill; screenshots `settings-types-text-1366.png` (the text cells),
-  `settings-types-change-row-1366.png` (one Change row open) and `settings-types-desk-down-1366.png` (The Desk not reachable),
+  firm, ArrowDown on Firm keeps the focus there and sends nothing, ArrowDown on Size sends nothing and enables Save, nothing sent
+  for Firm, Plan, Size or Cancel, one row at a time, one PUT on Save by Tab and Enter, null for Not set, the focus on Change or Set
+  after Cancel, Save and Not set, "not known" and read only with The Desk down) and the dialog's fill and its "still:" line by
+  ArrowDown on Firm; screenshots `settings-types-text-1366.png` (the text cells),
+  `settings-types-change-row-1366.png` (one Change row open, Save enabled), `settings-group-type-still.png` (the dialog's "still:"
+  line) and `settings-types-desk-down-1366.png` (The Desk not reachable),
   beside the 1.30.0 ones. The check that the Room is no narrower than without the column is gone (Anthony chose a narrower Room).
 
 ## ChartBridge 0.6.3 and chart 1.31.0 (2026-10-16): the audit fixes for ChartBridge and the chart page

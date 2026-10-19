@@ -694,7 +694,7 @@ function mount(v, host) {
     '<p class="ac-foot apg-foot" data-foot></p></div>';
   const q = sel => v.body.querySelector(sel);
   const listEl = q('[data-list]'), footEl = q('[data-foot]');
-  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null };
+  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null, typeFocus: '' };
   q('.apg-tabs').addEventListener('click', e => {
     const b = e.target.closest('button[data-tab]'); if (!b) return;
     b.blur();
@@ -708,7 +708,8 @@ function mount(v, host) {
     if (!b || !listEl.contains(b)) return;
     if (b.dataset.review) { window.open(AC.reviewUrl(S.deskUrl, b.dataset.review), '_blank', 'noopener'); return; }
     b.blur();
-    if (e.detail === 0) { host.note('The Account page\'s buttons work by click only, not by keyboard.', true); return; }
+    /* 1.32.0 (review): the Change row's Save works by click or by Enter, as Anthony asked; every other button by click only */
+    if (e.detail === 0 && b.dataset.act !== 'type-save') { host.note('The Account page\'s buttons work by click only, not by keyboard.', true); return; }
     const a = b.dataset.act, id = b.dataset.id || '';
     if (a === 'archive') { P.confirm = id; render(); }
     else if (a === 'archive-no') { P.confirm = ''; render(); }
@@ -722,10 +723,12 @@ function mount(v, host) {
     else if (a === 'apply-type') { P.apply = P.apply === id ? '' : id; render(); }   // 1.30.0: asks first, never applied silently
     else if (a === 'apply-no') { P.apply = ''; render(); }
     /* 1.32.0 (Anthony 2026-10-19, "Text + Change"): Change (or Set) opens the picker in a row under the account, one row at a time;
-       Cancel closes it and sends nothing; Not set sends null and closes it */
+       Cancel closes it and sends nothing; Not set sends null and closes it; Save sends the Size chosen and closes it (review: the
+       Size select alone never sends, as an arrow key on a closed select fires change). Each puts the focus back on Change or Set */
     else if (a === 'type-edit') { const open = P.typeEdit !== id && canTypeNow(); P.typeEdit = open ? id : ''; P.typePick = null; render(); if (open) { const f = listEl.querySelector(`select[data-act="acct-firm"][data-id="${CSS.escape(id)}"]`); if (f) f.focus(); } }
-    else if (a === 'type-cancel') { P.typeEdit = ''; P.typePick = null; render(); }
-    else if (a === 'type-clear') { const ok = P.typeEdit === id && canTypeNow() && !P.typePending.has(id) && !!typeVal(id); P.typeEdit = ''; P.typePick = null; if (ok) sendType(id, ''); else render(); }
+    else if (a === 'type-cancel') { P.typeEdit = ''; P.typePick = null; P.typeFocus = id; render(); }
+    else if (a === 'type-clear') { const ok = P.typeEdit === id && canTypeNow() && !P.typePending.has(id) && !!typeVal(id); P.typeEdit = ''; P.typePick = null; P.typeFocus = id; if (ok) sendType(id, ''); else render(); }
+    else if (a === 'type-save') { const want = saveWant(id); P.typeEdit = ''; P.typePick = null; P.typeFocus = id; if (want) sendType(id, want); else render(); }
     else if (a === 'apply-yes') {
       const t = P.apply === id ? typeFor(id) : null, acc = S.accounts.find(x => x.name === id);
       const l = t ? GroupsCore.typeLimits(t) : { error: 'Its type is not on The Desk\'s list now.' };
@@ -757,19 +760,16 @@ function mount(v, host) {
       return;
     }
     if (a === 'acct-firm' || a === 'acct-plan' || a === 'acct-type') {   // 1.30.0: the account's type, saved on The Desk; shown as The Desk says once it answers
-      /* 1.32.0: the open Change row's Firm, then Plan, then Size; Firm and Plan only move the picker, the last select sends and
-         closes the row (Not set is a button of its own) */
+      /* 1.32.0: the open Change row's Firm, then Plan, then Size; none of them sends (review: in Chromium an arrow key on a closed
+         select fires change). Firm and Plan move the picker from the account's own type and keep the focus where it is (the row
+         is drawn again, the focus put back on the same select); the Size is kept for Save (Not set is a button of its own) */
       const name = el.dataset.id, which = a === 'acct-firm' ? 'firm' : a === 'acct-plan' ? 'plan' : 'type';
-      if (P.typeEdit !== name || !canTypeNow() || P.typePending.has(name) || !el.value) return;
-      const tree = typeTreeNow(), r = GroupsCore.cascadePick(tree, pickState(name, tree), which, el.value);
-      if (which !== 'type') {
-        P.typePick = { firm: r.state.firm, plan: r.state.plan }; render();
-        const next = listEl.querySelector(`select[data-act="${which === 'firm' && !r.state.plan ? 'acct-plan' : 'acct-type'}"][data-id="${CSS.escape(name)}"]`);
-        if (next && !next.disabled) next.focus();
-        return;
-      }
-      P.typeEdit = ''; P.typePick = null;
-      if (r.send) sendType(name, r.send); else render();   // the type it has already: the row closes, nothing sent
+      if (P.typeEdit !== name || !canTypeNow() || P.typePending.has(name)) return;
+      const tree = typeTreeNow();
+      if (which === 'type') { P.typePick = Object.assign({}, pickState(name, tree), { id: el.value, sized: true }); render(); return; }
+      if (!el.value) return;
+      const r = GroupsCore.cascadePick(tree, Object.assign(pickState(name, tree), { id: typeVal(name) }), which, el.value);
+      P.typePick = { firm: r.state.firm, plan: r.state.plan }; render();
       return;
     }
     if (a === 'my-floor' || a === 'my-daily') {   // 1.26.0: a personal account's own limits, both sent together
@@ -802,7 +802,13 @@ function mount(v, host) {
   const goneOf = name => { const at = F.typeOf(name); return at && !(S.types || []).some(t => t.id === at.id) ? { firm: at.firm, name: at.name } : null; };
   const pickState = (name, tree) => {
     const id = typeVal(name), b = P.typeEdit === name ? P.typePick : null;
-    return Object.assign(GroupsCore.cascadeStart(tree, id, goneOf(name)), b ? { firm: b.firm, plan: b.plan } : {}, { id });
+    return Object.assign(GroupsCore.cascadeStart(tree, id, goneOf(name)), b ? { firm: b.firm, plan: b.plan } : {}, { id: b && b.sized ? b.id : id });
+  };
+  /* the type Save sends: the Size chosen in the open row, on The Desk's list in the plan shown, and not the account's own; or '' */
+  const saveWant = name => {
+    if (P.typeEdit !== name || !canTypeNow() || P.typePending.has(name) || !P.typePick || !P.typePick.sized) return '';
+    const tree = typeTreeNow(), want = GroupsCore.cascadeView(tree, pickState(name, tree), goneOf(name)).type.value;
+    return want && want !== typeVal(name) && (S.types || []).some(t => t.id === want) ? want : '';
   };
   /* the type can be changed only while The Desk answers (its list read now, and its rows) */
   const canTypeNow = () => !!S.types && S.typesState === 'ok' && S.deskState === 'ok';
@@ -888,8 +894,9 @@ function mount(v, host) {
         return `<span role="cell" class="apg-type">` + ci(text, 'apg-ttext' + (val ? '' : ' mut') + (off ? ' apg-toff' : ''), tip) + edit +
           (canApply ? `<button type="button" class="ac-btn apg-apply" data-act="apply-type" data-id="${esc(a.name)}" aria-label="Apply its rules to ${esc(a.name)}" title="Apply its rules: My floor and My daily from ${esc(GroupsCore.typeLabel(t))} (asks first)">Apply</button>` : '') + '</span>';
       };
-      /* 1.32.0: the Change row: Firm, Plan and Size at full width with full labels; the last select sends and closes the row; Not set
-         (only when a type is set) sends null; Cancel sends nothing. One row at a time; Firm and Plan send nothing */
+      /* 1.32.0: the Change row: Firm, Plan and Size at full width with full labels, then Save (once a Size other than the account's
+         own is chosen: sends it and closes the row), Not set (only when a type is set: sends null) and Cancel (sends nothing). One row
+         at a time; no select sends */
       const typeRow = a => {
         if (!typesOn || P.typeEdit !== a.name || !canType || P.typePending.has(a.name)) return '';
         const val = typeVal(a.name), vw = GroupsCore.cascadeView(tree, pickState(a.name, tree), goneOf(a.name));
@@ -899,6 +906,7 @@ function mount(v, host) {
         return row('type|' + a.name, `<span role="cell" class="apg-confirm apg-typeask"><span class="apg-tasklbl">Account type for ${esc(a.name)}:</span>` +
           sel('acct-firm', 'apg-tfirm', firm, 'Account type firm', false) + sel('acct-plan', 'apg-tplan', vw.plan, 'Account type plan', !vw.firm.value) +
           sel('acct-type', 'apg-tsel', vw.type, 'Account type size and stage', !vw.plan.value) +
+          `<button type="button" class="ac-btn apg-yes" data-act="type-save" data-id="${esc(a.name)}" ${pr({ disabled: !saveWant(a.name) })} title="Save: sends the size chosen as ${esc(a.name)}'s type on The Desk">Save</button>` +
           (val ? `<button type="button" class="ac-btn" data-act="type-clear" data-id="${esc(a.name)}" title="Not set: clears ${esc(a.name)}'s type on The Desk">Not set</button>` : '') +
           `<button type="button" class="ac-btn" data-act="type-cancel" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
       };
@@ -1050,7 +1058,12 @@ function mount(v, host) {
     }
     /* the list is rebuilt only when its rows change; figures write only their cells, so a button is never replaced under
        the mouse, and a box being typed in keeps its value */
+    /* 1.32.0 (review): a control with the focus keeps it when the list is rebuilt (the same data-act and data-id), so an arrow key
+       on the Change row's Firm or Plan moves through the list there */
+    const had = document.activeElement, keep = had && had !== listEl && listEl.contains(had) && had.dataset && had.dataset.act ? { act: had.dataset.act, id: had.dataset.id || '' } : null;
+    let rebuilt = false;
     if (P.key !== html) {
+      rebuilt = true;
       P.key = html; const top = listEl.scrollTop; listEl.innerHTML = html; listEl.scrollTop = top;
       P.cells = []; for (const e of listEl.querySelectorAll('[data-c]')) P.cells[+e.dataset.c] = e;
       P.props = []; for (const e of listEl.querySelectorAll('[data-p]')) P.props[+e.dataset.p] = e;
@@ -1067,6 +1080,15 @@ function mount(v, host) {
       if ('checked' in x && e.checked !== x.checked) e.checked = x.checked;
       if ('disabled' in x && e.disabled !== !!x.disabled) e.disabled = !!x.disabled;
       if ('value' in x && e !== document.activeElement && e.value !== x.value) e.value = x.value;
+    }
+    const findAct = (act, id) => [...listEl.querySelectorAll(`[data-act="${act}"]`)].find(e => (e.dataset.id || '') === id) || null;
+    if (rebuilt && keep) { const e = findAct(keep.act, keep.id); if (e && !e.disabled) e.focus(); }
+    /* after Cancel, Not set or Save: the account's Change or Set button (once it is back, after a save; only while nothing else
+       has the focus) */
+    if (P.typeFocus) {
+      const act = document.activeElement;
+      if (act && act !== document.body && !(listEl.contains(act) && act.dataset && act.dataset.act === 'type-edit')) P.typeFocus = '';
+      else { const e = findAct('type-edit', P.typeFocus); if (e) { e.focus(); P.typeFocus = ''; } else if (!P.typePending.has(P.typeFocus)) P.typeFocus = ''; }
     }
     if (footEl.textContent !== foot) { footEl.textContent = foot; footEl.title = foot; }
   }

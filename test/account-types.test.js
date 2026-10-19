@@ -320,23 +320,29 @@ test('type picker (1.32.0): the three selects as data (short labels, "(not check
   assert.equal(gf.plan.value, 'Old'); assert.equal(gf.type.value, 'x-old');
 });
 
-test('type picker (1.32.0, "Text + Change"): the Accounts tab shows text and Change; the row sends only on the last select or Not set; Cancel sends nothing; one row', () => {
+test('type picker (1.32.0, "Text + Change"): the Accounts tab shows text and Change; no select sends; Save sends the Size; Not set sends null; Cancel nothing; one row', () => {
   const acc = read('live/accounts.js'), grp = read('live/groups.js'), css = read('live/accounts.css');
-  /* the select handler: only the open row's selects; Firm and Plan move the picker and return before any send; the last select
-     closes the row and sends through the one sendType */
+  /* the select handler (review: in Chromium an arrow key on a closed select fires change): only the open row's selects; none of
+     Firm, Plan or Size sends; Firm and Plan never move the focus; the Size is kept for Save */
   const h = acc.split("if (a === 'acct-firm' || a === 'acct-plan' || a === 'acct-type') {")[1].split("if (a === 'my-floor'")[0];
   assert.ok(h, 'one change handler for the three selects');
-  assert.match(h, /if \(P\.typeEdit !== name \|\| !canTypeNow\(\) \|\| P\.typePending\.has\(name\) \|\| !el\.value\) return;/, 'only the open row, only while The Desk answers; a placeholder sends nothing');
-  assert.match(h, /if \(which !== 'type'\) \{\s*P\.typePick = \{ firm: r\.state\.firm, plan: r\.state\.plan \}; render\(\);[^]*?return;\s*\}/, 'Firm and Plan: nothing sent');
-  assert.match(h, /P\.typeEdit = ''; P\.typePick = null;\s*if \(r\.send\) sendType\(name, r\.send\); else render\(\);/, 'the last select closes the row and sends its type');
-  assert.ok(!/setAccountType|type-clear/.test(h), 'no other send in the handler (Not set is its own button)');
-  assert.ok(h.indexOf('sendType(') > h.indexOf("if (which !== 'type')"));
-  /* the clicks: Change or Set opens one row (another closes); Cancel closes it, nothing sent; Not set sends null, only with a type */
+  assert.match(h, /if \(P\.typeEdit !== name \|\| !canTypeNow\(\) \|\| P\.typePending\.has\(name\)\) return;/, 'only the open row, only while The Desk answers');
+  assert.match(h, /if \(which === 'type'\) \{ P\.typePick = Object\.assign\(\{\}, pickState\(name, tree\), \{ id: el\.value, sized: true \}\); render\(\); return; \}/, 'Size: kept for Save, nothing sent');
+  assert.match(h, /P\.typePick = \{ firm: r\.state\.firm, plan: r\.state\.plan \}; render\(\);\s*return;/, 'Firm and Plan: nothing sent');
+  assert.ok(!/sendType\(|setAccountType|\.focus\(/.test(h), 'no send and no focus move in the select handler');
+  /* the list keeps the focus on the same control when it is rebuilt (Firm or Plan drawn again) */
+  assert.match(acc, /if \(rebuilt && keep\) \{ const e = findAct\(keep\.act, keep\.id\); if \(e && !e\.disabled\) e\.focus\(\); \}/);
+  /* the clicks: Change or Set opens one row (another closes); Cancel closes it, nothing sent; Not set sends null, only with a type;
+     Save sends the Size chosen (not the account's own), by click or Enter; each puts the focus back on Change or Set */
   const clicks = acc.split("listEl.addEventListener('click'")[1].split("listEl.addEventListener('change'")[0];
+  assert.match(clicks, /if \(e\.detail === 0 && b\.dataset\.act !== 'type-save'\) \{ host\.note\(/, 'Save by Enter too; every other button by click only, as before');
   assert.match(clicks, /else if \(a === 'type-edit'\) \{ const open = P\.typeEdit !== id && canTypeNow\(\); P\.typeEdit = open \? id : ''; P\.typePick = null; render\(\);/, 'one row at a time: P.typeEdit holds one account');
-  assert.match(clicks, /else if \(a === 'type-cancel'\) \{ P\.typeEdit = ''; P\.typePick = null; render\(\); \}/, 'Cancel sends nothing');
-  assert.match(clicks, /else if \(a === 'type-clear'\) \{ const ok = P\.typeEdit === id && canTypeNow\(\) && !P\.typePending\.has\(id\) && !!typeVal\(id\);[^}]*if \(ok\) sendType\(id, ''\); else render\(\); \}/, 'Not set sends null');
-  assert.equal(clicks.split('sendType(').length, 2, 'one send among the clicks (Not set)');
+  assert.match(clicks, /else if \(a === 'type-cancel'\) \{ P\.typeEdit = ''; P\.typePick = null; P\.typeFocus = id; render\(\); \}/, 'Cancel sends nothing');
+  assert.match(clicks, /else if \(a === 'type-clear'\) \{ const ok = P\.typeEdit === id && canTypeNow\(\) && !P\.typePending\.has\(id\) && !!typeVal\(id\);[^}]*P\.typeFocus = id; if \(ok\) sendType\(id, ''\); else render\(\); \}/, 'Not set sends null');
+  assert.match(clicks, /else if \(a === 'type-save'\) \{ const want = saveWant\(id\); P\.typeEdit = ''; P\.typePick = null; P\.typeFocus = id; if \(want\) sendType\(id, want\); else render\(\); \}/, 'Save sends the Size chosen once');
+  assert.equal(clicks.split('sendType(').length, 3, 'two sends among the clicks (Not set and Save)');
+  assert.match(acc, /return want && want !== typeVal\(name\) && \(S\.types \|\| \[\]\)\.some\(t => t\.id === want\) \? want : '';/, 'Save: a Size on the list, not the account\'s own');
+  assert.match(acc, /data-act="type-save" data-id="\$\{esc\(a\.name\)\}" \$\{pr\(\{ disabled: !saveWant\(a\.name\) \}\)\}/, 'Save enabled once a Size other than its own is chosen');
   assert.equal(acc.split('F.setAccountType(').length, 2, 'one PUT route as before (sendType)');
   assert.match(acc, /F\.setAccountType\(name, want \|\| null\)/);
   /* the cell: text, Change or Set only while The Desk answers; "Not set" offered in the row only when a type is set */
@@ -350,5 +356,7 @@ test('type picker (1.32.0, "Text + Change"): the Accounts tab shows text and Cha
   /* the rules dialog keeps the three selects; the Account type column 244px ("Narrower Room") */
   assert.match(grp, /const chosen = pick\.id;/, 'the dialog links the type chosen last, not the Size select\'s placeholder');
   assert.match(grp, /if \(r\.send === null\) \{ filled = null; fromIdle\(\); \}\s*else if \(r\.send\) \{ const t = typeById\(r\.send\); if \(t\) fill\(t\); \}/, 'the dialog fills only on the last select');
+  assert.ok(!/\.focus\(/.test(grp.split('const onPick = ')[1].split('};')[0]), 'the dialog\'s Firm and Plan keep the focus where it is (review)');
+  assert.match(grp, /still\.textContent = was \? 'still: ' \+ was : ''; still\.hidden = !was;/, 'Firm or Plan moved with Size blank: "still: <type>" under the selects');
   assert.match(css, /\.apg-acc-g\.apg-grps\.apg-types \.gr-row \{ grid-template-columns: [^}]* minmax\(0, 1\.45fr\) 116px 244px 152px 44px; \}/, 'the type column 244px, taken from the Room only (Narrower Room)');
 });

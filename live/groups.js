@@ -203,7 +203,8 @@ const typeLabel = t => (t ? t.firm + ' ' + t.name + (t.status === 'checked' ? ''
  * Chart 1.32.0 (Anthony 2026-10-19: "far to many accounts for just a drop down"; he chose Firm > Plan > Size, "firms I actually
  * trade first"): the type picker as three short selects. The Desk's names follow "<Plan> <Size>K <rest>" ("LucidFlex 50K Eval",
  * "Trading Combine 50K", "Master 25K Option 2 EOD"). Pure: the Accounts tab and the rules dialog both draw from cascadeView and
- * move with cascadePick; only the last select (a type) or "Not set" sends anything.
+ * move with cascadePick; only the last select (a type) or "Not set" gives a value to send (the Accounts tab sends it on Save,
+ * the rules dialog fills from it and saves on its Save).
  */
 const SIZE_RX = /(^|[\s(])(\d+(?:\.\d+)?)[kK](?=$|[^A-Za-z0-9])/;
 const PLAN_OTHER = 'Other';
@@ -522,7 +523,7 @@ function mountSettings(host) {
     const typeTip = 'Fills every rule box and the Type from The Desk\'s ledger; you can still change any box. Pick the firm, then the plan, then the size';
     const typeSel = `<div class="gp-f gp-ftype"><label for="gp-fromFirm">Account type</label><div class="gp-herorow"><span class="gp-tpick">` +
       `<select class="ws-sel gp-in gp-tp" id="gp-fromFirm" aria-label="Account type: firm"></select><select class="ws-sel gp-in gp-tp" id="gp-fromPlan" aria-label="Account type: plan"></select>` +
-      `<select class="ws-sel gp-in gp-tp" id="gp-fromType" aria-label="Account type: size and stage"></select></span><span class="ws-help gp-herowhy" id="gp-fromWhy" role="status"></span></div></div>`;
+      `<select class="ws-sel gp-in gp-tp" id="gp-fromType" aria-label="Account type: size and stage"></select></span><span class="ws-help gp-herowhy" id="gp-fromWhy" role="status"></span></div><p class="ws-help" id="gp-fromStill" role="status" hidden></p></div>`;
     const box = (k, label, help) => `<div class="gp-f"><label for="gp-${k}">${label}</label><input class="ws-in gp-in" id="gp-${k}" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${help}" value="${esc(f[k])}"></div>`;
     d.innerHTML = `<form class="ws-dlg ws-gp" method="dialog" aria-label="${g ? 'Edit ' + esc(g.name) : 'New group'}">
       <h2>${g ? 'Edit ' + esc(g.name) : 'New group'} <span>${g ? esc(GC.membersText(g)) : 'shows in every account\'s Group dropdown'}</span></h2>
@@ -560,6 +561,10 @@ function mountSettings(host) {
         const o = v.options.find(x => x.value === v.value);
         sel.title = (k === 'fromType' && t && v.value ? GC.typeLabel(t) : o && v.value ? o.title : '') + (v.value ? '. ' : '') + typeTip;
       }
+      /* 1.32.0 (review): Firm or Plan moved off the type chosen last and Size still blank: the line under the selects says which type
+         Save keeps, so the screen does not mislead; gone once a Size is chosen */
+      const still = $d('fromStill'), was = pick.id && !vw.type.value ? (t ? GC.typeLabel(t) : link && link.id === pick.id ? link.label : pick.id) : '';
+      still.textContent = was ? 'still: ' + was : ''; still.hidden = !was;
     };
     drawPick();
     const fromIdle = () => {
@@ -585,7 +590,8 @@ function mountSettings(host) {
       pick = r.state; drawPick();
       if (r.send === null) { filled = null; fromIdle(); }
       else if (r.send) { const t = typeById(r.send); if (t) fill(t); }
-      else { const next = $d(which === 'firm' && !pick.plan ? 'fromPlan' : 'fromType'); if (which !== 'type' && !next.disabled) next.focus(); }
+      /* Firm and Plan keep the focus where it is (review: an arrow key on a closed select fires change, so moving the focus would
+         stop Anthony arrowing through the firms); only Save saves */
     };
     $d('fromFirm').addEventListener('change', e => onPick('firm', e.target));
     $d('fromPlan').addEventListener('change', e => onPick('plan', e.target));
