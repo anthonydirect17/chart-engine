@@ -288,7 +288,7 @@ function reviewUrl(deskUrl, day) {
 
 /* ---------------- the copier (PROTOCOL.md "Copier engine"): a row per account but the leader, each marked SIM or LIVE */
 const FOLLOWER_DEFAULT = { on: false, qty: 1, size: 'micro', lossLimit: null };
-/** 1.31.1 (WORK 2026-10-19: the leader would not go back to none): the Leader picker's choice as copierSet's leader: an
+/** 1.32.1 (WORK 2026-10-19: the leader would not go back to none): the Leader picker's choice as copierSet's leader: an
  *  account name, or null for "none" (ChartBridge 0.4.3 or later takes null as no leader: the copier stands down). */
 const leaderSet = value => ({ leader: typeof value === 'string' && value ? value : null });
 /** SIM or LIVE (Anthony 2026-10-07): SIM only when ChartBridge says sim true; anything else is LIVE (the careful side). */
@@ -792,7 +792,7 @@ function mount(v, host) {
     const el = e.target, a = el.dataset.act;
     if (!a) return;
     if (a === 'trade') { const on = el.checked; el.checked = !on; F.accountTrade(el.dataset.id, on); return; }   // shown as ChartBridge says, not as clicked
-    if (a === 'leader') {   // none sends leader null (1.31.1); shown as ChartBridge says until its copier message comes back
+    if (a === 'leader') {   // none sends leader null (1.32.1); shown as ChartBridge says until its copier message comes back
       const want = el.value;
       el.value = S.copier && S.copier.leader ? S.copier.leader.account : '';
       F.copierSet(AC.leaderSet(want));

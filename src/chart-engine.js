@@ -2118,7 +2118,9 @@ function create(container, options) {
         const i1 = idxAtTime(tr.tIn), i2 = open ? i1 : idxAtTime(tr.tOut);
         if (i2 < from - 2 || i1 > to + 2) continue;
         const x1 = xOf(i1), x2 = xOf(i2), y1 = yOf(tr.pIn), y2 = open ? y1 : yOf(tr.pOut);
-        const pts = open ? 0 : (tr.pOut - tr.pIn) * tr.dir;
+        // 1.32.2: an optional `pts` (the trade's signed result in points) decides the colour and the default chip; a trade
+        // with adds can show its first entry and last exit fills while its result is the average (The Desk's Review)
+        const pts = open ? 0 : typeof tr.pts === 'number' && isFinite(tr.pts) ? tr.pts : (tr.pOut - tr.pIn) * tr.dir;
         const col = pts > 0 ? T.profit : pts < 0 ? T.loss : T.axisText;
         if (!open) {
           ctx.strokeStyle = col; ctx.globalAlpha = 0.85 * ga; ctx.lineWidth = 1.25; ctx.setLineDash([3, 3]);

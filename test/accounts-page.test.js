@@ -150,8 +150,8 @@ test('The Desk\'s rows (GET /api/chart-accounts): numbers above 0 or null, the o
 });
 
 /* ---------------- the copier's rows */
-test('1.31.1 (WORK 2026-10-19): the Leader picker\'s none sends leader null, and the page shows none once ChartBridge says so', () => {
-  assert.deepEqual(AC.leaderSet(''), { leader: null }, 'none: null (before 1.31.1 nothing was sent, so the picker snapped back)');
+test('1.32.1 (WORK 2026-10-19): the Leader picker\'s none sends leader null, and the page shows none once ChartBridge says so', () => {
+  assert.deepEqual(AC.leaderSet(''), { leader: null }, 'none: null (before 1.32.1 nothing was sent, so the picker snapped back)');
   assert.deepEqual(AC.leaderSet(undefined), { leader: null });
   assert.deepEqual(AC.leaderSet('Sim101'), { leader: 'Sim101' });
   const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'accounts.js'), 'utf8');
