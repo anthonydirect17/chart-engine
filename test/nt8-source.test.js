@@ -184,7 +184,7 @@ test('strict messages: known keys only, bracket must be an object', () => {
 
 test('every order message passes the gate first; auth checks origin and token', () => {
   const on = fnBody('OnMessage');
-  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string strategyBody = null;\s*if \(why == null && type == "order" && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why == null\) why = QuoteOnly\(top, id\);\s*if \(why == null && type != "flatten" && type != "merge" && type != "groupPreview" && type != "groupOrder"\) why = MergeFreezeWhy\(type, top, id\);[^\n]*\s*if \(why != null\) \{ Reject/);   // 0.4.0: a quote-only market is refused right after the gate; B1: a strategy is cut out only after the gate passed; 0.4.0 B4: then the Merge freeze
+  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string strategyBody = null;\s*if \(why == null && \(type == "order" \|\| type == "groupPreview" \|\| type == "groupOrder"\) && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);[^\n]*\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why == null\) why = QuoteOnly\(top, id\);\s*if \(why == null && type != "flatten" && type != "merge" && type != "groupPreview" && type != "groupOrder"\) why = MergeFreezeWhy\(type, top, id\);[^\n]*\s*if \(why != null\) \{ Reject/);   // 0.4.0: a quote-only market is refused right after the gate; B1: a strategy is cut out only after the gate passed; 0.4.0 B4: then the Merge freeze
   const gate = fnBody('Gate');
   assert.match(gate, /if \(!Enabled\) return/);
   assert.match(gate, /if \(!client\.Trader \|\| !OriginAllowed\(client\.Origin\)\) return/);
@@ -1232,7 +1232,7 @@ test('0.4.0 B1: switches on by default; the off line gives 0.3.8 (every hook is 
   assert.match(fnBody('ResetConfig'), /ResetV3Config\(\);/);
   assert.match(sBodies('ReadV3Config'), /return key == "orderTypes" \|\| key == "strategies";/);
   const on = fnBody('OnMessage');
-  assert.match(on, /if \(why == null && type == "order" && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);/);
+  assert.match(on, /if \(why == null && \(type == "order" \|\| type == "groupPreview" \|\| type == "groupOrder"\) && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);[^\n]*/);
   assert.match(fnBody('PlaceOrderLocked'), /!\(OrderTypesOn && NewKind\(kind\)\)\) return "kind must be market, limit or stop";/);
   assert.match(fnBody('PlaceOrderLocked'), /string newKind = OrderTypesOn \? NewKindProblem\(/);
   assert.match(scode, /private static string\[\] WithV3Keys\(string type, string\[\] allowed\)\s*\{\s*if \(type == "order" && OrderTypesOn\)/);

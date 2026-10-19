@@ -180,7 +180,7 @@ test('ChartBridge 0.6.5 source: rules lines, the old file kept as written, only 
 /* ---------------- 0.6.5 (Anthony 2026-10-19): trade the group from the ticket, each member sized from the group's risk percent */
 test('groupSize: each guard, in ChartBridge\'s order and words (the harness\'s numbers)', async () => {
   const { groupSize } = await import('./fake-groups.mjs');
-  const base = { riskPct: 10, drawdown: 4500, stopTicks: 20, tickValue: 5, maxSize: 10, maxWords: '10 minis', cap: 9, capWords: 'maxQty.NQ in config.txt', held: 0, roomFloor: 4000, hasDaily: false, roomDaily: null };
+  const base = { riskPct: 10, drawdown: 4500, stopTicks: 20, tickValue: 5, maxSize: 10, maxWords: '10 minis', cap: 9, capWords: 'maxQty.NQ in config.txt', held: 0, roomFloor: 4000, hasDaily: false, roomDaily: null, openRisk: 0 };
   const g = o => groupSize(Object.assign({}, base, o));
   assert.deepEqual(g({}), { size: 4, budget: 450, why: null }, '10% of $4,500 = $450 / ($100 a contract) = 4');
   assert.equal(g({ stopTicks: 4 }).size, 9, '22 by risk, its max 10, the cap 9 (maxQty, the hard ceiling)');
@@ -242,4 +242,31 @@ test('fake: a ChartBridge before 0.6.5 knows no group entry', async () => {
   const f = await geDesk({ groupRules: false });
   assert.equal(f.reject(f.act(GE('groupPreview'))), 'Unknown message type groupPreview.');
   assert.equal(f.reject(f.act(GE('groupOrder', { sizes: '1' }))), 'Unknown message type groupOrder.');
+});
+
+/* ---------------- Anthony's answers of 2026-10-19: a strategy with a group entry (2), the cumulative room cap (4) */
+test('groupSize answer 4: all the open stop risk on that side comes off both rooms first (the harness\'s numbers)', async () => {
+  const { groupSize } = await import('./fake-groups.mjs');
+  const base = { riskPct: 10, drawdown: 2000, stopTicks: 20, tickValue: 5, maxSize: 4, maxWords: '4 minis', cap: 9, capWords: 'maxQty.NQ in config.txt', held: 0, roomFloor: 650, hasDaily: false, roomDaily: null, openRisk: 0 };
+  const g = o => groupSize(Object.assign({}, base, o));
+  assert.equal(g({}).size, 2, 'flat: room 650 / $100 holds 6, its risk 2');
+  assert.equal(g({ openRisk: 500 }).size, 1, 'long 1 with its stop $500 away: (650 - 500) / 100 = 1');
+  assert.equal(g({ openRisk: 700 }).why, 'its room to the floor $650 less its open stop risk $700 is less than one contract\'s stop ($100)');
+  assert.equal(g({ openRisk: null, openWhy: 'it holds 4 NQ with no working stop for 4 of them' }).why, 'its open stop risk is not known (it holds 4 NQ with no working stop for 4 of them)');
+  assert.equal(g({ hasDaily: true, roomDaily: 300, openRisk: 250 }).why, 'its daily room $300 less its open stop risk $250 is less than one contract\'s stop ($100)');
+});
+
+test('fake answers 2 and 4: a strategy\'s stop sizes the group, and a held position\'s stop risk caps the room', async () => {
+  const f = await geDesk({ switches: { accountChecks: true, strategies: true } });
+  const strat = { name: 'Scalp', stop: 20, t1: 40, t1Share: 100 };
+  const pv = f.act(GE('groupPreview', { bracket: undefined, strategy: strat }));
+  assert.equal(sizesOf(pv), '4,2,1,2', 'the strategy\'s stop of 20 ticks sizes as a bracket stop of 20');
+  assert.equal(f.reject(f.act(GE('groupPreview', { strategy: strat }))), 'bracket and strategy on one order are refused: send one of them');
+  const placed = f.act(GE('groupOrder', { bracket: undefined, strategy: strat, sizes: '4,2,1,2' })).find(m => m.type === 'groupPlaced');
+  assert.equal(placed.placed, 4, 'each member\'s own strategy entry');
+  /* answer 4: SIM-A holds a position with no working stop: its open stop risk is not known */
+  const g = await geDesk();
+  g.desk.positions.set('SIM-A|NQ', { qty: 4, avgPrice: 25000 });
+  const out = g.act(GE('groupPreview'))[0].members[0];
+  assert.equal(out.out, 'its open stop risk is not known (it holds 4 NQ with no working stop for 4 of them)');
 });

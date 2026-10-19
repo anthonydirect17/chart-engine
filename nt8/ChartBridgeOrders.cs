@@ -386,7 +386,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (type == "auth") { Auth(client, text); return; }
                 string why = Gate(client);
                 string strategyBody = null;   // 0.4.0 B1: the strategy object, cut out as the bracket is (strategies on only)
-                if (why == null && type == "order" && StrategiesOn) why = CutStrategy(ref text, out strategyBody);
+                if (why == null && (type == "order" || type == "groupPreview" || type == "groupOrder") && StrategiesOn) why = CutStrategy(ref text, out strategyBody);   // 0.6.5: a group entry may carry a strategy
                 string bracketBody = null, top = why == null ? TopLevel(type, text, out bracketBody, out why) : null;
                 if (why == null) why = QuoteOnly(top, id);   // 0.4.0: a quote-only market: refused before any other order code runs
                 if (why == null && type != "flatten" && type != "merge" && type != "groupPreview" && type != "groupOrder") why = MergeFreezeWhy(type, top, id);   // 0.6.5: a group entry asks it per member   // 0.4.0 B4: a Merge swap freezes its account and root
@@ -397,7 +397,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (type == "cancel") why = CancelOrder(top, id);   // 0.4.0 accounts: top for "from"
                 else if (type == "flatten") why = Flatten(top);
                 else if (type == "merge") why = MergeStart(client, top, cid);   // 0.4.0 B4
-                else if (type == "groupPreview" || type == "groupOrder") why = GroupEntry(client, type, top, bracketBody, cid);   // 0.6.5
+                else if (type == "groupPreview" || type == "groupOrder") why = GroupEntry(client, type, top, bracketBody, cid, strategyBody);   // 0.6.5
                 if (why != null) Reject(client, cid, id, why);
             }
             catch (Exception ex)

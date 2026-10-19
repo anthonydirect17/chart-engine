@@ -154,27 +154,63 @@ namespace NinjaTrader.NinjaScript.AddOns
         // One member's contracts (pure, for the harness): floor(budget / (stopTicks x tickValue)), budget = riskPct of its drawdown;
         // never above its max size or the maxQty cap less what it already holds and has working on that side; capped so the stop loss
         // fits its room to its floor and (with a daily loss rule) its daily room. A room not known: it sits out. 0 always says why.
+        // Anthony 2026-10-19 (answer 4): the room caps count ALL its open stop risk on that side: openRisk, the loss if every position it
+        // holds on that side is stopped at its working stops (from the last price), is taken off both rooms first; not known: it sits out.
         public static int GroupSize(double riskPct, double drawdown, int stopTicks, double tickValue, int maxSize, string maxWords, int cap, string capWords, int held,
-                                    double? roomFloor, string floorWhy, bool hasDaily, double? roomDaily, string dailyWhy, out double budget, out string why)
+                                    double? roomFloor, string floorWhy, bool hasDaily, double? roomDaily, string dailyWhy, double? openRisk, string openWhy, out double budget, out string why)
         {
             why = null;
             budget = Math.Round(riskPct * drawdown) / 100;
             double per = stopTicks * tickValue;
             if (!roomFloor.HasValue) { why = "its room to the floor is not known (" + (floorWhy ?? "not known") + ")"; return 0; }
             if (hasDaily && !roomDaily.HasValue) { why = "its daily room is not known (" + (dailyWhy ?? "not known") + ")"; return 0; }
+            if (!openRisk.HasValue) { why = "its open stop risk is not known (" + (openWhy ?? "not known") + ")"; return 0; }
+            double open = Math.Round(openRisk.Value * 100) / 100;
+            string less = open > 0 ? " less its open stop risk " + Usd(open) : "";
             int n = (int)Math.Floor(budget / per + 1e-9);
             if (n < 1) { why = "its risk " + Usd(budget) + " (" + riskPct.ToString("0.##", CultureInfo.InvariantCulture) + "% of its max loss " + Usd(drawdown) + ") is less than one contract's stop (" + Usd(per) + " at " + stopTicks + " ticks)"; return 0; }
             held = Math.Max(0, held);
             if (maxSize > 0 && maxSize - held < n) { n = maxSize - held; if (n < 1) { why = "it is at its max size (" + maxWords + "; it holds or has working " + held + ")"; return 0; } }
             if (cap - held < n) { n = cap - held; if (n < 1) { why = "it is at the cap of " + cap + " (" + capWords + "; it holds or has working " + held + ")"; return 0; } }
-            int byFloor = (int)Math.Floor(roomFloor.Value / per + 1e-9);
-            if (byFloor < n) { n = byFloor; if (n < 1) { why = "its room to the floor " + Usd(roomFloor.Value) + " is less than one contract's stop (" + Usd(per) + ")"; return 0; } }
+            int byFloor = (int)Math.Floor((roomFloor.Value - open) / per + 1e-9);
+            if (byFloor < n) { n = byFloor; if (n < 1) { why = "its room to the floor " + Usd(roomFloor.Value) + less + " is less than one contract's stop (" + Usd(per) + ")"; return 0; } }
             if (hasDaily)
             {
-                int byDay = (int)Math.Floor(roomDaily.Value / per + 1e-9);
-                if (byDay < n) { n = byDay; if (n < 1) { why = "its daily room " + Usd(roomDaily.Value) + " is less than one contract's stop (" + Usd(per) + ")"; return 0; } }
+                int byDay = (int)Math.Floor((roomDaily.Value - open) / per + 1e-9);
+                if (byDay < n) { n = byDay; if (n < 1) { why = "its daily room " + Usd(roomDaily.Value) + less + " is less than one contract's stop (" + Usd(per) + ")"; return 0; } }
             }
             return n;
+        }
+
+        // Answer 4: the loss if every position the account holds on that side (every served instrument) is stopped out at its working stops,
+        // from each instrument's last price: per stop, its contracts (up to the position, the farthest stops first) times the distance from the
+        // last price to it (0 for a stop past the price in profit) times the point value. Null with why when a contract held has no working
+        // stop, or a last price is not known.
+        internal static double? OpenStopRisk(Account a, bool isBuy, out string why)
+        {
+            why = null;
+            double total = 0;
+            List<Position> ps;
+            lock (a.Positions) ps = a.Positions.ToList();
+            List<Order> orders;
+            lock (a.Orders) orders = a.Orders.ToList();
+            lock (Sync) foreach (Order o in Ours) if (o.Account == a && !orders.Contains(o)) orders.Add(o);
+            foreach (Instrument inst in ps.Where(p => p != null && p.Instrument != null && p.Quantity != 0 && p.MarketPosition != MarketPosition.Flat).Select(p => p.Instrument).Distinct().ToList())
+            {
+                int pn = SignedPosition(a, inst), pe = EffectivePosition(a, inst);
+                int held = isBuy ? Math.Max(Math.Max(pn, pe), 0) : Math.Max(Math.Max(-pn, -pe), 0);
+                if (held == 0) continue;
+                string root = MasterName(inst);
+                double last;
+                if (LastPrice(root, out last) != null || inst.MasterInstrument == null) { why = "no recent " + root + " price to measure its " + root + " stops from"; return null; }
+                double pv = inst.MasterInstrument.PointValue, dir = isBuy ? 1 : -1;
+                List<double[]> stops = orders.Where(o => o != null && MayFill(o.OrderState) && SameInstrument(o.Instrument, inst) && IsBuy(o) != isBuy && (o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit))
+                    .Select(o => new[] { Math.Max(0, (last - o.StopPrice) * dir), (double)Math.Max(0, o.Quantity - o.Filled) }).Where(x => x[1] > 0).OrderByDescending(x => x[0]).ToList();
+                int left = held;
+                foreach (double[] st in stops) { if (left <= 0) break; int q = Math.Min(left, (int)st[1]); total += q * st[0] * pv; left -= q; }
+                if (left > 0) { why = "it holds " + held + " " + root + " with no working stop for " + left + " of them"; return null; }
+            }
+            return total;
         }
 
         // Every member's size for one entry, in seat order (by name); null with err when the entry cannot go to the group at all.
@@ -213,9 +249,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string floorWhy, dailyWhy;
                 n.Why.TryGetValue("roomFloor", out floorWhy); n.Why.TryGetValue("roomDaily", out dailyWhy);
                 double budget;
-                string why;
+                string why, openWhy;
+                double? openRisk = OpenStopRisk(a, isBuy, out openWhy);
                 s.Size = GroupSize(riskPct, n.R.Drawdown, stopTicks, tickValue, maxSize, maxSize + (micro ? " micros" : " minis"), CapFor(root), "maxQty." + root + " in config.txt", held,
-                                   n.RoomFloor, floorWhy, n.R.DailyLoss > 0, n.RoomDaily, dailyWhy, out budget, out why);
+                                   n.RoomFloor, floorWhy, n.R.DailyLoss > 0, n.RoomDaily, dailyWhy, openRisk, openWhy, out budget, out why);
                 s.Budget = budget; s.Out = why; s.Risk = Math.Round(s.Size * stopTicks * tickValue * 100) / 100;
             }
             return seats;
@@ -229,16 +266,30 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // groupPreview and groupOrder (the order connection's gates have passed in OnMessage).
-        private static string GroupEntry(ChartBridgeClient client, string type, string top, string bracketBody, string cid)
+        private static string GroupEntry(ChartBridgeClient client, string type, string top, string bracketBody, string cid, string strategyBody)
         {
             string gid = Str(top, "group"), root = (Str(top, "root") ?? "").ToUpperInvariant(), side = Str(top, "side"), kind = Str(top, "kind");
             if (gid == null) return type + " needs group (a group id)";
             if (side != "buy" && side != "sell") return "side must be buy or sell";
             if (kind != "market" && kind != "limit" && kind != "stop" && !(OrderTypesOn && NewKind(kind))) return "kind must be market, limit or stop";
             int stopTicks = 0, targetTicks = 0;
-            if (bracketBody == null) return "a group entry needs a stop: each member is sized from its stop loss (set the bracket's stop)";
-            if (Int("{" + bracketBody + "}", "stop", out stopTicks) != 1 || Int("{" + bracketBody + "}", "target", out targetTicks) != 1 || stopTicks < 0 || targetTicks < 0)
-                return "bracket needs both stop and target as whole numbers of ticks (0 for none)";
+            if (strategyBody != null)
+            {
+                // Anthony 2026-10-19 (answer 2): an Order Strategy may go with a group entry: its stop distance sizes each member; its
+                // targets, breakeven and trailing run on every member's own entry as on one account
+                string off = StrategiesRunRefusal();
+                if (off != null) return off;
+                StratParams sp;
+                string bad = ParseStrategy(strategyBody, out sp);
+                if (bad != null) return bad;
+                stopTicks = sp.Stop;
+            }
+            else
+            {
+                if (bracketBody == null) return "a group entry needs a stop: each member is sized from its stop loss (set the bracket's stop)";
+                if (Int("{" + bracketBody + "}", "stop", out stopTicks) != 1 || Int("{" + bracketBody + "}", "target", out targetTicks) != 1 || stopTicks < 0 || targetTicks < 0)
+                    return "bracket needs both stop and target as whole numbers of ticks (0 for none)";
+            }
             string name, err;
             double risk;
             List<GroupSeat> seats = GroupPlan(gid, root, side == "buy", stopTicks, out name, out risk, out err);
@@ -263,12 +314,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string one = "{\"type\":\"order\",\"account\":" + CbJson.Str(s.Account) + ",\"root\":" + CbJson.Str(root) + ",\"side\":" + CbJson.Str(side) + ",\"kind\":" + CbJson.Str(kind) +
                              ",\"qty\":" + s.Size.ToString(CultureInfo.InvariantCulture) + (price != null ? ",\"price\":" + price : "") + (lo != null ? ",\"limitOffset\":" + lo : "") + "}";
                 string why;
-                try { why = MergeFreezeWhy("order", one, null) ?? PlaceOrder(one, bracketBody, cid != null ? cid + ":" + (i + 1) : null, null); }
+                try { why = MergeFreezeWhy("order", one, null) ?? PlaceOrder(one, bracketBody, cid != null ? cid + ":" + (i + 1) : null, strategyBody); }
                 catch (Exception ex) { why = "ChartBridge error: " + ex.Message; }
                 if (why != null) { s.Out = "refused: " + why; s.Size = 0; s.Risk = 0; }
             }
             int placed = seats.Count(s => s.Size > 0);
-            ChartBridgeServer.Log("group entry on " + name + ": " + side + " " + root + " " + kind + ", stop " + stopTicks + " ticks, risk " + risk.ToString("0.##", CultureInfo.InvariantCulture) + "%: " +
+            ChartBridgeServer.Log("group entry on " + name + ": " + side + " " + root + " " + kind + (strategyBody != null ? " with a strategy" : "") + ", stop " + stopTicks + " ticks, risk " + risk.ToString("0.##", CultureInfo.InvariantCulture) + "%: " +
                 string.Join("; ", seats.Select(s => s.Account + " " + (s.Size > 0 ? s.Size + " (" + Usd(s.Risk) + ")" : "out: " + s.Out))));
             client.Send("{\"type\":\"groupPlaced\"," + head + ",\"placed\":" + placed.ToString(CultureInfo.InvariantCulture) + ",\"members\":" + SeatsJson(seats) + "}");
             return null;
