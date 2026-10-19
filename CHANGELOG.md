@@ -1,6 +1,6 @@
 # Changelog
 
-## ChartBridge 0.6.5 and chart 1.33.0 (2026-10-19): one group of accounts of different types and sizes, each with its own rules
+## ChartBridge 0.6.5 and chart 1.33.0 (2026-10-19): one group of accounts of different types and sizes, each with its own rules, traded from the ticket
 
 Anthony's PRIORITY ask (FROM_WORK_2026-10-19_PRIORITY_multi_account_groups, "build it into the current build"): his three Lucid
 accounts in one group (a 150K Flex eval, a 50K Flex eval, a 25K Daily intraday eval; three 50K Flex evals join tomorrow). A group had
@@ -23,23 +23,34 @@ member's own rules and the risk percent (0.6.5)".
   drawdown when The Desk sends `seed_floor` (desk/reorg-prop-roi; read if present, else asked as before). Only an account with no type
   on The Desk gets the full rules form; Edit rules opens it on any join; a member's Rules (its Limits cell) changes its rules later.
   The type picker is 1.32.0's (Firm > Plan > Size), not repeated.
-- **The group's risk percent** (of each account's max loss, its drawdown amount: 10% is $200 on a 50K, $450 on a 150K): set in the
-  rules dialog (Risk % of max loss), stored, sent and shown (the Settings row lists each member's dollars). **Nothing sizes an order by
-  it yet**: ChartBridge has no path that sends one entry to a group and sizes it (the copier gives each follower a fixed quantity and its
-  followers are any accounts, not a group; group trading places the sizes the runner sends and never resizes). Open questions for
-  Anthony before item 3 is built: which path takes the risk sizing (the copier's followers in a group, group trading, or a new ticket
-  that sends one entry to every member); with the copier, whether the leader's own size is risk sized too, whether a risk-sized
-  follower takes the entry's own contract or its saved micro or mini, and how an add is sized; how the stop distance is read for a
-  market entry (the leader's fill, or the ticket's planned stop); whether a member with no known room (its floor null, or no balance)
-  sits out or takes the fixed quantity; and what "ChartBridge's hard ceiling" is (the per-root `maxQty` gate, or a new cap). Max size
-  is stored and shown; nothing enforces it yet either.
+- **Trade the group** (Anthony 2026-10-19: "Trade the group (new)"). The order ticket's picker lists each group after the accounts
+  ("Group Lucid (4)"; the hotkeys follow the ticket). Buy, Sell and a chart click on a group send one entry with its bracket stop to
+  every member, each sized by ChartBridge from the group's risk percent of its own max loss (its drawdown amount: 10% is $200 on a
+  50K, $450 on a 150K): contracts = floor(dollar risk / (stop ticks x tick value)), in the entry's own instrument. Guards, in order: a
+  member whose room to the floor (or, with a daily loss rule, daily room) is not known sits out; never above its max size (minis or
+  micros, from its rules) nor ChartBridge's `maxQty` for the root, less what it holds and has working on that side (an add is sized
+  the same way); the stop loss within its room to the floor and its daily room; a member at 0 sits out and says why. No stop: refused
+  ("a group entry needs a stop"). The ticket first asks ChartBridge (`groupPreview`) and shows one confirm with each account's size,
+  dollar risk and budget, or why it sits out; Send (a click only) sends `groupOrder` with those sizes, which ChartBridge works out
+  again and refuses whole if any changed; each member's entry then goes through the order path (every gate, one direction per
+  group, its own legs). Close, Flatten all, B/E (each member's own break-even) and Cancel all act on every member. A member that is
+  the copier's leader or a follower, the bot's account or an agent's sits out (as a group trading seat). The group's risk off: a
+  group entry is refused. The copier, the agents and single account tickets are unchanged. `accountState.rules` gains `maxMinis`
+  and `maxMicros` (0 none).
+- **Open questions for Anthony** (built the safe way meanwhile): what the charts show for a group ticket and how a dragged stop
+  applies (today a group ticket draws no order lines and a drag is refused; B/E, Close and Cancel all work); whether an Order
+  Strategy may go with a group entry (today refused: sizing reads the bracket's stop); whether the copier, bot and agent sit outs
+  are right; whether the room cap should also count the stop risk of a position already held (today only the new entry's stop).
 - Tests: `test/member-rules.test.js` (The Desk's rules with an account's own numbers winning, the seed floor, the form's checks, the
   messages, the display and the risk dollars, the fake bridge's mirror of the harness, the old ChartBridge's key lists, the source);
   the Mono harness `GroupsHarness.MemberRules` (the migration of a 0.6.4 file, every refusal, three types in one group with each floor,
   daily room and target, EOD and intraday trailing to each lock, a restart, memberRules, leaving and joining again, the risk percent,
   unreadable rules lines); `npm run smoke:member-rules` at 1366 x 768 (screenshots `member-rules-join-auto-1366.png`,
   `member-rules-join-form-1366.png`, `member-rules-edit-1366.png`, `member-rules-accounts-1366.png`, `member-rules-dialog-1366.png`).
-  `smoke:settings`: the join question for an account with no type is now the full form with the same question.
+  `smoke:settings`: the join question for an account with no type is now the full form with the same question. The group ticket:
+  `GroupsHarness.GroupEntries` (each guard with its words, rounds to 0, a room not known, adds, no stop, the sizes changed, risk off,
+  the placing, one direction per member), the fake's `groupSize`, `groupPreview` and `groupOrder` with the same numbers, and
+  `npm run smoke:group-ticket` (screenshots `group-ticket-confirm-1366.png`, `group-ticket-placed-1366.png`).
 
 ## 1.32.0 (2026-10-19): the account type picker as Firm, Plan and Size
 

@@ -3332,14 +3332,27 @@ two of three floors had the wrong numbers. Built in `nt8/ChartBridgeGroups.cs`, 
   below its own size less its drawdown; room is equity less its floor; daily room is its own daily loss plus today's P&L. A
   member with no daily loss or target of its own gets `why` "SIM-A's rules in Lucid have no daily loss limit" (a member on the
   group's rules: "group Lucid has no daily loss limit", as before). The missed-close warning (0.6.3) follows the member's own
-  drawdown type. `accountState.rules` carries the member's own seven numbers (the same keys as before; max size is not in it).
+  drawdown type. `accountState.rules` carries the member's own numbers (the seven keys as before, then `maxMinis` and `maxMicros`, 0 none).
   ChartBridge holds every member's rules in `groups.txt`, so all of it works while The Desk is down.
-- **Max size** is stored and shown; ChartBridge enforces nothing with it (the copier, group trading and every gate are unchanged).
+- **Max size** caps a group entry from the ticket (below); the copier, agent group trading and the single account gates are unchanged.
 - **The risk percent** (`riskPct`, Anthony: of each account's max loss, its drawdown amount: 10% is $200 on a 50K with a $2,000 max
-  loss, $450 on a 150K with $4,500): stored, sent and shown (the Settings row lists each member's dollars). **Nothing in the order path
-  reads it.** No path in ChartBridge sizes one entry onto a group: the copier sends a fixed quantity per follower (followers are any
-  accounts, not a group), and group trading (0.6.0) places the sizes the runner sends ("ChartBridge never resizes"). Sizing an entry
-  per member from the risk percent waits for Anthony's answers on which path and how (the CHANGELOG lists the questions).
+  loss, $450 on a 150K with $4,500) sizes a group entry from the ticket (below). The copier, the agents and the bot never read it.
+
+**Trade the group (Anthony 2026-10-19).** On the page's order connection (the order gates, counted as order actions):
+
+| message | fields (no others) | answer |
+|---|---|---|
+| `groupPreview` | `cid`, `group`, `root`, `side`, `kind` (as `order`), `price` (not market), `limitOffset` (stopLimit), `bracket` `{stop, target}` with `stop` at least 1 | `groupPreview` `{cid, group, name, root, side, kind, stopTicks, riskPct, members: [{account, size, risk, budget, out}]}` in seat order (by name); nothing is placed |
+| `groupOrder` | the same and `sizes` (the sizes confirmed, in seat order: "4,2,1,2") | refused whole when the members or any size changed since ("the sizes changed since the preview (SIM-A 5 confirmed, 4 now): nothing was sent; look again and send"); else each member with a size gets its own `order` (its account, that qty, the bracket) through the order path, then `groupPlaced` `{..., placed, members}` with `out` "refused: <why>" for a member the order path refused |
+
+Each member: budget = riskPct x its drawdown / 100; contracts = floor(budget / (stopTicks x tick x point value)). It sits out with
+its reason when its room to the floor, or its daily room under a daily loss rule, is not known; when it is the copier's leader or a
+follower, the bot's account or an agent's; when it rounds to 0. Never above its max size (MaxMinis, or MaxMicros for MNQ, MES and the
+other micros) nor `maxQty.<root>` less what it holds and has working on that side (an add is sized the same way); the stop loss
+within its room to the floor and its daily room. Refused: no `bracket` or a stop of 0 ("a group entry needs a stop: each member is
+sized from its stop loss (set the bracket's stop)"), the group's risk off ("group Lucid has no risk percent: set Risk % of max loss in
+Settings, Account groups"), no member able to take it. `accountState.rules` adds `maxMinis` and `maxMicros` (0 none). A ChartBridge
+before 0.6.5 knows neither message (the page lists no group in the ticket then).
 
 **groups.txt.** A `group` line may carry a 14th field, `riskPct|-` (more than 0, at most 100, at most 2 decimals; `-` off), written
 only when the risk is on or a later ChartBridge's fields follow it, so a group with risk off is written exactly as 0.6.4 writes it.

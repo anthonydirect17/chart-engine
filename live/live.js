@@ -2611,7 +2611,7 @@ function mount(container, options) {
     put(c, 'className', 'pill' + (staleSec > 0 ? ' warn' : connState === 'offline' ? ' bad' : ''));
     put(c, 'title', staleSec > 0 ? 'No trade from ChartBridge for ' + staleSec + ' s (' + (LP.isRthEt(etNow()) ? 'RTH: 10 s' : 'outside RTH: 60 s') + '). It clears with the next trade.' : versionText());
     put(a, 'hidden', !hostLive);
-    put(a, 'textContent', 'ARMED' + (hostLive && HT.account ? ' · ' + HT.account : ''));
+    put(a, 'textContent', 'ARMED' + (hostLive && HT.account ? ' · ' + String(HT.account).replace(/^group:/, 'group ') : ''));   // 1.33.0: a group ticket says so
   }
   /* 1.14.0 (Anthony): the versions, quietly: the badge's tooltip */
   const versionText = () => 'chart ' + CE.VERSION + ' · ChartBridge ' + (bridgeVersion || '-');

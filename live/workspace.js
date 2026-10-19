@@ -740,9 +740,18 @@ const tlater = (fn, ms) => { const id = setTimeout(() => { tTimers.delete(id); f
    nt8/PROTOCOL.md "The page's v3 connection (chart 1.16.0)". */
 const AF = window.AccountsPage ? window.AccountsPage.createFeed({
   wsUrl, pin: PIN, framed: FRAMED, fetch: (u, o) => fetch(u, o), note: (text, warn) => note(text, !!warn, warn ? 8000 : 4000),
-  changed: () => { syncV3(); renderLimits(); renderAccountPages(); if (groupsUi) groupsUi.render(); },
+  changed: () => { syncV3(); renderLimits(); renderAccountPages(); if (groupsUi) groupsUi.render(); syncGroupPicks(); },
   orderSend: obj => !!obj && obj.type === 'cancel' && obj.from === 'list' && core.cancelFromList(obj.id, obj.cid),
 }) : null;
+/* 1.33.0: the ticket's picker lists the groups (ChartBridge 0.6.5): drawn again only when the groups it offers change */
+let groupPickKey = '';
+function syncGroupPicks() {
+  let k;
+  try { k = JSON.stringify(core.groupChoices()); } catch (e) { return; }   // core is made below; the feed may call this first
+  if (k === groupPickKey) return;
+  groupPickKey = k;
+  if (TK.bar) TK.bar.syncTradeAccounts();
+}
 /* the v3 connection's switches to the ticket (each control shows only while its switch is on), only when they change */
 let v3Key = 'null';
 function syncV3() {
@@ -785,7 +794,32 @@ const core = TC.create({
   /* 1.17.0: the AI agent that owns this pair by ChartBridge's owner lock (the Agent tab knows): a resting order there is
      refused before it is sent, a market exit that only reduces passes */
   agentOwner: (account, root) => (agentDesk ? agentDesk.ownerOf(account, root) : ''),
+  /* 1.33.0 (ChartBridge 0.6.5): the groups on the window's v3 connection, for the ticket's picker; a group entry's confirm */
+  groups: () => (AF && AF.S.groups && !AF.S.groupsError ? AF.S.groups : []),
+  confirmGroup: (m, onSend, onCancel) => { if (forwarding || !holds()) return false; askGroup(m, onSend, onCancel); return true; },
 });
+/* 1.33.0: the group entry's one confirm (Anthony 2026-10-19): each account's size and dollar risk, or why it sits out; Send sends
+   them all (ChartBridge refuses the whole entry if any size changed since). A dialog of the page, as the rules dialog. */
+function askGroup(m, onSend, onCancel) {
+  const d = $('wsDialog'), GC = window.GroupsCore, usd = v => (GC ? GC.usd(v) : '$' + v);
+  const side = m.side === 'sell' ? 'SELL' : 'BUY', kind = m.kind === 'market' ? 'MKT' : m.kind === 'limit' ? 'LMT' : m.kind === 'stop' ? 'STP' : m.kind;
+  const rows = (m.members || []).map(x => `<tr class="${x.size > 0 ? '' : 'gq-out'}"><td>${esc(x.account)}</td><td class="r">${x.size > 0 ? x.size + ' ' + esc(m.root) : '-'}</td><td class="r">${x.size > 0 ? usd(x.risk) : '-'}</td><td class="r">${usd(x.budget)}</td><td>${x.size > 0 ? '' : esc('sits out: ' + (x.out || ''))}</td></tr>`).join('');
+  const total = (m.members || []).reduce((t, x) => t + (x.size > 0 ? x.risk : 0), 0), n = (m.members || []).filter(x => x.size > 0).length;
+  d.innerHTML = `<form class="ws-dlg ws-gq" method="dialog" aria-label="Group entry on ${esc(m.name)}">
+    <h2>${side} ${kind} ${esc(m.root)} on group ${esc(m.name)} <span>stop ${m.stopTicks} ticks · risk ${m.riskPct}% of each account's max loss</span></h2>
+    <table class="gq-t"><thead><tr><th>Account</th><th class="r">Size</th><th class="r">Risk</th><th class="r">Budget</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="ws-help">${n} account${n === 1 ? '' : 's'}, ${usd(Math.round(total * 100) / 100)} at risk in all. Each account gets its own entry with the bracket's stop and target. ChartBridge refuses the whole entry if a size changed since this was worked out.</p>
+    <div class="ws-dlg-btns"><span class="sg-fill"></span><button type="button" class="ws-btn" data-act="cancel">Cancel</button><button type="button" class="ws-btn primary" id="gqSend" title="Sends every account entry (a click only, as every order button)">Send to ${n} account${n === 1 ? '' : 's'}</button></div>
+  </form>`;
+  /* Send works by a real click only (e.detail 0 is a key), as the ticket's order buttons; Enter never sends */
+  let sent = false;
+  showDialog(d, () => false, () => { if (!sent && onCancel) onCancel(); });
+  d.querySelector('#gqSend').addEventListener('click', e => {
+    if (e.detail === 0) { tnote('The group entry is sent by a click on Send only, not by keyboard.', 'warn'); return; }
+    sent = true; d.close(); onSend();
+  });
+  d.querySelector('[data-act="cancel"]').focus();
+}
 /* 1.16.0: what only the v3 connection gets, for the ticket: `managed` and the Merge result (Merge itself goes on the ticket's
    connection, as every order action); its errors and warnings are said as the ticket's own (the Bot tab says the bot's) */
 if (AF) AF.listen({
@@ -889,7 +923,7 @@ function renderOrders() {
 }
 /* The window's title says when this window's ticket is Armed, and on which account (as the single chart page's tab). */
 function syncTitle() {
-  const t = (holds() && core.TR.armed ? 'ARMED · ' + ticketRoot() + ' · ' + core.TR.account + ' · ' : '') + (layout || W.DEFAULT_NAME) + ' · Workspace';
+  const t = (holds() && core.TR.armed ? 'ARMED · ' + ticketRoot() + ' · ' + String(core.TR.account).replace(/^group:/, 'group ') + ' · ' : '') + (layout || W.DEFAULT_NAME) + ' · Workspace';
   if (document.title !== t) document.title = t;
 }
 function renderFlat() {
