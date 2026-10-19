@@ -49,7 +49,7 @@ test('1.33.0 deskRules: nothing to take the rules from gives the reason (the pag
 
 test('1.33.0 seedHigh: the highest close prefilled from The Desk\'s seed floor plus the drawdown, else none', () => {
   const rules = { drawdown: 2000 };
-  assert.deepEqual(GC.seedHigh(deskRow({ seedFloor: 49234.5, seedDate: '2026-10-17' }), rules), { value: 51234.5, words: 'The Desk\'s seed floor $49,234.50 (2026-10-17) plus the drawdown $2,000' });
+  assert.deepEqual(GC.seedHigh(deskRow({ seedFloor: 49234.5, seedDate: '2026-10-17' }), rules), { value: 51234.5, date: '2026-10-17', words: 'The Desk\'s seed floor $49,234.50 (2026-10-17) plus the drawdown $2,000' });
   assert.equal(GC.seedHigh(deskRow({}), rules), null, 'The Desk has no seed for it: asked as now');
   assert.equal(GC.seedHigh(deskRow({ seedFloor: 49000 }), null), null);
 });

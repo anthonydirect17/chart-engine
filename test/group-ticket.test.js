@@ -8,12 +8,13 @@ const assert = require('node:assert/strict');
 const { LivePrefs: LP } = require('../live/live.js');
 const TC = require('../live/trade.js');
 
-function rig() {
+function rig(gx) {
   let clock = 5000, timers = [], tid = 0;
   const store = new Map();
   const storage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
   const R = { sent: [], notes: [], root: 'NQ', last: 25000, strategy: null, confirm: null };
-  const groups = [{ id: 'g1', name: 'Lucid', perMember: true, riskPct: 10, members: ['SIM-A', 'SIM-B', 'SIM-C'] }];
+  const groups = [Object.assign({ id: 'g1', name: 'Lucid', perMember: true, riskPct: 10, members: ['SIM-A', 'SIM-B', 'SIM-C'], tradeOut: [] }, gx || {})];
+  R.groups = groups;
   const env = {
     LP, prefs: LP.create(storage), fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve('{"token":"t"}') }),
     send: m => R.sent.push(JSON.parse(JSON.stringify(m))), open: () => true, sock: () => R,
@@ -53,7 +54,7 @@ test('the entry: no stop refused; the preview, one confirm, then the sizes shown
   assert.equal(R.sent.length, 0, 'nothing sent before Send');
   R.confirm.send();
   const go = R.sent.pop();
-  assert.equal(go.type, 'groupOrder'); assert.equal(go.sizes, '4,0,1'); assert.deepEqual(go.bracket, { stop: 20, target: 40 });
+  assert.equal(go.type, 'groupOrder'); assert.equal(go.sizes, 'SIM-A:4,SIM-B:0,SIM-C:1', 'review 2: the accounts with their sizes'); assert.deepEqual(go.bracket, { stop: 20, target: 40 });
   R.advance(6000);
   R.strategy = { name: 'Scalp', wire: { name: 'Scalp', stop: 16, t1: 32, t1Share: 100 } };
   R.core.setSwitches({ strategies: true });
@@ -98,4 +99,33 @@ test('answer 1: Close, Cancel all and B/E act on each member', () => {
   R.advance(1000);
   R.core.flattenHere();
   assert.deepEqual(R.sent.filter(m => m.type === 'flatten').map(m => m.account).sort(), ['SIM-A', 'SIM-B', 'SIM-C']);
+});
+
+test('review 4: Close, Cancel all, B/E and the lines leave out the members ChartBridge leaves out, and say so', () => {
+  const R = rig({ members: ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'], tradeOut: [{ account: 'SIM-D', why: 'SIM-D is the bot\'s account' }] });
+  R.core.setArmed(true);
+  R.core.message({ type: 'orders', list: [order('o1', 'SIM-A', 'stop', 'sell', 'stop', 24980, 1), order('o5', 'SIM-D', 'stop', 'sell', 'stop', 24980, 3)] });
+  const line = R.core.chartOrders('group:g1', 'NQ')[0];
+  assert.equal(line.qty, 1, 'SIM-D\'s stop is not on the group\'s line');
+  assert.match(line.groupTip, /\nleft out: SIM-D \(SIM-D is the bot's account\)$/);
+  R.sent.length = 0;
+  R.core.flattenHere();
+  assert.deepEqual(R.sent.filter(m => m.type === 'flatten').map(m => m.account).sort(), ['SIM-A', 'SIM-B', 'SIM-C'], 'never the bot\'s account');
+  assert.match(R.notes.pop(), /Left out: SIM-D \(SIM-D is the bot's account\)\.$/);
+});
+
+test('review 7: one id per planned level when the members\' prices differ; a member that left mid trade is said', () => {
+  const R = rig();
+  R.core.setArmed(true);
+  const entry = (id, a, stopTicks) => order(id, a, 'entry', 'buy', 'limit', 24990, 1, { planned: { stopTicks, targetTicks: null } });
+  R.core.message({ type: 'orders', list: [entry('e1', 'SIM-A', 8), entry('e2', 'SIM-B', 12)] });
+  const lines = R.core.chartOrders('group:g1', 'NQ'), ids = lines.map(l => l.id);
+  assert.equal(new Set(ids).size, ids.length, 'every line its own id: ' + ids.join(' '));
+  assert.equal(lines.filter(l => l.plan).length, 2, 'two planned stops at two prices');
+  R.core.message({ type: 'position', account: 'SIM-C', root: 'NQ', qty: 2, avgPrice: 25000 });
+  R.core.groupsChanged();
+  R.groups[0].members = ['SIM-A', 'SIM-B'];
+  R.core.groupsChanged();
+  assert.match(R.notes.pop(), /^warn: SIM-C left group Lucid while it holds a position or orders: its own stops stay on SIM-C\./);
+  assert.equal(R.core.groupLeftWords('group:g1'), 'SIM-C left the group: its own stops stay');
 });

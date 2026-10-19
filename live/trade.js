@@ -121,17 +121,40 @@ function create(env) {
   const newCid = () => 'p' + Date.now().toString(36) + '-' + (++cidSeq);
   const tradeMode = () => TR.v2 && TR.enabled;
   /* 1.33.0 (ChartBridge 0.6.5, Anthony 2026-10-19, "Trade the group"): the ticket may pick a group in place of one account
-     ("group:g1"). One entry with its bracket stop goes to every member, each member sized by ChartBridge from the group's risk
-     percent of its own max loss: the ticket asks ChartBridge for the sizes (groupPreview), shows each member's size and dollar
-     risk or why it sits out, and one confirm sends them (groupOrder, refused whole by ChartBridge if any size changed meanwhile).
-     Close, Flatten all, B/E and Cancel all act on every member's own position and orders. env.groups(): the groups ChartBridge
-     0.6.5 sends (perMember), [{ id, name, members, riskPct }]. */
+     ("group:g1"). One entry with its stop (the bracket's, or an Order Strategy's) goes to every member ChartBridge trades, each
+     sized by ChartBridge from the group's risk percent of its own max loss: the ticket asks for the sizes (groupPreview), shows each
+     member's size and dollar risk or why it sits out, and one confirm sends them with their accounts (groupOrder, refused whole by
+     ChartBridge if any account or size changed meanwhile). Close, Flatten all, B/E, Cancel all and the group's chart lines act on
+     the members a group entry trades: never the ones ChartBridge leaves out (tradeOut: the copier's, the bot's, an agent's).
+     env.groups(): the groups ChartBridge 0.6.5 sends (perMember), [{ id, name, members, riskPct, tradeOut }]. */
   const GROUP_PREFIX = 'group:';
   const isGroup = a => typeof a === 'string' && a.startsWith(GROUP_PREFIX);
   const groupsNow = () => (typeof env.groups === 'function' ? env.groups() || [] : []).filter(g => g && typeof g.id === 'string' && g.perMember);
   const groupFor = a => (isGroup(a) ? groupsNow().find(g => GROUP_PREFIX + g.id === a) || null : null);
-  /* the accounts an action on the ticket's account covers: the members of a group, else the account itself */
-  const targets = a => { if (!isGroup(a)) return a ? [a] : []; const g = groupFor(a); return g ? g.members.slice() : []; };
+  /* the accounts an action on the ticket's account covers: the members of a group a group entry trades (review 4: never those
+     ChartBridge leaves out), else the account itself */
+  const outOf = g => (g && Array.isArray(g.tradeOut) ? g.tradeOut.filter(x => x && typeof x.account === 'string') : []);
+  const targets = a => { if (!isGroup(a)) return a ? [a] : []; const g = groupFor(a); if (!g) return []; const out = new Set(outOf(g).map(x => x.account)); return g.members.filter(m => !out.has(m)); };
+  const outWords = a => { const g = groupFor(a), o = outOf(g); return o.length ? 'left out: ' + o.map(x => x.account + ' (' + x.why + ')').join('; ') : ''; };
+  /* review 7: a member that left the group while it held something there: said on the ticket and the group's lines (its own stops
+     stay); account -> group name, until it is flat with nothing working */
+  const groupLeft = new Map();
+  let groupSeen = new Map();
+  function groupsChanged() {
+    const now = new Map(groupsNow().map(g => [g.id, new Set(g.members)]));
+    for (const [id, was] of groupSeen) {
+      const g = groupsNow().find(x => x.id === id), nowSet = now.get(id) || new Set();
+      for (const a of was) if (!nowSet.has(a) && holdsAny(a) && !groupLeft.has(a)) {
+        groupLeft.set(a, g ? g.name : id);
+        if (TR.account === GROUP_PREFIX + id) flash(a + ' left group ' + (g ? g.name : id) + ' while it holds a position or orders: its own stops stay on ' + a + '. Pick ' + a + ' on the ticket to manage them.', 'warn');
+      }
+    }
+    for (const a of [...groupLeft.keys()]) if (!holdsAny(a)) groupLeft.delete(a);
+    groupSeen = now;
+    env.changed();
+  }
+  const holdsAny = a => [...TR.positions].some(([k, v]) => k.startsWith(a + '|') && v.qty) || [...TR.orders.values()].some(o => o.account === a && OT.isWorking(o));
+  const leftWords = a => { const g = groupFor(a); if (!g) return ''; const l = [...groupLeft].filter(([, n]) => n === g.name).map(([x]) => x); return l.length ? l.join(', ') + ' left the group: ' + (l.length > 1 ? 'their' : 'its') + ' own stops stay' : ''; };
   const nameOf = a => { if (!isGroup(a)) return a; const g = groupFor(a); return g ? 'group ' + g.name : a; };
   let groupAsk = null;                                // { cid, side, kind, price, bracket, root, account, gen }: a preview asked for
 
@@ -364,7 +387,7 @@ function create(env) {
     const send2 = () => {
       if (!TR.armed || armGen !== q.gen || root() !== q.root || TR.account !== q.account) { flash('Not sent: that group entry was for ' + q.root + ' on ' + nameOf(q.account) + (TR.armed && armGen === q.gen ? ', and the ticket is on ' + root() + ' on ' + nameOf(TR.account) + ' now.' : ' while Armed; Armed went off since.'), 'warn'); return; }
       if (!open()) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return; }
-      const msg = Object.assign({ type: 'groupOrder', cid: newCid(), group: m.group, root: q.root, side: q.side, kind: q.kind }, q.strategy ? { strategy: q.strategy } : { bracket: q.bracket }, { sizes: members.map(x => x.size).join(',') });
+      const msg = Object.assign({ type: 'groupOrder', cid: newCid(), group: m.group, root: q.root, side: q.side, kind: q.kind }, q.strategy ? { strategy: q.strategy } : { bracket: q.bracket }, { sizes: members.map(x => x.account + ':' + x.size).join(',') });   // review 2: the accounts with their sizes
       if (q.kind !== 'market') msg.price = q.price;
       if (q.kind === 'stopLimit') msg.limitOffset = 0;
       send(msg);
@@ -725,7 +748,8 @@ function create(env) {
     if (isGroup(TR.account)) {   // 1.33.0: Close on a group closes every member's own position there (each its own Flatten)
       const list = targets(TR.account);
       for (const a of list) sendFlatten(a, R, false, 'all');
-      flash('Flatten sent for ' + nameOf(TR.account) + ' ' + R + ' (' + list.join(', ') + '): cancel their orders, close their positions at market.', '');
+      const ow = outWords(TR.account);
+      flash('Flatten sent for ' + nameOf(TR.account) + ' ' + R + ' (' + list.join(', ') + '): cancel their orders, close their positions at market.' + (ow ? ' ' + ow.charAt(0).toUpperCase() + ow.slice(1) + '.' : ''), '');
       return;
     }
     sendFlatten(TR.account, R, false, other ? 'all' : 'here');     // takes its orders off a Cancel all; sent again once if refused for the rate
@@ -878,7 +902,7 @@ function create(env) {
      distance sent is the one the chart showed (F2 review) */
   function planMove(planId, price, from) {
     const p = OT.planIdOf(planId); if (!p) return;
-    if (isGroupLine(p.entry)) { groupPlan(p.entry, p.which, (o, tick) => OT.planDrag(o, p.which, price, tick, from)); return; }   // 1.33.0: each member's entry, to the same price
+    if (isGroupLine(planId)) { groupPlan(planEntries(planId), p.which, (o, tick) => OT.planDrag(o, p.which, price, tick, from)); return; }   // 1.33.0: each member's entry, to the same price
     const o = planTarget(p.entry); if (!o) return;
     const r = OT.planDrag(o, p.which, price, tickOf(o.root), from);
     if (r.error) { env.changed(); flash(r.error, 'warn'); return; }
@@ -889,13 +913,13 @@ function create(env) {
   }
   function planRemove(planId) {
     const p = OT.planIdOf(planId); if (!p) return;
-    if (isGroupLine(p.entry)) { groupPlan(p.entry, p.which, () => ({ ticks: null })); return; }
+    if (isGroupLine(planId)) { groupPlan(planEntries(planId), p.which, () => ({ ticks: null })); return; }
     const o = planTarget(p.entry); if (!o) return;
     sendPlan(o, p.which, null, 'Removing the planned ' + whichName(p.which) + ' of order ' + o.id + '.');
   }
   function planAdd(entryId, which) {
     if (which !== 'stop' && which !== 'target') return;
-    if (isGroupLine(entryId)) { const t = OT.cleanBracket(brackets[root()], cap())[which]; if (!(t > 0)) { flash('Not sent: the bracket ' + whichName(which) + ' for ' + root() + ' is 0.', 'warn'); return; } groupPlan(entryId, which, () => ({ ticks: t })); return; }
+    if (isGroupLine(entryId)) { const t = OT.cleanBracket(brackets[root()], cap())[which]; if (!(t > 0)) { flash('Not sent: the bracket ' + whichName(which) + ' for ' + root() + ' is 0.', 'warn'); return; } groupPlan(groupLine(entryId), which, () => ({ ticks: t })); return; }
     const o = planTarget(entryId); if (!o) return;
     const t = OT.cleanBracket(brackets[o.root], cap())[which];
     if (!(t > 0)) { flash('Not sent: the bracket ' + whichName(which) + ' for ' + o.root + ' is 0. Set it in the bracket boxes, then click +' + (which === 'stop' ? 'SL' : 'TP') + ' again.', 'warn'); return; }
@@ -903,9 +927,13 @@ function create(env) {
   }
   /* 1.33.0: a group entry line's planned stop or target: one `plan` per member entry (ticks: from each one's own entry price,
      so every member's line lands at the same price) */
-  function groupPlan(entryLine, which, ticksOf) {
+  /* the member entries under a group's planned line (each planned line's own entry) */
+  function planEntries(planLineId) {
+    const l = groupLine(planLineId);
+    return l ? { items: l.items.map(x => Object.assign({}, x, { id: x.plan && x.plan.parent })).filter(x => x.id) } : null;
+  }
+  function groupPlan(l, which, ticksOf) {
     if (!ready()) { env.changed(); return; }
-    const l = groupLine(entryLine);
     if (!l) { flash('Not sent: that group line is no longer there.', 'warn'); env.changed(); return; }
     const done = [], bad = [];
     for (const x of l.items) {
@@ -934,11 +962,11 @@ function create(env) {
     const g = groupFor(account), t = tickOf(r), out = new Map();
     if (!g || !(t > 0)) return out;
     const keyOf = o => 'G~' + (o.role || 'entry') + '~' + o.side + '~' + o.kind + '~' + Math.round(o.price / t);
-    for (const a of g.members) {
+    for (const a of targets(account)) {
       const own = chartOrdersOne(a, r), parentKey = new Map();
       for (const o of own) if (!o.plan) parentKey.set(o.id, keyOf(o));
       for (const o of own) {
-        const id = o.plan ? (parentKey.get(o.plan.parent) || 'G~?') + ':' + (o.plan.role === 'stop' ? 'sl' : 'tp') + '~' + Math.round(o.price / t) : keyOf(o);
+        const id = o.plan ? (parentKey.get(o.plan.parent) || 'G~?') + '~at' + Math.round(o.price / t) + ':' + (o.plan.role === 'stop' ? 'sl' : 'tp') : keyOf(o);   // review 7: one id per planned level
         let b = out.get(id);
         if (!b) { b = { id, items: [], parent: o.plan ? parentKey.get(o.plan.parent) : null }; out.set(id, b); }
         b.items.push(Object.assign({ account: a }, o));
@@ -951,9 +979,10 @@ function create(env) {
     for (const b of groupBuckets(account, r).values()) {
       const f = b.items[0], n = new Set(b.items.map(x => x.account)).size;
       const left = b.items.reduce((s2, x) => s2 + Math.max(0, (+x.qty || 0) - (+x.filled || 0)), 0);
-      const tip = (g ? 'Group ' + g.name : 'Group') + ': ' + b.items.map(x => x.account + ' ' + (x.plan ? (x.plan.role === 'stop' ? 'planned stop' : 'planned target') : (x.side === 'sell' ? 'SELL ' : 'BUY ') + (x.role === 'stop' ? 'STP' : x.role === 'target' ? 'TGT' : String(x.kind).toUpperCase())) + ' ' + Math.max(0, (+x.qty || 0) - (+x.filled || 0)) + ' @ ' + fmt(x.price)).join('\n');
+      const extra = [outWords(account), leftWords(account)].filter(Boolean).join('\n');
+      const tip = (g ? 'Group ' + g.name : 'Group') + ': ' + b.items.map(x => x.account + ' ' + (x.plan ? (x.plan.role === 'stop' ? 'planned stop' : 'planned target') : (x.side === 'sell' ? 'SELL ' : 'BUY ') + (x.role === 'stop' ? 'STP' : x.role === 'target' ? 'TGT' : String(x.kind).toUpperCase())) + ' ' + Math.max(0, (+x.qty || 0) - (+x.filled || 0)) + ' @ ' + fmt(x.price)).join('\n') + (extra ? '\n' + extra : '');
       const pend = b.items.every(x => x.movePending !== undefined && x.movePending === f.movePending) ? f.movePending : undefined;
-      const line = { id: f.plan ? b.parent + ':' + (f.plan.role === 'stop' ? 'sl' : 'tp') : b.id, side: f.side, kind: f.kind, price: f.price, qty: left, filled: 0, role: f.role, root: r,
+      const line = { id: b.id, side: f.side, kind: f.kind, price: f.price, qty: left, filled: 0, role: f.role, root: r,
         group: (g ? g.name : 'group') + ' \u00d7' + n, groupTip: tip, members: b.items.map(x => x.id) };
       if (f.plan) line.plan = { parent: b.parent, offset: f.plan.offset, role: f.plan.role };
       if (f.adds) line.adds = f.adds;
@@ -965,10 +994,7 @@ function create(env) {
   /* the member orders a group line stands for, read now (a line drawn a moment ago may cover fewer or more) */
   function groupLine(id) {
     const r = root(), plan = OT.planIdOf(id);
-    for (const b of groupBuckets(TR.account, r).values()) {
-      const lid = b.items[0].plan ? b.parent + ':' + (b.items[0].plan.role === 'stop' ? 'sl' : 'tp') : b.id;
-      if (lid === id) return { items: b.items, plan };
-    }
+    for (const b of groupBuckets(TR.account, r).values()) if (b.id === id) return { items: b.items, plan };
     return null;
   }
   const isGroupLine = id => typeof id === 'string' && id.startsWith('G~');
@@ -1189,7 +1215,7 @@ function create(env) {
     /** for tests (test/order-account.test.js): the inner steps, run on their own */
     /** 1.33.0: the ticket picker's groups: [{ value: 'group:g1', label: 'Group Lucid (4)' }] (ChartBridge 0.6.5's, with members) */
     groupChoices: () => (TR.enabled ? groupsNow().filter(g => g.members.length).map(g => ({ value: GROUP_PREFIX + g.id, label: 'Group ' + g.name + ' (' + g.members.length + ')' })) : []),
-    isGroup, groupMembers: a => targets(a),
+    isGroup, groupMembers: a => targets(a), groupsChanged, groupOut: a => outWords(a), groupLeftWords: a => leftWords(a), groupOf: a => groupFor(a),
     _t: { batchStop, unsentCheck, actionSent, sendFlatten, onRefused, get batch() { return batch; } },
     /** for tests: the order actions sent in the last 1.1 s, and whether a B/E, Flatten all or Flatten retry is under way */
     busy: () => ({ be: !!beRun, flattenAll: !!faRun, retry: retry ? retry.list.map(f => f.account + ' ' + f.root) : [], recent: actionTimes.filter(x => x > now() - CANCEL_GAP).length }),
@@ -1331,6 +1357,11 @@ function wire($, core, ui) {
      picked last for this root stays picked even over the cap, so a click says why it is not sent (checkQty). */
   function renderQty(r, cap) {
     const q = $('oQty'), opts = OT.qtyOptions(cap);
+    /* review 7: on a group the size is ChartBridge's per account: the ticket says the group's risk in place of the qty */
+    const g = core.isGroup(TR.account) ? core.groupOf(TR.account) : null;
+    q.hidden = !!g;
+    if (g) { $('oQtyCap').textContent = 'risk ' + (g.riskPct > 0 ? g.riskPct + '%' : 'off') + ' of each max loss'; $('oQtyCap').title = 'Each account is sized by ChartBridge from the group\'s risk percent of its own max loss'; return; }
+    $('oQtyCap').title = '';
     for (const o of opts) q.options[o.n - 1].disabled = !o.ok;
     q.value = String(qtys[r] || 1);
     const capped = cap < OT.QTY_CHOICES;
@@ -1393,7 +1424,15 @@ function wire($, core, ui) {
   function renderPositionInfo() {
     const el = $('oPos'), other = $('oOther'), legsEl = $('oLegs');
     if (!TR.v2 || !TR.enabled) { if (posKey !== '') { posKey = ''; el.textContent = ''; other.textContent = ''; legsEl.textContent = ''; } return; }
-    const r = ui.root(), pos = TR.positions.get(TR.account + '|' + r), dp = ui.precision();
+    const r = ui.root(), dp = ui.precision();
+    /* review 7: on a group, each member's position here, and the members left out or that left */
+    if (core.isGroup(TR.account)) {
+      const parts = core.groupMembers(TR.account).map(a => { const p = TR.positions.get(a + '|' + r); return a + ' ' + (p && p.qty ? (p.qty > 0 ? '+' : '') + p.qty : 'flat'); });
+      const t = parts.join(' · ') + [core.groupOut(TR.account), core.groupLeftWords(TR.account)].filter(Boolean).map(x => ' · ' + x).join('');
+      if (posKey !== 'g|' + t) { posKey = 'g|' + t; el.textContent = t; el.title = t; el.className = 'oinfo pz flat'; other.textContent = ''; legsEl.textContent = ''; }
+      return;
+    }
+    const pos = TR.positions.get(TR.account + '|' + r);
     const last = pos && pos.qty ? ui.lastPrice() : null;
     const key = [r, TR.account, pos ? pos.qty + '@' + pos.avgPrice : '', last, dp, ui.pointValue(r), TR.orders.size, [...TR.orders.values()].map(o => o.id + o.state + o.qty + o.filled + o.price).join(), [...TR.positions].map(([k, v]) => k + v.qty).join()].join('|');
     if (key === posKey) return;

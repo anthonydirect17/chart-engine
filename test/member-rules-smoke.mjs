@@ -70,7 +70,7 @@ try {
   const jb = await until(() => joinText(p), 'SIM-B\'s join row');
   check(/^Put SIM-B in Lucid with its rules from Lucid LucidFlex 50K Eval \(its own on The Desk: daily loss \$1,200\): \$50,000 · daily \$1,200 · drawdown \$2,000 end of day, stops at \$50,100 · target \$3,000 · consistency 50% · max 4 minis \/ 40 micros · risk 10% of each account's max loss: \$200\./.test(jb || ''),
     'the compact row: every rule from The Desk (no picking, no typing), its own daily loss winning, 10% of its $2,000 max loss = $200: ' + jb);
-  check((await p.$eval(`${AP} [data-act="join-high"]`, e => e.value)) === '51234.5' && /The Desk's seed floor plus the drawdown/.test(jb || ''), 'highest close prefilled from The Desk\'s seed floor 49,234.50 plus the drawdown 2,000');
+  check((await p.$eval(`${AP} [data-act="join-high"]`, e => e.value)) === '51234.5' && /\(highest close from The Desk's seed of 2026-10-17\)/.test(jb || ''), 'highest close prefilled from The Desk\'s seed floor 49,234.50 plus the drawdown 2,000');
   check(await p.$$eval(`${AP} .apg-join input:not([data-act="join-high"])`, e => e.length) === 0, 'the compact row asks only the highest close (no rule boxes)');
   check(await fits(p, `${AP} .apg-join`), 'the compact row fits the panel at 1366 x 768');
   await p.screenshot({ path: path.join(out, 'member-rules-join-auto-1366.png') });

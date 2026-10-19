@@ -3343,7 +3343,7 @@ two of three floors had the wrong numbers. Built in `nt8/ChartBridgeGroups.cs`, 
 | message | fields (no others) | answer |
 |---|---|---|
 | `groupPreview` | `cid`, `group`, `root`, `side`, `kind` (as `order`), `price` (not market), `limitOffset` (stopLimit), `bracket` `{stop, target}` with `stop` at least 1 | `groupPreview` `{cid, group, name, root, side, kind, stopTicks, riskPct, members: [{account, size, risk, budget, out}]}` in seat order (by name); nothing is placed |
-| `groupOrder` | the same and `sizes` (the sizes confirmed, in seat order: "4,2,1,2") | refused whole when the members or any size changed since ("the sizes changed since the preview (SIM-A 5 confirmed, 4 now): nothing was sent; look again and send"); else each member with a size gets its own `order` (its account, that qty, the bracket) through the order path, then `groupPlaced` `{..., placed, members}` with `out` "refused: <why>" for a member the order path refused |
+| `groupOrder` | the same and `sizes` (the accounts with the sizes confirmed, in seat order: "SIM-A:4,SIM-B:2,SIM-C:1,SIM-D:2"; review of d7c8e50: any other account, order or size refuses the whole entry) | refused whole when the members or any size changed since ("the sizes changed since the preview (SIM-A 5 confirmed, 4 now): nothing was sent; look again and send"); else each member with a size gets its own `order` (its account, that qty, the bracket) through the order path, then `groupPlaced` `{..., placed, members}` with `out` "refused: <why>" for a member the order path refused |
 
 A `strategy` object (an Order Strategy, as on `order`; never with `bracket`) may go in place of the bracket: its `stop` sizes each
 member, and each member's entry is its own managed strategy entry. Each member: budget = riskPct x its drawdown / 100; contracts =
@@ -3352,7 +3352,18 @@ for every position it holds on that side, each working stop (stop or stop-limit 
 position) times its distance from the last price (0 past the price in profit) times the point value; a contract held with no working
 stop, or no recent price, makes it not known ("its open stop risk is not known (it holds 4 NQ with no working stop for 4 of them)"),
 and it sits out. A group's order lines on the page are moved by one `change` per member to the same price, each checked as on one
-account. It sits out with
+account.
+
+Review of d7c8e50 (the coordinator's decisions): the open stop risk is every position on BOTH sides at its working stops (each
+contract month from its own last price: another month with no price makes it not known) plus every working entry (resting, or a
+market one not yet filled; single or group) at its own stop (its bracket's, its planned or its strategy's stop and stop-limit ticks)
+times its contracts; an entry whose stop ChartBridge does not know makes it not known. The max size counts every instrument in mini
+equivalents (10 micros are 1 mini): held plus working plus the new entry against `maxMinis`, or `maxMicros / 10` when only micros
+are set. A strategy entry is sized from its stop plus a stop-limit's ticks. The bracket cap (`maxBracketTicks`) is applied at the
+preview. One lock (`GroupEntryLock`) holds a `groupOrder` from its sizing to its last member's order, and every page entry takes
+it before `PlaceLock`, so two windows never both pass the room check. The `groups` message adds `tradeOut` per group
+(`[{account, why}]`, the members a group entry leaves out: the copier's leader or a follower, the bot's account, an agent's); the
+page's group Close, Flatten all, Cancel all, B/E and lines leave them out and say so. It sits out with
 its reason when its room to the floor, or its daily room under a daily loss rule, is not known; when it is the copier's leader or a
 follower, the bot's account or an agent's; when it rounds to 0. Never above its max size (MaxMinis, or MaxMicros for MNQ, MES and the
 other micros) nor `maxQty.<root>` less what it holds and has working on that side (an add is sized the same way); the stop loss

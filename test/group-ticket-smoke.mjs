@@ -78,10 +78,12 @@ try {
   await until(() => p.$eval('#wsDialog', d => d.open && !!d.querySelector('.ws-gq')), 'the confirm again');
   await p.click('#gqSend');
   const go = await until(async () => (await sent(['groupOrder']))[0], 'groupOrder');
-  check(go && go.sizes === '4,2,1,2' && go.bracket.stop === 20 && go.bracket.target === 40, 'Send: groupOrder with the sizes shown: ' + JSON.stringify(go));
+  check(go && go.sizes === 'SIM-A:4,SIM-B:2,SIM-C:1,SIM-D:2' && go.bracket.stop === 20 && go.bracket.target === 40, 'Send: groupOrder with the sizes shown: ' + JSON.stringify(go));
   const pos = await until(async () => { const s = await control('state', { root: 'NQ' }); const q = ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'].map(a => ((s.positions || {})[a + '|NQ'] || {}).qty || 0); return q.every(x => x > 0) ? q : null; }, 'every member filled', 8000);
   const note1 = await p.$eval(tk('note'), e => e.textContent).catch(() => '');
   check(JSON.stringify(pos) === '[4,2,1,2]' || /placed SIM-A 4, SIM-B 2, SIM-C 1, SIM-D 2/.test(note1), 'every member got its own entry at its own size: ' + JSON.stringify(pos) + ' ' + note1);
+  const tkInfo = await until(async () => { const x = await p.evaluate(() => { const q = document.querySelector('[data-tk-id="oQty"]'), c = document.querySelector('[data-tk-id="oQtyCap"]'), ps = document.querySelector('[data-tk-id="oPos"]'); return { qtyHidden: q.hidden, cap: c.textContent, pos: ps.textContent }; }); return /SIM-A \+4/.test(x.pos) ? x : null; }, 'the members\' positions on the ticket');
+  check(tkInfo && tkInfo.qtyHidden && tkInfo.cap === 'risk 10% of each max loss' && tkInfo.pos === 'SIM-A +4 · SIM-B +2 · SIM-C +1 · SIM-D +2', 'review 7: on a group the ticket shows the risk in place of QTY, and each member\'s position: ' + JSON.stringify(tkInfo));
   await p.screenshot({ path: path.join(out, 'group-ticket-placed-1366.png') });
   /* answer 1: the group's lines on an MNQ chart: one per level, "STP n · Lucid ×4", each account in the tooltip; a drag moves each */
   await p.click(tk('flattenBtn')); await wait(800);

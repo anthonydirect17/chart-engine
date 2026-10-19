@@ -748,6 +748,7 @@ let groupPickKey = '';
 function syncGroupPicks() {
   let k;
   try { k = JSON.stringify(core.groupChoices()); } catch (e) { return; }   // core is made below; the feed may call this first
+  try { core.groupsChanged(); } catch (e) { /* the ticket's notes only */ }   // review 7: a member that left the group mid trade
   if (k === groupPickKey) return;
   groupPickKey = k;
   if (TK.bar) TK.bar.syncTradeAccounts();

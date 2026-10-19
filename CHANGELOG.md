@@ -49,6 +49,14 @@ member's own rules and the risk percent (0.6.5)".
   stops, measured from the last price (a stop past the price in profit risks 0), comes off its room to the floor and its daily
   room before the new entry's stop; a position with no working stop for some of its contracts makes the risk not known, so it sits
   out and says why.
+- **The review of d7c8e50, fixed.** The open stop risk counts every working entry at its own stop and every position on both
+  sides (each contract month from its own price); one lock holds a group entry from its sizing to its last order, and page entries
+  take it too, so two windows cannot both pass the room check; the confirmed sizes carry their accounts; the max size counts every
+  instrument in mini equivalents (10 micros = 1 mini); a stop-limit strategy sizes from its stop plus its limit ticks; the preview
+  applies the bracket cap; the group's Close, Flatten all, Cancel all, B/E and lines leave out the copier's, the bot's and an
+  agent's accounts (`tradeOut`) and say so; one id per planned group level; the ticket shows the group's risk in place of QTY and
+  each member's position; a member that leaves the group mid trade is named (its own stops stay); the join row shows the seed's
+  date ("highest close from The Desk's seed of 2026-10-17").
 - Tests: `test/member-rules.test.js` (The Desk's rules with an account's own numbers winning, the seed floor, the form's checks, the
   messages, the display and the risk dollars, the fake bridge's mirror of the harness, the old ChartBridge's key lists, the source);
   the Mono harness `GroupsHarness.MemberRules` (the migration of a 0.6.4 file, every refusal, three types in one group with each floor,

@@ -210,7 +210,7 @@ function seedHigh(row, rules) {
   const f = row && posMoney(row.seedFloor);
   if (!f || !rules || !(rules.drawdown > 0)) return null;
   const v = Math.round((f + rules.drawdown) * 100) / 100;
-  return { value: v, words: 'The Desk\'s seed floor ' + usd(f) + (row.seedDate ? ' (' + row.seedDate + ')' : '') + ' plus the drawdown ' + usd(rules.drawdown) };
+  return { value: v, date: row.seedDate || '', words: 'The Desk\'s seed floor ' + usd(f) + (row.seedDate ? ' (' + row.seedDate + ')' : '') + ' plus the drawdown ' + usd(rules.drawdown) };
 }
 /** 1.33.0: the risk percent in words, and one member's dollars at it (the percent of its max loss, its drawdown amount). */
 /** 1.33.0: ChartBridge 0.6.5 or later keeps each member's own rules (its hello's version, "0.6.5"). */
@@ -272,7 +272,9 @@ function cleanGroups(m) {
       members: Array.isArray(g.members) ? g.members.filter(x => typeof x === 'string') : [], side: ['long', 'short', 'mixed'].includes(g.side) ? g.side : null,
       holders: Array.isArray(g.holders) ? g.holders.filter(h => h && typeof h.account === 'string') : [],
       /* 1.33.0: ChartBridge 0.6.5 sends riskPct and ownRules (perMember: it keeps each member's own rules) */
-      perMember: 'riskPct' in g && Array.isArray(g.ownRules), riskPct: isNum(g.riskPct) && g.riskPct > 0 ? g.riskPct : null, ownRules: Array.isArray(g.ownRules) ? g.ownRules.filter(x => typeof x === 'string') : [] }));
+      perMember: 'riskPct' in g && Array.isArray(g.ownRules), riskPct: isNum(g.riskPct) && g.riskPct > 0 ? g.riskPct : null, ownRules: Array.isArray(g.ownRules) ? g.ownRules.filter(x => typeof x === 'string') : [],
+      /* review 4: the members a group entry leaves out (the copier's, the bot's, an agent's), with why */
+      tradeOut: Array.isArray(g.tradeOut) ? g.tradeOut.filter(x => x && typeof x.account === 'string' && typeof x.why === 'string') : [] }));
 }
 
 /* ---------------- 1.30.0 (wave 5, Anthony 2026-10-16): account types, the one ledger on The Desk (GET /api/account-types).
