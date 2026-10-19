@@ -490,6 +490,8 @@ test('ChartBridge 0.5.0 as built (agent-channel 4d4a81f): every status line nami
   const lines = {
     lost: 'agent demo had an open trade on SIM-AG1 MNQ and its legs are gone; ChartBridge no longer treats the position as the agent\'s: flatten or protect it by hand',
     noRecord: 'agent demo holds 1 on SIM-AG1 MNQ with no trade record (ChartBridge restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader',
+    noRecordRunning: 'agent demo holds 1 on SIM-AG1 MNQ with no trade record (opened while ChartBridge was running); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader',   // 0.6.4
+    noRecordCleared: 'agent demo: the no-trade-record error on SIM-AG1 MNQ is cleared: ChartBridge follows its trade 1a2b3c4d there now',   // 0.6.4, an info line
     noLonger: 'SIM-AG1 MNQ is no longer agent demo\'s: ChartBridge did not close it',
     rest: 'SIM-AG1 MNQ: agent demo\'s 1 closed; the rest (2) is not agent demo\'s: ChartBridge did not close it',
     flatTime: 'demo flattened at 15:55 by its rules',

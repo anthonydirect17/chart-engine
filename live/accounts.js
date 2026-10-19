@@ -284,6 +284,9 @@ function reviewUrl(deskUrl, day) {
 
 /* ---------------- the copier (PROTOCOL.md "Copier engine"): a row per account but the leader, each marked SIM or LIVE */
 const FOLLOWER_DEFAULT = { on: false, qty: 1, size: 'micro', lossLimit: null };
+/** 1.31.1 (WORK 2026-10-19: the leader would not go back to none): the Leader picker's choice as copierSet's leader: an
+ *  account name, or null for "none" (ChartBridge 0.4.3 or later takes null as no leader: the copier stands down). */
+const leaderSet = value => ({ leader: typeof value === 'string' && value ? value : null });
 /** SIM or LIVE (Anthony 2026-10-07): SIM only when ChartBridge says sim true; anything else is LIVE (the careful side). */
 const accountMark = sim => (sim === true ? 'SIM' : 'LIVE');
 /**
@@ -378,7 +381,7 @@ const WORKING = new Set(['working', 'partFilled', 'cancelling']);
 const isWorking = o => !!o && WORKING.has(o.state);
 
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
-  tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, accountMark, followerRows, followerMessage,
+  tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
   accountMark, accountChange, logText, orderName, attachedLegs, isWorking, heroOf };
 });
 
@@ -750,7 +753,12 @@ function mount(v, host) {
     const el = e.target, a = el.dataset.act;
     if (!a) return;
     if (a === 'trade') { const on = el.checked; el.checked = !on; F.accountTrade(el.dataset.id, on); return; }   // shown as ChartBridge says, not as clicked
-    if (a === 'leader') { if (el.value) F.copierSet({ leader: el.value }); return; }
+    if (a === 'leader') {   // none sends leader null (1.31.1); shown as ChartBridge says until its copier message comes back
+      const want = el.value;
+      el.value = S.copier && S.copier.leader ? S.copier.leader.account : '';
+      F.copierSet(AC.leaderSet(want));
+      return;
+    }
     if (a === 'group') {   // 1.26.0: None goes at once; a group first asks for the highest close so far (G2 b)
       const name = el.dataset.id, acc = S.accounts.find(x => x.name === name), want = el.value;
       el.value = acc && acc.group ? acc.group : '';                                       // shown as ChartBridge says, not as picked

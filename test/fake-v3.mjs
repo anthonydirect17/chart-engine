@@ -594,6 +594,10 @@ export class OrderDeskV3 extends OrderDesk {
   }
   /** a restart (F5) in the fake: resume when the managed record is there, else leave the stops (PROTOCOL.md) */
   simulateRestart(lostRecord) {
+    /* the copier: copier.txt's leader (or none) and followers come back as saved; stood down until Re-arm (ChartBridge's StartWhy) */
+    if (this.copier) { this.copier.armed = false; this.copier.standDownWhy = 'ChartBridge started: check the accounts and press Re-arm'; this.broadcastV3(this.copierMsg()); }
+    /* 0.6.4: a position held at the start is the only one a missing trade record is put down to a restart for */
+    if (this.agents) for (const a of this.agents.values()) for (const r of a.rules.roots) if (this.pos(a.account, r).qty) (a.heldAtStart || (a.heldAtStart = new Set())).add(r);
     if (this.agents) for (const a of this.agents.values()) {   // 0.5.0: every start is shadow; open proposals are gone with the old run
       a.mode = 'shadow'; a.connected = false; a.helloed = false; a.simulated = false;
       if (a.conn && typeof this.closeAgentConn === 'function') this.closeAgentConn(a.conn);
@@ -621,11 +625,23 @@ export class OrderDeskV3 extends OrderDesk {
     }
     return [...pairs.values()].sort((a, b) => a.seq - b.seq);
   }
+  /** ChartBridge 0.6.4 MergeRefusal: with the copier on, Merge is refused on a follower that is ON, or one that is off while the
+   *  copier still has something of its own there (a copier order that may fill, or a copier fill with the pair not flat); an
+   *  off follower with nothing of the copier is the account's own (WORK 2026-10-19: every account is a follower row) */
+  copierMergeRefusal(account) {
+    if (!this.sw.copier) return null;
+    const f = this.copier.followers.get(account);
+    if (!f) return null;
+    if (f.on) return account + ' is a copier follower: Merge is refused on it while the copier is on (the copier manages its orders).';
+    const held = [...this.orders.values()].some(o => o.copier && o.account === account && (isWorking(o) || (o.filled > 0 && this.pos(account, o.root).qty)));
+    return held ? account + ' is a copier follower (off) that still holds a copier position or orders: Merge is refused on it until the copier\'s part there is flat and done (the copier manages those orders).' : null;
+  }
   check_merge(m) {
     const q = this.quoteOnly(m.root); if (q) return q;
     if (!this.exitAllowed(m.account)) return 'Account ' + m.account + ' is not allowed to trade.';
     const pos = this.pos(m.account, m.root).qty;
     if (!pos) return 'Nothing to merge: ' + m.account + ' is flat on ' + m.root + '.';
+    { const why = this.copierMergeRefusal(m.account); if (why) return why; }
     for (const o of this.orders.values()) if (isWorking(o) && o.account === m.account && o.root === m.root && (o.role === 'entry' || (o.role === 'other' && (o.side === 'buy') === (pos > 0))))
       return 'Merge is refused while an entry is working on ' + m.account + ' ' + m.root + '.';
     if (this.now() - (this.lastFillAt || 0) < 2000 && this.lastFillKey === m.account + '|' + m.root) return 'Merge is refused while the position is changing; try again in a moment.';
@@ -1063,8 +1079,8 @@ const AGENT_ID_RX = /^[a-z][a-z0-9]{0,11}$/;
 /* ChartBridge 0.5.0 as built (agent-channel 4d4a81f, nt8/ChartBridgeAgents.cs): a cancel not confirmed slows to every 30 s after
    10 tries and stops after 30 minutes; the flatten's NOT FLAT error every 10 s (every 60 s while the market is shut); the
    market trading in fact is a trade on that root in the last 5 s; a close that ended unfilled waits 30 s with the stop back;
-   the lost-trade error every 60 s */
-export const AGENT_TIMING = Object.freeze({ cancelEveryMs: 3000, cancelSlowAfter: 10, cancelSlowMs: 30000, cancelGiveUpMs: 30 * 60000, flatErrorEveryMs: 10000,
+   the lost-trade error every 60 s; 0.6.4: the no-trade-record error once that state has held 5 s on every pass */
+export const AGENT_TIMING = Object.freeze({ orphanConfirmMs: 5000, cancelEveryMs: 3000, cancelSlowAfter: 10, cancelSlowMs: 30000, cancelGiveUpMs: 30 * 60000, flatErrorEveryMs: 10000,
   shutErrorEveryMs: 60000, tradingFreshMs: 5000, closeRetryHoldMs: 30000, lostTradeEveryMs: 60000, flatRetryMs: 3000, refusedEveryMs: 1000 });
 const NY_DAY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', weekday: 'short', hour: '2-digit' });
 /** The market is shut (ChartBridge sends no flatten order): 17:00 to 18:00 New York time Monday to Thursday, and Friday 17:00
@@ -1790,7 +1806,7 @@ Object.assign(OrderDeskV3.prototype, {
     if (!this.agents || !this.agents.size) return;
     const mine = this.agentOfOrder(o), a0 = mine ? this.agents.get(mine) : null, signed = o.side === 'buy' ? qty : -qty, pv = this.instruments[o.root].pointValue;
     if (a0 && o.role === 'entry' && (!a0.trade || a0.trade.root === o.root)) {
-      if (!a0.trade) { a0.trade = { root: o.root, qty: 0, avg: 0, pnl: 0 }; a0.trades++; }
+      if (!a0.trade) { a0.trade = { root: o.root, qty: 0, avg: 0, pnl: 0, tag: o.id.toLowerCase() }; a0.trades++; }
       const tr = a0.trade, n = Math.abs(tr.qty);
       tr.avg = (tr.avg * n + price * qty) / (n + qty); tr.qty += signed;
     }
@@ -1818,27 +1834,60 @@ Object.assign(OrderDeskV3.prototype, {
       if (a === a0 || a.account === o.account) this.agentNotify(a);
     }
   },
-  /** the lost-trade error (as built, review A3): every 60 s until that pair is flat; `say` for the restart's own words (D1) */
-  agentTradeLost(a, root, say) {
+  /** the lost-trade error (as built, review A3): every 60 s until that pair is flat; `say` for the no-trade-record words (D1);
+   *  orphan (0.6.4): that error, which clears once a trade record follows there (the pair stays the agent's: its stop protects it) */
+  agentTradeLost(a, root, say, orphan) {
     const text = say || 'agent ' + a.id + ' had an open trade on ' + a.account + ' ' + root + ' and its legs are gone; ChartBridge no longer treats the position as the agent\'s: flatten or protect it by hand';
-    a.lost.set(root, { at: this.now(), text });
-    if (a.flatJob && a.flatJob.root === root) a.flatJob.unstuck = true;   // no longer the agent's pair
+    a.lost.set(root, { at: this.now(), text, orphan: !!orphan });
+    if (!orphan && a.flatJob && a.flatJob.root === root) a.flatJob.unstuck = true;   // no longer the agent's pair
     this.agentLogLine(a, text);
     this.broadcast({ type: 'status', level: 'error', text });
   },
   agentRepeatLost(a, t) {
     for (const [root, x] of [...a.lost]) {
-      if (!this.pos(a.account, root).qty) { a.lost.delete(root); continue; }
+      const flat = !this.pos(a.account, root).qty, recorded = x.orphan && a.trade && a.trade.root === root;
+      if (flat || recorded) {
+        a.lost.delete(root);
+        if (x.orphan) {   // 0.6.4: said once, as info
+          const text = 'agent ' + a.id + ': the no-trade-record error on ' + a.account + ' ' + root + ' is cleared: ' + (recorded ? 'ChartBridge follows its trade ' + a.trade.tag + ' there now' : 'the pair is flat');
+          this.agentLogLine(a, text);
+          this.broadcast({ type: 'status', level: 'info', text });
+        }
+        continue;
+      }
       if (t - x.at >= AGENT_TIMING.lostTradeEveryMs) { x.at = t; this.broadcast({ type: 'status', level: 'error', text: x.text }); }
     }
   },
-  /** /test/agent-lose-trade: the trade record gone while the account holds the position (the executions read again after a
-   *  restart did not give it back); restart: its own stop still protects it ("holds <n> ... with no trade record") */
+  /** 0.6.4 (ChartBridge's WarnHeldByStopOnly): a position on one of its roots with no trade record whose only working orders are
+   *  the agent's own stop and target: the error once that has held on every pass for orphanConfirmMs (a fresh fill looks the
+   *  same until its execution opens the record), naming what the account holds, "ChartBridge restarted" only for a position
+   *  that was there at the start (simulateRestart), else "opened while ChartBridge was running" */
+  agentWarnOrphan(a, t) {
+    const since = a.orphanSince || (a.orphanSince = new Map());
+    for (const root of a.rules.roots) {
+      const q = this.pos(a.account, root).qty;
+      if (!q && a.heldAtStart) a.heldAtStart.delete(root);
+      const working = [...this.orders.values()].filter(o => isWorking(o) && o.account === a.account && o.root === root);
+      const legsOnly = working.length > 0 && working.every(o => this.agentOfOrder(o) === a.id && (o.role === 'stop' || o.role === 'target'));
+      if ((a.trade && a.trade.root === root) || a.lost.has(root) || !q || !legsOnly) { since.delete(root); continue; }
+      if (!since.has(root)) { since.set(root, t); continue; }
+      if (t - since.get(root) < AGENT_TIMING.orphanConfirmMs) continue;
+      since.delete(root);
+      const why = a.heldAtStart && a.heldAtStart.has(root) ? 'ChartBridge restarted' : 'opened while ChartBridge was running';
+      this.agentTradeLost(a, root, 'agent ' + a.id + ' holds ' + q + ' on ' + a.account + ' ' + root + ' with no trade record (' + why + '); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader', true);
+      this.agentNotify(a);
+    }
+  },
+  /** /test/agent-lose-trade: the trade record gone while the account holds the position. restart: the executions read again
+   *  after a restart did not give it back (the position counts as held at the start), and its own stop still protects it: the
+   *  every-second check raises "holds <n> ... with no trade record (ChartBridge restarted)" after 5 s. Without restart: the
+   *  legs-gone error at once, as before */
   agentLoseTrade(a, restart) {
     const root = a.trade ? a.trade.root : a.rules.roots.find(r => this.pos(a.account, r).qty) || a.rules.roots[0], q = this.pos(a.account, root).qty;
     a.trade = null;
     if (!q) return null;
-    this.agentTradeLost(a, root, restart ? 'agent ' + a.id + ' holds ' + q + ' on ' + a.account + ' ' + root + ' with no trade record (ChartBridge restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader' : null);
+    if (restart) (a.heldAtStart || (a.heldAtStart = new Set())).add(root);
+    else this.agentTradeLost(a, root, null);
     this.agentNotify(a);
     return root;
   },
@@ -1876,6 +1925,7 @@ Object.assign(OrderDeskV3.prototype, {
       if (stop) for (const o of this.agentWorkingEntries(a)) if (!o.cancelPending) { this.agentCancelEntry(a, o, 'expired', stop); this.agentNotify(a); }
       if (outside && this.agentOpenProposals(a).length) { this.agentExpireProposals(a, 'expired', 'outside its window'); this.agentNotify(a); }
       this.agentFlushRefused(a, t);
+      this.agentWarnOrphan(a, t);
       this.agentRepeatLost(a, t);
       if (a.conn && a.helloed && JSON.stringify(this.agentEnforcedRules(a)) !== a.welcomeRules) this.agentToAgent(a, this.agentWelcome(a));   // a cap enforced changed
       this.agentSendState(a);

@@ -718,14 +718,32 @@ public static class IntegrationHarness
         Check(r.Contains("\"type\":\"reject\"") && r.Contains("SIM-G is a copier follower: Merge is refused on it while the copier is on") && g.Calls.Count == gCalls,
               "X12: Merge on a copier follower is refused in plain words, nothing sent: " + r);
         Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"fg2\",\"account\":\"SIM-G\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+        // 0.6.4: a follower that is off but still holds a copier position (the copier follows its exits): refused too
+        BindingFlags ps = BindingFlags.NonPublic | BindingFlags.Static;
+        System.Collections.IDictionary copies = (System.Collections.IDictionary)typeof(ChartBridgeCopier).GetField("Copies", ps).GetValue(null);
+        Type copyT = typeof(ChartBridgeCopier).GetNestedType("Copy", BindingFlags.NonPublic);
+        object cp = Activator.CreateInstance(copyT, true);
+        copyT.GetField("A").SetValue(cp, g); copyT.GetField("Inst").SetValue(cp, mnq); copyT.GetField("Root").SetValue(cp, "MNQ");
+        object lk = typeof(ChartBridgeCopier).GetField("Lk", ps).GetValue(null);
+        lock (lk) copies["SIM-G|" + mnq.FullName] = cp;
         r = RunMerge(g, "mx2");
-        Check(r.Contains("is a copier follower") && g.Calls.Count == gCalls, "X12: a follower that is off is still listed (it may hold a copier position): refused too");
+        Check(r.Contains("SIM-G is a copier follower (off) that still holds a copier position or orders: Merge is refused") && g.Calls.Count == gCalls,
+              "X12 (0.6.4): a follower that is off but still holds a copier position: refused, and the words say why: " + r);
+        lock (lk) copies.Remove("SIM-G|" + mnq.FullName);
         ChartBridgeSwitches.Note("copier", "off");
         r = RunMerge(g, "mx3");
         Stopwatch sw = Stopwatch.StartNew();
         while (ChartBridgeOrders.MergeFrozen(g, mnq) && sw.ElapsedMilliseconds < 5000) Thread.Sleep(5);
         Check(r.Contains("\"result\":\"merged\""), "X12: the copier off: the same account merges: " + r);
         ChartBridgeSwitches.Note("copier", "on");
+        Clean(g);
+        // 0.6.4 (WORK 2026-10-19): the copier on, SIM-G a follower that is off with nothing of the copier on it: its own trades merge
+        Order g3 = StrategyEntry(g, 1, 25000, Two), g4 = StrategyEntry(g, 1, 25000, Two);
+        if (g3 == null || g4 == null) { Check(false, "X12 (0.6.4): two entries on SIM-G"); return; }
+        r = RunMerge(g, "mx5");
+        sw = Stopwatch.StartNew();
+        while (ChartBridgeOrders.MergeFrozen(g, mnq) && sw.ElapsedMilliseconds < 5000) Thread.Sleep(5);
+        Check(r.Contains("\"result\":\"merged\"") && !r.Contains("copier follower"), "X12 (0.6.4): a follower that is off with nothing of the copier there merges, the copier on: " + r);
         Clean(g);
 
         // the other way: an account with a Merge running cannot become a follower until the swap ends

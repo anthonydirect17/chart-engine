@@ -98,6 +98,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal static string AgentLastPrice(string root, out double p) { return LastPrice(root, out p); }
         internal static int AgentListed(Account a, Instrument i) { return SignedPosition(a, i); }
         internal static int AgentEffective(Account a, Instrument i) { return EffectivePosition(a, i); }
+        internal static bool AgentHeldAtWatch(Account a, Instrument i) { lock (Moves) return HeldAtWatch.Contains(PosKey(a, i)); }   // 0.6.4: held since this run began watching the account
+        internal static void AgentSeenFlat(Account a, Instrument i) { lock (Moves) HeldAtWatch.Remove(PosKey(a, i)); }
         internal static bool AgentHoldsOnRoot(Account a, string root) { return BotHoldsOnRoot(a, root); }
         internal static List<Order> AgentMayFill(Account a, Instrument i) { return CopierMayFill(a, i); }
         internal static bool AgentMayFillState(OrderState s) { return MayFill(s); }
@@ -192,6 +194,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const double TradingFreshMs = 5000, AgainstGraceMs = 3000, CloseRetryHoldMs = 30000, GhostGraceMs = 5000;   // the market trading in fact: a trade in the last 5 s
         public const double CancelSlowMs = 30000, ShutErrorEveryMs = 60000, LostTradeEveryMs = 60000, CancelGiveUpMs = 30 * 60000;
         public const double LostHoldMaxMs = 30000;   // 0.5.7 review of #47: the longest a lost-trade error waits for ChartBridge's own flatten
+        public const double OrphanConfirmMs = 5000;   // 0.6.4: a position held by its own legs only with no trade record, on every pass this long, before the error
 
         // The market is shut (no market order is sent): 17:00 to 18:00 New York time Monday to Thursday, and Friday 17:00 to Sunday
         // 18:00. Fixed times (lead's default: NinjaTrader's trading hours are not read; holidays are not known here: the flatten
@@ -1206,6 +1209,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             public readonly Dictionary<string, string> LostTradeText = new Dictionary<string, string>();
             public readonly Dictionary<string, string> HeldLost = new Dictionary<string, string>();   // root -> a lost-trade error held while ChartBridge's own flatten runs there (0.5.7)
             public readonly Dictionary<string, double> HeldSince = new Dictionary<string, double>();   // root -> when the hold began (review of #47: at most 30 s)
+            // 0.6.4: the no-trade-record error. OrphanSince: root -> the first pass of a run of passes that saw the position held by its
+            // own legs only with no trade record (the error only once that has lasted OrphanConfirmMs); OrphanRoots: the roots whose
+            // lost-trade error is that one (it clears once a trade record follows there); OrphanShown: those whose error was sent.
+            public readonly Dictionary<string, double> OrphanSince = new Dictionary<string, double>();
+            public readonly HashSet<string> OrphanRoots = new HashSet<string>();
+            public readonly HashSet<string> OrphanShown = new HashSet<string>();
             public readonly HashSet<string> Sticky = new HashSet<string>();   // roots it owns until flat by both readings with no entry
             public readonly Dictionary<string, FlatJob> Flats = new Dictionary<string, FlatJob>();   // the contract's full name -> its flatten job
             // the last plan on this seat (agentState.seats, the page's seats table): why it sat out, its size and risk
@@ -1559,7 +1568,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Review D1: a position whose only working orders there are the agent's own stop (a leg, or the stop placed again) with no
             // trade followed (a restart lost it: the executions read again did not give it back): the A3 error every 60 s until flat.
             // The pair stays the agent's (its stop protects it) and its flat hours close it.
-            public void WarnHeldByStopOnly(List<string> roots)
+            // 0.6.4 (WORK 2026-10-19, the false alarm): a fresh fill looks the same for a moment (NinjaTrader shows the entry filled,
+            // the position moved and its legs working before the execution event that opens the trade record comes through), so the
+            // error needs that state on every pass for OrphanConfirmMs with no fill NinjaTrader shows ahead of its event; any pass
+            // that finds a record, a flat pair or anything else working starts it over. It names what the account holds (the
+            // effective reading: it includes a fill not yet in the position; the listed one when that is 0) and says "ChartBridge
+            // restarted" only when the position was already there when this run of ChartBridge began watching the account.
+            public void WarnHeldByStopOnly(List<string> roots, double now)
             {
                 Account a = FindAccount(Account);
                 if (a == null) return;
@@ -1567,22 +1582,35 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     bool followed, told;
                     lock (Sync) { followed = openTag != null && openRoot == root; told = LostTrades.ContainsKey(root) || HeldLost.ContainsKey(root); }
-                    if (followed || told) continue;
+                    if (followed || told) { lock (Sync) OrphanSince.Remove(root); continue; }
                     Instrument inst = ChartBridgeServer.InstrumentFor(root);
-                    if (inst == null) continue;
+                    if (inst == null) { lock (Sync) OrphanSince.Remove(root); continue; }
                     int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
-                    if (p1 == 0 && p2 == 0) continue;
+                    if (p1 == 0 && p2 == 0) { ChartBridgeOrders.AgentSeenFlat(a, inst); lock (Sync) OrphanSince.Remove(root); continue; }
                     List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
-                    if (may.Count == 0 || !may.All(o => IsMine(o) && LegRx.IsMatch(o.Name ?? ""))) continue;
-                    TradeLost(root, "agent " + Id + " holds " + p1 + " on " + Account + " " + root + " with no trade record (ChartBridge restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader");
+                    bool legsOnly = may.Count > 0 && may.All(o => IsMine(o) && LegRx.IsMatch(o.Name ?? ""));
+                    if (!legsOnly || ChartBridgeOrders.AgentUnnotedFill(a, inst, now) != null) { lock (Sync) OrphanSince.Remove(root); continue; }
+                    lock (Sync)
+                    {
+                        double since;
+                        if (openTag != null && openRoot == root) { OrphanSince.Remove(root); continue; }   // its execution came through meanwhile
+                        if (!OrphanSince.TryGetValue(root, out since)) { OrphanSince[root] = now; continue; }
+                        if (now - since < ChartBridgeAgents.OrphanConfirmMs) continue;
+                        OrphanSince.Remove(root);
+                    }
+                    int held = p2 != 0 ? p2 : p1;
+                    string why = ChartBridgeOrders.AgentHeldAtWatch(a, inst) ? "ChartBridge restarted" : "opened while ChartBridge was running";
+                    TradeLost(root, "agent " + Id + " holds " + held + " on " + Account + " " + root + " with no trade record (" + why + "); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader", true);
                 }
             }
 
-            public void TradeLost(string root) { TradeLost(root, null); }
+            public void TradeLost(string root) { TradeLost(root, null, false); }
+            private void TradeLost(string root, string say) { TradeLost(root, say, false); }
 
             // 0.5.7: while ChartBridge's own flatten job runs on that root (its cancels take the legs away), the error is HELD, never
             // dropped: RepeatTradeLost raises it once no job runs there and the pair is still not flat, and forgets it if it is flat.
-            private void TradeLost(string root, string say)
+            // orphan (0.6.4): the no-trade-record error (WarnHeldByStopOnly), which clears once a trade record follows on that root.
+            private void TradeLost(string root, string say, bool orphan)
             {
                 string text = say ?? "agent " + Id + " had an open trade on " + Account + " " + root + " and its legs are gone; ChartBridge no longer treats the position as the agent's: flatten or protect it by hand";
                 bool held, already;
@@ -1592,6 +1620,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     already = HeldLost.ContainsKey(root);
                     if (held) HeldLost[root] = text;
                     else { HeldLost.Remove(root); LostTrades[root] = Now(); LostTradeText[root] = text; }
+                    if (orphan) OrphanRoots.Add(root); else OrphanRoots.Remove(root);
+                    if (orphan && !held) OrphanShown.Add(root); else OrphanShown.Remove(root);
                 }
                 if (held) { if (!already) { string h = text + " (held while ChartBridge's own flatten runs on " + root + ")"; Log(h); AgentLog(h); } return; }
                 Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
@@ -1624,21 +1654,31 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     Instrument inst = ChartBridgeServer.InstrumentFor(root);
                     bool flat = a != null && inst != null && ChartBridgeOrders.AgentListed(a, inst) == 0 && ChartBridgeOrders.AgentEffective(a, inst) == 0;
-                    string text = null, raise = null, dropped = null;
+                    string text = null, raise = null, dropped = null, cleared = null;
                     lock (Sync)
                     {
                         string h;
                         bool wasHeld = HeldLost.TryGetValue(root, out h);
-                        if (flat) { LostTrades.Remove(root); LostTradeText.Remove(root); HeldLost.Remove(root); HeldSince.Remove(root); if (wasHeld) dropped = h; }
+                        // 0.6.4: the no-trade-record error ends once a trade record follows that pair, or the pair is flat; said once if it was sent
+                        bool orphan = OrphanRoots.Contains(root), recorded = orphan && openTag != null && openRoot == root;
+                        if (orphan && (recorded || flat))
+                        {
+                            bool shown = OrphanShown.Remove(root);
+                            OrphanRoots.Remove(root);
+                            if (shown) cleared = "agent " + Id + ": the no-trade-record error on " + Account + " " + root + " is cleared: " + (recorded ? "ChartBridge follows its trade " + openTag + " there now" : "the pair is flat");
+                        }
+                        if (recorded) { LostTrades.Remove(root); LostTradeText.Remove(root); HeldLost.Remove(root); HeldSince.Remove(root); if (wasHeld && cleared == null) dropped = h; }
+                        else if (flat) { LostTrades.Remove(root); LostTradeText.Remove(root); HeldLost.Remove(root); HeldSince.Remove(root); if (wasHeld) dropped = h; }
                         else if (HoldLocked(root, now)) { }   // held: neither repeated nor dropped (at most 30 s)
-                        else if (wasHeld) { HeldLost.Remove(root); if (!FlattenRunsLocked(root)) HeldSince.Remove(root); LostTrades[root] = now; LostTradeText[root] = h; raise = h; }
+                        else if (wasHeld) { HeldLost.Remove(root); if (!FlattenRunsLocked(root)) HeldSince.Remove(root); LostTrades[root] = now; LostTradeText[root] = h; raise = h; if (orphan) OrphanShown.Add(root); }
                         else
                         {
                             if (!FlattenRunsLocked(root)) HeldSince.Remove(root);   // no job there now: a later job may hold again
                             if (now - LostTrades[root] >= ChartBridgeAgents.LostTradeEveryMs) { LostTrades[root] = now; text = LostTradeText[root]; }
                         }
                     }
-                    if (dropped != null) { string d = "agent " + Id + ": the lost-trade error held on " + Account + " " + root + " is not raised: the pair is flat"; Log(d); AgentLog(d); }
+                    if (dropped != null) { string d = "agent " + Id + ": the lost-trade error held on " + Account + " " + root + " is not raised: " + (flat ? "the pair is flat" : "a trade record follows it now"); Log(d); AgentLog(d); }
+                    if (cleared != null) { Log(cleared); AgentLog(cleared); ChartBridgeServer.SendToTraders(StatusJson("info", cleared)); }
                     if (raise != null) { Log(raise); AgentLog(raise); ChartBridgeOrders.AgentAlarm(raise); }
                     if (text != null) { AgentLog(text); ChartBridgeOrders.AgentAlarm(text); }
                 }
@@ -3999,7 +4039,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<Seat> seats = AllSeats();
             foreach (Seat x in seats) { x.DropLedgerAgainst(roots); x.EndGhostTrade(now); foreach (string root in roots) x.Owns(root); }
             DropStaleRecords(roots);   // each record once its seat's executions were read again (ExecutionsReplayed)
-            foreach (Seat x in seats) { if (ChartBridgeServer.ExecutionsReplayed(x.Name)) x.WarnHeldByStopOnly(roots); x.RepeatTradeLost(now); }   // only once the session's executions were read again (review B)
+            foreach (Seat x in seats) { if (ChartBridgeServer.ExecutionsReplayed(x.Name)) x.WarnHeldByStopOnly(roots, now); x.RepeatTradeLost(now); }   // only once the session's executions were read again (review B)
             // the flat time (ruling 2): from flatAt until the next entryFrom in session order (0.5.2: with an 18:00 entryFrom a
             // position held across midnight is inside the session and stays; with 09:45 one held overnight is flattened, as
             // before) and while the market is closed, whatever the agent does or whether it is there

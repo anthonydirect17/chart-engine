@@ -282,7 +282,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void Clear()
         {
             lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); NotedFilled.Clear(); UnnotedSince.Clear(); LateSaid.Clear(); ExecSeq.Clear(); PosSeq.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
-            lock (Moves) { Moves.Clear(); LastPos.Clear(); }
+            lock (Moves) { Moves.Clear(); LastPos.Clear(); HeldAtWatch.Clear(); }
             lock (Last) Last.Clear();
             lock (Suspect) Suspect.Clear();
             lock (ConnectedSince) ConnectedSince.Clear();
@@ -558,6 +558,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // that many reported fills of the same sign, oldest first. What it cannot explain yet (the position
         // update arrived before the order update) stays as a credit that the fill, when reported, cancels.
         private static readonly Dictionary<string, int> LastPos = new Dictionary<string, int>();
+        // 0.6.4: account|contract pairs that held a position when this run of ChartBridge began watching the account (SeedNoted),
+        // each until that pair is seen flat (a position update to flat, or both readings 0): the only positions an agent's missing
+        // trade record is put down to a restart for. Under the Moves lock.
+        private static readonly HashSet<string> HeldAtWatch = new HashSet<string>();
 
         private static void Booked(Account a, Instrument i, int signedNow)
         {
@@ -567,6 +571,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 int last;
                 bool known = LastPos.TryGetValue(key, out last);
                 LastPos[key] = signedNow;
+                if (signedNow == 0) HeldAtWatch.Remove(key);   // 0.6.4: flat since the watch began
                 List<double[]> list;
                 if (!Moves.TryGetValue(key, out list)) Moves[key] = list = new List<double[]>();
                 if (!known) { list.Clear(); return; }
@@ -584,13 +589,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        // 0.4.3: an account just watched: its orders' fills so far count as come through (they are in its position already).
+        // 0.4.3: an account just watched: its orders' fills so far count as come through (they are in its position already). 0.6.4: and
+        // each position it holds is noted as held at the watch (HeldAtWatch).
         public static void SeedNoted(Account a)
         {
             if (a == null) return;
             List<Order> orders;
             lock (a.Orders) orders = a.Orders.ToList();
             lock (Sync) foreach (Order o in orders) if (!NotedFilled.ContainsKey(o)) NotedFilled[o] = o.Filled;
+            // 0.6.4: what it holds now was there before this run began watching it
+            List<Position> held;
+            lock (a.Positions) held = a.Positions.ToList();
+            lock (Moves) foreach (Position p in held) if (p != null && p.Instrument != null && p.MarketPosition != MarketPosition.Flat && p.Quantity != 0) HeldAtWatch.Add(PosKey(a, p.Instrument));
         }
 
         private static int EffectivePosition(Account a, Instrument i)

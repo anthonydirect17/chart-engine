@@ -55,6 +55,36 @@ known" while The Desk is not reachable.
   line) and `settings-types-desk-down-1366.png` (The Desk not reachable),
   beside the 1.30.0 ones. The check that the Room is no narrower than without the column is gone (Anthony chose a narrower Room).
 
+## ChartBridge 0.6.4 and chart 1.31.1 (2026-10-19): no false no-trade-record alarm, the copier's leader back to none, Merge on an off follower
+
+Three bugs Anthony hit at WORK on 2026-10-19 (ChartBridge 0.6.3). **ChartBridge 0.6.4 is a recompile for its own fixes**
+(Anthony does it on each PC outside market hours); **the page works with ChartBridge 0.6.2** (`minChartBridge` stays 0.6.2).
+Nothing changes on the order path: exits, legs and flattens are as before.
+
+- **No false "no trade record" alarm on a fresh fill** (FROM_WORK_2026-10-19_BUG_false_orphan_alarm). A 1-lot long that filled
+  39 s after it was placed raised "agent manrae holds 0 on Sim101 MNQ with no trade record (ChartBridge restarted)" 26 ms
+  before its trade record opened, then every minute while the trade was followed with its stop and target working; ChartBridge
+  had not restarted. Four fixes in `Seat.WarnHeldByStopOnly` and `RepeatTradeLost`:
+  - the race: NinjaTrader shows the entry filled, the position moved and its legs working before the execution event that
+    opens the record comes through, so the error now needs that state on every pass for 5 s (`OrphanConfirmMs`) with no fill
+    NinjaTrader shows ahead of its event; a record, a flat pair or anything else working starts it over;
+  - it clears: once a trade record follows on that pair, or the pair is flat, the error stops and, if it was sent, the pages get
+    one `info` line ("agent <id>: the no-trade-record error on <account> <root> is cleared: ChartBridge follows its trade <tag>
+    there now", or "the pair is flat");
+  - the quantity: what the account holds by the effective reading (it counts a fill not yet in NinjaTrader's position), the
+    listed one when that is 0, never "holds 0" while the account holds 1;
+  - the reason: "ChartBridge restarted" only for a position that was there when this run of ChartBridge began watching the
+    account (and has not been flat since); otherwise "opened while ChartBridge was running".
+  After a real restart the error now comes 5 s later than before (or, with the flatten job already running, after its 30 s hold).
+- **The copier's leader goes back to none** (chart 1.31.1, page only). The Copier tab's Leader none sent nothing, so the picker
+  snapped back to the saved leader; it now sends `copierSet` with `"leader": null`, which ChartBridge takes since 0.4.3 (no
+  leader, stood down, saved in `copier.txt`, so none survives a restart). A saved leader still comes back at start stood down
+  until Re-arm ("ChartBridge started: check the accounts and press Re-arm").
+- **Merge on a copier follower that is off.** The page lists every account as a follower row, so with the copier on Merge was
+  refused on every account ("is a copier follower: Merge is refused ..."). It is now refused only on a follower that is on, or
+  on one that is off while the copier still has something of its own there (a copied position, a copier entry, stop or close
+  that may fill, a reduce or a wait), with its own words; an off follower with nothing of the copier merges as any account.
+
 ## ChartBridge 0.6.3 and chart 1.31.0 (2026-10-16): the audit fixes for ChartBridge and the chart page
 
 Audit C (the live-only quirks of a laptop: off at the wrong hour, asleep, a power cut, flaky Wi-Fi), all ten findings, approved by

@@ -232,6 +232,37 @@ test('merge: grows the first pair (one target); refused while an entry works or 
   assert.match(reasonOf(e.act({ type: 'merge', account: 'Sim101', root: 'MNQ' })), /already through the market/);
 });
 
+test('ChartBridge 0.6.4 (WORK 2026-10-19): Merge on a copier follower only while it is on or the copier still has something there', async () => {
+  const d = await makeDesk();
+  const f = on => d.act({ type: 'copierFollower', account: 'EVAL-A', on, qty: 1, size: 'micro', lossLimit: null });
+  d.order({ account: 'EVAL-A', qty: 1, bracket: { stop: 8, target: 16 } });
+  d.tick(25401);
+  d.order({ account: 'EVAL-A', qty: 1, bracket: { stop: 8, target: 16 } });
+  d.advance(2100);
+  f(true);
+  assert.equal(reasonOf(d.act({ type: 'merge', account: 'EVAL-A', root: 'MNQ' })), 'EVAL-A is a copier follower: Merge is refused on it while the copier is on (the copier manages its orders).');
+  f(false);
+  const co = d.desk.newOrder({ cid: null, account: 'EVAL-A', root: 'MNQ', side: 'sell', kind: 'stop', qty: 1, price: 25300, role: 'stop', by: 'copier', copier: true });
+  assert.match(reasonOf(d.act({ type: 'merge', account: 'EVAL-A', root: 'MNQ' })) || '', /^EVAL-A is a copier follower \(off\) that still holds a copier position or orders: Merge is refused/, 'off, a copier order still working there: refused');
+  co.state = 'cancelled';
+  const r = d.act({ type: 'merge', cid: 'm6', account: 'EVAL-A', root: 'MNQ' }).find(m => m.type === 'merge');
+  assert.equal(r && r.result, 'merged', 'off with nothing of the copier there: its own trades merge, the copier on');
+});
+
+test('ChartBridge 0.6.4 (WORK 2026-10-19): the copier\'s leader set to none stays none through a restart, a saved leader comes back stood down', async () => {
+  const d = await makeDesk();
+  assert.equal(d.desk.copierMsg().leader.account, 'Sim101');
+  d.desk.simulateRestart();
+  let c = d.desk.copierMsg();
+  assert.deepEqual([c.leader && c.leader.account, c.armed, c.standDownWhy], ['Sim101', false, 'ChartBridge started: check the accounts and press Re-arm'], 'the saved leader, stood down until Re-arm');
+  d.act({ type: 'copierSet', cid: 'n', leader: null });
+  c = d.desk.copierMsg();
+  assert.deepEqual([c.leader, c.armed, c.standDownWhy], [null, false, 'No leader is set.']);
+  d.desk.simulateRestart();
+  c = d.desk.copierMsg();
+  assert.deepEqual([c.leader, c.armed], [null, false], 'none survives a restart');
+});
+
 test('merge with a 3-target strategy: one stop with no OCO, targets at the first leg\'s prices, the stop shrinks as targets fill', async () => {
   const d = await makeDesk();
   const s = { name: 'Three', stop: 16, t1: 8, t1Share: 34, t2: 16, t2Share: 33, t3: 32, t3Share: 33 };
@@ -1449,7 +1480,45 @@ test('4d4a81f: the flatten asks again, closes at most the agent\'s own part, and
   // after a restart: its trade record gone, its own stop protecting the position
   const r = await inTrade();
   r.d.desk.agentLoseTrade(r.a, true);
-  assert.deepEqual(errs(r.d), ['agent demo holds 1 on SIM-AG1 MNQ with no trade record (ChartBridge restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader']);
+  r.d.desk.everySecond();
+  assert.deepEqual(errs(r.d), [], '0.6.4: not on the first pass');
+  r.d.advance(5000); r.d.desk.everySecond();
+  assert.deepEqual(errs(r.d), ['agent demo holds 1 on SIM-AG1 MNQ with no trade record (ChartBridge restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader'], '0.6.4: once it has held 5 s');
+});
+
+test('ChartBridge 0.6.4 (WORK 2026-10-19, the false alarm): no error on a fresh fill, the real quantity and reason, cleared once a record follows or flat', async () => {
+  const NOREC = 'agent demo holds 1 on SIM-AG1 MNQ with no trade record (opened while ChartBridge was running); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader';
+  const infos = d => d.take('status').filter(s => s.level === 'info').map(s => s.text);
+  // the race: a pass between the fill and its trade record (the record follows 26 ms later at WORK): no error, then or later
+  const r = await inTrade();
+  const tr = r.a.trade;
+  assert.ok(tr && tr.root === 'MNQ');
+  r.a.trade = null; r.d.desk.everySecond();
+  r.a.trade = tr;
+  for (let i = 0; i < 66; i++) { r.d.advance(1000); r.d.desk.everySecond(); }
+  assert.deepEqual(errs(r.d), [], 'a fresh fill raises no no-trade-record error');
+  // the record late for more than 5 s: the error, holds 1, not a restart; then the record follows: cleared, said once
+  const c = await inTrade();
+  const ct = c.a.trade;
+  c.a.trade = null;
+  for (let i = 0; i < 4; i++) { c.d.advance(1000); c.d.desk.everySecond(); }
+  assert.deepEqual(errs(c.d), [], '4 s: no error yet');
+  for (let i = 0; i < 2; i++) { c.d.advance(1000); c.d.desk.everySecond(); }
+  assert.deepEqual(errs(c.d), [NOREC], 'after 5 s on every pass: the error, the real quantity, the neutral reason');
+  c.a.trade = ct;
+  c.d.advance(1000); c.d.desk.everySecond();
+  assert.deepEqual(infos(c.d), ['agent demo: the no-trade-record error on SIM-AG1 MNQ is cleared: ChartBridge follows its trade ' + ct.tag + ' there now']);
+  for (let i = 0; i < 61; i++) { c.d.advance(1000); c.d.desk.everySecond(); }
+  const later = c.d.take('status');
+  assert.ok(!later.some(s => /no trade record|no-trade-record/.test(s.text)), 'never repeated, the clear said once');
+  // the error, then the pair flat: cleared, said once
+  const f = await inTrade();
+  f.a.trade = null;
+  for (let i = 0; i < 6; i++) { f.d.advance(1000); f.d.desk.everySecond(); }
+  assert.deepEqual(errs(f.d), [NOREC]);
+  f.d.desk.placeElsewhere({ account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 1, price: null });
+  f.d.advance(1000); f.d.desk.everySecond();
+  assert.deepEqual(infos(f.d), ['agent demo: the no-trade-record error on SIM-AG1 MNQ is cleared: the pair is flat']);
 });
 
 test('4d4a81f: refused plans held back are shown within about a second, the latest with the count of the rest', async () => {
