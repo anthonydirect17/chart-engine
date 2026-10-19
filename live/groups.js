@@ -199,6 +199,115 @@ function cleanTypes(json) {
 }
 /** "Lucid 50K Flex, no DLL", with " (not checked)" until Anthony marks the type checked on The Desk. */
 const typeLabel = t => (t ? t.firm + ' ' + t.name + (t.status === 'checked' ? '' : ' (not checked)') : '');
+/*
+ * Chart 1.32.0 (Anthony 2026-10-19: "far to many accounts for just a drop down"; he chose Firm > Plan > Size, "firms I actually
+ * trade first"): the type picker as three short selects. The Desk's names follow "<Plan> <Size>K <rest>" ("LucidFlex 50K Eval",
+ * "Trading Combine 50K", "Master 25K Option 2 EOD"). Pure: the Accounts tab and the rules dialog both draw from cascadeView and
+ * move with cascadePick; only the last select (a type) or "Not set" gives a value to send (the Accounts tab sends it on Save,
+ * the rules dialog fills from it and saves on its Save).
+ */
+const SIZE_RX = /(^|[\s(])(\d+(?:\.\d+)?)[kK](?=$|[^A-Za-z0-9])/;
+const PLAN_OTHER = 'Other';
+const cmpText = (a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' });
+/** A type's name split: { plan, size (the number before K, or null), sizeText ("50K"), rest, short (the last select's label) }.
+ *  plan is the text before the first "<number>K" token; no size token (or nothing before it): plan "Other" and the whole name as
+ *  the label. */
+function typeParts(t) {
+  const name = t && typeof t.name === 'string' ? t.name.trim() : '';
+  const m = SIZE_RX.exec(name);
+  const plan = m ? name.slice(0, m.index).trim() : '';
+  if (!m || !plan) return { plan: PLAN_OTHER, size: null, sizeText: '', rest: name, short: name };
+  const sizeText = m[2] + 'K', rest = name.slice(m.index + m[0].length).replace(/^[\s,]+/, '').trim();
+  return { plan, size: +m[2], sizeText, rest, short: rest ? sizeText + ' ' + rest : sizeText };
+}
+/** The stage within a size: 0 Eval, Challenge or Test; 2 Funded, Qualified, Sim-Funded or Account; 1 anything else. */
+function stageRank(rest) {
+  const s = ' ' + String(rest || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+  if (/ (eval|evaluation|challenge|test) /.test(s)) return 0;
+  if (/ (funded|qualified|sim funded|account) /.test(s)) return 2;
+  return 1;
+}
+/** The firms in use, as a list: each chart-accounts row's accountType.firm (an account whose type is set on The Desk) and the
+ *  row's own firm (the firm The Desk gives the account, type set or not; Anthony 2026-10-19). */
+function usedFirms(rows) {
+  const out = new Set(), add = f => { if (typeof f === 'string' && f.trim()) out.add(f.trim()); };
+  for (const r of rows || []) { if (!r) continue; if (r.accountType) add(r.accountType.firm); add(r.firm); }
+  return [...out];
+}
+/** The types as a tree: [{ firm, used, plans: [{ plan, types: [{ t, parts }] }] }]. Firms in use first (A to Z), then the other
+ *  firms A to Z; within a firm, plans A to Z; within a plan by size, then the stage (Eval before Funded), then the rest A to Z. */
+function typeTree(types, used) {
+  const inUse = new Set((used || []).map(f => String(f).toLowerCase())), firms = new Map();
+  for (const t of types || []) {
+    if (!t || !t.firm) continue;
+    const key = t.firm.toLowerCase();
+    if (!firms.has(key)) firms.set(key, { firm: t.firm, used: inUse.has(key), plans: new Map() });
+    const f = firms.get(key), parts = typeParts(t), pk = parts.plan.toLowerCase();
+    if (!f.plans.has(pk)) f.plans.set(pk, { plan: parts.plan, types: [] });
+    f.plans.get(pk).types.push({ t, parts });
+  }
+  const byType = (a, b) => (a.parts.size === null) - (b.parts.size === null) || (a.parts.size || 0) - (b.parts.size || 0) ||
+    stageRank(a.parts.rest) - stageRank(b.parts.rest) || cmpText(a.parts.rest, b.parts.rest) || cmpText(a.t.name, b.t.name) || (a.t.id < b.t.id ? -1 : 1);
+  return [...firms.values()].sort((a, b) => (b.used - a.used) || cmpText(a.firm, b.firm))
+    .map(f => ({ firm: f.firm, used: f.used, plans: [...f.plans.values()].sort((a, b) => cmpText(a.plan, b.plan)).map(p => ({ plan: p.plan, types: p.types.sort(byType) })) }));
+}
+const sameText = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+/** Where a type id sits in the tree: { firm, plan } or null. */
+function cascadeOf(tree, id) {
+  if (!id) return null;
+  for (const f of tree || []) for (const p of f.plans) if (p.types.some(x => x.t.id === id)) return { firm: f.firm, plan: p.plan };
+  return null;
+}
+/** The picker's place for a saved type id (or a type no longer on the list, gone = { firm, name }): { firm, plan, id }. */
+function cascadeStart(tree, id, gone) {
+  const at = cascadeOf(tree, id);
+  if (at) return { firm: at.firm, plan: at.plan, id };
+  if (id && gone) return { firm: gone.firm || '', plan: typeParts(gone).plan, id };
+  return { firm: '', plan: '', id: '' };
+}
+/**
+ * One choice in the picker. state { firm, plan, id } (id: the type chosen now, '' = Not set); which 'firm', 'plan' or 'type'.
+ * Returns { state, send }: send undefined (nothing is sent), null (Not set) or a type id. Changing Firm or Plan never sends;
+ * Not set sends null only when a type was set; a type sends its id (not the one already chosen).
+ */
+function cascadePick(tree, state, which, value) {
+  const s = Object.assign({ firm: '', plan: '', id: '' }, state || {}), v = value || '';
+  if (which === 'firm') {
+    if (!v) return { state: { firm: '', plan: '', id: '' }, send: s.id ? null : undefined };
+    const f = (tree || []).find(x => sameText(x.firm, v)), at = cascadeOf(tree, s.id);
+    const plan = at && sameText(at.firm, v) ? at.plan : f && f.plans.length === 1 ? f.plans[0].plan : '';
+    return { state: { firm: f ? f.firm : v, plan, id: s.id }, send: undefined };
+  }
+  if (which === 'plan') return { state: { firm: s.firm, plan: v, id: s.id }, send: undefined };
+  if (which === 'type') {
+    if (!v || v === s.id) return { state: s, send: undefined };
+    const at = cascadeOf(tree, v);
+    return { state: { firm: at ? at.firm : s.firm, plan: at ? at.plan : s.plan, id: v }, send: v };
+  }
+  return { state: s, send: undefined };
+}
+/**
+ * The three selects as data: { firm: { value, options }, plan: {...}, type: {...} }, each option { value, label, title }.
+ * Firm: "Not set", then the firms (in use first). Plan: that firm's plans ("Plan" until one is picked). Size: that plan's types
+ * by their short label ("50K Eval", "(not checked)" after it until checked; "Size" until one is picked), the whole name in each
+ * option's title. gone ({ firm, name } of a saved type no longer on the list) shows where it was, "(not on The Desk's list now)".
+ */
+function cascadeView(tree, state, gone) {
+  const s = Object.assign({ firm: '', plan: '', id: '' }, state || {});
+  const f = (tree || []).find(x => sameText(x.firm, s.firm)) || null, p = f ? f.plans.find(x => sameText(x.plan, s.plan)) || null : null;
+  const goneHere = !!(gone && s.id && !cascadeOf(tree, s.id) && sameText(gone.firm, s.firm) && sameText(typeParts(gone).plan, s.plan));
+  const firms = [{ value: '', label: 'Not set', title: 'Not set' }].concat((tree || []).map(x => ({ value: x.firm, label: x.firm, title: x.firm + (x.used ? ' (an account of yours has a type of it)' : '') })));
+  if (s.firm && !f) firms.push({ value: s.firm, label: s.firm, title: s.firm });
+  const plans = f ? f.plans.map(x => ({ value: x.plan, label: x.plan, title: f.firm + ' ' + x.plan })) : [];
+  if (s.plan && !p) plans.push({ value: s.plan, label: s.plan, title: (s.firm ? s.firm + ' ' : '') + s.plan });
+  if (!s.plan) plans.unshift({ value: '', label: 'Plan', title: 'Pick a plan' });
+  const types = p ? p.types.map(x => ({ value: x.t.id, label: x.parts.short + (x.t.status === 'checked' ? '' : ' (not checked)'), title: typeLabel(x.t) })) : [];
+  if (goneHere) { const gp = typeParts(gone), w = gp.short + ' (not on The Desk\'s list now)'; types.push({ value: s.id, label: w, title: (gone.firm ? gone.firm + ' ' : '') + gone.name + ' (not on The Desk\'s list now)' }); }
+  const typeVal = types.some(x => x.value === s.id) ? s.id : '';
+  if (!typeVal) types.unshift({ value: '', label: 'Size', title: s.plan ? 'Pick the size and stage' : 'Pick a firm and a plan first' });
+  return { firm: { value: f ? f.firm : s.firm, options: firms }, plan: { value: s.plan ? (p ? p.plan : s.plan) : '', options: plans }, type: { value: typeVal, options: types } };
+}
+
 /** The rules dialog's boxes and Type from a type; missing: what the type has no value for that a group needs. */
 function typeForm(t) {
   const f = { size: moneyBox(t.size), dailyLoss: moneyBox(t.dailyLoss), drawdown: moneyBox(t.drawdown), drawdownType: t.drawdownType || null,
@@ -292,7 +401,8 @@ function membersOff(g, link, typeOfAccount) {
 
 return { NAME_MAX, MONEY_MAX, TYPES, TYPE_WORD, ACCOUNT_TYPES, HERO_RX, typeText, heroText, usd, parseMoney, moneyBox, summary, membersText, sideText, groupMessage, saveFrom, formOf,
   highCloseDefault, highWord, joinMessage, limitsMessage, cleanGroups,
-  TYPE_ID_RX, TYPES_CACHE_KEY, LINKS_KEY, cleanTypes, typeLabel, typeForm, rulesDiffer, typeLimits, applyWords, applySend, TRAILING_FLOOR_WORDS, asOfText, readTypesCache, writeTypesCache, readLinks, saveLink, membersOff };
+  TYPE_ID_RX, TYPES_CACHE_KEY, LINKS_KEY, cleanTypes, typeLabel, typeForm, rulesDiffer, typeLimits, applyWords, applySend, TRAILING_FLOOR_WORDS, asOfText, readTypesCache, writeTypesCache, readLinks, saveLink, membersOff,
+  PLAN_OTHER, typeParts, stageRank, usedFirms, typeTree, cascadeOf, cascadeStart, cascadePick, cascadeView };
 });
 
 /* ======================================================================== GroupsPage (browser only) */
@@ -403,12 +513,17 @@ function mountSettings(host) {
   /* Edit and New: the firm's rules (Anthony's approved mockup: the name, the firm's rules, one direction) */
   function openRules(g, refill) {
     const d = host.dialog, f = GC.formOf(g);
-    /* 1.30.0: the Account type select at the top: Not set, then every type of The Desk's ledger ("(not checked)" until checked) */
+    /* 1.30.0: the Account type select at the top: Not set, then every type of The Desk's ledger ("(not checked)" until checked).
+       1.32.0: as three short selects, Firm, Plan and Size (the firms in use on The Desk first); only the last
+       (or Not set) fills or clears */
     const ts = types() || [], link = g ? GC.readLinks(st())[g.id] || null : null;
     const startType = refill ? refill.id : link && ts.some(t => t.id === link.id) ? link.id : '';
-    const typeSel = `<div class="gp-f gp-ftype"><label for="gp-fromType">Account type</label><div class="gp-herorow"><select class="ws-sel gp-in" id="gp-fromType" title="Fills every rule box and the Type from The Desk's ledger; you can still change any box">` +
-      '<option value="">Not set</option>' + ts.map(t => `<option value="${esc(t.id)}"${t.id === startType ? ' selected' : ''}>${esc(GC.typeLabel(t))}</option>`).join('') +
-      `</select><span class="ws-help gp-herowhy" id="gp-fromWhy" role="status"></span></div></div>`;
+    const tree = GC.typeTree(ts, GC.usedFirms(F && F.S.desk ? [...F.S.desk.values()] : []));
+    let pick = GC.cascadeStart(tree, startType, null);
+    const typeTip = 'Fills every rule box and the Type from The Desk\'s ledger; you can still change any box. Pick the firm, then the plan, then the size';
+    const typeSel = `<div class="gp-f gp-ftype"><label for="gp-fromFirm">Account type</label><div class="gp-herorow"><span class="gp-tpick">` +
+      `<select class="ws-sel gp-in gp-tp" id="gp-fromFirm" aria-label="Account type: firm"></select><select class="ws-sel gp-in gp-tp" id="gp-fromPlan" aria-label="Account type: plan"></select>` +
+      `<select class="ws-sel gp-in gp-tp" id="gp-fromType" aria-label="Account type: size and stage"></select></span><span class="ws-help gp-herowhy" id="gp-fromWhy" role="status"></span></div><p class="ws-help" id="gp-fromStill" role="status" hidden></p></div>`;
     const box = (k, label, help) => `<div class="gp-f"><label for="gp-${k}">${label}</label><input class="ws-in gp-in" id="gp-${k}" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${help}" value="${esc(f[k])}"></div>`;
     d.innerHTML = `<form class="ws-dlg ws-gp" method="dialog" aria-label="${g ? 'Edit ' + esc(g.name) : 'New group'}">
       <h2>${g ? 'Edit ' + esc(g.name) : 'New group'} <span>${g ? esc(GC.membersText(g)) : 'shows in every account\'s Group dropdown'}</span></h2>
@@ -435,9 +550,26 @@ function mountSettings(host) {
     /* 1.30.0: choosing a type fills the boxes and the Type (never the name: Anthony names his groups); Save sends groupSave as before */
     let filled = null;
     const fromWhy = (text, warn) => { $d('fromWhy').textContent = text; $d('fromWhy').classList.toggle('ws-warn', !!warn); };
+    /* 1.32.0: the picker drawn from GC.cascadeView (short labels, the whole name in each option's and select's tooltip) */
+    const drawPick = () => {
+      const vw = GC.cascadeView(tree, pick), t = typeById(pick.id);
+      for (const [k, v] of [['fromFirm', vw.firm], ['fromPlan', vw.plan], ['fromType', vw.type]]) {
+        const sel = $d(k);
+        sel.replaceChildren(...v.options.map(o => { const op = new Option(o.label, o.value); op.title = o.title; return op; }));
+        sel.value = v.value;
+        sel.disabled = !ts.length || (k !== 'fromFirm' && !vw.firm.value) || (k === 'fromType' && !vw.plan.value);
+        const o = v.options.find(x => x.value === v.value);
+        sel.title = (k === 'fromType' && t && v.value ? GC.typeLabel(t) : o && v.value ? o.title : '') + (v.value ? '. ' : '') + typeTip;
+      }
+      /* 1.32.0 (review): Firm or Plan moved off the type chosen last and Size still blank: the line under the selects says which type
+         Save keeps, so the screen does not mislead; gone once a Size is chosen */
+      const still = $d('fromStill'), was = pick.id && !vw.type.value ? (t ? GC.typeLabel(t) : link && link.id === pick.id ? link.label : pick.id) : '';
+      still.textContent = was ? 'still: ' + was : ''; still.hidden = !was;
+    };
+    drawPick();
     const fromIdle = () => {
-      const id = $d('fromType').value, t = typeById(id), note = typesNote();
-      if (!ts.length) { $d('fromType').disabled = true; fromWhy(note || 'The Desk has no account types yet.', !!note); return; }
+      const id = pick.id, t = typeById(id), note = typesNote();
+      if (!ts.length) { fromWhy(note || 'The Desk has no account types yet.', !!note); return; }
       if (!id) { fromWhy(note, !!note); return; }
       const diff = t && g ? GC.rulesDiffer(g, t) : [];
       fromWhy((diff.length ? 'Rules differ from ' + GC.typeLabel(t) + ' (' + diff.join(', ') + ').' : 'Filled from ' + (link ? link.label : GC.typeLabel(t)) + '.') + (note ? ' ' + note : ''), diff.length > 0);
@@ -453,7 +585,17 @@ function mountSettings(host) {
       const note = typesNote();
       fromWhy('Filled from ' + GC.typeLabel(t) + ', version ' + t.version + (v.missing.length ? '; it has no ' + v.missing.join(', ') + ': type ' + (v.missing.length > 1 ? 'them' : 'it') : '') + '. Change any box, then Save.' + (note ? ' ' + note : ''), v.missing.length > 0 || t.status !== 'checked');
     };
-    $d('fromType').addEventListener('change', () => { const t = typeById($d('fromType').value); if (t) fill(t); else { filled = null; fromIdle(); } });
+    const onPick = (which, el) => {
+      const r = GC.cascadePick(tree, pick, which, el.value);
+      pick = r.state; drawPick();
+      if (r.send === null) { filled = null; fromIdle(); }
+      else if (r.send) { const t = typeById(r.send); if (t) fill(t); }
+      /* Firm and Plan keep the focus where it is (review: an arrow key on a closed select fires change, so moving the focus would
+         stop Anthony arrowing through the firms); only Save saves */
+    };
+    $d('fromFirm').addEventListener('change', e => onPick('firm', e.target));
+    $d('fromPlan').addEventListener('change', e => onPick('plan', e.target));
+    $d('fromType').addEventListener('change', e => onPick('type', e.target));
     if (refill) fill(refill); else fromIdle();
     /* 1.28.0: Hero on duty: None, then every hero the PC helper knows (its tier, and a warning when it does not fit the Type) */
     let heroWant = g && g.hero ? g.hero : '';
@@ -472,6 +614,7 @@ function mountSettings(host) {
     $d('hero').addEventListener('change', () => { heroWant = $d('hero').value; heroFill(); });
     $d('accountType').addEventListener('change', heroFill);
     $d('fromType').addEventListener('change', heroFill);   // 1.30.0: a fill may change the Type
+    $d('fromFirm').addEventListener('change', heroFill);   // 1.32.0: Not set is on the Firm select
     heroFill();
     askHeroes().then(() => { if (d.open && $d('hero')) heroFill(); });
     let delAsked = false;
@@ -487,7 +630,7 @@ function mountSettings(host) {
       if (r.error) { $d('err').textContent = r.error; if (r.field && $d(r.field)) { $d(r.field).setAttribute('aria-invalid', 'true'); $d(r.field).focus(); } return false; }
       if (!post(r.msg, (g ? 'Save ' : 'New group ') + r.msg.name + ': sent to ChartBridge.')) return false;
       /* 1.30.0: the group remembers the type and version it was filled from (Not set: no link; unchanged: the link it had) */
-      const chosen = $d('fromType').value;
+      const chosen = pick.id;   // 1.32.0: the type chosen last (moving Firm or Plan alone changes nothing)
       const next = !chosen ? null : filled && filled.id === chosen ? filled : link && link.id === chosen ? link : null;
       if (g) GC.saveLink(st(), g.id, next); else P.pendingLink = next ? { name: r.msg.name.toLowerCase(), link: next } : null;
       return true;

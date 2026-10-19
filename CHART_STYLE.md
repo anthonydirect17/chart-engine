@@ -339,7 +339,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   none drawn outside 09:30 to 16:00 ET (the legend "VWAP -").
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in
   the result color. Chips step down so they never overlap. The result is (pOut - pIn) * dir, or the trade's
-  `pts` when given (1.31.1: a trade with adds drawn from its first entry to its last exit, its result the average).
+  `pts` when given (1.32.2: a trade with adds drawn from its first entry to its last exit, its result the average).
 - **Fills (1.3.1):** a triangle in the side color with its tip at the fill price (buy up, sell down),
   quantity beside it in 10 px mono (buys below the price, sells above). Fills on one bar, side and price
   merge into one mark with the summed quantity; labels on one bar that would overlap step away from the

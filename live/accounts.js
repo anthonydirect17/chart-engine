@@ -284,6 +284,9 @@ function reviewUrl(deskUrl, day) {
 
 /* ---------------- the copier (PROTOCOL.md "Copier engine"): a row per account but the leader, each marked SIM or LIVE */
 const FOLLOWER_DEFAULT = { on: false, qty: 1, size: 'micro', lossLimit: null };
+/** 1.32.1 (WORK 2026-10-19: the leader would not go back to none): the Leader picker's choice as copierSet's leader: an
+ *  account name, or null for "none" (ChartBridge 0.4.3 or later takes null as no leader: the copier stands down). */
+const leaderSet = value => ({ leader: typeof value === 'string' && value ? value : null });
 /** SIM or LIVE (Anthony 2026-10-07): SIM only when ChartBridge says sim true; anything else is LIVE (the careful side). */
 const accountMark = sim => (sim === true ? 'SIM' : 'LIVE');
 /**
@@ -378,7 +381,7 @@ const WORKING = new Set(['working', 'partFilled', 'cancelling']);
 const isWorking = o => !!o && WORKING.has(o.state);
 
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
-  tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, accountMark, followerRows, followerMessage,
+  tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
   accountMark, accountChange, logText, orderName, attachedLegs, isWorking, heroOf };
 });
 
@@ -694,7 +697,7 @@ function mount(v, host) {
     '<p class="ac-foot apg-foot" data-foot></p></div>';
   const q = sel => v.body.querySelector(sel);
   const listEl = q('[data-list]'), footEl = q('[data-foot]');
-  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, apply: '', typePending: new Map() };
+  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null, typeFocus: '' };
   q('.apg-tabs').addEventListener('click', e => {
     const b = e.target.closest('button[data-tab]'); if (!b) return;
     b.blur();
@@ -708,7 +711,8 @@ function mount(v, host) {
     if (!b || !listEl.contains(b)) return;
     if (b.dataset.review) { window.open(AC.reviewUrl(S.deskUrl, b.dataset.review), '_blank', 'noopener'); return; }
     b.blur();
-    if (e.detail === 0) { host.note('The Account page\'s buttons work by click only, not by keyboard.', true); return; }
+    /* 1.32.0 (review): the Change row's Save works by click or by Enter, as Anthony asked; every other button by click only */
+    if (e.detail === 0 && b.dataset.act !== 'type-save') { host.note('The Account page\'s buttons work by click only, not by keyboard.', true); return; }
     const a = b.dataset.act, id = b.dataset.id || '';
     if (a === 'archive') { P.confirm = id; render(); }
     else if (a === 'archive-no') { P.confirm = ''; render(); }
@@ -721,6 +725,13 @@ function mount(v, host) {
     else if (a === 'join-no') { P.join = null; render(); }
     else if (a === 'apply-type') { P.apply = P.apply === id ? '' : id; render(); }   // 1.30.0: asks first, never applied silently
     else if (a === 'apply-no') { P.apply = ''; render(); }
+    /* 1.32.0 (Anthony 2026-10-19, "Text + Change"): Change (or Set) opens the picker in a row under the account, one row at a time;
+       Cancel closes it and sends nothing; Not set sends null and closes it; Save sends the Size chosen and closes it (review: the
+       Size select alone never sends, as an arrow key on a closed select fires change). Each puts the focus back on Change or Set */
+    else if (a === 'type-edit') { const open = P.typeEdit !== id && canTypeNow(); P.typeEdit = open ? id : ''; P.typePick = null; render(); if (open) { const f = listEl.querySelector(`select[data-act="acct-firm"][data-id="${CSS.escape(id)}"]`); if (f) f.focus(); } }
+    else if (a === 'type-cancel') { P.typeEdit = ''; P.typePick = null; P.typeFocus = id; render(); }
+    else if (a === 'type-clear') { const ok = P.typeEdit === id && canTypeNow() && !P.typePending.has(id) && !!typeVal(id); P.typeEdit = ''; P.typePick = null; P.typeFocus = id; if (ok) sendType(id, ''); else render(); }
+    else if (a === 'type-save') { const want = saveWant(id); P.typeEdit = ''; P.typePick = null; P.typeFocus = id; if (want) sendType(id, want); else render(); }
     else if (a === 'apply-yes') {
       const t = P.apply === id ? typeFor(id) : null, acc = S.accounts.find(x => x.name === id);
       const l = t ? GroupsCore.typeLimits(t) : { error: 'Its type is not on The Desk\'s list now.' };
@@ -742,7 +753,12 @@ function mount(v, host) {
     const el = e.target, a = el.dataset.act;
     if (!a) return;
     if (a === 'trade') { const on = el.checked; el.checked = !on; F.accountTrade(el.dataset.id, on); return; }   // shown as ChartBridge says, not as clicked
-    if (a === 'leader') { if (el.value) F.copierSet({ leader: el.value }); return; }
+    if (a === 'leader') {   // none sends leader null (1.32.1); shown as ChartBridge says until its copier message comes back
+      const want = el.value;
+      el.value = S.copier && S.copier.leader ? S.copier.leader.account : '';
+      F.copierSet(AC.leaderSet(want));
+      return;
+    }
     if (a === 'group') {   // 1.26.0: None goes at once; a group first asks for the highest close so far (G2 b)
       const name = el.dataset.id, acc = S.accounts.find(x => x.name === name), want = el.value;
       el.value = acc && acc.group ? acc.group : '';                                       // shown as ChartBridge says, not as picked
@@ -751,15 +767,17 @@ function mount(v, host) {
       if (g) { P.join = { account: name, group: want, prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)) }; render(); const box = listEl.querySelector('[data-act="join-high"]'); if (box) { box.focus(); box.select(); } }
       return;
     }
-    if (a === 'acct-type') {   // 1.30.0: the account's type, saved on The Desk; shown as The Desk says once it answers
-      const name = el.dataset.id, want = el.value;
-      P.typePending.set(name, { v: want, after: null }); render();
-      F.setAccountType(name, want || null).then(r => {
-        /* saved: shown as picked until The Desk's rows are read again (no flash of the old value); refused: back at once */
-        if (r.ok) { const pd = P.typePending.get(name); if (pd) pd.after = S.deskAt; }
-        else { P.typePending.delete(name); host.note('Account type for ' + name + ' not saved: ' + r.error, true); }
-        render();
-      });
+    if (a === 'acct-firm' || a === 'acct-plan' || a === 'acct-type') {   // 1.30.0: the account's type, saved on The Desk; shown as The Desk says once it answers
+      /* 1.32.0: the open Change row's Firm, then Plan, then Size; none of them sends (review: in Chromium an arrow key on a closed
+         select fires change). Firm and Plan move the picker from the account's own type and keep the focus where it is (the row
+         is drawn again, the focus put back on the same select); the Size is kept for Save (Not set is a button of its own) */
+      const name = el.dataset.id, which = a === 'acct-firm' ? 'firm' : a === 'acct-plan' ? 'plan' : 'type';
+      if (P.typeEdit !== name || !canTypeNow() || P.typePending.has(name)) return;
+      const tree = typeTreeNow();
+      if (which === 'type') { P.typePick = Object.assign({}, pickState(name, tree), { id: el.value, sized: true }); render(); return; }
+      if (!el.value) return;
+      const r = GroupsCore.cascadePick(tree, Object.assign(pickState(name, tree), { id: typeVal(name) }), which, el.value);
+      P.typePick = { firm: r.state.firm, plan: r.state.plan }; render();
       return;
     }
     if (a === 'my-floor' || a === 'my-daily') {   // 1.26.0: a personal account's own limits, both sent together
@@ -785,6 +803,33 @@ function mount(v, host) {
 
   /* 1.30.0: the account's type from The Desk's list (its current version), or null */
   const typeFor = name => { const at = F.typeOf(name); return at && S.types ? S.types.find(t => t.id === at.id) || null : null; };
+  /* 1.32.0: the picker's tree (the firms in use on The Desk first) and where an account's picker stands: its
+     type (or the one just picked, until The Desk's rows say it), moved in the open Change row by Firm and Plan without sending */
+  const typeTreeNow = () => GroupsCore.typeTree(S.types || [], GroupsCore.usedFirms([...S.desk.values()]));
+  const typeVal = name => { const at = F.typeOf(name), pd = P.typePending.get(name); return pd ? pd.v : at ? at.id : ''; };
+  const goneOf = name => { const at = F.typeOf(name); return at && !(S.types || []).some(t => t.id === at.id) ? { firm: at.firm, name: at.name } : null; };
+  const pickState = (name, tree) => {
+    const id = typeVal(name), b = P.typeEdit === name ? P.typePick : null;
+    return Object.assign(GroupsCore.cascadeStart(tree, id, goneOf(name)), b ? { firm: b.firm, plan: b.plan } : {}, { id: b && b.sized ? b.id : id });
+  };
+  /* the type Save sends: the Size chosen in the open row, on The Desk's list in the plan shown, and not the account's own; or '' */
+  const saveWant = name => {
+    if (P.typeEdit !== name || !canTypeNow() || P.typePending.has(name) || !P.typePick || !P.typePick.sized) return '';
+    const tree = typeTreeNow(), want = GroupsCore.cascadeView(tree, pickState(name, tree), goneOf(name)).type.value;
+    return want && want !== typeVal(name) && (S.types || []).some(t => t.id === want) ? want : '';
+  };
+  /* the type can be changed only while The Desk answers (its list read now, and its rows) */
+  const canTypeNow = () => !!S.types && S.typesState === 'ok' && S.deskState === 'ok';
+  /* the one send: PUT /api/accounts/{account}/account-type (1.30.0), a type id or null (Not set) */
+  function sendType(name, want) {
+    P.typePending.set(name, { v: want, after: null }); render();
+    F.setAccountType(name, want || null).then(r => {
+      /* saved: shown as picked until The Desk's rows are read again (no flash of the old value); refused: back at once */
+      if (r.ok) { const pd = P.typePending.get(name); if (pd) pd.after = S.deskAt; }
+      else { P.typePending.delete(name); host.note('Account type for ' + name + ' not saved: ' + r.error, true); }
+      render();
+    });
+  }
   /* the prices of the instruments with an open position (unrealized P&L): watched while this panel shows */
   function watchPositions(roots) {
     for (const r of roots) if (!P.offs.has(r)) P.offs.set(r, host.watchQuote(r));
@@ -833,19 +878,45 @@ function mount(v, host) {
       /* 1.30.0: the Account type column (The Desk's ledger), once its list is known (read now, or this browser's copy) */
       const typesOn = grpOn && !!S.types, canType = typesOn && S.typesState === 'ok' && S.deskState === 'ok';
       const links = typesOn ? GroupsCore.readLinks(F.store) : {};
-      const typeOpts = typesOn ? '<option value="">Not set</option>' + S.types.map(t => `<option value="${esc(t.id)}">${esc(GroupsCore.typeLabel(t))}</option>`).join('') : '';
+      const tree = typesOn ? typeTreeNow() : [];
+      const opts = list => list.map(o => `<option value="${esc(o.value)}" title="${esc(o.title)}">${esc(o.label)}</option>`).join('');
+      if (!canType || !grpKnown) { P.typeEdit = ''; P.typePick = null; }   // read only: no Change row
+      /* 1.32.0 (Anthony 2026-10-19, "Text + Change"): the type as plain text (the whole label and the firm in the tooltip), with
+         Change, or "Not set" with Set; the picker opens in a row under the account (typeRow) */
       const typeCell = a => {
         if (!typesOn) return '';
         if (!grpKnown) return c(NK, 'mut apg-nk', 'Not connected to ChartBridge: the account\'s group, type and limits are not known now');
         const pd = P.typePending.get(a.name);
         if (pd && pd.after !== null && S.deskAt > pd.after) P.typePending.delete(a.name);   // The Desk's rows read since the save
-        const at = F.typeOf(a.name), pend = P.typePending.has(a.name), val = pend ? P.typePending.get(a.name).v : at ? at.id : '';
-        const gone = at && !S.types.some(t => t.id === at.id) ? `<option value="${esc(at.id)}">${esc((at.firm ? at.firm + ' ' : '') + at.name + ' (not on The Desk\'s list now)')}</option>` : '';
+        /* 1.32.0 (Anthony 2026-10-19): no Desk rows read (The Desk not reachable since this page opened): the type is not known,
+           not "Not set"; no Change or Set */
+        if (!S.deskAt) return `<span role="cell" class="apg-type">` + ci('not known', 'apg-ttext mut apg-tnk', 'The Desk is not reachable, so the account\'s type cannot be read now') + '</span>';
+        const at = F.typeOf(a.name), pend = P.typePending.has(a.name), val = typeVal(a.name);
+        if (pend && P.typeEdit === a.name) { P.typeEdit = ''; P.typePick = null; }
         const t = typeFor(a.name), canApply = !a.group && !!t && canGroup;
         const off = a.group && links[a.group] && at && at.id !== links[a.group].id;
-        const cur = S.types.find(x => x.id === val), tip = (cur ? GroupsCore.typeLabel(cur) + '. ' : '') + (S.typesState === 'ok' ? 'The account\'s type on The Desk\'s ledger (saved on The Desk)' : 'The Desk is not reachable: the list as of ' + GroupsCore.asOfText(S.typesAsOf) + '; the type cannot be changed now');
-        return `<span role="cell" class="apg-type"><select class="ws-sel apg-sel apg-tsel${off ? ' apg-toff' : ''}" data-act="acct-type" data-id="${esc(a.name)}" ${pr({ value: val, disabled: !canType || pend })} aria-label="Account type for ${esc(a.name)}" title="${esc(tip)}">${typeOpts}${gone}</select>` +
+        const cur = S.types.find(x => x.id === val), g = goneOf(a.name), goneNow = !cur && g && val === at.id;
+        const text = cur ? cur.name : goneNow ? (g.firm ? g.firm + ' ' : '') + g.name + ' (not on The Desk\'s list now)' : val ? val : 'Not set';
+        const tip = (cur ? GroupsCore.typeLabel(cur) + '. ' : goneNow ? text + '. ' : '') + (S.typesState === 'ok' ? 'The account\'s type on The Desk\'s ledger (saved on The Desk)' + (canType ? ': ' + (val ? 'Change' : 'Set') + ' picks the firm, then the plan, then the size' : '') : 'The Desk is not reachable: the list as of ' + GroupsCore.asOfText(S.typesAsOf) + '; the type cannot be changed now');
+        const edit = canType && !pend ? `<button type="button" class="ac-btn apg-tedit" data-act="type-edit" data-id="${esc(a.name)}" aria-expanded="${P.typeEdit === a.name}" aria-label="${val ? 'Change' : 'Set'} the account type for ${esc(a.name)}" title="${val ? 'Change' : 'Set'} the account type: firm, plan and size in a row under ${esc(a.name)}">${val ? 'Change' : 'Set'}</button>` : '';
+        return `<span role="cell" class="apg-type">` + ci(text, 'apg-ttext' + (val ? '' : ' mut') + (off ? ' apg-toff' : ''), tip) + edit +
           (canApply ? `<button type="button" class="ac-btn apg-apply" data-act="apply-type" data-id="${esc(a.name)}" aria-label="Apply its rules to ${esc(a.name)}" title="Apply its rules: My floor and My daily from ${esc(GroupsCore.typeLabel(t))} (asks first)">Apply</button>` : '') + '</span>';
+      };
+      /* 1.32.0: the Change row: Firm, Plan and Size at full width with full labels, then Save (once a Size other than the account's
+         own is chosen: sends it and closes the row), Not set (only when a type is set: sends null) and Cancel (sends nothing). One row
+         at a time; no select sends */
+      const typeRow = a => {
+        if (!typesOn || P.typeEdit !== a.name || !canType || P.typePending.has(a.name)) return '';
+        const val = typeVal(a.name), vw = GroupsCore.cascadeView(tree, pickState(a.name, tree), goneOf(a.name));
+        const firm = { value: vw.firm.value, options: vw.firm.options.filter(o => o.value) };
+        if (!firm.value) firm.options.unshift({ value: '', label: 'Firm', title: 'Pick a firm' });
+        const sel = (act, cls, v, label, dis) => `<select class="ws-sel apg-sel apg-tpick ${cls}" data-act="${act}" data-id="${esc(a.name)}" ${pr({ value: v.value, disabled: dis })} aria-label="${label} for ${esc(a.name)}" title="${esc(label)}">${opts(v.options)}</select>`;
+        return row('type|' + a.name, `<span role="cell" class="apg-confirm apg-typeask"><span class="apg-tasklbl">Account type for ${esc(a.name)}:</span>` +
+          sel('acct-firm', 'apg-tfirm', firm, 'Account type firm', false) + sel('acct-plan', 'apg-tplan', vw.plan, 'Account type plan', !vw.firm.value) +
+          sel('acct-type', 'apg-tsel', vw.type, 'Account type size and stage', !vw.plan.value) +
+          `<button type="button" class="ac-btn apg-yes" data-act="type-save" data-id="${esc(a.name)}" ${pr({ disabled: !saveWant(a.name) })} title="Save: sends the size chosen as ${esc(a.name)}'s type on The Desk">Save</button>` +
+          (val ? `<button type="button" class="ac-btn" data-act="type-clear" data-id="${esc(a.name)}" title="Not set: clears ${esc(a.name)}'s type on The Desk">Not set</button>` : '') +
+          `<button type="button" class="ac-btn" data-act="type-cancel" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
       };
       /* 1.30.0: "Apply its rules" asks first, a row of its own (never applied silently) */
       /* the question: the numbers as they will be sent and how each was worked out; a trailing type never sets My floor (ChartBridge
@@ -873,7 +944,8 @@ function mount(v, host) {
         const s = lim(a), pos = (a.positions || []).filter(p => p.qty).map(p => p.root + ' ' + (p.qty > 0 ? '+' : '') + p.qty).join(', ');
         const lvl = s.level ? ' apg-' + s.level : '';
         const why = a.why && typeof a.why === 'object' ? a.why : {}, from = x => (x.from === 'desk' ? ' (The Desk)' : x.from === 'chartbridge' ? ' (ChartBridge, from NinjaTrader\'s balance and P&L)' : ' (NinjaTrader)');
-        const roomTip = [s.dd ? (s.cb ? 'Room to the floor' + (s.dd.floor !== null && s.dd.floor !== undefined ? ' (' + AC.fmtUsdPlain(s.dd.floor) + ')' : '') + ': ' : 'Trailing drawdown: ') + (s.dd.room !== null ? AC.fmtUsdPlain(s.dd.room) + ' left' : 'room not reported') + (s.dd.limit ? ' of ' + AC.fmtUsdPlain(s.dd.limit) : '') + from(s.dd) : (why.roomFloor || a.roomDrawdownWhy || 'No trailing drawdown known'),
+        /* 1.32.0 ("Narrower Room"): the Room's whole text first in its tooltip (the cell may cut it at 1366) */
+        const roomTip = [AC.limitText(s), s.dd ? (s.cb ? 'Room to the floor' + (s.dd.floor !== null && s.dd.floor !== undefined ? ' (' + AC.fmtUsdPlain(s.dd.floor) + ')' : '') + ': ' : 'Trailing drawdown: ') + (s.dd.room !== null ? AC.fmtUsdPlain(s.dd.room) + ' left' : 'room not reported') + (s.dd.limit ? ' of ' + AC.fmtUsdPlain(s.dd.limit) : '') + from(s.dd) : (why.roomFloor || a.roomDrawdownWhy || 'No trailing drawdown known'),
           s.dl ? 'Daily loss: ' + (s.dl.room !== null ? AC.fmtUsdPlain(s.dl.room) + ' left' : 'room not known') + (s.dl.limit ? ' of ' + AC.fmtUsdPlain(s.dl.limit) : '') + (s.cb ? ' (open P&L counted)' : '') + from(s.dl) : (why.roomDaily || a.roomDailyLossWhy || 'No daily loss limit known'),
           s.tg ? 'Profit target: ' + (s.tg.left <= 0 ? 'reached' : AC.fmtUsdPlain(s.tg.left) + ' left') + (s.tg.target ? ' of ' + AC.fmtUsdPlain(s.tg.target) : '') : '',
           s.level ? (s.level === 'red' ? 'RED: ' : 'AMBER: ') + Math.round(s.pct * 100) + '% of the room used to the closer limit' : ''].filter(Boolean).join('\n');
@@ -894,7 +966,7 @@ function mount(v, host) {
         const hero = AC.heroOf(S.heroes, a.name);   // 1.27.0: a seat shows its hero's name
         return row(a.name, `${c(a.name + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', (a.sim ? 'NinjaTrader Sim account' : '') + (hero ? (a.sim ? '. ' : '') + 'A seat of ' + hero + ' (the Agent tab): the copier and the bot never trade it' : ''))}${stale ? c('unknown', 'warn', 'Not connected to ChartBridge since ' + hms(S.lostAt) + ' ET: this account\'s connection is not known') : c(CONN[a.connection] || a.connection, a.connection === 'connected' ? '' : 'warn')}` +
           `${c(AC.fmtUsdPlain(a.balance), 'r')}${c(AC.fmtUsd(a.pnlToday), 'r ' + (a.pnlToday > 0.004 ? 'up' : a.pnlToday < -0.004 ? 'dn' : ''))}${c(pos, 'r')}` +
-          `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${grp}${typeCell(a)}${lims}${mark}${hide}`, 'apg-acc' + lvl) + ask(a) + askJoin(a) + askApply(a) + typeWarn(a);
+          `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${grp}${typeCell(a)}${lims}${mark}${hide}`, 'apg-acc' + lvl) + ask(a) + askJoin(a) + typeRow(a) + askApply(a) + typeWarn(a);
       };
       html = !accounts.length ? '<p class="ac-empty">ChartBridge watches no account.</p>' :
         (stale ? `<p class="apg-stalenote" role="status">${esc(staleWords)}</p>` : '') +
@@ -994,7 +1066,12 @@ function mount(v, host) {
     }
     /* the list is rebuilt only when its rows change; figures write only their cells, so a button is never replaced under
        the mouse, and a box being typed in keeps its value */
+    /* 1.32.0 (review): a control with the focus keeps it when the list is rebuilt (the same data-act and data-id), so an arrow key
+       on the Change row's Firm or Plan moves through the list there */
+    const had = document.activeElement, keep = had && had !== listEl && listEl.contains(had) && had.dataset && had.dataset.act ? { act: had.dataset.act, id: had.dataset.id || '' } : null;
+    let rebuilt = false;
     if (P.key !== html) {
+      rebuilt = true;
       P.key = html; const top = listEl.scrollTop; listEl.innerHTML = html; listEl.scrollTop = top;
       P.cells = []; for (const e of listEl.querySelectorAll('[data-c]')) P.cells[+e.dataset.c] = e;
       P.props = []; for (const e of listEl.querySelectorAll('[data-p]')) P.props[+e.dataset.p] = e;
@@ -1011,6 +1088,15 @@ function mount(v, host) {
       if ('checked' in x && e.checked !== x.checked) e.checked = x.checked;
       if ('disabled' in x && e.disabled !== !!x.disabled) e.disabled = !!x.disabled;
       if ('value' in x && e !== document.activeElement && e.value !== x.value) e.value = x.value;
+    }
+    const findAct = (act, id) => [...listEl.querySelectorAll(`[data-act="${act}"]`)].find(e => (e.dataset.id || '') === id) || null;
+    if (rebuilt && keep) { const e = findAct(keep.act, keep.id); if (e && !e.disabled) e.focus(); }
+    /* after Cancel, Not set or Save: the account's Change or Set button (once it is back, after a save; only while nothing else
+       has the focus) */
+    if (P.typeFocus) {
+      const act = document.activeElement;
+      if (act && act !== document.body && !(listEl.contains(act) && act.dataset && act.dataset.act === 'type-edit')) P.typeFocus = '';
+      else { const e = findAct('type-edit', P.typeFocus); if (e) { e.focus(); P.typeFocus = ''; } else if (!P.typePending.has(P.typeFocus)) P.typeFocus = ''; }
     }
     if (footEl.textContent !== foot) { footEl.textContent = foot; footEl.title = foot; }
   }

@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.31.1
+ * chart-engine 1.32.2
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.31.1';
+const VERSION = '1.32.2';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -2116,7 +2116,7 @@ function create(container, options) {
         const i1 = idxAtTime(tr.tIn), i2 = open ? i1 : idxAtTime(tr.tOut);
         if (i2 < from - 2 || i1 > to + 2) continue;
         const x1 = xOf(i1), x2 = xOf(i2), y1 = yOf(tr.pIn), y2 = open ? y1 : yOf(tr.pOut);
-        // 1.31.1: an optional `pts` (the trade's signed result in points) decides the colour and the default chip; a trade
+        // 1.32.2: an optional `pts` (the trade's signed result in points) decides the colour and the default chip; a trade
         // with adds can show its first entry and last exit fills while its result is the average (The Desk's Review)
         const pts = open ? 0 : typeof tr.pts === 'number' && isFinite(tr.pts) ? tr.pts : (tr.pOut - tr.pIn) * tr.dir;
         const col = pts > 0 ? T.profit : pts < 0 ? T.loss : T.axisText;

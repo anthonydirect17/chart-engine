@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -2303,9 +2303,13 @@ Where two lanes meet, these rules hold; each is a check in `nt8/check/Integratio
   merged stop no breakeven or trailing)**.
 - **The copier and Merge never act on one account (lead's default).** The copier closes, shrinks and moves a follower's
   orders on its own (its "flatten this follower" goes to NinjaTrader directly and would not end a swap). So while the copier
-  is on, Merge is refused on any listed follower, on or off ("SIM-G is a copier follower: Merge is refused on it while the
-  copier is on (the copier manages its orders)"), and an account with a Merge running cannot become a follower until the
-  swap ends. The copier's leader may merge (above).
+  is on, Merge is refused on a follower that is on ("SIM-G is a copier follower: Merge is refused on it while the copier is
+  on (the copier manages its orders)"), and on a follower that is off while the copier still has something of its own there
+  (a copied position, a copier entry, stop or close that may fill, a reduce or a wait: "SIM-G is a copier follower (off) that
+  still holds a copier position or orders: Merge is refused on it until the copier's part there is flat and done (the copier
+  manages those orders)"). 0.6.4 (WORK 2026-10-19: the page lists every account as a follower row, so before 0.6.4 Merge was
+  refused on every account while the copier was on): an off follower with nothing of the copier there merges as any account.
+  An account with a Merge running cannot become a follower until the swap ends. The copier's leader may merge (above).
 - **The copier and Order Strategies.** A strategy entry's stop counts for the copier's stop rule. Each fill increment is copied
   once, for its whole quantity; the followers' stops follow the stop of the increment's last bucket (all of an increment's
   stops are at one level and move together), so breakeven and trailing move the followers' stops to the leader's new price.
@@ -2734,9 +2738,19 @@ Where the contract left a detail open, the safest simple choice was taken and is
   restart; a flatten of a pair the agent does not own never cancels it while the account holds a position there, and cancels
   it once the pair is flat (lead's default: flat, it could only open a position). A position whose only working orders are the
   agent's own stop or legs, with no trade followed after the executions were read again (a restart lost the record), raises
-  the lost-trade error every 60 s until flat ("agent <id> holds <n> on <account> <root> with no trade record (ChartBridge
-  restarted); only its own stop protects it: ChartBridge keeps that stop and closes the position at its flat time"). A leg
-  counts for the owner only when it would close the position the account holds.
+  the lost-trade error every 60 s ("agent <id> holds <n> on <account> <root> with no trade record (<why>); only its own stop
+  protects it: ChartBridge keeps that stop and closes the position at its flat time; check NinjaTrader"). 0.6.4 (WORK
+  2026-10-19, a false alarm on a fresh fill): NinjaTrader shows an entry filled, the position moved and its legs working
+  before the execution event that opens the trade record comes through, so the error goes only once that state has held on
+  every pass for 5 s (`OrphanConfirmMs`) with no fill NinjaTrader shows ahead of its event; any pass with a record, a flat pair
+  or anything else working starts the 5 s over. `<n>` is what the account holds by the effective reading (it counts a fill not
+  yet in NinjaTrader's position; the listed reading when that is 0), so a fresh fill never reads "holds 0". `<why>` is
+  "ChartBridge restarted" only when the position was already there when this run of ChartBridge began watching the account
+  (and has not been flat since), else "opened while ChartBridge was running". The error ends once a trade record follows on
+  that pair (the poll found the execution) or the pair is flat by both readings, and if it was sent the pages get one `info`
+  line ("agent <id>: the no-trade-record error on <account> <root> is cleared: ChartBridge follows its trade <tag> there now",
+  or "...: the pair is flat"). While the agent's own flatten runs there it is held as in 0.5.7. A leg counts for the owner only
+  when it would close the position the account holds.
 - **The close cap counts each close** (review A C2): with no trade followed, every close's fill comes off the stop legs' count;
   when the agent's part is closed and the account still holds more, the job ends with a warning ("agent <id>'s <n> closed; the
   rest (<m>) is not agent <id>'s: ChartBridge did not close it"). Every

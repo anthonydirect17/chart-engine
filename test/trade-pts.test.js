@@ -1,5 +1,5 @@
 'use strict';
-// Trade colour (1.31.1): an optional `pts` on a trade (its signed result in points) decides the line and chip colour and the
+// Trade colour (1.32.2): an optional `pts` on a trade (its signed result in points) decides the line and chip colour and the
 // default chip text; without it the colour comes from (pOut - pIn) * dir exactly as before. Drawn on a stand-in canvas.
 const test = require('node:test');
 const assert = require('node:assert/strict');
