@@ -30,21 +30,23 @@
 .apg-my { min-width: 0; overflow: hidden; }
 .apg-join .apg-high { width: 84px; }
 .apg-join .mut { color: var(--ws-muted); }
-/* 1.30.0: the Account type column (The Desk's ledger) between Group and Limits, its dropdown and Apply (1.32.0: 196px for the
-   three selects of the picker, and the Room 2.7fr so it keeps its width) */
+/* 1.30.0: the Account type column (The Desk's ledger) between Group and Limits, its dropdown and Apply (1.32.0: its text and
+   Change, the widths of 1.30.0 again) */
 /* the Room keeps at least its 1.29 width at 1366: the type column is narrow (names cut, whole in the tooltip) and the short figures
    (balance, today, position) give up a little */
-.apg-acc-g.apg-grps.apg-types .gr-row { grid-template-columns: minmax(64px, 1fr) 78px minmax(0, .8fr) minmax(0, .7fr) minmax(0, .7fr) minmax(0, 2.7fr) 116px 196px 152px 44px; }
-.apg-acc-g.apg-grps.apg-types.apg-hides .gr-row { grid-template-columns: minmax(64px, 1fr) 78px minmax(0, .8fr) minmax(0, .7fr) minmax(0, .7fr) minmax(0, 2.7fr) 116px 196px 152px 44px 50px; }
+.apg-acc-g.apg-grps.apg-types .gr-row { grid-template-columns: minmax(64px, 1fr) 78px minmax(0, .8fr) minmax(0, .7fr) minmax(0, .7fr) minmax(0, 2.4fr) 116px 128px 152px 44px; }
+.apg-acc-g.apg-grps.apg-types.apg-hides .gr-row { grid-template-columns: minmax(64px, 1fr) 78px minmax(0, .8fr) minmax(0, .7fr) minmax(0, .7fr) minmax(0, 2.4fr) 116px 128px 152px 44px 50px; }
 .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types .gr-row { grid-template-columns: minmax(56px, 1fr) 0 0 minmax(0, .9fr) 0 minmax(0, 1.4fr) 100px 0 0 36px; column-gap: 4px; }
 .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types.apg-hides .gr-row { grid-template-columns: minmax(56px, 1fr) 0 0 minmax(0, .9fr) 0 minmax(0, 1.4fr) 100px 0 0 36px 46px; }
 .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types .gr-row > :nth-child(9) { visibility: hidden; }
 .apg-type { display: flex; gap: 4px; align-items: center; min-width: 0; overflow: hidden; }
-/* 1.32.0: the picker, Firm, Plan and Size side by side (Anthony 2026-10-19); short labels cut, the whole name in each tooltip */
-.apg .apg-sel.apg-tpick { flex: 1 1 0; min-width: 0; width: 0; max-width: none; padding: 0 2px; }
-.apg .apg-sel.apg-tplan { flex-grow: 1.15; }
-.apg .apg-sel.apg-tsel { flex-grow: 1.3; }
-.apg .apg-sel.apg-tpick.apg-toff { border-color: var(--ws-warn); }
+/* 1.32.0 (Anthony 2026-10-19, "Text + Change"): the type as text (cut at the cell's end, the whole label in its tooltip), then
+   Change or Set; the picker in a row of its own under the account, Firm, Plan and Size at full width with full labels */
+.apg-type .apg-ttext { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.apg-type .apg-ttext.apg-toff { color: var(--ws-warn); }
+.apg .ac-btn.apg-tedit { flex: none; padding: 2px 5px; }
+.apg-typeask .apg-tasklbl { flex: none; }
+.apg .apg-typeask .apg-sel.apg-tpick { flex: none; width: auto; max-width: none; }
 .apg .ac-btn.apg-apply { flex: none; }
 .apg-twarn { color: var(--ws-warn-text); }
 .apg-acc-g .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g .gr-row.apg-ask, .apg-acc-g.apg-grps.apg-hides .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-hides .gr-row.apg-ask,

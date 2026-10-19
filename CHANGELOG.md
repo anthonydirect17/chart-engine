@@ -4,29 +4,37 @@
 
 Page only, no recompile (ChartBridge 0.6.2 as for 1.31.0; `minChartBridge` stays 0.6.2). The Desk's list of account types now holds
 about 208 types from 9 firms, and one flat dropdown of them was not usable (Anthony 2026-10-19: "far to many accounts for just a drop
-down"). He chose Firm > Plan > Size, with "firms I actually trade first".
+down"). He chose Firm > Plan > Size, with "firms I actually trade first", and for the Accounts tab "Text + Change" (the three selects
+side by side cut the labels to "Luci", "Topst", "Tradir" at 1366 x 768).
 
 - **The picker's pure parts (live/groups.js GroupsCore).** `typeParts` splits a type's name as The Desk writes it ("<Plan> <Size>K
   <rest>", e.g. "LucidFlex 50K Eval", "Trading Combine 50K", "Master 25K Option 2 EOD"): the plan is the text before the first
   "<number>K" token; a name with no size token (or nothing before it) is plan "Other" and shows its whole name. `typeTree` sorts:
-  the firms in use first (the firms of the accounts whose type is set on The Desk, from the GET /api/chart-accounts rows the page
-  already reads), then the other firms A to Z; within a firm the plans A to Z; within a plan by the size number, then Eval,
+  the firms in use first (from the GET /api/chart-accounts rows the page already reads: the firm of each account whose type is set,
+  and the firm The Desk gives on a row, its `firm` field, type set or not), then the other firms A to Z (all A to Z while The Desk is
+  not reachable); within a firm the plans A to Z; within a plan by the size number, then Eval,
   Challenge or Test before Funded, Qualified, Sim-Funded or Account (any other words between them), then the rest A to Z.
   `cascadeView` gives the three selects' options and `cascadePick` each choice and what it sends.
-- **Accounts tab, Account type.** Three compact selects in the same cell: Firm ("Not set", then the firms), Plan (that firm's plans)
-  and Size (that plan's sizes and stages, "50K Eval", with "(not checked)" until checked). Changing Firm or Plan sends nothing; only
-  the Size select, or "Not set" on the Firm select, sends the PUT /api/accounts/{account}/account-type of 1.30.0. A firm with one plan
-  takes it at once, and going back to the account's own firm shows its own plan and type again. The whole name is in each select's
-  tooltip and each option's. A type no longer on The Desk's list shows where it was, "(not on The Desk's list now)", as before. Read
-  only while The Desk is not reachable, as before; Apply is unchanged. The column is 196 px at 1366 x 768 (it was 128 px) and the
-  Room is no narrower than without the column.
+- **Accounts tab, Account type ("Text + Change").** The cell shows the account's type as plain text ("LucidFlex 50K Eval"), cut at
+  the cell's end where it is long, with the firm and the whole label in its tooltip ("Lucid LucidFlex 50K Eval (not checked)"), and a
+  small Change button; with no type, "Not set" and Set. A type no longer on The Desk's list shows as before, "(not on The Desk's list
+  now)". Change (or Set) opens a row under that account, as Apply's question does: Firm, Plan and Size at full width with full labels
+  (Size: "50K Eval", "(not checked)" until checked), then "Not set" (only when a type is set) and Cancel. Firm and Plan send nothing;
+  a firm with one plan takes it at once, and going back to the account's own firm shows its own plan and type again. The Size select
+  sends the PUT /api/accounts/{account}/account-type of 1.30.0 and closes the row; Not set sends null and closes it; Cancel closes it
+  and sends nothing. One row open at a time (Change on another account closes the first). Read only (no Change or Set, no row) while
+  The Desk is not reachable, as before; Apply and its question row are unchanged. The column (128 px) and the Room have their 1.30.0
+  widths again: at 1366 x 768 the Room is 295 px, as in 1.31.0, and longer names are cut ("LucidFlex...", shorter still beside Apply).
 - **Settings, the rules dialog.** The same three selects in the place of the one Account type select. Choosing the size fills every
   rule box and the Type as in 1.30.0; "Not set" clears the link; Firm and Plan alone fill nothing and keep the type chosen last for
   Save. Update opens on the group's type.
-- Tests: `test/account-types.test.js` (the split, the order, the send rules, the selects as data with a type gone, the wiring);
+- Tests: `test/account-types.test.js` (the split, the order with a row's firm counted, the send rules, the selects as data with a
+  type gone, the wiring: only the last select or Not set sends, Cancel sends nothing, one open row);
   `test/fake-desk.mjs` gives `sampleFirmTypes()` (Topstep, Bulenox and FundedNext types, made-up values); `smoke:settings` runs the
-  picker against the fake Desk at 1366 x 768 (the order with a firm in use, nothing sent for Firm and Plan, one PUT for the size, null
-  for Not set, the cell fits, the dialog's fill), screenshot `settings-types-cascade-1366.png` beside the 1.30.0 ones.
+  Accounts tab against the fake Desk at 1366 x 768 (text and Change or Set, the cell fits, the 128 px column and the Room, the row's
+  order with a firm in use from a row's firm, nothing sent for Firm, Plan or Cancel, one row at a time, one PUT for the size, null for
+  Not set, read only with The Desk down) and the dialog's fill; screenshots `settings-types-text-1366.png` (the text cells) and
+  `settings-types-change-row-1366.png` (one Change row open), beside the 1.30.0 ones.
 
 ## ChartBridge 0.6.3 and chart 1.31.0 (2026-10-16): the audit fixes for ChartBridge and the chart page
 

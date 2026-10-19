@@ -226,10 +226,11 @@ function stageRank(rest) {
   if (/ (funded|qualified|sim funded|account) /.test(s)) return 2;
   return 1;
 }
-/** The firms of the accounts whose type is set on The Desk (each chart-accounts row's accountType.firm), as a list. */
+/** The firms in use, as a list: each chart-accounts row's accountType.firm (an account whose type is set on The Desk) and the
+ *  row's own firm (the firm The Desk gives the account, type set or not; Anthony 2026-10-19). */
 function usedFirms(rows) {
-  const out = new Set();
-  for (const r of rows || []) { const at = r && r.accountType; if (at && typeof at.firm === 'string' && at.firm.trim()) out.add(at.firm.trim()); }
+  const out = new Set(), add = f => { if (typeof f === 'string' && f.trim()) out.add(f.trim()); };
+  for (const r of rows || []) { if (!r) continue; if (r.accountType) add(r.accountType.firm); add(r.firm); }
   return [...out];
 }
 /** The types as a tree: [{ firm, used, plans: [{ plan, types: [{ t, parts }] }] }]. Firms in use first (A to Z), then the other
@@ -512,7 +513,7 @@ function mountSettings(host) {
   function openRules(g, refill) {
     const d = host.dialog, f = GC.formOf(g);
     /* 1.30.0: the Account type select at the top: Not set, then every type of The Desk's ledger ("(not checked)" until checked).
-       1.32.0: as three short selects, Firm, Plan and Size (the firms of the accounts with a type on The Desk first); only the last
+       1.32.0: as three short selects, Firm, Plan and Size (the firms in use on The Desk first); only the last
        (or Not set) fills or clears */
     const ts = types() || [], link = g ? GC.readLinks(st())[g.id] || null : null;
     const startType = refill ? refill.id : link && ts.some(t => t.id === link.id) ? link.id : '';

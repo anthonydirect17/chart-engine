@@ -252,6 +252,9 @@ test('type picker (1.32.0): a name splits into plan, size and rest; no size toke
 test('type picker (1.32.0): firms in use first, then A to Z; plans A to Z; by size, then Eval before Funded, then the rest A to Z', () => {
   const used = GC.usedFirms([{ accountType: { id: 't-tc50', firm: 'Topstep', name: 'x' } }, { accountType: null }, {}, null, { accountType: { id: 'l-f50e', firm: 'Lucid' } }, { accountType: { id: 'l-p100', firm: 'Lucid' } }]);
   assert.deepEqual(used.sort(), ['Lucid', 'Topstep']);
+  /* Anthony 2026-10-19: a firm The Desk gives on a chart-accounts row (its firm field) is in use too, type set or not */
+  assert.deepEqual(GC.usedFirms([{ firm: 'FundedNext', accountType: null }, { firm: ' Bulenox ' }, { firm: '' }, { firm: null }, { firm: 3 }, { firm: 'Lucid', accountType: { firm: 'Topstep' } }]).sort(), ['Bulenox', 'FundedNext', 'Lucid', 'Topstep']);
+  assert.deepEqual(GC.typeTree(SAMPLE, GC.usedFirms([{ firm: 'fundednext', accountType: null }])).map(f => f.firm).slice(0, 2), ['FundedNext', 'Apex'], 'a row\'s firm puts it first, without case');
   const tree = GC.typeTree(SAMPLE, used);
   assert.deepEqual(tree.map(f => f.firm + (f.used ? '*' : '')), ['Lucid*', 'Topstep*', 'Apex', 'Bulenox', 'FundedNext']);
   const plans = firm => tree.find(f => f.firm === firm).plans.map(p => p.plan);
@@ -317,16 +320,33 @@ test('type picker (1.32.0): the three selects as data (short labels, "(not check
   assert.equal(gf.plan.value, 'Old'); assert.equal(gf.type.value, 'x-old');
 });
 
-test('type picker (1.32.0): the wiring (Accounts tab and rules dialog send only what cascadePick says; one PUT route as before)', () => {
+test('type picker (1.32.0, "Text + Change"): the Accounts tab shows text and Change; the row sends only on the last select or Not set; Cancel sends nothing; one row', () => {
   const acc = read('live/accounts.js'), grp = read('live/groups.js'), css = read('live/accounts.css');
+  /* the select handler: only the open row's selects; Firm and Plan move the picker and return before any send; the last select
+     closes the row and sends through the one sendType */
   const h = acc.split("if (a === 'acct-firm' || a === 'acct-plan' || a === 'acct-type') {")[1].split("if (a === 'my-floor'")[0];
   assert.ok(h, 'one change handler for the three selects');
-  assert.match(h, /const r = GroupsCore\.cascadePick\(tree, pickState\(name, tree\), a === 'acct-firm' \? 'firm' : a === 'acct-plan' \? 'plan' : 'type', el\.value\);\s*if \(r\.send === undefined\) \{[^]*?return;\s*\}/);
-  assert.equal(h.split('F.setAccountType(').length, 2, 'one send, after the no-send return');
-  assert.ok(h.indexOf('F.setAccountType(') > h.indexOf('if (r.send === undefined)'));
-  assert.match(acc, /disabled: ro \|\| \(act !== 'acct-firm' && !vw\.firm\.value\) \|\| \(act === 'acct-type' && !vw\.plan\.value\)/, 'read only while The Desk is not reachable, as before');
-  assert.match(acc, /const ro = !canType \|\| pend/);
+  assert.match(h, /if \(P\.typeEdit !== name \|\| !canTypeNow\(\) \|\| P\.typePending\.has\(name\) \|\| !el\.value\) return;/, 'only the open row, only while The Desk answers; a placeholder sends nothing');
+  assert.match(h, /if \(which !== 'type'\) \{\s*P\.typePick = \{ firm: r\.state\.firm, plan: r\.state\.plan \}; render\(\);[^]*?return;\s*\}/, 'Firm and Plan: nothing sent');
+  assert.match(h, /P\.typeEdit = ''; P\.typePick = null;\s*if \(r\.send\) sendType\(name, r\.send\); else render\(\);/, 'the last select closes the row and sends its type');
+  assert.ok(!/setAccountType|type-clear/.test(h), 'no other send in the handler (Not set is its own button)');
+  assert.ok(h.indexOf('sendType(') > h.indexOf("if (which !== 'type')"));
+  /* the clicks: Change or Set opens one row (another closes); Cancel closes it, nothing sent; Not set sends null, only with a type */
+  const clicks = acc.split("listEl.addEventListener('click'")[1].split("listEl.addEventListener('change'")[0];
+  assert.match(clicks, /else if \(a === 'type-edit'\) \{ const open = P\.typeEdit !== id && canTypeNow\(\); P\.typeEdit = open \? id : ''; P\.typePick = null; render\(\);/, 'one row at a time: P.typeEdit holds one account');
+  assert.match(clicks, /else if \(a === 'type-cancel'\) \{ P\.typeEdit = ''; P\.typePick = null; render\(\); \}/, 'Cancel sends nothing');
+  assert.match(clicks, /else if \(a === 'type-clear'\) \{ const ok = P\.typeEdit === id && canTypeNow\(\) && !P\.typePending\.has\(id\) && !!typeVal\(id\);[^}]*if \(ok\) sendType\(id, ''\); else render\(\); \}/, 'Not set sends null');
+  assert.equal(clicks.split('sendType(').length, 2, 'one send among the clicks (Not set)');
+  assert.equal(acc.split('F.setAccountType(').length, 2, 'one PUT route as before (sendType)');
+  assert.match(acc, /F\.setAccountType\(name, want \|\| null\)/);
+  /* the cell: text, Change or Set only while The Desk answers; "Not set" offered in the row only when a type is set */
+  assert.match(acc, /const edit = canType && !pend \? `<button type="button" class="ac-btn apg-tedit" data-act="type-edit"/, 'read only while The Desk is not reachable, as before');
+  assert.match(acc, /const text = cur \? cur\.name : goneNow \? \(g\.firm \? g\.firm \+ ' ' : ''\) \+ g\.name \+ ' \(not on The Desk\\'s list now\)' : val \? val : 'Not set';/);
+  assert.match(acc, /\(val \? `<button type="button" class="ac-btn" data-act="type-clear"/);
+  assert.match(acc, /if \(!typesOn \|\| P\.typeEdit !== a\.name \|\| !canType \|\| P\.typePending\.has\(a\.name\)\) return '';/, 'the row shows only for the open account while The Desk answers');
+  assert.match(acc, /\+ typeRow\(a\) \+ askApply\(a\) \+ typeWarn\(a\);/);
+  /* the rules dialog keeps the three selects; the widths of 1.30.0 again on the Accounts tab */
   assert.match(grp, /const chosen = pick\.id;/, 'the dialog links the type chosen last, not the Size select\'s placeholder');
   assert.match(grp, /if \(r\.send === null\) \{ filled = null; fromIdle\(\); \}\s*else if \(r\.send\) \{ const t = typeById\(r\.send\); if \(t\) fill\(t\); \}/, 'the dialog fills only on the last select');
-  assert.match(css, /\.apg-acc-g\.apg-grps\.apg-types \.gr-row \{ grid-template-columns: [^}]* minmax\(0, 2\.7fr\) 116px 196px 152px 44px; \}/);
+  assert.match(css, /\.apg-acc-g\.apg-grps\.apg-types \.gr-row \{ grid-template-columns: [^}]* minmax\(0, 2\.4fr\) 116px 128px 152px 44px; \}/);
 });

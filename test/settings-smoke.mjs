@@ -201,7 +201,8 @@ try {
         ...sampleFirmTypes().map(T)],
       accounts: [{ account: 'SIM-A', firm: 'Lucid', archived: false, account_type: 'lucid-50k-flex-no-dll' }, { account: 'SIM-B', firm: 'Lucid', archived: false, account_type: 'lucid-150k-daily-dll' },
         { account: 'Sim101', firm: null, archived: false, account_type: 'lucid-150k-daily-dll' }, { account: 'SIM-F1', firm: 'Lucid', archived: false, account_type: 'lucid-25k-static-sample' },
-        { account: 'SIM-T', firm: 'Topstep', archived: false, account_type: 'sample-topstep-tc-50k' }] });   // 1.32.0: a Desk row of a Topstep type: Topstep is a firm in use
+        { account: 'SIM-T', firm: 'Topstep', archived: false, account_type: 'sample-topstep-tc-50k' },   // 1.32.0: a Desk row of a Topstep type: Topstep is a firm in use
+        { account: 'SIM-D', firm: 'FundedNext', archived: false, account_type: null }] });   // 1.32.0: a row's firm with no type set: FundedNext is in use too
     const tb = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(TP), '--v3', '--trading', '--test-controls', '--board-groups', '--test-pin=' + TEST_PIN, '--desk-url=http://127.0.0.1:' + DP], { stdio: ['ignore', 'pipe', 'inherit'] });
     await new Promise(r => tb.stdout.once('data', r));
     const received = async () => (await fetch(`http://127.0.0.1:${TP}/test/received`, { method: 'POST' })).json();
@@ -218,75 +219,104 @@ try {
       };
       await open();
       const AP = '.ws-panel[data-id="ap"]';
-      /* the Accounts tab: each account's Account type as Firm, Plan and Size (1.32.0, Anthony 2026-10-19): Firm "Not set" then the
-         firms in use first (Lucid, Topstep), then the others A to Z; the firm's plans; the plan's sizes, "(not checked)" until checked */
-      await until(async () => (await p.$$(`${AP} select.apg-tsel`)).length >= 4, 'the Account type dropdowns');
-      const pickOf = id => p.evaluate(([ap, id]) => Object.fromEntries(['acct-firm', 'acct-plan', 'acct-type'].map(k => { const e = document.querySelector(`${ap} select[data-act="${k}"][data-id="${id}"]`);
-        return [k, e ? { v: e.value, opts: [...e.options].map(o => o.textContent), dis: e.disabled, tip: e.title } : null]; })), [AP, id]);
-      const dd = await pickOf('SIM-A');
-      check(dd['acct-firm'].v === 'Lucid' && dd['acct-firm'].opts.join(' | ') === 'Not set | Lucid | Topstep | Bulenox | FundedNext' && !dd['acct-firm'].dis,
-        'Accounts tab: SIM-A\'s firm from The Desk; Not set, the firms in use first, then the others A to Z: ' + JSON.stringify(dd['acct-firm']));
-      check(dd['acct-plan'].v === 'LucidFlex' && dd['acct-plan'].opts.join(' | ') === 'LucidFlex | LucidPro', 'its plan, the firm\'s plans A to Z: ' + JSON.stringify(dd['acct-plan']));
-      check(dd['acct-type'].v === 'lucid-50k-flex-no-dll' && dd['acct-type'].opts.join(' | ') === '25K Static Eval (not checked) | 50K Eval (not checked)' && !dd['acct-type'].dis,
-        'its size and stage, by size, "(not checked)" on the last select: ' + JSON.stringify(dd['acct-type']));
-      check(dd['acct-type'].tip.startsWith('Lucid LucidFlex 50K Eval (not checked). The account') && dd['acct-firm'].tip.includes('Lucid LucidFlex 50K Eval (not checked).'), 'the whole name in the tooltips: ' + dd['acct-type'].tip);
-      const fitT = await p.evaluate(sel => [...document.querySelectorAll(sel)].every(c => c.scrollWidth <= c.clientWidth + 1 && [...c.children].every(x => x.getBoundingClientRect().right <= c.getBoundingClientRect().right + 0.5)), `${AP} .apg-type`);
-      check(fitT, 'the three selects (and Apply) fit the Account type cell at 1366 x 768');
-      check((await p.$$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]`, els => els.map(e => e.textContent))).includes('Account type'), 'the Account type column');
-      /* the Room keeps its width: measured with the column, then with the 1.29 grid (the class off for a moment) */
-      const roomW = await p.evaluate(sel => { const g = document.querySelector(sel), h = () => Math.round(g.querySelector('.gr-h [role="columnheader"]:nth-child(6)').getBoundingClientRect().width);
-        const w = h(); g.classList.remove('apg-types'); const w0 = h(); g.classList.add('apg-types'); return { w, w0 }; }, `${AP} .apg-acc-g`);
-      check(roomW.w >= roomW.w0, 'the Room column at 1366 is no narrower than without the Account type column: ' + JSON.stringify(roomW));
-      /* 1.32.0: Firm and Plan send nothing; SIM-C (no type): its Plan and Size wait for a firm */
+      /* the Accounts tab (1.32.0, Anthony 2026-10-19, "Text + Change"): each account's type as text with Change, or "Not set" with
+         Set; the picker (Firm, Plan, Size) opens in a row under the account, one row at a time */
+      await until(async () => (await p.$$(`${AP} .apg-ttext`)).length >= 4, 'the Account type cells');
+      const cellOf = id => p.evaluate(([ap, id]) => { const r = document.querySelector(`${ap} .gr-row[data-k="${id}"] .apg-type`); if (!r) return null;
+        const t = r.querySelector('.apg-ttext'), b = r.querySelector('[data-act="type-edit"]');
+        return { text: t.textContent, tip: t.title, full: t.scrollWidth <= t.clientWidth + 1, off: t.classList.contains('apg-toff'), btn: b ? b.textContent : null }; }, [AP, id]);
+      const pickOf = id => p.evaluate(([ap, id]) => Object.fromEntries(['acct-firm', 'acct-plan', 'acct-type'].map(k => { const e = document.querySelector(`${ap} .apg-typeask select[data-act="${k}"][data-id="${id}"]`);
+        return [k, e ? { v: e.value, opts: [...e.options].map(o => o.textContent), dis: e.disabled } : null]; })), [AP, id]);
+      const rowsOpen = () => p.$$eval(`${AP} .apg-typeask`, els => els.map(e => e.querySelector('select').dataset.id));
       const putsNow = () => desk.log.filter(x => x.method === 'PUT' && x.which === 'account-type').length;
-      const c0 = await pickOf('SIM-C');
-      check(c0['acct-firm'].v === '' && c0['acct-plan'].dis && c0['acct-type'].dis && c0['acct-type'].opts.join() === 'Size', 'SIM-C Not set: Plan and Size wait for a firm: ' + JSON.stringify(c0));
+      const ca = await cellOf('SIM-A');
+      check(ca && ca.text === 'LucidFlex 50K Eval' && ca.btn === 'Change' && ca.tip.startsWith('Lucid LucidFlex 50K Eval (not checked). The account'), 'Accounts tab: SIM-A\'s type as text, the firm and "(not checked)" in the tooltip, Change: ' + JSON.stringify(ca));
+      const cc = await cellOf('SIM-C');
+      check(cc && cc.text === 'Not set' && cc.btn === 'Set', 'SIM-C with no type: "Not set" and Set: ' + JSON.stringify(cc));
+      check((await p.$$(`${AP} select.apg-tpick`)).length === 0 && (await rowsOpen()).length === 0, 'no select in the table until Change or Set');
+      const fitT = await p.evaluate(sel => [...document.querySelectorAll(sel)].every(c => c.scrollWidth <= c.clientWidth + 1 && [...c.querySelectorAll('button')].every(x => x.getBoundingClientRect().right <= c.getBoundingClientRect().right + 0.5 && x.getBoundingClientRect().width >= x.scrollWidth)), `${AP} .apg-type`);
+      check(fitT, 'the text, Change (or Set) and Apply fit the Account type cell at 1366 x 768 (the text cut at the end where it is long, whole in the tooltip)');
+      const fullRows = await p.$$eval(`${AP} .apg-acc .apg-ttext`, els => els.map(e => e.closest('.gr-row').dataset.k + (e.scrollWidth <= e.clientWidth + 1 ? ' full' : ' cut') + ' "' + e.textContent + '"'));
+      console.log('  info: Account type text at 1366: ' + fullRows.join('; '));
+      check((await p.$$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]`, els => els.map(e => e.textContent))).includes('Account type'), 'the Account type column');
+      /* the widths of 1.30.0 again: the column 128 px, and the Room no narrower than without the column (1.29) */
+      const roomW = await p.evaluate(sel => { const g = document.querySelector(sel), h = n => Math.round(g.querySelector(`.gr-h [role="columnheader"]:nth-child(${n})`).getBoundingClientRect().width);
+        const w = h(6), tw = h(8); g.classList.remove('apg-types'); const w0 = h(6); g.classList.add('apg-types'); return { w, w0, tw }; }, `${AP} .apg-acc-g`);
+      check(roomW.w >= roomW.w0 && roomW.tw === 128, 'the Account type column at 128 px as in 1.30.0, the Room no narrower than without it: ' + JSON.stringify(roomW));
+      await p.screenshot({ path: path.join(out, 'settings-types-text-1366.png') });
+      /* Set on SIM-C: the row, Firm first (the firms in use first: FundedNext from its Desk row's firm, Lucid, Topstep; then A to Z) */
+      await p.click(`${AP} [data-act="type-edit"][data-id="SIM-C"]`);
+      const c0 = await until(async () => { const x = await pickOf('SIM-C'); return x['acct-firm'] ? x : null; }, 'SIM-C\'s Change row');
+      check(c0 && c0['acct-firm'].v === '' && c0['acct-firm'].opts.join(' | ') === 'Firm | FundedNext | Lucid | Topstep | Bulenox' && c0['acct-plan'].dis && c0['acct-type'].dis,
+        'Set: Firm (the firms in use first, a Desk row\'s firm counted), Plan and Size wait: ' + JSON.stringify(c0));
+      check(await p.$(`${AP} [data-act="type-clear"][data-id="SIM-C"]`) === null && await p.$(`${AP} [data-act="type-cancel"][data-id="SIM-C"]`) !== null, 'no Not set in the row when no type is set; Cancel');
+      check(await p.evaluate(ap => document.activeElement && document.activeElement.matches(`${ap} select[data-act="acct-firm"][data-id="SIM-C"]`), AP), 'the Firm select has the focus');
       await p.selectOption(`${AP} select[data-act="acct-firm"][data-id="SIM-C"]`, 'Topstep');
-      const c1 = await until(async () => { const x = await pickOf('SIM-C'); return !x['acct-plan'].dis ? x : null; }, 'SIM-C\'s plans of Topstep');
-      check(c1 && c1['acct-plan'].opts.join(' | ') === 'Plan | Express Funded | Trading Combine' && c1['acct-type'].dis, 'Firm Topstep: its plans A to Z, Size still waits: ' + JSON.stringify(c1 && c1['acct-plan']));
+      const c1 = await until(async () => { const x = await pickOf('SIM-C'); return x['acct-plan'] && !x['acct-plan'].dis ? x : null; }, 'SIM-C\'s plans of Topstep');
+      check(c1 && c1['acct-firm'].opts.join(' | ') === 'FundedNext | Lucid | Topstep | Bulenox' && c1['acct-plan'].opts.join(' | ') === 'Plan | Express Funded | Trading Combine' && c1['acct-type'].dis, 'Firm Topstep: its plans A to Z, Size still waits: ' + JSON.stringify(c1 && c1['acct-plan']));
       check(await p.evaluate(ap => document.activeElement && document.activeElement.matches(`${ap} select[data-act="acct-plan"][data-id="SIM-C"]`), AP), 'the Plan select has the focus after Firm');
       await p.selectOption(`${AP} select[data-act="acct-plan"][data-id="SIM-C"]`, 'Trading Combine');
-      const c2 = await until(async () => { const x = await pickOf('SIM-C'); return !x['acct-type'].dis ? x : null; }, 'SIM-C\'s sizes of Trading Combine');
+      const c2 = await until(async () => { const x = await pickOf('SIM-C'); return x['acct-type'] && !x['acct-type'].dis ? x : null; }, 'SIM-C\'s sizes of Trading Combine');
       check(c2 && c2['acct-type'].opts.join(' | ') === 'Size | 50K (not checked) | 100K (not checked)', 'Plan Trading Combine: its sizes by size number: ' + JSON.stringify(c2 && c2['acct-type']));
+      const rowFit = await p.$eval(`${AP} .apg-typeask`, c => { const r = c.getBoundingClientRect(); return c.scrollWidth <= c.clientWidth + 1 && [...c.querySelectorAll('select')].every(s => { const ctx = document.createElement('canvas').getContext('2d'); ctx.font = getComputedStyle(s).font; return s.getBoundingClientRect().right <= r.right && [...s.options].every(o => ctx.measureText(o.textContent).width <= s.clientWidth); }); });
+      check(rowFit, 'the row\'s selects at full width: every label whole, inside the row at 1366 x 768');
       await p.waitForTimeout(300);
       check(putsNow() === 0, 'choosing Firm and Plan sent nothing to The Desk');
-      await p.screenshot({ path: path.join(out, 'settings-types-cascade-1366.png') });
-      /* a firm with one plan: the plan is taken at once; back to the account's own firm: its own plan and type again */
-      await p.selectOption(`${AP} select[data-act="acct-firm"][data-id="SIM-C"]`, 'FundedNext');
-      const c3 = await until(async () => { const x = await pickOf('SIM-C'); return x['acct-plan'].v === 'Direct' ? x : null; }, 'FundedNext\'s one plan');
-      check(c3 && c3['acct-type'].opts.join(' | ') === 'Size | 50K Account (not checked)' && putsNow() === 0, 'a firm with one plan: Plan taken, nothing sent: ' + JSON.stringify(c3 && c3['acct-type']));
+      await p.screenshot({ path: path.join(out, 'settings-types-change-row-1366.png') });
+      /* one row at a time: Change on SIM-A closes SIM-C's; its own type shown, and Not set offered (a type is set) */
+      await p.click(`${AP} [data-act="type-edit"][data-id="SIM-A"]`);
+      const a0 = await until(async () => { const x = await pickOf('SIM-A'); return x['acct-type'] ? x : null; }, 'SIM-A\'s Change row');
+      check(JSON.stringify(await rowsOpen()) === '["SIM-A"]' && putsNow() === 0, 'one open row at a time (SIM-C\'s closed, nothing sent): ' + JSON.stringify(await rowsOpen()));
+      check(a0 && a0['acct-firm'].v === 'Lucid' && a0['acct-plan'].v === 'LucidFlex' && a0['acct-plan'].opts.join(' | ') === 'LucidFlex | LucidPro' && a0['acct-type'].v === 'lucid-50k-flex-no-dll' &&
+        a0['acct-type'].opts.join(' | ') === '25K Static Eval (not checked) | 50K Eval (not checked)', 'Change opens on its own firm, plan and type: ' + JSON.stringify(a0));
+      check(await p.$(`${AP} [data-act="type-clear"][data-id="SIM-A"]`) !== null, 'Not set offered in the row when a type is set');
+      /* Bulenox: Master, and Other for a name with no size; within a size Eval words first, Funded words last; nothing sent */
       await p.selectOption(`${AP} select[data-act="acct-firm"][data-id="SIM-A"]`, 'Bulenox');
-      await until(async () => (await pickOf('SIM-A'))['acct-firm'].v === 'Bulenox', 'SIM-A on Bulenox');
-      const a1 = await pickOf('SIM-A');
-      check(a1['acct-plan'].opts.join(' | ') === 'Plan | Master | Other' && putsNow() === 0, 'Bulenox: Master, and Other for a name with no size; nothing sent: ' + JSON.stringify(a1['acct-plan']));
+      const a1 = await until(async () => { const x = await pickOf('SIM-A'); return x['acct-firm'] && x['acct-firm'].v === 'Bulenox' ? x : null; }, 'SIM-A on Bulenox');
+      check(a1 && a1['acct-plan'].opts.join(' | ') === 'Plan | Master | Other' && putsNow() === 0, 'Bulenox: Master, and Other for a name with no size; nothing sent: ' + JSON.stringify(a1 && a1['acct-plan']));
       await p.selectOption(`${AP} select[data-act="acct-plan"][data-id="SIM-A"]`, 'Master');
-      const a2 = await until(async () => { const x = await pickOf('SIM-A'); return !x['acct-type'].dis ? x : null; }, 'SIM-A Master sizes');
+      const a2 = await until(async () => { const x = await pickOf('SIM-A'); return x['acct-type'] && !x['acct-type'].dis ? x : null; }, 'SIM-A Master sizes');
       check(a2 && a2['acct-type'].opts.join(' | ') === 'Size | 25K Option 2 EOD (not checked) | 25K Funded (not checked)', 'within a size: Eval words first, Funded words last, the rest between: ' + JSON.stringify(a2 && a2['acct-type']));
       await p.selectOption(`${AP} select[data-act="acct-firm"][data-id="SIM-A"]`, 'Lucid');
-      const a3 = await until(async () => { const x = await pickOf('SIM-A'); return x['acct-type'].v === 'lucid-50k-flex-no-dll' ? x : null; }, 'SIM-A back on its own type');
+      const a3 = await until(async () => { const x = await pickOf('SIM-A'); return x['acct-type'] && x['acct-type'].v === 'lucid-50k-flex-no-dll' ? x : null; }, 'SIM-A back on its own type');
       check(!!a3 && a3['acct-plan'].v === 'LucidFlex' && putsNow() === 0, 'back to its own firm: its plan and type again, nothing sent');
-      /* choosing the last select calls PUT /api/accounts/{account}/account-type, then shows what The Desk says */
-      /* the pick is shown from the click until The Desk's rows say it: sampled every 15 ms, never the old value in between */
+      /* Cancel: the row closes, nothing sent, the text as it was */
+      await p.click(`${AP} [data-act="type-cancel"][data-id="SIM-A"]`);
+      await until(async () => (await rowsOpen()).length === 0, 'SIM-A\'s row closed by Cancel');
+      await p.waitForTimeout(300);
+      check(putsNow() === 0 && (await cellOf('SIM-A')).text === 'LucidFlex 50K Eval', 'Cancel: nothing sent, the type as it was');
+      /* a firm with one plan: the plan is taken at once, nothing sent */
+      await p.click(`${AP} [data-act="type-edit"][data-id="SIM-C"]`);
+      await until(async () => (await pickOf('SIM-C'))['acct-firm'], 'SIM-C\'s row again');
+      await p.selectOption(`${AP} select[data-act="acct-firm"][data-id="SIM-C"]`, 'FundedNext');
+      const c3 = await until(async () => { const x = await pickOf('SIM-C'); return x['acct-plan'] && x['acct-plan'].v === 'Direct' ? x : null; }, 'FundedNext\'s one plan');
+      check(c3 && c3['acct-type'].opts.join(' | ') === 'Size | 50K Account (not checked)' && putsNow() === 0, 'a firm with one plan: Plan taken, nothing sent: ' + JSON.stringify(c3 && c3['acct-type']));
+      /* the last select sends PUT /api/accounts/{account}/account-type and closes the row; the text shows the pick from the click until
+         The Desk's rows say it: sampled every 15 ms, never the old text in between */
       await p.selectOption(`${AP} select[data-act="acct-firm"][data-id="SIM-C"]`, 'Lucid');
       await until(async () => (await pickOf('SIM-C'))['acct-plan'].opts.includes('LucidFlex'), 'SIM-C on Lucid');
       await p.selectOption(`${AP} select[data-act="acct-plan"][data-id="SIM-C"]`, 'LucidFlex');
       await until(async () => !(await pickOf('SIM-C'))['acct-type'].dis, 'SIM-C LucidFlex sizes');
       check(putsNow() === 0, 'still nothing sent before the size');
-      await p.evaluate(sel => { const e = document.querySelector(sel); window.__seen = []; window.__sampler = setInterval(() => { const x = document.querySelector(sel); window.__seen.push(x ? x.value : '?'); }, 15); }, `${AP} select.apg-tsel[data-id="SIM-C"]`);
-      await p.selectOption(`${AP} select.apg-tsel[data-id="SIM-C"]`, 'lucid-50k-flex-no-dll');
-      await until(async () => (await p.$eval(`${AP} select.apg-tsel[data-id="SIM-C"]`, e => e.value)) === 'lucid-50k-flex-no-dll' && desk.accounts.some(a => a.account === 'SIM-C' && a.account_type === 'lucid-50k-flex-no-dll'), 'SIM-C saved on The Desk');
+      await p.evaluate(sel => { window.__seen = []; window.__sampler = setInterval(() => { const x = document.querySelector(sel); window.__seen.push(x ? x.textContent : '?'); }, 15); }, `${AP} .gr-row[data-k="SIM-C"] .apg-ttext`);
+      await p.selectOption(`${AP} select[data-act="acct-type"][data-id="SIM-C"]`, 'lucid-50k-flex-no-dll');
+      await until(async () => (await cellOf('SIM-C')).text === 'LucidFlex 50K Eval' && desk.accounts.some(a => a.account === 'SIM-C' && a.account_type === 'lucid-50k-flex-no-dll'), 'SIM-C saved on The Desk');
+      check((await rowsOpen()).length === 0, 'the last select closes the row');
       await p.waitForTimeout(800);   // past the next read of The Desk's rows
       const seen = await p.evaluate(() => { clearInterval(window.__sampler); return window.__seen; });
-      const firstNew = seen.indexOf('lucid-50k-flex-no-dll');
-      check(firstNew >= 0 && seen.slice(firstNew).every(v => v === 'lucid-50k-flex-no-dll'), 'the picked type stays shown until The Desk\'s rows are read again (no flash of the old value; ' + seen.length + ' samples)');
+      const firstNew = seen.indexOf('LucidFlex 50K Eval');
+      check(firstNew >= 0 && seen.slice(firstNew).every(v => v === 'LucidFlex 50K Eval'), 'the picked type stays shown until The Desk\'s rows are read again (no flash of the old value; ' + seen.length + ' samples)');
       const put = desk.log.filter(x => x.method === 'PUT' && x.which === 'account-type');
       check(put.length === 1 && put[0].account === 'SIM-C' && JSON.stringify(put[0].body) === '{"account_type":"lucid-50k-flex-no-dll"}', 'one PUT with the spec\'s body: ' + JSON.stringify(put));
-      /* Not set (the Firm select) sends null; then the type again */
-      await p.selectOption(`${AP} select[data-act="acct-firm"][data-id="SIM-C"]`, '');
+      check((await cellOf('SIM-C')).btn === 'Change', 'SIM-C now offers Change');
+      /* Not set (in the row) sends null and closes the row */
+      await p.click(`${AP} [data-act="type-edit"][data-id="SIM-C"]`);
+      await until(() => p.$(`${AP} [data-act="type-clear"][data-id="SIM-C"]`), 'SIM-C\'s row with Not set');
+      await p.click(`${AP} [data-act="type-clear"][data-id="SIM-C"]`);
       await until(() => desk.accounts.some(a => a.account === 'SIM-C' && a.account_type === null), 'SIM-C Not set on The Desk');
       const put2 = desk.log.filter(x => x.method === 'PUT' && x.which === 'account-type');
       check(put2.length === 2 && JSON.stringify(put2[1].body) === '{"account_type":null}', 'Not set: one PUT with null: ' + JSON.stringify(put2.slice(1)));
-      await until(async () => { const x = await pickOf('SIM-C'); return x['acct-firm'].v === '' && !x['acct-firm'].dis; }, 'SIM-C shown Not set');
+      await until(async () => { const x = await cellOf('SIM-C'); return x.text === 'Not set' && x.btn === 'Set' && (await rowsOpen()).length === 0; }, 'SIM-C shown Not set, the row closed');
       /* Apply its rules: only for an account in no group, and it asks first */
       check(await p.$(`${AP} [data-act="apply-type"][data-id="SIM-A"]`) === null && await p.$(`${AP} [data-act="apply-type"][data-id="Sim101"]`) !== null, 'Apply its rules only on an account in no group (Sim101), not on SIM-A in Group A');
       /* a trailing type (Sim101: 150K, end of day): My floor is never set from it (ChartBridge trails a floor only in a group); the
@@ -328,7 +358,7 @@ try {
       await until(() => p.$('#wsDialog[open] #gp-fromType'), 'the rules dialog with Account type');
       /* 1.32.0: Firm, Plan and Size, as on the Accounts tab; Firm and Plan fill nothing, the size fills */
       const optsOf = id => p.$$eval('#' + id + ' option', els => els.map(e => e.textContent).join(' | '));
-      check(await optsOf('gp-fromFirm') === 'Not set | Lucid | Topstep | Bulenox | FundedNext' && await p.$eval('#gp-fromType', e => e.disabled), 'the dialog\'s Firm: Not set, the firms in use first; Size waits: ' + await optsOf('gp-fromFirm'));
+      check(await optsOf('gp-fromFirm') === 'Not set | FundedNext | Lucid | Topstep | Bulenox' && await p.$eval('#gp-fromType', e => e.disabled), 'the dialog\'s Firm: Not set, the firms in use first; Size waits: ' + await optsOf('gp-fromFirm'));
       const target0 = await p.inputValue('#gp-target');
       await p.selectOption('#gp-fromFirm', 'Lucid');
       check(await optsOf('gp-fromPlan') === 'Plan | LucidFlex | LucidPro' && await p.inputValue('#gp-target') === target0, 'Firm Lucid: its plans, no box filled: ' + await optsOf('gp-fromPlan'));
@@ -368,7 +398,8 @@ try {
       await p.keyboard.press('Escape');
       const warn = await until(() => p.$eval(`${AP} .apg-twarn`, e => e.textContent), 'the Accounts tab warning for SIM-B');
       check(/SIM-B is Lucid LucidPro 150K Funded; its group Group A was filled from Lucid LucidFlex 50K Eval\. A warning only: nothing is blocked\./.test(warn || ''), 'Accounts tab: SIM-B\'s warning row: ' + warn);
-      check(await p.$$eval(`${AP} select.apg-tpick[data-id="SIM-B"]`, els => els.length === 3 && els.every(e => e.classList.contains('apg-toff') && !e.disabled)), 'SIM-B\'s dropdowns marked, still usable');
+      const cb = await cellOf('SIM-B');
+      check(cb && cb.off && cb.btn === 'Change', 'SIM-B\'s type marked, Change still offered: ' + JSON.stringify(cb));
       /* The Desk edits the type (version 2): after a reload the page reads it and the group differs from the current version */
       desk.editType('lucid-50k-flex-no-dll', { drawdown: 2500 });
       await open();
@@ -379,10 +410,11 @@ try {
       /* The Desk not reachable: the last good list from this browser, "as of" its time; the dropdowns read only */
       desk.down = true;
       await open();
-      await until(async () => (await p.$$(`${AP} select.apg-tsel`)).length >= 4, 'the Account type dropdowns from the copy');
+      await until(async () => (await p.$$(`${AP} .apg-ttext`)).length >= 4, 'the Account type cells from the copy');
       const foot = await until(async () => { const t = await p.$eval(`${AP} .apg-foot`, e => e.textContent); return /as of/.test(t) ? t : null; }, 'the as-of note', 15000);
       check(/Account types: The Desk is not reachable; the list as of [A-Z][a-z]{2} \d{1,2} \d\d:\d\d ET\./.test(foot || ''), 'The Desk down: the cached list "as of <time>": ' + foot);
-      check(await p.$$eval(`${AP} select.apg-tpick[data-id="SIM-A"]`, els => els.length === 3 && els.every(e => e.disabled) && els[0].options.length === 5), 'the cached list still offered, read only while The Desk is down');
+      const cd = await cellOf('SIM-A');
+      check(cd && /The Desk is not reachable: the list as of/.test(cd.tip) && (await p.$$(`${AP} [data-act="type-edit"]`)).length === 0 && (await p.$$(`${AP} .apg-typeask`)).length === 0, 'read only (no Change or Set, no row) while The Desk is down, as before: ' + JSON.stringify(cd));
       await p.click('#wsSet');
       await p.click('#wsGroups [data-gp="edit"][data-id="g2"]');
       await until(() => p.$('#wsDialog[open] #gp-fromType'), 'the dialog with The Desk down');
