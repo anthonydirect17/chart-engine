@@ -1,5 +1,13 @@
 # Changelog
 
+## chart 1.31.1 (2026-10-19): a trade's own result decides its colour
+
+Page only; ChartBridge is unchanged. **A trade can carry `pts`**, its signed result in points: when it is a finite number it
+decides the colour of the trade's dotted line and chip and the chip's default text, instead of (pOut - pIn) * dir. The Desk's
+Review draws a trade with adds from its first entry fill to its last exit fill (so every mark sits on a bar), while its result is
+the contract weighted average: long 1 at 100, add 2 at 110, out 3 at 105 is -1.67 pt and is now drawn in the loss colour, not the
+profit colour first to last would give. A trade without `pts` draws exactly as before. Tests: test/trade-pts.test.js.
+
 ## ChartBridge 0.6.3 and chart 1.31.0 (2026-10-16): the audit fixes for ChartBridge and the chart page
 
 Audit C (the live-only quirks of a laptop: off at the wrong hour, asleep, a power cut, flaky Wi-Fi), all ten findings, approved by
