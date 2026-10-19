@@ -59,7 +59,7 @@ const OS = typeof self !== 'undefined' && self.OrderStrategies ? self.OrderStrat
 /* 1.17.0: AgentCore's pageExitPasses, the one test of an exit on an agent's pair (agent-core.js loads after this file in
    index.html, so it is looked up when needed; with none loaded no agent owns anything and nothing asks) */
 const agentCore = () => (typeof self !== 'undefined' && self.AgentCore) || (typeof require === 'function' ? require('./agent-core.js') : null);
-const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten', 'plan', 'merge'];   // what ChartBridge counts, 10 a second at most (plan: 0.3.8; merge: 0.4.0)
+const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten', 'plan', 'merge', 'groupPreview', 'groupOrder'];   // 1.33.0: a group entry's preview and send count too   // what ChartBridge counts, 10 a second at most (plan: 0.3.8; merge: 0.4.0)
 const CANCEL_CHUNK = 6, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;
 const BE_LIMIT = 10;
 const RATE_REFUSAL = /order actions/i;
@@ -120,6 +120,48 @@ function create(env) {
   let cidSeq = 0;
   const newCid = () => 'p' + Date.now().toString(36) + '-' + (++cidSeq);
   const tradeMode = () => TR.v2 && TR.enabled;
+  /* 1.33.0 (ChartBridge 0.6.5, Anthony 2026-10-19, "Trade the group"): the ticket may pick a group in place of one account
+     ("group:g1"). One entry with its stop (the bracket's, or an Order Strategy's) goes to every member ChartBridge trades, each
+     sized by ChartBridge from the group's risk percent of its own max loss: the ticket asks for the sizes (groupPreview), shows each
+     member's size and dollar risk or why it sits out, and one confirm sends them with their accounts (groupOrder, refused whole by
+     ChartBridge if any account or size changed meanwhile). Close, Flatten all, B/E, Cancel all and the group's chart lines act on
+     the members a group entry trades: never the ones ChartBridge leaves out (tradeOut: the copier's, the bot's, an agent's).
+     env.groups(): the groups ChartBridge 0.6.5 sends (perMember), [{ id, name, members, riskPct, tradeOut }]. */
+  const GROUP_PREFIX = 'group:';
+  const isGroup = a => typeof a === 'string' && a.startsWith(GROUP_PREFIX);
+  const groupsNow = () => (typeof env.groups === 'function' ? env.groups() || [] : []).filter(g => g && typeof g.id === 'string' && g.perMember);
+  const groupFor = a => (isGroup(a) ? groupsNow().find(g => GROUP_PREFIX + g.id === a) || null : null);
+  /* the accounts an action on the ticket's account covers: the members of a group a group entry trades (review 4: never those
+     ChartBridge leaves out), else the account itself */
+  const outOf = g => (g && Array.isArray(g.tradeOut) ? g.tradeOut.filter(x => x && typeof x.account === 'string') : []);
+  const targets = a => { if (!isGroup(a)) return a ? [a] : []; const g = groupFor(a); if (!g) return []; const out = new Set(outOf(g).map(x => x.account)); return g.members.filter(m => !out.has(m)); };
+  const outWords = a => { const g = groupFor(a), o = outOf(g); return o.length ? 'left out: ' + o.map(x => x.account + ' (' + x.why + ')').join('; ') : ''; };
+  /* review 7: a member that left the group while it held something there: said on the ticket and the group's lines (its own stops
+     stay); account -> group name, until it is flat with nothing working */
+  const groupLeft = new Map();
+  let groupSeen = new Map();
+  let groupKey = '';
+  function groupsChanged() {
+    /* re-review 3: only when a group's members, tradeOut or a member's positions change (not on every accounts update) */
+    const k = JSON.stringify(groupsNow().map(g => [g.id, g.members, outOf(g)])) + '|' + [...TR.positions].filter(([, v]) => v.qty).map(([x, v]) => x + v.qty).join() + '|' + [...groupLeft.keys()].join();
+    if (k === groupKey) return;
+    groupKey = k;
+    const now = new Map(groupsNow().map(g => [g.id, new Set(g.members)]));
+    for (const [id, was] of groupSeen) {
+      const g = groupsNow().find(x => x.id === id), nowSet = now.get(id) || new Set();
+      for (const a of was) if (!nowSet.has(a) && holdsAny(a) && !groupLeft.has(a)) {
+        groupLeft.set(a, g ? g.name : id);
+        if (TR.account === GROUP_PREFIX + id) flash(a + ' left group ' + (g ? g.name : id) + ' while it holds a position or orders: its own stops stay on ' + a + '. Pick ' + a + ' on the ticket to manage them.', 'warn');
+      }
+    }
+    for (const a of [...groupLeft.keys()]) if (!holdsAny(a)) groupLeft.delete(a);
+    groupSeen = now;
+    env.changed();
+  }
+  const holdsAny = a => [...TR.positions].some(([k, v]) => k.startsWith(a + '|') && v.qty) || [...TR.orders.values()].some(o => o.account === a && OT.isWorking(o));
+  const leftWords = a => { const g = groupFor(a); if (!g) return ''; const l = [...groupLeft].filter(([, n]) => n === g.name).map(([x]) => x); return l.length ? l.join(', ') + ' left the group: ' + (l.length > 1 ? 'their' : 'its') + ' own stops stay' : ''; };
+  const nameOf = a => { if (!isGroup(a)) return a; const g = groupFor(a); return g ? 'group ' + g.name : a; };
+  let groupAsk = null;                                // { cid, side, kind, price, bracket, root, account, gen }: a preview asked for
 
   function send(obj) {
     if (!open()) return;
@@ -171,7 +213,7 @@ function create(env) {
     if (!TR.enabled) batchStop(() => true, 'trading went off (' + TR.reason.replace(/\.$/, '') + ')');
     else batchStop(e => !TR.accounts.includes(e.account), 'the account is no longer a trade account in ChartBridge');
     const was = TR.account, cameOn = TR.enabled && !wasOn;         // trading comes on: a load, a PIN entry, a reconnect
-    const pick = LP.orderAccount(TR.accounts, TR.enabled ? env.wantedAccount() : '');
+    const pick = LP.orderAccount(TR.accounts.concat(groupsNow().map(g => GROUP_PREFIX + g.id)), TR.enabled ? env.wantedAccount() : '');   // 1.33.0: a group stays picked
     TR.account = TR.enabled ? pick.account : '';                   // no order account while trading is off
     if (cameOn || !TR.enabled || TR.account !== was) setArmed(false);   // Armed always starts off; never restored
     env.changed();
@@ -223,7 +265,9 @@ function create(env) {
       case 'order': onOrder(m); return true;
       case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 });
         if (TR.snapLeft > 0 && --TR.snapLeft === 0) TR.snapReady = true; env.changed(); if (env.positionChanged) env.positionChanged(); return true;
-      case 'reject': if (!onRefused(m)) flash('Refused by ChartBridge: ' + m.reason, 'error'); env.changed(); return true;
+      case 'reject': if (groupAsk && m.cid === groupAsk.cid) groupAsk = null; if (!onRefused(m)) flash('Refused by ChartBridge: ' + m.reason, 'error'); env.changed(); return true;
+      case 'groupPreview': groupPreviewIn(m); return true;   // 1.33.0
+      case 'groupPlaced': groupPlacedIn(m); return true;
       /* 1.16.0 (protocol v3): a managed strategy's state, and a Merge's result (each shown plainly by the host) */
       case 'managed': if (!OS || typeof m.id !== 'string') return true;
         if (m.state === 'done') TR.managed.delete(m.id); else TR.managed.set(m.id, m);
@@ -265,6 +309,7 @@ function create(env) {
     if (kind !== 'market' && !(lastPrice() > 0)) { flash('No price yet: nothing was sent. Market orders and Flatten work.', 'warn'); return; }
     // 1.16.0: a stop-limit or an MIT entry only while ChartBridge says orderTypes is on (it refuses them otherwise)
     if ((kind === 'stopLimit' || kind === 'mit') && !sw('orderTypes')) { flash('Not sent: stop-limit and MIT orders are off in ChartBridge (orderTypes = off in config.txt).', 'warn'); return; }
+    if (isGroup(TR.account)) { groupEntry(side, kind, price); return; }   // 1.33.0: sized per member by ChartBridge, asked first
     const qty = qtyNow(), bad = OT.checkQty(qty, capNow(), R);
     if (bad) { flash('Not sent: ' + bad, 'error'); return; }
     const b = OT.cleanBracket(brackets[R], cap()), pos = TR.positions.get(TR.account + '|' + R);
@@ -321,6 +366,48 @@ function create(env) {
       (kind === 'market' ? '' : ' @ ' + fmt(price)) + (msg.strategy ? ' with strategy ' + strat.name : msg.bracket ? ' with bracket ' + b.stop + ' / ' + b.target + ' ticks'
         : reduces && strat ? ' (no strategy: it reduces the position)' : reduces && (b.stop > 0 || b.target > 0) ? ' (no bracket: it reduces the position)' : '') + ' · ' + TR.account, '');
   }
+  /* 1.33.0: a group entry. The bracket's stop is required (each member is sized from its stop loss); an Order Strategy is not
+     sent with a group (ChartBridge sizes from the bracket's stop). The preview's answer opens the confirm (env.confirmGroup). */
+  function groupEntry(side, kind, price) {
+    const R = root(), g = groupFor(TR.account);
+    if (!g) { flash('Not sent: the group is not known now (ChartBridge has not sent it). Pick it again.', 'error'); return; }
+    /* Anthony 2026-10-19 (answer 2): an Order Strategy may go with a group entry; its stop sizes each account */
+    const strat = sw('strategies') && typeof env.strategy === 'function' ? env.strategy() : null;
+    if (strat) { const why = OS.checkWire(strat.wire, TR.maxBracketTicks); if (why) { flash('Not sent: strategy ' + strat.name + ': ' + why, 'error'); return; } }
+    const b = OT.cleanBracket(brackets[R], cap());
+    if (!strat && !(b.stop > 0)) { flash('Not sent: a group entry needs a stop: each account is sized from its stop loss. Set the bracket\'s stop.', 'warn'); return; }
+    if (groupAsk && now() - groupAsk.at < 5000) { flash('A group entry is waiting for ChartBridge\'s sizes. Nothing new was sent.', 'warn'); return; }
+    const msg = Object.assign({ type: 'groupPreview', cid: newCid(), group: g.id, root: R, side, kind }, strat ? { strategy: Object.assign({}, strat.wire) } : { bracket: { stop: b.stop, target: b.target } });
+    if (kind !== 'market') msg.price = price;
+    if (kind === 'stopLimit') msg.limitOffset = 0;
+    groupAsk = { cid: msg.cid, side, kind, price, bracket: msg.bracket, strategy: msg.strategy, root: R, account: TR.account, gen: armGen, at: now() };
+    send(msg);
+    flash('Asking ChartBridge for each account\'s size in ' + g.name + '...', '');
+  }
+  function groupPreviewIn(m) {
+    const q = groupAsk;
+    if (!q || m.cid !== q.cid) return;
+    groupAsk = null;
+    const members = Array.isArray(m.members) ? m.members.filter(x => x && typeof x.account === 'string') : [];
+    const send2 = () => {
+      if (!TR.armed || armGen !== q.gen || root() !== q.root || TR.account !== q.account) { flash('Not sent: that group entry was for ' + q.root + ' on ' + nameOf(q.account) + (TR.armed && armGen === q.gen ? ', and the ticket is on ' + root() + ' on ' + nameOf(TR.account) + ' now.' : ' while Armed; Armed went off since.'), 'warn'); return; }
+      if (!open()) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return; }
+      const msg = Object.assign({ type: 'groupOrder', cid: newCid(), group: m.group, root: q.root, side: q.side, kind: q.kind }, q.strategy ? { strategy: q.strategy } : { bracket: q.bracket }, { sizes: members.map(x => x.account + ':' + x.size).join(',') });   // review 2: the accounts with their sizes
+      if (q.kind !== 'market') msg.price = q.price;
+      if (q.kind === 'stopLimit') msg.limitOffset = 0;
+      send(msg);
+      flash('Sent the group entry to ' + m.name + ': ' + members.filter(x => x.size > 0).map(x => x.account + ' ' + x.size).join(', ') + '.', '');
+    };
+    if (!members.some(x => x.size > 0)) { flash('Not sent: no account of ' + m.name + ' can take it: ' + members.map(x => x.account + ': ' + x.out).join('; ') + '.', 'warn'); return; }
+    if (typeof env.confirmGroup !== 'function' || env.confirmGroup(m, send2, () => flash('Not sent: the group entry was cancelled.', '')) === false) flash('Not sent: the group entry is confirmed in the order ticket\'s window.', 'warn');
+  }
+  function groupPlacedIn(m) {
+    const members = Array.isArray(m.members) ? m.members : [];
+    const placed = members.filter(x => x.size > 0), out = members.filter(x => !(x.size > 0));
+    flash((placed.length ? 'Group ' + m.name + ': placed ' + placed.map(x => x.account + ' ' + x.size).join(', ') + '.' : 'Group ' + m.name + ': nothing placed.') +
+      (out.length ? ' Not in it: ' + out.map(x => x.account + ' (' + x.out + ')').join('; ') + '.' : ''), out.some(x => /^refused/.test(x.out || '')) ? 'error' : out.length ? 'warn' : '');
+    env.changed();
+  }
   /** A click on a chart at a price (Shift+click buys, Shift+right click and Ctrl+click sell): a limit or a stop by the
       last price, as the order bar's chart has always placed it. */
   function placeAt(side, price) { sendOrder(side, OT.placeKind(side, price, lastPrice()), price); }
@@ -362,6 +449,7 @@ function create(env) {
   let beRun = null;                                                // { account, root, be, qty, queue: [id], sent, skipped, notes }
   function breakEven() {
     if (!ready()) return;
+    if (isGroup(TR.account)) { groupBreakEven(); return; }   // 1.33.0: each member's own stops to its own break-even
     if (beRun) { flash('B/E under way on ' + beRun.account + ' ' + beRun.root + ': ' + beRun.queue.length + ' left. Nothing new was sent.', 'warn'); return; }
     const account = TR.account, R = root(), pos = TR.positions.get(account + '|' + R);
     if (!pos || !pos.qty) { flash('B/E: no open position on ' + account + ' ' + R + '. Nothing was sent.', 'warn'); env.changed(); return; }
@@ -387,6 +475,42 @@ function create(env) {
     if (!left) return;
     beRun = { account, root: R, be, qty: pos.qty, queue: ids.slice(first.length), sent: first.length, skipped: 0, notes };
     bePump();
+  }
+  /* 1.33.0: B/E on a group: each member with a position moves its own ChartBridge stops to its own break-even (its own average
+     price), when the last price is past it; paced as B/E, the rest as ChartBridge's 10 a second allows. */
+  let gbeRun = null;
+  function groupBreakEven() {
+    if (gbeRun) { flash('B/E under way on the group: ' + gbeRun.queue.length + ' left. Nothing new was sent.', 'warn'); return; }
+    const R = root(), last = lastPrice(), items = [], notes = [];
+    if (!(last > 0)) { flash('No price yet: nothing was sent.', 'warn'); return; }
+    for (const a of targets(TR.account)) {
+      const pos = TR.positions.get(a + '|' + R);
+      if (!pos || !pos.qty) continue;
+      const be = OT.breakEvenPrice(pos.avgPrice, pos.qty, tickOf(R));
+      if (be === null) { notes.push(a + ': no average price yet'); continue; }
+      if (!OT.breakEvenAllowed(pos.qty, be, last)) { notes.push(a + ': not past break-even yet'); continue; }
+      const legs = OT.breakEvenLegs([...TR.orders.values()], a, R, pos.qty, be);
+      for (const id of legs.ids.filter(id => !inCancelAll(id))) items.push({ id, be, a });
+    }
+    if (!items.length) { flash('B/E on ' + nameOf(TR.account) + ': no ChartBridge stop to move; nothing was sent.' + (notes.length ? ' ' + notes.join('; ') + '.' : ''), 'warn'); env.changed(); return; }
+    const t = now();
+    if (!sameAction('gbe|' + TR.account + '|' + R, t)) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
+    gbeRun = { root: R, queue: items, sent: 0, notes };
+    gbePump();
+  }
+  function gbePump() {
+    const r = gbeRun;
+    if (!r) return;
+    const t = now(), recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
+    const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
+    if (room) {
+      const why = FRAMED || !TR.enabled ? 'trading went off' : !open() ? 'the connection to ChartBridge dropped' : !TR.armed ? 'Armed went off' : root() !== r.root ? 'the instrument changed' : '';
+      if (why) { gbeRun = null; flash('B/E on the group: ' + r.sent + ' sent; ' + r.queue.length + ' not sent: ' + why + '.', 'warn'); return; }
+      for (const x of r.queue.splice(0, room)) { send({ type: 'change', id: x.id, price: x.be }); r.sent++; }
+    }
+    if (!r.queue.length) { gbeRun = null; flash('B/E on the group: ' + r.sent + ' stop' + (r.sent === 1 ? '' : 's') + ' moved to each account\'s own break-even.' + (r.notes.length ? ' ' + r.notes.join('; ') + '.' : ''), r.notes.length ? 'warn' : ''); return; }
+    const oldest = actionTimes.find(x => x > t - CANCEL_GAP);
+    later(() => { if (gbeRun === r) gbePump(); }, Math.max(20, (oldest === undefined ? t : oldest) + CANCEL_GAP - t));
   }
   /* The rest of a paced B/E: each later chunk once the budget allows, re-checked before it goes (see breakEven). */
   function bePump() {
@@ -448,7 +572,11 @@ function create(env) {
   const batchItems = () => batch ? batch.groups.flatMap(g => g.queue.map(id => ({ id, account: g.account, root: g.root }))) : [];
   function cancelAll() {
     if (!ready()) return;
-    const account = TR.account, R = root(), pos = TR.positions.get(account + '|' + R), t = now();
+    if (isGroup(TR.account)) { for (const a of targets(TR.account)) cancelAllOn(a); return; }   // 1.33.0: every member's own orders
+    cancelAllOn(TR.account);
+  }
+  function cancelAllOn(account) {
+    const R = root(), pos = TR.positions.get(account + '|' + R), t = now();
     const ids = OT.cancelAllIds([...TR.orders.values()], account, R, pos ? pos.qty : 0);
     const keptNote = ids.kept ? ' Kept ' + ids.kept + ' order' + (ids.kept > 1 ? 's' : '') + ' protecting the open position (cancel those one by one, or Flatten).' : '';
     if (!ids.length) { flash('Nothing to cancel on ' + account + ' ' + R + '.' + keptNote, ''); return; }
@@ -560,6 +688,7 @@ function create(env) {
     const mvNote = moveRefusal(m);
     if (typeof m.id === 'string' && typeof m.cid === 'string' && TR.moving.has(m.id) && TR.moving.get(m.id).cid === m.cid) TR.moving.delete(m.id);
     if (mvNote) { flash('Refused by ChartBridge: ' + m.reason + ' ' + mvNote, 'error'); return true; }
+    if (typeof m.cid === 'string' && gmRefused(m)) { env.changed(); return true; }   // 1.33.0: a group move's member: said with the others
     const wasBatch = typeof m.id === 'string' && cancelSent.has(m.id);
     if (typeof m.id === 'string') cancelSent.delete(m.id);         // a refused cancel can go again at once (review 3 N1)
     /* A Cancel all's cancel refused for the rate (the page keeps 6 in 1.1 s, but a busy PC can deliver two of its
@@ -621,6 +750,13 @@ function create(env) {
     if (!ready(false)) return;
     const R = other || root();
     if (!sameAction(other ? 'flatten|' + other : 'flatten', now())) return;
+    if (isGroup(TR.account)) {   // 1.33.0: Close on a group closes every member's own position there (each its own Flatten)
+      const list = targets(TR.account);
+      for (const a of list) sendFlatten(a, R, false, 'all');
+      const ow = outWords(TR.account);
+      flash('Flatten sent for ' + nameOf(TR.account) + ' ' + R + ' (' + list.join(', ') + '): cancel their orders, close their positions at market.' + (ow ? ' ' + ow.charAt(0).toUpperCase() + ow.slice(1) + '.' : ''), '');
+      return;
+    }
     sendFlatten(TR.account, R, false, other ? 'all' : 'here');     // takes its orders off a Cancel all; sent again once if refused for the rate
     flash('Flatten sent for ' + TR.account + ' ' + R + ': cancel its orders, close the position at market.', '');
   }
@@ -655,11 +791,11 @@ function create(env) {
   function flattenAll() {
     try { dropNoStop(); flattened(null); } catch (e) { /* never in the way of the flatten */ }
     if (!ready(false)) return;
-    const one = true, account = TR.account;
+    const one = !isGroup(TR.account), account = TR.account;   // 1.33.0: a group's Flatten all covers every member
     if (faRun) { flash('Flatten all under way on ' + faRun.account + ': ' + faRun.queue.map(x => faName(faRun, x)).join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
     const items = [];
-    for (const a of [account]) for (const r of OT.flattenAllRoots([...TR.orders.values()], TR.positions, a, served, ROOTS)) items.push({ a, r });
-    if (!items.length) { flash('Flatten all: no position or working order on ' + account + '. Nothing was sent.', ''); return; }
+    for (const a of targets(account)) for (const r of OT.flattenAllRoots([...TR.orders.values()], TR.positions, a, served, ROOTS)) items.push({ a, r });
+    if (!items.length) { flash('Flatten all: no position or working order on ' + nameOf(account) + '. Nothing was sent.', ''); return; }
     const t = now();
     if (!sameAction('flattenAll|' + account, t)) return;
     const recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
@@ -667,9 +803,9 @@ function create(env) {
     const first = OT.paceChunks(items, recent, BE_LIMIT)[0];
     for (const x of first) sendFlatten(x.a, x.r, false, 'all');
     const rest = items.slice(first.length);
-    flash(first.length ? 'Flatten all sent for ' + account + ': ' + first.map(x => faName(run, x)).join(', ') + ' (cancel their orders, close their positions at market).' +
+    flash(first.length ? 'Flatten all sent for ' + nameOf(account) + ': ' + first.map(x => faName(run, x)).join(', ') + ' (cancel their orders, close their positions at market).' +
       (rest.length ? ' ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.' : '')
-      : 'Flatten all for ' + account + ': ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.', '');
+      : 'Flatten all for ' + nameOf(account) + ': ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.', '');
     if (!rest.length) return;
     faRun = Object.assign(run, { queue: rest, sent: first.slice() });
     faPump();
@@ -699,6 +835,7 @@ function create(env) {
   /* Chart actions (only while Armed): drag an order's label to move it, its x to cancel it. */
   const notShown = id => { const o = TR.orders.get(id); if (o && o.account === TR.account) return false; flash(o ? 'Not sent: that order is not on ' + TR.account + '.' : 'Not sent: that order is no longer working.', o ? 'error' : 'warn'); env.changed(); return true; };
   function moveOrder(id, price) {
+    if (isGroupLine(id)) { groupMove(id, price); return; }   // 1.33.0: every member's order there, to the same price
     if (!ready()) { env.changed(); return; }
     if (notShown(id)) return;
     /* An order in a Cancel all under way (queued, or its cancel just sent) is not moved: Cancel all wins and cancels
@@ -732,11 +869,19 @@ function create(env) {
     }).join('; ') + '.';
   }
   function cancelOrder(id) {
+    if (isGroupLine(id)) { groupCancel(id); return; }   // 1.33.0: the x on a group line cancels each member's order there
     if (!ready()) return;
     if (notShown(id)) return;
     send({ type: 'cancel', id });
     batchStop(x => x.id === id);                                   // sent now, not again with a Cancel all under way
     flash('Cancelling order ' + id, '');
+  }
+  function groupCancel(id) {
+    if (!ready()) return;
+    const l = groupLine(id);
+    if (!l) { flash('Not sent: that group line is no longer there.', 'warn'); return; }
+    for (const x of l.items) { send({ type: 'cancel', id: x.id }); batchStop(e => e.id === x.id); }
+    flash('Cancelling ' + l.items.length + ' order' + (l.items.length === 1 ? '' : 's') + ' of the group (' + l.items.map(x => x.account).join(', ') + ').', '');
   }
 
   /*
@@ -762,6 +907,7 @@ function create(env) {
      distance sent is the one the chart showed (F2 review) */
   function planMove(planId, price, from) {
     const p = OT.planIdOf(planId); if (!p) return;
+    if (isGroupLine(planId)) { groupPlan(planEntries(planId), p.which, (o, tick) => OT.planDrag(o, p.which, price, tick, from)); return; }   // 1.33.0: each member's entry, to the same price
     const o = planTarget(p.entry); if (!o) return;
     const r = OT.planDrag(o, p.which, price, tickOf(o.root), from);
     if (r.error) { env.changed(); flash(r.error, 'warn'); return; }
@@ -772,20 +918,135 @@ function create(env) {
   }
   function planRemove(planId) {
     const p = OT.planIdOf(planId); if (!p) return;
+    if (isGroupLine(planId)) { groupPlan(planEntries(planId), p.which, () => ({ ticks: null })); return; }
     const o = planTarget(p.entry); if (!o) return;
     sendPlan(o, p.which, null, 'Removing the planned ' + whichName(p.which) + ' of order ' + o.id + '.');
   }
   function planAdd(entryId, which) {
     if (which !== 'stop' && which !== 'target') return;
+    if (isGroupLine(entryId)) { const t = OT.cleanBracket(brackets[root()], cap())[which]; if (!(t > 0)) { flash('Not sent: the bracket ' + whichName(which) + ' for ' + root() + ' is 0.', 'warn'); return; } groupPlan(groupLine(entryId), which, () => ({ ticks: t })); return; }
     const o = planTarget(entryId); if (!o) return;
     const t = OT.cleanBracket(brackets[o.root], cap())[which];
     if (!(t > 0)) { flash('Not sent: the bracket ' + whichName(which) + ' for ' + o.root + ' is 0. Set it in the bracket boxes, then click +' + (which === 'stop' ? 'SL' : 'TP') + ' again.', 'warn'); return; }
     sendPlan(o, which, t, 'Planned ' + whichName(which) + ' added to order ' + o.id + ': ' + t + ' ticks from the fill.');
   }
+  /* 1.33.0: a group entry line's planned stop or target: one `plan` per member entry (ticks: from each one's own entry price,
+     so every member's line lands at the same price) */
+  /* the member entries under a group's planned line (each planned line's own entry) */
+  function planEntries(planLineId) {
+    const l = groupLine(planLineId);
+    return l ? { items: l.items.map(x => Object.assign({}, x, { id: x.plan && x.plan.parent })).filter(x => x.id) } : null;
+  }
+  function groupPlan(l, which, ticksOf) {
+    if (!ready()) { env.changed(); return; }
+    if (!l) { flash('Not sent: that group line is no longer there.', 'warn'); env.changed(); return; }
+    const done = [], bad = [];
+    for (const x of l.items) {
+      const o = TR.orders.get(x.id);
+      if (!o || !o.planned) { bad.push(x.account + ': no planned stop and target'); continue; }
+      const r = ticksOf(o, tickOf(o.root));
+      if (r.error) { bad.push(x.account + ': ' + r.error); continue; }
+      if (r.ticks !== null && r.ticks > cap()) { bad.push(x.account + ': ' + r.ticks + ' ticks is more than ChartBridge takes'); continue; }
+      send({ type: 'plan', cid: newCid(), id: o.id, [whichKey(which)]: r.ticks }); done.push(x.account);
+    }
+    flash('Planned ' + whichName(which) + ' of the group: ' + (done.length ? done.join(', ') + ' sent' : 'none sent') + (bad.length ? '; ' + bad.join('; ') : '') + '.', bad.length ? 'warn' : '');
+    env.changed();
+  }
   /** What a chart of root r shows for one account: the working orders, each resting entry's planned lines (0.3.8), and on
       an entry what can be added ("+SL", "+TP"); an order whose move waits for its answer carries the price asked for
       (movePending, 1.22.0). */
-  function chartOrders(account, r) {
+  function chartOrders(account, r) { return isGroup(account) ? groupChartOrders(account, r) : chartOrdersOne(account, r); }
+  /*
+   * 1.33.0 (Anthony 2026-10-19, answer 1): a group ticket's charts draw the group's order lines: one line per level (the members'
+   * orders of one role, side and kind at one price, and their planned lines), labelled with the group and how many accounts it
+   * covers ("Lucid x4"), each account's order in its tooltip. A line's id is "G~<role>~<side>~<kind>~<price in ticks>" (a planned
+   * line's, its entry line's id with ":sl" or ":tp"). Dragging it moves every member's order there to the SAME price; its x cancels
+   * each; +SL or +TP adds to each.
+   */
+  function groupBuckets(account, r) {
+    const g = groupFor(account), t = tickOf(r), out = new Map();
+    if (!g || !(t > 0)) return out;
+    const keyOf = o => 'G~' + (o.role || 'entry') + '~' + o.side + '~' + o.kind + '~' + Math.round(o.price / t);
+    for (const a of targets(account)) {
+      const own = chartOrdersOne(a, r), parentKey = new Map();
+      for (const o of own) if (!o.plan) parentKey.set(o.id, keyOf(o));
+      for (const o of own) {
+        const id = o.plan ? (parentKey.get(o.plan.parent) || 'G~?') + '~at' + Math.round(o.price / t) + ':' + (o.plan.role === 'stop' ? 'sl' : 'tp') : keyOf(o);   // review 7: one id per planned level
+        let b = out.get(id);
+        if (!b) { b = { id, items: [], parent: o.plan ? parentKey.get(o.plan.parent) : null }; out.set(id, b); }
+        b.items.push(Object.assign({ account: a }, o));
+      }
+    }
+    return out;
+  }
+  function groupChartOrders(account, r) {
+    const g = groupFor(account), out = [];
+    for (const b of groupBuckets(account, r).values()) {
+      const f = b.items[0], n = new Set(b.items.map(x => x.account)).size;
+      const left = b.items.reduce((s2, x) => s2 + Math.max(0, (+x.qty || 0) - (+x.filled || 0)), 0);
+      const extra = [outWords(account), leftWords(account)].filter(Boolean).join('\n');
+      const tip = (g ? 'Group ' + g.name : 'Group') + ': ' + b.items.map(x => x.account + ' ' + (x.plan ? (x.plan.role === 'stop' ? 'planned stop' : 'planned target') : (x.side === 'sell' ? 'SELL ' : 'BUY ') + (x.role === 'stop' ? 'STP' : x.role === 'target' ? 'TGT' : String(x.kind).toUpperCase())) + ' ' + Math.max(0, (+x.qty || 0) - (+x.filled || 0)) + ' @ ' + fmt(x.price)).join('\n') + (extra ? '\n' + extra : '');
+      const pend = b.items.every(x => x.movePending !== undefined && x.movePending === f.movePending) ? f.movePending : undefined;
+      const line = { id: b.id, side: f.side, kind: f.kind, price: f.price, qty: left, filled: 0, role: f.role, root: r,
+        group: (g ? g.name : 'group') + ' \u00d7' + n, groupTip: tip, members: b.items.map(x => x.id) };
+      if (f.plan) line.plan = { parent: b.parent, offset: f.plan.offset, role: f.plan.role };
+      if (f.adds) line.adds = f.adds;
+      if (pend !== undefined) line.movePending = pend;
+      out.push(line);
+    }
+    return out;
+  }
+  /* the member orders a group line stands for, read now (a line drawn a moment ago may cover fewer or more) */
+  function groupLine(id) {
+    const r = root(), plan = OT.planIdOf(id);
+    for (const b of groupBuckets(TR.account, r).values()) if (b.id === id) return { items: b.items, plan };
+    return null;
+  }
+  const isGroupLine = id => typeof id === 'string' && id.startsWith('G~');
+  let gmRun = null;                                  // a group line's move: { what, price, queue: [{ id, account, price }], sent: [], refused: Map(cid -> account) }
+  function groupMove(id, price) {
+    if (!ready()) { env.changed(); return; }
+    if (gmRun) { flash('A group move is under way: ' + gmRun.queue.length + ' left. Nothing new was sent.', 'warn'); env.changed(); return; }
+    const l = groupLine(id);
+    if (!l) { flash('Not sent: that group line is no longer there.', 'warn'); env.changed(); return; }
+    const items = l.items.filter(x => !inCancelAll(x.id));
+    const f = items[0] || l.items[0], what = f.role === 'stop' ? 'stops' : f.role === 'target' ? 'targets' : 'orders';
+    gmRun = { what, price, queue: items.map(x => ({ id: x.id, account: x.account })), sent: [], cids: new Map(), refused: [] };
+    gmPump();
+  }
+  function gmPump() {
+    const r = gmRun;
+    if (!r) return;
+    const t = now(), recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
+    const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
+    if (room) {
+      const why = FRAMED || !TR.enabled ? 'trading went off' : !open() ? 'the connection to ChartBridge dropped' : !TR.armed ? 'Armed went off' : '';
+      if (why) { for (const x of r.queue) r.refused.push(x.account + ': not sent (' + why + ')'); r.queue.length = 0; }
+      for (const x of r.queue.splice(0, room)) {
+        const cid = newCid();
+        r.cids.set(cid, x.account); r.sent.push(x.account);
+        send({ type: 'change', cid, id: x.id, price: r.price });   /* each member's move is the single path's (ChartBridge checks it as one account's) */
+        noteMoving(x.id, r.price, cid);
+      }
+    }
+    if (r.queue.length) { const oldest = actionTimes.find(x => x > t - CANCEL_GAP); later(() => { if (gmRun === r) gmPump(); }, Math.max(20, (oldest === undefined ? t : oldest) + CANCEL_GAP - t)); return; }
+    gmDoneRuns.push(r);
+    later(() => gmDone(r), 1500);                     /* the refusals come back by cid within a moment; then each member's result is said */
+    gmRun = null;
+  }
+  function gmDone(r) {
+    const i = gmDoneRuns.indexOf(r); if (i >= 0) gmDoneRuns.splice(i, 1);
+    const moved = r.sent.filter(a => !r.refused.some(x => x.startsWith(a + ':')));
+    flash('Group ' + r.what + ' to ' + fmt(r.price) + ': ' + (moved.length ? moved.join(', ') + ' moved' : 'none moved') + (r.refused.length ? '; ' + r.refused.join('; ') : '') + '.', r.refused.length ? 'warn' : '');
+    env.changed();
+  }
+  const gmDoneRuns = [];
+  /* a refused member move: kept for its run's report */
+  function gmRefused(m) {
+    for (const r of gmDoneRuns.concat(gmRun ? [gmRun] : [])) if (r.cids.has(m.cid)) { r.refused.push(r.cids.get(m.cid) + ': refused (' + m.reason + ')'); return true; }
+    return false;
+  }
+  function chartOrdersOne(account, r) {
     const out = [];
     for (const o of working(account, r)) {
       // 1.16.0: a strategy's entry has no planned lines to drag (ChartBridge refuses `plan` on it: cancel and place again)
@@ -957,6 +1218,9 @@ function create(env) {
     working, inCancelAll, batchLine, unsentNote, dismissUnsent,
     fmtUnit, bracketSelShown, typedTicks, committedTicks, setBracket, setUnit, setQty, pickPreset, savePreset, readPresets, flushBrackets, cancelBrackets,
     /** for tests (test/order-account.test.js): the inner steps, run on their own */
+    /** 1.33.0: the ticket picker's groups: [{ value: 'group:g1', label: 'Group Lucid (4)' }] (ChartBridge 0.6.5's, with members) */
+    groupChoices: () => (TR.enabled ? groupsNow().filter(g => g.members.length).map(g => ({ value: GROUP_PREFIX + g.id, label: 'Group ' + g.name + ' (' + g.members.length + ')' })) : []),
+    isGroup, groupMembers: a => targets(a), groupsChanged, groupOut: a => outWords(a), groupLeftWords: a => leftWords(a), groupOf: a => groupFor(a),
     _t: { batchStop, unsentCheck, actionSent, sendFlatten, onRefused, get batch() { return batch; } },
     /** for tests: the order actions sent in the last 1.1 s, and whether a B/E, Flatten all or Flatten retry is under way */
     busy: () => ({ be: !!beRun, flattenAll: !!faRun, retry: retry ? retry.list.map(f => f.account + ' ' + f.root) : [], recent: actionTimes.filter(x => x > now() - CANCEL_GAP).length }),
@@ -1075,6 +1339,9 @@ function wire($, core, ui) {
   function syncTradeAccounts() {
     const sel = $('oAcct');
     sel.replaceChildren(new Option('None', ''), ...TR.accounts.map(a => new Option(a, a)));   // DECISION 2026-10-14e: None first, nothing trades on it
+    /* 1.33.0 (ChartBridge 0.6.5): the groups after the accounts, "Group Lucid (4)": one entry to every member, sized per member */
+    const gs = core.groupChoices();
+    if (gs.length) { const og = document.createElement('optgroup'); og.label = 'Groups (sized by risk)'; for (const g of gs) og.appendChild(new Option(g.label, g.value)); sel.appendChild(og); }
     sel.value = TR.account;
     sel.disabled = !TR.accounts.length;                            // enabled again after a trading-off spell with no accounts (review 2, S1); never locked by a Cancel all (review 2 S1)
   }
@@ -1095,6 +1362,11 @@ function wire($, core, ui) {
      picked last for this root stays picked even over the cap, so a click says why it is not sent (checkQty). */
   function renderQty(r, cap) {
     const q = $('oQty'), opts = OT.qtyOptions(cap);
+    /* review 7: on a group the size is ChartBridge's per account: the ticket says the group's risk in place of the qty */
+    const g = core.isGroup(TR.account) ? core.groupOf(TR.account) : null;
+    q.hidden = !!g;
+    if (g) { $('oQtyCap').textContent = 'risk ' + (g.riskPct > 0 ? g.riskPct + '%' : 'off') + ' of each max loss'; $('oQtyCap').title = 'Each account is sized by ChartBridge from the group\'s risk percent of its own max loss'; return; }
+    $('oQtyCap').title = '';
     for (const o of opts) q.options[o.n - 1].disabled = !o.ok;
     q.value = String(qtys[r] || 1);
     const capped = cap < OT.QTY_CHOICES;
@@ -1157,7 +1429,15 @@ function wire($, core, ui) {
   function renderPositionInfo() {
     const el = $('oPos'), other = $('oOther'), legsEl = $('oLegs');
     if (!TR.v2 || !TR.enabled) { if (posKey !== '') { posKey = ''; el.textContent = ''; other.textContent = ''; legsEl.textContent = ''; } return; }
-    const r = ui.root(), pos = TR.positions.get(TR.account + '|' + r), dp = ui.precision();
+    const r = ui.root(), dp = ui.precision();
+    /* review 7: on a group, each member's position here, and the members left out or that left */
+    if (core.isGroup(TR.account)) {
+      const parts = core.groupMembers(TR.account).map(a => { const p = TR.positions.get(a + '|' + r); return a + ' ' + (p && p.qty ? (p.qty > 0 ? '+' : '') + p.qty : 'flat'); });
+      const t = parts.join(' · ') + [core.groupOut(TR.account), core.groupLeftWords(TR.account)].filter(Boolean).map(x => ' · ' + x).join('');
+      if (posKey !== 'g|' + t) { posKey = 'g|' + t; el.textContent = t; el.title = t; el.className = 'oinfo pz flat'; other.textContent = ''; legsEl.textContent = ''; }
+      return;
+    }
+    const pos = TR.positions.get(TR.account + '|' + r);
     const last = pos && pos.qty ? ui.lastPrice() : null;
     const key = [r, TR.account, pos ? pos.qty + '@' + pos.avgPrice : '', last, dp, ui.pointValue(r), TR.orders.size, [...TR.orders.values()].map(o => o.id + o.state + o.qty + o.filled + o.price).join(), [...TR.positions].map(([k, v]) => k + v.qty).join()].join('|');
     if (key === posKey) return;

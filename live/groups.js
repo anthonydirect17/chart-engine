@@ -29,6 +29,14 @@
  * (LINKS_KEY): groups.txt has no place for it, since ChartBridge 0.6.2's groupSave refuses any key it does not know and keeps a
  * line's extra fields only as written there. A group whose rules differ from its type's current values shows "rules differ from
  * <type>: Update", and a member whose own type is another is named; warnings only, nothing is blocked.
+ * Chart 1.33.0 (ChartBridge 0.6.5, Anthony 2026-10-19, PRIORITY): a group may hold accounts of different types and sizes. Each member
+ * carries its own rules (account size, daily loss, drawdown and type, floor stops at, target, consistency, max minis and micros);
+ * the group keeps what is shared (name, Type, hero, No hedging, the risk percent) and its own rules stay as the rules of a member
+ * with none of its own (every member of a group made before 0.6.5). Anthony: "I shouldnt have to manually assign the account
+ * types": joining takes the account's rules from its type on The Desk (GET /api/chart-accounts accountType, GET /api/account-types),
+ * a number set on the account itself on The Desk winning over the type's (its source "account"), and asks only the highest close
+ * (prefilled from The Desk's seed floor plus the drawdown when The Desk has one). Only an account with no type on The Desk gets the
+ * full rules form. deskRules, rulesForm, rulesCheck, memberRulesMessage below; the Accounts tab draws them (live/accounts.js).
  * Made-up names only in tests and docs (Lucid, Apex, SIM-A, SIM-B).
  */
 (function (root, factory) {
@@ -61,13 +69,18 @@ function parseMoney(text) {
 /** The box's text for a number ChartBridge sent (null: empty). */
 const moneyBox = v => (isNum(v) && v > 0 ? String(+v.toFixed(2)) : '');
 
-/** The firm's rules in one line: "$50,000 · daily $1,000 · drawdown $2,000 end of day, stops at $50,100 · target $3,000". */
+/** The firm's rules in one line: "$50,000 · daily $1,000 · drawdown $2,000 end of day, stops at $50,100 · target $3,000"; 1.33.0:
+ *  a member's rules add "max 4 minis / 40 micros" when the firm caps the size. */
 function summary(g) {
   if (!g) return '';
   return [usd(g.size), 'daily ' + (isNum(g.dailyLoss) && g.dailyLoss > 0 ? usd(g.dailyLoss) : 'none'),
     'drawdown ' + usd(g.drawdown) + ' ' + (TYPE_WORD[g.drawdownType] || g.drawdownType) + (isNum(g.lockAt) && g.lockAt > 0 ? ', stops at ' + usd(g.lockAt) : ''),
-    'target ' + (isNum(g.target) && g.target > 0 ? usd(g.target) : 'none')].concat(isNum(g.consistency) && g.consistency > 0 ? ['consistency ' + g.consistency + '%'] : []).join(' · ');
+    'target ' + (isNum(g.target) && g.target > 0 ? usd(g.target) : 'none')].concat(isNum(g.consistency) && g.consistency > 0 ? ['consistency ' + g.consistency + '%'] : [])
+    .concat(maxText(g) ? [maxText(g)] : []).join(' · ');
 }
+/** 1.33.0: "max 4 minis / 40 micros" ('' when neither is capped; "max - minis / 40 micros" when one is) */
+const maxText = r => (r && ((isNum(r.maxMinis) && r.maxMinis > 0) || (isNum(r.maxMicros) && r.maxMicros > 0))
+  ? 'max ' + (r.maxMinis > 0 ? r.maxMinis : '-') + ' minis / ' + (r.maxMicros > 0 ? r.maxMicros : '-') + ' micros' : '');
 /** 1.28.0: the Type in a word ("Evals", "Funded", "type not set"), and the default hero's words ("hero Demo", "no hero"); heroName:
  *  the hero's name for a build (the PC helper's), else the build itself. */
 const typeText = g => (g && g.accountType === 'eval' ? 'Evals' : g && g.accountType === 'funded' ? 'Funded' : 'type not set');
@@ -96,6 +109,30 @@ function groupMessage(f, others, id, cid) {
   if (!name || name.length > NAME_MAX) return { error: 'Name: 1 to ' + NAME_MAX + ' characters.', field: 'name' };
   if (/[\u0000-\u001f\u007f"\\]/.test(name)) return { error: 'Name: plain letters, numbers and spaces.', field: 'name' };
   if ((others || []).some(g => g && g.id !== id && String(g.name).toLowerCase() === name.toLowerCase())) return { error: 'A group named ' + name + ' is there already.', field: 'name' };
+  const rc = rulesCheck(f);
+  if (rc.error) return rc;
+  const n = rc.rules, con = n.consistency, type = n.drawdownType;
+  /* 1.33.0 (ChartBridge 0.6.5): the risk percent, of each member's max loss (its drawdown amount); empty or 0 is off. Sent only
+     when the dialog has the box (riskPct given), so an older ChartBridge (it refuses a key it does not know) is never sent one */
+  let risk;
+  if (f.riskPct !== undefined) {
+    const rt = String(f.riskPct === null ? '' : f.riskPct).trim().replace(/%$/, '').trim();
+    risk = rt === '' ? 0 : /^(?:0|[1-9][0-9]?|100)(?:\.[0-9]{1,2})?$/.test(rt) && Number(rt) <= 100 ? Number(rt) : NaN;
+    if (!isFinite(risk)) return { error: 'Risk: a percent of each account\'s max loss from 0.01 to 100, or empty for off.', field: 'riskPct' };
+  }
+  const at = f.accountType === undefined || f.accountType === null ? '' : f.accountType, hero = String(f.hero === undefined || f.hero === null ? '' : f.hero).trim();
+  if (!ACCOUNT_TYPES.some(t => t[0] === at)) return { error: 'Type: Evals, Funded or not set.', field: 'accountType' };
+  if (hero && !HERO_RX.test(hero)) return { error: 'Hero on duty: a build name of 1 to 64 letters, digits, dots, underscores or hyphens, or none.', field: 'hero' };
+  return { msg: Object.assign({ type: 'groupSave' }, cid ? { cid } : {}, id ? { group: id } : {}, { name, noHedge: f.noHedge !== false,
+    dailyLoss: n.dailyLoss, drawdown: n.drawdown, drawdownType: type, target: n.target, size: n.size, lockAt: n.lockAt, consistency: con }, f.accountType !== undefined ? { accountType: at || '-' } : {}, f.hero !== undefined ? { hero: hero || '-' } : {},
+    risk !== undefined ? { riskPct: risk } : {}) };   // 1.28.0: absent keeps them (ChartBridge 0.6.1); 1.33.0: riskPct too (0.6.5)
+}
+/**
+ * 1.33.0: one set of rules as typed ({ size, dailyLoss, drawdown, drawdownType, lockAt, target, consistency, maxMinis, maxMicros },
+ * boxes as text) checked as ChartBridge checks them: { rules } (numbers, 0 for none) or { error, field }. The group's dialog and a
+ * member's rules form both use it.
+ */
+function rulesCheck(f) {
   const n = {};
   for (const [k, label, need] of [['size', 'Account size', true], ['dailyLoss', 'Daily loss limit', false], ['drawdown', 'Drawdown size', true], ['lockAt', 'Floor stops at', false], ['target', 'Profit target', false]]) {
     const v = parseMoney(f[k]);
@@ -108,17 +145,83 @@ function groupMessage(f, others, id, cid) {
   const ct = String(f.consistency === undefined || f.consistency === null ? '' : f.consistency).trim().replace(/%$/, '').trim();
   const con = ct === '' ? 0 : /^(?:[1-9][0-9]?|100)(?:\.[0-9]{1,2})?$/.test(ct) && Number(ct) <= 100 ? Number(ct) : NaN;
   if (!isFinite(con)) return { error: 'Consistency: a percent from 1 to 100, or empty for none.', field: 'consistency' };
+  n.consistency = con;
   const type = f.drawdownType;
   if (!TYPES.some(t => t[0] === type)) return { error: 'Drawdown type: end of day, intraday or static.', field: 'drawdownType' };
+  n.drawdownType = type;
   if (n.drawdown >= n.size) return { error: 'The drawdown must be less than the account size.', field: 'drawdown' };
   if (n.lockAt > 0 && type === 'static') return { error: 'Floor stops at is for a trailing drawdown only (leave it empty for static).', field: 'lockAt' };
   if (n.lockAt > 0 && n.lockAt <= n.size - n.drawdown) return { error: 'Floor stops at must be above the starting floor (' + usd(n.size - n.drawdown) + ').', field: 'lockAt' };
-  const at = f.accountType === undefined || f.accountType === null ? '' : f.accountType, hero = String(f.hero === undefined || f.hero === null ? '' : f.hero).trim();
-  if (!ACCOUNT_TYPES.some(t => t[0] === at)) return { error: 'Type: Evals, Funded or not set.', field: 'accountType' };
-  if (hero && !HERO_RX.test(hero)) return { error: 'Hero on duty: a build name of 1 to 64 letters, digits, dots, underscores or hyphens, or none.', field: 'hero' };
-  return { msg: Object.assign({ type: 'groupSave' }, cid ? { cid } : {}, id ? { group: id } : {}, { name, noHedge: f.noHedge !== false,
-    dailyLoss: n.dailyLoss, drawdown: n.drawdown, drawdownType: type, target: n.target, size: n.size, lockAt: n.lockAt, consistency: con }, f.accountType !== undefined ? { accountType: at || '-' } : {}, f.hero !== undefined ? { hero: hero || '-' } : {}) };   // 1.28.0: absent keeps them (ChartBridge 0.6.1)
+  for (const [k, label] of [['maxMinis', 'Max minis'], ['maxMicros', 'Max micros']]) {
+    if (f[k] === undefined) continue;
+    const t = String(f[k] === null ? '' : f[k]).trim();
+    if (t !== '' && !/^(?:0|[1-9][0-9]{0,3})$/.test(t)) return { error: label + ': whole contracts from 1 to 1000, or empty for none.', field: k };
+    const v = t === '' ? 0 : Number(t);
+    if (v > 1000) return { error: label + ': whole contracts from 1 to 1000, or empty for none.', field: k };
+    n[k] = v;
+  }
+  return { rules: n };
 }
+/** 1.33.0: the rule keys of a message (accountGroup, memberRules) from checked rules and The Desk's type id (or none). */
+function ruleKeys(r, typeId) {
+  return Object.assign({ size: r.size, dailyLoss: r.dailyLoss || 0, drawdown: r.drawdown, drawdownType: r.drawdownType, lockAt: r.lockAt || 0, target: r.target || 0, consistency: r.consistency || 0,
+    maxMinis: r.maxMinis || 0, maxMicros: r.maxMicros || 0 }, typeId && TYPE_ID_RX.test(typeId) ? { typeId } : {});
+}
+/** 1.33.0: memberRules for a member's rules form ({ ...boxes, typeId }): { msg } or { error, field }. */
+function memberRulesMessage(account, f, cid) {
+  const rc = rulesCheck(f);
+  if (rc.error) return rc;
+  return { msg: Object.assign({ type: 'memberRules' }, cid ? { cid } : {}, { account }, ruleKeys(rc.rules, f.typeId)) };
+}
+/** 1.33.0: a member's rules form's boxes from rules (as ChartBridge or deskRules gave them; null numbers are empty boxes). */
+function rulesForm(r) {
+  r = r || {};
+  const whole = v => (isNum(v) && v > 0 ? String(Math.round(v)) : '');
+  return { size: moneyBox(r.size), dailyLoss: moneyBox(r.dailyLoss), drawdown: moneyBox(r.drawdown), drawdownType: r.drawdownType || 'eod', lockAt: moneyBox(r.lockAt), target: moneyBox(r.target),
+    consistency: isNum(r.consistency) && r.consistency > 0 ? String(r.consistency) : '', maxMinis: whole(r.maxMinis), maxMicros: whole(r.maxMicros), typeId: typeof r.typeId === 'string' ? r.typeId : '' };
+}
+/**
+ * 1.33.0 (Anthony 2026-10-19: "match the accounts going into a group to our desk pool ... so its all automatic"): an account's rules
+ * from The Desk. row: its GET /api/chart-accounts row (live/accounts.js cleanDesk), types: the account types list (cleanTypes).
+ * The type's rules, then each number Anthony set on the account itself on The Desk (source "account") in its place: account size,
+ * daily loss limit, and the trailing drawdown (a trailing type's drawdown). Returns { rules, type, from: words, overrides: [words] }
+ * or { error } when there is nothing to take them from (no type on The Desk, its type not on the list, or a size, drawdown or
+ * drawdown type missing): the page then shows the full form.
+ */
+function deskRules(row, types) {
+  const at = row && row.accountType;
+  if (!at) return { error: 'no account type on The Desk' };
+  const t = (types || []).find(x => x.id === at.id);
+  if (!t) return { error: 'its account type (' + (at.name || at.id) + ') is not on The Desk\'s list now' };
+  const r = { size: t.size, dailyLoss: t.dailyLoss, drawdown: t.drawdown, drawdownType: t.drawdownType, lockAt: lockOf(t), target: t.target, consistency: t.consistency, maxMinis: t.maxMinis, maxMicros: t.maxMicros, typeId: t.id };
+  const src = row.source && typeof row.source === 'object' ? row.source : {}, over = [];
+  if (src.account_size === 'account' && posMoney(row.account_size)) { r.size = row.account_size; over.push('account size ' + usd(r.size)); }
+  if (src.daily_loss_limit === 'account' && posMoney(row.daily_loss_limit)) { r.dailyLoss = row.daily_loss_limit; over.push('daily loss ' + usd(r.dailyLoss)); }
+  if (src.trailing_drawdown === 'account' && posMoney(row.trailing_drawdown) && r.drawdownType !== 'static') { r.drawdown = row.trailing_drawdown; over.push('drawdown ' + usd(r.drawdown)); }
+  const missing = [[!r.size, 'account size'], [!r.drawdown, 'drawdown size'], [!r.drawdownType, 'drawdown type']].filter(x => x[0]).map(x => x[1]);
+  if (missing.length) return { error: typeLabel(t) + ' has no ' + missing.join(', ') };
+  const rc = rulesCheck(Object.assign(rulesForm(r), { drawdownType: r.drawdownType }));
+  if (rc.error) return { error: typeLabel(t) + ': ' + rc.error };
+  return { rules: Object.assign(rc.rules, { typeId: t.id }), type: t, from: typeLabel(t), overrides: over };
+}
+/** 1.33.0: the "highest close so far" prefill from The Desk's seed floor (its seed_floor for the account plus the drawdown), or null
+ *  when The Desk has none for it: { value, words }. */
+function seedHigh(row, rules) {
+  const f = row && posMoney(row.seedFloor);
+  if (!f || !rules || !(rules.drawdown > 0)) return null;
+  const v = Math.round((f + rules.drawdown) * 100) / 100;
+  return { value: v, date: row.seedDate || '', words: 'The Desk\'s seed floor ' + usd(f) + (row.seedDate ? ' (' + row.seedDate + ')' : '') + ' plus the drawdown ' + usd(rules.drawdown) };
+}
+/** 1.33.0: the risk percent in words, and one member's dollars at it (the percent of its max loss, its drawdown amount). */
+/** 1.33.0: ChartBridge 0.6.5 or later keeps each member's own rules (its hello's version, "0.6.5"). */
+function perMemberVersion(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(v || ''));
+  if (!m) return false;
+  const n = [+m[1], +m[2], +m[3]];
+  return n[0] > 0 || n[1] > 6 || (n[1] === 6 && n[2] >= 5);
+}
+const riskText = g => (g && isNum(g.riskPct) && g.riskPct > 0 ? 'risk ' + g.riskPct + '% of each account\'s max loss' : 'risk off');
+const riskDollars = (g, r) => (g && isNum(g.riskPct) && g.riskPct > 0 && r && isNum(r.drawdown) && r.drawdown > 0 ? Math.round(g.riskPct * r.drawdown) / 100 : null);
 /** groupSave for a group as ChartBridge sent it, with one change (a new name, the switch): every field, as the contract asks. */
 function saveFrom(g, change, cid) {
   const x = Object.assign({}, g, change || {});
@@ -129,7 +232,7 @@ function saveFrom(g, change, cid) {
 function formOf(g) {
   if (!g) return { name: '', size: '50000', dailyLoss: '', drawdown: '2000', drawdownType: 'eod', lockAt: '', target: '', consistency: '', noHedge: true };
   return { name: g.name, size: moneyBox(g.size), dailyLoss: moneyBox(g.dailyLoss), drawdown: moneyBox(g.drawdown), drawdownType: g.drawdownType, lockAt: moneyBox(g.lockAt), target: moneyBox(g.target),
-    consistency: isNum(g.consistency) && g.consistency > 0 ? String(g.consistency) : '', noHedge: g.noHedge !== false };
+    consistency: isNum(g.consistency) && g.consistency > 0 ? String(g.consistency) : '', noHedge: g.noHedge !== false, riskPct: isNum(g.riskPct) && g.riskPct > 0 ? String(g.riskPct) : '' };
 }
 
 /** The join question's words for a group: an intraday drawdown trails the balance with open P&L, so "highest balance so far
@@ -141,8 +244,10 @@ function highCloseDefault(g, account) {
   return Math.max(size, bal);
 }
 /** accountGroup: into a group with the highest close typed ('' : none, ChartBridge then takes the prefill's rule), or out (group null). */
-function joinMessage(account, groupId, highText, cid, word) {
+function joinMessage(account, groupId, highText, cid, word, rules) {
   const m = Object.assign({ type: 'accountGroup' }, cid ? { cid } : {}, { account, group: groupId || null });
+  /* 1.33.0 (ChartBridge 0.6.5): the account's own rules ({ rules, typeId } from rulesCheck or deskRules) go with the join */
+  if (groupId && rules) Object.assign(m, ruleKeys(rules, rules.typeId));
   if (groupId && highText !== undefined && highText !== null && String(highText).trim() !== '') {
     const v = parseMoney(highText);
     if (!(v > 0) || v > MONEY_MAX) return { error: (word || 'Highest close so far') + ': dollars above $0, or empty.' };
@@ -165,7 +270,11 @@ function cleanGroups(m) {
       drawdownType: g.drawdownType, target: isNum(g.target) ? g.target : null, size: isNum(g.size) ? g.size : null, lockAt: isNum(g.lockAt) ? g.lockAt : null, consistency: isNum(g.consistency) ? g.consistency : null,
       accountType: g.accountType === 'eval' || g.accountType === 'funded' ? g.accountType : null, hero: typeof g.hero === 'string' && HERO_RX.test(g.hero) ? g.hero : null,
       members: Array.isArray(g.members) ? g.members.filter(x => typeof x === 'string') : [], side: ['long', 'short', 'mixed'].includes(g.side) ? g.side : null,
-      holders: Array.isArray(g.holders) ? g.holders.filter(h => h && typeof h.account === 'string') : [] }));
+      holders: Array.isArray(g.holders) ? g.holders.filter(h => h && typeof h.account === 'string') : [],
+      /* 1.33.0: ChartBridge 0.6.5 sends riskPct and ownRules (perMember: it keeps each member's own rules) */
+      perMember: 'riskPct' in g && Array.isArray(g.ownRules), riskPct: isNum(g.riskPct) && g.riskPct > 0 ? g.riskPct : null, ownRules: Array.isArray(g.ownRules) ? g.ownRules.filter(x => typeof x === 'string') : [],
+      /* review 4: the members a group entry leaves out (the copier's, the bot's, an agent's), with why */
+      tradeOut: Array.isArray(g.tradeOut) ? g.tradeOut.filter(x => x && typeof x.account === 'string' && typeof x.why === 'string') : [] }));
 }
 
 /* ---------------- 1.30.0 (wave 5, Anthony 2026-10-16): account types, the one ledger on The Desk (GET /api/account-types).
@@ -191,7 +300,8 @@ function cleanTypes(json) {
       size: posMoney(t.account_size), dailyLoss: posMoney(t.daily_loss), drawdown: posMoney(t.drawdown),
       drawdownType: TYPES.some(x => x[0] === t.drawdown_type) ? t.drawdown_type : null, lockAt: posMoney(t.lock_at), target: posMoney(t.profit_target),
       consistency: isNum(t.consistency_pct) && t.consistency_pct > 0 && t.consistency_pct <= 100 ? t.consistency_pct : null,
-      status: t.status === 'checked' ? 'checked' : 'not_checked', version: Number.isInteger(t.version) && t.version >= 0 ? t.version : 0 });
+      status: t.status === 'checked' ? 'checked' : 'not_checked', version: Number.isInteger(t.version) && t.version >= 0 ? t.version : 0,
+      maxMinis: Number.isInteger(t.max_nq) && t.max_nq > 0 && t.max_nq <= 1000 ? t.max_nq : null, maxMicros: Number.isInteger(t.max_mnq) && t.max_mnq > 0 && t.max_mnq <= 1000 ? t.max_mnq : null });   // 1.33.0: the firm's max size
     out[out.length - 1].lockAt = lockOf(out[out.length - 1]);
   }
   out.sort((a, b) => a.firm.localeCompare(b.firm, 'en', { sensitivity: 'base' }) || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }) || (a.id < b.id ? -1 : 1));
@@ -402,7 +512,8 @@ function membersOff(g, link, typeOfAccount) {
 return { NAME_MAX, MONEY_MAX, TYPES, TYPE_WORD, ACCOUNT_TYPES, HERO_RX, typeText, heroText, usd, parseMoney, moneyBox, summary, membersText, sideText, groupMessage, saveFrom, formOf,
   highCloseDefault, highWord, joinMessage, limitsMessage, cleanGroups,
   TYPE_ID_RX, TYPES_CACHE_KEY, LINKS_KEY, cleanTypes, typeLabel, typeForm, rulesDiffer, typeLimits, applyWords, applySend, TRAILING_FLOOR_WORDS, asOfText, readTypesCache, writeTypesCache, readLinks, saveLink, membersOff,
-  PLAN_OTHER, typeParts, stageRank, usedFirms, typeTree, cascadeOf, cascadeStart, cascadePick, cascadeView };
+  PLAN_OTHER, typeParts, stageRank, usedFirms, typeTree, cascadeOf, cascadeStart, cascadePick, cascadeView,
+  maxText, perMemberVersion, rulesCheck, ruleKeys, memberRulesMessage, rulesForm, deskRules, seedHigh, riskText, riskDollars };
 });
 
 /* ======================================================================== GroupsPage (browser only) */
@@ -469,11 +580,18 @@ function mountSettings(host) {
         (off.length ? `<span class="gp-differ ws-warn"><span class="gp-dt">${esc(off.slice(0, 3).map(x => x.account + ' is ' + (x.type.firm ? x.type.firm + ' ' : '') + x.type.name).join('; ') + (off.length > 3 ? '; and ' + (off.length - 3) + ' more' : ''))}: not the group's type</span></span>` : '');
       return lines ? '<span class="gp-tlines">' + lines + '</span>' : '';
     };
+    /* 1.33.0 (ChartBridge 0.6.5): how many members have rules of their own, and the risk percent with each member's dollars */
+    const ownText = g => (g.perMember ? (g.ownRules.length ? ' (' + (g.ownRules.length === g.members.length ? 'each' : g.ownRules.length) + ' with its own rules)' : '') + ' · ' + GC.riskText(g) + riskEach(g) : '');
+    const riskEach = g => {
+      if (!(g.riskPct > 0) || !F || !F.S || !Array.isArray(F.S.accounts)) return '';
+      const each = g.members.map(n => { const a = F.S.accounts.find(x => x.name === n), r = a && a.rules ? a.rules : g, d = GC.riskDollars(g, r); return d !== null ? n + ' ' + GC.usd(d) : null; }).filter(Boolean);
+      return each.length ? ' (' + each.join(', ') + ')' : '';
+    };
     const fromText = g => { const l = links[g.id]; if (!l) return ''; const t = typeById(l.id); return ' · from ' + (t ? GC.typeLabel(t) : l.label); };
     const rows = list.map(g => {
       if (P.confirm === g.id) return `<div class="gp-row gp-ask" role="listitem"><span class="gp-askt">Delete ${esc(g.name)}? ${g.members.length ? 'Its ' + esc(GC.membersText(g)) + ' go to None.' : 'It has no accounts.'}</span>` +
         `<button type="button" class="ws-btn gp-yes" data-gp="del-yes" data-id="${esc(g.id)}">Delete</button><button type="button" class="ws-btn" data-gp="del-no">Keep</button></div>`;
-      return `<div class="gp-row" role="listitem" data-id="${esc(g.id)}"><span class="gp-txt"><b class="gp-name">${esc(g.name)}</b><span class="gp-sum" title="${esc(GC.summary(g) + ' · ' + GC.membersText(g) + ' · ' + GC.sideText(g))}">${esc(GC.summary(g))} · ${esc(GC.membersText(g))} · ${esc(GC.typeText(g))} · ${esc(GC.heroText(g, heroName))}${g.side ? ' · ' + esc(g.side === 'mixed' ? 'long and short' : g.side) : ''}${esc(fromText(g))}</span></span>` +
+      return `<div class="gp-row" role="listitem" data-id="${esc(g.id)}"><span class="gp-txt"><b class="gp-name">${esc(g.name)}</b><span class="gp-sum" title="${esc(GC.summary(g) + ' · ' + GC.membersText(g) + ' · ' + GC.sideText(g))}">${esc(GC.summary(g))} · ${esc(GC.membersText(g))}${esc(ownText(g))} · ${esc(GC.typeText(g))} · ${esc(GC.heroText(g, heroName))}${g.side ? ' · ' + esc(g.side === 'mixed' ? 'long and short' : g.side) : ''}${esc(fromText(g))}</span></span>` +
         `<button type="button" class="gp-switch" role="switch" aria-checked="${g.noHedge}" data-gp="hedge" data-id="${esc(g.id)}" title="No hedging inside this group: counts positions and working entries; covers agents, bots, copier followers and your ticket; exits always go"><span class="gp-knob" aria-hidden="true"></span><span class="visually-hidden">No hedging in ${esc(g.name)}</span></button>` +
         `<button type="button" class="ws-btn gp-b" data-gp="edit" data-id="${esc(g.id)}">Edit</button><button type="button" class="ws-btn gp-b" data-gp="rename" data-id="${esc(g.id)}">Rename</button><button type="button" class="ws-btn gp-b" data-gp="del" data-id="${esc(g.id)}">Delete</button>${typeLines(g)}</div>`;
     }).join('');
@@ -513,6 +631,8 @@ function mountSettings(host) {
   /* Edit and New: the firm's rules (Anthony's approved mockup: the name, the firm's rules, one direction) */
   function openRules(g, refill) {
     const d = host.dialog, f = GC.formOf(g);
+    /* 1.33.0: the risk box only for a ChartBridge 0.6.5 (its groups carry riskPct; with no group yet, its hello's version) */
+    const perMember = g ? !!g.perMember : (F.S.groups || []).some(x => x.perMember) || GC.perMemberVersion(F.S.version);
     /* 1.30.0: the Account type select at the top: Not set, then every type of The Desk's ledger ("(not checked)" until checked).
        1.32.0: as three short selects, Firm, Plan and Size (the firms in use on The Desk first); only the last
        (or Not set) fills or clears */
@@ -530,10 +650,10 @@ function mountSettings(host) {
       ${typeSel}
       <div class="gp-f gp-fname"><label for="gp-name">Group name</label><input class="ws-in gp-in" id="gp-name" type="text" maxlength="${GC.NAME_MAX}" autocomplete="off" spellcheck="false" value="${esc(f.name)}"></div>
       <h3 class="gp-h">The firm's rules</h3>
-      <p class="ws-help">Set once. With NinjaTrader's balance these give each account its room, so the agent sizes on real numbers.</p>
+      <p class="ws-help">${perMember ? 'Each account keeps its own rules from its type on The Desk, taken as it joins; these are for an account with none of its own.' : 'Set once. With NinjaTrader\'s balance these give each account its room, so the agent sizes on real numbers.'}</p>
       <div class="gp-grid">${box('size', 'Account size', '$')}${box('dailyLoss', 'Daily loss limit', '$ or none')}${box('drawdown', 'Drawdown size', '$')}
         <div class="gp-f"><label for="gp-drawdownType">Drawdown type</label><select class="ws-sel gp-in" id="gp-drawdownType">${GC.TYPES.map(t => `<option value="${t[0]}"${t[0] === f.drawdownType ? ' selected' : ''}>${t[1]}</option>`).join('')}</select></div>
-        ${box('lockAt', 'Floor stops at', '$ or none')}${box('target', 'Profit target', '$ or none')}${box('consistency', 'Consistency %', '% or none')}
+        ${box('lockAt', 'Floor stops at', '$ or none')}${box('target', 'Profit target', '$ or none')}${box('consistency', 'Consistency %', '% or none')}${perMember ? box('riskPct', 'Risk % of max loss', '% or off') : ''}
         <div class="gp-f"><label for="gp-accountType">Type</label><select class="ws-sel gp-in" id="gp-accountType" title="Evals or Funded: the Agent tab and this dialog warn when a hero's tier does not fit it (shown only)">${GC.ACCOUNT_TYPES.map(t => `<option value="${t[0]}"${t[0] === (g && g.accountType || '') ? ' selected' : ''}>${t[1]}</option>`).join('')}</select></div></div>
       <p class="ws-help">Daily room counts open P&amp;L, the way the firm does. If a number is missing, the agent uses its model numbers and says so. Consistency (no single day over that share of the profit) is shown to the agent only; nothing is blocked by it.</p>
       <h3 class="gp-h">One direction</h3>
@@ -626,6 +746,7 @@ function mountSettings(host) {
       for (const el of d.querySelectorAll('.gp-in')) el.removeAttribute('aria-invalid');
       const form = { name: $d('name').value, size: $d('size').value, dailyLoss: $d('dailyLoss').value, drawdown: $d('drawdown').value, drawdownType: $d('drawdownType').value,
         lockAt: $d('lockAt').value, target: $d('target').value, consistency: $d('consistency').value, noHedge: $d('noHedge').checked, accountType: $d('accountType').value, hero: $d('hero').value };
+      if (perMember) form.riskPct = $d('riskPct').value;   // 1.33.0: only to a ChartBridge 0.6.5 (an older one refuses the key)
       const r = GC.groupMessage(form, groups(), g ? g.id : null, cid());
       if (r.error) { $d('err').textContent = r.error; if (r.field && $d(r.field)) { $d(r.field).setAttribute('aria-invalid', 'true'); $d(r.field).focus(); } return false; }
       if (!post(r.msg, (g ? 'Save ' : 'New group ') + r.msg.name + ': sent to ChartBridge.')) return false;

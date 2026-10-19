@@ -112,15 +112,15 @@ export function checkKeysV3(m, text) {
   if (text !== undefined && /\\/.test(text)) return 'The message has a backslash escape.';
   const allowed = KEYS[m.type];
   if (!allowed) return 'Unknown message type ' + m.type + '.';
-  for (const k of Object.keys(m)) if (!allowed.includes(k) && !(m.type === 'flatten' && k === 'bracket')) return 'Unknown key "' + k + '" in ' + m.type + '.';
+  for (const k of Object.keys(m)) if (!allowed.includes(k) && !(m.type === 'flatten' && k === 'bracket') && !((m.type === 'groupPreview' || m.type === 'groupOrder') && k === 'strategy')) return 'Unknown key "' + k + '" in ' + m.type + '.';
   for (const [k, v] of Object.entries(m)) {
-    if (v !== null && typeof v === 'object' && !(m.type === 'order' && (k === 'bracket' || k === 'strategy'))) return 'The message has an unexpected nested object or list.';
+    if (v !== null && typeof v === 'object' && !(m.type === 'order' && (k === 'bracket' || k === 'strategy')) && !((m.type === 'groupPreview' || m.type === 'groupOrder') && (k === 'bracket' || k === 'strategy'))) return 'The message has an unexpected nested object or list.';
     if (typeof v === 'boolean' && !(BOOL_KEYS[m.type] || []).includes(k) && !(OPT_BOOL_KEYS[m.type] || []).includes(k)) return k + ' cannot be true or false.';
     if (typeof v === 'string' && v.length > 200) return k + ' is over 200 characters.';
   }
   for (const k of BOOL_KEYS[m.type] || []) if (typeof m[k] !== 'boolean') return k + ' must be true or false.';
   for (const k of OPT_BOOL_KEYS[m.type] || []) if (m[k] !== undefined && typeof m[k] !== 'boolean') return k + ' must be true or false.';
-  if (m.bracket !== undefined && m.strategy !== undefined) return 'An order takes a bracket or a strategy, not both.';
+  if (m.bracket !== undefined && m.strategy !== undefined) return m.type === 'groupPreview' || m.type === 'groupOrder' ? 'bracket and strategy on one order are refused: send one of them' : 'An order takes a bracket or a strategy, not both.';   // 0.6.5: a group entry in ChartBridge's own words
   if (m.strategy !== undefined) {
     const s = m.strategy;
     if (s === null || typeof s !== 'object' || Array.isArray(s)) return 'A strategy must be one flat object.';
@@ -340,7 +340,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (typeof m.cid === 'string') ref.cid = m.cid;
     if (typeof m.id === 'string') ref.id = m.id;
     if (m.type === 'botSeen') { const why = this.blocked(conn) || checkKeysV3(m, text) || this.check_botSeen(m); if (why) this.send(conn, Object.assign({ type: 'reject' }, ref, { reason: why })); else this.do_botSeen(m); return !why; }
-    let why = this.checkAction(conn) || (GROUP_TYPES.includes(m.type) && !this.gr.on ? 'Unknown message type ' + m.type + '.' : null) || checkKeysV3(m, text);
+    let why = this.checkAction(conn) || (GROUP_TYPES.includes(m.type) && !this.gr.on ? 'Unknown message type ' + m.type + '.' : null) || (this.gr && this.gr.on && !this.gr.perMember ? this.groupOldKeys(m) : null) || checkKeysV3(m, text);   // 0.6.5: groupRules false is a ChartBridge 0.5.8 to 0.6.4
     if (!why && V3_TYPES.includes(m.type) && SWITCH_OF[m.type] && !this.sw[SWITCH_OF[m.type]]) why = m.type + ' is off (' + SWITCH_OF[m.type] + ' = off in config.txt).';
     if (!why && (m.type === 'accountArchive' || m.type === 'accountUnarchive') && !this.sw.accountChecks) why = m.type + ' is off (accountChecks = off in config.txt).';
     if (!why && AGENT_PAGE_TYPES.includes(m.type)) why = this.agentPageCheck(m);

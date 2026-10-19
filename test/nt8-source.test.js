@@ -184,7 +184,7 @@ test('strict messages: known keys only, bracket must be an object', () => {
 
 test('every order message passes the gate first; auth checks origin and token', () => {
   const on = fnBody('OnMessage');
-  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string strategyBody = null;\s*if \(why == null && type == "order" && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why == null\) why = QuoteOnly\(top, id\);\s*if \(why == null && type != "flatten" && type != "merge"\) why = MergeFreezeWhy\(type, top, id\);\s*if \(why != null\) \{ Reject/);   // 0.4.0: a quote-only market is refused right after the gate; B1: a strategy is cut out only after the gate passed; 0.4.0 B4: then the Merge freeze
+  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string strategyBody = null;\s*if \(why == null && \(type == "order" \|\| type == "groupPreview" \|\| type == "groupOrder"\) && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);[^\n]*\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why == null\) why = QuoteOnly\(top, id\);\s*if \(why == null && type != "flatten" && type != "merge" && type != "groupPreview" && type != "groupOrder"\) why = MergeFreezeWhy\(type, top, id\);[^\n]*\s*if \(why != null\) \{ Reject/);   // 0.4.0: a quote-only market is refused right after the gate; B1: a strategy is cut out only after the gate passed; 0.4.0 B4: then the Merge freeze
   const gate = fnBody('Gate');
   assert.match(gate, /if \(!Enabled\) return/);
   assert.match(gate, /if \(!client\.Trader \|\| !OriginAllowed\(client\.Origin\)\) return/);
@@ -244,7 +244,7 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
 
 test('the main file routes order messages only to ChartBridgeOrders, and ships both files', () => {
   assert.match(code, /ChartBridgeOrders\.OnMessage\(client, type, text\)/);
-  assert.match(code, /type == "auth" \|\| type == "order" \|\| type == "change" \|\| type == "plan" \|\| type == "cancel" \|\| type == "flatten"\)\s*ChartBridgeOrders\.OnMessage/);   // 0.3.7: plan
+  assert.match(code, /type == "auth" \|\| type == "order" \|\| type == "change" \|\| type == "plan" \|\| type == "cancel" \|\| type == "flatten" \|\| type == "groupPreview" \|\| type == "groupOrder"\)[^\n]*\s*ChartBridgeOrders\.OnMessage/);   // 0.3.7: plan
   // /session: the Host check, then (0.3.2) the PIN unlock, then the order sign-in token
   assert.match(code, /if \(path == "\/session"\)[^\n]*\n\s*\{\s*if \(ctx\.Request\.Headers\["Host"\] != "localhost:" \+ ChartBridgeConfig\.Port\) \{ ctx\.Response\.StatusCode = 403;[^\n]*\n\s*if \(!ChartBridgePin\.TokenValid\(ctx\.Request\.Headers\[ChartBridgePin\.Header\]\)\) \{ Refuse\(ctx\); return; \}[^\n]*\n\s*ServeText\(ctx, ChartBridgeOrders\.SessionJson\(\), "application\/json"\);/);
   assert.match(code, /ChartBridgeOrders\.WatchConnections\(\);\s*try \{ ChartBridgeOrders\.Resume\(\); \}/);
@@ -557,7 +557,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(bodyOf(code, 'public void Close()'), /try \{ if \(Socket != null\) Socket\.Abort\(\); \} catch \(Exception\) \{ \}/);
   assert.match(code, /long waited = Stopwatch\.GetTimestamp\(\) - q\.At - \(Interlocked\.Read\(ref bulkSpent\) - q\.Bulk\);/);
   for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
-  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",\s*"bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock" \};/);   // 0.4.0: accounts (B2), merge (B4), copier (B5), the bot channel (B3) and managed (B1) in the order lane; 0.5.6: pcClock (after hello, in order)
+  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",\s*"bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock", "groupPreview", "groupPlaced" \};/);   // 0.4.0: accounts (B2), merge (B4), copier (B5), the bot channel (B3) and managed (B1) in the order lane; 0.5.6: pcClock (after hello, in order)
   assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
   const md2 = bodyOf(code, 'private static void OnMarketData(');
@@ -1232,7 +1232,7 @@ test('0.4.0 B1: switches on by default; the off line gives 0.3.8 (every hook is 
   assert.match(fnBody('ResetConfig'), /ResetV3Config\(\);/);
   assert.match(sBodies('ReadV3Config'), /return key == "orderTypes" \|\| key == "strategies";/);
   const on = fnBody('OnMessage');
-  assert.match(on, /if \(why == null && type == "order" && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);/);
+  assert.match(on, /if \(why == null && \(type == "order" \|\| type == "groupPreview" \|\| type == "groupOrder"\) && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);[^\n]*/);
   assert.match(fnBody('PlaceOrderLocked'), /!\(OrderTypesOn && NewKind\(kind\)\)\) return "kind must be market, limit or stop";/);
   assert.match(fnBody('PlaceOrderLocked'), /string newKind = OrderTypesOn \? NewKindProblem\(/);
   assert.match(scode, /private static string\[\] WithV3Keys\(string type, string\[\] allowed\)\s*\{\s*if \(type == "order" && OrderTypesOn\)/);
@@ -1282,7 +1282,7 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.[0-4])";/);
+  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.[0-5])";/);
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1311,7 +1311,7 @@ test('ChartBridge 0.5.5: the accounts line\'s one-time conversion and notConnect
 });
 
 test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its own thread, and tells hello, the pages and /diag', () => {
-  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.[0-4])";/);
+  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.[0-5])";/);
   const clk = code.slice(code.indexOf('public static class ChartBridgeClock'));
   assert.ok(code.indexOf('public static class ChartBridgeClock') > code.indexOf('public static class ChartBridgeServer') && clk.length > 1000, 'ChartBridgeClock is the last class of ChartBridge.cs');
   // never sets the clock or a setting: no Win32 time call, no w32tm, no process, no registry, in any add-on file
@@ -1395,11 +1395,12 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   assert.match(acc, /ChartBridgeGroups\.StartNow\(\);[^\n]*\n\s*if \(!On\) return;/, 'groups.txt is read whether or not accountChecks is on');
   // the page messages, through ChartBridge.cs's dispatch; strict keys
   assert.match(code, /else if \(ChartBridgeGroups\.Handles\(type\)\) ChartBridgeGroups\.OnMessage\(client, type, text\);/);
-  assert.match(g, /\{ "groupSave", new\[\] \{ "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt", "consistency", "accountType", "hero" \} \}/);
+  assert.match(g, /\{ "groupSave", new\[\] \{ "type", "cid", "group", "name", "noHedge", "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt", "consistency", "accountType", "hero", "riskPct" \} \}/);   // 0.6.5: riskPct
   // Q-EXIT (b): the one order call for the groups is in ChartBridgeOrders.cs (GroupCancelLeftover), a cancel only
   const oo = strip(read('ChartBridgeOrders.cs')), gc = oo.slice(oo.indexOf('internal static string GroupCancelLeftover('), oo.indexOf('private static string ChangeOrder('));
   assert.ok(gc.length > 0 && gc.length < 600 && /a\.Cancel\(new\[\] \{ o \}\)/.test(gc) && !/Submit|CreateOrder|\.Change\(|Flatten/.test(gc), 'GroupCancelLeftover only cancels');
-  assert.match(g, /\{ "accountGroup", new\[\] \{ "type", "cid", "account", "group", "highClose" \} \}/);
+  assert.match(g, /\{ "accountGroup", new\[\] \{ "type", "cid", "account", "group", "highClose", "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" \} \}/);   // 0.6.5: the member's own rules
+  assert.match(g, /\{ "memberRules", new\[\] \{ "type", "cid", "account", "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" \} \}/);   // 0.6.5
   // accounts.txt keeps its 0.5.0 format: groups live in their own file
   assert.ok(!/groups/.test(acc.slice(acc.indexOf('private static void Save()'), acc.indexOf('private static void SaveDetails()'))), 'accounts.txt is not touched');
 });

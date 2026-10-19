@@ -272,7 +272,11 @@ function cleanDesk(json) {
       /* 1.30.0: the account's type on The Desk's ledger ({ id, firm, name, version, status }) or null */
       accountType: r.accountType && typeof r.accountType === 'object' && typeof r.accountType.id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(r.accountType.id)
         ? { id: r.accountType.id, firm: typeof r.accountType.firm === 'string' ? r.accountType.firm : '', name: typeof r.accountType.name === 'string' ? r.accountType.name : r.accountType.id,
-          version: Number.isInteger(r.accountType.version) ? r.accountType.version : 0, status: r.accountType.status === 'checked' ? 'checked' : 'not_checked' } : null });
+          version: Number.isInteger(r.accountType.version) ? r.accountType.version : 0, status: r.accountType.status === 'checked' ? 'checked' : 'not_checked' } : null,
+      /* 1.33.0: where each prop number came from ("account": set on the account itself on The Desk, which wins over its type) and
+         The Desk's seed for a prop account (seed_floor, seed_date, seed_balance), each null when The Desk has none */
+      source: r.source && typeof r.source === 'object' && !Array.isArray(r.source) ? Object.fromEntries(['daily_loss_limit', 'trailing_drawdown', 'account_size'].map(k => [k, typeof r.source[k] === 'string' ? r.source[k] : null])) : {},
+      seedFloor: n(r.seed_floor), seedBalance: n(r.seed_balance), seedDate: typeof r.seed_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.seed_date) ? r.seed_date : null });
   }
   return out;
 }
@@ -629,9 +633,11 @@ function createFeed(env) {
   }
   const account = name => S.accounts.find(a => a.name === name) || null;
   const groupOf = a => (a && a.group && S.groups ? S.groups.find(g => g.id === a.group) || null : null);
-  const limit = name => { const a = account(name); return a ? AC.limitState(a, S.desk.get(name), groupOf(a)) : null; };
+  /* 1.33.0: the rules that hold for an account in a group: its own (ChartBridge 0.6.5's accounts entry rules) over its group's */
+  const rulesOf = a => { const g = groupOf(a); return g && a.rules && typeof a.rules === 'object' ? Object.assign({}, g, a.rules) : g; };
+  const limit = name => { const a = account(name); return a ? AC.limitState(a, S.desk.get(name), rulesOf(a)) : null; };
   return {
-    S, start, startAny, stop, account, limit, post, groupOf, store, setAccountType, readTypes,
+    S, start, startAny, stop, account, limit, post, groupOf, rulesOf, store, setAccountType, readTypes,
     /** 1.30.0: an account's type on The Desk ({ id, firm, name, version, status }) or null */
     typeOf: name => { const d = S.desk.get(name); return d && d.accountType ? d.accountType : null; },
     listen(part) { subs.add(part); return () => subs.delete(part); },
@@ -654,9 +660,16 @@ function createFeed(env) {
     copierRearm: () => S.switches.copier && send({ type: 'copierRearm', cid: cid() }),
     /* 1.26.0 (ChartBridge 0.5.8): an account's group (null: None; highText: the highest close typed, G2 b) and a personal
        account's own floor and daily limit; each only once ChartBridge has sent groups (ChartBridge checks again) */
-    accountGroup: (name, group, highText) => {
+    accountGroup: (name, group, highText, rules) => {   // 1.33.0: rules (checked, with typeId) go with a join on ChartBridge 0.6.5
       if (!S.groups || typeof GroupsCore === 'undefined') return false;
-      const hw = GroupsCore.highWord((S.groups || []).find(x => x.id === group)), r = GroupsCore.joinMessage(name, group, highText, cid(), hw.charAt(0).toUpperCase() + hw.slice(1));
+      const jg = (S.groups || []).find(x => x.id === group), hw = GroupsCore.highWord(rules || jg), r = GroupsCore.joinMessage(name, group, highText, cid(), hw.charAt(0).toUpperCase() + hw.slice(1), jg && jg.perMember ? rules : null);
+      if (r.error) { env.note('Not sent: ' + r.error, true); return false; }
+      return send(r.msg);
+    },
+    /* 1.33.0 (ChartBridge 0.6.5): a member's own rules changed later (the form's boxes as typed) */
+    memberRules: (name, form) => {
+      if (!S.groups || typeof GroupsCore === 'undefined') return false;
+      const r = GroupsCore.memberRulesMessage(name, form, cid());
       if (r.error) { env.note('Not sent: ' + r.error, true); return false; }
       return send(r.msg);
     },
@@ -697,7 +710,7 @@ function mount(v, host) {
     '<p class="ac-foot apg-foot" data-foot></p></div>';
   const q = sel => v.body.querySelector(sel);
   const listEl = q('[data-list]'), footEl = q('[data-foot]');
-  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null, typeFocus: '' };
+  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, rulesEdit: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null, typeFocus: '' };
   q('.apg-tabs').addEventListener('click', e => {
     const b = e.target.closest('button[data-tab]'); if (!b) return;
     b.blur();
@@ -723,6 +736,21 @@ function mount(v, host) {
     else if (a === 'mode') F.copierSet({ mode: b.dataset.v });
     else if (a === 'trd') { P.trd = b.dataset.v; render(); }
     else if (a === 'join-no') { P.join = null; render(); }
+    /* 1.33.0: Edit rules on the join row opens the full form, prefilled with what The Desk gave; Rules on a member opens it with its
+       rules now (sends memberRules); Cancel closes either and sends nothing */
+    else if (a === 'join-edit') { if (P.join && P.join.account === id && P.join.mode === 'auto') { P.join = Object.assign({}, P.join, { mode: 'form', form: GroupsCore.rulesForm(P.join.rules), why: 'edited by hand' }); render(); focusRules(id); } }
+    else if (a === 'rules-edit') { const acc = S.accounts.find(x => x.name === id); P.rulesEdit = P.rulesEdit && P.rulesEdit.account === id ? null : { account: id, form: GroupsCore.rulesForm(acc && acc.rules) }; render(); if (P.rulesEdit) focusRules(id); }
+    else if (a === 'rules-no') { P.rulesEdit = null; render(); }
+    else if (a === 'rules-save') {
+      const ed = P.rulesEdit;
+      if (!ed || ed.account !== id) return;
+      const f = readRules(id, ed.form);
+      const rc = GroupsCore.rulesCheck(f);
+      if (rc.error) { host.note('Not sent: ' + rc.error, true); return; }
+      P.rulesEdit = null;
+      if (F.memberRules(id, f)) host.note(id + '\'s rules: sent to ChartBridge.');
+      render();
+    }
     else if (a === 'apply-type') { P.apply = P.apply === id ? '' : id; render(); }   // 1.30.0: asks first, never applied silently
     else if (a === 'apply-no') { P.apply = ''; render(); }
     /* 1.32.0 (Anthony 2026-10-19, "Text + Change"): Change (or Set) opens the picker in a row under the account, one row at a time;
@@ -744,8 +772,19 @@ function mount(v, host) {
       render();
     }
     else if (a === 'join-yes') {   // G2 (b): the highest close, asked once when an account joins a group
-      const j = P.join; P.join = null;
-      if (j && j.account === id) { const box = listEl.querySelector('[data-act="join-high"]'); F.accountGroup(j.account, j.group, box ? box.value : ''); }
+      const j = P.join;
+      if (!j || j.account !== id) return;
+      const box = listEl.querySelector('[data-act="join-high"]'), high = box ? box.value : '';
+      /* 1.33.0: the rules go with the join: The Desk's (auto), or the form's as typed (checked first: nothing sent on a mistake) */
+      let rules = null;
+      if (j.mode === 'auto') rules = j.rules;
+      else if (j.mode === 'form') {
+        const f = readRules(id, j.form), rc = GroupsCore.rulesCheck(f);
+        if (rc.error) { host.note('Not sent: ' + rc.error, true); return; }
+        rules = Object.assign(rc.rules, { typeId: f.typeId || null });
+      }
+      P.join = null;
+      F.accountGroup(j.account, j.group, high, rules);
       render();
     }
   });
@@ -764,7 +803,7 @@ function mount(v, host) {
       el.value = acc && acc.group ? acc.group : '';                                       // shown as ChartBridge says, not as picked
       if (!want) { P.join = null; F.accountGroup(name, null); render(); return; }
       const g = (S.groups || []).find(x => x.id === want);
-      if (g) { P.join = { account: name, group: want, prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)) }; render(); const box = listEl.querySelector('[data-act="join-high"]'); if (box) { box.focus(); box.select(); } }
+      if (g) { P.join = joinPlan(name, g, acc); P.rulesEdit = null; render(); const box = listEl.querySelector('[data-act="join-high"]'); if (box) { box.focus(); box.select(); } }
       return;
     }
     if (a === 'acct-firm' || a === 'acct-plan' || a === 'acct-type') {   // 1.30.0: the account's type, saved on The Desk; shown as The Desk says once it answers
@@ -805,6 +844,36 @@ function mount(v, host) {
   const typeFor = name => { const at = F.typeOf(name); return at && S.types ? S.types.find(t => t.id === at.id) || null : null; };
   /* 1.32.0: the picker's tree (the firms in use on The Desk first) and where an account's picker stands: its
      type (or the one just picked, until The Desk's rows say it), moved in the open Change row by Firm and Plan without sending */
+  /* 1.33.0 (Anthony 2026-10-19: "match the accounts going into a group to our desk pool ... so its all automatic"): what a join
+     asks. ChartBridge 0.6.5 (the group is perMember): the account's rules from its type on The Desk (auto: one compact row with the
+     rules taken and the highest close, prefilled from The Desk's seed floor when it has one), or the full form when The Desk has no
+     type for it (or is not reachable, or the type misses a rule). An older ChartBridge: the 1.26.0 question only (old). */
+  function joinPlan(name, g, acc) {
+    const base = { account: name, group: g.id };
+    if (!g.perMember) return Object.assign(base, { mode: 'old', prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)) });
+    const row = S.desk.get(name);
+    const dr = !S.deskAt ? { error: 'The Desk is not reachable, so its account type cannot be read' } : !S.types ? { error: 'The Desk\'s account types are not known' } : GroupsCore.deskRules(row, S.types);
+    if (dr.error) {
+      const form = GroupsCore.rulesForm(g);
+      return Object.assign(base, { mode: 'form', form, why: dr.error, prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)), seed: null });
+    }
+    const seed = GroupsCore.seedHigh(row, dr.rules);
+    return Object.assign(base, { mode: 'auto', rules: dr.rules, from: dr.from, overrides: dr.overrides, seed, prefill: seed ? String(seed.value) : String(+GroupsCore.highCloseDefault(dr.rules, acc).toFixed(2)) });
+  }
+  const RULE_BOXES = [['size', 'Size', 'Account size, dollars'], ['dailyLoss', 'Daily', 'Daily loss limit, dollars (empty: none)'], ['drawdown', 'Drawdown', 'Drawdown size (max loss), dollars'],
+    ['lockAt', 'Stops at', 'Floor stops at, dollars (empty: none; trailing only)'], ['target', 'Target', 'Profit target, dollars (empty: none)'], ['consistency', 'Cons. %', 'Consistency percent (empty: none)'],
+    ['maxMinis', 'Max minis', 'Max size in minis (NQ, ES; empty: none)'], ['maxMicros', 'Max micros', 'Max size in micros (MNQ, MES; empty: none)']];
+  /** the form's boxes as HTML (from the values it opened with: the row is not drawn again while it is typed in) */
+  const rulesBoxes = (name, f) => RULE_BOXES.map(([k, label, tip]) => `<label class="apg-rf">${esc(label)} <input type="text" inputmode="decimal" class="oin apg-ll-in apg-rin" data-rf="${k}" data-id="${esc(name)}" value="${esc(f[k] || '')}" maxlength="12" aria-label="${esc(tip)} for ${esc(name)}" title="${esc(tip)}"></label>`).slice(0, 3).join('') +
+    `<label class="apg-rf">Type <select class="ws-sel apg-sel apg-rin" data-rf="drawdownType" data-id="${esc(name)}" aria-label="Drawdown type for ${esc(name)}" title="How the floor trails">${GroupsCore.TYPES.map(t => `<option value="${t[0]}"${t[0] === f.drawdownType ? ' selected' : ''}>${esc(t[1])}</option>`).join('')}</select></label>` +
+    RULE_BOXES.slice(3).map(([k, label, tip]) => `<label class="apg-rf">${esc(label)} <input type="text" inputmode="decimal" class="oin apg-ll-in apg-rin" data-rf="${k}" data-id="${esc(name)}" value="${esc(f[k] || '')}" maxlength="12" aria-label="${esc(tip)} for ${esc(name)}" title="${esc(tip)}"></label>`).join('');
+  /** the form's values now, as typed (the type id it opened with stays: a typed box does not unlink The Desk's type) */
+  function readRules(name, f0) {
+    const out = Object.assign({}, f0);
+    for (const el of listEl.querySelectorAll(`[data-rf][data-id="${CSS.escape(name)}"]`)) out[el.dataset.rf] = el.value;
+    return out;
+  }
+  const focusRules = name => { const el = listEl.querySelector(`[data-rf="size"][data-id="${CSS.escape(name)}"]`); if (el) { el.focus(); el.select(); } };
   const typeTreeNow = () => GroupsCore.typeTree(S.types || [], GroupsCore.usedFirms([...S.desk.values()]));
   const typeVal = name => { const at = F.typeOf(name), pd = P.typePending.get(name); return pd ? pd.v : at ? at.id : ''; };
   const goneOf = name => { const at = F.typeOf(name); return at && !(S.types || []).some(t => t.id === at.id) ? { firm: at.firm, name: at.name } : null; };
@@ -871,7 +940,7 @@ function mount(v, host) {
     if (!S.v3) html = `<p class="ac-empty">${esc(S.reason || 'The Account page needs ChartBridge 0.4.0 or newer.')}</p>`;
     else if (!S.got) html = `<p class="ac-empty">${esc(S.open ? 'Waiting for ChartBridge\'s accounts.' : S.reason || 'Connecting to ChartBridge.')}</p>`;
     else if (P.tab === 'acc') {
-      const lim = a => AC.limitState(a, S.desk.get(a.name), F.groupOf(a));
+      const lim = a => AC.limitState(a, S.desk.get(a.name), F.rulesOf(a));   // 1.33.0: the member's own rules
       const canAct = sw.accountChecks && S.enabled;
       const grpKnown = !!S.groups, grpOn = grpKnown || S.hadGroups, canGroup = grpKnown && S.enabled && !S.groupsError;   // 1.26.0: ChartBridge 0.5.8 sends groups; 1.31.0: the columns stay while not known
       const gName = id => { const g = (S.groups || []).find(x => x.id === id); return g ? g.name : id; };
@@ -936,7 +1005,26 @@ function mount(v, host) {
         return row('toff|' + a.name, `<span role="cell" class="apg-confirm apg-twarn">${esc(a.name)} is ${esc((at.firm ? at.firm + ' ' : '') + at.name)}; its group ${esc(gName(a.group))} was filled from ${esc(l.label)}. A warning only: nothing is blocked.</span>`, 'apg-ask');
       };
       /* G2 (b): the one question when an account joins a group, a row of its own under the account's */
-      const askJoin = a => { if (!P.join || P.join.account !== a.name) return ''; const jg = (S.groups || []).find(x => x.id === P.join.group), hw = GroupsCore.highWord(jg); return row('join|' + a.name + '|' + P.join.group, `<span role="cell" class="apg-confirm apg-join">Put ${esc(a.name)} in ${esc(gName(P.join.group))}: ${esc(hw)} <input type="text" inputmode="decimal" class="oin apg-ll-in apg-high" data-act="join-high" value="${esc(P.join.prefill)}" aria-label="${esc(hw.charAt(0).toUpperCase() + hw.slice(1))} for ${esc(a.name)}, from the firm's dashboard" title="From the firm's dashboard. Optional: empty takes the larger of the account size and its balance. ChartBridge starts the trailing floor from it."> <span class="mut">(the firm's dashboard; optional)</span> <button type="button" class="ac-btn apg-yes" data-act="join-yes" data-id="${esc(a.name)}">Put in ${esc(gName(P.join.group))}</button><button type="button" class="ac-btn" data-act="join-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask'); };
+      const askJoin = a => {
+        if (!P.join || P.join.account !== a.name) return '';
+        const j = P.join, jg = (S.groups || []).find(x => x.id === j.group), hw = GroupsCore.highWord(j.mode === 'auto' ? j.rules : jg), gn = gName(j.group);
+        const high = `${esc(hw)} <input type="text" inputmode="decimal" class="oin apg-ll-in apg-high" data-act="join-high" value="${esc(j.prefill)}" aria-label="${esc(hw.charAt(0).toUpperCase() + hw.slice(1))} for ${esc(a.name)}, from the firm's dashboard" title="${esc(j.seed ? 'From ' + j.seed.words + '. ' : 'From the firm\'s dashboard. ')}Optional: empty takes the larger of the account size and its balance. ChartBridge starts the trailing floor from it."> <span class="mut">(${esc(j.seed ? (hw.startsWith('highest balance') ? 'highest balance' : 'highest close') + ' from The Desk\'s seed' + (j.seed.date ? ' of ' + j.seed.date : '') : 'the firm\'s dashboard; optional')})</span>`;
+        const yes = `<button type="button" class="ac-btn apg-yes" data-act="join-yes" data-id="${esc(a.name)}">Put in ${esc(gn)}</button>`, no = `<button type="button" class="ac-btn" data-act="join-no" data-id="${esc(a.name)}">Cancel</button>`;
+        if (j.mode === 'old') return row('join|' + a.name + '|' + j.group, `<span role="cell" class="apg-confirm apg-join">Put ${esc(a.name)} in ${esc(gn)}: ${high} ${yes}${no}</span>`, 'apg-ask');
+        /* 1.33.0: one compact row: the rules taken from The Desk (and what the account's own Desk numbers changed), the highest close */
+        if (j.mode === 'auto') {
+          const rs = GroupsCore.summary(j.rules), risk = GroupsCore.riskDollars(jg, j.rules);
+          const words = `Put ${a.name} in ${gn} with its rules from ${j.from}${j.overrides.length ? ' (its own on The Desk: ' + j.overrides.join(', ') + ')' : ''}: ${rs}${risk !== null ? ' · ' + GroupsCore.riskText(jg) + ': ' + GroupsCore.usd(risk) : ''}.`;
+          return row('join|' + a.name + '|' + j.group + '|auto', `<span role="cell" class="apg-confirm apg-join apg-jauto"><span class="apg-jrules" title="${esc(words)}">${esc(words)}</span> ${high} ${yes}<button type="button" class="ac-btn" data-act="join-edit" data-id="${esc(a.name)}" title="Change any of the rules before ${esc(a.name)} joins">Edit rules</button>${no}</span>`, 'apg-ask');
+        }
+        /* the full form: every rule box, prefilled (the group's own rules when The Desk has no type for it) */
+        return row('join|' + a.name + '|' + j.group + '|form', `<span role="cell" class="apg-confirm apg-join apg-rform"><span class="apg-jrules">Put ${esc(a.name)} in ${esc(gn)} with these rules (${esc(j.why)}):</span>${rulesBoxes(a.name, j.form)} ${high} ${yes}${no}</span>`, 'apg-ask');
+      };
+      /* 1.33.0: a member's rules changed later (Rules on its Limits cell): the full form, sent as memberRules */
+      const askRules = a => {
+        if (!P.rulesEdit || P.rulesEdit.account !== a.name || !a.group) return '';
+        return row('rules|' + a.name, `<span role="cell" class="apg-confirm apg-rform"><span class="apg-jrules">${esc(a.name)}'s rules in ${esc(gName(a.group))}:</span>${rulesBoxes(a.name, P.rulesEdit.form)} <button type="button" class="ac-btn apg-yes" data-act="rules-save" data-id="${esc(a.name)}">Save rules</button><button type="button" class="ac-btn" data-act="rules-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
+      };
       const canShow = canAct && accounts.some(a => a && 'canHide' in a);   // Show: ChartBridge 0.5.1 and later (its accounts carry canHide)
       /* the in-page confirm for Hide, a row of its own under the account's */
       const ask = a => P.confirm !== a.name ? '' : row('ask|' + a.name, `<span role="cell" class="apg-confirm">Hide ${esc(a.name)}? It leaves every list until you Show it; its history stays. <button type="button" class="ac-btn apg-yes" data-act="archive-yes" data-id="${esc(a.name)}">Hide</button><button type="button" class="ac-btn" data-act="archive-no" data-id="${esc(a.name)}">Keep</button></span>`, 'apg-ask');
@@ -960,13 +1048,18 @@ function mount(v, host) {
           : c(a.trade ? '✓' : '', 'r ' + (a.tradable ? 'up' : 'mut'), a.trade ? (a.tradable ? 'Trading is on for ' + a.name : 'Checked, but not tradable now') : 'Not checked for trading');
         /* 1.26.0: the Group dropdown (None and every group) and the Limits cell: the group's floor, or My floor and My daily */
         const grp = !grpOn ? '' : !grpKnown ? c(NK, 'mut apg-nk', 'Not connected to ChartBridge: the account\'s group is not known now') : `<span role="cell"><select class="ws-sel apg-sel apg-grp" data-act="group" data-id="${esc(a.name)}" ${pr({ value: a.group || '', disabled: !canGroup })} aria-label="Group for ${esc(a.name)}" title="${esc(a.group ? GroupsCore.summary(F.groupOf(a)) : 'None: a personal account, in no group')}"><option value="">None</option>${(S.groups || []).map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('')}</select></span>`;
-        const lims = !grpOn ? '' : !grpKnown ? c(NK, 'r mut apg-nk', 'Not connected to ChartBridge: the limits are not known now') : a.group
+        const mg = a.group ? F.groupOf(a) : null, mr = a.rules && typeof a.rules === 'object' ? a.rules : null;
+        const lims = !grpOn ? '' : !grpKnown ? c(NK, 'r mut apg-nk', 'Not connected to ChartBridge: the limits are not known now') : a.group && mg && mg.perMember
+          /* 1.33.0: a member's floor by its own rules, and Rules to change them (its rules in the tooltip) */
+          ? `<span role="cell" class="apg-my apg-mrules">` + ci(typeof a.floor === 'number' ? 'floor ' + AC.fmtUsdPlain(a.floor) : 'floor ?', 'mut apg-mfloor', (typeof a.floor === 'number' ? 'The floor by ' + (mr && mr.own ? 'its own rules' : 'its group\'s rules') : (why.floor || '')) + (mr ? '\n' + (mr.own ? 'Its rules' : 'Its group\'s rules') + ': ' + GroupsCore.summary(mr) : '')) +
+            (canGroup ? `<button type="button" class="ac-btn apg-redit" data-act="rules-edit" data-id="${esc(a.name)}" aria-expanded="${!!(P.rulesEdit && P.rulesEdit.account === a.name)}" title="${esc(a.name)}'s rules in ${esc(gName(a.group))}: change any of them">Rules</button>` : '') + '</span>'
+          : a.group
           ? c(typeof a.floor === 'number' ? 'floor ' + AC.fmtUsdPlain(a.floor) : 'floor ?', 'r mut', typeof a.floor === 'number' ? 'The floor by its group\'s rules' : (why.floor || ''))
           : `<span role="cell" class="apg-my"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-floor" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myFloor), disabled: !canGroup })} placeholder="${a.myLimitsSet === false ? 'not set' : 'floor $'}" maxlength="12" aria-label="My floor for ${esc(a.name)}" title="My floor: the balance this account must stay above (empty: none)"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-daily" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myDailyLoss), disabled: !canGroup })} placeholder="${a.myLimitsSet === false ? 'not set' : 'daily $'}" maxlength="12" aria-label="My daily limit for ${esc(a.name)}" title="My daily limit: the most this account may lose today, open P&amp;L counted (empty: none)"></span>`;
         const hero = AC.heroOf(S.heroes, a.name);   // 1.27.0: a seat shows its hero's name
         return row(a.name, `${c(a.name + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', (a.sim ? 'NinjaTrader Sim account' : '') + (hero ? (a.sim ? '. ' : '') + 'A seat of ' + hero + ' (the Agent tab): the copier and the bot never trade it' : ''))}${stale ? c('unknown', 'warn', 'Not connected to ChartBridge since ' + hms(S.lostAt) + ' ET: this account\'s connection is not known') : c(CONN[a.connection] || a.connection, a.connection === 'connected' ? '' : 'warn')}` +
           `${c(AC.fmtUsdPlain(a.balance), 'r')}${c(AC.fmtUsd(a.pnlToday), 'r ' + (a.pnlToday > 0.004 ? 'up' : a.pnlToday < -0.004 ? 'dn' : ''))}${c(pos, 'r')}` +
-          `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${grp}${typeCell(a)}${lims}${mark}${hide}`, 'apg-acc' + lvl) + ask(a) + askJoin(a) + typeRow(a) + askApply(a) + typeWarn(a);
+          `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${grp}${typeCell(a)}${lims}${mark}${hide}`, 'apg-acc' + lvl) + ask(a) + askJoin(a) + askRules(a) + typeRow(a) + askApply(a) + typeWarn(a);
       };
       html = !accounts.length ? '<p class="ac-empty">ChartBridge watches no account.</p>' :
         (stale ? `<p class="apg-stalenote" role="status">${esc(staleWords)}</p>` : '') +

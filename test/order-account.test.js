@@ -96,7 +96,7 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   // 1.13.0 (the F2 review): an open NO STOP question is closed first (dropNoStop sends nothing; an error there never stops the flatten), then ready() as before
   assert.match(CORE, /function flattenHere\(other\) \{\n\s+(try \{ dropNoStop\(\); flattened\(other \|\| root\(\)\); \} catch \(e\) \{ \/\* never in the way of the flatten \*\/ \}\n\s+)if \(!ready\(false\)\) return;/);
   // Flatten all on the ticket's account; on None it sends nothing, as every ticket action (the coordinator's ruling on #47)
-  assert.match(CORE, /function flattenAll\(\) \{\n\s+(try \{ dropNoStop\(\); flattened\(null\); \} catch \(e\) \{ \/\* never in the way of the flatten \*\/ \}\n\s+)if \(!ready\(false\)\) return;\n\s+const one = true, account = TR\.account;/);
+  assert.match(CORE, /function flattenAll\(\) \{\n\s+(try \{ dropNoStop\(\); flattened\(null\); \} catch \(e\) \{ \/\* never in the way of the flatten \*\/ \}\n\s+)if \(!ready\(false\)\) return;\n\s+const one = !isGroup\(TR\.account\), account = TR\.account;/);   // 1.33.0: a group's Flatten all covers every member
   assert.match(CORE, /if \(!TR\.account\) \{ flash\('No account \(None\)/);
   assert.match(CORE, /function dropNoStop\(\) \{ if \(typeof env\.dropNoStop === 'function'\) env\.dropNoStop\(\); \}/, 'dropNoStop only closes the question');
   // only Flatten and Flatten all skip the Armed check (Anthony 2026-10-01); every other ready() call keeps it
@@ -116,8 +116,8 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   // 1.13.0: a planned line's drag, x and "+SL" / "+TP" go through ready() too (the gates of a leg's drag)
   assert.match(CORE, /function planTarget\(entryId\) \{\n\s+if \(!ready\(\)\) \{ env\.changed\(\); return null; \}\n\s+if \(notShown\(entryId\)\) return null;/);
   for (const f of ['planMove', 'planRemove', 'planAdd']) assert.match(CORE.slice(CORE.indexOf('function ' + f + '(')), /^\s+const o = planTarget\(/m, f);
-  assert.match(CORE, /function moveOrder\(id, price\) \{\n\s+if \(!ready\(\)\) \{ env\.changed\(\); return; \}\n\s+if \(notShown\(id\)\) return;/);
-  assert.match(CORE, /function cancelOrder\(id\) \{\n\s+if \(!ready\(\)\) return;\n\s+if \(notShown\(id\)\) return;/);
+  assert.match(CORE, /function moveOrder\(id, price\) \{\n(?:\s+if \(isGroupLine\(id\)\) \{ groupMove\(id, price\); return; \}[^\n]*\n)?\s+if \(!ready\(\)\) \{ env\.changed\(\); return; \}\n\s+if \(notShown\(id\)\) return;/);
+  assert.match(CORE, /function cancelOrder\(id\) \{\n(?:\s+if \(isGroupLine\(id\)\) \{ groupCancel\(id\); return; \}[^\n]*\n)?\s+if \(!ready\(\)\) return;\n\s+if \(notShown\(id\)\) return;/);
   assert.match(CORE, /const notShown = id => \{ const o = TR\.orders\.get\(id\); if \(o && o\.account === TR\.account\) return false;/);
   // the workspace sends only through the same core: its ticket's buttons (TradeCore.wire), chart clicks, keys, forwards
   assert.match(WS, /const core = TC\.create\(\{/);
@@ -129,7 +129,7 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
 test('trade.js: TR.account is set only from orderAccount, the picker, or cleared; Armed is never read from storage', () => {
   const sets = CORE.match(/TR\.account = [^;]*;/g);
   assert.deepEqual(sets, ["TR.account = TR.enabled ? pick.account : '';", "TR.account = '';", 'TR.account = a;']);
-  assert.match(CORE, /const pick = LP\.orderAccount\(TR\.accounts, TR\.enabled \? env\.wantedAccount\(\) : ''\);/);
+  assert.match(CORE, /const pick = LP\.orderAccount\(TR\.accounts\.concat\(groupsNow\(\)\.map\(g => GROUP_PREFIX \+ g\.id\)\), TR\.enabled \? env\.wantedAccount\(\) : ''\);/);   // 1.33.0: a group (ChartBridge 0.6.5) may be the ticket's account
   assert.match(CORE, /function pickAccount\(a\) \{\n\s+TR\.account = a;\n\s+if \(TR\.armed\) \{ setArmed\(false\); flash\('Armed turned off: the account changed\.', 'warn'\); \}/);
   assert.doesNotMatch(PAGE + CORE + WS, /TR\.armed = (?!v;)/, 'TR.armed is set only in setArmed');
   assert.doesNotMatch(PAGE + WS, /store\.(get|set|getItem|setItem)\('[^']*arm/i, 'nothing about Armed in storage');
@@ -337,7 +337,7 @@ test('Cancel all: a drop mid-batch leaves a note that names the account, the ins
   // the wiring: a drop, trading off and the account list, a refusal, and Dismiss
   assert.match(CORE, /batchStop\(\(\) => true, 'the connection to ChartBridge dropped'\);   \/\/ before the orders are cleared/);
   assert.match(CORE, /if \(!TR\.enabled\) batchStop\(\(\) => true, 'trading went off \(' \+ TR\.reason\.replace\(\/\\\.\$\/, ''\) \+ '\)'\);/);
-  assert.match(CORE, /case 'reject': if \(!onRefused\(m\)\) flash\('Refused by ChartBridge: ' \+ m\.reason, 'error'\);/);
+  assert.match(CORE, /case 'reject': (?:if \(groupAsk && m\.cid === groupAsk\.cid\) groupAsk = null; )?if \(!onRefused\(m\)\) flash\('Refused by ChartBridge: ' \+ m\.reason, 'error'\);/);
   assert.match(CORE, /\$\('unsentClose'\)\.addEventListener\('click', \(\) => core\.dismissUnsent\(\)\);/);
   assert.match(CORE, /function dismissUnsent\(\) \{ unsent\.clear\(\); flattenMiss = ''; env\.unsent\(\); \}/);
 });

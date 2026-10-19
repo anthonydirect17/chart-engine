@@ -136,3 +136,13 @@
 .apg-stale .gr-row:not(.gr-h) { opacity: .5; }
 .apg-stalenote { margin: 0 8px 6px; color: var(--warn); font-size: 12px; }
 .apg-nk { font-style: italic; }
+/* 1.33.0 (ChartBridge 0.6.5): a member's own rules. The join row says the rules taken from The Desk; the full form (an account with
+   no type on The Desk, Edit rules, a member's Rules) wraps its boxes over two lines at 1366 x 768 */
+.apg-join.apg-jauto, .apg-rform { flex-wrap: wrap; row-gap: 4px; }
+.apg-jrules { flex: 1 1 100%; min-width: 0; color: var(--ws-text); }
+.apg-rf { display: inline-flex; align-items: center; gap: 3px; color: var(--ws-muted); white-space: nowrap; }
+.apg-rf .apg-ll-in { width: 64px; }
+.apg-rf .apg-sel { height: 20px; font-size: 11px; width: 128px; }
+.apg-mrules { align-items: center; }
+.apg-mrules .apg-mfloor { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apg-redit { flex: none; }

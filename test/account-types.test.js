@@ -28,7 +28,7 @@ test('account types: The Desk\'s list read clean, archived and malformed rows le
   assert.equal(c.asOf, '2026-10-16T18:02:00Z');
   const t = c.types.find(x => x.id === 'lucid-50k-flex');
   assert.deepEqual(t, { id: 'lucid-50k-flex', firm: 'Lucid', name: '50K Flex, no DLL', accountType: 'eval', size: 50000, dailyLoss: null, drawdown: 2000, drawdownType: 'eod', lockAt: 50100,
-    target: 3000, consistency: 50, status: 'not_checked', version: 3 });
+    target: 3000, consistency: 50, status: 'not_checked', version: 3, maxMinis: 4, maxMicros: 40 });   // 1.33.0: max_nq and max_mnq
   assert.equal(GC.cleanTypes({ types: [row({ status: 'Checked' })] }).types[0].status, 'not_checked', 'only "checked" exactly is checked');
   assert.equal(GC.cleanTypes({ types: [row({ drawdown_type: 'weekly', account_type: 'x' })] }).types[0].drawdownType, null);
   assert.equal(GC.cleanTypes({ types: [row({ account_type: 'x' })] }).types[0].accountType, '');

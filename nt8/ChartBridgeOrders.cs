@@ -236,6 +236,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public int StopTicks, TargetTicks;      // ticks from each fill (0 = none); a resting entry's change with plan (read and written under Sync)
             public bool Resting;                    // a limit or stop entry: its ticks can be changed (plan), and are kept in planned_brackets.txt
             public bool PlanLost;                   // recovered without its planned_brackets.txt record: the name's ticks, with an alarm
+            public int RiskTicks;                   // 0.6.5 (review 1, 6): a strategy entry's stop risk, its stop plus a stop-limit's ticks (0: StopTicks)
             public string Converted;                // 0.3.7 planned prices turned into ticks at recovery: what to tell the page
             public bool ValueEstimated;             // recovered: CoveredValue partly unknown (contracts handled with no legs before a
                                                     // recompile); the next increment's price comes from NinjaTrader's executions, never an estimate
@@ -303,6 +304,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "cancel", new[] { "type", "cid", "id", "from" } },   // 0.4.0 accounts: "from": "list" (the Working orders tab), refused unless cancelFromList is on
             { "flatten", new[] { "type", "cid", "account", "root" } },
             { "merge", new[] { "type", "cid", "account", "root" } },   // 0.4.0 B4
+            // 0.6.5 (Anthony 2026-10-19): trade the group from the ticket (ChartBridgeGroups.cs, GroupEntry)
+            { "groupPreview", new[] { "type", "cid", "group", "root", "side", "kind", "price", "limitOffset", "bracket" } },
+            { "groupOrder", new[] { "type", "cid", "group", "root", "side", "kind", "price", "limitOffset", "bracket", "sizes" } },
         };
         private static readonly string[] BracketKeys = { "stop", "target" };
         private static readonly Regex BracketRx = new Regex("\"bracket\"\\s*:\\s*\\{([^{}]*)\\}");
@@ -319,7 +323,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Has(top, "bracket")) { why = "bracket must be an object like {\"stop\":8,\"target\":16}"; return null; }
             // 0.3.7: a bracket object belongs on order only; on plan, change or cancel it is refused. On flatten it is
             // still ignored, so Flatten is never refused for anything new.
-            if (bracketBody != null && type != "order" && type != "flatten") { why = "unknown key \"bracket\" in " + type; return null; }
+            if (bracketBody != null && type != "order" && type != "flatten" && type != "groupPreview" && type != "groupOrder") { why = "unknown key \"bracket\" in " + type; return null; }
             if (Duplicate(top) || (bracketBody != null && Duplicate(bracketBody))) { why = "message has a key twice"; return null; }
             string[] allowed;
             if (!Keys.TryGetValue(type, out allowed)) { why = "unknown message type " + type; return null; }
@@ -383,10 +387,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (type == "auth") { Auth(client, text); return; }
                 string why = Gate(client);
                 string strategyBody = null;   // 0.4.0 B1: the strategy object, cut out as the bracket is (strategies on only)
-                if (why == null && type == "order" && StrategiesOn) why = CutStrategy(ref text, out strategyBody);
+                if (why == null && (type == "order" || type == "groupPreview" || type == "groupOrder") && StrategiesOn) why = CutStrategy(ref text, out strategyBody);   // 0.6.5: a group entry may carry a strategy
                 string bracketBody = null, top = why == null ? TopLevel(type, text, out bracketBody, out why) : null;
                 if (why == null) why = QuoteOnly(top, id);   // 0.4.0: a quote-only market: refused before any other order code runs
-                if (why == null && type != "flatten" && type != "merge") why = MergeFreezeWhy(type, top, id);   // 0.4.0 B4: a Merge swap freezes its account and root
+                if (why == null && type != "flatten" && type != "merge" && type != "groupPreview" && type != "groupOrder") why = MergeFreezeWhy(type, top, id);   // 0.6.5: a group entry asks it per member   // 0.4.0 B4: a Merge swap freezes its account and root
                 if (why != null) { Reject(client, cid, id, why); return; }
                 if (type == "order") why = PlaceOrder(top, bracketBody, cid, strategyBody);
                 else if (type == "change") why = ChangeOrder(top, id);
@@ -394,6 +398,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (type == "cancel") why = CancelOrder(top, id);   // 0.4.0 accounts: top for "from"
                 else if (type == "flatten") why = Flatten(top);
                 else if (type == "merge") why = MergeStart(client, top, cid);   // 0.4.0 B4
+                else if (type == "groupPreview" || type == "groupOrder") why = GroupEntry(client, type, top, bracketBody, cid, strategyBody);   // 0.6.5
                 if (why != null) Reject(client, cid, id, why);
             }
             catch (Exception ex)
@@ -694,7 +699,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, string agent, string agentPlan, out Order placed)
         {
             string planTag, why;
-            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
+            // 0.6.5 (review 1b): a page entry takes the group entry lock first (GroupEntryLock, then PlaceLock), so a group entry's sizing
+            // and its placing never interleave with another entry on a member
+            // re-review 3: only entries wait on it: a page market exit (no bracket or strategy, the other side of the position by both
+            // readings, at most the position) never does
+            if (!bot && agent == null && !LooksLikeExit(top, bracketBody, strategyBody)) { lock (GroupEntryLock) lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed); }
+            else lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
             if (planTag != null)
             {
                 // The record is what a recompile reads. Its name holds the same ticks, so a failed write does not refuse the
@@ -704,6 +714,20 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (err != null) PlanSaveAlarm("the planned stop and target of entry CB#" + planTag + " could not be saved (" + err + ")");
             }
             return why;
+        }
+
+        private static bool LooksLikeExit(string top, string bracketBody, string strategyBody)
+        {
+            if (bracketBody != null || strategyBody != null || Str(top, "kind") != "market") return false;
+            int q;
+            if (Int(top, "qty", out q) != 1 || q < 1) return false;
+            string name = Str(top, "account");
+            Instrument inst = ChartBridgeServer.InstrumentFor((Str(top, "root") ?? "").ToUpperInvariant());
+            Account a = null;
+            lock (Account.All) foreach (Account x in Account.All) if (x.Name != null && name != null && x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { a = x; break; }
+            if (a == null || inst == null) return false;
+            int pn = SignedPosition(a, inst), pe = EffectivePosition(a, inst), along = Str(top, "side") == "buy" ? -1 : 1;
+            return pn * along > 0 && pe * along > 0 && q <= Math.Min(Math.Abs(pn), Math.Abs(pe));
         }
 
         private static string PlaceOrderLocked(string top, string bracketBody, string cid, string strategyBody, bool bot, string agent, string agentPlan, out string planTag, out Order placed)
@@ -827,7 +851,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 IdFor(order);
                 Ours.Add(order);
                 if (!string.IsNullOrEmpty(cid)) CidOf[order] = cid;
-                if (strat != null) { BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = strat.Stop }; NewManaged(tag, order, account, inst, isBuy, root, strat); }   // 0.4.0 B1
+                if (strat != null) { BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = strat.Stop, RiskTicks = strat.Stop + Math.Max(0, strat.StopLimit) }; NewManaged(tag, order, account, inst, isBuy, root, strat); }   // 0.4.0 B1
                 else if (kind != "market")
                     BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, Resting = true, StopTicks = stopTicks, TargetTicks = targetTicks };
                 else if (stopTicks > 0 || targetTicks > 0)

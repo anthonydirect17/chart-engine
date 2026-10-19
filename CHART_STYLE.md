@@ -356,6 +356,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   +4.50 +$90" (side letter and size, points, whole dollars). The full label (the 1.14.0 one) while the mouse is over it, and
   while it has "+SL" / "+TP" cells. The hit areas, the stacking and the x (its 18 px cell) are the full label's, so nothing
   that was clickable shrank.
+- **A group's lines (1.33.0, Anthony 2026-10-19):** with a group on the order ticket, one line per level of the members' orders,
+  drawn exactly as one account's (colors, borders, dashes, compact and full labels), its quantity the members' sum and its label
+  followed by the group and how many accounts it covers: "STP 9 · Lucid ×4" ("SELL STP 9 · Lucid ×4" in full). Each account's
+  order is in the line's tooltip. Dragging it moves every member's order to the price dropped at.
 - **Planned stop and target (1.13.0, ChartBridge 0.3.8):** a resting entry's planned legs draw as its legs would (the
   leg's side color), but clearly planned: the line finely dashed 2/4 at 70% (40% while a move waits for its answer),
   the label "SL plan -12t" / "TP plan +24t" (ticks from the fill, from the line's live distance while dragged) with a

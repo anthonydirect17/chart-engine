@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.32.2
+ * chart-engine 1.33.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.32.2';
+const VERSION = '1.33.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -68,22 +68,24 @@ const roundTo = (p, tick) => tick ? Math.round(p / tick) * tick : p;
 /* ---------------------------------------------------------------- orders and position (1.3.0) */
 const KIND_ABBR = { market: 'MKT', limit: 'LMT', stop: 'STP', stopLimit: 'STL' };
 /** Short order label: "BUY LMT 2"; bracket legs read "SELL TGT 2" and "SELL STP 2". Qty is what is left to fill. */
+/* 1.33.0: a group's line (the host sets `group`, "Lucid ×4") says so after its own label */
+const groupPart = ord => (typeof ord.group === 'string' && ord.group ? ' · ' + ord.group : '');
 function orderLabel(ord) {
-  if (ord.plan) return (ord.plan.role === 'stop' ? 'SL plan -' : 'TP plan +') + Math.abs(ord.plan.ticks) + 't';   // 1.13.0: a planned stop or target
+  if (ord.plan) return (ord.plan.role === 'stop' ? 'SL plan -' : 'TP plan +') + Math.abs(ord.plan.ticks) + 't' + groupPart(ord);   // 1.13.0: a planned stop or target
   const side = ord.side === 'sell' ? 'SELL' : 'BUY';
   const kind = ord.role === 'target' ? 'TGT' : ord.role === 'stop' ? 'STP' : (KIND_ABBR[ord.kind] || String(ord.kind || '').toUpperCase());
   const left = Math.max(0, (+ord.qty || 0) - (+ord.filled || 0));
-  return side + ' ' + kind + ' ' + left;
+  return side + ' ' + kind + ' ' + left + groupPart(ord);
 }
 /** The short label (1.15.0, Anthony from his two-monitor setup: the labels were too big and covered price), drawn on a
     host's chart with the full label (orderLabel) on hover: "TGT 1", "STP 1" (a bracket leg; its side is its color),
     "BUY LMT 1" (an entry), planned "SL -12t" / "TP +24t". */
 function orderLabelShort(ord) {
-  if (ord.plan) return (ord.plan.role === 'stop' ? 'SL -' : 'TP +') + Math.abs(ord.plan.ticks) + 't';
+  if (ord.plan) return (ord.plan.role === 'stop' ? 'SL -' : 'TP +') + Math.abs(ord.plan.ticks) + 't' + groupPart(ord);
   const left = Math.max(0, (+ord.qty || 0) - (+ord.filled || 0));
-  if (ord.role === 'target') return 'TGT ' + left;
-  if (ord.role === 'stop') return 'STP ' + left;
-  return (ord.side === 'sell' ? 'SELL' : 'BUY') + ' ' + (KIND_ABBR[ord.kind] || String(ord.kind || '').toUpperCase()) + ' ' + left;
+  if (ord.role === 'target') return 'TGT ' + left + groupPart(ord);
+  if (ord.role === 'stop') return 'STP ' + left + groupPart(ord);
+  return (ord.side === 'sell' ? 'SELL' : 'BUY') + ' ' + (KIND_ABBR[ord.kind] || String(ord.kind || '').toUpperCase()) + ' ' + left + groupPart(ord);
 }
 /** The position's short label parts (1.15.0): ["L1", "+4.50", "+$90"]: the side's letter and size, points per contract,
     whole dollars for the position (none without a point value). */
@@ -2290,7 +2292,7 @@ function create(container, options) {
           const ticks = parent ? Math.round(Math.abs(price - orderPrice(parent)) / o.tick) : Math.abs(ord.plan.ticks);
           const alpha = pendingMoves.has(ord.id) && !dragging ? 0.4 : 0.7;
           hline(y, col, [2, 4], 0.75 * alpha, dragging ? 1.5 : 1);
-          const pl = { plan: { role: ord.plan.role, ticks } };
+          const pl = { plan: { role: ord.plan.role, ticks }, group: ord.group };
           const hit = label(y, [[orderLabel(pl), col]], col, [2, 3], alpha, orderEditing, null, [[orderLabelShort(pl), col]], ord.id);
           orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox });
           orderTags.push({ price, id: ord.id, style: { fill: T.bg, fg: col, border: col, dash: [2, 3] } });
@@ -2987,7 +2989,8 @@ function create(container, options) {
      * "SL plan -12t" / "TP plan +24t", it follows the entry while that is dragged and is dragged and closed like an
      * order (orderMove with its own id and `from`, the entry price it was drawn from; orderCancel). `adds: ['stop', 'target']` on an entry draws "+SL" / "+TP" cells on
      * its label while editing; a click on one emits orderPlanAdd { id, which }. `movePending: price` (1.22.0) on an order
-     * whose move still waits for its answer draws it there (faded, as after the drag), its planned lines with it.
+     * whose move still waits for its answer draws it there (faded, as after the drag), its planned lines with it. `group` (1.33.0,
+     * a string such as "Lucid ×4") follows the label: a group's line on a host's chart.
      */
     setOrders(list) {
       orders = (list || []).filter(x => x && x.id !== undefined && isFinite(x.price) && x.price !== null)
@@ -2995,6 +2998,7 @@ function create(container, options) {
           const y = { id: x.id, side: x.side === 'sell' ? 'sell' : 'buy', kind: x.kind, price: +x.price, qty: +x.qty || 0, filled: +x.filled || 0, role: x.role || null };
           if (x.plan && x.plan.parent !== undefined && isFinite(x.plan.offset)) y.plan = { parent: x.plan.parent, offset: Math.round(+x.plan.offset), role: x.plan.role === 'target' ? 'target' : 'stop', ticks: Math.abs(Math.round(+x.plan.offset)) };
           if (Array.isArray(x.adds)) y.adds = x.adds.filter(w => w === 'stop' || w === 'target');
+          if (typeof x.group === 'string' && x.group) y.group = x.group.slice(0, 40);   // 1.33.0: a group's line names its group
           return y;
         });
       pendingMoves.clear();
