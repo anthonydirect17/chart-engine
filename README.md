@@ -665,7 +665,7 @@ reference for ChartBridge's behaviour) with `npm test` and `npm run smoke:orders
   });
   chart.setBars(bars);       // [{ t, o, h, l, c, v, vw }]
   chart.setLevels(ChartEngine.util.levelLines(ChartEngine.util.sessionLevels(oneMinuteBars)));
-  chart.setTrades([{ tIn, tOut, pIn, pOut, dir: 1 }]);
+  chart.setTrades([{ tIn, tOut, pIn, pOut, dir: 1 }]);   // optional pts: the signed result in points, for the colour (1.32.2)
   onTick(bar => chart.update(bar));        // same t updates the forming bar, a newer t adds one
   ChartEngine.mountThemePanel(chart, document.getElementById('toolbar'));
 </script>
