@@ -553,6 +553,10 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .gp-differ .ws-btn.gp-upd { flex: none; }
 .gp-differ .ws-btn.gp-upd { height: 20px; padding: 0 6px; font-size: 11px; }
 .ws-gp .gp-ftype .gp-herorow .gp-in { width: 320px; max-width: 60%; flex: none; }
+/* 1.32.0: the Account type as Firm, Plan and Size side by side (Anthony 2026-10-19), in the width the one select had */
+.ws-gp .gp-ftype .gp-tpick { display: flex; gap: 4px; width: 320px; max-width: 60%; flex: none; min-width: 0; }
+.ws-gp .gp-ftype .gp-tpick .gp-in.gp-tp { flex: 1 1 0; width: 0; min-width: 0; max-width: none; padding: 0 4px; }
+.ws-gp .gp-ftype .gp-tpick .gp-in#gp-fromType { flex-grow: 1.3; }
 
 /* ---------------- 1.30.0 (wave 5): Settings, every section collapsible from its header row (the heading as before, the whole
    row a button, a small caret), and Collapse all / Expand all in the first header row (no row of its own). No motion: a section opens and closes at once. */

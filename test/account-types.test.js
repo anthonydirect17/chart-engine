@@ -227,3 +227,136 @@ test('account types (review nits): a static Apply names a stricter My floor it r
   assert.match(GC.applySend({ error: 'Its type is not on The Desk\'s list now.' }, null).error, /now\.$/, 'an error ending in a full stop gets no second one (apply-yes adds one only when missing)');
   assert.match(fs.readFileSync(path.join(ROOT, 'live', 'accounts.js'), 'utf8'), /const x = GroupsCore\.applySend\(l, acc\);\s*if \(x\.error\) \{ host\.note\('Not sent: ' \+ x\.error \+ \(\/\[\.!\?\]\$\/\.test\(x\.error\) \? '' : '\.'\), true\); render\(\); return; \}\s*if \(F\.accountLimits\(id, x\.floor, x\.daily\)\)/, 'apply-yes sends only what applySend gives');
 });
+
+/* Chart 1.32.0 (Anthony 2026-10-19: "far to many accounts for just a drop down"; Firm > Plan > Size, "firms I actually trade
+   first"): the picker's pure parts in GroupsCore. Real firm names, made-up ids. */
+const ty = (id, firm, name, o) => Object.assign({ id, firm, name, status: 'not_checked', version: 1 }, o || {});
+const SAMPLE = [ty('t-tc100', 'Topstep', 'Trading Combine 100K'), ty('t-tc50', 'Topstep', 'Trading Combine 50K', { status: 'checked' }), ty('t-xf50', 'Topstep', 'Express Funded 50K'),
+  ty('l-f50f', 'Lucid', 'LucidFlex 50K Funded'), ty('l-f50e', 'Lucid', 'LucidFlex 50K Eval'), ty('l-f25e', 'Lucid', 'LucidFlex 25K Eval'), ty('l-p100', 'Lucid', 'LucidPro 100K Eval'),
+  ty('b-m25o', 'Bulenox', 'Master 25K Option 2 EOD'), ty('b-m25f', 'Bulenox', 'Master 25K Funded'), ty('b-m25q', 'Bulenox', 'Master 25K Qualified'), ty('b-m25t', 'Bulenox', 'Master 25K Test'),
+  ty('b-leg', 'Bulenox', 'Legacy plan'), ty('f-d50', 'FundedNext', 'Direct 50K Account'), ty('a-50', 'Apex', 'PA 50K Sim-Funded'), ty('a-50e', 'Apex', 'PA 50K Evaluation')];
+
+test('type picker (1.32.0): a name splits into plan, size and rest; no size token is plan Other with the whole name', () => {
+  assert.deepEqual(GC.typeParts(ty('x', 'Lucid', 'LucidFlex 50K Eval')), { plan: 'LucidFlex', size: 50, sizeText: '50K', rest: 'Eval', short: '50K Eval' });
+  assert.deepEqual(GC.typeParts(ty('x', 'Topstep', 'Trading Combine 50K')), { plan: 'Trading Combine', size: 50, sizeText: '50K', rest: '', short: '50K' });
+  assert.deepEqual(GC.typeParts(ty('x', 'Bulenox', 'Master 25K Option 2 EOD')), { plan: 'Master', size: 25, sizeText: '25K', rest: 'Option 2 EOD', short: '25K Option 2 EOD' });
+  assert.deepEqual(GC.typeParts(ty('x', 'FundedNext', 'Direct 50K Account')), { plan: 'Direct', size: 50, sizeText: '50K', rest: 'Account', short: '50K Account' });
+  assert.equal(GC.typeParts(ty('x', 'Apex', 'Rally 100k Sim-Funded')).size, 100, 'a lower case k is a size too');
+  assert.equal(GC.typeParts(ty('x', 'Apex', 'Static 2.5K Eval')).size, 2.5);
+  assert.equal(GC.typeParts(ty('x', 'Apex', 'Plan 50K2 Eval')).plan, 'Other', '"50K2" is not a size token');
+  assert.equal(GC.typeParts(ty('x', 'Apex', 'Two Plans 50K Eval 100K')).plan, 'Two Plans', 'the first size token splits');
+  for (const n of ['Legacy plan', '50K Flex, no DLL', 'Express Funded']) assert.deepEqual(GC.typeParts(ty('x', 'Lucid', n)), { plan: 'Other', size: null, sizeText: '', rest: n, short: n }, n);
+  assert.deepEqual(GC.typeParts(null), { plan: 'Other', size: null, sizeText: '', rest: '', short: '' });
+});
+
+test('type picker (1.32.0): firms in use first, then A to Z; plans A to Z; by size, then Eval before Funded, then the rest A to Z', () => {
+  const used = GC.usedFirms([{ accountType: { id: 't-tc50', firm: 'Topstep', name: 'x' } }, { accountType: null }, {}, null, { accountType: { id: 'l-f50e', firm: 'Lucid' } }, { accountType: { id: 'l-p100', firm: 'Lucid' } }]);
+  assert.deepEqual(used.sort(), ['Lucid', 'Topstep']);
+  /* Anthony 2026-10-19: a firm The Desk gives on a chart-accounts row (its firm field) is in use too, type set or not */
+  assert.deepEqual(GC.usedFirms([{ firm: 'FundedNext', accountType: null }, { firm: ' Bulenox ' }, { firm: '' }, { firm: null }, { firm: 3 }, { firm: 'Lucid', accountType: { firm: 'Topstep' } }]).sort(), ['Bulenox', 'FundedNext', 'Lucid', 'Topstep']);
+  assert.deepEqual(GC.typeTree(SAMPLE, GC.usedFirms([{ firm: 'fundednext', accountType: null }])).map(f => f.firm).slice(0, 2), ['FundedNext', 'Apex'], 'a row\'s firm puts it first, without case');
+  const tree = GC.typeTree(SAMPLE, used);
+  assert.deepEqual(tree.map(f => f.firm + (f.used ? '*' : '')), ['Lucid*', 'Topstep*', 'Apex', 'Bulenox', 'FundedNext']);
+  const plans = firm => tree.find(f => f.firm === firm).plans.map(p => p.plan);
+  assert.deepEqual(plans('Topstep'), ['Express Funded', 'Trading Combine']);
+  assert.deepEqual(plans('Bulenox'), ['Master', 'Other']);
+  const ids = (firm, plan) => tree.find(f => f.firm === firm).plans.find(p => p.plan === plan).types.map(x => x.t.id);
+  assert.deepEqual(ids('Topstep', 'Trading Combine'), ['t-tc50', 't-tc100'], 'by the size number, not as text');
+  assert.deepEqual(ids('Lucid', 'LucidFlex'), ['l-f25e', 'l-f50e', 'l-f50f']);
+  assert.deepEqual(ids('Bulenox', 'Master'), ['b-m25t', 'b-m25o', 'b-m25f', 'b-m25q'], 'Eval, Challenge or Test first; Funded, Qualified, Sim-Funded or Account last; the rest between, each A to Z');
+  assert.deepEqual(ids('Apex', 'PA'), ['a-50e', 'a-50']);
+  assert.deepEqual(GC.typeTree(SAMPLE, []).map(f => f.firm), ['Apex', 'Bulenox', 'FundedNext', 'Lucid', 'Topstep'], 'none in use: A to Z');
+  assert.deepEqual(GC.typeTree(SAMPLE, ['lucid']).map(f => f.firm)[0], 'Lucid', 'a firm in use matches without case');
+  assert.equal([0, 1, 2].map(i => ['Eval', 'Option 2 EOD', 'Sim-Funded'].map(GC.stageRank)[i]).join(), '0,1,2');
+  assert.equal(GC.stageRank('Challenge'), 0); assert.equal(GC.stageRank('Qualified'), 2); assert.equal(GC.stageRank('Account'), 2); assert.equal(GC.stageRank(''), 1);
+});
+
+test('type picker (1.32.0): only the last select or Not set sends; Firm and Plan move the picker without sending', () => {
+  const tree = GC.typeTree(SAMPLE, ['Lucid']);
+  const s0 = GC.cascadeStart(tree, 'l-f50e');
+  assert.deepEqual(s0, { firm: 'Lucid', plan: 'LucidFlex', id: 'l-f50e' });
+  assert.deepEqual(GC.cascadeStart(tree, ''), { firm: '', plan: '', id: '' });
+  /* Firm: nothing sent; a firm with one plan takes it; back to the account's own firm, its own plan */
+  let r = GC.cascadePick(tree, s0, 'firm', 'Topstep');
+  assert.deepEqual(r, { state: { firm: 'Topstep', plan: '', id: 'l-f50e' }, send: undefined });
+  r = GC.cascadePick(tree, r.state, 'plan', 'Trading Combine');
+  assert.deepEqual(r, { state: { firm: 'Topstep', plan: 'Trading Combine', id: 'l-f50e' }, send: undefined });
+  assert.deepEqual(GC.cascadePick(tree, r.state, 'firm', 'FundedNext'), { state: { firm: 'FundedNext', plan: 'Direct', id: 'l-f50e' }, send: undefined });
+  assert.deepEqual(GC.cascadePick(tree, r.state, 'firm', 'Lucid'), { state: { firm: 'Lucid', plan: 'LucidFlex', id: 'l-f50e' }, send: undefined });
+  /* the last select sends its type; the placeholder or the type already chosen sends nothing */
+  assert.deepEqual(GC.cascadePick(tree, r.state, 'type', 't-tc100'), { state: { firm: 'Topstep', plan: 'Trading Combine', id: 't-tc100' }, send: 't-tc100' });
+  assert.equal(GC.cascadePick(tree, r.state, 'type', '').send, undefined);
+  assert.equal(GC.cascadePick(tree, s0, 'type', 'l-f50e').send, undefined);
+  /* Not set (on the Firm select) sends null once a type is set; with none set it only resets the picker */
+  assert.deepEqual(GC.cascadePick(tree, r.state, 'firm', ''), { state: { firm: '', plan: '', id: '' }, send: null });
+  assert.deepEqual(GC.cascadePick(tree, { firm: 'Topstep', plan: '', id: '' }, 'firm', ''), { state: { firm: '', plan: '', id: '' }, send: undefined });
+  assert.equal(GC.cascadePick(tree, s0, 'other', 'x').send, undefined);
+});
+
+test('type picker (1.32.0): the three selects as data (short labels, "(not checked)" on the last, the whole name in the titles, a type gone)', () => {
+  const tree = GC.typeTree(SAMPLE, ['Topstep']);
+  const v = GC.cascadeView(tree, GC.cascadeStart(tree, 't-tc50'));
+  assert.deepEqual(v.firm.options.map(o => o.label), ['Not set', 'Topstep', 'Apex', 'Bulenox', 'FundedNext', 'Lucid']);
+  assert.equal(v.firm.value, 'Topstep'); assert.equal(v.plan.value, 'Trading Combine'); assert.equal(v.type.value, 't-tc50');
+  assert.deepEqual(v.plan.options.map(o => o.label), ['Express Funded', 'Trading Combine']);
+  assert.deepEqual(v.type.options.map(o => [o.label, o.title]), [['50K', 'Topstep Trading Combine 50K'], ['100K (not checked)', 'Topstep Trading Combine 100K (not checked)']]);
+  /* Not set: Plan and Size are placeholders; a firm chosen: "Plan" until one is; a plan chosen without its type: "Size" */
+  const n = GC.cascadeView(tree, { firm: '', plan: '', id: '' });
+  assert.equal(n.firm.value, ''); assert.deepEqual(n.plan.options.map(o => o.label), ['Plan']); assert.deepEqual(n.type.options.map(o => o.label), ['Size']);
+  const b = GC.cascadeView(tree, { firm: 'Bulenox', plan: '', id: 't-tc50' });
+  assert.deepEqual(b.plan.options.map(o => o.label), ['Plan', 'Master', 'Other']); assert.equal(b.plan.value, '');
+  const m = GC.cascadeView(tree, { firm: 'Bulenox', plan: 'Master', id: 't-tc50' });
+  assert.equal(m.type.value, ''); assert.equal(m.type.options[0].label, 'Size');
+  assert.deepEqual(GC.cascadeView(tree, { firm: 'Bulenox', plan: 'Other', id: '' }).type.options.map(o => o.label), ['Size', 'Legacy plan (not checked)'], 'plan Other: the whole name');
+  /* a saved type no longer on The Desk's list: shown where it was, "(not on The Desk's list now)", as before */
+  const gone = { firm: 'Lucid', name: 'LucidFlex 150K Eval' }, gs = GC.cascadeStart(tree, 'l-old', gone);
+  assert.deepEqual(gs, { firm: 'Lucid', plan: 'LucidFlex', id: 'l-old' });
+  const g = GC.cascadeView(tree, gs, gone);
+  assert.equal(g.type.value, 'l-old');
+  assert.equal(g.type.options.find(o => o.value === 'l-old').label, '150K Eval (not on The Desk\'s list now)');
+  assert.equal(g.type.options.find(o => o.value === 'l-old').title, 'Lucid LucidFlex 150K Eval (not on The Desk\'s list now)');
+  const gf = GC.cascadeView(tree, GC.cascadeStart(tree, 'x-old', { firm: 'Elite', name: 'Old 50K' }), { firm: 'Elite', name: 'Old 50K' });
+  assert.equal(gf.firm.value, 'Elite'); assert.ok(gf.firm.options.some(o => o.value === 'Elite'), 'a firm no longer on the list is still shown');
+  assert.equal(gf.plan.value, 'Old'); assert.equal(gf.type.value, 'x-old');
+});
+
+test('type picker (1.32.0, "Text + Change"): the Accounts tab shows text and Change; no select sends; Save sends the Size; Not set sends null; Cancel nothing; one row', () => {
+  const acc = read('live/accounts.js'), grp = read('live/groups.js'), css = read('live/accounts.css');
+  /* the select handler (review: in Chromium an arrow key on a closed select fires change): only the open row's selects; none of
+     Firm, Plan or Size sends; Firm and Plan never move the focus; the Size is kept for Save */
+  const h = acc.split("if (a === 'acct-firm' || a === 'acct-plan' || a === 'acct-type') {")[1].split("if (a === 'my-floor'")[0];
+  assert.ok(h, 'one change handler for the three selects');
+  assert.match(h, /if \(P\.typeEdit !== name \|\| !canTypeNow\(\) \|\| P\.typePending\.has\(name\)\) return;/, 'only the open row, only while The Desk answers');
+  assert.match(h, /if \(which === 'type'\) \{ P\.typePick = Object\.assign\(\{\}, pickState\(name, tree\), \{ id: el\.value, sized: true \}\); render\(\); return; \}/, 'Size: kept for Save, nothing sent');
+  assert.match(h, /P\.typePick = \{ firm: r\.state\.firm, plan: r\.state\.plan \}; render\(\);\s*return;/, 'Firm and Plan: nothing sent');
+  assert.ok(!/sendType\(|setAccountType|\.focus\(/.test(h), 'no send and no focus move in the select handler');
+  /* the list keeps the focus on the same control when it is rebuilt (Firm or Plan drawn again) */
+  assert.match(acc, /if \(rebuilt && keep\) \{ const e = findAct\(keep\.act, keep\.id\); if \(e && !e\.disabled\) e\.focus\(\); \}/);
+  /* the clicks: Change or Set opens one row (another closes); Cancel closes it, nothing sent; Not set sends null, only with a type;
+     Save sends the Size chosen (not the account's own), by click or Enter; each puts the focus back on Change or Set */
+  const clicks = acc.split("listEl.addEventListener('click'")[1].split("listEl.addEventListener('change'")[0];
+  assert.match(clicks, /if \(e\.detail === 0 && b\.dataset\.act !== 'type-save'\) \{ host\.note\(/, 'Save by Enter too; every other button by click only, as before');
+  assert.match(clicks, /else if \(a === 'type-edit'\) \{ const open = P\.typeEdit !== id && canTypeNow\(\); P\.typeEdit = open \? id : ''; P\.typePick = null; render\(\);/, 'one row at a time: P.typeEdit holds one account');
+  assert.match(clicks, /else if \(a === 'type-cancel'\) \{ P\.typeEdit = ''; P\.typePick = null; P\.typeFocus = id; render\(\); \}/, 'Cancel sends nothing');
+  assert.match(clicks, /else if \(a === 'type-clear'\) \{ const ok = P\.typeEdit === id && canTypeNow\(\) && !P\.typePending\.has\(id\) && !!typeVal\(id\);[^}]*P\.typeFocus = id; if \(ok\) sendType\(id, ''\); else render\(\); \}/, 'Not set sends null');
+  assert.match(clicks, /else if \(a === 'type-save'\) \{ const want = saveWant\(id\); P\.typeEdit = ''; P\.typePick = null; P\.typeFocus = id; if \(want\) sendType\(id, want\); else render\(\); \}/, 'Save sends the Size chosen once');
+  assert.equal(clicks.split('sendType(').length, 3, 'two sends among the clicks (Not set and Save)');
+  assert.match(acc, /return want && want !== typeVal\(name\) && \(S\.types \|\| \[\]\)\.some\(t => t\.id === want\) \? want : '';/, 'Save: a Size on the list, not the account\'s own');
+  assert.match(acc, /data-act="type-save" data-id="\$\{esc\(a\.name\)\}" \$\{pr\(\{ disabled: !saveWant\(a\.name\) \}\)\}/, 'Save enabled once a Size other than its own is chosen');
+  assert.equal(acc.split('F.setAccountType(').length, 2, 'one PUT route as before (sendType)');
+  assert.match(acc, /F\.setAccountType\(name, want \|\| null\)/);
+  /* the cell: text, Change or Set only while The Desk answers; "Not set" offered in the row only when a type is set */
+  assert.match(acc, /const edit = canType && !pend \? `<button type="button" class="ac-btn apg-tedit" data-act="type-edit"/, 'read only while The Desk is not reachable, as before');
+  assert.match(acc, /const text = cur \? cur\.name : goneNow \? \(g\.firm \? g\.firm \+ ' ' : ''\) \+ g\.name \+ ' \(not on The Desk\\'s list now\)' : val \? val : 'Not set';/);
+  assert.match(acc, /\(val \? `<button type="button" class="ac-btn" data-act="type-clear"/);
+  /* no Desk rows read: "not known" (not "Not set"), the reason in the tooltip, no Change or Set (Anthony 2026-10-19) */
+  assert.match(acc, /if \(!S\.deskAt\) return `<span role="cell" class="apg-type">` \+ ci\('not known', 'apg-ttext mut apg-tnk', 'The Desk is not reachable, so the account\\'s type cannot be read now'\) \+ '<\/span>';/, 'not known while no Desk rows are read');
+  assert.match(acc, /if \(!typesOn \|\| P\.typeEdit !== a\.name \|\| !canType \|\| P\.typePending\.has\(a\.name\)\) return '';/, 'the row shows only for the open account while The Desk answers');
+  assert.match(acc, /\+ typeRow\(a\) \+ askApply\(a\) \+ typeWarn\(a\);/);
+  /* the rules dialog keeps the three selects; the Account type column 244px ("Narrower Room") */
+  assert.match(grp, /const chosen = pick\.id;/, 'the dialog links the type chosen last, not the Size select\'s placeholder');
+  assert.match(grp, /if \(r\.send === null\) \{ filled = null; fromIdle\(\); \}\s*else if \(r\.send\) \{ const t = typeById\(r\.send\); if \(t\) fill\(t\); \}/, 'the dialog fills only on the last select');
+  assert.ok(!/\.focus\(/.test(grp.split('const onPick = ')[1].split('};')[0]), 'the dialog\'s Firm and Plan keep the focus where it is (review)');
+  assert.match(grp, /still\.textContent = was \? 'still: ' \+ was : ''; still\.hidden = !was;/, 'Firm or Plan moved with Size blank: "still: <type>" under the selects');
+  assert.match(css, /\.apg-acc-g\.apg-grps\.apg-types \.gr-row \{ grid-template-columns: [^}]* minmax\(0, 1\.45fr\) 116px 244px 152px 44px; \}/, 'the type column 244px, taken from the Room only (Narrower Room)');
+});
