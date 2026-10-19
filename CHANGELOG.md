@@ -5,7 +5,8 @@
 Page only, no recompile (ChartBridge 0.6.2 as for 1.31.0; `minChartBridge` stays 0.6.2). The Desk's list of account types now holds
 about 208 types from 9 firms, and one flat dropdown of them was not usable (Anthony 2026-10-19: "far to many accounts for just a drop
 down"). He chose Firm > Plan > Size, with "firms I actually trade first", and for the Accounts tab "Text + Change" (the three selects
-side by side cut the labels to "Luci", "Topst", "Tradir" at 1366 x 768).
+side by side cut the labels to "Luci", "Topst", "Tradir" at 1366 x 768), then "Narrower Room" for the column's width and "not
+known" while The Desk is not reachable.
 
 - **The picker's pure parts (live/groups.js GroupsCore).** `typeParts` splits a type's name as The Desk writes it ("<Plan> <Size>K
   <rest>", e.g. "LucidFlex 50K Eval", "Trading Combine 50K", "Master 25K Option 2 EOD"): the plan is the text before the first
@@ -23,18 +24,27 @@ side by side cut the labels to "Luci", "Topst", "Tradir" at 1366 x 768).
   a firm with one plan takes it at once, and going back to the account's own firm shows its own plan and type again. The Size select
   sends the PUT /api/accounts/{account}/account-type of 1.30.0 and closes the row; Not set sends null and closes it; Cancel closes it
   and sends nothing. One row open at a time (Change on another account closes the first). Read only (no Change or Set, no row) while
-  The Desk is not reachable, as before; Apply and its question row are unchanged. The column (128 px) and the Room have their 1.30.0
-  widths again: at 1366 x 768 the Room is 295 px, as in 1.31.0, and longer names are cut ("LucidFlex...", shorter still beside Apply).
+  The Desk is not reachable, as before; Apply and its question row are unchanged. While no Desk rows have been read (The Desk not
+  reachable since the page opened) each cell says "not known", not "Not set", with the tooltip "The Desk is not reachable, so the
+  account's type cannot be read now"; when The Desk stops answering later, its last rows show as before.
+- **Accounts tab, "Narrower Room".** At 128 px the column cut "LucidFlex 50K Eval" to "LucidFlex..." (and to "Luc..." beside Change
+  and Apply). The column is now 244 px, so "LucidFlex 50K Eval", "LucidPro 150K Funded" and "Trading Combine 150K" show whole at
+  1366 x 768 beside Change and also beside Change and Apply (about 220 px was the ask; at 220 px the three still cut beside Apply,
+  which needs 241 px). The width comes from the Room only (2.4fr to 1.45fr: 295 px to 178 px at 1366); the other columns keep their
+  widths. A long Room is cut at the cell's end, and its whole text is now the first line of its tooltip. Longer type names
+  ("LucidDaily 150K Eval Intraday DLL Off") may still cut, whole in the tooltip.
 - **Settings, the rules dialog.** The same three selects in the place of the one Account type select. Choosing the size fills every
   rule box and the Type as in 1.30.0; "Not set" clears the link; Firm and Plan alone fill nothing and keep the type chosen last for
   Save. Update opens on the group's type.
 - Tests: `test/account-types.test.js` (the split, the order with a row's firm counted, the send rules, the selects as data with a
   type gone, the wiring: only the last select or Not set sends, Cancel sends nothing, one open row);
   `test/fake-desk.mjs` gives `sampleFirmTypes()` (Topstep, Bulenox and FundedNext types, made-up values); `smoke:settings` runs the
-  Accounts tab against the fake Desk at 1366 x 768 (text and Change or Set, the cell fits, the 128 px column and the Room, the row's
-  order with a firm in use from a row's firm, nothing sent for Firm, Plan or Cancel, one row at a time, one PUT for the size, null for
-  Not set, read only with The Desk down) and the dialog's fill; screenshots `settings-types-text-1366.png` (the text cells) and
-  `settings-types-change-row-1366.png` (one Change row open), beside the 1.30.0 ones.
+  Accounts tab against the fake Desk at 1366 x 768 (text and Change or Set, the cell fits, the 244 px column, the three names whole
+  beside Change and beside Change and Apply, the Room's text first in its tooltip, the row's order with a firm in use from a row's
+  firm, nothing sent for Firm, Plan or Cancel, one row at a time, one PUT for the size, null for Not set, "not known" and read only
+  with The Desk down) and the dialog's fill; screenshots `settings-types-text-1366.png` (the text cells),
+  `settings-types-change-row-1366.png` (one Change row open) and `settings-types-desk-down-1366.png` (The Desk not reachable),
+  beside the 1.30.0 ones. The check that the Room is no narrower than without the column is gone (Anthony chose a narrower Room).
 
 ## ChartBridge 0.6.3 and chart 1.31.0 (2026-10-16): the audit fixes for ChartBridge and the chart page
 

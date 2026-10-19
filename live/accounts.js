@@ -874,6 +874,9 @@ function mount(v, host) {
         if (!grpKnown) return c(NK, 'mut apg-nk', 'Not connected to ChartBridge: the account\'s group, type and limits are not known now');
         const pd = P.typePending.get(a.name);
         if (pd && pd.after !== null && S.deskAt > pd.after) P.typePending.delete(a.name);   // The Desk's rows read since the save
+        /* 1.32.0 (Anthony 2026-10-19): no Desk rows read (The Desk not reachable since this page opened): the type is not known,
+           not "Not set"; no Change or Set */
+        if (!S.deskAt) return `<span role="cell" class="apg-type">` + ci('not known', 'apg-ttext mut apg-tnk', 'The Desk is not reachable, so the account\'s type cannot be read now') + '</span>';
         const at = F.typeOf(a.name), pend = P.typePending.has(a.name), val = typeVal(a.name);
         if (pend && P.typeEdit === a.name) { P.typeEdit = ''; P.typePick = null; }
         const t = typeFor(a.name), canApply = !a.group && !!t && canGroup;
@@ -925,7 +928,8 @@ function mount(v, host) {
         const s = lim(a), pos = (a.positions || []).filter(p => p.qty).map(p => p.root + ' ' + (p.qty > 0 ? '+' : '') + p.qty).join(', ');
         const lvl = s.level ? ' apg-' + s.level : '';
         const why = a.why && typeof a.why === 'object' ? a.why : {}, from = x => (x.from === 'desk' ? ' (The Desk)' : x.from === 'chartbridge' ? ' (ChartBridge, from NinjaTrader\'s balance and P&L)' : ' (NinjaTrader)');
-        const roomTip = [s.dd ? (s.cb ? 'Room to the floor' + (s.dd.floor !== null && s.dd.floor !== undefined ? ' (' + AC.fmtUsdPlain(s.dd.floor) + ')' : '') + ': ' : 'Trailing drawdown: ') + (s.dd.room !== null ? AC.fmtUsdPlain(s.dd.room) + ' left' : 'room not reported') + (s.dd.limit ? ' of ' + AC.fmtUsdPlain(s.dd.limit) : '') + from(s.dd) : (why.roomFloor || a.roomDrawdownWhy || 'No trailing drawdown known'),
+        /* 1.32.0 ("Narrower Room"): the Room's whole text first in its tooltip (the cell may cut it at 1366) */
+        const roomTip = [AC.limitText(s), s.dd ? (s.cb ? 'Room to the floor' + (s.dd.floor !== null && s.dd.floor !== undefined ? ' (' + AC.fmtUsdPlain(s.dd.floor) + ')' : '') + ': ' : 'Trailing drawdown: ') + (s.dd.room !== null ? AC.fmtUsdPlain(s.dd.room) + ' left' : 'room not reported') + (s.dd.limit ? ' of ' + AC.fmtUsdPlain(s.dd.limit) : '') + from(s.dd) : (why.roomFloor || a.roomDrawdownWhy || 'No trailing drawdown known'),
           s.dl ? 'Daily loss: ' + (s.dl.room !== null ? AC.fmtUsdPlain(s.dl.room) + ' left' : 'room not known') + (s.dl.limit ? ' of ' + AC.fmtUsdPlain(s.dl.limit) : '') + (s.cb ? ' (open P&L counted)' : '') + from(s.dl) : (why.roomDaily || a.roomDailyLossWhy || 'No daily loss limit known'),
           s.tg ? 'Profit target: ' + (s.tg.left <= 0 ? 'reached' : AC.fmtUsdPlain(s.tg.left) + ' left') + (s.tg.target ? ' of ' + AC.fmtUsdPlain(s.tg.target) : '') : '',
           s.level ? (s.level === 'red' ? 'RED: ' : 'AMBER: ') + Math.round(s.pct * 100) + '% of the room used to the closer limit' : ''].filter(Boolean).join('\n');

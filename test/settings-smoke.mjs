@@ -239,10 +239,34 @@ try {
       const fullRows = await p.$$eval(`${AP} .apg-acc .apg-ttext`, els => els.map(e => e.closest('.gr-row').dataset.k + (e.scrollWidth <= e.clientWidth + 1 ? ' full' : ' cut') + ' "' + e.textContent + '"'));
       console.log('  info: Account type text at 1366: ' + fullRows.join('; '));
       check((await p.$$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]`, els => els.map(e => e.textContent))).includes('Account type'), 'the Account type column');
-      /* the widths of 1.30.0 again: the column 128 px, and the Room no narrower than without the column (1.29) */
-      const roomW = await p.evaluate(sel => { const g = document.querySelector(sel), h = n => Math.round(g.querySelector(`.gr-h [role="columnheader"]:nth-child(${n})`).getBoundingClientRect().width);
-        const w = h(6), tw = h(8); g.classList.remove('apg-types'); const w0 = h(6); g.classList.add('apg-types'); return { w, w0, tw }; }, `${AP} .apg-acc-g`);
-      check(roomW.w >= roomW.w0 && roomW.tw === 128, 'the Account type column at 128 px as in 1.30.0, the Room no narrower than without it: ' + JSON.stringify(roomW));
+      /* 1.32.0 (Anthony 2026-10-19, "Narrower Room"): the column 244 px, taken from the Room only; at 1366 the names "LucidFlex 50K
+         Eval", "LucidPro 150K Funded" and "Trading Combine 150K" show whole beside Change, and beside Change and Apply (each name put in
+         a cell of each kind for the measure, then put back); the Room's whole text first in its tooltip */
+      const colW = await p.evaluate(sel => { const g = document.querySelector(sel), h = n => Math.round(g.querySelector(`.gr-h [role="columnheader"]:nth-child(${n})`).getBoundingClientRect().width);
+        return { room: h(6), type: h(8) }; }, `${AP} .apg-acc-g`);
+      check(colW.type === 244, 'the Account type column at 244 px at 1366: ' + JSON.stringify(colW));
+      const NAMES = ['LucidFlex 50K Eval', 'LucidPro 150K Funded', 'Trading Combine 150K'];
+      const whole = await p.evaluate(([ap, names]) => {
+        const cells = [...document.querySelectorAll(`${ap} .apg-acc .apg-type`)].filter(c => c.querySelector('[data-act="type-edit"]'));
+        const kinds = { change: cells.find(c => !c.querySelector('[data-act="apply-type"]')), changeApply: cells.find(c => c.querySelector('[data-act="apply-type"]')) };
+        const res = {};
+        for (const [k, c] of Object.entries(kinds)) {
+          if (!c) { res[k] = 'no such cell'; continue; }
+          const t = c.querySelector('.apg-ttext'), was = t.textContent;
+          res[k] = names.map(n => { t.textContent = n; return n + (t.scrollWidth <= t.clientWidth + 1 ? ' whole' : ' cut'); }).join(', ');
+          t.textContent = was;
+        }
+        return res;
+      }, [AP, NAMES]);
+      check(Object.values(whole).every(x => !/cut|no such/.test(x)), 'at 1366 the three names show whole beside Change, and beside Change and Apply: ' + JSON.stringify(whole));
+      const realW = await cellOf('SIM-A'), realP = await cellOf('Sim101');
+      check(realW && realW.full && realP && realP.full && realP.text === 'LucidPro 150K Funded', 'SIM-A "LucidFlex 50K Eval" and Sim101 "LucidPro 150K Funded" whole in the table: ' + JSON.stringify([realW && realW.full, realP && realP.full]));
+      const longW = await p.evaluate(ap => { const c = document.querySelector(`${ap} .apg-acc .apg-type`), t = c.querySelector('.apg-ttext'), was = t.textContent;
+        t.textContent = 'LucidDaily 150K Eval Intraday DLL Off'; const r = t.scrollWidth <= t.clientWidth + 1 ? 'whole' : 'cut'; t.textContent = was; return r; }, AP);
+      console.log('  info: "LucidDaily 150K Eval Intraday DLL Off" beside Change at 1366: ' + longW + ' (cut is fine, whole in the tooltip)');
+      const roomTips = await p.$$eval(`${AP} .apg-acc .apg-room`, els => els.map(e => ({ text: e.textContent, cut: e.scrollWidth > e.clientWidth + 1, first: (e.title || '').split('\n')[0] })));
+      check(roomTips.length > 0 && roomTips.every(x => x.text === '-' || x.first === x.text), 'the Room\'s whole text first in its tooltip: ' + JSON.stringify(roomTips.filter(x => x.cut)));
+      console.log('  info: Room at 1366: ' + colW.room + ' px; cut cells: ' + roomTips.filter(x => x.cut).length + ' of ' + roomTips.length);
       await p.screenshot({ path: path.join(out, 'settings-types-text-1366.png') });
       /* Set on SIM-C: the row, Firm first (the firms in use first: FundedNext from its Desk row's firm, Lucid, Topstep; then A to Z) */
       await p.click(`${AP} [data-act="type-edit"][data-id="SIM-C"]`);
@@ -413,8 +437,12 @@ try {
       await until(async () => (await p.$$(`${AP} .apg-ttext`)).length >= 4, 'the Account type cells from the copy');
       const foot = await until(async () => { const t = await p.$eval(`${AP} .apg-foot`, e => e.textContent); return /as of/.test(t) ? t : null; }, 'the as-of note', 15000);
       check(/Account types: The Desk is not reachable; the list as of [A-Z][a-z]{2} \d{1,2} \d\d:\d\d ET\./.test(foot || ''), 'The Desk down: the cached list "as of <time>": ' + foot);
-      const cd = await cellOf('SIM-A');
-      check(cd && /The Desk is not reachable: the list as of/.test(cd.tip) && (await p.$$(`${AP} [data-act="type-edit"]`)).length === 0 && (await p.$$(`${AP} .apg-typeask`)).length === 0, 'read only (no Change or Set, no row) while The Desk is down, as before: ' + JSON.stringify(cd));
+      /* 1.32.0 (Anthony 2026-10-19): no Desk rows read, so each type "not known" (not "Not set"), the tooltip says why; no Change or Set */
+      const cd = await cellOf('SIM-A'), cdc = await cellOf('SIM-C');
+      check(cd && cd.text === 'not known' && cdc && cdc.text === 'not known' && cd.tip === 'The Desk is not reachable, so the account\'s type cannot be read now' && (await p.$$(`${AP} [data-act="type-edit"]`)).length === 0 &&
+        (await p.$$(`${AP} [data-act="apply-type"]`)).length === 0 && (await p.$$(`${AP} .apg-typeask`)).length === 0, 'The Desk down: "not known" with the reason in the tooltip, no Change, Set, Apply or row: ' + JSON.stringify([cd, cdc]));
+      check(!(await p.$$eval(`${AP} .apg-acc .apg-ttext`, els => els.map(e => e.textContent))).includes('Not set'), 'no "Not set" while The Desk is down');
+      await p.screenshot({ path: path.join(out, 'settings-types-desk-down-1366.png') });
       await p.click('#wsSet');
       await p.click('#wsGroups [data-gp="edit"][data-id="g2"]');
       await until(() => p.$('#wsDialog[open] #gp-fromType'), 'the dialog with The Desk down');

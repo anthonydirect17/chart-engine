@@ -31,11 +31,13 @@
 .apg-join .apg-high { width: 84px; }
 .apg-join .mut { color: var(--ws-muted); }
 /* 1.30.0: the Account type column (The Desk's ledger) between Group and Limits, its dropdown and Apply (1.32.0: its text and
-   Change, the widths of 1.30.0 again) */
-/* the Room keeps at least its 1.29 width at 1366: the type column is narrow (names cut, whole in the tooltip) and the short figures
-   (balance, today, position) give up a little */
-.apg-acc-g.apg-grps.apg-types .gr-row { grid-template-columns: minmax(64px, 1fr) 78px minmax(0, .8fr) minmax(0, .7fr) minmax(0, .7fr) minmax(0, 2.4fr) 116px 128px 152px 44px; }
-.apg-acc-g.apg-grps.apg-types.apg-hides .gr-row { grid-template-columns: minmax(64px, 1fr) 78px minmax(0, .8fr) minmax(0, .7fr) minmax(0, .7fr) minmax(0, 2.4fr) 116px 128px 152px 44px 50px; }
+   Change) */
+/* 1.32.0 (Anthony 2026-10-19, "Narrower Room"): the type column 244px, so "LucidFlex 50K Eval", "LucidPro 150K Funded" and
+   "Trading Combine 150K" show whole beside Change, and beside Change and Apply, at 1366 (about 220px was the ask; Apply needs the
+   rest); the width comes from the Room only (2.4fr to 1.45fr, about 178px at 1366 where it was 295px; its whole text first in its
+   tooltip), the other columns as before */
+.apg-acc-g.apg-grps.apg-types .gr-row { grid-template-columns: minmax(64px, 1fr) 78px minmax(0, .8fr) minmax(0, .7fr) minmax(0, .7fr) minmax(0, 1.45fr) 116px 244px 152px 44px; }
+.apg-acc-g.apg-grps.apg-types.apg-hides .gr-row { grid-template-columns: minmax(64px, 1fr) 78px minmax(0, .8fr) minmax(0, .7fr) minmax(0, .7fr) minmax(0, 1.45fr) 116px 244px 152px 44px 50px; }
 .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types .gr-row { grid-template-columns: minmax(56px, 1fr) 0 0 minmax(0, .9fr) 0 minmax(0, 1.4fr) 100px 0 0 36px; column-gap: 4px; }
 .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types.apg-hides .gr-row { grid-template-columns: minmax(56px, 1fr) 0 0 minmax(0, .9fr) 0 minmax(0, 1.4fr) 100px 0 0 36px 46px; }
 .ws-panel.gr-narrow .apg-acc-g.apg-grps.apg-types .gr-row > :nth-child(9) { visibility: hidden; }
