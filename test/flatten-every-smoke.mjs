@@ -47,8 +47,8 @@ try {
 
   /* the top bar: the button beside Flatten all, everything still inside 1366 */
   const bar = await p.evaluate(() => { const top = document.querySelector('.ws-top'), f = document.getElementById('wsFlat'), e = document.getElementById('wsFlatEvery'), g = document.getElementById('wsSet');
-    const r = x => x.getBoundingClientRect(); return { fits: top.scrollWidth <= top.clientWidth + 1, next: r(e).left >= r(f).right && r(e).left - r(f).right < 24, inside: r(e).right <= innerWidth && r(g).right <= innerWidth, text: e.textContent, flatOff: f.disabled, everyOff: e.disabled }; });
-  check(bar.fits && bar.next && bar.inside && bar.text === 'Flatten every account', 'the top bar: Flatten every account beside Flatten all, the bar fits 1366: ' + JSON.stringify(bar));
+    const r = x => x.getBoundingClientRect(); return { fits: top.scrollWidth <= top.clientWidth + 1, next: r(e).left >= r(f).right && r(e).left - r(f).right < 24, inside: r(e).right <= innerWidth && r(g).right <= innerWidth, text: e.innerText, label: e.getAttribute('aria-label'), flatOff: f.disabled, everyOff: e.disabled }; });
+  check(bar.fits && bar.next && bar.inside && bar.text === 'Flatten every' && bar.label === 'Flatten every account', 'the top bar: Flatten every account beside Flatten all (its short label under 1440 wide), the bar fits 1366: ' + JSON.stringify(bar));
   check(bar.flatOff && !bar.everyOff && (await p.evaluate(() => window.workspace.ticket().account)) === '', 'the ticket on None: Flatten all is off (it sends nothing there), Flatten every account is on');
 
   /* something open on every account but EVAL-B (it goes Gone in the fake): the follower SIM-F1 and FUNDED-C are not trade accounts */

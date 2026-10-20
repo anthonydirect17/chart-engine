@@ -1002,6 +1002,9 @@ the broker and the prop firm see NinjaTrader orders.
    message with any backslash escape is refused. No key may appear twice. No list
    and no nested object except `bracket`, which must be an object (`"bracket": null` is refused).
    A WebSocket message over 64 KB closes the connection.
+9. **The firm's limits (0.6.6).** On the part of an entry that opens or adds (never an exit, a close or a flatten): the page's
+   entries only past the account's firm max contracts; the bot's, an agent's and a copier follower's only on a known breach.
+   See "The firm's limits on entries (0.6.6)" below.
 
 A refusal never reaches NinjaTrader; it comes back as `reject` with a plain reason.
 
@@ -1208,6 +1211,7 @@ String values must be plain (no backslash escapes, at most 200 characters).
 | `position` | `account`, `root`, `qty` (signed: long positive, short negative), `avgPrice` (or null when flat) | after `auth` and on every change |
 | `reject` | `cid` or `id` (whichever the message had), `reason` | a refusal by ChartBridge's gates |
 | `status` | `level` `error` (a bracket leg rejected or a bracket error: check the stop now) or `warn` (the legs check cancelled or shrank legs), `text` | bracket problems, to signed-in pages |
+| `riskAlert` | `kind` (`dailyLoss`, `held` or `skipped`), `account`, `text` (0.6.6) | to signed-in pages, in the order lane: an account reached its daily loss, or the bot's, an agent's or a copier follower's entry was held back by the firm's limits (see "The firm's limits on entries (0.6.6)") |
 
 Orders placed in NinjaTrader itself (or anywhere else) on an allowed account also show on the chart,
 with `role` `other`, and can be moved or cancelled from the chart.
@@ -3335,6 +3339,7 @@ two of three floors had the wrong numbers. Built in `nt8/ChartBridgeGroups.cs`, 
   drawdown type. `accountState.rules` carries the member's own numbers (the seven keys as before, then `maxMinis` and `maxMicros`, 0 none).
   ChartBridge holds every member's rules in `groups.txt`, so all of it works while The Desk is down.
 - **Max size** caps a group entry from the ticket (below); the copier, agent group trading and the single account gates are unchanged.
+  (0.6.6: the max now holds every entry, each kind against its own number: "The firm's limits on entries (0.6.6)".)
 - **The risk percent** (`riskPct`, Anthony: of each account's max loss, its drawdown amount: 10% is $200 on a 50K with a $2,000 max
   loss, $450 on a 150K with $4,500) sizes a group entry from the ticket (below). The copier, the agents and the bot never read it.
 
@@ -3359,7 +3364,8 @@ contract month from its own last price: another month with no price makes it not
 market one not yet filled; single or group) at its own stop (its bracket's, its planned or its strategy's stop and stop-limit ticks)
 times its contracts; an entry whose stop ChartBridge does not know makes it not known. The max size counts every instrument in mini
 equivalents (10 micros are 1 mini): held plus working plus the new entry against `maxMinis`, or `maxMicros / 10` when only micros
-are set. A strategy entry is sized from its stop plus a stop-limit's ticks. The bracket cap (`maxBracketTicks`) is applied at the
+are set (0.6.6: micros against `maxMicros` where the firm gives one, minis against `maxMinis`; was the smaller of the two in mini
+equivalents when both were set). A strategy entry is sized from its stop plus a stop-limit's ticks. The bracket cap (`maxBracketTicks`) is applied at the
 preview. One lock (`GroupEntryLock`) holds a `groupOrder` from its sizing to its last member's order, and every page entry takes
 it before `PlaceLock`, so two windows never both pass the room check. The `groups` message adds `tradeOut` per group
 (`[{account, why}]`, the members a group entry leaves out: the copier's leader or a follower, the bot's account, an agent's); the
@@ -3379,8 +3385,9 @@ One line per member with rules of its own, after the member lines:
     rules<TAB><account><TAB><size><TAB><dailyLoss>|-<TAB><drawdown><TAB>eod|intraday|static<TAB><lockAt>|-<TAB><target>|-<TAB><consistency>|-<TAB><maxMinis>|-<TAB><maxMicros>|-<TAB><typeId>|-
 
 Checked as `groupSave` checks (the drawdown below the size, a lock only on a trailing drawdown and above the starting floor), max size
-whole contracts 1 to 1000; fields after `typeId` are kept as read. A rules line for an account in no group, one ChartBridge cannot read,
-or an account given rules twice makes the file unreadable (the 0.5.8 rule: every entry refused, never rewritten that run).
+whole contracts 1 to 1000; fields after `typeId` are kept as read. A rules line ChartBridge cannot read, or an account given rules
+twice, makes the file unreadable (0.6.5 also refused a rules line for an account in no group; 0.6.6 writes and reads those: its own
+firm rules) (the 0.5.8 rule: every entry refused, never rewritten that run).
 **Migration:** a member with no rules line inherits the group's rules, so a 0.6.4 file loads, gives the same numbers and is written back
 line for line as 0.6.4 writes it (only the second `#` line, the format note, names the new line). **Going back:** a ChartBridge 0.5.8 to 0.6.4 knows group, member and personal lines only, so a file with a rules line
 reads as unreadable there (every entry refused with its alarm, the file never rewritten): it never trails a floor from the wrong
@@ -3392,7 +3399,7 @@ A group with risk on and no rules line reads in 0.6.1 to 0.6.4 as before (the 14
 |---|---|
 | `groupSave` | `riskPct` (optional: 0 off, else above 0 and at most 100, at most 2 decimals; absent keeps the group's, so a page before 1.33.0 never drops it). Refused: "riskPct must be a percent of each member's max loss from 0 (off) to 100, at most 2 decimals" |
 | `accountGroup` | the member's own rules, all or none, joining a group only: `size`, `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target` (all needed once any is there), `consistency`, `maxMinis`, `maxMicros` (whole, 0 or absent none), `typeId` (The Desk's type id, or `-`). None sent (a page before 1.33.0): the group's rules apply, and any rules the account had go. The seed of both highs without `highClose`: the larger of its own size and its balance. Refused with `groupSave`'s words, and "rules go with joining a group only" |
-| `memberRules` (new) | `cid` (optional), `account`, and the same rule keys (size, dailyLoss, drawdown, drawdownType, lockAt, target needed): a member's rules changed later. Its highs stay as they are. Refused for an account in no group ("SIM-C is in no group: its own rules are for a member of a group (My floor and My daily are for an account in no group)") |
+| `memberRules` (new) | `cid` (optional), `account`, and the same rule keys (size, dailyLoss, drawdown, drawdownType, lockAt, target needed): a member's rules changed later. Its highs stay as they are. Refused for an account in no group ("SIM-C is in no group: its own rules are for a member of a group (My floor and My daily are for an account in no group)"); 0.6.6 takes it there (below) |
 | `groups` | each group gains, after `holders`, `riskPct` (null off) and `ownRules` (the members with rules of their own). A page tells a 0.6.5 ChartBridge by `riskPct` being there |
 | `accounts` | each entry gains `rules`: a member's rules `{size, dailyLoss, drawdown, drawdownType, lockAt, target, consistency, maxMinis, maxMicros, typeId, own}` (null for none; `own` false: its group's), null in no group |
 
@@ -3408,6 +3415,79 @@ on The Desk (or The Desk not reachable, or a type missing a size, drawdown or dr
 group's rules and the reason. A member's Limits cell shows its floor and Rules (the same form, sent as `memberRules`). Settings: the
 group's row says how many members have rules of their own and the risk with each member's dollars; the rules dialog has Risk % of max
 loss. With a ChartBridge 0.5.8 to 0.6.4 (no `riskPct` in `groups`) the page joins exactly as 1.32.0 did and sends no new key.
+
+### The firm's floor, Remove a follower and the firm's limits on entries (0.6.6)
+
+Chart 1.34.0 and ChartBridge 0.6.6 (Anthony's work requests and decisions of 2026-10-20). Built in `nt8/ChartBridgeGroups.cs`,
+`nt8/ChartBridgeOrders.cs`, `nt8/ChartBridgeCopier.cs` and the page (`live/accounts.js`, `live/trade.js`, `live/workspace.js`).
+A page tells a 0.6.6 ChartBridge by `hello`'s `version`. Made-up names and money below.
+
+**The floor from the firm's rules (Anthony: "the floor and thus the % used for certain accounts is still wrong").**
+
+- `memberRules` is taken for an account in **no group** too: those are its own firm rules (its type's), kept as a `rules` line in
+  `groups.txt` (read at the start since the fix in 0.6.6; the first 0.6.6 build refused that file at the next start), so its floor
+  trails and locks as the firm's does. The `accounts` entry's `rules` then carries them (`own` true) while `group` stays null.
+- The room to the floor computed from the rules (the lock included) is the room. NinjaTrader's own trailing figure (the broker's,
+  which never locks) is used only when nothing is computed, and is always sent beside it: the `accounts` entry gains `roomFloorNt`
+  (null when NinjaTrader gives none), and `src.roomFloor` says which one `roomFloor` is (`computed` or `ninjatrader`). Before 0.6.6 the
+  smaller of the two won, so the unlocked figure could win.
+
+| message | fields (no others) | answer |
+|---|---|---|
+| `firmMinimum` (new) | `cid` (optional), `account`, `minBalance` (dollars, more than 0, at most 2 decimals): the minimum balance the firm's dashboard shows | both highs of the account (end of day and intraday) set to `minBalance` plus its drawdown, so the computed floor equals the firm's from then on; the missed-close marks cleared; `groups` and `accounts` sent at once. Refused: no rules yet ("SIM-D has no firm rules yet: apply its account type first (the floor comes from its drawdown and lock)"), a static drawdown (its floor is fixed), below the starting floor (size less drawdown), above the lock, `account-marks.txt` unreadable, an account ChartBridge does not list |
+
+**Remove a follower row (WORK 2026-10-20).** An off follower row left from the October copier tests kept its account out of every
+group entry (a follower, on or off, is never a group's or an agent's seat).
+
+| message | fields (no others) | answer |
+|---|---|---|
+| `copierFollowerRemove` (new, copier lane, `copier` switch) | `cid` (optional), `account` | the row is gone from `copier.txt` and the `copier` state is sent; the account is its own again. Refused: not a follower ("SIM-F1 is not a copier follower."), on ("turn it off first, then remove it"), the copier still holds a position or orders there ("it can be removed once the copier's part there is flat and done"), `copier.txt` unreadable at the start |
+
+The `copier` state gains `canRemove: true` (after `simOnly`): the page shows Remove only then (an older ChartBridge knows no such
+message).
+
+**The firm's limits on entries (Anthony 2026-10-20: "Only absolutely critical things should stop an account from trading").**
+Anthony is the final arbiter on his own orders. No pop-up or "send anyway?" before an entry, and no order is ever blocked because
+data is missing (The Desk down, a close not seen). Only the part of an order that opens or adds is checked (an order past flat: what
+it opens; the position it closes no longer counts); exits, closes, flattens and stop or target moves never are.
+
+- **The firm's max contracts** (`maxMinis`, `maxMicros` in the account's rules, a fixed number typed in, never stale; none set: no
+  check). Micros count against `maxMicros` where the firm gives one, minis against `maxMinis`; with only one of them set, the other
+  kind converts at 10 micros to a mini. What the account holds and has working counts, every instrument, in mini equivalents. Words:
+  "over SIM-B's max of 4 minis: this entry of 5 NQ would take it to 5 minis (it holds or has working 0, every instrument). Nothing
+  was sent; 4 NQ at most".
+- **Anthony's own entries** (the page, one account; also each member's entry of a group entry, already sized within it): that one
+  check, refused as a `reject` with those words (the ticket's note). No floor, daily room or no-stop check is added; the copier's
+  "a leader entry needs a stop while armed" (0.4.0) and the page's first-order NO STOP question (1.13.0) are unchanged.
+- **The bot, an agent and a copier follower** (no one at the keyboard): one shared check (`MachineHold`) in front of each entry
+  (the order path for the bot's and every agent's, each seat of an agent's group plan on its own; the copier's `Eligible` for each
+  follower's copy) holds it back only on a KNOWN breach: the max contracts; this entry's stop risk (its contracts x its stop ticks x
+  the tick value; a copy's: its distance to the leader's stop) plus the account's open stop risk (the group sizing's: every position
+  at its working stops and every working entry at its own stop) more than a known room to the floor or a known daily room ("its stop
+  risk $2,000 is more than SIM-B's room to the floor $1,500"); or the account's daily loss already reached that trading day. A room, a
+  risk or a balance not known (null; a balance of 0 is NinjaTrader not having given one yet) lets the entry go. A follower skips that
+  one copy (`copierEvent` skip, label `limit`); the leader and the other followers trade as normal. Each hold sends one `riskAlert`
+  (`held`, or `skipped` for a copy): "Held: the bot's entry on SIM-B: ..." or "Copier: SIM-F1 skipped this copy: ...".
+- **The daily loss reached.** Each second ChartBridge reads every listed, connected account's numbers; one whose known daily room is
+  0 or below (with a balance given) is marked for the rest of that trading day (18:00 ET to 18:00 ET), with one `riskAlert`
+  (`dailyLoss`): "SIM-C reached its daily loss limit of $500.00 (daily room -$100.00): the bot, the agents and the copier send no new
+  entry on it until the next trading day (18:00 ET). Your own orders are not held, and nothing was flattened." The mark holds even
+  if the room comes back that day (an open loss recovering); it is memory only, so after a restart a room still at or below 0 marks
+  it again.
+- **Nothing ever flattens an account on its own.** The firm does that at its daily loss limit. (An agent's flat time is the agent's
+  own rule and unchanged.)
+
+**The page (chart 1.34.0).**
+
+- `riskAlert` shows in the banner the page uses for ChartBridge's errors (red for `dailyLoss`, amber for `held` and `skipped`), with
+  a short sound, once per window (both of a window's connections bring it), never a dialog; the Account page's log keeps it too.
+- **Flatten every account** (Anthony, approved 2026-10-20): its own button in the top bar beside Flatten all, one confirm listing each
+  account and what it holds. It sends a `flatten` for every account ChartBridge lists with a position or a working order (the
+  copier's leader and followers, the bot's and the agents' accounts included; the window's v3 connection lists them all), whatever
+  the ticket shows, with Armed off, paced within the 10 order actions a second as Flatten all (a flatten refused for the rate goes
+  again once). ChartBridge checks each as any `flatten` (an exit). Flatten all on None still sends nothing. No new message.
+- The ticket shows the account's room for a single account where ChartBridge's numbers give it ("Room $900.00 daily · $1,700.00 to
+  floor · entry $40.00 at stop": the daily room, the room to the floor and this entry's risk at its stop), display only.
 
 ### Tape timing and new `/diag` counters
 

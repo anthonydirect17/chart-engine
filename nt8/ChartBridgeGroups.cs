@@ -1,7 +1,9 @@
 // ChartBridge prop groups and real account state (ChartBridge 0.5.8; 0.6.1: each group's Type and default hero; 0.6.5: each member's
-// own rules and the group's risk percent). Part of the
-// ChartBridge add-on; install it with the other files. See nt8/PROTOCOL.md, "Prop groups and account state (0.5.8)" and
-// "A group's Type and default hero (0.6.1)".
+// own rules and the group's risk percent; 0.6.6: the firm's rules on an account in no group, firmMinimum, and the firm's limits on
+// entries: FirmMaxWhy, MachineHold, the daily loss reached and riskAlert). Part of the
+// ChartBridge add-on; install it with the other files. See nt8/PROTOCOL.md, "Prop groups and account state (0.5.8)",
+// "A group's Type and default hero (0.6.1)", "Each member's own rules and the risk percent (0.6.5)" and "The firm's floor, Remove a
+// follower and the firm's limits on entries (0.6.6)".
 //
 // This file never places, changes or cancels an order itself (no Submit, Change, Cancel or Flatten here; Q-EXIT's cancel of an exit
 // left behind goes through ChartBridgeOrders.GroupCancelLeftover). It holds:
@@ -582,7 +584,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // name, or null). Shown on the page only: ChartBridge checks their shape, never which hero trades the group.
             public string AccountType, Hero;
             // 0.6.5 (Anthony 2026-10-19): the group's risk percent, of each member's max loss (its drawdown amount): 0 off. Stored and
-            // shown; nothing in the order path reads it (no path in ChartBridge sizes one entry onto a group: PROTOCOL.md)
+            // shown; a group entry from the ticket (groupPreview, groupOrder: GroupPlan) is sized from it; the copier, the agents and the bot never read it
             public double RiskPct;
             public string[] Extra = new string[0];                   // fields after riskPct, kept as read (a later ChartBridge's)
             public Group Clone() { Group g = (Group)MemberwiseClone(); g.Extra = (string[])Extra.Clone(); return g; }

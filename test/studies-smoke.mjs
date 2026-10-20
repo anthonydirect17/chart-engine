@@ -178,7 +178,11 @@ try {
     await page.click(`${P} [data-act="gear"][data-id="${id}"]`);
     await page.waitForTimeout(100);
     const r = await page.evaluate(scan, P);
-    check(!r.missing && !r.bad.length, 'the ' + id + ' gear fits, no scrolling' + (r.bad.length ? ': ' + r.bad.slice(0, 4).join('; ') : ''));
+    /* 1.34.0 (the audit): the menu never goes under the top bar; when it is taller than the room below the bar its list scrolls
+       inside (Anthony's instruction for the audit fix): that one scroll is allowed, nothing else */
+    const bad = r.bad.filter(x => !/^div\.ind-body tall /.test(x) && !/ind-body tall/.test(x));
+    const pos = await page.evaluate(sel => { const bar = document.querySelector('.ws-top').getBoundingClientRect().bottom, pn = document.querySelector(sel).getBoundingClientRect(); return pn.top >= bar && pn.bottom <= innerHeight; }, P);
+    check(!r.missing && !bad.length && pos, 'the ' + id + ' gear fits below the top bar, only its list scrolling if need be' + (bad.length ? ': ' + bad.slice(0, 4).join('; ') : ''));
     if (id === 'ema') await page.screenshot({ path: path.join(out, 'studies-gear.png') });
     await page.click(`${P} [data-act="gear"][data-id="${id}"]`);
   }
