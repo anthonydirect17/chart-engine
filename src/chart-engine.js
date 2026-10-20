@@ -2282,9 +2282,9 @@ function create(container, options) {
           const pnl = openPnl(position.qty, position.avgPrice, bars[n].c, position.pointValue || o.pointValue);
           const pc = pnl.points > 0 ? T.profit : pnl.points < 0 ? T.loss : T.axisText;
           hline(y, T.exit, null, 0.6, 1.5);
-          const parts = [[(long ? 'LONG ' : 'SHORT ') + Math.abs(position.qty), long ? T.long : T.short], [fmtSigned(pnl.points, o.precision) + ' pt', pc]];
+          const parts = [[(long ? 'LONG ' : 'SHORT ') + Math.abs(position.qty) + groupPart(position), long ? T.long : T.short], [fmtSigned(pnl.points, o.precision) + ' pt', pc]];
           if (pnl.dollars !== null) parts.push([fmtMoney(pnl.dollars), pc]);
-          const sp = positionShort(position.qty, pnl, o.precision), short = sp.map((t, k) => [t, k ? pc : long ? T.long : T.short]);
+          const sp = positionShort(position.qty, pnl, o.precision), short = sp.map((t, k) => [k ? t : t + countPart(position), k ? pc : long ? T.long : T.short]);   // 1.34.0: a group's ("Lucid ×4", short "×4")
           posHit = label(y, parts, T.exit, null, 1, false, null, short, 'position').box;
           orderTags.push({ price: position.avgPrice, style: { fill: T.tagFill, fg: T.exit, border: T.exit } });
         }
@@ -3025,10 +3025,12 @@ function create(container, options) {
       dirty = true;
     },
     getOrders() { return orders.map(x => Object.assign({}, x)); },
-    /** Position line: { qty (long > 0, short < 0), avgPrice } or null. pointValue (here or in options) adds dollars. */
+    /** Position line: { qty (long > 0, short < 0), avgPrice, group? } or null. pointValue (here or in options) adds dollars;
+        group (1.34.0) names a group's combined position on its label ("Lucid ×4"). */
     setPosition(pos, opts) {
       const pv = (opts && opts.pointValue) || (pos && pos.pointValue) || 0;
       position = pos && +pos.qty && isFinite(pos.avgPrice) ? { qty: +pos.qty, avgPrice: +pos.avgPrice, pointValue: pv } : null;
+      if (position && typeof pos.group === 'string' && pos.group) position.group = pos.group.slice(0, 40);   // 1.34.0: a group's combined position names its group
       if (pv > 0) hostPV = pv;   // 1.34.0: the dollars on stop and target labels, with or without a position
       dirty = true;
     },
@@ -3037,6 +3039,8 @@ function create(container, options) {
     setOrderEditing(on) { orderEditing = !!on; if (!orderEditing) { od = null; xDown = null; addDown = null; } dirty = true; },
     /** fn(price) -> { side, kind, qty, note } or null: what Shift+click would place, shown while Shift is held. */
     setOrderPreview(fn) { orderPreview = typeof fn === 'function' ? fn : null; dirty = true; },
+    /** Where the position's label was last drawn ({ x, y, w, h }, CSS px in the chart), or null (1.34.0, for tooltips). */
+    positionBox() { return posHit ? Object.assign({}, posHit) : null; },
     /** Where each order's label, close handle and axis tag were last drawn (CSS px in the chart), for tests and tooltips. */
     orderHandles() { return orderHits.map(h => JSON.parse(JSON.stringify(h))); },
     /** Price to y and back, in CSS px from the top of the chart (as last drawn). */

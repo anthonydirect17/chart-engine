@@ -2511,7 +2511,8 @@ function mount(container, options) {
       const r = cv.getBoundingClientRect(), pt = { x: e.clientX - r.left, y: e.clientY - r.top };
       const h = HOST ? chart.orderHandles().find(x => inR(x.box, pt) || inR(x.tag, pt)) : null;
       const o = h ? HT.orders.find(x => x && x.id === h.id && typeof x.groupTip === 'string') : null;
-      const tip = o ? o.groupTip : '';
+      const pb = !h && HOST && HT.position && typeof HT.position.groupTip === 'string' ? chart.positionBox() : null;   // 1.34.0: the group's position
+      const tip = o ? o.groupTip : pb && inR(pb, pt) ? HT.position.groupTip : '';
       if (cv.title !== tip && (tip || cv.dataset.groupTip)) { cv.title = tip; cv.dataset.groupTip = tip ? '1' : ''; }
     });
     let press = null;

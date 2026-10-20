@@ -1036,6 +1036,24 @@ function create(env) {
     }
     return out;
   }
+  /*
+   * 1.34.0 (Anthony 2026-10-20, "the order entry does not show on the chart"; his pick: one combined line): a group ticket's
+   * charts draw the group's position as one line: the members' sizes added, at their size-weighted average price (so its
+   * dollars are the members' added), labelled with the group ("Lucid ×4"), each account's position in its tooltip. Only when
+   * every member holding one is on the same side (a group long and short is refused new entries; each account's own line is
+   * on its own ticket then).
+   */
+  function groupPosition(account, r) {
+    const g = groupFor(account);
+    if (!g) return null;
+    const held = targets(account).map(a => ({ a, p: TR.positions.get(a + '|' + r) })).filter(x => x.p && +x.p.qty && isFinite(x.p.avgPrice));
+    if (!held.length || !(held.every(x => x.p.qty > 0) || held.every(x => x.p.qty < 0))) return null;
+    const qty = held.reduce((t2, x) => t2 + +x.p.qty, 0), size = Math.abs(qty);
+    const avgPrice = held.reduce((t2, x) => t2 + Math.abs(x.p.qty) * x.p.avgPrice, 0) / size;
+    const tip = 'Group ' + g.name + ': ' + held.map(x => x.a + ' ' + (x.p.qty > 0 ? 'LONG ' : 'SHORT ') + Math.abs(x.p.qty) + ' @ ' + fmt(x.p.avgPrice)).join('\n') +
+      '\n' + (qty > 0 ? 'LONG ' : 'SHORT ') + size + ' in all @ ' + fmt(avgPrice) + ' (the average)';
+    return { qty, avgPrice, group: g.name + ' \u00d7' + held.length, groupTip: tip };
+  }
   /* the member orders a group line stands for, read now (a line drawn a moment ago may cover fewer or more) */
   function groupLine(id) {
     const r = root(), plan = OT.planIdOf(id);
@@ -1251,7 +1269,7 @@ function create(env) {
 
   return {
     TR, brackets, qtys, BK, cap, framed: FRAMED, allowNoStop, noStopAsked: () => !noStopOk,
-    planMove, planRemove, planAdd, chartOrders, framedReason: FRAMED_REASON, tradeMode, noteMoving, moveRefusal,
+    planMove, planRemove, planAdd, chartOrders, groupPosition, framedReason: FRAMED_REASON, tradeMode, noteMoving, moveRefusal,
     hello, message, lost, signIn, applyTrading,
     ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAgent, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
     merge, managedOf, switchOn: sw, setSwitches, v3Lost, cancelFromList,

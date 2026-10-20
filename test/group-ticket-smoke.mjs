@@ -103,6 +103,17 @@ try {
   const cid = await p.evaluate(() => { const c = window.workspace.panels().find(x => x.type === 'chart' && x.root === 'MNQ' && window.workspace.chart(x.id)); return c ? c.id : null; });
   const stopLine = await until(async () => { const hs = await p.evaluate(i => window.workspace.chart(i).orderHandles(), cid); return hs.find(h => /^G~stop~/.test(h.id)); }, 'the group stop line on the MNQ chart', 10000);
   check(!!stopLine, 'the group\'s stop line is drawn: ' + JSON.stringify(stopLine && stopLine.id));
+  /* 1.34.0 (Anthony 2026-10-20, "the order entry does not show on the chart"): the group's position, one combined line */
+  const gpos = await until(async () => { const s = await control('state', { root: 'MNQ' }); const q = ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'].map(a => ((s.positions || {})[a + '|MNQ'] || {}).qty || 0); if (!q.every(x => x > 0)) return null;
+    const cp = await p.evaluate(i => window.workspace.chart(i).getPosition(), cid); return cp && cp.qty === q.reduce((a, b) => a + b, 0) ? { cp, q } : null; }, 'the group\'s position on the MNQ chart', 8000);
+  check(!!gpos && gpos.cp.group === 'Lucid \u00d74' && gpos.cp.avgPrice > 0, 'the group\'s entry: one position line, the members\' sizes added, named for the group: ' + JSON.stringify(gpos));
+  if (gpos) {
+    const pbox = await p.evaluate(i => window.workspace.chart(i).positionBox(), cid), cbox = await p.locator('.ws-panel[data-id="' + cid + '"] canvas').first().boundingBox();
+    if (pbox) { await p.mouse.move(cbox.x + pbox.x + 6, cbox.y + pbox.y + pbox.h / 2); await wait(300); }
+    const ptip = await p.$eval('.ws-panel[data-id="' + cid + '"] canvas', c => c.title);
+    check(/^Group Lucid: SIM-A LONG \d+ @ [0-9.,]+\nSIM-B LONG \d+ @ [0-9.,]+\nSIM-C LONG \d+ @ [0-9.,]+\nSIM-D LONG \d+ @ [0-9.,]+\nLONG \d+ in all @ [0-9.,]+ \(the average\)$/.test(ptip), 'its tooltip lists each account\'s position and the average: ' + JSON.stringify(ptip));
+    await p.screenshot({ path: path.join(out, 'group-ticket-position-1366.png') });
+  }
   if (stopLine) {
     const box = await p.locator('.ws-panel[data-id="' + cid + '"] canvas').first().boundingBox();
     await p.mouse.move(box.x + stopLine.box.x + 8, box.y + stopLine.box.y + stopLine.box.h / 2); await wait(300);

@@ -181,3 +181,17 @@ test('1.34.0: the ticket\'s projected sizes: a quiet preview while Armed (never 
   R.advance(16000); R.core.groupProjectTick();
   assert.equal(R.sent.pop().type, 'groupPreview', 'asked again later');
 });
+
+test('1.34.0 (Anthony 2026-10-20, one combined line): the group\'s position: the sizes added at their weighted average, each account in its tooltip', () => {
+  const R = rig();
+  assert.equal(R.core.groupPosition('group:g1', 'NQ'), null, 'flat: no line');
+  R.core.message({ type: 'position', account: 'SIM-A', root: 'NQ', qty: 3, avgPrice: 25000 });
+  R.core.message({ type: 'position', account: 'SIM-B', root: 'NQ', qty: 1, avgPrice: 25004 });
+  R.core.message({ type: 'position', account: 'SIM-D', root: 'NQ', qty: 5, avgPrice: 24000 });   // not in the group
+  const p = R.core.groupPosition('group:g1', 'NQ');
+  assert.equal(p.qty, 4); assert.equal(p.avgPrice, 25001); assert.equal(p.group, 'Lucid ×2');
+  assert.equal(p.groupTip, 'Group Lucid: SIM-A LONG 3 @ 25000.00\nSIM-B LONG 1 @ 25004.00\nLONG 4 in all @ 25001.00 (the average)');
+  R.core.message({ type: 'position', account: 'SIM-C', root: 'NQ', qty: -1, avgPrice: 25010 });
+  assert.equal(R.core.groupPosition('group:g1', 'NQ'), null, 'long and short: no combined line');
+  assert.equal(R.core.groupPosition('SIM-A', 'NQ'), null, 'an account: its own position, not this');
+});

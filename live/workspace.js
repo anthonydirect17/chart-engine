@@ -910,7 +910,7 @@ $('wsUnsentClose').addEventListener('click', () => core.dismissUnsent());
 /* ---------------- what every chart shows, and which charts take orders */
 function chartTrade(v) {
   const r = v.panel.root, TR = core.TR, acct = ticketAccount(), on = TR.enabled && !!acct;
-  const pos = on ? TR.positions.get(acct + '|' + r) : null;
+  const pos = !on ? null : core.isGroup(acct) ? core.groupPosition(acct, r) : TR.positions.get(acct + '|' + r);   // 1.34.0: a group's combined position
   return { root: r, account: acct, live: on && ticketArmed() && r === ticketRoot(), orders: on ? core.chartOrders(acct, r) : [],
     position: pos && pos.qty ? pos : null, pointValue: (instruments[r] || {}).pointValue || 0, qty: ticketQty() };
 }
