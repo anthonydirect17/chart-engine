@@ -752,6 +752,7 @@ function syncGroupPicks() {
   if (k === groupPickKey) return;
   groupPickKey = k;
   if (TK.bar) TK.bar.syncTradeAccounts();
+  try { followHolder(); noTicketAccount(); } catch (e) { /* core is made below; the feed may call this first */ }
 }
 /* the v3 connection's switches to the ticket (each control shows only while its switch is on), only when they change */
 let v3Key = 'null';
@@ -1067,8 +1068,18 @@ function linkChanged() {
   // a question asked here for the ticket's window goes when the ticket is not as it was asked (F2 re-review)
   if (noStopQ && noStopQ.fwd && (h || !hd || !hd.armed || hd.root !== noStopQ.root || hd.account !== noStopQ.account)) dropNoStop();
   if (!h && hd && W.ROOTS.includes(hd.root)) TK.root = hd.root;
-  if (!h && hd && hd.account && hd.account !== core.TR.account && core.TR.accounts.includes(hd.account)) core.pickAccount(hd.account);
+  followHolder();
   if (!h && !hd) noTicketAccount();
+  renderOrders();
+}
+/* 1.34.0 (Anthony 2026-10-20, "flatten all does not work with these group orders"): a group is an order account too, so
+   another window follows the ticket onto a group as onto an account (it was left on None: its Flatten all and Close sent
+   nothing). Called again when the groups come, as they may come after the ticket's message. */
+const orderAccounts = () => core.TR.accounts.concat(core.groupChoices().map(g => g.value));
+function followHolder() {
+  const hd = holder();
+  if (holds() || !hd || !hd.account || hd.account === core.TR.account || !orderAccounts().includes(hd.account)) return;
+  core.pickAccount(hd.account);
   renderOrders();
 }
 /* No window has the ticket: Close and Flatten all go on the default account (the last one picked on this PC, as the
@@ -1076,7 +1087,7 @@ function linkChanged() {
 function noTicketAccount() {
   const TR = core.TR;
   if (!TR.enabled || holds() || holder()) return;
-  const a = LP.orderAccount(TR.accounts, accountPick()).account;
+  const a = LP.orderAccount(orderAccounts(), accountPick()).account;   // 1.34.0: a group picked last stays the default
   if (a !== TR.account) core.pickAccount(a);                    // None ('') too: no Sim101 fallback (DECISION 2026-10-14e)
 }
 /* What Close and Flatten all here would act on, for KEYS's tooltip and the top bar's Flatten all */
