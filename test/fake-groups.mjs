@@ -27,7 +27,14 @@ const TYPE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
  const MICRO_ROOTS = ['MNQ', 'MES', 'M2K', 'MYM', 'MGC', 'MCL', 'SIL', 'MBT', 'MET', 'M6E'];
 const usd2 = v => '$' + (+v).toLocaleString('en-US', { maximumFractionDigits: 2 });
 export const miniEquivalent = root => (MICRO_ROOTS.includes(root) ? 0.1 : 1);
-export const maxMiniEquivalents = (minis, micros) => (minis > 0 && micros > 0 ? Math.min(minis, micros / 10) : minis > 0 ? minis : micros > 0 ? micros / 10 : -1);   // re-review 2: both set: the smaller
+/* ChartBridge 0.6.6 (FirmMaxFor): the root's contracts the firm's max still allows (-1: no max). Micros against maxMicros where the
+   firm gives one, minis against maxMinis; with only one set, 10 micros to a mini. usedMini: held and working, every instrument. */
+export const firmMaxLeft = (minis, micros, root, usedMini) => {
+  if (!(minis > 0) && !(micros > 0)) return -1;
+  const inMicros = MICRO_ROOTS.includes(root) ? micros > 0 : !(minis > 0), k = inMicros ? 10 : 1;
+  const cap = inMicros ? micros : minis, used = Math.round(Math.max(0, usedMini) * k * 1e6) / 1e6, per = miniEquivalent(root) * k;
+  return Math.max(0, Math.floor((cap - used) / per + 1e-6));
+};
 /** 0.6.5: one member's contracts, exactly ChartBridgeOrders.GroupSize (its guards in its order, its words) */
 export function groupSize(o) {
   const budget = Math.round(o.riskPct * o.drawdown) / 100, per = o.stopTicks * o.tickValue;
@@ -245,9 +252,9 @@ export function installGroups(Desk) {
         const f = this.groupFields(a, this.accountMsg058(a)), r = this.groupRulesOf(name, g);
         const pos = (this.positions.get(name + '|' + m.root) || {}).qty || 0;
         const pend = [...this.orders.values()].filter(o => o.account === name && o.root === m.root && (o.state === 'working' || o.state === 'partFilled') && o.side === m.side).reduce((t, o) => t + o.qty - (o.filled || 0), 0);
-        const held = buy ? pos + pend : -pos + pend, risk = this.groupOpenRisk(name), maxEq = maxMiniEquivalents(r.maxMinis, r.maxMicros);
-        const maxLeft = maxEq < 0 ? -1 : Math.max(0, Math.floor((maxEq - risk.usedMini) / miniEquivalent(m.root) + 1e-9));
-        const maxWords = maxEq < 0 ? '' : (r.maxMinis > 0 && r.maxMicros > 0 ? r.maxMinis + ' minis / ' + r.maxMicros + ' micros' : r.maxMinis > 0 ? r.maxMinis + ' minis' : r.maxMicros + ' micros') + '; it holds or has working ' + +risk.usedMini.toFixed(1) + ' in mini equivalents, every instrument';
+        const held = buy ? pos + pend : -pos + pend, risk = this.groupOpenRisk(name);
+        const maxLeft = firmMaxLeft(r.maxMinis, r.maxMicros, m.root, risk.usedMini);   // ChartBridge 0.6.6
+        const maxWords = maxLeft < 0 ? '' : (r.maxMinis > 0 && r.maxMicros > 0 ? r.maxMinis + ' minis / ' + r.maxMicros + ' micros' : r.maxMinis > 0 ? r.maxMinis + ' minis' : r.maxMicros + ' micros') + '; it holds or has working ' + +risk.usedMini.toFixed(1) + ' in mini equivalents, every instrument';
         const z = groupSize({ riskPct: g.riskPct, drawdown: r.drawdown, stopTicks: stop, tickValue, maxLeft, maxWords, cap: this.capFor(m.root), capWords: 'maxQty.' + m.root + ' in config.txt',
           held, roomFloor: f.roomFloor, floorWhy: f.why.roomFloor, hasDaily: r.dailyLoss > 0, roomDaily: f.roomDaily, dailyWhy: f.why.roomDaily, openRisk: risk.openRisk, openWhy: risk.openWhy });
         s.size = z.size; s.budget = z.budget; s.out = z.why; s.risk = Math.round(z.size * stop * tickValue * 100) / 100;

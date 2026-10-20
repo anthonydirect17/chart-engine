@@ -310,7 +310,7 @@ test('fake review 3, 4, 6, 7: mini equivalents, the bot\'s account left out, a s
   assert.equal(c.reject(c.act(GE('groupPreview', { bracket: { stop: 60, target: 0 } }))), 'bracket ticks must be from 0 to 50 (maxBracketTicks in config.txt)', 'review 7');
 });
 
-test('fake re-review 1 and 2: an adding side OCO entry counts, a closing side OCO set is one exit; both max limits, the smaller', async () => {
+test('fake re-review 1 and 2: an adding side OCO entry counts, a closing side OCO set is one exit; 0.6.6: each kind against its own max', async () => {
   const f = await geDesk();
   f.desk.positions.set('SIM-B|NQ', { qty: 1, avgPrice: 25000 });
   f.desk.newOrder({ account: 'SIM-B', root: 'NQ', side: 'sell', kind: 'stop', qty: 1, price: 24990, role: 'entry', oco: 'x1' });
@@ -318,6 +318,13 @@ test('fake re-review 1 and 2: an adding side OCO entry counts, a closing side OC
   assert.equal(f.act(GE('groupPreview'))[0].members[1].size, 2, 'the typed stop and target on the long: one exit');
   f.desk.newOrder({ account: 'SIM-B', root: 'NQ', side: 'buy', kind: 'limit', qty: 1, price: 24950, role: 'entry', oco: 'y1' });
   assert.equal(f.act(GE('groupPreview'))[0].members[1].out, 'its open stop risk is not known (a working buy limit 1 NQ has no stop ChartBridge knows)');
-  const { maxMiniEquivalents } = await import('./fake-groups.mjs');
-  assert.equal(maxMiniEquivalents(4, 20), 2); assert.equal(maxMiniEquivalents(4, 0), 4); assert.equal(maxMiniEquivalents(0, 30), 3); assert.equal(maxMiniEquivalents(0, 0), -1);
+  /* ChartBridge 0.6.6 (Anthony 2026-10-20): micros against maxMicros, minis against maxMinis (was: the smaller in mini equivalents) */
+  const { firmMaxLeft } = await import('./fake-groups.mjs');
+  assert.equal(firmMaxLeft(4, 20, 'NQ', 2), 2, '4 minis / 20 micros holding 2 NQ: 2 NQ left (was 0)');
+  assert.equal(firmMaxLeft(4, 20, 'MNQ', 2), 0, 'and no MNQ: the 2 NQ are its 20 micros');
+  assert.equal(firmMaxLeft(2, 40, 'MNQ', 0), 40, '2 minis / 40 micros, flat: 40 MNQ (was 20)');
+  assert.equal(firmMaxLeft(2, 40, 'MNQ', 2.5), 15);
+  assert.equal(firmMaxLeft(4, 0, 'MNQ', 1.5), 25, 'only minis set: micros convert, 10 to a mini');
+  assert.equal(firmMaxLeft(0, 30, 'NQ', 0), 3, 'only micros set: minis convert');
+  assert.equal(firmMaxLeft(0, 0, 'NQ', 0), -1, 'no max');
 });

@@ -1513,12 +1513,38 @@ public static class GroupsHarness
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
         Check(Seat(Last("groupPreview"), "SIM-B").Contains("its open stop risk is not known (a working buy limit 1 NQ has no stop ChartBridge knows)"), "GE re-review 1: an adding side OCO entry counts (no stop known: it sits out): " + Seat(Last("groupPreview"), "SIM-B"));
         Flat();
-        // re-review 2: both limits set, the smaller: 4 minis / 20 micros is 2 mini equivalents; holding 2 NQ it is at its max size
+        // 0.6.6 (Anthony 2026-10-20, reverses re-review 2's "both set: the smaller"): minis against maxMinis, micros against maxMicros,
+        // what it holds counted in mini equivalents. 4 minis / 20 micros, holding 2 NQ: an NQ entry has 2 minis left (was: none)...
         G("memberRules", MR("SIM-B", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":20")));
         Pos(simB, nq, 2); Manual(simB, nq, OrderAction.Sell, OrderType.StopMarket, 2, null, "typed stop").StopPrice = 24995;
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis / 20 micros; it holds or has working 2 in mini equivalents, every instrument)"), "GE re-review 2: the smaller of 4 minis and 20 micros: " + Seat(Last("groupPreview"), "SIM-B"));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":2,"), "GE 0.6.6: an NQ entry against maxMinis (4 less the 2 NQ held): 2: " + Seat(Last("groupPreview"), "SIM-B"));
+        // ...and an MNQ entry has none: the 2 NQ held are 20 micros, all of its 20
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", "").Replace("\"root\":\"NQ\"", "\"root\":\"MNQ\""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis / 20 micros; it holds or has working 2 in mini equivalents, every instrument)"), "GE 0.6.6: an MNQ entry against maxMicros (2 NQ held are its 20 micros): it sits out and says why: " + Seat(Last("groupPreview"), "SIM-B"));
+        Flat();
+        // a firm with 2 minis or 40 micros: flat, a micro entry may take 40 (0.6.5 held it to 20, the smaller in mini equivalents)
+        // and a mini entry 2; holding 25 MNQ (2.5 minis), an NQ entry is at its max and an MNQ one has 15 left
+        G("memberRules", MR("SIM-B", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":2,\"maxMicros\":40")));
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "99");
+        string mnqGe = GE("groupPreview", "buy", "market", "{\"stop\":4,\"target\":8}", "").Replace("\"root\":\"NQ\"", "\"root\":\"MNQ\"");
+        Clear(); GP("groupPreview", mnqGe);
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":40,"), "GE 0.6.6: 2 minis / 40 micros, flat: an MNQ entry takes its 40 micros ($200 / $2 = 100, the max 40): " + Seat(Last("groupPreview"), "SIM-B") + Rejection());
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":4,\"target\":8}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":2,"), "GE 0.6.6: 2 minis / 40 micros, flat: an NQ entry takes its 2 minis: " + Seat(Last("groupPreview"), "SIM-B"));
+        Pos(simB, mnq, 25); Manual(simB, mnq, OrderAction.Sell, OrderType.StopMarket, 25, null, "typed stop").StopPrice = 24999;
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":4,\"target\":8}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (2 minis / 40 micros; it holds or has working 2.5 in mini equivalents, every instrument)"), "GE 0.6.6: holding 25 MNQ (2.5 minis): an NQ entry is over its 2 minis: it sits out: " + Seat(Last("groupPreview"), "SIM-B"));
+        Clear(); GP("groupPreview", mnqGe);
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":15,"), "GE 0.6.6: holding 25 MNQ: an MNQ entry has 15 of its 40 micros left: " + Seat(Last("groupPreview"), "SIM-B"));
+        Flat(); simB.Positions.Clear();
+        // only micros set (40): an NQ entry converts (4 minis), holding nothing
+        G("memberRules", MR("SIM-B", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMicros\":40")));
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":4,\"target\":8}", ""));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":4,"), "GE 0.6.6: only 40 micros set: an NQ entry may take 4 (10 micros to a mini): " + Seat(Last("groupPreview"), "SIM-B"));
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "9");
         G("memberRules", MR("SIM-B", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":40")));
+        Pos(simB, nq, 2); Manual(simB, nq, OrderAction.Sell, OrderType.StopMarket, 2, null, "typed stop").StopPrice = 24995;   // long 2 NQ again, for the exit below
         // re-review 3: a page market exit never waits on the group entry lock (an entry does)
         object gel = typeof(ChartBridgeOrders).GetField("GroupEntryLock", PS).GetValue(null);
         ManualResetEvent held = new ManualResetEvent(false), release = new ManualResetEvent(false);

@@ -152,7 +152,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Usd(double v) { return "$" + v.ToString("#,0.##", CultureInfo.InvariantCulture); }
 
         // One member's contracts (pure, for the harness): floor(budget / (stopTicks x tickValue)), budget = riskPct of its drawdown;
-        // never above maxLeft (its max size less what it holds and has working, every instrument in mini equivalents; -1 none) nor the
+        // never above maxLeft (its max size less what it holds and has working, every instrument in mini equivalents; 0.6.6: in the unit
+        // of the cap that applies, FirmMaxFor; -1 none) nor the
         // maxQty cap less what it holds and has working on that side of this root; capped so ALL its open stop risk (openRisk: every
         // position at its working stops and every working entry at its own stop) plus this entry's stop fits its room to its floor and
         // (with a daily loss rule) its daily room. A room or the open risk not known: it sits out. 0 always says why.
@@ -184,8 +185,24 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Review 3: the mini equivalents of a root (10 micros = 1 mini).
         public static double MiniEquivalent(string root) { return MicroRoots.Contains(root ?? "") ? 0.1 : 1; }
-        // Review 3: the max size in mini equivalents (maxMinis; else maxMicros / 10 when only micros are set; -1 none).
-        public static double MaxMiniEquivalents(int maxMinis, int maxMicros) { return maxMinis > 0 && maxMicros > 0 ? Math.Min(maxMinis, maxMicros / 10.0) : maxMinis > 0 ? maxMinis : maxMicros > 0 ? maxMicros / 10.0 : -1; }   // re-review 2: both set: the smaller
+        // 0.6.6 (Anthony 2026-10-20): the firm's max contracts, the one limit that holds every entry (his own, a group's and the
+        // machines'). Micros count against maxMicros where the firm gives one, minis against maxMinis; with only one of the two set,
+        // the other kind converts at 10 micros to a mini. What the account holds and has working counts too, every instrument, in mini
+        // equivalents (usedMini, OpenStopRisk's count). Was (0.6.5): one max in mini equivalents, the smaller of maxMinis and maxMicros / 10
+        // when both were set (a firm allowing 4 minis or 40 micros capped the same; one allowing 2 minis or 40 micros held micros to 20).
+        // Unit: the kind the cap is in ("minis" or "micros"); Cap, Used (in that unit), Per: one contract of the root in that unit;
+        // Left: the root's contracts still allowed (0 or more). Null when the rules set no max.
+        public sealed class FirmMax { public string Unit; public double Cap, Used, Per; public int Left; }
+        public static FirmMax FirmMaxFor(ChartBridgeGroups.Rules r, string root, double usedMini)
+        {
+            if (r == null || (r.MaxMinis <= 0 && r.MaxMicros <= 0)) return null;
+            bool micro = MicroRoots.Contains(root ?? ""), inMicros = micro ? r.MaxMicros > 0 : r.MaxMinis <= 0;
+            double k = inMicros ? 10 : 1;
+            FirmMax m = new FirmMax { Unit = inMicros ? "micros" : "minis", Cap = inMicros ? r.MaxMicros : r.MaxMinis, Used = Math.Round(Math.Max(0, usedMini) * k, 6), Per = MiniEquivalent(root) * k };
+            m.Left = Math.Max(0, (int)Math.Floor((m.Cap - m.Used) / m.Per + 1e-6));
+            return m;
+        }
+        private static string Qty(double v) { return v.ToString("0.#", CultureInfo.InvariantCulture); }
 
         // Answer 4 and review 1 and 5: what an account holds and has working, every instrument, both sides. risk: the loss if every
         // position is stopped at its working stops (each contract month from its own last price; the farthest stops first, up to the
@@ -302,9 +319,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 n.Why.TryGetValue("roomFloor", out floorWhy); n.Why.TryGetValue("roomDaily", out dailyWhy);
                 double usedMini, budget;
                 double? openRisk = OpenStopRisk(a, out openWhy, out usedMini);
-                double maxEq = MaxMiniEquivalents(n.R.MaxMinis, n.R.MaxMicros);
-                int maxLeft = maxEq < 0 ? -1 : Math.Max(0, (int)Math.Floor((maxEq - usedMini) / MiniEquivalent(root) + 1e-9));
-                string maxWords = maxEq < 0 ? "" : (n.R.MaxMinis > 0 && n.R.MaxMicros > 0 ? n.R.MaxMinis + " minis / " + n.R.MaxMicros + " micros" : n.R.MaxMinis > 0 ? n.R.MaxMinis + " minis" : n.R.MaxMicros + " micros") + "; it holds or has working " + usedMini.ToString("0.#", CultureInfo.InvariantCulture) + " in mini equivalents, every instrument";
+                FirmMax fm = FirmMaxFor(n.R, root, usedMini);   // 0.6.6: micros against maxMicros, minis against maxMinis
+                int maxLeft = fm == null ? -1 : fm.Left;
+                string maxWords = fm == null ? "" : (n.R.MaxMinis > 0 && n.R.MaxMicros > 0 ? n.R.MaxMinis + " minis / " + n.R.MaxMicros + " micros" : n.R.MaxMinis > 0 ? n.R.MaxMinis + " minis" : n.R.MaxMicros + " micros") + "; it holds or has working " + usedMini.ToString("0.#", CultureInfo.InvariantCulture) + " in mini equivalents, every instrument";
                 s.Size = GroupSize(riskPct, n.R.Drawdown, stopTicks, tickValue, maxLeft, maxWords, CapFor(root), "maxQty." + root + " in config.txt", held,
                                    n.RoomFloor, floorWhy, n.R.DailyLoss > 0, n.RoomDaily, dailyWhy, openRisk, openWhy, out budget, out why);
                 s.Budget = budget; s.Out = why; s.Risk = Math.Round(s.Size * stopTicks * tickValue * 100) / 100;
@@ -518,7 +535,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             public double Size, DailyLoss, Drawdown, LockAt, Target, Consistency;   // 0: none (DailyLoss, LockAt, Target, Consistency)
             public string Type, TypeId;             // Type: eod, intraday, static; TypeId: The Desk's account type it came from, or null
-            public int MaxMinis, MaxMicros;         // the firm's max size (0: none); shown and sent, never enforced by ChartBridge
+            public int MaxMinis, MaxMicros;         // the firm's max size (0: none); 0.6.6: enforced on every entry (ChartBridgeOrders.FirmMaxFor)
             public bool Own;                        // from a rules line (else the group's)
             public string[] Extra = new string[0];  // fields after typeId, kept as read (a later ChartBridge's)
             public Rules Clone() { Rules r = (Rules)MemberwiseClone(); r.Extra = (string[])Extra.Clone(); return r; }
