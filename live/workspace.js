@@ -2559,6 +2559,93 @@ document.addEventListener('keydown', e => {
 });
 
 $('wsAdd').addEventListener('click', e => toggle($('wsAddMenu'), e.currentTarget, () => { syncAddMenu(); openPop($('wsAddMenu'), e.currentTarget); }));
+
+/* ---------------- 1.34.0 (Anthony 2026-10-20): Screens. Save these screens keeps every workspace window open now (its layout
+   and where it is); Open my screens opens the saved ones not open now, each on its screen (the browser's window placement
+   on all screens, asked once), each unlocked by this window's PIN (ChartBridgePin.openChild). live/screens.js. */
+const SC = window.Screens;
+const scChan = typeof BroadcastChannel === 'function' ? new BroadcastChannel(SC.CHANNEL) : null;
+const scMine = () => ({ layout: layout || W.DEFAULT_NAME, x: window.screenX, y: window.screenY, w: window.outerWidth, h: window.outerHeight });
+if (scChan) scChan.onmessage = e => { const m = e.data; if (m && m.type === 'who' && typeof m.id === 'string') scChan.postMessage(Object.assign({ type: 'here', id: m.id }, scMine())); };
+/* the workspace windows open now, this one first (each answers within the wait) */
+function scRoster(ms) {
+  return new Promise(resolve => {
+    const list = [scMine()];
+    if (!scChan) { resolve(list); return; }
+    const id = Math.random().toString(36).slice(2), other = new BroadcastChannel(SC.CHANNEL);   // a second port: a channel never hears its own posts
+    other.onmessage = e => { const m = e.data; if (m && m.type === 'here' && m.id === id) list.push(m); };
+    other.postMessage({ type: 'who', id });
+    setTimeout(() => { other.close(); resolve(list); }, ms || 350);
+  });
+}
+const scSaved = () => { try { return SC.clean(JSON.parse(store.getItem(SC.KEY))); } catch (e) { return SC.clean(null); } };
+let scScreens = null, scMsg = { text: '', warn: false };
+/* the screens as the browser tells them (asked once: the browser's "manage windows on all your displays"), else null */
+async function scDetails(ask) {
+  if (typeof window.getScreenDetails !== 'function') return null;
+  try {
+    if (!ask && navigator.permissions) { const st = await navigator.permissions.query({ name: 'window-management' }); if (st.state !== 'granted') return scScreens; }
+    const d = await window.getScreenDetails();
+    scScreens = d.screens.map(x => ({ left: x.availLeft, top: x.availTop, width: x.availWidth, height: x.availHeight }));
+  } catch (e) { /* refused or not offered: this screen only */ }
+  return scScreens;
+}
+async function renderScreens() {
+  const el = $('wsScreensPop'), set = scSaved(), open = new Set((await scRoster()).map(x => x.layout));
+  await scDetails(false);
+  const where = w => { const n = scScreens ? SC.screenNo(w, scScreens) : 0; return n ? 'screen ' + n : scScreens ? 'its screen is not connected' : 'at ' + w.x + ', ' + w.y; };
+  const missing = set.windows.filter(w => !open.has(w.layout));
+  el.innerHTML = '<h2>Screens</h2>' +
+    (set.windows.length ? '<ul>' + set.windows.map(w => '<li><b>' + esc(w.layout) + '</b><span>' + esc(where(w)) + ' · ' + w.w + ' x ' + w.h + '</span><span class="' + (open.has(w.layout) ? 'on' : '') + '">' + (open.has(w.layout) ? 'open' : 'not open') + '</span></li>').join('') + '</ul>'
+      : '<p class="ws-scr-msg">No screens saved yet. Open your windows, put each where you want it, then Save these screens.</p>') +
+    (scMsg.text ? '<p class="ws-scr-msg' + (scMsg.warn ? ' warn' : '') + '" role="status">' + esc(scMsg.text) + '</p>' : '') +
+    '<div class="ws-scr-btns"><button type="button" class="ws-btn" data-scr="save" title="Remember every workspace window open now: its layout, screen and size">Save these screens</button>' +
+    '<button type="button" class="ws-btn primary" data-scr="open"' + (missing.length ? '' : ' disabled') + ' title="' + (missing.length ? 'Open ' + esc(missing.map(w => w.layout).join(', ')) + ', each on its screen' : 'Every saved window is open') + '">Open my screens</button></div>' +
+    '<p class="ws-help">Open my screens opens the saved windows that are not open, each on its screen, unlocked with this window\'s PIN. The first time the browser asks to manage windows on all your displays, and may block the extra windows: allow pop-ups for this page (the icon at the end of the address bar), then click again.</p>';
+  scDue(missing);
+}
+function scDue(missing) {
+  const b = $('wsScreens'), due = missing.length > 0;
+  b.classList.toggle('ws-scr-due', due);
+  const t = due ? 'Screens: ' + missing.map(w => w.layout).join(', ') + ' not open (Open my screens)' : 'Screens: save where your windows are, open them all again';
+  if (b.title !== t) b.title = t;
+}
+async function scSave() {
+  const list = await scRoster(), at = Date.now();
+  store.setItem(SC.KEY, JSON.stringify({ at, windows: list.map(x => ({ layout: x.layout, x: x.x, y: x.y, w: x.w, h: x.h })) }));
+  const set = scSaved();
+  scMsg = { text: 'Saved ' + set.windows.length + ' window' + (set.windows.length === 1 ? '' : 's') + ': ' + set.windows.map(w => w.layout).join(', ') + '.', warn: false };
+  await renderScreens();
+}
+async function scOpen() {
+  const set = scSaved(), open = new Set((await scRoster(250)).map(x => x.layout));
+  const missing = set.windows.filter(w => !open.has(w.layout));
+  if (!missing.length) { scMsg = { text: 'Every saved window is open.', warn: false }; await renderScreens(); return; }
+  const screens = await scDetails(true);
+  const here = { left: window.screen.availLeft || 0, top: window.screen.availTop || 0, width: window.screen.availWidth, height: window.screen.availHeight };
+  const moved = [], blocked = [];
+  for (const w of missing) {
+    let p = screens ? SC.place(w, screens) : { left: w.x, top: w.y, width: w.w, height: w.h };
+    if (!p) { p = SC.onScreen(here, w.w, w.h); moved.push(w.layout); }
+    const url = location.pathname + SC.url(w.layout), f = SC.features(p);
+    const win = PIN && PIN.openChild ? PIN.openChild(url, f) : window.open(url, '_blank', f);
+    if (!win) blocked.push(w.layout);
+  }
+  const opened = missing.length - blocked.length;
+  scMsg = { text: (opened ? 'Opened ' + missing.filter(w => !blocked.includes(w.layout)).map(w => w.layout).join(', ') + '.' : '') +
+    (moved.length ? ' ' + moved.join(', ') + ': its screen is not connected now, so on this one.' : '') +
+    (blocked.length ? ' The browser blocked ' + blocked.join(', ') + ': allow pop-ups for this page (the icon at the end of the address bar), then click Open my screens again.' : '') +
+    (!screens && opened ? ' The browser did not allow placing windows on other screens, so they may open on this one.' : ''), warn: blocked.length > 0 || moved.length > 0 || (!screens && opened > 0) };
+  scMsg.text = scMsg.text.trim();
+  await renderScreens();
+}
+$('wsScreens').addEventListener('click', e => toggle($('wsScreensPop'), e.currentTarget, () => { scMsg = { text: '', warn: false }; renderScreens().then(() => openPop($('wsScreensPop'), $('wsScreens'))); }));
+$('wsScreensPop').addEventListener('click', e => {
+  const b = e.target.closest('[data-scr]');
+  if (!b || b.disabled) return;
+  if (b.dataset.scr === 'save') scSave(); else scOpen();
+});
+setTimeout(() => { const set = scSaved(); if (set.windows.length) scRoster().then(list => { const open = new Set(list.map(x => x.layout)); scDue(set.windows.filter(w => !open.has(w.layout))); }); }, 2500);
 $('wsAddMenu').addEventListener('click', e => { const b = e.target.closest('[data-add]'); if (b && !b.disabled) addPanel(b.dataset.add); });
 function syncAddMenu() {
   const b = $('wsAddMenu').querySelector('[data-add="ticket"]'), has = panels.some(p => p.type === 'ticket');

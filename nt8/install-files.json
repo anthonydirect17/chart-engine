@@ -25,6 +25,7 @@
     { "from": "live/order-strategies.js", "to": "order-strategies.js" },
     { "from": "live/trade.js", "to": "trade.js" },
     { "from": "live/ticket-link.js", "to": "ticket-link.js" },
+    { "from": "live/screens.js", "to": "screens.js" },
     { "from": "live/pin.js", "to": "pin.js" },
     { "from": "live/pin.css", "to": "pin.css" },
     { "from": "live/update-notice.js", "to": "update-notice.js" },

@@ -41,6 +41,7 @@
     "smoke:motion": "node test/motion-smoke.mjs",
     "smoke:kit": "node test/kit-smoke.mjs",
     "smoke:accounts": "node test/accounts-smoke.mjs",
+    "smoke:screens": "node test/screens-smoke.mjs",
     "smoke:v038": "node test/v038-smoke.mjs",
     "smoke:quoterows": "node test/quoterows-smoke.mjs",
     "smoke:strategies": "node test/strategies-smoke.mjs",
