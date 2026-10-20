@@ -70,22 +70,29 @@ const KIND_ABBR = { market: 'MKT', limit: 'LMT', stop: 'STP', stopLimit: 'STL' }
 /** Short order label: "BUY LMT 2"; bracket legs read "SELL TGT 2" and "SELL STP 2". Qty is what is left to fill. */
 /* 1.33.0: a group's line (the host sets `group`, "Lucid ×4") says so after its own label */
 const groupPart = ord => (typeof ord.group === 'string' && ord.group ? ' · ' + ord.group : '');
+/* 1.34.0 (Anthony 2026-10-20: "the order lines' labels are too big again and cover the bars ... I need to see precisely where
+   I am placing the orders"): the short label names no group but an entry's member count ("×4"); the full one, on hover, the
+   group. `usd` (1.34.0, Anthony: "the amount in $ for the stop and the tgt listed on the bar next to the ticks ... this
+   number should adjust as I drag"): a stop or target's signed dollars for the contracts it covers, null when not known. */
+const countPart = ord => { const m = typeof ord.group === 'string' ? /×\s*(\d+)\s*$/.exec(ord.group) : null; return m ? ' ×' + m[1] : ''; };
+const usdPart = ord => (ord.usd !== null && ord.usd !== undefined && isFinite(ord.usd) ? ' ' + (ord.usd < 0 ? '-' : '+') + '$' + fmtPrice(Math.abs(Math.round(ord.usd)), 0) : '');
+const legTicksPart = ord => (ord.legTicks !== null && ord.legTicks !== undefined && isFinite(ord.legTicks) ? ' ' + (ord.legTicks < 0 ? '-' : '+') + Math.abs(ord.legTicks) + 't' : '');
 function orderLabel(ord) {
-  if (ord.plan) return (ord.plan.role === 'stop' ? 'SL plan -' : 'TP plan +') + Math.abs(ord.plan.ticks) + 't' + groupPart(ord);   // 1.13.0: a planned stop or target
+  if (ord.plan) return (ord.plan.role === 'stop' ? 'SL plan -' : 'TP plan +') + Math.abs(ord.plan.ticks) + 't' + usdPart(ord) + groupPart(ord);   // 1.13.0: a planned stop or target
   const side = ord.side === 'sell' ? 'SELL' : 'BUY';
   const kind = ord.role === 'target' ? 'TGT' : ord.role === 'stop' ? 'STP' : (KIND_ABBR[ord.kind] || String(ord.kind || '').toUpperCase());
   const left = Math.max(0, (+ord.qty || 0) - (+ord.filled || 0));
-  return side + ' ' + kind + ' ' + left + groupPart(ord);
+  return side + ' ' + kind + ' ' + left + legTicksPart(ord) + usdPart(ord) + groupPart(ord);
 }
 /** The short label (1.15.0, Anthony from his two-monitor setup: the labels were too big and covered price), drawn on a
     host's chart with the full label (orderLabel) on hover: "TGT 1", "STP 1" (a bracket leg; its side is its color),
-    "BUY LMT 1" (an entry), planned "SL -12t" / "TP +24t". */
+    "BUY LMT 1" (an entry), planned "SL -12t" / "TP +24t". 1.34.0: "SL -80t -$120", "STP 2 -80t -$120", "BUY LMT 3 ×2". */
 function orderLabelShort(ord) {
-  if (ord.plan) return (ord.plan.role === 'stop' ? 'SL -' : 'TP +') + Math.abs(ord.plan.ticks) + 't' + groupPart(ord);
+  if (ord.plan) return (ord.plan.role === 'stop' ? 'SL -' : 'TP +') + Math.abs(ord.plan.ticks) + 't' + usdPart(ord);
   const left = Math.max(0, (+ord.qty || 0) - (+ord.filled || 0));
-  if (ord.role === 'target') return 'TGT ' + left + groupPart(ord);
-  if (ord.role === 'stop') return 'STP ' + left + groupPart(ord);
-  return (ord.side === 'sell' ? 'SELL' : 'BUY') + ' ' + (KIND_ABBR[ord.kind] || String(ord.kind || '').toUpperCase()) + ' ' + left + groupPart(ord);
+  if (ord.role === 'target') return 'TGT ' + left + legTicksPart(ord) + usdPart(ord);
+  if (ord.role === 'stop') return 'STP ' + left + legTicksPart(ord) + usdPart(ord);
+  return (ord.side === 'sell' ? 'SELL' : 'BUY') + ' ' + (KIND_ABBR[ord.kind] || String(ord.kind || '').toUpperCase()) + ' ' + left + countPart(ord);
 }
 /** The position's short label parts (1.15.0): ["L1", "+4.50", "+$90"]: the side's letter and size, points per contract,
     whole dollars for the position (none without a point value). */
@@ -1164,7 +1171,7 @@ function create(container, options) {
   let cornerText = '', cornerShort = '', cornerAt = null, labelHover = null;
   const cornerWidths = new Map();                         // text -> its width in the readout's font (cleared with the fonts)
   // working orders and the position (1.3.0): shown always; moved, cancelled and placed only while editing is on
-  let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
+  let orders = [], position = null, hostPV = 0, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, addDown = null, orderHits = [];
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
   const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [], drawn: [] };
@@ -2292,7 +2299,9 @@ function create(container, options) {
           const ticks = parent ? Math.round(Math.abs(price - orderPrice(parent)) / o.tick) : Math.abs(ord.plan.ticks);
           const alpha = pendingMoves.has(ord.id) && !dragging ? 0.4 : 0.7;
           hline(y, col, [2, 4], 0.75 * alpha, dragging ? 1.5 : 1);
-          const pl = { plan: { role: ord.plan.role, ticks }, group: ord.group };
+          const pv = hostPV || o.pointValue, left = parent ? Math.max(0, (+parent.qty || 0) - (+parent.filled || 0)) : 0;
+          const usd = pv > 0 && left > 0 ? (ord.plan.role === 'stop' ? -1 : 1) * ticks * o.tick * pv * left : null;   // 1.34.0: live while dragged
+          const pl = { plan: { role: ord.plan.role, ticks }, group: ord.group, usd };
           const hit = label(y, [[orderLabel(pl), col]], col, [2, 3], alpha, orderEditing, null, [[orderLabelShort(pl), col]], ord.id);
           orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox });
           orderTags.push({ price, id: ord.id, style: { fill: T.bg, fg: col, border: col, dash: [2, 3] } });
@@ -2302,7 +2311,14 @@ function create(container, options) {
         const alpha = pendingMoves.has(ord.id) && !dragging ? 0.55 : 1;
         hline(y, col, dash, 0.9 * alpha, dragging ? 1.5 : 1);
         const extras = orderEditing && ord.adds && ord.adds.length ? ord.adds.map(w => [w, w === 'stop' ? '+SL' : '+TP']) : null;
-        const hit = label(y, [[orderLabel(ord), col]], col, dash ? [3, 2] : null, alpha, orderEditing, extras, [[orderLabelShort(ord), col]], ord.id);
+        /* 1.34.0: a stop or target leg of the open position: its ticks and dollars from the average price, for what it covers */
+        let lab = ord;
+        if ((ord.role === 'stop' || ord.role === 'target') && position && position.qty && o.tick > 0) {
+          const pv = position.pointValue || hostPV || o.pointValue, left = Math.max(0, (+ord.qty || 0) - (+ord.filled || 0));
+          const pts = (price - position.avgPrice) * Math.sign(position.qty);
+          lab = Object.assign({}, ord, { legTicks: Math.round(pts / o.tick), usd: pv > 0 && left > 0 ? pts * pv * left : null });
+        }
+        const hit = label(y, [[orderLabel(lab), col]], col, dash ? [3, 2] : null, alpha, orderEditing, extras, [[orderLabelShort(lab), col]], ord.id);
         orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox, adds: hit.adds });
         orderTags.push({ price, id: ord.id, style: stop ? { fill: T.bg, fg: col, border: col, dash: [3, 2] } : { fill: col, fg: readableOn(col), border: null } });
       }
@@ -3013,6 +3029,7 @@ function create(container, options) {
     setPosition(pos, opts) {
       const pv = (opts && opts.pointValue) || (pos && pos.pointValue) || 0;
       position = pos && +pos.qty && isFinite(pos.avgPrice) ? { qty: +pos.qty, avgPrice: +pos.avgPrice, pointValue: pv } : null;
+      if (pv > 0) hostPV = pv;   // 1.34.0: the dollars on stop and target labels, with or without a position
       dirty = true;
     },
     getPosition() { return position ? Object.assign({}, position) : null; },

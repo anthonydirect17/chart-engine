@@ -116,6 +116,13 @@ test('compact labels: the short text; the full one is today\'s', () => {
   assert.equal(U.orderLabelShort({ plan: { role: 'target', ticks: 24 } }), 'TP +24t');
   assert.equal(U.orderLabel({ side: 'sell', role: 'target', qty: 1 }), 'SELL TGT 1', 'the full label as before');
   assert.equal(U.orderLabel({ plan: { role: 'stop', ticks: 12 } }), 'SL plan -12t');
+  /* 1.34.0 (Anthony 2026-10-20): dollars beside the ticks; the group's name on hover only, an entry's member count short */
+  assert.equal(U.orderLabelShort({ plan: { role: 'stop', ticks: 80 }, usd: -120, group: 'Lucid-Evals ×2' }), 'SL -80t -$120');
+  assert.equal(U.orderLabelShort({ plan: { role: 'target', ticks: 120 }, usd: 180, group: 'Lucid-Evals ×2' }), 'TP +120t +$180');
+  assert.equal(U.orderLabel({ plan: { role: 'stop', ticks: 80 }, usd: -120, group: 'Lucid-Evals ×2' }), 'SL plan -80t -$120 · Lucid-Evals ×2');
+  assert.equal(U.orderLabelShort({ side: 'buy', kind: 'limit', qty: 3, group: 'Lucid-Evals ×2' }), 'BUY LMT 3 ×2');
+  assert.equal(U.orderLabelShort({ side: 'sell', role: 'stop', kind: 'stop', qty: 2, legTicks: -80, usd: -80, group: 'Lucid ×2' }), 'STP 2 -80t -$80');
+  assert.equal(U.orderLabelShort({ plan: { role: 'stop', ticks: 12 }, usd: null }), 'SL -12t', 'no point value: no dollars');
   assert.deepEqual(U.positionShort(1, { points: 4.5, dollars: 90 }, 2), ['L1', '+4.50', '+$90']);
   assert.deepEqual(U.positionShort(-2, { points: -3.25, dollars: -1300.4 }, 2), ['S2', '-3.25', '-$1,300']);
   assert.deepEqual(U.positionShort(1, { points: 0, dollars: null }, 2), ['L1', '0.00'], 'no point value: no dollars');
@@ -387,15 +394,16 @@ test('compact labels: short text drawn, the full label\'s hit areas and x, the f
   const compact = stub({ compactLabels: true }); setUp(compact);
   assert.ok(fullHits.length === 2, 'two orders');
   assert.deepEqual(compact.chart.orderHandles(), fullHits, 'the same hit areas, x and stacking as the full labels');
-  assert.ok(fullTexts.includes('SELL TGT 1') && fullTexts.includes('BUY LMT 2') && fullTexts.includes('LONG 1'));
-  assert.ok(texts(compact).includes('TGT 1') && texts(compact).includes('BUY LMT 2') && texts(compact).includes('L1'), texts(compact).join('|'));
-  assert.ok(!texts(compact).includes('SELL TGT 1') && !texts(compact).includes('LONG 1'), 'not the full text');
-  assert.ok(compact.ops.filter(o => o.op === 'text' && o.s === 'TGT 1').every(o => /10px/.test(o.font)), 'the smaller text');
+  /* 1.34.0: a leg of the open position says its ticks and dollars from the average price (101.50 - 100 = 6 ticks, $3 at $2 a point) */
+  assert.ok(fullTexts.includes('SELL TGT 1 +6t +$3') && fullTexts.includes('BUY LMT 2') && fullTexts.includes('LONG 1'), fullTexts.join('|'));
+  assert.ok(texts(compact).includes('TGT 1 +6t +$3') && texts(compact).includes('BUY LMT 2') && texts(compact).includes('L1'), texts(compact).join('|'));
+  assert.ok(!texts(compact).includes('SELL TGT 1 +6t +$3') && !texts(compact).includes('LONG 1'), 'not the full text');
+  assert.ok(compact.ops.filter(o => o.op === 'text' && o.s === 'TGT 1 +6t +$3').every(o => /10px/.test(o.font)), 'the smaller text');
   const h = compact.chart.orderHandles().find(x => x.id === 'o1');
   compact.move(h.box.x + h.box.w - 4, h.box.y + 9);
   assert.equal(compact.chart.labelHover(), 'o1');
   compact.frame();
-  assert.ok(texts(compact).includes('SELL TGT 1') && !texts(compact).includes('TGT 1'), 'the full label on hover');
+  assert.ok(texts(compact).includes('SELL TGT 1 +6t +$3') && !texts(compact).includes('TGT 1 +6t +$3'), 'the full label on hover');
   compact.move(20, 20);
   assert.equal(compact.chart.labelHover(), null);
 });
@@ -457,4 +465,18 @@ test('review: the feed sends htf as exactly { type, root, tf, id }', () => {
   assert.deepEqual(F.htfOf({ type: 'htf', root: 'NQ', tf: '1W' }), { type: 'htf', root: 'NQ', tf: '1W' }, 'no id: none sent');
   assert.deepEqual(F.htfOf({ type: 'htf', root: 'NQ', tf: '1D', id: 1.5 }), { type: 'htf', root: 'NQ', tf: '1D' }, 'a fraction is no id');
   for (const bad of [null, {}, { root: 'MNQ', tf: '2h' }, { root: 7, tf: '4h' }]) assert.equal(F.htfOf(bad), null);
+});
+
+test('1.34.0: a planned stop and target say their dollars for the entry\'s contracts (a group\'s sum); the dollars follow the line', () => {
+  const S = stub({ compactLabels: true });
+  const texts = () => S.ops.filter(o => o.op === 'text').map(o => o.s);
+  const entry = { id: 'e1', side: 'buy', kind: 'limit', price: 100, qty: 3, group: 'Lucid ×2' };
+  const plans = p => [entry, { id: 'e1~stop', side: 'sell', kind: 'stop', price: p, qty: 3, plan: { role: 'stop', parent: 'e1', offset: -(100 - p) / 0.25 } },
+    { id: 'e1~target', side: 'sell', kind: 'limit', price: 103, qty: 3, plan: { role: 'target', parent: 'e1', offset: 12 } }];
+  S.chart.setOrders(plans(99)); S.chart.setOrderEditing(true); S.chart.setPosition(null, { pointValue: 2 }); S.frame();
+  assert.ok(texts().includes('SL -4t -$6') && texts().includes('TP +12t +$18') && texts().includes('BUY LMT 3 ×2'), texts().join('|'));
+  S.ops.length = 0;
+  S.chart.setOrders(plans(98)); S.frame();
+  assert.ok(texts().includes('SL -8t -$12'), 'the stop moved: its ticks and dollars with it: ' + texts().join('|'));
+  S.chart.destroy();
 });
