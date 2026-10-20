@@ -127,7 +127,10 @@ try {
   check(JSON.parse(await A.evaluate(() => localStorage.getItem('live-hotkeys-v1'))).be === 'Alt+K', 'a key set in Settings is saved in this browser, as before');
   await A.keyboard.press('Escape'); await A.evaluate(() => document.activeElement && document.activeElement.blur()); await wait(200);
   if (await visible(A, '#wsSettings')) { await A.click('#wsSet'); await wait(200); }
-  check(desk.log.length === 0, 'The Desk was never asked (' + desk.log.length + ' requests)');
+  // the hotkeys and strategies documents are never asked for with the switches off; the account types and the accounts'
+  // links are read from The Desk on any ChartBridge since the Accounts tab's types (they are not a switch's)
+  const asked = desk.log.filter(x => x.which === 'hotkeys' || x.which === 'strategies');
+  check(asked.length === 0, 'The Desk was never asked for hotkeys or strategies (' + asked.length + ' requests: ' + JSON.stringify(asked.map(x => x.method + ' ' + x.which)) + ')');
   check((await A.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === null, 'live-desk-sync-v1 is never written (1.22.0: it told the single chart page, gone)');
   // an order: the 1.15 order, a bracket and no strategy, and Num9 (a strategy's key on The Desk) does nothing
   await A.selectOption('.ws-panel[data-type="ticket"] [data-tk-id="oQty"]', '1');
