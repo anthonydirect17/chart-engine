@@ -177,8 +177,11 @@ try {
   // Copier
   await tab(page, 'cop');
   const cop = await rows(page, '.apg-cop-g');
-  check(cop.map(r => r.k).join() === 'f|EVAL-A|LIVE,f|FUNDED-C|LIVE,f|SIM-F1|SIM,f|SIM-F2|SIM', 'Copier (Anthony 2026-10-07: no Sim lock): a row per account but the leader, Sim or LIVE (' + cop.map(r => r.k).join(', ') + ')');
-  const marks0 = await page.$$eval(`${AP} .apg-cop-g .apg-mark`, els => els.map(e => e.textContent + (e.classList.contains('live') ? ':' + getComputedStyle(e).backgroundColor : '')));
+  check(cop.map(r => r.k).join() === 'f|EVAL-A|LIVE|,f|FUNDED-C|LIVE|,f|SIM-F1|SIM|s,f|SIM-F2|SIM|s', 'Copier (Anthony 2026-10-07: no Sim lock): a row per account but the leader, Sim or LIVE (' + cop.map(r => r.k).join(', ') + ')');
+  /* 1.34.0: a saved follower row also carries a "follower" mark (counted apart) */
+  const fmarks = await page.$$eval(`${AP} .apg-cop-g .apg-fmark`, els => els.length);
+  check(fmarks === 2, '1.34.0: the two saved followers (SIM-F1, SIM-F2) are marked "follower": ' + fmarks);
+  const marks0 = await page.$$eval(`${AP} .apg-cop-g .apg-mark:not(.apg-fmark)`, els => els.map(e => e.textContent + (e.classList.contains('live') ? ':' + getComputedStyle(e).backgroundColor : '')));
   check(marks0.join() === 'LIVE:rgb(159, 18, 57),LIVE:rgb(159, 18, 57),SIM,SIM', 'each follower marked SIM or LIVE, LIVE in the house red: ' + marks0.join(', '));
   check(/Sim or LIVE followers/.test(await page.$eval(`${AP} .apg-sim`, e => e.textContent)), 'the Copier tab no longer says Sim accounts only');
   check(!(await page.$eval(`${AP} [data-follower="EVAL-A"] input[data-act="f-on"]`, e => e.disabled)), 'a LIVE account can be turned on as a follower');
