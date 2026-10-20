@@ -642,18 +642,17 @@ function syncStats() {
   // 1.24.0: the split only while the top bar has room for it beside everything else (its free space, .ws-fill, not used
   // up: a note or the update notice is never squeezed for it); else "125 ms real", the split in the tooltip. With the clock
   // warning shown and the line still cut, the frame rate gives way, then the local delay's p95, then the local delay (each
-  // instrument's is in the tooltip): the warning is never cut.
+  // instrument's is in the tooltip): the warning is never cut. 1.34.0: the same order whenever the line is cut, warning or not
+  // (Flatten every account took its room in the top bar at 1366 wide: the line is never cut mid number).
   const fpsEl = $('wsFps'), localEl = $('wsLocal').parentElement, stat = $('wsStat');
   const show = (el, on) => { el.hidden = !on; if (el.previousElementSibling) el.previousElementSibling.hidden = !on; };
   show(fpsEl, true); show(localEl, true);
   const st = feedShort(feed, pcClock) + tail;
   if (st !== ft && !(fillEl && fillEl.getBoundingClientRect().width >= 1)) $('wsFeed').textContent = st;
-  if (cw) {
-    const cut = () => stat.scrollWidth > stat.clientWidth + 1;
-    if (cut()) show(fpsEl, false);
-    if (cut()) $('wsLocal').textContent = fmtDelay(local);
-    if (cut()) show(localEl, false);
-  }
+  const cut = () => stat.scrollWidth > stat.clientWidth + 1;
+  if (cut()) show(fpsEl, false);
+  if (cut()) $('wsLocal').textContent = fmtDelay(local);
+  if (cut()) show(localEl, false);
   $('wsStat').title = 'Feed delay (ChartBridge to here) and local delay per instrument, the worst shown. Frame: a trade\'s receipt by ChartBridge to the chart frame that drew it, ' +
     (frameMax === null ? 'no trade drawn in the last second' : fmtDelay(frameMax) + ' at worst in the last second (latest ' + fmtDelay(frame) + ')') + '; each chart\'s in the Data Box.\n' +
     ([...per].map(([root, r]) => root + ': feed ' + feedText(r.feed, pcClock) + ', local ' + fmtDelay(r.local)).join('\n') || 'no data yet') +
