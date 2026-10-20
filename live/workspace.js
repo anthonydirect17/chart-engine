@@ -1263,7 +1263,7 @@ function mountTicket(v) {
     <div class="tk-row tk-two"><button type="button" class="obtn buy" data-tk-id="buyMkt">Buy MKT</button><button type="button" class="obtn sell" data-tk-id="sellMkt">Sell MKT</button></div>
     <div class="tk-row tk-three"><button type="button" class="btn" data-tk-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-tk-id="flattenBtn" title="Close: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Close</button><button type="button" class="btn" data-tk-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button><button type="button" class="btn" data-tk-id="mergeBtn" hidden>Merge</button></div>
     <div class="tk-state ostate">
-      <span class="oinfo" data-tk-id="oPos"></span><span class="oinfo olegs" data-tk-id="oLegs"></span>
+      <span class="oinfo" data-tk-id="oPos"></span><span class="oinfo olegs" data-tk-id="oLegs"></span><span class="oinfo dim tk-room" data-tk-id="room"></span>
       <span class="oinfo tk-v3" data-tk-id="managed" role="status"></span><span class="oinfo tk-v3" data-tk-id="mergeLine" role="status"></span><span class="oinfo tk-fill" data-tk-id="fill"></span>
       <span class="tk-also" data-tk-id="also"></span>
       <span class="oinfo dim oother" data-tk-id="oOther"></span><span class="oinfo acct-note" data-tk-id="oAcctNote" role="status"></span><span class="oinfo acct-note batch-note" data-tk-id="oCancel" role="status"></span><span class="ooff" data-tk-id="oOff"></span>
@@ -1333,6 +1333,7 @@ function ticketAccountNote(pick) {
 /* the last fill of the ticket's account and instrument, and the account's other instruments still open */
 function renderTicketExtras() {
   renderTicketV3();
+  renderRoom();
   const TR = core.TR, acct = TR.account, r = TK.root;
   const fill = TR.enabled && acct ? [...tfills.values()].filter(f => f.account === acct && f.root === r).sort((a, b) => a.t - b.t).pop() : null;
   const fe = tk('fill');
@@ -1350,6 +1351,29 @@ function renderTicketExtras() {
   if (el.dataset.key === key) return;
   el.dataset.key = key;
   el.innerHTML = rows.map(x => `<span class="tk-also-row"><span>Also open: ${esc(x.text)}</span><button type="button" class="btn" data-close="${x.root}" title="Close ${x.root}: cancel its orders and close its position at market on ${esc(acct)}">Close</button></span>`).join('');
+}
+/* 1.34.0 (Anthony 2026-10-20): the ticket says the account's room where its rules give it (ChartBridge's own numbers: the daily
+   room and the room to the floor, as the Account page's Room column), and this entry's risk at its stop (Qty x the bracket's stop,
+   or the active Order Strategy's, in dollars). Display only: nothing is checked or held on it (his own entries have one check, the
+   firm's max contracts, in ChartBridge). One account only (a group shows its next entry's sizes instead); nothing on None. */
+function renderRoom() {
+  const el = tk('room');
+  if (!el) return;
+  const acct = ticketAccount(), R = TK.root, a = AF && acct && core.TR.enabled && !core.isGroup(acct) ? AF.account(acct) : null;
+  const num = v => typeof v === 'number' && isFinite(v), C = window.AccountsCore;
+  const usd = v => (C ? C.fmtUsdPlain(v) : (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2));
+  let text = '', tip = '';
+  if (a && (num(a.roomDaily) || num(a.roomFloor))) {
+    const st = activeStrategy(), b = core.brackets[R] || {};
+    const ticks = st && st.stop ? (+st.stop.ticks || 0) + (st.stop.type === 'limit' ? +st.stop.limitOffsetTicks || 0 : 0) : +b.stop || 0;
+    const pv = (instruments[R] || {}).pointValue || 0, risk = ticks > 0 && pv > 0 ? ticketQty() * ticks * tickOf(R) * pv : null;
+    const parts = [num(a.roomDaily) ? usd(a.roomDaily) + ' daily' : '', num(a.roomFloor) ? usd(a.roomFloor) + ' to floor' : ''].filter(Boolean);
+    text = 'Room ' + parts.join(' · ') + (ticks > 0 ? (risk !== null ? ' · entry ' + usd(risk) + ' at stop' : '') : ' · entry: no stop');
+    tip = acct + ': ' + [num(a.roomDaily) ? usd(a.roomDaily) + ' of daily room left' : '', num(a.roomFloor) ? usd(a.roomFloor) + ' to the floor' + (num(a.floor) ? ' (' + usd(a.floor) + ')' : '') : ''].filter(Boolean).join(', ') +
+      ' (ChartBridge, from its rules).' + (ticks > 0 && risk !== null ? ' This entry: ' + ticketQty() + ' ' + R + ' at a ' + ticks + ' tick stop risks ' + usd(risk) + (st ? ' (the Order Strategy\'s stop)' : '') + '.' : '') + ' Shown only: nothing is held on it.';
+  }
+  if (el.textContent !== text) el.textContent = text;
+  if (el.title !== tip) el.title = tip;
 }
 /* the ticket's price: its instrument's trades from the window's feed (no history kept) */
 function startTicketPrice() {
@@ -1373,7 +1397,7 @@ function stopTicketPrice() {
   const P = TK.price; TK.price = null;
   if (P) { P.sock.onmessage = P.sock.onclose = null; try { P.sock.close(); } catch (e) { /* closed */ } }
 }
-setInterval(() => { if (holds() && TK.bar) { core.groupProjectTick(); TK.bar.renderPositionInfo(); } }, 500);   // the P&L, as the single chart page's; 1.34.0: a group's projected sizes
+setInterval(() => { if (holds() && TK.bar) { core.groupProjectTick(); TK.bar.renderPositionInfo(); renderRoom(); } }, 500);   // 1.34.0: the room as ChartBridge's numbers change   // the P&L, as the single chart page's; 1.34.0: a group's projected sizes
 
 /* ---------------- hotkeys: in either window. Buy, Sell and B/E go to the ticket's window; Close and Flatten all go from
    this one, on the ticket's account (Anthony 2026-10-01). */

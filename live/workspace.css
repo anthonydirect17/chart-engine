@@ -163,6 +163,9 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .ws-btn.ws-flat { color: var(--ws-sell); border-color: color-mix(in srgb, var(--ws-sell) 55%, transparent); background: var(--ws-sell-ground); font-weight: 600; }
 .ws-btn.ws-flat:hover { color: var(--ws-text); }
 .ws-btn.ws-flat:disabled { opacity: .45; cursor: not-allowed; }
+/* 1.34.0: the ticket's room line (display only), one quiet line in the state row */
+.chart-live .tk-state .tk-room { font-size: 11px; }   /* wraps at its own width; color: .dim (text3) */
+.chart-live .tk-state .tk-room:empty { display: none; }
 /* 1.34.0: Flatten every account's confirm: each account and what it holds, scrolling inside past a dozen */
 .ws-fe { max-width: 520px; }
 .ws-fe .fe-list { margin: 0; padding: 0 0 0 18px; max-height: 220px; overflow-y: auto; font-family: var(--ws-mono); font-size: 12px; line-height: 1.6; color: var(--ws-muted); }

@@ -170,6 +170,19 @@ try {
   check(held.length >= 4 && held.every(x => fa.includes(x)) && fa.every(x => /^SIM-[A-D] (NQ|MNQ)$/.test(x)), 'Flatten all on the group, from another window: every member with a position, both instruments: ' + JSON.stringify(fa) + ' (open: ' + held.length + ')');
   const flat = await until(async () => { const q = []; for (const R of ['NQ', 'MNQ']) { const s = await control('state', { root: R }); for (const a of ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D']) q.push(((s.positions || {})[a + '|' + R] || {}).qty || 0); } return q.every(x => !x) ? q : null; }, 'every member flat after Flatten all', 6000);
   check(!!flat, 'after Flatten all every member is flat on NQ and MNQ');
+  /* 1.34.0 (Anthony 2026-10-20, item 7): one account on the ticket shows its room (ChartBridge's numbers) and this entry's risk at
+     its stop; a group shows none of it (its next entry's sizes instead) */
+  const grpRoom = await p.$eval(tk('room'), e => e.textContent);
+  await p.selectOption(tk('oAcct'), 'SIM-B'); await p.selectOption(tk('root'), 'NQ'); await wait(600);
+  await p.selectOption(tk('oQty'), '1');
+  await p.fill(tk('bStop'), '20'); await p.press(tk('bStop'), 'Tab');
+  const room = await until(async () => { const t = await p.$eval(tk('room'), e => e.textContent); return /^Room (\$[0-9,.]+ daily · )?\$[0-9,.]+ to floor · entry \$100\.00 at stop$/.test(t) ? t : null; }, 'the room line on a single account');
+  check(grpRoom === '' && !!room, 'the ticket on one account shows its room and the entry\'s risk at its stop (1 NQ, 20 ticks: $100); on the group none: ' + room);
+  await p.fill(tk('bStop'), '0'); await p.press(tk('bStop'), 'Tab');
+  const room0 = await until(async () => { const t = await p.$eval(tk('room'), e => e.textContent); return /entry: no stop$/.test(t) ? t : null; }, 'the room line with no stop');
+  check(!!room0, 'with no stop the line says so (nothing is held on it): ' + room0);
+  await p.fill(tk('bStop'), '20'); await p.press(tk('bStop'), 'Tab'); await wait(600);
+  await p.locator('.ws-panel:has([data-tk-id="room"])').screenshot({ path: path.join(out, 'group-ticket-room-1366.png') });
   await ctx.close();
 } catch (e) { fail('threw: ' + (e && e.stack || e)); }
 finally { await browser.close(); bridge.kill(); }
