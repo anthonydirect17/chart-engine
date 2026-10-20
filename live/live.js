@@ -2482,7 +2482,7 @@ function mount(container, options) {
      through its TradeCore with every check, or forwards them to the window that has the ticket. The chart itself still
      sends only subscribe, ping and htf. */
   const HOST = opt.trade && typeof opt.trade.place === 'function' && typeof opt.trade.move === 'function' && typeof opt.trade.cancel === 'function' ? opt.trade : null;
-  const HT = { root: '', live: false, account: '', orders: [], position: null, pointValue: 0, qty: 1 };
+  const HT = { root: '', live: false, account: '', accountShort: '', orders: [], position: null, pointValue: 0, qty: 1 };
   const armedHere = () => HT.live && HT.root === D.root;
 
   /*
@@ -2575,6 +2575,7 @@ function mount(container, options) {
     HT.position = x.position && +x.position.qty ? x.position : null;
     HT.pointValue = +x.pointValue || 0;
     HT.qty = Number.isInteger(x.qty) ? x.qty : 1;
+    HT.accountShort = typeof x.accountShort === 'string' ? x.accountShort.slice(0, 40) : '';
     const acct = typeof x.account === 'string' ? x.account : '';
     const acctNew = acct !== HT.account;
     HT.account = acct;
@@ -2621,7 +2622,11 @@ function mount(container, options) {
     put(c, 'className', 'pill' + (staleSec > 0 ? ' warn' : connState === 'offline' ? ' bad' : ''));
     put(c, 'title', staleSec > 0 ? 'No trade from ChartBridge for ' + staleSec + ' s (' + (LP.isRthEt(etNow()) ? 'RTH: 10 s' : 'outside RTH: 60 s') + '). It clears with the next trade.' : versionText());
     put(a, 'hidden', !hostLive);
-    put(a, 'textContent', 'ARMED' + (hostLive && HT.account ? ' · ' + String(HT.account).replace(/^group:/, 'group ') : ''));   // 1.33.0: a group ticket says so
+    /* 1.34.0 (Anthony 2026-10-20: the badge covered the instrument): the account's short name (its label on the Accounts tab,
+       a group's name), the whole name in the tooltip; the badge gives way before the instrument does (workspace.css) */
+    const full = String(HT.account || '').replace(/^group:/, 'group '), shown = HT.accountShort || full;
+    put(a, 'textContent', 'ARMED' + (hostLive && shown ? ' · ' + shown : ''));
+    put(a, 'title', hostLive && full ? 'Armed: this chart\'s orders go to ' + (HT.accountShort && HT.accountShort !== full ? HT.accountShort + ' (' + full + ')' : full) : '');
   }
   /* 1.14.0 (Anthony): the versions, quietly: the badge's tooltip */
   const versionText = () => 'chart ' + CE.VERSION + ' · ChartBridge ' + (bridgeVersion || '-');

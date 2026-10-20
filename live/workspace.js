@@ -908,10 +908,16 @@ function renderUnsent() { const n = core.unsentNote(); $('wsUnsent').hidden = !n
 $('wsUnsentClose').addEventListener('click', () => core.dismissUnsent());
 
 /* ---------------- what every chart shows, and which charts take orders */
+/* 1.34.0: what the ARMED badge calls the account: a group's name, else the account's label on the Accounts tab, else '' (the name) */
+function accountShort(a) {
+  if (!a) return '';
+  if (core.isGroup(a)) { const g = core.groupOf(a); return g ? 'group ' + g.name : ''; }
+  try { const l = JSON.parse(store.getItem('live-acc-labels-v1') || 'null'); return l && typeof l[a] === 'string' ? l[a].trim().slice(0, 24) : ''; } catch (e) { return ''; }
+}
 function chartTrade(v) {
   const r = v.panel.root, TR = core.TR, acct = ticketAccount(), on = TR.enabled && !!acct;
   const pos = !on ? null : core.isGroup(acct) ? core.groupPosition(acct, r) : TR.positions.get(acct + '|' + r);   // 1.34.0: a group's combined position
-  return { root: r, account: acct, live: on && ticketArmed() && r === ticketRoot(), orders: on ? core.chartOrders(acct, r) : [],
+  return { root: r, account: acct, accountShort: accountShort(acct), live: on && ticketArmed() && r === ticketRoot(), orders: on ? core.chartOrders(acct, r) : [],
     position: pos && pos.qty ? pos : null, pointValue: (instruments[r] || {}).pointValue || 0, qty: ticketQty() };
 }
 function renderCharts() { for (const v of chartViews()) v.pane.setTrade(chartTrade(v)); }

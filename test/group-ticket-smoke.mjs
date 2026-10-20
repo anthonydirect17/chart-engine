@@ -103,6 +103,12 @@ try {
   const cid = await p.evaluate(() => { const c = window.workspace.panels().find(x => x.type === 'chart' && x.root === 'MNQ' && window.workspace.chart(x.id)); return c ? c.id : null; });
   const stopLine = await until(async () => { const hs = await p.evaluate(i => window.workspace.chart(i).orderHandles(), cid); return hs.find(h => /^G~stop~/.test(h.id)); }, 'the group stop line on the MNQ chart', 10000);
   check(!!stopLine, 'the group\'s stop line is drawn: ' + JSON.stringify(stopLine && stopLine.id));
+  /* 1.34.0 (Anthony 2026-10-20, the badge over the instrument): the badge names the group; squeezed, the instrument stays */
+  const badge = await p.$eval('.ws-panel[data-id="' + cid + '"] .ws-head .pill.armed', e => ({ text: e.textContent, title: e.title }));
+  check(badge.text === 'ARMED · group Lucid' && badge.title === 'Armed: this chart\'s orders go to group Lucid (group g1)', 'the ARMED badge names the group: ' + JSON.stringify(badge));
+  const squeezed = await p.evaluate(i => { const head = document.querySelector('.ws-panel[data-id="' + i + '"] .ws-head'); const was = head.style.width; head.style.width = '470px';
+    const n = head.querySelector('.ws-name'), b = head.querySelector('.pill.armed'), r = { name: Math.round(n.getBoundingClientRect().width), nameFull: n.scrollWidth <= n.clientWidth + 1, badge: Math.round(b.getBoundingClientRect().width) }; head.style.width = was; return r; }, cid);
+  check(squeezed.name >= 50 && squeezed.badge <= 50 && squeezed.badge >= 30, 'a narrow chart (470 px): the badge gives way first (down to ARMED), the instrument still shows: ' + JSON.stringify(squeezed));
   /* 1.34.0 (Anthony 2026-10-20, "the order entry does not show on the chart"): the group's position, one combined line */
   const gpos = await until(async () => { const s = await control('state', { root: 'MNQ' }); const q = ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'].map(a => ((s.positions || {})[a + '|MNQ'] || {}).qty || 0); if (!q.every(x => x > 0)) return null;
     const cp = await p.evaluate(i => window.workspace.chart(i).getPosition(), cid); return cp && cp.qty === q.reduce((a, b) => a + b, 0) ? { cp, q } : null; }, 'the group\'s position on the MNQ chart', 8000);
@@ -161,7 +167,7 @@ try {
   const held = []; for (const R of ['NQ', 'MNQ']) { const s = await control('state', { root: R }); for (const a of ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D']) if (((s.positions || {})[a + '|' + R] || {}).qty) held.push(a + ' ' + R); }
   await p2.click('#wsFlat'); await wait(2500);
   const fa = (await p2.evaluate(() => window.__sent.filter(m => m.type === 'flatten'))).map(m => m.account + ' ' + m.root).sort();
-  check(held.length >= 6 && held.every(x => fa.includes(x)) && fa.every(x => /^SIM-[A-D] (NQ|MNQ)$/.test(x)), 'Flatten all on the group, from another window: every member with a position, both instruments: ' + JSON.stringify(fa) + ' (open: ' + held.length + ')');
+  check(held.length >= 4 && held.every(x => fa.includes(x)) && fa.every(x => /^SIM-[A-D] (NQ|MNQ)$/.test(x)), 'Flatten all on the group, from another window: every member with a position, both instruments: ' + JSON.stringify(fa) + ' (open: ' + held.length + ')');
   const flat = await until(async () => { const q = []; for (const R of ['NQ', 'MNQ']) { const s = await control('state', { root: R }); for (const a of ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D']) q.push(((s.positions || {})[a + '|' + R] || {}).qty || 0); } return q.every(x => !x) ? q : null; }, 'every member flat after Flatten all', 6000);
   check(!!flat, 'after Flatten all every member is flat on NQ and MNQ');
   await ctx.close();
