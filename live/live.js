@@ -97,6 +97,15 @@ const INDICATORS = [
   { id: 'levels', name: 'Levels', code: 'LV', short: 'LEVELS', letter: 'L', cat: 'price', sw: 'var(--info)',
     alias: 'levels pdh pdl onh onl prior day high low close pc overnight vah val poc value area ib ibh ibl initial balance 1h',
     opt: 'The prior session\'s high, low and close, its value area high, low and point of control (PD VAH, PD VAL, PD POC), the overnight high and low, and today\'s 1 hour Initial Balance (locks 10:30 ET)' },
+  /* 1.34.0 (Anthony 2026-10-20: "add some more indicator options. Like EMA's SMA's - maybe RSI and some other basic
+     indicators that are commonly used"; his picks): EMA and SMA up to three lines each, Bollinger Bands on the chart, the
+     RSI in the lower pane; on the bar closes, continuous across sessions, the forming bar included (BO: BB is the bubbles') */
+  { id: 'ema', name: 'EMA', code: 'EM', short: 'EMA', letter: 'E', cat: 'price', sw: 'var(--ema-sw)', alias: 'ema exponential moving average ma',
+    opt: 'Exponential moving averages of the bar closes, up to three lines, each its own length and color; each starts from the simple average of its first bars and runs on across sessions' },
+  { id: 'sma', name: 'SMA', code: 'SM', short: 'SMA', letter: 'S', cat: 'price', sw: 'var(--sma-sw)', alias: 'sma simple moving average ma',
+    opt: 'Simple moving averages of the bar closes, up to three lines, each its own length and color, across sessions' },
+  { id: 'bands', name: 'Bollinger Bands', code: 'BO', short: 'BANDS', letter: 'O', cat: 'price', sw: 'var(--bands-sw)', alias: 'bollinger bands bb volatility',
+    opt: 'The simple average of the closes (the basis) with a band above and below it, the deviations times the closes\' standard deviation over the same bars, and a faint fill between the bands' },
   { id: 'vp', name: 'Volume profile', code: 'VP', short: 'PROFILE', letter: 'P', cat: 'volume', sw: 'var(--vp-sw)',
     alias: 'vp volume profile poc vah val value area',
     opt: 'Traded volume per price at the right edge: 1-tick rows, the point of control and the 70% value area' },
@@ -106,6 +115,8 @@ const INDICATORS = [
   { id: 'bubbles', name: 'Large-order bubbles', code: 'BB', short: 'BUBBLES', letter: 'B', cat: 'volume', sw: 'var(--up-text)',
     alias: 'bubbles bb large orders prints big trades block',
     opt: 'Circles at large trades from the page\'s opening: same side prints within 100 ms added up, from the floor up, at the trade price on its bar. The area grows with the square root of the size; buys in the bull color, sells in the bear color.' },
+  { id: 'rsi', name: 'RSI', code: 'RS', short: 'RSI', letter: 'R', cat: 'momentum', sw: 'var(--rsi-sw)', alias: 'rsi relative strength momentum oscillator',
+    opt: 'Wilder\'s relative strength index of the bar closes, 0 to 100, in a pane below the chart (under the delta pane when both are on) with its two levels and a faint 50. Drag the line above the pane (or focus it and use the arrow keys) to resize it.' },
   { id: 'fills', name: 'Fills', code: 'FL', short: 'FILLS', letter: 'F', cat: 'trades', sw: 'var(--profit)', alias: 'fills executions trades',
     opt: 'Past fills and trade marks of the account picked (side and size at the fill price). Hiding them never hides the open trade: its entry fills, the position line, working orders and stop and target lines stay.' },
   /* nochip (G1c, Anthony): no chip on the strip and never counted toward it */
@@ -117,7 +128,7 @@ const INDICATORS = [
 /* Listed in the menu, tagged "coming" and not selectable until they exist (none since the volume profile, 1.6.0, and
    the cumulative delta, 1.7.0). */
 const COMING = [];
-const CATEGORIES = [{ id: 'price', name: 'Price' }, { id: 'volume', name: 'Volume' }, { id: 'trades', name: 'Trades' }, { id: 'signals', name: 'Signals' }];
+const CATEGORIES = [{ id: 'price', name: 'Price' }, { id: 'volume', name: 'Volume' }, { id: 'momentum', name: 'Momentum' }, { id: 'trades', name: 'Trades' }, { id: 'signals', name: 'Signals' }];   // Momentum: the RSI (1.34.0)
 /* No chip, never counted toward the strip (the absorption bars, G1c). */
 const NOCHIP = INDICATORS.filter(d => d.nochip).map(d => d.id);
 const IND_IDS = INDICATORS.map(x => x.id);
@@ -128,9 +139,10 @@ let api = null;
 const pinMax = () => (api ? api.PIN_MAX : 10);
 /* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
    starts here, each on the chart, shown and pinned to the chip strip. */
-const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
+const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
 /* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
-const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, vp: false, delta: false, bubbles: false, absorption: false };
+const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, vp: false, delta: false, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false };
+/* 1.34.0: the studies are off on every pane, also one saved before they existed (cleanPane gives a missing id its default) */
 /* The main pane's own five up to 1.5.3, which a pane saved by 1.4 to 1.5.3 lists (paneFromV1); the IB is part of Levels
    since 1.14.0 (migrateIb). */
 const V1_LISTED = ['volume', 'vwap', 'levels', 'fills'];
@@ -141,6 +153,9 @@ const LEVEL_LINES = [
   { k: 'vah', name: 'PD VAH' }, { k: 'val', name: 'PD VAL' }, { k: 'poc', name: 'PD POC' }, { k: 'ibh', name: 'IBH' }, { k: 'ibl', name: 'IBL' },
 ];
 const ONOFF = ['on', 'off'];
+/* The lengths an EMA or SMA line can take (1.34.0): its default first, then off (not for the first line), then the rest */
+const MA_LENS = ['5', '8', '9', '10', '12', '13', '20', '21', '26', '34', '50', '55', '89', '100', '144', '200'];
+const maLens = (def, off) => [def].concat(off && def !== 'off' ? ['off'] : [], MA_LENS.filter(v => v !== def));
 /*
  * Options an indicator has besides on and off, each a list of allowed values with the default first (set in its gear
  * panel). The volume profile: the full session from 18:00 ET, or RTH 9:30 to 16:00 ET, 13:00 on NYSE early closes
@@ -152,12 +167,24 @@ const INDICATOR_OPTIONS = {
   delta: { show: ['cum', 'bar'], div: ['off', 'on'] },                             // div: the divergence arrows (G1c), off until switched on
   vwap: { session: ['full', 'rth'] },                                              // 1.14.0: from 18:00 ET, or RTH only from 09:30 ET
   levels: Object.fromEntries(LEVEL_LINES.map(L => [L.k, ONOFF])),                  // 1.14.0: each level line on or off
+  /* 1.34.0: the lengths in bars (a line 'off'), the bands' length, deviations, basis and fill, the RSI's length and levels */
+  ema: { len1: maLens('9', false), len2: maLens('21', true), len3: maLens('off', true) },
+  sma: { len1: maLens('20', false), len2: maLens('50', true), len3: maLens('200', true) },
+  bands: { len: ['20', '10', '14', '30', '50'], dev: ['2', '1.5', '2.5', '3'], basis: ONOFF, fill: ONOFF },
+  rsi: { len: ['14', '2', '5', '7', '9', '21', '28'], levels: ['30/70', '20/80', '25/75', '40/60'] },
 };
+/** What the chart draws of the studies (ChartEngine setStudies, 1.34.0) from their options on a pane. */
+function studiesOf(opts) {
+  const n = v => (v === 'off' || v === undefined ? 0 : +v), lv = String(opts.rsi.levels).split('/');
+  return { ema: ['len1', 'len2', 'len3'].map(k => n(opts.ema[k])), sma: ['len1', 'len2', 'len3'].map(k => n(opts.sma[k])),
+    bands: { len: +opts.bands.len, dev: +opts.bands.dev, basis: opts.bands.basis === 'on', fill: opts.bands.fill === 'on' },
+    rsi: { len: +opts.rsi.len, lo: +lv[0], hi: +lv[1] } };
+}
 /* The delta pane's height (1.7.0), a share of the chart height, per pane: the default and the least and most kept,
    read from the engine (PANE_RATIO, PANE_RATIO_MIN, PANE_RATIO_MAX; review N8), which also keeps both panes at least a
    few rows tall. The engine loads before this file (live/EMBED.md); in Node it is required. */
 const ENGINE = typeof self !== 'undefined' && self.ChartEngine ? self.ChartEngine : require('../src/chart-engine.js');
-const PANE_HEIGHTS = { delta: { def: ENGINE.PANE_RATIO, min: ENGINE.PANE_RATIO_MIN, max: ENGINE.PANE_RATIO_MAX } };
+const PANE_HEIGHTS = { delta: { def: ENGINE.PANE_RATIO, min: ENGINE.PANE_RATIO_MIN, max: ENGINE.PANE_RATIO_MAX } };   // 1.34.0: the lower pane's, the RSI's too (one height)
 /* On by default without a chip (review N5): the main pane's strip keeps the five chips of 1.6.0, so an indicator added
    (the volume profile) still gets the sixth; pinning the delta pane gives it one like any other. */
 const UNPINNED_BY_DEFAULT = ['delta'];
@@ -185,10 +212,22 @@ const INDICATOR_COLORS = [
   { key: 'sigBullLine', id: 'absorption', name: 'Bullish outline', def: ENGINE.DEFAULT_THEME.sigBullLine },
   { key: 'sigBear', id: 'absorption', name: 'Bearish (yellow)', def: ENGINE.DEFAULT_THEME.sigBear },
   { key: 'sigBearLine', id: 'absorption', name: 'Bearish outline', def: ENGINE.DEFAULT_THEME.sigBearLine },
+  // 1.34.0: the studies' lines (each EMA and SMA line its own), the bands, their basis and fill, the RSI and its levels
+  { key: 'ema1', id: 'ema', name: 'Line 1', def: ENGINE.DEFAULT_THEME.ema1 },
+  { key: 'ema2', id: 'ema', name: 'Line 2', def: ENGINE.DEFAULT_THEME.ema2 },
+  { key: 'ema3', id: 'ema', name: 'Line 3', def: ENGINE.DEFAULT_THEME.ema3 },
+  { key: 'sma1', id: 'sma', name: 'Line 1', def: ENGINE.DEFAULT_THEME.sma1 },
+  { key: 'sma2', id: 'sma', name: 'Line 2', def: ENGINE.DEFAULT_THEME.sma2 },
+  { key: 'sma3', id: 'sma', name: 'Line 3', def: ENGINE.DEFAULT_THEME.sma3 },
+  { key: 'bands', id: 'bands', name: 'Bands', def: ENGINE.DEFAULT_THEME.bands },
+  { key: 'bandsBasis', id: 'bands', name: 'Basis', def: ENGINE.DEFAULT_THEME.bandsBasis },
+  { key: 'bandsFill', id: 'bands', name: 'Fill', def: ENGINE.DEFAULT_THEME.bandsFill },
+  { key: 'rsi', id: 'rsi', name: 'Line', def: ENGINE.DEFAULT_THEME.rsi },
+  { key: 'rsiLevels', id: 'rsi', name: 'Levels', def: ENGINE.DEFAULT_THEME.rsiLevels },
 ];
 /* Colors added after indicator presets were first saved (G1c): a preset saved before has none of them and takes the
    defaults, so no saved preset is lost. */
-const IND_COLOR_LATER = ['sigBull', 'sigBullLine', 'sigBear', 'sigBearLine', 'vpRow', 'vpValue'];
+const IND_COLOR_LATER = ['sigBull', 'sigBullLine', 'sigBear', 'sigBearLine', 'vpRow', 'vpValue', 'ema1', 'ema2', 'ema3', 'sma1', 'sma2', 'sma3', 'bands', 'bandsBasis', 'bandsFill', 'rsi', 'rsiLevels'];   // 1.34.0: the studies'
 const IND_COLOR_KEYS = INDICATOR_COLORS.map(c => c.key);
 const HEX = /^#[0-9a-f]{6}$/i;
 /** The allowed colors of `v` (#RRGGBB, upper case) for `keys`; the rest left out. */
@@ -962,7 +1001,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, CLOCK_WARN_MS, REAL_WARN_MS, REAL_BAD_MS, pcClockOf, fmtDelay, feedSplit, feedText, feedShort, feedLevel, clockWarn, clockNote, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
+api = { staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, CLOCK_WARN_MS, REAL_WARN_MS, REAL_BAD_MS, pcClockOf, fmtDelay, feedSplit, feedText, feedShort, feedLevel, clockWarn, clockNote, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, MA_LENS, studiesOf, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -1234,7 +1273,7 @@ function mount(container, options) {
   /* Saved choices: read once here, written one field at a time as they change (LivePrefs above). */
   const prefs = LP.create(prefixedStorage((() => { try { return window.localStorage; } catch (e) { return null; } })(), PREFIX));
   let IS = prefs.pane(PANE);                            // this pane's indicators (LivePrefs.Pane): on the chart, shown, pinned
-  const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS), options: { vp: prefs.indicatorOptions(PANE, 'vp'), delta: prefs.indicatorOptions(PANE, 'delta'), vwap: prefs.indicatorOptions(PANE, 'vwap'), levels: prefs.indicatorOptions(PANE, 'levels') } });   // layers: what is drawn
+  const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS), options: Object.fromEntries(Object.keys(LP.INDICATOR_OPTIONS).map(id => [id, prefs.indicatorOptions(PANE, id)])) });   // layers: what is drawn; options: every indicator's (1.34.0: the studies' too)
   /* 1.15.0: a host's charts (the workspace) take the room right of 120 px until one is picked */
   const roomOf = s => (prefs.roomSaved() ? s.room : LP.DEFAULT_ROOM_WS);
   S.room = roomOf(S);
@@ -1263,6 +1302,9 @@ function mount(container, options) {
   const nowMs = PAGE_CLOCK.now;                        // 1.14.0: follows the PC's clock (LivePrefs.pageClock)
 
   let IC = prefs.indicatorColors();                    // the indicators' colors (1.9.0), set in their gears
+  /* the indicator colors the chart draws with (the level and IB lines go with the levels): 1.34.0 the studies' too */
+  const chartIndColors = () => ({ vwap: IC.vwap, vpPoc: IC.vpPoc, vpRow: IC.vpRow, vpValue: IC.vpValue, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine,
+    ema1: IC.ema1, ema2: IC.ema2, ema3: IC.ema3, sma1: IC.sma1, sma2: IC.sma2, sma3: IC.sma3, bands: IC.bands, bandsBasis: IC.bandsBasis, bandsFill: IC.bandsFill, rsi: IC.rsi, rsiLevels: IC.rsiLevels });
   const AXIS_W = 78;                                   // the price axis width (the engine's default), so the page knows where the plot ends
   /* 1.15.0 (Anthony's ruling 3): what the 4h, 1D and 1W charts draw. The delta pane, the bubbles and the absorption bars
      work on the page's own intraday bars: none on these. VWAP, the session levels and the volume profile are intraday:
@@ -1280,15 +1322,18 @@ function mount(container, options) {
     barSeconds: 60, precision: 2, tick: 0.25, axisWidth: AXIS_W,
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
     layers: maskLayers({ volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.levels, vp: S.layers.vp, delta: S.layers.delta, trades: false,
-      absorption: S.layers.absorption, bubbles: S.layers.bubbles, divergence: S.layers.delta && S.options.delta.div === 'on' }),
+      absorption: S.layers.absorption, bubbles: S.layers.bubbles, divergence: S.layers.delta && S.options.delta.div === 'on',
+      ema: S.layers.ema, sma: S.layers.sma, bands: S.layers.bands, rsi: S.layers.rsi }),   // 1.34.0: the studies, on every bar type
     grid: S.grid === 'on', room: S.room,                 // 1.14.0: grid lines (off by default) and the room right of price
     compactLabels: HOSTED, toolOrders: HOSTED, spacedDays: HOSTED,
-    motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc, vpRow: IC.vpRow, vpValue: IC.vpValue, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine },
+    motion: GLIDE[S.glide], clock: etNow, theme: chartIndColors(),
   });
+  chart.setStudies(LP.studiesOf(S.options));                     // 1.34.0: the studies' lengths and levels, per pane
   { const raw = chart.setLayers; chart.setLayers = partial => raw(maskLayers(partial)); }   // every change goes through the mask
   /* the layers as the indicators say, through the mask (a change of bars) */
   const remask = () => chart.setLayers({ volume: !!S.layers.volume, vwap: !!S.layers.vwap, levels: !!S.layers.levels, ib: !!S.layers.levels, vp: !!S.layers.vp, delta: !!S.layers.delta,
-    absorption: !!S.layers.absorption, bubbles: !!S.layers.bubbles, divergence: !!S.layers.delta && S.options.delta.div === 'on' });
+    absorption: !!S.layers.absorption, bubbles: !!S.layers.bubbles, divergence: !!S.layers.delta && S.options.delta.div === 'on',
+    ema: !!S.layers.ema, sma: !!S.layers.sma, bands: !!S.layers.bands, rsi: !!S.layers.rsi });
   chart.setDeltaView({ mode: S.options.delta.show, ratio: prefs.paneHeight(PANE, 'delta') });   // the delta pane (1.7.0), per pane
 
 
@@ -1533,7 +1578,7 @@ function mount(container, options) {
   /* New indicator colors (a gear, an indicator preset, Default colors): the chart's VWAP and profile colors, the level
      and IB lines as they are, and the swatches. Nothing is computed again from the bars. */
   function applyIndicatorColors() {
-    chart.setTheme({ vwap: IC.vwap, vpPoc: IC.vpPoc, vpRow: IC.vpRow, vpValue: IC.vpValue, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine });
+    chart.setTheme(chartIndColors());
     if (D.lvSrc) D.lv = U.levelLines(D.lvSrc, IC);
     if (D.m1) chart.setLevels(levelsOn(D.lv.concat(U.ibLines(D.ib, IC))));
     paintColors();
@@ -1917,6 +1962,7 @@ function mount(container, options) {
       if (id === 'vwap') vwapApply();
       if (id === 'delta' && key === 'show') chart.setDeltaView({ mode: value });   // the same core, drawn the other way
       if (id === 'delta' && key === 'div') sigApply();               // the divergence arrows (G1c)
+      if (id === 'ema' || id === 'sma' || id === 'bands' || id === 'rsi') chart.setStudies(LP.studiesOf(S.options));   // 1.34.0: worked out again
     }
     syncIndicators();
     return true;
@@ -2836,8 +2882,10 @@ function mount(container, options) {
     st.setProperty('--vp-poc', T.vpPocText);                      // the legend's POC, on the chart ground
     st.setProperty('--delta-sw', T.upText);                       // the delta pane's swatch: the bull candle color, readable here
     st.setProperty('--sig-bull', onChrome(T.sigBull)); st.setProperty('--sig-bear', onChrome(T.sigBear));   // the signals (G1c)
+    // 1.34.0: the studies' swatches, each its first line's color (the RSI's its line's), moved to read on the chrome
+    st.setProperty('--ema-sw', onChrome(IC.ema1)); st.setProperty('--sma-sw', onChrome(IC.sma1)); st.setProperty('--bands-sw', onChrome(IC.bands)); st.setProperty('--rsi-sw', onChrome(IC.rsi));
     // a host's slim header holds the Indicators menu and the chips outside this element: their swatches follow too
-    if (SLIM) for (const el of [$('indWrap'), $('indChips')]) for (const k of ['--vwap-sw', '--up-text', '--down-text', '--ib-sw', '--vp-sw', '--delta-sw', '--vp-poc', '--sig-bull', '--sig-bear']) el.style.setProperty(k, st.getPropertyValue(k));
+    if (SLIM) for (const el of [$('indWrap'), $('indChips')]) for (const k of ['--vwap-sw', '--up-text', '--down-text', '--ib-sw', '--vp-sw', '--delta-sw', '--vp-poc', '--sig-bull', '--sig-bear', '--ema-sw', '--sma-sw', '--bands-sw', '--rsi-sw']) el.style.setProperty(k, st.getPropertyValue(k));
   }
 
   /*
@@ -3137,13 +3185,26 @@ function mount(container, options) {
      the profile: its developing POC, VAH and VAL) */
   const TOG = (name, what) => ({ toggle: name, label: name, values: { on: ['On', what + ': shown'], off: ['Off', what + ': not shown'] } });
   const TOGGLE_GROUP = { levels: ['Lines', 'Each line on or off; the prior session\'s levels, the overnight high and low, and today\'s Initial Balance'],
-    vp: ['Developing', 'The current session\'s point of control and value area, drawn as they build'] };
+    vp: ['Developing', 'The current session\'s point of control and value area, drawn as they build'],
+    bands: ['Show', 'The basis (the simple average) and the faint fill between the bands'] };
+  /* 1.34.0: a long list of values (the EMA and SMA lengths) is a select, the three lines' side by side in one row */
+  const SELECT_GROUP = { ema: ['Lengths', 'Each line\'s length in bars; Off hides that line'], sma: ['Lengths', 'Each line\'s length in bars; Off hides that line'] };
+  const LEN_SEL = (n, what) => ({ select: 'Line ' + n, label: 'Line ' + n,
+    values: Object.fromEntries(['off'].concat(LP.MA_LENS).map(v => [v, v === 'off' ? ['Off', what + ' line ' + n + ': not drawn'] : [v, what + ' line ' + n + ': ' + v + ' bars']])) });
+  const vals = (list, f) => Object.fromEntries(list.map(v => [v, f(v)]));
   const OPTION_TEXT = { vp: { session: { label: 'Hours', values: { full: ['Session', 'Every trade from 18:00 ET'], rth: ['RTH', '9:30 to 16:00 ET (13:00 on NYSE early closes)'] } },
       dpoc: TOG('dPOC', 'The developing point of control'), dvah: TOG('dVAH', 'The developing value area high'), dval: TOG('dVAL', 'The developing value area low') },
     vwap: { session: { label: 'Hours', values: { full: ['Full session', 'From 18:00 ET (the default)'], rth: ['RTH only', 'From 09:30 ET to 16:00 ET; none outside regular hours'] } } },
     levels: Object.fromEntries(LP.LEVEL_LINES.map(L => [L.k, TOG(L.name, L.name)])),
     delta: { show: { label: 'Show', values: { cum: ['Cumulative', 'Candles of buys minus sells, from 0 at 18:00 ET'], bar: ['Bar delta', 'Each bar\'s own buys minus sells, above or below zero'] } },
-      div: { label: 'Show divergences', values: { off: ['Off', 'No divergence arrows'], on: ['On', 'Arrows at swings where price and delta disagree (Anthony\'s DeltaDivergenceSignal), from the page\'s opening'] } } } };
+      div: { label: 'Show divergences', values: { off: ['Off', 'No divergence arrows'], on: ['On', 'Arrows at swings where price and delta disagree (Anthony\'s DeltaDivergenceSignal), from the page\'s opening'] } } },
+    ema: { len1: LEN_SEL(1, 'EMA'), len2: LEN_SEL(2, 'EMA'), len3: LEN_SEL(3, 'EMA') },
+    sma: { len1: LEN_SEL(1, 'SMA'), len2: LEN_SEL(2, 'SMA'), len3: LEN_SEL(3, 'SMA') },
+    bands: { len: { label: 'Length', values: vals(LP.INDICATOR_OPTIONS.bands.len, v => [v, 'The average and deviation of the last ' + v + ' closes']) },
+      dev: { label: 'Deviations', values: vals(LP.INDICATOR_OPTIONS.bands.dev, v => [v, 'The bands ' + v + ' standard deviations above and below the basis']) },
+      basis: TOG('Basis', 'The basis, the simple average (dashed)'), fill: TOG('Fill', 'The faint fill between the bands') },
+    rsi: { len: { label: 'Length', values: vals(LP.INDICATOR_OPTIONS.rsi.len, v => [v, 'Wilder\'s smoothing over ' + v + ' bars']) },
+      levels: { label: 'Levels', values: vals(LP.INDICATOR_OPTIONS.rsi.levels, v => [v, 'Dashed lines at ' + v.replace('/', ' and ')]) } } };
   /*
    * The signals' own settings in their gears (G1c), each a number box with the NinjaScript file's name for it and its
    * range: the absorption bars' per instrument and chart type, the divergence's (with Show divergences on), and the
@@ -3218,7 +3279,16 @@ function mount(container, options) {
         togs.map(k => { const on = S.options[id][k] === 'on', t = OPTION_TEXT[id][k];
           return `<button type="button" class="ind-tog" data-act="opt" data-id="${id}" data-k="${k}" data-v="${on ? 'off' : 'on'}" data-f="tog:${id}:${k}" aria-pressed="${on}" title="${esc(t.values[on ? 'on' : 'off'][1])}; click to turn it ${on ? 'off' : 'on'}">${esc(t.toggle)}</button>`; }).join('') + '</span></div>';
     })();
-    return keys.filter(k => !OPTION_TEXT[id][k].toggle).map(k => {
+    const sels = keys.filter(k => OPTION_TEXT[id][k].select);
+    const sl = !sels.length ? '' : (() => {
+      const lblId = p + 'indSel-' + id, g = SELECT_GROUP[id], who = esc(defOf(id).name);
+      return `<div class="ind-set-opt"><span class="glabel" id="${lblId}" title="${esc(g[1])}">${esc(g[0])}</span><span class="ind-sels" role="group" aria-labelledby="${lblId}">` +
+        sels.map(k => { const t = OPTION_TEXT[id][k], cur = S.options[id][k];
+          return `<select class="acct-sel ind-sel" data-act="optsel" data-id="${id}" data-k="${k}" data-f="sel:${id}:${k}" aria-label="${who} ${esc(t.select)} length" title="${esc(t.values[cur][1])}">` +
+            LP.INDICATOR_OPTIONS[id][k].map(v => `<option value="${v}"${v === cur ? ' selected' : ''}>${esc(t.values[v][0])}</option>`).join('') + '</select>'; }).join('') +
+        `</span><span class="ind-set-note">${esc(g[1])}</span></div>`;
+    })();
+    return sl + keys.filter(k => !OPTION_TEXT[id][k].toggle && !OPTION_TEXT[id][k].select).map(k => {
       const t = OPTION_TEXT[id][k], cur = S.options[id][k], lblId = p + 'indOpt-' + id + '-' + k;
       const btns = LP.INDICATOR_OPTIONS[id][k].map(v => `<button type="button" data-act="opt" data-id="${id}" data-k="${k}" data-v="${v}" data-f="opt:${id}:${k}:${v}" aria-pressed="${v === cur}" title="${esc(t.values[v][1])}">${esc(t.values[v][0])}</button>`).join('');
       return `<div class="ind-set-opt"><span class="glabel" id="${lblId}">${esc(t.label)}</span><span class="seg sans ind-opt" role="group" aria-labelledby="${lblId}">${btns}</span><span class="ind-set-note">${esc(t.values[cur][1])}</span></div>`;
@@ -3526,6 +3596,7 @@ function mount(container, options) {
     });
     panel.addEventListener('change', e => {
       if (e.target.dataset.sig && panel.contains(e.target)) { sigShown(e.target); return; }
+      if (e.target.dataset.act === 'optsel' && panel.contains(e.target)) { M.note = ''; setIndicatorOption(e.target.dataset.id, e.target.dataset.k, e.target.value); return; }   // 1.34.0: a length
       const t = e.target, k = t.dataset.hk;
       if (k && panel.contains(t)) { t.removeAttribute('aria-invalid'); t.value = IC[k]; }   // leaving the box puts the color in use back
     });
@@ -3565,6 +3636,7 @@ function mount(container, options) {
     chipPop.addEventListener('change', e => {
       const t = e.target;
       if (t.dataset.sig) { sigShown(t); return; }
+      if (t.dataset.act === 'optsel') { setIndicatorOption(t.dataset.id, t.dataset.k, t.value); renderPop(); return; }   // 1.34.0: a length
       if (t.dataset.hk) { t.removeAttribute('aria-invalid'); t.value = IC[t.dataset.hk]; }
       if (t.tagName === 'INPUT' && t.type === 'color') handBack(t);
     });

@@ -303,6 +303,11 @@ const DEFAULT_THEME = {
   // #FFFF00): a softer cyan and a warm yellow for the absorption bars' bodies and the divergence arrows, each with a
   // slightly brighter shade for the 1 px outline (CHART_STYLE --sig-bull, --sig-bull-line, --sig-bear, --sig-bear-line)
   sigBull: '#38DCE8', sigBullLine: '#9CF1F7', sigBear: '#F3D84A', sigBearLine: '#FFEC8F',
+  // 1.34.0 (Anthony 2026-10-20): the EMAs warm (orange, apricot, burnt orange), the SMAs cool neutrals (near white, silver,
+  // steel), the Bollinger Bands a muted teal (its basis dashed, its fill faint), the RSI in the house soft lavender (a step
+  // lighter than the VWAP) with grey levels; none green, red or crimson, each moved to read on another ground as the VWAP is
+  ema1: '#FF9F43', ema2: '#FFD08A', ema3: '#C2662A', sma1: '#E6EDF5', sma2: '#BFCBDB', sma3: '#5C6B85',
+  bands: '#7BC4C4', bandsBasis: '#5E9E9E', bandsFill: '#7BC4C4', rsi: '#D8CCFF', rsiLevels: '#8392A5',
   fontMono: '"IBM Plex Mono", ui-monospace, Consolas, monospace',
   fontCond: '"IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif',
 };
@@ -367,6 +372,17 @@ function buildTheme(partial) {
     // the signals keep their hue and move only as far as needed: bodies and arrows as candle bodies, outlines as lines
     T.sigBull = markOnGround(T.sigBull, T.bg, FLOOR.candle, to); T.sigBear = markOnGround(T.sigBear, T.bg, FLOOR.candle, to);
     T.sigBullLine = markOnGround(T.sigBullLine, T.bg, FLOOR.line, to); T.sigBearLine = markOnGround(T.sigBearLine, T.bg, FLOOR.line, to);
+    // 1.34.0: the studies' lines as the VWAP; where two of one area then look alike (a light ground takes the EMAs' orange
+    // and apricot, the SMAs' white and silver, to the same shade), the later one moves on toward the ink until they part,
+    // never to where it reads less
+    for (const [area, keys] of [[[T.vwap], ['ema1', 'ema2', 'ema3', 'sma1', 'sma2', 'sma3', 'bands', 'bandsBasis']], [[], ['rsi', 'rsiLevels']]]) {
+      for (const k of keys) {
+        let c = markOnGround(T[k], T.bg, FLOOR.line, to);
+        for (let i = 0; i < 12 && area.some(x => !distinct(x, c)); i++) { const n = mix(c, to, 0.1); if (contrast(n, T.bg) < Math.min(FLOOR.line, contrast(c, T.bg))) break; c = n; }   // never less readable
+        T[k] = c; area.push(c);
+      }
+    }
+    T.bandsFill = markOnGround(T.bandsFill, T.bg, FLOOR.line, to);
   }
   /* Trade sides (buy / long green, sell / short red) keep their color on every ground (review, 1.5.3): where one
      does not read on the ground, marks get an outline (lines 3:1) and text a halo (4.5:1) in the house near-black
@@ -383,6 +399,7 @@ function buildTheme(partial) {
   T.upText = legible(T.up, T.bg, 4.5, to); T.downText = legible(T.down, T.bg, 4.5, to);
   T.vwapText = legible(T.vwap, T.bg, 4.5, to);
   T.vpPocText = legible(T.vpPoc, T.bg, 4.5, to);
+  T.rsiOnTag = readableOn(T.rsi);                                   // 1.34.0: the text on the RSI's value tag
   T.to = to || '#FFFFFF';
   return T;
 }
@@ -950,6 +967,81 @@ function atr(bars, period, count) {
   }
   return a;
 }
+/*
+ * The moving averages, Bollinger Bands and RSI (1.34.0, Anthony 2026-10-20: "add some more indicator options. Like EMA's
+ * SMA's - maybe RSI"), on bar closes `c` (oldest first), continuous across sessions. Each value at bar i is worked out from
+ * the closes up to i and the value before it only, so the chart keeps the closed bars' values and works out again only
+ * the forming bar's (studyAt), and a whole series (smaSeries, emaSeries, bollinger, rsiSeries) is the same arithmetic run
+ * bar by bar. null where there are not enough bars yet.
+ */
+/** The simple average of the `len` closes up to bar i, or null before bar len - 1. */
+function smaAt(c, i, len) {
+  if (!(len >= 1) || i < len - 1) return null;
+  let s = 0;
+  for (let j = i - len + 1; j <= i; j++) s += c[j];
+  return s / len;
+}
+/** The EMA at bar i from the one at i - 1 (`prev`): seeded at bar len - 1 with the SMA of the first `len` closes, then
+    prev + (close - prev) x 2 / (len + 1). */
+function emaAt(c, i, len, prev) {
+  if (!(len >= 1) || i < len - 1) return null;
+  if (i === len - 1 || prev === null || prev === undefined) return smaAt(c, i, len);
+  return prev + (c[i] - prev) * (2 / (len + 1));
+}
+/** Bollinger Bands at bar i: the SMA of `len` closes, and that plus and minus `dev` population standard deviations over the
+    same closes. { mid, up, lo } or null. */
+function bandsAt(c, i, len, dev) {
+  const mid = smaAt(c, i, len);
+  if (mid === null) return null;
+  let q = 0;
+  for (let j = i - len + 1; j <= i; j++) { const d = c[j] - mid; q += d * d; }
+  const sd = Math.sqrt(q / len);
+  return { mid, up: mid + dev * sd, lo: mid - dev * sd };
+}
+/** Wilder's RSI at bar i from the averages at i - 1 (`prev`, { g, l }): the first at bar `len`, the simple averages of the
+    first `len` gains and losses, then (prev x (len - 1) + this bar's) / len. { g, l, v } or null; v is
+    100 - 100 / (1 + g / l), 100 with no loss, 50 with neither. */
+function rsiAt(c, i, len, prev) {
+  if (!(len >= 1) || i < len) return null;
+  let g, l;
+  if (i === len || !prev) {
+    g = 0; l = 0;
+    for (let j = i - len + 1; j <= i; j++) { const d = c[j] - c[j - 1]; if (d > 0) g += d; else l -= d; }
+    g /= len; l /= len;
+  } else {
+    const d = c[i] - c[i - 1];
+    g = (prev.g * (len - 1) + (d > 0 ? d : 0)) / len; l = (prev.l * (len - 1) + (d < 0 ? -d : 0)) / len;
+  }
+  return { g, l, v: l === 0 ? (g === 0 ? 50 : 100) : 100 - 100 / (1 + g / l) };
+}
+const smaSeries = (c, len) => c.map((x, i) => smaAt(c, i, len));
+function emaSeries(c, len) { const out = []; for (let i = 0; i < c.length; i++) out.push(emaAt(c, i, len, i ? out[i - 1] : null)); return out; }
+const bollinger = (c, len, dev) => c.map((x, i) => bandsAt(c, i, len, dev));
+function rsiSeries(c, len) { const out = []; let p = null; for (let i = 0; i < c.length; i++) { p = rsiAt(c, i, len, p); out.push(p ? p.v : null); } return out; }
+/* What the chart draws of them (setStudies): up to three EMA and three SMA lengths (0 for a line that is off), the bands'
+   length, deviations, basis and fill, the RSI's length and its two levels. */
+const STUDY_DEFAULTS = { ema: [9, 21, 0], sma: [20, 50, 200], bands: { len: 20, dev: 2, basis: true, fill: true }, rsi: { len: 14, lo: 30, hi: 70 } };
+const copyStudies = s => ({ ema: s.ema.slice(), sma: s.sma.slice(), bands: Object.assign({}, s.bands), rsi: Object.assign({}, s.rsi) });
+/** `cur` with what `v` sets that is allowed: lengths whole bars 1 to 1000 (an MA line 0 for off), deviations above 0 up to
+    10, RSI levels 0 to 100 with the low under the high; the rest as it was. */
+function cleanStudies(cur, v) {
+  const out = copyStudies(cur), whole = (x, lo) => Number.isInteger(x) && x >= lo && x <= 1000;
+  if (!v || typeof v !== 'object') return out;
+  for (const k of ['ema', 'sma']) if (Array.isArray(v[k])) for (let j = 0; j < 3; j++) { const x = v[k][j]; if (x === 0 || x === null || whole(x, 1)) out[k][j] = x || 0; }
+  const b = v.bands, r = v.rsi;
+  if (b && typeof b === 'object') {
+    if (whole(b.len, 2)) out.bands.len = b.len;
+    if (typeof b.dev === 'number' && b.dev > 0 && b.dev <= 10) out.bands.dev = b.dev;
+    if (typeof b.basis === 'boolean') out.bands.basis = b.basis;
+    if (typeof b.fill === 'boolean') out.bands.fill = b.fill;
+  }
+  if (r && typeof r === 'object') {
+    if (whole(r.len, 1)) out.rsi.len = r.len;
+    const lo = typeof r.lo === 'number' ? r.lo : out.rsi.lo, hi = typeof r.hi === 'number' ? r.hi : out.rsi.hi;
+    if (lo >= 0 && hi <= 100 && lo < hi) { out.rsi.lo = lo; out.rsi.hi = hi; }
+  }
+  return out;
+}
 /**
  * The VWAP of 1-minute bars anchored at a time of day (1.14.0, the VWAP gear's "RTH only"): from `from` (09:30 ET) up to
  * `to` (16:00 ET) each trading day, each bar's typical price (high + low + close) / 3 times its volume, as addSessionVwap
@@ -1077,7 +1169,8 @@ function create(container, options) {
     axisWidth: opt.axisWidth || 78,
     timeAxisHeight: opt.timeAxisHeight || 26,
     session: Object.assign({ start: 18 * 3600, rthStart: 34200, rthEnd: 57600 }, opt.session || {}),
-    layers: Object.assign({ volume: true, vwap: true, levels: true, trades: true, ib: true, vp: false, delta: false, absorption: false, bubbles: false, divergence: false }, opt.layers || {}),
+    layers: Object.assign({ volume: true, vwap: true, levels: true, trades: true, ib: true, vp: false, delta: false, absorption: false, bubbles: false, divergence: false,
+      ema: false, sma: false, bands: false, rsi: false }, opt.layers || {}),                               // 1.34.0: the studies, off until the page turns them on
     motion: Object.assign({ zoom: 75, fit: 120, candle: 55, follow: 110, friction: 325 }, opt.motion || {}),
     clock: opt.clock || (() => zoneSeconds(Date.now() / 1000, opt.timeZone || 'America/New_York')),
     liveButton: opt.liveButton !== false,
@@ -1180,9 +1273,13 @@ function create(container, options) {
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
   let dpr = 1, W = 0, H = 0, plotW = 0, plotH = 0;
   /* With the delta pane: the price plot is 0 to plotH, the pane paneTop to paneTop + paneH, the time axis from timeY.
-     With no pane the time axis starts at plotH, as it always did. */
-  let paneTop = 0, paneH = 0, timeY = 0;
-  const paneOn = () => !!o.layers.delta;
+     With no pane the time axis starts at plotH, as it always did. 1.34.0: that is the lower pane, the delta pane's or the
+     RSI's or both (the delta on top, dTop to dTop + dH, the RSI under it, rTop to rTop + rH, PANE_GAP between them, the
+     height split evenly), one height and one divider for both. */
+  let paneTop = 0, paneH = 0, timeY = 0, dTop = 0, dH = 0, rTop = 0, rH = 0;
+  const deltaOn = () => !!o.layers.delta, rsiOn = () => !!o.layers.rsi;
+  const paneOn = () => deltaOn() || rsiOn();
+  const paneKey = () => (deltaOn() ? 1 : 0) + (rsiOn() ? 2 : 0);
   const V = {
     spacing: o.barSpacing, logS: Math.log(o.barSpacing), logT: Math.log(o.barSpacing), right: 0,
     follow: true, anchor: null, kin: null, auto: true, lo: 0, hi: 1, init: false, edgeKey: '',
@@ -1332,18 +1429,27 @@ function create(container, options) {
     const area = H - TIME_H;
     if (!paneOn()) {
       plotH = Math.max(10, H - TIME_H); paneTop = plotH; paneH = 0; timeY = plotH; divEl.hidden = true;
+      dTop = rTop = plotH; dH = rH = 0;
       return;
     }
-    const least = Math.min(PANE_MIN, Math.floor(area * 0.3)), most = Math.max(least, area - PANE_GAP - PRICE_MIN);
+    // 1.34.0: with the delta and the RSI both on, room for two (each at least PANE_MIN when the chart has it)
+    const both = deltaOn() && rsiOn();
+    const least = both ? Math.min(PANE_MIN * 2 + PANE_GAP, Math.floor(area * 0.4)) : Math.min(PANE_MIN, Math.floor(area * 0.3));
+    const most = Math.max(least, area - PANE_GAP - PRICE_MIN);
     paneH = Math.max(0, Math.round(clamp(area * pane.ratio, least, most)));
     plotH = Math.max(10, area - PANE_GAP - paneH);
     paneTop = plotH + PANE_GAP; timeY = paneTop + paneH;
+    if (both) { dTop = paneTop; dH = Math.max(0, Math.floor((paneH - PANE_GAP) / 2)); rTop = dTop + dH + PANE_GAP; rH = Math.max(0, timeY - rTop); }
+    else if (deltaOn()) { dTop = paneTop; dH = paneH; rTop = timeY; rH = 0; }
+    else { rTop = paneTop; rH = paneH; dTop = paneTop; dH = 0; }
     divEl.hidden = false;
     // the band starts where the plot ends (its last row, order tags there and the wheel stay the plot's) and stops at
     // the price axis: the 4 px gap and the top 6 px of the pane (review N2)
     divEl.style.top = Math.round(plotH) + 'px'; divEl.style.right = AXIS_W + 'px';
     divEl.setAttribute('aria-valuenow', String(Math.round(pane.ratio * 100)));
-    divEl.setAttribute('aria-valuetext', 'Delta pane ' + Math.round(pane.ratio * 100) + '% of the chart height');
+    const what = rsiOn() ? 'Lower pane' : 'Delta pane';           // 1.34.0: the RSI's too, or alone
+    divEl.setAttribute('aria-label', what + ' height: drag, or use the up and down arrow keys');
+    divEl.setAttribute('aria-valuetext', what + ' ' + Math.round(pane.ratio * 100) + '% of the chart height');
   }
   /* A new height for the pane from a drag or a key: kept between PANE_RATIO_MIN and PANE_RATIO_MAX, then to what the
      pixel limits allow, so what is saved is what is seen. Nothing changes and nothing is saved when the pane would not
@@ -1509,7 +1615,7 @@ function create(container, options) {
     if (now - pulseT0 < 500) moving = true;
     if (profile && o.layers.vp && (!vpBars || vpBars.ver !== profile.version)) dirty = true;   // new trades, a new session
     if (signals && signals.version !== sigVer) { sigVer = signals.version; dirty = true; }       // a signal came, grew or went
-    if (paneOn() && delta && !pane.note) {
+    if (deltaOn() && delta && !pane.note) {
       if (delta.version !== pane.ver) { pane.ver = delta.version; dirty = true; }            // new trades
       const t = paneTarget();
       if (t) {
@@ -1571,6 +1677,72 @@ function create(container, options) {
     vwapMark = { up, x, y, w, h, price: vw };
   }
   let vwapMark = null, atrCache = { key: '', v: null }, posHit = null;
+  /*
+   * The studies (1.34.0, Anthony 2026-10-20): EMAs, SMAs and Bollinger Bands on the plot, the RSI in the lower pane, on the
+   * plot's own bars (smaAt, emaAt, bandsAt, rsiAt). The closed bars' values are kept (SC) and only the forming bar's worked
+   * out again when it changes; all of them again when the bars are replaced (a history load, another bar type) or what is
+   * drawn changes (setStudies, a study's layer). Only the studies whose layer is on are worked out.
+   */
+  let studies = copyStudies(STUDY_DEFAULTS);
+  const SC = { bars: null, key: '', done: 0, tail: '', cl: [], ema: [[], [], []], sma: [[], [], []], bb: [], rsi: [] };
+  const studyKey = () => [o.layers.ema ? studies.ema.join(',') : '-', o.layers.sma ? studies.sma.join(',') : '-',
+    o.layers.bands ? studies.bands.len + ',' + studies.bands.dev : '-', o.layers.rsi ? studies.rsi.len : '-'].join('|');
+  function studyAt(i) {
+    const c = SC.cl;
+    for (let k = 0; k < 3; k++) {
+      if (o.layers.ema) SC.ema[k][i] = studies.ema[k] ? emaAt(c, i, studies.ema[k], i ? SC.ema[k][i - 1] : null) : null;
+      if (o.layers.sma) SC.sma[k][i] = studies.sma[k] ? smaAt(c, i, studies.sma[k]) : null;
+    }
+    if (o.layers.bands) SC.bb[i] = bandsAt(c, i, studies.bands.len, studies.bands.dev);
+    if (o.layers.rsi) SC.rsi[i] = rsiAt(c, i, studies.rsi.len, i ? SC.rsi[i - 1] : null);
+  }
+  /* The studies up to date with the bars; false when none is on or there are no bars. */
+  function studiesNow() {
+    const n = last();
+    if (n < 0 || !(o.layers.ema || o.layers.sma || o.layers.bands || o.layers.rsi)) return false;
+    const key = studyKey();
+    if (SC.bars !== bars || SC.key !== key) {
+      SC.bars = bars; SC.key = key; SC.done = 0; SC.tail = '';
+      for (const a of [SC.cl, SC.bb, SC.rsi].concat(SC.ema, SC.sma)) a.length = 0;
+    }
+    for (; SC.done < n; SC.done++) { SC.cl[SC.done] = bars[SC.done].c; studyAt(SC.done); }   // a bar closed: its values, once
+    const tk = n + '|' + bars[n].c;
+    if (SC.tail !== tk) { SC.tail = tk; SC.cl[n] = bars[n].c; studyAt(n); }                 // the forming bar, as it changes
+    return true;
+  }
+  /* One study line across bars from..to (`at(i)` its value or null), broken where it has none. */
+  function studyLine(from, to, at, col, w, alpha, dash) {
+    ctx.strokeStyle = col; ctx.lineWidth = w; ctx.lineJoin = 'round'; ctx.globalAlpha = alpha; ctx.setLineDash(dash || []);
+    ctx.beginPath(); let pen = false;
+    for (let i = from; i <= to; i++) {
+      const v = at(i);
+      if (v === null || v === undefined) { pen = false; continue; }
+      const x = xOf(i), y = yOf(v);
+      if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke(); ctx.globalAlpha = 1; ctx.setLineDash([]);
+  }
+  /* The plot's studies: the bands' fill, its lines and basis, then the SMAs and the EMAs over them, behind the candles. */
+  function drawStudies(from, to) {
+    if (!(o.layers.ema || o.layers.sma || o.layers.bands) || !studiesNow()) return;
+    to = Math.min(to, last());
+    if (to < from) return;
+    if (o.layers.bands) {
+      const bb = SC.bb, B = studies.bands;
+      let a = from; while (a <= to && !bb[a]) a++;
+      if (B.fill && a < to) {                                       // a faint fill between the bands
+        ctx.beginPath(); ctx.moveTo(xOf(a), yOf(bb[a].up));
+        for (let i = a + 1; i <= to; i++) ctx.lineTo(xOf(i), yOf(bb[i].up));
+        for (let i = to; i >= a; i--) ctx.lineTo(xOf(i), yOf(bb[i].lo));
+        ctx.closePath(); ctx.fillStyle = rgba(T.bandsFill, 0.07); ctx.fill();
+      }
+      studyLine(from, to, i => bb[i] ? bb[i].up : null, T.bands, 1, 0.85);
+      studyLine(from, to, i => bb[i] ? bb[i].lo : null, T.bands, 1, 0.85);
+      if (B.basis) studyLine(from, to, i => bb[i] ? bb[i].mid : null, T.bandsBasis, 1, 0.85, [4, 3]);
+    }
+    if (o.layers.sma) for (let k = 2; k >= 0; k--) if (studies.sma[k]) studyLine(from, to, i => SC.sma[k][i], T['sma' + (k + 1)], 1.25, 0.9);
+    if (o.layers.ema) for (let k = 2; k >= 0; k--) if (studies.ema[k]) studyLine(from, to, i => SC.ema[k][i], T['ema' + (k + 1)], 1.25, 0.9);
+  }
   function roundRect(x, y, w, h, r) {
     ctx.beginPath();
     if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
@@ -1843,10 +2015,10 @@ function create(container, options) {
     }
   }
 
-  function drawPane(from, to, labels, cx, hy) {
-    const top = paneTop, h = paneH, bottom = top + h, n = last();
-    const show = !!delta && !pane.note && n >= 0 && to >= from, range = pane.hi - pane.lo || 1;
-    const yD = v => top + (pane.hi - v) / range * h;
+  /* A lower pane's ground (the delta's, the RSI's; 1.34.0): clipped to it (the caller restores), the RTH shading, the time
+     grid and the session dividers, as in the plot. */
+  function paneGround(from, to, labels, top, h) {
+    const bottom = top + h;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.save();
     ctx.beginPath(); ctx.rect(0, top, plotW, h); ctx.clip();
@@ -1864,6 +2036,13 @@ function create(container, options) {
     ctx.beginPath(); ctx.strokeStyle = T.divider; ctx.setLineDash([2, 4]);
     for (const l of labels) if (l.strong) { const x = crisp(l.x - V.spacing / 2, 1); ctx.moveTo(x, top); ctx.lineTo(x, bottom); }
     ctx.stroke(); ctx.setLineDash([]);
+  }
+  function drawPane(from, to, labels, cx, hy) {
+    const top = dTop, h = dH, bottom = top + h, n = last();   // 1.34.0: its own part of the lower pane
+    if (hy !== null && (hy < top || hy >= bottom)) hy = null;
+    const show = !!delta && !pane.note && n >= 0 && to >= from, range = pane.hi - pane.lo || 1;
+    const yD = v => top + (pane.hi - v) / range * h;
+    paneGround(from, to, labels, top, h);
     let vStep = 1, g0 = 0, g1 = -1;
     if (show) {
       vStep = niceStep(range * 34 / Math.max(1, h), 1); g0 = Math.ceil(pane.lo / vStep); g1 = Math.floor(pane.hi / vStep);
@@ -1985,6 +2164,79 @@ function create(container, options) {
     if (hy !== null) tag(hy, fmtSigned(Math.round(pane.hi - (hy - top) / h * range), 0), T.tagFill, T.tagText, T.tagBorder);
   }
 
+  /*
+   * The RSI (1.34.0, Anthony 2026-10-20): Wilder's, in its part of the lower pane (under the delta pane when both are on),
+   * on the plot's own bars: a fixed 0 to 100 scale, the two levels dashed, a faint 50, the line in its color, the title
+   * with its length and the value of the bar under the pointer (else the newest), the newest value in a tag on the axis
+   * and the pointer's value when it is over the pane.
+   */
+  function drawRsi(from, to, labels, cx, hy) {
+    const top = rTop, h = rH, bottom = top + h, n = last(), R = studies.rsi;
+    if (h <= 0) return;
+    if (hy !== null && (hy < top || hy >= bottom)) hy = null;
+    const show = studiesNow() && n >= 0, pad = rsiPad(), yR = v => top + pad + (100 - v) / 100 * (h - 2 * pad);
+    paneGround(from, to, labels, top, h);
+    const lw = Math.max(1, Math.round(dpr)) / dpr;
+    ctx.lineWidth = lw; ctx.strokeStyle = T.divider; ctx.beginPath();
+    { const y = crisp(yR(50), 1); ctx.moveTo(0, y); ctx.lineTo(plotW, y); }
+    ctx.stroke();
+    ctx.strokeStyle = T.rsiLevels; ctx.globalAlpha = 0.85; ctx.setLineDash([4, 3]); ctx.beginPath();
+    for (const v of [R.lo, R.hi]) { const y = crisp(yR(v), 1); ctx.moveTo(0, y); ctx.lineTo(plotW, y); }
+    ctx.stroke(); ctx.globalAlpha = 1; ctx.setLineDash([]);
+    if (show && to >= from) {
+      const rs = SC.rsi, e = Math.min(to, n);
+      ctx.strokeStyle = T.rsi; ctx.lineWidth = 1.25; ctx.lineJoin = 'round'; ctx.beginPath();
+      let pen = false;
+      for (let i = from; i <= e; i++) {
+        const r = rs[i]; if (!r) { pen = false; continue; }
+        const x = xOf(i), y = yR(r.v);
+        if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    if (cx !== null) {                                               // the crosshair, as in the delta pane
+      const x = crisp(xOf(cx), 1);
+      ctx.strokeStyle = T.cross; ctx.lineWidth = lw; ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bottom);
+      if (hy !== null) { const y = crisp(hy, 1); ctx.moveTo(0, y); ctx.lineTo(plotW, y); }
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+    const li = hoverIdx !== null ? hoverIdx : n, lr = show && li >= 0 && li <= n ? SC.rsi[li] : null;
+    const title = 'RSI ' + R.len, val = !show ? '' : lr ? lr.v.toFixed(1) : '-';
+    const f1 = '600 10px ' + T.fontCond, f2 = '500 11px ' + T.fontMono;
+    const width = (font, text) => {
+      const k = font + '|' + text;
+      let w = pane.widths.get(k);
+      if (w === undefined) { if (pane.widths.size > 400) pane.widths.clear(); ctx.font = font; w = ctx.measureText(text).width; pane.widths.set(k, w); }
+      return w;
+    };
+    const w1 = width(f1, title), w2 = val ? width(f2, val) + 8 : 0;
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    roundRect(6, top + 4, w1 + w2 + 12, 18, 4); ctx.fillStyle = T.legendBg; ctx.fill();
+    ctx.font = f1; ctx.fillStyle = T.axisText; ctx.fillText(title, 12, top + 13.5);
+    if (val) { ctx.font = f2; ctx.fillStyle = T.axisTextStrong; ctx.fillText(val, 12 + w1 + 8, top + 13.5); }
+    ctx.restore();
+    // its axis: the levels and 50, the newest value in a tag, the pointer's value
+    const tag = (y, text, fill, fg, border) => {
+      const th = 18, t0 = clamp(y - th / 2, top, Math.max(top, bottom - th));
+      roundRect(plotW + 2, t0, AXIS_W - 4, th, 3); ctx.fillStyle = fill; ctx.fill();
+      if (border) { ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke(); }
+      ctx.font = '500 11px ' + T.fontMono; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = fg;
+      ctx.fillText(text, plotW + 8, t0 + 9);
+    };
+    const nr = show ? SC.rsi[n] : null, ny = nr ? yR(nr.v) : null;
+    ctx.font = '400 11px ' + T.fontMono; ctx.fillStyle = T.axisText; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    for (const v of [R.lo, 50, R.hi]) {
+      const y = yR(v);
+      if (y < top + 6 || y > bottom - 6 || (ny !== null && Math.abs(y - ny) < 16) || (hy !== null && Math.abs(y - hy) < 16)) continue;
+      ctx.fillText(String(v), plotW + 8, y);
+    }
+    if (nr) tag(ny, nr.v.toFixed(1), T.rsi, T.rsiOnTag, null);
+    if (hy !== null) tag(hy, clamp(100 - (hy - top - pad) / Math.max(1, h - 2 * pad) * 100, 0, 100).toFixed(1), T.tagFill, T.tagText, T.tagBorder);
+  }
+  /* The RSI's room above 100 and below 0 in its pane, so neither line sits on the pane's edge. */
+  const rsiPad = () => Math.min(8, rH * 0.1);
+
   function draw(now) {
     const n = last();
     vwapMark = null;
@@ -2081,6 +2333,8 @@ function create(container, options) {
     }
 
     if (profile && o.layers.vp && (profLines.poc || profLines.vah || profLines.val)) drawProfileLines();
+
+    drawStudies(from, to);                                          // 1.34.0: the bands and moving averages, under the VWAP
 
     // VWAP, broken at each session start
     if (o.layers.vwap && to > from) {
@@ -2407,6 +2661,7 @@ function create(container, options) {
     ctx.strokeStyle = T.axisLine; ctx.lineWidth = Math.max(1, Math.round(dpr)) / dpr;
     ctx.beginPath(); ctx.moveTo(crisp(plotW, 1), 0); ctx.lineTo(crisp(plotW, 1), H); ctx.moveTo(0, crisp(plotH, 1)); ctx.lineTo(W, crisp(plotH, 1));
     if (paneOn()) { ctx.moveTo(0, crisp(paneTop, 1)); ctx.lineTo(W, crisp(paneTop, 1)); ctx.moveTo(0, crisp(timeY, 1)); ctx.lineTo(W, crisp(timeY, 1)); }   // the pane's top, the time axis
+    if (deltaOn() && rsiOn()) { ctx.moveTo(0, crisp(dTop + dH, 1)); ctx.lineTo(W, crisp(dTop + dH, 1)); ctx.moveTo(0, crisp(rTop, 1)); ctx.lineTo(W, crisp(rTop, 1)); }   // 1.34.0: between the delta and the RSI
     ctx.stroke();
 
     const tagSrc = levelsShown.filter(levelOn).concat(drawings.filter(d => d.type === 'hline').map(d => ({ price: d.price, color: d.color || T.drawing })), orderTags);
@@ -2467,7 +2722,7 @@ function create(container, options) {
       const price = V.hi - hover.y / plotH * pRange;
       axisTag(hover.y, fmtPrice(roundTo(price, o.tick), o.precision), T.tagFill, T.tagText, T.tagBorder, null);
     }
-    if (paneOn()) { hoverIdx = hi; drawPane(from, to, labels, paneX, paneY); }
+    if (paneOn()) { hoverIdx = hi; if (deltaOn()) drawPane(from, to, labels, paneX, paneY); if (rsiOn()) drawRsi(from, to, labels, paneX, paneY); }
     // 1.15.0 (review): a compact label that moves under a still mouse shows in full on the next frame
     if (o.compactLabels && !drag && !od) {
       const ph = posHit, lh = hover ? hitOrder(hover, true) : null;
@@ -2869,9 +3124,9 @@ function create(container, options) {
     getLevels() { return levels.map(L => Object.assign({}, L)); },
     setTrades(list) { trades = list || []; dirty = true; },
     setLayers(partial) {
-      const had = paneOn();
+      const had = paneKey();
       Object.assign(o.layers, partial || {});
-      if (paneOn() !== had) { layout(); clampRight(); pane.init = false; }   // the delta pane came or went (1.7.0)
+      if (paneKey() !== had) { layout(); clampRight(); pane.init = false; }   // the delta pane came or went (1.7.0), or the RSI's (1.34.0)
       pane.widths.clear(); cornerWidths.clear();                   // a page redraws this way when its web fonts arrive
       dirty = true;
     },
@@ -2914,9 +3169,34 @@ function create(container, options) {
       dirty = true;
     },
     /** Where the delta pane is and what it shows (CSS px from the top of the chart; title as last drawn): { on, top, height, ratio, mode, note, title, lo, hi, plotHeight }. */
-    deltaPane() { return { on: paneOn(), top: paneTop, height: paneH, ratio: pane.ratio, mode: pane.mode, note: pane.note, title: pane.title, lo: pane.lo, hi: pane.hi, plotHeight: plotH }; },
+    deltaPane() { return { on: deltaOn(), top: dTop, height: dH, ratio: pane.ratio, mode: pane.mode, note: pane.note, title: pane.title, lo: pane.lo, hi: pane.hi, plotHeight: plotH }; },
+    /** The studies drawn (1.34.0): { ema: [len, len, len], sma: [...] (0 for a line that is off), bands: { len, dev, basis,
+        fill }, rsi: { len, lo, hi } }; only the fields given change (cleanStudies), each shown while its layer ('ema',
+        'sma', 'bands', 'rsi') is on. */
+    setStudies(v) {
+      const next = cleanStudies(studies, v);
+      if (JSON.stringify(next) !== JSON.stringify(studies)) { studies = next; dirty = true; }
+    },
+    getStudies() { return copyStudies(studies); },
+    /** Where the RSI is and what it shows (1.34.0; CSS px from the top of the chart): { on, top, height, value (the newest
+        bar's, null with too few bars), lo, hi, len }. */
+    rsiPane() {
+      const n = last(), r = rsiOn() && studiesNow() ? SC.rsi[n] : null;
+      return { on: rsiOn(), top: rTop, height: rH, value: r ? r.v : null, lo: studies.rsi.lo, hi: studies.rsi.hi, len: studies.rsi.len };
+    },
+    /** An RSI value to y in its pane (CSS px from the top of the chart). */
+    rsiToY(v) { const pad = rsiPad(); return rTop + pad + (100 - v) / 100 * (rH - 2 * pad); },
+    /** The studies' values at bar i (1.34.0, for reading: tests, a host's readout): { ema: [..], sma: [..], bands, rsi },
+        each null while its layer is off or with too few bars. */
+    studiesAt(i) {
+      const n = last();
+      if (!(i >= 0 && i <= n) || !studiesNow()) return null;
+      const v = a => (a[i] === undefined ? null : a[i]);
+      return { ema: o.layers.ema ? SC.ema.map(v) : null, sma: o.layers.sma ? SC.sma.map(v) : null,
+        bands: o.layers.bands && SC.bb[i] ? Object.assign({}, SC.bb[i]) : null, rsi: o.layers.rsi && SC.rsi[i] ? SC.rsi[i].v : null };
+    },
     /** A delta value to y in the pane and back (CSS px from the top of the chart, as last drawn). */
-    deltaToY(v) { return paneTop + (pane.hi - v) / ((pane.hi - pane.lo) || 1) * paneH; },
+    deltaToY(v) { return dTop + (pane.hi - v) / ((pane.hi - pane.lo) || 1) * dH; },
     /** Change colors, e.g. { up, down, vwap, bg }. The theme is built here, once per change. */
     setTheme(partial) { themeSrc = Object.assign({}, themeSrc, partial || {}); T = buildTheme(themeSrc); themeBuilds++; shadeLevels(); pane.widths.clear(); legendKey = ''; dirty = true; },
     /** The colors as chosen (not as moved to read on the ground; colors() has those). */
@@ -3925,14 +4205,14 @@ class DeltaDivergence {
 
 return {
   VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, BACKGROUNDS, LEVEL_COLORS, FLOOR, PAIR, IB_FORMING_DASH, VP_WIDTH, VP_POC_MIN,
-  PANE_RATIO, PANE_RATIO_MIN, PANE_RATIO_MAX, PANE_MIN, PRICE_MIN, PANE_GAP,
+  PANE_RATIO, PANE_RATIO_MIN, PANE_RATIO_MAX, PANE_MIN, PRICE_MIN, PANE_GAP, STUDY_DEFAULTS,
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtExact, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, ibPair, distinct, mix, buildTheme, chromeColors, CHROME_VARS,
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, orderLabelShort, positionShort, htfStart, htfEnd, HTF_SECONDS, cornerPlace, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
-    roomBars, fitRange, fmtRemain, barRemain, atr, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, rthVwapUpdate, vwapAt, PD_POC_DASH,
+    roomBars, fitRange, fmtRemain, barRemain, atr, smaAt, emaAt, bandsAt, rsiAt, smaSeries, emaSeries, bollinger, rsiSeries, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, rthVwapUpdate, vwapAt, PD_POC_DASH,
   },
   VolumeProfile, CumulativeDelta,
   // chart signals (G1c)

@@ -270,14 +270,14 @@ try {
       while (await page.$('#paneB .ind-body [data-f^="add:"]')) await page.click('#paneB .ind-body [data-f^="add:"]');   // each add redraws the list
     }
     await page.keyboard.press('Escape');
-    check(await page.textContent('#paneB .ind-count') === '7/7' && await page.$$eval('#paneB .ind-chip', c => c.length) === 7, 'pane B: all seven added (the volume profile, the delta pane and the bubbles too), each with a chip (the strip holds ten, 1.14.0)');
+    check(await page.textContent('#paneB .ind-count') === '10/10' && await page.$$eval('#paneB .ind-chip', c => c.length) === 10, 'pane B: all ten added (the volume profile, the delta pane and the bubbles too; 1.34.0 the EMA, SMA and Bollinger Bands), each with a chip (the strip holds ten, 1.14.0)');
     await page.evaluate(() => { document.getElementById('paneA').style.flex = '3 1 0'; });
     await page.waitForTimeout(300);
     const nb = await page.evaluate(() => { const s = document.querySelector('#paneB .ind-chips'), cs = [...s.querySelectorAll(':scope > .ind-chip')], more = s.querySelector('.ind-chip-more');
       return { w: Math.round(document.getElementById('paneB').getBoundingClientRect().width), narrow: s.classList.contains('is-narrow'), lines: new Set(cs.map(c => Math.round(c.getBoundingClientRect().top))).size, text: cs.map(c => c.innerText.trim()).join(''), fits: s.scrollWidth <= s.clientWidth + 1,
         more: more && !more.hidden ? more.textContent : '', listed: s.querySelectorAll('.ind-chip-list .ind-chip').length }; });
     const na = await page.evaluate(() => document.querySelector('#paneA .ind-chips').classList.contains('is-narrow'));
-    check(nb.narrow && nb.lines === 1 && 'VWLPDBF'.startsWith(nb.text) && nb.text.length + nb.listed === 7 && (nb.listed ? nb.more === '+' + nb.listed : true) && nb.fits, 'narrow pane (' + nb.w + ' px): one-letter chips on one line, the rest behind +N (1.14.0) (the wide pane: ' + (na ? 'letters' : 'names') + '): ' + JSON.stringify(nb));
+    check(nb.narrow && nb.lines === 1 && 'VWLESOPDBF'.startsWith(nb.text) && nb.text.length + nb.listed === 10 && (nb.listed ? nb.more === '+' + nb.listed : true) && nb.fits, 'narrow pane (' + nb.w + ' px): one-letter chips on one line, the rest behind +N (1.14.0) (the wide pane: ' + (na ? 'letters' : 'names') + '): ' + JSON.stringify(nb));
     await page.click('#paneB .ind-chip[data-id="levels"]'); await page.click('#paneB .chip-pop [data-act="popsw"]'); await page.keyboard.press('Escape');   // 1.14.0: the chip's popover switch
     check(await page.evaluate(() => window.__b.chart.getLayers().levels === false && window.__a.chart.getLayers().levels === true), 'a letter chip hides Levels on its own pane only');
     await shot(page, 'embed-narrow-pane-chips.png');
@@ -288,7 +288,7 @@ try {
     await page.keyboard.press('Escape');
     // back to pane B's earlier set: Volume and VWAP only, not pinned
     await page.click('#paneB .ind-btn');
-    for (const id of ['levels', 'vp', 'delta', 'bubbles', 'fills']) await page.click(`#paneB .ind-body [data-act="remove"][data-id="${id}"]`);
+    for (const id of ['levels', 'ema', 'sma', 'bands', 'vp', 'delta', 'bubbles', 'fills']) await page.click(`#paneB .ind-body [data-act="remove"][data-id="${id}"]`);
     await page.keyboard.press('Escape');
     await page.evaluate(() => { document.getElementById('paneA').style.flex = ''; });
     check(await page.textContent('#paneB .ind-count') === '2/2', 'pane B back to Volume and VWAP');
