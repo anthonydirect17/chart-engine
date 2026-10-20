@@ -798,6 +798,8 @@ const core = TC.create({
   agentOwner: (account, root) => (agentDesk ? agentDesk.ownerOf(account, root) : ''),
   /* 1.33.0 (ChartBridge 0.6.5): the groups on the window's v3 connection, for the ticket's picker; a group entry's confirm */
   groups: () => (AF && AF.S.groups && !AF.S.groupsError ? AF.S.groups : []),
+  /* 1.34.0: Flatten every account reads every listed account's orders and positions (the v3 connection), not only the trade accounts */
+  everyHolding: () => (AF && AF.S.v3 && AF.S.signedIn ? { orders: [...AF.S.orders.values()], positions: AF.S.positions } : null),
   confirmGroup: (m, onSend, onCancel) => { if (forwarding || !holds()) return false; askGroup(m, onSend, onCancel); return true; },
 });
 /* 1.33.0: the group entry's one confirm (Anthony 2026-10-19): each account's size and dollar risk, or why it sits out; Send sends
@@ -828,6 +830,7 @@ if (AF) AF.listen({
   message: m => {
     if (m.type === 'managed' || m.type === 'merge') core.message(m);
     else if (m.type === 'status' && typeof m.text === 'string' && m.text && (m.level === 'error' || (m.level === 'warn' && !/^Bot\b/.test(m.text)))) alertOnce(m.text, m.level === 'warn', true);
+    else if (m.type === 'riskAlert') riskAlert(m, true);   // 1.34.0 (ChartBridge 0.6.6)
   },
   closed: () => core.v3Lost(),
 });
@@ -871,6 +874,7 @@ function tmessage(m) {
     case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
     // errors stay until dismissed; a warning (a mistyped maxTicksAway or maxBracketTicks in config.txt, 0.3.7) too, in amber
     case 'status': if (m.level === 'error') alertOnce(m.text); else if (m.level === 'warn' && m.text) alertOnce(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;
+    case 'riskAlert': riskAlert(m, false); return;        // 1.34.0 (ChartBridge 0.6.6)
   }
   // 1.16.0: the Account page's cancel from the list went on this connection; its refusal is said there
   if (m.type === 'reject' && AF && AF.takeReject(m)) return;
@@ -902,6 +906,30 @@ function alertOnce(text, warn, v3) {
   if (was && now - was.at <= 5000 && was.v3 !== !!v3) return;
   alertSaid.set(text, { at: now, v3: !!v3 });
   alertLoud(text, warn);
+  return true;
+}
+/* 1.34.0 (ChartBridge 0.6.6, Anthony 2026-10-20): a risk alert, the banner above with a sound, never a dialog: an account reached
+   its daily loss (red), or the bot's, an agent's or a copier follower's entry was held back by the firm's limits (amber). Said once
+   per window whichever connection brings it (alertOnce); nothing here acts on any account. */
+let riskSounds = 0, audio = null;
+function riskAlert(m, v3) {
+  if (!m || typeof m.text !== 'string' || !m.text) return;
+  if (alertOnce(m.text, m.kind !== 'dailyLoss', v3)) riskSound();
+}
+function riskSound() {
+  riskSounds++;
+  try {
+    const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+    audio = audio || new C();
+    if (audio.state === 'suspended') audio.resume();
+    const t = audio.currentTime;
+    for (const [f, at] of [[880, 0], [660, 0.2]]) {                      // two short tones, as the Bot tab's notice sound
+      const osc = audio.createOscillator(), g = audio.createGain();
+      osc.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t + at); g.gain.exponentialRampToValueAtTime(0.12, t + at + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.18);
+      osc.connect(g); g.connect(audio.destination); osc.start(t + at); osc.stop(t + at + 0.2);
+    }
+  } catch (e) { /* no sound */ }
 }
 $('wsAlertClose').addEventListener('click', () => { alerts.length = 0; alertErr = false; $('wsAlert').hidden = true; });
 function renderUnsent() { const n = core.unsentNote(); $('wsUnsent').hidden = !n.show; $('wsUnsentText').textContent = n.text; }
@@ -940,12 +968,45 @@ function renderFlat() {
   const t = on ? 'Flatten all on ' + a + ': every instrument with a position or a working order, cancel its orders and close its position at market. Works with Armed off.'
     : 'Flatten all: ' + (core.TR.reason || 'not connected to ChartBridge yet');
   if (b.title !== t) b.title = t;
+  /* 1.34.0: Flatten every account needs trading on only (no account picked: it covers every account) */
+  const e = $('wsFlatEvery'), te = core.TR.enabled ? 'Flatten every account: cancel every working order and close every position at market on every account ChartBridge lists, the copier\'s, the bot\'s and the agents\' included, whatever the ticket shows. One confirm; works with Armed off.'
+    : 'Flatten every account: ' + (core.TR.reason || 'not connected to ChartBridge yet');
+  e.disabled = !core.TR.enabled;
+  if (e.title !== te) e.title = te;
 }
 $('wsFlat').addEventListener('click', e => {
   e.currentTarget.blur();
   if (e.detail === 0) { note('Order buttons work by click only, not by keyboard.', true); return; }
   core.flattenAll();
 });
+/* 1.34.0 Flatten every account (Anthony 2026-10-20, approved): its own button beside Flatten all, one confirm, then a flatten for every
+   account ChartBridge lists with a position or a working order (the copier's, the bot's and the agents' accounts included), whatever
+   the ticket shows; with Armed off too. Paced within ChartBridge's 10 order actions a second (TradeCore.flattenEvery). */
+$('wsFlatEvery').addEventListener('click', e => {
+  e.currentTarget.blur();
+  if (e.detail === 0) { note('Order buttons work by click only, not by keyboard.', true); return; }
+  askFlattenEvery();
+});
+function askFlattenEvery() {
+  const items = core.everyItems();
+  if (!items.length) { core.flattenEvery(); return; }      // says there is nothing to flatten, sends nothing
+  const byAcct = new Map();
+  for (const x of items) { if (!byAcct.has(x.a)) byAcct.set(x.a, []); byAcct.get(x.a).push(x.r); }
+  const n = byAcct.size, d = $('wsDialog');
+  const rows = [...byAcct].map(([a, rs]) => `<li><b>${esc(a)}</b> ${esc(rs.join(', '))}</li>`).join('');
+  d.innerHTML = `<form class="ws-dlg ws-fe" method="dialog" aria-label="Flatten every account">
+    <h2>Flatten every account?</h2>
+    <p>Cancels every working order and closes every position at market on ${n} account${n === 1 ? '' : 's'}, the copier's, the bot's and the agents' included, whatever the ticket shows. Works with Armed off.</p>
+    <ul class="fe-list">${rows}</ul>
+    <div class="ws-dlg-btns"><span class="sg-fill"></span><button type="button" class="ws-btn" data-act="cancel">Cancel</button><button type="button" class="ws-btn ws-flat" id="feGo" title="Flatten every account (a click only, as every order button)">Flatten every account</button></div>
+  </form>`;
+  showDialog(d, () => false);
+  d.querySelector('#feGo').addEventListener('click', e => {
+    if (e.detail === 0) { note('Flatten every account goes by a click on its button only, not by keyboard.', true); return; }
+    d.close(); core.flattenEvery();
+  });
+  d.querySelector('[data-act="cancel"]').focus();
+}
 
 /* A chart's click, drag or cancel (ChartLive.mount's `trade`): in the ticket's window straight to TradeCore, else
    forwarded to it. Either way only for the ticket's instrument. */
@@ -3252,7 +3313,9 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   /* the Bot tab's entrance played again (test/perf-bot.mjs: the motion kit running while the live chart draws) */
   botReplay: () => !!(botDesk && botDesk.replay()),
   /* 1.17.0: the Agent tab (read it; its actions go through ChartBridge's checks) */
-  agent: () => (agentDesk ? agentDesk.state() : null) };
+  agent: () => (agentDesk ? agentDesk.state() : null),
+  /* 1.34.0: how many risk alerts sounded in this window (test/flatten-every-smoke.mjs) */
+  riskSounds: () => riskSounds };
 
 /* 1.16.0: the Bot tab, the bot strip and the bot's pop-ups (live/bot.js), on the window's v3 connection (AF); everything bot
    shows only when ChartBridge's bot switch is on. The Bot tab hides the grid while it is open (?tab=bot keeps it on a reload). */

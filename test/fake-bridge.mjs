@@ -9,7 +9,7 @@
 //                                   the last price; default none)
 //   --max-bracket-ticks=300         maxBracketTicks = 300 (0.3.7: a bracket stop or target at most this many ticks; default none)
 //   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
-//                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/elsewhere
+//                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/risk-alert (a riskAlert, 0.6.6), /test/elsewhere
 //   --allow-frames                  drop X-Frame-Options and frame-ancestors (only to test the page's own frame check)
 //   --allow-origins=https://desk.example,http://host:8800   allowOrigins: other web pages that may open the
 //                                   read-only WebSocket (ChartBridge 0.3.1 rule; never trade)
@@ -789,6 +789,7 @@ const server = http.createServer((req, res) => {
         positions: Object.fromEntries(desk.positions) }));
     }
     else if (p === '/test/status') { for (const c of clients) send(c, { type: 'status', level: q.get('level') || 'error', text: q.get('text') || '' }); }
+    else if (p === '/test/risk-alert') { for (const c of clients) send(c, { type: 'riskAlert', kind: q.get('kind') || 'held', account: q.get('account') || 'SIM-A', text: q.get('text') || 'Sample: a held entry (made up)' }); }   // ChartBridge 0.6.6
     else if (p === '/test/htf' && DATA_037) htfFail = q.get('fail') || '';
     else if (p === '/test/pc-clock') {              // 0.5.6: a new time check result, to every page (and hello from now on)
       pcClock = q.get('checked') === '0' ? { checked: false, why: q.get('why') || 'not checked yet', server: PC_CLOCK_SERVER }

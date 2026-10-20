@@ -82,7 +82,7 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   // while those are still shown (review 3 S4), Flatten all's while the account is still a trade account (1.12.0)
   assert.match(CORE, /sendFlatten\(TR\.account, R, false, other \? 'all' : 'here'\);/);
   assert.match(CORE, /send\(\{ type: 'flatten', account, root: R \}\);/);
-  assert.match(CORE, /const ok = on && \(f\.kind === 'here' \? TR\.account === f\.account && root\(\) === f\.root : TR\.accounts\.includes\(f\.account\)\);\n\s+if \(ok\) \{ sendFlatten\(f\.account, f\.root, true, f\.kind\);/);
+  assert.match(CORE, /const ok = on && \(f\.kind === 'here' \? TR\.account === f\.account && root\(\) === f\.root : f\.kind === 'every' \|\| TR\.accounts\.includes\(f\.account\)\);[^\n]*\n\s+if \(ok\) \{ sendFlatten\(f\.account, f\.root, true, f\.kind\);/);   // 1.34.0: Flatten every account's resend, any account ChartBridge lists
   // ready(): the picker must show TR.account, else nothing is sent
   const ready = CORE.slice(CORE.indexOf('function ready('), CORE.indexOf('function sendOrder('));
   assert.match(ready, /if \(env\.pickerAccount\(\) !== TR\.account\) \{ env\.syncAccounts\(\); flash\('Nothing was sent[^\n]*return false; \}/);

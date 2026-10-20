@@ -24,6 +24,7 @@ function rig(opts) {
     changed: () => { R.renders++; }, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {},
     batch: () => {}, unsent: () => { R.unsent++; }, armBlocked: () => R.armedBlocked, destroyed: () => false, now: () => clock,
     framed: !!o.framed,
+    everyHolding: () => (R.every || null),       // 1.34.0: the window's v3 connection's orders and positions (every listed account)
   };
   const core = TC.create(env);
   R.core = core;
@@ -144,6 +145,55 @@ test('Flatten all paced within ChartBridge\'s 10 a second, and a run finishes on
   R.advance(1200);
   assert.deepEqual(R.flattens(), ['Sim101 MNQ', 'Sim101 NQ', 'Sim101 MES', 'Sim101 ES']);
   assert.equal(R.core.busy().flattenAll, false);
+});
+
+test('1.34.0 Flatten every account: every account ChartBridge lists (copier, bot, agent), whatever the ticket shows, Armed off, paced; None still sends nothing for Flatten all', () => {
+  const R = rig({ wanted: '' });                   // the ticket on None
+  R.on();
+  assert.equal(R.core.TR.account, '', 'None');
+  R.pos('Sim101', 'MNQ', 1); R.pos('EVAL-1', 'NQ', -2);
+  // the v3 connection lists more: the bot's account (not a trade account), a follower with a working order, an agent's account
+  R.every = { orders: [{ id: 'o9', account: 'FOLLOW-1', root: 'MNQ', state: 'working', side: 'sell', kind: 'stop', qty: 1 }],
+    positions: new Map([['BOT-1|MNQ', { qty: 1, avgPrice: 100 }], ['AGENT-1|NQ', { qty: -1, avgPrice: 100 }], ['AGENT-1|ES', { qty: 0, avgPrice: 0 }]]) };
+  R.core.flattenAll();
+  assert.equal(R.flattens().length, 0, 'Flatten all on None sends nothing, as before');
+  assert.match(R.notes.pop(), /No account \(None\): nothing was sent/);
+  R.advance(500);
+  assert.deepEqual(R.core.everyItems().map(x => x.a + ' ' + x.r), ['AGENT-1 NQ', 'BOT-1 MNQ', 'EVAL-1 NQ', 'FOLLOW-1 MNQ', 'Sim101 MNQ'], 'what a press would flatten, by account');
+  assert.equal(R.core.TR.armed, false);
+  assert.equal(R.core.flattenEvery(), true);
+  assert.deepEqual(R.flattens(), ['AGENT-1 NQ', 'BOT-1 MNQ', 'EVAL-1 NQ', 'FOLLOW-1 MNQ', 'Sim101 MNQ'], 'every account, with Armed off and the ticket on None');
+  assert.match(R.notes.pop(), /^Flatten every account sent: AGENT-1 NQ, BOT-1 MNQ, EVAL-1 NQ, FOLLOW-1 MNQ, Sim101 MNQ/);
+  // a refusal for the rate: sent again once, even for an account that is not a trade account (the bot's)
+  R.advance(5000); R.sent.length = 0;
+  R.core.flattenEvery(); R.rate();
+  R.advance(1100);
+  assert.deepEqual(R.flattens().slice(5), ['Sim101 MNQ'], 'the latest refused goes again');
+  R.advance(5000); R.sent.length = 0;
+  R.core.flattenEvery(); R.rate(); R.rate(); R.rate(); R.rate();
+  R.advance(1100);
+  assert.deepEqual(R.flattens().slice(5), ['Sim101 MNQ', 'FOLLOW-1 MNQ', 'EVAL-1 NQ', 'BOT-1 MNQ'], 'the newest four go again, BOT-1 (not a trade account) too');
+  // paced within 10 a second: 14 to flatten, 10 now and 4 once the second allows
+  R.advance(5000); R.sent.length = 0;
+  const pos = new Map();
+  for (let i = 0; i < 14; i++) pos.set('ACC-' + String(i).padStart(2, '0') + '|MNQ', { qty: 1, avgPrice: 100 });
+  R.every = { orders: [], positions: pos };
+  R.core.applyTrading({ enabled: true, accounts: [], maxQty: {} });
+  R.core.message({ type: 'position', account: 'Sim101', root: 'MNQ', qty: 0, avgPrice: 0 }); R.core.message({ type: 'position', account: 'EVAL-1', root: 'NQ', qty: 0, avgPrice: 0 });
+  R.core.flattenEvery();
+  assert.equal(R.flattens().length, 10, '10 now');
+  assert.equal(R.core.busy().flattenAll, true);
+  R.advance(1200);
+  assert.equal(R.flattens().length, 14, 'the rest within the next second');
+  assert.equal(R.core.busy().flattenAll, false);
+  // nothing anywhere: says so, sends nothing; trading off: nothing
+  R.advance(5000); R.sent.length = 0; R.every = null;
+  assert.equal(R.core.flattenEvery(), false);
+  assert.match(R.notes.pop(), /Flatten every account: no position or working order on any account\. Nothing was sent\./);
+  R.every = { orders: [], positions: pos };
+  R.core.applyTrading({ enabled: false, reason: 'Trading is off.' });
+  assert.equal(R.core.flattenEvery(), false);
+  assert.equal(R.flattens().length, 0);
 });
 
 test('a chart click from another window: sent with the chart\'s kind only when the ticket\'s own recent price agrees (review S)', () => {

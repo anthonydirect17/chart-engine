@@ -56,6 +56,7 @@
     "smoke:member-rules": "node test/member-rules-smoke.mjs",
     "smoke:group-ticket": "node test/group-ticket-smoke.mjs",
     "smoke:onoff": "node test/agent-onoff-smoke.mjs",
+    "smoke:flatten-every": "node test/flatten-every-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",
     "perf:bot": "node test/perf-bot.mjs",

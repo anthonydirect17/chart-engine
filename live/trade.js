@@ -1,7 +1,8 @@
 /*
  * TradeCore: the order logic of the order ticket, in one place (chart 1.12.0). The workspace's order ticket
  * (live/workspace.js, index.html) calls these very functions (the single chart page's order bar did too until chart
- * 1.22.0, when that page went), so there is one order path: what Buy MKT, Sell MKT, B/E, Flatten (Close), Cancel all, Flatten all, a
+ * 1.22.0, when that page went), so there is one order path: what Buy MKT, Sell MKT, B/E, Flatten (Close), Cancel all, Flatten all,
+ * Flatten every account (1.34.0), a
  * chart click and a drag send, and every check before it, is written once, here. It is the 1.11.0 code of live.js moved
  * out unchanged, with the chart's instrument, last price, Qty box and account picker read through `env`.
  *
@@ -43,6 +44,8 @@
  *   strategy()           1.16.0 (optional): the active Order Strategy, { name, wire } (wire: The Desk's strategy as
  *                        OrderStrategies.toWire gives it), or null for the bracket; used only while `switches.strategies`
  *   merged(m)            1.16.0 (optional): ChartBridge's `merge` result arrived (the host shows it)
+ *   everyHolding()       1.34.0 (optional): { orders, positions } of every account ChartBridge lists (the window's v3 connection),
+ *                        for Flatten every account; null or absent: this connection's own (the trade accounts)
  *   destroyed()          the host went away
  *   prefs, LP            LivePrefs (the saved bracket, qty and presets) and its module
  *   pin, fetch, framed, framedReason, now
@@ -765,7 +768,7 @@ function create(env) {
     if (!r) return;
     const on = open() && TR.enabled, sentAgain = [], missed = [];
     for (const f of r.list) {
-      const ok = on && (f.kind === 'here' ? TR.account === f.account && root() === f.root : TR.accounts.includes(f.account));
+      const ok = on && (f.kind === 'here' ? TR.account === f.account && root() === f.root : f.kind === 'every' || TR.accounts.includes(f.account));   // 1.34.0: Flatten every account goes again for any account ChartBridge lists
       if (ok) { sendFlatten(f.account, f.root, true, f.kind); sentAgain.push(f); } else missed.push(f);
     }
     if (sentAgain.length) flash('Flatten sent again for ' + retryWhere(sentAgain) + '.', 'warn');
@@ -828,11 +831,12 @@ function create(env) {
   /* Flatten all acts on the ticket's account. On None (DECISION 2026-10-14e) it sends nothing and says to pick an account, as
      every ticket action does (whether it should cover every trade account then is Anthony's to decide). */
   const faName = (run, x) => (run.one ? x.r : x.a + ' ' + x.r);
+  const faLabel = run => (run.every ? 'Flatten every account' : 'Flatten all on ' + run.account);
   function flattenAll() {
     try { dropNoStop(); flattened(null); } catch (e) { /* never in the way of the flatten */ }
     if (!ready(false)) return;
     const one = !isGroup(TR.account), account = TR.account;   // 1.33.0: a group's Flatten all covers every member
-    if (faRun) { flash('Flatten all under way on ' + faRun.account + ': ' + faRun.queue.map(x => faName(faRun, x)).join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
+    if (faRun) { flash(faLabel(faRun) + ' under way: ' + faRun.queue.map(x => faName(faRun, x)).join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
     const items = [];
     for (const a of targets(account)) for (const r of OT.flattenAllRoots([...TR.orders.values()], TR.positions, a, served, ROOTS)) items.push({ a, r });
     if (!items.length) { flash('Flatten all: no position or working order on ' + nameOf(account) + '. Nothing was sent.', ''); return; }
@@ -856,20 +860,66 @@ function create(env) {
     const t = now(), recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
     const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
     if (room) {
-      const gone = r.queue.find(x => !TR.accounts.includes(x.a));
+      const gone = r.every ? null : r.queue.find(x => !TR.accounts.includes(x.a));   // 1.34.0: Flatten every account is not held to the trade accounts
       const why = FRAMED || !TR.enabled ? 'trading went off' : !open() ? 'the connection to ChartBridge dropped' :
         gone ? gone.a + ' is no longer a trade account in ChartBridge' : '';
       if (why) {                                                   // a note that stays until dismissed, as for a Flatten not sent
         faRun = null;
-        flattenMiss = 'Flatten all on ' + r.account + ': ' + (r.sent.length ? r.sent.map(x => faName(r, x)).join(', ') + ' sent; ' : '') + r.queue.map(x => faName(r, x)).join(', ') + ' not sent: ' + why + '. Those positions may still be open. Flatten again.';
+        flattenMiss = faLabel(r) + ': ' + (r.sent.length ? r.sent.map(x => faName(r, x)).join(', ') + ' sent; ' : '') + r.queue.map(x => faName(r, x)).join(', ') + ' not sent: ' + why + '. Those positions may still be open. Flatten again.';
         env.unsent(); flash(flattenMiss, 'error');
         return;
       }
-      for (const x of r.queue.splice(0, room)) { sendFlatten(x.a, x.r, false, 'all'); r.sent.push(x); }
+      for (const x of r.queue.splice(0, room)) { sendFlatten(x.a, x.r, false, r.every ? 'every' : 'all'); r.sent.push(x); }
     }
-    if (!r.queue.length) { faRun = null; flash('Flatten all sent for ' + r.account + ': ' + r.sent.map(x => faName(r, x)).join(', ') + ' (cancel their orders, close their positions at market).', ''); return; }
+    if (!r.queue.length) { faRun = null; flash((r.every ? 'Flatten every account sent: ' : 'Flatten all sent for ' + r.account + ': ') + r.sent.map(x => faName(r, x)).join(', ') + ' (cancel their orders, close their positions at market).', ''); return; }
     const oldest = actionTimes.find(x => x > t - CANCEL_GAP);
     later(() => { if (faRun === r) faPump(); }, Math.max(20, (oldest === undefined ? t : oldest) + CANCEL_GAP - t));
+  }
+
+  /*
+   * Flatten every account (1.34.0, Anthony 2026-10-20, approved: its own action in the top bar, one confirm in the workspace): one
+   * flatten (sendFlatten, as the Flatten button) per account and instrument with a position or a working order, on EVERY account
+   * ChartBridge lists: the copier's leader and followers, the bot's and the agents' accounts included, whatever the ticket shows (its
+   * account, a group or None does not matter here; the ticket's Flatten all on None still sends nothing). Needs trading on and the
+   * connection, not Armed (as Flatten all). Paced within ChartBridge's 10 order actions a second as Flatten all (the same run, faRun);
+   * a flatten refused for the rate goes again once. ChartBridge checks each as any Flatten (an exit, never an entry).
+   * env.everyHolding(): the window's v3 connection's working orders and positions (it lists every account; this connection only the
+   * trade accounts), or null without one. everyItems() is what a press would flatten now ([{ a, r }], by account), for the confirm.
+   */
+  function everyItems() {
+    const ext = typeof env.everyHolding === 'function' ? env.everyHolding() : null;
+    const orders = [...TR.orders.values()].concat(ext && Array.isArray(ext.orders) ? ext.orders : []);
+    const positions = new Map(TR.positions);
+    if (ext && ext.positions && typeof ext.positions.forEach === 'function') ext.positions.forEach((p, k) => { const was = positions.get(k); if (!(was && +was.qty) && p && +p.qty) positions.set(k, p); });
+    const accts = new Set();
+    for (const o of orders) if (o && OT.isWorking(o) && typeof o.account === 'string' && o.account) accts.add(o.account);
+    for (const [k, p] of positions) { const i = k.lastIndexOf('|'); if (i > 0 && p && +p.qty) accts.add(k.slice(0, i)); }
+    const items = [];
+    for (const a of [...accts].sort()) for (const r of OT.flattenAllRoots(orders, positions, a, served, ROOTS)) items.push({ a, r });
+    return items;
+  }
+  function flattenEvery() {
+    try { dropNoStop(); flattened(null); } catch (e) { /* never in the way of the flatten */ }
+    if (FRAMED) { flash(FRAMED_REASON, 'error'); return false; }
+    if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
+    if (!open()) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
+    if (faRun) { flash(faLabel(faRun) + ' under way: ' + faRun.queue.map(x => faName(faRun, x)).join(', ') + ' left. Nothing new was sent.', 'warn'); return false; }
+    const items = everyItems();
+    if (!items.length) { flash('Flatten every account: no position or working order on any account. Nothing was sent.', ''); return false; }
+    const t = now();
+    if (!sameAction('flattenEvery', t)) return false;
+    const recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
+    const run = { account: 'every account', queue: items, sent: [], one: false, every: true };
+    const first = OT.paceChunks(items, recent, BE_LIMIT)[0];
+    for (const x of first) sendFlatten(x.a, x.r, false, 'every');
+    const rest = items.slice(first.length);
+    flash(first.length ? 'Flatten every account sent: ' + first.map(x => faName(run, x)).join(', ') + ' (cancel their orders, close their positions at market).' +
+      (rest.length ? ' ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.' : '')
+      : 'Flatten every account: ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.', '');
+    if (!rest.length) return true;
+    faRun = Object.assign(run, { queue: rest, sent: first.slice() });
+    faPump();
+    return true;
   }
 
   /* Chart actions (only while Armed): drag an order's label to move it, its x to cancel it. */
@@ -1271,7 +1321,7 @@ function create(env) {
     TR, brackets, qtys, BK, cap, framed: FRAMED, allowNoStop, noStopAsked: () => !noStopOk,
     planMove, planRemove, planAdd, chartOrders, groupPosition, framedReason: FRAMED_REASON, tradeMode, noteMoving, moveRefusal,
     hello, message, lost, signIn, applyTrading,
-    ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAgent, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
+    ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAgent, flattenAll, flattenEvery, everyItems, moveOrder, cancelOrder, setArmed, pickAccount,
     merge, managedOf, switchOn: sw, setSwitches, v3Lost, cancelFromList,
     working, inCancelAll, batchLine, unsentNote, dismissUnsent,
     fmtUnit, bracketSelShown, typedTicks, committedTicks, setBracket, setUnit, setQty, pickPreset, savePreset, readPresets, flushBrackets, cancelBrackets,

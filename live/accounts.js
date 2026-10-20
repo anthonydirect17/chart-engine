@@ -589,6 +589,7 @@ function createFeed(env) {
         changed(); return;
       }
       case 'status': log(AC.logText(m), m.level === 'error' ? 'error' : m.level === 'warn' ? 'warn' : ''); changed(); return;
+      case 'riskAlert': if (typeof m.text === 'string' && m.text) { log(m.text, m.kind === 'dailyLoss' ? 'error' : 'warn'); changed(); } return;   // 1.34.0 (ChartBridge 0.6.6): kept in the page's log too
     }
   }
   /* The Desk's limits (read only): its address as ChartBridge knows it (/diag desk.deskUrl), then GET /api/chart-accounts
