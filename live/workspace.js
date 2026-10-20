@@ -1295,7 +1295,7 @@ function stopTicketPrice() {
   const P = TK.price; TK.price = null;
   if (P) { P.sock.onmessage = P.sock.onclose = null; try { P.sock.close(); } catch (e) { /* closed */ } }
 }
-setInterval(() => { if (holds() && TK.bar) TK.bar.renderPositionInfo(); }, 500);   // the P&L, as the single chart page's
+setInterval(() => { if (holds() && TK.bar) { core.groupProjectTick(); TK.bar.renderPositionInfo(); } }, 500);   // the P&L, as the single chart page's; 1.34.0: a group's projected sizes
 
 /* ---------------- hotkeys: in either window. Buy, Sell and B/E go to the ticket's window; Close and Flatten all go from
    this one, on the ticket's account (Anthony 2026-10-01). */

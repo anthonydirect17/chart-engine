@@ -129,3 +129,55 @@ test('review 7: one id per planned level when the members\' prices differ; a mem
   assert.match(R.notes.pop(), /^warn: SIM-C left group Lucid while it holds a position or orders: its own stops stay on SIM-C\./);
   assert.equal(R.core.groupLeftWords('group:g1'), 'SIM-C left the group: its own stops stay');
 });
+
+// 1.34.0 (Anthony 2026-10-20): "this screen should not pop up each time I put in a trade with the group, it should only appear
+// with an issue. I am fine with showing the projected size, but it should be shown somewhere that's not interrupting the trade"
+const pvAll = (cid, sizes) => ({ type: 'groupPreview', cid, group: 'g1', name: 'Lucid', root: 'NQ', side: 'buy', kind: 'market', stopTicks: 20, riskPct: 10,
+  members: sizes.map(([account, size, out]) => ({ account, size, risk: size * 100, budget: 450, out: out || null })) });
+
+test('1.34.0: every account takes it: sent at once, no confirm; one sits out: the confirm, as before', () => {
+  const R = rig();
+  R.core.setArmed(true);
+  R.core.setBracket('NQ', 'stop', 20, true);
+  R.core.sendOrder('buy', 'market', null);
+  const pv = R.sent.pop();
+  R.core.message(pvAll(pv.cid, [['SIM-A', 4], ['SIM-B', 2], ['SIM-C', 1]]));
+  assert.equal(R.confirm, null, 'no confirm');
+  const go = R.sent.pop();
+  assert.equal(go.type, 'groupOrder'); assert.equal(go.sizes, 'SIM-A:4,SIM-B:2,SIM-C:1');
+  assert.match(R.notes.pop(), /^Sent the group entry to Lucid: SIM-A 4, SIM-B 2, SIM-C 1\.$/);
+  R.advance(6000);
+  R.core.sendOrder('sell', 'market', null);
+  const pv2 = R.sent.pop();
+  R.core.message(pvAll(pv2.cid, [['SIM-A', 4], ['SIM-B', 0, 'refused: hedge'], ['SIM-C', 1]]));
+  assert.ok(R.confirm, 'an account sits out: the confirm');
+  assert.equal(R.sent.length, 0, 'nothing sent before Send');
+});
+
+test('1.34.0: the ticket\'s projected sizes: a quiet preview while Armed (never traded), at most one a second, again after 15 s or a change', () => {
+  const R = rig();
+  R.core.setBracket('NQ', 'stop', 20, true);
+  R.core.groupProjectTick();
+  assert.equal(R.sent.length, 0, 'not Armed: nothing asked');
+  R.core.setArmed(true);
+  R.sent.length = 0;
+  R.core.groupProjectTick();
+  const q = R.sent.pop();
+  assert.equal(q.type, 'groupPreview'); assert.ok(q.cid.startsWith('q'));
+  assert.equal(R.core.groupProjection(), '', 'nothing shown before the answer');
+  R.core.message(pvAll(q.cid, [['SIM-A', 4], ['SIM-B', 0, 'its daily room is too small'], ['SIM-C', 1]]));
+  assert.equal(R.core.groupProjection(), 'Next entry: SIM-A 4, SIM-C 1 NQ · $500 at risk · sits out: SIM-B (its daily room is too small)');
+  assert.equal(R.confirm, null, 'a quiet preview never opens the confirm');
+  assert.equal(R.sent.filter(m => m.type === 'groupOrder').length, 0, 'and never trades');
+  R.advance(1500); R.core.groupProjectTick();
+  assert.equal(R.sent.length, 0, 'the same key within 15 s: not asked again');
+  R.core.setBracket('NQ', 'stop', 30, true);
+  assert.equal(R.core.groupProjection(), '', 'a new stop: the old sizes are not shown');
+  R.core.groupProjectTick();
+  const q2 = R.sent.pop();
+  assert.deepEqual(q2.bracket, { stop: 30, target: 0 });
+  R.core.message({ type: 'reject', cid: q2.cid, reason: 'too many actions' });
+  assert.equal(R.notes.filter(n => /Refused/.test(n)).length, 0, 'a quiet preview refused says nothing');
+  R.advance(16000); R.core.groupProjectTick();
+  assert.equal(R.sent.pop().type, 'groupPreview', 'asked again later');
+});

@@ -162,6 +162,12 @@ function create(env) {
   const leftWords = a => { const g = groupFor(a); if (!g) return ''; const l = [...groupLeft].filter(([, n]) => n === g.name).map(([x]) => x); return l.length ? l.join(', ') + ' left the group: ' + (l.length > 1 ? 'their' : 'its') + ' own stops stay' : ''; };
   const nameOf = a => { if (!isGroup(a)) return a; const g = groupFor(a); return g ? 'group ' + g.name : a; };
   let groupAsk = null;                                // { cid, side, kind, price, bracket, root, account, gen }: a preview asked for
+  /* 1.34.0 (Anthony 2026-10-20: "this screen should not pop up each time I put in a trade with the group, it should only
+     appear with an issue. I am fine with showing the projected size, but it should be shown somewhere that's not
+     interrupting the actual trade"): while Armed on a group, a quiet preview (never traded, at most one a second, again every
+     15 s or when the group, instrument, stop or strategy changes) gives the ticket each account's projected size. */
+  let groupProj = null, projAsk = null, projAt = 0;   // groupProj { key, name, root, members, at }; projAsk { cid, key, at }
+  const PROJ_EVERY = 15000, PROJ_GAP = 1000, PROJ_WAIT = 3000;
 
   function send(obj) {
     if (!open()) return;
@@ -384,11 +390,40 @@ function create(env) {
     send(msg);
     flash('Asking ChartBridge for each account\'s size in ' + g.name + '...', '');
   }
+  /** The quiet preview's key: what the sizes depend on (group, its risk, instrument, stop or strategy); '' when none can be asked. */
+  function projKey() {
+    const g = groupFor(TR.account);
+    if (!g) return '';
+    const strat = sw('strategies') && typeof env.strategy === 'function' ? env.strategy() : null;
+    const b = OT.cleanBracket(brackets[root()], cap());
+    if (!strat && !(b.stop > 0)) return '';
+    return [g.id, g.riskPct, root(), strat ? 'S:' + strat.name + JSON.stringify(strat.wire) : 'B:' + b.stop + '/' + b.target].join('|');
+  }
+  /** Called every half second in the ticket's window: asks a quiet preview when one is due. */
+  function groupProjectTick() {
+    if (!isGroup(TR.account) || !TR.enabled || !TR.armed || !open()) return;
+    const key = projKey(), t = now();
+    if (!key || (groupProj && groupProj.key === key && t - groupProj.at < PROJ_EVERY) || (projAsk && t - projAsk.at < PROJ_WAIT) || t - projAt < PROJ_GAP) return;
+    const g = groupFor(TR.account), R = root();
+    const strat = sw('strategies') && typeof env.strategy === 'function' ? env.strategy() : null, b = OT.cleanBracket(brackets[R], cap());
+    const msg = Object.assign({ type: 'groupPreview', cid: 'q' + newCid(), group: g.id, root: R, side: 'buy', kind: 'market' }, strat ? { strategy: Object.assign({}, strat.wire) } : { bracket: { stop: b.stop, target: b.target } });
+    projAsk = { cid: msg.cid, key, at: t }; projAt = t;
+    send(msg);
+  }
+  /** The ticket's projected sizes on a group ('' when none is known for what the ticket shows now). */
+  function groupProjection() {
+    if (!groupProj || !isGroup(TR.account) || groupProj.key !== projKey()) return '';
+    const inn = groupProj.members.filter(x => x.size > 0), out = groupProj.members.filter(x => !(x.size > 0));
+    const risk = inn.reduce((t2, x) => t2 + (isFinite(x.risk) ? x.risk : 0), 0);
+    return (inn.length ? 'Next entry: ' + inn.map(x => x.account + ' ' + x.size).join(', ') + ' ' + groupProj.root + ' · $' + (Math.round(risk * 100) / 100).toLocaleString('en-US') + ' at risk' : 'Next entry: no account can take it') +
+      (out.length ? ' · sits out: ' + out.map(x => x.account + (x.out ? ' (' + x.out + ')' : '')).join('; ') : '');
+  }
   function groupPreviewIn(m) {
+    const members = Array.isArray(m.members) ? m.members.filter(x => x && typeof x.account === 'string') : [];
+    if (projAsk && m.cid === projAsk.cid) { groupProj = { key: projAsk.key, name: m.name, root: m.root, members, at: now() }; projAsk = null; env.changed(); return; }
     const q = groupAsk;
     if (!q || m.cid !== q.cid) return;
     groupAsk = null;
-    const members = Array.isArray(m.members) ? m.members.filter(x => x && typeof x.account === 'string') : [];
     const send2 = () => {
       if (!TR.armed || armGen !== q.gen || root() !== q.root || TR.account !== q.account) { flash('Not sent: that group entry was for ' + q.root + ' on ' + nameOf(q.account) + (TR.armed && armGen === q.gen ? ', and the ticket is on ' + root() + ' on ' + nameOf(TR.account) + ' now.' : ' while Armed; Armed went off since.'), 'warn'); return; }
       if (!open()) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return; }
@@ -399,6 +434,10 @@ function create(env) {
       flash('Sent the group entry to ' + m.name + ': ' + members.filter(x => x.size > 0).map(x => x.account + ' ' + x.size).join(', ') + '.', '');
     };
     if (!members.some(x => x.size > 0)) { flash('Not sent: no account of ' + m.name + ' can take it: ' + members.map(x => x.account + ': ' + x.out).join('; ') + '.', 'warn'); return; }
+    /* 1.34.0: every account takes it: sent at once (no confirm; the sizes are the ticket's projection); the confirm only when
+       one sits out (ChartBridge still refuses the whole entry if a size changed since) */
+    groupProj = { key: projKey(), name: m.name, root: m.root, members, at: now() };
+    if (members.every(x => x.size > 0)) { send2(); return; }
     if (typeof env.confirmGroup !== 'function' || env.confirmGroup(m, send2, () => flash('Not sent: the group entry was cancelled.', '')) === false) flash('Not sent: the group entry is confirmed in the order ticket\'s window.', 'warn');
   }
   function groupPlacedIn(m) {
@@ -683,6 +722,7 @@ function create(env) {
      page shows it. */
   const requeued = new Set();                                      // batch cancels already sent again once after a rate refusal
   function onRefused(m) {
+    if (projAsk && m.cid === projAsk.cid) { projAsk = null; groupProj = null; return true; }   // 1.34.0: a quiet preview refused says nothing (the trade itself would)
     /* a refused move (its change's cid): drawn at the confirmed price again, and a planned line dragged while it waited
        is said where it really is (1.22.0) */
     const mvNote = moveRefusal(m);
@@ -1220,7 +1260,7 @@ function create(env) {
     /** for tests (test/order-account.test.js): the inner steps, run on their own */
     /** 1.33.0: the ticket picker's groups: [{ value: 'group:g1', label: 'Group Lucid (4)' }] (ChartBridge 0.6.5's, with members) */
     groupChoices: () => (TR.enabled ? groupsNow().filter(g => g.members.length).map(g => ({ value: GROUP_PREFIX + g.id, label: 'Group ' + g.name + ' (' + g.members.length + ')' })) : []),
-    isGroup, groupMembers: a => targets(a), groupsChanged, groupOut: a => outWords(a), groupLeftWords: a => leftWords(a), groupOf: a => groupFor(a),
+    isGroup, groupMembers: a => targets(a), groupsChanged, groupProjectTick, groupProjection, groupOut: a => outWords(a), groupLeftWords: a => leftWords(a), groupOf: a => groupFor(a),
     _t: { batchStop, unsentCheck, actionSent, sendFlatten, onRefused, get batch() { return batch; } },
     /** for tests: the order actions sent in the last 1.1 s, and whether a B/E, Flatten all or Flatten retry is under way */
     busy: () => ({ be: !!beRun, flattenAll: !!faRun, retry: retry ? retry.list.map(f => f.account + ' ' + f.root) : [], recent: actionTimes.filter(x => x > now() - CANCEL_GAP).length }),
@@ -1434,7 +1474,8 @@ function wire($, core, ui) {
     if (core.isGroup(TR.account)) {
       const parts = core.groupMembers(TR.account).map(a => { const p = TR.positions.get(a + '|' + r); return a + ' ' + (p && p.qty ? (p.qty > 0 ? '+' : '') + p.qty : 'flat'); });
       const t = parts.join(' · ') + [core.groupOut(TR.account), core.groupLeftWords(TR.account)].filter(Boolean).map(x => ' · ' + x).join('');
-      if (posKey !== 'g|' + t) { posKey = 'g|' + t; el.textContent = t; el.title = t; el.className = 'oinfo pz flat'; other.textContent = ''; legsEl.textContent = ''; }
+      const proj = core.groupProjection();   // 1.34.0: the projected sizes, shown, never in the way of the trade
+      if (posKey !== 'g|' + t + '|' + proj) { posKey = 'g|' + t + '|' + proj; el.textContent = t; el.title = t; el.className = 'oinfo pz flat'; other.textContent = proj; other.title = proj; legsEl.textContent = ''; }
       return;
     }
     const pos = TR.positions.get(TR.account + '|' + r);
