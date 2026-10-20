@@ -101,6 +101,9 @@
 .apg-fol > .b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apg-mark { flex: none; font: 700 9.5px/1 var(--ws-sans); letter-spacing: .08em; padding: 2px 4px; border-radius: 3px; border: 1px solid var(--ws-line2); color: var(--ws-muted); }
 .apg-mark.live { color: #FFE4EA; background: #9F1239; border-color: #E0445E; }
+/* 1.34.0: a saved follower row (it keeps its account out of group entries and the agents), and Remove beside it */
+.apg-mark.apg-fmark { color: #F5C977; border-color: #8A6A2A; }
+.apg-frm { margin-left: 4px; padding: 1px 6px; font-size: 11px; }
 .apg-ll { display: flex; align-items: center; gap: 4px; }
 .apg-ll-in { width: 70px; height: 20px; font: 11px var(--ws-mono); background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 4px; padding: 0 4px; }
 .apg-ll-in:disabled { opacity: .45; }

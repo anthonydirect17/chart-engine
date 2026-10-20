@@ -601,6 +601,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "copierSet", new[] { "type", "cid", "leader", "mode" } },
             { "copierFollower", new[] { "type", "cid", "account", "on", "qty", "size", "lossLimit" } },
             { "copierRearm", new[] { "type", "cid" } },
+            { "copierFollowerRemove", new[] { "type", "cid", "account" } },   // 0.6.6 (WORK 2026-10-20): a follower row removed
         };
 
         // copier* (ChartBridgeServer.OnClientMessage). Every refusal is a reject; nothing reaches NinjaTrader.
@@ -621,6 +622,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (type == "copierGet") { client.Send(StateJson()); return; }
                     if (type == "copierSet") { why = SetLeader(text); if (why == null && ChartBridgeOrders.CopierHas(text, "leader")) ChartBridgeBranches.Chosen("copier"); }   // 0.6.3 (review round 2, MED A)
                     else if (type == "copierFollower") why = SetFollower(text);
+                    else if (type == "copierFollowerRemove") why = RemoveFollower(text);
                     else if (type == "copierRearm") why = Rearm();
                 }
                 if (why != null) Reject(client, cid, why);
@@ -790,6 +792,32 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!f.On) f.Skipped = null;
             }
             Decision(a.Name, "set", null, (on.Groups[1].Value == "true" ? "on" : "off") + ", " + qty + " " + size + " per leader entry (fixed), loss limit " + (loss > 0 ? loss.ToString(CultureInfo.InvariantCulture) : "off") + " (set by the page)");
+            Save();
+            BroadcastState(true);
+            return null;
+        }
+
+        // 0.6.6 (WORK 2026-10-20, Anthony's first group trade: an OFF follower row left from the October copier tests kept its
+        // account out of every group entry, and nothing on the page could remove it; ruling 1 stays: an agent or a group never
+        // trades a follower, on or off). Remove takes the row away: refused while it is ON (turn it off first, so the copier
+        // stops copying to it before it goes) and while the copier still follows anything of its own there (a copied position,
+        // an entry, stop or close that may fill, a reduce or a wait: the copier manages those until they are done).
+        private static string RemoveFollower(string text)
+        {
+            string name = ChartBridgeOrders.CopierStr(text, "account");
+            if (string.IsNullOrEmpty(name)) return "account must be an account name.";
+            if (loadFailed) return "copier.txt could not be read at start: the copier's settings cannot change until it can (restart ChartBridge)";
+            string was;
+            lock (Lk)
+            {
+                Follower f = FollowerNamed(name);
+                if (f == null) return name + " is not a copier follower.";
+                if (f.On) return f.Name + " is a copier follower that is on: turn it off first, then remove it.";
+                if (CopierOnAccountLocked(f.Name)) return f.Name + " still holds a copier position or orders: it can be removed once the copier's part there is flat and done.";
+                was = f.Name;
+                Followers.Remove(f);
+            }
+            Decision(was, "set", null, "removed as a follower (it is an account of its own again; set by the page)");
             Save();
             BroadcastState(true);
             return null;
@@ -2372,7 +2400,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool on;
             List<Follower> list;
             lock (Lk) { l = leader; m = mode; why = standDownWhy; on = armed; lroot = lastLeaderRoot; list = Followers.Select(f => new Follower { Name = f.Name, On = f.On, Qty = f.Qty, Size = f.Size, LossLimit = f.LossLimit, LastAction = f.LastAction, LastAt = f.LastAt, Slippage = f.Slippage, Skipped = f.Skipped }).ToList(); }
-            StringBuilder b = new StringBuilder("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":false,\"armed\":").Append(on ? "true" : "false")
+            StringBuilder b = new StringBuilder("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":false,\"canRemove\":true,\"armed\":").Append(on ? "true" : "false")   // 0.6.6: copierFollowerRemove is known
                 .Append(",\"standDownWhy\":").Append(why != null ? CbJson.Str(why) : "null").Append(",\"leader\":");
             Account la = Find(l);
             if (l == null) b.Append("null");

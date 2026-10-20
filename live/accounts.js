@@ -658,6 +658,9 @@ function createFeed(env) {
       return send(r.msg);
     },
     copierRearm: () => S.switches.copier && send({ type: 'copierRearm', cid: cid() }),
+    /* 1.34.0 (ChartBridge 0.6.6; WORK 2026-10-20): a follower row removed (refused while it is on or the copier still holds
+       something there): its account is then its own again, so a group or an agent may trade it */
+    copierFollowerRemove: name => S.switches.copier && send({ type: 'copierFollowerRemove', cid: cid(), account: name }),
     /* 1.26.0 (ChartBridge 0.5.8): an account's group (null: None; highText: the highest close typed, G2 b) and a personal
        account's own floor and daily limit; each only once ChartBridge has sent groups (ChartBridge checks again) */
     accountGroup: (name, group, highText, rules) => {   // 1.33.0: rules (checked, with typeId) go with a join on ChartBridge 0.6.5
@@ -733,6 +736,7 @@ function mount(v, host) {
     else if (a === 'unarchive') F.accountUnarchive(id);
     else if (a === 'cancel') F.cancelFromList(id);
     else if (a === 'rearm') F.copierRearm();
+    else if (a === 'f-remove') F.copierFollowerRemove(id);   // 1.34.0
     else if (a === 'mode') F.copierSet({ mode: b.dataset.v });
     else if (a === 'trd') { P.trd = b.dataset.v; render(); }
     else if (a === 'join-no') { P.join = null; render(); }
@@ -1143,7 +1147,11 @@ function mount(v, host) {
           const llOn = r.lossLimit !== null || P.llPending.has(r.account);
           const pos = r.position && r.position.qty ? (r.position.qty > 0 ? '+' : '') + r.position.qty + ' ' + (r.root || '') : '';
           const last = hero ? hero + '\'s seat: the copier never trades it' : r.skipped ? 'Skipped: ' + r.skipped : r.lastAction ? r.lastAction + (r.lastAt ? ' ' + hms(r.lastAt) : '') : '';
-          return row('f|' + r.account + '|' + r.mark, `<span role="cell" class="apg-fol">${ci(r.account, 'b', r.mark === 'LIVE' ? 'A LIVE account: copies to it are real orders' : 'NinjaTrader Sim account')}<span class="apg-mark ${r.mark === 'LIVE' ? 'live' : 'sim'}">${r.mark}</span></span>` +
+          /* 1.34.0 (WORK 2026-10-20): a saved follower row is marked (even off, it keeps its account out of groups and agents), and
+             an off one has Remove (ChartBridge 0.6.6 refuses it while the copier still holds something there) */
+          const rm = r.saved && !r.on && C.canRemove === true ? `<button type="button" class="ac-btn apg-frm" data-act="f-remove" data-id="${esc(r.account)}" title="Remove ${esc(r.account)} as a follower: it is an account of its own again (a group or an agent may trade it). Refused while the copier still holds a position or orders there.">Remove</button>` : '';
+          const fmark = r.saved ? `<span class="apg-mark apg-fmark" title="${esc(r.account)} is a copier follower${r.on ? '' : ' (off)'}: a group entry and the agents leave it out until it is removed">follower</span>` : '';
+          return row('f|' + r.account + '|' + r.mark + '|' + (r.saved ? 's' : '') + (rm ? 'r' : ''), `<span role="cell" class="apg-fol">${ci(r.account, 'b', r.mark === 'LIVE' ? 'A LIVE account: copies to it are real orders' : 'NinjaTrader Sim account')}<span class="apg-mark ${r.mark === 'LIVE' ? 'live' : 'sim'}">${r.mark}</span>${fmark}${rm}</span>` +
             `<span role="cell"><input type="checkbox" data-act="f-on" ${pr({ checked: r.on, disabled: dis })} aria-label="Copy to ${esc(r.account)}"></span>` +
             `<span role="cell"><select class="ws-sel apg-sel" data-act="f-qty" ${pr({ value: String(r.qty), disabled: dis })} aria-label="Contracts per leader contract">${qtyOpts}</select></span>` +
             `<span role="cell"><select class="ws-sel apg-sel" data-act="f-size" ${pr({ value: r.size, disabled: dis })} aria-label="Micro or mini"><option value="micro">micro</option><option value="mini">mini</option></select></span>` +

@@ -167,6 +167,7 @@ public static class CopierHarness
             FilesAndRestart();
             RecoveredWithoutLeader();   // review 2 finding 6
             CopierThread();
+            RemoveFollower();   // 0.6.6 (WORK 2026-10-20): a follower row removed from the page (last: it changes the followers)
         }
         catch (Exception ex) { Check(false, "copier harness threw: " + ex); }
         finally
@@ -1546,6 +1547,28 @@ public static class CopierHarness
         lstop.OrderState = OrderState.Cancelled; fstop2.OrderState = OrderState.Cancelled;
         Pos(lead, mnq, 0); Pos(f1, mnq, 0); Booked();
         ChartBridgeCopier.Stop();
+    }
+
+    // ------------------------------------------------------------ 0.6.6 (WORK 2026-10-20): an OFF follower row left from tests kept
+    // its account out of every group entry, and the page could not remove it
+    static void RemoveFollower()
+    {
+        string file = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "ChartBridge", "copier.txt");
+        foreach (Instrument i in new[] { mnq, nq }) Pos(f4, i, 0);
+        sent.Clear(); Msg("copierFollower", Follower("SIM-F4", "true", "1", "micro", "null"));
+        Check(!Rejected(""), "0.6.6: SIM-F4 a follower, on");
+        sent.Clear(); Msg("copierFollowerRemove", "{\"type\":\"copierFollowerRemove\",\"cid\":\"r\",\"account\":\"SIM-F4\"}");
+        Check(Rejected("SIM-F4 is a copier follower that is on: turn it off first, then remove it."), "0.6.6: an ON follower is not removed (turn it off first)");
+        sent.Clear(); Msg("copierFollower", Follower("SIM-F4", "false", "1", "micro", "null"));
+        Check(ChartBridgeCopier.AgentAccountRefusal("SIM-F4") == "SIM-F4 is a copier follower", "0.6.6: an OFF follower is still the copier's (ruling 1 unchanged)");
+        sent.Clear(); Msg("copierFollowerRemove", "{\"type\":\"copierFollowerRemove\",\"cid\":\"r\",\"account\":\"SIM-F4\"}");
+        Check(!Rejected("") && !State().Contains("\"account\":\"SIM-F4\"") && !File.ReadAllText(file).Contains("follower\tSIM-F4\t"),
+              "0.6.6: an OFF follower with nothing of the copier's: removed, the pages told, copier.txt without it: " + State());
+        Check(ChartBridgeCopier.AgentAccountRefusal("SIM-F4") == null, "0.6.6: removed, it is an account of its own again (groups and agents may trade it)");
+        sent.Clear(); Msg("copierFollowerRemove", "{\"type\":\"copierFollowerRemove\",\"cid\":\"r\",\"account\":\"SIM-F4\"}");
+        Check(Rejected("SIM-F4 is not a copier follower."), "0.6.6: removing one that is not a follower: refused");
+        sent.Clear(); Msg("copierFollowerRemove", "{\"type\":\"copierFollowerRemove\",\"cid\":\"r\",\"account\":\"SIM-F4\",\"on\":false}");
+        Check(Rejected("unknown key"), "0.6.6: copierFollowerRemove takes account only");
     }
 
     // ------------------------------------------------------------ copier.txt, copier.log, a restart

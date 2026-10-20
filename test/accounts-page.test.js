@@ -254,7 +254,7 @@ test('the Account page\'s connection: client v3 right after hello, then auth; it
     s.deliver({ type: 'trading', enabled: true, accounts: ['Sim101'], maxQty: {}, switches: { accountChecks: false, orderTypes: false, strategies: false, merge: false, cancelFromList: false, copier: false, bot: false } });
     F.sent.length = 0;
     const tryAll = () => [F.feed.accountTrade('EVAL-A', true), F.feed.accountArchive('EVAL-B'), F.feed.accountUnarchive('EVAL-B'), F.feed.cancelFromList('o14'), F.feed.copierSet({ mode: 'orders' }),
-      F.feed.copierFollower({ account: 'SIM-F1', on: true, qty: 1, size: 'micro', lossLimit: null }), F.feed.copierRearm()];
+      F.feed.copierFollower({ account: 'SIM-F1', on: true, qty: 1, size: 'micro', lossLimit: null }), F.feed.copierRearm(), F.feed.copierFollowerRemove('SIM-F2')];   // 1.34.0: Remove
     assert.ok(tryAll().every(x => !x)); assert.equal(F.sent.length, 0, 'with every switch off nothing is sent');
     // a switch not strictly true is off
     s.deliver({ type: 'trading', enabled: true, accounts: [], maxQty: {}, switches: { accountChecks: 'true', cancelFromList: 1, copier: null } });
@@ -265,7 +265,8 @@ test('the Account page\'s connection: client v3 right after hello, then auth; it
     // every switch on: each action is one message with the contract's keys only (gate 8 extended, the fake's checker)
     s.deliver({ type: 'trading', enabled: true, accounts: [], maxQty: {}, switches: { accountChecks: true, orderTypes: true, strategies: true, merge: true, cancelFromList: true, copier: true, bot: true } });
     assert.ok(tryAll().every(Boolean));
-    assert.deepEqual(F.sent.map(m => m.type), ['accountTrade', 'accountArchive', 'accountUnarchive', 'cancel', 'copierSet', 'copierFollower', 'copierRearm']);
+    assert.deepEqual(F.sent.map(m => m.type), ['accountTrade', 'accountArchive', 'accountUnarchive', 'cancel', 'copierSet', 'copierFollower', 'copierRearm', 'copierFollowerRemove']);
+    assert.deepEqual(Object.keys(F.sent[7]).sort(), ['account', 'cid', 'type'], '1.34.0: copierFollowerRemove with the account only');
     for (const m of F.sent) assert.equal(V.checkKeysV3(m, JSON.stringify(m)), null, JSON.stringify(m));
     assert.equal(F.sent[1].confirm, true, 'Archive always carries confirm: true (sent only after the page\'s own confirm)');
     assert.deepEqual(Object.keys(F.sent[2]).sort(), ['account', 'cid', 'type'], 'Show (0.5.1): accountUnarchive with the account only');
