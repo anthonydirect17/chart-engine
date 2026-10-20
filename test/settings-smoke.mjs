@@ -54,7 +54,7 @@ async function rangeAfterReload(p, rootSym) {
 try {
   // 1. type 40 on NQ and reload straight away: no Enter, no click elsewhere
   {
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
     const p = await newPage(ctx);
     await pick(p, 'symSeg', 'NQ'); await pick(p, 'tfSeg', 'Range');
     await p.click(C('rangeTicks'), { clickCount: 3 }); await p.keyboard.type('40');
@@ -67,7 +67,7 @@ try {
   }
   // 2. two chart tabs: A (NQ) sets 40 with Enter; B (MNQ, opened earlier) then sets its own size
   {
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
     const a = await newPage(ctx), b = await newPage(ctx);
     await pick(b, 'symSeg', 'MNQ'); await pick(b, 'tfSeg', 'Range');
     await a.bringToFront(); await pick(a, 'symSeg', 'NQ'); await pick(a, 'tfSeg', 'Range');
@@ -82,7 +82,7 @@ try {
   }
   // 3. arrow keys and Tab also stick
   {
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
     const p = await newPage(ctx);
     await pick(p, 'symSeg', 'ES'); await pick(p, 'tfSeg', 'Range');
     await p.focus(C('rangeTicks')); for (let i = 0; i < 4; i++) await p.keyboard.press('ArrowUp');
@@ -92,7 +92,7 @@ try {
   }
   // 5. half-typed sizes (review S1): never saved as a stale prefix, never rebuilt while typing
   {
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
     const p = await newPage(ctx);
     await pick(p, 'symSeg', 'NQ'); await pick(p, 'tfSeg', 'Range');
     const storedNQ = () => p.evaluate(() => (JSON.parse(localStorage.getItem('live-range-v2') || '{}') || {}).NQ);
@@ -123,7 +123,7 @@ try {
   }
   // 4. first run after the update: the indicators and size chosen on 1.3 carry over, so the chart looks the same
   {
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
     const p = await newPage(ctx);
     await p.evaluate(() => {
       localStorage.clear();
@@ -153,7 +153,7 @@ try {
       { build: 'sample-build-3', stamp: 'cccccccccccc', hero: 'Sample Hero C', here: true, shadowOk: true },
       { build: 'sample-build-9', stamp: 'dddddddddddd', hero: null, here: true, shadowOk: true, tier: 'Good' }] });
     try {
-      const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+      const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
       const p = await ctx.newPage();
       p.on('pageerror', e => fail('pageerror: ' + e.message));
       await p.goto(`http://localhost:${GP}/live/?layout=Main`);
@@ -208,7 +208,7 @@ try {
     const received = async () => (await fetch(`http://127.0.0.1:${TP}/test/received`, { method: 'POST' })).json();
     const until = async (fn, what, ms) => { const end = Date.now() + (ms || 10000); for (;;) { let v = null; try { v = await fn(); } catch (e) { v = null; } if (v) return v; if (Date.now() > end) { fail('timed out: ' + what); return null; } await new Promise(r => setTimeout(r, 100)); } };
     try {
-      const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+      const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
       await ctx.addInitScript(() => { try { if (!localStorage.getItem('live-workspace-v1')) localStorage.setItem('live-workspace-v1', JSON.stringify({ v: 1, layouts: { Types: { panels: [{ id: 'ap', type: 'accounts', x: 0, y: 0, w: 12, h: 6 }] } } })); } catch (e) { /* blocked */ } });
       const p = await ctx.newPage();
       p.on('pageerror', e => fail('pageerror: ' + e.message));
@@ -222,7 +222,7 @@ try {
       /* the Accounts tab (1.32.0, Anthony 2026-10-19, "Text + Change"): each account's type as text with Change, or "Not set" with
          Set; the picker (Firm, Plan, Size) opens in a row under the account, one row at a time */
       await until(async () => (await p.$$(`${AP} .apg-ttext`)).length >= 4, 'the Account type cells');
-      const cellOf = id => p.evaluate(([ap, id]) => { const r = document.querySelector(`${ap} .gr-row[data-k="${id}"] .apg-type`); if (!r) return null;
+      const cellOf = id => p.evaluate(([ap, id]) => { const r = document.querySelector(`${ap} .gr-row[data-k="dr|${id}"] .apg-type`); if (!r) return null;
         const t = r.querySelector('.apg-ttext'), b = r.querySelector('[data-act="type-edit"]');
         return { text: t.textContent, tip: t.title, full: t.scrollWidth <= t.clientWidth + 1, off: t.classList.contains('apg-toff'), btn: b ? b.textContent : null }; }, [AP, id]);
       const pickOf = id => p.evaluate(([ap, id]) => Object.fromEntries(['acct-firm', 'acct-plan', 'acct-type'].map(k => { const e = document.querySelector(`${ap} .apg-typeask select[data-act="${k}"][data-id="${id}"]`);
@@ -238,18 +238,17 @@ try {
       check((await p.$$(`${AP} select.apg-tpick`)).length === 0 && (await rowsOpen()).length === 0, 'no select in the table until Change or Set');
       const fitT = await p.evaluate(sel => [...document.querySelectorAll(sel)].every(c => c.scrollWidth <= c.clientWidth + 1 && [...c.querySelectorAll('button')].every(x => x.getBoundingClientRect().right <= c.getBoundingClientRect().right + 0.5 && x.getBoundingClientRect().width >= x.scrollWidth)), `${AP} .apg-type`);
       check(fitT, 'the text, Change (or Set) and Apply fit the Account type cell at 1366 x 768 (the text cut at the end where it is long, whole in the tooltip)');
-      const fullRows = await p.$$eval(`${AP} .apg-acc .apg-ttext`, els => els.map(e => e.closest('.gr-row').dataset.k + (e.scrollWidth <= e.clientWidth + 1 ? ' full' : ' cut') + ' "' + e.textContent + '"'));
+      const fullRows = await p.$$eval(`${AP} .apg-drawerrow .apg-ttext`, els => els.map(e => e.closest('.gr-row').dataset.k + (e.scrollWidth <= e.clientWidth + 1 ? ' full' : ' cut') + ' "' + e.textContent + '"'));
       console.log('  info: Account type text at 1366: ' + fullRows.join('; '));
-      check((await p.$$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]`, els => els.map(e => e.textContent))).includes('Account type'), 'the Account type column');
-      /* 1.32.0 (Anthony 2026-10-19, "Narrower Room"): the column 244 px, taken from the Room only; at 1366 the names "LucidFlex 50K
-         Eval", "LucidPro 150K Funded" and "Trading Combine 150K" show whole beside Change, and beside Change and Apply (each name put in
-         a cell of each kind for the measure, then put back); the Room's whole text first in its tooltip */
+      /* 1.34.0 (Anthony 2026-10-20: the tab "too messy"): the type moved from a 244 px column into each account's drawer (⋯),
+         where it takes the width it needs; at 1366 the names "LucidFlex 50K Eval", "LucidPro 150K Funded" and "Trading Combine 150K"
+         show whole beside Change, and beside Change and Apply (each name put in a cell of each kind for the measure, then put back) */
+      check((await p.$$eval(`${AP} .apg-acc-g .apg-dlbl`, els => els.map(e => e.textContent))).includes('Account type'), 'the Account type in the drawer');
       const colW = await p.evaluate(sel => { const g = document.querySelector(sel), h = n => Math.round(g.querySelector(`.gr-h [role="columnheader"]:nth-child(${n})`).getBoundingClientRect().width);
-        return { room: h(6), type: h(8) }; }, `${AP} .apg-acc-g`);
-      check(colW.type === 244, 'the Account type column at 244 px at 1366: ' + JSON.stringify(colW));
+        return { room: h(5) }; }, `${AP} .apg-acc-g`);
       const NAMES = ['LucidFlex 50K Eval', 'LucidPro 150K Funded', 'Trading Combine 150K'];
       const whole = await p.evaluate(([ap, names]) => {
-        const cells = [...document.querySelectorAll(`${ap} .apg-acc .apg-type`)].filter(c => c.querySelector('[data-act="type-edit"]'));
+        const cells = [...document.querySelectorAll(`${ap} .apg-drawerrow .apg-type`)].filter(c => c.querySelector('[data-act="type-edit"]'));
         const kinds = { change: cells.find(c => !c.querySelector('[data-act="apply-type"]')), changeApply: cells.find(c => c.querySelector('[data-act="apply-type"]')) };
         const res = {};
         for (const [k, c] of Object.entries(kinds)) {
@@ -263,11 +262,12 @@ try {
       check(Object.values(whole).every(x => !/cut|no such/.test(x)), 'at 1366 the three names show whole beside Change, and beside Change and Apply: ' + JSON.stringify(whole));
       const realW = await cellOf('SIM-A'), realP = await cellOf('Sim101');
       check(realW && realW.full && realP && realP.full && realP.text === 'LucidPro 150K Funded', 'SIM-A "LucidFlex 50K Eval" and Sim101 "LucidPro 150K Funded" whole in the table: ' + JSON.stringify([realW && realW.full, realP && realP.full]));
-      const longW = await p.evaluate(ap => { const c = document.querySelector(`${ap} .apg-acc .apg-type`), t = c.querySelector('.apg-ttext'), was = t.textContent;
+      const longW = await p.evaluate(ap => { const c = document.querySelector(`${ap} .apg-drawerrow .apg-type`), t = c.querySelector('.apg-ttext'), was = t.textContent;
         t.textContent = 'LucidDaily 150K Eval Intraday DLL Off'; const r = t.scrollWidth <= t.clientWidth + 1 ? 'whole' : 'cut'; t.textContent = was; return r; }, AP);
       console.log('  info: "LucidDaily 150K Eval Intraday DLL Off" beside Change at 1366: ' + longW + ' (cut is fine, whole in the tooltip)');
-      const roomTips = await p.$$eval(`${AP} .apg-acc .apg-room`, els => els.map(e => ({ text: e.textContent, cut: e.scrollWidth > e.clientWidth + 1, first: (e.title || '').split('\n')[0] })));
-      check(roomTips.length > 0 && roomTips.every(x => x.text === '-' || x.first === x.text), 'the Room\'s whole text first in its tooltip: ' + JSON.stringify(roomTips.filter(x => x.cut)));
+      /* 1.34.0: the row shows the tightest room in whole dollars; the whole text (every room, with cents) first in its tooltip */
+      const roomTips = await p.$$eval(`${AP} .apg-acc .apg-rtext`, els => els.map(e => ({ text: e.textContent, cut: e.scrollWidth > e.clientWidth + 1, first: (e.title || '').split('\n')[0] })));
+      check(roomTips.length > 0 && roomTips.every(x => x.text === '-' || (x.first && /daily|floor|target|DD|DL/.test(x.first) && !x.cut)), 'the Room short and whole on the row, its whole text first in its tooltip: ' + JSON.stringify(roomTips));
       console.log('  info: Room at 1366: ' + colW.room + ' px; cut cells: ' + roomTips.filter(x => x.cut).length + ' of ' + roomTips.length);
       await p.screenshot({ path: path.join(out, 'settings-types-text-1366.png') });
       /* Set on SIM-C: the row, Firm first (the firms in use first: FundedNext from its Desk row's firm, Lucid, Topstep; then A to Z) */
@@ -344,7 +344,7 @@ try {
       await p.selectOption(`${AP} select[data-act="acct-plan"][data-id="SIM-C"]`, 'LucidFlex');
       await until(async () => !(await pickOf('SIM-C'))['acct-type'].dis, 'SIM-C LucidFlex sizes');
       check(putsNow() === 0, 'still nothing sent before the size');
-      await p.evaluate(sel => { window.__seen = []; window.__sampler = setInterval(() => { const x = document.querySelector(sel); window.__seen.push(x ? x.textContent : '?'); }, 15); }, `${AP} .gr-row[data-k="SIM-C"] .apg-ttext`);
+      await p.evaluate(sel => { window.__seen = []; window.__sampler = setInterval(() => { const x = document.querySelector(sel); window.__seen.push(x ? x.textContent : "?"); }, 15); }, `${AP} .gr-row[data-k="dr|SIM-C"] .apg-ttext`);
       await p.selectOption(`${AP} select[data-act="acct-type"][data-id="SIM-C"]`, 'lucid-50k-flex-no-dll');
       await p.waitForTimeout(300);
       check(putsNow() === 0 && (await rowsOpen()).length === 1 && (await cellOf('SIM-C')).text === 'Not set', 'choosing the Size sends nothing (Save does)');
@@ -463,8 +463,9 @@ try {
       await p.click('#wsSet');
       await until(async () => !/rules differ/.test(await p.$eval('#wsGroups .gp-row[data-id="g1"]', e => e.textContent)), 'no differ line once saved from the type');
       await p.keyboard.press('Escape');
-      const warn = await until(() => p.$eval(`${AP} .apg-twarn`, e => e.textContent), 'the Accounts tab warning for SIM-B');
-      check(/SIM-B is Lucid LucidPro 150K Funded; its group Group A was filled from Lucid LucidFlex 50K Eval\. A warning only: nothing is blocked\./.test(warn || ''), 'Accounts tab: SIM-B\'s warning row: ' + warn);
+      /* 1.34.0: the warning is the amber flag on SIM-B's name (its words in the flag's tooltip and in the drawer), not a row */
+      const warn = await until(() => p.$eval(`${AP} .gr-row[data-k="SIM-B"] .apg-flag:not(.off)`, e => e.title).catch(() => null), 'the Accounts tab warning for SIM-B');
+      check(/SIM-B is Lucid LucidPro 150K Funded; its group Group A was filled from Lucid LucidFlex 50K Eval/.test(warn || '') && !(await p.$(`${AP} .apg-twarn`)), 'Accounts tab: SIM-B\'s amber flag says it: ' + warn);
       const cb = await cellOf('SIM-B');
       check(cb && cb.off && cb.btn === 'Change', 'SIM-B\'s type marked, Change still offered: ' + JSON.stringify(cb));
       /* The Desk edits the type (version 2): after a reload the page reads it and the group differs from the current version */
@@ -484,7 +485,7 @@ try {
       const cd = await cellOf('SIM-A'), cdc = await cellOf('SIM-C');
       check(cd && cd.text === 'not known' && cdc && cdc.text === 'not known' && cd.tip === 'The Desk is not reachable, so the account\'s type cannot be read now' && (await p.$$(`${AP} [data-act="type-edit"]`)).length === 0 &&
         (await p.$$(`${AP} [data-act="apply-type"]`)).length === 0 && (await p.$$(`${AP} .apg-typeask`)).length === 0, 'The Desk down: "not known" with the reason in the tooltip, no Change, Set, Apply or row: ' + JSON.stringify([cd, cdc]));
-      check(!(await p.$$eval(`${AP} .apg-acc .apg-ttext`, els => els.map(e => e.textContent))).includes('Not set'), 'no "Not set" while The Desk is down');
+      check(!(await p.$$eval(`${AP} .apg-drawerrow .apg-ttext`, els => els.map(e => e.textContent))).includes('Not set'), 'no "Not set" while The Desk is down');
       await p.screenshot({ path: path.join(out, 'settings-types-desk-down-1366.png') });
       await p.click('#wsSet');
       await p.click('#wsGroups [data-gp="edit"][data-id="g2"]');
@@ -498,7 +499,7 @@ try {
       //    1366 x 768 no-scroll rule in the fullest Settings (v3, The Desk, groups): every section open (the default), some
       //    closed, all closed
       desk.down = false;
-      const ctx8 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+      const ctx8 = await browser.newContext({ viewport: { width: 1366, height: 768 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
       const q = await ctx8.newPage();
       q.on('pageerror', e => fail('pageerror: ' + e.message));
       const open8 = async () => {

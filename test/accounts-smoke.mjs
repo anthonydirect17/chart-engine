@@ -72,14 +72,14 @@ const tab = async (page, id) => { await page.click(`${AP} .ac-tab[data-tab="${id
 const rows = (page, sel) => page.$$eval(`${AP} ${sel} .gr-row:not(.gr-h)`, els => els.map(e => ({ k: e.dataset.k, text: e.textContent, cls: e.className })));
 const quoteRows = page => page.$$eval('.ws-panel[data-id="qb"] [data-root]', els => els.map(e => ({ root: e.dataset.root, cls: e.className, last: e.querySelector('[data-q="last"]').textContent, chg: e.querySelector('[data-q="chg"]').textContent })));
 /* 1.26.0: the Group dropdown and My floor and My daily have no config switch (ChartBridge 0.5.8 has none for groups): not counted here */
-const controlsOnPage = page => page.$$eval(`${AP} .ac-list input:not([data-act^="my-"]), ${AP} .ac-list select:not(.apg-grp), ${AP} .ac-list button[data-act="archive"], ${AP} .ac-list button[data-act="unarchive"], ${AP} .ac-list button[data-act="cancel"], ${AP} .ac-list button[data-act="rearm"], ${AP} .ac-list button[data-act="mode"]`, els => els.length);
+const controlsOnPage = page => page.$$eval(`${AP} .ac-list input:not([data-act^="my-"]):not([data-act="label"]), ${AP} .ac-list select:not(.apg-grp), ${AP} .ac-list button[data-act="archive"], ${AP} .ac-list button[data-act="unarchive"], ${AP} .ac-list button[data-act="cancel"], ${AP} .ac-list button[data-act="rearm"], ${AP} .ac-list button[data-act="mode"]`, els => els.length);
 
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 try {
   await startBridge(PORT, ['--v3', '--trading', '--test-controls', '--data-037', '--gone-grace-ms=1500', '--max-qty=MNQ:9,NQ:4', '--test-pin=' + TEST_PIN]);
   /* ================================================================ 1. every switch on */
   console.log('every v3 switch on');
-  const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+  const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
   await ctx.addInitScript(seed, [{ Acc: { panels: LAYOUT } }]);
   const page = await openWs(ctx, PORT, 'Acc');
   const feed = await until(() => page.evaluate(() => { const f = window.workspace.accountFeed(); return f && f.enabled && f.switches.copier ? f : null; }), 'the Account page signed in with the switches', 20000);
@@ -223,7 +223,7 @@ try {
   /* ================================================================ 2. every switch off */
   console.log('every v3 switch off');
   await startBridge(OFF_PORT, ['--v3', '--v3-off=accountChecks,orderTypes,strategies,merge,cancelFromList,copier,bot', '--trading', '--test-controls', '--data-037', '--gone-grace-ms=1500', '--test-pin=' + TEST_PIN]);
-  const ctx2 = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+  const ctx2 = await browser.newContext({ viewport: { width: 1600, height: 900 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
   await ctx2.addInitScript(seed, [{ Acc: { panels: LAYOUT } }]);
   const p2 = await openWs(ctx2, OFF_PORT, 'Acc');
   const f2 = await until(() => p2.evaluate(() => { const f = window.workspace.accountFeed(); return f && f.enabled ? f : null; }), 'signed in (switches off)', 20000);
@@ -246,17 +246,21 @@ try {
   console.log('ChartBridge 0.5.8: groups, at 1366 x 768');
   const GP_PORT = PORT + 3;
   await startBridge(GP_PORT, ['--v3', '--trading', '--test-controls', '--data-037', '--groups', '--test-pin=' + TEST_PIN]);
-  const ctx4 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  const ctx4 = await browser.newContext({ viewport: { width: 1366, height: 768 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
   await ctx4.addInitScript(seed, [{ Acc: { panels: [{ id: 'ap', type: 'accounts', x: 0, y: 0, w: 12, h: 6 }] } }]);
   const p4 = await openWs(ctx4, GP_PORT, 'Acc');
   await until(async () => (await p4.$$(`${AP} select.apg-grp`)).length >= 3, 'the Group dropdowns');
   const heads4 = await p4.$$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]`, els => els.map(e => e.textContent));
-  check(heads4.includes('Group') && heads4.includes('Limits'), 'the Accounts tab gets Group and Limits (' + heads4.join(', ') + ')');
+  /* 1.34.0: Group on the row; the dropdown, type and Limits in each account's drawer (open here: "Settings for every account") */
+  const dl4 = await p4.$$eval(`${AP} .apg-acc-g .apg-dlbl`, els => [...new Set(els.map(e => e.textContent))]);
+  check(heads4.includes('Group') && dl4.includes('Group') && dl4.includes('Limits'), 'the Accounts tab gets Group, and the drawer Group and Limits (' + heads4.join(', ') + ' / ' + dl4.join(', ') + ')');
   const grp = await p4.$eval(`${AP} select.apg-grp[data-id="EVAL-A"]`, e => ({ v: e.value, opts: [...e.options].map(o => o.textContent) }));
   check(grp.v === 'g1' && grp.opts.join() === 'None,Lucid,Apex', 'EVAL-A in Lucid; the dropdown offers None and every group (' + JSON.stringify(grp) + ')');
-  const roomA = await p4.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-room`, e => e.textContent);
-  check(/daily · .* to floor · .* to target/.test(roomA), 'the room from ChartBridge\'s own numbers: daily, to floor, to target (' + roomA + ')');
-  check(await p4.$(`${AP} .gr-row[data-k="Sim101"] input[data-act="my-floor"]`) !== null && await p4.$(`${AP} .gr-row[data-k="EVAL-A"] input[data-act="my-floor"]`) === null, 'My floor and My daily only for an account in no group');
+  /* 1.34.0: the row shows the tightest room in whole dollars with a bar; its tooltip every room (daily, floor, target) */
+  const roomA = await p4.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-rtext`, e => ({ text: e.textContent, tip: e.title }));
+  check(/^\$[\d,]+ (daily|to floor)$/.test(roomA.text) && /daily · .* to floor · .* to target/.test(roomA.tip), 'the room from ChartBridge\'s own numbers: the tightest on the row, daily, to floor, to target in its tooltip (' + JSON.stringify(roomA) + ')');
+  check(!!(await p4.$(`${AP} .gr-row[data-k="EVAL-A"] .apg-track .apg-bar`)), '1.34.0: a bar of the room used under it');
+  check(await p4.$(`${AP} .gr-row[data-k="dr|Sim101"] input[data-act="my-floor"]`) !== null && await p4.$(`${AP} .gr-row[data-k="dr|EVAL-A"] input[data-act="my-floor"]`) === null, 'My floor and My daily only for an account in no group (in its drawer)');
   // G2 (b): putting SIM-F1 in Lucid asks for its highest close once, prefilled
   await p4.selectOption(`${AP} select.apg-grp[data-id="SIM-F1"]`, 'g1');
   const ask = await until(() => p4.$(`${AP} .apg-join`), 'the highest close question');
@@ -310,21 +314,87 @@ try {
     const q = s => document.querySelector(ap + ' ' + s);
     const heads = [...document.querySelectorAll(ap + ' .apg-acc-g .gr-h [role="columnheader"]')].map(e => e.textContent);
     const row = q('.gr-row[data-k="EVAL-A"]'), cells = row ? [...row.querySelectorAll('[role="cell"]')].map(e => e.textContent) : [];
-    return { heads, cells, note: (q('.apg-stalenote') || {}).textContent || '', foot: (q('.apg-foot') || {}).textContent || '', op: row ? getComputedStyle(row).opacity : '' };
+    const dr = q('.gr-row[data-k="dr|EVAL-A"]');
+    return { heads, cells, drawer: dr ? dr.textContent : '', unk: !!(row && row.querySelector('.apg-dot.unk')), note: (q('.apg-stalenote') || {}).textContent || '', foot: (q('.apg-foot') || {}).textContent || '', op: row ? getComputedStyle(row).opacity : '' };
   }, AP);
-  check(st.heads.includes('Group') && st.heads.includes('Limits') && st.cells.filter(x => x === 'not known (not connected)').length >= 2,
-    'after the drop the Group and Limits columns stay, "not known (not connected)" (' + JSON.stringify(st.cells) + ')');
-  check(st.cells[1] === 'unknown' && +st.op < 0.9, 'Conn is unknown and the row is dimmed (' + st.cells[1] + ', opacity ' + st.op + ')');
+  check(st.heads.includes('Group') && st.cells.includes('not known') && (st.drawer.match(/not known \(not connected\)/g) || []).length >= 2,
+    'after the drop the Group column stays ("not known"), and the drawer\'s Group and Limits say "not known (not connected)" (' + JSON.stringify(st.cells) + ' / ' + st.drawer + ')');
+  check(st.unk && +st.op < 0.9, '1.34.0: the connection dot says not known and the row is dimmed (opacity ' + st.op + ')');
   check(/^As of \d\d:\d\d:\d\d ET \(not connected\)/.test(st.note) && /As of \d\d:\d\d:\d\d ET \(not connected\): ChartBridge's last balances, positions and orders, not current\./.test(st.foot),
     'the note and the footer say as of when, not connected (' + st.foot + ')');
   await p4.screenshot({ path: path.join(out, 'accounts-9-dropped-1366.png') });
   await ctx4.close();
   }
 
+  /* ================================================================ 5. 1.34.0 (Anthony 2026-10-20): the clean Accounts tab, with
+     ChartBridge 0.6.6 (the firm's minimum seeds the floor; NinjaTrader's own figure beside the room). A fresh browser: nothing
+     folded open, as Anthony first sees it */
+  {
+  console.log('1.34.0: the clean Accounts tab, ChartBridge 0.6.6, at 1366 x 768');
+  const CL_PORT = PORT + 4;
+  await startBridge(CL_PORT, ['--v3', '--trading', '--test-controls', '--data-037', '--groups', '--firm-floor', '--version=0.6.6', '--test-pin=' + TEST_PIN]);
+  const ctx5 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  await ctx5.addInitScript(seed, [{ Acc: { panels: [{ id: 'ap', type: 'accounts', x: 0, y: 0, w: 12, h: 6 }] } }]);
+  const p5 = await openWs(ctx5, CL_PORT, 'Acc');
+  await until(async () => (await rows(p5, '.apg-acc-g')).some(r => r.k === 'EVAL-A'), 'the Accounts rows');
+  const heads5 = await p5.$$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]`, els => els.map(e => e.textContent));
+  check(heads5.join('|') === 'Account|Balance|Today|Position|Room|Group|Trade|', 'the row\'s columns: Account, Balance, Today, Position, Room, Group, Trade and ⋯ (no Conn; Position kept): ' + heads5.join(', '));
+  const r5 = await rows(p5, '.apg-acc-g');
+  check(r5.some(r => r.k === 'sec|g|g1') && r5.some(r => r.k === 'sec|sim') && !r5.some(r => r.k === 'Sim101'), 'rows by group, then the Sim accounts, folded (' + r5.map(r => r.k).join(', ') + ')');
+  const inRows = await p5.$$eval(`${AP} .apg-acc-g .gr-row.apg-acc`, els => els.map(e => e.querySelectorAll('select, input:not([data-act="trade"]), button:not([data-act="drawer"])').length));
+  check(inRows.length > 0 && inRows.every(n => n === 0), 'no select, box or button on a row but Trade and ⋯ (the settings are in the drawer)');
+  await p5.click(`${AP} button[data-act="sim-toggle"]`);
+  await until(async () => (await rows(p5, '.apg-acc-g')).some(r => r.k === 'Sim101'), 'Show: the Sim accounts');
+  await p5.screenshot({ path: path.join(out, 'accounts-10-clean-1366.png') });
+  // the drawer
+  await p5.click(`${AP} button[data-act="drawer"][data-id="EVAL-A"]`);
+  const dr = await until(() => p5.$eval(`${AP} .gr-row[data-k="dr|EVAL-A"]`, e => [...e.querySelectorAll('.apg-dlbl')].map(x => x.textContent)), 'EVAL-A\'s drawer');
+  check(dr && ['Group', 'Limits', 'Firm minimum', 'Label'].every(x => dr.includes(x)) && !!(await p5.$(`${AP} .gr-row[data-k="dr|EVAL-A"] select.apg-grp`)), 'the drawer: Group (its dropdown), Limits, Firm minimum, Label: ' + JSON.stringify(dr));
+  check((await p5.$$(`${AP} .apg-drawerrow`)).length === 1, 'one drawer open at a time');
+  // a label, kept in this browser
+  await p5.fill(`${AP} input[data-act="label"][data-id="EVAL-A"]`, 'e50');
+  await p5.press(`${AP} input[data-act="label"][data-id="EVAL-A"]`, 'Enter');
+  await p5.click(`${AP} .apg-foot`);
+  const lab = await until(async () => { const x = await p5.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-name .b`, e => ({ t: e.textContent, tip: e.title })); return x.t === 'e50' ? x : null; }, 'EVAL-A shown as e50');
+  check(lab && /^EVAL-A/.test(lab.tip), 'the label on the row, the full name in its tooltip: ' + JSON.stringify(lab));
+  // NinjaTrader's own figure differs from the computed room: the amber flag says so
+  await control(CL_PORT, 'nt-room', { account: 'EVAL-A', v: '1885.5' });
+  const flag = await until(() => p5.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-flag:not(.off)`, e => e.title).catch(() => null), 'EVAL-A\'s flag');
+  check(/NinjaTrader shows \$1,886 to the floor, ChartBridge \$[\d,]+ \(from the firm's rules\)/.test(flag || ''), 'an amber flag when NinjaTrader\'s figure differs, its words in the tooltip: ' + flag);
+  // the firm's minimum seeds the floor
+  const before = await control(CL_PORT, 'received');
+  await p5.fill(`${AP} input[data-act="firm-min"][data-id="EVAL-A"]`, '49500');
+  await p5.click(`${AP} button[data-act="firm-min-set"][data-id="EVAL-A"]`);
+  const fl = await until(async () => { const a = (await v3(CL_PORT)).accounts.list.find(x => x.name === 'EVAL-A'); return a && a.floor === 49500 ? a : null; }, 'EVAL-A\'s floor from the firm\'s minimum');
+  check(!!fl && fl.src.roomFloor === 'computed', 'firmMinimum: ChartBridge\'s floor is the firm\'s 49,500, the room computed from it (' + JSON.stringify(fl && { floor: fl.floor, roomFloor: fl.roomFloor, nt: fl.roomFloorNt }) + ')');
+  const after = await control(CL_PORT, 'received');
+  check((after.types.firmMinimum || 0) === (before.types.firmMinimum || 0) + 1, 'one firmMinimum sent');
+  // column widths: drag the Account column 80 px wider; kept after a reload; a double-click gives its default back
+  const wOf = () => p5.$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]:nth-child(1)`, e => Math.round(e.getBoundingClientRect().width));
+  // the list re-renders as the firm minimum's accounts come back: the handle is read once it is laid out
+  const hb = await until(() => p5.$eval(`${AP} .apg-rs[data-col="0"]`, e => { const r = e.getBoundingClientRect(); return r.width > 0 ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }).catch(() => null), 'the Account column\'s edge laid out');
+  const w0 = await until(async () => (await wOf()) || null, 'the Account column laid out');
+  await p5.mouse.move(hb.x, hb.y); await p5.mouse.down(); await p5.mouse.move(hb.x + 40, hb.y, { steps: 4 }); await p5.mouse.move(hb.x + 80, hb.y, { steps: 4 }); await p5.mouse.up();
+  const w1 = await until(async () => { const w = await wOf(); return Math.abs(w - (w0 + 80)) <= 3 ? w : null; }, 'the Account column 80 px wider');
+  check(w1 !== null, 'a column dragged wider at its header\'s edge: ' + w0 + ' to ' + w1 + ' px');
+  await p5.reload();
+  await p5.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p5, TEST_PIN);
+  await until(async () => (await rows(p5, '.apg-acc-g')).some(r => r.k === 'EVAL-A'), 'the rows after a reload');
+  const w2 = await wOf();
+  check(Math.abs(w2 - w1) <= 3 && (await p5.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-name .b`, e => e.textContent)) === 'e50' && (await rows(p5, '.apg-acc-g')).some(r => r.k === 'Sim101'),
+    'after a reload: the width, the label and the open Sim section kept in this browser (' + w2 + ' px)');
+  await p5.dblclick(`${AP} .apg-rs[data-col="0"]`);
+  const w3 = await until(async () => { const w = await wOf(); return Math.abs(w - w0) <= 3 ? w : null; }, 'the default width again');
+  check(w3 !== null, 'a double-click on the edge: the default width again (' + w3 + ' px)');
+  check(await p5.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll at 1366');
+  await p5.screenshot({ path: path.join(out, 'accounts-11-clean-drawer-1366.png') });
+  await ctx5.close();
+  }
+
   /* ================================================================ 3. ChartBridge 0.3.8: no v3 */
   console.log('ChartBridge 0.3.8 (no v3)');
   await startBridge(OLD_PORT, ['--trading', '--test-controls', '--data-037', '--version=0.3.8', '--test-pin=' + TEST_PIN]);
-  const ctx3 = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+  const ctx3 = await browser.newContext({ viewport: { width: 1600, height: 900 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
   await ctx3.addInitScript(seed, [{ Acc: { panels: LAYOUT } }]);
   const p3 = await openWs(ctx3, OLD_PORT, 'Acc');
   await until(async () => /needs ChartBridge 0\.4\.0 or newer/.test(await p3.$eval(AP, e => e.textContent)), 'the Account page says it needs 0.4.0');

@@ -149,3 +149,47 @@
 .apg-mrules { align-items: center; }
 .apg-mrules .apg-mfloor { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apg-redit { flex: none; }
+
+/* ---------------- 1.34.0 (Anthony 2026-10-20: "this accounts tab needs cleaned up, its too messy, too much info in one area";
+   "I do like to see the position on this screen, so leave that, make the rows or columns adjustable"): the lean row, the
+   settings drawer (⋯), sections by group, an amber flag, and column widths dragged at the header's edges (kept here) */
+.apg-acc-g.apg-acc2 .gr-row, .ws-panel.gr-narrow .apg-acc-g.apg-acc2 .gr-row { grid-template-columns: var(--apg-cols); column-gap: 8px; }
+.ws-panel.gr-narrow .apg-acc-g.apg-acc2 .gr-row > * { visibility: visible; }
+.apg-acc-g.apg-acc2 .gr-row.apg-ask, .apg-acc-g.apg-acc2 .gr-row.apg-secrow,
+.ws-panel.gr-narrow .apg-acc-g.apg-acc2 .gr-row.apg-ask, .ws-panel.gr-narrow .apg-acc-g.apg-acc2 .gr-row.apg-secrow { grid-template-columns: minmax(0, 1fr); }
+.apg-acc2 .gr-h > span { position: relative; }
+.apg-rs { position: absolute; top: -2px; bottom: -2px; right: 0; width: 8px; cursor: col-resize; z-index: 2; }
+.apg-rs::after { content: ''; position: absolute; top: 3px; bottom: 3px; right: 0; width: 1px; background: var(--ws-line2); opacity: 0; }
+.apg-acc2 .gr-h:hover .apg-rs::after, .apg-rs.on::after { opacity: 1; }
+.apg-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.apg-name > .b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apg-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: transparent; }
+.apg-dot.down { background: #E0445E; }
+.apg-dot.unk { background: var(--ws-muted); }
+.apg-flag { flex: none; font: 700 10px/14px var(--ws-sans); width: 14px; height: 14px; text-align: center; border-radius: 50%; color: #1A1206; background: #F5C977; cursor: help; }
+.apg-flag.off { display: none; }
+.apg-room { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 2px; min-width: 0; }
+.apg-rtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.apg-track { display: block; width: 100%; max-width: 120px; height: 3px; border-radius: 2px; background: var(--ws-line2); overflow: hidden; }
+.apg-bar { display: block; height: 100%; background: #6FA8DC; }
+.apg-bar.apg-amber { background: #F5C977; } .apg-bar.apg-red { background: #E0445E; }
+.apg-bn { width: 0; } .apg-b0 { width: 0; } .apg-b1 { width: 10%; } .apg-b2 { width: 20%; } .apg-b3 { width: 30%; } .apg-b4 { width: 40%; } .apg-b5 { width: 50%; }
+.apg-b6 { width: 60%; } .apg-b7 { width: 70%; } .apg-b8 { width: 80%; } .apg-b9 { width: 90%; } .apg-b10 { width: 100%; }
+.apg-more { padding: 0 6px; font-size: 14px; line-height: 16px; }
+.apg-more[aria-expanded="true"] { border-color: var(--ws-accent, #8B7CF6); }
+.apg-secrow { background: transparent; }
+.apg-sec { display: flex; align-items: center; gap: 10px; padding-top: 6px; border-bottom: 1px solid var(--ws-line2); }
+.apg-stitle { font: 600 11px var(--ws-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ws-muted); }
+.apg-stot { font: 11px var(--ws-mono); color: var(--ws-muted); }
+.apg-simtg { margin-left: auto; padding: 0 8px; font-size: 11px; }
+.apg-drawer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 6px 4px 8px 12px; border-left: 2px solid var(--ws-line2); }
+.apg-dfield { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.apg-dlbl { font: 600 10px var(--ws-sans); letter-spacing: .05em; text-transform: uppercase; color: var(--ws-muted); }
+.apg-dflags { flex-basis: 100%; color: #F5C977; font-size: 11px; }
+.apg-fmin, .apg-label { width: 110px; }
+.apg-acc-top { display: flex; justify-content: flex-end; padding: 2px 0 4px; }
+.apg-alltg { font-size: 11px; padding: 1px 8px; }
+.apg-alltg[aria-pressed="true"] { border-color: var(--ws-accent, #8B7CF6); }
+/* in the drawer the type, the limits and their buttons take the width they need */
+.apg-drawer .apg-type, .apg-drawer .apg-my { overflow: visible; }
+.apg-drawer .apg-type .apg-ttext { flex: none; overflow: visible; }

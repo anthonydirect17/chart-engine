@@ -348,7 +348,7 @@ test('1.31.0 (audit C6): after a drop the Accounts tab dims the last snapshot as
   assert.match(js, /if \(S\.got && S\.lostAt === null\) S\.lostAt = Date\.now\(\);/, 'the drop time, once');
   assert.match(js, /S\.accounts = list; S\.got = true; S\.lostAt = null;/, 'a fresh accounts list is current again');
   assert.match(js, /const grpKnown = !!S\.groups, grpOn = grpKnown \|\| S\.hadGroups,/);
-  assert.match(js, /stale \? c\('unknown', 'warn'/);
+  assert.match(js, /stale \? 'apg-dot unk'/, '1.34.0: the connection dot says not known');
   assert.match(js, /'As of ' \+ hms\(S\.lostAt\) \+ ' ET \(not connected\): ChartBridge\\'s last balances, positions and orders, not current\.'/);
   assert.match(read('live/accounts.css'), /\.apg-stale \.gr-row:not\(\.gr-h\) \{ opacity: \.5; \}/);
 });
@@ -365,7 +365,9 @@ test('1.26.0: the Accounts tab gets Group and Limits only once ChartBridge sends
   const src = read('live/accounts.js'), html = read('live/index.html'), files = JSON.parse(read('nt8/install-files.json'));
   assert.match(src, /case 'groups': \{/);
   assert.match(src, /const grpKnown = !!S\.groups, grpOn = grpKnown \|\| S\.hadGroups, canGroup = grpKnown && S\.enabled && !S\.groupsError;/);   // 1.31.0: kept while not known after groups came once
-  assert.match(src, /\(grpOn \? h\('Group'\) \+ \(typesOn \? h\('Account type'\) : ''\) \+ h\('Limits', 'r'\) : ''\)/, 'the two headers, only with groups (1.30.0: Account type between them once The Desk\'s types are known)');
+  /* 1.34.0: the Group column on the row (its name); the Group dropdown, Account type and Limits in the account's drawer (⋯) */
+  assert.match(src, /\['Group', 'minmax\(0, 1fr\)'\]/);
+  assert.match(src, /fld\('Group', unrole\(grp\)\) \+ fld\('Account type', unrole\(typeCell\(a\)\)\) \+ fld\('Limits', unrole\(lims\)\)/, 'the drawer: group, type and limits');
   assert.match(src, /S\.groups = null; S\.groupsError = null;/, 'a drop forgets the groups (an older ChartBridge sends none)');
   assert.match(src, /accountGroup: \(name, group, highText, rules\) => \{[^\n]*\n\s*if \(!S\.groups/);
   assert.match(src, /accountLimits: \(name, floorText, dailyText\) => \{\s*if \(!S\.groups/);

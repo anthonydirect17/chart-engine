@@ -676,6 +676,14 @@ function createFeed(env) {
       if (r.error) { env.note('Not sent: ' + r.error, true); return false; }
       return send(r.msg);
     },
+    /* 1.34.0 (ChartBridge 0.6.6, Anthony 2026-10-20: the floor "still wrong ... so it stops being an issue"): the firm dashboard's
+       minimum balance seeds the account's floor, so ChartBridge's floor equals the firm's from then on */
+    firmMinimum: (name, text) => {
+      if (!S.groups || typeof GroupsCore === 'undefined') return false;
+      const v = GroupsCore.parseMoney(text);
+      if (!(v > 0)) { env.note('Not sent: Minimum balance: the firm\'s number in dollars (at most 2 decimals).', true); return false; }
+      return send({ type: 'firmMinimum', cid: cid(), account: name, minBalance: v });
+    },
     accountLimits: (name, floorText, dailyText) => {
       if (!S.groups || typeof GroupsCore === 'undefined') return false;
       const r = GroupsCore.limitsMessage(name, floorText, dailyText, cid());
@@ -713,7 +721,24 @@ function mount(v, host) {
     '<p class="ac-foot apg-foot" data-foot></p></div>';
   const q = sel => v.body.querySelector(sel);
   const listEl = q('[data-list]'), footEl = q('[data-foot]');
-  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, rulesEdit: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null, typeFocus: '' };
+  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, rulesEdit: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null, typeFocus: '',
+    drawer: '', simOpen: false, allOpen: false, colDrag: null, colClick: null };   // 1.34.0: the account whose settings drawer is open; the Sim section open; every drawer open
+  /* 1.34.0 (Anthony 2026-10-20: "make the rows or columns adjustable, so I can click and drag them and make them larger or
+     smaller"): the Accounts tab's column widths (px, or null for the default share), kept in this browser; and each account's
+     short label, kept in this browser too (the full name on hover) */
+  const COLS_KEY = 'live-acc-cols-v1', LABELS_KEY = 'live-acc-labels-v1';
+  const isNum = v => typeof v === 'number' && isFinite(v);
+  const ACC_COLS = [['Account', 'minmax(96px, 1.5fr)'], ['Balance', 'minmax(0, 1fr)'], ['Today', 'minmax(0, .8fr)'], ['Position', 'minmax(0, 1fr)'],
+    ['Room', 'minmax(0, 1.6fr)'], ['Group', 'minmax(0, 1fr)'], ['Trade', '44px'], ['', '34px']];
+  const sread = k => { try { return JSON.parse(F.store ? F.store.getItem(k) : 'null'); } catch (e) { return null; } };
+  const swrite = (k, v) => { try { if (F.store) F.store.setItem(k, JSON.stringify(v)); } catch (e) { /* blocked: the default */ } };
+  const colWidths = () => { const w = sread(COLS_KEY); return Array.isArray(w) && w.length === ACC_COLS.length ? w.map(x => (Number.isFinite(x) && x >= 36 && x <= 2000 ? Math.round(x) : null)) : ACC_COLS.map(() => null); };
+  const colsCss = w => ACC_COLS.map((c, i) => (w[i] ? w[i] + 'px' : c[1])).join(' ');
+  const labels = () => { const l = sread(LABELS_KEY); return l && typeof l === 'object' && !Array.isArray(l) ? l : {}; };
+  const OPEN_KEY = 'live-acc-open-v1';   // 1.34.0: { sim, all } as last chosen here
+  { const o = sread(OPEN_KEY); if (o && typeof o === 'object') { P.simOpen = o.sim === true; P.allOpen = o.all === true; } }
+  const saveOpen = () => swrite(OPEN_KEY, { sim: P.simOpen, all: P.allOpen });
+  const labelOf = name => { const l = labels()[name]; return typeof l === 'string' && l.trim() ? l.trim().slice(0, 24) : ''; };
   q('.apg-tabs').addEventListener('click', e => {
     const b = e.target.closest('button[data-tab]'); if (!b) return;
     b.blur();
@@ -737,6 +762,13 @@ function mount(v, host) {
     else if (a === 'cancel') F.cancelFromList(id);
     else if (a === 'rearm') F.copierRearm();
     else if (a === 'f-remove') F.copierFollowerRemove(id);   // 1.34.0
+    else if (a === 'drawer') { P.drawer = P.drawer === id ? '' : id; render(); }   // 1.34.0: the account's settings drawer
+    else if (a === 'sim-toggle') { P.simOpen = !P.simOpen; saveOpen(); render(); }
+    else if (a === 'drawers-all') { P.allOpen = !P.allOpen; P.drawer = ''; saveOpen(); render(); }   // 1.34.0: every account's settings at once (a setup day)
+    else if (a === 'firm-min-set') {   // 1.34.0 (ChartBridge 0.6.6): the firm's minimum balance seeds the floor
+      const tr = b.closest('[data-k]'), box = tr ? tr.querySelector('[data-act="firm-min"]') : null;
+      if (box && F.firmMinimum(id, box.value)) { host.note(id + '\'s floor from the firm\'s minimum balance: sent to ChartBridge.'); box.value = ''; }
+    }
     else if (a === 'mode') F.copierSet({ mode: b.dataset.v });
     else if (a === 'trd') { P.trd = b.dataset.v; render(); }
     else if (a === 'join-no') { P.join = null; render(); }
@@ -764,6 +796,13 @@ function mount(v, host) {
     else if (a === 'type-cancel') { P.typeEdit = ''; P.typePick = null; P.typeFocus = id; render(); }
     else if (a === 'type-clear') { const ok = P.typeEdit === id && canTypeNow() && !P.typePending.has(id) && !!typeVal(id); P.typeEdit = ''; P.typePick = null; P.typeFocus = id; if (ok) sendType(id, ''); else render(); }
     else if (a === 'type-save') { const want = saveWant(id); P.typeEdit = ''; P.typePick = null; P.typeFocus = id; if (want) sendType(id, want); else render(); }
+    else if (a === 'apply-yes' && firmOn()) {   // 1.34.0 (ChartBridge 0.6.6): the type's rules become the account's own; its floor trails and locks
+      const dr = P.apply === id ? GroupsCore.deskRules(S.desk.get(id), S.types) : { error: 'no type' };
+      P.apply = '';
+      if (dr.error) { host.note('Not sent: ' + dr.error + '.', true); render(); return; }
+      if (F.memberRules(id, GroupsCore.rulesForm(dr.rules))) { host.note(id + '\'s rules from ' + dr.from + ': sent to ChartBridge. Give its minimum balance from the firm\'s dashboard (its ⋯) so the floor matches the firm.'); P.drawer = id; }
+      render();
+    }
     else if (a === 'apply-yes') {
       const t = P.apply === id ? typeFor(id) : null, acc = S.accounts.find(x => x.name === id);
       const l = t ? GroupsCore.typeLimits(t) : { error: 'Its type is not on The Desk\'s list now.' };
@@ -791,6 +830,36 @@ function mount(v, host) {
       F.accountGroup(j.account, j.group, high, rules);
       render();
     }
+  });
+  /* 1.34.0: a column's width dragged at its header's right edge (the Accounts tab); kept in this browser; a double-click on the
+     edge gives that column its default share back */
+  listEl.addEventListener('pointerdown', e => {
+    const hnd = e.target.closest && e.target.closest('.apg-rs');
+    if (!hnd || !listEl.contains(hnd) || e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const grid = hnd.closest('.apg-acc2'), cells = grid ? [...grid.querySelector('.gr-h').children] : [];
+    if (!grid || !cells.length) return;
+    const col = +hnd.dataset.col, x0 = e.clientX, start = cells.map(el => Math.round(el.getBoundingClientRect().width));
+    /* a double-click on the edge gives the column its default back; told by column and time, as a re-render between the two
+       clicks makes them land on two handles (no dblclick event then) */
+    const t = Date.now(), last = P.colClick; P.colClick = { col, t };
+    if (last && last.col === col && t - last.t < 450) { P.colClick = null; const next = colWidths(); next[col] = null; swrite(COLS_KEY, next); P.key = ''; render(); return; }
+    /* the list re-renders as the accounts tick (a new header, a new handle): the drag lives in P.colDrag, which render keeps,
+       and its move and up are the window's, not the handle's */
+    P.colDrag = { col, px: start[col] };
+    hnd.classList.add('on');
+    const css = () => colsCss(ACC_COLS.map((c, i) => (i === col ? P.colDrag.px : colWidths()[i])));
+    const move = ev => {
+      P.colDrag.px = Math.max(36, Math.min(900, start[col] + ev.clientX - x0));
+      const g = listEl.querySelector('.apg-acc2'); if (g) g.style.setProperty('--apg-cols', css());
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
+      const px = P.colDrag.px; P.colDrag = null;
+      if (px === start[col]) { const g = listEl.querySelector('.apg-acc2'); if (g) g.style.setProperty('--apg-cols', colsCss(colWidths())); return; }   // a click, no drag
+      const next = colWidths(); next[col] = px; swrite(COLS_KEY, next); P.key = ''; render();
+    };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
   });
   listEl.addEventListener('change', e => {
     const el = e.target, a = el.dataset.act;
@@ -823,6 +892,12 @@ function mount(v, host) {
       P.typePick = { firm: r.state.firm, plan: r.state.plan }; render();
       return;
     }
+    if (a === 'label') {   // 1.34.0: a short label, this browser only (empty: the account's name)
+      const all = labels(), t = el.value.trim().slice(0, 24);
+      if (t) all[el.dataset.id] = t; else delete all[el.dataset.id];
+      swrite(LABELS_KEY, all); render();
+      return;
+    }
     if (a === 'my-floor' || a === 'my-daily') {   // 1.26.0: a personal account's own limits, both sent together
       const tr = el.closest('[data-k]'); if (!tr) return;
       const f = tr.querySelector('[data-act="my-floor"]'), d = tr.querySelector('[data-act="my-daily"]');
@@ -846,6 +921,9 @@ function mount(v, host) {
 
   /* 1.30.0: the account's type from The Desk's list (its current version), or null */
   const typeFor = name => { const at = F.typeOf(name); return at && S.types ? S.types.find(t => t.id === at.id) || null : null; };
+  /* 1.34.0: what ChartBridge 0.6.6 adds (the firm's rules on an account in no group, firmMinimum), from hello's version */
+  const verAtLeast = (v, want) => { const p = x => String(x || '').split('.').map(n => parseInt(n, 10) || 0); const A = p(v), B = p(want); for (let k = 0; k < 3; k++) { if ((A[k] || 0) !== (B[k] || 0)) return (A[k] || 0) > (B[k] || 0); } return true; };
+  const firmOn = () => verAtLeast(S.version, '0.6.6');
   /* 1.32.0: the picker's tree (the firms in use on The Desk first) and where an account's picker stands: its
      type (or the one just picked, until The Desk's rows say it), moved in the open Change row by Firm and Plan without sending */
   /* 1.33.0 (Anthony 2026-10-19: "match the accounts going into a group to our desk pool ... so its all automatic"): what a join
@@ -997,9 +1075,12 @@ function mount(v, host) {
       const askApply = a => {
         if (P.apply !== a.name) return '';
         const t = typeFor(a.name), l = t ? GroupsCore.typeLimits(t) : { error: 'Its type is not on The Desk\'s list now.' };
-        const words = l.error ? l.error : `Apply its rules from ${GroupsCore.typeLabel(t)} to ${a.name}: ` + GroupsCore.applyWords(l, { floor: a.myFloor, daily: a.myDailyLoss });
+        const dr = firmOn() && t ? GroupsCore.deskRules(S.desk.get(a.name), S.types) : null;
+        /* 1.34.0 (ChartBridge 0.6.6): the type's rules become the account's own, so its floor trails and locks as the firm's does */
+        const words = dr ? (dr.error ? dr.error : `Apply ${GroupsCore.typeLabel(t)} to ${a.name}: ${GroupsCore.summary(dr.rules)}. ChartBridge then works out its floor the firm's way (highest close less the drawdown, never above where it stops); give its minimum balance from the firm's dashboard next, in its ⋯.`)
+          : l.error ? l.error : `Apply its rules from ${GroupsCore.typeLabel(t)} to ${a.name}: ` + GroupsCore.applyWords(l, { floor: a.myFloor, daily: a.myDailyLoss });
         return row('apply|' + a.name, `<span role="cell" class="apg-confirm apg-applyask"><span class="apg-applysum">${esc(words)}</span> ` +
-          (l.error ? '' : `<button type="button" class="ac-btn apg-yes" data-act="apply-yes" data-id="${esc(a.name)}">Apply its rules</button>`) + `<button type="button" class="ac-btn" data-act="apply-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
+          ((dr ? dr.error : l.error) ? '' : `<button type="button" class="ac-btn apg-yes" data-act="apply-yes" data-id="${esc(a.name)}">Apply its rules</button>`) + `<button type="button" class="ac-btn" data-act="apply-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
       };
       /* 1.30.0: a member whose type is not the one its group was filled from: a warning row (nothing is blocked) */
       const typeWarn = a => {
@@ -1026,12 +1107,40 @@ function mount(v, host) {
       };
       /* 1.33.0: a member's rules changed later (Rules on its Limits cell): the full form, sent as memberRules */
       const askRules = a => {
-        if (!P.rulesEdit || P.rulesEdit.account !== a.name || !a.group) return '';
-        return row('rules|' + a.name, `<span role="cell" class="apg-confirm apg-rform"><span class="apg-jrules">${esc(a.name)}'s rules in ${esc(gName(a.group))}:</span>${rulesBoxes(a.name, P.rulesEdit.form)} <button type="button" class="ac-btn apg-yes" data-act="rules-save" data-id="${esc(a.name)}">Save rules</button><button type="button" class="ac-btn" data-act="rules-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
+        if (!P.rulesEdit || P.rulesEdit.account !== a.name || !(a.group || (firmOn() && a.rules && a.rules.own))) return '';
+        return row('rules|' + a.name, `<span role="cell" class="apg-confirm apg-rform"><span class="apg-jrules">${esc(a.name)}'s rules${a.group ? ' in ' + esc(gName(a.group)) : ''}:</span>${rulesBoxes(a.name, P.rulesEdit.form)} <button type="button" class="ac-btn apg-yes" data-act="rules-save" data-id="${esc(a.name)}">Save rules</button><button type="button" class="ac-btn" data-act="rules-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
       };
       const canShow = canAct && accounts.some(a => a && 'canHide' in a);   // Show: ChartBridge 0.5.1 and later (its accounts carry canHide)
       /* the in-page confirm for Hide, a row of its own under the account's */
       const ask = a => P.confirm !== a.name ? '' : row('ask|' + a.name, `<span role="cell" class="apg-confirm">Hide ${esc(a.name)}? It leaves every list until you Show it; its history stays. <button type="button" class="ac-btn apg-yes" data-act="archive-yes" data-id="${esc(a.name)}">Hide</button><button type="button" class="ac-btn" data-act="archive-no" data-id="${esc(a.name)}">Keep</button></span>`, 'apg-ask');
+      /* 1.34.0 (Anthony 2026-10-20: "this accounts tab needs cleaned up, its too messy, too much info in one area"; "I do like to see
+         the position on this screen, so leave that, make the rows or columns adjustable"): the row keeps what is watched while
+         trading (the account, balance, today, position, the tightest room with a bar, the group, Trade); the settings (group,
+         type, limits, the firm's minimum, a label, Hide) are in a drawer under it (⋯); rows by group, then those in no group,
+         then the Sim accounts (folded); a problem is an amber flag on the name, its reasons in the flag's tooltip */
+      const usd0 = v => (isNum(v) ? (v < 0 ? '-$' : '$') + Math.round(Math.abs(v)).toLocaleString('en-US') : '');
+      const followerSet = new Set(((S.copier && S.copier.followers) || []).filter(f => f && typeof f.account === 'string').map(f => f.account));
+      const roomShort = s => {
+        if (!s) return '-';
+        if (s.cb) {
+          const cx = s.closer === 'dl' ? s.dl : s.closer === 'dd' ? s.dd : null;
+          if (cx) return usd0(cx.room) + (s.closer === 'dl' ? ' daily' : ' to floor');
+          if (s.tg) return s.tg.left <= 0 ? 'target reached' : usd0(s.tg.left) + ' to target';
+          return '-';
+        }
+        return AC.limitText(s) || '-';
+      };
+      const flagsOf = a => {
+        const why = a.why && typeof a.why === 'object' ? a.why : {}, out = [];
+        if (typeof why.floor === 'string' && /minimum balance/.test(why.floor)) out.push('Floor not known: ' + why.floor);
+        if (isNum(a.roomFloorNt) && isNum(a.roomFloor) && Math.abs(a.roomFloor - a.roomFloorNt) > 25 && !(a.src && a.src.roomFloor === 'ninjatrader'))
+          out.push('NinjaTrader shows ' + usd0(a.roomFloorNt) + ' to the floor, ChartBridge ' + usd0(a.roomFloor) + ' (from the firm\'s rules): check the firm\'s dashboard; its minimum balance goes in ⋯');
+        if (followerSet.has(a.name)) out.push('A copier follower: group entries and the agents leave it out (the Copier tab: turn it off, then Remove)');
+        const at = typesOn ? F.typeOf(a.name) : null, l = a.group ? links[a.group] : null;
+        if (at && l && at.id !== l.id) out.push(a.name + ' is ' + (at.firm ? at.firm + ' ' : '') + at.name + '; its group ' + gName(a.group) + ' was filled from ' + l.label);
+        if (!a.group && !(a.rules && a.rules.own) && a.myLimitsSet === false && typesOn && typeFor(a.name)) out.push('No limits set: Apply its type\'s rules (in ⋯)');
+        return out;
+      };
       const accRow = a => {
         const s = lim(a), pos = (a.positions || []).filter(p => p.qty).map(p => p.root + ' ' + (p.qty > 0 ? '+' : '') + p.qty).join(', ');
         const lvl = s.level ? ' apg-' + s.level : '';
@@ -1053,23 +1162,59 @@ function mount(v, host) {
         /* 1.26.0: the Group dropdown (None and every group) and the Limits cell: the group's floor, or My floor and My daily */
         const grp = !grpOn ? '' : !grpKnown ? c(NK, 'mut apg-nk', 'Not connected to ChartBridge: the account\'s group is not known now') : `<span role="cell"><select class="ws-sel apg-sel apg-grp" data-act="group" data-id="${esc(a.name)}" ${pr({ value: a.group || '', disabled: !canGroup })} aria-label="Group for ${esc(a.name)}" title="${esc(a.group ? GroupsCore.summary(F.groupOf(a)) : 'None: a personal account, in no group')}"><option value="">None</option>${(S.groups || []).map(g => `<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('')}</select></span>`;
         const mg = a.group ? F.groupOf(a) : null, mr = a.rules && typeof a.rules === 'object' ? a.rules : null;
-        const lims = !grpOn ? '' : !grpKnown ? c(NK, 'r mut apg-nk', 'Not connected to ChartBridge: the limits are not known now') : a.group && mg && mg.perMember
+        const ownFree = !a.group && firmOn() && mr && mr.own;   // 1.34.0 (ChartBridge 0.6.6): the firm's rules on an account in no group
+        const lims = !grpOn ? '' : !grpKnown ? c(NK, 'r mut apg-nk', 'Not connected to ChartBridge: the limits are not known now') : (a.group && mg && mg.perMember) || ownFree
           /* 1.33.0: a member's floor by its own rules, and Rules to change them (its rules in the tooltip) */
           ? `<span role="cell" class="apg-my apg-mrules">` + ci(typeof a.floor === 'number' ? 'floor ' + AC.fmtUsdPlain(a.floor) : 'floor ?', 'mut apg-mfloor', (typeof a.floor === 'number' ? 'The floor by ' + (mr && mr.own ? 'its own rules' : 'its group\'s rules') : (why.floor || '')) + (mr ? '\n' + (mr.own ? 'Its rules' : 'Its group\'s rules') + ': ' + GroupsCore.summary(mr) : '')) +
-            (canGroup ? `<button type="button" class="ac-btn apg-redit" data-act="rules-edit" data-id="${esc(a.name)}" aria-expanded="${!!(P.rulesEdit && P.rulesEdit.account === a.name)}" title="${esc(a.name)}'s rules in ${esc(gName(a.group))}: change any of them">Rules</button>` : '') + '</span>'
+            (canGroup ? `<button type="button" class="ac-btn apg-redit" data-act="rules-edit" data-id="${esc(a.name)}" aria-expanded="${!!(P.rulesEdit && P.rulesEdit.account === a.name)}" title="${esc(a.name)}'s rules${a.group ? ' in ' + esc(gName(a.group)) : ''}: change any of them">Rules</button>` : '') + '</span>'
           : a.group
           ? c(typeof a.floor === 'number' ? 'floor ' + AC.fmtUsdPlain(a.floor) : 'floor ?', 'r mut', typeof a.floor === 'number' ? 'The floor by its group\'s rules' : (why.floor || ''))
           : `<span role="cell" class="apg-my"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-floor" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myFloor), disabled: !canGroup })} placeholder="${a.myLimitsSet === false ? 'not set' : 'floor $'}" maxlength="12" aria-label="My floor for ${esc(a.name)}" title="My floor: the balance this account must stay above (empty: none)"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-daily" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myDailyLoss), disabled: !canGroup })} placeholder="${a.myLimitsSet === false ? 'not set' : 'daily $'}" maxlength="12" aria-label="My daily limit for ${esc(a.name)}" title="My daily limit: the most this account may lose today, open P&amp;L counted (empty: none)"></span>`;
         const hero = AC.heroOf(S.heroes, a.name);   // 1.27.0: a seat shows its hero's name
-        return row(a.name, `${c(a.name + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', (a.sim ? 'NinjaTrader Sim account' : '') + (hero ? (a.sim ? '. ' : '') + 'A seat of ' + hero + ' (the Agent tab): the copier and the bot never trade it' : ''))}${stale ? c('unknown', 'warn', 'Not connected to ChartBridge since ' + hms(S.lostAt) + ' ET: this account\'s connection is not known') : c(CONN[a.connection] || a.connection, a.connection === 'connected' ? '' : 'warn')}` +
-          `${c(AC.fmtUsdPlain(a.balance), 'r')}${c(AC.fmtUsd(a.pnlToday), 'r ' + (a.pnlToday > 0.004 ? 'up' : a.pnlToday < -0.004 ? 'dn' : ''))}${c(pos, 'r')}` +
-          `${c(AC.limitText(s) || '-', 'r apg-room' + lvl, roomTip)}${grp}${typeCell(a)}${lims}${mark}${hide}`, 'apg-acc' + lvl) + ask(a) + askJoin(a) + askRules(a) + typeRow(a) + askApply(a) + typeWarn(a);
+        const lab = labelOf(a.name), flags = flagsOf(a), up = a.connection === 'connected', open = P.allOpen || P.drawer === a.name;
+        const nameTip = [a.name, a.sim ? 'NinjaTrader Sim account' : '', hero ? 'A seat of ' + hero + ' (the Agent tab): the copier and the bot never trade it' : '',
+          stale ? 'Not connected to ChartBridge since ' + hms(S.lostAt) + ' ET: this account\'s connection is not known' : up ? '' : (CONN[a.connection] || a.connection)].filter(Boolean).join('\n');
+        const bucket = s.pct === null || s.pct === undefined ? 'n' : String(Math.max(0, Math.min(10, Math.round(s.pct * 10))));
+        const nameCell = `<span role="cell" class="apg-name">` + ci('', stale ? 'apg-dot unk' : up ? 'apg-dot' : 'apg-dot down', stale ? 'Connection not known' : up ? '' : (CONN[a.connection] || a.connection) + ': not connected') +
+          ci((lab || a.name) + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', nameTip) + ci(flags.length ? '!' : '', flags.length ? 'apg-flag' : 'apg-flag off', flags.join('\n')) + '</span>';
+        const roomCell = `<span role="cell" class="r apg-room${lvl}">` + ci(roomShort(s), 'apg-rtext', roomTip) + `<span class="apg-track">` + ci('', 'apg-bar apg-b' + bucket + lvl, roomTip) + '</span></span>';
+        const grpText = !grpOn ? '' : !grpKnown ? 'not known' : a.group ? gName(a.group) : 'None';
+        const more = `<span role="cell" class="r"><button type="button" class="ac-btn apg-more" data-act="drawer" data-id="${esc(a.name)}" aria-expanded="${open}" aria-label="Settings for ${esc(a.name)}" title="Settings: group, type, limits, the firm's minimum, a label, Hide">⋯</button></span>`;
+        const main = row(a.name, nameCell + `${c(AC.fmtUsdPlain(a.balance), 'r')}${c(AC.fmtUsd(a.pnlToday), 'r ' + (a.pnlToday > 0.004 ? 'up' : a.pnlToday < -0.004 ? 'dn' : ''))}${c(pos, 'r')}` +
+          roomCell + c(grpText, a.group ? '' : 'mut', a.group ? GroupsCore.summary(F.groupOf(a)) : 'In no group') + mark + more, 'apg-acc' + lvl + (open ? ' apg-open' : ''));
+        if (!open) return main + ask(a) + askJoin(a) + askRules(a) + typeRow(a) + askApply(a);
+        const unrole = x => String(x || '').replace(/role="cell" ?/g, '');
+        const fld = (label, html2) => html2 ? `<span class="apg-dfield"><span class="apg-dlbl">${label}</span>${html2}</span>` : '';
+        const trailing = mr && (mr.drawdownType === 'eod' || mr.drawdownType === 'intraday');
+        const firm = firmOn() && grpKnown && canGroup && trailing ? `<input type="text" inputmode="decimal" class="oin apg-ll-in apg-fmin" data-act="firm-min" data-id="${esc(a.name)}" placeholder="${esc(S.desk.get(a.name) && isNum(S.desk.get(a.name).seedFloor) ? 'Desk seed ' + GroupsCore.usd(S.desk.get(a.name).seedFloor) : 'from the dashboard')}" maxlength="12" aria-label="Minimum balance from the firm's dashboard for ${esc(a.name)}" title="The minimum balance the firm's dashboard shows for ${esc(a.name)}: ChartBridge's floor equals it from then on (and trails from there)"><button type="button" class="ac-btn" data-act="firm-min-set" data-id="${esc(a.name)}">Set floor</button>` : '';
+        const labBox = `<input type="text" class="oin apg-ll-in apg-label" data-act="label" data-id="${esc(a.name)}" ${pr({ value: lab })} placeholder="${esc(a.name.slice(0, 12))}" maxlength="24" aria-label="Short label for ${esc(a.name)}" title="A short name shown in place of ${esc(a.name)} on this page (this browser only; empty: the name)">`;
+        const hideBtn = canAct && a.canHide === true ? `<button type="button" class="ac-btn apg-hide" data-act="archive" data-id="${esc(a.name)}" title="Hide ${esc(a.name)}: it leaves every list until you Show it; its fills and history stay">Hide</button>` : '';
+        const drawer = row('dr|' + a.name, `<span role="cell" class="apg-drawer">` + fld('Group', unrole(grp)) + fld('Account type', unrole(typeCell(a))) + fld('Limits', unrole(lims)) +
+          fld('Firm minimum', firm) + fld('Label', labBox) + fld('', hideBtn) + (flags.length ? `<span class="apg-dflags">${esc(flags.join(' · '))}</span>` : '') + '</span>', 'apg-ask apg-drawerrow');
+        return main + drawer + ask(a) + askJoin(a) + askRules(a) + typeRow(a) + askApply(a);
       };
+      /* the sections: each group (its members), then the accounts in no group, then the Sim accounts (folded until opened) */
+      const secRow = (k, title, tot, extra) => row('sec|' + k, `<span role="cell" class="apg-sec">` + ci(title, 'apg-stitle') + ci(tot, 'apg-stot') + (extra || '') + '</span>', 'apg-secrow');
+      const totText = list => { const t = list.reduce((x, a) => x + (isNum(a.pnlToday) ? a.pnlToday : 0), 0); return list.length + (list.length === 1 ? ' account' : ' accounts') + ' · today ' + AC.fmtUsd(t); };
+      const sections = [];
+      const inGroup = new Set();
+      for (const g of S.groups || []) {
+        const list = active.filter(a => a.group === g.id);
+        if (!list.length) continue;
+        list.forEach(a => inGroup.add(a.name));
+        sections.push(secRow('g|' + g.id, g.name, totText(list)) + list.map(accRow).join(''));
+      }
+      const rest = active.filter(a => !inGroup.has(a.name)), real = rest.filter(a => !a.sim), sims = rest.filter(a => a.sim);
+      if (real.length) sections.push(secRow('none', S.groups && S.groups.length ? 'Not in a group' : 'Accounts', totText(real)) + real.map(accRow).join(''));
+      if (sims.length) sections.push(secRow('sim', 'Sim', totText(sims), `<button type="button" class="ac-btn apg-simtg" data-act="sim-toggle" aria-expanded="${P.simOpen}" title="${P.simOpen ? 'Fold' : 'Show'} the Sim accounts">${P.simOpen ? 'Hide' : 'Show'}</button>`) + (P.simOpen ? sims.map(accRow).join('') : ''));
+      const widths = colWidths();
+      if (P.colDrag) widths[P.colDrag.col] = P.colDrag.px;   // a drag going on
+      const headRow = row('h', ACC_COLS.map((cdef, i) => h(cdef[0] + (i < ACC_COLS.length - 1 ? `<span class="apg-rs" data-col="${i}" title="Drag to make this column wider or narrower; double-click for its default"></span>` : ''), i >= 1 && i <= 4 || i >= 6 ? 'r' : '')).join(''), 'gr-h');
       html = !accounts.length ? '<p class="ac-empty">ChartBridge watches no account.</p>' :
         (stale ? `<p class="apg-stalenote" role="status">${esc(staleWords)}</p>` : '') +
-        `<div class="gr apg-g apg-acc-g${canAct ? ' apg-hides' : ''}${grpOn ? ' apg-grps' : ''}${typesOn ? ' apg-types' : ''}${stale ? ' apg-stale' : ''}" role="table" aria-label="Accounts${stale ? ' as of ' + esc(hms(S.lostAt)) + ' ET (not connected)' : ''}">` +
-        row('h', h('Account') + h('Conn') + h('Balance', 'r') + h('Today', 'r') + h('Position', 'r') + h('Room', 'r') + (grpOn ? h('Group') + (typesOn ? h('Account type') : '') + h('Limits', 'r') : '') + h('Trade', 'r') + (canAct ? h('', 'r') : ''), 'gr-h') +
-        active.map(accRow).join('') + '</div>' +
+        `<div class="apg-acc-top"><button type="button" class="ac-btn apg-alltg" data-act="drawers-all" aria-pressed="${P.allOpen}" title="${P.allOpen ? 'Fold every account\'s settings' : 'Show every account\'s settings (group, type, limits, the firm\'s minimum, a label, Hide) at once'}">${P.allOpen ? 'Fold settings' : 'Settings for every account'}</button></div>` +
+        `<div class="gr apg-g apg-acc-g apg-acc2${stale ? ' apg-stale' : ''}" style="--apg-cols: ${colsCss(widths)}" role="table" aria-label="Accounts${stale ? ' as of ' + esc(hms(S.lostAt)) + ' ET (not connected)' : ''}">` +
+        headRow + sections.join('') + '</div>' +
         (gone.length ? '<h3 class="apg-h">Gone</h3><div class="gr apg-g apg-gone-g" role="table" aria-label="Gone accounts">' + gone.map(a => {
           const asking = P.confirm === a.name;
           const btn = !canAct ? '' : asking
