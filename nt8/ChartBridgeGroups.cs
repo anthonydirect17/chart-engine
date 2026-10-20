@@ -764,7 +764,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             State s = new State();
             if (lines.Length < 2 || lines[0].TrimEnd('\r') != Header || !lines[1].StartsWith("#", StringComparison.Ordinal)) { why = "the first two lines are not ChartBridge's"; return null; }
             List<string[]> members = new List<string[]>();
-            Dictionary<string, string> rulesAt = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             int maxId = 0;
             for (int i = 2; i < lines.Length; i++)
             {
@@ -807,13 +806,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 else if (p[0] == "rules")
                 {
-                    // 0.6.5: a member's own rules (the same checks as groupSave's); its account must be a member (checked below)
+                    // 0.6.5: a member's own rules (the same checks as groupSave's); 0.6.6: or an account in no group's (the firm's rules)
                     Rules r;
                     string bad;
                     if (p.Length < 12 || p[1].Length == 0 || p[1] != p[1].Trim() || (r = FileRules(p, out bad)) == null) { why = at + " is not a rules line"; return null; }
                     if (s.Own.ContainsKey(p[1])) { why = at + " gives an account rules twice"; return null; }
                     s.Own[p[1]] = r;
-                    rulesAt[p[1]] = at;
                 }
                 else if (p[0] == "personal")
                 {
@@ -825,7 +823,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else { why = at + " is not a group, member, rules or personal line"; return null; }
             }
             foreach (string[] m in members) if (!s.Groups.ContainsKey(m[1])) { why = m[2] + " puts an account in group " + m[1] + ", which is not there"; return null; }
-            foreach (KeyValuePair<string, string> kv in rulesAt) if (!s.Members.ContainsKey(kv.Key)) { why = kv.Value + " gives rules to an account in no group"; return null; }
+            // 0.6.6: an account in no group may have its own (the firm's) rules (memberRules there, 0a9f315), written as a rules line; this
+            // check refused that very file at the next start ("gives rules to an account in no group": every entry refused). Taken now.
             s.Next = maxId + 1;
             return s;
         }

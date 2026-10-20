@@ -169,7 +169,7 @@ test('fake: a ChartBridge before 0.6.5 (groupRules false) knows none of it, as i
 test('ChartBridge 0.6.5 source: rules lines, the old file kept as written, only a group entry reads the risk percent', () => {
   const g = read('nt8/ChartBridgeGroups.cs');
   assert.match(g, /else if \(p\[0\] == "rules"\)/);
-  assert.match(g, /gives rules to an account in no group/);
+  assert.doesNotMatch(g, /why = kv\.Value \+ " gives rules to an account in no group"/, '0.6.6: a rules line for an account in no group is read (its own firm rules), never a reason to refuse the file');
   assert.match(g, /if \(g\.RiskPct > 0 \|\| g\.Extra\.Length > 0\) b\.Append\('\\t'\)\.Append\(PctText\(g\.RiskPct\)\);/, 'risk off: the group line as 0.6.4 writes it');
   assert.match(g, /public Rules RulesOf\(string account, Group g\) \{ Rules r; return account != null && Own\.TryGetValue\(account, out r\) \? r\.Clone\(\) : g\.Default\(\); \}/, 'no rules line: the group\'s rules (migration)');
   for (const f of ['ChartBridgeCopier.cs', 'ChartBridgeAgents.cs', 'ChartBridgeBot.cs']) assert.doesNotMatch(read('nt8/' + f), /RiskPct|riskPct|MaxMinis|MaxMicros/, f + ': the copier, the agents and the bot never read the risk percent or the max size');

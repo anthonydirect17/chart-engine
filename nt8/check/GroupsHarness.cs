@@ -1275,9 +1275,16 @@ public static class GroupsHarness
         Check(ChartBridgeGroups.EntryCheck("page", simA, "MNQ", true, 1, true, false) == null, "0.6.5 risk: nothing in the order path reads it (an entry on a member passes as before)");
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0").Replace("}", ",\"riskPct\":0}"));
         Check(FileText().Contains("\teval\t-\n") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null"), "0.6.5 risk: 0 is off, and the line is 13 fields again (as 0.6.4 writes it)");
-        // a rules line ChartBridge cannot read, or for an account in no group: the whole file unreadable, never rewritten
+        // 0.6.6: a rules line for an account in no group (the firm's rules, memberRules there) is read at the next start; 0.6.5 to the
+        // first 0.6.6 build refused that very file (every entry refused after a restart)
+        string withOwn = ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-\t-\t-\nmember\tSIM-A\tg1\nrules\tSIM-D\t50000\t-\t2000\teod\t-\t-\t-\t4\t40\t-\n";
+        Corrupt(p, withOwn);
+        Clear(); Restart();
+        Check(!ChartBridgeGroups.GroupsJson().Contains("\"error\":\"groups.txt could not be read") && ChartBridgeGroups.EntryCheck("page", simA, "MNQ", true, 1, true, false) == null &&
+              ChartBridgeGroups.GroupOf("SIM-D") == null && AccountsNow().Contains("\"maxMinis\":4,\"maxMicros\":40,\"typeId\":null,\"own\":true}"),
+              "0.6.6: rules for an account in no group: read at the start (its own rules, still in no group): " + ChartBridgeGroups.GroupsJson());
+        // a rules line ChartBridge cannot read: the whole file unreadable, never rewritten
         foreach (string[] broken in new[] {
-            new[] { "rules\tSIM-D\t50000\t-\t2000\teod\t-\t-\t-\t-\t-\t-\n", "gives rules to an account in no group" },
             new[] { "rules\tSIM-A\t50000\t-\t50000\teod\t-\t-\t-\t-\t-\t-\n", "is not a rules line" },
             new[] { "rules\tSIM-A\t50000\t-\t2000\tdaily\t-\t-\t-\t-\t-\t-\n", "is not a rules line" },
             new[] { "rules\tSIM-A\t50000\t-\t2000\teod\t-\t-\t-\t-\t-\n", "is not a rules line" },
