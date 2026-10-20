@@ -644,7 +644,7 @@ function mountSettings(host) {
     const typeSel = `<div class="gp-f gp-ftype"><label for="gp-fromFirm">Account type</label><div class="gp-herorow"><span class="gp-tpick">` +
       `<select class="ws-sel gp-in gp-tp" id="gp-fromFirm" aria-label="Account type: firm"></select><select class="ws-sel gp-in gp-tp" id="gp-fromPlan" aria-label="Account type: plan"></select>` +
       `<select class="ws-sel gp-in gp-tp" id="gp-fromType" aria-label="Account type: size and stage"></select></span><span class="ws-help gp-herowhy" id="gp-fromWhy" role="status"></span></div><p class="ws-help" id="gp-fromStill" role="status" hidden></p></div>`;
-    const box = (k, label, help) => `<div class="gp-f"><label for="gp-${k}">${label}</label><input class="ws-in gp-in" id="gp-${k}" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${help}" value="${esc(f[k])}"></div>`;
+    const box = (k, label, help) => `<div class="gp-f"><label for="gp-${k}">${label}</label><input class="ws-in gp-in" id="gp-${k}" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${help}" value="${esc(f[k] === undefined || f[k] === null ? '' : f[k])}"></div>`;   // 1.34.0: a new group's risk box showed "undefined"
     d.innerHTML = `<form class="ws-dlg ws-gp" method="dialog" aria-label="${g ? 'Edit ' + esc(g.name) : 'New group'}">
       <h2>${g ? 'Edit ' + esc(g.name) : 'New group'} <span>${g ? esc(GC.membersText(g)) : 'shows in every account\'s Group dropdown'}</span></h2>
       ${typeSel}
