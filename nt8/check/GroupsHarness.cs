@@ -114,7 +114,7 @@ public static class GroupsHarness
         ClockEt(2026, 10, 21, 16, 30); Tick();
         ClockEt(2026, 10, 21, 19, 0); Restart(); Money(simC, 51800, 0, 0); Clear(); Tick();
         e = Entry(AccountsNow(), "SIM-C");
-        Check(e.Contains("\"floor\":null,\"roomFloor\":null,") && e.Contains("ChartBridge was not running at the close of 2026-10-21: put the account in Lucid Flex again and give the highest close from the firm's dashboard") &&
+        Check(e.Contains("\"floor\":null,\"roomFloor\":null,") && e.Contains("ChartBridge was not running at the close of 2026-10-21: give the minimum balance from the firm's dashboard (the account's settings), or put it in Lucid Flex again and give the highest close") &&
               Any("SIM-C: ChartBridge was not running at the close of 2026-10-21"), "0.6.3 C2: off over the close and it traded: floor and roomFloor null with the reason, the pages told: " + e);
         Check(State("SIM-C").Contains("\"roomFloor\":null") && State("SIM-C").Contains("not running at the close of 2026-10-21"), "0.6.3 C2: the agents' accountState too: " + State("SIM-C"));
         Check(!Any("its intraday high may have been missed"), "0.6.3 LOW 8: an EOD group's account never gets the intraday-high warning");
@@ -156,7 +156,7 @@ public static class GroupsHarness
         Pos(simC, mnq, 1); Money(simC, 52300, 40, 0); Tick();
         ClockEt(2026, 10, 28, 11, 0); Money(simC, 52300, -20, 0); Clear(); Tick();
         e = Entry(AccountsNow(), "SIM-C");
-        Check(e.Contains("\"floor\":null,\"roomFloor\":null,") && e.Contains("its intraday high may be missed: put it in Lucid Flex again and give the highest balance from the firm's dashboard") && Any("its intraday high may have been missed"),
+        Check(e.Contains("\"floor\":null,\"roomFloor\":null,") && e.Contains("its intraday high may be missed: give the minimum balance from the firm's dashboard (the account's settings), or put it in Lucid Flex again and give the highest balance") && Any("its intraday high may have been missed"),
               "0.6.3 C2 intraday: 30 minutes unwatched holding a position: floor and room null with the reason: " + e);
         Pos(simC, mnq, 0); Money(simC, 52300, 0, 0);
         G("accountGroup", Join("SIM-C", "null", null)); Clear(); G("accountGroup", Join("SIM-C", "\"g1\"", "52500"));
@@ -243,6 +243,7 @@ public static class GroupsHarness
             Backups();       // 0.6.3 (audit C3): groups.txt and account-marks.txt fall back to their last good copy
             MemberRules();   // 0.6.5 (Anthony 2026-10-19, PRIORITY): each member's own rules, the old file, the risk percent
             GroupEntries();  // 0.6.5 (Anthony 2026-10-19): trade the group from the ticket, each member sized from the risk percent
+            FirmFloor();     // 0.6.6 (Anthony 2026-10-20): the firm's rules on an account in no group, the computed floor first, firmMinimum
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally
@@ -572,13 +573,13 @@ public static class GroupsHarness
         Check(Entry(AccountsNow(), "SIM-B").Contains("\"floor\":48800,\"roomFloor\":2000,"), "intraday: the high follows equity (50800), floor 48800");
         Money(simB, 50000, -300, 0); Tick();
         Check(Entry(AccountsNow(), "SIM-B").Contains("\"floor\":48800,\"roomFloor\":900,"), "intraday: equity down, the floor stays (room 49700-48800)");
-        // NinjaTrader's trailing drawdown wins when it reports one
+        // 0.6.6: the computed room is the room; NinjaTrader's own figure only beside it (roomFloorNt), never in place of it
         simB.Items[AccountItem.TrailingMaxDrawdown] = 1234.5;
         e = Entry(AccountsNow(), "SIM-B");
-        Check(e.Contains("\"roomFloor\":900,") && e.Contains("\"roomFloor\":\"computed\""), "review item 4: NinjaTrader's 1234.50 and the computed 900 both known: the smaller (computed): " + e);
+        Check(e.Contains("\"roomFloor\":900,") && e.Contains("\"roomFloor\":\"computed\"") && e.Contains("\"roomFloorNt\":1234.5,"), "0.6.6: NinjaTrader's 1234.50 and the computed 900 both known: the computed, NinjaTrader's beside it: " + e);
         simB.Items[AccountItem.TrailingMaxDrawdown] = 700;
         e = Entry(AccountsNow(), "SIM-B");
-        Check(e.Contains("\"roomFloor\":700,") && e.Contains("\"roomFloor\":\"ninjatrader\""), "review item 4: NinjaTrader's 700 is smaller: its figure, src ninjatrader: " + e);
+        Check(e.Contains("\"roomFloor\":900,") && e.Contains("\"roomFloor\":\"computed\"") && e.Contains("\"roomFloorNt\":700,"), "0.6.6 (was review item 4): NinjaTrader's 700 is smaller but never replaces the computed 900 (its broker figure does not lock): " + e);
         simB.Items.Remove(AccountItem.TrailingMaxDrawdown);
         // personal: SIM-C leaves the group, its own floor
         Clear(); G("accountGroup", Join("SIM-C", "null", null));
@@ -1109,6 +1110,58 @@ public static class GroupsHarness
     static string JoinRules(string account, string group, string high, string rules) { return "{\"type\":\"accountGroup\",\"cid\":\"j\",\"account\":\"" + account + "\",\"group\":" + group + (high != null ? ",\"highClose\":" + high : "") + rules + "}"; }
     static string R(string size, string dl, string dd, string type, string lk, string tg, string extra) { return ",\"size\":" + size + ",\"dailyLoss\":" + dl + ",\"drawdown\":" + dd + ",\"drawdownType\":\"" + type + "\",\"lockAt\":" + lk + ",\"target\":" + tg + extra; }
     static string MR(string account, string rules) { return "{\"type\":\"memberRules\",\"cid\":\"r\",\"account\":\"" + account + "\"" + rules + "}"; }
+    // ------------------------------------------------------------ 0.6.6 (Anthony 2026-10-20: "the floor and thus the % used for
+    // certain accounts is still wrong, how do we square this, so it stops being an issue?"): an eval in no group, NinjaTrader's
+    // broker figure trailing past the lock (the firm's minimum 50,100 against NinjaTrader's 50,226.75)
+    static string FM(string account, string min) { return "{\"type\":\"firmMinimum\",\"cid\":\"f\",\"account\":\"" + account + "\",\"minBalance\":" + min + "}"; }
+    static void FirmFloor()
+    {
+        Flat();
+        ChartBridgeGroups.GapMs = 1e12;
+        ClockEt(2026, 10, 20, 10, 0);
+        string p = Path.Combine(folder, "groups.txt"), mp = Path.Combine(folder, "account-marks.txt");
+        Gone(p); Gone(mp);
+        Restart();
+        Money(simD, 52112.25, 0, 0);
+        simD.Items[AccountItem.TrailingMaxDrawdown] = 1885.5;
+        string e = Entry(AccountsNow(), "SIM-D");
+        Check(e.Contains("\"group\":null") && e.Contains("\"roomFloor\":1885.5,") && e.Contains("\"roomFloor\":\"ninjatrader\"") && e.Contains("\"roomFloorNt\":1885.5,"),
+              "0.6.6: no rules at all: NinjaTrader's figure is all there is (src ninjatrader): " + e);
+        Clear(); G("firmMinimum", FM("SIM-D", "50100"));
+        Check(Rejection().Contains("SIM-D has no firm rules yet"), "0.6.6: firmMinimum before the account has rules: refused: " + Rejection());
+        Clear(); G("memberRules", MR("SIM-D", R("50000", "1200", "2000", "eod", "50100", "3000", ",\"typeId\":\"lucidflex-50k-eval\"")));
+        e = Entry(AccountsNow(), "SIM-D");
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-D") == null && FileText().Contains("rules\tSIM-D\t50000\t1200\t2000\teod\t50100\t3000"),
+              "0.6.6: memberRules on an account in no group: saved as its own rules, still in no group: " + FileText().Replace("\t", "<TAB>"));
+        Check(e.Contains("\"floor\":null,") && e.Contains("\"roomFloor\":1885.5,") && e.Contains("give the minimum balance from the firm's dashboard") && AccountsNow().Contains("\"lockAt\":50100,\"target\":3000,\"consistency\":null,\"maxMinis\":null,\"maxMicros\":null,\"typeId\":\"lucidflex-50k-eval\",\"own\":true}"),
+              "0.6.6: rules but no high yet: no floor (asks for the firm's minimum), NinjaTrader's room meanwhile: " + e);
+        foreach (string[] x in new[] { new[] { "47000", "below the starting floor (48000.00)" }, new[] { "50200", "above where the floor stops (50100.00)" }, new[] { "0", "minBalance must be more than 0" } })
+        {
+            Clear(); G("firmMinimum", FM("SIM-D", x[0]));
+            Check(Rejection().Contains(x[1]), "0.6.6: firmMinimum " + x[0] + " refused (" + x[1] + "): " + Rejection());
+        }
+        Clear(); G("firmMinimum", FM("SIM-X", "50100"));
+        Check(Rejection().Contains("no account SIM-X"), "0.6.6: firmMinimum for an unknown account: refused");
+        Clear(); G("firmMinimum", FM("SIM-D", "50100"));
+        e = Entry(AccountsNow(), "SIM-D");
+        Check(Rejection() == "" && e.Contains("\"floor\":50100,\"roomFloor\":2012.25,") && e.Contains("\"roomFloorNt\":1885.5,") && e.Contains("\"roomFloor\":\"computed\""),
+              "0.6.6: the firm's minimum 50100 (locked): floor 50100, room 2012.25 computed, NinjaTrader's 1885.50 only beside it: " + e);
+        Check(MarksText().Contains("mark\tSIM-D\t52100\t52100\t"), "0.6.6: the firm's minimum seeds both highs at minimum + drawdown (52100): " + MarksText().Replace("\t", "<TAB>"));
+        // a higher close never lifts a locked floor
+        ClockEt(2026, 10, 20, 17, 10); Money(simD, 53000, 0, 0); ChartBridgeGroups.EodMark();
+        ClockEt(2026, 10, 21, 10, 0); Tick();
+        Check(Entry(AccountsNow(), "SIM-D").Contains("\"floor\":50100,"), "0.6.6: a higher close never lifts a locked floor");
+        // still trailing: the firm's 49500 seeds the high at 51500; a close at 52000 then trails it to 50000
+        Clear(); G("firmMinimum", FM("SIM-D", "49500"));
+        Money(simD, 51000, 0, 0);
+        Check(Entry(AccountsNow(), "SIM-D").Contains("\"floor\":49500,\"roomFloor\":1500,"), "0.6.6: a trailing floor from the firm's minimum: 49500, room 1500");
+        ClockEt(2026, 10, 21, 17, 10); Money(simD, 52000, 0, 0); ChartBridgeGroups.EodMark();
+        ClockEt(2026, 10, 22, 10, 0); Tick();
+        Check(Entry(AccountsNow(), "SIM-D").Contains("\"floor\":50000,"), "0.6.6: it trails from there as the firm's does (close 52000: floor 50000): " + Entry(AccountsNow(), "SIM-D"));
+        simD.Items.Remove(AccountItem.TrailingMaxDrawdown);
+        Clear(); G("accountGroup", Join("SIM-D", "null", null));
+    }
+
     static void MemberRules()
     {
         Flat();
@@ -1141,7 +1194,6 @@ public static class GroupsHarness
             new[] { JoinRules("SIM-C", "\"g1\"", null, R("150000", "0", "4500", "eod", "0", "0", ",\"typeId\":\"two words\"")), "typeId must be The Desk's account type id" },
             new[] { JoinRules("SIM-C", "\"g1\"", null, R("150000", "0", "4500", "eod", "0", "0", ",\"consistency\":101")), "consistency must be a percent" },
             new[] { JoinRules("SIM-C", "null", null, R("150000", "0", "4500", "eod", "0", "0", "")), "rules go with joining a group only" },
-            new[] { MR("SIM-C", R("150000", "0", "4500", "eod", "0", "0", "")), "SIM-C is in no group" },
             new[] { MR("SIM-A", ""), "size is needed" },
             new[] { MR("SIM-A", R("150000", "0", "4500", "eod", "0", "0", ",\"color\":1")), "unknown key" },
         };

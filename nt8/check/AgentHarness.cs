@@ -1965,7 +1965,7 @@ public static class AgentHarness
                 Tick();
                 st = Last(agentOut, "accountState");
                 Check(Count(agentOut, "accountState") == n + 1 && st.Contains("\"kind\":\"prop\",\"group\":\"Lucid\",\"groupId\":\"g1\",\"groupSide\":null,\"noHedge\":true,\"accountType\":null,\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"intraday\",\"target\":3000,\"size\":50000,\"lockAt\":0,\"consistency\":0,\"maxMinis\":0,\"maxMicros\":0}") &&
-                      st.Contains("\"floor\":\"no intraday high is known for this account: put it in Lucid again and give its highest close\""), "0.5.8: in a group: sent again within the 1 s pass (prop, its rules; no high yet: floor null with why): " + st);
+                      st.Contains("\"floor\":\"no intraday high is known for this account: give the minimum balance from the firm's dashboard (the account's settings)\""), "0.5.8: in a group: sent again within the 1 s pass (prop, its rules; no high yet: floor null with why): " + st);
                 SetPos(simb, nq, -1);
                 Tick();
                 Check(Last(agentOut, "accountState").Contains("\"groupSide\":\"short\""), "0.5.8: another member goes short: groupSide short, sent again");

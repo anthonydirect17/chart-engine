@@ -1404,9 +1404,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             public string Name, Kind, GroupId, GroupName, Side, Session;
             public Group G;
-            public Rules R;      // 0.6.5: the member's rules (its own, or its group's); null when not in a group
+            public Rules R;      // 0.6.5: the member's rules (its own, or its group's); 0.6.6: an account in no group with its own rules too; else null
             public bool MySet;   // a personal line was ever saved (My floor or My daily, 0 included): rules are Anthony's, else null
             public double? MyFloor, MyDaily, Balance, Unrealized, Realized, Pnl, Floor, RoomFloor, RoomDaily, TargetLeft;
+            public double? NtRoomFloor;   // 0.6.6: NinjaTrader's own trailing figure, shown beside the computed room (never in place of it)
             public readonly Dictionary<string, string> Src = new Dictionary<string, string>(), Why = new Dictionary<string, string>();
             public void Set(string key, double? v, string src, string why) { if (v.HasValue) Src[key] = src; else Why[key] = why ?? "not known"; }
         }
@@ -1433,6 +1434,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     g = g.Clone();
                     if (withSide) members = state.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList();
                 }
+                else if (name != null) { Rules own; if (state.Own.TryGetValue(name, out own)) n.R = own.Clone(); }   // 0.6.6: the firm's rules on an account in no group
                 if (name != null && state.Personal.TryGetValue(name, out mine)) mine = (double[])mine.Clone();
                 Mark mk;
                 if (name != null && Marks.TryGetValue(name, out mk)) mark = mk.Clone();
@@ -1477,12 +1479,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 n.Set("floor", null, null, w); n.Set("roomFloor", null, null, w); n.Set("roomDaily", null, null, w); n.Set("targetLeft", null, null, w);
                 return n;
             }
-            if (g != null)
+            if (g != null || n.R != null)
             {
                 // 0.6.5: every number from the member's own rules (its own size, drawdown and type, lock, daily loss and target),
-                // or its group's when it has none of its own (as 0.6.4)
+                // or its group's when it has none of its own (as 0.6.4); 0.6.6: an account in no group with its own rules too
                 Rules r = n.R;
-                string whose = r.Own ? n.Name + "'s rules in " + g.Name : "group " + g.Name;
+                string whose = g == null ? n.Name + "'s rules" : r.Own ? n.Name + "'s rules in " + g.Name : "group " + g.Name;
+                string again = g != null ? "put it in " + g.Name + " again and give" : "give";
                 string floorWhy = null;
                 bool missedHigh = false;
                 if (r.Type == "static") n.Floor = r.Size - r.Drawdown;
@@ -1491,9 +1494,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     double? peak = mark == null ? null : r.Type == "eod" ? mark.PeakEod : mark.PeakIntraday;
                     string gone = mark == null ? null : r.Type == "eod" ? mark.EodMissed : mark.IntradayMissed;
-                    if (gone != null) { floorWhy = r.Type == "eod" ? "ChartBridge was not running at the close of " + gone + ": put the account in " + g.Name + " again and give the highest close from the firm's dashboard"
-                                                                  : "ChartBridge was not watching on " + gone + " while the account held a position or traded, so its intraday high may be missed: put it in " + g.Name + " again and give the highest balance from the firm's dashboard"; missedHigh = true; }
-                    else if (!peak.HasValue) floorWhy = "no " + (r.Type == "eod" ? "end-of-day" : "intraday") + " high is known for this account: put it in " + g.Name + " again and give its highest close";
+                    if (gone != null) { floorWhy = r.Type == "eod" ? "ChartBridge was not running at the close of " + gone + ": give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest close"
+                                                                  : "ChartBridge was not watching on " + gone + " while the account held a position or traded, so its intraday high may be missed: give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest balance"; missedHigh = true; }
+                    else if (!peak.HasValue) floorWhy = "no " + (r.Type == "eod" ? "end-of-day" : "intraday") + " high is known for this account: give the minimum balance from the firm's dashboard (the account's settings)";
                     else
                     {
                         double f = Math.Max(peak.Value, r.Size) - r.Drawdown;
@@ -1503,7 +1506,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 n.Set("floor", n.Floor, "computed", floorWhy);
                 // 0.6.3 (audit C2): never a room from a high that may be too low; review LOW 8: NinjaTrader's own trailing figure when it gives one
-                if (missedHigh && ntRoom.HasValue) { n.RoomFloor = ntRoom; n.Set("roomFloor", ntRoom, "ninjatrader", null); }
+                if (missedHigh && ntRoom.HasValue) { n.RoomFloor = ntRoom; n.NtRoomFloor = ntRoom; n.Set("roomFloor", ntRoom, "ninjatrader", null); }
                 else if (missedHigh) n.Set("roomFloor", null, null, floorWhy);
                 else SetRoomFloor(n, ntRoom, equity, n.Floor.HasValue ? eqWhy : floorWhy);
                 if (r.DailyLoss > 0) { n.RoomDaily = n.Pnl.HasValue ? r.DailyLoss + n.Pnl.Value : (double?)null; n.Set("roomDaily", n.RoomDaily, "computed", n.Why.ContainsKey("pnlToday") ? n.Why["pnlToday"] : null); }
@@ -1533,13 +1536,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             return (utc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
         }
 
-        // Review of #48 (item 4): with NinjaTrader's trailing drawdown and the computed room both known, the smaller (src says which).
+        // 0.6.6 (Anthony 2026-10-20: "the floor and thus the % used for certain accounts is still wrong"): the room computed from
+        // the firm's rules (the lock included) is the room; NinjaTrader's own trailing figure (the broker's, which never locks) is
+        // used only when nothing is computed, and is always sent beside it (roomFloorNt) so the page can flag a difference.
+        // Was (review of #48, item 4): the smaller of the two, so NinjaTrader's unlocked figure won over a locked floor.
+        public const double FloorCheckDollars = 25;
         private static void SetRoomFloor(Numbers n, double? ntRoom, double? equity, string why)
         {
             double? comp = n.Floor.HasValue && equity.HasValue ? equity.Value - n.Floor.Value : (double?)null;
-            if (ntRoom.HasValue && comp.HasValue) { n.RoomFloor = Math.Min(ntRoom.Value, comp.Value); n.Set("roomFloor", n.RoomFloor, ntRoom.Value < comp.Value ? "ninjatrader" : "computed", null); }
+            n.NtRoomFloor = ntRoom;
+            if (comp.HasValue) { n.RoomFloor = comp; n.Set("roomFloor", comp, "computed", null); }
             else if (ntRoom.HasValue) { n.RoomFloor = ntRoom; n.Set("roomFloor", n.RoomFloor, "ninjatrader", null); }
-            else { n.RoomFloor = comp; n.Set("roomFloor", comp, "computed", why); }
+            else { n.RoomFloor = null; n.Set("roomFloor", null, null, why); }
         }
 
         private static double? Get(Numbers n, string key)
@@ -1580,8 +1588,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"group\":").Append(n.GroupId == null ? "null" : CbJson.Str(n.GroupId))
              .Append(",\"myFloor\":").Append(Num(n.MyFloor)).Append(",\"myDailyLoss\":").Append(Num(n.MyDaily)).Append(",\"myLimitsSet\":").Append(n.MySet ? "true" : "false");
             foreach (string k in PageKeys) b.Append(",\"").Append(k).Append("\":").Append(Num(Get(n, k)));
+            b.Append(",\"roomFloorNt\":").Append(Num(n.NtRoomFloor));   // 0.6.6: NinjaTrader's own figure, beside the room (the page flags a difference)
             SrcWhy(b, n, PageKeys);
-            b.Append(",\"rules\":");   // 0.6.5: a member's rules (own true: its own; false: its group's), null in no group
+            b.Append(",\"rules\":");   // 0.6.5: a member's rules (own true: its own; false: its group's), null in no group; 0.6.6: an account in no group with its own rules
             if (n.R == null) b.Append("null"); else RulesJson(b, n.R, true);
         }
 
@@ -1644,6 +1653,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "accountGroup", new[] { "type", "cid", "account", "group", "highClose", "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" } },
             { "memberRules", new[] { "type", "cid", "account", "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" } },
             { "accountLimits", new[] { "type", "cid", "account", "floor", "dailyLoss" } },
+            { "firmMinimum", new[] { "type", "cid", "account", "minBalance" } },   // 0.6.6: the firm's minimum balance seeds the floor
         };
 
         public static bool Handles(string type) { return type != null && Keys.ContainsKey(type); }
@@ -1663,7 +1673,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     EnsureLoaded();
                     lock (Mem) if (readError != null) why = ReadFailedText + "; nothing was changed";
                 }
-                if (why == null) why = type == "groupSave" ? GroupSave(m) : type == "groupDelete" ? GroupDelete(m) : type == "accountGroup" ? AccountGroup(m) : type == "memberRules" ? MemberRules(m) : AccountLimits(m);
+                if (why == null) why = type == "groupSave" ? GroupSave(m) : type == "groupDelete" ? GroupDelete(m) : type == "accountGroup" ? AccountGroup(m) : type == "memberRules" ? MemberRules(m) : type == "firmMinimum" ? FirmMinimum(m) : AccountLimits(m);
                 if (why != null) client.Send(Reject(cid, why));
             }
             catch (Exception ex)
@@ -1949,13 +1959,55 @@ namespace NinjaTrader.NinjaScript.AddOns
                 State next;
                 lock (Mem) next = state.Clone();
                 string gid;
-                if (!next.Members.TryGetValue(name, out gid)) return name + " is in no group: its own rules are for a member of a group (My floor and My daily are for an account in no group)";
-                gname = next.Groups[gid].Name;
+                // 0.6.6: an account in no group may hold the firm's rules too (its floor then trails and locks as the firm's does)
+                gname = next.Members.TryGetValue(name, out gid) ? next.Groups[gid].Name : null;
                 next.Own[name] = r;
                 string err = Save(next);
                 if (err != null) return err;
             }
-            ChartBridgeServer.Log("groups: " + name + "'s own rules in " + gname + ": " + MemberWords(r) + " (by the page)");
+            ChartBridgeServer.Log("groups: " + name + "'s own rules" + (gname != null ? " in " + gname : " (in no group)") + ": " + MemberWords(r) + " (by the page)");
+            Changed();
+            return null;
+        }
+
+        // 0.6.6 (Anthony 2026-10-20: the floor "still wrong ... how do we square this, so it stops being an issue"): the minimum
+        // balance the firm's dashboard shows seeds the account's highs, so the computed floor equals the firm's from now on:
+        // high = minBalance + drawdown (the floor is then min(high - drawdown, lock) = minBalance, a locked floor included).
+        // The account needs the firm's rules (a group's, or its own), with a trailing drawdown; a minimum below the starting
+        // floor (size - drawdown) or above the lock is refused (the firm never shows one).
+        private static string FirmMinimum(Dictionary<string, string> m)
+        {
+            string name = ChartBridgeV3.Str(m, "account"), why;
+            if (name == null) return "firmMinimum needs account (a plain string)";
+            double min;
+            if ((why = Money(m, "minBalance", false, out min)) != null) return why;
+            Account a = Find(name);
+            if (a == null && !ChartBridgeAccounts.Listed(name)) return "no account " + name;
+            if (a != null) name = a.Name;
+            Rules r;
+            lock (Mem)
+            {
+                if (marksError != null) return "account-marks.txt could not be read (" + marksError + "); nothing was changed";
+                string gid; Group g;
+                if (state.Members.TryGetValue(name, out gid) && state.Groups.TryGetValue(gid, out g)) r = state.RulesOf(name, g);
+                else if (!state.Own.TryGetValue(name, out r)) return name + " has no firm rules yet: apply its account type first (the floor comes from its drawdown and lock)";
+            }
+            if (r.Type == "static") return name + "'s drawdown is static: its floor is fixed at " + (r.Size - r.Drawdown).ToString("0.00", CultureInfo.InvariantCulture) + ", nothing to give";
+            if (min < r.Size - r.Drawdown - 0.004) return "the minimum balance " + min.ToString("0.00", CultureInfo.InvariantCulture) + " is below the starting floor (" + (r.Size - r.Drawdown).ToString("0.00", CultureInfo.InvariantCulture) + "): check the firm's dashboard";
+            if (r.LockAt > 0 && min > r.LockAt + 0.004) return "the minimum balance " + min.ToString("0.00", CultureInfo.InvariantCulture) + " is above where the floor stops (" + r.LockAt.ToString("0.00", CultureInfo.InvariantCulture) + "): check the firm's dashboard or the account's type";
+            double high = Math.Round(min + r.Drawdown, 2);
+            bool flatNow = a == null || IsFlat(a);
+            double? balNow = Up(a) ? Item(a, AccountItem.CashValue) : null;
+            lock (Mem)
+            {
+                Mark mk;
+                if (!Marks.TryGetValue(name, out mk)) Marks[name] = mk = new Mark { Name = name };
+                mk.PeakEod = high; mk.PeakIntraday = high; marksDirty = true;
+                mk.EodMissed = null; mk.IntradayMissed = null; mk.CloseSeen = LatestClose(NowEt());
+                mk.Seen = true; mk.Legacy = false; mk.LastAt = NowMs(); if (balNow.HasValue && balNow.Value > 0) { mk.LastBal = Math.Round(balNow.Value, 2); mk.LastFlat = flatNow; }
+            }
+            SaveMarks(true);
+            ChartBridgeServer.Log("groups: " + name + "'s floor set from the firm's minimum balance " + min.ToString("0.00", CultureInfo.InvariantCulture) + " (its high is now " + high.ToString("0.00", CultureInfo.InvariantCulture) + "; by the page)");
             Changed();
             return null;
         }
