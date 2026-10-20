@@ -243,6 +243,7 @@ public static class GroupsHarness
             Backups();       // 0.6.3 (audit C3): groups.txt and account-marks.txt fall back to their last good copy
             MemberRules();   // 0.6.5 (Anthony 2026-10-19, PRIORITY): each member's own rules, the old file, the risk percent
             GroupEntries();  // 0.6.5 (Anthony 2026-10-19): trade the group from the ticket, each member sized from the risk percent
+            FirmLimits();    // 0.6.6 (Anthony 2026-10-20): his own entries: the firm's max only; the machines': a known breach only; the daily loss alert
             FirmFloor();     // 0.6.6 (Anthony 2026-10-20): the firm's rules on an account in no group, the computed floor first, firmMinimum
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
@@ -1597,4 +1598,107 @@ public static class GroupsHarness
         ClockEt(2026, 10, 14, 10, 0);
     }
 
+
+    // ------------------------------------------------------------ 0.6.6 (Anthony 2026-10-20): the firm's limits on entries
+    // "Only absolutely critical things should stop an account from trading." The page's entries: the firm's max contracts only (no
+    // max typed: no check; never a room); the bot's, an agent's or a follower's: held only on a KNOWN breach (the max, the stop risk
+    // plus the open stop risk past a known room, the daily loss reached today), with one riskAlert; not known lets it go.
+    static string RiskAlerts() { lock (sent) return string.Join("\n", sent.Where(m => m.StartsWith("{\"type\":\"riskAlert\""))); }
+    static int RiskAlertCount() { lock (sent) return sent.Count(m => m.StartsWith("{\"type\":\"riskAlert\"")); }
+    static void FirmLimits()
+    {
+        Flat();
+        ChartBridgeGroups.GapMs = 1e12;
+        string p = Path.Combine(folder, "groups.txt"), mp = Path.Combine(folder, "account-marks.txt");
+        Gone(p); Gone(mp);
+        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\toff\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\t10\n");   // No hedging off: a flip is his to make
+        ClockEt(2026, 10, 20, 9, 0); Restart();
+        foreach (Account a in new[] { simA, simB, simC, simD }) a.Connection.Status = ConnectionStatus.Connected;
+        ClockEt(2026, 10, 19, 18, 1);
+        Money(simA, 150500, 0, 0); Money(simB, 50500, 0, 0); Money(simC, 25000, 0, 0); Money(simD, 50000, 0, 0);
+        Clear(); G("accountGroup", JoinRules("SIM-B", "\"g1\"", "51000", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":40")));
+        G("accountGroup", JoinRules("SIM-C", "\"g1\"", null, R("25000", "500", "1000", "intraday", "25100", "1250", ",\"maxMinis\":2,\"maxMicros\":20")));
+        G("accountGroup", Join("SIM-D", "\"g1\"", null));
+        Tick();
+        ClockEt(2026, 10, 20, 10, 0); Tick();
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-B") == "g1", "LIM setup: SIM-B 50K (4 minis / 40 micros, room 1500), SIM-C 25K intraday (daily 500, 2 / 20), SIM-D on the group's rules (no max)");
+        int b0 = Submits(simB);
+        // the page: the firm's max contracts only
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":5"));
+        Check(Rejection().Contains("over SIM-B's max of 4 minis: this entry of 5 NQ would take it to 5 minis (it holds or has working 0, every instrument). Nothing was sent; 4 NQ at most") && Submits(simB) == b0,
+              "LIM page: 5 NQ over the firm's 4 minis: refused with a short why, nothing sent: " + Rejection());
+        Check(RiskAlertCount() == 0, "LIM page: his own refusal is the ticket's note, no alert");
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":4"));
+        Check(Rejection() == "" && Submits(simB) == b0 + 1, "LIM page: 4 NQ (the max) goes: " + Rejection());
+        Flat(); Pos(simB, nq, 4);
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990"));
+        Check(Rejection().Contains("this entry of 1 NQ would take it to 5 minis (it holds or has working 4, every instrument). Nothing was sent\""), "LIM page: holding 4 NQ, an add of 1 is refused: " + Rejection());
+        Clear(); O(Order("SIM-B", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(Rejection().Contains("over SIM-B's max of 40 micros: this entry of 1 MNQ would take it to 41 micros (it holds or has working 40, every instrument)"), "LIM page: holding 4 NQ (40 micros), 1 MNQ against maxMicros: refused: " + Rejection());
+        b0 = Submits(simB);
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":4"));
+        Check(Rejection() == "" && Submits(simB) == b0 + 1, "LIM page: an exit is never checked (sell 4 of the 4): " + Rejection());
+        Flat(); Pos(simB, nq, 4);
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":6"));
+        Check(Rejection() == "" && Submits(simB) == b0 + 2, "LIM page: a flip counts only what it opens (sell 6 on long 4: short 2 of 4): " + Rejection());
+        Flat(); Pos(simB, nq, 4);
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":9"));
+        Check(Rejection().Contains("this entry of 5 NQ would take it to 5 minis (it holds or has working 0, every instrument)") && Submits(simB) == b0 + 2, "LIM page: sell 9 on long 4 opens 5: refused: " + Rejection());
+        Flat();
+        int d0 = Submits(simD);
+        Clear(); O(Order("SIM-D", "NQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":9"));
+        Check(Rejection() == "" && Submits(simD) == d0 + 1, "LIM page: no max typed (SIM-D): no check (9 NQ, the config cap): " + Rejection());
+        Flat();
+        // the daily loss reached: one alert, then no machine entry for the rest of that trading day; his own orders still go
+        Money(simC, 24400, 0, 0);
+        Clear(); Tick(); Tick();
+        Check(RiskAlertCount() == 1 && RiskAlerts().Contains("{\"type\":\"riskAlert\",\"kind\":\"dailyLoss\",\"account\":\"SIM-C\",\"text\":\"SIM-C reached its daily loss limit of $500.00 (daily room -$100.00): the bot, the agents and the copier send no new entry on it until the next trading day (18:00 ET). Your own orders are not held, and nothing was flattened.\"}"),
+              "LIM daily: the room at -100: one riskAlert (two ticks): " + RiskAlerts());
+        Check(simC.Calls.All(c => !c.StartsWith("flatten")) && simC.Orders.Count(o => o.OrderState == OrderState.Working) == 0, "LIM daily: nothing flattens or places anything on its own");
+        int c0 = Submits(simC);
+        Clear(); O(Order("SIM-C", "NQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(Rejection() == "" && Submits(simC) == c0 + 1 && RiskAlertCount() == 0, "LIM daily: Anthony's own entry still goes (no daily room check on his orders): " + Rejection());
+        Flat();
+        Clear();
+        string held = ChartBridgeOrders.MachineHold("the bot", "held", simC, "NQ", 1, 0, 100);
+        Check(held == "SIM-C reached its daily loss today: no new entry from the bot, an agent or the copier until the next trading day (18:00 ET)" &&
+              RiskAlerts().Contains("\"kind\":\"held\",\"account\":\"SIM-C\",\"text\":\"Held: the bot's entry on SIM-C: SIM-C reached its daily loss today"), "LIM machine: held after the daily loss, one alert: " + held + " " + RiskAlerts());
+        Money(simC, 25000, 0, 0); Tick();
+        Check(ChartBridgeOrders.MachineHold("agent manrae", "held", simC, "NQ", 1, 0, 100) != null, "LIM machine: still held when the room comes back that day (the open loss recovered)");
+        ClockEt(2026, 10, 20, 18, 1); Tick();
+        Clear();
+        Check(ChartBridgeOrders.MachineHold("the bot", "held", simC, "NQ", 1, 0, 100) == null && RiskAlertCount() == 0, "LIM machine: the next trading day (18:01 ET) it trades again: " + Rejection());
+        ClockEt(2026, 10, 21, 10, 0); Tick();
+        // a known room: the stop risk plus the open stop risk past it holds the entry; not known lets it go
+        Clear();
+        held = ChartBridgeOrders.MachineHold("the bot", "held", simB, "NQ", 1, 0, 2000);
+        Check(held == "its stop risk $2,000 is more than SIM-B's room to the floor $1,500" && RiskAlertCount() == 1, "LIM machine: a stop risk past the known room to the floor: held, one alert: " + held);
+        Check(ChartBridgeOrders.MachineHold("the bot", "held", simB, "NQ", 1, 0, 1000) == null, "LIM machine: within the room: it goes");
+        Check(ChartBridgeOrders.MachineHold("the bot", "held", simB, "NQ", 1, 0, null) == null, "LIM machine: its stop risk not known: it goes");
+        Pos(simB, nq, 1); Manual(simB, nq, OrderAction.Sell, OrderType.StopMarket, 1, null, "typed stop").StopPrice = 24975;
+        held = ChartBridgeOrders.MachineHold("the bot", "held", simB, "NQ", 1, 0, 1100);
+        Check(held == "its stop risk $1,100 plus the open stop risk $500 is more than SIM-B's room to the floor $1,500", "LIM machine: the open stop risk counts (500 + 1100 past 1500): " + held);
+        Check(ChartBridgeOrders.MachineHold("the bot", "held", simB, "NQ", 1, 0, 900) == null, "LIM machine: 500 + 900 within 1500: it goes");
+        Flat(); Pos(simB, nq, 1);
+        Check(ChartBridgeOrders.MachineHold("the bot", "held", simB, "NQ", 1, 0, 2000) == null, "LIM machine: a position with no stop: the open risk is not known, it goes");
+        Flat();
+        Money(simC, 24700, 0, 0); Tick();
+        held = ChartBridgeOrders.MachineHold("the copier", "skipped", simC, "NQ", 1, 0, 400);
+        Check(held == "its stop risk $400 is more than SIM-C's daily room $200" && RiskAlerts().Contains("\"kind\":\"skipped\",\"account\":\"SIM-C\",\"text\":\"Copier: SIM-C skipped this copy: its stop risk $400"), "LIM machine: past the known daily room: a follower skips this copy, one alert: " + held);
+        Money(simC, 25000, 0, 0); Tick();
+        held = ChartBridgeOrders.MachineHold("the bot", "held", simB, "NQ", 5, 0, null);
+        Check(held != null && held.StartsWith("over SIM-B's max of 4 minis"), "LIM machine: the firm's max holds the machines too: " + held);
+        Check(ChartBridgeOrders.MachineHold("the bot", "held", simD, "NQ", 9, 0, 100) == null, "LIM machine: no max and room enough: it goes");
+        // through the order path: the bot's entry (PlaceBotEntry) with a 400 tick stop ($2,000) past SIM-B's room is refused, nothing sent
+        b0 = Submits(simB);
+        Order bo;
+        Clear();
+        string bw = ChartBridgeOrders.PlaceBotEntry("{\"type\":\"order\",\"account\":\"SIM-B\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":400,\"target\":0}}", out bo);
+        Check(bw == "its stop risk $2,000 is more than SIM-B's room to the floor $1,500" && bo == null && Submits(simB) == b0 && RiskAlerts().Contains("Held: the bot's entry on SIM-B"), "LIM bot: the order path holds it, nothing sent, one alert: " + bw);
+        bw = ChartBridgeOrders.PlaceBotEntry("{\"type\":\"order\",\"account\":\"SIM-B\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":20,\"target\":40}}", out bo);
+        Check(bw == null && bo != null && Submits(simB) == b0 + 1, "LIM bot: within the room it goes: " + bw);
+        Flat();
+        ChartBridgeGroups.GapMs = 10000;
+        ClockEt(2026, 10, 14, 10, 0);
+    }
 }

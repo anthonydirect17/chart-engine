@@ -283,6 +283,66 @@ namespace NinjaTrader.NinjaScript.AddOns
             return total;
         }
 
+        // ---------------------------------------------------------- 0.6.6: the firm's limits on entries (Anthony 2026-10-20)
+        // "Only absolutely critical things should stop an account from trading." Anthony is the final arbiter on his own orders.
+        //   - His own entries (the page: one account, or each member of a group entry) have ONE check: the firm's max contracts, a
+        //     fixed number typed in the account's rules (never stale). No max set: no check. No floor, daily room or no-stop check.
+        //   - The entries no one types (the bot, an agent, a copier follower) are held back only on a KNOWN breach: the max
+        //     contracts; this entry's stop risk plus the open stop risk past a known room to the floor or a known daily room (the
+        //     group sizing's arithmetic); or the account's daily loss already reached today (no new entry for the rest of that
+        //     trading day). A room or a risk not known lets the entry go. Each hold sends one riskAlert.
+        // Only the part of an order that opens or adds is checked (opening); an exit never is, and nothing here flattens anything.
+
+        // Anthony's own entry: the firm's max contracts, or null. opening: the contracts it opens or adds; closing: the position it
+        // closes first (an order past flat), which no longer counts.
+        internal static string FirmMaxWhy(Account a, string root, int opening, int closing)
+        {
+            if (a == null || opening < 1) return null;
+            ChartBridgeGroups.Rules r = ChartBridgeGroups.RulesOf(a.Name);
+            if (r == null || (r.MaxMinis <= 0 && r.MaxMicros <= 0)) return null;   // no max typed: no check
+            string ignored;
+            double used;
+            OpenStopRisk(a, out ignored, out used);
+            used = Math.Max(0, used - Math.Max(0, closing) * MiniEquivalent(root));
+            FirmMax m = FirmMaxFor(r, root, used);
+            if (m == null || opening <= m.Left) return null;
+            return "over " + a.Name + "'s max of " + Qty(m.Cap) + " " + m.Unit + ": this entry of " + opening + " " + root + " would take it to " + Qty(m.Used + opening * m.Per) + " " + m.Unit +
+                   " (it holds or has working " + Qty(m.Used) + ", every instrument). Nothing was sent" + (m.Left > 0 ? "; " + m.Left + " " + root + " at most" : "");
+        }
+
+        // The bot's, an agent's or a copier follower's entry (who: "the bot", "agent X", "the copier"): held back only on a known breach,
+        // with one riskAlert (kind "held", or "skipped" for a follower). entryRisk: this entry's stop risk in dollars (null: not known).
+        internal static string MachineHold(string who, string kind, Account a, string root, int opening, int closing, double? entryRisk)
+        {
+            if (a == null || opening < 1) return null;
+            string why = MachineHoldWhy(a, root, opening, closing, entryRisk);
+            if (why == null) return null;
+            string text = (kind == "skipped" ? "Copier: " + a.Name + " skipped this copy: " : "Held: " + who + "'s entry on " + a.Name + ": ") + why;
+            ChartBridgeGroups.RiskAlert(kind, a.Name, text);
+            return why;
+        }
+
+        internal static string MachineHoldWhy(Account a, string root, int opening, int closing, double? entryRisk)
+        {
+            string max = FirmMaxWhy(a, root, opening, closing);
+            if (max != null) return max;
+            ChartBridgeGroups.Numbers n;
+            try { n = ChartBridgeGroups.Read(a.Name, a, false); }
+            catch (Exception ex) { ChartBridgeServer.Log("limits: the numbers of " + a.Name + " could not be read (" + ex.Message + "): not known, the entry goes"); return null; }
+            if (ChartBridgeGroups.DailyReached(n))
+                return a.Name + " reached its daily loss today: no new entry from the bot, an agent or the copier until the next trading day (18:00 ET)";
+            if (!entryRisk.HasValue || !n.Balance.HasValue || n.Balance.Value <= 0) return null;   // a balance of 0: NinjaTrader has not given one yet, so no room is known
+            string ignored;
+            double used;
+            double? open = OpenStopRisk(a, out ignored, out used);
+            if (!open.HasValue) return null;
+            double total = Math.Round((open.Value + entryRisk.Value) * 100) / 100;
+            string words = "its stop risk " + Usd(entryRisk.Value) + (open.Value > 0.004 ? " plus the open stop risk " + Usd(Math.Round(open.Value * 100) / 100) : "");
+            if (n.RoomFloor.HasValue && total > n.RoomFloor.Value + 0.004) return words + " is more than " + a.Name + "'s room to the floor " + Usd(n.RoomFloor.Value);
+            if (n.RoomDaily.HasValue && total > n.RoomDaily.Value + 0.004) return words + " is more than " + a.Name + "'s daily room " + Usd(n.RoomDaily.Value);
+            return null;
+        }
+
         // Review 1b: one group entry at a time, from its sizing to its last member's order; every page entry takes it too (PlaceOrder)
         internal static readonly object GroupEntryLock = new object();
 
@@ -597,6 +657,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 state = new State(); loaded = false; readError = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
                 marksSaveFailed = false; lastGroupsJson = null; LastSide.Clear();
             }
+            ClearDailyHits();   // 0.6.6
         }
 
         // Reads groups.txt and account-marks.txt (ChartBridgeAccounts.StartNow, at ChartBridge's start; the harness on its thread).
@@ -1018,6 +1079,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
             SaveMarks(false);
+            // 0.6.6: an account whose known daily room reached 0 or below is marked for the day, with one alert (DailyReached)
+            foreach (Account a in all)
+            {
+                if (a == null || a.Name == null || ChartBridgeOrders.IsNeverTradable(a.Name) || !Up(a) || !ChartBridgeAccounts.Listed(a.Name)) continue;
+                try { DailyReached(Read(a.Name, a, false)); }
+                catch (Exception ex) { ChartBridgeServer.Log("groups: the daily loss check of " + a.Name + " failed (" + ex.Message + ")"); }
+            }
             foreach (string w in notes) { ChartBridgeServer.Log("NOTE: " + w); ChartBridgeServer.SendToTraders("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(w) + "}"); }
             try { Leftovers(); } catch (Exception ex) { ChartBridgeServer.Log("groups: leftover exits check error: " + ex.Message); }   // Q-EXIT (b)
             SendGroups(false);
@@ -2089,6 +2157,57 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- telling the pages
         private static string Reject(string cid, string reason) { return "{\"type\":\"reject\"" + (cid != null ? ",\"cid\":" + CbJson.Str(cid) : "") + ",\"reason\":" + CbJson.Str(reason) + "}"; }
+        // ---------------------------------------------------------- 0.6.6: the daily loss reached, and the risk alerts (Anthony 2026-10-20)
+        // An account whose known daily room went to 0 or below in a trading day (account -> that day): no new entry from the bot, an
+        // agent or the copier on it for the rest of that day, whatever its room does after (an open loss that comes back). Anthony's own
+        // orders are never held by it, and nothing flattens the account: the firm does that at its own limit. One alert per account and
+        // day. Memory only: after a restart a room still at or below 0 marks it again.
+        private static readonly Dictionary<string, string> DailyHit = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        public static bool DailyReached(Numbers n)
+        {
+            if (n == null || n.Name == null || n.Session == null) return false;
+            bool fresh = false, hit;
+            lock (DailyHit)
+            {
+                string day;
+                hit = DailyHit.TryGetValue(n.Name, out day) && day == n.Session;
+                // a balance of 0 is NinjaTrader not having given one yet (Tick's rule): never a loss reached
+                if (!hit && n.RoomDaily.HasValue && n.RoomDaily.Value <= 0 && n.Balance.HasValue && n.Balance.Value > 0) { DailyHit[n.Name] = n.Session; hit = fresh = true; }
+            }
+            if (fresh)
+            {
+                double limit = n.R != null && n.R.DailyLoss > 0 ? n.R.DailyLoss : n.MyDaily ?? 0;
+                RiskAlert("dailyLoss", n.Name, n.Name + " reached its daily loss" + (limit > 0 ? " limit of " + Usd(limit) : "") + " (daily room " + Usd(n.RoomDaily.Value) +
+                          "): the bot, the agents and the copier send no new entry on it until the next trading day (18:00 ET). Your own orders are not held, and nothing was flattened.");
+            }
+            return hit;
+        }
+        public static void ClearDailyHits() { lock (DailyHit) DailyHit.Clear(); }
+
+        // 0.6.6: the rules that hold for an account (a member's own, else its group's; an account in no group with its own), or null.
+        // No clock read, so the page's entries ask it before anything else.
+        public static Rules RulesOf(string name)
+        {
+            if (name == null) return null;
+            EnsureLoaded();
+            lock (Mem)
+            {
+                string id;
+                Group g;
+                if (state.Members.TryGetValue(name, out id) && state.Groups.TryGetValue(id, out g)) return state.RulesOf(name, g);
+                Rules own;
+                return state.Own.TryGetValue(name, out own) ? own.Clone() : null;
+            }
+        }
+
+        // One alert (0.6.6): every page that trades shows it as a banner with a sound, never a dialog. kind: dailyLoss, held or skipped.
+        public static void RiskAlert(string kind, string account, string text)
+        {
+            ChartBridgeServer.Log("ALERT: " + text);
+            ChartBridgeServer.SendToTraders("{\"type\":\"riskAlert\",\"kind\":" + CbJson.Str(kind) + ",\"account\":" + CbJson.Str(account) + ",\"text\":" + CbJson.Str(text) + "}");
+        }
+        private static string Usd(double v) { return (v < 0 ? "-$" : "$") + Math.Abs(v).ToString("#,0.00", CultureInfo.InvariantCulture); }
+
         private static string StatusJson(string level, string text) { return "{\"type\":\"status\",\"level\":\"" + level + "\",\"text\":" + CbJson.Str(text) + "}"; }
         private static void Alarm(string text) { ChartBridgeServer.Log("ALERT: " + text); ChartBridgeServer.SendToTraders(StatusJson("error", text)); }
     }

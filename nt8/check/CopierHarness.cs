@@ -157,6 +157,7 @@ public static class CopierHarness
             RealFollowerAllowed();
             PositionLimit();
             GroupSkip();   // 0.5.8: one direction per group (G3 a): a follower whose group holds the other side is skipped
+            FirmLimitSkip();   // 0.6.6 (Anthony 2026-10-20): a follower that would break a known firm limit skips that one copy, with one alert
             DailyLoss();
             ConnectionDrop();
             MassDisconnect();
@@ -917,6 +918,31 @@ public static class CopierHarness
         finally
         {
             Reset(); Pos(evalA, nq, 0);
+            File.Delete(file);
+            ChartBridgeGroups.StartNow();
+        }
+    }
+
+    // ------------------------------------------------------------ 0.6.6: a follower over the firm's max contracts skips that one copy
+    static void FirmLimitSkip()
+    {
+        string file = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "ChartBridge", "groups.txt");
+        // SIM-F1's own firm rules (in no group): max 2 micros; it copies 3 MNQ
+        File.WriteAllText(file, ChartBridgeGroups.Header + "\n#\nrules\tSIM-F1\t50000\t-\t2000\teod\t50100\t3000\t-\t-\t2\t-\n");
+        ChartBridgeGroups.StartNow();
+        try
+        {
+            int b1 = f1.Calls.Count, b3 = f3.Calls.Count, l0 = lead.Calls.Count;
+            sent.Clear();
+            LeaderEntry(1);
+            Check(After(f1, b1).Count == 0 && EventSaid("skip", "SIM-F1", "over SIM-F1's max of 2 micros: this entry of 3 MNQ would take it to 3 micros"), "0.6.6: SIM-F1 over its firm max (3 MNQ of 2 micros): this copy is skipped, nothing sent");
+            Check(sent.Count(m => m.StartsWith("{\"type\":\"riskAlert\",\"kind\":\"skipped\",\"account\":\"SIM-F1\"")) == 1, "0.6.6: one riskAlert for the skip: " + string.Join(" | ", sent.Where(m => m.Contains("riskAlert"))));
+            Check(After(f3, b3).Count == 1 && lead.Calls.Count > l0, "0.6.6: the leader and the other followers trade as normal");
+            Check(Regex.IsMatch(State(), "\"account\":\"SIM-F1\"[^}]*\\}[^}]*\"skipped\":\"limit\""), "0.6.6: the page sees SIM-F1 skipped: limit");
+        }
+        finally
+        {
+            Reset();
             File.Delete(file);
             ChartBridgeGroups.StartNow();
         }
