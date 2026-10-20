@@ -234,7 +234,7 @@ public static class CopierHarness
         Msg("client", "{\"type\":\"client\",\"v\":3}");
         sent.Clear();
         Msg("copierGet", "{\"type\":\"copierGet\",\"cid\":\"g\"}");
-        Check(Last().StartsWith("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":false,\"armed\":false,\"standDownWhy\":\"ChartBridge started: check the accounts and press Re-arm\""), "on: the copier starts stood down: " + Last());
+        Check(Last().StartsWith("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":false,\"canRemove\":true,\"armed\":false,\"standDownWhy\":\"ChartBridge started: check the accounts and press Re-arm\""), "on: the copier starts stood down (0.6.6: canRemove, copierFollowerRemove taken): " + Last());
         sent.Clear(); Msg("copierRearm", "{\"type\":\"copierRearm\"}");
         Check(Rejected("No leader is set."), "Re-arm with no leader: refused");
         ChartBridgeClient other = new ChartBridgeClient(null, 93) { Origin = "http://localhost:8765" };
