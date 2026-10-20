@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { TEST_PIN, enterPin, ticketOnSim101 } from './smoke-pin.mjs';
 import { C as H, hostUrl, waitLive } from './chart-host.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -84,7 +84,9 @@ const popState = (page, scope) => page.evaluate(sc => {
     chip: chip ? (() => { const c = chip.getBoundingClientRect(); return { x: c.left, y: c.top, b: c.bottom, r: c.right }; })() : null };
 }, scope);
 
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+// DECISION 2026-10-14e: the ticket starts on None, where Close and Flatten all rightly send nothing; this smoke checks the keys
+// with a popover open, so every page starts as if Sim101 had just been picked (as smoke:hotkeys)
+const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));
 try {
   await startBridge();
   for (const [w, h] of [[1366, 768], [1920, 1080], [2560, 1440]]) {
