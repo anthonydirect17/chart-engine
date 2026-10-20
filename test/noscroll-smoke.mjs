@@ -117,10 +117,27 @@ try {
     for (const pid of await page.evaluate(() => window.workspace.panels().filter(p => p.type === 'chart').map(p => p.id))) {
       await page.click(`.ws-panel[data-id="${pid}"] .ind-btn`);
       await expectFits(page, `.ws-panel[data-id="${pid}"] .ind-panel`, 'Indicators of chart ' + pid);
+      /* 1.34.0 (the audit): a tall menu never slides under the top bar; it stays whole on screen, its list scrolling inside if needed */
+      const below = () => page.evaluate(i => { const bar = document.querySelector('.ws-top').getBoundingClientRect().bottom, pn = document.querySelector(`.ws-panel[data-id="${i}"] .ind-panel`), r = pn.getBoundingClientRect(), c = pn.querySelector('.ind-set'), cr = c ? c.getBoundingClientRect() : null;
+        return { bar: Math.round(bar), top: Math.round(r.top), bottom: Math.round(r.bottom), card: cr ? [Math.round(cr.top), Math.round(cr.bottom)] : null, h: innerHeight }; }, pid);
+      const ub = await below();
+      check(ub.top >= ub.bar && ub.bottom <= ub.h, 'Indicators of chart ' + pid + ' stays below the top bar and on screen: ' + JSON.stringify(ub));
+      /* each group opened in turn (the menu at its tallest): still below the top bar, whole, its list scrolling inside if need be */
+      for (const cat of await page.$$eval(`.ws-panel[data-id="${pid}"] .ind-panel [data-act="cat"]`, l => l.map(b => b.dataset.id))) {
+        await page.$eval(`.ws-panel[data-id="${pid}"] .ind-panel [data-act="cat"][data-id="${cat}"]`, b => b.click()); await page.waitForTimeout(60);   // the button may sit in the scrolled list
+        const uc = await below();
+        if (w === 1366 && cat === 'price' && ub.top > 200) await page.screenshot({ path: path.join(out, 'noscroll-indicators-tall-1366.png') });   // a low chart's tall menu
+        if (!(uc.top >= uc.bar && uc.bottom <= uc.h)) check(false, 'Indicators of chart ' + pid + ' with ' + cat + ' open: under the top bar or off screen: ' + JSON.stringify(uc));
+      }
+      const ul = await below();
+      check(ul.top >= ul.bar && ul.bottom <= ul.h, 'Indicators of chart ' + pid + ', every group opened in turn: below the top bar and whole: ' + JSON.stringify(ul));
+      await page.$eval(`.ws-panel[data-id="${pid}"] .ind-btn`, b => b.click()); await page.$eval(`.ws-panel[data-id="${pid}"] .ind-btn`, b => b.click()); await page.waitForTimeout(60);   // closed and opened again: its groups folded
       const gears = await page.$$eval(`.ws-panel[data-id="${pid}"] .ind-panel [data-act="gear"]`, l => l.map(b => b.dataset.id));
       for (const g of gears) {
         await page.click(`.ws-panel[data-id="${pid}"] .ind-panel [data-act="gear"][data-id="${g}"]`);
         await expectFits(page, `.ws-panel[data-id="${pid}"] .ind-panel`, '  its ' + g + ' gear');
+        const ug = await below();
+        check(ug.top >= ug.bar && (!ug.card || ug.card[0] >= ug.bar), '  its ' + g + ' gear: the menu and its card below the top bar: ' + JSON.stringify(ug));
         await page.click(`.ws-panel[data-id="${pid}"] .ind-panel [data-act="gear"][data-id="${g}"]`);
       }
       await esc();

@@ -3522,14 +3522,16 @@ function mount(container, options) {
       if (SLIM) {
         const b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect();
         const below = b.bottom, room = window.innerHeight - 8;
+        /* 1.34.0 (the audit): never under the host's top bar (the workspace's .ws-top sits over the panels): a tall menu moved up
+           stops just below it, and its list scrolls inside when even that is not room enough */
+        const bar = document.querySelector('.ws-top'), minTop = bar ? Math.ceil(bar.getBoundingClientRect().bottom) + 6 : 8;
         panel.style.maxWidth = Math.max(220, Math.floor(window.innerWidth - 16)) + 'px';
         panel.style.maxHeight = '';
         const h = panel.offsetHeight;
         let top = below + 6;
-        if (top + h > room) top = b.bottom + 6;
-        if (top + h > room) top = Math.max(8, room - h);
+        if (top + h > room) top = Math.max(minTop, room - h);
         panel.style.top = Math.round(top - w.top) + 'px';
-        if (top + h > room) panel.style.maxHeight = Math.floor(room - top) + 'px';
+        if (top + h > room) panel.style.maxHeight = Math.max(120, Math.floor(room - top)) + 'px';
         panel.style.left = '0px';
         const card = panel.querySelector('.ind-set'), extra = card && panel.classList.contains('has-gear') ? card.offsetWidth + 8 : 0;   // the gear's card beside it
         const over = panel.getBoundingClientRect().right + extra - (window.innerWidth - 8);
@@ -3538,8 +3540,8 @@ function mount(container, options) {
         if (extra) {                                             // the card on the left when the right has no room; up as needed
           card.style.top = '';
           if (card.getBoundingClientRect().right > window.innerWidth - 8) panel.classList.add('gear-left');
-          const cb = card.getBoundingClientRect().bottom - (window.innerHeight - 8);
-          if (cb > 0) card.style.top = Math.round(-1 - cb) + 'px';
+          const cr = card.getBoundingClientRect(), cb = cr.bottom - (window.innerHeight - 8);
+          if (cb > 0) card.style.top = Math.round(-1 - Math.min(cb, Math.max(0, cr.top - minTop))) + 'px';   // up as needed, never under the top bar
         }
         return;
       }
