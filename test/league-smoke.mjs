@@ -78,6 +78,9 @@ try {
   await p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
   const bars = await until(() => p.evaluate(() => { const c = window.workspace.chart('c1'); const b = c && c.bars(); return b && b.length > 60 ? b.map(x => ({ t: x.t, c: x.c })) : null; }), 'the MNQ chart\'s bars', 20000);
   desk.league = sampleDay(bars);
+  /* the made-up bot connected, so it carries no alert of its own until the test raises one (review 2) */
+  await fetch(`http://127.0.0.1:${PORT}/test/bot-connect?name=Demo%20Opening%20Fade`, { method: 'POST' });
+  await until(() => p.$eval('#wsBotTab', b => !b.classList.contains('bt-alert')), 'the made-up bot connected: no alert', 10000);
 
   /* the top bar: Agent (as it was), then League; the Bot button waits in the hold for its panel */
   check(await p.isVisible('#wsLeagueTab') && (await p.textContent('#wsLeagueTab')) === 'League', 'the top bar has the League tab');
@@ -132,6 +135,15 @@ try {
   check(!!ink2, 'on: the league\'s trades, faint, on that chart (' + ink2 + ' pixels)');
   await p.screenshot({ path: path.join(out, 'league-faint-1366.png') });
   check(await p.evaluate(() => JSON.parse(localStorage.getItem('live-league-ghost-v1')).c1 === true), 'kept in this browser');
+  /* review 3: the League tab was open once; after it closed the faint marks still follow The Desk (a new paper trade shows) */
+  const n0 = await p.evaluate(() => window.workspace.leagueGhostTrades());
+  const d2 = sampleDay(bars);
+  d2.trades.push({ id: 's-S-2', seat: 'S', side: 'short', contracts: 2, fill_t: bars[bars.length - 5].t * 1000, fill_px: bars[bars.length - 5].c, stop_px: bars[bars.length - 5].c + 20, target_px: null, exit_t: bars[bars.length - 2].t * 1000, exit_px: bars[bars.length - 2].c, exit_reason: 'flat time', r: 0.1 });
+  desk.league = d2;
+  const n1 = await until(async () => { const n = await p.evaluate(() => window.workspace.leagueGhostTrades()); return n === n0 + 1 ? n : null; }, 'a new paper trade on the faint marks after the League tab was closed', 45000);
+  if (await p.isVisible('#wsAlertClose')) await p.click('#wsAlertClose');   // the fake bridge's made-up "EVAL-B is gone" banner, over the headers
+  if (n1 !== n0 + 1) console.log('  debug: ' + JSON.stringify(await p.evaluate(() => ({ body: document.body.className, n: window.workspace.leagueGhostTrades(), ghosts: window.workspace.leagueGhosts() }))));
+  check(n1 === n0 + 1, 'review 3: the faint marks read on after the League tab closed (' + n0 + ' to ' + n1 + ' trades)');
   await p.click('.ws-panel[data-id="c1"] .ws-more');
   await p.click('#wsMore [data-do="league"]');
   await until(async () => !(await p.$('.ws-panel[data-id="c1"] .lg-overlay')), 'off again: the marks go');
@@ -172,6 +184,35 @@ try {
   await p.click('.ws-panel.bot [data-act="close"]');
   await until(() => p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsBotTab'))), 'closed: the Bot button back in the hold');
   check(true, 'removing the Bot panel removes the entry point (+ Add panel brings it back)');
+  /* review 6: from the League view, with no Bot panel on the layout, the Bot is one click away in the top bar */
+  check(!(await p.$('.ws-panel.bot')) && !(await p.isVisible('#wsBotTab')), 'no Bot panel: no Bot button while the grid shows');
+  await p.click('#wsLeagueTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('lg-on')), 'the League view');
+  await until(() => p.isVisible('#wsBotTab'), 'from the League view the Bot button is in the top bar', 5000);
+  check(await p.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsBotTab'))), 'one click from the League view to the Bot, with no Bot panel');
+  check(await p.evaluate(() => document.body.classList.contains('bt-has-tab')), 'review 5: the Layout word gives way (bt-has-tab) while the Bot button is in the top bar');
+  await p.click('#wsBotTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('bt-on') && !document.body.classList.contains('lg-on')), 'the Bot view from the League view');
+  /* review 2: the Bot's red alert is never hidden: killed, with no Bot panel, the button stays in the top bar, red */
+  await p.click('.bt-kill');
+  await until(() => p.$eval('#wsBotTab', b => b.classList.contains('bt-alert')), 'the bot killed: the alert on its button', 8000);
+  await p.click('#wsBotTab');
+  await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'the Bot view closed');
+  await wait(300);
+  const red = await p.$eval('#wsBotTab', b => ({ inTop: document.getElementById('wsTabSlot').contains(b), seen: b.getClientRects().length > 0, border: getComputedStyle(b).borderColor, cls: b.className }));
+  check(red.inTop && red.seen && /bt-alert/.test(red.cls) && await p.isVisible('#wsBotTab'), 'no Bot panel, the bot\'s alert raised: its button is in the top bar and seen (' + red.border + ')');
+  check(await p.evaluate(() => document.body.classList.contains('bt-has-tab')), 'the Layout word gives way for it (bt-has-tab)');
+  await p.screenshot({ path: path.join(out, 'league-bot-alert-1366.png') });
+  await p.click('#wsBotTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'the Bot view again');
+  await p.click('.bt-kill'); await wait(900); await p.click('.bt-kill');   // release asks a second click (not a double-click)
+  await until(() => p.$eval('#wsBotTab', b => !b.classList.contains('bt-alert')), 'released: no alert', 8000);
+  await p.click('#wsBotTab');
+  await until(() => p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsBotTab'))), 'the alert cleared and the grid back: the button returns to the hold', 8000);
+  check(await p.evaluate(() => !document.body.classList.contains('bt-has-tab')), 'review 5: the Layout word back (no bt-has-tab) once the Bot button is not in the top bar');
+  await p.setViewportSize({ width: 1600, height: 900 }); await wait(300);
+  check(await p.evaluate(() => getComputedStyle(document.querySelector('label[for="wsLayout"]')).display !== 'none'), 'at 1600 the Layout word shows with no Bot panel and no alert (1.34.1 hid it for a Bot tab no longer in the top bar)');
+  await p.setViewportSize({ width: 1366, height: 768 }); await wait(300);
   check((await p.evaluate(() => window.__sent.length)) === 0, 'nothing here sent an order message');
 
   /* a reload with ?tab=league keeps the League tab */

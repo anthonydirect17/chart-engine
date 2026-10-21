@@ -17,7 +17,8 @@
  *   url(layout)                -> "?layout=<name>"
  *   check(info)                -> { ok, codes: [...], lines: [...] }: what stops the windows going to their screens, and exactly
  *                                 what Anthony must allow (1.35.0). info: { brave, screenX, screenY, outerW, outerH, innerW,
- *                                 innerH, screenW, screenH, availLeft, availTop, hasDetails, permission, popupsBlocked }
+ *                                 innerH, screenW, screenH, availLeft, availTop, hasDetails, permission, popupsBlocked, screens
+ *                                 (how many screens getScreenDetails lists when granted, else null) }
  *   spoofed(info)              -> true when Brave reports this window's place as made up (its Shields' fingerprinting
  *                                 protection: screenX/Y and availLeft/Top a few pixels from 0, the screen the size of the window)
  *
@@ -75,6 +76,9 @@
   const near = (v, most) => typeof v === 'number' && isFinite(v) && v >= 0 && v <= most;
   function spoofed(i) {
     if (!i || i.brave !== true) return false;   // only Brave does this (a headless or full-screen window looks alike, and is real)
+    /* review 4: a real Brave window in F11 full screen at 0, 0 on the main monitor looks alike too; when window management is
+       granted and the browser lists more than one screen, the screens are real (Shields would show one), so it is not made up */
+    if (typeof i.screens === 'number' && i.screens > 1) return false;
     const R = 8;   // Brave's made-up offset is 0 to 8 px
     return near(i.screenX, R) && near(i.screenY, R) && near(i.availLeft, R) && near(i.availTop, R) &&
       near(i.screenW - i.innerW, R) && near(i.screenH - i.innerH, R) && near(i.outerH - i.innerH, R) && i.innerW > 0;

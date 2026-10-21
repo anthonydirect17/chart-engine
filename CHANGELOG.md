@@ -51,6 +51,23 @@ says so (the league view and the floors: "The Desk has no ... yet"; a note recor
   Pop-ups and redirects: Allow; reload and save again), and Save refuses the made-up places. It also says when Window management is
   blocked or not offered, or the pop-ups were blocked.
 
+**The review of 159cca4, fixed** (the floors' Send waits on Anthony's ruling and is unchanged here).
+- The Bot's red alert (rails red, stand-down, killed, on but not connected) is never hidden: while its button carries it, the
+  button sits in the top bar where the Bot tab was, with or without a Bot panel, and goes back to its panel or the hold once it
+  clears (the workspace follows the button's class as the Bot desk sets it).
+- From the Agent or the League view, with or without a Bot panel, the Bot button is in the top bar: one click to the Bot.
+- The "Layout" word gives way (`bt-has-tab`) only while the Bot button is really in the top bar (1.35.0 before this fix hid it for
+  a Bot tab waiting in its panel or the hold).
+- The league's faint marks draw the League view's day only while that view is open, else their own 30 second read, so they never
+  freeze on what the view read last; closing the view hands its day over and reads at once.
+- Screens: a real Brave window in F11 full screen at 0, 0 on the main monitor looked made up; when window management is granted
+  and the browser lists more than one screen, the place is real.
+- A `firmMinimum` refused after the 3 second wait is matched to its account: the remembered minimum is forgotten (the NinjaTrader
+  flag can come back) and its row says refused. A remembered minimum also keeps the firm rules it was set under (size, drawdown
+  and its type, lock) and is forgotten when they change (another type applied, a reset).
+- The floors box: one row per account (two from The Desk for one account: the newer seed kept, the other listed with why), and each
+  row shows this page's label for the account, then ChartBridge's name, then The Desk's prop name.
+
 **Tests.** `npm test`: 883 pass, 0 fail (1 skipped: the PowerShell updater tests). New `test/league.test.js`; new tests in `test/trade-tags.test.js`,
 `test/accounts-page.test.js`, `test/screens.test.js`. New smoke `npm run smoke:league` (screenshots `league-1366.png`,
 `league-1600.png`, `league-1920.png`, `league-chart.png`, `league-faint-1366.png`, `league-agent-tab-1366.png`,

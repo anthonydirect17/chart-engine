@@ -39,6 +39,10 @@ test('1.35.0: Brave Shields\' made-up window places are seen, and the page says 
   const brave = { brave: true, screenX: 5, screenY: 3, outerW: 1924, outerH: 1043, innerW: 1920, innerH: 1040, screenW: 1926, screenH: 1044, availLeft: 2, availTop: 7, hasDetails: true, permission: 'granted' };
   assert.equal(SC.spoofed(brave), true);
   assert.equal(SC.spoofed(Object.assign({}, brave, { brave: false })), false, 'only Brave: a headless or full-screen window looks alike and is real');
+  /* review 4: Brave in F11 full screen at 0, 0 on the main monitor looks alike; window management granted and three screens listed: real */
+  assert.equal(SC.spoofed(Object.assign({}, brave, { screens: 3 })), false, 'more than one real screen listed: not made up');
+  assert.equal(SC.spoofed(Object.assign({}, brave, { screens: 1 })), true, 'one screen listed: still made up');
+  assert.deepEqual(SC.check(Object.assign({}, brave, { screens: 3 })).codes, [], 'F11 on a three-screen PC with window management granted: nothing to allow');
   const r = SC.check(brave);
   assert.equal(r.ok, false);
   assert.deepEqual(r.codes, ['spoofed']);

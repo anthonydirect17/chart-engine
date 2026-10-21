@@ -420,3 +420,17 @@ test('1.35.0: no "NinjaTrader shows X to the floor" flag once the firm\'s minimu
   assert.match(src, /data-act="floors-send"/);
   assert.match(src, /type: 'firmMinimum', cid: c, account: name, minBalance: v/, 'the existing firmMinimum, nothing new to ChartBridge');
 });
+
+test('1.35.0 review: the floors from The Desk, one row per account (the newer kept, the other said why); a remembered minimum keeps its rules', () => {
+  const AC = require('../live/accounts.js');
+  const desk = { accounts: [
+    { account: 'EVAL-A', prop: 'Old 50K', floor: 48000, seed_date: '2026-09-01', source: 'x' },
+    { account: 'EVAL-A', prop: 'New 50K', floor: 48500, seed_date: '2026-10-13', source: 'y' }] };
+  const plan = AC.floorPlan(desk, [{ name: 'EVAL-A', floor: 48100, rules: { drawdownType: 'eod' } }], a => a.rules);
+  assert.deepStrictEqual(plan.send.map(r => [r.account, r.label, r.floor]), [['EVAL-A', 'New 50K', 48500]]);
+  assert.deepStrictEqual(plan.skip, [{ account: 'EVAL-A', label: 'Old 50K', why: 'The Desk sent two floors for it: the newer one (New 50K, seed of 2026-10-13) is the one shown' }]);
+  assert.deepStrictEqual(AC.cleanFirmMins({ 'EVAL-A': { min: 48500, at: 5, sig: '50000|2000|eod|52100' } }), { 'EVAL-A': { min: 48500, at: 5, sig: '50000|2000|eod|52100' } });
+  const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'accounts.js'), 'utf8');
+  assert.match(src, /else if \(m\.cid && firmDone\.has\(m\.cid\)\) \{ const n = firmDone\.get\(m\.cid\); firmDone\.delete\(m\.cid\); firmForget\(n\);/, 'a refusal after the wait forgets the minimum');
+  assert.match(src, /firmPrune\(\);/, 'a minimum set under other rules is forgotten when the accounts come');
+});

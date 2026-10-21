@@ -2524,13 +2524,23 @@ function placeTabBtn(type) {
   const kind = TAB_PANEL[type], btn = kind && kind.btn(), d = kind && kind.desk();
   if (!btn) return;
   const v = [...views.values()].find(x => x.panel.type === type);
-  /* while a view hides the grid (Bot, Agent, League), the Bot's button stays in the top bar too when its panel is on the layout,
-     so one view can go to the other as the top bar's tabs did */
+  /* the Bot's button sits in the top bar where the Bot tab was:
+     - while its view is open (the way back);
+     - while any view hides the grid (Agent, League), with or without a Bot panel: one click from there to the Bot (review 6);
+     - while it carries its red alert (rails red, stand-down, killed, on but not connected), with or without a Bot panel, so the
+       alert is never hidden (review 2); it goes back to its panel or the hold once the alert clears.
+     Else in its panel when the layout has one, else in the hidden hold. */
   const viewOpen = ['bt-on', 'ag-on', 'lg-on'].some(c => document.body.classList.contains(c));
-  const where = d && d.shown() ? $('wsTabSlot') : v && viewOpen ? $('wsTabSlot') : v ? v.body.querySelector('.ws-tp-slot') : $('wsTabHold');
+  const alert = btn.classList.contains('bt-alert') && !btn.hidden;
+  const top = (d && d.shown()) || viewOpen || alert;
+  const where = top ? $('wsTabSlot') : v ? v.body.querySelector('.ws-tp-slot') : $('wsTabHold');
   if (where && btn.parentElement !== where) where.appendChild(btn);
   btn.classList.toggle('ws-tp-btn', !!v && where !== $('wsTabSlot') && where !== $('wsTabHold'));
+  /* review 5: the "Layout" word gives way only while the Bot button is really in the top bar (bot.css bt-has-tab) */
+  document.body.classList.toggle('bt-has-tab', !btn.hidden && where === $('wsTabSlot'));
 }
+/* the Bot desk sets bt-alert (and hidden) on its own button as it renders: the button follows at once */
+if (typeof MutationObserver === 'function' && $('wsBotTab')) new MutationObserver(() => placeTabBtn('bot')).observe($('wsBotTab'), { attributes: true, attributeFilter: ['class', 'hidden'] });
 function mountTabPanel(v) {
   v.state = 'live';
   const kind = TAB_PANEL[v.panel.type], btn = kind.btn();
@@ -2776,7 +2786,8 @@ async function scInfo() {
   const sc = window.screen || {};
   return { brave: !!navigator.brave, screenX: window.screenX, screenY: window.screenY, outerW: window.outerWidth, outerH: window.outerHeight,
     innerW: window.innerWidth, innerH: window.innerHeight, screenW: sc.width, screenH: sc.height, availLeft: sc.availLeft || 0, availTop: sc.availTop || 0,
-    hasDetails: typeof window.getScreenDetails === 'function', permission: scPerm, popupsBlocked: scBlocked };
+    hasDetails: typeof window.getScreenDetails === 'function', permission: scPerm, popupsBlocked: scBlocked,
+    screens: scPerm === 'granted' && Array.isArray(scScreens) ? scScreens.length : null };   // review 4: the real screens rule out a made-up place
 }
 const scCheckHtml = r => (r.lines.length ? '<div class="ws-scr-check' + (r.ok ? '' : ' warn') + '" role="note">' + (r.codes.includes('spoofed') || r.codes.includes('denied') || r.codes.includes('noDetails') || r.codes.includes('popups')
   ? '<p><b>Why the windows all open on the main screen, and what to allow:</b></p>' : '') + '<ol>' + r.lines.map(l => '<li>' + esc(l) + '</li>').join('') + '</ol></div>' : '');
@@ -2795,6 +2806,7 @@ async function renderScreens() {
   await scDetails(false);
   const where = w => { const n = scScreens ? SC.screenNo(w, scScreens) : 0; return n ? 'screen ' + n : scScreens ? 'its screen is not connected' : 'at ' + w.x + ', ' + w.y; };
   const missing = set.windows.filter(w => !open.has(w.layout));
+  await scDetails(false);
   const chk = SC.check(await scInfo());
   el.innerHTML = '<h2>Screens</h2>' + scCheckHtml(chk) +
     (set.windows.length ? '<ul>' + set.windows.map(w => '<li><b>' + esc(w.layout) + '</b><span>' + esc(where(w)) + ' · ' + w.w + ' x ' + w.h + '</span><span class="' + (open.has(w.layout) ? 'on' : '') + '">' + (open.has(w.layout) ? 'open' : 'not open') + '</span></li>').join('') + '</ul>'
@@ -2813,6 +2825,7 @@ function scDue(missing) {
 }
 async function scSave() {
   /* 1.35.0: never save places the browser made up (Brave's Shields): they would all be the main screen */
+  await scDetails(false);
   const chk = SC.check(await scInfo());
   if (chk.codes.includes('spoofed')) { scMsg = { text: 'Not saved: the browser is hiding where the windows are (see above).', warn: true }; await renderScreens(); return; }
   const list = await scRoster(), at = Date.now();
@@ -3471,6 +3484,7 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   /* 1.35.0: the League tab, and the charts showing the league's trades faintly (read only) */
   league: () => (leagueView ? leagueView.state() : null),
   leagueGhosts: () => [...LG.overlays.keys()],
+  leagueGhostTrades: () => { const d = leagueGhostDay(); return d ? d.trades.length + d.open.length : 0; },
   /* 1.34.0: how many risk alerts sounded in this window (test/flatten-every-smoke.mjs) */
   riskSounds: () => riskSounds };
 
@@ -3526,7 +3540,8 @@ function startLeague() {
       document.body.classList.toggle('lg-on', on);
       if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); }
       tabUrl(on ? 'league' : '');
-      placeTabBtn();                                        // the desks with a panel keep their buttons in the top bar meanwhile
+      placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
+      if (!on) { if (leagueView.day()) LG.day = leagueView.day(); leaguePoll(); }   // the faint marks read on by themselves
     } });
 }
 /* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk
@@ -3534,6 +3549,9 @@ function startLeague() {
 const LG_GHOST_KEY = window.LeagueCore ? window.LeagueCore.GHOST_KEY : 'live-league-ghost-v1';
 const leagueGhosts = () => { try { return window.LeagueCore ? window.LeagueCore.cleanGhosts(store.getItem(LG_GHOST_KEY)) : {}; } catch (e) { return {}; } };
 const LG = { day: null, timer: 0, busy: false, overlays: new Map() };
+/* review 3: the faint marks draw the League view's day only while it is open (it reads every 15 s); else this poll's (30 s), so
+   they never freeze on what the view read last */
+const leagueGhostDay = () => (leagueView && leagueView.shown() && leagueView.day()) || LG.day;
 function setLeagueGhost(id, on) {
   const g = leagueGhosts();
   if (on) g[id] = true; else delete g[id];
@@ -3545,7 +3563,7 @@ function syncLeagueGhosts() {
   const g = leagueGhosts(), want = new Set();
   for (const v of chartViews()) if (g[v.panel.id] && window.LeagueCore.ROOTS.includes(v.panel.root)) want.add(v.panel.id);
   for (const [id, ov] of LG.overlays) if (!want.has(id) || !views.has(id) || ov.pane !== views.get(id).pane) { ov.o.destroy(); LG.overlays.delete(id); }
-  for (const id of want) if (!LG.overlays.has(id)) { const v = views.get(id); LG.overlays.set(id, { pane: v.pane, o: window.LeagueOverlay.attach(v.pane, v.body, () => (leagueView && leagueView.day()) || LG.day, () => v.panel.root, true) }); }
+  for (const id of want) if (!LG.overlays.has(id)) { const v = views.get(id); LG.overlays.set(id, { pane: v.pane, o: window.LeagueOverlay.attach(v.pane, v.body, leagueGhostDay, () => v.panel.root, true) }); }
   if (want.size && !LG.timer) leaguePoll();
   if (!want.size) { clearTimeout(LG.timer); LG.timer = 0; }
 }

@@ -624,8 +624,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   50 % from the fill to the exit (to the right edge while open). Faint (a chart's ⋯ "League trades (faint)", off by default,
   NQ and MNQ only): 6 px marks, 8 px letters, the marks at 55 % and the lines at 30 %.
 - **The Bot as a panel (1.35.0, Anthony 2026-10-21):** "Bot" in + Add panel, at most one a layout: a 28 px header with the
-  name, then the very Bot button the top bar had and one muted line. While a view is open (Bot, Agent, League) the button sits in
-  the top bar where the Bot tab was. With no room on the grid, the menu item opens the Bot view itself and says so. The Bot view
+  name, then the very Bot button the top bar had and one muted line. While a view is open (Bot, Agent, League), or while the
+  button carries its red alert, it sits in the top bar where the Bot tab was, with or without a Bot panel. With no room on the grid, the menu item opens the Bot view itself and says so. The Bot view
   is unchanged, and so is the Agent tab, in the top bar where it was.
 - **Update floors from The Desk (1.35.0, Anthony 2026-10-21):** a small button beside "Settings for every account" on the
   Accounts tab; it opens a box above the rows (the field color, a 1 px line, 8 px corners): each account's floor from The

@@ -395,8 +395,19 @@ const isWorking = o => !!o && WORKING.has(o.state);
 function floorPlan(desk, accounts, rulesOf) {
   const out = { send: [], skip: [] };
   const list = Array.isArray(accounts) ? accounts : [];
-  const rows = desk && Array.isArray(desk.accounts) ? desk.accounts : [];
   const money = v => isNum(v) && v > 0 && v < 1e8;
+  /* review 8: one row per account: when The Desk sends two for the same account, the newer is kept (the later seed date; the same
+     or none: the later row), the other skipped with why */
+  const rows = [];
+  for (const r of desk && Array.isArray(desk.accounts) ? desk.accounts : []) {
+    if (!r || typeof r.account !== 'string' || !r.account) continue;
+    const k = rows.findIndex(x => x.account === r.account);
+    if (k < 0) { rows.push(r); continue; }
+    const old = rows[k], newer = String(r.seed_date || '') >= String(old.seed_date || '');
+    const keep = newer ? r : old, drop = newer ? old : r;
+    rows[k] = keep;
+    out.skip.push({ account: r.account, label: typeof drop.prop === 'string' && drop.prop !== r.account ? drop.prop : '', why: 'The Desk sent two floors for it: the newer one (' + (keep.prop || 'its other prop account') + (keep.seed_date ? ', seed of ' + keep.seed_date : '') + ') is the one shown' });
+  }
   for (const r of rows) {
     if (!r || typeof r.account !== 'string' || !r.account) continue;
     const label = typeof r.prop === 'string' && r.prop !== r.account ? r.prop : '';
@@ -428,7 +439,7 @@ function cleanFirmMins(raw) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
   for (const k of Object.keys(v)) {
     const x = v[k];
-    if (k && k.length <= 200 && x && isNum(x.min) && x.min > 0 && Number.isInteger(x.at) && x.at > 0) out[k] = { min: x.min, at: x.at };
+    if (k && k.length <= 200 && x && isNum(x.min) && x.min > 0 && Number.isInteger(x.at) && x.at > 0) out[k] = Object.assign({ min: x.min, at: x.at }, typeof x.sig === 'string' && x.sig.length <= 200 ? { sig: x.sig } : {});
   }
   return out;
 }
@@ -520,7 +531,18 @@ function createFeed(env) {
   const cid = () => 'ap' + Date.now().toString(36) + '-' + (++seq);
   const mine = new Map();                                 // cid -> what was asked (its refusal goes to the window's note)
   const firmPending = new Map();                          // 1.35.0: cid -> { name, min } of a firmMinimum not refused yet
+  const firmDone = new Map();                             // review 7: cid -> name of a firmMinimum taken as set (a late refusal undoes it)
   const FIRM_WAIT_MS = 3000;
+  /* review 7: the firm rules a remembered minimum was set under (size, drawdown and its type, lock): another type applied, or a
+     reset, changes them, and the minimum set before is forgotten (the NinjaTrader flag can come back) */
+  const firmSig = name => { const a = S.accounts.find(x => x.name === name), r = a && (rulesOf(a) || (a.rules && typeof a.rules === 'object' ? a.rules : null)); return r ? [r.size, r.drawdown, r.drawdownType, r.lockAt || 0].join('|') : ''; };
+  const firmWrite = all => { S.firmMins = all; try { if (store) store.setItem(AC.FIRM_MIN_KEY, JSON.stringify(all)); } catch (e) { /* blocked: this window's memory */ } };
+  function firmForget(name) { const all = Object.assign({}, S.firmMins); if (!all[name]) return; delete all[name]; firmWrite(all); }
+  function firmPrune() {
+    let changed2 = false; const all = Object.assign({}, S.firmMins);
+    for (const n of Object.keys(all)) { const now = firmSig(n); if (all[n].sig && now && all[n].sig !== now) { delete all[n]; changed2 = true; } }
+    if (changed2) firmWrite(all);
+  }
   const subs = new Set();                                // listen(): the window's other v3 parts
   const tell = (k, m) => { for (const s of subs) { if (typeof s[k] === 'function') { try { s[k](m); } catch (e) { setTimeout(() => { throw e; }); } } } };
 
@@ -626,6 +648,7 @@ function createFeed(env) {
         S.archived = Array.isArray(m.archived) ? m.archived.filter(a => a && typeof a.name === 'string') : [];
         if (S.got) for (const a of S.archived) if (!was.has(a.name)) log(a.name + ': archived');
         S.accounts = list; S.got = true; S.lostAt = null;
+        firmPrune();                                          // review 7: a minimum set under other rules is forgotten
         changed(); return;
       }
       case 'orders': S.orders.clear(); for (const o of m.list || []) if (o && o.id) S.orders.set(o.id, o); changed(); return;
@@ -646,6 +669,7 @@ function createFeed(env) {
       case 'reject': {
         log(AC.logText(m), 'warn');
         if (m.cid && firmPending.has(m.cid)) { const p = firmPending.get(m.cid); firmPending.delete(m.cid); S.firmSent[p.name] = 'refused: ' + String(m.reason || '').slice(0, 200); }   // 1.35.0
+        else if (m.cid && firmDone.has(m.cid)) { const n = firmDone.get(m.cid); firmDone.delete(m.cid); firmForget(n); S.firmSent[n] = 'refused: ' + String(m.reason || '').slice(0, 200); }   // review 7: a late refusal
         if (m.cid && mine.has(m.cid)) { mine.delete(m.cid); env.note('Refused by ChartBridge: ' + m.reason, true); }
         changed(); return;
       }
@@ -752,9 +776,10 @@ function createFeed(env) {
         const p = firmPending.get(c); if (!p) return;
         firmPending.delete(c);
         const all = AC.cleanFirmMins(store ? (() => { try { return store.getItem(AC.FIRM_MIN_KEY); } catch (e) { return null; } })() : null);
-        all[p.name] = { min: p.min, at: Date.now() };
-        try { if (store) store.setItem(AC.FIRM_MIN_KEY, JSON.stringify(all)); } catch (e) { /* blocked: this window's memory */ }
-        S.firmMins = all; S.firmSent[p.name] = 'set'; changed();
+        all[p.name] = { min: p.min, at: Date.now(), sig: firmSig(p.name) };
+        firmWrite(all);
+        firmDone.set(c, p.name); if (firmDone.size > 100) firmDone.delete(firmDone.keys().next().value);
+        S.firmSent[p.name] = 'set'; changed();
       }, FIRM_WAIT_MS);
       S.firmSent[name] = 'sent'; changed();
       return true;
@@ -1239,11 +1264,13 @@ function mount(v, host) {
         if (fl.state === 'error') return `<div class="apg-floors" role="region" aria-label="Floors from The Desk"><p class="warn">${esc(fl.error)}</p><button type="button" class="ac-btn" data-act="floors-close">Close</button></div>`;
         const plan = AC.floorPlan(fl.json, S.accounts, F.rulesOf);
         const state = n => S.firmSent[n] || '';
-        const line = r => `<li class="apg-fl-row"><b>${esc(r.account)}</b>${r.label ? ` <span class="mut">(${esc(r.label)})</span>` : ''}: floor <b class="mono">${esc(AC.fmtUsdPlain(r.floor))}</b>` +
+        /* review 9: the row's own label on this page first (as the rows below show it), then ChartBridge's name and The Desk's prop name */
+        const who = r => { const l = labelOf(r.account); return (l ? `<b>${esc(l)}</b> <span class="mut">${esc(r.account)}</span>` : `<b>${esc(r.account)}</b>`) + (r.label ? ` <span class="mut">· The Desk: ${esc(r.label)}</span>` : ''); };
+        const line = r => `<li class="apg-fl-row">${who(r)}: floor <b class="mono">${esc(AC.fmtUsdPlain(r.floor))}</b>` +
           ` <span class="mut">ChartBridge now ${r.now === null ? 'not known' : esc(AC.fmtUsdPlain(r.now))}</span>` +
           `<span class="mut apg-fl-src" title="${esc(r.source + (r.note ? '. ' + r.note : ''))}"> · ${esc(r.source)}${r.note ? '; ' + esc(r.note) : ''}</span>` +
           (state(r.account) ? ` <span class="${/^refused/.test(state(r.account)) ? 'warn' : 'b'}">${esc(state(r.account) === 'set' ? 'set' : state(r.account) === 'sent' ? 'sent...' : state(r.account))}</span>` : '') + '</li>';
-        const skip = r => `<li class="apg-fl-row mut"><b>${esc(r.account || r.label || 'a prop account')}</b>${r.account && r.label ? ` (${esc(r.label)})` : ''}: skipped, ${esc(r.why)}</li>`;
+        const skip = r => `<li class="apg-fl-row mut"><b>${esc((r.account && labelOf(r.account)) || r.account || r.label || 'a prop account')}</b>${r.account && labelOf(r.account) ? ' ' + esc(r.account) : ''}${r.account && r.label ? ` · The Desk: ${esc(r.label)}` : ''}: skipped, ${esc(r.why)}</li>`;
         const sent = fl.sentAt ? `<p class="mut">Sent ${fl.sentN} at ${esc(hms(fl.sentAt))} ET; ChartBridge checks each (a refusal shows on its row and in the Log). Read them again to send again.</p>` : '';
         return '<div class="apg-floors" role="region" aria-label="Floors from The Desk">' +
           `<p class="apg-fl-head">Floors from The Desk (its Prop seeds from the firm dashboard plus the tracked fills). ${fl.sentAt ? '' : plan.send.length ? 'Send them to ChartBridge as each firm\'s minimum?' : 'Nothing to send.'}</p>` +
