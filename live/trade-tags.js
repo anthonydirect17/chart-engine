@@ -72,8 +72,9 @@ function tradesOf(fills, account, root, qtyNow) {
   let cur = pos !== 0 ? { open: null, close: null } : null;
   for (const f of mine) {
     const after = pos + (f.side === 'buy' ? 1 : -1) * (+f.qty);
-    if (pos !== 0 && (after === 0 || Math.sign(after) !== Math.sign(pos))) { cur.close = +f.u; trades.push(cur); cur = null; }
-    if (after !== 0 && (pos === 0 || Math.sign(after) !== Math.sign(pos))) cur = { open: +f.u, close: null };
+    const u = Math.round(+f.u);   // 1.34.1: ChartBridge sends u with 3 decimals; a record's trade_open_ms is whole ms
+    if (pos !== 0 && (after === 0 || Math.sign(after) !== Math.sign(pos))) { cur.close = u; trades.push(cur); cur = null; }
+    if (after !== 0 && (pos === 0 || Math.sign(after) !== Math.sign(pos))) cur = { open: u, close: null };
     pos = after;
   }
   if (cur) trades.push(cur);
@@ -306,6 +307,7 @@ function mount(el, env) {
       recs.push({ id: C.newId(), account: p.a, root: v.r, phase: p.t.phase, dim, value, trade_open_ms: p.t.phase === 'pre' ? null : p.t.tradeOpenMs, at_ms: now });
     }
     if (!recs.length) { say('Not recorded: ' + (v.per[0].t.why || 'no account') + '.', true); return; }
+    if (recs.some(r => !C.cleanRecord(r))) { say('Not recorded: this click could not be made into a record. Reload this window.', true); return; }   // 1.34.1: never a silent loss
     H.add(recs);
     say((value === null ? C.DIM_LABEL[dim] + ' cleared' : C.labelOf(dim, value)) + ' (' + recs[0].phase + ')' + (recs.length > 1 ? ' on ' + recs.length + ' accounts' : '') + (skipped.length ? '; not on ' + skipped.join(', ') : '') + '.', !!skipped.length);
   });

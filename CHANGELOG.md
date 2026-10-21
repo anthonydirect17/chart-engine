@@ -1,5 +1,15 @@
 # Changelog
 
+## chart 1.34.1 (2026-10-21): the Trade tags panel keeps clicks made during a trade and on Last trade
+
+WORK's test card on 1.34.0 (FROM_WORK_2026-10-21_release.md, step 3.5): a chip clicked while a trade was open (OPEN) or
+on Last trade (AFTER) showed for a moment and never reached The Desk; clicks made while flat (PRE) were saved. The cause:
+ChartBridge sends a fill's `u` with three decimals (sub-millisecond), the panel named the trade by that time, and a
+record's `trade_open_ms` must be whole milliseconds, so the record was dropped as invalid before it was queued. Now the
+trade's open and close times are rounded to the millisecond (The Desk matches a trade within 2 seconds, so the match is
+unchanged), and a click that cannot be made into a record says so on the panel instead of vanishing. Page only: no
+ChartBridge change (it stays 0.6.6). A new test fails on 1.34.0 and passes on 1.34.1.
+
 ## ChartBridge 0.6.6 and chart 1.34.0 (2026-10-20): the work requests of 2026-10-20, and the firm's limits on entries
 
 Everything on `desk/work-requests-1020` since 0.6.5 and 1.33.0. **ChartBridge 0.6.6 is a recompile** (outside market hours);
