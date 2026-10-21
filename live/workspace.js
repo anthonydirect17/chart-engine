@@ -3548,7 +3548,7 @@ function startLeague() {
    every 30 seconds while any is on, one overlay per such chart */
 const LG_GHOST_KEY = window.LeagueCore ? window.LeagueCore.GHOST_KEY : 'live-league-ghost-v1';
 const leagueGhosts = () => { try { return window.LeagueCore ? window.LeagueCore.cleanGhosts(store.getItem(LG_GHOST_KEY)) : {}; } catch (e) { return {}; } };
-const LG = { day: null, timer: 0, busy: false, overlays: new Map() };
+const LG = { day: null, timer: 0, seq: 0, overlays: new Map() };
 /* review 3: the faint marks draw the League view's day only while it is open (it reads every 15 s); else this poll's (30 s), so
    they never freeze on what the view read last */
 const leagueGhostDay = () => (leagueView && leagueView.shown() && leagueView.day()) || LG.day;
@@ -3570,9 +3570,10 @@ function syncLeagueGhosts() {
 function leaguePoll() {
   clearTimeout(LG.timer); LG.timer = 0;
   if (!LG.overlays.size) return;
+  const seq = ++LG.seq;                                    // only the latest read schedules the next (one 30 s poll, never two)
   window.AccountsPage.deskBase((u, o) => fetch(u, o)).then(url => fetch(url + '/api/chart-league', { cache: 'no-store', mode: 'cors', credentials: 'omit' }))
     .then(r => (r.ok ? r.json() : null)).then(j => { if (j) LG.day = window.LeagueCore.cleanDay(j); }, () => { /* The Desk down: the last marks stay */ })
-    .then(() => { for (const x of LG.overlays.values()) x.o.redraw(); if (LG.overlays.size) LG.timer = setTimeout(leaguePoll, 30000); });
+    .then(() => { for (const x of LG.overlays.values()) x.o.redraw(); if (seq === LG.seq && LG.overlays.size) LG.timer = setTimeout(leaguePoll, 30000); });
 }
 setInterval(syncLeagueGhosts, 3000);                      // a chart's instrument changed, a layout opened: the overlays follow
 window.addEventListener('storage', e => { if (e.key && e.key.endsWith(LG_GHOST_KEY)) syncLeagueGhosts(); });

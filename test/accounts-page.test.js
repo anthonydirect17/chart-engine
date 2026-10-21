@@ -431,6 +431,7 @@ test('1.35.0 review: the floors from The Desk, one row per account (the newer ke
   assert.deepStrictEqual(plan.skip, [{ account: 'EVAL-A', label: 'Old 50K', why: 'The Desk sent two floors for it: the newer one (New 50K, seed of 2026-10-13) is the one shown' }]);
   assert.deepStrictEqual(AC.cleanFirmMins({ 'EVAL-A': { min: 48500, at: 5, sig: '50000|2000|eod|52100' } }), { 'EVAL-A': { min: 48500, at: 5, sig: '50000|2000|eod|52100' } });
   const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'accounts.js'), 'utf8');
-  assert.match(src, /else if \(m\.cid && firmDone\.has\(m\.cid\)\) \{ const n = firmDone\.get\(m\.cid\); firmDone\.delete\(m\.cid\); firmForget\(n\);/, 'a refusal after the wait forgets the minimum');
+  assert.match(src, /else if \(m\.cid && firmDone\.has\(m\.cid\)\) \{[^\n]*\n\s*const d = firmDone\.get\(m\.cid\); firmDone\.delete\(m\.cid\);\n\s*if \(S\.firmMins && S\.firmMins\[d\.name\] && S\.firmMins\[d\.name\]\.at === d\.at\) \{ firmForget\(d\.name\);/,
+    'a refusal after the wait forgets its own minimum, never a newer one sent since');
   assert.match(src, /firmPrune\(\);/, 'a minimum set under other rules is forgotten when the accounts come');
 });

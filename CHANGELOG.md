@@ -59,12 +59,14 @@ says so (the league view and the floors: "The Desk has no ... yet"; a note recor
 - The "Layout" word gives way (`bt-has-tab`) only while the Bot button is really in the top bar (1.35.0 before this fix hid it for
   a Bot tab waiting in its panel or the hold).
 - The league's faint marks draw the League view's day only while that view is open, else their own 30 second read, so they never
-  freeze on what the view read last; closing the view hands its day over and reads at once.
+  freeze on what the view read last; closing the view hands its day over and reads at once. Only the latest read schedules the
+  next, so a read still on its way when the view closes never starts a second 30 second poll.
 - Screens: a real Brave window in F11 full screen at 0, 0 on the main monitor looked made up; when window management is granted
   and the browser lists more than one screen, the place is real.
 - A `firmMinimum` refused after the 3 second wait is matched to its account: the remembered minimum is forgotten (the NinjaTrader
   flag can come back) and its row says refused. A remembered minimum also keeps the firm rules it was set under (size, drawdown
-  and its type, lock) and is forgotten when they change (another type applied, a reset).
+  and its type, lock) and is forgotten when they change (another type applied, a reset). A late refusal undoes only the
+  minimum it was sent for, never a newer one sent since.
 - The floors box: one row per account (two from The Desk for one account: the newer seed kept, the other listed with why), and each
   row shows this page's label for the account, then ChartBridge's name, then The Desk's prop name.
 

@@ -531,7 +531,7 @@ function createFeed(env) {
   const cid = () => 'ap' + Date.now().toString(36) + '-' + (++seq);
   const mine = new Map();                                 // cid -> what was asked (its refusal goes to the window's note)
   const firmPending = new Map();                          // 1.35.0: cid -> { name, min } of a firmMinimum not refused yet
-  const firmDone = new Map();                             // review 7: cid -> name of a firmMinimum taken as set (a late refusal undoes it)
+  const firmDone = new Map();                             // review 7: cid -> {name, at} of a firmMinimum taken as set (a late refusal undoes it)
   const FIRM_WAIT_MS = 3000;
   /* review 7: the firm rules a remembered minimum was set under (size, drawdown and its type, lock): another type applied, or a
      reset, changes them, and the minimum set before is forgotten (the NinjaTrader flag can come back) */
@@ -669,7 +669,10 @@ function createFeed(env) {
       case 'reject': {
         log(AC.logText(m), 'warn');
         if (m.cid && firmPending.has(m.cid)) { const p = firmPending.get(m.cid); firmPending.delete(m.cid); S.firmSent[p.name] = 'refused: ' + String(m.reason || '').slice(0, 200); }   // 1.35.0
-        else if (m.cid && firmDone.has(m.cid)) { const n = firmDone.get(m.cid); firmDone.delete(m.cid); firmForget(n); S.firmSent[n] = 'refused: ' + String(m.reason || '').slice(0, 200); }   // review 7: a late refusal
+        else if (m.cid && firmDone.has(m.cid)) {                // review 7: a late refusal undoes its own minimum only, never a newer one
+          const d = firmDone.get(m.cid); firmDone.delete(m.cid);
+          if (S.firmMins && S.firmMins[d.name] && S.firmMins[d.name].at === d.at) { firmForget(d.name); S.firmSent[d.name] = 'refused: ' + String(m.reason || '').slice(0, 200); }
+        }
         if (m.cid && mine.has(m.cid)) { mine.delete(m.cid); env.note('Refused by ChartBridge: ' + m.reason, true); }
         changed(); return;
       }
@@ -776,9 +779,10 @@ function createFeed(env) {
         const p = firmPending.get(c); if (!p) return;
         firmPending.delete(c);
         const all = AC.cleanFirmMins(store ? (() => { try { return store.getItem(AC.FIRM_MIN_KEY); } catch (e) { return null; } })() : null);
-        all[p.name] = { min: p.min, at: Date.now(), sig: firmSig(p.name) };
+        const at = Date.now();
+        all[p.name] = { min: p.min, at, sig: firmSig(p.name) };
         firmWrite(all);
-        firmDone.set(c, p.name); if (firmDone.size > 100) firmDone.delete(firmDone.keys().next().value);
+        firmDone.set(c, { name: p.name, at }); if (firmDone.size > 100) firmDone.delete(firmDone.keys().next().value);
         S.firmSent[p.name] = 'set'; changed();
       }, FIRM_WAIT_MS);
       S.firmSent[name] = 'sent'; changed();
