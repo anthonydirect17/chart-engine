@@ -55,6 +55,8 @@ function sampleDay(bars) {
 }
 
 const desk = await startDesk(DP, {});
+/* The Desk of this release answers GET /api/chart-league from the start (no session yet); the sample day comes once the chart has bars */
+desk.league = { shadow: 'SHADOW: no orders', folder: { set: true, ok: true, problem: 'The league has no session yet.' }, trades: [], open: [], decisions: [] };
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--agents=demo', '--agent-any-time', '--bot-account=Sim101', '--test-pin=' + TEST_PIN, '--desk-url=http://127.0.0.1:' + DP], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});

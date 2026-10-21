@@ -10,7 +10,8 @@ says so (the league view and the floors: "The Desk has no ... yet"; a note recor
   LEAGUE: WHERE IT RUNS AND HOW IT SHOWS", and Anthony's ruling of the same day: keep the Agent tab exactly as it is, he pops in
   to check a running agent, and add the league as a second top-level tab): the top bar's **League** button, right after the Agent
   tab (`#wsLeagueTab`, `?tab=league`), opens it in place of the grid; the Agent tab, the League tab and the Bot view close each
-  other, one at a time. One MNQ chart with each seat's paper trades as hollow marks
+  other, one at a time. The button shows once The Desk answers `GET /api/chart-league` (asked at the start and every 5 minutes):
+  with an older Desk, or none reachable, the top bar keeps its room and the ⋯ switch below is not offered. One MNQ chart with each seat's paper trades as hollow marks
   carrying its letter in its color (H Haiku amber, S Sonnet cyan, O Opus violet): a circle at the fill, a diamond at the exit, a
   faint dashed stop and dotted target from the fill to the exit; "SHADOW: no orders"; the legend strip; each seat's day (its
   open paper trade, its virtual 50K Flex account, today's R, its looks, the league's flag for Anthony); the API spend against the
@@ -50,14 +51,17 @@ says so (the league view and the floors: "The Desk has no ... yet"; a note recor
   Pop-ups and redirects: Allow; reload and save again), and Save refuses the made-up places. It also says when Window management is
   blocked or not offered, or the pop-ups were blocked.
 
-**Tests.** `npm test`: TESTS_PLACEHOLDER. New `test/league.test.js`; new tests in `test/trade-tags.test.js`,
+**Tests.** `npm test`: 883 pass, 0 fail (1 skipped: the PowerShell updater tests). New `test/league.test.js`; new tests in `test/trade-tags.test.js`,
 `test/accounts-page.test.js`, `test/screens.test.js`. New smoke `npm run smoke:league` (screenshots `league-1366.png`,
 `league-1600.png`, `league-1920.png`, `league-chart.png`, `league-faint-1366.png`, `league-agent-tab-1366.png`,
 `league-panels-1366.png`, `league-nofolder-1366.png`); `smoke:trade-tags` (the note and the lost line: `trade-tags-note-1366.png`,
 `trade-tags-lost-1366.png`), `smoke:accounts` (the floors and the flag: `accounts-12-floors-desk-1366.png`,
 `accounts-13-floors-sent-1366.png`), `smoke:screens` (Brave: `screens-brave-1366.png`) extended; the bot smoke and agent-smoke open
 the Bot view through `test/tab-buttons.mjs` (its panel, or + Add panel when there is no room); the agent smokes are unchanged but for
-the Bot clicks and the top-bar order check in `agent-smoke.mjs`. SMOKES_PLACEHOLDER
+the Bot clicks and the top-bar order check in `agent-smoke.mjs`.
+Every smoke in package.json and the new one were run (49 files): 47 pass. Two fail one check each, and fail the same check on main
+(`bc9bc05`) in this environment, run here for the comparison: `smoke:bot` (waiting for the Library pop-up window) and
+`agent-board-smoke.mjs` (the board's Desk button click), as the 1.34.0 entry says. No NT8 harness run: no ChartBridge change.
 
 ## chart 1.34.1 (2026-10-21): the Trade tags panel keeps clicks made during a trade and on Last trade; the ARMED chip
 

@@ -611,7 +611,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   leaving the box saves it. A loss of records shows as one amber line at the top of the panel (under the trade line) saying
   when and why, with a small Seen button; it goes once seen.
 - **The League tab (1.35.0, Anthony 2026-10-21):** the top bar's League button, right after the Agent tab (the Agent tab's
-  look, pressed = the tint), opens the league view in place of the grid. A head line: "Shadow league", "SHADOW: no orders" (11 px mono capitals in a dashed
+  look, pressed = the tint), opens the league view in place of the grid. It shows only once The Desk serves the league, so the
+  top bar's room is never taken without it. A head line: "Shadow league", "SHADOW: no orders" (11 px mono capitals in a dashed
   purple box), the legend strip (each seat's letter in an 18 px ring of its color, then its name: H Haiku amber `#FFC266`, S
   Sonnet cyan `#5DE0F0`, O Opus violet `#B69CFF`), and on the right the date, the time and "day closed, recording to 17:00"
   after the close. Then one MNQ chart (the chart as everywhere) and a 420 px column: each seat's day (a 3 px left edge in its

@@ -9,6 +9,9 @@
  * reads The Desk's GET /api/chart-league (TheDesk docs/API.md "Shadow league"), which serves the league's own files read only:
  * status.json, the day's paper trades (closed and open), its decisions, and the standings. "SHADOW: no orders" is on the view.
  *
+ * The League button shows once The Desk answers GET /api/chart-league (a Desk of this release, reachable from this PC); with no such
+ * Desk it stays hidden and the top bar keeps its room.
+ *
  * The view: one chart (MNQ, the league's instrument; NQ shows the same prices) with each seat's paper trades as hollow markers
  * carrying its letter in its colour (a circle at the fill, a diamond at the exit) and faint stop and target lines from the fill
  * to the exit (or to now while open); the legend strip; each seat's day (its position, its virtual 50K Flex account, its
@@ -309,20 +312,29 @@ function create(o) {
     on = !!on;
     if (on === S.shown) return;
     S.shown = on;
-    if (tabBtn) tabBtn.setAttribute('aria-pressed', String(on));
+    if (tabBtn) { tabBtn.setAttribute('aria-pressed', String(on)); if (on) tabBtn.hidden = false; }
     if (typeof o.onTab === 'function') o.onTab(on);
     if (on) { mountChart(); poll(); } else { clearTimeout(S.timer); unmountChart(); }
     render();
   }
-  if (tabBtn) { tabBtn.hidden = false; tabBtn.addEventListener('click', e => { tabBtn.blur(); showTab(!S.shown); }); }
+  /* the tab is offered once The Desk answers GET /api/chart-league (a Desk of this release, reachable from this PC), asked at the
+     start and every 5 minutes; with no such Desk the top bar keeps its room (the trading controls never give way to it) */
+  S.offered = false;
+  function probe() {
+    Promise.resolve().then(() => o.deskBase()).then(url => o.fetch(url + '/api/chart-league', { cache: 'no-store', mode: 'cors', credentials: 'omit' }))
+      .then(r => r.ok, () => false).then(ok => { S.offered = ok; if (tabBtn) tabBtn.hidden = !(ok || S.shown); if (typeof o.onOffered === 'function') o.onOffered(ok); });
+  }
+  if (tabBtn) { tabBtn.hidden = true; tabBtn.addEventListener('click', e => { tabBtn.blur(); showTab(!S.shown); }); }
+  probe();
+  const probeTimer = setInterval(probe, 300000);
   render();
   return {
-    showTab, shown: () => S.shown, poll,
+    showTab, shown: () => S.shown, poll, offered: () => S.offered,
     /* read only, for the tests and the console */
     state: () => ({ shown: S.shown, problem: S.problem, reach: S.reach, date: S.day ? S.day.date : '', trades: S.day ? S.day.trades.length : 0, open: S.day ? S.day.open.length : 0,
       decisions: S.day ? S.day.decisions.length : 0, chart: !!S.chart, marks: S.day ? C.marksFor(S.day, S.root).marks.length : 0 }),
     day: () => S.day,
-    destroy() { clearTimeout(S.timer); unmountChart(); },
+    destroy() { clearTimeout(S.timer); clearInterval(probeTimer); unmountChart(); },
   };
 }
 

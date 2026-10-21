@@ -2930,7 +2930,7 @@ function openMore(v, anchor) {
     if (!g.hidden) g.textContent = 'Bot trades (faint): ' + (botDesk.ghostOn(v.panel.id) ? 'on' : 'off');
     /* 1.35.0: the league's paper trades, faint, on this chart (off by default; NQ and MNQ only) */
     const lg = $('wsMore').querySelector('[data-do="league"]');
-    lg.hidden = !window.LeagueCore || !window.LeagueCore.ROOTS.includes(v.panel.root);
+    lg.hidden = !window.LeagueCore || !window.LeagueCore.ROOTS.includes(v.panel.root) || !(leagueView && leagueView.offered());   // offered with The Desk's league only
     if (!lg.hidden) lg.textContent = 'League trades (faint): ' + (leagueGhosts()[v.panel.id] ? 'on' : 'off');
     openPop($('wsMore'), anchor);
   });
