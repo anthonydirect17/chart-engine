@@ -182,6 +182,22 @@ test('1.34.0: the ticket\'s projected sizes: a quiet preview while Armed (never 
   assert.equal(R.sent.pop().type, 'groupPreview', 'asked again later');
 });
 
+test('1.34.0 (Anthony\'s ruling on the review, "size it anyway"): a member sized with its room unknown: a quiet note, no confirm, sent at once', () => {
+  const R = rig();
+  R.core.setBracket('NQ', 'stop', 20, true);
+  R.core.setArmed(true);
+  R.sent.length = 0;
+  R.core.sendOrder('buy', 'market', null);
+  const pv = R.sent.pop();
+  const m = pvAll(pv.cid, [['SIM-A', 4], ['SIM-B', 2], ['SIM-C', 1]]);
+  m.members[1].note = 'room unknown: sized by risk only (its room to the floor: no high known)';
+  R.core.message(m);
+  assert.equal(R.confirm, null, 'no confirm for a room unknown');
+  const go = R.sent.pop();
+  assert.equal(go.type, 'groupOrder'); assert.equal(go.sizes, 'SIM-A:4,SIM-B:2,SIM-C:1');
+  assert.equal(R.core.groupProjection(), 'Next entry: SIM-A 4, SIM-B 2, SIM-C 1 NQ · $700 at risk · SIM-B: room unknown: sized by risk only', 'the note, short, on the ticket');
+});
+
 test('1.34.0 (Anthony 2026-10-20, one combined line): the group\'s position: the sizes added at their weighted average, each account in its tooltip', () => {
   const R = rig();
   assert.equal(R.core.groupPosition('group:g1', 'NQ'), null, 'flat: no line');

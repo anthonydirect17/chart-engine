@@ -46,6 +46,9 @@
  *   merged(m)            1.16.0 (optional): ChartBridge's `merge` result arrived (the host shows it)
  *   everyHolding()       1.34.0 (optional): { orders, positions } of every account ChartBridge lists (the window's v3 connection),
  *                        for Flatten every account; null or absent: this connection's own (the trade accounts)
+ *   alert(text)          1.34.0 (optional): a banner that stays until dismissed (a group entry refused while groups.txt cannot be read)
+ *   unserved()           1.34.0 (optional): Map account -> [contract names] it holds or works in that ChartBridge does not serve
+ *                        (ChartBridge 0.6.6's accounts entries), said as "not covered" by Flatten all and Flatten every account
  *   destroyed()          the host went away
  *   prefs, LP            LivePrefs (the saved bracket, qty and presets) and its module
  *   pin, fetch, framed, framedReason, now
@@ -419,7 +422,9 @@ function create(env) {
     const inn = groupProj.members.filter(x => x.size > 0), out = groupProj.members.filter(x => !(x.size > 0));
     const risk = inn.reduce((t2, x) => t2 + (isFinite(x.risk) ? x.risk : 0), 0);
     return (inn.length ? 'Next entry: ' + inn.map(x => x.account + ' ' + x.size).join(', ') + ' ' + groupProj.root + ' · $' + (Math.round(risk * 100) / 100).toLocaleString('en-US') + ' at risk' : 'Next entry: no account can take it') +
-      (out.length ? ' · sits out: ' + out.map(x => x.account + (x.out ? ' (' + x.out + ')' : '')).join('; ') : '');
+      (out.length ? ' · sits out: ' + out.map(x => x.account + (x.out ? ' (' + x.out + ')' : '')).join('; ') : '') +
+      /* 1.34.0 (Anthony's ruling on the review, "size it anyway"): a member sized with its room or open risk not known, said quietly */
+      inn.filter(x => typeof x.note === 'string' && x.note).map(x => ' · ' + x.account + ': ' + x.note.replace(/ \(.*$/, '')).join('');
   }
   function groupPreviewIn(m) {
     const members = Array.isArray(m.members) ? m.members.filter(x => x && typeof x.account === 'string') : [];
@@ -726,6 +731,8 @@ function create(env) {
   const requeued = new Set();                                      // batch cancels already sent again once after a rate refusal
   function onRefused(m) {
     if (projAsk && m.cid === projAsk.cid) { projAsk = null; groupProj = null; return true; }   // 1.34.0: a quiet preview refused says nothing (the trade itself would)
+    /* 1.34.0 (Anthony's ruling on the review): groups.txt unreadable refuses a group entry; the banner says why too (his single orders go) */
+    if (groupAsk && m.cid === groupAsk.cid && /groups\.txt could not be read/.test(m.reason || '') && typeof env.alert === 'function') env.alert('Group entry refused: ' + m.reason);
     /* a refused move (its change's cid): drawn at the confirmed price again, and a planned line dragged while it waited
        is said where it really is (1.22.0) */
     const mvNote = moveRefusal(m);
@@ -837,19 +844,19 @@ function create(env) {
     if (!ready(false)) return;
     const one = !isGroup(TR.account), account = TR.account;   // 1.33.0: a group's Flatten all covers every member
     if (faRun) { flash(faLabel(faRun) + ' under way: ' + faRun.queue.map(x => faName(faRun, x)).join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
-    const items = [];
+    const items = [], missedList = notCovered([...TR.orders.values()], TR.positions, targets(account)), missed = missedWords(missedList);   // the review: what it cannot reach, said
     for (const a of targets(account)) for (const r of OT.flattenAllRoots([...TR.orders.values()], TR.positions, a, served, ROOTS)) items.push({ a, r });
-    if (!items.length) { flash('Flatten all: no position or working order on ' + nameOf(account) + '. Nothing was sent.', ''); return; }
+    if (!items.length) { flash('Flatten all: no position or working order on ' + nameOf(account) + (missedList.length ? ' that ChartBridge serves' : '') + '. Nothing was sent.' + missed, missedList.length ? 'warn' : ''); return; }
     const t = now();
     if (!sameAction('flattenAll|' + account, t)) return;
     const recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
-    const run = { account, queue: items, sent: [], one };
+    const run = { account, queue: items, sent: [], one, missed };
     const first = OT.paceChunks(items, recent, BE_LIMIT)[0];
     for (const x of first) sendFlatten(x.a, x.r, false, 'all');
     const rest = items.slice(first.length);
-    flash(first.length ? 'Flatten all sent for ' + nameOf(account) + ': ' + first.map(x => faName(run, x)).join(', ') + ' (cancel their orders, close their positions at market).' +
+    flash((first.length ? 'Flatten all sent for ' + nameOf(account) + ': ' + first.map(x => faName(run, x)).join(', ') + ' (cancel their orders, close their positions at market).' +
       (rest.length ? ' ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.' : '')
-      : 'Flatten all for ' + nameOf(account) + ': ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.', '');
+      : 'Flatten all for ' + nameOf(account) + ': ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.') + (rest.length ? '' : missed), missed && !rest.length ? 'warn' : '');
     if (!rest.length) return;
     faRun = Object.assign(run, { queue: rest, sent: first.slice() });
     faPump();
@@ -871,7 +878,7 @@ function create(env) {
       }
       for (const x of r.queue.splice(0, room)) { sendFlatten(x.a, x.r, false, r.every ? 'every' : 'all'); r.sent.push(x); }
     }
-    if (!r.queue.length) { faRun = null; flash((r.every ? 'Flatten every account sent: ' : 'Flatten all sent for ' + r.account + ': ') + r.sent.map(x => faName(r, x)).join(', ') + ' (cancel their orders, close their positions at market).', ''); return; }
+    if (!r.queue.length) { faRun = null; flash((r.every ? 'Flatten every account sent: ' : 'Flatten all sent for ' + r.account + ': ') + r.sent.map(x => faName(r, x)).join(', ') + ' (cancel their orders, close their positions at market).' + (r.missed || ''), r.missed ? 'warn' : ''); return; }
     const oldest = actionTimes.find(x => x > t - CANCEL_GAP);
     later(() => { if (faRun === r) faPump(); }, Math.max(20, (oldest === undefined ? t : oldest) + CANCEL_GAP - t));
   }
@@ -886,7 +893,7 @@ function create(env) {
    * env.everyHolding(): the window's v3 connection's working orders and positions (it lists every account; this connection only the
    * trade accounts), or null without one. everyItems() is what a press would flatten now ([{ a, r }], by account), for the confirm.
    */
-  function everyItems() {
+  function everyScan() {
     const ext = typeof env.everyHolding === 'function' ? env.everyHolding() : null;
     const orders = [...TR.orders.values()].concat(ext && Array.isArray(ext.orders) ? ext.orders : []);
     const positions = new Map(TR.positions);
@@ -896,26 +903,39 @@ function create(env) {
     for (const [k, p] of positions) { const i = k.lastIndexOf('|'); if (i > 0 && p && +p.qty) accts.add(k.slice(0, i)); }
     const items = [];
     for (const a of [...accts].sort()) for (const r of OT.flattenAllRoots(orders, positions, a, served, ROOTS)) items.push({ a, r });
-    return items;
+    return { items, missed: notCovered(orders, positions, null), v3: !!ext };
   }
+  function everyItems() { return everyScan().items; }
+  /* the review (1.34.0): what a flatten from this page cannot reach: contracts ChartBridge does not serve, as "EVAL-A YM 12-26", from
+     ChartBridge 0.6.6's accounts entries (`unserved`, env.unserved()) and any position or order here on a root it does not serve.
+     only: the accounts to look at (null: every one) */
+  function notCovered(orders, positions, only) {
+    const out = new Set(), want = a => !only || only.includes(a);
+    const ext = typeof env.unserved === 'function' ? env.unserved() : null;
+    if (ext && typeof ext.forEach === 'function') ext.forEach((names, a) => { if (want(a) && Array.isArray(names)) for (const n of names) out.add(a + ' ' + n); });
+    for (const o of orders || []) if (o && OT.isWorking(o) && want(o.account) && o.root && !served(o.root)) out.add(o.account + ' ' + o.root);
+    for (const [k, p] of positions || []) { const i = k.lastIndexOf('|'); if (i > 0 && p && +p.qty && want(k.slice(0, i)) && !served(k.slice(i + 1))) out.add(k.slice(0, i) + ' ' + k.slice(i + 1)); }
+    return [...out].sort();
+  }
+  const missedWords = list => (list.length ? ' Not covered (not served by ChartBridge): ' + list.join(', ') + '.' : '');
   function flattenEvery() {
     try { dropNoStop(); flattened(null); } catch (e) { /* never in the way of the flatten */ }
     if (FRAMED) { flash(FRAMED_REASON, 'error'); return false; }
     if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
     if (!open()) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
     if (faRun) { flash(faLabel(faRun) + ' under way: ' + faRun.queue.map(x => faName(faRun, x)).join(', ') + ' left. Nothing new was sent.', 'warn'); return false; }
-    const items = everyItems();
-    if (!items.length) { flash('Flatten every account: no position or working order on any account. Nothing was sent.', ''); return false; }
+    const scan = everyScan(), items = scan.items, missed = missedWords(scan.missed);
+    if (!items.length) { flash('Flatten every account: no position or working order on any account' + (scan.missed.length ? ' that ChartBridge serves' : '') + '. Nothing was sent.' + missed, scan.missed.length ? 'warn' : ''); return false; }
     const t = now();
     if (!sameAction('flattenEvery', t)) return false;
     const recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
-    const run = { account: 'every account', queue: items, sent: [], one: false, every: true };
+    const run = { account: 'every account', queue: items, sent: [], one: false, every: true, missed };
     const first = OT.paceChunks(items, recent, BE_LIMIT)[0];
     for (const x of first) sendFlatten(x.a, x.r, false, 'every');
     const rest = items.slice(first.length);
-    flash(first.length ? 'Flatten every account sent: ' + first.map(x => faName(run, x)).join(', ') + ' (cancel their orders, close their positions at market).' +
+    flash((first.length ? 'Flatten every account sent: ' + first.map(x => faName(run, x)).join(', ') + ' (cancel their orders, close their positions at market).' +
       (rest.length ? ' ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.' : '')
-      : 'Flatten every account: ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.', '');
+      : 'Flatten every account: ' + rest.map(x => faName(run, x)).join(', ') + ' as ChartBridge\'s 10 a second allows.') + (rest.length ? '' : missed), missed && !rest.length ? 'warn' : '');
     if (!rest.length) return true;
     faRun = Object.assign(run, { queue: rest, sent: first.slice() });
     faPump();
@@ -1321,7 +1341,7 @@ function create(env) {
     TR, brackets, qtys, BK, cap, framed: FRAMED, allowNoStop, noStopAsked: () => !noStopOk,
     planMove, planRemove, planAdd, chartOrders, groupPosition, framedReason: FRAMED_REASON, tradeMode, noteMoving, moveRefusal,
     hello, message, lost, signIn, applyTrading,
-    ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAgent, flattenAll, flattenEvery, everyItems, moveOrder, cancelOrder, setArmed, pickAccount,
+    ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAgent, flattenAll, flattenEvery, everyItems, everyScan, moveOrder, cancelOrder, setArmed, pickAccount,
     merge, managedOf, switchOn: sw, setSwitches, v3Lost, cancelFromList,
     working, inCancelAll, batchLine, unsentNote, dismissUnsent,
     fmtUnit, bracketSelShown, typedTicks, committedTicks, setBracket, setUnit, setQty, pickPreset, savePreset, readPresets, flushBrackets, cancelBrackets,

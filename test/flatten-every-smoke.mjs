@@ -59,12 +59,16 @@ try {
   check(before && ACCTS.every(a => before.includes(a + '|MNQ') && before.includes(a + '|NQ')) && before.includes('Sim101|ES'), 'set up: MNQ and NQ held on ' + ACCTS.join(', ') + ', ES on two: ' + JSON.stringify(before));
   await wait(800);
 
+  /* the review: a contract ChartBridge does not serve (made up: FUNDED-C in YM) is named, never sent */
+  await control('unserved', { account: 'FUNDED-C', names: 'YM 12-26' }); await wait(600);
   /* one confirm, listing each account and what it holds */
   await clearSent();
   await p.click('#wsFlatEvery');
   await until(() => p.$eval('#wsDialog', d => d.open && !!d.querySelector('.ws-fe')), 'the confirm');
   const rows = await p.$$eval('.ws-fe .fe-list li', ls => ls.map(l => l.textContent));
   check(ACCTS.every(a => rows.some(r => r.startsWith(a + ' ') && /MNQ/.test(r) && /NQ/.test(r))) && (await flattens()).length === 0, 'one confirm, nothing sent yet: every account with something open, FUNDED-C and the follower SIM-F1 too: ' + JSON.stringify(rows));
+  const missedLine = await p.$eval('.ws-fe', f => (f.querySelector('.fe-missed') || {}).textContent || '');
+  check(missedLine === 'Not covered (not served by ChartBridge): FUNDED-C YM 12-26', 'the confirm names what it cannot reach: ' + missedLine);
   const fit = await p.$eval('.ws-fe', f => { const r = f.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.right <= innerWidth && f.scrollWidth <= f.clientWidth + 1; });
   check(fit, 'the confirm fits 1366 x 768');
   await p.screenshot({ path: path.join(out, 'flatten-every-confirm-1366.png') });

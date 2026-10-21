@@ -799,6 +799,9 @@ const core = TC.create({
   groups: () => (AF && AF.S.groups && !AF.S.groupsError ? AF.S.groups : []),
   /* 1.34.0: Flatten every account reads every listed account's orders and positions (the v3 connection), not only the trade accounts */
   everyHolding: () => (AF && AF.S.v3 && AF.S.signedIn ? { orders: [...AF.S.orders.values()], positions: AF.S.positions } : null),
+  alert: text => alertOnce(text),                      // 1.34.0: a group entry refused while groups.txt cannot be read
+  /* the review: contracts ChartBridge does not serve that an account holds or works (ChartBridge 0.6.6's accounts entries) */
+  unserved: () => (AF && AF.S.v3 ? new Map(AF.S.accounts.filter(x => x && Array.isArray(x.unserved) && x.unserved.length).map(x => [x.name, x.unserved.filter(n => typeof n === 'string')])) : null),
   confirmGroup: (m, onSend, onCancel) => { if (forwarding || !holds()) return false; askGroup(m, onSend, onCancel); return true; },
 });
 /* 1.33.0: the group entry's one confirm (Anthony 2026-10-19): each account's size and dollar risk, or why it sits out; Send sends
@@ -806,7 +809,7 @@ const core = TC.create({
 function askGroup(m, onSend, onCancel) {
   const d = $('wsDialog'), GC = window.GroupsCore, usd = v => (GC ? GC.usd(v) : '$' + v);
   const side = m.side === 'sell' ? 'SELL' : 'BUY', kind = m.kind === 'market' ? 'MKT' : m.kind === 'limit' ? 'LMT' : m.kind === 'stop' ? 'STP' : m.kind;
-  const rows = (m.members || []).map(x => `<tr class="${x.size > 0 ? '' : 'gq-out'}"><td>${esc(x.account)}</td><td class="r">${x.size > 0 ? x.size + ' ' + esc(m.root) : '-'}</td><td class="r">${x.size > 0 ? usd(x.risk) : '-'}</td><td class="r">${usd(x.budget)}</td><td>${x.size > 0 ? '' : esc('sits out: ' + (x.out || ''))}</td></tr>`).join('');
+  const rows = (m.members || []).map(x => `<tr class="${x.size > 0 ? '' : 'gq-out'}"><td>${esc(x.account)}</td><td class="r">${x.size > 0 ? x.size + ' ' + esc(m.root) : '-'}</td><td class="r">${x.size > 0 ? usd(x.risk) : '-'}</td><td class="r">${usd(x.budget)}</td><td>${x.size > 0 ? (x.note ? esc(x.note) : '') : esc('sits out: ' + (x.out || ''))}</td></tr>`).join('');   // 1.34.0: a member sized with a room unknown says so
   const total = (m.members || []).reduce((t, x) => t + (x.size > 0 ? x.risk : 0), 0), n = (m.members || []).filter(x => x.size > 0).length;
   d.innerHTML = `<form class="ws-dlg ws-gq" method="dialog" aria-label="Group entry on ${esc(m.name)}">
     <h2>${side} ${kind} ${esc(m.root)} on group ${esc(m.name)} <span>stop ${m.stopTicks} ticks · risk ${m.riskPct}% of each account's max loss</span></h2>
@@ -987,7 +990,7 @@ $('wsFlatEvery').addEventListener('click', e => {
   askFlattenEvery();
 });
 function askFlattenEvery() {
-  const items = core.everyItems();
+  const scan = core.everyScan(), items = scan.items;
   if (!items.length) { core.flattenEvery(); return; }      // says there is nothing to flatten, sends nothing
   const byAcct = new Map();
   for (const x of items) { if (!byAcct.has(x.a)) byAcct.set(x.a, []); byAcct.get(x.a).push(x.r); }
@@ -995,8 +998,8 @@ function askFlattenEvery() {
   const rows = [...byAcct].map(([a, rs]) => `<li><b>${esc(a)}</b> ${esc(rs.join(', '))}</li>`).join('');
   d.innerHTML = `<form class="ws-dlg ws-fe" method="dialog" aria-label="Flatten every account">
     <h2>Flatten every account?</h2>
-    <p>Cancels every working order and closes every position at market on ${n} account${n === 1 ? '' : 's'}, the copier's, the bot's and the agents' included, whatever the ticket shows. Works with Armed off.</p>
-    <ul class="fe-list">${rows}</ul>
+    <p>Cancels every working order and closes every position at market on ${n} account${n === 1 ? '' : 's'}, ${scan.v3 ? 'the copier\'s, the bot\'s and the agents\' included' : 'trade accounts only (no v3 connection)'}, whatever the ticket shows. Works with Armed off.</p>
+    <ul class="fe-list">${rows}</ul>${scan.missed.length ? `<p class="fe-missed">Not covered (not served by ChartBridge): ${esc(scan.missed.join(', '))}</p>` : ''}
     <div class="ws-dlg-btns"><span class="sg-fill"></span><button type="button" class="ws-btn" data-act="cancel">Cancel</button><button type="button" class="ws-btn ws-flat" id="feGo" title="Flatten every account (a click only, as every order button)">Flatten every account</button></div>
   </form>`;
   showDialog(d, () => false);

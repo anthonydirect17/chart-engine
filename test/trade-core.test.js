@@ -25,6 +25,7 @@ function rig(opts) {
     batch: () => {}, unsent: () => { R.unsent++; }, armBlocked: () => R.armedBlocked, destroyed: () => false, now: () => clock,
     framed: !!o.framed,
     everyHolding: () => (R.every || null),       // 1.34.0: the window's v3 connection's orders and positions (every listed account)
+    unserved: () => (R.unserved || null),        // 1.34.0 (the review): ChartBridge 0.6.6's accounts entries' unserved contracts
   };
   const core = TC.create(env);
   R.core = core;
@@ -194,6 +195,33 @@ test('1.34.0 Flatten every account: every account ChartBridge lists (copier, bot
   R.core.applyTrading({ enabled: false, reason: 'Trading is off.' });
   assert.equal(R.core.flattenEvery(), false);
   assert.equal(R.flattens().length, 0);
+});
+
+test('1.34.0 (the review): Flatten every account and Flatten all name what they cannot reach (not served by ChartBridge); no v3: trade accounts only', () => {
+  const R = rig();
+  R.on();
+  R.pos('Sim101', 'MNQ', 1);
+  R.unserved = new Map([['Sim101', ['YM 12-26']], ['FUNDED-C', ['GC 12-26', 'YM 12-26']]]);
+  const scan0 = R.core.everyScan();
+  assert.equal(scan0.v3, false, 'no v3 connection: the scan says so (the confirm says trade accounts only)');
+  R.every = { orders: [], positions: new Map() };
+  const scan = R.core.everyScan();
+  assert.equal(scan.v3, true);
+  assert.deepEqual(scan.items.map(x => x.a + ' ' + x.r), ['Sim101 MNQ']);
+  assert.deepEqual(scan.missed, ['FUNDED-C GC 12-26', 'FUNDED-C YM 12-26', 'Sim101 YM 12-26']);
+  R.core.flattenEvery();
+  assert.deepEqual(R.flattens(), ['Sim101 MNQ'], 'only what ChartBridge serves is sent');
+  assert.match(R.notes.pop(), /^warn: Flatten every account sent: Sim101 MNQ .* Not covered \(not served by ChartBridge\): FUNDED-C GC 12-26, FUNDED-C YM 12-26, Sim101 YM 12-26\.$/);
+  R.advance(5000); R.sent.length = 0;
+  R.core.flattenAll();
+  assert.deepEqual(R.flattens(), ['Sim101 MNQ']);
+  assert.match(R.notes.pop(), /^warn: Flatten all sent for Sim101: MNQ .* Not covered \(not served by ChartBridge\): Sim101 YM 12-26\.$/, 'Flatten all names only its own account\'s');
+  // nothing it can reach, something it cannot: said, nothing sent
+  R.advance(5000); R.sent.length = 0;
+  R.pos('Sim101', 'MNQ', 0);
+  R.core.flattenEvery();
+  assert.equal(R.flattens().length, 0);
+  assert.match(R.notes.pop(), /no position or working order on any account that ChartBridge serves\. Nothing was sent\. Not covered \(not served by ChartBridge\): /);
 });
 
 test('a chart click from another window: sent with the chart\'s kind only when the ticket\'s own recent price agrees (review S)', () => {
