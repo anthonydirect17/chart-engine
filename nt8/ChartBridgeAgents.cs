@@ -671,7 +671,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (raised.Count > 0) lock (SdFileLock) { string err = WriteStandDowns(list); if (err != null) ChartBridgeServer.Log(StandDownsFileName + " could not be saved (" + err + ")"); }
             if (waited) ChartBridgeServer.Log(StandDownsFileName + " could be read now");
             // fix round 1: only when groups.txt exists and was read (a missing groups.txt keeps every line, and the file is not rewritten)
-            bool groupsRead = File.Exists(Path.Combine(ChartBridgeConfig.Folder, "groups.txt")) && !ChartBridgeGroups.Unreadable();
+            bool groupsRead = File.Exists(Path.Combine(ChartBridgeConfig.Folder, "groups.txt")) && !ChartBridgeGroups.FileUnreadable();   // the file itself: never pruned from a last good copy
             List<GroupStandDown> gone = !groupsRead ? new List<GroupStandDown>() : list.Where(x => ChartBridgeGroups.NameOf(x.Group) == null).ToList();
             foreach (GroupStandDown s in gone) list.Remove(s);
             lock (SdLock) { sdList = list; sdBroken = null; sdRepeatSaid.Clear(); sdCapAlarmed.Clear(); }
@@ -3522,7 +3522,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // sized for, qty the first seat's size that is not 0. Null when it may go on.
         private string GroupPlanProblem(Plan p, string gid, List<string> seats, long rev)
         {
-            if (ChartBridgeGroups.Unreadable()) return ChartBridgeGroups.ReadFailedText;
+            if (ChartBridgeGroups.Unreadable()) return ChartBridgeGroups.ReadFailedNow();
             if (seats.Count == 0) return "group " + (ChartBridgeGroups.NameOf(gid) ?? gid) + " has no accounts: agent " + Id + " trades nothing until it has";
             if (p.SizesText == null || !p.HasSeatsRev) return "a plan for a group needs sizes (one per seat, in welcome.seats order) and seatsRev";
             if (p.SeatsRev != rev) return "the group changed; size again";
@@ -4173,7 +4173,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string AutoProblem()
         {
             if (!GroupNow()) return AccountProblemFor(Account, true) ?? AccountConflict();
-            if (ChartBridgeGroups.Unreadable()) return ChartBridgeGroups.ReadFailedText;
+            if (ChartBridgeGroups.Unreadable()) return ChartBridgeGroups.ReadFailedNow();
             string cw = AccountConflict();
             if (cw != null) return cw;
             List<string> seats = SeatNames();
@@ -4435,7 +4435,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string SetGroupLocked(string gid, string keep)
         {
             ChartBridgeAgents.RefreshFiles();   // a page's thread: the copies are read fresh
-            if (ChartBridgeGroups.Unreadable()) return ChartBridgeGroups.ReadFailedText + "; nothing changed";
+            if (ChartBridgeGroups.FileUnreadable()) return ChartBridgeGroups.ReadFailedNow() + "; nothing changed";   // a change waits for the file itself
             List<string> members = ChartBridgeGroups.MembersOf(gid);
             string gname = ChartBridgeGroups.NameOf(gid);
             if (members == null) return "there is no group " + gid;

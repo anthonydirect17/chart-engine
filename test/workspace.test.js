@@ -270,3 +270,13 @@ test('1.30.0 Settings sections: each a header row button over its body, in the o
   assert.match(js, /const \{ el, anchor, onClose, ro \} = pop; pop = null;\s*if \(ro\) ro\.disconnect\(\);/, 'and let go when closed');
   assert.match(js, /else if \(k === W\.KEYS\.sections\) sectionsChanged\(\);/, 'another window\'s change followed, and placed again the same way');
 });
+
+test('2026-10-21 (Anthony): the groups.txt alarm gets the sound: the page knows ChartBridge\'s words, whatever the machines do', () => {
+  const cs = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'nt8', 'ChartBridgeGroups.cs'), 'utf8');
+  const text = /public const string ReadFailedText = "([^"]+)"/.exec(cs)[1];
+  assert.ok(W.GROUPS_ALARM.test(text), text);
+  assert.ok(W.GROUPS_ALARM.test(text + '; the bot, the agents and the copier run on its last good copy (groups.txt.bak) (why)'));
+  assert.ok(!W.GROUPS_ALARM.test('accounts.txt could not be read: trading is off for every account until it can'));
+  const page = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
+  assert.match(page, /alertOnce\(m\.text\) && W\.GROUPS_ALARM\.test\(m\.text \|\| ''\)\) riskSound\(\)/, 'a banner and a sound, never a dialog');
+});

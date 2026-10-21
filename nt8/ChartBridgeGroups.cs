@@ -580,9 +580,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const string MarksHeader = "# ChartBridge account marks (written by ChartBridge; do not edit)";
         public const string MarksHeader2 = "# mark<TAB>account<TAB>peakEod|-<TAB>peakIntraday|-<TAB>dayStartBalance|-<TAB>session<TAB>dayStartAt (UTC ms)|-<TAB>closeSeen|-<TAB>lastBalance|-<TAB>flat|open|-<TAB>eodMissed|-<TAB>intradayMissed|-";
         public static double GapMs = 10000;   // 0.6.3 (audit C2): no reading of a connected account for this long is a gap ChartBridge did not watch
-        // 0.6.6 (Anthony's ruling on the review, "My single orders go"): his own single-account entries still go; group entries and the
-        // bot's, the agents' and the copier's entries stay refused (they read the groups: one direction, an agent's seats)
-        public const string ReadFailedText = "groups.txt could not be read: group entries and the bot's, the agents' and the copier's entries are refused until it can (your own single-account orders and every exit still go)";
+        // 0.6.6 (Anthony's ruling on the review, "My single orders go"): his own single-account entries still go; group entries are refused.
+        // Anthony's ruling of 2026-10-21: the bot, the agents and the copier are NOT blocked: they run on the last groups that read cleanly
+        // (groups.txt.bak, or the copy a cut-off save left beside a missing groups.txt). With no clean copy at all there is nothing to run
+        // on, so their entries wait. Either way the page shows the banner with a sound, never a dialog. ReadFailedNow() says which.
+        public const string ReadFailedText = "groups.txt could not be read: group entries are refused until it can (your own single-account orders and every exit still go)";
+        public const string MachinesWaitText = "; no copy of the groups read cleanly, so the bot's, the agents' and the copier's entries wait until it can";
         public const double MaxMoney = 100000000;
         public static double MarksWriteMs = 5000;  // account-marks.txt at most every 5 s while something changed (the harness sets 0)
         public const int NameMax = 30;
@@ -664,7 +667,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly object MarksFileLock = new object();
         private static State state = new State();
         private static bool loaded;
-        private static string readError;      // groups.txt exists but could not be read: every entry refused, never rewritten this run
+        private static string readError;      // groups.txt exists but could not be read: group entries refused, never rewritten this run
+        // 2026-10-21 (Anthony): with readError set, the last good copy (its file name) that `state` holds for the bot, the agents and the
+        // copier, or null when none read cleanly (their entries wait)
+        private static string lastGoodFrom;
         private static readonly Dictionary<string, Mark> Marks = new Dictionary<string, Mark>(StringComparer.OrdinalIgnoreCase);
         private static string marksError;     // account-marks.txt could not be read: not rewritten this run, no marks kept
         private static bool marksDirty;
@@ -679,7 +685,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Mem)
             {
                 ExitOf.Clear(); ExitHeld.Clear(); FlatSince.Clear(); LeftCancelled.Clear(); LeftLooked.Clear(); PosSide.Clear();
-                state = new State(); loaded = false; readError = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
+                state = new State(); loaded = false; readError = null; lastGoodFrom = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
                 marksSaveFailed = false; lastGroupsJson = null; LastSide.Clear();
             }
             ClearDailyHits();   // 0.6.6
@@ -708,7 +714,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void Load()
         {
             string err = null;
-            State s = null;
+            State s = null, good = null;   // good: the last good copy the machines run on while groups.txt cannot be read (2026-10-21)
+            string goodFrom = null;
             string[] lines = null;
             bool exists = File.Exists(FilePath);
             List<string> notes = new List<string>();
@@ -723,6 +730,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     State bs = b != null ? Parse(b, out berr) : null;
                     if (bs == null) continue;
                     exists = true;
+                    good = bs; goodFrom = Path.GetFileName(alt);
                     err = "groups.txt is missing (a save cut off?) but " + Path.GetFileName(alt) + " is there and holds " + bs.Groups.Count + " group" + (bs.Groups.Count == 1 ? "" : "s") + (bs.Groups.Count > 0 ? " (" + string.Join(", ", bs.Groups.Values.Select(g => g.Name)) + ")" : "") + " with " + bs.Members.Count + " account" + (bs.Members.Count == 1 ? "" : "s") + " in them: to go back to it, copy " + Path.GetFileName(alt) + " to groups.txt; to start with no groups, delete it";
                     break;
                 }
@@ -731,11 +739,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 lines = ReadLines(FilePath, out err);
                 if (lines != null) s = Parse(lines, out err);
-                if (lines != null && s == null)   // 0.6.3 (review MED 3): never the last good copy on its own: the alarm says what it holds
+                // 0.6.3 (review MED 3): never the last good copy on its own: the alarm says what it holds. 2026-10-21 (Anthony): the bot,
+                // the agents and the copier run on it (a file that cannot be opened at all included); his page keeps the 0.6.6 rules
+                if (s == null)
                 {
                     string[] b = ChartBridgeFiles.ReadBackup(FilePath);
                     string berr;
                     State bs = b != null ? Parse(b, out berr) : null;
+                    if (bs != null) { good = bs; goodFrom = "groups.txt.bak"; }
                     if (bs != null) err += "; its last good copy, groups.txt.bak, holds " + bs.Groups.Count + " group" + (bs.Groups.Count == 1 ? "" : "s") + (bs.Groups.Count > 0 ? " (" + string.Join(", ", bs.Groups.Values.Select(g => g.Name)) + ")" : "") + " with " + bs.Members.Count + " account" + (bs.Members.Count == 1 ? "" : "s") + " in them: to go back to it, copy groups.txt.bak over groups.txt";
                 }
             }
@@ -772,14 +783,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (loaded) return;   // another thread read them meanwhile
                 loaded = true;
                 if (!exists) state = new State();
-                else if (s == null) { readError = err ?? "unknown"; state = new State(); }
+                else if (s == null) { readError = err ?? "unknown"; state = good ?? new State(); lastGoodFrom = good != null ? goodFrom : null; }
                 else state = s;
                 Marks.Clear();
                 if (marks != null) foreach (KeyValuePair<string, Mark> kv in marks) Marks[kv.Key] = kv.Value;
                 marksError = merr != null && marks == null ? merr : null;
                 if (marksLeft) marksDirty = true;
             }
-            if (exists && s == null) Alarm(ReadFailedText + " (" + err + "); fix or delete the file, then recompile");
+            if (exists && s == null) Alarm(ReadFailedNow() + " (" + err + "); fix or delete the file, then recompile");
             else if (exists) ChartBridgeServer.Log("groups: " + s.Groups.Count + " group" + (s.Groups.Count == 1 ? "" : "s") + ", " + s.Members.Count + " account" + (s.Members.Count == 1 ? "" : "s") + " in them (groups.txt)");
             foreach (string w in notes) ChartBridgeFiles.Note(w);
             if (merr != null && marks == null) ChartBridgeServer.Log("account-marks.txt could not be read (" + merr + "): it is not rewritten this run; the trailing floors and the computed P&L are not given until it can be read");
@@ -1350,7 +1361,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 // 0.6.6 (Anthony's ruling): his own single-account entry goes (its group, and so one direction, cannot be known); every
                 // other source stays refused. A group entry never reaches this (GroupPlan refuses it first, with a banner).
-                if (readError != null) return source == "page" ? null : ReadFailedText;
+                // 2026-10-21 (Anthony): the bot's, the agents' and the copier's run on the last good copy (in `state`); with none, they wait
+                if (readError != null && source == "page") return null;
+                if (readError != null && lastGoodFrom == null) return ReadFailedNow();
                 string id;
                 if (!state.Members.TryGetValue(a.Name, out id) || !state.Groups.TryGetValue(id, out g)) return null;
                 g = g.Clone();
@@ -1452,7 +1465,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"ownRules\":[").Append(string.Join(",", members[g.Id].Where(x => own.Contains(x)).Select(x => CbJson.Str(x)))).Append("]")   // 0.6.5: the members with rules of their own
                  .Append(",\"tradeOut\":[").Append(string.Join(",", members[g.Id].Select(x => new[] { x, TradeOutWhy(x) }).Where(x => x[1] != null).Select(x => "{\"account\":" + CbJson.Str(x[0]) + ",\"why\":" + CbJson.Str(x[1]) + "}"))).Append("]}");   // 0.6.5 (review 4): the members a group entry leaves out
             }
-            b.Append("],\"error\":").Append(err == null ? "null" : CbJson.Str(ReadFailedText + " (" + err + ")")).Append('}');
+            b.Append("],\"error\":").Append(err == null ? "null" : CbJson.Str(ReadFailedNow() + " (" + err + ")")).Append('}');
             NoteSides(sides);
             return b.ToString();
         }
@@ -1507,7 +1520,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             EnsureLoaded();
             string err;
             lock (Mem) err = readError;
-            if (err != null) c.Send(StatusJson("error", ReadFailedText + " (" + err + ")"));
+            if (err != null) c.Send(StatusJson("error", ReadFailedNow() + " (" + err + ")"));
         }
 
         // ---------------------------------------------------------- the account numbers (item 5)
@@ -1537,7 +1550,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> members = null;
             lock (Mem)
             {
-                groupsErr = readError; marksErr = marksError;
+                groupsErr = readError != null && lastGoodFrom == null ? readError : null;   // 2026-10-21: the rooms from the last good copy when there is one
+                marksErr = marksError;
                 string id;
                 if (name != null && state.Members.TryGetValue(name, out id) && state.Groups.TryGetValue(id, out g))
                 {
@@ -1586,7 +1600,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             double? ntRoom = up ? ChartBridgeAccounts.RoomDrawdown(a, out ntWhy) : null;
             if (groupsErr != null)
             {
-                string w = ReadFailedText;
+                string w = ReadFailedNow();
                 n.Set("floor", null, null, w); n.Set("roomFloor", null, null, w); n.Set("roomDaily", null, null, w); n.Set("targetLeft", null, null, w);
                 return n;
             }
@@ -2142,7 +2156,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             EnsureLoaded();
             lock (Mem)
             {
-                if (readError != null || !state.Groups.ContainsKey(id)) return null;
+                if ((readError != null && lastGoodFrom == null) || !state.Groups.ContainsKey(id)) return null;   // 2026-10-21: the last good copy's seats
                 return state.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
             }
         }
@@ -2179,8 +2193,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Mem) { Group g; return state.Groups.TryGetValue(id, out g) ? g.Name : null; }
         }
 
-        // 0.6.0: groups.txt could not be read (no group is known this run).
-        public static bool Unreadable() { EnsureLoaded(); lock (Mem) return readError != null; }
+        // 0.6.0: no group is known this run: groups.txt could not be read and (2026-10-21, Anthony) no last good copy read cleanly either.
+        // With a last good copy the bot, the agents and the copier run on it, so this is false; FileUnreadable() is the file itself.
+        public static bool Unreadable() { EnsureLoaded(); lock (Mem) return readError != null && lastGoodFrom == null; }
+        // groups.txt itself could not be read (changes refused, the file never rewritten, page group entries refused).
+        public static bool FileUnreadable() { EnsureLoaded(); lock (Mem) return readError != null; }
+        // The groups.txt alarm's words: what the machines do (run on the last good copy, or wait).
+        public static string ReadFailedNow()
+        {
+            string from;
+            lock (Mem) from = lastGoodFrom;
+            return ReadFailedText + (from != null ? "; the bot, the agents and the copier run on its last good copy (" + from + ")" : MachinesWaitText);
+        }
 
         // ---------------------------------------------------------- telling the pages
         private static string Reject(string cid, string reason) { return "{\"type\":\"reject\"" + (cid != null ? ",\"cid\":" + CbJson.Str(cid) : "") + ",\"reason\":" + CbJson.Str(reason) + "}"; }

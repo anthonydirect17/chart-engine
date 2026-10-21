@@ -739,7 +739,7 @@ public static class GroupsHarness
         Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1"));
         Check(Submits(simD) == d0 + 1 && Rejection() == "", "review item 2: groups.txt unreadable: the sell of SIM-D's long 1 (an exit) goes");
         Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
-        Check(Submits(simD) == d0 + 2 && Rejection() == "" && ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText,
+        Check(Submits(simD) == d0 + 2 && Rejection() == "" && ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText + ChartBridgeGroups.MachinesWaitText,
               "review item 2 (0.6.6, Anthony's ruling: his single orders go): his entry goes; the bot's is still refused: " + Rejection());
         File.WriteAllText(file, was);
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
@@ -1012,8 +1012,8 @@ public static class GroupsHarness
             int d = Submits(simD);
             Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
             Check(Submits(simD) == d + 1 && Rejection() == "", "unreadable (0.6.6, Anthony's ruling: \"My single orders go\"): his single-account entry goes: " + Rejection());
-            Check(ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText && ChartBridgeGroups.EntryCheck("agent:x", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText &&
-                  ChartBridgeGroups.EntryCheck("copier", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText, "unreadable: the bot's, an agent's and the copier's entries stay refused");
+            Check(ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText + ChartBridgeGroups.MachinesWaitText && ChartBridgeGroups.EntryCheck("agent:x", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText + ChartBridgeGroups.MachinesWaitText &&
+                  ChartBridgeGroups.EntryCheck("copier", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText + ChartBridgeGroups.MachinesWaitText, "unreadable, no clean copy (Anthony 2026-10-21: nothing to run on): the bot's, an agent's and the copier's entries wait");
             Clear(); GP("groupPreview", "{\"type\":\"groupPreview\",\"cid\":\"ge\",\"group\":\"g1\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"market\",\"bracket\":{\"stop\":20,\"target\":40}}");
             Check(Rejection().Contains(ChartBridgeGroups.ReadFailedText), "unreadable: a group entry is refused, with why: " + Rejection());
             Flat();
@@ -1028,13 +1028,55 @@ public static class GroupsHarness
         File.WriteAllText(p, was);
         ChartBridgeAccounts.ReadFault = f => f == "groups.txt" ? "locked by another program" : null;
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
-        Check(ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText && ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == null, "a file that cannot be opened (three tries): the machines' entries refused, his single orders go");
+        Check(ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText + ChartBridgeGroups.MachinesWaitText && ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == null, "a file that cannot be opened (three tries): the machines' entries refused, his single orders go");
         ChartBridgeAccounts.ReadFault = null;
+        LastGoodCopy(p, was);
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Check(ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == null && ChartBridgeGroups.GroupOf("SIM-B") == null && FileText() == was, "readable again after a start: as saved");
         Gone(p); Gone(Path.Combine(folder, "account-marks.txt"));
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Check(ChartBridgeGroups.GroupsJson() == "{\"type\":\"groups\",\"list\":[],\"error\":null}", "both files gone: no groups (0.5.7's behaviour)");
+    }
+
+    // Anthony's ruling of 2026-10-21: an unreadable groups.txt never blocks the bot, the agents or the copier. They run on the last
+    // groups that read cleanly (groups.txt.bak, or the copy beside a missing file); his single orders go; group entries from the page
+    // and every change stay refused, the file is never rewritten, and the pages get the alarm (a banner with a sound on the page).
+    static void LastGoodCopy(string p, string was)
+    {
+        string good = ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-\t-\t-\nmember\tSIM-A\tg1\nmember\tSIM-B\tg1\n";
+        foreach (bool missing in new[] { false, true })
+        {
+            Corrupt(p, "no header\n");
+            File.WriteAllText(p + ".bak", good);
+            if (missing) File.Delete(p);
+            Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+            foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+            string tag = missing ? "groups.txt missing, its .bak beside it" : "groups.txt unreadable, its .bak good";
+            string gj = ChartBridgeGroups.GroupsJson();
+            Check(Any("groups.txt could not be read") && Any("the bot, the agents and the copier run on its last good copy (groups.txt.bak)") &&
+                  gj.Contains("run on its last good copy (groups.txt.bak)") && gj.Contains("\"name\":\"Lucid\""), "2026-10-21 (" + tag + "): the alarm says the machines run on the last good copy; the groups message lists it: " + gj);
+            Check(ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == null && ChartBridgeGroups.EntryCheck("agent:x", simD, "MNQ", true, 1, true, false) == null &&
+                  ChartBridgeGroups.EntryCheck("copier", simD, "MNQ", true, 1, true, false) == null && ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == null,
+                  "2026-10-21 (" + tag + "): the bot's, an agent's and the copier's entries are not blocked; his single orders go");
+            Check(!ChartBridgeGroups.Unreadable() && ChartBridgeGroups.FileUnreadable() && ChartBridgeGroups.GroupOf("SIM-B") == "g1" &&
+                  string.Join(",", ChartBridgeGroups.MembersOf("g1") ?? new List<string>()) == "SIM-A,SIM-B", "2026-10-21 (" + tag + "): the agents see the last good copy's groups and seats");
+            Pos(simA, mnq, 1);
+            string held = ChartBridgeGroups.EntryCheck("bot", simB, "MNQ", false, 1, true, false);
+            Check(held != null && held.Contains("Group Lucid is long"), "2026-10-21 (" + tag + "): the last good copy's rules hold the machines (one direction): " + held);
+            Flat();
+            Clear(); GP("groupPreview", "{\"type\":\"groupPreview\",\"cid\":\"ge\",\"group\":\"g1\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"market\",\"bracket\":{\"stop\":20,\"target\":40}}");
+            Check(Rejection().Contains(ChartBridgeGroups.ReadFailedText), "2026-10-21 (" + tag + "): his group entry from the page is still refused: " + Rejection());
+            Clear(); G("groupSave", Save("", "New", "true", "0", "2000", "eod", "0", "50000", "0"));
+            Check(Rejection().Contains("groups.txt could not be read") && (missing ? !File.Exists(p) : File.ReadAllText(p) == "no header\n") && File.ReadAllText(p + ".bak") == good,
+                  "2026-10-21 (" + tag + "): changes refused, neither file rewritten");
+            List<string> late = new List<string>();
+            ChartBridgeClient lc = new ChartBridgeClient(null, 778) { Origin = "http://localhost:8765" };
+            lc.Tap = x => { lock (late) late.Add(x); };
+            ChartBridgeAccounts.SignedIn(lc);
+            Check(late.Any(x => x.Contains("\"level\":\"error\"") && x.Contains("run on its last good copy")), "2026-10-21 (" + tag + "): a page that signs in gets the alarm (the page's banner and sound)");
+        }
+        Gone(p + ".bak");
+        File.WriteAllText(p, was);
     }
 
     // ------------------------------------------------------------ 0.6.2: accountState.accountType (the group's Type, for a hero on one account)
@@ -1301,7 +1343,7 @@ public static class GroupsHarness
             Corrupt(p, text);
             Clear(); Restart();
             Check(ChartBridgeGroups.GroupsJson().Contains("\"list\":[],\"error\":\"groups.txt could not be read") && ChartBridgeGroups.GroupsJson().Contains(broken[1]) &&
-                  ChartBridgeGroups.EntryCheck("bot", simA, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText && Entry(AccountsNow(), "SIM-A").Contains("\"floor\":null,"), "0.6.5: " + broken[1] + ": unreadable, the machines' entries refused (0.6.6: his own go), no floor: " + ChartBridgeGroups.GroupsJson());
+                  ChartBridgeGroups.EntryCheck("bot", simA, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText + ChartBridgeGroups.MachinesWaitText && Entry(AccountsNow(), "SIM-A").Contains("\"floor\":null,"), "0.6.5: " + broken[1] + ": unreadable, the machines' entries refused (0.6.6: his own go), no floor: " + ChartBridgeGroups.GroupsJson());
             Clear(); G("memberRules", MR("SIM-A", R("50000", "0", "2000", "eod", "0", "0", "")));
             Check(File.ReadAllText(p) == text, "0.6.5: unreadable: never rewritten");
         }

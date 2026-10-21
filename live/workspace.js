@@ -330,6 +330,8 @@ function roundTrips(fills, pointValue, start) {
   return { byFill, trades, realized: realizedKnown ? realized : null, unknown };
 }
 /** The fills of one trading day (from 18:00 ET the day before), at bar time `now` (New York wall clock as seconds). */
+/* 2026-10-21 (Anthony): ChartBridge's groups.txt alarm (ChartBridgeGroups.ReadFailedText): the banner gets the alert sound too */
+const GROUPS_ALARM = /^groups\.txt could not be read/;
 function fillsToday(fills, account, now) {
   const d = tradeDayOf(now);
   return (Array.isArray(fills) ? fills : []).filter(f => f && f.account === account && isFinite(f.t) && tradeDayOf(+f.t) === d);
@@ -483,7 +485,7 @@ return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS
   layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
   isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout, LAPTOP_TABS, GAP, GAP_TIGHT, VIEW_KEYS, cleanViewKeys, fmtSpan,
   readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor, HTF_TFS,
-  roundTrips, fillsToday, QUOTE_ROOTS, cleanHide, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
+  GROUPS_ALARM, roundTrips, fillsToday, QUOTE_ROOTS, cleanHide, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
   TAPE_CATS, cleanTapeColors, tapeClass, readTapeColors, setTapeColor, resetTapeColors };
 });
 
@@ -875,7 +877,8 @@ function tmessage(m) {
     case 'pcClock': pcClock = pcClockOf(m); syncStats(); return;   // 1.24.0: a new check of this PC's clock (every 5 minutes)
     case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
     // errors stay until dismissed; a warning (a mistyped maxTicksAway or maxBracketTicks in config.txt, 0.3.7) too, in amber
-    case 'status': if (m.level === 'error') alertOnce(m.text); else if (m.level === 'warn' && m.text) alertOnce(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;
+    /* 2026-10-21 (Anthony): groups.txt that cannot be read is a banner with a sound, never a dialog (GROUPS_ALARM) */
+    case 'status': if (m.level === 'error') { if (alertOnce(m.text) && W.GROUPS_ALARM.test(m.text || '')) riskSound(); } else if (m.level === 'warn' && m.text) alertOnce(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;
     case 'riskAlert': riskAlert(m, false); return;        // 1.34.0 (ChartBridge 0.6.6)
   }
   // 1.16.0: the Account page's cancel from the list went on this connection; its refusal is said there
