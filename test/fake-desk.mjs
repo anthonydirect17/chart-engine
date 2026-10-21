@@ -9,6 +9,9 @@
 //   (rows gain "accountType": {id, firm, name, version, status} or null) and PUT /api/accounts/{account}/account-type
 //   ({"account_type": id|null}; 404 for an unknown type, 409 for an archived one, errors as {"detail"}, as The Desk's). Seed { types, accounts }; desk.editType(id, change) is an edit on The Desk
 //   (version + 1; a checked type goes back to not_checked). Made-up firm values and SIM-A style accounts only.
+// Chart 1.35.0: notes on POST /api/trade-tags (dim "note") come back apart under `notes` on GET, as The Desk's; desk.refuseTags
+//   (a function of a record: a reason, or '') refuses records as The Desk's `rejected`; GET /api/chart-floors answers seed.floors
+//   ({accounts, skipped}); GET /api/chart-league answers seed.league (the SAMPLE league day: status, trades, open, decisions).
 import http from 'node:http';
 
 /* Chart 1.32.0: a few more firms and plans for the type picker (Firm, Plan, Size), named as The Desk names its types ("<Plan>
@@ -53,8 +56,9 @@ function check(which, d) {
 export async function startDesk(port, seed) {
   const docs = Object.assign(emptyDocs(), JSON.parse(JSON.stringify(seed || {})));
   const types = JSON.parse(JSON.stringify((seed && seed.types) || [])), accounts = JSON.parse(JSON.stringify((seed && seed.accounts) || []));
-  delete docs.types; delete docs.accounts;
-  const desk = { docs, types, accounts, tags: [], log: [], down: false, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)),
+  const floors = (seed && seed.floors) || null, league = (seed && seed.league) || null;
+  delete docs.types; delete docs.accounts; delete docs.floors; delete docs.league;
+  const desk = { docs, types, accounts, floors, league, tags: [], log: [], down: false, refuseTags: null, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)),
     editType(id, change) { const t = types.find(x => x.id === id); Object.assign(t, change, { version: t.version + 1, status: 'not_checked', updated_at: new Date().toISOString() }); } };
   const typeLink = id => { const t = types.find(x => x.id === id); return t ? { id: t.id, firm: t.firm, name: t.name, version: t.version, status: t.status } : null; };
   const server = http.createServer((req, res) => {
@@ -73,16 +77,30 @@ export async function startDesk(port, seed) {
         let d; try { d = JSON.parse(body); } catch (e) { return send(400, { detail: 'send JSON with Content-Type: application/json' }); }
         if (!d || !Array.isArray(d.tags)) return send(400, { detail: 'send {"tags": [...]}' });
         let inserted = 0, duplicates = 0;
-        for (const t of d.tags) { if (desk.tags.some(x => x.id === t.id)) duplicates++; else { desk.tags.push(t); inserted++; } }
+        const rejected = [];
+        d.tags.forEach((t, index) => {
+          const why = typeof desk.refuseTags === 'function' ? desk.refuseTags(t) : '';
+          if (why) { rejected.push({ index, id: t.id, reason: why }); return; }
+          if (desk.tags.some(x => x.id === t.id)) duplicates++; else { desk.tags.push(t); inserted++; }
+        });
         desk.log.push({ method: 'POST', which: 'trade-tags', body: d });
-        send(200, { received: d.tags.length, rejected: [], inserted, duplicates, conflicts: [] });
+        send(200, { received: d.tags.length, rejected, inserted, duplicates, conflicts: [] });
       });
       return;
     }
     if (urlPath === '/api/trade-tags' && req.method === 'GET') {
       const q = new URLSearchParams(query || '');
       desk.log.push({ method: 'GET', which: 'trade-tags' });
-      return send(200, { tags: desk.tags.filter(t => (!q.get('account') || t.account === q.get('account')) && (!q.get('root') || t.root === q.get('root')) && (!q.get('since_ms') || t.at_ms >= +q.get('since_ms'))) });
+      const hit = desk.tags.filter(t => (!q.get('account') || t.account === q.get('account')) && (!q.get('root') || t.root === q.get('root')) && (!q.get('since_ms') || t.at_ms >= +q.get('since_ms')));
+      return send(200, { tags: hit.filter(t => t.dim !== 'note'), notes: hit.filter(t => t.dim === 'note') });
+    }
+    if (urlPath === '/api/chart-floors' && req.method === 'GET') {
+      desk.log.push({ method: 'GET', which: 'chart-floors' });
+      return desk.floors ? send(200, desk.floors) : send(404, { detail: 'Not Found' });
+    }
+    if (urlPath === '/api/chart-league' && req.method === 'GET') {
+      desk.log.push({ method: 'GET', which: 'chart-league' });
+      return desk.league ? send(200, desk.league) : send(404, { detail: 'Not Found' });
     }
     if (urlPath === '/api/account-types' && req.method === 'GET') {
       desk.log.push({ method: 'GET', which: 'account-types' });

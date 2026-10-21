@@ -17,6 +17,12 @@
  * and are sent again every 10 seconds; The Desk stores a record once by its id, so a resend is safe. A ticket on a group
  * records each click for every member account, each with its own phase. Nothing here sends, changes or cancels an order.
  *
+ * 1.35.0 (Anthony 2026-10-21): a short note box under the chips (one line, at most NOTE_MAX characters), kept with the trade
+ * like the chips: Enter, or leaving the box after a change, records it as one record with dim `note` (every edit a new record,
+ * the newest is the note; an empty box clears it). Never a chip, never scored by the Teach checkpoint (The Desk keeps notes
+ * apart). Typing in it fires no hotkey (the page's hotkey handlers ignore every key while a box has the focus). The "lost" line
+ * says when the losses happened and clears with its Seen button (1.34.1 and before: a bare count that never went away).
+ *
  * Two parts, as workspace.js: TradeTagsCore (pure, loads in Node for test/trade-tags.test.js) and TradeTags.mount (browser).
  */
 (function (root, factory) {
@@ -40,9 +46,20 @@ const MATCH_MS = 2000;                      // a record's trade_open_ms and the 
 const KEEP = 400;                           // records kept in this browser (the newest)
 const STORE_KEY = 'live-trade-tags-v1';
 const ID_RX = /^[A-Za-z0-9_-]{8,64}$/;
+const NOTE = 'note';                        // 1.35.0: the note's records (The Desk's trade_notes)
+const NOTE_MAX = 200;                       // characters (Anthony: "short", about 200)
+const LOST_KEEP = 20;                       // loss entries kept in this browser
 
 const labelOf = (dim, value) => { const c = (CHIPS[dim] || []).find(x => x[0] === value); return c ? c[1] : null; };
-const validValue = (dim, value) => value === null || !!labelOf(dim, value);
+const validValue = (dim, value) => value === null || (dim === NOTE ? cleanNote(value) === value && value !== '' : !!labelOf(dim, value));
+/** A note as The Desk takes it: one line of printable text, trimmed, at most NOTE_MAX characters; '' when empty; null when it
+ *  is not text or holds a line break or a control character. */
+function cleanNote(v) {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  if (t.length > NOTE_MAX || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(t)) return null;
+  return t;
+}
 
 /** A new record id: 20 characters of a-z and 0-9 from `rand` (Math.random by default). */
 function newId(rand) {
@@ -118,11 +135,29 @@ function recordsFor(records, account, root, tr, shown, sessionStart) {
 }
 
 /** Each row's chip from records (any order): the newest record of the row; a cleared row null. { dim: { value, label, phase, at_ms } | null } */
+const byTime = (a, b) => a.at_ms - b.at_ms || (a.seq || 0) - (b.seq || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 function chipsOf(records) {
   const out = { setup: null, grade: null, context: null, trigger: null };
-  const sorted = (records || []).slice().sort((a, b) => a.at_ms - b.at_ms || (a.seq || 0) - (b.seq || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const sorted = (records || []).filter(r => DIMS.includes(r.dim)).sort(byTime);   // 1.35.0: a note is never a chip
   for (const r of sorted) out[r.dim] = r.value === null ? null : { value: r.value, label: labelOf(r.dim, r.value), phase: r.phase, at_ms: r.at_ms };
   return out;
+}
+
+/** 1.35.0: the trade's note from records (any order): the newest note record's { text, phase, at_ms }, or null (none, or cleared). */
+function noteOf(records) {
+  const notes = (records || []).filter(r => r.dim === NOTE).sort(byTime);
+  const last = notes[notes.length - 1];
+  return !last || last.value === null ? null : { text: last.value, phase: last.phase, at_ms: last.at_ms };
+}
+
+/** 1.35.0: what the lost line says, from this browser's loss entries ({ at, n, why, seen }), or '' when every one was seen.
+ *  hms(ms) formats a time (New York). A loss from before 1.35.0 has no time: it says so. */
+function lostLine(lost, hms) {
+  const fresh = (Array.isArray(lost) ? lost : []).filter(x => x && !x.seen && x.n > 0);
+  if (!fresh.length) return '';
+  const n = fresh.reduce((a, x) => a + x.n, 0);
+  const parts = fresh.map(x => x.n + ' ' + (x.at ? 'at ' + hms(x.at) : 'before chart 1.35.0 (when was not kept)') + (x.why ? ', ' + x.why : ''));
+  return n + ' tag record' + (n > 1 ? 's were' : ' was') + ' lost before The Desk took ' + (n > 1 ? 'them' : 'it') + ': ' + parts.join('; ') + '.';
 }
 
 /** One record as The Desk takes it, or null when a field is not right. */
@@ -130,7 +165,7 @@ function cleanRecord(r) {
   if (!r || typeof r !== 'object') return null;
   if (typeof r.id !== 'string' || !ID_RX.test(r.id)) return null;
   if (typeof r.account !== 'string' || !r.account || r.account.length > 64) return null;
-  if (!ROOTS.includes(r.root) || !PHASES.includes(r.phase) || !DIMS.includes(r.dim) || !validValue(r.dim, r.value === undefined ? undefined : r.value)) return null;
+  if (!ROOTS.includes(r.root) || !PHASES.includes(r.phase) || !(DIMS.includes(r.dim) || r.dim === NOTE) || !validValue(r.dim, r.value === undefined ? undefined : r.value)) return null;
   const tom = r.trade_open_ms === null || r.trade_open_ms === undefined ? null : r.trade_open_ms;
   if (tom !== null && !(Number.isInteger(tom) && tom > 0)) return null;
   if ((r.phase === 'pre') !== (tom === null)) return null;
@@ -139,20 +174,33 @@ function cleanRecord(r) {
 }
 
 /**
- * This browser's copy: { records, pending (ids not yet taken by The Desk), dropped (records lost before The Desk took them, ever) },
- * from its JSON; never throws. Every pending record is kept; of the others (The Desk has them) the newest KEEP (the review of
- * b4bc612: trimming never drops an unsent record). A pending id whose record is not usable is counted in dropped.
+ * This browser's copy: { records, pending (ids not yet taken by The Desk), lost (when records were lost before The Desk took
+ * them: [{ at, n, why, seen }], the newest LOST_KEEP) }, from its JSON; never throws. Every pending record is kept; of the others
+ * (The Desk has them) the newest KEEP (the review of b4bc612: trimming never drops an unsent record). A pending id whose record
+ * is not usable is a loss at `now` (null when not given). 1.35.0: a store from 1.34.x has `dropped`, a bare count: it becomes one
+ * loss with no time (said so on the panel).
  */
-function cleanStore(raw) {
+function cleanLost(v) {
+  const out = [];
+  for (const x of Array.isArray(v) ? v : []) {
+    if (!x || !Number.isInteger(x.n) || x.n <= 0) continue;
+    out.push({ at: Number.isInteger(x.at) && x.at > 0 ? x.at : null, n: x.n, why: typeof x.why === 'string' ? x.why.slice(0, 160) : '', seen: x.seen === true });
+  }
+  return out.slice(-LOST_KEEP);
+}
+function cleanStore(raw, now) {
   let v = raw;
   if (typeof raw === 'string') { try { v = JSON.parse(raw); } catch (e) { v = null; } }
-  const out = { records: [], pending: [], dropped: 0 };
+  const out = { records: [], pending: [], lost: [] };
   if (!v || typeof v !== 'object') return out;
-  out.dropped = Number.isInteger(v.dropped) && v.dropped > 0 ? v.dropped : 0;
+  out.lost = cleanLost(v.lost);
+  if (!Array.isArray(v.lost) && Number.isInteger(v.dropped) && v.dropped > 0) out.lost.push({ at: null, n: v.dropped, why: '', seen: false });
   const seen = new Set(), all = [];
   for (const r of Array.isArray(v.records) ? v.records : []) { const c = cleanRecord(r); if (c && !seen.has(c.id)) { seen.add(c.id); all.push(c); } }
   const want = new Set((Array.isArray(v.pending) ? v.pending : []).filter(id => typeof id === 'string'));
-  for (const id of want) if (!seen.has(id)) out.dropped++;
+  let bad = 0;
+  for (const id of want) if (!seen.has(id)) bad++;
+  if (bad) out.lost = cleanLost(out.lost.concat([{ at: Number.isInteger(now) ? now : null, n: bad, why: 'unreadable in this browser', seen: false }]));
   const sent = all.filter(r => !want.has(r.id)), keepSent = new Set(sent.slice(-KEEP).map(r => r.id));
   out.records = all.filter(r => want.has(r.id) || keepSent.has(r.id));
   out.pending = out.records.filter(r => want.has(r.id)).map(r => r.id);
@@ -166,8 +214,13 @@ function mergeRecords(mine, desk) {
   return out.sort((a, b) => a.at_ms - b.at_ms);   // cleanStore trims, never a pending record
 }
 
-return { CHIPS, DIMS, DIM_LABEL, ROOTS, PHASES, MATCH_MS, KEEP, STORE_KEY, labelOf, newId, sessionStartMs, tradesOf, targetOf, recordsFor, chipsOf,
-  cleanRecord, cleanStore, mergeRecords };
+/** 1.35.0: every loss marked seen (the lost line's Seen button): the line clears; the entries stay for the record. */
+const markSeen = st => Object.assign({}, st, { lost: (st.lost || []).map(x => Object.assign({}, x, { seen: true })) });
+/** 1.35.0: a new loss added to the copy ({ at, n, why }). */
+const addLost = (st, at, n, why) => Object.assign({}, st, { lost: cleanLost((st.lost || []).concat([{ at, n, why, seen: false }])) });
+
+return { CHIPS, DIMS, DIM_LABEL, ROOTS, PHASES, MATCH_MS, KEEP, STORE_KEY, NOTE, NOTE_MAX, labelOf, newId, sessionStartMs, tradesOf, targetOf, recordsFor, chipsOf,
+  noteOf, cleanNote, lostLine, markSeen, addLost, cleanRecord, cleanStore, mergeRecords };
 });
 
 /* ======================================================================== the panel (browser only) */
@@ -184,11 +237,13 @@ let shared = null;
 function hub(env) {
   if (shared) return shared;
   const H = shared = { state: C.cleanStore(null), listeners: new Set(), deskState: 'not asked', deskNote: '', timer: 0, sending: false, loaded: new Set() };
-  const read = () => { try { H.state = C.cleanStore(env.store.getItem(C.STORE_KEY)); } catch (e) { /* blocked: this window's memory only */ } };
+  const read = () => { try { H.state = C.cleanStore(env.store.getItem(C.STORE_KEY), Date.now()); } catch (e) { /* blocked: this window's memory only */ } };
   const write = () => { try { env.store.setItem(C.STORE_KEY, JSON.stringify(H.state)); } catch (e) { /* blocked */ } };
   const changed = () => { for (const f of H.listeners) { try { f(); } catch (e) { /* one panel */ } } };
   read();
-  H.add = recs => { read(); for (const r of recs) { H.state.records.push(r); H.state.pending.push(r.id); } H.state = C.cleanStore(H.state); write(); changed(); H.send(); };
+  H.add = recs => { read(); for (const r of recs) { H.state.records.push(r); H.state.pending.push(r.id); } H.state = C.cleanStore(H.state, Date.now()); write(); changed(); H.send(); };
+  /* 1.35.0: the lost line's Seen: every loss marked seen in this browser (every window's panel clears) */
+  H.seen = () => { read(); H.state = C.markSeen(H.state); write(); changed(); };
   H.send = () => {
     if (H.sending) return;
     read();
@@ -205,7 +260,7 @@ function hub(env) {
         const done = new Set(batch.map(r => r.id));
         H.state.pending = H.state.pending.filter(id => !done.has(id));
         const refused = (j && Array.isArray(j.rejected) ? j.rejected : []).concat(j && Array.isArray(j.conflicts) ? j.conflicts : []);
-        if (refused.length) { const bad = new Set(refused.map(x => x && x.id)); H.state.records = H.state.records.filter(r => !bad.has(r.id)); H.state.dropped += refused.length; }
+        if (refused.length) { const bad = new Set(refused.map(x => x && x.id)); H.state.records = H.state.records.filter(r => !bad.has(r.id)); H.state = C.addLost(H.state, Date.now(), refused.length, 'refused by The Desk: ' + String(refused[0].reason || '').slice(0, 100)); }
         write();
         H.deskState = 'ok'; H.deskNote = refused.length ? 'The Desk refused ' + refused.length + ' record' + (refused.length > 1 ? 's' : '') + ': ' + (refused[0].reason || '') : '';
       }, e => { H.deskState = 'down'; H.deskNote = e && e.message ? e.message : 'not reachable'; })
@@ -218,7 +273,7 @@ function hub(env) {
     H.loaded.add(k);
     env.deskBase().then(url => env.fetch(url + '/api/trade-tags?' + new URLSearchParams({ account, root, since_ms: String(since) }), { mode: 'cors', credentials: 'omit', cache: 'no-store' }))
       .then(r => (r.ok ? r.json() : Promise.reject(new Error('The Desk answered ' + r.status))))
-      .then(j => { read(); H.state = C.cleanStore({ records: C.mergeRecords(H.state.records, j && j.tags), pending: H.state.pending, dropped: H.state.dropped }); write(); changed(); }, () => { H.loaded.delete(k); });
+      .then(j => { read(); H.state = C.cleanStore({ records: C.mergeRecords(H.state.records, ((j && j.tags) || []).concat((j && j.notes) || [])), pending: H.state.pending, lost: H.state.lost }, Date.now()); write(); changed(); }, () => { H.loaded.delete(k); });   // 1.35.0: The Desk's notes too
   };
   H.timer = setInterval(H.send, SEND_EVERY_MS);
   if (typeof window.addEventListener === 'function') window.addEventListener('storage', e => { if (e.key && e.key.endsWith(C.STORE_KEY)) { read(); changed(); } });
@@ -238,9 +293,14 @@ function mount(el, env) {
     '<div class="tt-top"><span class="tt-which" data-t="which" role="status"></span>' +
     '<span class="tt-switch" role="group" aria-label="Which trade while flat"><button type="button" class="tt-sw" data-target="next" aria-pressed="true">Next trade</button>' +
     '<button type="button" class="tt-sw" data-target="last" aria-pressed="false">Last trade</button></span></div>' +
+    /* 1.35.0: the lost line, at the top so a short panel still shows it; Seen clears it */
+    '<p class="tt-lost" data-t="lost" role="status" hidden><span data-t="lostText"></span><button type="button" class="tt-seen" data-act="seen" title="You have seen it: the line goes">Seen</button></p>' +
     C.DIMS.map(d => '<div class="tt-row" role="group" aria-label="' + C.DIM_LABEL[d] + '"><span class="tt-lbl">' + C.DIM_LABEL[d] + '</span><span class="tt-chips">' +
       C.CHIPS[d].map(([v, l]) => '<button type="button" class="tt-chip" data-dim="' + d + '" data-val="' + esc(v) + '" aria-pressed="false"><span class="tt-name">' + esc(l) + '</span><span class="tt-ph"></span></button>').join('') +
       '</span></div>').join('') +
+    /* 1.35.0: the note, one line kept with the trade (Enter or leaving the box records it); typing fires no hotkey */
+    '<div class="tt-noterow"><span class="tt-lbl">Note</span><input type="text" class="tt-note" data-t="note" maxlength="' + C.NOTE_MAX + '" spellcheck="true" autocomplete="off" ' +
+      'placeholder="optional, one line" aria-label="Note on this trade (at most ' + C.NOTE_MAX + ' characters; Enter saves it)" title="A short note kept with the trade. Enter, or leaving the box, saves it; every edit is kept. Never scored."></div>' +
     '<p class="tt-foot" data-t="foot"></p></div>';
   const q = s => el.querySelector(s);
   const note = (text, warn) => { const f = q('[data-t="foot"]'); f.textContent = text; f.classList.toggle('warn', !!warn); f.title = text; };
@@ -271,6 +331,15 @@ function mount(el, env) {
     which.title = v.accts.length ? env.label() + (v.accts.length > 1 ? ' (' + v.accts.join(', ') + ')' : '') : '';
     const recs = first ? C.recordsFor(H.state.records, first.a, v.r, first.tr, first.t, v.since) : [];
     const chips = C.chipsOf(recs);
+    /* 1.35.0: the note box shows the trade's note, never written over while Anthony types in it */
+    const nb = q('[data-t="note"]'), cur = C.noteOf(recs);
+    nb.disabled = !first || !!first.t.why;
+    if (document.activeElement !== nb) { const want = cur ? cur.text : ''; if (nb.value !== want) nb.value = want; nb.dataset.saved = want; }
+    nb.title = cur ? 'Saved ' + (cur.phase === 'pre' ? 'before the fill' : cur.phase === 'open' ? 'while the trade was open' : 'after it closed') + ', ' + hms(cur.at_ms) + '. Enter, or leaving the box, saves a change; every edit is kept. Never scored.' : nb.getAttribute('aria-label');
+    /* 1.35.0: the lost line says when, and goes once seen */
+    const lost = C.lostLine(H.state.lost, hms), lp = q('[data-t="lost"]');
+    lp.hidden = !lost;
+    { const lt = q('[data-t="lostText"]'); if (lt.textContent !== lost) { lt.textContent = lost; lt.title = lost; } }
     for (const b of el.querySelectorAll('.tt-chip')) {
       const c = chips[b.dataset.dim], on = !!c && c.value === b.dataset.val;
       b.setAttribute('aria-pressed', String(on));
@@ -284,7 +353,6 @@ function mount(el, env) {
     else if (first.t.why) note('Not taggable: ' + first.t.why + '.', true);
     else if (H.deskState === 'down' && waiting) note(waiting + ' waiting for The Desk (' + H.deskNote + '): kept in this browser and sent again.', true);
     else if (H.deskNote) note(H.deskNote, true);
-    else if (H.state.dropped) note(H.state.dropped + ' tag record' + (H.state.dropped > 1 ? 's were' : ' was') + ' lost before The Desk took ' + (H.state.dropped > 1 ? 'them' : 'it') + ' (unreadable in this browser, or refused).', true);
     else if (waiting) note('Sending ' + waiting + ' to The Desk...', false);
     else note(v.accts.length > 1 ? 'Each click is recorded for ' + v.accts.length + ' accounts of ' + env.label() + '.' : (recs.length ? 'Saved to The Desk. Levels, delta, MFE, MAE and the stop are measured from the trade.' : 'Click what you entered on. Levels, delta, MFE, MAE and the stop are measured from the trade.'), false);
   }
@@ -294,6 +362,7 @@ function mount(el, env) {
     b.blur();                                                 // the trading hotkeys keep working at once
     if (e.detail === 0) { say('Trade tags work by click only, not by keyboard.', true); return; }
     if (b.dataset.target) { target = b.dataset.target; flashUntil = 0; render(); return; }
+    if (b.dataset.act === 'seen') { H.seen(); return; }
     if (!b.dataset.dim) return;
     const v = view();
     if (!v.per.length) { say('Pick an account on the order ticket first.', true); return; }
@@ -311,6 +380,34 @@ function mount(el, env) {
     H.add(recs);
     say((value === null ? C.DIM_LABEL[dim] + ' cleared' : C.labelOf(dim, value)) + ' (' + recs[0].phase + ')' + (recs.length > 1 ? ' on ' + recs.length + ' accounts' : '') + (skipped.length ? '; not on ' + skipped.join(', ') : '') + '.', !!skipped.length);
   });
+  /* 1.35.0: the note. Enter, or leaving the box after a change (the change event), records it: one note record per account of
+     the ticket, with the phase as for a chip; an empty box clears the note. Escape puts the saved note back. The key handler is
+     on the box only (never the document); the page's hotkeys already ignore every key while a box has the focus. */
+  const nb = q('[data-t="note"]');
+  function saveNote() {
+    const text = C.cleanNote(nb.value);
+    if (text === null) { say('Not saved: a note is one line of at most ' + C.NOTE_MAX + ' characters.', true); return; }
+    if (text === (nb.dataset.saved || '')) return;
+    const v = view();
+    if (!v.per.length) { say('Pick an account on the order ticket first.', true); return; }
+    const now = Date.now(), recs = [], skipped = [];
+    for (const p of v.per) {
+      if (p.t.why) { skipped.push(p.a); continue; }
+      recs.push({ id: C.newId(), account: p.a, root: v.r, phase: p.t.phase, dim: C.NOTE, value: text === '' ? null : text, trade_open_ms: p.t.phase === 'pre' ? null : p.t.tradeOpenMs, at_ms: now });
+    }
+    if (!recs.length) { say('Not saved: ' + (v.per[0].t.why || 'no account') + '.', true); return; }
+    if (recs.some(r => !C.cleanRecord(r))) { say('Not saved: this note could not be made into a record. Reload this window.', true); return; }
+    nb.dataset.saved = text;
+    H.add(recs);
+    say((text === '' ? 'Note cleared' : 'Note saved') + ' (' + recs[0].phase + ')' + (recs.length > 1 ? ' on ' + recs.length + ' accounts' : '') + (skipped.length ? '; not on ' + skipped.join(', ') : '') + '.', !!skipped.length);
+  }
+  nb.addEventListener('keydown', e => {
+    if (e.isComposing) return;
+    if (e.key === 'Enter') { e.preventDefault(); saveNote(); nb.blur(); }          // the trading hotkeys work again at once
+    else if (e.key === 'Escape') { e.preventDefault(); nb.value = nb.dataset.saved || ''; nb.blur(); }
+  });
+  nb.addEventListener('change', saveNote);
+  nb.addEventListener('blur', () => render());
   const onChange = () => render();
   H.listeners.add(onChange);
   render();

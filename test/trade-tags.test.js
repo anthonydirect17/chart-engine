@@ -91,8 +91,9 @@ test('this browser\'s copy: bad records dropped, pending only for records kept, 
   const good = rec('r0000001', 'setup', 'breakout', 'pre', T);
   const st = C.cleanStore(JSON.stringify({ records: [good, rec('short', 'setup', 'x', 'pre', T), rec('r0000002', 'grade', 'breakout', 'pre', T),
     rec('r0000003', 'grade', 'A', 'open', T), rec('r0000004', 'grade', 'A', 'pre', T, T), good], pending: ['r0000001', 'r0000002', 7] }));
-  assert.deepStrictEqual(st, { records: [good], pending: ['r0000001'], dropped: 1 }, 'a pending id with no usable record is counted as dropped');
-  assert.deepStrictEqual(C.cleanStore('not json'), { records: [], pending: [], dropped: 0 });
+  assert.deepStrictEqual(st, { records: [good], pending: ['r0000001'], lost: [{ at: null, n: 1, why: 'unreadable in this browser', seen: false }] },
+    'a pending id with no usable record is a loss (1.35.0: with its time when known)');
+  assert.deepStrictEqual(C.cleanStore('not json'), { records: [], pending: [], lost: [] });
   const many = { records: Array.from({ length: C.KEEP + 5 }, (_, i) => rec('r' + String(i).padStart(7, '0'), 'grade', 'B', 'pre', T + i)), pending: [] };
   assert.strictEqual(C.cleanStore(many).records.length, C.KEEP);
   /* the review of b4bc612: trimming never drops an unsent record: every pending one stays, the newest KEEP of the sent ones */
@@ -100,10 +101,10 @@ test('this browser\'s copy: bad records dropped, pending only for records kept, 
   const kept = C.cleanStore(unsent);
   assert.strictEqual(kept.records.length, C.KEEP + 5);
   assert.deepStrictEqual(kept.pending, unsent.pending, 'the 10 oldest, all pending, are kept');
-  assert.strictEqual(kept.dropped, 0);
+  assert.deepStrictEqual(kept.lost, []);
   const allUnsent = C.cleanStore(Object.assign({}, many, { pending: many.records.map(r => r.id), dropped: 2 }));
   assert.strictEqual(allUnsent.records.length, C.KEEP + 5);
-  assert.strictEqual(allUnsent.dropped, 2, 'the count of records ever lost is kept');
+  assert.deepStrictEqual(allUnsent.lost, [{ at: null, n: 2, why: '', seen: false }], 'a 1.34.x count becomes one loss with no time');
   assert.deepStrictEqual(C.mergeRecords([good], [Object.assign({}, good, { value: 'other' }), rec('r0000009', 'grade', 'A+', 'pre', T - 5)]).map(r => [r.id, r.value]),
     [['r0000009', 'A+'], ['r0000001', 'breakout']], 'The Desk\'s records added by id; this browser\'s own kept');
   assert.match(C.newId(), /^tt[a-z0-9]{18}$/);
@@ -119,9 +120,11 @@ test('the page: Trade tags in + Add panel, saved in the layout, loaded before wo
   assert.ok(files.addons.includes('nt8/ChartBridgeStops.cs'));
 });
 
-test('clicks only, and nothing that trades: no key handler, a keyboard press records nothing, no order message', () => {
+test('clicks only, and nothing that trades: no key handler but the note box\'s own, a keyboard press records nothing, no order message', () => {
   const src = read('live/trade-tags.js');
-  assert.doesNotMatch(src, /addEventListener\('key(down|up|press)'/);
+  assert.doesNotMatch(src, /(document|window|el)\.addEventListener\('key(down|up|press)'/, 'no key handler on the document, the window or the panel');
+  assert.deepStrictEqual(src.match(/addEventListener\('key(down|up|press)'/g), ["addEventListener('keydown'"], 'one: the note box\'s Enter and Escape');
+  assert.match(src, /nb\.addEventListener\('keydown'/);
   assert.match(src, /if \(e\.detail === 0\) \{ say\('Trade tags work by click only, not by keyboard\.', true\); return; \}/);
   assert.doesNotMatch(src, /type: ?'(order|change|cancel|flatten)'|\.send\(JSON/);
   assert.match(src, /'\/api\/trade-tags'/);
@@ -130,4 +133,48 @@ test('clicks only, and nothing that trades: no key handler, a keyboard press rec
   }
   const css = read('live/workspace.css'), block = css.slice(css.indexOf('Trade tags (live/trade-tags.js)'));
   assert.doesNotMatch(block.replace(/\.tt-long \{[^}]*\}|\.tt-short \{[^}]*\}/g, ''), /--ws-buy|--ws-sell/, 'green and red only for the trade\'s side');
+});
+
+
+test('1.35.0: the note: one line of at most 200 characters, a record of its own, never a chip; the newest is the note', () => {
+  assert.strictEqual(C.NOTE, 'note');
+  assert.strictEqual(C.NOTE_MAX, 200);
+  assert.strictEqual(C.cleanNote('  waited for the reclaim  '), 'waited for the reclaim');
+  assert.strictEqual(C.cleanNote(''), '');
+  assert.strictEqual(C.cleanNote('x'.repeat(201)), null);
+  assert.strictEqual(C.cleanNote('two\nlines'), null);
+  assert.strictEqual(C.cleanNote(5), null);
+  const n1 = rec('n0000001', 'note', 'first read', 'pre', T - 60000), n2 = rec('n0000002', 'note', 'edited while open', 'open', T + 60000, T);
+  assert.ok(C.cleanRecord(n1) && C.cleanRecord(n2));
+  assert.strictEqual(C.cleanRecord(rec('n0000003', 'note', 'x'.repeat(201), 'pre', T)), null);
+  assert.strictEqual(C.cleanRecord(rec('n0000004', 'note', '', 'pre', T)), null, 'an empty note is sent as null (it clears)');
+  assert.ok(C.cleanRecord(rec('n0000005', 'note', null, 'after', T + 120000, T)));
+  const chip = rec('r0000001', 'grade', 'A', 'pre', T - 50000);
+  assert.deepStrictEqual(C.chipsOf([n1, chip, n2]), { setup: null, grade: { value: 'A', label: 'A', phase: 'pre', at_ms: T - 50000 }, context: null, trigger: null }, 'a note is never a chip');
+  assert.deepStrictEqual(C.noteOf([n2, chip, n1]), { text: 'edited while open', phase: 'open', at_ms: T + 60000 });
+  assert.strictEqual(C.noteOf([n1, rec('n0000006', 'note', null, 'after', T + 120000, T)]), null, 'cleared');
+  /* the panel shows the trade's note by the chips' rule: the pre note before its fill, the open note naming it */
+  const tr = C.tradesOf([f('1', 'buy', 1, T), f('2', 'sell', 1, T + 600000)], 'SIM-A', 'MNQ', 0);
+  const shown = C.targetOf(tr, 'last');
+  assert.deepStrictEqual(C.recordsFor([n1, n2], 'SIM-A', 'MNQ', tr, shown, T - 3600000).map(r => r.id), ['n0000001', 'n0000002']);
+  /* The Desk's notes come back under `notes` and are merged like the chips */
+  assert.deepStrictEqual(C.mergeRecords([], [n1, Object.assign({}, n2)]).map(r => r.id), ['n0000001', 'n0000002']);
+});
+
+test('1.35.0: the lost line says when the losses happened and goes once seen', () => {
+  const hms = ms => (ms === T ? '10:45:00' : '11:02:10');
+  let st = C.cleanStore({ records: [], pending: [], dropped: 10 });
+  assert.strictEqual(C.lostLine(st.lost, hms), '10 tag records were lost before The Desk took them: 10 before chart 1.35.0 (when was not kept).');
+  st = C.addLost(st, T, 1, 'refused by The Desk: dim must be one of setup');
+  assert.strictEqual(C.lostLine(st.lost, hms), '11 tag records were lost before The Desk took them: 10 before chart 1.35.0 (when was not kept); 1 at 10:45:00, refused by The Desk: dim must be one of setup.');
+  st = C.markSeen(st);
+  assert.strictEqual(C.lostLine(st.lost, hms), '', 'seen: the line goes');
+  assert.strictEqual(C.cleanStore(JSON.stringify(st)).lost.length, 2, 'the entries stay in this browser, seen');
+  st = C.addLost(st, T + 1, 2, 'unreadable in this browser');
+  assert.strictEqual(C.lostLine(st.lost, hms), '2 tag records were lost before The Desk took them: 2 at 11:02:10, unreadable in this browser.', 'a new loss shows alone');
+  const many = Array.from({ length: 30 }, (_, i) => ({ at: T + i, n: 1, why: '', seen: false }));
+  assert.strictEqual(C.cleanStore({ lost: many }).lost.length, 20, 'the newest 20 kept');
+  const src = read('live/trade-tags.js');
+  assert.match(src, /data-act="seen"/);
+  assert.doesNotMatch(src, /H\.state\.dropped/, 'the old bare count is gone');
 });
