@@ -13,7 +13,8 @@
     "nt8/ChartBridgeBot.cs",
     "nt8/ChartBridgeStrategies.cs",
     "nt8/ChartBridgeAgents.cs",
-    "nt8/ChartBridgeGroups.cs"
+    "nt8/ChartBridgeGroups.cs",
+    "nt8/ChartBridgeStops.cs"
   ],
   "www": [
     { "from": "live/index.html", "to": "index.html" },
@@ -31,6 +32,7 @@
     { "from": "live/update-notice.js", "to": "update-notice.js" },
     { "from": "live/feed.js", "to": "feed.js" },
     { "from": "live/workspace.js", "to": "workspace.js" },
+    { "from": "live/trade-tags.js", "to": "trade-tags.js" },
     { "from": "live/workspace.css", "to": "workspace.css" },
     { "from": "live/accounts.js", "to": "accounts.js" },
     { "from": "live/accounts.css", "to": "accounts.css" },

@@ -70,7 +70,8 @@ function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Nu
 
 /* 1.15.0: the Account panel and the Quote board (Anthony's consolidated form, 2026-10-02) take no instrument; nor does the
    Data Box (1.16.0: the bar under the cursor on any chart), nor the Account page (1.16.0, live/accounts.js: every account) */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts'];
+/* 1.34.0 (Anthony 2026-10-21): the Trade tags panel (live/trade-tags.js) follows the order ticket's account and instrument */
+const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags'];
 /* 1.16.0 (Anthony 2026-10-07): the rows a Quote board hides, saved with its panel. Any root name ChartBridge could list (NQ,
    ES, or a quote-only market from hello, such as YM or 6E): kept as typed by the menu, so a root hello no longer lists is
    simply ignored; anything else dropped. Display only. */
@@ -959,6 +960,7 @@ function renderOrders() {
   renderCharts();
   renderLimits();                                        // 1.16.0: the ticket's account may have changed
   renderAccounts();                                      // 1.15.0: the Account panels
+  renderTags();                                          // 1.34.0: the Trade tags panels
   renderFlat();
   syncTitle();
 }
@@ -1957,6 +1959,7 @@ function addView(p) {
     '<button type="button" class="ws-ic ws-more" data-act="qbrows" aria-haspopup="true" aria-expanded="false" aria-label="Markets shown on this Quote board" title="Markets shown on this board">⋯</button>';
   else if (p.type === 'databox') mid = '<span class="ws-name">Data Box</span><span class="ws-db-src" title="The chart it follows: the one under the mouse, else the last one"></span><span class="ws-fill"></span>';
   else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
+  else if (p.type === 'tags') mid = '<span class="ws-name">Trade tags</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';   // 1.34.0
   else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
   // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
@@ -1973,6 +1976,7 @@ function addView(p) {
   else if (p.type === 'quotes') mountQuotes(v);
   else if (p.type === 'databox') mountDataBox(v);        // 1.16.0
   else if (p.type === 'accounts') mountAccountsPage(v);  // 1.16.0
+  else if (p.type === 'tags') mountTags(v);              // 1.34.0 (Anthony 2026-10-21)
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
@@ -2054,7 +2058,7 @@ function addPanel(type) {
   if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' || type === 'databox' || type === 'accounts' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' || type === 'databox' || type === 'accounts' || type === 'tags' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -2456,6 +2460,42 @@ function fitPanel(v, classes) {
    copy on or off), goes here as one more entry with its own render; it is not built. */
 const ACCOUNT_TABS = [{ id: 'pos', name: 'Positions' }, { id: 'ord', name: 'Orders' }, { id: 'fil', name: 'Fills' }];
 const accountViews = () => [...views.values()].filter(v => v.account);
+/* ---------------- 1.34.0 (Anthony 2026-10-21): Trade tags (live/trade-tags.js): one-click chips for what he entered on, with their
+   phase from the ticket's account and instrument; records to The Desk. Clicks only; nothing here sends an order. */
+const tagViews = () => [...views.values()].filter(v => v.tags);
+function tagAccounts() {
+  const a = ticketAccount();
+  if (!a) return [];
+  if (!a.startsWith('group:')) return [a];
+  const g = AF && Array.isArray(AF.S.groups) ? AF.S.groups.find(x => 'group:' + x.id === a) : null;
+  return g && Array.isArray(g.members) ? g.members.filter(m => typeof m === 'string' && m) : [];
+}
+function tagLabel() { const a = ticketAccount(); if (!a || !a.startsWith('group:')) return a || 'None'; const g = AF && Array.isArray(AF.S.groups) ? AF.S.groups.find(x => 'group:' + x.id === a) : null; return g ? 'group ' + g.name : a; }
+function tagPosition(acct, r) {
+  const k = acct + '|' + r, p = core.TR.positions.get(k) || (AF && AF.S.positions ? AF.S.positions.get(k) : null);
+  return p && isFinite(p.qty) ? +p.qty : 0;
+}
+function tagFills() {
+  const all = new Map();
+  for (const f of tfills.values()) if (f && f.id) all.set(f.account + '|' + f.id, f);
+  if (AF && AF.S.fills && typeof AF.S.fills.values === 'function') for (const f of AF.S.fills.values()) if (f && f.id && !all.has(f.account + '|' + f.id)) all.set(f.account + '|' + f.id, f);
+  return [...all.values()];
+}
+function mountTags(v) {
+  v.state = 'live';
+  const acctEl = v.head.querySelector('.ws-acct');
+  if (!window.TradeTags || !window.AccountsPage) { v.body.innerHTML = '<p class="tt-foot warn">Reload this window: its trade-tags.js is missing.</p>'; v.tags = { render: () => {} }; v.destroy = () => {}; return; }
+  const t = window.TradeTags.mount(v.body, {
+    accounts: tagAccounts, label: tagLabel, root: () => ticketRoot(), position: tagPosition, fills: tagFills, etNowSec: () => etNowSec(),
+    deskBase: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)), fetch: (u, o) => fetch(u, o), store,
+  });
+  v.tags = { render: () => { if (acctEl) acctEl.textContent = tagLabel() + ' · ' + ticketRoot(); t.render(); }, pending: t.pending };
+  v.tags.render();
+  v.destroy = () => t.destroy();
+}
+var tagsRaf = 0;                                          // var: renderOrders may run before this line
+function renderTags() { if (!tagsRaf && tagViews().length) tagsRaf = requestAnimationFrame(() => { tagsRaf = 0; for (const v of tagViews()) v.tags.render(); }); }
+setInterval(renderTags, 1000);                            // the session's start and the Desk's answers
 const SIDE_WORD = { buy: 'Buy', sell: 'Sell' };
 function orderTypeName(o) {
   if (o.plan) return 'Planned ' + (o.plan.role === 'stop' ? 'stop' : 'target');

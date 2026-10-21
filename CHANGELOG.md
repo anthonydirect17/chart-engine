@@ -7,6 +7,32 @@ Everything on `desk/work-requests-1020` since 0.6.5 and 1.33.0. **ChartBridge 0.
 minimum, the firm's rules on an account in no group, Remove a follower row) is not offered and no `riskAlert` comes. nt8/PROTOCOL.md
 "The firm's floor, Remove a follower and the firm's limits on entries (0.6.6)".
 
+**Anthony's decisions of 2026-10-21, added to this release.**
+
+- **Trade tags** (`live/trade-tags.js`, a new page file): its own placeable panel (+ Add panel, Trade tags), following the order
+  ticket's account and instrument, so it can sit out of the way. One click per chip, four rows: Setup (Continuation, Breakout,
+  Reversal, Sweep/retest, Other), Grade (A+, A, B), Context (With-trend, Counter-trend, No context), Trigger (Absorption, Delta
+  flip/divergence, Level hold/reclaim, Other); one chip per row, a click on the set chip clears it. Clicks only: no hotkeys, and
+  Enter or Space on a chip records nothing. Each click is one record with its phase worked out from ChartBridge's position and fills:
+  `open` while the trade is open (with the trade's first fill), else `pre` for the next trade or `after` for the last one (the Next
+  trade / Last trade switch while flat). Records are append-only (a change is a new record); the newest of each row is its chip,
+  shown with the phase it was set in. Everything else (levels, delta, time, MFE, MAE, hold, exit, the stop) is measured from the trade
+  on The Desk. Records go to The Desk's new `POST /api/trade-tags` (TheDesk branch `desk/trade-tags`); while The Desk is not reachable
+  they wait in this browser and are sent again every 10 seconds. A ticket on a group records each click for every member.
+- **The stop record** (`nt8/ChartBridgeStops.cs`, a new add-on file; nt8/PROTOCOL.md "The stop record to The Desk (0.6.6)"). What
+  was there: ChartBridge saw every order update (with the stop price) but kept none of it; The Desk had the fills (fill and exit
+  prices and times) and the Tradovate Orders import (each order's last state only). Added: for every stop order on a watched
+  account, whoever placed it, one event per change of NinjaTrader's state, stop price, quantity or fills, with the time ChartBridge
+  saw it, queued in `pending_stops.jsonl` and sent to The Desk's new `POST /api/stop-events` (the fills' queue rules). On with
+  `postFills` (or `postStops = true|false`). The Desk's `GET /api/trade-record` gives each closed trade its stop at send (price,
+  distance in points from the fill, contracts, time), every modify, his first stop move after the fill, the fill and the exit.
+- **groups.txt that cannot be read no longer blocks the bot, the agents or the copier** (Anthony's ruling, replacing the 0.6.6
+  review's "they stay refused" below): they run on the last groups that read cleanly (`groups.txt.bak`, or the copy beside a missing
+  `groups.txt`, a file that cannot be opened included), their one-direction check, seats and the firm's rules from that copy. With no
+  clean copy they wait. His single-account orders always go; his group entries and every change stay refused and the file is never
+  rewritten (0.6.3 MED 3's "never the .bak on its own" now holds for those only). The page plays the alert sound with the groups.txt
+  banner, never a dialog.
+
 **Anthony's decisions of 2026-10-20: "Only absolutely critical things should stop an account from trading."**
 
 - **His own entries: one hard check.** An entry (an order that opens or adds; the part past flat of one that turns) that would take

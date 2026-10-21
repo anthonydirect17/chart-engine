@@ -599,6 +599,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Quote board (1.15.0):** NQ and ES (1.16.0, Anthony 2026-10-05: the MNQ and MES rows went; display only): last, change and % from the prior settlement (buy green or sell red; blank
   without one), the session's high and low, in the same rows; under 400 px the change and %, and the high and low,
   stack; a 2 x 1 board shows the last, change and % (at 1366 px the last and %), the rest in the row's tooltip.
+- **Trade tags (1.34.0, Anthony 2026-10-21):** a placeable panel (+ Add panel) following the order ticket's account and
+  instrument. One line says which trade it tags ("Next trade · MNQ · flat", "Open trade · LONG 2 MNQ since 10:31:05", "Last trade
+  · closed ..."), with a Next trade / Last trade switch while flat; then four rows of 22 px pill chips (Setup, Grade, Context,
+  Trigger), a muted uppercase label at the left of each. A set chip is the purple tint with the accent border and its phase in
+  small mono capitals (PRE, OPEN, AFTER); the others are the field color. Green and red only for the side word (LONG, SHORT). A
+  one-line note at the foot (amber when The Desk is not reachable). Clicks only, no hotkeys.
 - **Text panels never cost the charts (Anthony's ruling for 1.15.0):** the Quote board's and the Account panel's figures
   are written at most 4 times a second, in one animation frame, only the cells that changed; a trade only notes the price.
 

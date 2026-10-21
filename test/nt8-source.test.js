@@ -1369,7 +1369,7 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   const g = strip(read('ChartBridgeGroups.cs'));
   const files = JSON.parse(read('install-files.json'));
   assert.ok(files.addons.includes('nt8/ChartBridgeGroups.cs'), 'install-files.json addons');
-  assert.ok(/ChartBridgeGroups\.cs check\/Nt8Stubs\.cs/.test(read('check/check.sh')) && /ChartBridgeGroups\.cs check\/Nt8Stubs\.cs/.test(read('check/orders.sh')) && /check\/GroupsHarness\.cs/.test(read('check/orders.sh')), 'compile-checked and harnessed');
+  assert.ok(/ChartBridgeGroups\.cs (ChartBridgeStops\.cs )?check\/Nt8Stubs\.cs/.test(read('check/check.sh')) && /ChartBridgeGroups\.cs (ChartBridgeStops\.cs )?check\/Nt8Stubs\.cs/.test(read('check/orders.sh')) && /check\/GroupsHarness\.cs/.test(read('check/orders.sh')), 'compile-checked and harnessed');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/, /CancelAllOrders/, /\bAtm\w*\./, /\bOrderAction\./])
     assert.ok(!re.test(g), 'ChartBridgeGroups.cs must never place, change or cancel an order: ' + re);
   assert.ok(!/\$@?"[^"\n]*\{/.test(g) && !/\?\.[A-Za-z]/.test(g), 'C# 5 only: no string interpolation or ?.');
@@ -1440,4 +1440,18 @@ test('ChartBridge 0.5.8: accountState carries the PROTOCOL table\'s fields, in i
   for (const k of ['account', 'sim', 'kind', 'group', 'groupId', 'groupSide', 'noHedge', 'rules', 'src', 'why', 'session', 'at', 'roomFloor', 'roomDaily', 'targetLeft'])
     assert.ok(sec.includes('`' + k + '`'), 'PROTOCOL names ' + k);
   for (const t of ['groupSave', 'groupDelete', 'accountGroup', 'accountLimits', 'highClose', 'groups.txt', 'account-marks.txt']) assert.ok(sec.includes(t), 'PROTOCOL: ' + t);
+});
+
+test('ChartBridge 0.6.6 (Anthony 2026-10-21): the stop record ships, is compile-checked and harnessed, and never touches an order', () => {
+  const read = f => fs.readFileSync(path.join(__dirname, '..', 'nt8', f), 'utf8');
+  assert.ok(JSON.parse(read('install-files.json')).addons.includes('nt8/ChartBridgeStops.cs'));
+  assert.match(read('check/check.sh'), /ChartBridgeStops\.cs check\/Nt8Stubs\.cs/);
+  assert.match(read('check/orders.sh'), /ChartBridgeStops\.cs check\/Nt8Stubs\.cs/);
+  assert.match(read('check/orders.sh'), /check\/StopsHarness\.cs/);
+  const src = read('ChartBridgeStops.cs');
+  assert.doesNotMatch(src, /\.(Submit|Change|Cancel|Flatten|CreateOrder)\(/);
+  assert.match(src, /"\/api\/stop-events"/);
+  const cb = read('ChartBridge.cs');
+  assert.match(cb, /try \{ ChartBridgeOrders\.OnOrderUpdate\(a, e\); \} catch[^\n]*\n\s*try \{ ChartBridgeStops\.Observe\(a, e\.Order\); \} catch/, 'after the order path, never in its way');
+  assert.match(cb, /else if \(ChartBridgeStops\.ReadConfig\(key, val\)\) \{ \}/);
 });

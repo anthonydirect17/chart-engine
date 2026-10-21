@@ -84,6 +84,8 @@
   <button type="button" role="menuitem" data-add="quotes">Quote board</button>
   <button type="button" role="menuitem" data-add="databox">Data Box</button>
   <button type="button" role="menuitem" data-add="accounts">Account page</button>
+  <!-- 1.34.0 (Anthony 2026-10-21): what you entered on, one click per chip; records go to The Desk -->
+  <button type="button" role="menuitem" data-add="tags">Trade tags</button>
 </div>
 
 <div class="ws-pop ws-scr" id="wsScreensPop" role="dialog" aria-label="Screens" hidden></div>
@@ -243,6 +245,8 @@
 <!-- 1.23.0 (Layout 5): the grid panel's canvas, the one frame loop of the tab (live/agent-grid.js) -->
 <script src="agent-grid.js"></script>
 <script src="agent.js"></script>
+<!-- 1.34.0: the Trade tags panel (TradeTagsCore and TradeTags.mount), before workspace.js -->
+<script src="trade-tags.js"></script>
 <script src="workspace.js"></script>
 <!-- "Update ready: reload when flat" from the per-PC updater (nt8/update-pc.ps1); never reloads by itself. -->
 <script src="update-notice.js"></script>

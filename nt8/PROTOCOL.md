@@ -3489,11 +3489,16 @@ order that reduces by either reading is never checked.
   "room unknown: sized by risk only (its room to the floor: ...)" or "open stop risk unknown: its room caps this entry's own stop only
   (...)". A member that is not connected sits out ("it is not connected"; 0.6.5 said its room was not known). The page shows the note
   quietly on the ticket and never asks a confirm for it.
-- **groups.txt that cannot be read** (Anthony's ruling: "My single orders go"): his own single-account entries go (its group, and so
-  the one-direction check, cannot be known then; the firm's max is not known either); group entries are refused (the page's banner
-  says why); the bot's, the agents' and the copier's entries stay refused (they read the groups: an agent's seats, a follower's or the
-  bot's account's group direction). Every exit goes, as before. Its text: "groups.txt could not be read: group entries and the bot's,
-  the agents' and the copier's entries are refused until it can (your own single-account orders and every exit still go)".
+- **groups.txt that cannot be read** (Anthony's rulings: "My single orders go", and of 2026-10-21: never block the bot, the agents
+  or the copier): his own single-account entries go (its group, and so the one-direction check, cannot be known then); group entries
+  from the page and every change are refused (the page's banner says why) and the file is never rewritten. The bot, the agents and
+  the copier run on the last groups that read cleanly: `groups.txt.bak` (the copy each save keeps), or the copy a cut-off save left
+  beside a missing `groups.txt`, a file that cannot be opened at all included. Their one-direction check, an agent's seats and the
+  firm's rules and rooms come from that copy. With no clean copy there is nothing to run on, so their entries wait. Every exit goes,
+  as before. Either way the alarm is a `status` `error` to every signed-in page, which shows it as its banner with the alert sound,
+  never a dialog. Its text: "groups.txt could not be read: group entries are refused until it can (your own single-account orders and
+  every exit still go)", then "; the bot, the agents and the copier run on its last good copy (groups.txt.bak)" or "; no copy of the
+  groups read cleanly, so the bot's, the agents' and the copier's entries wait until it can", then why.
 - **The accounts message** entries gain `unserved` (last): the contracts the account holds or has working orders in that ChartBridge
   does not serve, by name (`["YM 12-26"]`, empty for none), which no flatten from the page can reach.
 - **Going back to 0.6.5 after 0.6.6.** 0.6.6 writes the firm's rules of an account in no group as a `rules` line in `groups.txt`;
@@ -3517,6 +3522,27 @@ order that reduces by either reading is never checked.
   order and dragging it used to push every panel down by its height.
 - The ticket shows the account's room for a single account where ChartBridge's numbers give it ("Room $900.00 daily · $1,700.00 to
   floor · entry $40.00 at stop": the daily room, the room to the floor and this entry's risk at its stop), display only.
+
+### The stop record to The Desk (0.6.6)
+
+Anthony 2026-10-21: the stop record, measured, never guessed (`nt8/ChartBridgeStops.cs`). ChartBridge's order event for every
+watched account (after the order path, in its own `try`) looks at each stop order (stop market or stop limit, whoever placed it:
+the page, NinjaTrader's chart or ATM, the bot, an agent, the copier). Each time NinjaTrader's state, the stop price, the quantity
+or the filled count changes, it queues one event for The Desk's `POST /api/stop-events` (TheDesk `docs/API.md`, "Trade record"):
+`source`, `account`, `instrument`, `root`, `order_id` (NinjaTrader's id as first seen, kept for the order's life), `order_name`,
+`side`, `kind` (`stop` or `stopLimit`), `nt_state` (NinjaTrader's state name), `state` (the page's word), `stop_price`,
+`limit_price` (a stop limit's, else null), `qty`, `filled`, `oco`, `role` (`entry`, `stop`, `target` or `other`), `by` (when
+known, as on fills) and `at_ms` (ChartBridge's clock when it saw it). An update that changes none of those sends nothing; a stop
+with no price yet (0) sends nothing. So The Desk has the stop price, contracts and time at send, every modify (new price and
+time) and how it ended; the fill and the exit are the fills it already has.
+
+- **On:** `postStops = true` in `config.txt`, or, with no `postStops` line, whenever `postFills = true` (the stop record goes where
+  the fills go). `postStops = false` turns it off with fills on.
+- **Queue:** the fills' rules: `pending_stops.jsonl` next to `config.txt` (replaced atomically), 10 seconds a request, retried
+  every 10 seconds; a batch The Desk calls malformed (400 or 422) is sent one at a time and a single bad event is set aside in
+  `rejected_stops.jsonl`. The Desk stores an event once, so a resend is safe.
+- **`/diag` `stops`:** `on`, `waiting`, `seen`, `queued`, `sent`, `lastSendFailed`, `lastError`, `setAside`, `rejectedByDesk`.
+- Nothing here places, changes or cancels an order, and nothing the pages get changes.
 
 ### Tape timing and new `/diag` counters
 
@@ -3546,6 +3572,7 @@ only, never through the tunnel; CORS for `http://localhost:8765` and `http://127
 | `GET`, `PUT /api/chart-strategies` | `{rev, strategies: [{id, name, stop: {ticks, type, limitOffsetTicks}, targets: [{ticks, sharePct}], breakeven: {afterTicks, plusTicks} or null, trail: {startTicks, byTicks, stepTicks} or null, hotkey}]}` | the Order Strategies, at most 24 |
 | `GET`, `PUT /api/chart-hotkeys` | `{rev, keys: {buy, sell, be, close, flattenAll, merge, maximize}, modifiers: {limit, stop}}` | the trading hotkeys (Merge's key is `merge`) |
 | `GET /api/chart-accounts` | `{accounts: [{account, firm, archived, daily_loss_limit, trailing_drawdown, account_size, source}]}` | read only: a prop limit Anthony typed on The Desk, shown only where ChartBridge's `roomDrawdown` or `roomDailyLoss` is null |
+| `POST`, `GET /api/trade-tags` (chart 1.34.0) | `{tags: [{id, account, root, phase, dim, value, trade_open_ms, at_ms}]}`; CORS `GET, POST` | the Trade tags panel's records (append-only; TheDesk `docs/API.md` "Trade record") |
 
 **From The Desk's strategy to `order.strategy`** (the page converts; ChartBridge takes only the flat form):
 
