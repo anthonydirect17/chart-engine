@@ -107,7 +107,7 @@ the combined max cases in `GroupEntries`, sizing with a room not known, a no-gro
 with his single orders going, `CopierHarness.FirmLimitSkip`; the copier's start check fixed for `canRemove`). New smoke
 `npm run smoke:flatten-every` (Flatten every account, what it cannot reach, and the alert's banner and sound; screenshots
 `flatten-every-confirm-1366.png`, `flatten-every-done-1366.png`, `flatten-every-alert-1366.png`); `smoke:group-ticket` checks the
-ticket's room line (`group-ticket-room-1366.png`) and passed 5 runs of 5 after the banner fix (before it, about one run in five failed:
+ticket's room line (`group-ticket-room-1366.png`) and re-measures the stop line right before each hover and drag (the floating banner fixed the panels moving; the line's label still moves a few pixels with the price axis), 10 runs of 10 after both fixes (before them, about one run in five failed:
 the release commit 1310f06 said every smoke passed, which was not so for this one); `smoke:noscroll` opens every group of every
 Indicators menu (`noscroll-indicators-tall-1366.png`); `smoke:studies` allows the menu's own list to scroll below the top bar. Every
 smoke in package.json passes but `smoke:headroom`'s "scrolled back, the icon at the top of the price scale" (it fails the same way at
