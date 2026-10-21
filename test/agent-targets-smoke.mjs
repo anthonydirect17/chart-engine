@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
+import { tabBtn, toggleTab } from './tab-buttons.mjs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -98,7 +99,7 @@ try {
   await control('price', { root: 'MNQ', p: 25400 });
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
   await control('agent-connect', { agent: 'demotwo', name: 'Second Demo Agent', build: 'sample-build-7' });
-  await page.click('#wsAgentTab');
+  await toggleTab(page, 'agentdesk');
   await until(() => page.evaluate(() => window.workspace.agent().shown && window.workspace.agent().agents.length === 2), 'the Agent tab open with both agents');
   for (const [id, acct] of [['demotwo', 'SIM-AG2'], ['demo', 'SIM-AG1']]) {
     await page.selectOption('#agView [data-k="pick"]', id);

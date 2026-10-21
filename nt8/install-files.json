@@ -33,6 +33,8 @@
     { "from": "live/feed.js", "to": "feed.js" },
     { "from": "live/workspace.js", "to": "workspace.js" },
     { "from": "live/trade-tags.js", "to": "trade-tags.js" },
+    { "from": "live/league.js", "to": "league.js" },
+    { "from": "live/league.css", "to": "league.css" },
     { "from": "live/workspace.css", "to": "workspace.css" },
     { "from": "live/accounts.js", "to": "accounts.js" },
     { "from": "live/accounts.css", "to": "accounts.css" },

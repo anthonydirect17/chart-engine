@@ -18,6 +18,8 @@
 <link rel="stylesheet" href="bot.css">
 <!-- 1.17.0: the Agent tab (live/agent.js) -->
 <link rel="stylesheet" href="agent.css">
+<!-- 1.35.0: the League tab and the league's marks (live/league.js) -->
+<link rel="stylesheet" href="league.css">
 </head>
 <body>
 <!-- The trading workspace, ChartBridge's main page (http://localhost:8765/): panels on a 12 x 6 snap grid, one window per
@@ -46,10 +48,11 @@
   <span class="chart-live ws-lv ws-colors" id="wsColors"></span>
   <!-- the laptop preset's two layout tabs (1.16.0), shown when it is on in this browser -->
   <span class="ws-tabs" id="wsTabs" role="tablist" aria-label="Layouts" hidden></span>
-  <!-- the Bot tab (1.16.0, live/bot.js): shown with a ChartBridge that speaks protocol v3; it works only when ChartBridge's bot switch is on -->
-  <button type="button" class="ws-btn bt-tabbtn" id="wsBotTab" aria-pressed="false" hidden>Bot</button>
-  <!-- the Agent tab (1.17.0, live/agent.js): shown with a ChartBridge that speaks protocol v3; its agents come with ChartBridge 0.5.0 -->
-  <button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent</button>
+  <!-- 1.35.0 (Anthony 2026-10-21): the League tab (live/league.js): the shadow league on paper, SHADOW: no orders. The Bot tab and
+       the Agent tab (the agent desk) left the top bar for panels of their own in + Add panel; their buttons wait in wsTabHold -->
+  <button type="button" class="ws-btn lg-tabbtn" id="wsLeagueTab" aria-pressed="false" title="The shadow league: H, S, O on paper. SHADOW: no orders" hidden>League</button>
+  <!-- 1.35.0: while the Bot or the agent desk view is open, its own button sits here (a click goes back to the layout) -->
+  <span class="ws-tabslot" id="wsTabSlot"></span>
   <!-- 1.34.0 (Anthony 2026-10-20): Save these screens / Open my screens (live/screens.js) -->
   <button type="button" class="ws-btn ws-gear ws-scrbtn" id="wsScreens" aria-label="Screens" title="Screens" aria-haspopup="dialog" aria-expanded="false" aria-controls="wsScreensPop"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1.5" y="2.5" width="9" height="6.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="5.5" y="6.5" width="9" height="6.5" rx="1" fill="var(--ws-field)" stroke="currentColor" stroke-width="1.3"/></svg></button>
   <label class="ws-lbl" for="wsLayout">Layout</label>
@@ -75,6 +78,16 @@
 <section class="bt-view bt-in-ws" id="btView" aria-label="Bot tab"></section>
 <!-- the Agent tab's own layout: the agent strip, its controls, its chart, its proposals and its notes and plans (live/agent.js builds it) -->
 <section class="ag-view ag-in-ws" id="agView" aria-label="Agent tab"></section>
+<!-- 1.35.0: the League tab's own layout (live/league.js builds it) -->
+<section class="lg-view lg-in-ws" id="lgView" aria-label="League tab"></section>
+<!-- 1.35.0: where the Bot and Agent tab buttons wait while no Bot or Agent desk panel holds them (the desks' own buttons, with their
+     listeners: a panel moves its button in, and back here when it goes). Never shown. -->
+<div id="wsTabHold" hidden>
+  <!-- the Bot tab (1.16.0, live/bot.js): shown with a ChartBridge that speaks protocol v3; it works only when ChartBridge's bot switch is on -->
+  <button type="button" class="ws-btn bt-tabbtn" id="wsBotTab" aria-pressed="false" hidden>Bot</button>
+  <!-- the Agent tab (1.17.0, live/agent.js): shown with a ChartBridge that speaks protocol v3; its agents come with ChartBridge 0.5.0 -->
+  <button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent</button>
+</div>
 
 <div class="ws-pop ws-menu" id="wsAddMenu" role="menu" aria-label="Add panel" hidden>
   <button type="button" role="menuitem" data-add="chart">Chart</button>
@@ -86,6 +99,9 @@
   <button type="button" role="menuitem" data-add="accounts">Account page</button>
   <!-- 1.34.0 (Anthony 2026-10-21): what you entered on, one click per chip; records go to The Desk -->
   <button type="button" role="menuitem" data-add="tags">Trade tags</button>
+  <!-- 1.35.0 (Anthony 2026-10-21): the agent desk (the Agent tab before; "join an agent's trade") and the Bot tab, as panels -->
+  <button type="button" role="menuitem" data-add="agentdesk" data-tip="The agent desk: join an agent's trade (the Agent tab before)">Agent desk (join an agent's trade)</button>
+  <button type="button" role="menuitem" data-add="bot" data-tip="The Bot tab, as a panel">Bot</button>
 </div>
 
 <div class="ws-pop ws-scr" id="wsScreensPop" role="dialog" aria-label="Screens" hidden></div>
@@ -97,6 +113,8 @@
   <button type="button" role="menuitem" data-do="reset">Reset view</button>
   <!-- 1.16.0: the bot's trades, faint, on this chart (off by default; shown when ChartBridge's bot switch is on) -->
   <button type="button" role="menuitem" data-do="ghost" hidden>Bot trades: off</button>
+  <!-- 1.35.0: the shadow league's paper trades, faint, on this chart (off by default; NQ and MNQ) -->
+  <button type="button" role="menuitem" data-do="league" hidden>League trades (faint): off</button>
   <p class="ws-menu-note">Drawing tools: middle-click the chart.</p>
 </div>
 
@@ -247,6 +265,8 @@
 <script src="agent.js"></script>
 <!-- 1.34.0: the Trade tags panel (TradeTagsCore and TradeTags.mount), before workspace.js -->
 <script src="trade-tags.js"></script>
+<!-- 1.35.0: the League tab (the shadow league, read from The Desk; SHADOW: no orders) -->
+<script src="league.js"></script>
 <script src="workspace.js"></script>
 <!-- "Update ready: reload when flat" from the per-PC updater (nt8/update-pc.ps1); never reloads by itself. -->
 <script src="update-notice.js"></script>

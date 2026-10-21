@@ -28,6 +28,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+import { tabBtn, toggleTab } from './tab-buttons.mjs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -159,11 +160,16 @@ try {
   /* ---------------------------------------------------------------- the tab */
   console.log('the Agent tab next to the Bot tab');
   await until(async () => (await A()).agents.length === 2, 'ChartBridge told of both agents after sign-in');
-  check(await page.isVisible('#wsAgentTab') && await page.isVisible('#wsBotTab'), 'the Agent tab button is in the top bar, next to the Bot tab');
-  check(await page.evaluate(() => { const b = document.getElementById('wsBotTab'), a = document.getElementById('wsAgentTab'); return b.nextElementSibling === a; }), 'right after the Bot tab');
+  /* 1.35.0 (Anthony 2026-10-21): the agent desk and the Bot tab left the top bar for panels of their own in + Add panel */
+  check(!(await page.isVisible('#wsAgentTab')) && await page.isVisible('#wsLeagueTab'), '1.35.0: the top bar has the League tab; the Agent button waits for its panel');
+  await toggleTab(page, 'agentdesk');                   // Main has no free room: + Add panel opens the agent desk itself
+  await until(async () => (await A()).shown, 'the agent desk opens from + Add panel');
+  check(await page.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsAgentTab'))) && await page.isVisible('#wsAgentTab'), 'with no room for its panel, + Add panel opens the agent desk; its button sits in the top bar while it is open');
+  await page.click('#wsAgentTab');
+  await until(async () => !(await A()).shown, 'its button closes it');
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
   await control('agent-connect', { agent: 'demotwo', name: 'Second Demo Agent', build: 'sample-build-7' });
-  await page.click('#wsAgentTab');
+  await toggleTab(page, 'agentdesk');
   await until(async () => (await A()).shown, 'the tab opens');
   check(await page.evaluate(() => getComputedStyle(document.getElementById('wsGrid')).display) === 'none' && /tab=agent/.test(page.url()), 'the grid is hidden while the Agent tab is open; the URL keeps ?tab=agent');
   check(await visible('#agView [data-k="pickWrap"]'), 'two agents: the picker shows');
@@ -545,7 +551,7 @@ try {
   check((await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'open', 'demotwo\'s k2 (not shown on the tab) untouched');
   await control('agent-withdraw', { agent: 'demo', id: 'k1' });
   // off the tab: demotwo's proposal is no card anywhere, only counted in the corner's line; the key answers the bot's (1.16.0)
-  await page.click('#wsAgentTab');
+  await toggleTab(page, 'agentdesk');
   await until(async () => !(await A()).shown, 'the tab closes');
   await until(async () => (await text('.ag-cornerline')) === 'Second Demo Agent: 1 proposal', 'the tab closed: demotwo\'s proposal counted in the corner\'s line');
   check(!(await page.evaluate(() => [...document.querySelectorAll('[data-agans]')].some(b => b.getClientRects().length))), 'off the tab no agent Accept or Reject anywhere');
@@ -567,7 +573,7 @@ try {
   await until(async () => (await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'rejected', 'k2 rejected by its button');
   await until(async () => !(await page.$('.ag-prop[data-id="k2"]')), 'its card goes', 6000);
   await page.selectOption('#agView [data-k="pick"]', 'demo');
-  await page.click('#wsAgentTab');
+  await toggleTab(page, 'agentdesk');
   await until(async () => !(await A()).shown, 'the tab closes again');
   await page.mouse.click(800, 450);
   await page.keyboard.press('Alt+KeyN');
@@ -575,7 +581,7 @@ try {
 
   /* ---------------------------------------------------------------- the Bot tab: a double-click never confirms (review S3) */
   console.log('the Bot tab: a double-click on Auto or Release never confirms');
-  await page.click('#wsBotTab');
+  await toggleTab(page, 'bot');
   await until(async () => (await page.evaluate(() => window.workspace.bot().shown)), 'the Bot tab opens');
   await sleep(1500);                                                                   // its entrance
   const botModes = async () => (await sent()).filter(m => m.type === 'botMode').length;
@@ -594,11 +600,11 @@ try {
   check((await control('v3')).bot.killed, 'a double-click on the bot\'s Release never releases');
   await page.click('.bt-kill');
   await until(async () => !(await control('v3')).bot.killed, 'a later second click releases, as before');
-  await page.click('#wsBotTab');
+  await toggleTab(page, 'bot');
 
   /* ---------------------------------------------------------------- the pop-out */
   console.log('the pop-out window');
-  await page.click('#wsAgentTab');
+  await toggleTab(page, 'agentdesk');
   /* the corner notices cover none of the tab: never the left column (its rules and Change the rules), the proposal, the
      tracker, the stream or the footer; they stack in the chart panel's lower left */
   console.log('the corner notices while the Agent tab is open');
@@ -684,7 +690,7 @@ try {
   await p2.waitForFunction(() => /0\.5\.2 or later/.test(document.querySelector('#agView [data-k="offText"]').textContent), null, { timeout: 10000 });
   check((await p2.textContent('#agView [data-k="offText"]')) === 'No agents on this ChartBridge (0.5.2 or later).', 'the tab says: No agents on this ChartBridge (0.5.2 or later). (the hello says fake-0.4.0)');
   check(!(await p2.evaluate(() => window.__socks.some(s => s.types.some(t => /^agent/.test(t))))), 'nothing agent is sent');
-  check(await p2.isVisible('#wsBotTab'), 'the Bot tab is as it was');
+  check(!!(await p2.$('#wsBotTab')), 'the Bot tab is as it was (1.35.0: its button waits for its panel)');
   await p2.close();
   await bridge.kill(); bridge = null;
   console.log('a ChartBridge 0.5.2 with no agents line: no agents');

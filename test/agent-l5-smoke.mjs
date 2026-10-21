@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
+import { tabBtn, toggleTab } from './tab-buttons.mjs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 import { createRequire } from 'node:module';
 
@@ -116,7 +117,7 @@ try {
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
   await until(async () => (await A()).agents.length === 1, 'ChartBridge told of demo');
   await page.evaluate(() => { window.__anims = []; const b = document.getElementById('wsAgentTab'); b.addEventListener('click', () => requestAnimationFrame(() => { window.__anims = document.getAnimations().map(a => a.animationName || a.transitionProperty || 'other'); })); });
-  await page.click('#wsAgentTab');
+  await toggleTab(page, 'agentdesk');
   await until(async () => (await A()).shown, 'the tab opens');
   check(await page.evaluate(() => !!window.__desk && typeof window.__desk.layout5 === 'function'), 'the AgentDesk API has layout5()');
   const anims = await page.evaluate(() => window.__anims);
@@ -158,11 +159,11 @@ try {
   check(!r1.running && r1.frames - r0.frames <= 1, 'the system\'s reduced motion: no frame loop: ' + (r1.frames - r0.frames));
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await until(async () => (await L5()).grid.running, 'it runs again');
-  await page.click('#wsAgentTab');
+  await toggleTab(page, 'agentdesk');
   await until(async () => !(await A()).shown, 'the tab closed');
   await sleep(500); const h0 = (await L5()).grid; await sleep(1200); const h1 = (await L5()).grid;
   check(!h1.running && h1.frames === h0.frames, 'the tab closed: no frame loop and no frame: ' + JSON.stringify({ running: h1.running, frames: h1.frames - h0.frames }));
-  await page.click('#wsAgentTab');
+  await toggleTab(page, 'agentdesk');
   await until(async () => (await A()).shown && (await L5()).grid.running, 'the tab again: it runs');
   /* the pixel ratio stays at most 1.5 on a screen of 2 */
   await page.evaluate(() => Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => 2 }));

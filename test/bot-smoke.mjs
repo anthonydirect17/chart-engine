@@ -29,6 +29,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+import { tabBtn, toggleTab } from './tab-buttons.mjs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -88,7 +89,9 @@ try {
   const socks = await page.evaluate(() => window.__socks.map(s => s.types));
   check(socks.filter(t => t.includes('client')).length === 1 && socks.filter(t => t.includes('auth')).length === 2,
     'one v3 connection in the window (client once), shared by the Bot tab and the Account page; the ticket\'s signs in as a v2 page: ' + JSON.stringify(socks.filter(t => t.includes('auth'))));
-  check(await page.isVisible('#wsBotTab'), 'the Bot tab button is in the top bar');
+  await tabBtn(page, 'bot');
+  check(await page.isVisible('#wsBotTab'), 'the Bot tab button is reached from + Add panel (1.35.0: its panel, or the Bot view at once when there is no room)');
+  if (await page.evaluate(() => document.body.classList.contains('bt-on'))) { await page.click('#wsBotTab'); await sleep(300); }
   check(await page.isHidden('#btStrip'), 'no strip before ChartBridge tells the bot\'s status');
   await control('bot-connect', { name: 'Sample Lantern Fade' });
   await until(() => page.isVisible('#btStrip .bt-sline'), 'the strip shows');
@@ -193,7 +196,7 @@ try {
 
   /* ---------------------------------------------------------------- notices and proposals on the Main tab */
   console.log('copilot proposals wherever Anthony is (the Main tab)');
-  await page.click('#wsBotTab');
+  await toggleTab(page, 'bot');
   await until(async () => !(await B()).shown && (await page.isVisible('#btStrip .bt-sline')), 'back on Main');
   await control('bot-signal', { id: 's1', action: 'skipped', reason: 'Sample: the range was too wide' });
   await until(() => page.isVisible('.bt-note'), 'a corner notice for a signal');
@@ -262,7 +265,7 @@ try {
   await page.click('#wsMotion [data-v="less"]');
   check(await page.evaluate(() => document.documentElement.classList.contains('motion-off') && localStorage.getItem('motion-reduced-v1') === '1'), 'Settings > Motion: Less (the kit\'s own setting)');
   await page.keyboard.press('Escape');
-  await page.click('#wsBotTab');
+  await toggleTab(page, 'bot');
   const lm = await page.evaluate(() => ({ lib: +getComputedStyle(document.querySelector('.bt-lib .bt-ph')).opacity, inline: [...document.querySelectorAll('.bt-grid [data-in]')].filter(e => e.style.opacity !== '').length }));
   check(lm.lib === 1 && lm.inline === 0, 'with Less motion the Bot tab shows in its final state at once');
   await until(async () => /Sample Kite Sweep/.test(await page.textContent('[data-k="slot"]')), 'the slot follows the running bot');
@@ -294,12 +297,12 @@ try {
   await open();
   await until(async () => { const b = await B(); return b && b.v3 && b.signedIn; }, 'signed in');
   await sleep(500);
-  check(!(await B()).on && await page.isVisible('#wsBotTab') && await page.isHidden('#btStrip'), 'off: the Bot tab is there, no strip');
-  await page.click('#wsBotTab');
+  check(!(await B()).on && !!(await page.$('#wsBotTab')) && await page.isHidden('#btStrip'), 'off: the Bot tab is there, no strip');
+  await toggleTab(page, 'bot');
   const offText = await page.textContent('[data-k="offText"]');
   check(/bot channel is off on this PC/.test(offText) && await page.isHidden('.bt-grid') && !(await B()).chart, 'the Bot tab says the bot channel is off and offers nothing: ' + offText);
   await page.screenshot({ path: path.join(SHOTS, 'bot-off.png') });
-  await page.click('#wsBotTab');
+  await toggleTab(page, 'bot');
   const mnq2 = (await page.evaluate(() => window.workspace.panels())).find(p => p.type === 'chart');
   await page.click(`.ws-panel[data-id="${mnq2.id}"] [data-act="more"]`);
   check(await page.isHidden('#wsMore [data-do="ghost"]'), 'no ghost choice in a chart\'s menu');
@@ -368,7 +371,7 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'bot-live.png') });
   await page.click('.bt-modes [data-mode="shadow"]');
   await until(async () => (await v3()).bot.mode === 'shadow', 'back to Shadow');
-  await page.click('#wsBotTab');
+  await toggleTab(page, 'bot');
   await until(() => page.isVisible('#btStrip .bt-sline'), 'the strip on Main');
   const strip2 = await page.evaluate(() => ({ text: document.querySelector('#btStrip').textContent, live: !!document.querySelector('#btStrip .bt-acct.live') }));
   check(/EVAL-A\s*LIVE/.test(strip2.text) && strip2.live, 'the strip: EVAL-A, LIVE in red: "' + strip2.text.replace(/\s+/g, ' ').trim() + '"');
@@ -378,7 +381,7 @@ try {
   check(/EVAL-A/.test(pl.text) && /LIVE/.test(pl.text) && pl.live, 'the proposal names EVAL-A and marks it LIVE');
   await page.click('.bt-prop[data-id="pl1"] .bt-rej');
   await until(async () => (await v3()).proposals.find(x => x.id === 'pl1').state === 'rejected', 'rejected');
-  await page.click('#wsBotTab');
+  await toggleTab(page, 'bot');
   await page.click('[data-act="acctOpen"]');
   await page.selectOption('[data-k="acctSel"]', 'Sim101');
   await page.click('[data-act="acctSave"]');

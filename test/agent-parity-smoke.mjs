@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
+import { tabBtn } from './tab-buttons.mjs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 import { startFakeHelper } from './fake-helper.mjs';
 
@@ -218,6 +219,10 @@ try {
     await control('price', { root: 'MNQ', p: 25400 });
     await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
     await until(async () => (await A()).agents.length === 1, 'ChartBridge told of demo');
+    /* 1.35.0: the Agent button lives in the Agent desk panel (+ Add panel). Main is full, so its Time and Sales goes to make room
+       (nothing of the agent desk reads it), then the panel is added and holds W01, closed, as the top bar did */
+    await page.click('.ws-panel.tape [data-act="close"]');
+    await tabBtn(page, 'agentdesk');
     await until(async () => (await info('W01')).shown, 'the Agent tab button');
     check((await P('attr', 'W01', 'aria-pressed')) === 'false', 'the tab is closed at first');
     await click('W01');
@@ -763,6 +768,7 @@ try {
     await control('price', { root: 'MNQ', p: 25400 });
     await until(async () => (await A()).agents.length === 2, 'ChartBridge told of demo and demotwo');
     await control('agent-connect', { agent: 'demotwo', name: 'Second Demo Agent', build: 'sample-build-7' });
+    await page.click('.ws-panel.tape [data-act="close"]'); await tabBtn(page, 'agentdesk');   // 1.35.0: W01 in the Agent desk panel
     await click('W01');
     await until(async () => (await A()).shown, 'the tab opens');
     await until(async () => (await info('ST12')).shown, 'the picker');

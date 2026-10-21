@@ -1,5 +1,62 @@
 # Changelog
 
+## chart 1.35.0 (2026-10-21): the League tab, the agent desk and the Bot as panels, Update floors from The Desk, the trade note
+
+Anthony's decisions of 2026-10-21. **Page only: no ChartBridge change** (it stays 0.6.6; `minChartBridge` stays 0.6.2). Needs The
+Desk of this release (TheDesk branch `desk/release-1035`) for the league view, the floors and the note; with an older Desk each
+says so (the league view and the floors: "The Desk has no ... yet"; a note record is refused by The Desk and the lost line says so).
+
+- **The League tab** (`live/league.js`, `live/league.css`, new page files). The Agent tab's Shadow part became the league view
+  (Bot-Lab notes/DECISIONS_bot_division.md, "SHADOW LEAGUE: WHERE IT RUNS AND HOW IT SHOWS"): the top bar's **League** button
+  (`#wsLeagueTab`, `?tab=league`) opens it in place of the grid. One MNQ chart with each seat's paper trades as hollow marks
+  carrying its letter in its color (H Haiku amber, S Sonnet cyan, O Opus violet): a circle at the fill, a diamond at the exit, a
+  faint dashed stop and dotted target from the fill to the exit; "SHADOW: no orders"; the legend strip; each seat's day (its
+  open paper trade, its virtual 50K Flex account, today's R, its looks, the league's flag for Anthony); the API spend against the
+  caps; the week and month table with agreement and decision time ("not enough data yet" under the league's 20); the decision
+  log. Read from The Desk's new `GET /api/chart-league` every 15 seconds while open (TheDesk docs/API.md "Shadow league"); after
+  the 16:01 close it says "day closed, recording to 17:00". The marks are an overlay canvas drawn after each frame the chart
+  draws (its `drawn` event): the chart's own canvas, look and motion are untouched. Nothing in it sends an order; the league is
+  paper.
+- **The league's trades on any chart:** each NQ or MNQ chart's ⋯ menu has "League trades (faint)", off by default, kept in this
+  browser (`live-league-ghost-v1`); The Desk is read every 30 seconds while any is on.
+- **The agent desk and the Bot tab as panels** (Anthony: the Autopilot "leaves the Agent tab for its own add/remove panel ...
+  join an agent's trade"; "the bot tab can also move to a panel"). + Add panel offers "Agent desk (join an agent's trade)" and
+  "Bot", at most one of each a layout. Each panel holds the very button the top bar had (`#wsAgentTab`, `#wsBotTab`, with their
+  listeners, states and parity hooks) and opens the same view; while the view is open the button sits in the top bar (the way
+  back); closing the panel puts the button back in a hidden hold (the views, the proposals' corner line, the copilot keys and the
+  bot strip run as before). A layout with no room for the panel still reaches it: the menu item opens the view itself and says
+  so; with the panel placed already it opens the view.
+- **Update floors from The Desk** (Accounts tab, with ChartBridge 0.6.6): every prop account's floor as The Desk has it (its Prop
+  seed from the firm dashboard plus the tracked fills; The Desk's new `GET /api/chart-floors`) beside ChartBridge's, and every one
+  skipped with why (not listed by ChartBridge, no firm rules there, a static drawdown, The Desk's own reasons). Nothing goes until
+  Send; then ChartBridge's existing `firmMinimum` for each (it checks each again), each row saying sent, set or refused.
+  Repeatable.
+- **No NinjaTrader floor flag once the firm minimum is set:** a firm minimum sent from this page and not refused within 3 seconds
+  is kept in this browser (`live-firm-min-v1`); for such an account "NinjaTrader shows X to the floor, ChartBridge Y" (NinjaTrader's
+  trailing figure never locks, so it always differs) is no longer a flag. NinjaTrader's figure is in the Room's hover for every
+  account.
+- **Trade tags: the note** (one line, at most 200 characters, under the chips): Enter or leaving the box after a change records it
+  for the trade shown (`dim` `note`; every edit a new record, the newest is the note, an empty box clears it). Never a chip and
+  never scored (The Desk keeps notes apart). Typing in it fires no hotkey: every hotkey handler of the page ignores keys while a box
+  has the focus (the smoke checks KEYS OFF and that no order message goes).
+- **Trade tags: the lost line** says when the losses happened and why (refused by The Desk, or unreadable in this browser) and goes
+  with its Seen button. The bare count a 1.34.x browser kept (the "10" Anthony saw) becomes one loss with no time, said so.
+- **Screens in Brave** ("Open my screens" put every window on the main monitor). Cause: Brave's Shields, with fingerprinting
+  blocked, report `window.screenX`/`screenY` and `screen.availLeft`/`availTop` as a small random number, the screen as the size
+  of the window and `screen.isExtended` false, and place a `window.open` child relative to those (brave-core pull 13737,
+  kBraveBlockScreenFingerprinting). So every window was saved near 0, 0. The page cannot see through it: the Screens pop-up now says
+  why and lists exactly what to allow (Shields down, or "Allow all fingerprinting", for this page; Window management: Allow;
+  Pop-ups and redirects: Allow; reload and save again), and Save refuses the made-up places. It also says when Window management is
+  blocked or not offered, or the pop-ups were blocked.
+
+**Tests.** `npm test`: TESTS_PLACEHOLDER. New `test/league.test.js`; new tests in `test/trade-tags.test.js`,
+`test/accounts-page.test.js`, `test/screens.test.js`. New smoke `npm run smoke:league` (screenshots `league-1366.png`,
+`league-1600.png`, `league-1920.png`, `league-chart.png`, `league-faint-1366.png`, `league-agentdesk-open-1366.png`,
+`league-panels-1366.png`, `league-nofolder-1366.png`); `smoke:trade-tags` (the note and the lost line: `trade-tags-note-1366.png`,
+`trade-tags-lost-1366.png`), `smoke:accounts` (the floors and the flag: `accounts-12-floors-desk-1366.png`,
+`accounts-13-floors-sent-1366.png`), `smoke:screens` (Brave: `screens-brave-1366.png`) extended; the agent and bot smokes open the
+desks through `test/tab-buttons.mjs` (the panel, or + Add panel when there is no room). SMOKES_PLACEHOLDER
+
 ## chart 1.34.1 (2026-10-21): the Trade tags panel keeps clicks made during a trade and on Last trade; the ARMED chip
 
 WORK's test card on 1.34.0 (FROM_WORK_2026-10-21_release.md, step 3.5): a chip clicked while a trade was open (OPEN) or

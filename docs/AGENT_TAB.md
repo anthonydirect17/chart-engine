@@ -1,5 +1,10 @@
 # The Agent tab (chart 1.17.0; Layout 5 since 1.23.0)
 
+**Chart 1.35.0 (Anthony 2026-10-21): the agent desk is a panel.** The top bar's Agent button left for a panel of its own in
++ Add panel, "Agent desk (join an agent's trade)"; the top bar's League tab is the league view (live/league.js). The desk below is
+unchanged: the panel holds the very `#wsAgentTab` button (its listeners, states and parity hooks), which opens it as before and
+sits in the top bar while it is open; with no room for the panel, + Add panel opens the desk itself. `?tab=agent` still opens it.
+
 Where Anthony watches and controls his AI trading agents, next to the Bot tab. Manrae is the first agent; the tab serves
 any number of them. It is the page's side of ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1, 2026-10-08:
 section 7 is the page's interface, sections 3 to 6 say what the page shows and what ChartBridge refuses). ChartBridge's
