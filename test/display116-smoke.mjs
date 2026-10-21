@@ -171,7 +171,7 @@ try {
   await until(async () => page.evaluate(() => window.workspace.ticket().held && window.workspace.ticket().enabled), 'the ticket in this window, trading on', 10000);
   await tk('armBtn').click();
   const arm = await until(async () => { const a = await page.evaluate(ids => ids.map(id => { const x = document.querySelector(`.ws-panel[data-id="${id}"] .ws-head [id$="-bArmed"]`); return x && !x.hidden ? x.textContent : ''; }), panels.filter(p => p.type === 'chart').map(p => p.id)); return a.some(Boolean) ? a : null; }, 'ARMED', 4000);
-  if (arm) check(panels.filter(p => p.type === 'chart').every((p, i) => p.root === 'MNQ' ? arm[i] === 'ARMED · Sim101' : arm[i] === ''), 'Armed on MNQ: "ARMED · Sim101" in the header of the MNQ charts only: ' + JSON.stringify(arm));
+  if (arm) check(panels.filter(p => p.type === 'chart').every((p, i) => p.root === 'MNQ' ? arm[i] === 'ARMED' : arm[i] === ''), 'Armed on MNQ: "ARMED" (1.34.1: a chip, the account on hover) in the header of the MNQ charts only: ' + JSON.stringify(arm));
   await tk('armBtn').click();
   check(!!await until(async () => page.evaluate(() => [...document.querySelectorAll('.ws-head [id$="-bArmed"]')].every(x => x.hidden)), 'ARMED gone', 3000), 'Armed off: the badge goes');
 

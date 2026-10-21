@@ -105,7 +105,7 @@ try {
   check(!!stopLine, 'the group\'s stop line is drawn: ' + JSON.stringify(stopLine && stopLine.id));
   /* 1.34.0 (Anthony 2026-10-20, the badge over the instrument): the badge names the group; squeezed, the instrument stays */
   const badge = await p.$eval('.ws-panel[data-id="' + cid + '"] .ws-head .pill.armed', e => ({ text: e.textContent, title: e.title }));
-  check(badge.text === 'ARMED · group Lucid' && badge.title === 'Armed: this chart\'s orders go to group Lucid (group g1)', 'the ARMED badge names the group: ' + JSON.stringify(badge));
+  check(badge.text === 'ARMED' && badge.title === 'Armed: this chart\'s orders go to group Lucid (group g1)', 'the ARMED badge names the group: ' + JSON.stringify(badge));
   const squeezed = await p.evaluate(i => { const head = document.querySelector('.ws-panel[data-id="' + i + '"] .ws-head'); const was = head.style.width; head.style.width = '470px';
     const n = head.querySelector('.ws-name'), b = head.querySelector('.pill.armed'), r = { name: Math.round(n.getBoundingClientRect().width), nameFull: n.scrollWidth <= n.clientWidth + 1, badge: Math.round(b.getBoundingClientRect().width) }; head.style.width = was; return r; }, cid);
   check(squeezed.name >= 50 && squeezed.badge <= 50 && squeezed.badge >= 30, 'a narrow chart (470 px): the badge gives way first (down to ARMED), the instrument still shows: ' + JSON.stringify(squeezed));

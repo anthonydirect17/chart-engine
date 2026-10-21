@@ -2670,8 +2670,8 @@ function mount(container, options) {
     put(a, 'hidden', !hostLive);
     /* 1.34.0 (Anthony 2026-10-20: the badge covered the instrument): the account's short name (its label on the Accounts tab,
        a group's name), the whole name in the tooltip; the badge gives way before the instrument does (workspace.css) */
-    const full = String(HT.account || '').replace(/^group:/, 'group '), shown = HT.accountShort || full;
-    put(a, 'textContent', 'ARMED' + (hostLive && shown ? ' · ' + shown : ''));
+    const full = String(HT.account || '').replace(/^group:/, 'group ');
+    put(a, 'textContent', 'ARMED');   // 1.34.1 (Anthony 2026-10-21): a small chip, "ARMED" only; the account or group on hover
     put(a, 'title', hostLive && full ? 'Armed: this chart\'s orders go to ' + (HT.accountShort && HT.accountShort !== full ? HT.accountShort + ' (' + full + ')' : full) : '');
   }
   /* 1.14.0 (Anthony): the versions, quietly: the badge's tooltip */

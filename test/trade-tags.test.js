@@ -64,6 +64,23 @@ test('the chips shown: the newest record of each row, its phase kept; a click on
     'once the fill comes, the pre records since the close before it are this trade\'s');
 });
 
+test('1.34.1: fill times with a fraction of a ms (ChartBridge sends u with 3 decimals) still name the trade, and its records are kept', () => {
+  const u1 = T + 0.123, u2 = T + 60000.789;
+  const open = C.tradesOf([f('1', 'buy', 1, u1)], 'SIM-A', 'MNQ', 1);
+  const t = C.targetOf(open, 'next');
+  assert.strictEqual(t.phase, 'open');
+  assert.strictEqual(t.tradeOpenMs, T);
+  assert.ok(C.cleanRecord(rec('r0000101', 'trigger', 'absorption', 'open', T + 5000, t.tradeOpenMs)), 'an open record is kept');
+  const closed = C.tradesOf([f('1', 'buy', 1, u1), f('2', 'sell', 1, u2)], 'SIM-A', 'MNQ', 0);
+  const a = C.targetOf(closed, 'last');
+  assert.deepStrictEqual(a, { phase: 'after', tradeOpenMs: T, trade: { open: T, close: T + 60001 }, why: '' });
+  const r = rec('r0000102', 'grade', 'A', 'after', T + 70000, a.tradeOpenMs);
+  assert.ok(C.cleanRecord(r), 'an after record is kept');
+  const store = C.cleanStore({ records: [r], pending: [r.id], dropped: 0 });
+  assert.deepStrictEqual(store.pending, [r.id], 'still waiting to be sent, not dropped');
+  assert.deepStrictEqual(C.chipsOf(C.recordsFor(store.records, 'SIM-A', 'MNQ', closed, a, T - 3600000)).grade.value, 'A');
+});
+
 test('the session starts at 18:00 ET', () => {
   const et = 10 * 3600 + 30 * 60;   // 10:30 ET
   assert.strictEqual(C.sessionStartMs(T, 86400 * 20000 + et), T - (16 * 3600 + 30 * 60) * 1000);
