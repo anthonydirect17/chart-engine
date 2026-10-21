@@ -836,15 +836,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool reduces = ((posNow > 0 && !isBuy) || (posNow < 0 && isBuy)) && ((posEff > 0 && !isBuy) || (posEff < 0 && isBuy));
             if (wantsLegs && reduces) return (strat != null ? "a strategy" : "a bracket") + " can only go on an order that opens or adds; this order reduces the position";
             // 0.6.6 (Anthony 2026-10-20): the firm's limits (ChartBridgeGroups.cs, FirmMaxWhy and MachineHold), on the part of the order
-            // that opens or adds only (held: the position on the other side both readings agree on; an exit within it is never checked).
+            // that opens or adds only. The review: closing is the position on the other side by the LARGER of the two readings, so an
+            // order that reduces by either reading is never checked (a fill not yet in NinjaTrader's list must never stop an exit).
             // The page (Anthony's own, one account or a group's member): the firm's max contracts only. The bot and an agent: held
             // back only on a known breach, with one alert.
-            int opening = Math.Max(0, qty - held);
+            int closing = isBuy ? Math.Max(Math.Max(-posNow, -posEff), 0) : Math.Max(Math.Max(posNow, posEff), 0);
+            int opening = Math.Max(0, qty - closing);
             if (opening > 0)
             {
                 string limitWhy = bot || agent != null
-                    ? MachineHold(bot ? "the bot" : "agent " + agent, "held", account, root, opening, held, stopTicks > 0 ? opening * stopTicks * tick * inst.MasterInstrument.PointValue : (double?)null)
-                    : FirmMaxWhy(account, root, opening, held);
+                    ? MachineHold(bot ? "the bot" : "agent " + agent, "held", account, root, opening, closing, stopTicks > 0 ? opening * stopTicks * tick * inst.MasterInstrument.PointValue : (double?)null)
+                    : FirmMaxWhy(account, root, opening, closing);
                 if (limitWhy != null) return limitWhy;
             }
             // 0.5.8 (G3 a): one direction for the whole group, every market, every source; review of #48: asked for every order, a page exit (pageReduces) too: the check's own exit rule passes a true exit and counts the exits already working

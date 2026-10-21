@@ -1127,7 +1127,26 @@ namespace NinjaTrader.NinjaScript.AddOns
              .Append(",\"canHide\":").Append(hideWhy == null ? "true" : "false")
              .Append(",\"hideWhy\":").Append(hideWhy == null ? "null" : CbJson.Str(hideWhy));
             ChartBridgeGroups.AppendAccountFields(b, name, a);   // 0.5.8: group, myFloor, myDailyLoss, floor, roomFloor, roomDaily, targetLeft, src, why
+            b.Append(",\"unserved\":[").Append(a != null ? UnservedJson(a) : "").Append(']');   // 0.6.6 (the review): what Flatten every account cannot cover
             b.Append('}');
+        }
+
+        // 0.6.6 (the review): the contracts the account holds or has working orders in that ChartBridge does not serve (no flatten from the
+        // page can reach them), each once by its contract name, for the page's "not covered (not served by ChartBridge)".
+        private static string UnservedJson(Account a)
+        {
+            SortedSet<string> names = new SortedSet<string>(StringComparer.Ordinal);
+            try
+            {
+                List<Position> ps;
+                lock (a.Positions) ps = a.Positions.ToList();
+                foreach (Position p in ps) if (p != null && p.Instrument != null && p.Quantity != 0 && p.MarketPosition != MarketPosition.Flat && ChartBridgeServer.RootFor(p.Instrument) == null) names.Add(p.Instrument.FullName ?? "?");
+                List<Order> os;
+                lock (a.Orders) os = a.Orders.ToList();
+                foreach (Order o in os) if (o != null && o.Instrument != null && ChartBridgeOrders.IsWorking(o.OrderState) && ChartBridgeServer.RootFor(o.Instrument) == null) names.Add(o.Instrument.FullName ?? "?");
+            }
+            catch (Exception) { return ""; }
+            return string.Join(",", names.Select(x => CbJson.Str(x)));
         }
 
         private static string Money(double? v) { return v.HasValue ? CbJson.Num(Math.Round(v.Value, 2)) : "null"; }

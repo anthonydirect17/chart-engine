@@ -182,17 +182,18 @@ test('groupSize: each guard, in ChartBridge\'s order and words (the harness\'s n
   const { groupSize } = await import('./fake-groups.mjs');
   const base = { riskPct: 10, drawdown: 4500, stopTicks: 20, tickValue: 5, maxLeft: 10, maxWords: '10 minis; it holds or has working 0 in mini equivalents, every instrument', cap: 9, capWords: 'maxQty.NQ in config.txt', held: 0, roomFloor: 4000, hasDaily: false, roomDaily: null, openRisk: 0 };
   const g = o => groupSize(Object.assign({}, base, o));
-  assert.deepEqual(g({}), { size: 4, budget: 450, why: null }, '10% of $4,500 = $450 / ($100 a contract) = 4');
+  assert.deepEqual(g({}), { size: 4, budget: 450, why: null, note: null }, '10% of $4,500 = $450 / ($100 a contract) = 4');
   assert.equal(g({ stopTicks: 4 }).size, 9, '22 by risk, its max 10, the cap 9 (maxQty, the hard ceiling)');
   assert.deepEqual(g({ stopTicks: 4, maxLeft: 2 }).size, 2, 'its max size');
   assert.equal(g({ stopTicks: 4, held: 4, maxLeft: 6 }).size, 5, 'an add: what it holds counts against the cap');
   assert.equal(g({ stopTicks: 4, held: 10, maxLeft: 0, maxWords: '10 minis; it holds or has working 10 in mini equivalents, every instrument' }).why, 'it is at its max size (10 minis; it holds or has working 10 in mini equivalents, every instrument)');
   assert.equal(g({ stopTicks: 4, maxLeft: -1, held: 9 }).why, 'it is at the cap of 9 (maxQty.NQ in config.txt; it holds or has working 9)');
-  assert.deepEqual(g({ roomFloor: 150 }), { size: 1, budget: 450, why: null }, 'the room to its floor $150: 1 contract of $100');
+  assert.deepEqual(g({ roomFloor: 150 }), { size: 1, budget: 450, why: null, note: null }, 'the room to its floor $150: 1 contract of $100');
   assert.equal(g({ roomFloor: 80 }).why, 'its room to the floor $80 is less than one contract\'s stop ($100)');
   assert.equal(g({ hasDaily: true, roomDaily: 80 }).why, 'its daily room $80 is less than one contract\'s stop ($100)');
-  assert.equal(g({ roomFloor: null, floorWhy: 'the account is not connected' }).why, 'its room to the floor is not known (the account is not connected)');
-  assert.equal(g({ hasDaily: true, roomDaily: null, dailyWhy: 'x' }).why, 'its daily room is not known (x)');
+  /* 0.6.6 (Anthony's ruling on the review, "size it anyway"): a room not known skips its cap, with a quiet note */
+  assert.deepEqual(g({ roomFloor: null, floorWhy: 'no high known' }), { size: 4, budget: 450, why: null, note: 'room unknown: sized by risk only (its room to the floor: no high known)' });
+  assert.deepEqual(g({ hasDaily: true, roomDaily: null, dailyWhy: 'x' }), { size: 4, budget: 450, why: null, note: 'room unknown: sized by risk only (its daily room: x)' });
   assert.equal(g({ drawdown: 2000, stopTicks: 50 }).why, 'its risk $200 (10% of its max loss $2,000) is less than one contract\'s stop ($250 at 50 ticks)', 'rounds to 0');
   assert.equal(g({ riskPct: 10, drawdown: 2000, stopTicks: 40, tickValue: 0.5, maxLeft: 40, cap: 100 }).size, 10, 'micros: $200 / ($20 a contract) = 10');
 });
@@ -252,7 +253,7 @@ test('groupSize answer 4: all the open stop risk on that side comes off both roo
   assert.equal(g({}).size, 2, 'flat: room 650 / $100 holds 6, its risk 2');
   assert.equal(g({ openRisk: 500 }).size, 1, 'long 1 with its stop $500 away: (650 - 500) / 100 = 1');
   assert.equal(g({ openRisk: 700 }).why, 'its room to the floor $650 less its open stop risk $700 is less than one contract\'s stop ($100)');
-  assert.equal(g({ openRisk: null, openWhy: 'it holds 4 NQ with no working stop for 4 of them' }).why, 'its open stop risk is not known (it holds 4 NQ with no working stop for 4 of them)');
+  assert.deepEqual(g({ openRisk: null, openWhy: 'it holds 4 NQ with no working stop for 4 of them' }), { size: 2, budget: 200, why: null, note: 'open stop risk unknown: its room caps this entry\'s own stop only (it holds 4 NQ with no working stop for 4 of them)' }, '0.6.6: sized anyway; the known room still caps its own stop');
   assert.equal(g({ hasDaily: true, roomDaily: 300, openRisk: 250 }).why, 'its daily room $300 less its open stop risk $250 is less than one contract\'s stop ($100)');
 });
 
@@ -264,11 +265,11 @@ test('fake answers 2 and 4: a strategy\'s stop sizes the group, and a held posit
   assert.equal(f.reject(f.act(GE('groupPreview', { strategy: strat }))), 'bracket and strategy on one order are refused: send one of them');
   const placed = f.act(GE('groupOrder', { bracket: undefined, strategy: strat, sizes: 'SIM-A:4,SIM-B:2,SIM-C:1,SIM-D:2' })).find(m => m.type === 'groupPlaced');
   assert.equal(placed.placed, 4, 'each member\'s own strategy entry');
-  /* answer 4: SIM-A holds a position with no working stop: its open stop risk is not known */
+  /* answer 4: SIM-A holds a position with no working stop: its open stop risk is not known; 0.6.6: sized anyway, with the note */
   const g = await geDesk();
   g.desk.positions.set('SIM-A|NQ', { qty: 4, avgPrice: 25000 });
   const out = g.act(GE('groupPreview'))[0].members[0];
-  assert.equal(out.out, 'its open stop risk is not known (it holds 4 NQ with no working stop for 4 of them)');
+  assert.ok(out.size > 0 && out.out === null && out.note === 'open stop risk unknown: its room caps this entry\'s own stop only (it holds 4 NQ with no working stop for 4 of them)', JSON.stringify(out));
 });
 
 /* ---------------- the review of d7c8e50: the fake mirrors each fix */
@@ -310,20 +311,22 @@ test('fake review 3, 4, 6, 7: mini equivalents, the bot\'s account left out, a s
   assert.equal(c.reject(c.act(GE('groupPreview', { bracket: { stop: 60, target: 0 } }))), 'bracket ticks must be from 0 to 50 (maxBracketTicks in config.txt)', 'review 7');
 });
 
-test('fake re-review 1 and 2: an adding side OCO entry counts, a closing side OCO set is one exit; 0.6.6: each kind against its own max', async () => {
+test('fake re-review 1 and 2: an adding side OCO entry counts, a closing side OCO set is one exit; 0.6.6: the combined max (10 micros = 1 mini)', async () => {
   const f = await geDesk();
   f.desk.positions.set('SIM-B|NQ', { qty: 1, avgPrice: 25000 });
   f.desk.newOrder({ account: 'SIM-B', root: 'NQ', side: 'sell', kind: 'stop', qty: 1, price: 24990, role: 'entry', oco: 'x1' });
   f.desk.newOrder({ account: 'SIM-B', root: 'NQ', side: 'sell', kind: 'limit', qty: 1, price: 25040, role: 'entry', oco: 'x1' });
   assert.equal(f.act(GE('groupPreview'))[0].members[1].size, 2, 'the typed stop and target on the long: one exit');
   f.desk.newOrder({ account: 'SIM-B', root: 'NQ', side: 'buy', kind: 'limit', qty: 1, price: 24950, role: 'entry', oco: 'y1' });
-  assert.equal(f.act(GE('groupPreview'))[0].members[1].out, 'its open stop risk is not known (a working buy limit 1 NQ has no stop ChartBridge knows)');
-  /* ChartBridge 0.6.6 (Anthony 2026-10-20): micros against maxMicros, minis against maxMinis (was: the smaller in mini equivalents) */
+  { const m1 = f.act(GE('groupPreview'))[0].members[1]; assert.ok(m1.size > 0 && /\(a working buy limit 1 NQ has no stop ChartBridge knows\)$/.test(m1.note), '0.6.6: sized anyway: ' + JSON.stringify(m1)); }
+  /* ChartBridge 0.6.6 (Anthony's ruling on the review, "10 micros = 1 mini"): the total in minis at most maxMinis and in micros at most
+     maxMicros, whatever the entry's instrument */
   const { firmMaxLeft } = await import('./fake-groups.mjs');
-  assert.equal(firmMaxLeft(4, 20, 'NQ', 2), 2, '4 minis / 20 micros holding 2 NQ: 2 NQ left (was 0)');
-  assert.equal(firmMaxLeft(4, 20, 'MNQ', 2), 0, 'and no MNQ: the 2 NQ are its 20 micros');
-  assert.equal(firmMaxLeft(2, 40, 'MNQ', 0), 40, '2 minis / 40 micros, flat: 40 MNQ (was 20)');
-  assert.equal(firmMaxLeft(2, 40, 'MNQ', 2.5), 15);
+  assert.equal(firmMaxLeft(4, 20, 'NQ', 2), 0, '4 minis / 20 micros holding 2 NQ (20 micro equivalents): no NQ');
+  assert.equal(firmMaxLeft(4, 20, 'MNQ', 2), 0, 'and no MNQ');
+  assert.equal(firmMaxLeft(2, 40, 'MNQ', 0), 20, '2 minis / 40 micros, flat: 20 MNQ (2 minis)');
+  assert.equal(firmMaxLeft(2, 40, 'NQ', 1.5), 0, 'the review: holding 15 MNQ, no NQ');
+  assert.equal(firmMaxLeft(2, 40, 'MNQ', 1), 10, 'the review: holding 1 NQ, 10 MNQ (the same total either way)');
   assert.equal(firmMaxLeft(4, 0, 'MNQ', 1.5), 25, 'only minis set: micros convert, 10 to a mini');
   assert.equal(firmMaxLeft(0, 30, 'NQ', 0), 3, 'only micros set: minis convert');
   assert.equal(firmMaxLeft(0, 0, 'NQ', 0), -1, 'no max');

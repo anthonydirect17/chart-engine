@@ -247,7 +247,7 @@ export class OrderDeskV3 extends OrderDesk {
       roomDailyLoss: null, roomDailyLossWhy: off || 'NinjaTrader does not report a daily loss limit for this account',
       canHide: this.hideWhy(a) === null, hideWhy: this.hideWhy(a) };
   }
-  accountMsg(a) { return this.groupFields(a, this.accountMsg058(a)); }   // 0.5.8: the group fields (test/fake-groups.mjs)
+  accountMsg(a) { return Object.assign(this.groupFields(a, this.accountMsg058(a)), { unserved: (a.unserved || []).slice() }); }   // 0.5.8: the group fields (test/fake-groups.mjs); 0.6.6: unserved (made-up contract names)
   /** ChartBridge 0.5.1's Hide rule (ChartBridgeAccounts.HideRefusal): flat, no working orders, not the bot's or the copier's */
   hideWhy(a) {
     if (!this.sw.accountChecks) return 'accountChecks is off';

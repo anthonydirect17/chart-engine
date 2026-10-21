@@ -27,31 +27,36 @@ const TYPE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
  const MICRO_ROOTS = ['MNQ', 'MES', 'M2K', 'MYM', 'MGC', 'MCL', 'SIL', 'MBT', 'MET', 'M6E'];
 const usd2 = v => '$' + (+v).toLocaleString('en-US', { maximumFractionDigits: 2 });
 export const miniEquivalent = root => (MICRO_ROOTS.includes(root) ? 0.1 : 1);
-/* ChartBridge 0.6.6 (FirmMaxFor): the root's contracts the firm's max still allows (-1: no max). Micros against maxMicros where the
-   firm gives one, minis against maxMinis; with only one set, 10 micros to a mini. usedMini: held and working, every instrument. */
+/* ChartBridge 0.6.6 (FirmMaxFor, Anthony's ruling on the review: "10 micros = 1 mini"): the root's contracts the firm's max still allows
+   (-1: no max): after the order the total in mini equivalents at most maxMinis, and in micro equivalents at most maxMicros, each when
+   set. usedMini: held and working, every instrument. */
 export const firmMaxLeft = (minis, micros, root, usedMini) => {
-  if (!(minis > 0) && !(micros > 0)) return -1;
-  const inMicros = MICRO_ROOTS.includes(root) ? micros > 0 : !(minis > 0), k = inMicros ? 10 : 1;
-  const cap = inMicros ? micros : minis, used = Math.round(Math.max(0, usedMini) * k * 1e6) / 1e6, per = miniEquivalent(root) * k;
-  return Math.max(0, Math.floor((cap - used) / per + 1e-6));
+  let best = -1;
+  for (const [cap, k] of [[minis, 1], [micros, 10]]) {
+    if (!(cap > 0)) continue;
+    const used = Math.round(Math.max(0, usedMini) * k * 1e6) / 1e6, per = miniEquivalent(root) * k;
+    const left = Math.max(0, Math.floor((cap - used) / per + 1e-6));
+    if (best < 0 || left < best) best = left;
+  }
+  return best;
 };
-/** 0.6.5: one member's contracts, exactly ChartBridgeOrders.GroupSize (its guards in its order, its words) */
+/** 0.6.5: one member's contracts, exactly ChartBridgeOrders.GroupSize (its guards in its order, its words); 0.6.6 (Anthony's ruling on
+ *  the review, "size it anyway"): a room not known skips that room's cap with a note, the open risk not known counts as 0 with a note */
 export function groupSize(o) {
   const budget = Math.round(o.riskPct * o.drawdown) / 100, per = o.stopTicks * o.tickValue;
-  const out = (why) => ({ size: 0, budget, why });
-  if (!isNum(o.roomFloor)) return out('its room to the floor is not known (' + (o.floorWhy || 'not known') + ')');
-  if (o.hasDaily && !isNum(o.roomDaily)) return out('its daily room is not known (' + (o.dailyWhy || 'not known') + ')');
-  if (!isNum(o.openRisk)) return out('its open stop risk is not known (' + (o.openWhy || 'not known') + ')');   // answer 4
-  const open = Math.round(o.openRisk * 100) / 100, less = open > 0 ? ' less its open stop risk ' + usd2(open) : '';
+  const out = (why) => ({ size: 0, budget, why, note: null });
+  const floorKnown = isNum(o.roomFloor), dailyKnown = !o.hasDaily || isNum(o.roomDaily);
+  const note = !floorKnown || !dailyKnown ? 'room unknown: sized by risk only (' + (!floorKnown ? 'its room to the floor: ' + (o.floorWhy || 'not known') : 'its daily room: ' + (o.dailyWhy || 'not known')) + ')'
+    : !isNum(o.openRisk) ? 'open stop risk unknown: its room caps this entry\'s own stop only (' + (o.openWhy || 'not known') + ')' : null;
+  const open = isNum(o.openRisk) ? Math.round(o.openRisk * 100) / 100 : 0, less = open > 0 ? ' less its open stop risk ' + usd2(open) : '';
   let n = Math.floor(budget / per + 1e-9);
   if (n < 1) return out('its risk ' + usd2(budget) + ' (' + +o.riskPct.toFixed(2) + '% of its max loss ' + usd2(o.drawdown) + ') is less than one contract\'s stop (' + usd2(per) + ' at ' + o.stopTicks + ' ticks)');
   const held = Math.max(0, o.held);
   if (o.maxLeft >= 0 && o.maxLeft < n) { n = o.maxLeft; if (n < 1) return out('it is at its max size (' + o.maxWords + ')'); }   // review 3: every instrument, in mini equivalents
   if (o.cap - held < n) { n = o.cap - held; if (n < 1) return out('it is at the cap of ' + o.cap + ' (' + o.capWords + '; it holds or has working ' + held + ')'); }
-  const byFloor = Math.floor((o.roomFloor - open) / per + 1e-9);
-  if (byFloor < n) { n = byFloor; if (n < 1) return out('its room to the floor ' + usd2(o.roomFloor) + less + ' is less than one contract\'s stop (' + usd2(per) + ')'); }
-  if (o.hasDaily) { const byDay = Math.floor((o.roomDaily - open) / per + 1e-9); if (byDay < n) { n = byDay; if (n < 1) return out('its daily room ' + usd2(o.roomDaily) + less + ' is less than one contract\'s stop (' + usd2(per) + ')'); } }
-  return { size: n, budget, why: null };
+  if (floorKnown) { const byFloor = Math.floor((o.roomFloor - open) / per + 1e-9); if (byFloor < n) { n = byFloor; if (n < 1) return out('its room to the floor ' + usd2(o.roomFloor) + less + ' is less than one contract\'s stop (' + usd2(per) + ')'); } }
+  if (o.hasDaily && isNum(o.roomDaily)) { const byDay = Math.floor((o.roomDaily - open) / per + 1e-9); if (byDay < n) { n = byDay; if (n < 1) return out('its daily room ' + usd2(o.roomDaily) + less + ' is less than one contract\'s stop (' + usd2(per) + ')'); } }
+  return { size: n, budget, why: null, note };
 }
 const PCT = /^(?:0|[1-9][0-9]?|100)(?:\.[0-9]{1,2})?$/;
 
@@ -249,6 +254,7 @@ export function installGroups(Desk) {
         const taken = this.groupTakenWhy(name);
         if (taken) { s.out = taken; return s; }
         if (!a) { s.out = 'it is not in NinjaTrader now'; return s; }
+        if (a.connection !== 'connected') { s.out = 'it is not connected'; return s; }   // 0.6.6
         const f = this.groupFields(a, this.accountMsg058(a)), r = this.groupRulesOf(name, g);
         const pos = (this.positions.get(name + '|' + m.root) || {}).qty || 0;
         const pend = [...this.orders.values()].filter(o => o.account === name && o.root === m.root && (o.state === 'working' || o.state === 'partFilled') && o.side === m.side).reduce((t, o) => t + o.qty - (o.filled || 0), 0);
@@ -258,6 +264,7 @@ export function installGroups(Desk) {
         const z = groupSize({ riskPct: g.riskPct, drawdown: r.drawdown, stopTicks: stop, tickValue, maxLeft, maxWords, cap: this.capFor(m.root), capWords: 'maxQty.' + m.root + ' in config.txt',
           held, roomFloor: f.roomFloor, floorWhy: f.why.roomFloor, hasDaily: r.dailyLoss > 0, roomDaily: f.roomDaily, dailyWhy: f.why.roomDaily, openRisk: risk.openRisk, openWhy: risk.openWhy });
         s.size = z.size; s.budget = z.budget; s.out = z.why; s.risk = Math.round(z.size * stop * tickValue * 100) / 100;
+        if (z.size > 0 && z.note) s.note = z.note;   // 0.6.6
         return s;
       });
       return { seats, name: g.name, riskPct: g.riskPct, stop };

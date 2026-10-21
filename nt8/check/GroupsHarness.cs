@@ -739,7 +739,8 @@ public static class GroupsHarness
         Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1"));
         Check(Submits(simD) == d0 + 1 && Rejection() == "", "review item 2: groups.txt unreadable: the sell of SIM-D's long 1 (an exit) goes");
         Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
-        Check(Submits(simD) == d0 + 1 && Rejection().Contains("groups.txt could not be read"), "review item 2: an entry is still refused");
+        Check(Submits(simD) == d0 + 2 && Rejection() == "" && ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText,
+              "review item 2 (0.6.6, Anthony's ruling: his single orders go): his entry goes; the bot's is still refused: " + Rejection());
         File.WriteAllText(file, was);
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
@@ -1007,10 +1008,15 @@ public static class GroupsHarness
             Clear();
             ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
             foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
-            Check(Any("groups.txt could not be read: every new entry is refused until it can (exits always work)"), "unreadable (" + text.Split('\n').Last(l => l.Length > 0).Replace("\t", " ") + "): the pages get the alarm");
+            Check(Any(ChartBridgeGroups.ReadFailedText), "unreadable (" + text.Split('\n').Last(l => l.Length > 0).Replace("\t", " ") + "): the pages get the alarm");
             int d = Submits(simD);
             Clear(); O(Order("SIM-D", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
-            Check(Submits(simD) == d && Rejection().Contains("groups.txt could not be read"), "unreadable: every entry refused, any account");
+            Check(Submits(simD) == d + 1 && Rejection() == "", "unreadable (0.6.6, Anthony's ruling: \"My single orders go\"): his single-account entry goes: " + Rejection());
+            Check(ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText && ChartBridgeGroups.EntryCheck("agent:x", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText &&
+                  ChartBridgeGroups.EntryCheck("copier", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText, "unreadable: the bot's, an agent's and the copier's entries stay refused");
+            Clear(); GP("groupPreview", "{\"type\":\"groupPreview\",\"cid\":\"ge\",\"group\":\"g1\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"market\",\"bracket\":{\"stop\":20,\"target\":40}}");
+            Check(Rejection().Contains(ChartBridgeGroups.ReadFailedText), "unreadable: a group entry is refused, with why: " + Rejection());
+            Flat();
             Clear(); G("groupSave", Save("", "New", "true", "0", "2000", "eod", "0", "50000", "0"));
             Check(Rejection().Contains("groups.txt could not be read") && File.ReadAllText(p) == text, "unreadable: changes refused, the file never rewritten");
             Check(ChartBridgeGroups.GroupsJson().Contains("\"list\":[],\"error\":\"groups.txt could not be read"), "the groups message says why");
@@ -1022,7 +1028,7 @@ public static class GroupsHarness
         File.WriteAllText(p, was);
         ChartBridgeAccounts.ReadFault = f => f == "groups.txt" ? "locked by another program" : null;
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
-        Check(ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText, "a file that cannot be opened (three tries): every entry refused");
+        Check(ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText && ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == null, "a file that cannot be opened (three tries): the machines' entries refused, his single orders go");
         ChartBridgeAccounts.ReadFault = null;
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Check(ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == null && ChartBridgeGroups.GroupOf("SIM-B") == null && FileText() == was, "readable again after a start: as saved");
@@ -1295,7 +1301,7 @@ public static class GroupsHarness
             Corrupt(p, text);
             Clear(); Restart();
             Check(ChartBridgeGroups.GroupsJson().Contains("\"list\":[],\"error\":\"groups.txt could not be read") && ChartBridgeGroups.GroupsJson().Contains(broken[1]) &&
-                  ChartBridgeGroups.EntryCheck("page", simA, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText && Entry(AccountsNow(), "SIM-A").Contains("\"floor\":null,"), "0.6.5: " + broken[1] + ": unreadable, every entry refused, no floor: " + ChartBridgeGroups.GroupsJson());
+                  ChartBridgeGroups.EntryCheck("bot", simA, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText && Entry(AccountsNow(), "SIM-A").Contains("\"floor\":null,"), "0.6.5: " + broken[1] + ": unreadable, the machines' entries refused (0.6.6: his own go), no floor: " + ChartBridgeGroups.GroupsJson());
             Clear(); G("memberRules", MR("SIM-A", R("50000", "0", "2000", "eod", "0", "0", "")));
             Check(File.ReadAllText(p) == text, "0.6.5: unreadable: never rewritten");
         }
@@ -1315,7 +1321,7 @@ public static class GroupsHarness
     // ------------------------------------------------------------ 0.6.5 (Anthony 2026-10-19): trade the group from the ticket
     static void GP(string type, string json) { lock (page.Actions) page.Actions.Clear(); ChartBridgeOrders.OnMessage(page, type, json); }
     static string GE(string type, string side, string kind, string bracket, string extra) { return "{\"type\":\"" + type + "\",\"cid\":\"ge\",\"group\":\"g1\",\"root\":\"NQ\",\"side\":\"" + side + "\",\"kind\":\"" + kind + "\"" + (bracket != null ? ",\"bracket\":" + bracket : "") + extra + "}"; }
-    static string Seat(string json, string account) { Match m = Regex.Match(json, "\\{\"account\":\"" + Regex.Escape(account) + "\",\"size\":[0-9]+,\"risk\":[0-9.]+,\"budget\":[0-9.]+,\"out\":(?:null|\"[^\"]*\")\\}"); return m.Success ? m.Value : "(none) " + json; }
+    static string Seat(string json, string account) { Match m = Regex.Match(json, "\\{\"account\":\"" + Regex.Escape(account) + "\",\"size\":[0-9]+,\"risk\":[0-9.]+,\"budget\":[0-9.]+,\"out\":(?:null|\"[^\"]*\")(?:,\"note\":\"[^\"]*\")?\\}"); return m.Success ? m.Value : "(none) " + json; }
     // a ChartBridge-named stop (as a bracket's leg) at 24980 on NQ, sell 1, listed and ours
     static Order PlaceStop(Account a)
     {
@@ -1372,7 +1378,15 @@ public static class GroupsHarness
         simD.Connection.Status = ConnectionStatus.Disconnected;
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
         pv = Last("groupPreview");
-        Check(Seat(pv, "SIM-D").Contains("\"size\":0,") && Seat(pv, "SIM-D").Contains("its room to the floor is not known (the account is not connected)"), "GE room not known: SIM-D sits out and says why: " + Seat(pv, "SIM-D"));
+        Check(Seat(pv, "SIM-D").Contains("\"size\":0,") && Seat(pv, "SIM-D").Contains("\"out\":\"it is not connected\""), "GE 0.6.6: SIM-D not connected sits out and says so (no longer as a room not known): " + Seat(pv, "SIM-D"));
+        // 0.6.6 (Anthony's ruling on the review, "size it anyway"): a room not known (the pure sizing): sized by its risk and its max
+        // only, with a note; never 0 for that
+        { double bg; string why, note; int sz = ChartBridgeOrders.GroupSize(10, 2000, 20, 5, -1, "", 9, "cap", 0, null, "made up: no high known", false, null, null, 0, null, out bg, out why, out note);
+          Check(sz == 2 && why == null && note == "room unknown: sized by risk only (its room to the floor: made up: no high known)", "GE 0.6.6: room to the floor not known: sized by risk (2), a quiet note: " + sz + " " + note);
+          sz = ChartBridgeOrders.GroupSize(10, 2000, 20, 5, 1, "1 minis", 9, "cap", 0, 1500, null, true, null, "made up", 0, null, out bg, out why, out note);
+          Check(sz == 1 && note != null && note.StartsWith("room unknown: sized by risk only (its daily room"), "GE 0.6.6: daily room not known: sized by risk, the firm max still caps (1): " + sz + " " + note);
+          sz = ChartBridgeOrders.GroupSize(10, 2000, 20, 5, -1, "", 9, "cap", 0, 150, null, false, null, null, null, "made up", out bg, out why, out note);
+          Check(sz == 1 && note != null && note.StartsWith("open stop risk unknown"), "GE 0.6.6: open risk not known, room 150 known: its own stop still capped by the room (1): " + sz + " " + note); }
         simD.Connection.Status = ConnectionStatus.Connected;
         Money(simB, 50500, 0, 0); Money(simC, 25000, 0, 0); Tick();
         // refusals: no stop, no bracket, risk off, a bad sizes list
@@ -1402,7 +1416,7 @@ public static class GroupsHarness
         ChartBridgeOrders.NoteLast("NQ", 25000);
         Pos(simA, nq, 4); Pos(simB, nq, 2);
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "limit", "{\"stop\":4,\"target\":8}", ",\"price\":24990"));
-        Check(Seat(Last("groupPreview"), "SIM-A").Contains("its open stop risk is not known (it holds 4 NQ with no working stop for 4 of them)"), "GE answer 4: a position with no working stop: its open stop risk is not known, it sits out: " + Seat(Last("groupPreview"), "SIM-A"));
+        Check(Seat(Last("groupPreview"), "SIM-A").Contains("\"size\":5,") && Seat(Last("groupPreview"), "SIM-A").Contains("\"note\":\"open stop risk unknown: its room caps this entry's own stop only (it holds 4 NQ with no working stop for 4 of them)\""), "GE 0.6.6: a position with no working stop: its open stop risk is not known, sized anyway with a note: " + Seat(Last("groupPreview"), "SIM-A"));
         Manual(simA, nq, OrderAction.Sell, OrderType.StopMarket, 4, null, "typed stop A"); Manual(simB, nq, OrderAction.Sell, OrderType.StopMarket, 2, null, "typed stop B");
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "limit", "{\"stop\":4,\"target\":8}", ",\"price\":24990"));
         pv = Last("groupPreview");
@@ -1467,7 +1481,7 @@ public static class GroupsHarness
         Flat();
         Manual(simB, nq, OrderAction.Buy, OrderType.Limit, 2, null, "typed entry");
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("its open stop risk is not known (a working buy limit 2 NQ has no stop ChartBridge knows)"), "GE review 1a: an entry with no stop ChartBridge knows: it sits out: " + Seat(Last("groupPreview"), "SIM-B"));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":2,") && Seat(Last("groupPreview"), "SIM-B").Contains("(a working buy limit 2 NQ has no stop ChartBridge knows)"), "GE review 1a (0.6.6): an entry with no stop ChartBridge knows: sized anyway, the note says why: " + Seat(Last("groupPreview"), "SIM-B"));
         Flat();
         // review 5: both sides: SIM-B short 1 NQ with its buy stop 25 points above ($500) counts for a buy entry too
         Pos(simB, nq, -1); Order ss = Manual(simB, nq, OrderAction.Buy, OrderType.StopMarket, 1, null, "typed stop"); ss.StopPrice = 25025;
@@ -1478,7 +1492,7 @@ public static class GroupsHarness
         Instrument nqSep = new Instrument { FullName = "NQ 09-26", MasterInstrument = new MasterInstrument { Name = "NQ", TickSize = 0.25, PointValue = 20 } };
         Pos(simB, nqSep, 1); Manual(simB, nqSep, OrderAction.Sell, OrderType.StopMarket, 1, null, "typed stop");
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("its open stop risk is not known (no recent price for NQ 09-26 to measure its stops from)"), "GE review 5: another contract month with no price: it sits out: " + Seat(Last("groupPreview"), "SIM-B"));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":2,") && Seat(Last("groupPreview"), "SIM-B").Contains("(no recent price for NQ 09-26 to measure its stops from)"), "GE review 5 (0.6.6): another contract month with no price: sized anyway with the note: " + Seat(Last("groupPreview"), "SIM-B"));
         simB.Positions.Clear(); Flat();
         Money(simB, 50500, 0, 0); Tick();
         // review 3: the max size counts every instrument in mini equivalents: SIM-B (4 minis) holds 30 MNQ (3 minis) with a stop: NQ 1 left
@@ -1519,32 +1533,34 @@ public static class GroupsHarness
         Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":2,"), "GE re-review 1: a closing side OCO stop and target are one exit (the long's $200 stop risk, room 1500): 2: " + Seat(Last("groupPreview"), "SIM-B"));
         Manual(simB, nq, OrderAction.Buy, OrderType.Limit, 1, "y1", "typed entry a"); Manual(simB, nq, OrderAction.Buy, OrderType.StopMarket, 1, "y1", "typed entry b").StopPrice = 25050;
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("its open stop risk is not known (a working buy limit 1 NQ has no stop ChartBridge knows)"), "GE re-review 1: an adding side OCO entry counts (no stop known: it sits out): " + Seat(Last("groupPreview"), "SIM-B"));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":1,") && Seat(Last("groupPreview"), "SIM-B").Contains("(a working buy limit 1 NQ has no stop ChartBridge knows)"), "GE re-review 1 (0.6.6): an adding side OCO entry counts, no stop known: sized anyway (1) with the note: " + Seat(Last("groupPreview"), "SIM-B"));
         Flat();
-        // 0.6.6 (Anthony 2026-10-20, reverses re-review 2's "both set: the smaller"): minis against maxMinis, micros against maxMicros,
-        // what it holds counted in mini equivalents. 4 minis / 20 micros, holding 2 NQ: an NQ entry has 2 minis left (was: none)...
+        // 0.6.6 (Anthony's ruling on the review, "10 micros = 1 mini"): one combined rule whatever the entry's instrument: after the
+        // order the total in mini equivalents (held and working, every instrument) at most maxMinis, and in micro equivalents at most
+        // maxMicros. 4 minis / 20 micros, holding 2 NQ (20 micro equivalents): neither an NQ nor an MNQ entry has room
         G("memberRules", MR("SIM-B", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":20")));
         Pos(simB, nq, 2); Manual(simB, nq, OrderAction.Sell, OrderType.StopMarket, 2, null, "typed stop").StopPrice = 24995;
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":2,"), "GE 0.6.6: an NQ entry against maxMinis (4 less the 2 NQ held): 2: " + Seat(Last("groupPreview"), "SIM-B"));
-        // ...and an MNQ entry has none: the 2 NQ held are 20 micros, all of its 20
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis / 20 micros; it holds or has working 2 in mini equivalents, every instrument)"), "GE 0.6.6: 4 minis / 20 micros holding 2 NQ: an NQ entry is over the 20 micro equivalents: it sits out: " + Seat(Last("groupPreview"), "SIM-B"));
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", "").Replace("\"root\":\"NQ\"", "\"root\":\"MNQ\""));
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis / 20 micros; it holds or has working 2 in mini equivalents, every instrument)"), "GE 0.6.6: an MNQ entry against maxMicros (2 NQ held are its 20 micros): it sits out and says why: " + Seat(Last("groupPreview"), "SIM-B"));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (4 minis / 20 micros;"), "GE 0.6.6: and an MNQ entry too: " + Seat(Last("groupPreview"), "SIM-B"));
         Flat();
-        // a firm with 2 minis or 40 micros: flat, a micro entry may take 40 (0.6.5 held it to 20, the smaller in mini equivalents)
-        // and a mini entry 2; holding 25 MNQ (2.5 minis), an NQ entry is at its max and an MNQ one has 15 left
+        // the reviewer's case, 2 minis / 40 micros: holding 15 MNQ, an NQ entry has none left (1.5 + 1 is over 2 minis); holding 1 NQ,
+        // an MNQ entry has 10 (1 + 15 x 0.1 would be over 2 minis as well): the same answer whichever came first
         G("memberRules", MR("SIM-B", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":2,\"maxMicros\":40")));
         ChartBridgeOrders.ReadConfig("maxQty.MNQ", "99");
         string mnqGe = GE("groupPreview", "buy", "market", "{\"stop\":4,\"target\":8}", "").Replace("\"root\":\"NQ\"", "\"root\":\"MNQ\"");
         Clear(); GP("groupPreview", mnqGe);
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":40,"), "GE 0.6.6: 2 minis / 40 micros, flat: an MNQ entry takes its 40 micros ($200 / $2 = 100, the max 40): " + Seat(Last("groupPreview"), "SIM-B") + Rejection());
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":20,"), "GE 0.6.6: 2 minis / 40 micros, flat: an MNQ entry takes 20 (2 minis is 20 micro equivalents): " + Seat(Last("groupPreview"), "SIM-B") + Rejection());
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":4,\"target\":8}", ""));
         Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":2,"), "GE 0.6.6: 2 minis / 40 micros, flat: an NQ entry takes its 2 minis: " + Seat(Last("groupPreview"), "SIM-B"));
-        Pos(simB, mnq, 25); Manual(simB, mnq, OrderAction.Sell, OrderType.StopMarket, 25, null, "typed stop").StopPrice = 24999;
+        Pos(simB, mnq, 15); Manual(simB, mnq, OrderAction.Sell, OrderType.StopMarket, 15, null, "typed stop").StopPrice = 24999;
         Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":4,\"target\":8}", ""));
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (2 minis / 40 micros; it holds or has working 2.5 in mini equivalents, every instrument)"), "GE 0.6.6: holding 25 MNQ (2.5 minis): an NQ entry is over its 2 minis: it sits out: " + Seat(Last("groupPreview"), "SIM-B"));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("it is at its max size (2 minis / 40 micros; it holds or has working 1.5 in mini equivalents, every instrument)"), "GE 0.6.6 review: holding 15 MNQ, an NQ entry would make 2.5 minis: it sits out: " + Seat(Last("groupPreview"), "SIM-B"));
+        Flat(); simB.Positions.Clear();
+        Pos(simB, nq, 1); Manual(simB, nq, OrderAction.Sell, OrderType.StopMarket, 1, null, "typed stop").StopPrice = 24999;
         Clear(); GP("groupPreview", mnqGe);
-        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":15,"), "GE 0.6.6: holding 25 MNQ: an MNQ entry has 15 of its 40 micros left: " + Seat(Last("groupPreview"), "SIM-B"));
+        Check(Seat(Last("groupPreview"), "SIM-B").Contains("\"size\":10,"), "GE 0.6.6 review: holding 1 NQ, an MNQ entry has 10 (15 would make 2.5 minis too): the same rule either way: " + Seat(Last("groupPreview"), "SIM-B"));
         Flat(); simB.Positions.Clear();
         // only micros set (40): an NQ entry converts (4 minis), holding nothing
         G("memberRules", MR("SIM-B", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMicros\":40")));
@@ -1649,6 +1665,30 @@ public static class GroupsHarness
         Clear(); O(Order("SIM-D", "NQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":9"));
         Check(Rejection() == "" && Submits(simD) == d0 + 1, "LIM page: no max typed (SIM-D): no check (9 NQ, the config cap): " + Rejection());
         Flat();
+        // the review: the two readings disagree (NinjaTrader lists long 4 NQ, a sell fill of 4 not in its list yet: 0): a sell of 4
+        // reduces by one reading, so it is never checked
+        b0 = Submits(simB);
+        Pos(simB, nq, 4);
+        Dictionary<string, List<double[]>> moves = (Dictionary<string, List<double[]>>)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null);
+        lock (moves) moves["SIM-B|" + nq.FullName] = new List<double[]> { new double[] { -4, ChartBridgeTime.NowUtcMs() } };
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":4"));
+        Check(Rejection() == "" && Submits(simB) == b0 + 1, "LIM page (the review): listed long 4, the other reading 0: Sell 4 is not refused: " + Rejection());
+        Flat();
+        // the reviewer's case on Anthony's own orders, 2 minis / 40 micros: holding 15 MNQ, a buy of 1 NQ; holding 1 NQ, a buy of 15
+        // MNQ: both refused (2.5 minis), the same rule whichever came first
+        G("memberRules", MR("SIM-B", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":2,\"maxMicros\":40")));
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "99");
+        Pos(simB, mnq, 15);
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        string r1 = Rejection();
+        Flat(); Pos(simB, nq, 1);
+        Clear(); O(Order("SIM-B", "MNQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":15"));
+        string r2 = Rejection();
+        Check(r1.Contains("over SIM-B's max of 2 minis: this entry of 1 NQ would take it to 2.5 minis") && r2.Contains("over SIM-B's max of 2 minis: this entry of 15 MNQ would take it to 2.5 minis") && r2.Contains("10 MNQ at most"),
+              "LIM page (Anthony's ruling, 10 micros = 1 mini): 15 MNQ then 1 NQ, and 1 NQ then 15 MNQ, both refused: " + r1 + " | " + r2);
+        Flat();
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "9");
+        G("memberRules", MR("SIM-B", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":40")));
         // the daily loss reached: one alert, then no machine entry for the rest of that trading day; his own orders still go
         Money(simC, 24400, 0, 0);
         Clear(); Tick(); Tick();
@@ -1680,7 +1720,9 @@ public static class GroupsHarness
         Check(held == "its stop risk $1,100 plus the open stop risk $500 is more than SIM-B's room to the floor $1,500", "LIM machine: the open stop risk counts (500 + 1100 past 1500): " + held);
         Check(ChartBridgeOrders.MachineHold("the bot", "held", simB, "NQ", 1, 0, 900) == null, "LIM machine: 500 + 900 within 1500: it goes");
         Flat(); Pos(simB, nq, 1);
-        Check(ChartBridgeOrders.MachineHold("the bot", "held", simB, "NQ", 1, 0, 2000) == null, "LIM machine: a position with no stop: the open risk is not known, it goes");
+        Check(ChartBridgeOrders.MachineHold("the bot", "held", simB, "NQ", 1, 0, 1400) == null, "LIM machine: a position with no stop (open risk not known): its own $1,400 within the room 1500 goes");
+        held = ChartBridgeOrders.MachineHold("the bot", "held", simB, "NQ", 1, 0, 2000);
+        Check(held == "its stop risk $2,000 alone (the open stop risk not known) is more than SIM-B's room to the floor $1,500", "LIM machine (the review): open risk not known, but its own $2,000 alone is past the known room: held: " + held);
         Flat();
         Money(simC, 24700, 0, 0); Tick();
         held = ChartBridgeOrders.MachineHold("the copier", "skipped", simC, "NQ", 1, 0, 400);

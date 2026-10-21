@@ -1412,15 +1412,15 @@ test('ChartBridge 0.6.6: the firm\'s limits (Anthony 2026-10-20): his entries th
   const o = strip(read('ChartBridgeOrders.cs')), g = strip(read('ChartBridgeGroups.cs')), c = strip(read('ChartBridgeCopier.cs'));
   const place = o.slice(o.indexOf('private static string PlaceOrderLocked('), o.indexOf('private static string PriceText('));
   // one place in the order path for the page, the bot and every agent; only the part that opens or adds
-  assert.match(place, /int opening = Math\.Max\(0, qty - held\);\s*if \(opening > 0\)\s*\{\s*string limitWhy = bot \|\| agent != null\s*\? MachineHold\(bot \? "the bot" : "agent " \+ agent, "held", account, root, opening, held, [^;]+\)\s*: FirmMaxWhy\(account, root, opening, held\);\s*if \(limitWhy != null\) return limitWhy;\s*\}/);
-  assert.ok(place.indexOf('int opening =') < place.indexOf('account.CreateOrder(') && place.indexOf('int opening =') > place.indexOf('bool reduces ='), 'before the order exists, after the reduce rule');
+  assert.match(place, /int closing = isBuy \? Math\.Max\(Math\.Max\(-posNow, -posEff\), 0\) : Math\.Max\(Math\.Max\(posNow, posEff\), 0\);\s*int opening = Math\.Max\(0, qty - closing\);\s*if \(opening > 0\)\s*\{\s*string limitWhy = bot \|\| agent != null\s*\? MachineHold\(bot \? "the bot" : "agent " \+ agent, "held", account, root, opening, closing, [^;]+\)\s*: FirmMaxWhy\(account, root, opening, closing\);\s*if \(limitWhy != null\) return limitWhy;\s*\}/, 'the review: closing by the larger reading, so an order that reduces by either is never checked');
+  assert.ok(place.indexOf('int closing =') < place.indexOf('account.CreateOrder(') && place.indexOf('int closing =') > place.indexOf('bool reduces ='), 'before the order exists, after the reduce rule');
   // the page's check reads the max only (no room, no daily loss); the machines' adds the rooms and the daily loss reached
   const fmw = g.slice(g.indexOf('internal static string FirmMaxWhy('), g.indexOf('internal static string MachineHold('));
   assert.doesNotMatch(fmw, /RoomFloor|RoomDaily|DailyReached/);
   const mhw = g.slice(g.indexOf('internal static string MachineHoldWhy('), g.indexOf('// Review 1b: one group entry at a time'));
   assert.match(mhw, /FirmMaxWhy\(a, root, opening, closing\)/); assert.match(mhw, /DailyReached\(n\)/);
   assert.match(mhw, /if \(!entryRisk\.HasValue \|\| !n\.Balance\.HasValue \|\| n\.Balance\.Value <= 0\) return null;/, 'a risk or a balance not known lets it go');
-  assert.match(mhw, /if \(!open\.HasValue\) return null;/, 'the open risk not known lets it go');
+  assert.match(mhw, /double openKnown = open\.HasValue \? open\.Value : 0;/, 'the review: the open risk not known, its own stop risk alone still holds it past a known room');
   // the copier's one copy, through the same check
   assert.match(c, /ChartBridgeOrders\.MachineHold\("the copier", "skipped", a, fRoot, fq, 0, risk\)/);
   // the alerts, and nothing that flattens

@@ -148,61 +148,79 @@ namespace NinjaTrader.NinjaScript.AddOns
         // groupPreview answers each member's size, dollar risk and budget, or why it sits out; groupOrder carries the sizes Anthony saw
         // and confirmed: ChartBridge works them out again and refuses the whole entry if any changed (nothing is ever placed at a size
         // he did not see), then places each member's entry through PlaceOrder (every gate, the one-direction check, its own legs).
-        public sealed class GroupSeat { public string Account, Out; public int Size; public double Risk, Budget; }
+        public sealed class GroupSeat { public string Account, Out, Note; public int Size; public double Risk, Budget; }   // 0.6.6: Note, a member sized with a room unknown
         // micro contracts (10 to a mini equivalent in the max size, review 3); every other root is a mini
         public static readonly HashSet<string> MicroRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "MNQ", "MES", "M2K", "MYM", "MGC", "MCL", "SIL", "MBT", "MET", "M6E" };
         private static string Usd(double v) { return "$" + v.ToString("#,0.##", CultureInfo.InvariantCulture); }
 
         // One member's contracts (pure, for the harness): floor(budget / (stopTicks x tickValue)), budget = riskPct of its drawdown;
-        // never above maxLeft (its max size less what it holds and has working, every instrument in mini equivalents; 0.6.6: in the unit
-        // of the cap that applies, FirmMaxFor; -1 none) nor the
+        // never above maxLeft (its firm max less what it holds and has working, FirmMaxFor's combined rule; -1 none) nor the
         // maxQty cap less what it holds and has working on that side of this root; capped so ALL its open stop risk (openRisk: every
         // position at its working stops and every working entry at its own stop) plus this entry's stop fits its room to its floor and
-        // (with a daily loss rule) its daily room. A room or the open risk not known: it sits out. 0 always says why.
+        // (with a daily loss rule) its daily room. 0 always says why.
+        // 0.6.6 (Anthony's ruling on the review: "size it anyway"): a room NOT known no longer sits the member out: that room's cap is
+        // skipped and note says so ("room unknown: sized by risk only"); the open stop risk not known counts as 0 against a room that
+        // IS known (its own stop still caps it there) and note says so. No confirm for that reason.
         public static int GroupSize(double riskPct, double drawdown, int stopTicks, double tickValue, int maxLeft, string maxWords, int cap, string capWords, int held,
                                     double? roomFloor, string floorWhy, bool hasDaily, double? roomDaily, string dailyWhy, double? openRisk, string openWhy, out double budget, out string why)
         {
-            why = null;
+            string note;
+            return GroupSize(riskPct, drawdown, stopTicks, tickValue, maxLeft, maxWords, cap, capWords, held, roomFloor, floorWhy, hasDaily, roomDaily, dailyWhy, openRisk, openWhy, out budget, out why, out note);
+        }
+        public static int GroupSize(double riskPct, double drawdown, int stopTicks, double tickValue, int maxLeft, string maxWords, int cap, string capWords, int held,
+                                    double? roomFloor, string floorWhy, bool hasDaily, double? roomDaily, string dailyWhy, double? openRisk, string openWhy, out double budget, out string why, out string note)
+        {
+            why = null; note = null;
             budget = Math.Round(riskPct * drawdown) / 100;
             double per = stopTicks * tickValue;
-            if (!roomFloor.HasValue) { why = "its room to the floor is not known (" + (floorWhy ?? "not known") + ")"; return 0; }
-            if (hasDaily && !roomDaily.HasValue) { why = "its daily room is not known (" + (dailyWhy ?? "not known") + ")"; return 0; }
-            if (!openRisk.HasValue) { why = "its open stop risk is not known (" + (openWhy ?? "not known") + ")"; return 0; }
-            double open = Math.Round(openRisk.Value * 100) / 100;
+            bool floorKnown = roomFloor.HasValue, dailyKnown = !hasDaily || roomDaily.HasValue;
+            if (!floorKnown || !dailyKnown) note = "room unknown: sized by risk only (" + (!floorKnown ? "its room to the floor: " + (floorWhy ?? "not known") : "its daily room: " + (dailyWhy ?? "not known")) + ")";
+            else if (!openRisk.HasValue) note = "open stop risk unknown: its room caps this entry's own stop only (" + (openWhy ?? "not known") + ")";
+            double open = openRisk.HasValue ? Math.Round(openRisk.Value * 100) / 100 : 0;
             string less = open > 0 ? " less its open stop risk " + Usd(open) : "";
             int n = (int)Math.Floor(budget / per + 1e-9);
-            if (n < 1) { why = "its risk " + Usd(budget) + " (" + riskPct.ToString("0.##", CultureInfo.InvariantCulture) + "% of its max loss " + Usd(drawdown) + ") is less than one contract's stop (" + Usd(per) + " at " + stopTicks + " ticks)"; return 0; }
+            if (n < 1) { why = "its risk " + Usd(budget) + " (" + riskPct.ToString("0.##", CultureInfo.InvariantCulture) + "% of its max loss " + Usd(drawdown) + ") is less than one contract's stop (" + Usd(per) + " at " + stopTicks + " ticks)"; note = null; return 0; }
             held = Math.Max(0, held);
-            if (maxLeft >= 0 && maxLeft < n) { n = maxLeft; if (n < 1) { why = "it is at its max size (" + maxWords + ")"; return 0; } }
-            if (cap - held < n) { n = cap - held; if (n < 1) { why = "it is at the cap of " + cap + " (" + capWords + "; it holds or has working " + held + ")"; return 0; } }
-            int byFloor = (int)Math.Floor((roomFloor.Value - open) / per + 1e-9);
-            if (byFloor < n) { n = byFloor; if (n < 1) { why = "its room to the floor " + Usd(roomFloor.Value) + less + " is less than one contract's stop (" + Usd(per) + ")"; return 0; } }
-            if (hasDaily)
+            if (maxLeft >= 0 && maxLeft < n) { n = maxLeft; if (n < 1) { why = "it is at its max size (" + maxWords + ")"; note = null; return 0; } }
+            if (cap - held < n) { n = cap - held; if (n < 1) { why = "it is at the cap of " + cap + " (" + capWords + "; it holds or has working " + held + ")"; note = null; return 0; } }
+            if (floorKnown)
+            {
+                int byFloor = (int)Math.Floor((roomFloor.Value - open) / per + 1e-9);
+                if (byFloor < n) { n = byFloor; if (n < 1) { why = "its room to the floor " + Usd(roomFloor.Value) + less + " is less than one contract's stop (" + Usd(per) + ")"; note = null; return 0; } }
+            }
+            if (hasDaily && roomDaily.HasValue)
             {
                 int byDay = (int)Math.Floor((roomDaily.Value - open) / per + 1e-9);
-                if (byDay < n) { n = byDay; if (n < 1) { why = "its daily room " + Usd(roomDaily.Value) + less + " is less than one contract's stop (" + Usd(per) + ")"; return 0; } }
+                if (byDay < n) { n = byDay; if (n < 1) { why = "its daily room " + Usd(roomDaily.Value) + less + " is less than one contract's stop (" + Usd(per) + ")"; note = null; return 0; } }
             }
             return n;
         }
 
         // Review 3: the mini equivalents of a root (10 micros = 1 mini).
         public static double MiniEquivalent(string root) { return MicroRoots.Contains(root ?? "") ? 0.1 : 1; }
-        // 0.6.6 (Anthony 2026-10-20): the firm's max contracts, the one limit that holds every entry (his own, a group's and the
-        // machines'). Micros count against maxMicros where the firm gives one, minis against maxMinis; with only one of the two set,
-        // the other kind converts at 10 micros to a mini. What the account holds and has working counts too, every instrument, in mini
-        // equivalents (usedMini, OpenStopRisk's count). Was (0.6.5): one max in mini equivalents, the smaller of maxMinis and maxMicros / 10
-        // when both were set (a firm allowing 4 minis or 40 micros capped the same; one allowing 2 minis or 40 micros held micros to 20).
-        // Unit: the kind the cap is in ("minis" or "micros"); Cap, Used (in that unit), Per: one contract of the root in that unit;
-        // Left: the root's contracts still allowed (0 or more). Null when the rules set no max.
+        // 0.6.6 (Anthony 2026-10-20, his ruling on the review: "10 micros = 1 mini"): the firm's max contracts, the one limit that holds
+        // every entry (his own, a group's and the machines'), one combined rule whatever the entry's instrument, so the order of the
+        // trades never changes the answer: after the order, the account's total in mini equivalents (minis + micros / 10, held and
+        // working, every instrument: usedMini, OpenStopRisk's count) is at most maxMinis when it is set, and its total in micro
+        // equivalents (minis x 10 + micros) at most maxMicros when it is set. Both set: both hold (the tighter decides).
+        // Unit: the cap that decides ("minis" or "micros"); Cap, Used (in that unit), Per: one contract of the root in that unit; Left:
+        // the root's contracts still allowed (0 or more). Null when the rules set no max. A tie names the root's own kind.
         public sealed class FirmMax { public string Unit; public double Cap, Used, Per; public int Left; }
         public static FirmMax FirmMaxFor(ChartBridgeGroups.Rules r, string root, double usedMini)
         {
             if (r == null || (r.MaxMinis <= 0 && r.MaxMicros <= 0)) return null;
-            bool micro = MicroRoots.Contains(root ?? ""), inMicros = micro ? r.MaxMicros > 0 : r.MaxMinis <= 0;
-            double k = inMicros ? 10 : 1;
-            FirmMax m = new FirmMax { Unit = inMicros ? "micros" : "minis", Cap = inMicros ? r.MaxMicros : r.MaxMinis, Used = Math.Round(Math.Max(0, usedMini) * k, 6), Per = MiniEquivalent(root) * k };
-            m.Left = Math.Max(0, (int)Math.Floor((m.Cap - m.Used) / m.Per + 1e-6));
-            return m;
+            bool micro = MicroRoots.Contains(root ?? "");
+            FirmMax best = null;
+            foreach (bool inMicros in micro ? new[] { true, false } : new[] { false, true })
+            {
+                int cap = inMicros ? r.MaxMicros : r.MaxMinis;
+                if (cap <= 0) continue;
+                double k = inMicros ? 10 : 1;
+                FirmMax m = new FirmMax { Unit = inMicros ? "micros" : "minis", Cap = cap, Used = Math.Round(Math.Max(0, usedMini) * k, 6), Per = MiniEquivalent(root) * k };
+                m.Left = Math.Max(0, (int)Math.Floor((m.Cap - m.Used) / m.Per + 1e-6));
+                if (best == null || m.Left < best.Left) best = m;
+            }
+            return best;
         }
         private static string Qty(double v) { return v.ToString("0.#", CultureInfo.InvariantCulture); }
 
@@ -337,9 +355,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             string ignored;
             double used;
             double? open = OpenStopRisk(a, out ignored, out used);
-            if (!open.HasValue) return null;
-            double total = Math.Round((open.Value + entryRisk.Value) * 100) / 100;
-            string words = "its stop risk " + Usd(entryRisk.Value) + (open.Value > 0.004 ? " plus the open stop risk " + Usd(Math.Round(open.Value * 100) / 100) : "");
+            // the review: the open stop risk not known (never below 0) still holds an entry whose own stop risk alone is past a known room
+            double openKnown = open.HasValue ? open.Value : 0;
+            double total = Math.Round((openKnown + entryRisk.Value) * 100) / 100;
+            string words = "its stop risk " + Usd(entryRisk.Value) + (openKnown > 0.004 ? " plus the open stop risk " + Usd(Math.Round(openKnown * 100) / 100) : !open.HasValue ? " alone (the open stop risk not known)" : "");
             if (n.RoomFloor.HasValue && total > n.RoomFloor.Value + 0.004) return words + " is more than " + a.Name + "'s room to the floor " + Usd(n.RoomFloor.Value);
             if (n.RoomDaily.HasValue && total > n.RoomDaily.Value + 0.004) return words + " is more than " + a.Name + "'s daily room " + Usd(n.RoomDaily.Value);
             return null;
@@ -372,6 +391,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string taken = GroupTakenWhy(name);
                 if (taken != null) { s.Out = taken; continue; }
                 if (a == null) { s.Out = "it is not in NinjaTrader now"; continue; }
+                if (a.Connection == null || a.Connection.Status != ConnectionStatus.Connected) { s.Out = "it is not connected"; continue; }   // 0.6.6: no longer caught by its room not known
                 ChartBridgeGroups.Numbers n = ChartBridgeGroups.Read(name, a, false);
                 if (n.R == null) { s.Out = "it is not in group " + g.Name + " now"; continue; }
                 int posNow = SignedPosition(a, inst), posEff = EffectivePosition(a, inst), pb, ps;
@@ -381,12 +401,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 n.Why.TryGetValue("roomFloor", out floorWhy); n.Why.TryGetValue("roomDaily", out dailyWhy);
                 double usedMini, budget;
                 double? openRisk = OpenStopRisk(a, out openWhy, out usedMini);
-                FirmMax fm = FirmMaxFor(n.R, root, usedMini);   // 0.6.6: micros against maxMicros, minis against maxMinis
+                FirmMax fm = FirmMaxFor(n.R, root, usedMini);   // 0.6.6: the combined rule (10 micros = 1 mini), both caps
                 int maxLeft = fm == null ? -1 : fm.Left;
                 string maxWords = fm == null ? "" : (n.R.MaxMinis > 0 && n.R.MaxMicros > 0 ? n.R.MaxMinis + " minis / " + n.R.MaxMicros + " micros" : n.R.MaxMinis > 0 ? n.R.MaxMinis + " minis" : n.R.MaxMicros + " micros") + "; it holds or has working " + usedMini.ToString("0.#", CultureInfo.InvariantCulture) + " in mini equivalents, every instrument";
+                string note;
                 s.Size = GroupSize(riskPct, n.R.Drawdown, stopTicks, tickValue, maxLeft, maxWords, CapFor(root), "maxQty." + root + " in config.txt", held,
-                                   n.RoomFloor, floorWhy, n.R.DailyLoss > 0, n.RoomDaily, dailyWhy, openRisk, openWhy, out budget, out why);
-                s.Budget = budget; s.Out = why; s.Risk = Math.Round(s.Size * stopTicks * tickValue * 100) / 100;
+                                   n.RoomFloor, floorWhy, n.R.DailyLoss > 0, n.RoomDaily, dailyWhy, openRisk, openWhy, out budget, out why, out note);
+                s.Budget = budget; s.Out = why; s.Note = s.Size > 0 ? note : null; s.Risk = Math.Round(s.Size * stopTicks * tickValue * 100) / 100;
             }
             return seats;
         }
@@ -406,7 +427,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string SeatsJson(List<GroupSeat> seats)
         {
             return "[" + string.Join(",", seats.Select(s => "{\"account\":" + CbJson.Str(s.Account) + ",\"size\":" + s.Size.ToString(CultureInfo.InvariantCulture) + ",\"risk\":" + CbJson.Num(s.Risk) +
-                ",\"budget\":" + CbJson.Num(s.Budget) + ",\"out\":" + (s.Out == null ? "null" : CbJson.Str(s.Out)) + "}")) + "]";
+                ",\"budget\":" + CbJson.Num(s.Budget) + ",\"out\":" + (s.Out == null ? "null" : CbJson.Str(s.Out)) + (s.Note != null ? ",\"note\":" + CbJson.Str(s.Note) : "") + "}")) + "]";
         }
 
         // groupPreview and groupOrder (the order connection's gates have passed in OnMessage).
@@ -559,7 +580,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const string MarksHeader = "# ChartBridge account marks (written by ChartBridge; do not edit)";
         public const string MarksHeader2 = "# mark<TAB>account<TAB>peakEod|-<TAB>peakIntraday|-<TAB>dayStartBalance|-<TAB>session<TAB>dayStartAt (UTC ms)|-<TAB>closeSeen|-<TAB>lastBalance|-<TAB>flat|open|-<TAB>eodMissed|-<TAB>intradayMissed|-";
         public static double GapMs = 10000;   // 0.6.3 (audit C2): no reading of a connected account for this long is a gap ChartBridge did not watch
-        public const string ReadFailedText = "groups.txt could not be read: every new entry is refused until it can (exits always work)";
+        // 0.6.6 (Anthony's ruling on the review, "My single orders go"): his own single-account entries still go; group entries and the
+        // bot's, the agents' and the copier's entries stay refused (they read the groups: one direction, an agent's seats)
+        public const string ReadFailedText = "groups.txt could not be read: group entries and the bot's, the agents' and the copier's entries are refused until it can (your own single-account orders and every exit still go)";
         public const double MaxMoney = 100000000;
         public static double MarksWriteMs = 5000;  // account-marks.txt at most every 5 s while something changed (the harness sets 0)
         public const int NameMax = 30;
@@ -1325,7 +1348,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> members;
             lock (Mem)
             {
-                if (readError != null) return ReadFailedText;
+                // 0.6.6 (Anthony's ruling): his own single-account entry goes (its group, and so one direction, cannot be known); every
+                // other source stays refused. A group entry never reaches this (GroupPlan refuses it first, with a banner).
+                if (readError != null) return source == "page" ? null : ReadFailedText;
                 string id;
                 if (!state.Members.TryGetValue(a.Name, out id) || !state.Groups.TryGetValue(id, out g)) return null;
                 g = g.Clone();
