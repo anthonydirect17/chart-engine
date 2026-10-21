@@ -384,7 +384,7 @@ try {
   const before2 = await control(CL_PORT, 'received');
   await p5.click(`${AP} button[data-act="floors-desk"]`);
   const fpanel = await until(() => p5.$eval(`${AP} .apg-floors`, e => /Send 1 floor to ChartBridge/.test(e.textContent) ? e.textContent : null).catch(() => null), 'the floors from The Desk');
-  check(!!fpanel && /EVAL-A \(Sample 50K\): floor \$49,600\.00 ChartBridge now \$49,500\.00/.test(fpanel), 'each floor as The Desk has it, beside ChartBridge\'s: ' + fpanel);
+  check(!!fpanel && /e50 EVAL-A · The Desk: Sample 50K: floor \$49,600\.00 ChartBridge now \$49,500\.00/.test(fpanel), 'each floor as The Desk has it, beside ChartBridge\'s: ' + fpanel);
   check(/NOPE-X: skipped, ChartBridge does not list it on this PC/.test(fpanel) && /Sample 150K: skipped, not linked to a fills account/.test(fpanel), 'every skip says why');
   await p5.screenshot({ path: path.join(out, 'accounts-12-floors-desk-1366.png') });
   check(((await control(CL_PORT, 'received')).types.firmMinimum || 0) === (before2.types.firmMinimum || 0), 'nothing sent before the confirm');

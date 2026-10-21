@@ -162,7 +162,10 @@ try {
   await until(async () => (await A()).agents.length === 2, 'ChartBridge told of both agents after sign-in');
   /* 1.35.0 (Anthony 2026-10-21): the Bot tab moved to a panel of its own (+ Add panel, Bot); the Agent tab stays where it was,
      with the League tab after it */
-  check(await page.isVisible('#wsAgentTab') && !(await page.isVisible('#wsBotTab')), 'the Agent tab button is in the top bar (the Bot tab is a panel now)');
+  /* review 2 of 1.35.0: the Bot button comes back to the top bar only while it carries its red alert (this sample bot is on but
+     not connected), so the alert is never hidden */
+  check(await page.isVisible('#wsAgentTab') && (!(await page.isVisible('#wsBotTab')) || await page.$eval('#wsBotTab', b => b.classList.contains('bt-alert'))),
+    'the Agent tab button is in the top bar (the Bot tab is a panel now; its button is there only with its red alert)');
   check(await page.evaluate(() => { const a = document.getElementById('wsAgentTab'); return a.nextElementSibling === document.getElementById('wsLeagueTab') && a.previousElementSibling === document.getElementById('wsTabSlot'); }), 'where it was, the League tab right after it');
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
   await control('agent-connect', { agent: 'demotwo', name: 'Second Demo Agent', build: 'sample-build-7' });
