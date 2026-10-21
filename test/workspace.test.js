@@ -280,3 +280,12 @@ test('2026-10-21 (Anthony): the groups.txt alarm gets the sound: the page knows 
   const page = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
   assert.match(page, /alertOnce\(m\.text\) && W\.GROUPS_ALARM\.test\(m\.text \|\| ''\)\) riskSound\(\)/, 'a banner and a sound, never a dialog');
 });
+
+test('2026-10-21 (review of b4bc612): floors and rooms from the copy of groups.txt say so on the page', () => {
+  const ws = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
+  const ac = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'accounts.js'), 'utf8');
+  assert.match(ws, /\(typeof a\.fromCopy === 'string' && a\.fromCopy \? ' \(' \+ a\.fromCopy \+ '\)' : ''\)/, 'the ticket\'s room line');
+  assert.match(ac, /'groups\.txt could not be read: ' \+ a\.fromCopy/, 'the Accounts tab\'s Room tooltip');
+  const cs = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'nt8', 'ChartBridgeGroups.cs'), 'utf8');
+  assert.match(cs, /Append\(",\\"fromCopy\\":"\)/, 'ChartBridge sends it');
+});

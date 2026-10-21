@@ -1375,7 +1375,8 @@ function renderRoom() {
     const ticks = st && st.stop ? (+st.stop.ticks || 0) + (st.stop.type === 'limit' ? +st.stop.limitOffsetTicks || 0 : 0) : +b.stop || 0;
     const pv = (instruments[R] || {}).pointValue || 0, risk = ticks > 0 && pv > 0 ? ticketQty() * ticks * tickOf(R) * pv : null;
     const parts = [num(a.roomDaily) ? usd(a.roomDaily) + ' daily' : '', num(a.roomFloor) ? usd(a.roomFloor) + ' to floor' : ''].filter(Boolean);
-    text = 'Room ' + parts.join(' · ') + (ticks > 0 ? (risk !== null ? ' · entry ' + usd(risk) + ' at stop' : '') : ' · entry: no stop');
+    text = 'Room ' + parts.join(' · ') + (ticks > 0 ? (risk !== null ? ' · entry ' + usd(risk) + ' at stop' : '') : ' · entry: no stop') +
+      (typeof a.fromCopy === 'string' && a.fromCopy ? ' (' + a.fromCopy + ')' : '');   // 2026-10-21: worked out from groups.txt.good
     tip = acct + ': ' + [num(a.roomDaily) ? usd(a.roomDaily) + ' of daily room left' : '', num(a.roomFloor) ? usd(a.roomFloor) + ' to the floor' + (num(a.floor) ? ' (' + usd(a.floor) + ')' : '') : ''].filter(Boolean).join(', ') +
       ' (ChartBridge, from its rules).' + (ticks > 0 && risk !== null ? ' This entry: ' + ticketQty() + ' ' + R + ' at a ' + ticks + ' tick stop risks ' + usd(risk) + (st ? ' (the Order Strategy\'s stop)' : '') + '.' : '') + ' Shown only: nothing is held on it.';
   }

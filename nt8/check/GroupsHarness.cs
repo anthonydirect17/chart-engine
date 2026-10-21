@@ -20,7 +20,7 @@ public static class GroupsHarness
     // 0.6.3 (audit C3): a file broken on purpose, with no last good copy (.bak) to fall back to (the backup cases are their own)
     // 0.6.3 (review MED 5): a file gone means no copy beside it either (a .bak or .tmp left would be used, or stand the agent down)
     static void Gone(string path) { File.Delete(path); File.Delete(path + ".bak"); File.Delete(path + ".tmp"); }
-    static void Corrupt(string path, string text) { try { Gone(path + ".bak"); } catch (Exception) { } File.WriteAllText(path, text); }
+    static void Corrupt(string path, string text) { try { Gone(path + ".bak"); File.Delete(path + ".good"); } catch (Exception) { } File.WriteAllText(path, text); }   // no clean copy left (2026-10-21: .good)
     const BindingFlags PS = BindingFlags.NonPublic | BindingFlags.Static;
     static readonly List<string> sent = new List<string>();
     static ChartBridgeClient page;
@@ -1044,38 +1044,53 @@ public static class GroupsHarness
     static void LastGoodCopy(string p, string was)
     {
         string good = ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t-\t-\t-\t-\nmember\tSIM-A\tg1\nmember\tSIM-B\tg1\n";
+        // the copy is written after every clean read and every save, and is exactly the file
+        File.WriteAllText(p, good); File.Delete(p + ".good");
+        Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        Check(File.Exists(p + ".good") && File.ReadAllText(p + ".good") == good, "2026-10-21 (review of b4bc612): a clean read writes groups.txt.good, the file as read");
+        Clear(); G("groupSave", Save("", "New", "true", "0", "2000", "eod", "0", "50000", "0"));
+        Check(Rejection() == "" && File.ReadAllText(p + ".good") == File.ReadAllText(p) && File.ReadAllText(p + ".good").Contains("\tNew\t"), "2026-10-21: a save writes groups.txt.good too (the latest save, never one change behind)");
+        // a .bak (the copy before the latest save) is never the machines' copy: with no .good they wait
+        Corrupt(p, "no header\n");
+        File.WriteAllText(p + ".bak", good);
+        Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+        Check(ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText + ChartBridgeGroups.MachinesWaitText && ChartBridgeGroups.Unreadable(),
+              "2026-10-21 (review of b4bc612): only groups.txt.good is the machines' copy: a .bak alone, and they wait");
         foreach (bool missing in new[] { false, true })
         {
             Corrupt(p, "no header\n");
-            File.WriteAllText(p + ".bak", good);
-            if (missing) File.Delete(p);
+            File.WriteAllText(p + ".good", good);
+            File.SetLastWriteTimeUtc(p + ".good", new DateTime(2026, 10, 21, 12, 14, 0, DateTimeKind.Utc));   // 08:14 ET
+            if (missing) { File.WriteAllText(p + ".bak", good.Replace("SIM-B", "SIM-C")); File.Delete(p); }   // a cut-off save: the .bak beside is not the copy
             Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
             foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
-            string tag = missing ? "groups.txt missing, its .bak beside it" : "groups.txt unreadable, its .bak good";
+            string tag = missing ? "groups.txt missing, a .bak beside it, a good .good" : "groups.txt unreadable, a good .good";
             string gj = ChartBridgeGroups.GroupsJson();
-            Check(Any("groups.txt could not be read") && Any("the bot, the agents and the copier run on its last good copy (groups.txt.bak)") &&
-                  gj.Contains("run on its last good copy (groups.txt.bak)") && gj.Contains("\"name\":\"Lucid\""), "2026-10-21 (" + tag + "): the alarm says the machines run on the last good copy; the groups message lists it: " + gj);
+            Check(Any("groups.txt could not be read") && Any("the bot, the agents and the copier run on its last good copy (groups.txt.good, from the copy of 2026-10-21 08:14 ET)") &&
+                  gj.Contains("from the copy of 2026-10-21 08:14 ET") && gj.Contains("\"name\":\"Lucid\""), "2026-10-21 (" + tag + "): the alarm says the machines run on the copy and of when; the groups message lists it: " + gj);
             Check(ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == null && ChartBridgeGroups.EntryCheck("agent:x", simD, "MNQ", true, 1, true, false) == null &&
                   ChartBridgeGroups.EntryCheck("copier", simD, "MNQ", true, 1, true, false) == null && ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == null,
                   "2026-10-21 (" + tag + "): the bot's, an agent's and the copier's entries are not blocked; his single orders go");
-            Check(!ChartBridgeGroups.Unreadable() && ChartBridgeGroups.FileUnreadable() && ChartBridgeGroups.GroupOf("SIM-B") == "g1" &&
-                  string.Join(",", ChartBridgeGroups.MembersOf("g1") ?? new List<string>()) == "SIM-A,SIM-B", "2026-10-21 (" + tag + "): the agents see the last good copy's groups and seats");
+            Check(!ChartBridgeGroups.Unreadable() && ChartBridgeGroups.FileUnreadable() && ChartBridgeGroups.GroupOf("SIM-B") == "g1" && ChartBridgeGroups.GroupOf("SIM-C") == null &&
+                  string.Join(",", ChartBridgeGroups.MembersOf("g1") ?? new List<string>()) == "SIM-A,SIM-B", "2026-10-21 (" + tag + "): the agents see the copy's groups and seats (never the .bak's)");
+            Check(Entry(AccountsNow(), "SIM-A").Contains("\"fromCopy\":\"from the copy of 2026-10-21 08:14 ET\""),
+                  "2026-10-21 (review of b4bc612): floors and rooms worked out from the copy say so: " + Entry(AccountsNow(), "SIM-A"));
             Pos(simA, mnq, 1);
             string held = ChartBridgeGroups.EntryCheck("bot", simB, "MNQ", false, 1, true, false);
-            Check(held != null && held.Contains("Group Lucid is long"), "2026-10-21 (" + tag + "): the last good copy's rules hold the machines (one direction): " + held);
+            Check(held != null && held.Contains("Group Lucid is long"), "2026-10-21 (" + tag + "): the copy's rules hold the machines (one direction): " + held);
             Flat();
             Clear(); GP("groupPreview", "{\"type\":\"groupPreview\",\"cid\":\"ge\",\"group\":\"g1\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"market\",\"bracket\":{\"stop\":20,\"target\":40}}");
             Check(Rejection().Contains(ChartBridgeGroups.ReadFailedText), "2026-10-21 (" + tag + "): his group entry from the page is still refused: " + Rejection());
             Clear(); G("groupSave", Save("", "New", "true", "0", "2000", "eod", "0", "50000", "0"));
-            Check(Rejection().Contains("groups.txt could not be read") && (missing ? !File.Exists(p) : File.ReadAllText(p) == "no header\n") && File.ReadAllText(p + ".bak") == good,
-                  "2026-10-21 (" + tag + "): changes refused, neither file rewritten");
+            Check(Rejection().Contains("groups.txt could not be read") && (missing ? !File.Exists(p) : File.ReadAllText(p) == "no header\n") && File.ReadAllText(p + ".good") == good,
+                  "2026-10-21 (" + tag + "): changes refused, neither groups.txt nor its copy rewritten");
             List<string> late = new List<string>();
             ChartBridgeClient lc = new ChartBridgeClient(null, 778) { Origin = "http://localhost:8765" };
             lc.Tap = x => { lock (late) late.Add(x); };
             ChartBridgeAccounts.SignedIn(lc);
-            Check(late.Any(x => x.Contains("\"level\":\"error\"") && x.Contains("run on its last good copy")), "2026-10-21 (" + tag + "): a page that signs in gets the alarm (the page's banner and sound)");
+            Check(late.Any(x => x.Contains("\"level\":\"error\"") && x.Contains("from the copy of 2026-10-21 08:14 ET")), "2026-10-21 (" + tag + "): a page that signs in gets the alarm (the page's banner and sound)");
         }
-        Gone(p + ".bak");
+        Gone(p + ".bak"); File.Delete(p + ".good");
         File.WriteAllText(p, was);
     }
 

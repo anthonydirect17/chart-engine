@@ -137,17 +137,24 @@ function cleanRecord(r) {
   return { id: r.id, account: r.account, root: r.root, phase: r.phase, dim: r.dim, value: r.value, trade_open_ms: tom, at_ms: r.at_ms };
 }
 
-/** This browser's copy: { records (newest KEEP), pending (ids not yet taken by The Desk) }, from its JSON; never throws. */
+/**
+ * This browser's copy: { records, pending (ids not yet taken by The Desk), dropped (records lost before The Desk took them, ever) },
+ * from its JSON; never throws. Every pending record is kept; of the others (The Desk has them) the newest KEEP (the review of
+ * b4bc612: trimming never drops an unsent record). A pending id whose record is not usable is counted in dropped.
+ */
 function cleanStore(raw) {
   let v = raw;
   if (typeof raw === 'string') { try { v = JSON.parse(raw); } catch (e) { v = null; } }
-  const out = { records: [], pending: [] };
+  const out = { records: [], pending: [], dropped: 0 };
   if (!v || typeof v !== 'object') return out;
-  const seen = new Set();
-  for (const r of Array.isArray(v.records) ? v.records : []) { const c = cleanRecord(r); if (c && !seen.has(c.id)) { seen.add(c.id); out.records.push(c); } }
-  out.records = out.records.slice(-KEEP);
-  const kept = new Set(out.records.map(r => r.id));
-  out.pending = [...new Set((Array.isArray(v.pending) ? v.pending : []).filter(id => typeof id === 'string' && kept.has(id)))];
+  out.dropped = Number.isInteger(v.dropped) && v.dropped > 0 ? v.dropped : 0;
+  const seen = new Set(), all = [];
+  for (const r of Array.isArray(v.records) ? v.records : []) { const c = cleanRecord(r); if (c && !seen.has(c.id)) { seen.add(c.id); all.push(c); } }
+  const want = new Set((Array.isArray(v.pending) ? v.pending : []).filter(id => typeof id === 'string'));
+  for (const id of want) if (!seen.has(id)) out.dropped++;
+  const sent = all.filter(r => !want.has(r.id)), keepSent = new Set(sent.slice(-KEEP).map(r => r.id));
+  out.records = all.filter(r => want.has(r.id) || keepSent.has(r.id));
+  out.pending = out.records.filter(r => want.has(r.id)).map(r => r.id);
   return out;
 }
 
@@ -155,7 +162,7 @@ function cleanStore(raw) {
 function mergeRecords(mine, desk) {
   const have = new Set(mine.map(r => r.id)), out = mine.slice();
   for (const r of Array.isArray(desk) ? desk : []) { const c = cleanRecord(r); if (c && !have.has(c.id)) { have.add(c.id); out.push(c); } }
-  return out.sort((a, b) => a.at_ms - b.at_ms).slice(-KEEP);
+  return out.sort((a, b) => a.at_ms - b.at_ms);   // cleanStore trims, never a pending record
 }
 
 return { CHIPS, DIMS, DIM_LABEL, ROOTS, PHASES, MATCH_MS, KEEP, STORE_KEY, labelOf, newId, sessionStartMs, tradesOf, targetOf, recordsFor, chipsOf,
@@ -197,7 +204,7 @@ function hub(env) {
         const done = new Set(batch.map(r => r.id));
         H.state.pending = H.state.pending.filter(id => !done.has(id));
         const refused = (j && Array.isArray(j.rejected) ? j.rejected : []).concat(j && Array.isArray(j.conflicts) ? j.conflicts : []);
-        if (refused.length) { const bad = new Set(refused.map(x => x && x.id)); H.state.records = H.state.records.filter(r => !bad.has(r.id)); }
+        if (refused.length) { const bad = new Set(refused.map(x => x && x.id)); H.state.records = H.state.records.filter(r => !bad.has(r.id)); H.state.dropped += refused.length; }
         write();
         H.deskState = 'ok'; H.deskNote = refused.length ? 'The Desk refused ' + refused.length + ' record' + (refused.length > 1 ? 's' : '') + ': ' + (refused[0].reason || '') : '';
       }, e => { H.deskState = 'down'; H.deskNote = e && e.message ? e.message : 'not reachable'; })
@@ -210,7 +217,7 @@ function hub(env) {
     H.loaded.add(k);
     env.deskBase().then(url => env.fetch(url + '/api/trade-tags?' + new URLSearchParams({ account, root, since_ms: String(since) }), { mode: 'cors', credentials: 'omit', cache: 'no-store' }))
       .then(r => (r.ok ? r.json() : Promise.reject(new Error('The Desk answered ' + r.status))))
-      .then(j => { read(); H.state.records = C.mergeRecords(H.state.records, j && j.tags); write(); changed(); }, () => { H.loaded.delete(k); });
+      .then(j => { read(); H.state = C.cleanStore({ records: C.mergeRecords(H.state.records, j && j.tags), pending: H.state.pending, dropped: H.state.dropped }); write(); changed(); }, () => { H.loaded.delete(k); });
   };
   H.timer = setInterval(H.send, SEND_EVERY_MS);
   if (typeof window.addEventListener === 'function') window.addEventListener('storage', e => { if (e.key && e.key.endsWith(C.STORE_KEY)) { read(); changed(); } });
@@ -276,6 +283,7 @@ function mount(el, env) {
     else if (first.t.why) note('Not taggable: ' + first.t.why + '.', true);
     else if (H.deskState === 'down' && waiting) note(waiting + ' waiting for The Desk (' + H.deskNote + '): kept in this browser and sent again.', true);
     else if (H.deskNote) note(H.deskNote, true);
+    else if (H.state.dropped) note(H.state.dropped + ' tag record' + (H.state.dropped > 1 ? 's were' : ' was') + ' lost before The Desk took ' + (H.state.dropped > 1 ? 'them' : 'it') + ' (unreadable in this browser, or refused).', true);
     else if (waiting) note('Sending ' + waiting + ' to The Desk...', false);
     else note(v.accts.length > 1 ? 'Each click is recorded for ' + v.accts.length + ' accounts of ' + env.label() + '.' : (recs.length ? 'Saved to The Desk. Levels, delta, MFE, MAE and the stop are measured from the trade.' : 'Click what you entered on. Levels, delta, MFE, MAE and the stop are measured from the trade.'), false);
   }

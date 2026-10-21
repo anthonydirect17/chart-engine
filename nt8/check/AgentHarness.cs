@@ -25,7 +25,7 @@ public static class AgentHarness
     // 0.6.3 (audit C3): a file broken on purpose, with no last good copy (.bak) to fall back to (the backup cases are their own)
     // 0.6.3 (review MED 5): a file gone means no copy beside it either (a .bak or .tmp left would be used, or stand the agent down)
     static void Gone(string path) { File.Delete(path); File.Delete(path + ".bak"); File.Delete(path + ".tmp"); }
-    static void Corrupt(string path, string text) { try { Gone(path + ".bak"); } catch (Exception) { } File.WriteAllText(path, text); }
+    static void Corrupt(string path, string text) { try { Gone(path + ".bak"); File.Delete(path + ".good"); } catch (Exception) { } File.WriteAllText(path, text); }   // no clean copy left (2026-10-21: groups.txt.good)
     const BindingFlags PS = BindingFlags.NonPublic | BindingFlags.Static;
     static readonly List<string> page = new List<string>(), agentOut = new List<string>(), demobOut = new List<string>();
     static ChartBridgeClient pc, ac, dc;

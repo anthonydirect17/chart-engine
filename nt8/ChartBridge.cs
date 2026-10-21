@@ -2081,6 +2081,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeBot.Stop();   // 0.4.0 bot
                 ChartBridgeAgents.Stop();   // 0.5.0 agents
                 ChartBridgeBars.Stop();
+                try { ChartBridgeStops.SaveIfDirty(); } catch (Exception) { }   // 0.6.6: the stop events not saved yet (the 10 s timer saves them)
                 ChartBridgeCopier.Stop();   // 0.4.0 copier:
                 ChartBridgeClock.Stop();    // 0.5.6: the time check
                 try { if (accountTimer != null) accountTimer.Dispose(); } catch (Exception) { }
@@ -4977,7 +4978,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Account a = sender as Account;
             Count(a != null ? a.Name : "", 1);
             try { ChartBridgeOrders.OnOrderUpdate(a, e); } catch (Exception ex) { Log("order update error: " + ex.Message); }
-            try { ChartBridgeStops.Observe(a, e.Order); } catch (Exception ex) { Log("stop record error: " + ex.Message); }   // 0.6.6: the stop record to The Desk (ChartBridgeStops.cs)
+            try { ChartBridgeStops.Observe(a, e); } catch (Exception ex) { Log("stop record error: " + ex.Message); }   // 0.6.6: the stop record to The Desk (ChartBridgeStops.cs)
         }
 
         private static void OnPositionUpdate(object sender, PositionEventArgs e)

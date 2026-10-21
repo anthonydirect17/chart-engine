@@ -3490,15 +3490,21 @@ order that reduces by either reading is never checked.
   (...)". A member that is not connected sits out ("it is not connected"; 0.6.5 said its room was not known). The page shows the note
   quietly on the ticket and never asks a confirm for it.
 - **groups.txt that cannot be read** (Anthony's rulings: "My single orders go", and of 2026-10-21: never block the bot, the agents
-  or the copier): his own single-account entries go (its group, and so the one-direction check, cannot be known then); group entries
-  from the page and every change are refused (the page's banner says why) and the file is never rewritten. The bot, the agents and
-  the copier run on the last groups that read cleanly: `groups.txt.bak` (the copy each save keeps), or the copy a cut-off save left
-  beside a missing `groups.txt`, a file that cannot be opened at all included. Their one-direction check, an agent's seats and the
-  firm's rules and rooms come from that copy. With no clean copy there is nothing to run on, so their entries wait. Every exit goes,
-  as before. Either way the alarm is a `status` `error` to every signed-in page, which shows it as its banner with the alert sound,
-  never a dialog. Its text: "groups.txt could not be read: group entries are refused until it can (your own single-account orders and
-  every exit still go)", then "; the bot, the agents and the copier run on its last good copy (groups.txt.bak)" or "; no copy of the
-  groups read cleanly, so the bot's, the agents' and the copier's entries wait until it can", then why.
+  or the copier; "the last groups that read cleanly"): his own single-account entries go (its group, and so the one-direction check,
+  cannot be known then); group entries from the page and every change are refused (the page's banner says why) and the file is never
+  rewritten. ChartBridge writes `groups.txt.good`, the file exactly as it last read cleanly or was last saved, after every clean read
+  and every save. While groups.txt cannot be read (a file that cannot be opened after 5 tries 0.1 s apart included, or missing with a
+  copy left beside it), the bot, the agents and the copier run on `groups.txt.good` only: never `groups.txt.bak` (the copy before the
+  latest save, one change behind) nor `.tmp`. Their one-direction check, an agent's seats and the firm's rules and rooms come from
+  it. With no `groups.txt.good` there is nothing to run on, so their entries wait. Every exit goes, as before. The Q-EXIT pass that
+  cancels an exit left behind in a group (`Leftovers`) stays off while groups.txt cannot be read, even when the machines run on the
+  copy. Either way the alarm is a `status` `error` to every signed-in page, which shows it as its banner with the alert sound, never
+  a dialog. Its text: "groups.txt could not be read: group entries are refused until it can (your own single-account orders and
+  every exit still go)", then "; the bot, the agents and the copier run on its last good copy (groups.txt.good, from the copy of
+  2026-10-21 08:14 ET)" (the time `groups.txt.good` was written, New York time) or "; no copy of the groups read cleanly, so the
+  bot's, the agents' and the copier's entries wait until it can", then why. While the machines run on the copy, each entry of the
+  accounts message gains `fromCopy` ("from the copy of 2026-10-21 08:14 ET"): its floor and rooms were worked out from it, and the
+  page says so beside them.
 - **The accounts message** entries gain `unserved` (last): the contracts the account holds or has working orders in that ChartBridge
   does not serve, by name (`["YM 12-26"]`, empty for none), which no flatten from the page can reach.
 - **Going back to 0.6.5 after 0.6.6.** 0.6.6 writes the firm's rules of an account in no group as a `rules` line in `groups.txt`;
@@ -3538,10 +3544,20 @@ time) and how it ended; the fill and the exit are the fills it already has.
 
 - **On:** `postStops = true` in `config.txt`, or, with no `postStops` line, whenever `postFills = true` (the stop record goes where
   the fills go). `postStops = false` turns it off with fills on.
-- **Queue:** the fills' rules: `pending_stops.jsonl` next to `config.txt` (replaced atomically), 10 seconds a request, retried
-  every 10 seconds; a batch The Desk calls malformed (400 or 422) is sent one at a time and a single bad event is set aside in
-  `rejected_stops.jsonl`. The Desk stores an event once, so a resend is safe.
-- **`/diag` `stops`:** `on`, `waiting`, `seen`, `queued`, `sent`, `lastSendFailed`, `lastError`, `setAside`, `rejectedByDesk`.
+- **The values are the event's** (`OrderEventArgs`: its state, stop and limit price, quantity and fills), never the order's live
+  fields. A final event repeated (NinjaTrader sends some twice) is not a new event. A stop whose instrument has no master instrument
+  yet is skipped (one Output line).
+- **Queue:** the order event only adds to the queue in memory; nothing is written or sent on NinjaTrader's event thread. Every
+  10 seconds the account timer saves `pending_stops.jsonl` next to `config.txt` (replaced atomically) when it changed, then sends the
+  oldest batch (10 seconds a request); ChartBridge's stop saves it too. At most 20,000 events wait: past that the oldest are dropped,
+  counted in `/diag` and said once. A batch The Desk calls malformed (400 or 422) is sent one at a time and a single bad event is set
+  aside in `rejected_stops.jsonl`. A 404 (a Desk without `POST /api/stop-events`) means The Desk has no stop record: nothing more is
+  queued or sent until ChartBridge starts again (said once, the waiting events stay in the file). The Desk stores an event once, so
+  a resend is safe.
+- **`/diag` `stops`:** `on`, `deskHasNoStopRecord`, `dropped`, `waiting`, `seen`, `queued`, `sent`, `lastSendFailed`, `lastError`,
+  `setAside`, `rejectedByDesk`.
+- **Order ids:** NinjaTrader's id as first seen. An order with no id yet gets `cb<number>` from a counter that starts again at each
+  ChartBridge start, so after an NT8 restart two orders can share a `cb` id (rare; a per-start nonce is for the next release).
 - Nothing here places, changes or cancels an order, and nothing the pages get changes.
 
 ### Tape timing and new `/diag` counters

@@ -592,6 +592,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static string FilePath { get { return Path.Combine(ChartBridgeConfig.Folder, "groups.txt"); } }
         private static string MarksPath { get { return Path.Combine(ChartBridgeConfig.Folder, "account-marks.txt"); } }
+        // 2026-10-21 (Anthony, "the last groups that read cleanly"; the review of b4bc612): groups.txt as it last read cleanly or was
+        // last saved, written after every clean read and every save. The one copy the bot, the agents and the copier fall back on
+        // while groups.txt cannot be read (never .bak, the copy before the latest save, nor .tmp).
+        public static string GoodPath { get { return Path.Combine(ChartBridgeConfig.Folder, "groups.txt.good"); } }
 
         // Test hook: the UTC clock (unused in NinjaTrader).
         public static Func<DateTime> ClockUtc;
@@ -670,7 +674,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string readError;      // groups.txt exists but could not be read: group entries refused, never rewritten this run
         // 2026-10-21 (Anthony): with readError set, the last good copy (its file name) that `state` holds for the bot, the agents and the
         // copier, or null when none read cleanly (their entries wait)
-        private static string lastGoodFrom;
+        private static string lastGoodFrom, lastGoodAt;   // lastGoodAt: "2026-10-21 08:14 ET", when groups.txt.good was written
         private static readonly Dictionary<string, Mark> Marks = new Dictionary<string, Mark>(StringComparer.OrdinalIgnoreCase);
         private static string marksError;     // account-marks.txt could not be read: not rewritten this run, no marks kept
         private static bool marksDirty;
@@ -685,7 +689,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Mem)
             {
                 ExitOf.Clear(); ExitHeld.Clear(); FlatSince.Clear(); LeftCancelled.Clear(); LeftLooked.Clear(); PosSide.Clear();
-                state = new State(); loaded = false; readError = null; lastGoodFrom = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
+                state = new State(); loaded = false; readError = null; lastGoodFrom = null; lastGoodAt = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
                 marksSaveFailed = false; lastGroupsJson = null; LastSide.Clear();
             }
             ClearDailyHits();   // 0.6.6
@@ -730,7 +734,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                     State bs = b != null ? Parse(b, out berr) : null;
                     if (bs == null) continue;
                     exists = true;
-                    good = bs; goodFrom = Path.GetFileName(alt);
                     err = "groups.txt is missing (a save cut off?) but " + Path.GetFileName(alt) + " is there and holds " + bs.Groups.Count + " group" + (bs.Groups.Count == 1 ? "" : "s") + (bs.Groups.Count > 0 ? " (" + string.Join(", ", bs.Groups.Values.Select(g => g.Name)) + ")" : "") + " with " + bs.Members.Count + " account" + (bs.Members.Count == 1 ? "" : "s") + " in them: to go back to it, copy " + Path.GetFileName(alt) + " to groups.txt; to start with no groups, delete it";
                     break;
                 }
@@ -746,10 +749,20 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string[] b = ChartBridgeFiles.ReadBackup(FilePath);
                     string berr;
                     State bs = b != null ? Parse(b, out berr) : null;
-                    if (bs != null) { good = bs; goodFrom = "groups.txt.bak"; }
                     if (bs != null) err += "; its last good copy, groups.txt.bak, holds " + bs.Groups.Count + " group" + (bs.Groups.Count == 1 ? "" : "s") + (bs.Groups.Count > 0 ? " (" + string.Join(", ", bs.Groups.Values.Select(g => g.Name)) + ")" : "") + " with " + bs.Members.Count + " account" + (bs.Members.Count == 1 ? "" : "s") + " in them: to go back to it, copy groups.txt.bak over groups.txt";
                 }
             }
+            string goodAt = null;
+            if (exists && s == null)
+            {
+                // the machines' copy: groups.txt.good only (written after every clean read and every save); none: they wait
+                string gerr;
+                string[] gl = File.Exists(GoodPath) ? ReadLines(GoodPath, out gerr) : null;
+                State gs = gl != null ? Parse(gl, out gerr) : null;
+                if (gs != null) { good = gs; goodFrom = "groups.txt.good"; goodAt = EtStamp(File.GetLastWriteTimeUtc(GoodPath)); }
+            }
+            else if (s != null) WriteGood(string.Concat(lines.Select(l => l + Environment.NewLine)));   // a clean read
+            else if (!exists) WriteGood(Serialize(new State()));                                        // no groups.txt: no groups
             string merr = null;
             Dictionary<string, Mark> marks = null;
             bool marksLeft = false;
@@ -783,7 +796,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (loaded) return;   // another thread read them meanwhile
                 loaded = true;
                 if (!exists) state = new State();
-                else if (s == null) { readError = err ?? "unknown"; state = good ?? new State(); lastGoodFrom = good != null ? goodFrom : null; }
+                else if (s == null) { readError = err ?? "unknown"; state = good ?? new State(); lastGoodFrom = good != null ? goodFrom : null; lastGoodAt = good != null ? goodAt : null; }
                 else state = s;
                 Marks.Clear();
                 if (marks != null) foreach (KeyValuePair<string, Mark> kv in marks) Marks[kv.Key] = kv.Value;
@@ -799,7 +812,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string[] ReadLines(string path, out string err)
         {
             err = null;
-            for (int attempt = 0; attempt < 3; attempt++)
+            for (int attempt = 0; attempt < 5; attempt++)   // review of b4bc612: a sharing lock (a backup, antivirus) gets 5 tries, 0.4 s in all
             {
                 try
                 {
@@ -815,7 +828,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                     return lines.ToArray();
                 }
-                catch (Exception ex) { err = ex.Message; if (attempt < 2) Thread.Sleep(100); }
+                catch (Exception ex) { err = ex.Message; if (attempt < 4) Thread.Sleep(100); }
             }
             return null;
         }
@@ -997,6 +1010,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (KeyValuePair<string, double[]> kv in s.Personal.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
                 b.Append("personal\t").Append(kv.Key).Append('\t').Append(MoneyText(kv.Value[0])).Append('\t').Append(MoneyText(kv.Value[1])).Append('\n');
             return b.ToString();
+        }
+
+        // groups.txt.good: through its own temp file, swapped in with no backup of its own. A failure is logged and changes nothing else.
+        private static void WriteGood(string text)
+        {
+            try
+            {
+                Directory.CreateDirectory(ChartBridgeConfig.Folder);
+                string tmp = GoodPath + ".tmp";
+                File.WriteAllText(tmp, text);
+                if (File.Exists(GoodPath)) File.Replace(tmp, GoodPath, null); else File.Move(tmp, GoodPath);
+            }
+            catch (Exception ex) { ChartBridgeServer.Log("groups.txt.good could not be written (" + ex.Message + "); the last one stays"); }
+        }
+
+        private static string EtStamp(DateTime utc)
+        {
+            try { return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), ChartBridgeTime.Eastern).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " ET"; }
+            catch (Exception) { return utc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC"; }
         }
 
         // Whole, through a temp file; null when saved, else why.
@@ -1713,7 +1745,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"group\":").Append(n.GroupId == null ? "null" : CbJson.Str(n.GroupId))
              .Append(",\"myFloor\":").Append(Num(n.MyFloor)).Append(",\"myDailyLoss\":").Append(Num(n.MyDaily)).Append(",\"myLimitsSet\":").Append(n.MySet ? "true" : "false");
             foreach (string k in PageKeys) b.Append(",\"").Append(k).Append("\":").Append(Num(Get(n, k)));
-            b.Append(",\"roomFloorNt\":").Append(Num(n.NtRoomFloor));   // 0.6.6: NinjaTrader's own figure, beside the room (the page flags a difference)
+            b.Append(",\"roomFloorNt\":").Append(Num(n.NtRoomFloor));
+            string copy = FromCopy();   // 2026-10-21 (review of b4bc612): floors and rooms from groups.txt.good say so (the page shows it)
+            if (copy != null) b.Append(",\"fromCopy\":").Append(CbJson.Str(copy));   // 0.6.6: NinjaTrader's own figure, beside the room (the page flags a difference)
             SrcWhy(b, n, PageKeys);
             b.Append(",\"rules\":");   // 0.6.5: a member's rules (own true: its own; false: its group's), null in no group; 0.6.6: an account in no group with its own rules
             if (n.R == null) b.Append("null"); else RulesJson(b, n.R, true);
@@ -1852,8 +1886,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static string Save(State next)
         {
-            string err = WriteWhole(FilePath, Serialize(next));
+            string text = Serialize(next), err = WriteWhole(FilePath, text);
             if (err != null) return "groups.txt could not be saved (" + err + "); nothing was changed";
+            WriteGood(text);   // 2026-10-21: the copy the machines fall back on is always the latest save
             lock (Mem) state = next;
             return null;
         }
@@ -2201,9 +2236,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The groups.txt alarm's words: what the machines do (run on the last good copy, or wait).
         public static string ReadFailedNow()
         {
-            string from;
-            lock (Mem) from = lastGoodFrom;
-            return ReadFailedText + (from != null ? "; the bot, the agents and the copier run on its last good copy (" + from + ")" : MachinesWaitText);
+            string from, at;
+            lock (Mem) { from = lastGoodFrom; at = lastGoodAt; }
+            return ReadFailedText + (from != null ? "; the bot, the agents and the copier run on its last good copy (" + from + ", from the copy of " + (at ?? "an unknown time") + ")" : MachinesWaitText);
+        }
+        // The label of numbers worked out from the copy ("from the copy of 2026-10-21 08:14 ET"), or null when groups.txt read cleanly.
+        public static string FromCopy()
+        {
+            lock (Mem) return readError != null && lastGoodFrom != null ? "from the copy of " + (lastGoodAt ?? "an unknown time") : null;
         }
 
         // ---------------------------------------------------------- telling the pages

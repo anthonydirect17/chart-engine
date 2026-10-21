@@ -74,10 +74,19 @@ test('this browser\'s copy: bad records dropped, pending only for records kept, 
   const good = rec('r0000001', 'setup', 'breakout', 'pre', T);
   const st = C.cleanStore(JSON.stringify({ records: [good, rec('short', 'setup', 'x', 'pre', T), rec('r0000002', 'grade', 'breakout', 'pre', T),
     rec('r0000003', 'grade', 'A', 'open', T), rec('r0000004', 'grade', 'A', 'pre', T, T), good], pending: ['r0000001', 'r0000002', 7] }));
-  assert.deepStrictEqual(st, { records: [good], pending: ['r0000001'] });
-  assert.deepStrictEqual(C.cleanStore('not json'), { records: [], pending: [] });
+  assert.deepStrictEqual(st, { records: [good], pending: ['r0000001'], dropped: 1 }, 'a pending id with no usable record is counted as dropped');
+  assert.deepStrictEqual(C.cleanStore('not json'), { records: [], pending: [], dropped: 0 });
   const many = { records: Array.from({ length: C.KEEP + 5 }, (_, i) => rec('r' + String(i).padStart(7, '0'), 'grade', 'B', 'pre', T + i)), pending: [] };
   assert.strictEqual(C.cleanStore(many).records.length, C.KEEP);
+  /* the review of b4bc612: trimming never drops an unsent record: every pending one stays, the newest KEEP of the sent ones */
+  const unsent = Object.assign({}, many, { pending: many.records.slice(0, 10).map(r => r.id) });
+  const kept = C.cleanStore(unsent);
+  assert.strictEqual(kept.records.length, C.KEEP + 5);
+  assert.deepStrictEqual(kept.pending, unsent.pending, 'the 10 oldest, all pending, are kept');
+  assert.strictEqual(kept.dropped, 0);
+  const allUnsent = C.cleanStore(Object.assign({}, many, { pending: many.records.map(r => r.id), dropped: 2 }));
+  assert.strictEqual(allUnsent.records.length, C.KEEP + 5);
+  assert.strictEqual(allUnsent.dropped, 2, 'the count of records ever lost is kept');
   assert.deepStrictEqual(C.mergeRecords([good], [Object.assign({}, good, { value: 'other' }), rec('r0000009', 'grade', 'A+', 'pre', T - 5)]).map(r => [r.id, r.value]),
     [['r0000009', 'A+'], ['r0000001', 'breakout']], 'The Desk\'s records added by id; this browser\'s own kept');
   assert.match(C.newId(), /^tt[a-z0-9]{18}$/);

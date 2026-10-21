@@ -1451,7 +1451,12 @@ test('ChartBridge 0.6.6 (Anthony 2026-10-21): the stop record ships, is compile-
   const src = read('ChartBridgeStops.cs');
   assert.doesNotMatch(src, /\.(Submit|Change|Cancel|Flatten|CreateOrder)\(/);
   assert.match(src, /"\/api\/stop-events"/);
+  /* the review of b4bc612: nothing written or sent on NinjaTrader's event thread; the queue capped; a 404 stops it */
+  const observe = src.slice(src.indexOf('public static void Observe('), src.indexOf('public static string EventJson('));
+  assert.doesNotMatch(observe, /Save\(|Flush\(|File\./);
+  assert.match(src, /public static int Cap = 20000;/);
+  assert.match(src, /if \(code == 404\)/);
   const cb = read('ChartBridge.cs');
-  assert.match(cb, /try \{ ChartBridgeOrders\.OnOrderUpdate\(a, e\); \} catch[^\n]*\n\s*try \{ ChartBridgeStops\.Observe\(a, e\.Order\); \} catch/, 'after the order path, never in its way');
+  assert.match(cb, /try \{ ChartBridgeOrders\.OnOrderUpdate\(a, e\); \} catch[^\n]*\n\s*try \{ ChartBridgeStops\.Observe\(a, e\); \} catch/, 'after the order path, never in its way');
   assert.match(cb, /else if \(ChartBridgeStops\.ReadConfig\(key, val\)\) \{ \}/);
 });
