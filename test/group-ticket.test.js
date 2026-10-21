@@ -129,3 +129,85 @@ test('review 7: one id per planned level when the members\' prices differ; a mem
   assert.match(R.notes.pop(), /^warn: SIM-C left group Lucid while it holds a position or orders: its own stops stay on SIM-C\./);
   assert.equal(R.core.groupLeftWords('group:g1'), 'SIM-C left the group: its own stops stay');
 });
+
+// 1.34.0 (Anthony 2026-10-20): "this screen should not pop up each time I put in a trade with the group, it should only appear
+// with an issue. I am fine with showing the projected size, but it should be shown somewhere that's not interrupting the trade"
+const pvAll = (cid, sizes) => ({ type: 'groupPreview', cid, group: 'g1', name: 'Lucid', root: 'NQ', side: 'buy', kind: 'market', stopTicks: 20, riskPct: 10,
+  members: sizes.map(([account, size, out]) => ({ account, size, risk: size * 100, budget: 450, out: out || null })) });
+
+test('1.34.0: every account takes it: sent at once, no confirm; one sits out: the confirm, as before', () => {
+  const R = rig();
+  R.core.setArmed(true);
+  R.core.setBracket('NQ', 'stop', 20, true);
+  R.core.sendOrder('buy', 'market', null);
+  const pv = R.sent.pop();
+  R.core.message(pvAll(pv.cid, [['SIM-A', 4], ['SIM-B', 2], ['SIM-C', 1]]));
+  assert.equal(R.confirm, null, 'no confirm');
+  const go = R.sent.pop();
+  assert.equal(go.type, 'groupOrder'); assert.equal(go.sizes, 'SIM-A:4,SIM-B:2,SIM-C:1');
+  assert.match(R.notes.pop(), /^Sent the group entry to Lucid: SIM-A 4, SIM-B 2, SIM-C 1\.$/);
+  R.advance(6000);
+  R.core.sendOrder('sell', 'market', null);
+  const pv2 = R.sent.pop();
+  R.core.message(pvAll(pv2.cid, [['SIM-A', 4], ['SIM-B', 0, 'refused: hedge'], ['SIM-C', 1]]));
+  assert.ok(R.confirm, 'an account sits out: the confirm');
+  assert.equal(R.sent.length, 0, 'nothing sent before Send');
+});
+
+test('1.34.0: the ticket\'s projected sizes: a quiet preview while Armed (never traded), at most one a second, again after 15 s or a change', () => {
+  const R = rig();
+  R.core.setBracket('NQ', 'stop', 20, true);
+  R.core.groupProjectTick();
+  assert.equal(R.sent.length, 0, 'not Armed: nothing asked');
+  R.core.setArmed(true);
+  R.sent.length = 0;
+  R.core.groupProjectTick();
+  const q = R.sent.pop();
+  assert.equal(q.type, 'groupPreview'); assert.ok(q.cid.startsWith('q'));
+  assert.equal(R.core.groupProjection(), '', 'nothing shown before the answer');
+  R.core.message(pvAll(q.cid, [['SIM-A', 4], ['SIM-B', 0, 'its daily room is too small'], ['SIM-C', 1]]));
+  assert.equal(R.core.groupProjection(), 'Next entry: SIM-A 4, SIM-C 1 NQ · $500 at risk · sits out: SIM-B (its daily room is too small)');
+  assert.equal(R.confirm, null, 'a quiet preview never opens the confirm');
+  assert.equal(R.sent.filter(m => m.type === 'groupOrder').length, 0, 'and never trades');
+  R.advance(1500); R.core.groupProjectTick();
+  assert.equal(R.sent.length, 0, 'the same key within 15 s: not asked again');
+  R.core.setBracket('NQ', 'stop', 30, true);
+  assert.equal(R.core.groupProjection(), '', 'a new stop: the old sizes are not shown');
+  R.core.groupProjectTick();
+  const q2 = R.sent.pop();
+  assert.deepEqual(q2.bracket, { stop: 30, target: 0 });
+  R.core.message({ type: 'reject', cid: q2.cid, reason: 'too many actions' });
+  assert.equal(R.notes.filter(n => /Refused/.test(n)).length, 0, 'a quiet preview refused says nothing');
+  R.advance(16000); R.core.groupProjectTick();
+  assert.equal(R.sent.pop().type, 'groupPreview', 'asked again later');
+});
+
+test('1.34.0 (Anthony\'s ruling on the review, "size it anyway"): a member sized with its room unknown: a quiet note, no confirm, sent at once', () => {
+  const R = rig();
+  R.core.setBracket('NQ', 'stop', 20, true);
+  R.core.setArmed(true);
+  R.sent.length = 0;
+  R.core.sendOrder('buy', 'market', null);
+  const pv = R.sent.pop();
+  const m = pvAll(pv.cid, [['SIM-A', 4], ['SIM-B', 2], ['SIM-C', 1]]);
+  m.members[1].note = 'room unknown: sized by risk only (its room to the floor: no high known)';
+  R.core.message(m);
+  assert.equal(R.confirm, null, 'no confirm for a room unknown');
+  const go = R.sent.pop();
+  assert.equal(go.type, 'groupOrder'); assert.equal(go.sizes, 'SIM-A:4,SIM-B:2,SIM-C:1');
+  assert.equal(R.core.groupProjection(), 'Next entry: SIM-A 4, SIM-B 2, SIM-C 1 NQ · $700 at risk · SIM-B: room unknown: sized by risk only', 'the note, short, on the ticket');
+});
+
+test('1.34.0 (Anthony 2026-10-20, one combined line): the group\'s position: the sizes added at their weighted average, each account in its tooltip', () => {
+  const R = rig();
+  assert.equal(R.core.groupPosition('group:g1', 'NQ'), null, 'flat: no line');
+  R.core.message({ type: 'position', account: 'SIM-A', root: 'NQ', qty: 3, avgPrice: 25000 });
+  R.core.message({ type: 'position', account: 'SIM-B', root: 'NQ', qty: 1, avgPrice: 25004 });
+  R.core.message({ type: 'position', account: 'SIM-D', root: 'NQ', qty: 5, avgPrice: 24000 });   // not in the group
+  const p = R.core.groupPosition('group:g1', 'NQ');
+  assert.equal(p.qty, 4); assert.equal(p.avgPrice, 25001); assert.equal(p.group, 'Lucid ×2');
+  assert.equal(p.groupTip, 'Group Lucid: SIM-A LONG 3 @ 25000.00\nSIM-B LONG 1 @ 25004.00\nLONG 4 in all @ 25001.00 (the average)');
+  R.core.message({ type: 'position', account: 'SIM-C', root: 'NQ', qty: -1, avgPrice: 25010 });
+  assert.equal(R.core.groupPosition('group:g1', 'NQ'), null, 'long and short: no combined line');
+  assert.equal(R.core.groupPosition('SIM-A', 'NQ'), null, 'an account: its own position, not this');
+});

@@ -15,7 +15,7 @@ test('defaults with empty storage: what the page showed before', () => {
   assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt', grid: 'off', room: 80, atr: 14 });
   assert.equal(p.range('NQ'), 20);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false });   // the delta pane (1.7.0): on; the signals (G1c) off
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false });   // the delta pane (1.7.0): on; the signals (G1c) off; the studies (1.34.0) off
   // 1.14.0: the IB is part of Levels; every level line on by default, the PD POC with them
   assert.ok(Object.values(p.indicatorOptions('main', 'levels')).every(v => v === 'on') && p.indicatorOptions('main', 'levels').poc === 'on' && p.indicatorOptions('main', 'levels').ibh === 'on');
 });
@@ -56,7 +56,7 @@ test('1.3 keys are read once and carry over', () => {
   assert.deepEqual(p.settings(), { root: 'NQ', tf: 'range', glide: 'fast', rangeMode: 'nt', grid: 'off', room: 80, atr: 14 });
   assert.equal(p.range('NQ'), 40);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, vp: false, delta: true, bubbles: false, absorption: false });   // the delta pane (1.7.0): the main pane default
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, vp: false, delta: true, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false });   // the delta pane (1.7.0): the main pane default
   assert.equal(p.indicatorOptions('main', 'levels').ibh, 'on', 'IB (1.5.3, in Levels since 1.14.0): the main pane default');
   // later changes to the old keys (an older page in another tab) are not read again
   s.setItem('live-range-v1', JSON.stringify({ NQ: 12 }));
@@ -93,11 +93,11 @@ test('indicators (1.6.0): the main pane starts with the five on, shown and pinne
 test('1.3 keys: the indicators chosen on 1.3 draw the same after the update (through live-indicators-v1)', () => {
   const s = mem({ 'live-settings-v1': { layers: { volume: false, vwap: true, levels: false, fills: true } } });
   const p = LP.create(s);
-  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false });
+  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false });
   // 1.14.0: the IB (on by default then) brought Levels on with only its own two lines, as 1.13 drew it
   assert.deepEqual(Object.entries(p.indicatorOptions('main', 'levels')).filter(([, v]) => v === 'on').map(([k]) => k), ['ibh', 'ibl']);
   assert.deepEqual(p.indicators('pane-2'), flags([]));
-  assert.deepEqual(s.dump('live-indicators-v1'), { main: { volume: false, vwap: true, levels: false, fills: true, vp: false, delta: true, bubbles: false, absorption: false } });   // left in place
+  assert.deepEqual(s.dump('live-indicators-v1'), { main: { volume: false, vwap: true, levels: false, fills: true, vp: false, delta: true, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false } });   // left in place
 });
 
 test('migration from live-indicators-v1: on and off carried over exactly, an explicit off stays off', () => {
@@ -198,11 +198,14 @@ test('Pane: the chip strip holds 10 (1.14.0, Anthony; 6 before); when full an ad
   const P = LP.Pane;
   assert.equal(LP.PIN_MAX, 10);
   assert.equal(P.pinned(LP.defaultPane('main')), 4, 'the main pane: the four (the delta pane has no chip by default, review N5)');
-  // ten chips: every indicator that can have one, on a pane
+  // ten chips: every indicator that can have one, on a pane; 1.34.0: eleven can, so the last added gets none
   let ten = LP.defaultPane('pane-2');
+  const pinnable = LP.INDICATORS.filter(d => !d.nochip);
   for (const d of LP.INDICATORS) ten = P.toggle(ten, d.id);
-  assert.equal(P.pinned(ten), LP.INDICATORS.filter(d => !d.nochip).length, 'all eight pinnable ones fit');
-  assert.equal(P.pinFull(ten), false);
+  assert.equal(pinnable.length, 11);
+  assert.equal(P.pinned(ten), LP.PIN_MAX, 'the first ten added fit');
+  assert.deepEqual(pinnable.filter(d => !ten.ind[d.id].pin).map(d => d.id), ['fills'], 'the eleventh is on the chart with no chip');
+  assert.equal(P.pinFull(ten), true);
   assert.equal(P.pinFull(LP.defaultPane('main')), false);
   const cap = LP.PIN_MAX;
   try {
@@ -357,7 +360,10 @@ test('search matches names and short names', () => {
   const ids = q => LP.searchIndicators(q).map(d => d.id);
   assert.deepEqual(ids('vwap'), ['vwap']);
   for (const q of ['ib', 'ibh', 'ibl', 'initial', 'IB', 'pdh', 'pdl', 'onh', 'onl', 'levels', 'prior day']) assert.deepEqual(ids(q), ['levels'], q);   // the IB is in Levels (1.14.0)
-  assert.deepEqual(ids('vol'), ['volume', 'vp']);
+  assert.deepEqual(ids('vol'), ['volume', 'bands', 'vp']);                   // 1.34.0: Bollinger Bands' volatility
+  assert.deepEqual(ids('bb'), ['bands', 'bubbles'], 'BB: the bands and the bubbles');
+  for (const [q, id] of [['ema', 'ema'], ['exponential', 'ema'], ['sma', 'sma'], ['simple moving', 'sma'], ['bollinger', 'bands'], ['rsi', 'rsi'], ['relative strength', 'rsi'], ['oscillator', 'rsi'], ['momentum', 'rsi']]) assert.deepEqual(ids(q), [id], q);
+  assert.deepEqual(ids('moving average'), ['ema', 'sma']);
   assert.deepEqual(ids('volume bars'), ['volume']);
   assert.deepEqual(ids('fills'), ['fills']);
   assert.deepEqual(ids('profile'), ['vp']);
@@ -366,11 +372,12 @@ test('search matches names and short names', () => {
   assert.deepEqual(ids('zzz'), []);
 });
 
-test('the menu lists only real indicators, in four groups; the volume profile (1.6.0), the cumulative delta (1.7.0), the bubbles and the absorption bars (G1c) are among them', () => {
-  assert.deepEqual(LP.INDICATORS.map(d => d.id), ['volume', 'vwap', 'levels', 'vp', 'delta', 'bubbles', 'fills', 'absorption']);
-  assert.deepEqual(LP.CATEGORIES.map(c => c.name), ['Price', 'Volume', 'Trades', 'Signals']);
+test('the menu lists only real indicators, in five groups; the volume profile (1.6.0), the cumulative delta (1.7.0), the bubbles and the absorption bars (G1c), the studies (1.34.0) are among them', () => {
+  assert.deepEqual(LP.INDICATORS.map(d => d.id), ['volume', 'vwap', 'levels', 'ema', 'sma', 'bands', 'vp', 'delta', 'bubbles', 'rsi', 'fills', 'absorption']);
+  assert.deepEqual(LP.CATEGORIES.map(c => c.name), ['Price', 'Volume', 'Momentum', 'Trades', 'Signals']);
   const byCat = c => LP.INDICATORS.concat(LP.COMING).filter(d => d.cat === c).map(d => d.name);
-  assert.deepEqual(byCat('price'), ['VWAP', 'Levels']);
+  assert.deepEqual(byCat('price'), ['VWAP', 'Levels', 'EMA', 'SMA', 'Bollinger Bands']);
+  assert.deepEqual(byCat('momentum'), ['RSI']);
   assert.deepEqual(byCat('volume'), ['Volume bars', 'Volume profile', 'Cumulative delta', 'Large-order bubbles']);
   assert.deepEqual(byCat('trades'), ['Fills']);
   assert.deepEqual(byCat('signals'), ['Absorption bars']);

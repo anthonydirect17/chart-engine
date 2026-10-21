@@ -111,7 +111,7 @@ try {
   if (await page.evaluate(() => document.activeElement.id.endsWith('-indQ')) !== true) fail('focus not on the search box when the menu opens');
   const onRows = await page.$$eval(H('indBody') + ' .ind-item', els => els.map(e => e.dataset.id));
   if (JSON.stringify(onRows) !== JSON.stringify(['volume', 'vwap', 'levels', 'delta', 'fills'])) fail('On this chart rows: ' + JSON.stringify(onRows));
-  if (await page.$$eval(H('indBody') + ' .ind-cat', els => els.map(e => e.textContent.replace(/\d+$/, '').trim()).join(',')) !== 'Price,Volume,Trades,Signals') fail('groups');   // Signals: the absorption bars (G1c)
+  if (await page.$$eval(H('indBody') + ' .ind-cat', els => els.map(e => e.textContent.replace(/\d+$/, '').trim()).join(',')) !== 'Price,Volume,Momentum,Trades,Signals') fail('groups');   // Signals: the absorption bars (G1c); Momentum: the RSI (1.34.0)
   if (!/Coming: time and sales/.test(await page.textContent(H('indBody')))) fail('coming line missing');
   // search: short names, then Enter acts on the first match
   await page.keyboard.type('pdh');

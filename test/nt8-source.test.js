@@ -557,7 +557,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(bodyOf(code, 'public void Close()'), /try \{ if \(Socket != null\) Socket\.Abort\(\); \} catch \(Exception\) \{ \}/);
   assert.match(code, /long waited = Stopwatch\.GetTimestamp\(\) - q\.At - \(Interlocked\.Read\(ref bulkSpent\) - q\.Bulk\);/);
   for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
-  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",\s*"bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock", "groupPreview", "groupPlaced" \};/);   // 0.4.0: accounts (B2), merge (B4), copier (B5), the bot channel (B3) and managed (B1) in the order lane; 0.5.6: pcClock (after hello, in order)
+  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",\s*"bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock", "groupPreview", "groupPlaced", "riskAlert" \};/);   // 0.6.6: riskAlert; 0.4.0: accounts (B2), merge (B4), copier (B5), the bot channel (B3) and managed (B1) in the order lane; 0.5.6: pcClock (after hello, in order)
   assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
   const md2 = bodyOf(code, 'private static void OnMarketData(');
@@ -1282,7 +1282,7 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.[0-5])";/);
+  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.[0-6])";/);
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1311,7 +1311,7 @@ test('ChartBridge 0.5.5: the accounts line\'s one-time conversion and notConnect
 });
 
 test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its own thread, and tells hello, the pages and /diag', () => {
-  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.[0-5])";/);
+  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.[0-6])";/);
   const clk = code.slice(code.indexOf('public static class ChartBridgeClock'));
   assert.ok(code.indexOf('public static class ChartBridgeClock') > code.indexOf('public static class ChartBridgeServer') && clk.length > 1000, 'ChartBridgeClock is the last class of ChartBridge.cs');
   // never sets the clock or a setting: no Win32 time call, no w32tm, no process, no registry, in any add-on file
@@ -1369,7 +1369,7 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   const g = strip(read('ChartBridgeGroups.cs'));
   const files = JSON.parse(read('install-files.json'));
   assert.ok(files.addons.includes('nt8/ChartBridgeGroups.cs'), 'install-files.json addons');
-  assert.ok(/ChartBridgeGroups\.cs check\/Nt8Stubs\.cs/.test(read('check/check.sh')) && /ChartBridgeGroups\.cs check\/Nt8Stubs\.cs/.test(read('check/orders.sh')) && /check\/GroupsHarness\.cs/.test(read('check/orders.sh')), 'compile-checked and harnessed');
+  assert.ok(/ChartBridgeGroups\.cs (ChartBridgeStops\.cs )?check\/Nt8Stubs\.cs/.test(read('check/check.sh')) && /ChartBridgeGroups\.cs (ChartBridgeStops\.cs )?check\/Nt8Stubs\.cs/.test(read('check/orders.sh')) && /check\/GroupsHarness\.cs/.test(read('check/orders.sh')), 'compile-checked and harnessed');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/, /CancelAllOrders/, /\bAtm\w*\./, /\bOrderAction\./])
     assert.ok(!re.test(g), 'ChartBridgeGroups.cs must never place, change or cancel an order: ' + re);
   assert.ok(!/\$@?"[^"\n]*\{/.test(g) && !/\?\.[A-Za-z]/.test(g), 'C# 5 only: no string interpolation or ?.');
@@ -1383,7 +1383,7 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   // the copier's Eligible (under the same lock) and the agent's plan check 10b
   const c = strip(read('ChartBridgeCopier.cs'));
   const elig = c.slice(c.indexOf('private static Account Eligible('), c.indexOf('private static void Skip('));
-  assert.match(elig, /string grp = ChartBridgeGroups\.EntryCheck\("copier", a, fRoot, le\.Buy, fq, true, false\);[^\n]*\n\s*if \(grp != null\) \{ label = "group"; why = grp; return null; \}\s*return a;/);
+  assert.match(elig, /string grp = ChartBridgeGroups\.EntryCheck\("copier", a, fRoot, le\.Buy, fq, true, false\);[^\n]*\n\s*if \(grp != null\) \{ label = "group"; why = grp; return null; \}\s*double\? risk = [^\n]*\n\s*string hold = ChartBridgeOrders\.MachineHold\("the copier", "skipped", a, fRoot, fq, 0, risk\);\s*if \(hold != null\) \{ label = "limit"; why = hold; return null; \}\s*return a;/);   // 0.6.6: the firm's limits last
   const a = strip(read('ChartBridgeAgents.cs'));
   assert.ok(a.indexOf('ChartBridgeGroups.EntryCheck("agent:" + Id') > a.indexOf('// 10. the owner lock') || /string groupWhy = ChartBridgeGroups\.EntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Qty, true, false\);/.test(a), 'check 10b');
   // accountState after the snapshot, from the 1 s pass and on every change; the end-of-day highs in the 17:00 ET break
@@ -1405,6 +1405,30 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   assert.ok(!/groups/.test(acc.slice(acc.indexOf('private static void Save()'), acc.indexOf('private static void SaveDetails()'))), 'accounts.txt is not touched');
 });
 
+
+test('ChartBridge 0.6.6: the firm\'s limits (Anthony 2026-10-20): his entries the max only, the machines a known breach only, one shared check, never a flatten', () => {
+  const read = f => fs.readFileSync(path.join(__dirname, '..', 'nt8', f), 'utf8');
+  const strip = s => s.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+  const o = strip(read('ChartBridgeOrders.cs')), g = strip(read('ChartBridgeGroups.cs')), c = strip(read('ChartBridgeCopier.cs'));
+  const place = o.slice(o.indexOf('private static string PlaceOrderLocked('), o.indexOf('private static string PriceText('));
+  // one place in the order path for the page, the bot and every agent; only the part that opens or adds
+  assert.match(place, /int closing = isBuy \? Math\.Max\(Math\.Max\(-posNow, -posEff\), 0\) : Math\.Max\(Math\.Max\(posNow, posEff\), 0\);\s*int opening = Math\.Max\(0, qty - closing\);\s*if \(opening > 0\)\s*\{\s*string limitWhy = bot \|\| agent != null\s*\? MachineHold\(bot \? "the bot" : "agent " \+ agent, "held", account, root, opening, closing, [^;]+\)\s*: FirmMaxWhy\(account, root, opening, closing\);\s*if \(limitWhy != null\) return limitWhy;\s*\}/, 'the review: closing by the larger reading, so an order that reduces by either is never checked');
+  assert.ok(place.indexOf('int closing =') < place.indexOf('account.CreateOrder(') && place.indexOf('int closing =') > place.indexOf('bool reduces ='), 'before the order exists, after the reduce rule');
+  // the page's check reads the max only (no room, no daily loss); the machines' adds the rooms and the daily loss reached
+  const fmw = g.slice(g.indexOf('internal static string FirmMaxWhy('), g.indexOf('internal static string MachineHold('));
+  assert.doesNotMatch(fmw, /RoomFloor|RoomDaily|DailyReached/);
+  const mhw = g.slice(g.indexOf('internal static string MachineHoldWhy('), g.indexOf('// Review 1b: one group entry at a time'));
+  assert.match(mhw, /FirmMaxWhy\(a, root, opening, closing\)/); assert.match(mhw, /DailyReached\(n\)/);
+  assert.match(mhw, /if \(!entryRisk\.HasValue \|\| !n\.Balance\.HasValue \|\| n\.Balance\.Value <= 0\) return null;/, 'a risk or a balance not known lets it go');
+  assert.match(mhw, /double openKnown = open\.HasValue \? open\.Value : 0;/, 'the review: the open risk not known, its own stop risk alone still holds it past a known room');
+  // the copier's one copy, through the same check
+  assert.match(c, /ChartBridgeOrders\.MachineHold\("the copier", "skipped", a, fRoot, fq, 0, risk\)/);
+  // the alerts, and nothing that flattens
+  assert.match(g, /SendToTraders\("\{\\"type\\":\\"riskAlert\\",\\"kind\\":" \+ CbJson\.Str\(kind\)/);
+  assert.match(g, /try \{ DailyReached\(Read\(a\.Name, a, false\)\); \}/, 'the 1 s pass marks the daily loss reached');
+  for (const re of [/\.Flatten\s*\(/, /FlattenFor/]) assert.ok(!re.test(g), 'nothing in the limits flattens: ' + re);
+  for (const f of ['ChartBridgeGroups.cs', 'ChartBridgeOrders.cs', 'ChartBridgeCopier.cs', 'PROTOCOL.md', 'check/GroupsHarness.cs', 'check/CopierHarness.cs']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
+});
 test('ChartBridge 0.5.8: accountState carries the PROTOCOL table\'s fields, in its order', () => {
   const g = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeGroups.cs'), 'utf8');
   const proto = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'PROTOCOL.md'), 'utf8');
@@ -1416,4 +1440,23 @@ test('ChartBridge 0.5.8: accountState carries the PROTOCOL table\'s fields, in i
   for (const k of ['account', 'sim', 'kind', 'group', 'groupId', 'groupSide', 'noHedge', 'rules', 'src', 'why', 'session', 'at', 'roomFloor', 'roomDaily', 'targetLeft'])
     assert.ok(sec.includes('`' + k + '`'), 'PROTOCOL names ' + k);
   for (const t of ['groupSave', 'groupDelete', 'accountGroup', 'accountLimits', 'highClose', 'groups.txt', 'account-marks.txt']) assert.ok(sec.includes(t), 'PROTOCOL: ' + t);
+});
+
+test('ChartBridge 0.6.6 (Anthony 2026-10-21): the stop record ships, is compile-checked and harnessed, and never touches an order', () => {
+  const read = f => fs.readFileSync(path.join(__dirname, '..', 'nt8', f), 'utf8');
+  assert.ok(JSON.parse(read('install-files.json')).addons.includes('nt8/ChartBridgeStops.cs'));
+  assert.match(read('check/check.sh'), /ChartBridgeStops\.cs check\/Nt8Stubs\.cs/);
+  assert.match(read('check/orders.sh'), /ChartBridgeStops\.cs check\/Nt8Stubs\.cs/);
+  assert.match(read('check/orders.sh'), /check\/StopsHarness\.cs/);
+  const src = read('ChartBridgeStops.cs');
+  assert.doesNotMatch(src, /\.(Submit|Change|Cancel|Flatten|CreateOrder)\(/);
+  assert.match(src, /"\/api\/stop-events"/);
+  /* the review of b4bc612: nothing written or sent on NinjaTrader's event thread; the queue capped; a 404 stops it */
+  const observe = src.slice(src.indexOf('public static void Observe('), src.indexOf('public static string EventJson('));
+  assert.doesNotMatch(observe, /Save\(|Flush\(|File\./);
+  assert.match(src, /public static int Cap = 20000;/);
+  assert.match(src, /if \(code == 404\)/);
+  const cb = read('ChartBridge.cs');
+  assert.match(cb, /try \{ ChartBridgeOrders\.OnOrderUpdate\(a, e\); \} catch[^\n]*\n\s*try \{ ChartBridgeStops\.Observe\(a, e\); \} catch/, 'after the order path, never in its way');
+  assert.match(cb, /else if \(ChartBridgeStops\.ReadConfig\(key, val\)\) \{ \}/);
 });

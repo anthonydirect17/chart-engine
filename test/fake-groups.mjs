@@ -14,6 +14,7 @@ export const GROUP_KEYS = {
   groupDelete: ['type', 'cid', 'group'],
   accountGroup: ['type', 'cid', 'account', 'group', 'highClose', 'size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 'target', 'consistency', 'maxMinis', 'maxMicros', 'typeId'],   // 0.6.5: the member's own rules
   memberRules: ['type', 'cid', 'account', 'size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 'target', 'consistency', 'maxMinis', 'maxMicros', 'typeId'],   // 0.6.5
+  firmMinimum: ['type', 'cid', 'account', 'minBalance'],   // 0.6.6: the firm dashboard's minimum balance seeds the floor
   /* 0.6.5 (Anthony 2026-10-19): trade the group from the ticket (ChartBridgeGroups.cs GroupEntry, on the order connection) */
   groupPreview: ['type', 'cid', 'group', 'root', 'side', 'kind', 'price', 'limitOffset', 'bracket'],
   groupOrder: ['type', 'cid', 'group', 'root', 'side', 'kind', 'price', 'limitOffset', 'bracket', 'sizes'],
@@ -26,24 +27,36 @@ const TYPE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
  const MICRO_ROOTS = ['MNQ', 'MES', 'M2K', 'MYM', 'MGC', 'MCL', 'SIL', 'MBT', 'MET', 'M6E'];
 const usd2 = v => '$' + (+v).toLocaleString('en-US', { maximumFractionDigits: 2 });
 export const miniEquivalent = root => (MICRO_ROOTS.includes(root) ? 0.1 : 1);
-export const maxMiniEquivalents = (minis, micros) => (minis > 0 && micros > 0 ? Math.min(minis, micros / 10) : minis > 0 ? minis : micros > 0 ? micros / 10 : -1);   // re-review 2: both set: the smaller
-/** 0.6.5: one member's contracts, exactly ChartBridgeOrders.GroupSize (its guards in its order, its words) */
+/* ChartBridge 0.6.6 (FirmMaxFor, Anthony's ruling on the review: "10 micros = 1 mini"): the root's contracts the firm's max still allows
+   (-1: no max): after the order the total in mini equivalents at most maxMinis, and in micro equivalents at most maxMicros, each when
+   set. usedMini: held and working, every instrument. */
+export const firmMaxLeft = (minis, micros, root, usedMini) => {
+  let best = -1;
+  for (const [cap, k] of [[minis, 1], [micros, 10]]) {
+    if (!(cap > 0)) continue;
+    const used = Math.round(Math.max(0, usedMini) * k * 1e6) / 1e6, per = miniEquivalent(root) * k;
+    const left = Math.max(0, Math.floor((cap - used) / per + 1e-6));
+    if (best < 0 || left < best) best = left;
+  }
+  return best;
+};
+/** 0.6.5: one member's contracts, exactly ChartBridgeOrders.GroupSize (its guards in its order, its words); 0.6.6 (Anthony's ruling on
+ *  the review, "size it anyway"): a room not known skips that room's cap with a note, the open risk not known counts as 0 with a note */
 export function groupSize(o) {
   const budget = Math.round(o.riskPct * o.drawdown) / 100, per = o.stopTicks * o.tickValue;
-  const out = (why) => ({ size: 0, budget, why });
-  if (!isNum(o.roomFloor)) return out('its room to the floor is not known (' + (o.floorWhy || 'not known') + ')');
-  if (o.hasDaily && !isNum(o.roomDaily)) return out('its daily room is not known (' + (o.dailyWhy || 'not known') + ')');
-  if (!isNum(o.openRisk)) return out('its open stop risk is not known (' + (o.openWhy || 'not known') + ')');   // answer 4
-  const open = Math.round(o.openRisk * 100) / 100, less = open > 0 ? ' less its open stop risk ' + usd2(open) : '';
+  const out = (why) => ({ size: 0, budget, why, note: null });
+  const floorKnown = isNum(o.roomFloor), dailyKnown = !o.hasDaily || isNum(o.roomDaily);
+  const note = !floorKnown || !dailyKnown ? 'room unknown: sized by risk only (' + (!floorKnown ? 'its room to the floor: ' + (o.floorWhy || 'not known') : 'its daily room: ' + (o.dailyWhy || 'not known')) + ')'
+    : !isNum(o.openRisk) ? 'open stop risk unknown: its room caps this entry\'s own stop only (' + (o.openWhy || 'not known') + ')' : null;
+  const open = isNum(o.openRisk) ? Math.round(o.openRisk * 100) / 100 : 0, less = open > 0 ? ' less its open stop risk ' + usd2(open) : '';
   let n = Math.floor(budget / per + 1e-9);
   if (n < 1) return out('its risk ' + usd2(budget) + ' (' + +o.riskPct.toFixed(2) + '% of its max loss ' + usd2(o.drawdown) + ') is less than one contract\'s stop (' + usd2(per) + ' at ' + o.stopTicks + ' ticks)');
   const held = Math.max(0, o.held);
   if (o.maxLeft >= 0 && o.maxLeft < n) { n = o.maxLeft; if (n < 1) return out('it is at its max size (' + o.maxWords + ')'); }   // review 3: every instrument, in mini equivalents
   if (o.cap - held < n) { n = o.cap - held; if (n < 1) return out('it is at the cap of ' + o.cap + ' (' + o.capWords + '; it holds or has working ' + held + ')'); }
-  const byFloor = Math.floor((o.roomFloor - open) / per + 1e-9);
-  if (byFloor < n) { n = byFloor; if (n < 1) return out('its room to the floor ' + usd2(o.roomFloor) + less + ' is less than one contract\'s stop (' + usd2(per) + ')'); }
-  if (o.hasDaily) { const byDay = Math.floor((o.roomDaily - open) / per + 1e-9); if (byDay < n) { n = byDay; if (n < 1) return out('its daily room ' + usd2(o.roomDaily) + less + ' is less than one contract\'s stop (' + usd2(per) + ')'); } }
-  return { size: n, budget, why: null };
+  if (floorKnown) { const byFloor = Math.floor((o.roomFloor - open) / per + 1e-9); if (byFloor < n) { n = byFloor; if (n < 1) return out('its room to the floor ' + usd2(o.roomFloor) + less + ' is less than one contract\'s stop (' + usd2(per) + ')'); } }
+  if (o.hasDaily && isNum(o.roomDaily)) { const byDay = Math.floor((o.roomDaily - open) / per + 1e-9); if (byDay < n) { n = byDay; if (n < 1) return out('its daily room ' + usd2(o.roomDaily) + less + ' is less than one contract\'s stop (' + usd2(per) + ')'); } }
+  return { size: n, budget, why: null, note };
 }
 const PCT = /^(?:0|[1-9][0-9]?|100)(?:\.[0-9]{1,2})?$/;
 
@@ -52,7 +65,7 @@ const PCT = /^(?:0|[1-9][0-9]?|100)(?:\.[0-9]{1,2})?$/;
 export function installGroups(Desk) {
   Object.assign(Desk.prototype, {
     groupsInit(o) {
-      this.gr = { on: o.groups !== false, perMember: o.groupRules !== false, list: new Map(), members: new Map(), personal: new Map(), peaks: new Map(), own: new Map(), next: 1 };   // groupRules false: a ChartBridge 0.5.8 to 0.6.4 (one rule set per group)
+      this.gr = { on: o.groups !== false, perMember: o.groupRules !== false, firm: o.firmFloor === true, list: new Map(), members: new Map(), personal: new Map(), peaks: new Map(), own: new Map(), ntRoom: new Map(), next: 1 };   // firm: ChartBridge 0.6.6   // groupRules false: a ChartBridge 0.5.8 to 0.6.4 (one rule set per group)
       for (const s of o.groupsSeed || []) {
         const id = 'g' + this.gr.next++;
         this.gr.list.set(id, { id, name: s.name, noHedge: s.noHedge !== false, dailyLoss: s.dailyLoss || 0, drawdown: s.drawdown, drawdownType: s.drawdownType || 'eod', target: s.target || 0, size: s.size, lockAt: s.lockAt || 0, accountType: s.accountType || null, hero: s.hero || null, riskPct: s.riskPct || 0 });
@@ -108,10 +121,13 @@ export function installGroups(Desk) {
       const id = this.gr.members.get(a.name), g = id ? this.gr.list.get(id) : null, mine = this.gr.personal.get(a.name) || { floor: 0, daily: 0 };
       const up = a.connection === 'connected', eq = msg.balance + msg.unrealized, src = {}, why = {};
       let floor = null, roomFloor = null, roomDaily = null, targetLeft = null;
-      const r = g ? this.groupRulesOf(a.name, g) : null;   // 0.6.5: the member's own rules, else its group's
-      if (g) {
-        const peak = Math.max(this.gr.peaks.get(a.name) || r.size, r.size), whose = r.own ? a.name + '\'s rules in ' + g.name + ' have' : 'group ' + g.name + ' has';
-        floor = r.drawdownType === 'static' ? r.size - r.drawdown : Math.min(peak - r.drawdown, r.lockAt > 0 ? r.lockAt : Infinity);
+      /* 0.6.5: the member's own rules, else its group's; 0.6.6: an account in no group with its own (the firm's) rules too */
+      const r = g ? this.groupRulesOf(a.name, g) : this.gr.firm && this.gr.own.has(a.name) ? Object.assign({ own: true }, this.gr.own.get(a.name)) : null;
+      if (r) {
+        const whose = !g ? a.name + '\'s rules have' : r.own ? a.name + '\'s rules in ' + g.name + ' have' : 'group ' + g.name + ' has';
+        const pk = this.gr.peaks.get(a.name);
+        if (!g && r.drawdownType !== 'static' && !pk) why.floor = 'no end-of-day high is known for this account: give the minimum balance from the firm\'s dashboard (the account\'s settings)';
+        else { const peak = Math.max(pk || r.size, r.size); floor = r.drawdownType === 'static' ? r.size - r.drawdown : Math.min(peak - r.drawdown, r.lockAt > 0 ? r.lockAt : Infinity); }
         roomDaily = r.dailyLoss > 0 ? r.dailyLoss + msg.pnlToday : null; targetLeft = r.target > 0 ? r.size + r.target - msg.balance : null;
         if (roomDaily === null) why.roomDaily = whose + ' no daily loss limit';
         if (targetLeft === null) why.targetLeft = whose + ' no profit target';
@@ -122,10 +138,13 @@ export function installGroups(Desk) {
         why.targetLeft = 'a personal account has no profit target';
       }
       if (floor !== null) roomFloor = +(eq - floor).toFixed(2); else why.roomFloor = why.floor;
+      const nt = this.gr.ntRoom.has(a.name) ? this.gr.ntRoom.get(a.name) : null;   // 0.6.6: NinjaTrader's own figure, beside the room (made up)
+      if (nt !== null && roomFloor === null && up) { roomFloor = nt; src.roomFloor = 'ninjatrader'; delete why.roomFloor; }
       if (!up) { for (const k of ['roomFloor', 'roomDaily', 'targetLeft']) if (k !== 'targetLeft' || g) why[k] = 'the account is not connected'; roomFloor = roomDaily = null; if (g) targetLeft = null; }
-      for (const [k, v] of [['floor', floor], ['roomFloor', roomFloor], ['roomDaily', roomDaily], ['targetLeft', targetLeft]]) if (v !== null) { src[k] = k === 'floor' && !g ? 'settings' : 'computed'; delete why[k]; }
+      for (const [k, v] of [['floor', floor], ['roomFloor', roomFloor], ['roomDaily', roomDaily], ['targetLeft', targetLeft]]) if (v !== null) { src[k] = src[k] || (k === 'floor' && !g && !r ? 'settings' : 'computed'); delete why[k]; }
       const r2 = v => (v === null ? null : +(+v).toFixed(2)), nz = v => (v > 0 ? v : null);
-      return Object.assign(msg, { group: id || null, myFloor: mine.floor || null, myDailyLoss: mine.daily || null, myLimitsSet: this.gr.personal.has(a.name), floor: r2(floor), roomFloor: r2(roomFloor), roomDaily: r2(roomDaily), targetLeft: r2(targetLeft), src, why },
+      return Object.assign(msg, { group: id || null, myFloor: mine.floor || null, myDailyLoss: mine.daily || null, myLimitsSet: this.gr.personal.has(a.name), floor: r2(floor), roomFloor: r2(roomFloor), roomDaily: r2(roomDaily), targetLeft: r2(targetLeft) },
+        this.gr.firm ? { roomFloorNt: r2(nt) } : {}, { src, why },
         this.gr.perMember ? { rules: r ? { size: r.size, dailyLoss: nz(r.dailyLoss), drawdown: r.drawdown, drawdownType: r.drawdownType, lockAt: nz(r.lockAt), target: nz(r.target), consistency: nz(r.consistency), maxMinis: nz(r.maxMinis), maxMicros: nz(r.maxMicros), typeId: r.typeId || null, own: !!r.own } : null } : {});   // 0.6.5
     },
     /** 0.6.5: a member's rules: its own, else its group's (own false) */
@@ -235,15 +254,17 @@ export function installGroups(Desk) {
         const taken = this.groupTakenWhy(name);
         if (taken) { s.out = taken; return s; }
         if (!a) { s.out = 'it is not in NinjaTrader now'; return s; }
+        if (a.connection !== 'connected') { s.out = 'it is not connected'; return s; }   // 0.6.6
         const f = this.groupFields(a, this.accountMsg058(a)), r = this.groupRulesOf(name, g);
         const pos = (this.positions.get(name + '|' + m.root) || {}).qty || 0;
         const pend = [...this.orders.values()].filter(o => o.account === name && o.root === m.root && (o.state === 'working' || o.state === 'partFilled') && o.side === m.side).reduce((t, o) => t + o.qty - (o.filled || 0), 0);
-        const held = buy ? pos + pend : -pos + pend, risk = this.groupOpenRisk(name), maxEq = maxMiniEquivalents(r.maxMinis, r.maxMicros);
-        const maxLeft = maxEq < 0 ? -1 : Math.max(0, Math.floor((maxEq - risk.usedMini) / miniEquivalent(m.root) + 1e-9));
-        const maxWords = maxEq < 0 ? '' : (r.maxMinis > 0 && r.maxMicros > 0 ? r.maxMinis + ' minis / ' + r.maxMicros + ' micros' : r.maxMinis > 0 ? r.maxMinis + ' minis' : r.maxMicros + ' micros') + '; it holds or has working ' + +risk.usedMini.toFixed(1) + ' in mini equivalents, every instrument';
+        const held = buy ? pos + pend : -pos + pend, risk = this.groupOpenRisk(name);
+        const maxLeft = firmMaxLeft(r.maxMinis, r.maxMicros, m.root, risk.usedMini);   // ChartBridge 0.6.6
+        const maxWords = maxLeft < 0 ? '' : (r.maxMinis > 0 && r.maxMicros > 0 ? r.maxMinis + ' minis / ' + r.maxMicros + ' micros' : r.maxMinis > 0 ? r.maxMinis + ' minis' : r.maxMicros + ' micros') + '; it holds or has working ' + +risk.usedMini.toFixed(1) + ' in mini equivalents, every instrument';
         const z = groupSize({ riskPct: g.riskPct, drawdown: r.drawdown, stopTicks: stop, tickValue, maxLeft, maxWords, cap: this.capFor(m.root), capWords: 'maxQty.' + m.root + ' in config.txt',
           held, roomFloor: f.roomFloor, floorWhy: f.why.roomFloor, hasDaily: r.dailyLoss > 0, roomDaily: f.roomDaily, dailyWhy: f.why.roomDaily, openRisk: risk.openRisk, openWhy: risk.openWhy });
         s.size = z.size; s.budget = z.budget; s.out = z.why; s.risk = Math.round(z.size * stop * tickValue * 100) / 100;
+        if (z.size > 0 && z.note) s.note = z.note;   // 0.6.6
         return s;
       });
       return { seats, name: g.name, riskPct: g.riskPct, stop };
@@ -341,8 +362,25 @@ export function installGroups(Desk) {
       if (typeof m.account !== 'string') return 'memberRules needs account (a plain string)';
       const rr = this.groupRulesFrom(m, true); if (rr.error) return rr.error;
       if (!this.acct.has(m.account)) return 'no account ' + m.account;
-      if (!this.gr.members.has(m.account)) return m.account + ' is in no group: its own rules are for a member of a group (My floor and My daily are for an account in no group)';
+      if (!this.gr.firm && !this.gr.members.has(m.account)) return m.account + ' is in no group: its own rules are for a member of a group (My floor and My daily are for an account in no group)';
       return null;
+    },
+    check_firmMinimum(m) {   // 0.6.6: as ChartBridgeGroups.FirmMinimum
+      if (!this.gr.firm) return 'unknown message type firmMinimum';
+      if (typeof m.account !== 'string') return 'firmMinimum needs account (a plain string)';
+      if (!this.acct.has(m.account)) return 'no account ' + m.account;
+      const w = this.groupMoney(m, 'minBalance', false); if (w) return w;
+      const id = this.gr.members.get(m.account), g = id ? this.gr.list.get(id) : null;
+      const r = g ? this.groupRulesOf(m.account, g) : this.gr.own.get(m.account);
+      if (!r) return m.account + ' has no firm rules yet: apply its account type first (the floor comes from its drawdown and lock)';
+      if (r.drawdownType === 'static') return m.account + '\'s drawdown is static: its floor is fixed at ' + (r.size - r.drawdown).toFixed(2) + ', nothing to give';
+      if (m.minBalance < r.size - r.drawdown - 0.004) return 'the minimum balance ' + m.minBalance.toFixed(2) + ' is below the starting floor (' + (r.size - r.drawdown).toFixed(2) + '): check the firm\'s dashboard';
+      if (r.lockAt > 0 && m.minBalance > r.lockAt + 0.004) return 'the minimum balance ' + m.minBalance.toFixed(2) + ' is above where the floor stops (' + r.lockAt.toFixed(2) + '): check the firm\'s dashboard or the account\'s type';
+      return null;
+    },
+    do_firmMinimum(m) {
+      const id = this.gr.members.get(m.account), g = id ? this.gr.list.get(id) : null, r = g ? this.groupRulesOf(m.account, g) : this.gr.own.get(m.account);
+      this.gr.peaks.set(m.account, +(m.minBalance + r.drawdown).toFixed(2)); this.groupsChanged();
     },
     do_memberRules(m) { this.gr.own.set(m.account, this.groupRulesFrom(m, true).rules); this.groupsChanged(); },
     check_accountLimits(m) {

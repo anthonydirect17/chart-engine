@@ -1,7 +1,9 @@
 // ChartBridge prop groups and real account state (ChartBridge 0.5.8; 0.6.1: each group's Type and default hero; 0.6.5: each member's
-// own rules and the group's risk percent). Part of the
-// ChartBridge add-on; install it with the other files. See nt8/PROTOCOL.md, "Prop groups and account state (0.5.8)" and
-// "A group's Type and default hero (0.6.1)".
+// own rules and the group's risk percent; 0.6.6: the firm's rules on an account in no group, firmMinimum, and the firm's limits on
+// entries: FirmMaxWhy, MachineHold, the daily loss reached and riskAlert). Part of the
+// ChartBridge add-on; install it with the other files. See nt8/PROTOCOL.md, "Prop groups and account state (0.5.8)",
+// "A group's Type and default hero (0.6.1)", "Each member's own rules and the risk percent (0.6.5)" and "The firm's floor, Remove a
+// follower and the firm's limits on entries (0.6.6)".
 //
 // This file never places, changes or cancels an order itself (no Submit, Change, Cancel or Flatten here; Q-EXIT's cancel of an exit
 // left behind goes through ChartBridgeOrders.GroupCancelLeftover). It holds:
@@ -146,46 +148,81 @@ namespace NinjaTrader.NinjaScript.AddOns
         // groupPreview answers each member's size, dollar risk and budget, or why it sits out; groupOrder carries the sizes Anthony saw
         // and confirmed: ChartBridge works them out again and refuses the whole entry if any changed (nothing is ever placed at a size
         // he did not see), then places each member's entry through PlaceOrder (every gate, the one-direction check, its own legs).
-        public sealed class GroupSeat { public string Account, Out; public int Size; public double Risk, Budget; }
+        public sealed class GroupSeat { public string Account, Out, Note; public int Size; public double Risk, Budget; }   // 0.6.6: Note, a member sized with a room unknown
         // micro contracts (10 to a mini equivalent in the max size, review 3); every other root is a mini
         public static readonly HashSet<string> MicroRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "MNQ", "MES", "M2K", "MYM", "MGC", "MCL", "SIL", "MBT", "MET", "M6E" };
         private static string Usd(double v) { return "$" + v.ToString("#,0.##", CultureInfo.InvariantCulture); }
 
         // One member's contracts (pure, for the harness): floor(budget / (stopTicks x tickValue)), budget = riskPct of its drawdown;
-        // never above maxLeft (its max size less what it holds and has working, every instrument in mini equivalents; -1 none) nor the
+        // never above maxLeft (its firm max less what it holds and has working, FirmMaxFor's combined rule; -1 none) nor the
         // maxQty cap less what it holds and has working on that side of this root; capped so ALL its open stop risk (openRisk: every
         // position at its working stops and every working entry at its own stop) plus this entry's stop fits its room to its floor and
-        // (with a daily loss rule) its daily room. A room or the open risk not known: it sits out. 0 always says why.
+        // (with a daily loss rule) its daily room. 0 always says why.
+        // 0.6.6 (Anthony's ruling on the review: "size it anyway"): a room NOT known no longer sits the member out: that room's cap is
+        // skipped and note says so ("room unknown: sized by risk only"); the open stop risk not known counts as 0 against a room that
+        // IS known (its own stop still caps it there) and note says so. No confirm for that reason.
         public static int GroupSize(double riskPct, double drawdown, int stopTicks, double tickValue, int maxLeft, string maxWords, int cap, string capWords, int held,
                                     double? roomFloor, string floorWhy, bool hasDaily, double? roomDaily, string dailyWhy, double? openRisk, string openWhy, out double budget, out string why)
         {
-            why = null;
+            string note;
+            return GroupSize(riskPct, drawdown, stopTicks, tickValue, maxLeft, maxWords, cap, capWords, held, roomFloor, floorWhy, hasDaily, roomDaily, dailyWhy, openRisk, openWhy, out budget, out why, out note);
+        }
+        public static int GroupSize(double riskPct, double drawdown, int stopTicks, double tickValue, int maxLeft, string maxWords, int cap, string capWords, int held,
+                                    double? roomFloor, string floorWhy, bool hasDaily, double? roomDaily, string dailyWhy, double? openRisk, string openWhy, out double budget, out string why, out string note)
+        {
+            why = null; note = null;
             budget = Math.Round(riskPct * drawdown) / 100;
             double per = stopTicks * tickValue;
-            if (!roomFloor.HasValue) { why = "its room to the floor is not known (" + (floorWhy ?? "not known") + ")"; return 0; }
-            if (hasDaily && !roomDaily.HasValue) { why = "its daily room is not known (" + (dailyWhy ?? "not known") + ")"; return 0; }
-            if (!openRisk.HasValue) { why = "its open stop risk is not known (" + (openWhy ?? "not known") + ")"; return 0; }
-            double open = Math.Round(openRisk.Value * 100) / 100;
+            bool floorKnown = roomFloor.HasValue, dailyKnown = !hasDaily || roomDaily.HasValue;
+            if (!floorKnown || !dailyKnown) note = "room unknown: sized by risk only (" + (!floorKnown ? "its room to the floor: " + (floorWhy ?? "not known") : "its daily room: " + (dailyWhy ?? "not known")) + ")";
+            else if (!openRisk.HasValue) note = "open stop risk unknown: its room caps this entry's own stop only (" + (openWhy ?? "not known") + ")";
+            double open = openRisk.HasValue ? Math.Round(openRisk.Value * 100) / 100 : 0;
             string less = open > 0 ? " less its open stop risk " + Usd(open) : "";
             int n = (int)Math.Floor(budget / per + 1e-9);
-            if (n < 1) { why = "its risk " + Usd(budget) + " (" + riskPct.ToString("0.##", CultureInfo.InvariantCulture) + "% of its max loss " + Usd(drawdown) + ") is less than one contract's stop (" + Usd(per) + " at " + stopTicks + " ticks)"; return 0; }
+            if (n < 1) { why = "its risk " + Usd(budget) + " (" + riskPct.ToString("0.##", CultureInfo.InvariantCulture) + "% of its max loss " + Usd(drawdown) + ") is less than one contract's stop (" + Usd(per) + " at " + stopTicks + " ticks)"; note = null; return 0; }
             held = Math.Max(0, held);
-            if (maxLeft >= 0 && maxLeft < n) { n = maxLeft; if (n < 1) { why = "it is at its max size (" + maxWords + ")"; return 0; } }
-            if (cap - held < n) { n = cap - held; if (n < 1) { why = "it is at the cap of " + cap + " (" + capWords + "; it holds or has working " + held + ")"; return 0; } }
-            int byFloor = (int)Math.Floor((roomFloor.Value - open) / per + 1e-9);
-            if (byFloor < n) { n = byFloor; if (n < 1) { why = "its room to the floor " + Usd(roomFloor.Value) + less + " is less than one contract's stop (" + Usd(per) + ")"; return 0; } }
-            if (hasDaily)
+            if (maxLeft >= 0 && maxLeft < n) { n = maxLeft; if (n < 1) { why = "it is at its max size (" + maxWords + ")"; note = null; return 0; } }
+            if (cap - held < n) { n = cap - held; if (n < 1) { why = "it is at the cap of " + cap + " (" + capWords + "; it holds or has working " + held + ")"; note = null; return 0; } }
+            if (floorKnown)
+            {
+                int byFloor = (int)Math.Floor((roomFloor.Value - open) / per + 1e-9);
+                if (byFloor < n) { n = byFloor; if (n < 1) { why = "its room to the floor " + Usd(roomFloor.Value) + less + " is less than one contract's stop (" + Usd(per) + ")"; note = null; return 0; } }
+            }
+            if (hasDaily && roomDaily.HasValue)
             {
                 int byDay = (int)Math.Floor((roomDaily.Value - open) / per + 1e-9);
-                if (byDay < n) { n = byDay; if (n < 1) { why = "its daily room " + Usd(roomDaily.Value) + less + " is less than one contract's stop (" + Usd(per) + ")"; return 0; } }
+                if (byDay < n) { n = byDay; if (n < 1) { why = "its daily room " + Usd(roomDaily.Value) + less + " is less than one contract's stop (" + Usd(per) + ")"; note = null; return 0; } }
             }
             return n;
         }
 
         // Review 3: the mini equivalents of a root (10 micros = 1 mini).
         public static double MiniEquivalent(string root) { return MicroRoots.Contains(root ?? "") ? 0.1 : 1; }
-        // Review 3: the max size in mini equivalents (maxMinis; else maxMicros / 10 when only micros are set; -1 none).
-        public static double MaxMiniEquivalents(int maxMinis, int maxMicros) { return maxMinis > 0 && maxMicros > 0 ? Math.Min(maxMinis, maxMicros / 10.0) : maxMinis > 0 ? maxMinis : maxMicros > 0 ? maxMicros / 10.0 : -1; }   // re-review 2: both set: the smaller
+        // 0.6.6 (Anthony 2026-10-20, his ruling on the review: "10 micros = 1 mini"): the firm's max contracts, the one limit that holds
+        // every entry (his own, a group's and the machines'), one combined rule whatever the entry's instrument, so the order of the
+        // trades never changes the answer: after the order, the account's total in mini equivalents (minis + micros / 10, held and
+        // working, every instrument: usedMini, OpenStopRisk's count) is at most maxMinis when it is set, and its total in micro
+        // equivalents (minis x 10 + micros) at most maxMicros when it is set. Both set: both hold (the tighter decides).
+        // Unit: the cap that decides ("minis" or "micros"); Cap, Used (in that unit), Per: one contract of the root in that unit; Left:
+        // the root's contracts still allowed (0 or more). Null when the rules set no max. A tie names the root's own kind.
+        public sealed class FirmMax { public string Unit; public double Cap, Used, Per; public int Left; }
+        public static FirmMax FirmMaxFor(ChartBridgeGroups.Rules r, string root, double usedMini)
+        {
+            if (r == null || (r.MaxMinis <= 0 && r.MaxMicros <= 0)) return null;
+            bool micro = MicroRoots.Contains(root ?? "");
+            FirmMax best = null;
+            foreach (bool inMicros in micro ? new[] { true, false } : new[] { false, true })
+            {
+                int cap = inMicros ? r.MaxMicros : r.MaxMinis;
+                if (cap <= 0) continue;
+                double k = inMicros ? 10 : 1;
+                FirmMax m = new FirmMax { Unit = inMicros ? "micros" : "minis", Cap = cap, Used = Math.Round(Math.Max(0, usedMini) * k, 6), Per = MiniEquivalent(root) * k };
+                m.Left = Math.Max(0, (int)Math.Floor((m.Cap - m.Used) / m.Per + 1e-6));
+                if (best == null || m.Left < best.Left) best = m;
+            }
+            return best;
+        }
+        private static string Qty(double v) { return v.ToString("0.#", CultureInfo.InvariantCulture); }
 
         // Answer 4 and review 1 and 5: what an account holds and has working, every instrument, both sides. risk: the loss if every
         // position is stopped at its working stops (each contract month from its own last price; the farthest stops first, up to the
@@ -266,6 +303,67 @@ namespace NinjaTrader.NinjaScript.AddOns
             return total;
         }
 
+        // ---------------------------------------------------------- 0.6.6: the firm's limits on entries (Anthony 2026-10-20)
+        // "Only absolutely critical things should stop an account from trading." Anthony is the final arbiter on his own orders.
+        //   - His own entries (the page: one account, or each member of a group entry) have ONE check: the firm's max contracts, a
+        //     fixed number typed in the account's rules (never stale). No max set: no check. No floor, daily room or no-stop check.
+        //   - The entries no one types (the bot, an agent, a copier follower) are held back only on a KNOWN breach: the max
+        //     contracts; this entry's stop risk plus the open stop risk past a known room to the floor or a known daily room (the
+        //     group sizing's arithmetic); or the account's daily loss already reached today (no new entry for the rest of that
+        //     trading day). A room or a risk not known lets the entry go. Each hold sends one riskAlert.
+        // Only the part of an order that opens or adds is checked (opening); an exit never is, and nothing here flattens anything.
+
+        // Anthony's own entry: the firm's max contracts, or null. opening: the contracts it opens or adds; closing: the position it
+        // closes first (an order past flat), which no longer counts.
+        internal static string FirmMaxWhy(Account a, string root, int opening, int closing)
+        {
+            if (a == null || opening < 1) return null;
+            ChartBridgeGroups.Rules r = ChartBridgeGroups.RulesOf(a.Name);
+            if (r == null || (r.MaxMinis <= 0 && r.MaxMicros <= 0)) return null;   // no max typed: no check
+            string ignored;
+            double used;
+            OpenStopRisk(a, out ignored, out used);
+            used = Math.Max(0, used - Math.Max(0, closing) * MiniEquivalent(root));
+            FirmMax m = FirmMaxFor(r, root, used);
+            if (m == null || opening <= m.Left) return null;
+            return "over " + a.Name + "'s max of " + Qty(m.Cap) + " " + m.Unit + ": this entry of " + opening + " " + root + " would take it to " + Qty(m.Used + opening * m.Per) + " " + m.Unit +
+                   " (it holds or has working " + Qty(m.Used) + ", every instrument). Nothing was sent" + (m.Left > 0 ? "; " + m.Left + " " + root + " at most" : "");
+        }
+
+        // The bot's, an agent's or a copier follower's entry (who: "the bot", "agent X", "the copier"): held back only on a known breach,
+        // with one riskAlert (kind "held", or "skipped" for a follower). entryRisk: this entry's stop risk in dollars (null: not known).
+        internal static string MachineHold(string who, string kind, Account a, string root, int opening, int closing, double? entryRisk)
+        {
+            if (a == null || opening < 1) return null;
+            string why = MachineHoldWhy(a, root, opening, closing, entryRisk);
+            if (why == null) return null;
+            string text = (kind == "skipped" ? "Copier: " + a.Name + " skipped this copy: " : "Held: " + who + "'s entry on " + a.Name + ": ") + why;
+            ChartBridgeGroups.RiskAlert(kind, a.Name, text);
+            return why;
+        }
+
+        internal static string MachineHoldWhy(Account a, string root, int opening, int closing, double? entryRisk)
+        {
+            string max = FirmMaxWhy(a, root, opening, closing);
+            if (max != null) return max;
+            ChartBridgeGroups.Numbers n;
+            try { n = ChartBridgeGroups.Read(a.Name, a, false); }
+            catch (Exception ex) { ChartBridgeServer.Log("limits: the numbers of " + a.Name + " could not be read (" + ex.Message + "): not known, the entry goes"); return null; }
+            if (ChartBridgeGroups.DailyReached(n))
+                return a.Name + " reached its daily loss today: no new entry from the bot, an agent or the copier until the next trading day (18:00 ET)";
+            if (!entryRisk.HasValue || !n.Balance.HasValue || n.Balance.Value <= 0) return null;   // a balance of 0: NinjaTrader has not given one yet, so no room is known
+            string ignored;
+            double used;
+            double? open = OpenStopRisk(a, out ignored, out used);
+            // the review: the open stop risk not known (never below 0) still holds an entry whose own stop risk alone is past a known room
+            double openKnown = open.HasValue ? open.Value : 0;
+            double total = Math.Round((openKnown + entryRisk.Value) * 100) / 100;
+            string words = "its stop risk " + Usd(entryRisk.Value) + (openKnown > 0.004 ? " plus the open stop risk " + Usd(Math.Round(openKnown * 100) / 100) : !open.HasValue ? " alone (the open stop risk not known)" : "");
+            if (n.RoomFloor.HasValue && total > n.RoomFloor.Value + 0.004) return words + " is more than " + a.Name + "'s room to the floor " + Usd(n.RoomFloor.Value);
+            if (n.RoomDaily.HasValue && total > n.RoomDaily.Value + 0.004) return words + " is more than " + a.Name + "'s daily room " + Usd(n.RoomDaily.Value);
+            return null;
+        }
+
         // Review 1b: one group entry at a time, from its sizing to its last member's order; every page entry takes it too (PlaceOrder)
         internal static readonly object GroupEntryLock = new object();
 
@@ -293,6 +391,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string taken = GroupTakenWhy(name);
                 if (taken != null) { s.Out = taken; continue; }
                 if (a == null) { s.Out = "it is not in NinjaTrader now"; continue; }
+                if (a.Connection == null || a.Connection.Status != ConnectionStatus.Connected) { s.Out = "it is not connected"; continue; }   // 0.6.6: no longer caught by its room not known
                 ChartBridgeGroups.Numbers n = ChartBridgeGroups.Read(name, a, false);
                 if (n.R == null) { s.Out = "it is not in group " + g.Name + " now"; continue; }
                 int posNow = SignedPosition(a, inst), posEff = EffectivePosition(a, inst), pb, ps;
@@ -302,12 +401,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 n.Why.TryGetValue("roomFloor", out floorWhy); n.Why.TryGetValue("roomDaily", out dailyWhy);
                 double usedMini, budget;
                 double? openRisk = OpenStopRisk(a, out openWhy, out usedMini);
-                double maxEq = MaxMiniEquivalents(n.R.MaxMinis, n.R.MaxMicros);
-                int maxLeft = maxEq < 0 ? -1 : Math.Max(0, (int)Math.Floor((maxEq - usedMini) / MiniEquivalent(root) + 1e-9));
-                string maxWords = maxEq < 0 ? "" : (n.R.MaxMinis > 0 && n.R.MaxMicros > 0 ? n.R.MaxMinis + " minis / " + n.R.MaxMicros + " micros" : n.R.MaxMinis > 0 ? n.R.MaxMinis + " minis" : n.R.MaxMicros + " micros") + "; it holds or has working " + usedMini.ToString("0.#", CultureInfo.InvariantCulture) + " in mini equivalents, every instrument";
+                FirmMax fm = FirmMaxFor(n.R, root, usedMini);   // 0.6.6: the combined rule (10 micros = 1 mini), both caps
+                int maxLeft = fm == null ? -1 : fm.Left;
+                string maxWords = fm == null ? "" : (n.R.MaxMinis > 0 && n.R.MaxMicros > 0 ? n.R.MaxMinis + " minis / " + n.R.MaxMicros + " micros" : n.R.MaxMinis > 0 ? n.R.MaxMinis + " minis" : n.R.MaxMicros + " micros") + "; it holds or has working " + usedMini.ToString("0.#", CultureInfo.InvariantCulture) + " in mini equivalents, every instrument";
+                string note;
                 s.Size = GroupSize(riskPct, n.R.Drawdown, stopTicks, tickValue, maxLeft, maxWords, CapFor(root), "maxQty." + root + " in config.txt", held,
-                                   n.RoomFloor, floorWhy, n.R.DailyLoss > 0, n.RoomDaily, dailyWhy, openRisk, openWhy, out budget, out why);
-                s.Budget = budget; s.Out = why; s.Risk = Math.Round(s.Size * stopTicks * tickValue * 100) / 100;
+                                   n.RoomFloor, floorWhy, n.R.DailyLoss > 0, n.RoomDaily, dailyWhy, openRisk, openWhy, out budget, out why, out note);
+                s.Budget = budget; s.Out = why; s.Note = s.Size > 0 ? note : null; s.Risk = Math.Round(s.Size * stopTicks * tickValue * 100) / 100;
             }
             return seats;
         }
@@ -327,7 +427,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string SeatsJson(List<GroupSeat> seats)
         {
             return "[" + string.Join(",", seats.Select(s => "{\"account\":" + CbJson.Str(s.Account) + ",\"size\":" + s.Size.ToString(CultureInfo.InvariantCulture) + ",\"risk\":" + CbJson.Num(s.Risk) +
-                ",\"budget\":" + CbJson.Num(s.Budget) + ",\"out\":" + (s.Out == null ? "null" : CbJson.Str(s.Out)) + "}")) + "]";
+                ",\"budget\":" + CbJson.Num(s.Budget) + ",\"out\":" + (s.Out == null ? "null" : CbJson.Str(s.Out)) + (s.Note != null ? ",\"note\":" + CbJson.Str(s.Note) : "") + "}")) + "]";
         }
 
         // groupPreview and groupOrder (the order connection's gates have passed in OnMessage).
@@ -480,13 +580,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const string MarksHeader = "# ChartBridge account marks (written by ChartBridge; do not edit)";
         public const string MarksHeader2 = "# mark<TAB>account<TAB>peakEod|-<TAB>peakIntraday|-<TAB>dayStartBalance|-<TAB>session<TAB>dayStartAt (UTC ms)|-<TAB>closeSeen|-<TAB>lastBalance|-<TAB>flat|open|-<TAB>eodMissed|-<TAB>intradayMissed|-";
         public static double GapMs = 10000;   // 0.6.3 (audit C2): no reading of a connected account for this long is a gap ChartBridge did not watch
-        public const string ReadFailedText = "groups.txt could not be read: every new entry is refused until it can (exits always work)";
+        // 0.6.6 (Anthony's ruling on the review, "My single orders go"): his own single-account entries still go; group entries are refused.
+        // Anthony's ruling of 2026-10-21: the bot, the agents and the copier are NOT blocked: they run on the last groups that read cleanly
+        // (groups.txt.bak, or the copy a cut-off save left beside a missing groups.txt). With no clean copy at all there is nothing to run
+        // on, so their entries wait. Either way the page shows the banner with a sound, never a dialog. ReadFailedNow() says which.
+        public const string ReadFailedText = "groups.txt could not be read: group entries are refused until it can (your own single-account orders and every exit still go)";
+        public const string MachinesWaitText = "; no copy of the groups read cleanly, so the bot's, the agents' and the copier's entries wait until it can";
         public const double MaxMoney = 100000000;
         public static double MarksWriteMs = 5000;  // account-marks.txt at most every 5 s while something changed (the harness sets 0)
         public const int NameMax = 30;
 
         private static string FilePath { get { return Path.Combine(ChartBridgeConfig.Folder, "groups.txt"); } }
         private static string MarksPath { get { return Path.Combine(ChartBridgeConfig.Folder, "account-marks.txt"); } }
+        // 2026-10-21 (Anthony, "the last groups that read cleanly"; the review of b4bc612): groups.txt as it last read cleanly or was
+        // last saved, written after every clean read and every save. The one copy the bot, the agents and the copier fall back on
+        // while groups.txt cannot be read (never .bak, the copy before the latest save, nor .tmp).
+        public static string GoodPath { get { return Path.Combine(ChartBridgeConfig.Folder, "groups.txt.good"); } }
 
         // Test hook: the UTC clock (unused in NinjaTrader).
         public static Func<DateTime> ClockUtc;
@@ -505,7 +614,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // name, or null). Shown on the page only: ChartBridge checks their shape, never which hero trades the group.
             public string AccountType, Hero;
             // 0.6.5 (Anthony 2026-10-19): the group's risk percent, of each member's max loss (its drawdown amount): 0 off. Stored and
-            // shown; nothing in the order path reads it (no path in ChartBridge sizes one entry onto a group: PROTOCOL.md)
+            // shown; a group entry from the ticket (groupPreview, groupOrder: GroupPlan) is sized from it; the copier, the agents and the bot never read it
             public double RiskPct;
             public string[] Extra = new string[0];                   // fields after riskPct, kept as read (a later ChartBridge's)
             public Group Clone() { Group g = (Group)MemberwiseClone(); g.Extra = (string[])Extra.Clone(); return g; }
@@ -518,7 +627,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             public double Size, DailyLoss, Drawdown, LockAt, Target, Consistency;   // 0: none (DailyLoss, LockAt, Target, Consistency)
             public string Type, TypeId;             // Type: eod, intraday, static; TypeId: The Desk's account type it came from, or null
-            public int MaxMinis, MaxMicros;         // the firm's max size (0: none); shown and sent, never enforced by ChartBridge
+            public int MaxMinis, MaxMicros;         // the firm's max size (0: none); 0.6.6: enforced on every entry (ChartBridgeOrders.FirmMaxFor)
             public bool Own;                        // from a rules line (else the group's)
             public string[] Extra = new string[0];  // fields after typeId, kept as read (a later ChartBridge's)
             public Rules Clone() { Rules r = (Rules)MemberwiseClone(); r.Extra = (string[])Extra.Clone(); return r; }
@@ -562,7 +671,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly object MarksFileLock = new object();
         private static State state = new State();
         private static bool loaded;
-        private static string readError;      // groups.txt exists but could not be read: every entry refused, never rewritten this run
+        private static string readError;      // groups.txt exists but could not be read: group entries refused, never rewritten this run
+        // 2026-10-21 (Anthony): with readError set, the last good copy (its file name) that `state` holds for the bot, the agents and the
+        // copier, or null when none read cleanly (their entries wait)
+        private static string lastGoodFrom, lastGoodAt;   // lastGoodAt: "2026-10-21 08:14 ET", when groups.txt.good was written
         private static readonly Dictionary<string, Mark> Marks = new Dictionary<string, Mark>(StringComparer.OrdinalIgnoreCase);
         private static string marksError;     // account-marks.txt could not be read: not rewritten this run, no marks kept
         private static bool marksDirty;
@@ -577,9 +689,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Mem)
             {
                 ExitOf.Clear(); ExitHeld.Clear(); FlatSince.Clear(); LeftCancelled.Clear(); LeftLooked.Clear(); PosSide.Clear();
-                state = new State(); loaded = false; readError = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
+                state = new State(); loaded = false; readError = null; lastGoodFrom = null; lastGoodAt = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
                 marksSaveFailed = false; lastGroupsJson = null; LastSide.Clear();
             }
+            ClearDailyHits();   // 0.6.6
         }
 
         // Reads groups.txt and account-marks.txt (ChartBridgeAccounts.StartNow, at ChartBridge's start; the harness on its thread).
@@ -605,7 +718,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void Load()
         {
             string err = null;
-            State s = null;
+            State s = null, good = null;   // good: the last good copy the machines run on while groups.txt cannot be read (2026-10-21)
+            string goodFrom = null;
             string[] lines = null;
             bool exists = File.Exists(FilePath);
             List<string> notes = new List<string>();
@@ -628,7 +742,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 lines = ReadLines(FilePath, out err);
                 if (lines != null) s = Parse(lines, out err);
-                if (lines != null && s == null)   // 0.6.3 (review MED 3): never the last good copy on its own: the alarm says what it holds
+                // 0.6.3 (review MED 3): never the last good copy on its own: the alarm says what it holds. 2026-10-21 (Anthony): the bot,
+                // the agents and the copier run on it (a file that cannot be opened at all included); his page keeps the 0.6.6 rules
+                if (s == null)
                 {
                     string[] b = ChartBridgeFiles.ReadBackup(FilePath);
                     string berr;
@@ -636,6 +752,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (bs != null) err += "; its last good copy, groups.txt.bak, holds " + bs.Groups.Count + " group" + (bs.Groups.Count == 1 ? "" : "s") + (bs.Groups.Count > 0 ? " (" + string.Join(", ", bs.Groups.Values.Select(g => g.Name)) + ")" : "") + " with " + bs.Members.Count + " account" + (bs.Members.Count == 1 ? "" : "s") + " in them: to go back to it, copy groups.txt.bak over groups.txt";
                 }
             }
+            string goodAt = null;
+            if (exists && s == null)
+            {
+                // the machines' copy: groups.txt.good only (written after every clean read and every save); none: they wait
+                string gerr;
+                string[] gl = File.Exists(GoodPath) ? Unseal(ReadLines(GoodPath, out gerr)) : null;   // a cut copy: none (they wait)
+                State gs = gl != null ? Parse(gl, out gerr) : null;
+                if (gs != null) { good = gs; goodFrom = "groups.txt.good"; goodAt = EtStamp(File.GetLastWriteTimeUtc(GoodPath)); }
+            }
+            else if (s != null) WriteGood(string.Concat(lines.Select(l => l + Environment.NewLine)));   // a clean read
+            else if (!exists) WriteGood(Serialize(new State()));                                        // no groups.txt: no groups
             string merr = null;
             Dictionary<string, Mark> marks = null;
             bool marksLeft = false;
@@ -669,14 +796,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (loaded) return;   // another thread read them meanwhile
                 loaded = true;
                 if (!exists) state = new State();
-                else if (s == null) { readError = err ?? "unknown"; state = new State(); }
+                else if (s == null) { readError = err ?? "unknown"; state = good ?? new State(); lastGoodFrom = good != null ? goodFrom : null; lastGoodAt = good != null ? goodAt : null; }
                 else state = s;
                 Marks.Clear();
                 if (marks != null) foreach (KeyValuePair<string, Mark> kv in marks) Marks[kv.Key] = kv.Value;
                 marksError = merr != null && marks == null ? merr : null;
                 if (marksLeft) marksDirty = true;
             }
-            if (exists && s == null) Alarm(ReadFailedText + " (" + err + "); fix or delete the file, then recompile");
+            if (exists && s == null) Alarm(ReadFailedNow() + " (" + err + "); fix or delete the file, then recompile");
             else if (exists) ChartBridgeServer.Log("groups: " + s.Groups.Count + " group" + (s.Groups.Count == 1 ? "" : "s") + ", " + s.Members.Count + " account" + (s.Members.Count == 1 ? "" : "s") + " in them (groups.txt)");
             foreach (string w in notes) ChartBridgeFiles.Note(w);
             if (merr != null && marks == null) ChartBridgeServer.Log("account-marks.txt could not be read (" + merr + "): it is not rewritten this run; the trailing floors and the computed P&L are not given until it can be read");
@@ -685,7 +812,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string[] ReadLines(string path, out string err)
         {
             err = null;
-            for (int attempt = 0; attempt < 3; attempt++)
+            for (int attempt = 0; attempt < 5; attempt++)   // review of b4bc612: a sharing lock (a backup, antivirus) gets 5 tries, 0.4 s in all
             {
                 try
                 {
@@ -701,7 +828,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                     return lines.ToArray();
                 }
-                catch (Exception ex) { err = ex.Message; if (attempt < 2) Thread.Sleep(100); }
+                catch (Exception ex) { err = ex.Message; if (attempt < 4) Thread.Sleep(100); }
             }
             return null;
         }
@@ -747,7 +874,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             State s = new State();
             if (lines.Length < 2 || lines[0].TrimEnd('\r') != Header || !lines[1].StartsWith("#", StringComparison.Ordinal)) { why = "the first two lines are not ChartBridge's"; return null; }
             List<string[]> members = new List<string[]>();
-            Dictionary<string, string> rulesAt = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             int maxId = 0;
             for (int i = 2; i < lines.Length; i++)
             {
@@ -790,13 +916,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 else if (p[0] == "rules")
                 {
-                    // 0.6.5: a member's own rules (the same checks as groupSave's); its account must be a member (checked below)
+                    // 0.6.5: a member's own rules (the same checks as groupSave's); 0.6.6: or an account in no group's (the firm's rules)
                     Rules r;
                     string bad;
                     if (p.Length < 12 || p[1].Length == 0 || p[1] != p[1].Trim() || (r = FileRules(p, out bad)) == null) { why = at + " is not a rules line"; return null; }
                     if (s.Own.ContainsKey(p[1])) { why = at + " gives an account rules twice"; return null; }
                     s.Own[p[1]] = r;
-                    rulesAt[p[1]] = at;
                 }
                 else if (p[0] == "personal")
                 {
@@ -808,7 +933,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else { why = at + " is not a group, member, rules or personal line"; return null; }
             }
             foreach (string[] m in members) if (!s.Groups.ContainsKey(m[1])) { why = m[2] + " puts an account in group " + m[1] + ", which is not there"; return null; }
-            foreach (KeyValuePair<string, string> kv in rulesAt) if (!s.Members.ContainsKey(kv.Key)) { why = kv.Value + " gives rules to an account in no group"; return null; }
+            // 0.6.6: an account in no group may have its own (the firm's) rules (memberRules there, 0a9f315), written as a rules line; this
+            // check refused that very file at the next start ("gives rules to an account in no group": every entry refused). Taken now.
             s.Next = maxId + 1;
             return s;
         }
@@ -884,6 +1010,51 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (KeyValuePair<string, double[]> kv in s.Personal.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
                 b.Append("personal\t").Append(kv.Key).Append('\t').Append(MoneyText(kv.Value[0])).Append('\t').Append(MoneyText(kv.Value[1])).Append('\n');
             return b.ToString();
+        }
+
+        // The second review of 4406fcb (D): groups.txt.good ends with "# end <lines before it>", so a copy cut short (a crash, a power
+        // cut) is no clean copy (the machines wait) instead of groups with members missing. groups.txt itself never has this line.
+        public static string SealGood(string text)
+        {
+            string body = text.EndsWith("\n") ? text : text + Environment.NewLine;
+            int n = body.Split('\n').Length - 1;
+            return body + "# end " + n.ToString(CultureInfo.InvariantCulture) + Environment.NewLine;
+        }
+        private static string[] Unseal(string[] lines)
+        {
+            if (lines == null) return null;
+            List<string> l = lines.Select(x => x.TrimEnd('\r')).ToList();
+            while (l.Count > 0 && l[l.Count - 1].Length == 0) l.RemoveAt(l.Count - 1);
+            if (l.Count == 0) return null;
+            Match m = Regex.Match(l[l.Count - 1], "^# end ([0-9]{1,9})$");
+            if (!m.Success || int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) != l.Count - 1) return null;
+            l.RemoveAt(l.Count - 1);
+            return l.ToArray();
+        }
+
+        // groups.txt.good: as WriteWhole writes (a temp file written through and flushed to the disk, then swapped in), with no backup of
+        // its own. A failure is logged and changes nothing else.
+        private static void WriteGood(string text)
+        {
+            try
+            {
+                Directory.CreateDirectory(ChartBridgeConfig.Folder);
+                string tmp = GoodPath + ".tmp";
+                byte[] bytes = new UTF8Encoding(false).GetBytes(SealGood(text));
+                using (FileStream fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+                {
+                    fs.Write(bytes, 0, bytes.Length);
+                    fs.Flush(true);
+                }
+                if (File.Exists(GoodPath)) File.Replace(tmp, GoodPath, null); else File.Move(tmp, GoodPath);
+            }
+            catch (Exception ex) { ChartBridgeServer.Log("groups.txt.good could not be written (" + ex.Message + "); the last one stays"); }
+        }
+
+        private static string EtStamp(DateTime utc)
+        {
+            try { return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), ChartBridgeTime.Eastern).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " ET"; }
+            catch (Exception) { return utc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC"; }
         }
 
         // Whole, through a temp file; null when saved, else why.
@@ -1002,6 +1173,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
             SaveMarks(false);
+            // 0.6.6: an account whose known daily room reached 0 or below is marked for the day, with one alert (DailyReached)
+            foreach (Account a in all)
+            {
+                if (a == null || a.Name == null || ChartBridgeOrders.IsNeverTradable(a.Name) || !Up(a) || !ChartBridgeAccounts.Listed(a.Name)) continue;
+                try { DailyReached(Read(a.Name, a, false)); }
+                catch (Exception ex) { ChartBridgeServer.Log("groups: the daily loss check of " + a.Name + " failed (" + ex.Message + ")"); }
+            }
             foreach (string w in notes) { ChartBridgeServer.Log("NOTE: " + w); ChartBridgeServer.SendToTraders("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(w) + "}"); }
             try { Leftovers(); } catch (Exception ex) { ChartBridgeServer.Log("groups: leftover exits check error: " + ex.Message); }   // Q-EXIT (b)
             SendGroups(false);
@@ -1239,7 +1417,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> members;
             lock (Mem)
             {
-                if (readError != null) return ReadFailedText;
+                // 0.6.6 (Anthony's ruling): his own single-account entry goes (its group, and so one direction, cannot be known); every
+                // other source stays refused. A group entry never reaches this (GroupPlan refuses it first, with a banner).
+                // 2026-10-21 (Anthony): the bot's, the agents' and the copier's run on the last good copy (in `state`); with none, they wait
+                if (readError != null && source == "page") return null;
+                if (readError != null && lastGoodFrom == null) return ReadFailedNow();
                 string id;
                 if (!state.Members.TryGetValue(a.Name, out id) || !state.Groups.TryGetValue(id, out g)) return null;
                 g = g.Clone();
@@ -1341,7 +1523,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"ownRules\":[").Append(string.Join(",", members[g.Id].Where(x => own.Contains(x)).Select(x => CbJson.Str(x)))).Append("]")   // 0.6.5: the members with rules of their own
                  .Append(",\"tradeOut\":[").Append(string.Join(",", members[g.Id].Select(x => new[] { x, TradeOutWhy(x) }).Where(x => x[1] != null).Select(x => "{\"account\":" + CbJson.Str(x[0]) + ",\"why\":" + CbJson.Str(x[1]) + "}"))).Append("]}");   // 0.6.5 (review 4): the members a group entry leaves out
             }
-            b.Append("],\"error\":").Append(err == null ? "null" : CbJson.Str(ReadFailedText + " (" + err + ")")).Append('}');
+            b.Append("],\"error\":").Append(err == null ? "null" : CbJson.Str(ReadFailedNow() + " (" + err + ")")).Append('}');
             NoteSides(sides);
             return b.ToString();
         }
@@ -1396,7 +1578,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             EnsureLoaded();
             string err;
             lock (Mem) err = readError;
-            if (err != null) c.Send(StatusJson("error", ReadFailedText + " (" + err + ")"));
+            if (err != null) c.Send(StatusJson("error", ReadFailedNow() + " (" + err + ")"));
         }
 
         // ---------------------------------------------------------- the account numbers (item 5)
@@ -1404,9 +1586,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             public string Name, Kind, GroupId, GroupName, Side, Session;
             public Group G;
-            public Rules R;      // 0.6.5: the member's rules (its own, or its group's); null when not in a group
+            public Rules R;      // 0.6.5: the member's rules (its own, or its group's); 0.6.6: an account in no group with its own rules too; else null
             public bool MySet;   // a personal line was ever saved (My floor or My daily, 0 included): rules are Anthony's, else null
             public double? MyFloor, MyDaily, Balance, Unrealized, Realized, Pnl, Floor, RoomFloor, RoomDaily, TargetLeft;
+            public double? NtRoomFloor;   // 0.6.6: NinjaTrader's own trailing figure, shown beside the computed room (never in place of it)
             public readonly Dictionary<string, string> Src = new Dictionary<string, string>(), Why = new Dictionary<string, string>();
             public void Set(string key, double? v, string src, string why) { if (v.HasValue) Src[key] = src; else Why[key] = why ?? "not known"; }
         }
@@ -1425,7 +1608,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> members = null;
             lock (Mem)
             {
-                groupsErr = readError; marksErr = marksError;
+                groupsErr = readError != null && lastGoodFrom == null ? readError : null;   // 2026-10-21: the rooms from the last good copy when there is one
+                marksErr = marksError;
                 string id;
                 if (name != null && state.Members.TryGetValue(name, out id) && state.Groups.TryGetValue(id, out g))
                 {
@@ -1433,6 +1617,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     g = g.Clone();
                     if (withSide) members = state.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList();
                 }
+                else if (name != null) { Rules own; if (state.Own.TryGetValue(name, out own)) n.R = own.Clone(); }   // 0.6.6: the firm's rules on an account in no group
                 if (name != null && state.Personal.TryGetValue(name, out mine)) mine = (double[])mine.Clone();
                 Mark mk;
                 if (name != null && Marks.TryGetValue(name, out mk)) mark = mk.Clone();
@@ -1473,16 +1658,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             double? ntRoom = up ? ChartBridgeAccounts.RoomDrawdown(a, out ntWhy) : null;
             if (groupsErr != null)
             {
-                string w = ReadFailedText;
+                string w = ReadFailedNow();
                 n.Set("floor", null, null, w); n.Set("roomFloor", null, null, w); n.Set("roomDaily", null, null, w); n.Set("targetLeft", null, null, w);
                 return n;
             }
-            if (g != null)
+            if (g != null || n.R != null)
             {
                 // 0.6.5: every number from the member's own rules (its own size, drawdown and type, lock, daily loss and target),
-                // or its group's when it has none of its own (as 0.6.4)
+                // or its group's when it has none of its own (as 0.6.4); 0.6.6: an account in no group with its own rules too
                 Rules r = n.R;
-                string whose = r.Own ? n.Name + "'s rules in " + g.Name : "group " + g.Name;
+                string whose = g == null ? n.Name + "'s rules" : r.Own ? n.Name + "'s rules in " + g.Name : "group " + g.Name;
+                string again = g != null ? "put it in " + g.Name + " again and give" : "give";
                 string floorWhy = null;
                 bool missedHigh = false;
                 if (r.Type == "static") n.Floor = r.Size - r.Drawdown;
@@ -1491,9 +1677,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     double? peak = mark == null ? null : r.Type == "eod" ? mark.PeakEod : mark.PeakIntraday;
                     string gone = mark == null ? null : r.Type == "eod" ? mark.EodMissed : mark.IntradayMissed;
-                    if (gone != null) { floorWhy = r.Type == "eod" ? "ChartBridge was not running at the close of " + gone + ": put the account in " + g.Name + " again and give the highest close from the firm's dashboard"
-                                                                  : "ChartBridge was not watching on " + gone + " while the account held a position or traded, so its intraday high may be missed: put it in " + g.Name + " again and give the highest balance from the firm's dashboard"; missedHigh = true; }
-                    else if (!peak.HasValue) floorWhy = "no " + (r.Type == "eod" ? "end-of-day" : "intraday") + " high is known for this account: put it in " + g.Name + " again and give its highest close";
+                    if (gone != null) { floorWhy = r.Type == "eod" ? "ChartBridge was not running at the close of " + gone + ": give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest close"
+                                                                  : "ChartBridge was not watching on " + gone + " while the account held a position or traded, so its intraday high may be missed: give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest balance"; missedHigh = true; }
+                    else if (!peak.HasValue) floorWhy = "no " + (r.Type == "eod" ? "end-of-day" : "intraday") + " high is known for this account: give the minimum balance from the firm's dashboard (the account's settings)";
                     else
                     {
                         double f = Math.Max(peak.Value, r.Size) - r.Drawdown;
@@ -1503,7 +1689,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 n.Set("floor", n.Floor, "computed", floorWhy);
                 // 0.6.3 (audit C2): never a room from a high that may be too low; review LOW 8: NinjaTrader's own trailing figure when it gives one
-                if (missedHigh && ntRoom.HasValue) { n.RoomFloor = ntRoom; n.Set("roomFloor", ntRoom, "ninjatrader", null); }
+                if (missedHigh && ntRoom.HasValue) { n.RoomFloor = ntRoom; n.NtRoomFloor = ntRoom; n.Set("roomFloor", ntRoom, "ninjatrader", null); }
                 else if (missedHigh) n.Set("roomFloor", null, null, floorWhy);
                 else SetRoomFloor(n, ntRoom, equity, n.Floor.HasValue ? eqWhy : floorWhy);
                 if (r.DailyLoss > 0) { n.RoomDaily = n.Pnl.HasValue ? r.DailyLoss + n.Pnl.Value : (double?)null; n.Set("roomDaily", n.RoomDaily, "computed", n.Why.ContainsKey("pnlToday") ? n.Why["pnlToday"] : null); }
@@ -1533,13 +1719,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             return (utc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
         }
 
-        // Review of #48 (item 4): with NinjaTrader's trailing drawdown and the computed room both known, the smaller (src says which).
+        // 0.6.6 (Anthony 2026-10-20: "the floor and thus the % used for certain accounts is still wrong"): the room computed from
+        // the firm's rules (the lock included) is the room; NinjaTrader's own trailing figure (the broker's, which never locks) is
+        // used only when nothing is computed, and is always sent beside it (roomFloorNt) so the page can flag a difference.
+        // Was (review of #48, item 4): the smaller of the two, so NinjaTrader's unlocked figure won over a locked floor.
+        public const double FloorCheckDollars = 25;
         private static void SetRoomFloor(Numbers n, double? ntRoom, double? equity, string why)
         {
             double? comp = n.Floor.HasValue && equity.HasValue ? equity.Value - n.Floor.Value : (double?)null;
-            if (ntRoom.HasValue && comp.HasValue) { n.RoomFloor = Math.Min(ntRoom.Value, comp.Value); n.Set("roomFloor", n.RoomFloor, ntRoom.Value < comp.Value ? "ninjatrader" : "computed", null); }
+            n.NtRoomFloor = ntRoom;
+            if (comp.HasValue) { n.RoomFloor = comp; n.Set("roomFloor", comp, "computed", null); }
             else if (ntRoom.HasValue) { n.RoomFloor = ntRoom; n.Set("roomFloor", n.RoomFloor, "ninjatrader", null); }
-            else { n.RoomFloor = comp; n.Set("roomFloor", comp, "computed", why); }
+            else { n.RoomFloor = null; n.Set("roomFloor", null, null, why); }
         }
 
         private static double? Get(Numbers n, string key)
@@ -1580,8 +1771,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"group\":").Append(n.GroupId == null ? "null" : CbJson.Str(n.GroupId))
              .Append(",\"myFloor\":").Append(Num(n.MyFloor)).Append(",\"myDailyLoss\":").Append(Num(n.MyDaily)).Append(",\"myLimitsSet\":").Append(n.MySet ? "true" : "false");
             foreach (string k in PageKeys) b.Append(",\"").Append(k).Append("\":").Append(Num(Get(n, k)));
+            b.Append(",\"roomFloorNt\":").Append(Num(n.NtRoomFloor));
+            string copy = FromCopy();   // 2026-10-21 (review of b4bc612): floors and rooms from groups.txt.good say so (the page shows it)
+            if (copy != null) b.Append(",\"fromCopy\":").Append(CbJson.Str(copy));   // 0.6.6: NinjaTrader's own figure, beside the room (the page flags a difference)
             SrcWhy(b, n, PageKeys);
-            b.Append(",\"rules\":");   // 0.6.5: a member's rules (own true: its own; false: its group's), null in no group
+            b.Append(",\"rules\":");   // 0.6.5: a member's rules (own true: its own; false: its group's), null in no group; 0.6.6: an account in no group with its own rules
             if (n.R == null) b.Append("null"); else RulesJson(b, n.R, true);
         }
 
@@ -1644,6 +1838,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "accountGroup", new[] { "type", "cid", "account", "group", "highClose", "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" } },
             { "memberRules", new[] { "type", "cid", "account", "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" } },
             { "accountLimits", new[] { "type", "cid", "account", "floor", "dailyLoss" } },
+            { "firmMinimum", new[] { "type", "cid", "account", "minBalance" } },   // 0.6.6: the firm's minimum balance seeds the floor
         };
 
         public static bool Handles(string type) { return type != null && Keys.ContainsKey(type); }
@@ -1663,7 +1858,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     EnsureLoaded();
                     lock (Mem) if (readError != null) why = ReadFailedText + "; nothing was changed";
                 }
-                if (why == null) why = type == "groupSave" ? GroupSave(m) : type == "groupDelete" ? GroupDelete(m) : type == "accountGroup" ? AccountGroup(m) : type == "memberRules" ? MemberRules(m) : AccountLimits(m);
+                if (why == null) why = type == "groupSave" ? GroupSave(m) : type == "groupDelete" ? GroupDelete(m) : type == "accountGroup" ? AccountGroup(m) : type == "memberRules" ? MemberRules(m) : type == "firmMinimum" ? FirmMinimum(m) : AccountLimits(m);
                 if (why != null) client.Send(Reject(cid, why));
             }
             catch (Exception ex)
@@ -1717,8 +1912,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static string Save(State next)
         {
-            string err = WriteWhole(FilePath, Serialize(next));
+            string text = Serialize(next), err = WriteWhole(FilePath, text);
             if (err != null) return "groups.txt could not be saved (" + err + "); nothing was changed";
+            WriteGood(text);   // 2026-10-21: the copy the machines fall back on is always the latest save
             lock (Mem) state = next;
             return null;
         }
@@ -1949,13 +2145,55 @@ namespace NinjaTrader.NinjaScript.AddOns
                 State next;
                 lock (Mem) next = state.Clone();
                 string gid;
-                if (!next.Members.TryGetValue(name, out gid)) return name + " is in no group: its own rules are for a member of a group (My floor and My daily are for an account in no group)";
-                gname = next.Groups[gid].Name;
+                // 0.6.6: an account in no group may hold the firm's rules too (its floor then trails and locks as the firm's does)
+                gname = next.Members.TryGetValue(name, out gid) ? next.Groups[gid].Name : null;
                 next.Own[name] = r;
                 string err = Save(next);
                 if (err != null) return err;
             }
-            ChartBridgeServer.Log("groups: " + name + "'s own rules in " + gname + ": " + MemberWords(r) + " (by the page)");
+            ChartBridgeServer.Log("groups: " + name + "'s own rules" + (gname != null ? " in " + gname : " (in no group)") + ": " + MemberWords(r) + " (by the page)");
+            Changed();
+            return null;
+        }
+
+        // 0.6.6 (Anthony 2026-10-20: the floor "still wrong ... how do we square this, so it stops being an issue"): the minimum
+        // balance the firm's dashboard shows seeds the account's highs, so the computed floor equals the firm's from now on:
+        // high = minBalance + drawdown (the floor is then min(high - drawdown, lock) = minBalance, a locked floor included).
+        // The account needs the firm's rules (a group's, or its own), with a trailing drawdown; a minimum below the starting
+        // floor (size - drawdown) or above the lock is refused (the firm never shows one).
+        private static string FirmMinimum(Dictionary<string, string> m)
+        {
+            string name = ChartBridgeV3.Str(m, "account"), why;
+            if (name == null) return "firmMinimum needs account (a plain string)";
+            double min;
+            if ((why = Money(m, "minBalance", false, out min)) != null) return why;
+            Account a = Find(name);
+            if (a == null && !ChartBridgeAccounts.Listed(name)) return "no account " + name;
+            if (a != null) name = a.Name;
+            Rules r;
+            lock (Mem)
+            {
+                if (marksError != null) return "account-marks.txt could not be read (" + marksError + "); nothing was changed";
+                string gid; Group g;
+                if (state.Members.TryGetValue(name, out gid) && state.Groups.TryGetValue(gid, out g)) r = state.RulesOf(name, g);
+                else if (!state.Own.TryGetValue(name, out r)) return name + " has no firm rules yet: apply its account type first (the floor comes from its drawdown and lock)";
+            }
+            if (r.Type == "static") return name + "'s drawdown is static: its floor is fixed at " + (r.Size - r.Drawdown).ToString("0.00", CultureInfo.InvariantCulture) + ", nothing to give";
+            if (min < r.Size - r.Drawdown - 0.004) return "the minimum balance " + min.ToString("0.00", CultureInfo.InvariantCulture) + " is below the starting floor (" + (r.Size - r.Drawdown).ToString("0.00", CultureInfo.InvariantCulture) + "): check the firm's dashboard";
+            if (r.LockAt > 0 && min > r.LockAt + 0.004) return "the minimum balance " + min.ToString("0.00", CultureInfo.InvariantCulture) + " is above where the floor stops (" + r.LockAt.ToString("0.00", CultureInfo.InvariantCulture) + "): check the firm's dashboard or the account's type";
+            double high = Math.Round(min + r.Drawdown, 2);
+            bool flatNow = a == null || IsFlat(a);
+            double? balNow = Up(a) ? Item(a, AccountItem.CashValue) : null;
+            lock (Mem)
+            {
+                Mark mk;
+                if (!Marks.TryGetValue(name, out mk)) Marks[name] = mk = new Mark { Name = name };
+                mk.PeakEod = high; mk.PeakIntraday = high; marksDirty = true;
+                mk.EodMissed = null; mk.IntradayMissed = null; mk.CloseSeen = LatestClose(NowEt());
+                mk.Seen = true; mk.Legacy = false; mk.LastAt = NowMs(); if (balNow.HasValue && balNow.Value > 0) { mk.LastBal = Math.Round(balNow.Value, 2); mk.LastFlat = flatNow; }
+            }
+            SaveMarks(true);
+            ChartBridgeServer.Log("groups: " + name + "'s floor set from the firm's minimum balance " + min.ToString("0.00", CultureInfo.InvariantCulture) + " (its high is now " + high.ToString("0.00", CultureInfo.InvariantCulture) + "; by the page)");
             Changed();
             return null;
         }
@@ -1979,7 +2217,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             EnsureLoaded();
             lock (Mem)
             {
-                if (readError != null || !state.Groups.ContainsKey(id)) return null;
+                if ((readError != null && lastGoodFrom == null) || !state.Groups.ContainsKey(id)) return null;   // 2026-10-21: the last good copy's seats
                 return state.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
             }
         }
@@ -2016,11 +2254,77 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Mem) { Group g; return state.Groups.TryGetValue(id, out g) ? g.Name : null; }
         }
 
-        // 0.6.0: groups.txt could not be read (no group is known this run).
-        public static bool Unreadable() { EnsureLoaded(); lock (Mem) return readError != null; }
+        // 0.6.0: no group is known this run: groups.txt could not be read and (2026-10-21, Anthony) no last good copy read cleanly either.
+        // With a last good copy the bot, the agents and the copier run on it, so this is false; FileUnreadable() is the file itself.
+        public static bool Unreadable() { EnsureLoaded(); lock (Mem) return readError != null && lastGoodFrom == null; }
+        // groups.txt itself could not be read (changes refused, the file never rewritten, page group entries refused).
+        public static bool FileUnreadable() { EnsureLoaded(); lock (Mem) return readError != null; }
+        // The groups.txt alarm's words: what the machines do (run on the last good copy, or wait).
+        public static string ReadFailedNow()
+        {
+            string from, at;
+            lock (Mem) { from = lastGoodFrom; at = lastGoodAt; }
+            return ReadFailedText + (from != null ? "; the bot, the agents and the copier run on its last good copy (" + from + ", from the copy of " + (at ?? "an unknown time") + ")" : MachinesWaitText);
+        }
+        // The label of numbers worked out from the copy ("from the copy of 2026-10-21 08:14 ET"), or null when groups.txt read cleanly.
+        public static string FromCopy()
+        {
+            lock (Mem) return readError != null && lastGoodFrom != null ? "from the copy of " + (lastGoodAt ?? "an unknown time") : null;
+        }
 
         // ---------------------------------------------------------- telling the pages
         private static string Reject(string cid, string reason) { return "{\"type\":\"reject\"" + (cid != null ? ",\"cid\":" + CbJson.Str(cid) : "") + ",\"reason\":" + CbJson.Str(reason) + "}"; }
+        // ---------------------------------------------------------- 0.6.6: the daily loss reached, and the risk alerts (Anthony 2026-10-20)
+        // An account whose known daily room went to 0 or below in a trading day (account -> that day): no new entry from the bot, an
+        // agent or the copier on it for the rest of that day, whatever its room does after (an open loss that comes back). Anthony's own
+        // orders are never held by it, and nothing flattens the account: the firm does that at its own limit. One alert per account and
+        // day. Memory only: after a restart a room still at or below 0 marks it again.
+        private static readonly Dictionary<string, string> DailyHit = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        public static bool DailyReached(Numbers n)
+        {
+            if (n == null || n.Name == null || n.Session == null) return false;
+            bool fresh = false, hit;
+            lock (DailyHit)
+            {
+                string day;
+                hit = DailyHit.TryGetValue(n.Name, out day) && day == n.Session;
+                // a balance of 0 is NinjaTrader not having given one yet (Tick's rule): never a loss reached
+                if (!hit && n.RoomDaily.HasValue && n.RoomDaily.Value <= 0 && n.Balance.HasValue && n.Balance.Value > 0) { DailyHit[n.Name] = n.Session; hit = fresh = true; }
+            }
+            if (fresh)
+            {
+                double limit = n.R != null && n.R.DailyLoss > 0 ? n.R.DailyLoss : n.MyDaily ?? 0;
+                RiskAlert("dailyLoss", n.Name, n.Name + " reached its daily loss" + (limit > 0 ? " limit of " + Usd(limit) : "") + " (daily room " + Usd(n.RoomDaily.Value) +
+                          "): the bot, the agents and the copier send no new entry on it until the next trading day (18:00 ET). Your own orders are not held, and nothing was flattened.");
+            }
+            return hit;
+        }
+        public static void ClearDailyHits() { lock (DailyHit) DailyHit.Clear(); }
+
+        // 0.6.6: the rules that hold for an account (a member's own, else its group's; an account in no group with its own), or null.
+        // No clock read, so the page's entries ask it before anything else.
+        public static Rules RulesOf(string name)
+        {
+            if (name == null) return null;
+            EnsureLoaded();
+            lock (Mem)
+            {
+                string id;
+                Group g;
+                if (state.Members.TryGetValue(name, out id) && state.Groups.TryGetValue(id, out g)) return state.RulesOf(name, g);
+                Rules own;
+                return state.Own.TryGetValue(name, out own) ? own.Clone() : null;
+            }
+        }
+
+        // One alert (0.6.6): every page that trades shows it as a banner with a sound, never a dialog. kind: dailyLoss, held or skipped.
+        public static void RiskAlert(string kind, string account, string text)
+        {
+            ChartBridgeServer.Log("ALERT: " + text);
+            ChartBridgeServer.SendToTraders("{\"type\":\"riskAlert\",\"kind\":" + CbJson.Str(kind) + ",\"account\":" + CbJson.Str(account) + ",\"text\":" + CbJson.Str(text) + "}");
+        }
+        private static string Usd(double v) { return (v < 0 ? "-$" : "$") + Math.Abs(v).ToString("#,0.00", CultureInfo.InvariantCulture); }
+
         private static string StatusJson(string level, string text) { return "{\"type\":\"status\",\"level\":\"" + level + "\",\"text\":" + CbJson.Str(text) + "}"; }
         private static void Alarm(string text) { ChartBridgeServer.Log("ALERT: " + text); ChartBridgeServer.SendToTraders(StatusJson("error", text)); }
     }

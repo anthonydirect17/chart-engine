@@ -15,8 +15,18 @@
  *   ChartBridgePin.active()      -> true once unlocked against a ChartBridge that has the PIN.
  *   ChartBridgePin.check()       -> promise of 'unlocked', 'set', 'none', 'unsupported', 'error' or 'offline'.
  *
+ *   ChartBridgePin.openChild(url, features) -> the new window, or null (blocked): 1.34.0, Open my screens (live/screens.js).
+ *
  * The unlock lives in this closure only: never localStorage, sessionStorage, cookies or the URL bar. A reload asks
  * for the PIN again. A wrong PIN is refused and that is all: nothing is counted and nothing is ever blocked.
+ *
+ * One exception (chart 1.34.0, Anthony 2026-10-20: "One PIN opens all three", the design as approved): a window this page
+ * opens with openChild (Open my screens) may ask for this page's unlock once. openChild names the new window with a
+ * one-time random code ("cbw-" and 32 hex); the new window, when its PIN pad would show, posts that code to the window
+ * that opened it (this origin only) and forgets it (its name is cleared, so a reload asks for the PIN); this page answers
+ * with its unlock only to that same window, only within HANDOVER_MS of opening it, only once, and only while unlocked.
+ * The unlock goes window to window in memory, never through storage, a cookie or the URL. A window opened any other way
+ * (typed, a bookmark, the browser restoring it), a reload, or no answer within ASK_MS: the PIN pad, as always.
  */
 (function () {
   'use strict';
@@ -25,6 +35,10 @@
   let token = null;                 // the unlock: memory only
   let supported = true;             // false against a ChartBridge without the PIN
   let ui = null;                    // the open overlay: { el, kind, close() }
+  const HANDOVER_MS = 60000, ASK_MS = 1500;
+  const CHILD_NAME = /^cbw-([0-9a-f]{32})$/;
+  const children = new Map();       // one-time code -> { win, at }: the windows openChild opened, not answered yet
+  let handoverTried = false;        // a window asks its opener once, at its first PIN pad
 
   /* ---------------- ChartBridge: POST, same origin, small JSON bodies */
   async function call(path, body) {
@@ -54,7 +68,7 @@
       if (s === 'unsupported') { supported = false; close(); done(); }
       else if (s === 'unlocked') { close(); done(); }
       else if (s === 'none') showSet(done);
-      else if (s === 'set') showUnlock(done);
+      else if (s === 'set') { if (handoverTried) showUnlock(done); else { handoverTried = true; handover().then(ok => { if (ok) { close(); done(); } else showUnlock(done); }); } }
       else { showWaiting('ChartBridge could not check the PIN: ' + lastReason + '. Trying again. (Open ' + location.origin + '/ in its own tab.)'); later(() => runGate(done)); }
     }, () => { showWaiting(''); later(() => runGate(done)); });
   }
@@ -90,6 +104,46 @@
           resolve(withUnlock());
         }
       }, () => resolve(withUnlock()));                                                        // not answering: keep the unlock
+    });
+  }
+  /* ---------------- 1.34.0: the unlock for a window this page opened (Open my screens), and asking for it */
+  function openChild(url, features) {
+    const b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    const code = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+    const win = window.open(url, 'cbw-' + code, features);
+    if (win) children.set(code, { win, at: Date.now() });
+    return win;
+  }
+  window.addEventListener('message', e => {
+    const m = e.data;
+    if (e.origin !== location.origin || !m || m.type !== 'cb-unlock-ask' || typeof m.code !== 'string') return;
+    const c = children.get(m.code);
+    children.delete(m.code);                                                  // once, answered or not
+    for (const [k, x] of children) if (Date.now() - x.at > HANDOVER_MS) children.delete(k);
+    if (!c || e.source !== c.win || Date.now() - c.at > HANDOVER_MS || !active()) return;
+    try { c.win.postMessage({ type: 'cb-unlock', code: m.code, token }, location.origin); } catch (err) { /* gone */ }
+  });
+  /* resolves true once the opener's unlock holds here (ChartBridge says unlocked with it), else false: the pad then */
+  function handover() {
+    const named = CHILD_NAME.exec(window.name || ''), opener = window.opener;
+    if (!named) return Promise.resolve(false);
+    try { window.name = ''; } catch (e) { /* kept */ }                         // one try: a reload asks for the PIN
+    if (!opener) return Promise.resolve(false);
+    const code = named[1];
+    return new Promise(resolve => {
+      let over = false;
+      const end = ok => { if (over) return; over = true; window.removeEventListener('message', got); clearTimeout(t); resolve(ok); };
+      const got = e => {
+        const m = e.data;
+        if (e.origin !== location.origin || e.source !== opener || !m || m.type !== 'cb-unlock' || m.code !== code || typeof m.token !== 'string' || !/^v1\.[0-9a-f]+\.[0-9a-f]+$/.test(m.token)) return;
+        token = m.token;
+        clearTimeout(t);
+        status().then(st => { if (st === 'unlocked') end(true); else { token = null; end(false); } }, () => { token = null; end(false); });
+      };
+      const t = setTimeout(() => end(false), ASK_MS);
+      window.addEventListener('message', got);
+      try { opener.postMessage({ type: 'cb-unlock-ask', code }, location.origin); } catch (e) { end(false); }
     });
   }
   const headers = () => token ? { [HEADER]: token } : {};
@@ -284,5 +338,5 @@
     setTimeout(() => t.remove(), 6000);
   }
 
-  window.ChartBridgePin = { gate, wsUrl, headers, openChange, active, check };
+  window.ChartBridgePin = { gate, wsUrl, headers, openChange, active, check, openChild };
 })();

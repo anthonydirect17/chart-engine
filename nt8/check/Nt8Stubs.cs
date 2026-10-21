@@ -131,7 +131,8 @@ namespace NinjaTrader.Cbi
         public int Quantity { get; set; }
         public double AveragePrice { get; set; }
     }
-    public class OrderEventArgs : EventArgs { public Order Order { get; set; } public ErrorCode Error { get; set; } }
+    // NinjaTrader's OrderEventArgs carries the order's values as of this event (0.6.6 stop record: ChartBridgeStops reads these)
+    public class OrderEventArgs : EventArgs { public Order Order { get; set; } public ErrorCode Error { get; set; } public OrderState OrderState { get; set; } public double StopPrice { get; set; } public double LimitPrice { get; set; } public int Quantity { get; set; } public int Filled { get; set; } }
     public class PositionEventArgs : EventArgs
     {
         public Position Position { get; set; }

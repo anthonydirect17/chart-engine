@@ -72,6 +72,7 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   copierSet: ['type', 'cid', 'leader', 'mode'],
   copierFollower: ['type', 'cid', 'account', 'on', 'qty', 'size', 'lossLimit'],
   copierRearm: ['type', 'cid'],
+  copierFollowerRemove: ['type', 'cid', 'account'],               // 0.6.6 (WORK 2026-10-20)
   botMode: ['type', 'cid', 'mode'],
   botKill: ['type', 'cid', 'on'],
   botSeen: ['type', 'id', 'at'],
@@ -97,8 +98,8 @@ export const BOT_KEYS = {
 };
 const BOT_NONE_WHY = 'the bot\'s account is None: no bot entries until an account is chosen on the Bot tab';   // ChartBridge 0.5.7
 export const AGENT_PAGE_TYPES = ['agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear'];
-const V3_TYPES = GROUP_TYPES.concat(['accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount']).concat(AGENT_PAGE_TYPES);
-const SWITCH_OF = { accountTrade: 'accountChecks', accountArchive: null, accountUnarchive: null, merge: 'merge', copierGet: 'copier', copierSet: 'copier', copierFollower: 'copier', copierRearm: 'copier', botMode: 'bot', botKill: 'bot', botSeen: 'bot', botAnswer: 'bot', botRails: 'bot', botAccount: 'bot' };
+const V3_TYPES = GROUP_TYPES.concat(['accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'copierFollowerRemove', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount']).concat(AGENT_PAGE_TYPES);
+const SWITCH_OF = { accountTrade: 'accountChecks', accountArchive: null, accountUnarchive: null, merge: 'merge', copierGet: 'copier', copierSet: 'copier', copierFollower: 'copier', copierRearm: 'copier', copierFollowerRemove: 'copier', botMode: 'bot', botKill: 'bot', botSeen: 'bot', botAnswer: 'bot', botRails: 'bot', botAccount: 'bot' };
 
 const isInt = v => typeof v === 'number' && Number.isInteger(v);
 const BOT_SIBLING = { MNQ: 'NQ', NQ: 'MNQ', MES: 'ES', ES: 'MES' };   // ChartBridgeBot.cs Sibling
@@ -246,7 +247,7 @@ export class OrderDeskV3 extends OrderDesk {
       roomDailyLoss: null, roomDailyLossWhy: off || 'NinjaTrader does not report a daily loss limit for this account',
       canHide: this.hideWhy(a) === null, hideWhy: this.hideWhy(a) };
   }
-  accountMsg(a) { return this.groupFields(a, this.accountMsg058(a)); }   // 0.5.8: the group fields (test/fake-groups.mjs)
+  accountMsg(a) { return Object.assign(this.groupFields(a, this.accountMsg058(a)), { unserved: (a.unserved || []).slice() }); }   // 0.5.8: the group fields (test/fake-groups.mjs); 0.6.6: unserved (made-up contract names)
   /** ChartBridge 0.5.1's Hide rule (ChartBridgeAccounts.HideRefusal): flat, no working orders, not the bot's or the copier's */
   hideWhy(a) {
     if (!this.sw.accountChecks) return 'accountChecks is off';
@@ -712,7 +713,7 @@ export class OrderDeskV3 extends OrderDesk {
   copierMsg() {
     const c = this.copier, la = this.acct.get(c.leader);
     const lpos = c.leader ? [...this.positions].find(([k, p]) => k.startsWith(c.leader + '|') && p.qty) : null;
-    return { type: 'copier', enabled: this.sw.copier, simOnly: false, armed: c.armed, standDownWhy: c.standDownWhy,
+    return { type: 'copier', enabled: this.sw.copier, simOnly: false, canRemove: true, armed: c.armed, standDownWhy: c.standDownWhy,
       leader: c.leader ? { account: c.leader, connection: la ? la.connection : 'disconnected', position: lpos ? { root: lpos[0].split('|')[1], qty: lpos[1].qty, avgPrice: lpos[1].avgPrice } : null } : null,
       mode: c.mode,
       followers: [...c.followers.values()].map(f => {
@@ -765,6 +766,14 @@ export class OrderDeskV3 extends OrderDesk {
     this.copier.followers.set(m.account, f);
     this.broadcastV3(this.copierMsg());
   }
+  check_copierFollowerRemove(m) {   // 0.6.6: as ChartBridgeCopier.RemoveFollower
+    const f = this.copier.followers.get(m.account);
+    if (!f) return m.account + ' is not a copier follower.';
+    if (f.on) return m.account + ' is a copier follower that is on: turn it off first, then remove it.';
+    if ([...this.positions].some(([k, p]) => k.startsWith(m.account + '|') && p.qty && this.copier.held && this.copier.held.has(m.account))) return m.account + ' still holds a copier position or orders: it can be removed once the copier\'s part there is flat and done.';
+    return null;
+  }
+  do_copierFollowerRemove(m) { this.copier.followers.delete(m.account); this.broadcastV3(this.copierMsg()); }
   check_copierRearm() {
     if (!this.connected(this.copier.leader)) return 'The leader ' + this.copier.leader + ' is not connected.';
     const down = [...this.copier.followers.values()].filter(f => !this.connected(f.account)).length;

@@ -52,6 +52,10 @@ pickers, saved per browser); the indicators' colors in their gears (1.9.0). Defa
 | Initial Balance low (1.5.3) | `#E58BD2` orchid, the base (the one level hue nothing else on the chart uses) |
 | Signals, bullish (G1c) | `--sig-bull` `#38DCE8` a softer cyan; outline `--sig-bull-line` `#9CF1F7` (Anthony's NinjaTrader cyan, toned) |
 | Signals, bearish (G1c) | `--sig-bear` `#F3D84A` a warm yellow; outline `--sig-bear-line` `#FFEC8F` (his NinjaTrader yellow, toned) |
+| EMA lines 1, 2, 3 (1.34.0) | `#FF9F43` orange, `#FFD08A` apricot, `#C2662A` burnt orange (the EMAs warm) |
+| SMA lines 1, 2, 3 (1.34.0) | `#E6EDF5` near white, `#BFCBDB` silver, `#5C6B85` steel (the SMAs cool neutrals) |
+| Bollinger Bands (1.34.0) | bands `#7BC4C4` muted teal, basis `#5E9E9E` (dashed), fill `#7BC4C4` at 7% |
+| RSI (1.34.0) | line `#D8CCFF` soft lavender (a step lighter than the VWAP), levels `#8392A5` |
 | Time and Sales, above the ask (1.14.0) | `--tape-above` `#9CF5CB`, the brighter green (14.9:1 on the tape's panel `#0B0F15`) |
 | Time and Sales, at the ask (1.14.0) | `--tape-ask` `#3DDC97`, the house buy green (10.9:1) |
 | Time and Sales, between (1.14.0) | `--tape-mid` `#9AA8B8`, the quiet grey (7.9:1) |
@@ -136,8 +140,11 @@ should have their own preset group, so I can set colors for indicators on a whit
   (a second click confirms, Escape keeps it), and a name box with Save (Replace when the name is taken, any case).
 - Indicator colors are set in each indicator's gear, a picker and a hex box each, and Default colors: VWAP (line),
   Levels (prior day, overnight, value area, prior close, and since 1.14.0 the IB high and low), Volume profile (rows,
-  value area rows and point of control, 1.14.0). The volume bars and the delta pane keep the candle colors; fills keep the house trade-side colors (no
-  colors of their own, Anthony). On a ground other than the default they move to read exactly as the house colors do.
+  value area rows and point of control, 1.14.0), EMA and SMA (each line, 1.34.0), Bollinger Bands (bands, basis, fill)
+  and RSI (line, levels). The volume bars and the delta pane keep the candle colors; fills keep the house trade-side colors (no
+  colors of their own, Anthony). On a ground other than the default they move to read exactly as the house colors do;
+  1.34.0: the studies' lines of one area (the plot, the RSI's pane) that then look alike part, the later one moving on
+  toward the ink (never to where it reads less).
 - The IB high stays the brighter with any colors (Anthony): on the default ground the chosen IB colors are drawn as
   chosen while the high is the brighter by 1.25:1; when it is not (a high picked darker than its low, or the same),
   the pair is drawn as on the other grounds, and if even that leaves the high the darker, the high moves toward white
@@ -332,6 +339,27 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     one: solid in the signal color once the swing is confirmed; hollow (a 1.25 px outline in the outline shade on the
     ground) from the close of the bar that beats the previous swing with the delta not following, gone if a later bar
     takes its high (low) first.
+- **Studies (1.34.0; Anthony 2026-10-20: "add some more indicator options. Like EMA's SMA's - maybe RSI"):** on the bar
+  closes of every bar type, continuous across sessions (no reset at 18:00), the forming bar included and moving with
+  it; nothing drawn until there are enough bars. They never size the price scale (as the VWAP). The closed bars' values
+  are kept and only the forming bar's worked out again on a tick; all again when the bars are replaced or an option
+  changes. Drawn over the levels and under the VWAP and candles.
+  - **EMA** and **SMA**: up to three lines each, 1.25 px at 90%, each its own length (a select in the gear: 5 to 200
+    bars, Off for lines 2 and 3; EMA 9, 21 and Off, SMA 20, 50 and 200 by default) and color. The EMA starts at its
+    length's bar from the simple average of the first closes, then prev + (close - prev) x 2 / (length + 1).
+  - **Bollinger Bands**: the SMA of the closes (the basis, 1 px dashed 4 3), and the bands that many population
+    standard deviations above and below it over the same closes (1 px at 85%), a 7% fill between them. Gear: Length
+    20, 10, 14, 30, 50; Deviations 2, 1.5, 2.5, 3; Show Basis and Fill.
+  - **RSI**: Wilder's (the first averages simple over the length, then (prev x (length - 1) + this) / length; 100 with
+    no loss, 50 with no change at all), Length 14, 2, 5, 7, 9, 21, 28 and Levels 30/70, 20/80, 25/75, 40/60 in its gear.
+    In the lower pane on a fixed 0 to 100 scale (8 px free above 100 and under 0): the levels dashed 4 3 at 85%, 50 in
+    the divider color, the line 1.25 px; the title "RSI 14" with the value of the bar under the pointer (else the
+    newest, one decimal) as the delta pane's; on its axis the levels and 50, the newest value in a tag in the RSI's
+    color, the pointer's value in the crosshair tag.
+  - **The lower pane** is the delta pane's, the RSI's, or both: one height (the delta pane's, saved as before) and one
+    divider ("Lower pane" to a screen reader when the RSI is in it). With both, the delta on top and the RSI under it,
+    the height split evenly with a 4 px band between them (a 1 px `#18212C` line on each side), each at least 48 px when
+    the chart has the room.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session. 1.14.0: off the price scale (it no longer sizes it), a
   marker at the plot's top or bottom right edge, 16 px tall, radius 3, on the legend ground: a small triangle pointing
   to it and "VWAP 25,512.25" in 500 10px mono, both in the VWAP color. Its gear's **Hours** (1.14.0, per chart):
@@ -461,8 +489,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     open at a time (`#0F151D`, what the indicator does, read only, and its real options: the Volume profile's Hours,
     Session or RTH, and the Cumulative delta's Show, Cumulative or Bar delta, in the toolbar's segmented style at 11 px), and an x that takes it off the chart. Pins only on
     these rows; group rows have the + and the gear.
-  - The groups, folded, one open at a time: Price (VWAP, Levels), Volume (Volume bars, Volume
-    profile, Cumulative delta, Large-order bubbles), Trades (Fills), Signals (Absorption bars, G1c); a dashed + adds one.
+  - The groups, folded, one open at a time: Price (VWAP, Levels, EMA, SMA, Bollinger Bands), Volume (Volume bars, Volume
+    profile, Cumulative delta, Large-order bubbles), Momentum (RSI, 1.34.0), Trades (Fills), Signals (Absorption bars,
+    G1c); a dashed + adds one.
     Then "Coming: time and sales".
   - "Hide all (n)", which becomes "Restore" and brings back the same mix (not everything). Fills are included.
   - **The live trade always stays** (Anthony): hiding Fills (switch, chip or Hide all) hides past fills and trade
@@ -570,6 +599,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Quote board (1.15.0):** NQ and ES (1.16.0, Anthony 2026-10-05: the MNQ and MES rows went; display only): last, change and % from the prior settlement (buy green or sell red; blank
   without one), the session's high and low, in the same rows; under 400 px the change and %, and the high and low,
   stack; a 2 x 1 board shows the last, change and % (at 1366 px the last and %), the rest in the row's tooltip.
+- **Trade tags (1.34.0, Anthony 2026-10-21):** a placeable panel (+ Add panel) following the order ticket's account and
+  instrument. One line says which trade it tags ("Next trade · MNQ · flat", "Open trade · LONG 2 MNQ since 10:31:05", "Last trade
+  · closed ..."), with a Next trade / Last trade switch while flat; then four rows of 22 px pill chips (Setup, Grade, Context,
+  Trigger), a muted uppercase label at the left of each. A set chip is the purple tint with the accent border and its phase in
+  small mono capitals (PRE, OPEN, AFTER); the others are the field color. Green and red only for the side word (LONG, SHORT). A
+  one-line note at the foot (amber when The Desk is not reachable). Clicks only, no hotkeys.
 - **Text panels never cost the charts (Anthony's ruling for 1.15.0):** the Quote board's and the Account panel's figures
   are written at most 4 times a second, in one animation frame, only the cells that changed; a trade only notes the price.
 

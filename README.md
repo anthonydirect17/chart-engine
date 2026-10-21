@@ -728,6 +728,12 @@ window of trades with measured sides). `setDelta(delta | null)` hands one to the
 `setDeltaView({ mode: 'cum' | 'bar', ratio, note, reason })`, `deltaPane()`, `deltaToY(v)` and
 `on('paneResize', { ratio, height, done })` for the divider.
 
+Studies (1.34.0): `setStudies({ ema: [9, 21, 0], sma: [20, 50, 200], bands: { len, dev, basis, fill }, rsi: { len, lo, hi } })`
+(only the fields given change; an MA line 0 is off) and `getStudies()`; each drawn while its layer is on (`ema`, `sma`,
+`bands` on the plot, `rsi` in the lower pane, under the delta pane when both are on, one height for both), from the bar
+closes. `studiesAt(i)` reads the values at bar i, `rsiPane()` (`{ on, top, height, value, lo, hi, len }`) and `rsiToY(v)`
+where the RSI is.
+
 Orders (1.3.0): `setOrders(list)` · `setPosition({ qty, avgPrice } | null, { pointValue })` ·
 `setOrderEditing(bool)` · `setOrderPreview(fn)` · `orderHandles()` · `priceToY(price)` · `yToPrice(y)` ·
 `on('orderMove', { id, price })` · `on('orderCancel', { id })` · `on('orderPlace', { price })`. The chart only
@@ -752,7 +758,8 @@ those into styled lines; `initialBalance(data, opts)` (1.5.3) gives today's 1-ho
 `profileRects(columns, view, emit)` lays out a volume profile's bars (1.6.0); plus
 formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `buildTheme`); 1.14.0: `roomBars(px, spacing,
 bars)`, `fitRange(lo, hi, extraPrices, plotHeight, tick, volume)`, `fmtRemain(seconds)`, `barRemain(t, barSeconds, now)`,
-`atr(bars, period, count)`, `pctFrom(price, base)`, `bubbleRadius(size, floor)`, `rthVwap(bars, opts)`, `rthVwapUpdate(series, bars, opts)`, `vwapAt(series, time)`
+`atr(bars, period, count)`, 1.34.0: `smaSeries(closes, len)`, `emaSeries(closes, len)`, `bollinger(closes, len, dev)`,
+`rsiSeries(closes, len)` (and one bar of each: `smaAt`, `emaAt`, `bandsAt`, `rsiAt`), `pctFrom(price, base)`, `bubbleRadius(size, floor)`, `rthVwap(bars, opts)`, `rthVwapUpdate(series, bars, opts)`, `vwapAt(series, time)`
 and `PD_POC_DASH`.
 
 ## Colors

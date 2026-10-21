@@ -54,17 +54,36 @@ export async function startDesk(port, seed) {
   const docs = Object.assign(emptyDocs(), JSON.parse(JSON.stringify(seed || {})));
   const types = JSON.parse(JSON.stringify((seed && seed.types) || [])), accounts = JSON.parse(JSON.stringify((seed && seed.accounts) || []));
   delete docs.types; delete docs.accounts;
-  const desk = { docs, types, accounts, log: [], down: false, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)),
+  const desk = { docs, types, accounts, tags: [], log: [], down: false, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)),
     editType(id, change) { const t = types.find(x => x.id === id); Object.assign(t, change, { version: t.version + 1, status: 'not_checked', updated_at: new Date().toISOString() }); } };
   const typeLink = id => { const t = types.find(x => x.id === id); return t ? { id: t.id, firm: t.firm, name: t.name, version: t.version, status: t.status } : null; };
   const server = http.createServer((req, res) => {
     const origin = req.headers.origin || '';
     if (desk.down) { req.socket.destroy(); return; }
-    const cors = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin) ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'GET, PUT', 'Access-Control-Allow-Headers': 'Content-Type', Vary: 'Origin' } : {};
+    const cors = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin) ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'GET, PUT, POST', 'Access-Control-Allow-Headers': 'Content-Type', Vary: 'Origin' } : {};
     const send = (status, body) => { res.writeHead(status, Object.assign({ 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, cors)); res.end(JSON.stringify(body)); };
     const m = /^\/api\/chart-(hotkeys|strategies)$/.exec(req.url.split('?')[0]);
     if (req.method === 'OPTIONS') { if (!cors['Access-Control-Allow-Origin']) { res.writeHead(403); res.end(); return; } res.writeHead(204, cors); res.end(); return; }
     const [urlPath, query] = req.url.split('?');
+    /* chart 1.34.0: the Trade tags panel's records (TheDesk POST and GET /api/trade-tags): stored once by id, never changed */
+    if (urlPath === '/api/trade-tags' && req.method === 'POST') {
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', () => {
+        let d; try { d = JSON.parse(body); } catch (e) { return send(400, { detail: 'send JSON with Content-Type: application/json' }); }
+        if (!d || !Array.isArray(d.tags)) return send(400, { detail: 'send {"tags": [...]}' });
+        let inserted = 0, duplicates = 0;
+        for (const t of d.tags) { if (desk.tags.some(x => x.id === t.id)) duplicates++; else { desk.tags.push(t); inserted++; } }
+        desk.log.push({ method: 'POST', which: 'trade-tags', body: d });
+        send(200, { received: d.tags.length, rejected: [], inserted, duplicates, conflicts: [] });
+      });
+      return;
+    }
+    if (urlPath === '/api/trade-tags' && req.method === 'GET') {
+      const q = new URLSearchParams(query || '');
+      desk.log.push({ method: 'GET', which: 'trade-tags' });
+      return send(200, { tags: desk.tags.filter(t => (!q.get('account') || t.account === q.get('account')) && (!q.get('root') || t.root === q.get('root')) && (!q.get('since_ms') || t.at_ms >= +q.get('since_ms'))) });
+    }
     if (urlPath === '/api/account-types' && req.method === 'GET') {
       desk.log.push({ method: 'GET', which: 'account-types' });
       return send(200, { v: 1, types: types.filter(t => !t.archived || /(^|&)all=1(&|$)/.test(query || '')), asOf: new Date().toISOString() });

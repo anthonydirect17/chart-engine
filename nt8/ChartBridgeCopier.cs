@@ -20,7 +20,9 @@
 //      minimum cut, so a small follower is not taken out early). A flat follower gets nothing. Never an opposite order sized
 //      from the leader.
 //   S5 Skipped, never partly: a follower at its position limit (gate 3), not Connected, unchecked (gate 2), Gone, past
-//      its loss limit, or holding the opposite side.
+//      its loss limit, or holding the opposite side. 0.6.6: also on a KNOWN breach of the firm's limits (its max contracts, this
+//      copy's stop risk plus its open stop risk past a known room to the floor or daily room, its daily loss reached today),
+//      with one riskAlert (ChartBridgeOrders.MachineHold); a limit not known lets the copy go.
 //   S6 Mass disconnect: the leader, or 3 or more followers, leaving Connected within 10 s stands the copier down until
 //      Re-arm. Every start begins stood down. Exits and stop moves still go to followers that hold a copier position.
 //   S7 The sweep: every second, a copier order on a follower that is flat (both readings) is cancelled.
@@ -172,6 +174,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal static void CopierUnsent(Order o) { lock (Sync) Ours.Remove(o); }
         internal static bool CopierFreshLast(string root, out double last) { return FreshLast(root, FreshTickMs, out last); }
         internal static string CopierPriceProblem(string root, double tick, string kind, bool isBuy, double price) { return PriceProblem(root, tick, kind, isBuy, price); }
+        // 0.6.6: the stop ticks the leader's entry carries (its bracket's, or its strategy's with any stop-limit ticks), 0 when not known
+        internal static int CopierEntryStopTicks(Order entry)
+        {
+            if (entry == null) return 0;
+            Bracket br;
+            lock (Sync) BracketOfEntry.TryGetValue(entry, out br);
+            return br == null ? 0 : br.RiskTicks > 0 ? br.RiskTicks : br.StopTicks;
+        }
         internal static double CopierRound(double price, double tick) { return Round(price, tick); }
         internal static bool CopierIsBuy(Order o) { return IsBuy(o); }
         internal static bool CopierDone(Order o) { return IsDone(o.OrderState); }
@@ -601,6 +611,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "copierSet", new[] { "type", "cid", "leader", "mode" } },
             { "copierFollower", new[] { "type", "cid", "account", "on", "qty", "size", "lossLimit" } },
             { "copierRearm", new[] { "type", "cid" } },
+            { "copierFollowerRemove", new[] { "type", "cid", "account" } },   // 0.6.6 (WORK 2026-10-20): a follower row removed
         };
 
         // copier* (ChartBridgeServer.OnClientMessage). Every refusal is a reject; nothing reaches NinjaTrader.
@@ -621,6 +632,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (type == "copierGet") { client.Send(StateJson()); return; }
                     if (type == "copierSet") { why = SetLeader(text); if (why == null && ChartBridgeOrders.CopierHas(text, "leader")) ChartBridgeBranches.Chosen("copier"); }   // 0.6.3 (review round 2, MED A)
                     else if (type == "copierFollower") why = SetFollower(text);
+                    else if (type == "copierFollowerRemove") why = RemoveFollower(text);
                     else if (type == "copierRearm") why = Rearm();
                 }
                 if (why != null) Reject(client, cid, why);
@@ -790,6 +802,32 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!f.On) f.Skipped = null;
             }
             Decision(a.Name, "set", null, (on.Groups[1].Value == "true" ? "on" : "off") + ", " + qty + " " + size + " per leader entry (fixed), loss limit " + (loss > 0 ? loss.ToString(CultureInfo.InvariantCulture) : "off") + " (set by the page)");
+            Save();
+            BroadcastState(true);
+            return null;
+        }
+
+        // 0.6.6 (WORK 2026-10-20, Anthony's first group trade: an OFF follower row left from the October copier tests kept its
+        // account out of every group entry, and nothing on the page could remove it; ruling 1 stays: an agent or a group never
+        // trades a follower, on or off). Remove takes the row away: refused while it is ON (turn it off first, so the copier
+        // stops copying to it before it goes) and while the copier still follows anything of its own there (a copied position,
+        // an entry, stop or close that may fill, a reduce or a wait: the copier manages those until they are done).
+        private static string RemoveFollower(string text)
+        {
+            string name = ChartBridgeOrders.CopierStr(text, "account");
+            if (string.IsNullOrEmpty(name)) return "account must be an account name.";
+            if (loadFailed) return "copier.txt could not be read at start: the copier's settings cannot change until it can (restart ChartBridge)";
+            string was;
+            lock (Lk)
+            {
+                Follower f = FollowerNamed(name);
+                if (f == null) return name + " is not a copier follower.";
+                if (f.On) return f.Name + " is a copier follower that is on: turn it off first, then remove it.";
+                if (CopierOnAccountLocked(f.Name)) return f.Name + " still holds a copier position or orders: it can be removed once the copier's part there is flat and done.";
+                was = f.Name;
+                Followers.Remove(f);
+            }
+            Decision(was, "set", null, "removed as a follower (it is an account of its own again; set by the page)");
             Save();
             BroadcastState(true);
             return null;
@@ -1017,7 +1055,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string fRoot = FollowerRoot(le.Root, f.Size), label, why;
                     int fq = f.Qty;
                     Instrument fInst;
-                    Account a = Eligible(f, fRoot, le, fq, out fInst, out label, out why);
+                    Account a = Eligible(f, fRoot, le, fq, Math.Abs(leaderPrice - stopPrice), out fInst, out label, out why);   // 0.6.6: its stop at the leader's stop price
                     if (a == null) { Skip(f, label, why, fRoot, fq, Ms(ts, Stopwatch.GetTimestamp())); continue; }
                     string tag = NewTag();
                     Order o = a.CreateOrder(fInst, le.Buy ? OrderAction.Buy : OrderAction.Sell, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, fq, 0, 0, "",
@@ -1031,6 +1069,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Orders mode: the leader's entry, placed for each follower as a real order (same kind and price, its own quantity).
         private static void PlaceOrdersCopies(LeaderEntry le, long ts)
         {
+            int stopTicks = ChartBridgeOrders.CopierEntryStopTicks(le.Entry);   // 0.6.6: the leader's stop distance, for each copy's stop risk
+            double? stopPoints = stopTicks > 0 && le.Inst != null && le.Inst.MasterInstrument != null ? stopTicks * le.Inst.MasterInstrument.TickSize : (double?)null;
             lock (ChartBridgeOrders.CopierPlaceLock)
             {
                 foreach (Follower f in OnFollowers())
@@ -1038,7 +1078,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string fRoot = FollowerRoot(le.Root, f.Size), label, why;
                     int fq = f.Qty;   // 0.4.3: its fixed quantity, whatever the leader's size
                     Instrument fInst;
-                    Account a = Eligible(f, fRoot, le, fq, out fInst, out label, out why);
+                    Account a = Eligible(f, fRoot, le, fq, stopPoints, out fInst, out label, out why);
                     if (a == null) { Skip(f, label, why, fRoot, fq, Ms(ts, Stopwatch.GetTimestamp())); continue; }
                     if (le.Kind != "market" && le.Kind != "limit" && le.Kind != "stop") { Skip(f, "kind", "a " + le.Kind + " entry is not copied in orders mode", fRoot, fq, null); continue; }
                     if (le.Kind != "market")
@@ -1081,7 +1121,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static List<Follower> OnFollowers() { lock (Lk) return Followers.Where(f => f.On).ToList(); }
 
         // S1 (every account gate) and S5: the follower may take this entry, or null with a short label (shown on the page) and the reason.
-        private static Account Eligible(Follower f, string fRoot, LeaderEntry le, int fq, out Instrument inst, out string label, out string why)
+        // 0.6.6: stopPoints, the copy's stop distance in points (null: not known), for the firm's limits (ChartBridgeOrders.MachineHold).
+        private static Account Eligible(Follower f, string fRoot, LeaderEntry le, int fq, double? stopPoints, out Instrument inst, out string label, out string why)
         {
             inst = null; label = null; why = null;
             Account a = Find(f.Name);
@@ -1125,6 +1166,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (seat != null) { label = "agent"; why = seat; return null; }
             string grp = ChartBridgeGroups.EntryCheck("copier", a, fRoot, le.Buy, fq, true, false);   // 0.5.8 (G3 a): one direction per group (a copy is always an entry)
             if (grp != null) { label = "group"; why = grp; return null; }
+            // 0.6.6 (Anthony 2026-10-20): the firm's limits, held back only on a known breach: this one copy is skipped (one alert); the
+            // leader and the other followers trade as normal. A copy is always an entry (the opposite side was skipped above).
+            double? risk = stopPoints.HasValue && inst.MasterInstrument != null ? stopPoints.Value * inst.MasterInstrument.PointValue * fq : (double?)null;
+            string hold = ChartBridgeOrders.MachineHold("the copier", "skipped", a, fRoot, fq, 0, risk);
+            if (hold != null) { label = "limit"; why = hold; return null; }
             return a;
         }
 
@@ -2372,7 +2418,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool on;
             List<Follower> list;
             lock (Lk) { l = leader; m = mode; why = standDownWhy; on = armed; lroot = lastLeaderRoot; list = Followers.Select(f => new Follower { Name = f.Name, On = f.On, Qty = f.Qty, Size = f.Size, LossLimit = f.LossLimit, LastAction = f.LastAction, LastAt = f.LastAt, Slippage = f.Slippage, Skipped = f.Skipped }).ToList(); }
-            StringBuilder b = new StringBuilder("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":false,\"armed\":").Append(on ? "true" : "false")
+            StringBuilder b = new StringBuilder("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":false,\"canRemove\":true,\"armed\":").Append(on ? "true" : "false")   // 0.6.6: copierFollowerRemove is known
                 .Append(",\"standDownWhy\":").Append(why != null ? CbJson.Str(why) : "null").Append(",\"leader\":");
             Account la = Find(l);
             if (l == null) b.Append("null");

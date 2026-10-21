@@ -157,6 +157,7 @@ public static class CopierHarness
             RealFollowerAllowed();
             PositionLimit();
             GroupSkip();   // 0.5.8: one direction per group (G3 a): a follower whose group holds the other side is skipped
+            FirmLimitSkip();   // 0.6.6 (Anthony 2026-10-20): a follower that would break a known firm limit skips that one copy, with one alert
             DailyLoss();
             ConnectionDrop();
             MassDisconnect();
@@ -167,6 +168,7 @@ public static class CopierHarness
             FilesAndRestart();
             RecoveredWithoutLeader();   // review 2 finding 6
             CopierThread();
+            RemoveFollower();   // 0.6.6 (WORK 2026-10-20): a follower row removed from the page (last: it changes the followers)
         }
         catch (Exception ex) { Check(false, "copier harness threw: " + ex); }
         finally
@@ -233,7 +235,7 @@ public static class CopierHarness
         Msg("client", "{\"type\":\"client\",\"v\":3}");
         sent.Clear();
         Msg("copierGet", "{\"type\":\"copierGet\",\"cid\":\"g\"}");
-        Check(Last().StartsWith("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":false,\"armed\":false,\"standDownWhy\":\"ChartBridge started: check the accounts and press Re-arm\""), "on: the copier starts stood down: " + Last());
+        Check(Last().StartsWith("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":false,\"canRemove\":true,\"armed\":false,\"standDownWhy\":\"ChartBridge started: check the accounts and press Re-arm\""), "on: the copier starts stood down (0.6.6: canRemove, copierFollowerRemove taken): " + Last());
         sent.Clear(); Msg("copierRearm", "{\"type\":\"copierRearm\"}");
         Check(Rejected("No leader is set."), "Re-arm with no leader: refused");
         ChartBridgeClient other = new ChartBridgeClient(null, 93) { Origin = "http://localhost:8765" };
@@ -921,6 +923,31 @@ public static class CopierHarness
         }
     }
 
+    // ------------------------------------------------------------ 0.6.6: a follower over the firm's max contracts skips that one copy
+    static void FirmLimitSkip()
+    {
+        string file = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "ChartBridge", "groups.txt");
+        // SIM-F1's own firm rules (in no group): max 2 micros; it copies 3 MNQ
+        File.WriteAllText(file, ChartBridgeGroups.Header + "\n#\nrules\tSIM-F1\t50000\t-\t2000\teod\t50100\t3000\t-\t-\t2\t-\n");
+        ChartBridgeGroups.StartNow();
+        try
+        {
+            int b1 = f1.Calls.Count, b3 = f3.Calls.Count, l0 = lead.Calls.Count;
+            sent.Clear();
+            LeaderEntry(1);
+            Check(After(f1, b1).Count == 0 && EventSaid("skip", "SIM-F1", "over SIM-F1's max of 2 micros: this entry of 3 MNQ would take it to 3 micros"), "0.6.6: SIM-F1 over its firm max (3 MNQ of 2 micros): this copy is skipped, nothing sent");
+            Check(sent.Count(m => m.StartsWith("{\"type\":\"riskAlert\",\"kind\":\"skipped\",\"account\":\"SIM-F1\"")) == 1, "0.6.6: one riskAlert for the skip: " + string.Join(" | ", sent.Where(m => m.Contains("riskAlert"))));
+            Check(After(f3, b3).Count == 1 && lead.Calls.Count > l0, "0.6.6: the leader and the other followers trade as normal");
+            Check(Regex.IsMatch(State(), "\"account\":\"SIM-F1\"[^}]*\\}[^}]*\"skipped\":\"limit\""), "0.6.6: the page sees SIM-F1 skipped: limit");
+        }
+        finally
+        {
+            Reset();
+            File.Delete(file);
+            ChartBridgeGroups.StartNow();
+        }
+    }
+
     // ------------------------------------------------------------ the follower daily loss limit (an option, off by default; flat dollars, no buffer)
     static void DailyLoss()
     {
@@ -1546,6 +1573,28 @@ public static class CopierHarness
         lstop.OrderState = OrderState.Cancelled; fstop2.OrderState = OrderState.Cancelled;
         Pos(lead, mnq, 0); Pos(f1, mnq, 0); Booked();
         ChartBridgeCopier.Stop();
+    }
+
+    // ------------------------------------------------------------ 0.6.6 (WORK 2026-10-20): an OFF follower row left from tests kept
+    // its account out of every group entry, and the page could not remove it
+    static void RemoveFollower()
+    {
+        string file = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "ChartBridge", "copier.txt");
+        foreach (Instrument i in new[] { mnq, nq }) Pos(f4, i, 0);
+        sent.Clear(); Msg("copierFollower", Follower("SIM-F4", "true", "1", "micro", "null"));
+        Check(!Rejected(""), "0.6.6: SIM-F4 a follower, on");
+        sent.Clear(); Msg("copierFollowerRemove", "{\"type\":\"copierFollowerRemove\",\"cid\":\"r\",\"account\":\"SIM-F4\"}");
+        Check(Rejected("SIM-F4 is a copier follower that is on: turn it off first, then remove it."), "0.6.6: an ON follower is not removed (turn it off first)");
+        sent.Clear(); Msg("copierFollower", Follower("SIM-F4", "false", "1", "micro", "null"));
+        Check(ChartBridgeCopier.AgentAccountRefusal("SIM-F4") == "SIM-F4 is a copier follower", "0.6.6: an OFF follower is still the copier's (ruling 1 unchanged)");
+        sent.Clear(); Msg("copierFollowerRemove", "{\"type\":\"copierFollowerRemove\",\"cid\":\"r\",\"account\":\"SIM-F4\"}");
+        Check(!Rejected("") && !State().Contains("\"account\":\"SIM-F4\"") && !File.ReadAllText(file).Contains("follower\tSIM-F4\t"),
+              "0.6.6: an OFF follower with nothing of the copier's: removed, the pages told, copier.txt without it: " + State());
+        Check(ChartBridgeCopier.AgentAccountRefusal("SIM-F4") == null, "0.6.6: removed, it is an account of its own again (groups and agents may trade it)");
+        sent.Clear(); Msg("copierFollowerRemove", "{\"type\":\"copierFollowerRemove\",\"cid\":\"r\",\"account\":\"SIM-F4\"}");
+        Check(Rejected("SIM-F4 is not a copier follower."), "0.6.6: removing one that is not a follower: refused");
+        sent.Clear(); Msg("copierFollowerRemove", "{\"type\":\"copierFollowerRemove\",\"cid\":\"r\",\"account\":\"SIM-F4\",\"on\":false}");
+        Check(Rejected("unknown key"), "0.6.6: copierFollowerRemove takes account only");
     }
 
     // ------------------------------------------------------------ copier.txt, copier.log, a restart

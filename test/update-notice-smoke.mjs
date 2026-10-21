@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { ticketOnSim101 } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
@@ -73,7 +74,9 @@ async function until(fn, what, ms = 8000) {
 
 let browser = null;
 try {
-  browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+  // DECISION 2026-10-14e: the ticket starts on None, where a Buy sends nothing; this smoke opens a position from the ticket,
+  // so every page starts as if Sim101 had just been picked (as smoke:hotkeys)
+  browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));
   const page = await open(browser, 1920);
   let navigations = 0;
   page.on('framenavigated', f => { if (f === page.mainFrame()) navigations++; });

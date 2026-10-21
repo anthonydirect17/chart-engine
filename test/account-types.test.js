@@ -352,7 +352,7 @@ test('type picker (1.32.0, "Text + Change"): the Accounts tab shows text and Cha
   /* no Desk rows read: "not known" (not "Not set"), the reason in the tooltip, no Change or Set (Anthony 2026-10-19) */
   assert.match(acc, /if \(!S\.deskAt\) return `<span role="cell" class="apg-type">` \+ ci\('not known', 'apg-ttext mut apg-tnk', 'The Desk is not reachable, so the account\\'s type cannot be read now'\) \+ '<\/span>';/, 'not known while no Desk rows are read');
   assert.match(acc, /if \(!typesOn \|\| P\.typeEdit !== a\.name \|\| !canType \|\| P\.typePending\.has\(a\.name\)\) return '';/, 'the row shows only for the open account while The Desk answers');
-  assert.match(acc, /\+ typeRow\(a\) \+ askApply\(a\) \+ typeWarn\(a\);/);
+  assert.match(acc, /\+ typeRow\(a\) \+ askApply\(a\);/);
   /* the rules dialog keeps the three selects; the Account type column 244px ("Narrower Room") */
   assert.match(grp, /const chosen = pick\.id;/, 'the dialog links the type chosen last, not the Size select\'s placeholder');
   assert.match(grp, /if \(r\.send === null\) \{ filled = null; fromIdle\(\); \}\s*else if \(r\.send\) \{ const t = typeById\(r\.send\); if \(t\) fill\(t\); \}/, 'the dialog fills only on the last select');

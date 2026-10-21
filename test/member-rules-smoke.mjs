@@ -43,7 +43,7 @@ const groupMsgs = async port => ((await (await fetch(`http://127.0.0.1:${port}/t
 const AP = '.ws-panel[data-id="ap"]';
 
 async function openPage(port) {
-  const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } }).then(async c => { await c.addInitScript(() => { try { if (!localStorage.getItem('live-acc-open-v1')) localStorage.setItem('live-acc-open-v1', JSON.stringify({ sim: true, all: true })); } catch (e) { /* none */ } }); return c; });
   await ctx.addInitScript(() => { try { if (!localStorage.getItem('live-workspace-v1')) localStorage.setItem('live-workspace-v1', JSON.stringify({ v: 1, layouts: { Mix: { panels: [{ id: 'ap', type: 'accounts', x: 0, y: 0, w: 12, h: 6 }] } } })); } catch (e) { /* blocked */ } });
   const p = await ctx.newPage();
   p.on('pageerror', e => fail('pageerror: ' + e.message));
@@ -62,7 +62,7 @@ const fits = (p, sel) => p.evaluate(([ap, sel]) => { const panel = document.quer
 try {
   const { ctx, p } = await openPage(PORT);
   /* 1. the member with its own rules: its Limits cell (its floor by its own rules, Rules) */
-  const limA = await until(() => p.$eval(`${AP} .gr-row[data-k="SIM-A"] .apg-mrules`, e => ({ text: e.textContent, tip: e.querySelector('.apg-mfloor').title })), 'SIM-A\'s Limits cell');
+  const limA = await until(() => p.$eval(`${AP} .gr-row[data-k="dr|SIM-A"] .apg-mrules`, e => ({ text: e.textContent, tip: e.querySelector('.apg-mfloor').title })), 'SIM-A\'s Limits cell');
   check(limA && /^floor \$146,500\.00Rules$/.test(limA.text) && /its own rules/.test(limA.tip) && /\$150,000 · daily none · drawdown \$4,500 end of day, stops at \$150,100 · target \$9,000 · consistency 50% · max 10 minis \/ 100 micros/.test(limA.tip),
     'SIM-A (150K, its own rules): floor 151000 - 4500 = 146,500 with Rules; its rules in the tooltip: ' + JSON.stringify(limA));
   /* 2. SIM-B joins: one compact row with the rules from its type on The Desk, its own Desk daily loss winning, the seed floor's close */
@@ -78,7 +78,7 @@ try {
   const sentB = await until(async () => (await groupMsgs(PORT)).find(m => m.type === 'accountGroup' && m.account === 'SIM-B'), 'SIM-B\'s accountGroup');
   check(sentB && sentB.group === 'g1' && sentB.highClose === 51234.5 && sentB.size === 50000 && sentB.dailyLoss === 1200 && sentB.drawdown === 2000 && sentB.drawdownType === 'eod' && sentB.lockAt === 50100 &&
     sentB.target === 3000 && sentB.consistency === 50 && sentB.maxMinis === 4 && sentB.maxMicros === 40 && sentB.typeId === 'sample-lucid-50k', 'sent: accountGroup with every rule and The Desk\'s type id: ' + JSON.stringify(sentB));
-  const limB = await until(async () => { const t = await p.$eval(`${AP} .gr-row[data-k="SIM-B"] .apg-mrules`, e => e.textContent).catch(() => null); return t && /^floor \$49,234\.50Rules$/.test(t) ? t : null; }, 'SIM-B\'s floor by its own rules');
+  const limB = await until(async () => { const t = await p.$eval(`${AP} .gr-row[data-k="dr|SIM-B"] .apg-mrules`, e => e.textContent).catch(() => null); return t && /^floor \$49,234\.50Rules$/.test(t) ? t : null; }, 'SIM-B\'s floor by its own rules');
   check(!!limB, 'SIM-B in Lucid: floor 51,234.50 - 2,000 = 49,234.50 (its own rules): ' + limB);
   /* 3. SIM-C (a 25K intraday type): the row says highest balance so far (intraday) */
   await p.selectOption(`${AP} select.apg-grp[data-id="SIM-C"]`, 'g1');
@@ -117,8 +117,8 @@ try {
   await p.click(`${AP} [data-act="rules-save"][data-id="SIM-A"]`);
   const sentA = await until(async () => (await groupMsgs(PORT)).find(m => m.type === 'memberRules' && m.account === 'SIM-A'), 'SIM-A\'s memberRules');
   check(sentA && sentA.dailyLoss === 3000 && sentA.size === 150000 && sentA.typeId === 'sample-lucid-150k', 'sent: memberRules with the daily loss changed, the rest as it was: ' + JSON.stringify(sentA));
-  const roomA = await until(async () => { const t = await p.$eval(`${AP} .gr-row[data-k="SIM-A"] .apg-room`, e => e.title).catch(() => ''); return /Daily loss: \$3,000\.00 left of \$3,000\.00/.test(t) ? t : null; }, 'SIM-A\'s daily room from its own rules');
-  if (!roomA) console.log('  info: room tip ' + await p.$eval(`${AP} .gr-row[data-k="SIM-A"] .apg-room`, e => e.title).catch(() => 'none'));
+  const roomA = await until(async () => { const t = await p.$eval(`${AP} .gr-row[data-k="SIM-A"] .apg-rtext`, e => e.title).catch(() => ''); return /Daily loss: \$3,000\.00 left of \$3,000\.00/.test(t) ? t : null; }, 'SIM-A\'s daily room from its own rules');
+  if (!roomA) console.log('  info: room tip ' + await p.$eval(`${AP} .gr-row[data-k="SIM-A"] .apg-rtext`, e => e.title).catch(() => 'none'));
   check(!!roomA, 'the Room reads the member\'s own daily loss ($3,000 of $3,000): ' + (roomA || '').split('\n').join(' | '));
   await p.screenshot({ path: path.join(out, 'member-rules-accounts-1366.png') });
   /* 6. Settings: the group's row says each member keeps its own rules and the risk with each member's dollars; the dialog fits */

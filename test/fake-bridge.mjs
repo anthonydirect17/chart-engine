@@ -9,7 +9,7 @@
 //                                   the last price; default none)
 //   --max-bracket-ticks=300         maxBracketTicks = 300 (0.3.7: a bracket stop or target at most this many ticks; default none)
 //   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
-//                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/elsewhere
+//                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/risk-alert (a riskAlert, 0.6.6), /test/elsewhere
 //   --allow-frames                  drop X-Frame-Options and frame-ancestors (only to test the page's own frame check)
 //   --allow-origins=https://desk.example,http://host:8800   allowOrigins: other web pages that may open the
 //                                   read-only WebSocket (ChartBridge 0.3.1 rule; never trade)
@@ -490,7 +490,7 @@ const deskOpts = {
 const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { now: () => Date.now() + CLOCK_OFFSET * 1000, switches: Object.fromEntries(SWITCHES.map(k => [k, !V3_OFF.includes(k)])), accountList: V3_ACCOUNTS.concat(AGENT_ACCOUNTS),
   graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ', agents: AGENTS, agentAnyTime: !!flag('agent-any-time'), botAccount: flagValue('bot-account') || null,
   /* 0.5.8: --no-groups is a ChartBridge before 0.5.8 (no groups message); --groups seeds two made-up groups (sample data) */
-  groups: !flag('no-groups'), groupRules: !flag('no-group-rules'),   // 0.6.5: --no-group-rules is a ChartBridge 0.5.8 to 0.6.4 (one rule set per group)
+  groups: !flag('no-groups'), groupRules: !flag('no-group-rules'), firmFloor: !!flag('firm-floor'),   // 0.6.6: --firm-floor (the firm's rules on an account in no group, firmMinimum, roomFloorNt)   // 0.6.5: --no-group-rules is a ChartBridge 0.5.8 to 0.6.4 (one rule set per group)
   /* 0.6.5: --mix-groups seeds Lucid with a made-up 150K member that has its own rules, and the risk percent at 10 (sample data) */
   /* 0.6.5: --mix-groups-full: Lucid (risk 10%) with SIM-A 150K, SIM-B 50K and SIM-C 25K intraday (their own rules) and SIM-D (the
      group's rules), for the group ticket (sample data) */
@@ -526,7 +526,7 @@ function onMessage(c, text) {
   else if (DATA_037 && (m.type === 'htf' || m.type === 'weekProfile')) onDataRequest(c, m, text);
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (V3 && m.type === 'client') desk.client(c, m);
-  else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm',
+  else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'copierFollowerRemove', 'firmMinimum',
     'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear', 'groupSave', 'groupDelete', 'accountGroup', 'memberRules', 'accountLimits', 'groupPreview', 'groupOrder'].includes(m.type)) desk.handle(c, m, text);
   else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks)
 }
@@ -789,6 +789,7 @@ const server = http.createServer((req, res) => {
         positions: Object.fromEntries(desk.positions) }));
     }
     else if (p === '/test/status') { for (const c of clients) send(c, { type: 'status', level: q.get('level') || 'error', text: q.get('text') || '' }); }
+    else if (p === '/test/risk-alert') { for (const c of clients) send(c, { type: 'riskAlert', kind: q.get('kind') || 'held', account: q.get('account') || 'SIM-A', text: q.get('text') || 'Sample: a held entry (made up)' }); }   // ChartBridge 0.6.6
     else if (p === '/test/htf' && DATA_037) htfFail = q.get('fail') || '';
     else if (p === '/test/pc-clock') {              // 0.5.6: a new time check result, to every page (and hello from now on)
       pcClock = q.get('checked') === '0' ? { checked: false, why: q.get('why') || 'not checked yet', server: PC_CLOCK_SERVER }
@@ -837,6 +838,8 @@ const server = http.createServer((req, res) => {
     else if (V3 && AGENTS.length && p.startsWith('/test/agent')) return agentControl(p, q, req, res);
     else if (V3 && p === '/test/bot-withdraw') desk.botMessage({ type: 'withdraw', id: q.get('id') || '', reason: q.get('reason') || 'Sample: the entry is no longer valid' });
     else if (V3 && p === '/test/account') desk.setConnection(q.get('name'), q.get('connection') || 'lost');
+    else if (V3 && p === '/test/unserved') { const a = desk.acct.get(q.get('account')); if (a) { a.unserved = (q.get('names') || '').split(',').map(x => x.trim()).filter(Boolean); desk.sendAccounts(); } }   // 0.6.6: contracts it holds that ChartBridge does not serve (made up)
+    else if (V3 && p === '/test/nt-room') { const n = q.get('account'); if (q.get('v') === '') desk.gr.ntRoom.delete(n); else desk.gr.ntRoom.set(n, +q.get('v')); desk.groupsChanged(); }   // 0.6.6: NinjaTrader's own figure for an account (made up)
     else if (V3 && p === '/test/restart') desk.simulateRestart(q.get('lost') === '1');
     else if (V3 && p === '/test/v3') {
       res.writeHead(200, { 'Content-Type': 'application/json' });

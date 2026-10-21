@@ -70,7 +70,8 @@ function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Nu
 
 /* 1.15.0: the Account panel and the Quote board (Anthony's consolidated form, 2026-10-02) take no instrument; nor does the
    Data Box (1.16.0: the bar under the cursor on any chart), nor the Account page (1.16.0, live/accounts.js: every account) */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts'];
+/* 1.34.0 (Anthony 2026-10-21): the Trade tags panel (live/trade-tags.js) follows the order ticket's account and instrument */
+const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags'];
 /* 1.16.0 (Anthony 2026-10-07): the rows a Quote board hides, saved with its panel. Any root name ChartBridge could list (NQ,
    ES, or a quote-only market from hello, such as YM or 6E): kept as typed by the menu, so a root hello no longer lists is
    simply ignored; anything else dropped. Display only. */
@@ -330,6 +331,8 @@ function roundTrips(fills, pointValue, start) {
   return { byFill, trades, realized: realizedKnown ? realized : null, unknown };
 }
 /** The fills of one trading day (from 18:00 ET the day before), at bar time `now` (New York wall clock as seconds). */
+/* 2026-10-21 (Anthony): ChartBridge's groups.txt alarm (ChartBridgeGroups.ReadFailedText): the banner gets the alert sound too */
+const GROUPS_ALARM = /^groups\.txt could not be read/;
 function fillsToday(fills, account, now) {
   const d = tradeDayOf(now);
   return (Array.isArray(fills) ? fills : []).filter(f => f && f.account === account && isFinite(f.t) && tradeDayOf(+f.t) === d);
@@ -483,7 +486,7 @@ return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS
   layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
   isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout, LAPTOP_TABS, GAP, GAP_TIGHT, VIEW_KEYS, cleanViewKeys, fmtSpan,
   readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor, HTF_TFS,
-  roundTrips, fillsToday, QUOTE_ROOTS, cleanHide, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
+  GROUPS_ALARM, roundTrips, fillsToday, QUOTE_ROOTS, cleanHide, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
   TAPE_CATS, cleanTapeColors, tapeClass, readTapeColors, setTapeColor, resetTapeColors };
 });
 
@@ -642,18 +645,17 @@ function syncStats() {
   // 1.24.0: the split only while the top bar has room for it beside everything else (its free space, .ws-fill, not used
   // up: a note or the update notice is never squeezed for it); else "125 ms real", the split in the tooltip. With the clock
   // warning shown and the line still cut, the frame rate gives way, then the local delay's p95, then the local delay (each
-  // instrument's is in the tooltip): the warning is never cut.
+  // instrument's is in the tooltip): the warning is never cut. 1.34.0: the same order whenever the line is cut, warning or not
+  // (Flatten every account took its room in the top bar at 1366 wide: the line is never cut mid number).
   const fpsEl = $('wsFps'), localEl = $('wsLocal').parentElement, stat = $('wsStat');
   const show = (el, on) => { el.hidden = !on; if (el.previousElementSibling) el.previousElementSibling.hidden = !on; };
   show(fpsEl, true); show(localEl, true);
   const st = feedShort(feed, pcClock) + tail;
   if (st !== ft && !(fillEl && fillEl.getBoundingClientRect().width >= 1)) $('wsFeed').textContent = st;
-  if (cw) {
-    const cut = () => stat.scrollWidth > stat.clientWidth + 1;
-    if (cut()) show(fpsEl, false);
-    if (cut()) $('wsLocal').textContent = fmtDelay(local);
-    if (cut()) show(localEl, false);
-  }
+  const cut = () => stat.scrollWidth > stat.clientWidth + 1;
+  if (cut()) show(fpsEl, false);
+  if (cut()) $('wsLocal').textContent = fmtDelay(local);
+  if (cut()) show(localEl, false);
   $('wsStat').title = 'Feed delay (ChartBridge to here) and local delay per instrument, the worst shown. Frame: a trade\'s receipt by ChartBridge to the chart frame that drew it, ' +
     (frameMax === null ? 'no trade drawn in the last second' : fmtDelay(frameMax) + ' at worst in the last second (latest ' + fmtDelay(frame) + ')') + '; each chart\'s in the Data Box.\n' +
     ([...per].map(([root, r]) => root + ': feed ' + feedText(r.feed, pcClock) + ', local ' + fmtDelay(r.local)).join('\n') || 'no data yet') +
@@ -752,6 +754,7 @@ function syncGroupPicks() {
   if (k === groupPickKey) return;
   groupPickKey = k;
   if (TK.bar) TK.bar.syncTradeAccounts();
+  try { followHolder(); noTicketAccount(); } catch (e) { /* core is made below; the feed may call this first */ }
 }
 /* the v3 connection's switches to the ticket (each control shows only while its switch is on), only when they change */
 let v3Key = 'null';
@@ -797,6 +800,11 @@ const core = TC.create({
   agentOwner: (account, root) => (agentDesk ? agentDesk.ownerOf(account, root) : ''),
   /* 1.33.0 (ChartBridge 0.6.5): the groups on the window's v3 connection, for the ticket's picker; a group entry's confirm */
   groups: () => (AF && AF.S.groups && !AF.S.groupsError ? AF.S.groups : []),
+  /* 1.34.0: Flatten every account reads every listed account's orders and positions (the v3 connection), not only the trade accounts */
+  everyHolding: () => (AF && AF.S.v3 && AF.S.signedIn ? { orders: [...AF.S.orders.values()], positions: AF.S.positions } : null),
+  alert: text => alertOnce(text),                      // 1.34.0: a group entry refused while groups.txt cannot be read
+  /* the review: contracts ChartBridge does not serve that an account holds or works (ChartBridge 0.6.6's accounts entries) */
+  unserved: () => (AF && AF.S.v3 ? new Map(AF.S.accounts.filter(x => x && Array.isArray(x.unserved) && x.unserved.length).map(x => [x.name, x.unserved.filter(n => typeof n === 'string')])) : null),
   confirmGroup: (m, onSend, onCancel) => { if (forwarding || !holds()) return false; askGroup(m, onSend, onCancel); return true; },
 });
 /* 1.33.0: the group entry's one confirm (Anthony 2026-10-19): each account's size and dollar risk, or why it sits out; Send sends
@@ -804,7 +812,7 @@ const core = TC.create({
 function askGroup(m, onSend, onCancel) {
   const d = $('wsDialog'), GC = window.GroupsCore, usd = v => (GC ? GC.usd(v) : '$' + v);
   const side = m.side === 'sell' ? 'SELL' : 'BUY', kind = m.kind === 'market' ? 'MKT' : m.kind === 'limit' ? 'LMT' : m.kind === 'stop' ? 'STP' : m.kind;
-  const rows = (m.members || []).map(x => `<tr class="${x.size > 0 ? '' : 'gq-out'}"><td>${esc(x.account)}</td><td class="r">${x.size > 0 ? x.size + ' ' + esc(m.root) : '-'}</td><td class="r">${x.size > 0 ? usd(x.risk) : '-'}</td><td class="r">${usd(x.budget)}</td><td>${x.size > 0 ? '' : esc('sits out: ' + (x.out || ''))}</td></tr>`).join('');
+  const rows = (m.members || []).map(x => `<tr class="${x.size > 0 ? '' : 'gq-out'}"><td>${esc(x.account)}</td><td class="r">${x.size > 0 ? x.size + ' ' + esc(m.root) : '-'}</td><td class="r">${x.size > 0 ? usd(x.risk) : '-'}</td><td class="r">${usd(x.budget)}</td><td>${x.size > 0 ? (x.note ? esc(x.note) : '') : esc('sits out: ' + (x.out || ''))}</td></tr>`).join('');   // 1.34.0: a member sized with a room unknown says so
   const total = (m.members || []).reduce((t, x) => t + (x.size > 0 ? x.risk : 0), 0), n = (m.members || []).filter(x => x.size > 0).length;
   d.innerHTML = `<form class="ws-dlg ws-gq" method="dialog" aria-label="Group entry on ${esc(m.name)}">
     <h2>${side} ${kind} ${esc(m.root)} on group ${esc(m.name)} <span>stop ${m.stopTicks} ticks · risk ${m.riskPct}% of each account's max loss</span></h2>
@@ -827,6 +835,7 @@ if (AF) AF.listen({
   message: m => {
     if (m.type === 'managed' || m.type === 'merge') core.message(m);
     else if (m.type === 'status' && typeof m.text === 'string' && m.text && (m.level === 'error' || (m.level === 'warn' && !/^Bot\b/.test(m.text)))) alertOnce(m.text, m.level === 'warn', true);
+    else if (m.type === 'riskAlert') riskAlert(m, true);   // 1.34.0 (ChartBridge 0.6.6)
   },
   closed: () => core.v3Lost(),
 });
@@ -869,7 +878,9 @@ function tmessage(m) {
     case 'pcClock': pcClock = pcClockOf(m); syncStats(); return;   // 1.24.0: a new check of this PC's clock (every 5 minutes)
     case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
     // errors stay until dismissed; a warning (a mistyped maxTicksAway or maxBracketTicks in config.txt, 0.3.7) too, in amber
-    case 'status': if (m.level === 'error') alertOnce(m.text); else if (m.level === 'warn' && m.text) alertOnce(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;
+    /* 2026-10-21 (Anthony): groups.txt that cannot be read is a banner with a sound, never a dialog (GROUPS_ALARM) */
+    case 'status': if (m.level === 'error') { if (alertOnce(m.text) && W.GROUPS_ALARM.test(m.text || '')) riskSound(); } else if (m.level === 'warn' && m.text) alertOnce(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;
+    case 'riskAlert': riskAlert(m, false); return;        // 1.34.0 (ChartBridge 0.6.6)
   }
   // 1.16.0: the Account page's cancel from the list went on this connection; its refusal is said there
   if (m.type === 'reject' && AF && AF.takeReject(m)) return;
@@ -901,16 +912,46 @@ function alertOnce(text, warn, v3) {
   if (was && now - was.at <= 5000 && was.v3 !== !!v3) return;
   alertSaid.set(text, { at: now, v3: !!v3 });
   alertLoud(text, warn);
+  return true;
+}
+/* 1.34.0 (ChartBridge 0.6.6, Anthony 2026-10-20): a risk alert, the banner above with a sound, never a dialog: an account reached
+   its daily loss (red), or the bot's, an agent's or a copier follower's entry was held back by the firm's limits (amber). Said once
+   per window whichever connection brings it (alertOnce); nothing here acts on any account. */
+let riskSounds = 0, audio = null;
+function riskAlert(m, v3) {
+  if (!m || typeof m.text !== 'string' || !m.text) return;
+  if (alertOnce(m.text, m.kind !== 'dailyLoss', v3)) riskSound();
+}
+function riskSound() {
+  riskSounds++;
+  try {
+    const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+    audio = audio || new C();
+    if (audio.state === 'suspended') audio.resume();
+    const t = audio.currentTime;
+    for (const [f, at] of [[880, 0], [660, 0.2]]) {                      // two short tones, as the Bot tab's notice sound
+      const osc = audio.createOscillator(), g = audio.createGain();
+      osc.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t + at); g.gain.exponentialRampToValueAtTime(0.12, t + at + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.18);
+      osc.connect(g); g.connect(audio.destination); osc.start(t + at); osc.stop(t + at + 0.2);
+    }
+  } catch (e) { /* no sound */ }
 }
 $('wsAlertClose').addEventListener('click', () => { alerts.length = 0; alertErr = false; $('wsAlert').hidden = true; });
 function renderUnsent() { const n = core.unsentNote(); $('wsUnsent').hidden = !n.show; $('wsUnsentText').textContent = n.text; }
 $('wsUnsentClose').addEventListener('click', () => core.dismissUnsent());
 
 /* ---------------- what every chart shows, and which charts take orders */
+/* 1.34.0: what the ARMED badge calls the account: a group's name, else the account's label on the Accounts tab, else '' (the name) */
+function accountShort(a) {
+  if (!a) return '';
+  if (core.isGroup(a)) { const g = core.groupOf(a); return g ? 'group ' + g.name : ''; }
+  try { const l = JSON.parse(store.getItem('live-acc-labels-v1') || 'null'); return l && typeof l[a] === 'string' ? l[a].trim().slice(0, 24) : ''; } catch (e) { return ''; }
+}
 function chartTrade(v) {
   const r = v.panel.root, TR = core.TR, acct = ticketAccount(), on = TR.enabled && !!acct;
-  const pos = on ? TR.positions.get(acct + '|' + r) : null;
-  return { root: r, account: acct, live: on && ticketArmed() && r === ticketRoot(), orders: on ? core.chartOrders(acct, r) : [],
+  const pos = !on ? null : core.isGroup(acct) ? core.groupPosition(acct, r) : TR.positions.get(acct + '|' + r);   // 1.34.0: a group's combined position
+  return { root: r, account: acct, accountShort: accountShort(acct), live: on && ticketArmed() && r === ticketRoot(), orders: on ? core.chartOrders(acct, r) : [],
     position: pos && pos.qty ? pos : null, pointValue: (instruments[r] || {}).pointValue || 0, qty: ticketQty() };
 }
 function renderCharts() { for (const v of chartViews()) v.pane.setTrade(chartTrade(v)); }
@@ -919,6 +960,7 @@ function renderOrders() {
   renderCharts();
   renderLimits();                                        // 1.16.0: the ticket's account may have changed
   renderAccounts();                                      // 1.15.0: the Account panels
+  renderTags();                                          // 1.34.0: the Trade tags panels
   renderFlat();
   syncTitle();
 }
@@ -933,12 +975,45 @@ function renderFlat() {
   const t = on ? 'Flatten all on ' + a + ': every instrument with a position or a working order, cancel its orders and close its position at market. Works with Armed off.'
     : 'Flatten all: ' + (core.TR.reason || 'not connected to ChartBridge yet');
   if (b.title !== t) b.title = t;
+  /* 1.34.0: Flatten every account needs trading on only (no account picked: it covers every account) */
+  const e = $('wsFlatEvery'), te = core.TR.enabled ? 'Flatten every account: cancel every working order and close every position at market on every account ChartBridge lists, the copier\'s, the bot\'s and the agents\' included, whatever the ticket shows. One confirm; works with Armed off.'
+    : 'Flatten every account: ' + (core.TR.reason || 'not connected to ChartBridge yet');
+  e.disabled = !core.TR.enabled;
+  if (e.title !== te) e.title = te;
 }
 $('wsFlat').addEventListener('click', e => {
   e.currentTarget.blur();
   if (e.detail === 0) { note('Order buttons work by click only, not by keyboard.', true); return; }
   core.flattenAll();
 });
+/* 1.34.0 Flatten every account (Anthony 2026-10-20, approved): its own button beside Flatten all, one confirm, then a flatten for every
+   account ChartBridge lists with a position or a working order (the copier's, the bot's and the agents' accounts included), whatever
+   the ticket shows; with Armed off too. Paced within ChartBridge's 10 order actions a second (TradeCore.flattenEvery). */
+$('wsFlatEvery').addEventListener('click', e => {
+  e.currentTarget.blur();
+  if (e.detail === 0) { note('Order buttons work by click only, not by keyboard.', true); return; }
+  askFlattenEvery();
+});
+function askFlattenEvery() {
+  const scan = core.everyScan(), items = scan.items;
+  if (!items.length) { core.flattenEvery(); return; }      // says there is nothing to flatten, sends nothing
+  const byAcct = new Map();
+  for (const x of items) { if (!byAcct.has(x.a)) byAcct.set(x.a, []); byAcct.get(x.a).push(x.r); }
+  const n = byAcct.size, d = $('wsDialog');
+  const rows = [...byAcct].map(([a, rs]) => `<li><b>${esc(a)}</b> ${esc(rs.join(', '))}</li>`).join('');
+  d.innerHTML = `<form class="ws-dlg ws-fe" method="dialog" aria-label="Flatten every account">
+    <h2>Flatten every account?</h2>
+    <p>Cancels every working order and closes every position at market on ${n} account${n === 1 ? '' : 's'}, ${scan.v3 ? 'the copier\'s, the bot\'s and the agents\' included' : 'trade accounts only (no v3 connection)'}, whatever the ticket shows. Works with Armed off.</p>
+    <ul class="fe-list">${rows}</ul>${scan.missed.length ? `<p class="fe-missed">Not covered (not served by ChartBridge): ${esc(scan.missed.join(', '))}</p>` : ''}
+    <div class="ws-dlg-btns"><span class="sg-fill"></span><button type="button" class="ws-btn" data-act="cancel">Cancel</button><button type="button" class="ws-btn ws-flat" id="feGo" title="Flatten every account (a click only, as every order button)">Flatten every account</button></div>
+  </form>`;
+  showDialog(d, () => false);
+  d.querySelector('#feGo').addEventListener('click', e => {
+    if (e.detail === 0) { note('Flatten every account goes by a click on its button only, not by keyboard.', true); return; }
+    d.close(); core.flattenEvery();
+  });
+  d.querySelector('[data-act="cancel"]').focus();
+}
 
 /* A chart's click, drag or cancel (ChartLive.mount's `trade`): in the ticket's window straight to TradeCore, else
    forwarded to it. Either way only for the ticket's instrument. */
@@ -1067,8 +1142,18 @@ function linkChanged() {
   // a question asked here for the ticket's window goes when the ticket is not as it was asked (F2 re-review)
   if (noStopQ && noStopQ.fwd && (h || !hd || !hd.armed || hd.root !== noStopQ.root || hd.account !== noStopQ.account)) dropNoStop();
   if (!h && hd && W.ROOTS.includes(hd.root)) TK.root = hd.root;
-  if (!h && hd && hd.account && hd.account !== core.TR.account && core.TR.accounts.includes(hd.account)) core.pickAccount(hd.account);
+  followHolder();
   if (!h && !hd) noTicketAccount();
+  renderOrders();
+}
+/* 1.34.0 (Anthony 2026-10-20, "flatten all does not work with these group orders"): a group is an order account too, so
+   another window follows the ticket onto a group as onto an account (it was left on None: its Flatten all and Close sent
+   nothing). Called again when the groups come, as they may come after the ticket's message. */
+const orderAccounts = () => core.TR.accounts.concat(core.groupChoices().map(g => g.value));
+function followHolder() {
+  const hd = holder();
+  if (holds() || !hd || !hd.account || hd.account === core.TR.account || !orderAccounts().includes(hd.account)) return;
+  core.pickAccount(hd.account);
   renderOrders();
 }
 /* No window has the ticket: Close and Flatten all go on the default account (the last one picked on this PC, as the
@@ -1076,7 +1161,7 @@ function linkChanged() {
 function noTicketAccount() {
   const TR = core.TR;
   if (!TR.enabled || holds() || holder()) return;
-  const a = LP.orderAccount(TR.accounts, accountPick()).account;
+  const a = LP.orderAccount(orderAccounts(), accountPick()).account;   // 1.34.0: a group picked last stays the default
   if (a !== TR.account) core.pickAccount(a);                    // None ('') too: no Sim101 fallback (DECISION 2026-10-14e)
 }
 /* What Close and Flatten all here would act on, for KEYS's tooltip and the top bar's Flatten all */
@@ -1185,7 +1270,7 @@ function mountTicket(v) {
     <div class="tk-row tk-two"><button type="button" class="obtn buy" data-tk-id="buyMkt">Buy MKT</button><button type="button" class="obtn sell" data-tk-id="sellMkt">Sell MKT</button></div>
     <div class="tk-row tk-three"><button type="button" class="btn" data-tk-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-tk-id="flattenBtn" title="Close: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Close</button><button type="button" class="btn" data-tk-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button><button type="button" class="btn" data-tk-id="mergeBtn" hidden>Merge</button></div>
     <div class="tk-state ostate">
-      <span class="oinfo" data-tk-id="oPos"></span><span class="oinfo olegs" data-tk-id="oLegs"></span>
+      <span class="oinfo" data-tk-id="oPos"></span><span class="oinfo olegs" data-tk-id="oLegs"></span><span class="oinfo dim tk-room" data-tk-id="room"></span>
       <span class="oinfo tk-v3" data-tk-id="managed" role="status"></span><span class="oinfo tk-v3" data-tk-id="mergeLine" role="status"></span><span class="oinfo tk-fill" data-tk-id="fill"></span>
       <span class="tk-also" data-tk-id="also"></span>
       <span class="oinfo dim oother" data-tk-id="oOther"></span><span class="oinfo acct-note" data-tk-id="oAcctNote" role="status"></span><span class="oinfo acct-note batch-note" data-tk-id="oCancel" role="status"></span><span class="ooff" data-tk-id="oOff"></span>
@@ -1255,6 +1340,7 @@ function ticketAccountNote(pick) {
 /* the last fill of the ticket's account and instrument, and the account's other instruments still open */
 function renderTicketExtras() {
   renderTicketV3();
+  renderRoom();
   const TR = core.TR, acct = TR.account, r = TK.root;
   const fill = TR.enabled && acct ? [...tfills.values()].filter(f => f.account === acct && f.root === r).sort((a, b) => a.t - b.t).pop() : null;
   const fe = tk('fill');
@@ -1272,6 +1358,30 @@ function renderTicketExtras() {
   if (el.dataset.key === key) return;
   el.dataset.key = key;
   el.innerHTML = rows.map(x => `<span class="tk-also-row"><span>Also open: ${esc(x.text)}</span><button type="button" class="btn" data-close="${x.root}" title="Close ${x.root}: cancel its orders and close its position at market on ${esc(acct)}">Close</button></span>`).join('');
+}
+/* 1.34.0 (Anthony 2026-10-20): the ticket says the account's room where its rules give it (ChartBridge's own numbers: the daily
+   room and the room to the floor, as the Account page's Room column), and this entry's risk at its stop (Qty x the bracket's stop,
+   or the active Order Strategy's, in dollars). Display only: nothing is checked or held on it (his own entries have one check, the
+   firm's max contracts, in ChartBridge). One account only (a group shows its next entry's sizes instead); nothing on None. */
+function renderRoom() {
+  const el = tk('room');
+  if (!el) return;
+  const acct = ticketAccount(), R = TK.root, a = AF && acct && core.TR.enabled && !core.isGroup(acct) ? AF.account(acct) : null;
+  const num = v => typeof v === 'number' && isFinite(v), C = window.AccountsCore;
+  const usd = v => (C ? C.fmtUsdPlain(v) : (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2));
+  let text = '', tip = '';
+  if (a && (num(a.roomDaily) || num(a.roomFloor))) {
+    const st = activeStrategy(), b = core.brackets[R] || {};
+    const ticks = st && st.stop ? (+st.stop.ticks || 0) + (st.stop.type === 'limit' ? +st.stop.limitOffsetTicks || 0 : 0) : +b.stop || 0;
+    const pv = (instruments[R] || {}).pointValue || 0, risk = ticks > 0 && pv > 0 ? ticketQty() * ticks * tickOf(R) * pv : null;
+    const parts = [num(a.roomDaily) ? usd(a.roomDaily) + ' daily' : '', num(a.roomFloor) ? usd(a.roomFloor) + ' to floor' : ''].filter(Boolean);
+    text = 'Room ' + parts.join(' · ') + (ticks > 0 ? (risk !== null ? ' · entry ' + usd(risk) + ' at stop' : '') : ' · entry: no stop') +
+      (typeof a.fromCopy === 'string' && a.fromCopy ? ' (' + a.fromCopy + ')' : '');   // 2026-10-21: worked out from groups.txt.good
+    tip = acct + ': ' + [num(a.roomDaily) ? usd(a.roomDaily) + ' of daily room left' : '', num(a.roomFloor) ? usd(a.roomFloor) + ' to the floor' + (num(a.floor) ? ' (' + usd(a.floor) + ')' : '') : ''].filter(Boolean).join(', ') +
+      ' (ChartBridge, from its rules).' + (ticks > 0 && risk !== null ? ' This entry: ' + ticketQty() + ' ' + R + ' at a ' + ticks + ' tick stop risks ' + usd(risk) + (st ? ' (the Order Strategy\'s stop)' : '') + '.' : '') + ' Shown only: nothing is held on it.';
+  }
+  if (el.textContent !== text) el.textContent = text;
+  if (el.title !== tip) el.title = tip;
 }
 /* the ticket's price: its instrument's trades from the window's feed (no history kept) */
 function startTicketPrice() {
@@ -1295,7 +1405,7 @@ function stopTicketPrice() {
   const P = TK.price; TK.price = null;
   if (P) { P.sock.onmessage = P.sock.onclose = null; try { P.sock.close(); } catch (e) { /* closed */ } }
 }
-setInterval(() => { if (holds() && TK.bar) TK.bar.renderPositionInfo(); }, 500);   // the P&L, as the single chart page's
+setInterval(() => { if (holds() && TK.bar) { core.groupProjectTick(); TK.bar.renderPositionInfo(); renderRoom(); } }, 500);   // 1.34.0: the room as ChartBridge's numbers change   // the P&L, as the single chart page's; 1.34.0: a group's projected sizes
 
 /* ---------------- hotkeys: in either window. Buy, Sell and B/E go to the ticket's window; Close and Flatten all go from
    this one, on the ticket's account (Anthony 2026-10-01). */
@@ -1850,6 +1960,7 @@ function addView(p) {
     '<button type="button" class="ws-ic ws-more" data-act="qbrows" aria-haspopup="true" aria-expanded="false" aria-label="Markets shown on this Quote board" title="Markets shown on this board">⋯</button>';
   else if (p.type === 'databox') mid = '<span class="ws-name">Data Box</span><span class="ws-db-src" title="The chart it follows: the one under the mouse, else the last one"></span><span class="ws-fill"></span>';
   else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
+  else if (p.type === 'tags') mid = '<span class="ws-name">Trade tags</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';   // 1.34.0
   else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
   // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
@@ -1866,6 +1977,7 @@ function addView(p) {
   else if (p.type === 'quotes') mountQuotes(v);
   else if (p.type === 'databox') mountDataBox(v);        // 1.16.0
   else if (p.type === 'accounts') mountAccountsPage(v);  // 1.16.0
+  else if (p.type === 'tags') mountTags(v);              // 1.34.0 (Anthony 2026-10-21)
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
@@ -1947,7 +2059,7 @@ function addPanel(type) {
   if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' || type === 'databox' || type === 'accounts' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' || type === 'databox' || type === 'accounts' || type === 'tags' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -2349,6 +2461,42 @@ function fitPanel(v, classes) {
    copy on or off), goes here as one more entry with its own render; it is not built. */
 const ACCOUNT_TABS = [{ id: 'pos', name: 'Positions' }, { id: 'ord', name: 'Orders' }, { id: 'fil', name: 'Fills' }];
 const accountViews = () => [...views.values()].filter(v => v.account);
+/* ---------------- 1.34.0 (Anthony 2026-10-21): Trade tags (live/trade-tags.js): one-click chips for what he entered on, with their
+   phase from the ticket's account and instrument; records to The Desk. Clicks only; nothing here sends an order. */
+const tagViews = () => [...views.values()].filter(v => v.tags);
+function tagAccounts() {
+  const a = ticketAccount();
+  if (!a) return [];
+  if (!a.startsWith('group:')) return [a];
+  const g = AF && Array.isArray(AF.S.groups) ? AF.S.groups.find(x => 'group:' + x.id === a) : null;
+  return g && Array.isArray(g.members) ? g.members.filter(m => typeof m === 'string' && m) : [];
+}
+function tagLabel() { const a = ticketAccount(); if (!a || !a.startsWith('group:')) return a || 'None'; const g = AF && Array.isArray(AF.S.groups) ? AF.S.groups.find(x => 'group:' + x.id === a) : null; return g ? 'group ' + g.name : a; }
+function tagPosition(acct, r) {
+  const k = acct + '|' + r, p = core.TR.positions.get(k) || (AF && AF.S.positions ? AF.S.positions.get(k) : null);
+  return p && isFinite(p.qty) ? +p.qty : 0;
+}
+function tagFills() {
+  const all = new Map();
+  for (const f of tfills.values()) if (f && f.id) all.set(f.account + '|' + f.id, f);
+  if (AF && AF.S.fills && typeof AF.S.fills.values === 'function') for (const f of AF.S.fills.values()) if (f && f.id && !all.has(f.account + '|' + f.id)) all.set(f.account + '|' + f.id, f);
+  return [...all.values()];
+}
+function mountTags(v) {
+  v.state = 'live';
+  const acctEl = v.head.querySelector('.ws-acct');
+  if (!window.TradeTags || !window.AccountsPage) { v.body.innerHTML = '<p class="tt-foot warn">Reload this window: its trade-tags.js is missing.</p>'; v.tags = { render: () => {} }; v.destroy = () => {}; return; }
+  const t = window.TradeTags.mount(v.body, {
+    accounts: tagAccounts, label: tagLabel, root: () => ticketRoot(), position: tagPosition, fills: tagFills, etNowSec: () => etNowSec(),
+    deskBase: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)), fetch: (u, o) => fetch(u, o), store,
+  });
+  v.tags = { render: () => { if (acctEl) acctEl.textContent = tagLabel() + ' · ' + ticketRoot(); t.render(); }, pending: t.pending };
+  v.tags.render();
+  v.destroy = () => t.destroy();
+}
+var tagsRaf = 0;                                          // var: renderOrders may run before this line
+function renderTags() { if (!tagsRaf && tagViews().length) tagsRaf = requestAnimationFrame(() => { tagsRaf = 0; for (const v of tagViews()) v.tags.render(); }); }
+setInterval(renderTags, 1000);                            // the session's start and the Desk's answers
 const SIDE_WORD = { buy: 'Buy', sell: 'Sell' };
 function orderTypeName(o) {
   if (o.plan) return 'Planned ' + (o.plan.role === 'stop' ? 'stop' : 'target');
@@ -2548,6 +2696,93 @@ document.addEventListener('keydown', e => {
 });
 
 $('wsAdd').addEventListener('click', e => toggle($('wsAddMenu'), e.currentTarget, () => { syncAddMenu(); openPop($('wsAddMenu'), e.currentTarget); }));
+
+/* ---------------- 1.34.0 (Anthony 2026-10-20): Screens. Save these screens keeps every workspace window open now (its layout
+   and where it is); Open my screens opens the saved ones not open now, each on its screen (the browser's window placement
+   on all screens, asked once), each unlocked by this window's PIN (ChartBridgePin.openChild). live/screens.js. */
+const SC = window.Screens;
+const scChan = typeof BroadcastChannel === 'function' ? new BroadcastChannel(SC.CHANNEL) : null;
+const scMine = () => ({ layout: layout || W.DEFAULT_NAME, x: window.screenX, y: window.screenY, w: window.outerWidth, h: window.outerHeight });
+if (scChan) scChan.onmessage = e => { const m = e.data; if (m && m.type === 'who' && typeof m.id === 'string') scChan.postMessage(Object.assign({ type: 'here', id: m.id }, scMine())); };
+/* the workspace windows open now, this one first (each answers within the wait) */
+function scRoster(ms) {
+  return new Promise(resolve => {
+    const list = [scMine()];
+    if (!scChan) { resolve(list); return; }
+    const id = Math.random().toString(36).slice(2), other = new BroadcastChannel(SC.CHANNEL);   // a second port: a channel never hears its own posts
+    other.onmessage = e => { const m = e.data; if (m && m.type === 'here' && m.id === id) list.push(m); };
+    other.postMessage({ type: 'who', id });
+    setTimeout(() => { other.close(); resolve(list); }, ms || 350);
+  });
+}
+const scSaved = () => { try { return SC.clean(JSON.parse(store.getItem(SC.KEY))); } catch (e) { return SC.clean(null); } };
+let scScreens = null, scMsg = { text: '', warn: false };
+/* the screens as the browser tells them (asked once: the browser's "manage windows on all your displays"), else null */
+async function scDetails(ask) {
+  if (typeof window.getScreenDetails !== 'function') return null;
+  try {
+    if (!ask && navigator.permissions) { const st = await navigator.permissions.query({ name: 'window-management' }); if (st.state !== 'granted') return scScreens; }
+    const d = await window.getScreenDetails();
+    scScreens = d.screens.map(x => ({ left: x.availLeft, top: x.availTop, width: x.availWidth, height: x.availHeight }));
+  } catch (e) { /* refused or not offered: this screen only */ }
+  return scScreens;
+}
+async function renderScreens() {
+  const el = $('wsScreensPop'), set = scSaved(), open = new Set((await scRoster()).map(x => x.layout));
+  await scDetails(false);
+  const where = w => { const n = scScreens ? SC.screenNo(w, scScreens) : 0; return n ? 'screen ' + n : scScreens ? 'its screen is not connected' : 'at ' + w.x + ', ' + w.y; };
+  const missing = set.windows.filter(w => !open.has(w.layout));
+  el.innerHTML = '<h2>Screens</h2>' +
+    (set.windows.length ? '<ul>' + set.windows.map(w => '<li><b>' + esc(w.layout) + '</b><span>' + esc(where(w)) + ' · ' + w.w + ' x ' + w.h + '</span><span class="' + (open.has(w.layout) ? 'on' : '') + '">' + (open.has(w.layout) ? 'open' : 'not open') + '</span></li>').join('') + '</ul>'
+      : '<p class="ws-scr-msg">No screens saved yet. Open your windows, put each where you want it, then Save these screens.</p>') +
+    (scMsg.text ? '<p class="ws-scr-msg' + (scMsg.warn ? ' warn' : '') + '" role="status">' + esc(scMsg.text) + '</p>' : '') +
+    '<div class="ws-scr-btns"><button type="button" class="ws-btn" data-scr="save" title="Remember every workspace window open now: its layout, screen and size">Save these screens</button>' +
+    '<button type="button" class="ws-btn primary" data-scr="open"' + (missing.length ? '' : ' disabled') + ' title="' + (missing.length ? 'Open ' + esc(missing.map(w => w.layout).join(', ')) + ', each on its screen' : 'Every saved window is open') + '">Open my screens</button></div>' +
+    '<p class="ws-help">Open my screens opens the saved windows that are not open, each on its screen, unlocked with this window\'s PIN. The first time the browser asks to manage windows on all your displays, and may block the extra windows: allow pop-ups for this page (the icon at the end of the address bar), then click again.</p>';
+  scDue(missing);
+}
+function scDue(missing) {
+  const b = $('wsScreens'), due = missing.length > 0;
+  b.classList.toggle('ws-scr-due', due);
+  const t = due ? 'Screens: ' + missing.map(w => w.layout).join(', ') + ' not open (Open my screens)' : 'Screens: save where your windows are, open them all again';
+  if (b.title !== t) b.title = t;
+}
+async function scSave() {
+  const list = await scRoster(), at = Date.now();
+  store.setItem(SC.KEY, JSON.stringify({ at, windows: list.map(x => ({ layout: x.layout, x: x.x, y: x.y, w: x.w, h: x.h })) }));
+  const set = scSaved();
+  scMsg = { text: 'Saved ' + set.windows.length + ' window' + (set.windows.length === 1 ? '' : 's') + ': ' + set.windows.map(w => w.layout).join(', ') + '.', warn: false };
+  await renderScreens();
+}
+async function scOpen() {
+  const set = scSaved(), open = new Set((await scRoster(250)).map(x => x.layout));
+  const missing = set.windows.filter(w => !open.has(w.layout));
+  if (!missing.length) { scMsg = { text: 'Every saved window is open.', warn: false }; await renderScreens(); return; }
+  const screens = await scDetails(true);
+  const here = { left: window.screen.availLeft || 0, top: window.screen.availTop || 0, width: window.screen.availWidth, height: window.screen.availHeight };
+  const moved = [], blocked = [];
+  for (const w of missing) {
+    let p = screens ? SC.place(w, screens) : { left: w.x, top: w.y, width: w.w, height: w.h };
+    if (!p) { p = SC.onScreen(here, w.w, w.h); moved.push(w.layout); }
+    const url = location.pathname + SC.url(w.layout), f = SC.features(p);
+    const win = PIN && PIN.openChild ? PIN.openChild(url, f) : window.open(url, '_blank', f);
+    if (!win) blocked.push(w.layout);
+  }
+  const opened = missing.length - blocked.length;
+  scMsg = { text: (opened ? 'Opened ' + missing.filter(w => !blocked.includes(w.layout)).map(w => w.layout).join(', ') + '.' : '') +
+    (moved.length ? ' ' + moved.join(', ') + ': its screen is not connected now, so on this one.' : '') +
+    (blocked.length ? ' The browser blocked ' + blocked.join(', ') + ': allow pop-ups for this page (the icon at the end of the address bar), then click Open my screens again.' : '') +
+    (!screens && opened ? ' The browser did not allow placing windows on other screens, so they may open on this one.' : ''), warn: blocked.length > 0 || moved.length > 0 || (!screens && opened > 0) };
+  scMsg.text = scMsg.text.trim();
+  await renderScreens();
+}
+$('wsScreens').addEventListener('click', e => toggle($('wsScreensPop'), e.currentTarget, () => { scMsg = { text: '', warn: false }; renderScreens().then(() => openPop($('wsScreensPop'), $('wsScreens'))); }));
+$('wsScreensPop').addEventListener('click', e => {
+  const b = e.target.closest('[data-scr]');
+  if (!b || b.disabled) return;
+  if (b.dataset.scr === 'save') scSave(); else scOpen();
+});
+setTimeout(() => { const set = scSaved(); if (set.windows.length) scRoster().then(list => { const open = new Set(list.map(x => x.layout)); scDue(set.windows.filter(w => !open.has(w.layout))); }); }, 2500);
 $('wsAddMenu').addEventListener('click', e => { const b = e.target.closest('[data-add]'); if (b && !b.disabled) addPanel(b.dataset.add); });
 function syncAddMenu() {
   const b = $('wsAddMenu').querySelector('[data-add="ticket"]'), has = panels.some(p => p.type === 'ticket');
@@ -3148,7 +3383,9 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   /* the Bot tab's entrance played again (test/perf-bot.mjs: the motion kit running while the live chart draws) */
   botReplay: () => !!(botDesk && botDesk.replay()),
   /* 1.17.0: the Agent tab (read it; its actions go through ChartBridge's checks) */
-  agent: () => (agentDesk ? agentDesk.state() : null) };
+  agent: () => (agentDesk ? agentDesk.state() : null),
+  /* 1.34.0: how many risk alerts sounded in this window (test/flatten-every-smoke.mjs) */
+  riskSounds: () => riskSounds };
 
 /* 1.16.0: the Bot tab, the bot strip and the bot's pop-ups (live/bot.js), on the window's v3 connection (AF); everything bot
    shows only when ChartBridge's bot switch is on. The Bot tab hides the grid while it is open (?tab=bot keeps it on a reload). */

@@ -107,6 +107,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         //                                  order for them is refused. Default these eight; "quoteRoots =" for none.)
         //   contract.MNQ = MNQ 12-26      (forces a contract instead of the computed front month)
         //   postFills = true              (send every fill to The Desk; off by default)
+        //   postStops = true              (0.6.6: the stop record to The Desk, every stop order's price at send and each modify;
+        //                                  with no postStops line it follows postFills; see ChartBridgeStops.cs)
         //   deskUrl = http://localhost:8800
         //   trading = true                (order entry from the chart; OFF by default; see ChartBridgeOrders.cs)
         //   tradeAccounts = Sim101, ...   (exact account names; pre-checked on a first start, and gate 2 only with accountChecks = off)
@@ -134,6 +136,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeOrders.ResetConfig();
             AllowOrigins = new List<string>();
             ChartBridgeBars.ResetConfig();
+            ChartBridgeStops.ResetConfig();   // 0.6.6: the stop record follows postFills unless config.txt has postStops
             ChartBridgeSwitches.Reset();   // 0.4.0 accounts: the v3 switches, all ON unless config.txt turns one off (Anthony 2026-10-07)
             ChartBridgeCopier.ResetConfig();   // 0.4.0 copier:
             ChartBridgeBot.ResetConfig();   // 0.4.0 bot: on by default
@@ -159,6 +162,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key == "roots") Roots = val.Split(',').Select(s => s.Trim().ToUpperInvariant()).Where(s => s.Length > 0).ToArray();
                 else if (key == "quoteRoots") QuoteRoots = val.Split(',').Select(s => s.Trim().ToUpperInvariant()).Where(s => s.Length > 0).ToArray();   // 0.4.0
                 else if (key.StartsWith("contract.")) ContractOverride[key.Substring(9).Trim().ToUpperInvariant()] = val;
+                else if (ChartBridgeStops.ReadConfig(key, val)) { }   // 0.6.6: postStops = true|false (ChartBridgeStops.cs)
                 else if (key == "postFills") PostFills = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1";
                 else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
                 else if (key == "allowOrigins") AllowOrigins = ChartBridgeAccess.ParseOrigins(val);
@@ -1572,7 +1576,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public Action<string> Tap;              // test hook: sees every message sent (unused in NinjaTrader)
 
         private static readonly string[] OrderLaneTypes = { "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",
-            "bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock", "groupPreview", "groupPlaced" };   // 0.6.5: a group entry's preview and result   // 0.4.0 accounts: "accounts" in the order lane   // 0.4.0 B4: merge   // 0.4.0 copier: copier, copierEvent   // 0.4.0 bot: the bot's messages never wait behind market data   // 0.4.0 B1: managed   // 0.5.6: pcClock, in order after hello
+            "bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed", "pcClock", "groupPreview", "groupPlaced", "riskAlert" };   // 0.6.6: riskAlert (a held entry, a skipped copy, a daily loss reached)   // 0.6.5: a group entry's preview and result   // 0.4.0 accounts: "accounts" in the order lane   // 0.4.0 B4: merge   // 0.4.0 copier: copier, copierEvent   // 0.4.0 bot: the bot's messages never wait behind market data   // 0.4.0 B1: managed   // 0.5.6: pcClock, in order after hello
 
         // The message's type, read from its start ({"type":"...), as every message ChartBridge sends begins.
         public static string TypeOf(string json)
@@ -1982,7 +1986,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.6.5";
+        public const string Version = "0.6.6";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -2037,10 +2041,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     SubscribeMarketData();
                     WatchFeed();   // 0.3.5 S2
                     if (ChartBridgeConfig.PostFills) ChartBridgeDesk.Load();
+                    ChartBridgeStops.Clear();
+                    if (ChartBridgeStops.On) ChartBridgeStops.Load();   // 0.6.6: the stop record's queue
                     WatchAccounts();
                     ChartBridgeOrders.WatchConnections();
                     try { ChartBridgeOrders.Resume(); } catch (Exception ex) { Log("bracket resume error: " + ex.Message); }   // entries that filled while stopped
-                    accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } try { SweepBooks(); } catch (Exception) { } }, null, 10000, 10000);
+                    accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } try { ChartBridgeStops.Flush(); } catch (Exception) { } try { SweepBooks(); } catch (Exception) { } }, null, 10000, 10000);
                     htfTimer = new System.Threading.Timer(delegate { try { HtfPush(); HtfExpire(); } catch (Exception ex) { Log("higher-timeframe push error: " + ex.Message); } try { SettlementTick(); } catch (Exception ex) { Log("settlement error: " + ex.Message); } }, null, HtfPushMs, HtfPushMs);   // 0.3.7
                     pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } try { ChartBridgeOrders.CheckLegs(); } catch (Exception ex) { Log("legs check error: " + ex.Message); } try { ChartBridgeBranches.Poll(); } catch (Exception ex) { Log("daily reset error: " + ex.Message); } }, null, 2000, 2000);   // 0.5.7: the 17:00 ET reset to None
                     listener = new HttpListener();
@@ -2095,6 +2101,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Settlements) Settlements.Clear();
                 ChartBridgeAccounts.Stop();   // 0.4.0 accounts
                 Unwatch();
+                try { ChartBridgeStops.SaveIfDirty(); } catch (Exception) { }   // 0.6.6: after Unwatch (no order event can add one now): the stop events the 10 s timer has not saved
                 ChartBridgeOrders.UnwatchConnections();
                 UnwatchFeed();
                 try { if (listener != null) { listener.Stop(); listener.Close(); } } catch (Exception) { }
@@ -4971,6 +4978,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Account a = sender as Account;
             Count(a != null ? a.Name : "", 1);
             try { ChartBridgeOrders.OnOrderUpdate(a, e); } catch (Exception ex) { Log("order update error: " + ex.Message); }
+            try { ChartBridgeStops.Observe(a, e); } catch (Exception ex) { Log("stop record error: " + ex.Message); }   // 0.6.6: the stop record to The Desk (ChartBridgeStops.cs)
         }
 
         private static void OnPositionUpdate(object sender, PositionEventArgs e)
@@ -4997,6 +5005,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"network\":").Append(ChartBridgeAccess.DiagJson());
             b.Append(",\"pin\":").Append(ChartBridgePin.DiagJson());   // whether a PIN is set, nothing else
             b.Append(",\"desk\":").Append(ChartBridgeDesk.DiagJson());
+            b.Append(",\"stops\":").Append(ChartBridgeStops.DiagJson());   // 0.6.6: the stop record to The Desk
             b.Append(",\"bars\":").Append(ChartBridgeBars.DiagJson());   // 0.3.6: daily 1-minute bars to The Desk
             b.Append(",\"seams\":").Append(SeamsJson());   // 0.3.3: where each load's backfill met the live trades
             b.Append(",\"sides\":").Append(SidesJson());
