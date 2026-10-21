@@ -24,16 +24,18 @@ minimum, the firm's rules on an account in no group, Remove a follower row) is n
   it for the rest of that trading day) and for each held entry or skipped copy. The page shows it in its ChartBridge banner (red for
   the daily loss, amber for a hold) with a short sound, once per window; the Account page's log keeps it.
 - **Nothing ever flattens an account on its own.** The firm does that at its daily loss limit.
-- **Group auto-sizing never above the firm max, each kind against its own.** Since 0.6.5 a member was capped by one max in mini
-  equivalents, the smaller of `maxMinis` and `maxMicros / 10` (so a 2 minis or 40 micros firm held micros to 20); now micros count
-  against `maxMicros` where the firm gives one and minis against `maxMinis` (one set only: 10 micros to a mini), still counting what
-  it holds and has working in mini equivalents. A member capped to 0 sits out and says it is at its max size. The rest of the sizing
-  is unchanged.
+- **Group auto-sizing never above the firm max.** Since 0.6.5 a member was capped by one max in mini equivalents, the smaller of
+  `maxMinis` and `maxMicros / 10`. After the review (Anthony's ruling, "10 micros = 1 mini") one combined rule holds every entry,
+  his own, a group member's and the machines', whatever its instrument: after the order the total in mini equivalents (minis +
+  micros / 10, held and working, every instrument) is at most `maxMinis` and the total in micro equivalents at most `maxMicros`, each
+  when set. So a 2 minis / 40 micros account holding 15 MNQ cannot buy 1 NQ, and holding 1 NQ can buy 10 MNQ, not 15: the same answer
+  whichever came first. (An earlier commit of this release, ef98500, counted micros against `maxMicros` and minis against `maxMinis`
+  separately; replaced.) A member capped to 0 sits out and says it is at its max size.
 - **Flatten every account** (approved earlier today): its own button in the top bar beside Flatten all, with one confirm listing each
   account and what it holds. It flattens every account ChartBridge lists with a position or a working order, the copier's, the bot's
   and the agents' included, whatever the ticket shows, with Armed off, paced within ChartBridge's 10 order actions a second as Flatten
   all. Flatten all on None still sends nothing. Its button, like every order button, goes by a click only. Under 1440 wide it reads
-  "Flatten every" (the whole name in its tooltip and for screen readers) and the top bar's items sit 12 px apart instead of 16, so
+  "Flatten every" (the whole name in its tooltip and for screen readers) and the top bar's items sit 10 px apart instead of 16, so
   every control keeps its full size at 1366.
 - **The ticket shows the account's room** (it did not: only a chart's header said "Limit N%" from 70 percent used): one quiet line
   for a single account where ChartBridge's numbers give them, "Room $900.00 daily · $1,700.00 to floor · entry $40.00 at stop" (Qty x
@@ -45,6 +47,31 @@ minimum, the firm's rules on an account in no group, Remove a follower row) is n
   was unreadable and every new entry refused. The loader now reads them.
 - The top bar's delay line gives way part by part (the frame rate, the p95, the local delay) whenever it is cut, as it did with the
   clock warning: at 1366 with the v3 tabs Flatten every account takes its room.
+
+**The review of 1310f06 (Anthony's rulings of 2026-10-21), fixed.**
+
+- **The max, one rule** (above).
+- **An exit refused at the max while the two position readings disagree.** The position an order closes is now the larger of the
+  two readings, so an order that reduces by either is never checked (listed long 4 NQ with a sell fill of 4 not in the list yet: a
+  sell of 4 goes).
+- **A machine's entry with the open stop risk not known** is still held when its own stop risk alone is past a known room to the
+  floor or daily room. Unknown rooms still never hold anything.
+- **A group member with its room or open stop risk not known: "size it anyway".** It is sized by its risk percent and its firm max
+  (and `maxQty`), the unknown room's cap skipped; a known room still caps its own stop. The ticket's projection says so quietly
+  ("SIM-B: room unknown: sized by risk only"), and no confirm opens for it. The confirm now opens only when a member sits out for a
+  real reason: its risk below one contract's stop, at its firm max or the `maxQty` cap, a known room too small, the copier's, the
+  bot's or an agent's account, not in NinjaTrader or not connected.
+- **groups.txt that cannot be read: "My single orders go".** His single-account entries go; group entries are refused with a banner
+  saying why; the bot's, the agents' and the copier's entries stay refused (they read the groups: an agent's seats, the one direction of a member's group).
+- **Holdings ChartBridge does not serve** are named by Flatten every account and Flatten all, in the confirm and the note: "Not
+  covered (not served by ChartBridge): FUNDED-C YM 12-26" (ChartBridge's accounts entries gain `unserved`). With no v3 connection the
+  confirm says it covers the trade accounts only.
+- **The ChartBridge banner no longer pushes the panels down.** It floats over the top of the grid under the top bar. In the
+  group-ticket smoke the fake's EVAL-B went Gone about 10 s in; its banner opened between measuring the group stop line and dragging
+  it, moved every chart 46 px down, and the drag missed (the smoke failed about one run in five). The smoke also measures the line
+  and the position label again right before it drags and hovers.
+- **Going back to 0.6.5 after 0.6.6** (nt8/PROTOCOL.md): 0.6.6 writes a `rules` line for an account in no group, which 0.6.5 reads
+  as an unreadable file (every entry refused). Take those accounts' rules off before going back.
 
 **The work requests of 2026-10-20 (WORK and Anthony), built earlier on this branch.**
 
@@ -73,14 +100,18 @@ minimum, the firm's rules on an account in no group, Remove a follower row) is n
 - **Indicators:** EMA and SMA (up to three lines each), Bollinger Bands and Wilder's RSI in the lower pane, off by default.
 - The new group dialog's risk box starts empty; the old Account panel is no longer offered in + Add panel.
 
-**Tests.** `npm test` 858 pass, 0 fail (1 skipped: the PowerShell updater tests, no PowerShell here). The Mono harness (`npm run
-check:orders`): 3356 checks, 0 failed (new: `GroupsHarness.FirmLimits` 27 checks, the per-kind max cases in `GroupEntries`, a no-group
-rules line read at the start, `CopierHarness.FirmLimitSkip`; the copier's start check fixed for `canRemove`). New smoke
-`npm run smoke:flatten-every` (Flatten every account and the alert's banner and sound; screenshots `flatten-every-confirm-1366.png`,
-`flatten-every-done-1366.png`, `flatten-every-alert-1366.png`); `smoke:group-ticket` checks the ticket's room line
-(`group-ticket-room-1366.png`); `smoke:noscroll` opens every group of every Indicators menu (`noscroll-indicators-tall-1366.png`);
-`smoke:studies` allows the menu's own list to scroll below the top bar. Every smoke in package.json passes but
-`smoke:headroom`'s "scrolled back, the icon at the top of the price scale" (it fails the same way at caafbd0, before this work).
+**Tests.** `npm test` 860 pass, 0 fail (1 skipped: the PowerShell updater tests, no PowerShell here). The Mono harness (`npm run
+check:orders`): 3370 checks, 0 failed (new: `GroupsHarness.FirmLimits` (the page's max, exits and flips, an exit by either reading,
+the reviewer's 15 MNQ / 1 NQ case, the daily loss alert once, the machines' holds, the open risk known and not, the bot's order path),
+the combined max cases in `GroupEntries`, sizing with a room not known, a no-group rules line read at the start, an unreadable file
+with his single orders going, `CopierHarness.FirmLimitSkip`; the copier's start check fixed for `canRemove`). New smoke
+`npm run smoke:flatten-every` (Flatten every account, what it cannot reach, and the alert's banner and sound; screenshots
+`flatten-every-confirm-1366.png`, `flatten-every-done-1366.png`, `flatten-every-alert-1366.png`); `smoke:group-ticket` checks the
+ticket's room line (`group-ticket-room-1366.png`) and passed 5 runs of 5 after the banner fix (before it, about one run in five failed:
+the release commit 1310f06 said every smoke passed, which was not so for this one); `smoke:noscroll` opens every group of every
+Indicators menu (`noscroll-indicators-tall-1366.png`); `smoke:studies` allows the menu's own list to scroll below the top bar. Every
+smoke in package.json passes but `smoke:headroom`'s "scrolled back, the icon at the top of the price scale" (it fails the same way at
+caafbd0, before this work).
 
 ## ChartBridge 0.6.5 and chart 1.33.0 (2026-10-19): one group of accounts of different types and sizes, each with its own rules, traded from the ticket
 

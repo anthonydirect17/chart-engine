@@ -3449,11 +3449,16 @@ message).
 **The firm's limits on entries (Anthony 2026-10-20: "Only absolutely critical things should stop an account from trading").**
 Anthony is the final arbiter on his own orders. No pop-up or "send anyway?" before an entry, and no order is ever blocked because
 data is missing (The Desk down, a close not seen). Only the part of an order that opens or adds is checked (an order past flat: what
-it opens; the position it closes no longer counts); exits, closes, flattens and stop or target moves never are.
+it opens; the position it closes no longer counts); exits, closes, flattens and stop or target moves never are. The review: the
+position it closes is the LARGER of ChartBridge's two readings (NinjaTrader's list, and with fills reported but not in it yet), so an
+order that reduces by either reading is never checked.
 
 - **The firm's max contracts** (`maxMinis`, `maxMicros` in the account's rules, a fixed number typed in, never stale; none set: no
-  check). Micros count against `maxMicros` where the firm gives one, minis against `maxMinis`; with only one of them set, the other
-  kind converts at 10 micros to a mini. What the account holds and has working counts, every instrument, in mini equivalents. Words:
+  check). One combined rule whatever the entry's instrument (Anthony's ruling on the review: "10 micros = 1 mini"): after the order,
+  the account's total in mini equivalents (minis + micros / 10, held and working, every instrument) at most `maxMinis` when it is
+  set, and its total in micro equivalents (minis x 10 + micros) at most `maxMicros` when it is set; the order of the trades never
+  changes the answer (a 2 minis / 40 micros account holding 15 MNQ may not buy 1 NQ, and holding 1 NQ may buy 10 MNQ, not 15). The
+  same rule caps a group member's size. Words:
   "over SIM-B's max of 4 minis: this entry of 5 NQ would take it to 5 minis (it holds or has working 0, every instrument). Nothing
   was sent; 4 NQ at most".
 - **Anthony's own entries** (the page, one account; also each member's entry of a group entry, already sized within it): that one
@@ -3464,8 +3469,10 @@ it opens; the position it closes no longer counts); exits, closes, flattens and 
   follower's copy) holds it back only on a KNOWN breach: the max contracts; this entry's stop risk (its contracts x its stop ticks x
   the tick value; a copy's: its distance to the leader's stop) plus the account's open stop risk (the group sizing's: every position
   at its working stops and every working entry at its own stop) more than a known room to the floor or a known daily room ("its stop
-  risk $2,000 is more than SIM-B's room to the floor $1,500"); or the account's daily loss already reached that trading day. A room, a
-  risk or a balance not known (null; a balance of 0 is NinjaTrader not having given one yet) lets the entry go. A follower skips that
+  risk $2,000 is more than SIM-B's room to the floor $1,500"); or the account's daily loss already reached that trading day. A room, the
+  entry's own stop risk or a balance not known (null; a balance of 0 is NinjaTrader not having given one yet) lets the entry go. The
+  open stop risk not known counts as 0 (it is never below 0): the entry's own stop risk alone past a known room still holds it ("its
+  stop risk $2,000 alone (the open stop risk not known) is more than ..."). A follower skips that
   one copy (`copierEvent` skip, label `limit`); the leader and the other followers trade as normal. Each hold sends one `riskAlert`
   (`held`, or `skipped` for a copy): "Held: the bot's entry on SIM-B: ..." or "Copier: SIM-F1 skipped this copy: ...".
 - **The daily loss reached.** Each second ChartBridge reads every listed, connected account's numbers; one whose known daily room is
@@ -3476,6 +3483,23 @@ it opens; the position it closes no longer counts); exits, closes, flattens and 
   it again.
 - **Nothing ever flattens an account on its own.** The firm does that at its daily loss limit. (An agent's flat time is the agent's
   own rule and unchanged.)
+- **A group member whose room or open stop risk is not known** (Anthony's ruling on the review: "size it anyway"): it no longer sits
+  out. A room not known: that room's cap is skipped (its risk percent, its firm max and `maxQty` still cap it); the open stop risk not
+  known: a room that IS known caps this entry's own stop. `groupPreview` and `groupPlaced` members gain `note` (only when it is so):
+  "room unknown: sized by risk only (its room to the floor: ...)" or "open stop risk unknown: its room caps this entry's own stop only
+  (...)". A member that is not connected sits out ("it is not connected"; 0.6.5 said its room was not known). The page shows the note
+  quietly on the ticket and never asks a confirm for it.
+- **groups.txt that cannot be read** (Anthony's ruling: "My single orders go"): his own single-account entries go (its group, and so
+  the one-direction check, cannot be known then; the firm's max is not known either); group entries are refused (the page's banner
+  says why); the bot's, the agents' and the copier's entries stay refused (they read the groups: an agent's seats, a follower's or the
+  bot's account's group direction). Every exit goes, as before. Its text: "groups.txt could not be read: group entries and the bot's,
+  the agents' and the copier's entries are refused until it can (your own single-account orders and every exit still go)".
+- **The accounts message** entries gain `unserved` (last): the contracts the account holds or has working orders in that ChartBridge
+  does not serve, by name (`["YM 12-26"]`, empty for none), which no flatten from the page can reach.
+- **Going back to 0.6.5 after 0.6.6.** 0.6.6 writes the firm's rules of an account in no group as a `rules` line in `groups.txt`;
+  ChartBridge 0.6.5 (and the first 0.6.6 build) refuses such a line, so the whole file reads as unreadable there (every entry refused,
+  never rewritten). Before going back, take those accounts' rules off (put each in a group and in None again from the page, which drops
+  its rules line) or remove those lines from a copy of the file.
 
 **The page (chart 1.34.0).**
 
@@ -3485,7 +3509,12 @@ it opens; the position it closes no longer counts); exits, closes, flattens and 
   account and what it holds. It sends a `flatten` for every account ChartBridge lists with a position or a working order (the
   copier's leader and followers, the bot's and the agents' accounts included; the window's v3 connection lists them all), whatever
   the ticket shows, with Armed off, paced within the 10 order actions a second as Flatten all (a flatten refused for the rate goes
-  again once). ChartBridge checks each as any `flatten` (an exit). Flatten all on None still sends nothing. No new message.
+  again once). ChartBridge checks each as any `flatten` (an exit). Flatten all on None still sends nothing. No new message. Holdings in
+  a contract ChartBridge does not serve (`unserved`, and any order or position on a root it does not serve) are named, never sent: "Not
+  covered (not served by ChartBridge): FUNDED-C YM 12-26", in the confirm and the note after it (Flatten all says its own account's).
+  With no v3 connection the confirm says it covers the trade accounts only.
+- The ChartBridge banners float over the top of the grid under the top bar (the review): a banner that opened between pointing at an
+  order and dragging it used to push every panel down by its height.
 - The ticket shows the account's room for a single account where ChartBridge's numbers give it ("Room $900.00 daily · $1,700.00 to
   floor · entry $40.00 at stop": the daily room, the room to the floor and this entry's risk at its stop), display only.
 
