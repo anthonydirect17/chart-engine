@@ -2081,7 +2081,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeBot.Stop();   // 0.4.0 bot
                 ChartBridgeAgents.Stop();   // 0.5.0 agents
                 ChartBridgeBars.Stop();
-                try { ChartBridgeStops.SaveIfDirty(); } catch (Exception) { }   // 0.6.6: the stop events not saved yet (the 10 s timer saves them)
                 ChartBridgeCopier.Stop();   // 0.4.0 copier:
                 ChartBridgeClock.Stop();    // 0.5.6: the time check
                 try { if (accountTimer != null) accountTimer.Dispose(); } catch (Exception) { }
@@ -2102,6 +2101,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Settlements) Settlements.Clear();
                 ChartBridgeAccounts.Stop();   // 0.4.0 accounts
                 Unwatch();
+                try { ChartBridgeStops.SaveIfDirty(); } catch (Exception) { }   // 0.6.6: after Unwatch (no order event can add one now): the stop events the 10 s timer has not saved
                 ChartBridgeOrders.UnwatchConnections();
                 UnwatchFeed();
                 try { if (listener != null) { listener.Stop(); listener.Close(); } } catch (Exception) { }

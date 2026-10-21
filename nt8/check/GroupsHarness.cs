@@ -1047,9 +1047,19 @@ public static class GroupsHarness
         // the copy is written after every clean read and every save, and is exactly the file
         File.WriteAllText(p, good); File.Delete(p + ".good");
         Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
-        Check(File.Exists(p + ".good") && File.ReadAllText(p + ".good") == good, "2026-10-21 (review of b4bc612): a clean read writes groups.txt.good, the file as read");
+        Check(File.Exists(p + ".good") && File.ReadAllText(p + ".good") == ChartBridgeGroups.SealGood(good) && ChartBridgeGroups.SealGood(good).EndsWith("# end 5\n"),
+              "2026-10-21 (review of b4bc612): a clean read writes groups.txt.good, the file as read and its end line (the second review, D)");
         Clear(); G("groupSave", Save("", "New", "true", "0", "2000", "eod", "0", "50000", "0"));
-        Check(Rejection() == "" && File.ReadAllText(p + ".good") == File.ReadAllText(p) && File.ReadAllText(p + ".good").Contains("\tNew\t"), "2026-10-21: a save writes groups.txt.good too (the latest save, never one change behind)");
+        Check(Rejection() == "" && File.ReadAllText(p + ".good") == ChartBridgeGroups.SealGood(File.ReadAllText(p)) && File.ReadAllText(p + ".good").Contains("\tNew\t"), "2026-10-21: a save writes groups.txt.good too (the latest save, never one change behind)");
+        // the second review of 4406fcb (D): a cut copy (its end line missing, or a line short) is no clean copy: the machines wait
+        foreach (string cut in new[] { good, ChartBridgeGroups.SealGood(good).Replace("member\tSIM-B\tg1\n", ""), ChartBridgeGroups.SealGood(good).Replace("# end 5", "# end 9") })
+        {
+            Corrupt(p, "no header\n");
+            File.WriteAllText(p + ".good", cut);
+            Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
+            Check(ChartBridgeGroups.Unreadable() && ChartBridgeGroups.EntryCheck("bot", simD, "MNQ", true, 1, true, false) == ChartBridgeGroups.ReadFailedText + ChartBridgeGroups.MachinesWaitText,
+                  "2026-10-21 (second review, D): a groups.txt.good that is cut (" + cut.Split('\n').Length + " lines) is no clean copy: the machines wait");
+        }
         // a .bak (the copy before the latest save) is never the machines' copy: with no .good they wait
         Corrupt(p, "no header\n");
         File.WriteAllText(p + ".bak", good);
@@ -1059,7 +1069,7 @@ public static class GroupsHarness
         foreach (bool missing in new[] { false, true })
         {
             Corrupt(p, "no header\n");
-            File.WriteAllText(p + ".good", good);
+            File.WriteAllText(p + ".good", ChartBridgeGroups.SealGood(good));
             File.SetLastWriteTimeUtc(p + ".good", new DateTime(2026, 10, 21, 12, 14, 0, DateTimeKind.Utc));   // 08:14 ET
             if (missing) { File.WriteAllText(p + ".bak", good.Replace("SIM-B", "SIM-C")); File.Delete(p); }   // a cut-off save: the .bak beside is not the copy
             Clear(); ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
@@ -1082,7 +1092,7 @@ public static class GroupsHarness
             Clear(); GP("groupPreview", "{\"type\":\"groupPreview\",\"cid\":\"ge\",\"group\":\"g1\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"market\",\"bracket\":{\"stop\":20,\"target\":40}}");
             Check(Rejection().Contains(ChartBridgeGroups.ReadFailedText), "2026-10-21 (" + tag + "): his group entry from the page is still refused: " + Rejection());
             Clear(); G("groupSave", Save("", "New", "true", "0", "2000", "eod", "0", "50000", "0"));
-            Check(Rejection().Contains("groups.txt could not be read") && (missing ? !File.Exists(p) : File.ReadAllText(p) == "no header\n") && File.ReadAllText(p + ".good") == good,
+            Check(Rejection().Contains("groups.txt could not be read") && (missing ? !File.Exists(p) : File.ReadAllText(p) == "no header\n") && File.ReadAllText(p + ".good") == ChartBridgeGroups.SealGood(good),
                   "2026-10-21 (" + tag + "): changes refused, neither groups.txt nor its copy rewritten");
             List<string> late = new List<string>();
             ChartBridgeClient lc = new ChartBridgeClient(null, 778) { Origin = "http://localhost:8765" };

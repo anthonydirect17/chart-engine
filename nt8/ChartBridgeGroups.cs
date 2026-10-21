@@ -757,7 +757,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 // the machines' copy: groups.txt.good only (written after every clean read and every save); none: they wait
                 string gerr;
-                string[] gl = File.Exists(GoodPath) ? ReadLines(GoodPath, out gerr) : null;
+                string[] gl = File.Exists(GoodPath) ? Unseal(ReadLines(GoodPath, out gerr)) : null;   // a cut copy: none (they wait)
                 State gs = gl != null ? Parse(gl, out gerr) : null;
                 if (gs != null) { good = gs; goodFrom = "groups.txt.good"; goodAt = EtStamp(File.GetLastWriteTimeUtc(GoodPath)); }
             }
@@ -1012,14 +1012,40 @@ namespace NinjaTrader.NinjaScript.AddOns
             return b.ToString();
         }
 
-        // groups.txt.good: through its own temp file, swapped in with no backup of its own. A failure is logged and changes nothing else.
+        // The second review of 4406fcb (D): groups.txt.good ends with "# end <lines before it>", so a copy cut short (a crash, a power
+        // cut) is no clean copy (the machines wait) instead of groups with members missing. groups.txt itself never has this line.
+        public static string SealGood(string text)
+        {
+            string body = text.EndsWith("\n") ? text : text + Environment.NewLine;
+            int n = body.Split('\n').Length - 1;
+            return body + "# end " + n.ToString(CultureInfo.InvariantCulture) + Environment.NewLine;
+        }
+        private static string[] Unseal(string[] lines)
+        {
+            if (lines == null) return null;
+            List<string> l = lines.Select(x => x.TrimEnd('\r')).ToList();
+            while (l.Count > 0 && l[l.Count - 1].Length == 0) l.RemoveAt(l.Count - 1);
+            if (l.Count == 0) return null;
+            Match m = Regex.Match(l[l.Count - 1], "^# end ([0-9]{1,9})$");
+            if (!m.Success || int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) != l.Count - 1) return null;
+            l.RemoveAt(l.Count - 1);
+            return l.ToArray();
+        }
+
+        // groups.txt.good: as WriteWhole writes (a temp file written through and flushed to the disk, then swapped in), with no backup of
+        // its own. A failure is logged and changes nothing else.
         private static void WriteGood(string text)
         {
             try
             {
                 Directory.CreateDirectory(ChartBridgeConfig.Folder);
                 string tmp = GoodPath + ".tmp";
-                File.WriteAllText(tmp, text);
+                byte[] bytes = new UTF8Encoding(false).GetBytes(SealGood(text));
+                using (FileStream fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+                {
+                    fs.Write(bytes, 0, bytes.Length);
+                    fs.Flush(true);
+                }
                 if (File.Exists(GoodPath)) File.Replace(tmp, GoodPath, null); else File.Move(tmp, GoodPath);
             }
             catch (Exception ex) { ChartBridgeServer.Log("groups.txt.good could not be written (" + ex.Message + "); the last one stays"); }

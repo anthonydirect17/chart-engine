@@ -40,12 +40,18 @@ minimum, the firm's rules on an account in no group, Remove a follower row) is n
   until the next start (`stops.deskHasNoStopRecord`); the values are the event's own (`OrderEventArgs`), a repeated final event is
   dropped, and a stop with no master instrument is skipped with one line. The Trade tags panel never trims a record The Desk has not
   taken (every pending record kept, the newest 400 of the rest), and says on the panel when any record was ever lost.
+- **The review of 4406fcb, followed up.** `pending_stops.jsonl` is written outside the queue's lock (the order event never waits on
+  the file; a failed write is tried again); a sent batch is taken off the queue by who its events are, so events the cap moved to the
+  front meanwhile are never lost; ChartBridge's stop saves after it stops watching the accounts (a hard crash or power cut can lose
+  up to 10 s of stop events); `groups.txt.good` is written through to the disk like groups.txt and ends with `# end <lines>`, so a cut
+  copy is no clean copy and the machines wait.
 
-**Tests for the 2026-10-21 additions (after the review of b4bc612).** `npm test` 871 pass, 0 fail (1 skipped: the PowerShell
-updater tests). The Mono harness (`npm run check:orders`): 3417 checks, 0 failed (new: `StopsHarness`, 28 checks through
+**Tests for the 2026-10-21 additions (after the reviews of b4bc612 and 4406fcb).** `npm test` 871 pass, 0 fail (1 skipped: the PowerShell
+updater tests). The Mono harness (`npm run check:orders`): 3423 checks, 0 failed (new: `StopsHarness`, 31 checks through
 ChartBridge's own order event: the stop at send, a drag, the end and its repeat, the event's own values, a stop with no master
-instrument, memory only on the event thread, the cap, the switch, The Desk down, up, refusing one event and answering 404;
-`GroupsHarness.LastGoodCopy`: groups.txt.good written after a clean read and a save, a .bak alone never used, groups.txt unreadable
+instrument, memory only on the event thread, the file written outside the queue's lock, a sent batch taken off by who it is (never newer
+events the cap moved to the front), the cap, the switch, The Desk down, up, refusing one event and answering 404;
+`GroupsHarness.LastGoodCopy`: groups.txt.good written after a clean read and a save with its end line, a cut copy treated as none, a .bak alone never used, groups.txt unreadable
 or missing with a good .good, the machines not blocked and held by the copy's one direction, `fromCopy` on the accounts message, his
 group entry and every change still refused, the alarm with the copy's time at sign-in; `AgentHarness`'s unreadable cases remove the
 .good as well, as they test no clean copy). `nt8/check/check.sh` compiles. New smoke `npm run smoke:trade-tags` (screenshots
@@ -54,7 +60,7 @@ fails the same check at 1ef3e3b, before this work, in the cloud environment too,
 so there: `smoke:bot` (waiting for the Library pop-up window, 30 s) and `agent-board-smoke.mjs`, the last part of `smoke:agent` (the
 board's Desk button click, 30 s). `smoke:agent`'s 390 px error-line check failed once in a full run and passed 2 of 2 on its own.
 After the review's fixes `smoke`, `smoke:trade-tags`, `smoke:accounts`, `smoke:group-ticket`, `smoke:member-rules`,
-`smoke:flatten-every` and `smoke:workspace` were run again and pass.
+`smoke:flatten-every` and `smoke:workspace` were run again and pass; after the follow-ups, `smoke` and `smoke:trade-tags` again.
 
 **Anthony's decisions of 2026-10-20: "Only absolutely critical things should stop an account from trading."**
 

@@ -144,13 +144,34 @@ public static class StopsHarness
             Check(WaitFor(() => { ChartBridgeStops.Flush(); return ChartBridgeStops.Waiting() == 0; }, 15000) && File.Exists(aside) && File.ReadAllText(aside).Contains("\"bad\"") && !File.ReadAllText(aside).Contains("\"good\"") &&
                   ChartBridgeStops.DiagJson().Contains("\"setAside\":1"), "stops: a batch The Desk calls malformed: one at a time, only the bad event set aside, the good one taken");
 
+            // the second review of 4406fcb (B): a send's events are taken off by who they are, never by place, so events the cap moved
+            // to the front while the batch was out are never lost
+            {
+                MethodInfo remove = typeof(ChartBridgeStops).GetMethod("Remove", BindingFlags.NonPublic | BindingFlags.Static);
+                int capWas2 = ChartBridgeStops.Cap;
+                ChartBridgeStops.Cap = 3;
+                ChartBridgeStops.Queue("{\"source\":\"nt8\",\"order_id\":\"q0\"}"); ChartBridgeStops.Queue("{\"source\":\"nt8\",\"order_id\":\"q1\"}");
+                string[] outBatch = { "{\"source\":\"nt8\",\"order_id\":\"q0\"}", "{\"source\":\"nt8\",\"order_id\":\"q1\"}" };   // the batch being sent
+                for (int i = 2; i < 5; i++) ChartBridgeStops.Queue("{\"source\":\"nt8\",\"order_id\":\"q" + i + "\"}");   // q0 and q1 dropped by the cap meanwhile
+                remove.Invoke(null, new object[] { outBatch });
+                string[] left = Lines();
+                ChartBridgeStops.Cap = capWas2;
+                Check(left.Length == 3 && left[0].Contains("q2") && left[2].Contains("q4"), "stops (second review, B): taking a sent batch off never removes newer unsent events: " + string.Join(" ", left));
+                Check(WaitFor(() => { ChartBridgeStops.Flush(); return ChartBridgeStops.Waiting() == 0; }, 15000), "stops: and they are sent");
+            }
+            // (A) the file is written outside the queue's lock: the order thread never waits on it
+            string own2 = File.ReadAllText("ChartBridgeStops.cs");
+            string save = own2.Substring(own2.IndexOf("public static void SaveIfDirty()"), 900);
+            Check(Regex.IsMatch(save, "lock \\(Sync\\) \\{[^}]*ToArray\\(\\);[^}]*dirty = false;") && save.Contains("lock (SaveLock)") && save.Contains("dirty = true"),
+                  "stops (second review, A): SaveIfDirty copies the queue under its lock and writes outside it (dirty again if the write fails)");
+
             // the cap: past it the oldest go, counted in /diag and said once
             int capWas = ChartBridgeStops.Cap;
             ChartBridgeStops.Cap = 3;
             for (int i = 0; i < 5; i++) ChartBridgeStops.Queue("{\"source\":\"nt8\",\"order_id\":\"cap" + i + "\"}");
             string[] capped = Lines();
             ChartBridgeStops.Cap = capWas;
-            Check(capped.Length == 3 && capped[0].Contains("cap2") && ChartBridgeStops.DiagJson().Contains("\"dropped\":2"), "stops (review of b4bc612): at most Cap events wait; the oldest are dropped and counted: " + ChartBridgeStops.DiagJson());
+            Check(capped.Length == 3 && capped[0].Contains("cap2") && ChartBridgeStops.DiagJson().Contains("\"dropped\":4"), "stops (review of b4bc612): at most Cap events wait; the oldest are dropped and counted (2 here, 2 in the case before): " + ChartBridgeStops.DiagJson());
             Check(WaitFor(() => { ChartBridgeStops.Flush(); return ChartBridgeStops.Waiting() == 0; }, 15000), "stops: the capped queue is sent");
             // an older Desk (404): no stop record there: nothing more is queued or sent until the next start, said in /diag
             desk.Stop(); desk = null;

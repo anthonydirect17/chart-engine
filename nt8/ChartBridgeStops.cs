@@ -182,16 +182,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        private static void Save()
+        // The queue's lines to pending_stops.jsonl (a temp file swapped in). Called under SaveLock only, never under Sync. False when it failed.
+        private static bool Save(string[] lines)
         {
             try
             {
                 string tmp = File_ + ".tmp";
-                File.WriteAllLines(tmp, PendingList.ToArray());
+                File.WriteAllLines(tmp, lines);
                 if (File.Exists(File_)) File.Replace(tmp, File_, null); else File.Move(tmp, File_);
+                return true;
             }
-            catch (Exception ex) { ChartBridgeServer.Log("could not save pending stop events: " + ex.Message); }
+            catch (Exception ex) { ChartBridgeServer.Log("could not save pending stop events: " + ex.Message); return false; }
         }
+        private static readonly object SaveLock = new object();   // one write at a time; Sync is held only to copy the queue
 
         // In memory only (the event thread): the file is written by SaveIfDirty on the timer's send, and at the stop.
         public static void Queue(string json)
@@ -207,7 +210,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // pending_stops.jsonl as the queue is now, when it changed (never on NinjaTrader's event thread).
-        public static void SaveIfDirty() { lock (Sync) { if (!dirty) return; dirty = false; Save(); } }
+        // (The second review of 4406fcb, A: the copy under Sync, the write outside it, so the order thread's Queue never waits on the file.)
+        public static void SaveIfDirty()
+        {
+            lock (SaveLock)
+            {
+                string[] lines;
+                lock (Sync) { if (!dirty) return; lines = PendingList.ToArray(); dirty = false; }
+                if (!Save(lines)) lock (Sync) dirty = true;   // tried again on the next send
+            }
+        }
 
         public static int Waiting() { lock (Sync) return PendingList.Count; }
 
@@ -224,7 +236,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (Sync)
             {
-                PendingList.RemoveRange(0, Math.Min(batch.Length, PendingList.Count));   // the queue only grows at the end
+                // by who they are, never by place (the second review of 4406fcb, B): the cap may have dropped some from the front meanwhile
+                HashSet<string> sentNow = new HashSet<string>(batch);
+                PendingList.RemoveAll(sentNow.Contains);
                 foreach (string f in batch) PendingSet.Remove(f);
                 dirty = true;
             }

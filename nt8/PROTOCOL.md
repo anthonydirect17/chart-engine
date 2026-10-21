@@ -3493,7 +3493,8 @@ order that reduces by either reading is never checked.
   or the copier; "the last groups that read cleanly"): his own single-account entries go (its group, and so the one-direction check,
   cannot be known then); group entries from the page and every change are refused (the page's banner says why) and the file is never
   rewritten. ChartBridge writes `groups.txt.good`, the file exactly as it last read cleanly or was last saved, after every clean read
-  and every save. While groups.txt cannot be read (a file that cannot be opened after 5 tries 0.1 s apart included, or missing with a
+  and every save (written through to the disk and swapped in, as groups.txt is), with an end line `# end <lines before it>`: a
+  copy cut short (its end line missing or its count wrong) is no clean copy, so the machines wait. While groups.txt cannot be read (a file that cannot be opened after 5 tries 0.1 s apart included, or missing with a
   copy left beside it), the bot, the agents and the copier run on `groups.txt.good` only: never `groups.txt.bak` (the copy before the
   latest save, one change behind) nor `.tmp`. Their one-direction check, an agent's seats and the firm's rules and rooms come from
   it. With no `groups.txt.good` there is nothing to run on, so their entries wait. Every exit goes, as before. The Q-EXIT pass that
@@ -3549,7 +3550,9 @@ time) and how it ended; the fill and the exit are the fills it already has.
   yet is skipped (one Output line).
 - **Queue:** the order event only adds to the queue in memory; nothing is written or sent on NinjaTrader's event thread. Every
   10 seconds the account timer saves `pending_stops.jsonl` next to `config.txt` (replaced atomically) when it changed, then sends the
-  oldest batch (10 seconds a request); ChartBridge's stop saves it too. At most 20,000 events wait: past that the oldest are dropped,
+  oldest batch (10 seconds a request); ChartBridge's stop saves it too, after it stops watching the accounts. The file is written
+  outside the queue's lock, so the order event never waits on it. A hard NinjaTrader crash or a power cut can lose up to the last
+  10 seconds of stop events (those not saved yet). At most 20,000 events wait: past that the oldest are dropped,
   counted in `/diag` and said once. A batch The Desk calls malformed (400 or 422) is sent one at a time and a single bad event is set
   aside in `rejected_stops.jsonl`. A 404 (a Desk without `POST /api/stop-events`) means The Desk has no stop record: nothing more is
   queued or sent until ChartBridge starts again (said once, the waiting events stay in the file). The Desk stores an event once, so
