@@ -36,6 +36,7 @@ pickers, saved per browser); the indicators' colors in their gears (1.9.0). Defa
 | Working orders (1.3.0) | `#3DDC97` buy, `#FF7A7A` sell (house trade-side colors) |
 | Position line and tag | `#F2F6FA`; open P&L text `#3DDC97` profit, `#FF7A7A` loss |
 | Armed (live page and ticket) | 1.13.0: the house crimson `#9F1239` switch and ARMED pill with the logo's light ink `#FFE4EA` (6.7:1), the order bar or ticket outline in the crimson word color `#E0445E` (4.5:1 on the bar); the chart's outline the workspace accent `#7B5CFF` with a soft glow on both pages; amber `#E0B45A` before |
+| ARMED chip in a chart's header | 1.34.1 (Anthony): a small chip, 8 px type, that says ARMED only; the account or group on hover, never written on the chart |
 | Chart ground | `#080B10` |
 | Regular-hours ground (bars under 1 hour) | `#0B1016` |
 | Grid hairlines | `rgba(42,54,69,0.30)` |

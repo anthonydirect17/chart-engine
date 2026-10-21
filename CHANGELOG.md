@@ -1,6 +1,6 @@
 # Changelog
 
-## chart 1.34.1 (2026-10-21): the Trade tags panel keeps clicks made during a trade and on Last trade
+## chart 1.34.1 (2026-10-21): the Trade tags panel keeps clicks made during a trade and on Last trade; the ARMED chip
 
 WORK's test card on 1.34.0 (FROM_WORK_2026-10-21_release.md, step 3.5): a chip clicked while a trade was open (OPEN) or
 on Last trade (AFTER) showed for a moment and never reached The Desk; clicks made while flat (PRE) were saved. The cause:
@@ -9,6 +9,11 @@ record's `trade_open_ms` must be whole milliseconds, so the record was dropped a
 trade's open and close times are rounded to the millisecond (The Desk matches a trade within 2 seconds, so the match is
 unchanged), and a click that cannot be made into a record says so on the panel instead of vanishing. Page only: no
 ChartBridge change (it stays 0.6.6). A new test fails on 1.34.0 and passes on 1.34.1.
+
+The ARMED badge in a chart's header (Anthony 2026-10-21: the armed tags were to be "significantly reduced in size, almost
+to a chip size"): a small chip that says ARMED only, 8 px type; the account or the group it trades is in its tooltip,
+never on the chart. 1.34.0 shortened it only when the header ran out of room and showed the whole account when it had
+no label.
 
 ## ChartBridge 0.6.6 and chart 1.34.0 (2026-10-20): the work requests of 2026-10-20, and the firm's limits on entries
 
