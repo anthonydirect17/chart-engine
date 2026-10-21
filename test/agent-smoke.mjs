@@ -28,6 +28,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+import { toggleTab } from './tab-buttons.mjs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -159,8 +160,13 @@ try {
   /* ---------------------------------------------------------------- the tab */
   console.log('the Agent tab next to the Bot tab');
   await until(async () => (await A()).agents.length === 2, 'ChartBridge told of both agents after sign-in');
-  check(await page.isVisible('#wsAgentTab') && await page.isVisible('#wsBotTab'), 'the Agent tab button is in the top bar, next to the Bot tab');
-  check(await page.evaluate(() => { const b = document.getElementById('wsBotTab'), a = document.getElementById('wsAgentTab'); return b.nextElementSibling === a; }), 'right after the Bot tab');
+  /* 1.35.0 (Anthony 2026-10-21): the Bot tab moved to a panel of its own (+ Add panel, Bot); the Agent tab stays where it was,
+     with the League tab after it */
+  /* review 2 of 1.35.0: the Bot button comes back to the top bar only while it carries its red alert (this sample bot is on but
+     not connected), so the alert is never hidden */
+  check(await page.isVisible('#wsAgentTab') && (!(await page.isVisible('#wsBotTab')) || await page.$eval('#wsBotTab', b => b.classList.contains('bt-alert'))),
+    'the Agent tab button is in the top bar (the Bot tab is a panel now; its button is there only with its red alert)');
+  check(await page.evaluate(() => { const a = document.getElementById('wsAgentTab'); return a.nextElementSibling === document.getElementById('wsLeagueTab') && a.previousElementSibling === document.getElementById('wsTabSlot'); }), 'where it was, the League tab right after it');
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
   await control('agent-connect', { agent: 'demotwo', name: 'Second Demo Agent', build: 'sample-build-7' });
   await page.click('#wsAgentTab');
@@ -575,7 +581,7 @@ try {
 
   /* ---------------------------------------------------------------- the Bot tab: a double-click never confirms (review S3) */
   console.log('the Bot tab: a double-click on Auto or Release never confirms');
-  await page.click('#wsBotTab');
+  await toggleTab(page, 'bot');                                                        // 1.35.0: + Add panel, Bot
   await until(async () => (await page.evaluate(() => window.workspace.bot().shown)), 'the Bot tab opens');
   await sleep(1500);                                                                   // its entrance
   const botModes = async () => (await sent()).filter(m => m.type === 'botMode').length;
@@ -594,7 +600,7 @@ try {
   check((await control('v3')).bot.killed, 'a double-click on the bot\'s Release never releases');
   await page.click('.bt-kill');
   await until(async () => !(await control('v3')).bot.killed, 'a later second click releases, as before');
-  await page.click('#wsBotTab');
+  await toggleTab(page, 'bot');
 
   /* ---------------------------------------------------------------- the pop-out */
   console.log('the pop-out window');
@@ -684,7 +690,7 @@ try {
   await p2.waitForFunction(() => /0\.5\.2 or later/.test(document.querySelector('#agView [data-k="offText"]').textContent), null, { timeout: 10000 });
   check((await p2.textContent('#agView [data-k="offText"]')) === 'No agents on this ChartBridge (0.5.2 or later).', 'the tab says: No agents on this ChartBridge (0.5.2 or later). (the hello says fake-0.4.0)');
   check(!(await p2.evaluate(() => window.__socks.some(s => s.types.some(t => /^agent/.test(t))))), 'nothing agent is sent');
-  check(await p2.isVisible('#wsBotTab'), 'the Bot tab is as it was');
+  check(!!(await p2.$('#wsBotTab')), 'the Bot tab is as it was (1.35.0: its button waits for its panel)');
   await p2.close();
   await bridge.kill(); bridge = null;
   console.log('a ChartBridge 0.5.2 with no agents line: no agents');

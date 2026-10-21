@@ -679,7 +679,9 @@ function create(o) {
     const off = !S.on;
     if (tabBtn) {
       put(tabBtn, 'hidden', S.v3 !== true && !S.shown);           // a ChartBridge that speaks v3 has a Bot tab
-      tog(document.body, 'bt-has-tab', !tabBtn.hidden);
+      /* 1.35.0: the Bot button may wait in the workspace's hidden hold or a Bot panel: the "Layout" word gives way only while it is
+         in the top bar (the workspace keeps this class as it moves the button) */
+      tog(document.body, 'bt-has-tab', !tabBtn.hidden && !tabBtn.closest('#wsTabHold, .ws-tp-slot'));
       attr(tabBtn, 'aria-pressed', String(S.shown));
       tog(tabBtn, 'bt-alert', S.on && !!S.bot && (BC.rails(S.bot).level === 'red' || !!S.bot.standDown || !!S.bot.killed || (S.bot.enabled && !S.bot.connected)));
       attr(tabBtn, 'title', off ? 'Bot: the bot channel is off on this PC' : 'Bot tab');

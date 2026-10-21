@@ -71,7 +71,10 @@ function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Nu
 /* 1.15.0: the Account panel and the Quote board (Anthony's consolidated form, 2026-10-02) take no instrument; nor does the
    Data Box (1.16.0: the bar under the cursor on any chart), nor the Account page (1.16.0, live/accounts.js: every account) */
 /* 1.34.0 (Anthony 2026-10-21): the Trade tags panel (live/trade-tags.js) follows the order ticket's account and instrument */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags'];
+/* 1.35.0 (Anthony 2026-10-21: "the bot tab can also move to a panel"): the Bot tab became a panel of its own in + Add panel,
+   a small panel whose button opens the same Bot view as before; at most one per layout. The Agent tab stays in the top bar. */
+const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'bot'];
+const ONE_EACH = ['ticket', 'bot'];
 /* 1.16.0 (Anthony 2026-10-07): the rows a Quote board hides, saved with its panel. Any root name ChartBridge could list (NQ,
    ES, or a quote-only market from hello, such as YM or 6E): kept as typed by the menu, so a root hello no longer lists is
    simply ignored; anything else dropped. Display only. */
@@ -102,17 +105,17 @@ function cleanPanel(p) {
   return Object.assign(out, { x, y, w, h });
 }
 
-/** A layout as kept: { panels } with bad panels dropped, ids unique, at most 12 panels, at most one order ticket, every
-    panel inside the grid and none overlapping (re-flow). Never throws. */
+/** A layout as kept: { panels } with bad panels dropped, ids unique, at most 12 panels, at most one order ticket (1.35.0: and
+    one Bot panel), every panel inside the grid and none overlapping (re-flow). Never throws. */
 function cleanLayout(l) {
   const list = l && typeof l === 'object' && Array.isArray(l.panels) ? l.panels : [];
   const seen = new Set(), panels = [];
-  let ticket = false;
+  const once = new Set();
   for (const raw of list) {
     if (panels.length >= MAX_PANELS) break;
     const p = cleanPanel(raw);
     if (!p || seen.has(p.id)) continue;
-    if (p.type === 'ticket') { if (ticket) continue; ticket = true; }
+    if (ONE_EACH.includes(p.type)) { if (once.has(p.type)) continue; once.add(p.type); }
     seen.add(p.id);
     panels.push(p);
   }
@@ -1961,6 +1964,7 @@ function addView(p) {
   else if (p.type === 'databox') mid = '<span class="ws-name">Data Box</span><span class="ws-db-src" title="The chart it follows: the one under the mouse, else the last one"></span><span class="ws-fill"></span>';
   else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
   else if (p.type === 'tags') mid = '<span class="ws-name">Trade tags</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';   // 1.34.0
+  else if (p.type === 'bot') mid = '<span class="ws-name">Bot</span><span class="ws-fill"></span>';                // 1.35.0
   else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
   // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
@@ -1978,6 +1982,7 @@ function addView(p) {
   else if (p.type === 'databox') mountDataBox(v);        // 1.16.0
   else if (p.type === 'accounts') mountAccountsPage(v);  // 1.16.0
   else if (p.type === 'tags') mountTags(v);              // 1.34.0 (Anthony 2026-10-21)
+  else if (p.type === 'bot') mountTabPanel(v);           // 1.35.0 (Anthony 2026-10-21)
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
@@ -2055,11 +2060,22 @@ function closePanel(id) {
 function addPanel(type) {
   closePops();
   if (maxId) restoreMax();                                  // the new panel is seen where it goes
+  /* 1.35.0: the Bot is always reachable from here: with the panel already placed, or no room for it, the menu opens the Bot
+     view itself (its button sits in the top bar while it is open, the way back) */
+  if (type === 'bot') {
+    const d = TAB_PANEL.bot.desk(), has = panels.some(q => q.type === type);
+    if (d && (has || panels.length >= W.MAX_PANELS || !W.largestFree(panels))) {
+      if (!has) note('No room for the Bot panel: opened the Bot tab. Make room and add it again to keep its button on the grid.', true);
+      d.showTab(true);
+      return;
+    }
+  }
   if (panels.length >= W.MAX_PANELS) { note('At most ' + W.MAX_PANELS + ' panels: close one first', true); return; }
   if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
+  if (type === 'bot' && panels.some(q => q.type === type)) { note('This layout has its Bot panel already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' || type === 'databox' || type === 'accounts' || type === 'tags' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'bot'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -2494,6 +2510,51 @@ function mountTags(v) {
   v.tags.render();
   v.destroy = () => t.destroy();
 }
+/* 1.35.0 (Anthony 2026-10-21: "the bot tab can also move to a panel"): the Bot tab as a panel. The panel holds the very button
+   the top bar had (#wsBotTab: the Bot desk's own, with its listeners and states), moved into it while the panel is on the grid
+   and back to a hidden holder when it goes; the button opens the same Bot view as before. The Bot desk itself (its proposals,
+   the copilot keys, the bot strip) runs whether a panel is placed or not. The Agent tab stays in the top bar, unchanged. */
+const TAB_PANEL = {
+  bot: { btn: () => $('wsBotTab'), desk: () => botDesk, what: 'the Bot tab', help: 'The bot: its Library, its chart and its panel, as the Bot tab had them.' },
+};
+/* where a desk's button belongs now: in the top bar while its view is open (the way back to the layout, as before), else in its
+   panel when the layout has one, else in the hidden hold */
+function placeTabBtn(type) {
+  if (!type) { placeTabBtn('bot'); return; }
+  const kind = TAB_PANEL[type], btn = kind && kind.btn(), d = kind && kind.desk();
+  if (!btn) return;
+  const v = [...views.values()].find(x => x.panel.type === type);
+  /* the Bot's button sits in the top bar where the Bot tab was:
+     - while its view is open (the way back);
+     - while any view hides the grid (Agent, League), with or without a Bot panel: one click from there to the Bot (review 6);
+     - while it carries its red alert (rails red, stand-down, killed, on but not connected), with or without a Bot panel, so the
+       alert is never hidden (review 2); it goes back to its panel or the hold once the alert clears.
+     Else in its panel when the layout has one, else in the hidden hold. */
+  const viewOpen = ['bt-on', 'ag-on', 'lg-on'].some(c => document.body.classList.contains(c));
+  const alert = btn.classList.contains('bt-alert') && !btn.hidden;
+  const top = (d && d.shown()) || viewOpen || alert;
+  const where = top ? $('wsTabSlot') : v ? v.body.querySelector('.ws-tp-slot') : $('wsTabHold');
+  if (where && btn.parentElement !== where) where.appendChild(btn);
+  btn.classList.toggle('ws-tp-btn', !!v && where !== $('wsTabSlot') && where !== $('wsTabHold'));
+  /* review 5: the "Layout" word gives way only while the Bot button is really in the top bar (bot.css bt-has-tab) */
+  document.body.classList.toggle('bt-has-tab', !btn.hidden && where === $('wsTabSlot'));
+}
+/* the Bot desk sets bt-alert (and hidden) on its own button as it renders: the button follows at once */
+if (typeof MutationObserver === 'function' && $('wsBotTab')) new MutationObserver(() => placeTabBtn('bot')).observe($('wsBotTab'), { attributes: true, attributeFilter: ['class', 'hidden'] });
+function mountTabPanel(v) {
+  v.state = 'live';
+  const kind = TAB_PANEL[v.panel.type], btn = kind.btn();
+  v.body.innerHTML = '<div class="ws-tabpanel"><div class="ws-tp-slot"></div><p class="ws-tp-help"></p></div>';
+  const help = v.body.querySelector('.ws-tp-help');
+  placeTabBtn(v.panel.type);
+  const sync = () => {
+    const d = kind.desk();
+    help.textContent = !d ? 'Reload this window: its ' + kind.what + ' did not start.' : btn && btn.hidden ? 'Not offered by this ChartBridge (it needs protocol v3).' : kind.help;
+  };
+  sync();
+  const t = setInterval(sync, 2000);
+  v.destroy = () => { clearInterval(t); if (btn && v.body.contains(btn)) { btn.classList.remove('ws-tp-btn'); $('wsTabHold').appendChild(btn); } };
+}
 var tagsRaf = 0;                                          // var: renderOrders may run before this line
 function renderTags() { if (!tagsRaf && tagViews().length) tagsRaf = requestAnimationFrame(() => { tagsRaf = 0; for (const v of tagViews()) v.tags.render(); }); }
 setInterval(renderTags, 1000);                            // the session's start and the Desk's answers
@@ -2716,7 +2777,20 @@ function scRoster(ms) {
   });
 }
 const scSaved = () => { try { return SC.clean(JSON.parse(store.getItem(SC.KEY))); } catch (e) { return SC.clean(null); } };
-let scScreens = null, scMsg = { text: '', warn: false };
+let scScreens = null, scMsg = { text: '', warn: false }, scPerm = null, scBlocked = false;
+/* 1.35.0: what the browser says about this window and its screens (Brave's Shields can make them up: Screens.check) */
+async function scInfo() {
+  if (navigator.permissions && typeof window.getScreenDetails === 'function') {
+    try { scPerm = (await navigator.permissions.query({ name: 'window-management' })).state; } catch (e) { scPerm = null; }
+  }
+  const sc = window.screen || {};
+  return { brave: !!navigator.brave, screenX: window.screenX, screenY: window.screenY, outerW: window.outerWidth, outerH: window.outerHeight,
+    innerW: window.innerWidth, innerH: window.innerHeight, screenW: sc.width, screenH: sc.height, availLeft: sc.availLeft || 0, availTop: sc.availTop || 0,
+    hasDetails: typeof window.getScreenDetails === 'function', permission: scPerm, popupsBlocked: scBlocked,
+    screens: scPerm === 'granted' && Array.isArray(scScreens) ? scScreens.length : null };   // review 4: the real screens rule out a made-up place
+}
+const scCheckHtml = r => (r.lines.length ? '<div class="ws-scr-check' + (r.ok ? '' : ' warn') + '" role="note">' + (r.codes.includes('spoofed') || r.codes.includes('denied') || r.codes.includes('noDetails') || r.codes.includes('popups')
+  ? '<p><b>Why the windows all open on the main screen, and what to allow:</b></p>' : '') + '<ol>' + r.lines.map(l => '<li>' + esc(l) + '</li>').join('') + '</ol></div>' : '');
 /* the screens as the browser tells them (asked once: the browser's "manage windows on all your displays"), else null */
 async function scDetails(ask) {
   if (typeof window.getScreenDetails !== 'function') return null;
@@ -2732,7 +2806,9 @@ async function renderScreens() {
   await scDetails(false);
   const where = w => { const n = scScreens ? SC.screenNo(w, scScreens) : 0; return n ? 'screen ' + n : scScreens ? 'its screen is not connected' : 'at ' + w.x + ', ' + w.y; };
   const missing = set.windows.filter(w => !open.has(w.layout));
-  el.innerHTML = '<h2>Screens</h2>' +
+  await scDetails(false);
+  const chk = SC.check(await scInfo());
+  el.innerHTML = '<h2>Screens</h2>' + scCheckHtml(chk) +
     (set.windows.length ? '<ul>' + set.windows.map(w => '<li><b>' + esc(w.layout) + '</b><span>' + esc(where(w)) + ' · ' + w.w + ' x ' + w.h + '</span><span class="' + (open.has(w.layout) ? 'on' : '') + '">' + (open.has(w.layout) ? 'open' : 'not open') + '</span></li>').join('') + '</ul>'
       : '<p class="ws-scr-msg">No screens saved yet. Open your windows, put each where you want it, then Save these screens.</p>') +
     (scMsg.text ? '<p class="ws-scr-msg' + (scMsg.warn ? ' warn' : '') + '" role="status">' + esc(scMsg.text) + '</p>' : '') +
@@ -2748,7 +2824,14 @@ function scDue(missing) {
   if (b.title !== t) b.title = t;
 }
 async function scSave() {
+  /* 1.35.0: never save places the browser made up (Brave's Shields): they would all be the main screen */
+  await scDetails(false);
+  const chk = SC.check(await scInfo());
+  if (chk.codes.includes('spoofed')) { scMsg = { text: 'Not saved: the browser is hiding where the windows are (see above).', warn: true }; await renderScreens(); return; }
   const list = await scRoster(), at = Date.now();
+  /* another window may still have Shields up for this page: it answers from near 0, 0 like this one did */
+  const near0 = list.filter(x => Math.abs(x.x) <= 8 && Math.abs(x.y) <= 8);
+  if (navigator.brave && list.length > 1 && near0.length > 1) { scMsg = { text: 'Not saved: ' + near0.length + ' windows say they are at the top left of the main screen; Brave\'s Shields may still be up for this page in them. Shields down in each, reload, then save again.', warn: true }; await renderScreens(); return; }
   store.setItem(SC.KEY, JSON.stringify({ at, windows: list.map(x => ({ layout: x.layout, x: x.x, y: x.y, w: x.w, h: x.h })) }));
   const set = scSaved();
   scMsg = { text: 'Saved ' + set.windows.length + ' window' + (set.windows.length === 1 ? '' : 's') + ': ' + set.windows.map(w => w.layout).join(', ') + '.', warn: false };
@@ -2769,6 +2852,7 @@ async function scOpen() {
     if (!win) blocked.push(w.layout);
   }
   const opened = missing.length - blocked.length;
+  scBlocked = blocked.length > 0;
   scMsg = { text: (opened ? 'Opened ' + missing.filter(w => !blocked.includes(w.layout)).map(w => w.layout).join(', ') + '.' : '') +
     (moved.length ? ' ' + moved.join(', ') + ': its screen is not connected now, so on this one.' : '') +
     (blocked.length ? ' The browser blocked ' + blocked.join(', ') + ': allow pop-ups for this page (the icon at the end of the address bar), then click Open my screens again.' : '') +
@@ -2787,6 +2871,12 @@ $('wsAddMenu').addEventListener('click', e => { const b = e.target.closest('[dat
 function syncAddMenu() {
   const b = $('wsAddMenu').querySelector('[data-add="ticket"]'), has = panels.some(p => p.type === 'ticket');
   b.disabled = has; b.title = has ? 'This layout has its order ticket' : '';
+  /* 1.35.0: one Bot panel a layout */
+  for (const [t, words] of [['bot', 'its Bot panel']]) {
+    const x = $('wsAddMenu').querySelector('[data-add="' + t + '"]'); if (!x) continue;
+    const on = panels.some(p => p.type === t);
+    x.title = on ? 'This layout has ' + words + ': a click opens it' : x.dataset.tip || '';
+  }
 }
 
 /* A chart's instrument and bars: the instruments, the bars, and the range size for Range bars. Applied at once. */
@@ -2851,6 +2941,10 @@ function openMore(v, anchor) {
     const g = $('wsMore').querySelector('[data-do="ghost"]');
     g.hidden = !(botDesk && botDesk.ghostOffered());
     if (!g.hidden) g.textContent = 'Bot trades (faint): ' + (botDesk.ghostOn(v.panel.id) ? 'on' : 'off');
+    /* 1.35.0: the league's paper trades, faint, on this chart (off by default; NQ and MNQ only) */
+    const lg = $('wsMore').querySelector('[data-do="league"]');
+    lg.hidden = !window.LeagueCore || !window.LeagueCore.ROOTS.includes(v.panel.root) || !(leagueView && leagueView.offered());   // offered with The Desk's league only
+    if (!lg.hidden) lg.textContent = 'League trades (faint): ' + (leagueGhosts()[v.panel.id] ? 'on' : 'off');
     openPop($('wsMore'), anchor);
   });
 }
@@ -2859,6 +2953,7 @@ $('wsMore').addEventListener('click', e => {
   if (!b || !v || !v.pane) return;
   if (b.dataset.do === 'reset') v.pane.chart.reset();
   else if (b.dataset.do === 'ghost' && botDesk) botDesk.setGhost(v.panel.id, !botDesk.ghostOn(v.panel.id));
+  else if (b.dataset.do === 'league') setLeagueGhost(v.panel.id, !leagueGhosts()[v.panel.id]);
   closePops();
 });
 
@@ -3224,6 +3319,7 @@ $('wsTabs').addEventListener('click', e => {
   const b = e.target.closest('[data-tab]');
   if (b && botDesk && botDesk.shown()) botDesk.showTab(false);   // 1.16.0: from the Bot tab back to a layout
   if (b && agentDesk && agentDesk.shown()) agentDesk.showTab(false);   // 1.17.0: and from the Agent tab
+  if (b && leagueView && leagueView.shown()) leagueView.showTab(false);   // 1.35.0: and from the League tab
   if (!b || b.dataset.tab === layout) return;
   save(); openLayout(b.dataset.tab);
 });
@@ -3347,6 +3443,7 @@ function openLayout(name) {
   renderOrders();
   if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); }   // 1.16.0: the strip on Main only; ghost marks
   if (agentDesk) agentDesk.layoutChanged(layout);                             // 1.17.0: a layout closes the Agent tab
+  if (leagueView && leagueView.shown()) leagueView.showTab(false);            // 1.35.0: and the League tab
 }
 
 /* Another window changed something this page uses. Its open layouts stay its own. */
@@ -3384,6 +3481,10 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   botReplay: () => !!(botDesk && botDesk.replay()),
   /* 1.17.0: the Agent tab (read it; its actions go through ChartBridge's checks) */
   agent: () => (agentDesk ? agentDesk.state() : null),
+  /* 1.35.0: the League tab, and the charts showing the league's trades faintly (read only) */
+  league: () => (leagueView ? leagueView.state() : null),
+  leagueGhosts: () => [...LG.overlays.keys()],
+  leagueGhostTrades: () => { const d = leagueGhostDay(); return d ? d.trades.length + d.open.length : 0; },
   /* 1.34.0: how many risk alerts sounded in this window (test/flatten-every-smoke.mjs) */
   riskSounds: () => riskSounds };
 
@@ -3398,14 +3499,15 @@ function startBot() {
     charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
     onTab: on => {
       document.body.classList.toggle('bt-on', on);
-      if (on) { closePops(); restoreMax(); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); }   // one tab at a time
+      if (on) { closePops(); restoreMax(); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time
       tabUrl(on ? 'bot' : '');
+      placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
     } });
 }
 /* the tab in the URL (?tab=bot or ?tab=agent), so a reload keeps it */
 function tabUrl(t) {
   const u = new URL(location.href);
-  if (t) u.searchParams.set('tab', t); else if (!document.body.classList.contains('bt-on') && !document.body.classList.contains('ag-on')) u.searchParams.delete('tab');
+  if (t) u.searchParams.set('tab', t); else if (!document.body.classList.contains('bt-on') && !document.body.classList.contains('ag-on') && !document.body.classList.contains('lg-on')) u.searchParams.delete('tab');
   history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
 }
 /* 1.17.0: the Agent tab (live/agent.js) on the same v3 connection (AF); the agents come with ChartBridge 0.5.0, and with an
@@ -3420,15 +3522,68 @@ function startAgent() {
     flatten: (account, root) => core.flattenAgent(account, root),   // On/Off's "Flatten and turn him off?" Yes (1.20.0)
     onTab: on => {
       document.body.classList.toggle('ag-on', on);
-      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); }   // one tab at a time
+      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time
       tabUrl(on ? 'agent' : '');
+      placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
     } });
 }
+/* 1.35.0 (Anthony 2026-10-21): the League tab (live/league.js), a second top-level tab beside the Agent tab (which is unchanged):
+   the shadow league's paper trades on one chart, the seats' day,
+   the week and month, the decision log and the API spend, read from The Desk's GET /api/chart-league. It hides the grid while
+   it is open, as the Bot and Agent views do (?tab=league keeps it on a reload). Nothing in it sends an order. */
+let leagueView = null;
+function startLeague() {
+  if (!window.LeagueView) return;
+  leagueView = window.LeagueView.create({ view: $('lgView'), tab: $('wsLeagueTab'), feed: hub, storagePrefix: PREFIX,
+    deskBase: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)), fetch: (u, o) => fetch(u, o),
+    onTab: on => {
+      document.body.classList.toggle('lg-on', on);
+      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); }
+      tabUrl(on ? 'league' : '');
+      placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
+      if (!on) { if (leagueView.day()) LG.day = leagueView.day(); leaguePoll(); }   // the faint marks read on by themselves
+    } });
+}
+/* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk
+   every 30 seconds while any is on, one overlay per such chart */
+const LG_GHOST_KEY = window.LeagueCore ? window.LeagueCore.GHOST_KEY : 'live-league-ghost-v1';
+const leagueGhosts = () => { try { return window.LeagueCore ? window.LeagueCore.cleanGhosts(store.getItem(LG_GHOST_KEY)) : {}; } catch (e) { return {}; } };
+const LG = { day: null, timer: 0, seq: 0, overlays: new Map() };
+/* review 3: the faint marks draw the League view's day only while it is open (it reads every 15 s); else this poll's (30 s), so
+   they never freeze on what the view read last */
+const leagueGhostDay = () => (leagueView && leagueView.shown() && leagueView.day()) || LG.day;
+function setLeagueGhost(id, on) {
+  const g = leagueGhosts();
+  if (on) g[id] = true; else delete g[id];
+  try { store.setItem(LG_GHOST_KEY, JSON.stringify(g)); } catch (e) { /* blocked: this window only */ }
+  syncLeagueGhosts();
+}
+function syncLeagueGhosts() {
+  if (!window.LeagueOverlay || !window.LeagueCore) return;
+  const g = leagueGhosts(), want = new Set();
+  for (const v of chartViews()) if (g[v.panel.id] && window.LeagueCore.ROOTS.includes(v.panel.root)) want.add(v.panel.id);
+  for (const [id, ov] of LG.overlays) if (!want.has(id) || !views.has(id) || ov.pane !== views.get(id).pane) { ov.o.destroy(); LG.overlays.delete(id); }
+  for (const id of want) if (!LG.overlays.has(id)) { const v = views.get(id); LG.overlays.set(id, { pane: v.pane, o: window.LeagueOverlay.attach(v.pane, v.body, leagueGhostDay, () => v.panel.root, true) }); }
+  if (want.size && !LG.timer) leaguePoll();
+  if (!want.size) { clearTimeout(LG.timer); LG.timer = 0; }
+}
+function leaguePoll() {
+  clearTimeout(LG.timer); LG.timer = 0;
+  if (!LG.overlays.size) return;
+  const seq = ++LG.seq;                                    // only the latest read schedules the next (one 30 s poll, never two)
+  window.AccountsPage.deskBase((u, o) => fetch(u, o)).then(url => fetch(url + '/api/chart-league', { cache: 'no-store', mode: 'cors', credentials: 'omit' }))
+    .then(r => (r.ok ? r.json() : null)).then(j => { if (j) LG.day = window.LeagueCore.cleanDay(j); }, () => { /* The Desk down: the last marks stay */ })
+    .then(() => { for (const x of LG.overlays.values()) x.o.redraw(); if (seq === LG.seq && LG.overlays.size) LG.timer = setTimeout(leaguePoll, 30000); });
+}
+setInterval(syncLeagueGhosts, 3000);                      // a chart's instrument changed, a layout opened: the overlays follow
+window.addEventListener('storage', e => { if (e.key && e.key.endsWith(LG_GHOST_KEY)) syncLeagueGhosts(); });
 const start = () => {
-  startBot(); startAgent();
+  startBot(); startAgent(); startLeague();
   openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake();
   if (botDesk && new URLSearchParams(location.search).get('tab') === 'bot') botDesk.showTab(true);
   if (agentDesk && new URLSearchParams(location.search).get('tab') === 'agent') agentDesk.showTab(true);
+  if (leagueView && new URLSearchParams(location.search).get('tab') === 'league') leagueView.showTab(true);
+  syncLeagueGhosts();
 };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
    2026-10-01), Armed off. The same `ifAvailable` lock as any take: two windows opening at once give one holder, and a

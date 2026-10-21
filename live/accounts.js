@@ -384,9 +384,75 @@ function attachedLegs(orders, account, root) {
 const WORKING = new Set(['working', 'partFilled', 'cancelling']);
 const isWorking = o => !!o && WORKING.has(o.state);
 
+/* ---------------- 1.35.0: Update floors from The Desk (Anthony 2026-10-21) */
+/**
+ * What "Update floors from The Desk" would send, from The Desk's GET /api/chart-floors ({ accounts, skipped }) and ChartBridge's
+ * accounts (each with its rules: its group's, or its own). Returns { send: [{ account, floor, now, source, note }], skip:
+ * [{ account, label, why }] }. An account is sent only when ChartBridge lists it and has firm rules for it with a trailing
+ * drawdown (firmMinimum's own conditions; ChartBridge checks again and may still refuse, said in the Log); every other one is
+ * skipped with why, The Desk's own skips included. `rulesOf(a)` gives the rules that hold for ChartBridge's account a.
+ */
+function floorPlan(desk, accounts, rulesOf) {
+  const out = { send: [], skip: [] };
+  const list = Array.isArray(accounts) ? accounts : [];
+  const money = v => isNum(v) && v > 0 && v < 1e8;
+  /* review 8: one row per account: when The Desk sends two for the same account, the newer is kept (the later seed date; the same
+     or none: the later row), the other skipped with why */
+  const rows = [];
+  for (const r of desk && Array.isArray(desk.accounts) ? desk.accounts : []) {
+    if (!r || typeof r.account !== 'string' || !r.account) continue;
+    const k = rows.findIndex(x => x.account === r.account);
+    if (k < 0) { rows.push(r); continue; }
+    const old = rows[k], newer = String(r.seed_date || '') >= String(old.seed_date || '');
+    const keep = newer ? r : old, drop = newer ? old : r;
+    rows[k] = keep;
+    out.skip.push({ account: r.account, label: typeof drop.prop === 'string' && drop.prop !== r.account ? drop.prop : '', why: 'The Desk sent two floors for it: the newer one (' + (keep.prop || 'its other prop account') + (keep.seed_date ? ', seed of ' + keep.seed_date : '') + ') is the one shown' });
+  }
+  for (const r of rows) {
+    if (!r || typeof r.account !== 'string' || !r.account) continue;
+    const label = typeof r.prop === 'string' && r.prop !== r.account ? r.prop : '';
+    if (!money(r.floor)) { out.skip.push({ account: r.account, label, why: 'The Desk sent no floor for it' }); continue; }
+    const a = list.find(x => x && x.name === r.account);
+    if (!a || a.state === 'gone') { out.skip.push({ account: r.account, label, why: 'ChartBridge does not list it on this PC' }); continue; }
+    const rules = typeof rulesOf === 'function' ? rulesOf(a) : a.rules;
+    if (!rules || typeof rules !== 'object') { out.skip.push({ account: r.account, label, why: 'no firm rules on ChartBridge yet: apply its account type first (in ⋯)' }); continue; }
+    if (rules.drawdownType === 'static') { out.skip.push({ account: r.account, label, why: 'its drawdown is static on ChartBridge: the floor is fixed' }); continue; }
+    out.send.push({ account: r.account, label, floor: Math.round(r.floor * 100) / 100, now: isNum(a.floor) ? a.floor : null,
+      source: typeof r.source === 'string' ? r.source.slice(0, 200) : '', note: typeof r.note === 'string' ? r.note.slice(0, 200) : '' });
+  }
+  for (const k of desk && Array.isArray(desk.skipped) ? desk.skipped : []) {
+    if (!k || typeof k.why !== 'string') continue;
+    out.skip.push({ account: typeof k.account === 'string' ? k.account : '', label: typeof k.prop === 'string' ? k.prop : '', why: k.why.slice(0, 200) });
+  }
+  out.send.sort((x, y) => x.account.localeCompare(y.account));
+  return out;
+}
+
+/* 1.35.0 (G): the accounts whose firm minimum was set from this page (sent, and not refused by ChartBridge within the wait),
+   kept in this browser: { name: { min, at } }. Once one is set, NinjaTrader's own room to the floor (it never locks, so it
+   always differs) is no flag; it stays in the Room's hover. */
+const FIRM_MIN_KEY = 'live-firm-min-v1';
+function cleanFirmMins(raw) {
+  let v = raw;
+  if (typeof raw === 'string') { try { v = JSON.parse(raw); } catch (e) { v = null; } }
+  const out = {};
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
+  for (const k of Object.keys(v)) {
+    const x = v[k];
+    if (k && k.length <= 200 && x && isNum(x.min) && x.min > 0 && Number.isInteger(x.at) && x.at > 0) out[k] = Object.assign({ min: x.min, at: x.at }, typeof x.sig === 'string' && x.sig.length <= 200 ? { sig: x.sig } : {});
+  }
+  return out;
+}
+/** Whether to flag "NinjaTrader shows X to the floor, ChartBridge Y" for account a: only when no firm minimum was set for it. */
+function ntFloorFlag(a, firmMins) {
+  if (!a || !isNum(a.roomFloorNt) || !isNum(a.roomFloor) || Math.abs(a.roomFloor - a.roomFloorNt) <= 25) return false;
+  if (a.src && a.src.roomFloor === 'ninjatrader') return false;
+  return !(firmMins && firmMins[a.name]);
+}
+
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
-  accountMark, accountChange, logText, orderName, attachedLegs, isWorking, heroOf };
+  accountMark, accountChange, logText, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -457,10 +523,26 @@ function createFeed(env) {
   let ws = null, tries = 0, timer = 0, seq = 0, started = false, deskTimer = 0, changeQueued = false, stopped = false;
   /* 1.30.0: this browser's storage for the account types' copy and the groups' links (every call wrapped; works without it) */
   const store = env.storage !== undefined ? env.storage : (() => { try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch (e) { return null; } })();
+  /* 1.35.0: the firm minimums set from this page (G), and what "Update floors from The Desk" sent this time, by account */
+  S.firmMins = AC.cleanFirmMins((() => { try { return store ? store.getItem(AC.FIRM_MIN_KEY) : null; } catch (e) { return null; } })());
+  S.firmSent = {};
   const changed = () => { if (changeQueued) return; changeQueued = true; Promise.resolve().then(() => { changeQueued = false; env.changed(); }); };
   const log = (text, level) => { if (!text) return; S.log.unshift({ at: Date.now(), text, level: level || '' }); if (S.log.length > LOG_MAX) S.log.length = LOG_MAX; };
   const cid = () => 'ap' + Date.now().toString(36) + '-' + (++seq);
   const mine = new Map();                                 // cid -> what was asked (its refusal goes to the window's note)
+  const firmPending = new Map();                          // 1.35.0: cid -> { name, min } of a firmMinimum not refused yet
+  const firmDone = new Map();                             // review 7: cid -> {name, at} of a firmMinimum taken as set (a late refusal undoes it)
+  const FIRM_WAIT_MS = 3000;
+  /* review 7: the firm rules a remembered minimum was set under (size, drawdown and its type, lock): another type applied, or a
+     reset, changes them, and the minimum set before is forgotten (the NinjaTrader flag can come back) */
+  const firmSig = name => { const a = S.accounts.find(x => x.name === name), r = a && (rulesOf(a) || (a.rules && typeof a.rules === 'object' ? a.rules : null)); return r ? [r.size, r.drawdown, r.drawdownType, r.lockAt || 0].join('|') : ''; };
+  const firmWrite = all => { S.firmMins = all; try { if (store) store.setItem(AC.FIRM_MIN_KEY, JSON.stringify(all)); } catch (e) { /* blocked: this window's memory */ } };
+  function firmForget(name) { const all = Object.assign({}, S.firmMins); if (!all[name]) return; delete all[name]; firmWrite(all); }
+  function firmPrune() {
+    let changed2 = false; const all = Object.assign({}, S.firmMins);
+    for (const n of Object.keys(all)) { const now = firmSig(n); if (all[n].sig && now && all[n].sig !== now) { delete all[n]; changed2 = true; } }
+    if (changed2) firmWrite(all);
+  }
   const subs = new Set();                                // listen(): the window's other v3 parts
   const tell = (k, m) => { for (const s of subs) { if (typeof s[k] === 'function') { try { s[k](m); } catch (e) { setTimeout(() => { throw e; }); } } } };
 
@@ -566,6 +648,7 @@ function createFeed(env) {
         S.archived = Array.isArray(m.archived) ? m.archived.filter(a => a && typeof a.name === 'string') : [];
         if (S.got) for (const a of S.archived) if (!was.has(a.name)) log(a.name + ': archived');
         S.accounts = list; S.got = true; S.lostAt = null;
+        firmPrune();                                          // review 7: a minimum set under other rules is forgotten
         changed(); return;
       }
       case 'orders': S.orders.clear(); for (const o of m.list || []) if (o && o.id) S.orders.set(o.id, o); changed(); return;
@@ -585,6 +668,11 @@ function createFeed(env) {
       case 'copierEvent': log(AC.logText(m), m.action === 'skip' || m.action === 'standDown' || m.action === 'refused' ? 'warn' : ''); changed(); return;
       case 'reject': {
         log(AC.logText(m), 'warn');
+        if (m.cid && firmPending.has(m.cid)) { const p = firmPending.get(m.cid); firmPending.delete(m.cid); S.firmSent[p.name] = 'refused: ' + String(m.reason || '').slice(0, 200); }   // 1.35.0
+        else if (m.cid && firmDone.has(m.cid)) {                // review 7: a late refusal undoes its own minimum only, never a newer one
+          const d = firmDone.get(m.cid); firmDone.delete(m.cid);
+          if (S.firmMins && S.firmMins[d.name] && S.firmMins[d.name].at === d.at) { firmForget(d.name); S.firmSent[d.name] = 'refused: ' + String(m.reason || '').slice(0, 200); }
+        }
         if (m.cid && mine.has(m.cid)) { mine.delete(m.cid); env.note('Refused by ChartBridge: ' + m.reason, true); }
         changed(); return;
       }
@@ -683,8 +771,33 @@ function createFeed(env) {
       if (!S.groups || typeof GroupsCore === 'undefined') return false;
       const v = GroupsCore.parseMoney(text);
       if (!(v > 0)) { env.note('Not sent: Minimum balance: the firm\'s number in dollars (at most 2 decimals).', true); return false; }
-      return send({ type: 'firmMinimum', cid: cid(), account: name, minBalance: v });
+      const c = cid();
+      if (!send({ type: 'firmMinimum', cid: c, account: name, minBalance: v })) return false;
+      /* 1.35.0: set once ChartBridge has not refused it within FIRM_WAIT_MS (a refusal comes back by its cid at once) */
+      firmPending.set(c, { name, min: v });
+      setTimeout(() => {
+        const p = firmPending.get(c); if (!p) return;
+        firmPending.delete(c);
+        const all = AC.cleanFirmMins(store ? (() => { try { return store.getItem(AC.FIRM_MIN_KEY); } catch (e) { return null; } })() : null);
+        const at = Date.now();
+        all[p.name] = { min: p.min, at, sig: firmSig(p.name) };
+        firmWrite(all);
+        firmDone.set(c, { name: p.name, at }); if (firmDone.size > 100) firmDone.delete(firmDone.keys().next().value);
+        S.firmSent[p.name] = 'set'; changed();
+      }, FIRM_WAIT_MS);
+      S.firmSent[name] = 'sent'; changed();
+      return true;
     },
+    /* 1.35.0: The Desk's floor for each prop account (GET /api/chart-floors), for "Update floors from The Desk". Resolves
+       { ok, json } or { ok: false, error }; never rejects. */
+    readFloors: () => {
+      if (env.desk === false) return Promise.resolve({ ok: false, error: 'this window does not read The Desk' });
+      return deskBase(env.fetch).then(url => env.fetch(url + '/api/chart-floors', { cache: 'no-store', mode: 'cors', credentials: 'omit' }))
+        .then(r => (r.ok ? r.json().then(j => ({ ok: true, json: j })) : r.json().then(j => j && typeof j.detail === 'string' ? j.detail : '', () => '')
+          .then(d => ({ ok: false, error: r.status === 404 ? 'The Desk has no floors to give (it needs The Desk of this release)' : 'The Desk answered ' + r.status + (d ? ': ' + d : '') }))),
+        e => ({ ok: false, error: 'The Desk is not reachable (' + (e && e.message ? e.message : 'no answer') + ')' }));
+    },
+    firmMins: () => S.firmMins,
     accountLimits: (name, floorText, dailyText) => {
       if (!S.groups || typeof GroupsCore === 'undefined') return false;
       const r = GroupsCore.limitsMessage(name, floorText, dailyText, cid());
@@ -766,6 +879,20 @@ function mount(v, host) {
     else if (a === 'drawer') { P.drawer = P.drawer === id ? '' : id; render(); }   // 1.34.0: the account's settings drawer
     else if (a === 'sim-toggle') { P.simOpen = !P.simOpen; saveOpen(); render(); }
     else if (a === 'drawers-all') { P.allOpen = !P.allOpen; P.drawer = ''; saveOpen(); render(); }   // 1.34.0: every account's settings at once (a setup day)
+    else if (a === 'floors-desk' || a === 'floors-desk-again') {   // 1.35.0: read The Desk's floors; nothing is sent until Send
+      if (a === 'floors-desk' && P.floors) { P.floors = null; render(); return; }
+      P.floors = { state: 'loading' }; S.firmSent = {}; render();
+      F.readFloors().then(r => { if (!P.floors) return; P.floors = r.ok ? { state: 'ready', json: r.json } : { state: 'error', error: r.error }; render(); });
+    }
+    else if (a === 'floors-close') { P.floors = null; render(); }
+    else if (a === 'floors-send') {   // the one confirm: each floor as ChartBridge's own firmMinimum, a little apart
+      const fl = P.floors; if (!fl || fl.state !== 'ready' || fl.sentAt) return;
+      const plan = AC.floorPlan(fl.json, S.accounts, F.rulesOf);
+      fl.sentAt = Date.now(); fl.sentN = plan.send.length;
+      plan.send.forEach((r, i) => setTimeout(() => { if (!F.firmMinimum(r.account, String(r.floor))) S.firmSent[r.account] = 'refused: not sent (not connected to ChartBridge)'; render(); }, i * 150));
+      host.note('Sending ' + plan.send.length + ' floor' + (plan.send.length > 1 ? 's' : '') + ' from The Desk to ChartBridge.');
+      render();
+    }
     else if (a === 'firm-min-set') {   // 1.34.0 (ChartBridge 0.6.6): the firm's minimum balance seeds the floor
       const tr = b.closest('[data-k]'), box = tr ? tr.querySelector('[data-act="firm-min"]') : null;
       if (box && F.firmMinimum(id, box.value)) { host.note(id + '\'s floor from the firm\'s minimum balance: sent to ChartBridge.'); box.value = ''; }
@@ -1131,10 +1258,38 @@ function mount(v, host) {
         }
         return AC.limitText(s) || '-';
       };
+      /* 1.35.0 (C): "Update floors from The Desk": every prop account's floor as The Desk has it, what would be sent and what is
+         skipped and why; Anthony confirms once (Send), then the page sends ChartBridge's firmMinimum for each (it checks each
+         again; a refusal shows here and in the Log). Repeatable. */
+      function floorsPanel() {
+        const fl = P.floors;
+        if (!fl) return '';
+        if (fl.state === 'loading') return '<div class="apg-floors" role="region" aria-label="Floors from The Desk"><p class="mut">Reading the floors from The Desk...</p></div>';
+        if (fl.state === 'error') return `<div class="apg-floors" role="region" aria-label="Floors from The Desk"><p class="warn">${esc(fl.error)}</p><button type="button" class="ac-btn" data-act="floors-close">Close</button></div>`;
+        const plan = AC.floorPlan(fl.json, S.accounts, F.rulesOf);
+        const state = n => S.firmSent[n] || '';
+        /* review 9: the row's own label on this page first (as the rows below show it), then ChartBridge's name and The Desk's prop name */
+        const who = r => { const l = labelOf(r.account); return (l ? `<b>${esc(l)}</b> <span class="mut">${esc(r.account)}</span>` : `<b>${esc(r.account)}</b>`) + (r.label ? ` <span class="mut">· The Desk: ${esc(r.label)}</span>` : ''); };
+        const line = r => `<li class="apg-fl-row">${who(r)}: floor <b class="mono">${esc(AC.fmtUsdPlain(r.floor))}</b>` +
+          ` <span class="mut">ChartBridge now ${r.now === null ? 'not known' : esc(AC.fmtUsdPlain(r.now))}</span>` +
+          `<span class="mut apg-fl-src" title="${esc(r.source + (r.note ? '. ' + r.note : ''))}"> · ${esc(r.source)}${r.note ? '; ' + esc(r.note) : ''}</span>` +
+          (state(r.account) ? ` <span class="${/^refused/.test(state(r.account)) ? 'warn' : 'b'}">${esc(state(r.account) === 'set' ? 'set' : state(r.account) === 'sent' ? 'sent...' : state(r.account))}</span>` : '') + '</li>';
+        const skip = r => `<li class="apg-fl-row mut"><b>${esc((r.account && labelOf(r.account)) || r.account || r.label || 'a prop account')}</b>${r.account && labelOf(r.account) ? ' ' + esc(r.account) : ''}${r.account && r.label ? ` · The Desk: ${esc(r.label)}` : ''}: skipped, ${esc(r.why)}</li>`;
+        const sent = fl.sentAt ? `<p class="mut">Sent ${fl.sentN} at ${esc(hms(fl.sentAt))} ET; ChartBridge checks each (a refusal shows on its row and in the Log). Read them again to send again.</p>` : '';
+        return '<div class="apg-floors" role="region" aria-label="Floors from The Desk">' +
+          `<p class="apg-fl-head">Floors from The Desk (its Prop seeds from the firm dashboard plus the tracked fills). ${fl.sentAt ? '' : plan.send.length ? 'Send them to ChartBridge as each firm\'s minimum?' : 'Nothing to send.'}</p>` +
+          (plan.send.length ? '<ul class="apg-fl-list">' + plan.send.map(line).join('') + '</ul>' : '') +
+          (plan.skip.length ? '<ul class="apg-fl-list">' + plan.skip.map(skip).join('') + '</ul>' : '') + sent +
+          '<div class="apg-fl-btns">' + (plan.send.length && !fl.sentAt ? `<button type="button" class="ac-btn apg-yes" data-act="floors-send">Send ${plan.send.length} floor${plan.send.length > 1 ? 's' : ''} to ChartBridge</button>` : '') +
+          (fl.sentAt ? '<button type="button" class="ac-btn" data-act="floors-desk-again">Read again</button>' : '') +
+          '<button type="button" class="ac-btn" data-act="floors-close">' + (fl.sentAt ? 'Close' : 'Cancel') + '</button></div></div>';
+      }
       const flagsOf = a => {
         const why = a.why && typeof a.why === 'object' ? a.why : {}, out = [];
         if (typeof why.floor === 'string' && /minimum balance/.test(why.floor)) out.push('Floor not known: ' + why.floor);
-        if (isNum(a.roomFloorNt) && isNum(a.roomFloor) && Math.abs(a.roomFloor - a.roomFloorNt) > 25 && !(a.src && a.src.roomFloor === 'ninjatrader'))
+        /* 1.35.0 (Anthony): once its firm minimum is set, NinjaTrader's figure (it never locks, so it always differs) is no flag;
+           it stays in the Room's hover */
+        if (AC.ntFloorFlag(a, F.firmMins()))
           out.push('NinjaTrader shows ' + usd0(a.roomFloorNt) + ' to the floor, ChartBridge ' + usd0(a.roomFloor) + ' (from the firm\'s rules): check the firm\'s dashboard; its minimum balance goes in ⋯');
         if (followerSet.has(a.name)) out.push('A copier follower: group entries and the agents leave it out (the Copier tab: turn it off, then Remove)');
         const at = typesOn ? F.typeOf(a.name) : null, l = a.group ? links[a.group] : null;
@@ -1148,10 +1303,11 @@ function mount(v, host) {
         const why = a.why && typeof a.why === 'object' ? a.why : {}, from = x => (x.from === 'desk' ? ' (The Desk)' : x.from === 'chartbridge' ? ' (ChartBridge, from NinjaTrader\'s balance and P&L)' : ' (NinjaTrader)');
         /* 1.32.0 ("Narrower Room"): the Room's whole text first in its tooltip (the cell may cut it at 1366) */
         /* 2026-10-21 (review of b4bc612): groups.txt could not be read: the floor and rooms come from its copy, and say of when */
+        const ntTip = isNum(a.roomFloorNt) && !(a.src && a.src.roomFloor === 'ninjatrader') ? 'NinjaTrader shows ' + AC.fmtUsdPlain(a.roomFloorNt) + ' to the floor (its own trailing figure, which never locks)' + (F.firmMins()[a.name] ? '; the firm minimum ' + AC.fmtUsdPlain(F.firmMins()[a.name].min) + ' was set from this page' : '') : '';
         const roomTip = [typeof a.fromCopy === 'string' && a.fromCopy ? 'groups.txt could not be read: ' + a.fromCopy : '', AC.limitText(s), s.dd ? (s.cb ? 'Room to the floor' + (s.dd.floor !== null && s.dd.floor !== undefined ? ' (' + AC.fmtUsdPlain(s.dd.floor) + ')' : '') + ': ' : 'Trailing drawdown: ') + (s.dd.room !== null ? AC.fmtUsdPlain(s.dd.room) + ' left' : 'room not reported') + (s.dd.limit ? ' of ' + AC.fmtUsdPlain(s.dd.limit) : '') + from(s.dd) : (why.roomFloor || a.roomDrawdownWhy || 'No trailing drawdown known'),
           s.dl ? 'Daily loss: ' + (s.dl.room !== null ? AC.fmtUsdPlain(s.dl.room) + ' left' : 'room not known') + (s.dl.limit ? ' of ' + AC.fmtUsdPlain(s.dl.limit) : '') + (s.cb ? ' (open P&L counted)' : '') + from(s.dl) : (why.roomDaily || a.roomDailyLossWhy || 'No daily loss limit known'),
           s.tg ? 'Profit target: ' + (s.tg.left <= 0 ? 'reached' : AC.fmtUsdPlain(s.tg.left) + ' left') + (s.tg.target ? ' of ' + AC.fmtUsdPlain(s.tg.target) : '') : '',
-          s.level ? (s.level === 'red' ? 'RED: ' : 'AMBER: ') + Math.round(s.pct * 100) + '% of the room used to the closer limit' : ''].filter(Boolean).join('\n');
+          s.level ? (s.level === 'red' ? 'RED: ' : 'AMBER: ') + Math.round(s.pct * 100) + '% of the room used to the closer limit' : '', ntTip].filter(Boolean).join('\n');
         /* the checkmark: a control only with accountChecks on; else what gate 2 says, read only */
         const canCheck = sw.accountChecks && S.enabled;
         /* Hide (ChartBridge 0.5.1): on any account ChartBridge says may be hidden now (flat, not the bot's, the copier's or an agent's) */
@@ -1214,7 +1370,9 @@ function mount(v, host) {
       const headRow = row('h', ACC_COLS.map((cdef, i) => h(cdef[0] + (i < ACC_COLS.length - 1 ? `<span class="apg-rs" data-col="${i}" title="Drag to make this column wider or narrower; double-click for its default"></span>` : ''), i >= 1 && i <= 4 || i >= 6 ? 'r' : '')).join(''), 'gr-h');
       html = !accounts.length ? '<p class="ac-empty">ChartBridge watches no account.</p>' :
         (stale ? `<p class="apg-stalenote" role="status">${esc(staleWords)}</p>` : '') +
-        `<div class="apg-acc-top"><button type="button" class="ac-btn apg-alltg" data-act="drawers-all" aria-pressed="${P.allOpen}" title="${P.allOpen ? 'Fold every account\'s settings' : 'Show every account\'s settings (group, type, limits, the firm\'s minimum, a label, Hide) at once'}">${P.allOpen ? 'Fold settings' : 'Settings for every account'}</button></div>` +
+        `<div class="apg-acc-top"><button type="button" class="ac-btn apg-alltg" data-act="drawers-all" aria-pressed="${P.allOpen}" title="${P.allOpen ? 'Fold every account\'s settings' : 'Show every account\'s settings (group, type, limits, the firm\'s minimum, a label, Hide) at once'}">${P.allOpen ? 'Fold settings' : 'Settings for every account'}</button>` +
+          (firmOn() && canGroup ? `<button type="button" class="ac-btn apg-floorsbtn" data-act="floors-desk" aria-expanded="${!!P.floors}" title="Show every prop account's floor as The Desk has it (its seed from the firm dashboard plus the tracked fills); you confirm once, then each goes to ChartBridge as the firm's minimum">Update floors from The Desk</button>` : '') + '</div>' +
+          floorsPanel() +
         `<div class="gr apg-g apg-acc-g apg-acc2${stale ? ' apg-stale' : ''}" style="--apg-cols: ${colsCss(widths)}" role="table" aria-label="Accounts${stale ? ' as of ' + esc(hms(S.lostAt)) + ' ET (not connected)' : ''}">` +
         headRow + sections.join('') + '</div>' +
         (gone.length ? '<h3 class="apg-h">Gone</h3><div class="gr apg-g apg-gone-g" role="table" aria-label="Gone accounts">' + gone.map(a => {

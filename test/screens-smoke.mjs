@@ -4,7 +4,8 @@
 // Checks: a window opened by hand asks for the PIN; Save these screens keeps every workspace window open now; with one closed,
 // the Screens button says so and Open my screens opens it, unlocked by the opening window's PIN (no pad); a reload of it asks
 // for the PIN again; a window that names itself like one but was not opened by Open my screens gets nothing and asks.
-// Screenshot test/out/screens-pop-1366.png.
+// 1.35.0: Brave with Shields up (made-up window places): the popover says what to allow and Save refuses.
+// Screenshots test/out/screens-pop-1366.png, test/out/screens-brave-1366.png.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -76,6 +77,30 @@ try {
   check(await padShows(f), 'a window with a made-up code (not opened by Open my screens) gets no unlock: the PIN pad');
   await f.close();
   await ctx.close();
+
+  /* 1.35.0: Brave with Shields up (fingerprinting blocked): the window's place is made up (brave-core 13737), so the popover
+     says why every window opens on the main screen and exactly what to allow, and Save refuses the made-up places */
+  const bctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  await bctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+  await bctx.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, 'brave', { get: () => ({ isBrave: () => Promise.resolve(true) }), configurable: true });
+    const def = (o, k, f) => Object.defineProperty(o, k, { get: f, configurable: true });
+    def(window, 'screenX', () => 5); def(window, 'screenY', () => 3); def(window, 'outerHeight', () => window.innerHeight + 3);
+    def(Screen.prototype, 'width', () => window.innerWidth + 2); def(Screen.prototype, 'height', () => window.innerHeight + 4);
+    def(Screen.prototype, 'availLeft', () => 2); def(Screen.prototype, 'availTop', () => 7);
+  });
+  const b = await bctx.newPage(); errs(b);
+  await b.goto(`http://localhost:${PORT}/live/?layout=Main`);
+  await padShows(b); await enterPin(b, TEST_PIN); await live(b);
+  await b.click('#wsScreens');
+  const bt = await until(async () => { const t = await popText(b); return /Brave's Shields are hiding where this window is/.test(t) ? t : null; }, 'the Brave note');
+  check(!!bt && /it reports 5, 3/.test(bt) && /Shields icon \(the lion\)/.test(bt) && /Allow all fingerprinting/.test(bt) && /Window management: Allow/.test(bt) && /Pop-ups and redirects: Allow/.test(bt),
+    'Brave Shields: the popover says why every window opens on the main screen and exactly what to allow');
+  await b.click('#wsScreensPop [data-scr="save"]');
+  const nt = await until(async () => { const t = await popText(b); return /Not saved: the browser is hiding where the windows are/.test(t) ? t : null; }, 'not saved');
+  check(!!nt, 'Save refuses the made-up places');
+  await b.screenshot({ path: path.join(out, 'screens-brave-1366.png') });
+  await bctx.close();
 } catch (e) { fail('threw: ' + (e && e.stack || e)); }
 finally { await browser.close(); bridge.kill(); }
 console.log(errors.length ? errors.length + ' FAILED' : 'screens smoke: all passed');

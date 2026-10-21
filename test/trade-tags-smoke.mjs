@@ -5,7 +5,8 @@
 // chip records nothing; with a position open the chips set before it show with their phase and a click records `open` with the
 // trade's first fill; after the close, Last trade shows that trade's chips and a click records `after` (a change is a new
 // record, the newest shown); a click on the set chip clears its row; The Desk down: the record waits and goes once it is back;
-// nothing the panel does sends an order message. Screenshots test/out/trade-tags-*.png.
+// nothing the panel does sends an order message. 1.35.0: the note (typing fires no hotkey: KEYS OFF; Enter records one note
+// record; the box keeps it) and the lost line (a refused record says when; Seen clears it). Screenshots test/out/trade-tags-*.png.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -103,14 +104,45 @@ try {
   check(desk.tags[5].value === null && desk.tags[5].dim === 'context' && await p.$eval(chip('context', 'with_trend'), b => b.getAttribute('aria-pressed') === 'false'), 'a click on the set chip clears its row (a record with value null)');
   await p.screenshot({ path: path.join(out, 'trade-tags-last-1366.png') });
 
+  /* 1.35.0: the note: typing fires no hotkey (KEYS OFF while the box has the focus), Enter records one note record for the
+     trade shown (after), the box keeps it, and the hotkeys work again at once */
+  const NOTE = `${TAGS} .tt-note`;
+  await p.click(NOTE);
+  await until(() => p.$eval('#wsKeys', e => e.textContent === 'KEYS OFF'), 'KEYS OFF while typing in the note');
+  await p.keyboard.type('bsa held the reclaim, b e c', { delay: 5 });
+  check(desk.tags.length === 6, 'typing records nothing until Enter');
+  await p.keyboard.press('Enter');
+  await until(() => desk.tags.length === 7, 'the note record');
+  const nrec = desk.tags[6];
+  check(nrec.dim === 'note' && nrec.value === 'bsa held the reclaim, b e c' && nrec.phase === 'after' && nrec.trade_open_ms === opened[0].trade_open_ms,
+    'Enter records the note for the trade shown (a record of its own, dim note): ' + JSON.stringify(nrec));
+  check(await p.$eval(NOTE, e => e.value === 'bsa held the reclaim, b e c' && document.activeElement !== e), 'the box keeps the note, and gives the focus back');
+  await until(() => p.$eval('#wsKeys', e => e.textContent === 'KEYS ON'), 'KEYS ON again after Enter');
+  check((await p.evaluate(() => window.__sent.length)) === 0, 'typing in the note sent no order message');
+  check(await p.$$eval(`${TAGS} .tt-chip[aria-pressed="true"]`, bs => bs.length === 3), 'the note is no chip');
+  check(await p.$eval(NOTE, e => e.maxLength === 200), 'at most 200 characters');
+  await p.screenshot({ path: path.join(out, 'trade-tags-note-1366.png') });
+
+  /* 1.35.0: a refused record: the lost line says when, and goes with Seen */
+  desk.refuseTags = t => (t.value === 'other' ? 'made up refusal for the smoke' : '');
+  await p.click(chip('setup', 'other'));
+  await until(() => p.$eval(`${TAGS} [data-t="lost"]`, e => !e.hidden), 'the lost line', 9000);
+  const lostText = await p.$eval(`${TAGS} [data-t="lostText"]`, e => e.textContent);
+  check(/^1 tag record was lost before The Desk took it: 1 at \d\d:\d\d:\d\d, refused by The Desk: made up refusal for the smoke\.$/.test(lostText), 'the lost line says when: ' + lostText);
+  await p.screenshot({ path: path.join(out, 'trade-tags-lost-1366.png') });
+  await p.click(`${TAGS} [data-act="seen"]`);
+  await until(() => p.$eval(`${TAGS} [data-t="lost"]`, e => e.hidden), 'Seen clears the line');
+  check(true, 'Seen clears the lost line');
+  desk.refuseTags = null;
+
   /* The Desk down: kept, sent again */
   desk.down = true;
   await p.click(chip('setup', 'reversal'));
   await until(() => p.$eval(`${TAGS} [data-t="foot"]`, e => /^1 waiting for The Desk/.test(e.textContent)), 'the waiting note', 9000);
-  check(desk.tags.length === 6, 'The Desk down: the record waits in this browser');
+  check(desk.tags.length === 7, 'The Desk down: the record waits in this browser');
   desk.down = false;
-  await until(() => desk.tags.length === 7 && desk.tags[6].value === 'reversal', 'the resend', 15000);
-  check(desk.tags.length === 7, 'The Desk back: sent again within 10 seconds');
+  await until(() => desk.tags.length === 8 && desk.tags[7].value === 'reversal', 'the resend', 15000);
+  check(desk.tags.length === 8, 'The Desk back: sent again within 10 seconds');
   check((await p.evaluate(() => window.__sent.length)) === 0, 'nothing the panel did sent an order message');
 
   /* a reload keeps the panel and the chips */
@@ -121,7 +153,9 @@ try {
   /* (the fake bridge replays only its sample fills on a reconnect, so the last trade cannot be named here; ChartBridge replays
      the session's executions) the records are this browser's and The Desk's again */
   const kept = await p.evaluate(() => { try { return JSON.parse(localStorage.getItem('live-trade-tags-v1')); } catch (e) { return null; } });
-  check(kept && kept.records.length === 7 && kept.pending.length === 0, 'a reload keeps the panel and the 7 records, none waiting');
+  check(kept && kept.records.length === 8 && kept.pending.length === 0, 'a reload keeps the panel and the 8 records (the note too), none waiting');
+  check(kept && kept.lost.length === 1 && kept.lost[0].seen === true, 'the loss is kept, seen');
+  check(await p.$eval(`${TAGS} [data-t="lost"]`, e => e.hidden), 'a seen loss stays gone after a reload');
   check(await until(() => desk.log.some(x => x.method === 'GET' && x.which === 'trade-tags'), 'The Desk read back', 8000), 'the panel reads The Desk\'s records for the session (another window\'s clicks)');
 } catch (e) {
   fail('threw: ' + (e && e.stack || e));

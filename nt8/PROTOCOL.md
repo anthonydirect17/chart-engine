@@ -3436,6 +3436,12 @@ A page tells a 0.6.6 ChartBridge by `hello`'s `version`. Made-up names and money
 |---|---|---|
 | `firmMinimum` (new) | `cid` (optional), `account`, `minBalance` (dollars, more than 0, at most 2 decimals): the minimum balance the firm's dashboard shows | both highs of the account (end of day and intraday) set to `minBalance` plus its drawdown, so the computed floor equals the firm's from then on; the missed-close marks cleared; `groups` and `accounts` sent at once. Refused: no rules yet ("SIM-D has no firm rules yet: apply its account type first (the floor comes from its drawdown and lock)"), a static drawdown (its floor is fixed), below the starting floor (size less drawdown), above the lock, `account-marks.txt` unreadable, an account ChartBridge does not list |
 
+**The page (1.35.0): Update floors from The Desk.** No new message: the Accounts tab reads every prop account's floor from The
+Desk (`GET /api/chart-floors`), shows them, and on Anthony's one confirm sends the existing `firmMinimum` above for each account
+ChartBridge lists with firm rules and a trailing drawdown, 150 ms apart; ChartBridge checks each as above. A `firmMinimum` not
+refused within 3 seconds is kept in the page's browser, and for that account the page no longer flags NinjaTrader's own room to
+the floor (`roomFloorNt`, which never locks); it stays in the Room's hover.
+
 **Remove a follower row (WORK 2026-10-20).** An off follower row left from the October copier tests kept its account out of every
 group entry (a follower, on or off, is never a group's or an agent's seat).
 

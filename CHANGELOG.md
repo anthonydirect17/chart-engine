@@ -1,5 +1,87 @@
 # Changelog
 
+## chart 1.35.0 (2026-10-21): the League tab, the Bot as a panel, Update floors from The Desk, the trade note
+
+Anthony's decisions of 2026-10-21. **Page only: no ChartBridge change** (it stays 0.6.6; `minChartBridge` stays 0.6.2). Needs The
+Desk of this release (TheDesk branch `desk/release-1035`) for the league view, the floors and the note; with an older Desk each
+says so (the league view and the floors: "The Desk has no ... yet"; a note record is refused by The Desk and the lost line says so).
+
+- **The League tab** (`live/league.js`, `live/league.css`, new page files; Bot-Lab notes/DECISIONS_bot_division.md, "SHADOW
+  LEAGUE: WHERE IT RUNS AND HOW IT SHOWS", and Anthony's ruling of the same day: keep the Agent tab exactly as it is, he pops in
+  to check a running agent, and add the league as a second top-level tab): the top bar's **League** button, right after the Agent
+  tab (`#wsLeagueTab`, `?tab=league`), opens it in place of the grid; the Agent tab, the League tab and the Bot view close each
+  other, one at a time. The button shows once The Desk answers `GET /api/chart-league` (asked at the start and every 5 minutes):
+  with an older Desk, or none reachable, the top bar keeps its room and the ⋯ switch below is not offered. One MNQ chart with each seat's paper trades as hollow marks
+  carrying its letter in its color (H Haiku amber, S Sonnet cyan, O Opus violet): a circle at the fill, a diamond at the exit, a
+  faint dashed stop and dotted target from the fill to the exit; "SHADOW: no orders"; the legend strip; each seat's day (its
+  open paper trade, its virtual 50K Flex account, today's R, its looks, the league's flag for Anthony); the API spend against the
+  caps; the week and month table with agreement and decision time ("not enough data yet" under the league's 20); the decision
+  log. Read from The Desk's new `GET /api/chart-league` every 15 seconds while open (TheDesk docs/API.md "Shadow league"); after
+  the 16:01 close it says "day closed, recording to 17:00". The marks are an overlay canvas drawn after each frame the chart
+  draws (its `drawn` event): the chart's own canvas, look and motion are untouched. Nothing in it sends an order; the league is
+  paper.
+- **The league's trades on any chart:** each NQ or MNQ chart's ⋯ menu has "League trades (faint)", off by default, kept in this
+  browser (`live-league-ghost-v1`); The Desk is read every 30 seconds while any is on.
+- **The Bot tab as a panel** (Anthony: "the bot tab can also move to a panel"). + Add panel offers "Bot", at most one a layout.
+  The panel holds the very button the top bar had (`#wsBotTab`, with its listeners and states) and opens the same Bot view; while
+  any view is open (Bot, Agent, League) the button sits in the top bar where the Bot tab was, so one view can go to the other;
+  closing the panel puts it back in a hidden hold (the Bot desk, its proposals, the copilot keys and the bot strip run as before).
+  A layout with no room for the panel still reaches it: the menu item opens the Bot view itself and says so; with the panel placed
+  already it opens the view. **The Agent tab is unchanged**, in the top bar where it was.
+- **Update floors from The Desk** (Accounts tab, with ChartBridge 0.6.6): every prop account's floor as The Desk has it (its Prop
+  seed from the firm dashboard plus the tracked fills; The Desk's new `GET /api/chart-floors`) beside ChartBridge's, and every one
+  skipped with why (not listed by ChartBridge, no firm rules there, a static drawdown, The Desk's own reasons). Nothing goes until
+  Send; then ChartBridge's existing `firmMinimum` for each (it checks each again), each row saying sent, set or refused.
+  Repeatable.
+- **No NinjaTrader floor flag once the firm minimum is set:** a firm minimum sent from this page and not refused within 3 seconds
+  is kept in this browser (`live-firm-min-v1`); for such an account "NinjaTrader shows X to the floor, ChartBridge Y" (NinjaTrader's
+  trailing figure never locks, so it always differs) is no longer a flag. NinjaTrader's figure is in the Room's hover for every
+  account.
+- **Trade tags: the note** (one line, at most 200 characters, under the chips): Enter or leaving the box after a change records it
+  for the trade shown (`dim` `note`; every edit a new record, the newest is the note, an empty box clears it). Never a chip and
+  never scored (The Desk keeps notes apart). Typing in it fires no hotkey: every hotkey handler of the page ignores keys while a box
+  has the focus (the smoke checks KEYS OFF and that no order message goes).
+- **Trade tags: the lost line** says when the losses happened and why (refused by The Desk, or unreadable in this browser) and goes
+  with its Seen button. The bare count a 1.34.x browser kept (the "10" Anthony saw) becomes one loss with no time, said so.
+- **Screens in Brave** ("Open my screens" put every window on the main monitor). Cause: Brave's Shields, with fingerprinting
+  blocked, report `window.screenX`/`screenY` and `screen.availLeft`/`availTop` as a small random number, the screen as the size
+  of the window and `screen.isExtended` false, and place a `window.open` child relative to those (brave-core pull 13737,
+  kBraveBlockScreenFingerprinting). So every window was saved near 0, 0. The page cannot see through it: the Screens pop-up now says
+  why and lists exactly what to allow (Shields down, or "Allow all fingerprinting", for this page; Window management: Allow;
+  Pop-ups and redirects: Allow; reload and save again), and Save refuses the made-up places. It also says when Window management is
+  blocked or not offered, or the pop-ups were blocked.
+
+**The review of 159cca4, fixed** (the floors' Send waits on Anthony's ruling and is unchanged here).
+- The Bot's red alert (rails red, stand-down, killed, on but not connected) is never hidden: while its button carries it, the
+  button sits in the top bar where the Bot tab was, with or without a Bot panel, and goes back to its panel or the hold once it
+  clears (the workspace follows the button's class as the Bot desk sets it).
+- From the Agent or the League view, with or without a Bot panel, the Bot button is in the top bar: one click to the Bot.
+- The "Layout" word gives way (`bt-has-tab`) only while the Bot button is really in the top bar (1.35.0 before this fix hid it for
+  a Bot tab waiting in its panel or the hold).
+- The league's faint marks draw the League view's day only while that view is open, else their own 30 second read, so they never
+  freeze on what the view read last; closing the view hands its day over and reads at once. Only the latest read schedules the
+  next, so a read still on its way when the view closes never starts a second 30 second poll.
+- Screens: a real Brave window in F11 full screen at 0, 0 on the main monitor looked made up; when window management is granted
+  and the browser lists more than one screen, the place is real.
+- A `firmMinimum` refused after the 3 second wait is matched to its account: the remembered minimum is forgotten (the NinjaTrader
+  flag can come back) and its row says refused. A remembered minimum also keeps the firm rules it was set under (size, drawdown
+  and its type, lock) and is forgotten when they change (another type applied, a reset). A late refusal undoes only the
+  minimum it was sent for, never a newer one sent since.
+- The floors box: one row per account (two from The Desk for one account: the newer seed kept, the other listed with why), and each
+  row shows this page's label for the account, then ChartBridge's name, then The Desk's prop name.
+
+**Tests.** `npm test`: 883 pass, 0 fail (1 skipped: the PowerShell updater tests). New `test/league.test.js`; new tests in `test/trade-tags.test.js`,
+`test/accounts-page.test.js`, `test/screens.test.js`. New smoke `npm run smoke:league` (screenshots `league-1366.png`,
+`league-1600.png`, `league-1920.png`, `league-chart.png`, `league-faint-1366.png`, `league-agent-tab-1366.png`,
+`league-panels-1366.png`, `league-nofolder-1366.png`); `smoke:trade-tags` (the note and the lost line: `trade-tags-note-1366.png`,
+`trade-tags-lost-1366.png`), `smoke:accounts` (the floors and the flag: `accounts-12-floors-desk-1366.png`,
+`accounts-13-floors-sent-1366.png`), `smoke:screens` (Brave: `screens-brave-1366.png`) extended; the bot smoke and agent-smoke open
+the Bot view through `test/tab-buttons.mjs` (its panel, or + Add panel when there is no room); the agent smokes are unchanged but for
+the Bot clicks and the top-bar order check in `agent-smoke.mjs`.
+Every smoke in package.json and the new one were run (49 files): 47 pass. Two fail one check each, and fail the same check on main
+(`bc9bc05`) in this environment, run here for the comparison: `smoke:bot` (waiting for the Library pop-up window) and
+`agent-board-smoke.mjs` (the board's Desk button click), as the 1.34.0 entry says. No NT8 harness run: no ChartBridge change.
+
 ## chart 1.34.1 (2026-10-21): the Trade tags panel keeps clicks made during a trade and on Last trade; the ARMED chip
 
 WORK's test card on 1.34.0 (FROM_WORK_2026-10-21_release.md, step 3.5): a chip clicked while a trade was open (OPEN) or

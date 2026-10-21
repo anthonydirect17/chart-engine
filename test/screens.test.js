@@ -32,3 +32,36 @@ test('onScreen, features, screenNo, url', () => {
   assert.equal(SC.screenNo({ x: 9000, y: 0, w: 1920, h: 1040 }, three), 0);
   assert.equal(SC.url('My Layout'), '?layout=My%20Layout');
 });
+
+/* 1.35.0 (Anthony 2026-10-21: all windows open on the main monitor in Brave) */
+test('1.35.0: Brave Shields\' made-up window places are seen, and the page says exactly what to allow', () => {
+  // Brave with fingerprinting blocked: screenX/Y and availLeft/Top 0 to 8, the screen the size of the window (brave-core 13737)
+  const brave = { brave: true, screenX: 5, screenY: 3, outerW: 1924, outerH: 1043, innerW: 1920, innerH: 1040, screenW: 1926, screenH: 1044, availLeft: 2, availTop: 7, hasDetails: true, permission: 'granted' };
+  assert.equal(SC.spoofed(brave), true);
+  assert.equal(SC.spoofed(Object.assign({}, brave, { brave: false })), false, 'only Brave: a headless or full-screen window looks alike and is real');
+  /* review 4: Brave in F11 full screen at 0, 0 on the main monitor looks alike; window management granted and three screens listed: real */
+  assert.equal(SC.spoofed(Object.assign({}, brave, { screens: 3 })), false, 'more than one real screen listed: not made up');
+  assert.equal(SC.spoofed(Object.assign({}, brave, { screens: 1 })), true, 'one screen listed: still made up');
+  assert.deepEqual(SC.check(Object.assign({}, brave, { screens: 3 })).codes, [], 'F11 on a three-screen PC with window management granted: nothing to allow');
+  const r = SC.check(brave);
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.codes, ['spoofed']);
+  assert.match(r.lines[0], /^Brave's Shields are hiding where this window is \(it reports 5, 3 and a screen the size of the window\)/);
+  assert.match(r.lines.join(' '), /Shields icon \(the lion\).*turn Shields down for this site.*"Allow all fingerprinting"/);
+  assert.match(r.lines.join(' '), /Window management: Allow/);
+  assert.match(r.lines.join(' '), /Pop-ups and redirects: Allow/);
+  assert.match(r.lines.join(' '), /Save these screens again/);
+  // a real window on the second of three screens, toolbars and all: not made up
+  const real = { brave: true, screenX: 1920, screenY: 0, outerW: 1920, outerH: 1040, innerW: 1920, innerH: 951, screenW: 1920, screenH: 1080, availLeft: 1920, availTop: 0, hasDetails: true, permission: 'granted' };
+  assert.equal(SC.spoofed(real), false);
+  assert.deepEqual(SC.check(real), { ok: true, codes: [], lines: [] });
+  // on the main screen at its top left, but with a toolbar: not made up either
+  assert.equal(SC.spoofed(Object.assign({}, real, { screenX: 0, availLeft: 0 })), false);
+  assert.deepEqual(SC.check(Object.assign({}, real, { permission: 'denied' })).codes, ['denied']);
+  assert.deepEqual(SC.check(Object.assign({}, real, { hasDetails: false })).codes, ['noDetails']);
+  const ask = SC.check(Object.assign({}, real, { permission: 'prompt' }));
+  assert.deepEqual([ask.ok, ask.codes], [true, ['ask']]);
+  assert.deepEqual(SC.check(Object.assign({}, real, { popupsBlocked: true })).codes, ['popups']);
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
+  assert.match(src, /if \(chk\.codes\.includes\('spoofed'\)\) \{ scMsg = \{ text: 'Not saved: the browser is hiding where the windows are/, 'made-up places are never saved');
+});

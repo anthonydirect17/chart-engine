@@ -604,11 +604,17 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 
 /* 1.34.0: Screens (Save these screens, Open my screens) */
 .ws-btn.ws-scr-due { border-color: var(--ws-tint-line); color: var(--ws-soft); }
-.ws-scr { width: 340px; max-width: calc(100vw - 16px); padding: 12px; display: grid; gap: 10px; }
+.ws-scr { width: 380px; max-width: calc(100vw - 16px); padding: 12px; display: grid; gap: 10px; }
 .ws-scr h2 { margin: 0; font: 600 13px var(--ws-sans); color: var(--ws-text); }
 .ws-scr ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .ws-scr li { display: flex; gap: 8px; font: 12px var(--ws-mono); color: var(--ws-text2); }
 .ws-scr li b { color: var(--ws-text); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 1.35.0: why the windows all open on the main screen, and exactly what to allow (Screens.check) */
+.ws-scr-check { font-size: 11px; color: var(--ws-text2); border: 1px solid var(--ws-line2); border-radius: 6px; padding: 6px 8px; max-height: 260px; overflow: auto; }
+.ws-scr-check.warn { border-color: var(--ws-warn); }
+.ws-scr-check p { margin: 0 0 4px; color: var(--ws-text); }
+.ws-scr-check ol { margin: 0; padding-left: 16px; display: grid; gap: 4px; }
+.ws-scr-check li { display: list-item; font: 11px/1.4 var(--ws-sans); color: var(--ws-text2); }
 .ws-scr li span { margin-left: auto; white-space: nowrap; }
 .ws-scr li .on { color: var(--ws-soft); }
 .ws-scr .ws-scr-btns { display: flex; gap: 8px; justify-content: flex-end; }
@@ -642,3 +648,13 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .tt-ph:empty { display: none; }
 .tt-foot { margin: 2px 0 0; font-size: 11px; color: var(--ws-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tt-foot.warn { color: var(--ws-warn); }
+/* 1.35.0: the note (one line, kept with the trade) and the lost line with its Seen button */
+.tt-noterow { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tt-noterow .tt-lbl { padding-top: 0; }
+.tt-note { flex: 1 1 auto; min-width: 0; height: 22px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--ws-line2); background: var(--ws-field); color: var(--ws-text); font: 400 11px var(--ws-sans); }
+.tt-note:focus { outline: none; border-color: var(--ws-accent); }
+.tt-note:disabled { opacity: .45; }
+.tt-lost { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 11px; color: var(--ws-warn); min-width: 0; }
+.tt-lost[hidden] { display: none; }
+.tt-lost > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-seen { flex: none; height: 20px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--ws-line2); background: var(--ws-field); color: var(--ws-text2); font: 500 11px var(--ws-sans); cursor: pointer; }
