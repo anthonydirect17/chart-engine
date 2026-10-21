@@ -76,7 +76,7 @@ try {
   await until(() => p.$eval(`${TAGS} [data-t="which"]`, e => /^Open trade · LONG 2 MNQ since \d\d:\d\d:\d\d$/.test(e.textContent)), 'open: LONG 2', 8000);
   check(await p.$eval(chip('grade', 'A+'), b => b.getAttribute('aria-pressed') === 'true' && b.querySelector('.tt-ph').textContent === 'pre') && await p.$eval(`${TAGS} .tt-switch`, e => e.hidden),
     'open: the chips set before the fill are this trade\'s (pre); the Next/Last switch hides');
-  check(await p.$eval(`${TAGS} .tt-long`, e => getComputedStyle(e).color === 'rgb(61, 220, 151)'), 'the side in green (trade side only)');
+  check(await until(() => p.$eval(`${TAGS} .tt-long`, e => getComputedStyle(e).color === 'rgb(61, 220, 151)'), 'the side\'s color', 5000), 'the side in green (trade side only)');
   await p.click(chip('trigger', 'absorption')); await p.click(chip('context', 'with_trend'));
   await until(() => desk.tags.length === 4, 'the open records');
   const opened = desk.tags.slice(2);

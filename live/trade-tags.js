@@ -256,7 +256,8 @@ function mount(el, env) {
     if (!first) { which.textContent = 'No account on the order ticket'; }
     else if (open) {
       const qty = env.position(first.a, v.r), t = first.tr.openTrade;
-      which.innerHTML = 'Open trade · <b class="' + (qty > 0 ? 'tt-long' : 'tt-short') + '">' + (qty > 0 ? 'LONG ' : 'SHORT ') + Math.abs(qty) + '</b> ' + esc(v.r) + (t.open ? ' since ' + hms(t.open) : '');
+      const html = 'Open trade · <b class="' + (qty > 0 ? 'tt-long' : 'tt-short') + '">' + (qty > 0 ? 'LONG ' : 'SHORT ') + Math.abs(qty) + '</b> ' + esc(v.r) + (t.open ? ' since ' + hms(t.open) : '');
+      if (which.innerHTML !== html) which.innerHTML = html;   // written only when it changes
     } else if (target === 'last') which.textContent = first.t.trade && first.t.trade.close ? 'Last trade · closed ' + hms(first.t.trade.close) + ' · ' + v.r : 'Last trade · none yet';
     else which.textContent = 'Next trade · ' + v.r + ' · flat';
     which.title = v.accts.length ? env.label() + (v.accts.length > 1 ? ' (' + v.accts.join(', ') + ')' : '') : '';

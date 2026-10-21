@@ -33,6 +33,16 @@ minimum, the firm's rules on an account in no group, Remove a follower row) is n
   rewritten (0.6.3 MED 3's "never the .bak on its own" now holds for those only). The page plays the alert sound with the groups.txt
   banner, never a dialog.
 
+**Tests for the 2026-10-21 additions.** `npm test` 870 pass, 0 fail (1 skipped: the PowerShell updater tests). The Mono harness
+(`npm run check:orders`): 3402 checks, 0 failed (new: `StopsHarness`, 18 checks through ChartBridge's own order event: the stop at
+send, a drag, the end, nothing for an update that changes nothing, the switch, the queue, The Desk down, up and refusing one event;
+`GroupsHarness.LastGoodCopy`, 14 checks: groups.txt unreadable or missing with a good .bak, the machines not blocked and held by the
+copy's one direction, his group entry and every change still refused, the alarm at sign-in). New smoke `npm run smoke:trade-tags`
+(screenshots `trade-tags-flat-1366.png`, `trade-tags-open-1366.png`, `trade-tags-last-1366.png`, `trade-tags-panel.png`), 3 runs of
+3. Every other smoke in package.json passes here but two that fail the same way at 1ef3e3b, before this work, in this environment:
+`smoke:bot` (waiting for the Library pop-up window, 30 s) and the board part of `smoke:agent` (`agent-board-smoke.mjs`, the Desk
+button's click, 30 s). `smoke:agent`'s 390 px error-line check failed once in a full run and passed 2 of 2 on its own.
+
 **Anthony's decisions of 2026-10-20: "Only absolutely critical things should stop an account from trading."**
 
 - **His own entries: one hard check.** An entry (an order that opens or adds; the part past flat of one that turns) that would take
