@@ -2716,7 +2716,19 @@ function scRoster(ms) {
   });
 }
 const scSaved = () => { try { return SC.clean(JSON.parse(store.getItem(SC.KEY))); } catch (e) { return SC.clean(null); } };
-let scScreens = null, scMsg = { text: '', warn: false };
+let scScreens = null, scMsg = { text: '', warn: false }, scPerm = null, scBlocked = false;
+/* 1.35.0: what the browser says about this window and its screens (Brave's Shields can make them up: Screens.check) */
+async function scInfo() {
+  if (navigator.permissions && typeof window.getScreenDetails === 'function') {
+    try { scPerm = (await navigator.permissions.query({ name: 'window-management' })).state; } catch (e) { scPerm = null; }
+  }
+  const sc = window.screen || {};
+  return { brave: !!navigator.brave, screenX: window.screenX, screenY: window.screenY, outerW: window.outerWidth, outerH: window.outerHeight,
+    innerW: window.innerWidth, innerH: window.innerHeight, screenW: sc.width, screenH: sc.height, availLeft: sc.availLeft || 0, availTop: sc.availTop || 0,
+    hasDetails: typeof window.getScreenDetails === 'function', permission: scPerm, popupsBlocked: scBlocked };
+}
+const scCheckHtml = r => (r.lines.length ? '<div class="ws-scr-check' + (r.ok ? '' : ' warn') + '" role="note">' + (r.codes.includes('spoofed') || r.codes.includes('denied') || r.codes.includes('noDetails') || r.codes.includes('popups')
+  ? '<p><b>Why the windows all open on the main screen, and what to allow:</b></p>' : '') + '<ol>' + r.lines.map(l => '<li>' + esc(l) + '</li>').join('') + '</ol></div>' : '');
 /* the screens as the browser tells them (asked once: the browser's "manage windows on all your displays"), else null */
 async function scDetails(ask) {
   if (typeof window.getScreenDetails !== 'function') return null;
@@ -2732,7 +2744,8 @@ async function renderScreens() {
   await scDetails(false);
   const where = w => { const n = scScreens ? SC.screenNo(w, scScreens) : 0; return n ? 'screen ' + n : scScreens ? 'its screen is not connected' : 'at ' + w.x + ', ' + w.y; };
   const missing = set.windows.filter(w => !open.has(w.layout));
-  el.innerHTML = '<h2>Screens</h2>' +
+  const chk = SC.check(await scInfo());
+  el.innerHTML = '<h2>Screens</h2>' + scCheckHtml(chk) +
     (set.windows.length ? '<ul>' + set.windows.map(w => '<li><b>' + esc(w.layout) + '</b><span>' + esc(where(w)) + ' · ' + w.w + ' x ' + w.h + '</span><span class="' + (open.has(w.layout) ? 'on' : '') + '">' + (open.has(w.layout) ? 'open' : 'not open') + '</span></li>').join('') + '</ul>'
       : '<p class="ws-scr-msg">No screens saved yet. Open your windows, put each where you want it, then Save these screens.</p>') +
     (scMsg.text ? '<p class="ws-scr-msg' + (scMsg.warn ? ' warn' : '') + '" role="status">' + esc(scMsg.text) + '</p>' : '') +
@@ -2748,7 +2761,13 @@ function scDue(missing) {
   if (b.title !== t) b.title = t;
 }
 async function scSave() {
+  /* 1.35.0: never save places the browser made up (Brave's Shields): they would all be the main screen */
+  const chk = SC.check(await scInfo());
+  if (chk.codes.includes('spoofed')) { scMsg = { text: 'Not saved: the browser is hiding where the windows are (see above).', warn: true }; await renderScreens(); return; }
   const list = await scRoster(), at = Date.now();
+  /* another window may still have Shields up for this page: it answers from near 0, 0 like this one did */
+  const near0 = list.filter(x => Math.abs(x.x) <= 8 && Math.abs(x.y) <= 8);
+  if (navigator.brave && list.length > 1 && near0.length > 1) { scMsg = { text: 'Not saved: ' + near0.length + ' windows say they are at the top left of the main screen; Brave\'s Shields may still be up for this page in them. Shields down in each, reload, then save again.', warn: true }; await renderScreens(); return; }
   store.setItem(SC.KEY, JSON.stringify({ at, windows: list.map(x => ({ layout: x.layout, x: x.x, y: x.y, w: x.w, h: x.h })) }));
   const set = scSaved();
   scMsg = { text: 'Saved ' + set.windows.length + ' window' + (set.windows.length === 1 ? '' : 's') + ': ' + set.windows.map(w => w.layout).join(', ') + '.', warn: false };
@@ -2769,6 +2788,7 @@ async function scOpen() {
     if (!win) blocked.push(w.layout);
   }
   const opened = missing.length - blocked.length;
+  scBlocked = blocked.length > 0;
   scMsg = { text: (opened ? 'Opened ' + missing.filter(w => !blocked.includes(w.layout)).map(w => w.layout).join(', ') + '.' : '') +
     (moved.length ? ' ' + moved.join(', ') + ': its screen is not connected now, so on this one.' : '') +
     (blocked.length ? ' The browser blocked ' + blocked.join(', ') + ': allow pop-ups for this page (the icon at the end of the address bar), then click Open my screens again.' : '') +

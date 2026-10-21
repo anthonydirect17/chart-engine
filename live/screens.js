@@ -15,6 +15,19 @@
  *   features(p)                -> the window.open features: "popup,left=..,top=..,width=..,height=.."
  *   screenNo(win, screens)     -> 1, 2, 3 ... (the screens from left to right), or 0 when none holds it
  *   url(layout)                -> "?layout=<name>"
+ *   check(info)                -> { ok, codes: [...], lines: [...] }: what stops the windows going to their screens, and exactly
+ *                                 what Anthony must allow (1.35.0). info: { brave, screenX, screenY, outerW, outerH, innerW,
+ *                                 innerH, screenW, screenH, availLeft, availTop, hasDetails, permission, popupsBlocked }
+ *   spoofed(info)              -> true when Brave reports this window's place as made up (its Shields' fingerprinting
+ *                                 protection: screenX/Y and availLeft/Top a few pixels from 0, the screen the size of the window)
+ *
+ * 1.35.0 (Anthony 2026-10-21, "all windows open on the main monitor" in Brave): Brave's Shields, with fingerprinting blocked
+ * (its default on many sites), report window.screenX and screenY as a small random number (0 to 8), screen.availLeft and
+ * availTop the same, the screen as the size of the window, screen.isExtended false, and place a window.open child relative to
+ * those made-up numbers (brave-core pull 13737, the kBraveBlockScreenFingerprinting work). So Save these screens kept every
+ * window at about 0, 0 (the main screen) and Open my screens put them all there. The page cannot see through it: it says so
+ * and lists what to allow (Shields down, or fingerprinting allowed, for this page; Window management; Pop-ups), and refuses
+ * to save made-up places.
  *
  * No DOM; it also loads in Node for test/screens.test.js.
  */
@@ -58,5 +71,41 @@
     return i + 1;
   }
   const url = layout => '?layout=' + encodeURIComponent(layout);
-  return { KEY, CHANNEL, clean, place, onScreen, features, screenNo, url };
+
+  const near = (v, most) => typeof v === 'number' && isFinite(v) && v >= 0 && v <= most;
+  function spoofed(i) {
+    if (!i || i.brave !== true) return false;   // only Brave does this (a headless or full-screen window looks alike, and is real)
+    const R = 8;   // Brave's made-up offset is 0 to 8 px
+    return near(i.screenX, R) && near(i.screenY, R) && near(i.availLeft, R) && near(i.availTop, R) &&
+      near(i.screenW - i.innerW, R) && near(i.screenH - i.innerH, R) && near(i.outerH - i.innerH, R) && i.innerW > 0;
+  }
+  const BRAVE_STEPS = [
+    'In Brave, on this page: click the Shields icon (the lion) at the right end of the address bar, then either turn Shields down for this site, or open Advanced controls and set Fingerprinting to "Allow all fingerprinting".',
+    'Allow window management: click the icon at the left end of the address bar, Site settings, then Window management: Allow (brave://settings/content/windowManagement lists it).',
+    'Allow pop-ups: the same Site settings, Pop-ups and redirects: Allow.',
+    'Reload every trading window, put each on its screen, then Save these screens again (the places saved while Shields hid them are all near the main screen).',
+  ];
+  function check(i) {
+    const codes = [], lines = [];
+    const info = i || {};
+    if (spoofed(info)) {
+      codes.push('spoofed');
+      lines.push('Brave\'s Shields are hiding where this window is (it reports ' + info.screenX + ', ' + info.screenY +
+        ' and a screen the size of the window), so windows can only be saved and opened on the main screen.');
+      lines.push(...BRAVE_STEPS);
+    }
+    if (!info.hasDetails) {
+      codes.push('noDetails');
+      lines.push('This browser does not offer window placement on other screens (getScreenDetails): use Chrome, Edge or Brave 100 or newer.');
+    } else if (info.permission === 'denied') {
+      codes.push('denied');
+      lines.push('Window management is blocked for this page: click the icon at the left end of the address bar, Site settings, Window management: Allow, then reload.');
+    } else if (info.permission === 'prompt' && !codes.includes('spoofed')) {
+      codes.push('ask');
+      lines.push('The first Open my screens asks to manage windows on all your displays: Allow it.');
+    }
+    if (info.popupsBlocked) { codes.push('popups'); lines.push('The browser blocked the extra windows: allow pop-ups for this page (Site settings, Pop-ups and redirects: Allow), then click Open my screens again.'); }
+    return { ok: !codes.some(c => c !== 'ask'), codes, lines };
+  }
+  return { KEY, CHANNEL, clean, place, onScreen, features, screenNo, url, spoofed, check, BRAVE_STEPS };
 }));

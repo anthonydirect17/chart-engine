@@ -604,11 +604,17 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 
 /* 1.34.0: Screens (Save these screens, Open my screens) */
 .ws-btn.ws-scr-due { border-color: var(--ws-tint-line); color: var(--ws-soft); }
-.ws-scr { width: 340px; max-width: calc(100vw - 16px); padding: 12px; display: grid; gap: 10px; }
+.ws-scr { width: 380px; max-width: calc(100vw - 16px); padding: 12px; display: grid; gap: 10px; }
 .ws-scr h2 { margin: 0; font: 600 13px var(--ws-sans); color: var(--ws-text); }
 .ws-scr ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .ws-scr li { display: flex; gap: 8px; font: 12px var(--ws-mono); color: var(--ws-text2); }
 .ws-scr li b { color: var(--ws-text); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 1.35.0: why the windows all open on the main screen, and exactly what to allow (Screens.check) */
+.ws-scr-check { font-size: 11px; color: var(--ws-text2); border: 1px solid var(--ws-line2); border-radius: 6px; padding: 6px 8px; max-height: 260px; overflow: auto; }
+.ws-scr-check.warn { border-color: var(--ws-warn); }
+.ws-scr-check p { margin: 0 0 4px; color: var(--ws-text); }
+.ws-scr-check ol { margin: 0; padding-left: 16px; display: grid; gap: 4px; }
+.ws-scr-check li { display: list-item; font: 11px/1.4 var(--ws-sans); color: var(--ws-text2); }
 .ws-scr li span { margin-left: auto; white-space: nowrap; }
 .ws-scr li .on { color: var(--ws-soft); }
 .ws-scr .ws-scr-btns { display: flex; gap: 8px; justify-content: flex-end; }
