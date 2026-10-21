@@ -1,7 +1,8 @@
 /*
  * The league (chart 1.35.0, Anthony 2026-10-21, Bot-Lab notes/DECISIONS_bot_division.md "SHADOW LEAGUE: WHERE IT RUNS AND HOW IT
- * SHOWS"): the top bar's League tab, where the Agent tab's Shadow part became the league view, and the league's trades, faint,
- * on any chart (a switch in each chart's ⋯ menu, off by default).
+ * SHOWS", and his ruling of the same day: keep the Agent tab as it is and add the league as a second top-level tab): the top
+ * bar's League tab, beside the Agent tab, and the league's trades, faint, on any chart (a switch in each chart's ⋯ menu, off by
+ * default).
  *
  * The shadow league runs on the WORK PC as its own process: three seats identical but for the judge model, H (Haiku, amber),
  * S (Sonnet, cyan), O (Opus, violet), each trading on paper. Nothing here sends an order and nothing here can: the page only

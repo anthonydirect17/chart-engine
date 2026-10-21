@@ -45,7 +45,7 @@ body:not(.lg-on) .lg-view.lg-in-ws { display: none !important; }
 .lg-row.k-refused .lg-text, .lg-row.k-failed .lg-text { color: var(--ws-warn); }
 @media (max-width: 1100px) { .lg-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(320px, 1fr) auto; } }
 
-/* 1.35.0: the Agent desk and Bot panels: the very button the top bar had, and one line */
+/* 1.35.0: the Bot panel: the very button the top bar had, and one line */
 .ws-tabpanel { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 10px; min-width: 0; }
 .ws-tp-slot .ws-btn.ws-tp-btn { min-width: 120px; }
 .ws-tp-help { margin: 0; font-size: 11px; color: var(--ws-muted); }

@@ -22,7 +22,6 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { tabBtn, toggleTab } from './tab-buttons.mjs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 import { startFakeHelper } from './fake-helper.mjs';
 
@@ -79,7 +78,7 @@ try {
 
   console.log('the tab, off: the picker, the spend, On offered');
   await until(async () => (await page.evaluate(() => window.workspace.agent().agents.length)) === 2, 'ChartBridge told of demo and demotwo');
-  await toggleTab(page, 'agentdesk');
+  await page.click('#wsAgentTab');
   await until(async () => (await page.evaluate(() => window.workspace.agent().shown)), 'the tab opens');
   await page.selectOption('#agView [data-k="pick"]', 'demo');
   await until(async () => (await page.evaluate(() => window.workspace.agent().chosen)) === 'demo', 'demo shown');

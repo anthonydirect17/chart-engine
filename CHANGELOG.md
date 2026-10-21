@@ -1,14 +1,16 @@
 # Changelog
 
-## chart 1.35.0 (2026-10-21): the League tab, the agent desk and the Bot as panels, Update floors from The Desk, the trade note
+## chart 1.35.0 (2026-10-21): the League tab, the Bot as a panel, Update floors from The Desk, the trade note
 
 Anthony's decisions of 2026-10-21. **Page only: no ChartBridge change** (it stays 0.6.6; `minChartBridge` stays 0.6.2). Needs The
 Desk of this release (TheDesk branch `desk/release-1035`) for the league view, the floors and the note; with an older Desk each
 says so (the league view and the floors: "The Desk has no ... yet"; a note record is refused by The Desk and the lost line says so).
 
-- **The League tab** (`live/league.js`, `live/league.css`, new page files). The Agent tab's Shadow part became the league view
-  (Bot-Lab notes/DECISIONS_bot_division.md, "SHADOW LEAGUE: WHERE IT RUNS AND HOW IT SHOWS"): the top bar's **League** button
-  (`#wsLeagueTab`, `?tab=league`) opens it in place of the grid. One MNQ chart with each seat's paper trades as hollow marks
+- **The League tab** (`live/league.js`, `live/league.css`, new page files; Bot-Lab notes/DECISIONS_bot_division.md, "SHADOW
+  LEAGUE: WHERE IT RUNS AND HOW IT SHOWS", and Anthony's ruling of the same day: keep the Agent tab exactly as it is, he pops in
+  to check a running agent, and add the league as a second top-level tab): the top bar's **League** button, right after the Agent
+  tab (`#wsLeagueTab`, `?tab=league`), opens it in place of the grid; the Agent tab, the League tab and the Bot view close each
+  other, one at a time. One MNQ chart with each seat's paper trades as hollow marks
   carrying its letter in its color (H Haiku amber, S Sonnet cyan, O Opus violet): a circle at the fill, a diamond at the exit, a
   faint dashed stop and dotted target from the fill to the exit; "SHADOW: no orders"; the legend strip; each seat's day (its
   open paper trade, its virtual 50K Flex account, today's R, its looks, the league's flag for Anthony); the API spend against the
@@ -19,13 +21,12 @@ says so (the league view and the floors: "The Desk has no ... yet"; a note recor
   paper.
 - **The league's trades on any chart:** each NQ or MNQ chart's ⋯ menu has "League trades (faint)", off by default, kept in this
   browser (`live-league-ghost-v1`); The Desk is read every 30 seconds while any is on.
-- **The agent desk and the Bot tab as panels** (Anthony: the Autopilot "leaves the Agent tab for its own add/remove panel ...
-  join an agent's trade"; "the bot tab can also move to a panel"). + Add panel offers "Agent desk (join an agent's trade)" and
-  "Bot", at most one of each a layout. Each panel holds the very button the top bar had (`#wsAgentTab`, `#wsBotTab`, with their
-  listeners, states and parity hooks) and opens the same view; while the view is open the button sits in the top bar (the way
-  back); closing the panel puts the button back in a hidden hold (the views, the proposals' corner line, the copilot keys and the
-  bot strip run as before). A layout with no room for the panel still reaches it: the menu item opens the view itself and says
-  so; with the panel placed already it opens the view.
+- **The Bot tab as a panel** (Anthony: "the bot tab can also move to a panel"). + Add panel offers "Bot", at most one a layout.
+  The panel holds the very button the top bar had (`#wsBotTab`, with its listeners and states) and opens the same Bot view; while
+  any view is open (Bot, Agent, League) the button sits in the top bar where the Bot tab was, so one view can go to the other;
+  closing the panel puts it back in a hidden hold (the Bot desk, its proposals, the copilot keys and the bot strip run as before).
+  A layout with no room for the panel still reaches it: the menu item opens the Bot view itself and says so; with the panel placed
+  already it opens the view. **The Agent tab is unchanged**, in the top bar where it was.
 - **Update floors from The Desk** (Accounts tab, with ChartBridge 0.6.6): every prop account's floor as The Desk has it (its Prop
   seed from the firm dashboard plus the tracked fills; The Desk's new `GET /api/chart-floors`) beside ChartBridge's, and every one
   skipped with why (not listed by ChartBridge, no firm rules there, a static drawdown, The Desk's own reasons). Nothing goes until
@@ -51,11 +52,12 @@ says so (the league view and the floors: "The Desk has no ... yet"; a note recor
 
 **Tests.** `npm test`: TESTS_PLACEHOLDER. New `test/league.test.js`; new tests in `test/trade-tags.test.js`,
 `test/accounts-page.test.js`, `test/screens.test.js`. New smoke `npm run smoke:league` (screenshots `league-1366.png`,
-`league-1600.png`, `league-1920.png`, `league-chart.png`, `league-faint-1366.png`, `league-agentdesk-open-1366.png`,
+`league-1600.png`, `league-1920.png`, `league-chart.png`, `league-faint-1366.png`, `league-agent-tab-1366.png`,
 `league-panels-1366.png`, `league-nofolder-1366.png`); `smoke:trade-tags` (the note and the lost line: `trade-tags-note-1366.png`,
 `trade-tags-lost-1366.png`), `smoke:accounts` (the floors and the flag: `accounts-12-floors-desk-1366.png`,
-`accounts-13-floors-sent-1366.png`), `smoke:screens` (Brave: `screens-brave-1366.png`) extended; the agent and bot smokes open the
-desks through `test/tab-buttons.mjs` (the panel, or + Add panel when there is no room). SMOKES_PLACEHOLDER
+`accounts-13-floors-sent-1366.png`), `smoke:screens` (Brave: `screens-brave-1366.png`) extended; the bot smoke and agent-smoke open
+the Bot view through `test/tab-buttons.mjs` (its panel, or + Add panel when there is no room); the agent smokes are unchanged but for
+the Bot clicks and the top-bar order check in `agent-smoke.mjs`. SMOKES_PLACEHOLDER
 
 ## chart 1.34.1 (2026-10-21): the Trade tags panel keeps clicks made during a trade and on Last trade; the ARMED chip
 

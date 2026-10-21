@@ -3,12 +3,13 @@
 // serving a SAMPLE league day (made up here: three seats, made-up paper trades on the sample bars, made-up decisions; no real
 // league, no model name, no account), at 1366 x 768, 1600 x 900 and 1920 x 1080:
 //   npm run smoke:league        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
-// Checks: the top bar has League and no Bot or Agent button; + Add panel offers "Agent desk (join an agent's trade)" and "Bot";
+// Checks: the top bar keeps the Agent tab as it was, League after it, and no Bot button; + Add panel offers "Bot";
 // the League tab hides the grid and shows SHADOW: no orders, the legend H Haiku, S Sonnet, O Opus, the seats' day, the week and
 // month table ("not enough data yet" under 20), the decision log, the spend against the caps and the day closed note; its chart
 // carries the hollow marks (pixels drawn on the overlay, never on the chart's canvas); a chart's ⋯ switch shows them faintly,
-// off by default, kept in this browser; the Agent desk panel holds the very #wsAgentTab button and opens the agent desk as
-// before, and goes back to the hold when the panel is closed; the Bot panel the same for #wsBotTab; nothing sends an order.
+// off by default, kept in this browser; the Agent tab and the League tab close each other; the Bot panel holds the very #wsBotTab
+// button and opens the Bot view as before, it stays in reach in the top bar while a view is open, and goes back to the hold when
+// the panel is closed; nothing sends an order.
 // Screenshots test/out/league-*.png.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -76,13 +77,13 @@ try {
   const bars = await until(() => p.evaluate(() => { const c = window.workspace.chart('c1'); const b = c && c.bars(); return b && b.length > 60 ? b.map(x => ({ t: x.t, c: x.c })) : null; }), 'the MNQ chart\'s bars', 20000);
   desk.league = sampleDay(bars);
 
-  /* the top bar: League; the Bot and Agent buttons wait in the hold */
+  /* the top bar: Agent (as it was), then League; the Bot button waits in the hold for its panel */
   check(await p.isVisible('#wsLeagueTab') && (await p.textContent('#wsLeagueTab')) === 'League', 'the top bar has the League tab');
-  check(!(await p.isVisible('#wsBotTab')) && !(await p.isVisible('#wsAgentTab')) && await p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsBotTab')) && h.contains(document.getElementById('wsAgentTab'))),
-    'no Bot or Agent button in the top bar: they wait in the hidden hold');
+  check(await p.evaluate(() => document.getElementById('wsAgentTab').nextElementSibling === document.getElementById('wsLeagueTab') && !!document.getElementById('wsAgentTab').closest('.ws-top')), 'the Agent tab stays in the top bar, League right after it');
+  check(!(await p.isVisible('#wsBotTab')) && await p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsBotTab'))), 'no Bot button in the top bar: it waits in the hidden hold');
   await p.click('#wsAdd');
   const menu = await p.$$eval('#wsAddMenu [data-add]', bs => bs.map(b => b.textContent));
-  check(menu.includes('Agent desk (join an agent\'s trade)') && menu.includes('Bot'), '+ Add panel offers the Agent desk and the Bot: ' + menu.join(', '));
+  check(menu.includes('Bot') && !menu.some(t => /Agent/.test(t)), '+ Add panel offers the Bot (and no agent panel): ' + menu.join(', '));
   await p.click('#wsAdd');
 
   /* the League tab */
@@ -133,29 +134,18 @@ try {
   await p.click('#wsMore [data-do="league"]');
   await until(async () => !(await p.$('.ws-panel[data-id="c1"] .lg-overlay')), 'off again: the marks go');
 
-  /* the Agent desk panel: the very #wsAgentTab button, the agent desk as before */
-  await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="agentdesk"]');
-  await until(() => p.$eval('.ws-panel.agentdesk', e => e.contains(document.getElementById('wsAgentTab'))), 'the Agent desk panel holds the Agent button');
-  await until(() => p.isVisible('#wsAgentTab'), 'the button shows (the agents came)', 15000);
-  check(await p.$eval('.ws-panel.agentdesk .ws-name', e => e.textContent === 'Agent desk'), 'the panel is named Agent desk');
-  check(await p.$eval('#wsAgentTab', b => /^W01 W02/.test(b.dataset.parity || '')), 'its parity hooks kept');
+  /* the Agent tab stays in the top bar, as it was (Anthony 2026-10-21): the League tab closes it and it closes the League tab */
+  await until(() => p.isVisible('#wsAgentTab'), 'the Agent tab (the agents came)', 15000);
   await p.click('#wsAgentTab');
-  await until(() => p.evaluate(() => window.workspace.agent().shown && document.body.classList.contains('ag-on')), 'the agent desk opens as before');
-  check(await p.$eval('#wsTabSlot', s => s.contains(document.getElementById('wsAgentTab'))) && await p.isVisible('#wsAgentTab'), 'while it is open its button is in the top bar (the way back)');
+  await until(() => p.evaluate(() => window.workspace.agent().shown && document.body.classList.contains('ag-on')), 'the Agent tab opens as before');
   check(new URL(p.url()).searchParams.get('tab') === 'agent', '?tab=agent as before');
-  await p.screenshot({ path: path.join(out, 'league-agentdesk-open-1366.png') });
   await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => !window.workspace.agent().shown && document.body.classList.contains('lg-on')), 'one view at a time: the League tab closes the agent desk');
-  await p.click('#wsLeagueTab');
-  await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="agentdesk"]');
-  await until(() => p.evaluate(() => window.workspace.agent().shown), 'with its panel placed, + Add panel opens the agent desk');
-  check((await p.evaluate(() => window.workspace.panels().filter(x => x.type === 'agentdesk').length)) === 1, 'one Agent desk a layout: the menu opens it instead of a second panel');
+  await until(() => p.evaluate(() => !window.workspace.agent().shown && document.body.classList.contains('lg-on')), 'one view at a time: the League tab closes the Agent tab');
+  await p.click('#wsAgentTab');
+  await until(() => p.evaluate(() => window.workspace.agent().shown && !document.body.classList.contains('lg-on')), 'and the Agent tab closes the League tab');
+  await p.screenshot({ path: path.join(out, 'league-agent-tab-1366.png') });
   await p.click('#wsAgentTab');
   await until(() => p.evaluate(() => !window.workspace.agent().shown), 'closed');
-  await p.screenshot({ path: path.join(out, 'league-panels-1366.png') });
-  await p.click('.ws-panel.agentdesk [data-act="close"]');
-  await until(() => p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsAgentTab'))), 'closed: the button back in the hold');
-  check(true, 'removing the panel removes the entry point (the button waits in the hold)');
 
   /* the Bot panel */
   await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="bot"]');
@@ -167,6 +157,19 @@ try {
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on') && document.querySelector('.ws-panel.bot').contains(document.getElementById('wsBotTab'))), 'its button in the top bar closes it, and goes back to its panel');
   check(true, 'the Bot button in the top bar goes back to the layout, then sits in its panel again');
+  await p.click('#wsAdd');
+  check(await p.$eval('#wsAddMenu [data-add="bot"]', b => /a click opens it/.test(b.title)), 'one Bot panel a layout: the menu item then opens the Bot view');
+  await p.click('#wsAddMenu [data-add="bot"]');
+  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'with its panel placed, + Add panel opens the Bot view');
+  check((await p.evaluate(() => window.workspace.panels().filter(x => x.type === 'bot').length)) === 1, 'still one Bot panel');
+  await p.click('#wsLeagueTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('lg-on') && document.getElementById('wsTabSlot').contains(document.getElementById('wsBotTab'))), 'while the League view is open the Bot button stays in the top bar');
+  check(await p.isVisible('#wsBotTab') && await p.isVisible('#wsAgentTab'), 'from the League view: Bot and Agent both in reach in the top bar');
+  await p.screenshot({ path: path.join(out, 'league-panels-1366.png') });
+  await p.click('#wsLeagueTab');
+  await p.click('.ws-panel.bot [data-act="close"]');
+  await until(() => p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsBotTab'))), 'closed: the Bot button back in the hold');
+  check(true, 'removing the Bot panel removes the entry point (+ Add panel brings it back)');
   check((await p.evaluate(() => window.__sent.length)) === 0, 'nothing here sent an order message');
 
   /* a reload with ?tab=league keeps the League tab */

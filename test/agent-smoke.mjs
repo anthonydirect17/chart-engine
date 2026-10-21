@@ -28,7 +28,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { tabBtn, toggleTab } from './tab-buttons.mjs';
+import { toggleTab } from './tab-buttons.mjs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -160,16 +160,13 @@ try {
   /* ---------------------------------------------------------------- the tab */
   console.log('the Agent tab next to the Bot tab');
   await until(async () => (await A()).agents.length === 2, 'ChartBridge told of both agents after sign-in');
-  /* 1.35.0 (Anthony 2026-10-21): the agent desk and the Bot tab left the top bar for panels of their own in + Add panel */
-  check(!(await page.isVisible('#wsAgentTab')) && await page.isVisible('#wsLeagueTab'), '1.35.0: the top bar has the League tab; the Agent button waits for its panel');
-  await toggleTab(page, 'agentdesk');                   // Main has no free room: + Add panel opens the agent desk itself
-  await until(async () => (await A()).shown, 'the agent desk opens from + Add panel');
-  check(await page.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsAgentTab'))) && await page.isVisible('#wsAgentTab'), 'with no room for its panel, + Add panel opens the agent desk; its button sits in the top bar while it is open');
-  await page.click('#wsAgentTab');
-  await until(async () => !(await A()).shown, 'its button closes it');
+  /* 1.35.0 (Anthony 2026-10-21): the Bot tab moved to a panel of its own (+ Add panel, Bot); the Agent tab stays where it was,
+     with the League tab after it */
+  check(await page.isVisible('#wsAgentTab') && !(await page.isVisible('#wsBotTab')), 'the Agent tab button is in the top bar (the Bot tab is a panel now)');
+  check(await page.evaluate(() => { const a = document.getElementById('wsAgentTab'); return a.nextElementSibling === document.getElementById('wsLeagueTab') && a.previousElementSibling === document.getElementById('wsTabSlot'); }), 'where it was, the League tab right after it');
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
   await control('agent-connect', { agent: 'demotwo', name: 'Second Demo Agent', build: 'sample-build-7' });
-  await toggleTab(page, 'agentdesk');
+  await page.click('#wsAgentTab');
   await until(async () => (await A()).shown, 'the tab opens');
   check(await page.evaluate(() => getComputedStyle(document.getElementById('wsGrid')).display) === 'none' && /tab=agent/.test(page.url()), 'the grid is hidden while the Agent tab is open; the URL keeps ?tab=agent');
   check(await visible('#agView [data-k="pickWrap"]'), 'two agents: the picker shows');
@@ -551,7 +548,7 @@ try {
   check((await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'open', 'demotwo\'s k2 (not shown on the tab) untouched');
   await control('agent-withdraw', { agent: 'demo', id: 'k1' });
   // off the tab: demotwo's proposal is no card anywhere, only counted in the corner's line; the key answers the bot's (1.16.0)
-  await toggleTab(page, 'agentdesk');
+  await page.click('#wsAgentTab');
   await until(async () => !(await A()).shown, 'the tab closes');
   await until(async () => (await text('.ag-cornerline')) === 'Second Demo Agent: 1 proposal', 'the tab closed: demotwo\'s proposal counted in the corner\'s line');
   check(!(await page.evaluate(() => [...document.querySelectorAll('[data-agans]')].some(b => b.getClientRects().length))), 'off the tab no agent Accept or Reject anywhere');
@@ -573,7 +570,7 @@ try {
   await until(async () => (await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'rejected', 'k2 rejected by its button');
   await until(async () => !(await page.$('.ag-prop[data-id="k2"]')), 'its card goes', 6000);
   await page.selectOption('#agView [data-k="pick"]', 'demo');
-  await toggleTab(page, 'agentdesk');
+  await page.click('#wsAgentTab');
   await until(async () => !(await A()).shown, 'the tab closes again');
   await page.mouse.click(800, 450);
   await page.keyboard.press('Alt+KeyN');
@@ -581,7 +578,7 @@ try {
 
   /* ---------------------------------------------------------------- the Bot tab: a double-click never confirms (review S3) */
   console.log('the Bot tab: a double-click on Auto or Release never confirms');
-  await toggleTab(page, 'bot');
+  await toggleTab(page, 'bot');                                                        // 1.35.0: + Add panel, Bot
   await until(async () => (await page.evaluate(() => window.workspace.bot().shown)), 'the Bot tab opens');
   await sleep(1500);                                                                   // its entrance
   const botModes = async () => (await sent()).filter(m => m.type === 'botMode').length;
@@ -604,7 +601,7 @@ try {
 
   /* ---------------------------------------------------------------- the pop-out */
   console.log('the pop-out window');
-  await toggleTab(page, 'agentdesk');
+  await page.click('#wsAgentTab');
   /* the corner notices cover none of the tab: never the left column (its rules and Change the rules), the proposal, the
      tracker, the stream or the footer; they stack in the chart panel's lower left */
   console.log('the corner notices while the Agent tab is open');

@@ -70,17 +70,18 @@ test('the seats\' day, the week and month table and the spend', () => {
   assert.deepEqual(L.cleanGhosts('{"c1":true,"c2":false,"c3":"yes"}'), { c1: true });
 });
 
-test('the page: League in the top bar; the agent desk and the Bot as panels (one each), their buttons kept; the ⋯ switch; nothing that trades', () => {
+test('the page: League in the top bar after the Agent tab; the Bot as a panel, its button kept; the ⋯ switch; nothing that trades', () => {
   const html = read('live/index.html');
   assert.match(html, /id="wsLeagueTab"[^>]*>League<\/button>/);
-  assert.match(html, /<div id="wsTabHold" hidden>[\s\S]*id="wsBotTab"[\s\S]*id="wsAgentTab"[\s\S]*<\/div>/, 'the desks\' own buttons wait in the hold');
-  assert.match(html, /data-add="agentdesk"[^>]*>Agent desk \(join an agent's trade\)<\/button>/);
+  assert.match(html, /<div id="wsTabHold" hidden>\s*<!--[^>]*-->\s*<button[^>]*id="wsBotTab"[^>]*>Bot<\/button>\s*<\/div>/, 'the Bot\'s own button waits in the hold');
+  assert.match(html, /<button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent<\/button>\s*<button[^>]*id="wsLeagueTab"/, 'the Agent tab stays in the top bar, League after it');
+  assert.doesNotMatch(html, /data-add="agentdesk"/, 'no agent panel');
   assert.match(html, /data-add="bot"[^>]*>Bot<\/button>/);
   assert.match(html, /data-do="league" hidden>League trades \(faint\): off<\/button>/);
   assert.ok(html.indexOf('<script src="league.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
-  assert.ok(W.TYPES.includes('agentdesk') && W.TYPES.includes('bot'));
-  const two = W.cleanLayout({ panels: [{ id: 'a1', type: 'agentdesk', x: 0, y: 0, w: 2, h: 1 }, { id: 'a2', type: 'agentdesk', x: 2, y: 0, w: 2, h: 1 }, { id: 'b1', type: 'bot', x: 4, y: 0, w: 2, h: 1 }, { id: 'b2', type: 'bot', x: 6, y: 0, w: 2, h: 1 }] });
-  assert.deepEqual(two.panels.map(p => p.id), ['a1', 'b1'], 'one of each a layout');
+  assert.ok(W.TYPES.includes('bot') && !W.TYPES.includes('agentdesk'));
+  const two = W.cleanLayout({ panels: [{ id: 'b1', type: 'bot', x: 4, y: 0, w: 2, h: 1 }, { id: 'b2', type: 'bot', x: 6, y: 0, w: 2, h: 1 }] });
+  assert.deepEqual(two.panels.map(p => p.id), ['b1'], 'one Bot panel a layout');
   const files = JSON.parse(read('nt8/install-files.json'));
   assert.ok(files.www.some(x => x.from === 'live/league.js') && files.www.some(x => x.from === 'live/league.css'));
   const src = read('live/league.js');

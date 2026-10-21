@@ -71,10 +71,10 @@ function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Nu
 /* 1.15.0: the Account panel and the Quote board (Anthony's consolidated form, 2026-10-02) take no instrument; nor does the
    Data Box (1.16.0: the bar under the cursor on any chart), nor the Account page (1.16.0, live/accounts.js: every account) */
 /* 1.34.0 (Anthony 2026-10-21): the Trade tags panel (live/trade-tags.js) follows the order ticket's account and instrument */
-/* 1.35.0 (Anthony 2026-10-21): the agent desk ("join an agent's trade", the Agent tab before) and the Bot tab became panels of
-   their own in + Add panel: each a small panel whose button opens the same view as before; at most one of each per layout */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agentdesk', 'bot'];
-const ONE_EACH = ['ticket', 'agentdesk', 'bot'];
+/* 1.35.0 (Anthony 2026-10-21: "the bot tab can also move to a panel"): the Bot tab became a panel of its own in + Add panel,
+   a small panel whose button opens the same Bot view as before; at most one per layout. The Agent tab stays in the top bar. */
+const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'bot'];
+const ONE_EACH = ['ticket', 'bot'];
 /* 1.16.0 (Anthony 2026-10-07): the rows a Quote board hides, saved with its panel. Any root name ChartBridge could list (NQ,
    ES, or a quote-only market from hello, such as YM or 6E): kept as typed by the menu, so a root hello no longer lists is
    simply ignored; anything else dropped. Display only. */
@@ -106,7 +106,7 @@ function cleanPanel(p) {
 }
 
 /** A layout as kept: { panels } with bad panels dropped, ids unique, at most 12 panels, at most one order ticket (1.35.0: and
-    one agent desk, one Bot panel), every panel inside the grid and none overlapping (re-flow). Never throws. */
+    one Bot panel), every panel inside the grid and none overlapping (re-flow). Never throws. */
 function cleanLayout(l) {
   const list = l && typeof l === 'object' && Array.isArray(l.panels) ? l.panels : [];
   const seen = new Set(), panels = [];
@@ -1964,7 +1964,6 @@ function addView(p) {
   else if (p.type === 'databox') mid = '<span class="ws-name">Data Box</span><span class="ws-db-src" title="The chart it follows: the one under the mouse, else the last one"></span><span class="ws-fill"></span>';
   else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
   else if (p.type === 'tags') mid = '<span class="ws-name">Trade tags</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';   // 1.34.0
-  else if (p.type === 'agentdesk') mid = '<span class="ws-name">Agent desk</span><span class="ws-fill"></span>';   // 1.35.0
   else if (p.type === 'bot') mid = '<span class="ws-name">Bot</span><span class="ws-fill"></span>';                // 1.35.0
   else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
@@ -1983,7 +1982,7 @@ function addView(p) {
   else if (p.type === 'databox') mountDataBox(v);        // 1.16.0
   else if (p.type === 'accounts') mountAccountsPage(v);  // 1.16.0
   else if (p.type === 'tags') mountTags(v);              // 1.34.0 (Anthony 2026-10-21)
-  else if (p.type === 'agentdesk' || p.type === 'bot') mountTabPanel(v);   // 1.35.0 (Anthony 2026-10-21)
+  else if (p.type === 'bot') mountTabPanel(v);           // 1.35.0 (Anthony 2026-10-21)
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
@@ -2061,22 +2060,22 @@ function closePanel(id) {
 function addPanel(type) {
   closePops();
   if (maxId) restoreMax();                                  // the new panel is seen where it goes
-  /* 1.35.0: the Agent desk and the Bot are always reachable from here: with the panel already placed, or no room for it, the
-     menu opens the view itself (its button sits in the top bar while it is open, the way back) */
-  if (type === 'agentdesk' || type === 'bot') {
-    const d = TAB_PANEL[type].desk(), has = panels.some(q => q.type === type);
+  /* 1.35.0: the Bot is always reachable from here: with the panel already placed, or no room for it, the menu opens the Bot
+     view itself (its button sits in the top bar while it is open, the way back) */
+  if (type === 'bot') {
+    const d = TAB_PANEL.bot.desk(), has = panels.some(q => q.type === type);
     if (d && (has || panels.length >= W.MAX_PANELS || !W.largestFree(panels))) {
-      if (!has) note('No room for the ' + (type === 'bot' ? 'Bot' : 'Agent desk') + ' panel: opened it. Make room and add it again to keep its button on the grid.', true);
+      if (!has) note('No room for the Bot panel: opened the Bot tab. Make room and add it again to keep its button on the grid.', true);
       d.showTab(true);
       return;
     }
   }
   if (panels.length >= W.MAX_PANELS) { note('At most ' + W.MAX_PANELS + ' panels: close one first', true); return; }
   if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
-  if ((type === 'agentdesk' || type === 'bot') && panels.some(q => q.type === type)) { note('This layout has its ' + (type === 'bot' ? 'Bot' : 'Agent desk') + ' panel already', true); return; }
+  if (type === 'bot' && panels.some(q => q.type === type)) { note('This layout has its Bot panel already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agentdesk', 'bot'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'bot'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -2511,23 +2510,22 @@ function mountTags(v) {
   v.tags.render();
   v.destroy = () => t.destroy();
 }
-/* 1.35.0 (Anthony 2026-10-21): the agent desk ("join an agent's trade") and the Bot tab as panels. The panel holds the very
-   button the top bar had (#wsAgentTab, #wsBotTab: the desks' own, with their listeners and parity hooks), moved into it while
-   the panel is on the grid and back to a hidden holder when it goes; the button opens the same view as before. The desks
-   themselves (their proposals, the corner line, the copilot keys, the bot strip) run whether a panel is placed or not. */
+/* 1.35.0 (Anthony 2026-10-21: "the bot tab can also move to a panel"): the Bot tab as a panel. The panel holds the very button
+   the top bar had (#wsBotTab: the Bot desk's own, with its listeners and states), moved into it while the panel is on the grid
+   and back to a hidden holder when it goes; the button opens the same Bot view as before. The Bot desk itself (its proposals,
+   the copilot keys, the bot strip) runs whether a panel is placed or not. The Agent tab stays in the top bar, unchanged. */
 const TAB_PANEL = {
-  agentdesk: { btn: () => $('wsAgentTab'), desk: () => agentDesk, what: 'the agent desk', help: 'Join an agent\'s trade: its controls, its proposals, its stream and its chart, as the Agent tab had them.' },
   bot: { btn: () => $('wsBotTab'), desk: () => botDesk, what: 'the Bot tab', help: 'The bot: its Library, its chart and its panel, as the Bot tab had them.' },
 };
 /* where a desk's button belongs now: in the top bar while its view is open (the way back to the layout, as before), else in its
    panel when the layout has one, else in the hidden hold */
 function placeTabBtn(type) {
-  if (!type) { placeTabBtn('bot'); placeTabBtn('agentdesk'); return; }
+  if (!type) { placeTabBtn('bot'); return; }
   const kind = TAB_PANEL[type], btn = kind && kind.btn(), d = kind && kind.desk();
   if (!btn) return;
   const v = [...views.values()].find(x => x.panel.type === type);
-  /* while a view hides the grid (Bot, agent desk, League), a desk whose panel is on the layout keeps its button in the top bar
-     too, so one view can go to the other as the top bar's tabs did */
+  /* while a view hides the grid (Bot, Agent, League), the Bot's button stays in the top bar too when its panel is on the layout,
+     so one view can go to the other as the top bar's tabs did */
   const viewOpen = ['bt-on', 'ag-on', 'lg-on'].some(c => document.body.classList.contains(c));
   const where = d && d.shown() ? $('wsTabSlot') : v && viewOpen ? $('wsTabSlot') : v ? v.body.querySelector('.ws-tp-slot') : $('wsTabHold');
   if (where && btn.parentElement !== where) where.appendChild(btn);
@@ -2541,7 +2539,7 @@ function mountTabPanel(v) {
   placeTabBtn(v.panel.type);
   const sync = () => {
     const d = kind.desk();
-    help.textContent = !d ? 'Reload this window: its ' + kind.what + ' did not start.' : btn && btn.hidden ? 'Not offered by this ChartBridge (it needs protocol v3' + (v.panel.type === 'agentdesk' ? ' and agents, ChartBridge 0.5.0' : '') + ').' : kind.help;
+    help.textContent = !d ? 'Reload this window: its ' + kind.what + ' did not start.' : btn && btn.hidden ? 'Not offered by this ChartBridge (it needs protocol v3).' : kind.help;
   };
   sync();
   const t = setInterval(sync, 2000);
@@ -2860,8 +2858,8 @@ $('wsAddMenu').addEventListener('click', e => { const b = e.target.closest('[dat
 function syncAddMenu() {
   const b = $('wsAddMenu').querySelector('[data-add="ticket"]'), has = panels.some(p => p.type === 'ticket');
   b.disabled = has; b.title = has ? 'This layout has its order ticket' : '';
-  /* 1.35.0: one Agent desk and one Bot panel a layout */
-  for (const [t, words] of [['agentdesk', 'its Agent desk panel'], ['bot', 'its Bot panel']]) {
+  /* 1.35.0: one Bot panel a layout */
+  for (const [t, words] of [['bot', 'its Bot panel']]) {
     const x = $('wsAddMenu').querySelector('[data-add="' + t + '"]'); if (!x) continue;
     const on = panels.some(p => p.type === t);
     x.title = on ? 'This layout has ' + words + ': a click opens it' : x.dataset.tip || '';
@@ -3515,7 +3513,8 @@ function startAgent() {
       placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
     } });
 }
-/* 1.35.0 (Anthony 2026-10-21): the League tab (live/league.js): the shadow league's paper trades on one chart, the seats' day,
+/* 1.35.0 (Anthony 2026-10-21): the League tab (live/league.js), a second top-level tab beside the Agent tab (which is unchanged):
+   the shadow league's paper trades on one chart, the seats' day,
    the week and month, the decision log and the API spend, read from The Desk's GET /api/chart-league. It hides the grid while
    it is open, as the Bot and Agent views do (?tab=league keeps it on a reload). Nothing in it sends an order. */
 let leagueView = null;
