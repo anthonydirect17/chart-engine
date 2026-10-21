@@ -57,10 +57,16 @@ const DESK = { accounts: [
   { account: 'EVAL-A', firm: 'Firm A', archived: false, daily_loss_limit: 100000, trailing_drawdown: null, account_size: 50000, source: {} },
   { account: 'Sim101', firm: null, archived: false, daily_loss_limit: null, trailing_drawdown: null, account_size: null, source: {}, commission: { MNQ: 0.5, NQ: 2 } },
 ] };
+/* 1.35.0: The Desk's floors (made-up numbers, sample data): EVAL-A's, one ChartBridge does not list, and The Desk's own skip */
+const FLOORS = { accounts: [
+  { account: 'EVAL-A', prop: 'Sample 50K', floor: 49600, source: 'the firm dashboard on 2026-10-13, then 2 tracked round trips (sample)', note: null },
+  { account: 'NOPE-X', prop: 'NOPE-X', floor: 48000, source: 'sample' }],
+  skipped: [{ account: null, prop: 'Sample 150K', why: 'not linked to a fills account on The Desk\'s Prop screen' }] };
 async function openWs(ctx, port, layout) {
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
   await page.route('http://localhost:8800/api/chart-accounts', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': 'http://localhost:' + port }, body: JSON.stringify(DESK) }));
+  await page.route('http://localhost:8800/api/chart-floors', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': 'http://localhost:' + port }, body: JSON.stringify(FLOORS) }));
   await page.goto(`http://localhost:${port}/live/?layout=${layout}`);
   await page.waitForSelector('.cb-pin-key', { timeout: 15000 });
   await enterPin(page, TEST_PIN);
@@ -369,6 +375,27 @@ try {
   check(!!fl && fl.src.roomFloor === 'computed', 'firmMinimum: ChartBridge\'s floor is the firm\'s 49,500, the room computed from it (' + JSON.stringify(fl && { floor: fl.floor, roomFloor: fl.roomFloor, nt: fl.roomFloorNt }) + ')');
   const after = await control(CL_PORT, 'received');
   check((after.types.firmMinimum || 0) === (before.types.firmMinimum || 0) + 1, 'one firmMinimum sent');
+  /* 1.35.0 (G): once the firm minimum is set, NinjaTrader's figure (it never locks) is no flag; it stays in the Room's hover */
+  const gone = await until(async () => { const t = await p5.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-flag`, e => e.title).catch(() => ''); return !/NinjaTrader shows/.test(t) ? 'gone' : null; }, 'the NinjaTrader flag goes once the minimum is set', 8000);
+  check(gone === 'gone', '1.35.0: no "NinjaTrader shows X to the floor" flag once the firm minimum is set');
+  const roomHover = await p5.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-rtext`, e => e.title);
+  check(/NinjaTrader shows \$1,885\.50 to the floor \(its own trailing figure, which never locks\); the firm minimum \$49,500\.00 was set from this page/.test(roomHover), 'NinjaTrader\'s figure stays in the Room\'s hover: ' + roomHover.split('\n').pop());
+  /* 1.35.0 (C): Update floors from The Desk: shown first, nothing sent until Send, then ChartBridge's own firmMinimum */
+  const before2 = await control(CL_PORT, 'received');
+  await p5.click(`${AP} button[data-act="floors-desk"]`);
+  const fpanel = await until(() => p5.$eval(`${AP} .apg-floors`, e => /Send 1 floor to ChartBridge/.test(e.textContent) ? e.textContent : null).catch(() => null), 'the floors from The Desk');
+  check(!!fpanel && /EVAL-A \(Sample 50K\): floor \$49,600\.00 ChartBridge now \$49,500\.00/.test(fpanel), 'each floor as The Desk has it, beside ChartBridge\'s: ' + fpanel);
+  check(/NOPE-X: skipped, ChartBridge does not list it on this PC/.test(fpanel) && /Sample 150K: skipped, not linked to a fills account/.test(fpanel), 'every skip says why');
+  await p5.screenshot({ path: path.join(out, 'accounts-12-floors-desk-1366.png') });
+  check(((await control(CL_PORT, 'received')).types.firmMinimum || 0) === (before2.types.firmMinimum || 0), 'nothing sent before the confirm');
+  await p5.click(`${AP} button[data-act="floors-send"]`);
+  const fl2 = await until(async () => { const a = (await v3(CL_PORT)).accounts.list.find(x => x.name === 'EVAL-A'); return a && a.floor === 49600 ? a : null; }, 'EVAL-A\'s floor from The Desk');
+  check(!!fl2, 'Send: ChartBridge\'s floor is The Desk\'s 49,600');
+  check(((await control(CL_PORT, 'received')).types.firmMinimum || 0) === (before2.types.firmMinimum || 0) + 1, 'one firmMinimum for the one account');
+  const setRow = await until(() => p5.$eval(`${AP} .apg-floors`, e => /\(sample\) set/.test(e.textContent) && /Read again/.test(e.textContent) ? e.textContent : null).catch(() => null), 'the row says set', 8000);
+  check(!!setRow, 'the row says set, and Read again repeats it' + (setRow ? '' : ': ' + await p5.$eval(`${AP} .apg-floors`, e => e.textContent).catch(() => 'no panel')));
+  await p5.screenshot({ path: path.join(out, 'accounts-13-floors-sent-1366.png') });
+  await p5.click(`${AP} button[data-act="floors-close"]`);
   // column widths: drag the Account column 80 px wider; kept after a reload; a double-click gives its default back
   const wOf = () => p5.$eval(`${AP} .apg-acc-g .gr-h [role="columnheader"]:nth-child(1)`, e => Math.round(e.getBoundingClientRect().width));
   // the list re-renders as the firm minimum's accounts come back: the handle is read once it is laid out

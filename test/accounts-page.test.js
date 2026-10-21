@@ -381,3 +381,42 @@ test('1.26.0: the Accounts tab gets Group and Limits only once ChartBridge sends
   const s = AC.limitState({ roomFloor: 900, roomDaily: 400, targetLeft: null, src: { roomFloor: 'computed' } }, null, { dailyLoss: 1000, drawdown: 2500 });
   assert.equal(AC.limitText(s), '$400.00 daily · $900.00 to floor (60% used)', 'the closer is the daily room: (1000 - 400) / 1000');
 });
+
+/* 1.35.0 (Anthony 2026-10-21): Update floors from The Desk, and no NinjaTrader floor flag once the firm's minimum is set */
+test('1.35.0: the floors from The Desk: what is sent, and every skip with why', () => {
+  const AC = require('../live/accounts.js');
+  const desk = { accounts: [
+    { account: 'EVAL-A', prop: 'Lucid 50K', floor: 48040.5, source: 'the firm dashboard on 2026-10-13, then 4 tracked round trips', note: null },
+    { account: 'EVAL-B', prop: 'EVAL-B', floor: 49000, source: 'x' },
+    { account: 'SIM-GONE', floor: 47000, source: 'x' },
+    { account: 'EVAL-S', floor: 48000, source: 'x' },
+    { account: 'EVAL-N', floor: null }],
+    skipped: [{ account: null, prop: 'Lucid 150K', why: 'not linked to a fills account on The Desk\'s Prop screen' }] };
+  const accounts = [{ name: 'EVAL-A', floor: 47900, rules: { drawdownType: 'eod' } }, { name: 'EVAL-B', rules: null },
+    { name: 'EVAL-S', rules: { drawdownType: 'static' } }, { name: 'EVAL-N', rules: { drawdownType: 'eod' } }];
+  const plan = AC.floorPlan(desk, accounts, a => a.rules);
+  assert.deepStrictEqual(plan.send, [{ account: 'EVAL-A', label: 'Lucid 50K', floor: 48040.5, now: 47900, source: 'the firm dashboard on 2026-10-13, then 4 tracked round trips', note: '' }]);
+  assert.deepStrictEqual(plan.skip.map(x => [x.account || x.label, x.why]), [
+    ['EVAL-B', 'no firm rules on ChartBridge yet: apply its account type first (in ⋯)'],
+    ['SIM-GONE', 'ChartBridge does not list it on this PC'],
+    ['EVAL-S', 'its drawdown is static on ChartBridge: the floor is fixed'],
+    ['EVAL-N', 'The Desk sent no floor for it'],
+    ['Lucid 150K', 'not linked to a fills account on The Desk\'s Prop screen']]);
+  assert.deepStrictEqual(AC.floorPlan(null, accounts), { send: [], skip: [] });
+});
+
+test('1.35.0: no "NinjaTrader shows X to the floor" flag once the firm\'s minimum is set; the figure stays in the hover', () => {
+  const AC = require('../live/accounts.js');
+  const a = { name: 'EVAL-A', roomFloor: 2100, roomFloorNt: 1500, src: { roomFloor: 'computed' } };
+  assert.strictEqual(AC.ntFloorFlag(a, {}), true, 'no minimum set: flagged as before');
+  assert.strictEqual(AC.ntFloorFlag(a, { 'EVAL-A': { min: 48040.5, at: 1 } }), false, 'set: never flagged');
+  assert.strictEqual(AC.ntFloorFlag(Object.assign({}, a, { roomFloorNt: 2090 }), {}), false, 'within $25: no flag');
+  assert.strictEqual(AC.ntFloorFlag(Object.assign({}, a, { src: { roomFloor: 'ninjatrader' } }), {}), false);
+  assert.deepStrictEqual(AC.cleanFirmMins('{"EVAL-A":{"min":48040.5,"at":5},"bad":{"min":-1,"at":5},"x":3}'), { 'EVAL-A': { min: 48040.5, at: 5 } });
+  assert.deepStrictEqual(AC.cleanFirmMins('nope'), {});
+  const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'accounts.js'), 'utf8');
+  assert.match(src, /if \(AC\.ntFloorFlag\(a, F\.firmMins\(\)\)\)/);
+  assert.match(src, /'NinjaTrader shows ' \+ AC\.fmtUsdPlain\(a\.roomFloorNt\) \+ ' to the floor \(its own trailing figure, which never locks\)'/);
+  assert.match(src, /data-act="floors-send"/);
+  assert.match(src, /type: 'firmMinimum', cid: c, account: name, minBalance: v/, 'the existing firmMinimum, nothing new to ChartBridge');
+});
