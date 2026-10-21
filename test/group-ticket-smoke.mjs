@@ -116,7 +116,12 @@ try {
   if (gpos) {
     const pbox = await p.evaluate(i => window.workspace.chart(i).positionBox(), cid), cbox = await p.locator('.ws-panel[data-id="' + cid + '"] canvas').first().boundingBox();
     if (pbox) { await p.mouse.move(cbox.x + pbox.x + 6, cbox.y + pbox.y + pbox.h / 2); await wait(300); }
-    const ptip = await p.$eval('.ws-panel[data-id="' + cid + '"] canvas', c => c.title);
+    let ptip = await p.$eval('.ws-panel[data-id="' + cid + '"] canvas', c => c.title);
+    if (!ptip) {   // the review: the label moved with the price axis between measuring and hovering: measured again, hovered again
+      const pb2 = await p.evaluate(i => window.workspace.chart(i).positionBox(), cid), cb2 = await p.locator('.ws-panel[data-id="' + cid + '"] canvas').first().boundingBox();
+      if (pb2) { await p.mouse.move(cb2.x + pb2.x + 6, cb2.y + pb2.y + pb2.h / 2); await wait(300); }
+      ptip = await p.$eval('.ws-panel[data-id="' + cid + '"] canvas', c => c.title);
+    }
     check(/^Group Lucid: SIM-A LONG \d+ @ [0-9.,]+\nSIM-B LONG \d+ @ [0-9.,]+\nSIM-C LONG \d+ @ [0-9.,]+\nSIM-D LONG \d+ @ [0-9.,]+\nLONG \d+ in all @ [0-9.,]+ \(the average\)$/.test(ptip), 'its tooltip lists each account\'s position and the average: ' + JSON.stringify(ptip));
     await p.screenshot({ path: path.join(out, 'group-ticket-position-1366.png') });
   }
@@ -127,7 +132,11 @@ try {
     check(/^Group Lucid: SIM-A SELL STP \d+ @ [0-9.,]+\nSIM-B SELL STP \d+ @ [0-9.,]+\nSIM-C SELL STP \d+ @ [0-9.,]+\nSIM-D SELL STP \d+ @ [0-9.,]+$/.test(tip), 'its tooltip lists each account\'s stop: ' + JSON.stringify(tip));
     await p.screenshot({ path: path.join(out, 'group-ticket-lines-1366.png') });
     await clearSent();
-    await p.mouse.down(); await p.mouse.move(box.x + stopLine.box.x + 8, box.y + stopLine.box.y + stopLine.box.h / 2 + 30, { steps: 6 }); await p.mouse.up(); await wait(700);
+    /* the review: measured again right before the drag (the line's label moves with the price axis's width as prices change) */
+    const box2 = await p.locator('.ws-panel[data-id="' + cid + '"] canvas').first().boundingBox();
+    const sl2 = (await p.evaluate(i => window.workspace.chart(i).orderHandles(), cid)).find(h => h.id === stopLine.id) || stopLine;
+    await p.mouse.move(box2.x + sl2.box.x + 8, box2.y + sl2.box.y + sl2.box.h / 2); await wait(150);
+    await p.mouse.down(); await p.mouse.move(box2.x + sl2.box.x + 8, box2.y + sl2.box.y + sl2.box.h / 2 + 30, { steps: 6 }); await p.mouse.up(); await wait(700);
     const ch = await sent(['change']);
     const prices = [...new Set(ch.map(m => m.price))];
     check(ch.length === 4 && prices.length === 1, 'a drag of the group stop: one change per member, all to the same price: ' + JSON.stringify(ch.map(m => m.id + ' ' + m.price)));
