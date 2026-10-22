@@ -580,12 +580,16 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
 /* the tray: narrower than 1100 px, ChartBridge's line and the notices pinned above the tab's scrolling part, in a band of a
    fixed height (they scroll inside it), so they are always in sight, cover nothing, and coming or going move nothing */
 .ag-view .ag-tray { display: none; }
+/* the board (Heroes on duty) has no chart to lay them over: while it is open the tray shows at every width, so ChartBridge's line
+   never covers its Desk or Kill all agents (Anthony 2026-10-22); :where keeps this at the plain rule's weight, so the phone's
+   taller tray still applies */
+.ag-view .ag-tray:where(:has(~ .ag-board:not([hidden]))) { display: block; flex: none; height: 66px; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 6px 10px 2px; border-bottom: 1px solid var(--f-line2); }
+.ag-view .ag-tray > .ws-alerts { position: static; padding: 0; }
+.ag-view .ag-tray > .ws-alerts .ws-alert:first-child { margin-top: 0; }
+.ag-view .ag-tray > .ag-notes, .ag-view .ag-tray > .bt-notes { position: static; width: auto; max-height: none; flex-direction: column; margin-top: 4px; }
 @media (max-width: 1100px) {
   .ag-view .ag-tray { display: block; flex: none; height: 66px; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 6px 10px 2px; border-bottom: 1px solid var(--f-line2); }
-  .ag-view .ag-tray:has(~ .ag-main[hidden]) { display: none; }
-  .ag-view .ag-tray > .ws-alerts { position: static; padding: 0; }
-  .ag-view .ag-tray > .ws-alerts .ws-alert:first-child { margin-top: 0; }
-  .ag-view .ag-tray > .ag-notes, .ag-view .ag-tray > .bt-notes { position: static; width: auto; max-height: none; flex-direction: column; margin-top: 4px; }
+  .ag-view .ag-tray:has(~ .ag-main[hidden]):not(:has(~ .ag-board:not([hidden]))) { display: none; }
   .ag-main { overflow-y: auto; }
   .ag-view .ag-strip { flex-wrap: wrap; height: auto; min-height: 46px; padding: 6px 4px; row-gap: 6px; }
   .ag-view .ag-strip > .ag-fill { display: none; }
@@ -639,6 +643,11 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
   .ag-view .ag-strip > .ag-stat { align-items: flex-start; }
   /* the workspace's top bar wraps while the Agent tab is open on a phone (no sideways scroll) */
   body.ag-on .ws-top { flex-wrap: wrap; row-gap: 6px; height: auto; min-height: 40px; padding: 6px 12px; }
+  /* the status line's text changes every second ("local 13 ms" gains " (p95 297 ms)", "60 fps" becomes "idle"): sized by its
+     text it moved to a row of its own and back, the bar's height changed by 20 px and the whole tab, Accept and Reject with it,
+     jumped under the finger. A fixed width (its full text's, 330 px) decides where the bar wraps, so its height never follows
+     the text; what does not fit is cut in workspace.js's order (the frame rate, then the p95, then the local delay) */
+  body.ag-on .ws-top > .ws-stat { flex: 0 1 330px; }
 }
 
 /* 1.27.0 (ChartBridge 0.6.0): a group's seats table in His account (one row per seat, then the group's total) */

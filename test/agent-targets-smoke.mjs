@@ -383,6 +383,22 @@ try {
     check(r.seen && !r.covered.length && r.own !== null && Math.abs(r.own - before) <= 1, 'at ' + w + ' x ' + h + ' with the tab at its top, ChartBridge\'s error line is in sight, covers no Accept or Reject and moves none: ' + JSON.stringify(r) + ' (Accept at ' + before + ' before)');
     await page.click('#wsAlertClose');
   }
+  /* what moved Accept 20 px in the check above in 2 or 3 runs of 10: the top bar's status line, its text changed by the page
+     every second, decided where the phone's top bar wraps, so the bar's height and the whole tab under it followed the text.
+     Each text it takes, set and measured in one go (no timer runs between), moves no Accept and changes no bar height */
+  for (const [w, h] of [[390, 844], [412, 915], [600, 900]]) {
+    await page.setViewportSize({ width: w, height: h }); await sleep(600);
+    await toTop(page);
+    const r = await page.evaluate(() => {
+      const acc = () => Math.round(document.querySelector('#agView .ag-plist [data-agans="accept"]').getBoundingClientRect().top), bar = () => Math.round(document.querySelector('.ws-top').getBoundingClientRect().height);
+      const L = document.getElementById('wsLocal'), F = document.getElementById('wsFps'), keep = [L.textContent, F.textContent], out = [];
+      for (const e of [F, L.parentElement]) { e.hidden = false; if (e.previousElementSibling) e.previousElementSibling.hidden = false; }   // as workspace.js shows them
+      for (const [l, f] of [['13 ms', '60 fps'], ['13 ms (p95 297 ms)', '60 fps'], ['13 ms', 'idle'], ['1,234 ms (p95 12,345 ms)', '60 fps'], ['-', '-']]) { L.textContent = l; F.textContent = f; out.push(acc() + '/' + bar()); }
+      [L.textContent, F.textContent] = keep;
+      return out;
+    });
+    check(r.every(v => v === r[0]), 'at ' + w + ' x ' + h + ' the top bar\'s status line, whatever its text, changes no bar height and moves no Accept (Accept top / bar height): ' + JSON.stringify(r));
+  }
   /* ---------------------------------------------------------------- off the Agent tab: the corner */
   console.log('off the Agent tab, two agents and the bot proposing: no agent card, one line for them; the bot\'s corner one card at a time');
   for (const id of await ownOpen()) await control('agent-withdraw', { agent: 'demo', id });
