@@ -1,5 +1,62 @@
 # Changelog
 
+## ChartBridge 0.6.7 and chart 1.37.0 (2026-10-22): the Multi-Account panel and the bench, more room right, lighter trade lines, sharp candles
+
+Anthony's requests of 2026-10-22: "I would like to have the ability to quickly swap out accounts in and out of the group while flat
+... a group panel, showing each account chip thats in the group and the ones on the side line, when I click and drag a chip into the
+group, it trades with, when its on the bench, it sits out"; "I still find myself needing more room to the right ... our price /
+trade lines can be a bit thinner ... I still find the chips and the lines obstructing price, especially when price is moving and im
+trying to click and trail a stop"; and one grid panel's chart soft when zoomed out. **ChartBridge 0.6.7 is a recompile** (nt8/*.cs);
+`minChartBridge` stays 0.6.2 (with 0.6.2 to 0.6.6 the panel shows the groups and the copier and says that moving a chip and New group
+need 0.6.7).
+
+- **The Multi-Account panel** (`live/multi-account.js`, `live/multi-account.css`, new page files): "Multi-Account" in + Add panel, one
+  a layout, the approved mockup (version 2) built with the page's own tokens and classes. Two tabs:
+  - **Groups:** the group dropdown (kept per panel in this browser), **Risk** in the bar (the group's percent of each account's own
+    max loss; changed only while the group is flat, ChartBridge refuses it otherwise), "One direction, always (no hedging inside a
+    group)", **Group settings** (the name, Type Evals or Funded, Delete group, asked twice and only while every account in it is
+    flat) and **New group** (a name, a Type and the risk). Two lanes of chips: **Trades with the group** and **Bench** ("sits out new
+    entries, keeps its rules"). A chip: the account and SIM or LIVE, its type on The Desk, ChartBridge's room to its floor and its
+    own dollar risk at the group's percent (5% of a $4,500 max loss: $225); the trading lane sums them ("3 accounts · $375 at risk a
+    trade"). A click or a drag moves a chip (`memberBench`); refused, with the reason on the chip, while the account holds a
+    position or has a working order, has no type on The Desk, or is not in the group. Only this firm's accounts show (the firm of
+    the members' types on The Desk): the bench also lists the firm's accounts in no group, which join on the Accounts tab as before.
+  - **Copier:** the copier exactly as it was, moved from the Account page (the Account page is mounted with only its Copier tab).
+- **The Account page loses its Copier tab**, and **Settings loses Account groups** (its group dialog with the firm's rules, Hero on
+  duty and the No hedging switch): groups are made and set on the panel. A saved layout and old settings load as before (a kept
+  answer for the groups section is ignored). On the Accounts tab, with ChartBridge 0.6.7 and The Desk read, an account with no type
+  on The Desk cannot join a group ("set its type there first"), and a group holds one firm's accounts.
+- **ChartBridge 0.6.7, the bench** (nt8/PROTOCOL.md "The bench (0.6.7)"): a per-member `benched` flag in `groups.txt` (and the sealed
+  `groups.txt.good`), written only for a benched member. A benched member stays a member (its rules, highs, floor and the group's
+  one-direction check) and sits out every new group entry: the page's ticket and hotkeys (`groupPreview`/`groupOrder`: size 0,
+  "benched: it sits out new entries (the Multi-Account panel)") and an agent's group plan (its seat stays in seat order; `welcome`
+  names the benched seats; a change puts `seatsRev` up; a size sent for it places nothing, "benched"). Exits, stops, targets,
+  changes, cancels and flattens are never blocked by it. `memberBench` is refused unless the account is flat by both readings on
+  every instrument with no order that may still fill, with the reason. An older ChartBridge reading a file with the flag refuses
+  it safely (its member line must have exactly 3 fields: the whole file unreadable; group entries refused, nothing rewritten, the
+  machines wait; single-account orders and exits still go).
+- **ChartBridge 0.6.7, groups:** no hedging is always on (`noHedge` false refused; a line saved off reads as on); a group's own rules
+  are optional (a group made on the panel has none, its line `-` for drawdown, type and size) and never size a member: a member with
+  no rules of its own sits out a group entry ("it has no account type: set its type on The Desk and apply it"); a group with no
+  rules takes a joining account only with its own rules; the risk percent changes only while the group is flat.
+- **Room right:** Custom beside 80, 120 and 160 px (any whole 40 to 600 px), and a drag in the gap between the last bar and the price
+  axis on any chart sets it (live charts; the `col-resize` cursor there; never with Shift or Ctrl). Saved as the presets, for every
+  chart; Jump to live and End keep it (engine: the `room` event, `util.ROOM_MIN`/`ROOM_MAX`).
+- **Lighter trade lines:** order and position lines at 60% (orders were 90%), the position line 1 px (was 1.5), full strength (and
+  1.5 px) while the mouse is on the line, its label or its tag, or it is dragged.
+- **See-through labels:** an order's label (SL, TP, an entry, planned legs; compact or full) at 55% where a candle is behind it, full
+  while the mouse is within 24 px or it is dragged. Hit areas, the drag and the clicks are unchanged.
+- **Sharp candles:** the chart's canvas now covers whole device pixels (`resize()` and a twice-a-second check for a panel moved with
+  no resize or a window taken to another screen). Before, a panel whose size was a fraction of a device pixel had a canvas the
+  browser scaled by part of a pixel, so it resampled the whole chart; thin candles (zoomed out) went soft first.
+  `npm run smoke:blur` (new): a chart at whole and fractional CSS positions and sizes, at 100%, 125%, 150% and 200% scaling (a real
+  device scale factor), thin and wide candles: on 1.36.0, 7 of 32 placements are resampled (as low as 88% of pixels matching the
+  canvas's own); on 1.37.0 all 32 match 100%.
+- Tests: `test/multi-account.test.js`; `npm run smoke:multi-account`, `smoke:blur`, `smoke:lines` (new); the display smoke checks Custom
+  and the gap drag; the accounts, settings and member-rules smokes follow the moves; `npm run check:orders` gains the bench, no
+  hedging always on, a group with no rules and the risk while flat (GroupsHarness) and a benched agent seat (AgentHarness). Version
+  1.37.0 (package.json, engine header and VERSION, COMPAT.json page), ChartBridge 0.6.7, CHART_STYLE and PROTOCOL entries.
+
 ## chart 1.36.0 (2026-10-22): the Agents strip, the Bot panel merged into it
 
 Anthony's request of 2026-10-22 (WORK, "FROM_WORK_2026-10-22_REQUEST_agents_strip_panel.md"): "I want a panel made, that plays

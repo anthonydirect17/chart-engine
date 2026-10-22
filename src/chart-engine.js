@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.36.0
+ * chart-engine 1.37.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.36.0';
+const VERSION = '1.37.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -910,6 +910,13 @@ const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 /* ---------------------------------------------------------------- display helpers (1.14.0, Anthony's list) */
 /** The empty room right of the last bar, in bars: `roomPx` CSS px at this bar spacing (so it stays the same on screen at
     any zoom), or the fixed bar count `bars` when no room in px is set (the engine's rightOffset, as before 1.14.0). */
+/* 1.37.0 (Anthony 2026-10-22: "I still find myself needing more room to the right"): the room he may set by dragging the gap
+   between the last bar and the price axis, in CSS px (Settings' Custom takes the same) */
+const ROOM_MIN = 40, ROOM_MAX = 600;
+/* 1.37.0 (Anthony 2026-10-22: lighter trade lines, see-through labels): the order and position lines' strength (was 0.9 for an
+   order, 0.6 at 1.5 px for the position, which is 1 px now), an order label's where candles are behind it, and how near the
+   mouse (CSS px) brings them back to full */
+const LINE_SOFT = 0.6, LABEL_SOFT = 0.55, NEAR_LINE = 4, NEAR_LABEL = 24;
 function roomBars(roomPx, spacing, bars) {
   return roomPx === null || roomPx === undefined || !isFinite(roomPx) || !(spacing > 0) ? bars : Math.max(0, roomPx) / spacing;
 }
@@ -1267,7 +1274,7 @@ function create(container, options) {
   let orders = [], position = null, hostPV = 0, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, addDown = null, orderHits = [];
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
-  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [], drawn: [] };
+  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [], drawn: [], room: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -1416,13 +1423,33 @@ function create(container, options) {
     disp.n = bars.length;
   }
 
+  /* 1.37.0 (Anthony 2026-10-22: one grid panel's chart soft when zoomed out, sharp when zoomed in; test/blur-smoke.mjs): a
+     chart at a fractional CSS position or size had a canvas the browser scaled or moved by part of a device pixel, so it
+     resampled the whole picture and thin candles went soft. The canvas now covers whole device pixels: its edges are the
+     container's rounded to the device grid (each edge moves less than half a device pixel), its backing store exactly that
+     many pixels, so the browser shows it one to one. W and H are its size in CSS px. Nothing drawn changes. snapAt: the
+     container's place and the ratio it was snapped for; a frame looks again twice a second (a panel moved without a resize,
+     a window taken to another screen). */
+  let snapAt = '', snapLook = 0;
   function resize() {
     const r = container.getBoundingClientRect();
     dpr = Math.max(1, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
-    W = Math.max(50, r.width); H = Math.max(50, r.height);
-    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    const L = r.left * dpr, T = r.top * dpr, sl = Math.round(L), st = Math.round(T);
+    const cw = Math.max(Math.round(50 * dpr), Math.round((r.left + r.width) * dpr) - sl), chh = Math.max(Math.round(50 * dpr), Math.round((r.top + r.height) * dpr) - st);
+    W = cw / dpr; H = chh / dpr;
+    if (cv.width !== cw) cv.width = cw;
+    if (cv.height !== chh) cv.height = chh;
+    const s = cv.style;
+    s.left = (sl - L) / dpr + 'px'; s.top = (st - T) / dpr + 'px'; s.width = W + 'px'; s.height = H + 'px';
+    snapAt = [r.left, r.top, r.width, r.height, dpr].join('|');
     plotW = Math.max(10, W - AXIS_W); layout();
     clampRight(); dirty = true;
+  }
+  function snapCheck(now) {
+    if (now - snapLook < 500) return;
+    snapLook = now;
+    const r = container.getBoundingClientRect(), d = Math.max(1, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+    if ([r.left, r.top, r.width, r.height, d].join('|') !== snapAt) resize();
   }
   /* The heights of the plot, the delta pane and the band between them (see PANE_RATIO). */
   function layout() {
@@ -1676,7 +1703,7 @@ function create(container, options) {
     ctx.fillStyle = T.vwapText; ctx.fillText(text, x + w - 5, ty + 0.5);
     vwapMark = { up, x, y, w, h, price: vw };
   }
-  let vwapMark = null, atrCache = { key: '', v: null }, posHit = null;
+  let vwapMark = null, atrCache = { key: '', v: null }, posHit = null, posBoxLast = null;
   /*
    * The studies (1.34.0, Anthony 2026-10-20): EMAs, SMAs and Bollinger Bands on the plot, the RSI in the lower pane, on the
    * plot's own bars (smaAt, emaAt, bandsAt, rsiAt). The closed bars' values are kept (SC) and only the forming bar's worked
@@ -2449,6 +2476,7 @@ function create(container, options) {
     // working orders, the position and the Shift+click preview: a line across the plot, a label at its
     // right end (with a close handle while editing) and a tag on the price axis (added to the tag stack below)
     const orderTags = [], orderLabels = [];   // labels draw after the last price line, so the live dot never covers them
+    const hoverWas = hover && !drag ? hitOrder(hover, true) : null;   // 1.37.0: the label or tag under the mouse (last frame's boxes)
     orderHits = []; posHit = null;
     const labelBoxes = [];                    // where the labels are (full size), for the corner readout (1.15.0)
     if (n >= 0 && (orders.length || position || orderPreview)) {
@@ -2472,15 +2500,32 @@ function create(container, options) {
         ctx.beginPath(); ctx.moveTo(0, crisp(y, lw)); ctx.lineTo(plotW, crisp(y, lw)); ctx.stroke();
         ctx.setLineDash([]); ctx.globalAlpha = 1;
       };
+      /* 1.37.0 (Anthony 2026-10-22: "the chips and the lines obstructing price, especially when price is moving and im trying
+         to click and trail a stop"): the order and position lines at LINE_SOFT strength and the position's 1 px, full (and
+         as wide as before) while the mouse is on the line (within NEAR_LINE px), its label or its tag, or it is dragged; an
+         order's label (SL, TP, an entry) at LABEL_SOFT where a candle is behind it, full while the mouse is within NEAR_LABEL px
+         of it or it is dragged. Only how strongly they draw changes: the hit areas, the drag and the clicks are as before. */
+      const mouse = hover && !drag && hover.x >= 0 && hover.x < plotW + AXIS_W && hover.y >= 0 && hover.y < plotH ? hover : null;
+      const hoverHit = mouse ? hoverWas : null;
+      const lineHot = (id, y, box) => !!mouse && ((hoverHit && hoverHit.id === id) || (mouse.x < plotW && Math.abs(mouse.y - y) <= NEAR_LINE) ||
+        (box && mouse.x >= box.x && mouse.x <= box.x + box.w && mouse.y >= box.y && mouse.y <= box.y + box.h));
+      const labelNear = (x, top, w) => !!mouse && mouse.x >= x - NEAR_LABEL && mouse.x <= x + w + NEAR_LABEL && mouse.y >= top - NEAR_LABEL && mouse.y <= top + LH + NEAR_LABEL;
+      const candlesBehind = (x, top, w) => {                    // a candle (high to low) crosses the label's box
+        const pTop = priceAt(top), pBot = priceAt(top + LH);
+        const i0 = Math.max(0, Math.floor(indexAt(x) - 0.5)), i1 = Math.min(n, Math.ceil(indexAt(x + w) + 0.5));
+        for (let i = i0; i <= i1; i++) { const b = bars[i]; if (b && b.h >= pBot && b.l <= pTop) return true; }
+        return false;
+      };
       /* parts: [[text, color], ...]; extras: [[which, text]] cells (1.13.0). 1.15.0: `short` (parts too) is drawn instead on
          a host's chart (compactLabels), smaller and right-aligned in the full label's place, the full label while the
          mouse is over it (`hid`) or it has cells to add; the hit areas, the x and the stacking stay the full label's */
-      const label = (y, parts, border, dash, alpha, closer, extras, short, hid) => {
+      const label = (y, parts, border, dash, alpha, closer, extras, short, hid, see) => {
         const gap = 7, widths = parts.map(pt => ctx.measureText(pt[0]).width);
         const ex = (extras || []).map(e => ({ which: e[0], text: e[1], w: ctx.measureText(e[1]).width + 10 }));
         const ew = ex.reduce((a, e) => a + e.w, 0);
         const tw = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 10, w = tw + ew + (closer ? LH : 0);
         const { x, top } = place(y, w);
+        if (see && !(od && od.id === hid) && !labelNear(x, top, w) && candlesBehind(x, top, w)) alpha *= LABEL_SOFT;   // 1.37.0
         const compact = o.compactLabels && short && !ex.length && (hid === undefined || hid !== labelHover);
         if (compact) {
           const CH = 14;
@@ -2535,11 +2580,13 @@ function create(container, options) {
         if (y >= 0 && y <= plotH) {
           const pnl = openPnl(position.qty, position.avgPrice, bars[n].c, position.pointValue || o.pointValue);
           const pc = pnl.points > 0 ? T.profit : pnl.points < 0 ? T.loss : T.axisText;
-          hline(y, T.exit, null, 0.6, 1.5);
+          const hot = lineHot('position', y, posBoxLast);           // 1.37.0: 1 px at LINE_SOFT; full and 1.5 px while the mouse is on it
+          hline(y, T.exit, null, hot ? 1 : LINE_SOFT, hot ? 1.5 : 1);
           const parts = [[(long ? 'LONG ' : 'SHORT ') + Math.abs(position.qty) + groupPart(position), long ? T.long : T.short], [fmtSigned(pnl.points, o.precision) + ' pt', pc]];
           if (pnl.dollars !== null) parts.push([fmtMoney(pnl.dollars), pc]);
           const sp = positionShort(position.qty, pnl, o.precision), short = sp.map((t, k) => [k ? t : t + countPart(position), k ? pc : long ? T.long : T.short]);   // 1.34.0: a group's ("Lucid ×4", short "×4")
           posHit = label(y, parts, T.exit, null, 1, false, null, short, 'position').box;
+          posBoxLast = posHit;
           orderTags.push({ price: position.avgPrice, style: { fill: T.tagFill, fg: T.exit, border: T.exit } });
         }
       }
@@ -2552,18 +2599,18 @@ function create(container, options) {
           const parent = orders.find(x => x.id === ord.plan.parent);
           const ticks = parent ? Math.round(Math.abs(price - orderPrice(parent)) / o.tick) : Math.abs(ord.plan.ticks);
           const alpha = pendingMoves.has(ord.id) && !dragging ? 0.4 : 0.7;
-          hline(y, col, [2, 4], 0.75 * alpha, dragging ? 1.5 : 1);
+          hline(y, col, [2, 4], dragging || lineHot(ord.id, y) ? 1 : 0.75 * alpha, dragging ? 1.5 : 1);   // 1.37.0: full while hovered or dragged
           const pv = hostPV || o.pointValue, left = parent ? Math.max(0, (+parent.qty || 0) - (+parent.filled || 0)) : 0;
           const usd = pv > 0 && left > 0 ? (ord.plan.role === 'stop' ? -1 : 1) * ticks * o.tick * pv * left : null;   // 1.34.0: live while dragged
           const pl = { plan: { role: ord.plan.role, ticks }, group: ord.group, usd };
-          const hit = label(y, [[orderLabel(pl), col]], col, [2, 3], alpha, orderEditing, null, [[orderLabelShort(pl), col]], ord.id);
+          const hit = label(y, [[orderLabel(pl), col]], col, [2, 3], alpha, orderEditing, null, [[orderLabelShort(pl), col]], ord.id, true);
           orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox });
           orderTags.push({ price, id: ord.id, style: { fill: T.bg, fg: col, border: col, dash: [2, 3] } });
           continue;
         }
         const dash = stop ? [6, 4] : null;
         const alpha = pendingMoves.has(ord.id) && !dragging ? 0.55 : 1;
-        hline(y, col, dash, 0.9 * alpha, dragging ? 1.5 : 1);
+        hline(y, col, dash, dragging || lineHot(ord.id, y) ? alpha : LINE_SOFT * alpha, dragging ? 1.5 : 1);   // 1.37.0: LINE_SOFT (was 0.9); full while hovered or dragged
         const extras = orderEditing && ord.adds && ord.adds.length ? ord.adds.map(w => [w, w === 'stop' ? '+SL' : '+TP']) : null;
         /* 1.34.0: a stop or target leg of the open position: its ticks and dollars from the average price, for what it covers */
         let lab = ord;
@@ -2572,7 +2619,7 @@ function create(container, options) {
           const pts = (price - position.avgPrice) * Math.sign(position.qty);
           lab = Object.assign({}, ord, { legTicks: Math.round(pts / o.tick), usd: pv > 0 && left > 0 ? pts * pv * left : null });
         }
-        const hit = label(y, [[orderLabel(lab), col]], col, dash ? [3, 2] : null, alpha, orderEditing, extras, [[orderLabelShort(lab), col]], ord.id);
+        const hit = label(y, [[orderLabel(lab), col]], col, dash ? [3, 2] : null, alpha, orderEditing, extras, [[orderLabelShort(lab), col]], ord.id, true);
         orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox, adds: hit.adds });
         orderTags.push({ price, id: ord.id, style: stop ? { fill: T.bg, fg: col, border: col, dash: [3, 2] } : { fill: col, fg: readableOn(col), border: null } });
       }
@@ -2754,6 +2801,14 @@ function create(container, options) {
   function local(e) { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
   /* 'pane' (1.7.0) is the delta pane and its axis column, and the band above it: dragging there pans the bars. */
   function zoneOf(p) { return paneOn() && p.y >= plotH && p.y < timeY ? 'pane' : p.x >= plotW ? 'price' : p.y >= timeY ? 'time' : 'plot'; }
+  /* 1.37.0: the gap between the last bar and the price axis, where a drag sets the room right (only with a room in px, while
+     following live, and with at least 20 px of gap: a press on the last candle itself still pans) */
+  function inGap(p) {
+    const n = last();
+    if (o.room === null || !V.follow || n < 0 || zoneOf(p) !== 'plot') return false;
+    const xl = xOf(n);
+    return plotW - xl >= 20 && p.x > xl + Math.max(4, V.spacing / 2 + 3) && p.x < plotW;
+  }
   function zoomBy(delta, x) {
     V.kin = null;
     V.logT = clamp(V.logT + delta, Math.log(o.minSpacing), Math.log(o.maxSpacing));
@@ -2766,6 +2821,8 @@ function create(container, options) {
     if (!drag && !tool && !draft && p && orderEditing) { const h = hitOrder(p); if (h) { cv.style.cursor = h.part === 'x' || h.part === 'add' ? 'pointer' : 'ns-resize'; return; } }
     if (tool || draft) { cv.style.cursor = 'crosshair'; return; }
     if (!drag && p && z === 'plot' && drawings.length) { const h = hitDrawing(p); if (h) { cv.style.cursor = h.part === 'body' ? 'move' : 'pointer'; return; } }
+    if (drag && drag.zone === 'room') { cv.style.cursor = 'col-resize'; return; }   // 1.37.0
+    if (!drag && p && !shiftHeld && inGap(p)) { cv.style.cursor = 'col-resize'; return; }
     cv.style.cursor = drag ? (drag.zone === 'plot' || drag.zone === 'pane' ? 'grabbing' : drag.zone === 'price' ? 'ns-resize' : 'ew-resize') : z === 'price' ? 'ns-resize' : z === 'time' ? 'ew-resize' : 'crosshair';
   }
   function onWheel(e) {
@@ -2839,6 +2896,12 @@ function create(container, options) {
       if (hit) { selectedId = hit.d.id; dd = { d: hit.d, part: hit.part, x0: p.x, y0: p.y, orig: cloneDrawing(hit.d) }; setCursor('plot', p); dirty = true; return; }
       if (selectedId) { selectedId = null; dirty = true; }
     }
+    /* 1.37.0: a press in the gap right of the last bar sets the room right (never with Shift or Ctrl: those place orders) */
+    if (primary && !toolOn && !e.shiftKey && !e.ctrlKey && inGap(p)) {
+      drag = { zone: 'room', x0: p.x, y0: p.y, room0: o.room, moved: false, samples: [], place: false };
+      hover = e.pointerType === 'mouse' ? p : null;
+      setCursor('plot', p); dirty = true; return;
+    }
     drag = { zone: zoneOf(p), x0: p.x, y0: p.y, right0: V.right, lo0: V.lo, hi0: V.hi, logS0: V.logS, samples: [{ t: e.timeStamp, r: V.right }], moved: false,
       place: orderEditing && !!e.shiftKey && !toolOn && zoneOf(p) === 'plot' && primary };   // Shift+click places an order if the pointer does not move
     hover = e.pointerType === 'mouse' ? p : null;
@@ -2892,7 +2955,10 @@ function create(container, options) {
     if (drag) {
       const dx = p.x - drag.x0, dy = p.y - drag.y0;
       if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
-      if (drag.zone === 'plot' || drag.zone === 'pane') {           // the delta pane pans the bars only
+      if (drag.zone === 'room') {                                   // 1.37.0: left widens the room, right narrows it; live stays
+        const r = clamp(Math.round(drag.room0 - dx), ROOM_MIN, ROOM_MAX);
+        if (r !== o.room) { o.room = r; V.right = followRight(); clampRight(); V.follow = true; }
+      } else if (drag.zone === 'plot' || drag.zone === 'pane') {           // the delta pane pans the bars only
         V.right = drag.right0 - dx / V.spacing; clampRight();
         if (!V.auto && drag.zone === 'plot') { const sh = dy / plotH * (drag.hi0 - drag.lo0); V.lo = drag.lo0 + sh; V.hi = drag.hi0 + sh; }
         V.follow = false;
@@ -2958,6 +3024,10 @@ function create(container, options) {
       const v = dt > 0 ? (lastS.r - first.r) / dt : 0;
       if (e.timeStamp - lastS.t < 60 && Math.abs(v * V.spacing) > 0.2 && !REDUCED) V.kin = { v };
       else setFollowFromPosition();
+    }
+    if (drag && drag.zone === 'room') {                          // 1.37.0: the room set (the page saves it, as a preset)
+      if (cancelled && o.room !== drag.room0) { o.room = drag.room0; V.right = followRight(); clampRight(); }
+      else if (o.room !== drag.room0) emit('room', o.room);
     }
     if (drag && drag.place && !drag.moved && !cancelled && e.shiftKey && orderEditing) {
       const p = local(e);
@@ -3054,6 +3124,7 @@ function create(container, options) {
     try {
       const dt = lastFrame ? Math.min(64, now - lastFrame) : 16.7;
       lastFrame = now;
+      snapCheck(now);                                     // 1.37.0: the canvas on whole device pixels
       const t0 = performance.now();
       const moving = step(dt, now);
       if (moving || dirty) {
@@ -4212,7 +4283,7 @@ return {
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, orderLabelShort, positionShort, htfStart, htfEnd, HTF_SECONDS, cornerPlace, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
-    roomBars, fitRange, fmtRemain, barRemain, atr, smaAt, emaAt, bandsAt, rsiAt, smaSeries, emaSeries, bollinger, rsiSeries, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, rthVwapUpdate, vwapAt, PD_POC_DASH,
+    roomBars, ROOM_MIN, ROOM_MAX, LINE_SOFT, LABEL_SOFT, fitRange, fmtRemain, barRemain, atr, smaAt, emaAt, bandsAt, rsiAt, smaSeries, emaSeries, bollinger, rsiSeries, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, rthVwapUpdate, vwapAt, PD_POC_DASH,
   },
   VolumeProfile, CumulativeDelta,
   // chart signals (G1c)

@@ -191,7 +191,8 @@ const V3_OFF = flagValue('v3-off').split(',').map(x => x.trim()).filter(Boolean)
 const QUOTE = (V3 && !V3_OFF.includes('quoteRoots')) || (!!flag('quote-roots') && !flag('v1'));
 const AGENTS = V3 ? flagValue('agents').split(',').map(x => x.trim()).filter(Boolean) : [];   // 0.5.0: config.txt `agents`
 const AGENT_ACCOUNTS = (AGENTS.length ? [{ name: 'SIM-AG1', sim: true, balance: 50000 }, { name: 'SIM-AG2', sim: true, balance: 50000 }] : [])   // made-up Sim accounts for agents to take
-  .concat(process.argv.includes('--mix-groups') || process.argv.includes('--mix-groups-full') ? [{ name: 'SIM-A', sim: true, balance: 150500 }, { name: 'SIM-B', sim: true, balance: 50500 }, { name: 'SIM-C', sim: true, balance: 25000 }, { name: 'SIM-D', sim: true, balance: 50000 }] : [])   // 0.6.5: --mix-groups' made-up accounts
+  .concat(process.argv.includes('--mix-groups') || process.argv.includes('--mix-groups-full') || process.argv.includes('--bench-groups') ? [{ name: 'SIM-A', sim: true, balance: 150500 }, { name: 'SIM-B', sim: true, balance: 50500 }, { name: 'SIM-C', sim: true, balance: 25000 }, { name: 'SIM-D', sim: true, balance: 50000 }] : [])   // 0.6.5: --mix-groups' made-up accounts
+  .concat(process.argv.includes('--bench-groups') ? [{ name: 'SIM-E', sim: true, balance: 50000 }, { name: 'SIM-G', sim: true, balance: 50000 }, { name: 'SIM-H', sim: false, balance: 50000 }] : [])   // 0.6.7: --bench-groups' made-up accounts
   .concat(process.argv.includes('--board-groups') ? [{ name: 'SIM-A', sim: true, balance: 50000 }, { name: 'SIM-B', sim: true, balance: 50400 }, { name: 'SIM-C', sim: true, balance: 50000 }, { name: 'SIM-D', sim: false, balance: 51000 }] : []);   // 0.6.1: --board-groups' made-up accounts
 let htfFail = '';                                  // /test/htf?fail=: the error every htf request gets (none when '')
 const TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps');
@@ -490,11 +491,21 @@ const deskOpts = {
 const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { now: () => Date.now() + CLOCK_OFFSET * 1000, switches: Object.fromEntries(SWITCHES.map(k => [k, !V3_OFF.includes(k)])), accountList: V3_ACCOUNTS.concat(AGENT_ACCOUNTS),
   graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ', agents: AGENTS, agentAnyTime: !!flag('agent-any-time'), botAccount: flagValue('bot-account') || null,
   /* 0.5.8: --no-groups is a ChartBridge before 0.5.8 (no groups message); --groups seeds two made-up groups (sample data) */
-  groups: !flag('no-groups'), groupRules: !flag('no-group-rules'), firmFloor: !!flag('firm-floor'),   // 0.6.6: --firm-floor (the firm's rules on an account in no group, firmMinimum, roomFloorNt)   // 0.6.5: --no-group-rules is a ChartBridge 0.5.8 to 0.6.4 (one rule set per group)
+  groups: !flag('no-groups'), groupRules: !flag('no-group-rules'), firmFloor: !!flag('firm-floor'), bench: !!flag('bench'),   // 0.6.7: --bench (the bench, no hedging always on, a group with no rules of its own)   // 0.6.6: --firm-floor (the firm's rules on an account in no group, firmMinimum, roomFloorNt)   // 0.6.5: --no-group-rules is a ChartBridge 0.5.8 to 0.6.4 (one rule set per group)
   /* 0.6.5: --mix-groups seeds Lucid with a made-up 150K member that has its own rules, and the risk percent at 10 (sample data) */
   /* 0.6.5: --mix-groups-full: Lucid (risk 10%) with SIM-A 150K, SIM-B 50K and SIM-C 25K intraday (their own rules) and SIM-D (the
      group's rules), for the group ticket (sample data) */
-  groupsSeed: flag('mix-groups-full') ? [
+  /* 0.6.7: --bench-groups (with --bench): Lucid (risk 5%, Evals, no rules of its own) with SIM-A 150K, SIM-B 50K, SIM-C 25K intraday
+     and SIM-D 50K on the bench (each its own rules), and Apex with SIM-H; SIM-E and SIM-G are in no group (sample data) */
+  groupsSeed: flag('bench-groups') ? [
+    { name: 'Lucid', members: ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'], benched: ['SIM-D'], riskPct: 5, accountType: 'eval',
+      rules: { 'SIM-A': { size: 150000, dailyLoss: 0, drawdown: 4500, drawdownType: 'eod', lockAt: 150100, target: 9000, consistency: 50, maxMinis: 10, maxMicros: 100, typeId: 'sample-lucid-150k' },
+        'SIM-B': { size: 50000, dailyLoss: 0, drawdown: 2000, drawdownType: 'eod', lockAt: 50100, target: 3000, consistency: 50, maxMinis: 4, maxMicros: 40, typeId: 'sample-lucid-50k' },
+        'SIM-C': { size: 25000, dailyLoss: 500, drawdown: 1000, drawdownType: 'intraday', lockAt: 25100, target: 1250, consistency: 0, maxMinis: 2, maxMicros: 20, typeId: 'sample-lucid-25k-daily' },
+        'SIM-D': { size: 50000, dailyLoss: 0, drawdown: 2000, drawdownType: 'eod', lockAt: 50100, target: 3000, consistency: 50, maxMinis: 4, maxMicros: 40, typeId: 'sample-lucid-50k' } } },
+    { name: 'Apex', members: ['SIM-H'], riskPct: 4, accountType: 'funded',
+      rules: { 'SIM-H': { size: 50000, dailyLoss: 0, drawdown: 2500, drawdownType: 'intraday', lockAt: 0, target: 3000, consistency: 0, maxMinis: 0, maxMicros: 0, typeId: 'sample-apex-50k' } } }]
+    : flag('mix-groups-full') ? [
     { name: 'Lucid', size: 50000, drawdown: 2000, drawdownType: 'eod', target: 3000, lockAt: 50100, members: ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'], riskPct: 10, accountType: 'eval',
       rules: { 'SIM-A': { size: 150000, dailyLoss: 0, drawdown: 4500, drawdownType: 'eod', lockAt: 150100, target: 9000, consistency: 50, maxMinis: 10, maxMicros: 100, typeId: 'sample-lucid-150k' },
         'SIM-B': { size: 50000, dailyLoss: 0, drawdown: 2000, drawdownType: 'eod', lockAt: 50100, target: 3000, consistency: 50, maxMinis: 4, maxMicros: 40, typeId: 'sample-lucid-50k' },
@@ -520,14 +531,14 @@ function onMessage(c, text) {
   const type = m && typeof m.type === 'string' ? m.type : '?';
   received.types[type] = (received.types[type] || 0) + 1;
   if (type === 'subscribe') { (received.subscribes = received.subscribes || []).push({ root: m.root, days: m.days, tickHours: m.tickHours, at: Date.now() }); if (received.subscribes.length > 200) received.subscribes.shift(); }
-  if (type === 'accountGroup' || type === 'memberRules' || type === 'groupSave' || type === 'groupPreview' || type === 'groupOrder') { (received.groupMsgs = received.groupMsgs || []).push(m); if (received.groupMsgs.length > 200) received.groupMsgs.shift(); }   // 0.6.5: the group messages as sent (no PIN or token in them)
+  if (type === 'accountGroup' || type === 'memberRules' || type === 'groupSave' || type === 'groupPreview' || type === 'groupOrder' || type === 'memberBench' || type === 'groupDelete') { (received.groupMsgs = received.groupMsgs || []).push(m); if (received.groupMsgs.length > 200) received.groupMsgs.shift(); }   // 0.6.5: the group messages as sent (no PIN or token in them)
   if (type === 'flatten' || type === 'cancel') { (received.orderActions = received.orderActions || []).push({ type, root: m.root, id: m.id, at: Date.now() }); if (received.orderActions.length > 200) received.orderActions.shift(); }
   if (m.type === 'subscribe') subscribe(c, m);
   else if (DATA_037 && (m.type === 'htf' || m.type === 'weekProfile')) onDataRequest(c, m, text);
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (V3 && m.type === 'client') desk.client(c, m);
   else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'copierFollowerRemove', 'firmMinimum',
-    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear', 'groupSave', 'groupDelete', 'accountGroup', 'memberRules', 'accountLimits', 'groupPreview', 'groupOrder'].includes(m.type)) desk.handle(c, m, text);
+    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear', 'groupSave', 'groupDelete', 'accountGroup', 'memberRules', 'accountLimits', 'groupPreview', 'groupOrder', 'memberBench'].includes(m.type)) desk.handle(c, m, text);   // 0.6.7: memberBench
   else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */

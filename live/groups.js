@@ -1,12 +1,8 @@
 /*
  * Account groups (chart 1.26.0, ChartBridge 0.5.8; Anthony's decisions of 2026-10-14, items 4 and 5 with G1, G2 and G3):
- * the group manager in Settings and the words the Accounts tab uses for groups. nt8/PROTOCOL.md "Prop groups and account
- * state (0.5.8)".
+ * the words the Accounts tab and the Multi-Account panel use for groups (1.26.0 to 1.36.0 also the group manager in Settings,
+ * gone in 1.37.0: see below). nt8/PROTOCOL.md "Prop groups and account state (0.5.8)".
  *
- *   Settings, Account groups   each group as one row: its name, the firm's rules in a line, the No hedging switch, Edit,
- *                              Rename and Delete (an in-page confirm); New group. Edit and New open the rules dialog (as
- *                              Order Strategies): name, account size, daily loss limit, drawdown size and type, "floor stops
- *                              at" (G1), profit target, No hedging. Shown only when ChartBridge sends groups (0.5.8 and on).
  *   Accounts tab               (live/accounts.js) each account's Group dropdown, "highest close so far" asked once when an
  *                              account joins a group (G2 b), and My floor and My daily for an account in no group.
  *
@@ -15,10 +11,10 @@
  * ChartBridge refuses what is wrong with its own words. One direction per group (G3 a) is ChartBridge's check under its order
  * lock; this page only shows the side and the holders it reports. No motion: nothing here moves (rule R3).
  *
- * Two parts, as accounts.js:
- *   GroupsCore   the pure parts (money words, the rules line, the form's checks and the messages). No DOM; it also loads in
- *                Node for test/groups.test.js.
- *   GroupsPage   runs only in a browser: mountSettings (the Settings section and its dialogs), used by workspace.js.
+ * GroupsCore: the pure parts (money words, the rules line, the form's checks and the messages). No DOM; it also loads in Node for
+ * test/groups.test.js. Chart 1.37.0 (ChartBridge 0.6.7, Anthony 2026-10-22): the Settings section and its group dialog (GroupsPage) are
+ * gone: a group is made and set (name, Type, risk percent, Delete) on the Multi-Account panel (live/multi-account.js); its own
+ * rules and its hero left the page (each account's rules come from its type on The Desk), and no hedging is always on.
  * Chart 1.28.0 (ChartBridge 0.6.1, SPEC CE-1): each group's Type (Evals, Funded or not set) and its default hero (a build name)
  * in the rules dialog; ChartBridge saves both in groups.txt and checks only their shapes. The heroes and their tiers come from
  * the PC helper's GET /status (host.heroes, live/agent-helper.js), every hero for every group with a warning when its tier
@@ -266,7 +262,7 @@ function limitsMessage(account, floorText, dailyText, cid) {
 function cleanGroups(m) {
   const list = m && Array.isArray(m.list) ? m.list : [];
   return list.filter(g => g && typeof g.id === 'string' && /^g[1-9][0-9]{0,8}$/.test(g.id) && typeof g.name === 'string')
-    .map(g => ({ id: g.id, name: g.name, noHedge: g.noHedge !== false, dailyLoss: isNum(g.dailyLoss) ? g.dailyLoss : null, drawdown: isNum(g.drawdown) ? g.drawdown : null,
+    .map(g => Object.assign({ id: g.id, name: g.name, noHedge: g.noHedge !== false, dailyLoss: isNum(g.dailyLoss) ? g.dailyLoss : null, drawdown: isNum(g.drawdown) ? g.drawdown : null,
       drawdownType: g.drawdownType, target: isNum(g.target) ? g.target : null, size: isNum(g.size) ? g.size : null, lockAt: isNum(g.lockAt) ? g.lockAt : null, consistency: isNum(g.consistency) ? g.consistency : null,
       accountType: g.accountType === 'eval' || g.accountType === 'funded' ? g.accountType : null, hero: typeof g.hero === 'string' && HERO_RX.test(g.hero) ? g.hero : null,
       members: Array.isArray(g.members) ? g.members.filter(x => typeof x === 'string') : [], side: ['long', 'short', 'mixed'].includes(g.side) ? g.side : null,
@@ -274,7 +270,9 @@ function cleanGroups(m) {
       /* 1.33.0: ChartBridge 0.6.5 sends riskPct and ownRules (perMember: it keeps each member's own rules) */
       perMember: 'riskPct' in g && Array.isArray(g.ownRules), riskPct: isNum(g.riskPct) && g.riskPct > 0 ? g.riskPct : null, ownRules: Array.isArray(g.ownRules) ? g.ownRules.filter(x => typeof x === 'string') : [],
       /* review 4: the members a group entry leaves out (the copier's, the bot's, an agent's), with why */
-      tradeOut: Array.isArray(g.tradeOut) ? g.tradeOut.filter(x => x && typeof x.account === 'string' && typeof x.why === 'string') : [] }));
+      tradeOut: Array.isArray(g.tradeOut) ? g.tradeOut.filter(x => x && typeof x.account === 'string' && typeof x.why === 'string') : [] },
+      /* 1.37.0 (ChartBridge 0.6.7): the members on the bench (members still); absent from an older ChartBridge */
+      Array.isArray(g.benched) ? { benched: g.benched.filter(x => typeof x === 'string') } : {}));
 }
 
 /* ---------------- 1.30.0 (wave 5, Anthony 2026-10-16): account types, the one ledger on The Desk (GET /api/account-types).
@@ -515,252 +513,3 @@ return { NAME_MAX, MONEY_MAX, TYPES, TYPE_WORD, ACCOUNT_TYPES, HERO_RX, typeText
   PLAN_OTHER, typeParts, stageRank, usedFirms, typeTree, cascadeOf, cascadeStart, cascadePick, cascadeView,
   maxText, perMemberVersion, rulesCheck, ruleKeys, memberRulesMessage, rulesForm, deskRules, seedHigh, riskText, riskDollars };
 });
-
-/* ======================================================================== GroupsPage (browser only) */
-if (typeof window !== 'undefined' && typeof document !== 'undefined') window.GroupsPage = (function () {
-'use strict';
-const GC = window.GroupsCore;
-const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-/**
- * Settings, Account groups. host:
- *   feed            the window's createFeed (live/accounts.js): S.groups (null until ChartBridge 0.5.8 sends them), post()
- *   sec, list, add, note    the section, its rows, the New group button and its status line
- *   dialog          the page's <dialog> (#wsDialog); showDialog(d, onOk, onCancel) as workspace.js's
- *   heroes          (1.28.0, optional) () => Promise of the PC helper's GET /status ({ reach, body }, AgentHelper.createClient):
- *                   the heroes and tiers for Hero on duty; without it, or with the helper not answering, only the hero saved
- * Returns { render }.
- */
-function mountSettings(host) {
-  const F = host.feed, P = { confirm: '', seq: 0, heroes: null };
-  const AH = window.AgentHelper || null;
-  const heroName = b => { const st = P.heroes && P.heroes.status, r = st && Array.isArray(st.builds) ? st.builds.find(x => x && x.build === b && x.hero) : null; return r ? String(r.hero) : ''; };
-  function askHeroes() {
-    if (typeof host.heroes !== 'function') return Promise.resolve(P.heroes);
-    return Promise.resolve(host.heroes()).then(r => { P.heroes = { reach: r && r.reach === 'ok' && r.body ? 'ok' : (r && r.reach) || 'down', status: r && r.reach === 'ok' ? r.body : null }; render(); return P.heroes; },
-      () => { P.heroes = { reach: 'down', status: null }; return P.heroes; });
-  }
-  const cid = () => 'gp' + Date.now().toString(36) + '-' + (++P.seq);
-  const say = (text, warn) => { host.note.textContent = text || ''; host.note.className = 'ws-help' + (warn ? ' ws-warn' : ''); };
-  const groups = () => (F && F.S.groups) || [];
-  /* 1.30.0: The Desk's account types (the feed's list, read now or this browser's copy) and each group's link to the type it
-     was filled from (this browser's storage, keyed by group id: groups.txt has no place for it without a ChartBridge change) */
-  const types = () => (F && F.S.types) || null;
-  const typeById = id => { const ts = types(); return ts && id ? ts.find(t => t.id === id) || null : null; };
-  const st = () => (F && F.store) || null;
-  const typeOfAccount = a => (F && typeof F.typeOf === 'function' ? F.typeOf(a) : null);
-  const typesNote = () => { const S = F && F.S; if (!S) return ''; return S.typesState === 'cache' ? 'The Desk is not reachable: the list as of ' + GC.asOfText(S.typesAsOf) + '.' : S.typesState === 'none' ? 'The Desk is not reachable and this browser has no copy of its account types.' : !types() ? 'Reading The Desk\'s account types...' : ''; };
-  /* a new group's link waits for ChartBridge's answer (its id), found by its name; links of groups that are gone are dropped */
-  function syncLinks() {
-    const list = F && F.S.groups;
-    if (!list || F.S.groupsError) return;
-    if (P.pendingLink) { const g = list.find(x => x.name.toLowerCase() === P.pendingLink.name); if (g) { GC.saveLink(st(), g.id, P.pendingLink.link); P.pendingLink = null; } }
-    const links = GC.readLinks(st());
-    for (const id of Object.keys(links)) if (!list.some(g => g.id === id)) GC.saveLink(st(), id, null);
-  }
-  const can = () => !!(F && F.S.groups && F.S.signedIn && F.S.enabled);
-  function post(msg, done) {
-    if (!can() || !F.post(msg)) { say('Not sent: not connected to ChartBridge.', true); return false; }
-    if (done) say(done);
-    return true;
-  }
-  function render() {
-    const show = !!(F && F.S.groups);
-    if (host.sec.hidden === show) host.sec.hidden = !show;
-    if (host.wide) host.wide(show);   // the workspace's third Settings column
-    if (!show) return;
-    syncLinks();
-    const list = groups(), err = F.S.groupsError, links = GC.readLinks(st());
-    /* 1.30.0: under a group filled from a type: "rules differ from <type>: Update" when its rules are not the type's current ones, and
-       the members whose own type is another (warnings only, nothing blocked) */
-    const typeLines = g => {
-      const l = links[g.id]; if (!l) return '';
-      const t = typeById(l.id), diff = t ? GC.rulesDiffer(g, t) : [], off = GC.membersOff(g, l, typeOfAccount);
-      const lines = (diff.length ? `<span class="gp-differ ws-warn" title="${esc('Differs in: ' + diff.join(', ') + '. Filled from version ' + l.version + '; the type is at version ' + t.version + '.')}"><span class="gp-dt">rules differ from ${esc(GC.typeLabel(t))}:</span> <button type="button" class="ws-btn gp-b gp-upd" data-gp="update" data-id="${esc(g.id)}">Update</button></span>` : '') +
-        (off.length ? `<span class="gp-differ ws-warn"><span class="gp-dt">${esc(off.slice(0, 3).map(x => x.account + ' is ' + (x.type.firm ? x.type.firm + ' ' : '') + x.type.name).join('; ') + (off.length > 3 ? '; and ' + (off.length - 3) + ' more' : ''))}: not the group's type</span></span>` : '');
-      return lines ? '<span class="gp-tlines">' + lines + '</span>' : '';
-    };
-    /* 1.33.0 (ChartBridge 0.6.5): how many members have rules of their own, and the risk percent with each member's dollars */
-    const ownText = g => (g.perMember ? (g.ownRules.length ? ' (' + (g.ownRules.length === g.members.length ? 'each' : g.ownRules.length) + ' with its own rules)' : '') + ' · ' + GC.riskText(g) + riskEach(g) : '');
-    const riskEach = g => {
-      if (!(g.riskPct > 0) || !F || !F.S || !Array.isArray(F.S.accounts)) return '';
-      const each = g.members.map(n => { const a = F.S.accounts.find(x => x.name === n), r = a && a.rules ? a.rules : g, d = GC.riskDollars(g, r); return d !== null ? n + ' ' + GC.usd(d) : null; }).filter(Boolean);
-      return each.length ? ' (' + each.join(', ') + ')' : '';
-    };
-    const fromText = g => { const l = links[g.id]; if (!l) return ''; const t = typeById(l.id); return ' · from ' + (t ? GC.typeLabel(t) : l.label); };
-    const rows = list.map(g => {
-      if (P.confirm === g.id) return `<div class="gp-row gp-ask" role="listitem"><span class="gp-askt">Delete ${esc(g.name)}? ${g.members.length ? 'Its ' + esc(GC.membersText(g)) + ' go to None.' : 'It has no accounts.'}</span>` +
-        `<button type="button" class="ws-btn gp-yes" data-gp="del-yes" data-id="${esc(g.id)}">Delete</button><button type="button" class="ws-btn" data-gp="del-no">Keep</button></div>`;
-      return `<div class="gp-row" role="listitem" data-id="${esc(g.id)}"><span class="gp-txt"><b class="gp-name">${esc(g.name)}</b><span class="gp-sum" title="${esc(GC.summary(g) + ' · ' + GC.membersText(g) + ' · ' + GC.sideText(g))}">${esc(GC.summary(g))} · ${esc(GC.membersText(g))}${esc(ownText(g))} · ${esc(GC.typeText(g))} · ${esc(GC.heroText(g, heroName))}${g.side ? ' · ' + esc(g.side === 'mixed' ? 'long and short' : g.side) : ''}${esc(fromText(g))}</span></span>` +
-        `<button type="button" class="gp-switch" role="switch" aria-checked="${g.noHedge}" data-gp="hedge" data-id="${esc(g.id)}" title="No hedging inside this group: counts positions and working entries; covers agents, bots, copier followers and your ticket; exits always go"><span class="gp-knob" aria-hidden="true"></span><span class="visually-hidden">No hedging in ${esc(g.name)}</span></button>` +
-        `<button type="button" class="ws-btn gp-b" data-gp="edit" data-id="${esc(g.id)}">Edit</button><button type="button" class="ws-btn gp-b" data-gp="rename" data-id="${esc(g.id)}">Rename</button><button type="button" class="ws-btn gp-b" data-gp="del" data-id="${esc(g.id)}">Delete</button>${typeLines(g)}</div>`;
-    }).join('');
-    const html = (err ? `<p class="ws-help ws-warn" role="alert">${esc(err)}</p>` : '') + (rows || '<p class="ws-help gp-none">No groups yet. Personal accounts sit in no group.</p>');
-    if (host.list.dataset.html !== html) { host.list.dataset.html = html; host.list.innerHTML = html; }
-    host.add.disabled = !can() || !!err;
-  }
-  host.list.addEventListener('click', e => {
-    const b = e.target.closest('[data-gp]'); if (!b) return;
-    const g = groups().find(x => x.id === b.dataset.id), act = b.dataset.gp;
-    if (act === 'del-no') { P.confirm = ''; render(); return; }
-    if (!g) return;
-    if (act === 'hedge') post(GC.saveFrom(g, { noHedge: !g.noHedge }, cid()), 'No hedging ' + (g.noHedge ? 'off' : 'on') + ' for ' + g.name + ': sent to ChartBridge.');
-    else if (act === 'edit') openRules(g);
-    else if (act === 'update') { const l = GC.readLinks(st())[g.id], t = l ? typeById(l.id) : null; if (t) openRules(g, t); }
-    else if (act === 'rename') openRename(g);
-    else if (act === 'del') { P.confirm = g.id; render(); }
-    else if (act === 'del-yes') { P.confirm = ''; if (post({ type: 'groupDelete', cid: cid(), group: g.id }, 'Delete ' + g.name + ': sent to ChartBridge.')) GC.saveLink(st(), g.id, null); render(); }
-  });
-  host.add.addEventListener('click', () => openRules(null));
-
-  /* Rename: one box (the whole group goes again, as the contract asks) */
-  function openRename(g) {
-    const d = host.dialog;
-    d.innerHTML = `<form class="ws-dlg" method="dialog" aria-label="Rename ${esc(g.name)}"><h2>Rename ${esc(g.name)}</h2><label for="gpName">Group name</label>` +
-      `<input id="gpName" type="text" maxlength="${GC.NAME_MAX}" autocomplete="off" spellcheck="false" value="${esc(g.name)}"><p class="ws-err" id="gpNameErr" role="alert"></p>` +
-      '<div class="ws-dlg-btns"><button type="button" class="ws-btn" data-act="cancel">Cancel</button><button type="submit" class="ws-btn primary">Save</button></div></form>';
-    host.showDialog(d, () => {
-      const name = d.querySelector('#gpName').value.trim();
-      const r = GC.groupMessage(Object.assign(GC.formOf(g), { name }), groups(), g.id, cid());
-      if (r.error) { d.querySelector('#gpNameErr').textContent = r.error; return false; }
-      return post(r.msg, 'Rename ' + g.name + ' to ' + name + ': sent to ChartBridge.');
-    });
-    const i = d.querySelector('#gpName'); i.focus(); i.select();
-  }
-
-  /* Edit and New: the firm's rules (Anthony's approved mockup: the name, the firm's rules, one direction) */
-  function openRules(g, refill) {
-    const d = host.dialog, f = GC.formOf(g);
-    /* 1.33.0: the risk box only for a ChartBridge 0.6.5 (its groups carry riskPct; with no group yet, its hello's version) */
-    const perMember = g ? !!g.perMember : (F.S.groups || []).some(x => x.perMember) || GC.perMemberVersion(F.S.version);
-    /* 1.30.0: the Account type select at the top: Not set, then every type of The Desk's ledger ("(not checked)" until checked).
-       1.32.0: as three short selects, Firm, Plan and Size (the firms in use on The Desk first); only the last
-       (or Not set) fills or clears */
-    const ts = types() || [], link = g ? GC.readLinks(st())[g.id] || null : null;
-    const startType = refill ? refill.id : link && ts.some(t => t.id === link.id) ? link.id : '';
-    const tree = GC.typeTree(ts, GC.usedFirms(F && F.S.desk ? [...F.S.desk.values()] : []));
-    let pick = GC.cascadeStart(tree, startType, null);
-    const typeTip = 'Fills every rule box and the Type from The Desk\'s ledger; you can still change any box. Pick the firm, then the plan, then the size';
-    const typeSel = `<div class="gp-f gp-ftype"><label for="gp-fromFirm">Account type</label><div class="gp-herorow"><span class="gp-tpick">` +
-      `<select class="ws-sel gp-in gp-tp" id="gp-fromFirm" aria-label="Account type: firm"></select><select class="ws-sel gp-in gp-tp" id="gp-fromPlan" aria-label="Account type: plan"></select>` +
-      `<select class="ws-sel gp-in gp-tp" id="gp-fromType" aria-label="Account type: size and stage"></select></span><span class="ws-help gp-herowhy" id="gp-fromWhy" role="status"></span></div><p class="ws-help" id="gp-fromStill" role="status" hidden></p></div>`;
-    const box = (k, label, help) => `<div class="gp-f"><label for="gp-${k}">${label}</label><input class="ws-in gp-in" id="gp-${k}" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${help}" value="${esc(f[k] === undefined || f[k] === null ? '' : f[k])}"></div>`;   // 1.34.0: a new group's risk box showed "undefined"
-    d.innerHTML = `<form class="ws-dlg ws-gp" method="dialog" aria-label="${g ? 'Edit ' + esc(g.name) : 'New group'}">
-      <h2>${g ? 'Edit ' + esc(g.name) : 'New group'} <span>${g ? esc(GC.membersText(g)) : 'shows in every account\'s Group dropdown'}</span></h2>
-      ${typeSel}
-      <div class="gp-f gp-fname"><label for="gp-name">Group name</label><input class="ws-in gp-in" id="gp-name" type="text" maxlength="${GC.NAME_MAX}" autocomplete="off" spellcheck="false" value="${esc(f.name)}"></div>
-      <h3 class="gp-h">The firm's rules</h3>
-      <p class="ws-help">${perMember ? 'Each account keeps its own rules from its type on The Desk, taken as it joins; these are for an account with none of its own.' : 'Set once. With NinjaTrader\'s balance these give each account its room, so the agent sizes on real numbers.'}</p>
-      <div class="gp-grid">${box('size', 'Account size', '$')}${box('dailyLoss', 'Daily loss limit', '$ or none')}${box('drawdown', 'Drawdown size', '$')}
-        <div class="gp-f"><label for="gp-drawdownType">Drawdown type</label><select class="ws-sel gp-in" id="gp-drawdownType">${GC.TYPES.map(t => `<option value="${t[0]}"${t[0] === f.drawdownType ? ' selected' : ''}>${t[1]}</option>`).join('')}</select></div>
-        ${box('lockAt', 'Floor stops at', '$ or none')}${box('target', 'Profit target', '$ or none')}${box('consistency', 'Consistency %', '% or none')}${perMember ? box('riskPct', 'Risk % of max loss', '% or off') : ''}
-        <div class="gp-f"><label for="gp-accountType">Type</label><select class="ws-sel gp-in" id="gp-accountType" title="Evals or Funded: the Agent tab and this dialog warn when a hero's tier does not fit it (shown only)">${GC.ACCOUNT_TYPES.map(t => `<option value="${t[0]}"${t[0] === (g && g.accountType || '') ? ' selected' : ''}>${t[1]}</option>`).join('')}</select></div></div>
-      <p class="ws-help">Daily room counts open P&amp;L, the way the firm does. If a number is missing, the agent uses its model numbers and says so. Consistency (no single day over that share of the profit) is shown to the agent only; nothing is blocked by it.</p>
-      <h3 class="gp-h">One direction</h3>
-      <label class="gp-hedge"><input type="checkbox" id="gp-noHedge"${f.noHedge ? ' checked' : ''}> No hedging inside this group <span>counts positions and working entries; covers agents, bots, copier followers and your ticket; exits always go</span></label>
-      <h3 class="gp-h">Hero on duty</h3>
-      <div class="gp-herorow"><select class="ws-sel gp-in" id="gp-hero" aria-label="The group's default hero"></select><span class="ws-help gp-herowhy" id="gp-heroWhy" role="status"></span></div>
-      <p class="ws-help">The Agent tab picks this hero first when an agent takes this group; you can pick another there. Every hero is listed; a tier that does not fit the Type is a warning, nothing is blocked.</p>
-      <p class="ws-err" id="gp-err" role="alert"></p>
-      <div class="ws-dlg-btns">${g ? '<button type="button" class="ws-btn gp-del" id="gp-del">Delete group</button><span class="sg-fill"></span>' : ''}<button type="button" class="ws-btn" data-act="cancel">Close</button><button type="submit" class="ws-btn primary">Save</button></div>
-    </form>`;
-    const $d = id => d.querySelector('#gp-' + id);
-    const lockSync = () => { const st = $d('drawdownType').value === 'static'; $d('lockAt').disabled = st; if (st) $d('lockAt').value = ''; };
-    $d('drawdownType').addEventListener('change', lockSync); lockSync();
-    /* 1.30.0: choosing a type fills the boxes and the Type (never the name: Anthony names his groups); Save sends groupSave as before */
-    let filled = null;
-    const fromWhy = (text, warn) => { $d('fromWhy').textContent = text; $d('fromWhy').classList.toggle('ws-warn', !!warn); };
-    /* 1.32.0: the picker drawn from GC.cascadeView (short labels, the whole name in each option's and select's tooltip) */
-    const drawPick = () => {
-      const vw = GC.cascadeView(tree, pick), t = typeById(pick.id);
-      for (const [k, v] of [['fromFirm', vw.firm], ['fromPlan', vw.plan], ['fromType', vw.type]]) {
-        const sel = $d(k);
-        sel.replaceChildren(...v.options.map(o => { const op = new Option(o.label, o.value); op.title = o.title; return op; }));
-        sel.value = v.value;
-        sel.disabled = !ts.length || (k !== 'fromFirm' && !vw.firm.value) || (k === 'fromType' && !vw.plan.value);
-        const o = v.options.find(x => x.value === v.value);
-        sel.title = (k === 'fromType' && t && v.value ? GC.typeLabel(t) : o && v.value ? o.title : '') + (v.value ? '. ' : '') + typeTip;
-      }
-      /* 1.32.0 (review): Firm or Plan moved off the type chosen last and Size still blank: the line under the selects says which type
-         Save keeps, so the screen does not mislead; gone once a Size is chosen */
-      const still = $d('fromStill'), was = pick.id && !vw.type.value ? (t ? GC.typeLabel(t) : link && link.id === pick.id ? link.label : pick.id) : '';
-      still.textContent = was ? 'still: ' + was : ''; still.hidden = !was;
-    };
-    drawPick();
-    const fromIdle = () => {
-      const id = pick.id, t = typeById(id), note = typesNote();
-      if (!ts.length) { fromWhy(note || 'The Desk has no account types yet.', !!note); return; }
-      if (!id) { fromWhy(note, !!note); return; }
-      const diff = t && g ? GC.rulesDiffer(g, t) : [];
-      fromWhy((diff.length ? 'Rules differ from ' + GC.typeLabel(t) + ' (' + diff.join(', ') + ').' : 'Filled from ' + (link ? link.label : GC.typeLabel(t)) + '.') + (note ? ' ' + note : ''), diff.length > 0);
-    };
-    const fill = t => {
-      const v = GC.typeForm(t);
-      for (const k of ['size', 'dailyLoss', 'drawdown', 'lockAt', 'target', 'consistency']) $d(k).value = v[k];
-      if (v.drawdownType) $d('drawdownType').value = v.drawdownType;
-      if (v.accountType) $d('accountType').value = v.accountType;   // a type with no Type set keeps the group's own
-      lockSync(); $d('lockAt').value = $d('drawdownType').value === 'static' ? '' : v.lockAt;
-      for (const el of d.querySelectorAll('.gp-in')) el.removeAttribute('aria-invalid');
-      filled = { id: t.id, version: t.version, label: t.firm + ' ' + t.name };
-      const note = typesNote();
-      fromWhy('Filled from ' + GC.typeLabel(t) + ', version ' + t.version + (v.missing.length ? '; it has no ' + v.missing.join(', ') + ': type ' + (v.missing.length > 1 ? 'them' : 'it') : '') + '. Change any box, then Save.' + (note ? ' ' + note : ''), v.missing.length > 0 || t.status !== 'checked');
-    };
-    const onPick = (which, el) => {
-      const r = GC.cascadePick(tree, pick, which, el.value);
-      pick = r.state; drawPick();
-      if (r.send === null) { filled = null; fromIdle(); }
-      else if (r.send) { const t = typeById(r.send); if (t) fill(t); }
-      /* Firm and Plan keep the focus where it is (review: an arrow key on a closed select fires change, so moving the focus would
-         stop Anthony arrowing through the firms); only Save saves */
-    };
-    $d('fromFirm').addEventListener('change', e => onPick('firm', e.target));
-    $d('fromPlan').addEventListener('change', e => onPick('plan', e.target));
-    $d('fromType').addEventListener('change', e => onPick('type', e.target));
-    if (refill) fill(refill); else fromIdle();
-    /* 1.28.0: Hero on duty: None, then every hero the PC helper knows (its tier, and a warning when it does not fit the Type) */
-    let heroWant = g && g.hero ? g.hero : '';
-    const heroFill = () => {
-      const sel = $d('hero'); if (!sel) return;
-      const type = $d('accountType').value, H = P.heroes, reach = H ? H.reach : '';
-      const opts = AH ? AH.heroOptions(H && H.status, type, reach) : [];
-      const list = [{ build: '', label: 'None' }].concat(opts);
-      if (heroWant && !opts.some(o => o.build === heroWant)) list.push({ build: heroWant, label: heroWant + ' (' + (reach === 'ok' ? 'not on this PC\'s helper now' : H ? 'tier unknown (the PC helper is not answering)' : 'asking the PC helper...') + ')' });
-      sel.replaceChildren(...list.map(o => new Option(o.label, o.build)));
-      sel.value = heroWant;
-      const o = opts.find(x => x.build === heroWant);
-      $d('heroWhy').textContent = !heroWant ? '' : o ? (o.fit.warn || o.fit.note || 'fits ' + (type === 'eval' ? 'Evals' : 'Funded')) : '';
-      $d('heroWhy').classList.toggle('ws-warn', !!(o && o.fit.warn));
-    };
-    $d('hero').addEventListener('change', () => { heroWant = $d('hero').value; heroFill(); });
-    $d('accountType').addEventListener('change', heroFill);
-    $d('fromType').addEventListener('change', heroFill);   // 1.30.0: a fill may change the Type
-    $d('fromFirm').addEventListener('change', heroFill);   // 1.32.0: Not set is on the Firm select
-    heroFill();
-    askHeroes().then(() => { if (d.open && $d('hero')) heroFill(); });
-    let delAsked = false;
-    if (g) $d('del').addEventListener('click', () => {
-      if (!delAsked) { delAsked = true; $d('del').textContent = 'Delete ' + g.name + '? Click again'; $d('err').textContent = g.members.length ? 'Its ' + GC.membersText(g) + ' go to None.' : ''; return; }
-      if (post({ type: 'groupDelete', cid: cid(), group: g.id }, 'Delete ' + g.name + ': sent to ChartBridge.')) { GC.saveLink(st(), g.id, null); d.close(); }
-    });
-    host.showDialog(d, () => {
-      for (const el of d.querySelectorAll('.gp-in')) el.removeAttribute('aria-invalid');
-      const form = { name: $d('name').value, size: $d('size').value, dailyLoss: $d('dailyLoss').value, drawdown: $d('drawdown').value, drawdownType: $d('drawdownType').value,
-        lockAt: $d('lockAt').value, target: $d('target').value, consistency: $d('consistency').value, noHedge: $d('noHedge').checked, accountType: $d('accountType').value, hero: $d('hero').value };
-      if (perMember) form.riskPct = $d('riskPct').value;   // 1.33.0: only to a ChartBridge 0.6.5 (an older one refuses the key)
-      const r = GC.groupMessage(form, groups(), g ? g.id : null, cid());
-      if (r.error) { $d('err').textContent = r.error; if (r.field && $d(r.field)) { $d(r.field).setAttribute('aria-invalid', 'true'); $d(r.field).focus(); } return false; }
-      if (!post(r.msg, (g ? 'Save ' : 'New group ') + r.msg.name + ': sent to ChartBridge.')) return false;
-      /* 1.30.0: the group remembers the type and version it was filled from (Not set: no link; unchanged: the link it had) */
-      const chosen = pick.id;   // 1.32.0: the type chosen last (moving Firm or Plan alone changes nothing)
-      const next = !chosen ? null : filled && filled.id === chosen ? filled : link && link.id === chosen ? link : null;
-      if (g) GC.saveLink(st(), g.id, next); else P.pendingLink = next ? { name: r.msg.name.toLowerCase(), link: next } : null;
-      return true;
-    });
-    if (refill) d.querySelector('button[type="submit"]').focus(); else $d('name').focus();
-  }
-  render();
-  return { render, state: P };
-}
-
-return { mountSettings };
-})();

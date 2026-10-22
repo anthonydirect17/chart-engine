@@ -243,6 +243,7 @@ public static class GroupsHarness
             Backups();       // 0.6.3 (audit C3): groups.txt and account-marks.txt fall back to their last good copy
             MemberRules();   // 0.6.5 (Anthony 2026-10-19, PRIORITY): each member's own rules, the old file, the risk percent
             GroupEntries();  // 0.6.5 (Anthony 2026-10-19): trade the group from the ticket, each member sized from the risk percent
+            Bench();         // 0.6.7 (Anthony 2026-10-22): the bench, no hedging always on, a group with no rules of its own, the risk percent while flat
             FirmLimits();    // 0.6.6 (Anthony 2026-10-20): his own entries: the firm's max only; the machines': a known breach only; the daily loss alert
             FirmFloor();     // 0.6.6 (Anthony 2026-10-20): the firm's rules on an account in no group, the computed floor first, firmMinimum
         }
@@ -336,7 +337,7 @@ public static class GroupsHarness
             Check(Rejection().Contains(x[1]) && (x[1].StartsWith("unknown key") || Rejection().Contains("\"cid\":\"s\"")) && !File.Exists(Path.Combine(folder, "groups.txt")), "groupSave refused: " + x[1] + " (" + Rejection() + ")");
         }
         Clear(); G("groupSave", Save("", "Lucid", "true", "1000", "2000", "eod", "3000", "50000", "50100"));
-        Check(Rejection() == "" && Last("groups").Contains("{\"id\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":null,\"accountType\":null,\"hero\":null,\"members\":[],\"side\":null,\"holders\":[],\"riskPct\":null,\"ownRules\":[],\"tradeOut\":[]}"),
+        Check(Rejection() == "" && Last("groups").Contains("{\"id\":\"g1\",\"name\":\"Lucid\",\"noHedge\":true,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":null,\"accountType\":null,\"hero\":null,\"members\":[],\"side\":null,\"holders\":[],\"riskPct\":null,\"ownRules\":[],\"tradeOut\":[],\"benched\":[]}"),
               "groupSave: g1 made, the page told at once: " + Last("groups"));
         string[] lines = FileText().Split('\n');
         Check(lines[0] == ChartBridgeGroups.Header && lines[1].StartsWith("# ") && lines[2] == "group\tg1\tLucid\ton\t1000\t2000\teod\t3000\t50000\t50100\t-\t-\t-",   // 0.6.1: then type and hero, - for not set and none
@@ -476,11 +477,12 @@ public static class GroupsHarness
     {
         Flat();
         Pos(simA, mnq, 2);
+        // 0.6.7 (Anthony 2026-10-22, "Always on, no switch"): no hedging cannot be turned off
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid Flex", "false", "1000", "2000", "eod", "3000", "50000", "50100"));
-        Check(FileText().Contains("group\tg1\tLucid Flex\toff\t"), "the switch off is saved");
-        Check(ChartBridgeGroups.EntryCheck("page", simC, "MNQ", false, 1, true, false) == null, "No hedging off: a sell while the group is long goes");
+        Check(Rejection().Contains("No hedging is always on for every group") && FileText().Contains("group\tg1\tLucid Flex\ton\t"), "0.6.7: the switch off is refused; still on");
+        Check(ChartBridgeGroups.EntryCheck("page", simC, "MNQ", false, 1, true, false) != null, "0.6.7: so a sell while the group is long is still refused");
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid Flex", "true", "1000", "2000", "eod", "3000", "50000", "50100"));
-        Check(ChartBridgeGroups.EntryCheck("page", simC, "MNQ", false, 1, true, false) != null, "back on: refused again");
+        Check(Rejection() == "" && ChartBridgeGroups.EntryCheck("page", simC, "MNQ", false, 1, true, false) != null, "noHedge true is taken (an older page sends it)");
         Flat();
     }
 
@@ -812,13 +814,7 @@ public static class GroupsHarness
         Order nog = Manual(simD, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed d");
         Tick(); Pos(simD, mnq, 0); Tick();
         Check(!Cancelled(simD, nog), "Q-EXIT: an account in no group: untouched");
-        Flat();
-        G("groupSave", Save(",\"group\":\"g1\"", "Review", "false", "0", "2000", "eod", "0", "50000", "0"));
-        Pos(simA, mnq, 2); Pos(simC, mnq, 1);
-        Order off = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 2, "", "typed off");
-        Tick(); Pos(simA, mnq, 0); Tick();
-        Check(!Cancelled(simA, off), "Q-EXIT: No hedging off: untouched");
-        G("groupSave", Save(",\"group\":\"g1\"", "Review", "true", "0", "2000", "eod", "0", "50000", "0"));
+        Flat();   // 0.6.7: no hedging is always on (the "No hedging off: untouched" case is gone with the switch)
         // after a start: an order on a flat account against its group's side is cancelled once, the same way
         Flat(); Pos(simC, mnq, 1);
         Order before = Manual(simA, mnq, OrderAction.Sell, OrderType.Limit, 1, "", "typed before");
@@ -1254,7 +1250,7 @@ public static class GroupsHarness
               "0.6.5 migration: a 0.6.4 file's member inherits the group's rules (floor 51000-2000, rules own false): " + e);
         Check(FileText() == old.Replace("# group...", ChartBridgeGroups.Header2) || FileText().Replace(ChartBridgeGroups.Header2, "# group...") == old, "0.6.5 migration: saved again, the file is byte for byte what 0.6.4 writes (no rules line, 13 fields): " + FileText().Replace("\t", "<TAB>"));
         Check(State("SIM-A").Contains("\"rules\":{\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"target\":3000,\"size\":50000,\"lockAt\":50100,\"consistency\":0,\"maxMinis\":0,\"maxMicros\":0}"), "0.6.5 migration: accountState's rules as before: " + State("SIM-A"));
-        Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[],\"tradeOut\":[]}"), "0.6.5 migration: risk off, no member with rules of its own");
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[],\"tradeOut\":[],\"benched\":[]}"), "0.6.5 migration: risk off, no member with rules of its own");
         // the refusals: all or none, with joining only, the same checks as groupSave's
         string[][] bad = {
             new[] { JoinRules("SIM-C", "\"g1\"", null, ",\"size\":150000"), "dailyLoss is needed" },
@@ -1294,7 +1290,7 @@ public static class GroupsHarness
         Check(b.Contains("\"floor\":49000,\"roomFloor\":1500,\"roomDaily\":null,\"targetLeft\":2500"), "0.6.5 mixed: SIM-B (50K, eod 2000): floor 49000, its own target: " + b);
         Check(c.Contains("\"floor\":24000,\"roomFloor\":1000,\"roomDaily\":500,\"targetLeft\":1250"), "0.6.5 mixed: SIM-C (25K, intraday 1000, daily 500): floor 24000, daily room 500: " + c);
         Check(AccountsNow().Contains("\"rules\":{\"size\":25000,\"dailyLoss\":500,\"drawdown\":1000,\"drawdownType\":\"intraday\",\"lockAt\":25100,\"target\":1250,\"consistency\":null,\"maxMinis\":2,\"maxMicros\":20,\"typeId\":\"lucid-daily-25k-eval\",\"own\":true}"), "0.6.5: the accounts message carries each member's rules (own true)");
-        Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[\"SIM-A\",\"SIM-B\",\"SIM-C\"],\"tradeOut\":[]}"), "0.6.5: the groups message names the members with rules of their own");
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":null,\"ownRules\":[\"SIM-A\",\"SIM-B\",\"SIM-C\"],\"tradeOut\":[],\"benched\":[]}"), "0.6.5: the groups message names the members with rules of their own");
         Check(State("SIM-A").Contains("\"rules\":{\"dailyLoss\":0,\"drawdown\":4500,\"drawdownType\":\"eod\",\"target\":9000,\"size\":150000,\"lockAt\":150100,\"consistency\":50,\"maxMinis\":10,\"maxMicros\":100}") &&
               State("SIM-C").Contains("\"rules\":{\"dailyLoss\":500,\"drawdown\":1000,\"drawdownType\":\"intraday\",\"target\":1250,\"size\":25000,\"lockAt\":25100,\"consistency\":0,\"maxMinis\":2,\"maxMicros\":20}"), "0.6.5: each agent's accountState carries its member's own rules (the same seven keys): " + State("SIM-A"));
         // each floor trails from its own high and stops at its own lock
@@ -1342,7 +1338,7 @@ public static class GroupsHarness
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0").Replace("}", ",\"riskPct\":101}"));
         Check(Rejection().Contains("riskPct must be a percent of each member's max loss from 0 (off) to 100"), "0.6.5 risk: above 100 refused");
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0").Replace("}", ",\"riskPct\":10}"));
-        Check(Rejection() == "" && FileText().Contains("\teval\t-\t10\n") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":10,\"ownRules\":[\"SIM-A\",\"SIM-B\"],\"tradeOut\":[]}") && Logged("risk 10% of each member's max loss"), "0.6.5 risk: 10 saved as the 14th field, in the groups message: " + FileText().Replace("\t", "<TAB>"));
+        Check(Rejection() == "" && FileText().Contains("\teval\t-\t10\n") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":10,\"ownRules\":[\"SIM-A\",\"SIM-B\"],\"tradeOut\":[],\"benched\":[]}") && Logged("risk 10% of each member's max loss"), "0.6.5 risk: 10 saved as the 14th field, in the groups message: " + FileText().Replace("\t", "<TAB>"));
         Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "true", "500", "3000", "static", "0", "60000", "0"));
         Check(FileText().Contains("\teval\t-\t10\n"), "0.6.5 risk: a save without it (a page before 1.33.0) keeps it");
         Flat();
@@ -1397,6 +1393,120 @@ public static class GroupsHarness
         lock ((object)typeof(ChartBridgeOrders).GetField("Sync", PS).GetValue(null)) ((HashSet<Order>)typeof(ChartBridgeOrders).GetField("Ours", PS).GetValue(null)).Add(o);
         return o;
     }
+    // ------------------------------------------------------------ 0.6.7 (Anthony 2026-10-22): the Multi-Account panel's bench
+    static string Bench(string account, string benched) { return "{\"type\":\"memberBench\",\"cid\":\"bn\",\"account\":\"" + account + "\",\"benched\":" + benched + "}"; }
+    static void Bench()
+    {
+        Flat();
+        ChartBridgeGroups.GapMs = 1e12;
+        Func<int> All = () => Submits(simA) + Submits(simB) + Submits(simC) + Submits(simD);
+        string p = Path.Combine(folder, "groups.txt"), mp = Path.Combine(folder, "account-marks.txt");
+        Gone(p); Gone(mp); File.Delete(p + ".good");
+        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\toff\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\t10\n");
+        ClockEt(2026, 10, 20, 9, 0); Restart();
+        foreach (Account a in new[] { simA, simB, simC, simD }) a.Connection.Status = ConnectionStatus.Connected;
+        ClockEt(2026, 10, 19, 18, 1);
+        Money(simA, 150500, 0, 0); Money(simB, 50500, 0, 0); Money(simC, 25000, 0, 0); Money(simD, 50000, 0, 0);
+        Clear(); G("accountGroup", JoinRules("SIM-A", "\"g1\"", "151000", R("150000", "0", "4500", "eod", "150100", "9000", ",\"maxMinis\":10,\"maxMicros\":100,\"typeId\":\"made-up-150k\"")));
+        G("accountGroup", JoinRules("SIM-B", "\"g1\"", "51000", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"")));
+        G("accountGroup", JoinRules("SIM-C", "\"g1\"", null, R("25000", "500", "1000", "intraday", "25100", "1250", ",\"maxMinis\":2,\"maxMicros\":20,\"typeId\":\"made-up-25k\"")));
+        G("accountGroup", Join("SIM-D", "\"g1\"", null));   // joined by an older page: no rules of its own (the group's line has some)
+        Tick();
+        ClockEt(2026, 10, 20, 10, 0); Tick();
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-D") == "g1", "BENCH setup: Lucid (risk 10%) with SIM-A, SIM-B, SIM-C (each its own rules) and SIM-D (none of its own)");
+        // no hedging always on: a line saved "off" reads as on (and is saved "on" from then), a save with noHedge false is refused
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"name\":\"Lucid\",\"noHedge\":true,") && FileText().Contains("group\tg1\tLucid\ton\t"), "0.6.7: no hedging always on: a line saved off reads as on, written on: " + FileText().Replace("\t", "<TAB>"));
+        Pos(simA, mnq, 2);
+        Check(ChartBridgeGroups.EntryCheck("page", simC, "MNQ", false, 1, true, false) != null, "0.6.7: so a sell while the group is long is refused (it was allowed with off)");
+        Pos(simA, mnq, 0);
+        Clear(); G("groupSave", Save(",\"group\":\"g1\"", "Lucid", "false", "0", "2000", "eod", "3000", "50000", "0"));
+        Check(Rejection().Contains("No hedging is always on for every group (ChartBridge 0.6.7): noHedge false is refused"), "0.6.7: groupSave with noHedge false refused: " + Rejection());
+
+        // the bench: SIM-B flat with nothing working goes to the bench; a member still, its flag in groups.txt and the sealed copy
+        Clear(); G("memberBench", Bench("SIM-B", "true"));
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-B") == "g1" && FileText().Contains("member\tSIM-B\tg1\tbenched\n") && FileText().Contains("member\tSIM-A\tg1\n") &&
+              File.ReadAllText(p + ".good").Contains("member\tSIM-B\tg1\tbenched\n"), "BENCH: SIM-B to the bench: still in g1, \"benched\" on its member line, in groups.txt.good too: " + FileText().Replace("\t", "<TAB>"));
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"members\":[\"SIM-A\",\"SIM-B\",\"SIM-C\",\"SIM-D\"]") && ChartBridgeGroups.GroupsJson().Contains("\"benched\":[\"SIM-B\"]"), "BENCH: the groups message: every member, SIM-B on the bench: " + ChartBridgeGroups.GroupsJson());
+        Check(Logged("groups: SIM-B is on Lucid's bench: it sits out new entries and keeps its rules (by the page)"), "BENCH: the Output window says so");
+        Check(Entry(AccountsNow(), "SIM-B").Contains("\"floor\":49000,") && AccountsNow().Contains("\"typeId\":\"made-up-50k\",\"own\":true"), "BENCH: a benched member keeps its rules and its floor: " + Entry(AccountsNow(), "SIM-B"));
+        // a group entry: SIM-B size 0, "benched"; SIM-D (no rules of its own) sits out too, and says to set its type
+        int s0 = All(), b0 = Submits(simB);
+        Clear(); GP("groupPreview", GE("groupPreview", "buy", "market", "{\"stop\":20,\"target\":40}", ""));
+        string pv = Last("groupPreview");
+        Check(Seat(pv, "SIM-B") == "{\"account\":\"SIM-B\",\"size\":0,\"risk\":0,\"budget\":0,\"out\":\"" + ChartBridgeOrders.BenchedOut + "\"}" && Seat(pv, "SIM-A").Contains("\"size\":4,") && Seat(pv, "SIM-C").Contains("\"size\":1,"),
+              "BENCH: the preview: SIM-B 0, benched; SIM-A 4 and SIM-C 1 as before: " + pv);
+        Check(Seat(pv, "SIM-D") == "{\"account\":\"SIM-D\",\"size\":0,\"risk\":0,\"budget\":0,\"out\":\"" + ChartBridgeOrders.NoTypeOut + "\"}", "0.6.7: SIM-D, no rules of its own: sits out, set its type (the group's own rules size no member now): " + Seat(pv, "SIM-D"));
+        Clear(); GP("groupOrder", GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"SIM-A:4,SIM-B:2,SIM-C:1,SIM-D:0\""));
+        Check(Rejection().Contains("the sizes changed since the preview (SIM-B 2 confirmed, 0 now)") && All() == s0, "BENCH: a size for a benched member is refused whole, nothing sent: " + Rejection());
+        Clear(); GP("groupOrder", GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"SIM-A:4,SIM-B:0,SIM-C:1,SIM-D:0\""));
+        Check(Rejection() == "" && Last("groupPlaced").Contains("\"placed\":2,") && Submits(simB) == b0 && All() == s0 + 2, "BENCH: the entry goes to SIM-A and SIM-C only, nothing to SIM-B: " + Last("groupPlaced"));
+        // moves only while flat with no working orders: SIM-A now holds the entry's working order
+        Clear(); G("memberBench", Bench("SIM-A", "true"));
+        Check(Rejection().Contains("SIM-A has ") && Rejection().Contains("working order") && Rejection().Contains("it moves once it is flat with no working orders") && !FileText().Contains("member\tSIM-A\tg1\tbenched"),
+              "BENCH: refused while SIM-A has a working order, with the reason the chip shows: " + Rejection());
+        Flat();
+        // a benched member that holds a position anyway (typed into NinjaTrader): its exits, stop, cancel and flatten all go
+        Pos(simB, nq, 2);
+        Clear(); G("memberBench", Bench("SIM-B", "false"));
+        Check(Rejection().Contains("SIM-B is in a trade (+2 NQ): it moves once it is flat with no working orders") && FileText().Contains("member\tSIM-B\tg1\tbenched"), "BENCH: back from the bench refused while SIM-B is in a trade: " + Rejection());
+        ChartBridgeOrders.NoteLast("NQ", 25000);
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"stop\",\"qty\":2,\"price\":24950"));
+        Check(Rejection() == "" && simB.Orders.Any(o => o.OrderType == OrderType.StopMarket && o.OrderState == OrderState.Working), "BENCH: a stop for the benched member's position goes: " + Rejection());
+        Order stopB = simB.Orders.Last(o => o.OrderType == OrderType.StopMarket);
+        Clear(); ChartBridgeOrders.OnMessage(page, "change", "{\"type\":\"change\",\"cid\":\"c\",\"id\":\"" + (string)typeof(ChartBridgeOrders).GetMethod("IdFor", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, new object[] { stopB }) + "\",\"price\":24960}");
+        Check(Rejection() == "", "BENCH: the stop is moved (change): " + Rejection());
+        Clear(); ChartBridgeOrders.OnMessage(page, "cancel", "{\"type\":\"cancel\",\"cid\":\"x\",\"id\":\"" + (string)typeof(ChartBridgeOrders).GetMethod("IdFor", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, new object[] { stopB }) + "\"}");
+        Check(Rejection() == "", "BENCH: the stop is cancelled: " + Rejection());
+        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1"));
+        Check(Rejection() == "" && Submits(simB) > b0, "BENCH: an exit (sell 1 of the long 2) goes: " + Rejection());
+        Clear(); ChartBridgeOrders.OnMessage(page, "flatten", "{\"type\":\"flatten\",\"cid\":\"f\",\"account\":\"SIM-B\",\"root\":\"NQ\"}");
+        Check(Rejection() == "" && simB.Calls.Any(c => c.StartsWith("flatten") || c.StartsWith("submit ")), "BENCH: Flatten on the benched member goes: " + Rejection());
+        Flat();
+        // back from the bench once flat: the line exactly as 0.6.6 writes it
+        Clear(); G("memberBench", Bench("SIM-B", "false"));
+        Check(Rejection() == "" && FileText().Contains("member\tSIM-B\tg1\n") && !FileText().Contains("\tbenched") && ChartBridgeGroups.GroupsJson().Contains("\"benched\":[]"), "BENCH: back from the bench when flat: the 0.6.6 line again, no one benched: " + FileText().Replace("\t", "<TAB>"));
+        // the bench survives a restart; leaving the group clears it
+        G("memberBench", Bench("SIM-C", "true"));
+        Restart();
+        Check(ChartBridgeGroups.BenchedOf("g1").Contains("SIM-C") && !ChartBridgeGroups.FileUnreadable(), "BENCH: after a restart SIM-C is still on the bench");
+        G("accountGroup", Join("SIM-C", "null", null));
+        Check(Rejection() == "" && !FileText().Contains("SIM-C\tg1"), "BENCH: SIM-C leaves the group: its bench goes with it");
+        // refusals
+        foreach (string[] x in new[] {
+            new[] { Bench("SIM-C", "true"), "SIM-C is in no group: only a group's member goes to the bench" },
+            new[] { Bench("SIM-A", "\"yes\""), "benched must be true (to the bench) or false" },
+            new[] { "{\"type\":\"memberBench\",\"cid\":\"bn\",\"benched\":true}", "memberBench needs account" } })
+        {
+            Clear(); G("memberBench", x[0]);
+            Check(Rejection().Contains(x[1]), "BENCH refused: " + x[1] + " (" + Rejection() + ")");
+        }
+        simA.Connection.Status = ConnectionStatus.Disconnected;
+        Clear(); G("memberBench", Bench("SIM-A", "true"));
+        Check(Rejection().Contains("SIM-A is not connected: ChartBridge cannot see that it is flat"), "BENCH: not connected: it stays where it is: " + Rejection());
+        simA.Connection.Status = ConnectionStatus.Connected;
+        // the risk percent changes only while the group is flat
+        Pos(simA, nq, 1);
+        Clear(); G("groupSave", "{\"type\":\"groupSave\",\"cid\":\"s\",\"group\":\"g1\",\"name\":\"Lucid\",\"riskPct\":5}");
+        Check(Rejection().Contains("the risk percent changes only while group Lucid is flat: it holds SIM-A +1 NQ; nothing was changed") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":10,"), "0.6.7: the risk percent refused while the group holds a position: " + Rejection());
+        Flat();
+        Clear(); G("groupSave", "{\"type\":\"groupSave\",\"cid\":\"s\",\"group\":\"g1\",\"name\":\"Lucid\",\"riskPct\":5}");
+        Check(Rejection() == "" && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":5,") && FileText().Contains("group\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\t5\n"),
+              "0.6.7: flat: the risk percent changes, the group's other fields kept (a save with no rules keeps the line's): " + FileText().Replace("\t", "<TAB>"));
+        // a group made on the panel: a name and a Type, no rules of its own
+        Clear(); G("groupSave", "{\"type\":\"groupSave\",\"cid\":\"s\",\"name\":\"Apex\",\"accountType\":\"funded\",\"riskPct\":4}");
+        Check(Rejection() == "" && FileText().Contains("group\tg2\tApex\ton\t-\t-\t-\t-\t-\t-\t-\tfunded\t-\t4\n"), "0.6.7: a new group with no rules: size, drawdown and type \"-\": " + FileText().Replace("\t", "<TAB>"));
+        Check(ChartBridgeGroups.GroupsJson().Contains("\"name\":\"Apex\",\"noHedge\":true,\"dailyLoss\":null,\"drawdown\":null,\"drawdownType\":null,"), "0.6.7: the groups message: its rules null");
+        Clear(); G("accountGroup", Join("SIM-C", "\"g2\"", null));
+        Check(Rejection().Contains("SIM-C has no account type: set its type on The Desk first") && ChartBridgeGroups.GroupOf("SIM-C") == null, "0.6.7: an account with no rules cannot join a group with none: " + Rejection());
+        Clear(); G("accountGroup", JoinRules("SIM-C", "\"g2\"", null, R("25000", "500", "1000", "intraday", "25100", "1250", ",\"typeId\":\"made-up-25k\"")));
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-C") == "g2" && Entry(AccountsNow(), "SIM-C").Contains("\"group\":\"g2\""), "0.6.7: with its rules from its type it joins: " + Rejection());
+        Restart();
+        Check(!ChartBridgeGroups.FileUnreadable() && ChartBridgeGroups.GroupOf("SIM-C") == "g2", "0.6.7: a group with no rules reads back after a restart");
+        Clear(); G("groupDelete", "{\"type\":\"groupDelete\",\"cid\":\"d\",\"group\":\"g2\"}");
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-C") == null, "0.6.7: Delete group");
+        Flat();
+    }
+
     static void GroupEntries()
     {
         Flat();
@@ -1413,7 +1523,7 @@ public static class GroupsHarness
         Clear(); G("accountGroup", JoinRules("SIM-A", "\"g1\"", "151000", R("150000", "0", "4500", "eod", "150100", "9000", ",\"maxMinis\":10,\"maxMicros\":100")));
         G("accountGroup", JoinRules("SIM-B", "\"g1\"", "51000", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":40")));
         G("accountGroup", JoinRules("SIM-C", "\"g1\"", null, R("25000", "500", "1000", "intraday", "25100", "1250", ",\"maxMinis\":2,\"maxMicros\":20")));
-        G("accountGroup", Join("SIM-D", "\"g1\"", null));
+        G("accountGroup", JoinRules("SIM-D", "\"g1\"", null, R("50000", "0", "2000", "eod", "0", "3000", "")));   // 0.6.7: a group's own rules size no member, so SIM-D has its own (the group's numbers)
         Tick();   // the session's day start at 18:01 ET (on time: the computed P&L counts)
         ClockEt(2026, 10, 20, 10, 0); Tick();
         Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-D") == "g1", "GE setup: Lucid (risk 10%) with SIM-A 150K, SIM-B 50K, SIM-C 25K intraday (each its own rules) and SIM-D (the group's rules)");
@@ -1721,12 +1831,19 @@ public static class GroupsHarness
         b0 = Submits(simB);
         Clear(); O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":4"));
         Check(Rejection() == "" && Submits(simB) == b0 + 1, "LIM page: an exit is never checked (sell 4 of the 4): " + Rejection());
+        // 0.6.7: no hedging is always on, so a flip in a group is its one-direction check's; the firm's max on a flip is shown on SIM-A,
+        // in no group with the same firm's rules (0.6.6: an account in no group may hold them)
+        Flat(); Pos(simA, nq, 4);
+        Clear(); G("memberRules", MR("SIM-A", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":40")));
+        int a0 = Submits(simA);
+        Clear(); O(Order("SIM-A", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":6"));
+        Check(Rejection() == "" && Submits(simA) == a0 + 1, "LIM page: a flip counts only what it opens (sell 6 on long 4: short 2 of 4): " + Rejection());
+        Flat(); Pos(simA, nq, 4);
+        Clear(); O(Order("SIM-A", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":9"));
+        Check(Rejection().Contains("this entry of 5 NQ would take it to 5 minis (it holds or has working 0, every instrument)") && Submits(simA) == a0 + 1, "LIM page: sell 9 on long 4 opens 5: refused: " + Rejection());
         Flat(); Pos(simB, nq, 4);
         Clear(); O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":6"));
-        Check(Rejection() == "" && Submits(simB) == b0 + 2, "LIM page: a flip counts only what it opens (sell 6 on long 4: short 2 of 4): " + Rejection());
-        Flat(); Pos(simB, nq, 4);
-        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":9"));
-        Check(Rejection().Contains("this entry of 5 NQ would take it to 5 minis (it holds or has working 0, every instrument)") && Submits(simB) == b0 + 2, "LIM page: sell 9 on long 4 opens 5: refused: " + Rejection());
+        Check(Rejection().Contains("Group Lucid is long (SIM-B +4 NQ): a sell on SIM-B would hedge the group"), "0.6.7: the same flip on SIM-B in Lucid is refused by no hedging, always on: " + Rejection());
         Flat();
         int d0 = Submits(simD);
         Clear(); O(Order("SIM-D", "NQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":9"));
@@ -1734,12 +1851,12 @@ public static class GroupsHarness
         Flat();
         // the review: the two readings disagree (NinjaTrader lists long 4 NQ, a sell fill of 4 not in its list yet: 0): a sell of 4
         // reduces by one reading, so it is never checked
-        b0 = Submits(simB);
-        Pos(simB, nq, 4);
+        a0 = Submits(simA);   // 0.6.7: on SIM-A in no group (with the firm's rules), as the flips above
+        Pos(simA, nq, 4);
         Dictionary<string, List<double[]>> moves = (Dictionary<string, List<double[]>>)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null);
-        lock (moves) moves["SIM-B|" + nq.FullName] = new List<double[]> { new double[] { -4, ChartBridgeTime.NowUtcMs() } };
-        Clear(); O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":4"));
-        Check(Rejection() == "" && Submits(simB) == b0 + 1, "LIM page (the review): listed long 4, the other reading 0: Sell 4 is not refused: " + Rejection());
+        lock (moves) moves["SIM-A|" + nq.FullName] = new List<double[]> { new double[] { -4, ChartBridgeTime.NowUtcMs() } };
+        Clear(); O(Order("SIM-A", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":4"));
+        Check(Rejection() == "" && Submits(simA) == a0 + 1, "LIM page (the review): listed long 4, the other reading 0: Sell 4 is not refused: " + Rejection());
         Flat();
         // the reviewer's case on Anthony's own orders, 2 minis / 40 micros: holding 15 MNQ, a buy of 1 NQ; holding 1 NQ, a buy of 15
         // MNQ: both refused (2.5 minis), the same rule whichever came first

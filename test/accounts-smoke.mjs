@@ -45,7 +45,7 @@ const LAYOUT = [
   { id: 'tk', type: 'ticket', x: 4, y: 0, w: 2, h: 3 },
   { id: 'qb', type: 'quotes', x: 0, y: 3, w: 3, h: 3 },
   { id: 'ap', type: 'accounts', x: 6, y: 0, w: 6, h: 6 },
-  { id: 'c2', type: 'chart', root: 'NQ', tf: 'm5', x: 3, y: 3, w: 3, h: 3 },
+  { id: 'ma', type: 'multi', x: 3, y: 3, w: 3, h: 3 },   // 1.37.0: the copier is the Multi-Account panel's Copier tab
 ];
 function seed([layouts]) {
   try { if (!localStorage.getItem('live-workspace-v1')) localStorage.setItem('live-workspace-v1', JSON.stringify({ v: 1, layouts })); } catch (e) { /* blocked */ }
@@ -74,6 +74,7 @@ async function openWs(ctx, port, layout) {
   return page;
 }
 const AP = '.ws-panel[data-id="ap"]';
+const MAC = '.ws-panel[data-id="ma"] .ma-cop';   // 1.37.0: the copier, on the Multi-Account panel
 const tab = async (page, id) => { await page.click(`${AP} .ac-tab[data-tab="${id}"]`); await wait(150); };
 const rows = (page, sel) => page.$$eval(`${AP} ${sel} .gr-row:not(.gr-h)`, els => els.map(e => ({ k: e.dataset.k, text: e.textContent, cls: e.className })));
 const quoteRows = page => page.$$eval('.ws-panel[data-id="qb"] [data-root]', els => els.map(e => ({ root: e.dataset.root, cls: e.className, last: e.querySelector('[data-q="last"]').textContent, chg: e.querySelector('[data-q="chg"]').textContent })));
@@ -180,33 +181,35 @@ try {
   await page.click(`${AP} .apg-seg button[data-v="fills"]`);
   check((await rows(page, '.apg-fil-g')).length >= 2, 'the Fills view lists the day\'s fills');
   await page.screenshot({ path: path.join(out, 'accounts-2-trades.png') });
-  // Copier
-  await tab(page, 'cop');
-  const cop = await rows(page, '.apg-cop-g');
+  // Copier (1.37.0: the Multi-Account panel's Copier tab, exactly as the Account page had it; the Account page has none)
+  check(!(await page.$(`${AP} .ac-tab[data-tab="cop"]`)), '1.37.0: the Account page has no Copier tab');
+  await page.click('.ws-panel[data-id="ma"] .ma-tabs [data-tab="copier"]');
+  await until(() => page.$(`${MAC} .apg-cop-g`), 'the copier in the Multi-Account panel');
+  const cop = await page.$$eval(`${MAC} .apg-cop-g .gr-row:not(.gr-h)`, els => els.map(e => ({ k: e.dataset.k, text: e.textContent, cls: e.className })));
   check(cop.map(r => r.k).join() === 'f|EVAL-A|LIVE|,f|FUNDED-C|LIVE|,f|SIM-F1|SIM|s,f|SIM-F2|SIM|s', 'Copier (Anthony 2026-10-07: no Sim lock): a row per account but the leader, Sim or LIVE (' + cop.map(r => r.k).join(', ') + ')');
   /* 1.34.0: a saved follower row also carries a "follower" mark (counted apart) */
-  const fmarks = await page.$$eval(`${AP} .apg-cop-g .apg-fmark`, els => els.length);
+  const fmarks = await page.$$eval(`${MAC} .apg-cop-g .apg-fmark`, els => els.length);
   check(fmarks === 2, '1.34.0: the two saved followers (SIM-F1, SIM-F2) are marked "follower": ' + fmarks);
-  const marks0 = await page.$$eval(`${AP} .apg-cop-g .apg-mark:not(.apg-fmark)`, els => els.map(e => e.textContent + (e.classList.contains('live') ? ':' + getComputedStyle(e).backgroundColor : '')));
+  const marks0 = await page.$$eval(`${MAC} .apg-cop-g .apg-mark:not(.apg-fmark)`, els => els.map(e => e.textContent + (e.classList.contains('live') ? ':' + getComputedStyle(e).backgroundColor : '')));
   check(marks0.join() === 'LIVE:rgb(159, 18, 57),LIVE:rgb(159, 18, 57),SIM,SIM', 'each follower marked SIM or LIVE, LIVE in the house red: ' + marks0.join(', '));
-  check(/Sim or LIVE followers/.test(await page.$eval(`${AP} .apg-sim`, e => e.textContent)), 'the Copier tab no longer says Sim accounts only');
-  check(!(await page.$eval(`${AP} [data-follower="EVAL-A"] input[data-act="f-on"]`, e => e.disabled)), 'a LIVE account can be turned on as a follower');
-  check(/STOOD DOWN/.test(await page.$eval(`${AP} .apg-arm`, e => e.textContent)), 'the copier starts stood down');
-  await page.click(`${AP} button[data-act="rearm"]`);
+  check(/Sim or LIVE followers/.test(await page.$eval(`${MAC} .apg-sim`, e => e.textContent)), 'the Copier tab no longer says Sim accounts only');
+  check(!(await page.$eval(`${MAC} [data-follower="EVAL-A"] input[data-act="f-on"]`, e => e.disabled)), 'a LIVE account can be turned on as a follower');
+  check(/STOOD DOWN/.test(await page.$eval(`${MAC} .apg-arm`, e => e.textContent)), 'the copier starts stood down');
+  await page.click(`${MAC} button[data-act="rearm"]`);
   await until(async () => (await v3(PORT)).copier.armed === true, 'Re-arm through ChartBridge');
-  await until(async () => /ARMED/.test(await page.$eval(`${AP} .apg-arm`, e => e.textContent)) && !(await page.$(`${AP} button[data-act="rearm"]`)), 'ARMED, Re-arm gone');
+  await until(async () => /ARMED/.test(await page.$eval(`${MAC} .apg-arm`, e => e.textContent)) && !(await page.$(`${MAC} button[data-act="rearm"]`)), 'ARMED, Re-arm gone');
   check(true, 'Re-arm after the stand-down');
-  await page.selectOption(`${AP} [data-follower="SIM-F1"] select[data-act="f-qty"]`, '2');
+  await page.selectOption(`${MAC} [data-follower="SIM-F1"] select[data-act="f-qty"]`, '2');
   await until(async () => (await v3(PORT)).copier.followers.find(x => x.account === 'SIM-F1').qty === 2, 'SIM-F1 quantity 2 through copierFollower');
   check(true, 'a follower\'s quantity set from its dropdown');
-  const ll = await page.$eval(`${AP} [data-follower="SIM-F1"] input[data-act="f-ll-on"]`, e => e.checked);
+  const ll = await page.$eval(`${MAC} [data-follower="SIM-F1"] input[data-act="f-ll-on"]`, e => e.checked);
   check(ll === false, 'the daily loss option is off by default');
-  await page.click(`${AP} [data-follower="SIM-F1"] input[data-act="f-ll-on"]`);
-  await page.fill(`${AP} [data-follower="SIM-F1"] input[data-act="f-ll"]`, '400');
-  await page.press(`${AP} [data-follower="SIM-F1"] input[data-act="f-ll"]`, 'Tab');
+  await page.click(`${MAC} [data-follower="SIM-F1"] input[data-act="f-ll-on"]`);
+  await page.fill(`${MAC} [data-follower="SIM-F1"] input[data-act="f-ll"]`, '400');
+  await page.press(`${MAC} [data-follower="SIM-F1"] input[data-act="f-ll"]`, 'Tab');
   await until(async () => (await v3(PORT)).copier.followers.find(x => x.account === 'SIM-F1').lossLimit === 400, 'SIM-F1 daily loss 400');
   check(true, 'a follower\'s daily loss limit: a flat dollar amount');
-  await page.click(`${AP} [data-follower="EVAL-A"] input[data-act="f-on"]`);
+  await page.click(`${MAC} [data-follower="EVAL-A"] input[data-act="f-on"]`);
   await until(async () => { const f = (await v3(PORT)).copier.followers.find(x => x.account === 'EVAL-A'); return f && f.on === true && f.sim === false; }, 'EVAL-A (LIVE) on as a follower through copierFollower');
   check(true, 'a LIVE follower turned on from its checkbox (ChartBridge\'s gates decide each copy)');
   await page.screenshot({ path: path.join(out, 'accounts-3-copier.png') });
@@ -237,7 +240,9 @@ try {
   await until(async () => (await rows(p2, '.apg-acc-g')).length >= 4, 'the Accounts tab rows (read only)');
   await until(() => p2.$(`${AP} .apg-gone-g`), 'EVAL-B Gone', 8000);
   for (const t of ['acc', 'pos', 'ord', 'trd', 'log']) { await tab(p2, t); check(await controlsOnPage(p2) === 0, 'switches off: no new control on the ' + t + ' tab'); }
-  check(await p2.$eval(`${AP} .ac-tab[data-tab="cop"]`, e => e.hidden), 'switches off: no Copier tab');
+  check(!(await p2.$(`${AP} .ac-tab[data-tab="cop"]`)), 'switches off: no Copier tab (1.37.0: none on the Account page at all)');
+  await p2.click('.ws-panel[data-id="ma"] .ma-tabs [data-tab="copier"]');
+  check(/The copier is off: config\.txt has copier = false/.test(await until(() => p2.$eval(`${MAC}`, e => e.textContent), 'the Copier tab with the copier off') || '') && !(await p2.$(`${MAC} input, ${MAC} select`)), 'switches off: the Multi-Account panel\'s Copier tab says the copier is off, with no control');
   await tab(p2, 'acc');
   const marks = await rows(p2, '.apg-acc-g');
   check(marks.some(r => r.k === 'Sim101' && /✓/.test(r.text)), 'the checkmark shows read only (gate 2 is tradeAccounts)');
@@ -283,34 +288,9 @@ try {
   await p4.press(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, 'Enter');
   await p4.click(`${AP} .apg-foot`);
   await until(async () => /to floor/.test(await p4.$eval(`${AP} .gr-row[data-k="Sim101"] .apg-room`, e => e.textContent)), 'Sim101\'s room to its own floor');
-  // Settings: the groups section, the rules dialog, and no scrolling at 1366 x 768
+  // 1.37.0: Settings has no Account groups (1.26.0 to 1.36.0): a group is made, set and deleted on the Multi-Account panel (smoke:multi-account)
   await p4.click('#wsSet');
-  await until(async () => !(await p4.$eval('#wsGroupsSec', e => e.hidden)), 'the Account groups section in Settings');
-  const gRows = await p4.$$eval('#wsGroups .gp-row', els => els.map(e => e.textContent));
-  check(gRows.length === 2 && /Lucid/.test(gRows[0]) && /\$50,000 · daily \$1,000 · drawdown \$2,000 end of day, stops at \$50,100 · target \$3,000/.test(gRows[0]), 'each group: its name and the firm\'s rules in a line (' + gRows[0] + ')');
-  /* the groups have a column of their own: Settings is no taller and no wider than the window (the other two columns as before) */
-  const fits = await p4.evaluate(() => { const s = document.getElementById('wsSettings').getBoundingClientRect(), c = document.getElementById('wsGroupsCol'), last = c.lastElementChild.getBoundingClientRect();
-    return { ok: s.left >= 0 && s.right <= innerWidth && last.bottom <= innerHeight, w: Math.round(s.width), bottom: Math.round(last.bottom) }; });
-  check(fits.ok, 'Settings at 1366 x 768: the groups in a third column, no wider than the window and nothing below it (' + JSON.stringify(fits) + ')');
-  await p4.screenshot({ path: path.join(out, 'accounts-7-settings-groups-1366.png') });
-  await p4.click('#wsGroups [data-gp="hedge"][data-id="g2"]');
-  await until(async () => (await p4.$eval('#wsGroups [data-gp="hedge"][data-id="g2"]', e => e.getAttribute('aria-checked'))) === 'false', 'No hedging off for Apex (the whole group sent again)');
-  await p4.click('#wsGroups [data-gp="edit"][data-id="g1"]');
-  await until(() => p4.$('#wsDialog[open] .ws-gp'), 'the rules dialog');
-  const dlgFits = await p4.evaluate(() => { const r = document.querySelector('#wsDialog').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; });
-  check(dlgFits, 'the rules dialog fits 1366 x 768');
-  await p4.screenshot({ path: path.join(out, 'accounts-8-group-rules-1366.png') });
-  await p4.fill('#gp-drawdown', '60000');
-  await p4.click('#wsDialog button[type="submit"]');
-  check(/less than the account size/.test(await p4.$eval('#gp-err', e => e.textContent)), 'the dialog checks as ChartBridge does (drawdown under the size), nothing sent');
-  await p4.fill('#gp-drawdown', '2500');
-  await p4.click('#wsDialog button[type="submit"]');
-  await p4.click('#wsSet');   // the dialog closed Settings (one pop at a time): open it again
-  await until(async () => /drawdown \$2,500/.test(await p4.$eval('#wsGroups .gp-row', e => e.textContent)), 'Lucid saved with its new drawdown');
-  await p4.click('#wsGroups [data-gp="del"][data-id="g2"]');
-  check(/Delete Apex\? Its 1 account go to None\.|Delete Apex\? Its 1 account/.test(await p4.$eval('#wsGroups .gp-ask', e => e.textContent)), 'Delete asks in the page first');
-  await p4.click('#wsGroups [data-gp="del-yes"]');
-  await until(async () => (await p4.$$('#wsGroups .gp-row')).length === 1, 'Apex deleted');
+  check(!(await p4.$('#wsGroupsSec')) && !(await p4.$('#wsGroups')), 'Settings has no Account groups section (the Multi-Account panel has them)');
   /* 1.31.0 (audit C6): ChartBridge drops: the rows stay, dimmed, as of the drop; Conn unknown; the group columns stay */
   await p4.keyboard.press('Escape');   // Settings closed again
   const gpBridge = bridges[bridges.length - 1];

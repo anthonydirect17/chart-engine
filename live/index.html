@@ -22,6 +22,8 @@
 <link rel="stylesheet" href="league.css">
 <!-- 1.36.0: the Agents strip (live/agents-strip.js) -->
 <link rel="stylesheet" href="agents-strip.css">
+<!-- 1.37.0: the Multi-Account panel (live/multi-account.js) -->
+<link rel="stylesheet" href="multi-account.css">
 </head>
 <body>
 <!-- The trading workspace, ChartBridge's main page (http://localhost:8765/): panels on a 12 x 6 snap grid, one window per
@@ -104,6 +106,8 @@
   <button type="button" role="menuitem" data-add="tags">Trade tags</button>
   <!-- 1.36.0 (Anthony 2026-10-22): every agent at a glance, one row of cards (the league's seats, the live agents, the bot); read only. It replaces 1.35.0's Bot panel -->
   <button type="button" role="menuitem" data-add="agents" data-tip="Every agent at a glance: one row of cards">Agents</button>
+  <!-- 1.37.0 (Anthony 2026-10-22): a group's accounts as chips, in or on the bench, and the copier -->
+  <button type="button" role="menuitem" data-add="multi" data-tip="A group's accounts as chips, in or on the bench; and the copier">Multi-Account</button>
 </div>
 
 <div class="ws-pop ws-scr" id="wsScreensPop" role="dialog" aria-label="Screens" hidden></div>
@@ -149,8 +153,8 @@
         <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select></div>
     <div class="ws-field"><span class="ws-flabel" id="wsGridLinesLbl">Grid lines</span>
       <span class="ws-seg" id="wsGridLines" role="group" aria-labelledby="wsGridLinesLbl"><button type="button" data-v="off">Off</button><button type="button" data-v="on">On</button></span></div>
-    <div class="ws-field"><span class="ws-flabel" id="wsRoomLbl" title="Empty space right of the last bar, kept at every zoom; Jump to live and End keep it">Room right</span>
-      <span class="ws-seg" id="wsRoom" role="group" aria-labelledby="wsRoomLbl"><button type="button" data-v="80">80 px</button><button type="button" data-v="120">120 px</button><button type="button" data-v="160">160 px</button></span></div>
+    <div class="ws-field"><span class="ws-flabel" id="wsRoomLbl" title="Empty space right of the last bar, kept at every zoom; Jump to live and End keep it. Drag the gap right of the last bar on any chart to set it too.">Room right</span>
+      <span class="ws-seg" id="wsRoom" role="group" aria-labelledby="wsRoomLbl"><button type="button" data-v="80">80 px</button><button type="button" data-v="120">120 px</button><button type="button" data-v="160">160 px</button><button type="button" data-v="custom" id="wsRoomCustom" title="Any width from 40 to 600 px; or drag the gap right of the last bar on any chart">Custom</button><input class="ws-num" id="wsRoomPx" type="number" min="40" max="600" step="1" inputmode="numeric" aria-label="Room right, px (40 to 600)" title="40 to 600 px" hidden></span></div>
     <div class="ws-field"><span class="ws-flabel" id="wsMotionLbl" title="The Bot tab and its Library. Less shows every scene in its final state. Charts, orders, the kill switch and P&amp;L never move either way.">Motion</span>
       <span class="ws-seg" id="wsMotion" role="group" aria-labelledby="wsMotionLbl"><button type="button" data-v="full">Full</button><button type="button" data-v="less">Less</button></span></div>
     <div class="ws-field"><label class="ws-flabel" for="wsAtr" title="The ATR in every chart's corner readout: NinjaTrader's ATR of this many closed bars">ATR period</label>
@@ -211,16 +215,7 @@
     </div>
   </section>
   <p class="ws-ver" id="wsVersion"></p>
-  </div><div class="ws-col ws-col-groups" id="wsGroupsCol" hidden>
-  <!-- 1.26.0 (ChartBridge 0.5.8, Anthony 2026-10-14): the account groups (live/groups.js), a third column, shown once ChartBridge sends groups, so Settings still fits 1366x768 whole -->
-  <section class="ws-sec" data-sec="groups" id="wsGroupsSec">
-    <h2><button type="button" class="ws-sec-hd" aria-expanded="true" aria-controls="wsSecBody-groups">Account groups <span>one direction per group, the firm's rules</span></button></h2>
-    <div class="ws-sec-body" id="wsSecBody-groups">
-    <div class="gp-list" id="wsGroups" role="list" aria-label="Account groups"></div>
-    <p class="ws-help">Each account picks its group on the Accounts tab (Group). Personal accounts sit in no group and may have a floor and a daily limit of their own there.</p>
-    <div class="ws-field"><button type="button" class="ws-btn" id="wsGroupNew">+ New group</button><span class="ws-help" id="wsGroupsNote" role="status"></span></div>
-    </div>
-  </section>
+  <!-- 1.37.0: the Account groups column (1.26.0 to 1.36.0) is gone: groups are made and set on the Multi-Account panel -->
   </div></div>
 </div>
 
@@ -271,6 +266,8 @@
 <script src="league.js"></script>
 <!-- 1.36.0: the Agents strip (AgentsStripCore and AgentsStrip.mount), before workspace.js -->
 <script src="agents-strip.js"></script>
+<!-- 1.37.0: the Multi-Account panel (MultiAccountCore and MultiAccount.mount), before workspace.js -->
+<script src="multi-account.js"></script>
 <script src="workspace.js"></script>
 <!-- "Update ready: reload when flat" from the per-PC updater (nt8/update-pc.ps1); never reloads by itself. -->
 <script src="update-notice.js"></script>

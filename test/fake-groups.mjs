@@ -4,6 +4,8 @@
 // rules (accountGroup with the rule keys, memberRules), the groups message's riskPct and ownRules, the accounts entry's rules. Everything simulated: made-up groups
 // (Lucid, Apex), made-up accounts and money; nothing reaches a broker. ChartBridgeGroups.cs is the real thing (its Mono
 // harness, nt8/check/GroupsHarness.cs); this keeps the page's smokes honest about the messages and the words.
+// 0.6.7 (--bench, Anthony 2026-10-22): the bench (memberBench, the groups message's benched, a benched seat sits out a group entry),
+// no hedging always on, a group's own rules optional (and never sizing a member), the risk percent changed only while flat.
 import { checkStrategy } from './fake-v3.mjs';   // 0.6.5: a group entry's strategy is checked as an order's (a cycle: called only at run time)
 const isNum = v => typeof v === 'number' && isFinite(v);
 const MONEY = /^(?:0|[1-9][0-9]{0,8})(?:\.[0-9]{1,2})?$/;
@@ -19,7 +21,11 @@ export const GROUP_KEYS = {
   groupPreview: ['type', 'cid', 'group', 'root', 'side', 'kind', 'price', 'limitOffset', 'bracket'],
   groupOrder: ['type', 'cid', 'group', 'root', 'side', 'kind', 'price', 'limitOffset', 'bracket', 'sizes'],
   accountLimits: ['type', 'cid', 'account', 'floor', 'dailyLoss'],
+  memberBench: ['type', 'cid', 'account', 'benched'],   // 0.6.7
 };
+/* 0.6.7: ChartBridgeOrders.BenchedOut and NoTypeOut, word for word */
+export const BENCHED_OUT = 'benched: it sits out new entries (the Multi-Account panel)';
+export const NO_TYPE_OUT = 'it has no account type: set its type on The Desk and apply it (its Rules on the Accounts tab)';
 export const GROUP_TYPES = Object.keys(GROUP_KEYS);
 /* 0.6.5: the rule keys a join or memberRules may carry (all of them, or none: the group's apply) */
 const RULE_KEYS = ['size', 'dailyLoss', 'drawdown', 'drawdownType', 'lockAt', 'target', 'consistency', 'maxMinis', 'maxMicros', 'typeId'];
@@ -65,10 +71,11 @@ const PCT = /^(?:0|[1-9][0-9]?|100)(?:\.[0-9]{1,2})?$/;
 export function installGroups(Desk) {
   Object.assign(Desk.prototype, {
     groupsInit(o) {
-      this.gr = { on: o.groups !== false, perMember: o.groupRules !== false, firm: o.firmFloor === true, list: new Map(), members: new Map(), personal: new Map(), peaks: new Map(), own: new Map(), ntRoom: new Map(), next: 1 };   // firm: ChartBridge 0.6.6   // groupRules false: a ChartBridge 0.5.8 to 0.6.4 (one rule set per group)
+      this.gr = { on: o.groups !== false, perMember: o.groupRules !== false, firm: o.firmFloor === true || o.bench === true, bench: o.bench === true, benched: new Set(), list: new Map(), members: new Map(), personal: new Map(), peaks: new Map(), own: new Map(), ntRoom: new Map(), next: 1 };   // bench: ChartBridge 0.6.7   // firm: ChartBridge 0.6.6   // groupRules false: a ChartBridge 0.5.8 to 0.6.4 (one rule set per group)
       for (const s of o.groupsSeed || []) {
         const id = 'g' + this.gr.next++;
-        this.gr.list.set(id, { id, name: s.name, noHedge: s.noHedge !== false, dailyLoss: s.dailyLoss || 0, drawdown: s.drawdown, drawdownType: s.drawdownType || 'eod', target: s.target || 0, size: s.size, lockAt: s.lockAt || 0, accountType: s.accountType || null, hero: s.hero || null, riskPct: s.riskPct || 0 });
+        this.gr.list.set(id, { id, name: s.name, noHedge: s.noHedge !== false || this.gr.bench, dailyLoss: s.dailyLoss || 0, drawdown: s.drawdown || 0, drawdownType: s.drawdown ? s.drawdownType || 'eod' : null, target: s.target || 0, size: s.size || 0, lockAt: s.lockAt || 0, accountType: s.accountType || null, hero: s.hero || null, riskPct: s.riskPct || 0 });
+        for (const b of s.benched || []) if (this.gr.bench) this.gr.benched.add(b);   // 0.6.7
         for (const a of s.members || []) {
           this.gr.members.set(a, id);
           const r = s.rules && s.rules[a];   // 0.6.5: a seeded member's own rules
@@ -82,9 +89,10 @@ export function installGroups(Desk) {
         const members = [...this.gr.members].filter(([, id]) => id === g.id).map(([a]) => a).sort();
         const holders = members.flatMap(a => this.groupHoldings(a));
         const longs = holders.some(h => h.side === 'long'), shorts = holders.some(h => h.side === 'short');
-        return Object.assign({ id: g.id, name: g.name, noHedge: g.noHedge, dailyLoss: g.dailyLoss || null, drawdown: g.drawdown, drawdownType: g.drawdownType, target: g.target || null,
-          size: g.size, lockAt: g.lockAt || null, consistency: g.consistency || null, accountType: g.accountType || null, hero: g.hero || null, members, side: longs && shorts ? 'mixed' : longs ? 'long' : shorts ? 'short' : null, holders },
-          this.gr.perMember ? { riskPct: g.riskPct || null, ownRules: members.filter(a => this.gr.own.has(a)), tradeOut: members.map(a => ({ account: a, why: this.groupTakenWhy(a) })).filter(x => x.why) } : {});   // review 4: tradeOut   // 0.6.5, after holders as ChartBridge writes them
+        return Object.assign({ id: g.id, name: g.name, noHedge: g.noHedge, dailyLoss: g.dailyLoss || null, drawdown: g.drawdown || null, drawdownType: g.drawdownType || null, target: g.target || null,
+          size: g.size || null, lockAt: g.lockAt || null, consistency: g.consistency || null, accountType: g.accountType || null, hero: g.hero || null, members, side: longs && shorts ? 'mixed' : longs ? 'long' : shorts ? 'short' : null, holders },
+          this.gr.perMember ? { riskPct: g.riskPct || null, ownRules: members.filter(a => this.gr.own.has(a)), tradeOut: members.map(a => ({ account: a, why: this.groupTakenWhy(a) })).filter(x => x.why) } : {},
+          this.gr.bench ? { benched: members.filter(a => this.gr.benched.has(a)) } : {});   // 0.6.7   // review 4: tradeOut   // 0.6.5, after holders as ChartBridge writes them
       });
       return { type: 'groups', list, error: null };
     },
@@ -123,7 +131,10 @@ export function installGroups(Desk) {
       let floor = null, roomFloor = null, roomDaily = null, targetLeft = null;
       /* 0.6.5: the member's own rules, else its group's; 0.6.6: an account in no group with its own (the firm's) rules too */
       const r = g ? this.groupRulesOf(a.name, g) : this.gr.firm && this.gr.own.has(a.name) ? Object.assign({ own: true }, this.gr.own.get(a.name)) : null;
-      if (r) {
+      if (g && !r) {   // 0.6.7: a member with no rules, in a group with none
+        const w = a.name + ' has no rules of its own and group ' + g.name + ' has none: set its account type on The Desk and apply it (its Rules on the Accounts tab)';
+        why.floor = why.roomDaily = why.targetLeft = w;
+      } else if (r) {
         const whose = !g ? a.name + '\'s rules have' : r.own ? a.name + '\'s rules in ' + g.name + ' have' : 'group ' + g.name + ' has';
         const pk = this.gr.peaks.get(a.name);
         if (!g && r.drawdownType !== 'static' && !pk) why.floor = 'no end-of-day high is known for this account: give the minimum balance from the firm\'s dashboard (the account\'s settings)';
@@ -151,6 +162,7 @@ export function installGroups(Desk) {
     groupRulesOf(account, g) {
       const o = this.gr.own.get(account);
       if (o) return Object.assign({ own: true }, o);
+      if (!(g.size > 0) || !(g.drawdown > 0)) return null;   // 0.6.7: a group with no rules of its own gives none
       return { own: false, size: g.size, dailyLoss: g.dailyLoss || 0, drawdown: g.drawdown, drawdownType: g.drawdownType, lockAt: g.lockAt || 0, target: g.target || 0, consistency: g.consistency || 0, maxMinis: 0, maxMicros: 0, typeId: null };
     },
     /** 0.6.5: the rule keys of a message (ChartBridge's RulesFrom, its words): { rules } or { error }; none and not needed: {} */
@@ -178,27 +190,67 @@ export function installGroups(Desk) {
     check_groupSave(m) {
       const name = m.name;
       if (typeof name !== 'string' || name.length < 1 || name.length > 30) return 'a group name is 1 to 30 characters';
+      if (this.gr.bench) {   // 0.6.7: the group's own rules optional, no hedging always on, the risk percent changed only while flat
+        if ('noHedge' in m && typeof m.noHedge !== 'boolean') return 'noHedge must be true or false';
+        if (m.noHedge === false) return 'No hedging is always on for every group (ChartBridge 0.6.7): noHedge false is refused';
+        if (['dailyLoss', 'drawdown', 'drawdownType', 'target', 'size', 'lockAt', 'consistency'].some(k => k in m)) return this.groupSaveRules(m);
+        return this.groupSaveRest(m);
+      }
       if (typeof m.noHedge !== 'boolean') return 'noHedge must be true or false';
       if (!['eod', 'intraday', 'static'].includes(m.drawdownType)) return 'drawdownType must be eod, intraday or static';
       for (const [k, z] of [['dailyLoss', true], ['drawdown', false], ['target', true], ['size', false], ['lockAt', true]]) { if (!(k in m)) return k + ' is needed'; const w = this.groupMoney(m, k, z); if (w) return w; }
       if (m.drawdown >= m.size) return 'the drawdown must be less than the account size';
       if (m.lockAt > 0 && m.drawdownType === 'static') return 'floor stops at applies to a trailing drawdown only (end of day or intraday); 0 for none';
       if (m.lockAt > 0 && m.lockAt <= m.size - m.drawdown) return 'floor stops at must be above the starting floor (' + (m.size - m.drawdown) + ')';
+      return this.groupSaveRest(m);
+    },
+    groupSaveRules(m) {
+      if (!['eod', 'intraday', 'static'].includes(m.drawdownType)) return 'drawdownType must be eod, intraday or static';
+      for (const [k, z] of [['dailyLoss', true], ['drawdown', false], ['target', true], ['size', false], ['lockAt', true]]) { if (!(k in m)) return k + ' is needed'; const w = this.groupMoney(m, k, z); if (w) return w; }
+      if (m.drawdown >= m.size) return 'the drawdown must be less than the account size';
+      return this.groupSaveRest(m);
+    },
+    groupSaveRest(m) {
+      const name = m.name;
       if (m.accountType !== undefined && !['eval', 'funded', '-'].includes(m.accountType)) return 'accountType must be eval, funded or - (not set)';   // 0.6.1
       if (m.hero !== undefined && (typeof m.hero !== 'string' || !(m.hero === '-' || /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(m.hero)))) return 'hero must be a build name of 1 to 64 letters, digits, dots, underscores or hyphens, or - (none)';
       if (m.riskPct !== undefined && m.riskPct !== 0 && !(isNum(m.riskPct) && PCT.test(String(m.riskPct)) && m.riskPct > 0 && m.riskPct <= 100)) return 'riskPct must be a percent of each member\'s max loss from 0 (off) to 100, at most 2 decimals';   // 0.6.5
       if (m.group !== undefined && !this.gr.list.has(m.group)) return 'no group ' + m.group;
       if ([...this.gr.list.values()].some(g => g.id !== m.group && g.name.toLowerCase() === name.toLowerCase())) return 'a group named ' + name + ' is there already';
+      if (this.gr.bench && m.group && m.riskPct !== undefined && m.riskPct !== (this.gr.list.get(m.group).riskPct || 0)) {   // 0.6.7: only while flat
+        const held = [...this.gr.members].filter(([, id]) => id === m.group).map(([a]) => a).sort().flatMap(a => this.groupHoldings(a));
+        if (held.length) return 'the risk percent changes only while group ' + this.gr.list.get(m.group).name + ' is flat: it holds ' + held.map(h => h.what === 'position' ? h.account + ' ' + (h.side === 'long' ? '+' : '-') + h.qty + ' ' + h.root : h.account + ' ' + (h.side === 'long' ? 'buy' : 'sell') + ' ' + h.qty + ' ' + h.root + ' working').join('; ') + '; nothing was changed';
+      }
       return null;
     },
     do_groupSave(m) {
       const id = m.group || 'g' + this.gr.next++, was = this.gr.list.get(id) || {};
       const keep = (k, v) => (v === undefined ? was[k] || null : v === '-' ? null : v);   // 0.6.1: absent keeps, - clears
-      this.gr.list.set(id, { riskPct: m.riskPct === undefined ? was.riskPct || 0 : m.riskPct, accountType: keep('accountType', m.accountType), hero: keep('hero', m.hero), id, name: m.name, noHedge: m.noHedge, dailyLoss: m.dailyLoss, drawdown: m.drawdown, drawdownType: m.drawdownType, target: m.target, size: m.size, lockAt: m.lockAt, consistency: m.consistency || 0 });
+      const rules = !this.gr.bench || 'drawdown' in m;   // 0.6.7: no rules sent keeps the group's (a new group has none)
+      this.gr.list.set(id, Object.assign({ riskPct: m.riskPct === undefined ? was.riskPct || 0 : m.riskPct, accountType: keep('accountType', m.accountType), hero: keep('hero', m.hero), id, name: m.name, noHedge: this.gr.bench ? true : m.noHedge },
+        rules ? { dailyLoss: m.dailyLoss, drawdown: m.drawdown, drawdownType: m.drawdownType, target: m.target, size: m.size, lockAt: m.lockAt, consistency: m.consistency || 0 }
+          : { dailyLoss: was.dailyLoss || 0, drawdown: was.drawdown || 0, drawdownType: was.drawdownType || null, target: was.target || 0, size: was.size || 0, lockAt: was.lockAt || 0, consistency: was.consistency || 0 }));
       this.groupsChanged();
     },
     check_groupDelete(m) { return this.gr.list.has(m.group) ? null : 'no group ' + m.group; },
-    do_groupDelete(m) { this.gr.list.delete(m.group); for (const [a, id] of [...this.gr.members]) if (id === m.group) { this.gr.members.delete(a); this.gr.peaks.delete(a); this.gr.own.delete(a); } this.groupsChanged(); },
+    do_groupDelete(m) { this.gr.list.delete(m.group); for (const [a, id] of [...this.gr.members]) if (id === m.group) { this.gr.members.delete(a); this.gr.peaks.delete(a); this.gr.own.delete(a); this.gr.benched.delete(a); } this.groupsChanged(); },
+    /* 0.6.7: a member to the bench or back, refused unless flat with no working order (ChartBridgeGroups.MemberBench, its words) */
+    check_memberBench(m) {
+      if (!this.gr.bench) return 'Unknown message type memberBench.';
+      if (typeof m.account !== 'string') return 'memberBench needs account (a plain string)';
+      if (typeof m.benched !== 'boolean') return 'benched must be true (to the bench) or false (back to trade with the group)';
+      if (!this.gr.members.has(m.account)) return m.account + ' is in no group: only a group\'s member goes to the bench';
+      if (this.gr.benched.has(m.account) === m.benched) return null;
+      const a = this.acct.get(m.account);
+      if (!a) return m.account + ' is not in NinjaTrader now: ChartBridge cannot see that it is flat, so it stays where it is';
+      if (a.connection !== 'connected') return m.account + ' is not connected: ChartBridge cannot see that it is flat, so it stays where it is';
+      const held = [...this.positions].filter(([k, p]) => k.split('|')[0] === m.account && p.qty).map(([k, p]) => (p.qty > 0 ? '+' : '-') + Math.abs(p.qty) + ' ' + k.split('|')[1]);
+      const n = [...this.orders.values()].filter(o => o.account === m.account && (o.state === 'working' || o.state === 'partFilled' || o.state === 'accepted' || o.state === 'submitted')).length;
+      if (!held.length && !n) return null;
+      const ords = n + ' working order' + (n === 1 ? '' : 's');
+      return m.account + (held.length ? ' is in a trade (' + held.join(', ') + ')' + (n ? ' with ' + ords : '') : ' has ' + ords) + ': it moves once it is flat with no working orders';
+    },
+    do_memberBench(m) { if (m.benched) this.gr.benched.add(m.account); else this.gr.benched.delete(m.account); this.groupsChanged(); },
     check_accountGroup(m) {
       if (typeof m.account !== 'string' || !this.acct.has(m.account)) return 'no account ' + m.account;
       if (!('group' in m) || (m.group !== null && typeof m.group !== 'string')) return 'group must be a group id or null (None)';
@@ -210,6 +262,7 @@ export function installGroups(Desk) {
       const g = this.gr.list.get(m.group);
       if (!g) return 'no group ' + m.group;
       if (this.gr.members.get(m.account) === m.group) return m.account + ' is in ' + g.name + ' already';
+      if (this.gr.bench && !(g.size > 0 && g.drawdown > 0) && !this.groupRulesFrom(m, false).rules) return m.account + ' has no account type: set its type on The Desk first (group ' + g.name + ' takes each account\'s rules from its type)';   // 0.6.7
       if (!g.noHedge) return null;
       const mine = this.groupHoldings(m.account), theirs = [...this.gr.members].filter(([a, id]) => id === m.group && a !== m.account).flatMap(([a]) => this.groupHoldings(a));
       const side = h => (h.some(x => x.side === 'long') && h.some(x => x.side === 'short') ? 'mixed' : h.some(x => x.side === 'long') ? 'long' : h.some(x => x.side === 'short') ? 'short' : null);
@@ -219,12 +272,13 @@ export function installGroups(Desk) {
       return null;
     },
     do_accountGroup(m) {
+      this.gr.benched.delete(m.account);   // 0.6.7: a new membership (or none) starts off the bench
       if (m.group === null) { this.gr.members.delete(m.account); this.gr.peaks.delete(m.account); }
       else {
         const g = this.gr.list.get(m.group), a = this.acct.get(m.account), own = this.groupRulesFrom(m, false).rules;
         this.gr.members.set(m.account, m.group);
         if (own) this.gr.own.set(m.account, own); else this.gr.own.delete(m.account);   // 0.6.5: no rules sent: the group's apply
-        this.gr.peaks.set(m.account, m.highClose || Math.max(own ? own.size : g.size, a.balance + this.pnl(a.name).realized));
+        this.gr.peaks.set(m.account, m.highClose || Math.max(own ? own.size : g.size || 0, a.balance + this.pnl(a.name).realized));
       }
       if (m.group === null) this.gr.own.delete(m.account);
       this.groupsChanged();
@@ -250,12 +304,14 @@ export function installGroups(Desk) {
       const tickValue = ins.tick * ins.pointValue, micro = MICRO_ROOTS.includes(m.root), buy = m.side === 'buy';
       const seats = members.map(name => {
         const s = { account: name, size: 0, risk: 0, budget: 0, out: null }, a = this.acct.get(name);
+        if (this.gr.bench && this.gr.benched.has(name)) { s.out = BENCHED_OUT; return s; }   // 0.6.7
         /* never an account another lane trades (ChartBridgeAgents.CopierUses, AccountTakenWhy, the bot's) */
         const taken = this.groupTakenWhy(name);
         if (taken) { s.out = taken; return s; }
         if (!a) { s.out = 'it is not in NinjaTrader now'; return s; }
         if (a.connection !== 'connected') { s.out = 'it is not connected'; return s; }   // 0.6.6
         const f = this.groupFields(a, this.accountMsg058(a)), r = this.groupRulesOf(name, g);
+        if (this.gr.bench && (!r || !r.own)) { s.out = NO_TYPE_OUT; return s; }   // 0.6.7: sized from its own rules only
         const pos = (this.positions.get(name + '|' + m.root) || {}).qty || 0;
         const pend = [...this.orders.values()].filter(o => o.account === name && o.root === m.root && (o.state === 'working' || o.state === 'partFilled') && o.side === m.side).reduce((t, o) => t + o.qty - (o.filled || 0), 0);
         const held = buy ? pos + pend : -pos + pend, risk = this.groupOpenRisk(name);

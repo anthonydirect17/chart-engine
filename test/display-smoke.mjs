@@ -227,7 +227,37 @@ try {
   await wp.click('#wsRoom [data-v="160"]'); await wp.waitForTimeout(700);
   const rooms = await W(ids => ids.map(id => Math.round(window.workspace.chart(id).room().px)), charts);
   check(rooms.every(r => r === 160) && await W(() => JSON.parse(localStorage.getItem('live-settings-v2')).room === 160), 'Settings: Room right 160 px on every chart at once, saved: ' + rooms.join(' '));
+  /* 1.37.0 (Anthony 2026-10-22): Custom, any width from 40 to 600 px, and the gap right of the last bar dragged on a chart */
+  await wp.click('#wsRoom [data-v="custom"]');
+  check(await W(() => !document.getElementById('wsRoomPx').hidden && document.querySelector('#wsRoom [data-v="custom"]').getAttribute('aria-pressed') === 'true'), 'Settings: Custom pressed opens its px box');
+  await wp.fill('#wsRoomPx', '260'); await wp.waitForTimeout(700);
+  const r260 = await W(ids => ids.map(id => Math.round(window.workspace.chart(id).room().px)), charts);
+  check(r260.every(r => r === 260) && await W(() => JSON.parse(localStorage.getItem('live-settings-v2')).room === 260), 'Settings: Custom 260 px on every chart at once, saved: ' + r260.join(' '));
+  await wp.fill('#wsRoomPx', '700'); await wp.waitForTimeout(300);
+  check(await W(() => JSON.parse(localStorage.getItem('live-settings-v2')).room === 260 && document.getElementById('wsRoomPx').getAttribute('aria-invalid') === 'true'), 'Settings: 700 px is refused (40 to 600), 260 kept');
+  await wp.fill('#wsRoomPx', '260'); await wp.keyboard.press('Escape'); await wp.keyboard.press('Escape'); await wp.waitForTimeout(300);
+  await shot(wp, 'room-custom-260.png');
+  const c0 = charts[0];
+  const gb = await W(id => { const c = window.workspace.chart(id), cv = document.querySelector(`.ws-panel[data-id="${id}"] canvas`).getBoundingClientRect(), g = c.room();
+    return { x: cv.left, y: cv.top, w: cv.width, h: cv.height, gap: g.gap, px: g.px, live: c.isLive ? c.isLive() : null }; }, c0);
+  const axisX = gb.x + gb.w - 78, sx = axisX - Math.min(40, gb.gap / 3), sy = gb.y + gb.h * 0.45;
+  await wp.mouse.move(sx, sy); await wp.waitForTimeout(100);
+  const curGap = await W(id => getComputedStyle(document.querySelector(`.ws-panel[data-id="${id}"] canvas`)).cursor, c0);
+  check(curGap === 'col-resize', 'the gap right of the last bar shows the resize cursor: ' + curGap);
+  await wp.mouse.down(); for (let k = 1; k <= 10; k++) { await wp.mouse.move(sx - k * 10, sy); await wp.waitForTimeout(16); } await wp.mouse.up();
+  await wp.waitForTimeout(700);
+  const dr = await W(ids => ids.map(id => Math.round(window.workspace.chart(id).room().px)), charts);
+  check(dr.every(r => r === 360) && await W(() => JSON.parse(localStorage.getItem('live-settings-v2')).room === 360), 'the gap dragged 100 px left: 360 px of room on every chart, saved as Settings\' room: ' + dr.join(' '));
+  const follow = await W(id => window.workspace.chart(id).room().gap, c0);
+  check(Math.abs(follow - 360) <= 1, 'the chart still on live with the new gap (' + Math.round(follow) + ' px from the last bar to the axis)');
+  await wp.mouse.move(gb.x + gb.w * 0.3, sy); await wp.mouse.down(); await wp.mouse.move(gb.x + gb.w * 0.3 + 120, sy, { steps: 6 }); await wp.mouse.up(); await wp.waitForTimeout(400);
+  await W(id => window.workspace.chart(id).goLive(), c0); await wp.waitForTimeout(900);
+  check(Math.abs(await W(id => window.workspace.chart(id).room().gap, c0) - 360) <= 1, 'Jump to live keeps the dragged room (360 px)');
+  await wp.click('#wsSet'); await wp.waitForTimeout(200);
+  check(await W(() => document.querySelector('#wsRoom [data-v="custom"]').getAttribute('aria-pressed') === 'true' && document.getElementById('wsRoomPx').value === '360'), 'Settings shows Custom 360 after the drag');
+  await shot(wp, 'room-dragged-360.png');
   await wp.click('#wsRoom [data-v="80"]');
+  check(await W(() => document.getElementById('wsRoomPx').hidden), 'a preset closes the Custom box');
   await wp.keyboard.press('Escape');
 
   // zoom to brackets: a working limit far below the price comes on screen, eased in with the axis re-fit (on the

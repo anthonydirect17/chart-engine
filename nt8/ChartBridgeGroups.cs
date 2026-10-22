@@ -1,9 +1,10 @@
 // ChartBridge prop groups and real account state (ChartBridge 0.5.8; 0.6.1: each group's Type and default hero; 0.6.5: each member's
 // own rules and the group's risk percent; 0.6.6: the firm's rules on an account in no group, firmMinimum, and the firm's limits on
-// entries: FirmMaxWhy, MachineHold, the daily loss reached and riskAlert). Part of the
+// entries: FirmMaxWhy, MachineHold, the daily loss reached and riskAlert; 0.6.7: a member on the bench, memberBench, no hedging
+// always on, a group's own fallback rules optional and never sizing a group entry). Part of the
 // ChartBridge add-on; install it with the other files. See nt8/PROTOCOL.md, "Prop groups and account state (0.5.8)",
-// "A group's Type and default hero (0.6.1)", "Each member's own rules and the risk percent (0.6.5)" and "The firm's floor, Remove a
-// follower and the firm's limits on entries (0.6.6)".
+// "A group's Type and default hero (0.6.1)", "Each member's own rules and the risk percent (0.6.5)", "The firm's floor, Remove a
+// follower and the firm's limits on entries (0.6.6)" and "The bench (0.6.7)".
 //
 // This file never places, changes or cancels an order itself (no Submit, Change, Cancel or Flatten here; Q-EXIT's cancel of an exit
 // left behind goes through ChartBridgeOrders.GroupCancelLeftover). It holds:
@@ -386,6 +387,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 GroupSeat s = new GroupSeat { Account = name };
                 seats.Add(s);
+                // 0.6.7 (Anthony 2026-10-22): a member on the bench stays a member and sits out every new entry
+                if (g.Benched.Contains(name)) { s.Out = BenchedOut; continue; }
                 Account a = null;
                 lock (Account.All) foreach (Account x in Account.All) if (x.Name != null && x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { a = x; break; }
                 string taken = GroupTakenWhy(name);
@@ -393,7 +396,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (a == null) { s.Out = "it is not in NinjaTrader now"; continue; }
                 if (a.Connection == null || a.Connection.Status != ConnectionStatus.Connected) { s.Out = "it is not connected"; continue; }   // 0.6.6: no longer caught by its room not known
                 ChartBridgeGroups.Numbers n = ChartBridgeGroups.Read(name, a, false);
-                if (n.R == null) { s.Out = "it is not in group " + g.Name + " now"; continue; }
+                if (n.GroupId != g.Id) { s.Out = "it is not in group " + g.Name + " now"; continue; }
+                // 0.6.7 (Anthony 2026-10-22: the group's fallback rules dropped): sized only from its own rules (its type on The Desk)
+                if (n.R == null || !n.R.Own) { s.Out = NoTypeOut; continue; }
                 int posNow = SignedPosition(a, inst), posEff = EffectivePosition(a, inst), pb, ps;
                 PendingOrders(a, inst, out pb, out ps);
                 int pos = isBuy ? Math.Max(posNow, posEff) : Math.Min(posNow, posEff), held = isBuy ? pos + pb : -pos + ps;
@@ -411,6 +416,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             return seats;
         }
+
+        // 0.6.7: why a member sits out a group entry: on the bench; with no rules of its own (no type on The Desk)
+        public const string BenchedOut = "benched: it sits out new entries (the Multi-Account panel)";
+        public const string NoTypeOut = "it has no account type: set its type on The Desk and apply it (its Rules on the Accounts tab)";
 
         // never an account another lane trades (as a group trading seat): the copier's leader or a follower, the bot's, an agent's; review 4:
         // the page leaves the same accounts out of the group's Close, Flatten all, Cancel all, B/E and lines (the groups message's tradeOut)
@@ -529,6 +538,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             return list;
         }
         internal static bool GroupIsBuy(Order o) { return IsBuy(o); }
+        // 0.6.7 (the bench): every order of the account that may still fill (NinjaTrader's list and ChartBridge's own just sent), its
+        // legs, stops and targets included; and a fill on its way (moved, not yet in NinjaTrader's positions)
+        internal static int GroupWorkingCount(Account a)
+        {
+            List<Order> orders;
+            lock (a.Orders) orders = a.Orders.ToList();
+            lock (Sync) foreach (Order o in Ours) if (o.Account == a && !orders.Contains(o)) orders.Add(o);
+            return orders.Count(o => o != null && MayFill(o.OrderState));
+        }
+        internal static bool GroupMovesPending(Account a)
+        {
+            double now = ChartBridgeTime.NowUtcMs();
+            string prefix = (a.Name ?? "") + "|";
+            lock (Moves) return Moves.Any(kv => kv.Key.StartsWith(prefix, StringComparison.Ordinal) && (int)kv.Value.Where(x => now - x[1] <= MoveTtlMs).Sum(x => x[0]) != 0);
+        }
         // the position on this contract both readings agree it is at least (0 when they differ in side)
         internal static int GroupHeld(Account a, Instrument inst) { int pn = SignedPosition(a, inst), pe = EffectivePosition(a, inst); return pn > 0 && pe > 0 ? Math.Min(pn, pe) : pn < 0 && pe < 0 ? Math.Min(-pn, -pe) : 0; }
 
@@ -576,7 +600,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     public static class ChartBridgeGroups
     {
         public const string Header = "# ChartBridge account groups (written by ChartBridge; do not edit)";
-        public const string Header2 = "# group<TAB>id<TAB>name<TAB>on|off<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>target|-<TAB>size<TAB>lockAt|-<TAB>consistency|-<TAB>eval|funded|-<TAB>hero|-<TAB>riskPct|-, member<TAB>account<TAB>id, rules<TAB>account<TAB>size<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>lockAt|-<TAB>target|-<TAB>consistency|-<TAB>maxMinis|-<TAB>maxMicros|-<TAB>typeId|-, personal<TAB>account<TAB>floor|-<TAB>daily|-";
+        public const string Header2 = "# group<TAB>id<TAB>name<TAB>on|off<TAB>dailyLoss|-<TAB>drawdown|-<TAB>eod|intraday|static|-<TAB>target|-<TAB>size|-<TAB>lockAt|-<TAB>consistency|-<TAB>eval|funded|-<TAB>hero|-<TAB>riskPct|-, member<TAB>account<TAB>id[<TAB>benched], rules<TAB>account<TAB>size<TAB>dailyLoss|-<TAB>drawdown<TAB>eod|intraday|static<TAB>lockAt|-<TAB>target|-<TAB>consistency|-<TAB>maxMinis|-<TAB>maxMicros|-<TAB>typeId|-, personal<TAB>account<TAB>floor|-<TAB>daily|-";
         public const string MarksHeader = "# ChartBridge account marks (written by ChartBridge; do not edit)";
         public const string MarksHeader2 = "# mark<TAB>account<TAB>peakEod|-<TAB>peakIntraday|-<TAB>dayStartBalance|-<TAB>session<TAB>dayStartAt (UTC ms)|-<TAB>closeSeen|-<TAB>lastBalance|-<TAB>flat|open|-<TAB>eodMissed|-<TAB>intradayMissed|-";
         public static double GapMs = 10000;   // 0.6.3 (audit C2): no reading of a connected account for this long is a gap ChartBridge did not watch
@@ -618,8 +642,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             public double RiskPct;
             public string[] Extra = new string[0];                   // fields after riskPct, kept as read (a later ChartBridge's)
             public Group Clone() { Group g = (Group)MemberwiseClone(); g.Extra = (string[])Extra.Clone(); return g; }
-            // the group's own rules: the rules of every member that has none of its own (every member of a 0.6.4 or older file)
-            public Rules Default() { return new Rules { Size = Size, DailyLoss = DailyLoss, Drawdown = Drawdown, Type = Type, LockAt = LockAt, Target = Target, Consistency = Consistency }; }
+            // 0.6.7 (Anthony 2026-10-22): a group made on the Multi-Account panel has no rules of its own (size, drawdown and type "-");
+            // one saved before keeps the ones it has
+            public bool HasRules { get { return Size > 0 && Drawdown > 0 && Type != null; } }
+            // the group's own rules: the rules of every member that has none of its own (every member of a 0.6.4 or older file); 0.6.7:
+            // they give such a member its floor and rooms only (never a group entry's size), and a group with none gives none
+            public Rules Default() { return HasRules ? new Rules { Size = Size, DailyLoss = DailyLoss, Drawdown = Drawdown, Type = Type, LockAt = LockAt, Target = Target, Consistency = Consistency } : null; }
         }
         // 0.6.5 (Anthony 2026-10-19, PRIORITY): one member's rules. A member with a rules line has its own (a group may hold accounts of
         // different types and sizes); one without inherits the group's (Default), exactly as 0.6.4.
@@ -638,6 +666,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public readonly Dictionary<string, string> Members = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // account -> group id
             public readonly Dictionary<string, double[]> Personal = new Dictionary<string, double[]>(StringComparer.OrdinalIgnoreCase);   // account -> {floor, daily}, 0 none
             public readonly Dictionary<string, Rules> Own = new Dictionary<string, Rules>(StringComparer.OrdinalIgnoreCase);   // 0.6.5: a member -> its own rules
+            public readonly HashSet<string> Benched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // 0.6.7: the members on the bench
             public int Next = 1;
             // 0.6.5: the rules of a member of group g: its own, else the group's
             public Rules RulesOf(string account, Group g) { Rules r; return account != null && Own.TryGetValue(account, out r) ? r.Clone() : g.Default(); }
@@ -648,6 +677,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (KeyValuePair<string, string> kv in Members) s.Members[kv.Key] = kv.Value;
                 foreach (KeyValuePair<string, double[]> kv in Personal) s.Personal[kv.Key] = (double[])kv.Value.Clone();
                 foreach (KeyValuePair<string, Rules> kv in Own) s.Own[kv.Key] = kv.Value.Clone();
+                foreach (string b in Benched) s.Benched.Add(b);
                 return s;
             }
         }
@@ -885,14 +915,21 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     Group g = new Group();
                     double dl, dd, tg, sz, lk;
-                    if (p.Length < 10 || !IdRx.IsMatch(p[1]) || NameProblem(p[2]) != null || (p[3] != "on" && p[3] != "off") || !FileMoney(p[4], true, out dl) || !FileMoney(p[5], false, out dd) ||
-                        (p[6] != "eod" && p[6] != "intraday" && p[6] != "static") || !FileMoney(p[7], true, out tg) || !FileMoney(p[8], false, out sz) || !FileMoney(p[9], true, out lk))
+                    // 0.6.7: a group with no rules of its own has "-" for its drawdown, its type and its size, and none of the other
+                    // rules (a ChartBridge 0.6.6 or older reads such a line as no group line: the whole file unreadable, so it never
+                    // sizes or floors anything from rules that are not there)
+                    bool none = p.Length >= 10 && p[5] == "-" && p[6] == "-" && p[8] == "-";
+                    if (p.Length < 10 || !IdRx.IsMatch(p[1]) || NameProblem(p[2]) != null || (p[3] != "on" && p[3] != "off") || !FileMoney(p[4], true, out dl) || !FileMoney(p[5], none, out dd) ||
+                        (p[6] != "eod" && p[6] != "intraday" && p[6] != "static" && !none) || !FileMoney(p[7], true, out tg) || !FileMoney(p[8], none, out sz) || !FileMoney(p[9], true, out lk) ||
+                        (none && (dl > 0 || tg > 0 || lk > 0)))
                     { why = at + " is not a group line"; return null; }
                     if (s.Groups.ContainsKey(p[1])) { why = at + " names group " + p[1] + " twice"; return null; }
                     if (s.Groups.Values.Any(x => string.Equals(x.Name, p[2], StringComparison.OrdinalIgnoreCase))) { why = at + " names a group name twice"; return null; }
-                    g.Id = p[1]; g.Name = p[2]; g.NoHedge = p[3] == "on"; g.DailyLoss = dl; g.Drawdown = dd; g.Type = p[6]; g.Target = tg; g.Size = sz; g.LockAt = lk;
+                    // 0.6.7 (Anthony 2026-10-22, "Always on, no switch"): no hedging is on for every group; a line saved "off" reads as on
+                    g.Id = p[1]; g.Name = p[2]; g.NoHedge = true; g.DailyLoss = dl; g.Drawdown = dd; g.Type = none ? null : p[6]; g.Target = tg; g.Size = sz; g.LockAt = lk;
                     double con = 0;
                     if (p.Length >= 11 && !FilePercent(p[10], out con)) { why = at + " is not a group line (consistency)"; return null; }
+                    if (none && con > 0) { why = at + " is not a group line (consistency with no rules)"; return null; }
                     g.Consistency = con;
                     // 0.6.1: the type and the hero; a line written before them (10 or 11 fields) reads as not set and none
                     string at2 = null, hr = null;
@@ -909,9 +946,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 else if (p[0] == "member")
                 {
-                    if (p.Length != 3 || p[1].Length == 0 || p[1] != p[1].Trim() || !IdRx.IsMatch(p[2]) || ChartBridgeOrders.IsNeverTradable(p[1])) { why = at + " is not a member line"; return null; }
+                    // 0.6.7: a fourth field "benched" puts the member on the bench (written only for a benched member, so a file with no
+                    // one benched is exactly what 0.6.6 wrote; a 0.6.6 or older reads a benched member's line as no member line)
+                    if ((p.Length != 3 && !(p.Length == 4 && p[3] == "benched")) || p[1].Length == 0 || p[1] != p[1].Trim() || !IdRx.IsMatch(p[2]) || ChartBridgeOrders.IsNeverTradable(p[1])) { why = at + " is not a member line"; return null; }
                     if (s.Members.ContainsKey(p[1])) { why = at + " puts an account in two groups"; return null; }
                     s.Members[p[1]] = p[2];
+                    if (p.Length == 4) s.Benched.Add(p[1]);
                     members.Add(new[] { p[1], p[2], at });
                 }
                 else if (p[0] == "rules")
@@ -987,15 +1027,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             StringBuilder b = new StringBuilder(Header).Append('\n').Append(Header2).Append('\n');
             foreach (Group g in s.Groups.Values.OrderBy(x => int.Parse(x.Id.Substring(1), CultureInfo.InvariantCulture)))
             {
-                b.Append("group\t").Append(g.Id).Append('\t').Append(g.Name).Append('\t').Append(g.NoHedge ? "on" : "off").Append('\t').Append(MoneyText(g.DailyLoss)).Append('\t')
-                 .Append(MoneyText(g.Drawdown)).Append('\t').Append(g.Type).Append('\t').Append(MoneyText(g.Target)).Append('\t').Append(MoneyText(g.Size)).Append('\t').Append(MoneyText(g.LockAt))
+                b.Append("group\t").Append(g.Id).Append('\t').Append(g.Name).Append('\t').Append("on").Append('\t').Append(MoneyText(g.DailyLoss)).Append('\t')   // 0.6.7: always on
+                 .Append(MoneyText(g.Drawdown)).Append('\t').Append(g.Type ?? "-").Append('\t').Append(MoneyText(g.Target)).Append('\t').Append(MoneyText(g.Size)).Append('\t').Append(MoneyText(g.LockAt))
                  .Append('\t').Append(g.Consistency > 0 ? g.Consistency.ToString("0.##", CultureInfo.InvariantCulture) : "-")
                  .Append('\t').Append(g.AccountType ?? "-").Append('\t').Append(g.Hero ?? "-");
                 if (g.RiskPct > 0 || g.Extra.Length > 0) b.Append('\t').Append(PctText(g.RiskPct));   // 0.6.5: off and nothing after it: the line exactly as 0.6.4 wrote it
                 foreach (string x in g.Extra) b.Append('\t').Append(x);
                 b.Append('\n');
             }
-            foreach (KeyValuePair<string, string> kv in s.Members.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)) b.Append("member\t").Append(kv.Key).Append('\t').Append(kv.Value).Append('\n');
+            foreach (KeyValuePair<string, string> kv in s.Members.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+                b.Append("member\t").Append(kv.Key).Append('\t').Append(kv.Value).Append(s.Benched.Contains(kv.Key) ? "\tbenched" : "").Append('\n');   // 0.6.7: the bench
             // 0.6.5: a member's own rules. A ChartBridge 0.6.4 or older does not know this line: it reads the whole file as unreadable
             // (every entry refused, an alarm, never rewritten), so it never trails a floor from the wrong rules
             foreach (KeyValuePair<string, Rules> kv in s.Own.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
@@ -1248,7 +1289,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // review LOW 8: the warning only for the drawdown type of the account's group (an EOD group never hears of intraday highs)
             string gid, type = null;
             Group grp;
-            if (state.Members.TryGetValue(m.Name, out gid) && state.Groups.TryGetValue(gid, out grp)) type = state.RulesOf(m.Name, grp).Type;   // 0.6.5: the member's own drawdown type
+            if (state.Members.TryGetValue(m.Name, out gid) && state.Groups.TryGetValue(gid, out grp)) { Rules mr = state.RulesOf(m.Name, grp); type = mr != null ? mr.Type : null; }   // 0.6.5: the member's own drawdown type; 0.6.7: none with no rules
             if (covers && m.PeakEod.HasValue && un.HasValue && bal + un.Value > m.PeakEod.Value + 0.004) m.PeakEod = Math.Round(bal + un.Value, 2);
             if (missed != null && m.PeakEod.HasValue)
             {
@@ -1486,11 +1527,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<Group> groups;
             Dictionary<string, List<string>> members = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             string err;
-            HashSet<string> own;
+            HashSet<string> own, bench;
             lock (Mem)
             {
                 err = readError;
                 own = new HashSet<string>(state.Own.Keys, StringComparer.OrdinalIgnoreCase);
+                bench = new HashSet<string>(state.Benched, StringComparer.OrdinalIgnoreCase);
                 groups = state.Groups.Values.Select(x => x.Clone()).OrderBy(x => int.Parse(x.Id.Substring(1), CultureInfo.InvariantCulture)).ToList();
                 foreach (Group g in groups) members[g.Id] = state.Members.Where(kv => kv.Value == g.Id).Select(kv => kv.Key).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
             }
@@ -1505,7 +1547,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 sides.Add(new[] { g.Id, g.Name, side ?? "", g.NoHedge ? "on" : "off", HolderText(held) });
                 if (i > 0) b.Append(',');
                 b.Append("{\"id\":").Append(CbJson.Str(g.Id)).Append(",\"name\":").Append(CbJson.Str(g.Name)).Append(",\"noHedge\":").Append(g.NoHedge ? "true" : "false")
-                 .Append(",\"dailyLoss\":").Append(None0(g.DailyLoss)).Append(",\"drawdown\":").Append(None0(g.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(g.Type))
+                 .Append(",\"dailyLoss\":").Append(None0(g.DailyLoss)).Append(",\"drawdown\":").Append(None0(g.Drawdown)).Append(",\"drawdownType\":").Append(g.Type == null ? "null" : CbJson.Str(g.Type))
                  .Append(",\"target\":").Append(None0(g.Target)).Append(",\"size\":").Append(None0(g.Size)).Append(",\"lockAt\":").Append(None0(g.LockAt))
                  .Append(",\"consistency\":").Append(None0(g.Consistency))
                  .Append(",\"accountType\":").Append(g.AccountType == null ? "null" : CbJson.Str(g.AccountType)).Append(",\"hero\":").Append(g.Hero == null ? "null" : CbJson.Str(g.Hero))
@@ -1521,7 +1563,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 b.Append("]");
                 b.Append(",\"riskPct\":").Append(None0(g.RiskPct))   // 0.6.5: the risk percent of each member's max loss, null off
                  .Append(",\"ownRules\":[").Append(string.Join(",", members[g.Id].Where(x => own.Contains(x)).Select(x => CbJson.Str(x)))).Append("]")   // 0.6.5: the members with rules of their own
-                 .Append(",\"tradeOut\":[").Append(string.Join(",", members[g.Id].Select(x => new[] { x, TradeOutWhy(x) }).Where(x => x[1] != null).Select(x => "{\"account\":" + CbJson.Str(x[0]) + ",\"why\":" + CbJson.Str(x[1]) + "}"))).Append("]}");   // 0.6.5 (review 4): the members a group entry leaves out
+                 .Append(",\"tradeOut\":[").Append(string.Join(",", members[g.Id].Select(x => new[] { x, TradeOutWhy(x) }).Where(x => x[1] != null).Select(x => "{\"account\":" + CbJson.Str(x[0]) + ",\"why\":" + CbJson.Str(x[1]) + "}"))).Append("]")   // 0.6.5 (review 4): the members a group entry leaves out
+                 .Append(",\"benched\":[").Append(string.Join(",", members[g.Id].Where(x => bench.Contains(x)).Select(x => CbJson.Str(x)))).Append("]}");   // 0.6.7: the members on the bench (members still)
             }
             b.Append("],\"error\":").Append(err == null ? "null" : CbJson.Str(ReadFailedNow() + " (" + err + ")")).Append('}');
             NoteSides(sides);
@@ -1662,7 +1705,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 n.Set("floor", null, null, w); n.Set("roomFloor", null, null, w); n.Set("roomDaily", null, null, w); n.Set("targetLeft", null, null, w);
                 return n;
             }
-            if (g != null || n.R != null)
+            if (g != null && n.R == null)
+            {
+                // 0.6.7: a member with no rules of its own in a group with none (made on the Multi-Account panel): nothing to work from
+                string w = n.Name + " has no rules of its own and group " + g.Name + " has none: set its account type on The Desk and apply it (its Rules on the Accounts tab)";
+                n.Set("floor", null, null, w); SetRoomFloor(n, ntRoom, equity, w); n.Set("roomDaily", null, null, w); n.Set("targetLeft", null, null, w);
+            }
+            else if (g != null || n.R != null)
             {
                 // 0.6.5: every number from the member's own rules (its own size, drawdown and type, lock, daily loss and target),
                 // or its group's when it has none of its own (as 0.6.4); 0.6.6: an account in no group with its own rules too
@@ -1814,7 +1863,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"noHedge\":").Append(n.G == null ? "null" : n.G.NoHedge ? "true" : "false")
                  .Append(",\"accountType\":").Append(n.G == null || n.G.AccountType == null ? "null" : CbJson.Str(n.G.AccountType))   // 0.6.2: the group's Type (eval, funded; null not set, or not prop)
                  .Append(",\"rules\":");
-                if (n.G != null)   // 0.6.5: the member's own rules (or its group's), the same seven keys as before
+                if (n.G != null && n.R == null) b.Append("null");   // 0.6.7: a member with no rules (its group has none either)
+                else if (n.G != null)   // 0.6.5: the member's own rules (or its group's), the same seven keys as before
                     b.Append("{\"dailyLoss\":").Append(Zero0(n.R.DailyLoss)).Append(",\"drawdown\":").Append(Zero0(n.R.Drawdown)).Append(",\"drawdownType\":").Append(CbJson.Str(n.R.Type))
                      .Append(",\"target\":").Append(Zero0(n.R.Target)).Append(",\"size\":").Append(Zero0(n.R.Size)).Append(",\"lockAt\":").Append(Zero0(n.R.LockAt))
                      .Append(",\"consistency\":").Append(Zero0(n.R.Consistency))   // CON (a): informational, 0 none
@@ -1839,6 +1889,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "memberRules", new[] { "type", "cid", "account", "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" } },
             { "accountLimits", new[] { "type", "cid", "account", "floor", "dailyLoss" } },
             { "firmMinimum", new[] { "type", "cid", "account", "minBalance" } },   // 0.6.6: the firm's minimum balance seeds the floor
+            { "memberBench", new[] { "type", "cid", "account", "benched" } },      // 0.6.7: a member to the bench or back
         };
 
         public static bool Handles(string type) { return type != null && Keys.ContainsKey(type); }
@@ -1858,7 +1909,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     EnsureLoaded();
                     lock (Mem) if (readError != null) why = ReadFailedText + "; nothing was changed";
                 }
-                if (why == null) why = type == "groupSave" ? GroupSave(m) : type == "groupDelete" ? GroupDelete(m) : type == "accountGroup" ? AccountGroup(m) : type == "memberRules" ? MemberRules(m) : type == "firmMinimum" ? FirmMinimum(m) : AccountLimits(m);
+                if (why == null) why = type == "groupSave" ? GroupSave(m) : type == "groupDelete" ? GroupDelete(m) : type == "accountGroup" ? AccountGroup(m) : type == "memberRules" ? MemberRules(m) : type == "firmMinimum" ? FirmMinimum(m) :
+                                       type == "memberBench" ? MemberBench(m) : AccountLimits(m);
                 if (why != null) client.Send(Reject(cid, why));
             }
             catch (Exception ex)
@@ -1919,26 +1971,37 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
+        // 0.6.7 (Anthony 2026-10-22): the group's own rules are optional (the Multi-Account panel sends none: absent keeps what the group
+        // has, a new group has none); noHedge optional and never false (always on); the risk percent changes only while the group is flat.
+        static readonly string[] GroupRuleKeys = { "dailyLoss", "drawdown", "drawdownType", "target", "size", "lockAt", "consistency" };
         private static string GroupSave(Dictionary<string, string> m)
         {
             string id = ChartBridgeV3.Str(m, "group"), name = ChartBridgeV3.Str(m, "name"), type = ChartBridgeV3.Str(m, "drawdownType"), why;
             if (m.ContainsKey("group") && id == null) return "group must be a group id (a plain string), or left out for a new group";
             if ((why = NameProblem(name)) != null) return why;
-            bool? noHedge = ChartBridgeV3.Bool(m, "noHedge");
-            if (!noHedge.HasValue) return "noHedge must be true or false";
-            if (type != "eod" && type != "intraday" && type != "static") return "drawdownType must be eod, intraday or static";
-            double dl, dd, tg, sz, lk;
-            if ((why = Money(m, "dailyLoss", true, out dl)) != null || (why = Money(m, "drawdown", false, out dd)) != null || (why = Money(m, "target", true, out tg)) != null ||
-                (why = Money(m, "size", false, out sz)) != null || (why = Money(m, "lockAt", true, out lk)) != null) return why;
-            if (dd >= sz) return "the drawdown must be less than the account size";
-            if (lk > 0 && type == "static") return "floor stops at applies to a trailing drawdown only (end of day or intraday); 0 for none";
-            double con = 0;   // CON (a): optional, 0 or absent none, else more than 0 and at most 100 (2 decimals)
-            if (m.ContainsKey("consistency"))
+            if (m.ContainsKey("noHedge"))
             {
-                string raw = m["consistency"];
-                if (raw != "0" && !FilePercent(raw, out con)) return "consistency must be a percent from 0 (none) to 100, at most 2 decimals";
+                bool? noHedge = ChartBridgeV3.Bool(m, "noHedge");
+                if (!noHedge.HasValue) return "noHedge must be true or false";
+                if (!noHedge.Value) return "No hedging is always on for every group (ChartBridge 0.6.7): noHedge false is refused";
             }
-            if (lk > 0 && lk <= sz - dd) return "floor stops at must be above the starting floor (" + (sz - dd).ToString("0.##", CultureInfo.InvariantCulture) + ")";
+            bool hasRules = GroupRuleKeys.Any(k => m.ContainsKey(k));
+            double dl = 0, dd = 0, tg = 0, sz = 0, lk = 0, con = 0;
+            if (hasRules)
+            {
+                if (type != "eod" && type != "intraday" && type != "static") return "drawdownType must be eod, intraday or static";
+                if ((why = Money(m, "dailyLoss", true, out dl)) != null || (why = Money(m, "drawdown", false, out dd)) != null || (why = Money(m, "target", true, out tg)) != null ||
+                    (why = Money(m, "size", false, out sz)) != null || (why = Money(m, "lockAt", true, out lk)) != null) return why;
+                if (dd >= sz) return "the drawdown must be less than the account size";
+                if (lk > 0 && type == "static") return "floor stops at applies to a trailing drawdown only (end of day or intraday); 0 for none";
+                // CON (a): optional, 0 or absent none, else more than 0 and at most 100 (2 decimals)
+                if (m.ContainsKey("consistency"))
+                {
+                    string raw = m["consistency"];
+                    if (raw != "0" && !FilePercent(raw, out con)) return "consistency must be a percent from 0 (none) to 100, at most 2 decimals";
+                }
+                if (lk > 0 && lk <= sz - dd) return "floor stops at must be above the starting floor (" + (sz - dd).ToString("0.##", CultureInfo.InvariantCulture) + ")";
+            }
             // 0.6.1: optional; absent keeps what the group has (a new group: not set and none), so an older page's save never drops them.
             // The message's own "type" is its kind, so the group's type travels as accountType. Shapes only: ChartBridge does not know heroes
             string atype = null, hero = null;
@@ -1950,6 +2013,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool hasRisk = m.ContainsKey("riskPct");
             if (hasRisk && m["riskPct"] != "0" && !FileRisk(m["riskPct"], out risk)) return "riskPct must be a percent of each member's max loss from 0 (off) to 100, at most 2 decimals";
             string said;
+            lock (ChartBridgeOrders.GroupEntryLock)   // 0.6.7: no group entry is sized while its risk percent changes
+            lock (ChartBridgeOrders.GroupPlaceLock)
             lock (SaveLock)
             {
                 State next;
@@ -1958,8 +2023,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (id != null) { if (!next.Groups.TryGetValue(id, out g)) return "no group " + id; }
                 else g = new Group { Id = "g" + next.Next.ToString(CultureInfo.InvariantCulture) };
                 if (next.Groups.Values.Any(x => x.Id != g.Id && string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase))) return "a group named " + name + " is there already";
+                // 0.6.7 (Anthony 2026-10-22): the risk percent changes only while the group is flat (no position, no working entry)
+                if (id != null && hasRisk && Math.Abs(risk - g.RiskPct) > 1e-9)
+                {
+                    List<ChartBridgeOrders.GroupHolding> held;
+                    try { held = Holdings(next.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList()); }
+                    catch (Exception ex) { return "ChartBridge could not read group " + g.Name + "'s positions and orders (" + ex.Message + "): the risk percent was not changed"; }
+                    if (held.Count > 0) return "the risk percent changes only while group " + g.Name + " is flat: it holds " + HolderText(held) + "; nothing was changed";
+                }
                 string was = id != null ? g.Name : null;
-                g.Name = name; g.NoHedge = noHedge.Value; g.DailyLoss = dl; g.Drawdown = dd; g.Type = type; g.Target = tg; g.Size = sz; g.LockAt = lk; g.Consistency = con;
+                g.Name = name; g.NoHedge = true;
+                if (hasRules) { g.DailyLoss = dl; g.Drawdown = dd; g.Type = type; g.Target = tg; g.Size = sz; g.LockAt = lk; g.Consistency = con; }
                 if (hasType) g.AccountType = atype;
                 if (hasHero) g.Hero = hero;
                 if (hasRisk) g.RiskPct = risk;
@@ -1976,8 +2050,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string RulesWords(Group g)
         {
             Func<double, string> d = v => "$" + v.ToString("#,0.##", CultureInfo.InvariantCulture);
-            return "size " + d(g.Size) + ", daily loss " + (g.DailyLoss > 0 ? d(g.DailyLoss) : "none") + ", drawdown " + d(g.Drawdown) + " " + g.Type +
-                   (g.LockAt > 0 ? " (floor stops at " + d(g.LockAt) + ")" : "") + ", target " + (g.Target > 0 ? d(g.Target) : "none") + ", consistency " + (g.Consistency > 0 ? g.Consistency.ToString("0.##", CultureInfo.InvariantCulture) + "%" : "none") + ", no hedging " + (g.NoHedge ? "on" : "off") +
+            return (g.HasRules ? "size " + d(g.Size) + ", daily loss " + (g.DailyLoss > 0 ? d(g.DailyLoss) : "none") + ", drawdown " + d(g.Drawdown) + " " + g.Type +
+                   (g.LockAt > 0 ? " (floor stops at " + d(g.LockAt) + ")" : "") + ", target " + (g.Target > 0 ? d(g.Target) : "none") + ", consistency " + (g.Consistency > 0 ? g.Consistency.ToString("0.##", CultureInfo.InvariantCulture) + "%" : "none") : "no rules of its own (each member's own)") + ", no hedging " + (g.NoHedge ? "on" : "off") +
                    ", type " + (g.AccountType ?? "not set") + ", hero " + (g.Hero ?? "none") + ", risk " + (g.RiskPct > 0 ? g.RiskPct.ToString("0.##", CultureInfo.InvariantCulture) + "% of each member's max loss" : "off");
         }
         private static string MemberWords(Rules r)
@@ -2003,7 +2077,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 name = g.Name;
                 left = next.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList();
                 next.Groups.Remove(id);
-                foreach (string a in left) { next.Members.Remove(a); next.Own.Remove(a); }   // 0.6.5: its members' own rules go with it
+                foreach (string a in left) { next.Members.Remove(a); next.Own.Remove(a); next.Benched.Remove(a); }   // 0.6.5: its members' own rules go with it; 0.6.7: the bench too
                 string err = Save(next);
                 if (err != null) return err;
                 try { ChartBridgeAgents.GroupDeleted(id); } catch (Exception ex) { ChartBridgeServer.Log("groups: the stand-downs of group " + id + " not dropped (" + ex.Message + ")"); }   // 0.6.2: under the save, before a later group could take the id
@@ -2055,6 +2129,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (id == cur) return id == null ? null : name + " is in " + next.Groups[id].Name + " already";
                 Group g = null;
                 if (id != null && !next.Groups.TryGetValue(id, out g)) return "no group " + id;
+                // 0.6.7: a group with no rules of its own takes an account only with its own (from its type on The Desk)
+                if (g != null && own == null && !g.HasRules) return name + " has no account type: set its type on The Desk first (group " + g.Name + " takes each account's rules from its type)";
                 // 0.6.0: again here, under the lock that saves the membership (PlaceLock, then SaveLock; memory only, no file read), so an
                 // agent that chose this group, or a copier or bot change, since the first check cannot slip past it
                 if (id != null) { string taken = ChartBridgeAgents.JoinRefusal(name, id, false); if (taken != null) return taken; }
@@ -2068,6 +2144,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (ms != null && ts != null && ms != ts) return name + " is " + ms + " (" + HolderText(mine) + ") and " + g.Name + " is " + ts + " (" + HolderText(theirs) + "): joining would hedge the group; prop firms ban hedged accounts";
                 }
                 if (id == null) next.Members.Remove(name); else next.Members[name] = id;
+                next.Benched.Remove(name);   // 0.6.7: a new membership (or none) starts off the bench
                 // 0.6.5: its own rules when the page sent them; none sent (a page before 1.33.0): the group's, so any it had go
                 if (own != null) next.Own[name] = own; else next.Own.Remove(name);
                 string err = Save(next);
@@ -2176,7 +2253,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (marksError != null) return "account-marks.txt could not be read (" + marksError + "); nothing was changed";
                 string gid; Group g;
                 if (state.Members.TryGetValue(name, out gid) && state.Groups.TryGetValue(gid, out g)) r = state.RulesOf(name, g);
-                else if (!state.Own.TryGetValue(name, out r)) return name + " has no firm rules yet: apply its account type first (the floor comes from its drawdown and lock)";
+                else if (!state.Own.TryGetValue(name, out r)) r = null;
+                if (r == null) return name + " has no firm rules yet: apply its account type first (the floor comes from its drawdown and lock)";
             }
             if (r.Type == "static") return name + "'s drawdown is static: its floor is fixed at " + (r.Size - r.Drawdown).ToString("0.00", CultureInfo.InvariantCulture) + ", nothing to give";
             if (min < r.Size - r.Drawdown - 0.004) return "the minimum balance " + min.ToString("0.00", CultureInfo.InvariantCulture) + " is below the starting floor (" + (r.Size - r.Drawdown).ToString("0.00", CultureInfo.InvariantCulture) + "): check the firm's dashboard";
@@ -2196,6 +2274,70 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeServer.Log("groups: " + name + "'s floor set from the firm's minimum balance " + min.ToString("0.00", CultureInfo.InvariantCulture) + " (its high is now " + high.ToString("0.00", CultureInfo.InvariantCulture) + "; by the page)");
             Changed();
             return null;
+        }
+
+        // 0.6.7 (Anthony 2026-10-22: "the ability to quickly swap out accounts in and out of the group while flat"): a member to the
+        // bench (benched true) or back (false). It stays a member either way (its rules, highs and firm are kept; nothing is asked
+        // again); on the bench it sits out every new group entry (the page's ticket and hotkeys, an agent's group plan), while its exits,
+        // stops, cancels and flattens go as always. Refused unless the account is flat (both readings, every instrument) with no
+        // working order, so nothing it holds or has working changes side with the move.
+        private static string MemberBench(Dictionary<string, string> m)
+        {
+            string name = ChartBridgeV3.Str(m, "account");
+            if (name == null) return "memberBench needs account (a plain string)";
+            bool? benched = ChartBridgeV3.Bool(m, "benched");
+            if (!benched.HasValue) return "benched must be true (to the bench) or false (back to trade with the group)";
+            Account a = Find(name);
+            if (a != null) name = a.Name;
+            string gname, why;
+            lock (ChartBridgeOrders.GroupEntryLock)   // a group entry from the page is sized and placed whole, before or after the move
+            lock (ChartBridgeOrders.GroupPlaceLock)   // and no other entry passes meanwhile (an agent's seat is checked again under it)
+            lock (SaveLock)
+            {
+                State next;
+                lock (Mem) next = state.Clone();
+                string gid;
+                if (!next.Members.TryGetValue(name, out gid) || !next.Groups.ContainsKey(gid)) return name + " is in no group: only a group's member goes to the bench";
+                gname = next.Groups[gid].Name;
+                if (next.Benched.Contains(name) == benched.Value) return null;   // already there: nothing to change
+                if ((why = BenchBusyWhy(name, a)) != null) return why;
+                if (benched.Value) next.Benched.Add(name); else next.Benched.Remove(name);
+                string err = Save(next);
+                if (err != null) return err;
+            }
+            ChartBridgeServer.Log("groups: " + name + (benched.Value ? " is on " + gname + "'s bench: it sits out new entries and keeps its rules" : " trades with " + gname + " again from the next entry") + " (by the page)");
+            Changed();
+            return null;
+        }
+
+        // 0.6.7: why an account may not move to or from the bench now (null: flat with no working order). Its positions by both
+        // readings on every instrument and every order that may still fill (NinjaTrader's list and ChartBridge's own just sent).
+        internal static string BenchBusyWhy(string name, Account a)
+        {
+            if (a == null) return name + " is not in NinjaTrader now: ChartBridge cannot see that it is flat, so it stays where it is";
+            if (!Up(a)) return name + " is not connected: ChartBridge cannot see that it is flat, so it stays where it is";
+            List<string> held = new List<string>();
+            List<Position> ps;
+            lock (a.Positions) ps = a.Positions.ToList();
+            foreach (Position p in ps)
+                if (p != null && p.Instrument != null && p.MarketPosition != MarketPosition.Flat && p.Quantity != 0)
+                    held.Add((p.MarketPosition == MarketPosition.Long ? "+" : "-") + p.Quantity + " " + (p.Instrument.MasterInstrument != null ? p.Instrument.MasterInstrument.Name : p.Instrument.FullName));
+            int working = ChartBridgeOrders.GroupWorkingCount(a);
+            if (held.Count == 0 && working == 0 && ChartBridgeOrders.GroupMovesPending(a)) held.Add("a fill on its way");
+            if (held.Count == 0 && working == 0) return null;
+            string orders = working + " working order" + (working == 1 ? "" : "s");
+            return name + (held.Count > 0 ? " is in a trade (" + string.Join(", ", held) + ")" + (working > 0 ? " with " + orders : "") : " has " + orders) + ": it moves once it is flat with no working orders";
+        }
+
+        // 0.6.7: the members of group id on the bench (empty when none, or no such group)
+        public static HashSet<string> BenchedOf(string id)
+        {
+            EnsureLoaded();
+            lock (Mem)
+            {
+                if (id == null || !state.Groups.ContainsKey(id)) return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                return new HashSet<string>(state.Members.Where(kv => kv.Value == id && state.Benched.Contains(kv.Key)).Select(kv => kv.Key), StringComparer.OrdinalIgnoreCase);
+            }
         }
 
         // After any change: the groups and the accounts to the pages at once, and each agent its accountState.
@@ -2223,7 +2365,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // 0.6.5: a group's name, risk percent and members in seat order (by name), or null with why (no such group, groups.txt unreadable).
-        public sealed class RiskGroup { public string Id, Name; public double RiskPct; public List<string> Members; }
+        public sealed class RiskGroup { public string Id, Name; public double RiskPct; public List<string> Members; public HashSet<string> Benched; }   // 0.6.7: Benched
         public static RiskGroup RiskGroupOf(string id, out string why)
         {
             why = null;
@@ -2233,7 +2375,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (readError != null) { why = ReadFailedText; return null; }
                 Group g;
                 if (id == null || !state.Groups.TryGetValue(id, out g)) { why = "no group " + id; return null; }
-                return new RiskGroup { Id = g.Id, Name = g.Name, RiskPct = g.RiskPct, Members = state.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList() };
+                List<string> ms = state.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+                return new RiskGroup { Id = g.Id, Name = g.Name, RiskPct = g.RiskPct, Members = ms, Benched = new HashSet<string>(ms.Where(x => state.Benched.Contains(x)), StringComparer.OrdinalIgnoreCase) };
             }
         }
 

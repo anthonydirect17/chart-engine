@@ -3536,6 +3536,53 @@ order that reduces by either reading is never checked.
 - The ticket shows the account's room for a single account where ChartBridge's numbers give it ("Room $900.00 daily · $1,700.00 to
   floor · entry $40.00 at stop": the daily room, the room to the floor and this entry's risk at its stop), display only.
 
+### The bench (0.6.7)
+
+Anthony 2026-10-22: "I would like to have the ability to quickly swap out accounts in and out of the group while flat ... when I
+click and drag a chip into the group, it trades with, when its on the bench, it sits out." Page 1.37.0's Multi-Account panel.
+
+- **A member on the bench stays a member.** Its rules (its own, from its type on The Desk), its highs, its floor and rooms and its
+  place in the group's one-direction check are kept; nothing is asked again when it comes back. It **sits out every new group
+  entry**: `groupPreview` and `groupOrder` (the page's ticket and its hotkeys) give it size 0 with `out` "benched: it sits out new
+  entries (the Multi-Account panel)" (a `sizes` list that gives it more is refused whole, as any changed size); an agent trading the
+  group keeps it as a seat in seat order, `welcome` gains `benched` (the benched seats, in seat order; absent when none), a change of
+  the bench puts `seatsRev` up, and a plan's seat on the bench sits out with `out` "benched" whatever size it was sent (checked again
+  under `PlaceLock` for each seat, so a bench raised mid fan-out stops it there). The bot and the copier never trade a group seat.
+- **Exits are never blocked by the bench:** a benched account's own exits, stops, targets, changes, cancels and flattens go exactly as
+  before (the bench is read only by the group-entry paths above, never by the one-direction check, an order's checks or a flatten),
+  and Flatten group and Flatten all on the page still cover it (a benched account that holds a position, typed into NinjaTrader,
+  should not happen; it is flattened all the same).
+- **`memberBench`** (page to ChartBridge, the v3 connection, signed in): `{type, cid?, account, benched}`, `benched` true to the bench,
+  false back. Refused (a `reject` with its `cid`) unless the account is a member of a group, and **flat by both readings on every
+  instrument with no order that may still fill** (its legs, stops and targets included): "SIM-B is in a trade (+2 NQ): it moves once
+  it is flat with no working orders", "SIM-A has 1 working order: it moves once it is flat with no working orders"; an account not
+  in NinjaTrader or not connected stays where it is (ChartBridge cannot see that it is flat). Already there: nothing changes. Under
+  the group entry lock and `PlaceLock`, so no group entry is sized and placed across the move. Joining a group (or leaving it, or the
+  group deleted) takes an account off the bench.
+- **The `groups` message** gains `benched` per group: the members on the bench (members still, in `members` too).
+- **`groups.txt`:** a benched member's line is `member<TAB>account<TAB>id<TAB>benched` (written only for a benched member, so a file
+  with no one benched is exactly what 0.6.6 wrote); `groups.txt.good` is the same text, sealed. **An older ChartBridge (0.6.6 or
+  before) reading a file with a benched member refuses it safely:** its reader takes a member line of exactly 3 fields
+  (`ChartBridgeGroups.Parse`: `if (p.Length != 3 || ...) { why = at + " is not a member line"; return null; }`), so the whole file is
+  unreadable for it: group entries refused, nothing rewritten, the alarm; and since the sealed copy carries the flag too, the bot,
+  the agents and the copier find no clean copy and their entries wait; Anthony's own single-account orders and every exit still go.
+- **No hedging is always on** (Anthony 2026-10-22, "Always on, no switch"): every group is one direction; a line saved `off` reads
+  as on and is written `on`; `groupSave` with `noHedge` false is refused ("No hedging is always on for every group (ChartBridge
+  0.6.7): noHedge false is refused"); `noHedge` is optional (true is taken, as an older page sends it).
+- **A group's own rules are optional and size no member** (Anthony 2026-10-22: the group's fallback rules dropped; each account's
+  rules come from its type on The Desk): `groupSave` may leave out every rule key (`dailyLoss`, `drawdown`, `drawdownType`,
+  `target`, `size`, `lockAt`, `consistency`; all or none), absent keeps what the group has, and a new group has none: its line
+  carries `-` for the drawdown, the drawdown type and the size (`group<TAB>g2<TAB>Apex<TAB>on<TAB>-<TAB>-<TAB>-<TAB>-<TAB>-<TAB>-<TAB>-
+  <TAB>funded<TAB>-<TAB>4`; a 0.6.6 reader refuses that line too: `FileMoney(p[5], false, ...)`). The `groups` message sends their
+  rules as null. A group entry sizes only a member with **rules of its own**; one with none sits out: "it has no account type: set
+  its type on The Desk and apply it (its Rules on the Accounts tab)". A group's stored rules still give such a member (a 0.6.4 or
+  older join) its floor and rooms (the checks that protect the account), never a size. A group with no rules takes a joining account
+  only with its own rules (`accountGroup` with the rule keys): "SIM-C has no account type: set its type on The Desk first (group Apex
+  takes each account's rules from its type)". A member with no rules in a group with none has no floor or rooms, with that reason.
+- **The risk percent changes only while the group is flat** (no position and no working entry on any member): "the risk percent
+  changes only while group Lucid is flat: it holds SIM-A +1 NQ; nothing was changed".
+- Hero on duty stays in the file as it was (`hero`); the page no longer sets it.
+
 ### The stop record to The Desk (0.6.6)
 
 Anthony 2026-10-21: the stop record, measured, never guessed (`nt8/ChartBridgeStops.cs`). ChartBridge's order event for every

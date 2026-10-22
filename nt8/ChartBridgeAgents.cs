@@ -2031,6 +2031,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string groupId;   // the group it trades (agent-<id>-account.txt group<TAB><id>), or null: one account (or None)
         private List<string> seatNames = new List<string>();   // the accounts it trades now, in seat order (welcome.seats)
         private long seatsRev = 1;   // up on every change of seatNames (welcome.seatsRev; a plan with another is refused)
+        private HashSet<string> seatBench = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // 0.6.7: the seats on the group's bench (welcome.benched; seatsRev up on a change)
         private readonly Dictionary<string, Seat> Seats = new Dictionary<string, Seat>(StringComparer.Ordinal);   // every seat it follows: now, and one that left while it holds its trade
         private readonly Dictionary<string, string> SeatOfTag = new Dictionary<string, string>();   // entry tag -> its seat (a group's plans only; the day file's #seat lines)
         private readonly Dictionary<string, Proposal> Proposals = new Dictionary<string, Proposal>();
@@ -2141,20 +2142,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             else want = ChartBridgeBranches.IsNone(acct) ? new List<string>() : new List<string> { acct };
             bool changed;
             string was;
+            // 0.6.7: the bench (members still, so seats still): a change puts seatsRev up, so the runner sizes again (a benched seat 0)
+            HashSet<string> bench = gid != null ? ChartBridgeGroups.BenchedOf(gid) : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bench.IntersectWith(want);
             lock (Sync)
             {
                 if (groupId != gid || account != acct) return false;   // changed meanwhile: the caller of that change refreshes
-                changed = !want.SequenceEqual(seatNames);
-                was = string.Join(", ", seatNames);
+                changed = !want.SequenceEqual(seatNames) || !bench.SetEquals(seatBench);
+                was = string.Join(", ", seatNames) + (seatBench.Count > 0 ? " (" + string.Join(", ", seatBench.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) + " benched)" : "");
                 if (changed)
                 {
                     seatNames = want;
+                    seatBench = bench;
                     seatsRev++;
                     foreach (string n in want) if (!Seats.ContainsKey(n)) Seats[n] = new Seat(this, n);
                 }
             }
             if (!changed) return false;
-            if (gid != null) { string t = "group " + (ChartBridgeGroups.NameOf(gid) ?? gid) + "'s seats are now " + (want.Count > 0 ? string.Join(", ", want) : "none") + " (were " + (was.Length > 0 ? was : "none") + "); seatsRev " + SeatsRevNow(); Log("agent " + Id + " " + t); AgentLog(t); }
+            if (gid != null) { string t = "group " + (ChartBridgeGroups.NameOf(gid) ?? gid) + "'s seats are now " + (want.Count > 0 ? string.Join(", ", want) : "none") + (bench.Count > 0 ? " (" + string.Join(", ", bench.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)) + " benched)" : "") + " (were " + (was.Length > 0 ? was : "none") + "); seatsRev " + SeatsRevNow(); Log("agent " + Id + " " + t); AgentLog(t); }
             PruneSeats();
             if (tell) { ToAgent(WelcomeJson()); Notify(); }
             return true;
@@ -3396,7 +3401,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> seats;
             long rev;
             bool k, lg;
-            lock (Sync) { k = killed; sd = FilesBrokenLocked(); gid = groupId; seats = seatNames.ToList(); rev = seatsRev; lg = league; }
+            HashSet<string> benchNow;
+            lock (Sync) { k = killed; sd = FilesBrokenLocked(); gid = groupId; seats = seatNames.ToList(); rev = seatsRev; lg = league; benchNow = new HashSet<string>(seatBench, StringComparer.OrdinalIgnoreCase); }
             bool grp = gid != null;
             used = grp ? "group:" + gid : acct;
             p.SeatNames = null; p.Outs = null; p.Results = null; p.Orders = null;
@@ -3420,7 +3426,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string cw = AccountConflict();
                 if (cw != null) return cw;
                 outs = new string[seats.Count];
-                for (int i = 0; i < seats.Count; i++) outs[i] = p.Sizes[i] == 0 ? "its size is 0 (no room for 1 contract)" : AccountProblemFor(seats[i], true);
+                // 0.6.7: a benched seat sits out whatever size it was sent (read fresh too: a bench since the plan was sized)
+                HashSet<string> benchFresh = ChartBridgeGroups.BenchedOf(gid);
+                for (int i = 0; i < seats.Count; i++) outs[i] = benchNow.Contains(seats[i]) || benchFresh.Contains(seats[i]) ? "benched" : p.Sizes[i] == 0 ? "its size is 0 (no room for 1 contract)" : AccountProblemFor(seats[i], true);
             }
             else
             {
@@ -4889,11 +4897,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string SeatsWelcomeFields()
         {
             string gid;
-            List<string> seats;
+            List<string> seats, bench;
             long rev;
-            lock (Sync) { gid = groupId; seats = seatNames.ToList(); rev = seatsRev; }
+            lock (Sync) { gid = groupId; seats = seatNames.ToList(); rev = seatsRev; bench = seatNames.Where(x => seatBench.Contains(x)).ToList(); }
             return ",\"group\":" + (gid != null ? WelcomeGroupJson(gid) : "null") + ",\"seats\":" + (gid != null ? "[" + string.Join(",", seats.Select(x => CbJson.Str(x))) + "]" : "null") +
-                   ",\"seatsRev\":" + rev.ToString(CultureInfo.InvariantCulture);
+                   ",\"seatsRev\":" + rev.ToString(CultureInfo.InvariantCulture) +
+                   (gid != null && bench.Count > 0 ? ",\"benched\":[" + string.Join(",", bench.Select(x => CbJson.Str(x))) + "]" : "");   // 0.6.7: the seats on the bench (size 0 for them), only when any
         }
 
         private static string GroupJson(string gid) { return "{\"id\":" + CbJson.Str(gid) + ",\"name\":" + Str(ChartBridgeGroups.NameOf(gid)) + "}"; }
@@ -4955,6 +4964,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!InWindow(r, et)) return WindowRefusal(r, et);   // 0.5.2: session time, the market open
             string sd = ChartBridgeAgents.BrokenRefusal(acct) ?? ChartBridgeAgents.StandDownRefusal(bd, ChartBridgeGroups.GroupOf(acct)) ?? (gid != null ? ChartBridgeAgents.StandDownRefusal(bd, gid) : null);
             if (sd != null) return sd;
+            if (gid != null && ChartBridgeGroups.BenchedOf(gid).Contains(acct ?? "")) return acct + " is on group " + (ChartBridgeGroups.NameOf(gid) ?? gid) + "'s bench: it sits out new entries";   // 0.6.7: benched mid fan-out
             if (lg) { Account a = FindAccount(acct); if (gid != null || a == null || !ChartBridgeBot.IsSim(a)) return LeagueRefusal; }
             return null;
         }

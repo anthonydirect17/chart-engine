@@ -121,20 +121,11 @@ try {
   if (!roomA) console.log('  info: room tip ' + await p.$eval(`${AP} .gr-row[data-k="SIM-A"] .apg-rtext`, e => e.title).catch(() => 'none'));
   check(!!roomA, 'the Room reads the member\'s own daily loss ($3,000 of $3,000): ' + (roomA || '').split('\n').join(' | '));
   await p.screenshot({ path: path.join(out, 'member-rules-accounts-1366.png') });
-  /* 6. Settings: the group's row says each member keeps its own rules and the risk with each member's dollars; the dialog fits */
+  /* 6. 1.37.0: the group's risk percent is set on the Multi-Account panel (each chip shows its own dollars; smoke:multi-account), not in
+     Settings: no group row or rules dialog there now */
   await p.click('#wsSet');
-  const row = await until(async () => { const t = await p.$eval('#wsGroups .gp-row[data-id="g1"]', e => e.textContent).catch(() => ''); return /each with its own rules/.test(t) ? t : null; }, 'the group\'s row in Settings');
-  check(/4 accounts \(each with its own rules\) · risk 10% of each account's max loss \(SIM-A \$450, SIM-B \$200, SIM-C \$100, SIM-D \$250\)/.test(row || ''), 'Settings: each member with its own rules, 10% of each one\'s max loss: ' + row);
-  await p.click('#wsGroups [data-gp="edit"][data-id="g1"]');
-  await p.waitForSelector('#gp-riskPct', { timeout: 5000 });
-  check((await p.$eval('#gp-riskPct', e => e.value)) === '10', 'the rules dialog\'s Risk % of max loss box: 10');
-  const dlgFit = await p.$eval('.ws-gp', f => { const r = f.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight && r.right <= window.innerWidth; });
-  check(dlgFit, 'the rules dialog with the Risk box fits 1366 x 768');
-  await p.screenshot({ path: path.join(out, 'member-rules-dialog-1366.png') });
-  await p.fill('#gp-riskPct', '');
-  await p.click('.ws-gp button[type="submit"]');
-  const save = await until(async () => (await groupMsgs(PORT)).find(m => m.type === 'groupSave'), 'groupSave');
-  check(save && save.riskPct === 0, 'Risk emptied: groupSave riskPct 0 (off): ' + JSON.stringify(save));
+  check(!(await p.$('#wsGroups')) && !(await p.$('#gp-riskPct')), 'Settings has no group row or rules dialog (1.37.0: the Multi-Account panel)');
+  await p.keyboard.press('Escape');
   await ctx.close();
   /* 7. an older ChartBridge (one rule set per group): the 1.26.0 question, no rule key, no risk box */
   const o = await openPage(OP);
@@ -145,9 +136,6 @@ try {
   const so = await until(async () => (await groupMsgs(OP)).find(m => m.type === 'accountGroup' && m.account === 'SIM-B'), 'the older join');
   check(so && !('size' in so) && !('typeId' in so), 'no rule key to an older ChartBridge (it refuses keys it does not know): ' + JSON.stringify(so));
   check(!(await o.p.$(`${AP} .apg-mrules`)), 'no Rules button with an older ChartBridge');
-  await o.p.click('#wsSet'); await o.p.click('#wsGroups [data-gp="edit"][data-id="g1"]');
-  await o.p.waitForSelector('#gp-size', { timeout: 5000 });
-  check(!(await o.p.$('#gp-riskPct')), 'no Risk box with an older ChartBridge');
   await o.ctx.close();
 } catch (e) { fail('threw: ' + (e && e.stack || e)); }
 finally { await browser.close(); bridge.kill(); older.kill(); await desk.close(); }

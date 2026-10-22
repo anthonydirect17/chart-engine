@@ -241,7 +241,7 @@ test('Quote board rows (1.16.0): cleanPanel keeps the hidden rows, sanitised; no
 /* 1.30.0 (wave 5): the Settings cleanup: every section collapsible, remembered per section, Collapse all / Expand all, the order */
 test('1.30.0 Settings sections: open by default, kept answers win, junk and blocked storage read as the default', () => {
   const W2 = require('../live/workspace.js');
-  assert.deepStrictEqual(W2.SETTINGS_SECTIONS, ['charts', 'hotkeys', 'strategies', 'entry', 'prints', 'desk', 'pin', 'layout', 'groups']);
+  assert.deepStrictEqual(W2.SETTINGS_SECTIONS, ['charts', 'hotkeys', 'strategies', 'entry', 'prints', 'desk', 'pin', 'layout']);   // 1.37.0: Account groups left Settings
   const all = W2.sectionsOpen(null);
   assert.ok(W2.SETTINGS_SECTIONS.every(id => all[id] === true), 'every section starts open, as before');
   assert.strictEqual(W2.sectionsOpen('{"charts":false,"desk":true,"nope":false}').charts, false);
@@ -259,7 +259,7 @@ test('1.30.0 Settings sections: each a header row button over its body, in the o
   const html = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'index.html'), 'utf8');
   const set = html.slice(html.indexOf('id="wsSettings"'), html.indexOf('id="wsGear"'));
   const ids = [...set.matchAll(/<section class="ws-sec" data-sec="([a-z]+)"/g)].map(m => m[1]);
-  assert.deepStrictEqual(ids, ['charts', 'hotkeys', 'strategies', 'entry', 'prints', 'desk', 'pin', 'layout', 'groups']);
+  assert.deepStrictEqual(ids, ['charts', 'hotkeys', 'strategies', 'entry', 'prints', 'desk', 'pin', 'layout']);   // 1.37.0: Account groups left Settings
   for (const id of ids) assert.match(set, new RegExp(`<button type="button" class="ws-sec-hd" aria-expanded="true" aria-controls="wsSecBody-${id}">[^]*?<div class="ws-sec-body" id="wsSecBody-${id}">`));
   assert.match(set, /<h2 class="ws-sec-hrow"><button type="button" class="ws-sec-hd"[^>]*aria-controls="wsSecBody-charts">Charts <span>every chart<\/span><\/button><button type="button" class="ws-set-all" id="wsSecAll"/, 'Collapse all in the first header row, not a row of its own');
   assert.ok(!/ws-set-top/.test(set));

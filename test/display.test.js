@@ -89,9 +89,10 @@ test('settings: grid lines off and 80 px of room by default, only the listed val
   assert.strictEqual(LP.create(s).settings().grid, 'on');
   assert.strictEqual(LP.create(s).settings().room, 160);
   for (const bad of ['yes', true, 1]) { p.setSetting('grid', bad); assert.strictEqual(LP.create(s).settings().grid, 'off'); }
-  for (const bad of [81, '80', -40, null]) { p.setSetting('room', bad); assert.strictEqual(LP.create(s).settings().room, 80); }
+  for (const bad of [39, 601, 80.5, '80', -40, null]) { p.setSetting('room', bad); assert.strictEqual(LP.create(s).settings().room, 80); }   // 1.37.0: any whole 40 to 600 is a Custom room
+  p.setSetting('room', 81); assert.strictEqual(LP.create(s).settings().room, 81, '1.37.0: a Custom room (40 to 600 px) is kept');
   assert.deepStrictEqual(LP.ROOMS, [0, 40, 80, 120, 160], '1.15.0: 120 kept too (the workspace\'s choices are 80, 120, 160)');
-  p.setSetting('glide', 'fast');
+  p.setSetting('room', null); p.setSetting('glide', 'fast');
   assert.strictEqual(LP.create(s).settings().room, 80, 'one field at a time');
 });
 

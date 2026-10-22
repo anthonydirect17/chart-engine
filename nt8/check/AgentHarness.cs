@@ -2491,6 +2491,31 @@ public static class AgentHarness
             Check(AgentReject().Contains("agent manrae has made 2 trades today (maxTrades 2)"), "0.6.0: maxTrades counts plans, not seats: " + AgentReject());
         });
 
+        // 0.6.7 (Anthony 2026-10-22): a member on the group's bench stays a seat (seat order unchanged) and sits out every plan: welcome
+        // says which (benched), a bench change puts seatsRev up, and a size sent for it anyway places nothing there
+        Part("0.6.7 a benched seat", () =>
+        {
+            File.WriteAllText(GroupsFile, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\tintraday\t3000\t50000\t-\nmember\tSIM-A\tg1\nmember\tSIM-B\tg1\tbenched\nmember\tSIM-C\tg1\n");
+            ChartBridgeGroups.StartNow();
+            GroupFresh();
+            long rev = Rev();
+            string w = Last(agentOut, "welcome");
+            Check(w.Contains("\"seats\":[\"SIM-A\",\"SIM-B\",\"SIM-C\"]") && w.Contains("\"benched\":[\"SIM-B\"]"), "0.6.7: welcome keeps every seat in order and names the benched one: " + w);
+            int a0 = N(agentOut);
+            Order[] e = PlaceAll(GPlan(NewId(), "2,3,1", rev));
+            List<string> ans = AnswersFrom(a0);
+            Check(e[0] != null && e[0].Quantity == 2 && e[1] == null && e[2] != null && e[2].Quantity == 1 && ans.Any(x => x.Contains("\"text\":\"not in this trade: benched\",\"account\":\"SIM-B\"")),
+                  "0.6.7: a size sent for the benched seat places nothing there (\"benched\"); the others take the plan: " + string.Join(" | ", ans));
+            Check(Last(agentOut, "agentState").Contains("{\"account\":\"SIM-B\",\"owns\":false,\"position\":null,\"pnlToday\":0,\"trades\":0,\"out\":\"benched\"}"), "0.6.7: agentState.seats: SIM-B out, benched");
+            // back from the bench (flat, nothing working): seatsRev up, welcome with no benched
+            foreach (Account x in Abc()) foreach (Order o in x.Orders.ToList()) if (IsLive(o)) o.OrderState = OrderState.Cancelled;
+            File.WriteAllText(GroupsFile, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\tintraday\t3000\t50000\t-\nmember\tSIM-A\tg1\nmember\tSIM-B\tg1\nmember\tSIM-C\tg1\n");
+            ChartBridgeGroups.StartNow();
+            ChartBridgeAgents.AccountStatesChanged();
+            Check(Rev() > rev && !Last(agentOut, "welcome").Contains("\"benched\""), "0.6.7: off the bench: seatsRev up (" + rev + " to " + Rev() + "), welcome with no benched");
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
+        });
+
         Part("0.6.0 clean up", () =>
         {
             try { Gone(GroupsFile); } catch (Exception) { }

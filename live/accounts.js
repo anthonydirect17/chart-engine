@@ -16,7 +16,8 @@
  *   Working orders   every working order on every account (Cancel only with `cancelFromList` on)
  *   Today's trades   per account, the fills and the flat-to-flat round trips, gross and net (The Desk's commission)
  *   Copier           only with `copier` on: the leader, the mode, a row per follower marked SIM or LIVE (Anthony 2026-10-07:
- *                    no Sim lock; ChartBridge's account gates apply to every follower), Re-arm after a stand-down
+ *                    no Sim lock; ChartBridge's account gates apply to every follower), Re-arm after a stand-down. 1.37.0: shown
+ *                    on the Multi-Account panel's Copier tab only (mount with only: 'cop'); the Account page has no Copier tab
  *   Log              what ChartBridge said on this page's connection (account changes, refusals, copier decisions)
  *
  * The page asks; ChartBridge decides. Every control shows only when its switch is true (`trading.switches`, PROTOCOL.md
@@ -510,7 +511,7 @@ function createFeed(env) {
     v3: false, open: false, signedIn: false, enabled: false, reason: 'Not connected to ChartBridge yet.', trading: null, version: '',
     switches: Object.fromEntries(SWITCH_KEYS.map(k => [k, false])), tradeAccounts: [],
     accounts: [], archived: [], got: false, instruments: {}, orders: new Map(), positions: new Map(), fills: new Map(),
-    copier: null, log: [], desk: new Map(), deskUrl: '', deskState: 'not asked', deskAt: 0,
+    copier: null, log: [], rejects: new Map(), desk: new Map(), deskUrl: '', deskState: 'not asked', deskAt: 0,
     groups: null, groupsError: null,   // 1.26.0: ChartBridge 0.5.8's groups (null: none sent, an older ChartBridge or not connected)
     /* 1.30.0: The Desk's account types (GET /api/account-types): null until read or found in this browser's copy; typesState
        'not asked', 'ok' (The Desk answered), 'cache' (not reachable: the last good list, as of typesAsOf) or 'none' (neither) */
@@ -674,6 +675,8 @@ function createFeed(env) {
           if (S.firmMins && S.firmMins[d.name] && S.firmMins[d.name].at === d.at) { firmForget(d.name); S.firmSent[d.name] = 'refused: ' + String(m.reason || '').slice(0, 200); }
         }
         if (m.cid && mine.has(m.cid)) { mine.delete(m.cid); env.note('Refused by ChartBridge: ' + m.reason, true); }
+        /* 1.37.0: the last refusals by cid, for a panel that shows its own reason (the Multi-Account panel's chips) */
+        if (typeof m.cid === 'string' && m.cid) { S.rejects.set(m.cid, String(m.reason || '').slice(0, 400)); if (S.rejects.size > 50) S.rejects.delete(S.rejects.keys().next().value); }
         changed(); return;
       }
       case 'status': log(AC.logText(m), m.level === 'error' ? 'error' : m.level === 'warn' ? 'warn' : ''); changed(); return;
@@ -810,10 +813,13 @@ function createFeed(env) {
 }
 
 /* ---------------- the panel */
+/* 1.37.0 (Anthony 2026-10-22: "copier can just be a secondary tab on the Multi-Account panel"): the Copier tab left the Account page;
+   the Multi-Account panel (live/multi-account.js) mounts this page with only: 'cop', so the copier is exactly as it was */
 const TABS = [
   { id: 'acc', name: 'Accounts', short: 'Accts' }, { id: 'pos', name: 'Positions', short: 'Pos' }, { id: 'ord', name: 'Working orders', short: 'Orders' },
-  { id: 'trd', name: 'Today\'s trades', short: 'Trades' }, { id: 'cop', name: 'Copier', short: 'Copier', when: S => S.switches.copier }, { id: 'log', name: 'Log', short: 'Log' },
+  { id: 'trd', name: 'Today\'s trades', short: 'Trades' }, { id: 'log', name: 'Log', short: 'Log' },
 ];
+const COPIER_TAB = { id: 'cop', name: 'Copier', short: 'Copier', when: S => S.switches.copier };
 const CONN = { connected: 'Connected', connecting: 'Connecting', lost: 'Lost', disconnected: 'Disconnected' };
 const GONE_WHY = { disconnected: 'disconnected', disabled: 'disabled in NinjaTrader', drawdown: 'past the trailing drawdown', dailyLoss: 'past the daily loss limit' };
 
@@ -829,13 +835,16 @@ const GONE_WHY = { disconnected: 'disconnected', disabled: 'disabled in NinjaTra
  */
 function mount(v, host) {
   const F = host.feed, S = F.S;
-  v.body.innerHTML = '<div class="apg" data-ap>' +
-    '<div class="ac-tabs apg-tabs" role="tablist" aria-label="Account page">' + TABS.map((t, i) => `<button type="button" role="tab" class="ac-tab" data-tab="${t.id}" aria-selected="${i === 0}"${t.when ? ' hidden' : ''}><span class="lb-full">${esc(t.name)}</span><span class="lb-short">${esc(t.short)}</span><span class="ac-ct" data-ct="${t.id}"></span></button>`).join('') + '</div>' +
+  /* 1.37.0: host.only 'cop': the copier alone (the Multi-Account panel's Copier tab), with no tab strip */
+  const only = host.only === 'cop';
+  const TABS = only ? [COPIER_TAB] : TABS_PAGE;
+  v.body.innerHTML = '<div class="apg' + (only ? ' apg-only' : '') + '" data-ap>' +
+    '<div class="ac-tabs apg-tabs" role="tablist" aria-label="Account page"' + (only ? ' hidden' : '') + '>' + TABS.map((t, i) => `<button type="button" role="tab" class="ac-tab" data-tab="${t.id}" aria-selected="${i === 0}"${t.when ? ' hidden' : ''}><span class="lb-full">${esc(t.name)}</span><span class="lb-short">${esc(t.short)}</span><span class="ac-ct" data-ct="${t.id}"></span></button>`).join('') + '</div>' +
     '<div class="ac-list apg-list" data-list role="tabpanel"></div>' +
     '<p class="ac-foot apg-foot" data-foot></p></div>';
   const q = sel => v.body.querySelector(sel);
   const listEl = q('[data-list]'), footEl = q('[data-foot]');
-  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, rulesEdit: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null, typeFocus: '',
+  const P = { tab: only ? 'cop' : 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, rulesEdit: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null, typeFocus: '',
     drawer: '', simOpen: false, allOpen: false, colDrag: null, colClick: null };   // 1.34.0: the account whose settings drawer is open; the Sim section open; every drawer open
   /* 1.34.0 (Anthony 2026-10-20: "make the rows or columns adjustable, so I can click and drag them and make them larger or
      smaller"): the Accounts tab's column widths (px, or null for the default share), kept in this browser; and each account's
@@ -1004,6 +1013,10 @@ function mount(v, host) {
       el.value = acc && acc.group ? acc.group : '';                                       // shown as ChartBridge says, not as picked
       if (!want) { P.join = null; F.accountGroup(name, null); render(); return; }
       const g = (S.groups || []).find(x => x.id === want);
+      /* 1.37.0 (ChartBridge 0.6.7, Anthony 2026-10-22): an account with no type on The Desk cannot join a group until it has one, and a
+         group holds one firm's accounts (the firm of its members' types; the bench pool of the Multi-Account panel) */
+      const no = g ? joinRefusal(name, g) : '';
+      if (no) { P.join = null; host.note(no, true); render(); return; }
       if (g) { P.join = joinPlan(name, g, acc); P.rulesEdit = null; render(); const box = listEl.querySelector('[data-act="join-high"]'); if (box) { box.focus(); box.select(); } }
       return;
     }
@@ -1058,6 +1071,14 @@ function mount(v, host) {
      asks. ChartBridge 0.6.5 (the group is perMember): the account's rules from its type on The Desk (auto: one compact row with the
      rules taken and the highest close, prefilled from The Desk's seed floor when it has one), or the full form when The Desk has no
      type for it (or is not reachable, or the type misses a rule). An older ChartBridge: the 1.26.0 question only (old). */
+  function joinRefusal(name, g) {
+    if (!verAtLeast(S.version, '0.6.7') || !S.deskAt) return '';   // an older ChartBridge (its group's own rules), or The Desk not read: as before
+    const row = S.desk.get(name), MC = typeof MultiAccountCore !== 'undefined' ? MultiAccountCore : null;
+    if (!row || !row.accountType) return name + ' has no account type on The Desk: set its type there first (an account with no type cannot trade with a group until it has one).';
+    const gf = MC ? MC.groupFirm(g, S.desk) : '', af = MC ? MC.firmOfRow(row) : '';
+    if (gf && af && gf.toLowerCase() !== af.toLowerCase()) return g.name + ' holds ' + gf + ' accounts and ' + name + ' is ' + af + '\'s: a group holds one firm\'s accounts.';
+    return '';
+  }
   function joinPlan(name, g, acc) {
     const base = { account: name, group: g.id };
     if (!g.perMember) return Object.assign(base, { mode: 'old', prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)) });
@@ -1128,7 +1149,7 @@ function mount(v, host) {
       const b = v.body.querySelector(`.ac-tab[data-tab="${t.id}"]`), show = !t.when || !!t.when(S);
       if (b.hidden === show) b.hidden = !show;
     }
-    if (P.tab === 'cop' && !sw.copier) { P.tab = 'acc'; for (const t of v.body.querySelectorAll('.ac-tab[data-tab]')) t.setAttribute('aria-selected', String(t.dataset.tab === 'acc')); }
+    if (P.tab === 'cop' && !sw.copier && !only) { P.tab = 'acc'; for (const t of v.body.querySelectorAll('.ac-tab[data-tab]')) t.setAttribute('aria-selected', String(t.dataset.tab === 'acc')); }
     const accounts = S.accounts, active = accounts.filter(a => a.state !== 'gone'), gone = accounts.filter(a => a.state === 'gone');
     const instr = r => S.instruments[r] || {};
     const pv = r => +instr(r).pointValue || 0;
@@ -1141,7 +1162,7 @@ function mount(v, host) {
     const archived = new Set(S.archived.map(x => x.name));        // an archived account leaves every list (its history stays on The Desk)
     const groups = AC.tradesToday([...S.fills.values()].filter(x => !archived.has(x.account)), now, pv, (acct, r) => { const a = accounts.find(x => x.name === acct); const p = a && (a.positions || []).find(x => x.root === r); return p ? p.qty : 0; }, F.rateOf);
     const counts = { acc: accounts.length, pos: positions.length, ord: orders.length, trd: groups.reduce((n, g) => n + g.trips.filter(t => !t.open).length, 0), cop: (S.copier && S.copier.followers || []).filter(f => f.on).length, log: S.log.length };
-    for (const t of TABS) { const el = v.body.querySelector(`[data-ct="${t.id}"]`), x = String(counts[t.id]); if (el.textContent !== x) el.textContent = x; }
+    for (const t of TABS) { const el = v.body.querySelector(`[data-ct="${t.id}"]`), x = String(counts[t.id]); if (el && el.textContent !== x) el.textContent = x; }
 
     let html, foot = '';
     /* 1.31.0 (audit C6): after a drop the last snapshot is shown dimmed, as of the drop; nothing in it is current */
@@ -1434,6 +1455,8 @@ function mount(v, host) {
             'apg-link', ` data-review="${g.day}" title="Open this session's Review on The Desk"`)).join('') + '</div>';
       }).join(''));
       foot = 'Today from 18:00 ET, flat to flat. Net uses The Desk\'s commission (the firm\'s default when the account has none). A row opens The Desk\'s Review.';
+    } else if (P.tab === 'cop' && only && !sw.copier) {
+      html = '<p class="ac-empty">The copier is off: config.txt has copier = false (ChartBridge says so in its switches).</p>';
     } else if (P.tab === 'cop') {
       const C = S.copier || { armed: false, standDownWhy: null, leader: null, mode: 'executions', followers: [] };
       const rows = AC.followerRows(accounts, C), leader = C.leader ? C.leader.account : '';
@@ -1513,5 +1536,6 @@ function mount(v, host) {
   return { render, destroy: () => { unfit(); host.quoteSubs.delete(render); for (const off of P.offs.values()) off(); P.offs.clear(); }, state: P };
 }
 
-return { createFeed, mount, TABS, deskBase, deskNow, DESK_DEFAULT };
+const TABS_PAGE = TABS;
+return { createFeed, mount, TABS, COPIER_TAB, deskBase, deskNow, DESK_DEFAULT };
 })();

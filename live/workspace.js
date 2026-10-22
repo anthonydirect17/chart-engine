@@ -76,8 +76,10 @@ function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Nu
 /* 1.36.0 (Anthony 2026-10-22): the Agents strip (live/agents-strip.js), every agent and the bot at a glance in one row of cards;
    at most one per layout. Read only. The Bot panel of 1.35.0 is gone (Anthony 2026-10-22: "get rid of the bot panel and merge it
    into this"): a saved layout that had one opens without it (cleanPanel drops a type it does not know). */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agents'];
-const ONE_EACH = ['ticket', 'agents'];
+/* 1.37.0 (Anthony 2026-10-22): the Multi-Account panel (live/multi-account.js): the groups' chips and bench, and the copier; at most one
+   per layout */
+const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agents', 'multi'];
+const ONE_EACH = ['ticket', 'agents', 'multi'];
 /* 1.16.0 (Anthony 2026-10-07): the rows a Quote board hides, saved with its panel. Any root name ChartBridge could list (NQ,
    ES, or a quote-only market from hello, such as YM or 6E): kept as typed by the menu, so a root hello no longer lists is
    simply ignored; anything else dropped. Display only. */
@@ -474,7 +476,7 @@ function setFloor(storage, root, which, value) {
    Every section starts open, as before (The Desk's line says when its hotkeys are read only, so it is not hidden by default);
    the fullest Settings (ChartBridge v3 with The Desk and the groups) still fits 1366 x 768 whole with the Collapse all row, moved
    up as any tall popover is, and is placed again whenever a section opens or closes. */
-const SETTINGS_SECTIONS = ['charts', 'hotkeys', 'strategies', 'entry', 'prints', 'desk', 'pin', 'layout', 'groups'];
+const SETTINGS_SECTIONS = ['charts', 'hotkeys', 'strategies', 'entry', 'prints', 'desk', 'pin', 'layout'];   // 1.37.0: no 'groups' (Account groups moved to the Multi-Account panel; a kept answer for it is ignored)
 const SECTIONS_CLOSED = [];
 /** Each section open (true) or closed, from what this browser kept (a JSON string or null): kept answers first, else the default. */
 function sectionsOpen(raw) {
@@ -748,7 +750,7 @@ const tlater = (fn, ms) => { const id = setTimeout(() => { tTimers.delete(id); f
    nt8/PROTOCOL.md "The page's v3 connection (chart 1.16.0)". */
 const AF = window.AccountsPage ? window.AccountsPage.createFeed({
   wsUrl, pin: PIN, framed: FRAMED, fetch: (u, o) => fetch(u, o), note: (text, warn) => note(text, !!warn, warn ? 8000 : 4000),
-  changed: () => { syncV3(); renderLimits(); renderAccountPages(); if (groupsUi) groupsUi.render(); syncGroupPicks(); },
+  changed: () => { syncV3(); renderLimits(); renderAccountPages(); syncGroupPicks(); },
   orderSend: obj => !!obj && obj.type === 'cancel' && obj.from === 'list' && core.cancelFromList(obj.id, obj.cid),
 }) : null;
 /* 1.33.0: the ticket's picker lists the groups (ChartBridge 0.6.5): drawn again only when the groups it offers change */
@@ -1968,6 +1970,7 @@ function addView(p) {
   else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
   else if (p.type === 'tags') mid = '<span class="ws-name">Trade tags</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';   // 1.34.0
   else if (p.type === 'agents') mid = '<span class="ws-name">Agents</span><span class="ws-acct" title="Read only: this panel sends nothing">read only</span><span class="ws-fill"></span>';   // 1.36.0
+  else if (p.type === 'multi') mid = '<span class="ws-name">Multi-Account</span><span class="ws-fill"></span>';   // 1.37.0
   else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
   // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
@@ -1986,6 +1989,7 @@ function addView(p) {
   else if (p.type === 'accounts') mountAccountsPage(v);  // 1.16.0
   else if (p.type === 'tags') mountTags(v);              // 1.34.0 (Anthony 2026-10-21)
   else if (p.type === 'agents') mountAgentsStrip(v);     // 1.36.0 (Anthony 2026-10-22)
+  else if (p.type === 'multi') mountMulti(v);             // 1.37.0 (Anthony 2026-10-22)
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
@@ -2066,9 +2070,10 @@ function addPanel(type) {
   if (panels.length >= W.MAX_PANELS) { note('At most ' + W.MAX_PANELS + ' panels: close one first', true); return; }
   if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
   if (type === 'agents' && panels.some(q => q.type === type)) { note('This layout has its Agents strip already', true); return; }
+  if (type === 'multi' && panels.some(q => q.type === type)) { note('This layout has its Multi-Account panel already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agents'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agents', 'multi'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -2668,6 +2673,19 @@ setInterval(renderAccounts, 1000);                       // the clock (a new tra
 /* ---------------- the Account page (1.16.0, live/accounts.js): every account ChartBridge watches, on the window's one v3 connection (AF, shared with the ticket's 0.4.0 parts and the Bot tab).
    Its figures follow the feed (accounts at most once a second) and the prices (quoteSubs, at most 4 times a second). */
 const accountPages = () => [...views.values()].filter(v => v.accountPage);
+/* 1.37.0 (Anthony 2026-10-22): the Multi-Account panel (live/multi-account.js): Groups (the chips, the bench, the group's settings) and
+   the Copier (the Account page's Copier tab, mounted as it was with only: 'cop'). It renders with the Account pages (v.accountPage) */
+function mountMulti(v) {
+  v.state = 'live';
+  if (!AF || !window.MultiAccount) { v.body.innerHTML = '<p class="ac-empty">The Multi-Account panel could not load (accounts.js or multi-account.js): reload the window.</p>'; v.destroy = () => {}; return; }
+  const AC = window.AccountsCore;
+  const ma = window.MultiAccount.mount(v.body, { feed: AF, panelId: v.panel.id, note: (t, w) => note(t, !!w, w ? 8000 : 4000),
+    working: () => [...AF.S.orders.values()].filter(o => (AC && typeof AC.isWorking === 'function' ? AC.isWorking(o) : true)),
+    copier: el => window.AccountsPage.mount({ el: v.el, body: el, head: v.head }, { only: 'cop', feed: AF, watchQuote, quoteOf, quoteSubs, fitPanel, note: (t, w) => note(t, !!w, w ? 8000 : 4000), now: etNowSec }) });
+  v.accountPage = ma;
+  const unfit = fitPanel(v, w => ({ 'ma-narrow': w < 620 }));
+  v.destroy = () => { unfit(); ma.destroy(); delete v.accountPage; };
+}
 function mountAccountsPage(v) {
   v.state = 'live';
   if (!AF) { v.body.innerHTML = '<p class="ac-empty">The Account page could not load (accounts.js): reload the window.</p>'; return; }
@@ -2859,9 +2877,11 @@ $('wsAddMenu').addEventListener('click', e => { const b = e.target.closest('[dat
 function syncAddMenu() {
   const b = $('wsAddMenu').querySelector('[data-add="ticket"]'), has = panels.some(p => p.type === 'ticket');
   b.disabled = has; b.title = has ? 'This layout has its order ticket' : '';
-  /* 1.36.0: one Agents strip a layout */
+  /* 1.36.0: one Agents strip a layout; 1.37.0: one Multi-Account panel */
   const ag = $('wsAddMenu').querySelector('[data-add="agents"]'), hasAg = panels.some(p => p.type === 'agents');
   if (ag) { ag.disabled = hasAg; ag.title = hasAg ? 'This layout has its Agents strip' : ag.dataset.tip || ''; }
+  const ma = $('wsAddMenu').querySelector('[data-add="multi"]'), hasMa = panels.some(p => p.type === 'multi');
+  if (ma) { ma.disabled = hasMa; ma.title = hasMa ? 'This layout has its Multi-Account panel' : ma.dataset.tip || ''; }
   placeTabBtn();                                            // the Bot button: in the top bar on every layout (the hold only while hidden)
 }
 
@@ -3058,7 +3078,11 @@ function renderGeneral() {
   for (const b of $('wsGlide').children) b.setAttribute('aria-pressed', String(b.dataset.v === s.glide));
   for (const b of $('wsGridLines').children) b.setAttribute('aria-pressed', String(b.dataset.v === s.grid));
   const room = prefs.roomSaved() ? s.room : LP.DEFAULT_ROOM_WS;   // 1.15.0: 80, 120 or 160 px, 120 until one is picked
-  for (const b of $('wsRoom').children) b.setAttribute('aria-pressed', String(+b.dataset.v === room));
+  /* 1.37.0: Custom (40 to 600 px, or set by dragging the gap on a chart) is pressed for any other width, its box showing it */
+  const custom = roomCustomOpen || !LP.ROOMS_WS.includes(room);
+  for (const b of $('wsRoom').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.v === 'custom' ? custom : !custom && +b.dataset.v === room));
+  $('wsRoomPx').hidden = !custom;
+  if (document.activeElement !== $('wsRoomPx')) $('wsRoomPx').value = room;
   if (document.activeElement !== $('wsAtr')) $('wsAtr').value = s.atr;
   $('wsRangeMode').value = s.rangeMode;
   const less = !!(window.ChartMotion && window.ChartMotion.reduced());   // 1.16.0: Less motion (the motion kit's own setting)
@@ -3084,11 +3108,28 @@ $('wsAtr').addEventListener('input', e => {
 });
 $('wsAtr').addEventListener('change', e => { e.target.removeAttribute('aria-invalid'); e.target.value = prefs.settings().atr; });
 $('wsAtr').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+var roomCustomOpen = false;                                // 1.37.0: Custom pressed, its box open (until a preset is picked)
 $('wsRoom').addEventListener('click', e => {
-  const b = e.target.closest('button[data-v]'); if (!b || !LP.ROOMS_WS.includes(+b.dataset.v)) return;
+  const b = e.target.closest('button[data-v]'); if (!b) return;
+  if (b.dataset.v === 'custom') { roomCustomOpen = true; renderGeneral(); $('wsRoomPx').focus(); $('wsRoomPx').select(); return; }
+  if (!LP.ROOMS_WS.includes(+b.dataset.v)) return;
+  roomCustomOpen = false;
   prefs.setSetting('room', +b.dataset.v); renderGeneral();
   for (const v of chartViews()) v.pane.refreshSettings();
 });
+/* 1.37.0: Custom's width, saved as typed when a whole number of px from 40 to 600 (as the ATR box) */
+$('wsRoomPx').addEventListener('input', e => {
+  const n = Number(e.target.value);
+  if (String(e.target.value).trim() === '' || !Number.isInteger(n) || n < LP.ROOM_MIN || n > LP.ROOM_MAX) { e.target.setAttribute('aria-invalid', 'true'); return; }
+  e.target.removeAttribute('aria-invalid');
+  roomCustomOpen = true;
+  prefs.setSetting('room', n);
+  for (const v of chartViews()) v.pane.refreshSettings();
+});
+$('wsRoomPx').addEventListener('change', e => { e.target.removeAttribute('aria-invalid'); renderGeneral(); });
+$('wsRoomPx').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+/* a chart's gap dragged (live.js tells every chart in this window): Settings shows the new width if it is open */
+window.addEventListener('live-settings-changed', () => renderGeneral());
 $('wsGlide').addEventListener('click', e => {
   const b = e.target.closest('button[data-v]'); if (!b) return;
   prefs.setSetting('glide', b.dataset.v); renderGeneral();
@@ -3193,16 +3234,8 @@ $('wsHotkeys').addEventListener('click', e => { const b = e.target.closest('butt
 
 $('wsPin').addEventListener('click', () => { closePops(); if (PIN) PIN.openChange(); });
 
-/* 1.26.0 (ChartBridge 0.5.8): Settings, Account groups (live/groups.js), on the window's v3 connection (AF) */
-let groupsUi = null;
-function startGroups() {
-  if (!window.GroupsPage || !AF || groupsUi) return;
-  groupsUi = window.GroupsPage.mountSettings({ feed: AF, sec: $('wsGroupsCol'), wide: on => { if ($('wsSettings').classList.contains('ws-has-groups') === on) return; $('wsSettings').classList.toggle('ws-has-groups', on); Promise.resolve().then(() => { if (pop && pop.el === $('wsSettings')) placePop(pop.el, pop.anchor, pop.align); }); }, /* 1.30.0: placed again for its new size (after this script's start: pop is declared below) */ list: $('wsGroups'), add: $('wsGroupNew'), note: $('wsGroupsNote'), dialog: $('wsDialog'), showDialog: (d, ok, cancel) => showDialog(d, ok, cancel),
-    /* 1.28.0: the heroes and their tiers for Hero on duty, from the PC helper (asked when the rules dialog opens) */
-    heroes: () => (heroHelper ? heroHelper.status() : Promise.resolve({ reach: 'down', body: null })) });
-}
-const heroHelper = window.AgentHelper && typeof fetch === 'function' ? window.AgentHelper.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (PIN ? PIN.headers() : {}) }) : null;
-startGroups();
+/* 1.37.0 (ChartBridge 0.6.7, Anthony 2026-10-22): Settings no longer has Account groups (1.26.0 to 1.36.0): a group is made and set on
+   the Multi-Account panel (live/multi-account.js, + Add panel) */
 /* 1.30.0 (wave 5): Settings, every section collapsible from its header row, remembered per section (W.KEYS.sections, this browser;
    the page works without storage), and Collapse all / Expand all in the first header row */
 const setSecs = () => [...$('wsSettings').querySelectorAll('.ws-sec[data-sec]')];
@@ -3231,7 +3264,6 @@ $('wsSecAll').addEventListener('click', () => { const open = $('wsSecAll').textC
 applySections();
 function renderSettings() {
   applySections();
-  startGroups(); if (groupsUi) groupsUi.render();
   for (const a of OT.HOTKEY_ACTIONS) hkNote(a.id, '', '');
   for (const a of W.VIEW_KEYS.concat(EXTRA_KEYS)) hkNote(a.id, '', '');
   renderGeneral(); renderHotkeys();
@@ -3470,6 +3502,8 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   /* 1.35.0: the League tab, and the charts showing the league's trades faintly (read only) */
   league: () => (leagueView ? leagueView.state() : null),
   leagueGhosts: () => [...LG.overlays.keys()],
+  /* 1.37.0: the Multi-Account panel's state (its tab, group, toast), for the smokes */
+  multi: () => { const v = [...views.values()].find(x => x.panel.type === 'multi' && x.accountPage); return v ? { tab: v.accountPage.state.tab, gid: v.accountPage.state.gid, toast: v.accountPage.state.toast } : null; },
   /* 1.36.0: the Agents strip (read only) and how many times this window read the league */
   agentsStrip: () => { const v = stripViews()[0]; return v ? v.strip.state() : null; },
   leagueReads: () => LG.reads,

@@ -375,7 +375,7 @@ test('1.26.0: the Accounts tab gets Group and Limits only once ChartBridge sends
   assert.match(src, /P\.join = joinPlan\(name, g, acc\)/, 'a group asks first (G2 b; 1.33.0: with the rules taken from The Desk)');
   assert.match(src, /if \(!g\.perMember\) return Object\.assign\(base, \{ mode: 'old', prefill: String\(\+GroupsCore\.highCloseDefault\(g, acc\)/, 'an older ChartBridge: the 1.26.0 question exactly');
   assert.ok(html.indexOf('<script src="groups.js"></script>') > html.indexOf('<script src="accounts.js"></script>') && html.indexOf('<script src="groups.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
-  assert.ok(html.indexOf('<div class="ws-col ws-col-groups" id="wsGroupsCol" hidden>') > html.indexOf('id="wsTypesSec"') && html.indexOf('id="wsGroupsSec"') > html.indexOf('id="wsGroupsCol"'), 'Settings: the groups in a third column, hidden until ChartBridge sends groups');
+  assert.ok(!html.includes('id="wsGroupsCol"') && !html.includes('id="wsGroupsSec"'), '1.37.0: Settings has no groups column: groups are made and set on the Multi-Account panel');
   assert.ok(files.www.some(f => f.from === 'live/groups.js' && f.to === 'groups.js'));
   // the room words from ChartBridge's own numbers
   const s = AC.limitState({ roomFloor: 900, roomDaily: 400, targetLeft: null, src: { roomFloor: 'computed' } }, null, { dailyLoss: 1000, drawdown: 2500 });
