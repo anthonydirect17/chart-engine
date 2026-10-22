@@ -2529,7 +2529,7 @@ function mountAgentsStrip(v) {
   const strip = window.AgentsStrip.mount(v.body, {
     day: () => leagueGhostDay(),
     reach: () => (leagueView && leagueView.shown() ? { problem: leagueView.state().problem, at: 0 } : { problem: LG.problem, at: LG.at }),
-    agents: () => (agentDesk && agentDesk.glanceIds ? agentDesk.glanceIds().map(id => { const g = agentDesk.glance(id); return g ? { a: g.agent, g } : null; }).filter(Boolean) : []),
+    agents: () => (agentDesk && agentDesk.glances ? agentDesk.glances().map(g => ({ a: g.agent, g })) : []),   // one read of the day's fills a tick, for every agent
     nowMs: () => etNowSec() * 1000,
     last: r => { const x = quoteOf(r); return x && typeof x.last === 'number' && isFinite(x.last) ? x.last : null; },
     pv: r => (instruments[r] && +instruments[r].pointValue > 0 ? +instruments[r].pointValue : null),
@@ -2862,7 +2862,7 @@ function syncAddMenu() {
   /* 1.36.0: one Agents strip a layout */
   const ag = $('wsAddMenu').querySelector('[data-add="agents"]'), hasAg = panels.some(p => p.type === 'agents');
   if (ag) { ag.disabled = hasAg; ag.title = hasAg ? 'This layout has its Agents strip' : ag.dataset.tip || ''; }
-  placeTabBtn();                                            // the Bot button follows the strip (in the top bar on a layout without one)
+  placeTabBtn();                                            // the Bot button: in the top bar on every layout (the hold only while hidden)
 }
 
 /* A chart's instrument and bars: the instruments, the bars, and the range size for Range bars. Applied at once. */
@@ -3531,7 +3531,7 @@ function startLeague() {
       if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); }
       tabUrl(on ? 'league' : '');
       placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
-      if (!on) { if (leagueView.day()) LG.day = leagueView.day(); leaguePoll(); }   // the faint marks read on by themselves
+      if (!on) { if (leagueView.day()) LG.day = leagueView.day(); if (!LG.busy) leaguePoll(); }   // the faint marks read on by themselves (a read under way schedules the next itself)
     } });
 }
 /* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk
@@ -3539,6 +3539,7 @@ function startLeague() {
 const LG_GHOST_KEY = window.LeagueCore ? window.LeagueCore.GHOST_KEY : 'live-league-ghost-v1';
 const leagueGhosts = () => { try { return window.LeagueCore ? window.LeagueCore.cleanGhosts(store.getItem(LG_GHOST_KEY)) : {}; } catch (e) { return {}; } };
 const LG = { day: null, timer: 0, seq: 0, overlays: new Map(), problem: '', at: 0, reads: 0, busy: false };
+const LG_TIMEOUT_MS = 10000;                              // one league read waits at most this long for The Desk
 /* 1.36.0: the one league read serves the faint marks and the Agents strip: it runs while either is on the page (every 30 s,
    15 s with a strip), and while the League view is open it reads nothing itself (that view reads every 15 s; its day is used) */
 const leagueWanted = () => LG.overlays.size > 0 || [...views.values()].some(v => v.panel.type === 'agents');
@@ -3567,11 +3568,16 @@ function leaguePoll() {
   const next = () => { if (seq === LG.seq && leagueWanted()) LG.timer = setTimeout(leaguePoll, stripViews().length ? 15000 : 30000); };
   if (leagueView && leagueView.shown()) { next(); return; }   // the League view reads it now: its day is the one used
   LG.reads++; LG.busy = true;
-  window.AccountsPage.deskBase((u, o) => fetch(u, o)).then(url => fetch(url + '/api/chart-league', { cache: 'no-store', mode: 'cors', credentials: 'omit' }))
-    .then(r => (r.ok ? r.json() : Promise.reject(new Error(r.status === 404 ? 'The Desk has no league view yet (it needs The Desk of chart 1.35.0).' : 'The Desk answered ' + r.status))))
+  /* review: a Desk that never answers cannot hold the read for good: given up after 10 s (the fetch aborted), and the next read
+     is scheduled. The Desk's address (deskBase, shared by the page) is not aborted: the limit races it instead */
+  const ac = typeof AbortController === 'function' ? new AbortController() : null;
+  let giveUp = 0;
+  const limit = new Promise((_, no) => { giveUp = setTimeout(() => { if (ac) ac.abort(); const e = new Error('timeout'); e.name = 'AbortError'; no(e); }, LG_TIMEOUT_MS); });
+  Promise.race([limit, window.AccountsPage.deskBase((u, o) => fetch(u, o)).then(url => fetch(url + '/api/chart-league', { cache: 'no-store', mode: 'cors', credentials: 'omit', signal: ac ? ac.signal : undefined }))
+    .then(r => (r.ok ? r.json() : Promise.reject(new Error(r.status === 404 ? 'The Desk has no league view yet (it needs The Desk of chart 1.35.0).' : 'The Desk answered ' + r.status))))])
     .then(j => { LG.day = window.LeagueCore.cleanDay(j); LG.problem = ''; LG.at = Date.now(); },
-      e => { LG.problem = (e && /^The Desk/.test(e.message) ? e.message : 'The Desk is not reachable: ' + (e && e.message ? e.message : 'no answer')) + (LG.day ? ' Showing what it last sent.' : ''); })   // the last marks stay
-    .then(() => { LG.busy = false; for (const x of LG.overlays.values()) x.o.redraw(); for (const v of stripViews()) v.strip.render(); next(); });
+      e => { LG.problem = (e && e.name === 'AbortError' ? 'The Desk did not answer in ' + LG_TIMEOUT_MS / 1000 + ' s.' : e && /^The Desk/.test(e.message) ? e.message : 'The Desk is not reachable: ' + (e && e.message ? e.message : 'no answer')) + (LG.day ? ' Showing what it last sent.' : ''); })   // the last marks stay
+    .then(() => { clearTimeout(giveUp); LG.busy = false; for (const x of LG.overlays.values()) x.o.redraw(); for (const v of stripViews()) v.strip.render(); next(); });
 }
 setInterval(syncLeagueGhosts, 3000);                      // a chart's instrument changed, a layout opened: the overlays follow
 window.addEventListener('storage', e => { if (e.key && e.key.endsWith(LG_GHOST_KEY)) syncLeagueGhosts(); });

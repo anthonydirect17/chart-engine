@@ -393,12 +393,12 @@ function create(o) {
     const ids = Object.keys(v.map); if (ids.length > 400) for (const k of ids.slice(0, ids.length - 400)) delete v.map[k];
     writeJson(KEYS.risk, v);
   }
-  function rNow(a) { return AC.tradesR(fillsDay().list.filter(x => x.agent === a.agent), risksDay().map, pointValue); }
+  function rNow(a, fills, risks) { return AC.tradesR((fills || fillsDay()).list.filter(x => x.agent === a.agent), (risks || risksDay()).map, pointValue); }
   function trips() { const a = cur(); if (!a) return []; return BC.trips(fillsDay().list.filter(x => x.agent === a.agent && x.root === S.chartRoot).sort((x, y) => x.t - y.t)); }
   /* the agent's fills today and its closed trades, on the clock (each fill's `u`, UTC ms), for the stream and the trail */
   const pointValue = r => (S.instruments[r] && +S.instruments[r].pointValue > 0 ? +S.instruments[r].pointValue : 0);
-  function dayTrades(id) {
-    const fills = fillsDay().list.filter(x => x.agent === id && isNum(x.u)), exits = [];
+  function dayTrades(id, day) {
+    const fills = (day || fillsDay()).list.filter(x => x.agent === id && isNum(x.u)), exits = [];
     for (const r of [...new Set(fills.map(f => f.root))]) {
       const list = fills.filter(f => f.root === r).map(f => Object.assign({}, f, { t: f.u })).sort((x, y) => x.t - y.t);
       for (const t of BC.trips(list)) {
@@ -408,6 +408,26 @@ function create(o) {
       }
     }
     return { fills, exits };
+  }
+
+  /* 1.36.0, read only: one agent's glance for the Agents strip (see the desk's glance below); fills and risks: the day's, read once by the caller */
+  function glanceOf(id, fills, risks) {
+    const a = agents.get(id);
+    if (!a) return null;
+    const stream = streamRows(a).slice(0, 12).map(r => ({ key: r.key, at: r.at, time: AC.etClockSec(r.at), tag: AC.rowTone(r).tag, text: rowText(r), full: r.type === 'note' ? r.m.text : rowText(r) }));
+    const t = dayTrades(id, fills), rr = rNow(a, fills, risks), pos = a.position && isNum(a.position.qty) && a.position.qty ? a.position : null;
+    let sinceText = '';
+    if (pos) {
+      const list = fills.list.filter(x => x.agent === id && x.root === pos.root && isNum(x.u)).map(f => Object.assign({}, f, { t: f.u })).sort((x, y) => x.t - y.t);
+      const open = BC.trips(list).find(x => x.tOut === null);
+      if (open && isNum(open.tIn)) sinceText = AC.etClockSec(open.tIn);
+    }
+    const op = pos ? rr.open.find(x => x.root === pos.root) : null;
+    const orders = [...S.orders.values()].filter(o => AC.isAgentMark(o, a) && (o.state === 'working' || o.state === 'partFilled'))
+      .map(o => ({ role: o.role === 'stop' || o.role === 'target' ? o.role : 'entry', side: o.side, kind: typeof o.kind === 'string' ? o.kind : '', price: isNum(o.price) ? o.price : null, qty: isNum(o.qty) ? o.qty : null, root: o.root }));
+    const h = helperOf(id);
+    return { agent: Object.assign({}, a), stream, exits: t.exits.map(e => ({ pnl: e.pnl, at: e.at })), totalR: rr.total, openRisk: op && isNum(op.risk) ? op.risk : null, sinceText,
+      orders, spend: h && h.spend ? { session: h.spend.session, overall: h.spend.overall } : null, helperOn: !!(h && h.on) };
   }
 
   /* ---------------- proposals: a card only in the tab, for the agent shown; counted everywhere else */
@@ -1718,24 +1738,10 @@ function create(o) {
         this tab already holds (his `agent` message, his stream newest first, his closed trades today, his open position's first
         fill and its risk, his working orders, the PC helper's spend as last read). Sends nothing. */
     glanceIds: () => agents.ids(),
-    glance: id => {
-      const a = agents.get(id);
-      if (!a) return null;
-      const stream = streamRows(a).slice(0, 12).map(r => ({ key: r.key, at: r.at, time: AC.etClockSec(r.at), tag: AC.rowTone(r).tag, text: rowText(r), full: r.type === 'note' ? r.m.text : rowText(r) }));
-      const t = dayTrades(id), rr = rNow(a), pos = a.position && isNum(a.position.qty) && a.position.qty ? a.position : null;
-      let sinceText = '';
-      if (pos) {
-        const list = fillsDay().list.filter(x => x.agent === id && x.root === pos.root && isNum(x.u)).map(f => Object.assign({}, f, { t: f.u })).sort((x, y) => x.t - y.t);
-        const open = BC.trips(list).find(x => x.tOut === null);
-        if (open && isNum(open.tIn)) sinceText = AC.etClockSec(open.tIn);
-      }
-      const op = pos ? rr.open.find(x => x.root === pos.root) : null;
-      const orders = [...S.orders.values()].filter(o => AC.isAgentMark(o, a) && (o.state === 'working' || o.state === 'partFilled'))
-        .map(o => ({ role: o.role === 'stop' || o.role === 'target' ? o.role : 'entry', side: o.side, kind: typeof o.kind === 'string' ? o.kind : '', price: isNum(o.price) ? o.price : null, qty: isNum(o.qty) ? o.qty : null, root: o.root }));
-      const h = helperOf(id);
-      return { agent: Object.assign({}, a), stream, exits: t.exits.map(e => ({ pnl: e.pnl, at: e.at })), totalR: rr.total, openRisk: op && isNum(op.risk) ? op.risk : null, sinceText,
-        orders, spend: h && h.spend ? { session: h.spend.session, overall: h.spend.overall } : null, helperOn: !!(h && h.on) };
-    },
+    glance: id => glanceOf(id, fillsDay(), risksDay()),
+    /** every agent's glance from ONE read of the day's fills and risks (the Agents strip reads it once a second) */
+    glances: () => { const f = fillsDay(), r = risksDay(); return agents.ids().map(id => glanceOf(id, f, r)).filter(Boolean); },
+
     /* read only, for the tests and the console */
     state: () => ({ v3: S.v3, version: S.version, signedIn: S.signedIn, shown: S.shown, chosen: S.chosen, agents: agents.list().map(a => Object.assign({}, a)),
       proposals: [...cards.values()].map(x => ({ agent: x.p.agent, id: x.p.id, ended: !!x.ended })),

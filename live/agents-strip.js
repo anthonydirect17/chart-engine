@@ -38,9 +38,10 @@ const SEATS = [
   { id: 'S', family: 'Sonnet', color: '#5DE0F0' },
   { id: 'O', family: 'Opus', color: '#B69CFF' },
 ];
-/* the league's look cap: at most 30 looks in any 60 minutes a seat (Bot-Lab league/config.py LOOKS_PER_HOUR, league/runner.py
-   _cap_ok). The league logs it (events.jsonl look_cap) but neither status.json nor The Desk passes it on, so the strip DERIVES it
-   from the seat's own decisions (one decision a look) in the 60 minutes before now. */
+/* the league's look cap: at most 30 counted looks in any 60 minutes a seat (Bot-Lab league/config.py LOOKS_PER_HOUR, league/runner.py
+   _cap_ok). A look at Anthony's new entry is never counted (Amendment 7: runner.py _look_kind says "mentor"). The league logs the
+   cap (events.jsonl look_cap) but neither status.json nor The Desk passes it on, so the strip DERIVES it from the seat's own
+   counted decisions (one decision a look) in the 60 minutes before now. */
 const LOOKS_PER_HOUR = 30, HOUR_MS = 3600000;
 /* MNQ's point value, the league's instrument (Bot-Lab league/config.py POINT_VALUE), when the page has none from ChartBridge */
 const MNQ_POINT = 2;
@@ -72,21 +73,30 @@ function firstLine(text, n) {
   return s.length > max ? s.slice(0, max - 3).trimEnd() + '...' : s;
 }
 
+/** A decision's look kind as the league reads it (Bot-Lab league/runner.py _look_kind, the same rule): its look_kind when it has
+    one, else by its trigger: "a new mentor entry..." is mentor, one that says reaction is reaction, any other is clock. */
+function lookKind(d) {
+  if (d && typeof d.look_kind === 'string' && d.look_kind) return d.look_kind;
+  const why = d && typeof d.trigger === 'string' ? d.trigger : '';
+  return why.startsWith('a new mentor entry') ? 'mentor' : why.includes('reaction') ? 'reaction' : 'clock';
+}
+
 /**
- * The look cap, DERIVED (the league reports it nowhere the page can read): the seat's decisions in the 60 minutes before nowMs
- * (the league's clock convention). 30 or more: capped, and its next look is when the oldest of the last 30 is an hour old
- * (the league's rule is "any 60 minutes", not the clock hour). Returns { capped, n, nextMs, text }.
+ * The look cap, DERIVED (the league reports it nowhere the page can read): the seat's counted looks (every decision but a look at
+ * Anthony's new entry, Amendment 7) in the 60 minutes before nowMs (the league's clock convention). 30 or more: capped, and its
+ * next look is when the oldest of the last 30 counted ones is an hour old (the league's rule is "any 60 minutes", not the clock
+ * hour). Returns { capped, n, nextMs, text }.
  */
 function lookCap(decisions, seat, nowMs) {
   const out = { capped: false, n: 0, nextMs: null, text: '' };
   if (!isNum(nowMs)) return out;
-  const times = (Array.isArray(decisions) ? decisions : []).filter(d => d && d.seat === seat && isNum(d.t) && d.t <= nowMs && nowMs - d.t < HOUR_MS)
+  const times = (Array.isArray(decisions) ? decisions : []).filter(d => d && d.seat === seat && isNum(d.t) && d.t <= nowMs && nowMs - d.t < HOUR_MS && lookKind(d) !== 'mentor')
     .map(d => d.t).sort((a, b) => a - b);
   out.n = times.length;
   if (times.length < LOOKS_PER_HOUR) return out;
   out.capped = true;
   out.nextMs = times[times.length - LOOKS_PER_HOUR] + HOUR_MS;
-  out.text = out.n + ' looks in the last hour, next look ' + clock(out.nextMs);
+  out.text = out.n + ' counted looks in the last hour, next look ' + clock(out.nextMs);
   return out;
 }
 
@@ -134,7 +144,10 @@ function seatThoughts(decisions, seat, most) {
 /**
  * The position block of a card: { flat, side, head, since, open: { text, tone, title }, stops: text, rest: text }.
  * pos: { side ('long' | 'short'), contracts, fill, stop, target, sinceMs | sinceText, root }; last: the page's price or null;
- * pv: the root's point value; risk: the open trade's risk in dollars (live agents; a seat's R comes from its stop).
+ * pv: the root's point value. opts.risk: the trade's ORIGINAL risk in dollars (a seat's risk_dollars, a live agent's plan risk),
+ * opts.riskNote: what that risk is, for the hover; opts.stopPoints: the stop distance at the fill (a seat's stop_points). R is
+ * open P&L dollars over that risk, else the points over that stop distance, else not reported. The current stop (pos.stop) is
+ * never used for R: after break-even or the trail it is not the trade's risk any more.
  */
 function positionBlock(pos, last, pv, opts) {
   const o = opts || {};
@@ -147,10 +160,11 @@ function positionBlock(pos, last, pv, opts) {
   else if (isNum(last)) {
     const p = (last - pos.fill) * dir;
     const usd = q !== null && isNum(pv) && pv > 0 ? Math.round(p * q * pv * 100) / 100 : null;
-    const stopPts = isNum(pos.stop) ? Math.abs(pos.fill - pos.stop) : null;
-    const r = isNum(o.risk) && o.risk > 0 && usd !== null ? usd / o.risk : stopPts ? p / stopPts : null;
+    let r = null, how = ', R not reported (no risk at the fill)';
+    if (isNum(o.risk) && o.risk > 0 && usd !== null) { r = usd / o.risk; how = ', R: open P&L over ' + (o.riskNote || 'the trade\'s risk') + ' (' + money(o.risk) + ')'; }
+    else if (isNum(o.stopPoints) && o.stopPoints > 0) { r = p / o.stopPoints; how = ', R: open points over the stop distance at the fill (' + pts(o.stopPoints) + ' pt), before fees'; }
     open = { text: 'open ' + (usd !== null ? signedMoney(usd) || '$0.00' : (p > 0 ? '+' : '') + pts(p) + ' pt') + (r !== null ? ' · ' + signedR(r) : ' · R ' + NR), tone: tone(p),
-      title: 'Worked out on this page: ' + (pos.root || '') + ' last ' + px(last) + ' against the fill ' + px(pos.fill) + (r !== null ? (isNum(o.risk) ? ', R on the plan\'s risk' : ', R on the stop at the fill') : '') };
+      title: 'Worked out on this page: ' + (pos.root || '') + ' last ' + px(last) + ' against the fill ' + px(pos.fill) + how };
   }
   const ref = isNum(last) ? last : pos.fill, from = isNum(last) ? '' : ' from the fill';
   const stops = isNum(ref) ? ['stop ' + (isNum(pos.stop) ? pts(Math.abs(ref - pos.stop)) + ' pt' : NR), 'target ' + (isNum(pos.target) ? pts(Math.abs(pos.target - ref)) + ' pt' : pos.target === null && o.noTarget ? 'none' : NR)].join(' · ') + from
@@ -158,8 +172,8 @@ function positionBlock(pos, last, pv, opts) {
   return { flat: false, head, side: dir < 0 ? 'short' : 'long', since, open, stops, rest: o.rest || '' };
 }
 
-/** A seat's resting order: status.json's `resting` when The Desk passes it on (the league writes it; The Desk of 1.35.0 does
-    not pass it on yet): text, '' for none. nowMs: the league's clock, for the time left. */
+/** A seat's resting order: status.json's `resting` as The Desk passes it on (status.seats.<seat>.resting; an older Desk that
+    leaves the field out: not reported): text, '' for none. nowMs: the league's clock, for the time left. */
 function seatRest(x, date, nowMs) {
   if (!x || !Object.prototype.hasOwnProperty.call(x, 'resting')) return 'resting order: ' + NR;
   const o = x.resting;
@@ -198,15 +212,19 @@ function seatCards(day, ctx) {
     else if (closed) state = { word: 'day closed', why: (day.day && day.day.note) || 'The day closed at 16:01' };
     else if (st && typeof st.feed === 'string' && st.feed && st.feed !== 'live') state = { word: 'feed down', why: 'The league\'s feed: ' + str(st.feed, 80) };
     else if (statusMs !== null && isNum(c.nowMs) && date === clockDate(c.nowMs) && c.nowMs - statusMs > STATUS_LATE_MS) state = { word: 'status late', why: 'The league\'s status is from ' + str(st.now, 8) + ' ET' };
-    else if (cap.capped) state = { word: 'look cap', why: cap.text + ' (worked out on this page from its decisions; the league allows 30 looks in any 60 minutes)' };
+    else if (cap.capped) state = { word: 'look cap', why: cap.text + ' (worked out on this page from its decisions; the league allows 30 counted looks in any 60 minutes, and a look at your new entry is not counted)' };
     /* the position: status.json's, else The Desk's open paper trade */
     const p = x && x.position && typeof x.position === 'object' ? x.position : null;
     const ot = day ? (day.open || []).find(t => t.seat === s.id) : null;
+    const same = !!ot && (!p || !p.id || !ot.id || p.id === ot.id);   // status.json's position is The Desk's open trade
     const pos = p ? { side: p.side, contracts: isNum(p.contracts) ? p.contracts : null, fill: isNum(p.fill_px) ? p.fill_px : null, stop: isNum(p.stop_px) ? p.stop_px : null,
       target: isNum(p.target_px) ? p.target_px : p.target_px === null ? null : undefined, sinceText: str(p.fill_time, 8).slice(0, 5) || (ot ? clock(ot.fillT) : ''), root: 'MNQ' }
       : ot ? { side: ot.side, contracts: ot.contracts, fill: ot.fillPx, stop: ot.stopPx, target: ot.targetPx, sinceMs: ot.fillT, root: 'MNQ' } : null;
     const position = !x && !ot ? { flat: true, head: NR, side: '', since: '', open: null, stops: '', rest: '' }
-      : positionBlock(pos, c.last, pv, { rest: seatRest(x, date, statusMs !== null ? statusMs : c.nowMs), noTarget: true });
+      : positionBlock(pos, c.last, pv, { rest: seatRest(x, date, statusMs !== null ? statusMs : c.nowMs), noTarget: true,
+        /* R on the trade's own risk at the fill (The Desk's open trade: risk_dollars, stop_points), never on the stop now */
+        risk: same ? ot.riskDollars : null, stopPoints: same ? ot.stopPoints : null,
+        riskNote: 'the trade\'s risk at the fill, gross: before the round-turn fees (the league\'s booked R is net of them)' });
     /* today */
     const mine = (day ? day.trades : []).filter(t => t.seat === s.id);
     const counted = mine.filter(t => t.r !== null && !t.crashCut);
@@ -268,7 +286,7 @@ function agentCard(a, g, ctx) {
   const pos = p ? { side: p.qty < 0 ? 'short' : 'long', contracts: Math.abs(p.qty), fill: isNum(p.avgPrice) ? p.avgPrice : null, stop: stopO ? stopO.price : null, target: tgtO ? tgtO.price : null,
     sinceMs: null, sinceText: str(gl.sinceText, 8).slice(0, 5), root } : null;
   const last = p && typeof c.last === 'function' ? c.last(root) : null, pv = p && typeof c.pv === 'function' ? c.pv(root) : null;
-  const position = positionBlock(pos, last, pv, { rest, risk: isNum(gl.openRisk) ? gl.openRisk : null });
+  const position = positionBlock(pos, last, pv, { rest, risk: isNum(gl.openRisk) ? gl.openRisk : null, riskNote: 'the plan\'s risk' });
   const exits = Array.isArray(gl.exits) ? gl.exits : [];
   const known = exits.every(e => isNum(e.pnl));
   const today = {
@@ -326,7 +344,7 @@ function idleLine(names) {
   return n ? n + (n === 1 ? ' agent slot is' : ' agent slots are') + ' off and empty: ' + names.join(', ') : '';
 }
 
-return { SEATS, LOOKS_PER_HOUR, HOUR_MS, MNQ_POINT, NR, THOUGHTS_MAX, clock, wallMs, clockDate, firstLine, lookCap, seatMode, liveMode, agentMode, thoughtOf, seatThoughts,
+return { SEATS, LOOKS_PER_HOUR, HOUR_MS, MNQ_POINT, NR, THOUGHTS_MAX, clock, wallMs, clockDate, firstLine, lookCap, seatMode, liveMode, agentMode, thoughtOf, seatThoughts, lookKind,
   positionBlock, seatRest, seatCards, agentActive, agentCard, botCard, idleLine, money, signedMoney, signedR };
 });
 
@@ -416,24 +434,29 @@ function mount(body, o) {
       row.dataset.keys = keys;
       row.innerHTML = cards.map(c => '<div class="as-slot" data-slot="' + esc(c.key) + '"></div>').join('') || '<p class="as-mut as-empty">No agent to show: the league has not been read, no live agent is running and the Bot is not offered.</p>';
     }
+    let drawn = false;
     for (const c of cards) {
       const slot = row.querySelector('[data-slot="' + CSS.escape(c.key) + '"]');
       if (!slot) continue;
       const html = cardHtml(c);
       if (slot.dataset.html !== html) {
         const had = slot.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.th || (document.activeElement.dataset.open ? 'open' : '') : '';
-        slot.dataset.html = html; slot.innerHTML = html;
+        slot.dataset.html = html; slot.innerHTML = html; drawn = true;
         if (had) { const b = had === 'open' ? slot.querySelector('[data-open]') : slot.querySelector('[data-th="' + CSS.escape(had) + '"]'); if (b) b.focus({ preventScroll: true }); }
       }
     }
-    /* the stream shows the lines that fit whole: a line cut by the card's foot is not shown */
+    /* the stream shows the lines that fit whole: a line cut by the card's foot is not shown. Measured only when a card was drawn
+       again or the panel's size changed (a ResizeObserver), never on a tick that changed nothing */
+    if (drawn || !ro) fitThoughts();
+    setHtml(q('[data-k="foot"]'), esc(C.idleLine(idle.filter(Boolean))) + (day ? (idle.length ? ' · ' : '') + 'League: SHADOW, paper only.' + (reach.at ? ' Read ' + Math.max(0, Math.round((Date.now() - reach.at) / 1000)) + ' s ago.' : '') : ''));
+    renderDetail();
+  }
+  function fitThoughts() {
     for (const list of row.querySelectorAll('.as-list')) {
       const card = list.closest('.as-card');
       const bottom = Math.min(list.getBoundingClientRect().bottom, card ? card.getBoundingClientRect().bottom - 4 : Infinity);
       for (const li of list.children) { const cut = li.getBoundingClientRect().bottom > bottom + 0.5; if (li.style.visibility !== (cut ? 'hidden' : '')) li.style.visibility = cut ? 'hidden' : ''; }
     }
-    setHtml(q('[data-k="foot"]'), esc(C.idleLine(idle.filter(Boolean))) + (day ? (idle.length ? ' · ' : '') + 'League: SHADOW, paper only.' + (reach.at ? ' Read ' + Math.max(0, Math.round((Date.now() - reach.at) / 1000)) + ' s ago.' : '') : ''));
-    renderDetail();
   }
   function onClick(e) {
     if (e.target.closest('[data-close]')) { const was = S.detail; S.detail = null; renderDetail(); if (was) { const b = row.querySelector('[data-slot="' + CSS.escape(was.card) + '"] [data-th="' + CSS.escape(was.id) + '"]'); if (b) b.focus({ preventScroll: true }); } return; }
@@ -449,10 +472,13 @@ function mount(body, o) {
   function onKey(e) { if (e.key === 'Escape' && S.detail && detail.contains(e.target)) { e.stopPropagation(); S.detail = null; renderDetail(); } }
   body.addEventListener('click', onClick);
   body.addEventListener('keydown', onKey);
+  /* the panel's size changed (a resize, a layout change): the stream's lines are measured again (no ResizeObserver: every render) */
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => fitThoughts()) : null;
+  if (ro) ro.observe(row);
   render();
   return {
     render,
-    destroy() { body.removeEventListener('click', onClick); body.removeEventListener('keydown', onKey); body.innerHTML = ''; },
+    destroy() { if (ro) ro.disconnect(); body.removeEventListener('click', onClick); body.removeEventListener('keydown', onKey); body.innerHTML = ''; },
     /* read only, for the tests */
     state: () => ({ cards: S.cards.map(c => ({ key: c.key, name: c.name, mode: c.mode.word, sub: c.mode.sub, alert: !!c.alert, state: c.state ? c.state.word : '', flat: c.position.flat, head: c.position.head, thoughts: c.thoughts.length })), detail: S.detail ? Object.assign({}, S.detail) : null }),
   };

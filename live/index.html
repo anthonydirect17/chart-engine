@@ -85,8 +85,8 @@
 <section class="ag-view ag-in-ws" id="agView" aria-label="Agent tab"></section>
 <!-- 1.35.0: the League tab's own layout (live/league.js builds it) -->
 <section class="lg-view lg-in-ws" id="lgView" aria-label="League tab"></section>
-<!-- where the Bot's button waits on a layout with an Agents strip (1.36.0; the Bot desk's own button, with its listeners: the
-     workspace moves it to the top bar and back). Never shown. -->
+<!-- where the Bot's button waits while it is hidden (no v3 ChartBridge), so the top bar's slot takes no room; shown, it sits in
+     the top bar on every layout (1.36.0: the workspace moves the Bot desk's own button, with its listeners). Never shown. -->
 <div id="wsTabHold" hidden>
   <!-- the Bot tab (1.16.0, live/bot.js): shown with a ChartBridge that speaks protocol v3; it works only when ChartBridge's bot switch is on -->
   <button type="button" class="ws-btn bt-tabbtn" id="wsBotTab" aria-pressed="false" hidden>Bot</button>

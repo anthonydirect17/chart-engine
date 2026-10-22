@@ -682,8 +682,8 @@ function create(o) {
     const off = !S.on;
     if (tabBtn) {
       put(tabBtn, 'hidden', S.v3 !== true && !S.shown);           // a ChartBridge that speaks v3 has a Bot tab
-      /* the Bot button may wait in the workspace's hidden hold (1.36.0: on a layout with an Agents strip): the "Layout" word gives
-         way only while it is in the top bar (the workspace keeps this class as it moves the button) */
+      /* the Bot button waits in the workspace's hidden hold only while it is hidden (1.36.0: shown, it is in the top bar on every
+         layout): the "Layout" word gives way only while it is in the top bar (the workspace keeps this class as it moves it) */
       tog(document.body, 'bt-has-tab', !tabBtn.hidden && !tabBtn.closest('#wsTabHold'));
       attr(tabBtn, 'aria-pressed', String(S.shown));
       tog(tabBtn, 'bt-alert', alertNow());

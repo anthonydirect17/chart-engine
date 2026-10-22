@@ -23,7 +23,7 @@ test('the look cap is derived from the seat\'s decisions in any 60 minutes, as t
   const c = A.lookCap(ds, 'H', min(4));
   assert.equal(c.capped, true); assert.equal(c.n, 30);
   assert.equal(A.clock(c.nextMs), '10:34');
-  assert.match(c.text, /^30 looks in the last hour, next look 10:34$/);
+  assert.match(c.text, /^30 counted looks in the last hour, next look 10:34$/);
   assert.equal(A.lookCap(ds, 'S', min(4)).capped, false, 'another seat is not capped');
   assert.equal(A.lookCap(ds.slice(1), 'H', min(4)).capped, false, '29 looks: not capped');
   assert.equal(A.lookCap(ds, 'H', min(35)).capped, false, 'an hour after the oldest: free again');
@@ -32,6 +32,49 @@ test('the look cap is derived from the seat\'s decisions in any 60 minutes, as t
   assert.equal(A.clock(A.lookCap(more, 'O', min(-15)).nextMs), '10:14', 'the fifth oldest (09:14) an hour on');
   assert.equal(A.lookCap(ds, 'H', null).capped, false, 'no clock: nothing claimed');
   assert.equal(A.lookCap(null, 'H', min(4)).n, 0);
+});
+
+test('the look cap counts as the league does: a look at Anthony\'s new entry is never counted (Amendment 7)', () => {
+  /* 30 clock looks and 5 looks at his new entry in the hour: still 30 counted */
+  const ds = []; for (let i = 0; i < 30; i++) ds.push(look('H', min(-26 + i), { trigger: i % 2 ? 'the 5 minute look' : 'a reaction at IBH' }));
+  for (let i = 0; i < 5; i++) ds.push(look('H', min(-50 + i), { trigger: 'a new mentor entry: long MNQ at 09:1' + i }));
+  const c = A.lookCap(ds, 'H', min(4));
+  assert.equal(c.n, 30); assert.equal(c.capped, true);
+  assert.equal(A.clock(c.nextMs), '10:34', 'the oldest counted look (09:34) an hour on, not a mentor look\'s time');
+  /* 25 counted and 10 mentor looks: not capped (the old count said 35) */
+  const mix = []; for (let i = 0; i < 25; i++) mix.push(look('S', min(-30 + i)));
+  for (let i = 0; i < 10; i++) mix.push(look('S', min(-4 + i), { trigger: 'a new mentor entry: short MNQ at 10:0' + i }));
+  assert.equal(A.lookCap(mix, 'S', min(6)).capped, false); assert.equal(A.lookCap(mix, 'S', min(6)).n, 25);
+  /* the runner's own rule: look_kind first, then the trigger */
+  assert.equal(A.lookKind({ look_kind: 'mentor', trigger: 'the 5 minute look' }), 'mentor');
+  assert.equal(A.lookKind({ look_kind: 'clock', trigger: 'a new mentor entry: long MNQ' }), 'clock', 'look_kind wins, as in _look_kind');
+  assert.equal(A.lookKind({ trigger: 'a new mentor entry: long MNQ at 10:01' }), 'mentor');
+  assert.equal(A.lookKind({ trigger: 'his new mentor entry' }), 'clock', 'only a trigger that starts with it');
+  assert.equal(A.lookKind({}), 'clock');
+  assert.equal(A.lookCap(ds.map(d => Object.assign({}, d, { look_kind: d.trigger.startsWith('a new') ? 'mentor' : 'clock' })), 'H', min(4)).n, 30);
+});
+
+test('open R is on the trade\'s ORIGINAL risk: right at break-even and after the trail, never on the stop now', () => {
+  const at = (stopPx, last, open) => { const d = sampleDay(); d.status.seats.S.position.stop_px = stopPx; d.status.seats.S.position.id = 's1'; if (open) Object.assign(d.open[0], open); d.open[0].stopPx = stopPx; return A.seatCards(d, { nowMs: min(5), last, pv: 2 })[1].position; };
+  /* break-even: the stop at the fill (24000); 10 points up on 3 MNQ is still +0.40 R of the $150 risk, not "not reported" */
+  const be = at(24000, 24010);
+  assert.equal(be.open.text, 'open +$60.00 · +0.40 R', 'break-even');
+  assert.equal(be.stops, 'stop 10 pt · target 40 pt', 'the stop distance now is still shown, from the price');
+  /* the trail: the stop at 24030, 40 points up: +1.60 R of the original risk (the stop now would say 4.00 R) */
+  assert.equal(at(24030, 24040).open.text, 'open +$240.00 · +1.60 R', 'after the trail');
+  /* no risk_dollars: the stop distance at the fill (25 points) */
+  assert.equal(at(24030, 24040, { riskDollars: null }).open.text, 'open +$240.00 · +1.60 R', 'from stop_points');
+  assert.match(at(24030, 24040, { riskDollars: null }).open.title, /open points over the stop distance at the fill \(25 pt\)/);
+  /* neither: R not reported, never the stop now */
+  assert.equal(at(24030, 24040, { riskDollars: null, stopPoints: null }).open.text, 'open +$240.00 · R not reported');
+  /* status.json's position from another trade than The Desk's open one: its risk is not borrowed */
+  assert.equal(at(24000, 24010, { id: 'other' }).open.text, 'open +$60.00 · R not reported');
+  /* a live agent with no plan risk: not reported, never from its stop order */
+  const a = { agent: 'demo', name: 'Demo Agent', mode: 'shadow', connected: true, position: { qty: 1, root: 'MNQ', avgPrice: 24000 } };
+  const c = A.agentCard(a, { orders: [{ role: 'stop', root: 'MNQ', price: 24000 }], openRisk: null }, { last: () => 24010, pv: () => 2 });
+  assert.equal(c.position.open.text, 'open +$20.00 · R not reported');
+  assert.deepEqual(L.cleanTrade({ id: 'x', seat: 'H', side: 'long', fill_t: 1, fill_px: 1, risk_dollars: 150, stop_points: 25 }, true).riskDollars, 150);
+  assert.equal(L.cleanTrade({ id: 'x', seat: 'H', side: 'long', fill_t: 1, fill_px: 1, risk_dollars: 0 }, true).riskDollars, null);
 });
 
 test('the mode, big: SHADOW or LIVE only (Anthony 2026-10-22); the account kind under LIVE; never COPILOT, AUTO or SIM big', () => {
@@ -72,7 +115,7 @@ function sampleDay() {
       O: { status: 'active', decisions: 11, flex: { phase: 'eval', balance: 49838, today_pnl: -162, room_to_floor: 1838 }, position: null } },
       spend: { day_spent: 1.61, day_cap: 9.5, coach_reserve: 1, seats: { H: 0.5, S: 0.4, O: 0.71 }, calls_today: 53, stopped: null } },
     trades: [{ id: 'o1', seat: 'O', side: 'short', contracts: 12, fill_t: min(-40), fill_px: 24010, stop_px: 24016, target_px: 23995, exit_t: min(-39), exit_px: 24016, r: -1.13 }],
-    open: [{ id: 's1', seat: 'S', side: 'long', contracts: 3, fill_t: min(-7), fill_px: 24000, stop_px: 23975, target_px: 24050 }],
+    open: [{ id: 's1', seat: 'S', side: 'long', contracts: 3, fill_t: min(-7), fill_px: 24000, stop_px: 23975, target_px: 24050, stop_points: 25, risk_dollars: 150 }],
     decisions: Array.from({ length: 30 }, (_, i) => look('H', min(-25 + i))).concat([look('O', min(-41), { answer: { action: 'rest', side: 'short', confidence: 0.55, reasoning: 'Sample: retest' } })]) });
 }
 
@@ -87,7 +130,8 @@ test('the seats\' cards: one flat at the look cap, one with an open paper trade,
   assert.equal(h.today.room, '$2,000.00 to the floor');
   assert.equal(s.state, null);
   assert.equal(s.position.head, 'LONG 3 MNQ'); assert.equal(s.position.since, '09:58');
-  assert.equal(s.position.open.text, 'open +$60.00 · +0.40 R', '10 points on 3 MNQ at $2; R on the 25 point stop');
+  assert.equal(s.position.open.text, 'open +$60.00 · +0.40 R', '10 points on 3 MNQ at $2; R on the trade\'s $150 risk at the fill');
+  assert.match(s.position.open.title, /R: open P&L over the trade's risk at the fill, gross: before the round-turn fees .*\(\$150\.00\)$/, 'the hover says gross');
   assert.equal(s.position.stops, 'stop 35 pt · target 40 pt');
   assert.equal(o.today.usd, -162); assert.equal(o.today.r, -1.13); assert.equal(o.today.n, 1); assert.equal(o.today.losses, 1);
   assert.equal(o.today.room, '$1,838.00 to the floor');
@@ -187,6 +231,12 @@ test('the page: Agents in + Add panel, one a layout, installed, read only, no da
   const ws = read('live/workspace.js');
   assert.match(ws, /day: \(\) => leagueGhostDay\(\)/, 'the strip reads the workspace\'s one league read');
   assert.equal((ws.match(/'\/api\/chart-league'/g) || []).length, 1, 'the workspace still asks The Desk for the league in one place');
+  /* review: one fills read a tick for every agent; the league read gives up after 10 s; the League view's close never starts a second read */
+  assert.match(ws, /agents: \(\) => \(agentDesk && agentDesk\.glances \? agentDesk\.glances\(\)/, 'the strip asks for every agent\'s glance at once');
+  assert.match(read('live/agent.js'), /glances: \(\) => \{ const f = fillsDay\(\), r = risksDay\(\); return agents\.ids\(\)\.map\(id => glanceOf\(id, f, r\)\)/, 'one read of the day\'s fills for all');
+  assert.match(ws, /const LG_TIMEOUT_MS = 10000;/); assert.match(ws, /Promise\.race\(\[limit, /); assert.match(ws, /clearTimeout\(giveUp\); LG\.busy = false;/);
+  assert.match(ws, /if \(!on\) \{ if \(leagueView\.day\(\)\) LG\.day = leagueView\.day\(\); if \(!LG\.busy\) leaguePoll\(\); \}/, 'the League view\'s close guarded by busy');
+  assert.match(src, /if \(drawn \|\| !ro\) fitThoughts\(\);/, 'the stream fit only when a card was drawn or the size changed');
   for (const f of ['live/agents-strip.js', 'live/agents-strip.css', 'test/agents-strip.test.js', 'test/agents-strip-smoke.mjs']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
   const css = read('live/agents-strip.css');
   assert.doesNotMatch(css, /crimson|#9F1239|#E0445E/i, 'no crimson');

@@ -48,20 +48,24 @@ function sampleDay(px) {
   decisions.push({ id: 'O-50', seat: 'O', t: at(50), time: hms(at(50)), trigger: 'touch IBL', latency_s: 9.5, cost: 0.03, call_ok: true, refused: null, contracts: 12,
     answer: { action: 'rest', side: 'short', stop_points: 6, target_points: 15, reference: 'IBL', confidence: 0.55, reasoning: 'Sample: a retest of the made-up IBL from below; rest a short there' } });
   for (let i = 0; i < 30; i++) decisions.push(pass('O', 48 - i * 1.5, i === 29 ? 'Sample: price sliced 25 pts through the made-up EMA50, no clean level' : 'Sample: no edge at the made-up level', 0.35));
+  /* and three looks at Anthony's made-up new entry: never counted by the cap (league Amendment 7), so still 31 counted */
+  for (const m of [40, 30, 20]) decisions.push(Object.assign(pass('O', m, 'Sample: a look at the made-up mentor entry', 0.3), { trigger: 'a new mentor entry: long MNQ at ' + hms(at(m + 1)).slice(0, 5) }));
   decisions.sort((a, b) => a.t - b.t);
   const fill = px - 4;
   return {
     shadow: 'SHADOW: no orders', folder: { set: true, ok: true, problem: null }, date,
     day: { date, closed: false, note: null },
     status: { date, now: hms(now), feed: 'live', seats: {
-      H: { status: 'active', flag: 'Sample data, made up for the smoke', decisions: 58, entries: 0, flex: { phase: 'eval', balance: 50000, today_pnl: 0, room_to_floor: 2000 }, position: null },
+      H: { status: 'active', flag: 'Sample data, made up for the smoke', decisions: 58, entries: 0, flex: { phase: 'eval', balance: 50000, today_pnl: 0, room_to_floor: 2000 }, position: null, resting: null },
       S: { status: 'active', flag: 'Sample data, made up for the smoke', decisions: 57, entries: 1, flex: { phase: 'eval', balance: 50000, today_pnl: 24, room_to_floor: 2000 },
-        position: { id: 's-S-1', side: 'long', state: 'open', contracts: 3, fill_px: fill, stop_px: fill - 25, target_px: fill + 50, fill_time: hms(at(15)) } },
-      O: { status: 'active', flag: 'Sample data, made up for the smoke', decisions: 58, entries: 1, flex: { phase: 'eval', balance: 49838, today_pnl: -162, room_to_floor: 1838 }, position: null } },
+        /* its stop moved to break-even (the fill): R still on the trade's $150 risk at the fill */
+        position: { id: 's-S-1', side: 'long', state: 'open', contracts: 3, fill_px: fill, stop_px: fill, target_px: fill + 50, fill_time: hms(at(15)) }, resting: null },
+      O: { status: 'active', flag: 'Sample data, made up for the smoke', decisions: 58, entries: 1, flex: { phase: 'eval', balance: 49838, today_pnl: -162, room_to_floor: 1838 }, position: null,
+        resting: { id: 'r-O-2', side: 'short', type: 'limit', price: px + 20, stop_points: 6, target_points: 15, good_until: hms(at(-20)), triggered: false } } },
       spend: { day_spent: 1.61, day_cap: 9.5, month_spent: 12.25, month_cap: 200, coach_reserve: 1, seats: { H: 0.42, S: 0.48, O: 0.71 }, calls_today: 173, stopped: null } },
     league: { enough_n: 20, seats: {} },
     trades: [{ id: 's-O-1', seat: 'O', side: 'short', contracts: 12, fill_t: at(49), fill_px: px + 20, stop_px: px + 26, target_px: px + 5, exit_t: at(48), exit_px: px + 26.75, exit_reason: 'stop', r: -1.13, relation: 'own' }],
-    open: [{ id: 's-S-1', seat: 'S', side: 'long', contracts: 3, fill_t: at(15), fill_px: fill, stop_px: fill - 25, target_px: fill + 50 }],
+    open: [{ id: 's-S-1', seat: 'S', side: 'long', contracts: 3, fill_t: at(15), fill_px: fill, stop_px: fill, target_px: fill + 50, stop_points: 25, risk_dollars: 150 }],
     decisions,
   };
 }
@@ -134,13 +138,14 @@ try {
   const fillPx = px - 4, mv = shown - fillPx, usd = mv * 3 * 2;
   check(Math.abs(shown - sv.last) <= 30, 'S: the card used the page\'s MNQ price (' + shown + ', now ' + sv.last + ')');
   const want = 'open ' + (usd > 0 ? '+' : usd < 0 ? '-' : '') + '$' + Math.abs(usd).toFixed(2) + ' · ' + (mv > 0 ? '+' : mv < 0 ? '-' : '') + Math.abs(mv / 25).toFixed(2) + ' R';
-  check(sv.text.includes(want) && /Worked out on this page/.test(sv.title), 'S: open P&L and R from the page\'s MNQ price, said so on hover: ' + want);
+  check(sv.text.includes(want) && /Worked out on this page/.test(sv.title) && /over the trade's risk at the fill, gross/.test(sv.title), 'S: open P&L from the page\'s MNQ price, R on the trade\'s risk at the fill though its stop is at break-even (gross, said so on hover): ' + want);
   const pt = v => String(Math.round(v * 100) / 100);
-  check(sv.text.includes('stop ' + pt(Math.abs(shown - (fillPx - 25))) + ' pt · target ' + pt(Math.abs(fillPx + 50 - shown)) + ' pt'), 'S: the stop and target distance in points from the price now');
-  check(/since \d\d:\d\d/.test(s) && /resting order: not reported/.test(s), 'S: since hh:mm; the resting order not reported (The Desk does not pass it on)');
+  check(sv.text.includes('stop ' + pt(Math.abs(shown - fillPx)) + ' pt · target ' + pt(Math.abs(fillPx + 50 - shown)) + ' pt'), 'S: the stop and target distance in points from the price now');
+  check(/since \d\d:\d\d/.test(s) && !/resting/.test(s), 'S: since hh:mm; no resting order (The Desk passes resting: null)');
   check(/\$0\.48 seat · seats \$1\.61 of \$8\.50/.test(s) && /day \$1\.61 of \$9\.50 · 57 calls/.test(s), 'S: the spend against the seats\' pool and the day cap, calls today');
   const o = await cardText('seat:O');
-  check(/look cap/.test(o) && /31 looks in the last hour, next look \d\d:\d\d/.test(o), 'O: the look cap with the next look');
+  check(/look cap/.test(o) && /31 counted looks in the last hour, next look \d\d:\d\d/.test(o), 'O: the look cap with the next look (its 3 looks at the mentor entry not counted)');
+  check(/resting short limit at [\d,.]+, stop 6 pt, target 15 pt until \d\d:\d\d \(\d+ min left\)/.test(o), 'O: its resting order as The Desk passes it on');
   check(/-\$162\.00 · -1\.13 R · 1 trade 0W 1L/.test(o) && /\$1,838\.00 to the floor/.test(o), 'O: today -$162.00, -1.13 R, its 50K Flex and room to the floor');
   const oth = await p.$$eval('.ws-panel.agents [data-card="seat:O"] .as-th', bs => bs.map(b => b.innerText.replace(/\s+/g, ' ')));
   check(oth.length >= 3 && /pass 0\.35 Sample: price sliced 25 pts/i.test(oth[0]), 'O: thoughts newest first with time, action, confidence and the first line: ' + oth[0]);

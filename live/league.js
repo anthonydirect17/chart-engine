@@ -49,6 +49,9 @@ function cleanTrade(t, open) {
   if (!isNum(t.fill_t) || !isNum(t.fill_px)) return null;
   return { id: str(t.id, 64), seat: t.seat, side: t.side, contracts: isNum(t.contracts) ? t.contracts : null, fillT: t.fill_t, fillPx: t.fill_px,
     stopPx: isNum(t.stop_px) ? t.stop_px : null, targetPx: isNum(t.target_px) ? t.target_px : null,
+    /* the trade's ORIGINAL risk (1.36.0 review: the Agents strip's open R): the league's risk_dollars and the stop distance at
+       the fill; stop_px moves with break-even and the trail, so it is never the risk */
+    riskDollars: isNum(t.risk_dollars) && t.risk_dollars > 0 ? t.risk_dollars : null, stopPoints: isNum(t.stop_points) && t.stop_points > 0 ? t.stop_points : null,
     exitT: !open && isNum(t.exit_t) ? t.exit_t : null, exitPx: !open && isNum(t.exit_px) ? t.exit_px : null, exitReason: str(t.exit_reason, 80),
     r: isNum(t.r) ? t.r : null, open: !!open, relation: ['own', 'with', 'against'].includes(t.relation) ? t.relation : null, crashCut: t.crash_cut === true,
     reference: str(t.reference, 40) };

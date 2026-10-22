@@ -9,8 +9,8 @@
 // month table ("not enough data yet" under 20), the decision log, the spend against the caps and the day closed note; its chart
 // carries the hollow marks (pixels drawn on the overlay, never on the chart's canvas); a chart's ⋯ switch shows them faintly,
 // off by default, kept in this browser; the Agent tab and the League tab close each other; with an Agents strip the Bot button
-// waits in the hold and the strip's bot card opens the Bot view; the button stays in reach in the top bar while a view is open
-// and while it carries its red alert (review 2), and comes back to the top bar when the strip goes; nothing sends an order.
+// stays in the top bar (it does on every layout) and the strip's bot card opens the Bot view; the button stays in reach while a
+// view is open and while it carries its red alert (review 2), and is still there when the strip goes; nothing sends an order.
 // Screenshots test/out/league-*.png.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -206,7 +206,7 @@ try {
   await until(() => p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'the alert cleared and the grid back: the button stays in the top bar', 8000);
   check(await p.evaluate(() => document.body.classList.contains('bt-has-tab')), 'the Layout word gives way while the Bot button is in the top bar (bt-has-tab), as before 1.35.0');
   await p.click('.ws-panel.agents [data-act="close"]');
-  await until(() => p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'the strip closed: the Bot button back in the top bar');
+  await until(() => p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'the strip closed: the Bot button still in the top bar');
   check(await p.isVisible('#wsBotTab'), 'with no strip on the layout the Bot is one click away in the top bar');
   check((await p.evaluate(() => window.__sent.length)) === 0, 'nothing here sent an order message');
 
