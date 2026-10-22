@@ -182,8 +182,8 @@ try {
   check(r1 === r0, 'while the League view is open the workspace\'s league read waits (' + r0 + ' then ' + r1 + ')');
   await p.click('#wsLeagueTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('lg-on')), 'back to the layout');
-  /* the bot card opens the Bot view (its switches, kill switch and rails, unchanged); the Bot button waits in the hold meanwhile */
-  check(!(await p.isVisible('#wsBotTab')) && await p.$eval('#wsTabHold', e => e.contains(document.getElementById('wsBotTab'))), 'with the strip on the layout: the Bot button waits in the hold, the bot card is the way in');
+  /* the bot card opens the Bot view (its switches, kill switch and rails, unchanged); the Bot button stays in the top bar too */
+  check(await p.isVisible('#wsBotTab') && await p.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsBotTab'))), 'with the strip on the layout: the Bot button stays in the top bar (Anthony: "its fine there")');
   const bt = await cardText('bot');
   check(/Demo Opening Fade/.test(bt) && /RAILS/i.test(bt) && /trades \d+ of \d+ · losing \d+ of \d+/.test(bt), 'the bot card: its name, mode, position, today and rails: ' + bt.replace(/\s+/g, ' ').slice(0, 160));
   await p.click('.ws-panel.agents [data-card="bot"] .as-name');

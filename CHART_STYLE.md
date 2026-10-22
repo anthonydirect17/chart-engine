@@ -623,7 +623,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   seat's color with its letter inside (600 10 px mono); the stop as a dashed line (4 3) and the target as a dotted line (1 3) at
   50 % from the fill to the exit (to the right edge while open). Faint (a chart's ⋯ "League trades (faint)", off by default,
   NQ and MNQ only): 6 px marks, 8 px letters, the marks at 55 % and the lines at 30 %.
-- **The Bot as a panel (1.35.0, Anthony 2026-10-21; removed in 1.36.0, merged into the Agents strip as its bot card):** "Bot" in + Add panel, at most one a layout: a 28 px header with the
+- **The Bot as a panel (1.35.0, Anthony 2026-10-21; removed in 1.36.0, merged into the Agents strip as its bot card; from 1.36.0 the Bot button stays in the top bar on every layout):** "Bot" in + Add panel, at most one a layout: a 28 px header with the
   name, then the very Bot button the top bar had and one muted line. While a view is open (Bot, Agent, League), or while the
   button carries its red alert, it sits in the top bar where the Bot tab was, with or without a Bot panel. With no room on the grid, the menu item opens the Bot view itself and says so. The Bot view
   is unchanged, and so is the Agent tab, in the top bar where it was.

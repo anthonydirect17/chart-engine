@@ -176,7 +176,7 @@ test('the page: Agents in + Add panel, one a layout, installed, read only, no da
   assert.ok(W.TYPES.includes('agents') && !W.TYPES.includes('bot'));
   assert.doesNotMatch(html, /data-add="bot"/, 'no Bot panel: merged into the strip');
   const ws0 = read('live/workspace.js');
-  assert.match(ws0, /const top = \(botDesk && botDesk\.shown\(\)\) \|\| viewOpen \|\| alert \|\| !strip;/, 'the Bot button in the top bar while open, a view open, its alert, or no strip');
+  assert.match(ws0, /const where = !btn\.hidden \? \$\('wsTabSlot'\) : \$\('wsTabHold'\);/, 'the Bot button in the top bar on every layout (only a hidden one waits in the hold)');
   const two = W.cleanLayout({ panels: [{ id: 'a1', type: 'agents', x: 0, y: 3, w: 9, h: 3 }, { id: 'a2', type: 'agents', x: 9, y: 3, w: 3, h: 3 }] });
   assert.deepEqual(two.panels.map(p => p.id), ['a1'], 'one Agents strip a layout');
   const files = JSON.parse(read('nt8/install-files.json'));

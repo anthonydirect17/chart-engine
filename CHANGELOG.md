@@ -41,9 +41,8 @@ stays 0.6.6; `minChartBridge` stays 0.6.2), no Desk change (it reads The Desk of
   button's bt-alert and the card: rails red, stand-down, killed, on but not connected) gives the card the Bot button's alert look
   and its one word. A click opens the Bot view, unchanged, where its enable, kill switch and rails are.
 - **The Bot panel is gone:** "Bot" is no longer in + Add panel and `bot` is no longer a panel type (a saved layout that had one
-  opens without it, no error). The Bot's button: in the top bar where the Bot tab was on any layout with no Agents strip (so the
-  Bot is always one click away), while a view is open, and while it carries its red alert (review 2 of 1.35.0, kept); on a layout
-  with an Agents strip and no alert it waits in the hidden hold and the bot card is the way in.
+  opens without it, no error). The Bot's button stays in the top bar where the Bot tab always was, on every layout (Anthony: "bot
+  tab never left the top, that was the SS and its fine there"); the strip's bot card opens the same Bot view.
 - **The League tab's decision log:** a "rest" answer is shown as a resting order ("rest short at IBL, stop 6 pt, target 15 pt,
   good until not reported": The Desk passes no good-until time with a decision), no longer as an entry; a "cancel" as the cancel
   of its resting order.

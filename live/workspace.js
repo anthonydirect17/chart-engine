@@ -2504,22 +2504,13 @@ function mountTags(v) {
   v.destroy = () => t.destroy();
 }
 /* Where the Bot's button (#wsBotTab, the Bot desk's own, with its listeners and states) sits. 1.36.0 (Anthony 2026-10-22: "get
-   rid of the bot panel and merge it into this"): the Bot panel is gone; the Agents strip's bot card opens the Bot view. The
-   button sits in the top bar where the Bot tab was:
-     - while its view is open (the way back);
-     - while any view hides the grid (Agent, League): one click from there to the Bot (review 6 of 1.35.0);
-     - while it carries its red alert (rails red, stand-down, killed, on but not connected), so the alert is never hidden (review 2);
-     - and whenever the layout has no Agents strip, so the Bot (its enable, kill switch and rails) is always one click away.
-   Only on a layout with an Agents strip, with no alert and no view open, does it wait in the hidden hold: the strip's bot card is
-   then the way in (and carries the same alert). */
+   rid of the bot panel and merge it into this"; then "bot tab never left the top, that was the SS and its fine there"): the Bot
+   panel is gone and the button stays in the top bar on every layout, where the Bot tab always was; the Agents strip's bot card
+   opens the same Bot view. Only a hidden button (no v3 ChartBridge) waits in the hold, so the slot takes no room. */
 function placeTabBtn() {
   const btn = $('wsBotTab');
   if (!btn) return;
-  const viewOpen = ['bt-on', 'ag-on', 'lg-on'].some(c => document.body.classList.contains(c));
-  const alert = btn.classList.contains('bt-alert') && !btn.hidden;
-  const strip = panels.some(p => p.type === 'agents');
-  const top = (botDesk && botDesk.shown()) || viewOpen || alert || !strip;
-  const where = top && !btn.hidden ? $('wsTabSlot') : $('wsTabHold');   // hidden (no v3 ChartBridge): in the hold, so the slot takes no room
+  const where = !btn.hidden ? $('wsTabSlot') : $('wsTabHold');   // hidden (no v3 ChartBridge): in the hold, so the slot takes no room
   if (where && btn.parentElement !== where) where.appendChild(btn);
   /* review 5: the "Layout" word gives way only while the Bot button is really in the top bar (bot.css bt-has-tab) */
   document.body.classList.toggle('bt-has-tab', !btn.hidden && where === $('wsTabSlot'));

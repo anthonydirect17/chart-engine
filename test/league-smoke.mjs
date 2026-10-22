@@ -170,13 +170,12 @@ try {
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'closed again from its button');
   await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="agents"]');
   await until(() => p.$('.ws-panel.agents [data-card="bot"]'), 'the Agents strip with its bot card', 15000);
-  await until(() => p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsBotTab'))), 'with an Agents strip the Bot button waits in the hold');
-  check(!(await p.isVisible('#wsBotTab')), 'with an Agents strip: no Bot button in the top bar while the grid shows (the bot card is the way in)');
+  check(await p.isVisible('#wsBotTab') && await p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'with an Agents strip the Bot button stays in the top bar (Anthony: "its fine there")');
   await p.click('.ws-panel.agents [data-card="bot"] .as-name');
   await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'a click on the bot card opens the Bot view');
   check(await p.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsBotTab'))) && await p.isVisible('#wsBotTab'), 'while the Bot view is open its button is in the top bar (the way back)');
   await p.click('#wsBotTab');
-  await until(() => p.evaluate(() => !document.body.classList.contains('bt-on') && document.getElementById('wsTabHold').contains(document.getElementById('wsBotTab'))), 'closed: the button back in the hold');
+  await until(() => p.evaluate(() => !document.body.classList.contains('bt-on') && document.getElementById('wsTabSlot').contains(document.getElementById('wsBotTab'))), 'closed: the button still in the top bar');
   /* review 6: from the League view the Bot is one click away in the top bar */
   await p.click('#wsLeagueTab');
   await until(() => p.evaluate(() => document.body.classList.contains('lg-on')), 'the League view');
@@ -204,11 +203,8 @@ try {
   await p.click('.bt-kill'); await wait(900); await p.click('.bt-kill');   // release asks a second click (not a double-click)
   await until(() => p.$eval('#wsBotTab', b => !b.classList.contains('bt-alert')), 'released: no alert', 8000);
   await p.click('#wsBotTab');
-  await until(() => p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsBotTab'))), 'the alert cleared and the grid back: the button returns to the hold', 8000);
-  check(await p.evaluate(() => !document.body.classList.contains('bt-has-tab')), 'review 5: the Layout word back (no bt-has-tab) once the Bot button is not in the top bar');
-  await p.setViewportSize({ width: 1600, height: 900 }); await wait(300);
-  check(await p.evaluate(() => getComputedStyle(document.querySelector('label[for="wsLayout"]')).display !== 'none'), 'at 1600 the Layout word shows with the strip and no alert');
-  await p.setViewportSize({ width: 1366, height: 768 }); await wait(300);
+  await until(() => p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'the alert cleared and the grid back: the button stays in the top bar', 8000);
+  check(await p.evaluate(() => document.body.classList.contains('bt-has-tab')), 'the Layout word gives way while the Bot button is in the top bar (bt-has-tab), as before 1.35.0');
   await p.click('.ws-panel.agents [data-act="close"]');
   await until(() => p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'the strip closed: the Bot button back in the top bar');
   check(await p.isVisible('#wsBotTab'), 'with no strip on the layout the Bot is one click away in the top bar');
