@@ -36,7 +36,7 @@ async function shot(page, name, clip) {
   if (SHOTS) fs.copyFileSync(file, path.join(SHOTS, name));
 }
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--bench', '--bench-groups', '--max-qty=MNQ:9,NQ:9',
-  '--trade-accounts=SIM-A,SIM-B,SIM-C,SIM-D,SIM-E,SIM-G,SIM-H', '--version=0.6.7', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
+  '--trade-accounts=SIM-A,SIM-B,SIM-C,SIM-D,SIM-E,SIM-F,SIM-G,SIM-H', '--version=0.6.7', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const control = async (what, q) => (await fetch(`http://127.0.0.1:${PORT}/test/${what}?` + new URLSearchParams(q || {}), { method: 'POST' })).json();
 const groupMsgs = async () => ((await control('received')).groupMsgs || []);
@@ -47,6 +47,7 @@ const DESK = { accounts: [
   { account: 'SIM-C', firm: 'Lucid', archived: false, accountType: lucid('sample-lucid-25k-daily', 'Flex 25K Daily'), source: {} },
   { account: 'SIM-D', firm: 'Lucid', archived: false, accountType: lucid('sample-lucid-50k', 'Flex 50K Eval'), source: {} },
   { account: 'SIM-E', firm: 'Lucid', archived: false, accountType: lucid('sample-lucid-50k', 'Flex 50K Eval'), source: {} },
+  { account: 'SIM-F', firm: 'Lucid', archived: false, accountType: lucid('sample-lucid-50k', 'Flex 50K Eval'), source: {} },
   { account: 'SIM-G', firm: 'Lucid', archived: false, accountType: null, source: {} },
   { account: 'SIM-H', firm: 'Apex', archived: false, accountType: { id: 'sample-apex-50k', firm: 'Apex', name: 'EOD 50K', version: 1, status: 'checked' }, source: {} },
 ] };
@@ -84,7 +85,7 @@ try {
     group: (document.querySelector(s + ' [data-ma="group"]') || {}).value, risk: (document.querySelector(s + ' [data-ma="risk"]') || {}).value, toast: (document.querySelector(s + ' .ma-toast:last-child') || {}).textContent }), sel);
   const L0 = await until(async () => { const l = await lanes(); return l.in.length === 3 && l.bench.length >= 1 ? l : null; }, 'the lanes drawn');
   check(L0 && L0.group === 'g1' && JSON.stringify(L0.in) === '["SIM-A","SIM-B","SIM-C"]', 'Groups: Lucid chosen, SIM-A, SIM-B and SIM-C trade with it: ' + JSON.stringify(L0));
-  check(L0 && JSON.stringify(L0.bench) === '["SIM-D","SIM-E","SIM-G"]' && !L0.bench.includes('SIM-H'), 'the bench: SIM-D (benched), then Lucid\'s accounts in no group (SIM-E, SIM-G); Apex\'s SIM-H never shows');
+  check(L0 && JSON.stringify(L0.bench) === '["SIM-D","SIM-E","SIM-F","SIM-G"]' && !L0.bench.includes('SIM-H'), 'the bench: SIM-D (benched), then Lucid\'s accounts in no group (SIM-E, SIM-F, SIM-G); Apex\'s SIM-H never shows');
   check(L0 && L0.sumIn === '3 accounts · $375 at risk a trade' && L0.risk === '5', 'each chip\'s risk at 5% of its own max loss ($225, $100, $50), the lane\'s sum $375: ' + (L0 && L0.sumIn));
   const chip = name => p.$eval(`${sel} [data-chip="${name}"]`, e => [...e.children].map(c => c.textContent.trim()).join(' ').replace(/\s+/g, ' '));
   check(/^SIM-A ?SIM Flex 150K Eval Room \$[\d,]+ ?Risk \$225$/.test(await chip('SIM-A')), 'a chip: the account, SIM or LIVE, its type on The Desk, its room and its own risk: ' + await chip('SIM-A'));
@@ -149,6 +150,21 @@ try {
   /* 1.37.0 (Anthony 2026-10-22, "Join flow on the chip"): the firm's account in no group joins from its chip: the Accounts tab's own
      join step (its rules from its type on The Desk, the highest close), Put in sends the same accountGroup; Cancel leaves it */
   const joins = async () => (await groupMsgs()).filter(m => m.type === 'accountGroup');
+  /* review M1: a highest close typed in one account's join step never carries into another's: SIM-E's step, 50250 typed, then a
+     click on SIM-F (typed, in no group): SIM-F's box shows SIM-F's own prefill, and Put in sends that */
+  const jm0 = (await joins()).length;
+  await p.click(`${sel} [data-chip="SIM-E"]`);
+  await until(() => p.$(`${sel} [data-jkey="SIM-E|g1"]`), 'SIM-E\'s join step');
+  await p.fill(`${sel} [data-ma="jhigh"]`, '50250');
+  await p.click(`${sel} [data-chip="SIM-F"]`);
+  const fbox = await until(() => p.$eval(`${sel} [data-jkey="SIM-F|g1"]`, e => ({ value: e.value, prefill: e.getAttribute('value') })).catch(() => null), 'SIM-F\'s join step');
+  check(fbox && fbox.value === fbox.prefill && fbox.value !== '50250' && !(await p.$(`${sel} [data-jkey="SIM-E|g1"]`)),
+    'review M1: SIM-E\'s typed 50250 does not carry into SIM-F\'s step: SIM-F\'s box shows its own prefill: ' + JSON.stringify(fbox));
+  await p.click(`${sel} [data-ma="join-yes"]`);
+  const fm = await until(async () => (await joins()).slice(jm0).find(m => m.account === 'SIM-F'), 'SIM-F\'s accountGroup');
+  check(fm && fbox && fm.group === 'g1' && fm.highClose === Number(fbox.prefill.replace(/,/g, '')) && !(await joins()).slice(jm0).some(m => m.account === 'SIM-E'),
+    'review M1: Put in sends SIM-F with its own prefill (' + (fbox && fbox.prefill) + '), nothing for SIM-E: ' + JSON.stringify(fm));
+  await until(async () => { const l = await lanes(); return l.in.includes('SIM-F') ? l : null; }, 'SIM-F in the trading lane');
   const j0 = (await joins()).length;
   await p.click(`${sel} [data-chip="SIM-E"]`);
   const step = await until(() => p.$eval(`${sel} .ma-join`, e => ({ words: e.querySelector('.ma-jwords').textContent, high: e.querySelector('[data-ma="jhigh"]').value })), 'the join step under SIM-E');
@@ -191,7 +207,7 @@ try {
   /* a ChartBridge older than 0.6.7 (no bench): a join from a chip says it needs 0.6.7, as moving a chip does */
   const OLDP = PORT + 1;
   const ob = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(OLDP), '--v3', '--trading', '--test-controls', '--bench-groups', '--max-qty=MNQ:9,NQ:9',
-    '--trade-accounts=SIM-A,SIM-B,SIM-C,SIM-D,SIM-E,SIM-G,SIM-H', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
+    '--trade-accounts=SIM-A,SIM-B,SIM-C,SIM-D,SIM-E,SIM-F,SIM-G,SIM-H', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise(r => ob.stdout.once('data', r));
   try {
     const q = await ctx.newPage();

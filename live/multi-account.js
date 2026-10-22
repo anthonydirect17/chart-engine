@@ -229,7 +229,7 @@ function mount(el, host) {
     if (!j || j.plan.account !== c.name || j.plan.group !== g.id) return '';
     const hw = window.GroupsCore.highWord(j.plan.rules), Hw = hw.charAt(0).toUpperCase() + hw.slice(1), words = F.joinWords(j.plan);
     return `<div class="ma-join" role="group" aria-label="${esc('Join ' + c.name + ' to ' + g.name)}"><span class="ma-jwords" title="${esc(words)}">${esc(words)}</span>` +
-      `<span class="ma-jrow"><label class="ma-lbl" for="ma-jhigh-${esc(host.panelId)}">${esc(Hw)}</label><input class="ws-num ma-jhigh" id="ma-jhigh-${esc(host.panelId)}" data-ma="jhigh" inputmode="decimal" autocomplete="off" value="${esc(j.plan.prefill)}" title="${esc(j.plan.seed ? 'From ' + j.plan.seed.words + '. ' : 'From the firm\'s dashboard. ')}Optional: empty takes the larger of the account size and its balance. ChartBridge starts the trailing floor from it.">` +
+      `<span class="ma-jrow"><label class="ma-lbl" for="ma-jhigh-${esc(host.panelId)}">${esc(Hw)}</label><input class="ws-num ma-jhigh" id="ma-jhigh-${esc(host.panelId)}" data-ma="jhigh" data-jkey="${esc(j.plan.account + '|' + j.plan.group)}" inputmode="decimal" autocomplete="off" value="${esc(j.plan.prefill)}" title="${esc(j.plan.seed ? 'From ' + j.plan.seed.words + '. ' : 'From the firm\'s dashboard. ')}Optional: empty takes the larger of the account size and its balance. ChartBridge starts the trailing floor from it.">` +
       `<span class="ma-rules">${esc(j.plan.seed ? 'from The Desk\'s seed' + (j.plan.seed.date ? ' of ' + j.plan.seed.date : '') : 'the firm\'s dashboard; optional')}</span>` +
       `<button type="button" class="ws-btn primary" data-ma="join-yes">Put in ${esc(g.name)}</button><button type="button" class="ws-btn" data-ma="join-no">Cancel</button></span></div>`;
   }
@@ -299,9 +299,11 @@ function mount(el, host) {
       /* a box being typed in keeps its text, its focus and its caret when the figures around it change */
       const had = document.activeElement, keep = had && body.contains(had) && had.dataset ? had.dataset.ma : '', val = keep && 'value' in had ? had.value : null;
       let sel = null; try { sel = keep && typeof had.selectionStart === 'number' ? [had.selectionStart, had.selectionEnd] : null; } catch (e) { sel = null; }
-      const typed = {}; for (const k of ['name', 'type', 'nname', 'ntype', 'nrisk', 'jhigh']) { const e = body.querySelector(`[data-ma="${k}"]`); if (e) typed[k] = e.value; }
+      const typed = {}, jkey = {}; for (const k of ['name', 'type', 'nname', 'ntype', 'nrisk', 'jhigh']) { const e = body.querySelector(`[data-ma="${k}"]`); if (e) { typed[k] = e.value; jkey[k] = e.dataset.jkey || ''; } }
       P.key = html; body.innerHTML = html;   // (a join step's box keeps what was typed, below)
-      for (const k of Object.keys(typed)) { const e = body.querySelector(`[data-ma="${k}"]`); if (e) e.value = typed[k]; }
+      /* review M1: the join step's highest close comes back only for the same account and group (its data-jkey); another account's
+         step starts from its own prefill */
+      for (const k of Object.keys(typed)) { const e = body.querySelector(`[data-ma="${k}"]`); if (e && (e.dataset.jkey || '') === jkey[k]) e.value = typed[k]; }
       if (keep) {
         const e = body.querySelector(`[data-ma="${keep}"]`);
         if (e && !e.disabled) { if (val !== null && keep === 'risk') e.value = val; e.focus(); if (sel) try { e.setSelectionRange(sel[0], sel[1]); } catch (x) { /* a select */ } }

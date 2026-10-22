@@ -192,7 +192,7 @@ const QUOTE = (V3 && !V3_OFF.includes('quoteRoots')) || (!!flag('quote-roots') &
 const AGENTS = V3 ? flagValue('agents').split(',').map(x => x.trim()).filter(Boolean) : [];   // 0.5.0: config.txt `agents`
 const AGENT_ACCOUNTS = (AGENTS.length ? [{ name: 'SIM-AG1', sim: true, balance: 50000 }, { name: 'SIM-AG2', sim: true, balance: 50000 }] : [])   // made-up Sim accounts for agents to take
   .concat(process.argv.includes('--mix-groups') || process.argv.includes('--mix-groups-full') || process.argv.includes('--bench-groups') ? [{ name: 'SIM-A', sim: true, balance: 150500 }, { name: 'SIM-B', sim: true, balance: 50500 }, { name: 'SIM-C', sim: true, balance: 25000 }, { name: 'SIM-D', sim: true, balance: 50000 }] : [])   // 0.6.5: --mix-groups' made-up accounts
-  .concat(process.argv.includes('--bench-groups') ? [{ name: 'SIM-E', sim: true, balance: 50000 }, { name: 'SIM-G', sim: true, balance: 50000 }, { name: 'SIM-H', sim: false, balance: 50000 }] : [])   // 0.6.7: --bench-groups' made-up accounts
+  .concat(process.argv.includes('--bench-groups') ? [{ name: 'SIM-E', sim: true, balance: 50000 }, { name: 'SIM-F', sim: true, balance: 50400 }, { name: 'SIM-G', sim: true, balance: 50000 }, { name: 'SIM-H', sim: false, balance: 50000 }] : [])   // 0.6.7: --bench-groups' made-up accounts
   .concat(process.argv.includes('--board-groups') ? [{ name: 'SIM-A', sim: true, balance: 50000 }, { name: 'SIM-B', sim: true, balance: 50400 }, { name: 'SIM-C', sim: true, balance: 50000 }, { name: 'SIM-D', sim: false, balance: 51000 }] : []);   // 0.6.1: --board-groups' made-up accounts
 let htfFail = '';                                  // /test/htf?fail=: the error every htf request gets (none when '')
 const TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps');
@@ -496,7 +496,7 @@ const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { now: () => Date.now(
   /* 0.6.5: --mix-groups-full: Lucid (risk 10%) with SIM-A 150K, SIM-B 50K and SIM-C 25K intraday (their own rules) and SIM-D (the
      group's rules), for the group ticket (sample data) */
   /* 0.6.7: --bench-groups (with --bench): Lucid (risk 5%, Evals, no rules of its own) with SIM-A 150K, SIM-B 50K, SIM-C 25K intraday
-     and SIM-D 50K on the bench (each its own rules), and Apex with SIM-H; SIM-E and SIM-G are in no group (sample data) */
+     and SIM-D 50K on the bench (each its own rules), and Apex with SIM-H; SIM-E, SIM-F and SIM-G are in no group (sample data) */
   groupsSeed: flag('bench-groups') ? [
     { name: 'Lucid', members: ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'], benched: ['SIM-D'], riskPct: 5, accountType: 'eval',
       rules: { 'SIM-A': { size: 150000, dailyLoss: 0, drawdown: 4500, drawdownType: 'eod', lockAt: 150100, target: 9000, consistency: 50, maxMinis: 10, maxMicros: 100, typeId: 'sample-lucid-150k' },
