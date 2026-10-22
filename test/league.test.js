@@ -70,18 +70,18 @@ test('the seats\' day, the week and month table and the spend', () => {
   assert.deepEqual(L.cleanGhosts('{"c1":true,"c2":false,"c3":"yes"}'), { c1: true });
 });
 
-test('the page: League in the top bar after the Agent tab; the Bot as a panel, its button kept; the ⋯ switch; nothing that trades', () => {
+test('the page: League in the top bar after the Agent tab; the Bot button kept (1.36.0: no Bot panel); the ⋯ switch; nothing that trades', () => {
   const html = read('live/index.html');
   assert.match(html, /id="wsLeagueTab"[^>]*>League<\/button>/);
   assert.match(html, /<div id="wsTabHold" hidden>\s*<!--[^>]*-->\s*<button[^>]*id="wsBotTab"[^>]*>Bot<\/button>\s*<\/div>/, 'the Bot\'s own button waits in the hold');
   assert.match(html, /<button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent<\/button>\s*<button[^>]*id="wsLeagueTab"/, 'the Agent tab stays in the top bar, League after it');
   assert.doesNotMatch(html, /data-add="agentdesk"/, 'no agent panel');
-  assert.match(html, /data-add="bot"[^>]*>Bot<\/button>/);
+  assert.doesNotMatch(html, /data-add="bot"/, '1.36.0: no Bot panel (merged into the Agents strip)');
   assert.match(html, /data-do="league" hidden>League trades \(faint\): off<\/button>/);
   assert.ok(html.indexOf('<script src="league.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
-  assert.ok(W.TYPES.includes('bot') && !W.TYPES.includes('agentdesk'));
-  const two = W.cleanLayout({ panels: [{ id: 'b1', type: 'bot', x: 4, y: 0, w: 2, h: 1 }, { id: 'b2', type: 'bot', x: 6, y: 0, w: 2, h: 1 }] });
-  assert.deepEqual(two.panels.map(p => p.id), ['b1'], 'one Bot panel a layout');
+  assert.ok(!W.TYPES.includes('bot') && !W.TYPES.includes('agentdesk'));
+  const old = W.cleanLayout({ panels: [{ id: 'c1', type: 'chart', root: 'MNQ', tf: 'm1', x: 0, y: 0, w: 4, h: 2 }, { id: 'b1', type: 'bot', x: 4, y: 0, w: 2, h: 1 }] });
+  assert.deepEqual(old.panels.map(p => p.id), ['c1'], '1.36.0: a saved layout with a Bot panel opens without it');
   const files = JSON.parse(read('nt8/install-files.json'));
   assert.ok(files.www.some(x => x.from === 'live/league.js') && files.www.some(x => x.from === 'live/league.css'));
   const src = read('live/league.js');
@@ -90,4 +90,13 @@ test('the page: League in the top bar after the Agent tab; the Bot as a panel, i
   for (const f of ['live/league.js', 'live/league.css', 'test/league.test.js', 'test/league-smoke.mjs', 'test/tab-buttons.mjs']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
   const css = read('live/league.css');
   assert.doesNotMatch(css, /--ws-buy|--ws-sell/, 'no green or red in the league view');
+});
+
+test('1.36.0: the decision log shows a rest as a resting order, never as an entry; a cancel as its cancel', () => {
+  const d = (id, answer, extra) => Object.assign({ id, seat: 'O', time: '11:23:42', call_ok: true, refused: null, answer }, extra || {});
+  const rows = L.decisionRows([d('a', { action: 'rest', side: 'short', stop_points: 6, target_points: 15, reference: 'IBL', reasoning: 'Sample: retest from below' }, { contracts: 12 }),
+    d('b', { action: 'cancel', reasoning: 'Sample: the level is gone' }), d('c', { action: 'enter', side: 'long', stop_points: 10, target_points: 20 })]);
+  assert.deepEqual(rows.map(r => r.kind), ['enter', 'cancel', 'rest']);
+  assert.equal(rows[2].text, 'rest short at IBL, stop 6 pt, target 15 pt, good until not reported: Sample: retest from below');
+  assert.match(rows[1].text, /^cancelled its resting order: Sample/);
 });

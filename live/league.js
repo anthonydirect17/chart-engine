@@ -49,6 +49,9 @@ function cleanTrade(t, open) {
   if (!isNum(t.fill_t) || !isNum(t.fill_px)) return null;
   return { id: str(t.id, 64), seat: t.seat, side: t.side, contracts: isNum(t.contracts) ? t.contracts : null, fillT: t.fill_t, fillPx: t.fill_px,
     stopPx: isNum(t.stop_px) ? t.stop_px : null, targetPx: isNum(t.target_px) ? t.target_px : null,
+    /* the trade's ORIGINAL risk (1.36.0 review: the Agents strip's open R): the league's risk_dollars and the stop distance at
+       the fill; stop_px moves with break-even and the trail, so it is never the risk */
+    riskDollars: isNum(t.risk_dollars) && t.risk_dollars > 0 ? t.risk_dollars : null, stopPoints: isNum(t.stop_points) && t.stop_points > 0 ? t.stop_points : null,
     exitT: !open && isNum(t.exit_t) ? t.exit_t : null, exitPx: !open && isNum(t.exit_px) ? t.exit_px : null, exitReason: str(t.exit_reason, 80),
     r: isNum(t.r) ? t.r : null, open: !!open, relation: ['own', 'with', 'against'].includes(t.relation) ? t.relation : null, crashCut: t.crash_cut === true,
     reference: str(t.reference, 40) };
@@ -102,7 +105,9 @@ function barIndex(bars, t) {
 const money = v => (isNum(v) ? (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
 const signedR = v => (isNum(v) ? (v >= 0 ? '+' : '') + v.toFixed(2) + ' R' : '');
 
-/** A decision log row: { time, seat, text, kind ('enter' | 'pass' | 'refused' | 'failed'), latency }. Newest first. */
+/** A decision log row: { time, seat, text, kind ('enter' | 'rest' | 'cancel' | 'pass' | 'refused' | 'failed'), latency }. Newest first.
+    1.36.0: a "rest" answer (a resting entry, PREREG Amendment 6) is shown as a resting order, never as an entry; "cancel" as
+    the cancel of one. The Desk passes no good-until time with a decision: "good until not reported". */
 function decisionRows(decisions, most) {
   const out = [];
   for (const d of (decisions || []).slice().reverse()) {
@@ -112,6 +117,9 @@ function decisionRows(decisions, most) {
     if (!d.call_ok) { kind = 'failed'; text = 'no answer (the call failed)'; }
     else if (d.refused) { kind = 'refused'; text = 'refused: ' + str(d.refused, 160); }
     else if (a.action === 'pass') { kind = 'pass'; text = 'passed' + (a.reasoning ? ': ' + str(a.reasoning, 200) : ''); }
+    else if (a.action === 'cancel') { kind = 'cancel'; text = 'cancelled its resting order' + (a.reasoning ? ': ' + str(a.reasoning, 200) : ''); }
+    else if (a.action === 'rest') { kind = 'rest'; text = 'rest ' + (a.side === 'short' ? 'short' : 'long') + (a.reference ? ' at ' + str(a.reference, 30) : '') +
+      (isNum(a.stop_points) ? ', stop ' + a.stop_points + ' pt' : '') + (isNum(a.target_points) ? ', target ' + a.target_points + ' pt' : ', no target') + ', good until not reported' + (a.reasoning ? ': ' + str(a.reasoning, 200) : ''); }
     else { kind = 'enter'; text = (a.side === 'short' ? 'short' : 'long') + (isNum(d.contracts) ? ' ' + d.contracts + ' MNQ' : '') + (isNum(a.stop_points) ? ', stop ' + a.stop_points + ' pt' : '') +
       (isNum(a.target_points) ? ', target ' + a.target_points + ' pt' : ', no target') + (a.reference ? ' at ' + str(a.reference, 30) : '') + (a.reasoning ? ': ' + str(a.reasoning, 200) : ''); }
     if (d.relation === 'with') text += ' (with you)'; else if (d.relation === 'against') text += ' (against you)';

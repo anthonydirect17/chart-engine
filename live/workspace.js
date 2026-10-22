@@ -73,8 +73,11 @@ function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Nu
 /* 1.34.0 (Anthony 2026-10-21): the Trade tags panel (live/trade-tags.js) follows the order ticket's account and instrument */
 /* 1.35.0 (Anthony 2026-10-21: "the bot tab can also move to a panel"): the Bot tab became a panel of its own in + Add panel,
    a small panel whose button opens the same Bot view as before; at most one per layout. The Agent tab stays in the top bar. */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'bot'];
-const ONE_EACH = ['ticket', 'bot'];
+/* 1.36.0 (Anthony 2026-10-22): the Agents strip (live/agents-strip.js), every agent and the bot at a glance in one row of cards;
+   at most one per layout. Read only. The Bot panel of 1.35.0 is gone (Anthony 2026-10-22: "get rid of the bot panel and merge it
+   into this"): a saved layout that had one opens without it (cleanPanel drops a type it does not know). */
+const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agents'];
+const ONE_EACH = ['ticket', 'agents'];
 /* 1.16.0 (Anthony 2026-10-07): the rows a Quote board hides, saved with its panel. Any root name ChartBridge could list (NQ,
    ES, or a quote-only market from hello, such as YM or 6E): kept as typed by the menu, so a root hello no longer lists is
    simply ignored; anything else dropped. Display only. */
@@ -1964,7 +1967,7 @@ function addView(p) {
   else if (p.type === 'databox') mid = '<span class="ws-name">Data Box</span><span class="ws-db-src" title="The chart it follows: the one under the mouse, else the last one"></span><span class="ws-fill"></span>';
   else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
   else if (p.type === 'tags') mid = '<span class="ws-name">Trade tags</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';   // 1.34.0
-  else if (p.type === 'bot') mid = '<span class="ws-name">Bot</span><span class="ws-fill"></span>';                // 1.35.0
+  else if (p.type === 'agents') mid = '<span class="ws-name">Agents</span><span class="ws-acct" title="Read only: this panel sends nothing">read only</span><span class="ws-fill"></span>';   // 1.36.0
   else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
   // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
@@ -1982,7 +1985,7 @@ function addView(p) {
   else if (p.type === 'databox') mountDataBox(v);        // 1.16.0
   else if (p.type === 'accounts') mountAccountsPage(v);  // 1.16.0
   else if (p.type === 'tags') mountTags(v);              // 1.34.0 (Anthony 2026-10-21)
-  else if (p.type === 'bot') mountTabPanel(v);           // 1.35.0 (Anthony 2026-10-21)
+  else if (p.type === 'agents') mountAgentsStrip(v);     // 1.36.0 (Anthony 2026-10-22)
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
@@ -2060,22 +2063,12 @@ function closePanel(id) {
 function addPanel(type) {
   closePops();
   if (maxId) restoreMax();                                  // the new panel is seen where it goes
-  /* 1.35.0: the Bot is always reachable from here: with the panel already placed, or no room for it, the menu opens the Bot
-     view itself (its button sits in the top bar while it is open, the way back) */
-  if (type === 'bot') {
-    const d = TAB_PANEL.bot.desk(), has = panels.some(q => q.type === type);
-    if (d && (has || panels.length >= W.MAX_PANELS || !W.largestFree(panels))) {
-      if (!has) note('No room for the Bot panel: opened the Bot tab. Make room and add it again to keep its button on the grid.', true);
-      d.showTab(true);
-      return;
-    }
-  }
   if (panels.length >= W.MAX_PANELS) { note('At most ' + W.MAX_PANELS + ' panels: close one first', true); return; }
   if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
-  if (type === 'bot' && panels.some(q => q.type === type)) { note('This layout has its Bot panel already', true); return; }
+  if (type === 'agents' && panels.some(q => q.type === type)) { note('This layout has its Agents strip already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'bot'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agents'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -2510,51 +2503,46 @@ function mountTags(v) {
   v.tags.render();
   v.destroy = () => t.destroy();
 }
-/* 1.35.0 (Anthony 2026-10-21: "the bot tab can also move to a panel"): the Bot tab as a panel. The panel holds the very button
-   the top bar had (#wsBotTab: the Bot desk's own, with its listeners and states), moved into it while the panel is on the grid
-   and back to a hidden holder when it goes; the button opens the same Bot view as before. The Bot desk itself (its proposals,
-   the copilot keys, the bot strip) runs whether a panel is placed or not. The Agent tab stays in the top bar, unchanged. */
-const TAB_PANEL = {
-  bot: { btn: () => $('wsBotTab'), desk: () => botDesk, what: 'the Bot tab', help: 'The bot: its Library, its chart and its panel, as the Bot tab had them.' },
-};
-/* where a desk's button belongs now: in the top bar while its view is open (the way back to the layout, as before), else in its
-   panel when the layout has one, else in the hidden hold */
-function placeTabBtn(type) {
-  if (!type) { placeTabBtn('bot'); return; }
-  const kind = TAB_PANEL[type], btn = kind && kind.btn(), d = kind && kind.desk();
+/* Where the Bot's button (#wsBotTab, the Bot desk's own, with its listeners and states) sits. 1.36.0 (Anthony 2026-10-22: "get
+   rid of the bot panel and merge it into this"; then "bot tab never left the top, that was the SS and its fine there"): the Bot
+   panel is gone and the button stays in the top bar on every layout, where the Bot tab always was; the Agents strip's bot card
+   opens the same Bot view. Only a hidden button (no v3 ChartBridge) waits in the hold, so the slot takes no room. */
+function placeTabBtn() {
+  const btn = $('wsBotTab');
   if (!btn) return;
-  const v = [...views.values()].find(x => x.panel.type === type);
-  /* the Bot's button sits in the top bar where the Bot tab was:
-     - while its view is open (the way back);
-     - while any view hides the grid (Agent, League), with or without a Bot panel: one click from there to the Bot (review 6);
-     - while it carries its red alert (rails red, stand-down, killed, on but not connected), with or without a Bot panel, so the
-       alert is never hidden (review 2); it goes back to its panel or the hold once the alert clears.
-     Else in its panel when the layout has one, else in the hidden hold. */
-  const viewOpen = ['bt-on', 'ag-on', 'lg-on'].some(c => document.body.classList.contains(c));
-  const alert = btn.classList.contains('bt-alert') && !btn.hidden;
-  const top = (d && d.shown()) || viewOpen || alert;
-  const where = top ? $('wsTabSlot') : v ? v.body.querySelector('.ws-tp-slot') : $('wsTabHold');
+  const where = !btn.hidden ? $('wsTabSlot') : $('wsTabHold');   // hidden (no v3 ChartBridge): in the hold, so the slot takes no room
   if (where && btn.parentElement !== where) where.appendChild(btn);
-  btn.classList.toggle('ws-tp-btn', !!v && where !== $('wsTabSlot') && where !== $('wsTabHold'));
   /* review 5: the "Layout" word gives way only while the Bot button is really in the top bar (bot.css bt-has-tab) */
   document.body.classList.toggle('bt-has-tab', !btn.hidden && where === $('wsTabSlot'));
 }
 /* the Bot desk sets bt-alert (and hidden) on its own button as it renders: the button follows at once */
-if (typeof MutationObserver === 'function' && $('wsBotTab')) new MutationObserver(() => placeTabBtn('bot')).observe($('wsBotTab'), { attributes: true, attributeFilter: ['class', 'hidden'] });
-function mountTabPanel(v) {
+if (typeof MutationObserver === 'function' && $('wsBotTab')) new MutationObserver(() => placeTabBtn()).observe($('wsBotTab'), { attributes: true, attributeFilter: ['class', 'hidden'] });
+/* 1.36.0 (Anthony 2026-10-22: "a panel ... that plays horizontally, but just shows the current active shadow agents and
+   eventually live agents status"): the Agents strip (live/agents-strip.js). Read only: the league from the workspace's one league
+   read (LG below, or the League view's day while it is open: no second poller), the live agents from the Agent tab's own state
+   (agentDesk.glance), MNQ's price from the quote the Quote board uses. A click on a card opens the League tab or the Agent tab. */
+const stripViews = () => [...views.values()].filter(v => v.panel.type === 'agents' && v.strip);
+function mountAgentsStrip(v) {
   v.state = 'live';
-  const kind = TAB_PANEL[v.panel.type], btn = kind.btn();
-  v.body.innerHTML = '<div class="ws-tabpanel"><div class="ws-tp-slot"></div><p class="ws-tp-help"></p></div>';
-  const help = v.body.querySelector('.ws-tp-help');
-  placeTabBtn(v.panel.type);
-  const sync = () => {
-    const d = kind.desk();
-    help.textContent = !d ? 'Reload this window: its ' + kind.what + ' did not start.' : btn && btn.hidden ? 'Not offered by this ChartBridge (it needs protocol v3).' : kind.help;
-  };
-  sync();
-  const t = setInterval(sync, 2000);
-  v.destroy = () => { clearInterval(t); if (btn && v.body.contains(btn)) { btn.classList.remove('ws-tp-btn'); $('wsTabHold').appendChild(btn); } };
+  if (!window.AgentsStrip || !window.AgentsStripCore) { v.body.innerHTML = '<p class="tt-foot warn">Reload this window: its agents-strip.js is missing.</p>'; v.destroy = () => {}; return; }
+  const offMnq = watchQuote('MNQ');
+  const strip = window.AgentsStrip.mount(v.body, {
+    day: () => leagueGhostDay(),
+    reach: () => (leagueView && leagueView.shown() ? { problem: leagueView.state().problem, at: 0 } : { problem: LG.problem, at: LG.at }),
+    agents: () => (agentDesk && agentDesk.glances ? agentDesk.glances().map(g => ({ a: g.agent, g })) : []),   // one read of the day's fills a tick, for every agent
+    nowMs: () => etNowSec() * 1000,
+    last: r => { const x = quoteOf(r); return x && typeof x.last === 'number' && isFinite(x.last) ? x.last : null; },
+    pv: r => (instruments[r] && +instruments[r].pointValue > 0 ? +instruments[r].pointValue : null),
+    openLeague: () => { if (leagueView) leagueView.showTab(true); else note('The League tab did not start: reload this window', true); },
+    openAgent: id => { if (agentDesk) { agentDesk.choose(id); agentDesk.showTab(true); } },
+    bot: () => (botDesk && botDesk.glance ? botDesk.glance() : null),
+    openBot: () => { if (botDesk) botDesk.showTab(true); else note('The Bot tab did not start: reload this window', true); },
+  });
+  v.strip = strip;
+  syncLeagueGhosts();                                       // the league read runs while a strip is placed
+  v.destroy = () => { offMnq(); strip.destroy(); v.strip = null; setTimeout(syncLeagueGhosts, 0); };
 }
+setInterval(() => { for (const v of stripViews()) v.strip.render(); }, 1000);   // its clocks and the Agent tab's news; a card is drawn again only when it changed
 var tagsRaf = 0;                                          // var: renderOrders may run before this line
 function renderTags() { if (!tagsRaf && tagViews().length) tagsRaf = requestAnimationFrame(() => { tagsRaf = 0; for (const v of tagViews()) v.tags.render(); }); }
 setInterval(renderTags, 1000);                            // the session's start and the Desk's answers
@@ -2871,12 +2859,10 @@ $('wsAddMenu').addEventListener('click', e => { const b = e.target.closest('[dat
 function syncAddMenu() {
   const b = $('wsAddMenu').querySelector('[data-add="ticket"]'), has = panels.some(p => p.type === 'ticket');
   b.disabled = has; b.title = has ? 'This layout has its order ticket' : '';
-  /* 1.35.0: one Bot panel a layout */
-  for (const [t, words] of [['bot', 'its Bot panel']]) {
-    const x = $('wsAddMenu').querySelector('[data-add="' + t + '"]'); if (!x) continue;
-    const on = panels.some(p => p.type === t);
-    x.title = on ? 'This layout has ' + words + ': a click opens it' : x.dataset.tip || '';
-  }
+  /* 1.36.0: one Agents strip a layout */
+  const ag = $('wsAddMenu').querySelector('[data-add="agents"]'), hasAg = panels.some(p => p.type === 'agents');
+  if (ag) { ag.disabled = hasAg; ag.title = hasAg ? 'This layout has its Agents strip' : ag.dataset.tip || ''; }
+  placeTabBtn();                                            // the Bot button: in the top bar on every layout (the hold only while hidden)
 }
 
 /* A chart's instrument and bars: the instruments, the bars, and the range size for Range bars. Applied at once. */
@@ -3484,6 +3470,10 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   /* 1.35.0: the League tab, and the charts showing the league's trades faintly (read only) */
   league: () => (leagueView ? leagueView.state() : null),
   leagueGhosts: () => [...LG.overlays.keys()],
+  /* 1.36.0: the Agents strip (read only) and how many times this window read the league */
+  agentsStrip: () => { const v = stripViews()[0]; return v ? v.strip.state() : null; },
+  leagueReads: () => LG.reads,
+  quoteLast: r => { const x = quoteOf(r); return x ? x.last : null; },
   leagueGhostTrades: () => { const d = leagueGhostDay(); return d ? d.trades.length + d.open.length : 0; },
   /* 1.34.0: how many risk alerts sounded in this window (test/flatten-every-smoke.mjs) */
   riskSounds: () => riskSounds };
@@ -3541,14 +3531,18 @@ function startLeague() {
       if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); }
       tabUrl(on ? 'league' : '');
       placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
-      if (!on) { if (leagueView.day()) LG.day = leagueView.day(); leaguePoll(); }   // the faint marks read on by themselves
+      if (!on) { if (leagueView.day()) LG.day = leagueView.day(); if (!LG.busy) leaguePoll(); }   // the faint marks read on by themselves (a read under way schedules the next itself)
     } });
 }
 /* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk
    every 30 seconds while any is on, one overlay per such chart */
 const LG_GHOST_KEY = window.LeagueCore ? window.LeagueCore.GHOST_KEY : 'live-league-ghost-v1';
 const leagueGhosts = () => { try { return window.LeagueCore ? window.LeagueCore.cleanGhosts(store.getItem(LG_GHOST_KEY)) : {}; } catch (e) { return {}; } };
-const LG = { day: null, timer: 0, seq: 0, overlays: new Map() };
+const LG = { day: null, timer: 0, seq: 0, overlays: new Map(), problem: '', at: 0, reads: 0, busy: false };
+const LG_TIMEOUT_MS = 10000;                              // one league read waits at most this long for The Desk
+/* 1.36.0: the one league read serves the faint marks and the Agents strip: it runs while either is on the page (every 30 s,
+   15 s with a strip), and while the League view is open it reads nothing itself (that view reads every 15 s; its day is used) */
+const leagueWanted = () => LG.overlays.size > 0 || [...views.values()].some(v => v.panel.type === 'agents');
 /* review 3: the faint marks draw the League view's day only while it is open (it reads every 15 s); else this poll's (30 s), so
    they never freeze on what the view read last */
 const leagueGhostDay = () => (leagueView && leagueView.shown() && leagueView.day()) || LG.day;
@@ -3564,16 +3558,26 @@ function syncLeagueGhosts() {
   for (const v of chartViews()) if (g[v.panel.id] && window.LeagueCore.ROOTS.includes(v.panel.root)) want.add(v.panel.id);
   for (const [id, ov] of LG.overlays) if (!want.has(id) || !views.has(id) || ov.pane !== views.get(id).pane) { ov.o.destroy(); LG.overlays.delete(id); }
   for (const id of want) if (!LG.overlays.has(id)) { const v = views.get(id); LG.overlays.set(id, { pane: v.pane, o: window.LeagueOverlay.attach(v.pane, v.body, leagueGhostDay, () => v.panel.root, true) }); }
-  if (want.size && !LG.timer) leaguePoll();
-  if (!want.size) { clearTimeout(LG.timer); LG.timer = 0; }
+  if (leagueWanted() && !LG.timer && !LG.busy) leaguePoll();
+  if (!leagueWanted()) { clearTimeout(LG.timer); LG.timer = 0; }
 }
 function leaguePoll() {
   clearTimeout(LG.timer); LG.timer = 0;
-  if (!LG.overlays.size) return;
-  const seq = ++LG.seq;                                    // only the latest read schedules the next (one 30 s poll, never two)
-  window.AccountsPage.deskBase((u, o) => fetch(u, o)).then(url => fetch(url + '/api/chart-league', { cache: 'no-store', mode: 'cors', credentials: 'omit' }))
-    .then(r => (r.ok ? r.json() : null)).then(j => { if (j) LG.day = window.LeagueCore.cleanDay(j); }, () => { /* The Desk down: the last marks stay */ })
-    .then(() => { for (const x of LG.overlays.values()) x.o.redraw(); if (seq === LG.seq && LG.overlays.size) LG.timer = setTimeout(leaguePoll, 30000); });
+  if (!leagueWanted()) return;
+  const seq = ++LG.seq;                                    // only the latest read schedules the next (one poll, never two)
+  const next = () => { if (seq === LG.seq && leagueWanted()) LG.timer = setTimeout(leaguePoll, stripViews().length ? 15000 : 30000); };
+  if (leagueView && leagueView.shown()) { next(); return; }   // the League view reads it now: its day is the one used
+  LG.reads++; LG.busy = true;
+  /* review: a Desk that never answers cannot hold the read for good: given up after 10 s (the fetch aborted), and the next read
+     is scheduled. The Desk's address (deskBase, shared by the page) is not aborted: the limit races it instead */
+  const ac = typeof AbortController === 'function' ? new AbortController() : null;
+  let giveUp = 0;
+  const limit = new Promise((_, no) => { giveUp = setTimeout(() => { if (ac) ac.abort(); const e = new Error('timeout'); e.name = 'AbortError'; no(e); }, LG_TIMEOUT_MS); });
+  Promise.race([limit, window.AccountsPage.deskBase((u, o) => fetch(u, o)).then(url => fetch(url + '/api/chart-league', { cache: 'no-store', mode: 'cors', credentials: 'omit', signal: ac ? ac.signal : undefined }))
+    .then(r => (r.ok ? r.json() : Promise.reject(new Error(r.status === 404 ? 'The Desk has no league view yet (it needs The Desk of chart 1.35.0).' : 'The Desk answered ' + r.status))))])
+    .then(j => { LG.day = window.LeagueCore.cleanDay(j); LG.problem = ''; LG.at = Date.now(); },
+      e => { LG.problem = (e && e.name === 'AbortError' ? 'The Desk did not answer in ' + LG_TIMEOUT_MS / 1000 + ' s.' : e && /^The Desk/.test(e.message) ? e.message : 'The Desk is not reachable: ' + (e && e.message ? e.message : 'no answer')) + (LG.day ? ' Showing what it last sent.' : ''); })   // the last marks stay
+    .then(() => { clearTimeout(giveUp); LG.busy = false; for (const x of LG.overlays.values()) x.o.redraw(); for (const v of stripViews()) v.strip.render(); next(); });
 }
 setInterval(syncLeagueGhosts, 3000);                      // a chart's instrument changed, a layout opened: the overlays follow
 window.addEventListener('storage', e => { if (e.key && e.key.endsWith(LG_GHOST_KEY)) syncLeagueGhosts(); });

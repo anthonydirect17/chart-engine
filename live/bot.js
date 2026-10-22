@@ -675,15 +675,18 @@ function create(o) {
 
   /* ---------------- the panel */
   const botRoot = () => (S.bot && S.bot.root) || 'MNQ';
+  /* the Bot's red alert (rails red, stand-down, killed, on but not connected): its button's bt-alert and, 1.36.0, the Agents
+     strip's bot card (glance below) both read this one rule */
+  const alertNow = () => S.on && !!S.bot && (BC.rails(S.bot).level === 'red' || !!S.bot.standDown || !!S.bot.killed || (S.bot.enabled && !S.bot.connected));
   function render() {
     const off = !S.on;
     if (tabBtn) {
       put(tabBtn, 'hidden', S.v3 !== true && !S.shown);           // a ChartBridge that speaks v3 has a Bot tab
-      /* 1.35.0: the Bot button may wait in the workspace's hidden hold or a Bot panel: the "Layout" word gives way only while it is
-         in the top bar (the workspace keeps this class as it moves the button) */
-      tog(document.body, 'bt-has-tab', !tabBtn.hidden && !tabBtn.closest('#wsTabHold, .ws-tp-slot'));
+      /* the Bot button waits in the workspace's hidden hold only while it is hidden (1.36.0: shown, it is in the top bar on every
+         layout): the "Layout" word gives way only while it is in the top bar (the workspace keeps this class as it moves it) */
+      tog(document.body, 'bt-has-tab', !tabBtn.hidden && !tabBtn.closest('#wsTabHold'));
       attr(tabBtn, 'aria-pressed', String(S.shown));
-      tog(tabBtn, 'bt-alert', S.on && !!S.bot && (BC.rails(S.bot).level === 'red' || !!S.bot.standDown || !!S.bot.killed || (S.bot.enabled && !S.bot.connected)));
+      tog(tabBtn, 'bt-alert', alertNow());
       attr(tabBtn, 'title', off ? 'Bot: the bot channel is off on this PC' : 'Bot tab');
     }
     if (view) {
@@ -1063,6 +1066,10 @@ function create(o) {
     /** the workspace's hotkeys changed (The Desk read): the keys shown on the buttons */
     keysChanged() { loadKeys(); renderPanelTab(); for (const x of propEls.values()) if (!x.ended) { const n = x.el.querySelector('[data-k="msg"]'); const t = n ? n.textContent : ''; x.el.innerHTML = propHtml(x.p); if (t) put(x.el.querySelector('[data-k="msg"]'), 'textContent', t); syncButtons(x); } },
     showTab, shown: () => S.shown, on: () => S.on,
+    /** 1.36.0, read only: what the Agents strip's bot card shows (live/agents-strip.js): whether the Bot is offered (a v3
+        ChartBridge), its channel on, the `bot` message, its red alert by the rule above, its status words and strip line. */
+    glance: () => ({ offered: S.v3 === true, on: S.on, bot: S.bot ? Object.assign({}, S.bot) : null, alert: !!alertNow(),
+      status: S.on ? BC.statusText(S.bot) : offText(), strip: S.bot ? BC.stripModel(S.bot, p => fmtPx(p)) : null }),
     layoutChanged(name) { S.layout = String(name || ''); if (S.shown && !popout) showTab(false); renderStrip(); },
     /** the chart menu's ghost switch (workspace.js): whether it is offered and on, and to flip it */
     ghostOffered: () => S.on,
