@@ -19,8 +19,14 @@ need 0.6.7).
     entries, keeps its rules"). A chip: the account and SIM or LIVE, its type on The Desk, ChartBridge's room to its floor and its
     own dollar risk at the group's percent (5% of a $4,500 max loss: $225); the trading lane sums them ("3 accounts · $375 at risk a
     trade"). A click or a drag moves a chip (`memberBench`); refused, with the reason on the chip, while the account holds a
-    position or has a working order, has no type on The Desk, or is not in the group. Only this firm's accounts show (the firm of
-    the members' types on The Desk): the bench also lists the firm's accounts in no group, which join on the Accounts tab as before.
+    position or has a working order or has no type on The Desk. Only this firm's accounts show (the firm of the members' types on
+    The Desk): the bench also lists the firm's accounts in no group, and a click or a drag of one into the group opens the join step
+    on its chip (Anthony 2026-10-22, "Join flow on the chip"): the Accounts tab's own join, the same words, its rules from its type
+    on The Desk, the highest close so far prefilled, then **Put in** sends the same `accountGroup` and it lands in the trading lane;
+    **Cancel** (or Escape) leaves it on the bench. An account with no type on The Desk still cannot join and says so on its chip; one
+    whose rules cannot be read from The Desk (The Desk not reached, or its type has no rules) is sent to the Accounts tab, where
+    they can be typed. The Accounts tab's join works as before (the same code, now shared). With a ChartBridge older than 0.6.7 a
+    join from the panel says it needs 0.6.7, as moving a chip does.
   - **Copier:** the copier exactly as it was, moved from the Account page (the Account page is mounted with only its Copier tab).
 - **The Account page loses its Copier tab**, and **Settings loses Account groups** (its group dialog with the firm's rules, Hero on
   duty and the No hedging switch): groups are made and set on the panel. A saved layout and old settings load as before (a kept

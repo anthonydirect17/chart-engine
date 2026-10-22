@@ -662,7 +662,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   trade", "1 sitting out"). A chip is 188 px: the row color, a 1 px line (the tint line color in the trading lane), 5 px corners;
   the account in 500 12 px mono after a 7 px dot (the accent in the trading lane, muted on the bench) and a SIM or LIVE mark;
   its type on The Desk in 11 px; "Room" and "Risk" with their dollars in 11 px mono; any reason in 500 10 px mono amber. A drop
-  target lights with a 2 px accent outline; a dragged chip at 45%. The line under the lanes in 12 px, amber for a refusal. No
+  target lights with a 2 px accent outline; a dragged chip at 45%. The join step (an account in no group, dragged or clicked into
+  the group) sits on the full row under its chip: the field color, a 1 px tint line, 5 px corners, the join words in 11 px in the
+  second text color, then the highest close box (96 px, right aligned), Put in (the accent button) and Cancel, 26 px high. The
+  line under the lanes in 12 px, amber for a refusal. No
   green or red (no P&L, no trade side); no motion. Copier: the Account page's copier exactly as it was.
 - **Update floors from The Desk (1.35.0, Anthony 2026-10-21):** a small button beside "Settings for every account" on the
   Accounts tab; it opens a box above the rows (the field color, a 1 px line, 8 px corners): each account's floor from The

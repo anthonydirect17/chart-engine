@@ -11,8 +11,9 @@
  *            kept; nothing is asked again) and sits out every new group entry; its exits, stops, cancels and flattens go as
  *            always. Each chip shows its own dollar risk at the group's percent; the lane sums the dollars at risk a trade.
  *            Only this firm's accounts show (the firm of the members' types on The Desk): the bench also lists the firm's
- *            accounts in no group, which join on the Accounts tab (Group). An account with no type on The Desk cannot trade
- *            with a group until it has one.
+ *            accounts in no group; dragging or clicking one in opens the Accounts tab's own join step under its chip (its rules
+ *            from its type on The Desk, the highest close; F.joinPlan and F.joinRefusal), and Put in sends the same accountGroup.
+ *            An account with no type on The Desk cannot join or trade with a group until it has one.
  *   Copier   the copier exactly as it was on the Account page (live/accounts.js, mounted with only: 'cop'); the Account page has
  *            no Copier tab from 1.37.0.
  *
@@ -209,6 +210,10 @@ function mount(el, host) {
         const why = rej.get(c); P.pending.delete(c);
         if (p.chip) P.chipWhy.set(p.chip, why);
         say((p.what || 'Refused') + ': ' + why, true);
+      } else if (p.join) {   // a join from the chip: done once ChartBridge's groups list it as a member
+        const g = groups().find(x => x.id === p.gid);
+        if (g && g.members.includes(p.chip)) { P.pending.delete(c); P.chipWhy.delete(p.chip); say(p.chip + ' joined ' + g.name + ' and trades with it from the next entry.'); }
+        else if (Date.now() - p.at > 8000) { P.pending.delete(c); say('ChartBridge did not answer for ' + p.chip + ': look again.', true); }
       } else if (p.chip && p.gid) {
         const g = groups().find(x => x.id === p.gid), on = g && Array.isArray(g.benched) && g.benched.includes(p.chip);
         if (g && on === p.benched) { P.pending.delete(c); P.chipWhy.delete(p.chip); say(p.chip + (p.benched ? ' is on the bench: it sits out new entries and keeps its rules.' : ' trades with ' + g.name + ' from the next entry.')); }
@@ -217,13 +222,24 @@ function mount(el, host) {
     }
   }
 
+  /* 1.37.0 (Anthony 2026-10-22, "Join flow on the chip"): the Accounts tab's own join step (F.joinPlan: the rules from its type on The
+     Desk and the highest close, prefilled from The Desk's seed), right under the chip; Put in sends the same accountGroup */
+  function joinHtml(c, g) {
+    const j = P.join;
+    if (!j || j.plan.account !== c.name || j.plan.group !== g.id) return '';
+    const hw = window.GroupsCore.highWord(j.plan.rules), Hw = hw.charAt(0).toUpperCase() + hw.slice(1), words = F.joinWords(j.plan);
+    return `<div class="ma-join" role="group" aria-label="${esc('Join ' + c.name + ' to ' + g.name)}"><span class="ma-jwords" title="${esc(words)}">${esc(words)}</span>` +
+      `<span class="ma-jrow"><label class="ma-lbl" for="ma-jhigh-${esc(host.panelId)}">${esc(Hw)}</label><input class="ws-num ma-jhigh" id="ma-jhigh-${esc(host.panelId)}" data-ma="jhigh" inputmode="decimal" autocomplete="off" value="${esc(j.plan.prefill)}" title="${esc(j.plan.seed ? 'From ' + j.plan.seed.words + '. ' : 'From the firm\'s dashboard. ')}Optional: empty takes the larger of the account size and its balance. ChartBridge starts the trailing floor from it.">` +
+      `<span class="ma-rules">${esc(j.plan.seed ? 'from The Desk\'s seed' + (j.plan.seed.date ? ' of ' + j.plan.seed.date : '') : 'the firm\'s dashboard; optional')}</span>` +
+      `<button type="button" class="ws-btn primary" data-ma="join-yes">Put in ${esc(g.name)}</button><button type="button" class="ws-btn" data-ma="join-no">Cancel</button></span></div>`;
+  }
   function chipHtml(c, g) {
     const pend = [...P.pending.values()].some(p => p.chip === c.name);
     const why = P.chipWhy.get(c.name) || '';
-    const locked = !c.member || !!c.busy || (c.notype && c.benched) || pend;   // a benched chip with no type cannot go in; one trading may still go out
+    const locked = (!c.member && c.notype) || (c.member && !!c.busy) || (c.notype && c.benched) || pend || !!(P.join && P.join.plan.account === c.name);   // a benched chip with no type cannot go in; one trading may still go out
     const tags = [];
     if (c.notype) tags.push('set its type on The Desk first');
-    if (!c.member) tags.push('not in the group: join it on the Accounts tab');
+    if (!c.member) tags.push('not in the group: drag or click it in to join');
     if (c.busy) tags.push('in a trade: ' + c.busy);
     if (pend) tags.push('moving...');
     if (why && !pend) tags.push(why);
@@ -271,7 +287,7 @@ function mount(el, host) {
         `<button type="button" class="ws-btn primary" data-ma="create">Create</button><button type="button" class="ws-btn" data-ma="create-no">Cancel</button></div>` +
         `<p class="ma-fixed">Name it for the firm; then put that firm's accounts in it on the Accounts tab (Group). Each joins with its rules from its type on The Desk.</p></div>` : '';
       const lane = (kind, chips, head) => `<div class="ma-lane ${kind}" data-lane="${kind}"><div class="ma-lhead">${head}</div><div class="ma-chips">` +
-        (chips.length ? chips.map(c => chipHtml(c, g)).join('') : `<div class="ma-empty">${kind === 'in' ? 'No account trades with this group now. Drag one here.' : 'Nothing on the bench.'}</div>`) + '</div></div>';
+        (chips.length ? chips.map(c => chipHtml(c, g) + joinHtml(c, g)).join('') : `<div class="ma-empty">${kind === 'in' ? 'No account trades with this group now. Drag one here.' : 'Nothing on the bench.'}</div>`) + '</div></div>';
       const lanes = !g ? '' : `<div class="ma-lanes">` +
         lane('in', L.active, `<span class="ma-lname">Trades with the group</span><span class="ma-lsum">${esc(MC.sumText(L))}</span>`) +
         lane('bench', L.bench, `<span class="ma-lname">Bench</span><span class="ma-lsub">sits out new entries, keeps its rules</span><span class="ma-lsum">${esc(MC.benchText(L))}</span>`) + '</div>';
@@ -283,8 +299,8 @@ function mount(el, host) {
       /* a box being typed in keeps its text, its focus and its caret when the figures around it change */
       const had = document.activeElement, keep = had && body.contains(had) && had.dataset ? had.dataset.ma : '', val = keep && 'value' in had ? had.value : null;
       let sel = null; try { sel = keep && typeof had.selectionStart === 'number' ? [had.selectionStart, had.selectionEnd] : null; } catch (e) { sel = null; }
-      const typed = {}; for (const k of ['name', 'type', 'nname', 'ntype', 'nrisk']) { const e = body.querySelector(`[data-ma="${k}"]`); if (e) typed[k] = e.value; }
-      P.key = html; body.innerHTML = html;
+      const typed = {}; for (const k of ['name', 'type', 'nname', 'ntype', 'nrisk', 'jhigh']) { const e = body.querySelector(`[data-ma="${k}"]`); if (e) typed[k] = e.value; }
+      P.key = html; body.innerHTML = html;   // (a join step's box keeps what was typed, below)
       for (const k of Object.keys(typed)) { const e = body.querySelector(`[data-ma="${k}"]`); if (e) e.value = typed[k]; }
       if (keep) {
         const e = body.querySelector(`[data-ma="${keep}"]`);
@@ -298,7 +314,20 @@ function mount(el, host) {
     const L = MC.lanes(g, S, typeof host.working === 'function' ? host.working() : []), c = L.active.concat(L.bench).find(x => x.name === name);
     if (!c) return;
     if (c.member && c.benched === !toActive) return;   // already there
-    if (!benchNow(g)) { say('Moving a chip needs ChartBridge ' + MC.BENCH_VERSION + ' (this PC has ' + (S.version || 'an older one') + ').', true); render(); return; }
+    if (!benchNow(g)) { say((c.member ? 'Moving a chip' : 'Joining from the panel') + ' needs ChartBridge ' + MC.BENCH_VERSION + ' (this PC has ' + (S.version || 'an older one') + ').', true); render(); return; }
+    if (!c.member) {   // the firm's account in no group, into the group: the join step on its chip (the Accounts tab's checks and plan)
+      if (!toActive) return;
+      const acc = (S.accounts || []).find(a => a.name === name) || null;
+      const no = F.joinRefusal(name, g) || (c.notype ? name + ' has no account type on The Desk: set its type there first (an account with no type cannot trade with a group until it has one).' : '');
+      if (no) { P.chipWhy.set(name, no); say(no, true); render(); return; }
+      const plan = F.joinPlan(name, g, acc);
+      if (plan.mode !== 'auto') { const w = name + ' cannot join from here: ' + (plan.why || 'its rules are not known') + '. Put it in the group on the Accounts tab (Group), where its rules can be typed.'; P.chipWhy.set(name, w); say(w, true); render(); return; }
+      P.join = { plan }; P.chipWhy.delete(name);
+      say('Join ' + name + ' to ' + g.name + ': check its rules and its highest close, then Put in.');
+      render();
+      const box = body.querySelector('[data-ma="jhigh"]'); if (box) { box.focus(); box.select(); }
+      return;
+    }
     const why = MC.moveWhy(c, toActive, g.name);
     if (why) { P.chipWhy.set(name, why); say(why, true); render(); return; }
     const m = MC.benchMessage(name, !toActive, cid());
@@ -322,6 +351,13 @@ function mount(el, host) {
     if (act === 'settings') { P.settings = !P.settings; P.creating = false; P.delAsk = false; }
     else if (act === 'new') { P.creating = !P.creating; P.settings = false; P.delAsk = false; if (P.creating && !benchNow(g) && !MC.verAtLeast(S.version, MC.BENCH_VERSION)) say('New group needs ChartBridge ' + MC.BENCH_VERSION + ' (a group keeps no rules of its own from then; this PC has ' + (S.version || 'an older one') + ').', true); }
     else if (act === 'create-no') P.creating = false;
+    else if (act === 'join-no') { if (P.join) say(P.join.plan.account + ' stays on the bench (not in the group).'); P.join = null; }
+    else if (act === 'join-yes' && P.join) {
+      const j = P.join.plan, box = body.querySelector('[data-ma="jhigh"]'), c2 = cid();
+      P.join = null;
+      if (F.accountGroup(j.account, j.group, box ? box.value : '', j.rules, c2)) { P.pending.set(c2, { at: Date.now(), chip: j.account, gid: j.group, join: true, what: j.account + ' did not join' }); say('Sent to ChartBridge: ' + j.account + ' into ' + ((group() || {}).name || j.group) + '.'); }
+      else say('Not sent: not connected to ChartBridge.', true);
+    }
     else if (act === 'create') {
       const name = (body.querySelector('[data-ma="nname"]') || {}).value, type = (body.querySelector('[data-ma="ntype"]') || {}).value, rt = (body.querySelector('[data-ma="nrisk"]') || {}).value;
       const rk = MC.parseRisk(rt);
@@ -348,7 +384,7 @@ function mount(el, host) {
   });
   el.addEventListener('change', e => {
     const t = e.target, act = t.dataset && t.dataset.ma;
-    if (act === 'group') { P.gid = t.value; savePick(P.gid); P.settings = false; P.delAsk = false; P.chipWhy.clear(); say(DEFAULT_TOAST); render(); }
+    if (act === 'group') { P.gid = t.value; savePick(P.gid); P.settings = false; P.delAsk = false; P.join = null; P.chipWhy.clear(); say(DEFAULT_TOAST); render(); }
     else if (act === 'risk') {
       const g = group(); if (!g) return;
       const rk = MC.parseRisk(t.value);
@@ -362,7 +398,10 @@ function mount(el, host) {
       render();
     }
   });
-  el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.dataset && e.target.dataset.ma === 'risk') { e.preventDefault(); e.target.blur(); } });
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.dataset && e.target.dataset.ma === 'risk') { e.preventDefault(); e.target.blur(); }
+    if (e.key === 'Escape' && e.target.dataset && e.target.dataset.ma === 'jhigh' && P.join) { e.preventDefault(); P.join = null; say(DEFAULT_TOAST); render(); }
+  });
   /* drag a chip to the other lane (the same move as a click) */
   el.addEventListener('dragstart', e => { const c = e.target.closest && e.target.closest('[data-chip]'); if (!c) return; P.drag = c.dataset.chip; c.classList.add('dragging'); try { e.dataTransfer.setData('text/plain', P.drag); e.dataTransfer.effectAllowed = 'move'; } catch (x) { /* fine */ } });
   el.addEventListener('dragend', e => { const c = e.target.closest && e.target.closest('[data-chip]'); if (c) c.classList.remove('dragging'); P.drag = ''; for (const l of el.querySelectorAll('.ma-lane.over')) l.classList.remove('over'); });

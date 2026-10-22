@@ -88,7 +88,7 @@ try {
   check(L0 && L0.sumIn === '3 accounts · $375 at risk a trade' && L0.risk === '5', 'each chip\'s risk at 5% of its own max loss ($225, $100, $50), the lane\'s sum $375: ' + (L0 && L0.sumIn));
   const chip = name => p.$eval(`${sel} [data-chip="${name}"]`, e => [...e.children].map(c => c.textContent.trim()).join(' ').replace(/\s+/g, ' '));
   check(/^SIM-A ?SIM Flex 150K Eval Room \$[\d,]+ ?Risk \$225$/.test(await chip('SIM-A')), 'a chip: the account, SIM or LIVE, its type on The Desk, its room and its own risk: ' + await chip('SIM-A'));
-  check(/set its type on The Desk first/.test(await chip('SIM-G')) && /not in the group: join it on the Accounts tab/.test(await chip('SIM-E')), 'SIM-G says to set its type first; SIM-E to join on the Accounts tab');
+  check(/set its type on The Desk first/.test(await chip('SIM-G')) && /not in the group: drag or click it in to join/.test(await chip('SIM-E')), 'SIM-G says to set its type first; SIM-E that it joins by a drag or a click');
   await shot(p, 'multi-account-groups-1366.png');
   await p.locator(sel).screenshot({ path: path.join(out, 'multi-account-groups-panel-1366.png') });
   if (SHOTS) fs.copyFileSync(path.join(out, 'multi-account-groups-panel-1366.png'), path.join(SHOTS, 'multi-account-groups-panel-1366.png'));
@@ -102,15 +102,13 @@ try {
   await p.dragAndDrop(`${sel} [data-chip="SIM-B"]`, `${sel} .ma-lane.bench`);
   const L2 = await until(async () => { const l = await lanes(); return l.bench.includes('SIM-B') ? l : null; }, 'SIM-B on the bench after the drag');
   check(L2 && (await groupMsgs()).some(m => m.type === 'memberBench' && m.account === 'SIM-B' && m.benched === true) && L2.sumIn === '3 accounts · $375 at risk a trade', 'a drag to the bench: memberBench benched true; SIM-B sits out: ' + JSON.stringify(L2));
-  /* refused on the page, with the reason on the chip: a working order on SIM-A; SIM-E not in the group */
+  /* refused on the page, with the reason on the chip: a working order on SIM-A */
   await control('elsewhere', { account: 'SIM-A', root: 'MNQ', side: 'buy', kind: 'limit', qty: 1, p: 24000 });
   await until(async () => /in a trade: 1 working order/.test(await chip('SIM-A')), 'SIM-A\'s working order on its chip');
   const n0 = (await groupMsgs()).filter(m => m.type === 'memberBench').length;
   await p.click(`${sel} [data-chip="SIM-A"]`, { force: true }); await wait(300);
   check((await groupMsgs()).filter(m => m.type === 'memberBench').length === n0 && /SIM-A is in a trade or has working orders \(1 working order\)\. It moves once it is flat with no working orders\./.test((await lanes()).toast),
     'SIM-A with a working order: nothing sent, the reason on the line: ' + (await lanes()).toast);
-  await p.click(`${sel} [data-chip="SIM-E"]`, { force: true }); await wait(200);
-  check(/SIM-E is not in Lucid: put it in the group on the Accounts tab \(Group\) first/.test(await chip('SIM-E')), 'SIM-E (in no group): it says to join on the Accounts tab: ' + await chip('SIM-E'));
   await shot(p, 'multi-account-refused-1366.png');
   /* the risk: refused while the group is not flat (SIM-A's order), then changed once it is */
   check(await p.$eval(`${sel} [data-ma="risk"]`, e => e.disabled), 'the risk box is off while the group is not flat');
@@ -148,6 +146,29 @@ try {
   await p.click(`${sel} [data-ma="delete"]`);
   check(!!(await until(async () => (await groupMsgs()).find(m => m.type === 'groupDelete' && m.group === 'g3'), 'groupDelete')), 'then groupDelete');
   await until(async () => (await lanes()).group === 'g1', 'back on Lucid Flex');
+  /* 1.37.0 (Anthony 2026-10-22, "Join flow on the chip"): the firm's account in no group joins from its chip: the Accounts tab's own
+     join step (its rules from its type on The Desk, the highest close), Put in sends the same accountGroup; Cancel leaves it */
+  const joins = async () => (await groupMsgs()).filter(m => m.type === 'accountGroup');
+  const j0 = (await joins()).length;
+  await p.click(`${sel} [data-chip="SIM-E"]`);
+  const step = await until(() => p.$eval(`${sel} .ma-join`, e => ({ words: e.querySelector('.ma-jwords').textContent, high: e.querySelector('[data-ma="jhigh"]').value })), 'the join step under SIM-E');
+  check(step && /^Put SIM-E in Lucid Flex with its rules from Lucid Flex 50K Eval: \$50,000 · daily none · drawdown \$2,000 end of day/.test(step.words) && step.high === '50000',
+    'a click on SIM-E (in no group): the join step under its chip, the Accounts tab\'s words, the highest close prefilled: ' + JSON.stringify(step));
+  await p.locator(sel).screenshot({ path: path.join(out, 'multi-account-join-1366.png') });
+  if (SHOTS) fs.copyFileSync(path.join(out, 'multi-account-join-1366.png'), path.join(SHOTS, 'multi-account-join-1366.png'));
+  await p.click(`${sel} [data-ma="join-no"]`); await wait(300);
+  check(!(await p.$(`${sel} .ma-join`)) && (await lanes()).bench.includes('SIM-E') && (await joins()).length === j0, 'Cancel: the step closes, SIM-E stays on the bench, nothing sent');
+  await p.dragAndDrop(`${sel} [data-chip="SIM-E"]`, `${sel} .ma-lane.in`);
+  await until(() => p.$(`${sel} .ma-join`), 'the join step after a drag into the group');
+  await p.fill(`${sel} [data-ma="jhigh"]`, '50250');
+  await p.click(`${sel} [data-ma="join-yes"]`);
+  const jm = await until(async () => (await joins()).slice(j0).find(m => m.account === 'SIM-E'), 'SIM-E\'s accountGroup');
+  check(jm && jm.group === 'g1' && jm.highClose === 50250 && jm.typeId === 'sample-lucid-50k' && jm.size === 50000 && jm.drawdown === 2000, 'Put in: the Accounts tab\'s accountGroup, with its rules from its type and the highest close: ' + JSON.stringify(jm));
+  const LJ = await until(async () => { const l = await lanes(); return l.in.includes('SIM-E') ? l : null; }, 'SIM-E in the trading lane');
+  check(LJ && /SIM-E joined Lucid Flex/.test(LJ.toast), 'SIM-E lands in the trading lane: ' + JSON.stringify(LJ && [LJ.in, LJ.toast]));
+  const j1 = (await joins()).length;
+  await p.click(`${sel} [data-chip="SIM-G"]`, { force: true }); await wait(300);
+  check(!(await p.$(`${sel} .ma-join`)) && (await joins()).length === j1 && /SIM-G has no account type on The Desk: set its type there first/.test(await chip('SIM-G')), 'SIM-G (no type): no join step, nothing sent, the reason on its chip');
   /* the Copier tab: the copier as the Account page had it; the Account page has no Copier tab */
   await p.click(`${sel} .ma-tabs [data-tab="copier"]`);
   const cop = await until(() => p.$eval(`${sel} .ma-cop`, e => (!e.hidden && e.querySelector('.apg-cop-top') ? e.textContent : null)), 'the copier in the Copier tab');
@@ -166,6 +187,29 @@ try {
   await p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
   const L4 = await until(async () => { const l = await lanes(); return l.in.length ? l : null; }, 'the panel after a reload');
   check(L4 && L4.group === 'g1', 'after a reload: the panel is there with its group: ' + JSON.stringify(L4 && L4.group));
+
+  /* a ChartBridge older than 0.6.7 (no bench): a join from a chip says it needs 0.6.7, as moving a chip does */
+  const OLDP = PORT + 1;
+  const ob = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(OLDP), '--v3', '--trading', '--test-controls', '--bench-groups', '--max-qty=MNQ:9,NQ:9',
+    '--trade-accounts=SIM-A,SIM-B,SIM-C,SIM-D,SIM-E,SIM-G,SIM-H', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await new Promise(r => ob.stdout.once('data', r));
+  try {
+    const q = await ctx.newPage();
+    q.on('pageerror', e => fail('pageerror (older): ' + e.message));
+    await q.goto(`http://localhost:${OLDP}/live/?layout=Main`);
+    await q.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(q, TEST_PIN);
+    await q.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
+    await q.click('#wsAdd'); await q.click('#wsAddMenu [data-add="multi"]');
+    const qs = await until(() => q.evaluate(() => (window.workspace.panels().find(x => x.type === 'multi') || {}).id), 'the panel on the older ChartBridge');
+    const qsel = `.ws-panel[data-id="${qs}"]`;
+    await until(() => q.$(`${qsel} [data-chip="SIM-E"]`), 'SIM-E on the older ChartBridge');
+    const n1 = ((await (await fetch(`http://127.0.0.1:${OLDP}/test/received`, { method: 'POST' })).json()).groupMsgs || []).length;
+    await q.click(`${qsel} [data-chip="SIM-E"]`, { force: true }); await wait(300);
+    const t = await q.$eval(`${qsel} .ma-toast:last-child`, e => e.textContent);
+    check(/^Joining from the panel needs ChartBridge 0\.6\.7/.test(t) && !(await q.$(`${qsel} .ma-join`)) && ((await (await fetch(`http://127.0.0.1:${OLDP}/test/received`, { method: 'POST' })).json()).groupMsgs || []).length === n1,
+      'an older ChartBridge: the join says it needs 0.6.7 (as moving a chip does), nothing sent: ' + t);
+    await q.close();
+  } finally { ob.kill(); }
   await p.setViewportSize({ width: 1920, height: 1080 }); await wait(600);
   await shot(p, 'multi-account-groups-1920.png');
 } catch (e) { fail('smoke threw: ' + (e && e.stack || e)); }

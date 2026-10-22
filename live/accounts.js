@@ -723,13 +723,44 @@ function createFeed(env) {
         return r.json().then(j => j && typeof j.detail === 'string' ? j.detail : '', () => '').then(d => ({ ok: false, error: 'The Desk answered ' + r.status + (d ? ': ' + d : '') }));
       }, e => ({ ok: false, error: 'The Desk is not reachable (' + (e && e.message ? e.message : 'no answer') + ')' }));
   }
+  /* 1.33.0 (Anthony 2026-10-19: "match the accounts going into a group to our desk pool ... so its all automatic"): what a join
+     asks. ChartBridge 0.6.5 (the group is perMember): the account's rules from its type on The Desk (auto: one compact row with the
+     rules taken and the highest close, prefilled from The Desk's seed floor when it has one), or the full form when The Desk has no
+     type for it (or is not reachable, or the type misses a rule). An older ChartBridge: the 1.26.0 question only (old).
+     1.37.0: on the feed, so the Accounts tab and the Multi-Account panel's join step on a chip ask exactly the same. */
+  const verAtLeast = (v, want) => { const p = x => String(x || '').split('.').map(n => parseInt(n, 10) || 0); const A = p(v), B = p(want); for (let k = 0; k < 3; k++) { if ((A[k] || 0) !== (B[k] || 0)) return (A[k] || 0) > (B[k] || 0); } return true; };
+  function joinRefusal(name, g) {
+    if (!verAtLeast(S.version, '0.6.7') || !S.deskAt) return '';   // an older ChartBridge (its group's own rules), or The Desk not read: as before
+    const row = S.desk.get(name), MC = typeof MultiAccountCore !== 'undefined' ? MultiAccountCore : null;
+    if (!row || !row.accountType) return name + ' has no account type on The Desk: set its type there first (an account with no type cannot trade with a group until it has one).';
+    const gf = MC ? MC.groupFirm(g, S.desk) : '', af = MC ? MC.firmOfRow(row) : '';
+    if (gf && af && gf.toLowerCase() !== af.toLowerCase()) return g.name + ' holds ' + gf + ' accounts and ' + name + ' is ' + af + '\'s: a group holds one firm\'s accounts.';
+    return '';
+  }
+  function joinPlan(name, g, acc) {
+    const GC = GroupsCore, base = { account: name, group: g.id };
+    if (!g.perMember) return Object.assign(base, { mode: 'old', prefill: String(+GC.highCloseDefault(g, acc).toFixed(2)) });
+    const row = S.desk.get(name);
+    const dr = !S.deskAt ? { error: 'The Desk is not reachable, so its account type cannot be read' } : !S.types ? { error: 'The Desk\'s account types are not known' } : GC.deskRules(row, S.types);
+    if (dr.error) {
+      const form = GC.rulesForm(g);
+      return Object.assign(base, { mode: 'form', form, why: dr.error, prefill: String(+GC.highCloseDefault(g, acc).toFixed(2)), seed: null });
+    }
+    const seed = GC.seedHigh(row, dr.rules);
+    return Object.assign(base, { mode: 'auto', rules: dr.rules, from: dr.from, overrides: dr.overrides, seed, prefill: seed ? String(seed.value) : String(+GC.highCloseDefault(dr.rules, acc).toFixed(2)) });
+  }
+  /** an auto join's words: "Put SIM-E in Lucid with its rules from <type>: <rules> · risk 5% ...: $100." */
+  function joinWords(j) {
+    const GC = GroupsCore, jg = (S.groups || []).find(x => x.id === j.group), gn = jg ? jg.name : j.group, rs = GC.summary(j.rules), risk = GC.riskDollars(jg, j.rules);
+    return `Put ${j.account} in ${gn} with its rules from ${j.from}${j.overrides.length ? ' (its own on The Desk: ' + j.overrides.join(', ') + ')' : ''}: ${rs}${risk !== null ? ' · ' + GC.riskText(jg) + ': ' + GC.usd(risk) : ''}.`;
+  }
   const account = name => S.accounts.find(a => a.name === name) || null;
   const groupOf = a => (a && a.group && S.groups ? S.groups.find(g => g.id === a.group) || null : null);
   /* 1.33.0: the rules that hold for an account in a group: its own (ChartBridge 0.6.5's accounts entry rules) over its group's */
   const rulesOf = a => { const g = groupOf(a); return g && a.rules && typeof a.rules === 'object' ? Object.assign({}, g, a.rules) : g; };
   const limit = name => { const a = account(name); return a ? AC.limitState(a, S.desk.get(name), rulesOf(a)) : null; };
   return {
-    S, start, startAny, stop, account, limit, post, groupOf, rulesOf, store, setAccountType, readTypes,
+    S, start, startAny, stop, account, limit, post, groupOf, rulesOf, store, setAccountType, readTypes, joinRefusal, joinPlan, joinWords,   // 1.37.0: the join, shared
     /** 1.30.0: an account's type on The Desk ({ id, firm, name, version, status }) or null */
     typeOf: name => { const d = S.desk.get(name); return d && d.accountType ? d.accountType : null; },
     listen(part) { subs.add(part); return () => subs.delete(part); },
@@ -755,9 +786,9 @@ function createFeed(env) {
     copierFollowerRemove: name => S.switches.copier && send({ type: 'copierFollowerRemove', cid: cid(), account: name }),
     /* 1.26.0 (ChartBridge 0.5.8): an account's group (null: None; highText: the highest close typed, G2 b) and a personal
        account's own floor and daily limit; each only once ChartBridge has sent groups (ChartBridge checks again) */
-    accountGroup: (name, group, highText, rules) => {   // 1.33.0: rules (checked, with typeId) go with a join on ChartBridge 0.6.5
+    accountGroup: (name, group, highText, rules, useCid) => {   // 1.33.0: rules (checked, with typeId) go with a join on ChartBridge 0.6.5; 1.37.0: useCid (the panel follows its answer)
       if (!S.groups || typeof GroupsCore === 'undefined') return false;
-      const jg = (S.groups || []).find(x => x.id === group), hw = GroupsCore.highWord(rules || jg), r = GroupsCore.joinMessage(name, group, highText, cid(), hw.charAt(0).toUpperCase() + hw.slice(1), jg && jg.perMember ? rules : null);
+      const jg = (S.groups || []).find(x => x.id === group), hw = GroupsCore.highWord(rules || jg), r = GroupsCore.joinMessage(name, group, highText, useCid || cid(), hw.charAt(0).toUpperCase() + hw.slice(1), jg && jg.perMember ? rules : null);
       if (r.error) { env.note('Not sent: ' + r.error, true); return false; }
       return send(r.msg);
     },
@@ -1071,26 +1102,9 @@ function mount(v, host) {
      asks. ChartBridge 0.6.5 (the group is perMember): the account's rules from its type on The Desk (auto: one compact row with the
      rules taken and the highest close, prefilled from The Desk's seed floor when it has one), or the full form when The Desk has no
      type for it (or is not reachable, or the type misses a rule). An older ChartBridge: the 1.26.0 question only (old). */
-  function joinRefusal(name, g) {
-    if (!verAtLeast(S.version, '0.6.7') || !S.deskAt) return '';   // an older ChartBridge (its group's own rules), or The Desk not read: as before
-    const row = S.desk.get(name), MC = typeof MultiAccountCore !== 'undefined' ? MultiAccountCore : null;
-    if (!row || !row.accountType) return name + ' has no account type on The Desk: set its type there first (an account with no type cannot trade with a group until it has one).';
-    const gf = MC ? MC.groupFirm(g, S.desk) : '', af = MC ? MC.firmOfRow(row) : '';
-    if (gf && af && gf.toLowerCase() !== af.toLowerCase()) return g.name + ' holds ' + gf + ' accounts and ' + name + ' is ' + af + '\'s: a group holds one firm\'s accounts.';
-    return '';
-  }
-  function joinPlan(name, g, acc) {
-    const base = { account: name, group: g.id };
-    if (!g.perMember) return Object.assign(base, { mode: 'old', prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)) });
-    const row = S.desk.get(name);
-    const dr = !S.deskAt ? { error: 'The Desk is not reachable, so its account type cannot be read' } : !S.types ? { error: 'The Desk\'s account types are not known' } : GroupsCore.deskRules(row, S.types);
-    if (dr.error) {
-      const form = GroupsCore.rulesForm(g);
-      return Object.assign(base, { mode: 'form', form, why: dr.error, prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)), seed: null });
-    }
-    const seed = GroupsCore.seedHigh(row, dr.rules);
-    return Object.assign(base, { mode: 'auto', rules: dr.rules, from: dr.from, overrides: dr.overrides, seed, prefill: seed ? String(seed.value) : String(+GroupsCore.highCloseDefault(dr.rules, acc).toFixed(2)) });
-  }
+  /* 1.37.0: the join's checks and plan live on the feed (F.joinRefusal, F.joinPlan, F.joinWords), shared with the Multi-Account
+     panel's join step on a chip */
+  const joinRefusal = (name, g) => F.joinRefusal(name, g), joinPlan = (name, g, acc) => F.joinPlan(name, g, acc);
   const RULE_BOXES = [['size', 'Size', 'Account size, dollars'], ['dailyLoss', 'Daily', 'Daily loss limit, dollars (empty: none)'], ['drawdown', 'Drawdown', 'Drawdown size (max loss), dollars'],
     ['lockAt', 'Stops at', 'Floor stops at, dollars (empty: none; trailing only)'], ['target', 'Target', 'Profit target, dollars (empty: none)'], ['consistency', 'Cons. %', 'Consistency percent (empty: none)'],
     ['maxMinis', 'Max minis', 'Max size in minis (NQ, ES; empty: none)'], ['maxMicros', 'Max micros', 'Max size in micros (MNQ, MES; empty: none)']];
@@ -1247,8 +1261,7 @@ function mount(v, host) {
         if (j.mode === 'old') return row('join|' + a.name + '|' + j.group, `<span role="cell" class="apg-confirm apg-join">Put ${esc(a.name)} in ${esc(gn)}: ${high} ${yes}${no}</span>`, 'apg-ask');
         /* 1.33.0: one compact row: the rules taken from The Desk (and what the account's own Desk numbers changed), the highest close */
         if (j.mode === 'auto') {
-          const rs = GroupsCore.summary(j.rules), risk = GroupsCore.riskDollars(jg, j.rules);
-          const words = `Put ${a.name} in ${gn} with its rules from ${j.from}${j.overrides.length ? ' (its own on The Desk: ' + j.overrides.join(', ') + ')' : ''}: ${rs}${risk !== null ? ' · ' + GroupsCore.riskText(jg) + ': ' + GroupsCore.usd(risk) : ''}.`;
+          const words = F.joinWords(j);   // 1.37.0: the same words as the Multi-Account panel's join step
           return row('join|' + a.name + '|' + j.group + '|auto', `<span role="cell" class="apg-confirm apg-join apg-jauto"><span class="apg-jrules" title="${esc(words)}">${esc(words)}</span> ${high} ${yes}<button type="button" class="ac-btn" data-act="join-edit" data-id="${esc(a.name)}" title="Change any of the rules before ${esc(a.name)} joins">Edit rules</button>${no}</span>`, 'apg-ask');
         }
         /* the full form: every rule box, prefilled (the group's own rules when The Desk has no type for it) */

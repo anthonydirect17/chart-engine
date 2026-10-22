@@ -91,6 +91,10 @@ test('1.37.0 the workspace: the Multi-Account panel (one a layout), an old layou
   const acc = read('live/accounts.js');
   assert.match(acc, /const TABS = \[\n  \{ id: 'acc'[^\n]*\n  \{ id: 'trd', name: 'Today\\'s trades', short: 'Trades' \}, \{ id: 'log', name: 'Log', short: 'Log' \},\n\];/, 'the Account page has no Copier tab');
   assert.match(acc, /const only = host\.only === 'cop';/);
+  const ma = read('live/multi-account.js');
+  assert.match(ma, /const no = F\.joinRefusal\(name, g\)/, 'the chip\'s join asks the Accounts tab\'s own checks');
+  assert.match(ma, /const plan = F\.joinPlan\(name, g, acc\);/, 'and its own plan (rules from the type, the highest close)');
+  assert.match(ma, /F\.accountGroup\(j\.account, j\.group, box \? box\.value : '', j\.rules, c2\)/, 'Put in sends the Accounts tab\'s accountGroup');
   assert.doesNotMatch(read('live/groups.js'), /mountSettings/, 'the Settings group dialog is gone');
 });
 
