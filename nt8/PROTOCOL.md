@@ -3561,13 +3561,19 @@ click and drag a chip into the group, it trades with, when its on the bench, it 
   at a time behind the groups' change gate, taken before any other lock, so a second change waits there holding nothing an exit
   needs (review L1). The flat check and the move in memory are made under the group entry lock and `PlaceLock`, so no group entry is
   sized and placed across the move; `PlaceLock` is then let go and `groups.txt` (and the sealed copy) is written with the group entry
-  lock and the save lock still held, so an exit placed meanwhile (the page's, a copier exit copy, an agent's close or stop: `PlaceLock`
-  only) never waits on the disk (review LOW 1), and no page group entry is sized from a change not yet saved (review L2). A write that
+  lock and the save lock still held, so a page market exit, a copier exit copy, an agent's close or stop and a flatten placed
+  meanwhile (`PlaceLock` only) never wait on the disk (review LOW 1), and no page group entry is sized from a change not yet saved
+  (review L2). A page stop or limit order placed on its own counts as an entry (it takes the group entry lock), so it can wait for a
+  groups change in progress (normally milliseconds). A write that
   fails: under `PlaceLock` again, if the account (or, for a risk percent, the group) is still flat with no working order, memory goes
   back to what the file holds ("groups.txt could not be saved (...); nothing was changed"); if something was placed on the change
   meanwhile (an agent's group entry takes `PlaceLock` alone), the change stays in memory, the alarm goes up (again at each sign in
   until a save) and the answer is "changed, but groups.txt could not be saved (...): SIM-A is in a trade (+1 NQ) since the change, so
-  it stays in effect; it will be saved with the next change". The pages and agents are told either way. `groupSave` with `riskPct`
+  it stays in effect; it will be saved with the next change". It still comes as a `reject` with its `cid` (an older page shows it as
+  refused); page 1.37.0 shows a reason starting "changed, but" as done with a warning. The groups' tick (every second) writes such a
+  kept change again, only when no groups change is on and under the save lock alone, until it is in the file (so a restart does not
+  read the older file), then sends an `info` status: "groups: groups.txt saved: the change kept in memory after the failed write is
+  in the file now". The pages and agents are told either way. `groupSave` with `riskPct`
   for a group and `accountGroup` work the same way (the account's holdings decide for `accountGroup`); a save without `riskPct`
   takes the save lock alone. Joining a group (or leaving it, or the group deleted) takes an account off the bench.
 - **The `groups` message** gains `benched` per group: the members on the bench (members still, in `members` too).

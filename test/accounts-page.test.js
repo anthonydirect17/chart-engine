@@ -191,6 +191,12 @@ test('Log lines and order names', () => {
   assert.equal(AC.accountChange({ name: 'EVAL-A', state: 'active', connection: 'connected', trade: false }, { name: 'EVAL-A', state: 'active', connection: 'connected', trade: true }), 'EVAL-A: checked for trading');
   assert.equal(AC.accountChange(null, { name: 'EVAL-A' }), null);
   assert.equal(AC.logText({ type: 'reject', cid: 'c1', reason: 'Merge is refused.' }), 'Refused by ChartBridge: Merge is refused.');
+  /* 1.37.0 (review N2): a groups change ChartBridge made but could not save yet is done with a warning, never "Refused" */
+  const kept = 'changed, but groups.txt could not be saved (the disk is full (made up)): SIM-A is in a trade (+1 NQ) since the change, so it stays in effect; it will be saved with the next change';
+  assert.equal(AC.logText({ type: 'reject', cid: 'c2', reason: kept }), 'Done by ChartBridge, with a warning: ' + kept);
+  assert.equal(AC.keptChange(kept), true);
+  assert.equal(AC.keptChange('groups.txt could not be saved (x); nothing was changed'), false);
+  assert.equal(AC.keptChange(undefined), false);
   assert.equal(AC.logText({ type: 'copierEvent', account: 'SIM-F1', action: 'enter', text: 'entered 3 MNQ at market', slippageTicks: 2, leaderMs: 14, fillMs: 61 }),
     'Copier SIM-F1: entered 3 MNQ at market (slippage 2 t) (14 ms from the leader, filled in 61 ms)');
   assert.equal(AC.logText({ type: 'status', level: 'warn', text: 'EVAL-B is gone' }), 'Warning: EVAL-B is gone');

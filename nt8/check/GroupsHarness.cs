@@ -1546,10 +1546,24 @@ public static class GroupsHarness
         Check(Rejection().Contains("changed, but groups.txt could not be saved (the disk is full (made up)): group Lucid holds SIM-A +1 NQ since the change, so it stays in effect") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":6,") && FileText() == beforeFail,
               "0.6.7 review L2: a failed risk save after the group traded on it: 6 stays in memory: " + Rejection());
         Flat();
+        // review N3: the kept change is written again on the groups' tick: not while the disk still fails, then with no other change
+        ChartBridgeGroups.WriteForHarness = () => { throw new IOException("the disk is full (made up)"); };
+        Tick();
+        Check(FileText() == beforeFail && !Logged("groups.txt saved: the change kept in memory"), "0.6.7 review N3: a tick while the disk still fails: the file stays as it was, quiet");
         ChartBridgeGroups.WriteForHarness = null;
+        Clear(); Tick();
+        Check(!FileText().Contains("\tbenched") && FileText().Contains("group\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\t6\n") && File.ReadAllText(p + ".good").Contains("group\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\t6\n") && !File.ReadAllText(p + ".good").Contains("\tbenched") &&
+              Logged("NOTE: groups: groups.txt saved: the change kept in memory after the failed write is in the file now"),
+              "0.6.7 review N3: the disk back: the next tick writes the kept changes with no other change (SIM-A off the bench, risk 6), the all-clear sent: " + FileText().Replace("\t", "<TAB>"));
+        string afterTick = FileText();
+        Func<int> savedNotes = () => { lock (NinjaTrader.Code.Output.Lines) return NinjaTrader.Code.Output.Lines.Count(x => x.Contains("groups.txt saved: the change kept in memory")); };
+        int notes0 = savedNotes();
+        DateTime written = File.GetLastWriteTimeUtc(p);   // the tick must not touch groups.txt again
+        Clear(); Tick();
+        Check(FileText() == afterTick && File.GetLastWriteTimeUtc(p) == written && savedNotes() == notes0 && notes0 == 1, "0.6.7 review N3: once saved, the tick writes nothing more and says nothing (" + notes0 + " all-clear)");
         Clear(); G("groupSave", "{\"type\":\"groupSave\",\"cid\":\"s\",\"group\":\"g1\",\"name\":\"Lucid\",\"riskPct\":5}");
         Check(Rejection() == "" && !FileText().Contains("\tbenched") && FileText().Contains("group\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\t5\n") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":5,"),
-              "0.6.7 review L2: the disk back: the next change writes the kept move with it (SIM-A off the bench in the file), risk 5: " + FileText().Replace("\t", "<TAB>"));
+              "0.6.7: risk back to 5 for the checks below: " + FileText().Replace("\t", "<TAB>"));
         // a group made on the panel: a name and a Type, no rules of its own
         Clear(); G("groupSave", "{\"type\":\"groupSave\",\"cid\":\"s\",\"name\":\"Apex\",\"accountType\":\"funded\",\"riskPct\":4}");
         Check(Rejection() == "" && FileText().Contains("group\tg2\tApex\ton\t-\t-\t-\t-\t-\t-\t-\tfunded\t-\t4\n"), "0.6.7: a new group with no rules: size, drawdown and type \"-\": " + FileText().Replace("\t", "<TAB>"));

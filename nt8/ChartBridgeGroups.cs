@@ -25,8 +25,11 @@
 // Lock order: ChangeGate (every groups change, one at a time), then ChartBridgeOrders' GroupEntryLock, then PlaceLock, then SaveLock,
 // then Mem. Mem only guards memory: never held during file I/O or a NinjaTrader call. 0.6.7 (reviews LOW 1, L1, L2): the group save
 // with a risk percent, the bench move and accountGroup decide and change memory under GroupEntryLock and PlaceLock, then let PlaceLock
-// go and write groups.txt under GroupEntryLock and SaveLock (ChangeAndSave), so an exit (PlaceLock only) never waits on that write and
-// no page group entry uses a change before it is saved. A second groups change waits at ChangeGate, holding nothing an exit needs. Written in C# 5 syntax (NinjaTrader 8 compiles NinjaScript as C# 5).
+// go and write groups.txt under GroupEntryLock and SaveLock (ChangeAndSave), so a page market exit, a copier exit copy, an agent's
+// close or stop and a flatten (PlaceLock only) never wait on that write, and no page group entry uses a change before it is saved. A
+// page stop or limit order placed on its own counts as an entry (GroupEntryLock), so it can wait for a groups change in progress
+// (normally milliseconds). A second groups change waits at ChangeGate, holding nothing an exit needs. A change kept in memory after a
+// failed write is written again on the tick (RetryUnsaved). Written in C# 5 syntax (NinjaTrader 8 compiles NinjaScript as C# 5).
 #region Using declarations
 using System;
 using System.Collections.Generic;
@@ -1182,6 +1185,35 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static bool Up(Account a) { return a != null && ChartBridgeAccounts.ConnectionText(a) == "connected"; }
 
+        // 0.6.7 (review N3): a change kept in memory after a failed groups.txt write (ChangeAndSave) is written again every tick until
+        // it is in the file, so a restart does not read the older file. Only when no groups change is on (ChangeGate free; else this
+        // tick is skipped and that change writes the whole state itself), under SaveLock alone: never PlaceLock or GroupEntryLock, so
+        // nothing waits on it but another groups change. Saved: the all-clear to the pages; still failing: quiet (the alarm is up).
+        private static void RetryUnsaved()
+        {
+            lock (Mem) if (unsaved == null) return;
+            if (!Monitor.TryEnter(ChangeGate)) return;
+            try
+            {
+                lock (SaveLock)
+                {
+                    State now;
+                    lock (Mem) { if (unsaved == null) return; now = state; }
+                    string text = Serialize(now), err = null;
+                    Action hook = WriteForHarness;
+                    if (hook != null) { try { hook(); } catch (Exception ex) { err = ex.Message; } }
+                    if (err == null) err = WriteWhole(FilePath, text);
+                    if (err != null) return;
+                    WriteGood(text);
+                    lock (Mem) { onDisk = now; unsaved = null; }
+                }
+            }
+            finally { Monitor.Exit(ChangeGate); }
+            string ok = "groups: groups.txt saved: the change kept in memory after the failed write is in the file now";
+            ChartBridgeServer.Log("NOTE: " + ok);
+            ChartBridgeServer.SendToTraders(StatusJson("info", ok));
+        }
+
         // Every second (ChartBridgeAccounts.Tick): each connected account's day start (its first reading of a session, which also
         // raises an end-of-day high it has) and its intraday high; the marks saved; the groups message when it changed.
         public static void Tick(List<Account> all, double now)
@@ -1221,6 +1253,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
             SaveMarks(false);
+            RetryUnsaved();   // 0.6.7 (review N3)
             // 0.6.6: an account whose known daily room reached 0 or below is marked for the day, with one alert (DailyReached)
             foreach (Account a in all)
             {
@@ -1986,8 +2019,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         // flat, a move to or from the bench only while the account is flat, an account joining or leaving a group). Every groups change
         // already holds ChangeGate (OnMessage), so no second change waits on SaveLock while holding PlaceLock. With place true: the
         // decision and the change in memory under GroupEntryLock, PlaceLock and SaveLock; then PlaceLock is let go and groups.txt (and
-        // its .good copy) is written with GroupEntryLock and SaveLock still held, so an exit (the page's, the copier's, an agent's close
-        // or stop: PlaceLock only) never waits on the disk, and no page group entry is sized from a change not yet saved (L2). If the
+        // its .good copy) is written with GroupEntryLock and SaveLock still held, so a page market exit, a copier exit copy, an agent's
+        // close or stop and a flatten (PlaceLock only) never wait on the disk, and no page group entry is sized from a change not yet
+        // saved (L2); a page stop or limit order on its own is an entry and can wait for the write (normally milliseconds). If the
         // write fails, under PlaceLock again (SaveLock let go first, so the order holds): busyNow says whether anything was placed on
         // the change meanwhile (an agent's group entry takes PlaceLock alone). Nothing: memory goes back ("nothing was changed").
         // Something: the change stays in memory, the groups alarm goes up and the answer says it is saved with the next change. The

@@ -93,6 +93,8 @@ test('1.37.0 the workspace: the Multi-Account panel (one a layout), an old layou
   assert.match(acc, /const only = host\.only === 'cop';/);
   const ma = read('live/multi-account.js');
   assert.match(ma, /const no = F\.joinRefusal\(name, g\)/, 'the chip\'s join asks the Accounts tab\'s own checks');
+  assert.match(ma, /window\.AccountsCore\.keptChange\(why\)\) \{ if \(p\.chip\) P\.chipWhy\.delete\(p\.chip\); say\('Done, with a warning: ' \+ why, true\); continue; \}/,
+    'review N2: a change ChartBridge made but could not save yet shows as done with a warning, never as refused');
   assert.match(ma, /const plan = F\.joinPlan\(name, g, acc\);/, 'and its own plan (rules from the type, the highest close)');
   assert.match(ma, /F\.accountGroup\(j\.account, j\.group, box \? box\.value : '', j\.rules, c2\)/, 'Put in sends the Accounts tab\'s accountGroup');
   assert.doesNotMatch(read('live/groups.js'), /mountSettings/, 'the Settings group dialog is gone');

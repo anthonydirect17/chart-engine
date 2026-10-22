@@ -208,6 +208,8 @@ function mount(el, host) {
     for (const [c, p] of [...P.pending]) {
       if (rej.has(c)) {
         const why = rej.get(c); P.pending.delete(c);
+        /* review N2: "changed, but groups.txt could not be saved ...": done, with ChartBridge's warning (never shown as refused) */
+        if (typeof window !== 'undefined' && window.AccountsCore && window.AccountsCore.keptChange(why)) { if (p.chip) P.chipWhy.delete(p.chip); say('Done, with a warning: ' + why, true); continue; }
         if (p.chip) P.chipWhy.set(p.chip, why);
         say((p.what || 'Refused') + ': ' + why, true);
       } else if (p.join) {   // a join from the chip: done once ChartBridge's groups list it as a member

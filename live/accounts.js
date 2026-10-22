@@ -352,10 +352,13 @@ function accountChange(prev, next) {
   if (prev.trade !== next.trade && prev.state === next.state) out.push(next.trade ? 'checked for trading' : 'unchecked for trading');
   return out.length ? next.name + ': ' + out.join('; ') : null;
 }
+/** 1.37.0 (review N2): ChartBridge 0.6.7's answer for a groups change made but not yet in groups.txt ("changed, but groups.txt could
+ *  not be saved ..."): it comes as a reject with its cid, but the change is in effect, so the pages show it as done with a warning. */
+const keptChange = reason => typeof reason === 'string' && /^changed, but /.test(reason);
 /** A message from ChartBridge as one Log line, or null for messages the Log does not keep. */
 function logText(m) {
   if (!m || typeof m !== 'object') return null;
-  if (m.type === 'reject') return 'Refused by ChartBridge: ' + (m.reason || '');
+  if (m.type === 'reject') return keptChange(m.reason) ? 'Done by ChartBridge, with a warning: ' + m.reason : 'Refused by ChartBridge: ' + (m.reason || '');
   if (m.type === 'status' && m.text) return (m.level === 'error' ? 'Error: ' : m.level === 'warn' ? 'Warning: ' : '') + m.text;
   if (m.type === 'copierEvent') return 'Copier' + (m.account ? ' ' + m.account : '') + ': ' + (m.text || m.action) +
     (isNum(m.slippageTicks) ? ' (slippage ' + m.slippageTicks + ' t)' : '') + (isNum(m.leaderMs) ? ' (' + m.leaderMs + ' ms from the leader' + (isNum(m.fillMs) ? ', filled in ' + m.fillMs + ' ms' : '') + ')' : '');
@@ -453,7 +456,7 @@ function ntFloorFlag(a, firmMins) {
 
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
-  accountMark, accountChange, logText, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag };
+  accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -674,7 +677,7 @@ function createFeed(env) {
           const d = firmDone.get(m.cid); firmDone.delete(m.cid);
           if (S.firmMins && S.firmMins[d.name] && S.firmMins[d.name].at === d.at) { firmForget(d.name); S.firmSent[d.name] = 'refused: ' + String(m.reason || '').slice(0, 200); }
         }
-        if (m.cid && mine.has(m.cid)) { mine.delete(m.cid); env.note('Refused by ChartBridge: ' + m.reason, true); }
+        if (m.cid && mine.has(m.cid)) { mine.delete(m.cid); env.note(AC.logText(m), true); }
         /* 1.37.0: the last refusals by cid, for a panel that shows its own reason (the Multi-Account panel's chips) */
         if (typeof m.cid === 'string' && m.cid) { S.rejects.set(m.cid, String(m.reason || '').slice(0, 400)); if (S.rejects.size > 50) S.rejects.delete(S.rejects.keys().next().value); }
         changed(); return;
