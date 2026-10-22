@@ -191,6 +191,12 @@ test('Log lines and order names', () => {
   assert.equal(AC.accountChange({ name: 'EVAL-A', state: 'active', connection: 'connected', trade: false }, { name: 'EVAL-A', state: 'active', connection: 'connected', trade: true }), 'EVAL-A: checked for trading');
   assert.equal(AC.accountChange(null, { name: 'EVAL-A' }), null);
   assert.equal(AC.logText({ type: 'reject', cid: 'c1', reason: 'Merge is refused.' }), 'Refused by ChartBridge: Merge is refused.');
+  /* 1.37.0 (review N2): a groups change ChartBridge made but could not save yet is done with a warning, never "Refused" */
+  const kept = 'changed, but groups.txt could not be saved (the disk is full (made up)): SIM-A is in a trade (+1 NQ) since the change, so it stays in effect; it will be saved with the next change';
+  assert.equal(AC.logText({ type: 'reject', cid: 'c2', reason: kept }), 'Done by ChartBridge, with a warning: ' + kept);
+  assert.equal(AC.keptChange(kept), true);
+  assert.equal(AC.keptChange('groups.txt could not be saved (x); nothing was changed'), false);
+  assert.equal(AC.keptChange(undefined), false);
   assert.equal(AC.logText({ type: 'copierEvent', account: 'SIM-F1', action: 'enter', text: 'entered 3 MNQ at market', slippageTicks: 2, leaderMs: 14, fillMs: 61 }),
     'Copier SIM-F1: entered 3 MNQ at market (slippage 2 t) (14 ms from the leader, filled in 61 ms)');
   assert.equal(AC.logText({ type: 'status', level: 'warn', text: 'EVAL-B is gone' }), 'Warning: EVAL-B is gone');
@@ -369,13 +375,14 @@ test('1.26.0: the Accounts tab gets Group and Limits only once ChartBridge sends
   assert.match(src, /\['Group', 'minmax\(0, 1fr\)'\]/);
   assert.match(src, /fld\('Group', unrole\(grp\)\) \+ fld\('Account type', unrole\(typeCell\(a\)\)\) \+ fld\('Limits', unrole\(lims\)\)/, 'the drawer: group, type and limits');
   assert.match(src, /S\.groups = null; S\.groupsError = null;/, 'a drop forgets the groups (an older ChartBridge sends none)');
-  assert.match(src, /accountGroup: \(name, group, highText, rules\) => \{[^\n]*\n\s*if \(!S\.groups/);
+  assert.match(src, /accountGroup: \(name, group, highText, rules, useCid\) => \{[^\n]*\n\s*if \(!S\.groups/);
   assert.match(src, /accountLimits: \(name, floorText, dailyText\) => \{\s*if \(!S\.groups/);
   assert.match(src, /if \(!want\) \{ P\.join = null; F\.accountGroup\(name, null\);/, 'None at once');
   assert.match(src, /P\.join = joinPlan\(name, g, acc\)/, 'a group asks first (G2 b; 1.33.0: with the rules taken from The Desk)');
-  assert.match(src, /if \(!g\.perMember\) return Object\.assign\(base, \{ mode: 'old', prefill: String\(\+GroupsCore\.highCloseDefault\(g, acc\)/, 'an older ChartBridge: the 1.26.0 question exactly');
+  assert.match(src, /if \(!g\.perMember\) return Object\.assign\(base, \{ mode: 'old', prefill: String\(\+GC\.highCloseDefault\(g, acc\)/, 'an older ChartBridge: the 1.26.0 question exactly (1.37.0: on the feed, shared with the Multi-Account panel)');
+  assert.match(src, /S, start, startAny, stop, account, limit, post, groupOf, rulesOf, store, setAccountType, readTypes, joinRefusal, joinPlan, joinWords,/, '1.37.0: one join (plan, checks, words) for the Accounts tab and the panel');
   assert.ok(html.indexOf('<script src="groups.js"></script>') > html.indexOf('<script src="accounts.js"></script>') && html.indexOf('<script src="groups.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
-  assert.ok(html.indexOf('<div class="ws-col ws-col-groups" id="wsGroupsCol" hidden>') > html.indexOf('id="wsTypesSec"') && html.indexOf('id="wsGroupsSec"') > html.indexOf('id="wsGroupsCol"'), 'Settings: the groups in a third column, hidden until ChartBridge sends groups');
+  assert.ok(!html.includes('id="wsGroupsCol"') && !html.includes('id="wsGroupsSec"'), '1.37.0: Settings has no groups column: groups are made and set on the Multi-Account panel');
   assert.ok(files.www.some(f => f.from === 'live/groups.js' && f.to === 'groups.js'));
   // the room words from ChartBridge's own numbers
   const s = AC.limitState({ roomFloor: 900, roomDaily: 400, targetLeft: null, src: { roomFloor: 'computed' } }, null, { dailyLoss: 1000, drawdown: 2500 });

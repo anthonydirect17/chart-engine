@@ -509,6 +509,8 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .ws-sg .sg-name { flex: 1 1 auto; }
 .ws-sg .ws-num { width: 64px; }
 .ws-sg .ws-num:disabled, .ws-sg select:disabled { opacity: .45; }
+/* 1.37.0: Custom's px box beside its button, as tall as the segment's buttons */
+#wsRoomPx { height: 26px; width: 64px; }
 .ws-sg .ws-num[aria-invalid="true"], .ws-sg input[aria-invalid="true"] { border-color: var(--ws-sell); }
 .sg-hk { width: 130px; font: 600 12px var(--ws-mono) !important; caret-color: transparent; cursor: pointer; }
 .sg-sum { color: var(--ws-muted); min-height: 0; }
@@ -522,62 +524,8 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .ws-qbrows .qb-pick-q { margin-left: auto; color: var(--ws-muted); font: 11px var(--ws-sans); }
 .qb-empty { margin: 10px; color: var(--ws-muted); font-size: 12px; }
 
-/* ---------------- 1.26.0 (ChartBridge 0.5.8): Settings, Account groups (live/groups.js), in the house style: one row per group,
-   the rules in a line, the No hedging switch, Edit, Rename, Delete; the rules dialog as Order Strategies'. No motion (R3). */
-/* a third column of its own in Settings (1200 px; 1366 x 768 still shows Settings whole) */
-#wsSettings.ws-has-groups { width: 1200px; }
-#wsSettings.ws-has-groups .ws-cols { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.ws-col-groups[hidden] { display: none; }
-.gp-list { display: flex; flex-direction: column; gap: 4px; }
-.gp-row { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 0; border-top: 1px solid var(--ws-row); }
-.gp-row:first-child { border-top: 0; }
-.gp-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.gp-name { color: var(--ws-text); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gp-sum { color: var(--ws-muted); font: 10.5px var(--ws-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gp-row .ws-btn.gp-b { height: 24px; padding: 0 7px; font-size: 11px; flex: none; }
-.gp-switch { flex: none; position: relative; width: 30px; height: 18px; padding: 0; border-radius: 999px; border: 1px solid var(--ws-line2); background: var(--ws-field); cursor: pointer; }
-.gp-switch .gp-knob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--ws-muted); }
-.gp-switch[aria-checked="true"] { background: var(--ws-accent); border-color: var(--ws-accent); }
-.gp-switch[aria-checked="true"] .gp-knob { left: 14px; background: var(--ws-soft); }
-.gp-switch:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
-.gp-ask { color: var(--ws-warn-text); }
-.gp-askt { flex: 1 1 auto; min-width: 0; }
-.gp-row .ws-btn.gp-yes, .ws-gp .gp-del { border-color: color-mix(in srgb, var(--ws-sell) 55%, transparent); color: var(--ws-sell); }
-.gp-none { margin: 2px 0; }
-#wsGroupsSec .ws-field .ws-help { margin: 0; }
-.ws-dialog .ws-gp { width: min(560px, calc(100vw - 32px)); box-sizing: border-box; }
-.ws-dialog:has(.ws-gp) { width: min(560px, calc(100vw - 32px)); }
-.ws-gp h2 span { color: var(--ws-muted); font-weight: 400; margin-left: 6px; }
-.gp-h { margin: 4px 0 0; font: 600 10px var(--ws-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ws-soft); }
-.ws-gp .ws-help { margin: 0; }
-.gp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 10px; }
-.gp-f { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.gp-f label { font-size: 11px; }
-.ws-gp .gp-in { width: 100%; max-width: none; height: 28px; box-sizing: border-box; }
-.ws-gp .gp-in:disabled { opacity: .45; }
-.ws-gp .gp-in[aria-invalid="true"] { border-color: var(--ws-sell); }
-.gp-fname .gp-in { max-width: 320px; }
-.gp-hedge { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; color: var(--ws-text) !important; }
-.gp-hedge input { height: auto !important; margin: 0; accent-color: var(--ws-accent); }
-.gp-hedge span { color: var(--ws-muted); font-size: 11px; }
-/* 1.28.0: the group's Hero on duty: its picker and its tier fit on one line */
-.gp-herorow { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.ws-gp .gp-herorow .gp-in { width: 320px; max-width: 60%; flex: none; }
-.gp-herowhy { margin: 0; min-width: 0; }
-/* 1.30.0 (wave 5): a group filled from an account type (The Desk's ledger): the rules-differ line with Update, and the
-   members of another type (warnings only); the rules dialog's Account type select at the top */
-.gp-row:has(.gp-tlines) { flex-wrap: wrap; }
-.gp-row:has(.gp-tlines) .gp-txt { flex-basis: 0; }
-.gp-tlines { flex: 1 0 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.gp-differ { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; color: var(--ws-warn); }
-.gp-differ .gp-dt { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gp-differ .ws-btn.gp-upd { flex: none; }
-.gp-differ .ws-btn.gp-upd { height: 20px; padding: 0 6px; font-size: 11px; }
-.ws-gp .gp-ftype .gp-herorow .gp-in { width: 320px; max-width: 60%; flex: none; }
-/* 1.32.0: the Account type as Firm, Plan and Size side by side (Anthony 2026-10-19), in the width the one select had */
-.ws-gp .gp-ftype .gp-tpick { display: flex; gap: 4px; width: 320px; max-width: 60%; flex: none; min-width: 0; }
-.ws-gp .gp-ftype .gp-tpick .gp-in.gp-tp { flex: 1 1 0; width: 0; min-width: 0; max-width: none; padding: 0 4px; }
-.ws-gp .gp-ftype .gp-tpick .gp-in#gp-fromType { flex-grow: 1.3; }
+/* 1.26.0 to 1.36.0: Settings' Account groups column and its rules dialog (.gp-*) were here; 1.37.0 moved groups to the Multi-Account
+   panel (live/multi-account.css) */
 
 /* ---------------- 1.30.0 (wave 5): Settings, every section collapsible from its header row (the heading as before, the whole
    row a button, a small caret), and Collapse all / Expand all in the first header row (no row of its own). No motion: a section opens and closes at once. */

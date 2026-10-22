@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.[0-6])";/);   // 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.[0-7])";/);   // 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -205,7 +205,7 @@ test('0.6.0 group trading: one plan, each seat through PlaceAgentEntry on its ow
   assert.match(seats, /if \(why == null && o\.OrderState == OrderState\.Rejected\) why = "NinjaTrader rejected its entry";/);
   assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(/.test(seats), 'no order call of its own');
   const checks = bodies(acode, 'Checks');
-  assert.match(checks, /outs\[i\] = p\.Sizes\[i\] == 0 \? "its size is 0 \(no room for 1 contract\)" : AccountProblemFor\(seats\[i\], true\);/, 'Q1 b: size 0, not tradable or not connected: that seat sits out');
+  assert.match(checks, /outs\[i\] = benchNow\.Contains\(seats\[i\]\) \|\| benchFresh\.Contains\(seats\[i\]\) \? "benched" : p\.Sizes\[i\] == 0 \? "its size is 0 \(no room for 1 contract\)" : AccountProblemFor\(seats\[i\], true\);/, 'Q1 b: size 0, not tradable or not connected: that seat sits out (0.6.7: a benched seat too)');
   assert.match(checks, /outs\[i\] = ChartBridgeAgents\.EntryCheck\("agent:" \+ Id, a, root\) \?\? ChartBridgeGroups\.EntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Sizes\[i\], true, false\);/, 'Q1 b: the owner lock and the one-direction check per seat');
   assert.match(checks, /if \(outs\.All\(x => x != null\)\)\s*return "no seat of "/, 'refused only when no seat can take it');
   assert.match(bodies(acode, 'GroupPlanProblem'), /if \(p\.SeatsRev != rev\) return "the group changed; size again";/, 'a stale seatsRev refuses the whole plan');
@@ -249,8 +249,13 @@ test('0.6.0 fix round 1: accountState for every seat followed; not connected sto
   const pp = acode.slice(acode.indexOf('public string PlacingProblem(string acct)'), acode.indexOf('private string StateJson()'));
   assert.match(pp, /lock \(Sync\) \{ m = mode; k = killed; on = client != null && helloed; bd = build; gid = groupId; lg = league; \}[\s\S]*if \(!on\) return "agent " \+ Id \+ " is not connected: nothing more is placed";/, 'asked per seat under PlaceLock (PlaceOrderLocked), only the agent\'s Sync taken');
   const ag = strip(read('ChartBridgeGroups.cs')), body = ag.slice(ag.indexOf('private static string AccountGroup('), ag.indexOf('private static string AccountLimits('));
-  const lk = body.indexOf('lock (ChartBridgeOrders.GroupPlaceLock)'), again = body.indexOf('ChartBridgeAgents.JoinRefusal(name, id, false)'), save = body.indexOf('string err = Save(next);');
+  /* 0.6.7 (reviews L1, L2): AccountGroup decides inside ChangeAndSave(true, ...), whose decide runs under GroupEntryLock, PlaceLock
+     and SaveLock, before the membership is written */
+  const lk = body.indexOf('ChangeAndSave(true, next =>'), again = body.indexOf('ChartBridgeAgents.JoinRefusal(name, id, false)'), save = body.indexOf('}, next => HeldWords(name, a), out inEffect);');
   assert.ok(lk > 0 && again > lk && again < save, 'JoinRefusal again under PlaceLock and SaveLock, before the membership is saved');
+  const cs = ag.slice(ag.indexOf('private static string ChangeAndSave('), ag.indexOf('private static string GroupSave('));
+  const pe = cs.indexOf('Monitor.Enter(ChartBridgeOrders.GroupPlaceLock, ref p)'), se = cs.indexOf('Monitor.Enter(SaveLock, ref sv)'), dc = cs.indexOf('why = decide(next);'), wr = cs.indexOf('err = WriteWhole(FilePath, text)'), px = cs.indexOf('Monitor.Exit(ChartBridgeOrders.GroupPlaceLock); p = false;');
+  assert.ok(pe > 0 && se > pe && dc > se && px > dc && wr > px, 'ChangeAndSave: PlaceLock, then SaveLock, then the decision; PlaceLock let go before the write');
   assert.match(bodies(acode, 'JoinRefusal'), /if \(refresh\) RefreshFiles\(\);/, 'no file read under the locks');
   assert.match(read(path.join('check', 'check.sh')), /-out:"\$\{CHARTBRIDGE_CHECK_DLL:-\/tmp\/chartbridge-check\.dll\}"/, 'check:nt8 builds to a private path when CHARTBRIDGE_CHECK_DLL is set');
 });

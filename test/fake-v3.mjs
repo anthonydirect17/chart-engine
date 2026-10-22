@@ -90,8 +90,8 @@ export const KEYS = Object.assign({}, V2_KEYS, {
 });
 Object.assign(KEYS, GROUP_KEYS);   // 0.5.8: groupSave, groupDelete, accountGroup, accountLimits
 export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep'];
-export const BOOL_KEYS = { groupSave: ['noHedge'], accountTrade: ['on'], accountArchive: ['confirm'], copierFollower: ['on'], botKill: ['on'], agentKill: ['on'] };
-const OPT_BOOL_KEYS = { agentAccount: ['league'] };   // 0.6.2: true or false when present
+export const BOOL_KEYS = { memberBench: ['benched'], accountTrade: ['on'], accountArchive: ['confirm'], copierFollower: ['on'], botKill: ['on'], agentKill: ['on'] };
+const OPT_BOOL_KEYS = { agentAccount: ['league'], groupSave: ['noHedge'] };   // 0.6.7: noHedge optional in groupSave (check_groupSave asks it of an older ChartBridge)   // 0.6.2: true or false when present
 export const BOT_KEYS = {
   botHello: ['type', 'name'], beat: ['type'], withdraw: ['type', 'id', 'reason'], flatten: ['type'],
   signal: ['type', 'id', 'action', 'side', 'kind', 'price', 'stopTicks', 'targetTicks', 'reason'],

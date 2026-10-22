@@ -1,0 +1,66 @@
+/* The Multi-Account panel (chart 1.37.0, live/multi-account.js): Groups (a bar, two lanes of account chips) and the Copier (the
+   Account page's own copier, live/accounts.css). House style: the workspace's one dark theme and tokens, the purple accent for the
+   lane that trades, IBM Plex; green and red nowhere here (no P&L, no trade side). Nothing moves (rule R3). */
+.ma { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.ma-tabs { flex: none; }
+.ma-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 10px; }
+.ma-body[hidden], .ma-cop[hidden] { display: none; }
+.ma-cop { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ma-cop > .apg { flex: 1 1 auto; min-height: 0; }
+
+.ma-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.ma-lbl { font: 500 10px var(--ws-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ws-muted); }
+.ma-sel { height: 26px; min-width: 120px; }
+.ma-risk { display: inline-flex; align-items: center; gap: 6px; }
+.ma-rin { width: 56px; height: 26px; text-align: right; }
+.ma-rules { font: 11px var(--ws-mono); color: var(--ws-text2); }
+.ma-fill { flex: 1 1 auto; }
+.ma-bar .ws-btn { height: 26px; }
+
+.ma-set { border: 1px solid var(--ws-line2); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--ws-field); }
+.ma-srow { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: flex-end; }
+.ma-field { display: flex; flex-direction: column; gap: 3px; }
+.ma-field label { font: 500 10px var(--ws-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ws-muted); }
+.ma-in { height: 26px; width: 180px; max-width: 100%; box-sizing: border-box; }
+.ma-in.ma-rin { width: 64px; }
+.ma-fixed { margin: 0; font-size: 11px; color: var(--ws-text2); max-width: 90ch; }
+.ma-danger { border-color: color-mix(in srgb, var(--ws-sell) 45%, transparent); color: var(--ws-sell); }
+
+.ma-lanes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.ws-panel.ma-narrow .ma-lanes { grid-template-columns: minmax(0, 1fr); }
+.ma-lane { border: 1px dashed var(--ws-line2); border-radius: 6px; padding: 8px; min-height: 120px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ma-lane.in { border-style: solid; border-color: var(--ws-tint-line); background: linear-gradient(var(--ws-tint), transparent 70%); }
+.ma-lane.over { outline: 2px solid var(--ws-accent); outline-offset: -2px; }
+.ma-lhead { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ma-lname { font: 600 12px var(--ws-sans); letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
+.ma-lane.in .ma-lname { color: var(--ws-soft); }
+.ma-lane.bench .ma-lname { color: var(--ws-text2); }
+.ma-lsub { font-size: 11px; color: var(--ws-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ma-lsum { margin-left: auto; font: 11px var(--ws-mono); color: var(--ws-text2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ma-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ma-empty { font-size: 11px; color: var(--ws-muted); padding: 4px 2px; }
+
+.ma-chip { width: 188px; max-width: 100%; text-align: left; background: var(--ws-row); border: 1px solid var(--ws-line2); border-radius: 5px; padding: 6px 8px;
+  color: var(--ws-text); cursor: grab; display: flex; flex-direction: column; gap: 3px; font: inherit; }
+.ma-chip:hover { border-color: var(--ws-text2); }
+.ma-chip.in { border-color: var(--ws-tint-line); }
+.ma-chip.locked { cursor: not-allowed; }
+.ma-chip.dragging { opacity: .45; }
+.ma-chip:focus-visible, .ma-rin:focus-visible, .ma-in:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 2px; }
+.ma-cname { font: 500 12px var(--ws-mono); display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ma-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ws-muted); flex: none; }
+.ma-chip.in .ma-dot { background: var(--ws-accent); }
+.ma-mark { margin-left: auto; font: 500 9px var(--ws-mono); letter-spacing: .06em; padding: 0 4px; border-radius: 3px; border: 1px solid var(--ws-line2); color: var(--ws-text2); }
+.ma-mark.live { border-color: var(--ws-tint-line); color: var(--ws-soft); }
+.ma-ctype { font-size: 11px; color: var(--ws-text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ma-crow { display: flex; justify-content: space-between; gap: 6px; font: 11px var(--ws-mono); color: var(--ws-text2); font-variant-numeric: tabular-nums; }
+.ma-crow b { color: var(--ws-text); font-weight: 500; }
+.ma-ctag { font: 500 10px var(--ws-mono); color: var(--ws-warn); white-space: normal; }
+.ma-toast { margin: 0; min-height: 16px; font-size: 12px; color: var(--ws-text2); }
+.ma-toast.warn { color: var(--ws-warn); }
+/* 1.37.0 (Anthony 2026-10-22, "Join flow on the chip"): the join step under a chip of the firm's account in no group, the lane's width */
+.ma-join { flex: 1 0 100%; box-sizing: border-box; border: 1px solid var(--ws-tint-line); border-radius: 5px; background: var(--ws-field); padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; }
+.ma-jwords { font-size: 11px; color: var(--ws-text2); }
+.ma-jrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.ma-jhigh { width: 96px; height: 26px; text-align: right; }
+.ma-jrow .ws-btn { height: 26px; }

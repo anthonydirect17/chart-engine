@@ -76,6 +76,10 @@ const DEFAULT_ROOM = 80;
    saved before is kept (ROOMS and DEFAULT_ROOM were the single chart page's, gone in 1.22.0: still read as saved) */
 const ROOMS_WS = [80, 120, 160];
 const DEFAULT_ROOM_WS = 120;
+/* 1.37.0 (Anthony 2026-10-22: "a custom option where I can adjust the size to the right myself"): any whole number of px from
+   40 to 600 too, typed in Settings (Custom) or set by dragging the gap right of the last bar on any chart; saved as the presets */
+const ROOM_MIN = 40, ROOM_MAX = 600;
+const roomOk = v => ROOMS.includes(v) || (Number.isInteger(v) && v >= ROOM_MIN && v <= ROOM_MAX);
 /* the ATR readout's period (Anthony's answer, review D2): editable in Settings, 14 by default, whole bars 2 to 100 */
 const ATR_MIN = 2, ATR_MAX = 100, DEFAULT_ATR = 14;
 const cleanAtr = v => (Number.isInteger(v) && v >= ATR_MIN && v <= ATR_MAX ? v : DEFAULT_ATR);
@@ -594,13 +598,13 @@ function create(storage) {
         glide: GLIDES.includes(s.glide) ? s.glide : 'smooth',
         rangeMode: RANGE_MODES.includes(s.rangeMode) ? s.rangeMode : 'nt',
         grid: GRIDS.includes(s.grid) ? s.grid : 'off',
-        room: ROOMS.includes(s.room) ? s.room : DEFAULT_ROOM,
+        room: roomOk(s.room) ? s.room : DEFAULT_ROOM,
         atr: cleanAtr(s.atr),
       };
     },
     setSetting(field, value) { return patch(KEYS.settings, field, value); },
     /** Whether a room right of price was picked (1.15.0): the workspace's 120 px default applies only when none was. */
-    roomSaved() { return ROOMS.includes(obj(KEYS.settings).room); },
+    roomSaved() { return roomOk(obj(KEYS.settings).room); },
     /** Range bar size in ticks for a root: the saved one, else the default. */
     range(root) { const n = parseRange(obj(KEYS.range)[root]); return n !== null ? n : (DEFAULT_RANGE[root] || 20); },
     setRange(root, ticks) { const n = parseRange(ticks); if (n === null || !ROOTS.includes(root)) return false; return patch(KEYS.range, root, n); },
@@ -1001,7 +1005,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, CLOCK_WARN_MS, REAL_WARN_MS, REAL_BAD_MS, pcClockOf, fmtDelay, feedSplit, feedText, feedShort, feedLevel, clockWarn, clockNote, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, MA_LENS, studiesOf, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
+api = { staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, CLOCK_WARN_MS, REAL_WARN_MS, REAL_BAD_MS, pcClockOf, fmtDelay, feedSplit, feedText, feedShort, feedLevel, clockWarn, clockNote, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, MA_LENS, studiesOf, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, ROOM_MIN, ROOM_MAX, roomOk, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -2232,6 +2236,7 @@ function mount(container, options) {
   cleanups.push(() => { for (const peer of accountPeers) if (peer.follow === followAccount) accountPeers.delete(peer); });
   // 1.14.0: Glide, Range style, grid lines and the room right of price changed in another tab or the workspace
   listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.settings) refreshSettings(); });
+  listen(window, 'live-settings-changed', () => refreshSettings());   // 1.37.0: another chart in this window set the room
   listen(window, 'storage', e => {
     if (e.key !== PREFIX + 'live-account-v1') return;
     try { followAccount(JSON.parse(e.newValue)); } catch (err) { /* not ours */ }
@@ -2821,6 +2826,12 @@ function mount(container, options) {
   /* the price scale lock (1.14.0, review D2): saved per chart, off by default */
   chart.setScaleLock(prefs.scaleLocked(PANE));
   chart.on('scaleLock', v => prefs.setScaleLocked(PANE, v));
+  /* 1.37.0: the room right set by dragging the gap on this chart: saved as Settings' room (Custom), every chart takes it */
+  chart.on('room', px => {
+    if (!LP.roomOk(px)) return;
+    S.room = px; prefs.setSetting('room', px);
+    try { window.dispatchEvent(new CustomEvent('live-settings-changed', { detail: { room: px } })); } catch (e) { /* an old browser: the others follow at their next refresh */ }
+  });
   listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.scaleLock) chart.setScaleLock(prefs.scaleLocked(PANE)); });
   function shortHeader() {
     if (!COMPACT) return;

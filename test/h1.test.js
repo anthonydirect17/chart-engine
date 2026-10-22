@@ -31,6 +31,8 @@ test('room right: the workspace offers 80, 120 and 160 px, 120 until one is pick
   p.setSetting('room', 40);
   assert.equal(LP.create(s).settings().room, 40, 'an older pick (40) is kept as it was');
   p.setSetting('room', 121);
+  assert.equal(LP.create(s).settings().room, 121, '1.37.0: a Custom room (40 to 600 px) is kept');
+  p.setSetting('room', 601);
   assert.equal(LP.create(s).roomSaved(), false, 'not a value: as if none was picked');
 });
 

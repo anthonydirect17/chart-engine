@@ -1230,11 +1230,15 @@ function create(o) {
   if (alertsEl) alertsEl.dataset.parity = 'N03';
   /* Narrower than 1100 px the chart sits far down the tab (the review of 7bca487: the line at 989 px at 1000 x 800, 1299 px on
      a phone), so there both are pinned at the top instead, in a band of a fixed height above the tab's scrolling part (the
-     tray): always in sight, covering nothing, and their coming and going moves nothing. */
+     tray): always in sight, covering nothing, and their coming and going moves nothing.
+     The board (1.28.0) has no chart: in the page's place, fixed under the top bar, the line lay over the board's Desk and Kill
+     all agents (a "no heartbeat" warning, just when Kill all is wanted). So while it is open both sit in the tray at every
+     width (Anthony 2026-10-22: the band above the board). */
   const NARROW = typeof matchMedia === 'function' ? matchMedia('(max-width: 1100px)') : null;
   function placeNotes() {
-    const over = view ? q(NARROW && NARROW.matches ? '[data-k="tray"]' : '[data-k="over"]') : null, main = view ? q('[data-k="main"]') : null;
-    const inTab = !!(S.shown && over && main && !main.hidden);
+    const board = view ? q('[data-k="board"]') : null, onBoard = !!(board && !board.hidden);
+    const over = view ? q((NARROW && NARROW.matches) || onBoard ? '[data-k="tray"]' : '[data-k="over"]') : null, main = view ? q('[data-k="main"]') : null;
+    const inTab = !!(S.shown && over && ((main && !main.hidden) || onBoard));
     const host = inTab ? over : document.body;
     if (notes.parentElement !== host) host.appendChild(notes);
     tog(notes, 'ag-in-tab', inTab);

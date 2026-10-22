@@ -172,6 +172,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   jammed against the scale): **room right** of 80 px, the same on screen at every zoom (8 bars shrank to a few px zoomed
   out); None, 40, 80 or 160 px in Settings; Jump to live and End keep it. 1.15.0 (Anthony's review): the workspace offers 80,
   120 and 160 px, **120** until one is picked (a value saved before is kept; `/single.html` keeps its 1.14.0 choices).
+  1.37.0 (Anthony 2026-10-22: "I still find myself needing more room to the right"): **Custom** beside the three, any whole
+  width from 40 to 600 px typed in its 64 px box; and on any chart, while it follows live, a drag in the gap between the last
+  bar and the price axis sets it (the cursor there is `col-resize`; left widens the room, right narrows it, 40 to 600 px; never
+  with Shift or Ctrl, which place orders, nor with a drawing tool armed; an order's label or tag under the mouse still takes the
+  press first). Saved as the presets are, for every chart; Settings then shows Custom with the width; Jump to live and End keep
+  it.
   Default bar spacing 7 px; zoom range 0.6 to 48 px.
 - **The price scale** fits the candles in view, eased with the 120 ms re-fit. 1.14.0 (Anthony, from WORK: on the smaller
   panels the high ran under the legend): the top keeps the legend's height and 8 px free (8% when that is more, 45% of
@@ -205,6 +211,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 
 ## Drawing
 
+- **The canvas on whole device pixels (1.37.0, Anthony 2026-10-22: one grid panel's chart soft when zoomed out):** the chart's
+  canvas covers whole device pixels (its edges are the panel's, rounded to the screen's pixel grid, each by less than half a
+  device pixel), so the browser shows it one to one and never resamples it; nothing drawn changes. `npm run smoke:blur` checks it
+  at 100%, 125%, 150% and 200% scaling.
 - **Candles:** body 72% of bar spacing, wick 1 device pixel, both snapped to device pixels. Below
   about 2.5 px spacing bodies collapse to the wick.
 - **Grid:** price lines about every 52 px on 1 / 2 / 2.5 / 5 times a power of ten, in whole ticks.
@@ -379,6 +389,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   stops), plus a close x while order editing is on. Labels that would overlap step left. The price-axis tag
   is filled in the side color for limits and outlined (dashed) for stops, and stacks with the level tags.
   An order moved and waiting for its answer draws at 55%. Labels draw above the last price line and live dot.
+  **1.37.0 (Anthony 2026-10-22: "I still find the chips and the lines obstructing price, especially when price is moving and im
+  trying to click and trail a stop"):** the line at **60%** (was 90%; 33% while a move waits), back to full while the mouse is
+  on it (within 4 px), on its label or on its tag, or while it is dragged (then 1.5 px, as before). An order's label (SL, TP, an
+  entry; compact or full; planned legs too) draws at **55%** of its strength where a candle (its high to low) is behind it, and
+  at full strength while the mouse is within 24 px of it or it is dragged; a label over the empty room draws as before. Only how
+  strongly they draw changes: every hit area, the drag and the clicks are the same boxes.
 - **Compact labels (1.15.0, a host's charts: the workspace; Anthony from his two-monitor setup, images/67.webp):** the same
   colors, borders and dashes, the text 500 10px mono in a 14 px box with 4 px padding, right-aligned where the full label
   would end: "TGT 1", "STP 1" (a leg's side is its color), "BUY LMT 1", planned "SL -12t" / "TP +24t", the position "L1
@@ -394,7 +410,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   the label "SL plan -12t" / "TP plan +24t" (ticks from the fill, from the line's live distance while dragged) with a
   dashed border, the price tag outlined. They hang off the entry: while the entry is dragged they move with it. While
   order editing is on, an entry missing one shows "+SL" / "+TP" cells in its label, before the x, in the label's type.
-- **Position (1.3.0):** a 1.5 px `#F2F6FA` line at 60% at the average price, a label "LONG 2  +3.50 pt
+- **Position (1.3.0):** a 1.5 px `#F2F6FA` line at 60% at the average price (1.37.0: **1 px**, full strength and 1.5 px while the
+  mouse is on it, its label or its tag), a label "LONG 2  +3.50 pt
   +$14.00" (side word in the side color, P&L in the result color; points per contract, dollars for the
   position) and an outlined tag on the price axis.
 - **Last price:** dotted line in the forming bar's color; filled tag with price and countdown to bar
@@ -635,6 +652,21 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   with a muted 10 px uppercase label at the left (as Trade tags; the Thoughts label above its lines, which take the card's width), figures in 11 px mono; a thought is its time, action (10 px mono capitals), confidence and first line. Green and red only for the side word
   (LONG, SHORT) and P&L, and the bot card's red alert in the Bot button's own alert look (`bt-alert`: the border at 60 % of the
   sell red, the chip's ink `#FFC9D3` on the sell ground). The bot card's Rails row takes the Spend row's place. A thought's full reasoning opens in a box over the strip's foot (the pop color, 8 px corners). No motion.
+- **The Multi-Account panel (1.37.0, Anthony 2026-10-22):** a placeable panel (+ Add panel, one a layout), the Account page's tab
+  strip (Groups, Copier). Groups: a bar (Group dropdown; Risk, a 56 px mono box and "% of each account's max loss"; "One
+  direction, always (no hedging inside a group)" in 11 px mono; Group settings and New group buttons at the right), the group's
+  settings or New group in a box of the field color with a 1 px line and 6 px corners (labels 10 px mono capitals), then two lanes
+  side by side (one under the other below 620 px): **Trades with the group** with a solid line in the tint line color over a tint
+  gradient, its name in 600 12 px capitals in the soft violet, and **Bench** with a dashed line, its name in the second text color
+  and "sits out new entries, keeps its rules" muted; each lane's sum at its right in 11 px mono ("3 accounts · $375 at risk a
+  trade", "1 sitting out"). A chip is 188 px: the row color, a 1 px line (the tint line color in the trading lane), 5 px corners;
+  the account in 500 12 px mono after a 7 px dot (the accent in the trading lane, muted on the bench) and a SIM or LIVE mark;
+  its type on The Desk in 11 px; "Room" and "Risk" with their dollars in 11 px mono; any reason in 500 10 px mono amber. A drop
+  target lights with a 2 px accent outline; a dragged chip at 45%. The join step (an account in no group, dragged or clicked into
+  the group) sits on the full row under its chip: the field color, a 1 px tint line, 5 px corners, the join words in 11 px in the
+  second text color, then the highest close box (96 px, right aligned), Put in (the accent button) and Cancel, 26 px high. The
+  line under the lanes in 12 px, amber for a refusal. No
+  green or red (no P&L, no trade side); no motion. Copier: the Account page's copier exactly as it was.
 - **Update floors from The Desk (1.35.0, Anthony 2026-10-21):** a small button beside "Settings for every account" on the
   Accounts tab; it opens a box above the rows (the field color, a 1 px line, 8 px corners): each account's floor from The
   Desk in bold mono beside ChartBridge's now, the source muted, every skip muted with why, then "Send N floors to

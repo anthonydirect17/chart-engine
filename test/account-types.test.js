@@ -119,7 +119,8 @@ test('account types: a type with no Type set keeps the group\'s own (not filled,
   const g = { size: 50000, dailyLoss: null, drawdown: 2000, drawdownType: 'eod', lockAt: 50100, target: 3000, consistency: 50, accountType: 'funded' };
   assert.deepEqual(GC.rulesDiffer(g, t), []);
   assert.equal(GC.typeForm(t).accountType, '');
-  assert.match(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'groups.js'), 'utf8'), /if \(v\.accountType\) \$d\('accountType'\)\.value = v\.accountType;/);
+  /* 1.37.0: the rules dialog that filled a group from a type is gone (a group keeps no rules of its own; each account's come from its type) */
+  assert.doesNotMatch(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'groups.js'), 'utf8'), /function openRules/);
 });
 
 test('groups: the join question for an intraday group asks the highest balance so far (intraday); ChartBridge reads it as before', () => {
@@ -184,7 +185,7 @@ test('account types: the wiring (the page reads and writes only the spec\'s rout
   assert.match(acc, /'\/api\/accounts\/' \+ encodeURIComponent\(name\) \+ '\/account-type', \{ method: 'PUT'/);
   assert.match(acc, /body: JSON\.stringify\(\{ account_type: id \|\| null \}\)/);
   assert.ok(!/accountTypeId|typeVersion/.test(grp.split('function groupMessage')[1].split('function saveFrom')[0]), 'groupSave carries no new key (ChartBridge 0.6.2 refuses unknown keys)');
-  assert.match(grp, /GC\.saveLink\(st\(\), g\.id, next\)/);
+  assert.doesNotMatch(grp, /mountSettings/, '1.37.0: no group dialog fills from a type any more (the links are still read and cleaned, GC.readLinks)');
   const compat = JSON.parse(read('live/COMPAT.json'));
   assert.equal(compat.minChartBridge, '0.6.2', 'page only: no ChartBridge change');
 });
@@ -354,9 +355,6 @@ test('type picker (1.32.0, "Text + Change"): the Accounts tab shows text and Cha
   assert.match(acc, /if \(!typesOn \|\| P\.typeEdit !== a\.name \|\| !canType \|\| P\.typePending\.has\(a\.name\)\) return '';/, 'the row shows only for the open account while The Desk answers');
   assert.match(acc, /\+ typeRow\(a\) \+ askApply\(a\);/);
   /* the rules dialog keeps the three selects; the Account type column 244px ("Narrower Room") */
-  assert.match(grp, /const chosen = pick\.id;/, 'the dialog links the type chosen last, not the Size select\'s placeholder');
-  assert.match(grp, /if \(r\.send === null\) \{ filled = null; fromIdle\(\); \}\s*else if \(r\.send\) \{ const t = typeById\(r\.send\); if \(t\) fill\(t\); \}/, 'the dialog fills only on the last select');
-  assert.ok(!/\.focus\(/.test(grp.split('const onPick = ')[1].split('};')[0]), 'the dialog\'s Firm and Plan keep the focus where it is (review)');
-  assert.match(grp, /still\.textContent = was \? 'still: ' \+ was : ''; still\.hidden = !was;/, 'Firm or Plan moved with Size blank: "still: <type>" under the selects');
+  assert.doesNotMatch(grp, /const onPick = /, '1.37.0: the group rules dialog (and its type picker) is gone; the Accounts tab keeps its own');
   assert.match(css, /\.apg-acc-g\.apg-grps\.apg-types \.gr-row \{ grid-template-columns: [^}]* minmax\(0, 1\.45fr\) 116px 244px 152px 44px; \}/, 'the type column 244px, taken from the Room only (Narrower Room)');
 });

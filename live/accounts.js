@@ -16,7 +16,8 @@
  *   Working orders   every working order on every account (Cancel only with `cancelFromList` on)
  *   Today's trades   per account, the fills and the flat-to-flat round trips, gross and net (The Desk's commission)
  *   Copier           only with `copier` on: the leader, the mode, a row per follower marked SIM or LIVE (Anthony 2026-10-07:
- *                    no Sim lock; ChartBridge's account gates apply to every follower), Re-arm after a stand-down
+ *                    no Sim lock; ChartBridge's account gates apply to every follower), Re-arm after a stand-down. 1.37.0: shown
+ *                    on the Multi-Account panel's Copier tab only (mount with only: 'cop'); the Account page has no Copier tab
  *   Log              what ChartBridge said on this page's connection (account changes, refusals, copier decisions)
  *
  * The page asks; ChartBridge decides. Every control shows only when its switch is true (`trading.switches`, PROTOCOL.md
@@ -351,10 +352,13 @@ function accountChange(prev, next) {
   if (prev.trade !== next.trade && prev.state === next.state) out.push(next.trade ? 'checked for trading' : 'unchecked for trading');
   return out.length ? next.name + ': ' + out.join('; ') : null;
 }
+/** 1.37.0 (review N2): ChartBridge 0.6.7's answer for a groups change made but not yet in groups.txt ("changed, but groups.txt could
+ *  not be saved ..."): it comes as a reject with its cid, but the change is in effect, so the pages show it as done with a warning. */
+const keptChange = reason => typeof reason === 'string' && /^changed, but /.test(reason);
 /** A message from ChartBridge as one Log line, or null for messages the Log does not keep. */
 function logText(m) {
   if (!m || typeof m !== 'object') return null;
-  if (m.type === 'reject') return 'Refused by ChartBridge: ' + (m.reason || '');
+  if (m.type === 'reject') return keptChange(m.reason) ? 'Done by ChartBridge, with a warning: ' + m.reason : 'Refused by ChartBridge: ' + (m.reason || '');
   if (m.type === 'status' && m.text) return (m.level === 'error' ? 'Error: ' : m.level === 'warn' ? 'Warning: ' : '') + m.text;
   if (m.type === 'copierEvent') return 'Copier' + (m.account ? ' ' + m.account : '') + ': ' + (m.text || m.action) +
     (isNum(m.slippageTicks) ? ' (slippage ' + m.slippageTicks + ' t)' : '') + (isNum(m.leaderMs) ? ' (' + m.leaderMs + ' ms from the leader' + (isNum(m.fillMs) ? ', filled in ' + m.fillMs + ' ms' : '') + ')' : '');
@@ -452,7 +456,7 @@ function ntFloorFlag(a, firmMins) {
 
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
-  accountMark, accountChange, logText, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag };
+  accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -510,7 +514,7 @@ function createFeed(env) {
     v3: false, open: false, signedIn: false, enabled: false, reason: 'Not connected to ChartBridge yet.', trading: null, version: '',
     switches: Object.fromEntries(SWITCH_KEYS.map(k => [k, false])), tradeAccounts: [],
     accounts: [], archived: [], got: false, instruments: {}, orders: new Map(), positions: new Map(), fills: new Map(),
-    copier: null, log: [], desk: new Map(), deskUrl: '', deskState: 'not asked', deskAt: 0,
+    copier: null, log: [], rejects: new Map(), desk: new Map(), deskUrl: '', deskState: 'not asked', deskAt: 0,
     groups: null, groupsError: null,   // 1.26.0: ChartBridge 0.5.8's groups (null: none sent, an older ChartBridge or not connected)
     /* 1.30.0: The Desk's account types (GET /api/account-types): null until read or found in this browser's copy; typesState
        'not asked', 'ok' (The Desk answered), 'cache' (not reachable: the last good list, as of typesAsOf) or 'none' (neither) */
@@ -673,7 +677,9 @@ function createFeed(env) {
           const d = firmDone.get(m.cid); firmDone.delete(m.cid);
           if (S.firmMins && S.firmMins[d.name] && S.firmMins[d.name].at === d.at) { firmForget(d.name); S.firmSent[d.name] = 'refused: ' + String(m.reason || '').slice(0, 200); }
         }
-        if (m.cid && mine.has(m.cid)) { mine.delete(m.cid); env.note('Refused by ChartBridge: ' + m.reason, true); }
+        if (m.cid && mine.has(m.cid)) { mine.delete(m.cid); env.note(AC.logText(m), true); }
+        /* 1.37.0: the last refusals by cid, for a panel that shows its own reason (the Multi-Account panel's chips) */
+        if (typeof m.cid === 'string' && m.cid) { S.rejects.set(m.cid, String(m.reason || '').slice(0, 400)); if (S.rejects.size > 50) S.rejects.delete(S.rejects.keys().next().value); }
         changed(); return;
       }
       case 'status': log(AC.logText(m), m.level === 'error' ? 'error' : m.level === 'warn' ? 'warn' : ''); changed(); return;
@@ -720,13 +726,44 @@ function createFeed(env) {
         return r.json().then(j => j && typeof j.detail === 'string' ? j.detail : '', () => '').then(d => ({ ok: false, error: 'The Desk answered ' + r.status + (d ? ': ' + d : '') }));
       }, e => ({ ok: false, error: 'The Desk is not reachable (' + (e && e.message ? e.message : 'no answer') + ')' }));
   }
+  /* 1.33.0 (Anthony 2026-10-19: "match the accounts going into a group to our desk pool ... so its all automatic"): what a join
+     asks. ChartBridge 0.6.5 (the group is perMember): the account's rules from its type on The Desk (auto: one compact row with the
+     rules taken and the highest close, prefilled from The Desk's seed floor when it has one), or the full form when The Desk has no
+     type for it (or is not reachable, or the type misses a rule). An older ChartBridge: the 1.26.0 question only (old).
+     1.37.0: on the feed, so the Accounts tab and the Multi-Account panel's join step on a chip ask exactly the same. */
+  const verAtLeast = (v, want) => { const p = x => String(x || '').split('.').map(n => parseInt(n, 10) || 0); const A = p(v), B = p(want); for (let k = 0; k < 3; k++) { if ((A[k] || 0) !== (B[k] || 0)) return (A[k] || 0) > (B[k] || 0); } return true; };
+  function joinRefusal(name, g) {
+    if (!verAtLeast(S.version, '0.6.7') || !S.deskAt) return '';   // an older ChartBridge (its group's own rules), or The Desk not read: as before
+    const row = S.desk.get(name), MC = typeof MultiAccountCore !== 'undefined' ? MultiAccountCore : null;
+    if (!row || !row.accountType) return name + ' has no account type on The Desk: set its type there first (an account with no type cannot trade with a group until it has one).';
+    const gf = MC ? MC.groupFirm(g, S.desk) : '', af = MC ? MC.firmOfRow(row) : '';
+    if (gf && af && gf.toLowerCase() !== af.toLowerCase()) return g.name + ' holds ' + gf + ' accounts and ' + name + ' is ' + af + '\'s: a group holds one firm\'s accounts.';
+    return '';
+  }
+  function joinPlan(name, g, acc) {
+    const GC = GroupsCore, base = { account: name, group: g.id };
+    if (!g.perMember) return Object.assign(base, { mode: 'old', prefill: String(+GC.highCloseDefault(g, acc).toFixed(2)) });
+    const row = S.desk.get(name);
+    const dr = !S.deskAt ? { error: 'The Desk is not reachable, so its account type cannot be read' } : !S.types ? { error: 'The Desk\'s account types are not known' } : GC.deskRules(row, S.types);
+    if (dr.error) {
+      const form = GC.rulesForm(g);
+      return Object.assign(base, { mode: 'form', form, why: dr.error, prefill: String(+GC.highCloseDefault(g, acc).toFixed(2)), seed: null });
+    }
+    const seed = GC.seedHigh(row, dr.rules);
+    return Object.assign(base, { mode: 'auto', rules: dr.rules, from: dr.from, overrides: dr.overrides, seed, prefill: seed ? String(seed.value) : String(+GC.highCloseDefault(dr.rules, acc).toFixed(2)) });
+  }
+  /** an auto join's words: "Put SIM-E in Lucid with its rules from <type>: <rules> · risk 5% ...: $100." */
+  function joinWords(j) {
+    const GC = GroupsCore, jg = (S.groups || []).find(x => x.id === j.group), gn = jg ? jg.name : j.group, rs = GC.summary(j.rules), risk = GC.riskDollars(jg, j.rules);
+    return `Put ${j.account} in ${gn} with its rules from ${j.from}${j.overrides.length ? ' (its own on The Desk: ' + j.overrides.join(', ') + ')' : ''}: ${rs}${risk !== null ? ' · ' + GC.riskText(jg) + ': ' + GC.usd(risk) : ''}.`;
+  }
   const account = name => S.accounts.find(a => a.name === name) || null;
   const groupOf = a => (a && a.group && S.groups ? S.groups.find(g => g.id === a.group) || null : null);
   /* 1.33.0: the rules that hold for an account in a group: its own (ChartBridge 0.6.5's accounts entry rules) over its group's */
   const rulesOf = a => { const g = groupOf(a); return g && a.rules && typeof a.rules === 'object' ? Object.assign({}, g, a.rules) : g; };
   const limit = name => { const a = account(name); return a ? AC.limitState(a, S.desk.get(name), rulesOf(a)) : null; };
   return {
-    S, start, startAny, stop, account, limit, post, groupOf, rulesOf, store, setAccountType, readTypes,
+    S, start, startAny, stop, account, limit, post, groupOf, rulesOf, store, setAccountType, readTypes, joinRefusal, joinPlan, joinWords,   // 1.37.0: the join, shared
     /** 1.30.0: an account's type on The Desk ({ id, firm, name, version, status }) or null */
     typeOf: name => { const d = S.desk.get(name); return d && d.accountType ? d.accountType : null; },
     listen(part) { subs.add(part); return () => subs.delete(part); },
@@ -752,9 +789,9 @@ function createFeed(env) {
     copierFollowerRemove: name => S.switches.copier && send({ type: 'copierFollowerRemove', cid: cid(), account: name }),
     /* 1.26.0 (ChartBridge 0.5.8): an account's group (null: None; highText: the highest close typed, G2 b) and a personal
        account's own floor and daily limit; each only once ChartBridge has sent groups (ChartBridge checks again) */
-    accountGroup: (name, group, highText, rules) => {   // 1.33.0: rules (checked, with typeId) go with a join on ChartBridge 0.6.5
+    accountGroup: (name, group, highText, rules, useCid) => {   // 1.33.0: rules (checked, with typeId) go with a join on ChartBridge 0.6.5; 1.37.0: useCid (the panel follows its answer)
       if (!S.groups || typeof GroupsCore === 'undefined') return false;
-      const jg = (S.groups || []).find(x => x.id === group), hw = GroupsCore.highWord(rules || jg), r = GroupsCore.joinMessage(name, group, highText, cid(), hw.charAt(0).toUpperCase() + hw.slice(1), jg && jg.perMember ? rules : null);
+      const jg = (S.groups || []).find(x => x.id === group), hw = GroupsCore.highWord(rules || jg), r = GroupsCore.joinMessage(name, group, highText, useCid || cid(), hw.charAt(0).toUpperCase() + hw.slice(1), jg && jg.perMember ? rules : null);
       if (r.error) { env.note('Not sent: ' + r.error, true); return false; }
       return send(r.msg);
     },
@@ -810,10 +847,13 @@ function createFeed(env) {
 }
 
 /* ---------------- the panel */
+/* 1.37.0 (Anthony 2026-10-22: "copier can just be a secondary tab on the Multi-Account panel"): the Copier tab left the Account page;
+   the Multi-Account panel (live/multi-account.js) mounts this page with only: 'cop', so the copier is exactly as it was */
 const TABS = [
   { id: 'acc', name: 'Accounts', short: 'Accts' }, { id: 'pos', name: 'Positions', short: 'Pos' }, { id: 'ord', name: 'Working orders', short: 'Orders' },
-  { id: 'trd', name: 'Today\'s trades', short: 'Trades' }, { id: 'cop', name: 'Copier', short: 'Copier', when: S => S.switches.copier }, { id: 'log', name: 'Log', short: 'Log' },
+  { id: 'trd', name: 'Today\'s trades', short: 'Trades' }, { id: 'log', name: 'Log', short: 'Log' },
 ];
+const COPIER_TAB = { id: 'cop', name: 'Copier', short: 'Copier', when: S => S.switches.copier };
 const CONN = { connected: 'Connected', connecting: 'Connecting', lost: 'Lost', disconnected: 'Disconnected' };
 const GONE_WHY = { disconnected: 'disconnected', disabled: 'disabled in NinjaTrader', drawdown: 'past the trailing drawdown', dailyLoss: 'past the daily loss limit' };
 
@@ -829,13 +869,16 @@ const GONE_WHY = { disconnected: 'disconnected', disabled: 'disabled in NinjaTra
  */
 function mount(v, host) {
   const F = host.feed, S = F.S;
-  v.body.innerHTML = '<div class="apg" data-ap>' +
-    '<div class="ac-tabs apg-tabs" role="tablist" aria-label="Account page">' + TABS.map((t, i) => `<button type="button" role="tab" class="ac-tab" data-tab="${t.id}" aria-selected="${i === 0}"${t.when ? ' hidden' : ''}><span class="lb-full">${esc(t.name)}</span><span class="lb-short">${esc(t.short)}</span><span class="ac-ct" data-ct="${t.id}"></span></button>`).join('') + '</div>' +
+  /* 1.37.0: host.only 'cop': the copier alone (the Multi-Account panel's Copier tab), with no tab strip */
+  const only = host.only === 'cop';
+  const TABS = only ? [COPIER_TAB] : TABS_PAGE;
+  v.body.innerHTML = '<div class="apg' + (only ? ' apg-only' : '') + '" data-ap>' +
+    '<div class="ac-tabs apg-tabs" role="tablist" aria-label="Account page"' + (only ? ' hidden' : '') + '>' + TABS.map((t, i) => `<button type="button" role="tab" class="ac-tab" data-tab="${t.id}" aria-selected="${i === 0}"${t.when ? ' hidden' : ''}><span class="lb-full">${esc(t.name)}</span><span class="lb-short">${esc(t.short)}</span><span class="ac-ct" data-ct="${t.id}"></span></button>`).join('') + '</div>' +
     '<div class="ac-list apg-list" data-list role="tabpanel"></div>' +
     '<p class="ac-foot apg-foot" data-foot></p></div>';
   const q = sel => v.body.querySelector(sel);
   const listEl = q('[data-list]'), footEl = q('[data-foot]');
-  const P = { tab: 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, rulesEdit: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null, typeFocus: '',
+  const P = { tab: only ? 'cop' : 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, rulesEdit: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null, typeFocus: '',
     drawer: '', simOpen: false, allOpen: false, colDrag: null, colClick: null };   // 1.34.0: the account whose settings drawer is open; the Sim section open; every drawer open
   /* 1.34.0 (Anthony 2026-10-20: "make the rows or columns adjustable, so I can click and drag them and make them larger or
      smaller"): the Accounts tab's column widths (px, or null for the default share), kept in this browser; and each account's
@@ -1004,6 +1047,10 @@ function mount(v, host) {
       el.value = acc && acc.group ? acc.group : '';                                       // shown as ChartBridge says, not as picked
       if (!want) { P.join = null; F.accountGroup(name, null); render(); return; }
       const g = (S.groups || []).find(x => x.id === want);
+      /* 1.37.0 (ChartBridge 0.6.7, Anthony 2026-10-22): an account with no type on The Desk cannot join a group until it has one, and a
+         group holds one firm's accounts (the firm of its members' types; the bench pool of the Multi-Account panel) */
+      const no = g ? joinRefusal(name, g) : '';
+      if (no) { P.join = null; host.note(no, true); render(); return; }
       if (g) { P.join = joinPlan(name, g, acc); P.rulesEdit = null; render(); const box = listEl.querySelector('[data-act="join-high"]'); if (box) { box.focus(); box.select(); } }
       return;
     }
@@ -1058,18 +1105,9 @@ function mount(v, host) {
      asks. ChartBridge 0.6.5 (the group is perMember): the account's rules from its type on The Desk (auto: one compact row with the
      rules taken and the highest close, prefilled from The Desk's seed floor when it has one), or the full form when The Desk has no
      type for it (or is not reachable, or the type misses a rule). An older ChartBridge: the 1.26.0 question only (old). */
-  function joinPlan(name, g, acc) {
-    const base = { account: name, group: g.id };
-    if (!g.perMember) return Object.assign(base, { mode: 'old', prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)) });
-    const row = S.desk.get(name);
-    const dr = !S.deskAt ? { error: 'The Desk is not reachable, so its account type cannot be read' } : !S.types ? { error: 'The Desk\'s account types are not known' } : GroupsCore.deskRules(row, S.types);
-    if (dr.error) {
-      const form = GroupsCore.rulesForm(g);
-      return Object.assign(base, { mode: 'form', form, why: dr.error, prefill: String(+GroupsCore.highCloseDefault(g, acc).toFixed(2)), seed: null });
-    }
-    const seed = GroupsCore.seedHigh(row, dr.rules);
-    return Object.assign(base, { mode: 'auto', rules: dr.rules, from: dr.from, overrides: dr.overrides, seed, prefill: seed ? String(seed.value) : String(+GroupsCore.highCloseDefault(dr.rules, acc).toFixed(2)) });
-  }
+  /* 1.37.0: the join's checks and plan live on the feed (F.joinRefusal, F.joinPlan, F.joinWords), shared with the Multi-Account
+     panel's join step on a chip */
+  const joinRefusal = (name, g) => F.joinRefusal(name, g), joinPlan = (name, g, acc) => F.joinPlan(name, g, acc);
   const RULE_BOXES = [['size', 'Size', 'Account size, dollars'], ['dailyLoss', 'Daily', 'Daily loss limit, dollars (empty: none)'], ['drawdown', 'Drawdown', 'Drawdown size (max loss), dollars'],
     ['lockAt', 'Stops at', 'Floor stops at, dollars (empty: none; trailing only)'], ['target', 'Target', 'Profit target, dollars (empty: none)'], ['consistency', 'Cons. %', 'Consistency percent (empty: none)'],
     ['maxMinis', 'Max minis', 'Max size in minis (NQ, ES; empty: none)'], ['maxMicros', 'Max micros', 'Max size in micros (MNQ, MES; empty: none)']];
@@ -1128,7 +1166,7 @@ function mount(v, host) {
       const b = v.body.querySelector(`.ac-tab[data-tab="${t.id}"]`), show = !t.when || !!t.when(S);
       if (b.hidden === show) b.hidden = !show;
     }
-    if (P.tab === 'cop' && !sw.copier) { P.tab = 'acc'; for (const t of v.body.querySelectorAll('.ac-tab[data-tab]')) t.setAttribute('aria-selected', String(t.dataset.tab === 'acc')); }
+    if (P.tab === 'cop' && !sw.copier && !only) { P.tab = 'acc'; for (const t of v.body.querySelectorAll('.ac-tab[data-tab]')) t.setAttribute('aria-selected', String(t.dataset.tab === 'acc')); }
     const accounts = S.accounts, active = accounts.filter(a => a.state !== 'gone'), gone = accounts.filter(a => a.state === 'gone');
     const instr = r => S.instruments[r] || {};
     const pv = r => +instr(r).pointValue || 0;
@@ -1141,7 +1179,7 @@ function mount(v, host) {
     const archived = new Set(S.archived.map(x => x.name));        // an archived account leaves every list (its history stays on The Desk)
     const groups = AC.tradesToday([...S.fills.values()].filter(x => !archived.has(x.account)), now, pv, (acct, r) => { const a = accounts.find(x => x.name === acct); const p = a && (a.positions || []).find(x => x.root === r); return p ? p.qty : 0; }, F.rateOf);
     const counts = { acc: accounts.length, pos: positions.length, ord: orders.length, trd: groups.reduce((n, g) => n + g.trips.filter(t => !t.open).length, 0), cop: (S.copier && S.copier.followers || []).filter(f => f.on).length, log: S.log.length };
-    for (const t of TABS) { const el = v.body.querySelector(`[data-ct="${t.id}"]`), x = String(counts[t.id]); if (el.textContent !== x) el.textContent = x; }
+    for (const t of TABS) { const el = v.body.querySelector(`[data-ct="${t.id}"]`), x = String(counts[t.id]); if (el && el.textContent !== x) el.textContent = x; }
 
     let html, foot = '';
     /* 1.31.0 (audit C6): after a drop the last snapshot is shown dimmed, as of the drop; nothing in it is current */
@@ -1226,8 +1264,7 @@ function mount(v, host) {
         if (j.mode === 'old') return row('join|' + a.name + '|' + j.group, `<span role="cell" class="apg-confirm apg-join">Put ${esc(a.name)} in ${esc(gn)}: ${high} ${yes}${no}</span>`, 'apg-ask');
         /* 1.33.0: one compact row: the rules taken from The Desk (and what the account's own Desk numbers changed), the highest close */
         if (j.mode === 'auto') {
-          const rs = GroupsCore.summary(j.rules), risk = GroupsCore.riskDollars(jg, j.rules);
-          const words = `Put ${a.name} in ${gn} with its rules from ${j.from}${j.overrides.length ? ' (its own on The Desk: ' + j.overrides.join(', ') + ')' : ''}: ${rs}${risk !== null ? ' · ' + GroupsCore.riskText(jg) + ': ' + GroupsCore.usd(risk) : ''}.`;
+          const words = F.joinWords(j);   // 1.37.0: the same words as the Multi-Account panel's join step
           return row('join|' + a.name + '|' + j.group + '|auto', `<span role="cell" class="apg-confirm apg-join apg-jauto"><span class="apg-jrules" title="${esc(words)}">${esc(words)}</span> ${high} ${yes}<button type="button" class="ac-btn" data-act="join-edit" data-id="${esc(a.name)}" title="Change any of the rules before ${esc(a.name)} joins">Edit rules</button>${no}</span>`, 'apg-ask');
         }
         /* the full form: every rule box, prefilled (the group's own rules when The Desk has no type for it) */
@@ -1386,7 +1423,7 @@ function mount(v, host) {
         /* hidden (archived) accounts: Show brings one back, unchecked (ChartBridge 0.5.1) */
         (S.archived.length ? '<h3 class="apg-h">Hidden</h3><div class="gr apg-g apg-arch-g" role="table" aria-label="Hidden accounts">' + S.archived.map(a =>
           row('a|' + a.name, c(a.name, 'b mut') + (canShow ? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show" data-act="unarchive" data-id="${esc(a.name)}" title="Show ${esc(a.name)}: back in the lists, unchecked">Show</button></span>` : ''), 'apg-arch')).join('') + '</div>' : '');
-      foot = (grpOn ? (S.groupsError ? S.groupsError + ' ' : 'Room: ChartBridge from each group\'s rules or your own limits, NinjaTrader\'s balance and P&L. Groups are made in Settings. ') : '') +
+      foot = (grpOn ? (S.groupsError ? S.groupsError + ' ' : 'Room: ChartBridge from each group\'s rules or your own limits, NinjaTrader\'s balance and P&L. Groups are made on the Multi-Account panel. ') : '') +
         (S.deskState === 'ok' ? 'Limits: NinjaTrader where it reports them, else The Desk.' : S.deskState === 'not asked' ? 'Limits: NinjaTrader where it reports them.' : S.deskState) +
         (!grpOn ? '' : S.typesState === 'cache' ? ' Account types: The Desk is not reachable; the list as of ' + GroupsCore.asOfText(S.typesAsOf) + '.' : S.typesState === 'none' ? ' Account types: The Desk is not reachable and this browser has no copy.' : '') +
         (sw.accountChecks ? '' : ' Checkmarks are read only (accountChecks = off in config.txt).') + (S.enabled ? '' : ' ' + (S.reason || ''));
@@ -1434,6 +1471,8 @@ function mount(v, host) {
             'apg-link', ` data-review="${g.day}" title="Open this session's Review on The Desk"`)).join('') + '</div>';
       }).join(''));
       foot = 'Today from 18:00 ET, flat to flat. Net uses The Desk\'s commission (the firm\'s default when the account has none). A row opens The Desk\'s Review.';
+    } else if (P.tab === 'cop' && only && !sw.copier) {
+      html = '<p class="ac-empty">The copier is off: config.txt has copier = false (ChartBridge says so in its switches).</p>';
     } else if (P.tab === 'cop') {
       const C = S.copier || { armed: false, standDownWhy: null, leader: null, mode: 'executions', followers: [] };
       const rows = AC.followerRows(accounts, C), leader = C.leader ? C.leader.account : '';
@@ -1513,5 +1552,6 @@ function mount(v, host) {
   return { render, destroy: () => { unfit(); host.quoteSubs.delete(render); for (const off of P.offs.values()) off(); P.offs.clear(); }, state: P };
 }
 
-return { createFeed, mount, TABS, deskBase, deskNow, DESK_DEFAULT };
+const TABS_PAGE = TABS;
+return { createFeed, mount, TABS, COPIER_TAB, deskBase, deskNow, DESK_DEFAULT };
 })();
