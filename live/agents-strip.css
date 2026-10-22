@@ -33,6 +33,10 @@
 .as-sub > .as-mut { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .as-state { flex: none; margin-left: auto; font: 600 11px var(--ws-mono); color: var(--ws-warn); border: 1px solid var(--ws-warn); border-radius: 4px; padding: 0 5px; background: var(--ws-warn-ground); }
 .as-warn { color: var(--ws-warn); font-size: 11px; }
+/* the bot's red alert (rails red, stand-down, killed, on but not connected): the Bot button's own alert look (bot.css bt-alert) */
+.as-card.as-alert { border-color: color-mix(in srgb, var(--ws-sell) 60%, transparent); }
+.as-state.red { color: #FFC9D3; border-color: color-mix(in srgb, var(--ws-sell) 60%, transparent); background: var(--ws-sell-ground); }
+.as-red { color: #FFC9D3; }
 .as-flag { color: var(--ws-soft); font-size: 11px; }
 .as-mut { color: var(--ws-muted); }
 .as-v { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; line-height: 16px; }

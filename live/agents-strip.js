@@ -4,11 +4,13 @@
  * status, so If I dont have their tab pulled up I can still glance over and see their position, spent, stream of thoughts."
  *
  * A panel from + Add panel (at most one a layout), made for the lower left of his Accounts layout (about 1,430 by 450 px): one
- * card per agent, left to right (the league's seats H, S, O first, then the live agents ChartBridge lists), the row scrolling
- * sideways once the cards no longer fit. Each card: the name and colour, the MODE big (SHADOW, SIM, LIVE, or AUTO and COPILOT on
- * no account), its one-word state when it matters (look cap, API stopped, feed down, day stopped, killed, not connected), its
+ * card per agent, left to right (the league's seats H, S, O first, then the live agents ChartBridge lists, then the bot: 1.36.0
+ * merged the Bot panel into the strip, Anthony 2026-10-22: "get rid of the bot panel and merge it into this"), the row scrolling
+ * sideways once the cards no longer fit. Each card: the name and colour, the MODE big (SHADOW or LIVE only, the account kind
+ * under LIVE), its one-word state when it matters (look cap, API stopped, feed down, day stopped, killed, not connected), its
  * position now, its day, its spend and its stream of thoughts, newest first. A click on a thought opens its full reasoning; a
- * click anywhere else on a card opens that agent's full view (the League tab for a seat, the Agent tab for a live agent).
+ * click anywhere else on a card opens that agent's full view (the League tab for a seat, the Agent tab for a live agent, the Bot
+ * view for the bot: its switches, kill switch and rails stay there, unchanged).
  *
  * Read only. It never sends an order or a control message: it reads what the page already has.
  *   - The seats: The Desk's GET /api/chart-league, through the one league read the workspace already runs (live/workspace.js LG:
@@ -88,21 +90,22 @@ function lookCap(decisions, seat, nowMs) {
   return out;
 }
 
-/** The mode shown big. A league seat: SHADOW (paper). A live agent from its `agent` message (live/agent-core.js MODES):
-    Shadow is SHADOW (proposals only), Copilot or Auto on a Sim account SIM, on a live account LIVE; on no account the mode
-    itself (nothing trades); a mode or an account kind not given: not reported. { word, sub, kind } (kind for the look). */
+/** The mode shown big: SHADOW or LIVE, nothing else (Anthony 2026-10-22: "theres really only 2 types right now, shadow or live.
+    They are either shadow trading or get promoted and trade live with either sim or a cheap eval"). A league seat is SHADOW
+    (paper). A live agent or the bot from its message (`mode` shadow, copilot or auto; `account`; `sim`): Shadow is SHADOW; Copilot
+    or Auto on an account of its own is LIVE, the account kind under it in small text (sim, or not Sim: an eval or funded account,
+    which the page cannot tell apart); on no account nothing trades, so SHADOW. A mode not given: not reported. The Copilot and
+    Auto words are never shown. { word, sub, kind } (kind for the look). */
 function seatMode() { return { word: 'SHADOW', sub: 'paper: no orders', kind: 'shadow' }; }
-function agentMode(a) {
-  const x = a || {}, mode = x.mode;
-  if (mode === 'shadow') return { word: 'SHADOW', sub: 'proposals only: no orders', kind: 'shadow' };
-  if (mode !== 'copilot' && mode !== 'auto') return { word: 'MODE', sub: 'mode ' + NR, kind: 'unknown' };
-  const name = mode === 'auto' ? 'Auto' : 'Copilot';
-  const hasAccount = (typeof x.account === 'string' && x.account) || (x.group && typeof x.group === 'object');
-  if (!hasAccount) return { word: name.toUpperCase(), sub: 'account None: nothing trades', kind: 'none' };
-  if (x.sim === true) return { word: 'SIM', sub: name + ' on a Sim account', kind: 'sim' };
-  if (x.sim === false) return { word: 'LIVE', sub: name + ' on a live account', kind: 'live' };
-  return { word: name.toUpperCase(), sub: 'account kind ' + NR, kind: 'unknown' };
+function liveMode(x) {
+  const a = x || {}, mode = a.mode;
+  if (mode === 'shadow') return { word: 'SHADOW', sub: 'no orders', kind: 'shadow' };
+  if (mode !== 'copilot' && mode !== 'auto') return { word: '?', sub: 'mode ' + NR, kind: 'unknown' };
+  const hasAccount = (typeof a.account === 'string' && a.account) || (a.group && typeof a.group === 'object');
+  if (!hasAccount) return { word: 'SHADOW', sub: 'account None: no orders', kind: 'shadow' };
+  return { word: 'LIVE', sub: a.sim === true ? 'sim' : a.sim === false ? 'not Sim: eval or funded' : 'account kind ' + NR, kind: 'live' };
 }
+const agentMode = liveMode;
 
 /** One decision as a stream line: { id, time, action, conf, line, full }. action: enter, rest, cancel, pass, refused, failed. */
 function thoughtOf(d) {
@@ -114,7 +117,7 @@ function thoughtOf(d) {
     a.reference ? 'at ' + str(a.reference, 30) : ''].filter(Boolean).join(', ') : '';
   const line = action === 'failed' ? 'no answer (the call failed)' : action === 'refused' ? 'refused: ' + firstLine(d.refused, 120)
     : firstLine(reason, 140) || order || 'no reasoning given';
-  const full = [order, reason, action === 'refused' ? 'Refused: ' + str(d.refused, 400) : '', action === 'failed' ? 'The call failed: no answer.' : '',
+  const full = [order + (action === 'rest' ? (order ? ', ' : '') + 'good until ' + NR : ''), reason, action === 'refused' ? 'Refused: ' + str(d.refused, 400) : '', action === 'failed' ? 'The call failed: no answer.' : '',
     d.relation === 'with' ? 'With you.' : d.relation === 'against' ? 'Against you.' : ''].filter(Boolean).join('\n\n');
   return { id: str(d.id, 64) || (d.seat + '|' + (isNum(d.t) ? d.t : str(d.time, 8))), time: str(d.time, 8).slice(0, 5) || clock(d.t), action,
     conf: isNum(a.confidence) ? a.confidence.toFixed(2) : '', line, full,
@@ -163,8 +166,10 @@ function seatRest(x, date, nowMs) {
   if (!o || typeof o !== 'object') return '';
   const until = wallMs(date, str(o.good_until, 8));
   const left = until !== null && isNum(nowMs) ? Math.max(0, Math.round((until - nowMs) / 60000)) : null;
-  return 'resting ' + (o.side === 'short' ? 'short' : 'long') + (o.type ? ' ' + str(o.type, 10) : '') + (isNum(o.price) ? ' at ' + px(o.price) : '') +
-    (o.good_until ? ' until ' + str(o.good_until, 5) : '') + (left !== null ? ' (' + left + ' min left)' : '');
+  const ref = str(o.ref_text || o.reference || o.price_ref, 30);
+  return 'resting ' + (o.side === 'short' ? 'short' : 'long') + (o.type ? ' ' + str(o.type, 10) : '') + (isNum(o.price) ? ' at ' + px(o.price) : ref ? ' at ' + ref : '') +
+    (isNum(o.stop_points) ? ', stop ' + pts(o.stop_points) + ' pt' : '') + (isNum(o.target_points) ? ', target ' + pts(o.target_points) + ' pt' : '') +
+    (o.triggered === true ? ', triggered' : '') + (o.good_until ? ' until ' + str(o.good_until, 5) : ', time left ' + NR) + (left !== null ? ' (' + left + ' min left)' : '');
 }
 
 /**
@@ -279,14 +284,50 @@ function agentCard(a, g, ctx) {
   return { kind: 'agent', key: 'agent:' + x.agent, id: String(x.agent || ''), letter: name.slice(0, 1).toUpperCase(), name, color: '', mode: agentMode(x), state, position, today, spend, thoughts, flag: '', looks: null };
 }
 
+/**
+ * The bot's card (1.36.0: the Bot panel merged into the strip) from the Bot desk's glance (live/bot.js): { offered, on, bot (its
+ * `bot` message), alert (bot.js's own red-alert rule: rails red, stand-down, killed, on but not connected), status, strip
+ * (BotCore.stripModel) }. null: no card (the Bot is not offered on this ChartBridge). Its rails take the spend row's place (a
+ * rule bot makes no model calls the page knows of: spend not reported).
+ */
+function botCard(gl, ctx) {
+  if (!gl || !gl.offered) return null;
+  const c = ctx || {}, b = gl.bot || null, sm = gl.strip || null;
+  const name = sm && sm.name ? str(sm.name, 40) : 'Bot';
+  let state = null;
+  if (!gl.on) state = { word: 'off', why: str(gl.status, 200) || 'The bot channel is off on this PC' };
+  else if (!b) state = { word: NR, why: 'ChartBridge has not sent the bot\'s state yet' };
+  else if (b.killed) state = { word: 'killed', why: 'Kill switch on: no bot orders' };
+  else if (b.standDown) state = { word: 'stood down', why: str(b.standDown, 200) };
+  else if (sm && sm.level === 'red') state = { word: 'rails red', why: 'A rail is at its limit' };
+  else if (b.enabled === false) state = { word: 'off', why: str(gl.status, 200) };
+  else if (!b.connected) state = { word: 'not connected', why: str(gl.status, 200) || 'No bot program connected' };
+  const p = b && b.position && isNum(b.position.qty) && b.position.qty ? b.position : null;
+  const root = (b && str(b.root, 8)) || '';
+  const pos = p ? { side: p.qty < 0 ? 'short' : 'long', contracts: Math.abs(p.qty), fill: isNum(p.avgPrice) ? p.avgPrice : null, stop: null, target: null, sinceText: '', root } : null;
+  const position = !b ? { flat: true, head: NR, side: '', since: '', open: null, stops: '', rest: '' }
+    : positionBlock(pos, p && typeof c.last === 'function' ? c.last(root) : null, p && typeof c.pv === 'function' ? c.pv(root) : null, {});
+  const rail = r => (r && isNum(r.used) && isNum(r.max) ? r.used + ' of ' + r.max : NR);
+  const today = {
+    usd: b && isNum(b.pnlToday) ? b.pnlToday : null, r: null, n: b && isNum(b.trades) ? b.trades : 0, wins: null, losses: b && isNum(b.losses) ? b.losses : null,
+    account: !b ? 'account ' + NR : typeof b.account === 'string' && b.account ? (b.sim === true ? 'Sim account' : b.sim === false ? 'not Sim (eval or funded)' : 'account kind ' + NR) : 'account None: nothing trades',
+    room: 'room ' + NR, rNote: 'R ' + NR,
+  };
+  const spend = sm ? { label: 'Rails', line1: 'trades ' + rail(sm.trades) + ' · losing ' + rail(sm.losses), line2: '', title: 'The bot\'s rails as ChartBridge keeps them', level: sm.level }
+    : { label: 'Rails', line1: 'rails ' + NR, line2: '', title: '' };
+  const thoughts = sm && sm.last ? [{ id: 'bot-last', time: '', action: 'signal', conf: '', line: str(sm.last, 140), full: str(gl.status, 300) + '\n\n' + str(sm.last, 300), detail: 'the bot' }] : [];
+  return { kind: 'bot', key: 'bot', id: 'bot', letter: 'B', name, color: '', mode: b ? liveMode(b) : { word: '?', sub: 'mode ' + NR, kind: 'unknown' }, state, alert: !!gl.alert,
+    status: str(gl.status, 200), position, today, spend, thoughts, flag: '', looks: null };
+}
+
 /** The line under the strip's cards: the agent slots not shown (off and empty), by name. */
 function idleLine(names) {
   const n = (names || []).length;
   return n ? n + (n === 1 ? ' agent slot is' : ' agent slots are') + ' off and empty: ' + names.join(', ') : '';
 }
 
-return { SEATS, LOOKS_PER_HOUR, HOUR_MS, MNQ_POINT, NR, THOUGHTS_MAX, clock, wallMs, clockDate, firstLine, lookCap, seatMode, agentMode, thoughtOf, seatThoughts,
-  positionBlock, seatRest, seatCards, agentActive, agentCard, idleLine, money, signedMoney, signedR };
+return { SEATS, LOOKS_PER_HOUR, HOUR_MS, MNQ_POINT, NR, THOUGHTS_MAX, clock, wallMs, clockDate, firstLine, lookCap, seatMode, liveMode, agentMode, thoughtOf, seatThoughts,
+  positionBlock, seatRest, seatCards, agentActive, agentCard, botCard, idleLine, money, signedMoney, signedR };
 });
 
 /* ======================================================================== the panel (browser only) */
@@ -315,30 +356,31 @@ function mount(body, o) {
   function cardHtml(c) {
     const p = c.position, t = c.today, sp = c.spend;
     const letter = c.kind === 'seat' ? '<i class="lg-letter as-letter" aria-hidden="true">' + esc(c.letter) + '</i>' : '<i class="as-letter as-ag" aria-hidden="true">' + esc(c.letter) + '</i>';
-    const openWhat = c.kind === 'seat' ? 'Open the League tab' : 'Open the Agent tab for ' + c.name;
+    const openWhat = c.kind === 'seat' ? 'Open the League tab' : c.kind === 'bot' ? 'Open the Bot (its switches, kill switch and rails)' : 'Open the Agent tab for ' + c.name;
     const now = p.flat ? '<div class="as-v"><b>' + esc(p.head) + '</b></div>'
       : '<div class="as-v"><b class="as-side ' + esc(p.side) + '">' + esc(p.head) + '</b>' + (p.since ? ' <span class="as-mut">since ' + esc(p.since) + '</span>' : ' <span class="as-mut">since ' + C.NR + '</span>') + '</div>' +
         (p.open ? '<div class="as-v mono"><span class="as-pnl ' + esc(p.open.tone) + '" title="' + esc(p.open.title) + '">' + esc(p.open.text) + '</span></div>' : '') +
         '<div class="as-v mono as-mut">' + esc(p.stops) + '</div>';
     const rest = p.rest ? '<div class="as-v as-mut">' + esc(p.rest) + '</div>' : '';
     const today = '<div class="as-v mono"><span class="as-pnl ' + (t.usd !== null ? (t.usd > 0 ? 'up' : t.usd < 0 ? 'down' : '') : '') + '">' + esc(t.usd !== null ? C.signedMoney(t.usd) || '$0.00' : 'P&L ' + C.NR) + '</span>' +
-      ' · <span class="as-pnl ' + (t.r !== null ? (t.r > 0 ? 'up' : t.r < 0 ? 'down' : '') : '') + '">' + esc(t.r !== null ? C.signedR(t.r) || '0.00 R' : 'R ' + C.NR) + '</span>' +
-      ' · ' + t.n + (t.n === 1 ? ' trade' : ' trades') + (t.n ? ' ' + t.wins + 'W ' + t.losses + 'L' : '') + '</div>' +
+      ' · <span class="as-pnl ' + (t.r !== null ? (t.r > 0 ? 'up' : t.r < 0 ? 'down' : '') : '') + '">' + esc(t.r !== null ? C.signedR(t.r) || '0.00 R' : t.rNote || 'R ' + C.NR) + '</span>' +
+      ' · ' + t.n + (t.n === 1 ? ' trade' : ' trades') + (t.n ? (t.wins !== null && t.wins !== undefined ? ' ' + t.wins + 'W ' + t.losses + 'L' : t.losses !== null ? ' · ' + t.losses + ' losing' : '') : '') + '</div>' +
       '<div class="as-v as-mut mono">' + esc(t.account) + ' · ' + esc(t.room) + '</div>';
-    const spend = '<div class="as-v mono" title="' + esc(sp.title) + '">' + esc(sp.line1) + '</div>' + (sp.line2 ? '<div class="as-v mono as-mut" title="' + esc(sp.title) + '">' + esc(sp.line2) + '</div>' : '');
+    const spend = '<div class="as-v mono' + (sp.level === 'red' ? ' as-red' : sp.level === 'amber' ? ' as-warn' : '') + '" title="' + esc(sp.title) + '">' + esc(sp.line1) + '</div>' + (sp.line2 ? '<div class="as-v mono as-mut" title="' + esc(sp.title) + '">' + esc(sp.line2) + '</div>' : '');
     const th = c.thoughts.length ? c.thoughts.map(x => '<li><button type="button" class="as-th k-' + esc(x.action) + '" data-th="' + esc(x.id) + '" aria-label="' + esc(x.time + ' ' + x.action + ': open the full reasoning') + '">' +
       '<span class="mono as-t">' + esc(x.time) + '</span><span class="as-act">' + esc(x.action) + '</span><span class="mono as-conf">' + esc(x.conf) + '</span><span class="as-tx">' + esc(x.line) + '</span></button></li>').join('')
       : '<li class="as-mut as-none">No thought yet today.</li>';
-    return '<article class="as-card k-' + c.kind + ' m-' + esc(c.mode.kind) + '" role="listitem" data-card="' + esc(c.key) + '"' + (c.color ? ' style="--seat:' + esc(c.color) + '"' : '') + ' title="' + esc(openWhat) + '">' +
+    return '<article class="as-card k-' + c.kind + ' m-' + esc(c.mode.kind) + (c.alert ? ' as-alert' : '') + '" role="listitem" data-card="' + esc(c.key) + '"' + (c.color ? ' style="--seat:' + esc(c.color) + '"' : '') + ' title="' + esc(openWhat) + '">' +
       '<header class="as-head">' + letter + '<span class="as-name">' + esc(c.name) + '</span><span class="as-fill"></span>' +
         '<span class="as-mode m-' + esc(c.mode.kind) + '" title="' + esc(c.mode.sub) + '">' + esc(c.mode.word) + '</span>' +
         '<button type="button" class="as-open" data-open="1" aria-label="' + esc(openWhat) + '" title="' + esc(openWhat) + '">›</button></header>' +
-      '<div class="as-sub"><span class="as-mut">' + esc(c.mode.sub) + '</span>' + (c.state ? '<span class="as-state" title="' + esc(c.state.why) + '">' + esc(c.state.word) + '</span>' : '') + '</div>' +
+      '<div class="as-sub"><span class="as-mut">' + esc(c.mode.sub) + '</span>' + (c.state ? '<span class="as-state' + (c.alert ? ' red' : '') + '" title="' + esc(c.state.why) + '">' + esc(c.state.word) + '</span>' : '') + '</div>' +
+      (c.status ? '<div class="as-v as-mut" title="' + esc(c.status) + '">' + esc(c.status) + '</div>' : '') +
       (c.state && c.state.word === 'look cap' ? '<div class="as-v as-warn">' + esc(c.state.why.replace(/ \(worked out.*$/, '')) + '</div>' : '') +
       (c.flag ? '<div class="as-v as-flag" title="' + esc(c.flag) + '">Flag: ' + esc(c.flag) + '</div>' : '') +
       '<section class="as-sec" aria-label="Now"><span class="as-lbl">Now</span><div>' + now + rest + '</div></section>' +
       '<section class="as-sec" aria-label="Today"><span class="as-lbl">Today</span><div>' + today + '</div></section>' +
-      '<section class="as-sec" aria-label="Spend"><span class="as-lbl">Spend</span><div>' + spend + '</div></section>' +
+      '<section class="as-sec" aria-label="' + esc(sp.label || 'Spend') + '"><span class="as-lbl">' + esc(sp.label || 'Spend') + '</span><div>' + spend + '</div></section>' +
       '<section class="as-sec as-ths" aria-label="Stream of thoughts, newest first"><span class="as-lbl">Thoughts</span><ol class="as-list">' + th + '</ol></section>' +
       '</article>';
   }
@@ -362,6 +404,8 @@ function mount(body, o) {
       if (C.agentActive(x.a, x.g)) cards.push(C.agentCard(x.a, x.g, { last: o.last, pv: o.pv }));
       else idle.push(x.a && x.a.name ? x.a.name : x.a ? x.a.agent : '');
     }
+    const bot = C.botCard(typeof o.bot === 'function' ? o.bot() : null, { last: o.last, pv: o.pv });
+    if (bot) cards.push(bot);
     S.cards = cards;
     const line = q('[data-k="line"]');
     const ln = reach.problem ? reach.problem : !day ? 'Reading the league from The Desk...' : day.problem || '';
@@ -370,7 +414,7 @@ function mount(body, o) {
     const keys = cards.map(c => c.key).join('|');
     if (row.dataset.keys !== keys) {
       row.dataset.keys = keys;
-      row.innerHTML = cards.map(c => '<div class="as-slot" data-slot="' + esc(c.key) + '"></div>').join('') || '<p class="as-mut as-empty">No agent to show: the league has not been read and no live agent is running.</p>';
+      row.innerHTML = cards.map(c => '<div class="as-slot" data-slot="' + esc(c.key) + '"></div>').join('') || '<p class="as-mut as-empty">No agent to show: the league has not been read, no live agent is running and the Bot is not offered.</p>';
     }
     for (const c of cards) {
       const slot = row.querySelector('[data-slot="' + CSS.escape(c.key) + '"]');
@@ -400,7 +444,7 @@ function mount(body, o) {
     if (th) { S.detail = S.detail && S.detail.card === card.dataset.card && S.detail.id === th.dataset.th ? null : { card: card.dataset.card, id: th.dataset.th }; renderDetail(); return; }
     const c = S.cards.find(x => x.key === card.dataset.card);
     if (!c) return;
-    if (c.kind === 'seat') o.openLeague(); else o.openAgent(c.id);
+    if (c.kind === 'seat') o.openLeague(); else if (c.kind === 'bot') o.openBot(); else o.openAgent(c.id);
   }
   function onKey(e) { if (e.key === 'Escape' && S.detail && detail.contains(e.target)) { e.stopPropagation(); S.detail = null; renderDetail(); } }
   body.addEventListener('click', onClick);
@@ -410,7 +454,7 @@ function mount(body, o) {
     render,
     destroy() { body.removeEventListener('click', onClick); body.removeEventListener('keydown', onKey); body.innerHTML = ''; },
     /* read only, for the tests */
-    state: () => ({ cards: S.cards.map(c => ({ key: c.key, name: c.name, mode: c.mode.word, state: c.state ? c.state.word : '', flat: c.position.flat, head: c.position.head, thoughts: c.thoughts.length })), detail: S.detail ? Object.assign({}, S.detail) : null }),
+    state: () => ({ cards: S.cards.map(c => ({ key: c.key, name: c.name, mode: c.mode.word, sub: c.mode.sub, alert: !!c.alert, state: c.state ? c.state.word : '', flat: c.position.flat, head: c.position.head, thoughts: c.thoughts.length })), detail: S.detail ? Object.assign({}, S.detail) : null }),
   };
 }
 

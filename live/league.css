@@ -41,13 +41,10 @@ body:not(.lg-on) .lg-view.lg-in-ws { display: none !important; }
 .lg-log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
 .lg-row { display: grid; grid-template-columns: 38px 18px minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 2px 0; border-bottom: 1px solid var(--ws-line); }
 .lg-row .lg-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ws-text2); }
-.lg-row.k-enter .lg-text { color: var(--ws-text); }
+.lg-row.k-enter .lg-text, .lg-row.k-rest .lg-text { color: var(--ws-text); }
 .lg-row.k-refused .lg-text, .lg-row.k-failed .lg-text { color: var(--ws-warn); }
 @media (max-width: 1100px) { .lg-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(320px, 1fr) auto; } }
 
-/* 1.35.0: the Bot panel: the very button the top bar had, and one line */
-.ws-tabpanel { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 10px; min-width: 0; }
-.ws-tp-slot .ws-btn.ws-tp-btn { min-width: 120px; }
-.ws-tp-help { margin: 0; font-size: 11px; color: var(--ws-muted); }
+/* the Bot's button in the top bar's slot (1.35.0; 1.36.0 removed the Bot panel) */
 .ws-tabslot { display: inline-flex; gap: 6px; flex: none; }
 .ws-tabslot:empty { display: none; }

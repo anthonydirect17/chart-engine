@@ -623,17 +623,18 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   seat's color with its letter inside (600 10 px mono); the stop as a dashed line (4 3) and the target as a dotted line (1 3) at
   50 % from the fill to the exit (to the right edge while open). Faint (a chart's ⋯ "League trades (faint)", off by default,
   NQ and MNQ only): 6 px marks, 8 px letters, the marks at 55 % and the lines at 30 %.
-- **The Bot as a panel (1.35.0, Anthony 2026-10-21):** "Bot" in + Add panel, at most one a layout: a 28 px header with the
+- **The Bot as a panel (1.35.0, Anthony 2026-10-21; removed in 1.36.0, merged into the Agents strip as its bot card):** "Bot" in + Add panel, at most one a layout: a 28 px header with the
   name, then the very Bot button the top bar had and one muted line. While a view is open (Bot, Agent, League), or while the
   button carries its red alert, it sits in the top bar where the Bot tab was, with or without a Bot panel. With no room on the grid, the menu item opens the Bot view itself and says so. The Bot view
   is unchanged, and so is the Agent tab, in the top bar where it was.
 - **The Agents strip (1.36.0, Anthony 2026-10-22):** a placeable panel (+ Add panel, one a layout), a 28 px header ("Agents",
   "read only" in muted mono), then one row of cards 240 to 360 px wide (the row scrolls sideways when they no longer fit). A card:
   the panel color, a 1 px line, 6 px corners and a 3 px left edge in the seat's color (a live agent's in the second line color);
-  its letter in a 20 px ring; the name in 600 13 px; the mode in 600 14 px mono capitals (SHADOW in a dashed purple box, SIM in a
-  solid line, LIVE filled with the accent `#7B5CFF`); the one-word state as an amber chip; then Now, Today, Spend and Thoughts rows
+  its letter in a 20 px ring; the name in 600 13 px; the mode in 600 14 px mono capitals, SHADOW or LIVE only (SHADOW in a
+  dashed purple box, LIVE filled with the accent `#7B5CFF`, its account kind under it in 11 px muted text); the one-word state as an amber chip; then Now, Today, Spend and Thoughts rows
   with a muted 10 px uppercase label at the left (as Trade tags; the Thoughts label above its lines, which take the card's width), figures in 11 px mono; a thought is its time, action (10 px mono capitals), confidence and first line. Green and red only for the side word
-  (LONG, SHORT) and P&L. A thought's full reasoning opens in a box over the strip's foot (the pop color, 8 px corners). No motion.
+  (LONG, SHORT) and P&L, and the bot card's red alert in the Bot button's own alert look (`bt-alert`: the border at 60 % of the
+  sell red, the chip's ink `#FFC9D3` on the sell ground). The bot card's Rails row takes the Spend row's place. A thought's full reasoning opens in a box over the strip's foot (the pop color, 8 px corners). No motion.
 - **Update floors from The Desk (1.35.0, Anthony 2026-10-21):** a small button beside "Settings for every account" on the
   Accounts tab; it opens a box above the rows (the field color, a 1 px line, 8 px corners): each account's floor from The
   Desk in bold mono beside ChartBridge's now, the source muted, every skip muted with why, then "Send N floors to

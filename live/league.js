@@ -102,7 +102,9 @@ function barIndex(bars, t) {
 const money = v => (isNum(v) ? (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
 const signedR = v => (isNum(v) ? (v >= 0 ? '+' : '') + v.toFixed(2) + ' R' : '');
 
-/** A decision log row: { time, seat, text, kind ('enter' | 'pass' | 'refused' | 'failed'), latency }. Newest first. */
+/** A decision log row: { time, seat, text, kind ('enter' | 'rest' | 'cancel' | 'pass' | 'refused' | 'failed'), latency }. Newest first.
+    1.36.0: a "rest" answer (a resting entry, PREREG Amendment 6) is shown as a resting order, never as an entry; "cancel" as
+    the cancel of one. The Desk passes no good-until time with a decision: "good until not reported". */
 function decisionRows(decisions, most) {
   const out = [];
   for (const d of (decisions || []).slice().reverse()) {
@@ -112,6 +114,9 @@ function decisionRows(decisions, most) {
     if (!d.call_ok) { kind = 'failed'; text = 'no answer (the call failed)'; }
     else if (d.refused) { kind = 'refused'; text = 'refused: ' + str(d.refused, 160); }
     else if (a.action === 'pass') { kind = 'pass'; text = 'passed' + (a.reasoning ? ': ' + str(a.reasoning, 200) : ''); }
+    else if (a.action === 'cancel') { kind = 'cancel'; text = 'cancelled its resting order' + (a.reasoning ? ': ' + str(a.reasoning, 200) : ''); }
+    else if (a.action === 'rest') { kind = 'rest'; text = 'rest ' + (a.side === 'short' ? 'short' : 'long') + (a.reference ? ' at ' + str(a.reference, 30) : '') +
+      (isNum(a.stop_points) ? ', stop ' + a.stop_points + ' pt' : '') + (isNum(a.target_points) ? ', target ' + a.target_points + ' pt' : ', no target') + ', good until not reported' + (a.reasoning ? ': ' + str(a.reasoning, 200) : ''); }
     else { kind = 'enter'; text = (a.side === 'short' ? 'short' : 'long') + (isNum(d.contracts) ? ' ' + d.contracts + ' MNQ' : '') + (isNum(a.stop_points) ? ', stop ' + a.stop_points + ' pt' : '') +
       (isNum(a.target_points) ? ', target ' + a.target_points + ' pt' : ', no target') + (a.reference ? ' at ' + str(a.reference, 30) : '') + (a.reasoning ? ': ' + str(a.reasoning, 200) : ''); }
     if (d.relation === 'with') text += ' (with you)'; else if (d.relation === 'against') text += ' (against you)';

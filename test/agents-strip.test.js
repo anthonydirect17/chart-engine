@@ -34,24 +34,26 @@ test('the look cap is derived from the seat\'s decisions in any 60 minutes, as t
   assert.equal(A.lookCap(null, 'H', min(4)).n, 0);
 });
 
-test('the mode, big: a seat is SHADOW; a live agent SHADOW, SIM, LIVE, or its mode on no account; not reported otherwise', () => {
+test('the mode, big: SHADOW or LIVE only (Anthony 2026-10-22); the account kind under LIVE; never COPILOT, AUTO or SIM big', () => {
   assert.deepEqual(A.seatMode(), { word: 'SHADOW', sub: 'paper: no orders', kind: 'shadow' });
   assert.equal(A.agentMode({ mode: 'shadow', account: 'X', sim: false }).word, 'SHADOW', 'Shadow on any account places nothing');
-  assert.equal(A.agentMode({ mode: 'auto', account: 'X', sim: true }).word, 'SIM');
-  assert.equal(A.agentMode({ mode: 'copilot', account: 'X', sim: true }).sub, 'Copilot on a Sim account');
-  const live = A.agentMode({ mode: 'auto', account: 'X', sim: false });
-  assert.equal(live.word, 'LIVE'); assert.equal(live.kind, 'live');
-  assert.equal(A.agentMode({ mode: 'auto', account: '' }).word, 'AUTO');
-  assert.match(A.agentMode({ mode: 'auto', account: '' }).sub, /None: nothing trades/);
-  assert.match(A.agentMode({ mode: 'auto', account: 'X' }).sub, /account kind not reported/);
+  assert.deepEqual(A.agentMode({ mode: 'auto', account: 'X', sim: true }), { word: 'LIVE', sub: 'sim', kind: 'live' }, 'promoted, on a Sim account: LIVE, sim under it');
+  assert.deepEqual(A.agentMode({ mode: 'copilot', account: 'X', sim: false }), { word: 'LIVE', sub: 'not Sim: eval or funded', kind: 'live' });
+  assert.equal(A.agentMode({ mode: 'auto', account: 'X' }).sub, 'account kind not reported');
+  assert.deepEqual(A.agentMode({ mode: 'auto', account: '' }), { word: 'SHADOW', sub: 'account None: no orders', kind: 'shadow' }, 'no account: nothing trades');
   assert.match(A.agentMode({}).sub, /mode not reported/);
+  for (const a of [{ mode: 'auto', account: 'X', sim: true }, { mode: 'copilot', account: 'X', sim: false }, { mode: 'auto' }, { mode: 'copilot', account: 'X' }, {}]) {
+    const m = A.agentMode(a);
+    assert.ok(['SHADOW', 'LIVE', '?'].includes(m.word), m.word);
+    assert.doesNotMatch(m.word + ' ' + m.sub, /copilot|auto/i, 'never the Copilot or Auto word');
+  }
 });
 
 test('a thought: time, action, confidence, the first line of its reasoning; the whole reasoning for the click', () => {
   const t = A.thoughtOf(look('O', min(1), { answer: { action: 'rest', side: 'short', stop_points: 6, target_points: 15, reference: 'IBL', confidence: 0.55, reasoning: 'Sample: retest of the level from below\nsecond line' }, contracts: 12 }));
   assert.equal(t.action, 'rest'); assert.equal(t.conf, '0.55'); assert.equal(t.time, '10:01');
   assert.equal(t.line, 'Sample: retest of the level from below');
-  assert.match(t.full, /^short, 12 MNQ, stop 6 pt, target 15 pt, at IBL\n\nSample: retest of the level from below\nsecond line$/);
+  assert.match(t.full, /^short, 12 MNQ, stop 6 pt, target 15 pt, at IBL, good until not reported\n\nSample: retest of the level from below\nsecond line$/);
   assert.equal(A.thoughtOf(look('H', min(1), { call_ok: false })).action, 'failed');
   assert.match(A.thoughtOf(look('H', min(1), { refused: 'stop wider than 25 points' })).line, /^refused: stop wider/);
   assert.equal(A.thoughtOf(look('H', min(1), { answer: { action: 'pass' } })).conf, '', 'no confidence: none shown');
@@ -81,7 +83,7 @@ test('the seats\' cards: one flat at the look cap, one with an open paper trade,
   const [h, s, o] = cards;
   assert.equal(h.state.word, 'look cap'); assert.match(h.state.why, /next look 10:35.*worked out on this page/);
   assert.equal(h.position.head, 'Flat');
-  assert.equal(h.position.rest, 'resting order: not reported', 'The Desk does not pass the resting order on: not reported');
+  assert.equal(h.position.rest, 'resting order: not reported', 'no resting field from The Desk: not reported');
   assert.equal(h.today.room, '$2,000.00 to the floor');
   assert.equal(s.state, null);
   assert.equal(s.position.head, 'LONG 3 MNQ'); assert.equal(s.position.since, '09:58');
@@ -97,6 +99,17 @@ test('the seats\' cards: one flat at the look cap, one with an open paper trade,
   /* no price on the page: open P&L not reported, the distances from the fill */
   const s2 = A.seatCards(sampleDay(), { nowMs: min(5), last: null })[1];
   assert.equal(s2.position.open.text, 'open P&L not reported'); assert.equal(s2.position.stops, 'stop 25 pt · target 50 pt from the fill');
+});
+
+test('a seat\'s resting order once The Desk passes the league\'s field on: side, level, stop and target, time left', () => {
+  const d = sampleDay();
+  d.status.seats.O.resting = { id: 'o-R', side: 'short', type: 'limit', price: 24020.5, stop_points: 6, target_points: 15, good_until: '10:20:00', triggered: false };
+  d.status.seats.H.resting = null;
+  const cards = A.seatCards(d, { nowMs: min(5), last: null });
+  assert.equal(cards[2].position.rest, 'resting short limit at 24,020.50, stop 6 pt, target 15 pt until 10:20 (15 min left)');
+  assert.equal(cards[0].position.rest, '', 'null: no resting order, nothing said');
+  assert.equal(cards[1].position.rest, 'resting order: not reported', 'the field absent: not reported');
+  assert.equal(A.seatRest({ resting: { side: 'long', type: 'stop', price_ref: 'IBH' } }, '2026-10-22', min(5)), 'resting long stop at IBH, time left not reported');
 });
 
 test('the seats\' one word: API stopped, day stopped, day closed, feed down, status late; nothing reported', () => {
@@ -131,12 +144,39 @@ test('a live agent\'s card: from its agent message and the Agent tab\'s glance; 
   assert.equal(A.idleLine(['workspare']), '1 agent slot is off and empty: workspare');
 });
 
+test('the bot\'s card (the Bot panel merged in): its mode, account kind, position, P&L, rails and bot.js\'s own red alert', () => {
+  const strip = { name: 'Demo Opening Fade', trades: { used: 1, max: 3, level: 'ok' }, losses: { used: 1, max: 2, level: 'amber' }, level: 'amber', last: 'Last signal 10:31 short fade' };
+  const bot = { enabled: true, connected: true, mode: 'auto', account: 'SIM-1', sim: true, root: 'MNQ', position: { qty: -1, avgPrice: 24000 }, pnlToday: -12.5, trades: 1, losses: 1, killed: false };
+  const c = A.botCard({ offered: true, on: true, bot, alert: false, status: 'Watching', strip }, { last: () => 24010, pv: () => 2 });
+  assert.equal(c.key, 'bot'); assert.equal(c.name, 'Demo Opening Fade');
+  assert.deepEqual([c.mode.word, c.mode.sub], ['LIVE', 'sim']);
+  assert.equal(c.state, null); assert.equal(c.alert, false);
+  assert.equal(c.position.head, 'SHORT 1 MNQ'); assert.equal(c.position.open.text, 'open -$20.00 · R not reported');
+  assert.equal(c.today.usd, -12.5); assert.equal(c.today.losses, 1); assert.equal(c.today.account, 'Sim account');
+  assert.equal(c.spend.label, 'Rails'); assert.equal(c.spend.line1, 'trades 1 of 3 · losing 1 of 2'); assert.equal(c.spend.level, 'amber');
+  const killed = A.botCard({ offered: true, on: true, bot: Object.assign({}, bot, { killed: true }), alert: true, status: 'Kill switch on: no bot orders', strip }, {});
+  assert.equal(killed.state.word, 'killed'); assert.equal(killed.alert, true, 'the alert as bot.js says it');
+  assert.equal(A.botCard({ offered: true, on: true, bot: Object.assign({}, bot, { connected: false }), alert: true, strip }, {}).state.word, 'not connected');
+  assert.equal(A.botCard({ offered: true, on: true, bot: Object.assign({}, bot, { standDown: '2 losing trades today' }), alert: true, strip }, {}).state.word, 'stood down');
+  assert.equal(A.botCard({ offered: true, on: true, bot, alert: true, strip: Object.assign({}, strip, { level: 'red' }) }, {}).state.word, 'rails red');
+  assert.equal(A.botCard({ offered: true, on: false, bot: null, alert: false, status: 'The bot channel is off on this PC' }, {}).state.word, 'off', 'channel off: a card still, the way to the Bot view');
+  assert.equal(A.botCard({ offered: false }, {}), null, 'not offered (no v3 ChartBridge): no card');
+  assert.equal(A.botCard(null), null);
+  assert.equal(A.botCard({ offered: true, on: true, bot: Object.assign({}, bot, { mode: 'shadow' }), strip }, {}).mode.word, 'SHADOW');
+  const src = read('live/bot.js');
+  assert.match(src, /tog\(tabBtn, 'bt-alert', alertNow\(\)\)/, 'the button and the card read one alert rule');
+  assert.match(src, /alert: !!alertNow\(\)/);
+});
+
 test('the page: Agents in + Add panel, one a layout, installed, read only, no dashes, no green or red but P&L and sides', () => {
   const html = read('live/index.html');
   assert.match(html, /data-add="agents"[^>]*>Agents<\/button>/);
   assert.ok(html.indexOf('<script src="agents-strip.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
   assert.ok(html.indexOf('<script src="league.js"></script>') < html.indexOf('<script src="agents-strip.js"></script>'));
-  assert.ok(W.TYPES.includes('agents'));
+  assert.ok(W.TYPES.includes('agents') && !W.TYPES.includes('bot'));
+  assert.doesNotMatch(html, /data-add="bot"/, 'no Bot panel: merged into the strip');
+  const ws0 = read('live/workspace.js');
+  assert.match(ws0, /const top = \(botDesk && botDesk\.shown\(\)\) \|\| viewOpen \|\| alert \|\| !strip;/, 'the Bot button in the top bar while open, a view open, its alert, or no strip');
   const two = W.cleanLayout({ panels: [{ id: 'a1', type: 'agents', x: 0, y: 3, w: 9, h: 3 }, { id: 'a2', type: 'agents', x: 9, y: 3, w: 3, h: 3 }] });
   assert.deepEqual(two.panels.map(p => p.id), ['a1'], 'one Agents strip a layout');
   const files = JSON.parse(read('nt8/install-files.json'));
@@ -151,6 +191,6 @@ test('the page: Agents in + Add panel, one a layout, installed, read only, no da
   const css = read('live/agents-strip.css');
   assert.doesNotMatch(css, /crimson|#9F1239|#E0445E/i, 'no crimson');
   const greenRed = css.split('\n').filter(l => /--ws-buy|--ws-sell/.test(l));
-  assert.ok(greenRed.length && greenRed.every(l => /\.as-side\.(long|short)|\.as-pnl\.(up|down)/.test(l)), 'green and red only for the side and P&L');
+  assert.ok(greenRed.length && greenRed.every(l => /\.as-side\.(long|short)|\.as-pnl\.(up|down)|\.as-alert|\.as-state\.red/.test(l)), 'green and red only for the side, P&L and the bot\'s red alert (the Bot button\'s own look)');
   assert.doesNotMatch(css, /transition:(?!\s*none)|animation:(?!\s*none)|@keyframes/, 'no motion (R3)');
 });

@@ -1,6 +1,6 @@
 # Changelog
 
-## chart 1.36.0 (2026-10-22): the Agents strip
+## chart 1.36.0 (2026-10-22): the Agents strip, the Bot panel merged into it
 
 Anthony's request of 2026-10-22 (WORK, "FROM_WORK_2026-10-22_REQUEST_agents_strip_panel.md"): "I want a panel made, that plays
 horizontally, but just shows the current active shadow agents and eventually live agents status, so If I dont have their tab
@@ -12,9 +12,12 @@ stays 0.6.6; `minChartBridge` stays 0.6.2), no Desk change (it reads The Desk of
   agent, left to right: the league's seats H Haiku (amber), S Sonnet (cyan), O Opus (violet), as the League tab, then each live
   agent ChartBridge lists that is running, holds anything, or is killed or stood down (an off, empty slot is named in the strip's
   foot instead). Cards share the row at 240 to 360 px each; past that the row scrolls sideways inside the panel, never the page.
-- **Each card:** the name and colour; the **mode big** (SHADOW in a dashed purple box for a seat, paper; a live agent's Shadow is
-  SHADOW, Copilot or Auto on a Sim account SIM, on a live account LIVE filled with the accent, on no account AUTO or COPILOT with
-  "account None: nothing trades"), so a paper seat is never mistaken for a live one; its **one word** when it matters (look cap,
+- **Each card:** the name and colour; the **mode big, SHADOW or LIVE only** (Anthony 2026-10-22: "theres really only 2 types right
+  now, shadow or live. They are either shadow trading or get promoted and trade live with either sim or a cheap eval"): SHADOW in
+  a dashed purple box (a seat, paper; a live agent or the bot in Shadow, or on no account, where nothing trades), LIVE filled with
+  the accent for one trading an account of its own, the account kind under it in small text (sim, or "not Sim: eval or funded":
+  the page cannot tell an eval from a funded account); the Copilot and Auto words are never shown, so a paper seat is never
+  mistaken for a live one; its **one word** when it matters (look cap,
   API stopped, day stopped, day closed, feed down, status late, retired; killed, stood down, off, not connected); **now** (flat, or
   LONG or SHORT N since hh:mm, open P&L in dollars and R, the stop and target distance in points, a resting order); **today** (P&L
   and R, trades with wins and losses, the seat's virtual 50K Flex balance and room to the floor); **spend** (the seat's dollars
@@ -27,8 +30,24 @@ stays 0.6.6; `minChartBridge` stays 0.6.2), no Desk change (it reads The Desk of
   the last 30 is an hour old (the league's own rule, Bot-Lab league/runner.py `_cap_ok`: any 60 minutes, not the clock hour). Open
   P&L and R from the page's MNQ price (the Quote board's quote) against the paper fill, R on the stop at the fill (a live agent's on
   its plan's risk). The seats' pool: the day cap less the coach's reserve.
-- **Not reported, never a guess:** a seat's resting order (the league writes it to status.json; The Desk of 1.35.0 does not pass it
-  on, so every seat card says "resting order: not reported" until it does; the strip reads it once it comes); a live agent's room,
+- **A seat's resting order:** read from status.json's `resting` once The Desk passes it on (the coordinator's Desk change): its
+  side, type, price (or its reference), stop and target points, and "until hh:mm (N min left)"; null says nothing; with a Desk
+  that does not pass it on, "resting order: not reported".
+- **The bot's card (the Bot panel merged into the strip,** Anthony 2026-10-22: "get rid of the bot panel and merge it into
+  this"): after the live agents, whenever this ChartBridge offers the Bot (protocol v3), even with its channel off. Its name,
+  SHADOW or LIVE with its account kind, its status words, its position (open P&L from the page's price; R, stop and target not
+  reported), today's P&L, trades and losing trades, and its rails (trades n of max, losing n of max, amber and red as the Bot
+  tab) in the spend row's place; its last signal. Its red alert by bot.js's own rule (one function, `alertNow`, read by the Bot
+  button's bt-alert and the card: rails red, stand-down, killed, on but not connected) gives the card the Bot button's alert look
+  and its one word. A click opens the Bot view, unchanged, where its enable, kill switch and rails are.
+- **The Bot panel is gone:** "Bot" is no longer in + Add panel and `bot` is no longer a panel type (a saved layout that had one
+  opens without it, no error). The Bot's button: in the top bar where the Bot tab was on any layout with no Agents strip (so the
+  Bot is always one click away), while a view is open, and while it carries its red alert (review 2 of 1.35.0, kept); on a layout
+  with an Agents strip and no alert it waits in the hidden hold and the bot card is the way in.
+- **The League tab's decision log:** a "rest" answer is shown as a resting order ("rest short at IBL, stop 6 pt, target 15 pt,
+  good until not reported": The Desk passes no good-until time with a decision), no longer as an entry; a "cancel" as the cancel
+  of its resting order.
+- **Not reported, never a guess:** a live agent's room,
   its calls, a resting order's time left, the PC helper's spend while the Agent tab has not read it.
 - **One league read for the page:** the strip has no poller of its own. The workspace's league read (the faint marks' 30 s read)
   now runs while the faint marks or a strip are on the page, every 15 s with a strip, and reads nothing while the League view is

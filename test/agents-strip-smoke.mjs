@@ -70,7 +70,7 @@ const desk = await startDesk(DP, {});
 desk.league = { shadow: 'SHADOW: no orders', folder: { set: true, ok: true, problem: 'The league has no session yet.' }, trades: [], open: [], decisions: [] };
 let px = null;
 const refresh = setInterval(() => { if (px !== null) desk.league = sampleDay(px); }, 3000);   // its clock follows now (no "status late")
-const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--agents=demo', '--agent-any-time', '--test-pin=' + TEST_PIN, '--desk-url=http://127.0.0.1:' + DP], { stdio: ['ignore', 'pipe', 'inherit'] });
+const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--agents=demo', '--agent-any-time', '--bot-account=Sim101', '--test-pin=' + TEST_PIN, '--desk-url=http://127.0.0.1:' + DP], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const post = u => fetch(`http://127.0.0.1:${PORT}${u}`, { method: 'POST' }).then(r => r.json());
@@ -83,13 +83,18 @@ try {
     /* every order message and every agent or bot control message the page could send */
     WebSocket.prototype.send = function (d) { try { const m = JSON.parse(d); if (['order', 'change', 'cancel', 'flatten', 'plan', 'groupOrder'].includes(m.type) || /^(agent|bot)[A-Z]/.test(m.type || '')) window.__sent.push(m); } catch (e) { /* not JSON */ } return send.call(this, d); };
     try { if (!localStorage.getItem('live-workspace-v1')) localStorage.setItem('live-workspace-v1', JSON.stringify({ v: 1, layouts: { Accounts: { panels: [
-      { id: 'ap', type: 'accounts', x: 0, y: 0, w: 12, h: 3 }, { id: 'tk', type: 'ticket', x: 9, y: 3, w: 3, h: 3 }] } } })); } catch (e) { /* blocked */ }
+      { id: 'ap', type: 'accounts', x: 0, y: 0, w: 12, h: 3 }, { id: 'tk', type: 'ticket', x: 9, y: 3, w: 3, h: 3 },
+      { id: 'oldbot', type: 'bot', x: 0, y: 3, w: 2, h: 1 }] } } })); } catch (e) { /* blocked */ }   // 1.35.0's Bot panel, saved: 1.36.0 opens the layout without it
   });
   const p = await ctx.newPage();
   p.on('pageerror', e => fail('pageerror: ' + e.message));
   await p.goto(`http://localhost:${PORT}/live/?layout=Accounts`);
   await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
   await p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
+  check(!(await p.$('.ws-panel.bot')) && (await p.evaluate(() => window.workspace.panels().map(x => x.type).join(','))) === 'accounts,ticket', '1.36.0: a saved layout with a Bot panel opens without it, no error');
+  check(!!(await until(async () => (await p.isVisible('#wsBotTab')) && p.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsBotTab'))), 'the Bot button', 15000)), 'no strip yet: the Bot button is in the top bar');
+  /* the made-up bot connected (no alert of its own) */
+  await post('/test/bot-connect?name=Demo%20Opening%20Fade');
   /* the made-up agent, connected, in Shadow, with two made-up thoughts */
   await post('/test/agent-connect?agent=demo&name=Demo%20Agent');
   await post('/test/agent-mode?agent=demo&mode=shadow');
@@ -99,7 +104,7 @@ try {
   /* + Add panel: Agents, into the free lower left */
   await p.click('#wsAdd');
   const menu = await p.$$eval('#wsAddMenu [data-add]', bs => bs.map(b => b.textContent));
-  check(menu.includes('Agents'), '+ Add panel offers Agents: ' + menu.join(', '));
+  check(menu.includes('Agents') && !menu.includes('Bot'), '+ Add panel offers Agents and no Bot panel (merged into the strip): ' + menu.join(', '));
   await p.click('#wsAddMenu [data-add="agents"]');
   await until(() => p.$('.ws-panel.agents .as-row'), 'the Agents strip placed');
   const box = await p.$eval('.ws-panel.agents', e => { const r = e.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; });
@@ -111,10 +116,12 @@ try {
 
   px = await until(() => p.evaluate(() => window.workspace.quoteLast('MNQ')), 'MNQ\'s price on the page', 20000);
   desk.league = sampleDay(px);
-  const st = await until(async () => { const s = await p.evaluate(() => window.workspace.agentsStrip()); return s && s.cards.length === 4 && s.cards[1].head === 'LONG 3 MNQ' ? s : null; }, 'four cards: the three seats and the Demo Agent', 40000);
+  const st = await until(async () => { const s = await p.evaluate(() => window.workspace.agentsStrip()); return s && s.cards.length === 5 && s.cards[1].head === 'LONG 3 MNQ' ? s : null; }, 'five cards: the three seats, the Demo Agent and the bot', 40000);
   if (st) {
-    check(st.cards.map(c => c.key).join(',') === 'seat:H,seat:S,seat:O,agent:demo', 'left to right: H, S, O, then the live agent (' + st.cards.map(c => c.key).join(', ') + ')');
+    check(st.cards.map(c => c.key).join(',') === 'seat:H,seat:S,seat:O,agent:demo,bot', 'left to right: H, S, O, the live agent, then the bot (' + st.cards.map(c => c.key).join(', ') + ')');
     check(st.cards.slice(0, 3).every(c => c.mode === 'SHADOW') && st.cards[3].mode === 'SHADOW', 'the mode: SHADOW on every seat and on the Demo Agent in Shadow');
+    check(st.cards.every(c => ['SHADOW', 'LIVE'].includes(c.mode)) && st.cards.every(c => !/copilot|auto/i.test(c.mode + ' ' + c.sub)), 'the big word is SHADOW or LIVE only, never Copilot or Auto (' + st.cards.map(c => c.mode + ' / ' + c.sub).join('; ') + ')');
+    check(st.cards[4].alert === false, 'the bot: connected, no alert');
     check(st.cards[0].flat && st.cards[0].state === '', 'H: flat, no state word');
     check(st.cards[1].head === 'LONG 3 MNQ', 'S: LONG 3 MNQ (its open paper trade)');
     check(st.cards[2].state === 'look cap', 'O: look cap (derived from its 31 looks in the last hour)');
@@ -175,6 +182,15 @@ try {
   check(r1 === r0, 'while the League view is open the workspace\'s league read waits (' + r0 + ' then ' + r1 + ')');
   await p.click('#wsLeagueTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('lg-on')), 'back to the layout');
+  /* the bot card opens the Bot view (its switches, kill switch and rails, unchanged); the Bot button waits in the hold meanwhile */
+  check(!(await p.isVisible('#wsBotTab')) && await p.$eval('#wsTabHold', e => e.contains(document.getElementById('wsBotTab'))), 'with the strip on the layout: the Bot button waits in the hold, the bot card is the way in');
+  const bt = await cardText('bot');
+  check(/Demo Opening Fade/.test(bt) && /RAILS/i.test(bt) && /trades \d+ of \d+ · losing \d+ of \d+/.test(bt), 'the bot card: its name, mode, position, today and rails: ' + bt.replace(/\s+/g, ' ').slice(0, 160));
+  await p.click('.ws-panel.agents [data-card="bot"] .as-name');
+  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'a click on the bot card opens the Bot view');
+  check(await p.isVisible('.bt-kill') && await p.isVisible('#wsBotTab'), 'the Bot view: its kill switch in reach, its button in the top bar (the way back)');
+  await p.click('#wsBotTab');
+  await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'the Bot view closed');
   await p.click('.ws-panel.agents [data-card="agent:demo"] [data-open]');
   await until(() => p.evaluate(() => window.workspace.agent().shown && window.workspace.agent().chosen === 'demo'), 'the agent\'s card opens the Agent tab on him');
   check(true, 'a click on the live agent\'s card opens the Agent tab, on him');

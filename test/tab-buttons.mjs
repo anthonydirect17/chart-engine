@@ -1,26 +1,21 @@
-// Chart 1.35.0: the Bot tab left the top bar for a panel of its own in + Add panel (Anthony 2026-10-21: "the bot tab can also move
-// to a panel"). Its button (#wsBotTab, the Bot desk's own) sits in that panel, or in the top bar while a view is open; with no room
-// for the panel (or the panel placed already) + Add panel opens the Bot view itself. The smokes that opened or closed the Bot view
-// with a click on its top-bar button use toggleTab: the button when it is in sight, else + Add panel (which opens the view, or
-// places the panel, whose button is then clicked). The Agent tab is unchanged in the top bar.
-export async function toggleTab(page, which) {
-  if (which !== 'bot') throw new Error('toggleTab: only the Bot moved to a panel');
-  const id = '#wsBotTab';
-  if (await page.isVisible(id)) { await page.click(id); return; }
-  await page.click('#wsAdd');
-  await page.click('#wsAddMenu [data-add="bot"]');
-  await page.waitForTimeout(150);
-  if (await page.evaluate(() => document.body.classList.contains('bt-on'))) return;
-  await page.waitForSelector(id, { state: 'visible', timeout: 15000 });
-  await page.click(id);
-}
-/** the Bot reached from + Add panel (its panel, or the view at once when there is no room): its button in sight */
-export async function tabBtn(page, which) {
-  if (which !== 'bot') throw new Error('tabBtn: only the Bot moved to a panel');
+// Chart 1.35.0 moved the Bot tab to a panel; 1.36.0 (Anthony 2026-10-22: "get rid of the bot panel and merge it into this") removed
+// that panel: the Bot's button (#wsBotTab, the Bot desk's own) is in the top bar on any layout with no Agents strip (the smokes'
+// layouts), while a view is open, and while it carries its red alert; on a layout with an Agents strip the strip's bot card opens
+// the Bot view. The smokes that opened or closed the Bot view with a click on its top-bar button use these.
+async function inSight(page) {
   const id = '#wsBotTab';
   if (await page.isVisible(id)) return id;
-  await page.click('#wsAdd');
-  await page.click('#wsAddMenu [data-add="bot"]');
+  if (await page.$('.ws-panel.agents [data-card="bot"]')) return null;   // a layout with an Agents strip: its bot card
   await page.waitForSelector(id, { state: 'visible', timeout: 15000 });
   return id;
+}
+export async function toggleTab(page, which) {
+  if (which !== 'bot') throw new Error('toggleTab: only the Bot');
+  const id = await inSight(page);
+  if (id) await page.click(id); else await page.click('.ws-panel.agents [data-card="bot"] .as-name');
+}
+/** the Bot's button in sight (the top bar) */
+export async function tabBtn(page, which) {
+  if (which !== 'bot') throw new Error('tabBtn: only the Bot');
+  return (await inSight(page)) || '#wsBotTab';
 }
