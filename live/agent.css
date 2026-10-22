@@ -639,6 +639,11 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
   .ag-view .ag-strip > .ag-stat { align-items: flex-start; }
   /* the workspace's top bar wraps while the Agent tab is open on a phone (no sideways scroll) */
   body.ag-on .ws-top { flex-wrap: wrap; row-gap: 6px; height: auto; min-height: 40px; padding: 6px 12px; }
+  /* the status line's text changes every second ("local 13 ms" gains " (p95 297 ms)", "60 fps" becomes "idle"): sized by its
+     text it moved to a row of its own and back, the bar's height changed by 20 px and the whole tab, Accept and Reject with it,
+     jumped under the finger. A fixed width (its full text's, 330 px) decides where the bar wraps, so its height never follows
+     the text; what does not fit is cut in workspace.js's order (the frame rate, then the p95, then the local delay) */
+  body.ag-on .ws-top > .ws-stat { flex: 0 1 330px; }
 }
 
 /* 1.27.0 (ChartBridge 0.6.0): a group's seats table in His account (one row per seat, then the group's total) */

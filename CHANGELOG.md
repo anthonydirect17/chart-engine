@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **A phone's Agent tab no longer jumps under the finger** (page only, `live/agent.css`): at 720 px and narrower, with the Agent
+  tab open, the top bar wraps, and its status line ("feed 36 ms · local 13 ms (p95 297 ms) · 60 fps", rewritten every second)
+  was sized by its text, so a p95 coming or going, or "60 fps" becoming "idle", moved it to a row of its own and back: the bar
+  grew or shrank by 20 to 34 px and the whole tab under it moved, Accept and Reject with it. The status line now has a fixed
+  width (330 px, its full text), so the bar's height never follows its text; at 390 px the bar looks as it did most of the time
+  (the line on its own row). This was the agent-targets smoke's flaky "ChartBridge's error line moves no Accept" at 390 x 844
+  (2 or 3 runs in 10): the line was never the cause. A new check sets each text the line takes and measures in one go: it
+  fails on 1.35.0 at 390, 412 and 600 px and passes now.
+
 ## chart 1.35.0 (2026-10-21): the League tab, the Bot as a panel, Update floors from The Desk, the trade note
 
 Anthony's decisions of 2026-10-21. **Page only: no ChartBridge change** (it stays 0.6.6; `minChartBridge` stays 0.6.2). Needs The
