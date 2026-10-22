@@ -45,6 +45,11 @@ need 0.6.7).
   are optional (a group made on the panel has none, its line `-` for drawdown, type and size) and never size a member: a member with
   no rules of its own sits out a group entry ("it has no account type: set its type on The Desk and apply it"); a group with no
   rules takes a joining account only with its own rules; the risk percent changes only while the group is flat.
+- **ChartBridge 0.6.7, exits never wait on a groups.txt write** (review LOW 1): a save with a risk percent and a bench move decide
+  (the group or the account flat) and change memory under the group entry lock and the order lock, then let both go and write
+  `groups.txt` and its sealed copy under the save lock alone, so a page market exit, a copier exit copy or an agent's close or stop
+  placed meanwhile never waits on the disk. A write that fails puts memory back to what the file holds and says "groups.txt could not
+  be saved (...); nothing was changed". A save of a name, a Type or rules takes the save lock alone, as before 0.6.7.
 - **Room right:** Custom beside 80, 120 and 160 px (any whole 40 to 600 px), and a drag in the gap between the last bar and the price
   axis on any chart sets it (live charts; the `col-resize` cursor there; never with Shift or Ctrl). Saved as the presets, for every
   chart; Jump to live and End keep it (engine: the `room` event, `util.ROOM_MIN`/`ROOM_MAX`).
@@ -58,7 +63,15 @@ need 0.6.7).
   `npm run smoke:blur` (new): a chart at whole and fractional CSS positions and sizes, at 100%, 125%, 150% and 200% scaling (a real
   device scale factor), thin and wide candles: on 1.36.0, 7 of 32 placements are resampled (as low as 88% of pixels matching the
   canvas's own); on 1.37.0 all 32 match 100%.
-- Tests: `test/multi-account.test.js`; `npm run smoke:multi-account`, `smoke:blur`, `smoke:lines` (new); the display smoke checks Custom
+  `npm run smoke:candles` (new, Anthony: "I want to MAKE sure"): the same sample chart drawn by 1.36.0 (kept unchanged as
+  `test/fixtures/chart-engine-1.36.0.js`, the reference) and by 1.37.0, at 100%, 125%, 150% and 200% (real device scale factors),
+  candle spacing 2.6, 6 and 14. At a whole-pixel box: 0 pixels differ in all 12 cases. At a fractional box, the reference placed at
+  exactly the box 1.37.0's canvas landed on: the same canvas size in all 24 cases and 0 pixels different in 23; at 150%, spacing 2.6,
+  the 12-column grid's third, 1,372 pixels differ: 13 candles (every tenth) sit one device pixel to the left, same color, width and
+  height. Why: 1.36.0 lays its candles out from the box's width as the browser measures it (640.66669 css px, its 1/64 px layout
+  units), 1.37.0 from its canvas's whole device pixels over the ratio (961 / 1.5 = 640.66667), and those candles' edges fall within
+  that hair of a pixel's middle. Given exactly 1.37.0's width and height, 1.36.0 draws the same pixels in all 24 cases (0 different).
+- Tests: `test/multi-account.test.js`; `npm run smoke:multi-account`, `smoke:blur`, `smoke:lines`, `smoke:candles` (new); the display smoke checks Custom
   and the gap drag; the accounts, settings and member-rules smokes follow the moves; `npm run check:orders` gains the bench, no
   hedging always on, a group with no rules and the risk while flat (GroupsHarness) and a benched agent seat (AgentHarness). Version
   1.37.0 (package.json, engine header and VERSION, COMPAT.json page), ChartBridge 0.6.7, CHART_STYLE and PROTOCOL entries.

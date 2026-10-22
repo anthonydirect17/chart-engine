@@ -62,6 +62,7 @@
     "smoke:agents-strip": "node test/agents-strip-smoke.mjs",
     "smoke:multi-account": "node test/multi-account-smoke.mjs",
     "smoke:blur": "node test/blur-smoke.mjs",
+    "smoke:candles": "node test/candles-same-smoke.mjs",
     "smoke:lines": "node test/lines-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",
