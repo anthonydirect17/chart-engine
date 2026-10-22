@@ -9,7 +9,77 @@
   width (330 px, its full text), so the bar's height never follows its text; at 390 px the bar looks as it did most of the time
   (the line on its own row). This was the agent-targets smoke's flaky "ChartBridge's error line moves no Accept" at 390 x 844
   (2 or 3 runs in 10): the line was never the cause. A new check sets each text the line takes and measures in one go: it
-  fails on 1.35.0 at 390, 412 and 600 px and passes now.
+  fails on 1.36.0 at 390, 412 and 600 px and passes now.
+
+## chart 1.36.0 (2026-10-22): the Agents strip, the Bot panel merged into it
+
+Anthony's request of 2026-10-22 (WORK, "FROM_WORK_2026-10-22_REQUEST_agents_strip_panel.md"): "I want a panel made, that plays
+horizontally, but just shows the current active shadow agents and eventually live agents status, so If I dont have their tab
+pulled up I can still glance over and see their position, spent, stream of thoughts." **Page only: no ChartBridge change** (it
+stays 0.6.6; `minChartBridge` stays 0.6.2), no Desk change of its own (it reads The Desk of chart 1.35.0; a seat's resting order
+and a paper trade's risk come from The Desk's main, which passes `status.seats.<seat>.resting` and each trade's `risk_dollars`
+and `stop_points`), no Bot-Lab change.
+
+- **The Agents strip** (`live/agents-strip.js`, `live/agents-strip.css`, new page files): "Agents" in + Add panel, at most one a
+  layout, made for the lower left of the Accounts layout on his third screen (about 1,430 by 450 px at 1906 x 1014). One card per
+  agent, left to right: the league's seats H Haiku (amber), S Sonnet (cyan), O Opus (violet), as the League tab, then each live
+  agent ChartBridge lists that is running, holds anything, or is killed or stood down (an off, empty slot is named in the strip's
+  foot instead). Cards share the row at 240 to 360 px each; past that the row scrolls sideways inside the panel, never the page.
+- **Each card:** the name and colour; the **mode big, SHADOW or LIVE only** (Anthony 2026-10-22: "theres really only 2 types right
+  now, shadow or live. They are either shadow trading or get promoted and trade live with either sim or a cheap eval"): SHADOW in
+  a dashed purple box (a seat, paper; a live agent or the bot in Shadow, or on no account, where nothing trades), LIVE filled with
+  the accent for one trading an account of its own, the account kind under it in small text (sim, or "not Sim: eval or funded":
+  the page cannot tell an eval from a funded account); the Copilot and Auto words are never shown, so a paper seat is never
+  mistaken for a live one; its **one word** when it matters (look cap,
+  API stopped, day stopped, day closed, feed down, status late, retired; killed, stood down, off, not connected); **now** (flat, or
+  LONG or SHORT N since hh:mm, open P&L in dollars and R, the stop and target distance in points, a resting order); **today** (P&L
+  and R, trades with wins and losses, the seat's virtual 50K Flex balance and room to the floor); **spend** (the seat's dollars
+  against the seats' pool, the day against the day cap, calls today); the **stream of thoughts**, newest first (time, action,
+  confidence, the first line of the reasoning; the lines that fit whole). A click on a thought opens its full reasoning in a box
+  over the strip (Close or Escape); a click anywhere else on a card (or its › button) opens the League tab for a seat, the Agent
+  tab on that agent for a live one.
+- **Worked out on the page, and said so in its hover:** the **look cap** (the league logs it, but neither status.json nor The Desk
+  passes it on): a seat's counted looks in the 60 minutes before now (every decision but a look at Anthony's new entry, which the
+  league never counts: Amendment 7, read as runner.py `_look_kind` reads it, its `look_kind` or else a trigger starting "a new
+  mentor entry"); 30 or more is the cap, and the next look is when the oldest of the last 30 counted ones is an hour old (the
+  league's own rule, Bot-Lab league/runner.py `_cap_ok`: any 60 minutes, not the clock hour). Open P&L and R from the page's MNQ
+  price (the Quote board's quote) against the paper fill. R is on the trade's ORIGINAL risk, never on the stop now (after
+  break-even or the trail the stop is not the risk): a seat's open P&L dollars over the trade's `risk_dollars` (gross, before the
+  round-turn fees; the hover says so, since the league's booked R is net of them), else its points over `stop_points`, the stop
+  distance at the fill; a live agent's on its plan's risk; else "R not reported". The seats' pool: the day cap less the coach's
+  reserve.
+- **A seat's resting order:** read from status.json's `resting` as The Desk passes it on (`status.seats.<seat>.resting`): its
+  side, type, price (or its reference), stop and target points, and "until hh:mm (N min left)"; null says nothing; with an older
+  Desk that leaves the field out, "resting order: not reported".
+- **The bot's card (the Bot panel merged into the strip,** Anthony 2026-10-22: "get rid of the bot panel and merge it into
+  this"): after the live agents, whenever this ChartBridge offers the Bot (protocol v3), even with its channel off. Its name,
+  SHADOW or LIVE with its account kind, its status words, its position (open P&L from the page's price; R, stop and target not
+  reported), today's P&L, trades and losing trades, and its rails (trades n of max, losing n of max, amber and red as the Bot
+  tab) in the spend row's place; its last signal. Its red alert by bot.js's own rule (one function, `alertNow`, read by the Bot
+  button's bt-alert and the card: rails red, stand-down, killed, on but not connected) gives the card the Bot button's alert look
+  and its one word. A click opens the Bot view, unchanged, where its enable, kill switch and rails are.
+- **The Bot panel is gone:** "Bot" is no longer in + Add panel and `bot` is no longer a panel type (a saved layout that had one
+  opens without it, no error). The Bot's button stays in the top bar where the Bot tab always was, on every layout (Anthony: "bot
+  tab never left the top, that was the SS and its fine there"); the strip's bot card opens the same Bot view.
+- **The League tab's decision log:** a "rest" answer is shown as a resting order ("rest short at IBL, stop 6 pt, target 15 pt,
+  good until not reported": The Desk passes no good-until time with a decision), no longer as an entry; a "cancel" as the cancel
+  of its resting order.
+- **Not reported, never a guess:** a live agent's room,
+  its calls, a resting order's time left, the PC helper's spend while the Agent tab has not read it.
+- **One league read for the page:** the strip has no poller of its own. The workspace's league read (the faint marks' 30 s read)
+  now runs while the faint marks or a strip are on the page, every 15 s with a strip, and reads nothing while the League view is
+  open (that view reads every 15 s and its day is the one used). The live agents come from the Agent tab's state (`glance`, a new
+  read only accessor in `live/agent.js`: his stream, his day's trades, his open position's first fill and risk, his working
+  orders, the helper's spend as last read; `glances` gives every agent's from one read of the day's fills a second). The read
+  gives up after 10 seconds, so a Desk that never answers cannot stop it.
+- **Read only:** the strip sends nothing (no order, no agent or bot control message, no request of its own; the smoke checks it).
+  **No motion** (docs/MOTION.md R3): a new thought is simply the first line the next time the card is drawn; nothing scrolls,
+  slides or fades. A card is drawn again only when what it shows changed, and the stream's lines are measured again only then or
+  when the panel's size changes.
+- Tests: `test/agents-strip.test.js` (the derived look cap, the mode labels, not reported, the seats' and an agent's cards, the
+  page) and `npm run smoke:agents-strip` (test/agents-strip-smoke.mjs: a SAMPLE league day, labelled as sample on every seat
+  card, and the made-up Demo Agent in Shadow, in an Accounts-like layout at 1906 x 1014; screenshots
+  `test/out/agents-strip-*.png`).
 
 ## chart 1.35.0 (2026-10-21): the League tab, the Bot as a panel, Update floors from The Desk, the trade note
 

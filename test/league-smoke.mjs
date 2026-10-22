@@ -1,15 +1,16 @@
-// Chart 1.35.0 smoke (Anthony 2026-10-21): the League tab, the league's trades faint on any chart, and the agent desk and the
-// Bot tab as panels. Against the fake bridge (--v3, the made-up Demo Agent, sample data) and the fake Desk (test/fake-desk.mjs)
+// Chart 1.35.0 smoke (Anthony 2026-10-21): the League tab and the league's trades faint on any chart; 1.36.0 (Anthony 2026-10-22):
+// the Bot panel is gone, merged into the Agents strip (its bot card opens the Bot view). Against the fake bridge (--v3, the made-up Demo Agent, sample data) and the fake Desk (test/fake-desk.mjs)
 // serving a SAMPLE league day (made up here: three seats, made-up paper trades on the sample bars, made-up decisions; no real
 // league, no model name, no account), at 1366 x 768, 1600 x 900 and 1920 x 1080:
 //   npm run smoke:league        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
-// Checks: the top bar keeps the Agent tab as it was, League after it, and no Bot button; + Add panel offers "Bot";
+// Checks: the top bar keeps the Agent tab as it was, League after it, and the Bot button (no Agents strip on the layout); + Add
+// panel offers no Bot (1.36.0) but Agents;
 // the League tab hides the grid and shows SHADOW: no orders, the legend H Haiku, S Sonnet, O Opus, the seats' day, the week and
 // month table ("not enough data yet" under 20), the decision log, the spend against the caps and the day closed note; its chart
 // carries the hollow marks (pixels drawn on the overlay, never on the chart's canvas); a chart's ⋯ switch shows them faintly,
-// off by default, kept in this browser; the Agent tab and the League tab close each other; the Bot panel holds the very #wsBotTab
-// button and opens the Bot view as before, it stays in reach in the top bar while a view is open, and goes back to the hold when
-// the panel is closed; nothing sends an order.
+// off by default, kept in this browser; the Agent tab and the League tab close each other; with an Agents strip the Bot button
+// stays in the top bar (it does on every layout) and the strip's bot card opens the Bot view; the button stays in reach while a
+// view is open and while it carries its red alert (review 2), and is still there when the strip goes; nothing sends an order.
 // Screenshots test/out/league-*.png.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -82,13 +83,13 @@ try {
   await fetch(`http://127.0.0.1:${PORT}/test/bot-connect?name=Demo%20Opening%20Fade`, { method: 'POST' });
   await until(() => p.$eval('#wsBotTab', b => !b.classList.contains('bt-alert')), 'the made-up bot connected: no alert', 10000);
 
-  /* the top bar: Agent (as it was), then League; the Bot button waits in the hold for its panel */
+  /* the top bar: Agent (as it was), then League; the Bot button in the top bar (1.36.0: on a layout with no Agents strip) */
   check(await p.isVisible('#wsLeagueTab') && (await p.textContent('#wsLeagueTab')) === 'League', 'the top bar has the League tab');
   check(await p.evaluate(() => document.getElementById('wsAgentTab').nextElementSibling === document.getElementById('wsLeagueTab') && !!document.getElementById('wsAgentTab').closest('.ws-top')), 'the Agent tab stays in the top bar, League right after it');
-  check(!(await p.isVisible('#wsBotTab')) && await p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsBotTab'))), 'no Bot button in the top bar: it waits in the hidden hold');
+  check(await p.isVisible('#wsBotTab') && await p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), '1.36.0: no Agents strip on the layout: the Bot button is in the top bar');
   await p.click('#wsAdd');
   const menu = await p.$$eval('#wsAddMenu [data-add]', bs => bs.map(b => b.textContent));
-  check(menu.includes('Bot') && !menu.some(t => /Agent/.test(t)), '+ Add panel offers the Bot (and no agent panel): ' + menu.join(', '));
+  check(!menu.includes('Bot') && menu.includes('Agents') && !menu.some(t => /^Agent( tab| desk)?$/.test(t)), '1.36.0: + Add panel offers no Bot panel and no Agent tab panel, and the Agents strip: ' + menu.join(', '));
   await p.click('#wsAdd');
 
   /* the League tab */
@@ -161,46 +162,40 @@ try {
   await p.click('#wsAgentTab');
   await until(() => p.evaluate(() => !window.workspace.agent().shown), 'closed');
 
-  /* the Bot panel */
-  await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="bot"]');
-  await until(() => p.$eval('.ws-panel.bot', e => e.contains(document.getElementById('wsBotTab'))), 'the Bot panel holds the Bot button');
-  await until(() => p.isVisible('#wsBotTab'), 'the Bot button shows', 15000);
+  /* 1.36.0: the Bot through the Agents strip (the Bot panel is gone) */
   await p.click('#wsBotTab');
-  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'the Bot tab opens as before');
+  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'the Bot view from the top bar as before');
   check(new URL(p.url()).searchParams.get('tab') === 'bot', '?tab=bot as before');
   await p.click('#wsBotTab');
-  await until(() => p.evaluate(() => !document.body.classList.contains('bt-on') && document.querySelector('.ws-panel.bot').contains(document.getElementById('wsBotTab'))), 'its button in the top bar closes it, and goes back to its panel');
-  check(true, 'the Bot button in the top bar goes back to the layout, then sits in its panel again');
-  await p.click('#wsAdd');
-  check(await p.$eval('#wsAddMenu [data-add="bot"]', b => /a click opens it/.test(b.title)), 'one Bot panel a layout: the menu item then opens the Bot view');
-  await p.click('#wsAddMenu [data-add="bot"]');
-  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'with its panel placed, + Add panel opens the Bot view');
-  check((await p.evaluate(() => window.workspace.panels().filter(x => x.type === 'bot').length)) === 1, 'still one Bot panel');
-  await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => document.body.classList.contains('lg-on') && document.getElementById('wsTabSlot').contains(document.getElementById('wsBotTab'))), 'while the League view is open the Bot button stays in the top bar');
-  check(await p.isVisible('#wsBotTab') && await p.isVisible('#wsAgentTab'), 'from the League view: Bot and Agent both in reach in the top bar');
-  await p.screenshot({ path: path.join(out, 'league-panels-1366.png') });
-  await p.click('#wsLeagueTab');
-  await p.click('.ws-panel.bot [data-act="close"]');
-  await until(() => p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsBotTab'))), 'closed: the Bot button back in the hold');
-  check(true, 'removing the Bot panel removes the entry point (+ Add panel brings it back)');
-  /* review 6: from the League view, with no Bot panel on the layout, the Bot is one click away in the top bar */
-  check(!(await p.$('.ws-panel.bot')) && !(await p.isVisible('#wsBotTab')), 'no Bot panel: no Bot button while the grid shows');
+  await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'closed again from its button');
+  await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="agents"]');
+  await until(() => p.$('.ws-panel.agents [data-card="bot"]'), 'the Agents strip with its bot card', 15000);
+  check(await p.isVisible('#wsBotTab') && await p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'with an Agents strip the Bot button stays in the top bar (Anthony: "its fine there")');
+  await p.click('.ws-panel.agents [data-card="bot"] .as-name');
+  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'a click on the bot card opens the Bot view');
+  check(await p.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsBotTab'))) && await p.isVisible('#wsBotTab'), 'while the Bot view is open its button is in the top bar (the way back)');
+  await p.click('#wsBotTab');
+  await until(() => p.evaluate(() => !document.body.classList.contains('bt-on') && document.getElementById('wsTabSlot').contains(document.getElementById('wsBotTab'))), 'closed: the button still in the top bar');
+  /* review 6: from the League view the Bot is one click away in the top bar */
   await p.click('#wsLeagueTab');
   await until(() => p.evaluate(() => document.body.classList.contains('lg-on')), 'the League view');
   await until(() => p.isVisible('#wsBotTab'), 'from the League view the Bot button is in the top bar', 5000);
-  check(await p.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsBotTab'))), 'one click from the League view to the Bot, with no Bot panel');
+  check(await p.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsBotTab'))) && await p.isVisible('#wsAgentTab'), 'from the League view: Bot and Agent both in reach in the top bar');
   check(await p.evaluate(() => document.body.classList.contains('bt-has-tab')), 'review 5: the Layout word gives way (bt-has-tab) while the Bot button is in the top bar');
+  await p.screenshot({ path: path.join(out, 'league-panels-1366.png') });
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => document.body.classList.contains('bt-on') && !document.body.classList.contains('lg-on')), 'the Bot view from the League view');
-  /* review 2: the Bot's red alert is never hidden: killed, with no Bot panel, the button stays in the top bar, red */
+  /* review 2: the Bot's red alert is never hidden: killed, with the strip on the layout, the button stays in the top bar, red,
+     and the strip's bot card carries the same alert */
   await p.click('.bt-kill');
   await until(() => p.$eval('#wsBotTab', b => b.classList.contains('bt-alert')), 'the bot killed: the alert on its button', 8000);
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'the Bot view closed');
   await wait(300);
   const red = await p.$eval('#wsBotTab', b => ({ inTop: document.getElementById('wsTabSlot').contains(b), seen: b.getClientRects().length > 0, border: getComputedStyle(b).borderColor, cls: b.className }));
-  check(red.inTop && red.seen && /bt-alert/.test(red.cls) && await p.isVisible('#wsBotTab'), 'no Bot panel, the bot\'s alert raised: its button is in the top bar and seen (' + red.border + ')');
+  check(red.inTop && red.seen && /bt-alert/.test(red.cls) && await p.isVisible('#wsBotTab'), 'the bot\'s alert raised: its button is in the top bar and seen, with the strip on the layout (' + red.border + ')');
+  const card = await until(() => p.$eval('.ws-panel.agents [data-card="bot"]', e => (e.classList.contains('as-alert') && /killed/.test(e.innerText) ? e.innerText : null)), 'the bot card carries the alert', 5000);
+  check(!!card, 'the strip\'s bot card: killed, in the red alert look');
   check(await p.evaluate(() => document.body.classList.contains('bt-has-tab')), 'the Layout word gives way for it (bt-has-tab)');
   await p.screenshot({ path: path.join(out, 'league-bot-alert-1366.png') });
   await p.click('#wsBotTab');
@@ -208,11 +203,11 @@ try {
   await p.click('.bt-kill'); await wait(900); await p.click('.bt-kill');   // release asks a second click (not a double-click)
   await until(() => p.$eval('#wsBotTab', b => !b.classList.contains('bt-alert')), 'released: no alert', 8000);
   await p.click('#wsBotTab');
-  await until(() => p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsBotTab'))), 'the alert cleared and the grid back: the button returns to the hold', 8000);
-  check(await p.evaluate(() => !document.body.classList.contains('bt-has-tab')), 'review 5: the Layout word back (no bt-has-tab) once the Bot button is not in the top bar');
-  await p.setViewportSize({ width: 1600, height: 900 }); await wait(300);
-  check(await p.evaluate(() => getComputedStyle(document.querySelector('label[for="wsLayout"]')).display !== 'none'), 'at 1600 the Layout word shows with no Bot panel and no alert (1.34.1 hid it for a Bot tab no longer in the top bar)');
-  await p.setViewportSize({ width: 1366, height: 768 }); await wait(300);
+  await until(() => p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'the alert cleared and the grid back: the button stays in the top bar', 8000);
+  check(await p.evaluate(() => document.body.classList.contains('bt-has-tab')), 'the Layout word gives way while the Bot button is in the top bar (bt-has-tab), as before 1.35.0');
+  await p.click('.ws-panel.agents [data-act="close"]');
+  await until(() => p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'the strip closed: the Bot button still in the top bar');
+  check(await p.isVisible('#wsBotTab'), 'with no strip on the layout the Bot is one click away in the top bar');
   check((await p.evaluate(() => window.__sent.length)) === 0, 'nothing here sent an order message');
 
   /* a reload with ?tab=league keeps the League tab */
