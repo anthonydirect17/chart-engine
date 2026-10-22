@@ -181,6 +181,25 @@ try {
   check(await page.evaluate(() => window.workspace.agent().agents.find(a => a.agent === 'demothree').mode) === 'shadow', 'he is in Shadow');
   await until(async () => !(await page.$('#agView [data-brow="hero"][data-agent="demothree"] .ag-boff')), 'the warning gone once he is on');
 
+  /* ---------------- ChartBridge's line on the board (Anthony 2026-10-22): it lay over Desk and Kill all agents (a "no heartbeat"
+     warning, now and then, made the Desk click below time out); in the band above the board it covers neither and moves neither */
+  console.log('ChartBridge\'s line on the board: in the band above it, over no Desk or Kill all agents, moving neither');
+  const headBtns = () => page.evaluate(() => [...document.querySelectorAll('#agView [data-act="boardClose"], #agView [data-act="killAll"]')].map(b => {
+    const r = b.getBoundingClientRect(), hits = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 3, r.top + 3], [r.right - 3, r.bottom - 3]].every(([x, y]) => { const e = document.elementFromPoint(x, y); return !!e && b.contains(e); });
+    return b.dataset.act + ' ' + Math.round(r.left) + ',' + Math.round(r.top) + (hits ? '' : ' covered');
+  }));
+  for (const [w, h] of [[1440, 900], [390, 844]]) {
+    await page.setViewportSize({ width: w, height: h }); await sleep(400);
+    if (await page.isVisible('#wsAlertClose')) { await page.click('#wsAlertClose'); await sleep(200); }
+    const b0 = await headBtns();
+    await control('status', { level: 'warn', text: 'Sample: Agent demothree: no heartbeat for 5 s (a made-up warning for the board)' });
+    await until(() => page.isVisible('#wsAlert'), 'the line shows on the board');
+    const b1 = await headBtns(), inTray = await page.evaluate(() => !!document.getElementById('wsAlerts').closest('#agView [data-k="tray"]'));
+    check(inTray && b0.length === 2 && JSON.stringify(b1) === JSON.stringify(b0) && !b1.some(s => s.endsWith('covered')), 'at ' + w + ' x ' + h + ' ChartBridge\'s line on the board sits in the band above it, over no Desk or Kill all agents, moving neither: ' + JSON.stringify({ inTray, b0, b1 }));
+    await page.click('#wsAlertClose');
+  }
+  await page.setViewportSize({ width: 1440, height: 900 }); await sleep(400);
+
   /* ---------------- chart 1.29.0 (ChartBridge 0.6.2, SPEC CE-2): a league seat in the picker, its PROVING chip; a stand-down */
   console.log('CE-2: a league seat and a stand-down on the board');
   await page.click('#agView [data-act="boardClose"]');

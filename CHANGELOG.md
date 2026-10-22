@@ -10,6 +10,13 @@
   (the line on its own row). This was the agent-targets smoke's flaky "ChartBridge's error line moves no Accept" at 390 x 844
   (2 or 3 runs in 10): the line was never the cause. A new check sets each text the line takes and measures in one go: it
   fails on 1.36.0 at 390, 412 and 600 px and passes now.
+- **ChartBridge's line no longer covers Kill all agents on the board** (page only, `live/agent.js`, `live/agent.css`; Anthony
+  2026-10-22: "Band above the board"): with the Heroes on duty board open the line went back to the page's place, fixed under
+  the top bar, and lay over the board's Desk and Kill all agents (a "no heartbeat" warning, just when Kill all is wanted; the
+  agent-board smoke's Desk click timed out now and then). While the board is open the line and the notices now sit in the
+  tray, the band of a fixed height above it (66 px, 96 on a phone, as narrower than 1100 px already), at every width: they
+  cover nothing, and coming or going move nothing. The board starts 66 px lower at 1440 px. A new check fails on 1.36.0 at
+  1440 (both buttons covered) and passes now.
 
 ## chart 1.36.0 (2026-10-22): the Agents strip, the Bot panel merged into it
 
