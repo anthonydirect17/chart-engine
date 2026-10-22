@@ -20,6 +20,8 @@
 <link rel="stylesheet" href="agent.css">
 <!-- 1.35.0: the League tab and the league's marks (live/league.js) -->
 <link rel="stylesheet" href="league.css">
+<!-- 1.36.0: the Agents strip (live/agents-strip.js) -->
+<link rel="stylesheet" href="agents-strip.css">
 </head>
 <body>
 <!-- The trading workspace, ChartBridge's main page (http://localhost:8765/): panels on a 12 x 6 snap grid, one window per
@@ -101,6 +103,8 @@
   <button type="button" role="menuitem" data-add="tags">Trade tags</button>
   <!-- 1.35.0 (Anthony 2026-10-21: "the bot tab can also move to a panel"): the Bot tab, as a panel -->
   <button type="button" role="menuitem" data-add="bot" data-tip="The Bot tab, as a panel">Bot</button>
+  <!-- 1.36.0 (Anthony 2026-10-22): every agent at a glance, one row of cards (the league's seats, then the live agents); read only -->
+  <button type="button" role="menuitem" data-add="agents" data-tip="Every agent at a glance: one row of cards">Agents</button>
 </div>
 
 <div class="ws-pop ws-scr" id="wsScreensPop" role="dialog" aria-label="Screens" hidden></div>
@@ -266,6 +270,8 @@
 <script src="trade-tags.js"></script>
 <!-- 1.35.0: the League tab (the shadow league, read from The Desk; SHADOW: no orders) -->
 <script src="league.js"></script>
+<!-- 1.36.0: the Agents strip (AgentsStripCore and AgentsStrip.mount), before workspace.js -->
+<script src="agents-strip.js"></script>
 <script src="workspace.js"></script>
 <!-- "Update ready: reload when flat" from the per-PC updater (nt8/update-pc.ps1); never reloads by itself. -->
 <script src="update-notice.js"></script>

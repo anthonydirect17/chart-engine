@@ -73,8 +73,10 @@ function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Nu
 /* 1.34.0 (Anthony 2026-10-21): the Trade tags panel (live/trade-tags.js) follows the order ticket's account and instrument */
 /* 1.35.0 (Anthony 2026-10-21: "the bot tab can also move to a panel"): the Bot tab became a panel of its own in + Add panel,
    a small panel whose button opens the same Bot view as before; at most one per layout. The Agent tab stays in the top bar. */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'bot'];
-const ONE_EACH = ['ticket', 'bot'];
+/* 1.36.0 (Anthony 2026-10-22): the Agents strip (live/agents-strip.js), every agent at a glance in one row of cards; at most one
+   per layout. Read only. */
+const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'bot', 'agents'];
+const ONE_EACH = ['ticket', 'bot', 'agents'];
 /* 1.16.0 (Anthony 2026-10-07): the rows a Quote board hides, saved with its panel. Any root name ChartBridge could list (NQ,
    ES, or a quote-only market from hello, such as YM or 6E): kept as typed by the menu, so a root hello no longer lists is
    simply ignored; anything else dropped. Display only. */
@@ -1965,6 +1967,7 @@ function addView(p) {
   else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
   else if (p.type === 'tags') mid = '<span class="ws-name">Trade tags</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';   // 1.34.0
   else if (p.type === 'bot') mid = '<span class="ws-name">Bot</span><span class="ws-fill"></span>';                // 1.35.0
+  else if (p.type === 'agents') mid = '<span class="ws-name">Agents</span><span class="ws-acct" title="Read only: this panel sends nothing">read only</span><span class="ws-fill"></span>';   // 1.36.0
   else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
   // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
@@ -1983,6 +1986,7 @@ function addView(p) {
   else if (p.type === 'accounts') mountAccountsPage(v);  // 1.16.0
   else if (p.type === 'tags') mountTags(v);              // 1.34.0 (Anthony 2026-10-21)
   else if (p.type === 'bot') mountTabPanel(v);           // 1.35.0 (Anthony 2026-10-21)
+  else if (p.type === 'agents') mountAgentsStrip(v);     // 1.36.0 (Anthony 2026-10-22)
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
@@ -2073,9 +2077,10 @@ function addPanel(type) {
   if (panels.length >= W.MAX_PANELS) { note('At most ' + W.MAX_PANELS + ' panels: close one first', true); return; }
   if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
   if (type === 'bot' && panels.some(q => q.type === type)) { note('This layout has its Bot panel already', true); return; }
+  if (type === 'agents' && panels.some(q => q.type === type)) { note('This layout has its Agents strip already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'bot'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'bot', 'agents'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -2555,6 +2560,30 @@ function mountTabPanel(v) {
   const t = setInterval(sync, 2000);
   v.destroy = () => { clearInterval(t); if (btn && v.body.contains(btn)) { btn.classList.remove('ws-tp-btn'); $('wsTabHold').appendChild(btn); } };
 }
+/* 1.36.0 (Anthony 2026-10-22: "a panel ... that plays horizontally, but just shows the current active shadow agents and
+   eventually live agents status"): the Agents strip (live/agents-strip.js). Read only: the league from the workspace's one league
+   read (LG below, or the League view's day while it is open: no second poller), the live agents from the Agent tab's own state
+   (agentDesk.glance), MNQ's price from the quote the Quote board uses. A click on a card opens the League tab or the Agent tab. */
+const stripViews = () => [...views.values()].filter(v => v.panel.type === 'agents' && v.strip);
+function mountAgentsStrip(v) {
+  v.state = 'live';
+  if (!window.AgentsStrip || !window.AgentsStripCore) { v.body.innerHTML = '<p class="tt-foot warn">Reload this window: its agents-strip.js is missing.</p>'; v.destroy = () => {}; return; }
+  const offMnq = watchQuote('MNQ');
+  const strip = window.AgentsStrip.mount(v.body, {
+    day: () => leagueGhostDay(),
+    reach: () => (leagueView && leagueView.shown() ? { problem: leagueView.state().problem, at: 0 } : { problem: LG.problem, at: LG.at }),
+    agents: () => (agentDesk && agentDesk.glanceIds ? agentDesk.glanceIds().map(id => { const g = agentDesk.glance(id); return g ? { a: g.agent, g } : null; }).filter(Boolean) : []),
+    nowMs: () => etNowSec() * 1000,
+    last: r => { const x = quoteOf(r); return x && typeof x.last === 'number' && isFinite(x.last) ? x.last : null; },
+    pv: r => (instruments[r] && +instruments[r].pointValue > 0 ? +instruments[r].pointValue : null),
+    openLeague: () => { if (leagueView) leagueView.showTab(true); else note('The League tab did not start: reload this window', true); },
+    openAgent: id => { if (agentDesk) { agentDesk.choose(id); agentDesk.showTab(true); } },
+  });
+  v.strip = strip;
+  syncLeagueGhosts();                                       // the league read runs while a strip is placed
+  v.destroy = () => { offMnq(); strip.destroy(); v.strip = null; setTimeout(syncLeagueGhosts, 0); };
+}
+setInterval(() => { for (const v of stripViews()) v.strip.render(); }, 1000);   // its clocks and the Agent tab's news; a card is drawn again only when it changed
 var tagsRaf = 0;                                          // var: renderOrders may run before this line
 function renderTags() { if (!tagsRaf && tagViews().length) tagsRaf = requestAnimationFrame(() => { tagsRaf = 0; for (const v of tagViews()) v.tags.render(); }); }
 setInterval(renderTags, 1000);                            // the session's start and the Desk's answers
@@ -2877,6 +2906,9 @@ function syncAddMenu() {
     const on = panels.some(p => p.type === t);
     x.title = on ? 'This layout has ' + words + ': a click opens it' : x.dataset.tip || '';
   }
+  /* 1.36.0: one Agents strip a layout */
+  const ag = $('wsAddMenu').querySelector('[data-add="agents"]'), hasAg = panels.some(p => p.type === 'agents');
+  if (ag) { ag.disabled = hasAg; ag.title = hasAg ? 'This layout has its Agents strip' : ag.dataset.tip || ''; }
 }
 
 /* A chart's instrument and bars: the instruments, the bars, and the range size for Range bars. Applied at once. */
@@ -3484,6 +3516,10 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   /* 1.35.0: the League tab, and the charts showing the league's trades faintly (read only) */
   league: () => (leagueView ? leagueView.state() : null),
   leagueGhosts: () => [...LG.overlays.keys()],
+  /* 1.36.0: the Agents strip (read only) and how many times this window read the league */
+  agentsStrip: () => { const v = stripViews()[0]; return v ? v.strip.state() : null; },
+  leagueReads: () => LG.reads,
+  quoteLast: r => { const x = quoteOf(r); return x ? x.last : null; },
   leagueGhostTrades: () => { const d = leagueGhostDay(); return d ? d.trades.length + d.open.length : 0; },
   /* 1.34.0: how many risk alerts sounded in this window (test/flatten-every-smoke.mjs) */
   riskSounds: () => riskSounds };
@@ -3548,7 +3584,10 @@ function startLeague() {
    every 30 seconds while any is on, one overlay per such chart */
 const LG_GHOST_KEY = window.LeagueCore ? window.LeagueCore.GHOST_KEY : 'live-league-ghost-v1';
 const leagueGhosts = () => { try { return window.LeagueCore ? window.LeagueCore.cleanGhosts(store.getItem(LG_GHOST_KEY)) : {}; } catch (e) { return {}; } };
-const LG = { day: null, timer: 0, seq: 0, overlays: new Map() };
+const LG = { day: null, timer: 0, seq: 0, overlays: new Map(), problem: '', at: 0, reads: 0, busy: false };
+/* 1.36.0: the one league read serves the faint marks and the Agents strip: it runs while either is on the page (every 30 s,
+   15 s with a strip), and while the League view is open it reads nothing itself (that view reads every 15 s; its day is used) */
+const leagueWanted = () => LG.overlays.size > 0 || [...views.values()].some(v => v.panel.type === 'agents');
 /* review 3: the faint marks draw the League view's day only while it is open (it reads every 15 s); else this poll's (30 s), so
    they never freeze on what the view read last */
 const leagueGhostDay = () => (leagueView && leagueView.shown() && leagueView.day()) || LG.day;
@@ -3564,16 +3603,21 @@ function syncLeagueGhosts() {
   for (const v of chartViews()) if (g[v.panel.id] && window.LeagueCore.ROOTS.includes(v.panel.root)) want.add(v.panel.id);
   for (const [id, ov] of LG.overlays) if (!want.has(id) || !views.has(id) || ov.pane !== views.get(id).pane) { ov.o.destroy(); LG.overlays.delete(id); }
   for (const id of want) if (!LG.overlays.has(id)) { const v = views.get(id); LG.overlays.set(id, { pane: v.pane, o: window.LeagueOverlay.attach(v.pane, v.body, leagueGhostDay, () => v.panel.root, true) }); }
-  if (want.size && !LG.timer) leaguePoll();
-  if (!want.size) { clearTimeout(LG.timer); LG.timer = 0; }
+  if (leagueWanted() && !LG.timer && !LG.busy) leaguePoll();
+  if (!leagueWanted()) { clearTimeout(LG.timer); LG.timer = 0; }
 }
 function leaguePoll() {
   clearTimeout(LG.timer); LG.timer = 0;
-  if (!LG.overlays.size) return;
-  const seq = ++LG.seq;                                    // only the latest read schedules the next (one 30 s poll, never two)
+  if (!leagueWanted()) return;
+  const seq = ++LG.seq;                                    // only the latest read schedules the next (one poll, never two)
+  const next = () => { if (seq === LG.seq && leagueWanted()) LG.timer = setTimeout(leaguePoll, stripViews().length ? 15000 : 30000); };
+  if (leagueView && leagueView.shown()) { next(); return; }   // the League view reads it now: its day is the one used
+  LG.reads++; LG.busy = true;
   window.AccountsPage.deskBase((u, o) => fetch(u, o)).then(url => fetch(url + '/api/chart-league', { cache: 'no-store', mode: 'cors', credentials: 'omit' }))
-    .then(r => (r.ok ? r.json() : null)).then(j => { if (j) LG.day = window.LeagueCore.cleanDay(j); }, () => { /* The Desk down: the last marks stay */ })
-    .then(() => { for (const x of LG.overlays.values()) x.o.redraw(); if (seq === LG.seq && LG.overlays.size) LG.timer = setTimeout(leaguePoll, 30000); });
+    .then(r => (r.ok ? r.json() : Promise.reject(new Error(r.status === 404 ? 'The Desk has no league view yet (it needs The Desk of chart 1.35.0).' : 'The Desk answered ' + r.status))))
+    .then(j => { LG.day = window.LeagueCore.cleanDay(j); LG.problem = ''; LG.at = Date.now(); },
+      e => { LG.problem = (e && /^The Desk/.test(e.message) ? e.message : 'The Desk is not reachable: ' + (e && e.message ? e.message : 'no answer')) + (LG.day ? ' Showing what it last sent.' : ''); })   // the last marks stay
+    .then(() => { LG.busy = false; for (const x of LG.overlays.values()) x.o.redraw(); for (const v of stripViews()) v.strip.render(); next(); });
 }
 setInterval(syncLeagueGhosts, 3000);                      // a chart's instrument changed, a layout opened: the overlays follow
 window.addEventListener('storage', e => { if (e.key && e.key.endsWith(LG_GHOST_KEY)) syncLeagueGhosts(); });

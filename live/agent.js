@@ -1714,6 +1714,28 @@ function create(o) {
     /** the agent that owns (account, root) by ChartBridge's owner lock, or '' (the order ticket refuses a resting order there) */
     ownerOf: (account, root) => AC.pairOwner(agents.list(), S.orders.values(), account, root),
     answer: (agent, id, ans) => answer(agent, id, ans),
+    /** 1.36.0, read only: the agents ChartBridge lists, and what the Agents strip (live/agents-strip.js) shows of one, from what
+        this tab already holds (his `agent` message, his stream newest first, his closed trades today, his open position's first
+        fill and its risk, his working orders, the PC helper's spend as last read). Sends nothing. */
+    glanceIds: () => agents.ids(),
+    glance: id => {
+      const a = agents.get(id);
+      if (!a) return null;
+      const stream = streamRows(a).slice(0, 12).map(r => ({ key: r.key, at: r.at, time: AC.etClockSec(r.at), tag: AC.rowTone(r).tag, text: rowText(r), full: r.type === 'note' ? r.m.text : rowText(r) }));
+      const t = dayTrades(id), rr = rNow(a), pos = a.position && isNum(a.position.qty) && a.position.qty ? a.position : null;
+      let sinceText = '';
+      if (pos) {
+        const list = fillsDay().list.filter(x => x.agent === id && x.root === pos.root && isNum(x.u)).map(f => Object.assign({}, f, { t: f.u })).sort((x, y) => x.t - y.t);
+        const open = BC.trips(list).find(x => x.tOut === null);
+        if (open && isNum(open.tIn)) sinceText = AC.etClockSec(open.tIn);
+      }
+      const op = pos ? rr.open.find(x => x.root === pos.root) : null;
+      const orders = [...S.orders.values()].filter(o => AC.isAgentMark(o, a) && (o.state === 'working' || o.state === 'partFilled'))
+        .map(o => ({ role: o.role === 'stop' || o.role === 'target' ? o.role : 'entry', side: o.side, kind: typeof o.kind === 'string' ? o.kind : '', price: isNum(o.price) ? o.price : null, qty: isNum(o.qty) ? o.qty : null, root: o.root }));
+      const h = helperOf(id);
+      return { agent: Object.assign({}, a), stream, exits: t.exits.map(e => ({ pnl: e.pnl, at: e.at })), totalR: rr.total, openRisk: op && isNum(op.risk) ? op.risk : null, sinceText,
+        orders, spend: h && h.spend ? { session: h.spend.session, overall: h.spend.overall } : null, helperOn: !!(h && h.on) };
+    },
     /* read only, for the tests and the console */
     state: () => ({ v3: S.v3, version: S.version, signedIn: S.signedIn, shown: S.shown, chosen: S.chosen, agents: agents.list().map(a => Object.assign({}, a)),
       proposals: [...cards.values()].map(x => ({ agent: x.p.agent, id: x.p.id, ended: !!x.ended })),

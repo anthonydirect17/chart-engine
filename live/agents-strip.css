@@ -1,0 +1,68 @@
+/* The Agents strip (chart 1.36.0, live/agents-strip.js): one row of agent cards, side by side, in a panel. The page's own look
+   (the workspace tokens, IBM Plex). A seat's colour (H amber, S cyan, O violet, as the League tab) appears only on its letter
+   and its card's 3 px left edge. Green and red only for P&L and the trade side. No motion (docs/MOTION.md R3): no transition,
+   no animation; a new thought is simply the first line. */
+.ws-panel.agents .ws-body { overflow: hidden; }
+.as-wrap { position: relative; height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding: 6px 8px 4px; color: var(--ws-text); font-family: var(--ws-sans); box-sizing: border-box; }
+.as-wrap *, .as-wrap *::before, .as-wrap *::after { transition: none !important; animation: none !important; }
+.as-line { margin: 0; font-size: 11px; color: var(--ws-warn); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.as-line[hidden] { display: none; }
+.as-row { flex: 1 1 auto; min-height: 0; display: flex; align-items: stretch; gap: 8px; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
+/* 5 to 6 cards across 1,430 px: each 240 to 360 px, sharing the row; past that the row scrolls sideways */
+.as-slot { flex: 1 1 260px; min-width: 240px; max-width: 360px; min-height: 0; display: flex; }
+.as-empty { margin: 8px 0; font-size: 12px; }
+.as-card { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border: 1px solid var(--ws-line); border-left: 3px solid var(--seat, var(--ws-line2)); border-radius: 6px; background: var(--ws-panel); cursor: pointer; overflow: hidden; font-size: 12px; }
+/* a short card keeps every line whole and cuts only the stream */
+.as-card > * { flex: none; }
+.as-card > .as-ths { flex: 1 1 auto; }
+.as-card:hover { border-color: var(--ws-line2); border-left-color: var(--seat, var(--ws-line2)); }
+.as-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.as-letter { width: 20px; height: 20px; font-size: 11px; }
+.as-ag { display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: 50%; border: 1.5px solid var(--ws-line2); color: var(--ws-text2); font: 600 11px var(--ws-mono); font-style: normal; }
+.as-name { font: 600 13px var(--ws-sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.as-fill { flex: 1 1 auto; }
+/* the mode, big: SHADOW in a dashed purple box (paper), SIM in a solid line, LIVE filled with the accent (the house red stays in the logo) */
+.as-mode { flex: none; font: 600 14px var(--ws-mono); letter-spacing: .08em; padding: 1px 7px; border-radius: 5px; line-height: 20px; }
+.as-mode.m-shadow { color: var(--ws-soft); border: 1px dashed var(--ws-tint-line); }
+.as-mode.m-sim { color: var(--ws-text); border: 1px solid var(--ws-line2); }
+.as-mode.m-live { color: #fff; background: var(--ws-accent); border: 1px solid var(--ws-accent); }
+.as-mode.m-none, .as-mode.m-unknown { color: var(--ws-text2); border: 1px solid var(--ws-line2); }
+.as-open { flex: none; width: 22px; height: 22px; padding: 0; border: 1px solid var(--ws-line2); border-radius: 5px; background: var(--ws-field); color: var(--ws-text2); font: 600 14px var(--ws-sans); cursor: pointer; }
+.as-open:hover, .as-open:focus-visible { color: var(--ws-soft); border-color: var(--ws-tint-line); }
+.as-sub { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; }
+.as-sub > .as-mut { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.as-state { flex: none; margin-left: auto; font: 600 11px var(--ws-mono); color: var(--ws-warn); border: 1px solid var(--ws-warn); border-radius: 4px; padding: 0 5px; background: var(--ws-warn-ground); }
+.as-warn { color: var(--ws-warn); font-size: 11px; }
+.as-flag { color: var(--ws-soft); font-size: 11px; }
+.as-mut { color: var(--ws-muted); }
+.as-v { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; line-height: 16px; }
+.as-card .mono, .as-detail .mono { font-family: var(--ws-mono); font-variant-numeric: tabular-nums; font-size: 11px; }
+.as-sec { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 6px; align-items: start; border-top: 1px solid var(--ws-line); padding-top: 3px; min-width: 0; }
+.as-sec > div { min-width: 0; }
+.as-lbl { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--ws-muted); line-height: 16px; }
+.as-side.long { color: var(--ws-buy); }
+.as-side.short { color: var(--ws-sell); }
+.as-pnl.up { color: var(--ws-buy); }
+.as-pnl.down { color: var(--ws-sell); }
+/* the stream: newest first; the lines that fit show, the older ones are cut off at the card's foot (nothing scrolls) */
+.as-ths { flex: 1 1 auto; min-height: 0; overflow: hidden; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 1px; }   /* its label above: the lines get the card's width */
+.as-list { list-style: none; margin: 0; padding: 0; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 1px; }
+.as-th { width: 100%; display: grid; grid-template-columns: 32px 42px 26px minmax(0, 1fr); gap: 4px; align-items: center; padding: 1px 2px; border: 0; border-radius: 3px; background: transparent; color: var(--ws-text2); font: 11px var(--ws-sans); text-align: left; cursor: pointer; line-height: 16px; }
+.as-th:hover, .as-th:focus-visible { background: var(--ws-row); color: var(--ws-text); outline: none; box-shadow: inset 0 0 0 1px var(--ws-tint-line); }
+.as-t { color: var(--ws-muted); }
+.as-act { font: 600 10px var(--ws-mono); text-transform: uppercase; letter-spacing: .04em; color: var(--ws-text2); white-space: nowrap; overflow: hidden; }
+.as-th.k-enter .as-act, .as-th.k-rest .as-act, .as-th.k-plan .as-act { color: var(--ws-soft); }
+.as-th.k-refused .as-act, .as-th.k-failed .as-act { color: var(--ws-warn); }
+.as-conf { color: var(--ws-muted); }
+.as-tx { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.as-none { font-size: 11px; }
+.as-foot { margin: 0; font-size: 11px; color: var(--ws-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 14px; }
+/* a thought's full reasoning: a box over the strip's foot, in the panel (the strip stays where it was) */
+.as-detail { position: absolute; left: 8px; right: 8px; bottom: 6px; max-height: 60%; overflow: auto; z-index: 3; padding: 8px 10px; border: 1px solid var(--ws-line2); border-radius: 8px; background: var(--ws-pop); box-shadow: 0 8px 24px rgba(0, 0, 0, .5); font-size: 12px; }
+.as-detail[hidden] { display: none; }
+.as-dhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.as-dhead .as-act { font-size: 11px; }
+.as-dhead .as-act.k-enter, .as-dhead .as-act.k-rest { color: var(--ws-soft); }
+.as-dhead .as-act.k-refused, .as-dhead .as-act.k-failed { color: var(--ws-warn); }
+.as-full { margin: 6px 0 4px; white-space: pre-wrap; line-height: 1.45; color: var(--ws-text); }
+.as-detail p.as-mut { margin: 0; font-size: 11px; }

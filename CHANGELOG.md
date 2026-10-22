@@ -1,5 +1,48 @@
 # Changelog
 
+## chart 1.36.0 (2026-10-22): the Agents strip
+
+Anthony's request of 2026-10-22 (WORK, "FROM_WORK_2026-10-22_REQUEST_agents_strip_panel.md"): "I want a panel made, that plays
+horizontally, but just shows the current active shadow agents and eventually live agents status, so If I dont have their tab
+pulled up I can still glance over and see their position, spent, stream of thoughts." **Page only: no ChartBridge change** (it
+stays 0.6.6; `minChartBridge` stays 0.6.2), no Desk change (it reads The Desk of chart 1.35.0), no Bot-Lab change.
+
+- **The Agents strip** (`live/agents-strip.js`, `live/agents-strip.css`, new page files): "Agents" in + Add panel, at most one a
+  layout, made for the lower left of the Accounts layout on his third screen (about 1,430 by 450 px at 1906 x 1014). One card per
+  agent, left to right: the league's seats H Haiku (amber), S Sonnet (cyan), O Opus (violet), as the League tab, then each live
+  agent ChartBridge lists that is running, holds anything, or is killed or stood down (an off, empty slot is named in the strip's
+  foot instead). Cards share the row at 240 to 360 px each; past that the row scrolls sideways inside the panel, never the page.
+- **Each card:** the name and colour; the **mode big** (SHADOW in a dashed purple box for a seat, paper; a live agent's Shadow is
+  SHADOW, Copilot or Auto on a Sim account SIM, on a live account LIVE filled with the accent, on no account AUTO or COPILOT with
+  "account None: nothing trades"), so a paper seat is never mistaken for a live one; its **one word** when it matters (look cap,
+  API stopped, day stopped, day closed, feed down, status late, retired; killed, stood down, off, not connected); **now** (flat, or
+  LONG or SHORT N since hh:mm, open P&L in dollars and R, the stop and target distance in points, a resting order); **today** (P&L
+  and R, trades with wins and losses, the seat's virtual 50K Flex balance and room to the floor); **spend** (the seat's dollars
+  against the seats' pool, the day against the day cap, calls today); the **stream of thoughts**, newest first (time, action,
+  confidence, the first line of the reasoning; the lines that fit whole). A click on a thought opens its full reasoning in a box
+  over the strip (Close or Escape); a click anywhere else on a card (or its › button) opens the League tab for a seat, the Agent
+  tab on that agent for a live one.
+- **Worked out on the page, and said so in its hover:** the **look cap** (the league logs it, but neither status.json nor The Desk
+  passes it on): a seat's decisions in the 60 minutes before now; 30 or more is the cap, and the next look is when the oldest of
+  the last 30 is an hour old (the league's own rule, Bot-Lab league/runner.py `_cap_ok`: any 60 minutes, not the clock hour). Open
+  P&L and R from the page's MNQ price (the Quote board's quote) against the paper fill, R on the stop at the fill (a live agent's on
+  its plan's risk). The seats' pool: the day cap less the coach's reserve.
+- **Not reported, never a guess:** a seat's resting order (the league writes it to status.json; The Desk of 1.35.0 does not pass it
+  on, so every seat card says "resting order: not reported" until it does; the strip reads it once it comes); a live agent's room,
+  its calls, a resting order's time left, the PC helper's spend while the Agent tab has not read it.
+- **One league read for the page:** the strip has no poller of its own. The workspace's league read (the faint marks' 30 s read)
+  now runs while the faint marks or a strip are on the page, every 15 s with a strip, and reads nothing while the League view is
+  open (that view reads every 15 s and its day is the one used). The live agents come from the Agent tab's state (`glance`, a new
+  read only accessor in `live/agent.js`: his stream, his day's trades, his open position's first fill and risk, his working
+  orders, the helper's spend as last read).
+- **Read only:** the strip sends nothing (no order, no agent or bot control message, no request of its own; the smoke checks it).
+  **No motion** (docs/MOTION.md R3): a new thought is simply the first line the next time the card is drawn; nothing scrolls,
+  slides or fades. A card is drawn again only when what it shows changed.
+- Tests: `test/agents-strip.test.js` (the derived look cap, the mode labels, not reported, the seats' and an agent's cards, the
+  page) and `npm run smoke:agents-strip` (test/agents-strip-smoke.mjs: a SAMPLE league day, labelled as sample on every seat
+  card, and the made-up Demo Agent in Shadow, in an Accounts-like layout at 1906 x 1014; screenshots
+  `test/out/agents-strip-*.png`).
+
 ## chart 1.35.0 (2026-10-21): the League tab, the Bot as a panel, Update floors from The Desk, the trade note
 
 Anthony's decisions of 2026-10-21. **Page only: no ChartBridge change** (it stays 0.6.6; `minChartBridge` stays 0.6.2). Needs The

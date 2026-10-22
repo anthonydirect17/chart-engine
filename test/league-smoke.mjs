@@ -88,7 +88,7 @@ try {
   check(!(await p.isVisible('#wsBotTab')) && await p.$eval('#wsTabHold', h => h.contains(document.getElementById('wsBotTab'))), 'no Bot button in the top bar: it waits in the hidden hold');
   await p.click('#wsAdd');
   const menu = await p.$$eval('#wsAddMenu [data-add]', bs => bs.map(b => b.textContent));
-  check(menu.includes('Bot') && !menu.some(t => /Agent/.test(t)), '+ Add panel offers the Bot (and no agent panel): ' + menu.join(', '));
+  check(menu.includes('Bot') && !menu.some(t => /^Agent( tab| desk)?$/.test(t)), '+ Add panel offers the Bot (and no Agent tab panel; 1.36.0: the Agents strip is its own panel): ' + menu.join(', '));
   await p.click('#wsAdd');
 
   /* the League tab */
