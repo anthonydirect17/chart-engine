@@ -23,8 +23,9 @@ need 0.6.7).
     The Desk): the bench also lists the firm's accounts in no group, and a click or a drag of one into the group opens the join step
     on its chip (Anthony 2026-10-22, "Join flow on the chip"): the Accounts tab's own join, the same words, its rules from its type
     on The Desk, the highest close so far prefilled, then **Put in** sends the same `accountGroup` and it lands in the trading lane;
-    **Cancel** (or Escape) leaves it on the bench. An account with no type on The Desk still cannot join and says so on its chip; one
-    whose rules cannot be read from The Desk (The Desk not reached, or its type has no rules) is sent to the Accounts tab, where
+    **Cancel** (or Escape) leaves it on the bench. A highest close typed in one account's step never carries into another's (each
+    starts from its own prefill). An account with no type on The Desk still cannot join and says so on its chip; one whose rules
+    cannot be read from The Desk (The Desk not reached, or its type has no rules) is sent to the Accounts tab, where
     they can be typed. The Accounts tab's join works as before (the same code, now shared). With a ChartBridge older than 0.6.7 a
     join from the panel says it needs 0.6.7, as moving a chip does.
   - **Copier:** the copier exactly as it was, moved from the Account page (the Account page is mounted with only its Copier tab).
@@ -45,11 +46,15 @@ need 0.6.7).
   are optional (a group made on the panel has none, its line `-` for drawdown, type and size) and never size a member: a member with
   no rules of its own sits out a group entry ("it has no account type: set its type on The Desk and apply it"); a group with no
   rules takes a joining account only with its own rules; the risk percent changes only while the group is flat.
-- **ChartBridge 0.6.7, exits never wait on a groups.txt write** (review LOW 1): a save with a risk percent and a bench move decide
-  (the group or the account flat) and change memory under the group entry lock and the order lock, then let both go and write
-  `groups.txt` and its sealed copy under the save lock alone, so a page market exit, a copier exit copy or an agent's close or stop
-  placed meanwhile never waits on the disk. A write that fails puts memory back to what the file holds and says "groups.txt could not
-  be saved (...); nothing was changed". A save of a name, a Type or rules takes the save lock alone, as before 0.6.7.
+- **ChartBridge 0.6.7, exits never wait on a groups.txt write** (reviews LOW 1, L1, L2): every groups change runs one at a time
+  behind a change gate taken before any other lock, so a second change waits there holding nothing an exit needs. A save with a risk
+  percent, a bench move and `accountGroup` decide (the group or the account flat) and change memory under the group entry lock and
+  the order lock, then let the order lock go and write `groups.txt` and its sealed copy with the group entry lock still held: a page
+  market exit, a copier exit copy or an agent's close or stop placed meanwhile never waits on the disk, and no page group entry is
+  sized from a change not yet saved. A write that fails: when the account (or the group) is still flat with no working order, memory
+  goes back to what the file holds ("groups.txt could not be saved (...); nothing was changed"); when something was placed on the change
+  meanwhile (an agent's entry), the change stays, the alarm goes up and the answer says it will be saved with the next change. Pages
+  and agents are told either way. A save of a name, a Type or rules takes the save lock alone, as before 0.6.7.
 - **Room right:** Custom beside 80, 120 and 160 px (any whole 40 to 600 px), and a drag in the gap between the last bar and the price
   axis on any chart sets it (live charts; the `col-resize` cursor there; never with Shift or Ctrl). Saved as the presets, for every
   chart; Jump to live and End keep it (engine: the `room` event, `util.ROOM_MIN`/`ROOM_MAX`).

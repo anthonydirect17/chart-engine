@@ -22,10 +22,11 @@
 //     accounts message and the agent's accountState. account-marks.txt keeps each account's highs and its day start (G2: the
 //     highs start from the "highest close so far" the page asks for when an account joins a group). Never estimated: a number
 //     ChartBridge cannot give is null with the reason.
-// Lock order: ChartBridgeOrders' GroupEntryLock, then PlaceLock, then SaveLock, then Mem. Mem only guards memory: never held during
-// file I/O or a NinjaTrader call. 0.6.7 (review LOW 1): the group save with a risk percent and the bench move decide and change memory
-// under GroupEntryLock and PlaceLock, then let them go and write groups.txt under SaveLock alone (ChangeAndSave), so an exit never
-// waits on that write. AccountGroup still saves under PlaceLock, as before 0.6.7. Written in C# 5 syntax (NinjaTrader 8 compiles NinjaScript as C# 5).
+// Lock order: ChangeGate (every groups change, one at a time), then ChartBridgeOrders' GroupEntryLock, then PlaceLock, then SaveLock,
+// then Mem. Mem only guards memory: never held during file I/O or a NinjaTrader call. 0.6.7 (reviews LOW 1, L1, L2): the group save
+// with a risk percent, the bench move and accountGroup decide and change memory under GroupEntryLock and PlaceLock, then let PlaceLock
+// go and write groups.txt under GroupEntryLock and SaveLock (ChangeAndSave), so an exit (PlaceLock only) never waits on that write and
+// no page group entry uses a change before it is saved. A second groups change waits at ChangeGate, holding nothing an exit needs. Written in C# 5 syntax (NinjaTrader 8 compiles NinjaScript as C# 5).
 #region Using declarations
 using System;
 using System.Collections.Generic;
@@ -702,7 +703,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly object SaveLock = new object();       // one change (and its groups.txt write) at a time
         private static readonly object MarksFileLock = new object();
         private static State state = new State();
-        private static State onDisk = new State();   // 0.6.7 (review LOW 1): what groups.txt holds (the last save, or what was read at the start)
+        private static State onDisk = new State();   // 0.6.7 (review LOW 1): what a failed write goes back to: what groups.txt holds (the last save, or what was read at the start), or a change kept after a failed write (review L2)
+        private static string unsaved;   // 0.6.7 (review L2): a change kept in memory that groups.txt does not hold yet (the write's error), for the alarm at sign in
+        private static readonly object ChangeGate = new object();   // 0.6.7 (review L1): every groups change, one at a time, taken before any other lock
         private static bool loaded;
         private static string readError;      // groups.txt exists but could not be read: group entries refused, never rewritten this run
         // 2026-10-21 (Anthony): with readError set, the last good copy (its file name) that `state` holds for the bot, the agents and the
@@ -722,7 +725,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Mem)
             {
                 ExitOf.Clear(); ExitHeld.Clear(); FlatSince.Clear(); LeftCancelled.Clear(); LeftLooked.Clear(); PosSide.Clear();
-                state = onDisk = new State(); loaded = false; readError = null; lastGoodFrom = null; lastGoodAt = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
+                state = onDisk = new State(); unsaved = null; loaded = false; readError = null; lastGoodFrom = null; lastGoodAt = null; Marks.Clear(); marksError = null; marksDirty = false; marksWrittenMs = -1e18;
                 marksSaveFailed = false; lastGroupsJson = null; LastSide.Clear();
             }
             ClearDailyHits();   // 0.6.6
@@ -1626,6 +1629,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             string err;
             lock (Mem) err = readError;
             if (err != null) c.Send(StatusJson("error", ReadFailedNow() + " (" + err + ")"));
+            lock (Mem) err = unsaved;
+            if (err != null) c.Send(StatusJson("error", "groups: groups.txt could not be saved (" + err + "): a change is in effect that the file does not hold yet; it will be saved with the next change"));
         }
 
         // ---------------------------------------------------------- the account numbers (item 5)
@@ -1913,7 +1918,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     EnsureLoaded();
                     lock (Mem) if (readError != null) why = ReadFailedText + "; nothing was changed";
                 }
-                if (why == null) why = type == "groupSave" ? GroupSave(m) : type == "groupDelete" ? GroupDelete(m) : type == "accountGroup" ? AccountGroup(m) : type == "memberRules" ? MemberRules(m) : type == "firmMinimum" ? FirmMinimum(m) :
+                // review L1: one groups change at a time, the gate taken before GroupEntryLock and PlaceLock, so a second change waits
+                // here holding nothing an exit needs
+                if (why == null) lock (ChangeGate) why = type == "groupSave" ? GroupSave(m) : type == "groupDelete" ? GroupDelete(m) : type == "accountGroup" ? AccountGroup(m) : type == "memberRules" ? MemberRules(m) : type == "firmMinimum" ? FirmMinimum(m) :
                                        type == "memberBench" ? MemberBench(m) : AccountLimits(m);
                 if (why != null) client.Send(Reject(cid, why));
             }
@@ -1971,44 +1978,62 @@ namespace NinjaTrader.NinjaScript.AddOns
             string text = Serialize(next), err = WriteWhole(FilePath, text);
             if (err != null) return "groups.txt could not be saved (" + err + "); nothing was changed";
             WriteGood(text);   // 2026-10-21: the copy the machines fall back on is always the latest save
-            lock (Mem) { state = next; onDisk = next; }
+            lock (Mem) { state = next; onDisk = next; unsaved = null; }
             return null;
         }
 
-        // 0.6.7 (review LOW 1): a change whose decision needs the entry locks (a risk percent changed only while the group is flat, a
-        // move to or from the bench only while the account is flat). With place true, the decision and the change in memory are made
-        // under GroupEntryLock, PlaceLock and SaveLock; PlaceLock and GroupEntryLock are then let go and groups.txt (and its .good copy)
-        // is written under SaveLock alone, so an exit (the page's, the copier's, an agent's) never waits on the disk. If the write
-        // fails, memory goes back to what groups.txt holds (under all three again, taken in order) and the answer says nothing was
-        // changed. With place false: SaveLock alone, the file first and then memory, as Save always did. decide gets a copy of the state
-        // to change and answers null (save it), a refusal, or Unchanged (nothing to save).
+        // 0.6.7 (reviews LOW 1, L1, L2): a change whose decision needs the entry locks (a risk percent changed only while the group is
+        // flat, a move to or from the bench only while the account is flat, an account joining or leaving a group). Every groups change
+        // already holds ChangeGate (OnMessage), so no second change waits on SaveLock while holding PlaceLock. With place true: the
+        // decision and the change in memory under GroupEntryLock, PlaceLock and SaveLock; then PlaceLock is let go and groups.txt (and
+        // its .good copy) is written with GroupEntryLock and SaveLock still held, so an exit (the page's, the copier's, an agent's close
+        // or stop: PlaceLock only) never waits on the disk, and no page group entry is sized from a change not yet saved (L2). If the
+        // write fails, under PlaceLock again (SaveLock let go first, so the order holds): busyNow says whether anything was placed on
+        // the change meanwhile (an agent's group entry takes PlaceLock alone). Nothing: memory goes back ("nothing was changed").
+        // Something: the change stays in memory, the groups alarm goes up and the answer says it is saved with the next change. The
+        // pages and agents hear of either (Changed). With place false: SaveLock alone, the file first and then memory, as Save always
+        // did. decide gets a copy of the state to change and answers null (save it), a refusal, or Unchanged (nothing to save).
+        // inEffect: true when the change is in memory when this returns (saved, or kept after a failed write).
         private static readonly string Unchanged = new string('=', 1);
         public static Action WriteForHarness;   // the harness only: runs just before ChangeAndSave's write (a slow disk, or a throw for a failed write)
-        private static string ChangeAndSave(bool place, Func<State, string> decide)
+        private static string ChangeAndSave(bool place, Func<State, string> decide, Func<State, string> busyNow, out bool inEffect)
         {
-            bool e = false, p = false, sv = false;
-            State next = null, disk = null;
-            string err = null;
+            bool e = false, p = false, sv = false, reverted = false;
+            State next = null;
+            string err = null, why, keptBecause = null;
+            inEffect = false;
             try
             {
                 if (place) { Monitor.Enter(ChartBridgeOrders.GroupEntryLock, ref e); Monitor.Enter(ChartBridgeOrders.GroupPlaceLock, ref p); }
                 Monitor.Enter(SaveLock, ref sv);
-                lock (Mem) { next = state.Clone(); disk = onDisk; }
-                string why = decide(next);
+                lock (Mem) next = state.Clone();
+                why = decide(next);
                 if (why != null) return why;
-                if (!place) return Save(next);
+                if (!place) { why = Save(next); inEffect = why == null; return why; }
                 string text = Serialize(next);
                 lock (Mem) state = next;
-                Monitor.Exit(ChartBridgeOrders.GroupPlaceLock); p = false;
-                Monitor.Exit(ChartBridgeOrders.GroupEntryLock); e = false;
+                inEffect = true;
+                Monitor.Exit(ChartBridgeOrders.GroupPlaceLock); p = false;   // L2: GroupEntryLock stays held through the write
                 Action hook = WriteForHarness;
                 if (hook != null) { try { hook(); } catch (Exception ex) { err = ex.Message; } }
                 if (err == null) err = WriteWhole(FilePath, text);
                 if (err == null)
                 {
                     WriteGood(text);
-                    lock (Mem) onDisk = next;
+                    lock (Mem) { onDisk = next; unsaved = null; }
                     return null;
+                }
+                Monitor.Exit(SaveLock); sv = false;
+                lock (ChartBridgeOrders.GroupPlaceLock)
+                lock (SaveLock)
+                {
+                    try { keptBecause = busyNow(next); }
+                    catch (Exception ex) { keptBecause = "ChartBridge could not read its positions and orders (" + ex.Message + ")"; }
+                    lock (Mem)
+                    {
+                        if (keptBecause == null) { state = onDisk; reverted = true; inEffect = false; }
+                        else { onDisk = next; unsaved = err; }   // what a later failed write goes back to; the file is one change behind
+                    }
                 }
             }
             finally
@@ -2017,15 +2042,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (p) Monitor.Exit(ChartBridgeOrders.GroupPlaceLock);
                 if (e) Monitor.Exit(ChartBridgeOrders.GroupEntryLock);
             }
-            // the write failed: memory back to the file (a save after this one, if any, wrote its own state whole, so onDisk is the file)
-            lock (ChartBridgeOrders.GroupEntryLock)
-            lock (ChartBridgeOrders.GroupPlaceLock)
-            lock (SaveLock)
+            if (reverted)
             {
-                bool later;
-                lock (Mem) { later = !ReferenceEquals(onDisk, disk); state = onDisk; }
-                return "groups.txt could not be saved (" + err + "); " + (later ? "a save after it wrote groups.txt with this change in it" : "nothing was changed");
+                Changed();
+                return "groups.txt could not be saved (" + err + "); nothing was changed";
             }
+            string kept = "changed, but groups.txt could not be saved (" + err + "): " + keptBecause + " since the change, so it stays in effect; it will be saved with the next change";
+            Alarm("groups: " + kept);
+            return kept;
         }
 
         // 0.6.7 (Anthony 2026-10-22): the group's own rules are optional (the Multi-Account panel sends none: absent keeps what the group
@@ -2071,8 +2095,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (hasRisk && m["riskPct"] != "0" && !FileRisk(m["riskPct"], out risk)) return "riskPct must be a percent of each member's max loss from 0 (off) to 100, at most 2 decimals";
             string said = null;
             // 0.6.7: a save with riskPct for a group decides under the entry locks (no group entry is sized while its risk percent
-            // changes, and it changes only while the group is flat), then writes groups.txt after them (review LOW 1); a name, Type or
-            // rules save, or a new group, takes SaveLock alone
+            // changes, and it changes only while the group is flat), then writes groups.txt with only GroupEntryLock still held (reviews
+            // LOW 1, L2); a name, Type or rules save, or a new group, takes SaveLock alone
+            bool inEffect;
             string res = ChangeAndSave(id != null && hasRisk, next =>
             {
                 Group g;
@@ -2096,11 +2121,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (id == null) { next.Groups[g.Id] = g; next.Next++; }
                 said = (id == null ? "group " + g.Id + " made: " : "group " + g.Id + " saved: ") + name + (was != null && was != name ? " (was " + was + ")" : "") + ", " + RulesWords(g);
                 return null;
-            });
-            if (res != null) return res;
+            }, next =>
+            {
+                // a failed write: the group holds something now (an agent's entry may have used the new percent): the change stays
+                List<ChartBridgeOrders.GroupHolding> held = Holdings(next.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList());
+                return held.Count > 0 ? "group " + next.Groups[id].Name + " holds " + HolderText(held) : null;
+            }, out inEffect);
+            if (!inEffect) return res;
             ChartBridgeServer.Log("groups: " + said + " (by the page)");
             Changed();
-            return null;
+            return res;
         }
 
         private static string RulesWords(Group g)
@@ -2173,16 +2203,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             // 0.6.0 (group trading): a group an agent trades takes no account that is the bot's, the copier's leader or a follower, or
             // another agent's (asked before the order lock: it reads the copier's and the bot's memory)
             if (id != null) { string taken = ChartBridgeAgents.JoinRefusal(name, id); if (taken != null) return taken; }
-            string said;
+            string said = null;
             double seed = 0;
-            lock (ChartBridgeOrders.GroupPlaceLock)   // no entry passes the check while the membership changes
-            lock (SaveLock)
+            // no entry passes the check while the membership changes (GroupEntryLock and PlaceLock); groups.txt is written after
+            // PlaceLock is let go, so an exit never waits on the disk (review L1), with GroupEntryLock held through it (review L2)
+            bool inEffect;
+            string res = ChangeAndSave(true, next =>
             {
-                State next;
-                lock (Mem) next = state.Clone();
                 string cur;
                 next.Members.TryGetValue(name, out cur);
-                if (id == cur) return id == null ? null : name + " is in " + next.Groups[id].Name + " already";
+                if (id == cur) return id == null ? Unchanged : name + " is in " + next.Groups[id].Name + " already";
                 Group g = null;
                 if (id != null && !next.Groups.TryGetValue(id, out g)) return "no group " + id;
                 // 0.6.7: a group with no rules of its own takes an account only with its own (from its type on The Desk)
@@ -2203,8 +2233,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 next.Benched.Remove(name);   // 0.6.7: a new membership (or none) starts off the bench
                 // 0.6.5: its own rules when the page sent them; none sent (a page before 1.33.0): the group's, so any it had go
                 if (own != null) next.Own[name] = own; else next.Own.Remove(name);
-                string err = Save(next);
-                if (err != null) return err;
                 if (g != null)
                 {
                     double? bal = Up(a) ? Item(a, AccountItem.CashValue) : null;
@@ -2212,7 +2240,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 said = name + (g != null ? " joined " + g.Name + (own != null ? " with its own rules (" + MemberWords(own) + ")" : " with the group's rules") + " (its highs start at " + seed.ToString("0.00", CultureInfo.InvariantCulture) + (high > 0 ? ", the highest close given" : ", no highest close given: the larger of the account size and its balance") + ")" : " is in no group now") +
                        (cur != null && next.Groups.ContainsKey(cur) ? ", left " + next.Groups[cur].Name : "");
-            }
+                return null;
+            }, next => HeldWords(name, a), out inEffect);   // a failed write: the account holds something now: the change stays
+            if (ReferenceEquals(res, Unchanged)) return null;
+            if (!inEffect) return res;
             if (id != null)
             {
                 bool flatNow = a == null || IsFlat(a);
@@ -2233,7 +2264,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else ForgetHighs(new[] { name });
             ChartBridgeServer.Log("groups: " + said + " (by the page)");
             Changed();
-            return null;
+            return res;
         }
 
         private static string AccountLimits(Dictionary<string, string> m)
@@ -2348,7 +2379,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             string gname = null;
             // under GroupEntryLock (a group entry from the page is sized and placed whole, before or after the move) and PlaceLock (no
             // other entry passes meanwhile; an agent's seat is checked again under it): the flat check and the move in memory. groups.txt
-            // is written after both are let go (review LOW 1), so an exit never waits on the disk
+            // is written after PlaceLock is let go (review LOW 1), so an exit never waits on the disk; GroupEntryLock stays held through
+            // the write, so no page group entry uses the move before it is saved (review L2)
+            bool inEffect;
             string res = ChangeAndSave(true, next =>
             {
                 string gid, why;
@@ -2358,12 +2391,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if ((why = BenchBusyWhy(name, a)) != null) return why;
                 if (benched.Value) next.Benched.Add(name); else next.Benched.Remove(name);
                 return null;
-            });
+            }, next => HeldWords(name, a), out inEffect);   // a failed write: the account holds something now: the move stays
             if (ReferenceEquals(res, Unchanged)) return null;
-            if (res != null) return res;
+            if (!inEffect) return res;
             ChartBridgeServer.Log("groups: " + name + (benched.Value ? " is on " + gname + "'s bench: it sits out new entries and keeps its rules" : " trades with " + gname + " again from the next entry") + " (by the page)");
             Changed();
-            return null;
+            return res;
         }
 
         // 0.6.7: why an account may not move to or from the bench now (null: flat with no working order). Its positions by both
@@ -2372,6 +2405,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (a == null) return name + " is not in NinjaTrader now: ChartBridge cannot see that it is flat, so it stays where it is";
             if (!Up(a)) return name + " is not connected: ChartBridge cannot see that it is flat, so it stays where it is";
+            string held = HeldWords(name, a);
+            return held == null ? null : held + ": it moves once it is flat with no working orders";
+        }
+
+        // 0.6.7: what an account holds now, in words ("SIM-B is in a trade (+2 NQ) with 1 working order", "SIM-A has 1 working
+        // order"), or null when it is flat with no order that may still fill. Not connected: it cannot be seen, so it says so.
+        private static string HeldWords(string name, Account a)
+        {
+            if (a == null) return null;
+            if (!Up(a)) return name + " is not connected (ChartBridge cannot see what it holds)";
             List<string> held = new List<string>();
             List<Position> ps;
             lock (a.Positions) ps = a.Positions.ToList();
@@ -2382,7 +2425,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (held.Count == 0 && working == 0 && ChartBridgeOrders.GroupMovesPending(a)) held.Add("a fill on its way");
             if (held.Count == 0 && working == 0) return null;
             string orders = working + " working order" + (working == 1 ? "" : "s");
-            return name + (held.Count > 0 ? " is in a trade (" + string.Join(", ", held) + ")" + (working > 0 ? " with " + orders : "") : " has " + orders) + ": it moves once it is flat with no working orders";
+            return name + (held.Count > 0 ? " is in a trade (" + string.Join(", ", held) + ")" + (working > 0 ? " with " + orders : "") : " has " + orders);
         }
 
         // 0.6.7: the members of group id on the bench (empty when none, or no such group)

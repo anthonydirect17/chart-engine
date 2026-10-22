@@ -249,8 +249,13 @@ test('0.6.0 fix round 1: accountState for every seat followed; not connected sto
   const pp = acode.slice(acode.indexOf('public string PlacingProblem(string acct)'), acode.indexOf('private string StateJson()'));
   assert.match(pp, /lock \(Sync\) \{ m = mode; k = killed; on = client != null && helloed; bd = build; gid = groupId; lg = league; \}[\s\S]*if \(!on\) return "agent " \+ Id \+ " is not connected: nothing more is placed";/, 'asked per seat under PlaceLock (PlaceOrderLocked), only the agent\'s Sync taken');
   const ag = strip(read('ChartBridgeGroups.cs')), body = ag.slice(ag.indexOf('private static string AccountGroup('), ag.indexOf('private static string AccountLimits('));
-  const lk = body.indexOf('lock (ChartBridgeOrders.GroupPlaceLock)'), again = body.indexOf('ChartBridgeAgents.JoinRefusal(name, id, false)'), save = body.indexOf('string err = Save(next);');
+  /* 0.6.7 (reviews L1, L2): AccountGroup decides inside ChangeAndSave(true, ...), whose decide runs under GroupEntryLock, PlaceLock
+     and SaveLock, before the membership is written */
+  const lk = body.indexOf('ChangeAndSave(true, next =>'), again = body.indexOf('ChartBridgeAgents.JoinRefusal(name, id, false)'), save = body.indexOf('}, next => HeldWords(name, a), out inEffect);');
   assert.ok(lk > 0 && again > lk && again < save, 'JoinRefusal again under PlaceLock and SaveLock, before the membership is saved');
+  const cs = ag.slice(ag.indexOf('private static string ChangeAndSave('), ag.indexOf('private static string GroupSave('));
+  const pe = cs.indexOf('Monitor.Enter(ChartBridgeOrders.GroupPlaceLock, ref p)'), se = cs.indexOf('Monitor.Enter(SaveLock, ref sv)'), dc = cs.indexOf('why = decide(next);'), wr = cs.indexOf('err = WriteWhole(FilePath, text)'), px = cs.indexOf('Monitor.Exit(ChartBridgeOrders.GroupPlaceLock); p = false;');
+  assert.ok(pe > 0 && se > pe && dc > se && px > dc && wr > px, 'ChangeAndSave: PlaceLock, then SaveLock, then the decision; PlaceLock let go before the write');
   assert.match(bodies(acode, 'JoinRefusal'), /if \(refresh\) RefreshFiles\(\);/, 'no file read under the locks');
   assert.match(read(path.join('check', 'check.sh')), /-out:"\$\{CHARTBRIDGE_CHECK_DLL:-\/tmp\/chartbridge-check\.dll\}"/, 'check:nt8 builds to a private path when CHARTBRIDGE_CHECK_DLL is set');
 });

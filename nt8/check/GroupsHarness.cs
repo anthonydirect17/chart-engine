@@ -1492,8 +1492,10 @@ public static class GroupsHarness
         Clear(); G("groupSave", "{\"type\":\"groupSave\",\"cid\":\"s\",\"group\":\"g1\",\"name\":\"Lucid\",\"riskPct\":5}");
         Check(Rejection() == "" && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":5,") && FileText().Contains("group\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\t5\n"),
               "0.6.7: flat: the risk percent changes, the group's other fields kept (a save with no rules keeps the line's): " + FileText().Replace("\t", "<TAB>"));
-        // review LOW 1: the bench move and the risk save write groups.txt after letting PlaceLock and GroupEntryLock go: a page market
-        // exit placed while the write is slow goes at once; a failed write puts memory back and says nothing was changed
+        // reviews LOW 1, L1, L2: the bench move, the risk save and accountGroup write groups.txt after letting PlaceLock go (GroupEntryLock
+        // held through the write), one groups change at a time (the change gate, taken first): a page market exit placed while the write
+        // is slow and a second change is waiting goes at once; a failed write puts memory back when nothing was placed on the change, and
+        // keeps it (with the alarm) when something was
         Pos(simB, nq, 2);
         ManualResetEvent inWrite = new ManualResetEvent(false), letWrite = new ManualResetEvent(false);
         ChartBridgeGroups.WriteForHarness = () => { inWrite.Set(); letWrite.WaitOne(5000); };
@@ -1501,29 +1503,53 @@ public static class GroupsHarness
         Thread mover = new Thread(() => ChartBridgeGroups.OnMessage(page, "memberBench", Bench("SIM-A", "true")));
         mover.Start();
         bool wrote = inWrite.WaitOne(5000);
+        ChartBridgeGroups.WriteForHarness = null;   // the second change writes at once when its turn comes
         bool benchedMeanwhile = ChartBridgeGroups.BenchedOf("g1").Contains("SIM-A");
+        Thread second = new Thread(() => ChartBridgeGroups.OnMessage(page, "accountGroup", Join("SIM-C", "\"g1\"", null)));
+        second.Start();
+        Thread.Sleep(300);   // the second change has arrived and waits at the gate
+        object gelW = typeof(ChartBridgeOrders).GetField("GroupEntryLock", PS).GetValue(null), plW = ChartBridgeOrders.GroupPlaceLock;
+        bool entryFree = Monitor.TryEnter(gelW, 0); if (entryFree) Monitor.Exit(gelW);
+        bool placeFree = Monitor.TryEnter(plW, 0); if (placeFree) Monitor.Exit(plW);
         int bw = Submits(simB);
         DateTime tw = DateTime.UtcNow;
         O(Order("SIM-B", "NQ", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1"));
         double waitedW = (DateTime.UtcNow - tw).TotalMilliseconds;
         string exitRej = Rejection();
-        letWrite.Set(); mover.Join();
-        ChartBridgeGroups.WriteForHarness = null;
-        Check(wrote && benchedMeanwhile && Submits(simB) == bw + 1 && waitedW < 1000 && exitRej == "",
-              "0.6.7 review LOW 1: a market exit went at once while the bench move wrote groups.txt (" + waitedW.ToString("0") + " ms; the move already in memory: " + benchedMeanwhile + "; " + exitRej + ")");
-        Check(Rejection() == "" && FileText().Contains("member\tSIM-A\tg1\tbenched\n") && File.ReadAllText(p + ".good").Contains("member\tSIM-A\tg1\tbenched\n"), "0.6.7 review LOW 1: then the move is in groups.txt and the sealed copy: " + FileText().Replace("\t", "<TAB>"));
+        bool secondWaited = second.IsAlive && ChartBridgeGroups.GroupOf("SIM-C") == null;
+        letWrite.Set(); mover.Join(); second.Join();
+        Check(wrote && benchedMeanwhile && Submits(simB) == bw + 1 && waitedW < 1000 && exitRej == "" && secondWaited,
+              "0.6.7 reviews LOW 1, L1: a market exit went at once while the bench move wrote groups.txt and accountGroup waited for its turn (" + waitedW.ToString("0") + " ms; the move already in memory: " + benchedMeanwhile + "; the second change waiting: " + secondWaited + "; " + exitRej + ")");
+        Check(!entryFree && placeFree, "0.6.7 review L2: during the write GroupEntryLock is held (no page group entry uses the unsaved move) and PlaceLock is free (exits go): entry free " + entryFree + ", place free " + placeFree);
+        Check(Rejection() == "" && FileText().Contains("member\tSIM-A\tg1\tbenched\n") && File.ReadAllText(p + ".good").Contains("member\tSIM-A\tg1\tbenched\n") && FileText().Contains("member\tSIM-C\tg1\n") && ChartBridgeGroups.GroupOf("SIM-C") == "g1",
+              "0.6.7 reviews LOW 1, L1: then both are in groups.txt and the sealed copy (SIM-A benched, SIM-C joined after it): " + FileText().Replace("\t", "<TAB>"));
+        Clear(); G("accountGroup", Join("SIM-C", "null", null));
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-C") == null, "0.6.7: SIM-C leaves again");
         Flat();
         string beforeFail = FileText();
         ChartBridgeGroups.WriteForHarness = () => { throw new IOException("the disk is full (made up)"); };
         Clear(); G("memberBench", Bench("SIM-A", "false"));
-        Check(Rejection().Contains("groups.txt could not be saved (the disk is full (made up)); nothing was changed") && ChartBridgeGroups.BenchedOf("g1").Contains("SIM-A") && FileText() == beforeFail,
-              "0.6.7 review LOW 1: a failed write: memory back to the file (SIM-A still on the bench), said: " + Rejection());
+        Check(Rejection().Contains("groups.txt could not be saved (the disk is full (made up)); nothing was changed") && ChartBridgeGroups.BenchedOf("g1").Contains("SIM-A") && FileText() == beforeFail && Last("groups") != "",
+              "0.6.7 review L2: a failed write with nothing placed on the change: memory back to the file (SIM-A still on the bench), the pages told, said: " + Rejection());
         Clear(); G("groupSave", "{\"type\":\"groupSave\",\"cid\":\"s\",\"group\":\"g1\",\"name\":\"Lucid\",\"riskPct\":6}");
         Check(Rejection().Contains("groups.txt could not be saved (the disk is full (made up)); nothing was changed") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":5,") && FileText() == beforeFail,
-              "0.6.7 review LOW 1: a failed risk save: the percent stays 5 in memory and in the file: " + Rejection());
-        ChartBridgeGroups.WriteForHarness = null;
+              "0.6.7 review L2: a failed risk save, the group still flat: the percent stays 5 in memory and in the file: " + Rejection());
+        // something placed on the change while it was being written (an agent's entry takes PlaceLock alone): it stays, with the alarm
+        ChartBridgeGroups.WriteForHarness = () => { Pos(simA, nq, 1); throw new IOException("the disk is full (made up)"); };
         Clear(); G("memberBench", Bench("SIM-A", "false"));
-        Check(Rejection() == "" && !FileText().Contains("\tbenched") && !ChartBridgeGroups.BenchedOf("g1").Contains("SIM-A"), "0.6.7 review LOW 1: the disk back: SIM-A back from the bench, written");
+        Check(Rejection().Contains("changed, but groups.txt could not be saved (the disk is full (made up)): SIM-A is in a trade (+1 NQ) since the change, so it stays in effect; it will be saved with the next change") &&
+              !ChartBridgeGroups.BenchedOf("g1").Contains("SIM-A") && FileText() == beforeFail && Logged("ALERT: groups: changed, but groups.txt could not be saved") && Last("groups").Contains("\"benched\":[]"),
+              "0.6.7 review L2: a failed write after SIM-A traded on the move: the move stays in memory, the alarm, the file one change behind: " + Rejection());
+        Flat();
+        ChartBridgeGroups.WriteForHarness = () => { Pos(simA, nq, 1); throw new IOException("the disk is full (made up)"); };
+        Clear(); G("groupSave", "{\"type\":\"groupSave\",\"cid\":\"s\",\"group\":\"g1\",\"name\":\"Lucid\",\"riskPct\":6}");
+        Check(Rejection().Contains("changed, but groups.txt could not be saved (the disk is full (made up)): group Lucid holds SIM-A +1 NQ since the change, so it stays in effect") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":6,") && FileText() == beforeFail,
+              "0.6.7 review L2: a failed risk save after the group traded on it: 6 stays in memory: " + Rejection());
+        Flat();
+        ChartBridgeGroups.WriteForHarness = null;
+        Clear(); G("groupSave", "{\"type\":\"groupSave\",\"cid\":\"s\",\"group\":\"g1\",\"name\":\"Lucid\",\"riskPct\":5}");
+        Check(Rejection() == "" && !FileText().Contains("\tbenched") && FileText().Contains("group\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\t5\n") && ChartBridgeGroups.GroupsJson().Contains("\"riskPct\":5,"),
+              "0.6.7 review L2: the disk back: the next change writes the kept move with it (SIM-A off the bench in the file), risk 5: " + FileText().Replace("\t", "<TAB>"));
         // a group made on the panel: a name and a Type, no rules of its own
         Clear(); G("groupSave", "{\"type\":\"groupSave\",\"cid\":\"s\",\"name\":\"Apex\",\"accountType\":\"funded\",\"riskPct\":4}");
         Check(Rejection() == "" && FileText().Contains("group\tg2\tApex\ton\t-\t-\t-\t-\t-\t-\t-\tfunded\t-\t4\n"), "0.6.7: a new group with no rules: size, drawdown and type \"-\": " + FileText().Replace("\t", "<TAB>"));

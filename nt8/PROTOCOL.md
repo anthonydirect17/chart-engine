@@ -3556,12 +3556,19 @@ click and drag a chip into the group, it trades with, when its on the bench, it 
   false back. Refused (a `reject` with its `cid`) unless the account is a member of a group, and **flat by both readings on every
   instrument with no order that may still fill** (its legs, stops and targets included): "SIM-B is in a trade (+2 NQ): it moves once
   it is flat with no working orders", "SIM-A has 1 working order: it moves once it is flat with no working orders"; an account not
-  in NinjaTrader or not connected stays where it is (ChartBridge cannot see that it is flat). Already there: nothing changes. The
-  flat check and the move in memory are made under the group entry lock and `PlaceLock`, so no group entry is sized and placed
-  across the move; both are then let go and `groups.txt` (and the sealed copy) is written under the groups' save lock alone, so an
-  exit placed meanwhile (the page's, a copier exit copy, an agent's close or stop) never waits on the disk (review LOW 1). A write
-  that fails puts memory back to what the file holds: "groups.txt could not be saved (...); nothing was changed". `groupSave` with
-  `riskPct` for a group does the same (the flat check and the percent under both locks, the write after); a save without `riskPct`
+  in NinjaTrader or not connected stays where it is (ChartBridge cannot see that it is flat). Already there: nothing changes. Every
+  groups change (`groupSave`, `groupDelete`, `accountGroup`, `memberRules`, `firmMinimum`, `memberBench`, `accountLimits`) runs one
+  at a time behind the groups' change gate, taken before any other lock, so a second change waits there holding nothing an exit
+  needs (review L1). The flat check and the move in memory are made under the group entry lock and `PlaceLock`, so no group entry is
+  sized and placed across the move; `PlaceLock` is then let go and `groups.txt` (and the sealed copy) is written with the group entry
+  lock and the save lock still held, so an exit placed meanwhile (the page's, a copier exit copy, an agent's close or stop: `PlaceLock`
+  only) never waits on the disk (review LOW 1), and no page group entry is sized from a change not yet saved (review L2). A write that
+  fails: under `PlaceLock` again, if the account (or, for a risk percent, the group) is still flat with no working order, memory goes
+  back to what the file holds ("groups.txt could not be saved (...); nothing was changed"); if something was placed on the change
+  meanwhile (an agent's group entry takes `PlaceLock` alone), the change stays in memory, the alarm goes up (again at each sign in
+  until a save) and the answer is "changed, but groups.txt could not be saved (...): SIM-A is in a trade (+1 NQ) since the change, so
+  it stays in effect; it will be saved with the next change". The pages and agents are told either way. `groupSave` with `riskPct`
+  for a group and `accountGroup` work the same way (the account's holdings decide for `accountGroup`); a save without `riskPct`
   takes the save lock alone. Joining a group (or leaving it, or the group deleted) takes an account off the bench.
 - **The `groups` message** gains `benched` per group: the members on the bench (members still, in `members` too).
 - **`groups.txt`:** a benched member's line is `member<TAB>account<TAB>id<TAB>benched` (written only for a benched member, so a file
