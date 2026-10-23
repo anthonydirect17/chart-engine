@@ -1337,6 +1337,11 @@ Test 'status checks the task''s start (review N1): ours exactly as register writ
     [IO.File]::WriteAllText($ours, $line.Replace(' update ', ' update  '), [Text.Encoding]::ASCII)
     $r = Test-TaskStart $task 'update-pc.ps1' $want
     Assert (-not $r.ok -and $r.text -match 'LAUNCHER CHANGED') "changed: $($r.text)"
+    foreach ($bad in @(@(', 0, True)', ', 1, True)'), @(', 0, True)', ', 0, False)'))) {      # a window that shows, a run not waited for
+      [IO.File]::WriteAllText($ours, $line.Replace($bad[0], $bad[1]), [Text.Encoding]::ASCII)
+      $r = Test-TaskStart $task 'update-pc.ps1' $want
+      Assert (-not $r.ok -and $r.text -match 'LAUNCHER CHANGED') "$($bad[1]): $($r.text)"
+    }
     [IO.File]::WriteAllText($ours, $line.Replace('update-pc.ps1', 'other.ps1'), [Text.Encoding]::ASCII)
     $r = Test-TaskStart $task 'update-pc.ps1' $want
     Assert (-not $r.ok -and $r.text -match 'does not run update-pc\.ps1') "another script: $($r.text)"

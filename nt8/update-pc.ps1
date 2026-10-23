@@ -2082,7 +2082,7 @@ function Test-TaskStart($Task, [string]$Leaf, [scriptblock]$Expected) {
   if (-not $ours) { return @{ ok = $true; line = $cmd.line; text = "hidden by a launcher register did not write ($($cmd.launcher)); run register to move it to its own" } }
   $o = Get-CommandOptions $cmd.line $Leaf
   if ($null -eq $o) { return @{ ok = $false; line = $cmd.line; text = "LAUNCHER CHANGED: $ours does not run $Leaf; updates are not running as registered; run register" } }
-  $want = (& $Expected $o) + "`r`n"
+  try { $want = (& $Expected $o) + "`r`n" } catch { return @{ ok = $false; line = $cmd.line; text = "LAUNCHER CHANGED: the command in $ours cannot be rebuilt ($($_.Exception.Message)); run register" } }
   if ([IO.File]::ReadAllText($ours) -cne $want) { return @{ ok = $false; line = $cmd.line; text = "LAUNCHER CHANGED: $ours is not the line register writes for its command; updates may not run as registered; run register" } }
   return @{ ok = $true; line = $cmd.line; text = "hidden (wscript.exe //B $ours)" }
 }
