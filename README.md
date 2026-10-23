@@ -358,7 +358,7 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    `2026-09-30T09:00:00`): `(Get-ScheduledTask 'ChartEngine Updater').Triggers | Select StartBoundary`
 
    The task starts hidden (Anthony, 2026-10-22: every scheduled program runs hidden). Register writes a one-line
-   launcher, `updater\bin\update-pc.hidden.vbs`, and the task runs `wscript.exe` on it; the launcher runs the same
+   launcher, `updater\bin\update-pc.hidden.vbs`, and the task runs `wscript.exe //B` on it (batch mode: no WScript error dialog); the launcher runs the same
    Windows PowerShell command with no window and waits for it, so the task shows Running and its Last Result as before.
    `status` says `task start: hidden`. A task registered before this change still starts `powershell.exe` (a console
    may flash) and keeps its old daily time: run `register` again to move it to the launcher and to 9:00 AM.
@@ -422,7 +422,7 @@ next update. `-InstallChartBridge` also moves the task's copy of the updater to 
 | `rollback` | puts the previous page files back; that commit is skipped until a newer one is on `main`. `rollback` again goes forward again |
 | `repair` | page files only, never ChartBridge: finishes or undoes a cut-off install, or writes a whole page (staged, previous, or the clone's page files; the clone's only when its `live/COMPAT.json` allows the ChartBridge compiled here, or it says plainly that it could not check) |
 | `pause` / `resume` | turns the automatic update off and on (off is never the default; a cut-off install is still repaired while paused) |
-| `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 9:00 AM New York time, started hidden (wscript.exe and a one-line launcher) |
+| `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 9:00 AM New York time, started hidden (wscript.exe //B and a one-line launcher) |
 
 Why it waits (all in `update.log`): CI not finished or red on either system; GitHub not reachable (it reads CI
 without a token: 60 requests an hour per address, and a pass uses two); ChartBridge's version not known (NinjaTrader

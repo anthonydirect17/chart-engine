@@ -1176,7 +1176,7 @@ function Remove-TaskStubs {
 }
 function Get-TaskCall([string]$Cmd) { return @($script:TaskCalls | Where-Object { $_.cmd -eq $Cmd }) }
 
-Test 'register (stubbed): the task runs wscript.exe on an ASCII one-line launcher that runs the same hidden PowerShell command, everything else as before' {
+Test 'register (stubbed): the task runs wscript.exe //B on an ASCII one-line launcher that runs the same hidden PowerShell command, everything else as before' {
   $keepP = $script:P
   $docs = Join-Path $tmpRoot 'hid docs'
   $repoSp = Join-Path $tmpRoot 'my clone'
@@ -1204,7 +1204,7 @@ Test 'register (stubbed): the task runs wscript.exe on an ASCII one-line launche
     $r = $reg[0]
     Assert ($r.TaskName -eq 'ChartEngine Updater' -and $r.Force) "name and -Force: $($r.TaskName)"
     Assert ($r.Action.Execute -eq (Get-SystemExe 'System32\wscript.exe')) "wscript.exe: $($r.Action.Execute)"
-    Assert ($r.Action.Arguments -ceq ('"' + $launcher + '"')) "the launcher, quoted: $($r.Action.Arguments)"
+    Assert ($r.Action.Arguments -ceq ('//B "' + $launcher + '"')) "batch mode (no WScript error dialog), the launcher quoted: $($r.Action.Arguments)"
     Assert ($r.Action.WorkingDirectory -eq $script:P.Bin) "the working folder as before: $($r.Action.WorkingDirectory)"
     Assert ($r.Trigger.Count -eq 2 -and $r.Trigger[0].Kind -eq 'logon' -and $r.Trigger[0].User -eq 'PC\anthony' -and $r.Trigger[0].Delay -eq 'PT2M') 'at sign-in, after 2 minutes'
     Assert ($r.Trigger[1].Kind -eq 'daily' -and $r.Trigger[1].StartBoundary -eq $local.ToString('yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)) "daily, wall-clock time: $($r.Trigger[1].StartBoundary)"
@@ -1261,7 +1261,7 @@ Test 'unregister (stubbed) removes a launcher the task names only when it is our
     Assert ((Test-Path -LiteralPath $hand) -and @(Get-TaskCall 'unregister').Count -eq 1) 'the task removed, the hand-made launcher left'
     $mine = Join-Path $other 'update-pc.hidden.vbs'
     Put $mine "x`r`n"
-    $script:StubTask = [pscustomobject]@{ TaskName = 'ChartEngine Updater'; Actions = @([pscustomobject]@{ Execute = 'C:\Windows\System32\wscript.exe'; Arguments = '"' + $mine + '"' }); State = 'Ready' }
+    $script:StubTask = [pscustomobject]@{ TaskName = 'ChartEngine Updater'; Actions = @([pscustomobject]@{ Execute = 'C:\Windows\System32\wscript.exe'; Arguments = '//B "' + $mine + '"' }); State = 'Ready' }
     Unregister-HiddenTask
     Assert (-not (Test-Path -LiteralPath $mine)) 'ours, where the task named it: removed'
   } finally { Remove-TaskStubs; $script:P = $keepP }
@@ -1278,7 +1278,7 @@ if ($IsWin) {
       Assert ("$($t.Principal.LogonType)" -eq 'Interactive' -and "$($t.Principal.RunLevel)" -eq 'Limited') "principal $($t.Principal.LogonType) $($t.Principal.RunLevel)"
       $a = $t.Actions[0]
       $launcher = Join-Path $script:P.Bin 'update-pc.hidden.vbs'
-      Assert ($a.Execute -match 'System32\\wscript\.exe$' -and $a.Arguments -eq ('"' + $launcher + '"')) "hidden: $($a.Execute) $($a.Arguments)"
+      Assert ($a.Execute -match 'System32\\wscript\.exe$' -and $a.Arguments -eq ('//B "' + $launcher + '"')) "hidden: $($a.Execute) $($a.Arguments)"
       $line = [IO.File]::ReadAllText($launcher)
       Assert ($line -match 'WindowsPowerShell\\v1\.0\\powershell\.exe' -and $line -match '-File ' -and $line -match ' update -Repo ' -and $line -match 'updater\\bin\\update-pc\.ps1' -and $line -match ', 0, True\)\r\n$') "the pinned copy, hidden and waited for: $line"
       Assert ($a.WorkingDirectory -eq $script:P.Bin -and (Test-Path (Join-Path $script:P.Bin 'update-pc.ps1'))) "working folder $($a.WorkingDirectory)"

@@ -152,10 +152,10 @@ test('the schedule (Anthony, 2026-09-30; 09:00 since 2026-10-23): at sign-in and
   assert.match(src, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 30\)/);
 });
 
-test('the task starts hidden (Anthony, 2026-10-22): wscript.exe on a one-line ASCII launcher that waits, never powershell.exe itself', () => {
+test('the task starts hidden (Anthony, 2026-10-22): wscript.exe //B on a one-line ASCII launcher that waits, never powershell.exe itself', () => {
   const src = code(updater);
   const reg = src.slice(src.indexOf('function Register-HiddenTask'), src.indexOf('function Invoke-Register'));
-  assert.match(reg, /New-ScheduledTaskAction -Execute \(Get-SystemExe 'System32\\wscript\.exe'\) -Argument \('"' \+ \$launcher \+ '"'\) -WorkingDirectory \$script:P\.Bin/);
+  assert.match(reg, /New-ScheduledTaskAction -Execute \(Get-SystemExe 'System32\\wscript\.exe'\) -Argument \('\/\/B "' \+ \$launcher \+ '"'\) -WorkingDirectory \$script:P\.Bin/);
   assert.strictEqual([...src.matchAll(/New-ScheduledTaskAction/g)].length, 1, 'one task action, the hidden one');
   // the launcher is written before the task, and a failure stops register (never a visible task instead)
   assert.ok(reg.indexOf('Write-HiddenLauncher') < reg.indexOf('Register-ScheduledTask'));

@@ -44,7 +44,8 @@
   still flashes a console while PowerShell starts, so register writes a one-line ASCII launcher,
   updater\bin\update-pc.hidden.vbs:
     WScript.Quit CreateObject("WScript.Shell").Run("<the command line below, quotes doubled>", 0, True)
-  and the task runs wscript.exe "<that launcher>" (same working folder, triggers, user, settings and time limit). Window
+  and the task runs wscript.exe //B "<that launcher>" (//B: batch mode, so WScript never shows an error dialog; same
+  working folder, triggers, user, settings and time limit). Window
   style 0 is hidden; True waits, so the exit code comes back and Task Scheduler's Running and Last Result stay true. The
   command line is exactly the one the task ran before: Windows PowerShell with -File on the pinned copy, update -Repo
   <clone>. A launcher that cannot be written fails register (the task is left as it was, never made visible again).
@@ -1302,7 +1303,7 @@ function Invoke-Status {
   Write-Host "task:         $(if ($task) { "$TaskName ($($task.State))" } else { 'not registered (update-pc.ps1 register)' })"
   if ($task) {
     $hid = Get-TaskLauncherPath $task
-    if ($hid) { Write-Host "task start:   hidden (wscript.exe $hid)" }
+    if ($hid) { Write-Host "task start:   hidden (wscript.exe //B $hid)" }
     else { Write-Host "task start:   not through the hidden launcher (a console may flash): run update-pc.ps1 register again so it starts with no window" }
     $want = ''
     try { $want = (ConvertFrom-NewYorkTime ([string](Get-Field $pin 'dailyAt' $script:DailyAtDefault))).ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) } catch { }
@@ -1717,7 +1718,7 @@ function Invoke-Resume {
 #     whenever the PC is next awake, at any hour. The sign-in trigger already covers a PC that was off; one that slept
 #     through the daily time checks the next day.
 # Never two runs at once (IgnoreNew), 30 minutes at most. It runs Windows PowerShell with -File, started hidden through
-# wscript.exe and the launcher (see "Hidden start" at the top).
+# wscript.exe //B and the launcher (see "Hidden start" at the top).
 function Get-TaskArguments([string]$Script, [string]$RepoDir) {
   return ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ' + (Format-Arg $Script) + ' update -Repo ' + (Format-Arg $RepoDir))
 }
@@ -1947,13 +1948,13 @@ function Write-HiddenLauncher([string]$Path, [string]$Line) {
   if ([IO.File]::ReadAllText($Path, [Text.Encoding]::ASCII) -cne $text) { throw "the launcher $Path did not read back as written" }
 }
 
-# The launcher a task's action starts (wscript.exe "<path>"), when it is one of ours (its file name); '' otherwise.
+# The launcher a task's action starts (wscript.exe //B "<path>", or without //B), when it is one of ours (its file name); '' otherwise.
 function Get-TaskLauncherPath($Task) {
   if (-not $Task) { return '' }
   foreach ($a in @($Task.Actions)) {
     if (-not $a -or "$($a.Execute)" -notmatch '(?i)(^|[\\/])wscript\.exe"?$') { continue }
-    $m = [regex]::Match("$($a.Arguments)", '^\s*"([^"]+)"')
-    if ($m.Success -and $m.Groups[1].Value -match ('(^|[\\/])' + [regex]::Escape($script:HiddenLauncherName) + '$')) { return $m.Groups[1].Value }
+    $m = [regex]::Match("$($a.Arguments)", '(?i)^\s*(//B\s+)?"([^"]+)"')
+    if ($m.Success -and $m.Groups[2].Value -match ('(^|[\\/])' + [regex]::Escape($script:HiddenLauncherName) + '$')) { return $m.Groups[2].Value }
   }
   return ''
 }
@@ -1978,7 +1979,7 @@ function Register-HiddenTask([string]$User, [string]$Pinned, [datetime]$Local) {
   $launcher = Get-HiddenLauncherPath
   try { Write-HiddenLauncher $launcher (Get-HiddenLauncherLine $ps (Get-TaskArguments $Pinned $script:P.Repo)) }
   catch { throw "the hidden launcher could not be written, the task was not changed: $($_.Exception.Message)" }
-  $action = New-ScheduledTaskAction -Execute (Get-SystemExe 'System32\wscript.exe') -Argument ('"' + $launcher + '"') -WorkingDirectory $script:P.Bin
+  $action = New-ScheduledTaskAction -Execute (Get-SystemExe 'System32\wscript.exe') -Argument ('//B "' + $launcher + '"') -WorkingDirectory $script:P.Bin
   $logon = New-ScheduledTaskTrigger -AtLogOn -User $User
   $logon.Delay = 'PT2M'
   $daily = New-DailyTrigger $Local
@@ -2008,7 +2009,7 @@ function Invoke-Register {
     Write-Host "WARNING: $warn."
   }
   Write-Host "The task runs $pinned (a copy; it changes only when you run register again or -InstallChartBridge)."
-  Write-Host "It starts hidden: wscript.exe runs $(Get-HiddenLauncherPath), which runs Windows PowerShell with no window."
+  Write-Host "It starts hidden: wscript.exe //B (no WScript error dialog) runs $(Get-HiddenLauncherPath), which runs Windows PowerShell with no window."
   Write-Host "Each run works out $DailyAt New York time again and moves the daily check if this PC's clock drifted from it (time zone or DST)."
   return (Write-Verdict ($null -ne $t) "scheduled task '$TaskName' registered: $when ($($t.State))")
 }
