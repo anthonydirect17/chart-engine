@@ -217,6 +217,8 @@ public static class GapHarness
         ErrorAnswers();
         NoReloadLoop();
         ColdStartRecheck();
+        StaleOverdue();
+        FormingKept();
         AfterStop();
         Storm();   // last: the GapHarness page on NQ is not read after it (it gets the storm's live NQ trades)
     }
@@ -653,6 +655,69 @@ public static class GapHarness
         finally { ChartBridgeServer.MinuteTimeoutMs = mWas; ChartBridgeServer.MinuteRecheckMs = rWas; }
     }
 
+    // Third review D: a cold-start load marks the instrument overdue at the first limit; NinjaTrader then answers that same request
+    // in the normal way. The mark goes with the answer, so a later load whose days the kept answer does not cover (a 30-day 1 hour
+    // chart after a 5-day 1 min load) asks NinjaTrader and waits for it, not short stand-in history.
+    static void StaleOverdue()
+    {
+        FreshPage();
+        int mWas = ChartBridgeServer.MinuteTimeoutMs, rWas = ChartBridgeServer.MinuteRecheckMs;
+        try
+        {
+            ChartBridgeServer.MinuteTimeoutMs = 200; ChartBridgeServer.MinuteRecheckMs = 100;
+            simNow = Et(11, 7, 50);
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
+            List<Trade> t = Tape(Et(11, 7, 51), Et(11, 8, 20), 150, 812);
+            foreach (Trade x in t.Where(x => x.T < Et(11, 7, 58))) Live(x);
+            int r0 = Made();
+            simNow = Et(11, 7, 58);
+            Priv("Subscribe", client, "NQ", 5, 0);
+            Thread.Sleep(450);
+            bool marked = ((string)Priv("BooksJson")).Contains("\"minuteOverdue\":true");
+            Reqs(r0).First(IsMinute).Answer(NtMinutes(tape, Et(9, 31, 0), Et(11, 7, 0)), ErrorCode.NoError);   // the answer, in the normal path
+            BarsRequest last = null;
+            if (WaitFor(() => (last = Reqs(r0).FirstOrDefault(IsLastTrades)) != null, 1500)) last.Answer(TicksOf(t.Where(x => x.T < Et(11, 7, 58))), ErrorCode.NoError);
+            bool ready = WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0, 2000);
+            Thread.Sleep(300);
+            bool still = ((string)Priv("BooksJson")).Contains("\"minuteOverdue\":true");
+            foreach (Trade x in t.Where(x => x.T >= Et(11, 7, 58) && x.T < Et(11, 8, 10))) Live(x);
+            lock (sent) sent.Clear();
+            int r1 = Made();
+            simNow = Et(11, 8, 10);
+            Priv("Subscribe", client, "NQ", 30, 0);   // a 1 hour chart: 30 days
+            Thread.Sleep(400);
+            bool askedNt = Reqs(r1).Any(IsMinute), waits = !Sent().Any(x => x.Contains("\"type\":\"ready\""));
+            Check(marked && ready && !still && askedNt && waits,
+                "third review D: the overdue mark goes with the normal answer; a 30-day load the kept 5 days do not cover asks NinjaTrader (marked " + marked + ", still " + still + ", asked " + askedNt + ", waits " + waits + ")");
+            BarsRequest q = Reqs(r1).FirstOrDefault(IsMinute);
+            if (q != null) q.Answer(NtMinutes(tape, Et(9, 31, 0), Et(11, 8, 0)), ErrorCode.NoError);
+            WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0, 2000);
+        }
+        finally { ChartBridgeServer.MinuteTimeoutMs = mWas; ChartBridgeServer.MinuteRecheckMs = rWas; }
+    }
+
+    // Third review E: a kept answer's last bar was forming when it came: it is not served as closed (FromKept, a stand-in), and a
+    // merge with a staler answer never keeps the staler one's forming bar inside as if closed.
+    static void FormingKept()
+    {
+        Bars older = NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0));   // the staler answer: its 10:40 bar was forming
+        Bars newer = NtMinutes(tape, Et(9, 31, 0), Et(11, 0, 0));    // an answer that came later, to 11:00
+        RawBars ro = RawBars.Copy(older, false), rn = RawBars.Copy(newer, false);
+        ro.Volume[ro.Count - 1] = 1;                                   // short: forming when it came
+        bool newLast;
+        RawBars m = ChartBridgeServer.MergeNtMinutes(rn, ro, out newLast);   // kept: newer; the staler answer comes in after it
+        int at = Array.IndexOf(m.Time, Et(10, 40, 0));
+        Check(!newLast && m.Count == rn.Count && at >= 0 && m.Volume[at] == rn.Volume[at],
+            "third review E: a staler answer merged in: its forming bar (10:40, short) is not kept inside; the later answer's bar of that minute is");
+        simNow = Et(6, 0, 0);
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
+        foreach (Trade x in tape.Where(x => x.T < Et(11, 8, 0))) Live(x);
+        RootBook rb = ChartBridgeServer.BookOf("NQ", inst);
+        ChartBridgeServer.KeepNtMinutes(rb, RawBars.Copy(older, false), Et(9, 0, 0).AddDays(-8), Et(10, 39, 30));   // came at 10:39:30
+        RawBars closed = (RawBars)Priv("ClosedKept", rb, Et(9, 0, 0).AddDays(-8));
+        Check(closed.Count == older.Count - 1 && closed.Time[closed.Count - 1] == Et(10, 39, 0), "third review E: the kept answer's last bar, forming when it came (10:40 at 10:39:30), is left out of what a load is served");
+    }
+
     // Review 10: ChartBridge stops while a load waits: its time limit and its late answer do nothing (no book made again, nothing
     // kept from the previous run, nothing sent).
     static void AfterStop()
@@ -707,12 +772,13 @@ public static class GapHarness
             BarsRequest first = Reqs(r0).FirstOrDefault(IsMinute);
             Check(ready && sw.ElapsedMilliseconds < 2000 && w.Ready.Contains("\"filled\":28") && w.Ready.Contains("\"minuteTimedOut\":true") && w.Bars.Count == 28 && w.Statuses.Count == 0 && Notes().Contains("minute history: no answer from NinjaTrader in 0 s; the load starts from ChartBridge's own minute bars, from 10:40 ET") && LastSeam().Contains("\"minuteTimedOut\":true") && LastSeam().Contains("\"standIn\":true"),
                 "timeout: no minute answer in its time, the book stands in: ready in " + sw.ElapsedMilliseconds + " ms with its 28 bars, ready says minuteTimedOut, nothing on the page (a history note only)");
-            // a reload while that request is unanswered: not asked again, ready at once from the book
+            // a reload while that request is unanswered, with nothing kept that covers its days (third review D): NinjaTrader is
+            // asked again (the skip is only for kept answers that cover the load), and the book stands in after its own limit
             lock (sent) sent.Clear();
             int r1 = Made();
             Priv("Subscribe", client, "NQ", 5, 0);
-            Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0, 1000) && Made() == r1 && Read(Sent()).Statuses.Count == 0 && Notes().Contains("NinjaTrader has not answered an earlier request yet, so it is not asked again for now"),
-                "timeout: a reload while it is unanswered asks NinjaTrader nothing (no retry storm) and goes ready from the book");
+            Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0, 1500) && Reqs(r1).Count(IsMinute) == 1 && Read(Sent()).Statuses.Count == 0 && Read(Sent()).Ready.Contains("\"standIn\":true"),
+                "timeout: a reload while it is unanswered and nothing kept covers it asks NinjaTrader again, and the book stands in at its limit");
             // the late answer is not used, and frees the instrument to ask again
             lock (sent) sent.Clear();
             first.Answer(NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0)), ErrorCode.NoError);

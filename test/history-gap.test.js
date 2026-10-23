@@ -67,6 +67,11 @@ test('0.6.8: ChartBridge keeps a minute book per instrument and joins it to Ninj
   assert.match(cs, /if \(!L\.Agent && FromKept\(L, book\)\) return;/, 'B: a fresh kept answer is the answer');
   assert.match(cs, /public static int HistoryLateGapMs = 300000;/, 'B: historyLate at most once in 5 minutes');
   assert.match(cs, /Task\.Delay\(MinuteRecheckMs\)\.ContinueWith/, 'C: a cold start looks again');
+  // the third review
+  assert.match(cs, /if \(!L\.Stop\.IsCancellationRequested\) lock \(book\.Sync\) book\.MinuteOverdueMs = -1;   \/\/ third review D/, 'D: any answer clears the mark');
+  assert.match(cs, /if \(overdue && KeptCovers\(L, book\)\)/, 'D: the skip only when the kept answers cover the load');
+  assert.match(cs, /RawBars mine = ClosedKept\(book, L\.HistoryFrom\);/, 'E: no forming kept bar served');
+  assert.match(cs, /catch \(Exception ex\) \{ CbLogLimit\.Error\("history error", ex\); L\.HeadSent\.ContinueWith\(delegate \{ Finish\(L, null\); \}/, 'F');
   const live = read('live/live.js'), feed = read('live/feed.js');
   assert.match(live, /case 'historyLate':[\s\S]{0,400}if \(m\.root === D\.root && !stale\(m\) && D\.ready\) subscribe\(D\.root\);/);
   assert.match(feed, /if \(t === 'historyLate'\) \{/); assert.match(feed, /cur && !cur\.stale && /);

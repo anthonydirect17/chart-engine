@@ -1345,6 +1345,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // NtMinutesKept bars): a load whose own minute request is not answered in time starts from these and the minute book.
         public RawBars NtMinutes; public double NtMinutesAtMs = -1;
         public DateTime NtMinutesFrom = DateTime.MaxValue;   // the earliest request start the kept answers cover (re-review B)
+        public DateTime NtMinutesLastAt = DateTime.MaxValue; // third review E: NinjaTrader's clock when the answer with the kept last bar came (that bar was forming then)
         public long LateTrades, StaleTrades;         // live trades older than the session held; trades too old to open a session
         public double MaxGapSec;                     // the longest time between two live trades this session (a feed gap shows here)
         private DateTime lastTrade;
@@ -2829,6 +2830,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool StoodIn;                     // went ready on stand-in history (the book, NinjaTrader's kept answers): told when the real one comes
             public bool MinuteFailed;                // NinjaTrader answered the minute request with an error
             public bool FromKept;                    // re-review B: answered from NinjaTrader's fresh kept answer (no request)
+            public DateTime AnsweredNt = DateTime.MaxValue;   // NinjaTrader's clock when its minute answer came
             public int LateSent;                     // "historyLate" sent (once)
             public int WaitNoted;                    // re-review C: the first time limit passed with nothing to stand in
             public DateTime HistoryFrom;             // the minute request's start (kept answers are cut to it)
@@ -2916,7 +2918,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!L.Agent && FromKept(L, book)) return;
             bool overdue;
             lock (book.Sync) overdue = book.MinuteOverdueMs >= 0 && L.StartedMs - book.MinuteOverdueMs < OverdueReaskMs;
-            if (overdue && CanStandIn(L, book))
+            if (overdue && KeptCovers(L, book))   // third review D: only when the kept answers cover this load's days; else NinjaTrader is asked
             {
                 L.MinuteState = 2; L.MinuteTimedOut = true;
                 MinuteGivenUp(L, "minute history: NinjaTrader has not answered an earlier request yet, so it is not asked again for now");
@@ -2937,9 +2939,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (L.Stop.IsCancellationRequested) return;   // review: a previous run's answer touches nothing
                     lock (book.Sync) book.MinuteOverdueMs = -1;
                     HistoryNote(root, "minute history: NinjaTrader answered after " + CbJson.Num3((ChartBridgeTime.NowUtcMs() - L.StartedMs) / 1000) + " s, when it was given up at " + (MinuteTimeoutMs / 1000) + " s; kept for the next load" + (late != null && late.Count > 0 ? " (last bar " + EtText(late.Time[late.Count - 1]) + ")" : ""));
-                    if (late != null) Task.Run(() => { KeepNtMinutes(book, late, L.HistoryFrom); HistoryLate(L); });
+                    DateTime lateAt = NowNt();
+                    if (late != null) Task.Run(() => { KeepNtMinutes(book, late, L.HistoryFrom, lateAt); HistoryLate(L); });
                     return;
                 }
+                if (!L.Stop.IsCancellationRequested) lock (book.Sync) book.MinuteOverdueMs = -1;   // third review D: any answer frees the instrument
+                L.AnsweredNt = NowNt();
                 RawBars raw = null;
                 try
                 {
@@ -2987,17 +2992,32 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
         private static bool FromKept(Load L, RootBook book)
         {
-            RawBars kept; double at; DateTime from;
-            lock (book.Sync) { kept = book.NtMinutes; at = book.NtMinutesAtMs; from = book.NtMinutesFrom; }
-            if (kept == null || kept.Count == 0 || at < 0 || L.StartedMs - at >= OverdueReaskMs || from > L.HistoryFrom || L.Book == null) return false;
-            int a = 0; while (a < kept.Count && kept.Time[a] < L.HistoryFrom) a++;
-            RawBars mine = a == 0 ? kept : kept.Slice(a, kept.Count);
+            double at; DateTime from;
+            lock (book.Sync) { at = book.NtMinutesAtMs; from = book.NtMinutesFrom; }
+            if (at < 0 || L.StartedMs - at >= OverdueReaskMs || from > L.HistoryFrom || L.Book == null) return false;
+            RawBars mine = ClosedKept(book, L.HistoryFrom);   // third review E: never its last bar if it was still forming
+            if (mine == null || mine.Count == 0) return false;
             long cut; int filled, shortMinutes;
             if (L.Book.Join(mine, out cut, out filled, out shortMinutes) == null) return false;   // the book must reach back to it: no hole
             L.MinuteState = 1; L.FromKept = true;
             HistoryNote(L.Root, "minute history from NinjaTrader's answer kept " + CbJson.Num3((L.StartedMs - at) / 1000) + " s ago (no request)" + (L.Window ? " (a tick chart)" : ""));
             MinutesAnswered(L, mine);
             return true;
+        }
+        private static bool KeptCovers(Load L, RootBook book)
+        {
+            lock (book.Sync) return !L.Agent && book.NtMinutes != null && book.NtMinutes.Count > 0 && book.NtMinutesFrom <= L.HistoryFrom;
+        }
+        // Third review E: the kept answers without a last bar that was still forming when they came (it may be short); from a load's
+        // own start.
+        private static RawBars ClosedKept(RootBook book, DateTime from)
+        {
+            RawBars kept; DateTime lastAt;
+            lock (book.Sync) { kept = book.NtMinutes; lastAt = book.NtMinutesLastAt; }
+            if (kept == null || kept.Count == 0) return kept;
+            int a = 0; while (a < kept.Count && kept.Time[a] < from) a++;
+            int b = kept.Count; if (b > a && kept.Time[b - 1] > lastAt) b--;
+            return a == 0 && b == kept.Count ? kept : kept.Slice(a, b);
         }
         private static bool CanStandIn(Load L, RootBook book)
         {
@@ -3037,7 +3057,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 if (L.Stop.IsCancellationRequested) return;   // review: a previous run's answer touches nothing (no book made again)
-                if (raw != null && raw.Count > 0 && !L.FromKept) { RootBook kb = BookOf(L.Root, L.Inst); RawBars keep = raw; DateTime asked = L.HistoryFrom; Task.Run(() => KeepNtMinutes(kb, keep, asked)); }
+                if (raw != null && raw.Count > 0 && !L.FromKept) { RootBook kb = BookOf(L.Root, L.Inst); RawBars keep = raw; DateTime asked = L.HistoryFrom, at = L.AnsweredNt; Task.Run(() => KeepNtMinutes(kb, keep, asked, at)); }
                 if (!Current(L)) return;
                 if (raw != null && raw.Count > 0) L.NtLastBar = raw.Time[raw.Count - 1];
                 // re-review A: after an error answer an agent gets exactly what 0.6.7 sent (no history, then ready), never the book
@@ -3109,7 +3129,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 L.StoodIn = true;
                 RootBook book = BookOf(L.Root, L.Inst);
                 RawBars kept, bars; string text;
-                lock (book.Sync) kept = book.NtMinutes;
+                kept = ClosedKept(book, L.HistoryFrom);   // third review E: no last bar that was still forming
                 RawBars whole = kept;
                 kept = KeptFor(L, kept);
                 if (kept != null && kept.Count > 0)
@@ -3135,7 +3155,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (L.Window) { SendHead(L, mine); return; }   // finally: its trades
                         SendHead(L, mine);
                         handed = true;
-                        RequestTicks(L);
+                        try { RequestTicks(L); }
+                        catch (Exception ex) { CbLogLimit.Error("history error", ex); L.HeadSent.ContinueWith(delegate { Finish(L, null); }, TaskScheduler.Default); }   // third review F
                         return;
                     }
                 }
@@ -3173,19 +3194,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         // answer, and the kept bars after its last (a stale answer does not take away later bars an earlier answer had), at most
         // NtMinutesKept (about 60 days of minutes). Off NinjaTrader's thread.
         public const int NtMinutesKept = 90000;
-        public static void KeepNtMinutes(RootBook book, RawBars nw) { KeepNtMinutes(book, nw, nw != null && nw.Count > 0 ? nw.Time[0] : DateTime.MaxValue); }
-        // askedFrom: the start of the request it answered (a by-date answer covers every minute NinjaTrader has from there)
-        public static void KeepNtMinutes(RootBook book, RawBars nw, DateTime askedFrom)
+        public static void KeepNtMinutes(RootBook book, RawBars nw) { KeepNtMinutes(book, nw, nw != null && nw.Count > 0 ? nw.Time[0] : DateTime.MaxValue, DateTime.MaxValue); }
+        // askedFrom: the start of the request it answered (a by-date answer covers every minute NinjaTrader has from there);
+        // answeredAt: NinjaTrader's clock when it came (its last bar was forming then; MaxValue: every bar closed)
+        public static void KeepNtMinutes(RootBook book, RawBars nw, DateTime askedFrom, DateTime answeredAt)
         {
             try
             {
                 if (nw == null || nw.Count == 0 || nw.Open == null) return;
                 RawBars old;
                 lock (book.Sync) old = book.NtMinutes;
-                RawBars m = MergeNtMinutes(old, nw);
+                bool newLast;
+                RawBars m = MergeNtMinutes(old, nw, out newLast);
                 lock (book.Sync)
                 {
                     if (book.NtMinutes != old) return;
+                    if (newLast || old == null) book.NtMinutesLastAt = answeredAt;   // the kept last bar is the new answer's
                     book.NtMinutesFrom = old == null || old.Count == 0 ? askedFrom : (askedFrom < book.NtMinutesFrom ? askedFrom : book.NtMinutesFrom);
                     if (m.Count > 0 && m.Time[0] > book.NtMinutesFrom && m.Count == NtMinutesKept) book.NtMinutesFrom = m.Time[0];   // cut at the cap
                     book.NtMinutes = m; book.NtMinutesAtMs = ChartBridgeTime.NowUtcMs();
@@ -3193,18 +3217,30 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex) { CbLogLimit.Error("minute history keep error", ex); }
         }
-        public static RawBars MergeNtMinutes(RawBars old, RawBars nw)
+        public static RawBars MergeNtMinutes(RawBars old, RawBars nw) { bool newLast; return MergeNtMinutes(old, nw, out newLast); }
+        // newLast: the merged last bar is the new answer's. Third review E: when the kept bars run past the new answer's last bar
+        // (the new answer is the staler one), that bar was forming when it came: it is not kept inside the merge as if closed (the
+        // kept bar of that minute, if there is one, is used).
+        public static RawBars MergeNtMinutes(RawBars old, RawBars nw, out bool newLast)
         {
             RawBars r;
+            newLast = true;
             if (old == null || old.Count == 0 || old.Open == null) r = nw;
             else
             {
                 DateTime first = nw.Time[0], lastNew = nw.Time[nw.Count - 1];
                 int a = 0; while (a < old.Count && old.Time[a] < first) a++;
                 int b = old.Count; while (b > 0 && old.Time[b - 1] > lastNew) b--;
-                int n = a + nw.Count + (old.Count - b);
+                int nNew = nw.Count;
+                if (b < old.Count)
+                {
+                    newLast = false;
+                    nNew--;                                                   // the new answer's forming bar
+                    if (b > a && old.Time[b - 1] == lastNew) b--;             // the kept bar of that minute, later and fuller
+                }
+                int n = a + nNew + (old.Count - b);
                 r = new RawBars { Count = n, Time = new DateTime[n], Open = new double[n], High = new double[n], Low = new double[n], Close = new double[n], Volume = new long[n] };
-                CopyBars(old, 0, r, 0, a); CopyBars(nw, 0, r, a, nw.Count); CopyBars(old, b, r, a + nw.Count, old.Count - b);
+                CopyBars(old, 0, r, 0, a); CopyBars(nw, 0, r, a, nNew); CopyBars(old, b, r, a + nNew, old.Count - b);
             }
             return r.Count > NtMinutesKept ? r.Slice(r.Count - NtMinutesKept, r.Count) : r;
         }

@@ -71,6 +71,10 @@ changes: nothing on any order path (ChartBridgeOrders.cs and the other order fil
   instrument in 5 minutes, so a NinjaTrader just over the limit cannot reload the charts in a loop (harness: three loads, one
   historyLate, one request); a cold start marks the instrument overdue at the first limit and keeps looking every 3 s; kept
   bars served alone get their last minute from the last trades, as 0.6.7 does with an answer.
+- **The third review** (a MEDIUM, two LOW): any minute answer, late or in time, clears the instrument's overdue mark, and the
+  overdue skip applies only to loads whose days the kept answers cover (a 30-day 1 hour chart after a 5-day 1 min load asks
+  NinjaTrader); a kept bar still forming when its answer came is never served as closed, in a load or inside a merge; the
+  kept-bars-alone path falls back to ready if its last-trades request throws.
 - **The League chart and the Agents panel's Drone sky on NQ 1 min.** Anthony, 2026-10-23: his only MNQ chart is a 40-range
   execution chart (it loads trades, not minute bars) and all his other charts, including a 1 min, are NQ; "the League tab's
   chart AND the Agents panel's Drone sky pillars switch from MNQ to NQ 1 min", keeping 5 days and no ticks for the League

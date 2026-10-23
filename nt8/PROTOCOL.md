@@ -409,7 +409,9 @@ minute and sends the minutes the same trades hold after it; on minute charts the
 **NinjaTrader's answers kept.** ChartBridge keeps each instrument's minute answers in memory, joined (the kept bars before the
 new answer's first, the new answer, the kept bars after its last; at most 90,000 bars; never on disk), a late answer too (it is
 not sent to the load it was asked for, which went on without it). A load that uses them takes only its own days (from its
-minute request's start) and only the minutes that close before the minute of the copy's last trade.
+minute request's start) and only the minutes that close before the minute of the copy's last trade. The kept answers' last bar
+is never served when it was still forming when its answer came (NinjaTrader's clock then is kept with it), and a staler answer
+merged in never leaves its forming bar inside the kept bars as if closed (the later answer's bar of that minute is kept).
 
 **A fresh kept answer is the answer** (re-review B). When NinjaTrader's kept answers were added to within `OverdueReaskMs` (120 s),
 reach back to a load's minute request start, and the load's book reaches back to them, they are that load's answer, joined to
@@ -437,9 +439,10 @@ time limit goes to the page (Anthony 2026-10-23: "I dont need a notice"): each i
 - **an agent's subscribe** (the agent channel; agents place real orders) has no time limits and never gets stand-in history: it
   waits for NinjaTrader's full answer as in 0.6.7.
 
-No retry storm: while a given-up request of an instrument is unanswered (for at most `OverdueReaskMs`, 120 s), its loads with
-history to stand in do not ask again (they go ready on it at once), and the last trades are not asked; a load with nothing to
-stand in asks. The late answer is kept, not sent (a history note), and frees the instrument to ask again. A given-up last-trades
+No retry storm: while a given-up request of an instrument is unanswered (for at most `OverdueReaskMs`, 120 s), its loads whose
+days NinjaTrader's kept answers cover do not ask again (they go ready on them at once), and the last trades are not asked; any
+other load asks (third review: a 30-day 1 hour chart after a 5-day 1 min load is not served the 5 days). Any answer to the
+instrument's minute requests, late or in time, frees it (the mark goes); a late answer is kept, not sent (a history note). A given-up last-trades
 request still counts in `minuteTailsOut` until it is answered (no session backfill starts meanwhile, as before). A time limit
 or a late answer after ChartBridge stopped does nothing.
 
