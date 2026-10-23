@@ -375,6 +375,14 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    install. It is refused, and says why, from an elevated window or as another user. Until it moves, each check
    writes one WARN line in update.log saying so.
 
+   A task behind a hand-made launcher in `C:\SchwabDesk_bulk\hidden` (WORK and HOME made theirs on 2026-10-22, with
+   `cmd /s /c "cd /d ... && powershell ..."` in it) is read the same way, and the task's own automatic check moves it
+   to its own launcher by itself, with 9:00 AM and 5:00 PM and sign-in, once a pinned copy that has this change runs it
+   (so after the next `-InstallChartBridge` or `register`; `-InstallChartBridge` itself moves it at once when run from
+   an up to date clone). It keeps `-Repo`, leaves the hand-made `.vbs` on disk, and is refused (one WARN line in
+   update.log naming why, nothing changed) when elevated, as another user, or when the task's command carries anything
+   but `update -Repo`.
+
    A task already on the hidden launcher with the 9:00 AM check alone (registered before 2026-10-23's second check)
    gets the 5:00 PM one by itself: the first automatic check run by a pinned copy that has this change adds the
    trigger to the task, and changes nothing else (not the action, the launcher or the pinned copy). The pinned copy

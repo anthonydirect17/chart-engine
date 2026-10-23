@@ -1596,6 +1596,105 @@ Test 'the automatic run adds the 17:00 check to its own hidden task (the schedul
   } finally { $env:OS = $keepOS; $script:P = $keepP; $script:UpdaterSelf = $keepSelf }
 }
 
+Test 'WORK''s hand-made launcher (cmd /s /c, 2026-10-22) is read; the task''s own run moves it to its own launcher with 09:00 and 17:00, as -InstallChartBridge does; refused by name otherwise (stubbed)' {
+  # WORK's real line, as FROM_WORK_2026-10-23_release_068 gave it (the user's name left out). cmd's /c is joined from two
+  # parts only so the command-string guard (test/pc-updater.test.js, PowerShell's -c) does not read it as PowerShell's
+  $workLine = 'WScript.Quit CreateObject("WScript.Shell").Run("cmd /s /' + 'c ""cd /d ""C:\Users\<user>\Documents\NinjaTrader 8\ChartBridge\updater\bin"" && ""C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe"" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ""C:\Users\<user>\Documents\NinjaTrader 8\ChartBridge\updater\bin\update-pc.ps1"" update -Repo C:\TheDesk\chart-engine""", 0, True)'
+  $wf = Join-Path $tmpRoot 'work-real.vbs'
+  [IO.File]::WriteAllText($wf, $workLine + "`r`n", [Text.Encoding]::ASCII)
+  $line = Get-LauncherCommand $wf
+  Assert ($line -ceq '"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\Users\<user>\Documents\NinjaTrader 8\ChartBridge\updater\bin\update-pc.ps1" update -Repo C:\TheDesk\chart-engine') "the command: $line"
+  $o = Get-CommandOptions $line 'update-pc.ps1'
+  Assert ($null -ne $o -and $o['#script'] -eq 'C:\Users\<user>\Documents\NinjaTrader 8\ChartBridge\updater\bin\update-pc.ps1' -and $o['#command'] -eq 'update' -and $o['Repo'] -eq 'C:\TheDesk\chart-engine') 'its script, command and -Repo'
+  Assert (@($o.Keys | Where-Object { $_ -notlike '#*' }).Count -eq 1) "nothing else: $(@($o.Keys) -join ',')"
+  # the older form still reads: cmd /c cd /d <folder> && <command>
+  [IO.File]::WriteAllText($wf, 'WScript.Quit CreateObject("WScript.Shell").Run("cmd /' + 'c cd /d C:\x && ""C:\p s\powershell.exe"" -File C:\b\update-pc.ps1 update -Repo C:\r", 0, True)' + "`r`n", [Text.Encoding]::ASCII)
+  Assert ((Get-LauncherCommand $wf) -ceq '"C:\p s\powershell.exe" -File C:\b\update-pc.ps1 update -Repo C:\r') "cmd /c: $(Get-LauncherCommand $wf)"
+
+  $keepP = $script:P; $keepOS = $env:OS; $keepSelf = $script:UpdaterSelf; $keepHand = $script:HandLauncherDir
+  Initialize-Paths (Join-Path $tmpRoot 'work clone') (Join-Path (Join-Path $tmpRoot 'work docs') 'NinjaTrader 8')
+  . $script:TaskStubs
+  function Get-CurrentUserName { return 'PC\anthony' }
+  function Test-Elevated { return $script:Elevated }
+  $script:Elevated = $false
+  $inv = [Globalization.CultureInfo]::InvariantCulture
+  $handDir = Join-Path $tmpRoot 'SchwabDesk_bulk hidden'
+  New-Item -ItemType Directory -Force -Path $handDir | Out-Null
+  $script:HandLauncherDir = $handDir
+  $hand = Join-Path $handDir 'ChartEngine_Updater.vbs'
+  $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+  # WORK's line with this test's folders in place of WORK's (the same form: cmd /s /c, quotes doubled, no //B)
+  function Write-Hand([string]$Tail = '') {
+    $l = $workLine.Replace('C:\Users\<user>\Documents\NinjaTrader 8\ChartBridge\updater\bin', $script:P.Bin).Replace('C:\TheDesk\chart-engine', (Format-Arg $script:P.Repo).Replace('"', '""') + $Tail)
+    [IO.File]::WriteAllText($hand, $l + "`r`n", [Text.Encoding]::ASCII)
+  }
+  function Set-Hand([string]$User = 'PC\anthony', [string]$Launcher = $hand) {
+    $script:StubTask = [pscustomobject]@{ TaskName = 'ChartEngine Updater'; State = 'Running'
+      Actions = @([pscustomobject]@{ Execute = 'C:\WINDOWS\system32\wscript.exe'; Arguments = '"' + $Launcher + '"' })
+      Principal = [pscustomobject]@{ UserId = $User }; Triggers = @() }
+  }
+  try {
+    $env:OS = 'Windows_NT'
+    Put $pinned "# the pinned copy`n"
+    Put $script:P.Log ""
+    $pj = Join-Path $script:P.Bin 'pinned.json'
+    Write-JsonAtomic $pj @{ commit = 'abc'; dailyAt = '17:05'; repo = $script:P.Repo }     # as WORK's older copy wrote it
+    $pinText = Get-Text $pj
+    Write-Hand
+    $handText = Get-Text $hand
+    $launcher = Get-HiddenLauncherPath
+    $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    # a run by hand from the clone: nothing (the task's own run does it)
+    $script:UpdaterSelf = $keepSelf
+    Set-Hand
+    Assert ((Invoke-AutoTaskMigration) -eq '' -and @(Get-TaskCall 'register').Count -eq 0) 'a run that is not the pinned copy: nothing'
+    $script:UpdaterSelf = $pinned
+    # refused by name, one WARN line, nothing changed: elevated, another user, an option the launcher does not carry
+    $n = 0
+    foreach ($c in @(@{ set = { $script:Elevated = $true; Set-Hand }; why = 'this window is elevated' },
+        @{ set = { $script:Elevated = $false; Set-Hand 'PC\someone' }; why = 'the task runs as PC\\someone' },
+        @{ set = { Write-Hand ' -TaskName X'; Set-Hand }; why = 'the task runs with -TaskName X, which the launcher does not carry' })) {
+      & $c.set
+      $before = Get-Text $script:P.Log
+      $said = Invoke-AutoTaskMigration
+      $new = (Get-Text $script:P.Log).Substring($before.Length)
+      Assert ($said -match ('the scheduled task was not moved to the hidden launcher: .*' + $c.why)) "refused: $said"
+      Assert (@($new.Split("`n") | Where-Object { $_ -match ' WARN ' }).Count -eq 1) "one WARN line: $new"
+      Assert (@(Get-TaskCall 'register').Count -eq 0 -and -not (Test-Path -LiteralPath $launcher) -and (Get-Text $pj) -ceq $pinText) 'nothing changed'
+    }
+    Write-Hand
+    # a launcher elsewhere, or a plain powershell.exe task: left to -InstallChartBridge or register
+    $other = Join-Path $tmpRoot 'elsewhere.vbs'; Copy-Item -LiteralPath $hand -Destination $other
+    Set-Hand 'PC\anthony' $other
+    Assert ((Invoke-AutoTaskMigration) -eq '') 'a .vbs outside C:\SchwabDesk_bulk\hidden: not this move'
+    $script:StubTask = New-FakeTask $ps (Get-TaskArguments $pinned $script:P.Repo)
+    Assert ((Invoke-AutoTaskMigration) -eq '') 'plain powershell.exe: not this move'
+    # Task Scheduler refuses: nothing changed, the hand-made launcher kept
+    function Register-ScheduledTask { throw 'Access is denied' }
+    Set-Hand
+    $said = Invoke-AutoTaskMigration
+    Assert ($said -match 'not moved to the hidden launcher: Access is denied' -and -not (Test-Path -LiteralPath $launcher) -and (Get-Text $pj) -ceq $pinText) "failure: $said"
+    . $script:TaskStubs
+    function Get-CurrentUserName { return 'PC\anthony' }
+    # the task's own run (the pinned copy, not elevated, its own user): moved, -Repo kept, 09:00 and 17:00 plus sign-in
+    Set-Hand
+    $said = Invoke-AutoTaskMigration
+    $reg = @(Get-TaskCall 'register')
+    Assert ($reg.Count -eq 1 -and $reg[0].Action.Arguments -ceq ('//B "' + $launcher + '"')) "moved: $said"
+    Assert ([IO.File]::ReadAllText($launcher) -ceq ((Get-HiddenLauncherLine $ps (Get-TaskArguments $pinned $script:P.Repo)) + "`r`n")) 'the launcher register writes, -Repo kept'
+    Assert ($reg[0].Trigger.Count -eq 3 -and $reg[0].Trigger[0].Kind -eq 'logon' -and $reg[0].Trigger[1].StartBoundary -eq (ConvertFrom-NewYorkTime '09:00').ToString('yyyy-MM-ddTHH:mm:ss', $inv) -and $reg[0].Trigger[2].StartBoundary -eq (ConvertFrom-NewYorkTime '17:00').ToString('yyyy-MM-ddTHH:mm:ss', $inv)) 'sign-in, 09:00 and 17:00'
+    Assert ((@((Read-JsonFile $pj)['dailyTimes']) -join ',') -eq '09:00,17:00') 'pinned.json follows'
+    Assert ((Test-Path -LiteralPath $hand) -and (Get-Text $hand) -ceq $handText) 'the hand-made .vbs left on disk as it was'
+    Assert ((Get-Text $script:P.Log) -match "the scheduled task moved to the hidden launcher by the task's own run; daily at 09:00 and 17:00 New York time \(it was 17:05\)") 'logged'
+    Assert ((Invoke-AutoTaskMigration) -eq '' -and @(Get-TaskCall 'register').Count -eq 1) 'once: then on its own launcher'
+    # -InstallChartBridge moves the same task the same way (it said "does not run update-pc.ps1" before this change)
+    Write-JsonAtomic $pj @{ commit = 'abc'; dailyAt = '17:05'; repo = $script:P.Repo }
+    Set-Hand
+    $lines = @(Invoke-TaskMigration)
+    Assert ($lines[0] -match '^The scheduled task now starts hidden' -and @(Get-TaskCall 'register').Count -eq 2) "-InstallChartBridge: $($lines -join ' / ')"
+  } finally { $env:OS = $keepOS; $script:P = $keepP; $script:UpdaterSelf = $keepSelf; $script:HandLauncherDir = $keepHand }
+}
+
 Test 'no task stub is left behind: the Windows-only register tests below get the real ScheduledTasks commands' {
   foreach ($n in @('New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal', 'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask', 'Get-ScheduledTask', 'Unregister-ScheduledTask', 'Set-ScheduledTask')) {
     $c = Get-Command $n -ErrorAction SilentlyContinue

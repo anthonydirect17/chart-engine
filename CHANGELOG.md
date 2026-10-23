@@ -22,6 +22,17 @@
   this user. Anything else is refused by name in update.log and `status`, and changes nothing. A task not yet on the
   hidden launcher still moves only at `-InstallChartBridge` or `register`, as before, and gets both daily checks then
   (its 17:05 or 09:00 becomes 09:00 and 17:00; another time is kept).
+- **Hand-made launchers are read, and moved by the task's own run** (WORK's 0.6.8 install, 2026-10-23: the #66 move
+  said "does not run update-pc.ps1" on WORK and HOME, whose tasks run `wscript.exe` on a hand-made
+  `C:\SchwabDesk_bulk\hidden\ChartEngine_Updater.vbs` since 2026-10-22). A launcher's Run line of the form
+  `cmd /s /c "cd /d "<folder>" && "<powershell.exe>" ... -File "<pinned update-pc.ps1>" update -Repo <clone>"` is now
+  read (the outer quotes `/s` takes off, then the `cd /d ... &&`), so `register` and `-InstallChartBridge` keep its
+  `-Repo` and move it. And the task's own automatic run moves a task behind a `.vbs` in `C:\SchwabDesk_bulk\hidden`
+  (with or without `//B`) to its own launcher, with 09:00, 17:00 and sign-in, through the same move: `-Repo` kept, and
+  refused by name (one WARN line, nothing changed) when the window is elevated, the task runs as another user, its
+  script is not the pinned copy, or its command is anything but `update -Repo` (an option the launcher would drop). Only
+  when this run is the pinned copy. The hand-made `.vbs` stays on disk. A plain `powershell.exe` task still moves only at
+  `-InstallChartBridge` or `register`. Tested with WORK's exact `.vbs` line.
 - **Never two updates at once.** Two daily triggers and the sign-in trigger start the same task: Task Scheduler never
   starts it twice at once (IgnoreNew), and every run takes `updater.lock` (held open, no sharing) before it does
   anything; a run that finds it held says busy and changes nothing.

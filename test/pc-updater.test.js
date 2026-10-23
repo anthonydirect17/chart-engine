@@ -142,7 +142,16 @@ test('the task moves to the hidden launcher at -InstallChartBridge (after the re
   assert.match(tm, /elseif \(-not \(Test-SameUser \$taskUser \$me\)\)/);
   assert.match(tm, /if \(-not \(Test-SamePath \(\[string\]\$o\['#script'\]\) \$pinned\)\)/);
   const upd = src.slice(src.indexOf('function Invoke-Update('), src.indexOf('$r = Invoke-Pass -DryRun:$DryRun -State $state'));
-  assert.match(upd, /if \(-not \$DryRun\) \{ Save-TriggerCheck \$state \(Sync-DailyTrigger\); Write-TaskStartWarning \}/);
+  assert.match(upd, /if \(-not \$DryRun\) \{\s+\$mig = Invoke-AutoTaskMigration[^\n]*\s+Save-TriggerCheck \$state \(Sync-DailyTrigger\)\s+if \(-not \$mig\) \{ Write-TaskStartWarning \}\s+\}/);
+  // 2026-10-23 (WORK's 0.6.8 install): the task's own run moves a task behind a hand-made launcher in
+  // C:\SchwabDesk_bulk\hidden, through the same Invoke-TaskMigration, only when this run is the pinned copy
+  const auto = src.slice(src.indexOf('function Invoke-AutoTaskMigration'), src.indexOf('function Test-HandLauncher'));
+  assert.match(auto, /if \(-not \$task -or \(Get-TaskLauncherPath \$task\)\) \{ return '' \}/);
+  assert.match(auto, /if \(-not \$cmd\.launcher -or -not \(Test-HandLauncher \$cmd\.launcher\)\) \{ return '' \}/, 'a plain powershell.exe task is left to -InstallChartBridge or register');
+  assert.match(auto, /if \(-not \(Test-SamePath \$script:UpdaterSelf \(Join-Path \$script:P\.Bin 'update-pc\.ps1'\)\)\) \{ return '' \}/);
+  assert.match(auto, /Invoke-TaskMigration "the task's own run"/);
+  assert.ok(!/Register-ScheduledTask|Set-ScheduledTask|Write-TaskLauncher/.test(auto), 'only through Invoke-TaskMigration');
+  assert.match(src, /\$script:HandLauncherDir = 'C:\\SchwabDesk_bulk\\hidden'/);
   const warn = src.slice(src.indexOf('function Write-TaskStartWarning'), src.indexOf('function Invoke-Register'));
   assert.ok(!/Register-ScheduledTask|Set-ScheduledTask|Unregister-ScheduledTask|Write-TaskLauncher/.test(warn), 'the automatic run changes nothing');
 });

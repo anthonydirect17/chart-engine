@@ -66,6 +66,11 @@
   happens at the next -InstallChartBridge. Task Scheduler applies a changed action from the task's next start. Until
   then each automatic run logs one WARN line: "the task still starts without the hidden launcher: it is migrated at
   the next -InstallChartBridge (unless it is refused there; see its output) or update-pc.ps1 register".
+  A task behind a hand-made launcher (a .vbs in C:\SchwabDesk_bulk\hidden, as WORK and HOME made theirs on 2026-10-22,
+  with or without //B, its Run line plain or cmd /s /c "cd /d "<folder>" && <command>") is also moved by the task's own
+  automatic run once a pinned copy with this change runs it (Invoke-AutoTaskMigration): the same move and refusals, only
+  when this run is the pinned copy, one WARN line naming why when refused; the hand-made .vbs stays on disk. A plain
+  powershell.exe task still moves only at -InstallChartBridge or register.
   Two daily checks (Anthony 2026-10-23: 09:00 and 17:00 New York time, and at sign-in). pinned.json carries dailyTimes
   (the list) and dailyAt (its first time, for a pinned copy older than this change). A pin written before this change
   (dailyAt only: 09:00, 17:05 or none) reads 09:00 and 17:00; another single time is kept. A task on its own hidden
@@ -129,6 +134,7 @@ $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
 $script:DailyAtDefault = '09:00,17:00'    # the -DailyAt default above, and a pin written before it (Get-PinTimes)
 $script:DailyAtBefore = @('17:05', '09:00')   # the old single defaults: a pin written before with one moves to DailyAtDefault
 $script:HiddenLauncherName = 'update-pc.hidden.vbs'   # the task's hidden launcher, in updater\bin (register writes it)
+$script:HandLauncherDir = 'C:\SchwabDesk_bulk\hidden'   # where the hand-made launchers of 2026-10-22 are (Invoke-AutoTaskMigration)
 $script:FetchWaitSec = 120
 $script:FetchRetrySec = 10
 # 0.3.8: an antivirus (Norton on HOME) can hold the freshly extracted staged.tmp\files.zip for a moment ("Access to the
@@ -1262,7 +1268,11 @@ function Invoke-Update([switch]$DryRun) {
   if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
   try {
     $state = Read-State
-    if (-not $DryRun) { Save-TriggerCheck $state (Sync-DailyTrigger); Write-TaskStartWarning }
+    if (-not $DryRun) {
+      $mig = Invoke-AutoTaskMigration                  # logs its own line (one WARN when refused)
+      Save-TriggerCheck $state (Sync-DailyTrigger)
+      if (-not $mig) { Write-TaskStartWarning }
+    }
     $r = Invoke-Pass -DryRun:$DryRun -State $state
     if ($DryRun) {
       if (Test-Path $script:P.Journal) { Write-Host 'check: a page install was cut off; the next update finishes or undoes it before anything else' }
@@ -2185,13 +2195,20 @@ function Split-CommandLine([string]$Line) {
 }
 
 # The command line a launcher's Run("...") holds, quotes undoubled: ours, or a hand-made one (C:\SchwabDesk_bulk\hidden,
-# the same form, maybe with "cmd /c cd /d <folder> && " in front, which is taken off). '' when it holds no Run line.
+# the same form, maybe with "cmd /c cd /d <folder> && " in front, which is taken off; also cmd /s /c "cd /d "<folder>" &&
+# <command>", as WORK and HOME wrote theirs on 2026-10-22: /s takes off the quotes around the whole). '' when it holds no
+# Run line.
 function Get-LauncherCommand([string]$Path) {
   $m = [regex]::Match([IO.File]::ReadAllText($Path), '(?i)\.Run\(\s*"((?:[^"]|"")*)"')
   if (-not $m.Success) { return '' }
   $cmd = $m.Groups[1].Value.Replace('""', '"').Trim()
-  $c = [regex]::Match($cmd, '(?i)^cmd(\.exe)?\s+/c\s+cd\s+/d\s+.*?&&\s*(.*)$')
-  if ($c.Success) { $cmd = $c.Groups[2].Value.Trim() }
+  $c = [regex]::Match($cmd, '(?i)^"?([^"]*[\\/])?cmd(\.exe)?"?\s+(/s\s+)?/c\s+(.*)$')
+  if ($c.Success) {
+    $rest = $c.Groups[4].Value.Trim()
+    if ($rest.Length -ge 2 -and $rest.StartsWith('"') -and $rest.EndsWith('"')) { $rest = $rest.Substring(1, $rest.Length - 2).Trim() }
+    $d = [regex]::Match($rest, '(?i)^cd\s+/d\s+.*?&&\s*(.*)$')
+    if ($d.Success) { $cmd = $d.Groups[1].Value.Trim() }
+  }
   return $cmd
 }
 
@@ -2328,8 +2345,10 @@ function Test-Elevated { return (New-Object Security.Principal.WindowsPrincipal(
 # (Resolve-TaskOptions: another clone, or a command that cannot be read, is refused by name), the launcher written and
 # read back, then the task. The daily times: as Get-PinTimes reads pinned.json (a pin written before the two daily checks
 # with 17:05, 09:00 or none moves to 09:00 and 17:00; another time is kept). Task Scheduler applies a changed action from the task's next start. A failure is said and logged and
-# never stops -InstallChartBridge. Returns the lines to print.
-function Invoke-TaskMigration {
+# never stops -InstallChartBridge. Returns the lines to print. -By: who moves it (-InstallChartBridge, register's moves
+# are its own; "the task's own run" for a hand-made launcher, Invoke-AutoTaskMigration). Refused by name too: an option
+# the launcher's line does not carry (it carries update -Repo alone), a command other than update.
+function Invoke-TaskMigration([string]$By = '-InstallChartBridge') {
   if ($env:OS -ne 'Windows_NT') { return @() }
   $line = ''
   $launcher = ''; $hadLauncher = $false; $oldLauncher = ''; $registered = $false
@@ -2351,7 +2370,10 @@ function Invoke-TaskMigration {
       if ($keep.error) { $line = $keep.error }
       else {
         $o = Get-CommandOptions (Get-TaskCommand $task).line 'update-pc.ps1'
+        $extra = @(@($o.Keys) | Where-Object { [string]$_ -notlike '#*' -and [string]$_ -ne 'Repo' } | Sort-Object | ForEach-Object { if ($o[$_] -is [bool]) { "-$_" } else { "-$_ $($o[$_])" } })
         if (-not (Test-SamePath ([string]$o['#script']) $pinned)) { $line = "the task runs $($o['#script']), not the pinned copy ${pinned}: run update-pc.ps1 register" }
+        elseif ([string]$o['#command'] -ne 'update') { $line = "the task runs update-pc.ps1 $($o['#command']), not update: run update-pc.ps1 register" }
+        elseif ($extra.Count) { $line = "the task runs with $($extra -join ', '), which the launcher does not carry: run update-pc.ps1 register" }
       }
     }
     if ($line) { $line = "the scheduled task was not moved to the hidden launcher: $line" }
@@ -2375,7 +2397,7 @@ function Invoke-TaskMigration {
         "  kept: -Repo $([string]$o['Repo']) and the pinned copy $pinned; the triggers, user and settings are register's own (they replace the old ones)")
       if ($oldAt -and $oldAt -ne $at) { $out += "  daily checks: $(Format-DailyTimes $times) New York time (it was $oldAt; Anthony 2026-10-23: twice a day, at 09:00 and 17:00, and at sign-in)" }
       else { $out += "  daily checks: $(Format-DailyTimes $times) New York time" }
-      Write-Log "the scheduled task moved to the hidden launcher by -InstallChartBridge; daily at $(Format-DailyTimes $times) New York time (it was $oldAt); kept -Repo $([string]$o['Repo'])"
+      Write-Log "the scheduled task moved to the hidden launcher by $By; daily at $(Format-DailyTimes $times) New York time (it was $oldAt); kept -Repo $([string]$o['Repo'])"
       return $out
     }
   } catch {
@@ -2409,7 +2431,33 @@ function Test-SameUser([string]$A, [string]$B) {
   return (($A -split '\\')[-1] -eq ($B -split '\\')[-1])
 }
 
-# The automatic run never changes the task's action or its pinned copy (they stay as Anthony left them): it only says so.
+# The task's own run moves a task behind a hand-made launcher (a .vbs in C:\SchwabDesk_bulk\hidden, as WORK and HOME
+# made theirs on 2026-10-22) to this tool's own launcher (Anthony 2026-10-23: automatic on every PC, no hand step):
+# Invoke-TaskMigration, exactly as -InstallChartBridge (the -Repo kept and nothing else to keep, refused by name
+# otherwise; not elevated; the task's own user; the task runs the pinned copy), and only when this run is the pinned
+# copy. The hand-made .vbs stays on disk. A plain powershell.exe task still moves only at -InstallChartBridge or register.
+# A refusal or failure changes nothing and logs one WARN line naming why. Returns that line, or the move's ('' when it
+# had nothing to do).
+function Invoke-AutoTaskMigration {
+  if ($env:OS -ne 'Windows_NT') { return '' }
+  try {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $task -or (Get-TaskLauncherPath $task)) { return '' }
+    $cmd = Get-TaskCommand $task
+    if (-not $cmd.launcher -or -not (Test-HandLauncher $cmd.launcher)) { return '' }
+    if (-not (Test-SamePath $script:UpdaterSelf (Join-Path $script:P.Bin 'update-pc.ps1'))) { return '' }   # a run by hand from the clone
+  } catch { return '' }
+  return (@(Invoke-TaskMigration "the task's own run") -join ' ')
+}
+
+# A hand-made launcher: a .vbs in C:\SchwabDesk_bulk\hidden (the tests point HandLauncherDir elsewhere)
+function Test-HandLauncher([string]$Path) {
+  if ($Path -notmatch '(?i)\.vbs$') { return $false }
+  return (Test-SamePath (Split-Path -Parent $Path) $script:HandLauncherDir)
+}
+
+# The automatic run never changes the task's action or its pinned copy (they stay as Anthony left them), except the move
+# above from a hand-made launcher: it only says so.
 function Write-TaskStartWarning {
   if ($env:OS -ne 'Windows_NT') { return }
   try {
