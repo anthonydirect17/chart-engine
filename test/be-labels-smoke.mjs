@@ -1,0 +1,159 @@
+// Break-even labels smoke (chart 1.38.0, Anthony 2026-10-22 at WORK: "when I am dragging the stop over the entry, it kicks out over
+// the active candles, the entry is usually where I am moving my stop to b/e so it still gets in the way"). One chart in Chromium at
+// 2x with a long position, its stop below, a target above and a working buy limit at the entry price; the stop's label is dragged
+// up onto the entry price (break-even). Both as the workspace draws them (compact labels, room right 120 px) and full labels (room
+// right 260 px):
+//   - while the drag is held and after it lands: no label pixel left of the room-right gap's start (the last bar's right edge),
+//     so nothing over the newest candles: every pixel that differs from the same chart with no orders, off the lines' own rows, the
+//     crosshair and the price axis, is right of it;
+//   - the labels do not overlap, each stays in the gutter (right-aligned at the plot's edge), the dragged label stays at its line;
+//   - each label is visible and hittable: its x cancels its own order (orderCancel) and a drag of its body moves its own order.
+// BE_ENGINE=path runs it on another engine file (the 1.37.0 engine for Anthony's before pictures; BE_SHOTS_ONLY=1 then checks
+// nothing). Screenshots in test/out/ (and BE_SHOTS=dir). Sample data only (a random walk made here).
+//   npm run smoke:be-labels
+import { chromium } from 'playwright';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import fs from 'node:fs';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const out = path.join(root, 'test', 'out');
+fs.mkdirSync(out, { recursive: true });
+const SHOTS = process.env.BE_SHOTS || '', ONLY = process.env.BE_SHOTS_ONLY === '1';
+const ENGINE = process.env.BE_ENGINE || path.join(root, 'src', 'chart-engine.js');
+const TAG = process.env.BE_TAG || '';
+if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
+const errors = [];
+let checks = 0;
+const check = (ok, m) => { if (ONLY) { console.log('  (info) ' + (ok ? 'would pass: ' : 'would FAIL: ') + m); return ok; } checks++; if (!ok) { errors.push(m); console.error('  FAIL ' + m); } else console.log('  ok   ' + m); return ok; };
+async function shot(page, name, clip) {
+  const file = path.join(out, name);
+  await page.screenshot(clip ? { path: file, clip } : { path: file });
+  if (SHOTS) fs.copyFileSync(file, path.join(SHOTS, name));
+}
+const W = 1000, H = 560;
+const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+
+async function run(mode) {
+  const compact = mode === 'compact', room = compact ? 120 : 260;
+  console.log(`-- ${compact ? 'compact labels (as the workspace), room 120 px' : 'full labels, room 260 px'}`);
+  const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 2 });
+  page.on('pageerror', e => errors.push(e.message));
+  await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+  await page.setContent('<!doctype html><html><head><link rel="stylesheet" href="file://' + path.join(root, 'live', 'fonts', 'plex.css') + '"><style>html,body{margin:0;height:100%;background:#080B10}#c{position:absolute;left:0;top:0;width:' + W + 'px;height:' + H + 'px}</style></head><body><div id="c"></div></body></html>');
+  await page.addScriptTag({ path: ENGINE });
+  const S = await page.evaluate(async ([compact, room]) => {
+    const host = document.getElementById('c');
+    let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const bars = []; let p = 20000;
+    for (let i = 0; i < 300; i++) { const o = p, c = o + (rnd() - 0.5) * 6, h = Math.max(o, c) + rnd() * 3, l = Math.min(o, c) - rnd() * 3; bars.push({ t: 1760000000 + i * 60, o, h, l, c, v: 100 }); p = c; }
+    const ch = window.__ch = ChartEngine.create(host, { barSpacing: 8, liveButton: false, lockButton: false, room, pointValue: 2, compactLabels: compact,
+      motion: { zoom: 0, fit: 0, candle: 0, follow: 0, friction: 0 }, layers: { volume: false, vwap: false, levels: false, trades: false, ib: false }, clock: () => 1760000000 + 300 * 60 });
+    ch.setBars(bars);
+    const q = v => Math.round(v * 4) / 4, last = bars[bars.length - 1].c;
+    const tail = bars.slice(-40), lo = Math.min(...tail.map(b => b.l)), hi = Math.max(...tail.map(b => b.h));
+    const avg = q(last), stop = q(Math.max(lo + 1, avg - 8)), target = q(Math.min(hi - 1, avg + 8));
+    window.__S = { avg, stop, target, lo, hi };
+    window.__ev = []; for (const k of ['orderMove', 'orderCancel']) ch.on(k, e => window.__ev.push(Object.assign({ k }, e)));
+    window.__set = () => { ch.setPosition({ qty: 2, avgPrice: avg, pointValue: 2 }); ch.setOrders(window.__orders); };
+    window.__orders = [{ id: 's1', side: 'sell', kind: 'stop', price: stop, qty: 2, role: 'stop' }, { id: 't1', side: 'sell', kind: 'limit', price: target, qty: 2, role: 'target' },
+      { id: 'e1', side: 'buy', kind: 'limit', price: avg, qty: 1 }];
+    ch.setOrderEditing(true);
+    await new Promise(r => setTimeout(r, 200));
+    const n = ch.bars().length - 1, gap = ch.room().gap, xl = ch.barToX(n), sp = ch.barToX(n) - ch.barToX(n - 1);
+    return { avg, stop, target, gapStart: xl + sp / 2, plotW: xl + gap, spacing: sp };
+  }, [compact, room]);
+  const wait = ms => page.waitForTimeout(ms);
+  const yOf = p => page.evaluate(p => window.__ch.priceToY(p), p);
+  /* canvas grabs stay in the page (window.__img[name]); only the counts come back */
+  const grab = name => page.evaluate(name => { const cv = document.querySelector('#c canvas'); (window.__img = window.__img || {})[name] = { w: cv.width, h: cv.height, d: cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data }; return name; }, name);
+  const handles = () => page.evaluate(() => window.__ch.orderHandles());
+  /* the reference: the same chart, no orders, the mouse where the drag will end (the crosshair the same) */
+  const yAvg = await yOf(S.avg), yStop0 = await yOf(S.stop);
+  await page.evaluate(() => window.__set());
+  await wait(200);
+  const h0 = await handles();
+  const sBox = h0.find(h => h.id === 's1').box;
+  const gx = Math.round(sBox.x + sBox.w - 8);                 // on the drawn chip (compact labels draw at the right of their box)
+  const endY = yAvg + (sBox.y + sBox.h / 2 - yStop0);         // the grab point moved by exactly the stop's way to the entry
+  await page.evaluate(() => { window.__ch.setOrders([]); window.__ch.setPosition(null); });
+  await page.mouse.move(gx, endY); await wait(250);
+  await grab('ref');
+  check(Math.abs((await yOf(S.avg)) - yAvg) < 0.01, 'the scale does not move with the orders (the reference is comparable)');
+  await page.evaluate(() => window.__set());
+  await page.mouse.move(20, 20); await wait(250);
+  await shot(page, `be-labels-${mode}${TAG}-start.png`, { x: Math.max(0, S.gapStart - 300), y: Math.max(0, yAvg - 110), width: Math.min(W, 300 + 260 + 70), height: 220 });
+  /* the drag: the stop's label from its line up onto the entry price */
+  await page.mouse.move(gx, sBox.y + sBox.h / 2); await wait(100);
+  await page.mouse.down();
+  await page.mouse.move(gx, endY, { steps: 8 }); await wait(250);
+  await grab('drag'); const hDrag = await handles();
+  await shot(page, `be-labels-${mode}${TAG}-drag.png`, { x: Math.max(0, S.gapStart - 300), y: Math.max(0, yAvg - 110), width: Math.min(W, 300 + 260 + 70), height: 220 });
+  /* pixels left of the gap's start that differ from the reference: rows of the lines (entry, stop, target, the crosshair) and the
+     crosshair's column left out; anything else there is a label over the newest candles */
+  const yT = await yOf(S.target);
+  const strayLeft = (name, rows, col) => page.evaluate(([name, rows, gapStart, gx]) => {
+    const img = window.__img[name], ref = window.__img.ref, d = 2, x0 = Math.floor(gapStart * d) - 1;
+    const skipRow = y => rows.some(r => Math.abs(y / d - r) <= 1.6), skipCol = x => Math.abs(x / d - gx) <= 1.6;
+    let n = 0, minX = Infinity;
+    for (let y = 0; y < img.h; y++) {
+      if (skipRow(y)) continue;
+      for (let x = 0; x < x0; x++) {
+        if (skipCol(x)) continue;
+        const i = (y * img.w + x) * 4;
+        if (Math.abs(img.d[i] - ref.d[i]) + Math.abs(img.d[i + 1] - ref.d[i + 1]) + Math.abs(img.d[i + 2] - ref.d[i + 2]) > 24) { n++; if (x < minX) minX = x; }
+      }
+    }
+    return { n, minX: minX / d };
+  }, [name, rows, S.gapStart, col === undefined ? gx : col]);
+  const stray = await strayLeft('drag', [yAvg, yT, endY]);
+  check(stray.n === 0, 'while the stop is dragged onto the entry: no label pixel left of the room-right gap (' + S.gapStart.toFixed(1) + ' px): ' + stray.n + ' pixels' + (stray.n ? ' from x ' + stray.minX.toFixed(1) : ''));
+  const sDrag = hDrag.find(h => h.id === 's1');
+  check(!!sDrag && Math.abs(sDrag.box.y + sDrag.box.h / 2 - endY + (sBox.y + sBox.h / 2 - yStop0)) <= 1.5, 'the dragged label stays pinned at its line, in the gutter: ' + JSON.stringify(sDrag && sDrag.box));
+  await page.mouse.up(); await wait(200);
+  const mv = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
+  check(mv.length === 1 && mv[0].id === 's1' && mv[0].price === S.avg, 'the drag moves the stop to the entry price: ' + JSON.stringify(mv));
+  /* the stop lands at break-even (as ChartBridge would confirm it) */
+  await page.evaluate(avg => { window.__orders = window.__orders.map(o => (o.id === 's1' ? Object.assign({}, o, { price: avg }) : o)); window.__ch.setOrders(window.__orders); window.__ev = []; }, S.avg);
+  /* at rest, the mouse away (a compact label under the mouse shows in full, as since 1.15.0): a reference with the mouse there too */
+  await page.evaluate(() => { window.__ch.setOrders([]); window.__ch.setPosition(null); });
+  await page.mouse.move(20, 20); await wait(250);
+  await grab('ref');
+  await page.evaluate(() => window.__set()); await wait(250);
+  await grab('be'); const h1 = await handles();
+  const stray2 = await strayLeft('be', [yAvg, yT, 20], 20);
+  check(stray2.n === 0, 'at break-even (stop, entry and limit at one price): no label pixel left of the gap: ' + stray2.n + ' pixels' + (stray2.n ? ' from x ' + stray2.minX.toFixed(1) : ''));
+  await page.mouse.move(20, 20); await wait(250);
+  await shot(page, `be-labels-${mode}${TAG}-be.png`, { x: Math.max(0, S.gapStart - 300), y: Math.max(0, yAvg - 110), width: Math.min(W, 300 + 260 + 70), height: 220 });
+  const h2 = await handles();
+  const pb = await page.evaluate(() => window.__ch.positionBox());
+  const boxes = h2.map(h => ({ id: h.id, b: h.box })).concat(pb ? [{ id: 'position', b: pb }] : []);
+  const over = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  check(boxes.every((a, i) => boxes.every((b, j) => i === j || !over(a.b, b.b))), 'the labels do not overlap: ' + JSON.stringify(boxes.map(x => [x.id, Math.round(x.b.y)])));
+  check(boxes.every(x => Math.abs(x.b.x + x.b.w + ((h2.find(h => h.id === x.id) || {}).xbox ? 18 : 0) - (S.plotW - 6)) <= 1), 'every label right-aligned in the gutter at the plot\'s edge');
+  /* each visible and hittable: its x cancels its own order, its body drags its own order */
+  for (const id of ['s1', 'e1']) {
+    const h = h2.find(x => x.id === id);
+    if (!check(!!h && !!h.xbox, id + ': a label with its x')) continue;
+    await page.evaluate(() => { window.__ev = []; });
+    await page.mouse.click(h.xbox.x + h.xbox.w / 2, h.xbox.y + h.xbox.h / 2); await wait(150);
+    const ev = await page.evaluate(() => window.__ev);
+    check(ev.length === 1 && ev[0].k === 'orderCancel' && ev[0].id === id, id + ': its x cancels its own order: ' + JSON.stringify(ev));
+    await page.evaluate(() => { window.__ev = []; });
+    const bx = Math.round(h.box.x + h.box.w - 8), by = h.box.y + h.box.h / 2;
+    await page.mouse.move(bx, by); await page.mouse.down(); await page.mouse.move(bx, by - 24, { steps: 4 }); await page.mouse.up(); await wait(150);
+    const ev2 = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
+    check(ev2.length === 1 && ev2[0].id === id, id + ': a drag of its label moves its own order: ' + JSON.stringify(ev2));
+    await page.evaluate(() => window.__ch.setOrders(window.__orders)); await page.mouse.move(20, 20); await wait(150);
+  }
+  void h1;
+  await page.close();
+}
+try {
+  await run('compact');
+  await run('full');
+} catch (e) { errors.push('threw: ' + (e && e.stack || e)); console.error(e); }
+await browser.close();
+if (ONLY) { console.log('be-labels smoke: screenshots only'); process.exit(0); }
+if (errors.length) { console.error(`be-labels smoke: ${errors.length} of ${checks} checks FAILED\n` + errors.join('\n')); process.exit(1); }
+console.log(`be-labels smoke: ${checks} checks, all ok`);

@@ -386,7 +386,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Orders (1.3.0):** a 1 px line across the plot in the side color (buy green, sell red): limits and
   targets solid, stops dashed 6/4. A label at the right end of the plot ("BUY LMT 2", bracket legs "SELL TGT
   2" / "SELL STP 2", the quantity still to fill) on the ground at 92% with a side-colored border (dashed for
-  stops), plus a close x while order editing is on. Labels that would overlap step left. The price-axis tag
+  stops), plus a close x while order editing is on. Labels that would overlap step left (until 1.38.0; see below). The price-axis tag
   is filled in the side color for limits and outlined (dashed) for stops, and stacks with the level tags.
   An order moved and waiting for its answer draws at 55%. Labels draw above the last price line and live dot.
   **1.37.0 (Anthony 2026-10-22: "I still find the chips and the lines obstructing price, especially when price is moving and im
@@ -395,6 +395,14 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   entry; compact or full; planned legs too) draws at **55%** of its strength where a candle (its high to low) is behind it, and
   at full strength while the mouse is within 24 px of it or it is dragged; a label over the empty room draws as before. Only how
   strongly they draw changes: every hit area, the drag and the clicks are the same boxes.
+  **1.38.0 (Anthony 2026-10-22 at WORK: "when I am dragging the stop over the entry, it kicks out over the active candles"):**
+  every order and position label stays right-aligned at the plot's right edge, in the gutter beside the price axis; a label never
+  steps left onto the candles. Labels that would overlap stack up and down in the gutter instead, 20 px (the label's 18 and 2)
+  at a time: the label of the order being dragged is placed first and stays at its line (pinned, and compact on a host's chart
+  while dragged), then the position's, then the orders' in their order, each at its line when free, else the nearest free row,
+  first away from the label it meets (down when level with it). A label off its line gets a 1 px leader in its border color at
+  its strength, from its right end along the 6 px gutter to its line. Each label's hit areas (its body, its x, its add cells) are
+  its own boxes wherever it lands.
 - **Compact labels (1.15.0, a host's charts: the workspace; Anthony from his two-monitor setup, images/67.webp):** the same
   colors, borders and dashes, the text 500 10px mono in a 14 px box with 4 px padding, right-aligned where the full label
   would end: "TGT 1", "STP 1" (a leg's side is its color), "BUY LMT 1", planned "SL -12t" / "TP +24t", the position "L1

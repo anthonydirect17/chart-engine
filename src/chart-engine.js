@@ -2480,15 +2480,38 @@ function create(container, options) {
     orderHits = []; posHit = null;
     const labelBoxes = [];                    // where the labels are (full size), for the corner readout (1.15.0)
     if (n >= 0 && (orders.length || position || orderPreview)) {
-      const boxes = [], LH = 18;
+      const LH = 18, STEP = LH + 2;
       ctx.font = '500 11px ' + T.fontMono; ctx.textBaseline = 'middle';
-      const place = (y, w) => {                                  // right-aligned, stepping left past labels it would overlap
-        let x = plotW - 6 - w; const top = clamp(y - LH / 2, 0, Math.max(0, plotH - LH));
-        for (let k = 0; k < 8; k++) {
-          const hit = boxes.find(b => x < b.x + b.w + 4 && x + w + 4 > b.x && Math.abs(b.top - top) < LH + 1);
-          if (!hit) break; x = hit.x - 4 - w;
+      /* 1.38.0 (Anthony 2026-10-22 at WORK: "when I am dragging the stop over the entry, it kicks out over the active candles"):
+         every label is right-aligned at the plot's right edge, in the gutter beside the price axis, and never steps left onto the
+         candles. Labels that would overlap stack up and down in the gutter instead: the label of the order being dragged is
+         placed first (pinned at its line), then the others in their order (the position, then the orders), each at its own line
+         when free, else the nearest free row STEP px at a time, first away from the label it meets (down when level with it),
+         then the other way. A label moved off its line gets a short leader in the gutter back to its line. The hit areas are the
+         label's own boxes wherever it lands, so a click, its x and a drag act on its own order. Placed once all are asked for. */
+      const pend = [];
+      const place = (y, w, first) => { const top = clamp(y - LH / 2, 0, Math.max(0, plotH - LH)); const sl = { y, w, x: plotW - 6 - w, top, top0: top, first: !!first, done: null }; pend.push(sl); return sl; };
+      const placeAll = () => {
+        const boxes = [], hi = Math.max(0, plotH - LH);
+        const meets = (sl, top) => boxes.find(b => sl.x < b.x + b.w + 4 && sl.x + sl.w + 4 > b.x && Math.abs(b.top - top) < LH + 1);
+        for (const sl of pend.filter(q => q.first).concat(pend.filter(q => !q.first))) {
+          const hit = meets(sl, sl.top0);
+          if (hit) {
+            const dir = sl.top0 < hit.top ? -1 : 1;
+            let at = null;
+            for (let k = 1; k <= 12 && at === null; k++) for (const d of [dir, -dir]) { const t = sl.top0 + d * k * STEP; if (t >= 0 && t <= hi && !meets(sl, t)) { at = t; break; } }
+            if (at !== null) sl.top = at;
+          }
+          boxes.push({ x: sl.x, top: sl.top, w: sl.w }); labelBoxes.push({ x: sl.x, y: sl.top, w: sl.w, h: LH });
+          if (sl.done) sl.done();
         }
-        boxes.push({ x, top, w }); labelBoxes.push({ x, y: top, w, h: LH }); return { x, top };
+      };
+      const leader = (sl, border, alpha) => {                    // 1.38.0: a label off its line: a short leader back to it, in the gutter
+        if (sl.top === sl.top0) return;
+        const lx = Math.round(plotW - 3) + 0.5, my = sl.top + LH / 2, ly = clamp(sl.y, 0, plotH);
+        ctx.globalAlpha = alpha; ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.setLineDash([]);
+        ctx.beginPath(); ctx.moveTo(sl.x + sl.w, my); ctx.lineTo(lx, my); ctx.lineTo(lx, ly); ctx.stroke();
+        ctx.globalAlpha = 1;
       };
       const hline = (y, col, dash, alpha, width) => {
         const lw = Math.max(1, Math.round(dpr * (width || 1))), ring = ringOf(col);
@@ -2524,12 +2547,26 @@ function create(container, options) {
         const ex = (extras || []).map(e => ({ which: e[0], text: e[1], w: ctx.measureText(e[1]).width + 10 }));
         const ew = ex.reduce((a, e) => a + e.w, 0);
         const tw = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 10, w = tw + ew + (closer ? LH : 0);
-        const { x, top } = place(y, w);
-        if (see && !(od && od.id === hid) && !labelNear(x, top, w) && candlesBehind(x, top, w)) alpha *= LABEL_SOFT;   // 1.37.0
-        const compact = o.compactLabels && short && !ex.length && (hid === undefined || hid !== labelHover);
+        const sl = place(y, w, !!od && hid !== undefined && od.id === hid);
+        let x = sl.x, top = sl.top;
+        /* the boxes are filled in once every label is placed (placeAll), the same objects the callers keep */
+        const box = { x, y: top, w: tw, h: LH };
+        /* 1.38.0: the label of the order being dragged stays compact (it showed in full from the hover before the press, and the
+           full one is wider than the room right: over the newest candles) */
+        const compact = o.compactLabels && short && !ex.length && (hid === undefined || hid !== labelHover || (!!od && od.id === hid));
+        const xbox = closer ? { x: 0, y: 0, w: LH, h: LH } : null;
+        const adds = compact ? [] : ex.map(e => ({ which: e.which, box: { x: 0, y: top, w: e.w, h: LH } }));
+        sl.done = () => {
+          x = sl.x; top = sl.top; box.x = x; box.y = top;
+          if (xbox) { xbox.x = x + tw + (compact ? 0 : ew); xbox.y = top; }
+          let ax = x + tw;
+          for (const a of adds) { a.box.x = ax; a.box.y = top; ax += a.box.w; }
+          if (see && !(od && od.id === hid) && !labelNear(x, top, w) && candlesBehind(x, top, w)) alpha *= LABEL_SOFT;   // 1.37.0
+        };
         if (compact) {
           const CH = 14;
           orderLabels.push(() => {
+            leader(sl, border, alpha);
             ctx.font = '500 10px ' + T.fontMono; ctx.textBaseline = 'middle';
             const sw = short.map(pt => ctx.measureText(pt[0]).width), cg = 5;
             const ctw = sw.reduce((a, b) => a + b, 0) + cg * (short.length - 1) + 8, cx0 = x + tw - ctw, ct = top + (LH - CH) / 2;
@@ -2547,9 +2584,10 @@ function create(container, options) {
             }
             ctx.globalAlpha = 1;
           });
-          return { box: { x, y: top, w: tw, h: LH }, xbox: closer ? { x: x + tw, y: top, w: LH, h: LH } : null, adds: [] };
+          return { box, xbox, adds };
         }
         orderLabels.push(() => {
+          leader(sl, border, alpha);
           ctx.font = '500 11px ' + T.fontMono; ctx.textBaseline = 'middle';
           ctx.globalAlpha = alpha;
           roundRect(x, top, w, LH, 4); ctx.fillStyle = rgba(T.bg, 0.92); ctx.fill();
@@ -2570,9 +2608,7 @@ function create(container, options) {
           }
           ctx.globalAlpha = 1;
         });
-        let ax = x + tw;
-        const adds = ex.map(e => { const b = { which: e.which, box: { x: ax, y: top, w: e.w, h: LH } }; ax += e.w; return b; });
-        return { box: { x, y: top, w: tw, h: LH }, xbox: closer ? { x: x + tw + ew, y: top, w: LH, h: LH } : null, adds };
+        return { box, xbox, adds };
       };
       // position: neutral line at the average price, open P&L in points and dollars
       if (position && position.qty) {
@@ -2634,6 +2670,7 @@ function create(container, options) {
           orderTags.push({ price, style: { fill: T.bg, fg: col, border: col, dash } });
         }
       }
+      placeAll();                                                // 1.38.0: every label placed, the dragged one first
     }
 
     // last price line and live dot
