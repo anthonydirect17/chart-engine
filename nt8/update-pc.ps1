@@ -24,7 +24,8 @@
                           page from staged\, previous\ or the clone's page files
     pause / resume        a manual switch for the automatic path (off by default)
     register / unregister the scheduled task for this Windows user: at sign-in, and daily at -DailyAt (New York
-                          time, 17:05 by default: futures are closed from 17:00 to 18:00 ET)
+                          time, 09:00 by default: Anthony 2026-10-23, updates are pushed overnight and he wants them
+                          in the morning). The task starts hidden, through a one-line launcher (see "Hidden start")
 
   Rules (Anthony, 2026-09-30):
     - The automatic path never writes a .cs file into bin\Custom\AddOns: the next F5 anyone pressed would compile it
@@ -38,6 +39,25 @@
 
   State and logs: Documents\NinjaTrader 8\ChartBridge\updater\ (state.json, status.json, update.log, swap.json while a
   page install runs, staged\, previous\, previous-addons\, bin\, paused). Only update.json (versions, no secrets) is written into the served www folder.
+
+  Hidden start (Anthony, 2026-10-22: every scheduled program of ours runs hidden). powershell.exe -WindowStyle Hidden
+  still flashes a console while PowerShell starts, so register writes a one-line ASCII launcher,
+  updater\bin\update-pc.hidden.vbs:
+    WScript.Quit CreateObject("WScript.Shell").Run("<the command line below, quotes doubled>", 0, True)
+  and the task runs wscript.exe //B "<that launcher>" (//B: batch mode, so WScript never shows an error dialog; same
+  working folder, triggers, user, settings and time limit). Window
+  style 0 is hidden; True waits, so the exit code comes back and Task Scheduler's Running and Last Result stay true. The
+  command line is exactly the one the task ran before: Windows PowerShell with -File on the pinned copy, update -Repo
+  <clone>. register writes the launcher first (and reads it back), then pins, then changes the task: a launcher that
+  cannot be written fails register and changes nothing (never a visible task again). register keeps what the current
+  task runs: its -Repo, read from its arguments or from the Run line of the launcher it starts (ours, or a hand-made one
+  in C:\SchwabDesk_bulk\hidden); another clone is refused unless -Repo is given, and so is a task whose command cannot
+  be read (unregister first then). unregister removes the launcher too. status prints the command the task runs and
+  checks the launcher: missing, unreadable or not exactly the line register writes, status says so and ends with STOP. Time limit: when Task Scheduler stops the task at its 30 minutes it stops
+  wscript.exe, and the PowerShell under it may keep running. That run still holds updater.lock (a file held open, freed
+  by Windows when the process ends), so every later run says busy and changes nothing until it ends; each git call has
+  its own 3 minute limit and is ended with what it started (taskkill /T). A PowerShell that hangs for good outside git
+  would keep the updater busy until sign-out or a restart: update.log and status show it.
 #>
 [CmdletBinding()]
 param(
@@ -46,9 +66,12 @@ param(
   [string]$Command = 'status',
   [switch]$InstallChartBridge,
   [switch]$Yes,
-  # The daily check, in New York time (Anthony, 2026-09-30: 17:05, inside the 17:00 to 18:00 ET futures break).
+  # The daily check, in New York time. Anthony, 2026-10-23: 09:00 (it was 17:05, the futures break): updates are pushed
+  # overnight and he wants them in the morning. The updater only installs page files (an open page keeps the code it
+  # loaded and says "Update ready: reload when flat") and never installs ChartBridge, so a 09:00 run never changes what
+  # is open while he trades. A PC registered before keeps the time its pinned.json says until it registers again.
   [ValidatePattern('^([01][0-9]|2[0-3]):[0-5][0-9]$')]
-  [string]$DailyAt = '17:05',
+  [string]$DailyAt = '09:00',
   [string]$TaskName = 'ChartEngine Updater',
   # The clone, for the pinned copy in updater\bin that the scheduled task runs (register passes it).
   [string]$Repo = '',
@@ -60,6 +83,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
 $script:UpdaterSelf = $MyInvocation.MyCommand.Path
+$script:Bound = @{}                            # the options given on this command line (register keeps the task's others)
+foreach ($k in $PSBoundParameters.Keys) { $script:Bound[$k] = $PSBoundParameters[$k] }
 $script:RequiredChecks = @('unit (ubuntu-latest)', 'unit (windows-latest)')   # .github/workflows/test.yml
 $script:GoodConclusions = @('success', 'neutral', 'skipped')
 $script:Remote = 'origin'
@@ -77,6 +102,8 @@ $script:UpdaterStopped = $false                # the pinned copy failed its own 
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
 # 0.3.8: the run at sign-in can come before the network is up ("Failed to connect to github.com port 443"): `update`
 # tries the fetch again for up to FetchWaitSec, then gives up quietly (outcome offline) until the next run.
+$script:DailyAtDefault = '09:00'          # pinned.json without a dailyAt (the -DailyAt default above)
+$script:HiddenLauncherName = 'update-pc.hidden.vbs'   # the task's hidden launcher, in updater\bin (register writes it)
 $script:FetchWaitSec = 120
 $script:FetchRetrySec = 10
 # 0.3.8: an antivirus (Norton on HOME) can hold the freshly extracted staged.tmp\files.zip for a moment ("Access to the
@@ -113,6 +140,13 @@ function Get-LocalPath([string]$Root, [string]$Rel) {
 }
 
 # ------------------------------------------------------------------------------------------------ small helpers
+
+# 3 d 4 h, 2 h 5 min, 7 min
+function Format-Age([TimeSpan]$Age) {
+  if ($Age.TotalDays -ge 1) { return "$([int][Math]::Floor($Age.TotalDays)) d $($Age.Hours) h" }
+  if ($Age.TotalHours -ge 1) { return "$([int][Math]::Floor($Age.TotalHours)) h $($Age.Minutes) min" }
+  return "$([int][Math]::Max(0, [Math]::Floor($Age.TotalMinutes))) min"
+}
 
 function Get-NowMs { return [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
 function Get-Short([string]$Sha) { if ($Sha -and $Sha.Length -ge 7) { return $Sha.Substring(0, 7) } return "$Sha" }
@@ -1249,7 +1283,10 @@ function Invoke-Status {
   if ($n.ready) { Write-Host "              ChartBridge $($n.ready) is staged and ready: when flat, update-pc.ps1 -InstallChartBridge, then F5" }
   if ($n.copied) { Write-Host "              ChartBridge $($n.copied) was copied: press F5 in the NinjaScript Editor while flat" }
   $lr = $state['lastRun']
-  if (Get-Field $lr 'at') { Write-Host "last run:     $(Get-Field $lr 'outcome'): $(Get-Field $lr 'reason')" }
+  if (Get-Field $lr 'at') {
+    $t0 = [DateTimeOffset]::FromUnixTimeMilliseconds([long](Get-Field $lr 'at')).ToLocalTime()
+    Write-Host "last run:     $($t0.ToString('yyyy-MM-dd HH:mm')) ($(Format-Age ([DateTimeOffset]::Now - $t0)) ago), $(Get-Field $lr 'outcome'): $(Get-Field $lr 'reason')"
+  } else { Write-Host 'last run:     none recorded yet' }
   if (Get-Field $state 'skipCommit') { Write-Host "skipping:     $(Get-Short (Get-Field $state 'skipCommit')) (rolled back by hand)" }
   if (Get-Field $state 'pendingPage') { Write-Host "page waiting: $(Get-Field $state['pendingPage'] 'version') for ChartBridge $(Get-Field $state['pendingPage'] 'needs') (installs on the first run after F5)" }
   if (Test-Path $script:P.Journal) {
@@ -1280,15 +1317,19 @@ function Invoke-Status {
   $task = $null
   if ($env:OS -eq 'Windows_NT') { $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
   Write-Host "task:         $(if ($task) { "$TaskName ($($task.State))" } else { 'not registered (update-pc.ps1 register)' })"
+  $start = $null
   if ($task) {
+    $start = Test-TaskStart $task 'update-pc.ps1' { param($o) Get-HiddenLauncherLine (Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe') (Get-TaskArguments (Join-Path $script:P.Bin 'update-pc.ps1') ([string]$o['Repo'])) }
+    Write-Host "task start:   $($start.text)"
+    if ($start.line) { Write-Host "task command: $($start.line)" }
     $want = ''
-    try { $want = (ConvertFrom-NewYorkTime ([string](Get-Field $pin 'dailyAt' '17:05'))).ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) } catch { }
+    try { $want = (ConvertFrom-NewYorkTime ([string](Get-Field $pin 'dailyAt' $script:DailyAtDefault))).ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) } catch { }
     foreach ($d in @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })) {
       $sb = Read-StartBoundary ([string]$d.StartBoundary)
       $note = ''
       if ($sb.offset) { $note = ' KEPT ON UTC (StartBoundary has an offset): the next run moves it' }
       elseif ($want -and $sb.hhmm -ne $want) { $note = ' DRIFTED: the next run moves it' }
-      Write-Host "daily check:  $($sb.hhmm) on this PC's clock, wanted $want ($(Get-Field $pin 'dailyAt' '17:05') New York time; StartBoundary $($d.StartBoundary))$note"
+      Write-Host "daily check:  $($sb.hhmm) on this PC's clock, wanted $want ($(Get-Field $pin 'dailyAt' $script:DailyAtDefault) New York time; StartBoundary $($d.StartBoundary))$note"
     }
   }
   $dt = Get-Field $state 'dailyTrigger'
@@ -1301,6 +1342,7 @@ function Invoke-Status {
   if ($pre) { return (Write-Verdict $false $pre) }
   if ($mx) { return (Write-Verdict $false $script:MixedStop) }
   if ($pp) { return (Write-Verdict $false "the task's updater is stopped: $pp. Run update-pc.ps1 register from the clone") }
+  if ($start -and -not $start.ok) { return (Write-Verdict $false "the task's start: $($start.text)") }
   if (-not $c.version) { return (Write-Verdict $false "ChartBridge's version is not known: open NinjaTrader so ChartBridge runs, then run status again") }
   return (Write-Verdict $true "ChartBridge $($c.version) ($($c.source))")
 }
@@ -1687,12 +1729,14 @@ function Invoke-Resume {
 # The scheduled task: this Windows user, only while signed in (no password stored, no admin). Anthony's ruling
 # (2026-09-30): check once at startup, then once a day.
 #   - At sign-in, after two minutes: the "startup" check (an at-startup trigger needs admin or SYSTEM).
-#   - Daily at -DailyAt New York time (17:05), converted to this PC's clock when registering: futures are closed from
-#     17:00 to 18:00 ET, so the check, and any brief console flash, never lands while Anthony trades.
-#   - No "run as soon as possible after a missed start" (StartWhenAvailable): Task Scheduler would run a missed 17:05
-#     whenever the PC is next awake, at any hour, often inside the trading day. The sign-in trigger already covers a PC
-#     that was off; one that slept through 17:05 checks the next day.
-# Never two runs at once (IgnoreNew), 30 minutes at most. It runs Windows PowerShell with -File.
+#   - Daily at -DailyAt New York time (09:00, Anthony 2026-10-23: updates are pushed overnight, he wants them in the
+#     morning; it was 17:05), converted to this PC's clock when registering. A run installs page files only (an open page
+#     keeps its loaded code until Anthony reloads it) and never ChartBridge, and the task starts hidden (no window).
+#   - No "run as soon as possible after a missed start" (StartWhenAvailable): Task Scheduler would run a missed check
+#     whenever the PC is next awake, at any hour. The sign-in trigger already covers a PC that was off; one that slept
+#     through the daily time checks the next day.
+# Never two runs at once (IgnoreNew), 30 minutes at most. It runs Windows PowerShell with -File, started hidden through
+# wscript.exe //B and the launcher (see "Hidden start" at the top).
 function Get-TaskArguments([string]$Script, [string]$RepoDir) {
   return ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ' + (Format-Arg $Script) + ' update -Repo ' + (Format-Arg $RepoDir))
 }
@@ -1708,7 +1752,7 @@ function Install-PinnedUpdater([string]$Source, [string]$Commit, [string]$Blob, 
     Move-FileAtomic "$dest.upd-tmp" $dest
   }
   $old = Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')
-  $daily = [string](Get-Field $old 'dailyAt' '17:05')
+  $daily = [string](Get-Field $old 'dailyAt' $script:DailyAtDefault)
   Write-JsonAtomic (Join-Path $script:P.Bin 'pinned.json') @{ commit = $Commit; blob = $Blob; from = $From; at = (Get-NowMs); sha256 = (Get-FileSha256 $dest); repo = $script:P.Repo; dailyAt = $daily }
   Write-Log "the scheduled task's updater is now $dest (from $(Get-Short $Commit), $From)"
   return $dest
@@ -1806,7 +1850,7 @@ function Write-StopRecord([string]$Text) {
 
 # The daily trigger. New-ScheduledTaskTrigger -At writes StartBoundary with this PC's UTC offset of that day (for
 # example 2026-09-30T17:05:00-04:00), and Task Scheduler then keeps the trigger on UTC ("Synchronize across time
-# zones"): registered in summer, it would run at 16:05 New York time all winter, while futures trade. So StartBoundary
+# zones"): registered in summer, it would run an hour early (New York time) all winter. So StartBoundary
 # is written as local wall-clock time with no offset (2026-09-30T17:05:00): Task Scheduler then runs it at 17:05 on
 # this PC's clock every day, across DST.
 function New-DailyTrigger([datetime]$Local) {
@@ -1823,8 +1867,8 @@ function Read-StartBoundary([string]$Text) {
   return @{ ok = $true; hhmm = "$($m.Groups[1].Value):$($m.Groups[2].Value)"; offset = [bool]$m.Groups[5].Success }
 }
 
-# The daily check is a local time on this PC. At every run (sign-in and daily), 17:05 New York is worked out again for
-# today, and the trigger is moved when it drifted (a time zone change, DST dates that differ from New York's, or a
+# The daily check is a local time on this PC. At every run (sign-in and daily), pinned.json's dailyAt (New York time) is
+# worked out again for today, and the trigger is moved when it drifted (a time zone change, DST dates that differ from New York's, or a
 # StartBoundary kept on UTC). Returns what it found, for state.json and status: a failure (a task registered from an
 # elevated window cannot be changed by the task's own run: access denied) is recorded, not only logged.
 function Sync-DailyTrigger {
@@ -1837,7 +1881,7 @@ function Sync-DailyTrigger {
     $others = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -ne 'MSFT_TaskDailyTrigger' })
     if ($daily.Count -ne 1) { return $null }
     $pin = Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')
-    $at = [string](Get-Field $pin 'dailyAt' '17:05')
+    $at = [string](Get-Field $pin 'dailyAt' $script:DailyAtDefault)
     $want = ConvertFrom-NewYorkTime $at
     $sb = Read-StartBoundary ([string]$daily[0].StartBoundary)
     $res.have = $sb.hhmm; $res.want = $want.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture)
@@ -1890,6 +1934,211 @@ function Invoke-PinForTask([string]$At) {
   } finally { $lock.Dispose() }
 }
 
+# ------------------------------------------------------------------------------------------------ hidden start
+# The same functions, Get-SystemExe to Test-TaskStart, in chart-engine's nt8/update-pc.ps1 and Bot-Lab's
+# tools/botlab_update.ps1 and tools/manrae_night.ps1 (see "Hidden start" at the top).
+
+# A program under %SystemRoot% (C:\Windows when it is not set: tests off Windows), written as Join-Path would on Windows.
+function Get-SystemExe([string]$Rel) {
+  $root = "$env:SystemRoot"
+  if (-not $root) { $root = 'C:\Windows' }
+  return ($root.TrimEnd('\') + '\' + $Rel)
+}
+
+# The launcher's one line: WScript.Shell.Run of exactly the program and arguments the task would start, window style 0
+# (hidden), True (wait: its exit code is the task's Last Result). VBScript doubles a quote inside a string. Refused: a
+# character outside printable ASCII (the file is ASCII; a path with such a character would be changed) and % (Run would
+# expand %NAME% as an environment variable).
+function Get-HiddenLauncherLine([string]$Execute, [string]$Arguments) {
+  $cmd = '"' + $Execute + '" ' + $Arguments
+  if ($cmd -match '[^\x20-\x7E]') { throw "the command line has a character an ASCII launcher cannot hold: $cmd" }
+  if ($cmd.Contains('%')) { throw "the command line has a % (WScript.Shell.Run would read it as an environment variable): $cmd" }
+  return ('WScript.Quit CreateObject("WScript.Shell").Run("' + $cmd.Replace('"', '""') + '", 0, True)')
+}
+
+# Writes the launcher (ASCII, the one line and a line end) and reads it back; any failure throws, so register stops
+# before it touches the task.
+function Write-HiddenLauncher([string]$Path, [string]$Line) {
+  $dir = Split-Path -Parent $Path
+  if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+  $text = $Line + "`r`n"
+  [IO.File]::WriteAllText($Path, $text, [Text.Encoding]::ASCII)
+  if ([IO.File]::ReadAllText($Path, [Text.Encoding]::ASCII) -cne $text) { throw "the launcher $Path did not read back as written" }
+}
+
+# The launcher a task's action starts (wscript.exe //B "<path>", or without //B), when it is one of ours (its file name); '' otherwise.
+function Get-TaskLauncherPath($Task) {
+  if (-not $Task) { return '' }
+  foreach ($a in @($Task.Actions)) {
+    if (-not $a -or "$($a.Execute)" -notmatch '(?i)(^|[\\/])wscript\.exe"?$') { continue }
+    $m = [regex]::Match("$($a.Arguments)", '(?i)^\s*(//B\s+)?"([^"]+)"')
+    if ($m.Success -and $m.Groups[2].Value -match ('(^|[\\/])' + [regex]::Escape($script:HiddenLauncherName) + '$')) { return $m.Groups[2].Value }
+  }
+  return ''
+}
+
+# unregister: the launcher this script writes, and the one the task named (when it has our file name), are removed.
+function Remove-HiddenLauncher([string[]]$Paths) {
+  $done = @()
+  foreach ($p in @($Paths | Where-Object { $_ } | Select-Object -Unique)) {
+    if (Test-Path -LiteralPath $p -PathType Leaf) { Remove-Item -LiteralPath $p -Force; $done += $p }
+  }
+  return $done
+}
+
+# A command line's arguments, by the Windows rules (CommandLineToArgvW; Format-Arg writes them so): spaces split outside
+# quotes, 2n backslashes before a quote are n and the quote opens or closes, 2n+1 are n and a literal quote.
+function Split-CommandLine([string]$Line) {
+  $out = New-Object System.Collections.ArrayList
+  $cur = New-Object System.Text.StringBuilder
+  $inQ = $false; $any = $false; $i = 0
+  while ($i -lt $Line.Length) {
+    $ch = [string]$Line[$i]
+    if ($ch -eq '\') {
+      $n = 0
+      while ($i -lt $Line.Length -and [string]$Line[$i] -eq '\') { $n++; $i++ }
+      if ($i -lt $Line.Length -and [string]$Line[$i] -eq '"') {
+        [void]$cur.Append('\' * [int][Math]::Floor($n / 2))
+        if ($n % 2 -eq 1) { [void]$cur.Append('"'); $i++ }
+      } else { [void]$cur.Append('\' * $n) }
+      $any = $true; continue
+    }
+    if ($ch -eq '"') { $inQ = -not $inQ; $any = $true; $i++; continue }
+    if (-not $inQ -and ($ch -eq ' ' -or $ch -eq "`t")) {
+      if ($any) { [void]$out.Add($cur.ToString()); [void]$cur.Clear(); $any = $false }
+      $i++; continue
+    }
+    [void]$cur.Append($ch); $any = $true; $i++
+  }
+  if ($any) { [void]$out.Add($cur.ToString()) }
+  return $out.ToArray()
+}
+
+# The command line a launcher's Run("...") holds, quotes undoubled: ours, or a hand-made one (C:\SchwabDesk_bulk\hidden,
+# the same form, maybe with "cmd /c cd /d <folder> && " in front, which is taken off). '' when it holds no Run line.
+function Get-LauncherCommand([string]$Path) {
+  $m = [regex]::Match([IO.File]::ReadAllText($Path), '(?i)\.Run\(\s*"((?:[^"]|"")*)"')
+  if (-not $m.Success) { return '' }
+  $cmd = $m.Groups[1].Value.Replace('""', '"').Trim()
+  $c = [regex]::Match($cmd, '(?i)^cmd(\.exe)?\s+/c\s+cd\s+/d\s+.*?&&\s*(.*)$')
+  if ($c.Success) { $cmd = $c.Groups[2].Value.Trim() }
+  return $cmd
+}
+
+# What the current task runs: @{ found; launcher (the .vbs it starts, or ''); source (said in messages); line (the whole
+# command line); error }. Its action is the program itself with its arguments, or wscript.exe on a launcher (ours or a
+# hand-made one) whose Run line holds the command.
+function Get-TaskCommand($Task) {
+  $r = @{ found = $false; launcher = ''; source = ''; line = ''; error = '' }
+  if (-not $Task) { return $r }
+  $r.found = $true
+  $a = @($Task.Actions) | Select-Object -First 1
+  if (-not $a) { $r.error = 'the task has no action'; return $r }
+  $exe = "$($a.Execute)".Trim().Trim('"')
+  if ($exe -match '(?i)(^|[\\/])wscript\.exe$') {
+    $t = @(Split-CommandLine "$($a.Arguments)" | Where-Object { $_ -notmatch '^//' })
+    if ($t.Count -lt 1) { $r.error = 'its wscript.exe names no launcher'; return $r }
+    $r.launcher = $t[0]; $r.source = "the launcher $($t[0])"
+    if (-not (Test-Path -LiteralPath $t[0] -PathType Leaf)) { $r.error = "its launcher $($t[0]) is missing"; return $r }
+    try { $r.line = Get-LauncherCommand $t[0] } catch { $r.error = "its launcher $($t[0]) cannot be read: $($_.Exception.Message)"; return $r }
+    if (-not $r.line) { $r.error = "its launcher $($t[0]) holds no Run(""..."") line" }
+    return $r
+  }
+  $r.source = "the task's action ($exe)"
+  $r.line = (Format-Arg $exe) + ' ' + "$($a.Arguments)"
+  return $r
+}
+
+# A command line's script (after -File; its file name must be $Leaf) and its options: @{ '#exe'; '#script'; '#command';
+# <Name> = value } ($true for a switch); $null when it does not run that script.
+function Get-CommandOptions([string]$Line, [string]$Leaf) {
+  $t = @(Split-CommandLine $Line)
+  $f = -1
+  for ($i = 1; $i -lt $t.Count; $i++) { if ($t[$i] -eq '-File') { $f = $i; break } }
+  if ($f -lt 0 -or $f + 1 -ge $t.Count) { return $null }
+  $script = $t[$f + 1]
+  if ($script -notmatch ('(^|[\\/])' + [regex]::Escape($Leaf) + '$')) { return $null }
+  $o = @{ '#exe' = $t[0]; '#script' = $script; '#command' = '' }
+  $j = $f + 2
+  if ($j -lt $t.Count -and $t[$j] -notmatch '^-[A-Za-z]') { $o['#command'] = $t[$j]; $j++ }
+  while ($j -lt $t.Count) {
+    $m = [regex]::Match($t[$j], '^-([A-Za-z][A-Za-z0-9]*)$')
+    if (-not $m.Success) { $j++; continue }
+    if ($j + 1 -lt $t.Count -and $t[$j + 1] -notmatch '^-[A-Za-z]') { $o[$m.Groups[1].Value] = $t[$j + 1]; $j += 2 }
+    else { $o[$m.Groups[1].Value] = $true; $j++ }
+  }
+  return $o
+}
+
+# status: the task's start, checked. @{ ok; text; line }. Not ok (status then ends with exit code 1): the launcher the
+# task starts is missing or cannot be read, or ours holds anything but exactly the line register writes for the command
+# it holds ($Expected: the options read from it -> that line). A hand-made launcher or a visible start is said, not an
+# error (the task still runs).
+function Test-TaskStart($Task, [string]$Leaf, [scriptblock]$Expected) {
+  $cmd = Get-TaskCommand $Task
+  if ($cmd.error) { return @{ ok = $false; line = ''; text = "LAUNCHER MISSING OR UNREADABLE ($($cmd.error)): the task's runs fail, updates are not running; run register" } }
+  $ours = Get-TaskLauncherPath $Task
+  if (-not $cmd.launcher) { return @{ ok = $true; line = $cmd.line; text = "not hidden: $($cmd.source) starts it (a console may flash); run register" } }
+  if (-not $ours) { return @{ ok = $true; line = $cmd.line; text = "hidden by a launcher register did not write ($($cmd.launcher)); run register to move it to its own" } }
+  $o = Get-CommandOptions $cmd.line $Leaf
+  if ($null -eq $o) { return @{ ok = $false; line = $cmd.line; text = "LAUNCHER CHANGED: $ours does not run $Leaf; updates are not running as registered; run register" } }
+  try { $want = (& $Expected $o) + "`r`n" } catch { return @{ ok = $false; line = $cmd.line; text = "LAUNCHER CHANGED: the command in $ours cannot be rebuilt ($($_.Exception.Message)); run register" } }
+  if ([IO.File]::ReadAllText($ours) -cne $want) { return @{ ok = $false; line = $cmd.line; text = "LAUNCHER CHANGED: $ours is not the line register writes for its command; updates may not run as registered; run register" } }
+  return @{ ok = $true; line = $cmd.line; text = "hidden (wscript.exe //B $ours)" }
+}
+
+# ------------------------------------------------------------------------------------------------ register
+
+function Get-HiddenLauncherPath { return (Join-Path $script:P.Bin $script:HiddenLauncherName) }
+
+function Test-SamePath([string]$A, [string]$B) {
+  return ([IO.Path]::GetFullPath($A).TrimEnd('\', '/') -eq [IO.Path]::GetFullPath($B).TrimEnd('\', '/'))
+}
+
+# register keeps what the current task runs (B1 of the review, 2026-10-23): its -Repo, read from the task's own
+# arguments or from the line of the launcher it starts (ours or a hand-made one in C:\SchwabDesk_bulk\hidden). Another
+# clone than this one is refused unless -Repo is given (-Repo '' cannot clear it); so is a task whose command cannot be
+# read. Returns @{ error; notes }.
+function Resolve-TaskOptions($Task, [hashtable]$Bound = $script:Bound) {
+  $res = @{ error = ''; notes = @() }
+  if (-not $Task) { return $res }
+  $how = 'nothing changed; run update-pc.ps1 unregister first to register from scratch'
+  $cmd = Get-TaskCommand $Task
+  if ($cmd.error) { $res.error = "the current task's command cannot be read ($($cmd.error)): $how"; return $res }
+  $o = Get-CommandOptions $cmd.line 'update-pc.ps1'
+  if ($null -eq $o) { $res.error = "the current task ($($cmd.source)) does not run update-pc.ps1: $how"; return $res }
+  $old = [string]$o['Repo']
+  if ($old -and $Bound.ContainsKey('Repo') -and -not [string]$Bound['Repo']) { $res.error = "-Repo '' would drop the task's -Repo ${old}: give the clone (-Repo $old keeps it)"; return $res }
+  if ($old -and -not (Test-SamePath $old $script:P.Repo)) {
+    if (-not $Bound.ContainsKey('Repo')) { $res.error = "the current task runs the clone $old ($($cmd.source)), not $($script:P.Repo): give -Repo to change it (-Repo $old keeps it); nothing changed"; return $res }
+    $res.notes += "-Repo $($script:P.Repo) (given; the task had $old)"
+  }
+  return $res
+}
+
+# The launcher for the task's command (the pinned copy, -Repo this clone), written and read back; a failure throws.
+function Write-TaskLauncher([string]$Pinned) {
+  $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  try { Write-HiddenLauncher (Get-HiddenLauncherPath) (Get-HiddenLauncherLine $ps (Get-TaskArguments $Pinned $script:P.Repo)) }
+  catch { throw "the hidden launcher could not be written, the task was not changed: $($_.Exception.Message)" }
+}
+
+# register's task: the launcher (again, the same line), then the task (this user, only while signed in, not elevated).
+# The tests run it with the ScheduledTasks commands stubbed.
+function Register-HiddenTask([string]$User, [string]$Pinned, [datetime]$Local) {
+  Write-TaskLauncher $Pinned
+  $launcher = Get-HiddenLauncherPath
+  $action = New-ScheduledTaskAction -Execute (Get-SystemExe 'System32\wscript.exe') -Argument ('//B "' + $launcher + '"') -WorkingDirectory $script:P.Bin
+  $logon = New-ScheduledTaskTrigger -AtLogOn -User $User
+  $logon.Delay = 'PT2M'
+  $daily = New-DailyTrigger $Local
+  $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Limited
+  $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($logon, $daily) -Principal $principal -Settings $settings -Force `
+    -Description "Keeps the chart page in ChartBridge's www folder up to date (green commits on main only). Never installs ChartBridge. Log: $($script:P.Log)" | Out-Null
+}
+
 function Invoke-Register {
   if ($env:OS -ne 'Windows_NT') { return (Write-Verdict $false 'register works on Windows only') }
   $pre = Test-Preflight
@@ -1897,37 +2146,45 @@ function Invoke-Register {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
   $user = $id.Name
   $elevated = (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-  $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-  try { $pinned = Invoke-PinForTask $DailyAt } catch { return (Write-Verdict $false "not registered: $($_.Exception.Message)") }
-  $action = New-ScheduledTaskAction -Execute $ps -Argument (Get-TaskArguments $pinned $script:P.Repo) -WorkingDirectory $script:P.Bin
-  $logon = New-ScheduledTaskTrigger -AtLogOn -User $user
-  $logon.Delay = 'PT2M'
+  $keep = Resolve-TaskOptions (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
+  if ($keep.error) { return (Write-Verdict $false "not registered: $($keep.error)") }
+  foreach ($n in $keep.notes) { Write-Host "keeping:      $n" }
   $local = ConvertFrom-NewYorkTime $DailyAt
-  $daily = New-DailyTrigger $local
-  $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-  $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($logon, $daily) -Principal $principal -Settings $settings -Force `
-    -Description "Keeps the chart page in ChartBridge's www folder up to date (green commits on main only). Never installs ChartBridge. Log: $($script:P.Log)" | Out-Null
+  # the launcher first (written and read back), then the pin, then the task: a launcher that cannot be written changes
+  # nothing (review N2, 2026-10-23); the launcher names updater\bin\update-pc.ps1, where the pin puts the copy
+  $want = Join-Path $script:P.Bin 'update-pc.ps1'
+  try { Write-TaskLauncher $want } catch { return (Write-Verdict $false "not registered, nothing changed: $($_.Exception.Message)") }
+  try { $pinned = Invoke-PinForTask $DailyAt } catch { return (Write-Verdict $false "not registered: $($_.Exception.Message)") }
+  if ([IO.Path]::GetFullPath($pinned) -ne [IO.Path]::GetFullPath($want)) { return (Write-Verdict $false "not registered: the pinned copy is $pinned, not $want") }
+  try { Register-HiddenTask $user $pinned $local } catch { return (Write-Verdict $false "not registered: $($_.Exception.Message)") }
   $t = Get-ScheduledTask -TaskName $TaskName
   $when = "at sign-in (after 2 minutes) and daily at $DailyAt New York time, $($local.ToString('HH:mm')) on this PC's clock"
-  Write-Log "registered the scheduled task '$TaskName': $when"
+  Write-Log "registered the scheduled task '$TaskName': $when, started hidden by $(Get-HiddenLauncherPath)"
   if ($elevated) {
     $warn = "this window is elevated (Run as administrator). The task's own run (not elevated) may then be refused when it moves the daily check for DST or a time zone change, every day. Run update-pc.ps1 register again from a normal (not elevated) PowerShell window"
     Write-Log "register: $warn" 'WARN'
     Write-Host "WARNING: $warn."
   }
   Write-Host "The task runs $pinned (a copy; it changes only when you run register again or -InstallChartBridge)."
+  Write-Host "It starts hidden: wscript.exe //B (no WScript error dialog) runs $(Get-HiddenLauncherPath), which runs Windows PowerShell with no window."
   Write-Host "Each run works out $DailyAt New York time again and moves the daily check if this PC's clock drifted from it (time zone or DST)."
   return (Write-Verdict ($null -ne $t) "scheduled task '$TaskName' registered: $when ($($t.State))")
 }
 
-function Invoke-Unregister {
-  if ($env:OS -ne 'Windows_NT') { return (Write-Verdict $false 'unregister works on Windows only') }
-  if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+# unregister's work (the tests run it with the ScheduledTasks commands stubbed): the task, then its launcher.
+function Unregister-HiddenTask {
+  $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  $named = Get-TaskLauncherPath $task
+  if ($task) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     Write-Log "removed the scheduled task '$TaskName'"
   }
+  foreach ($f in @(Remove-HiddenLauncher @((Get-HiddenLauncherPath), $named))) { Write-Log "removed the task's launcher $f" }
+}
+
+function Invoke-Unregister {
+  if ($env:OS -ne 'Windows_NT') { return (Write-Verdict $false 'unregister works on Windows only') }
+  Unregister-HiddenTask
   return (Write-Verdict $true "no scheduled task '$TaskName' now")
 }
 

@@ -134,12 +134,15 @@ test('no message sends Anthony to install.ps1 (it copies .cs files without the p
   assert.ok(!/install\.ps1/.test(section), 'the README section names install.ps1');
 });
 
-test('the schedule (Anthony, 2026-09-30): at sign-in and once a day at 17:05 New York time, nothing repeating, no late start', () => {
+test('the schedule (Anthony, 2026-09-30; 09:00 since 2026-10-23): at sign-in and once a day at 09:00 New York time, nothing repeating, no late start', () => {
   const src = code(updater);
-  assert.match(src, /\[string\]\$DailyAt = '17:05'/);
-  assert.match(src, /New-ScheduledTaskTrigger -AtLogOn -User \$user/);
+  assert.match(src, /\[string\]\$DailyAt = '09:00'/);
+  assert.match(src, /\$script:DailyAtDefault = '09:00'/);
+  assert.ok(!/'17:05'/.test(src), 'no 17:05 default left in the code');
+  assert.strictEqual([...src.matchAll(/Get-Field \$(pin|old) 'dailyAt' \$script:DailyAtDefault/g)].length, 4, 'every read of the pin falls back on the one default');
+  assert.match(src, /New-ScheduledTaskTrigger -AtLogOn -User \$User/);
   assert.match(src, /\$logon\.Delay = 'PT2M'/);
-  assert.match(src, /\$daily = New-DailyTrigger \$local/);
+  assert.match(src, /\$daily = New-DailyTrigger \$Local/);
   // local wall-clock time with no UTC offset: Task Scheduler then keeps 17:05 on this PC's clock across DST
   assert.match(src, /function New-DailyTrigger[\s\S]{0,120}New-ScheduledTaskTrigger -Daily -At \$Local\s+\$t\.StartBoundary = \$Local\.ToString\('yyyy-MM-ddTHH:mm:ss'/);
   assert.strictEqual([...src.matchAll(/New-ScheduledTaskTrigger -Daily/g)].length, 1, 'every daily trigger is made by New-DailyTrigger');
@@ -147,6 +150,26 @@ test('the schedule (Anthony, 2026-09-30): at sign-in and once a day at 17:05 New
   assert.ok(!/RepetitionInterval|StartWhenAvailable|\$Hours/.test(src), 'no repetition, no late start of a missed run');
   assert.match(src, /-MultipleInstances IgnoreNew/);
   assert.match(src, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 30\)/);
+});
+
+test('the task starts hidden (Anthony, 2026-10-22): wscript.exe //B on a one-line ASCII launcher that waits, never powershell.exe itself', () => {
+  const src = code(updater);
+  const reg = src.slice(src.indexOf('function Register-HiddenTask'), src.indexOf('function Invoke-Register'));
+  assert.match(reg, /New-ScheduledTaskAction -Execute \(Get-SystemExe 'System32\\wscript\.exe'\) -Argument \('\/\/B "' \+ \$launcher \+ '"'\) -WorkingDirectory \$script:P\.Bin/);
+  assert.strictEqual([...src.matchAll(/New-ScheduledTaskAction/g)].length, 1, 'one task action, the hidden one');
+  // the launcher is written before the task, and a failure stops register (never a visible task instead)
+  assert.ok(reg.indexOf('Write-TaskLauncher $Pinned') > 0 && reg.indexOf('Write-TaskLauncher $Pinned') < reg.indexOf('Register-ScheduledTask'));
+  const wtl = src.slice(src.indexOf('function Write-TaskLauncher'), src.indexOf('function Register-HiddenTask'));
+  assert.match(wtl, /Write-HiddenLauncher[\s\S]*catch \{ throw "the hidden launcher could not be written, the task was not changed/);
+  // review N2: in register the launcher comes first (read back), then the pin, then the task
+  const ir = src.slice(src.indexOf('function Invoke-Register'), src.indexOf('function Unregister-HiddenTask'));
+  const order = ['Resolve-TaskOptions (Get-ScheduledTask', 'Write-TaskLauncher $want', 'Invoke-PinForTask $DailyAt', 'Register-HiddenTask $user $pinned $local'].map(t => ir.indexOf(t));
+  assert.ok(order.every((v, i) => v > 0 && (i === 0 || v > order[i - 1])), 'keep, launcher, pin, task: ' + order.join(','));
+  assert.match(src, /\.Run\("' \+ \$cmd\.Replace\('"', '""'\) \+ '", 0, True\)'/);
+  assert.match(src, /\[IO\.File\]::WriteAllText\(\$Path, \$text, \[Text\.Encoding\]::ASCII\)/);
+  assert.match(src, /\$script:HiddenLauncherName = 'update-pc\.hidden\.vbs'/);
+  assert.match(src, /function Get-HiddenLauncherPath \{ return \(Join-Path \$script:P\.Bin \$script:HiddenLauncherName\) \}/);
+  assert.match(src, /Remove-HiddenLauncher @\(\(Get-HiddenLauncherPath\), \$named\)/, 'unregister removes the launcher');
 });
 
 test('the scripts suit Windows PowerShell 5.1: ASCII only, no PowerShell 7 syntax; no dashes Anthony does not use', () => {

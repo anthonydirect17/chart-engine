@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased (2026-10-23): the PC updater's task starts hidden, and checks at 9:00 AM New York time
+
+`nt8/update-pc.ps1` only: no page change, no ChartBridge change, no version bump here (the chart and ChartBridge versions
+describe the page and the add-on; Anthony to say whether an updater-only change should carry one).
+
+- **Hidden start** (Anthony, 2026-10-22: every scheduled program of ours runs hidden). `powershell.exe -WindowStyle Hidden`
+  still flashed a console as PowerShell started. `register` now writes a one-line ASCII launcher,
+  `updater\bin\update-pc.hidden.vbs`:
+  `WScript.Quit CreateObject("WScript.Shell").Run("<the old command line, quotes doubled>", 0, True)`, and the task runs
+  `wscript.exe //B "<launcher>"` (//B, batch mode: WScript never shows an error dialog). Window style 0 is hidden; True waits, so the exit code is the task's Last Result and Running
+  stays true. The command line is exactly the old one (Windows PowerShell, -File on the pinned copy, update -Repo <clone>),
+  so `-InstallChartBridge` updating the pinned copy keeps working. Same working folder, triggers, user (only while signed
+  in, no password, not elevated), settings, 30 minute limit and description. A launcher that cannot be written (or a
+  command line it cannot hold: a character outside ASCII, or a %) stops register and leaves the task as it was.
+  `unregister` removes the launcher; `status` says whether the task starts hidden. The time limit with the launcher:
+  Task Scheduler stops wscript.exe, and the PowerShell under it may go on; it still holds `updater.lock`, so later runs
+  say busy and change nothing until it ends (git calls keep their own 3 minute limit).
+- **register keeps what the task runs, and status checks the start** (the independent review, 2026-10-23). register
+  reads the current task's `-Repo` from its own arguments or from the Run line of the launcher it starts (ours, or a
+  hand-made one in `C:\SchwabDesk_bulk\hidden`, `cmd /c cd /d ... &&` form too); another clone is refused unless `-Repo`
+  is given (`-Repo ''` cannot clear it), and so is a task whose command cannot be read. register writes and reads back
+  the launcher before it pins or touches the task, so a failed write changes nothing. `status` prints the command the
+  task runs, checks the launcher (missing, unreadable or not exactly the line register writes: STOP), and says when the
+  last run was and how long ago.
+- **The daily check moves to 09:00 New York time** (Anthony, 2026-10-23: "we push most updates overnight and I prefer them
+  in the morning"). `-DailyAt` defaults to 09:00, and a pinned.json without a dailyAt reads 09:00. A check installs page
+  files only (an open page keeps its code until reloaded when flat) and never ChartBridge. A PC registered before keeps
+  its pinned 17:05 and its old powershell.exe action until `register` runs again from an up to date clone.
+- Tests: the PowerShell tests stub the ScheduledTasks commands and check the launcher's exact line (paths with spaces,
+  every argument, quotes doubled), its ASCII bytes, the wscript.exe //B action and that the rest of the task is unchanged; a
+  launcher that cannot be written; unregister; the 09:00 default, an explicit -DailyAt and an old pin's time.
+
 ## chart 1.38.0 (2026-10-23): the Agents panel's Drone sky, order labels in the gutter at break-even, Multi-Account lane headers
 
 Three items, **page only**: no ChartBridge change (it stays 0.6.7; `minChartBridge` stays 0.6.2), no Desk change, no Bot-Lab change.
