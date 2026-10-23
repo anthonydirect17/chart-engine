@@ -135,7 +135,12 @@ test('the task moves to the hidden launcher at -InstallChartBridge (after the re
   assert.match(tm, /if \(-not \$task -or \(Get-TaskLauncherPath \$task\)\) \{ return @\(\) \}/, 'a task on its own launcher is left alone');
   assert.match(tm, /\$keep = Resolve-TaskOptions \$task @\{\}/, "register's own keeping of -Repo");
   assert.ok(tm.indexOf('Write-TaskLauncher $pinned') < tm.indexOf('Register-HiddenTask'), 'the launcher before the task');
-  assert.match(tm, /\} catch \{ \$line = "the scheduled task was not moved to the hidden launcher: /, 'a failure never stops -InstallChartBridge');
+  assert.match(tm, /\} catch \{\s*\$line = "the scheduled task was not moved to the hidden launcher: /, 'a failure never stops -InstallChartBridge');
+  // review of #66: a failed move changes nothing; refused from an elevated window or as another user
+  assert.ok(tm.indexOf('Register-HiddenTask $me $pinned $local') < tm.indexOf("$pin['dailyAt'] = $at"), 'pinned.json only after the task');
+  assert.match(tm, /elseif \(Test-Elevated\)/);
+  assert.match(tm, /elseif \(-not \(Test-SameUser \$taskUser \$me\)\)/);
+  assert.match(tm, /if \(-not \(Test-SamePath \(\[string\]\$o\['#script'\]\) \$pinned\)\)/);
   const upd = src.slice(src.indexOf('function Invoke-Update('), src.indexOf('$r = Invoke-Pass -DryRun:$DryRun -State $state'));
   assert.match(upd, /if \(-not \$DryRun\) \{ Save-TriggerCheck \$state \(Sync-DailyTrigger\); Write-TaskStartWarning \}/);
   const warn = src.slice(src.indexOf('function Write-TaskStartWarning'), src.indexOf('function Invoke-Register'));
@@ -156,6 +161,7 @@ test('the schedule (Anthony, 2026-09-30; 09:00 since 2026-10-23): at sign-in and
   assert.match(src, /\[string\]\$DailyAt = '09:00'/);
   assert.match(src, /\$script:DailyAtDefault = '09:00'/);
   assert.ok(!/'17:05'/.test(src.replace("$script:DailyAtBefore = '17:05'", '')), 'no 17:05 default left in the code (only the old default, for the migration)');
+  assert.strictEqual(src.split('$script:DailyAtBefore').length - 1, 2, 'the old default: its definition and the one use (the migration)');
   assert.strictEqual([...src.matchAll(/Get-Field \$(pin|old) 'dailyAt' \$script:DailyAtDefault/g)].length, 4, 'every read of the pin falls back on the one default');
   assert.match(src, /New-ScheduledTaskTrigger -AtLogOn -User \$User/);
   assert.match(src, /\$logon\.Delay = 'PT2M'/);

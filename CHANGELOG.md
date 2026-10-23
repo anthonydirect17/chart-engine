@@ -5,18 +5,25 @@
 `nt8/update-pc.ps1` only (no page or ChartBridge change, no version bump, as the 2026-10-23 updater entry below).
 
 - **No register job per PC** (Anthony 2026-10-23: "this prompt gets lost for the home PC"). The automatic path never
-  changes the pinned copy the task runs, so the task can only move where a new updater first runs: `-InstallChartBridge`
-  (the next is ChartBridge 0.6.8) now, after re-pinning the task's copy, moves a task that is not started by its own
-  launcher (plain `powershell.exe`, or a hand-made launcher in `C:\SchwabDesk_bulk\hidden`) to `wscript.exe //B` on
-  `updater\bin\update-pc.hidden.vbs`, once, through register's own code: `-Repo` kept (another clone, or a command that
-  cannot be read, is refused by name), pinned.json's dailyAt 17:05 moved to 09:00 (another time kept). It prints what it
-  kept and the 09:00 note. A failure is said and never stops `-InstallChartBridge`. Task Scheduler applies a changed
+  changes the pinned copy the task runs, so the task can only move where a new updater first runs. `-InstallChartBridge`
+  now, after re-pinning the task's copy, moves a task that is not started by its own launcher (plain `powershell.exe`,
+  or a hand-made launcher in `C:\SchwabDesk_bulk\hidden`) to `wscript.exe //B` on `updater\bin\update-pc.hidden.vbs`,
+  once, through register's own code: `-Repo` kept, pinned.json's dailyAt 17:05 moved to 09:00 (another time kept). It
+  prints what it kept and the 09:00 note; the triggers, user and settings are register's own. Refused, and said: an
+  elevated window, a task that runs as another user, a task on another clone or whose script is not the pinned copy, a
+  command that cannot be read. A refused or failed move changes nothing (pinned.json is written only after the task;
+  the launcher it wrote is taken away again) and never stops `-InstallChartBridge`. Task Scheduler applies a changed
   action from the task's next start.
+- **Which run moves it.** The move needs a copy of the updater that has this change: `-InstallChartBridge` run from an
+  up to date clone (`git pull --ff-only` first, as the ChartBridge 0.6.8 install job will do), or `register`. Run from
+  a pinned copy older than this change, `-InstallChartBridge` only pins the new copy, and the move then happens at the
+  next install.
 - **The automatic run only warns:** while the task is not hidden, each `update` run logs one WARN line, "the task still
-  starts without the hidden launcher: it is migrated at the next -InstallChartBridge or update-pc.ps1 register", and
-  changes nothing.
-- Tests: stubbed migration (a running plain task, a hand-made launcher with another time, a task on another clone, a
-  failure, the warning) and, on Windows, a real throwaway task migrated from its old action.
+  starts without the hidden launcher: it is migrated at the next -InstallChartBridge (unless it is refused there; see
+  its output) or update-pc.ps1 register", and changes nothing.
+- Tests: stubbed migration (a running plain task, a hand-made launcher with another time, a task on another clone, an
+  elevated window, another user, a script that is not the pinned copy, a failure that leaves pinned.json and the
+  launcher as they were, the warning) and, on Windows, a real throwaway task migrated from its old action.
 
 ## Unreleased (2026-10-23): the PC updater's task starts hidden, and checks at 9:00 AM New York time
 
