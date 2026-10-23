@@ -17,9 +17,10 @@
  *     the faint marks' poll, or the League view's day while that view is open). No poller of its own.
  *   - The live agents: the Agent tab's own state (live/agent.js glance(), from ChartBridge's `agent` messages, the agent's notes
  *     and plans, its fills and its working orders) and the PC helper's spend when the Agent tab has read it.
- *   - Prices: the workspace's MNQ quote (the same quote socket the Quote board uses).
+ *   - Prices: the workspace's NQ quote (1.38.1, Anthony 2026-10-23: his charts are NQ; the seats trade MNQ, the same index, so
+ *     their P&L and R use NQ's price with MNQ's point value, unconverted; the same quote socket the Quote board uses).
  * What a card wants and nobody reports says "not reported", never a guess. What the page works out itself (the look cap, open
- * P&L and R from the page's MNQ price, the seats' pool) says so in its title.
+ * P&L and R from the page's NQ price, the seats' pool) says so in its title.
  *
  * 1.38.0 (Anthony 2026-10-23, the approved "Drone sky"): the panel draws the agents as drones over the price (live/agents-sky.js);
  * this file keeps the data: AgentsStripCore's cards (each drone's hover card is its strip card) and the sky's model (who flies

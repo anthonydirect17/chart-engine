@@ -61,6 +61,42 @@ const sockets = async page => (await allSockets(page)).filter(k => !k.auth);
    the clock's) and "PC clock off by 2.3 s" shows; at 1366 x 768, with no room for the split, "M ms real" and the split in the
    tooltip, Flatten all still in the window; told the clock is nearer (a larger real delay) the feed turns amber at 1 s and red
    at 3 s of real delay; with no answer the feed is as before and the tooltip says why. */
+/* 1.38.1 (WORK 2026-10-23): a 1 min chart whose ChartBridge sends minute history ending 30 minutes early (--minute-lag-min=30, as
+   NinjaTrader's minute answer did; the fake has no minute book, like ChartBridge before 0.6.8) and is slow to go ready
+   (--load-delay-ms): while LOADING past 10 s the chart says "Waiting for NinjaTrader's NQ history (N s)"; at ready it shows no
+   hole notice (Anthony 2026-10-23: "I dont need a notice"; the hole is recorded in ChartBridge's /diag and history.log only).
+   Sample data. */
+async function gapPart() {
+  console.log('the history gap and the LOADING wait (chart 1.38.1)');
+  const port = PORT + 4;
+  const fake = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--test-pin=' + TEST_PIN, '--minute-lag-min=30', '--load-delay-ms=15000'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await new Promise(r => fake.stdout.once('data', r));
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1 });
+  try {
+    await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+    await ctx.addInitScript(() => { try { localStorage.setItem('live-workspace-v1', JSON.stringify({ v: 1, layouts: { Gap: { panels: [{ id: 'g1', type: 'chart', root: 'NQ', tf: 'm1', x: 0, y: 0, w: 12, h: 6 }] } } })); } catch (e) { /* blocked */ } });
+    const p = await ctx.newPage();
+    p.on('pageerror', e => fail('gap page error: ' + e.message));
+    await p.goto(`http://localhost:${port}/live/?layout=Gap`);
+    await p.waitForSelector('.cb-pin-key', { timeout: 15000 });
+    await enterPin(p, TEST_PIN);
+    const note = () => p.evaluate(() => { const panel = document.querySelector('.ws-panel[data-id="g1"]'); const m = panel && panel.querySelector('[id$="statusMsg"]'), a = panel && panel.querySelector('[id$="alertText"]'), b = panel && panel.querySelector('[id$="bConn"]');
+      return { status: m ? m.textContent : '', alert: a && !a.closest('[hidden]') ? a.textContent : '', badge: b && !b.hidden ? b.textContent : '' }; });
+    let waitText = null;
+    for (let i = 0; i < 140 && !waitText; i++) { const n = await note(); if (/^Waiting for NinjaTrader's NQ history \(\d+ s\)$/.test(n.status)) waitText = n; else await p.waitForTimeout(100); }
+    check(!!waitText && waitText.badge === 'LOADING', 'LOADING past 10 s: the chart says what it waits for: "' + (waitText ? waitText.status : 'nothing') + '" (badge ' + (waitText ? waitText.badge : '') + ')');
+    await shot(p, 'workspace-loading-wait-1366x768.png');
+    await p.waitForFunction(() => { const b = document.querySelector('.ws-panel[data-id="g1"] [id$="bConn"]'); return b && b.hidden; }, null, { timeout: 20000 }).catch(() => {});
+    await p.waitForTimeout(500);
+    const n = await note(), shown = n.status + ' ' + n.alert;
+    check(!/No bars from/.test(shown) && !/Waiting for NinjaTrader/.test(n.status), 'ready with history ending 30 minutes early: no hole notice (Anthony 2026-10-23: "I dont need a notice"), the waiting line gone (' + JSON.stringify(n) + ')');
+    /* review of 0.6.8 (item 4): no time-limit warning of any kind on screen either (ChartBridge 0.6.8 sends none: nt8/check/GapHarness.cs) */
+    const all = await p.evaluate(() => { const panel = document.querySelector('.ws-panel[data-id="g1"]'); return (panel ? panel.innerText : '') + ' ' + (document.getElementById('wsAlert') ? document.getElementById('wsAlert').innerText : ''); });
+    check(!/did not send|minute history|last trades|as it last sent it|starts from the live trades/i.test(all), 'no time-limit warning reaches the screen');
+    await shot(p, 'workspace-history-gap-1366x768.png');
+  } finally { await ctx.close(); fake.kill(); }
+}
+
 async function clockPart() {
   console.log('the feed delay split (ChartBridge 0.5.6\'s clock check)');
   const port = PORT + 2;
@@ -611,6 +647,7 @@ try {
   await page.waitForTimeout(1500);
   await shot(page, 'workspace-1920x1080.png');
   await clockPart();
+  await gapPart();
   console.log('the order ticket (1.12.0): two windows, trading on');
   if (!process.env.WORKSPACE_SKIP_TICKET) await ticketPart({ browser, check, fail, shot, root, port: PORT + 1 });
 } catch (e) {

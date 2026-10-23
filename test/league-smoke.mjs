@@ -11,6 +11,10 @@
 // off by default, kept in this browser; the Agent tab and the League tab close each other; with an Agents strip the Bot button
 // stays in the top bar (it does on every layout) and the strip's bot card opens the Bot view; the button stays in reach while a
 // view is open and while it carries its red alert (review 2), and is still there when the strip goes; nothing sends an order.
+// 1.38.1 (Anthony 2026-10-23: his only MNQ chart is a 40-range execution chart, every other chart is NQ): the layout's chart is NQ
+// 1 min; the League chart is NQ 1 min too ("NQ 1 min (league trades MNQ)"), so opening the tab sends no new NQ subscribe and no MNQ
+// minute subscribe (it joins the NQ line's load); the Agents panel's Drone sky reads NQ bars. The sample marks are at the NQ
+// sample's prices (the league's MNQ prices are the same index).
 // Screenshots test/out/league-*.png.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -66,18 +70,19 @@ try {
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   await ctx.addInitScript(() => {
-    window.__sent = [];
+    window.__sent = []; window.__subs = [];
     const send = WebSocket.prototype.send;
-    WebSocket.prototype.send = function (d) { try { const m = JSON.parse(d); if (['order', 'change', 'cancel', 'flatten', 'plan', 'groupOrder'].includes(m.type)) window.__sent.push(m); } catch (e) { /* not JSON */ } return send.call(this, d); };
+    WebSocket.prototype.send = function (d) { try { const m = JSON.parse(d); if (m.type === 'subscribe') window.__subs.push(m); if (['order', 'change', 'cancel', 'flatten', 'plan', 'groupOrder'].includes(m.type)) window.__sent.push(m); } catch (e) { /* not JSON */ } return send.call(this, d); };
     try { if (!localStorage.getItem('live-workspace-v1')) localStorage.setItem('live-workspace-v1', JSON.stringify({ v: 1, layouts: { Lg: { panels: [
-      { id: 'c1', type: 'chart', root: 'MNQ', tf: 'm1', x: 0, y: 0, w: 8, h: 6 }, { id: 'c2', type: 'chart', root: 'ES', tf: 'm1', x: 8, y: 0, w: 4, h: 3 }] } } })); } catch (e) { /* blocked */ }
+      { id: 'c1', type: 'chart', root: 'NQ', tf: 'm1', x: 0, y: 0, w: 8, h: 6 }, { id: 'c2', type: 'chart', root: 'ES', tf: 'm1', x: 8, y: 0, w: 4, h: 3 }] } } })); } catch (e) { /* blocked */ }
   });
   const p = await ctx.newPage();
   p.on('pageerror', e => fail('pageerror: ' + e.message));
+  let socks = 0; p.on('websocket', () => { socks++; });
   await p.goto(`http://localhost:${PORT}/live/?layout=Lg`);
   await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
   await p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
-  const bars = await until(() => p.evaluate(() => { const c = window.workspace.chart('c1'); const b = c && c.bars(); return b && b.length > 60 ? b.map(x => ({ t: x.t, c: x.c })) : null; }), 'the MNQ chart\'s bars', 20000);
+  const bars = await until(() => p.evaluate(() => { const c = window.workspace.chart('c1'); const b = c && c.bars(); return b && b.length > 60 ? b.map(x => ({ t: x.t, c: x.c })) : null; }), 'the NQ chart\'s bars', 20000);
   desk.league = sampleDay(bars);
   /* the made-up bot connected, so it carries no alert of its own until the test raises one (review 2) */
   await fetch(`http://127.0.0.1:${PORT}/test/bot-connect?name=Demo%20Opening%20Fade`, { method: 'POST' });
@@ -92,10 +97,19 @@ try {
   check(!menu.includes('Bot') && menu.includes('Agents') && !menu.some(t => /^Agent( tab| desk)?$/.test(t)), '1.36.0: + Add panel offers no Bot panel and no Agent tab panel, and the Agents strip: ' + menu.join(', '));
   await p.click('#wsAdd');
 
-  /* the League tab */
+  /* the League tab: 1.38.1 NQ 1 min, the load the NQ 1 min chart holds (no new subscribe, no MNQ minute load) */
+  await wait(500);
+  const subs0 = await p.evaluate(() => window.__subs.length);
   await p.click('#wsLeagueTab');
   await until(() => p.evaluate(() => document.body.classList.contains('lg-on') && window.workspace.league().trades === 2), 'the League tab with the sample day', 15000);
   check(await p.$eval('#wsGrid', g => getComputedStyle(g).display === 'none'), 'the League tab hides the grid');
+  const lgBars = await until(() => p.evaluate(() => { const c = document.querySelector('#lgView .lg-chart'); return c && c.querySelector('canvas') ? true : null; }), 'the League chart', 5000);
+  await wait(1500);
+  const newSubs = await p.evaluate(n => window.__subs.slice(n), subs0);
+  check(!!lgBars && !newSubs.some(m => m.root === 'NQ') && !newSubs.some(m => m.root === 'MNQ' && !(m.tickHours > 0)),
+    '1.38.1: opening the League tab with an NQ 1 min chart open sends no new NQ subscribe and no MNQ minute subscribe (' + JSON.stringify(newSubs) + ')');
+  check((await p.textContent('#lgView [data-k="cname"]')) === 'NQ 1 min (league trades MNQ)', '1.38.1: the League chart says NQ 1 min (league trades MNQ)');
+  check(await until(() => p.evaluate(() => { const b = document.querySelector('#lgView .ch-badge [id$="bConn"]'); return !b || b.hidden || !/LOADING/.test(b.textContent); }), 'the League chart live at once', 3000), '1.38.1: the League chart is not left LOADING');
   check(new URL(p.url()).searchParams.get('tab') === 'league', '?tab=league in the address');
   const text = await p.$eval('#lgView', e => e.innerText);
   check(/SHADOW: no orders/.test(text), 'SHADOW: no orders');
@@ -130,9 +144,9 @@ try {
   check(await p.$eval('#wsMore [data-do="league"]', b => b.hidden), 'not offered on an ES chart');
   await p.click('.ws-panel[data-id="c2"] .ws-more');
   await p.click('.ws-panel[data-id="c1"] .ws-more');
-  check((await p.textContent('#wsMore [data-do="league"]')) === 'League trades (faint): off', 'the MNQ chart\'s ⋯: League trades (faint): off');
+  check((await p.textContent('#wsMore [data-do="league"]')) === 'League trades (faint): off', 'the NQ chart\'s ⋯: League trades (faint): off');
   await p.click('#wsMore [data-do="league"]');
-  const ink2 = await until(async () => { const n = await inked(p, '.ws-panel[data-id="c1"] .lg-overlay').catch(() => 0); return n > 100 ? n : null; }, 'the faint marks on the MNQ chart', 40000);
+  const ink2 = await until(async () => { const n = await inked(p, '.ws-panel[data-id="c1"] .lg-overlay').catch(() => 0); return n > 100 ? n : null; }, 'the faint marks on the NQ chart', 40000);
   check(!!ink2, 'on: the league\'s trades, faint, on that chart (' + ink2 + ' pixels)');
   await p.screenshot({ path: path.join(out, 'league-faint-1366.png') });
   check(await p.evaluate(() => JSON.parse(localStorage.getItem('live-league-ghost-v1')).c1 === true), 'kept in this browser');
@@ -168,6 +182,7 @@ try {
   check(new URL(p.url()).searchParams.get('tab') === 'bot', '?tab=bot as before');
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'closed again from its button');
+  const socks0 = socks;
   await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="agents"]');
   /* the bot's drone: in the sky, or (a narrow panel) in the "+N more" list */
   const botSel = await until(async () => (await p.$('.ws-panel.agents .ak-hit[data-key="bot"]')) ? '.ws-panel.agents .ak-hit[data-key="bot"]'
@@ -175,6 +190,8 @@ try {
   const openBotDrone = async () => { if (/ak-mi/.test(botSel) && await p.$eval('.ws-panel.agents .ak-more', e => e.hidden)) await p.click('.ws-panel.agents .ak-idle'); await p.click(botSel); };
   const hoverBotDrone = async () => { if (/ak-mi/.test(botSel) && await p.$eval('.ws-panel.agents .ak-more', e => e.hidden)) await p.click('.ws-panel.agents .ak-idle'); await p.hover(botSel); };
   check(await p.isVisible('#wsBotTab') && await p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'with an Agents strip the Bot button stays in the top bar (Anthony: "its fine there")');
+  const skyNq = await until(async () => { const s = await p.evaluate(() => window.workspace.agentsStrip()); return s && s.bars > 5 && s.barsRoot === 'NQ' ? s : null; }, 'the Drone sky over NQ bars', 15000);
+  check(!!skyNq && skyNq.root === 'NQ' && socks === socks0, '1.38.1: the Drone sky reads NQ bars (' + (skyNq ? skyNq.bars : 0) + ' pillars) from the NQ line already open: no new socket (' + socks0 + ' before, ' + socks + ' after)');
   await openBotDrone();
   await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'a click on the bot\'s drone opens the Bot view');
   check(await p.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsBotTab'))) && await p.isVisible('#wsBotTab'), 'while the Bot view is open its button is in the top bar (the way back)');

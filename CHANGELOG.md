@@ -1,5 +1,94 @@
 # Changelog
 
+## ChartBridge 0.6.8 and chart 1.38.1 (2026-10-23): the history gap after a reload, the League chart and the Drone sky on NQ
+
+Two live bugs on WORK (2026-10-23, page 1.38.0, ChartBridge 0.6.7), and Anthony's choice for the League chart. ChartBridge 0.6.8
+is a recompile; the page works without it (`minChartBridge` stays 0.6.2). Only ChartBridge's market data and history path
+changes: nothing on any order path (ChartBridgeOrders.cs and the other order files are untouched; `npm run check:orders` passes).
+
+- **The gap after a reload** (an NQ 1 min chart with no bars from about 10:40 to the live bar at 11:08; a 5 min chart the
+  same from about 10:25 to 11:05). Verified in the Mono harness on the 0.6.7 code first (`nt8/check/GapHarness.cs`, the same
+  case: NinjaTrader's minute answer ending 28 minutes before the clock, its 20,000 last trades starting after that, 28
+  minutes of live trades seen before the subscribe): "gap REPRODUCED on today's code: minuteTailRebuilt 0 and no bar from
+  10:40 to 11:08 ET". NinjaTrader's 1-minute answer ended early, the 20,000 trades could not rebuild its last bar, and the
+  page fills nothing between the last history bar and the first live trade.
+  - ChartBridge 0.6.8 keeps a **minute book** per instrument: 1-minute bars from every live trade it sees, stamped at the
+    close as NinjaTrader's (a trade at hh:mm:00.000 in the bar that ends then), about two sessions (3,000 bars), from the
+    first whole minute after it started listening or the feed came back, reset on a feed drop.
+  - The seam: a subscribe takes the book's lock and then the page's Pending lock (OnMarketData's order) and copies the book
+    in the same moment it clears the held trades, so no trade is in both and none in neither. NinjaTrader's bars are kept
+    up to the first minute the book has whole, the book's bars follow, and the 20,000-trade request is not made. `ready`
+    carries `filled` (the book's bars sent). When the book does not reach back to NinjaTrader's last bar (ChartBridge
+    started later, a feed drop), 0.6.7's path runs.
+  - A hole is recorded, never shown (Anthony 2026-10-23: "I dont need a notice"): "No bars from 10:41 to 11:08 ET:
+    NinjaTrader's minute history ends at 10:40" (open market only: the 17:00 break and weekends are not a hole) goes to
+    `/diag` (the seam's `hole`, `historyNotes`) and `history.log`; no status, and no notice on the page.
+  - After the fix, the same harness case: continuous minutes from 09:30 to the ready minute, none twice, the volume of the
+    bars and the trades after `ready` equal to every trade fed, each held trade sent once, `filled` 28; and with 18,022
+    trades fed on another thread during the subscribe, every trade once.
+- **The League chart on LOADING for 50 s and more**: a load's minute history and last-trades requests now wait at most 20 s;
+  then the load goes ready with what ChartBridge has (its minute book, NinjaTrader's kept answers); a request given up and still
+  unanswered is not asked again for that instrument (for up to 2 minutes, or until NinjaTrader answers), so reloads do not
+  pile requests on a NinjaTrader that is not answering.
+- **The reload of every window** (WORK 2026-10-23, 11:09: every load matched false with no tick backfill, 23 to 32 s, MNQ
+  185 s): the book does not depend on the tick backfill or on how late or stale NinjaTrader's minute answer is (the copy is
+  taken at the subscribe; every trade after it is held). A minute answer past its 20 s limit is no longer a loss of history:
+  ChartBridge keeps NinjaTrader's minute answers per instrument in memory (late ones too) and a timed-out load starts from
+  them joined to the book. And 0.6.7's own path: when the last trades miss NinjaTrader's last minute, the minutes they hold
+  after it are now kept (0.6.7 threw them away with it). Harness: three instruments reloading at once, stale answers 28
+  minutes old, no tick backfill, one answer after its limit, trades flowing on another thread: every chart continuous,
+  every trade once.
+- **Seconds and range charts the same** (Anthony 2026-10-23, this release): the book is copied for every load and joined to
+  NinjaTrader's minute answer, the last minute rebuilt from the served window's trades as before; the minutes after a short
+  last minute are kept on that path too; the minute history's 20 s limit and no re-ask apply, and a tick chart whose minute
+  history does not come in time starts from the kept answers and the book (0.6.7 waited with no limit). Reproduced first on
+  the 0.6.7 code (`nt8/check/WindowGapHarness.cs`, run alone by `check/WindowGapMain.cs`): W1 and W2 "no bars 10:40 to
+  11:08", W3 "not ready after 3 s"; all three fixed on 0.6.8. The served window's own request keeps its 120 s limit.
+- **History notes** (WORK's request): "Minute history failed", "last trades for the forming minute not loaded", "tick
+  window failed", a request given up or answered late, and a history that ends early go to `/diag` (`historyNotes`, the last
+  50) and `history.log` next to copier.log, with the time and the instrument.
+- `/diag`: each seam adds the minute answer's last bar, the book's from, the bars it filled, the closed minutes NinjaTrader
+  had more volume for, the time limits and the hole recorded; each book adds `minutes`.
+- **The page** (no recompile part): a LOADING past 10 s says "Waiting for NinjaTrader's NQ history (N s)". No hole notice
+  (Anthony: "I dont need a notice"). No bars are kept in sessionStorage.
+- **The independent review of 0.6.8** (three MEDIUM, seven LOW), all fixed:
+  - A load in the book's first minute (right after a start or a feed drop) could count a minute's volume twice: the book now
+    stands in only with a bar after its `from`; else 0.6.7's path runs (harness: a load 8 s after a start, every trade once).
+  - The minute history's time limit gives up only when history can stand in (kept answers, or the book with a bar); a cold
+    start waits for NinjaTrader as in 0.6.7, the page saying it waits. A load that went ready on stand-in history is told
+    once when NinjaTrader's answer comes (`historyLate`), and the page loads again by itself.
+  - Agents (they place real orders) have no time limits and never get stand-in history; `ready` carries `minuteTimedOut`,
+    `tailTimedOut` and `historyFrom` for a program to read.
+  - No time-limit warning on screen either (a history note only; the "Waiting for NinjaTrader's ... history" line stays);
+    a time-limit path that throws still ends in ready or the trades; kept answers are cut to the load's own days; the dead
+    contract-change check is gone; after a stop, a time limit or a late answer does nothing; the four SeamHarness checks are
+    back in their strict form; `nt8/check/GapMain.cs` runs the WORK case alone against the 0.6.7 sources: "WORK case
+    REPRODUCED on 0.6.7: minuteTailRebuilt 0 and no bar from 10:40 to 11:08 ET", and on 0.6.8 "continuous minutes from 09:30
+    to 11:07, every trade once (29225 of 29225)".
+- **The re-review** (two MEDIUM, a LOW): after an error answer an agent gets exactly what 0.6.7 sent (no history bar) and
+  `ready` says `minuteFailed` (and `standIn` for any load not on NinjaTrader's full answer); a fresh kept answer that reaches
+  back to a load's start is that load's answer (NinjaTrader not asked), and `historyLate` goes at most once a page and
+  instrument in 5 minutes, so a NinjaTrader just over the limit cannot reload the charts in a loop (harness: three loads, one
+  historyLate, one request); a cold start marks the instrument overdue at the first limit and keeps looking every 3 s; kept
+  bars served alone get their last minute from the last trades, as 0.6.7 does with an answer.
+- **The third review** (a MEDIUM, two LOW): any minute answer, late or in time, clears the instrument's overdue mark, and the
+  overdue skip applies only to loads whose days the kept answers cover (a 30-day 1 hour chart after a 5-day 1 min load asks
+  NinjaTrader); a kept bar still forming when its answer came is never served as closed, in a load or inside a merge; the
+  kept-bars-alone path falls back to ready if its last-trades request throws.
+- **The League chart and the Agents panel's Drone sky on NQ 1 min.** Anthony, 2026-10-23: his only MNQ chart is a 40-range
+  execution chart (it loads trades, not minute bars) and all his other charts, including a 1 min, are NQ; "the League tab's
+  chart AND the Agents panel's Drone sky pillars switch from MNQ to NQ 1 min", keeping 5 days and no ticks for the League
+  chart, "so they reuse his NQ 1 min line's data and open at once with no extra NinjaTrader request". The seats trade MNQ:
+  their marks, entry and stop lines and tethers are drawn at their MNQ prices on the NQ candles (the same index, no
+  conversion), the League chart's label says "NQ 1 min (league trades MNQ)", the sky's price label says NQ, and the seats'
+  open P&L uses NQ's price with MNQ's point value. (The earlier idea of a 1-day MNQ League chart is dropped.)
+- Tests: `nt8/check/GapHarness.cs` (the reproduction and the fix, the fallback and its record, the race, the storm, both time
+  limits and their late answers, the book's own rules, the join, the resets); `nt8/check/WindowGapHarness.cs` (tick charts);
+  `test/history-gap.test.js`; `test/fake-bridge.mjs --minute-lag-min=30`; `smoke:workspace` shows the LOADING wait on a 1 min
+  chart and no hole notice at ready; `smoke:league` checks
+  opening the League tab with an NQ 1 min chart open sends no new NQ subscribe and no MNQ minute subscribe, and the sky reads
+  NQ bars from the NQ line already open.
+
 ## Unreleased (2026-10-23): -InstallChartBridge moves the PC updater's task to the hidden launcher
 
 `nt8/update-pc.ps1` only (no page or ChartBridge change, no version bump, as the 2026-10-23 updater entry below).

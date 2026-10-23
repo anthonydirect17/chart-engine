@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -202,13 +202,14 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 | `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`), `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
 | `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places); 0.3.7 sends `[t,p,v]` again; since 0.3.8 a trade with a known Time and Sales category is `[t,p,v,null,null,q]` (see Time and Sales category), `done` (bool) | after `history`, the current session's trades, chunked |
-| `ready` | `root`, `sub` (0.3.3) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
+| `ready` | `root`, `sub` (0.3.3), `filled` (0.6.8, minute and hour loads only: how many of the history's bars came from ChartBridge's minute book, 0 when none; see The minute book below), `minuteTimedOut`, `minuteFailed`, `standIn`, `tailTimedOut`, `historyFrom` (0.6.8, see The minute book) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
 | `profile` | `root`, `sub` (the load's; none when pushed after the session's backfill), `tick`, `bucketSeconds` (1800), `session` and `last`: `{from, whole, coveredFrom, rows: [[t, priceTicks, v], ...]}` or null (0.3.5, see Served window and session table) | right before `ready` when the subscribe asked for it; again, without `sub`, when the session's one backfill makes the table whole |
 | `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side), since 0.3.8 `q` (Time and Sales category, see there; absent when unknown) | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
 | `pcClock` | the fields of hello's `pcClock` (0.5.6, see Delay readout): `checked`, then `offsetMs`, `rttMs`, `atUtcMs`, `server`, or `why`, `server` | to every page when a check of this PC's clock answers (every 5 minutes), when it changes to no answer, and when the PC clock steps by more than 250 ms; in the order lane. A page can get one before its `hello` (a page is told from the moment it connects); `hello` then carries the state as it is, and a check that ends while `hello` is built is sent again after it |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page; since 0.3.7 also a refused `htf` or `weekProfile` request (`warn`, "ChartBridge refused a htf message: why") |
+| `historyLate` | `root`, `sub` (0.6.8) | once, when a load that went ready on stand-in history gets NinjaTrader's minute answer after all: the page subscribes again (see The minute book) |
 | `settlement` | `root`, `p` (null when none is known), `date` (the trading date it settles, `yyyy-MM-dd`) (0.3.7) | when the prior settlement changes: a value for that date comes in, or a new session starts at 18:00 ET and the day before becomes the prior |
 | `htf` | `root`, `tf` (`4h`, `1D`, `1W`), `id` (the request's, or null), `name` (the contract, or null with an error), `bars`: `[[t,o,h,l,c,v], ...]` oldest first, the last one forming, `error` (null, or why there are no bars) (0.3.7) | the answer to an `htf` request |
 | `htfBar` | `root`, `tf`, `bars`: one or two `[t,o,h,l,c,v]` (0.3.7) | while a page has asked for that root and timeframe, at most once a second when its forming bar changed: the forming bar, after the closed bar's final values when a new bar began |
@@ -339,6 +340,132 @@ another id. The live page does not send it yet (a follow-up in `live/`).
   Fixed in 0.3.4: the release is one outbox entry (see Trade side).
 
 The page needs no change to work with 0.3.3: it takes history, ticks and live trades as before, and ignores `sub`.
+
+## The minute book (0.6.8)
+
+WORK, 2026-10-23 (page 1.38.0, ChartBridge 0.6.7): after a reload an NQ 1 min chart showed history to about 10:40, then nothing
+until the live bar at 11:08 (a 5 min chart the same from about 10:25 to 11:05), and the League chart's MNQ 1 min sat on LOADING
+for 50 s and more. NinjaTrader's 1-minute answer ended 28 to 40 minutes before now (likely only what it had on disk), the
+20,000 last trades (`SeamTicksBack`) did not reach back to its last bar, so that bar went out as it was and the page filled
+nothing between it and the first live trade. ChartBridge saw every one of those trades live and kept no minute bars.
+
+**What ChartBridge keeps.** Per instrument (`RootBook.Minutes`, `MinuteBook`), 1-minute bars `[close, o, h, l, c, v]` built
+from every live trade in OnMarketData, under the book's lock, before the trade goes to the pages. Stamped as NinjaTrader stamps
+its minute bars and as `TailFromTicks` rebuilds them: at the bar's close, end-inclusive (a trade at exactly hh:mm:00.000 is in
+the bar that ends then; the boundary rule's live check, above, covers this too). No side volume: the history bars carry none.
+`from` (a minute close): every trade after it is in the book. It is set at the first trade after ChartBridge starts or after a
+reset, to the close of that trade's minute or of NinjaTrader's clock's minute, whichever is later (NinjaTrader can replay an old
+last trade when market data starts; the clock keeps it from claiming the time before). Trades at or before `from` are not kept.
+Reset (empty, `from` unknown until the next trade) on a feed drop while the market is open (a connection's price feed leaving
+Connected, or a market data reset: the same events as the volume profile's drop); a new contract only comes with a start, which
+makes new books. At most
+3,000 bars (about two sessions); past that the oldest 120 go at once and `from` moves up to the last of them. Per trade: a
+division, a compare and a few stores, no allocation (the harness: a million trades in about 11 ms on Mono). Nothing about it
+is written to disk.
+
+**The seam.** A subscribe takes the book's lock, then the page's Pending lock (the order OnMarketData takes them in; MarkReady
+and ServeFromCache take them in the same order, and nothing takes Pending and then a book's lock), clears the held trades and,
+for a minute or hour load (`tickHours` 0), copies the minute book in the same moment. A trade is added to the book and held for
+the page under the same book lock, so every trade before the copy is in it and every trade after it is held: none is in both,
+none in neither. The book stands in only with a bar after `from` (the review of 0.6.8: in the book's first minute, right after a
+start or a feed drop, `from` is the close of the minute still forming, and NinjaTrader's bar stamped there could hold trades that
+are also held for the page; with a bar after `from`, every NinjaTrader bar kept closes before the copy's last trade). When
+NinjaTrader's minute answer comes:
+
+- the book reaches back to NinjaTrader's last bar (`from` at or before that bar's close): NinjaTrader's bars are kept up to
+  `from`, the book's bars follow (the first is the first minute the book has whole), and no last-trades request is made (the
+  book has the forming minute up to the copy). Then `ready` with `filled` (the book's bars sent) and every held trade, none
+  dropped (none can be in the book). A closed minute after `from` that NinjaTrader has more volume for than the book (the book
+  missed trades there: a drop no event told of) moves the cut past it: NinjaTrader's bars up to it, the book's after.
+  NinjaTrader's last bar and the book's last are never compared (both may be partial). `/diag` counts them (`bookShortMinutes`).
+- an empty answer, or an error: the book's bars alone (`ready`: `standIn` true, and `minuteFailed` true for an error). Not for
+  an agent: after an error an agent gets exactly what 0.6.7 sent (no history bar, then `ready` with `minuteFailed` true).
+- the book does not reach back (ChartBridge started, or the feed came back, after NinjaTrader's last bar), has not started, or
+  has no bar after `from` yet:
+  0.6.7's path (the last trades, the forming minute rebuilt when they reach back to it, with the fix below). ChartBridge does
+  not fill half a hole: the minutes before `from` are not its to give.
+
+**A hole is recorded, never shown** (Anthony 2026-10-23: "I dont need a notice"). When the last bar a load sends ends more than
+2 minutes of open market before `ready` (the 17:00 to 18:00 break, a weekend and the CME holidays are not a hole:
+`ChartBridgeCme.Closed`), ChartBridge writes it, in bar start times, New York time ("No bars from 10:41 to 11:08 ET:
+NinjaTrader's minute history ends at 10:40"; the day is named, "Sun 18:00", when the hole crosses midnight), to the seam's `hole`
+in `/diag`, `historyNotes` and `history.log`. Nothing about it goes to the page.
+
+**Tick charts** (`tickHours` above 0, the served window; Anthony 2026-10-23, the same release). The book is copied for every
+load. NinjaTrader's minute answer is joined to it the same way (up to `from`, then the book's bars), and the last of those
+minutes is then rebuilt from the served window's trades as before (it reaches back to it: the window holds the last
+`rangeHours`), so a minute answer that ends early leaves no hole when the book reaches back to it. The rebuild follows the same
+rule as minute charts (below): the minutes after a short last minute are kept. The minute history's time limit and the
+no-re-ask rule (below) apply to tick charts too; a tick chart whose minute history does not come in time starts from
+NinjaTrader's kept answers and the book, its last minute rebuilt from its trades (before 0.6.8 it waited for NinjaTrader with no
+limit). The served window's own request keeps its 120 s limit and its rules (Served window and session table).
+
+**0.6.7's path, one fix.** When the last trades do not hold NinjaTrader's last minute in full (their rebuilt volume for it is
+under NinjaTrader's), 0.6.7 kept NinjaTrader's bar and threw away every minute rebuilt after it too, so the chart had no bar
+from that minute to the live one (tick charts the same, from the served window's trades). 0.6.8 keeps NinjaTrader's bar for that
+minute and sends the minutes the same trades hold after it; on minute charts the held trades are matched against those trades
+(`/diag` `tailKeptAfter`: the minutes kept).
+
+**NinjaTrader's answers kept.** ChartBridge keeps each instrument's minute answers in memory, joined (the kept bars before the
+new answer's first, the new answer, the kept bars after its last; at most 90,000 bars; never on disk), a late answer too (it is
+not sent to the load it was asked for, which went on without it). A load that uses them takes only its own days (from its
+minute request's start) and only the minutes that close before the minute of the copy's last trade. The kept answers' last bar
+is never served when it was still forming when its answer came (NinjaTrader's clock then is kept with it), and a staler answer
+merged in never leaves its forming bar inside the kept bars as if closed (the later answer's bar of that minute is kept).
+
+**A fresh kept answer is the answer** (re-review B). When NinjaTrader's kept answers were added to within `OverdueReaskMs` (120 s),
+reach back to a load's minute request start, and the load's book reaches back to them, they are that load's answer, joined to
+the book as a fresh answer is, and NinjaTrader is not asked (`/diag` seam `fromKept`; a history note). So a reload right after a
+load, or after `historyLate`, does not ask NinjaTrader again and does not wait on it. Not for an agent: it always asks.
+
+**Time limits.** A load's minute history request and its last-trades request each wait at most 20 s (`MinuteTimeoutMs`,
+`TailTimeoutMs`; each claimed once, the answer or the limit, by compare-and-swap; `ready` goes once per load). Nothing about a
+time limit goes to the page (Anthony 2026-10-23: "I dont need a notice"): each is a history note (below), and `ready` says it.
+
+- the minute history: given up only when there is history to stand in for it: NinjaTrader's kept answers, or the minute book
+  with a bar (the review of 0.6.8). The load then starts from the kept answers joined to the book as a fresh answer would be (the
+  kept bars alone when the book does not reach back to them; the book alone when nothing is kept); a tick chart the same, then
+  its trades. When the book does not reach back to the kept answers (or has no bar yet), the kept bars from the load's start go
+  out with their last minute rebuilt from the last trades and the held trades matched against them, as 0.6.7 does with an answer.
+  With nothing to stand in (a cold start: no trade since ChartBridge started, nothing kept) the load is not given up: it waits
+  for NinjaTrader as in 0.6.7 (the page says it waits), the instrument is marked overdue at the first limit, and the load looks
+  again every `MinuteRecheckMs` (3 s) until the answer comes or something can stand in.
+- when NinjaTrader's answer comes after its load went ready on stand-in history, and that load is still the page's, ChartBridge
+  sends the page `{"type": "historyLate", "root", "sub"}` once; chart 1.38.1 subscribes again (the bars it shows stay until the
+  new load is in), and the new load takes the answer just kept (above), asking nothing. At most once a page and instrument in
+  `HistoryLateGapMs` (5 minutes): a later one is a history note only, so a NinjaTrader just over the limit cannot reload the
+  charts again and again. An older page ignores the message.
+- the last trades: the forming minute stays as NinjaTrader sent it.
+- **an agent's subscribe** (the agent channel; agents place real orders) has no time limits and never gets stand-in history: it
+  waits for NinjaTrader's full answer as in 0.6.7.
+
+No retry storm: while a given-up request of an instrument is unanswered (for at most `OverdueReaskMs`, 120 s), its loads whose
+days NinjaTrader's kept answers cover do not ask again (they go ready on them at once), and the last trades are not asked; any
+other load asks (third review: a 30-day 1 hour chart after a 5-day 1 min load is not served the 5 days). Any answer to the
+instrument's minute requests, late or in time, frees it (the mark goes); a late answer is kept, not sent (a history note). A given-up last-trades
+request still counts in `minuteTailsOut` until it is answered (no session backfill starts meanwhile, as before). A time limit
+or a late answer after ChartBridge stopped does nothing.
+
+**`ready`, for a program reading it** (0.6.8, documented for the agents): `filled` (minute and hour loads), `minuteTimedOut`
+(true: NinjaTrader's minute answer did not come in time), `minuteFailed` (true: NinjaTrader answered the minute request with an
+error), `standIn` (true: the history is not NinjaTrader's answer to this load or a fresh kept one: the book, or older kept answers;
+never for an agent), `tailTimedOut` (the last trades were given up: the last minute is NinjaTrader's as sent), `historyFrom` (the
+first history bar's start, bar-time seconds, or null with no bar). NinjaTrader's full answer: all three of `minuteTimedOut`,
+`minuteFailed` and `standIn` false.
+
+**The page** (chart 1.38.1, no recompile needed, works with ChartBridge 0.6.2 and later): a load LOADING for more than 10 s, with
+nothing from ChartBridge for 3 s, says "Waiting for NinjaTrader's NQ history (N s)" on its status line. It shows no hole notice
+and no time-limit warning; on `historyLate` it subscribes again.
+
+`/diag` (0.6.8): each `seams` entry adds `minuteLastBar` (NinjaTrader's last minute bar, its close stamp, New York time),
+`bookFrom` (the copy's `from`, or null), `bookFilled` (the book's bars sent; -1 when the book was not used), `bookShortMinutes`,
+`minuteTimedOut`, `tailTimedOut`, `hole` (the hole recorded, or null; never sent to the page), `tailKeptAfter`, `standIn` (went
+ready on stand-in history), `agent`, `minuteFailed` and `fromKept` (the fresh kept answer was the answer); `books.<root>.minutes` is `{from, bars,
+trades, lateTrades, resets, resetWhy, minuteOverdue, tailOverdue}`. `historyNotes` (the last 50) and `history.log` in
+ChartBridge's folder (next to copier.log and bot.log; past 512 KB it moves to history.log.1, one old file kept): each history
+note with UTC and New York time and the instrument: "Minute history failed", "last trades for the forming minute not loaded",
+"tick window failed", a request given up or answered late, and a history that ends early ("history ends early: No bars from
+..."), the record of a hole (NinjaTrader's Output window loses them).
 
 ## Trade side (0.3.4)
 

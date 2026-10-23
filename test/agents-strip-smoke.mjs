@@ -8,7 +8,9 @@
 // An Accounts-like layout at 1906 x 1014 (Anthony's third screen), the panel from + Add panel in the lower left (about 1,430 by
 // 450 px). Checks: + Add panel's "Agents" and one a layout; a saved layout with the strip opens the sky; one drone per agent active
 // today (H, S, O, the Demo Agent, the bot) in its colour, SHADOW rings dashed; the strip's state words on the text blocks; each text
-// block inside its slot at every width; the canvas on whole device pixels; MNQ bars from the quote line (no new socket); no replay
+// block inside its slot at every width; the canvas on whole device pixels; 1.38.1 (Anthony 2026-10-23): NQ bars from the NQ quote
+// line (this layout has no NQ chart, so that one line is the panel's only new socket; with an NQ chart open it is none, see
+// test/league-smoke.mjs), the sample seats' prices at NQ's (the league's MNQ prices are the same index); no replay
 // of history; a new look fires the laser; a pass pulses and types into the feed; a trail moves the stop line and says so; Anthony's
 // fill drops the A beacon; the hover card and its full reasoning; a click opens the League tab, the Agent tab or the Bot view;
 // "+N idle" and the empty state; slim below 200 px; at most 30 frames a second, 15 calm (reduced motion); no frame while hidden
@@ -43,7 +45,7 @@ function etNow() {
 }
 const hms = ms => new Date(ms).toISOString().slice(11, 19);
 
-/* the SAMPLE league day around now; px: MNQ's price on the page; extra: { pass: [seat, id, why] played later, trail: S's stop moved
+/* the SAMPLE league day around now; px: NQ's price on the page (1.38.1; the league's MNQ prices are the same index); extra: { pass: [seat, id, why] played later, trail: S's stop moved
    up, date: another date } */
 const extra = { passes: [], trail: 0, date: null, closed: false, hStopped: false };
 let base = null;
@@ -121,17 +123,18 @@ try {
   await post('/test/agent-mode', { agent: 'demo', mode: 'shadow' });
   await post('/test/agent-note', { agent: 'demo', kind: 'look', text: 'Sample: a made-up look at the opening range' });
   await post('/test/agent-note', { agent: 'demo', kind: 'thinking', text: 'Sample: waiting for a retest of the made-up level before any plan' });
-  px = await until(() => p.evaluate(() => window.workspace.quoteLast('MNQ')), 'MNQ\'s price on the page', 20000);
-  base = etNow();
-  desk.league = sampleDay(px);
-
   /* + Add panel: Agents, into the free lower left */
-  const socks0 = socks;
+  await until(() => p.evaluate(() => window.workspace.quoteLast('MNQ')), 'MNQ\'s price on the page (the ticket\'s line up)', 20000);
+  const feed0 = await p.evaluate(() => window.workspace.feed());
   await p.click('#wsAdd');
   const menu = await p.$$eval('#wsAddMenu [data-add]', bs => bs.map(b => b.textContent));
   check(menu.includes('Agents') && !menu.includes('Bot'), '+ Add panel offers Agents (and no Bot panel): ' + menu.join(', '));
   await p.click('#wsAddMenu [data-add="agents"]');
   await until(() => p.$(SKY + ' canvas.ak-cv'), 'the Drone sky placed');
+  /* 1.38.1: the sky is over NQ: the sample seats' prices are NQ's (the league's MNQ prices are the same index) */
+  px = await until(() => p.evaluate(() => window.workspace.quoteLast('NQ')), 'NQ\'s price on the page', 20000);
+  base = etNow();
+  desk.league = sampleDay(px);
   check(await p.$eval(SKY + ' .ws-name', e => e.textContent) === 'Agents', 'the panel keeps its name, Agents');
   const box = await p.$eval(SKY, e => { const r = e.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; });
   check(box.w >= 1380 && box.w <= 1480 && box.h >= 400 && box.h <= 520 && box.x < 20, 'the panel fills the lower left: ' + JSON.stringify(box));
@@ -140,7 +143,7 @@ try {
   await p.click('#wsAdd');
 
   /* the drones: one per agent active today, the league's seats first */
-  const st = await until(async () => { const s = await sky(); return s && s.drones.length === 5 && s.drones[1].trade && s.bars > 20 ? s : null; }, 'five drones (H, S, O, the Demo Agent, the bot) over MNQ bars', 40000);
+  const st = await until(async () => { const s = await sky(); return s && s.drones.length === 5 && s.drones[1].trade && s.bars > 20 ? s : null; }, 'five drones (H, S, O, the Demo Agent, the bot) over NQ bars', 40000);
   if (st) {
     check(st.drones.map(d => d.key).join(',') === 'seat:H,seat:S,seat:O,agent:demo,bot', 'left to right: ' + st.drones.map(d => d.key).join(', '));
     check(st.drones.slice(0, 3).map(d => d.color).join(',') === '#FFC266,#5DE0F0,#B69CFF' && st.drones.slice(3).every(d => d.color === '#9AA8B8'), 'H amber, S cyan, O violet as the League; the live agent and the bot in the strip\'s own colour: ' + st.drones.map(d => d.color).join(', '));
@@ -148,10 +151,12 @@ try {
     check(st.drones[2].state === 'look cap' && st.drones[2].looks === 31, 'O keeps the strip\'s state word on its text block: look cap (31 counted looks)');
     const s = st.drones[1].trade;
     check(s.side === 'long' && s.contracts === 3 && s.be === true && s.stop === s.entry && typeof s.r === 'number', 'S: in a long trade at break-even, its open R worked out: ' + JSON.stringify(s));
-    check(st.bars >= 24 && st.bars <= 90, 'the pillars: ' + st.bars + ' MNQ minute bars');
+    check(st.bars >= 24 && st.bars <= 90 && st.barsRoot === 'NQ' && st.root === 'NQ', '1.38.1: the pillars: ' + st.bars + ' NQ minute bars (' + st.barsRoot + ')');
     check(st.size.cw === Math.round(st.size.w * st.size.dpr) && Number.isInteger(st.size.cw) && Math.abs(st.size.cw / st.size.dpr - st.size.w) < 1e-9, 'the canvas on whole device pixels: ' + JSON.stringify(st.size));
   }
-  check(socks === socks0, 'no new connection for the panel: the bars come from the MNQ quote line already open (' + socks0 + ' sockets before and after)');
+  const feed1 = await p.evaluate(() => window.workspace.feed());
+  check(feed1.opened - feed0.opened <= 1 && feed1.lines.some(L => L.root === 'NQ' && L.state === 'open'),
+    '1.38.1: the bars come from the NQ quote line: at most its one instrument socket is new on this layout with no NQ chart (' + feed0.opened + ' before, ' + feed1.opened + ' after; lines ' + feed1.lines.map(L => L.root).join(', ') + ')');
   /* no replay: of the history, at most the newest act plays (once) */
   const played = st ? st.drones.reduce((a, d) => a + (d.beam ? 1 : 0) + d.queued, 0) : -1;
   check(played <= 1, 'no replay of history on load: ' + played + ' look(s) playing (the newest at most)');

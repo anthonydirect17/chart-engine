@@ -353,3 +353,24 @@ test('a panel joining past the cap gets its own load on a new socket; the panels
   st = h.stats();
   assert.deepStrictEqual([st.sockets, st.lines.length, st.lines[0].retired], [1, 1, false]);
 });
+
+test('1.38.1 (ChartBridge 0.6.8): historyLate goes to the load\'s panels with their own ids, and their subscribe makes a new load', async () => {
+  const h = hub();
+  const a = panel(h, 'NQ', { tickHours: 0, profile: true, sub: 11 });
+  const b = panel(h, 'NQ', { tickHours: 0, sub: 7 });
+  await wait();
+  const ws = FakeWS.all[0]; ws.open(); ws.msg(HELLO); await wait();
+  const sub = ws.sent[0].sub;
+  ws.msg({ type: 'history', root: 'NQ', sub, bars: [[60, 1, 2, 0.5, 1.5, 10]], done: true });
+  ws.msg({ type: 'ready', root: 'NQ', sub, minuteTimedOut: true });
+  ws.msg({ type: 'historyLate', root: 'NQ', sub: sub + 5 });     // another load's: nothing
+  assert.ok(!a.got.some(m => m.type === 'historyLate'));
+  ws.msg({ type: 'historyLate', root: 'NQ', sub });
+  const la = a.got.find(m => m.type === 'historyLate'), lb = b.got.find(m => m.type === 'historyLate');
+  assert.ok(la && lb && la.sub === 11 && lb.sub === 7, 'each panel with its own subscribe id');
+  // the panels subscribe again (as live.js does): one new subscribe to ChartBridge, not the old load joined
+  a.sock.send(JSON.stringify({ type: 'subscribe', root: 'NQ', days: 5, tickHours: 0, profile: true, sub: 12 }));
+  b.sock.send(JSON.stringify({ type: 'subscribe', root: 'NQ', days: 5, tickHours: 0, sub: 8 }));
+  await wait();
+  assert.strictEqual(ws.sent.filter(m => m.type === 'subscribe').length, 2, 'a new load asked of ChartBridge');
+});

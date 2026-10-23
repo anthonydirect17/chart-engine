@@ -1,7 +1,8 @@
 /*
  * The Agents panel's Drone sky (chart 1.38.0; Anthony 2026-10-23 approved the concept, mockup version 4, style "drones").
  *
- * The price stands as a skyline of light pillars, one per MNQ minute bar, with very faint, slow code rain and drifting dust
+ * The price stands as a skyline of light pillars, one per NQ minute bar (1.38.1, Anthony 2026-10-23: his charts are NQ; the
+ * seats trade MNQ, the same index, so their entries and stops are drawn at their MNQ prices on the NQ pillars, unconverted), with very faint, slow code rain and drifting dust
  * behind it. Each agent active today hovers above it as a hexagon drone in its colour (the League's H amber, S cyan, O violet; a
  * live agent and the bot in the strip's own colour for them), a lens turning inside, a dashed ring for SHADOW and a solid one for
  * LIVE, its text block beside it inside its own slot (name, mode, its one-word state; position, today's R, spend; looks left; the
@@ -18,7 +19,7 @@
  * once; after that, each act the page reads plays once.
  *
  * Read only: no request, no message, no poller of its own. The workspace hands it the strip's reads (the one league read, the
- * Agent tab's and the Bot desk's state) and the MNQ minute bars of the quote line the strip already watched (no new
+ * Agent tab's and the Bot desk's state) and the NQ minute bars of the quote line the workspace already watches (no new
  * connection). Hover a drone (or focus its button) for today's full card; a click opens the League tab, the Agent tab or the Bot.
  *
  * Cheap (docs/MOTION.md "Allowed motion: the Agents panel"): one canvas on whole device pixels (as the chart's 1.37.0 snap), at
@@ -30,12 +31,13 @@
 'use strict';
 if (typeof window === 'undefined' || typeof document === 'undefined') return;
 const C = window.AgentsStripCore, CARD = window.AgentsStrip;
-const VERSION = '1.38.0';
+const VERSION = '1.38.1';
 const FPS = 30, CALM_FPS = 15, SLIM_H = 200, PULSE_S = 0.7, TICKS = 30;
 /* the code rain's glyphs: digits and signs only (every PC's fonts have them) */
 const GLY = '0123456789<>/\\|=+*#:;{}[]$%';
 const LOOK_S = 1.8;                         // one look's sweep
-const FEED_IDLE = 'watching MNQ';
+const SKY_ROOT = 'NQ';                      // 1.38.1: the pillars and the price label (the seats' contracts and point value stay MNQ)
+const FEED_IDLE = 'watching ' + SKY_ROOT;
 
 const isNum = v => typeof v === 'number' && isFinite(v);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -48,7 +50,7 @@ const sR = v => (isNum(v) ? (v >= 0 ? '+' : '-') + Math.abs(v).toFixed(2) + 'R' 
 
 /**
  * The sky in a panel's body. o: { day(), reach(), agents(), bot(), nowMs(), last(root), pv(root), bars() ({ root, name, bars:
- * [{ t, o, h, l, c }] } or null: the MNQ minute bars the page holds), mine() (Anthony's entries today, AgentsStripCore.entriesOf),
+ * [{ t, o, h, l, c }] } or null: the NQ minute bars the page holds), mine() (Anthony's entries today, AgentsStripCore.entriesOf),
  * zoneSec(ms) (epoch ms to the league's clock, seconds), openLeague(), openAgent(id), openBot() }. Returns { render, destroy, state }.
  */
 function mount(body, o) {
@@ -133,7 +135,7 @@ function mount(body, o) {
   }
   function read() {
     const nowMs = o.nowMs();
-    const model = C.skyModel({ day: o.day(), nowMs, last: o.last('MNQ'), pv: o.pv('MNQ'), agents: o.agents(), bot: o.bot ? o.bot() : null, lastOf: o.last, pvOf: o.pv, zoneSec: o.zoneSec });
+    const model = C.skyModel({ day: o.day(), nowMs, last: o.last(SKY_ROOT), pv: o.pv('MNQ'), agents: o.agents(), bot: o.bot ? o.bot() : null, lastOf: o.last, pvOf: o.pv, zoneSec: o.zoneSec });
     S.model = model;
     if (S.openedSec === null) S.openedSec = nowMs / 1000;
     /* no replays of history: a drone's acts from before the panel opened are taken as seen when it first shows (its source may be
@@ -314,7 +316,7 @@ function mount(body, o) {
   function priceLabel(k, last, slim) {
     glow('#ffffff', 14); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(k.nx, k.ny, 3, 0, 7); ctx.fill(); noGlow();
     ctx.textBaseline = 'middle'; ctx.font = '600 ' + (slim ? 10 : 11) + 'px ' + FM; ctx.fillStyle = K.ink;
-    ctx.fillText(fit('MNQ ' + fmtPx(last), S.W - k.nx - 14), k.nx + 10, k.ny);
+    ctx.fillText(fit(SKY_ROOT + ' ' + fmtPx(last), S.W - k.nx - 14), k.nx + 10, k.ny);
     ctx.font = (slim ? 9 : 10) + 'px ' + FM; ctx.fillStyle = K.dim;
     ctx.fillText(fit(hms(o.nowMs() / 1000) + ' ET', S.W - k.nx - 14), k.nx + 10, k.ny + (slim ? 11 : 13));
   }
@@ -394,7 +396,7 @@ function mount(body, o) {
       S.k = k; S.kBars = bars;
     } else {
       ctx.font = '10px ' + FM; ctx.fillStyle = K.dim; ctx.textBaseline = 'middle';
-      ctx.fillText('Waiting for MNQ bars from ChartBridge', W * 0.03, H * 0.7);
+      ctx.fillText('Waiting for ' + SKY_ROOT + ' bars from ChartBridge', W * 0.03, H * 0.7);
     }
     for (let i = 0; i < S.slots.length; i++) {
       const s = S.slots[i], d = s.d, a = animOf(d.key), r = slim ? 9 : 13;
@@ -488,7 +490,7 @@ function mount(body, o) {
         calm: calm(), slim: S.H < SLIM_H, size: { w: S.W, h: S.H, cw: cv.width, ch: cv.height, dpr: S.dpr },
         drones: S.model.drones.map(d => ({ key: d.key, name: d.name, letter: d.letter, color: d.color, ring: d.ring, mode: d.mode, state: d.state, trade: d.trade ? Object.assign({}, d.trade) : null, looks: d.looks, beam: !!(S.anim.get(d.key) || {}).beam, queued: ((S.anim.get(d.key) || {}).queue || []).length })),
         shown: S.slots.map(s => s.d.key), slots: S.slots.map(s => ({ key: s.d.key, x: s.x, w: s.w, right: s.right || 0 })), idle: S.model.idle.slice(), beacons: S.beacons.map(b => ({ t: b.t, p: b.p })), feed: { who: whoEl.textContent, text: S.decode ? S.decode.text : txtEl.textContent }, pop: S.pop ? Object.assign({}, S.pop) : null,
-        bars: (S.kBars || []).length };
+        bars: (S.kBars || []).length, barsRoot: (bw() || {}).root || null, root: SKY_ROOT };
     },
     /* for the tests: reset the frame times */
     resetStats() { S.ms = []; S.frames = 0; },
