@@ -236,11 +236,97 @@ test('the page: Agents in + Add panel, one a layout, installed, read only, no da
   assert.match(read('live/agent.js'), /glances: \(\) => \{ const f = fillsDay\(\), r = risksDay\(\); return agents\.ids\(\)\.map\(id => glanceOf\(id, f, r\)\)/, 'one read of the day\'s fills for all');
   assert.match(ws, /const LG_TIMEOUT_MS = 10000;/); assert.match(ws, /Promise\.race\(\[limit, /); assert.match(ws, /clearTimeout\(giveUp\); LG\.busy = false;/);
   assert.match(ws, /if \(!on\) \{ if \(leagueView\.day\(\)\) LG\.day = leagueView\.day\(\); if \(!LG\.busy\) leaguePoll\(\); \}/, 'the League view\'s close guarded by busy');
-  assert.match(src, /if \(drawn \|\| !ro\) fitThoughts\(\);/, 'the stream fit only when a card was drawn or the size changed');
-  for (const f of ['live/agents-strip.js', 'live/agents-strip.css', 'test/agents-strip.test.js', 'test/agents-strip-smoke.mjs']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
+  /* 1.38.0: the Drone sky (live/agents-sky.js): loaded after the cards, installed, read only, its own frame loop and nothing else */
+  assert.ok(html.indexOf('<script src="agents-strip.js"></script>') < html.indexOf('<script src="agents-sky.js"></script>') && html.indexOf('<script src="agents-sky.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
+  assert.ok(files.www.some(x => x.from === 'live/agents-sky.js' && x.to === 'agents-sky.js'), 'agents-sky.js installed');
+  const sky = read('live/agents-sky.js');
+  assert.doesNotMatch(sky, /\.send\(|\.post\(|fetch\(|new WebSocket|method: ?'(POST|PUT)'|type: ?'(order|change|cancel|flatten|plan|agent[A-Z]\w*)'/, 'the sky reads only: no request, no socket, no message');
+  assert.doesNotMatch(sky, /setInterval/, 'no poller of its own: the workspace renders it once a second');
+  assert.match(sky, /const FPS = 30, CALM_FPS = 15/, 'at most 30 frames a second, 15 calm');
+  assert.match(sky, /visibilitychange/); assert.match(sky, /IntersectionObserver/); assert.match(sky, /prefers-reduced-motion: reduce/); assert.match(sky, /checkVisibility/);
+  assert.match(sky, /Math\.round\(\(r\.left \+ r\.width\) \* d\) - sl/, 'the canvas on whole device pixels, as the chart\'s 1.37.0 snap');
+  assert.match(ws, /bars: \(\) => \{ const x = quoteOf\('MNQ'\); return x && x\.bars\.length/, 'the bars from the MNQ quote line the strip already watched');
+  assert.doesNotMatch(sky, /Haiku|Sonnet|Opus/, 'no seat family written in the sky (AgentsStripCore.SEATS names them, as the League)');
+  for (const f of ['live/agents-strip.js', 'live/agents-strip.css', 'live/agents-sky.js', 'test/agents-strip.test.js', 'test/agents-strip-smoke.mjs']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
   const css = read('live/agents-strip.css');
   assert.doesNotMatch(css, /crimson|#9F1239|#E0445E/i, 'no crimson');
   const greenRed = css.split('\n').filter(l => /--ws-buy|--ws-sell/.test(l));
   assert.ok(greenRed.length && greenRed.every(l => /\.as-side\.(long|short)|\.as-pnl\.(up|down)|\.as-alert|\.as-state\.red/.test(l)), 'green and red only for the side, P&L and the bot\'s red alert (the Bot button\'s own look)');
   assert.doesNotMatch(css, /transition:(?!\s*none)|animation:(?!\s*none)|@keyframes/, 'no motion (R3)');
+});
+
+/* ======================================================================== the Drone sky's model (1.38.0) */
+test('the sky: who flies today (seats during and after their session, an agent or the bot on or holding), the rest idle', () => {
+  const day = L.cleanDay({ date: '2026-10-22', status: { date: '2026-10-22', now: '10:00:00', feed: 'live', seats: { H: { status: 'active' }, S: { status: 'retired' }, O: {} } },
+    trades: [], open: [], decisions: [look('O', min(-5))] });
+  assert.equal(A.seatActive(day, 'H', T0), true, 'status active');
+  assert.equal(A.seatActive(day, 'S', T0), false, 'retired');
+  assert.equal(A.seatActive(day, 'O', T0), true, 'decided today');
+  assert.equal(A.seatActive(day, 'H', T0 + 86400000), false, 'a day of another date: idle');
+  /* Anthony 2026-10-23: seats fade after their session (The Desk's day closed): flat ones idle, holding ones stay; a seat's own risk stop is not the end */
+  const after = (dayFields, seats, open) => L.cleanDay({ date: '2026-10-22', day: dayFields, status: { date: '2026-10-22', now: '16:30:00', seats }, trades: [], open: open || [], decisions: [look('H', min(-5)), look('S', min(-5)), look('O', min(-5))] });
+  const closed = after({ closed: true, note: 'The day closed' }, { H: { status: 'active' }, S: { status: 'active', position: { side: 'long', fill_px: 1 } }, O: { status: 'active', resting: { side: 'short' } } });
+  assert.deepEqual(['H', 'S', 'O'].map(k => A.seatActive(closed, k, T0)), [false, true, true], 'the day closed: H flat idles, S (a position) and O (a resting order) stay');
+  const own = after({ closed: false }, { H: { status: 'active', stopped: 'daily loss' }, S: { status: 'active', stopped: 'daily loss' } }, [{ id: 'o1', seat: 'S', side: 'long', fill_t: min(-30), fill_px: 1 }]);
+  assert.deepEqual(['H', 'S', 'O'].map(k => A.seatActive(own, k, T0)), [true, true, true], 'a seat\'s own day stopped (a risk stop in the session, not its end): every seat stays a drone, flat or not');
+  assert.equal(A.skyModel({ day: own, nowMs: T0, last: 1, pv: 2 }).drones.find(d => d.key === 'seat:H').state, 'day stopped', 'and shows its day stopped word');
+  assert.equal(A.agentFlies({ connected: true }), true);
+  assert.equal(A.agentFlies({ connected: false, standDown: 'why' }), false, 'stood down, off and flat: idle');
+  assert.equal(A.agentFlies({ connected: false, position: { qty: -2 } }), true, 'holding');
+  assert.equal(A.agentFlies({ connected: false }, { orders: [{ role: 'entry' }] }), true, 'a working order');
+  assert.equal(A.botActive({ offered: true, on: true, bot: { connected: true } }), true);
+  assert.equal(A.botActive({ offered: true, on: false, bot: { connected: true } }), false);
+  const m = A.skyModel({ day, nowMs: T0, last: 20000, pv: 2, agents: [{ a: { agent: 'x', name: 'Demo X', connected: false }, g: null }, { a: { agent: 'y', name: 'Demo Y', connected: true, mode: 'auto', account: 'Sim101', sim: true }, g: { stream: [] } }], bot: { offered: true, on: false, bot: null, strip: { name: 'Demo Bot' } } });
+  assert.deepEqual(m.drones.map(d => d.key), ['seat:H', 'seat:O', 'agent:y']);
+  assert.deepEqual(m.idle, ['Sonnet', 'Demo X', 'Demo Bot'], 'folded into +N idle, by name');
+  assert.equal(m.drones[0].color, '#FFC266'); assert.equal(m.drones[2].color, A.AGENT_COLOR);
+  assert.equal(m.drones[0].ring, 'dashed', 'SHADOW: a dashed ring'); assert.equal(m.drones[2].ring, 'solid', 'LIVE: a solid ring');
+});
+
+test('the sky: a seat\'s trade (entry, stop now, open R on the risk at the fill, B/E), its acts and its look count', () => {
+  const day = L.cleanDay({ date: '2026-10-22', status: { date: '2026-10-22', now: '10:00:00', feed: 'live', seats: { S: { status: 'active', position: { id: 't1', side: 'long', contracts: 3, fill_px: 20000, stop_px: 20000, fill_time: '09:45:00' } } },
+    spend: { seats: { S: 0.48 } } },
+    trades: [{ id: 't0', seat: 'S', side: 'short', contracts: 1, fill_t: min(-40), fill_px: 20010, exit_t: min(-30), exit_px: 20000, exit_reason: 'target', r: 1.25 }],
+    open: [{ id: 't1', seat: 'S', side: 'long', contracts: 3, fill_t: min(-15), fill_px: 20000, stop_px: 20000, stop_points: 25, risk_dollars: 150 }],
+    decisions: [look('S', min(-16), { answer: { action: 'enter', side: 'long', stop_points: 25, target_points: 50, reasoning: 'Sample: in' }, contracts: 3, relation: 'with' }), look('S', min(-2))] });
+  const d = A.skyModel({ day, nowMs: T0, last: 20010, pv: 2 }).drones[0];
+  assert.deepEqual(Object.assign({}, d.trade, { r: +d.trade.r.toFixed(4) }), { side: 'long', contracts: 3, entry: 20000, stop: 20000, fillT: min(-15) / 1000, r: 0.4, be: true }, 'R on $150 at the fill: 10 pt x 3 x $2 = $60 is 0.40 R, though the stop is at B/E');
+  assert.equal(d.spend, '$0.48'); assert.equal(d.looks, 2); assert.equal(d.todayR, 1.25);
+  assert.deepEqual(d.acts.map(a => a.kind), ['exit', 'enter', 'pass'], 'oldest first');
+  assert.match(d.acts[1].text, /^JOIN long 3 MNQ, stop 25 pt, target 50 pt, with Anthony/);
+  assert.match(d.acts[0].text, /^EXIT \+1\.25R  target$/);
+  assert.match(d.acts[2].text, /^PASS  Sample: no edge here$/);
+  assert.equal(A.openR({ side: 'short', contracts: 1, fill: 100 }, 98, 2, { stopPoints: 4 }), 0.5, 'points over the stop distance at the fill');
+  assert.equal(A.openR({ side: 'long', contracts: 1, fill: 100 }, 98, 2, {}), null, 'no risk known: not worked out');
+});
+
+test('the sky: a live agent\'s acts from its stream (LOOK is a look), on the league\'s clock', () => {
+  const acts = A.agentActs({ stream: [{ key: 'b', at: 2000, tag: 'PASS', text: 'Sample: no' }, { key: 'a', at: 1000, tag: 'LOOK', text: 'Sample: a look\nmore' }] }, ms => ms / 1000 - 100);
+  assert.deepEqual(acts.map(a => [a.id, a.t, a.kind, a.text]), [['a:a', -99, 'look', 'LOOK  Sample: a look'], ['a:b', -98, 'pass', 'PASS  Sample: no']]);
+});
+
+test('Anthony\'s entries from his fills: from flat, or through flat; adding or taking off is no entry', () => {
+  const f = (t, side, qty, p, root) => ({ t, side, qty, p, root: root || 'MNQ' });
+  const e = A.entriesOf([f(3, 'sell', 1, 103), f(1, 'buy', 2, 101), f(2, 'buy', 1, 102), f(4, 'sell', 4, 104), f(5, 'buy', 2, 105), f(6, 'buy', 1, 200, 'NQ')], { MNQ: 0, NQ: 1 });
+  assert.deepEqual(e, [{ t: 1, p: 101, side: 'long', root: 'MNQ' }, { t: 4, p: 104, side: 'short', root: 'MNQ' }]);
+});
+
+test('a drone\'s text block fits its slot: fields kept whole while they fit, one cut short, the rest dropped', () => {
+  const w = s => s.length * 6;
+  const kept = A.fitFields([{ text: 'DEMO OPENING FADE', keep: 'cut' }, { text: 'LOOK CAP' }, { text: 'SHADOW' }], w, 110, 6);
+  assert.deepEqual(kept.map(k => k.text), ['DEMO OPENING FADE']);
+  const cut = A.fitFields([{ text: 'DEMO OPENING FADE', keep: 'cut' }, { text: 'SHADOW' }], w, 60, 6);
+  assert.deepEqual(cut.map(k => k.text), ['DEMO OP...']);
+  const all = A.fitFields([{ text: 'flat' }, { text: '+0.40R today' }, { text: '$0.48' }], w, 200, 9);
+  assert.deepEqual(all.map(k => [k.text, k.x]), [['flat', 0], ['+0.40R today', 33], ['$0.48', 114]]);
+  for (const W of [0, 10, 40, 80, 130, 400]) for (const k of A.fitFields([{ text: 'HAIKU', keep: 'cut' }, { text: 'API STOPPED' }, { text: 'SHADOW' }], w, W, 7)) assert.ok(k.x + k.w <= W, 'inside ' + W);
+});
+
+test('the sky\'s minute bars: a row with a value missing or not a number is left out (review of 1.38.0)', () => {
+  assert.deepEqual(A.cleanBar([60, 1, 2, 0.5, 1.5, 9]), { t: 60, o: 1, h: 2, l: 0.5, c: 1.5 });
+  for (const bad of [[60, null, 2, 0.5, 1.5], [60, 1, 'x', 0.5, 1.5], [60, 1, 2, NaN, 1.5], [60, 1, 2, 0.5], [60, 1, 2, 0.5, Infinity], null, 'bar']) assert.equal(A.cleanBar(bad), null, JSON.stringify(bad));
+  const ws = read('live/workspace.js');
+  assert.match(ws, /for \(const b of m\.bars\.slice\(-QUOTE_BARS\)\) \{ const x = clean\(b\); if \(x\) q\.bars\.push\(x\); \}/, 'the quote line keeps only clean bars');
+  const sky = read('live/agents-sky.js');
+  assert.match(sky, /if \(!isNum\(lo\) \|\| !isNum\(hi\)\) return null;/); assert.match(sky, /if \(!\[x0, y0, bp\.x, bp\.y, bp\.fade\]\.every\(isNum\)\) return;/);
 });

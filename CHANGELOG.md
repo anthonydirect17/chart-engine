@@ -1,5 +1,68 @@
 # Changelog
 
+## chart 1.38.0 (2026-10-23): the Agents panel's Drone sky, order labels in the gutter at break-even, Multi-Account lane headers
+
+Three items, **page only**: no ChartBridge change (it stays 0.6.7; `minChartBridge` stays 0.6.2), no Desk change, no Bot-Lab change.
+
+- **The Agents panel becomes the Drone sky** (Anthony approved the concept 2026-10-23, mockup version 4, its "drones" style;
+  `live/agents-sky.js`, new page file, installed; `live/agents-strip.js` keeps the data and the card). The same panel: "Agents" in
+  + Add panel, one a layout, and a saved layout with the strip opens the sky. MNQ's minute bars stand as a skyline of light
+  pillars, very faint slow code rain and dust behind them; one hexagon drone per agent active today in its colour (the League's H
+  amber, S cyan, O violet; a live agent and the bot in the strip's own colour for them, `#9AA8B8`), a turning lens, a dashed ring
+  for SHADOW and a solid one for LIVE, and its text block kept inside its own slot (fields cut or dropped, never over the next):
+  name, its one-word state (look cap, API stopped, status late, killed, stood down...), mode; position, today's R, spend (the bot:
+  its rails); looks left and the 30-tick look cap (a seat's). Under the canvas, the one-line feed with the decode effect and the
+  "+N idle" chip (named on hover); a panel too narrow for every drone says "+N more", and a click on it lists them (each with its card
+  on hover and its tab on a click). Below 200 px of height, the slim layout.
+  - **Data**, only what the strip read: the league's seats from the page's one league read (The Desk), the live agents from the
+    Agent tab's glance (one new read-only field, `sinceAt`, the time of the open trade's first fill, for the tether), the bot from
+    the Bot desk's glance, MNQ's price and **its minute bars from the quote line the strip already watched** (its own history and
+    trades, kept as the last 120 bars, a bar with a value missing or not a number left out; no new connection, nothing new asked), and **Anthony's own entries** from the order
+    connection's fills on the ticket's account (a fill from flat or through flat; read only).
+  - **Who flies:** a seat whose league day is today and that is active in status.json or holds a position or a resting order or
+    decided or traded today; **seats fade after their session** (Anthony 2026-10-23): once the league's day is over as The Desk
+    says it (its day closed, the strip's "day closed"; no clock time is worked out here), a seat holding nothing folds into "+N
+    idle", and one still holding a position or a resting order stays until it is flat; a seat stopped in the session for a risk
+    reason (its own "day stopped") stays a drone showing that word; a live agent that is connected, holds a position or has a working order; the bot when its channel is
+    on and it is connected or holds a position. The rest fold into "+N idle".
+  - **Events:** a new decision (a seat) or LOOK (a live agent) fires its look laser once, then a pass pulses and types its reason
+    into the feed (an entry, a rest, a cancel, a refusal say theirs); an exit pulses; a trade draws the tether to its entry (green
+    while its open R is up, red while down, a light packet running along it), its entry and stop dashed to now and its open R by
+    the price; break-even and the trail move the stop line at once with a flash, and the feed says B/E or TRAIL; Anthony's new fill
+    drops his white "A" beacon. **No replays:** acts from before the panel opened stand as they are; only the newest plays, once.
+  - **Hover** a drone (or focus its button) for today's full card, the 1.36.0 strip card, with a thought's full reasoning under it;
+    **click** opens the League tab, the Agent tab or the Bot view, as the strip's cards did. Nobody active: "No agents active
+    today" over the faint moving background.
+  - **Cheap:** one canvas on whole device pixels (the 1.37.0 snap), at most 30 frames a second, none while the panel is hidden
+    (another view open, a panel maximized over it, scrolled away) or the window is in the background; reduced motion (Windows, or
+    Less motion) is calm motion: 15 frames a second, slower, the feed text at once. docs/MOTION.md "Allowed motion: the Agents
+    panel's Drone sky" (R3 holds: the figures are drawn as they are, never eased).
+  - Not shown, no data on the page for it: a look cap and looks left for live agents and the bot (only the league has a cap); the
+    bot's stop and its entry time (its message carries neither: its tether goes to its entry price at the newest bar); a live
+    agent's "join with Anthony" (only the league marks it).
+- **Order labels at break-even** (Anthony 2026-10-22 at WORK: "when I am dragging the stop over the entry, it kicks out over the
+  active candles"). Until now a label that would overlap another stepped left past it, onto the newest candles. Now every order
+  and position label stays right-aligned in the gutter beside the price axis; overlapping labels stack up and down there, 20 px
+  at a time. The rule (two reviews): the label under a mouse that has not moved never changes owner. A pressed or dragged order's
+  label is placed first, in the row it was drawn in at the press, and moves only with the drag (compact while dragged on a host's
+  chart): a press moves nothing. After a drag that really moved the order, its label stays first in the row it was released in,
+  until the next such drag, that order is gone or the mouse leaves the chart, so a second press there moves the same order. A
+  click, a press that moves no tick, Escape, a drag cancelled or released off the chart leave the stack exactly as before. Each other
+  one at its line when free, else the nearest free row; a label off its line gets a short leader to it. Each label's hit areas
+  (body, x, add cells) are its own wherever it lands. The 1.37.0 see-through labels and light lines are unchanged.
+- **Multi-Account lane headers** (WORK 2026-10-22): from about 610 to 760 px the trading lane's sum ran over the Bench's header. A
+  lane's header now wraps inside its lane.
+- Tests: `test/agents-strip.test.js` (who flies, a seat's trade and R, the acts, Anthony's entries, the text fit, the page);
+  `npm run smoke:agents-strip` rewritten for the sky (55 checks: the drones and colours, no new connection, no replay, a look, a
+  pass, a trail, Anthony's beacon, the hover card, the clicks, 30 frames a second and 15 calm, no frame while hidden, the frame
+  time, slim, every text block inside its slot from 1,417 down to 380 px, +N more and its list, a seat stopped for a risk reason staying with its word, a flat seat folding into idle once the day closed while one still holding stays, +N idle, the empty state, nothing sent);
+  `npm run smoke:be-labels` (new: the stop dragged onto the entry with a limit at the same price, compact and full labels: no
+  label pixel left of the room-right gap, no overlap, each label's x and drag on its own order, and a second press right where a
+  stop or a target was dropped moves that same order, and a click, a 2 px press, Escape and a release over the price axis on a
+  label pushed a row down move nothing and leave the next press on the same order: 40 checks); `npm run smoke:league` reaches the Bot
+  through the bot's drone; `npm run smoke:multi-account`
+  measures both lane headers at 760 to 300 px. Version 1.38.0 (package.json, engine header and VERSION, COMPAT.json page).
+
 ## ChartBridge 0.6.7 and chart 1.37.0 (2026-10-22): the Multi-Account panel and the bench, more room right, lighter trade lines, sharp candles
 
 Anthony's requests of 2026-10-22: "I would like to have the ability to quickly swap out accounts in and out of the group while flat

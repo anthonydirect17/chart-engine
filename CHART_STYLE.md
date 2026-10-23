@@ -386,7 +386,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Orders (1.3.0):** a 1 px line across the plot in the side color (buy green, sell red): limits and
   targets solid, stops dashed 6/4. A label at the right end of the plot ("BUY LMT 2", bracket legs "SELL TGT
   2" / "SELL STP 2", the quantity still to fill) on the ground at 92% with a side-colored border (dashed for
-  stops), plus a close x while order editing is on. Labels that would overlap step left. The price-axis tag
+  stops), plus a close x while order editing is on. Labels that would overlap step left (until 1.38.0; see below). The price-axis tag
   is filled in the side color for limits and outlined (dashed) for stops, and stacks with the level tags.
   An order moved and waiting for its answer draws at 55%. Labels draw above the last price line and live dot.
   **1.37.0 (Anthony 2026-10-22: "I still find the chips and the lines obstructing price, especially when price is moving and im
@@ -395,6 +395,15 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   entry; compact or full; planned legs too) draws at **55%** of its strength where a candle (its high to low) is behind it, and
   at full strength while the mouse is within 24 px of it or it is dragged; a label over the empty room draws as before. Only how
   strongly they draw changes: every hit area, the drag and the clicks are the same boxes.
+  **1.38.0 (Anthony 2026-10-22 at WORK: "when I am dragging the stop over the entry, it kicks out over the active candles"):**
+  every order and position label stays right-aligned at the plot's right edge, in the gutter beside the price axis; a label never
+  steps left onto the candles. Labels that would overlap stack up and down in the gutter instead, 20 px (the label's 18 and 2)
+  at a time: the label of the order pressed or dragged is placed first, in the row it was drawn in at the press, moved only by the drag
+  (compact on a host's chart while dragged), and after a drag that moved the order it stays first in the row it was released in
+  until the next such drag, that order is gone or the mouse leaves the chart (the label under a still mouse never changes owner), then the position's, then the orders' in their order, each at its line when free, else the nearest free row,
+  first away from the label it meets (down when level with it). A label off its line gets a 1 px leader in its border color at
+  its strength, from its right end along the 6 px gutter to its line. Each label's hit areas (its body, its x, its add cells) are
+  its own boxes wherever it lands.
 - **Compact labels (1.15.0, a host's charts: the workspace; Anthony from his two-monitor setup, images/67.webp):** the same
   colors, borders and dashes, the text 500 10px mono in a 14 px box with 4 px padding, right-aligned where the full label
   would end: "TGT 1", "STP 1" (a leg's side is its color), "BUY LMT 1", planned "SL -12t" / "TP +24t", the position "L1
@@ -652,6 +661,34 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   with a muted 10 px uppercase label at the left (as Trade tags; the Thoughts label above its lines, which take the card's width), figures in 11 px mono; a thought is its time, action (10 px mono capitals), confidence and first line. Green and red only for the side word
   (LONG, SHORT) and P&L, and the bot card's red alert in the Bot button's own alert look (`bt-alert`: the border at 60 % of the
   sell red, the chip's ink `#FFC9D3` on the sell ground). The bot card's Rails row takes the Spend row's place. A thought's full reasoning opens in a box over the strip's foot (the pop color, 8 px corners). No motion.
+- **The Agents panel, Drone sky (1.38.0, Anthony 2026-10-23, the approved mockup version 4, style "drones"):** the same panel
+  (+ Add panel "Agents", one a layout, the header "Agents" and "read only"); the 1.36.0 cards above are now each drone's hover card.
+  One canvas on the ground color `--ws-bg`, then a 30 px feed line (a 1 px top line, 12.5 px mono, a purple wash from the left at
+  10%). The sky: very faint code rain (digits and signs, 11 px mono, 13 px columns, the head at 9% of `rgba(200,185,255)`, the tail
+  at 5% of `#5B3DFF` fading out, falling at about a third of the mockup's speed) and drifting dust (`rgba(167,123,255,.25)`, 0.2
+  to 1.4 px), behind everything. The price: one light pillar per MNQ minute bar (as many as fit at about 13 px, 24 to 90) across
+  3% to 86% of the width, from 40% to 96% of the height: the wick a 1 px line at 18% of `#D9DCF0`, the body at 75% of `#E2D6FF`,
+  a soft column under it from 10% of `#A77BFF` fading down; a bar a laser crosses lights in that drone's color and fades over
+  about 0.6 s. The price now: a white 3 px dot, "MNQ 25,425.50" (600 11 px mono) and the time in ET (10 px muted) to its right,
+  each open trade's R under them (600 10 px mono, green up, red down, its letter and "B/E" at break-even). A drone per agent
+  active today (a seat fades into "+N idle" once The Desk says the league's day is closed, unless it still holds a position or a resting order; a seat's own risk stop, "day stopped", keeps it a drone with that word), left to right in slots of at least a third of the width (150 px, 90 slim): a hexagon hull (13 px, 9 slim) with
+  wings, the dark hull `#0B0F1C` and a 1.3 px line in its color, a lens of its color with a white arc turning, a ring at 2.2 times
+  the hull, dashed (4 4, turning) for SHADOW and solid for LIVE; colors H `#FFC266`, S `#5DE0F0`, O `#B69CFF` (the League's), a
+  live agent and the bot `#9AA8B8` (the strip's own for them). Its text block, inside its slot (fields that do not fit are cut or
+  dropped, never over the next slot): its letter (Orbitron 700, 15 px, 12 slim), the name in capitals, its one-word state in
+  amber (red for the bot's alert) and the mode (Orbitron 700, 9 px, 8 slim, muted); position (green long, red short, or "flat"),
+  today's R (green, red) and its spend (11 px mono, 10 slim); then (full only) "N looks left" and what it does (9.5 px mono) and the
+  30-tick look cap (3 px ticks over at most 120 px, the used ones dark). Below 200 px of height: the slim layout (two lines). A
+  look: a fan from the drone to the bars it sweeps (the last 18, back to now) at 22% of its color, a laser (a 3.5 times wide halo
+  at 35%, the core at 95%, a white center at 70%) and a burn mark; a trade: a 1.5 px laser tether to its entry, green while its
+  open R is up, red while down (muted while R is not known), a white packet running along it, the entry (its color at 60%) and the
+  stop (`--ws-sell` at 55%) dashed 2 4 from the entry to now; Anthony's entries: a white `#F2F4FF` diamond with an "A", dropping
+  in over 0.6 s with a ring when new. A pass or an exit: one ring growing from the drone over 0.7 s. The feed line: the drone's
+  letter in its color (Orbitron 700 12 px), the time (muted), the text typed in with a decode effect, the amber note when The Desk
+  cannot be read, and the "+N idle" chip (11 px mono in a 1 px pill, named on hover; "+N more" when the panel is too narrow for
+  every drone, a click on it listing them in a pop-color box over the feed's right end: letter, name, state in amber). Nobody active: "No agents active today" (500 13 px, the second text color) over the moving background. The hover
+  card: the strip's card in a box of the pop color with 8 px corners and the pop shadow, a thought's full reasoning under it.
+  Glow: the canvas's shadow blur on the lasers, the lens, the price dot and the beacons only.
 - **The Multi-Account panel (1.37.0, Anthony 2026-10-22):** a placeable panel (+ Add panel, one a layout), the Account page's tab
   strip (Groups, Copier). Groups: a bar (Group dropdown; Risk, a 56 px mono box and "% of each account's max loss"; "One
   direction, always (no hedging inside a group)" in 11 px mono; Group settings and New group buttons at the right), the group's
@@ -659,7 +696,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   side by side (one under the other below 620 px): **Trades with the group** with a solid line in the tint line color over a tint
   gradient, its name in 600 12 px capitals in the soft violet, and **Bench** with a dashed line, its name in the second text color
   and "sits out new entries, keeps its rules" muted; each lane's sum at its right in 11 px mono ("3 accounts · $375 at risk a
-  trade", "1 sitting out"). A chip is 188 px: the row color, a 1 px line (the tint line color in the trading lane), 5 px corners;
+  trade", "1 sitting out"); 1.38.0: a lane's header wraps inside its lane (the sum on a line of its own when it does not fit
+  beside the name), never over the other lane. A chip is 188 px: the row color, a 1 px line (the tint line color in the trading lane), 5 px corners;
   the account in 500 12 px mono after a 7 px dot (the accent in the trading lane, muted on the bench) and a SIM or LIVE mark;
   its type on The Desk in 11 px; "Room" and "Risk" with their dollars in 11 px mono; any reason in 500 10 px mono amber. A drop
   target lights with a 2 px accent outline; a dragged chip at 45%. The join step (an account in no group, dragged or clicked into

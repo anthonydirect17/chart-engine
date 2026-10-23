@@ -416,17 +416,17 @@ function create(o) {
     if (!a) return null;
     const stream = streamRows(a).slice(0, 12).map(r => ({ key: r.key, at: r.at, time: AC.etClockSec(r.at), tag: AC.rowTone(r).tag, text: rowText(r), full: r.type === 'note' ? r.m.text : rowText(r) }));
     const t = dayTrades(id, fills), rr = rNow(a, fills, risks), pos = a.position && isNum(a.position.qty) && a.position.qty ? a.position : null;
-    let sinceText = '';
+    let sinceText = '', sinceAt = null;
     if (pos) {
       const list = fills.list.filter(x => x.agent === id && x.root === pos.root && isNum(x.u)).map(f => Object.assign({}, f, { t: f.u })).sort((x, y) => x.t - y.t);
       const open = BC.trips(list).find(x => x.tOut === null);
-      if (open && isNum(open.tIn)) sinceText = AC.etClockSec(open.tIn);
+      if (open && isNum(open.tIn)) { sinceText = AC.etClockSec(open.tIn); sinceAt = open.tIn; }   // 1.38.0: sinceAt (ms) places the Drone sky's tether
     }
     const op = pos ? rr.open.find(x => x.root === pos.root) : null;
     const orders = [...S.orders.values()].filter(o => AC.isAgentMark(o, a) && (o.state === 'working' || o.state === 'partFilled'))
       .map(o => ({ role: o.role === 'stop' || o.role === 'target' ? o.role : 'entry', side: o.side, kind: typeof o.kind === 'string' ? o.kind : '', price: isNum(o.price) ? o.price : null, qty: isNum(o.qty) ? o.qty : null, root: o.root }));
     const h = helperOf(id);
-    return { agent: Object.assign({}, a), stream, exits: t.exits.map(e => ({ pnl: e.pnl, at: e.at })), totalR: rr.total, openRisk: op && isNum(op.risk) ? op.risk : null, sinceText,
+    return { agent: Object.assign({}, a), stream, exits: t.exits.map(e => ({ pnl: e.pnl, at: e.at })), totalR: rr.total, openRisk: op && isNum(op.risk) ? op.risk : null, sinceText, sinceAt,
       orders, spend: h && h.spend ? { session: h.spend.session, overall: h.spend.overall } : null, helperOn: !!(h && h.on) };
   }
 

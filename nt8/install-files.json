@@ -37,6 +37,7 @@
     { "from": "live/league.css", "to": "league.css" },
     { "from": "live/agents-strip.js", "to": "agents-strip.js" },
     { "from": "live/agents-strip.css", "to": "agents-strip.css" },
+    { "from": "live/agents-sky.js", "to": "agents-sky.js" },
     { "from": "live/multi-account.js", "to": "multi-account.js" },
     { "from": "live/multi-account.css", "to": "multi-account.css" },
     { "from": "live/workspace.css", "to": "workspace.css" },

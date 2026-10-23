@@ -31,12 +31,14 @@
 .ma-lane { border: 1px dashed var(--ws-line2); border-radius: 6px; padding: 8px; min-height: 120px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .ma-lane.in { border-style: solid; border-color: var(--ws-tint-line); background: linear-gradient(var(--ws-tint), transparent 70%); }
 .ma-lane.over { outline: 2px solid var(--ws-accent); outline-offset: -2px; }
-.ma-lhead { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.ma-lname { font: 600 12px var(--ws-sans); letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
+/* 1.38.0 (WORK 2026-10-22: at about 610 px the trading lane's sum ran over the Bench's header): a lane's header wraps inside its
+   lane, never past it: the sum drops to a line of its own when the name and it do not fit, and a long piece wraps at its spaces */
+.ma-lhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.ma-lname { font: 600 12px var(--ws-sans); letter-spacing: .05em; text-transform: uppercase; min-width: 0; overflow-wrap: anywhere; }
 .ma-lane.in .ma-lname { color: var(--ws-soft); }
 .ma-lane.bench .ma-lname { color: var(--ws-text2); }
 .ma-lsub { font-size: 11px; color: var(--ws-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.ma-lsum { margin-left: auto; font: 11px var(--ws-mono); color: var(--ws-text2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ma-lsum { margin-left: auto; min-width: 0; max-width: 100%; font: 11px var(--ws-mono); color: var(--ws-text2); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .ma-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .ma-empty { font-size: 11px; color: var(--ws-muted); padding: 4px 2px; }
 

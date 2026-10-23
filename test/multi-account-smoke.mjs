@@ -228,6 +228,28 @@ try {
   } finally { ob.kill(); }
   await p.setViewportSize({ width: 1920, height: 1080 }); await wait(600);
   await shot(p, 'multi-account-groups-1920.png');
+  /* 1.38.0 (WORK 2026-10-22): at about 610 px the trading lane's sum ("4 accounts · $350 at risk a trade") ran over the Bench's
+     header. Each lane's header now wraps inside its lane: at every width below, no piece of one header touches the other's, and
+     every piece stays inside its own lane */
+  await p.click(`${sel} .ma-tabs [data-tab="groups"]`).catch(() => {});
+  await p.click(`${sel} [data-chip="SIM-D"]`).catch(() => {});   // four in the trading lane, as Anthony's
+  await until(async () => (await lanes()).in.length >= 4, 'four accounts trading with the group', 6000);
+  for (const w of [760, 700, 660, 640, 620, 610, 580, 520, 460, 400, 340, 300]) {
+    await p.$eval(sel, (e, w) => { e.style.width = w + 'px'; e.style.justifySelf = 'start'; }, w); await wait(250);
+    const g = await p.$eval(sel, e => {
+      const R = x => { const r = x.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; };
+      const parts = k => [...e.querySelectorAll('.ma-lane.' + k + ' .ma-lhead > *')].filter(x => x.getBoundingClientRect().width > 0).map(R);
+      return { inL: R(e.querySelector('.ma-lane.in')), benchL: R(e.querySelector('.ma-lane.bench')), a: parts('in'), b: parts('bench'), narrow: e.classList.contains('ma-narrow'),
+        sum: (e.querySelector('.ma-lane.in .ma-lsum') || {}).textContent, w: Math.round(e.getBoundingClientRect().width) };
+    });
+    const hit = (x, y) => x.l < y.r - 0.5 && x.r > y.l + 0.5 && x.t < y.b - 0.5 && x.b > y.t + 0.5;
+    const inside = (x, L) => x.l >= L.l - 0.5 && x.r <= L.r + 0.5;
+    const clash = g.a.some(x => g.b.some(y => hit(x, y)));
+    const outside = g.a.some(x => !inside(x, g.inL)) || g.b.some(x => !inside(x, g.benchL));
+    check(!clash && !outside, 'the lane headers at ' + g.w + ' px' + (g.narrow ? ' (lanes stacked)' : '') + ': no overlap, each inside its lane (' + g.sum + ')');
+    if (w === 610 || w === 640 || w === 400) await p.locator(sel).screenshot({ path: path.join(out, 'multi-account-heads-' + w + '.png') }).then(() => { if (SHOTS) fs.copyFileSync(path.join(out, 'multi-account-heads-' + w + '.png'), path.join(SHOTS, 'multi-account-heads-' + w + '.png')); });
+  }
+  await p.$eval(sel, e => { e.style.width = ''; e.style.justifySelf = ''; });
 } catch (e) { fail('smoke threw: ' + (e && e.stack || e)); }
 finally { await browser.close(); bridge.kill(); }
 if (errors.length) { console.error(`multi-account smoke: ${errors.length} of ${checks} checks FAILED`); process.exit(1); }

@@ -1,16 +1,44 @@
-/* The Agents strip (chart 1.36.0, live/agents-strip.js): one row of agent cards, side by side, in a panel. The page's own look
-   (the workspace tokens, IBM Plex). A seat's colour (H amber, S cyan, O violet, as the League tab) appears only on its letter
-   and its card's 3 px left edge. Green and red only for P&L and the trade side. No motion (docs/MOTION.md R3): no transition,
-   no animation; a new thought is simply the first line. */
+/* The Agents panel (live/agents-sky.js, chart 1.38.0: the Drone sky; before it the 1.36.0 strip of cards). The page's own look
+   (the workspace tokens, IBM Plex; Orbitron for the drones' letters, as the Agent tab's headers). The canvas does the motion
+   (docs/MOTION.md "Allowed motion: the Agents panel"); nothing here transitions or animates. The hover card is the strip's card
+   (live/agents-strip.js): a seat's colour (H amber, S cyan, O violet, as the League tab) only on its letter and its 3 px left edge,
+   green and red only for P&L and the trade side. */
 .ws-panel.agents .ws-body { overflow: hidden; }
-.as-wrap { position: relative; height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding: 6px 8px 4px; color: var(--ws-text); font-family: var(--ws-sans); box-sizing: border-box; }
-.as-wrap *, .as-wrap *::before, .as-wrap *::after { transition: none !important; animation: none !important; }
-.as-line { margin: 0; font-size: 11px; color: var(--ws-warn); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.as-line[hidden] { display: none; }
-.as-row { flex: 1 1 auto; min-height: 0; display: flex; align-items: stretch; gap: 8px; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
-/* 5 to 6 cards across 1,430 px: each 240 to 360 px, sharing the row; past that the row scrolls sideways */
-.as-slot { flex: 1 1 260px; min-width: 240px; max-width: 360px; min-height: 0; display: flex; }
-.as-empty { margin: 8px 0; font-size: 12px; }
+.ak-wrap { position: relative; height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--ws-bg); color: var(--ws-text); font-family: var(--ws-sans); }
+.ak-wrap *, .ak-wrap *::before, .ak-wrap *::after { transition: none !important; animation: none !important; }
+.ak-stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.ak-cv { position: absolute; display: block; }
+.ak-empty { position: absolute; left: 0; right: 0; top: 30%; margin: 0; text-align: center; font: 500 13px var(--ws-sans); color: var(--ws-text2); pointer-events: none; }
+.ak-empty[hidden] { display: none; }
+/* each drone's slot: a see-through button over its drone and text block (hover: the card; click: its tab; the keys reach it) */
+.ak-hits { position: absolute; inset: 0; pointer-events: none; }
+.ak-hit { position: absolute; top: 0; padding: 0; border: 0; border-radius: 6px; background: transparent; cursor: pointer; pointer-events: auto; }
+.ak-hit:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: -2px; }
+/* the one-line feed under the canvas: who, when, what (typed in with a decode effect), the +N idle chip */
+.ak-feed { flex: none; display: flex; align-items: center; gap: 10px; min-width: 0; height: 30px; box-sizing: border-box; padding: 6px 12px; border-top: 1px solid var(--ws-line);
+  font: 12.5px var(--ws-mono); background: linear-gradient(90deg, rgba(91, 61, 255, .10), transparent 60%); }
+.ak-who { flex: none; width: 16px; text-align: center; font: 700 12px "Orbitron", var(--ws-sans); }
+.ak-t { flex: none; color: var(--ws-muted); font-variant-numeric: tabular-nums; }
+.ak-t:empty { display: none; }
+.ak-txt { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ak-warn { flex: 0 1 auto; max-width: 40%; min-width: 0; font-size: 11px; color: var(--ws-warn); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ak-warn[hidden], .ak-idle[hidden] { display: none; }
+.ak-idle { flex: none; margin-left: auto; padding: 1px 8px; border: 1px solid var(--ws-line); border-radius: 10px; background: transparent; color: var(--ws-muted); font: 11px var(--ws-mono); cursor: default; }
+.ak-idle:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
+.ak-idle.ak-click { cursor: pointer; color: var(--ws-text2); border-color: var(--ws-line2); }
+/* "+N more": the drones with no room in a narrow panel, listed over the feed's right end */
+.ak-more { position: absolute; right: 8px; bottom: 34px; z-index: 3; display: flex; flex-direction: column; gap: 2px; min-width: 160px; max-width: calc(100% - 16px); max-height: calc(100% - 42px); overflow: auto; padding: 4px; border: 1px solid var(--ws-line2); border-radius: 8px; background: var(--ws-pop); box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
+.ak-more[hidden] { display: none; }
+.ak-mi { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding: 3px 6px; border: 0; border-radius: 4px; background: transparent; color: var(--ws-text); font: 12px var(--ws-sans); text-align: left; cursor: pointer; }
+.ak-mi:hover, .ak-mi:focus-visible { background: var(--ws-row); outline: none; box-shadow: inset 0 0 0 1px var(--ws-tint-line); }
+.ak-mi b { flex: none; font: 700 11px "Orbitron", var(--ws-sans); }
+.ak-mi span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ak-mi i { flex: none; margin-left: auto; font: 600 10px var(--ws-mono); font-style: normal; color: var(--ws-warn); }
+/* the hover card: the strip's card in a box over the panel, a thought's full reasoning under it */
+.ak-pop { position: absolute; z-index: 4; overflow: auto; border-radius: 8px; background: var(--ws-pop); box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
+.ak-pop[hidden] { display: none; }
+.ak-pop .as-card { min-height: 0; }
+.ak-pop .as-detail.ak-detail { position: static; max-height: none; margin: 4px 0 0; box-shadow: none; }
 .as-card { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border: 1px solid var(--ws-line); border-left: 3px solid var(--seat, var(--ws-line2)); border-radius: 6px; background: var(--ws-panel); cursor: pointer; overflow: hidden; font-size: 12px; }
 /* a short card keeps every line whole and cuts only the stream */
 .as-card > * { flex: none; }
@@ -60,8 +88,7 @@
 .as-conf { color: var(--ws-muted); }
 .as-tx { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .as-none { font-size: 11px; }
-.as-foot { margin: 0; font-size: 11px; color: var(--ws-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 14px; }
-/* a thought's full reasoning: a box over the strip's foot, in the panel (the strip stays where it was) */
+/* a thought's full reasoning (the hover card's, under it) */
 .as-detail { position: absolute; left: 8px; right: 8px; bottom: 6px; max-height: 60%; overflow: auto; z-index: 3; padding: 8px 10px; border: 1px solid var(--ws-line2); border-radius: 8px; background: var(--ws-pop); box-shadow: 0 8px 24px rgba(0, 0, 0, .5); font-size: 12px; }
 .as-detail[hidden] { display: none; }
 .as-dhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
