@@ -17,13 +17,13 @@ Three items, **page only**: no ChartBridge change (it stays 0.6.7; `minChartBrid
   - **Data**, only what the strip read: the league's seats from the page's one league read (The Desk), the live agents from the
     Agent tab's glance (one new read-only field, `sinceAt`, the time of the open trade's first fill, for the tether), the bot from
     the Bot desk's glance, MNQ's price and **its minute bars from the quote line the strip already watched** (its own history and
-    trades, kept as the last 120 bars; no new connection, nothing new asked), and **Anthony's own entries** from the order
+    trades, kept as the last 120 bars, a bar with a value missing or not a number left out; no new connection, nothing new asked), and **Anthony's own entries** from the order
     connection's fills on the ticket's account (a fill from flat or through flat; read only).
   - **Who flies:** a seat whose league day is today and that is active in status.json or holds a position or a resting order or
-    decided or traded today; **seats fade after their session** (Anthony 2026-10-23): once the league's day has stopped as the
-    data the page reads says it (The Desk's day closed, or the seat's own day stopped, the strip's "day closed" and "day stopped";
-    no clock time is worked out here), a seat holding nothing folds into "+N idle", and one still holding a position or a resting
-    order stays until it is flat; a live agent that is connected, holds a position or has a working order; the bot when its channel is
+    decided or traded today; **seats fade after their session** (Anthony 2026-10-23): once the league's day is over as The Desk
+    says it (its day closed, the strip's "day closed"; no clock time is worked out here), a seat holding nothing folds into "+N
+    idle", and one still holding a position or a resting order stays until it is flat; a seat stopped in the session for a risk
+    reason (its own "day stopped") stays a drone showing that word; a live agent that is connected, holds a position or has a working order; the bot when its channel is
     on and it is connected or holds a position. The rest fold into "+N idle".
   - **Events:** a new decision (a seat) or LOOK (a live agent) fires its look laser once, then a pass pulses and types its reason
     into the feed (an entry, a rest, a cancel, a refusal say theirs); an exit pulses; a trade draws the tether to its entry (green
@@ -43,17 +43,21 @@ Three items, **page only**: no ChartBridge change (it stays 0.6.7; `minChartBrid
 - **Order labels at break-even** (Anthony 2026-10-22 at WORK: "when I am dragging the stop over the entry, it kicks out over the
   active candles"). Until now a label that would overlap another stepped left past it, onto the newest candles. Now every order
   and position label stays right-aligned in the gutter beside the price axis; overlapping labels stack up and down there, 20 px
-  at a time, the dragged order's label placed first and kept at its line (compact while dragged on a host's chart), each other
+  at a time, the dragged order's label placed first and kept at its line (compact while dragged on a host's chart), and after
+  the release still placed first (until the next drag, that order gone, or the mouse off the chart), so nothing reorders under a
+  still mouse and a second press where it was dropped moves the same order (review: before this, a stop dragged onto a buy limit
+  swapped rows with it on release and the next press moved the limit), each other
   one at its line when free, else the nearest free row; a label off its line gets a short leader to it. Each label's hit areas
   (body, x, add cells) are its own wherever it lands. The 1.37.0 see-through labels and light lines are unchanged.
 - **Multi-Account lane headers** (WORK 2026-10-22): from about 610 to 760 px the trading lane's sum ran over the Bench's header. A
   lane's header now wraps inside its lane.
 - Tests: `test/agents-strip.test.js` (who flies, a seat's trade and R, the acts, Anthony's entries, the text fit, the page);
-  `npm run smoke:agents-strip` rewritten for the sky (54 checks: the drones and colours, no new connection, no replay, a look, a
+  `npm run smoke:agents-strip` rewritten for the sky (55 checks: the drones and colours, no new connection, no replay, a look, a
   pass, a trail, Anthony's beacon, the hover card, the clicks, 30 frames a second and 15 calm, no frame while hidden, the frame
-  time, slim, every text block inside its slot from 1,417 down to 380 px, +N more and its list, a flat seat folding into idle once the day stopped while one still holding stays, +N idle, the empty state, nothing sent);
+  time, slim, every text block inside its slot from 1,417 down to 380 px, +N more and its list, a seat stopped for a risk reason staying with its word, a flat seat folding into idle once the day closed while one still holding stays, +N idle, the empty state, nothing sent);
   `npm run smoke:be-labels` (new: the stop dragged onto the entry with a limit at the same price, compact and full labels: no
-  label pixel left of the room-right gap, no overlap, each label's x and drag on its own order); `npm run smoke:league` reaches the Bot
+  label pixel left of the room-right gap, no overlap, each label's x and drag on its own order, and a second press right where a
+  stop or a target was dropped moves that same order: 32 checks, 6 of them fail on the first 1.38.0 build); `npm run smoke:league` reaches the Bot
   through the bot's drone; `npm run smoke:multi-account`
   measures both lane headers at 760 to 300 px. Version 1.38.0 (package.json, engine header and VERSION, COMPAT.json page).
 

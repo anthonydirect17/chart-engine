@@ -45,7 +45,7 @@ const hms = ms => new Date(ms).toISOString().slice(11, 19);
 
 /* the SAMPLE league day around now; px: MNQ's price on the page; extra: { pass: [seat, id, why] played later, trail: S's stop moved
    up, date: another date } */
-const extra = { passes: [], trail: 0, date: null, closed: false };
+const extra = { passes: [], trail: 0, date: null, closed: false, hStopped: false };
 let base = null;
 function sampleDay(px) {
   const now = etNow(), at = m => (base || now) - m * 60000, date = extra.date || new Date(now).toISOString().slice(0, 10);
@@ -66,7 +66,7 @@ function sampleDay(px) {
     shadow: 'SHADOW: no orders', folder: { set: true, ok: true, problem: null }, date,
     day: { date, closed: extra.closed, note: extra.closed ? 'Sample: the made-up day closed' : null },
     status: { date, now: hms(now), feed: 'live', seats: {
-      H: { status: 'active', flag: 'Sample data, made up for the smoke', decisions: 58, entries: 0, flex: { phase: 'eval', balance: 50000, today_pnl: 0, room_to_floor: 2000 }, position: null, resting: null },
+      H: { status: 'active', stopped: extra.hStopped ? 'Sample: the made-up daily loss stop' : null, flag: 'Sample data, made up for the smoke', decisions: 58, entries: 0, flex: { phase: 'eval', balance: 50000, today_pnl: 0, room_to_floor: 2000 }, position: null, resting: null },
       S: { status: 'active', flag: 'Sample data, made up for the smoke', decisions: 57, entries: 1, flex: { phase: 'eval', balance: 50000, today_pnl: 24, room_to_floor: 2000 },
         position: { id: 's-S-1', side: 'long', state: 'open', contracts: 3, fill_px: fill, stop_px: stop, target_px: fill + 50, fill_time: hms(at(15)) }, resting: null },
       O: { status: 'active', flag: 'Sample data, made up for the smoke', decisions: 58, entries: 1, flex: { phase: 'eval', balance: 49838, today_pnl: -162, room_to_floor: 1838 }, position: null,
@@ -299,10 +299,15 @@ try {
 
   /* Anthony 2026-10-23: seats fade after their session. The league's day closed (as The Desk reports it): H (flat, nothing resting)
      folds into +N idle; S (its open paper trade) and O (its resting order) stay until they are flat */
+  /* a seat stopped in the session for a risk reason (its own stopped flag) is not after its session: it stays, saying day stopped */
+  extra.hStopped = true; desk.league = sampleDay(px);
+  const hs1 = await until(async () => { const s = await sky(); const d = s.drones.find(x => x.key === 'seat:H'); return d && d.state === 'day stopped' ? s : null; }, 'H stopped in the session', 25000);
+  check(!!hs1 && !hs1.idle.includes('Haiku'), 'a seat\'s own day stopped (a risk stop, the session not over): H stays a drone, flat, its word "day stopped" on its text block');
+  extra.hStopped = false;
   extra.closed = true; desk.league = sampleDay(px);
-  const fade = await until(async () => { const s = await sky(); return s.idle.includes('Haiku') ? s : null; }, 'H folded into idle after the day stopped', 25000);
+  const fade = await until(async () => { const s = await sky(); return s.idle.includes('Haiku') ? s : null; }, 'H folded into idle after the day closed', 25000);
   check(!!fade && !fade.drones.some(d => d.key === 'seat:H') && fade.drones.some(d => d.key === 'seat:S' && d.trade) && fade.drones.some(d => d.key === 'seat:O'),
-    'the day stopped: flat H folds into idle (' + (fade && fade.idle.join(', ')) + '); S still holding its trade and O its resting order stay: ' + (fade && fade.drones.map(d => d.key).join(', ')));
+    'the league\'s day closed (The Desk): flat H folds into idle (' + (fade && fade.idle.join(', ')) + '); S still holding its trade and O its resting order stay: ' + (fade && fade.drones.map(d => d.key).join(', ')));
   const chipF = await p.$eval(SKY + ' .ak-idle', e => ({ text: e.textContent, title: e.title }));
   check(/\+1 idle/.test(chipF.text) && /Haiku/.test(chipF.title), 'named on hover of the chip: ' + JSON.stringify(chipF));
   await shot('agents-sky-day-stopped-1906.png', true);

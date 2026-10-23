@@ -2293,7 +2293,8 @@ function quoteOpen(q) {
       if (m.bars.length) q.last = +m.bars[m.bars.length - 1][4];
       /* 1.38.0: the last minute bars, for the Agents panel's Drone sky (its pillars): this line's own load, nothing new asked */
       if (m.name) q.name = String(m.name).slice(0, 80);
-      for (const b of m.bars.slice(-QUOTE_BARS)) q.bars.push({ t: +b[0], o: +b[1], h: +b[2], l: +b[3], c: +b[4] });
+      const clean = window.AgentsStripCore ? window.AgentsStripCore.cleanBar : () => null;   // a bar with a value missing or not a number is left out
+      for (const b of m.bars.slice(-QUOTE_BARS)) { const x = clean(b); if (x) q.bars.push(x); }
       if (q.bars.length > QUOTE_BARS) q.bars.splice(0, q.bars.length - QUOTE_BARS);
       quoteChanged();
     } else if (m.type === 'tick' && m.root === q.root) {

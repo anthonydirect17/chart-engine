@@ -399,7 +399,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   every order and position label stays right-aligned at the plot's right edge, in the gutter beside the price axis; a label never
   steps left onto the candles. Labels that would overlap stack up and down in the gutter instead, 20 px (the label's 18 and 2)
   at a time: the label of the order being dragged is placed first and stays at its line (pinned, and compact on a host's chart
-  while dragged), then the position's, then the orders' in their order, each at its line when free, else the nearest free row,
+  while dragged), and stays first after the release until the next drag, that order is gone or the mouse leaves the chart, then the position's, then the orders' in their order, each at its line when free, else the nearest free row,
   first away from the label it meets (down when level with it). A label off its line gets a 1 px leader in its border color at
   its strength, from its right end along the 6 px gutter to its line. Each label's hit areas (its body, its x, its add cells) are
   its own boxes wherever it lands.
@@ -670,7 +670,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   a soft column under it from 10% of `#A77BFF` fading down; a bar a laser crosses lights in that drone's color and fades over
   about 0.6 s. The price now: a white 3 px dot, "MNQ 25,425.50" (600 11 px mono) and the time in ET (10 px muted) to its right,
   each open trade's R under them (600 10 px mono, green up, red down, its letter and "B/E" at break-even). A drone per agent
-  active today (a seat fades into "+N idle" once the league's day has stopped, unless it still holds a position or a resting order), left to right in slots of at least a third of the width (150 px, 90 slim): a hexagon hull (13 px, 9 slim) with
+  active today (a seat fades into "+N idle" once The Desk says the league's day is closed, unless it still holds a position or a resting order; a seat's own risk stop, "day stopped", keeps it a drone with that word), left to right in slots of at least a third of the width (150 px, 90 slim): a hexagon hull (13 px, 9 slim) with
   wings, the dark hull `#0B0F1C` and a 1.3 px line in its color, a lens of its color with a white arc turning, a ring at 2.2 times
   the hull, dashed (4 4, turning) for SHADOW and solid for LIVE; colors H `#FFC266`, S `#5DE0F0`, O `#B69CFF` (the League's), a
   live agent and the bot `#9AA8B8` (the strip's own for them). Its text block, inside its slot (fields that do not fit are cut or

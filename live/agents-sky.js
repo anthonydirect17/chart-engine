@@ -253,6 +253,7 @@ function mount(body, o) {
     for (const b of bars) { if (b.l < lo) lo = b.l; if (b.h > hi) hi = b.h; }
     for (const s of S.slots) { const t = s.d.trade; if (t) for (const p of [t.entry, t.stop]) if (isNum(p)) { lo = Math.min(lo, p); hi = Math.max(hi, p); } }
     for (const b of S.beacons) if (b.t >= bars[0].t) { lo = Math.min(lo, b.p); hi = Math.max(hi, b.p); }
+    if (!isNum(lo) || !isNum(hi)) return null;                // nothing finite to scale by: no pillars this frame
     const pd = (hi - lo) * 0.1 + 1; lo -= pd; hi += pd;
     const n = bars.length, step = n > 1 ? (x1 - x0) / (n - 1) : 0;
     const X = i => x0 + i * step, Y = p => bot - (p - lo) / (hi - lo) * (bot - top);
@@ -271,6 +272,7 @@ function mount(body, o) {
     return { x: k.X(idx), y: k.Y(bars[idx].c), idx, p, fade: p < 0.85 ? 1 : (1 - p) / 0.15 };
   }
   function lookFan(x0, y0, bp, col) {
+    if (![x0, y0, bp.x, bp.y, bp.fade].every(isNum)) return;   // a gradient with a value not finite throws
     const g = ctx.createLinearGradient(x0, y0, bp.x, bp.y); g.addColorStop(0, alpha(col, 0)); g.addColorStop(1, alpha(col, 0.22 * bp.fade));
     ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(bp.x - 14, bp.y); ctx.lineTo(bp.x + 14, bp.y); ctx.closePath(); ctx.fill();
     laser(x0, y0, bp.x, bp.y, col, bp.fade, 1.2);
@@ -370,16 +372,17 @@ function mount(body, o) {
     ctx.fillStyle = K.ground; ctx.fillRect(0, 0, W, H);
     layout();
     background(dt, sp);
-    const feed = bw(), bars0 = feed && Array.isArray(feed.bars) ? feed.bars : [];
+    const feed = bw(), bars0 = feed && Array.isArray(feed.bars) ? feed.bars.filter(b => b && [b.t, b.o, b.h, b.l, b.c].every(isNum)) : [];
     const nb = Math.round(clamp((W * 0.83) / 13, 24, 90)), bars = bars0.slice(-nb);
     let k = null;
-    if (bars.length >= 2) {
-      k = scaleOf(bars, W * 0.03, W * 0.86, H * 0.40, H * 0.96);
+    if (bars.length >= 2) k = scaleOf(bars, W * 0.03, W * 0.86, H * 0.40, H * 0.96);
+    if (k) {
       const lit = S.lit && S.lit.length === bars.length && S.litT === bars[0].t ? S.lit : (S.lit = bars.map(() => ({ v: 0, c: null })), S.litT = bars[0].t, S.lit);
       for (const l of lit) l.v = Math.max(0, l.v - dt * 1.6);
       const w = Math.max(1.5, k.step * 0.55);
       for (let i = 0; i < bars.length; i++) {                  // the pillars, one per bar, lit where a laser crosses them
         const b = bars[i], x = k.X(i), yT = k.Y(Math.max(b.o, b.c)), yB = Math.max(yT + 1.5, k.Y(Math.min(b.o, b.c))), L = lit[i].v, col = lit[i].c || '#a77bff';
+        if (![x, yT, yB, k.bot].every(isNum)) continue;
         ctx.strokeStyle = L > 0 ? alpha(col, 0.4 + 0.5 * L) : 'rgba(217,220,240,0.18)'; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(x, k.Y(b.h)); ctx.lineTo(x, k.Y(b.l)); ctx.stroke();
         const pg = ctx.createLinearGradient(0, yT, 0, k.bot); pg.addColorStop(0, L > 0 ? alpha(col, 0.35 * L) : 'rgba(167,123,255,0.10)'); pg.addColorStop(1, 'rgba(91,61,255,0)');

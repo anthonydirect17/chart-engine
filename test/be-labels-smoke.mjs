@@ -147,6 +147,29 @@ async function run(mode) {
     await page.evaluate(() => window.__ch.setOrders(window.__orders)); await page.mouse.move(20, 20); await wait(150);
   }
   void h1;
+  /* review of 1.38.0 (a real-money finding): right after a drag lands, with the mouse still where it let go, the stack must not
+     reorder under it: a second press there (to nudge the same order one more tick) acts on the order just dragged, never on the
+     label that was pushed aside. The stop (a sell stop) onto the entry, then the target (a sell limit) onto it, then (the
+     reviewer's probe) the stop onto the buy limit with no position on: there 1.38.0 before this fix moved the buy limit */
+  for (const [id, pos] of [['s1', true], ['t1', true], ['s1', false]]) {
+    await page.evaluate(pos => window.__ch.setPosition(pos ? { qty: 2, avgPrice: window.__S.avg, pointValue: 2 } : null), pos);
+    const list = [{ id: 's1', side: 'sell', kind: 'stop', price: S.stop, qty: 2, role: 'stop' }, { id: 't1', side: 'sell', kind: 'limit', price: S.target, qty: 2, role: 'target' },
+      { id: 'e1', side: 'buy', kind: 'limit', price: S.avg, qty: 1 }];
+    if (!pos) list.unshift(list.pop());                          // the probe: the buy limit first in the list, as ChartBridge may send it
+    await page.evaluate(o => { window.__orders = o; window.__ch.setOrders(o); window.__ev = []; }, list);
+    await page.mouse.move(20, 20); await wait(250);
+    const hb = (await handles()).find(h => h.id === id).box, gy = hb.y + hb.h / 2, gxx = Math.round(hb.x + hb.w - 8);
+    const yFrom = await yOf(id === 's1' ? S.stop : S.target), endAt = yAvg + (gy - yFrom);
+    await page.mouse.move(gxx, gy); await wait(80); await page.mouse.down(); await page.mouse.move(gxx, endAt, { steps: 8 }); await wait(150);
+    await page.mouse.up(); await wait(150);
+    const mv1 = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
+    /* the move confirmed (as ChartBridge would), the mouse not moved */
+    await page.evaluate(([id, avg]) => { window.__orders = window.__orders.map(o => (o.id === id ? Object.assign({}, o, { price: avg }) : o)); window.__ch.setOrders(window.__orders); window.__ev = []; }, [id, S.avg]);
+    await wait(250);
+    await page.mouse.down(); await page.mouse.move(gxx, endAt - 6, { steps: 3 }); await page.mouse.up(); await wait(150);
+    const mv2 = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
+    check(mv1.length === 1 && mv1[0].id === id && mv2.length === 1 && mv2[0].id === id, id + (pos ? '' : ' (no position, onto the buy limit)') + ': dragged onto the entry, then a second press at the same spot right after it lands: it moves ' + id + ' again (' + JSON.stringify(mv1) + ', then ' + JSON.stringify(mv2) + ')');
+  }
   await page.close();
 }
 try {

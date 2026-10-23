@@ -1273,6 +1273,10 @@ function create(container, options) {
   // working orders and the position (1.3.0): shown always; moved, cancelled and placed only while editing is on
   let orders = [], position = null, hostPV = 0, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, addDown = null, orderHits = [];
+  /* 1.38.0 (review of the gutter stacking): the order whose label is placed first in the gutter: the one being dragged, and after
+     the release still that one, so the stack does not reorder under a still mouse (a second press where the label was dropped
+     acts on the same order). Until the next drag starts, that order is gone, or the mouse leaves the chart. */
+  let labelFirst = null;
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
   const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [], drawn: [], room: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
@@ -2485,7 +2489,8 @@ function create(container, options) {
       /* 1.38.0 (Anthony 2026-10-22 at WORK: "when I am dragging the stop over the entry, it kicks out over the active candles"):
          every label is right-aligned at the plot's right edge, in the gutter beside the price axis, and never steps left onto the
          candles. Labels that would overlap stack up and down in the gutter instead: the label of the order being dragged is
-         placed first (pinned at its line), then the others in their order (the position, then the orders), each at its own line
+         placed first (pinned at its line), and after the release still that one (labelFirst) until the next drag, that order
+         gone or the mouse off the chart, so nothing reorders under a still mouse; then the others in their order (the position, then the orders), each at its own line
          when free, else the nearest free row STEP px at a time, first away from the label it meets (down when level with it),
          then the other way. A label moved off its line gets a short leader in the gutter back to its line. The hit areas are the
          label's own boxes wherever it lands, so a click, its x and a drag act on its own order. Placed once all are asked for. */
@@ -2547,7 +2552,7 @@ function create(container, options) {
         const ex = (extras || []).map(e => ({ which: e[0], text: e[1], w: ctx.measureText(e[1]).width + 10 }));
         const ew = ex.reduce((a, e) => a + e.w, 0);
         const tw = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 10, w = tw + ew + (closer ? LH : 0);
-        const sl = place(y, w, !!od && hid !== undefined && od.id === hid);
+        const sl = place(y, w, hid !== undefined && hid === (od ? od.id : labelFirst));
         let x = sl.x, top = sl.top;
         /* the boxes are filled in once every label is placed (placeAll), the same objects the callers keep */
         const box = { x, y: top, w: tw, h: LH };
@@ -2902,7 +2907,7 @@ function create(container, options) {
       if (oh && oh.part === 'add') { addDown = { id: oh.id, which: oh.which }; return; }
       if (oh) {
         const ord = orders.find(x => x.id === oh.id);
-        if (ord) { const p0 = orderPrice(ord); od = { id: ord.id, y0: p.y, price0: p0, price: p0, moved: false }; setCursor('plot', p); dirty = true; return; }
+        if (ord) { const p0 = orderPrice(ord); od = { id: ord.id, y0: p.y, price0: p0, price: p0, moved: false }; labelFirst = ord.id; setCursor('plot', p); dirty = true; return; }
       }
     }
     /* 1.15.0 (Anthony: "Armed is off" said nowhere): a press on an order's label or tag while order editing is off does
@@ -3074,7 +3079,7 @@ function create(container, options) {
     if (e.pointerType !== 'mouse') hover = null;
     setCursor('plot'); dirty = true;
   }
-  function onLeave(e) { if (!drag && !od && e.pointerType === 'mouse') { hover = null; hoverBubble(null); labelHover = null; dirty = true; } }
+  function onLeave(e) { if (!drag && !od && e.pointerType === 'mouse') { hover = null; hoverBubble(null); labelHover = null; labelFirst = null; dirty = true; } }
   function onDbl(e) {
     const z = zoneOf(local(e));
     if (z === 'price') V.auto = true;
@@ -3410,6 +3415,7 @@ function create(container, options) {
       // as after the drag, until the host stops saying it (the workspace redraws its charts after every action)
       for (const x of list || []) if (x && typeof x.movePending === 'number' && isFinite(x.movePending) && orders.some(y => y.id === x.id)) pendingMoves.set(x.id, x.movePending);
       if (od && !orders.some(x => x.id === od.id)) od = null;
+      if (labelFirst !== null && !orders.some(x => x.id === labelFirst)) labelFirst = null;
       dirty = true;
     },
     getOrders() { return orders.map(x => Object.assign({}, x)); },
