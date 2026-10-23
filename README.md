@@ -358,12 +358,19 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    `2026-09-30T09:00:00`): `(Get-ScheduledTask 'ChartEngine Updater').Triggers | Select StartBoundary`
 
    The task starts hidden (Anthony, 2026-10-22: every scheduled program runs hidden). Register writes a one-line
-   launcher, `updater\bin\update-pc.hidden.vbs`, and the task runs `wscript.exe //B` on it (batch mode: no WScript error dialog); the launcher runs the same
-   Windows PowerShell command with no window and waits for it, so the task shows Running and its Last Result as before.
-   `status` says `task start: hidden`, prints the command the task runs, and ends with STOP when the launcher is missing
-   or changed. Register again keeps the clone the task runs (`-Repo`), read from the task or its launcher; it refuses
-   another clone unless `-Repo` is given. A task registered before this change still starts `powershell.exe` (a console
-   may flash) and keeps its old daily time: run `register` again to move it to the launcher and to 9:00 AM.
+   launcher, `updater\bin\update-pc.hidden.vbs`, and the task runs `wscript.exe //B` on it (batch mode: no WScript
+   error dialog); the launcher runs the same Windows PowerShell command with no window and waits for it, so the task
+   shows Running and its Last Result as before. `status` says `task start: hidden`, prints the command the task runs,
+   and ends with STOP when the launcher is missing or changed. Register again keeps the clone the task runs (`-Repo`),
+   read from the task or its launcher; it refuses another clone unless `-Repo` is given.
+
+   A task registered before the hidden start (it starts `powershell.exe`, a console may flash, and checks at 5:05 PM)
+   moves to the launcher at an `-InstallChartBridge` run by a copy of the updater that has this change, for example
+   from an up to date clone (`git pull --ff-only` first), or at once with `update-pc.ps1 register`. It prints what it
+   kept, and the daily check moves from 5:05 PM to 9:00 AM unless you had set another time. Run from a pinned copy
+   older than this change, `-InstallChartBridge` only pins the new copy, and the move then happens at the next
+   install. It is refused, and says why, from an elevated window or as another user. Until it moves, each check
+   writes one WARN line in update.log saying so.
 
 **Everyday commands, with the task's own copy.** Paste this once per PowerShell window, then use `$u` as below:
 
@@ -401,6 +408,10 @@ as soon as a file changes):
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File $u -InstallChartBridge
 ```
+
+To move a task registered before the hidden start to the launcher in the same step, run it from an up to date clone
+instead of `$u` (`git -C <clone> pull --ff-only`, then `-File <clone>\nt8\update-pc.ps1 -InstallChartBridge`): a
+pinned copy older than that change only pins the new copy, and the task then moves at the next install.
 
 It installs from `updater\staged\` (the green commit that was announced), never from the clone. It shows the staged
 version and the one compiled here, asks once (type `y`), then writes the add-on files next to the old ones and replaces

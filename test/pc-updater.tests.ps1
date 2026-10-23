@@ -1278,6 +1278,18 @@ Test 'Split-CommandLine reads back what Format-Arg writes (spaces, quotes, trail
 # A task as Get-ScheduledTask returns it, for the option checks: its action only.
 function New-FakeTask([string]$Execute, [string]$Arguments) { return [pscustomobject]@{ TaskName = 'ChartEngine Updater'; State = 'Ready'; Actions = @([pscustomobject]@{ Execute = $Execute; Arguments = $Arguments }) } }
 
+Test 'Test-SamePath: the same path in either form; two different paths are not' {
+  $d = Join-Path $tmpRoot 'same path dir'
+  New-Item -ItemType Directory -Force -Path $d | Out-Null
+  Assert (Test-SamePath $d ($d + [IO.Path]::DirectorySeparatorChar)) 'a trailing separator'
+  Assert (-not (Test-SamePath $d (Join-Path $tmpRoot 'other dir'))) 'two paths'
+  if ($IsWin) {
+    $fso = New-Object -ComObject Scripting.FileSystemObject
+    $short = $fso.GetFolder($d).ShortPath
+    Assert (Test-SamePath $short $d) "8.3 $short and its long form"
+  }
+}
+
 Test 'register keeps the current task''s -Repo (review B1): from its arguments, our launcher or a hand-made one; an explicit -Repo wins; anything else is refused by name' {
   $keepP = $script:P
   $mine = Join-Path $tmpRoot 'keep clone'
@@ -1355,6 +1367,95 @@ Test 'status checks the task''s start (review N1): ours exactly as register writ
   } finally { $script:P = $keepP }
 }
 
+Test '-InstallChartBridge moves a task that is not hidden to the launcher once, keeping -Repo; 17:05 becomes 09:00, another time is kept; a refusal or failure is said (stubbed)' {
+  $keepP = $script:P; $keepOS = $env:OS
+  Initialize-Paths (Join-Path $tmpRoot 'mig clone') (Join-Path (Join-Path $tmpRoot 'mig docs') 'NinjaTrader 8')
+  . $script:TaskStubs
+  function Get-CurrentUserName { return 'PC\anthony' }
+  function Test-Elevated { return $script:Elevated }
+  $script:Elevated = $false
+  # a task as Get-ScheduledTask returns it, with the user it runs as
+  function New-MigTask([string]$Execute, [string]$Arguments, [string]$User = 'PC\anthony') {
+    $t = New-FakeTask $Execute $Arguments
+    $t | Add-Member -NotePropertyName Principal -NotePropertyValue ([pscustomobject]@{ UserId = $User })
+    return $t
+  }
+  try {
+    $env:OS = 'Windows_NT'
+    $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+    Put $pinned "# the pinned copy`n"
+    $pj = Join-Path $script:P.Bin 'pinned.json'
+    Write-JsonAtomic $pj @{ commit = 'abc'; dailyAt = '17:05'; repo = $script:P.Repo }
+    $script:StubTask = New-MigTask $ps (Get-TaskArguments $pinned $script:P.Repo)
+    $script:StubTask.State = 'Running'                     # a running task's action is changed all the same
+    $lines = @(Invoke-TaskMigration)
+    $launcher = Get-HiddenLauncherPath
+    Assert ($lines[0] -eq "The scheduled task now starts hidden: wscript.exe //B $launcher (it was the task's action ($ps)).") "said: $($lines -join ' / ')"
+    Assert ($lines[1] -eq "  kept: -Repo $($script:P.Repo) and the pinned copy $pinned; the triggers, user and settings are register's own (they replace the old ones)") "kept: $($lines[1])"
+    Assert ($lines[2] -match 'daily check: 09:00 New York time \(it was 17:05; Anthony 2026-10-23') "09:00: $($lines[2])"
+    $reg = @(Get-TaskCall 'register')
+    Assert ($reg.Count -eq 1 -and $reg[0].Action.Arguments -ceq ('//B "' + $launcher + '"') -and $reg[0].Action.WorkingDirectory -eq $script:P.Bin) 'the task: wscript.exe //B on the launcher'
+    Assert ($reg[0].Trigger[1].StartBoundary -eq (ConvertFrom-NewYorkTime '09:00').ToString('yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)) "daily at 09:00: $($reg[0].Trigger[1].StartBoundary)"
+    Assert ((Read-JsonFile $pj)['dailyAt'] -eq '09:00') 'pinned.json follows'
+    Assert ([IO.File]::ReadAllText($launcher) -ceq ((Get-HiddenLauncherLine $ps (Get-TaskArguments $pinned $script:P.Repo)) + "`r`n")) 'the launcher register writes'
+    Assert (@(Invoke-TaskMigration).Count -eq 0 -and @(Get-TaskCall 'register').Count -eq 1) 'once: a task on its own launcher is left alone'
+    Assert ((Get-Text $script:P.Log) -match 'the scheduled task moved to the hidden launcher by -InstallChartBridge; daily at 09:00') 'logged'
+    # a hand-made launcher and another time: the time is kept
+    $hand = Join-Path (Join-Path $tmpRoot 'mig hidden') 'chartengine_updater.vbs'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $hand) | Out-Null
+    $c = (Format-Arg $ps) + ' ' + (Get-TaskArguments $pinned $script:P.Repo)
+    [IO.File]::WriteAllText($hand, 'WScript.Quit CreateObject("WScript.Shell").Run("' + $c.Replace('"', '""') + '", 0, True)' + "`r`n", [Text.Encoding]::ASCII)
+    Write-JsonAtomic $pj @{ commit = 'abc'; dailyAt = '08:30'; repo = $script:P.Repo }
+    $script:StubTask = New-MigTask 'C:\Windows\System32\wscript.exe' ('"' + $hand + '"')
+    $lines = @(Invoke-TaskMigration)
+    Assert ($lines[2] -eq '  daily check: 08:30 New York time' -and (Read-JsonFile $pj)['dailyAt'] -eq '08:30' -and (Test-Path -LiteralPath $hand)) "kept 08:30: $($lines -join ' / ')"
+    # refused by name: the task runs another clone; nothing changed
+    Write-JsonAtomic $pj @{ commit = 'abc'; dailyAt = '17:05'; repo = $script:P.Repo }
+    $script:StubTask = New-MigTask $ps (Get-TaskArguments $pinned (Join-Path $tmpRoot 'other clone'))
+    $n = @(Get-TaskCall 'register').Count
+    $lines = @(Invoke-TaskMigration)
+    Assert ($lines.Count -eq 1 -and $lines[0] -match 'was not moved to the hidden launcher: the current task runs the clone .*other clone' -and $lines[0] -match 'update-pc\.ps1 register moves it') "refused: $($lines -join ' / ')"
+    Assert (@(Get-TaskCall 'register').Count -eq $n -and (Read-JsonFile $pj)['dailyAt'] -eq '17:05') 'nothing changed'
+    # refused, said, nothing changed: an elevated window, another user, a script that is not the pinned copy
+    $plain = (Get-TaskArguments $pinned $script:P.Repo)
+    $n = @(Get-TaskCall 'register').Count
+    Remove-Item -LiteralPath $launcher -Force
+    $script:Elevated = $true
+    $script:StubTask = New-MigTask $ps $plain
+    $lines = @(Invoke-TaskMigration)
+    Assert ($lines[0] -match 'not moved to the hidden launcher: this window is elevated') "elevated: $($lines -join ' / ')"
+    $script:Elevated = $false
+    $script:StubTask = New-MigTask $ps $plain 'PC\someone'
+    $lines = @(Invoke-TaskMigration)
+    Assert ($lines[0] -match [regex]::Escape('not moved to the hidden launcher: the task runs as PC\someone, this window is PC\anthony')) "another user: $($lines -join ' / ')"
+    $script:StubTask = New-MigTask $ps ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ' + (Format-Arg (Join-Path $tmpRoot 'elsewhere\update-pc.ps1')) + ' update -Repo ' + (Format-Arg $script:P.Repo))
+    $lines = @(Invoke-TaskMigration)
+    Assert ($lines[0] -match 'not moved to the hidden launcher: the task runs .*elsewhere.update-pc\.ps1, not the pinned copy') "another script: $($lines -join ' / ')"
+    Assert (@(Get-TaskCall 'register').Count -eq $n -and -not (Test-Path -LiteralPath $launcher) -and (Read-JsonFile $pj)['dailyAt'] -eq '17:05') 'refused: nothing changed'
+    Assert ((Test-SameUser 'anthony' 'PC\anthony') -and (Test-SameUser 'PC\anthony' 'pc\Anthony') -and -not (Test-SameUser 'PC\anthony' 'WORK\anthony') -and -not (Test-SameUser '' 'PC\anthony')) 'user forms'
+    # a failure is said, never throws, and changes nothing: pinned.json stays 17:05, no launcher left behind
+    function Register-ScheduledTask { throw 'Access is denied' }
+    $script:StubTask = New-MigTask $ps $plain
+    $lines = @(Invoke-TaskMigration)
+    Assert ($lines[0] -match 'was not moved to the hidden launcher: Access is denied') "failure: $($lines -join ' / ')"
+    Assert ((Read-JsonFile $pj)['dailyAt'] -eq '17:05') 'pinned.json still 17:05'
+    Assert (-not (Test-Path -LiteralPath $launcher)) 'no stray launcher'
+    # and a launcher that was there before is put back as it was
+    [IO.File]::WriteAllText($launcher, "an older line`r`n", [Text.Encoding]::ASCII)
+    $lines = @(Invoke-TaskMigration)
+    Assert ([IO.File]::ReadAllText($launcher) -ceq "an older line`r`n") 'the launcher as it was'
+    # the automatic run only warns, and changes nothing
+    $before = (Get-Text $script:P.Log)
+    Write-TaskStartWarning
+    $after = (Get-Text $script:P.Log)
+    Assert ($after.Substring($before.Length) -match 'WARN the task still starts without the hidden launcher: it is migrated at the next -InstallChartBridge \(unless it is refused there; see its output\) or update-pc\.ps1 register') 'the warning'
+    $script:StubTask = New-FakeTask 'C:\Windows\System32\wscript.exe' ('//B "' + $launcher + '"')
+    Write-TaskStartWarning
+    Assert ((Get-Text $script:P.Log) -eq $after) 'a hidden task: no warning'
+  } finally { $env:OS = $keepOS; $script:P = $keepP }
+}
+
 Test 'no task stub is left behind: the Windows-only register tests below get the real ScheduledTasks commands' {
   foreach ($n in @('New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal', 'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask', 'Get-ScheduledTask', 'Unregister-ScheduledTask', 'Set-ScheduledTask')) {
     $c = Get-Command $n -ErrorAction SilentlyContinue
@@ -1383,6 +1484,32 @@ if ($IsWin) {
     } finally {
       $script:P = $keepP
       Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+  Test '-InstallChartBridge migration on a real throwaway task: its old powershell.exe action becomes wscript.exe //B on the launcher' {
+    $keepP = $script:P; $keepName = $script:TaskName
+    $script:TaskName = 'ChartEngine Updater MIG ' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $TaskName = $script:TaskName
+    Initialize-Paths (Join-Path $tmpRoot 'mig real clone') (Join-Path (Join-Path $tmpRoot 'mig real docs') 'NinjaTrader 8')
+    function Test-Elevated { return $false }      # the CI runner is an administrator; the move refuses an elevated window
+    try {
+      $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+      Put $pinned "# the pinned copy`n"
+      Write-JsonAtomic (Join-Path $script:P.Bin 'pinned.json') @{ commit = 'abc'; dailyAt = '17:05'; repo = $script:P.Repo }
+      $u = Get-CurrentUserName
+      $old = New-ScheduledTaskAction -Execute (Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument (Get-TaskArguments $pinned $script:P.Repo) -WorkingDirectory $script:P.Bin
+      Register-ScheduledTask -TaskName $TaskName -Action $old -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $u) -Principal (New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Limited) -Force | Out-Null
+      $lines = @(Invoke-TaskMigration)
+      $t = Get-ScheduledTask -TaskName $TaskName
+      $a = @($t.Actions)[0]
+      Assert ($a.Execute -match 'System32\\wscript\.exe$' -and $a.Arguments -eq ('//B "' + (Get-HiddenLauncherPath) + '"')) "migrated: $($a.Execute) $($a.Arguments) / $($lines -join ' / ')"
+      $st = Test-TaskStart $t 'update-pc.ps1' { param($o) Get-HiddenLauncherLine (Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe') (Get-TaskArguments (Join-Path $script:P.Bin 'update-pc.ps1') ([string]$o['Repo'])) }
+      Assert $st.ok "status: $($st.text)"
+      Assert (@(Invoke-TaskMigration).Count -eq 0) 'once'
+    } finally {
+      if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false }
+      Remove-Item -LiteralPath (Join-Path $script:P.Bin 'update-pc.hidden.vbs') -Force -ErrorAction SilentlyContinue
+      $script:P = $keepP; $script:TaskName = $keepName
     }
   }
   Test 'register: a task for this user, at sign-in and daily at 09:00 New York time, started hidden, IgnoreNew, -File, no admin' {
@@ -1485,7 +1612,7 @@ if ($IsWin) {
     }
     Assert ([TimeZoneInfo]::Local.Id -eq $origTz -or "$(& tzutil /g)".Trim() -eq $origTz) "the runner's time zone is back: $([TimeZoneInfo]::Local.Id)"
   }
-} else { Skip 'the launcher runs for real (wscript.exe)' 'Windows only'; Skip 'register: the scheduled task' 'Windows only'; Skip 'register in a time zone with DST' 'Windows only' }
+} else { Skip '-InstallChartBridge migration on a real throwaway task' 'Windows only'; Skip 'the launcher runs for real (wscript.exe)' 'Windows only'; Skip 'register: the scheduled task' 'Windows only'; Skip 'register in a time zone with DST' 'Windows only' }
 
 # ---------------------------------------------------------------------------------------------- done
 
