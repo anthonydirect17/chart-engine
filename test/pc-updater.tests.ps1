@@ -1133,26 +1133,57 @@ Test 'the daily time: 17:05 New York is 21:05 UTC in summer and 22:05 UTC in win
   Assert ((ConvertFrom-NewYorkTime '09:30' ([datetime]'2026-12-15')).ToUniversalTime().ToString('HH:mm') -eq '14:30') 'another time'
 }
 
-Test 'the daily time is 09:00 New York by default (Anthony 2026-10-23), an explicit -DailyAt wins, and an old pin keeps its own' {
-  Assert ($DailyAt -eq '09:00' -and $script:DailyAtDefault -eq '09:00') "default $DailyAt / $($script:DailyAtDefault)"
+Test 'the daily times are 09:00 and 17:00 New York by default (Anthony 2026-10-23), an explicit -DailyAt wins, and an old pin reads as Get-PinTimes says' {
+  Assert ((@($DailyAt) -join '|') -eq '09:00,17:00' -and $script:DailyAtDefault -eq '09:00,17:00') "default $DailyAt / $($script:DailyAtDefault)"
   $exe = (Get-Process -Id $PID).Path
   $probe = Join-Path $tmpRoot 'dailyat-probe.ps1'
-  Put $probe ("param([string]`$At = '')`n`$a = @{ NoRun = `$true }`nif (`$At) { `$a['DailyAt'] = `$At }`n. '" + (Join-Path (Join-Path $repoRoot 'nt8') 'update-pc.ps1').Replace("'", "''") + "' @a`n[Console]::Out.WriteLine('DAILYAT=' + `$DailyAt)`n")
+  Put $probe ("param([string]`$At = '')`n`$a = @{ NoRun = `$true }`nif (`$At) { `$a['DailyAt'] = `$At }`n. '" + (Join-Path (Join-Path $repoRoot 'nt8') 'update-pc.ps1').Replace("'", "''") + "' @a`n[Console]::Out.WriteLine('DAILYAT=' + ((Get-DailyTimes `$DailyAt) -join '+'))`n")
   $r = Invoke-Native $exe @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $probe) 120
-  Assert ($r.out -match 'DAILYAT=09:00') "the default: $($r.out) $($r.err)"
+  Assert ($r.out -match 'DAILYAT=09:00\+17:00') "the default: $($r.out) $($r.err)"
   $r = Invoke-Native $exe @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $probe, '-At', '17:05') 120
-  Assert ($r.out -match 'DAILYAT=17:05') "explicit: $($r.out) $($r.err)"
-  # a PC registered before keeps the dailyAt its pinned.json says (-InstallChartBridge re-pins with the same time)
+  Assert ($r.out -match 'DAILYAT=17:05\s') "explicit, one time: $($r.out) $($r.err)"
+  $r = Invoke-Native $exe @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $probe, '-At', '17:00,08:30') 120
+  Assert ($r.out -match 'DAILYAT=08:30\+17:00') "explicit, a list (sorted): $($r.out) $($r.err)"
+  # -File on update-pc.ps1 itself: one argument 09:00,17:00 binds as the list; a bad time is refused before anything runs
+  $upd = Join-Path (Join-Path $repoRoot 'nt8') 'update-pc.ps1'
+  $r = Invoke-Native $exe @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $upd, 'pause', '-NoRun', '-DailyAt', '09:00,17:00') 120
+  Assert ($r.code -eq 0) "-File with -DailyAt 09:00,17:00 binds: $($r.out) $($r.err)"
+  $r = Invoke-Native $exe @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $upd, 'pause', '-NoRun', '-DailyAt', '9:00,17:00') 120
+  Assert ($r.code -ne 0 -and "$($r.out)$($r.err)" -match 'DailyAt') "a bad time is refused: $($r.code) $($r.out) $($r.err)"
+  # a PC registered before: a pin with dailyAt alone (an older copy wrote it) reads 09:00 and 17:00 when it held an old
+  # default (09:00, 17:05) or none, and keeps another time; -InstallChartBridge re-pins with what it reads
   $pj = Join-Path $script:P.Bin 'pinned.json'
   $keep = Get-Text $pj
   try {
-    $pin = Read-JsonFile $pj; $pin['dailyAt'] = '17:05'; Write-JsonAtomic $pj $pin
+    foreach ($case in @(@('17:05', '09:00', '09:00,17:00'), @('09:00', '09:00', '09:00,17:00'), @('', '09:00', '09:00,17:00'), @('08:30', '08:30', '08:30'))) {
+      $pin = Read-JsonFile $pj; $pin.Remove('dailyTimes'); if ($case[0]) { $pin['dailyAt'] = $case[0] } else { $pin.Remove('dailyAt') }; Write-JsonAtomic $pj $pin
+      [void](Install-PinnedUpdater (Join-Path $script:P.Bin 'update-pc.ps1') ([string]$pin['commit']) ([string]$pin['blob']) '-InstallChartBridge')
+      $now = Read-JsonFile $pj
+      Assert ($now['dailyAt'] -eq $case[1] -and (@($now['dailyTimes']) -join ',') -eq $case[2]) "an old pin with '$($case[0])': dailyAt $($now['dailyAt']), dailyTimes $(@($now['dailyTimes']) -join ',')"
+    }
+    # a pin of this version keeps its times, one or two
+    $pin = Read-JsonFile $pj; Set-PinTimes $pin '09:00'; Write-JsonAtomic $pj $pin
     [void](Install-PinnedUpdater (Join-Path $script:P.Bin 'update-pc.ps1') ([string]$pin['commit']) ([string]$pin['blob']) '-InstallChartBridge')
-    Assert ((Read-JsonFile $pj)['dailyAt'] -eq '17:05') 'an old pin keeps 17:05'
-    $pin = Read-JsonFile $pj; $pin.Remove('dailyAt'); Write-JsonAtomic $pj $pin
-    [void](Install-PinnedUpdater (Join-Path $script:P.Bin 'update-pc.ps1') ([string]$pin['commit']) ([string]$pin['blob']) '-InstallChartBridge')
-    Assert ((Read-JsonFile $pj)['dailyAt'] -eq '09:00') 'a pin with no dailyAt takes the default'
+    Assert ((@((Read-JsonFile $pj)['dailyTimes']) -join ',') -eq '09:00') 'one time given by hand stays one'
   } finally { Put $pj $keep }
+}
+
+Test 'Get-DailyTimes and Get-PinTimes: a list or one time, sorted, each once; an older copy''s pin; a stale dailyTimes' {
+  Assert ((@(Get-DailyTimes '17:00,09:00') -join '|') -eq '09:00|17:00') 'a command line list, sorted'
+  Assert ((@(Get-DailyTimes @('17:00', '09:00', '09:00')) -join '|') -eq '09:00|17:00') 'a PowerShell list, each once'
+  Assert (@(Get-DailyTimes '08:30').Count -eq 1) 'one time'
+  foreach ($bad in @('', '9:00', '09:00,25:00', 'noon')) { $threw = $false; try { [void](Get-DailyTimes $bad) } catch { $threw = $true }; Assert $threw "refused: '$bad'" }
+  Assert ((@(Get-PinTimes $null) -join ',') -eq '09:00,17:00') 'no pin: the default'
+  Assert ((@(Get-PinTimes @{ dailyAt = '09:00'; dailyTimes = @('09:00') }) -join ',') -eq '09:00') 'this version: one time kept'
+  Assert ((@(Get-PinTimes @{ dailyAt = '09:00'; dailyTimes = @('09:00', '17:00') }) -join ',') -eq '09:00,17:00') 'this version: both'
+  # an older copy's register wrote dailyAt after this version wrote dailyTimes: dailyAt wins (it is newer)
+  Assert ((@(Get-PinTimes @{ dailyAt = '08:30'; dailyTimes = @('09:00', '17:00') }) -join ',') -eq '08:30') 'a stale dailyTimes'
+  $p = @{}; Set-PinTimes $p '17:00,09:00'
+  $back = ConvertFrom-JsonText (ConvertTo-Json -InputObject $p -Depth 4)
+  Assert ($back['dailyAt'] -eq '09:00' -and (@($back['dailyTimes']) -join ',') -eq '09:00,17:00') 'written: dailyAt (for an older copy) and dailyTimes'
+  $p = @{}; Set-PinTimes $p '08:30'
+  $back = ConvertFrom-JsonText (ConvertTo-Json -InputObject $p -Depth 4)
+  Assert ((@(Get-PinTimes $back) -join ',') -eq '08:30') 'one time round trips through JSON'
 }
 
 # The scheduled task's commands, stubbed (no task is ever made or touched here): each records what it was given. A test
@@ -1367,7 +1398,7 @@ Test 'status checks the task''s start (review N1): ours exactly as register writ
   } finally { $script:P = $keepP }
 }
 
-Test '-InstallChartBridge moves a task that is not hidden to the launcher once, keeping -Repo; 17:05 becomes 09:00, another time is kept; a refusal or failure is said (stubbed)' {
+Test '-InstallChartBridge moves a task that is not hidden to the launcher once, keeping -Repo; 17:05 becomes 09:00 and 17:00, another time is kept; a refusal or failure is said (stubbed)' {
   $keepP = $script:P; $keepOS = $env:OS
   Initialize-Paths (Join-Path $tmpRoot 'mig clone') (Join-Path (Join-Path $tmpRoot 'mig docs') 'NinjaTrader 8')
   . $script:TaskStubs
@@ -1393,14 +1424,18 @@ Test '-InstallChartBridge moves a task that is not hidden to the launcher once, 
     $launcher = Get-HiddenLauncherPath
     Assert ($lines[0] -eq "The scheduled task now starts hidden: wscript.exe //B $launcher (it was the task's action ($ps)).") "said: $($lines -join ' / ')"
     Assert ($lines[1] -eq "  kept: -Repo $($script:P.Repo) and the pinned copy $pinned; the triggers, user and settings are register's own (they replace the old ones)") "kept: $($lines[1])"
-    Assert ($lines[2] -match 'daily check: 09:00 New York time \(it was 17:05; Anthony 2026-10-23') "09:00: $($lines[2])"
+    Assert ($lines[2] -match 'daily checks: 09:00 and 17:00 New York time \(it was 17:05; Anthony 2026-10-23: twice a day') "09:00 and 17:00: $($lines[2])"
     $reg = @(Get-TaskCall 'register')
     Assert ($reg.Count -eq 1 -and $reg[0].Action.Arguments -ceq ('//B "' + $launcher + '"') -and $reg[0].Action.WorkingDirectory -eq $script:P.Bin) 'the task: wscript.exe //B on the launcher'
-    Assert ($reg[0].Trigger[1].StartBoundary -eq (ConvertFrom-NewYorkTime '09:00').ToString('yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)) "daily at 09:00: $($reg[0].Trigger[1].StartBoundary)"
-    Assert ((Read-JsonFile $pj)['dailyAt'] -eq '09:00') 'pinned.json follows'
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    Assert ($reg[0].Trigger.Count -eq 3 -and $reg[0].Trigger[0].Kind -eq 'logon') "at sign-in and two daily: $($reg[0].Trigger.Count)"
+    Assert ($reg[0].Trigger[1].StartBoundary -eq (ConvertFrom-NewYorkTime '09:00').ToString('yyyy-MM-ddTHH:mm:ss', $inv)) "daily at 09:00: $($reg[0].Trigger[1].StartBoundary)"
+    Assert ($reg[0].Trigger[2].Kind -eq 'daily' -and $reg[0].Trigger[2].StartBoundary -eq (ConvertFrom-NewYorkTime '17:00').ToString('yyyy-MM-ddTHH:mm:ss', $inv)) "daily at 17:00: $($reg[0].Trigger[2].StartBoundary)"
+    $now = Read-JsonFile $pj
+    Assert ($now['dailyAt'] -eq '09:00' -and (@($now['dailyTimes']) -join ',') -eq '09:00,17:00') 'pinned.json follows'
     Assert ([IO.File]::ReadAllText($launcher) -ceq ((Get-HiddenLauncherLine $ps (Get-TaskArguments $pinned $script:P.Repo)) + "`r`n")) 'the launcher register writes'
     Assert (@(Invoke-TaskMigration).Count -eq 0 -and @(Get-TaskCall 'register').Count -eq 1) 'once: a task on its own launcher is left alone'
-    Assert ((Get-Text $script:P.Log) -match 'the scheduled task moved to the hidden launcher by -InstallChartBridge; daily at 09:00') 'logged'
+    Assert ((Get-Text $script:P.Log) -match 'the scheduled task moved to the hidden launcher by -InstallChartBridge; daily at 09:00 and 17:00 New York time \(it was 17:05\)') 'logged'
     # a hand-made launcher and another time: the time is kept
     $hand = Join-Path (Join-Path $tmpRoot 'mig hidden') 'chartengine_updater.vbs'
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $hand) | Out-Null
@@ -1409,7 +1444,8 @@ Test '-InstallChartBridge moves a task that is not hidden to the launcher once, 
     Write-JsonAtomic $pj @{ commit = 'abc'; dailyAt = '08:30'; repo = $script:P.Repo }
     $script:StubTask = New-MigTask 'C:\Windows\System32\wscript.exe' ('"' + $hand + '"')
     $lines = @(Invoke-TaskMigration)
-    Assert ($lines[2] -eq '  daily check: 08:30 New York time' -and (Read-JsonFile $pj)['dailyAt'] -eq '08:30' -and (Test-Path -LiteralPath $hand)) "kept 08:30: $($lines -join ' / ')"
+    Assert ($lines[2] -eq '  daily checks: 08:30 New York time' -and (Read-JsonFile $pj)['dailyAt'] -eq '08:30' -and (Test-Path -LiteralPath $hand)) "kept 08:30: $($lines -join ' / ')"
+    Assert (@((Read-JsonFile $pj)['dailyTimes']).Count -eq 1 -and @(Get-TaskCall 'register')[-1].Trigger.Count -eq 2) 'one daily time, one daily trigger'
     # refused by name: the task runs another clone; nothing changed
     Write-JsonAtomic $pj @{ commit = 'abc'; dailyAt = '17:05'; repo = $script:P.Repo }
     $script:StubTask = New-MigTask $ps (Get-TaskArguments $pinned (Join-Path $tmpRoot 'other clone'))
@@ -1454,6 +1490,110 @@ Test '-InstallChartBridge moves a task that is not hidden to the launcher once, 
     Write-TaskStartWarning
     Assert ((Get-Text $script:P.Log) -eq $after) 'a hidden task: no warning'
   } finally { $env:OS = $keepOS; $script:P = $keepP }
+}
+
+Test 'the automatic run adds the 17:00 check to its own hidden task (the schedule only); refused by name otherwise; moves and leaves as before; status lines (stubbed)' {
+  $keepP = $script:P; $keepOS = $env:OS; $keepSelf = $script:UpdaterSelf
+  Initialize-Paths (Join-Path $tmpRoot 'add clone') (Join-Path (Join-Path $tmpRoot 'add docs') 'NinjaTrader 8')
+  . $script:TaskStubs
+  $script:Sets = New-Object System.Collections.ArrayList
+  function Set-ScheduledTask { param([string]$TaskName, $Trigger) [void]$script:Sets.Add((@(@($Trigger) | ForEach-Object { "$($_.Kind):$($_.StartBoundary)" }) -join '|')) }
+  function Get-CurrentUserName { return 'PC\anthony' }
+  function Test-Elevated { return $script:Elevated }
+  $script:Elevated = $false
+  $inv = [Globalization.CultureInfo]::InvariantCulture
+  function L([string]$Ny) { return (ConvertFrom-NewYorkTime $Ny).ToString('yyyy-MM-ddTHH:mm:ss', $inv) }
+  function New-DailyStub([string]$Sb) { return [pscustomobject]@{ CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskDailyTrigger' }; StartBoundary = $Sb; Kind = 'daily' } }
+  $logonT = [pscustomobject]@{ CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskLogonTrigger' }; StartBoundary = ''; Kind = 'logon' }
+  # a task as Get-ScheduledTask returns it: its action, user and triggers (the sign-in one first)
+  function Set-Stub([string]$Execute, [string]$Arguments, [object[]]$Daily, [string]$User = 'PC\anthony') {
+    $script:StubTask = [pscustomobject]@{ TaskName = 'ChartEngine Updater'; State = 'Ready'; Actions = @([pscustomobject]@{ Execute = $Execute; Arguments = $Arguments })
+      Principal = [pscustomobject]@{ UserId = $User }; Triggers = @(@($logonT) + @($Daily)) }
+  }
+  try {
+    $env:OS = 'Windows_NT'
+    $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+    Put $pinned "# the pinned copy`n"
+    $pj = Join-Path $script:P.Bin 'pinned.json'
+    Write-JsonAtomic $pj @{ commit = 'abc'; dailyAt = '09:00'; repo = $script:P.Repo }      # as a copy older than this change wrote it
+    $pinText = Get-Text $pj
+    Write-TaskLauncher $pinned
+    $launcher = Get-HiddenLauncherPath
+    $launcherText = Get-Text $launcher
+    $wscript = Get-SystemExe 'System32\wscript.exe'
+    $hidden = '//B "' + $launcher + '"'
+    $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $script:UpdaterSelf = $pinned                  # the task's own run: the pinned copy
+    # 1. one daily trigger (09:00, as register made it before this change): the 17:00 one is added, the rest kept
+    Set-Stub $wscript $hidden @(New-DailyStub (L '09:00'))
+    $res = Sync-DailyTrigger
+    Assert ($script:Sets.Count -eq 1) "one Set-ScheduledTask: $($script:Sets.Count)"
+    Assert ($script:Sets[0] -eq ('logon:|daily:' + (L '09:00') + '|daily:' + (L '17:00'))) "the sign-in trigger kept, 09:00 and 17:00 (wall-clock): $($script:Sets[0])"
+    Assert ($res.ok -and -not $res.note -and $res.have -eq $res.want) "recorded: ok $($res.ok), note '$($res.note)'"
+    Assert ((Get-Text $script:P.Log) -match 'the daily check at 17:00 New York time was added to the task') 'logged'
+    Assert (@(Get-TaskCall 'register').Count -eq 0 -and @(Get-TaskCall 'action').Count -eq 0) 'the action is never touched: no register, no new action'
+    Assert ((Get-Text $launcher) -ceq $launcherText -and (Get-Text $pj) -ceq $pinText) 'the launcher and pinned.json as they were'
+    # 2. refused by name, nothing changed, the reason recorded for status
+    $cases = @(
+      @{ why = 'does not start through its own hidden launcher yet: -InstallChartBridge or update-pc.ps1 register moves it'; set = { Set-Stub $ps (Get-TaskArguments $pinned $script:P.Repo) @(New-DailyStub (L '09:00')) } },
+      @{ why = 'this run is elevated'; set = { $script:Elevated = $true; Set-Stub $wscript $hidden @(New-DailyStub (L '09:00')) } },
+      @{ why = 'the task runs as PC\\someone, this run as PC\\anthony'; set = { $script:Elevated = $false; Set-Stub $wscript $hidden @(New-DailyStub (L '09:00')) 'PC\someone' } },
+      @{ why = 'not the task.s pinned copy'; set = { $script:UpdaterSelf = $keepSelf; Set-Stub $wscript $hidden @(New-DailyStub (L '09:00')) } })
+    foreach ($c in $cases) {
+      $script:Sets.Clear()
+      & $c.set
+      $res = Sync-DailyTrigger
+      Assert ($script:Sets.Count -eq 0) "nothing changed: $($c.why)"
+      Assert ($res.ok -and $res.note -match ('the daily check at 17:00 New York time was not added: .*' + $c.why)) "said: $($res.note)"
+      $s = @{}; Save-TriggerCheck $s $res
+      Assert ($s['dailyTrigger']['note'] -eq $res.note) 'state.json keeps the reason'
+    }
+    $script:UpdaterSelf = $pinned
+    # 3. both there: nothing to do
+    $script:Sets.Clear()
+    Set-Stub $wscript $hidden @((New-DailyStub (L '09:00')), (New-DailyStub (L '17:00')))
+    $res = Sync-DailyTrigger
+    Assert ($script:Sets.Count -eq 0 -and $res.ok -and -not $res.note) 'both there: nothing'
+    # 4. both drifted (or kept on UTC): moved back, by any update run, as before this change
+    $script:UpdaterSelf = $keepSelf
+    Set-Stub $wscript $hidden @((New-DailyStub '2026-01-01T03:00:00'), (New-DailyStub ((L '17:00') + '-04:00')))
+    $res = Sync-DailyTrigger
+    Assert ($script:Sets.Count -eq 1 -and $script:Sets[0] -eq ('logon:|daily:' + (L '09:00') + '|daily:' + (L '17:00'))) "moved: $($script:Sets -join ' / ')"
+    Assert ((Get-Text $script:P.Log) -match 'the daily check moved from .*03:00.* to .* \(09:00 and 17:00 New York time\) \(it was kept on UTC') 'logged, with why'
+    # 5. more daily triggers than times, or none: left to register, said
+    $script:Sets.Clear()
+    Set-Stub $wscript $hidden @((New-DailyStub (L '09:00')), (New-DailyStub (L '17:00')), (New-DailyStub '2026-01-01T12:00:00'))
+    $res = Sync-DailyTrigger
+    Assert ($script:Sets.Count -eq 0 -and $res.note -match 'the task has 3 daily triggers .*more than the daily times \(09:00 and 17:00 New York time\); register sets them') "left: $($res.note)"
+    Set-Stub $wscript $hidden @()
+    $res = Sync-DailyTrigger
+    Assert ($script:Sets.Count -eq 0 -and $res.note -match 'no daily trigger') "none: $($res.note)"
+    # 6. a pin of this version with one time (given by hand): one trigger is right, nothing added
+    $script:UpdaterSelf = $pinned
+    $pin = Read-JsonFile $pj; Set-PinTimes $pin '09:00'; Write-JsonAtomic $pj $pin
+    Set-Stub $wscript $hidden @(New-DailyStub (L '09:00'))
+    $res = Sync-DailyTrigger
+    Assert ($script:Sets.Count -eq 0 -and -not $res.note) 'one time by hand: nothing added'
+    Write-JsonAtomic $pj @{ commit = 'abc'; dailyAt = '09:00'; repo = $script:P.Repo }
+    # 7. Task Scheduler refuses (a task registered from an elevated window): recorded, nothing else changed
+    function Set-ScheduledTask { throw 'Access is denied.' }
+    $res = Sync-DailyTrigger
+    Assert (-not $res.ok -and $res.error -match 'Access is denied') "failure recorded: $($res.error)"
+    # status: both times, their clock time and next run; a missing one and a stray one said
+    $now = [datetime]'2026-10-23 12:00'
+    $l9 = (ConvertFrom-NewYorkTime '09:00' $now).ToString('HH:mm', $inv); $l17 = (ConvertFrom-NewYorkTime '17:00' $now).ToString('HH:mm', $inv)
+    Set-Stub $wscript $hidden @((New-DailyStub (L '09:00')), (New-DailyStub (L '17:00')))
+    $lines = @(Get-DailyLines $script:StubTask @('09:00', '17:00') $now)
+    Assert ($lines.Count -eq 2 -and $lines[0] -eq "09:00 New York time, $l9 on this PC's clock, next run $(Get-NextDailyRun $l9 $now)" -and $lines[1] -eq "17:00 New York time, $l17 on this PC's clock, next run $(Get-NextDailyRun $l17 $now)") "lines: $($lines -join ' / ')"
+    Assert ((Get-NextDailyRun '09:00' $now) -eq '2026-10-24 09:00' -and (Get-NextDailyRun '17:00' $now) -eq '2026-10-23 17:00') 'the next run: later today, or tomorrow'
+    Set-Stub $wscript $hidden @((New-DailyStub (L '09:00')), (New-DailyStub '2026-01-01T03:00:00'))
+    $lines = @(Get-DailyLines $script:StubTask @('09:00', '17:00') $now)
+    Assert ($lines.Count -eq 3 -and $lines[1] -match '^17:00 New York time, .*NO TRIGGER at that time yet' -and $lines[2] -match 'a daily trigger at 03:00 .*DRIFTED, the next run moves it') "lines: $($lines -join ' / ')"
+    # register: one daily trigger per time
+    Register-HiddenTask 'PC\anthony' $pinned @(Get-DailyLocal @('09:00', '17:00'))
+    $reg = @(Get-TaskCall 'register')[-1]
+    Assert ($reg.Trigger.Count -eq 3 -and $reg.Trigger[0].Kind -eq 'logon' -and $reg.Trigger[1].StartBoundary -eq (L '09:00') -and $reg.Trigger[2].StartBoundary -eq (L '17:00')) "register: sign-in, 09:00, 17:00: $(@($reg.Trigger | ForEach-Object { $_.StartBoundary }) -join ',')"
+  } finally { $env:OS = $keepOS; $script:P = $keepP; $script:UpdaterSelf = $keepSelf }
 }
 
 Test 'no task stub is left behind: the Windows-only register tests below get the real ScheduledTasks commands' {
@@ -1512,7 +1652,7 @@ if ($IsWin) {
       $script:P = $keepP; $script:TaskName = $keepName
     }
   }
-  Test 'register: a task for this user, at sign-in and daily at 09:00 New York time, started hidden, IgnoreNew, -File, no admin' {
+  Test 'register: a task for this user, at sign-in and daily at 09:00 and 17:00 New York time, started hidden, IgnoreNew, -File, no admin' {
     $script:TaskName = 'ChartEngine Updater CI ' + [guid]::NewGuid().ToString('N').Substring(0, 8)
     $TaskName = $script:TaskName
     try {
@@ -1528,26 +1668,48 @@ if ($IsWin) {
       Assert ($a.WorkingDirectory -eq $script:P.Bin -and (Test-Path (Join-Path $script:P.Bin 'update-pc.ps1'))) "working folder $($a.WorkingDirectory)"
       Assert ($a.Arguments -notmatch '(?i)(^|\s)[-/](e|ec|en\w*|c|co\w*)(\s|$)') "no command string: $($a.Arguments)"
       $kinds = @($t.Triggers | ForEach-Object { $_.CimClass.CimClassName })
-      Assert ($kinds.Count -eq 2 -and $kinds -contains 'MSFT_TaskLogonTrigger' -and $kinds -contains 'MSFT_TaskDailyTrigger') ($kinds -join ',')
-      $daily = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })[0]
-      Assert ($daily.DaysInterval -eq 1) "every day: $($daily.DaysInterval)"
+      Assert ($kinds.Count -eq 3 -and @($kinds | Where-Object { $_ -eq 'MSFT_TaskLogonTrigger' }).Count -eq 1 -and @($kinds | Where-Object { $_ -eq 'MSFT_TaskDailyTrigger' }).Count -eq 2) ($kinds -join ',')
+      $dailies = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })
       $want = (ConvertFrom-NewYorkTime '09:00').ToString('HH:mm')
-      Assert (([datetime]$daily.StartBoundary).ToString('HH:mm') -eq $want) "daily at $want local (09:00 New York, the default): $($daily.StartBoundary)"
-      Assert ($daily.StartBoundary -notmatch '(Z|[+-]\d\d:\d\d)$') "local wall-clock time, no UTC offset: $($daily.StartBoundary)"
-      Assert (-not $daily.Repetition.Interval) "no repetition: '$($daily.Repetition.Interval)'"
+      $want17 = (ConvertFrom-NewYorkTime '17:00').ToString('HH:mm')
+      $wantBoth = (@($want, $want17) | Sort-Object) -join ','
+      $got = @($dailies | ForEach-Object { ([datetime]$_.StartBoundary).ToString('HH:mm') } | Sort-Object)
+      Assert (($got -join ',') -eq $wantBoth) "daily at $want and $want17 local (09:00 and 17:00 New York, the default): $($got -join ',')"
+      foreach ($daily in $dailies) {
+        Assert ($daily.DaysInterval -eq 1) "every day: $($daily.DaysInterval)"
+        Assert ($daily.StartBoundary -notmatch '(Z|[+-]\d\d:\d\d)$') "local wall-clock time, no UTC offset: $($daily.StartBoundary)"
+        Assert (-not $daily.Repetition.Interval) "no repetition: '$($daily.Repetition.Interval)'"
+      }
       Assert ($t.Settings.StartWhenAvailable -eq $false) 'a missed daily run is not started later (it could land in the trading day)'
       $logon = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' })[0]
       Assert ($logon.Delay -eq 'PT2M' -and $logon.UserId) "logon trigger for this user, delay $($logon.Delay)"
       Assert (-not $logon.Repetition.Interval) 'the sign-in check does not repeat'
       Assert ($t.Settings.ExecutionTimeLimit -eq 'PT30M') "time limit $($t.Settings.ExecutionTimeLimit)"
-      # a drifted daily time (time zone or DST dates unlike New York's) is moved back at the next run
-      $wrong = New-ScheduledTaskTrigger -Daily -At ([datetime]'2026-01-01 03:00')
-      Set-ScheduledTask -TaskName $TaskName -Trigger @(@($t.Triggers | Where-Object { $_.CimClass.CimClassName -ne 'MSFT_TaskDailyTrigger' }) + @($wrong)) | Out-Null
-      Sync-DailyTrigger
+      # drifted daily times (time zone or DST dates unlike New York's) are moved back at the next run
+      $logonOnly = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -ne 'MSFT_TaskDailyTrigger' })
+      $wrong = @((New-DailyTrigger ([datetime]'2026-01-01 03:00')), (New-DailyTrigger ([datetime]'2026-01-01 04:00')))
+      Set-ScheduledTask -TaskName $TaskName -Trigger (@($logonOnly) + $wrong) | Out-Null
+      [void](Sync-DailyTrigger)
       $t2 = Get-ScheduledTask -TaskName $TaskName
-      $d2 = @($t2.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })[0]
-      Assert (([datetime]$d2.StartBoundary).ToString('HH:mm') -eq $want -and $d2.StartBoundary -notmatch '(Z|[+-]\d\d:\d\d)$') "moved back to $want local, no offset: $($d2.StartBoundary)"
-      Assert (@($t2.Triggers).Count -eq 2 -and (Get-Text $script:P.Log) -match 'the daily check moved from 03:00') 'the sign-in trigger kept, and the move logged'
+      $d2 = @($t2.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })
+      $got = @($d2 | ForEach-Object { ([datetime]$_.StartBoundary).ToString('HH:mm') } | Sort-Object)
+      Assert (($got -join ',') -eq $wantBoth -and @($d2 | Where-Object { $_.StartBoundary -match '(Z|[+-]\d\d:\d\d)$' }).Count -eq 0) "moved back to $want and $want17 local, no offset: $($got -join ',')"
+      Assert (@($t2.Triggers).Count -eq 3 -and (Get-Text $script:P.Log) -match 'the daily check moved from 03:00,04:00') 'the sign-in trigger kept, and the move logged'
+      # a task with the 09:00 check alone (registered before 09:00 and 17:00): the task's own run adds 17:00 in place
+      $keepSelf = $script:UpdaterSelf
+      try {
+        function Test-Elevated { return $false }      # the CI runner is an administrator; the add refuses an elevated run
+        $script:UpdaterSelf = Join-Path $script:P.Bin 'update-pc.ps1'
+        $one = @(New-DailyTrigger (ConvertFrom-NewYorkTime '09:00'))
+        Set-ScheduledTask -TaskName $TaskName -Trigger (@($logonOnly) + $one) | Out-Null
+        $before = @((Get-ScheduledTask -TaskName $TaskName).Actions)[0]
+        $res = Sync-DailyTrigger
+        $t3 = Get-ScheduledTask -TaskName $TaskName
+        $got = @($t3.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' } | ForEach-Object { ([datetime]$_.StartBoundary).ToString('HH:mm') } | Sort-Object)
+        Assert ($res.ok -and -not $res.note -and ($got -join ',') -eq $wantBoth) "17:00 added: $($got -join ',') / $($res.note) $($res.error)"
+        $a3 = @($t3.Actions)[0]
+        Assert ($a3.Execute -eq $before.Execute -and $a3.Arguments -eq $before.Arguments -and @($t3.Triggers).Count -eq 3) 'the action and the sign-in trigger as they were'
+      } finally { $script:UpdaterSelf = $keepSelf }
       Assert-Code (Invoke-Unregister) 0 'unregister OK'
       Assert (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 'gone'
       Assert (-not (Test-Path -LiteralPath $launcher)) 'the launcher gone too'

@@ -137,7 +137,7 @@ test('the task moves to the hidden launcher at -InstallChartBridge (after the re
   assert.ok(tm.indexOf('Write-TaskLauncher $pinned') < tm.indexOf('Register-HiddenTask'), 'the launcher before the task');
   assert.match(tm, /\} catch \{\s*\$line = "the scheduled task was not moved to the hidden launcher: /, 'a failure never stops -InstallChartBridge');
   // review of #66: a failed move changes nothing; refused from an elevated window or as another user
-  assert.ok(tm.indexOf('Register-HiddenTask $me $pinned $local') < tm.indexOf("$pin['dailyAt'] = $at"), 'pinned.json only after the task');
+  assert.ok(tm.indexOf('Register-HiddenTask $me $pinned $local') < tm.indexOf('Set-PinTimes $pin $times'), 'pinned.json only after the task');
   assert.match(tm, /elseif \(Test-Elevated\)/);
   assert.match(tm, /elseif \(-not \(Test-SameUser \$taskUser \$me\)\)/);
   assert.match(tm, /if \(-not \(Test-SamePath \(\[string\]\$o\['#script'\]\) \$pinned\)\)/);
@@ -145,6 +145,25 @@ test('the task moves to the hidden launcher at -InstallChartBridge (after the re
   assert.match(upd, /if \(-not \$DryRun\) \{ Save-TriggerCheck \$state \(Sync-DailyTrigger\); Write-TaskStartWarning \}/);
   const warn = src.slice(src.indexOf('function Write-TaskStartWarning'), src.indexOf('function Invoke-Register'));
   assert.ok(!/Register-ScheduledTask|Set-ScheduledTask|Unregister-ScheduledTask|Write-TaskLauncher/.test(warn), 'the automatic run changes nothing');
+});
+
+test('the automatic run may add a missing daily trigger (Anthony 2026-10-23: 09:00 and 17:00), a schedule change only, in the task\'s own run', () => {
+  const src = code(updater);
+  const sync = src.slice(src.indexOf('function Sync-DailyTrigger'), src.indexOf('function Get-DailyTimes'));
+  // the schedule only: never the action, the launcher, the pinned copy or a new task
+  assert.ok(!/Register-ScheduledTask|New-ScheduledTaskAction|Unregister-ScheduledTask|Write-TaskLauncher|Write-HiddenLauncher|Install-PinnedUpdater|Write-JsonAtomic/.test(sync), 'Sync-DailyTrigger changes the triggers only');
+  assert.strictEqual([...sync.matchAll(/Set-ScheduledTask /g)].length, 1, 'one Set-ScheduledTask, with -Trigger only');
+  assert.match(sync, /Set-ScheduledTask -TaskName \$TaskName -Trigger \(@\(\$plan\.others\) \+ @\(\$plan\.local \| ForEach-Object \{ New-DailyTrigger \$_ \}\)\) \| Out-Null/);
+  // an add goes through the own-run guards first
+  const add = sync.indexOf("if ($plan.action -eq 'add') {"), guard = sync.indexOf('$why = Get-AddTriggerProblem $task'), set = sync.indexOf('Set-ScheduledTask ');
+  assert.ok(add > 0 && guard > add && set > guard, 'the guards before the change');
+  const g = src.slice(src.indexOf('function Get-AddTriggerProblem'));
+  const body = g.slice(0, g.indexOf('\n}\n'));
+  for (const s of ['Get-TaskLauncherPath $Task', "Test-SamePath ([string]$o['#script']) $pinned", 'Test-SamePath $script:UpdaterSelf $pinned', 'Test-Elevated', 'Test-SameUser $u $me']) assert.ok(body.includes(s), 'guard: ' + s);
+  // the update run takes updater.lock before the trigger check: two triggers never run an update at once
+  const upd = src.slice(src.indexOf('function Invoke-Update('), src.indexOf('function Invoke-Status'));
+  assert.ok(upd.indexOf('$lock = Enter-Lock') < upd.indexOf('Sync-DailyTrigger'), 'the lock first');
+  assert.match(src, /\[IO\.File\]::Open\(\$script:P\.Lock, 'OpenOrCreate', 'ReadWrite', 'None'\)/);
 });
 
 test('no message sends Anthony to install.ps1 (it copies .cs files without the prompt); recovery is update-pc.ps1 repair', () => {
@@ -156,20 +175,23 @@ test('no message sends Anthony to install.ps1 (it copies .cs files without the p
   assert.ok(!/install\.ps1/.test(section), 'the README section names install.ps1');
 });
 
-test('the schedule (Anthony, 2026-09-30; 09:00 since 2026-10-23): at sign-in and once a day at 09:00 New York time, nothing repeating, no late start', () => {
+test('the schedule (Anthony, 2026-09-30; 09:00 and 17:00 since 2026-10-23): at sign-in and twice a day at 09:00 and 17:00 New York time, nothing repeating, no late start', () => {
   const src = code(updater);
-  assert.match(src, /\[string\]\$DailyAt = '09:00'/);
-  assert.match(src, /\$script:DailyAtDefault = '09:00'/);
-  assert.ok(!/'17:05'/.test(src.replace("$script:DailyAtBefore = '17:05'", '')), 'no 17:05 default left in the code (only the old default, for the migration)');
-  assert.strictEqual(src.split('$script:DailyAtBefore').length - 1, 2, 'the old default: its definition and the one use (the migration)');
-  assert.strictEqual([...src.matchAll(/Get-Field \$(pin|old) 'dailyAt' \$script:DailyAtDefault/g)].length, 4, 'every read of the pin falls back on the one default');
+  assert.match(src, /\[string\[\]\]\$DailyAt = '09:00,17:00'/);
+  assert.match(src, /\$script:DailyAtDefault = '09:00,17:00'/);
+  assert.match(src, /\$script:DailyAtBefore = @\('17:05', '09:00'\)/);
+  assert.ok(!/'17:05'/.test(src.replace("$script:DailyAtBefore = @('17:05', '09:00')", '')), 'no 17:05 left in the code (only the old default, read in an old pin)');
+  assert.strictEqual(src.split('$script:DailyAtBefore').length - 1, 2, 'the old defaults: their definition and the one use (Get-PinTimes)');
+  // every read of the pin's times goes through Get-PinTimes (the migration reads dailyAt once more, only to say what it was)
+  assert.strictEqual([...src.matchAll(/Get-Field \$\w+ 'dailyAt'/g)].length, 2, 'dailyAt read in Get-PinTimes and the migration note');
+  assert.strictEqual([...src.matchAll(/\['dailyAt'\] = /g)].length, 1, 'dailyAt written by Set-PinTimes alone');
   assert.match(src, /New-ScheduledTaskTrigger -AtLogOn -User \$User/);
   assert.match(src, /\$logon\.Delay = 'PT2M'/);
-  assert.match(src, /\$daily = New-DailyTrigger \$Local/);
+  assert.match(src, /\$daily = @\(\$Local \| ForEach-Object \{ New-DailyTrigger \$_ \}\)/);
   // local wall-clock time with no UTC offset: Task Scheduler then keeps 17:05 on this PC's clock across DST
   assert.match(src, /function New-DailyTrigger[\s\S]{0,120}New-ScheduledTaskTrigger -Daily -At \$Local\s+\$t\.StartBoundary = \$Local\.ToString\('yyyy-MM-ddTHH:mm:ss'/);
   assert.strictEqual([...src.matchAll(/New-ScheduledTaskTrigger -Daily/g)].length, 1, 'every daily trigger is made by New-DailyTrigger');
-  assert.match(src, /-Trigger @\(\$logon, \$daily\)/);
+  assert.match(src, /-Trigger \(@\(\$logon\) \+ \$daily\)/);
   assert.ok(!/RepetitionInterval|StartWhenAvailable|\$Hours/.test(src), 'no repetition, no late start of a missed run');
   assert.match(src, /-MultipleInstances IgnoreNew/);
   assert.match(src, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 30\)/);
