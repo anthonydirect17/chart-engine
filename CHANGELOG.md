@@ -1,5 +1,63 @@
 # Changelog
 
+## ChartBridge 0.6.8 and chart 1.38.1 (2026-10-23): the history gap after a reload, the League chart and the Drone sky on NQ
+
+Two live bugs on WORK (2026-10-23, page 1.38.0, ChartBridge 0.6.7), and Anthony's choice for the League chart. ChartBridge 0.6.8
+is a recompile; the page works without it (`minChartBridge` stays 0.6.2). Only ChartBridge's market data and history path
+changes: nothing on any order path (ChartBridgeOrders.cs and the other order files are untouched; `npm run check:orders` passes).
+
+- **The gap after a reload** (an NQ 1 min chart with no bars from about 10:40 to the live bar at 11:08; a 5 min chart the
+  same from about 10:25 to 11:05). Verified in the Mono harness on the 0.6.7 code first (`nt8/check/GapHarness.cs`, the same
+  case: NinjaTrader's minute answer ending 28 minutes before the clock, its 20,000 last trades starting after that, 28
+  minutes of live trades seen before the subscribe): "gap REPRODUCED on today's code: minuteTailRebuilt 0 and no bar from
+  10:40 to 11:08 ET". NinjaTrader's 1-minute answer ended early, the 20,000 trades could not rebuild its last bar, and the
+  page fills nothing between the last history bar and the first live trade.
+  - ChartBridge 0.6.8 keeps a **minute book** per instrument: 1-minute bars from every live trade it sees, stamped at the
+    close as NinjaTrader's (a trade at hh:mm:00.000 in the bar that ends then), about two sessions (3,000 bars), from the
+    first whole minute after it started listening or the feed came back, reset on a feed drop or a contract change.
+  - The seam: a subscribe takes the book's lock and then the page's Pending lock (OnMarketData's order) and copies the book
+    in the same moment it clears the held trades, so no trade is in both and none in neither. NinjaTrader's bars are kept
+    up to the first minute the book has whole, the book's bars follow, and the 20,000-trade request is not made. `ready`
+    carries `filled` (the book's bars sent). When the book does not reach back to NinjaTrader's last bar (ChartBridge
+    started later, a feed drop), 0.6.7's path runs and a warn status names the hole: "No bars from 10:41 to 11:08 ET:
+    NinjaTrader's minute history ends at 10:40" (open market only: the 17:00 break and weekends are not a hole).
+  - After the fix, the same harness case: continuous minutes from 09:30 to the ready minute, none twice, the volume of the
+    bars and the trades after `ready` equal to every trade fed, each held trade sent once, `filled` 28; and with 18,022
+    trades fed on another thread during the subscribe, every trade once.
+- **The League chart on LOADING for 50 s and more**: a load's minute history and last-trades requests now wait at most 20 s;
+  then the load goes ready with what ChartBridge has (its minute book) and a status says so; a request given up and still
+  unanswered is not asked again for that instrument (for up to 2 minutes, or until NinjaTrader answers), so reloads do not
+  pile requests on a NinjaTrader that is not answering.
+- **The reload of every window** (WORK 2026-10-23, 11:09: every load matched false with no tick backfill, 23 to 32 s, MNQ
+  185 s): the book does not depend on the tick backfill or on how late or stale NinjaTrader's minute answer is (the copy is
+  taken at the subscribe; every trade after it is held). A minute answer past its 20 s limit is no longer a loss of history:
+  ChartBridge keeps NinjaTrader's minute answers per instrument in memory (late ones too) and a timed-out load starts from
+  them joined to the book. And 0.6.7's own path: when the last trades miss NinjaTrader's last minute, the minutes they hold
+  after it are now kept (0.6.7 threw them away with it). Harness: three instruments reloading at once, stale answers 28
+  minutes old, no tick backfill, one answer after its limit, trades flowing on another thread: every chart continuous,
+  every trade once.
+- **History notes** (WORK's request): "Minute history failed", "last trades for the forming minute not loaded", "tick
+  window failed", a request given up or answered late, and a hole said on screen go to `/diag` (`historyNotes`, the last
+  50) and `history.log` next to copier.log, with the time and the instrument.
+- `/diag`: each seam adds the minute answer's last bar, the book's from, the bars it filled, the closed minutes NinjaTrader
+  had more volume for, the time limits and the hole said; each book adds `minutes`.
+- **The page** (no recompile part): a LOADING past 10 s says "Waiting for NinjaTrader's NQ history (N s)"; a minute or hour
+  chart whose history ends more than 2 minutes before ready, with nothing filled by ChartBridge, says "No bars from X to Y
+  ET: NinjaTrader's minute history ends at Z" itself (with an older ChartBridge too), and does not show 0.6.8's status for
+  the same hole twice. No bars are kept in sessionStorage.
+- **The League chart and the Agents panel's Drone sky on NQ 1 min.** Anthony, 2026-10-23: his only MNQ chart is a 40-range
+  execution chart (it loads trades, not minute bars) and all his other charts, including a 1 min, are NQ; "the League tab's
+  chart AND the Agents panel's Drone sky pillars switch from MNQ to NQ 1 min", keeping 5 days and no ticks for the League
+  chart, "so they reuse his NQ 1 min line's data and open at once with no extra NinjaTrader request". The seats trade MNQ:
+  their marks, entry and stop lines and tethers are drawn at their MNQ prices on the NQ candles (the same index, no
+  conversion), the League chart's label says "NQ 1 min (league trades MNQ)", the sky's price label says NQ, and the seats'
+  open P&L uses NQ's price with MNQ's point value. (The earlier idea of a 1-day MNQ League chart is dropped.)
+- Tests: `nt8/check/GapHarness.cs` (the reproduction and the fix, the fallback and its status, the race, both time limits and
+  their late answers, the book's own rules, the join, the resets); `test/history-gap.test.js`; `test/fake-bridge.mjs
+  --minute-lag-min=30`; `smoke:workspace` shows the LOADING wait and the hole notice on a 1 min chart; `smoke:league` checks
+  opening the League tab with an NQ 1 min chart open sends no new NQ subscribe and no MNQ minute subscribe, and the sky reads
+  NQ bars from the NQ line already open.
+
 ## Unreleased (2026-10-23): the PC updater's task starts hidden, and checks at 9:00 AM New York time
 
 `nt8/update-pc.ps1` only: no page change, no ChartBridge change, no version bump here (the chart and ChartBridge versions

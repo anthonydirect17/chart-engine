@@ -245,7 +245,8 @@ test('the page: Agents in + Add panel, one a layout, installed, read only, no da
   assert.match(sky, /const FPS = 30, CALM_FPS = 15/, 'at most 30 frames a second, 15 calm');
   assert.match(sky, /visibilitychange/); assert.match(sky, /IntersectionObserver/); assert.match(sky, /prefers-reduced-motion: reduce/); assert.match(sky, /checkVisibility/);
   assert.match(sky, /Math\.round\(\(r\.left \+ r\.width\) \* d\) - sl/, 'the canvas on whole device pixels, as the chart\'s 1.37.0 snap');
-  assert.match(ws, /bars: \(\) => \{ const x = quoteOf\('MNQ'\); return x && x\.bars\.length/, 'the bars from the MNQ quote line the strip already watched');
+  assert.match(ws, /bars: \(\) => \{ const x = quoteOf\('NQ'\); return x && x\.bars\.length/, '1.38.1: the bars from the NQ quote line (Anthony 2026-10-23: his charts are NQ)');
+  assert.match(sky, /const SKY_ROOT = 'NQ';/); assert.match(sky, /last: o\.last\(SKY_ROOT\), pv: o\.pv\('MNQ'\)/, '1.38.1: NQ\'s price, MNQ\'s point value (the seats trade MNQ)');
   assert.doesNotMatch(sky, /Haiku|Sonnet|Opus/, 'no seat family written in the sky (AgentsStripCore.SEATS names them, as the League)');
   for (const f of ['live/agents-strip.js', 'live/agents-strip.css', 'live/agents-sky.js', 'test/agents-strip.test.js', 'test/agents-strip-smoke.mjs']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
   const css = read('live/agents-strip.css');

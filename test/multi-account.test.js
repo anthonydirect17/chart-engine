@@ -113,7 +113,7 @@ test('1.37.0 the chart: room right Custom (40 to 600 px) and the gap drag, the l
 
 test('ChartBridge 0.6.7: the bench flag, never blocking an exit, the group\'s own rules optional, no hedging always on', () => {
   const g = read('nt8/ChartBridgeGroups.cs'), a = read('nt8/ChartBridgeAgents.cs');
-  assert.match(read('nt8/ChartBridge.cs'), /public const string Version = "0\.6\.7";/);
+  assert.match(read('nt8/ChartBridge.cs'), /public const string Version = "0\.6\.[78]";/);
   assert.match(g, /\(p\.Length != 3 && !\(p\.Length == 4 && p\[3\] == "benched"\)\)/, 'a member line may carry benched');
   assert.match(g, /Append\(s\.Benched\.Contains\(kv\.Key\) \? "\\tbenched" : ""\)/, 'written only for a benched member');
   assert.match(g, /if \(g\.Benched\.Contains\(name\)\) \{ s\.Out = BenchedOut; continue; \}/, 'a group entry skips a benched member');

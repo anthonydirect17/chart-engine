@@ -118,7 +118,7 @@ test('bars: the fills queue\'s rules (file first, atomic, 10 s, deskUrl, set asi
 });
 
 test('bars: ChartBridge.cs hooks it in (config, start, stop, /diag) and runs its requests through the gate; version 0.6.2', () => {
-  assert.match(main, /public const string Version = "0\.6\.7";/);
+  assert.match(main, /public const string Version = "0\.6\.8";/);
   assert.match(src, /^\/\/ ChartBridge for NinjaTrader 8 \(its version is ChartBridgeServer\.Version, below\)/);
   assert.match(main, /AllowOrigins = new List<string>\(\);\s*ChartBridgeBars\.ResetConfig\(\);/);
   assert.match(main, /else if \(ChartBridgeBars\.ReadConfig\(key, val\)\) \{ \}[^\n]*\n\s*else if \(ChartBridgeOrders\.ReadConfig\(key, val\)\) \{ \}/);

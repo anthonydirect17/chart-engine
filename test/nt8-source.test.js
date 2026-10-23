@@ -508,7 +508,8 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
   // 0.3.4: ready and the released trades as one outbox entry (a release of any size cannot close the page)
   assert.match(ready, /foreach \(SeamTick h in r\.Release\) burst\.Add\(h\.Json\);\s*client\.SendAll\(burst\);/);
   assert.ok(!/foreach \(SeamTick h in client\.Pending\)/.test(code), 'held trades only go out through Dedupe');
-  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*client\.WantsProfile = profile;\s*\}/);   // 0.3.5: and whether it wants "profile"
+  // 0.6.8: under the book's lock then the Pending lock (OnMarketData's order), the minute book copied as the held trades are cleared
+  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(book\.Sync\)\s*lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*client\.WantsProfile = profile;\s*if \(!L\.Window\) L\.Book = book\.Minutes\.Snap\(\);\s*\}/);   // 0.3.5: and whether it wants "profile"; 0.6.8: the minute book
   assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"seams\\":"\)\.Append\(SeamsJson\(\)\);/);
   // review of 0.3.3: only trades held when NinjaTrader answered can match at T; every chunk checks the subscribe is current
   assert.match(ready, /client\.Pending, L\.HeldAtAnswer\)/);
@@ -639,7 +640,7 @@ test('0.3.5: every tick chart gets the served window by count, one request at a 
   // 0.3.6: with no backfill queued, a daily bars request goes last (no minute tail out, no page loading); else as 0.3.5
   // 0.3.7: higher-timeframe requests a page asked for go there too, ahead of daily bars
   assert.match(next, /if \(GateBackfills\.Count == 0\)\s*\{[\s\S]*?if \(\(GateHtfJobs\.Count == 0 && GateBarJobs\.Count == 0\) \|\| tailsOut > 0\) return null;\s*if \(PageLoading\(\)\) \{ wait = true; return null; \}[\s\S]*?\}\s*if \(tailsOut > 0\) return null;/);
-  assert.match(bodyOf(code, 'private static void RequestTicks('), /if \(!BeginTail\(\)\)/);
+  assert.match(bodyOf(code, 'private static void RequestTicks('), /if \(overdue \|\| !BeginTail\(\)\)/);
   // on NinjaTrader's callback thread only the copy (timed); the rest on a worker
   for (const f of ['private static void AskWindow(', 'private static void RunBackfill(']) {
     const b = bodyOf(code, f);
@@ -1282,7 +1283,7 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.[0-7])";/);
+  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.[0-8])";/);
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1311,7 +1312,7 @@ test('ChartBridge 0.5.5: the accounts line\'s one-time conversion and notConnect
 });
 
 test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its own thread, and tells hello, the pages and /diag', () => {
-  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.[0-7])";/);
+  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.[0-8])";/);
   const clk = code.slice(code.indexOf('public static class ChartBridgeClock'));
   assert.ok(code.indexOf('public static class ChartBridgeClock') > code.indexOf('public static class ChartBridgeServer') && clk.length > 1000, 'ChartBridgeClock is the last class of ChartBridge.cs');
   // never sets the clock or a setting: no Win32 time call, no w32tm, no process, no registry, in any add-on file

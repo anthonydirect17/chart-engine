@@ -1150,6 +1150,159 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
     }
 
+    // ------------------------------------------------------------------ 0.6.8: the minute book
+    // Per instrument, 1-minute OHLCV bars built from every live trade ChartBridge sees (OnMarketData, under the book's lock), so a
+    // minute chart's load no longer depends on NinjaTrader's minute history reaching up to now (WORK 2026-10-23: after a reload
+    // NinjaTrader's minute answer ended 28 to 40 minutes early and the chart had a hole until the live bar). Stamped exactly as
+    // NinjaTrader stamps its minute bars and as ChartBridgeSeam.TailFromTicks rebuilds them: at the bar's close, a trade at
+    // exactly hh:mm:00.000 in the bar that ends then (end-inclusive, the rule PROTOCOL.md's live check recipe is for). No side
+    // volume: the history bars carry none ([t, o, h, l, c, v]).
+    // From: a minute close (NinjaTrader time, DateTime ticks): every trade after it is in the book, every bar closes after it.
+    // Set at the first trade after a start or a reset, to the close of that trade's minute or of the clock's minute, whichever
+    // is later (NinjaTrader can replay an old last trade when market data starts: the clock keeps it from claiming the time
+    // before). Trades at or before From are not kept. Reset on a feed drop (the market open) and on a contract change; at
+    // most Cap bars (about two sessions), the oldest Trim go at once and From moves up to the last of them. Per trade: one
+    // division, a compare and a few stores; no allocation.
+    public class MinuteBook
+    {
+        public const int Cap = 3000, Trim = 120;
+        private const long Minute = TimeSpan.TicksPerMinute;
+        private readonly long[] close = new long[Cap];
+        private readonly double[] open = new double[Cap], high = new double[Cap], low = new double[Cap], last = new double[Cap];
+        private readonly long[] vol = new long[Cap];
+        public int Count;
+        public long From = -1;                 // -1: not started (no trade since the start or the last reset)
+        public DateTimeKind Kind = DateTimeKind.Unspecified;
+        public string Contract;                // the contract its trades are of (a trade of another one resets it)
+        public long Trades, LateTrades, Resets;
+        public string ResetWhy;
+
+        // The close of the 1-minute bar holding time t (end-inclusive, as NinjaTrader and TailFromTicks).
+        public static long CloseOf(long t) { long rem = t % Minute; return rem == 0 ? t : t - rem + Minute; }
+
+        public void Reset(string why) { Count = 0; From = -1; Resets++; ResetWhy = why; }
+
+        // Under the RootBook's lock. nowNt: NinjaTrader's clock now (read by the caller only while From is -1).
+        public void Begin(DateTime t, DateTime nowNt)
+        {
+            From = Math.Max(CloseOf(t.Ticks), nowNt == DateTime.MinValue ? 0 : CloseOf(nowNt.Ticks));
+            Kind = t.Kind;
+        }
+
+        public void Add(DateTime time, double p, long v)
+        {
+            long t = time.Ticks;
+            if (From < 0 || t <= From) return;
+            Trades++;
+            long k = CloseOf(t);
+            int n = Count;
+            if (n > 0 && close[n - 1] == k)
+            {
+                int j = n - 1;
+                if (p > high[j]) high[j] = p;
+                if (p < low[j]) low[j] = p;
+                last[j] = p; vol[j] += v;
+                return;
+            }
+            if (n == 0 || close[n - 1] < k) { Put(n, k, p, v); return; }
+            // a late trade (NinjaTrader's time before the last bar's minute): its own bar's high, low and volume
+            LateTrades++;
+            int i = n - 1;
+            while (i >= 0 && close[i] > k) i--;
+            if (i >= 0 && close[i] == k)
+            {
+                if (p > high[i]) high[i] = p;
+                if (p < low[i]) low[i] = p;
+                vol[i] += v;
+                return;
+            }
+            Insert(i + 1, k, p, v);   // a minute with no bar yet (rare): in its place
+        }
+
+        private void Put(int at, long k, double p, long v)
+        {
+            if (Count == Cap) { Drop(); at = Count; }
+            close[at] = k; open[at] = p; high[at] = p; low[at] = p; last[at] = p; vol[at] = v;
+            Count++;
+        }
+        private void Insert(int at, long k, double p, long v)
+        {
+            if (Count == Cap) { Drop(); at = Math.Max(0, at - Trim); if (k <= From) return; }
+            int m = Count - at;
+            Array.Copy(close, at, close, at + 1, m); Array.Copy(open, at, open, at + 1, m); Array.Copy(high, at, high, at + 1, m);
+            Array.Copy(low, at, low, at + 1, m); Array.Copy(last, at, last, at + 1, m); Array.Copy(vol, at, vol, at + 1, m);
+            Count++;
+            close[at] = k; open[at] = p; high[at] = p; low[at] = p; last[at] = p; vol[at] = v;
+        }
+        // The oldest Trim bars go; From becomes the last one's close (every trade after it is still in).
+        private void Drop()
+        {
+            From = close[Trim - 1];
+            int m = Count - Trim;
+            Array.Copy(close, Trim, close, 0, m); Array.Copy(open, Trim, open, 0, m); Array.Copy(high, Trim, high, 0, m);
+            Array.Copy(low, Trim, low, 0, m); Array.Copy(last, Trim, last, 0, m); Array.Copy(vol, Trim, vol, 0, m);
+            Count = m;
+        }
+
+        // Under the RootBook's lock: a copy (at most Cap bars, a few microseconds), used with no lock held.
+        public MinuteSnap Snap()
+        {
+            MinuteSnap s = new MinuteSnap { From = From, Kind = Kind };
+            RawBars r = new RawBars { Count = Count, Time = new DateTime[Count], Open = new double[Count], High = new double[Count], Low = new double[Count], Close = new double[Count], Volume = new long[Count] };
+            for (int i = 0; i < Count; i++) r.Time[i] = new DateTime(close[i], Kind);
+            Array.Copy(open, r.Open, Count); Array.Copy(high, r.High, Count); Array.Copy(low, r.Low, Count); Array.Copy(last, r.Close, Count); Array.Copy(vol, r.Volume, Count);
+            s.Bars = r;
+            return s;
+        }
+    }
+
+    // A minute book as it was at a load's subscribe (copied under the RootBook's lock together with the clearing of the page's
+    // held trades): every trade before that moment is in Bars, every one after it is held for the page.
+    public class MinuteSnap
+    {
+        public long From = -1;
+        public DateTimeKind Kind;
+        public RawBars Bars;
+        public bool Started { get { return From >= 0; } }
+
+        // NinjaTrader's minute answer (nt, its last bar still forming) joined to the book: NinjaTrader's bars up to the cut, then
+        // the book's after it. The cut is From, moved up past any closed minute NinjaTrader has more volume for than the book
+        // (the book missed trades there: a drop no event told of); NinjaTrader's last bar and the book's last are never compared
+        // (both may be partial). Null when the book cannot stand in: not started, or it begins after NinjaTrader's last bar (a
+        // hole between them: ChartBridge started, or the feed came back, after that bar). An empty answer: the book alone.
+        public RawBars Join(RawBars nt, out long cut, out int filled, out int shortMinutes)
+        {
+            cut = From; filled = 0; shortMinutes = 0;
+            if (!Started || Bars == null) return null;
+            int n = nt != null ? nt.Count : 0;
+            if (n > 0 && nt.Time[n - 1].Ticks < From) return null;
+            int b = Bars.Count;
+            long bookLast = b > 0 ? Bars.Time[b - 1].Ticks : From;
+            for (int i = 0; i < n - 1; i++)
+            {
+                long t = nt.Time[i].Ticks;
+                if (t <= From || t >= bookLast) continue;
+                int k = Array.BinarySearch(Bars.Time, 0, b, nt.Time[i]);
+                long have = k >= 0 ? Bars.Volume[k] : 0;
+                if (have < nt.Volume[i]) { shortMinutes++; if (t > cut) cut = t; }
+            }
+            int keep = 0;
+            while (keep < n && nt.Time[keep].Ticks <= cut) keep++;
+            int from = 0;
+            while (from < b && Bars.Time[from].Ticks <= cut) from++;
+            filled = b - from;
+            RawBars r = new RawBars { Count = keep + filled, Time = new DateTime[keep + filled], Open = new double[keep + filled], High = new double[keep + filled], Low = new double[keep + filled], Close = new double[keep + filled], Volume = new long[keep + filled] };
+            if (keep > 0)
+            {
+                Array.Copy(nt.Time, r.Time, keep); Array.Copy(nt.Open, r.Open, keep); Array.Copy(nt.High, r.High, keep);
+                Array.Copy(nt.Low, r.Low, keep); Array.Copy(nt.Close, r.Close, keep); Array.Copy(nt.Volume, r.Volume, keep);
+            }
+            Array.Copy(Bars.Time, from, r.Time, keep, filled); Array.Copy(Bars.Open, from, r.Open, keep, filled); Array.Copy(Bars.High, from, r.High, keep, filled);
+            Array.Copy(Bars.Low, from, r.Low, keep, filled); Array.Copy(Bars.Close, from, r.Close, keep, filled); Array.Copy(Bars.Volume, from, r.Volume, keep, filled);
+            return r;
+        }
+    }
+
     // One instrument's table, last finished table, served window and live trade rate. Lock Sync for everything in it; the
     // market data handler takes it (then a page's Pending lock) for every trade, so a snapshot taken under it is exact. Only
     // short work runs under it: a trade's adds, and copies (snapshots) that the formatting then works from with no lock held.
@@ -1179,6 +1332,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         public bool CacheGap; public double GapAskMs = -1;   // S-G: the served window misses a feed drop; when it was last asked again for that
         public List<SeamTick> WindowLive;
         public readonly List<object> WindowWaiters = new List<object>();
+        // 0.6.8: the minute book (every live trade's 1-minute bars), and a minute history or last-trades request NinjaTrader
+        // has not answered in its time (when it was given up; -1: none): no new one is asked for the instrument meanwhile.
+        public readonly MinuteBook Minutes = new MinuteBook();
+        public double MinuteOverdueMs = -1, TailOverdueMs = -1;
+        // 0.6.8: NinjaTrader's minute answers for this instrument, joined (ChartBridgeServer.KeepNtMinutes; in memory only, at most
+        // NtMinutesKept bars): a load whose own minute request is not answered in time starts from these and the minute book.
+        public RawBars NtMinutes; public double NtMinutesAtMs = -1;
         public long LateTrades, StaleTrades;         // live trades older than the session held; trades too old to open a session
         public double MaxGapSec;                     // the longest time between two live trades this session (a feed gap shows here)
         private DateTime lastTrade;
@@ -1986,7 +2146,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.6.7";   // 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
+        public const string Version = "0.6.8";   // 0.6.8: the minute book (a minute chart's history up to now from every live trade ChartBridge saw), the hole said on screen, 20 s limits on a load's minute history and last trades; 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -2583,6 +2743,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     DateTime nowNt = book.InTable(e.Time) ? DateTime.MinValue : NowNt();   // the clock only when a session may open
                     book.OnTrade(e.Time, e.Price, e.Volume, t, new DateTime(Interlocked.Read(ref listeningSinceUtcTicks), DateTimeKind.Utc),
                         new DateTime(Interlocked.Read(ref feedUpSinceUtcTicks), DateTimeKind.Utc), rx, nowNt, profileRoot, ChartBridgeSides.QCode(cat));
+                    // 0.6.8: the minute book takes the trade (a new contract starts it over; its first trade after a start or a
+                    // reset sets From, the only time the clock is read here)
+                    MinuteBook mb = book.Minutes;
+                    string contract = e.Instrument != null ? e.Instrument.FullName : null;
+                    if (!string.Equals(mb.Contract, contract, StringComparison.Ordinal)) { if (mb.Contract != null) mb.Reset("the contract changed to " + contract); mb.Contract = contract; }
+                    if (mb.From < 0) mb.Begin(e.Time, NowNt());
+                    mb.Add(e.Time, e.Price, e.Volume);
                     wantBackfill = book.BackfillState == "wanted";
                     if (wantBackfill) book.BackfillState = "queued";
                     lastChanged = book.LastChanged;
@@ -2621,6 +2788,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // With no tick backfill (minute and hour charts), the last trades up to now (BarsRequest by count) stand in for
         // the forming minute, so that minute and the held live trades meet at one seam too. Only ChartBridge uses them.
         public const int SeamTicksBack = 20000;
+        // 0.6.8: a load's minute history and last-trades requests each wait at most this long for NinjaTrader (WORK 2026-10-23:
+        // the League chart sat on LOADING for 50 s and more); then the load goes ready with what ChartBridge has and says so. A
+        // request given up is not asked again for the instrument until NinjaTrader answers it or OverdueReaskMs has passed.
+        public static int MinuteTimeoutMs = 20000, TailTimeoutMs = 20000, OverdueReaskMs = 120000;
 
         // One subscribe's load: minute history, tick backfill, then "ready" and the held live trades.
         private class Load
@@ -2642,6 +2813,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool Window, Profile, FromCache;
             public string WindowAsked = "";          // the counts asked of NinjaTrader, for /diag ("200000, 600000")
             public WindowDiag Diag;
+            // 0.6.8: the minute book as it was when the held trades were cleared (minute and hour charts), what the load did
+            // with it, and the requests' time limits (MinuteState and TailState: 0 waiting, 1 answered, 2 given up).
+            public MinuteSnap Book;
+            public int MinuteState, TailState, ReadyOnce;
+            public int Filled = -1, ShortMinutes;    // bars from the book (-1: not used); closed minutes NinjaTrader had more volume for
+            public DateTime? NtLastBar, LastBarClose; // NinjaTrader's last minute bar (its close stamp); the last bar sent
+            public bool MinuteTimedOut, TailTimedOut;
+            public int TailKeptAfter;                // rebuilt minutes kept after NinjaTrader's bar when the tail itself was not rebuilt
+            public string Hole;                      // the "no bars from ... to ..." text, when the history ends too early
+            public readonly List<string> AfterReady = new List<string>();   // status messages to send right after "ready"
         }
 
         // /diag "windows" (0.3.5): each served window, last 20.
@@ -2688,6 +2869,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return;
             }
             Load L = new Load { Client = client, Root = root, Name = inst.FullName, TickHours = tickHours, Inst = inst, Window = tickHours > 0, Profile = profile };   // S6: every tick chart gets the served window (0.3.7: the by-date load is gone)
+            RootBook book = BookOf(root, inst);
+            // 0.6.8: the book's lock, then the page's Pending lock (the order OnMarketData takes them in, and MarkReady and
+            // ServeFromCache): the minute book is copied at the very moment the held trades are cleared, so every trade before it
+            // is in the copy and every trade after it is held. None is in both, none in neither.
+            lock (book.Sync)
             lock (client.Pending)   // from here every live trade for this root is held until MarkReady
             {
                 L.Seq = ++client.SubscribeSeq;
@@ -2696,6 +2882,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 client.Pending.Clear();
                 client.Root = root;
                 client.WantsProfile = profile;
+                if (!L.Window) L.Book = book.Minutes.Snap();
             }
             L.NowNt = NowNt();
             L.StartedMs = ChartBridgeTime.NowUtcMs();
@@ -2705,35 +2892,247 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Windows) { Windows.Add(L.Diag); if (Windows.Count > 20) Windows.RemoveAt(0); }
             }
 
+            // 0.6.8: an earlier minute history request for this instrument given up and still unanswered: not asked again (no
+            // pile of requests on a NinjaTrader that is not answering); the load goes on with what ChartBridge has.
+            bool overdue;
+            lock (book.Sync) overdue = book.MinuteOverdueMs >= 0 && L.StartedMs - book.MinuteOverdueMs < OverdueReaskMs;
+            if (overdue)
+            {
+                L.MinuteState = 2; L.MinuteTimedOut = true;
+                MinuteGivenUp(L, "NinjaTrader has not answered an earlier " + root + " minute history request yet, so it is not asked again for now");
+                return;
+            }
             BarsRequest minutes = new BarsRequest(inst, L.NowNt.AddDays(-days - (days >= 5 ? 3 : 1)), L.NowNt);
             minutes.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 };
             minutes.TradingHours = inst.MasterInstrument.TradingHours;
             minutes.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
             {
+                if (Interlocked.CompareExchange(ref L.MinuteState, 1, 0) != 0)
+                {
+                    // answered after its time limit: not sent (the load went on without it), but kept for the next loads of the
+                    // instrument (KeepNtMinutes); the instrument may ask again
+                    RawBars late = null;
+                    try { if (code == ErrorCode.NoError) late = RawBars.Copy(req.Bars, false); } catch (Exception) { }
+                    finally { try { req.Dispose(); } catch (Exception) { } }
+                    lock (book.Sync) book.MinuteOverdueMs = -1;
+                    HistoryNote(root, "minute history: NinjaTrader answered after " + CbJson.Num3((ChartBridgeTime.NowUtcMs() - L.StartedMs) / 1000) + " s, when it was given up at " + (MinuteTimeoutMs / 1000) + " s; kept for the next load" + (late != null && late.Count > 0 ? " (last bar " + EtText(late.Time[late.Count - 1]) + ")" : ""));
+                    if (late != null) Task.Run(() => KeepNtMinutes(book, late));
+                    return;
+                }
+                RawBars raw = null;
                 try
                 {
                     if (code != ErrorCode.NoError)
                     {
                         if (Current(L)) client.SendData("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str("Minute history failed: " + code + " " + message) + "}");
+                        HistoryNote(root, "Minute history failed: " + code + " " + message);   // 0.6.8: in /diag and history.log too
                     }
-                    else if (Current(L))
-                    {
-                        RawBars raw = RawBars.Copy(req.Bars, false);     // quick copy on NinjaTrader's thread
-                        if (raw.Count > 0)
-                        {
-                            // The last bar was still forming: it goes out after the ticks, rebuilt from them when it can be.
-                            L.MinuteTail = raw.Slice(raw.Count - 1, raw.Count);
-                            raw = raw.Slice(0, raw.Count - 1);
-                        }
-                        RawBars head = raw;
-                        bool final = L.MinuteTail == null;
-                        L.HeadSent = Task.Run(() => SendBars(L, head, final));   // format off-thread; stops if the page resubscribes
-                    }
+                    else if (Current(L)) raw = RawBars.Copy(req.Bars, false);     // quick copy on NinjaTrader's thread
                 }
                 catch (Exception ex) { CbLogLimit.Error("history error", ex); }   // 0.4.0: at most a line a minute
                 finally { try { req.Dispose(); } catch (Exception) { } }
-                RequestTicks(L);
+                MinutesAnswered(L, raw);
             }));
+            Task.Delay(MinuteTimeoutMs).ContinueWith(delegate
+            {
+                if (Interlocked.CompareExchange(ref L.MinuteState, 2, 0) != 0) return;
+                L.MinuteTimedOut = true;
+                lock (book.Sync) book.MinuteOverdueMs = ChartBridgeTime.NowUtcMs();
+                HistoryNote(root, "minute history: no answer from NinjaTrader in " + (MinuteTimeoutMs / 1000) + " s; the load goes on with what ChartBridge has");
+                if (Current(L)) MinuteGivenUp(L, "NinjaTrader did not send " + root + "'s minute history within " + (MinuteTimeoutMs / 1000) + " s");
+            }, TaskScheduler.Default);
+        }
+
+        // 0.6.8: NinjaTrader's minute answer (raw; null after an error or for an older load). A minute or hour chart whose minute
+        // book reaches back to NinjaTrader's last bar gets NinjaTrader's bars up to the book's start and the book's after it
+        // (MinuteSnap.Join), and no last-trades request: the book has every trade up to the moment the held trades were
+        // cleared. Otherwise today's path (0.3.3 to 0.6.7): NinjaTrader's last bar goes out after the last trades, rebuilt from
+        // them when it can be.
+        private static void MinutesAnswered(Load L, RawBars raw)
+        {
+            try
+            {
+                if (raw != null && raw.Count > 0) { RootBook kb = BookOf(L.Root, L.Inst); RawBars keep = raw; Task.Run(() => KeepNtMinutes(kb, keep)); }
+                if (!Current(L)) return;
+                if (raw != null && raw.Count > 0) L.NtLastBar = raw.Time[raw.Count - 1];
+                if (!L.Window && L.Book != null)
+                {
+                    long cut; int filled, shortMinutes;
+                    RawBars joined = L.Book.Join(raw, out cut, out filled, out shortMinutes);
+                    if (joined != null)
+                    {
+                        L.Filled = filled; L.ShortMinutes = shortMinutes;
+                        SendJoined(L, joined);
+                        return;
+                    }
+                }
+                if (raw != null && raw.Count > 0)
+                {
+                    // The last bar was still forming: it goes out after the ticks, rebuilt from them when it can be.
+                    L.MinuteTail = raw.Slice(raw.Count - 1, raw.Count);
+                    raw = raw.Slice(0, raw.Count - 1);
+                }
+                if (raw != null)
+                {
+                    RawBars head = raw;
+                    bool final = L.MinuteTail == null;
+                    L.HeadSent = Task.Run(() => SendBars(L, head, final));   // format off-thread; stops if the page resubscribes
+                }
+            }
+            catch (Exception ex) { CbLogLimit.Error("history error", ex); }
+            RequestTicks(L);
+        }
+
+        // 0.6.8: the history of a minute or hour chart as one list, the last bar in its own message with done true (as 0.3.3),
+        // then "ready" and every held trade (none of them is in the list: they came after the book was copied).
+        private static void SendJoined(Load L, RawBars bars)
+        {
+            Task.Run(() =>
+            {
+                try
+                {
+                    int n = bars.Count;
+                    if (n == 0) SendBars(L, bars, true);
+                    else { SendBars(L, bars.Slice(0, n - 1), false); SendBars(L, bars.Slice(n - 1, n), true); }
+                }
+                catch (Exception ex) { CbLogLimit.Error("history error", ex); }
+                finally { MarkReady(L, null); }
+            });
+        }
+
+        // 0.6.8: the minute history did not come in time (or an earlier request is still unanswered). A minute or hour chart goes
+        // ready with the minute book alone; a tick chart goes on to its trades. Either way the page is told.
+        private static void MinuteGivenUp(Load L, string why)
+        {
+            if (L.Window)
+            {
+                AfterReady(L, Status("warn", why + "; the chart starts from the trades, with no minute history."));
+                RequestTicks(L);
+                return;
+            }
+            // NinjaTrader's earlier answers for this instrument (in memory), joined to the minute book as a fresh answer would be
+            RootBook book = BookOf(L.Root, L.Inst);
+            RawBars kept; double keptAt;
+            lock (book.Sync) { kept = book.NtMinutes; keptAt = book.NtMinutesAtMs; }
+            if (kept != null && kept.Count > 0)
+            {
+                L.NtLastBar = kept.Time[kept.Count - 1];
+                string asOf = "NinjaTrader's minute history as it last sent it (to " + EtHm(kept.Time[kept.Count - 1].AddMinutes(-1)) + " ET)";
+                long cut = -1; int filled = 0, shortMinutes = 0;
+                RawBars joined = L.Book != null ? L.Book.Join(kept, out cut, out filled, out shortMinutes) : null;
+                if (joined != null)
+                {
+                    L.Filled = filled; L.ShortMinutes = shortMinutes;
+                    AfterReady(L, Status("warn", why + ". The chart shows " + asOf + " and ChartBridge's own minute bars from " + EtHm(new DateTime(L.Book.From, L.Book.Kind)) + " ET."));
+                    SendJoined(L, joined);
+                    return;
+                }
+                // the book does not reach back to it: NinjaTrader's bars as kept, the hole (if any) said after ready
+                AfterReady(L, Status("warn", why + ". The chart shows " + asOf + "."));
+                SendJoined(L, kept);
+                return;
+            }
+            RawBars bars = L.Book != null && L.Book.Started ? L.Book.Bars : new RawBars();
+            L.Filled = bars.Count;
+            AfterReady(L, Status("warn", why + (bars.Count > 0
+                ? ". The chart starts from ChartBridge's own minute bars, from " + EtHm(new DateTime(L.Book.From, L.Book.Kind)) + " ET."
+                : ". The chart starts from the live trades.")));
+            SendJoined(L, bars);
+        }
+
+        // 0.6.8: NinjaTrader's minute answers for an instrument, kept in memory: the bars before the new answer's first, the new
+        // answer, and the kept bars after its last (a stale answer does not take away later bars an earlier answer had), at most
+        // NtMinutesKept (about 60 days of minutes). Off NinjaTrader's thread.
+        public const int NtMinutesKept = 90000;
+        public static void KeepNtMinutes(RootBook book, RawBars nw)
+        {
+            try
+            {
+                if (nw == null || nw.Count == 0 || nw.Open == null) return;
+                RawBars old;
+                lock (book.Sync) old = book.NtMinutes;
+                RawBars m = MergeNtMinutes(old, nw);
+                lock (book.Sync) { if (book.NtMinutes == old) { book.NtMinutes = m; book.NtMinutesAtMs = ChartBridgeTime.NowUtcMs(); } }
+            }
+            catch (Exception ex) { CbLogLimit.Error("minute history keep error", ex); }
+        }
+        public static RawBars MergeNtMinutes(RawBars old, RawBars nw)
+        {
+            RawBars r;
+            if (old == null || old.Count == 0 || old.Open == null) r = nw;
+            else
+            {
+                DateTime first = nw.Time[0], lastNew = nw.Time[nw.Count - 1];
+                int a = 0; while (a < old.Count && old.Time[a] < first) a++;
+                int b = old.Count; while (b > 0 && old.Time[b - 1] > lastNew) b--;
+                int n = a + nw.Count + (old.Count - b);
+                r = new RawBars { Count = n, Time = new DateTime[n], Open = new double[n], High = new double[n], Low = new double[n], Close = new double[n], Volume = new long[n] };
+                CopyBars(old, 0, r, 0, a); CopyBars(nw, 0, r, a, nw.Count); CopyBars(old, b, r, a + nw.Count, old.Count - b);
+            }
+            return r.Count > NtMinutesKept ? r.Slice(r.Count - NtMinutesKept, r.Count) : r;
+        }
+        private static void CopyBars(RawBars f, int i, RawBars t, int j, int n)
+        {
+            if (n <= 0) return;
+            Array.Copy(f.Time, i, t.Time, j, n); Array.Copy(f.Open, i, t.Open, j, n); Array.Copy(f.High, i, t.High, j, n);
+            Array.Copy(f.Low, i, t.Low, j, n); Array.Copy(f.Close, i, t.Close, j, n); Array.Copy(f.Volume, i, t.Volume, j, n);
+        }
+
+        // 0.6.8 (WORK's request, 2026-10-23: NinjaTrader's Output window loses them): the history path's own notes ("Minute history
+        // failed", "last trades for the forming minute not loaded", "tick window failed", the time limits and the holes) with the
+        // time and the instrument: the Output window as before, the last 50 in /diag ("historyNotes"), and history.log next to
+        // ChartBridge's other files (copier.log, bot.log), written off the caller's thread; past 512 KB it moves to history.log.1
+        // (one old file kept).
+        private static readonly List<string> HistoryNotes = new List<string>();
+        private static readonly object HistoryLogLock = new object();
+        public const int HistoryLogMaxBytes = 512 * 1024;
+        public static void HistoryNote(string root, string text)
+        {
+            Log(root + " " + text);
+            string line = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture) + "\t" + EtText(NowNt()) + " ET\t" + root + "\t" + text.Replace('\t', ' ').Replace('\n', ' ');
+            lock (HistoryNotes) { HistoryNotes.Add(line); if (HistoryNotes.Count > 50) HistoryNotes.RemoveAt(0); }
+            Task.Run(() =>
+            {
+                try
+                {
+                    lock (HistoryLogLock)
+                    {
+                        Directory.CreateDirectory(ChartBridgeConfig.Folder);
+                        string path = Path.Combine(ChartBridgeConfig.Folder, "history.log");
+                        FileInfo fi = new FileInfo(path);
+                        if (fi.Exists && fi.Length > HistoryLogMaxBytes) { string old = path + ".1"; if (File.Exists(old)) File.Delete(old); File.Move(path, old); }
+                        File.AppendAllText(path, line + "\n");
+                    }
+                }
+                catch (Exception) { }   // the Output window and /diag still have it
+            });
+        }
+        private static string HistoryNotesJson() { lock (HistoryNotes) return "[" + string.Join(",", HistoryNotes.Select(x => CbJson.Str(x)).ToArray()) + "]"; }
+        private static void AfterReady(Load L, string json) { lock (L.AfterReady) L.AfterReady.Add(json); }
+        private static string Status(string level, string text) { return "{\"type\":\"status\",\"level\":" + CbJson.Str(level) + ",\"text\":" + CbJson.Str(text) + "}"; }
+        private static DateTime EtWall(DateTime nt) { return TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(nt), ChartBridgeTime.Eastern); }
+        private static string EtHm(DateTime nt) { return EtWall(nt).ToString("HH:mm", CultureInfo.InvariantCulture); }
+
+        // 0.6.8: the hole between a minute chart's last history bar (its close stamp) and "ready", when the market was open for
+        // more than 2 minutes of it (the 17:00 break, a weekend and the CME holidays are not a hole: ChartBridgeCme.Closed); null
+        // when there is none. "No bars from 10:41 to 11:08 ET: NinjaTrader's minute history ends at 10:40" (bar start times, as
+        // the chart shows them; the day is named when the hole crosses midnight).
+        public static string HoleText(DateTime lastClose, DateTime readyNt)
+        {
+            DateTime x = EtWall(lastClose), r = EtWall(readyNt);
+            double open = 0; DateTime first = DateTime.MinValue;
+            int guard = 0;
+            for (DateTime m = x; m < r && guard < 20160; m = m.AddMinutes(1), guard++)
+            {
+                if (ChartBridgeCme.Closed(m)) continue;
+                if (first == DateTime.MinValue) first = m;
+                open += Math.Min(60, (r - m).TotalSeconds);
+            }
+            if (first == DateTime.MinValue || open <= 120) return null;
+            DateTime to = new DateTime(r.Ticks - r.Ticks % TimeSpan.TicksPerMinute), ends = x.AddMinutes(-1);
+            string f = first.Date != to.Date || ends.Date != to.Date ? "ddd HH:mm" : "HH:mm";
+            return "No bars from " + first.ToString(f, CultureInfo.InvariantCulture) + " to " + to.ToString(f, CultureInfo.InvariantCulture) +
+                " ET: NinjaTrader's minute history ends at " + ends.ToString(f, CultureInfo.InvariantCulture);
         }
 
         // final: this is the last "history" message (done true on its last chunk; an empty one still says done).
@@ -2769,6 +3168,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     b = null;
                 }
             }
+            if (n > 0 && (!L.LastBarClose.HasValue || bars.Time[n - 1] > L.LastBarClose.Value)) L.LastBarClose = bars.Time[n - 1];   // 0.6.8: for the hole check
             if (n == 0 && final && Current(L))
                 L.Client.Send("{\"type\":\"history\",\"root\":" + CbJson.Str(L.Root) + ",\"name\":" + CbJson.Str(L.Name) + ",\"barSeconds\":" + barSeconds + L.SubJson + ",\"bars\":[],\"done\":true}");
         }
@@ -2788,24 +3188,42 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (L.MinuteTail == null) { L.HeadSent.ContinueWith(delegate { Finish(L, null); }, TaskScheduler.Default); return; }
             // 0.3.5: not while a session backfill is out (the forming minute then stays as NinjaTrader sent it); counted, so no
             // backfill starts while it is.
-            if (!BeginTail()) { L.HeadSent.ContinueWith(delegate { Finish(L, null); }, TaskScheduler.Default); return; }
+            // 0.6.8: not while an earlier last-trades request for this instrument was given up and is still unanswered.
+            RootBook book = BookOf(L.Root, L.Inst);
+            bool overdue;
+            lock (book.Sync) overdue = book.TailOverdueMs >= 0 && ChartBridgeTime.NowUtcMs() - book.TailOverdueMs < OverdueReaskMs;
+            if (overdue || !BeginTail()) { L.HeadSent.ContinueWith(delegate { Finish(L, null); }, TaskScheduler.Default); return; }
             // Minute and hour charts: only the last trades, for the forming minute (not sent to the page).
             BarsRequest ticks = new BarsRequest(L.Inst, SeamTicksBack);
             ticks.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1 };
             ticks.TradingHours = L.Inst.MasterInstrument.TradingHours;
             ticks.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
             {
+                bool mine = Interlocked.CompareExchange(ref L.TailState, 1, 0) == 0;
                 RawBars raw = null;
                 try
                 {
-                    if (code != ErrorCode.NoError) Log("last trades for the forming minute not loaded (" + code + " " + message + "); the minute stays as NinjaTrader sent it");
+                    if (!mine) { lock (book.Sync) book.TailOverdueMs = -1; Log(L.Root + " last trades: NinjaTrader answered after " + (TailTimeoutMs / 1000) + " s, when they were given up; not used"); }
+                    else if (code != ErrorCode.NoError) HistoryNote(L.Root, "last trades for the forming minute not loaded (" + code + " " + message + "); the minute stays as NinjaTrader sent it");
                     else if (Current(L)) { raw = RawBars.Copy(req.Bars, true); NoteAnswer(L); }
                 }
                 catch (Exception ex) { Log("last trades error: " + ex.Message); }
                 finally { try { req.Dispose(); } catch (Exception) { } EndTail(); }
+                if (!mine) return;
                 RawBars copy = raw;
                 L.HeadSent.ContinueWith(delegate { Finish(L, copy); }, TaskScheduler.Default);
             }));
+            // 0.6.8: at most TailTimeoutMs for them; then the forming minute stays as NinjaTrader sent it, and the page is told.
+            Task.Delay(TailTimeoutMs).ContinueWith(delegate
+            {
+                if (Interlocked.CompareExchange(ref L.TailState, 2, 0) != 0) return;
+                L.TailTimedOut = true;
+                lock (book.Sync) book.TailOverdueMs = ChartBridgeTime.NowUtcMs();
+                HistoryNote(L.Root, "last trades: no answer from NinjaTrader in " + (TailTimeoutMs / 1000) + " s; the forming minute stays as NinjaTrader sent it");
+                if (!Current(L)) return;
+                AfterReady(L, Status("warn", "NinjaTrader did not send " + L.Root + "'s last trades within " + (TailTimeoutMs / 1000) + " s: the last minute bar is NinjaTrader's as it sent it."));
+                L.HeadSent.ContinueWith(delegate { Finish(L, null); }, TaskScheduler.Default);
+            }, TaskScheduler.Default);
         }
 
         // A minute or hour chart (no tick backfill since 0.3.5; tick charts finish in FinishWindow). Order on the wire: minute
@@ -2827,10 +3245,27 @@ namespace NinjaTrader.NinjaScript.AddOns
                         for (int i = 0; i < tail.Count; i++) if (tail.Time[i] == L.MinuteTail.Time[0]) L.RebuiltTailVolume = tail.Volume[i];
                         // The ticks were answered after the minutes, so they should hold at least as much of that minute.
                         // Less means the tick data lags: keep NinjaTrader's bar (and, on minute charts, release every held trade).
-                        if (L.RebuiltTailVolume < L.NtTailVolume) tail = null;
+                        if (L.RebuiltTailVolume < L.NtTailVolume)
+                        {
+                            // 0.6.8: NinjaTrader's bar is kept for that minute, but the minutes the same trades hold after it are
+                            // not thrown away with it (before 0.6.8 they were, and the chart had no bar from that minute to the
+                            // live one: a hole the trades in hand could fill). They go after NinjaTrader's bar, and the held
+                            // trades are matched against these same trades.
+                            int after = 0;
+                            while (after < tail.Count && tail.Time[after] <= L.MinuteTail.Time[0]) after++;
+                            if (after < tail.Count)
+                            {
+                                RawBars later = tail.Slice(after, tail.Count);
+                                RawBars both = new RawBars { Count = later.Count + 1, Time = new DateTime[later.Count + 1], Open = new double[later.Count + 1], High = new double[later.Count + 1], Low = new double[later.Count + 1], Close = new double[later.Count + 1], Volume = new long[later.Count + 1] };
+                                CopyBars(L.MinuteTail, 0, both, 0, 1); CopyBars(later, 0, both, 1, later.Count);
+                                L.TailKeptAfter = later.Count;
+                                tail = both;
+                            }
+                            else tail = null;
+                        }
                     }
-                    L.TailRebuilt = tail != null ? tail.Count : 0;
-                    if (tail != null) seam = ticks;   // minute charts: only when the forming minute came from these same ticks
+                    L.TailRebuilt = tail != null ? tail.Count - (L.TailKeptAfter > 0 ? 1 : 0) : 0;
+                    if (tail != null) seam = ticks;   // minute charts: only when the minutes after NinjaTrader's came from these same ticks
                     SendBars(L, tail ?? L.MinuteTail, true);
                 }
             }
@@ -2888,8 +3323,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The trades held after the copy are not in it and are released after it too.
         private static void MarkReady(Load L, RawBars seam)
         {
+            if (Interlocked.Exchange(ref L.ReadyOnce, 1) != 0) return;   // 0.6.8: once per load (a timeout and a late answer cannot both)
             ChartBridgeClient client = L.Client;
             string profile = null;
+            // 0.6.8: a minute or hour chart whose history (not joined to the minute book) ends well before now: said on screen
+            if (!L.Window && L.Filled < 0 && L.LastBarClose.HasValue)
+            {
+                try { L.Hole = HoleText(L.LastBarClose.Value, NowNt()); } catch (Exception ex) { CbLogLimit.Error("hole check error", ex); }
+                if (L.Hole != null) { AfterReady(L, Status("warn", L.Hole)); HistoryNote(L.Root, "hole said on screen: " + L.Hole); }
+            }
+            List<string> after; lock (L.AfterReady) after = new List<string>(L.AfterReady);
             if (L.Profile)
             {
                 RootBook book = BookOf(L.Root, L.Inst);
@@ -2916,7 +3359,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // traffic still goes out between them, and the page is not closed while it keeps draining (ChartBridgeClient).
                 List<string> burst = new List<string>(r.Release.Count + 2);
                 if (profile != null) burst.Add(profile);
-                burst.Add("{\"type\":\"ready\",\"root\":" + CbJson.Str(L.Root) + L.SubJson + "}");
+                // 0.6.8: a minute or hour chart's "ready" says how many of its bars came from ChartBridge's minute book ("filled")
+                burst.Add("{\"type\":\"ready\",\"root\":" + CbJson.Str(L.Root) + (L.Window ? "" : ",\"filled\":" + Math.Max(0, L.Filled).ToString(CultureInfo.InvariantCulture)) + L.SubJson + "}");
+                burst.AddRange(after);
                 foreach (SeamTick h in r.Release) burst.Add(h.Json);
                 client.SendAll(burst);
                 DateTime? firstHeld = client.Pending.Count > 0 ? client.Pending[0].Time : (DateTime?)null;
@@ -3094,7 +3539,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 book.WindowFailures++; book.WindowError = why;
                 waiters = new List<object>(book.WindowWaiters); book.WindowWaiters.Clear();
             }
-            Log(book.Root + " tick window failed (" + why + "); tick charts start from live trades" + (backoff ? ", asked again after " + (WindowRetryMs / 1000) + " s at the earliest" : ""));
+            HistoryNote(book.Root, "tick window failed (" + why + "); tick charts start from live trades" + (backoff ? ", asked again after " + (WindowRetryMs / 1000) + " s at the earliest" : ""));
             foreach (object o in waiters)
             {
                 Load w = (Load)o;
@@ -3754,7 +4199,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (RootBook b in list)
             {
                 bool changed;
-                lock (b.Sync) { changed = b.FeedDropped(et, why); if (b.WindowAsking) b.WindowLive = null; }
+                lock (b.Sync) { changed = b.FeedDropped(et, why); if (b.WindowAsking) b.WindowLive = null; b.Minutes.Reset(why); }   // 0.6.8: the minute book starts over once the feed is back
                 if (changed) { Log(b.Root + ": " + why + "; the volume profile of this session is missing trades from here; the served window keeps the gap (asked again at a load at most once in 10 minutes)"); PushProfile(b); }
             }
         }
@@ -3824,6 +4269,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                      .Append(",\"asks\":").Append(k.WindowAsks).Append(",\"failures\":").Append(k.WindowFailures)
                      .Append(",\"lastError\":").Append(k.WindowError != null ? CbJson.Str(k.WindowError) : "null")
                      .Append(",\"callbackMs\":").Append(k.WindowCallbackMs >= 0 ? CbJson.Num3(k.WindowCallbackMs) : "null").Append('}');
+                    MinuteBook mb = k.Minutes;   // 0.6.8
+                    b.Append(",\"minutes\":{\"from\":").Append(mb.From >= 0 ? CbJson.Str(EtText(new DateTime(mb.From, mb.Kind))) : "null").Append(",\"bars\":").Append(mb.Count)
+                     .Append(",\"trades\":").Append(mb.Trades).Append(",\"lateTrades\":").Append(mb.LateTrades).Append(",\"resets\":").Append(mb.Resets)
+                     .Append(",\"resetWhy\":").Append(mb.ResetWhy != null ? CbJson.Str(mb.ResetWhy) : "null")
+                     .Append(",\"minuteOverdue\":").Append(k.MinuteOverdueMs >= 0 ? "true" : "false").Append(",\"tailOverdue\":").Append(k.TailOverdueMs >= 0 ? "true" : "false").Append('}');
                     double rate = k.RatePerHour(now);
                     b.Append(",\"tradesPerHour\":").Append(rate >= 0 ? CbJson.Num3(rate) : "null").Append("},");
                 }
@@ -4797,6 +5247,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"minuteTailRebuilt\":").Append(L.TailRebuilt);
             b.Append(",\"ntTailVolume\":").Append(L.NtTailVolume >= 0 ? L.NtTailVolume.ToString(CultureInfo.InvariantCulture) : "null");
             b.Append(",\"rebuiltTailVolume\":").Append(L.RebuiltTailVolume >= 0 ? L.RebuiltTailVolume.ToString(CultureInfo.InvariantCulture) : "null");
+            // 0.6.8: NinjaTrader's last minute bar (its close stamp), the minute book's From, the bars it filled (-1: not used),
+            // closed minutes NinjaTrader had more volume for, the time limits, and the hole said on screen
+            b.Append(",\"minuteLastBar\":").Append(EtOrNull(L.NtLastBar));
+            b.Append(",\"bookFrom\":").Append(L.Book != null && L.Book.Started ? CbJson.Str(EtText(new DateTime(L.Book.From, L.Book.Kind))) : "null");
+            b.Append(",\"bookFilled\":").Append(L.Filled);
+            b.Append(",\"bookShortMinutes\":").Append(L.ShortMinutes);
+            b.Append(",\"minuteTimedOut\":").Append(L.MinuteTimedOut ? "true" : "false");
+            b.Append(",\"tailTimedOut\":").Append(L.TailTimedOut ? "true" : "false");
+            b.Append(",\"hole\":").Append(L.Hole != null ? CbJson.Str(L.Hole) : "null");
+            b.Append(",\"tailKeptAfter\":").Append(L.TailKeptAfter);
             b.Append('}');
             lock (Seams)
             {
@@ -5008,6 +5468,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"stops\":").Append(ChartBridgeStops.DiagJson());   // 0.6.6: the stop record to The Desk
             b.Append(",\"bars\":").Append(ChartBridgeBars.DiagJson());   // 0.3.6: daily 1-minute bars to The Desk
             b.Append(",\"seams\":").Append(SeamsJson());   // 0.3.3: where each load's backfill met the live trades
+            b.Append(",\"historyNotes\":").Append(HistoryNotesJson());   // 0.6.8: the history path's notes (also history.log)
             b.Append(",\"sides\":").Append(SidesJson());
             b.Append(",\"books\":").Append(BooksJson());       // 0.3.5: per instrument, the session table, its backfill and the served window
             b.Append(",\"settlements\":").Append(SettlementsJson());   // 0.3.7: NinjaTrader's settlement per root

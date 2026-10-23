@@ -61,6 +61,9 @@
 //   --load-delay-ms=3000            a load's ticks and `ready` go out this long after its subscribe (NinjaTrader answering
 //                                   the tick request), and no live trade reaches the page meanwhile, as with ChartBridge
 //                                   holding them (a page reloading for more ticks misses those seconds)
+//   --minute-lag-min=30             a minute load's history (tickHours 0) ends this many minutes before now, as NinjaTrader's
+//                                   minute answer did on WORK 2026-10-23 (chart 1.38.1: the page then says "No bars from ...");
+//                                   its `ready` has no `filled` (the fake has no minute book: a ChartBridge before 0.6.8)
 //   --cme-hours                     the history and trades follow CME's hours on the exchange clock: no minute bar, tick or
 //                                   live trade from 17:00 to 18:00 ET, or from Friday 17:00 to Sunday 18:00 (sample data
 //                                   shifted to now otherwise trades through 18:00)
@@ -252,6 +255,8 @@ let pcClock = !flag('pc-clock') ? null : flagValue('pc-clock') === 'none'
 const CME_HOURS = !!flag('cme-hours');
 const QUOTE_HOURS = flagValue('quote-hours') !== '' ? +flagValue('quote-hours') : null;
 const LOAD_DELAY_MS = +flagValue('load-delay-ms') || 0;
+const MINUTE_LAG_MIN = +flagValue('minute-lag-min') || 0;   // 1.38.1: a minute load's history ends this long before now
+const lagged = (bars, minute) => (MINUTE_LAG_MIN > 0 && minute ? bars.filter(b => b.t + 60 <= etNow() - MINUTE_LAG_MIN * 60) : bars);
 const etNow = () => CE.util.zoneSeconds(Date.now() / 1000 + CLOCK_OFFSET);
 const MARKET_HOURS = !!flag('market-hours');
 /* --market-hours: whether CME equity index futures are closed at exchange time t (the CME calendar, see the header). */
@@ -636,7 +641,7 @@ function subscribe(c, m) {
   c.root = r; c.ready = false;
   if (LIVE_FIRST) return subscribeTape(c, m, r);
   const seq = c.seq = (c.seq || 0) + 1;
-  let bars = data[r];
+  let bars = lagged(data[r], m.tickHours === 0);
   if (DEEP) { const days = Number.isFinite(+m.days) && m.days !== null ? Math.min(60, Math.max(0, +m.days)) : 5, from = bars[bars.length - 1].t - days * 86400; bars = bars.filter(b => b.t >= from); }
   for (let i = 0; i < bars.length; i += 4000) {
     const chunk = bars.slice(i, i + 4000).map(b => [b.t, b.o, b.h, b.l, b.c, b.v]);
@@ -661,7 +666,7 @@ function subscribe(c, m) {
 
 /* --live-first: a load from the tape, as ChartBridge 0.3.5 does it. */
 function subscribeTape(c, m, r) {
-  const sub = Number.isInteger(m.sub) ? m.sub : undefined, k = tapes[r], bars = data[r], b = books[r];
+  const sub = Number.isInteger(m.sub) ? m.sub : undefined, k = tapes[r], bars = lagged(data[r], m.tickHours !== undefined && !(+m.tickHours > 0)), b = books[r];
   const tag = o => (sub !== undefined ? Object.assign(o, { sub }) : o);
   c.seq = (c.seq || 0) + 1; c.profile = m.profile === true;
   const seq = c.seq;

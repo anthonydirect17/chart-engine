@@ -875,6 +875,7 @@ public static class OrdersHarness
         SidesHarness.Run(Check); // the side of every trade, as pure rules (check/SidesHarness.cs, 0.3.4; its loads run inside SeamHarness)
         PinHarness.Run(Check);   // the PIN on ChartBridge's own page (check/PinHarness.cs)
         AllOffLines();           // PinHarness starts ChartBridge (config.txt read: the v3 default, on); the base stays 0.3.8's
+        GapHarness.Run(Check);   // 0.6.8: the minute book and the history gap after a reload (check/GapHarness.cs)
         MarketsHarness.Run(Check);   // 0.4.0: quote-only markets, their rolls and settlement times, tape counters, error lines, /diag health (check/MarketsHarness.cs)
         Console.WriteLine("== base: " + checks + " checks, " + fails + " failed");
         Section("accounts (B2)", AccountsHarness.Run);  // 0.4.0: the per-account checkmark, Gone, Archive, cancel from the Working orders tab, switches off = 0.3.8 (check/AccountsHarness.cs)

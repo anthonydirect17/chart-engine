@@ -2540,8 +2540,9 @@ if (typeof MutationObserver === 'function' && $('wsBotTab')) new MutationObserve
    eventually live agents status"): the Agents strip (live/agents-strip.js). 1.38.0 (Anthony 2026-10-23, the approved "Drone
    sky"): the panel draws the agents as drones over the price (live/agents-sky.js), from the same reads. Read only: the league from
    the workspace's one league read (LG below, or the League view's day while it is open: no second poller), the live agents from
-   the Agent tab's own state (agentDesk.glance), the bot from the Bot desk's, MNQ's price and its minute bars from the quote line
-   the strip already watched (no new connection), Anthony's own entries from the order connection's fills on the ticket's account.
+   the Agent tab's own state (agentDesk.glance), the bot from the Bot desk's, NQ's price and its minute bars from the NQ quote line
+   (1.38.1, Anthony 2026-10-23: his charts are NQ, so the line his NQ 1 min chart already loaded; the seats' MNQ marks are drawn
+   at their prices on it, the same index), Anthony's own entries from the order connection's fills on the ticket's account.
    Hover a drone for its card; a click opens the League tab, the Agent tab or the Bot view. */
 const stripViews = () => [...views.values()].filter(v => v.panel.type === 'agents' && v.strip);
 /** Anthony's entries today (read only): the fills on the order ticket's account (a group's first member), NQ and MNQ (one price) */
@@ -2560,7 +2561,7 @@ function myEntries() {
 function mountAgentsStrip(v) {
   v.state = 'live';
   if (!window.AgentsSky || !window.AgentsStrip || !window.AgentsStripCore) { v.body.innerHTML = '<p class="tt-foot warn">Reload this window: its agents-strip.js or agents-sky.js is missing.</p>'; v.destroy = () => {}; return; }
-  const offMnq = watchQuote('MNQ');
+  const offQuote = watchQuote('NQ');   // 1.38.1: NQ (Anthony 2026-10-23); the Quote board watches it too
   const strip = window.AgentsSky.mount(v.body, {
     day: () => leagueGhostDay(),
     reach: () => (leagueView && leagueView.shown() ? { problem: leagueView.state().problem, at: 0 } : { problem: LG.problem, at: LG.at }),
@@ -2569,7 +2570,7 @@ function mountAgentsStrip(v) {
     zoneSec: ms => U.zoneSeconds(ms / 1000),
     last: r => { const x = quoteOf(r); return x && typeof x.last === 'number' && isFinite(x.last) ? x.last : null; },
     pv: r => (instruments[r] && +instruments[r].pointValue > 0 ? +instruments[r].pointValue : null),
-    bars: () => { const x = quoteOf('MNQ'); return x && x.bars.length ? { root: 'MNQ', name: x.name, bars: x.bars } : null; },
+    bars: () => { const x = quoteOf('NQ'); return x && x.bars.length ? { root: 'NQ', name: x.name, bars: x.bars } : null; },
     mine: () => myEntries(),
     openLeague: () => { if (leagueView) leagueView.showTab(true); else note('The League tab did not start: reload this window', true); },
     openAgent: id => { if (agentDesk) { agentDesk.choose(id); agentDesk.showTab(true); } },
@@ -2578,7 +2579,7 @@ function mountAgentsStrip(v) {
   });
   v.strip = strip;
   syncLeagueGhosts();                                       // the league read runs while a strip is placed
-  v.destroy = () => { offMnq(); strip.destroy(); v.strip = null; setTimeout(syncLeagueGhosts, 0); };
+  v.destroy = () => { offQuote(); strip.destroy(); v.strip = null; setTimeout(syncLeagueGhosts, 0); };
 }
 setInterval(() => { for (const v of stripViews()) v.strip.render(); }, 1000);   // its clocks and the Agent tab's news (the sky's frames run on their own, only while seen)
 var tagsRaf = 0;                                          // var: renderOrders may run before this line

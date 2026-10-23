@@ -12,7 +12,10 @@
  * The League button shows once The Desk answers GET /api/chart-league (a Desk of this release, reachable from this PC); with no such
  * Desk it stays hidden and the top bar keeps its room.
  *
- * The view: one chart (MNQ, the league's instrument; NQ shows the same prices) with each seat's paper trades as hollow markers
+ * The view: one chart, NQ 1 min (1.38.1, Anthony 2026-10-23: his only MNQ chart is a 40-range execution chart and every other
+ * chart, a 1 min among them, is NQ; so the League chart is NQ 1 min with {days: 5, tickHours: 0}, the load his NQ 1 min chart
+ * already holds, and opens at once with no NinjaTrader request of its own). The league trades MNQ: its marks are drawn at their
+ * MNQ prices on the NQ candles (the same index, no conversion), and the chart's label says so. Each seat's paper trades as hollow markers
  * carrying its letter in its colour (a circle at the fill, a diamond at the exit) and faint stop and target lines from the fill
  * to the exit (or to now while open); the legend strip; each seat's day (its position, its virtual 50K Flex account, its
  * decisions, a flag for Anthony); the week and month table with agreement and decision time; the decision log; the API spend
@@ -256,7 +259,7 @@ function attach(pane, host, get, root, faint) {
  */
 function create(o) {
   const view = o.view, tabBtn = o.tab;
-  const S = { shown: false, day: null, raw: null, problem: 'Not read yet.', reach: '', at: 0, timer: 0, chart: null, overlay: null, root: 'MNQ', busy: false };
+  const S = { shown: false, day: null, raw: null, problem: 'Not read yet.', reach: '', at: 0, timer: 0, chart: null, overlay: null, root: 'NQ', busy: false };   // 1.38.1: NQ 1 min (Anthony 2026-10-23), the league trades MNQ
   const q = s => view.querySelector(s);
   view.innerHTML =
     '<div class="lg-wrap">' +
@@ -267,7 +270,7 @@ function create(o) {
       '</header>' +
       '<p class="lg-problem" data-k="problem" role="status" hidden></p>' +
       '<div class="lg-main">' +
-        '<section class="lg-chartbox" aria-label="The league\'s chart"><div class="lg-charthead"><span class="lg-cname" data-k="cname">MNQ · 1 min</span><span class="lg-fill"></span><span class="lg-cnote">Hollow marks: paper trades only. Circle the fill, diamond the exit, dashed the stop, dotted the target.</span></div>' +
+        '<section class="lg-chartbox" aria-label="The league\'s chart"><div class="lg-charthead"><span class="lg-cname" data-k="cname" title="The seats trade MNQ: their marks are at their MNQ prices on the NQ candles (the same index)">NQ 1 min (league trades MNQ)</span><span class="lg-fill"></span><span class="lg-cnote">Hollow marks: paper trades only. Circle the fill, diamond the exit, dashed the stop, dotted the target.</span></div>' +
           '<div class="lg-chart" data-k="chart"></div></section>' +
         '<aside class="lg-side" aria-label="The seats today">' +
           '<div class="lg-seats" data-k="seats"></div>' +
