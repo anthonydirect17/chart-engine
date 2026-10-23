@@ -263,6 +263,12 @@ test('the sky: who flies today (seats during and after their session, an agent o
   assert.equal(A.seatActive(day, 'S', T0), false, 'retired');
   assert.equal(A.seatActive(day, 'O', T0), true, 'decided today');
   assert.equal(A.seatActive(day, 'H', T0 + 86400000), false, 'a day of another date: idle');
+  /* Anthony 2026-10-23: seats fade after their session (the day closed, or the seat's own day stopped): flat ones idle, holding ones stay */
+  const after = (dayFields, seats, open) => L.cleanDay({ date: '2026-10-22', day: dayFields, status: { date: '2026-10-22', now: '16:30:00', seats }, trades: [], open: open || [], decisions: [look('H', min(-5)), look('S', min(-5)), look('O', min(-5))] });
+  const closed = after({ closed: true, note: 'The day closed' }, { H: { status: 'active' }, S: { status: 'active', position: { side: 'long', fill_px: 1 } }, O: { status: 'active', resting: { side: 'short' } } });
+  assert.deepEqual(['H', 'S', 'O'].map(k => A.seatActive(closed, k, T0)), [false, true, true], 'the day closed: H flat idles, S (a position) and O (a resting order) stay');
+  const own = after({ closed: false }, { H: { status: 'active', stopped: 'daily loss' }, S: { status: 'active', stopped: 'daily loss' } }, [{ id: 'o1', seat: 'S', side: 'long', fill_t: min(-30), fill_px: 1 }]);
+  assert.deepEqual(['H', 'S', 'O'].map(k => A.seatActive(own, k, T0)), [false, true, true], 'a seat\'s own day stopped: flat H idles, S with an open paper trade stays, O (not stopped) flies');
   assert.equal(A.agentFlies({ connected: true }), true);
   assert.equal(A.agentFlies({ connected: false, standDown: 'why' }), false, 'stood down, off and flat: idle');
   assert.equal(A.agentFlies({ connected: false, position: { qty: -2 } }), true, 'holding');

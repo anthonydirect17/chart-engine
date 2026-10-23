@@ -670,7 +670,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   a soft column under it from 10% of `#A77BFF` fading down; a bar a laser crosses lights in that drone's color and fades over
   about 0.6 s. The price now: a white 3 px dot, "MNQ 25,425.50" (600 11 px mono) and the time in ET (10 px muted) to its right,
   each open trade's R under them (600 10 px mono, green up, red down, its letter and "B/E" at break-even). A drone per agent
-  active today, left to right in slots of at least a third of the width (150 px, 90 slim): a hexagon hull (13 px, 9 slim) with
+  active today (a seat fades into "+N idle" once the league's day has stopped, unless it still holds a position or a resting order), left to right in slots of at least a third of the width (150 px, 90 slim): a hexagon hull (13 px, 9 slim) with
   wings, the dark hull `#0B0F1C` and a 1.3 px line in its color, a lens of its color with a white arc turning, a ring at 2.2 times
   the hull, dashed (4 4, turning) for SHADOW and solid for LIVE; colors H `#FFC266`, S `#5DE0F0`, O `#B69CFF` (the League's), a
   live agent and the bot `#9AA8B8` (the strip's own for them). Its text block, inside its slot (fields that do not fit are cut or

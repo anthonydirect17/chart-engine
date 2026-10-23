@@ -45,7 +45,7 @@ const hms = ms => new Date(ms).toISOString().slice(11, 19);
 
 /* the SAMPLE league day around now; px: MNQ's price on the page; extra: { pass: [seat, id, why] played later, trail: S's stop moved
    up, date: another date } */
-const extra = { passes: [], trail: 0, date: null };
+const extra = { passes: [], trail: 0, date: null, closed: false };
 let base = null;
 function sampleDay(px) {
   const now = etNow(), at = m => (base || now) - m * 60000, date = extra.date || new Date(now).toISOString().slice(0, 10);
@@ -64,7 +64,7 @@ function sampleDay(px) {
   const fill = Math.round((px - 4) * 4) / 4, stop = fill + extra.trail;
   return {
     shadow: 'SHADOW: no orders', folder: { set: true, ok: true, problem: null }, date,
-    day: { date, closed: false, note: null },
+    day: { date, closed: extra.closed, note: extra.closed ? 'Sample: the made-up day closed' : null },
     status: { date, now: hms(now), feed: 'live', seats: {
       H: { status: 'active', flag: 'Sample data, made up for the smoke', decisions: 58, entries: 0, flex: { phase: 'eval', balance: 50000, today_pnl: 0, room_to_floor: 2000 }, position: null, resting: null },
       S: { status: 'active', flag: 'Sample data, made up for the smoke', decisions: 57, entries: 1, flex: { phase: 'eval', balance: 50000, today_pnl: 24, room_to_floor: 2000 },
@@ -296,6 +296,17 @@ try {
   check(await p.$eval(SKY + ' .ak-more', e => e.hidden), 'the list closes from its chip');
   await p.$eval(SKY, e => { e.style.width = ''; e.style.justifySelf = ''; });
   check(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways page scroll at 1906');
+
+  /* Anthony 2026-10-23: seats fade after their session. The league's day closed (as The Desk reports it): H (flat, nothing resting)
+     folds into +N idle; S (its open paper trade) and O (its resting order) stay until they are flat */
+  extra.closed = true; desk.league = sampleDay(px);
+  const fade = await until(async () => { const s = await sky(); return s.idle.includes('Haiku') ? s : null; }, 'H folded into idle after the day stopped', 25000);
+  check(!!fade && !fade.drones.some(d => d.key === 'seat:H') && fade.drones.some(d => d.key === 'seat:S' && d.trade) && fade.drones.some(d => d.key === 'seat:O'),
+    'the day stopped: flat H folds into idle (' + (fade && fade.idle.join(', ')) + '); S still holding its trade and O its resting order stay: ' + (fade && fade.drones.map(d => d.key).join(', ')));
+  const chipF = await p.$eval(SKY + ' .ak-idle', e => ({ text: e.textContent, title: e.title }));
+  check(/\+1 idle/.test(chipF.text) && /Haiku/.test(chipF.title), 'named on hover of the chip: ' + JSON.stringify(chipF));
+  await shot('agents-sky-day-stopped-1906.png', true);
+  extra.closed = false;
 
   /* +N idle: the league's day not today (yesterday's file): the seats fold into the chip, named on hover */
   extra.date = '2020-01-02'; desk.league = sampleDay(px);

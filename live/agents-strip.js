@@ -371,7 +371,15 @@ function openR(pos, last, pv, o) {
  * Is a seat active today ("league seats during and after their session that day"): the league's day is today (its status date or
  * The Desk's date against nowMs, the league's clock), the seat is not retired, and status.json calls it active or it holds a
  * position or a resting order, or it decided or traded today. A day of another date, or a seat with nothing today: idle.
+ * Anthony 2026-10-23: seats fade after their session. Once the league's day has stopped, as the data the page reads says it (The
+ * Desk's day.closed, the strip's "day closed"; or the seat's own status.json stopped, the strip's "day stopped"; never a clock
+ * time worked out here), a seat that holds nothing (no position: status.json's or an open paper trade; no resting order) is idle;
+ * one still holding something stays until it is flat.
  */
+function seatHolds(day, seat, x) {
+  return !!((x && ((x.position && typeof x.position === 'object') || (x.resting && typeof x.resting === 'object'))) || (day.open || []).some(t => t && t.seat === seat));
+}
+function seatStopped(day, x) { return !!((day.day && day.day.closed) || (x && x.stopped)); }
 function seatActive(day, seat, nowMs) {
   if (!day || !isNum(nowMs)) return false;
   const st = day.status && typeof day.status === 'object' ? day.status : null;
@@ -379,7 +387,8 @@ function seatActive(day, seat, nowMs) {
   if (!date || date !== clockDate(nowMs)) return false;
   const x = st && st.seats && typeof st.seats === 'object' && st.seats[seat] && typeof st.seats[seat] === 'object' ? st.seats[seat] : null;
   if (x && x.status === 'retired') return false;
-  if (x && (x.status === 'active' || (x.position && typeof x.position === 'object') || (x.resting && typeof x.resting === 'object'))) return true;
+  if (seatStopped(day, x)) return seatHolds(day, seat, x);
+  if (x && (x.status === 'active' || seatHolds(day, seat, x))) return true;
   const mine = t => t && t.seat === seat;
   return (day.decisions || []).some(mine) || (day.trades || []).some(mine) || (day.open || []).some(mine);
 }
@@ -537,7 +546,7 @@ function fitFields(fields, w, maxW, gap) {
 
 return { SEATS, LOOKS_PER_HOUR, HOUR_MS, MNQ_POINT, NR, THOUGHTS_MAX, clock, wallMs, clockDate, firstLine, lookCap, seatMode, liveMode, agentMode, thoughtOf, seatThoughts, lookKind,
   positionBlock, seatRest, seatCards, agentActive, agentCard, botCard, idleLine, money, signedMoney, signedR,
-  AGENT_COLOR, openR, seatActive, agentFlies, botActive, seatActs, agentActs, entriesOf, skyModel, fitFields };
+  AGENT_COLOR, openR, seatActive, seatStopped, seatHolds, agentFlies, botActive, seatActs, agentActs, entriesOf, skyModel, fitFields };
 });
 
 /* ======================================================================== the card (browser only) */
