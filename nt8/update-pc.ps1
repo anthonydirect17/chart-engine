@@ -23,9 +23,10 @@
     repair                page files only, never ChartBridge: finishes or undoes a cut-off install, or writes a whole
                           page from staged\, previous\ or the clone's page files
     pause / resume        a manual switch for the automatic path (off by default)
-    register / unregister the scheduled task for this Windows user: at sign-in, and daily at -DailyAt (New York
-                          time, 09:00 by default: Anthony 2026-10-23, updates are pushed overnight and he wants them
-                          in the morning). The task starts hidden, through a one-line launcher (see "Hidden start")
+    register / unregister the scheduled task for this Windows user: at sign-in, and daily at each -DailyAt time (New
+                          York time, 09:00 and 17:00 by default: Anthony 2026-10-23, every updater checks twice a
+                          day and at sign-in; -DailyAt 08:30 for one time, -DailyAt 09:00,17:00 for a list). The
+                          task starts hidden, through a one-line launcher (see "Hidden start")
 
   Rules (Anthony, 2026-09-30):
     - The automatic path never writes a .cs file into bin\Custom\AddOns: the next F5 anyone pressed would compile it
@@ -54,17 +55,34 @@
   in C:\SchwabDesk_bulk\hidden); another clone is refused unless -Repo is given, and so is a task whose command cannot
   be read (unregister first then). unregister removes the launcher too. status prints the command the task runs and
   checks the launcher: missing, unreadable or not exactly the line register writes, status says so and ends with STOP.
-  Migration without a job per PC (Anthony 2026-10-23): the automatic path never changes the pinned copy or the task, so
-  -InstallChartBridge (after it re-pins the task's copy) moves a task that is not started by this tool's own launcher
+  Migration without a job per PC (Anthony 2026-10-23): the automatic path never changes the pinned copy or the task's
+  action, so -InstallChartBridge (after it re-pins the task's copy) moves a task that is not started by this tool's own launcher
   (plain powershell.exe, or a hand-made launcher in C:\SchwabDesk_bulk\hidden) to it, once, through register's own
-  code: -Repo kept (refused by name otherwise), pinned.json's dailyAt 17:05 moved to 09:00 (another time kept), and it
-  prints what it kept. Refused, and said: an elevated window, a task that runs as another user, a task whose script is
-  not the pinned copy. A refused or failed move changes nothing (the launcher it wrote goes, pinned.json is written
+  code: -Repo kept (refused by name otherwise), pinned.json's daily time 17:05 or 09:00 moved to 09:00 and 17:00 (another
+  time kept), and it prints what it kept. Refused, and said: an elevated window, a task that runs as another user, a
+  task whose script is not the pinned copy. A refused or failed move changes nothing (the launcher it wrote goes, pinned.json is written
   only after the task) and never stops -InstallChartBridge. The move needs a copy that has this code: one run from an
   up to date clone, or register; a pinned copy older than this change only pins the new copy, and the move then
   happens at the next -InstallChartBridge. Task Scheduler applies a changed action from the task's next start. Until
   then each automatic run logs one WARN line: "the task still starts without the hidden launcher: it is migrated at
   the next -InstallChartBridge (unless it is refused there; see its output) or update-pc.ps1 register".
+  A task behind a hand-made launcher (a .vbs in C:\SchwabDesk_bulk\hidden, as WORK and HOME made theirs on 2026-10-22,
+  with or without //B, its Run line plain or cmd /s /c "cd /d "<folder>" && <command>") is also moved by the task's own
+  automatic run once a pinned copy with this change runs it (Invoke-AutoTaskMigration): the same move and refusals, only
+  when this run is the pinned copy, one WARN line naming why when refused; the hand-made .vbs stays on disk. A plain
+  powershell.exe task still moves only at -InstallChartBridge or register.
+  Two daily checks (Anthony 2026-10-23: 09:00 and 17:00 New York time, and at sign-in). pinned.json carries dailyTimes
+  (the list) and dailyAt (its first time, for a pinned copy older than this change). A pin written before this change
+  (dailyAt only: 09:00, 17:05 or none) reads 09:00 and 17:00; another single time is kept. A task on its own hidden
+  launcher with one daily trigger gets the 17:00 one from the automatic run of a pinned copy that has this change: a
+  change of the schedule only (the action, the launcher and the pinned copy stay as they are), and only in the task's own
+  run (the task starts through its own launcher, which runs the pinned copy, and this run is that copy; not elevated; the
+  task's own user). Every other change of the daily triggers (a move for DST or a time zone) is made only in the task's
+  own run too (the same checks, without the launcher one); an update run by hand changes no trigger and says so. A PC
+  picks it up after its next -InstallChartBridge or register (either pins a copy with this
+  change); a task not yet on the hidden launcher gets both at that migration. Two triggers never run an update at the same
+  moment: the task never starts twice at once (IgnoreNew), and every run takes updater.lock first (a run that finds it
+  held says busy and changes nothing).
   Time limit: when Task Scheduler stops the task at its 30 minutes it stops wscript.exe, and the PowerShell under it
   may keep running. That run still holds updater.lock (a file held open, freed by Windows when the process ends), so
   every later run says busy and changes nothing until it ends; each git call has
@@ -78,12 +96,13 @@ param(
   [string]$Command = 'status',
   [switch]$InstallChartBridge,
   [switch]$Yes,
-  # The daily check, in New York time. Anthony, 2026-10-23: 09:00 (it was 17:05, the futures break): updates are pushed
-  # overnight and he wants them in the morning. The updater only installs page files (an open page keeps the code it
-  # loaded and says "Update ready: reload when flat") and never installs ChartBridge, so a 09:00 run never changes what
-  # is open while he trades. A PC registered before keeps the time its pinned.json says until it registers again.
-  [ValidatePattern('^([01][0-9]|2[0-3]):[0-5][0-9]$')]
-  [string]$DailyAt = '09:00',
+  # The daily checks, in New York time, as a list: 09:00,17:00 (one argument from a command line) or a PowerShell list.
+  # Anthony, 2026-10-23: twice a day, at 09:00 and 17:00, and at sign-in (it was 09:00 alone that morning, 17:05 before).
+  # One time given (-DailyAt 08:30) is one daily check. The updater only installs page files (an open page keeps the code
+  # it loaded and says "Update ready: reload when flat") and never installs ChartBridge, so a check never changes what is
+  # open while he trades. A PC registered before reads its pinned.json as Get-PinTimes says.
+  [ValidatePattern('^([01][0-9]|2[0-3]):[0-5][0-9](,([01][0-9]|2[0-3]):[0-5][0-9])*$')]
+  [string[]]$DailyAt = '09:00,17:00',
   [string]$TaskName = 'ChartEngine Updater',
   # The clone, for the pinned copy in updater\bin that the scheduled task runs (register passes it).
   [string]$Repo = '',
@@ -114,9 +133,10 @@ $script:UpdaterStopped = $false                # the pinned copy failed its own 
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
 # 0.3.8: the run at sign-in can come before the network is up ("Failed to connect to github.com port 443"): `update`
 # tries the fetch again for up to FetchWaitSec, then gives up quietly (outcome offline) until the next run.
-$script:DailyAtDefault = '09:00'          # pinned.json without a dailyAt (the -DailyAt default above)
-$script:DailyAtBefore = '17:05'           # the old default: a task migrated from it moves to DailyAtDefault
+$script:DailyAtDefault = '09:00,17:00'    # the -DailyAt default above, and a pin written before it (Get-PinTimes)
+$script:DailyAtBefore = @('17:05', '09:00')   # the old single defaults: a pin written before with one moves to DailyAtDefault
 $script:HiddenLauncherName = 'update-pc.hidden.vbs'   # the task's hidden launcher, in updater\bin (register writes it)
+$script:HandLauncherDir = 'C:\SchwabDesk_bulk\hidden'   # where the hand-made launchers of 2026-10-22 are (Invoke-AutoTaskMigration)
 $script:FetchWaitSec = 120
 $script:FetchRetrySec = 10
 # 0.3.8: an antivirus (Norton on HOME) can hold the freshly extracted staged.tmp\files.zip for a moment ("Access to the
@@ -1250,7 +1270,11 @@ function Invoke-Update([switch]$DryRun) {
   if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
   try {
     $state = Read-State
-    if (-not $DryRun) { Save-TriggerCheck $state (Sync-DailyTrigger); Write-TaskStartWarning }
+    if (-not $DryRun) {
+      $mig = Invoke-AutoTaskMigration                  # logs its own line (one WARN when refused)
+      Save-TriggerCheck $state (Sync-DailyTrigger)
+      if (-not $mig) { Write-TaskStartWarning }
+    }
     $r = Invoke-Pass -DryRun:$DryRun -State $state
     if ($DryRun) {
       if (Test-Path $script:P.Journal) { Write-Host 'check: a page install was cut off; the next update finishes or undoes it before anything else' }
@@ -1335,17 +1359,11 @@ function Invoke-Status {
     $start = Test-TaskStart $task 'update-pc.ps1' { param($o) Get-HiddenLauncherLine (Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe') (Get-TaskArguments (Join-Path $script:P.Bin 'update-pc.ps1') ([string]$o['Repo'])) }
     Write-Host "task start:   $($start.text)"
     if ($start.line) { Write-Host "task command: $($start.line)" }
-    $want = ''
-    try { $want = (ConvertFrom-NewYorkTime ([string](Get-Field $pin 'dailyAt' $script:DailyAtDefault))).ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) } catch { }
-    foreach ($d in @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })) {
-      $sb = Read-StartBoundary ([string]$d.StartBoundary)
-      $note = ''
-      if ($sb.offset) { $note = ' KEPT ON UTC (StartBoundary has an offset): the next run moves it' }
-      elseif ($want -and $sb.hhmm -ne $want) { $note = ' DRIFTED: the next run moves it' }
-      Write-Host "daily check:  $($sb.hhmm) on this PC's clock, wanted $want ($(Get-Field $pin 'dailyAt' $script:DailyAtDefault) New York time; StartBoundary $($d.StartBoundary))$note"
-    }
+    try { foreach ($l in @(Get-DailyLines $task @(Get-PinTimes $pin))) { Write-Host "daily check:  $l" } }
+    catch { Write-Host "daily check:  cannot be worked out ($($_.Exception.Message))" }
   }
   $dt = Get-Field $state 'dailyTrigger'
+  if ($dt -and (Get-Field $dt 'note' '')) { Write-Host "daily check:  the last run left them alone: $(Get-Field $dt 'note')" }
   if ($dt -and -not (Get-Field $dt 'ok' $true)) {
     $since = [DateTimeOffset]::FromUnixTimeMilliseconds([long](Get-Field $dt 'failingSince' 0)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')
     $last = [DateTimeOffset]::FromUnixTimeMilliseconds([long](Get-Field $dt 'failedAt' 0)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')
@@ -1743,23 +1761,23 @@ function Invoke-Resume {
 }
 
 # The scheduled task: this Windows user, only while signed in (no password stored, no admin). Anthony's ruling
-# (2026-09-30): check once at startup, then once a day.
+# (2026-09-30): check at startup and on a daily schedule; 2026-10-23: twice a day, at 09:00 and 17:00 New York time.
 #   - At sign-in, after two minutes: the "startup" check (an at-startup trigger needs admin or SYSTEM).
-#   - Daily at -DailyAt New York time (09:00, Anthony 2026-10-23: updates are pushed overnight, he wants them in the
-#     morning; it was 17:05), converted to this PC's clock when registering. A run installs page files only (an open page
-#     keeps its loaded code until Anthony reloads it) and never ChartBridge, and the task starts hidden (no window).
+#   - One daily trigger per -DailyAt time, New York time (09:00 and 17:00 by default), converted to this PC's clock when
+#     registering. A run installs page files only (an open page keeps its loaded code until Anthony reloads it) and never
+#     ChartBridge, and the task starts hidden (no window).
 #   - No "run as soon as possible after a missed start" (StartWhenAvailable): Task Scheduler would run a missed check
 #     whenever the PC is next awake, at any hour. The sign-in trigger already covers a PC that was off; one that slept
 #     through the daily time checks the next day.
-# Never two runs at once (IgnoreNew), 30 minutes at most. It runs Windows PowerShell with -File, started hidden through
-# wscript.exe //B and the launcher (see "Hidden start" at the top).
+# Never two runs at once (IgnoreNew, and updater.lock in every run), 30 minutes at most. It runs Windows PowerShell
+# with -File, started hidden through wscript.exe //B and the launcher (see "Hidden start" at the top).
 function Get-TaskArguments([string]$Script, [string]$RepoDir) {
   return ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ' + (Format-Arg $Script) + ' update -Repo ' + (Format-Arg $RepoDir))
 }
 
 # The copy of this updater the scheduled task runs: updater\bin\update-pc.ps1, always the file of a CI-green commit on
 # main (checked against that commit's git blob). It changes only when Anthony runs register or -InstallChartBridge.
-# pinned.json keeps its commit, blob, sha256, the clone and the daily time; every run from it checks the sha256.
+# pinned.json keeps its commit, blob, sha256, the clone and the daily times; every run from it checks the sha256.
 function Install-PinnedUpdater([string]$Source, [string]$Commit, [string]$Blob, [string]$From) {
   New-Item -ItemType Directory -Force -Path $script:P.Bin | Out-Null
   $dest = Join-Path $script:P.Bin 'update-pc.ps1'
@@ -1768,8 +1786,9 @@ function Install-PinnedUpdater([string]$Source, [string]$Commit, [string]$Blob, 
     Move-FileAtomic "$dest.upd-tmp" $dest
   }
   $old = Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')
-  $daily = [string](Get-Field $old 'dailyAt' $script:DailyAtDefault)
-  Write-JsonAtomic (Join-Path $script:P.Bin 'pinned.json') @{ commit = $Commit; blob = $Blob; from = $From; at = (Get-NowMs); sha256 = (Get-FileSha256 $dest); repo = $script:P.Repo; dailyAt = $daily }
+  $pin = @{ commit = $Commit; blob = $Blob; from = $From; at = (Get-NowMs); sha256 = (Get-FileSha256 $dest); repo = $script:P.Repo }
+  Set-PinTimes $pin @(Get-PinTimes $old)          # the times it had (a pin written before: as Get-PinTimes reads it)
+  Write-JsonAtomic (Join-Path $script:P.Bin 'pinned.json') $pin
   Write-Log "the scheduled task's updater is now $dest (from $(Get-Short $Commit), $From)"
   return $dest
 }
@@ -1883,28 +1902,52 @@ function Read-StartBoundary([string]$Text) {
   return @{ ok = $true; hhmm = "$($m.Groups[1].Value):$($m.Groups[2].Value)"; offset = [bool]$m.Groups[5].Success }
 }
 
-# The daily check is a local time on this PC. At every run (sign-in and daily), pinned.json's dailyAt (New York time) is
-# worked out again for today, and the trigger is moved when it drifted (a time zone change, DST dates that differ from New York's, or a
-# StartBoundary kept on UTC). Returns what it found, for state.json and status: a failure (a task registered from an
-# elevated window cannot be changed by the task's own run: access denied) is recorded, not only logged.
+# The daily checks are local times on this PC. At every update run, pinned.json's daily times (New York time,
+# Get-PinTimes) are worked out again for today, and the daily triggers are moved when they drifted (a time zone change,
+# DST dates that differ from New York's, or a StartBoundary kept on UTC), only in the task's own run (Get-OwnRunProblem;
+# a run by hand changes no trigger and says so). A daily trigger missing (a task registered with one, before 09:00 and
+# 17:00) is added, also only on the task's own launcher (Get-AddTriggerProblem): a change of the schedule, never of the
+# action. More daily triggers than times, or none, are left to register. Returns what it found, for
+# state.json and status: a failure (a task registered from an elevated window cannot be changed by the task's own run:
+# access denied) is recorded, not only logged.
 function Sync-DailyTrigger {
   if ($env:OS -ne 'Windows_NT') { return $null }
-  $res = @{ at = (Get-NowMs); ok = $true; have = ''; want = ''; error = '' }
+  $res = @{ at = (Get-NowMs); ok = $true; have = ''; want = ''; error = ''; note = '' }
   try {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if (-not $task) { return $null }
-    $daily = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })
-    $others = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -ne 'MSFT_TaskDailyTrigger' })
-    if ($daily.Count -ne 1) { return $null }
-    $pin = Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')
-    $at = [string](Get-Field $pin 'dailyAt' $script:DailyAtDefault)
-    $want = ConvertFrom-NewYorkTime $at
-    $sb = Read-StartBoundary ([string]$daily[0].StartBoundary)
-    $res.have = $sb.hhmm; $res.want = $want.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture)
-    if ($sb.ok -and -not $sb.offset -and $sb.hhmm -eq $res.want) { return $res }
-    $why = ''; if ($sb.offset) { $why = ' (it was kept on UTC: StartBoundary had a UTC offset)' }
-    Set-ScheduledTask -TaskName $TaskName -Trigger (@($others) + @(New-DailyTrigger $want)) | Out-Null
-    Write-Log "the daily check moved from $($sb.hhmm) to $($res.want) on this PC's clock ($at New York time)$why" 'WARN'
+    $times = @(Get-PinTimes (Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')))
+    $plan = Get-DailyPlan $task $times
+    $res.have = $plan.have; $res.want = $plan.want
+    if ($plan.action -eq 'none') { return $res }
+    $ny = "$(Format-DailyTimes $times) New York time"
+    if ($plan.action -eq 'leave') {
+      $res.note = $plan.why
+      Write-Log "the daily checks were left alone: $($plan.why)" 'WARN'
+      return $res
+    }
+    if ($plan.action -eq 'add') {
+      $why = Get-AddTriggerProblem $task
+      if ($why) {
+        $res.note = "the daily check at $(Format-DailyTimes $plan.missing) New York time was not added: $why"
+        Write-Log "$($res.note)" 'WARN'
+        return $res
+      }
+    } else {
+      $why = Get-OwnRunProblem $task
+      if ($why) {
+        $res.note = "the daily checks were not moved (they are $($plan.have) on this PC's clock, wanted $($plan.want)): $why"
+        Write-Log "$($res.note)" 'WARN'
+        return $res
+      }
+    }
+    Set-ScheduledTask -TaskName $TaskName -Trigger (@($plan.others) + @($plan.local | ForEach-Object { New-DailyTrigger $_ })) | Out-Null
+    if ($plan.action -eq 'add') {
+      Write-Log "the daily check at $(Format-DailyTimes $plan.missing) New York time was added to the task (it had $($plan.have) on this PC's clock; now $($plan.want), $ny)"
+    } else {
+      $why = ''; if ($plan.utc) { $why = ' (it was kept on UTC: StartBoundary had a UTC offset)' }
+      Write-Log "the daily check moved from $($plan.have) to $($plan.want) on this PC's clock ($ny)$why" 'WARN'
+    }
     $res.have = $res.want
   } catch {
     $res.ok = $false; $res.error = $_.Exception.Message
@@ -1913,11 +1956,149 @@ function Sync-DailyTrigger {
   return $res
 }
 
+# The daily times, New York time: -DailyAt or pinned.json's, given as 09:00,17:00 (one command line argument) or as a
+# list, each HH:mm; sorted, each once. Anything else throws.
+function Get-DailyTimes($At) {
+  $t = @(@($At) | ForEach-Object { "$_".Split(',') } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Sort-Object -Unique)
+  if ($t.Count -eq 0) { throw 'no daily time is given' }
+  foreach ($x in $t) { if ($x -notmatch '^([01][0-9]|2[0-3]):[0-5][0-9]$') { throw "the daily time '$x' is not HH:mm" } }
+  return $t
+}
+
+# 09:00 and 17:00
+function Format-DailyTimes($Times) { return (@($Times) -join ' and ') }
+
+# The pin's daily times (New York time). pinned.json carries dailyTimes (this version) and dailyAt (their first, which a
+# pinned copy older than this change reads alone). A pin without dailyTimes, or whose dailyTimes do not start with its
+# dailyAt (an older copy wrote dailyAt since), was written before the two daily checks: no time or an old default (17:05,
+# 09:00) reads as the default 09:00 and 17:00 (Anthony 2026-10-23); another time is kept, alone.
+function Get-PinTimes($Pin) {
+  $at = [string](Get-Field $Pin 'dailyAt' '')
+  $list = Get-Field $Pin 'dailyTimes'
+  if ($null -ne $list) {
+    try { $t = @(Get-DailyTimes $list); if ($t[0] -eq $at) { return $t } } catch { }
+  }
+  if (-not $at -or $script:DailyAtBefore -contains $at) { return @(Get-DailyTimes $script:DailyAtDefault) }
+  return @(Get-DailyTimes $at)
+}
+
+# Writes the daily times into a pin: dailyTimes, and dailyAt (the first) for an older pinned copy.
+function Set-PinTimes($Pin, $Times) {
+  $t = @(Get-DailyTimes $Times)
+  $Pin['dailyAt'] = $t[0]
+  $Pin['dailyTimes'] = $t
+}
+
+# The daily times as this PC's local times on a day (New York time worked out for that day).
+function Get-DailyLocal($Times, [datetime]$Day = (Get-Date)) {
+  return @(@($Times) | ForEach-Object { ConvertFrom-NewYorkTime $_ $Day })
+}
+
+# The task's triggers, and a trigger's kind (MSFT_TaskDailyTrigger, MSFT_TaskLogonTrigger)
+function Get-TaskTriggers($Task) {
+  if ($null -eq $Task) { return @() }
+  $p = $Task.PSObject.Properties['Triggers']
+  if (-not $p -or $null -eq $p.Value) { return @() }
+  return @($p.Value)
+}
+function Get-TriggerClass($Trigger) {
+  try { return [string]$Trigger.CimClass.CimClassName } catch { return '' }
+}
+
+# What the daily triggers need, for these daily times today: @{ action = none | move | add | leave; why; others (the
+# triggers that are not daily); local (the wanted local times); want and have (HH:mm on this PC's clock, joined by ,);
+# missing (the New York times with no trigger); utc (a trigger kept on UTC) }. The same in Bot-Lab's botlab_update.ps1.
+function Get-DailyPlan($Task, $Times) {
+  $times = @(Get-DailyTimes $Times)
+  $local = @(Get-DailyLocal $times)
+  $all = @(Get-TaskTriggers $Task)
+  $daily = @($all | Where-Object { (Get-TriggerClass $_) -eq 'MSFT_TaskDailyTrigger' })
+  $others = @($all | Where-Object { (Get-TriggerClass $_) -ne 'MSFT_TaskDailyTrigger' })
+  $inv = [Globalization.CultureInfo]::InvariantCulture
+  $wantHm = @($local | ForEach-Object { $_.ToString('HH:mm', $inv) })
+  $read = @($daily | ForEach-Object { Read-StartBoundary ([string]$_.StartBoundary) })
+  $clean = @($read | Where-Object { $_.ok -and -not $_.offset } | ForEach-Object { $_.hhmm })
+  $p = @{ action = 'none'; why = ''; others = $others; local = $local; missing = @(); utc = $false
+    want = (@($wantHm | Sort-Object) -join ','); have = (@($read | ForEach-Object { $_.hhmm } | Sort-Object) -join ',') }
+  $p.utc = (@($read | Where-Object { $_.offset }).Count -gt 0)
+  for ($i = 0; $i -lt $times.Count; $i++) { if ($clean -notcontains $wantHm[$i]) { $p.missing += $times[$i] } }
+  if ($daily.Count -eq 0) { $p.action = 'leave'; $p.why = 'the task has no daily trigger; register sets them'; return $p }
+  if ($daily.Count -gt $times.Count) {
+    $p.action = 'leave'
+    $p.why = "the task has $($daily.Count) daily triggers ($($p.have) on this PC's clock), more than the daily times ($(Format-DailyTimes $times) New York time); register sets them"
+    return $p
+  }
+  if ($daily.Count -lt $times.Count) { $p.action = 'add'; return $p }
+  if ($p.missing.Count -or $clean.Count -ne $daily.Count) { $p.action = 'move' }
+  return $p
+}
+
+# The next run of a daily trigger at HH:mm on this PC's clock, after Now
+function Get-NextDailyRun([string]$HHmm, [datetime]$Now) {
+  $h, $m = $HHmm.Split(':')
+  $next = $Now.Date.AddHours([int]$h).AddMinutes([int]$m)
+  if ($next -le $Now) { $next = $next.AddDays(1) }
+  return $next.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+}
+
+# status: one line per daily time (New York time, its time on this PC's clock, its next run) and one per daily trigger
+# that is none of them. The same in Bot-Lab's botlab_update.ps1.
+function Get-DailyLines($Task, $Times, [datetime]$Now = (Get-Date)) {
+  $out = @()
+  $inv = [Globalization.CultureInfo]::InvariantCulture
+  $daily = @(Get-TaskTriggers $Task | Where-Object { (Get-TriggerClass $_) -eq 'MSFT_TaskDailyTrigger' })
+  $used = @{}
+  foreach ($t in @(Get-DailyTimes $Times)) {
+    $hm = (ConvertFrom-NewYorkTime $t $Now).ToString('HH:mm', $inv)
+    $hit = -1
+    for ($i = 0; $i -lt $daily.Count; $i++) {
+      $sb = Read-StartBoundary ([string]$daily[$i].StartBoundary)
+      if (-not $used.ContainsKey($i) -and $sb.ok -and -not $sb.offset -and $sb.hhmm -eq $hm) { $hit = $i; break }
+    }
+    if ($hit -ge 0) { $used[$hit] = $true; $out += "$t New York time, $hm on this PC's clock, next run $(Get-NextDailyRun $hm $Now)" }
+    else { $out += "$t New York time, $hm on this PC's clock: NO TRIGGER at that time yet (the next run sets it; update.log says when it cannot)" }
+  }
+  for ($i = 0; $i -lt $daily.Count; $i++) {
+    if ($used.ContainsKey($i)) { continue }
+    $sb = Read-StartBoundary ([string]$daily[$i].StartBoundary)
+    $what = 'DRIFTED'; if ($sb.offset) { $what = 'KEPT ON UTC (StartBoundary has an offset)' }
+    $out += "a daily trigger at $($sb.hhmm) on this PC's clock (StartBoundary $($daily[$i].StartBoundary)) is none of them: $what, the next run moves it"
+  }
+  return $out
+}
+
+# Every change of the daily triggers in the automatic run (Anthony 2026-10-23: a move too, not only an add) is made only
+# in the task's own run, as Bot-Lab's botlab_update.ps1: the task runs the pinned copy, and this run is that copy; this
+# run is not elevated, and the task runs as this user. A run by hand (update from the clone) changes no trigger and says
+# so. '' when it may.
+function Get-OwnRunProblem($Task) {
+  $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+  $cmd = Get-TaskCommand $Task
+  if ($cmd.error) { return "the task's command cannot be read ($($cmd.error)); run update-pc.ps1 register" }
+  $o = Get-CommandOptions $cmd.line 'update-pc.ps1'
+  if ($null -eq $o -or -not (Test-SamePath ([string]$o['#script']) $pinned)) { return "the task does not run the pinned copy $pinned; run update-pc.ps1 register" }
+  if (-not (Test-SamePath $script:UpdaterSelf $pinned)) { return "this run is $($script:UpdaterSelf), not the task's pinned copy $pinned (a run by hand: the task's own run does it)" }
+  if (Test-Elevated) { return 'this run is elevated (Run as administrator); run update-pc.ps1 register from a normal window' }
+  $u = Get-TaskUserId $Task
+  $me = Get-CurrentUserName
+  if (-not $u) { return "the task's user cannot be read; run update-pc.ps1 register" }
+  if (-not (Test-SameUser $u $me)) { return "the task runs as $u, this run as ${me}; run update-pc.ps1 register as $u" }
+  return ''
+}
+
+# Adding a daily trigger in the automatic run (Anthony 2026-10-23: no job per PC): a change of the schedule only, never of
+# the action, in the task's own run (Get-OwnRunProblem), and only when the task starts through its own hidden launcher.
+# A task not on its own launcher yet gets both daily triggers when it moves to it (-InstallChartBridge or register).
+function Get-AddTriggerProblem($Task) {
+  if (-not (Get-TaskLauncherPath $Task)) { return 'the task does not start through its own hidden launcher yet: -InstallChartBridge or update-pc.ps1 register moves it with both daily checks' }
+  return (Get-OwnRunProblem $Task)
+}
+
 # What the last check of the daily trigger found, in state.json: failedAt stays until a check succeeds again.
 function Save-TriggerCheck($State, $Res) {
   if ($null -eq $Res) { return }
   $prev = Get-Field $State 'dailyTrigger' @{}
-  $d = @{ checkedAt = $Res.at; ok = $Res.ok; have = $Res.have; want = $Res.want }
+  $d = @{ checkedAt = $Res.at; ok = $Res.ok; have = $Res.have; want = $Res.want; note = (Get-Field $Res 'note' '') }
   if (-not $Res.ok) { $d['failedAt'] = $Res.at; $d['error'] = $Res.error; $d['failingSince'] = (Get-Field $prev 'failingSince' $Res.at) }
   $State['dailyTrigger'] = $d
 }
@@ -1934,8 +2115,8 @@ function ConvertFrom-NewYorkTime([string]$HHmm, [datetime]$Day = (Get-Date)) {
   return [TimeZoneInfo]::ConvertTime($ny, $tz, [TimeZoneInfo]::Local)
 }
 
-# register's first half (any system): pick a checked copy, pin it, remember the daily time. Returns the pinned path.
-function Invoke-PinForTask([string]$At) {
+# register's first half (any system): pick a checked copy, pin it, remember the daily times. Returns the pinned path.
+function Invoke-PinForTask($At) {
   $lock = Enter-Lock
   if (-not $lock) { throw (Get-BusyText) }
   try {
@@ -1944,7 +2125,7 @@ function Invoke-PinForTask([string]$At) {
     Save-State $state
     $pinned = Install-PinnedUpdater $src.file $src.commit $src.blob 'register'
     $pj = Join-Path $script:P.Bin 'pinned.json'
-    $pin = Read-JsonFile $pj; $pin['dailyAt'] = $At; Write-JsonAtomic $pj $pin
+    $pin = Read-JsonFile $pj; Set-PinTimes $pin $At; Write-JsonAtomic $pj $pin
     Write-Host "pinning:      $($src.note)"
     return $pinned
   } finally { $lock.Dispose() }
@@ -2031,13 +2212,20 @@ function Split-CommandLine([string]$Line) {
 }
 
 # The command line a launcher's Run("...") holds, quotes undoubled: ours, or a hand-made one (C:\SchwabDesk_bulk\hidden,
-# the same form, maybe with "cmd /c cd /d <folder> && " in front, which is taken off). '' when it holds no Run line.
+# the same form, maybe with "cmd /c cd /d <folder> && " in front, which is taken off; also cmd /s /c "cd /d "<folder>" &&
+# <command>", as WORK and HOME wrote theirs on 2026-10-22: /s takes off the quotes around the whole). '' when it holds no
+# Run line.
 function Get-LauncherCommand([string]$Path) {
   $m = [regex]::Match([IO.File]::ReadAllText($Path), '(?i)\.Run\(\s*"((?:[^"]|"")*)"')
   if (-not $m.Success) { return '' }
   $cmd = $m.Groups[1].Value.Replace('""', '"').Trim()
-  $c = [regex]::Match($cmd, '(?i)^cmd(\.exe)?\s+/c\s+cd\s+/d\s+.*?&&\s*(.*)$')
-  if ($c.Success) { $cmd = $c.Groups[2].Value.Trim() }
+  $c = [regex]::Match($cmd, '(?i)^"?([^"]*[\\/])?cmd(\.exe)?"?\s+(/s\s+)?/c\s+(.*)$')
+  if ($c.Success) {
+    $rest = $c.Groups[4].Value.Trim()
+    if ($rest.Length -ge 2 -and $rest.StartsWith('"') -and $rest.EndsWith('"')) { $rest = $rest.Substring(1, $rest.Length - 2).Trim() }
+    $d = [regex]::Match($rest, '(?i)^cd\s+/d\s+.*?&&\s*(.*)$')
+    if ($d.Success) { $cmd = $d.Groups[1].Value.Trim() }
+  }
   return $cmd
 }
 
@@ -2147,19 +2335,19 @@ function Write-TaskLauncher([string]$Pinned) {
   catch { throw "the hidden launcher could not be written, the task was not changed: $($_.Exception.Message)" }
 }
 
-# register's task: the launcher (again, the same line), then the task (this user, only while signed in, not elevated).
-# The tests run it with the ScheduledTasks commands stubbed.
-function Register-HiddenTask([string]$User, [string]$Pinned, [datetime]$Local) {
+# register's task: the launcher (again, the same line), then the task (this user, only while signed in, not elevated):
+# at sign-in, and one daily trigger per local time. The tests run it with the ScheduledTasks commands stubbed.
+function Register-HiddenTask([string]$User, [string]$Pinned, [datetime[]]$Local) {
   Write-TaskLauncher $Pinned
   $launcher = Get-HiddenLauncherPath
   $action = New-ScheduledTaskAction -Execute (Get-SystemExe 'System32\wscript.exe') -Argument ('//B "' + $launcher + '"') -WorkingDirectory $script:P.Bin
   $logon = New-ScheduledTaskTrigger -AtLogOn -User $User
   $logon.Delay = 'PT2M'
-  $daily = New-DailyTrigger $Local
+  $daily = @($Local | ForEach-Object { New-DailyTrigger $_ })
   $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($logon, $daily) -Principal $principal -Settings $settings -Force `
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger (@($logon) + $daily) -Principal $principal -Settings $settings -Force `
     -Description "Keeps the chart page in ChartBridge's www folder up to date (green commits on main only). Never installs ChartBridge. Log: $($script:P.Log)" | Out-Null
 }
 
@@ -2172,10 +2360,12 @@ function Test-Elevated { return (New-Object Security.Principal.WindowsPrincipal(
 # updater first runs. Only the task named -TaskName, when it is not started by this tool's own launcher (plain
 # powershell.exe, or a hand-made launcher in C:\SchwabDesk_bulk\hidden). Exactly register's path: the task's -Repo kept
 # (Resolve-TaskOptions: another clone, or a command that cannot be read, is refused by name), the launcher written and
-# read back, then the task. The daily time: pinned.json's dailyAt 17:05 (or none) moves to the 09:00 default, another
-# time is kept. Task Scheduler applies a changed action from the task's next start. A failure is said and logged and
-# never stops -InstallChartBridge. Returns the lines to print.
-function Invoke-TaskMigration {
+# read back, then the task. The daily times: as Get-PinTimes reads pinned.json (a pin written before the two daily checks
+# with 17:05, 09:00 or none moves to 09:00 and 17:00; another time is kept). Task Scheduler applies a changed action from the task's next start. A failure is said and logged and
+# never stops -InstallChartBridge. Returns the lines to print. -By: who moves it (-InstallChartBridge, register's moves
+# are its own; "the task's own run" for a hand-made launcher, Invoke-AutoTaskMigration). Refused by name too: an option
+# the launcher's line does not carry (it carries update -Repo alone), a command other than update.
+function Invoke-TaskMigration([string]$By = '-InstallChartBridge') {
   if ($env:OS -ne 'Windows_NT') { return @() }
   $line = ''
   $launcher = ''; $hadLauncher = $false; $oldLauncher = ''; $registered = $false
@@ -2197,16 +2387,21 @@ function Invoke-TaskMigration {
       if ($keep.error) { $line = $keep.error }
       else {
         $o = Get-CommandOptions (Get-TaskCommand $task).line 'update-pc.ps1'
+        $extra = @(@($o.Keys) | Where-Object { [string]$_ -notlike '#*' -and [string]$_ -ne 'Repo' } | Sort-Object | ForEach-Object { if ($o[$_] -is [bool]) { "-$_" } else { "-$_ $($o[$_])" } })
         if (-not (Test-SamePath ([string]$o['#script']) $pinned)) { $line = "the task runs $($o['#script']), not the pinned copy ${pinned}: run update-pc.ps1 register" }
+        elseif ([string]$o['#command'] -ne 'update') { $line = "the task runs update-pc.ps1 $($o['#command']), not update: run update-pc.ps1 register" }
+        elseif ($extra.Count) { $line = "the task runs with $($extra -join ', '), which the launcher does not carry: run update-pc.ps1 register" }
       }
     }
     if ($line) { $line = "the scheduled task was not moved to the hidden launcher: $line" }
     else {
-      # the time first; pinned.json changes only once the task is registered (a failure changes nothing)
+      # the times first; pinned.json changes only once the task is registered (a failure changes nothing)
       $oldAt = [string](Get-Field $pin 'dailyAt' '')
-      $at = $script:DailyAtDefault
-      if ($oldAt -and $oldAt -ne $script:DailyAtBefore) { $at = $oldAt }
-      $local = ConvertFrom-NewYorkTime $at
+      $w = Get-Field $pin 'dailyTimes'
+      if ($null -ne $w -and [string]@($w)[0] -eq $oldAt) { $oldAt = @($w) -join ',' }
+      $times = @(Get-PinTimes $pin)
+      $at = $times -join ','
+      $local = @(Get-DailyLocal $times)
       $was = (Get-TaskCommand $task).source
       $launcher = Get-HiddenLauncherPath
       $hadLauncher = Test-Path -LiteralPath $launcher -PathType Leaf
@@ -2214,12 +2409,12 @@ function Invoke-TaskMigration {
       Write-TaskLauncher $pinned
       Register-HiddenTask $me $pinned $local
       $registered = $true
-      if ($at -ne $oldAt) { $pin['dailyAt'] = $at; Write-JsonAtomic $pj $pin }
+      Set-PinTimes $pin $times; Write-JsonAtomic $pj $pin
       $out = @("The scheduled task now starts hidden: wscript.exe //B $launcher (it was $was).",
         "  kept: -Repo $([string]$o['Repo']) and the pinned copy $pinned; the triggers, user and settings are register's own (they replace the old ones)")
-      if ($oldAt -and $oldAt -ne $at) { $out += "  daily check: $at New York time (it was $oldAt; Anthony 2026-10-23: updates are pushed overnight, so the check is in the morning)" }
-      else { $out += "  daily check: $at New York time" }
-      Write-Log "the scheduled task moved to the hidden launcher by -InstallChartBridge; daily at $at New York time (it was $oldAt); kept -Repo $([string]$o['Repo'])"
+      if ($oldAt -and $oldAt -ne $at) { $out += "  daily checks: $(Format-DailyTimes $times) New York time (it was $oldAt; Anthony 2026-10-23: twice a day, at 09:00 and 17:00, and at sign-in)" }
+      else { $out += "  daily checks: $(Format-DailyTimes $times) New York time" }
+      Write-Log "the scheduled task moved to the hidden launcher by $By; daily at $(Format-DailyTimes $times) New York time (it was $oldAt); kept -Repo $([string]$o['Repo'])"
       return $out
     }
   } catch {
@@ -2253,7 +2448,33 @@ function Test-SameUser([string]$A, [string]$B) {
   return (($A -split '\\')[-1] -eq ($B -split '\\')[-1])
 }
 
-# The automatic run never changes the task (its pinned copy and its action stay as Anthony left them): it only says so.
+# The task's own run moves a task behind a hand-made launcher (a .vbs in C:\SchwabDesk_bulk\hidden, as WORK and HOME
+# made theirs on 2026-10-22) to this tool's own launcher (Anthony 2026-10-23: automatic on every PC, no hand step):
+# Invoke-TaskMigration, exactly as -InstallChartBridge (the -Repo kept and nothing else to keep, refused by name
+# otherwise; not elevated; the task's own user; the task runs the pinned copy), and only when this run is the pinned
+# copy. The hand-made .vbs stays on disk. A plain powershell.exe task still moves only at -InstallChartBridge or register.
+# A refusal or failure changes nothing and logs one WARN line naming why. Returns that line, or the move's ('' when it
+# had nothing to do).
+function Invoke-AutoTaskMigration {
+  if ($env:OS -ne 'Windows_NT') { return '' }
+  try {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $task -or (Get-TaskLauncherPath $task)) { return '' }
+    $cmd = Get-TaskCommand $task
+    if (-not $cmd.launcher -or -not (Test-HandLauncher $cmd.launcher)) { return '' }
+    if (-not (Test-SamePath $script:UpdaterSelf (Join-Path $script:P.Bin 'update-pc.ps1'))) { return '' }   # a run by hand from the clone
+  } catch { return '' }
+  return (@(Invoke-TaskMigration "the task's own run") -join ' ')
+}
+
+# A hand-made launcher: a .vbs in C:\SchwabDesk_bulk\hidden (the tests point HandLauncherDir elsewhere)
+function Test-HandLauncher([string]$Path) {
+  if ($Path -notmatch '(?i)\.vbs$') { return $false }
+  return (Test-SamePath (Split-Path -Parent $Path) $script:HandLauncherDir)
+}
+
+# The automatic run never changes the task's action or its pinned copy (they stay as Anthony left them), except the move
+# above from a hand-made launcher: it only says so.
 function Write-TaskStartWarning {
   if ($env:OS -ne 'Windows_NT') { return }
   try {
@@ -2272,7 +2493,8 @@ function Invoke-Register {
   $keep = Resolve-TaskOptions (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
   if ($keep.error) { return (Write-Verdict $false "not registered: $($keep.error)") }
   foreach ($n in $keep.notes) { Write-Host "keeping:      $n" }
-  $local = ConvertFrom-NewYorkTime $DailyAt
+  try { $times = @(Get-DailyTimes $DailyAt) } catch { return (Write-Verdict $false "not registered: -DailyAt $($DailyAt -join ','): $($_.Exception.Message)") }
+  $local = @(Get-DailyLocal $times)
   # the launcher first (written and read back), then the pin, then the task: a launcher that cannot be written changes
   # nothing (review N2, 2026-10-23); the launcher names updater\bin\update-pc.ps1, where the pin puts the copy
   $want = Join-Path $script:P.Bin 'update-pc.ps1'
@@ -2281,16 +2503,16 @@ function Invoke-Register {
   if ([IO.Path]::GetFullPath($pinned) -ne [IO.Path]::GetFullPath($want)) { return (Write-Verdict $false "not registered: the pinned copy is $pinned, not $want") }
   try { Register-HiddenTask $user $pinned $local } catch { return (Write-Verdict $false "not registered: $($_.Exception.Message)") }
   $t = Get-ScheduledTask -TaskName $TaskName
-  $when = "at sign-in (after 2 minutes) and daily at $DailyAt New York time, $($local.ToString('HH:mm')) on this PC's clock"
+  $when = "at sign-in (after 2 minutes) and daily at $(Format-DailyTimes $times) New York time, $(Format-DailyTimes @($local | ForEach-Object { $_.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) })) on this PC's clock"
   Write-Log "registered the scheduled task '$TaskName': $when, started hidden by $(Get-HiddenLauncherPath)"
   if ($elevated) {
-    $warn = "this window is elevated (Run as administrator). The task's own run (not elevated) may then be refused when it moves the daily check for DST or a time zone change, every day. Run update-pc.ps1 register again from a normal (not elevated) PowerShell window"
+    $warn = "this window is elevated (Run as administrator). The task's own run (not elevated) may then be refused when it moves the daily checks for DST or a time zone change, every day. Run update-pc.ps1 register again from a normal (not elevated) PowerShell window"
     Write-Log "register: $warn" 'WARN'
     Write-Host "WARNING: $warn."
   }
   Write-Host "The task runs $pinned (a copy; it changes only when you run register again or -InstallChartBridge)."
   Write-Host "It starts hidden: wscript.exe //B (no WScript error dialog) runs $(Get-HiddenLauncherPath), which runs Windows PowerShell with no window."
-  Write-Host "Each run works out $DailyAt New York time again and moves the daily check if this PC's clock drifted from it (time zone or DST)."
+  Write-Host "Each run works out $(Format-DailyTimes $times) New York time again and moves the daily checks if this PC's clock drifted from them (time zone or DST)."
   return (Write-Verdict ($null -ne $t) "scheduled task '$TaskName' registered: $when ($($t.State))")
 }
 

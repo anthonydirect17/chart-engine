@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased (2026-10-23): the PC updater checks twice a day, at 9:00 AM and 5:00 PM New York time
+
+`nt8/update-pc.ps1` only (no page or ChartBridge change, no version bump, as the other 2026-10-23 updater entries below).
+
+- **Two daily checks, and at sign-in** (Anthony 2026-10-23: every updater checks for updates twice a day, at 09:00 and
+  17:00 New York time, and at sign-in). `-DailyAt` takes a list, `09:00,17:00` by default; one time given by hand
+  (`-DailyAt 08:30`) is one daily check. `register` writes the sign-in trigger and one daily trigger per time, each as
+  local wall-clock time with no UTC offset, as before.
+- **pinned.json** carries `dailyTimes` (the list) and `dailyAt` (its first time, which a pinned copy older than this change
+  reads alone). A pin written before this change (`dailyAt` only) reads 09:00 and 17:00 when it held an old default
+  (09:00 or 17:05) or no time; another single time is kept. `-InstallChartBridge` re-pins with the times it reads.
+- **The check of the daily times** (`Sync-DailyTrigger`, every update run) keeps every daily trigger on its New York time
+  across DST and time zones, as it kept the one. Every change of the triggers, a move as well as an add, is made only in
+  the task's own run (Anthony 2026-10-23, as Bot-Lab's updater): the task runs the pinned copy and this run is that copy,
+  not elevated, as the task's user. A run of `update` by hand changes no trigger and says so in update.log and `status`.
+  More daily triggers than times, or none, are left to `register` and said.
+- **A PC registered before gets the 5:00 PM check by itself, after its next `-InstallChartBridge` or `register`.** The
+  automatic path never changes the pinned copy the task runs, so the new code first runs on a PC once one of those pins
+  it (`-InstallChartBridge` run from the old pinned copy pins the new one too). From then on, the task's next automatic
+  check adds the missing 17:00 trigger to its own hidden task in place: a change of the schedule only (the action, the
+  launcher and the pinned copy stay as they are), and only in the task's own run: the task starts through its own
+  hidden launcher, which runs the pinned copy, and this run is that copy; the run is not elevated; the task runs as
+  this user. Anything else is refused by name in update.log and `status`, and changes nothing. A task not yet on the
+  hidden launcher still moves only at `-InstallChartBridge` or `register`, as before, and gets both daily checks then
+  (its 17:05 or 09:00 becomes 09:00 and 17:00; another time is kept).
+- **Hand-made launchers are read, and moved by the task's own run** (WORK's 0.6.8 install, 2026-10-23: the #66 move
+  said "does not run update-pc.ps1" on WORK and HOME, whose tasks run `wscript.exe` on a hand-made
+  `C:\SchwabDesk_bulk\hidden\ChartEngine_Updater.vbs` since 2026-10-22). A launcher's Run line of the form
+  `cmd /s /c "cd /d "<folder>" && "<powershell.exe>" ... -File "<pinned update-pc.ps1>" update -Repo <clone>"` is now
+  read (the outer quotes `/s` takes off, then the `cd /d ... &&`), so `register` and `-InstallChartBridge` keep its
+  `-Repo` and move it. And the task's own automatic run moves a task behind a `.vbs` in `C:\SchwabDesk_bulk\hidden`
+  (with or without `//B`) to its own launcher, with 09:00, 17:00 and sign-in, through the same move: `-Repo` kept, and
+  refused by name (one WARN line, nothing changed) when the window is elevated, the task runs as another user, its
+  script is not the pinned copy, or its command is anything but `update -Repo` (an option the launcher would drop). Only
+  when this run is the pinned copy. The hand-made `.vbs` stays on disk. A plain `powershell.exe` task still moves only at
+  `-InstallChartBridge` or `register`. Tested with WORK's exact `.vbs` line.
+- **Never two updates at once.** Two daily triggers and the sign-in trigger start the same task: Task Scheduler never
+  starts it twice at once (IgnoreNew), and every run takes `updater.lock` (held open, no sharing) before it does
+  anything; a run that finds it held says busy and changes nothing.
+- `status` prints one line per daily time: the New York time, its time on this PC's clock and its next run; a time with
+  no trigger yet, a daily trigger that is none of them, and why the last run left the triggers alone.
+- Tests: the stubbed add (the sign-in trigger kept, the action, launcher and pinned.json untouched), each refusal (not on
+  its launcher, elevated, another user, not the pinned copy), both there, both drifted, too many or none, a time given by
+  hand, a refused change; `-DailyAt` as a list and through `-File`; old pins of each kind; register with two times; the
+  migration with two times; and, on Windows, a real throwaway task registered with both, moved back from a drift, and
+  given its 17:00 trigger in place.
+
 ## ChartBridge 0.6.8 and chart 1.38.1 (2026-10-23): the history gap after a reload, the League chart and the Drone sky on NQ
 
 Two live bugs on WORK (2026-10-23, page 1.38.0, ChartBridge 0.6.7), and Anthony's choice for the League chart. ChartBridge 0.6.8
