@@ -65,6 +65,12 @@ changes: nothing on any order path (ChartBridgeOrders.cs and the other order fil
     back in their strict form; `nt8/check/GapMain.cs` runs the WORK case alone against the 0.6.7 sources: "WORK case
     REPRODUCED on 0.6.7: minuteTailRebuilt 0 and no bar from 10:40 to 11:08 ET", and on 0.6.8 "continuous minutes from 09:30
     to 11:07, every trade once (29225 of 29225)".
+- **The re-review** (two MEDIUM, a LOW): after an error answer an agent gets exactly what 0.6.7 sent (no history bar) and
+  `ready` says `minuteFailed` (and `standIn` for any load not on NinjaTrader's full answer); a fresh kept answer that reaches
+  back to a load's start is that load's answer (NinjaTrader not asked), and `historyLate` goes at most once a page and
+  instrument in 5 minutes, so a NinjaTrader just over the limit cannot reload the charts in a loop (harness: three loads, one
+  historyLate, one request); a cold start marks the instrument overdue at the first limit and keeps looking every 3 s; kept
+  bars served alone get their last minute from the last trades, as 0.6.7 does with an answer.
 - **The League chart and the Agents panel's Drone sky on NQ 1 min.** Anthony, 2026-10-23: his only MNQ chart is a 40-range
   execution chart (it loads trades, not minute bars) and all his other charts, including a 1 min, are NQ; "the League tab's
   chart AND the Agents panel's Drone sky pillars switch from MNQ to NQ 1 min", keeping 5 days and no ticks for the League

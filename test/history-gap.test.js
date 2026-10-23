@@ -44,7 +44,7 @@ test('0.6.8: ChartBridge keeps a minute book per instrument and joins it to Ninj
   assert.match(cs, /mb\.Add\(e\.Time, e\.Price, e\.Volume\);/);
   assert.match(cs, /b\.Minutes\.Reset\(why\);/);
   // the time limits and no pile of requests
-  assert.match(cs, /public static int MinuteTimeoutMs = 20000, TailTimeoutMs = 20000, OverdueReaskMs = 120000;/);
+  assert.match(cs, /public static int MinuteTimeoutMs = 20000, TailTimeoutMs = 20000, OverdueReaskMs = 120000, MinuteRecheckMs = 3000;/);
   assert.match(cs, /if \(Interlocked\.Exchange\(ref L\.ReadyOnce, 1\) != 0\) return;/);
   // tick charts (Anthony 2026-10-23): the book copied for every load, the same rebuild rule on both paths, the time limit
   assert.match(cs, /L\.Book = book\.Minutes\.Snap\(\);   \/\/ every load/);
@@ -61,6 +61,12 @@ test('0.6.8: ChartBridge keeps a minute book per instrument and joins it to Ninj
   assert.match(cs, /finally\s*\{\s*\/\/ review of 0\.6\.8: never a load stuck on LOADING/, 'item 5');
   assert.match(cs, /cts = null;   \/\/ 0\.6\.8/, 'item 10: a stopped run\'s loads do nothing');
   assert.doesNotMatch(cs, /the contract changed to/, 'item 9: the dead contract check is gone');
+  // the re-review
+  assert.match(cs, /if \(L\.Book != null && !\(raw == null && L\.Agent\)\)/, 'A: no book alone for an agent after an error');
+  assert.match(cs, /\\"minuteFailed\\":" \+ \(L\.MinuteFailed/, 'A: ready says minuteFailed');
+  assert.match(cs, /if \(!L\.Agent && FromKept\(L, book\)\) return;/, 'B: a fresh kept answer is the answer');
+  assert.match(cs, /public static int HistoryLateGapMs = 300000;/, 'B: historyLate at most once in 5 minutes');
+  assert.match(cs, /Task\.Delay\(MinuteRecheckMs\)\.ContinueWith/, 'C: a cold start looks again');
   const live = read('live/live.js'), feed = read('live/feed.js');
   assert.match(live, /case 'historyLate':[\s\S]{0,400}if \(m\.root === D\.root && !stale\(m\) && D\.ready\) subscribe\(D\.root\);/);
   assert.match(feed, /if \(t === 'historyLate'\) \{/); assert.match(feed, /cur && !cur\.stale && /);

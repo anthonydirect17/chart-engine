@@ -173,11 +173,12 @@ public static class WindowGapHarness
     // W3: NinjaTrader does not answer the minute request (an earlier load's answer to 10:40 is known).
     static void W3()
     {
-        FieldInfo mt = typeof(ChartBridgeServer).GetField("MinuteTimeoutMs");
-        int mWas = mt != null ? (int)mt.GetValue(null) : 0;
+        FieldInfo mt = typeof(ChartBridgeServer).GetField("MinuteTimeoutMs"), ot = typeof(ChartBridgeServer).GetField("OverdueReaskMs");
+        int mWas = mt != null ? (int)mt.GetValue(null) : 0, oWas = ot != null ? (int)ot.GetValue(null) : 0;
         try
         {
             if (mt != null) mt.SetValue(null, 400);
+            if (ot != null) ot.SetValue(null, 1);   // the earlier load's answer is not fresh: this load asks NinjaTrader, and waits for it
             simNow = Et(6, 0, 0);
             ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow).AddHours(-20));
             List<Trade> tape = Tape(Et(10, 38, 0), Et(11, 8, 20), 150, 703);
@@ -199,10 +200,10 @@ public static class WindowGapHarness
             else
             {
                 string notes = (string)Priv("HistoryNotesJson");
-                Check(ready && gaps == null && HistoryBars(l).Count > 60 && !l.Any(x => x.Contains("\"type\":\"status\"")) && notes.Contains("as it last sent it") && notes.Contains("(a tick chart)"),
+                Check(ready && gaps == null && HistoryBars(l).Count > 60 && !l.Any(x => x.Contains("\"type\":\"status\"")) && notes.Contains("minute history: no answer from NinjaTrader in 0 s; the load shows NinjaTrader's minute history as it last sent it (to 10:39 ET) and ChartBridge's own minute bars from 10:39 ET (a tick chart)") && l.Any(x => x.Contains("\"type\":\"ready\"") && x.Contains("\"standIn\":true")),
                     "W3 fixed: no minute answer in its time: the tick chart is ready from NinjaTrader's kept minute answer and the minute book, no hole; a history note, nothing on the page (" + HistoryBars(l).Count + " bars)");
             }
         }
-        finally { if (mt != null) mt.SetValue(null, mWas); }
+        finally { if (mt != null) mt.SetValue(null, mWas); if (ot != null) ot.SetValue(null, oWas); }
     }
 }
