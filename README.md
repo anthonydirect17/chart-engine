@@ -278,8 +278,8 @@ across fake restarts.
 `nt8\update-pc.ps1` keeps the chart page on each trading PC (HOME, the laptop, WORK) up to date by itself, and gets a
 new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git only; no admin, no Python, no token.
 
-- **The page updates by itself.** The updater checks when you sign in and once a day at 5:05 PM New York time, while
-  futures are closed. It installs the newest commit on `main` whose CI is green on both ubuntu-latest and
+- **The page updates by itself.** The updater checks when you sign in and once a day at 9:00 AM New York time (Anthony,
+  2026-10-23: updates are pushed overnight, so they are there in the morning). It installs the newest commit on `main` whose CI is green on both ubuntu-latest and
   windows-latest, and only when that page works with the ChartBridge compiled on this PC (`live/COMPAT.json`). An open
   page keeps running what it loaded, so an open trade is never disturbed.
 - **ChartBridge never installs by itself.** A new one is fetched and staged; Anthony installs it with one command while
@@ -338,10 +338,12 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 update
    ```
 
-5. The scheduled task for this Windows user. It checks when you sign in and once a day at 5:05 PM New York time, while
-   futures are closed (`-DailyAt 17:10` for another New York time). It prints that time on this PC's clock. If the PC
-   is off or asleep at 5:05 PM, that day's check is skipped rather than run later in the trading day; the next sign-in
-   or the next day checks. Every check works out 5:05 PM New York time again and moves the daily check if this PC's
+5. The scheduled task for this Windows user. It checks when you sign in and once a day at 9:00 AM New York time
+   (`-DailyAt 17:05` for another New York time). It prints that time on this PC's clock. A check only installs page
+   files (an open page keeps what it loaded and shows "Update ready: reload when flat") and never ChartBridge, so a
+   morning check changes nothing that is open while you trade. If the PC is off or asleep at 9:00 AM, that day's check
+   is skipped rather than run at a random later hour; the next sign-in or the next day checks. Every check works out
+   the daily New York time again and moves the daily check if this PC's
    clock drifted from it (a trip to another time zone, or DST dates that differ from New York's); the log says so.
    Register pins the updater from the newest green commit on `main` (it fetches first); it refuses a file changed by
    hand or from a branch, and never goes back to an older updater than the one pinned. Run it from a normal
@@ -353,10 +355,13 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    ```
 
    To check the daily time is kept on this PC's clock (a time with no ending such as `-04:00` or `Z`, for example
-   `2026-09-30T17:05:00`): `(Get-ScheduledTask 'ChartEngine Updater').Triggers | Select StartBoundary`
+   `2026-09-30T09:00:00`): `(Get-ScheduledTask 'ChartEngine Updater').Triggers | Select StartBoundary`
 
-   On Windows 11, if a console window stays open while the check runs, that is Windows Terminal being the default
-   terminal; the window closes when the run ends.
+   The task starts hidden (Anthony, 2026-10-22: every scheduled program runs hidden). Register writes a one-line
+   launcher, `updater\bin\update-pc.hidden.vbs`, and the task runs `wscript.exe` on it; the launcher runs the same
+   Windows PowerShell command with no window and waits for it, so the task shows Running and its Last Result as before.
+   `status` says `task start: hidden`. A task registered before this change still starts `powershell.exe` (a console
+   may flash) and keeps its old daily time: run `register` again to move it to the launcher and to 9:00 AM.
 
 **Everyday commands, with the task's own copy.** Paste this once per PowerShell window, then use `$u` as below:
 
@@ -417,7 +422,7 @@ next update. `-InstallChartBridge` also moves the task's copy of the updater to 
 | `rollback` | puts the previous page files back; that commit is skipped until a newer one is on `main`. `rollback` again goes forward again |
 | `repair` | page files only, never ChartBridge: finishes or undoes a cut-off install, or writes a whole page (staged, previous, or the clone's page files; the clone's only when its `live/COMPAT.json` allows the ChartBridge compiled here, or it says plainly that it could not check) |
 | `pause` / `resume` | turns the automatic update off and on (off is never the default; a cut-off install is still repaired while paused) |
-| `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 5:05 PM New York time |
+| `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 9:00 AM New York time, started hidden (wscript.exe and a one-line launcher) |
 
 Why it waits (all in `update.log`): CI not finished or red on either system; GitHub not reachable (it reads CI
 without a token: 60 requests an hour per address, and a pass uses two); ChartBridge's version not known (NinjaTrader

@@ -1133,8 +1133,142 @@ Test 'the daily time: 17:05 New York is 21:05 UTC in summer and 22:05 UTC in win
   Assert ((ConvertFrom-NewYorkTime '09:30' ([datetime]'2026-12-15')).ToUniversalTime().ToString('HH:mm') -eq '14:30') 'another time'
 }
 
+Test 'the daily time is 09:00 New York by default (Anthony 2026-10-23), an explicit -DailyAt wins, and an old pin keeps its own' {
+  Assert ($DailyAt -eq '09:00' -and $script:DailyAtDefault -eq '09:00') "default $DailyAt / $($script:DailyAtDefault)"
+  $exe = (Get-Process -Id $PID).Path
+  $probe = Join-Path $tmpRoot 'dailyat-probe.ps1'
+  Put $probe ("param([string]`$At = '')`n`$a = @{ NoRun = `$true }`nif (`$At) { `$a['DailyAt'] = `$At }`n. '" + (Join-Path (Join-Path $repoRoot 'nt8') 'update-pc.ps1').Replace("'", "''") + "' @a`n[Console]::Out.WriteLine('DAILYAT=' + `$DailyAt)`n")
+  $r = Invoke-Native $exe @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $probe) 120
+  Assert ($r.out -match 'DAILYAT=09:00') "the default: $($r.out) $($r.err)"
+  $r = Invoke-Native $exe @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $probe, '-At', '17:05') 120
+  Assert ($r.out -match 'DAILYAT=17:05') "explicit: $($r.out) $($r.err)"
+  # a PC registered before keeps the dailyAt its pinned.json says (-InstallChartBridge re-pins with the same time)
+  $pj = Join-Path $script:P.Bin 'pinned.json'
+  $keep = Get-Text $pj
+  try {
+    $pin = Read-JsonFile $pj; $pin['dailyAt'] = '17:05'; Write-JsonAtomic $pj $pin
+    [void](Install-PinnedUpdater (Join-Path $script:P.Bin 'update-pc.ps1') ([string]$pin['commit']) ([string]$pin['blob']) '-InstallChartBridge')
+    Assert ((Read-JsonFile $pj)['dailyAt'] -eq '17:05') 'an old pin keeps 17:05'
+    $pin = Read-JsonFile $pj; $pin.Remove('dailyAt'); Write-JsonAtomic $pj $pin
+    [void](Install-PinnedUpdater (Join-Path $script:P.Bin 'update-pc.ps1') ([string]$pin['commit']) ([string]$pin['blob']) '-InstallChartBridge')
+    Assert ((Read-JsonFile $pj)['dailyAt'] -eq '09:00') 'a pin with no dailyAt takes the default'
+  } finally { Put $pj $keep }
+}
+
+# The scheduled task's commands, stubbed (no task is ever made or touched here): each records what it was given.
+$script:TaskCalls = New-Object System.Collections.ArrayList
+$script:StubTask = $null
+function Use-TaskStubs {
+  $script:TaskCalls.Clear(); $script:StubTask = $null
+  function script:New-ScheduledTaskAction { param([string]$Execute, [string]$Argument, [string]$WorkingDirectory) [void]$script:TaskCalls.Add(@{ cmd = 'action'; Execute = $Execute; Argument = $Argument; WorkingDirectory = $WorkingDirectory }); return [pscustomobject]@{ Execute = $Execute; Arguments = $Argument; WorkingDirectory = $WorkingDirectory } }
+  function script:New-ScheduledTaskTrigger { param([switch]$AtLogOn, [string]$User, [switch]$Daily, [datetime]$At) return [pscustomobject]@{ Kind = $(if ($AtLogOn) { 'logon' } else { 'daily' }); User = $User; At = $At; Delay = $null; StartBoundary = $null } }
+  function script:New-ScheduledTaskPrincipal { param([string]$UserId, [string]$LogonType, [string]$RunLevel) return [pscustomobject]@{ UserId = $UserId; LogonType = $LogonType; RunLevel = $RunLevel } }
+  function script:New-ScheduledTaskSettingsSet { param([string]$MultipleInstances, [switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries, [switch]$StartWhenAvailable, [TimeSpan]$ExecutionTimeLimit) return [pscustomobject]@{ MultipleInstances = $MultipleInstances; AllowStartIfOnBatteries = [bool]$AllowStartIfOnBatteries; DontStopIfGoingOnBatteries = [bool]$DontStopIfGoingOnBatteries; StartWhenAvailable = [bool]$StartWhenAvailable; ExecutionTimeLimit = $ExecutionTimeLimit } }
+  function script:Register-ScheduledTask { param([string]$TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force, [string]$Description) [void]$script:TaskCalls.Add(@{ cmd = 'register'; TaskName = $TaskName; Action = $Action; Trigger = @($Trigger); Principal = $Principal; Settings = $Settings; Force = [bool]$Force; Description = $Description }); $script:StubTask = [pscustomobject]@{ TaskName = $TaskName; Actions = @($Action); State = 'Ready' }; return $script:StubTask }
+  function script:Get-ScheduledTask { [CmdletBinding()] param([string]$TaskName) [void]$script:TaskCalls.Add(@{ cmd = 'get'; TaskName = $TaskName }); return $script:StubTask }
+  function script:Unregister-ScheduledTask { param([string]$TaskName, [switch]$Confirm) [void]$script:TaskCalls.Add(@{ cmd = 'unregister'; TaskName = $TaskName }); $script:StubTask = $null }
+  function script:Set-ScheduledTask { throw 'Set-ScheduledTask was not expected here' }
+}
+function Remove-TaskStubs {
+  foreach ($n in @('New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal', 'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask', 'Get-ScheduledTask', 'Unregister-ScheduledTask', 'Set-ScheduledTask')) {
+    if (Test-Path "function:script:$n") { Remove-Item "function:script:$n" }
+  }
+}
+function Get-TaskCall([string]$Cmd) { return @($script:TaskCalls | Where-Object { $_.cmd -eq $Cmd }) }
+
+Test 'register (stubbed): the task runs wscript.exe on an ASCII one-line launcher that runs the same hidden PowerShell command, everything else as before' {
+  $keepP = $script:P
+  $docs = Join-Path $tmpRoot 'hid docs'
+  $repoSp = Join-Path $tmpRoot 'my clone'
+  Initialize-Paths $repoSp (Join-Path $docs 'NinjaTrader 8')
+  Use-TaskStubs
+  try {
+    $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+    $local = ConvertFrom-NewYorkTime '09:00'
+    Register-HiddenTask 'PC\anthony' $pinned $local
+    $launcher = Join-Path $script:P.Bin 'update-pc.hidden.vbs'
+    Assert ($launcher -match 'NinjaTrader 8' -and (Test-Path -LiteralPath $launcher)) "the launcher is in updater\bin: $launcher"
+    $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if ($env:SystemRoot) { Assert ($ps -eq (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')) "the same powershell.exe as before: $ps" }
+    $cmd = '"' + $ps + '" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $pinned + '" update -Repo "' + $repoSp + '"'
+    Assert ($cmd -eq ('"' + $ps + '" ' + (Get-TaskArguments $pinned $repoSp))) "the command line is the task's old one: $cmd"
+    $want = 'WScript.Quit CreateObject("WScript.Shell").Run("' + $cmd.Replace('"', '""') + '", 0, True)' + "`r`n"
+    $bytes = [IO.File]::ReadAllBytes($launcher)
+    Assert (@($bytes | Where-Object { $_ -gt 127 -or ($_ -lt 32 -and $_ -ne 13 -and $_ -ne 10) }).Count -eq 0) 'ASCII only, no BOM'
+    $text = [Text.Encoding]::ASCII.GetString($bytes)
+    Assert ($text -ceq $want) "the launcher's exact line:`n$text`nwanted`n$want"
+    Assert (@($text.TrimEnd("`r", "`n").Split("`n")).Count -eq 1) 'one line'
+    Assert ($text.Contains('-File ""' + $pinned + '"" update -Repo ""' + $repoSp + '""')) 'the paths with spaces, quoted and doubled'
+    $reg = @(Get-TaskCall 'register')
+    Assert ($reg.Count -eq 1) "one Register-ScheduledTask: $($reg.Count)"
+    $r = $reg[0]
+    Assert ($r.TaskName -eq 'ChartEngine Updater' -and $r.Force) "name and -Force: $($r.TaskName)"
+    Assert ($r.Action.Execute -eq (Get-SystemExe 'System32\wscript.exe')) "wscript.exe: $($r.Action.Execute)"
+    Assert ($r.Action.Arguments -ceq ('"' + $launcher + '"')) "the launcher, quoted: $($r.Action.Arguments)"
+    Assert ($r.Action.WorkingDirectory -eq $script:P.Bin) "the working folder as before: $($r.Action.WorkingDirectory)"
+    Assert ($r.Trigger.Count -eq 2 -and $r.Trigger[0].Kind -eq 'logon' -and $r.Trigger[0].User -eq 'PC\anthony' -and $r.Trigger[0].Delay -eq 'PT2M') 'at sign-in, after 2 minutes'
+    Assert ($r.Trigger[1].Kind -eq 'daily' -and $r.Trigger[1].StartBoundary -eq $local.ToString('yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)) "daily, wall-clock time: $($r.Trigger[1].StartBoundary)"
+    Assert ($r.Principal.UserId -eq 'PC\anthony' -and $r.Principal.LogonType -eq 'Interactive' -and $r.Principal.RunLevel -eq 'Limited') 'only while signed in, no password, not elevated'
+    $st = $r.Settings
+    Assert ($st.MultipleInstances -eq 'IgnoreNew' -and $st.AllowStartIfOnBatteries -and $st.DontStopIfGoingOnBatteries -and -not $st.StartWhenAvailable -and $st.ExecutionTimeLimit -eq (New-TimeSpan -Minutes 30)) 'settings as before'
+    Assert ($r.Description -ceq "Keeps the chart page in ChartBridge's www folder up to date (green commits on main only). Never installs ChartBridge. Log: $($script:P.Log)") 'the description as before'
+    # again: idempotent, the same launcher, one more register
+    Register-HiddenTask 'PC\anthony' $pinned $local
+    Assert ([IO.File]::ReadAllText($launcher) -ceq $want -and @(Get-TaskCall 'register').Count -eq 2) 'register again: the same launcher'
+    Assert ((Get-TaskLauncherPath $script:StubTask) -eq $launcher) 'the task names the launcher'
+    # unregister: the task and the launcher
+    Unregister-HiddenTask
+    Assert (@(Get-TaskCall 'unregister').Count -eq 1 -and $null -eq $script:StubTask) 'the task removed'
+    Assert (-not (Test-Path -LiteralPath $launcher)) 'the launcher removed'
+    Unregister-HiddenTask
+    Assert (@(Get-TaskCall 'unregister').Count -eq 1) 'unregister again: nothing to do'
+  } finally { Remove-TaskStubs; $script:P = $keepP }
+}
+Test 'register (stubbed): a launcher that cannot be written stops register before the task is touched' {
+  $keepP = $script:P
+  Initialize-Paths (Join-Path $tmpRoot 'clone2') (Join-Path $tmpRoot 'nt-hid-fail')
+  Use-TaskStubs
+  try {
+    $launcher = Join-Path $script:P.Bin 'update-pc.hidden.vbs'
+    New-Item -ItemType Directory -Force -Path $launcher | Out-Null      # a folder where the file goes: the write fails
+    $threw = ''
+    try { Register-HiddenTask 'PC\anthony' (Join-Path $script:P.Bin 'update-pc.ps1') (Get-Date) } catch { $threw = $_.Exception.Message }
+    Assert ($threw -match 'hidden launcher could not be written, the task was not changed') "failed loudly: $threw"
+    Assert (@(Get-TaskCall 'register').Count -eq 0 -and @(Get-TaskCall 'action').Count -eq 0) 'no task made or changed'
+    Remove-Item -LiteralPath $launcher -Force
+    # a path a launcher cannot hold as written: refused, not changed
+    foreach ($bad in @(('clone ' + [char]0x00E9), 'clone %USERNAME%')) {
+      Initialize-Paths (Join-Path $tmpRoot $bad) (Join-Path $tmpRoot 'nt-hid-fail')
+      $threw = ''
+      try { Register-HiddenTask 'PC\anthony' (Join-Path $script:P.Bin 'update-pc.ps1') (Get-Date) } catch { $threw = $_.Exception.Message }
+      Assert ($threw -match 'could not be written' -and -not (Test-Path -LiteralPath $launcher)) "refused for '$bad': $threw"
+    }
+    Assert (@(Get-TaskCall 'register').Count -eq 0) 'still no task'
+  } finally { Remove-TaskStubs; $script:P = $keepP }
+}
+Test 'unregister (stubbed) removes a launcher the task names only when it is ours' {
+  $keepP = $script:P
+  Initialize-Paths (Join-Path $tmpRoot 'clone3') (Join-Path $tmpRoot 'nt-hid-un')
+  Use-TaskStubs
+  try {
+    $other = Join-Path $tmpRoot 'hidden-by-hand'
+    New-Item -ItemType Directory -Force -Path $other | Out-Null
+    $hand = Join-Path $other 'chartengine_updater.vbs'
+    Put $hand "hand made`r`n"
+    $script:StubTask = [pscustomobject]@{ TaskName = 'ChartEngine Updater'; Actions = @([pscustomobject]@{ Execute = 'C:\Windows\System32\wscript.exe'; Arguments = '"' + $hand + '"' }); State = 'Ready' }
+    Assert ((Get-TaskLauncherPath $script:StubTask) -eq '') 'a hand-made launcher is not ours'
+    Unregister-HiddenTask
+    Assert ((Test-Path -LiteralPath $hand) -and @(Get-TaskCall 'unregister').Count -eq 1) 'the task removed, the hand-made launcher left'
+    $mine = Join-Path $other 'update-pc.hidden.vbs'
+    Put $mine "x`r`n"
+    $script:StubTask = [pscustomobject]@{ TaskName = 'ChartEngine Updater'; Actions = @([pscustomobject]@{ Execute = 'C:\Windows\System32\wscript.exe'; Arguments = '"' + $mine + '"' }); State = 'Ready' }
+    Unregister-HiddenTask
+    Assert (-not (Test-Path -LiteralPath $mine)) 'ours, where the task named it: removed'
+  } finally { Remove-TaskStubs; $script:P = $keepP }
+}
+
 if ($IsWin) {
-  Test 'register: a task for this user, at sign-in and daily at 17:05 New York time, IgnoreNew, -File, no admin' {
+  Test 'register: a task for this user, at sign-in and daily at 09:00 New York time, started hidden, IgnoreNew, -File, no admin' {
     $script:TaskName = 'ChartEngine Updater CI ' + [guid]::NewGuid().ToString('N').Substring(0, 8)
     $TaskName = $script:TaskName
     try {
@@ -1143,16 +1277,18 @@ if ($IsWin) {
       Assert ($t.Settings.MultipleInstances -eq 'IgnoreNew') "MultipleInstances $($t.Settings.MultipleInstances)"
       Assert ("$($t.Principal.LogonType)" -eq 'Interactive' -and "$($t.Principal.RunLevel)" -eq 'Limited') "principal $($t.Principal.LogonType) $($t.Principal.RunLevel)"
       $a = $t.Actions[0]
-      Assert ($a.Execute -match 'WindowsPowerShell\\v1\.0\\powershell\.exe$') $a.Execute
-      Assert ($a.Arguments -match '-File ' -and $a.Arguments -match ' update -Repo ' -and $a.Arguments -match 'updater\\bin\\update-pc\.ps1') "the pinned copy: $($a.Arguments)"
+      $launcher = Join-Path $script:P.Bin 'update-pc.hidden.vbs'
+      Assert ($a.Execute -match 'System32\\wscript\.exe$' -and $a.Arguments -eq ('"' + $launcher + '"')) "hidden: $($a.Execute) $($a.Arguments)"
+      $line = [IO.File]::ReadAllText($launcher)
+      Assert ($line -match 'WindowsPowerShell\\v1\.0\\powershell\.exe' -and $line -match '-File ' -and $line -match ' update -Repo ' -and $line -match 'updater\\bin\\update-pc\.ps1' -and $line -match ', 0, True\)\r\n$') "the pinned copy, hidden and waited for: $line"
       Assert ($a.WorkingDirectory -eq $script:P.Bin -and (Test-Path (Join-Path $script:P.Bin 'update-pc.ps1'))) "working folder $($a.WorkingDirectory)"
       Assert ($a.Arguments -notmatch '(?i)(^|\s)[-/](e|ec|en\w*|c|co\w*)(\s|$)') "no command string: $($a.Arguments)"
       $kinds = @($t.Triggers | ForEach-Object { $_.CimClass.CimClassName })
       Assert ($kinds.Count -eq 2 -and $kinds -contains 'MSFT_TaskLogonTrigger' -and $kinds -contains 'MSFT_TaskDailyTrigger') ($kinds -join ',')
       $daily = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })[0]
       Assert ($daily.DaysInterval -eq 1) "every day: $($daily.DaysInterval)"
-      $want = (ConvertFrom-NewYorkTime '17:05').ToString('HH:mm')
-      Assert (([datetime]$daily.StartBoundary).ToString('HH:mm') -eq $want) "daily at $want local (17:05 New York): $($daily.StartBoundary)"
+      $want = (ConvertFrom-NewYorkTime '09:00').ToString('HH:mm')
+      Assert (([datetime]$daily.StartBoundary).ToString('HH:mm') -eq $want) "daily at $want local (09:00 New York, the default): $($daily.StartBoundary)"
       Assert ($daily.StartBoundary -notmatch '(Z|[+-]\d\d:\d\d)$') "local wall-clock time, no UTC offset: $($daily.StartBoundary)"
       Assert (-not $daily.Repetition.Interval) "no repetition: '$($daily.Repetition.Interval)'"
       Assert ($t.Settings.StartWhenAvailable -eq $false) 'a missed daily run is not started later (it could land in the trading day)'
@@ -1170,6 +1306,7 @@ if ($IsWin) {
       Assert (@($t2.Triggers).Count -eq 2 -and (Get-Text $script:P.Log) -match 'the daily check moved from 03:00') 'the sign-in trigger kept, and the move logged'
       Assert-Code (Invoke-Unregister) 0 'unregister OK'
       Assert (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 'gone'
+      Assert (-not (Test-Path -LiteralPath $launcher)) 'the launcher gone too'
     } finally {
       if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false }
     }
@@ -1177,6 +1314,7 @@ if ($IsWin) {
   Test 'register in a time zone with DST: the XML StartBoundary has no offset, and 17:05 New York stays 17:05 across DST and time zones (review 3 S2)' {
     $script:TaskName = 'ChartEngine Updater DST ' + [guid]::NewGuid().ToString('N').Substring(0, 8)
     $TaskName = $script:TaskName
+    $DailyAt = '17:05'     # an explicit -DailyAt (the default is 09:00): it wins, and this test's times follow it
     $origTz = "$(& tzutil /g)".Trim()
     if (-not $origTz) { $origTz = [TimeZoneInfo]::Local.Id }
     $xmlBoundary = {
