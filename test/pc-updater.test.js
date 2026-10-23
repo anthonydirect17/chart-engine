@@ -166,9 +166,15 @@ test('the automatic run may add a missing daily trigger (Anthony 2026-10-23: 09:
   // an add goes through the own-run guards first
   const add = sync.indexOf("if ($plan.action -eq 'add') {"), guard = sync.indexOf('$why = Get-AddTriggerProblem $task'), set = sync.indexOf('Set-ScheduledTask ');
   assert.ok(add > 0 && guard > add && set > guard, 'the guards before the change');
+  // every change (a move too, Anthony 2026-10-23) only in the task's own run; an add also needs its own launcher
+  const own = src.slice(src.indexOf('function Get-OwnRunProblem'));
+  const ownBody = own.slice(0, own.indexOf('\n}\n'));
+  for (const s of ["Test-SamePath ([string]$o['#script']) $pinned", 'Test-SamePath $script:UpdaterSelf $pinned', 'Test-Elevated', 'Test-SameUser $u $me']) assert.ok(ownBody.includes(s), 'guard: ' + s);
   const g = src.slice(src.indexOf('function Get-AddTriggerProblem'));
   const body = g.slice(0, g.indexOf('\n}\n'));
-  for (const s of ['Get-TaskLauncherPath $Task', "Test-SamePath ([string]$o['#script']) $pinned", 'Test-SamePath $script:UpdaterSelf $pinned', 'Test-Elevated', 'Test-SameUser $u $me']) assert.ok(body.includes(s), 'guard: ' + s);
+  assert.ok(body.includes('Get-TaskLauncherPath $Task') && body.includes('return (Get-OwnRunProblem $Task)'), 'the add: its own launcher, then the own-run guards');
+  const mv = sync.indexOf('} else {\n      $why = Get-OwnRunProblem $task');
+  assert.ok(mv > add && mv < set, 'a move goes through the own-run guards first');
   // the update run takes updater.lock before the trigger check: two triggers never run an update at once
   const upd = src.slice(src.indexOf('function Invoke-Update('), src.indexOf('function Invoke-Status'));
   assert.ok(upd.indexOf('$lock = Enter-Lock') < upd.indexOf('Sync-DailyTrigger'), 'the lock first');

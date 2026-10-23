@@ -77,7 +77,9 @@
   launcher with one daily trigger gets the 17:00 one from the automatic run of a pinned copy that has this change: a
   change of the schedule only (the action, the launcher and the pinned copy stay as they are), and only in the task's own
   run (the task starts through its own launcher, which runs the pinned copy, and this run is that copy; not elevated; the
-  task's own user). A PC picks it up after its next -InstallChartBridge or register (either pins a copy with this
+  task's own user). Every other change of the daily triggers (a move for DST or a time zone) is made only in the task's
+  own run too (the same checks, without the launcher one); an update run by hand changes no trigger and says so. A PC
+  picks it up after its next -InstallChartBridge or register (either pins a copy with this
   change); a task not yet on the hidden launcher gets both at that migration. Two triggers never run an update at the same
   moment: the task never starts twice at once (IgnoreNew), and every run takes updater.lock first (a run that finds it
   held says busy and changes nothing).
@@ -1902,9 +1904,10 @@ function Read-StartBoundary([string]$Text) {
 
 # The daily checks are local times on this PC. At every update run, pinned.json's daily times (New York time,
 # Get-PinTimes) are worked out again for today, and the daily triggers are moved when they drifted (a time zone change,
-# DST dates that differ from New York's, or a StartBoundary kept on UTC). A daily trigger missing (a task registered with
-# one, before 09:00 and 17:00) is added, only in the task's own run (Get-AddTriggerProblem): a change of the schedule,
-# never of the action. More daily triggers than times, or none, are left to register. Returns what it found, for
+# DST dates that differ from New York's, or a StartBoundary kept on UTC), only in the task's own run (Get-OwnRunProblem;
+# a run by hand changes no trigger and says so). A daily trigger missing (a task registered with one, before 09:00 and
+# 17:00) is added, also only on the task's own launcher (Get-AddTriggerProblem): a change of the schedule, never of the
+# action. More daily triggers than times, or none, are left to register. Returns what it found, for
 # state.json and status: a failure (a task registered from an elevated window cannot be changed by the task's own run:
 # access denied) is recorded, not only logged.
 function Sync-DailyTrigger {
@@ -1927,6 +1930,13 @@ function Sync-DailyTrigger {
       $why = Get-AddTriggerProblem $task
       if ($why) {
         $res.note = "the daily check at $(Format-DailyTimes $plan.missing) New York time was not added: $why"
+        Write-Log "$($res.note)" 'WARN'
+        return $res
+      }
+    } else {
+      $why = Get-OwnRunProblem $task
+      if ($why) {
+        $res.note = "the daily checks were not moved (they are $($plan.have) on this PC's clock, wanted $($plan.want)): $why"
         Write-Log "$($res.note)" 'WARN'
         return $res
       }
@@ -2057,24 +2067,31 @@ function Get-DailyLines($Task, $Times, [datetime]$Now = (Get-Date)) {
   return $out
 }
 
-# Adding a daily trigger in the automatic run (Anthony 2026-10-23: no job per PC): a change of the schedule only, never of
-# the action, and only in the task's own run: the task starts through its own hidden launcher, that launcher runs the
-# pinned copy, and this run is that copy; this run is not elevated, and the task runs as this user. '' when it may.
-# A task not on its own launcher yet gets both daily triggers when it moves to it (-InstallChartBridge or register).
-function Get-AddTriggerProblem($Task) {
+# Every change of the daily triggers in the automatic run (Anthony 2026-10-23: a move too, not only an add) is made only
+# in the task's own run, as Bot-Lab's botlab_update.ps1: the task runs the pinned copy, and this run is that copy; this
+# run is not elevated, and the task runs as this user. A run by hand (update from the clone) changes no trigger and says
+# so. '' when it may.
+function Get-OwnRunProblem($Task) {
   $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
-  if (-not (Get-TaskLauncherPath $Task)) { return 'the task does not start through its own hidden launcher yet: -InstallChartBridge or update-pc.ps1 register moves it with both daily checks' }
   $cmd = Get-TaskCommand $Task
   if ($cmd.error) { return "the task's command cannot be read ($($cmd.error)); run update-pc.ps1 register" }
   $o = Get-CommandOptions $cmd.line 'update-pc.ps1'
   if ($null -eq $o -or -not (Test-SamePath ([string]$o['#script']) $pinned)) { return "the task does not run the pinned copy $pinned; run update-pc.ps1 register" }
-  if (-not (Test-SamePath $script:UpdaterSelf $pinned)) { return "this run is $($script:UpdaterSelf), not the task's pinned copy $pinned" }
+  if (-not (Test-SamePath $script:UpdaterSelf $pinned)) { return "this run is $($script:UpdaterSelf), not the task's pinned copy $pinned (a run by hand: the task's own run does it)" }
   if (Test-Elevated) { return 'this run is elevated (Run as administrator); run update-pc.ps1 register from a normal window' }
   $u = Get-TaskUserId $Task
   $me = Get-CurrentUserName
   if (-not $u) { return "the task's user cannot be read; run update-pc.ps1 register" }
   if (-not (Test-SameUser $u $me)) { return "the task runs as $u, this run as ${me}; run update-pc.ps1 register as $u" }
   return ''
+}
+
+# Adding a daily trigger in the automatic run (Anthony 2026-10-23: no job per PC): a change of the schedule only, never of
+# the action, in the task's own run (Get-OwnRunProblem), and only when the task starts through its own hidden launcher.
+# A task not on its own launcher yet gets both daily triggers when it moves to it (-InstallChartBridge or register).
+function Get-AddTriggerProblem($Task) {
+  if (-not (Get-TaskLauncherPath $Task)) { return 'the task does not start through its own hidden launcher yet: -InstallChartBridge or update-pc.ps1 register moves it with both daily checks' }
+  return (Get-OwnRunProblem $Task)
 }
 
 # What the last check of the daily trigger found, in state.json: failedAt stays until a check succeeds again.

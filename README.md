@@ -344,9 +344,10 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    it loaded and shows "Update ready: reload when flat") and never ChartBridge, so a check changes nothing that is open
    while you trade. If the PC is off or asleep at a check's time, that check is skipped rather than run at a random
    later hour; the next sign-in or the next daily check runs. The two checks never run an update at the same moment:
-   the task never starts twice at once, and each run holds `updater.lock`. Every check works out the New York times
-   again and moves the daily checks if this PC's clock drifted from them (a trip to another time zone, or DST dates
-   that differ from New York's); the log says so.
+   the task never starts twice at once, and each run holds `updater.lock`. Every check of the task's own works out
+   the New York times again and moves the daily checks if this PC's clock drifted from them (a trip to another time
+   zone, or DST dates that differ from New York's); the log says so. An `update` you run by hand changes no trigger
+   and says so.
    Register pins the updater from the newest green commit on `main` (it fetches first); it refuses a file changed by
    hand or from a branch, and never goes back to an older updater than the one pinned. Run it from a normal
    PowerShell window, not as administrator: the task's own run may not be allowed to move the daily check of a task

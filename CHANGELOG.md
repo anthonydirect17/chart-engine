@@ -12,7 +12,10 @@
   reads alone). A pin written before this change (`dailyAt` only) reads 09:00 and 17:00 when it held an old default
   (09:00 or 17:05) or no time; another single time is kept. `-InstallChartBridge` re-pins with the times it reads.
 - **The check of the daily times** (`Sync-DailyTrigger`, every update run) keeps every daily trigger on its New York time
-  across DST and time zones, as it kept the one. More daily triggers than times, or none, are left to `register` and said.
+  across DST and time zones, as it kept the one. Every change of the triggers, a move as well as an add, is made only in
+  the task's own run (Anthony 2026-10-23, as Bot-Lab's updater): the task runs the pinned copy and this run is that copy,
+  not elevated, as the task's user. A run of `update` by hand changes no trigger and says so in update.log and `status`.
+  More daily triggers than times, or none, are left to `register` and said.
 - **A PC registered before gets the 5:00 PM check by itself, after its next `-InstallChartBridge` or `register`.** The
   automatic path never changes the pinned copy the task runs, so the new code first runs on a PC once one of those pins
   it (`-InstallChartBridge` run from the old pinned copy pins the new one too). From then on, the task's next automatic

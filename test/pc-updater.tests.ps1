@@ -1554,8 +1554,22 @@ Test 'the automatic run adds the 17:00 check to its own hidden task (the schedul
     Set-Stub $wscript $hidden @((New-DailyStub (L '09:00')), (New-DailyStub (L '17:00')))
     $res = Sync-DailyTrigger
     Assert ($script:Sets.Count -eq 0 -and $res.ok -and -not $res.note) 'both there: nothing'
-    # 4. both drifted (or kept on UTC): moved back, by any update run, as before this change
+    # 4. both drifted (or kept on UTC): a run by hand (not the pinned copy) changes no trigger and says so (Anthony
+    # 2026-10-23: every trigger change only in the task's own run); the task's own run moves them back
     $script:UpdaterSelf = $keepSelf
+    Set-Stub $wscript $hidden @((New-DailyStub '2026-01-01T03:00:00'), (New-DailyStub ((L '17:00') + '-04:00')))
+    $res = Sync-DailyTrigger
+    Assert ($script:Sets.Count -eq 0 -and $res.note -match 'the daily checks were not moved .*not the task.s pinned copy .*a run by hand') "a run by hand: $($res.note)"
+    Assert ((Get-Text $script:P.Log) -match 'WARN the daily checks were not moved') 'said in update.log'
+    foreach ($c in @(@{ set = { $script:Elevated = $true }; why = 'this run is elevated' }, @{ set = { $script:Elevated = $false; $script:StubTask.Principal = [pscustomobject]@{ UserId = 'PC\someone' } }; why = 'the task runs as PC\\someone' })) {
+      $script:UpdaterSelf = $pinned
+      Set-Stub $wscript $hidden @((New-DailyStub '2026-01-01T03:00:00'), (New-DailyStub ((L '17:00') + '-04:00')))
+      & $c.set
+      $res = Sync-DailyTrigger
+      Assert ($script:Sets.Count -eq 0 -and $res.note -match ('not moved .*' + $c.why)) "refused: $($res.note)"
+    }
+    $script:Elevated = $false
+    $script:UpdaterSelf = $pinned
     Set-Stub $wscript $hidden @((New-DailyStub '2026-01-01T03:00:00'), (New-DailyStub ((L '17:00') + '-04:00')))
     $res = Sync-DailyTrigger
     Assert ($script:Sets.Count -eq 1 -and $script:Sets[0] -eq ('logon:|daily:' + (L '09:00') + '|daily:' + (L '17:00'))) "moved: $($script:Sets -join ' / ')"
@@ -1784,7 +1798,11 @@ if ($IsWin) {
       Assert ($logon.Delay -eq 'PT2M' -and $logon.UserId) "logon trigger for this user, delay $($logon.Delay)"
       Assert (-not $logon.Repetition.Interval) 'the sign-in check does not repeat'
       Assert ($t.Settings.ExecutionTimeLimit -eq 'PT30M') "time limit $($t.Settings.ExecutionTimeLimit)"
-      # drifted daily times (time zone or DST dates unlike New York's) are moved back at the next run
+      # drifted daily times (time zone or DST dates unlike New York's) are moved back at the task's own next run: this test
+      # stands in for it (the pinned copy, not elevated; the CI runner is an administrator)
+      $keepSelf = $script:UpdaterSelf
+      function Test-Elevated { return $false }
+      $script:UpdaterSelf = Join-Path $script:P.Bin 'update-pc.ps1'
       $logonOnly = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -ne 'MSFT_TaskDailyTrigger' })
       $wrong = @((New-DailyTrigger ([datetime]'2026-01-01 03:00')), (New-DailyTrigger ([datetime]'2026-01-01 04:00')))
       Set-ScheduledTask -TaskName $TaskName -Trigger (@($logonOnly) + $wrong) | Out-Null
@@ -1794,11 +1812,9 @@ if ($IsWin) {
       $got = @($d2 | ForEach-Object { ([datetime]$_.StartBoundary).ToString('HH:mm') } | Sort-Object)
       Assert (($got -join ',') -eq $wantBoth -and @($d2 | Where-Object { $_.StartBoundary -match '(Z|[+-]\d\d:\d\d)$' }).Count -eq 0) "moved back to $want and $want17 local, no offset: $($got -join ',')"
       Assert (@($t2.Triggers).Count -eq 3 -and (Get-Text $script:P.Log) -match 'the daily check moved from 03:00,04:00') 'the sign-in trigger kept, and the move logged'
+      $script:UpdaterSelf = $keepSelf
       # a task with the 09:00 check alone (registered before 09:00 and 17:00): the task's own run adds 17:00 in place
-      $keepSelf = $script:UpdaterSelf
       try {
-        function Test-Elevated { return $false }      # the CI runner is an administrator; the add refuses an elevated run
-        $script:UpdaterSelf = Join-Path $script:P.Bin 'update-pc.ps1'
         $one = @(New-DailyTrigger (ConvertFrom-NewYorkTime '09:00'))
         Set-ScheduledTask -TaskName $TaskName -Trigger (@($logonOnly) + $one) | Out-Null
         $before = @((Get-ScheduledTask -TaskName $TaskName).Actions)[0]
@@ -1813,6 +1829,7 @@ if ($IsWin) {
       Assert (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 'gone'
       Assert (-not (Test-Path -LiteralPath $launcher)) 'the launcher gone too'
     } finally {
+      if (Get-Variable keepSelf -ErrorAction SilentlyContinue) { $script:UpdaterSelf = $keepSelf }
       if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false }
       Remove-Item -LiteralPath (Join-Path $script:P.Bin 'update-pc.hidden.vbs') -Force -ErrorAction SilentlyContinue
     }
@@ -1851,8 +1868,12 @@ if ($IsWin) {
       Set-ScheduledTask -TaskName $TaskName -Trigger (@($others) + @($o)) | Out-Null
       $nextUtc = (Get-ScheduledTaskInfo -TaskName $TaskName).NextRunTime
       Microsoft.PowerShell.Utility\Write-Host "pc-updater dst: first winter run (2026-12-15), Task Scheduler's NextRunTime: wall-clock trigger $nextLocal; trigger with the summer offset -04:00 $nextUtc"
-      # a trigger written with an offset (as New-ScheduledTaskTrigger does) is drift: the next run rewrites it
+      # a trigger written with an offset (as New-ScheduledTaskTrigger does) is drift: the task's own next run rewrites it
+      # (this test stands in for it: the pinned copy, not elevated)
       Assert ((& $xmlBoundary) -match '-04:00$') 'the offset trigger is in place'
+      $keepSelf = $script:UpdaterSelf
+      function Test-Elevated { return $false }
+      $script:UpdaterSelf = Join-Path $script:P.Bin 'update-pc.ps1'
       $res = Sync-DailyTrigger
       $sb2 = & $xmlBoundary
       Assert ($res.ok -and $sb2 -match 'T17:05:00$') "rewritten as wall-clock time: $sb2"
@@ -1864,8 +1885,10 @@ if ($IsWin) {
       $sb3 = & $xmlBoundary
       Microsoft.PowerShell.Utility\Write-Host "pc-updater xml: after a move to Pacific time, <StartBoundary>$sb3</StartBoundary>"
       Assert ($res.ok -and $sb3 -match '^\d{4}-\d\d-\d\dT14:05:00$') "moved to 14:05 Pacific, no offset: $sb3"
+      $script:UpdaterSelf = $keepSelf
       Assert-Code (Invoke-Unregister) 0 'unregister OK'
     } finally {
+      if (Get-Variable keepSelf -ErrorAction SilentlyContinue) { $script:UpdaterSelf = $keepSelf }
       & tzutil /s $origTz
       [TimeZoneInfo]::ClearCachedData()
       if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false }
