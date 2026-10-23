@@ -189,7 +189,7 @@ public static class SeamHarness
         int rd = Index(l, "\"type\":\"ready\"");
         Check(Index(l, "\"type\":\"ticks\"") < 0, "minute chart: no tick backfill goes to the page");
         Check(l.Take(rd).Any(s => s.Contains(",21440.25,21440.5,21440.25,21440.5,7]")), "minute chart: the forming minute rebuilt from the same ticks");
-        List<string> after = l.Skip(rd + 1).Where(x => x.Contains("\"type\":\"tick\"")).ToList();   // 0.6.8: a hole status may follow ready (this case runs on the PC clock, weeks after its data)
+        List<string> after = l.Skip(rd + 1).ToList();
         Check(after.Count == 1 && after[0].Contains("\"p\":21440.75"), "minute chart: the held trade already in that minute is not sent again");
 
         // The last trades do not reach back to the minute's start: NinjaTrader's bar stays and nothing is dropped.
@@ -203,7 +203,7 @@ public static class SeamHarness
         Thread.Sleep(30);
         l = Sent();
         rd = Index(l, "\"type\":\"ready\"");
-        Check(l.Take(rd).Any(s => s.Contains(",21438,21441,21437,21439,7]")) && l.Skip(rd + 1).Count(s => s.Contains("\"type\":\"tick\"")) == 1,
+        Check(l.Take(rd).Any(s => s.Contains(",21438,21441,21437,21439,7]")) && l.Skip(rd + 1).Count() == 1,
             "minute chart, short ticks: NinjaTrader's minute kept and every held trade released (as 0.3.2)");
     }
 
@@ -227,7 +227,7 @@ public static class SeamHarness
         Thread.Sleep(30);
         List<string> l = Sent();
         Check(l.Count(s => s.Contains("\"type\":\"ready\"")) == 1 && !l.Any(s => s.Contains("[1,1,1,1,1]") || s.Contains(",1,1,1,1,1]")), "stale: one ready, nothing from the older load");
-        Check(l.Skip(Index(l, "\"type\":\"ready\"") + 1).Count(s => s.Contains("\"type\":\"tick\"")) == 1, "stale: the held trade from before the new subscribe is not sent (only the one after it)");
+        Check(l.Skip(Index(l, "\"type\":\"ready\"") + 1).Count() == 1, "stale: the held trade from before the new subscribe is not sent (only the one after it)");
     }
 
     static void Empty()
@@ -295,7 +295,7 @@ public static class SeamHarness
         Thread.Sleep(30);
         List<string> l = Sent();
         int rd = Index(l, "\"type\":\"ready\"");
-        Check(l.Take(rd).Any(x => x.Contains(",21438,21441,21437,21439,50]")) && l.Skip(rd + 1).Count(x => x.Contains("\"type\":\"tick\"")) == 1,
+        Check(l.Take(rd).Any(x => x.Contains(",21438,21441,21437,21439,50]")) && l.Skip(rd + 1).Count() == 1,
             "S2: rebuilt volume (7) under NinjaTrader's (50): NinjaTrader's bar kept, held trades all released");
         Check(Seams().Contains("\"ntTailVolume\":50") && Seams().Contains("\"rebuiltTailVolume\":7"), "S2: /diag has NinjaTrader's and the rebuilt volume for the minute");
 

@@ -92,6 +92,17 @@ public static class GapHarness
         return w;
     }
     static string Seams() { return (string)Priv("SeamsJson"); }
+    static string Notes() { return (string)Priv("HistoryNotesJson"); }
+    // A new stand-in page (the old one's outbox is never drained here: after many cases it would be full and drop the history)
+    static int pageIds = 868;
+    static void FreshPage()
+    {
+        var clients = (System.Collections.Concurrent.ConcurrentDictionary<int, ChartBridgeClient>)typeof(ChartBridgeServer).GetField("Clients", PS).GetValue(null);
+        ChartBridgeClient gone; clients.TryRemove(client.Id, out gone);
+        client = new ChartBridgeClient(null, ++pageIds + 1000);
+        client.Tap = x => { lock (sent) sent.Add(x); };
+        clients[client.Id] = client;
+    }
     static string LastSeam() { string s = Seams(); int i = s.LastIndexOf("{\"client\""); return i >= 0 ? s.Substring(i) : ""; }
     static string Hm(double etSec) { long s = (long)Math.Floor(etSec) % 86400; return (s / 3600).ToString("00") + ":" + (s / 60 % 60).ToString("00"); }
 
@@ -122,7 +133,7 @@ public static class GapHarness
             ChartBridgeServer.ClockForHarness = null;
             ChartBridgeServer.BackfillOn = bfWas;
             ChartBridgeServer.ResetBooks(DateTime.MinValue);
-            ChartBridgeClient gone; clients.TryRemove(868, out gone);
+            ChartBridgeClient gone; clients.TryRemove(868, out gone); clients.TryRemove(client.Id, out gone);
             if (had) instruments["NQ"] = was; else instruments.Remove("NQ");
             NinjaTrader.Core.GeneralOptionsClass.Zone = zoneWas;
         }
@@ -198,6 +209,12 @@ public static class GapHarness
         Timeouts();
         Pure();
         Resets();
+        FirstMinute();
+        ColdStart();
+        LateAfterStandIn();
+        AgentWaits();
+        KeptTrimmed();
+        AfterStop();
         Storm();   // last: the GapHarness page on NQ is not read after it (it gets the storm's live NQ trades)
     }
 
@@ -354,7 +371,7 @@ public static class GapHarness
                 double s0 = EtSec(Et(9, 30, 0)), sEnd = EtSec(Et(11, 7, 0));
                 bool continuous = starts.Count == (int)((sEnd - s0) / 60) + 1 && starts.Select((t, i) => Math.Abs(t - (s0 + 60 * i)) < 0.001).All(x => x);
                 double fed = tapes[r].Sum(x => x.V), vol = Vol(w.Bars.Where(b => b[0] >= EtSec(Et(10, 39, 0))), 5) + Vol(w.After, 2);
-                bool status = r != "RTY" ? w.Statuses.Count == 0 : w.Statuses.Count == 1 && w.Statuses[0].Contains("did not send RTY's minute history within 1 s") && w.Statuses[0].Contains("as it last sent it (to 10:39 ET)") && w.Statuses[0].Contains("own minute bars from 10:40 ET");
+                bool status = w.Statuses.Count == 0 && (r != "RTY" || Notes().Contains("minute history: no answer from NinjaTrader in 1 s; the load shows NinjaTrader's minute history as it last sent it (to 10:39 ET) and ChartBridge's own minute bars from 10:40 ET"));
                 Check(continuous && vol == fed && w.After.Count == tapes[r].Count(x => x.T >= Et(11, 8, 0)) && w.Ready.Contains("\"filled\":28") && status,
                     "storm, " + r + (r == "RTY" ? " (its answer after the limit: NinjaTrader's earlier answer and the book)" : " (late, stale answer, no tick backfill)") + ": continuous minutes 09:30 to 11:07, none twice, every trade once (" + vol + " of " + fed + ")" + (w.Statuses.Count > 0 ? "; " + w.Statuses[0] : ""));
             }
@@ -370,6 +387,187 @@ public static class GapHarness
             foreach (string r in roots) { if (r == "NQ") continue; Instrument w0; if (was.TryGetValue(r, out w0)) instruments[r] = w0; else instruments.Remove(r); }
             foreach (ChartBridgeClient c in pages.Values) { ChartBridgeClient g; clients.TryRemove(c.Id, out g); }
         }
+    }
+
+    // Review 1: a load in the book's first minute, right after a ChartBridge start (11:07:50). The book's From is 11:08, the close
+    // of the minute still forming, and it has no bar: NinjaTrader's bar stamped 11:08 holds trades that are also held for the
+    // page. The book does not stand in (Join: no bar after From); the last-trades path runs and its seam drops what is in both.
+    static void FirstMinute()
+    {
+        FreshPage();
+        simNow = Et(11, 7, 50);
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
+        List<Trade> t = Tape(Et(11, 7, 51), Et(11, 8, 30), 150, 811).Where(x => x.T.Second != 0 || x.T.Millisecond != 0).ToList();
+        foreach (Trade x in t.Where(x => x.T < Et(11, 7, 58))) Live(x);
+        lock (sent) sent.Clear();
+        int r0 = Made();
+        simNow = Et(11, 7, 58);
+        Priv("Subscribe", client, "NQ", 5, 0);
+        List<Trade> held = t.Where(x => x.T >= Et(11, 7, 58)).ToList();
+        foreach (Trade x in held.Where(x => x.T < Et(11, 8, 10))) Live(x);
+        // NinjaTrader's answer at 11:08:10: its forming bar (stamped 11:09) and the one before (11:08) hold trades held for the page
+        Bars nt = NtMinutes(t.Where(x => x.T <= Et(11, 8, 10)).ToList(), Et(10, 31, 0), Et(11, 9, 0));
+        Reqs(r0).First(IsMinute).Answer(nt, ErrorCode.NoError);
+        BarsRequest last = null;
+        bool asked = WaitFor(() => (last = Reqs(r0).FirstOrDefault(IsLastTrades)) != null, 1000);
+        foreach (Trade x in held.Where(x => x.T >= Et(11, 8, 10) && x.T <= Et(11, 8, 12))) Live(x);   // live before they are in an answer (0.3.3's order)
+        if (last != null) last.Answer(TicksOf(t.Where(x => x.T <= Et(11, 8, 12))), ErrorCode.NoError);
+        foreach (Trade x in held.Where(x => x.T > Et(11, 8, 12))) Live(x);
+        WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0, 3000);
+        Thread.Sleep(50);
+        Wire w = Read(Sent());
+        double fed = t.Sum(x => x.V), got = Vol(w.Bars.Where(b => b[0] >= EtSec(Et(11, 7, 0))), 5) + Vol(w.After, 2);
+        Check(asked && got == fed && w.Ready.Contains("\"filled\":0") && LastSeam().Contains("\"matched\":true"),
+            "review 1: a load in the book's first minute right after a start: the book does not stand in, the last trades' seam runs, every trade once (" + got + " of " + fed + ")");
+    }
+
+    // Review 2: a cold start (no trade in the book, nothing kept): the minute history's time limit gives up nothing; the load waits for
+    // NinjaTrader as in 0.6.7 (the page says it waits), and goes ready with NinjaTrader's answer when it comes.
+    static void ColdStart()
+    {
+        FreshPage();
+        int mWas = ChartBridgeServer.MinuteTimeoutMs;
+        try
+        {
+            ChartBridgeServer.MinuteTimeoutMs = 200;
+            simNow = Et(11, 8, 0);
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
+            lock (sent) sent.Clear();
+            int r0 = Made();
+            Priv("Subscribe", client, "NQ", 5, 0);
+            Thread.Sleep(800);
+            bool early = Sent().Any(x => x.Contains("\"type\":\"ready\""));
+            Reqs(r0).First(IsMinute).Answer(NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0)), ErrorCode.NoError);
+            BarsRequest last = null;
+            if (WaitFor(() => (last = Reqs(r0).FirstOrDefault(IsLastTrades)) != null, 500)) last.Answer(new Bars(), ErrorCode.NoError);
+            bool ready = WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0, 2000);
+            Thread.Sleep(30);
+            Wire w = Read(Sent());
+            Check(!early && ready && w.Bars.Count == 70 && w.Ready.Contains("\"minuteTimedOut\":false") && Notes().Contains("nothing to stand in for it; the load waits for NinjaTrader"),
+                "review 2: a cold start (no book, nothing kept): past the time limit the load keeps waiting, then goes ready with NinjaTrader's 70 bars");
+        }
+        finally { ChartBridgeServer.MinuteTimeoutMs = mWas; }
+    }
+
+    // Review 2: a load that went ready on stand-in history (the book), then NinjaTrader's answer comes: the page is told once to load
+    // again ("historyLate", with its subscribe id), and the next load asks NinjaTrader again (the answer kept meanwhile).
+    static void LateAfterStandIn()
+    {
+        FreshPage();
+        int mWas = ChartBridgeServer.MinuteTimeoutMs;
+        try
+        {
+            ChartBridgeServer.MinuteTimeoutMs = 200;
+            simNow = Et(6, 0, 0);
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
+            foreach (Trade x in tape.Where(x => x.T < Et(11, 8, 0))) Live(x);
+            lock (sent) sent.Clear();
+            int r0 = Made();
+            simNow = Et(11, 8, 0);
+            Priv("OnClientMessage", client, "{\"type\":\"subscribe\",\"root\":\"NQ\",\"days\":5,\"tickHours\":0,\"sub\":61}");
+            bool ready = WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0, 2000);
+            BarsRequest q = Reqs(r0).First(IsMinute);
+            q.Answer(NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0)), ErrorCode.NoError);
+            bool told = WaitFor(() => Sent().Any(x => x.Contains("\"type\":\"historyLate\"")), 2000);
+            List<string> l = Sent();
+            Check(ready && told && l.Count(x => x.Contains("\"type\":\"historyLate\"")) == 1 && l.Any(x => x.Contains("{\"type\":\"historyLate\",\"root\":\"NQ\",\"sub\":61}")) && Notes().Contains("the page was told to load again"),
+                "review 2: ready on the book's bars, then NinjaTrader's answer: the page is told once to load again (historyLate, its sub 61)");
+            RootBook rb = ChartBridgeServer.BookOf("NQ", inst);
+            RawBars kept; lock (rb.Sync) kept = rb.NtMinutes;
+            Check(kept != null && kept.Count == 70, "review 2: the late answer is kept for that next load");
+        }
+        finally { ChartBridgeServer.MinuteTimeoutMs = mWas; }
+    }
+
+    // Review 3: an agent (it places real orders) never goes ready on stand-in history: no time limit, it waits for NinjaTrader's
+    // answer, and its ready says so.
+    static void AgentWaits()
+    {
+        int mWas = ChartBridgeServer.MinuteTimeoutMs, tWas = ChartBridgeServer.TailTimeoutMs;
+        List<string> got = new List<string>();
+        ChartBridgeClient ag = new ChartBridgeClient(null, -868);
+        ag.Tap = x => { lock (got) got.Add(x); };
+        try
+        {
+            ChartBridgeServer.MinuteTimeoutMs = 200; ChartBridgeServer.TailTimeoutMs = 200;
+            simNow = Et(6, 0, 0);
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
+            foreach (Trade x in tape.Where(x => x.T < Et(11, 8, 0))) Live(x);
+            // a page's load gets NinjaTrader's answer kept first: there is stand-in history for the agent to be offered, and it is not
+            RootBook rb = ChartBridgeServer.BookOf("NQ", inst);
+            ChartBridgeServer.KeepNtMinutes(rb, RawBars.Copy(NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0)), false));
+            int r0 = Made();
+            simNow = Et(11, 8, 0);
+            ChartBridgeServer.AgentSubscribe(ag, "NQ", 5, 0, "5");
+            Thread.Sleep(900);
+            bool early; lock (got) early = got.Any(x => x.Contains("\"type\":\"ready\""));
+            Reqs(r0).First(IsMinute).Answer(NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0)), ErrorCode.NoError);
+            bool ready = WaitFor(() => { lock (got) return got.Any(x => x.Contains("\"type\":\"ready\"")); }, 2000);
+            string rd; lock (got) rd = got.FirstOrDefault(x => x.Contains("\"type\":\"ready\"")) ?? "";
+            Check(!early && ready && rd.Contains("\"minuteTimedOut\":false") && rd.Contains("\"tailTimedOut\":false") && rd.Contains("\"historyFrom\":") && LastSeam().Contains("\"agent\":true") && LastSeam().Contains("\"standIn\":false"),
+                "review 3: an agent's subscribe waits past the time limit (kept answers there) and goes ready only on NinjaTrader's answer: " + rd);
+        }
+        finally { ChartBridgeServer.MinuteTimeoutMs = mWas; ChartBridgeServer.TailTimeoutMs = tWas; }
+    }
+
+    // Review 6: kept answers served to a timed-out load are cut to that load's own start (a 1-day load gets no bar from 10 days ago).
+    static void KeptTrimmed()
+    {
+        FreshPage();
+        int mWas = ChartBridgeServer.MinuteTimeoutMs;
+        try
+        {
+            ChartBridgeServer.MinuteTimeoutMs = 200;
+            simNow = Et(6, 0, 0);
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
+            foreach (Trade x in tape.Where(x => x.T < Et(11, 8, 0))) Live(x);
+            Bars old = NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0));
+            Bars withOld = new Bars();
+            withOld.Add(Et(9, 31, 0).AddDays(-10), 1, 1, 1, 1, 5);
+            for (int i = 0; i < old.Count; i++) withOld.Add(old.GetTime(i), old.GetOpen(i), old.GetHigh(i), old.GetLow(i), old.GetClose(i), old.GetVolume(i));
+            ChartBridgeServer.KeepNtMinutes(ChartBridgeServer.BookOf("NQ", inst), RawBars.Copy(withOld, false));
+            lock (sent) sent.Clear();
+            simNow = Et(11, 8, 0);
+            Priv("OnClientMessage", client, "{\"type\":\"subscribe\",\"root\":\"NQ\",\"days\":1,\"tickHours\":0,\"sub\":71}");
+            bool ready = WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0, 2000);
+            Thread.Sleep(30);
+            Wire w = Read(Sent());
+            double first = w.Bars.Count > 0 ? w.Bars[0][0] : 0;
+            Check(ready && w.Bars.Count == 98 && first == EtSec(Et(9, 30, 0)), "review 6: a 1-day load that times out gets the kept answer from its own start (the bar 10 days back left out): " + w.Bars.Count + " bars from " + Hm(first) + (ready ? "" : "; sent " + string.Join(" | ", Sent().Take(5)) + "; notes " + Notes()));
+        }
+        finally { ChartBridgeServer.MinuteTimeoutMs = mWas; }
+    }
+
+    // Review 10: ChartBridge stops while a load waits: its time limit and its late answer do nothing (no book made again, nothing
+    // kept from the previous run, nothing sent).
+    static void AfterStop()
+    {
+        FreshPage();
+        FieldInfo cf = typeof(ChartBridgeServer).GetField("cts", PS);
+        object ctsWas = cf.GetValue(null);
+        int mWas = ChartBridgeServer.MinuteTimeoutMs;
+        CancellationTokenSource run = new CancellationTokenSource();
+        try
+        {
+            ChartBridgeServer.MinuteTimeoutMs = 200;
+            cf.SetValue(null, run);
+            simNow = Et(6, 0, 0);
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
+            foreach (Trade x in tape.Where(x => x.T < Et(11, 8, 0))) Live(x);
+            lock (sent) sent.Clear();
+            int r0 = Made();
+            simNow = Et(11, 8, 0);
+            Priv("Subscribe", client, "NQ", 5, 0);
+            run.Cancel();                                         // the stop: the run's token, then the books go
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
+            Thread.Sleep(600);                                    // past the time limit
+            Reqs(r0).First(IsMinute).Answer(NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0)), ErrorCode.NoError);
+            Thread.Sleep(100);
+            string bj = (string)Priv("BooksJson");
+            Check(!Sent().Any(x => x.Contains("\"type\":\"ready\"") || x.Contains("\"type\":\"history\"")) && !bj.Contains("\"NQ\":"),
+                "review 10: after a stop, the time limit and the late answer do nothing: no ready, no history, no book made again");
+        }
+        finally { cf.SetValue(null, ctsWas); ChartBridgeServer.MinuteTimeoutMs = mWas; }
     }
 
     // The time limits: the minute history (the book alone, said on screen; no new ask while it is unanswered), the last trades.
@@ -392,13 +590,13 @@ public static class GapHarness
             Thread.Sleep(30);
             Wire w = Read(Sent());
             BarsRequest first = Reqs(r0).FirstOrDefault(IsMinute);
-            Check(ready && sw.ElapsedMilliseconds < 2000 && w.Ready.Contains("\"filled\":28") && w.Bars.Count == 28 && w.Statuses.Count == 1 && w.Statuses[0].Contains("did not send NQ's minute history within") && w.Statuses[0].Contains("ChartBridge's own minute bars, from 10:40 ET") && LastSeam().Contains("\"minuteTimedOut\":true"),
-                "timeout: no minute answer in its time: ready in " + sw.ElapsedMilliseconds + " ms with the book's 28 bars and a status: " + (w.Statuses.Count > 0 ? w.Statuses[0] : "none"));
+            Check(ready && sw.ElapsedMilliseconds < 2000 && w.Ready.Contains("\"filled\":28") && w.Ready.Contains("\"minuteTimedOut\":true") && w.Bars.Count == 28 && w.Statuses.Count == 0 && Notes().Contains("minute history: no answer from NinjaTrader in 0 s; the load starts from ChartBridge's own minute bars, from 10:40 ET") && LastSeam().Contains("\"minuteTimedOut\":true") && LastSeam().Contains("\"standIn\":true"),
+                "timeout: no minute answer in its time, the book stands in: ready in " + sw.ElapsedMilliseconds + " ms with its 28 bars, ready says minuteTimedOut, nothing on the page (a history note only)");
             // a reload while that request is unanswered: not asked again, ready at once from the book
             lock (sent) sent.Clear();
             int r1 = Made();
             Priv("Subscribe", client, "NQ", 5, 0);
-            Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0, 1000) && Made() == r1 && Read(Sent()).Statuses.Any(x => x.Contains("has not answered an earlier NQ minute history request")),
+            Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0, 1000) && Made() == r1 && Read(Sent()).Statuses.Count == 0 && Notes().Contains("NinjaTrader has not answered an earlier request yet, so it is not asked again for now"),
                 "timeout: a reload while it is unanswered asks NinjaTrader nothing (no retry storm) and goes ready from the book");
             // the late answer is not used, and frees the instrument to ask again
             lock (sent) sent.Clear();
@@ -418,8 +616,8 @@ public static class GapHarness
             foreach (Trade x in tape.Where(x => x.T >= Et(10, 50, 0) && x.T < Et(11, 8, 0))) Live(x);
             bool askedTail; string seam;
             Wire t = LoadWith(NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0)), false, out askedTail, out seam);
-            Check(askedTail && t.Ready != null && t.Statuses.Count == 1 && t.Statuses[0].Contains("did not send NQ's last trades within") && seam.Contains("\"hole\":\"No bars from 10:40") && seam.Contains("\"tailTimedOut\":true"),
-                "timeout: the last trades not answered in time: ready with NinjaTrader's bar as sent and said on screen; the hole only in /diag");
+            Check(askedTail && t.Ready != null && t.Ready.Contains("\"tailTimedOut\":true") && t.Statuses.Count == 0 && Notes().Contains("last trades: no answer from NinjaTrader in 0 s") && seam.Contains("\"hole\":\"No bars from 10:40") && seam.Contains("\"tailTimedOut\":true"),
+                "timeout: the last trades not answered in time: ready with NinjaTrader's bar as sent; ready says tailTimedOut; the limit and the hole in /diag and history.log only, nothing on the page");
             lock (sent) sent.Clear();
             BarsRequest lateTail = Reqs(0).Where(IsLastTrades).Last();
             lateTail.Answer(TicksOf(tape.Take(10)), ErrorCode.NoError);
@@ -471,6 +669,11 @@ public static class GapHarness
             "join: a closed minute NinjaTrader has more volume for than the book (a drop no event told of) is NinjaTrader's; the book's after it");
         nt.Time = new[] { Et(9, 58, 0), Et(9, 59, 0), Et(10, 0, 0) };
         Check(j.Join(nt, out cut, out filled, out shortM) == null, "join: none when the book starts after NinjaTrader's last bar (the hole is not filled half way)");
+        MinuteBook e = new MinuteBook();
+        e.Begin(Et(10, 0, 20), Et(10, 0, 20));   // started this minute: From 10:01, no bar yet
+        e.Add(Et(10, 0, 30), 5, 1);
+        nt.Time = new[] { Et(9, 59, 0), Et(10, 0, 0), Et(10, 1, 0) };
+        Check(e.Snap().Join(nt, out cut, out filled, out shortM) == null && e.Snap().LastTrade == Et(10, 0, 30).Ticks, "review 1: join: none in the book's first minute (no bar after From: NinjaTrader's bar at From could hold held trades)");
     }
 
     // A feed drop and a contract change start the book over.
@@ -486,10 +689,5 @@ public static class GapHarness
         foreach (Trade x in tape.Where(x => x.T >= Et(10, 52, 0) && x.T < Et(10, 55, 0))) Live(x);
         j = (string)Priv("BooksJson");
         Check(j.Contains("\"minutes\":{\"from\":\"2026-10-21 10:53:00.000\""), "reset: the book starts again from the first whole minute after the feed is back (10:53)");
-        Instrument next = new Instrument { FullName = "NQ 03-27", MasterInstrument = inst.MasterInstrument };
-        simNow = Et(10, 55, 0);
-        Priv("OnMarketData", null, new MarketDataEventArgs { Instrument = next, MarketDataType = MarketDataType.Last, Price = 21000, Volume = 1, Time = Et(10, 55, 1) });
-        j = (string)Priv("BooksJson");
-        Check(j.Contains("\"minutes\":{\"from\":\"2026-10-21 10:56:00.000\",\"bars\":0") && j.Contains("the contract changed to NQ 03-27"), "reset: a trade of another contract starts the book over");
     }
 }

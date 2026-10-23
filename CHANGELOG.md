@@ -14,7 +14,7 @@ changes: nothing on any order path (ChartBridgeOrders.cs and the other order fil
   page fills nothing between the last history bar and the first live trade.
   - ChartBridge 0.6.8 keeps a **minute book** per instrument: 1-minute bars from every live trade it sees, stamped at the
     close as NinjaTrader's (a trade at hh:mm:00.000 in the bar that ends then), about two sessions (3,000 bars), from the
-    first whole minute after it started listening or the feed came back, reset on a feed drop or a contract change.
+    first whole minute after it started listening or the feed came back, reset on a feed drop.
   - The seam: a subscribe takes the book's lock and then the page's Pending lock (OnMarketData's order) and copies the book
     in the same moment it clears the held trades, so no trade is in both and none in neither. NinjaTrader's bars are kept
     up to the first minute the book has whole, the book's bars follow, and the 20,000-trade request is not made. `ready`
@@ -27,7 +27,7 @@ changes: nothing on any order path (ChartBridgeOrders.cs and the other order fil
     bars and the trades after `ready` equal to every trade fed, each held trade sent once, `filled` 28; and with 18,022
     trades fed on another thread during the subscribe, every trade once.
 - **The League chart on LOADING for 50 s and more**: a load's minute history and last-trades requests now wait at most 20 s;
-  then the load goes ready with what ChartBridge has (its minute book) and a status says so; a request given up and still
+  then the load goes ready with what ChartBridge has (its minute book, NinjaTrader's kept answers); a request given up and still
   unanswered is not asked again for that instrument (for up to 2 minutes, or until NinjaTrader answers), so reloads do not
   pile requests on a NinjaTrader that is not answering.
 - **The reload of every window** (WORK 2026-10-23, 11:09: every load matched false with no tick backfill, 23 to 32 s, MNQ
@@ -51,6 +51,20 @@ changes: nothing on any order path (ChartBridgeOrders.cs and the other order fil
   had more volume for, the time limits and the hole recorded; each book adds `minutes`.
 - **The page** (no recompile part): a LOADING past 10 s says "Waiting for NinjaTrader's NQ history (N s)". No hole notice
   (Anthony: "I dont need a notice"). No bars are kept in sessionStorage.
+- **The independent review of 0.6.8** (three MEDIUM, seven LOW), all fixed:
+  - A load in the book's first minute (right after a start or a feed drop) could count a minute's volume twice: the book now
+    stands in only with a bar after its `from`; else 0.6.7's path runs (harness: a load 8 s after a start, every trade once).
+  - The minute history's time limit gives up only when history can stand in (kept answers, or the book with a bar); a cold
+    start waits for NinjaTrader as in 0.6.7, the page saying it waits. A load that went ready on stand-in history is told
+    once when NinjaTrader's answer comes (`historyLate`), and the page loads again by itself.
+  - Agents (they place real orders) have no time limits and never get stand-in history; `ready` carries `minuteTimedOut`,
+    `tailTimedOut` and `historyFrom` for a program to read.
+  - No time-limit warning on screen either (a history note only; the "Waiting for NinjaTrader's ... history" line stays);
+    a time-limit path that throws still ends in ready or the trades; kept answers are cut to the load's own days; the dead
+    contract-change check is gone; after a stop, a time limit or a late answer does nothing; the four SeamHarness checks are
+    back in their strict form; `nt8/check/GapMain.cs` runs the WORK case alone against the 0.6.7 sources: "WORK case
+    REPRODUCED on 0.6.7: minuteTailRebuilt 0 and no bar from 10:40 to 11:08 ET", and on 0.6.8 "continuous minutes from 09:30
+    to 11:07, every trade once (29225 of 29225)".
 - **The League chart and the Agents panel's Drone sky on NQ 1 min.** Anthony, 2026-10-23: his only MNQ chart is a 40-range
   execution chart (it loads trades, not minute bars) and all his other charts, including a 1 min, are NQ; "the League tab's
   chart AND the Agents panel's Drone sky pillars switch from MNQ to NQ 1 min", keeping 5 days and no ticks for the League

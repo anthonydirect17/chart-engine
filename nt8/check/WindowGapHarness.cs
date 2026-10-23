@@ -196,8 +196,12 @@ public static class WindowGapHarness
             string gaps = ready ? Gaps(HistoryBars(l), EtSec(Et(11, 8, 0))) : "no ready";
             Console.WriteLine("     (W3 on " + ChartBridgeServer.Version + ": ready " + ready + ", holes: " + (gaps ?? "none") + ")");
             if (!New) Check(!ready, "W3 REPRODUCED on " + ChartBridgeServer.Version + ": no minute answer: the tick chart is not ready after 3 s (it waits for NinjaTrader with no limit)");
-            else Check(ready && gaps == null && HistoryBars(l).Count > 60 && l.Any(x => x.Contains("did not send NQ's minute history within") && x.Contains("as it last sent it")),
-                "W3 fixed: no minute answer in its time: the tick chart is ready from NinjaTrader's kept minute answer and the minute book, no hole, and says so (" + HistoryBars(l).Count + " bars)");
+            else
+            {
+                string notes = (string)Priv("HistoryNotesJson");
+                Check(ready && gaps == null && HistoryBars(l).Count > 60 && !l.Any(x => x.Contains("\"type\":\"status\"")) && notes.Contains("as it last sent it") && notes.Contains("(a tick chart)"),
+                    "W3 fixed: no minute answer in its time: the tick chart is ready from NinjaTrader's kept minute answer and the minute book, no hole; a history note, nothing on the page (" + HistoryBars(l).Count + " bars)");
+            }
         }
         finally { if (mt != null) mt.SetValue(null, mWas); }
     }

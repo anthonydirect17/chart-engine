@@ -2505,6 +2505,11 @@ function mount(container, options) {
         setStatus('', '');
         onReady(m.readyAt);
         break;
+      case 'historyLate':
+        /* 1.38.1 (ChartBridge 0.6.8): this load went ready on stand-in history (NinjaTrader's minute answer did not come in time)
+           and the answer has come since: load again, the bars shown kept meanwhile */
+        if (m.root === D.root && !stale(m) && D.ready) subscribe(D.root);
+        break;
       case 'profile':
         // with this load's id before its "ready"; without one when the table's backfill made it whole (only once live)
         if (m.root !== D.root || (m.sub !== undefined && m.sub !== null ? stale(m) : !D.ready)) return;

@@ -16,7 +16,7 @@ test('1.38.1: the page says a LOADING that waits, shows no hole notice (Anthony:
   assert.equal(LP.LOAD_WAIT_S, 10);
   assert.doesNotMatch(live, /No bars from|gapNotice|histGapText/, 'no hole notice on the page');
   const cs = read('nt8/ChartBridge.cs');
-  assert.doesNotMatch(cs, /AfterReady\(L, Status\("warn", L\.Hole\)\)/, 'ChartBridge sends no hole status to the page');
+  assert.doesNotMatch(cs, /AfterReady\(|Status\("warn"/, 'ChartBridge sends no hole or time-limit status to the page (review of 0.6.8, item 4)');
   assert.match(cs, /if \(L\.Hole != null\) HistoryNote\(L\.Root, "history ends early: "/, 'the hole is recorded: /diag and history.log');
   assert.doesNotMatch(live, /sessionStorage/, 'no sessionStorage bar cache (Anthony\'s instruction)');
   for (const f of ['live/live.js', 'live/league.js', 'live/agents-sky.js', 'live/agents-strip.js', 'live/workspace.js', 'nt8/ChartBridge.cs', 'nt8/PROTOCOL.md', 'nt8/check/GapHarness.cs', 'test/history-gap.test.js', 'test/fake-bridge.mjs', 'CHANGELOG.md'])
@@ -50,6 +50,20 @@ test('0.6.8: ChartBridge keeps a minute book per instrument and joins it to Ninj
   assert.match(cs, /L\.Book = book\.Minutes\.Snap\(\);   \/\/ every load/);
   assert.equal((cs.match(/RawBars tail = RebuildTail\(L, ticks\);/g) || []).length, 2, 'Finish and FinishWindow share the rebuild');
   assert.equal((cs.match(/if \(L\.RebuiltTailVolume < L\.NtTailVolume\) tail = null;/g) || []).length, 0, 'no rebuild is thrown away whole');
+  // the review of 0.6.8: the first minute, stand-in only, agents, a stop, a load that never sticks
+  assert.match(cs, /if \(!Started \|\| Bars == null \|\| Bars\.Count == 0\) return null;/, 'item 1: no join in the book\'s first minute');
+  assert.match(cs, /if \(!CanStandIn\(L, book\)\)/, 'item 2: the time limit gives up only when history can stand in');
+  assert.match(cs, /\\"type\\":\\"historyLate\\"/, 'item 2: the page is told when the real answer comes');
+  assert.match(cs, /StartLoad\(client, root, days, tickHours, sub, false, false, true\); \}/, 'item 3: an agent\'s subscribe');
+  assert.match(cs, /if \(!L\.Agent\) Task\.Delay\(MinuteTimeoutMs\)/, 'item 3: no minute time limit for an agent');
+  assert.match(cs, /if \(!L\.Agent\) Task\.Delay\(TailTimeoutMs\)/, 'item 3: no last-trades time limit for an agent');
+  assert.match(cs, /\\"minuteTimedOut\\":" \+ \(L\.MinuteTimedOut/, 'item 3: ready says it');
+  assert.match(cs, /finally\s*\{\s*\/\/ review of 0\.6\.8: never a load stuck on LOADING/, 'item 5');
+  assert.match(cs, /cts = null;   \/\/ 0\.6\.8/, 'item 10: a stopped run\'s loads do nothing');
+  assert.doesNotMatch(cs, /the contract changed to/, 'item 9: the dead contract check is gone');
+  const live = read('live/live.js'), feed = read('live/feed.js');
+  assert.match(live, /case 'historyLate':[\s\S]{0,400}if \(m\.root === D\.root && !stale\(m\) && D\.ready\) subscribe\(D\.root\);/);
+  assert.match(feed, /if \(t === 'historyLate'\) \{/); assert.match(feed, /cur && !cur\.stale && /);
   // the order path is untouched: the minute book never reaches ChartBridgeOrders
   assert.doesNotMatch(read('nt8/ChartBridgeOrders.cs'), /MinuteBook|MinuteSnap|Minutes\./);
   // lock order: nothing takes a page's Pending lock and then a book's

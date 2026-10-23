@@ -90,6 +90,9 @@ async function gapPart() {
     await p.waitForTimeout(500);
     const n = await note(), shown = n.status + ' ' + n.alert;
     check(!/No bars from/.test(shown) && !/Waiting for NinjaTrader/.test(n.status), 'ready with history ending 30 minutes early: no hole notice (Anthony 2026-10-23: "I dont need a notice"), the waiting line gone (' + JSON.stringify(n) + ')');
+    /* review of 0.6.8 (item 4): no time-limit warning of any kind on screen either (ChartBridge 0.6.8 sends none: nt8/check/GapHarness.cs) */
+    const all = await p.evaluate(() => { const panel = document.querySelector('.ws-panel[data-id="g1"]'); return (panel ? panel.innerText : '') + ' ' + (document.getElementById('wsAlert') ? document.getElementById('wsAlert').innerText : ''); });
+    check(!/did not send|minute history|last trades|as it last sent it|starts from the live trades/i.test(all), 'no time-limit warning reaches the screen');
     await shot(p, 'workspace-history-gap-1366x768.png');
   } finally { await ctx.close(); fake.kill(); }
 }

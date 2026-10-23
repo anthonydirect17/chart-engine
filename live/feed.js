@@ -219,6 +219,16 @@ function create(options) {
       for (const V of L.clients) if (V.load === load && !V.replaying) V._deliver(m);
       return;
     }
+    if (t === 'historyLate') {
+      /* 1.38.1 (ChartBridge 0.6.8): the line's load went ready on stand-in history and NinjaTrader's minute answer came since.
+         The load is no longer joined; its panels are told (each with its own id) and subscribe again, which makes one new load. */
+      const load = L.load;
+      if (!load || m.root !== L.root) return;
+      if (m.sub !== undefined && m.sub !== null && load.sub !== null && +m.sub !== load.sub) return;
+      load.stale = true;
+      for (const V of [...L.clients]) if (V.load === load) V._deliver(Object.assign({}, m, { sub: V.sub }));
+      return;
+    }
     if (LOAD_TYPES.includes(t)) {
       const load = L.load;
       if (!load || m.root !== L.root) return;
@@ -289,7 +299,7 @@ function create(options) {
     let need = null;
     for (const V of asking) need = merge(need, V.need);
     const cur = L.load;
-    if (cur && !cur.live.trimmed && !cur.bf.dropped && covers(cur.need, need, L.windowed)) { for (const V of asking) attach(V, cur); return; }
+    if (cur && !cur.stale && !cur.live.trimmed && !cur.bf.dropped && covers(cur.need, need, L.windowed)) { for (const V of asking) attach(V, cur); return; }
     /* 1.16.0: the load's record no longer starts at ready (a long day: the rolling window), so a panel joining now cannot be
        built from it. It gets a load of its own on a new socket for the instrument, which every later panel joins; the
        panels already on this line keep theirs, untouched (up to 1.15.0 they all loaded afresh). */
