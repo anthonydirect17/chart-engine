@@ -1155,24 +1155,22 @@ Test 'the daily time is 09:00 New York by default (Anthony 2026-10-23), an expli
   } finally { Put $pj $keep }
 }
 
-# The scheduled task's commands, stubbed (no task is ever made or touched here): each records what it was given.
+# The scheduled task's commands, stubbed (no task is ever made or touched here): each records what it was given. A test
+# dot-sources $script:TaskStubs into its own body, so the stubs live in that body's scope and are gone when it ends, on
+# Windows PowerShell 5.1 as on pwsh (a stub left behind would answer the Windows-only tests below in place of the real
+# ScheduledTasks commands).
 $script:TaskCalls = New-Object System.Collections.ArrayList
 $script:StubTask = $null
-function Use-TaskStubs {
+$script:TaskStubs = {
   $script:TaskCalls.Clear(); $script:StubTask = $null
-  function script:New-ScheduledTaskAction { param([string]$Execute, [string]$Argument, [string]$WorkingDirectory) [void]$script:TaskCalls.Add(@{ cmd = 'action'; Execute = $Execute; Argument = $Argument; WorkingDirectory = $WorkingDirectory }); return [pscustomobject]@{ Execute = $Execute; Arguments = $Argument; WorkingDirectory = $WorkingDirectory } }
-  function script:New-ScheduledTaskTrigger { param([switch]$AtLogOn, [string]$User, [switch]$Daily, [datetime]$At) return [pscustomobject]@{ Kind = $(if ($AtLogOn) { 'logon' } else { 'daily' }); User = $User; At = $At; Delay = $null; StartBoundary = $null } }
-  function script:New-ScheduledTaskPrincipal { param([string]$UserId, [string]$LogonType, [string]$RunLevel) return [pscustomobject]@{ UserId = $UserId; LogonType = $LogonType; RunLevel = $RunLevel } }
-  function script:New-ScheduledTaskSettingsSet { param([string]$MultipleInstances, [switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries, [switch]$StartWhenAvailable, [TimeSpan]$ExecutionTimeLimit) return [pscustomobject]@{ MultipleInstances = $MultipleInstances; AllowStartIfOnBatteries = [bool]$AllowStartIfOnBatteries; DontStopIfGoingOnBatteries = [bool]$DontStopIfGoingOnBatteries; StartWhenAvailable = [bool]$StartWhenAvailable; ExecutionTimeLimit = $ExecutionTimeLimit } }
-  function script:Register-ScheduledTask { param([string]$TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force, [string]$Description) [void]$script:TaskCalls.Add(@{ cmd = 'register'; TaskName = $TaskName; Action = $Action; Trigger = @($Trigger); Principal = $Principal; Settings = $Settings; Force = [bool]$Force; Description = $Description }); $script:StubTask = [pscustomobject]@{ TaskName = $TaskName; Actions = @($Action); State = 'Ready' }; return $script:StubTask }
-  function script:Get-ScheduledTask { [CmdletBinding()] param([string]$TaskName) [void]$script:TaskCalls.Add(@{ cmd = 'get'; TaskName = $TaskName }); return $script:StubTask }
-  function script:Unregister-ScheduledTask { param([string]$TaskName, [switch]$Confirm) [void]$script:TaskCalls.Add(@{ cmd = 'unregister'; TaskName = $TaskName }); $script:StubTask = $null }
-  function script:Set-ScheduledTask { throw 'Set-ScheduledTask was not expected here' }
-}
-function Remove-TaskStubs {
-  foreach ($n in @('New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal', 'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask', 'Get-ScheduledTask', 'Unregister-ScheduledTask', 'Set-ScheduledTask')) {
-    if (Test-Path "function:script:$n") { Remove-Item "function:script:$n" }
-  }
+  function New-ScheduledTaskAction { param([string]$Execute, [string]$Argument, [string]$WorkingDirectory) [void]$script:TaskCalls.Add(@{ cmd = 'action'; Execute = $Execute; Argument = $Argument; WorkingDirectory = $WorkingDirectory }); return [pscustomobject]@{ Execute = $Execute; Arguments = $Argument; WorkingDirectory = $WorkingDirectory } }
+  function New-ScheduledTaskTrigger { param([switch]$AtLogOn, [string]$User, [switch]$Daily, [datetime]$At) return [pscustomobject]@{ Kind = $(if ($AtLogOn) { 'logon' } else { 'daily' }); User = $User; At = $At; Delay = $null; StartBoundary = $null } }
+  function New-ScheduledTaskPrincipal { param([string]$UserId, [string]$LogonType, [string]$RunLevel) return [pscustomobject]@{ UserId = $UserId; LogonType = $LogonType; RunLevel = $RunLevel } }
+  function New-ScheduledTaskSettingsSet { param([string]$MultipleInstances, [switch]$AllowStartIfOnBatteries, [switch]$DontStopIfGoingOnBatteries, [switch]$StartWhenAvailable, [TimeSpan]$ExecutionTimeLimit) return [pscustomobject]@{ MultipleInstances = $MultipleInstances; AllowStartIfOnBatteries = [bool]$AllowStartIfOnBatteries; DontStopIfGoingOnBatteries = [bool]$DontStopIfGoingOnBatteries; StartWhenAvailable = [bool]$StartWhenAvailable; ExecutionTimeLimit = $ExecutionTimeLimit } }
+  function Register-ScheduledTask { param([string]$TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force, [string]$Description) [void]$script:TaskCalls.Add(@{ cmd = 'register'; TaskName = $TaskName; Action = $Action; Trigger = @($Trigger); Principal = $Principal; Settings = $Settings; Force = [bool]$Force; Description = $Description }); $script:StubTask = [pscustomobject]@{ TaskName = $TaskName; Actions = @($Action); State = 'Ready' }; return $script:StubTask }
+  function Get-ScheduledTask { [CmdletBinding()] param([string]$TaskName) [void]$script:TaskCalls.Add(@{ cmd = 'get'; TaskName = $TaskName }); return $script:StubTask }
+  function Unregister-ScheduledTask { param([string]$TaskName, [switch]$Confirm) [void]$script:TaskCalls.Add(@{ cmd = 'unregister'; TaskName = $TaskName }); $script:StubTask = $null }
+  function Set-ScheduledTask { throw 'Set-ScheduledTask was not expected here' }
 }
 function Get-TaskCall([string]$Cmd) { return @($script:TaskCalls | Where-Object { $_.cmd -eq $Cmd }) }
 
@@ -1181,7 +1179,7 @@ Test 'register (stubbed): the task runs wscript.exe //B on an ASCII one-line lau
   $docs = Join-Path $tmpRoot 'hid docs'
   $repoSp = Join-Path $tmpRoot 'my clone'
   Initialize-Paths $repoSp (Join-Path $docs 'NinjaTrader 8')
-  Use-TaskStubs
+  . $script:TaskStubs
   try {
     $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
     $local = ConvertFrom-NewYorkTime '09:00'
@@ -1222,12 +1220,12 @@ Test 'register (stubbed): the task runs wscript.exe //B on an ASCII one-line lau
     Assert (-not (Test-Path -LiteralPath $launcher)) 'the launcher removed'
     Unregister-HiddenTask
     Assert (@(Get-TaskCall 'unregister').Count -eq 1) 'unregister again: nothing to do'
-  } finally { Remove-TaskStubs; $script:P = $keepP }
+  } finally { $script:P = $keepP }
 }
 Test 'register (stubbed): a launcher that cannot be written stops register before the task is touched' {
   $keepP = $script:P
   Initialize-Paths (Join-Path $tmpRoot 'clone2') (Join-Path $tmpRoot 'nt-hid-fail')
-  Use-TaskStubs
+  . $script:TaskStubs
   try {
     $launcher = Join-Path $script:P.Bin 'update-pc.hidden.vbs'
     New-Item -ItemType Directory -Force -Path $launcher | Out-Null      # a folder where the file goes: the write fails
@@ -1244,12 +1242,12 @@ Test 'register (stubbed): a launcher that cannot be written stops register befor
       Assert ($threw -match 'could not be written' -and -not (Test-Path -LiteralPath $launcher)) "refused for '$bad': $threw"
     }
     Assert (@(Get-TaskCall 'register').Count -eq 0) 'still no task'
-  } finally { Remove-TaskStubs; $script:P = $keepP }
+  } finally { $script:P = $keepP }
 }
 Test 'unregister (stubbed) removes a launcher the task names only when it is ours' {
   $keepP = $script:P
   Initialize-Paths (Join-Path $tmpRoot 'clone3') (Join-Path $tmpRoot 'nt-hid-un')
-  Use-TaskStubs
+  . $script:TaskStubs
   try {
     $other = Join-Path $tmpRoot 'hidden-by-hand'
     New-Item -ItemType Directory -Force -Path $other | Out-Null
@@ -1264,7 +1262,15 @@ Test 'unregister (stubbed) removes a launcher the task names only when it is our
     $script:StubTask = [pscustomobject]@{ TaskName = 'ChartEngine Updater'; Actions = @([pscustomobject]@{ Execute = 'C:\Windows\System32\wscript.exe'; Arguments = '//B "' + $mine + '"' }); State = 'Ready' }
     Unregister-HiddenTask
     Assert (-not (Test-Path -LiteralPath $mine)) 'ours, where the task named it: removed'
-  } finally { Remove-TaskStubs; $script:P = $keepP }
+  } finally { $script:P = $keepP }
+}
+
+Test 'no task stub is left behind: the Windows-only register tests below get the real ScheduledTasks commands' {
+  foreach ($n in @('New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal', 'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask', 'Get-ScheduledTask', 'Unregister-ScheduledTask', 'Set-ScheduledTask')) {
+    $c = Get-Command $n -ErrorAction SilentlyContinue
+    if ($IsWin) { Assert ($c -and "$($c.ModuleName)" -eq 'ScheduledTasks') "$n is the ScheduledTasks module's: $(if ($c) { "$($c.CommandType) '$($c.ModuleName)'" } else { 'missing' })" }
+    else { Assert (-not $c) "$n is not defined off Windows (a stub left behind): $(if ($c) { $c.CommandType })" }
+  }
 }
 
 if ($IsWin) {
@@ -1309,6 +1315,7 @@ if ($IsWin) {
       Assert (-not (Test-Path -LiteralPath $launcher)) 'the launcher gone too'
     } finally {
       if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false }
+      Remove-Item -LiteralPath (Join-Path $script:P.Bin 'update-pc.hidden.vbs') -Force -ErrorAction SilentlyContinue
     }
   }
   Test 'register in a time zone with DST: the XML StartBoundary has no offset, and 17:05 New York stays 17:05 across DST and time zones (review 3 S2)' {
@@ -1363,6 +1370,7 @@ if ($IsWin) {
       & tzutil /s $origTz
       [TimeZoneInfo]::ClearCachedData()
       if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false }
+      Remove-Item -LiteralPath (Join-Path $script:P.Bin 'update-pc.hidden.vbs') -Force -ErrorAction SilentlyContinue
     }
     Assert ([TimeZoneInfo]::Local.Id -eq $origTz -or "$(& tzutil /g)".Trim() -eq $origTz) "the runner's time zone is back: $([TimeZoneInfo]::Local.Id)"
   }
