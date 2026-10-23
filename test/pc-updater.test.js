@@ -169,7 +169,8 @@ test('the automatic run may add a missing daily trigger (Anthony 2026-10-23: 09:
   // every change (a move too, Anthony 2026-10-23) only in the task's own run; an add also needs its own launcher
   const own = src.slice(src.indexOf('function Get-OwnRunProblem'));
   const ownBody = own.slice(0, own.indexOf('\n}\n'));
-  for (const s of ["Test-SamePath ([string]$o['#script']) $pinned", 'Test-SamePath $script:UpdaterSelf $pinned', 'Test-Elevated', 'Test-SameUser $u $me']) assert.ok(ownBody.includes(s), 'guard: ' + s);
+  for (const s of ["Test-SamePath ([string]$o['#script']) $pinned", 'Test-SamePath $script:UpdaterSelf $pinned', 'Test-Elevated', 'Test-SameUser $u $me', "$lt = Get-TaskLogonType $Task", "$lt -ne 'Interactive'"]) assert.ok(ownBody.includes(s), 'guard: ' + s);
+  assert.match(src, /elseif \(\(Get-TaskLogonType \$task\) -ne 'Interactive'\)/, 'the move refuses a task that is not Interactive (review C3 of #68)');
   const g = src.slice(src.indexOf('function Get-AddTriggerProblem'));
   const body = g.slice(0, g.indexOf('\n}\n'));
   assert.ok(body.includes('Get-TaskLauncherPath $Task') && body.includes('return (Get-OwnRunProblem $Task)'), 'the add: its own launcher, then the own-run guards');

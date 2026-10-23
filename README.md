@@ -346,8 +346,9 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    later hour; the next sign-in or the next daily check runs. The two checks never run an update at the same moment:
    the task never starts twice at once, and each run holds `updater.lock`. Every check of the task's own works out
    the New York times again and moves the daily checks if this PC's clock drifted from them (a trip to another time
-   zone, or DST dates that differ from New York's); the log says so. An `update` you run by hand changes no trigger
-   and says so.
+   zone, or DST dates that differ from New York's); the log says so. An `update` you run from the clone's copy
+   changes no trigger and says so; the pinned copy (`$u` below) run by hand counts as the task's own check when the
+   window is not elevated and you are the task's user.
    Register pins the updater from the newest green commit on `main` (it fetches first); it refuses a file changed by
    hand or from a branch, and never goes back to an older updater than the one pinned. Run it from a normal
    PowerShell window, not as administrator: the task's own run may not be allowed to move the daily check of a task
@@ -381,8 +382,8 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    to its own launcher by itself, with 9:00 AM and 5:00 PM and sign-in, once a pinned copy that has this change runs it
    (so after the next `-InstallChartBridge` or `register`; `-InstallChartBridge` itself moves it at once when run from
    an up to date clone). It keeps `-Repo`, leaves the hand-made `.vbs` on disk, and is refused (one WARN line in
-   update.log naming why, nothing changed) when elevated, as another user, or when the task's command carries anything
-   but `update -Repo`.
+   update.log naming why, nothing changed) when elevated, as another user, for a task that does not run only while
+   signed in (logon type other than Interactive), or when the task's command carries anything but `update -Repo`.
 
    A task already on the hidden launcher with the 9:00 AM check alone (registered before 2026-10-23's second check)
    gets the 5:00 PM one by itself: the first automatic check run by a pinned copy that has this change adds the
