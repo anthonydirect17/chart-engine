@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (2026-10-23): the PC updater reads HOME's hand-made launcher; logon type refused by name
+
+`nt8/update-pc.ps1` only (no page or ChartBridge change, no version bump, as the other 2026-10-23 updater entries below).
+
+- **HOME's launcher** (FROM_HOME_2026-10-22_hidden_tasks): `C:\SchwabDesk_bulk\hidden\ChartEngine_Updater.vbs` runs
+  `cmd /c "cd /d "<updater\bin>" && "<powershell.exe>" ... -File "<pinned update-pc.ps1>" update -Repo <clone>"`, with
+  `cmd /c` and no `/s`. The parser takes off the quotes around the whole after either `cmd /c` or `cmd /s /c` (WORK's),
+  then the `cd /d ... &&`. Tested with HOME's exact line (the user's name left out): read, and moved by the task's own
+  run to its own launcher with 09:00, 17:00 and sign-in, `-Repo` kept, the hand-made `.vbs` left on disk.
+- **A task that does not run only while signed in is refused by name** (review C3 of #68, as Bot-Lab's
+  Get-PrincipalProblem): the move to the hidden launcher (`-InstallChartBridge`, the task's own run) and every change of
+  the daily triggers refuse a task whose logon type is not Interactive ("the task runs with logon type S4U, not
+  Interactive (only while signed in)"), or cannot be read, and change nothing. `register` makes it Interactive.
+- **Which run changes the triggers, said plainly** (review C1 of #68): a run of the clone's copy changes no trigger and
+  says so; the pinned copy (`$u` in the README) run by hand counts as the task's own run when the window is not
+  elevated and runs as the task's user. Docs only; the checks are those of #68.
+- Tests: HOME's exact line read and moved; logon type S4U or unreadable refused, in the move and in a trigger change.
+
 ## Unreleased (2026-10-23): the PC updater checks twice a day, at 9:00 AM and 5:00 PM New York time
 
 `nt8/update-pc.ps1` only (no page or ChartBridge change, no version bump, as the other 2026-10-23 updater entries below).

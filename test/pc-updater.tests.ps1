@@ -1406,9 +1406,9 @@ Test '-InstallChartBridge moves a task that is not hidden to the launcher once, 
   function Test-Elevated { return $script:Elevated }
   $script:Elevated = $false
   # a task as Get-ScheduledTask returns it, with the user it runs as
-  function New-MigTask([string]$Execute, [string]$Arguments, [string]$User = 'PC\anthony') {
+  function New-MigTask([string]$Execute, [string]$Arguments, [string]$User = 'PC\anthony', [string]$Logon = 'Interactive') {
     $t = New-FakeTask $Execute $Arguments
-    $t | Add-Member -NotePropertyName Principal -NotePropertyValue ([pscustomobject]@{ UserId = $User })
+    $t | Add-Member -NotePropertyName Principal -NotePropertyValue ([pscustomobject]@{ UserId = $User; LogonType = $Logon })
     return $t
   }
   try {
@@ -1506,9 +1506,9 @@ Test 'the automatic run adds the 17:00 check to its own hidden task (the schedul
   function New-DailyStub([string]$Sb) { return [pscustomobject]@{ CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskDailyTrigger' }; StartBoundary = $Sb; Kind = 'daily' } }
   $logonT = [pscustomobject]@{ CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskLogonTrigger' }; StartBoundary = ''; Kind = 'logon' }
   # a task as Get-ScheduledTask returns it: its action, user and triggers (the sign-in one first)
-  function Set-Stub([string]$Execute, [string]$Arguments, [object[]]$Daily, [string]$User = 'PC\anthony') {
+  function Set-Stub([string]$Execute, [string]$Arguments, [object[]]$Daily, [string]$User = 'PC\anthony', [string]$Logon = 'Interactive') {
     $script:StubTask = [pscustomobject]@{ TaskName = 'ChartEngine Updater'; State = 'Ready'; Actions = @([pscustomobject]@{ Execute = $Execute; Arguments = $Arguments })
-      Principal = [pscustomobject]@{ UserId = $User }; Triggers = @(@($logonT) + @($Daily)) }
+      Principal = [pscustomobject]@{ UserId = $User; LogonType = $Logon }; Triggers = @(@($logonT) + @($Daily)) }
   }
   try {
     $env:OS = 'Windows_NT'
@@ -1559,9 +1559,10 @@ Test 'the automatic run adds the 17:00 check to its own hidden task (the schedul
     $script:UpdaterSelf = $keepSelf
     Set-Stub $wscript $hidden @((New-DailyStub '2026-01-01T03:00:00'), (New-DailyStub ((L '17:00') + '-04:00')))
     $res = Sync-DailyTrigger
-    Assert ($script:Sets.Count -eq 0 -and $res.note -match 'the daily checks were not moved .*not the task.s pinned copy .*a run by hand') "a run by hand: $($res.note)"
+    Assert ($script:Sets.Count -eq 0 -and $res.note -match 'the daily checks were not moved .*not the task.s pinned copy .*the clone.s copy') "a run of the clone's copy: $($res.note)"
     Assert ((Get-Text $script:P.Log) -match 'WARN the daily checks were not moved') 'said in update.log'
-    foreach ($c in @(@{ set = { $script:Elevated = $true }; why = 'this run is elevated' }, @{ set = { $script:Elevated = $false; $script:StubTask.Principal = [pscustomobject]@{ UserId = 'PC\someone' } }; why = 'the task runs as PC\\someone' })) {
+    foreach ($c in @(@{ set = { $script:Elevated = $true }; why = 'this run is elevated' }, @{ set = { $script:Elevated = $false; $script:StubTask.Principal = [pscustomobject]@{ UserId = 'PC\someone'; LogonType = 'Interactive' } }; why = 'the task runs as PC\\someone' },
+        @{ set = { $script:StubTask.Principal = [pscustomobject]@{ UserId = 'PC\anthony'; LogonType = 'S4U' } }; why = 'the task runs with logon type S4U, not Interactive \(only while signed in\)' })) {
       $script:UpdaterSelf = $pinned
       Set-Stub $wscript $hidden @((New-DailyStub '2026-01-01T03:00:00'), (New-DailyStub ((L '17:00') + '-04:00')))
       & $c.set
@@ -1642,10 +1643,10 @@ Test 'WORK''s hand-made launcher (cmd /s /c, 2026-10-22) is read; the task''s ow
     $l = $workLine.Replace('C:\Users\<user>\Documents\NinjaTrader 8\ChartBridge\updater\bin', $script:P.Bin).Replace('C:\TheDesk\chart-engine', (Format-Arg $script:P.Repo).Replace('"', '""') + $Tail)
     [IO.File]::WriteAllText($hand, $l + "`r`n", [Text.Encoding]::ASCII)
   }
-  function Set-Hand([string]$User = 'PC\anthony', [string]$Launcher = $hand) {
+  function Set-Hand([string]$User = 'PC\anthony', [string]$Launcher = $hand, [string]$Logon = 'Interactive') {
     $script:StubTask = [pscustomobject]@{ TaskName = 'ChartEngine Updater'; State = 'Running'
       Actions = @([pscustomobject]@{ Execute = 'C:\WINDOWS\system32\wscript.exe'; Arguments = '"' + $Launcher + '"' })
-      Principal = [pscustomobject]@{ UserId = $User }; Triggers = @() }
+      Principal = [pscustomobject]@{ UserId = $User; LogonType = $Logon }; Triggers = @() }
   }
   try {
     $env:OS = 'Windows_NT'
@@ -1667,6 +1668,8 @@ Test 'WORK''s hand-made launcher (cmd /s /c, 2026-10-22) is read; the task''s ow
     $n = 0
     foreach ($c in @(@{ set = { $script:Elevated = $true; Set-Hand }; why = 'this window is elevated' },
         @{ set = { $script:Elevated = $false; Set-Hand 'PC\someone' }; why = 'the task runs as PC\\someone' },
+        @{ set = { Set-Hand 'PC\anthony' $hand 'S4U' }; why = 'the task runs with logon type S4U, not Interactive \(only while signed in\)' },
+        @{ set = { Set-Hand 'PC\anthony' $hand '' }; why = 'the task.s logon type cannot be read' },
         @{ set = { Write-Hand ' -TaskName X'; Set-Hand }; why = 'the task runs with -TaskName X, which the launcher does not carry' })) {
       & $c.set
       $before = Get-Text $script:P.Log
@@ -1706,6 +1709,52 @@ Test 'WORK''s hand-made launcher (cmd /s /c, 2026-10-22) is read; the task''s ow
     Set-Hand
     $lines = @(Invoke-TaskMigration)
     Assert ($lines[0] -match '^The scheduled task now starts hidden' -and @(Get-TaskCall 'register').Count -eq 2) "-InstallChartBridge: $($lines -join ' / ')"
+  } finally { $env:OS = $keepOS; $script:P = $keepP; $script:UpdaterSelf = $keepSelf; $script:HandLauncherDir = $keepHand }
+}
+
+Test 'HOME''s hand-made launcher (cmd /c without /s, 2026-10-22) is read, and the task''s own run moves it with 09:00 and 17:00 (stubbed)' {
+  # HOME's real line (FROM_HOME_2026-10-22_hidden_tasks), the user's name left out; cmd's /c joined from two parts only
+  # so the command-string guard (test/pc-updater.test.js, PowerShell's -c) does not read it as PowerShell's
+  $homeLine = 'WScript.Quit CreateObject("WScript.Shell").Run("cmd /' + 'c ""cd /d ""C:\Users\<user>\Documents\NinjaTrader 8\ChartBridge\updater\bin"" && ""C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe"" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ""C:\Users\<user>\Documents\NinjaTrader 8\ChartBridge\updater\bin\update-pc.ps1"" update -Repo C:\Users\<user>\chart-engine""", 0, True)'
+  $hf = Join-Path $tmpRoot 'home-real.vbs'
+  [IO.File]::WriteAllText($hf, $homeLine + "`r`n", [Text.Encoding]::ASCII)
+  $line = Get-LauncherCommand $hf
+  Assert ($line -ceq '"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\Users\<user>\Documents\NinjaTrader 8\ChartBridge\updater\bin\update-pc.ps1" update -Repo C:\Users\<user>\chart-engine') "the command: $line"
+  $o = Get-CommandOptions $line 'update-pc.ps1'
+  Assert ($null -ne $o -and $o['#script'] -eq 'C:\Users\<user>\Documents\NinjaTrader 8\ChartBridge\updater\bin\update-pc.ps1' -and $o['#command'] -eq 'update' -and $o['Repo'] -eq 'C:\Users\<user>\chart-engine' -and @($o.Keys | Where-Object { $_ -notlike '#*' }).Count -eq 1) 'its script, command and -Repo, nothing else'
+
+  $keepP = $script:P; $keepOS = $env:OS; $keepSelf = $script:UpdaterSelf; $keepHand = $script:HandLauncherDir
+  Initialize-Paths (Join-Path $tmpRoot 'home clone') (Join-Path (Join-Path $tmpRoot 'home docs') 'NinjaTrader 8')
+  . $script:TaskStubs
+  function Get-CurrentUserName { return 'PC\anthony' }
+  function Test-Elevated { return $false }
+  $inv = [Globalization.CultureInfo]::InvariantCulture
+  $handDir = Join-Path $tmpRoot 'home hidden'
+  New-Item -ItemType Directory -Force -Path $handDir | Out-Null
+  $script:HandLauncherDir = $handDir
+  $hand = Join-Path $handDir 'ChartEngine_Updater.vbs'
+  $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+  try {
+    $env:OS = 'Windows_NT'
+    Put $pinned "# the pinned copy`n"
+    Put $script:P.Log ''
+    $pj = Join-Path $script:P.Bin 'pinned.json'
+    Write-JsonAtomic $pj @{ commit = 'abc'; dailyAt = '17:05'; repo = $script:P.Repo }
+    # HOME's line with this test's folders in place of HOME's (the same form: cmd /c, quotes doubled)
+    $l = $homeLine.Replace('C:\Users\<user>\Documents\NinjaTrader 8\ChartBridge\updater\bin', $script:P.Bin).Replace('C:\Users\<user>\chart-engine', (Format-Arg $script:P.Repo).Replace('"', '""'))
+    [IO.File]::WriteAllText($hand, $l + "`r`n", [Text.Encoding]::ASCII)
+    $script:StubTask = [pscustomobject]@{ TaskName = 'ChartEngine Updater'; State = 'Ready'
+      Actions = @([pscustomobject]@{ Execute = 'C:\WINDOWS\system32\wscript.exe'; Arguments = '"' + $hand + '"' })
+      Principal = [pscustomobject]@{ UserId = 'PC\anthony'; LogonType = 'Interactive' }; Triggers = @() }
+    $script:UpdaterSelf = $pinned
+    $said = Invoke-AutoTaskMigration
+    $reg = @(Get-TaskCall 'register')
+    $launcher = Get-HiddenLauncherPath
+    $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    Assert ($reg.Count -eq 1 -and $reg[0].Action.Arguments -ceq ('//B "' + $launcher + '"')) "moved: $said"
+    Assert ([IO.File]::ReadAllText($launcher) -ceq ((Get-HiddenLauncherLine $ps (Get-TaskArguments $pinned $script:P.Repo)) + "`r`n")) '-Repo kept'
+    Assert ($reg[0].Trigger.Count -eq 3 -and $reg[0].Trigger[1].StartBoundary -eq (ConvertFrom-NewYorkTime '09:00').ToString('yyyy-MM-ddTHH:mm:ss', $inv) -and $reg[0].Trigger[2].StartBoundary -eq (ConvertFrom-NewYorkTime '17:00').ToString('yyyy-MM-ddTHH:mm:ss', $inv)) 'sign-in, 09:00 and 17:00'
+    Assert (Test-Path -LiteralPath $hand) 'the hand-made .vbs left on disk'
   } finally { $env:OS = $keepOS; $script:P = $keepP; $script:UpdaterSelf = $keepSelf; $script:HandLauncherDir = $keepHand }
 }
 

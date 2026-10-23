@@ -59,8 +59,8 @@
   action, so -InstallChartBridge (after it re-pins the task's copy) moves a task that is not started by this tool's own launcher
   (plain powershell.exe, or a hand-made launcher in C:\SchwabDesk_bulk\hidden) to it, once, through register's own
   code: -Repo kept (refused by name otherwise), pinned.json's daily time 17:05 or 09:00 moved to 09:00 and 17:00 (another
-  time kept), and it prints what it kept. Refused, and said: an elevated window, a task that runs as another user, a
-  task whose script is not the pinned copy. A refused or failed move changes nothing (the launcher it wrote goes, pinned.json is written
+  time kept), and it prints what it kept. Refused, and said: an elevated window, a task that runs as another user or
+  with a logon type other than Interactive, a task whose script is not the pinned copy. A refused or failed move changes nothing (the launcher it wrote goes, pinned.json is written
   only after the task) and never stops -InstallChartBridge. The move needs a copy that has this code: one run from an
   up to date clone, or register; a pinned copy older than this change only pins the new copy, and the move then
   happens at the next -InstallChartBridge. Task Scheduler applies a changed action from the task's next start. Until
@@ -77,8 +77,10 @@
   launcher with one daily trigger gets the 17:00 one from the automatic run of a pinned copy that has this change: a
   change of the schedule only (the action, the launcher and the pinned copy stay as they are), and only in the task's own
   run (the task starts through its own launcher, which runs the pinned copy, and this run is that copy; not elevated; the
-  task's own user). Every other change of the daily triggers (a move for DST or a time zone) is made only in the task's
-  own run too (the same checks, without the launcher one); an update run by hand changes no trigger and says so. A PC
+  task's own user, a task that runs only while signed in). Every other change of the daily triggers (a move for DST or a
+  time zone) is made only in the task's own run too (the same checks, without the launcher one). An update run of the
+  clone's copy changes no trigger and says so; the pinned copy (updater\bin\update-pc.ps1, $u in the README) run by
+  hand counts as the task's own run when it is not elevated and runs as the task's user. A PC
   picks it up after its next -InstallChartBridge or register (either pins a copy with this
   change); a task not yet on the hidden launcher gets both at that migration. Two triggers never run an update at the same
   moment: the task never starts twice at once (IgnoreNew), and every run takes updater.lock first (a run that finds it
@@ -1905,7 +1907,7 @@ function Read-StartBoundary([string]$Text) {
 # The daily checks are local times on this PC. At every update run, pinned.json's daily times (New York time,
 # Get-PinTimes) are worked out again for today, and the daily triggers are moved when they drifted (a time zone change,
 # DST dates that differ from New York's, or a StartBoundary kept on UTC), only in the task's own run (Get-OwnRunProblem;
-# a run by hand changes no trigger and says so). A daily trigger missing (a task registered with one, before 09:00 and
+# a run of the clone's copy changes no trigger and says so). A daily trigger missing (a task registered with one, before 09:00 and
 # 17:00) is added, also only on the task's own launcher (Get-AddTriggerProblem): a change of the schedule, never of the
 # action. More daily triggers than times, or none, are left to register. Returns what it found, for
 # state.json and status: a failure (a task registered from an elevated window cannot be changed by the task's own run:
@@ -2069,20 +2071,23 @@ function Get-DailyLines($Task, $Times, [datetime]$Now = (Get-Date)) {
 
 # Every change of the daily triggers in the automatic run (Anthony 2026-10-23: a move too, not only an add) is made only
 # in the task's own run, as Bot-Lab's botlab_update.ps1: the task runs the pinned copy, and this run is that copy; this
-# run is not elevated, and the task runs as this user. A run by hand (update from the clone) changes no trigger and says
-# so. '' when it may.
+# run is not elevated, and the task runs as this user, only while signed in (logon type Interactive, review C3 of #68). A
+# run of the clone's copy changes no trigger and says so; the pinned copy run by hand ($u in the README) counts as the
+# task's own run when it is not elevated and runs as the task's user. '' when it may.
 function Get-OwnRunProblem($Task) {
   $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
   $cmd = Get-TaskCommand $Task
   if ($cmd.error) { return "the task's command cannot be read ($($cmd.error)); run update-pc.ps1 register" }
   $o = Get-CommandOptions $cmd.line 'update-pc.ps1'
   if ($null -eq $o -or -not (Test-SamePath ([string]$o['#script']) $pinned)) { return "the task does not run the pinned copy $pinned; run update-pc.ps1 register" }
-  if (-not (Test-SamePath $script:UpdaterSelf $pinned)) { return "this run is $($script:UpdaterSelf), not the task's pinned copy $pinned (a run by hand: the task's own run does it)" }
+  if (-not (Test-SamePath $script:UpdaterSelf $pinned)) { return "this run is $($script:UpdaterSelf), not the task's pinned copy $pinned (the clone's copy: the task's own run, or the pinned copy run by hand, does it)" }
   if (Test-Elevated) { return 'this run is elevated (Run as administrator); run update-pc.ps1 register from a normal window' }
   $u = Get-TaskUserId $Task
   $me = Get-CurrentUserName
   if (-not $u) { return "the task's user cannot be read; run update-pc.ps1 register" }
   if (-not (Test-SameUser $u $me)) { return "the task runs as $u, this run as ${me}; run update-pc.ps1 register as $u" }
+  $lt = Get-TaskLogonType $Task
+  if ($lt -ne 'Interactive') { return "$(Get-LogonTypeText $lt); run update-pc.ps1 register" }
   return ''
 }
 
@@ -2382,6 +2387,7 @@ function Invoke-TaskMigration([string]$By = '-InstallChartBridge') {
     elseif (Test-Elevated) { $line = 'this window is elevated (Run as administrator): a task registered from it could not move its own daily check. Run -InstallChartBridge or update-pc.ps1 register from a normal window' }
     elseif (-not $taskUser) { $line = 'the task''s user cannot be read' }
     elseif (-not (Test-SameUser $taskUser $me)) { $line = "the task runs as $taskUser, this window is ${me}: run update-pc.ps1 register as $taskUser" }
+    elseif ((Get-TaskLogonType $task) -ne 'Interactive') { $line = "$(Get-LogonTypeText (Get-TaskLogonType $task)): run update-pc.ps1 register" }
     else {
       $keep = Resolve-TaskOptions $task @{}
       if ($keep.error) { $line = $keep.error }
@@ -2438,6 +2444,21 @@ function Get-TaskUserId($Task) {
   $u = $p.Value.PSObject.Properties['UserId']
   if (-not $u) { return '' }
   return [string]$u.Value
+}
+
+# The task's logon type (Principal.LogonType: Interactive, S4U, Password, ...), '' when it has none. register makes it
+# Interactive (only while signed in, no password stored); the move and the trigger changes refuse any other by name (review
+# C3 of #68, as Bot-Lab's Get-PrincipalProblem).
+function Get-TaskLogonType($Task) {
+  $p = $Task.PSObject.Properties['Principal']
+  if (-not $p -or -not $p.Value) { return '' }
+  $l = $p.Value.PSObject.Properties['LogonType']
+  if (-not $l -or $null -eq $l.Value) { return '' }
+  return [string]$l.Value
+}
+function Get-LogonTypeText([string]$Type) {
+  if (-not $Type) { return "the task's logon type cannot be read" }
+  return "the task runs with logon type $Type, not Interactive (only while signed in)"
 }
 
 # The same Windows user: DOMAIN\user and user name the same one when the other side has no domain part
