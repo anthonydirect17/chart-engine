@@ -17,6 +17,13 @@ describe the page and the add-on; Anthony to say whether an updater-only change 
   `unregister` removes the launcher; `status` says whether the task starts hidden. The time limit with the launcher:
   Task Scheduler stops wscript.exe, and the PowerShell under it may go on; it still holds `updater.lock`, so later runs
   say busy and change nothing until it ends (git calls keep their own 3 minute limit).
+- **register keeps what the task runs, and status checks the start** (the independent review, 2026-10-23). register
+  reads the current task's `-Repo` from its own arguments or from the Run line of the launcher it starts (ours, or a
+  hand-made one in `C:\SchwabDesk_bulk\hidden`, `cmd /c cd /d ... &&` form too); another clone is refused unless `-Repo`
+  is given (`-Repo ''` cannot clear it), and so is a task whose command cannot be read. register writes and reads back
+  the launcher before it pins or touches the task, so a failed write changes nothing. `status` prints the command the
+  task runs, checks the launcher (missing, unreadable or not exactly the line register writes: STOP), and says when the
+  last run was and how long ago.
 - **The daily check moves to 09:00 New York time** (Anthony, 2026-10-23: "we push most updates overnight and I prefer them
   in the morning"). `-DailyAt` defaults to 09:00, and a pinned.json without a dailyAt reads 09:00. A check installs page
   files only (an open page keeps its code until reloaded when flat) and never ChartBridge. A PC registered before keeps

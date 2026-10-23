@@ -1265,6 +1265,91 @@ Test 'unregister (stubbed) removes a launcher the task names only when it is our
   } finally { $script:P = $keepP }
 }
 
+Test 'Split-CommandLine reads back what Format-Arg writes (spaces, quotes, trailing backslashes, empty)' {
+  foreach ($set in @(@('C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe', '-File', 'C:\Users\a b\Documents\NinjaTrader 8\x.ps1', 'update', '-Repo', 'C:\my clone\'),
+      @('a"b', 'c\"d', 'e f\\', '', 'plain'))) {
+    $line = (@($set | ForEach-Object { Format-Arg $_ }) -join ' ')
+    $back = @(Split-CommandLine $line)
+    Assert ($back.Count -eq $set.Count) "count: $($back.Count) of $($set.Count) from $line"
+    for ($i = 0; $i -lt $set.Count; $i++) { Assert ($back[$i] -ceq $set[$i]) "token $i '$($back[$i])' from $line" }
+  }
+}
+
+# A task as Get-ScheduledTask returns it, for the option checks: its action only.
+function New-FakeTask([string]$Execute, [string]$Arguments) { return [pscustomobject]@{ TaskName = 'ChartEngine Updater'; State = 'Ready'; Actions = @([pscustomobject]@{ Execute = $Execute; Arguments = $Arguments }) } }
+
+Test 'register keeps the current task''s -Repo (review B1): from its arguments, our launcher or a hand-made one; an explicit -Repo wins; anything else is refused by name' {
+  $keepP = $script:P
+  $mine = Join-Path $tmpRoot 'keep clone'
+  $other = Join-Path $tmpRoot 'other clone'
+  Initialize-Paths $mine (Join-Path (Join-Path $tmpRoot 'keep docs') 'NinjaTrader 8')
+  try {
+    $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+    # 1. the task's own arguments (registered before the hidden start)
+    $t = New-FakeTask $ps (Get-TaskArguments $pinned $other)
+    $r = Resolve-TaskOptions $t @{}
+    Assert ($r.error -match [regex]::Escape("the current task runs the clone $other") -and $r.error -match '-Repo') "refused, naming -Repo: $($r.error)"
+    Assert (-not (Resolve-TaskOptions (New-FakeTask $ps (Get-TaskArguments $pinned $mine)) @{}).error) 'the same clone: kept, no question'
+    # 2. our launcher
+    $ours = Get-HiddenLauncherPath
+    Write-HiddenLauncher $ours (Get-HiddenLauncherLine $ps (Get-TaskArguments $pinned $other))
+    $r = Resolve-TaskOptions (New-FakeTask 'C:\Windows\System32\wscript.exe' ('//B "' + $ours + '"')) @{}
+    Assert ($r.error -match [regex]::Escape($other) -and $r.error -match [regex]::Escape($ours)) "read from our launcher: $($r.error)"
+    # 3. a hand-made launcher (C:\SchwabDesk_bulk\hidden form, with cmd /c cd /d)
+    $handDir = Join-Path $tmpRoot 'hidden by hand'
+    New-Item -ItemType Directory -Force -Path $handDir | Out-Null
+    $hand = Join-Path $handDir 'chartengine_updater.vbs'
+    $cmd = 'cmd /c cd /d ' + (Format-Arg $script:P.Bin) + ' && ' + (Format-Arg $ps) + ' ' + (Get-TaskArguments $pinned $other)
+    [IO.File]::WriteAllText($hand, 'WScript.Quit CreateObject("WScript.Shell").Run("' + $cmd.Replace('"', '""') + '", 0, True)' + "`r`n", [Text.Encoding]::ASCII)
+    $handTask = New-FakeTask 'C:\Windows\System32\wscript.exe' ('"' + $hand + '"')
+    $r = Resolve-TaskOptions $handTask @{}
+    Assert ($r.error -match [regex]::Escape("runs the clone $other") -and $r.error -match [regex]::Escape($hand)) "read from the hand-made launcher: $($r.error)"
+    # 4. an explicit -Repo wins; an explicit empty one does not clear it
+    $r = Resolve-TaskOptions $handTask @{ Repo = $mine }
+    Assert (-not $r.error -and ($r.notes -join ' ') -match [regex]::Escape("the task had $other")) "explicit wins: $($r.error) $($r.notes -join ' ')"
+    $r = Resolve-TaskOptions $handTask @{ Repo = '' }
+    Assert ($r.error -match "-Repo '' would drop") "empty refused: $($r.error)"
+    # 5. a launcher that is missing, or a task that runs something else: refused, naming why
+    $r = Resolve-TaskOptions (New-FakeTask 'C:\Windows\System32\wscript.exe' ('//B "' + (Join-Path $handDir 'gone.vbs') + '"')) @{ Repo = $mine }
+    Assert ($r.error -match 'cannot be read' -and $r.error -match 'gone\.vbs is missing') "missing: $($r.error)"
+    $r = Resolve-TaskOptions (New-FakeTask $ps '-NoProfile -File C:\x\other.ps1 run') @{}
+    Assert ($r.error -match 'does not run update-pc\.ps1') "something else: $($r.error)"
+    Assert (-not (Resolve-TaskOptions $null @{}).error) 'no task: nothing to keep'
+  } finally { $script:P = $keepP }
+}
+
+Test 'status checks the task''s start (review N1): ours exactly as register writes it, missing or changed is not ok, hand-made and visible starts are said' {
+  $keepP = $script:P
+  Initialize-Paths (Join-Path $tmpRoot 'status clone') (Join-Path (Join-Path $tmpRoot 'status docs') 'NinjaTrader 8')
+  try {
+    $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+    $want = { param($o) Get-HiddenLauncherLine (Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe') (Get-TaskArguments (Join-Path $script:P.Bin 'update-pc.ps1') ([string]$o['Repo'])) }
+    $ours = Get-HiddenLauncherPath
+    $task = New-FakeTask 'C:\Windows\System32\wscript.exe' ('//B "' + $ours + '"')
+    $r = Test-TaskStart $task 'update-pc.ps1' $want
+    Assert (-not $r.ok -and $r.text -match 'LAUNCHER MISSING' -and $r.text -match 'updates are not running') "missing: $($r.text)"
+    Write-TaskLauncher $pinned
+    $r = Test-TaskStart $task 'update-pc.ps1' $want
+    Assert ($r.ok -and $r.text -match '^hidden \(wscript\.exe //B ' -and $r.line -ceq ('"' + $ps + '" ' + (Get-TaskArguments $pinned $script:P.Repo))) "ours: $($r.text) / $($r.line)"
+    $line = [IO.File]::ReadAllText($ours)
+    [IO.File]::WriteAllText($ours, $line.Replace(' update ', ' update  '), [Text.Encoding]::ASCII)
+    $r = Test-TaskStart $task 'update-pc.ps1' $want
+    Assert (-not $r.ok -and $r.text -match 'LAUNCHER CHANGED') "changed: $($r.text)"
+    [IO.File]::WriteAllText($ours, $line.Replace('update-pc.ps1', 'other.ps1'), [Text.Encoding]::ASCII)
+    $r = Test-TaskStart $task 'update-pc.ps1' $want
+    Assert (-not $r.ok -and $r.text -match 'does not run update-pc\.ps1') "another script: $($r.text)"
+    $r = Test-TaskStart (New-FakeTask $ps (Get-TaskArguments $pinned $script:P.Repo)) 'update-pc.ps1' $want
+    Assert ($r.ok -and $r.text -match '^not hidden') "visible: $($r.text)"
+    $hand = Join-Path $tmpRoot 'hand.vbs'
+    [IO.File]::WriteAllText($hand, $line, [Text.Encoding]::ASCII)
+    $r = Test-TaskStart (New-FakeTask 'C:\Windows\System32\wscript.exe' ('"' + $hand + '"')) 'update-pc.ps1' $want
+    Assert ($r.ok -and $r.text -match 'register did not write') "hand-made: $($r.text)"
+    Assert ((Format-Age (New-TimeSpan -Minutes 7)) -eq '7 min' -and (Format-Age (New-TimeSpan -Hours 2 -Minutes 5)) -eq '2 h 5 min' -and (Format-Age (New-TimeSpan -Days 3 -Hours 4)) -eq '3 d 4 h') 'the age of the last run'
+  } finally { $script:P = $keepP }
+}
+
 Test 'no task stub is left behind: the Windows-only register tests below get the real ScheduledTasks commands' {
   foreach ($n in @('New-ScheduledTaskAction', 'New-ScheduledTaskTrigger', 'New-ScheduledTaskPrincipal', 'New-ScheduledTaskSettingsSet', 'Register-ScheduledTask', 'Get-ScheduledTask', 'Unregister-ScheduledTask', 'Set-ScheduledTask')) {
     $c = Get-Command $n -ErrorAction SilentlyContinue
@@ -1274,6 +1359,27 @@ Test 'no task stub is left behind: the Windows-only register tests below get the
 }
 
 if ($IsWin) {
+  Test 'the launcher register writes runs for real: wscript.exe //B starts it hidden, waits, and gives back its exit code (review gap)' {
+    $keepP = $script:P
+    $root = Join-Path $tmpRoot 'probe dir with spaces'
+    Initialize-Paths (Join-Path $root 'my clone') (Join-Path (Join-Path $root 'Documents') 'NinjaTrader 8')
+    . $script:TaskStubs
+    try {
+      $marker = Join-Path $root 'probe marker.txt'
+      $probe = Join-Path $script:P.Bin 'update-pc.ps1'      # a harmless stand-in at the pinned copy's place
+      Put $probe ("param([Parameter(Position = 0)][string]`$Command, [string]`$Repo)`r`n[IO.File]::WriteAllText('" + $marker.Replace("'", "''") + "', `$Command + '|' + `$Repo)`r`nexit 7`r`n")
+      Register-HiddenTask 'PC\anthony' $probe (Get-Date)
+      $reg = @(Get-TaskCall 'register')[0]
+      Assert ($reg.Action.Arguments -ceq ('//B "' + (Get-HiddenLauncherPath) + '"')) "the action: $($reg.Action.Arguments)"
+      $args2 = @(Split-CommandLine $reg.Action.Arguments)
+      $r = Invoke-Native $reg.Action.Execute $args2 120
+      Assert ($r.code -eq 7) "wscript.exe gave back the exit code 7: $($r.code) $($r.err)"
+      Assert ((Test-Path -LiteralPath $marker) -and (Get-Text $marker) -ceq ('update|' + $script:P.Repo)) "the probe ran with its arguments: $(if (Test-Path -LiteralPath $marker) { Get-Text $marker })"
+    } finally {
+      $script:P = $keepP
+      Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
   Test 'register: a task for this user, at sign-in and daily at 09:00 New York time, started hidden, IgnoreNew, -File, no admin' {
     $script:TaskName = 'ChartEngine Updater CI ' + [guid]::NewGuid().ToString('N').Substring(0, 8)
     $TaskName = $script:TaskName
@@ -1374,7 +1480,7 @@ if ($IsWin) {
     }
     Assert ([TimeZoneInfo]::Local.Id -eq $origTz -or "$(& tzutil /g)".Trim() -eq $origTz) "the runner's time zone is back: $([TimeZoneInfo]::Local.Id)"
   }
-} else { Skip 'register: the scheduled task' 'Windows only'; Skip 'register in a time zone with DST' 'Windows only' }
+} else { Skip 'the launcher runs for real (wscript.exe)' 'Windows only'; Skip 'register: the scheduled task' 'Windows only'; Skip 'register in a time zone with DST' 'Windows only' }
 
 # ---------------------------------------------------------------------------------------------- done
 

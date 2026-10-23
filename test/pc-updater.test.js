@@ -158,8 +158,13 @@ test('the task starts hidden (Anthony, 2026-10-22): wscript.exe //B on a one-lin
   assert.match(reg, /New-ScheduledTaskAction -Execute \(Get-SystemExe 'System32\\wscript\.exe'\) -Argument \('\/\/B "' \+ \$launcher \+ '"'\) -WorkingDirectory \$script:P\.Bin/);
   assert.strictEqual([...src.matchAll(/New-ScheduledTaskAction/g)].length, 1, 'one task action, the hidden one');
   // the launcher is written before the task, and a failure stops register (never a visible task instead)
-  assert.ok(reg.indexOf('Write-HiddenLauncher') < reg.indexOf('Register-ScheduledTask'));
-  assert.match(reg, /catch \{ throw "the hidden launcher could not be written, the task was not changed/);
+  assert.ok(reg.indexOf('Write-TaskLauncher $Pinned') > 0 && reg.indexOf('Write-TaskLauncher $Pinned') < reg.indexOf('Register-ScheduledTask'));
+  const wtl = src.slice(src.indexOf('function Write-TaskLauncher'), src.indexOf('function Register-HiddenTask'));
+  assert.match(wtl, /Write-HiddenLauncher[\s\S]*catch \{ throw "the hidden launcher could not be written, the task was not changed/);
+  // review N2: in register the launcher comes first (read back), then the pin, then the task
+  const ir = src.slice(src.indexOf('function Invoke-Register'), src.indexOf('function Unregister-HiddenTask'));
+  const order = ['Resolve-TaskOptions (Get-ScheduledTask', 'Write-TaskLauncher $want', 'Invoke-PinForTask $DailyAt', 'Register-HiddenTask $user $pinned $local'].map(t => ir.indexOf(t));
+  assert.ok(order.every((v, i) => v > 0 && (i === 0 || v > order[i - 1])), 'keep, launcher, pin, task: ' + order.join(','));
   assert.match(src, /\.Run\("' \+ \$cmd\.Replace\('"', '""'\) \+ '", 0, True\)'/);
   assert.match(src, /\[IO\.File\]::WriteAllText\(\$Path, \$text, \[Text\.Encoding\]::ASCII\)/);
   assert.match(src, /\$script:HiddenLauncherName = 'update-pc\.hidden\.vbs'/);
