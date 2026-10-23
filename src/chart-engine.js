@@ -1273,10 +1273,16 @@ function create(container, options) {
   // working orders and the position (1.3.0): shown always; moved, cancelled and placed only while editing is on
   let orders = [], position = null, hostPV = 0, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, addDown = null, orderHits = [];
-  /* 1.38.0 (review of the gutter stacking): the order whose label is placed first in the gutter: the one being dragged, and after
-     the release still that one, so the stack does not reorder under a still mouse (a second press where the label was dropped
-     acts on the same order). Until the next drag starts, that order is gone, or the mouse leaves the chart. */
+  /* 1.38.0 (reviews of the gutter stacking; the rule: the label under a mouse that has not moved never changes owner): the label
+     placed first in the gutter, and where. While an order is pressed or dragged (od), its label is placed first at the row it was
+     drawn in at the press, moved only by the drag's own movement (od.off: its top less its line's top, kept as its line follows the
+     mouse), so a press moves nothing. After a drag that really moved the order (a move sent), labelFirst keeps that label first at
+     the row it was released in ({ id, off }), so a second press there acts on the same order; until the next drag that moves an
+     order, that order is gone, or the mouse leaves the chart. A click, a press that moves no tick, an Escape, a drag cancelled or
+     released off the chart leave labelFirst as it was before the press: the stack is then exactly as it was before. */
+  const ORDER_LH = 18;                                       // an order label's height (the gutter's rows: this and 2)
   let labelFirst = null;
+  const lineTop = y => clamp(y - ORDER_LH / 2, 0, Math.max(0, plotH - ORDER_LH));   // the top of a label drawn at its line
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
   const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [], drawn: [], room: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
@@ -2484,23 +2490,26 @@ function create(container, options) {
     orderHits = []; posHit = null;
     const labelBoxes = [];                    // where the labels are (full size), for the corner readout (1.15.0)
     if (n >= 0 && (orders.length || position || orderPreview)) {
-      const LH = 18, STEP = LH + 2;
+      const LH = ORDER_LH, STEP = LH + 2;
       ctx.font = '500 11px ' + T.fontMono; ctx.textBaseline = 'middle';
       /* 1.38.0 (Anthony 2026-10-22 at WORK: "when I am dragging the stop over the entry, it kicks out over the active candles"):
          every label is right-aligned at the plot's right edge, in the gutter beside the price axis, and never steps left onto the
          candles. Labels that would overlap stack up and down in the gutter instead: the label of the order being dragged is
-         placed first (pinned at its line), and after the release still that one (labelFirst) until the next drag, that order
-         gone or the mouse off the chart, so nothing reorders under a still mouse; then the others in their order (the position, then the orders), each at its own line
+         placed first, kept in the row it was in at the press and moved only by the drag, and after a drag that moved it still
+         first in the row it was released in (labelFirst, above) so nothing changes owner under a still mouse; then the others in their order (the position, then the orders), each at its own line
          when free, else the nearest free row STEP px at a time, first away from the label it meets (down when level with it),
          then the other way. A label moved off its line gets a short leader in the gutter back to its line. The hit areas are the
          label's own boxes wherever it lands, so a click, its x and a drag act on its own order. Placed once all are asked for. */
       const pend = [];
-      const place = (y, w, first) => { const top = clamp(y - LH / 2, 0, Math.max(0, plotH - LH)); const sl = { y, w, x: plotW - 6 - w, top, top0: top, first: !!first, done: null }; pend.push(sl); return sl; };
+      const place = (y, w, first, off) => {
+        const top0 = lineTop(y), top = first && isFinite(off) ? clamp(top0 + off, 0, Math.max(0, plotH - LH)) : top0;
+        const sl = { y, w, x: plotW - 6 - w, top, top0, first: !!first, done: null }; pend.push(sl); return sl;
+      };
       const placeAll = () => {
         const boxes = [], hi = Math.max(0, plotH - LH);
         const meets = (sl, top) => boxes.find(b => sl.x < b.x + b.w + 4 && sl.x + sl.w + 4 > b.x && Math.abs(b.top - top) < LH + 1);
         for (const sl of pend.filter(q => q.first).concat(pend.filter(q => !q.first))) {
-          const hit = meets(sl, sl.top0);
+          const hit = sl.first ? null : meets(sl, sl.top0);       // the first label keeps its row (its line, or where it is held)
           if (hit) {
             const dir = sl.top0 < hit.top ? -1 : 1;
             let at = null;
@@ -2552,7 +2561,8 @@ function create(container, options) {
         const ex = (extras || []).map(e => ({ which: e[0], text: e[1], w: ctx.measureText(e[1]).width + 10 }));
         const ew = ex.reduce((a, e) => a + e.w, 0);
         const tw = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 10, w = tw + ew + (closer ? LH : 0);
-        const sl = place(y, w, hid !== undefined && hid === (od ? od.id : labelFirst));
+        const pin = od ? { id: od.id, off: od.off } : labelFirst;
+        const sl = place(y, w, !!pin && hid !== undefined && hid === pin.id, pin ? pin.off : 0);
         let x = sl.x, top = sl.top;
         /* the boxes are filled in once every label is placed (placeAll), the same objects the callers keep */
         const box = { x, y: top, w: tw, h: LH };
@@ -2907,7 +2917,11 @@ function create(container, options) {
       if (oh && oh.part === 'add') { addDown = { id: oh.id, which: oh.which }; return; }
       if (oh) {
         const ord = orders.find(x => x.id === oh.id);
-        if (ord) { const p0 = orderPrice(ord); od = { id: ord.id, y0: p.y, price0: p0, price: p0, moved: false }; labelFirst = ord.id; setCursor('plot', p); dirty = true; return; }
+        if (ord) {
+          const p0 = orderPrice(ord), hb = orderHits.find(h => h.id === ord.id);   // the label stays in the row it is drawn in
+          od = { id: ord.id, y0: p.y, price0: p0, price: p0, moved: false, off: hb && hb.box ? hb.box.y - lineTop(yOf(p0)) : 0 };
+          setCursor('plot', p); dirty = true; return;
+        }
       }
     }
     /* 1.15.0 (Anthony: "Armed is off" said nowhere): a press on an order's label or tag while order editing is off does
@@ -3049,6 +3063,7 @@ function create(container, options) {
         const ev = { id: d.id, price: d.price };
         if (par) ev.from = orderPrice(par);
         pendingMoves.set(d.id, d.price); emit('orderMove', ev);
+        labelFirst = { id: d.id, off: d.off };                  // 1.38.0: its label stays first, in the row it was released in
       }
       setCursor(zoneOf(p), p); dirty = true; return;
     }
@@ -3415,7 +3430,7 @@ function create(container, options) {
       // as after the drag, until the host stops saying it (the workspace redraws its charts after every action)
       for (const x of list || []) if (x && typeof x.movePending === 'number' && isFinite(x.movePending) && orders.some(y => y.id === x.id)) pendingMoves.set(x.id, x.movePending);
       if (od && !orders.some(x => x.id === od.id)) od = null;
-      if (labelFirst !== null && !orders.some(x => x.id === labelFirst)) labelFirst = null;
+      if (labelFirst !== null && !orders.some(x => x.id === labelFirst.id)) labelFirst = null;
       dirty = true;
     },
     getOrders() { return orders.map(x => Object.assign({}, x)); },

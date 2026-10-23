@@ -147,6 +147,32 @@ async function run(mode) {
     await page.evaluate(() => window.__ch.setOrders(window.__orders)); await page.mouse.move(20, 20); await wait(150);
   }
   void h1;
+  /* re-review of 1.38.0 (the rule: the label under a mouse that has not moved never changes owner): a buy limit and a sell stop at one
+     price, the limit first in the list, so the stop's label is pushed a row down. A plain click on the stop's label, a press that
+     moves 2 px (no tick), a drag undone with Escape and one released over the price axis: none moves any label, and the next
+     press-drag where the mouse is (or, after Escape or the axis, where it was pressed) moves the stop again, never the limit */
+  for (const how of ['click', '2px', 'escape', 'axis']) {
+    await page.evaluate(avg => { window.__ch.setPosition(null); window.__orders = [{ id: 'e1', side: 'buy', kind: 'limit', price: avg, qty: 1 }, { id: 's1', side: 'sell', kind: 'stop', price: avg, qty: 2, role: 'stop' }]; window.__ch.setOrders(window.__orders); window.__ev = []; }, S.avg);
+    await page.mouse.move(20, 20); await wait(250);
+    const before = await handles(), sb = before.find(h => h.id === 's1').box, eb = before.find(h => h.id === 'e1').box;
+    const px = Math.round(sb.x + sb.w - 8), py = sb.y + sb.h / 2;
+    const displaced = Math.abs(sb.y - eb.y) >= 18;
+    await page.mouse.move(px, py); await wait(150);
+    await page.mouse.down();
+    if (how === '2px') await page.mouse.move(px, py - 2, { steps: 2 });
+    if (how === 'escape') { await page.mouse.move(px, py - 40, { steps: 5 }); await wait(100); await page.keyboard.press('Escape'); }
+    await wait(80); await page.mouse.up(); await wait(200);
+    if (how === 'axis') await page.mouse.move(Math.round(S.plotW + 30), py - 40, { steps: 5 });   // released over the price axis: cancelled
+    if (how === 'escape' || how === 'axis') { await page.mouse.move(px, py); await wait(150); }
+    const ev0 = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
+    const after = await handles();
+    const same = JSON.stringify(after.map(h => [h.id, Math.round(h.box.y)])) === JSON.stringify(before.map(h => [h.id, Math.round(h.box.y)]));
+    await page.evaluate(() => { window.__ev = []; });
+    const ny = how === '2px' ? py - 2 : py;
+    await page.mouse.down(); await page.mouse.move(px, ny - 12, { steps: 3 }); await page.mouse.up(); await wait(150);
+    const ev1 = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
+    check(displaced && ev0.length === 0 && same && ev1.length === 1 && ev1[0].id === 's1', 'the stop\'s displaced label: a ' + how + ' (no move sent) leaves every label where it was (' + same + '), and the next press-drag there moves the stop: ' + JSON.stringify(ev1));
+  }
   /* review of 1.38.0 (a real-money finding): right after a drag lands, with the mouse still where it let go, the stack must not
      reorder under it: a second press there (to nudge the same order one more tick) acts on the order just dragged, never on the
      label that was pushed aside. The stop (a sell stop) onto the entry, then the target (a sell limit) onto it, then (the

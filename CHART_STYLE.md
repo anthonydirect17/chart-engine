@@ -398,8 +398,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   **1.38.0 (Anthony 2026-10-22 at WORK: "when I am dragging the stop over the entry, it kicks out over the active candles"):**
   every order and position label stays right-aligned at the plot's right edge, in the gutter beside the price axis; a label never
   steps left onto the candles. Labels that would overlap stack up and down in the gutter instead, 20 px (the label's 18 and 2)
-  at a time: the label of the order being dragged is placed first and stays at its line (pinned, and compact on a host's chart
-  while dragged), and stays first after the release until the next drag, that order is gone or the mouse leaves the chart, then the position's, then the orders' in their order, each at its line when free, else the nearest free row,
+  at a time: the label of the order pressed or dragged is placed first, in the row it was drawn in at the press, moved only by the drag
+  (compact on a host's chart while dragged), and after a drag that moved the order it stays first in the row it was released in
+  until the next such drag, that order is gone or the mouse leaves the chart (the label under a still mouse never changes owner), then the position's, then the orders' in their order, each at its line when free, else the nearest free row,
   first away from the label it meets (down when level with it). A label off its line gets a 1 px leader in its border color at
   its strength, from its right end along the 6 px gutter to its line. Each label's hit areas (its body, its x, its add cells) are
   its own boxes wherever it lands.
