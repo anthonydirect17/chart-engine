@@ -362,7 +362,11 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    Windows PowerShell command with no window and waits for it, so the task shows Running and its Last Result as before.
    `status` says `task start: hidden`, prints the command the task runs, and ends with STOP when the launcher is missing
    or changed. Register again keeps the clone the task runs (`-Repo`), read from the task or its launcher; it refuses
-   another clone unless `-Repo` is given. A task registered before this change still starts `powershell.exe` (a console
+   another clone unless `-Repo` is given.
+
+   A task registered before the hidden start moves by itself at the next `-InstallChartBridge` (it prints what it kept,
+   and the daily check moves from 5:05 PM to 9:00 AM unless you had set another time). Until then each check writes one
+   WARN line in update.log saying so; `update-pc.ps1 register` moves it at once. A task registered before this change still starts `powershell.exe` (a console
    may flash) and keeps its old daily time: run `register` again to move it to the launcher and to 9:00 AM.
 
 **Everyday commands, with the task's own copy.** Paste this once per PowerShell window, then use `$u` as below:

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (2026-10-23): -InstallChartBridge moves the PC updater's task to the hidden launcher
+
+`nt8/update-pc.ps1` only (no page or ChartBridge change, no version bump, as the 2026-10-23 updater entry below).
+
+- **No register job per PC** (Anthony 2026-10-23: "this prompt gets lost for the home PC"). The automatic path never
+  changes the pinned copy the task runs, so the task can only move where a new updater first runs: `-InstallChartBridge`
+  (the next is ChartBridge 0.6.8) now, after re-pinning the task's copy, moves a task that is not started by its own
+  launcher (plain `powershell.exe`, or a hand-made launcher in `C:\SchwabDesk_bulk\hidden`) to `wscript.exe //B` on
+  `updater\bin\update-pc.hidden.vbs`, once, through register's own code: `-Repo` kept (another clone, or a command that
+  cannot be read, is refused by name), pinned.json's dailyAt 17:05 moved to 09:00 (another time kept). It prints what it
+  kept and the 09:00 note. A failure is said and never stops `-InstallChartBridge`. Task Scheduler applies a changed
+  action from the task's next start.
+- **The automatic run only warns:** while the task is not hidden, each `update` run logs one WARN line, "the task still
+  starts without the hidden launcher: it is migrated at the next -InstallChartBridge or update-pc.ps1 register", and
+  changes nothing.
+- Tests: stubbed migration (a running plain task, a hand-made launcher with another time, a task on another clone, a
+  failure, the warning) and, on Windows, a real throwaway task migrated from its old action.
+
 ## Unreleased (2026-10-23): the PC updater's task starts hidden, and checks at 9:00 AM New York time
 
 `nt8/update-pc.ps1` only: no page change, no ChartBridge change, no version bump here (the chart and ChartBridge versions
