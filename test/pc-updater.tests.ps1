@@ -1812,7 +1812,6 @@ if ($IsWin) {
       $got = @($d2 | ForEach-Object { ([datetime]$_.StartBoundary).ToString('HH:mm') } | Sort-Object)
       Assert (($got -join ',') -eq $wantBoth -and @($d2 | Where-Object { $_.StartBoundary -match '(Z|[+-]\d\d:\d\d)$' }).Count -eq 0) "moved back to $want and $want17 local, no offset: $($got -join ',')"
       Assert (@($t2.Triggers).Count -eq 3 -and (Get-Text $script:P.Log) -match 'the daily check moved from 03:00,04:00') 'the sign-in trigger kept, and the move logged'
-      $script:UpdaterSelf = $keepSelf
       # a task with the 09:00 check alone (registered before 09:00 and 17:00): the task's own run adds 17:00 in place
       try {
         $one = @(New-DailyTrigger (ConvertFrom-NewYorkTime '09:00'))
