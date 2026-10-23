@@ -53,9 +53,21 @@
   task runs: its -Repo, read from its arguments or from the Run line of the launcher it starts (ours, or a hand-made one
   in C:\SchwabDesk_bulk\hidden); another clone is refused unless -Repo is given, and so is a task whose command cannot
   be read (unregister first then). unregister removes the launcher too. status prints the command the task runs and
-  checks the launcher: missing, unreadable or not exactly the line register writes, status says so and ends with STOP. Time limit: when Task Scheduler stops the task at its 30 minutes it stops
-  wscript.exe, and the PowerShell under it may keep running. That run still holds updater.lock (a file held open, freed
-  by Windows when the process ends), so every later run says busy and changes nothing until it ends; each git call has
+  checks the launcher: missing, unreadable or not exactly the line register writes, status says so and ends with STOP.
+  Migration without a job per PC (Anthony 2026-10-23): the automatic path never changes the pinned copy or the task, so
+  -InstallChartBridge (after it re-pins the task's copy) moves a task that is not started by this tool's own launcher
+  (plain powershell.exe, or a hand-made launcher in C:\SchwabDesk_bulk\hidden) to it, once, through register's own
+  code: -Repo kept (refused by name otherwise), pinned.json's dailyAt 17:05 moved to 09:00 (another time kept), and it
+  prints what it kept. Refused, and said: an elevated window, a task that runs as another user, a task whose script is
+  not the pinned copy. A refused or failed move changes nothing (the launcher it wrote goes, pinned.json is written
+  only after the task) and never stops -InstallChartBridge. The move needs a copy that has this code: one run from an
+  up to date clone, or register; a pinned copy older than this change only pins the new copy, and the move then
+  happens at the next -InstallChartBridge. Task Scheduler applies a changed action from the task's next start. Until
+  then each automatic run logs one WARN line: "the task still starts without the hidden launcher: it is migrated at
+  the next -InstallChartBridge (unless it is refused there; see its output) or update-pc.ps1 register".
+  Time limit: when Task Scheduler stops the task at its 30 minutes it stops wscript.exe, and the PowerShell under it
+  may keep running. That run still holds updater.lock (a file held open, freed by Windows when the process ends), so
+  every later run says busy and changes nothing until it ends; each git call has
   its own 3 minute limit and is ended with what it started (taskkill /T). A PowerShell that hangs for good outside git
   would keep the updater busy until sign-out or a restart: update.log and status show it.
 #>
@@ -103,6 +115,7 @@ $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
 # 0.3.8: the run at sign-in can come before the network is up ("Failed to connect to github.com port 443"): `update`
 # tries the fetch again for up to FetchWaitSec, then gives up quietly (outcome offline) until the next run.
 $script:DailyAtDefault = '09:00'          # pinned.json without a dailyAt (the -DailyAt default above)
+$script:DailyAtBefore = '17:05'           # the old default: a task migrated from it moves to DailyAtDefault
 $script:HiddenLauncherName = 'update-pc.hidden.vbs'   # the task's hidden launcher, in updater\bin (register writes it)
 $script:FetchWaitSec = 120
 $script:FetchRetrySec = 10
@@ -1237,7 +1250,7 @@ function Invoke-Update([switch]$DryRun) {
   if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
   try {
     $state = Read-State
-    if (-not $DryRun) { Save-TriggerCheck $state (Sync-DailyTrigger) }
+    if (-not $DryRun) { Save-TriggerCheck $state (Sync-DailyTrigger); Write-TaskStartWarning }
     $r = Invoke-Pass -DryRun:$DryRun -State $state
     if ($DryRun) {
       if (Test-Path $script:P.Journal) { Write-Host 'check: a page install was cut off; the next update finishes or undoes it before anything else' }
@@ -1582,6 +1595,8 @@ function Invoke-InstallChartBridge {
     # the scheduled task's own copy of this updater follows the commit Anthony just installed (never an older one)
     $pinNote = ''
     try { $pinNote = Update-PinnedFromStage $stage } catch { $pinNote = "the task's updater was not changed ($($_.Exception.Message))"; Write-Log $pinNote 'WARN' }
+    # then the task itself moves to the hidden launcher, once (never stops -InstallChartBridge)
+    $migLines = @(Invoke-TaskMigration)
     # the page: now only if it also works with the ChartBridge running until F5 (COMPAT); otherwise after F5
     $pageNote = ''; $pageLater = $false
     $min = ConvertTo-VersionOrNull ([string](Get-Field $stage 'minChartBridge'))
@@ -1611,6 +1626,7 @@ function Invoke-InstallChartBridge {
     Write-Host $pageNote
     if ($pageLater) { Write-Host 'After F5, run update-pc.ps1 update so the page follows at once (the next scheduled check would do it too).' }
     if ($pinNote) { Write-Host $pinNote }
+    foreach ($l in $migLines) { Write-Host $l }
     Write-Host 'Then reload the chart page when flat. The files replaced are kept in:'
     Write-Host "  $backup"
     $tail = ''; if ($pageLater) { $tail = '; the page follows on the next update' }
@@ -2091,8 +2107,16 @@ function Test-TaskStart($Task, [string]$Leaf, [scriptblock]$Expected) {
 
 function Get-HiddenLauncherPath { return (Join-Path $script:P.Bin $script:HiddenLauncherName) }
 
+# The same path: as GetFullPath writes them, or, when both exist, as Windows names them (an 8.3 short name matches its
+# long form)
 function Test-SamePath([string]$A, [string]$B) {
-  return ([IO.Path]::GetFullPath($A).TrimEnd('\', '/') -eq [IO.Path]::GetFullPath($B).TrimEnd('\', '/'))
+  if ([IO.Path]::GetFullPath($A).TrimEnd('\', '/') -eq [IO.Path]::GetFullPath($B).TrimEnd('\', '/')) { return $true }
+  try {
+    if ((Test-Path -LiteralPath $A) -and (Test-Path -LiteralPath $B)) {
+      return ((Get-Item -LiteralPath $A -Force).FullName.TrimEnd('\', '/') -eq (Get-Item -LiteralPath $B -Force).FullName.TrimEnd('\', '/'))
+    }
+  } catch { }
+  return $false
 }
 
 # register keeps what the current task runs (B1 of the review, 2026-10-23): its -Repo, read from the task's own
@@ -2137,6 +2161,105 @@ function Register-HiddenTask([string]$User, [string]$Pinned, [datetime]$Local) {
     -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
   Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($logon, $daily) -Principal $principal -Settings $settings -Force `
     -Description "Keeps the chart page in ChartBridge's www folder up to date (green commits on main only). Never installs ChartBridge. Log: $($script:P.Log)" | Out-Null
+}
+
+# The user the task runs as (this Windows user, as register), and whether this window is elevated
+function Get-CurrentUserName { return [Security.Principal.WindowsIdentity]::GetCurrent().Name }
+function Test-Elevated { return (New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) }
+
+# -InstallChartBridge moves the scheduled task to the hidden launcher, once (Anthony 2026-10-23: no register job per PC).
+# The automatic path never changes the pinned copy the task runs, so -InstallChartBridge (or register) is where a new
+# updater first runs. Only the task named -TaskName, when it is not started by this tool's own launcher (plain
+# powershell.exe, or a hand-made launcher in C:\SchwabDesk_bulk\hidden). Exactly register's path: the task's -Repo kept
+# (Resolve-TaskOptions: another clone, or a command that cannot be read, is refused by name), the launcher written and
+# read back, then the task. The daily time: pinned.json's dailyAt 17:05 (or none) moves to the 09:00 default, another
+# time is kept. Task Scheduler applies a changed action from the task's next start. A failure is said and logged and
+# never stops -InstallChartBridge. Returns the lines to print.
+function Invoke-TaskMigration {
+  if ($env:OS -ne 'Windows_NT') { return @() }
+  $line = ''
+  $launcher = ''; $hadLauncher = $false; $oldLauncher = ''; $registered = $false
+  try {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $task -or (Get-TaskLauncherPath $task)) { return @() }
+    $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+    $pj = Join-Path $script:P.Bin 'pinned.json'
+    $pin = Read-JsonFile $pj
+    $taskUser = Get-TaskUserId $task
+    $me = Get-CurrentUserName
+    $keep = $null; $o = $null
+    if (-not $pin -or -not (Test-Path -LiteralPath $pinned)) { $line = "no pinned copy in $($script:P.Bin) (run update-pc.ps1 register)" }
+    elseif (Test-Elevated) { $line = 'this window is elevated (Run as administrator): a task registered from it could not move its own daily check. Run -InstallChartBridge or update-pc.ps1 register from a normal window' }
+    elseif (-not $taskUser) { $line = 'the task''s user cannot be read' }
+    elseif (-not (Test-SameUser $taskUser $me)) { $line = "the task runs as $taskUser, this window is ${me}: run update-pc.ps1 register as $taskUser" }
+    else {
+      $keep = Resolve-TaskOptions $task @{}
+      if ($keep.error) { $line = $keep.error }
+      else {
+        $o = Get-CommandOptions (Get-TaskCommand $task).line 'update-pc.ps1'
+        if (-not (Test-SamePath ([string]$o['#script']) $pinned)) { $line = "the task runs $($o['#script']), not the pinned copy ${pinned}: run update-pc.ps1 register" }
+      }
+    }
+    if ($line) { $line = "the scheduled task was not moved to the hidden launcher: $line" }
+    else {
+      # the time first; pinned.json changes only once the task is registered (a failure changes nothing)
+      $oldAt = [string](Get-Field $pin 'dailyAt' '')
+      $at = $script:DailyAtDefault
+      if ($oldAt -and $oldAt -ne $script:DailyAtBefore) { $at = $oldAt }
+      $local = ConvertFrom-NewYorkTime $at
+      $was = (Get-TaskCommand $task).source
+      $launcher = Get-HiddenLauncherPath
+      $hadLauncher = Test-Path -LiteralPath $launcher -PathType Leaf
+      if ($hadLauncher) { $oldLauncher = [IO.File]::ReadAllText($launcher) }
+      Write-TaskLauncher $pinned
+      Register-HiddenTask $me $pinned $local
+      $registered = $true
+      if ($at -ne $oldAt) { $pin['dailyAt'] = $at; Write-JsonAtomic $pj $pin }
+      $out = @("The scheduled task now starts hidden: wscript.exe //B $launcher (it was $was).",
+        "  kept: -Repo $([string]$o['Repo']) and the pinned copy $pinned; the triggers, user and settings are register's own (they replace the old ones)")
+      if ($oldAt -and $oldAt -ne $at) { $out += "  daily check: $at New York time (it was $oldAt; Anthony 2026-10-23: updates are pushed overnight, so the check is in the morning)" }
+      else { $out += "  daily check: $at New York time" }
+      Write-Log "the scheduled task moved to the hidden launcher by -InstallChartBridge; daily at $at New York time (it was $oldAt); kept -Repo $([string]$o['Repo'])"
+      return $out
+    }
+  } catch {
+    $line = "the scheduled task was not moved to the hidden launcher: $($_.Exception.Message)"
+    # a failed move changes nothing: the launcher this attempt wrote goes (or is put back as it was); pinned.json was not touched
+    if (-not $registered -and $launcher) {
+      try {
+        if ($hadLauncher) { [IO.File]::WriteAllText($launcher, $oldLauncher, [Text.Encoding]::ASCII) }
+        elseif (Test-Path -LiteralPath $launcher) { Remove-Item -LiteralPath $launcher -Force }
+      } catch { $line += " (the launcher $launcher could not be put back: $($_.Exception.Message))" }
+    }
+  }
+  Write-Log $line 'WARN'
+  return @("$line. update-pc.ps1 register moves it.")
+}
+
+# The task's user (Principal.UserId), '' when it has none
+function Get-TaskUserId($Task) {
+  $p = $Task.PSObject.Properties['Principal']
+  if (-not $p -or -not $p.Value) { return '' }
+  $u = $p.Value.PSObject.Properties['UserId']
+  if (-not $u) { return '' }
+  return [string]$u.Value
+}
+
+# The same Windows user: DOMAIN\user and user name the same one when the other side has no domain part
+function Test-SameUser([string]$A, [string]$B) {
+  if (-not $A -or -not $B) { return $false }
+  if ($A -eq $B) { return $true }
+  if ($A.Contains('\') -and $B.Contains('\')) { return $false }
+  return (($A -split '\\')[-1] -eq ($B -split '\\')[-1])
+}
+
+# The automatic run never changes the task (its pinned copy and its action stay as Anthony left them): it only says so.
+function Write-TaskStartWarning {
+  if ($env:OS -ne 'Windows_NT') { return }
+  try {
+    $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($t -and -not (Get-TaskLauncherPath $t)) { Write-Log 'the task still starts without the hidden launcher: it is migrated at the next -InstallChartBridge (unless it is refused there; see its output) or update-pc.ps1 register' 'WARN' }
+  } catch { }
 }
 
 function Invoke-Register {
