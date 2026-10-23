@@ -3,7 +3,7 @@
 // data handler and the stand-in BarsRequest answered by hand: NinjaTrader's minute answer ends 28 minutes before the clock and
 // its 20,000 last trades start after that, while ChartBridge saw every live trade of those 28 minutes. Then the pure rules of
 // the minute book (stamping at the close, a trade on the minute, the cap, late trades, resets), the fallback when the book
-// starts after NinjaTrader's last bar (the warn status, today's path), the timeouts, and /diag. Made-up prices; nothing here is
+// starts after NinjaTrader's last bar (today's path; the hole recorded in /diag and history.log, not shown), the timeouts, and /diag. Made-up prices; nothing here is
 // market data.
 using System;
 using System.Collections.Generic;
@@ -201,7 +201,7 @@ public static class GapHarness
         Storm();   // last: the GapHarness page on NQ is not read after it (it gets the storm's live NQ trades)
     }
 
-    // The book starts after NinjaTrader's last bar (ChartBridge started at 10:50): today's path, and the hole said on screen.
+    // The book starts after NinjaTrader's last bar (ChartBridge started at 10:50): today's path, and the hole recorded in /diag and history.log only.
     static void Fallback()
     {
         simNow = Et(10, 50, 0);
@@ -210,13 +210,10 @@ public static class GapHarness
         bool askedTail; string seam;
         Wire w = LoadWith(NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0)), true, out askedTail, out seam);
         string want = "No bars from 10:40 to 11:08 ET: NinjaTrader's minute history ends at 10:39";
-        int ready = w.ReadyAt;
         Check(askedTail && w.Bars.Count == 70 && w.Ready.Contains("\"filled\":0") && seam.Contains("\"minuteTailRebuilt\":0") && seam.Contains("\"bookFilled\":-1") && seam.Contains("\"bookFrom\":\"2026-10-21 10:51:00.000\""),
             "fallback: the book starts at 10:51, after NinjaTrader's last bar (10:40): today's path (the 20,000 trades asked, NinjaTrader's bars as sent)");
-        Check(w.Statuses.Count == 1 && w.Statuses[0].Contains("\"level\":\"warn\"") && w.Statuses[0].Contains(want) && seam.Contains(want),
-            "fallback: a warn status names the hole: " + (w.Statuses.Count > 0 ? w.Statuses[0] : "none"));
-        List<string> l = Sent();
-        Check(l.FindIndex(x => x.Contains("No bars")) == ready + 1, "fallback: the status comes right after ready (a page clears its status line at ready)");
+        Check(w.Statuses.Count == 0 && !Sent().Any(x => x.Contains("No bars")) && seam.Contains("\"hole\":\"" + want + "\"") && ((string)Priv("HistoryNotesJson")).Contains("history ends early: " + want),
+            "fallback: the hole is recorded in /diag (the seam, historyNotes) and history.log, and nothing about it goes to the page (Anthony 2026-10-23: \"I dont need a notice\"): " + want);
         Check(w.After.Count == tape.Count(x => x.T >= Et(11, 8, 0)), "fallback: every held trade released, as before");
         // the hole rule: the 17:00 break and a weekend are not a hole
         Check(ChartBridgeServer.HoleText(new DateTime(2026, 10, 21, 17, 0, 0), new DateTime(2026, 10, 21, 18, 1, 30)) == null &&
@@ -421,8 +418,8 @@ public static class GapHarness
             foreach (Trade x in tape.Where(x => x.T >= Et(10, 50, 0) && x.T < Et(11, 8, 0))) Live(x);
             bool askedTail; string seam;
             Wire t = LoadWith(NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0)), false, out askedTail, out seam);
-            Check(askedTail && t.Ready != null && t.Statuses.Any(x => x.Contains("did not send NQ's last trades within")) && t.Statuses.Any(x => x.Contains("No bars from 10:40")) && seam.Contains("\"tailTimedOut\":true"),
-                "timeout: the last trades not answered in time: ready with NinjaTrader's bar as sent, said on screen, and the hole too");
+            Check(askedTail && t.Ready != null && t.Statuses.Count == 1 && t.Statuses[0].Contains("did not send NQ's last trades within") && seam.Contains("\"hole\":\"No bars from 10:40") && seam.Contains("\"tailTimedOut\":true"),
+                "timeout: the last trades not answered in time: ready with NinjaTrader's bar as sent and said on screen; the hole only in /diag");
             lock (sent) sent.Clear();
             BarsRequest lateTail = Reqs(0).Where(IsLastTrades).Last();
             lateTail.Answer(TicksOf(tape.Take(10)), ErrorCode.NoError);

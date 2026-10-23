@@ -509,7 +509,7 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
   assert.match(ready, /foreach \(SeamTick h in r\.Release\) burst\.Add\(h\.Json\);\s*client\.SendAll\(burst\);/);
   assert.ok(!/foreach \(SeamTick h in client\.Pending\)/.test(code), 'held trades only go out through Dedupe');
   // 0.6.8: under the book's lock then the Pending lock (OnMarketData's order), the minute book copied as the held trades are cleared
-  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(book\.Sync\)\s*lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*client\.WantsProfile = profile;\s*if \(!L\.Window\) L\.Book = book\.Minutes\.Snap\(\);\s*\}/);   // 0.3.5: and whether it wants "profile"; 0.6.8: the minute book
+  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(book\.Sync\)\s*lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*client\.WantsProfile = profile;\s*L\.Book = book\.Minutes\.Snap\(\);[^\n]*\s*\}/);   // 0.3.5: and whether it wants "profile"; 0.6.8: the minute book
   assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"seams\\":"\)\.Append\(SeamsJson\(\)\);/);
   // review of 0.3.3: only trades held when NinjaTrader answered can match at T; every chunk checks the subscribe is current
   assert.match(ready, /client\.Pending, L\.HeldAtAnswer\)/);

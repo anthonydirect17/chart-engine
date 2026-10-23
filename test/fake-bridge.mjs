@@ -62,7 +62,7 @@
 //                                   the tick request), and no live trade reaches the page meanwhile, as with ChartBridge
 //                                   holding them (a page reloading for more ticks misses those seconds)
 //   --minute-lag-min=30             a minute load's history (tickHours 0) ends this many minutes before now, as NinjaTrader's
-//                                   minute answer did on WORK 2026-10-23 (chart 1.38.1: the page then says "No bars from ...");
+//                                   minute answer did on WORK 2026-10-23 (chart 1.38.1 shows no notice for it: Anthony's call);
 //                                   its `ready` has no `filled` (the fake has no minute book: a ChartBridge before 0.6.8)
 //   --cme-hours                     the history and trades follow CME's hours on the exchange clock: no minute bar, tick or
 //                                   live trade from 17:00 to 18:00 ET, or from Friday 17:00 to Sunday 18:00 (sample data

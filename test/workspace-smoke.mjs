@@ -63,9 +63,9 @@ const sockets = async page => (await allSockets(page)).filter(k => !k.auth);
    at 3 s of real delay; with no answer the feed is as before and the tooltip says why. */
 /* 1.38.1 (WORK 2026-10-23): a 1 min chart whose ChartBridge sends minute history ending 30 minutes early (--minute-lag-min=30, as
    NinjaTrader's minute answer did; the fake has no minute book, like ChartBridge before 0.6.8) and is slow to go ready
-   (--load-delay-ms): while LOADING past 10 s the chart says "Waiting for NinjaTrader's NQ history (N s)", and at ready it says
-   "No bars from X to Y ET: NinjaTrader's minute history ends at Z" (unless the market was closed for that half hour: the 17:00
-   break or a weekend, then no hole and nothing said). Sample data. */
+   (--load-delay-ms): while LOADING past 10 s the chart says "Waiting for NinjaTrader's NQ history (N s)"; at ready it shows no
+   hole notice (Anthony 2026-10-23: "I dont need a notice"; the hole is recorded in ChartBridge's /diag and history.log only).
+   Sample data. */
 async function gapPart() {
   console.log('the history gap and the LOADING wait (chart 1.38.1)');
   const port = PORT + 4;
@@ -88,12 +88,8 @@ async function gapPart() {
     await shot(p, 'workspace-loading-wait-1366x768.png');
     await p.waitForFunction(() => { const b = document.querySelector('.ws-panel[data-id="g1"] [id$="bConn"]'); return b && b.hidden; }, null, { timeout: 20000 }).catch(() => {});
     await p.waitForTimeout(500);
-    /* the market open for that half hour? (the 17:00 break or a weekend: no hole) */
-    const expect = await p.evaluate(() => { const U = window.ChartEngine.util, now = U.zoneSeconds(Date.now() / 1000); return window.LivePrefs.histGapText(now - 31 * 60, now, U.cmeClosed); });
-    const n = await note(), shown = n.status || n.alert;
-    if (expect === '') check(!/No bars from/.test(shown), 'the market was closed for that half hour now: no hole and nothing said (' + shown + ')');
-    else check(/^No bars from \d\d:\d\d to \d\d:\d\d ET: NinjaTrader's minute history ends at \d\d:\d\d$/.test(shown) || /No bars from (\w{3} )?\d\d:\d\d to (\w{3} )?\d\d:\d\d ET: NinjaTrader's minute history ends at (\w{3} )?\d\d:\d\d/.test(shown),
-      'ready with history ending 30 minutes early: the chart says so: "' + shown + '"');
+    const n = await note(), shown = n.status + ' ' + n.alert;
+    check(!/No bars from/.test(shown) && !/Waiting for NinjaTrader/.test(n.status), 'ready with history ending 30 minutes early: no hole notice (Anthony 2026-10-23: "I dont need a notice"), the waiting line gone (' + JSON.stringify(n) + ')');
     await shot(p, 'workspace-history-gap-1366x768.png');
   } finally { await ctx.close(); fake.kill(); }
 }

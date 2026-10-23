@@ -66,27 +66,6 @@ const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range', 'h4', 'd1', 'w1'];
 const HISTORY_DAYS = { h1: 30, m15: 10 };
 const DEFAULT_DAYS = 5;
 const daysFor = tf => (Object.prototype.hasOwnProperty.call(HISTORY_DAYS, tf) ? HISTORY_DAYS[tf] : DEFAULT_DAYS);
-/**
- * 1.38.1 (WORK 2026-10-23: after a reload a 1 min chart had no bars from about 10:40 to the live bar at 11:08, and said nothing):
- * the hole between a minute chart's last history bar (lastStart, its start in ET seconds as if UTC) and its ready (nowEt), said
- * as ChartBridge 0.6.8 says it, or '' when the market was open for 2 minutes or less of it (closed(t): the engine's cmeClosed,
- * so the 17:00 break, a weekend and the CME holidays are no hole). The day is named when the hole crosses midnight.
- */
-function histGapText(lastStart, nowEt, closed) {
-  if (!isFinite(lastStart) || !isFinite(nowEt)) return '';
-  const x = lastStart + 60;
-  let open = 0, first = null;
-  for (let m = x, n = 0; m < nowEt && n < 20160; m += 60, n++) {
-    if (closed && closed(m)) continue;
-    if (first === null) first = m;
-    open += Math.min(60, nowEt - m);
-  }
-  if (first === null || open <= 120) return '';
-  const to = Math.floor(nowEt / 60) * 60, day = t => Math.floor(t / 86400), named = day(first) !== day(to) || day(lastStart) !== day(to);
-  const z = n => (n < 10 ? '0' : '') + n;
-  const f = t => { const d = new Date(t * 1000); return (named ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()] + ' ' : '') + z(d.getUTCHours()) + ':' + z(d.getUTCMinutes()); };
-  return 'No bars from ' + f(first) + ' to ' + f(to) + ' ET: NinjaTrader\'s minute history ends at ' + f(lastStart);
-}
 /* 1.38.1: a load still LOADING after this many seconds, with nothing from ChartBridge for a few of them, says what it waits for */
 const LOAD_WAIT_S = 10;
 const GLIDES = ['smooth', 'fast', 'off'];
@@ -1028,7 +1007,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { histGapText, LOAD_WAIT_S, staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, CLOCK_WARN_MS, REAL_WARN_MS, REAL_BAD_MS, pcClockOf, fmtDelay, feedSplit, feedText, feedShort, feedLevel, clockWarn, clockNote, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, MA_LENS, studiesOf, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, ROOM_MIN, ROOM_MAX, roomOk, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
+api = { LOAD_WAIT_S, staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, CLOCK_WARN_MS, REAL_WARN_MS, REAL_BAD_MS, pcClockOf, fmtDelay, feedSplit, feedText, feedShort, feedLevel, clockWarn, clockNote, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, MA_LENS, studiesOf, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, ROOM_MIN, ROOM_MAX, roomOk, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -1371,7 +1350,7 @@ function mount(container, options) {
     // window the current delta was built with ({ from, by, why, journal })
     backfill: 0, deltaCov: null,
     sub: 0, window: false, table: null, vpTable: null, sync: null,
-    loadAt: 0, loadMsgAt: 0, gapText: '' };   // 1.38.1: when the load began, its last message, the hole it said (if any)   // served window and session table (1.8.0): see "Served window" below
+    loadAt: 0, loadMsgAt: 0 };   // 1.38.1: when the load began, and its last message   // served window and session table (1.8.0): see "Served window" below
   /* 1.15.0: this chart's 4h, 1D or 1W bars from ChartBridge (htfSync below): asked for which root and timeframe, and how it went */
   const H = { root: null, tf: '', id: 0, state: 'idle', bars: [], error: '', retry: 0, wait: 0, tries: 0, at: 0, retryAt: 0, pending: false, stale: '' };
   let htfSeq = 0;
@@ -2126,7 +2105,7 @@ function mount(container, options) {
   listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.signals || e.key === PREFIX + LP.KEYS.floors) sigRefresh(); });
 
   /* readyAt (ms): when the shared feed's load became ready, for a chart that joins it later (live/feed.js); else now */
-  function onReady(readyAt, m) {
+  function onReady(readyAt) {
     const nowEt = typeof readyAt === 'number' && isFinite(readyAt) && readyAt > 0 ? readyAt / 1000 + etOffset : etNow();
     // With ticks: 1m history up to the start of the current minute, and the forming minute rebuilt from
     // ticks. Without ticks: keep NinjaTrader's forming minute and let live ticks continue it.
@@ -2149,19 +2128,6 @@ function mount(container, options) {
     vpBuild();
     setConn('live');
     if (!(TF[S.tf].mode === 'htf' && H.state === 'old')) $('notice').hidden = true;   // 1.15.0: "4h bars need ChartBridge 0.3.7" stays
-    gapNotice(m, nowEt, hist);
-  }
-  /* 1.38.1 (house rule: missing data is said on screen): a minute or hour chart (no ticks) whose last history bar ends more than
-     2 minutes of open market before ready, when ChartBridge filled nothing from its own minute bars (0.6.8's "filled"; an older
-     ChartBridge sends none), says so: "No bars from 10:41 to 11:08 ET: NinjaTrader's minute history ends at 10:40". ChartBridge
-     0.6.8 says the same in a status after ready, which this chart then does not show twice. */
-  function gapNotice(m, nowEt, hist) {
-    if (D.tickHours > 0 || TF[S.tf].mode === 'htf' || !hist.length) return;
-    if (m && typeof m.filled === 'number' && m.filled > 0) return;
-    const text = LP.histGapText(hist[hist.length - 1].t, nowEt, U.cmeClosed);
-    if (!text) return;
-    D.gapText = text;
-    if (!COMPACT) alertLoud(text, true); else setStatus(text, 'warn');
   }
 
   function onTick(m) {
@@ -2352,7 +2318,7 @@ function mount(container, options) {
     else if (K.started) { countKeepBase(); K.gap = true; }   // and notes the seconds it misses (round 6)
     resetData(root, keep);
     setConn('loading');
-    D.loadAt = D.loadMsgAt = Date.now(); D.gapText = '';
+    D.loadAt = D.loadMsgAt = Date.now();
     D.tickHours = ticksWanted();
     D.tickFrom = D.tickHours > 0 ? etNow() - D.tickHours * 3600 : Infinity;
     // 1.15.0: deeper history for the 1 hour (30 days) and 15 minute (10 days) charts
@@ -2537,7 +2503,7 @@ function mount(container, options) {
         if (m.root !== D.root || stale(m)) return;
         if (m.load) adoptLoad(m.load);
         setStatus('', '');
-        onReady(m.readyAt, m);
+        onReady(m.readyAt);
         break;
       case 'profile':
         // with this load's id before its "ready"; without one when the table's backfill made it whole (only once live)
@@ -2552,9 +2518,7 @@ function mount(container, options) {
       case 'exec': addFill(m); applyMarkers(); break;
       /* 1.13.0: a warning (for example a mistyped maxTicksAway in config.txt, which means NO limit) stays on screen
          until dismissed, as in the workspace; other notes go to the status line */
-      case 'status':
-        if (m.level === 'warn' && D.gapText && /^No bars from /.test(String(m.text || ''))) break;   // 1.38.1: this chart said its hole already
-        if (m.level === 'error') alertLoud(m.text); else if (m.level === 'warn' && m.text && !COMPACT) alertLoud(m.text, true); else setStatus(m.text, m.level); break;
+      case 'status': if (m.level === 'error') alertLoud(m.text); else if (m.level === 'warn' && m.text && !COMPACT) alertLoud(m.text, true); else setStatus(m.text, m.level); break;
       case 'pcClock': pcClock = LP.pcClockOf(m); break;   // 1.24.0: a new check of this PC's clock (ChartBridge 0.5.6)
     }
   }
