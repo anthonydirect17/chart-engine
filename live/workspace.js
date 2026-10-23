@@ -2258,7 +2258,7 @@ function quoteChanged() {
 function watchQuote(root) {
   let q = QT.get(root);
   if (!q) {
-    q = { root, sock: null, users: 0, last: null, high: null, low: null, day: null, settle: null, settleDate: '', timer: 0, tries: 0 };
+    q = { root, sock: null, users: 0, last: null, high: null, low: null, day: null, settle: null, settleDate: '', timer: 0, tries: 0, bars: [], name: '' };
     QT.set(root, q);
     quoteOpen(q);
   }
@@ -2285,15 +2285,19 @@ function quoteOpen(q) {
     if (m.type === 'hello') {
       const i = (m.instruments || []).find(x => x && x.root === q.root);
       if (i) { q.settle = typeof i.settlement === 'number' ? i.settlement : null; q.settleDate = i.settlementDate || ''; }
-      q.high = q.low = q.day = null;
+      q.high = q.low = q.day = null; q.bars = [];
       sock.send({ type: 'subscribe', root: q.root, days: 1, tickHours: 0 });
     } else if (m.type === 'history' && m.root === q.root && Array.isArray(m.bars)) {
       const today = W.tradeDayOf(etNowSec());
       for (const b of m.bars) { if (W.tradeDayOf(b[0]) === today) range(b[2], b[3], b[0]); }
       if (m.bars.length) q.last = +m.bars[m.bars.length - 1][4];
+      /* 1.38.0: the last minute bars, for the Agents panel's Drone sky (its pillars): this line's own load, nothing new asked */
+      if (m.name) q.name = String(m.name).slice(0, 80);
+      for (const b of m.bars.slice(-QUOTE_BARS)) q.bars.push({ t: +b[0], o: +b[1], h: +b[2], l: +b[3], c: +b[4] });
+      if (q.bars.length > QUOTE_BARS) q.bars.splice(0, q.bars.length - QUOTE_BARS);
       quoteChanged();
     } else if (m.type === 'tick' && m.root === q.root) {
-      q.last = +m.p; range(+m.p, +m.p, +m.t); quoteChanged();
+      q.last = +m.p; range(+m.p, +m.p, +m.t); quoteBar(q, +m.t, +m.p); quoteChanged();
     } else if (m.type === 'settlement' && m.root === q.root) {
       q.settle = typeof m.p === 'number' ? m.p : null; q.settleDate = m.date || ''; quoteChanged();
     }
@@ -2301,6 +2305,15 @@ function quoteOpen(q) {
   sock.onclose = () => { if (q.sock !== sock) return; q.sock = null; if (q.users > 0) { const n = ++q.tries; q.timer = setTimeout(() => { if (q.users > 0 && !q.sock) quoteOpen(q); }, n === 1 ? 0 : Math.min(5000, 500 * n)); } };
 }
 const quoteOf = r => QT.get(r) || null;
+/* 1.38.0: a quote line keeps its last QUOTE_BARS minute bars (the history it loads anyway, then its live trades: a few compares a
+   trade, no DOM), read by the Agents panel's Drone sky */
+const QUOTE_BARS = 120;
+function quoteBar(q, t, p) {
+  if (!isFinite(t) || !isFinite(p) || !q.bars.length) return;   // no history yet: no bar to grow
+  const m = Math.floor(t / 60) * 60, b = q.bars[q.bars.length - 1];
+  if (m === b.t) { if (p > b.h) b.h = p; if (p < b.l) b.l = p; b.c = p; }
+  else if (m > b.t) { q.bars.push({ t: m, o: p, h: p, l: p, c: p }); if (q.bars.length > QUOTE_BARS) q.bars.shift(); }
+}
 
 /* ---------------- the Quote board: NQ and ES (1.16.0, Anthony 2026-10-05; the micros' rows are gone); read only.
    1.16.0 (item 20): then the quote-only markets ChartBridge 0.4.0 serves (hello's quoteOnly: YM, RTY, GC, SI, CL, 6E, ZN,
@@ -2523,21 +2536,40 @@ function placeTabBtn() {
 /* the Bot desk sets bt-alert (and hidden) on its own button as it renders: the button follows at once */
 if (typeof MutationObserver === 'function' && $('wsBotTab')) new MutationObserver(() => placeTabBtn()).observe($('wsBotTab'), { attributes: true, attributeFilter: ['class', 'hidden'] });
 /* 1.36.0 (Anthony 2026-10-22: "a panel ... that plays horizontally, but just shows the current active shadow agents and
-   eventually live agents status"): the Agents strip (live/agents-strip.js). Read only: the league from the workspace's one league
-   read (LG below, or the League view's day while it is open: no second poller), the live agents from the Agent tab's own state
-   (agentDesk.glance), MNQ's price from the quote the Quote board uses. A click on a card opens the League tab or the Agent tab. */
+   eventually live agents status"): the Agents strip (live/agents-strip.js). 1.38.0 (Anthony 2026-10-23, the approved "Drone
+   sky"): the panel draws the agents as drones over the price (live/agents-sky.js), from the same reads. Read only: the league from
+   the workspace's one league read (LG below, or the League view's day while it is open: no second poller), the live agents from
+   the Agent tab's own state (agentDesk.glance), the bot from the Bot desk's, MNQ's price and its minute bars from the quote line
+   the strip already watched (no new connection), Anthony's own entries from the order connection's fills on the ticket's account.
+   Hover a drone for its card; a click opens the League tab, the Agent tab or the Bot view. */
 const stripViews = () => [...views.values()].filter(v => v.panel.type === 'agents' && v.strip);
+/** Anthony's entries today (read only): the fills on the order ticket's account (a group's first member), NQ and MNQ (one price) */
+function myEntries() {
+  const TR = core.TR, acct = tagAccounts()[0];
+  if (!TR.enabled || !acct || !window.AgentsStripCore) return [];
+  const now = etNowSec(), fills = W.fillsToday([...tfills.values()], acct, now).filter(f => f.root === 'MNQ' || f.root === 'NQ');
+  if (!fills.length) return [];
+  const start = {};
+  for (const r of ['MNQ', 'NQ']) {
+    const p = TR.positions.get(acct + '|' + r);
+    start[r] = (p ? +p.qty || 0 : 0) - fills.filter(f => f.root === r).reduce((a, f) => a + (f.side === 'buy' ? 1 : -1) * Math.abs(+f.qty || 0), 0);
+  }
+  return window.AgentsStripCore.entriesOf(fills, start);
+}
 function mountAgentsStrip(v) {
   v.state = 'live';
-  if (!window.AgentsStrip || !window.AgentsStripCore) { v.body.innerHTML = '<p class="tt-foot warn">Reload this window: its agents-strip.js is missing.</p>'; v.destroy = () => {}; return; }
+  if (!window.AgentsSky || !window.AgentsStrip || !window.AgentsStripCore) { v.body.innerHTML = '<p class="tt-foot warn">Reload this window: its agents-strip.js or agents-sky.js is missing.</p>'; v.destroy = () => {}; return; }
   const offMnq = watchQuote('MNQ');
-  const strip = window.AgentsStrip.mount(v.body, {
+  const strip = window.AgentsSky.mount(v.body, {
     day: () => leagueGhostDay(),
     reach: () => (leagueView && leagueView.shown() ? { problem: leagueView.state().problem, at: 0 } : { problem: LG.problem, at: LG.at }),
     agents: () => (agentDesk && agentDesk.glances ? agentDesk.glances().map(g => ({ a: g.agent, g })) : []),   // one read of the day's fills a tick, for every agent
     nowMs: () => etNowSec() * 1000,
+    zoneSec: ms => U.zoneSeconds(ms / 1000),
     last: r => { const x = quoteOf(r); return x && typeof x.last === 'number' && isFinite(x.last) ? x.last : null; },
     pv: r => (instruments[r] && +instruments[r].pointValue > 0 ? +instruments[r].pointValue : null),
+    bars: () => { const x = quoteOf('MNQ'); return x && x.bars.length ? { root: 'MNQ', name: x.name, bars: x.bars } : null; },
+    mine: () => myEntries(),
     openLeague: () => { if (leagueView) leagueView.showTab(true); else note('The League tab did not start: reload this window', true); },
     openAgent: id => { if (agentDesk) { agentDesk.choose(id); agentDesk.showTab(true); } },
     bot: () => (botDesk && botDesk.glance ? botDesk.glance() : null),
@@ -2547,7 +2579,7 @@ function mountAgentsStrip(v) {
   syncLeagueGhosts();                                       // the league read runs while a strip is placed
   v.destroy = () => { offMnq(); strip.destroy(); v.strip = null; setTimeout(syncLeagueGhosts, 0); };
 }
-setInterval(() => { for (const v of stripViews()) v.strip.render(); }, 1000);   // its clocks and the Agent tab's news; a card is drawn again only when it changed
+setInterval(() => { for (const v of stripViews()) v.strip.render(); }, 1000);   // its clocks and the Agent tab's news (the sky's frames run on their own, only while seen)
 var tagsRaf = 0;                                          // var: renderOrders may run before this line
 function renderTags() { if (!tagsRaf && tagViews().length) tagsRaf = requestAnimationFrame(() => { tagsRaf = 0; for (const v of tagViews()) v.tags.render(); }); }
 setInterval(renderTags, 1000);                            // the session's start and the Desk's answers

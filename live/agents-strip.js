@@ -21,10 +21,12 @@
  * What a card wants and nobody reports says "not reported", never a guess. What the page works out itself (the look cap, open
  * P&L and R from the page's MNQ price, the seats' pool) says so in its title.
  *
- * Motion (docs/MOTION.md R3): none. A new thought is simply the first line the next time the card is drawn; nothing scrolls,
- * slides or fades.
+ * 1.38.0 (Anthony 2026-10-23, the approved "Drone sky"): the panel draws the agents as drones over the price (live/agents-sky.js);
+ * this file keeps the data: AgentsStripCore's cards (each drone's hover card is its strip card) and the sky's model (who flies
+ * today, each drone's trade, R, spend, looks and what it did), all from the same reads as above. The card itself has no motion.
  *
- * Two parts, as league.js: AgentsStripCore (pure: Node tests, test/agents-strip.test.js) and, in a browser, AgentsStrip.mount.
+ * Two parts, as league.js: AgentsStripCore (pure: Node tests, test/agents-strip.test.js) and, in a browser, AgentsStrip (the
+ * card's markup).
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -344,145 +346,251 @@ function idleLine(names) {
   return n ? n + (n === 1 ? ' agent slot is' : ' agent slots are') + ' off and empty: ' + names.join(', ') : '';
 }
 
+/* ======================================================================== the Drone sky's model (1.38.0) */
+/* Anthony 2026-10-23 approved the "Drone sky" concept for the Agents panel (live/agents-sky.js draws it). What follows is the pure
+   part: who flies today, what each drone shows and what each one did, all from the very data the strip's cards read. */
+
+/** A live agent's and the bot's drone colour: the strip's own for them (their letter in the second text colour); the seats keep
+    the League's amber, cyan and violet. */
+const AGENT_COLOR = '#9AA8B8';
+
+/**
+ * Open R as a number (null when it cannot be worked out), by positionBlock's own rule: open P&L dollars over the trade's original
+ * risk, else the points over the stop distance at the fill; never on the stop now. pos: { side, contracts, fill }.
+ */
+function openR(pos, last, pv, o) {
+  const x = o || {};
+  if (!pos || !isNum(pos.fill) || !isNum(last)) return null;
+  const dir = pos.side === 'short' ? -1 : 1, p = (last - pos.fill) * dir;
+  if (isNum(x.risk) && x.risk > 0 && isNum(pos.contracts) && isNum(pv) && pv > 0) return p * pos.contracts * pv / x.risk;
+  if (isNum(x.stopPoints) && x.stopPoints > 0) return p / x.stopPoints;
+  return null;
+}
+
+/**
+ * Is a seat active today ("league seats during and after their session that day"): the league's day is today (its status date or
+ * The Desk's date against nowMs, the league's clock), the seat is not retired, and status.json calls it active or it holds a
+ * position or a resting order, or it decided or traded today. A day of another date, or a seat with nothing today: idle.
+ */
+function seatActive(day, seat, nowMs) {
+  if (!day || !isNum(nowMs)) return false;
+  const st = day.status && typeof day.status === 'object' ? day.status : null;
+  const date = (st && str(st.date, 10)) || day.date || '';
+  if (!date || date !== clockDate(nowMs)) return false;
+  const x = st && st.seats && typeof st.seats === 'object' && st.seats[seat] && typeof st.seats[seat] === 'object' ? st.seats[seat] : null;
+  if (x && x.status === 'retired') return false;
+  if (x && (x.status === 'active' || (x.position && typeof x.position === 'object') || (x.resting && typeof x.resting === 'object'))) return true;
+  const mine = t => t && t.seat === seat;
+  return (day.decisions || []).some(mine) || (day.trades || []).some(mine) || (day.open || []).some(mine);
+}
+/** A live agent flies in the sky (the brief of 2026-10-23: "a live agent or the bot that is ON, holds a position or a working
+    order"): its program connected, or a position, or a working order. Off, flat and with nothing working: idle, even when killed
+    or stood down (its state word shows on its drone while it flies). */
+function agentFlies(a, g) {
+  const x = a || {};
+  return !!(x.connected || (x.position && isNum(x.position.qty) && x.position.qty) || (g && Array.isArray(g.orders) && g.orders.length));
+}
+/** The bot flies: its channel on and its program connected, or a position. */
+function botActive(gl) {
+  const b = gl && gl.bot;
+  if (!gl || !gl.offered || !gl.on || !b) return false;
+  return !!(b.connected || (b.position && isNum(b.position.qty) && b.position.qty));
+}
+
+/**
+ * What one drone did, oldest first: [{ id, t (seconds, the league's and the chart's clock), kind, text, side? }]. kind: look,
+ * pass, enter, rest, cancel, refused, failed (a seat's decision: each is a look), exit (a closed paper trade), note, plan, fill
+ * (a live agent's stream; LOOK rows are looks), signal (the bot's last line). Only what the page already holds.
+ */
+function seatActs(day, seat) {
+  const out = [];
+  for (const d of (day && day.decisions) || []) {
+    if (!d || d.seat !== seat || !isNum(d.t)) continue;
+    const th = thoughtOf(d), a = d.answer && typeof d.answer === 'object' ? d.answer : {};
+    const side = a.side === 'short' ? 'short' : a.side === 'long' ? 'long' : '';
+    let text = th.line;
+    if (th.action === 'pass') text = 'PASS  ' + th.line;
+    else if (th.action === 'enter') text = (d.relation === 'with' ? 'JOIN ' : 'ENTER ') + (side || 'long') + (isNum(d.contracts) ? ' ' + d.contracts + ' MNQ' : '') + (isNum(a.stop_points) ? ', stop ' + pts(a.stop_points) + ' pt' : '') +
+      (isNum(a.target_points) ? ', target ' + pts(a.target_points) + ' pt' : '') + (d.relation === 'with' ? ', with Anthony' : '') + (th.line && th.line !== 'no reasoning given' ? '  ' + th.line : '');
+    else if (th.action === 'rest') text = 'REST ' + (side || 'long') + (a.reference ? ' at ' + str(a.reference, 30) : '') + '  ' + th.line;
+    else if (th.action === 'cancel') text = 'CANCEL resting order  ' + th.line;
+    else if (th.action === 'refused') text = 'REFUSED  ' + th.line;
+    else if (th.action === 'failed') text = 'NO ANSWER  the call failed';
+    out.push({ id: 'd:' + th.id, t: d.t / 1000, kind: th.action, text, side });
+  }
+  for (const t of (day && day.trades) || []) {
+    if (!t || t.seat !== seat || !isNum(t.exitT)) continue;
+    out.push({ id: 'x:' + (t.id || t.fillT), t: t.exitT / 1000, kind: 'exit', text: 'EXIT ' + (t.r !== null ? (t.r >= 0 ? '+' : '') + t.r.toFixed(2) + 'R' : 'R ' + NR) + (t.exitReason ? '  ' + t.exitReason : '') });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+function agentActs(g, zs) {
+  const out = [], z = typeof zs === 'function' ? zs : ms => ms / 1000;   // the stream's times are epoch ms; the sky's clock is the league's
+  for (const r of (g && Array.isArray(g.stream) ? g.stream : [])) {
+    const tag = str(r.tag, 12).toUpperCase(), kind = tag === 'LOOK' ? 'look' : tag === 'PASS' ? 'pass' : tag === 'PLAN' ? 'plan' : tag === 'FILL' ? 'fill' : tag === 'EXIT' ? 'exit' : tag === 'REFUSED' ? 'refused' : 'note';
+    out.push({ id: 'a:' + str(r.key, 120), t: isNum(r.at) ? z(r.at) : 0, kind, text: (tag ? tag + '  ' : '') + firstLine(r.text, 160) });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * Anthony's own entries today from his fills (the order connection's execs for the ticket's account, read only): a fill that takes
+ * an instrument from flat (or through flat) is an entry. fills: [{ root, side, qty, p, t }]; start: { root: the position before
+ * today's first fill }. Returns [{ t, p, side, root }], oldest first.
+ */
+function entriesOf(fills, start) {
+  const pos = Object.assign({}, start || {}), out = [];
+  for (const f of (Array.isArray(fills) ? fills : []).filter(x => x && isNum(+x.t) && isNum(+x.qty) && isNum(+x.p)).sort((a, b) => a.t - b.t)) {
+    const q = (f.side === 'sell' ? -1 : 1) * Math.abs(+f.qty), was = pos[f.root] || 0, now = was + q;
+    if (now !== 0 && (was === 0 || Math.sign(now) !== Math.sign(was))) out.push({ t: +f.t, p: +f.p, side: now > 0 ? 'long' : 'short', root: f.root });
+    pos[f.root] = now;
+  }
+  return out;
+}
+
+/**
+ * The sky: { drones, idle } from what the strip reads. o: { day, nowMs, last (MNQ's price or null), pv, agents: [{ a, g }], bot (the
+ * Bot desk's glance), lastOf(root), pvOf(root), zoneSec(ms) (epoch ms to the league's clock in seconds) }. A drone: { key, kind, id, letter, name, color, ring ('solid' LIVE, 'dashed'
+ * otherwise), mode, state (one word or ''), alert, trade ({ side, contracts, entry, stop, fillT (s) or null, r, be } or null), todayR,
+ * spend (text or ''), rails (the bot's, or ''), looks (counted looks in the last hour, a seat's; null for the others), acts, card }.
+ * idle: the names folded into "+N idle".
+ */
+function skyModel(o) {
+  const x = o || {}, drones = [], idle = [], zs = typeof x.zoneSec === 'function' ? x.zoneSec : ms => ms / 1000;
+  const mk = (card, extra) => Object.assign({ key: card.key, kind: card.kind, id: card.id, letter: card.letter, name: card.name, color: card.color || AGENT_COLOR,
+    ring: card.mode && card.mode.kind === 'live' ? 'solid' : 'dashed', mode: card.mode ? card.mode.word : '?', state: card.state ? card.state.word : '', alert: !!card.alert, card }, extra);
+  if (x.day) {
+    const cards = seatCards(x.day, { nowMs: x.nowMs, last: x.last, pv: x.pv });
+    const st = x.day.status && x.day.status.seats && typeof x.day.status.seats === 'object' ? x.day.status.seats : {};
+    const spend = (x.day.status && x.day.status.spend) || null;
+    const pv = isNum(x.pv) && x.pv > 0 ? x.pv : MNQ_POINT;
+    for (const c of cards) {
+      if (!seatActive(x.day, c.id, x.nowMs)) { idle.push(c.name); continue; }
+      const p = st[c.id] && st[c.id].position && typeof st[c.id].position === 'object' ? st[c.id].position : null;
+      const ot = (x.day.open || []).find(t => t.seat === c.id) || null;
+      const same = !!ot && (!p || !p.id || !ot.id || p.id === ot.id);
+      let trade = null;
+      if (p || ot) {
+        const side = (p ? p.side : ot.side) === 'short' ? 'short' : 'long';
+        const entry = p && isNum(p.fill_px) ? p.fill_px : ot ? ot.fillPx : null;
+        const stop = p && isNum(p.stop_px) ? p.stop_px : ot && isNum(ot.stopPx) ? ot.stopPx : null;
+        const contracts = p && isNum(p.contracts) ? p.contracts : ot ? ot.contracts : null;
+        const date = (x.day.status && str(x.day.status.date, 10)) || x.day.date;
+        const fillMs = ot && isNum(ot.fillT) ? ot.fillT : p ? wallMs(date, str(p.fill_time, 8)) : null;
+        const r = openR({ side, contracts, fill: entry }, x.last, pv, { risk: same ? ot.riskDollars : null, stopPoints: same ? ot.stopPoints : null });
+        if (isNum(entry)) trade = { side, contracts, entry, stop, fillT: isNum(fillMs) ? fillMs / 1000 : null, r, be: isNum(stop) && (side === 'long' ? stop >= entry : stop <= entry) };
+      }
+      const sp = spend && spend.seats && isNum(spend.seats[c.id]) ? money(spend.seats[c.id]) : '';
+      drones.push(mk(c, { trade, todayR: c.today.r, spend: sp, rails: '', looks: c.looks, acts: seatActs(x.day, c.id) }));
+    }
+  }
+  for (const it of x.agents || []) {
+    const a = it.a || {}, g = it.g || null;
+    if (!agentFlies(a, g)) { idle.push(a.name || a.agent || 'Agent'); continue; }
+    const c = agentCard(a, g, { last: x.lastOf, pv: x.pvOf });
+    const p = a.position && isNum(a.position.qty) && a.position.qty ? a.position : null;
+    let trade = null;
+    if (p && isNum(p.avgPrice)) {
+      const root = str(p.root, 8), side = p.qty < 0 ? 'short' : 'long';
+      const stopO = (g && Array.isArray(g.orders) ? g.orders : []).find(q => q.role === 'stop' && q.root === root && isNum(q.price));
+      const last = typeof x.lastOf === 'function' ? x.lastOf(root) : null, pv = typeof x.pvOf === 'function' ? x.pvOf(root) : null;
+      const stop = stopO ? stopO.price : null;
+      trade = { side, contracts: Math.abs(p.qty), entry: p.avgPrice, stop, fillT: g && isNum(g.sinceAt) ? zs(g.sinceAt) : null,
+        r: openR({ side, contracts: Math.abs(p.qty), fill: p.avgPrice }, last, pv, { risk: g && isNum(g.openRisk) ? g.openRisk : null }), be: isNum(stop) && (side === 'long' ? stop >= p.avgPrice : stop <= p.avgPrice) };
+    }
+    const sp = g && g.spend && isNum(g.spend.session) ? money(g.spend.session) : '';
+    drones.push(mk(c, { trade, todayR: c.today.r, spend: sp, rails: '', looks: null, acts: agentActs(g, zs) }));
+  }
+  if (x.bot && x.bot.offered) {
+    if (!botActive(x.bot)) idle.push((x.bot.strip && x.bot.strip.name) || 'Bot');
+    else {
+      const c = botCard(x.bot, { last: x.lastOf, pv: x.pvOf });
+      const b = x.bot.bot, p = b && b.position && isNum(b.position.qty) && b.position.qty ? b.position : null;
+      const trade = p && isNum(p.avgPrice) ? { side: p.qty < 0 ? 'short' : 'long', contracts: Math.abs(p.qty), entry: p.avgPrice, stop: null, fillT: null, r: null, be: false } : null;
+      const sm = x.bot.strip;
+      const acts = sm && sm.last ? [{ id: 'b:' + str(sm.last, 200), t: 0, kind: 'signal', text: str(sm.last, 160) }] : [];
+      drones.push(mk(c, { trade, todayR: null, spend: '', rails: c.spend && c.spend.line1 ? c.spend.line1 : '', looks: null, acts }));
+    }
+  }
+  return { drones, idle: idle.filter(Boolean) };
+}
+
+/**
+ * The fields of a drone's text block that fit its slot (Anthony: "each agent's text block kept inside its own slot"): fields
+ * [{ text, keep }] in order, w(text) their width, maxW the room, gap between them. Each field is kept whole while it fits; a
+ * field with keep: 'cut' is cut short with "..." instead of dropped. Returns the kept fields with their x.
+ */
+function fitFields(fields, w, maxW, gap) {
+  const out = []; let x = 0;
+  for (const f of fields) {
+    if (!f || !f.text) continue;
+    const g = out.length ? gap || 0 : 0, fw = w(f.text);
+    if (x + g + fw <= maxW) { out.push({ text: f.text, x: x + g, w: fw, f }); x += g + fw; continue; }
+    if (f.keep === 'cut') {
+      let t = f.text;
+      while (t.length > 1 && x + g + w(t + '...') > maxW) t = t.slice(0, -1);
+      if (t.length > 1 && x + g + w(t + '...') <= maxW) { const tw = w(t + '...'); out.push({ text: t + '...', x: x + g, w: tw, f }); x += g + tw; }
+    }
+  }
+  return out;
+}
+
 return { SEATS, LOOKS_PER_HOUR, HOUR_MS, MNQ_POINT, NR, THOUGHTS_MAX, clock, wallMs, clockDate, firstLine, lookCap, seatMode, liveMode, agentMode, thoughtOf, seatThoughts, lookKind,
-  positionBlock, seatRest, seatCards, agentActive, agentCard, botCard, idleLine, money, signedMoney, signedR };
+  positionBlock, seatRest, seatCards, agentActive, agentCard, botCard, idleLine, money, signedMoney, signedR,
+  AGENT_COLOR, openR, seatActive, agentFlies, botActive, seatActs, agentActs, entriesOf, skyModel, fitFields };
 });
 
-/* ======================================================================== the panel (browser only) */
+/* ======================================================================== the card (browser only) */
+/* 1.38.0: the Agents panel became the Drone sky (live/agents-sky.js). The strip's card is today's full card, shown as the pop-up
+   when the mouse is on a drone (or a drone's button has the focus); its markup and its full reasoning box live here. */
 if (typeof window !== 'undefined' && typeof document !== 'undefined') (function () {
 'use strict';
 const C = window.AgentsStripCore;
 const esc = s => String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const setHtml = (el, html) => { if (el && el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; } };
 
-/**
- * The strip in a panel's body. o: { day() (the league day, LeagueCore.cleanDay's shape, or null), reach() ({ problem, at }),
- * agents() ([{ a, g }]: each live agent's message and the Agent tab's glance), nowMs() (New York wall time in ms as if UTC),
- * last(root), pv(root), openLeague(), openAgent(id) }. Returns { render, destroy, state }.
- */
-function mount(body, o) {
-  const S = { detail: null, cards: [] };
-  body.innerHTML = '<div class="as-wrap">' +
-    '<p class="as-line" data-k="line" role="status"></p>' +
-    '<div class="as-row" data-k="row" role="list" aria-label="Agents"></div>' +
-    '<p class="as-foot" data-k="foot"></p>' +
-    '<div class="as-detail" data-k="detail" role="dialog" aria-modal="false" aria-label="Full reasoning" hidden></div>' +
-    '</div>';
-  const q = s => body.querySelector(s);
-  const row = q('[data-k="row"]'), detail = q('[data-k="detail"]');
+/** What a click on the card opens: the League tab for a seat, the Bot view for the bot, the Agent tab for a live agent. */
+const openWhat = c => (c.kind === 'seat' ? 'Open the League tab' : c.kind === 'bot' ? 'Open the Bot (its switches, kill switch and rails)' : 'Open the Agent tab for ' + c.name);
 
-  function cardHtml(c) {
-    const p = c.position, t = c.today, sp = c.spend;
-    const letter = c.kind === 'seat' ? '<i class="lg-letter as-letter" aria-hidden="true">' + esc(c.letter) + '</i>' : '<i class="as-letter as-ag" aria-hidden="true">' + esc(c.letter) + '</i>';
-    const openWhat = c.kind === 'seat' ? 'Open the League tab' : c.kind === 'bot' ? 'Open the Bot (its switches, kill switch and rails)' : 'Open the Agent tab for ' + c.name;
-    const now = p.flat ? '<div class="as-v"><b>' + esc(p.head) + '</b></div>'
-      : '<div class="as-v"><b class="as-side ' + esc(p.side) + '">' + esc(p.head) + '</b>' + (p.since ? ' <span class="as-mut">since ' + esc(p.since) + '</span>' : ' <span class="as-mut">since ' + C.NR + '</span>') + '</div>' +
-        (p.open ? '<div class="as-v mono"><span class="as-pnl ' + esc(p.open.tone) + '" title="' + esc(p.open.title) + '">' + esc(p.open.text) + '</span></div>' : '') +
-        '<div class="as-v mono as-mut">' + esc(p.stops) + '</div>';
-    const rest = p.rest ? '<div class="as-v as-mut">' + esc(p.rest) + '</div>' : '';
-    const today = '<div class="as-v mono"><span class="as-pnl ' + (t.usd !== null ? (t.usd > 0 ? 'up' : t.usd < 0 ? 'down' : '') : '') + '">' + esc(t.usd !== null ? C.signedMoney(t.usd) || '$0.00' : 'P&L ' + C.NR) + '</span>' +
-      ' · <span class="as-pnl ' + (t.r !== null ? (t.r > 0 ? 'up' : t.r < 0 ? 'down' : '') : '') + '">' + esc(t.r !== null ? C.signedR(t.r) || '0.00 R' : t.rNote || 'R ' + C.NR) + '</span>' +
-      ' · ' + t.n + (t.n === 1 ? ' trade' : ' trades') + (t.n ? (t.wins !== null && t.wins !== undefined ? ' ' + t.wins + 'W ' + t.losses + 'L' : t.losses !== null ? ' · ' + t.losses + ' losing' : '') : '') + '</div>' +
-      '<div class="as-v as-mut mono">' + esc(t.account) + ' · ' + esc(t.room) + '</div>';
-    const spend = '<div class="as-v mono' + (sp.level === 'red' ? ' as-red' : sp.level === 'amber' ? ' as-warn' : '') + '" title="' + esc(sp.title) + '">' + esc(sp.line1) + '</div>' + (sp.line2 ? '<div class="as-v mono as-mut" title="' + esc(sp.title) + '">' + esc(sp.line2) + '</div>' : '');
-    const th = c.thoughts.length ? c.thoughts.map(x => '<li><button type="button" class="as-th k-' + esc(x.action) + '" data-th="' + esc(x.id) + '" aria-label="' + esc(x.time + ' ' + x.action + ': open the full reasoning') + '">' +
-      '<span class="mono as-t">' + esc(x.time) + '</span><span class="as-act">' + esc(x.action) + '</span><span class="mono as-conf">' + esc(x.conf) + '</span><span class="as-tx">' + esc(x.line) + '</span></button></li>').join('')
-      : '<li class="as-mut as-none">No thought yet today.</li>';
-    return '<article class="as-card k-' + c.kind + ' m-' + esc(c.mode.kind) + (c.alert ? ' as-alert' : '') + '" role="listitem" data-card="' + esc(c.key) + '"' + (c.color ? ' style="--seat:' + esc(c.color) + '"' : '') + ' title="' + esc(openWhat) + '">' +
-      '<header class="as-head">' + letter + '<span class="as-name">' + esc(c.name) + '</span><span class="as-fill"></span>' +
-        '<span class="as-mode m-' + esc(c.mode.kind) + '" title="' + esc(c.mode.sub) + '">' + esc(c.mode.word) + '</span>' +
-        '<button type="button" class="as-open" data-open="1" aria-label="' + esc(openWhat) + '" title="' + esc(openWhat) + '">›</button></header>' +
-      '<div class="as-sub"><span class="as-mut">' + esc(c.mode.sub) + '</span>' + (c.state ? '<span class="as-state' + (c.alert ? ' red' : '') + '" title="' + esc(c.state.why) + '">' + esc(c.state.word) + '</span>' : '') + '</div>' +
-      (c.status ? '<div class="as-v as-mut" title="' + esc(c.status) + '">' + esc(c.status) + '</div>' : '') +
-      (c.state && c.state.word === 'look cap' ? '<div class="as-v as-warn">' + esc(c.state.why.replace(/ \(worked out.*$/, '')) + '</div>' : '') +
-      (c.flag ? '<div class="as-v as-flag" title="' + esc(c.flag) + '">Flag: ' + esc(c.flag) + '</div>' : '') +
-      '<section class="as-sec" aria-label="Now"><span class="as-lbl">Now</span><div>' + now + rest + '</div></section>' +
-      '<section class="as-sec" aria-label="Today"><span class="as-lbl">Today</span><div>' + today + '</div></section>' +
-      '<section class="as-sec" aria-label="' + esc(sp.label || 'Spend') + '"><span class="as-lbl">' + esc(sp.label || 'Spend') + '</span><div>' + spend + '</div></section>' +
-      '<section class="as-sec as-ths" aria-label="Stream of thoughts, newest first"><span class="as-lbl">Thoughts</span><ol class="as-list">' + th + '</ol></section>' +
-      '</article>';
-  }
-  function renderDetail() {
-    if (!S.detail) { if (!detail.hidden) { detail.hidden = true; setHtml(detail, ''); } return; }
-    const c = S.cards.find(x => x.key === S.detail.card), t = c && c.thoughts.find(x => x.id === S.detail.id);
-    const html = !t ? '<div class="as-dhead"><b>' + esc(c ? c.name : 'Agent') + '</b><span class="as-fill"></span><button type="button" class="ws-btn" data-close="1">Close</button></div><p class="as-mut">This thought is no longer in the newest few.</p>'
-      : '<div class="as-dhead"><b>' + esc(c.name) + '</b><span class="as-act k-' + esc(t.action) + '">' + esc(t.action) + '</span>' + (t.conf ? '<span class="mono">confidence ' + esc(t.conf) + '</span>' : '') +
-        '<span class="as-mut mono">' + esc(t.detail) + '</span><span class="as-fill"></span><button type="button" class="ws-btn" data-close="1">Close</button></div>' +
-        '<p class="as-full">' + esc(t.full || t.line) + '</p>' + (c.kind === 'seat' ? '<p class="as-mut">SHADOW: paper only, no orders.</p>' : '');
-    setHtml(detail, html);
-    detail.hidden = false;
-  }
-  function render() {
-    const day = o.day(), reach = o.reach() || {};
-    const nowMs = o.nowMs();
-    const cards = [];
-    if (day) cards.push(...C.seatCards(day, { nowMs, last: o.last('MNQ'), pv: o.pv('MNQ') }));
-    const idle = [];
-    for (const x of o.agents()) {
-      if (C.agentActive(x.a, x.g)) cards.push(C.agentCard(x.a, x.g, { last: o.last, pv: o.pv }));
-      else idle.push(x.a && x.a.name ? x.a.name : x.a ? x.a.agent : '');
-    }
-    const bot = C.botCard(typeof o.bot === 'function' ? o.bot() : null, { last: o.last, pv: o.pv });
-    if (bot) cards.push(bot);
-    S.cards = cards;
-    const line = q('[data-k="line"]');
-    const ln = reach.problem ? reach.problem : !day ? 'Reading the league from The Desk...' : day.problem || '';
-    line.hidden = !ln; line.textContent = ln;
-    /* each card is drawn again only when what it shows changed: a click, a focus or a hover stays where it was */
-    const keys = cards.map(c => c.key).join('|');
-    if (row.dataset.keys !== keys) {
-      row.dataset.keys = keys;
-      row.innerHTML = cards.map(c => '<div class="as-slot" data-slot="' + esc(c.key) + '"></div>').join('') || '<p class="as-mut as-empty">No agent to show: the league has not been read, no live agent is running and the Bot is not offered.</p>';
-    }
-    let drawn = false;
-    for (const c of cards) {
-      const slot = row.querySelector('[data-slot="' + CSS.escape(c.key) + '"]');
-      if (!slot) continue;
-      const html = cardHtml(c);
-      if (slot.dataset.html !== html) {
-        const had = slot.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.th || (document.activeElement.dataset.open ? 'open' : '') : '';
-        slot.dataset.html = html; slot.innerHTML = html; drawn = true;
-        if (had) { const b = had === 'open' ? slot.querySelector('[data-open]') : slot.querySelector('[data-th="' + CSS.escape(had) + '"]'); if (b) b.focus({ preventScroll: true }); }
-      }
-    }
-    /* the stream shows the lines that fit whole: a line cut by the card's foot is not shown. Measured only when a card was drawn
-       again or the panel's size changed (a ResizeObserver), never on a tick that changed nothing */
-    if (drawn || !ro) fitThoughts();
-    setHtml(q('[data-k="foot"]'), esc(C.idleLine(idle.filter(Boolean))) + (day ? (idle.length ? ' · ' : '') + 'League: SHADOW, paper only.' + (reach.at ? ' Read ' + Math.max(0, Math.round((Date.now() - reach.at) / 1000)) + ' s ago.' : '') : ''));
-    renderDetail();
-  }
-  function fitThoughts() {
-    for (const list of row.querySelectorAll('.as-list')) {
-      const card = list.closest('.as-card');
-      const bottom = Math.min(list.getBoundingClientRect().bottom, card ? card.getBoundingClientRect().bottom - 4 : Infinity);
-      for (const li of list.children) { const cut = li.getBoundingClientRect().bottom > bottom + 0.5; if (li.style.visibility !== (cut ? 'hidden' : '')) li.style.visibility = cut ? 'hidden' : ''; }
-    }
-  }
-  function onClick(e) {
-    if (e.target.closest('[data-close]')) { const was = S.detail; S.detail = null; renderDetail(); if (was) { const b = row.querySelector('[data-slot="' + CSS.escape(was.card) + '"] [data-th="' + CSS.escape(was.id) + '"]'); if (b) b.focus({ preventScroll: true }); } return; }
-    if (detail.contains(e.target)) return;
-    const card = e.target.closest('[data-card]');
-    if (!card) return;
-    const th = e.target.closest('[data-th]');
-    if (th) { S.detail = S.detail && S.detail.card === card.dataset.card && S.detail.id === th.dataset.th ? null : { card: card.dataset.card, id: th.dataset.th }; renderDetail(); return; }
-    const c = S.cards.find(x => x.key === card.dataset.card);
-    if (!c) return;
-    if (c.kind === 'seat') o.openLeague(); else if (c.kind === 'bot') o.openBot(); else o.openAgent(c.id);
-  }
-  function onKey(e) { if (e.key === 'Escape' && S.detail && detail.contains(e.target)) { e.stopPropagation(); S.detail = null; renderDetail(); } }
-  body.addEventListener('click', onClick);
-  body.addEventListener('keydown', onKey);
-  /* the panel's size changed (a resize, a layout change): the stream's lines are measured again (no ResizeObserver: every render) */
-  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => fitThoughts()) : null;
-  if (ro) ro.observe(row);
-  render();
-  return {
-    render,
-    destroy() { if (ro) ro.disconnect(); body.removeEventListener('click', onClick); body.removeEventListener('keydown', onKey); body.innerHTML = ''; },
-    /* read only, for the tests */
-    state: () => ({ cards: S.cards.map(c => ({ key: c.key, name: c.name, mode: c.mode.word, sub: c.mode.sub, alert: !!c.alert, state: c.state ? c.state.word : '', flat: c.position.flat, head: c.position.head, thoughts: c.thoughts.length })), detail: S.detail ? Object.assign({}, S.detail) : null }),
-  };
+/** One agent's card (the 1.36.0 strip card): name, mode, state, Now, Today, Spend (the bot's Rails) and Thoughts, newest first. */
+function cardHtml(c) {
+  const p = c.position, t = c.today, sp = c.spend;
+  const letter = c.kind === 'seat' ? '<i class="lg-letter as-letter" aria-hidden="true">' + esc(c.letter) + '</i>' : '<i class="as-letter as-ag" aria-hidden="true">' + esc(c.letter) + '</i>';
+  const ow = openWhat(c);
+  const now = p.flat ? '<div class="as-v"><b>' + esc(p.head) + '</b></div>'
+    : '<div class="as-v"><b class="as-side ' + esc(p.side) + '">' + esc(p.head) + '</b>' + (p.since ? ' <span class="as-mut">since ' + esc(p.since) + '</span>' : ' <span class="as-mut">since ' + C.NR + '</span>') + '</div>' +
+      (p.open ? '<div class="as-v mono"><span class="as-pnl ' + esc(p.open.tone) + '" title="' + esc(p.open.title) + '">' + esc(p.open.text) + '</span></div>' : '') +
+      '<div class="as-v mono as-mut">' + esc(p.stops) + '</div>';
+  const rest = p.rest ? '<div class="as-v as-mut">' + esc(p.rest) + '</div>' : '';
+  const today = '<div class="as-v mono"><span class="as-pnl ' + (t.usd !== null ? (t.usd > 0 ? 'up' : t.usd < 0 ? 'down' : '') : '') + '">' + esc(t.usd !== null ? C.signedMoney(t.usd) || '$0.00' : 'P&L ' + C.NR) + '</span>' +
+    ' · <span class="as-pnl ' + (t.r !== null ? (t.r > 0 ? 'up' : t.r < 0 ? 'down' : '') : '') + '">' + esc(t.r !== null ? C.signedR(t.r) || '0.00 R' : t.rNote || 'R ' + C.NR) + '</span>' +
+    ' · ' + t.n + (t.n === 1 ? ' trade' : ' trades') + (t.n ? (t.wins !== null && t.wins !== undefined ? ' ' + t.wins + 'W ' + t.losses + 'L' : t.losses !== null ? ' · ' + t.losses + ' losing' : '') : '') + '</div>' +
+    '<div class="as-v as-mut mono">' + esc(t.account) + ' · ' + esc(t.room) + '</div>';
+  const spend = '<div class="as-v mono' + (sp.level === 'red' ? ' as-red' : sp.level === 'amber' ? ' as-warn' : '') + '" title="' + esc(sp.title) + '">' + esc(sp.line1) + '</div>' + (sp.line2 ? '<div class="as-v mono as-mut" title="' + esc(sp.title) + '">' + esc(sp.line2) + '</div>' : '');
+  const th = c.thoughts.length ? c.thoughts.map(x => '<li><button type="button" class="as-th k-' + esc(x.action) + '" data-th="' + esc(x.id) + '" aria-label="' + esc(x.time + ' ' + x.action + ': open the full reasoning') + '">' +
+    '<span class="mono as-t">' + esc(x.time) + '</span><span class="as-act">' + esc(x.action) + '</span><span class="mono as-conf">' + esc(x.conf) + '</span><span class="as-tx">' + esc(x.line) + '</span></button></li>').join('')
+    : '<li class="as-mut as-none">No thought yet today.</li>';
+  return '<article class="as-card k-' + c.kind + ' m-' + esc(c.mode.kind) + (c.alert ? ' as-alert' : '') + '" data-card="' + esc(c.key) + '"' + (c.color ? ' style="--seat:' + esc(c.color) + '"' : '') + ' title="' + esc(ow) + '">' +
+    '<header class="as-head">' + letter + '<span class="as-name">' + esc(c.name) + '</span><span class="as-fill"></span>' +
+      '<span class="as-mode m-' + esc(c.mode.kind) + '" title="' + esc(c.mode.sub) + '">' + esc(c.mode.word) + '</span>' +
+      '<button type="button" class="as-open" data-open="1" aria-label="' + esc(ow) + '" title="' + esc(ow) + '">›</button></header>' +
+    '<div class="as-sub"><span class="as-mut">' + esc(c.mode.sub) + '</span>' + (c.state ? '<span class="as-state' + (c.alert ? ' red' : '') + '" title="' + esc(c.state.why) + '">' + esc(c.state.word) + '</span>' : '') + '</div>' +
+    (c.status ? '<div class="as-v as-mut" title="' + esc(c.status) + '">' + esc(c.status) + '</div>' : '') +
+    (c.state && c.state.word === 'look cap' ? '<div class="as-v as-warn">' + esc(c.state.why.replace(/ \(worked out.*$/, '')) + '</div>' : '') +
+    (c.flag ? '<div class="as-v as-flag" title="' + esc(c.flag) + '">Flag: ' + esc(c.flag) + '</div>' : '') +
+    '<section class="as-sec" aria-label="Now"><span class="as-lbl">Now</span><div>' + now + rest + '</div></section>' +
+    '<section class="as-sec" aria-label="Today"><span class="as-lbl">Today</span><div>' + today + '</div></section>' +
+    '<section class="as-sec" aria-label="' + esc(sp.label || 'Spend') + '"><span class="as-lbl">' + esc(sp.label || 'Spend') + '</span><div>' + spend + '</div></section>' +
+    '<section class="as-sec as-ths" aria-label="Stream of thoughts, newest first"><span class="as-lbl">Thoughts</span><ol class="as-list">' + th + '</ol></section>' +
+    '</article>';
+}
+/** A thought's full reasoning (a click on it in the card): the box under the card. */
+function detailHtml(c, id) {
+  const t = c && c.thoughts.find(x => x.id === id);
+  return !t ? '<div class="as-dhead"><b>' + esc(c ? c.name : 'Agent') + '</b><span class="as-fill"></span><button type="button" class="ws-btn" data-close="1">Close</button></div><p class="as-mut">This thought is no longer in the newest few.</p>'
+    : '<div class="as-dhead"><b>' + esc(c.name) + '</b><span class="as-act k-' + esc(t.action) + '">' + esc(t.action) + '</span>' + (t.conf ? '<span class="mono">confidence ' + esc(t.conf) + '</span>' : '') +
+      '<span class="as-mut mono">' + esc(t.detail) + '</span><span class="as-fill"></span><button type="button" class="ws-btn" data-close="1">Close</button></div>' +
+      '<p class="as-full">' + esc(t.full || t.line) + '</p>' + (c.kind === 'seat' ? '<p class="as-mut">SHADOW: paper only, no orders.</p>' : '');
 }
 
-window.AgentsStrip = { mount };
+window.AgentsStrip = { cardHtml, detailHtml, openWhat, esc };
 })();

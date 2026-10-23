@@ -162,17 +162,21 @@ try {
   await p.click('#wsAgentTab');
   await until(() => p.evaluate(() => !window.workspace.agent().shown), 'closed');
 
-  /* 1.36.0: the Bot through the Agents strip (the Bot panel is gone) */
+  /* 1.36.0: the Bot through the Agents strip (the Bot panel is gone); 1.38.0: the strip is the Drone sky, the bot a drone */
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'the Bot view from the top bar as before');
   check(new URL(p.url()).searchParams.get('tab') === 'bot', '?tab=bot as before');
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'closed again from its button');
   await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="agents"]');
-  await until(() => p.$('.ws-panel.agents [data-card="bot"]'), 'the Agents strip with its bot card', 15000);
+  /* the bot's drone: in the sky, or (a narrow panel) in the "+N more" list */
+  const botSel = await until(async () => (await p.$('.ws-panel.agents .ak-hit[data-key="bot"]')) ? '.ws-panel.agents .ak-hit[data-key="bot"]'
+    : (await p.$('.ws-panel.agents .ak-mi[data-key="bot"]')) ? '.ws-panel.agents .ak-mi[data-key="bot"]' : null, 'the Agents panel with the bot\'s drone', 15000);
+  const openBotDrone = async () => { if (/ak-mi/.test(botSel) && await p.$eval('.ws-panel.agents .ak-more', e => e.hidden)) await p.click('.ws-panel.agents .ak-idle'); await p.click(botSel); };
+  const hoverBotDrone = async () => { if (/ak-mi/.test(botSel) && await p.$eval('.ws-panel.agents .ak-more', e => e.hidden)) await p.click('.ws-panel.agents .ak-idle'); await p.hover(botSel); };
   check(await p.isVisible('#wsBotTab') && await p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'with an Agents strip the Bot button stays in the top bar (Anthony: "its fine there")');
-  await p.click('.ws-panel.agents [data-card="bot"] .as-name');
-  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'a click on the bot card opens the Bot view');
+  await openBotDrone();
+  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'a click on the bot\'s drone opens the Bot view');
   check(await p.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsBotTab'))) && await p.isVisible('#wsBotTab'), 'while the Bot view is open its button is in the top bar (the way back)');
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on') && document.getElementById('wsTabSlot').contains(document.getElementById('wsBotTab'))), 'closed: the button still in the top bar');
@@ -194,8 +198,12 @@ try {
   await wait(300);
   const red = await p.$eval('#wsBotTab', b => ({ inTop: document.getElementById('wsTabSlot').contains(b), seen: b.getClientRects().length > 0, border: getComputedStyle(b).borderColor, cls: b.className }));
   check(red.inTop && red.seen && /bt-alert/.test(red.cls) && await p.isVisible('#wsBotTab'), 'the bot\'s alert raised: its button is in the top bar and seen, with the strip on the layout (' + red.border + ')');
-  const card = await until(() => p.$eval('.ws-panel.agents [data-card="bot"]', e => (e.classList.contains('as-alert') && /killed/.test(e.innerText) ? e.innerText : null)), 'the bot card carries the alert', 5000);
-  check(!!card, 'the strip\'s bot card: killed, in the red alert look');
+  /* 1.38.0: the bot's drone says killed on its text block (in the alert's red), and its hover card is the strip's card in the red alert look */
+  const drone = await until(async () => { const s = await p.evaluate(() => window.workspace.agentsStrip()); const d = s && s.drones.find(x => x.key === 'bot'); return d && d.state === 'killed' ? d : null; }, 'the bot\'s drone says killed', 5000);
+  await hoverBotDrone();
+  const card = await until(() => p.$eval('.ws-panel.agents .ak-pop [data-card="bot"]', e => (e.classList.contains('as-alert') && /killed/.test(e.innerText) ? e.innerText : null)), 'the bot\'s card carries the alert', 5000);
+  check(!!drone && !!card, 'the bot\'s drone: killed, its card in the red alert look');
+  await p.mouse.move(2, 400); await p.keyboard.press('Escape');
   check(await p.evaluate(() => document.body.classList.contains('bt-has-tab')), 'the Layout word gives way for it (bt-has-tab)');
   await p.screenshot({ path: path.join(out, 'league-bot-alert-1366.png') });
   await p.click('#wsBotTab');

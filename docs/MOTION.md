@@ -38,6 +38,33 @@ says so for that file alone): at most 30 frames a second, at most 1.5 device pix
 canvas changes size, what does not move drawn once per size on a canvas of its own, no shadow blur and no filter. It is never
 over the chart and never on an order surface. Nothing in the tab rezzes in or flickers when it opens.
 
+## Allowed motion: the Agents panel's Drone sky (chart 1.38.0)
+
+The Agents panel (`live/agents-sky.js`, Anthony approved the "Drone sky" concept on 2026-10-23) does not use the kit. It is
+one 2D canvas, the panel's own frame loop, and nothing else in the panel moves (its CSS has no transition and no animation):
+
+| what | how | stops |
+|---|---|---|
+| The background | very faint, slow code rain (digits and signs) and drifting dust, behind everything | as below |
+| The drones | a slow hover, a turning lens, a dashed (SHADOW) ring turning | as below |
+| A look | the look laser once per new look (a seat's decision, a live agent's LOOK), lighting the bars it crosses | as below |
+| A pass, an exit | one pulse ring; the feed line under the canvas types the reason in (a decode effect) | as below |
+| A trade | the tether to its entry with a light packet running along it; a stop that moves flashes once where it lands | as below |
+| Anthony's entry | his "A" beacon drops onto the price once | as below |
+
+It stops (no frame scheduled at all) while the panel is hidden (another view open over the layout, another panel maximized
+over it, scrolled away), and while the window is in the background; the workspace's once-a-second render wakes it when it can
+be seen again. At most 30 frames a second; reduced motion (the Windows setting or the page's Less motion) is calm motion: at
+most 15 frames a second, everything at about a third of the speed, the feed text at once. The canvas covers whole device pixels
+(the chart's 1.37.0 snap). Nothing replays: what the data held when the panel opened is shown as it stands; only its newest act
+plays, once.
+
+R3 still holds inside it: the figures (position, open R, today's R, spend, the stop and entry levels) are drawn as they are on
+every frame, the moment the page knows them; nothing counts up, eases in or slides to its value. A stop that moves is drawn at
+its new price at once (the flash is on top of it, never on the way to it). The panel sends nothing.
+`npm run smoke:agents-strip` checks the pace (at most 30 a second, 15 calm), the stops (another view, a panel maximized over
+it, the window in the background) and the frame time.
+
 ## Loading it
 
 | Page | How |
