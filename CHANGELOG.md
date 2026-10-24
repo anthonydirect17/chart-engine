@@ -18,7 +18,8 @@ ships, The Desk answers 404 on the two new paths and ChartBridge keeps everythin
   second's open in UTC ms. Built in one pass on NinjaTrader's thread from its 1 tick history (a bars job at the 0.3.5 gate, last of
   all, never beside a chart load; 180 s limit). The side of each trade by the live rule: the bid and ask NinjaTrader stored with the
   trade when usable, else the tick rule; the message says how (`sides.method`, `bidAsk`, `tickRule`, `mixed` or `none`, with counts).
-  **Never in regular trading hours** (09:30 to 16:15 New York), the start's catch-up and the sends included; one request a pass.
+  **Only from 16:15 to 18:00 New York on weekdays and on the weekend while the market is shut** (Saturday, Sunday before 18:00): never
+  premarket, in regular hours or in the evening session; the start's catch-up and the sends wait for that window; one request a pass.
   Sent as parts of at most 1,500 rows (about 90 KB) to the new `POST /api/bars-1s` (v 2, tf `1s`), each part with the set id, its
   number, the count and the session's totals, so The Desk knows when a day is whole. Queued in `bars1s/` (written once; a `.sent`
   file notes each part taken), retried like the 1-minute bars, `sent_bars1s.txt`, `refused_bars1s.txt`, `rejected_bars1s.jsonl`.

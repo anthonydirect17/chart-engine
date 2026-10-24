@@ -108,6 +108,7 @@ public static class BarsHarness
             OneSecondBuilder();          // 0.6.9: 1 second bars from made-up trades (pure)
             OneSecondMessages();         // 0.6.9: the parts of a set
             OneSecondSession(dir);       // 0.6.9: through the gate, a stand-in Desk, the 1-minute message unchanged
+            OneSecondWindow();           // 0.6.9 (coordinator 2026-10-24): 16:15 to 18:00 ET on weekdays, the weekend while shut
             OneSecondRthAndOnePerPass(dir);
             OneSecondOldDeskAndRestart(dir);
             OneSecondRefused(dir);
@@ -1218,6 +1219,28 @@ public static class BarsHarness
         Check(!ChartBridgeBars.OneSecondOn, "1s: off with bars off");
     }
 
+    static void OneSecondWindow()
+    {
+        // 2026-10-07 is a Wednesday, 10-10 a Saturday, 10-11 a Sunday, 10-09 a Friday
+        foreach (var c in new[] {
+            new { At = W(2026, 10, 7, 8, 0), In = false, What = "Wednesday 08:00 (premarket)" },
+            new { At = W(2026, 10, 7, 9, 30), In = false, What = "Wednesday 09:30 (regular hours)" },
+            new { At = W(2026, 10, 7, 16, 14), In = false, What = "Wednesday 16:14" },
+            new { At = W(2026, 10, 7, 16, 15), In = true, What = "Wednesday 16:15 (the window opens)" },
+            new { At = W(2026, 10, 7, 17, 59), In = true, What = "Wednesday 17:59" },
+            new { At = W(2026, 10, 7, 18, 0), In = false, What = "Wednesday 18:00 (the evening session opens)" },
+            new { At = W(2026, 10, 7, 23, 0), In = false, What = "Wednesday 23:00 (evening session)" },
+            new { At = W(2026, 10, 8, 2, 0), In = false, What = "Thursday 02:00 (overnight)" },
+            new { At = W(2026, 10, 9, 16, 15), In = true, What = "Friday 16:15" },
+            new { At = W(2026, 10, 9, 20, 0), In = false, What = "Friday 20:00 (a weekday evening, outside the window)" },
+            new { At = W(2026, 10, 10, 0, 0), In = true, What = "Saturday 00:00" },
+            new { At = W(2026, 10, 10, 13, 0), In = true, What = "Saturday 13:00" },
+            new { At = W(2026, 10, 11, 17, 59), In = true, What = "Sunday 17:59" },
+            new { At = W(2026, 10, 11, 18, 0), In = false, What = "Sunday 18:00 (the week's evening session opens)" },
+            new { At = W(2026, 10, 12, 16, 15), In = true, What = "Monday 16:15" } })
+            Check(ChartBridgeBars.In1sWindow(c.At) == c.In, "1s window: " + c.What + (c.In ? ": requests and sends may go" : ": nothing asked or sent"));
+    }
+
     static void OneSecondRthAndOnePerPass(string dir)
     {
         // a start at 10:00 ET: the 1-minute catch-up runs as before; no 1 second request in regular trading hours; at 16:16 ET they go
@@ -1236,7 +1259,7 @@ public static class BarsHarness
             int after1 = TicksMade(m0).Count;
             ChartBridgeBars.PlanOnce(null);
             int after2 = TicksMade(m0).Count;
-            Check(minutes == 2 && ticks == 0 && st.Contains("waiting: regular trading hours") && after1 == 1 && after2 == 2,
+            Check(minutes == 2 && ticks == 0 && st.Contains("waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend") && after1 == 1 && after2 == 2,
                   "1s RTH: at 10:00 ET the 1-minute catch-up goes (" + minutes + "), no tick request (" + ticks + "); after 16:15 one a pass (" + after1 + ", " + after2 + ")");
             // the sends wait out regular trading hours too: a set queued, The Desk up, 10:00 the next day: nothing posted
             int posted = desk.All1s().Count;
@@ -1250,6 +1273,28 @@ public static class BarsHarness
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 8, 16, 20));
             ChartBridgeBars1sQueue.Flush(null);
             Check(inRth == 0 && desk.All1s().Count - posted == 1, "1s RTH: a waiting set is not posted in regular trading hours; at 16:20 ET it goes");
+            // the start's catch-up outside the window waits for it: a start at 08:00 ET (premarket) and at 19:00 ET (evening session)
+            // asks nothing; at 16:15 it goes; Saturday any time; Sunday 18:00 nothing
+            foreach (var c in new[] {
+                new { At = W(2026, 10, 9, 8, 0), Goes = false, What = "a Friday 08:00 start (premarket)" },
+                new { At = W(2026, 10, 8, 19, 0), Goes = false, What = "a Thursday 19:00 start (evening session)" },
+                new { At = W(2026, 10, 8, 16, 14), Goes = false, What = "Thursday 16:14" },
+                new { At = W(2026, 10, 8, 16, 15), Goes = true, What = "Thursday 16:15" },
+                new { At = W(2026, 10, 10, 9, 0), Goes = true, What = "a Saturday 09:00 start" },
+                new { At = W(2026, 10, 11, 18, 0), Goes = false, What = "Sunday 18:00" } })
+            {
+                Desk dw = Fresh1s(dir, "MNQ", EtToUtc(c.At));
+                try
+                {
+                    dw.Status1s = body => 200;
+                    ChartBridgeBars.CatchUpSessions = 1;
+                    int w0 = MadeCount();
+                    ChartBridgeBars.PlanOnce(null);
+                    Check((TicksMade(w0).Count == 1) == c.Goes && (dw.All1s().Count > 0) == c.Goes && dw.All().Count == 1,
+                          "1s window, the start's catch-up: " + c.What + (c.Goes ? ": the request and the parts go" : ": no tick request and nothing posted; the 1-minute bars as before") + " (" + TicksMade(w0).Count + ")");
+                }
+                finally { dw.Stop(); }
+            }
         }
         finally { desk.Stop(); }
         // never beside the chart: a page loading (the gate's own rule) holds the 1 second request back

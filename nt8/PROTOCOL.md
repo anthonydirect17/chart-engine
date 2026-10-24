@@ -1098,8 +1098,11 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
   so the 18:00 open is in it) to the session's close (never past now). Through the 0.3.5 gate as a bars job (`1s <session>
   <contract>` in `/diag` `books.gate`), so the same rules hold: queued only when the gate is idle (no window, backfill, last trades
   or page load out or to come), never beside a chart load, and a request NinjaTrader does not answer frees the gate at its limit
-  (180 s here; its late answer is dropped). **Never in regular trading hours** (09:30 to 16:15 New York on a weekday), the start's
-  catch-up included (stricter than the 1-minute bars, whose start catch-up may run in them). At most one 1 second request a pass
+  (180 s here; its late answer is dropped). **Only from 16:15 to 18:00 New York on a weekday, and on the weekend while the market is
+  shut** (all Saturday, and Sunday before the 18:00 open): never premarket, in regular hours or in the evening session, so a Range or
+  tick chart load is never held behind a session's trades while Anthony may be watching (the coordinator's ruling, 2026-10-24). The
+  start's catch-up waits for the next window too (stricter than the 1-minute bars, whose start catch-up may run at any time). The
+  edges: 16:14 no, 16:15 yes, 17:59 yes, 18:00 no; Sunday 17:59 yes, Sunday 18:00 no. At most one 1 second request a pass
   (once a minute), after the pass's 1-minute requests. A failure is tried again after 15 minutes, 3 times, then not until the next
   start.
 - **The rows, on NinjaTrader's thread in one pass** (no copy of the trades is kept): each trade of the session (UTC `[open,
@@ -1133,8 +1136,8 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
   `complete` is always true (a set is always a whole session). Market data and the PC name only.
 - **Queue:** a set is written whole, before anything is sent, to `bars1s/<session>_<contract>.jsonl` next to `config.txt` (a temp
   file swapped in), one part a line; `bars1s/<same>.sent` gets one line per part The Desk took, so the big file is never written
-  again. Parts go to `deskUrl` + `/api/bars-1s`, one a request, in order, oldest session first, 10 seconds each, never in regular
-  trading hours. A set done is noted in `sent_bars1s.txt` (`yyyy-MM-dd contract`, 40 days) and its files deleted. `400`, `413` or
+  again. Parts go to `deskUrl` + `/api/bars-1s`, one a request, in order, oldest session first, 10 seconds each, only in the same
+  window (16:15 to 18:00 New York on weekdays, the weekend while shut). A set done is noted in `sent_bars1s.txt` (`yyyy-MM-dd contract`, 40 days) and its files deleted. `400`, `413` or
   `422` sets the part aside in `rejected_bars1s.jsonl`, drops the whole set and notes the session in `refused_bars1s.txt` (40 days:
   not asked for again). `404` (a Desk without `POST /api/bars-1s`, today's) keeps every set on disk and offers it again every 30
   minutes (said once in the Output window). Anything else is tried again after a minute. After a restart a set goes on from the

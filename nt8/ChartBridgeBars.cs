@@ -16,8 +16,8 @@
 // 16:15 New York time) it asks for nothing, except the catch-up after a start once the charts have settled. Every failure
 // or timeout is logged and tried again later (3 tries, then not until the next start), never thrown into NinjaTrader.
 // 0.6.9 (Anthony 2026-10-24, the stats suite's Phase 2): with bars = on, each session's 1 second bars for NQ and MNQ too, built from
-// NinjaTrader's 1 tick history in one pass on its thread (buy and sell volume by the live side rule), through the same gate, never in
-// regular trading hours, to The Desk's POST /api/bars-1s in parts (ChartBridgeBars1sQueue, bars1s/). The 1-minute bars are unchanged.
+// NinjaTrader's 1 tick history in one pass on its thread (buy and sell volume by the live side rule), through the same gate, only
+// 16:15 to 18:00 New York on weekdays and on the weekend while shut, to The Desk's POST /api/bars-1s in parts (ChartBridgeBars1sQueue, bars1s/). The 1-minute bars are unchanged.
 //
 // NinjaTrader 8 help used (ninjatrader.com/support/helpGuides/nt8/):
 //   barsrequest.htm (from/to are turned into whole trading days; Request, Bars, Dispose), request.htm,
@@ -277,6 +277,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (et.DayOfWeek == DayOfWeek.Saturday || et.DayOfWeek == DayOfWeek.Sunday) return false;
             TimeSpan tod = et.TimeOfDay;
             return tod >= new TimeSpan(9, 30, 0) && tod < new TimeSpan(16, 15, 0);
+        }
+
+        // 0.6.9 (the coordinator's ruling, 2026-10-24): the only times the 1 second bars ask NinjaTrader for trades or post to The
+        // Desk: 16:15 to 18:00 New York on a weekday (after regular hours, before the evening session opens), and the weekend while
+        // the market is shut (Saturday, and Sunday before the 18:00 open). Never premarket, in regular hours or in the evening
+        // session, so a Range or tick chart load is never held behind a session's trades while Anthony may be watching. The start's
+        // catch-up waits for the next window too.
+        public static bool In1sWindow(DateTime et)
+        {
+            TimeSpan tod = et.TimeOfDay;
+            if (et.DayOfWeek == DayOfWeek.Saturday) return true;
+            if (et.DayOfWeek == DayOfWeek.Sunday) return tod < TimeSpan.FromHours(18);
+            return tod >= new TimeSpan(16, 15, 0) && tod < TimeSpan.FromHours(18);
         }
 
         // NinjaTrader stamps a bar with its CLOSING time, in the time zone set under Tools > Options > General
@@ -640,15 +653,15 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- 0.6.9: the 1 second bars' worker part
         // After the 1-minute bars of the pass, the same sessions' 1 second bars for Roots1s (NQ, MNQ), the same contracts (the front
-        // month and any other with fills). Never in regular trading hours (09:30 to 16:15 New York), the start's catch-up included: a
-        // whole session's trades is a big request. At most one request a pass (once a minute), through the same gate, last of all.
+        // month and any other with fills). Only in In1sWindow (16:15 to 18:00 New York on weekdays, the weekend while shut), the start's
+        // catch-up included: a whole session's trades is a big request. At most one request a pass (once a minute), through the same gate, last of all.
         private static volatile string state1s = "off", lastBuild1s = "", error1s = "";
         public static string Key1s(string key) { return "1s " + key; }   // the retry records' key (never the same as a 1-minute key)
 
         private static void Plan1s(Func<bool> stopping, DateTime nowEt, List<DateTime> sessions)
         {
             if (!OneSecondOn) { state1s = "off"; return; }
-            if (InRth(nowEt)) { state1s = "waiting: regular trading hours (after 16:15 ET)"; return; }
+            if (!In1sWindow(nowEt)) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend"; return; }
             string[] roots = Roots1s.Where(r => Roots.Contains(r)).ToArray();   // only roots whose 1-minute bars go too (barsRoots)
             foreach (BarsJob j in Wanted(sessions, roots, FillJobs(sessions)))
             {
@@ -1136,8 +1149,8 @@ namespace NinjaTrader.NinjaScript.AddOns
     // One session of one contract is a set of parts (ChartBridgeBars.Messages1s, about 55 for a full NQ session). Each set is written
     // once, whole (a temp file swapped in), to bars1s/<session>_<contract>.jsonl next to config.txt, one part a line, before anything
     // is sent; bars1s/<same>.sent notes each part The Desk took (a line appended per part, so the big file is never written again).
-    // The parts go to The Desk's POST /api/bars-1s in order, oldest session first, one a request, 10 seconds each, never in regular
-    // trading hours (The Desk stores tens of thousands of rows a session: not while Anthony trades). A set done is noted in
+    // The parts go to The Desk's POST /api/bars-1s in order, oldest session first, one a request, 10 seconds each, only in the 1 second
+    // bars' window (ChartBridgeBars.In1sWindow: The Desk stores tens of thousands of rows a session, never while Anthony may trade). A set done is noted in
     // sent_bars1s.txt (40 days) and its files deleted. A part The Desk calls malformed (400, 413 or 422) is set aside in
     // rejected_bars1s.jsonl and its whole set dropped and noted in refused_bars1s.txt (40 days: not asked for again). A 404 means
     // this Desk has no 1 second store yet: the sets stay on disk and are offered again every 30 minutes (said once). Anything else is
@@ -1322,7 +1335,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (stopping != null && stopping()) return;
                     DateTime nowUtc = ChartBridgeBars.UtcNow();
-                    if (ChartBridgeBars.InRth(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), ChartBridgeTime.Eastern))) return;
+                    if (!ChartBridgeBars.In1sWindow(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), ChartBridgeTime.Eastern))) return;   // the same window as the requests
                     if ((deskHasNone || lastFailed) && nowUtc < retryAt) return;
                     Set first;
                     lock (Sync) { if (Sets.Count == 0) return; first = Sets[0]; }
