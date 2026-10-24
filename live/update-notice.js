@@ -51,9 +51,9 @@
     s.id = 'updNoticeStyle';
     // in the page's own place for it (the workspace's top bar, data-update-host). A long text ends in "...", and a shorter
     // form is picked when it fits. (1.22.0: the single chart page's spot on its status line went with that page.)
-    s.textContent = '[data-update-host] .upd-note { display: block; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info, #7FB2FF); }' +
+    s.textContent = '[data-update-host] .upd-note { display: block; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info, #8FB4E8); }' +
       '[data-update-host] .upd-note .upd-vis::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }' +
-      '[data-update-host] .upd-note.upd-stop { color: var(--warn, #E0B45A); font-weight: 600; }' +
+      '[data-update-host] .upd-note.upd-stop { color: var(--warn, #E8B85C); font-weight: 600; }' +
       '[data-update-host] .upd-note .upd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }';
     document.head.appendChild(s);
   }

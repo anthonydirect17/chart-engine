@@ -208,10 +208,10 @@
       const lv = A.state && A.state.level;
       if (lv && isFinite(lv.price)) {
         const y = ch.priceToY(lv.price);
-        g.strokeStyle = '#B69CFF'; g.setLineDash([6, 4]); g.lineWidth = 1.5;
+        g.strokeStyle = '#D4B06A'; g.setLineDash([6, 4]); g.lineWidth = 1.5;
         g.beginPath(); g.moveTo(0, y); g.lineTo(plotW, y); g.stroke(); g.setLineDash([]);
         const label = (lv.type || 'Level') + ' ' + fmtP(lv.price), tw = g.measureText(label).width + 10;
-        g.fillStyle = '#2A1F4D'; g.fillRect(6, y - 9, tw, 18); g.fillStyle = '#D8CCFF'; g.fillText(label, 11, y);
+        g.fillStyle = '#2A2214'; g.fillRect(6, y - 9, tw, 18); g.fillStyle = '#F2E4C2'; g.fillText(label, 11, y);
       }
       const spans = A.spans.concat(A.spanDraft && A.spanDraft.key === ov.key ? [{ role: A.spanDraft.role, t0: Math.min(A.spanDraft.t0, A.spanDraft.t1), t1: Math.max(A.spanDraft.t0, A.spanDraft.t1) }] : []);
       for (const s of spans) {
@@ -227,7 +227,7 @@
         const i = barIndexAt(ch, m.t);
         if (i < 0) continue;
         const x = ch.barToX(i), y = ch.priceToY(m.price), c = own && OWN_ROLES.includes(m.role) ? YOU : COLORS[m.role] || '#fff';
-        g.fillStyle = c; g.strokeStyle = '#06080C'; g.lineWidth = 1;
+        g.fillStyle = c; g.strokeStyle = '#050506'; g.lineWidth = 1;
         g.beginPath(); g.arc(x, y, 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
         g.fillText(m.role, x + 8, y);
       }
@@ -246,7 +246,7 @@
     for (const o of v.orders || []) {
       const x0 = xAt(ch, o.t_from), x1 = xAt(ch, o.t_to);
       if (x0 === null || x1 === null) continue;
-      const y = ch.priceToY(o.price), c = ROLE_COLOR[o.role] || '#9AA8B8';
+      const y = ch.priceToY(o.price), c = ROLE_COLOR[o.role] || '#A6A196';
       g.strokeStyle = c; g.lineWidth = 1.5; g.setLineDash(o.role === 'entry' ? [5, 3] : []);
       g.beginPath(); g.moveTo(x0, y); g.lineTo(Math.max(x1, x0 + 8), y); g.stroke(); g.setLineDash([]);
       if (o.role === 'entry') {
@@ -275,11 +275,11 @@
       const y = ch.priceToY(t.entry), up = t.dir !== 'short';
       g.fillStyle = up ? '#3DDC97' : '#FF5C7A';
       g.beginPath(); g.moveTo(x0, y + (up ? -6 : 6)); g.lineTo(x0 - 6, y + (up ? 5 : -5)); g.lineTo(x0 + 6, y + (up ? 5 : -5)); g.closePath(); g.fill();
-      g.fillStyle = '#E6EDF5'; g.fillText(fmtC(t.entry), x0 + 9, y + (up ? 10 : -10));
+      g.fillStyle = '#ECE9E2'; g.fillText(fmtC(t.entry), x0 + 9, y + (up ? 10 : -10));
       drawn.fills++; drawn.fillPx.push(fmtC(t.entry));
       if (ex && x1 !== null) {
         const ye = ch.priceToY(ex.exit);
-        g.fillStyle = ex.points > 0 ? '#3DDC97' : '#FF5C7A'; g.strokeStyle = '#06080C';
+        g.fillStyle = ex.points > 0 ? '#3DDC97' : '#FF5C7A'; g.strokeStyle = '#050506';
         g.beginPath(); g.arc(x1, ye, 5, 0, Math.PI * 2); g.fill(); g.stroke();
         g.fillText(ex.reason + ' ' + signed(ex.points), x1 + 9, ye);
         drawn.exits++; drawn.exitText.push(ex.reason + ' ' + signed(ex.points));
@@ -314,14 +314,14 @@
     const x0 = xAt(ch, t.entry_t);
     if (x0 === null) return;
     const y = ch.priceToY(t.entry), up = t.dir !== 'short';
-    g.fillStyle = YOU; g.strokeStyle = '#06080C'; g.lineWidth = 1;
+    g.fillStyle = YOU; g.strokeStyle = '#050506'; g.lineWidth = 1;
     g.beginPath(); g.moveTo(x0, y + (up ? -7 : 7)); g.lineTo(x0 - 7, y + (up ? 6 : -6)); g.lineTo(x0 + 7, y + (up ? 6 : -6)); g.closePath(); g.fill(); g.stroke();
     youTag(g, 'YOU ' + fmtC(t.entry), x0 + 10, y + (up ? 12 : -12), drawn);
     drawn.yours++;
     const ex = t.exits && t.exits.yours, x1 = ex ? xAt(ch, ex.exit_t) : null;
     if (ex && x1 !== null) {
       const ye = ch.priceToY(ex.exit);
-      g.fillStyle = YOU; g.strokeStyle = '#06080C';
+      g.fillStyle = YOU; g.strokeStyle = '#050506';
       g.beginPath(); g.rect(x1 - 5, ye - 5, 10, 10); g.fill(); g.stroke();
       youTag(g, 'YOU ' + ex.reason + ' ' + signed(ex.points), x1 + 10, ye, drawn);
       drawn.yours++;
@@ -569,6 +569,14 @@
       return s;
     } catch (e) { say(A.uiMode === 'bot' ? 'botErr' : A.uiMode === 'trades' ? 'tErr' : A.uiMode === 'day' ? 'dayErr' : 'saveMsg', e.message, true); return null; }
   }
+  /* House style V2 (chart 1.39.0): the tab bar's gold ink slides to the chosen tab (ChartMotion.syncInk; at once with
+     reduced motion; without the kit the chosen tab keeps its own highlight). The tab acts on its click; the ink follows. */
+  function tabInk() {
+    const M = window.ChartMotion, bar = document.querySelector('.ms-tabs');
+    if (M && typeof M.syncInk === 'function' && bar) M.syncInk(bar);
+  }
+  window.addEventListener('resize', tabInk);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(tabInk).catch(() => {});
   function setMode(m) {
     if (m !== 'blind' && A.state && A.state.blind_open) { say('saveMsg', 'Save the grade first, then use ' + (m === 'bot' ? 'the Bot tab.' : m === 'trades' ? 'the Trades tab.' : m === 'day' ? 'the Day tab.' : 'Free mode.'), true); return; }
     if (m !== 'trades' && A.state && A.state.trade_open) { say('tErr', 'Grade the open trade first.', true); return; }
@@ -578,6 +586,7 @@
     // Day tab (its days are shown without their date)
     BLIND = ui || day || !A.state || A.state.mode === 'blind' || A.state.mode === 'day' || !!A.state.trade_open || (tr && !A.state.date);
     for (const [id, k] of [['tabBlind', 'blind'], ['tabFree', 'free'], ['tabBot', 'bot'], ['tabTrades', 'trades'], ['tabDay', 'day']]) { $(id).classList.toggle('on', m === k); $(id).setAttribute('aria-selected', String(m === k)); }
+    tabInk();
     $('secBlind').hidden = !ui; $('secFree').hidden = m !== 'free'; $('secBot').hidden = !bot;
     $('secDay').hidden = !day; $('secRuns').hidden = $('secBuilds').hidden = !bot;
     if (!bot) $('botCompare').hidden = true;

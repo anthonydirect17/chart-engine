@@ -115,6 +115,7 @@ function create(env) {
   })();
 
   let pageSetting = null;   // true or false once read or set
+  const inks = new Map();   // syncInk: where each keyed bar's ink last sat
   const running = new Set();
   const byRoot = typeof WeakMap === 'function' ? new WeakMap() : null;
   let scheduled = false, last = 0;
@@ -324,11 +325,44 @@ function create(env) {
     return timeline(p => setText(el, formatNumber(lerp(from, +to, ease.out(p)), f)), { ms: o.ms || MS.slow, onDone: o.onDone });
   }
 
+  /* House style V2 (chart 1.39.0, Anthony 2026-10-24: "smooth everywhere where possible as far as we can go"): the gold
+     ink of a tab bar slides to the chosen tab, as The Desk's (frontend/src/lib/motion.ts syncInks). `bar` holds the tabs;
+     `chosen` is a selector for the chosen one (default aria-selected, aria-pressed or aria-current true). The ink is a
+     span (.v2-ink, motion.css) placed with a transform; the bar gets .has-ink, so its chosen tab's own highlight steps
+     aside. A bar drawn again (its tabs rebuilt) starts its ink where the last bar of the same `key` had it, so the ink
+     slides from the old tab to the new one. Reduced motion (M8): placed at once. Never on a bar inside NO_MOTION. The
+     tab acts on its click as before; the ink only follows. Returns the ink, or null when nothing is chosen. */
+  function syncInk(bar, o) {
+    o = o || {};
+    if (!bar || !bar.querySelector || (bar.closest && bar.closest(NO_MOTION))) return null;
+    const sel = o.chosen || '[aria-selected="true"], [aria-pressed="true"], [aria-current="page"]';
+    const on = Array.from(bar.children).find(el => el.matches && el.matches(sel) && !(el.classList && el.classList.contains('v2-ink')));
+    let ink = Array.from(bar.children).find(el => el.classList && el.classList.contains('v2-ink')) || null;
+    if (!on || !on.offsetWidth) { if (bar.classList) bar.classList.remove('has-ink'); if (ink) ink.style.width = '0px'; return null; }
+    if (bar.classList) bar.classList.add('has-ink');   // the bar is the ink's positioning box before anything is measured
+    const box = { x: on.offsetLeft, y: on.offsetTop, w: on.offsetWidth, h: on.offsetHeight };
+    const place = (el, b) => { el.style.transform = 'translate(' + b.x + 'px, ' + b.y + 'px)'; el.style.width = b.w + 'px'; el.style.height = b.h + 'px'; };
+    const still = reduced(), key = o.key || '';
+    if (!ink) {
+      ink = bar.ownerDocument.createElement('span');
+      ink.className = 'v2-ink still';
+      ink.setAttribute('aria-hidden', 'true');
+      bar.insertBefore(ink, bar.firstChild);
+      const prev = key && inks.get(key);
+      place(ink, prev && !still ? prev : box);
+      void ink.offsetWidth;   // start where it was, then slide
+    }
+    ink.classList.toggle('still', still);
+    place(ink, box);
+    if (key) { inks.delete(key); inks.set(key, box); if (inks.size > 50) inks.delete(inks.keys().next().value); }
+    return ink;
+  }
+
   return {
     VERSION, MS, STORAGE_KEY, NO_MOTION, DT_CAP, DPR_CAP,
     ease, clamp, seg, lerp, stagger, formatNumber,
     scene, timeline, countTo, setText, fitCanvas,
-    reduced, setReducedMotion,
+    reduced, setReducedMotion, syncInk,
     running: () => running.size,
     create,
   };

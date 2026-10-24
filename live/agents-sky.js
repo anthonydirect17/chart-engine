@@ -31,7 +31,7 @@
 'use strict';
 if (typeof window === 'undefined' || typeof document === 'undefined') return;
 const C = window.AgentsStripCore, CARD = window.AgentsStrip;
-const VERSION = '1.38.1';
+const VERSION = '1.39.0';
 const FPS = 30, CALM_FPS = 15, SLIM_H = 200, PULSE_S = 0.7, TICKS = 30;
 /* the code rain's glyphs: digits and signs only (every PC's fonts have them) */
 const GLY = '0123456789<>/\\|=+*#:;{}[]$%';
@@ -67,8 +67,8 @@ function mount(body, o) {
   const stage = q('stage'), cv = stage.querySelector('canvas'), ctx = cv.getContext('2d');
   const hitsEl = q('hits'), moreEl = q('more'), emptyEl = q('empty'), popEl = q('pop'), idleEl = q('idle'), warnEl = q('warn'), whoEl = q('who'), tEl = q('t'), txtEl = q('txt');
   const css = n => getComputedStyle(body).getPropertyValue(n).trim();
-  const K = { ground: css('--ws-bg') || '#06080C', ink: css('--ws-text') || '#E6EDF5', dim: css('--ws-muted') || '#7F8C9C', up: css('--ws-buy') || '#3DDC97', down: css('--ws-sell') || '#FF5C7A',
-    warn: css('--ws-warn') || '#FFC266', him: '#F2F4FF' };
+  const K = { ground: css('--ws-bg') || '#050506', ink: css('--ws-text') || '#ECE9E2', dim: css('--ws-muted') || '#8A857B', up: css('--ws-buy') || '#3DDC97', down: css('--ws-sell') || '#FF5C7A',
+    warn: css('--ws-warn') || '#FFC266', him: '#F7F3EA' };
   const FD = '"Orbitron", "IBM Plex Sans", system-ui, sans-serif', FM = '"IBM Plex Mono", ui-monospace, Consolas, monospace';
   if (document.fonts && document.fonts.load) { document.fonts.load('700 12px Orbitron').catch(() => {}); document.fonts.load('500 11px "IBM Plex Mono"').catch(() => {}); }
 
@@ -310,7 +310,7 @@ function mount(body, o) {
     drawFields([{ text: used !== null ? (TICKS - used) + ' looks left' : '', col: K.dim }, { text: doing, col: K.dim }], x, l2y + 15, maxW, 9);
     if (used !== null) {                                       // the 30-tick look cap: the used ones dark
       const w = Math.min(maxW, 120), gap = w / TICKS;
-      for (let i = 0; i < TICKS; i++) { ctx.fillStyle = i >= used ? alpha(d.color, 0.8) : 'rgba(124,130,163,0.2)'; ctx.fillRect(x + i * gap, l2y + 22, Math.max(1, gap - 1.2), 3); }
+      for (let i = 0; i < TICKS; i++) { ctx.fillStyle = i >= used ? alpha(d.color, 0.8) : 'rgba(138,133,123,0.2)'; ctx.fillRect(x + i * gap, l2y + 22, Math.max(1, gap - 1.2), 3); }
     }
   }
   function priceLabel(k, last, slim) {
@@ -353,11 +353,11 @@ function mount(body, o) {
       d.y += d.v * 0.35 * dt * sp; if (d.y > S.H + 60) { d.y = -20 - Math.random() * 80; d.v = 25 + Math.random() * 55; }
       for (let j = 0; j < 4; j++) {
         const y = d.y - j * 14; if (y < 0 || y > S.H) continue;
-        ctx.fillStyle = j === 0 ? 'rgba(200,185,255,0.09)' : 'rgba(91,61,255,' + (0.05 * (1 - j / 4)) + ')';
+        ctx.fillStyle = j === 0 ? 'rgba(242,228,194,0.09)' : 'rgba(201,165,92,' + (0.05 * (1 - j / 4)) + ')';
         ctx.fillText(GLY[((d.seed + j * 7 + Math.floor(S.now * 6 + d.seed)) | 0) % GLY.length], d.x - 4, y);
       }
     }
-    ctx.fillStyle = 'rgba(167,123,255,0.25)';
+    ctx.fillStyle = 'rgba(201,165,92,0.25)';
     for (const d of S.dust) { d.y -= d.v * dt * sp; if (d.y < 0) { d.y = S.H; d.x = Math.random() * S.W; } ctx.fillRect(d.x, d.y, d.r, d.r); }
   }
   /* the slots: one per drone shown, left to right, each at least 150 px (90 slim) */
@@ -383,14 +383,14 @@ function mount(body, o) {
       for (const l of lit) l.v = Math.max(0, l.v - dt * 1.6);
       const w = Math.max(1.5, k.step * 0.55);
       for (let i = 0; i < bars.length; i++) {                  // the pillars, one per bar, lit where a laser crosses them
-        const b = bars[i], x = k.X(i), yT = k.Y(Math.max(b.o, b.c)), yB = Math.max(yT + 1.5, k.Y(Math.min(b.o, b.c))), L = lit[i].v, col = lit[i].c || '#a77bff';
+        const b = bars[i], x = k.X(i), yT = k.Y(Math.max(b.o, b.c)), yB = Math.max(yT + 1.5, k.Y(Math.min(b.o, b.c))), L = lit[i].v, col = lit[i].c || '#C9A55C';
         if (![x, yT, yB, k.bot].every(isNum)) continue;
-        ctx.strokeStyle = L > 0 ? alpha(col, 0.4 + 0.5 * L) : 'rgba(217,220,240,0.18)'; ctx.lineWidth = 1;
+        ctx.strokeStyle = L > 0 ? alpha(col, 0.4 + 0.5 * L) : 'rgba(236,233,226,0.18)'; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(x, k.Y(b.h)); ctx.lineTo(x, k.Y(b.l)); ctx.stroke();
-        const pg = ctx.createLinearGradient(0, yT, 0, k.bot); pg.addColorStop(0, L > 0 ? alpha(col, 0.35 * L) : 'rgba(167,123,255,0.10)'); pg.addColorStop(1, 'rgba(91,61,255,0)');
+        const pg = ctx.createLinearGradient(0, yT, 0, k.bot); pg.addColorStop(0, L > 0 ? alpha(col, 0.35 * L) : 'rgba(201,165,92,0.10)'); pg.addColorStop(1, 'rgba(201,165,92,0)');
         ctx.fillStyle = pg; ctx.fillRect(x - w / 2, yT, w, k.bot - yT);
         if (L > 0) glow(col, 10 * L);
-        ctx.fillStyle = L > 0 ? alpha(col, 0.6 + 0.4 * L) : 'rgba(226,214,255,0.75)'; ctx.fillRect(x - w / 2, yT, w, yB - yT); noGlow();
+        ctx.fillStyle = L > 0 ? alpha(col, 0.6 + 0.4 * L) : 'rgba(242,228,194,0.75)'; ctx.fillRect(x - w / 2, yT, w, yB - yT); noGlow();
       }
       beacons(k, bars); tradeLevels(k, bars, bars[bars.length - 1].c, slim); priceLabel(k, bars[bars.length - 1].c, slim);
       S.k = k; S.kBars = bars;
@@ -416,7 +416,7 @@ function mount(body, o) {
         ctx.beginPath(); ctx.arc(dx + (ex - dx) * qq, dy + r + (ey - dy - r) * qq, 1.9, 0, 7); ctx.fill(); noGlow();
       }
       /* the drone: a hexagon hull, wings, a lens that turns; the ring dashed for SHADOW, solid for LIVE */
-      ctx.strokeStyle = alpha(d.color, 0.9); ctx.lineWidth = 1.3; ctx.fillStyle = '#0b0f1c';
+      ctx.strokeStyle = alpha(d.color, 0.9); ctx.lineWidth = 1.3; ctx.fillStyle = '#0E0D0B';
       ctx.beginPath(); for (let j = 0; j < 6; j++) { const th = j / 6 * Math.PI * 2 + Math.PI / 6; ctx.lineTo(dx + Math.cos(th) * r, dy + Math.sin(th) * r); } ctx.closePath(); ctx.fill(); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(dx - r, dy); ctx.lineTo(dx - r * 1.9, dy - r * 0.35); ctx.moveTo(dx + r, dy); ctx.lineTo(dx + r * 1.9, dy - r * 0.35); ctx.stroke();
       const hot = a.beam || d.trade ? 1 : 0.5 + 0.25 * Math.sin(S.now * 2 + i);

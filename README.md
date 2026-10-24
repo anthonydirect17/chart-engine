@@ -475,7 +475,7 @@ chart page's order bar did until 1.22.0 (`live/trade.js`), so everything below a
 
 - **Every chart on the ticket's instrument takes orders while it is Armed**, in every window: Shift + left click buys,
   Shift + right click and Ctrl + left click sell, drag a working order or a bracket leg to move it, its x cancels it.
-  Those charts have a purple border with a soft glow. Charts on other instruments only show their orders, position and fills.
+  Those charts have a gold border with a soft glow (purple before 1.39.0, house style V2). Charts on other instruments only show their orders, position and fills.
 - **Switching the ticket's instrument** turns Armed off; anything still open on the old one shows as "Also open: MNQ
   +2" with its own Close.
 - **One ticket for all windows** of the browser on this PC. The first window to open takes it by itself (Armed off);
@@ -564,8 +564,8 @@ Then check the accounts that may trade on the Account page: only checked account
 **The order bar** (above the chart, only with ChartBridge 0.3 or later):
 
 - **Armed** switch. Off after every page load, and it turns itself off when the account or instrument
-  changes, the connection drops or ChartBridge turns trading off. While it is on, the switch is deep red and the bar
-  is outlined in it, and the chart has a purple outline with a soft glow as in the workspace (1.13.0, Anthony; amber
+  changes, the connection drops or ChartBridge turns trading off. While it is on, the switch is gold (1.39.0; deep red before) and the bar
+  is outlined in it, and the chart has a gold outline (1.39.0; purple before) with a soft glow as in the workspace (1.13.0, Anthony; amber
   before), the legend shows ARMED with the account and the tab title starts with ARMED and names the
   instrument and the account ("ARMED · MNQ · EVAL-1", 1.6.1). **Nothing trades while it
   is off** (except Flatten, which works with Armed off, 1.11.0), and nothing asks for confirmation while it is on:

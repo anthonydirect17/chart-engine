@@ -1,14 +1,16 @@
 /*
  * ChartBridge's PIN pad (live/pin.js), on the standalone page only. The chart's look (CHART_STYLE.md, house style):
- * the #080B10 ground, #0B1016 panel with a #2A3645 border and radius 12, purple accent, crimson only in the logo
- * and wordmark, IBM Plex Mono digits. Amber (the warn color) for a refused PIN; green and red stay for trades.
+ * 1.39.0 house style V2 (black and gold, Anthony 2026-10-24): the #050506 ground, an 18 px #0C0C0F card with a gold
+ * hairline along its top, gold the accent and in the logo (a black tile, gold glyph, gold border glow) and the wordmark,
+ * IBM Plex Mono digits. Amber (the warn color) for a refused PIN; green and red stay for trades. The card rises in once
+ * when the pad opens (not with reduced motion); the keys ease their hover. A key acts on its press as before.
  */
 .cb-pin {
   color-scheme: dark;
-  --bg: #080B10; --panel: #0B1016; --s2: #0F151D; --s3: #141C26; --line: #18212C; --line-strong: #2A3645;
-  --text: #E6EDF5; --head: #F2F6FA; --text2: #9AA8B8; --text3: #8392A5;
-  --accent: #6D28D9; --accent-text: #B69CFF; --accent-tint: #1A1230; --accent-border: #3B2A6B;
-  --crimson: #9F1239; --crimson-word: #E0445E; --warn: #E0B45A;
+  --bg: #050506; --panel: #0C0C0F; --s2: #111114; --s3: #18181C; --line: #1B1B20; --line-strong: #2A2824;
+  --text: #ECE9E2; --head: #F7F3EA; --text2: #A6A196; --text3: #8A857B;
+  --accent: #C9A55C; --accent-text: #E2C687; --accent-tint: #17140E; --accent-border: #3C321E;
+  --crimson: #C9A55C; --crimson-word: #E2C687; --warn: #E8B85C;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --cond: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
@@ -16,18 +18,18 @@
   display: grid; place-items: center; padding: 24px 16px;
   background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px;
 }
-.cb-pin.cb-pin-over { background: rgba(8, 11, 16, 0.9); backdrop-filter: blur(3px); }   /* Change PIN over the chart */
+.cb-pin.cb-pin-over { background: rgba(5, 5, 6, 0.9); backdrop-filter: blur(3px); }   /* Change PIN over the chart */
 .cb-pin [hidden] { display: none !important; }
 .cb-pin *, .cb-pin *::before, .cb-pin *::after { box-sizing: border-box; }
 .cb-pin-card {
-  width: min(340px, 100%); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px;
+  position: relative; width: min(340px, 100%); background: linear-gradient(180deg, #0E0E11, var(--panel)); border: 1px solid var(--line-strong); border-radius: 18px;
   padding: 22px 22px 18px; display: grid; justify-items: center; gap: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
   outline: none;
 }
 .cb-pin-brand { display: flex; align-items: center; gap: 10px; justify-self: start; margin-bottom: 6px; }
-.cb-pin-logo { width: 28px; height: 28px; border-radius: 8px; background: var(--crimson); display: grid; place-items: center; flex: none; }
+.cb-pin-logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(145deg, #15130F, #0A0908); border: 1px solid rgba(201, 165, 92, .28); box-shadow: 0 0 18px rgba(201, 165, 92, .18); display: grid; place-items: center; flex: none; }
 .cb-pin-brandtext { display: grid; line-height: 1.15; }
-.cb-pin-word { font: 700 11px var(--cond); letter-spacing: .14em; color: var(--crimson-word); text-transform: uppercase; }
+.cb-pin-word { font: 700 11px var(--cond); letter-spacing: .14em; color: var(--crimson-word); text-transform: uppercase; text-shadow: 0 0 18px rgba(201, 165, 92, .18); }
 .cb-pin-page { font-weight: 600; font-size: 14px; color: var(--head); }
 .cb-pin-title { margin: 4px 0 0; font: 600 18px var(--sans); color: var(--head); text-align: center; }
 .cb-pin-sub { margin: 0; min-height: 18px; font-size: 12px; color: var(--text2); text-align: center; line-height: 1.45; max-width: 280px; }
@@ -49,7 +51,7 @@
 .cb-pin-key:disabled { opacity: .45; cursor: default; }
 .cb-pin-key:focus-visible, .cb-pin-link:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .cb-pin-foot { min-height: 18px; margin-top: 6px; font-size: 11px; color: var(--text3); text-align: center; line-height: 1.5; max-width: 290px; }
-.cb-pin-link { font: 500 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 14px; min-height: 30px; cursor: pointer; }
+.cb-pin-link { font: 500 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 999px; padding: 4px 14px; min-height: 30px; cursor: pointer; }
 .cb-pin-link:hover { background: var(--s3); }
 .cb-pin-busy .cb-pin-dots span.on { animation: cb-pin-pulse 900ms ease-in-out infinite; }
 .cb-pin-shake { animation: cb-pin-shake 300ms ease-in-out; }
@@ -57,9 +59,17 @@
 @keyframes cb-pin-pulse { 50% { opacity: .45; } }
 .cb-pin-toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 1001; max-width: calc(100vw - 32px);
-  background: #0B1016; border: 1px solid #3B2A6B; color: #D8CCFF; border-radius: 8px; padding: 8px 14px;
+  background: #0C0C0F; border: 1px solid #3C321E; color: #F2E4C2; border-radius: 999px; padding: 8px 14px;
   font: 500 12px "IBM Plex Sans", system-ui, sans-serif; box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
 }
+.cb-pin-card::before { content: ""; position: absolute; left: 18px; right: 18px; top: -1px; height: 1px; background: linear-gradient(90deg, transparent, rgba(201, 165, 92, .35), transparent); pointer-events: none; }
+.cb-pin-key:hover, .cb-pin-link:hover { border-color: rgba(201, 165, 92, .28); }
+.cb-pin-key:focus-visible, .cb-pin-link:focus-visible { outline-color: var(--accent); }
+@media (prefers-reduced-motion: no-preference) {
+  :root:not(.motion-off) .cb-pin-card { animation: cb-pin-rise .45s cubic-bezier(.22, 1, .36, 1); }
+  :root:not(.motion-off) .cb-pin-key, :root:not(.motion-off) .cb-pin-link { transition: background-color .2s cubic-bezier(.22, 1, .36, 1), border-color .2s cubic-bezier(.22, 1, .36, 1), color .2s cubic-bezier(.22, 1, .36, 1); }
+}
+@keyframes cb-pin-rise { from { opacity: 0; translate: 0 10px; } to { opacity: 1; translate: 0 0; } }
 @media (prefers-reduced-motion: reduce) {
   .cb-pin-shake, .cb-pin-busy .cb-pin-dots span.on { animation: none; }
   .cb-pin-dots span { transition: none; }

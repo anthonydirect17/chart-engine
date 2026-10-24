@@ -20,6 +20,39 @@ fantastic chart. Thats what I want to actually trade on."
   corner readout, compact order labels and spaced day labels on a host's charts (engine options `compactLabels`,
   `toolOrders`, `spacedDays`, all off by default), 4h, 1D and 1W charts; no new colors.
 
+## House style V2, black and gold (page and engine 1.39.0)
+
+**Anthony, 2026-10-24:** "lets unify everything. I really liked the black gold look you showed and I think it should live
+through our entire system." On the candles: "my colors for candles change all the time, You can add a black and gold
+pre-set, thats fine, but I change them - this is more of an overall theme change." On the feel: "smooth everywhere where
+possible as far as we can go."
+
+- **The chart's own colors** (ground, regular-hours ground, grid, axes, crosshair, tags, the exit and live dots) are V2's
+  black and warm greys, in the table below; every floor of the next section holds on the V2 ground (axis text 5.55:1, day
+  labels 16.8:1, tag text 15.99:1 on its fill, crosshair 3.57:1, divider and tag borders 1.49:1, grid 1.12:1; the default
+  bear purple reads 2.87:1, 2.77:1 before). The V1 dark ground `#080B10`, saved by a Reset or a pick of Dark before 1.39.0,
+  is read as the default ground (`V1_GROUND`, `groundOf`). The engine's own controls (Jump to live, the padlock, the delta
+  divider, focus rings, the Colors panel) are gold where they were purple: `#E2C687` on `#17140E` with a `#3C321E` border.
+- **Unchanged:** the default candle colors, every indicator's default color (VWAP, levels, the profile, the signals, the
+  studies, the drawings), the trade sides and P&L colors, and the chart's motion constants (below).
+- **The page chrome** (the workspace, its panels, menus, dialogs, the ticket, the PIN pad, the Markup Studio) takes The Desk's
+  V2 tokens (TheDesk `frontend/src/styles/tokens.css`): ground `#050506`, panels `#0C0C0F`, raised `#111114` and `#18181C`,
+  lines `#1B1B20` and `#2A2824`, text `#ECE9E2`, `#F7F3EA`, `#A6A196`, `#8A857B`; gold `#C9A55C`, gold text `#E2C687`, soft
+  gold `#F2E4C2`; info `#8FB4E8`, warn `#E8B85C`. Gold replaces the purple accent and the crimson everywhere: the logo (a black
+  tile, gold glyph and border glow), the wordmark, Armed (gold with dark ink `#140F06`, 8.9:1; the V1 names `--crimson` and
+  `--crimson-word` are kept), the chart's armed ring, the LIVE account marks. Green and red only for P&L and trade side
+  (the Account page's room meter in the loss red, crimson before). Buttons and tabs are pills, popovers and dialogs 14 px with
+  a gold border, panels and cards a gold hairline along the top, the top bar a gold hairline under it.
+- **Motion (V2):** one ease, `cubic-bezier(.22, 1, .36, 1)`. Menus and popovers (Indicators, Colors, the chip popovers, + Add
+  panel, Settings, Screens) fade in as they open; a dialog that asks nothing about orders rises in (10 px); the top bar's own
+  buttons (never Flatten all or Flatten every, nor the NO STOP question's buttons) ease their hover and lift 1 px; a tab bar's
+  gold ink slides to the chosen tab (`ChartMotion.syncInk`); the PIN card rises in once; the Studio's buttons and tabs ease.
+  The limits: a live value (prices, the quote board, Time and Sales, position, P&L, order state, the ticket, the chart and its
+  order and position lines) shows its true value at once and nothing on or around it moves; every control takes its click
+  on the first frame (a menu or a dialog while it is still fading in); Buy, Sell, Flatten, B/E, Arm and Disarm fire on the
+  click with no motion; the order dialogs (the group entry, Flatten every account, Order Strategies) appear at once. Reduced
+  motion (the system's, or the page's Less motion) turns all of it off. `npm run smoke:v2` checks these in a page.
+
 ## Colors
 
 Candle colors are Anthony's choice and can be changed in the chart's **Colors** panel (presets and
@@ -32,19 +65,19 @@ pickers, saved per browser); the indicators' colors in their gears (1.9.0). Defa
 | VWAP | `#B69CFF` (its color in the VWAP gear, 1.9.0) |
 | Trade entry | `#3DDC97` long, `#FF7A7A` short (house trade-side colors) |
 | Trade result line and chip | `#3DDC97` profit, `#FF7A7A` loss |
-| Trade exit, live dot | `#F2F6FA` |
+| Trade exit, live dot | `#F7F3EA` (1.39.0; `#F2F6FA` before) |
 | Working orders (1.3.0) | `#3DDC97` buy, `#FF7A7A` sell (house trade-side colors) |
-| Position line and tag | `#F2F6FA`; open P&L text `#3DDC97` profit, `#FF7A7A` loss |
-| Armed (live page and ticket) | 1.13.0: the house crimson `#9F1239` switch and ARMED pill with the logo's light ink `#FFE4EA` (6.7:1), the order bar or ticket outline in the crimson word color `#E0445E` (4.5:1 on the bar); the chart's outline the workspace accent `#7B5CFF` with a soft glow on both pages; amber `#E0B45A` before |
+| Position line and tag | `#F7F3EA` (1.39.0; `#F2F6FA` before); open P&L text `#3DDC97` profit, `#FF7A7A` loss |
+| Armed (live page and ticket) | 1.39.0: V2 gold `#C9A55C` with dark ink `#140F06`, the outline in the gold text `#E2C687`, the chart's armed ring gold. Before, 1.13.0: the house crimson `#9F1239` switch and ARMED pill with the logo's light ink `#FFE4EA` (6.7:1), the order bar or ticket outline in the crimson word color `#E0445E` (4.5:1 on the bar); the chart's outline the workspace accent `#7B5CFF` with a soft glow on both pages; amber `#E0B45A` before |
 | ARMED chip in a chart's header | 1.34.1 (Anthony): a small chip, 8 px type, that says ARMED only; the account or group on hover, never written on the chart |
-| Chart ground | `#080B10` |
-| Regular-hours ground (bars under 1 hour) | `#0B1016` |
-| Grid hairlines | `rgba(42,54,69,0.30)` |
-| Axis borders | `#18212C` |
-| Session divider, tag borders | `#2A3645` |
-| Crosshair lines | `#5B6B80` |
-| Axis text | `#8392A5`; day and month labels `#E6EDF5` |
-| Crosshair tags | fill `#141C26`, border `#2A3645`, text `#F2F6FA` |
+| Chart ground | `#050506` (1.39.0, V2; `#080B10` before) |
+| Regular-hours ground (bars under 1 hour) | `#09090B` (V1 `#0B1016`) |
+| Grid hairlines | `rgba(42,40,36,0.45)` (V1 `rgba(42,54,69,0.30)`) |
+| Axis borders | `#1B1B20` (V1 `#18212C`) |
+| Session divider, tag borders | `#302D28` (V1 `#2A3645`) |
+| Crosshair lines | `#6B665C` (V1 `#5B6B80`) |
+| Axis text | `#8A857B`; day and month labels `#ECE9E2` (V1 `#8392A5`, `#E6EDF5`) |
+| Crosshair tags | fill `#18181C`, border `#302D28`, text `#F7F3EA` (V1 `#141C26`, `#2A3645`, `#F2F6FA`) |
 | Overnight high/low | `#7FB2FF` |
 | Prior-day high/low | `#9AA8B8` |
 | Prior close | `#8392A5` |
@@ -65,11 +98,14 @@ pickers, saved per browser); the indicators' colors in their gears (1.9.0). Defa
 | Time and Sales, a big trade's lift (1.14.0) | `--tape-big-lift` `#FFFFFF`: a big trade's price and size are its color mixed 30% toward it |
 
 Presets: Carolina / purple (default), Mint / coral (`#4FD1A5` / `#F0717A`, the Chart lab v0 look),
-House green / red (`#3DDC97` / `#FF7A7A`). Text drawn in a candle color is lightened until it reads
+House green / red (`#3DDC97` / `#FF7A7A`), and since 1.39.0 **Black and gold** (`#D4B06A` / `#7A7468`, the V2 chart gold and a
+warm graphite; wicks and volume bars follow the candle colors, volume at 26%; on the V2 ground bull 9.91:1, bear 4.39:1,
+2.26:1 and an RGB distance of 108 apart, at least 1.30:1 apart on every ground; the bear 3.04:1 over the profile's value-area
+rows, the default's 1.99:1). Text drawn in a candle color is lightened until it reads
 at 4.5:1 on the ground; the last-price tag picks dark or white text for its fill.
 
-**Background (1.5.3, Anthony's request).** The Colors panel has a Background section: presets Dark `#080B10`
-(the default, the look above), Black `#000000`, Blue-grey `#1B2433` and Light `#F5F7FA`, and a picker for any
+**Background (1.5.3, Anthony's request).** The Colors panel has a Background section: presets Dark `#050506` since
+1.39.0 (`#080B10` before; the default, the look above), Black `#000000`, Blue-grey `#1B2433` and Light `#F5F7FA`, and a picker for any
 color. On the default ground nothing changes. On any other ground the theme is rebuilt once per change (never per
 frame) from the engine's helpers (`buildTheme`, `readableOn`, `legible`):
 - Neutrals are mixed from the ground toward an ink (`#F2F6FA` on a dark ground, `#080B10` on a light one, picked
@@ -472,12 +508,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   quiet grey). A host's chart with its own toolbar keeps the 1.13.0 toolbar.
 - Drag to pan and throw. Wheel or pinch zooms at the pointer; a sideways trackpad swipe pans.
 - While following the live edge, zoom keeps the live edge in place. Panning away shows "Jump to live": since 1.14.0 a
-  small icon (24 x 22 px, radius 6, `#B69CFF` on `#1A1230` with a `#3B2A6B` border, a play-to-end glyph, tooltip "Jump
+  small icon (24 x 22 px, radius 6, `#B69CFF` on `#1A1230` with a `#3B2A6B` border (1.39.0: `#E2C687` on `#17140E`, `#3C321E`), a play-to-end glyph, tooltip "Jump
   to live (End)") at the top of the price scale, moved down only to stay clear of the tags there; the axis prices under
   it are not drawn. End or the icon returns.
 - **Price scale lock (1.14.0, review D2):** a 24 x 20 px padlock centred in the corner under the price axis (beside the
   time axis; nothing else is drawn there): unlocked, an open padlock in the quiet grey `#7F8C9C`, the text color and a
-  `#2A3645` border on hover; locked, a closed padlock in `#B69CFF` on `#1A1230` with a `#3B2A6B` border. Saved per chart.
+  `#2A3645` border on hover; locked, a closed padlock in `#B69CFF` on `#1A1230` with a `#3B2A6B` border (1.39.0: the same gold). Saved per chart.
 - Drag the price axis to stretch price (auto-fit off; chart drag then pans price too). 1.14.0: while following live, a
   new trade that takes the forming bar within 12 px of the header or the bottom brings the auto-fit back (eased), and
   so does going back to live. Double-click

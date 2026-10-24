@@ -43,6 +43,15 @@ for (const vp of [{ w: 1440, h: 860, name: 'desk' }, { w: 400, h: 820, name: 'ph
     await page.click('.ce-preset[data-id="mint"]');
     await page.waitForTimeout(200);
     await page.screenshot({ path: path.join(out, 'desk-colors.png') });
+    // 1.39.0: the Black and gold preset (house style V2), shown on the sample data
+    await page.click('.ce-preset[data-id="gold"]');
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: path.join(out, 'desk-colors-blackgold.png') });
+    const pressed = await page.$eval('.ce-preset[data-id="gold"]', b => b.getAttribute('aria-pressed'));
+    if (pressed !== 'true') errors.push('the Black and gold preset is not shown as in use after a click');
+    await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(out, 'desk-blackgold.png') });
+    await page.click('.ce-theme-btn');
     await page.click('.ce-preset[data-id="carolina"]');
     await page.keyboard.press('Escape');
     for (const tf of ['5m', '15m', '1h', '1m']) { await page.click(`#tfSeg >> text=${tf}`); await page.waitForTimeout(250); }

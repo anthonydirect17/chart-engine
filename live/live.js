@@ -1101,7 +1101,7 @@ function markup(p, o) {
   const brand = !o.brand ? '' : `
     <div class="brand">
       <div class="logo" aria-hidden="true">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#FFE4EA" stroke-width="2"><path d="M7 4v16M17 4v16"/><rect x="4.5" y="8" width="5" height="7" rx="1"/><rect x="14.5" y="6" width="5" height="9" rx="1"/></svg>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#E2C687" stroke-width="2"><path d="M7 4v16M17 4v16"/><rect x="4.5" y="8" width="5" height="7" rx="1"/><rect x="14.5" y="6" width="5" height="9" rx="1"/></svg>
       </div>
       <div class="brand-text"><span class="wordmark">The Desk</span><span class="page-name">Live chart</span></div>
     </div>

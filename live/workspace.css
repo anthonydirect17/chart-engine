@@ -5,15 +5,20 @@
  * chart's outer padding and the 360 px floor of its plot are relaxed, so a short panel still shows its chart. The chart's
  * Indicators button and menu, the Colors panel and the hotkey boxes sit in .ws-lv spans that carry the class chart-live
  * (so live.css styles them) and take no box of their own.
- * Colors are the workspace mockup's (2026-10-01), on the house style: dark grounds, purple accent, IBM Plex.
+ * Colors are the workspace mockup's (2026-10-01), on the house style: dark grounds, purple accent, IBM Plex. 1.39.0: house
+ * style V2, black and gold (Anthony 2026-10-24: "lets unify everything ... the black gold look"): The Desk's tokens
+ * (frontend/src/styles/tokens.css), gold the accent and no crimson; green and red only for P&L and trade side.
  */
 :root {
   color-scheme: dark;
-  --ws-bg: #06080C; --ws-panel: #0B0F15; --ws-line: #18212C; --ws-line2: #2A3645; --ws-row: #121922; --ws-field: #0F151D;
-  --ws-pop: #0F141C; --ws-dots: #1A2230;
-  --ws-text: #E6EDF5; --ws-text2: #9AA8B8; --ws-muted: #7F8C9C; --ws-grip: #4A5566;
-  --ws-accent: #7B5CFF; --ws-accent-deep: #2A1F4D; --ws-tint: #1A1230; --ws-tint-line: #3B2A6B; --ws-soft: #D8CCFF;
-  --ws-buy: #3DDC97; --ws-sell: #FF5C7A; --ws-sell-ground: #2A0F17; --ws-warn: #FFC266; --ws-warn-ground: #2A2110; --ws-warn-text: #FFE2B0;
+  --ws-bg: #050506; --ws-panel: #0C0C0F; --ws-line: #1B1B20; --ws-line2: #2A2824; --ws-row: #101013; --ws-field: #111114;
+  --ws-pop: #0E0E11; --ws-dots: #1E1D1A;
+  --ws-text: #ECE9E2; --ws-text2: #A6A196; --ws-muted: #8A857B; --ws-grip: #4A463E;
+  --ws-accent: #C9A55C; --ws-accent-deep: #3C321E; --ws-tint: #17140E; --ws-tint-line: #3C321E; --ws-soft: #F2E4C2;
+  --ws-buy: #3DDC97; --ws-sell: #FF5C7A; --ws-sell-ground: #2A0F17; --ws-warn: #E8B85C; --ws-warn-ground: #1C150A; --ws-warn-text: #F2E4C2;
+  /* V2's gold (The Desk's --gold, --gold-text, --gold-soft, the hairline and the glow) and its one ease */
+  --ws-gold: #C9A55C; --ws-gold-text: #E2C687; --ws-gold-border: rgba(201, 165, 92, .28); --ws-gold-hair: rgba(201, 165, 92, .35); --ws-gold-glow: rgba(201, 165, 92, .18);
+  --ws-gold-fill: linear-gradient(180deg, #E6CB8E, #B8924A); --ws-on-gold: #140F06; --ws-ease: cubic-bezier(.22, 1, .36, 1);
   /* Time and Sales categories (1.14.0, CHART_STYLE): above the ask and below the bid the brighter pair; set by the tape's gear */
   --tape-above: #9CF5CB; --tape-ask: #3DDC97; --tape-mid: #9AA8B8; --tape-bid: #FF5C7A; --tape-below: #FFA3B4;
   --tape-big-lift: #FFFFFF;   /* what a big trade's color is mixed toward (30%) */
@@ -21,7 +26,7 @@
   --ws-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 html, body { height: 100%; margin: 0; }
-body { background: var(--ws-bg); color: var(--ws-text); font: 12px var(--ws-sans); display: flex; flex-direction: column; overflow: hidden; }
+body { background: radial-gradient(1200px 600px at 70% -200px, rgba(201, 165, 92, .06), transparent 60%) no-repeat, var(--ws-bg); background-color: var(--ws-bg); color: var(--ws-text); font: 12px var(--ws-sans); display: flex; flex-direction: column; overflow: hidden; }
 body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 [hidden] { display: none !important; }
 
@@ -472,6 +477,38 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .ws-db-src { color: var(--ws-text2); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .ws-panel.db-wide .db { grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); }
 .ws-panel.db-short .db-note { display: none; }
+
+/* ---------------- house style V2 (1.39.0, Anthony 2026-10-24) */
+/* The shapes: pills for buttons and tabs, 14 px popovers and dialogs, a gold hairline under the top bar and along the top
+   of every panel and popover, the wordmark in gold. */
+.ws-top::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: linear-gradient(90deg, transparent, var(--ws-gold-border), transparent); pointer-events: none; }
+.ws-title { color: var(--ws-gold-text); font-family: "IBM Plex Sans Condensed", var(--ws-sans); font-weight: 700; letter-spacing: .14em; text-shadow: 0 0 18px var(--ws-gold-glow); }
+.ws-btn { border-radius: 999px; }
+.ws-btn.ws-gear { border-radius: 50%; }
+.ws-btn:hover { border-color: var(--ws-gold-border); }
+.ws-btn.ws-flat:hover { border-color: color-mix(in srgb, var(--ws-sell) 55%, transparent); }
+.ws-btn.primary { background: var(--ws-gold-fill); border-color: transparent; color: var(--ws-on-gold); font-weight: 600; }
+.ws-btn.primary:hover { color: var(--ws-on-gold); }
+.ws-sel { border-radius: 999px; }
+.ws-panel::before { content: ""; position: absolute; left: 12px; right: 12px; top: -1px; height: 1px; z-index: 1; background: linear-gradient(90deg, transparent, var(--ws-gold-hair), transparent); opacity: .55; pointer-events: none; }
+.ws-pop, .ws-dialog { border-radius: 14px; border-color: var(--ws-gold-border); }
+.ws-tabs { border-radius: 999px; }
+.ws-tab { border-radius: 999px; }
+.ws-tabs.has-ink .ws-tab[aria-selected="true"] { background: transparent; }
+.ws-dialog::backdrop { background: rgba(0, 0, 0, .55); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+/* The feel: only where no live value shows and no order is asked (R3). The top bar's own buttons (Layout, + Add panel,
+   Screens, Settings, the tabs; never Flatten all or Flatten every, nor the NO STOP question's Send and Cancel) ease their hover and lift 1 px; a popover or menu fades in
+   as it opens; a dialog that asks nothing about orders rises in (the group entry, Flatten every and the Order Strategies
+   appear at once). Every one of them takes its click on the first frame: nothing waits for the motion. */
+@media (prefers-reduced-motion: no-preference) {
+  :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat), :root:not(.motion-off) .ws-top > .ws-sel, :root:not(.motion-off) .ws-tab,
+  :root:not(.motion-off) .ws-menu button {
+    transition: border-color .25s var(--ws-ease), color .2s var(--ws-ease), background-color .25s var(--ws-ease), box-shadow .25s var(--ws-ease), translate .2s var(--ws-ease); }
+  :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):not(:disabled):hover { translate: 0 -1px; box-shadow: 0 0 16px var(--ws-gold-glow); }
+  :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):active { translate: 0 0; scale: .98; }
+  :root:not(.motion-off) .ws-pop:not([hidden]) { animation: v2-fade-in .22s var(--ws-ease); }
+  :root:not(.motion-off) .ws-dialog[open]:not(:has(.ws-gq, .ws-fe, .ws-sg)) { animation: v2-rise .35s var(--ws-ease); }
+}
 
 /* ---------------- 1.16.0 (ChartBridge 0.4.0): Order Strategies, Merge, entry types and The Desk's shared settings. Shown
    only while ChartBridge's switches say on. No motion here: nothing moves or fades (rule R3). */

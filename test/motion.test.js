@@ -315,6 +315,8 @@ test('motion.css: the tokens, reduced motion to 0, nothing hidden at rest', () =
   assert.match(css, /prefers-reduced-motion: reduce\)\s*{\s*:root { --motion-fast: 0ms; --motion-base: 0ms; --motion-slow: 0ms; }/);
   assert.match(css, /:root\.motion-off { --motion-fast: 0ms; --motion-base: 0ms; --motion-slow: 0ms; }/);
   // opacity 0 only behind .motion-out, which a page adds itself
-  for (const m of css.matchAll(/([^{}]+){[^}]*opacity:\s*0[;\s]/g)) assert.match(m[1], /\.motion-out/);
+  // (1.39.0: a V2 keyframe, v2-rise, starts at opacity 0; a keyframe never applies at rest, so it is left out of this check)
+  const rest = css.replace(/@keyframes [\w-]+ \{[^{}]*(\{[^{}]*\}[^{}]*)*\}/g, '');
+  for (const m of rest.matchAll(/([^{}]+){[^}]*opacity:\s*0[;\s]/g)) assert.match(m[1], /\.motion-out/);
   assert.ok(!/display:\s*none|visibility:\s*hidden/.test(css));
 });

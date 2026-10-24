@@ -332,7 +332,8 @@ function cssBlock(css, sel) {
   assert.ok(m, sel + ' block');
   return Object.fromEntries([...m[1].matchAll(/--kit-([a-z0-9-]+):\s*([^;]+);/g)].map(x => [x[1], x[2].trim()]));
 }
-const LOCKED = JSON.parse(/const LOCKED = (\{[^\n]*\});/.exec(read('test/theme.test.js'))[1]);
+/* the chart's candle, money and indicator colors, which house style V2 (1.39.0) left as they were (theme.test.js LOCKED_V1) */
+const LOCKED = JSON.parse(/const LOCKED_V1 = (\{[^\n]*\});/.exec(read('test/theme.test.js'))[1]);
 
 test('tokens: kit.css and ChartKit.TOKENS agree, on .kit and on each surface', () => {
   const css = read('live/kit.css');
