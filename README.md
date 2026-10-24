@@ -849,7 +849,7 @@ npm run check:orders     # the order gates, the PIN, the seam, trade sides, the 
 
 Several checkouts at once on one machine: give each its own build file and smoke port, for example
 `CHARTBRIDGE_ORDERS_EXE=$PWD/.orders.exe CHARTBRIDGE_CHECK_DLL=$PWD/.check.dll npm run check:orders` and
-`ORDERS_SMOKE_PORT=27396 npm run smoke:orders` (the defaults are `/tmp/chartbridge-orders.exe`, `/tmp/chartbridge-check.dll`
+`ORDERS_SMOKE_PORT=27396 npm run smoke:orders` (the defaults are a build of its own per run of check:orders (`chartbridge-orders-<pid>.exe` in `$TMPDIR` or `/tmp`, deleted after), `/tmp/chartbridge-check.dll`
 and port 8796).
 
 Keep `CHART_STYLE.md` in step with the code, add a line to `CHANGELOG.md`, and bump the version in

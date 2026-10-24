@@ -284,6 +284,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         // the market is shut (Saturday, and Sunday before the 18:00 open). Never premarket, in regular hours or in the evening
         // session, so a Range or tick chart load is never held behind a session's trades while Anthony may be watching. The start's
         // catch-up waits for the next window too.
+        // Review of #71 (MEDIUM 2): a new 1 second request starts only up to 17:50 New York (the window's end less StartMargin1s), so one
+        // that runs long (up to Request1sTimeoutMs) is not out when the evening session opens. Sends may go on to 18:00.
+        public static TimeSpan StartMargin1s = TimeSpan.FromMinutes(10);
+        public static bool In1sStartWindow(DateTime et)
+        {
+            if (!In1sWindow(et)) return false;
+            if (et.DayOfWeek == DayOfWeek.Saturday) return true;
+            return et.TimeOfDay < TimeSpan.FromHours(18) - StartMargin1s;   // a weekday's and Sunday's window both end at 18:00
+        }
+        private static DateTime NowEt() { return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(UtcNow(), DateTimeKind.Utc), ChartBridgeTime.Eastern); }
+
         public static bool In1sWindow(DateTime et)
         {
             TimeSpan tod = et.TimeOfDay;
@@ -661,7 +672,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void Plan1s(Func<bool> stopping, DateTime nowEt, List<DateTime> sessions)
         {
             if (!OneSecondOn) { state1s = "off"; return; }
-            if (!In1sWindow(nowEt)) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend"; return; }
+            nowEt = NowEt();   // review of #71 (MEDIUM 2): the pass's 1-minute requests may have taken minutes: the clock now, not the pass's start
+            if (!In1sStartWindow(nowEt)) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend (a request starts by 17:50)"; return; }
             string[] roots = Roots1s.Where(r => Roots.Contains(r)).ToArray();   // only roots whose 1-minute bars go too (barsRoots)
             foreach (BarsJob j in Wanted(sessions, roots, FillJobs(sessions)))
             {
@@ -674,6 +686,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (GaveUp.Contains(k)) continue;
                     if (RetryAt.TryGetValue(k, out notBefore) && UtcNow() < notBefore) continue;
                 }
+                if (!In1sStartWindow(NowEt())) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend (a request starts by 17:50)"; return; }   // and again right before it
                 Outcome o = Fetch1s(j, stopping);
                 if (o == Outcome.Done) { try { ChartBridgeBars1sQueue.Flush(stopping); } catch (Exception ex) { Note1s("1 second bars send error: " + ex.Message); } }
                 return;   // one a pass
@@ -749,7 +762,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (err != null) { Later1s(j, "could not save the 1 second bars: " + err); return Outcome.Later; }
             lock (RetryAt) { string k = Key1s(j.Key); RetryAt.Remove(k); Tries.Remove(k); LoggedFailure.Remove(k); }
             error1s = "";
-            lastBuild1s = j.Key + ": " + sb.Trades + " trades, " + sb.Rows.Count + " seconds, " + parts.Count + " messages, sides " + sb.Method +
+            lastBuild1s = j.Key + ": " + sb.Trades + " trades, " + sb.Rows.Count + " seconds, " + parts.Count + " messages, " + sb.Outside + " trades outside the session left out" +
+                          " (asked " + fromNt.ToString("yyyy-MM-dd HH:mm", Inv) + " to " + toNt.ToString("yyyy-MM-dd HH:mm", Inv) + " NinjaTrader time), sides " + sb.Method +
                           " (bidAsk " + sb.BidAsk + ", tickRule " + sb.TickRule + ", none " + sb.None + "), built in " + Math.Round(t.BuildMs) + " ms on NinjaTrader's thread" +
                           (sb.QuoteError != null ? "; NinjaTrader gave no bid and ask with the trades (" + sb.QuoteError + ")" : "");
             ChartBridgeServer.Log("1 second bars for " + inst.FullName + " session " + j.Session.ToString("yyyy-MM-dd", Inv) + ": " + lastBuild1s.Substring(j.Key.Length + 2) + "; queued for The Desk");

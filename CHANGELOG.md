@@ -37,7 +37,20 @@ ships, The Desk answers 404 on the two new paths and ChartBridge keeps everythin
   `decision_id` on those fills to The Desk. Single-account entries have none (their fills byte for byte as before). Kept across a
   restart in `decisions.txt` (5 days). The only order-path code touched: around each member's existing `PlaceOrder` call (a thread-local
   set and cleared) and one line in `ChartBridgeGroups.NoteNewOrder`; the Output window's group entry line names the decision.
-- `/diag`: `orderRecord` (with `observeMeanUs` and `decisions`), `bars.oneSecond`.
+- `/diag`: `orderRecord` (with `observeMeanUs` and `decisions`), `bars.oneSecond` (its `lastBuild` with the trades outside the
+  session left out and the request's from and to).
+- **The independent review of #71** (no safety problem in the order path; byte-identity confirmed): the PC updater test's made-up
+  versions are counted above the real ChartBridge; a new 1 second request starts only by 17:50 New York and the clock is read again
+  after the pass's 1-minute requests and before each request; the order record's `nt_order_id` (NinjaTrader's id at each event, the
+  one fills carry); `lastBuild` shows the trades outside the session and the request's span; `decisions.txt` saved by the account
+  timer itself; the order record forgets ended orders one at a time and never-ended ones after 7 days, its event thread never moves the
+  waiting lines, the file is appended to (written whole only after events left it), and a refused batch is halved and grows back;
+  `check:orders` builds to a path of its own per run unless `CHARTBRIDGE_ORDERS_EXE` is set.
+- **Rollout checklist (HOME first):** after `update-pc.ps1 -InstallChartBridge` and F5, (1) it compiles: NinjaTrader's
+  `OrderEventArgs.Time` and `AverageFillPrice` and `Bars.GetBid`/`GetAsk` are used for the first time; (2) after 16:15 New York,
+  `/diag` `bars.oneSecond.lastBuild`: the trades outside the session (NinjaTrader's answer may hold the day before too) and the sides'
+  method (`bidAsk` means NinjaTrader keeps the quote with its historical trades); (3) `/diag` `orderRecord`: `deskHasNoOrderRecord`
+  true until The Desk ships its side, `waiting` growing, nothing dropped; then WORK.
 - Tests: `nt8/check/RecordHarness.cs` (every order type and change, the quotes at submission and when not known, the stop record's
   events identical to 0.6.6's, the queue, today's Desk's 404, a malformed event, 20,000 events' cost on the event thread);
   `GroupsHarness.cs` DecisionIds (a group entry to 3 made-up accounts: the orders sent and the page's messages byte for byte the same

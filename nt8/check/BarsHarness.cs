@@ -1191,7 +1191,7 @@ public static class BarsHarness
             ChartBridgeBars1sQueue.Load();
             ChartBridgeBars.PlanOnce(null);
             Check(TicksMade(m1).Count == 0 && desk.All1s().Count == 8, "1s session: the next pass and a restart ask for nothing more");
-            Check(Diag().Contains("\"oneSecond\":{\"on\":true,") && Diag().Contains("\"lastSent\":{\"MNQ 12-26\":\"2026-09-30\"}") && Diag().Contains("11829 seconds, 8 messages, sides mixed"),
+            Check(Diag().Contains("\"oneSecond\":{\"on\":true,") && Diag().Contains("\"lastSent\":{\"MNQ 12-26\":\"2026-09-30\"}") && Diag().Contains("11829 seconds, 8 messages, 3 trades outside the session left out (asked 2026-09-29 00:00 to 2026-09-30 16:00 NinjaTrader time), sides mixed"),
                   "1s session: /diag bars.oneSecond: on, last sent, the last build: " + Regex.Match(Diag(), "\"oneSecond\":\\{.*\\}\\}$").Value);
         }
         finally { desk.Stop(); }
@@ -1239,6 +1239,16 @@ public static class BarsHarness
             new { At = W(2026, 10, 11, 18, 0), In = false, What = "Sunday 18:00 (the week's evening session opens)" },
             new { At = W(2026, 10, 12, 16, 15), In = true, What = "Monday 16:15" } })
             Check(ChartBridgeBars.In1sWindow(c.At) == c.In, "1s window: " + c.What + (c.In ? ": requests and sends may go" : ": nothing asked or sent"));
+        // review of #71 (MEDIUM 2): a new request starts by 17:50 (the window's end less 10 minutes); sends may go on to 18:00
+        foreach (var c in new[] {
+            new { At = W(2026, 10, 7, 16, 15), In = true, What = "Wednesday 16:15" },
+            new { At = W(2026, 10, 7, 17, 49), In = true, What = "Wednesday 17:49" },
+            new { At = W(2026, 10, 7, 17, 50), In = false, What = "Wednesday 17:50" },
+            new { At = W(2026, 10, 7, 17, 59), In = false, What = "Wednesday 17:59" },
+            new { At = W(2026, 10, 10, 23, 59), In = true, What = "Saturday 23:59" },
+            new { At = W(2026, 10, 11, 17, 49), In = true, What = "Sunday 17:49" },
+            new { At = W(2026, 10, 11, 17, 50), In = false, What = "Sunday 17:50" } })
+            Check(ChartBridgeBars.In1sStartWindow(c.At) == c.In, "1s start window: " + c.What + (c.In ? ": a request may start" : ": no new request (one may run past 18:00)"));
     }
 
     static void OneSecondRthAndOnePerPass(string dir)
@@ -1275,6 +1285,25 @@ public static class BarsHarness
             Check(inRth == 0 && desk.All1s().Count - posted == 1, "1s RTH: a waiting set is not posted in regular trading hours; at 16:20 ET it goes");
             // the start's catch-up outside the window waits for it: a start at 08:00 ET (premarket) and at 19:00 ET (evening session)
             // asks nothing; at 16:15 it goes; Saturday any time; Sunday 18:00 nothing
+            // review of #71 (MEDIUM 2): the pass's 1-minute requests take time: the clock is read again before a 1 second request.
+            // A pass that starts at 17:45 and whose minute answer comes at 17:52 (or 18:01) asks for no trades.
+            foreach (int doneAt in new[] { 52, 61 })
+            {
+                Desk dl = Fresh1s(dir, "MNQ", EtToUtc(W(2026, 9, 30, 17, 45)));
+                try
+                {
+                    DateTime clk = EtToUtc(W(2026, 9, 30, 17, 45));
+                    ChartBridgeBars.UtcNow = () => clk;
+                    BarsRequest.AutoAnswer = r => { if (!IsTicks1s(r)) clk = EtToUtc(W(2026, 9, 30, 17, 0)).AddMinutes(doneAt); return AnswerLikeNt(r); };
+                    dl.Status1s = body => 200;
+                    ChartBridgeBars.CatchUpSessions = 1;
+                    int l0 = MadeCount();
+                    ChartBridgeBars.PlanOnce(null);
+                    Check(dl.All().Count == 1 && TicksMade(l0).Count == 0 && Diag().Contains("(a request starts by 17:50)"),
+                          "1s review of #71: a pass from 17:45 whose minute request ends at " + (doneAt >= 60 ? "18:01" : "17:" + doneAt) + ": the clock read again, no tick request");
+                }
+                finally { BarsRequest.AutoAnswer = AnswerLikeNt; dl.Stop(); }
+            }
             foreach (var c in new[] {
                 new { At = W(2026, 10, 9, 8, 0), Goes = false, What = "a Friday 08:00 start (premarket)" },
                 new { At = W(2026, 10, 8, 19, 0), Goes = false, What = "a Thursday 19:00 start (evening session)" },

@@ -1102,8 +1102,10 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
   shut** (all Saturday, and Sunday before the 18:00 open): never premarket, in regular hours or in the evening session, so a Range or
   tick chart load is never held behind a session's trades while Anthony may be watching (the coordinator's ruling, 2026-10-24). The
   start's catch-up waits for the next window too (stricter than the 1-minute bars, whose start catch-up may run at any time). The
-  edges: 16:14 no, 16:15 yes, 17:59 yes, 18:00 no; Sunday 17:59 yes, Sunday 18:00 no. At most one 1 second request a pass
-  (once a minute), after the pass's 1-minute requests. A failure is tried again after 15 minutes, 3 times, then not until the next
+  edges: 16:14 no, 16:15 yes, 17:59 yes, 18:00 no; Sunday 17:59 yes, Sunday 18:00 no. **A new request starts only by 17:50**
+  (the window's end less 10 minutes; Saturday all day), so one that runs long is not out when the evening session opens; the clock is
+  read again after the pass's 1-minute requests and right before each 1 second request (review of #71). Sends may go on to 18:00.
+  At most one 1 second request a pass (once a minute), after the pass's 1-minute requests. A failure is tried again after 15 minutes, 3 times, then not until the next
   start.
 - **The rows, on NinjaTrader's thread in one pass** (no copy of the trades is kept): each trade of the session (UTC `[open,
   close)`; the hours before the open in the answer are left out) goes into the row of its UTC second. One row per second that had a
@@ -1147,8 +1149,11 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
   set aside for good; a new path answers `404` until The Desk has the store, and nothing is lost meanwhile. The message is the
   1-minute message's shape with `v` 2, `tf` `1s`, `cols`, the two volume columns and the part fields.
 - **`/diag` `bars.oneSecond`:** `on`, `state`, `roots`, `lastSent` (per contract), `waitingSets`, `waitingParts`, `setAside`,
-  `deskHasNo1s`, `gaveUp`, `lastBuild` (trades, seconds, messages, the sides' method and counts, the time on NinjaTrader's thread)
-  and `error`.
+  `deskHasNo1s`, `gaveUp`, `lastBuild` (trades, seconds, messages, the trades of the answer outside the session that were left out,
+  the request's from and to in NinjaTrader's time, the sides' method and counts, the time on NinjaTrader's thread) and `error`.
+  The request starts at the open's date, 12:00 AM: NinjaTrader's answer may hold the session before too (whole trading days); those
+  trades are left out by time and counted in `lastBuild` ("N trades outside the session left out"). A large count on the first run
+  shows NinjaTrader gave the day before as well (harmless: nothing is counted twice).
 - **The 1-minute bars are unchanged:** the same requests, messages and queue as 0.3.7 to 0.6.8, byte for byte (harness: the same
   session with the 1 second bars off and on gives the same 1-minute message).
 
@@ -3855,6 +3860,7 @@ NinjaTrader repeats included).
   | `source` | `nt8` |
   | `account`, `instrument`, `root` | as for fills (`instrument` NinjaTrader's contract name, `root` its master instrument) |
   | `order_id` | NinjaTrader's order id as ChartBridge first saw it, kept for the order's life; an order with no id yet gets `cb<start>-<n>`, `<start>` 6 hex characters new at each ChartBridge start (so two starts never share one) |
+  | `nt_order_id` | NinjaTrader's order id at this event (text, 64), or null when it has none yet. On some connections the id is empty or temporary at `Initialized` and `Submitted` and changes later; the fills carry the final one, so The Desk matches fills by `nt_order_id` and groups an order's events by `order_id` (review of #71) |
   | `order_name`, `oco` | NinjaTrader's (a `CB#...` name for ChartBridge's own orders), or null |
   | `side` | `buy` (Buy, BuyToCover) or `sell` |
   | `kind` | `market`, `limit`, `stop` (stop market), `stopLimit`, `mit` or `other` |
@@ -3876,12 +3882,16 @@ NinjaTrader repeats included).
 - **Recording only, never in an order's way:** the order event only reads the event's values and adds a small snapshot to a queue in
   memory (and, at `new` and at a price change, reads the quote under three short locks); no file, no network and no JSON on
   NinjaTrader's event thread. Harness: 20,000 order events, about 5 microseconds each on Mono. Every 10 seconds the account timer
-  makes the events, saves `pending_orders.jsonl` next to `config.txt` (replaced atomically) when it changed, then sends the oldest
+  makes the events, saves `pending_orders.jsonl` next to `config.txt` when it changed (new events appended; the file replaced
+  atomically only after events left the queue, so a Desk answering 404 for days never makes it rewrite the whole file), then sends the oldest
   batch (at most 500, 10 seconds a request). ChartBridge's stop saves it too, after it stops watching the accounts. A hard crash or a
-  power cut can lose up to the last 10 seconds of events. At most 20,000 events wait: past that the oldest are dropped, counted in
-  `/diag` and said once.
-- **The Desk's answers:** `2xx` takes the batch (the answer's `rejected` list is logged, as for stops). `400`, `413` or `422`: sent one
-  at a time, a single bad event set aside in `rejected_orders.jsonl`. `404` (a Desk without `POST /api/order-events`, today's): every
+  power cut can lose up to the last 10 seconds of events (an event cut short by one is skipped when read). At most 20,000 events wait:
+  past that the oldest are dropped (on the timer; the event thread only drops its own oldest snapshot past 20,000), counted in `/diag`
+  and said once. What ChartBridge remembers per order (to tell a change from a repeat): the last 20,000 ended orders, the oldest
+  forgotten one at a time, and an order with no end for 7 days is forgotten.
+- **The Desk's answers:** `2xx` takes the batch (the answer's `rejected` list is logged, as for stops), and the next batch may be twice
+  as big (up to 500). `400`, `413` or `422`: the batch is halved until the bad event goes alone, then set aside in
+  `rejected_orders.jsonl`. `404` (a Desk without `POST /api/order-events`, today's): every
   event stays (memory and file) and is offered again every 5 minutes (said once), so nothing is lost before The Desk's side ships.
   Anything else: tried again on the next 10 seconds. The Desk stores an event once (`start`, `seq` and `order_id` name it), so a resend
   is safe.
@@ -3904,7 +3914,7 @@ share the entry's `CB#` tag) carries it too. Another account's order placed mean
 - **Single-account entries have none** (no `decision_id` on their fills, null in the order record): The Desk counts such an entry as
   its own decision. Agent, bot and copier entries have none either (the agents' group plans are not the page's group ticket).
 - **Kept across a restart:** `decisions.txt` next to `config.txt` (`tag<TAB>decision<TAB>UTC ms`, written by ChartBridge on the 10 s
-  timer and at its stop, 5 days), so an exit after an NT8 restart still carries its entry's decision.
+  account timer, whether or not the order record is on, and at its stop, 5 days), so an exit after an NT8 restart still carries its entry's decision.
 - **The orders sent are unchanged:** the entry, its size, name, price, bracket and every message to the page are byte for byte the same
   with the id as without it (harness: the same group entry to 3 made-up accounts with the id off, which is 0.6.8's path, and on). The
   Output window's group entry line ends with `(decision d...)`.

@@ -87,7 +87,7 @@ public static class RecordHarness
             Check(FileLines().Length == 0 && ChartBridgeOrderRecord.Waiting() == 4, "order record: the order event only adds to the queue in memory (4 events; the file is written on the timer's send)");
             string[] q = Lines();
             string sentAt = q.Length > 0 ? q[0] : "";
-            Check(q.Length == 4 && sentAt.StartsWith("{\"v\":1,\"source\":\"nt8\",\"account\":\"SIM-R\",\"instrument\":\"MNQ 12-26\",\"root\":\"MNQ\",\"order_id\":\"m1\",\"order_name\":\"CB#0a1b2c3d s20 t40\",\"oco\":null,\"side\":\"buy\",\"kind\":\"market\",\"nt_state\":\"Initialized\",\"state\":\"working\",\"limit_price\":null,\"stop_price\":null,\"qty\":2,\"filled\":0,\"avg_fill_price\":null,\"role\":\"entry\",\"by\":null,\"decision_id\":null,\"change\":\"new\",\"quote\":{\"bid\":24999.75,\"ask\":25000,\"last\":25000,\"why\":null},") &&
+            Check(q.Length == 4 && sentAt.StartsWith("{\"v\":1,\"source\":\"nt8\",\"account\":\"SIM-R\",\"instrument\":\"MNQ 12-26\",\"root\":\"MNQ\",\"order_id\":\"m1\",\"nt_order_id\":\"m1\",\"order_name\":\"CB#0a1b2c3d s20 t40\",\"oco\":null,\"side\":\"buy\",\"kind\":\"market\",\"nt_state\":\"Initialized\",\"state\":\"working\",\"limit_price\":null,\"stop_price\":null,\"qty\":2,\"filled\":0,\"avg_fill_price\":null,\"role\":\"entry\",\"by\":null,\"decision_id\":null,\"change\":\"new\",\"quote\":{\"bid\":24999.75,\"ask\":25000,\"last\":25000,\"why\":null},") &&
                   sentAt.EndsWith(",\"seq\":1,\"at_ms\":1792590300000}") && F(sentAt, "nt_time_ms") != "null",
                   "order record: a market entry at submission: every field, role entry, and the bid, ask and last ChartBridge knew then: " + sentAt);
             Check(q.Length == 4 && F(q[1], "change") == "\"state\"" && F(q[1], "quote") == "null" && F(q[2], "nt_state") == "\"Accepted\"" && F(q[3], "change") == "\"state,filled\"" && F(q[3], "filled") == "2" && F(q[3], "avg_fill_price") == "25000.25" && F(q[3], "state") == "\"filled\"",
@@ -188,14 +188,21 @@ public static class RecordHarness
                   FileLines().Length == 20,
                   "order record: today's Desk answers 404: every event stays (memory and file), /diag says so: " + ChartBridgeOrderRecord.DiagJson());
             int posts = 0; lock (got) posts = got.Count;
+            // review of #71 (LOW 7): while The Desk answers 404, new events are appended to the file, never the whole file again
+            Order ap = new Order { Account = sim, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Limit, Quantity = 1, LimitPrice = 24700, OrderId = "ap1", OrderState = OrderState.Working };
+            clock += 1; Update(sim, ap);
+            ChartBridgeOrderRecord.SaveNow();
+            Check(ChartBridgeOrderRecord.lastWrite == "append" && FileLines().Length == 21 && FileLines().Last().Contains("\"order_id\":\"ap1\""), "order record (review of #71): while The Desk answers 404 a new event is appended, the file not written whole (" + ChartBridgeOrderRecord.lastWrite + ")");
+            ChartBridgeOrderRecord.SaveNow();
+            Check(ChartBridgeOrderRecord.lastWrite == "append" && FileLines().Length == 21, "order record: nothing new, nothing written");
             ChartBridgeOrderRecord.Flush(); Thread.Sleep(300);
             lock (got) Check(got.Count == posts, "order record: not offered again before the retry time (5 minutes in NinjaTrader)");
             clock += 100; mkt.OrderState = OrderState.Cancelled; Update(sim, mkt);   // still recorded meanwhile
             hasRecord = true;
             Thread.Sleep(1600);
             Check(WaitFor(() => { ChartBridgeOrderRecord.Flush(); return ChartBridgeOrderRecord.Waiting() == 0; }, 15000) && Lines().Length == 0 && ChartBridgeOrderRecord.DiagJson().Contains("\"deskHasNoOrderRecord\":false"),
-                  "order record: once The Desk has the record, all 21 go and the file empties: " + ChartBridgeOrderRecord.DiagJson());
-            lock (got) Check(got.Last().StartsWith("/api/order-events [{\"v\":1,\"source\":\"nt8\"") && got.Where(x => x.StartsWith("/api/order-events [")).Last().Split(new[] { "\"order_id\"" }, StringSplitOptions.None).Length - 1 == 21,
+                  "order record: once The Desk has the record, all 22 go and the file empties: " + ChartBridgeOrderRecord.DiagJson());
+            lock (got) Check(got.Last().StartsWith("/api/order-events [{\"v\":1,\"source\":\"nt8\"") && got.Where(x => x.StartsWith("/api/order-events [")).Last().Split(new[] { "\"order_id\"" }, StringSplitOptions.None).Length - 1 == 22,
                              "order record: posted to POST /api/order-events as one JSON list");
             // a malformed one: one at a time, only it set aside
             File.Delete(Path.Combine(ChartBridgeConfig.Folder, "rejected_orders.jsonl"));
@@ -205,8 +212,54 @@ public static class RecordHarness
             foreach (string x in new[] { "{\"v\":1,\"source\":\"nt8\",\"order_id\":\"bad\",\"at_ms\":1}", "{\"v\":1,\"source\":\"nt8\",\"order_id\":\"good\",\"at_ms\":2}" }) lock (typeof(ChartBridgeOrderRecord).GetField("Sync", PS).GetValue(null)) { pl.Add(x); ps.Add(x); }
             string aside = Path.Combine(ChartBridgeConfig.Folder, "rejected_orders.jsonl");
             Check(WaitFor(() => { ChartBridgeOrderRecord.Flush(); return ChartBridgeOrderRecord.Waiting() == 0; }, 15000) && File.Exists(aside) && File.ReadAllText(aside).Contains("\"bad\"") && !File.ReadAllText(aside).Contains("\"good\""),
-                  "order record: a batch The Desk calls malformed: one at a time, only the bad event set aside");
+                  "order record: a batch The Desk calls malformed: halved until the bad event goes alone, only it set aside");
+            // review of #71 (LOW 7): the batch grows back after the refusal (doubling on each batch taken)
+            int b1 = ChartBridgeOrderRecord.BatchSize;
+            for (int i = 0; i < 6; i++) { Order g = new Order { Account = sim, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Limit, Quantity = 1, LimitPrice = 24800 + i, OrderId = "g" + i, OrderState = OrderState.Working }; clock += 1; Update(sim, g); }
+            Check(WaitFor(() => { ChartBridgeOrderRecord.Flush(); return ChartBridgeOrderRecord.Waiting() == 0; }, 15000) && ChartBridgeOrderRecord.BatchSize >= 8 && b1 <= 2,
+                  "order record (review of #71): after a refusal the batch size grows back (" + b1 + " then " + ChartBridgeOrderRecord.BatchSize + ")");
 
+            // review of #71 (MEDIUM 3): an id NinjaTrader gives (or changes) after the first event: order_id stays as first seen,
+            // nt_order_id is NinjaTrader's id at each event (the one the fills carry)
+            {
+                int n0 = Lines().Length;
+                Order idl = new Order { Account = sim, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Market, Quantity = 1, OrderId = "", OrderState = OrderState.Initialized };
+                clock += 10; Update(sim, idl);
+                idl.OrderId = "TMP-7"; idl.OrderState = OrderState.Submitted; clock += 10; Update(sim, idl);
+                idl.OrderId = "BRK-123456"; idl.OrderState = OrderState.Accepted; clock += 10; Update(sim, idl);
+                string[] il = Lines().Skip(n0).ToArray();
+                Check(il.Length == 3 && Regex.IsMatch(F(il[0], "order_id"), "^\"cb[0-9a-f]{6}-[0-9]+\"$") && il.All(x => F(x, "order_id") == F(il[0], "order_id")) &&
+                      F(il[0], "nt_order_id") == "null" && F(il[1], "nt_order_id") == "\"TMP-7\"" && F(il[2], "nt_order_id") == "\"BRK-123456\"",
+                      "order record (review of #71): order_id as first seen on every event; nt_order_id NinjaTrader's id at each (none, temporary, final): " + string.Join(" | ", il.Select(x => F(x, "order_id") + " " + F(x, "nt_order_id"))));
+                ChartBridgeOrderRecord.Clear(); try { File.Delete(Pending); } catch (Exception) { } ChartBridgeOrderRecord.Load();   // not part of the cases below
+            }
+            // review of #71 (LOW 6): ended orders forgotten oldest first, one at a time; a never-ended order after 7 days
+            {
+                ChartBridgeOrderRecord.Clear();
+                int maxWas = ChartBridgeOrderRecord.MaxEnded;
+                ChartBridgeOrderRecord.MaxEnded = 3;
+                List<Order> ended = Enumerable.Range(0, 5).Select(i => new Order { Account = sim, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Market, Quantity = 1, OrderId = "e" + i, OrderState = OrderState.Filled, Filled = 1, AverageFillPrice = 25000 }).ToList();
+                foreach (Order o in ended) { clock += 1; Update(sim, o); }
+                int known = ChartBridgeOrderRecord.Known(), w0 = ChartBridgeOrderRecord.Waiting();
+                clock += 1; Update(sim, ended[4]); Update(sim, ended[2]);   // their final event again, soon after
+                Check(known == 3 && ChartBridgeOrderRecord.Waiting() == w0, "order record (review of #71): past MaxEnded the oldest ended orders go one at a time (3 kept of 5); a recent final event repeated is still no new event");
+                Order open = new Order { Account = sim, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Limit, Quantity = 1, LimitPrice = 24000, OrderId = "never", OrderState = OrderState.Working };
+                clock += 1; Update(sim, open);
+                clock += 6 * 86400000.0; ChartBridgeOrderRecord.SaveNow();
+                int six = ChartBridgeOrderRecord.Known();
+                clock += 1.1 * 86400000.0; ChartBridgeOrderRecord.SaveNow();
+                Check(six == 4 && ChartBridgeOrderRecord.Known() == 3, "order record (review of #71): an order never ended is kept 7 days, then forgotten on the timer (" + six + ", " + ChartBridgeOrderRecord.Known() + ")");
+                ChartBridgeOrderRecord.MaxEnded = maxWas;
+                // a full queue on the event thread: only the snapshots' own queue drops its oldest (a Dequeue)
+                int capWas = ChartBridgeOrderRecord.Cap;
+                ChartBridgeOrderRecord.Cap = 3; ChartBridgeOrderRecord.Clear(); ChartBridgeOrderRecord.Load();
+                int before = ChartBridgeOrderRecord.Waiting();
+                for (int i = 0; i < 5; i++) { Order c = new Order { Account = sim, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Limit, Quantity = 1, LimitPrice = 24500 + i, OrderId = "c" + i, OrderState = OrderState.Working }; clock += 1; Update(sim, c); }
+                string[] capped = Lines();
+                ChartBridgeOrderRecord.Cap = capWas;
+                Check(capped.Length == 3 && capped[0].Contains("\"order_id\":\"c2\"") && ChartBridgeOrderRecord.DiagJson().Contains("\"dropped\":"), "order record (review of #71): at the cap the oldest go, the newest 3 kept: " + string.Join(" ", capped.Select(x => F(x, "order_id"))) + " (" + before + " before)");
+                ChartBridgeOrderRecord.Clear(); try { File.Delete(Pending); } catch (Exception) { } ChartBridgeOrderRecord.Load();
+            }
             // the event thread's cost: 20,000 order events through ChartBridge's own handler
             ChartBridgeOrderRecord.Clear();
             int n = 20000;

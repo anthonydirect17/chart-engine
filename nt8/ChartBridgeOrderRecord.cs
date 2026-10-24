@@ -211,7 +211,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // on the timer.
         private sealed class Snap
         {
-            public Order O; public string Account, Instrument, Root, Id, Name, Oco, Change;
+            public Order O; public string Account, Instrument, Root, Id, NtId, Name, Oco, Change;
             public OrderType Type; public bool Buy;
             public OrderState State; public double Limit, Stop, Avg, AtMs; public int Qty, Filled; public DateTime NtTime;
             public bool Quoted; public double Bid, Ask, Last; public string QuoteWhy;
@@ -222,8 +222,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly object Seen = new object();
         private static readonly Dictionary<Order, Prev> Last = new Dictionary<Order, Prev>();
         private static readonly Dictionary<Order, string> FirstId = new Dictionary<Order, string>();
-        private static readonly HashSet<Order> Ended = new HashSet<Order>();
-        private const int MaxEnded = 20000;
+        // Review of #71 (LOW 6): the ended orders are forgotten oldest first, one at a time past MaxEnded (never all at once, so a final
+        // event repeated soon after is still known), and an order seen with no end for MaxAgeMs (7 days) is forgotten on the timer.
+        private static readonly Queue<Order> Ended = new Queue<Order>();
+        private static readonly Dictionary<Order, double> SeenAt = new Dictionary<Order, double>();   // first seen (UTC ms), every order kept
+        public static int MaxEnded = 20000;
+        public static double MaxAgeMs = 7 * 86400000.0;
         private static readonly Regex ByRx = new Regex("^(page|bot|copier|agent:[a-z][a-z0-9]{0,11})$");
         private static long idSeq, eventSeq, observed, queuedEvents, observeTicks;
         private static string start = NewStart();
@@ -234,7 +238,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static void Clear()
         {
-            lock (Seen) { Last.Clear(); FirstId.Clear(); Ended.Clear(); }
+            lock (Seen) { Last.Clear(); FirstId.Clear(); Ended.Clear(); SeenAt.Clear(); }
             lock (Sync) Snaps.Clear();
             start = NewStart();   // the per-start part of a "cb" id and of every event's seq (the stop record's known limit, fixed here)
             Interlocked.Exchange(ref idSeq, 0); Interlocked.Exchange(ref eventSeq, 0);
@@ -277,17 +281,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     id = string.IsNullOrEmpty(o.OrderId) ? "cb" + start + "-" + Interlocked.Increment(ref idSeq).ToString(CultureInfo.InvariantCulture) : o.OrderId;
                     FirstId[o] = id;
+                    SeenAt[o] = NowMs();
                 }
                 Last[o] = new Prev { State = st, Limit = lp, Stop = sp, Qty = qty, Filled = filled };
-                if (IsDone(st))
+                if (IsDone(st) && !(had && IsDone(p.State)))
                 {
-                    Ended.Add(o);
-                    if (Ended.Count > MaxEnded) { foreach (Order x in Ended) { Last.Remove(x); FirstId.Remove(x); } Ended.Clear(); }
+                    Ended.Enqueue(o);
+                    while (Ended.Count > MaxEnded) { Order x = Ended.Dequeue(); Last.Remove(x); FirstId.Remove(x); SeenAt.Remove(x); }
                 }
             }
             Snap s = new Snap
             {
-                O = o, Account = a.Name ?? "", Instrument = inst.FullName ?? "", Root = inst.MasterInstrument.Name ?? "", Id = id, Name = o.Name, Oco = o.Oco, Change = change,
+                O = o, Account = a.Name ?? "", Instrument = inst.FullName ?? "", Root = inst.MasterInstrument.Name ?? "", Id = id, NtId = o.OrderId, Name = o.Name, Oco = o.Oco, Change = change,
                 Type = o.OrderType, Buy = ChartBridgeOrders.GroupIsBuy(o), State = st, Limit = lp, Stop = sp, Qty = qty, Filled = filled, Avg = e.AverageFillPrice, NtTime = e.Time,
                 AtMs = NowMs(), Seq = Interlocked.Increment(ref eventSeq)
             };
@@ -301,12 +306,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool sayDrop = false;
             lock (Sync)
             {
-                Snaps.Add(s); Interlocked.Increment(ref queuedEvents);
-                while (Snaps.Count + PendingList.Count > Cap)
-                {
-                    if (PendingList.Count > 0) { PendingSet.Remove(PendingList[0]); PendingList.RemoveAt(0); dirty = true; } else Snaps.RemoveAt(0);
-                    dropped++; if (!droppedSaid) { droppedSaid = true; sayDrop = true; }
-                }
+                // review of #71 (LOW 7): only the snapshots' own queue here (a Dequeue, never a move of the waiting lines); the timer keeps
+                // snapshots and lines together within Cap, dropping the oldest lines first
+                Snaps.Enqueue(s); Interlocked.Increment(ref queuedEvents);
+                if (Snaps.Count > Cap) { Snaps.Dequeue(); dropped++; if (!droppedSaid) { droppedSaid = true; sayDrop = true; } }
             }
             Interlocked.Add(ref observeTicks, System.Diagnostics.Stopwatch.GetTimestamp() - t0);
             if (sayDrop) ChartBridgeServer.Log("order record: more than " + Cap + " order events wait for The Desk; the oldest are dropped (counted in /diag orderRecord.dropped; said once)");
@@ -330,6 +333,7 @@ namespace NinjaTrader.NinjaScript.AddOns
              .Append(",\"instrument\":").Append(CbJson.Str(s.Instrument))
              .Append(",\"root\":").Append(CbJson.Str(s.Root))
              .Append(",\"order_id\":").Append(CbJson.Str(Cut(s.Id)))
+             .Append(",\"nt_order_id\":").Append(string.IsNullOrEmpty(s.NtId) ? "null" : CbJson.Str(Cut(s.NtId)))   // review of #71: NinjaTrader's id now (fills carry the final one)
              .Append(",\"order_name\":").Append(name.Length == 0 ? "null" : CbJson.Str(Cut(name)))
              .Append(",\"oco\":").Append(string.IsNullOrEmpty(s.Oco) ? "null" : CbJson.Str(Cut(s.Oco)))
              .Append(",\"side\":").Append(s.Buy ? "\"buy\"" : "\"sell\"")
@@ -360,7 +364,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- the queue (the stop record's rules, but a 404 keeps the events)
         private static readonly object Sync = new object();
-        private static readonly List<Snap> Snaps = new List<Snap>();
+        private static readonly Queue<Snap> Snaps = new Queue<Snap>();
+        private static readonly List<string> Appended = new List<string>();   // lines added since the file was last written (it is appended to)
+        private static bool rewrite;                                          // a line left the queue since: the file is written whole
         private static readonly List<string> PendingList = new List<string>();
         private static readonly HashSet<string> PendingSet = new HashSet<string>();
         private static readonly Regex RejectedRx = new Regex("\"rejected\"\\s*:\\s*\\[(.*?)\\]\\s*[,}]", RegexOptions.Singleline);
@@ -369,7 +375,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static int TimeoutMs = 10000;
         public static int NoDeskRetryMs = 300000;    // after a 404 (a Desk without POST /api/order-events yet): offered again every 5 minutes
         private static int sending, batchSize = FullBatch;
-        private static bool lastFailed, dirty, droppedSaid;
+        private static bool lastFailed, droppedSaid;
         private static volatile bool deskHasNone;
         private static double noDeskUntil;
         public static int Cap = 20000;
@@ -385,7 +391,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             deskHasNone = false; noDeskUntil = 0;
             lock (Sync)
             {
-                PendingList.Clear(); PendingSet.Clear(); dirty = false;
+                PendingList.Clear(); PendingSet.Clear(); Appended.Clear(); rewrite = false;
                 int bad = 0;
                 try
                 {
@@ -399,21 +405,29 @@ namespace NinjaTrader.NinjaScript.AddOns
                         }
                 }
                 catch (Exception ex) { ChartBridgeServer.Log("could not read pending order events: " + ex.Message); }
-                if (bad > 0) ChartBridgeServer.Log("skipped " + bad + " unreadable line(s) in pending_orders.jsonl");
+                if (bad > 0) { ChartBridgeServer.Log("skipped " + bad + " unreadable line(s) in pending_orders.jsonl"); rewrite = true; }
             }
         }
 
         // The snapshots made into events (JSON), added to the waiting lines. Never on NinjaTrader's event thread.
         private static void Build()
         {
+            Prune();
             List<Snap> take;
             lock (Sync) { if (Snaps.Count == 0) return; take = Snaps.ToList(); Snaps.Clear(); }
             List<string> lines = new List<string>(take.Count);
             foreach (Snap s in take) { try { lines.Add(EventJson(s)); } catch (Exception ex) { ChartBridgeServer.Log("order record: an event could not be made (" + ex.Message + ")"); } }
             lock (Sync)
             {
-                foreach (string l in lines) if (PendingSet.Add(l)) { PendingList.Add(l); dirty = true; }
-                while (PendingList.Count > Cap) { PendingSet.Remove(PendingList[0]); PendingList.RemoveAt(0); dropped++; }
+                foreach (string l in lines) if (PendingSet.Add(l)) { PendingList.Add(l); Appended.Add(l); }
+                int over = PendingList.Count - Cap;
+                if (over > 0)
+                {
+                    for (int i = 0; i < over; i++) PendingSet.Remove(PendingList[i]);
+                    PendingList.RemoveRange(0, over);   // once, on the timer
+                    dropped += over; rewrite = true;
+                    if (!droppedSaid) { droppedSaid = true; ChartBridgeServer.Log("order record: more than " + Cap + " order events wait for The Desk; the oldest are dropped (counted in /diag orderRecord.dropped; said once)"); }
+                }
             }
         }
 
@@ -422,16 +436,30 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (SaveLock)
             {
-                string[] lines;
-                lock (Sync) { if (!dirty) return; lines = PendingList.ToArray(); dirty = false; }
+                // review of #71 (LOW 7): written only when the queue changed since the last write: new lines are appended (a line cut
+                // short by a crash is skipped when read), and the file is written whole only after lines left the queue (sent, set aside,
+                // dropped). So a Desk answering 404 for days costs an append of the new events, never a rewrite every 10 s.
+                string[] lines; bool whole;
+                lock (Sync)
+                {
+                    whole = rewrite || !File.Exists(File_);
+                    if (!whole && Appended.Count == 0) return;
+                    lines = whole ? PendingList.ToArray() : Appended.ToArray();
+                    Appended.Clear(); rewrite = false;
+                }
                 try
                 {
                     Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                    string tmp = File_ + ".tmp";
-                    File.WriteAllLines(tmp, lines);
-                    if (File.Exists(File_)) File.Replace(tmp, File_, null); else File.Move(tmp, File_);
+                    if (whole)
+                    {
+                        string tmp = File_ + ".tmp";
+                        File.WriteAllLines(tmp, lines);
+                        if (File.Exists(File_)) File.Replace(tmp, File_, null); else File.Move(tmp, File_);
+                    }
+                    else File.AppendAllLines(File_, lines);
+                    lastWrite = whole ? "whole" : "append";
                 }
-                catch (Exception ex) { lock (Sync) dirty = true; ChartBridgeServer.Log("could not save pending order events: " + ex.Message); }
+                catch (Exception ex) { lock (Sync) rewrite = true; ChartBridgeServer.Log("could not save pending order events: " + ex.Message); }
             }
         }
 
@@ -439,6 +467,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void SaveNow() { Build(); SaveIfDirty(); }
 
         public static int Waiting() { lock (Sync) return PendingList.Count + Snaps.Count; }
+        public static string lastWrite = "";   // the harness: how the last save wrote the file ("whole" or "append")
+        public static int BatchSize { get { return batchSize; } }
+
+        // On the timer: orders seen with no end for MaxAgeMs are forgotten (an order NinjaTrader never ended for us).
+        private static void Prune()
+        {
+            double cut = NowMs() - MaxAgeMs;
+            lock (Seen)
+            {
+                List<Order> old = null;
+                foreach (KeyValuePair<Order, double> kv in SeenAt) if (kv.Value < cut) { if (old == null) old = new List<Order>(); old.Add(kv.Key); }
+                if (old == null) return;
+                foreach (Order o in old) { Prev p; if (Last.TryGetValue(o, out p) && IsDone(p.State)) continue; Last.Remove(o); FirstId.Remove(o); SeenAt.Remove(o); }
+            }
+        }
+        public static int Known() { lock (Seen) return Last.Count; }
 
         // The event thread's own cost, for /diag and the harness: the mean time Observe took, in microseconds.
         public static double ObserveMeanUs()
@@ -465,7 +509,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 HashSet<string> gone = new HashSet<string>(batch);
                 PendingList.RemoveAll(gone.Contains);
                 foreach (string f in batch) PendingSet.Remove(f);
-                dirty = true;
+                rewrite = true;
             }
         }
 
@@ -488,7 +532,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     Build();
                     SaveIfDirty();
-                    try { ChartBridgeDecisions.SaveIfDirty(); } catch (Exception) { }
                     if (deskHasNone && ChartBridgeTime.NowUtcMs() < noDeskUntil) return;
                     lock (Sync) batch = PendingList.Take(batchSize).ToArray();
                     if (batch.Length == 0) return;
@@ -510,7 +553,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Remove(batch);
                     SaveIfDirty();
                     Interlocked.Add(ref sent, batch.Length);
-                    if (batch.Length > 1) batchSize = FullBatch;
+                    batchSize = Math.Min(FullBatch, Math.Max(batch.Length, batchSize) * 2);   // review of #71 (LOW 7): grows back after a refusal
                     NoteRejected(text);
                     lock (Sync) more = PendingList.Count > 0;
                     if (lastFailed || deskHasNone) ChartBridgeServer.Log("The Desk is taking order events.");
@@ -531,13 +574,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                     else if (code == 400 || code == 413 || code == 422)
                     {
-                        if (batch.Length > 1) batchSize = 1;
+                        if (batch.Length > 1) batchSize = Math.Max(1, batch.Length / 2);   // halved until the bad one goes alone
                         else
                         {
                             try { File.AppendAllLines(SetAsideFile, batch); } catch (Exception) { }
                             Remove(batch);
                             SaveIfDirty();
-                            batchSize = FullBatch;
                             Interlocked.Increment(ref setAside);
                             ChartBridgeServer.Log("The Desk refused an order event (" + code + "); it was set aside in rejected_orders.jsonl");
                         }
