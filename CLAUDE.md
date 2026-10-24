@@ -3,9 +3,11 @@
 - This is Anthony's chart, locked as the charting standard for every project on 2026-09-29.
   `CHART_STYLE.md` is the spec; keep it and the code in step. Do not "improve" the look or the feel
   (the `motion` time constants) unless Anthony asks.
-- House style lives in Drive (`claude/design/HOUSE_STYLE.md`, `house-style.css`): one dark theme,
-  purple accent, crimson only in the logo, wordmark and active-nav bar, green/red only for trade sides
-  and P&L, IBM Plex Sans / Condensed / Mono.
+- House style V2 lives in Drive (`claude/design/HOUSE_STYLE_V2.md`, from 2026-10-24, the whole system):
+  one dark theme, black and charcoal with gold trim (gold also for the logo, wordmark and active-nav bar;
+  no crimson), green/red only for trade sides and P&L, IBM Plex Sans / Condensed / Mono. Candle colours
+  stay Anthony's choice (the "Black and gold" preset is optional). Motion is smooth everywhere, but a live
+  value is never eased or counted up and no animation delays an order action.
 - Anthony's writing style: no em dashes or en dashes in prose (docs, UI copy, commit messages).
 - The engine is one dependency-free file, `src/chart-engine.js`, usable as a `<script>` or from Node.
   Keep it that way.

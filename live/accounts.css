@@ -100,7 +100,7 @@
 .apg-fol { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .apg-fol > .b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apg-mark { flex: none; font: 700 9.5px/1 var(--ws-sans); letter-spacing: .08em; padding: 2px 4px; border-radius: 3px; border: 1px solid var(--ws-line2); color: var(--ws-muted); }
-.apg-mark.live { color: #FFE4EA; background: #9F1239; border-color: #E0445E; }
+.apg-mark.live { color: #140F06; background: #C9A55C; border-color: #E2C687; }
 /* 1.34.0: a saved follower row (it keeps its account out of group entries and the agents), and Remove beside it */
 .apg-mark.apg-fmark { color: #F5C977; border-color: #8A6A2A; }
 .apg-frm { margin-left: 4px; padding: 1px 6px; font-size: 11px; }
@@ -164,7 +164,7 @@
 .apg-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .apg-name > .b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apg-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: transparent; }
-.apg-dot.down { background: #E0445E; }
+.apg-dot.down { background: #FF7A7A; }
 .apg-dot.unk { background: var(--ws-muted); }
 .apg-flag { flex: none; font: 700 10px/14px var(--ws-sans); width: 14px; height: 14px; text-align: center; border-radius: 50%; color: #1A1206; background: #F5C977; cursor: help; }
 .apg-flag.off { display: none; }
@@ -172,11 +172,11 @@
 .apg-rtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .apg-track { display: block; width: 100%; max-width: 120px; height: 3px; border-radius: 2px; background: var(--ws-line2); overflow: hidden; }
 .apg-bar { display: block; height: 100%; background: #6FA8DC; }
-.apg-bar.apg-amber { background: #F5C977; } .apg-bar.apg-red { background: #E0445E; }
+.apg-bar.apg-amber { background: #F5C977; } .apg-bar.apg-red { background: #FF7A7A; }
 .apg-bn { width: 0; } .apg-b0 { width: 0; } .apg-b1 { width: 10%; } .apg-b2 { width: 20%; } .apg-b3 { width: 30%; } .apg-b4 { width: 40%; } .apg-b5 { width: 50%; }
 .apg-b6 { width: 60%; } .apg-b7 { width: 70%; } .apg-b8 { width: 80%; } .apg-b9 { width: 90%; } .apg-b10 { width: 100%; }
 .apg-more { padding: 0 6px; font-size: 14px; line-height: 16px; }
-.apg-more[aria-expanded="true"] { border-color: var(--ws-accent, #8B7CF6); }
+.apg-more[aria-expanded="true"] { border-color: var(--ws-accent, #C9A55C); }
 .apg-secrow { background: transparent; }
 .apg-sec { display: flex; align-items: center; gap: 10px; padding-top: 6px; border-bottom: 1px solid var(--ws-line2); }
 .apg-stitle { font: 600 11px var(--ws-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ws-muted); }
@@ -190,14 +190,14 @@
 .apg-acc-top { display: flex; justify-content: flex-end; gap: 6px; padding: 2px 0 4px; }
 /* 1.35.0: Update floors from The Desk: the list Anthony confirms once */
 .apg-floorsbtn { font-size: 11px; padding: 1px 8px; }
-.apg-floorsbtn[aria-expanded="true"] { border-color: var(--ws-accent, #8B7CF6); }
-.apg-floors { margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--ws-line2, #2A3645); border-radius: 8px; background: var(--ws-field, #0F151D); font-size: 12px; }
+.apg-floorsbtn[aria-expanded="true"] { border-color: var(--ws-accent, #C9A55C); }
+.apg-floors { margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--ws-line2, #2A2824); border-radius: 8px; background: var(--ws-field, #111114); font-size: 12px; }
 .apg-floors p { margin: 0 0 6px; }
 .apg-fl-list { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-direction: column; gap: 3px; }
 .apg-fl-row { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apg-fl-btns { display: flex; gap: 6px; flex-wrap: wrap; }
 .apg-alltg { font-size: 11px; padding: 1px 8px; }
-.apg-alltg[aria-pressed="true"] { border-color: var(--ws-accent, #8B7CF6); }
+.apg-alltg[aria-pressed="true"] { border-color: var(--ws-accent, #C9A55C); }
 /* in the drawer the type, the limits and their buttons take the width they need */
 .apg-drawer .apg-type, .apg-drawer .apg-my { overflow: visible; }
 .apg-drawer .apg-type .apg-ttext { flex: none; overflow: visible; }

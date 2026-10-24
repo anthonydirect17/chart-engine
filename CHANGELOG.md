@@ -1,5 +1,50 @@
 # Changelog
 
+## chart 1.39.0 (2026-10-24): house style V2, black and gold, on the chart page and the Markup Studio
+
+Anthony, 2026-10-24: "lets unify everything. I really liked the black gold look you showed and I think it should live
+through our entire system." Candles: "my colors for candles change all the time, You can add a black and gold pre-set,
+thats fine, but I change them - this is more of an overall theme change." Motion: "smooth everywhere where possible as far
+as we can go." Page and engine 1.39.0; ChartBridge does not change (no F5): the page works with ChartBridge 0.6.2 and later
+as 1.38.1 did (minChartBridge stays 0.6.2), so with 0.6.8.
+
+- **The page chrome** (the workspace, its panels, menus, popovers, dialogs, the ticket, the Accounts and Multi-Account
+  panels, the Agents panel's Drone sky, the League, Bot and Agent tabs' purple parts, the PIN pad, the Markup Studio, the demo
+  page) takes The Desk's V2 tokens (TheDesk PR #48): the black ground with a faint gold glow, charcoal panels, warm greys,
+  gold for the accent. Gold replaces the purple accent and the crimson everywhere: the logo (a black tile with a gold glyph
+  and border glow), the wordmark, Armed (gold with dark ink), the armed chart ring, the LIVE account marks; the Account page's
+  red room meter is the loss red. Green and red only for P&L and trade side. Pills for buttons and tabs, 14 px popovers and
+  dialogs with a gold border, a gold hairline along the top of panels and cards and under the top bar.
+- **The chart's own colors** in the default theme (ground `#050506`, regular-hours ground, grid, axes, crosshair, tags, the
+  exit and live dots, Jump to live, the padlock, the delta divider, the Colors panel): V2, every floor and pair rule of
+  CHART_STYLE.md kept (axis text 5.55:1, crosshair 3.57:1, divider 1.49:1, grid 1.14:1). The Background preset Dark is the V2
+  black; a ground saved as the V1 default `#080B10` (a Reset or a pick of Dark before) is read as the default. Other grounds
+  build their chrome from V2's surfaces and gold.
+- **Candles unchanged**: the default candle colors and Anthony's saved colors are never touched. New candle preset **Black and
+  gold** (`#D4B06A` / `#7A7468`; wicks and volume follow the candle colors; its bull is close to the value-area and PD POC level
+  gold `#E0B45A`, which stay dashed lines with names and tags), passing every contrast rule on every ground; the
+  three presets of before stay. Indicator colors unchanged (their defaults and swatches).
+- **Motion (V2)**: one ease. Menus and popovers fade in, a dialog that asks nothing about orders fades in, the top bar's own
+  buttons ease and lift, a tab bar's gold ink slides (`ChartMotion.syncInk`, the laptop layout tabs and the Studio's tabs), the
+  PIN card fades in, the Studio's buttons and tabs ease. Never on a live value or an order control: the ticket, the order bar,
+  Armed, Flatten, B/E, the order dialogs, the tape, the quote board, the account panels, positions, P&L and the chart stay
+  still; every control takes its click on the first frame. Reduced motion (the system's, or the page's Less motion): none of it.
+  The chart's own pan, zoom, scroll and Glide feel (the `motion` constants) is unchanged.
+- **The V1 ground**: `#080B10` now reads as the V2 ground everywhere: the default theme, the Colors panel, and a chart preset
+  saved before 1.39.0, which still shows as in use (`LivePrefs.presetSame`, through `ChartEngine.util.groundOf`).
+- **Review of #70**: danger stays red (Flatten all, the NO STOP question's Send and Delete group never take the gold hover
+  border; the Bot tab's switch to a LIVE account asks in the sell red, as the Agent tab's does); dialogs, the PIN card and
+  the Studio's summary fade in without moving, so a button is never hit off its place; the Studio's Level marker in the level
+  gold; the warnings' text its own amber `#FFE2B0`; the grid at 50% (1.14:1; at 45% it read 1.117:1, under the 1.12 floor);
+  the stated figures corrected (Armed's ink on gold 8.19:1, the default bear 2.87:1 on the V2 ground); candles-same also on
+  the default V2 ground.
+- Tests: `test/v2-theme.test.js` (the preset's contrast on every ground, the default candles, no V1 purple or crimson in the
+  chrome, the motion rules: off with reduced motion, never on a live part, no delay; the chart's motion constants; the ink);
+  `npm run smoke:v2` (the same in a page, on the fake bridge: nothing moves on the live parts at rest, Armed or with a position,
+  Buy MKT and Flatten all send within the click, a menu and a dialog take their click while animating, reduced motion and Less
+  motion still); the theme, presets, kit and motion tests moved to the V2 values; `npm run smoke` shows the Black and gold
+  preset (`test/out/desk-colors-blackgold.png`, `desk-blackgold.png`, sample data).
+
 ## Unreleased (2026-10-23): the PC updater reads HOME's hand-made launcher; logon type refused by name
 
 `nt8/update-pc.ps1` only (no page or ChartBridge change, no version bump, as the other 2026-10-23 updater entries below).

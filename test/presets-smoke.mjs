@@ -174,7 +174,7 @@ try {
   await openColors(a);
   await a.click(rowBtn('chart', 'Dark desk', 'pick')); await a.waitForTimeout(200);
   ob = await toolbarLook(a);
-  check(ob.toolbar === 'rgb(8, 11, 16)' && JSON.stringify(ob) === JSON.stringify(base), 'dark ground: the toolbar exactly as before the presets were used: ' + JSON.stringify(ob));
+  check(ob.toolbar === 'rgb(5, 5, 6)' && JSON.stringify(ob) === JSON.stringify(base), 'dark ground: the toolbar exactly as before the presets were used: ' + JSON.stringify(ob));
   // every other ground: the top bar matches it (Anthony: Black a black bar, Blue-grey a blue-grey one), as chromeColors
   const rgbOf = h => { const c = U.parseColor(h); return 'rgb(' + c.r + ', ' + c.g + ', ' + c.b + ')'; };
   for (const g of ['#000000', '#1B2433', '#888888', '#FFF8E1']) {
@@ -187,11 +187,11 @@ try {
 
   await closeColors(a);
   // the top bar on the four grounds and two custom ones
-  for (const [g, name] of [['#080B10', 'dark'], ['#000000', 'black'], ['#1B2433', 'blue-grey'], ['#F5F7FA', 'light'], ['#808080', 'custom-808080'], ['#FFF8E1', 'custom-FFF8E1']]) {
+  for (const [g, name] of [['#050506', 'dark'], ['#000000', 'black'], ['#1B2433', 'blue-grey'], ['#F5F7FA', 'light'], ['#808080', 'custom-808080'], ['#FFF8E1', 'custom-FFF8E1']]) {
     await setBg(a, g); await a.mouse.move(700, 600); await a.waitForTimeout(200);
     await a.screenshot({ path: path.join(SHOTS, 'presets-top-bar-' + name + '.png'), clip: { x: 0, y: 0, width: 1440, height: 330 } });
   }
-  await setBg(a, '#080B10'); await a.waitForTimeout(60);
+  await setBg(a, '#050506'); await a.waitForTimeout(60);
   await openColors(a);
   await a.click(rowBtn('chart', 'Dark desk', 'pick')); await a.waitForTimeout(100);
 

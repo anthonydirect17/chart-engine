@@ -149,7 +149,7 @@ export async function run({ browser, check, fail, shot, root, port }) {
     check(bA.every(x => x.startsWith('MNQ') ? x.endsWith('true') : x.endsWith('false')) && bB.every(x => x.startsWith('MNQ') ? x.endsWith('true') : x.endsWith('false')), 'the Armed border on every MNQ chart in both windows, on no other: ' + bA + ' | ' + bB);
     const borderColor = await A.evaluate(id => getComputedStyle(document.querySelector(`.ws-panel[data-id="${id}"] .stage`)).borderTopColor, mnqMain.id);
     const glow = await A.evaluate(id => getComputedStyle(document.querySelector(`.ws-panel[data-id="${id}"] .stage`)).boxShadow, mnqMain.id);
-    check(borderColor === 'rgb(123, 92, 255)' && /0\.45\) 0px 0px 8px 1px/.test(glow), 'in the accent purple with a soft glow (Anthony): ' + borderColor + ', ' + glow);
+    check(borderColor === 'rgb(201, 165, 92)' && /0\.45\) 0px 0px 8px 1px/.test(glow), 'in the accent (1.39.0: the V2 gold; purple before) with a soft glow (Anthony): ' + borderColor + ', ' + glow);
     const clickChart = async (p, id, price) => { await p.evaluate(i => window.workspace.chart(i).goLive(), id); await wait(300); await shiftClickAt(p, `.ws-panel[data-id="${id}"] canvas`, price, id); await wait(500); };
     const workingN = async () => (await state()).orders.length;
     let n0 = await workingN();

@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.38.1
+ * chart-engine 1.39.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.38.1';
+const VERSION = '1.39.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -284,17 +284,23 @@ function mix(a, b, k) {
 const sameColor = (a, b) => { const x = parseColor(a), y = parseColor(b); return !!x && !!y && x.r === y.r && x.g === y.g && x.b === y.b && x.a === y.a; };
 
 /* ---------------------------------------------------------------- theme */
+/* 1.39.0 (Anthony 2026-10-24: "lets unify everything. I really liked the black gold look you showed and I think it should
+   live through our entire system"): the chart's own colors (ground, regular-hours ground, grid, axes, crosshair, tags) are
+   house style V2's black and warm greys; every floor of FLOOR holds on it (axis text 5.55:1, day labels 16.8:1, tag text
+   16.0:1 on its fill, crosshair 3.57:1, divider 1.49:1, grid 1.14:1 as drawn; at 45% it read 1.117:1, under the
+   1.12 floor, so it is 50%). The candles' and indicators' defaults are not
+   changed (Anthony: "my colors for candles change all the time ... this is more of an overall theme change"). */
 const DEFAULT_THEME = {
-  bg: '#080B10', rth: '#0B1016', grid: 'rgba(42,54,69,0.30)', axisLine: '#18212C', divider: '#2A3645',
-  cross: '#5B6B80', axisText: '#8392A5', axisTextStrong: '#E6EDF5',
-  tagFill: '#141C26', tagBorder: '#2A3645', tagText: '#F2F6FA',
+  bg: '#050506', rth: '#09090B', grid: 'rgba(42,40,36,0.50)', axisLine: '#1B1B20', divider: '#302D28',
+  cross: '#6B665C', axisText: '#8A857B', axisTextStrong: '#ECE9E2',
+  tagFill: '#18181C', tagBorder: '#302D28', tagText: '#F7F3EA',
   up: '#4B9CD3',            // Carolina blue: bull candles
   down: '#6D28D9',          // deep purple: bear candles
   volumeAlpha: 0.26,
   vwap: '#B69CFF',
   long: '#3DDC97', short: '#FF7A7A',     // trade side (house style: green/red only for sides and P&L)
   profit: '#3DDC97', loss: '#FF7A7A',    // trade result
-  exit: '#F2F6FA', live: '#F2F6FA',
+  exit: '#F7F3EA', live: '#F7F3EA',      // 1.39.0: the V2 head ink (was #F2F6FA)
   drawing: '#D8CCFF',                    // trend lines and horizontal lines
   // volume profile (1.6.0): rows a tint of the ground, value area a step stronger, POC in the value-level gold;
   // 1.14.0 (Anthony: too dark on the dark ground) brighter: rows 1.31:1 on the ground, value area 1.74:1 (were 1.15, 1.40)
@@ -315,21 +321,31 @@ const PRESETS = [
   { id: 'carolina', name: 'Carolina / purple', up: '#4B9CD3', down: '#6D28D9' },
   { id: 'mint', name: 'Mint / coral', up: '#4FD1A5', down: '#F0717A' },
   { id: 'house', name: 'House green / red', up: '#3DDC97', down: '#FF7A7A' },
+  /* 1.39.0 (Anthony 2026-10-24: "You can add a black and gold pre-set, thats fine, but I change them"): the V2 chart gold
+     and a warm graphite. Wicks and volume bars are drawn from the candle colors (volume at 26%), so the preset sets all
+     three. On the V2 ground: bull 9.91:1, bear 4.39:1 (the default bear 2.87:1), 2.26:1 and an RGB distance of 108 apart
+     (pairOnGround's 1.25:1 or 60; at least 1.30:1 on every ground); over the volume profile's value-area rows the bear
+     reads 3.04:1 (the default 1.99:1). */
+  { id: 'gold', name: 'Black and gold', up: '#D4B06A', down: '#7A7468' },
 ];
 /* ibHigh / ibLow (1.5.3, Anthony): the IB high a brighter shade of the orchid base, the low the base itself. */
 const LEVEL_COLORS = { prior: '#9AA8B8', overnight: '#7FB2FF', value: '#E0B45A', close: '#8392A5', ibHigh: '#F7C6EC', ibLow: '#E58BD2' };
-/* Chart grounds for the Colors panel (1.5.3). The first is the default and keeps the locked look exactly. */
+/* Chart grounds for the Colors panel (1.5.3). The first is the default and keeps the locked look exactly. 1.39.0: Dark is the
+   V2 black; the V1 dark ground #080B10, saved by a Reset or a pick of Dark before 1.39.0, reads as this default (V1_GROUND). */
 const BACKGROUNDS = [
-  { id: 'dark', name: 'Dark', bg: '#080B10' },
+  { id: 'dark', name: 'Dark', bg: '#050506' },
   { id: 'black', name: 'Black', bg: '#000000' },
   { id: 'slate', name: 'Blue-grey', bg: '#1B2433' },
   { id: 'light', name: 'Light', bg: '#F5F7FA' },
 ];
 /*
  * Contrast floors on a chosen ground (1.5.3): text 4.5 (WCAG AA), strong text and tag text 7, lines and marks 3,
- * candle bodies 2.5 (the default bear purple reads at 2.77 on the default ground, which Anthony approved).
+ * candle bodies 2.5 (the default bear purple reads at 2.77 on V1's ground, which Anthony approved; 2.87 on the V2 ground).
  * On a ground where even white or black cannot reach a floor (mid-grey), the best of the two is used.
  */
+const V1_GROUND = '#080B10';
+/** A chosen ground as the chart takes it: the V1 default (1.38 and before) is the default ground now (1.39.0). */
+function groundOf(bg) { return sameColor(bg, V1_GROUND) ? DEFAULT_THEME.bg : bg; }
 const FLOOR = { text: 4.5, strong: 7, line: 3, candle: 2.5, cross: 3, divider: 1.4, grid: 1.12 };
 /*
  * Neutral colors on any other ground: a mix from the ground toward an ink (the house near-white on a dark ground,
@@ -353,8 +369,9 @@ function buildTheme(partial) {
   const src = Object.assign({}, DEFAULT_THEME, partial || {});
   const T = Object.assign({}, src);
   if (!parseColor(T.bg)) T.bg = DEFAULT_THEME.bg;
+  T.bg = groundOf(T.bg);                                   // 1.39.0: the V1 default ground is the default
   const custom = !sameColor(T.bg, DEFAULT_THEME.bg);
-  T.text2 = '#9AA8B8'; T.legendBg = rgba(T.bg, 0.78); T.ground = 'default';
+  T.text2 = '#A6A196'; T.legendBg = rgba(T.bg, 0.78); T.ground = 'default';
   let to;                                                  // which way colors move to read: white, or black
   if (custom) {
     const dark = readableOn(T.bg) === '#FFFFFF', ink = dark ? '#F2F6FA' : '#080B10';
@@ -414,12 +431,16 @@ function buildTheme(partial) {
  * chart's floors on the surface it sits on that reads worst (text 7:1, secondary text and accents 4.5:1). Built once
  * per theme change, never per frame.
  */
+/* 1.39.0: house style V2 (black and gold): the surfaces of live.css's .chart-live, the gold tint and border as solid colors
+   (gold at 9% and 28% over the ground), the gold text and soft gold for the accents; the house amber is V2's warn. */
 const HOUSE_CHROME = {
-  bg: '#080B10', s2: '#0F151D', s3: '#141C26', line: '#18212C', lineStrong: '#2A3645', panel: '#0B1016',
-  tint: '#1A1230', border: '#3B2A6B', text: '#E6EDF5', head: '#F2F6FA', text2: '#9AA8B8', text3: '#8392A5',
-  accentText: '#B69CFF', accentSoft: '#D8CCFF', loss: '#FF7A7A', profit: '#3DDC97',
+  bg: '#050506', s2: '#111114', s3: '#18181C', line: '#1B1B20', lineStrong: '#2A2824', panel: '#0C0C0F',
+  tint: '#17140E', border: '#3C321E', text: '#ECE9E2', head: '#F7F3EA', text2: '#A6A196', text3: '#8A857B',
+  accentText: '#E2C687', accentSoft: '#F2E4C2', loss: '#FF7A7A', profit: '#3DDC97',
 };
-const HOUSE_AMBER = '#E0B45A', HOUSE_BUY = '#3DDC97', HOUSE_SELL = '#FF7A7A';
+/* the gold of V2 (the accent: Armed, the logo, the active tab) and its deep shade (the accent on a light ground) */
+const HOUSE_GOLD = '#C9A55C', HOUSE_GOLD_TEXT = '#E2C687', HOUSE_GOLD_DEEP = '#8C6D33';
+const HOUSE_AMBER = '#E8B85C', HOUSE_BUY = '#3DDC97', HOUSE_SELL = '#FF7A7A';
 /* A mid ground: black or white text reads under 9:1 on it (about the 1.5.3 rule for a light chrome, 9:1 against the
    house near-black). There the chrome's ground is the chart's, lightened or darkened just enough to reach it, so its
    text and the Buy and Sell labels keep their colors apart and reading. */
@@ -432,8 +453,8 @@ function chromeColors(T) {
   if (light) {
     const ink = '#080B10';
     S = { s2: mix(bg, ink, 0.05), s3: mix(bg, ink, 0.10), line: mix(bg, ink, 0.12), lineStrong: mix(bg, ink, 0.24), panel: bg,
-      tint: mix(bg, '#6D28D9', 0.10), border: mix(bg, '#6D28D9', 0.45), text: T.axisTextStrong, head: T.tagText, text2: T.text2,
-      text3: T.axisText, accentText: '#6D28D9', accentSoft: '#6D28D9', loss: T.loss, profit: T.profit };
+      tint: mix(bg, HOUSE_GOLD_DEEP, 0.10), border: mix(bg, HOUSE_GOLD_DEEP, 0.45), text: T.axisTextStrong, head: T.tagText, text2: T.text2,
+      text3: T.axisText, accentText: HOUSE_GOLD_DEEP, accentSoft: HOUSE_GOLD_DEEP, loss: T.loss, profit: T.profit };
   } else {
     // the house dark surfaces, each the same step above the chosen ground as above the house ground
     const g = parseColor(bg), h0 = parseColor(HOUSE_CHROME.bg), cl = x => Math.max(0, Math.min(255, x));
@@ -451,7 +472,8 @@ function chromeColors(T) {
     '--text2': on(S.text2, FLOOR.text), '--text3': on(S.text3, FLOOR.text),
     '--accent-tint': S.tint, '--accent-border': S.border,
     '--accent-text': on(S.accentText, FLOOR.text, tinted), '--accent-soft': on(S.accentSoft, FLOOR.text, tinted),
-    '--crimson-word': on('#E0445E', FLOOR.text, bg), '--info': on('#7FB2FF', FLOOR.text), '--warn': on(HOUSE_AMBER, FLOOR.text),
+    // 1.39.0: the V1 name kept (the Armed outline and the wordmark): its color is V2's gold text, at 4.5:1 on the ground
+    '--crimson-word': on(HOUSE_GOLD_TEXT, FLOOR.text, bg), '--info': on('#8FB4E8', FLOOR.text), '--warn': on(HOUSE_AMBER, FLOOR.text),
     '--loss': on(S.loss, FLOOR.text), '--profit': on(S.profit, FLOOR.text), '--panel': S.panel,
     '--scheme': light ? 'light' : 'dark',
   };
@@ -858,46 +880,47 @@ const PANE_RATIO = 0.2, PANE_RATIO_MIN = 0.08, PANE_RATIO_MAX = 0.6, PANE_MIN = 
 /* ---------------------------------------------------------------- DOM styles */
 const CSS = `
 .ce-host{position:relative;overflow:hidden;outline:none}
-.ce-host:focus-visible{box-shadow:inset 0 0 0 2px #B69CFF}
+.ce-host:focus-visible{box-shadow:inset 0 0 0 2px #E2C687}
 .ce-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:crosshair;user-select:none;-webkit-user-select:none}
-.ce-live{position:absolute;top:4px;left:0;z-index:3;width:24px;height:22px;padding:0;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;color:#B69CFF;background:#1A1230;border:1px solid #3B2A6B;border-radius:6px;cursor:pointer}
+.ce-live{position:absolute;top:4px;left:0;z-index:3;transition:color .2s cubic-bezier(.22,1,.36,1),border-color .2s cubic-bezier(.22,1,.36,1),box-shadow .2s cubic-bezier(.22,1,.36,1);width:24px;height:22px;padding:0;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;color:#E2C687;background:#17140E;border:1px solid #3C321E;border-radius:6px;cursor:pointer}
 .ce-live[hidden]{display:none}
 .ce-live svg{width:12px;height:12px;display:block}
-.ce-live:hover{color:#fff;border-color:#B69CFF}
-.ce-lock{position:absolute;bottom:3px;z-index:3;width:24px;height:20px;padding:0;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;color:#7F8C9C;background:transparent;border:1px solid transparent;border-radius:5px;cursor:pointer}
+.ce-live:hover{color:#F7F3EA;border-color:#E2C687;box-shadow:0 0 12px rgba(201,165,92,.18)}
+.ce-lock{position:absolute;bottom:3px;z-index:3;width:24px;height:20px;padding:0;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;color:#8A857B;background:transparent;border:1px solid transparent;border-radius:5px;cursor:pointer}
 .ce-lock svg{width:12px;height:12px;display:block}
-.ce-lock:hover{color:#E6EDF5;border-color:#2A3645}
-.ce-lock[aria-pressed="true"]{color:#B69CFF;background:#1A1230;border-color:#3B2A6B}
-.ce-lock:focus-visible{outline:2px solid #B69CFF;outline-offset:1px}
-.ce-live:focus-visible{outline:2px solid #B69CFF;outline-offset:2px}
+.ce-lock:hover{color:#ECE9E2;border-color:#2A2824}
+.ce-lock[aria-pressed="true"]{color:#E2C687;background:#17140E;border-color:#3C321E}
+.ce-lock:focus-visible{outline:2px solid #E2C687;outline-offset:1px}
+.ce-live:focus-visible{outline:2px solid #E2C687;outline-offset:2px}
 .ce-theme{position:relative;display:inline-block}
-.ce-theme-btn{font:500 12px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#E6EDF5);background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line,#2A3645);border-radius:8px;padding:4px 12px 4px 8px;min-height:30px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
-.ce-theme-btn:hover{background:var(--ce-s3,#141C26)}
-.ce-theme-btn:focus-visible,.ce-theme-panel button:focus-visible,.ce-theme-panel input:focus-visible{outline:2px solid var(--ce-accent,#B69CFF);outline-offset:2px}
+.ce-theme-btn{font:500 12px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#ECE9E2);background:var(--ce-s2,#111114);border:1px solid var(--ce-line,#2A2824);border-radius:8px;padding:4px 12px 4px 8px;min-height:30px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.ce-theme-btn:hover{background:var(--ce-s3,#18181C)}
+.ce-theme-btn:focus-visible,.ce-theme-panel button:focus-visible,.ce-theme-panel input:focus-visible{outline:2px solid var(--ce-accent,#E2C687);outline-offset:2px}
 .ce-sw2{display:inline-flex;gap:2px}.ce-sw2 i{width:8px;height:14px;border-radius:2px;display:block}
-.ce-theme-panel{color-scheme:var(--ce-scheme,dark);position:absolute;top:calc(100% + 6px);right:0;z-index:20;width:268px;max-width:calc(100vw - 32px);box-sizing:border-box;background:var(--ce-panel,#0B1016);border:1px solid var(--ce-line,#2A3645);border-radius:12px;padding:12px;display:grid;gap:10px;box-shadow:var(--ce-shadow,0 12px 32px rgba(0,0,0,.45));font:13px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#E6EDF5)}
+.ce-theme-panel{color-scheme:var(--ce-scheme,dark);position:absolute;top:calc(100% + 6px);right:0;z-index:20;width:268px;max-width:calc(100vw - 32px);box-sizing:border-box;background:var(--ce-panel,#0C0C0F);border:1px solid var(--ce-line,#2A2824);border-radius:12px;padding:12px;display:grid;gap:10px;box-shadow:var(--ce-shadow,0 12px 32px rgba(0,0,0,.45));font:13px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#ECE9E2)}
 .ce-theme-panel[hidden]{display:none}
 .ce-theme-panel.ce-left{right:auto;left:0}
-.ce-lbl{font:600 10px "IBM Plex Sans Condensed","IBM Plex Sans",sans-serif;letter-spacing:.12em;text-transform:uppercase;color:var(--ce-muted,#8392A5)}
+.ce-lbl{font:600 10px "IBM Plex Sans Condensed","IBM Plex Sans",sans-serif;letter-spacing:.12em;text-transform:uppercase;color:var(--ce-muted,#8A857B)}
 .ce-presets{display:grid;gap:6px}
-.ce-preset{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line-soft,#18212C);border-radius:8px;padding:6px 8px;color:var(--ce-text,#E6EDF5);font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px}
-.ce-preset[aria-pressed="true"]{border-color:var(--ce-tint-border,#3B2A6B);background:var(--ce-tint,#1A1230);color:var(--ce-tint-text,#D8CCFF)}
+.ce-preset{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:var(--ce-s2,#111114);border:1px solid var(--ce-line-soft,#1B1B20);border-radius:8px;padding:6px 8px;color:var(--ce-text,#ECE9E2);font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px}
+.ce-preset[aria-pressed="true"]{border-color:var(--ce-tint-border,#3C321E);background:var(--ce-tint,#17140E);color:var(--ce-tint-text,#F2E4C2)}
 .ce-row{display:grid;grid-template-columns:64px 36px minmax(0,1fr);gap:8px;align-items:center}
-.ce-row input[type=color]{width:36px;height:28px;padding:0;border:1px solid var(--ce-line,#2A3645);border-radius:6px;background:var(--ce-s2,#0F151D);cursor:pointer}
-.ce-row input[type=text]{width:100%;box-sizing:border-box;min-width:0;background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line,#2A3645);border-radius:6px;color:var(--ce-text,#E6EDF5);font:500 12px "IBM Plex Mono",ui-monospace,monospace;padding:5px 7px;min-height:28px}
-.ce-reset{justify-self:start;background:transparent;border:1px solid var(--ce-line,#2A3645);border-radius:8px;color:var(--ce-text2,#9AA8B8);font:500 12px "IBM Plex Sans",system-ui,sans-serif;padding:4px 10px;min-height:30px;cursor:pointer}
-.ce-note{font-size:11px;color:var(--ce-muted,#8392A5);line-height:1.4}
+.ce-row input[type=color]{width:36px;height:28px;padding:0;border:1px solid var(--ce-line,#2A2824);border-radius:6px;background:var(--ce-s2,#111114);cursor:pointer}
+.ce-row input[type=text]{width:100%;box-sizing:border-box;min-width:0;background:var(--ce-s2,#111114);border:1px solid var(--ce-line,#2A2824);border-radius:6px;color:var(--ce-text,#ECE9E2);font:500 12px "IBM Plex Mono",ui-monospace,monospace;padding:5px 7px;min-height:28px}
+.ce-reset{justify-self:start;background:transparent;border:1px solid var(--ce-line,#2A2824);border-radius:8px;color:var(--ce-text2,#A6A196);font:500 12px "IBM Plex Sans",system-ui,sans-serif;padding:4px 10px;min-height:30px;cursor:pointer}
+.ce-note{font-size:11px;color:var(--ce-muted,#8A857B);line-height:1.4}
 .ce-slot{display:grid;gap:10px}.ce-slot:empty{display:none}
 .ce-grounds{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-.ce-ground{display:flex;align-items:center;gap:8px;background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line-soft,#18212C);border-radius:8px;padding:5px 8px;color:var(--ce-text,#E6EDF5);font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px;text-align:left}
-.ce-ground[aria-pressed="true"]{border-color:var(--ce-tint-border,#3B2A6B);background:var(--ce-tint,#1A1230);color:var(--ce-tint-text,#D8CCFF)}
-.ce-ground:focus-visible{outline:2px solid var(--ce-accent,#B69CFF);outline-offset:2px}
-.ce-ground i{width:16px;height:16px;border-radius:4px;flex:none;box-shadow:inset 0 0 0 1px rgba(154,168,184,.45)}
+.ce-ground{display:flex;align-items:center;gap:8px;background:var(--ce-s2,#111114);border:1px solid var(--ce-line-soft,#1B1B20);border-radius:8px;padding:5px 8px;color:var(--ce-text,#ECE9E2);font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px;text-align:left}
+.ce-ground[aria-pressed="true"]{border-color:var(--ce-tint-border,#3C321E);background:var(--ce-tint,#17140E);color:var(--ce-tint-text,#F2E4C2)}
+.ce-ground:focus-visible{outline:2px solid var(--ce-accent,#E2C687);outline-offset:2px}
+.ce-ground i{width:16px;height:16px;border-radius:4px;flex:none;box-shadow:inset 0 0 0 1px rgba(166,161,150,.45)}
 .ce-row input[type=text][aria-invalid="true"]{border-color:var(--ce-bad,#FF7A7A);box-shadow:inset 0 0 0 1px var(--ce-bad,#FF7A7A)}
 .ce-divider{position:absolute;left:0;right:0;height:10px;z-index:2;cursor:row-resize;touch-action:none;outline:none}
 .ce-divider[hidden]{display:none}
-.ce-divider:hover,.ce-divider.is-drag,.ce-divider:focus-visible{background:linear-gradient(transparent 1px,rgba(182,156,255,.55) 1px,rgba(182,156,255,.55) 3px,transparent 3px)}
-.ce-divider:focus-visible{box-shadow:inset 0 0 0 2px #B69CFF}
+.ce-divider:hover,.ce-divider.is-drag,.ce-divider:focus-visible{background:linear-gradient(transparent 1px,rgba(201,165,92,.6) 1px,rgba(201,165,92,.6) 3px,transparent 3px)}
+.ce-divider:focus-visible{box-shadow:inset 0 0 0 2px #E2C687}
+@media (prefers-reduced-motion:reduce){.ce-live,.ce-lock,.ce-theme-btn,.ce-preset,.ce-ground{transition:none!important}}
 `;
 function injectStyle() {
   if (typeof document === 'undefined' || document.getElementById('ce-style')) return;
@@ -3498,7 +3521,8 @@ function mountThemePanel(chart, host, options) {
   const defaults = {}; for (const [k] of FIELDS) defaults[k] = DEFAULT_THEME[k];
   const load = () => { try { return JSON.parse(localStorage.getItem(opt.storageKey) || 'null'); } catch (e) { return null; } };
   const store = v => { try { localStorage.setItem(opt.storageKey, JSON.stringify(v)); } catch (e) { /* storage blocked */ } };
-  const clean = v => { const out = {}; for (const [k] of FIELDS) if (v && /^#[0-9a-f]{6}$/i.test(v[k])) out[k] = v[k].toUpperCase(); return out; };
+  /* 1.39.0: a ground saved as the V1 default (a Reset or a pick of Dark before 1.39.0) is read as the V2 default */
+  const clean = v => { const out = {}; for (const [k] of FIELDS) if (v && /^#[0-9a-f]{6}$/i.test(v[k])) out[k] = k === 'bg' ? groundOf(v[k]).toUpperCase() : v[k].toUpperCase(); return out; };
 
   let cur = Object.assign({}, defaults, clean(load()));
   chart.setTheme(cur);
@@ -4338,6 +4362,7 @@ return {
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtExact, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, ibPair, distinct, mix, buildTheme, chromeColors, CHROME_VARS,
+    V1_GROUND, groundOf, HOUSE_CHROME,
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, orderLabelShort, positionShort, htfStart, htfEnd, HTF_SECONDS, cornerPlace, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,

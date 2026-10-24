@@ -218,8 +218,9 @@ test('the order bar matches every ground: Buy green, Sell red, Armed amber, each
 
 test('dimmed order bar controls (disarmed, trading off) read at least as well on every ground as on the house bar (review R2)', () => {
   const H = U.OBAR_DIM.house;
-  // the house bar's own numbers, as review 1 measured them in the page (disarmed Buy 2.85, Sell 2.28, Flatten 4.01; trading off Buy 2.51)
-  assert.deepEqual(H.off.map(x => +x.toFixed(1)), [2.9, 2.3, 4.0]);
+  // the house bar's own numbers, as review 1 measured them in the page (V1: disarmed Buy 2.85, Sell 2.28, Flatten 4.01; trading
+  // off Buy 2.51); 1.39.0 the V2 bar (black, warm text): disarmed Buy 2.85, Sell 2.29, Flatten 3.94; trading off Buy 2.50
+  assert.deepEqual(H.off.map(x => +x.toFixed(2)), [2.85, 2.29, 3.94]);
   assert.equal(+H.disabled[0].toFixed(1), 2.5);
   assert.deepEqual(U.OBAR_DIM.alpha, { off: 0.45, disabled: 0.4 });
   const worst = { off: [], disabled: [] };

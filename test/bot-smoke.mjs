@@ -361,7 +361,7 @@ try {
     return { name: document.querySelector('[data-k="account"]').textContent, byMode: m.textContent, cls: m.className, bg: cs.backgroundColor, tr: cs.transitionDuration, anim: cs.animationName,
       noMotion: !!m.closest('[data-no-motion]') };
   });
-  check(live.name === 'EVAL-A' && live.byMode === 'LIVE' && /live/.test(live.cls) && live.bg === 'rgb(159, 18, 57)', 'LIVE next to the mode, in the house red: ' + JSON.stringify(live));
+  check(live.name === 'EVAL-A' && live.byMode === 'LIVE' && /live/.test(live.cls) && live.bg === 'rgb(201, 165, 92)', 'LIVE next to the mode, in the house gold (1.39.0, V2; crimson before): ' + JSON.stringify(live));
   check(/^0s(, 0s)*$/.test(live.tr) && live.anim === 'none' && live.noMotion, 'the LIVE mark is never animated');
   await page.click('.bt-modes [data-mode="auto"]');
   await sleep(450);                                   // a person's second click, not a double-click (1.17.0)

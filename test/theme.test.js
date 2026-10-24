@@ -7,17 +7,41 @@ const assert = require('node:assert/strict');
 const CE = require('../src/chart-engine.js');
 const U = CE.util, F = CE.FLOOR;
 
-/* buildTheme() of 1.5.2, key for key (fonts aside): the look Anthony locked. */
-const LOCKED = {"bg":"#080B10","rth":"#0B1016","grid":"rgba(42,54,69,0.30)","axisLine":"#18212C","divider":"#2A3645","cross":"#5B6B80","axisText":"#8392A5","axisTextStrong":"#E6EDF5","tagFill":"#141C26","tagBorder":"#2A3645","tagText":"#F2F6FA","up":"#4B9CD3","down":"#6D28D9","volumeAlpha":0.26,"vwap":"#B69CFF","long":"#3DDC97","short":"#FF7A7A","profit":"#3DDC97","loss":"#FF7A7A","exit":"#F2F6FA","live":"#F2F6FA","drawing":"#D8CCFF","upVol":"rgba(75,156,211,0.26)","downVol":"rgba(109,40,217,0.26)","upOnTag":"#080B10","downOnTag":"#FFFFFF","upText":"#4B9CD3","downText":"#925EE3","vwapText":"#B69CFF"};
+/* buildTheme() of 1.5.2, key for key (fonts aside): the look Anthony locked (V1, the chart's colors to 1.38). */
+const LOCKED_V1 = {"bg":"#080B10","rth":"#0B1016","grid":"rgba(42,54,69,0.30)","axisLine":"#18212C","divider":"#2A3645","cross":"#5B6B80","axisText":"#8392A5","axisTextStrong":"#E6EDF5","tagFill":"#141C26","tagBorder":"#2A3645","tagText":"#F2F6FA","up":"#4B9CD3","down":"#6D28D9","volumeAlpha":0.26,"vwap":"#B69CFF","long":"#3DDC97","short":"#FF7A7A","profit":"#3DDC97","loss":"#FF7A7A","exit":"#F2F6FA","live":"#F2F6FA","drawing":"#D8CCFF","upVol":"rgba(75,156,211,0.26)","downVol":"rgba(109,40,217,0.26)","upOnTag":"#080B10","downOnTag":"#FFFFFF","upText":"#4B9CD3","downText":"#925EE3","vwapText":"#B69CFF"};
 
-test('the default ground is exactly the locked palette (and the legend colors the page had)', () => {
-  for (const T of [U.buildTheme(), U.buildTheme({ bg: '#080b10' }), U.buildTheme({ bg: CE.BACKGROUNDS[0].bg })]) {
+/* 1.39.0 (Anthony 2026-10-24, house style V2: "lets unify everything ... the black gold look"): the chart's own colors
+   (ground, regular-hours ground, grid, axes, crosshair, tags, the exit and live dots) are V2's black and warm greys. The
+   candles, the VWAP, the drawings and the trade sides keep the V1 values exactly ("my colors for candles change all the
+   time ... this is more of an overall theme change"). */
+const CANDLE_KEYS = ['up', 'down', 'volumeAlpha', 'vwap', 'long', 'short', 'profit', 'loss', 'drawing', 'upVol', 'downVol', 'upOnTag', 'downOnTag', 'upText', 'downText', 'vwapText'];
+const LOCKED = Object.assign({}, LOCKED_V1, {"bg":"#050506","rth":"#09090B","grid":"rgba(42,40,36,0.50)","axisLine":"#1B1B20","divider":"#302D28","cross":"#6B665C","axisText":"#8A857B","axisTextStrong":"#ECE9E2","tagFill":"#18181C","tagBorder":"#302D28","tagText":"#F7F3EA","exit":"#F7F3EA","live":"#F7F3EA"});
+
+test('the default ground is exactly the V2 palette, the candles exactly the locked V1 ones (and the legend colors)', () => {
+  // the V1 dark ground (saved by a Reset or a pick of Dark before 1.39.0) is read as the default ground
+  for (const T of [U.buildTheme(), U.buildTheme({ bg: '#080b10' }), U.buildTheme({ bg: '#080B10' }), U.buildTheme({ bg: CE.BACKGROUNDS[0].bg })]) {
     for (const k in LOCKED) if (k !== 'bg') assert.equal(T[k], LOCKED[k], k);
+    for (const k of CANDLE_KEYS) assert.equal(T[k], LOCKED_V1[k], 'unchanged from V1: ' + k);
     assert.equal(T.bg.toUpperCase(), LOCKED.bg);
     assert.equal(T.ground, 'default');
-    assert.equal(T.text2, '#9AA8B8');
-    assert.equal(T.legendBg, 'rgba(8,11,16,0.78)');
+    assert.equal(T.text2, '#A6A196');
+    assert.equal(T.legendBg, 'rgba(5,5,6,0.78)');
   }
+  assert.equal(U.V1_GROUND, '#080B10');
+  assert.equal(U.groundOf('#080b10'), CE.DEFAULT_THEME.bg);
+  assert.equal(U.groundOf('#000000'), '#000000');
+  // V2's floors on its own ground, as CHART_STYLE.md states them (the floors of every other ground, FLOOR)
+  const D = U.buildTheme(), c = (a, b) => U.contrast(over(a, b), b), r = (a, b) => +c(a, b).toFixed(2);   // c unrounded: the floors; r: the figures stated
+  assert.ok(c(D.axisText, D.bg) >= F.text && c(D.axisText, D.rth) >= F.text, 'axis text ' + r(D.axisText, D.bg));
+  assert.ok(c(D.axisTextStrong, D.bg) >= F.strong && c(D.tagText, D.tagFill) >= F.strong, 'day labels and tag text');
+  assert.ok(c(D.cross, D.bg) >= F.cross && c(D.cross, D.rth) >= F.cross, 'crosshair ' + r(D.cross, D.bg));
+  assert.ok(c(D.divider, D.bg) >= F.divider && c(D.tagBorder, D.bg) >= F.divider, 'divider ' + r(D.divider, D.bg));
+  assert.ok(c(D.grid, D.bg) >= F.grid, 'grid ' + c(D.grid, D.bg));   // unrounded (review of #70: 1.117 at 45% rounded up to 1.12)
+  assert.ok(c(D.down, D.bg) >= F.candle && c(D.up, D.bg) >= F.candle, 'the default candles on the V2 ground');
+  assert.deepEqual([r(D.axisText, D.bg), r(D.axisTextStrong, D.bg), r(D.tagText, D.tagFill), r(D.cross, D.bg), r(D.divider, D.bg), r(D.grid, D.bg), r(D.down, D.bg)],
+    [5.55, 16.8, 15.99, 3.57, 1.49, 1.14, 2.87]);
+  // Armed: the dark ink on the gold (CHART_STYLE.md and live.css say 8.19:1)
+  assert.equal(+U.contrast('#140F06', '#C9A55C').toFixed(2), 8.19);
   // candle presets on the default ground: only the candle colors and what follows from them change
   for (const p of CE.PRESETS) {
     const T = U.buildTheme({ up: p.up, down: p.down });
@@ -25,9 +49,10 @@ test('the default ground is exactly the locked palette (and the legend colors th
   }
 });
 
-test('background presets: the current dark (default), pure black, dark blue-grey and a light one', () => {
+test('background presets: the V2 dark (default), pure black, dark blue-grey and a light one', () => {
   assert.deepEqual(CE.BACKGROUNDS.map(b => b.id), ['dark', 'black', 'slate', 'light']);
   assert.equal(CE.BACKGROUNDS[0].bg, CE.DEFAULT_THEME.bg);
+  assert.equal(CE.BACKGROUNDS[0].bg, '#050506', '1.39.0: Dark is the V2 black');
   assert.equal(CE.BACKGROUNDS[1].bg, '#000000');
   for (const b of CE.BACKGROUNDS) assert.match(b.bg, /^#[0-9A-F]{6}$/);
   assert.equal(U.buildTheme({ bg: '#000000' }).ground, 'dark');
@@ -277,7 +302,8 @@ test('chart: the IB lines start at 9:30 (Anthony), the other levels run across t
 
 test('every ground but the default: the toolbar, menus and status line match it, text at the chart floors (Anthony)', () => {
   assert.equal(U.chromeColors(U.buildTheme()), null, 'default ground: the page keeps its dark style');
-  assert.equal(U.chromeColors(U.buildTheme({ bg: '#080b10' })), null, 'the default ground typed in: the same');
+  assert.equal(U.chromeColors(U.buildTheme({ bg: '#050506' })), null, 'the default ground typed in: the same');
+  assert.equal(U.chromeColors(U.buildTheme({ bg: '#080b10' })), null, 'the V1 default ground (1.39.0): the same');
   // 1.9.0 (Anthony: the top bar matches every ground): Black a black chrome, Blue-grey a blue-grey one, every grey its own
   for (let v = 0; v < 256; v++) {
     const h = v.toString(16).padStart(2, '0'), bg = '#' + h + h + h, T = U.buildTheme({ bg }), c = U.chromeColors(T);
@@ -292,11 +318,11 @@ test('every ground but the default: the toolbar, menus and status line match it,
   const black = U.chromeColors(U.buildTheme({ bg: '#000000' })), slate = U.chromeColors(U.buildTheme({ bg: '#1B2433' }));
   assert.equal(black['--bg'], '#000000'); assert.equal(slate['--bg'], '#1B2433');
   // a dark ground lifts the house surfaces by the house steps and keeps the house text where it reads
-  assert.deepEqual([black['--s2'], black['--text'], black['--text2'], black['--buy'], black['--sell'], black['--warn']], ['#070A0D', '#E6EDF5', '#9AA8B8', '#3DDC97', '#FF7A7A', '#E0B45A']);
-  assert.deepEqual([slate['--s2'], slate['--s3'], slate['--line-strong']], ['#222E40', '#273549', '#3D4F68']);
-  const house = U.chromeColors(Object.assign(U.buildTheme({ bg: '#000000' }), { bg: '#080B10' }));
+  assert.deepEqual([black['--s2'], black['--text'], black['--text2'], black['--buy'], black['--sell'], black['--warn']], ['#0C0C0E', '#ECE9E2', '#A6A196', '#3DDC97', '#FF7A7A', '#E8B85C']);
+  assert.deepEqual([slate['--s2'], slate['--s3'], slate['--line-strong']], ['#273041', '#2E3749', '#404751']);
+  const house = U.chromeColors(Object.assign(U.buildTheme({ bg: '#000000' }), { bg: '#050506' }));
   assert.deepEqual([house['--s2'], house['--s3'], house['--line'], house['--line-strong'], house['--panel'], house['--accent-tint'], house['--accent-border']],
-    ['#0F151D', '#141C26', '#18212C', '#2A3645', '#0B1016', '#1A1230', '#3B2A6B'], 'the lift of the house ground is the house chrome itself');
+    ['#111114', '#18181C', '#1B1B20', '#2A2824', '#0C0C0F', '#17140E', '#3C321E'], 'the lift of the house ground is the house chrome itself (V2)');
   assert.ok(U.chromeColors(U.buildTheme({ bg: '#F5F7FA' })), 'the Light preset takes it light');
   let s = 99;
   const rnd = () => (s = (s * 48271) % 2147483647) / 2147483647;

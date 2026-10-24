@@ -19,9 +19,9 @@
  * stop every animation in the tab (the grid canvas then draws one still frame); the glow stays, still.
  */
 :root {
-  --ag-line: #2A1F4D; --ag-line2: #1B1636; --ag-panel: #0B0E15; --ag-inset: #0E0B1C; --ag-raise: #15102B; --ag-hover: #0F1320;
-  --ag-lav: #B69CFF; --ag-lav2: #D7C8FF; --ag-pur: #7B5CFF; --ag-pur2: #6D28D9; --ag-gold: #E0B45A;
-  --ag-text: #E6EDF5; --ag-soft: #C9D2DE; --ag-muted: #8392A5; --ag-dim: #5B6B80;
+  --ag-line: #3C321E; --ag-line2: #24201A; --ag-panel: #0C0C0F; --ag-inset: #0E0D0B; --ag-raise: #17140E; --ag-hover: #121110;
+  --ag-lav: #E2C687; --ag-lav2: #F2E4C2; --ag-pur: #C9A55C; --ag-pur2: #C9A55C; --ag-gold: #E8B85C;
+  --ag-text: #ECE9E2; --ag-soft: #CFCAC0; --ag-muted: #8A857B; --ag-dim: #6B665C;
   --ag-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
   --ag-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --ag-cond: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
@@ -40,7 +40,7 @@
 
 /* ---------------- the tab button in the top bar, and the workspace while the tab is open (the page's look) */
 .ws-btn.ag-tabbtn { font-weight: 600; letter-spacing: .02em; position: relative; }
-.ws-btn.ag-tabbtn[aria-pressed="true"] { border-color: var(--ws-tint-line, #3B2A6B); background: var(--ws-tint, #1A1230); color: var(--ws-soft, #D8CCFF); box-shadow: inset 0 0 0 1px var(--ws-tint-line, #3B2A6B); }
+.ws-btn.ag-tabbtn[aria-pressed="true"] { border-color: var(--ws-tint-line, #3C321E); background: var(--ws-tint, #17140E); color: var(--ws-soft, #F2E4C2); box-shadow: inset 0 0 0 1px var(--ws-tint-line, #3C321E); }
 .ws-btn.ag-tabbtn.ag-waiting { border-color: var(--ag-pur); color: var(--ag-lav2); }
 .ws-btn.ag-tabbtn.ag-waiting::after { content: ""; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--ag-lav); }
 .ws-btn.ag-tabbtn.ag-alert { border-color: color-mix(in srgb, var(--ag-sell) 60%, transparent); color: #FFC9D3; }
@@ -53,7 +53,7 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view {
   --f-c: #5df2ff; --f-hot: #e8feff; --f-soft: #cfeff4; --f-dim: #7fa6b3; --f-faint: #3d5966; --f-line: rgba(93, 242, 255, .28); --f-line2: rgba(93, 242, 255, .12); --f-line3: rgba(93, 242, 255, .08);
   --f-panel: #040c16; --f-ground: #02060c; --f-blue: #2e9bff;
-  --f-pu: #7b5cff; --f-pud: #6d28d9; --f-put: #b69cff; --f-pul: #d8ccff; --f-rd: #ff3b5c; --f-gr: #3dff9a; --f-or: #ff7a18; --f-gold: #ffd23f;
+  --f-pu: #C9A55C; --f-pud: #C9A55C; --f-put: #E2C687; --f-pul: #F2E4C2; --f-rd: #ff3b5c; --f-gr: #3dff9a; --f-or: #ff7a18; --f-gold: #ffd23f;
   --f-head: "Orbitron", "Chakra Petch", "Segoe UI", system-ui, sans-serif;
   --f-ui: "Chakra Petch", "Segoe UI", system-ui, -apple-system, sans-serif;
   --f-num: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
@@ -173,10 +173,10 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-badge { width: 28px; height: 28px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--f-c); display: grid; place-items: center; color: var(--f-hot);
   box-shadow: 0 0 10px rgba(93, 242, 255, .55), inset 0 0 6px rgba(93, 242, 255, .45); font: 700 9.5px/1 var(--f-head); letter-spacing: .04em; }
 .ag-view .ag-brand { white-space: nowrap; font: 700 15px/1.2 var(--f-head); letter-spacing: .2em; min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto !important; }
-.ag-view .ag-name { color: var(--f-pul); text-shadow: 0 0 12px rgba(123, 92, 255, .8); text-transform: uppercase; }
+.ag-view .ag-name { color: var(--f-pul); text-shadow: 0 0 12px rgba(201, 165, 92, .8); text-transform: uppercase; }
 .ag-view .ag-desk { color: var(--f-dim); font-weight: 500; font-size: 12px; letter-spacing: .24em; }
 .ag-view .ag-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; font: 600 10.5px/16px var(--f-ui); letter-spacing: .16em; text-transform: uppercase; white-space: nowrap;
-  border: 1px solid var(--f-pu); color: var(--f-pul); background: rgba(109, 40, 217, .16); }
+  border: 1px solid var(--f-pu); color: var(--f-pul); background: rgba(201, 165, 92, .16); }
 .ag-view .ag-chip[hidden] { display: none; }
 .ag-view .ag-build { letter-spacing: .06em; text-transform: none; max-width: 200px; overflow: hidden; text-overflow: ellipsis; font-family: var(--f-num); }
 .ag-view .ag-mode.m-shadow { color: var(--f-dim); border-color: var(--f-line); background: transparent; }
@@ -208,7 +208,7 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 @media (max-width: 1500px) { .ag-view .ag-strip .ag-st-today, .ag-view .ag-motion > .ag-lbl { display: none; } .ag-view .ag-strip { gap: 11px; } }
 /* the SIM or LIVE mark: a purple chip, LIVE in red */
 .ag-view .ag-mark { display: inline-flex; align-items: center; height: 18px; padding: 0 7px; font: 700 10px/1 var(--f-ui); letter-spacing: .16em; text-transform: uppercase; vertical-align: middle;
-  border: 1px solid var(--f-pu); color: var(--f-pul); background: rgba(109, 40, 217, .16); box-sizing: border-box; border-radius: 0; }
+  border: 1px solid var(--f-pu); color: var(--f-pul); background: rgba(201, 165, 92, .16); box-sizing: border-box; border-radius: 0; }
 .ag-view .ag-mark[hidden] { display: none; }
 .ag-view .ag-mark.live { color: #ffd0d8; background: rgba(255, 59, 92, .14); border-color: var(--f-rd); }
 /* the selects */
@@ -302,7 +302,7 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-roomrow > span:first-child { white-space: nowrap; }
 .ag-view .ag-meter2 { height: 5px; background: rgba(93, 242, 255, .1); }
 .ag-view .ag-meter2 i { display: block; height: 100%; background: linear-gradient(90deg, var(--f-blue), var(--f-c)); box-shadow: 0 0 8px rgba(93, 242, 255, .5); }
-.ag-view .ag-meter2.pu i { background: var(--f-pu); box-shadow: 0 0 10px rgba(123, 92, 255, .7); }
+.ag-view .ag-meter2.pu i { background: var(--f-pu); box-shadow: 0 0 10px rgba(201, 165, 92, .7); }
 /* the rules form */
 .ag-view .ag-rform { display: grid; gap: 6px; padding: 9px; border: 1px solid var(--f-line2); background: rgba(0, 10, 18, .6); }
 .ag-view .ag-rform > label { display: grid; grid-template-columns: minmax(0, 1fr) 78px; align-items: center; gap: 8px; font-size: 12.5px; color: var(--f-dim); }
@@ -435,7 +435,7 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-prop-cd { flex: none; display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
 .ag-view .inline .ag-acc, .ag-view .inline .ag-rej { flex: 1; min-height: 40px; padding: 0 12px; border-radius: 0; font: 700 12px var(--f-ui); letter-spacing: .2em; text-transform: uppercase; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
 .ag-view .inline .ag-acc { background: rgba(93, 242, 255, .2); color: var(--f-hot); border: 1px solid var(--f-c); box-shadow: 0 0 12px rgba(93, 242, 255, .35); }
-.ag-view .inline .ag-rej { background: rgba(109, 40, 217, .18); color: var(--f-pul); border: 1px solid var(--f-pu); }
+.ag-view .inline .ag-rej { background: rgba(201, 165, 92, .18); color: var(--f-pul); border: 1px solid var(--f-pu); }
 .ag-view .inline .ag-acc:disabled, .ag-view .inline .ag-rej:disabled { opacity: .4; cursor: default; box-shadow: none; }
 .ag-view .ag-prop .bt-keycap { font: 600 10.5px/1 var(--f-num); border: 1px solid currentColor; border-bottom-width: 2px; border-radius: 3px; padding: 2px 5px; color: inherit; background: transparent; margin-left: 6px; text-transform: none; letter-spacing: 0; }
 .ag-view .ag-prop-msg { color: #ffc98f; font-size: 12px; }
@@ -521,7 +521,7 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-cornerline[hidden] { display: none; }
 .ag-cornerline .mono { font-family: var(--ag-mono); font-variant-numeric: tabular-nums; }
 .ag-cornerline .ag-oitem { padding: 1px 3px; }
-.ag-cornerline .ag-oitem.up { color: #F2F6FA; background: color-mix(in srgb, var(--ag-pur) 26%, transparent); box-shadow: inset 0 0 0 1px var(--ag-lav); }
+.ag-cornerline .ag-oitem.up { color: #F7F3EA; background: color-mix(in srgb, var(--ag-pur) 26%, transparent); box-shadow: inset 0 0 0 1px var(--ag-lav); }
 .ag-cornerline .ag-olink { appearance: none; background: none; border: 0; padding: 0; margin: 0; font: inherit; line-height: inherit; color: var(--ag-lav2);
   text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .ag-cornerline .ag-olink:focus-visible { outline: 2px solid var(--ag-pur); outline-offset: 1px; }

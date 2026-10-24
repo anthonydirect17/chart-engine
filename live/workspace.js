@@ -3364,6 +3364,8 @@ function syncLaptop() {
   if (on) {
     const html = W.LAPTOP_TABS.map(n => `<button type="button" role="tab" class="ws-tab" data-tab="${esc(n)}" aria-selected="${n === layout}">${esc(n)}</button>`).join('');
     if (tabs.dataset.html !== html) { tabs.dataset.html = html; tabs.innerHTML = html; }
+    // 1.39.0 (house style V2): the gold ink slides to the chosen tab (at once with reduced motion); the tab acts on its click
+    if (window.ChartMotion && typeof window.ChartMotion.syncInk === 'function') window.ChartMotion.syncInk(tabs, { key: 'ws-tabs' });
   }
   $('wsLaptop').textContent = on ? 'Laptop tabs: on (turn off)' : 'Laptop: two blank tabs, Main and Second';
 }
