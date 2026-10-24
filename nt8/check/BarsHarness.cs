@@ -7,6 +7,8 @@
 //   S1 OffByDefault, S2 OneSession (both daylight saving changes, Sunday's open), S3 DeskUnreachable, S4 CatchUpAtStart,
 //   S5 NeverBesideTheChart (a window out, a window queued behind bars, a backfill to come, a stuck gate, a bars request
 //   NinjaTrader never answers), S6 StopDuringRequest (and during a post), S7 ContractPerRoot, S8 Diag, and RTH.
+// 0.6.9: the 1 second bars (OneSecond*): rows from made-up trades, the parts, the request, the 1-minute message unchanged, regular
+// trading hours, one a pass, a chart loading, today's Desk (404), a restart mid set, a refusal, the speed of one pass.
 // Made-up prices and a made-up account name; nothing here is market data.
 using System;
 using System.Collections.Generic;
@@ -103,6 +105,14 @@ public static class BarsHarness
             S7ContractPerRoot(dir);
             S8Diag(dir);
             Rth(dir);
+            OneSecondBuilder();          // 0.6.9: 1 second bars from made-up trades (pure)
+            OneSecondMessages();         // 0.6.9: the parts of a set
+            OneSecondSession(dir);       // 0.6.9: through the gate, a stand-in Desk, the 1-minute message unchanged
+            OneSecondWindow();           // 0.6.9 (coordinator 2026-10-24): 16:15 to 18:00 ET on weekdays, the weekend while shut
+            OneSecondRthAndOnePerPass(dir);
+            OneSecondOldDeskAndRestart(dir);
+            OneSecondRefused(dir);
+            OneSecondSpeed();
         }
         catch (Exception ex) { Check(false, "bars harness threw: " + ex); }
         finally
@@ -311,6 +321,8 @@ public static class BarsHarness
     {
         public HttpListener L; public int Port; public readonly List<string> Bodies = new List<string>();
         public Func<string, int> Status = body => 200;
+        public Func<string, int> Status1s = body => 404;   // 0.6.9: POST /api/bars-1s (404: a Desk without it, as today's)
+        public readonly List<string> Bodies1s = new List<string>();
         public int HoldMs;   // answer this late
         public Desk()
         {
@@ -333,6 +345,14 @@ public static class BarsHarness
                         try
                         {
                             string body; using (StreamReader r = new StreamReader(c.Request.InputStream)) body = r.ReadToEnd();
+                            if (c.Request.Url.AbsolutePath == "/api/bars-1s")
+                            {
+                                lock (Bodies1s) Bodies1s.Add(body);
+                                int code1 = Status1s(body);
+                                byte[] b1 = System.Text.Encoding.UTF8.GetBytes(code1 == 200 ? "{\"ok\":true}" : "{\"detail\":\"bars must be a list\"}");
+                                c.Response.StatusCode = code1; c.Response.OutputStream.Write(b1, 0, b1.Length); c.Response.Close();
+                                return;
+                            }
                             if (c.Request.Url.AbsolutePath != "/api/bars") { c.Response.StatusCode = 404; c.Response.Close(); return; }
                             lock (Bodies) Bodies.Add(body);
                             if (HoldMs > 0) Thread.Sleep(HoldMs);
@@ -349,6 +369,7 @@ public static class BarsHarness
         public string Url { get { return "http://127.0.0.1:" + Port; } }
         public int Count { get { lock (Bodies) return Bodies.Count; } }
         public List<string> All() { lock (Bodies) return Bodies.ToList(); }
+        public List<string> All1s() { lock (Bodies1s) return Bodies1s.ToList(); }
         public void Stop() { try { L.Stop(); L.Close(); } catch (Exception) { } }
     }
 
@@ -374,6 +395,7 @@ public static class BarsHarness
     static bool AnswerLikeNt(BarsRequest r)
     {
         if (!IsBars(r)) return false;
+        if (r.BarsPeriod != null && r.BarsPeriod.BarsPeriodType == BarsPeriodType.Tick) { r.Answer(answerTicks(r), ErrorCode.NoError); return true; }   // 0.6.9
         Bars b = new Bars();
         if (!answerEmpty(r))
         {
@@ -400,10 +422,13 @@ public static class BarsHarness
         ChartBridgeBars.ReadConfig("bars", "on");
         if (roots != null) ChartBridgeBars.ReadConfig("barsRoots", roots);
         ChartBridgeBars.ReadConfig("pc", "HOME");
+        ChartBridgeBars.ReadConfig("bars1s", "off");   // 0.6.9: the 1-minute cases as before; the 1 second cases turn it on (OneSecond*)
         ChartBridgeBars.CatchUpSessions = 5; ChartBridgeBars.RequestTimeoutMs = 60000; ChartBridgeBars.QueueWaitMs = 60000; ChartBridgeBars.MaxTries = 3;
         ChartBridgeBars.TickMs = 10000; ChartBridgeBars.SettleMs = 120000; ChartBridgeBars.PlanEveryMs = 60000;
-        foreach (string f in new[] { "pending_bars.jsonl", "sent_bars.txt", "rejected_bars.jsonl", "refused_bars.txt", "config.txt" }) File.Delete(Path.Combine(dir, "ChartBridge", f));
+        foreach (string f in new[] { "pending_bars.jsonl", "sent_bars.txt", "rejected_bars.jsonl", "refused_bars.txt", "config.txt", "sent_bars1s.txt", "refused_bars1s.txt", "rejected_bars1s.jsonl" }) File.Delete(Path.Combine(dir, "ChartBridge", f));
+        if (Directory.Exists(Path.Combine(dir, "ChartBridge", "bars1s"))) Directory.Delete(Path.Combine(dir, "ChartBridge", "bars1s"), true);
         ChartBridgeBarsQueue.Load();
+        ChartBridgeBars1sQueue.Load();
         ChartBridgeServer.ResetBooks(DateTime.MinValue);
         ChartBridgeBars.Lookup = name => Inst(name);
         ChartBridgeBars.UtcNow = () => nowUtc;
@@ -506,7 +531,7 @@ public static class BarsHarness
                   "S2 OneSession: the request: MNQ 12-26, 1 minute, Last, DoNotMerge, the instrument's trading hours, from the day before the open to now (NinjaTrader's time): " + (r == null ? "none" : r.From + " to " + r.To));
             string b = d2.All().FirstOrDefault() ?? "";
             Check(b.StartsWith("{\"v\":1,\"source\":\"chartbridge\",\"bridge\":\"" + ChartBridgeServer.Version + "\",\"pc\":\"HOME\",\"contract\":\"MNQ 12-26\",\"root\":\"MNQ\",\"tick\":0.25,\"session\":\"2026-09-30\",\"tf\":\"1m\",\"stamp\":\"open\",\"bars\":[[") &&
-                  ChartBridgeServer.Version == "0.6.8", "S2 OneSession: contract v1 fields, bridge 0.6.8, pc HOME: " + (b.Length > 160 ? b.Substring(0, 160) : b));
+                  ChartBridgeServer.Version == "0.6.9", "S2 OneSession: contract v1 fields, bridge 0.6.9, pc HOME: " + (b.Length > 160 ? b.Substring(0, 160) : b));
             Check(Ts(b).Count > 0 && Ts(b)[0] == Ms(Utc(2026, 9, 29, 22, 0)) && b.Contains("[" + Ms(Utc(2026, 9, 29, 22, 0)) + ",25000,25001,24999.5,25000.25,10]"),
                 "S2 OneSession: the first bar is the 18:00 ET minute (NinjaTrader's 18:01 close stamp less 60 s), prices and volume exact");
         }
@@ -591,7 +616,7 @@ public static class BarsHarness
                 "N1: a refusal is set aside and noted in refused_bars.txt");
             // a restart: what the worker remembers this run (GaveUp) is gone, the files are read again
             ChartBridgeBars.ResetConfig(); ChartBridgeBars.Start();   // bars off: resets the run's memory, starts nothing
-            ChartBridgeBars.ReadConfig("bars", "on"); ChartBridgeBars.ReadConfig("barsRoots", "MNQ"); ChartBridgeBars.ReadConfig("pc", "HOME");
+            ChartBridgeBars.ReadConfig("bars", "on"); ChartBridgeBars.ReadConfig("barsRoots", "MNQ"); ChartBridgeBars.ReadConfig("pc", "HOME"); ChartBridgeBars.ReadConfig("bars1s", "off");   // 0.6.9: the 1-minute case
             ChartBridgeBarsQueue.Load();
             ChartBridgeBars.CatchUpSessions = 2;
             int m0 = MadeCount();
@@ -1016,5 +1041,399 @@ public static class BarsHarness
                 "RTH: the catch-up at a 10:00 ET start runs; its retries wait out regular trading hours and go at 16:16 ET (" + first + ", " + inRth + ", " + BarsMade(m0).Count + ")");
         }
         finally { desk.Stop(); }
+    }
+    // ------------------------------------------------------------ 0.6.9: 1 second bars (Anthony 2026-10-24, the stats suite's Phase 2)
+    // The stand-in NinjaTrader's trades for a tick request: answerTicks (per case). TicksFor makes a session of made-up trades: one
+    // every `every` seconds from the 18:00 ET open to the 17:00 close, the even ones with a quote stored (at the ask), the odd ones
+    // without, plus three trades of the session before (the request covers whole days from 12:00 AM), which are left out.
+    static Func<BarsRequest, Bars> answerTicks = r => new Bars();
+    static Bars TicksFor(DateTime session, int every)
+    {
+        Bars b = new Bars();
+        DateTime openEt = session.Date.AddDays(-1).AddHours(18);
+        for (int k = 0; k < 3; k++) { b.Add(NtOf(session.Date.AddDays(-1).AddHours(12).AddSeconds(k)), 1, 1, 1, 24990, 1); b.Bids.Add(0); b.Asks.Add(0); }
+        for (int sec = 0, n = 0; sec < 23 * 3600; sec += every, n++)
+        {
+            double p = 25000 + (sec % 13) * 0.25;
+            b.Add(NtOf(openEt.AddSeconds(sec)).AddMilliseconds(250), p, p, p, p, 1 + sec % 3);
+            if (n % 2 == 0) { b.Bids.Add(p - 0.25); b.Asks.Add(p); } else { b.Bids.Add(0); b.Asks.Add(0); }
+        }
+        return b;
+    }
+    static bool IsTicks1s(BarsRequest r) { return IsBars(r) && r.BarsPeriod != null && r.BarsPeriod.BarsPeriodType == BarsPeriodType.Tick; }
+    static List<BarsRequest> TicksMade(int from) { return Made(from).Where(IsTicks1s).ToList(); }
+    static List<string> Rows1s(string body) { return Regex.Matches(body, "\\[(\\d{13}),([0-9.]+),([0-9.]+),([0-9.]+),([0-9.]+),(\\d+),(\\d+),(\\d+)\\]").Cast<Match>().Select(m => m.Value).ToList(); }
+    static string Field1s(string body, string key) { Match m = Regex.Match(body, "\"" + key + "\":(\"[^\"]*\"|[^,}\\]]*)"); return m.Success ? m.Groups[1].Value : "(none)"; }
+    static string Bars1sDir(string dir) { return Path.Combine(dir, "ChartBridge", "bars1s"); }
+    static Desk Fresh1s(string dir, string roots, DateTime nowUtc)
+    {
+        Desk d = Fresh(dir, roots, nowUtc);
+        ChartBridgeBars.ReadConfig("bars1s", "on");
+        answerTicks = r => TicksFor(SessionOf1s(r), 7);
+        return d;
+    }
+    // The session a tick request asks for: to the close (17:00 ET of the session date, NinjaTrader's time) or to now.
+    static DateTime SessionOf1s(BarsRequest r)
+    {
+        DateTime toEt = TimeZoneInfo.ConvertTimeFromUtc(TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(r.To, DateTimeKind.Unspecified), NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo), NY);
+        return toEt.TimeOfDay > TimeSpan.FromHours(17) ? toEt.Date.AddDays(1) : toEt.Date;
+    }
+
+    static void OneSecondBuilder()
+    {
+        NtZone(Chicago);
+        DateTime ou, cu; ChartBridgeBars.SessionUtc(D(2026, 9, 30), out ou, out cu);
+        long from = Ms(ou), to = Ms(cu);
+        Func<double, DateTime> At = secAfterOpen => NtOf(W(2026, 9, 29, 18, 0)).AddMilliseconds(secAfterOpen * 1000);
+        SecondsBuilder b = new SecondsBuilder(from, to);
+        b.Add(NtOf(W(2026, 9, 29, 17, 59)).AddSeconds(59.9), 24990, 5, 24989.75, 24990);   // the break: not this session
+        b.Add(At(0.1), 25000, 2, 24999.75, 25000);       // at the ask: a buy (bidAsk)
+        b.Add(At(0.4), 24999.75, 1, 24999.75, 25000);    // at the bid: a sell (bidAsk)
+        b.Add(At(0.9), 25000.25, 3, 0, 0);               // no quote stored, above the last: a buy (tick rule)
+        b.Add(At(1.0), 25000.25, 2, 0, 0);               // exactly on the next second: its own row; same price: the last side (buy)
+        b.Add(At(5.0), 25000.25, 1, 0, 0);               // seconds 2 to 4 had no trade: no rows for them (gaps stay gaps)
+        b.Add(At(5.5), 25000, 4, 24999.75, 25000.25);    // between the quotes: the tick rule, below the last: a sell
+        b.Add(NtOf(W(2026, 9, 30, 17, 0)), 25010, 9, 0, 0);   // at the close: not this session
+        SecondsBuild r = b.Finish();
+        string rows = string.Join(" ", r.Rows.Select(x => "[" + x.T + "," + x.O + "," + x.H + "," + x.L + "," + x.C + "," + x.V + "," + x.Buy + "," + x.Sell + "]").ToArray());
+        long t0 = Ms(ou);
+        string want = "[" + t0 + ",25000,25000.25,24999.75,25000.25,6,5,1] [" + (t0 + 1000) + ",25000.25,25000.25,25000.25,25000.25,2,2,0] [" + (t0 + 5000) + ",25000.25,25000.25,25000,25000,5,1,4]";
+        Check(rows == want, "1s builder: one row per second with trades: t its open (UTC ms), o h l c, v, buy volume, sell volume; a trade on the second starts the next row; seconds with no trade are left out: " + rows);
+        Check(r.Trades == 6 && r.Volume == 13 && r.BidAsk == 2 && r.TickRule == 4 && r.None == 0 && r.Outside == 2 && r.Method == "mixed",
+              "1s builder: sides counted by method (2 from the quote stored with the trade, 4 by the tick rule), the break and the close left out: " + r.Trades + " " + r.BidAsk + " " + r.TickRule + " " + r.Outside + " " + r.Method);
+        // the first trade of the session with no quote has no side (the tick rule starts over at 18:00, as live)
+        SecondsBuilder b2 = new SecondsBuilder(from, to);
+        b2.Add(At(2), 25000, 3, 0, 0); b2.Add(At(2.5), 25000, 1, 0, 0); b2.Add(At(2.7), 25000.5, 2, 0, 0);
+        SecondsBuild r2 = b2.Finish();
+        Check(r2.Rows.Count == 1 && r2.Rows[0].V == 6 && r2.Rows[0].Buy == 2 && r2.Rows[0].Sell == 0 && r2.None == 2 && r2.TickRule == 1 && r2.Method == "tickRule",
+              "1s builder: no quote and no trade before: no side (its volume in v only, v less bv less sv is the unknown); the tick rule after: " + r2.Rows[0].V + "/" + r2.Rows[0].Buy + "/" + r2.Rows[0].Sell + " none " + r2.None);
+        // NinjaTrader's time zone: the same trades from Tokyo and London stamp the same UTC seconds
+        foreach (TimeZoneInfo z in new[] { Tokyo, London, NY })
+        {
+            NtZone(z);
+            SecondsBuilder bz = new SecondsBuilder(from, to);
+            bz.Add(NtOf(W(2026, 9, 29, 18, 0)).AddMilliseconds(100), 25000, 1, 0, 0);
+            bz.Add(NtOf(W(2026, 9, 30, 16, 59)).AddSeconds(59.5), 25001, 1, 0, 0);
+            SecondsBuild rz = bz.Finish();
+            Check(rz.Rows.Count == 2 && rz.Rows[0].T == Ms(ou) && rz.Rows[1].T == Ms(cu) - 1000, "1s builder: NinjaTrader in " + z.Id + ": the 18:00:00 ET and 16:59:59 ET seconds stamped exactly in UTC");
+        }
+        NtZone(Chicago);
+        // a trade out of time order (never seen; kept exact): into its own second, open and close of that second untouched
+        SecondsBuilder b3 = new SecondsBuilder(from, to);
+        b3.Add(At(0), 25000, 1, 0, 0); b3.Add(At(3), 25002, 1, 0, 0); b3.Add(At(0.5), 24998, 2, 0, 0); b3.Add(At(1.5), 25001, 1, 0, 0);
+        SecondsBuild r3 = b3.Finish();
+        Check(r3.Rows.Count == 3 && r3.Rows[0].L == 24998 && r3.Rows[0].V == 3 && r3.Rows[0].C == 25000 && r3.Rows[1].T == Ms(ou) + 1000 && r3.OutOfOrder == 2,
+              "1s builder: a trade out of order goes to its own second (sorted rows, no duplicate second): " + string.Join(",", r3.Rows.Select(x => x.T - Ms(ou)).ToArray()));
+        // BuildSeconds reads the 1 tick series' stored bid and ask (GetBid/GetAsk): none stored (0): the tick rule for every trade
+        Bars plain = new Bars();
+        for (int i = 0; i < 4; i++) plain.Add(At(i), 25000 + i, 25000 + i, 25000 + i, 25000 + i, 1);
+        SecondsBuild r4 = (SecondsBuild)ChartBridgeBars.BuildSeconds(plain, from, to);
+        Check(r4.Rows.Count == 4 && r4.Method == "tickRule" && r4.None == 1 && r4.TickRule == 3, "1s builder: a tick series with no bid and ask stored: sides by the tick rule, said as tickRule: " + r4.Method);
+    }
+
+    static void OneSecondMessages()
+    {
+        SecondsBuilder b = new SecondsBuilder(0, long.MaxValue);
+        for (int i = 0; i < 5; i++) b.Add(new DateTime(2026, 9, 30, 13, 0, i, 100, DateTimeKind.Unspecified), 25000 + i * 0.25, 2, 25000 + i * 0.25 - 0.25, 25000 + i * 0.25);
+        NtZone(Chicago);
+        SecondsBuild sb = b.Finish();
+        int perWas = ChartBridgeBars.Rows1sPerPart;
+        ChartBridgeBars.Rows1sPerPart = 2;
+        ChartBridgeBars.ReadConfig("pc", "HOME");
+        List<string> parts = ChartBridgeBars.Messages1s("MNQ 12-26", "MNQ", 0.25, D(2026, 9, 30), sb, "a1b2c3d4e5f6");
+        ChartBridgeBars.Rows1sPerPart = perWas;
+        string head = "{\"v\":2,\"source\":\"chartbridge\",\"bridge\":\"" + ChartBridgeServer.Version + "\",\"pc\":\"HOME\",\"contract\":\"MNQ 12-26\",\"root\":\"MNQ\",\"tick\":0.25,\"session\":\"2026-09-30\",\"tf\":\"1s\",\"stamp\":\"open\",\"cols\":[\"t\",\"o\",\"h\",\"l\",\"c\",\"v\",\"bv\",\"sv\"],\"sides\":{\"method\":\"bidAsk\",\"bidAsk\":5,\"tickRule\":0,\"none\":0},\"set\":\"a1b2c3d4e5f6\",\"part\":";
+        Check(parts.Count == 3 && parts.All(x => x.StartsWith(head) && x.EndsWith("],\"complete\":true}")) && Field1s(parts[0], "part") == "1" && Field1s(parts[2], "part") == "3" && parts.All(x => Field1s(x, "parts") == "3") &&
+              parts.All(x => Field1s(x, "setRows") == "5" && Field1s(x, "setTrades") == "5" && Field1s(x, "setVolume") == "10") && Rows1s(parts[0]).Count == 2 && Rows1s(parts[2]).Count == 1,
+              "1s message (contract v2): 5 rows at 2 a part are 3 parts of one set, each with the set's totals, rows [t,o,h,l,c,v,bv,sv]: " + parts[0].Substring(0, Math.Min(420, parts[0].Length)));
+        Check(ChartBridgeBars1sQueue.KeyOfLine(parts[1]) == "2026-09-30 MNQ 12-26" && ChartBridgeBars1sQueue.KeyOfLine(ChartBridgeBars.MessageJson("MNQ 12-26", "MNQ", 0.25, D(2026, 9, 30), new List<DeskBar>())) == null,
+              "1s message: its key read back from the line; a 1-minute line is never taken for one");
+        Check(Field1s(parts[0], "first") == Field1s(parts[2], "first") && Field1s(parts[0], "last") == sb.Rows[4].T.ToString(), "1s message: first and last second of the whole session in every part");
+    }
+
+    static void OneSecondSession(string dir)
+    {
+        // the 1-minute message of a session, with the 1 second bars off and on: byte for byte the same
+        DateTime now = EtToUtc(W(2026, 9, 30, 17, 6));
+        Desk off = Fresh(dir, "MNQ", now);
+        string m1off;
+        try { ChartBridgeBars.CatchUpSessions = 1; ChartBridgeBars.PlanOnce(null); m1off = off.All().FirstOrDefault() ?? ""; }
+        finally { off.Stop(); }
+        Desk desk = Fresh1s(dir, "MNQ", now);
+        try
+        {
+            desk.Status1s = body => 200;
+            ChartBridgeBars.CatchUpSessions = 1;
+            int m0 = MadeCount();
+            ChartBridgeBars.PlanOnce(null);
+            string m1on = desk.All().FirstOrDefault() ?? "";
+            Check(m1off.Length > 0 && m1on == m1off, "1s session: the 1-minute message is byte for byte the same with the 1 second bars on (" + m1on.Length + " bytes)");
+            List<BarsRequest> ticks = TicksMade(m0);
+            BarsRequest r = ticks.FirstOrDefault();
+            Check(ticks.Count == 1 && r.BarsPeriod.Value == 1 && r.BarsPeriod.MarketDataType == MarketDataType.Last && r.MergePolicy == MergePolicy.DoNotMerge && r.TradingHours != null &&
+                  r.Instrument.FullName == "MNQ 12-26" && r.From == D(2026, 9, 29) && r.To == W(2026, 9, 30, 16, 0),
+                  "1s session: one request, 1 tick, Last, DoNotMerge, the trading hours, from the open's date (12:00 AM, NinjaTrader's time) to the close: " + (r == null ? "none" : r.From + " to " + r.To));
+            List<string> got = desk.All1s();
+            List<string> rows = got.SelectMany(Rows1s).ToList();
+            int parts = got.Count;
+            bool oneSet = got.Select(x => Field1s(x, "set")).Distinct().Count() == 1;
+            bool inOrder = got.Select((x, i) => Field1s(x, "part") == (i + 1).ToString() && Field1s(x, "parts") == parts.ToString()).All(x => x);
+            List<long> ts = rows.Select(x => long.Parse(x.Substring(1, 13))).ToList();
+            bool sorted = ts.Zip(ts.Skip(1), (a, b) => b > a).All(x => x);
+            DateTime ou, cu; ChartBridgeBars.SessionUtc(D(2026, 9, 30), out ou, out cu);
+            Check(parts == 8 && oneSet && inOrder && rows.Count == 11829 && sorted && ts[0] == Ms(ou) && ts.Last() < Ms(cu) && ts.All(t => t % 1000 == 0) && Field1s(got[0], "setRows") == "11829",
+                  "1s session: a trade every 7 s from 18:00 to 17:00 ET: 11,829 seconds in 8 parts of at most 1,500 rows, one set, parts 1 to 8 in order, sorted, inside the session: " + parts + " parts, " + rows.Count + " rows");
+            Check(Field1s(got[0], "method") == "\"mixed\"" && got.All(x => x.Length < 128 * 1024), "1s session: sides by the quote stored with half the trades, the tick rule for the rest (mixed); every part under 128 KB (largest " + got.Max(x => x.Length) + " bytes)");
+            Check(ChartBridgeBars1sQueue.IsDone("2026-09-30 MNQ 12-26") && Lines(dir, "sent_bars1s.txt").Contains("2026-09-30 MNQ 12-26") && Directory.GetFiles(Bars1sDir(dir)).Length == 0 && Logged("The Desk took the 1 second bars for 2026-09-30 MNQ 12-26 (8 parts)"),
+                  "1s session: The Desk took every part: noted in sent_bars1s.txt, bars1s/ emptied");
+            int m1 = MadeCount();
+            ChartBridgeBars.PlanOnce(null);
+            ChartBridgeBars1sQueue.Load();
+            ChartBridgeBars.PlanOnce(null);
+            Check(TicksMade(m1).Count == 0 && desk.All1s().Count == 8, "1s session: the next pass and a restart ask for nothing more");
+            Check(Diag().Contains("\"oneSecond\":{\"on\":true,") && Diag().Contains("\"lastSent\":{\"MNQ 12-26\":\"2026-09-30\"}") && Diag().Contains("11829 seconds, 8 messages, 3 trades outside the session left out (asked 2026-09-29 00:00 to 2026-09-30 16:00 NinjaTrader time), sides mixed"),
+                  "1s session: /diag bars.oneSecond: on, last sent, the last build: " + Regex.Match(Diag(), "\"oneSecond\":\\{.*\\}\\}$").Value);
+        }
+        finally { desk.Stop(); }
+        // the roots: NQ and MNQ only (ES and MES get their 1-minute bars as before), and only with their 1-minute bars on
+        Desk d2 = Fresh1s(dir, "NQ, MNQ, ES, MES", now);
+        try
+        {
+            d2.Status1s = body => 200;
+            ChartBridgeBars.CatchUpSessions = 1;
+            int m0 = MadeCount();
+            for (int i = 0; i < 4; i++) ChartBridgeBars.PlanOnce(null);
+            List<string> asked = TicksMade(m0).Select(x => x.Instrument.FullName).ToList();
+            Check(asked.Count == 2 && asked.Contains("NQ 12-26") && asked.Contains("MNQ 12-26") && d2.All().Count == 4, "1s roots: NQ and MNQ only, one a pass; the four 1-minute messages as before: " + string.Join(", ", asked));
+        }
+        finally { d2.Stop(); }
+        Desk d3 = Fresh1s(dir, "ES", now);
+        try { int m0 = MadeCount(); ChartBridgeBars.PlanOnce(null); Check(TicksMade(m0).Count == 0, "1s roots: barsRoots without NQ and MNQ: no 1 second request"); }
+        finally { d3.Stop(); }
+        Desk d4 = Fresh(dir, "MNQ", now);
+        try { int m0 = MadeCount(); ChartBridgeBars.ReadConfig("bars1s", "off"); ChartBridgeBars.PlanOnce(null); Check(TicksMade(m0).Count == 0 && !ChartBridgeBars.OneSecondOn, "1s: bars1s = off: none, the 1-minute bars as before"); }
+        finally { d4.Stop(); }
+        ChartBridgeBars.ResetConfig(); ChartBridgeBars.ReadConfig("bars", "on");
+        Check(ChartBridgeBars.OneSecondOn, "1s: on by default with bars = on (Anthony approved Phase 2 on 2026-10-24)");
+        ChartBridgeBars.ResetConfig();
+        Check(!ChartBridgeBars.OneSecondOn, "1s: off with bars off");
+    }
+
+    static void OneSecondWindow()
+    {
+        // 2026-10-07 is a Wednesday, 10-10 a Saturday, 10-11 a Sunday, 10-09 a Friday
+        foreach (var c in new[] {
+            new { At = W(2026, 10, 7, 8, 0), In = false, What = "Wednesday 08:00 (premarket)" },
+            new { At = W(2026, 10, 7, 9, 30), In = false, What = "Wednesday 09:30 (regular hours)" },
+            new { At = W(2026, 10, 7, 16, 14), In = false, What = "Wednesday 16:14" },
+            new { At = W(2026, 10, 7, 16, 15), In = true, What = "Wednesday 16:15 (the window opens)" },
+            new { At = W(2026, 10, 7, 17, 59), In = true, What = "Wednesday 17:59" },
+            new { At = W(2026, 10, 7, 18, 0), In = false, What = "Wednesday 18:00 (the evening session opens)" },
+            new { At = W(2026, 10, 7, 23, 0), In = false, What = "Wednesday 23:00 (evening session)" },
+            new { At = W(2026, 10, 8, 2, 0), In = false, What = "Thursday 02:00 (overnight)" },
+            new { At = W(2026, 10, 9, 16, 15), In = true, What = "Friday 16:15" },
+            new { At = W(2026, 10, 9, 20, 0), In = false, What = "Friday 20:00 (a weekday evening, outside the window)" },
+            new { At = W(2026, 10, 10, 0, 0), In = true, What = "Saturday 00:00" },
+            new { At = W(2026, 10, 10, 13, 0), In = true, What = "Saturday 13:00" },
+            new { At = W(2026, 10, 11, 17, 59), In = true, What = "Sunday 17:59" },
+            new { At = W(2026, 10, 11, 18, 0), In = false, What = "Sunday 18:00 (the week's evening session opens)" },
+            new { At = W(2026, 10, 12, 16, 15), In = true, What = "Monday 16:15" } })
+            Check(ChartBridgeBars.In1sWindow(c.At) == c.In, "1s window: " + c.What + (c.In ? ": requests and sends may go" : ": nothing asked or sent"));
+        // review of #71 (MEDIUM 2): a new request starts by 17:50 (the window's end less 10 minutes); sends may go on to 18:00
+        foreach (var c in new[] {
+            new { At = W(2026, 10, 7, 16, 15), In = true, What = "Wednesday 16:15" },
+            new { At = W(2026, 10, 7, 17, 49), In = true, What = "Wednesday 17:49" },
+            new { At = W(2026, 10, 7, 17, 50), In = false, What = "Wednesday 17:50" },
+            new { At = W(2026, 10, 7, 17, 59), In = false, What = "Wednesday 17:59" },
+            new { At = W(2026, 10, 10, 23, 59), In = true, What = "Saturday 23:59" },
+            new { At = W(2026, 10, 11, 17, 49), In = true, What = "Sunday 17:49" },
+            new { At = W(2026, 10, 11, 17, 50), In = false, What = "Sunday 17:50" } })
+            Check(ChartBridgeBars.In1sStartWindow(c.At) == c.In, "1s start window: " + c.What + (c.In ? ": a request may start" : ": no new request (one may run past 18:00)"));
+    }
+
+    static void OneSecondRthAndOnePerPass(string dir)
+    {
+        // a start at 10:00 ET: the 1-minute catch-up runs as before; no 1 second request in regular trading hours; at 16:16 ET they go
+        DateTime now = EtToUtc(W(2026, 10, 7, 10, 0));
+        Desk desk = Fresh1s(dir, "MNQ", now);
+        try
+        {
+            desk.Status1s = body => 200;
+            ChartBridgeBars.CatchUpSessions = 2;
+            int m0 = MadeCount();
+            ChartBridgeBars.PlanOnce(null);
+            int minutes = BarsMade(m0).Count(x => !IsTicks1s(x)), ticks = TicksMade(m0).Count;
+            string st = Regex.Match(Diag(), "\"oneSecond\":\\{\"on\":true,\"state\":\"[^\"]*\"").Value;
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 7, 16, 16));
+            ChartBridgeBars.PlanOnce(null);
+            int after1 = TicksMade(m0).Count;
+            ChartBridgeBars.PlanOnce(null);
+            int after2 = TicksMade(m0).Count;
+            Check(minutes == 2 && ticks == 0 && st.Contains("waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend") && after1 == 1 && after2 == 2,
+                  "1s RTH: at 10:00 ET the 1-minute catch-up goes (" + minutes + "), no tick request (" + ticks + "); after 16:15 one a pass (" + after1 + ", " + after2 + ")");
+            // the sends wait out regular trading hours too: a set queued, The Desk up, 10:00 the next day: nothing posted
+            int posted = desk.All1s().Count;
+            File.Delete(Path.Combine(dir, "ChartBridge", "sent_bars1s.txt"));
+            ChartBridgeBars1sQueue.Load();
+            SecondsBuilder b = new SecondsBuilder(0, long.MaxValue); b.Add(new DateTime(2026, 10, 6, 12, 0, 0), 25000, 1, 0, 0);
+            ChartBridgeBars1sQueue.Queue("2026-10-06 NQ 12-26", ChartBridgeBars.Messages1s("NQ 12-26", "NQ", 0.25, D(2026, 10, 6), b.Finish(), "rth000000001"));
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 8, 10, 0));
+            ChartBridgeBars1sQueue.Flush(null);
+            int inRth = desk.All1s().Count - posted;
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 8, 16, 20));
+            ChartBridgeBars1sQueue.Flush(null);
+            Check(inRth == 0 && desk.All1s().Count - posted == 1, "1s RTH: a waiting set is not posted in regular trading hours; at 16:20 ET it goes");
+            // the start's catch-up outside the window waits for it: a start at 08:00 ET (premarket) and at 19:00 ET (evening session)
+            // asks nothing; at 16:15 it goes; Saturday any time; Sunday 18:00 nothing
+            // review of #71 (MEDIUM 2): the pass's 1-minute requests take time: the clock is read again before a 1 second request.
+            // A pass that starts at 17:45 and whose minute answer comes at 17:52 (or 18:01) asks for no trades.
+            foreach (int doneAt in new[] { 52, 61 })
+            {
+                Desk dl = Fresh1s(dir, "MNQ", EtToUtc(W(2026, 9, 30, 17, 45)));
+                try
+                {
+                    DateTime clk = EtToUtc(W(2026, 9, 30, 17, 45));
+                    ChartBridgeBars.UtcNow = () => clk;
+                    BarsRequest.AutoAnswer = r => { if (!IsTicks1s(r)) clk = EtToUtc(W(2026, 9, 30, 17, 0)).AddMinutes(doneAt); return AnswerLikeNt(r); };
+                    dl.Status1s = body => 200;
+                    ChartBridgeBars.CatchUpSessions = 1;
+                    int l0 = MadeCount();
+                    ChartBridgeBars.PlanOnce(null);
+                    Check(dl.All().Count == 1 && TicksMade(l0).Count == 0 && Diag().Contains("(a request starts by 17:50)"),
+                          "1s review of #71: a pass from 17:45 whose minute request ends at " + (doneAt >= 60 ? "18:01" : "17:" + doneAt) + ": the clock read again, no tick request");
+                }
+                finally { BarsRequest.AutoAnswer = AnswerLikeNt; dl.Stop(); }
+            }
+            foreach (var c in new[] {
+                new { At = W(2026, 10, 9, 8, 0), Goes = false, What = "a Friday 08:00 start (premarket)" },
+                new { At = W(2026, 10, 8, 19, 0), Goes = false, What = "a Thursday 19:00 start (evening session)" },
+                new { At = W(2026, 10, 8, 16, 14), Goes = false, What = "Thursday 16:14" },
+                new { At = W(2026, 10, 8, 16, 15), Goes = true, What = "Thursday 16:15" },
+                new { At = W(2026, 10, 10, 9, 0), Goes = true, What = "a Saturday 09:00 start" },
+                new { At = W(2026, 10, 11, 18, 0), Goes = false, What = "Sunday 18:00" } })
+            {
+                Desk dw = Fresh1s(dir, "MNQ", EtToUtc(c.At));
+                try
+                {
+                    dw.Status1s = body => 200;
+                    ChartBridgeBars.CatchUpSessions = 1;
+                    int w0 = MadeCount();
+                    ChartBridgeBars.PlanOnce(null);
+                    Check((TicksMade(w0).Count == 1) == c.Goes && (dw.All1s().Count > 0) == c.Goes && dw.All().Count == 1,
+                          "1s window, the start's catch-up: " + c.What + (c.Goes ? ": the request and the parts go" : ": no tick request and nothing posted; the 1-minute bars as before") + " (" + TicksMade(w0).Count + ")");
+                }
+                finally { dw.Stop(); }
+            }
+        }
+        finally { desk.Stop(); }
+        // never beside the chart: a page loading (the gate's own rule) holds the 1 second request back
+        Desk d2 = Fresh1s(dir, "MNQ", EtToUtc(W(2026, 9, 30, 17, 6)));
+        ChartBridgeClient loading = new ChartBridgeClient(null, 9901) { Root = "MNQ" };
+        try
+        {
+            ChartBridgeBars.CatchUpSessions = 1;
+            ChartBridgeBarsQueue.Queue(ChartBridgeBars.KeyOf(D(2026, 9, 30), "MNQ 12-26"), ChartBridgeBars.MessageJson("MNQ 12-26", "MNQ", 0.25, D(2026, 9, 30), new List<DeskBar> { new DeskBar { T = Ms(Utc(2026, 9, 30, 13, 30)), O = 1, H = 1, L = 1, C = 1, V = 1 } }));
+            Clients()[loading.Id] = loading;
+            int m0 = MadeCount();
+            ChartBridgeBars.PlanOnce(null);
+            Check(TicksMade(m0).Count == 0 && Diag().Contains("\"state\":\"waiting for the gate: a chart is loading\""), "1s: while a chart loads, no tick request (the gate's rule for the bars): " + Regex.Match(Diag(), "\"oneSecond\":\\{\"on\":true,\"state\":\"[^\"]*\"").Value);
+            Clients().TryRemove(loading.Id, out loading);
+            ChartBridgeBars.PlanOnce(null);
+            Check(TicksMade(m0).Count == 1, "1s: once the chart is loaded it goes");
+        }
+        finally { ChartBridgeClient x; Clients().TryRemove(9901, out x); d2.Stop(); }
+    }
+
+    static void OneSecondOldDeskAndRestart(string dir)
+    {
+        Desk desk = Fresh1s(dir, "MNQ", EtToUtc(W(2026, 9, 30, 17, 6)));
+        try
+        {
+            // today's Desk has no POST /api/bars-1s (404): the set stays on disk, nothing is set aside or refused, offered again later
+            ChartBridgeBars.CatchUpSessions = 1;
+            ChartBridgeBars.PlanOnce(null);
+            string key = "2026-09-30 MNQ 12-26";
+            string file = ChartBridgeBars1sQueue.FileOf(key);
+            Check(File.Exists(file) && File.ReadAllLines(file).Length == 8 && ChartBridgeBars1sQueue.IsWaiting(key) && !ChartBridgeBars1sQueue.IsRefused(key) && ChartBridgeBars1sQueue.DeskHasNone &&
+                  Lines(dir, "rejected_bars1s.jsonl").Length == 0 && Logged("The Desk has no 1 second bars store yet (POST /api/bars-1s answered 404)") && desk.All1s().Count == 1,
+                  "1s old Desk: 404: the 8 parts stay in bars1s/, nothing set aside or refused, said once, offered every 30 minutes (one post so far)");
+            ChartBridgeBars1sQueue.Flush(null);
+            Check(desk.All1s().Count == 1, "1s old Desk: not offered again before 30 minutes");
+            // The Desk gets its store: the parts go; it takes 3, then is down (503); a restart; the rest go, part 4 first, none twice
+            int n = 0;
+            desk.Status1s = body => ++n <= 3 ? 200 : 503;
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 9, 30, 17, 40));
+            ChartBridgeBars1sQueue.Flush(null);
+            Check(File.ReadAllLines(Path.ChangeExtension(file, ".sent")).Length == 3 && ChartBridgeBars1sQueue.WaitingParts() == 5 && Logged("The Desk did not take 1 second bars"),
+                  "1s: three parts taken (noted in the .sent file, the big file not rewritten), then The Desk is down: 5 wait");
+            ChartBridgeBars1sQueue.Load();   // a restart
+            Check(ChartBridgeBars1sQueue.WaitingParts() == 5, "1s: after a restart the set comes back from bars1s/ with its progress");
+            desk.Status1s = body => 200;
+            int before = desk.All1s().Count;
+            ChartBridgeBars1sQueue.Flush(null);
+            List<string> got = desk.All1s();
+            List<string> taken = got.Skip(1).Take(3).Concat(got.Skip(before)).ToList();   // got[0]: the 404; then parts 1 to 3 taken, part 4 refused with 503
+            Check(got.Skip(before).Select(x => Field1s(x, "part")).SequenceEqual(new[] { "4", "5", "6", "7", "8" }) && taken.Select(x => Field1s(x, "part")).SequenceEqual(new[] { "1", "2", "3", "4", "5", "6", "7", "8" }) &&
+                  ChartBridgeBars1sQueue.IsDone(key) && !File.Exists(file) && Logged("The Desk is taking 1 second bars again."),
+                  "1s: from part 4 on, each part once (" + string.Join(",", got.Skip(before).Select(x => Field1s(x, "part")).ToArray()) + "), the set done");
+            // a set waiting for a session older than 10 days is dropped when the queue is read
+            SecondsBuilder b = new SecondsBuilder(0, long.MaxValue); b.Add(new DateTime(2026, 9, 10, 12, 0, 0), 25000, 1, 0, 0);
+            ChartBridgeBars1sQueue.Queue("2026-09-10 MNQ 09-26", ChartBridgeBars.Messages1s("MNQ 09-26", "MNQ", 0.25, D(2026, 9, 10), b.Finish(), "old000000001"));
+            ChartBridgeBars1sQueue.Load();
+            Check(!ChartBridgeBars1sQueue.IsWaiting("2026-09-10 MNQ 09-26") && !File.Exists(ChartBridgeBars1sQueue.FileOf("2026-09-10 MNQ 09-26")), "1s: a waiting set older than 10 days is dropped at the start (the folder stays small)");
+            // a set cut short (a crash mid-write leaves only the temp file, or a broken file): dropped and asked for again
+            File.WriteAllText(ChartBridgeBars1sQueue.FileOf("2026-09-29 MNQ 12-26"), "{\"v\":2,\"source\":\"chartbridge\",\"tf\":\"1s\",\"session\":\"2026-09-29\",\"con");
+            ChartBridgeBars1sQueue.Load();
+            Check(!ChartBridgeBars1sQueue.IsWaiting("2026-09-29 MNQ 12-26") && Logged("unreadable 1 second bars set(s) in bars1s"), "1s: a broken set file is dropped at the start (asked for again)");
+        }
+        finally { desk.Stop(); }
+    }
+
+    static void OneSecondRefused(string dir)
+    {
+        Desk desk = Fresh1s(dir, "MNQ", EtToUtc(W(2026, 9, 30, 17, 6)));
+        try
+        {
+            desk.Status1s = body => Field1s(body, "part") == "2" ? 400 : 200;
+            ChartBridgeBars.CatchUpSessions = 1;
+            ChartBridgeBars.PlanOnce(null);
+            string key = "2026-09-30 MNQ 12-26";
+            Check(ChartBridgeBars1sQueue.IsRefused(key) && Lines(dir, "refused_bars1s.txt").Contains(key) && Lines(dir, "rejected_bars1s.jsonl").Length == 1 && !File.Exists(ChartBridgeBars1sQueue.FileOf(key)) &&
+                  Logged("The Desk refused part 2 of the 1 second bars for 2026-09-30 MNQ 12-26 (400: bars must be a list)") && desk.All1s().Count == 2,
+                  "1s refused: a part The Desk calls malformed: set aside, the set dropped, refused_bars1s.txt, not asked again; the 1-minute bars unaffected (" + desk.All().Count + ")");
+            int m0 = MadeCount();
+            ChartBridgeBars1sQueue.Load();
+            ChartBridgeBars.PlanOnce(null);
+            Check(TicksMade(m0).Count == 0 && desk.All().Count == 1, "1s refused: after a restart not asked again");
+            // NinjaTrader has no trades: tried 3 times, 15 minutes apart, then left until a restart; an error the same
+            Desk d2 = Fresh1s(dir, "MNQ", EtToUtc(W(2026, 10, 1, 17, 6)));
+            try
+            {
+                answerTicks = r => new Bars();
+                ChartBridgeBars.CatchUpSessions = 1;
+                int t0 = MadeCount();
+                for (int i = 0; i < 6; i++) { DateTime at = EtToUtc(W(2026, 10, 1, 17, 6)).AddMinutes(16 * i); ChartBridgeBars.UtcNow = () => at; ChartBridgeBars.PlanOnce(null); }
+                Check(TicksMade(t0).Count == 3 && Logged("1 second bars for MNQ 12-26 session 2026-10-01: NinjaTrader has no trades for it; tried 3 times") && d2.All().Count == 1,
+                      "1s: a session with no trades in NinjaTrader: asked 3 times 15 minutes apart, then not until a restart (" + TicksMade(t0).Count + ")");
+            }
+            finally { d2.Stop(); }
+        }
+        finally { desk.Stop(); }
+    }
+
+    static void OneSecondSpeed()
+    {
+        // NinjaTrader's thread does one pass over the trades: about a busy NQ session (600,000 trades) on the stand-in series
+        NtZone(Chicago);
+        DateTime ou, cu; ChartBridgeBars.SessionUtc(D(2026, 9, 30), out ou, out cu);
+        Bars b = new Bars();
+        DateTime open = NtOf(W(2026, 9, 29, 18, 0));
+        int n = 600000;
+        for (int i = 0; i < n; i++) { double p = 25000 + (i % 40) * 0.25; b.Add(open.AddMilliseconds(i * 138L), p, p, p, p, 1 + i % 4); b.Bids.Add(i % 3 == 0 ? p - 0.25 : 0); b.Asks.Add(i % 3 == 0 ? p : 0); }
+        System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+        SecondsBuild r = (SecondsBuild)ChartBridgeBars.BuildSeconds(b, Ms(ou), Ms(cu));
+        double ms = sw.Elapsed.TotalMilliseconds;
+        Console.WriteLine("     (1s build: " + n + " trades into " + r.Rows.Count + " seconds in " + Math.Round(ms) + " ms on the stand-in series, " + Math.Round(ms * 1000.0 / n, 3) + " us a trade)");
+        Check(r.Trades == n && r.Rows.Count > 80000 && ms < 3000, "1s speed: 600,000 trades in one pass in " + Math.Round(ms) + " ms (the stand-in; NinjaTrader's own series reads arrays), rows only kept (" + r.Rows.Count + ")");
     }
 }

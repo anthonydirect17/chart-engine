@@ -14,7 +14,8 @@
     "nt8/ChartBridgeStrategies.cs",
     "nt8/ChartBridgeAgents.cs",
     "nt8/ChartBridgeGroups.cs",
-    "nt8/ChartBridgeStops.cs"
+    "nt8/ChartBridgeStops.cs",
+    "nt8/ChartBridgeOrderRecord.cs"
   ],
   "www": [
     { "from": "live/index.html", "to": "index.html" },

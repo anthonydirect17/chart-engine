@@ -1,5 +1,64 @@
 # Changelog
 
+## ChartBridge 0.6.9 (2026-10-24): the stats suite's Phase 2, recording only: 1 second bars, the order record, a decision id on group entries
+
+Anthony approved Phase 2 of his personal stats suite on 2026-10-24 (SPEC_personal_stats.md: "ChartBridge sends NQ and MNQ 1 second
+bars", "ChartBridge records every order", "Each fill of a group entry carries a decision id"). ChartBridge only: the page, the engine
+and the chart version are unchanged (page 1.39.0, `minChartBridge` stays 0.6.2, COMPAT.json unchanged). **Needs a recompile (F5)** on
+WORK and HOME: `update-pc.ps1 -InstallChartBridge` while flat (one new add-on file, `ChartBridgeOrderRecord.cs`, in
+`install-files.json`). In Anthony's words for this release's spirit: "nothing else should change when it comes to functionality": it
+only records more. No change to order placement, sizing, the copier, the agents, the bot, hotkeys or any order path
+(`ChartBridgeOrders.cs`, `ChartBridgeStops.cs`, `ChartBridgeCopier.cs`, `ChartBridgeBot.cs`, `ChartBridgeAgents.cs`,
+`ChartBridgeStrategies.cs` and `ChartBridgeMerge.cs` are the 0.6.8 files, byte for byte). The Desk's side is a separate job; until it
+ships, The Desk answers 404 on the two new paths and ChartBridge keeps everything on disk and offers it again (nothing is lost).
+
+- **1 second bars to The Desk** (`ChartBridgeBars.cs`, PROTOCOL "1 second bars to The Desk (0.6.9, contract v2)"): with `bars = on`,
+  each full session's 1 second bars for NQ and MNQ (the 1-minute bars' front month plus contracts with fills, the same 17:05 New York
+  run and the same start catch-up of the last 5 sessions), one row per second with trades: `[t, o, h, l, c, v, bv, sv]`, `t` the
+  second's open in UTC ms. Built in one pass on NinjaTrader's thread from its 1 tick history (a bars job at the 0.3.5 gate, last of
+  all, never beside a chart load; 180 s limit). The side of each trade by the live rule: the bid and ask NinjaTrader stored with the
+  trade when usable, else the tick rule; the message says how (`sides.method`, `bidAsk`, `tickRule`, `mixed` or `none`, with counts).
+  **Only from 16:15 to 18:00 New York on weekdays and on the weekend while the market is shut** (Saturday, Sunday before 18:00): never
+  premarket, in regular hours or in the evening session; the start's catch-up and the sends wait for that window; one request a pass.
+  Sent as parts of at most 1,500 rows (about 90 KB) to the new `POST /api/bars-1s` (v 2, tf `1s`), each part with the set id, its
+  number, the count and the session's totals, so The Desk knows when a day is whole. Queued in `bars1s/` (written once; a `.sent`
+  file notes each part taken), retried like the 1-minute bars, `sent_bars1s.txt`, `refused_bars1s.txt`, `rejected_bars1s.jsonl`.
+  `bars1s = off` turns only them off; `bars1sRoots` names their roots. The 1-minute bars are unchanged, byte for byte.
+- **The order record** (`ChartBridgeOrderRecord.cs`, PROTOCOL "The order record to The Desk (0.6.9)"): every order on every watched
+  account, every type (market, limit, stop market, stop limit, MIT) and every change of its state, prices, quantity or fills, with
+  its role, who placed it (`by`, as fills), account, instrument, side, qty, filled, limit and stop prices, the average fill price, and
+  at submission and at each price change the bid, ask and last price ChartBridge knew then (each null with the reason when not
+  known: another contract, none yet, stale past 60 s). To the new `POST /api/order-events` (v 1); `postOrders`, else it follows
+  `postFills`. A `cb` id now has a per-start part (the stop record's known limit, fixed in the new record only). **The stop record
+  (`POST /api/stop-events`) is unchanged** and runs beside it for The Desk already installed. The order event only adds a snapshot to
+  a queue in memory (about 5 microseconds an event in the harness); the 10 s timer builds, saves and sends.
+- **A decision id on group entries** (PROTOCOL "The decision id of a group entry (0.6.9)"): one id (`d` and 12 hex characters) per
+  `groupOrder`, on every member's entry and its legs (they share the entry's tag), in the order record and as an optional
+  `decision_id` on those fills to The Desk. Single-account entries have none (their fills byte for byte as before). Kept across a
+  restart in `decisions.txt` (5 days). The only order-path code touched: around each member's existing `PlaceOrder` call (a thread-local
+  set and cleared) and one line in `ChartBridgeGroups.NoteNewOrder`; the Output window's group entry line names the decision.
+- `/diag`: `orderRecord` (with `observeMeanUs` and `decisions`), `bars.oneSecond` (its `lastBuild` with the trades outside the
+  session left out and the request's from and to).
+- **The independent review of #71** (no safety problem in the order path; byte-identity confirmed): the PC updater test's made-up
+  versions are counted above the real ChartBridge; a new 1 second request starts only by 17:50 New York and the clock is read again
+  after the pass's 1-minute requests and before each request; the order record's `nt_order_id` (NinjaTrader's id at each event, the
+  one fills carry); `lastBuild` shows the trades outside the session and the request's span; `decisions.txt` saved by the account
+  timer itself; the order record forgets ended orders one at a time and never-ended ones after 7 days, its event thread never moves the
+  waiting lines, the file is appended to (written whole only after events left it), and a refused batch is halved and grows back;
+  `check:orders` builds to a path of its own per run unless `CHARTBRIDGE_ORDERS_EXE` is set.
+- **Rollout checklist (HOME first):** after `update-pc.ps1 -InstallChartBridge` and F5, (1) it compiles: NinjaTrader's
+  `OrderEventArgs.Time` and `AverageFillPrice` and `Bars.GetBid`/`GetAsk` are used for the first time; (2) after 16:15 New York,
+  `/diag` `bars.oneSecond.lastBuild`: the trades outside the session (NinjaTrader's answer may hold the day before too) and the sides'
+  method (`bidAsk` means NinjaTrader keeps the quote with its historical trades); (3) `/diag` `orderRecord`: `deskHasNoOrderRecord`
+  true until The Desk ships its side, `waiting` growing, nothing dropped; then WORK.
+- Tests: `nt8/check/RecordHarness.cs` (every order type and change, the quotes at submission and when not known, the stop record's
+  events identical to 0.6.6's, the queue, today's Desk's 404, a malformed event, 20,000 events' cost on the event thread);
+  `GroupsHarness.cs` DecisionIds (a group entry to 3 made-up accounts: the orders sent and the page's messages byte for byte the same
+  with the id off, 0.6.8's path, and on; one id on the 3 entries and a leg; the fills; a single entry has none; decisions.txt);
+  `BarsHarness.cs` OneSecond cases (rows from made-up trades with the buy and sell split, gaps, the session's edges, NinjaTrader in four
+  time zones, out of order trades; the parts; the request; the 1-minute message unchanged; regular trading hours; one a pass; a chart
+  loading; today's Desk; a restart mid set; a refusal; 600,000 trades in one pass); `test/nt8-record.test.js`.
+
 ## chart 1.39.0 (2026-10-24): house style V2, black and gold, on the chart page and the Markup Studio
 
 Anthony, 2026-10-24: "lets unify everything. I really liked the black gold look you showed and I think it should live

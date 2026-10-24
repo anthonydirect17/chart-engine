@@ -889,6 +889,7 @@ public static class OrdersHarness
         Section("agents (0.5.0)", AgentHarness.Run);   // 0.5.0: the agent channel (check/AgentHarness.cs)
         Section("time check (0.5.6)", ClockHarness.Run);   // 0.5.6: this PC's clock against a time server, SNTP (check/ClockHarness.cs)
         Section("stop record (0.6.6)", StopsHarness.Run);   // 0.6.6: the stop record to The Desk (check/StopsHarness.cs)
+        Section("order record (0.6.9)", RecordHarness.Run);   // 0.6.9: the order record to The Desk, every order type, the quotes at submission (check/RecordHarness.cs)
         Section("groups (0.5.8)", GroupsHarness.Run);   // 0.5.8: prop groups, one direction per group, the account numbers (check/GroupsHarness.cs)
 
         Console.WriteLine("== total: " + checks + " checks");

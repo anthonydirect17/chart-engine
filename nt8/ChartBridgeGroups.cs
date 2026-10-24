@@ -502,6 +502,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (seats.All(s => s.Size < 1)) return "no account of group " + name + " can take this entry: " + string.Join("; ", seats.Select(s => s.Account + ": " + s.Out));
             string price = Has(top, "price") ? Regex.Match(top, "\"price\"\\s*:\\s*([0-9.]+)").Groups[1].Value : null;
             string lo = Has(top, "limitOffset") ? Regex.Match(top, "\"limitOffset\"\\s*:\\s*(-?[0-9.]+)").Groups[1].Value : null;
+            string decision = ChartBridgeDecisions.NewId();   // 0.6.9: one decision id for this group entry (recording only: no order changes)
             for (int i = 0; i < seats.Count; i++)
             {
                 GroupSeat s = seats[i];
@@ -509,13 +510,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string one = "{\"type\":\"order\",\"account\":" + CbJson.Str(s.Account) + ",\"root\":" + CbJson.Str(root) + ",\"side\":" + CbJson.Str(side) + ",\"kind\":" + CbJson.Str(kind) +
                              ",\"qty\":" + s.Size.ToString(CultureInfo.InvariantCulture) + (price != null ? ",\"price\":" + price : "") + (lo != null ? ",\"limitOffset\":" + lo : "") + "}";
                 string why;
+                ChartBridgeDecisions.Begin(decision, s.Account);   // 0.6.9: this thread's member entry takes the id (ChartBridgeDecisions.NoteCreated)
                 try { why = MergeFreezeWhy("order", one, null) ?? PlaceOrder(one, bracketBody, cid != null ? cid + ":" + (i + 1) : null, strategyBody); }
                 catch (Exception ex) { why = "ChartBridge error: " + ex.Message; }
+                finally { ChartBridgeDecisions.End(); }
                 if (why != null) { s.Out = "refused: " + why; s.Size = 0; s.Risk = 0; }
             }
             int placed = seats.Count(s => s.Size > 0);
             ChartBridgeServer.Log("group entry on " + name + ": " + side + " " + root + " " + kind + (strategyBody != null ? " with a strategy" : "") + ", stop " + stopTicks + " ticks, risk " + risk.ToString("0.##", CultureInfo.InvariantCulture) + "%: " +
-                string.Join("; ", seats.Select(s => s.Account + " " + (s.Size > 0 ? s.Size + " (" + Usd(s.Risk) + ")" : "out: " + s.Out))));
+                string.Join("; ", seats.Select(s => s.Account + " " + (s.Size > 0 ? s.Size + " (" + Usd(s.Risk) + ")" : "out: " + s.Out))) + " (decision " + decision + ")");
             answer = "{\"type\":\"groupPlaced\"," + head + ",\"placed\":" + placed.ToString(CultureInfo.InvariantCulture) + ",\"members\":" + SeatsJson(seats) + "}";
             return null;
         }
@@ -1381,6 +1384,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // PlaceOrderLocked, as each order is made: on the other side of the account's position by both readings, it exits that position.
         public static void NoteNewOrder(Account a, Instrument inst, Order o, bool isBuy)
         {
+            ChartBridgeDecisions.NoteCreated(a, o);   // 0.6.9: a group entry's member order takes its decision id (a thread-local read otherwise; never throws)
             try { if (ChartBridgeOrders.GroupOpposite(a, inst, isBuy)) { int h = ChartBridgeOrders.GroupHeld(a, inst); lock (Mem) { ExitOf[o] = isBuy ? -1 : 1; ExitHeld[o] = h; } } }
             catch (Exception) { }
         }

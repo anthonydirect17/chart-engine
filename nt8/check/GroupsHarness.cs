@@ -243,6 +243,7 @@ public static class GroupsHarness
             Backups();       // 0.6.3 (audit C3): groups.txt and account-marks.txt fall back to their last good copy
             MemberRules();   // 0.6.5 (Anthony 2026-10-19, PRIORITY): each member's own rules, the old file, the risk percent
             GroupEntries();  // 0.6.5 (Anthony 2026-10-19): trade the group from the ticket, each member sized from the risk percent
+            DecisionIds();   // 0.6.9 (Anthony 2026-10-24): one decision id on a group entry's orders and fills; the orders sent unchanged
             Bench();         // 0.6.7 (Anthony 2026-10-22): the bench, no hedging always on, a group with no rules of its own, the risk percent while flat
             FirmLimits();    // 0.6.6 (Anthony 2026-10-20): his own entries: the firm's max only; the machines': a known breach only; the daily loss alert
             FirmFloor();     // 0.6.6 (Anthony 2026-10-20): the firm's rules on an account in no group, the computed floor first, firmMinimum
@@ -1392,6 +1393,107 @@ public static class GroupsHarness
         a.Orders.Add(o);
         lock ((object)typeof(ChartBridgeOrders).GetField("Sync", PS).GetValue(null)) ((HashSet<Order>)typeof(ChartBridgeOrders).GetField("Ours", PS).GetValue(null)).Add(o);
         return o;
+    }
+    // ------------------------------------------------------------ 0.6.9 (Anthony 2026-10-24): the decision id of a group entry
+    // One group entry to 3 made-up accounts (SIM-A, SIM-B, SIM-C): every member's entry, its legs and their fills carry the same id; the
+    // orders sent are byte for byte the same as without the id (0.6.8's path: ChartBridgeDecisions off); a single-account entry has none.
+    static string Norm(IEnumerable<string> lines)
+    {
+        Dictionary<string, string> tags = new Dictionary<string, string>();
+        Func<string, string> one = x =>
+        {
+            x = Regex.Replace(x, "CB#([0-9a-f]{8})", m => { string t; if (!tags.TryGetValue(m.Groups[1].Value, out t)) { t = "T" + (tags.Count + 1); tags[m.Groups[1].Value] = t; } return "CB#" + t; });
+            return Regex.Replace(x, "\"id\":\"o[0-9]+\"", "\"id\":\"o?\"");
+        };
+        return string.Join("\n", lines.Select(one).ToArray());
+    }
+    static void DecisionIds()
+    {
+        Flat();
+        ChartBridgeGroups.GapMs = 1e12;
+        string p = Path.Combine(folder, "groups.txt"), mp = Path.Combine(folder, "account-marks.txt");
+        Gone(p); Gone(mp);
+        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\t10\n");
+        ClockEt(2026, 10, 20, 9, 0); Restart();
+        foreach (Account a in new[] { simA, simB, simC, simD }) a.Connection.Status = ConnectionStatus.Connected;
+        ClockEt(2026, 10, 19, 18, 1);
+        Money(simA, 150500, 0, 0); Money(simB, 50500, 0, 0); Money(simC, 25000, 0, 0);
+        Clear(); G("accountGroup", JoinRules("SIM-A", "\"g1\"", "151000", R("150000", "0", "4500", "eod", "150100", "9000", ",\"maxMinis\":10,\"maxMicros\":100")));
+        G("accountGroup", JoinRules("SIM-B", "\"g1\"", "51000", R("50000", "0", "2000", "eod", "50100", "3000", ",\"maxMinis\":4,\"maxMicros\":40")));
+        G("accountGroup", JoinRules("SIM-C", "\"g1\"", null, R("25000", "500", "1000", "intraday", "25100", "1250", ",\"maxMinis\":2,\"maxMicros\":20")));
+        Tick();
+        ClockEt(2026, 10, 20, 10, 0); Tick();
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-C") == "g1" && ChartBridgeGroups.GroupOf("SIM-D") == null, "DECISION setup: Lucid (risk 10%) with 3 made-up accounts, SIM-A, SIM-B and SIM-C");
+        string entry = GE("groupOrder", "buy", "market", "{\"stop\":20,\"target\":40}", ",\"sizes\":\"SIM-A:4,SIM-B:2,SIM-C:1\"");
+        Account[] three = { simA, simB, simC };
+        // the same entry twice, the decision ids off (0.6.8's path) and on: the orders sent and the page's messages the same, byte for byte
+        Func<bool, string[]> run = withIds =>
+        {
+            Flat();
+            foreach (Account a in three) a.Calls.Clear();
+            ChartBridgeDecisions.Enabled = withIds;
+            Clear(); GP("groupOrder", entry);
+            List<string> msgs; lock (sent) msgs = sent.ToList();
+            ChartBridgeDecisions.Enabled = true;
+            return new[] { Norm(three.SelectMany(a => a.Calls.Select(c => a.Name + " " + c))), Norm(msgs) };
+        };
+        string[] off = run(false);
+        List<Order> offEntries = three.Select(a => a.Orders.Last()).ToList();
+        string[] on = run(true);
+        List<Order> entries = three.Select(a => a.Orders.Last()).ToList();
+        Check(off[0].Length > 0 && off[0] == on[0] && off[0].Split('\n').Length == 3 && off[0].Contains("SIM-A submit CB#T1 s20 t40 Buy Market 4 L0 S0 oco:"),
+              "DECISION: the orders sent to the 3 accounts are byte for byte the same with the decision id as without it (0.6.8's path), only the random tags named in order:\n" + on[0]);
+        Check(off[1].Length > 0 && off[1] == on[1] && on[1].Contains("{\"type\":\"groupPlaced\""), "DECISION: and every message to the page the same (the groupPlaced answer and the order messages)");
+        Check(offEntries.All(o => ChartBridgeDecisions.Of(o) == null), "DECISION: with it off nothing was noted (0.6.8's path)");
+        string d = ChartBridgeDecisions.Of(entries[0]);
+        Check(d != null && Regex.IsMatch(d, "^d[0-9a-f]{12}$") && entries.All(o => ChartBridgeDecisions.Of(o) == d) && Logged("(decision " + d + ")"),
+              "DECISION: the 3 members' entries carry one decision id (" + d + "), also in the Output window's group entry line");
+        // its legs share the entry's CB# tag: the same decision
+        string tag = ChartBridgeDecisions.TagOf(entries[1].Name);
+        Order leg = new Order { Account = simB, Instrument = nq, OrderAction = OrderAction.Sell, OrderType = OrderType.StopMarket, Quantity = 2, StopPrice = 24995, Name = "CB#" + tag + " stop f2 q2 p25000", OrderState = OrderState.Working, OrderId = "nt-leg-1" };
+        simB.Orders.Add(leg);
+        Check(ChartBridgeDecisions.Of(leg) == d, "DECISION: a member's stop (a leg of its entry, the same tag) carries the decision too");
+        // a second group entry: a new decision
+        Flat(); Clear(); GP("groupOrder", entry);
+        string d2 = ChartBridgeDecisions.Of(simA.Orders.Last());
+        Check(d2 != null && d2 != d && three.All(a => ChartBridgeDecisions.Of(a.Orders.Last()) == d2), "DECISION: the next group entry has its own id (" + d2 + ")");
+        // the fills to The Desk: decision_id on a member's fill (the execution's order, or found by its id), none on a single-account entry
+        MethodInfo fill = typeof(ChartBridgeServer).GetMethods(PS).First(m => m.Name == "DeskFillJson" && m.GetParameters().Length == 9);
+        Func<string, Order, string, string> Fill = (acct, o, oid) => (string)fill.Invoke(null, new object[] { acct, nq, MarketPosition.Short, 2, 24995.0, new DateTime(2026, 10, 20, 9, 31, 0), "x-" + oid, oid, o });
+        string legFill = Fill("SIM-B", leg, "nt-leg-1"), byIdFill = Fill("SIM-B", null, "nt-leg-1");
+        Check(legFill.EndsWith(",\"order_id\":\"nt-leg-1\",\"decision_id\":\"" + d + "\"}") && byIdFill == legFill, "DECISION: the leg's fill to The Desk carries decision_id (from the execution's order, or the order found by its id): " + legFill);
+        Flat(); Clear(); O(Order("SIM-A", "NQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":20,\"target\":40}"));
+        Order single = simA.Orders.Last();
+        string singleFill = Fill("SIM-A", single, "nt-single-1");
+        Check(Rejection() == "" && ChartBridgeDecisions.Of(single) == null && !singleFill.Contains("decision") && singleFill.EndsWith(",\"order_id\":\"nt-single-1\"}"),
+              "DECISION: a single-account entry has none: its fill exactly as before (no decision_id key): " + singleFill);
+        // only the member being placed on this thread: another account's order meanwhile (the copier's follower, say) is not noted
+        ChartBridgeDecisions.Begin("d000000000001", "SIM-A");
+        Order follower = new Order { Account = simC, Instrument = nq, Name = "CB#0f0f0f0f copy s20 t40" };
+        ChartBridgeDecisions.NoteCreated(simC, follower);
+        ChartBridgeDecisions.End();
+        ChartBridgeDecisions.NoteCreated(simA, new Order { Account = simA, Instrument = nq, Name = "CB#1e1e1e1e s20 t40" });
+        Check(ChartBridgeDecisions.Of(follower) == null && ChartBridgeDecisions.Of(new Order { Name = "CB#1e1e1e1e s20 t40" }) == null, "DECISION: another account's order during a member's placing, or an order after it, gets no decision");
+        // the order record carries it
+        bool fillsWas = ChartBridgeConfig.PostFills;
+        ChartBridgeOrderRecord.ResetConfig(); ChartBridgeOrderRecord.ReadConfig("postOrders", "true"); ChartBridgeOrderRecord.Clear();
+        try { File.Delete(Path.Combine(folder, "pending_orders.jsonl")); } catch (Exception) { }
+        ChartBridgeOrderRecord.Load();
+        ChartBridgeOrderRecord.Observe(simB, new OrderEventArgs { Order = leg, OrderState = OrderState.Working, StopPrice = 24995, Quantity = 2 });
+        ChartBridgeOrderRecord.Observe(simA, new OrderEventArgs { Order = single, OrderState = OrderState.Working, Quantity = 1 });
+        ChartBridgeOrderRecord.SaveNow();
+        string[] rec = File.ReadAllLines(Path.Combine(folder, "pending_orders.jsonl"));
+        Check(rec.Length == 2 && rec[0].Contains(",\"role\":\"stop\",\"by\":null,\"decision_id\":\"" + d + "\",") && rec[1].Contains(",\"decision_id\":null,"),
+              "DECISION: in the order record: the member's stop with the decision, the single entry with null: " + string.Join(" | ", rec.Select(x => Regex.Match(x, "\"decision_id\":[^,]*").Value)));
+        ChartBridgeOrderRecord.ResetConfig(); ChartBridgeOrderRecord.Clear();
+        try { File.Delete(Path.Combine(folder, "pending_orders.jsonl")); } catch (Exception) { }
+        ChartBridgeConfig.PostFills = fillsWas;
+        // decisions.txt: kept across a restart (a trade's exits after an NT8 restart still carry it), 5 days
+        ChartBridgeDecisions.SaveIfDirty();
+        ChartBridgeDecisions.Clear();
+        ChartBridgeDecisions.Load();
+        Check(ChartBridgeDecisions.Of(leg) == d && File.ReadAllText(Path.Combine(folder, "decisions.txt")).Contains(tag + "\t" + d + "\t"), "DECISION: decisions.txt keeps the tag and its decision across a restart");
+        Flat();
     }
     // ------------------------------------------------------------ 0.6.7 (Anthony 2026-10-22): the Multi-Account panel's bench
     static string Bench(string account, string benched) { return "{\"type\":\"memberBench\",\"cid\":\"bn\",\"account\":\"" + account + "\",\"benched\":" + benched + "}"; }

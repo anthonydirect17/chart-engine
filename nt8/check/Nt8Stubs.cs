@@ -132,7 +132,8 @@ namespace NinjaTrader.Cbi
         public double AveragePrice { get; set; }
     }
     // NinjaTrader's OrderEventArgs carries the order's values as of this event (0.6.6 stop record: ChartBridgeStops reads these)
-    public class OrderEventArgs : EventArgs { public Order Order { get; set; } public ErrorCode Error { get; set; } public OrderState OrderState { get; set; } public double StopPrice { get; set; } public double LimitPrice { get; set; } public int Quantity { get; set; } public int Filled { get; set; } }
+    // 0.6.9 (the order record): AverageFillPrice and Time too, as NinjaTrader's OrderEventArgs has them (the average fill price and the time of this event)
+    public class OrderEventArgs : EventArgs { public Order Order { get; set; } public ErrorCode Error { get; set; } public OrderState OrderState { get; set; } public double StopPrice { get; set; } public double LimitPrice { get; set; } public int Quantity { get; set; } public int Filled { get; set; } public double AverageFillPrice { get; set; } public DateTime Time { get; set; } }
     public class PositionEventArgs : EventArgs
     {
         public Position Position { get; set; }
