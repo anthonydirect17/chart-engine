@@ -122,7 +122,7 @@ async function clockPart() {
         warnSeen: !w.hidden && w.getBoundingClientRect().right <= document.getElementById('wsStat').getBoundingClientRect().right + 0.5 };
     });
     const parts = t => { const m = /^(-?\d+) ms = clock ([+-]?\d+) ms, real (-?\d+) ms( [A-Z]+)?$/.exec(t); return m ? { feed: +m[1], clock: +m[2], real: +m[3] } : null; };
-    const AMBER = 'rgb(255, 194, 102)', RED = 'rgb(255, 92, 122)';   // --ws-warn, --ws-sell
+    const AMBER = 'rgb(232, 184, 92)', RED = 'rgb(255, 92, 122)';   // --ws-warn, --ws-sell
     let s = await read(), x = parts(s.feed);
     check(!!x && x.clock === 2310 && x.feed === x.clock + x.real && x.real >= 0 && x.real < 300, '1920 x 1080, the PC clock 2.31 s ahead: the feed split, the parts adding up: feed ' + s.feed + ' (local ' + s.local + ')');
     check(s.cls === '' && s.color !== AMBER && s.color !== RED, 'no colour: the late number is the clock\'s (' + s.color + ')');
@@ -631,7 +631,7 @@ try {
   const nt = await page.evaluate(id => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ws-body > .chart-live`), st = c.querySelector(':scope > .status'), m = st.querySelector('.msg'), r = st.getBoundingClientRect(), b = c.getBoundingClientRect();
     return { on: c.classList.contains('has-note'), shown: getComputedStyle(st).display !== 'none', text: m.textContent, color: getComputedStyle(m).color, bottom: b.bottom - r.bottom < 8, h: r.height, others: [...st.children].filter(x => getComputedStyle(x).display !== 'none').length }; }, esP.id);
   check(nt.on && nt.shown && nt.text === 'Test note for the chart' && nt.bottom && nt.h <= 18 && nt.others === 1, 'a note shows in one faint line at the bottom of the chart (' + Math.round(nt.h) + ' px), nothing else on it');
-  check(nt.color === 'rgb(224, 180, 90)', 'a warning keeps its colour (' + nt.color + ')');
+  check(nt.color === 'rgb(232, 184, 92)', 'a warning keeps its colour (' + nt.color + ')');
   await shot(page, 'workspace-1366x768-note.png');
   await control('status?level=info&text=');
   await page.waitForTimeout(400);

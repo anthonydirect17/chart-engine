@@ -292,7 +292,7 @@ try {
   const overText = await until(async () => { const t = await page.textContent(T('oLegs')); return t === 'Stop 2/1 · Target 2/1 · over the position' ? t : null; }, 'leg summary over the position');
   check(!!overText, 'over the position: ' + await page.textContent(T('oLegs')));
   check((await page.getAttribute(T('oLegs'), 'class') || '').includes('over'), 'over: warning class');
-  check(await page.evaluate(() => getComputedStyle($tk('oLegs')).color) === 'rgb(224, 180, 90)', 'over: warning color');
+  check(await page.evaluate(() => getComputedStyle($tk('oLegs')).color) === 'rgb(232, 184, 92)', 'over: warning color (1.39.0: the V2 warn)');
   await shot(page, 'orders-1440-legs-over.png');
   // buy 1 back with no bracket (0 / 0), then cancel one pair: stops 1 of 2, the error color
   await page.fill(T('bStop'), '0'); await page.press(T('bStop'), 'Tab');

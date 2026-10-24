@@ -482,7 +482,7 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 /* The shapes: pills for buttons and tabs, 14 px popovers and dialogs, a gold hairline under the top bar and along the top
    of every panel and popover, the wordmark in gold. */
 .ws-top::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: linear-gradient(90deg, transparent, var(--ws-gold-border), transparent); pointer-events: none; }
-.ws-title { color: var(--ws-gold-text); font-family: "IBM Plex Sans Condensed", var(--ws-sans); font-weight: 700; letter-spacing: .14em; text-shadow: 0 0 18px var(--ws-gold-glow); }
+.ws-title { color: var(--ws-gold-text); font-family: "IBM Plex Sans Condensed", var(--ws-sans); font-weight: 700; letter-spacing: .04em; text-shadow: 0 0 18px var(--ws-gold-glow); }
 .ws-btn { border-radius: 999px; }
 .ws-btn.ws-gear { border-radius: 50%; }
 .ws-btn:hover { border-color: var(--ws-gold-border); }
@@ -497,15 +497,16 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .ws-tabs.has-ink .ws-tab[aria-selected="true"] { background: transparent; }
 .ws-dialog::backdrop { background: rgba(0, 0, 0, .55); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
 /* The feel: only where no live value shows and no order is asked (R3). The top bar's own buttons (Layout, + Add panel,
-   Screens, Settings, the tabs; never Flatten all or Flatten every, nor the NO STOP question's Send and Cancel) ease their hover and lift 1 px; a popover or menu fades in
+   Screens, Settings, the layout tabs; never Flatten all or Flatten every, the NO STOP question's Send and Cancel, nor the Agent
+   and League tabs, which keep the Agent tab's own rule of no motion) ease their hover and lift 1 px; a popover or menu fades in
    as it opens; a dialog that asks nothing about orders rises in (the group entry, Flatten every and the Order Strategies
    appear at once). Every one of them takes its click on the first frame: nothing waits for the motion. */
 @media (prefers-reduced-motion: no-preference) {
-  :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat), :root:not(.motion-off) .ws-top > .ws-sel, :root:not(.motion-off) .ws-tab,
+  :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):not(.ag-tabbtn):not(.lg-tabbtn), :root:not(.motion-off) .ws-top > .ws-sel, :root:not(.motion-off) .ws-tab,
   :root:not(.motion-off) .ws-menu button {
     transition: border-color .25s var(--ws-ease), color .2s var(--ws-ease), background-color .25s var(--ws-ease), box-shadow .25s var(--ws-ease), translate .2s var(--ws-ease); }
-  :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):not(:disabled):hover { translate: 0 -1px; box-shadow: 0 0 16px var(--ws-gold-glow); }
-  :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):active { translate: 0 0; scale: .98; }
+  :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):not(.ag-tabbtn):not(.lg-tabbtn):not(:disabled):hover { translate: 0 -1px; box-shadow: 0 0 16px var(--ws-gold-glow); }
+  :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):not(.ag-tabbtn):not(.lg-tabbtn):active { translate: 0 0; scale: .98; }
   :root:not(.motion-off) .ws-pop:not([hidden]) { animation: v2-fade-in .22s var(--ws-ease); }
   :root:not(.motion-off) .ws-dialog[open]:not(:has(.ws-gq, .ws-fe, .ws-sg)) { animation: v2-rise .35s var(--ws-ease); }
 }

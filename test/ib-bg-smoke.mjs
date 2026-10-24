@@ -227,7 +227,7 @@ try {
        200 to 250 ms failed now and then on a busy box, on main too) */
     const lookFor = async (p, hex) => { let l = await look(p); for (let k = 0; k < 30 && l.canvas !== hex; k++) { await p.waitForTimeout(100); l = await look(p); } return l; };
     const base = await look(a);
-    check(base.theme === '#080B10' && base.canvas === '#080B10', 'default ground unchanged: ' + JSON.stringify(base));
+    check(base.theme === '#050506' && base.canvas === '#050506', 'default ground (1.39.0: the V2 black): ' + JSON.stringify(base));
     await a.screenshot({ path: path.join(SHOTS, 'bg-dark-default.png') });
     /* ---- the chart's chrome takes every ground (1.9.0: "white chart, white top bar"): its ground is the chrome's (the
        chart's, or on a mid grey that grey moved to 9:1). (Until 1.22.0 this also swept the single chart page's order bar.) */
@@ -242,7 +242,7 @@ try {
         const root = getComputedStyle(document.querySelector('.chart-live')).backgroundColor;
         if (want && root !== want) out.chrome.push(g + ' chrome ' + root + ', not ' + want);
       }
-      setBg('#080B10');
+      setBg('#050506');
       return out;
     }, { grounds: CE.BACKGROUNDS.map(g => g.bg).concat([...Array(256).keys()].map(v => { const h = v.toString(16).padStart(2, '0').toUpperCase(); return '#' + h + h + h; }))
         .map(g => { const c = U.chromeColors(U.buildTheme({ bg: g })); return [g, c ? rgbOf(c['--bg']) : null]; }) });
@@ -252,7 +252,7 @@ try {
     const marks = await a.evaluate(() => { const T = window.liveChart.colors(); return { long: T.long, short: T.short, ring: T.ring, halo: T.halo }; });
     check(marks.long === '#3DDC97' && marks.short === '#FF7A7A' && marks.ring.long && U.contrast(marks.ring.long, '#888888') >= 3, 'fill markers on #888888 keep green and red, outlined in ' + marks.ring.long);
     await a.screenshot({ path: path.join(SHOTS, 'fills-888888.png'), clip: { x: 1100, y: 250, width: 340, height: 300 } });
-    await a.evaluate(() => { const h = document.querySelector('.ce-theme-panel input[data-hex="bg"]'); h.value = '#080B10'; h.dispatchEvent(new Event('input', { bubbles: true })); });
+    await a.evaluate(() => { const h = document.querySelector('.ce-theme-panel input[data-hex="bg"]'); h.value = '#050506'; h.dispatchEvent(new Event('input', { bubbles: true })); });
     await a.waitForTimeout(200);
     await a.screenshot({ path: path.join(SHOTS, 'merged-labels-default-dark.png'), clip: { x: 1100, y: 250, width: 340, height: 460 } });
     await a.click('.ce-theme-btn');
@@ -320,7 +320,7 @@ try {
     // the mounted chart keeps its own (prefix desk:): still dark
     const host = await openPageEmbed(ctx, br.port);
     const emb = await host.evaluate(() => ({ bg: window.__a.chart.getTheme().bg, saved: localStorage.getItem('desk:live-colors-v1') }));
-    check(emb.bg === '#080B10', 'the embedded chart keeps its own ground: ' + JSON.stringify(emb));
+    check(emb.bg === '#050506', 'the embedded chart keeps its own ground: ' + JSON.stringify(emb));
     await host.click('#paneA .ce-theme-btn'); await host.click('#paneA .ce-ground[data-bg="black"]'); await host.keyboard.press('Escape');
     check(JSON.parse(await host.evaluate(() => localStorage.getItem('desk:live-colors-v1'))).bg === '#000000' && JSON.parse(await host.evaluate(() => localStorage.getItem('live-colors-v1'))).bg === '#F5F7FA',
       'embedded ground saved under desk:, the unprefixed one untouched');
@@ -329,9 +329,9 @@ try {
     // background tab paints no frames), and the canvas is read until it repaints (lookFor)
     await a.bringToFront();
     await a.click('.ce-theme-btn'); await a.click('.ce-reset'); await a.keyboard.press('Escape');
-    const reset = await lookFor(a, '#080B10');
-    check(reset.canvas === '#080B10', 'Reset to default: the dark ground again: ' + reset.canvas + ', saved ' + JSON.stringify(reset.saved));
-    check(await a.evaluate(() => getComputedStyle(document.querySelector('.chart-live')).backgroundColor) === 'rgb(8, 11, 16)' && await a.evaluate(() => document.querySelector('.chart-live').style.getPropertyValue('--s2')) === '',
+    const reset = await lookFor(a, '#050506');
+    check(reset.canvas === '#050506', 'Reset to default: the dark ground again: ' + reset.canvas + ', saved ' + JSON.stringify(reset.saved));
+    check(await a.evaluate(() => getComputedStyle(document.querySelector('.chart-live')).backgroundColor) === 'rgb(5, 5, 6)' && await a.evaluate(() => document.querySelector('.chart-live').style.getPropertyValue('--s2')) === '',
       'back on the dark ground the toolbar is the house style again');
     await ctx.close(); br.kill();
   }

@@ -191,7 +191,7 @@ try {
   const fmarks = await page.$$eval(`${MAC} .apg-cop-g .apg-fmark`, els => els.length);
   check(fmarks === 2, '1.34.0: the two saved followers (SIM-F1, SIM-F2) are marked "follower": ' + fmarks);
   const marks0 = await page.$$eval(`${MAC} .apg-cop-g .apg-mark:not(.apg-fmark)`, els => els.map(e => e.textContent + (e.classList.contains('live') ? ':' + getComputedStyle(e).backgroundColor : '')));
-  check(marks0.join() === 'LIVE:rgb(159, 18, 57),LIVE:rgb(159, 18, 57),SIM,SIM', 'each follower marked SIM or LIVE, LIVE in the house red: ' + marks0.join(', '));
+  check(marks0.join() === 'LIVE:rgb(201, 165, 92),LIVE:rgb(201, 165, 92),SIM,SIM', 'each follower marked SIM or LIVE, LIVE in the house gold (1.39.0, V2; crimson before): ' + marks0.join(', '));
   check(/Sim or LIVE followers/.test(await page.$eval(`${MAC} .apg-sim`, e => e.textContent)), 'the Copier tab no longer says Sim accounts only');
   check(!(await page.$eval(`${MAC} [data-follower="EVAL-A"] input[data-act="f-on"]`, e => e.disabled)), 'a LIVE account can be turned on as a follower');
   check(/STOOD DOWN/.test(await page.$eval(`${MAC} .apg-arm`, e => e.textContent)), 'the copier starts stood down');

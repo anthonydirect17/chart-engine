@@ -44,7 +44,10 @@ async function draw(page, b, spacing, size) {
     const bars = []; let p = 20000;
     for (let i = 0; i < 900; i++) { const o = p, c = o + (rnd() - 0.5) * 12, h = Math.max(o, c) + rnd() * 5, l = Math.min(o, c) - rnd() * 5; bars.push({ t: 1760000000 + i * 60, o, h, l, c, v: 100 }); p = c; }
     const ch = window.__ch = ChartEngine.create(host, { barSpacing: spacing, minSpacing: 0.6, liveButton: false, lockButton: false, motion: { zoom: 0, fit: 0, candle: 0, follow: 0, friction: 0 },
-      layers: { volume: false, vwap: false, levels: false, trades: false, ib: false }, clock: () => 1760000000 + 900 * 60 });
+      layers: { volume: false, vwap: false, levels: false, trades: false, ib: false }, clock: () => 1760000000 + 900 * 60,
+      /* 1.39.0: the default ground is house style V2's black, which the 1.36.0 reference does not know; both engines draw on the
+         Black preset, whose colors both build the same way, so the candles are still compared pixel for pixel */
+      theme: { bg: '#000000' } });
     ch.setBars(bars);
     await new Promise(res => setTimeout(res, 600));
     return [...host.querySelectorAll('canvas')].map(cv => {

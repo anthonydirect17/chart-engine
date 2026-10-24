@@ -105,9 +105,9 @@ try {
   await page.click(tk('armBtn')); await wait(300);
   const red = await page.evaluate(([a2, o2, i]) => { const a = getComputedStyle(document.querySelector(a2)), b = getComputedStyle(document.querySelector(o2)), p = getComputedStyle(document.querySelector(`.ws-panel[data-id="${i}"] [id$="-bArmed"]`));
     return { arm: a.backgroundColor, armText: a.color, bar: b.borderTopColor, pill: p.backgroundColor }; }, [tk('armBtn'), tk('obar'), mnq]);
-  check(red.arm === 'rgb(159, 18, 57)' && red.armText === 'rgb(255, 228, 234)' && red.bar === 'rgb(224, 68, 94)' && red.pill === 'rgb(159, 18, 57)', 'Armed in deep red: the switch, the ticket\'s outline and the chart\'s ARMED badge (' + JSON.stringify(red) + ')');
+  check(red.arm === 'rgb(201, 165, 92)' && red.armText === 'rgb(20, 15, 6)' && red.bar === 'rgb(226, 198, 135)' && red.pill === 'rgb(201, 165, 92)', 'Armed in the V2 gold (1.39.0; deep red before): the switch, the ticket\'s outline and the chart\'s ARMED badge (' + JSON.stringify(red) + ')');
   const stage = await page.evaluate(i => { const c = getComputedStyle(document.querySelector(`.ws-panel[data-id="${i}"] .chart-live .stage`)); return { border: c.borderTopColor, glow: /8px/.test(c.boxShadow) }; }, mnq);
-  check(stage.border === 'rgb(123, 92, 255)' && stage.glow, 'the chart outline while Armed: purple with the glow, as the workspace (' + JSON.stringify(stage) + ')');
+  check(stage.border === 'rgb(201, 165, 92)' && stage.glow, 'the chart outline while Armed: gold (1.39.0; purple before) with the glow, as the workspace (' + JSON.stringify(stage) + ')');
   await clear(page); await wait(450);
   await page.click(tk('buyMkt')); await wait(200);
   check(await asked() && /No stop: send anyway\?/.test(await page.textContent('#wsNoStop')) && !(await sent(page)).length, 'the first order with no stop asks "No stop: send anyway?" in the page, nothing sent yet');
@@ -266,11 +266,11 @@ try {
   check(await A.evaluate(() => !document.querySelector('[data-tk-id="bNoStop"]').hidden), 'the ticket shows NO STOP (stop 0)');
   await A.click(tk('armBtn'));
   const tred = await A.evaluate(() => ({ arm: getComputedStyle(document.querySelector('[data-tk-id="armBtn"]')).backgroundColor, outline: getComputedStyle(document.querySelector('[data-tk-id="obar"]')).borderTopColor }));
-  check(tred.arm === 'rgb(159, 18, 57)' && tred.outline === 'rgb(224, 68, 94)', 'the ticket\'s Armed switch and outline in deep red (' + JSON.stringify(tred) + ')');
+  check(tred.arm === 'rgb(201, 165, 92)' && tred.outline === 'rgb(226, 198, 135)', 'the ticket\'s Armed switch and outline in the V2 gold (' + JSON.stringify(tred) + ')');
   const mnqA = (await A.evaluate(() => window.workspace.panels())).find(x => x.type === 'chart' && x.root === 'MNQ');
   const mnqB = (await B.evaluate(() => window.workspace.panels())).find(x => x.type === 'chart' && x.root === 'MNQ');
   const glow = await A.evaluate(i => getComputedStyle(document.querySelector(`.ws-panel[data-id="${i}"] .stage`)).borderTopColor, mnqA.id);
-  check(glow === 'rgb(123, 92, 255)', 'the chart borders stay purple (' + glow + ')');
+  check(glow === 'rgb(201, 165, 92)', 'the chart borders in the V2 gold (' + glow + ')');
   // the question in the window clicked: B's Buy key while the ticket (A) has stop 0
   await A.evaluate(() => { window.__sent.length = 0; }); await B.evaluate(() => { window.__sent.length = 0; });
   await B.bringToFront(); await B.evaluate(() => { localStorage.setItem('live-hotkeys-v1', JSON.stringify({ buy: 'Alt+B', sell: '', be: '', close: 'Alt+C', flattenAll: '' })); window.dispatchEvent(new StorageEvent('storage', { key: 'live-hotkeys-v1' })); });
