@@ -115,8 +115,16 @@ $cbMajor = $cbParts[0]; $cbMinor = $cbParts[1]; $cbPatch = $cbParts[2]
 $vMin = "$cbMajor.$cbMinor.$cbPatch"
 $vBelow = if ($cbPatch -gt 0) { "$cbMajor.$cbMinor.$($cbPatch - 1)" } elseif ($cbMinor -gt 0) { "$cbMajor.$($cbMinor - 1).99" } else { "$($cbMajor - 1).99.99" }
 $vPc = "$cbMajor.$cbMinor.$($cbPatch + 1)"
-$vNeeds = "$cbMajor.$cbMinor.$($cbPatch + 7)"
-$vNext0 = "$cbMajor.$($cbMinor + 1).0"; $vNext1 = "$cbMajor.$($cbMinor + 1).1"; $vNext2 = "$cbMajor.$($cbMinor + 1).2"; $vNext3 = "$cbMajor.$($cbMinor + 1).3"
+# The newer ones are also counted from the ChartBridge this repo ships (nt8/ChartBridge.cs), so they are always newer than it (the
+# test clone starts from this repo's files: a "newer" ChartBridge equal to the real one is no change; ChartBridge 0.6.9, CI of #71):
+# $vNeeds is above both the minimum + 7 and the real version, in the real version's minor when it is the minimum's; the $vNext ones
+# are in the minor after the higher of the two.
+$realCb = [regex]::Match((Get-Text (Join-Path (Join-Path $repoRoot 'nt8') 'ChartBridge.cs')), 'public const string Version = "(\d+)\.(\d+)\.(\d+)"')
+if (-not $realCb.Success) { throw 'the ChartBridge version constant was not found in nt8/ChartBridge.cs' }
+$rMajor = [int]$realCb.Groups[1].Value; $rMinor = [int]$realCb.Groups[2].Value; $rPatch = [int]$realCb.Groups[3].Value
+if ($rMajor -eq $cbMajor -and $rMinor -eq $cbMinor) { $vNeeds = "$cbMajor.$cbMinor.$([Math]::Max($cbPatch + 7, $rPatch + 1))"; $nMajor = $cbMajor; $nMinor = $cbMinor + 1 }
+else { $vNeeds = "$rMajor.$rMinor.$($rPatch + 1)"; $nMajor = $rMajor; $nMinor = $rMinor + 1 }   # the real one is past the minimum's minor
+$vNext0 = "$nMajor.$nMinor.0"; $vNext1 = "$nMajor.$nMinor.1"; $vNext2 = "$nMajor.$nMinor.2"; $vNext3 = "$nMajor.$nMinor.3"
 
 [void](Invoke-Native (Get-GitExe) @('init', '-q', '--bare', '-b', 'main', $origin) 60)
 [void](Invoke-Native (Get-GitExe) @('clone', '-q', $origin, $src) 60)
