@@ -42,8 +42,8 @@ over the chart and never on an order surface. Nothing in the tab rezzes in or fl
 
 Anthony, 2026-10-24: "smooth everywhere where possible as far as we can go". The V2 feel (The Desk's, one ease
 `cubic-bezier(.22, 1, .36, 1)`) comes to the chart page and the Markup Studio where no live value shows and no order is
-asked: menus and popovers fade in as they open, a dialog that asks nothing about orders rises in, the top bar's own buttons
-ease their hover and lift 1 px, the PIN card rises in once, the Studio's buttons and tabs ease, and a tab bar's gold ink
+asked: menus and popovers fade in as they open, a dialog that asks nothing about orders fades in, the top bar's own buttons
+ease their hover and lift 1 px, the PIN card fades in once, the Studio's buttons and tabs ease, and a tab bar's gold ink
 slides to the chosen tab (`ChartMotion.syncInk(bar, { key })`, the `.v2-ink` span in motion.css). R3 holds as written above:
 no motion on the order ticket, the order bar, Armed, Flatten, the order dialogs (the group entry, Flatten every account,
 Order Strategies), the tape, the quote board, the account panels, positions, P&L or the chart. Every control takes its click

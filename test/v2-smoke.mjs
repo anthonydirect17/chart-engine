@@ -68,7 +68,7 @@ try {
   console.log('motion on');
   const { ctx, p } = await openPage(false);
   // the PIN card rises in once as the pad opens (no prices on it); its keys take a press at once
-  check(await p.$eval('.cb-pin-card', e => getComputedStyle(e).animationName) === 'cb-pin-rise', 'the PIN card rises in (cb-pin-rise)');
+  check(await p.$eval('.cb-pin-card', e => getComputedStyle(e).animationName) === 'cb-pin-in', 'the PIN card fades in (cb-pin-in, no movement under the keys)');
   await enterPin(p, TEST_PIN);
   await p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live') && window.workspace.ticket().enabled, null, { timeout: 30000 });
   await p.waitForSelector('[data-tk-id="buyMkt"]', { timeout: 30000 });
@@ -112,8 +112,23 @@ try {
     d.querySelector('[data-act="cancel"]').click();
     return { anim, wasOpen, open: d.open };
   });
-  check(dlg.wasOpen && dlg.anim === 'v2-rise' && !dlg.open, 'the New layout dialog rises in (v2-rise) and Cancel closed it at once: ' + JSON.stringify(dlg));
+  check(dlg.wasOpen && dlg.anim === 'v2-fade-in' && !dlg.open, 'the New layout dialog fades in (v2-fade-in, never moving under the pointer) and Cancel closed it at once: ' + JSON.stringify(dlg));
   await wait(400);
+  // danger borders keep their color on hover (review of #70): Flatten all, and the NO STOP question's Send (stop 0, Armed, Buy MKT)
+  const borderOf = sel => p.$eval(sel, e => getComputedStyle(e).borderTopColor);
+  const flat0 = await borderOf('#wsFlat'); await p.hover('#wsFlat'); await wait(350);
+  const flat1 = await borderOf('#wsFlat');
+  check(flat0 === flat1 && !/201, 165, 92/.test(flat1), 'Flatten all keeps its red border on hover: ' + flat0 + ' then ' + flat1);
+  await p.fill('[data-tk-id="bStop"]', '0'); await p.press('[data-tk-id="bStop"]', 'Tab');
+  await p.evaluate(() => document.activeElement && document.activeElement.blur());
+  await p.click('[data-tk-id="armBtn"]'); await wait(450);
+  await p.click('[data-tk-id="buyMkt"]'); await wait(300);
+  check(await p.isVisible('#wsNoStop'), 'Buy MKT with stop 0: the NO STOP question');
+  const send0 = await borderOf('#wsNoStopSend'); await p.hover('#wsNoStopSend'); await wait(350);
+  const send1 = await borderOf('#wsNoStopSend');
+  check(send0 === 'rgb(255, 92, 122)' && send1 === 'rgb(255, 92, 122)', 'the NO STOP question\'s Send keeps the sell red border on hover: ' + send0 + ' then ' + send1);
+  await p.click('#wsNoStopCancel'); await wait(200);
+  await p.click('[data-tk-id="armBtn"]'); await wait(300);
   // Buy MKT fires on the click (Armed, a stop set, so no question)
   await p.fill('[data-tk-id="bStop"]', '20'); await p.press('[data-tk-id="bStop"]', 'Tab');
   await p.evaluate(() => document.activeElement && document.activeElement.blur());

@@ -291,7 +291,7 @@
 .chart-live .arm .knob { width: 30px; height: 18px; border-radius: 999px; background: var(--s3); border: 1px solid var(--line-strong); position: relative; flex: none; }
 .chart-live .arm .knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text3); transition: left .12s; }
 /* Armed (1.13.0 deep red; 1.39.0 house style V2, Anthony 2026-10-24: gold replaces crimson everywhere): the V2 gold with
-   dark ink on it (8.9:1), the outline in the gold text color (kept readable on every ground). The V1 names --crimson and
+   dark ink on it (8.19:1), the outline in the gold text color (kept readable on every ground). The V1 names --crimson and
    --crimson-word are kept so a page or host that sets them still works. Instant: no motion on the switch's state (R3). */
 .chart-live .arm[aria-checked="true"] { color: #140F06; background: var(--crimson); border-color: var(--crimson-word); }
 .chart-live .arm[aria-checked="true"] .knob { background: #140F06; border-color: #140F06; }

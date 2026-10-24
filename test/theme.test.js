@@ -15,7 +15,7 @@ const LOCKED_V1 = {"bg":"#080B10","rth":"#0B1016","grid":"rgba(42,54,69,0.30)","
    candles, the VWAP, the drawings and the trade sides keep the V1 values exactly ("my colors for candles change all the
    time ... this is more of an overall theme change"). */
 const CANDLE_KEYS = ['up', 'down', 'volumeAlpha', 'vwap', 'long', 'short', 'profit', 'loss', 'drawing', 'upVol', 'downVol', 'upOnTag', 'downOnTag', 'upText', 'downText', 'vwapText'];
-const LOCKED = Object.assign({}, LOCKED_V1, {"bg":"#050506","rth":"#09090B","grid":"rgba(42,40,36,0.45)","axisLine":"#1B1B20","divider":"#302D28","cross":"#6B665C","axisText":"#8A857B","axisTextStrong":"#ECE9E2","tagFill":"#18181C","tagBorder":"#302D28","tagText":"#F7F3EA","exit":"#F7F3EA","live":"#F7F3EA"});
+const LOCKED = Object.assign({}, LOCKED_V1, {"bg":"#050506","rth":"#09090B","grid":"rgba(42,40,36,0.50)","axisLine":"#1B1B20","divider":"#302D28","cross":"#6B665C","axisText":"#8A857B","axisTextStrong":"#ECE9E2","tagFill":"#18181C","tagBorder":"#302D28","tagText":"#F7F3EA","exit":"#F7F3EA","live":"#F7F3EA"});
 
 test('the default ground is exactly the V2 palette, the candles exactly the locked V1 ones (and the legend colors)', () => {
   // the V1 dark ground (saved by a Reset or a pick of Dark before 1.39.0) is read as the default ground
@@ -31,15 +31,17 @@ test('the default ground is exactly the V2 palette, the candles exactly the lock
   assert.equal(U.groundOf('#080b10'), CE.DEFAULT_THEME.bg);
   assert.equal(U.groundOf('#000000'), '#000000');
   // V2's floors on its own ground, as CHART_STYLE.md states them (the floors of every other ground, FLOOR)
-  const D = U.buildTheme(), r = (a, b) => +U.contrast(over(a, b), b).toFixed(2);
-  assert.ok(r(D.axisText, D.bg) >= F.text && r(D.axisText, D.rth) >= F.text, 'axis text ' + r(D.axisText, D.bg));
-  assert.ok(r(D.axisTextStrong, D.bg) >= F.strong && r(D.tagText, D.tagFill) >= F.strong, 'day labels and tag text');
-  assert.ok(r(D.cross, D.bg) >= F.cross && r(D.cross, D.rth) >= F.cross, 'crosshair ' + r(D.cross, D.bg));
-  assert.ok(r(D.divider, D.bg) >= F.divider && r(D.tagBorder, D.bg) >= F.divider, 'divider ' + r(D.divider, D.bg));
-  assert.ok(r(D.grid, D.bg) >= F.grid, 'grid ' + r(D.grid, D.bg));
-  assert.ok(r(D.down, D.bg) >= F.candle && r(D.up, D.bg) >= F.candle, 'the default candles on the V2 ground');
+  const D = U.buildTheme(), c = (a, b) => U.contrast(over(a, b), b), r = (a, b) => +c(a, b).toFixed(2);   // c unrounded: the floors; r: the figures stated
+  assert.ok(c(D.axisText, D.bg) >= F.text && c(D.axisText, D.rth) >= F.text, 'axis text ' + r(D.axisText, D.bg));
+  assert.ok(c(D.axisTextStrong, D.bg) >= F.strong && c(D.tagText, D.tagFill) >= F.strong, 'day labels and tag text');
+  assert.ok(c(D.cross, D.bg) >= F.cross && c(D.cross, D.rth) >= F.cross, 'crosshair ' + r(D.cross, D.bg));
+  assert.ok(c(D.divider, D.bg) >= F.divider && c(D.tagBorder, D.bg) >= F.divider, 'divider ' + r(D.divider, D.bg));
+  assert.ok(c(D.grid, D.bg) >= F.grid, 'grid ' + c(D.grid, D.bg));   // unrounded (review of #70: 1.117 at 45% rounded up to 1.12)
+  assert.ok(c(D.down, D.bg) >= F.candle && c(D.up, D.bg) >= F.candle, 'the default candles on the V2 ground');
   assert.deepEqual([r(D.axisText, D.bg), r(D.axisTextStrong, D.bg), r(D.tagText, D.tagFill), r(D.cross, D.bg), r(D.divider, D.bg), r(D.grid, D.bg), r(D.down, D.bg)],
-    [5.55, 16.8, 15.99, 3.57, 1.49, 1.12, 2.87]);
+    [5.55, 16.8, 15.99, 3.57, 1.49, 1.14, 2.87]);
+  // Armed: the dark ink on the gold (CHART_STYLE.md and live.css say 8.19:1)
+  assert.equal(+U.contrast('#140F06', '#C9A55C').toFixed(2), 8.19);
   // candle presets on the default ground: only the candle colors and what follows from them change
   for (const p of CE.PRESETS) {
     const T = U.buildTheme({ up: p.up, down: p.down });

@@ -2,7 +2,7 @@
  * ChartBridge's PIN pad (live/pin.js), on the standalone page only. The chart's look (CHART_STYLE.md, house style):
  * 1.39.0 house style V2 (black and gold, Anthony 2026-10-24): the #050506 ground, an 18 px #0C0C0F card with a gold
  * hairline along its top, gold the accent and in the logo (a black tile, gold glyph, gold border glow) and the wordmark,
- * IBM Plex Mono digits. Amber (the warn color) for a refused PIN; green and red stay for trades. The card rises in once
+ * IBM Plex Mono digits. Amber (the warn color) for a refused PIN; green and red stay for trades. The card fades in once
  * when the pad opens (not with reduced motion); the keys ease their hover. A key acts on its press as before.
  */
 .cb-pin {
@@ -66,10 +66,10 @@
 .cb-pin-key:hover, .cb-pin-link:hover { border-color: rgba(201, 165, 92, .28); }
 .cb-pin-key:focus-visible, .cb-pin-link:focus-visible { outline-color: var(--accent); }
 @media (prefers-reduced-motion: no-preference) {
-  :root:not(.motion-off) .cb-pin-card { animation: cb-pin-rise .45s cubic-bezier(.22, 1, .36, 1); }
+  :root:not(.motion-off) .cb-pin-card { animation: cb-pin-in .45s cubic-bezier(.22, 1, .36, 1); }
   :root:not(.motion-off) .cb-pin-key, :root:not(.motion-off) .cb-pin-link { transition: background-color .2s cubic-bezier(.22, 1, .36, 1), border-color .2s cubic-bezier(.22, 1, .36, 1), color .2s cubic-bezier(.22, 1, .36, 1); }
 }
-@keyframes cb-pin-rise { from { opacity: 0; translate: 0 10px; } to { opacity: 1; translate: 0 0; } }
+@keyframes cb-pin-in { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .cb-pin-shake, .cb-pin-busy .cb-pin-dots span.on { animation: none; }
   .cb-pin-dots span { transition: none; }

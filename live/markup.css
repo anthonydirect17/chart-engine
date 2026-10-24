@@ -176,5 +176,6 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
     transition: border-color .25s var(--ms-ease), color .2s var(--ms-ease), background-color .25s var(--ms-ease), box-shadow .25s var(--ms-ease), translate .2s var(--ms-ease); }
   :root:not(.motion-off) .ms-btn:not(:disabled):hover { translate: 0 -1px; }
   :root:not(.motion-off) .ms-btn:not(:disabled):active { translate: 0 0; scale: .98; }
-  :root:not(.motion-off) .ms-summary:not([hidden]) { animation: v2-rise .45s var(--ms-ease); }
+  :root:not(.motion-off) .ms-summary:not([hidden]) { animation: v2-fade-in .35s var(--ms-ease); }
 }
+@keyframes v2-fade-in { from { opacity: 0; } to { opacity: 1; } }

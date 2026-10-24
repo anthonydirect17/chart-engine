@@ -287,10 +287,11 @@ const sameColor = (a, b) => { const x = parseColor(a), y = parseColor(b); return
 /* 1.39.0 (Anthony 2026-10-24: "lets unify everything. I really liked the black gold look you showed and I think it should
    live through our entire system"): the chart's own colors (ground, regular-hours ground, grid, axes, crosshair, tags) are
    house style V2's black and warm greys; every floor of FLOOR holds on it (axis text 5.55:1, day labels 16.8:1, tag text
-   16.0:1 on its fill, crosshair 3.57:1, divider 1.49:1, grid 1.12:1). The candles' and indicators' defaults are not
+   16.0:1 on its fill, crosshair 3.57:1, divider 1.49:1, grid 1.14:1 as drawn; at 45% it read 1.117:1, under the
+   1.12 floor, so it is 50%). The candles' and indicators' defaults are not
    changed (Anthony: "my colors for candles change all the time ... this is more of an overall theme change"). */
 const DEFAULT_THEME = {
-  bg: '#050506', rth: '#09090B', grid: 'rgba(42,40,36,0.45)', axisLine: '#1B1B20', divider: '#302D28',
+  bg: '#050506', rth: '#09090B', grid: 'rgba(42,40,36,0.50)', axisLine: '#1B1B20', divider: '#302D28',
   cross: '#6B665C', axisText: '#8A857B', axisTextStrong: '#ECE9E2',
   tagFill: '#18181C', tagBorder: '#302D28', tagText: '#F7F3EA',
   up: '#4B9CD3',            // Carolina blue: bull candles
@@ -339,7 +340,7 @@ const BACKGROUNDS = [
 ];
 /*
  * Contrast floors on a chosen ground (1.5.3): text 4.5 (WCAG AA), strong text and tag text 7, lines and marks 3,
- * candle bodies 2.5 (the default bear purple reads at 2.77 on the default ground, which Anthony approved).
+ * candle bodies 2.5 (the default bear purple reads at 2.77 on V1's ground, which Anthony approved; 2.87 on the V2 ground).
  * On a ground where even white or black cannot reach a floor (mid-grey), the best of the two is used.
  */
 const V1_GROUND = '#080B10';

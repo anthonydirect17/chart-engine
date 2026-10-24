@@ -245,6 +245,12 @@ function cleanColors(v, keys) {
 /* The two preset groups: a chart preset is the bar colors and the chart background, an indicator preset every
    indicator color. */
 const PRESET_GROUPS = { chart: ['up', 'down', 'bg'], indicator: IND_COLOR_KEYS };
+/* 1.39.0 (review of #70): whether a preset's colors are the colors in use. A chart preset saved before 1.39.0 holds the V1
+   ground #080B10, which now reads as the V2 default (ChartEngine.util.groundOf), so its ground is compared through it. */
+const presetGround = c => (typeof c === 'string' && ENGINE.util.groundOf ? String(ENGINE.util.groundOf(c)).toUpperCase() : c);
+function presetSame(group, cur, colors) {
+  return !!PRESET_GROUPS[group] && PRESET_GROUPS[group].every(k => (k === 'bg' ? presetGround(cur[k]) === presetGround(colors[k]) : cur[k] === colors[k]));
+}
 const PRESET_MAX = 24, PRESET_NAME_MAX = 40;
 /** A preset name as kept: trimmed, inner spaces as one, at most 40 characters; '' when nothing is left. */
 function presetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, PRESET_NAME_MAX).trim() : ''; }
@@ -1007,7 +1013,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { LOAD_WAIT_S, staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, CLOCK_WARN_MS, REAL_WARN_MS, REAL_BAD_MS, pcClockOf, fmtDelay, feedSplit, feedText, feedShort, feedLevel, clockWarn, clockNote, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, MA_LENS, studiesOf, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, ROOM_MIN, ROOM_MAX, roomOk, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
+api = { LOAD_WAIT_S, staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, CLOCK_WARN_MS, REAL_WARN_MS, REAL_BAD_MS, pcClockOf, fmtDelay, feedSplit, feedText, feedShort, feedLevel, clockWarn, clockNote, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, presetSame, presetGround, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, MA_LENS, studiesOf, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, ROOM_MIN, ROOM_MAX, roomOk, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -2940,9 +2946,10 @@ function mount(container, options) {
   // indSel: the save row's indicator preset as chosen by hand ('' None, an id), or null to follow the colors in use
   PR = { lists: { chart: [], indicator: [] }, note: { chart: '', indicator: '' }, edit: null, confirm: null, indSel: null };
   const prCurrent = g => { if (g !== 'chart') return Object.assign({}, IC); const c = themePanel.get(); return { up: c.up, down: c.down, bg: c.bg }; };
-  const prSame = (g, colors) => { const cur = prCurrent(g); return LP.PRESET_GROUPS[g].every(k => cur[k] === colors[k]); };
+  /* 1.39.0 (review of #70): a chart preset saved before 1.39.0 (ground #080B10) still shows as in use (LP.presetSame) */
+  const prSame = (g, colors) => LP.presetSame(g, prCurrent(g), colors);
   const prSwatch = (g, c) => g === 'chart'
-    ? `<span class="pr-sw" style="background:${c.bg}" aria-hidden="true"><i style="background:${c.up}"></i><i style="background:${c.down}"></i></span>`
+    ? `<span class="pr-sw" style="background:${LP.presetGround(c.bg)}" aria-hidden="true"><i style="background:${c.up}"></i><i style="background:${c.down}"></i></span>`
     : `<span class="pr-sw pr-sw-ind" aria-hidden="true">${['vwap', 'prior', 'ibHigh', 'vpPoc'].map(k => `<i style="background:${c[k]}"></i>`).join('')}</span>`;
   const prSel = f => '[data-f="' + CSS.escape(f) + '"]';
   themePanel.slot.innerHTML = PR_GROUPS.map(G => `<div class="pr-group" data-g="${G.g}" role="group" aria-labelledby="${p}pr-${G.g}">` +

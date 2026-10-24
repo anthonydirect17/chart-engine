@@ -69,7 +69,7 @@
   const $ = id => document.getElementById(id);
   const ROLES = ['Level', 'Failed candle', 'Reclaim candle', 'Entry', 'Stop', 'Target'];
   const SPANS = ["Volume I'm reading", 'Approach'];
-  const COLORS = { Level: '#B69CFF', 'Failed candle': '#FFC266', 'Reclaim candle': '#7FD7FF', Entry: '#E6EDF5', Stop: '#FF5C7A', Target: '#3DDC97' };
+  const COLORS = { Level: '#D4B06A', 'Failed candle': '#FFC266', 'Reclaim candle': '#7FD7FF', Entry: '#E6EDF5', Stop: '#FF5C7A', Target: '#3DDC97' };
   // his own trade in the Trades tab once the grade is complete: the one accent (markup.css --ms-yours), on marks and drawings
   const YOU = (getComputedStyle(document.documentElement).getPropertyValue('--ms-yours') || '').trim() || '#FF9500';
   const YOU_INK = (getComputedStyle(document.documentElement).getPropertyValue('--ms-yours-deep') || '').trim() || '#3A2200';

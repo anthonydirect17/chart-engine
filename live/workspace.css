@@ -15,7 +15,7 @@
   --ws-pop: #0E0E11; --ws-dots: #1E1D1A;
   --ws-text: #ECE9E2; --ws-text2: #A6A196; --ws-muted: #8A857B; --ws-grip: #4A463E;
   --ws-accent: #C9A55C; --ws-accent-deep: #3C321E; --ws-tint: #17140E; --ws-tint-line: #3C321E; --ws-soft: #F2E4C2;
-  --ws-buy: #3DDC97; --ws-sell: #FF5C7A; --ws-sell-ground: #2A0F17; --ws-warn: #E8B85C; --ws-warn-ground: #1C150A; --ws-warn-text: #F2E4C2;
+  --ws-buy: #3DDC97; --ws-sell: #FF5C7A; --ws-sell-ground: #2A0F17; --ws-warn: #E8B85C; --ws-warn-ground: #1C150A; --ws-warn-text: #FFE2B0;
   /* V2's gold (The Desk's --gold, --gold-text, --gold-soft, the hairline and the glow) and its one ease */
   --ws-gold: #C9A55C; --ws-gold-text: #E2C687; --ws-gold-border: rgba(201, 165, 92, .28); --ws-gold-hair: rgba(201, 165, 92, .35); --ws-gold-glow: rgba(201, 165, 92, .18);
   --ws-gold-fill: linear-gradient(180deg, #E6CB8E, #B8924A); --ws-on-gold: #140F06; --ws-ease: cubic-bezier(.22, 1, .36, 1);
@@ -485,8 +485,8 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .ws-title { color: var(--ws-gold-text); font-family: "IBM Plex Sans Condensed", var(--ws-sans); font-weight: 700; letter-spacing: .04em; text-shadow: 0 0 18px var(--ws-gold-glow); }
 .ws-btn { border-radius: 999px; }
 .ws-btn.ws-gear { border-radius: 50%; }
-.ws-btn:hover { border-color: var(--ws-gold-border); }
-.ws-btn.ws-flat:hover { border-color: color-mix(in srgb, var(--ws-sell) 55%, transparent); }
+/* the gold hover border: never on a button whose border says danger (Flatten, the NO STOP question's Send, Delete group) */
+.ws-btn:not(.ws-flat):not(.nostop-send):not(.ma-danger):hover { border-color: var(--ws-gold-border); }
 .ws-btn.primary { background: var(--ws-gold-fill); border-color: transparent; color: var(--ws-on-gold); font-weight: 600; }
 .ws-btn.primary:hover { color: var(--ws-on-gold); }
 .ws-sel { border-radius: 999px; }
@@ -499,7 +499,7 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 /* The feel: only where no live value shows and no order is asked (R3). The top bar's own buttons (Layout, + Add panel,
    Screens, Settings, the layout tabs; never Flatten all or Flatten every, the NO STOP question's Send and Cancel, nor the Agent
    and League tabs, which keep the Agent tab's own rule of no motion) ease their hover and lift 1 px; a popover or menu fades in
-   as it opens; a dialog that asks nothing about orders rises in (the group entry, Flatten every and the Order Strategies
+   as it opens; a dialog that asks nothing about orders fades in, never moving under the pointer (the group entry, Flatten every and the Order Strategies
    appear at once). Every one of them takes its click on the first frame: nothing waits for the motion. */
 @media (prefers-reduced-motion: no-preference) {
   :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):not(.ag-tabbtn):not(.lg-tabbtn), :root:not(.motion-off) .ws-top > .ws-sel, :root:not(.motion-off) .ws-tab,
@@ -508,7 +508,7 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
   :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):not(.ag-tabbtn):not(.lg-tabbtn):not(:disabled):hover { translate: 0 -1px; box-shadow: 0 0 16px var(--ws-gold-glow); }
   :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):not(.ag-tabbtn):not(.lg-tabbtn):active { translate: 0 0; scale: .98; }
   :root:not(.motion-off) .ws-pop:not([hidden]) { animation: v2-fade-in .22s var(--ws-ease); }
-  :root:not(.motion-off) .ws-dialog[open]:not(:has(.ws-gq, .ws-fe, .ws-sg)) { animation: v2-rise .35s var(--ws-ease); }
+  :root:not(.motion-off) .ws-dialog[open]:not(:has(.ws-gq, .ws-fe, .ws-sg)) { animation: v2-fade-in .3s var(--ws-ease); }
 }
 
 /* ---------------- 1.16.0 (ChartBridge 0.4.0): Order Strategies, Merge, entry types and The Desk's shared settings. Shown

@@ -151,10 +151,10 @@ test('motion: every V2 transition and animation is off with reduced motion, and 
   // every V2 motion rule sits inside @media (prefers-reduced-motion: no-preference): nothing outside it moves but what
   // moved before 1.39.0 (checked against the rules that animate outside it, which must not name V2's keyframes or ease)
   for (const f of ['live/live.css', 'live/workspace.css', 'live/markup.css', 'live/pin.css']) {
-    for (const r of rules(read(f))) if (!/no-preference/.test(r.media)) assert.doesNotMatch(r.body, /animation(?:-name)?\s*:[^;]*\b(v2-[a-z-]+|cb-pin-rise)\b|transition\s*:[^;]*(cubic-bezier\(\.22, 1, \.36, 1\)|var\(--(ws|ms|v2)-ease\))/, f + ': ' + r.sel + ' moves with reduced motion');
+    for (const r of rules(read(f))) if (!/no-preference/.test(r.media)) assert.doesNotMatch(r.body, /animation(?:-name)?\s*:[^;]*\b(v2-[a-z-]+|cb-pin-in)\b|transition\s*:[^;]*(cubic-bezier\(\.22, 1, \.36, 1\)|var\(--(ws|ms|v2)-ease\))/, f + ': ' + r.sel + ' moves with reduced motion');
   }
   // the order dialogs (the group entry, Flatten every account, Order Strategies) appear at once
-  assert.match(read('live/workspace.css'), /\.ws-dialog\[open\]:not\(:has\(\.ws-gq, \.ws-fe, \.ws-sg\)\) \{ animation: v2-rise/);
+  assert.match(read('live/workspace.css'), /\.ws-dialog\[open\]:not\(:has\(\.ws-gq, \.ws-fe, \.ws-sg\)\) \{ animation: v2-fade-in/);
   // the Armed switch's state: no V2 motion added (its knob's 0.12 s of 1.13.0 is the only motion it has)
   for (const r of rules(read('live/live.css'))) if (/\.arm\b/.test(r.sel) && moves(r.body)) assert.equal(r.sel, '.chart-live .arm .knob::after');
 });
@@ -209,4 +209,35 @@ test('motion: the tab ink (ChartMotion.syncInk) follows the chosen tab at once, 
   const blocked = mkEl('', {}, null); blocked.closest = () => ({}); blocked.ownerDocument = bar.ownerDocument;
   blocked.children.push(mkEl('', { 'aria-selected': 'true' }, [0, 0, 30, 20]));
   assert.equal(kit.syncInk(blocked), null);
+});
+
+test('danger stays danger (review of #70): no gold hover on a danger button; both LIVE confirmations in the danger red', () => {
+  const ws = read('live/workspace.css');
+  assert.doesNotMatch(ws.replace(/\/\*[\s\S]*?\*\//g, ''), /(^|\n)\.ws-btn:hover \{ border-color: var\(--ws-gold-border\)/, 'no bare gold hover border on every .ws-btn');
+  assert.match(ws, /\.ws-btn:not\(\.ws-flat\):not\(\.nostop-send\):not\(\.ma-danger\):hover \{ border-color: var\(--ws-gold-border\); \}/);
+  // the switch to a LIVE account: the Bot tab's ask as the Agent tab's (red), never the gold primary
+  const bot = read('live/bot.css');
+  assert.match(bot, /\.bt-acct-ask \{[^}]*border: 1px solid var\(--ws-sell\)[^}]*background: var\(--ws-sell-ground\)/);
+  assert.match(bot, /\.bt-acct-ask \.bt-live-go \{ color: #1a0006; background: var\(--ws-sell\); border-color: var\(--ws-sell\);/);
+  assert.match(read('live/agent.css'), /\.ag-view \.ag-ask \.ag-live-go \{ color: #1a0006; background: var\(--f-rd\); border-color: var\(--f-rd\); \}/);
+  // warnings keep their own amber text, apart from the soft gold
+  assert.match(ws, /--ws-warn-text: #FFE2B0;/); assert.match(ws, /--ws-soft: #F2E4C2;/);
+  // nothing with a button in it moves under the pointer as it opens: dialogs, the PIN card and the Studio's summary only fade
+  assert.match(ws, /\.ws-dialog\[open\]:not\(:has\(\.ws-gq, \.ws-fe, \.ws-sg\)\) \{ animation: v2-fade-in/);
+  assert.match(read('live/pin.css'), /@keyframes cb-pin-in \{ from \{ opacity: 0; \} to \{ opacity: 1; \} \}/);
+  assert.match(read('live/markup.css'), /\.ms-summary:not\(\[hidden\]\) \{ animation: v2-fade-in/);
+  for (const f of ['live/workspace.css', 'live/pin.css', 'live/markup.css']) assert.doesNotMatch(read(f), /animation: v2-rise/, f);
+  // the Studio's Level marker in the level line's gold (was the V1 purple)
+  assert.match(read('live/markup.js'), /const COLORS = \{ Level: '#D4B06A',/);
+});
+
+test('a chart preset saved before 1.39.0 (ground #080B10) still shows as in use on the V2 ground (review of #70)', () => {
+  const { LivePrefs: LP } = require('../live/live.js');
+  const cur = { up: '#4B9CD3', down: '#6D28D9', bg: '#050506' };
+  assert.equal(LP.presetSame('chart', cur, { up: '#4B9CD3', down: '#6D28D9', bg: '#080B10' }), true);
+  assert.equal(LP.presetSame('chart', cur, { up: '#4B9CD3', down: '#6D28D9', bg: '#050506' }), true);
+  assert.equal(LP.presetSame('chart', cur, { up: '#4B9CD3', down: '#6D28D9', bg: '#000000' }), false);
+  assert.equal(LP.presetSame('chart', cur, { up: '#4B9CD3', down: '#7A7468', bg: '#080B10' }), false);
+  assert.equal(LP.presetGround('#080B10'), '#050506');
+  assert.match(read('live/live.js'), /const prSame = \(g, colors\) => LP\.presetSame\(g, prCurrent\(g\), colors\);/);
 });

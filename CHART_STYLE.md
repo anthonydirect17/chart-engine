@@ -29,7 +29,7 @@ possible as far as we can go."
 
 - **The chart's own colors** (ground, regular-hours ground, grid, axes, crosshair, tags, the exit and live dots) are V2's
   black and warm greys, in the table below; every floor of the next section holds on the V2 ground (axis text 5.55:1, day
-  labels 16.8:1, tag text 15.99:1 on its fill, crosshair 3.57:1, divider and tag borders 1.49:1, grid 1.12:1; the default
+  labels 16.8:1, tag text 15.99:1 on its fill, crosshair 3.57:1, divider and tag borders 1.49:1, grid 1.14:1 as drawn (50%); the default
   bear purple reads 2.87:1, 2.77:1 before). The V1 dark ground `#080B10`, saved by a Reset or a pick of Dark before 1.39.0,
   is read as the default ground (`V1_GROUND`, `groundOf`). The engine's own controls (Jump to live, the padlock, the delta
   divider, focus rings, the Colors panel) are gold where they were purple: `#E2C687` on `#17140E` with a `#3C321E` border.
@@ -39,14 +39,16 @@ possible as far as we can go."
   V2 tokens (TheDesk `frontend/src/styles/tokens.css`): ground `#050506`, panels `#0C0C0F`, raised `#111114` and `#18181C`,
   lines `#1B1B20` and `#2A2824`, text `#ECE9E2`, `#F7F3EA`, `#A6A196`, `#8A857B`; gold `#C9A55C`, gold text `#E2C687`, soft
   gold `#F2E4C2`; info `#8FB4E8`, warn `#E8B85C`. Gold replaces the purple accent and the crimson everywhere: the logo (a black
-  tile, gold glyph and border glow), the wordmark, Armed (gold with dark ink `#140F06`, 8.9:1; the V1 names `--crimson` and
+  tile, gold glyph and border glow), the wordmark, Armed (gold with dark ink `#140F06`, 8.19:1; the V1 names `--crimson` and
   `--crimson-word` are kept), the chart's armed ring, the LIVE account marks. Green and red only for P&L and trade side
-  (the Account page's room meter in the loss red, crimson before). Buttons and tabs are pills, popovers and dialogs 14 px with
+  (the Account page's room meter in the loss red, crimson before). Danger stays red: Flatten, the NO STOP question's Send,
+  Delete group and both switches to a LIVE account (the Bot tab's and the Agent tab's) keep the sell red, and never take the
+  gold hover border. Buttons and tabs are pills, popovers and dialogs 14 px with
   a gold border, panels and cards a gold hairline along the top, the top bar a gold hairline under it.
 - **Motion (V2):** one ease, `cubic-bezier(.22, 1, .36, 1)`. Menus and popovers (Indicators, Colors, the chip popovers, + Add
-  panel, Settings, Screens) fade in as they open; a dialog that asks nothing about orders rises in (10 px); the top bar's own
+  panel, Settings, Screens) fade in as they open; a dialog that asks nothing about orders fades in (no movement, so no button is ever hit off its place); the top bar's own
   buttons (never Flatten all or Flatten every, nor the NO STOP question's buttons) ease their hover and lift 1 px; a tab bar's
-  gold ink slides to the chosen tab (`ChartMotion.syncInk`); the PIN card rises in once; the Studio's buttons and tabs ease.
+  gold ink slides to the chosen tab (`ChartMotion.syncInk`); the PIN card fades in once; the Studio's buttons and tabs ease.
   The limits: a live value (prices, the quote board, Time and Sales, position, P&L, order state, the ticket, the chart and its
   order and position lines) shows its true value at once and nothing on or around it moves; every control takes its click
   on the first frame (a menu or a dialog while it is still fading in); Buy, Sell, Flatten, B/E, Arm and Disarm fire on the
@@ -72,7 +74,7 @@ pickers, saved per browser); the indicators' colors in their gears (1.9.0). Defa
 | ARMED chip in a chart's header | 1.34.1 (Anthony): a small chip, 8 px type, that says ARMED only; the account or group on hover, never written on the chart |
 | Chart ground | `#050506` (1.39.0, V2; `#080B10` before) |
 | Regular-hours ground (bars under 1 hour) | `#09090B` (V1 `#0B1016`) |
-| Grid hairlines | `rgba(42,40,36,0.45)` (V1 `rgba(42,54,69,0.30)`) |
+| Grid hairlines | `rgba(42,40,36,0.50)` (V1 `rgba(42,54,69,0.30)`) |
 | Axis borders | `#1B1B20` (V1 `#18212C`) |
 | Session divider, tag borders | `#302D28` (V1 `#2A3645`) |
 | Crosshair lines | `#6B665C` (V1 `#5B6B80`) |
@@ -101,7 +103,8 @@ Presets: Carolina / purple (default), Mint / coral (`#4FD1A5` / `#F0717A`, the C
 House green / red (`#3DDC97` / `#FF7A7A`), and since 1.39.0 **Black and gold** (`#D4B06A` / `#7A7468`, the V2 chart gold and a
 warm graphite; wicks and volume bars follow the candle colors, volume at 26%; on the V2 ground bull 9.91:1, bear 4.39:1,
 2.26:1 and an RGB distance of 108 apart, at least 1.30:1 apart on every ground; the bear 3.04:1 over the profile's value-area
-rows, the default's 1.99:1). Text drawn in a candle color is lightened until it reads
+rows, the default's 1.99:1). Its bull gold is close to the value-area and PD POC level gold `#E0B45A` (1.06:1): the levels
+are dashed lines with names and tags, the candles bodies. Text drawn in a candle color is lightened until it reads
 at 4.5:1 on the ground; the last-price tag picks dark or white text for its fill.
 
 **Background (1.5.3, Anthony's request).** The Colors panel has a Background section: presets Dark `#050506` since
@@ -112,8 +115,8 @@ frame) from the engine's helpers (`buildTheme`, `readableOn`, `legible`):
   by `readableOn`): RTH ground 2.5%, grid 6%, axis borders 9%, divider and tag borders 20%, crosshair 40%, axis
   text 57%, day labels 95%, crosshair tag fill 7%, tag text, exit dot and live dot the ink.
 - Each is then pushed further toward white or black until it reaches its floor: text 4.5:1, day labels and tag
-  text 7:1, crosshair and lines (VWAP, drawings) 3:1, candle bodies 2.5:1 (the default bear purple reads 2.77:1 on
-  the default ground), divider 1.4:1, grid 1.12:1. Colored marks (candles, VWAP, levels and their names, trade
+  text 7:1, crosshair and lines (VWAP, drawings) 3:1, candle bodies 2.5:1 (the default bear purple reads 2.87:1 on
+  the V2 default ground, 2.77:1 on V1's `#080B10`), divider 1.4:1, grid 1.12:1. Colored marks (candles, VWAP, levels and their names, trade
   sides, results) keep their hue and move only as far as needed; the colors as chosen are kept, so going back to
   the default ground gives them back unchanged.
 - A colored mark moves toward white or black, whichever reaches its floor with the smaller change, so it keeps as

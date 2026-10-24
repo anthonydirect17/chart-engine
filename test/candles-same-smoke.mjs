@@ -31,8 +31,8 @@ const FRACTIONS = [
 const SPACINGS = [2.6, 6, 14];
 
 /* draws the sample chart in host box `b` and answers every canvas's size, box and pixels (base64 RGBA) */
-async function draw(page, b, spacing, size) {
-  return page.evaluate(async ({ b, spacing, size }) => {
+async function draw(page, b, spacing, size, theme) {
+  return page.evaluate(async ({ b, spacing, size, theme }) => {
     const host = document.getElementById('c');
     if (window.__ch) { window.__ch.destroy(); host.innerHTML = ''; }
     /* size (the reference only, b'): the host measures exactly the current engine's plot size (its canvas's device px over the
@@ -45,9 +45,9 @@ async function draw(page, b, spacing, size) {
     for (let i = 0; i < 900; i++) { const o = p, c = o + (rnd() - 0.5) * 12, h = Math.max(o, c) + rnd() * 5, l = Math.min(o, c) - rnd() * 5; bars.push({ t: 1760000000 + i * 60, o, h, l, c, v: 100 }); p = c; }
     const ch = window.__ch = ChartEngine.create(host, { barSpacing: spacing, minSpacing: 0.6, liveButton: false, lockButton: false, motion: { zoom: 0, fit: 0, candle: 0, follow: 0, friction: 0 },
       layers: { volume: false, vwap: false, levels: false, trades: false, ib: false }, clock: () => 1760000000 + 900 * 60,
-      /* 1.39.0: the default ground is house style V2's black, which the 1.36.0 reference does not know; both engines draw on the
-         Black preset, whose colors both build the same way, so the candles are still compared pixel for pixel */
-      theme: { bg: '#000000' } });
+      /* 1.39.0: drawn twice (GROUNDS below): on the Black preset, whose colors both engines build the same way, and on the
+         default V2 ground, the reference given the V2 chart colors as set colors (it keeps colors set by hand) */
+      theme });
     ch.setBars(bars);
     await new Promise(res => setTimeout(res, 600));
     return [...host.querySelectorAll('canvas')].map(cv => {
@@ -55,7 +55,7 @@ async function draw(page, b, spacing, size) {
       let s = ''; for (let i = 0; i < d.length; i += 0x8000) s += String.fromCharCode.apply(null, d.subarray(i, i + 0x8000));
       return { w: cv.width, h: cv.height, box: { left: r.left, top: r.top, width: r.width, height: r.height }, px: btoa(s) };
     });
-  }, { b, spacing, size });
+  }, { b, spacing, size, theme });
 }
 /* the pixels that differ (any of R, G, B, A), or null when the sizes differ; where (the box around them, in device px) */
 function differ(a, b, where) {
@@ -74,6 +74,14 @@ async function keep(page, name) {
   fs.writeFileSync(path.join(out, name), Buffer.from(url.split(',')[1], 'base64'));
 }
 const results = [];
+/* 1.39.0 (house style V2; review of #70): the candles compared on two grounds. Black (#000000): both engines build its colors
+   the same way. The default V2 ground (#050506): the current engine with its defaults, given bg #050506 as a host would; the
+   1.36.0 reference with V2's chart colors set by hand (for it a custom ground; it keeps colors set by hand), so only the
+   candles could differ. */
+const CE = (await import('node:module')).createRequire(import.meta.url)(NOW);
+const V2 = {}; for (const k of ['bg', 'rth', 'grid', 'axisLine', 'divider', 'cross', 'axisText', 'axisTextStrong', 'tagFill', 'tagBorder', 'tagText', 'exit', 'live']) V2[k] = CE.DEFAULT_THEME[k];
+const GROUNDS = [{ name: 'black', now: { bg: '#000000' }, ref: { bg: '#000000' } }, { name: 'v2', now: { bg: '#050506' }, ref: V2 }];
+for (const G of GROUNDS)
 for (const dpr of [1, 1.25, 1.5, 2]) {
   const browser = await chromium.launch(Object.assign({ args: ['--force-device-scale-factor=' + dpr, '--window-size=900,520'] }, process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));
   const pages = {};
@@ -86,19 +94,19 @@ for (const dpr of [1, 1.25, 1.5, 2]) {
   const real = await pages.now.evaluate(() => devicePixelRatio);
   check(real === dpr, `dpr ${dpr}: the browser runs at a real device scale factor of ${real}`);
   const ver = await Promise.all(['ref', 'now'].map(k => pages[k].evaluate(() => ChartEngine.VERSION || '')));
-  if (dpr === 1) check(ver[0] === '1.36.0' && ver[1] !== '1.36.0', `the reference engine is 1.36.0, the current one ${ver[1]}`);
+  if (dpr === 1 && G === GROUNDS[0]) check(ver[0] === '1.36.0' && ver[1] !== '1.36.0', `the reference engine is 1.36.0, the current one ${ver[1]}`);
   for (const spacing of SPACINGS) {
     for (const pl of [WHOLE, ...FRACTIONS]) {
-      const now = await draw(pages.now, pl, spacing);
+      const now = await draw(pages.now, pl, spacing, null, G.now);
       const box = pl === WHOLE ? pl : now[0].box;   // (b): the reference at exactly the box the current canvas landed on
-      const ref = await draw(pages.ref, box, spacing);
+      const ref = await draw(pages.ref, box, spacing, null, G.ref);
       const where = { x0: 1e9, x1: -1, y0: 1e9, y1: -1 };
       const counts = now.map((c, i) => ref[i] ? differ(ref[i], c, i === 0 ? where : null) : null);
-      const r = { dpr, spacing, place: pl.name, part: pl === WHOLE ? 'a' : 'b', canvases: [ref.length, now.length], sizes: now.map((c, i) => [ref[i] ? ref[i].w + 'x' + ref[i].h : '-', c.w + 'x' + c.h]),
+      const r = { ground: G.name, dpr, spacing, place: pl.name, part: pl === WHOLE ? 'a' : 'b', canvases: [ref.length, now.length], sizes: now.map((c, i) => [ref[i] ? ref[i].w + 'x' + ref[i].h : '-', c.w + 'x' + c.h]),
         box, refBox: ref[0] && ref[0].box, nowBox: now[0].box, differ: counts, where: counts[0] ? where : null };
-      const tag = `candles-same-dpr${String(dpr).replace('.', '_')}-${spacing}-${pl.name}`;
+      const tag = `candles-same-${G.name}-dpr${String(dpr).replace('.', '_')}-${spacing}-${pl.name}`;
       if (counts.some(n => n)) { await keep(pages.ref, tag + '-ref.png'); await keep(pages.now, tag + '-now.png'); }
-      const words = `dpr ${dpr} spacing ${spacing} ${pl.name}: ${r.sizes.map(x => x.join(' vs ')).join(', ')}; pixels different: ${counts.map(n => n === null ? 'sizes differ' : n).join(', ')}`;
+      const words = `${G.name} dpr ${dpr} spacing ${spacing} ${pl.name}: ${r.sizes.map(x => x.join(' vs ')).join(', ')}; pixels different: ${counts.map(n => n === null ? 'sizes differ' : n).join(', ')}`;
       if (pl === WHOLE) check(ref.length === now.length && counts.every(n => n === 0), '(a) ' + words);
       else {
         /* (b) as measured: the same canvas size is a must; the pixel count is reported (see b'). 1.36.0 lays its candles out from
@@ -106,11 +114,11 @@ for (const dpr of [1, 1.25, 1.5, 2]) {
            whole device pixels over the ratio (961 / 1.5 = 640.66667); a candle whose edge falls within that hair of a pixel's
            middle can land one device pixel over. (b'): the reference measuring exactly 1.37.0's width and height must give 0. */
         check(ref.length === now.length && counts.every(n => n !== null), '(b) ' + words + (counts[0] ? ` (in x ${where.x0} to ${where.x1}, y ${where.y0} to ${where.y1}; see b')` : ''));
-        const exact = await draw(pages.ref, box, spacing, { w: now[0].w / dpr, h: now[0].h / dpr });
+        const exact = await draw(pages.ref, box, spacing, { w: now[0].w / dpr, h: now[0].h / dpr }, G.ref);
         const counts2 = now.map((c, i) => exact[i] ? differ(exact[i], c) : null);
         r.differExact = counts2;
         if (counts2.some(n => n)) await keep(pages.ref, tag + '-ref-exact.png');
-        check(exact.length === now.length && counts2.every(n => n === 0), `(b') dpr ${dpr} spacing ${spacing} ${pl.name}, the reference measuring 1.37.0's plot size: pixels different: ${counts2.map(n => n === null ? 'sizes differ' : n).join(', ')}`);
+        check(exact.length === now.length && counts2.every(n => n === 0), `(b') ${G.name} dpr ${dpr} spacing ${spacing} ${pl.name}, the reference measuring 1.37.0's plot size: pixels different: ${counts2.map(n => n === null ? 'sizes differ' : n).join(', ')}`);
       }
       results.push(r);
     }

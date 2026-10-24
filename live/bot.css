@@ -255,9 +255,11 @@ body.ws-tight .bt-strip { padding: 2px 2px 0; }
   text-transform: uppercase; vertical-align: middle; border: 1px solid var(--ws-line2); color: var(--ws-text2); background: var(--bt-panel3); box-sizing: border-box; transition: none; animation: none; }
 .bt-acct[hidden] { display: none; }
 .bt-acct.live { color: #140F06; background: #C9A55C; border-color: #E2C687; }
-.bt-acct-ask { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding: 6px 8px; border: 1px solid #E2C687; border-radius: 6px;
-  background: color-mix(in srgb, #C9A55C 18%, transparent); font-size: 12px; color: var(--ws-text); }
+/* 1.39.0 (review of #70): the switch to a LIVE account asks in the danger red, as the NO STOP question and the Agent tab's
+   .ag-ask do: never in the gold of an ordinary primary button */
+.bt-acct-ask { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--ws-sell); border-radius: 6px;
+  background: var(--ws-sell-ground); font-size: 12px; color: var(--ws-text); }
 .bt-acct-ask[hidden] { display: none; }
 .bt-acct-ask .ws-btn { height: 24px; padding: 0 9px; }
-.bt-acct-ask .bt-live-go { color: #140F06; background: #C9A55C; border-color: #E2C687; }
+.bt-acct-ask .bt-live-go { color: #1a0006; background: var(--ws-sell); border-color: var(--ws-sell); font-weight: 600; }
 .bt-sline .bt-sacct { color: var(--ws-text2); }
