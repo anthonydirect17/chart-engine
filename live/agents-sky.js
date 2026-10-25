@@ -31,7 +31,7 @@
 'use strict';
 if (typeof window === 'undefined' || typeof document === 'undefined') return;
 const C = window.AgentsStripCore, CARD = window.AgentsStrip;
-const VERSION = '1.39.0';
+const VERSION = '1.39.1';
 const FPS = 30, CALM_FPS = 15, SLIM_H = 200, PULSE_S = 0.7, TICKS = 30;
 /* the code rain's glyphs: digits and signs only (every PC's fonts have them) */
 const GLY = '0123456789<>/\\|=+*#:;{}[]$%';
@@ -237,6 +237,11 @@ function mount(body, o) {
   hitsEl.addEventListener('focusout', e => { if (!(e.relatedTarget && (popEl.contains(e.relatedTarget) || hitsEl.contains(e.relatedTarget)))) leaveSoon(); });
   hitsEl.addEventListener('click', e => { const b = e.target.closest('.ak-hit'); if (b) openFor(droneOf(b.dataset.key)); });
   popEl.addEventListener('pointerover', () => { S.popT = 0; });
+  /* 1.39.1: the card re-renders while it is open (its live P&L, a click on a thought replaces its HTML), and Chromium sends no
+     pointerleave to the card or the drone's button once the node under a still mouse was replaced, so the card could stay after
+     the mouse left. Any move of the mouse outside the card, the drones and the list starts the same short close as a leave. */
+  const onDocMove = e => { if (S.pop && !S.popT && !(e.target instanceof Node && (popEl.contains(e.target) || hitsEl.contains(e.target) || moreEl.contains(e.target)))) leaveSoon(); };
+  document.addEventListener('pointermove', onDocMove, { passive: true });
   popEl.addEventListener('pointerleave', e => { if (!(e.relatedTarget && (hitsEl.contains(e.relatedTarget) || moreEl.contains(e.relatedTarget)))) leaveSoon(); });
   popEl.addEventListener('click', e => {
     if (!S.pop) return;
@@ -482,7 +487,7 @@ function mount(body, o) {
   render();
   return {
     render,
-    destroy() { S.destroyed = true; if (S.raf) cancelAnimationFrame(S.raf); S.raf = 0; if (ro) ro.disconnect(); if (io) io.disconnect(); document.removeEventListener('visibilitychange', onVis); if (mq && mq.removeEventListener) mq.removeEventListener('change', onVis); body.innerHTML = ''; },
+    destroy() { S.destroyed = true; if (S.raf) cancelAnimationFrame(S.raf); S.raf = 0; if (ro) ro.disconnect(); if (io) io.disconnect(); document.removeEventListener('visibilitychange', onVis); document.removeEventListener('pointermove', onDocMove); if (mq && mq.removeEventListener) mq.removeEventListener('change', onVis); body.innerHTML = ''; },
     /* read only, for the tests */
     state: () => {
       const ms = S.ms.slice().sort((a, b) => a - b), p = f => (ms.length ? ms[Math.min(ms.length - 1, Math.floor(ms.length * f))] : null);

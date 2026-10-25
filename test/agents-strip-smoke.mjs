@@ -211,8 +211,15 @@ try {
   const det = await until(() => p.$eval(SKY + ' .ak-pop .ak-detail', e => e.innerText), 'the full reasoning', 4000);
   check(!!det && /The second line of the made-up reasoning/.test(det) && /confidence 0\.62/.test(det) && /SHADOW: paper only/.test(det), 'a click on a thought in the card: its full reasoning');
   check(!(await p.evaluate(() => document.body.classList.contains('lg-on'))), 'a thought\'s click opens no tab');
-  await p.mouse.move(5, 5); await wait(700);
-  check(await p.$eval(SKY + ' .ak-pop', e => e.hidden), 'the card goes when the mouse leaves');
+  /* 1.39.1: the flake "the card goes when the mouse leaves": the thought's click replaced the card's HTML under the still mouse and
+     Chromium then sends no pointerleave to the card when the mouse leaves within a frame or so (the card stayed). The page now also
+     closes it on any move outside it. Here the leave is made to go missing every time: the card's and the drones' pointerleave and
+     pointerout are held back for this step, so only that close can work */
+  await p.evaluate(() => { window.__noLeave = e => { if (e.target instanceof Node && e.target.closest && e.target.closest('.ak-pop, .ak-hits, .ak-hit, .ak-more')) e.stopImmediatePropagation(); };
+    for (const t of ['pointerleave', 'pointerout']) window.addEventListener(t, window.__noLeave, true); });
+  await p.mouse.move(5, 5);
+  check(!!(await until(() => p.$eval(SKY + ' .ak-pop', e => e.hidden), 'the card gone', 3000)), 'the card goes when the mouse leaves (even with no pointerleave, as after its HTML was replaced under the mouse)');
+  await p.evaluate(() => { for (const t of ['pointerleave', 'pointerout']) window.removeEventListener(t, window.__noLeave, true); });
 
   /* a click opens the agent's full view */
   const r0 = await p.evaluate(() => window.workspace.leagueReads());

@@ -439,7 +439,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   steps left onto the candles. Labels that would overlap stack up and down in the gutter instead, 20 px (the label's 18 and 2)
   at a time: the label of the order pressed or dragged is placed first, in the row it was drawn in at the press, moved only by the drag
   (compact on a host's chart while dragged), and after a drag that moved the order it stays first in the row it was released in
-  until the next such drag, that order is gone or the mouse leaves the chart (the label under a still mouse never changes owner), then the position's, then the orders' in their order, each at its line when free, else the nearest free row,
+  until the next such drag, that order is gone or the mouse leaves the chart (the label under a still mouse never changes owner).
+  1.39.1: the order label under the mouse (its body, its x, its add cells) is also kept first in the row it is drawn in, like a
+  pressed one, until the mouse moves off it or leaves the chart, so an order arriving at the same price earlier in the list never
+  takes that row (a hover alone moves no label; after an Escape the label goes back to its row before the press). Then the position's, then the orders' in their order, each at its line when free, else the nearest free row,
   first away from the label it meets (down when level with it). A label off its line gets a 1 px leader in its border color at
   its strength, from its right end along the 6 px gutter to its line. Each label's hit areas (its body, its x, its add cells) are
   its own boxes wherever it lands.
@@ -571,7 +574,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     stay in view) and its list scrolls inside when the space is short. 1.14.0 (no scrolling, ever): placed where it
     fits whole (below the order bar, else below its button, else as high as it must), and an open gear's settings sit in
     a 300 px column beside the list (its title the indicator's name, 600 13px), so it grows sideways; only a menu taller
-    than the window scrolls its list.
+    than the window scrolls its list. 1.39.1: in the workspace the menu and the gear's card stay between the top bar and
+    the window's foot (placed again when the window is resized); a card taller than that room scrolls inside itself; where
+    the menu and the card do not fit side by side (a 400 px window) the card sits in the list under its row, as on a
+    host's chart, scrolled into sight.
   - **Chip strip** next to the button: pinned indicators only, at most 10 since 1.14.0 (6 before; Anthony): an added
     indicator gets a chip while there is room; pinning onto a full strip is refused with a note in the menu. Since
     1.14.0 (Anthony) a click opens the indicator's settings in a popover dropped 6 px below the chip (flipped up or left

@@ -1213,6 +1213,56 @@ $script:TaskStubs = {
 }
 function Get-TaskCall([string]$Cmd) { return @($script:TaskCalls | Where-Object { $_.cmd -eq $Cmd }) }
 
+Test 'register (stubbed): the task first, then the pinned copy and pinned.json; a register that fails leaves them, and the launcher, byte for byte (the hidden-register review)' {
+  $keepOS = $env:OS
+  . $script:TaskStubs
+  function Get-CurrentUserName { return 'PC\anthony' }
+  function Test-Elevated { return $false }
+  $pj = Join-Path $script:P.Bin 'pinned.json'
+  $bin = Join-Path $script:P.Bin 'update-pc.ps1'
+  $launcher = Get-HiddenLauncherPath
+  $hadL = Test-Path -LiteralPath $launcher
+  $keepL = $null; if ($hadL) { $keepL = [IO.File]::ReadAllBytes($launcher) }
+  $pjBytes = [IO.File]::ReadAllBytes($pj)
+  $b64 = { param($p) [BitConverter]::ToString([IO.File]::ReadAllBytes($p)) }
+  try {
+    $env:OS = 'Windows_NT'
+    $binHash = Get-Hash $bin
+    $odd = [byte[]](0x27, 0x20, 0xE9, 0x41, 0x0D, 0x0A)          # bytes a text round trip as ASCII would not keep
+    [IO.File]::WriteAllBytes($launcher, $odd)
+    $DailyAt = '08:30'
+    # review of #72: the launcher's read-back fails after the write: the one before is put back, so "nothing changed" holds
+    $realWhl = ${function:Write-HiddenLauncher}
+    function Write-HiddenLauncher([string]$Path, [string]$Line) { [IO.File]::WriteAllText($Path, "half written`r`n", [Text.Encoding]::ASCII); throw "the launcher $Path did not read back as written" }
+    [void](Get-Said)
+    Assert-Code (Invoke-Register) 1 'a launcher that does not read back is a STOP'
+    $said = Get-Said
+    Assert ($said -match 'not registered, nothing changed: the hidden launcher could not be written') "said: $said"
+    Assert ((& $b64 $launcher) -eq [BitConverter]::ToString($odd) -and @(Get-TaskCall 'register').Count -eq 0) 'the launcher put back byte for byte; no task change'
+    Assert ((& $b64 $pj) -eq [BitConverter]::ToString($pjBytes)) 'pinned.json as it was'
+    function Write-HiddenLauncher([string]$Path, [string]$Line) { & $realWhl $Path $Line }
+    function Register-ScheduledTask { throw 'Access is denied' }
+    [void](Get-Said)
+    Assert-Code (Invoke-Register) 1 'a register that fails is a STOP'
+    $said = Get-Said
+    Assert ($said -match 'not registered, nothing changed \(the pinned copy, pinned\.json and the task as they were\): Access is denied') "said: $said"
+    Assert ((& $b64 $pj) -eq [BitConverter]::ToString($pjBytes)) 'pinned.json byte for byte as it was'
+    Assert ((Get-Hash $bin) -eq $binHash) 'the pinned copy as it was'
+    Assert ((& $b64 $launcher) -eq [BitConverter]::ToString($odd)) 'the launcher put back byte for byte'
+    # a register that works: the task is registered while pinned.json is still the old one, and pinned.json follows it
+    $script:SeenPin = $null
+    function Register-ScheduledTask { param([string]$TaskName, $Action, $Trigger, $Principal, $Settings, [switch]$Force, [string]$Description) $script:SeenPin = [BitConverter]::ToString([IO.File]::ReadAllBytes((Join-Path $script:P.Bin 'pinned.json'))); [void]$script:TaskCalls.Add(@{ cmd = 'register' }); $script:StubTask = [pscustomobject]@{ TaskName = $TaskName; Actions = @($Action); State = 'Ready' }; return $script:StubTask }
+    Assert-Code (Invoke-Register) 0 'registered'
+    Assert ($script:SeenPin -eq [BitConverter]::ToString($pjBytes)) 'when the task was registered, pinned.json was still the one before'
+    $now = Read-JsonFile $pj
+    Assert ($now['dailyAt'] -eq '08:30' -and (@($now['dailyTimes']) -join ',') -eq '08:30' -and $now['from'] -eq 'register') "pinned.json written after the task: $($now['dailyAt']) $($now['from'])"
+    Assert ((Get-Text $launcher) -match '^WScript\.Quit ' -and (Get-Hash $bin) -eq $now['sha256'].ToUpperInvariant()) 'the launcher register writes; the copy is the one pinned'
+  } finally {
+    $env:OS = $keepOS
+    [IO.File]::WriteAllBytes($pj, $pjBytes)
+    if ($hadL) { [IO.File]::WriteAllBytes($launcher, $keepL) } elseif (Test-Path -LiteralPath $launcher) { Remove-Item -LiteralPath $launcher -Force }
+  }
+}
 Test 'register (stubbed): the task runs wscript.exe //B on an ASCII one-line launcher that runs the same hidden PowerShell command, everything else as before' {
   $keepP = $script:P
   $docs = Join-Path $tmpRoot 'hid docs'
@@ -1322,6 +1372,11 @@ Test 'Test-SamePath: the same path in either form; two different paths are not' 
   New-Item -ItemType Directory -Force -Path $d | Out-Null
   Assert (Test-SamePath $d ($d + [IO.Path]::DirectorySeparatorChar)) 'a trailing separator'
   Assert (-not (Test-SamePath $d (Join-Path $tmpRoot 'other dir'))) 'two paths'
+  # 1.39.1: Get-LongPath leaves a path with no ~ exactly as given (HOME's and WORK's long paths), and a ~ part that is the
+  # short name of nothing as written
+  foreach ($p in @($d, 'C:\Users\anthony\Documents\NinjaTrader 8\ChartBridge\updater\bin\update-pc.ps1', '')) { Assert ((Get-LongPath $p) -ceq $p) "unchanged: '$p'" }
+  $nx = Join-Path $d 'NOSUCH~1.PS1'
+  Assert ((Get-LongPath $nx).EndsWith('NOSUCH~1.PS1')) "a short name of nothing is kept: $(Get-LongPath $nx)"
   if ($IsWin) {
     $fso = New-Object -ComObject Scripting.FileSystemObject
     $short = $fso.GetFolder($d).ShortPath
@@ -1404,6 +1459,122 @@ Test 'status checks the task''s start (review N1): ours exactly as register writ
     Assert ($r.ok -and $r.text -match 'register did not write') "hand-made: $($r.text)"
     Assert ((Format-Age (New-TimeSpan -Minutes 7)) -eq '7 min' -and (Format-Age (New-TimeSpan -Hours 2 -Minutes 5)) -eq '2 h 5 min' -and (Format-Age (New-TimeSpan -Days 3 -Hours 4)) -eq '3 d 4 h') 'the age of the last run'
   } finally { $script:P = $keepP }
+}
+
+Test 'a task''s command line read as PowerShell binds it (the hidden-register review): -Name:value, -Name: value, any case, the start of a name; an option twice, unknown or ambiguous is refused with the fix' {
+  $ps = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+  $base = (Format-Arg $ps) + ' -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\u\updater\bin\update-pc.ps1" update'
+  $K = $script:OwnParams
+  $o = Get-CommandOptions ($base + ' -Repo:"C:\my clone"') 'update-pc.ps1' $K
+  Assert ($o['Repo'] -eq 'C:\my clone' -and -not $o.ContainsKey('#error')) "-Repo:value: $($o['Repo'])"
+  $o = Get-CommandOptions ($base + ' -Repo: "C:\my clone"') 'update-pc.ps1' $K
+  Assert ($o['Repo'] -eq 'C:\my clone' -and -not $o.ContainsKey('#error')) "-Repo: value: $($o['Repo'])"
+  $o = Get-CommandOptions ($base + ' -repo C:\c -yes:$false') 'update-pc.ps1' $K
+  Assert ($o['Repo'] -eq 'C:\c' -and $o['Yes'] -is [bool] -and -not $o['Yes'] -and -not $o.ContainsKey('#error')) "any case, a switch given :`$false: $($o['Repo']) $($o['Yes'])"
+  $o = Get-CommandOptions ($base + ' -Rep C:\c') 'update-pc.ps1' $K
+  Assert ($o['Repo'] -eq 'C:\c' -and -not $o.ContainsKey('Rep') -and -not $o.ContainsKey('#error')) "-Rep is -Repo: $($o['Repo'])"
+  $o = Get-CommandOptions ($base + ' -Repo C:\a -Repo:C:\b') 'update-pc.ps1' $K
+  Assert ($o['#error'] -match [regex]::Escape('-Repo is given twice (C:\a, then C:\b)') -and $o['#error'] -match 'every run of the task fails' -and $o['#error'] -match 'unregister, then register') "twice: $($o['#error'])"
+  Assert ($o['Repo'] -eq 'C:\a') 'the first is kept for the messages'
+  $o = Get-CommandOptions ($base + ' -repo C:\a -Rep C:\a') 'update-pc.ps1' $K
+  Assert ($o['#error'] -match '-Repo is given twice') "twice in two spellings: $($o['#error'])"
+  $o = Get-CommandOptions ($base + ' -Repo C:\a -Bogus 1') 'update-pc.ps1' $K
+  Assert ($o['#error'] -match '-Bogus is not an option of update-pc\.ps1') "unknown: $($o['#error'])"
+  $o = Get-CommandOptions ($base + ' -Repo C:\c -ea Stop -OV x') 'update-pc.ps1' $K
+  Assert (-not $o.ContainsKey('#error') -and $o['ErrorAction'] -eq 'Stop' -and $o['OutVariable'] -eq 'x') "the common parameters' short names (-ea, -ov): $($o['#error'])"
+  $o = Get-CommandOptions ($base + ' -ea Stop -ErrorAction Continue') 'update-pc.ps1' $K
+  Assert ($o['#error'] -match '-ErrorAction is given twice') "-ea and -ErrorAction: $($o['#error'])"
+  $o = Get-CommandOptions ($base + ' -D 09:00') 'update-pc.ps1' $K
+  Assert ($o['#error'] -match '-D could be any of -DailyAt, -Debug') "ambiguous: $($o['#error'])"
+  Assert (-not (Get-CommandOptions ($base + ' -Bogus 1') 'update-pc.ps1').ContainsKey('#error')) 'with no list of names, any name is read'
+  # the callers: register and the move refuse it by name, status says the task's runs fail
+  $t = New-FakeTask $ps ($base.Substring((Format-Arg $ps).Length + 1) + ' -Repo C:\a -Repo C:\b')
+  $r = Resolve-TaskOptions $t @{}
+  Assert ($r.error -match 'the current task \(the task''s action' -and $r.error -match '-Repo is given twice') "register refuses it: $($r.error)"
+  $st = Test-TaskStart $t 'update-pc.ps1' { param($o) 'x' } $K
+  Assert (-not $st.ok -and $st.text -match '^TASK COMMAND REFUSED' -and $st.text -match '-Repo is given twice') "status: $($st.text)"
+  # the list of names is the param block's, and PowerShell's common ones
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Join-Path $repoRoot 'nt8') 'update-pc.ps1'), [ref]$null, [ref]$null)
+  $names = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+  $common = @('Verbose', 'Debug', 'ErrorAction', 'WarningAction', 'InformationAction', 'ErrorVariable', 'WarningVariable', 'InformationVariable', 'OutVariable', 'OutBuffer', 'PipelineVariable')
+  Assert ((@($names + $common) -join ',') -eq ($K -join ',')) "OwnParams follows the param block: $($names -join ',')"
+}
+
+Test 'status reads the task as Task Scheduler keeps it (the hidden-register review): Disabled and a run that broke are a STOP; the task''s own state folder' {
+  $keepP = $script:P
+  Initialize-Paths (Join-Path $tmpRoot 'run clone') (Join-Path (Join-Path $tmpRoot 'run docs') 'NinjaTrader 8')
+  try {
+    $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+    $line = (Format-Arg $ps) + ' ' + (Get-TaskArguments $pinned $script:P.Repo)
+    $t = New-FakeTask $ps (Get-TaskArguments $pinned $script:P.Repo)
+    $at = [datetime]'2026-10-25 09:00'
+    $info = { param($code) [pscustomobject]@{ LastRunTime = $at; LastTaskResult = $code } }
+    $r = Get-TaskRunState $t $line (& $info ([uint32]0))
+    Assert (-not $r.stop -and ($r.lines -join "`n") -match 'task last: +2026-10-25 09:00, result 0 \(finished, OK\)' -and ($r.lines -join "`n") -notmatch 'task state') "ok: $($r.lines -join ' / ')"
+    $r = Get-TaskRunState $t $line (& $info ([uint32]1))
+    Assert (-not $r.stop -and ($r.lines -join "`n") -match 'result 1 \(the updater said STOP') "1: $($r.lines -join ' / ')"
+    foreach ($c in @([uint32]267009, [uint32]267014, [uint32]2147750687)) {
+      $r = Get-TaskRunState $t $line (& $info $c)
+      Assert (-not $r.stop) "$c is no STOP: $($r.lines -join ' / ')"
+    }
+    $r = Get-TaskRunState $t $line (& $info ([uint32]2147942402))
+    Assert ($r.stop -match 'ended with 0x80070002: a file it starts was not found') "file not found: $($r.stop)"
+    $r = Get-TaskRunState $t $line (& $info ([uint32]3221225477))
+    Assert ($r.stop -match 'ended with 0xC0000005: the run failed') "another code: $($r.stop)"
+    $r = Get-TaskRunState $t $line ([pscustomobject]@{ LastRunTime = [datetime]'1999-11-30'; LastTaskResult = [uint32]267011 })
+    Assert (-not $r.stop -and ($r.lines -join "`n") -match 'task last: +no run yet') "never ran: $($r.lines -join ' / ')"
+    $t.State = 'Disabled'
+    $r = Get-TaskRunState $t $line (& $info ([uint32]0))
+    Assert ($r.stop -match "the scheduled task 'ChartEngine Updater' is Disabled: no update runs") "Disabled: $($r.stop)"
+    $t.State = 'Ready'
+    # a task whose pinned copy is in another Documents folder: its own state.json is read and said
+    $other = Join-Path (Join-Path (Join-Path (Join-Path $tmpRoot 'other docs') 'NinjaTrader 8') 'ChartBridge') 'updater'
+    Write-JsonAtomic (Join-Path $other 'state.json') @{ lastRun = @{ at = [DateTimeOffset]::new($at).ToUnixTimeMilliseconds(); outcome = 'up_to_date'; reason = 'nothing new on main' } }
+    $line2 = (Format-Arg $ps) + ' ' + (Get-TaskArguments (Join-Path (Join-Path $other 'bin') 'update-pc.ps1') $script:P.Repo)
+    $r = Get-TaskRunState $t $line2 (& $info ([uint32]0))
+    $txt = $r.lines -join "`n"
+    Assert ($txt -match ('task state: +the task keeps its state in ' + [regex]::Escape($other) + '; this window reads ' + [regex]::Escape($script:P.Dir)) -and $txt -match 'its last run there: 2026-10-25 09:00, up_to_date: nothing new on main') "another state folder: $txt"
+  } finally { $script:P = $keepP }
+}
+
+Test 'a launcher that cannot be read is never overwritten by a failed move (the $hadLauncher of #66): refused before anything is written; a put-back is byte for byte' {
+  $keepP = $script:P; $keepOS = $env:OS
+  Initialize-Paths (Join-Path $tmpRoot 'held clone') (Join-Path (Join-Path $tmpRoot 'held docs') 'NinjaTrader 8')
+  . $script:TaskStubs
+  function Get-CurrentUserName { return 'PC\anthony' }
+  function Test-Elevated { return $false }
+  try {
+    $env:OS = 'Windows_NT'
+    $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
+    Put $pinned "# the pinned copy`n"
+    $pj = Join-Path $script:P.Bin 'pinned.json'
+    Write-JsonAtomic $pj @{ commit = 'abc'; dailyAt = '17:05'; repo = $script:P.Repo }
+    $launcher = Get-HiddenLauncherPath
+    $odd = [byte[]](0x57, 0x53, 0xE9, 0x0D, 0x0A, 0x00, 0xFF)
+    # Save and put back: byte for byte (the old put-back read it as text and wrote ASCII)
+    [IO.File]::WriteAllBytes($launcher, $odd)
+    $b = Save-LauncherBackup $launcher
+    [IO.File]::WriteAllText($launcher, "something else`r`n", [Text.Encoding]::ASCII)
+    Restore-LauncherBackup $b
+    Assert ([BitConverter]::ToString([IO.File]::ReadAllBytes($launcher)) -eq [BitConverter]::ToString($odd)) 'put back byte for byte'
+    $none = Save-LauncherBackup (Join-Path $script:P.Bin 'no such.vbs')
+    Put (Join-Path $script:P.Bin 'no such.vbs') "written`r`n"
+    Restore-LauncherBackup $none
+    Assert (-not (Test-Path -LiteralPath (Join-Path $script:P.Bin 'no such.vbs'))) 'none before: removed again'
+    # held by another program while the move starts: before, $hadLauncher was set, the read threw, and the put-back wrote
+    # an empty launcher over it. Now the move stops before anything is written
+    function Read-LauncherBytes { throw 'The process cannot access the file because it is being used by another process' }
+    $pjBefore = Get-Text $pj
+    $t = New-FakeTask $ps (Get-TaskArguments $pinned $script:P.Repo)
+    $t | Add-Member -NotePropertyName Principal -NotePropertyValue ([pscustomobject]@{ UserId = 'PC\anthony'; LogonType = 'Interactive' })
+    $script:StubTask = $t
+    $lines = @(Invoke-TaskMigration)
+    Assert ($lines[0] -match 'was not moved to the hidden launcher: .*being used by another process') "refused: $($lines -join ' / ')"
+    Assert ([BitConverter]::ToString([IO.File]::ReadAllBytes($launcher)) -eq [BitConverter]::ToString($odd)) 'the launcher untouched'
+    Assert (@(Get-TaskCall 'register').Count -eq 0 -and (Get-Text $pj) -eq $pjBefore) 'no task change, pinned.json as it was'
+  } finally { $env:OS = $keepOS; $script:P = $keepP }
 }
 
 Test '-InstallChartBridge moves a task that is not hidden to the launcher once, keeping -Repo; 17:05 becomes 09:00 and 17:00, another time is kept; a refusal or failure is said (stubbed)' {
@@ -1952,7 +2123,114 @@ if ($IsWin) {
     }
     Assert ([TimeZoneInfo]::Local.Id -eq $origTz -or "$(& tzutil /g)".Trim() -eq $origTz) "the runner's time zone is back: $([TimeZoneInfo]::Local.Id)"
   }
-} else { Skip '-InstallChartBridge migration on a real throwaway task' 'Windows only'; Skip 'the launcher runs for real (wscript.exe)' 'Windows only'; Skip 'register: the scheduled task' 'Windows only'; Skip 'register in a time zone with DST' 'Windows only' }
+  # The hidden-register review: Test-SamePath's 8.3 case is real only where the volume makes short names (the runner's may
+  # not): then a folder, a file in it and a task whose -File names the pinned copy by its short name are the pinned copy;
+  # where it makes none, this says so as a skip instead of passing on two equal strings.
+  $d83 = Join-Path $tmpRoot 'Long Folder Name For The 8dot3 Test'
+  New-Item -ItemType Directory -Force -Path $d83 | Out-Null
+  $short83 = ''
+  try { $short83 = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($d83).ShortPath } catch { }
+  if (-not $short83 -or $short83 -ieq $d83 -or $short83 -notmatch '~') {
+    Skip '8.3 short paths: a folder, a file and the task''s pinned copy' "this volume makes no 8.3 names ($d83 has none: '$short83')"
+  } else {
+    Test '8.3 short paths: a folder, a file and the task''s pinned copy named by its short name are the same (the hidden-register review)' {
+      $keepP = $script:P; $keepSelf = $script:UpdaterSelf
+      Initialize-Paths (Join-Path $d83 'clone') (Join-Path $d83 'NinjaTrader 8')
+      function Test-Elevated { return $false }
+      try {
+        $long = Join-Path $script:P.Bin 'update-pc.ps1'
+        Put $long "# the pinned copy`n"
+        $short = Join-Path (Join-Path (Join-Path (Join-Path (Join-Path $short83 'NinjaTrader 8') 'ChartBridge') 'updater') 'bin') 'update-pc.ps1'
+        $fso = New-Object -ComObject Scripting.FileSystemObject
+        $shortFile = $fso.GetFile($long).ShortPath
+        Assert ($shortFile -ne $long) "a short name for the file: $shortFile"
+        Assert ((Test-SamePath $short83 $d83) -and (Test-SamePath $shortFile $long) -and (Test-SamePath $short $long)) "the same: $short83 / $shortFile / $short"
+        Assert (-not (Test-SamePath $shortFile (Join-Path $d83 'other.ps1'))) 'another file is not'
+        $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $t = New-FakeTask $ps (Get-TaskArguments $shortFile $script:P.Repo)
+        $t | Add-Member -NotePropertyName Principal -NotePropertyValue ([pscustomobject]@{ UserId = (Get-CurrentUserName); LogonType = 'Interactive' })
+        $script:UpdaterSelf = $long
+        $why = Get-OwnRunProblem $t
+        Assert ($why -eq '') "a task that names the pinned copy by its short name is the task's own run: '$why'"
+        Assert ((Get-LongPath $shortFile) -eq (Get-LongPath $long) -and (Get-LongPath $shortFile) -notmatch '~') "the short name in its long form: $(Get-LongPath $shortFile)"
+        $who = [pscustomobject]@{ UserId = (Get-CurrentUserName); LogonType = 'Interactive' }
+        $t2 = New-FakeTask $ps (Get-TaskArguments $short $script:P.Repo)      # short folders, the long file name (as register writes it)
+        $t2 | Add-Member -NotePropertyName Principal -NotePropertyValue $who
+        $why = Get-OwnRunProblem $t2
+        Assert ($why -eq '') "short folders, the long file name: the task's own run: '$why'"
+        $t3 = New-FakeTask $ps (Get-TaskArguments (Get-LongPath $long) $script:P.Repo)
+        $t3 | Add-Member -NotePropertyName Principal -NotePropertyValue $who
+        $script:UpdaterSelf = $shortFile                                  # this run started by its short name, the task's by the long one
+        $why = Get-OwnRunProblem $t3
+        Assert ($why -eq '') "this run by its short name, the task's by its long one: '$why'"
+      } finally { $script:P = $keepP; $script:UpdaterSelf = $keepSelf }
+    }
+  }
+  # C4 of #68: a task re-registers itself from its own running instance (the task's own run moves a hand-made launcher and
+  # adds a daily trigger in place): does the run go on to its end, and is the new definition in place? A throwaway task runs a
+  # probe that calls register's own Register-HiddenTask on its own name, then carries on. It runs as S4U (with no one signed
+  # in): the CI runner has no interactive session, so an Interactive task (register's own) could not start there; the probe's
+  # register makes it Interactive, as on the trading PCs. Where Task Scheduler does not start it at all, this is a skip that
+  # says so (and LastTaskResult), not a pass.
+  $c4Name = 'ChartEngine Updater SELF ' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+  $c4Root = Join-Path $tmpRoot 'self register'
+  $c4Marker = Join-Path $c4Root 'self marker.txt'
+  $c4Started = $false; $c4Why = ''
+  try {
+    $keepP = $script:P
+    Initialize-Paths (Join-Path $c4Root 'clone') (Join-Path (Join-Path $c4Root 'Documents') 'NinjaTrader 8')
+    $c4P = $script:P
+    $script:P = $keepP
+    $probe = Join-Path $c4P.Bin 'self-probe.ps1'
+    $q = { param($s) "'" + $s.Replace("'", "''") + "'" }
+    Put $probe (@(
+        '$ErrorActionPreference = ''Stop''',
+        ('$m = ' + (& $q $c4Marker)),
+        'try {',
+        '  Add-Content -LiteralPath $m ''started''',
+        ('  . ' + (& $q (Join-Path (Join-Path $repoRoot 'nt8') 'update-pc.ps1')) + ' -NoRun -TaskName ' + (& $q $c4Name)),
+        '  $ErrorActionPreference = ''Stop''',
+        ('  Initialize-Paths ' + (& $q $c4P.Repo) + ' ' + (& $q $c4P.Nt)),
+        ('  Add-Content -LiteralPath $m (''state '' + (Get-ScheduledTask -TaskName ' + (& $q $c4Name) + ').State)'),
+        '  Register-HiddenTask (Get-CurrentUserName) (Join-Path $script:P.Bin ''update-pc.ps1'') @(Get-DailyLocal @(''09:00''))',
+        '  Add-Content -LiteralPath $m ''registered''',
+        '  Start-Sleep -Seconds 3',
+        '  Add-Content -LiteralPath $m ''done''',
+        '  exit 0',
+        '} catch { Add-Content -LiteralPath $m (''error '' + $_.Exception.Message); exit 3 }') -join "`r`n")
+    $u = Get-CurrentUserName
+    $act = New-ScheduledTaskAction -Execute (Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' + (Format-Arg $probe)) -WorkingDirectory $c4P.Bin
+    Register-ScheduledTask -TaskName $c4Name -Action $act -Principal (New-ScheduledTaskPrincipal -UserId $u -LogonType S4U -RunLevel Limited) -Settings (New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)) -Force | Out-Null
+    Start-ScheduledTask -TaskName $c4Name
+    $end = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $end -and -not (Test-Path -LiteralPath $c4Marker)) { Start-Sleep -Milliseconds 500 }
+    $c4Started = Test-Path -LiteralPath $c4Marker
+    if (-not $c4Started) { $info = Get-ScheduledTaskInfo -TaskName $c4Name; $c4Why = "Task Scheduler did not start it in 60 s (State $((Get-ScheduledTask -TaskName $c4Name).State), LastTaskResult $(Format-TaskResult $info.LastTaskResult))" }
+  } catch { $c4Why = "the throwaway task could not be made or started here: $($_.Exception.Message)" }
+  if (-not $c4Started) {
+    Skip 'a task re-registers itself from its own running instance (C4 of #68)' $c4Why
+    if (Get-ScheduledTask -TaskName $c4Name -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $c4Name -Confirm:$false }
+  } else {
+    Test 'a task re-registers itself from its own running instance (C4 of #68): the run goes on to its end, and the new definition is in place' {
+      try {
+        $end = (Get-Date).AddSeconds(90)
+        while ((Get-Date) -lt $end -and (Get-Text $c4Marker) -notmatch '(?m)^(done|error)') { Start-Sleep -Milliseconds 500 }
+        while ((Get-Date) -lt $end -and "$((Get-ScheduledTask -TaskName $c4Name).State)" -eq 'Running') { Start-Sleep -Milliseconds 500 }
+        $log = Get-Text $c4Marker
+        Microsoft.PowerShell.Utility\Write-Host "pc-updater c4: the probe wrote: $($log.Replace("`r`n", ' | '))"
+        Assert ($log -notmatch '(?m)^error') "the re-register from its own run: $log"
+        Assert ($log -match '(?m)^state Running' -and $log -match '(?m)^registered' -and $log -match '(?m)^done') "it ran, re-registered itself while Running, and went on to its end: $log"
+        $t = Get-ScheduledTask -TaskName $c4Name
+        $a = @($t.Actions)[0]
+        Assert ($a.Execute -match 'System32\\wscript\.exe$' -and $a.Arguments -eq ('//B "' + (Join-Path $c4P.Bin 'update-pc.hidden.vbs') + '"') -and "$($t.Principal.LogonType)" -eq 'Interactive') "the new definition: $($a.Execute) $($a.Arguments) $($t.Principal.LogonType)"
+        $info = Get-ScheduledTaskInfo -TaskName $c4Name
+        Assert ([int64]$info.LastTaskResult -eq 0) "its run's result is 0 (the old action's run, ended by itself): $(Format-TaskResult $info.LastTaskResult)"
+      } finally {
+        if (Get-ScheduledTask -TaskName $c4Name -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $c4Name -Confirm:$false }
+      }
+    }
+  }
+} else { Skip '-InstallChartBridge migration on a real throwaway task' 'Windows only'; Skip 'the launcher runs for real (wscript.exe)' 'Windows only'; Skip 'register: the scheduled task' 'Windows only'; Skip 'register in a time zone with DST' 'Windows only'; Skip '8.3 short paths: a folder, a file and the task''s pinned copy' 'Windows only'; Skip 'a task re-registers itself from its own running instance (C4 of #68)' 'Windows only' }
 
 # ---------------------------------------------------------------------------------------------- done
 

@@ -3564,21 +3564,33 @@ function mount(container, options) {
         const bar = document.querySelector('.ws-top'), minTop = bar ? Math.ceil(bar.getBoundingClientRect().bottom) + 6 : 8;
         panel.style.maxWidth = Math.max(220, Math.floor(window.innerWidth - 16)) + 'px';
         panel.style.maxHeight = '';
+        /* 1.39.1: the gear's card beside the menu only when the menu and the card fit side by side on the screen; else (a phone,
+           a 400 px window) the card goes in the menu's list under its row (gear-in), as on a host's chart, and scrolls with it.
+           Decided before the menu's height is measured, as it changes that height */
+        const card = panel.querySelector('.ind-set'), gear = !!card && panel.classList.contains('has-gear');
+        panel.classList.remove('gear-left', 'gear-in');
+        if (card) { card.style.top = ''; card.style.maxHeight = ''; }
+        const side = gear && panel.offsetWidth + card.offsetWidth + 8 <= window.innerWidth - 16;
+        if (gear && !side) panel.classList.add('gear-in');
         const h = panel.offsetHeight;
         let top = below + 6;
         if (top + h > room) top = Math.max(minTop, room - h);
         panel.style.top = Math.round(top - w.top) + 'px';
         if (top + h > room) panel.style.maxHeight = Math.max(120, Math.floor(room - top)) + 'px';
         panel.style.left = '0px';
-        const card = panel.querySelector('.ind-set'), extra = card && panel.classList.contains('has-gear') ? card.offsetWidth + 8 : 0;   // the gear's card beside it
+        const extra = side ? card.offsetWidth + 8 : 0;          // the gear's card beside it
         const over = panel.getBoundingClientRect().right + extra - (window.innerWidth - 8);
         if (over > 0) panel.style.left = -Math.ceil(Math.min(over, w.left - 8)) + 'px';
-        panel.classList.remove('gear-left');
         if (extra) {                                             // the card on the left when the right has no room; up as needed
-          card.style.top = '';
           if (card.getBoundingClientRect().right > window.innerWidth - 8) panel.classList.add('gear-left');
-          const cr = card.getBoundingClientRect(), cb = cr.bottom - (window.innerHeight - 8);
+          /* 1.39.1: never taller than the room between the top bar and the window's foot: a taller card scrolls inside itself */
+          card.style.maxHeight = Math.max(120, Math.floor(room - minTop)) + 'px';
+          const cr = card.getBoundingClientRect(), cb = cr.bottom - room;
           if (cb > 0) card.style.top = Math.round(-1 - Math.min(cb, Math.max(0, cr.top - minTop))) + 'px';   // up as needed, never under the top bar
+        } else if (gear && !side) {                              // in the list: scrolled into its sight, as little as needed
+          const lb = $('indBody').getBoundingClientRect(), cr = card.getBoundingClientRect();
+          if (cr.bottom > lb.bottom) $('indBody').scrollTop += Math.ceil(Math.min(cr.bottom - lb.bottom, cr.top - lb.top));
+          else if (cr.top < lb.top) $('indBody').scrollTop -= Math.ceil(lb.top - cr.top);
         }
         return;
       }
@@ -3589,6 +3601,9 @@ function mount(container, options) {
       panel.style.maxHeight = Math.max(200, Math.floor(Math.min(r.bottom, window.innerHeight) - below - 14)) + 'px';
     };
     placeMenu = place;
+    /* 1.39.1: the window resized while the menu is open (a browser bar shown, the window made smaller): placed again, so it stays
+       below the top bar and on screen */
+    listen(window, 'resize', () => { if (!panel.hidden) place(); });   // removed by destroy()
     openMenu = (v, from) => {
       if (v === !panel.hidden) { if (v) q.focus(); return; }
       panel.hidden = !v; btn.setAttribute('aria-expanded', String(v));

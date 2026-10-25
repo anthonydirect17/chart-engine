@@ -1,5 +1,105 @@
 # Changelog
 
+## chart 1.39.1 (2026-10-25): the agreed follow-ups (page only, no F5)
+
+Page only, no F5: no ChartBridge file changes (`nt8/*.cs` are the 0.6.9 files, byte for byte), so nothing needs a recompile.
+ChartBridge stays 0.6.9; `minChartBridge` stays 0.6.2 (COMPAT.json follows the page to 1.39.1). The PC updater
+(`nt8/update-pc.ps1`, PowerShell only) changes too; a PC picks it up at its next `-InstallChartBridge` or `register`, as
+always.
+
+- **A tall Indicators menu stays below the top bar and scrolls inside itself** (`live/live.js`, `live/live.css`). The menu
+  already stopped below the top bar when taller than the window; its gear card did not keep to the screen: at 400 px wide it
+  sat off the left edge (x -299 to 1), a card taller than the room ran past the window's foot, and a window made smaller while
+  the menu was open left both where they were. Now, in the workspace: the menu and the gear's card stay between the top bar
+  and the window's foot, placed again when the window is resized; a card taller than that room scrolls inside itself; where
+  the menu and the card do not fit side by side (400 px), the card sits in the menu's list under its row, as on a host's
+  chart, scrolled into sight. Nothing changes at 1366 x 768 and up but the card's height cap. CHART_STYLE.md says so. On
+  45a422a the menu itself never went under the top bar in this environment (1366 x 768, 1366 x 620, 400 x 768, each chart of
+  the default layout, 9 indicators on, every gear open): the exact case reported was not reproduced; the new smoke checks it.
+- **Order labels: the label under a still mouse keeps its row** (`src/chart-engine.js`; the reviewer's probe). A new order
+  arriving at the same price, earlier in the order list, took the row at the line from the label the mouse rested on (the
+  stack places the orders in their order), so the next press moved the new order. The label under the mouse (its body, its
+  x, its add cells) is now placed first in the row it is drawn in, as a pressed one is, until the mouse moves off it or leaves
+  the chart. A hover alone moves no label (it and the label kept after a drag, labelFirst, are both where the last frame drew
+  them); after Escape or a press that moved nothing the label goes back to its row before the press. Only which label a hover
+  or press finds changes: the events (orderMove, orderCancel, orderPlace, orderPlanAdd) and what the page sends for them are
+  unchanged. `orderHandles()` gains `y` (each order's line, read only, for the smokes). CHART_STYLE.md says so.
+  The review of #72 (HIGH): the kept row was measured against this frame's line, so when the price scale moved under a still
+  mouse (auto-scale on a new high or low, a scroll back in time, a zoom) the label stayed at its old screen height and left its
+  line (the reviewer's probe: the line 427 -> 274 px, the label stayed at 418), and a drag from it would have landed the stop
+  far from where Anthony aimed. The row is now kept against last frame's own line, so the label follows its line; the probe
+  gives the label at 265 on the line at 274. `smoke:be-labels` rests the mouse on a stop label and moves the scale with a wide
+  bar and with ArrowLeft: the label stays on its line (4 checks fail on the engine before this fix), and a drag from it moves
+  the stop by the mouse's distance.
+- **The Drone sky's card closes when the mouse leaves** (`live/agents-sky.js`; the agents-strip flake "the card goes when the
+  mouse leaves"). Root cause: the card's HTML is replaced while it is open (its live P&L; a click on a thought), and Chromium
+  then sends no pointerleave to the card when the mouse leaves within about a frame of that replace (a probe: 0 leaves at 0 ms,
+  1 at 20 ms), so the card stayed. A move of the mouse anywhere outside the card, the drones and the list now starts the same
+  250 ms close. The smoke now holds the leave events back on purpose, so it fails every time without the fix and passes with
+  it.
+- **The five page smokes that failed on main** (found on 506dff1; run on 45a422a here):
+  - `smoke:plan` (18 of 43): stale since 1.38.0's gutter stacking (2ccb2b1, CHANGELOG "Order labels at break-even"). Labels
+    that would overlap stack 20 px apart off their lines, and a drag moves the order by the distance the mouse moves; the smoke
+    grabbed the stacked stop label and moved the mouse to the new price's y, so the stop went 7 points the wrong way ("a stop
+    goes on the loss side"). The drags now move from the label by the distance from its line to the price, and the "drawn at"
+    checks read the line (`orderHandles().y`), not the label. 43 of 43.
+  - `smoke:v038` (1): stale since 1.35.0 (159cca4, "The button shows once The Desk answers GET /api/chart-league"). The League
+    tab's read-only probe of The Desk runs whatever the ChartBridge. The check now allows that one GET (and checks the League
+    button stays hidden with no Desk); every other Desk or /bot-library request is still refused. 28 of 28.
+  - `smoke:bot` (1, the pop-out window): stale since the fake bridge's seed loses EVAL-B's connection (PR #58). ChartBridge's
+    alarm band then stays at the top until dismissed, over the Bot view's header and its Pop out button, so the click never
+    landed (Playwright: "#wsAlertText ... intercepts pointer events"). The smoke dismisses it first, as Anthony would. 66 of 66.
+    Not changed: whether the band should cover the Bot view's header (a look question for Anthony).
+  - `smoke:kit` (2) and `smoke:screens` (1): both pass on 45a422a and on 506dff1 here (kit 8 runs, one with the CPU slowed 8 times; screens 5;
+    also three at once). The kit's two checks most likely to fail on a busy machine were its light colour fades (a 1.6 s transition read after
+    a fixed 1.8 s); they now wait for the colour, up to 6 s. The screens failure could not be reproduced and is not changed (its
+    default port, 8797, is also member-rules', orders' and markup's, so two of them run at once collide).
+  - The agents-strip flake: above.
+- **PC updater** (`nt8/update-pc.ps1`, the hidden-register review; Windows PowerShell 5.1 as before):
+  - **A task's command line is read as PowerShell binds it**: `-Name value`, `-Name:value` and `-Name: value`, any case, and the
+    unambiguous start of a name (`-Rep`). An option given twice, a name that is no option of update-pc.ps1, or one that starts
+    two (`-D`) is refused by name with the fix ("PowerShell refuses such a line before the script starts, so every run of the
+    task fails ... update-pc.ps1 unregister, then register"): by register and the move to the hidden launcher, and by status
+    ("TASK COMMAND REFUSED", a STOP). Before, a duplicate was read as its last value and `-Repo:x` was not read at all.
+  - **status reads the task as Task Scheduler keeps it**: a Disabled task is a STOP; its last run with LastTaskResult in words
+    (0 OK, 1 the updater's own STOP, running, not run yet, ended at the time limit); a result that means the run did not start
+    or broke (a file not found, access denied, refused, any other code) is a STOP; and when the task's pinned copy sits in
+    another state folder than this window's (another user's or another Documents folder), it says both folders and the task's
+    own last run from its own state.json.
+  - **pinned.json only after a successful register**: register now writes the launcher, registers the task, and only then
+    pins the copy and writes pinned.json (with the daily times). A register that fails (Access is denied) leaves the pinned
+    copy, pinned.json and the task as they were, and puts the launcher back byte for byte. The move to the hidden launcher
+    already wrote pinned.json last.
+  - **The `$hadLauncher` handling flagged in #66**: the launcher before a move was read as text and written back as ASCII, and
+    a read that failed (a file another program holds) left `$hadLauncher` set with no text, so the put-back would have written
+    an empty launcher over a good one. Now the old launcher is kept as bytes (`Save-LauncherBackup`), a read that fails stops
+    the move before anything is written, and the put-back is byte for byte (`Restore-LauncherBackup`; register uses it too).
+  - **8.3 short names** (CI of #72, windows-latest: the new 8.3 test failed): the own-run check said "the task does not run
+    the pinned copy" for a task whose -File names it by its short name. Two causes in the code: the script's file name was
+    matched as `update-pc.ps1` only (its short form `UPDATE~1.PS1` is not), and Test-SamePath relied on GetFullPath
+    expanding short names, which .NET 4.6.2 and later do not. `Get-LongPath` now puts each short part (`RUNNER~1`,
+    `UPDATE~1.PS1`) in its long form, part by part in its parent folder, on both sides of every comparison and for the file
+    name; a path with no `~` (HOME's and WORK's) is returned exactly as given. The test built its path correctly.
+  - The review of #72: a launcher whose read-back fails in register's first write is put back byte for byte, so "nothing
+    changed" holds; the common parameters' short names (`-ea`, `-wa`, `-infa`, `-ev`, `-wv`, `-iv`, `-ov`, `-ob`, `-vb`, `-db`,
+    `-pv`) are read as those parameters, never reported as unknown (and `-ea` with `-ErrorAction` is an option given twice).
+  - **Tests** (`test/pc-updater.tests.ps1`): the options (both colon forms, case, a start of a name, twice, unknown,
+    ambiguous; the list of names follows the param block); status's task state (Disabled, each result code, never run, another
+    state folder); register stubbed: a failed register leaves pinned.json, the copy and the launcher byte for byte, and a good
+    one registers the task while pinned.json is still the old one; a launcher held at the move is never written. On Windows
+    only: **the 8.3 short-path test** (a folder, a file and a task whose -File names the pinned copy by its short name; a skip
+    that says so where the volume makes no 8.3 names, instead of a pass on two equal strings) and **C4 of #68** (a throwaway task,
+    S4U, re-registers itself through Register-HiddenTask from its own running instance: the run goes on to its end, the new
+    definition is in place, its result is 0; a skip with Task Scheduler's own result where the runner does not start it). These
+    two have not run yet: CI runs on a pull request or on main, and this branch has neither; on Linux they are skips.
+- Tests: `npm test`: 930 pass, 0 fail (`pc-updater: 96 passed, 0 failed, 7 skipped` under pwsh: the 7 are Windows only). New
+  smoke `npm run smoke:indmenu` (screenshots `indmenu-1366.png`, `indmenu-gear-1366.png`, `indmenu-short-1366.png`,
+  `indmenu-400.png`, `indmenu-gear-400.png`); `smoke:be-labels` gains the probe and the scale moves (54 checks; the probe's 4 fail
+  on the 1.39.0 engine, `BE_ENGINE`, and pass here). Every smoke in package.json (56 files) was run one at a time: 54 passed at once; `smoke:embed`
+  failed one check (the menu's new resize listener was not removed by destroy(); fixed, 71 of 71) and `smoke:headroom` one check
+  (the Jump to live icon after a scroll back, in a 330 s run); headroom passes again here, and on 45a422a, so it is counted as a
+  flake of that run, not of this change.
+
 ## ChartBridge 0.6.9 (2026-10-24): the stats suite's Phase 2, recording only: 1 second bars, the order record, a decision id on group entries
 
 Anthony approved Phase 2 of his personal stats suite on 2026-10-24 (SPEC_personal_stats.md: "ChartBridge sends NQ and MNQ 1 second

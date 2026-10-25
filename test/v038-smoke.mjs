@@ -73,7 +73,7 @@ async function openWs(browser, withPage, requests) {
   await ctx.addInitScript(spies, LAYOUT(withPage));
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
-  page.on('request', r => requests.push(r.url()));
+  page.on('request', r => requests.push(r.method() + ' ' + r.url()));
   await page.goto(`http://localhost:${port}/live/?layout=Main`);
   await page.waitForSelector('.cb-pin-key', { timeout: 15000 });
   await enterPin(page, TEST_PIN);
@@ -139,7 +139,13 @@ try {
   const orders = every.filter(m => m.type === 'order');
   check(orders.length === 4 && orders.every(m => JSON.stringify(Object.keys(m).sort()) === '["account","bracket","cid","kind","qty","root","side","type"]' || JSON.stringify(Object.keys(m).sort()) === '["account","cid","kind","qty","root","side","type"]'),
     'each order is the 1.15 order (a bracket, or none on an order that reduces): ' + JSON.stringify(orders.map(m => Object.keys(m).join(','))));
-  check(requests.every(u => !/\/bot-library|\/api\/chart-(hotkeys|strategies|accounts)|:8800\//.test(u)), 'The Desk and /bot-library never asked: ' + requests.filter(u => /bot-library|\/api\/chart-|8800/.test(u)).join(', '));
+  /* 1.35.0 (159cca4, CHANGELOG "chart 1.35.0": "The button shows once The Desk answers GET /api/chart-league (asked at the
+     start and every 5 minutes)") deliberately asks The Desk for the League, read only, whatever the ChartBridge: that one GET is
+     the only Desk request allowed here, and with no Desk answering the League button stays hidden. Nothing else of The Desk or
+     /bot-library is asked (the 0.4.0 parts: hotkeys, strategies, accounts, the Bot library). */
+  const leagueProbe = u => /^GET https?:\/\/[^/]+\/api\/chart-league$/.test(u);
+  check(requests.every(u => leagueProbe(u) || !/\/bot-library|\/api\/chart-(hotkeys|strategies|accounts)|:8800\//.test(u)), 'The Desk and /bot-library never asked (only the League\'s read-only GET /api/chart-league probe, 1.35.0): ' + requests.filter(u => /bot-library|\/api\/chart-|8800/.test(u)).join(', '));
+  check(!(await visible(page, '#wsLeagueTab')), 'with no Desk answering, the League button stays hidden (1.35.0)');
   check((await page.evaluate(() => localStorage.getItem('live-desk-sync-v1'))) === null, 'live-desk-sync-v1 is never written (1.22.0: it told the single chart page, gone)');
   const mine = ticketSent(all);
   await ctx.close(); await stopBridge();

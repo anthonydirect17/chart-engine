@@ -149,7 +149,7 @@ try {
   let h = await hOf(id), slY0 = (await hOf(id + ':sl')).box.y;
   await page.mouse.move(box.x + h.box.x + h.box.w / 2, box.y + h.box.y + h.box.h / 2); await page.mouse.down();
   const yTo = await yAt(L - 7);
-  await page.mouse.move(box.x + h.box.x + h.box.w / 2, box.y + yTo, { steps: 6 }); await wait(150);
+  await page.mouse.move(box.x + h.box.x + h.box.w / 2, box.y + h.box.y + h.box.h / 2 + yTo - h.y, { steps: 6 }); await wait(150);
   const slMid = (await hOf(id + ':sl')).box.y, entryMid = (await hOf(id)).box.y;
   check(Math.abs((slMid - slY0) - (entryMid - h.box.y)) < 3 && slMid - slY0 > 3, 'while the entry is dragged its planned stop moves with it (' + Math.round(slMid - slY0) + ' px, the entry ' + Math.round(entryMid - h.box.y) + ' px)');
   await clear(page);
@@ -158,11 +158,13 @@ try {
   check(strip(await sent(page)).every(m => m.type === 'change') && (await sent(page)).length === 1, 'the drop sends one change for the entry and nothing for its plan: ' + JSON.stringify(strip(await sent(page))));
   ls = await until(async () => { const l = await lines(); return l.find(o => o.id === id + ':sl' && o.price === L - 7 - 3) ? l : null; }, 'planned lines from the confirmed price');
   check(!!ls && ls.find(o => o.id === id + ':tp').price === L - 7 + 6, 'after the drop the planned lines are at the confirmed entry - 12 / + 24 ticks');
-  // a planned line dragged: plan with the new ticks
+  // a planned line dragged: plan with the new ticks. 1.38.0 (2ccb2b1, CHANGELOG "Order labels at break-even") stacks labels that
+  // would overlap in the gutter, off their lines, and a drag moves the order by the distance the mouse moves: so each drag here
+  // grabs the label and moves by the distance from its line (orderHandles().y, 1.39.1) to the price, as Anthony's hand does
   const dragLine = async (lid, toPrice) => {
     const g = await hOf(lid);
     await page.mouse.move(box.x + g.box.x + g.box.w / 2, box.y + g.box.y + g.box.h / 2); await page.mouse.down();
-    await page.mouse.move(box.x + g.box.x + g.box.w / 2, box.y + await yAt(toPrice), { steps: 6 }); await page.mouse.up(); await wait(400);
+    await page.mouse.move(box.x + g.box.x + g.box.w / 2, box.y + g.box.y + g.box.h / 2 + await yAt(toPrice) - g.y, { steps: 6 }); await page.mouse.up(); await wait(400);
   };
   await clear(page); await wait(450);
   await dragLine(id + ':sl', L - 7 - 4);                                           // 16 ticks under the entry
@@ -176,9 +178,9 @@ try {
   await page.evaluate(() => { window.__holdChanges = true; });
   h = await hOf(id);
   await page.mouse.move(box.x + h.box.x + h.box.w / 2, box.y + h.box.y + h.box.h / 2); await page.mouse.down();
-  await page.mouse.move(box.x + h.box.x + h.box.w / 2, box.y + await yAt(L - 6), { steps: 6 }); await page.mouse.up(); await wait(300);
+  await page.mouse.move(box.x + h.box.x + h.box.w / 2, box.y + h.box.y + h.box.h / 2 + await yAt(L - 6) - h.y, { steps: 6 }); await page.mouse.up(); await wait(300);
   await until(async () => (await sent(page, ['change'])).length === 1, 'the entry move sent (held)');
-  const midOf = async i => { const g = await hOf(i); return g.box.y + g.box.h / 2; };
+  const midOf = async i => (await hOf(i)).y;                                     // where its line is drawn (its label may stack off it, 1.38.0)
   check(Math.abs(await midOf(id) - await yAt(L - 6)) < 1.5 && Math.abs(await midOf(id + ':sl') - await yAt(L - 6 - 4)) < 1.5, 'the entry moved and waiting for its answer: drawn at the moved price (L - 6), its planned stop 16 ticks under it');
   await wait(450);
   await dragLine(id + ':sl', L - 6 - 5);                                           // 20 ticks under the moved entry (16 under the old)
@@ -312,7 +314,7 @@ try {
   const toB = await B.evaluate(([i, p]) => window.workspace.chart(i).priceToY(p), [mnqB.id, L - 5 + 8]);
   await A.evaluate(() => { window.__sent.length = 0; }); await B.evaluate(() => { window.__sent.length = 0; });
   await B.mouse.move(cbB.x + gB.box.x + gB.box.w / 2, cbB.y + gB.box.y + gB.box.h / 2); await B.mouse.down();
-  await B.mouse.move(cbB.x + gB.box.x + gB.box.w / 2, cbB.y + toB, { steps: 6 }); await B.mouse.up();
+  await B.mouse.move(cbB.x + gB.box.x + gB.box.w / 2, cbB.y + gB.box.y + gB.box.h / 2 + toB - gB.y, { steps: 6 }); await B.mouse.up();
   await until(async () => (await state()).orders.find(o => o.id === e2.id).planned.targetTicks === 32, 'the target at 32 ticks');
   check(JSON.stringify(strip(await sent(A, ['plan']))) === JSON.stringify([{ type: 'plan', id: e2.id, targetTicks: 32 }]) && !(await sent(B, ['plan'])).length, 'B\'s drag of the planned target: plan targetTicks 32, sent from the ticket\'s window');
   /* F2 in the window without the ticket (1.22.0, the #41 re-review): the entry dragged in B (its change held in A, so the
@@ -322,17 +324,17 @@ try {
   await A.evaluate(() => { window.__sent.length = 0; window.__holdChanges = true; }); await B.evaluate(() => { window.__sent.length = 0; });
   const hB = id2 => B.evaluate(([i, x]) => window.workspace.chart(i).orderHandles().find(o => o.id === x), [mnqB.id, id2]);
   const yB = p => B.evaluate(([i, x]) => window.workspace.chart(i).priceToY(x), [mnqB.id, p]);
-  const midB = async id2 => { const g = await hB(id2); return g.box.y + g.box.h / 2; };
+  const midB = async id2 => (await hB(id2)).y;                                  // its line (its label may stack off it, 1.38.0)
   let ge = await hB(e2.id);
   await B.mouse.move(cbB.x + ge.box.x + ge.box.w / 2, cbB.y + ge.box.y + ge.box.h / 2); await B.mouse.down();
-  await B.mouse.move(cbB.x + ge.box.x + ge.box.w / 2, cbB.y + await yB(L - 4), { steps: 6 }); await B.mouse.up();
+  await B.mouse.move(cbB.x + ge.box.x + ge.box.w / 2, cbB.y + ge.box.y + ge.box.h / 2 + await yB(L - 4) - ge.y, { steps: 6 }); await B.mouse.up();
   await until(async () => (await sent(A, ['change'])).length === 1, 'B\'s entry move sent from A (held)');
   await wait(300);                                                 // A's answer to B, then B redraws its charts
   check(Math.abs(await midB(e2.id) - await yB(L - 4)) < 1.5 && Math.abs(await midB(e2.id + ':sl') - await yB(L - 4 - 3)) < 1.5,
     'B: the entry moved and waiting for its answer: B draws it at the dropped price (L - 4), its planned stop 12 ticks under it');
   const gs = await hB(e2.id + ':sl');
   await B.mouse.move(cbB.x + gs.box.x + gs.box.w / 2, cbB.y + gs.box.y + gs.box.h / 2); await B.mouse.down();
-  await B.mouse.move(cbB.x + gs.box.x + gs.box.w / 2, cbB.y + await yB(L - 4 - 5), { steps: 6 }); await B.mouse.up();   // 20 ticks under the dropped entry
+  await B.mouse.move(cbB.x + gs.box.x + gs.box.w / 2, cbB.y + gs.box.y + gs.box.h / 2 + await yB(L - 4 - 5) - gs.y, { steps: 6 }); await B.mouse.up();   // 20 ticks under the dropped entry
   await until(async () => (await sent(A, ['plan'])).length === 1, 'B\'s stop drag sent from A while the move waits');
   check(JSON.stringify(strip(await sent(A, ['plan']))) === JSON.stringify([{ type: 'plan', id: e2.id, stopTicks: 20 }]), 'B\'s stop dragged while the move waits: plan stopTicks 20, the distance B showed (' + JSON.stringify(strip(await sent(A, ['plan']))) + ')');
   await A.evaluate(() => window.__release());

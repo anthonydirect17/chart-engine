@@ -275,6 +275,10 @@ try {
 
   /* ---------------------------------------------------------------- the pop-out */
   console.log('the pop-out window');
+  /* The fake bridge's seed loses EVAL-B's connection (PR #58, 2026-10-19), and ChartBridge's alarm band stays at the top until
+     dismissed, over the Bot view's header (the band is fixed over the workspace by design). Anthony dismisses it first, as
+     here; the click below then reaches Pop out (before, it waited 30 s for a window that was never asked for). */
+  if (await page.isVisible('#wsAlertClose')) { await page.click('#wsAlertClose'); await page.waitForSelector('#wsAlert', { state: 'hidden' }); }
   const [pop] = await Promise.all([ctx.waitForEvent('page'), page.click('.bt-pop')]);
   pop.on('pageerror', e => fail('pop-out page error: ' + e.message));
   await pop.waitForSelector('.cb-pin-key', { timeout: 15000 });

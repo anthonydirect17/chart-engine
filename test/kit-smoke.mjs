@@ -112,13 +112,15 @@ try {
   await page.click('[data-trade="flat"]');
   check(await orbits(page, '#lightDemo') === 0, 'flat: the light stops (no running orbit on the panel)');
   check(await page.evaluate(() => !document.getElementById('lightDemo').classList.contains('kit-lit')), 'flat: no light at all');
+  /* 1.39.1: the colour fade is a 1.6 s transition (kit.css --kit-pc) and a fixed 1.8 s wait left 0.2 s for a busy machine (two
+     checks failed now and then); the colour is now waited for, up to 6 s, and must arrive */
+  const pcAt = () => page.evaluate(() => getComputedStyle(document.querySelector('#lightDemo > .kit-orbit')).getPropertyValue('--kit-pc').trim());
+  const fadeTo = async want => { const end = Date.now() + 6000; let v = await pcAt(); while (v !== want && Date.now() < end) { await page.waitForTimeout(100); v = await pcAt(); } return v; };
   await page.click('[data-trade="loss"]');
-  await page.waitForTimeout(1800);   // the colour fade
-  check(await page.evaluate(() => getComputedStyle(document.querySelector('#lightDemo > .kit-orbit')).getPropertyValue('--kit-pc').trim()) === 'rgb(255, 122, 122)', 'under water: the light fades to the locked loss red');
+  check(await fadeTo('rgb(255, 122, 122)') === 'rgb(255, 122, 122)', 'under water: the light fades to the locked loss red');
   await page.locator('#lightTrading').screenshot({ path: path.join(out, 'kit-light-loss.png') });
   await page.click('[data-trade="profit"]');
-  await page.waitForTimeout(1800);
-  check(await page.evaluate(() => getComputedStyle(document.querySelector('#lightDemo > .kit-orbit')).getPropertyValue('--kit-pc').trim()) === 'rgb(61, 220, 151)', 'in profit: the light fades to the locked profit green');
+  check(await fadeTo('rgb(61, 220, 151)') === 'rgb(61, 220, 151)', 'in profit: the light fades to the locked profit green');
   await page.locator('#lightTrading').screenshot({ path: path.join(out, 'kit-light-profit.png') });
   // numbers, prices and buttons never move, on their own or inside anything that moves (the decision drawer open: it
   // holds prices and a Close button)

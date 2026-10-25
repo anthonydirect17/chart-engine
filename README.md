@@ -450,7 +450,7 @@ next update. `-InstallChartBridge` also moves the task's copy of the updater to 
 
 | Command (`powershell -NoProfile -ExecutionPolicy Bypass -File $u ...`) | What it does |
 | --- | --- |
-| `status` | what is installed and waiting, and why; it saves what /diag reports (the version compiled here) in `updater\state.json`, and never writes a page or ChartBridge file |
+| `status` | what is installed and waiting, and why; it saves what /diag reports (the version compiled here) in `updater\state.json`, and never writes a page or ChartBridge file. It also reads the task as Task Scheduler keeps it: a Disabled task, or a last run that broke (its LastTaskResult), ends in STOP, and a task whose state folder is not this window's has its own last run shown |
 | `check` | dry run: what `update` would do now |
 | `update` | the automatic path, by hand |
 | `rollback` | puts the previous page files back; that commit is skipped until a newer one is on `main`. `rollback` again goes forward again |
