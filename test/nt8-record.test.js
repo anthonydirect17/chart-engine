@@ -79,7 +79,8 @@ test('0.6.9: PROTOCOL documents the three, with versions; the CHANGELOG says wha
   for (const h of ['### 1 second bars to The Desk (0.6.9, contract v2)', '### The order record to The Desk (0.6.9)', '### The decision id of a group entry (0.6.9)']) assert.ok(p.includes(h), h);
   for (const k of ['`POST /api/order-events`', '`/api/bars-1s`', '`decision_id`', '`bv`', '`sv`', '`sides.method`', '`setRows`', '`quote`', '`change`', '`start`, `seq`', 'decisions.txt', 'bars1s/']) assert.ok(p.includes(k), k);
   const cl = fs.readFileSync(path.join(__dirname, '..', 'CHANGELOG.md'), 'utf8');
-  assert.match(cl.split('\n## ')[1], /^ChartBridge 0\.6\.9 \(2026-10-24\)/);
-  assert.match(cl.split('\n## ')[1], /\*\*Needs a recompile \(F5\)\*\*/);
+  const sec = cl.split('\n## ').find(x => /^ChartBridge 0\.6\.9 /.test(x)) || '';   // 1.39.1: no longer the newest entry
+  assert.match(sec, /^ChartBridge 0\.6\.9 \(2026-10-24\)/);
+  assert.match(sec, /\*\*Needs a recompile \(F5\)\*\*/);
   for (const f of ['ChartBridgeOrderRecord.cs', 'check/RecordHarness.cs', 'PROTOCOL.md']) assert.doesNotMatch(read(f), /[–—]/, f + ': no em or en dashes');
 });

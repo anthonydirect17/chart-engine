@@ -171,7 +171,7 @@ async function run(mode) {
     const ny = how === '2px' ? py - 2 : py;
     await page.mouse.down(); await page.mouse.move(px, ny - 12, { steps: 3 }); await page.mouse.up(); await wait(150);
     const ev1 = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
-    check(displaced && ev0.length === 0 && same && ev1.length === 1 && ev1[0].id === 's1', 'the stop\'s displaced label: a ' + how + ' (no move sent) leaves every label where it was (' + same + '), and the next press-drag there moves the stop: ' + JSON.stringify(ev1));
+    check(displaced && ev0.length === 0 && same && ev1.length === 1 && ev1[0].id === 's1', 'the stop\'s displaced label: a ' + how + ' (no move sent) leaves every label where it was (' + same + (same ? '' : ' ' + JSON.stringify([before, after].map(l => l.map(h => [h.id, Math.round(h.box.y)])))) + '), and the next press-drag there moves the stop: ' + JSON.stringify(ev1));
   }
   /* review of 1.38.0 (a real-money finding): right after a drag lands, with the mouse still where it let go, the stack must not
      reorder under it: a second press there (to nudge the same order one more tick) acts on the order just dragged, never on the
@@ -195,6 +195,30 @@ async function run(mode) {
     await page.mouse.down(); await page.mouse.move(gxx, endAt - 6, { steps: 3 }); await page.mouse.up(); await wait(150);
     const mv2 = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
     check(mv1.length === 1 && mv1[0].id === id && mv2.length === 1 && mv2[0].id === id, id + (pos ? '' : ' (no position, onto the buy limit)') + ': dragged onto the entry, then a second press at the same spot right after it lands: it moves ' + id + ' again (' + JSON.stringify(mv1) + ', then ' + JSON.stringify(mv2) + ')');
+  }
+  /* 1.39.1 (the reviewer's probe): the mouse still on an order's label, a new order arrives at the same price earlier in the order
+     list (it would take the label's row at its line); a press there drags the order Anthony was over, never the new one. Then the
+     mouse moved off and onto the new order's label: a press acts on what is under the mouse then. Only which label a press finds is checked here; the orderMove event is the one the drag always sends. */
+  for (const kind of ['stop', 'limit']) {   // h1: an order no earlier drag has made labelFirst (that one is gone with its order)
+    await page.evaluate(avg => { window.__ch.setPosition(null); window.__orders = [{ id: 'h1', side: 'sell', kind: 'stop', price: avg, qty: 2, role: 'stop' }]; window.__ch.setOrders(window.__orders); window.__ev = []; }, S.avg);
+    await page.mouse.move(20, 20); await wait(250);
+    const hb = (await handles()).find(h => h.id === 'h1').box, hx = Math.round(hb.x + hb.w - 8), hy = hb.y + hb.h / 2;
+    await page.mouse.move(hx, hy); await wait(250);                // hovering the stop's label, the mouse still
+    const n2 = kind === 'stop' ? { id: 'n2', side: 'sell', kind: 'stop', price: S.avg, qty: 1, role: 'stop' } : { id: 'n2', side: 'buy', kind: 'limit', price: S.avg, qty: 1 };
+    await page.evaluate(n2 => { window.__orders = [n2].concat(window.__orders); window.__ch.setOrders(window.__orders); window.__ev = []; }, n2);
+    await wait(250);                                               // frames drawn with the new order, the mouse not moved
+    const held = (await handles()).find(h => h.id === 'h1').box;
+    await page.mouse.down(); await page.mouse.move(hx, hy - 12, { steps: 3 }); await page.mouse.up(); await wait(150);
+    const ev = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
+    check(Math.abs(held.y - hb.y) < 0.5 && ev.length === 1 && ev[0].id === 'h1', 'a new ' + kind + ' at the same price, earlier in the list, while the mouse rests on the stop label: the stop keeps its row (y ' + Math.round(hb.y) + ' -> ' + Math.round(held.y) + ') and the press drags the stop: ' + JSON.stringify(ev));
+    /* moved off it and onto the new order's label: the press acts on the label under the mouse then */
+    await page.evaluate(() => { window.__orders = window.__orders.map(o => Object.assign({}, o, { price: window.__S.avg })); window.__ch.setOrders(window.__orders); window.__ev = []; });
+    await page.mouse.move(20, 20); await wait(250);
+    const hs = await handles(), nb = hs.find(h => h.id === 'n2').box;
+    await page.mouse.move(Math.round(nb.x + nb.w - 8), nb.y + nb.h / 2); await wait(200);
+    await page.mouse.down(); await page.mouse.move(Math.round(nb.x + nb.w - 8), nb.y + nb.h / 2 - 12, { steps: 3 }); await page.mouse.up(); await wait(150);
+    const ev2 = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
+    check(ev2.length === 1 && ev2[0].id === 'n2', 'after the mouse moved off and onto the new ' + kind + '\'s label: a press there drags the new ' + kind + ': ' + JSON.stringify(ev2));
   }
   await page.close();
 }

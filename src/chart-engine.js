@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.39.0
+ * chart-engine 1.39.1
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.39.0';
+const VERSION = '1.39.1';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -1304,7 +1304,7 @@ function create(container, options) {
      order, that order is gone, or the mouse leaves the chart. A click, a press that moves no tick, an Escape, a drag cancelled or
      released off the chart leave labelFirst as it was before the press: the stack is then exactly as it was before. */
   const ORDER_LH = 18;                                       // an order label's height (the gutter's rows: this and 2)
-  let labelFirst = null;
+  let labelFirst = null, prevOd = null;                    // prevOd: the pressed order's { id, off } as the last frame drew it (1.39.1)
   const lineTop = y => clamp(y - ORDER_LH / 2, 0, Math.max(0, plotH - ORDER_LH));   // the top of a label drawn at its line
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
   const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [], drawn: [], room: [] };
@@ -2510,6 +2510,30 @@ function create(container, options) {
     // right end (with a close handle while editing) and a tag on the price axis (added to the tag stack below)
     const orderTags = [], orderLabels = [];   // labels draw after the last price line, so the live dot never covers them
     const hoverWas = hover && !drag ? hitOrder(hover, true) : null;   // 1.37.0: the label or tag under the mouse (last frame's boxes)
+    /* 1.39.1 (the review's probe: a new order at the same price, earlier in the order list, took the row under a still mouse and a
+       press then moved the new order): the order label under the mouse keeps its row, as a pressed one does, while the mouse is on
+       its own boxes (the label, its x, its add cells; last frame's), until the mouse moves off it or leaves the chart. Only where
+       the labels sit changes, so the press finds the label Anthony was over; what any order action sends is unchanged. It is
+       placed first beside labelFirst (both where the last frame drew them, so they never meet and every other label lands where
+       it was: a hover alone moves nothing). */
+    let hoverPin = null;
+    if (hover && !drag && !od && hover.x >= 0 && hover.x < plotW && hover.y >= 0 && hover.y < plotH) {
+      const inR = r => r && hover.x >= r.x && hover.x <= r.x + r.w && hover.y >= r.y && hover.y <= r.y + r.h;
+      let h = null;                                              // the same order of hits as hitOrder: the x, the add cells, the label
+      for (let k = orderHits.length - 1; k >= 0 && !h; k--) if (inR(orderHits[k].xbox)) h = orderHits[k];
+      for (let k = orderHits.length - 1; k >= 0 && !h; k--) if ((orderHits[k].adds || []).some(a => inR(a.box))) h = orderHits[k];
+      for (let k = orderHits.length - 1; k >= 0 && !h; k--) if (inR(orderHits[k].box)) h = orderHits[k];
+      const ord = h && orders.find(x => x.id === h.id);
+      /* the frame after a press or drag of that label ended (a click, Escape, a drop): its row as the press kept it (od.off), so an
+         Escape puts it back where it was before the press, never where the drag had it */
+      if (ord) hoverPin = { id: ord.id, off: prevOd && prevOd.id === ord.id ? prevOd.off : h.box.y - lineTop(yOf(orderPrice(ord))) };
+    }
+    /* labelFirst beside it only where it does not meet it (its line moved meanwhile): the label under the mouse wins its row */
+    const firstPin = labelFirst && hoverPin && labelFirst.id !== hoverPin.id && (() => {
+      const lo = orders.find(x => x.id === labelFirst.id), ho = orders.find(x => x.id === hoverPin.id);
+      return lo && ho && Math.abs((lineTop(yOf(orderPrice(lo))) + labelFirst.off) - (lineTop(yOf(orderPrice(ho))) + hoverPin.off)) < ORDER_LH + 1;
+    })() ? null : labelFirst;
+    prevOd = od ? { id: od.id, off: od.off } : null;
     orderHits = []; posHit = null;
     const labelBoxes = [];                    // where the labels are (full size), for the corner readout (1.15.0)
     if (n >= 0 && (orders.length || position || orderPreview)) {
@@ -2584,8 +2608,9 @@ function create(container, options) {
         const ex = (extras || []).map(e => ({ which: e[0], text: e[1], w: ctx.measureText(e[1]).width + 10 }));
         const ew = ex.reduce((a, e) => a + e.w, 0);
         const tw = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 10, w = tw + ew + (closer ? LH : 0);
-        const pin = od ? { id: od.id, off: od.off } : labelFirst;
-        const sl = place(y, w, !!pin && hid !== undefined && hid === pin.id, pin ? pin.off : 0);
+        const pin = hid === undefined ? null : od ? (od.id === hid ? { id: od.id, off: od.off } : null)
+          : hoverPin && hoverPin.id === hid ? hoverPin : firstPin && firstPin.id === hid ? firstPin : null;
+        const sl = place(y, w, !!pin, pin ? pin.off : 0);
         let x = sl.x, top = sl.top;
         /* the boxes are filled in once every label is placed (placeAll), the same objects the callers keep */
         const box = { x, y: top, w: tw, h: LH };
@@ -2678,7 +2703,7 @@ function create(container, options) {
           const usd = pv > 0 && left > 0 ? (ord.plan.role === 'stop' ? -1 : 1) * ticks * o.tick * pv * left : null;   // 1.34.0: live while dragged
           const pl = { plan: { role: ord.plan.role, ticks }, group: ord.group, usd };
           const hit = label(y, [[orderLabel(pl), col]], col, [2, 3], alpha, orderEditing, null, [[orderLabelShort(pl), col]], ord.id, true);
-          orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox });
+          orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox, y });   // 1.39.1: y, its line (read only, for orderHandles())
           orderTags.push({ price, id: ord.id, style: { fill: T.bg, fg: col, border: col, dash: [2, 3] } });
           continue;
         }
@@ -2694,7 +2719,7 @@ function create(container, options) {
           lab = Object.assign({}, ord, { legTicks: Math.round(pts / o.tick), usd: pv > 0 && left > 0 ? pts * pv * left : null });
         }
         const hit = label(y, [[orderLabel(lab), col]], col, dash ? [3, 2] : null, alpha, orderEditing, extras, [[orderLabelShort(lab), col]], ord.id, true);
-        orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox, adds: hit.adds });
+        orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox, adds: hit.adds, y });
         orderTags.push({ price, id: ord.id, style: stop ? { fill: T.bg, fg: col, border: col, dash: [3, 2] } : { fill: col, fg: readableOn(col), border: null } });
       }
       // Shift+click preview: what one click would place here
