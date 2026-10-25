@@ -10,7 +10,9 @@
 
   Commands:
     status                what is installed, what is waiting, and why (asks ChartBridge's /diag and saves the
-                          version it reports in state.json; never writes a page or ChartBridge file)
+                          version it reports in state.json; never writes a page or ChartBridge file). The task as
+                          Task Scheduler keeps it: Disabled, or a last run that broke (its LastTaskResult), ends
+                          with STOP; a task whose state folder is not this window's has its own last run said
     check                 dry run: fetches main and says what `update` would do; changes nothing
     update                the automatic path (the scheduled task runs this): installs the newest commit on main
                           whose CI is green on ubuntu-latest and windows-latest, only when its page works with the
@@ -49,8 +51,9 @@
   working folder, triggers, user, settings and time limit). Window
   style 0 is hidden; True waits, so the exit code comes back and Task Scheduler's Running and Last Result stay true. The
   command line is exactly the one the task ran before: Windows PowerShell with -File on the pinned copy, update -Repo
-  <clone>. register writes the launcher first (and reads it back), then pins, then changes the task: a launcher that
-  cannot be written fails register and changes nothing (never a visible task again). register keeps what the current
+  <clone>. register writes the launcher first (and reads it back), then changes the task, then pins (the pinned copy and
+  pinned.json only after the task is registered, 1.39.1): a launcher that cannot be written, or a task that cannot be
+  registered, fails register and changes nothing (the launcher put back byte for byte; never a visible task again). register keeps what the current
   task runs: its -Repo, read from its arguments or from the Run line of the launcher it starts (ours, or a hand-made one
   in C:\SchwabDesk_bulk\hidden); another clone is refused unless -Repo is given, and so is a task whose command cannot
   be read (unregister first then). unregister removes the launcher too. status prints the command the task runs and
@@ -139,6 +142,11 @@ $script:DailyAtDefault = '09:00,17:00'    # the -DailyAt default above, and a pi
 $script:DailyAtBefore = @('17:05', '09:00')   # the old single defaults: a pin written before with one moves to DailyAtDefault
 $script:HiddenLauncherName = 'update-pc.hidden.vbs'   # the task's hidden launcher, in updater\bin (register writes it)
 $script:HandLauncherDir = 'C:\SchwabDesk_bulk\hidden'   # where the hand-made launchers of 2026-10-22 are (Invoke-AutoTaskMigration)
+# This script's own parameters and PowerShell's common ones (CmdletBinding), as PowerShell binds a task's command line to them
+# (Get-CommandOptions; a test checks the list against the param block above)
+$script:OwnParams = @('Command', 'InstallChartBridge', 'Yes', 'DailyAt', 'TaskName', 'Repo', 'NoRun',
+  'Verbose', 'Debug', 'ErrorAction', 'WarningAction', 'InformationAction', 'ErrorVariable', 'WarningVariable', 'InformationVariable',
+  'OutVariable', 'OutBuffer', 'PipelineVariable')
 $script:FetchWaitSec = 120
 $script:FetchRetrySec = 10
 # 0.3.8: an antivirus (Norton on HOME) can hold the freshly extracted staged.tmp\files.zip for a moment ("Access to the
@@ -1356,11 +1364,13 @@ function Invoke-Status {
   $task = $null
   if ($env:OS -eq 'Windows_NT') { $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
   Write-Host "task:         $(if ($task) { "$TaskName ($($task.State))" } else { 'not registered (update-pc.ps1 register)' })"
-  $start = $null
+  $start = $null; $run = $null
   if ($task) {
-    $start = Test-TaskStart $task 'update-pc.ps1' { param($o) Get-HiddenLauncherLine (Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe') (Get-TaskArguments (Join-Path $script:P.Bin 'update-pc.ps1') ([string]$o['Repo'])) }
+    $start = Test-TaskStart $task 'update-pc.ps1' { param($o) Get-HiddenLauncherLine (Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe') (Get-TaskArguments (Join-Path $script:P.Bin 'update-pc.ps1') ([string]$o['Repo'])) } $script:OwnParams
     Write-Host "task start:   $($start.text)"
     if ($start.line) { Write-Host "task command: $($start.line)" }
+    $run = Get-TaskRunState $task $start.line
+    foreach ($l in $run.lines) { Write-Host $l }
     try { foreach ($l in @(Get-DailyLines $task @(Get-PinTimes $pin))) { Write-Host "daily check:  $l" } }
     catch { Write-Host "daily check:  cannot be worked out ($($_.Exception.Message))" }
   }
@@ -1376,8 +1386,74 @@ function Invoke-Status {
   if ($mx) { return (Write-Verdict $false $script:MixedStop) }
   if ($pp) { return (Write-Verdict $false "the task's updater is stopped: $pp. Run update-pc.ps1 register from the clone") }
   if ($start -and -not $start.ok) { return (Write-Verdict $false "the task's start: $($start.text)") }
+  if ($run -and $run.stop) { return (Write-Verdict $false $run.stop) }
   if (-not $c.version) { return (Write-Verdict $false "ChartBridge's version is not known: open NinjaTrader so ChartBridge runs, then run status again") }
   return (Write-Verdict $true "ChartBridge $($c.version) ($($c.source))")
+}
+
+# status (1.39.1, the hidden-register review): the task as Task Scheduler keeps it, not as this window sees its own files.
+#   - Disabled: no run starts at all (STOP).
+#   - Its last run: when, and Task Scheduler's LastTaskResult in words; a result that means the run did not start or broke
+#     (a launcher or a PowerShell that could not start, an access error) is a STOP; 1 is the updater's own STOP (update.log).
+#   - Its own state folder: the pinned copy it runs sits in <updater>\bin, so its state is <updater>. When that is not
+#     this window's (another user's Documents, a Documents folder moved by OneDrive), the task's last run is read from its
+#     own state.json and said, with both folders.
+# @{ lines; stop ('' or the STOP text) }. $Info: Get-ScheduledTaskInfo's answer (the tests pass one).
+function Get-TaskRunState($Task, [string]$Line, $Info = $null) {
+  $r = @{ lines = @(); stop = '' }
+  if (-not $Task) { return $r }
+  if ("$($Task.State)" -eq 'Disabled') { $r.stop = "the scheduled task '$TaskName' is Disabled: no update runs. Enable it in Task Scheduler, or run update-pc.ps1 register" }
+  if ($null -eq $Info) { try { $Info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction Stop } catch { $r.lines += "task last:    cannot be read ($($_.Exception.Message))" } }
+  if ($null -ne $Info) {
+    $code = $null; try { $code = [int64]$Info.LastTaskResult } catch { }
+    $when = $null; try { if ($Info.LastRunTime) { $when = [datetime]$Info.LastRunTime } } catch { }
+    $never = $null -eq $when -or $when.Year -lt 2000 -or $code -eq 267011
+    $words = Get-TaskResultText $code
+    if ($never) { $r.lines += 'task last:    no run yet' }
+    else { $r.lines += "task last:    $($when.ToString('yyyy-MM-dd HH:mm')), result $(Format-TaskResult $code) ($($words.text))" }
+    if (-not $never -and $words.bad -and -not $r.stop) { $r.stop = "the task's last run ($($when.ToString('yyyy-MM-dd HH:mm'))) ended with $(Format-TaskResult $code): $($words.text)" }
+  }
+  $o = $null; if ($Line) { $o = Get-CommandOptions $Line 'update-pc.ps1' $script:OwnParams }
+  $sp = if ($null -ne $o) { [string]$o['#script'] } else { '' }
+  if ($sp -and (Split-Path -Leaf (Split-Path -Parent $sp)) -eq 'bin') {
+    $dir = Split-Path -Parent (Split-Path -Parent $sp)
+    if (-not (Test-SamePath $dir $script:P.Dir)) {
+      $r.lines += "task state:   the task keeps its state in $dir; this window reads $($script:P.Dir) (another user's or another Documents folder)"
+      $st = Read-JsonFile (Join-Path $dir 'state.json')
+      $lr = Get-Field $st 'lastRun'
+      if (Get-Field $lr 'at') {
+        $t0 = [DateTimeOffset]::FromUnixTimeMilliseconds([long](Get-Field $lr 'at')).ToLocalTime()
+        $r.lines += "              its last run there: $($t0.ToString('yyyy-MM-dd HH:mm')), $(Get-Field $lr 'outcome'): $(Get-Field $lr 'reason')"
+      } else { $r.lines += "              its state.json there: $(if (Test-Path -LiteralPath (Join-Path $dir 'state.json')) { 'no run recorded' } else { 'none (it cannot be read from here, or the task has not run)' })" }
+    }
+  }
+  return $r
+}
+function Format-TaskResult($Code) {
+  if ($null -eq $Code) { return 'unknown' }
+  if ($Code -ge 0 -and $Code -le 255) { return "$Code" }
+  return ('0x{0:X8}' -f ([int64]$Code -band 4294967295))
+}
+# Task Scheduler's LastTaskResult in words; bad: the run did not start or broke (status ends with STOP)
+function Get-TaskResultText($Code) {
+  if ($null -eq $Code) { return @{ text = 'not known'; bad = $false } }
+  $u = [int64]$Code -band 4294967295
+  # decimal (Windows PowerShell 5.1 reads a hex literal over 0x7FFFFFFF as a negative Int32): 0x41301 to 0x41306, SCHED_S_*;
+  # 0x8004131F SCHED_E_ALREADY_RUNNING; 0x80070002 file not found; 0x80070005 access denied; 0x800710E0 refused; 0xC000013A
+  switch ($u) {
+    0 { return @{ text = 'finished, OK'; bad = $false } }
+    1 { return @{ text = 'the updater said STOP; update.log says why'; bad = $false } }
+    267009 { return @{ text = 'running now'; bad = $false } }
+    267010 { return @{ text = 'the task is disabled'; bad = $true } }
+    267011 { return @{ text = 'it has not run yet'; bad = $false } }
+    267014 { return @{ text = 'ended by Task Scheduler or by hand (its 30 minute limit?)'; bad = $false } }
+    2147750687 { return @{ text = 'it was still running, so this start was skipped'; bad = $false } }
+    2147942402 { return @{ text = 'a file it starts was not found (the launcher or the pinned copy): run update-pc.ps1 register'; bad = $true } }
+    2147942405 { return @{ text = 'access denied: run update-pc.ps1 register from a normal window'; bad = $true } }
+    2147946720 { return @{ text = 'the operator or administrator refused the request (not signed in, or the task is not allowed to start)'; bad = $true } }
+    3221225786 { return @{ text = 'stopped (the window or the session closed)'; bad = $false } }
+  }
+  return @{ text = 'the run failed; see update.log and the task''s History in Task Scheduler'; bad = $true }
 }
 
 function Invoke-Rollback {
@@ -2078,8 +2154,9 @@ function Get-OwnRunProblem($Task) {
   $pinned = Join-Path $script:P.Bin 'update-pc.ps1'
   $cmd = Get-TaskCommand $Task
   if ($cmd.error) { return "the task's command cannot be read ($($cmd.error)); run update-pc.ps1 register" }
-  $o = Get-CommandOptions $cmd.line 'update-pc.ps1'
+  $o = Get-CommandOptions $cmd.line 'update-pc.ps1' $script:OwnParams
   if ($null -eq $o -or -not (Test-SamePath ([string]$o['#script']) $pinned)) { return "the task does not run the pinned copy $pinned; run update-pc.ps1 register" }
+  if ($o.ContainsKey('#error')) { return "the task's $($o['#error'])" }
   if (-not (Test-SamePath $script:UpdaterSelf $pinned)) { return "this run is $($script:UpdaterSelf), not the task's pinned copy $pinned (the clone's copy: the task's own run, or the pinned copy run by hand, does it)" }
   if (Test-Elevated) { return 'this run is elevated (Run as administrator); run update-pc.ps1 register from a normal window' }
   $u = Get-TaskUserId $Task
@@ -2120,14 +2197,17 @@ function ConvertFrom-NewYorkTime([string]$HHmm, [datetime]$Day = (Get-Date)) {
   return [TimeZoneInfo]::ConvertTime($ny, $tz, [TimeZoneInfo]::Local)
 }
 
-# register's first half (any system): pick a checked copy, pin it, remember the daily times. Returns the pinned path.
-function Invoke-PinForTask($At) {
+# register's pin (any system): pick a checked copy, pin it, remember the daily times. Returns the pinned path. $Register
+# (register's task) runs once the copy is picked and before anything is pinned (1.39.1, the hidden-register review: the
+# pinned copy and pinned.json are written only after a successful register; a register that fails leaves them as they were).
+function Invoke-PinForTask($At, [scriptblock]$Register = $null) {
   $lock = Enter-Lock
   if (-not $lock) { throw (Get-BusyText) }
   try {
     $state = Read-State
     $src = Get-PinSource $state
     Save-State $state
+    if ($Register) { $null = & $Register }
     $pinned = Install-PinnedUpdater $src.file $src.commit $src.blob 'register'
     $pj = Join-Path $script:P.Bin 'pinned.json'
     $pin = Read-JsonFile $pj; Set-PinTimes $pin $At; Write-JsonAtomic $pj $pin
@@ -2259,8 +2339,12 @@ function Get-TaskCommand($Task) {
 }
 
 # A command line's script (after -File; its file name must be $Leaf) and its options: @{ '#exe'; '#script'; '#command';
-# <Name> = value } ($true for a switch); $null when it does not run that script.
-function Get-CommandOptions([string]$Line, [string]$Leaf) {
+# <Name> = value } ($true for a switch); $null when it does not run that script. Names as PowerShell binds them (1.39.1,
+# the hidden-register review): -Name value, -Name:value and -Name: value, in any case; with $Known (the script's own
+# parameters), an unambiguous start of one (-Rep) is that one. '#error' (with a hint) when PowerShell itself would refuse
+# the line before the script runs, so every run of the task fails: an option given twice, a name that is no parameter of
+# the script, or one that starts two of them.
+function Get-CommandOptions([string]$Line, [string]$Leaf, [string[]]$Known = @()) {
   $t = @(Split-CommandLine $Line)
   $f = -1
   for ($i = 1; $i -lt $t.Count; $i++) { if ($t[$i] -eq '-File') { $f = $i; break } }
@@ -2268,13 +2352,35 @@ function Get-CommandOptions([string]$Line, [string]$Leaf) {
   $script = $t[$f + 1]
   if ($script -notmatch ('(^|[\\/])' + [regex]::Escape($Leaf) + '$')) { return $null }
   $o = @{ '#exe' = $t[0]; '#script' = $script; '#command' = '' }
+  $err = @()
   $j = $f + 2
   if ($j -lt $t.Count -and $t[$j] -notmatch '^-[A-Za-z]') { $o['#command'] = $t[$j]; $j++ }
   while ($j -lt $t.Count) {
-    $m = [regex]::Match($t[$j], '^-([A-Za-z][A-Za-z0-9]*)$')
+    $m = [regex]::Match($t[$j], '^-([A-Za-z][A-Za-z0-9]*)(:(.*))?$')
     if (-not $m.Success) { $j++; continue }
-    if ($j + 1 -lt $t.Count -and $t[$j + 1] -notmatch '^-[A-Za-z]') { $o[$m.Groups[1].Value] = $t[$j + 1]; $j += 2 }
-    else { $o[$m.Groups[1].Value] = $true; $j++ }
+    $name = $m.Groups[1].Value
+    if ($Known.Count) {
+      $hit = @($Known | Where-Object { $_ -eq $name })
+      if (-not $hit.Count) { $hit = @($Known | Where-Object { $_.StartsWith($name, [StringComparison]::OrdinalIgnoreCase) }) }
+      if ($hit.Count -eq 1) { $name = $hit[0] }
+      elseif ($hit.Count -gt 1) { $err += "-$name could be any of -$($hit -join ', -')" }
+      else { $err += "-$name is not an option of $Leaf" }
+    }
+    if ($m.Groups[2].Success) {                                # -Name:value, or -Name: value
+      $v = $m.Groups[3].Value; $j++
+      if ($v -eq '' -and $j -lt $t.Count) { $v = $t[$j]; $j++ }
+      if ($v -eq '$true') { $v = $true } elseif ($v -eq '$false') { $v = $false }
+    } elseif ($j + 1 -lt $t.Count -and $t[$j + 1] -notmatch '^-[A-Za-z]') { $v = $t[$j + 1]; $j += 2 }
+    else { $v = $true; $j++ }
+    if ($o.ContainsKey($name)) {
+      $was = $(if ($o[$name] -is [bool]) { 'a switch' } else { [string]$o[$name] }); $now = $(if ($v -is [bool]) { 'a switch' } else { [string]$v })
+      $err += "-$name is given twice ($was, then $now)"
+      continue
+    }
+    $o[$name] = $v
+  }
+  if ($err.Count) {
+    $o['#error'] = "its command line would not run: $($err -join '; '). PowerShell refuses such a line before the script starts, so every run of the task fails. Give each option once, as -Name value: update-pc.ps1 unregister, then register, writes it again"
   }
   return $o
 }
@@ -2283,13 +2389,14 @@ function Get-CommandOptions([string]$Line, [string]$Leaf) {
 # task starts is missing or cannot be read, or ours holds anything but exactly the line register writes for the command
 # it holds ($Expected: the options read from it -> that line). A hand-made launcher or a visible start is said, not an
 # error (the task still runs).
-function Test-TaskStart($Task, [string]$Leaf, [scriptblock]$Expected) {
+function Test-TaskStart($Task, [string]$Leaf, [scriptblock]$Expected, [string[]]$Known = @()) {
   $cmd = Get-TaskCommand $Task
   if ($cmd.error) { return @{ ok = $false; line = ''; text = "LAUNCHER MISSING OR UNREADABLE ($($cmd.error)): the task's runs fail, updates are not running; run register" } }
+  $o = Get-CommandOptions $cmd.line $Leaf $Known
+  if ($null -ne $o -and $o.ContainsKey('#error')) { return @{ ok = $false; line = $cmd.line; text = "TASK COMMAND REFUSED ($($cmd.source)): $($o['#error'])" } }
   $ours = Get-TaskLauncherPath $Task
   if (-not $cmd.launcher) { return @{ ok = $true; line = $cmd.line; text = "not hidden: $($cmd.source) starts it (a console may flash); run register" } }
   if (-not $ours) { return @{ ok = $true; line = $cmd.line; text = "hidden by a launcher register did not write ($($cmd.launcher)); run register to move it to its own" } }
-  $o = Get-CommandOptions $cmd.line $Leaf
   if ($null -eq $o) { return @{ ok = $false; line = $cmd.line; text = "LAUNCHER CHANGED: $ours does not run $Leaf; updates are not running as registered; run register" } }
   try { $want = (& $Expected $o) + "`r`n" } catch { return @{ ok = $false; line = $cmd.line; text = "LAUNCHER CHANGED: the command in $ours cannot be rebuilt ($($_.Exception.Message)); run register" } }
   if ([IO.File]::ReadAllText($ours) -cne $want) { return @{ ok = $false; line = $cmd.line; text = "LAUNCHER CHANGED: $ours is not the line register writes for its command; updates may not run as registered; run register" } }
@@ -2322,8 +2429,9 @@ function Resolve-TaskOptions($Task, [hashtable]$Bound = $script:Bound) {
   $how = 'nothing changed; run update-pc.ps1 unregister first to register from scratch'
   $cmd = Get-TaskCommand $Task
   if ($cmd.error) { $res.error = "the current task's command cannot be read ($($cmd.error)): $how"; return $res }
-  $o = Get-CommandOptions $cmd.line 'update-pc.ps1'
+  $o = Get-CommandOptions $cmd.line 'update-pc.ps1' $script:OwnParams
   if ($null -eq $o) { $res.error = "the current task ($($cmd.source)) does not run update-pc.ps1: $how"; return $res }
+  if ($o.ContainsKey('#error')) { $res.error = "the current task ($($cmd.source)): $($o['#error'])"; return $res }
   $old = [string]$o['Repo']
   if ($old -and $Bound.ContainsKey('Repo') -and -not [string]$Bound['Repo']) { $res.error = "-Repo '' would drop the task's -Repo ${old}: give the clone (-Repo $old keeps it)"; return $res }
   if ($old -and -not (Test-SamePath $old $script:P.Repo)) {
@@ -2338,6 +2446,20 @@ function Write-TaskLauncher([string]$Pinned) {
   $ps = Get-SystemExe 'System32\WindowsPowerShell\v1.0\powershell.exe'
   try { Write-HiddenLauncher (Get-HiddenLauncherPath) (Get-HiddenLauncherLine $ps (Get-TaskArguments $Pinned $script:P.Repo)) }
   catch { throw "the hidden launcher could not be written, the task was not changed: $($_.Exception.Message)" }
+}
+
+# The launcher as it was before a change, to put back byte for byte when the change fails (1.39.1, the $hadLauncher of #66's
+# review: the old launcher was read as text and written back as ASCII, and a read that failed left $hadLauncher set with no
+# text, so the put-back would have written an empty launcher over a good one). Reading it throws before anything is written.
+function Save-LauncherBackup([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @{ path = $Path; had = $false; bytes = $null } }
+  return @{ path = $Path; had = $true; bytes = (Read-LauncherBytes $Path) }
+}
+function Read-LauncherBytes([string]$Path) { return , ([IO.File]::ReadAllBytes($Path)) }   # one place (a test holds the file)
+function Restore-LauncherBackup($Backup) {
+  if (-not $Backup) { return }
+  if ($Backup.had) { [IO.File]::WriteAllBytes($Backup.path, [byte[]]$Backup.bytes) }
+  elseif (Test-Path -LiteralPath $Backup.path -PathType Leaf) { Remove-Item -LiteralPath $Backup.path -Force }
 }
 
 # register's task: the launcher (again, the same line), then the task (this user, only while signed in, not elevated):
@@ -2373,7 +2495,7 @@ function Test-Elevated { return (New-Object Security.Principal.WindowsPrincipal(
 function Invoke-TaskMigration([string]$By = '-InstallChartBridge') {
   if ($env:OS -ne 'Windows_NT') { return @() }
   $line = ''
-  $launcher = ''; $hadLauncher = $false; $oldLauncher = ''; $registered = $false
+  $launcher = ''; $backup = $null; $registered = $false
   try {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if (-not $task -or (Get-TaskLauncherPath $task)) { return @() }
@@ -2392,7 +2514,7 @@ function Invoke-TaskMigration([string]$By = '-InstallChartBridge') {
       $keep = Resolve-TaskOptions $task @{}
       if ($keep.error) { $line = $keep.error }
       else {
-        $o = Get-CommandOptions (Get-TaskCommand $task).line 'update-pc.ps1'
+        $o = Get-CommandOptions (Get-TaskCommand $task).line 'update-pc.ps1' $script:OwnParams
         $extra = @(@($o.Keys) | Where-Object { [string]$_ -notlike '#*' -and [string]$_ -ne 'Repo' } | Sort-Object | ForEach-Object { if ($o[$_] -is [bool]) { "-$_" } else { "-$_ $($o[$_])" } })
         if (-not (Test-SamePath ([string]$o['#script']) $pinned)) { $line = "the task runs $($o['#script']), not the pinned copy ${pinned}: run update-pc.ps1 register" }
         elseif ([string]$o['#command'] -ne 'update') { $line = "the task runs update-pc.ps1 $($o['#command']), not update: run update-pc.ps1 register" }
@@ -2410,8 +2532,7 @@ function Invoke-TaskMigration([string]$By = '-InstallChartBridge') {
       $local = @(Get-DailyLocal $times)
       $was = (Get-TaskCommand $task).source
       $launcher = Get-HiddenLauncherPath
-      $hadLauncher = Test-Path -LiteralPath $launcher -PathType Leaf
-      if ($hadLauncher) { $oldLauncher = [IO.File]::ReadAllText($launcher) }
+      $backup = Save-LauncherBackup $launcher           # throws before anything is written when it cannot be read
       Write-TaskLauncher $pinned
       Register-HiddenTask $me $pinned $local
       $registered = $true
@@ -2426,11 +2547,8 @@ function Invoke-TaskMigration([string]$By = '-InstallChartBridge') {
   } catch {
     $line = "the scheduled task was not moved to the hidden launcher: $($_.Exception.Message)"
     # a failed move changes nothing: the launcher this attempt wrote goes (or is put back as it was); pinned.json was not touched
-    if (-not $registered -and $launcher) {
-      try {
-        if ($hadLauncher) { [IO.File]::WriteAllText($launcher, $oldLauncher, [Text.Encoding]::ASCII) }
-        elseif (Test-Path -LiteralPath $launcher) { Remove-Item -LiteralPath $launcher -Force }
-      } catch { $line += " (the launcher $launcher could not be put back: $($_.Exception.Message))" }
+    if (-not $registered -and $backup) {
+      try { Restore-LauncherBackup $backup } catch { $line += " (the launcher $launcher could not be put back: $($_.Exception.Message))" }
     }
   }
   Write-Log $line 'WARN'
@@ -2508,9 +2626,8 @@ function Invoke-Register {
   if ($env:OS -ne 'Windows_NT') { return (Write-Verdict $false 'register works on Windows only') }
   $pre = Test-Preflight
   if ($pre) { return (Write-Verdict $false $pre) }
-  $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-  $user = $id.Name
-  $elevated = (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  $user = Get-CurrentUserName
+  $elevated = Test-Elevated
   $keep = Resolve-TaskOptions (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
   if ($keep.error) { return (Write-Verdict $false "not registered: $($keep.error)") }
   foreach ($n in $keep.notes) { Write-Host "keeping:      $n" }
@@ -2519,10 +2636,21 @@ function Invoke-Register {
   # the launcher first (written and read back), then the pin, then the task: a launcher that cannot be written changes
   # nothing (review N2, 2026-10-23); the launcher names updater\bin\update-pc.ps1, where the pin puts the copy
   $want = Join-Path $script:P.Bin 'update-pc.ps1'
+  $launcher = Get-HiddenLauncherPath
+  try { $backup = Save-LauncherBackup $launcher } catch { return (Write-Verdict $false "not registered, nothing changed: the launcher $launcher cannot be read ($($_.Exception.Message))") }
   try { Write-TaskLauncher $want } catch { return (Write-Verdict $false "not registered, nothing changed: $($_.Exception.Message)") }
-  try { $pinned = Invoke-PinForTask $DailyAt } catch { return (Write-Verdict $false "not registered: $($_.Exception.Message)") }
-  if ([IO.Path]::GetFullPath($pinned) -ne [IO.Path]::GetFullPath($want)) { return (Write-Verdict $false "not registered: the pinned copy is $pinned, not $want") }
-  try { Register-HiddenTask $user $pinned $local } catch { return (Write-Verdict $false "not registered: $($_.Exception.Message)") }
+  # 1.39.1 (the hidden-register review): the task first, then the pinned copy and pinned.json, so a register that fails
+  # (Access is denied, a busy updater, main that cannot be staged) leaves the pin and its daily times as they were and puts
+  # the launcher back byte for byte
+  $done = @{ task = $false }
+  try { $pinned = Invoke-PinForTask $DailyAt { Register-HiddenTask $user $want $local; $done.task = $true } }
+  catch {
+    $why = $_.Exception.Message
+    if ($done.task) { return (Write-Verdict $false "the task is registered, but the copy it runs was not pinned: $why. Run update-pc.ps1 register again") }
+    try { Restore-LauncherBackup $backup } catch { $why += " (the launcher $launcher could not be put back: $($_.Exception.Message))" }
+    return (Write-Verdict $false "not registered, nothing changed (the pinned copy, pinned.json and the task as they were): $why")
+  }
+  if ([IO.Path]::GetFullPath($pinned) -ne [IO.Path]::GetFullPath($want)) { return (Write-Verdict $false "the pinned copy is $pinned, not ${want}: run update-pc.ps1 register again") }
   $t = Get-ScheduledTask -TaskName $TaskName
   $when = "at sign-in (after 2 minutes) and daily at $(Format-DailyTimes $times) New York time, $(Format-DailyTimes @($local | ForEach-Object { $_.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) })) on this PC's clock"
   Write-Log "registered the scheduled task '$TaskName': $when, started hidden by $(Get-HiddenLauncherPath)"
