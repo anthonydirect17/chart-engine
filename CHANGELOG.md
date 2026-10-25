@@ -24,6 +24,13 @@ always.
   them); after Escape or a press that moved nothing the label goes back to its row before the press. Only which label a hover
   or press finds changes: the events (orderMove, orderCancel, orderPlace, orderPlanAdd) and what the page sends for them are
   unchanged. `orderHandles()` gains `y` (each order's line, read only, for the smokes). CHART_STYLE.md says so.
+  The review of #72 (HIGH): the kept row was measured against this frame's line, so when the price scale moved under a still
+  mouse (auto-scale on a new high or low, a scroll back in time, a zoom) the label stayed at its old screen height and left its
+  line (the reviewer's probe: the line 427 -> 274 px, the label stayed at 418), and a drag from it would have landed the stop
+  far from where Anthony aimed. The row is now kept against last frame's own line, so the label follows its line; the probe
+  gives the label at 265 on the line at 274. `smoke:be-labels` rests the mouse on a stop label and moves the scale with a wide
+  bar and with ArrowLeft: the label stays on its line (4 checks fail on the engine before this fix), and a drag from it moves
+  the stop by the mouse's distance.
 - **The Drone sky's card closes when the mouse leaves** (`live/agents-sky.js`; the agents-strip flake "the card goes when the
   mouse leaves"). Root cause: the card's HTML is replaced while it is open (its live P&L; a click on a thought), and Chromium
   then sends no pointerleave to the card when the mouse leaves within about a frame of that replace (a probe: 0 leaves at 0 ms,
@@ -73,6 +80,9 @@ always.
     expanding short names, which .NET 4.6.2 and later do not. `Get-LongPath` now puts each short part (`RUNNER~1`,
     `UPDATE~1.PS1`) in its long form, part by part in its parent folder, on both sides of every comparison and for the file
     name; a path with no `~` (HOME's and WORK's) is returned exactly as given. The test built its path correctly.
+  - The review of #72: a launcher whose read-back fails in register's first write is put back byte for byte, so "nothing
+    changed" holds; the common parameters' short names (`-ea`, `-wa`, `-infa`, `-ev`, `-wv`, `-iv`, `-ov`, `-ob`, `-vb`, `-db`,
+    `-pv`) are read as those parameters, never reported as unknown (and `-ea` with `-ErrorAction` is an option given twice).
   - **Tests** (`test/pc-updater.tests.ps1`): the options (both colon forms, case, a start of a name, twice, unknown,
     ambiguous; the list of names follows the param block); status's task state (Disabled, each result code, never run, another
     state folder); register stubbed: a failed register leaves pinned.json, the copy and the launcher byte for byte, and a good
@@ -84,8 +94,8 @@ always.
     two have not run yet: CI runs on a pull request or on main, and this branch has neither; on Linux they are skips.
 - Tests: `npm test`: 930 pass, 0 fail (`pc-updater: 96 passed, 0 failed, 7 skipped` under pwsh: the 7 are Windows only). New
   smoke `npm run smoke:indmenu` (screenshots `indmenu-1366.png`, `indmenu-gear-1366.png`, `indmenu-short-1366.png`,
-  `indmenu-400.png`, `indmenu-gear-400.png`); `smoke:be-labels` gains the probe (4 of its checks fail on the 1.39.0 engine,
-  `BE_ENGINE`, and pass here). Every smoke in package.json (56 files) was run one at a time: 54 passed at once; `smoke:embed`
+  `indmenu-400.png`, `indmenu-gear-400.png`); `smoke:be-labels` gains the probe and the scale moves (54 checks; the probe's 4 fail
+  on the 1.39.0 engine, `BE_ENGINE`, and pass here). Every smoke in package.json (56 files) was run one at a time: 54 passed at once; `smoke:embed`
   failed one check (the menu's new resize listener was not removed by destroy(); fixed, 71 of 71) and `smoke:headroom` one check
   (the Jump to live icon after a scroll back, in a 330 s run); headroom passes again here, and on 45a422a, so it is counted as a
   flake of that run, not of this change.

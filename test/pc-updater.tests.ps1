@@ -1230,8 +1230,18 @@ Test 'register (stubbed): the task first, then the pinned copy and pinned.json; 
     $binHash = Get-Hash $bin
     $odd = [byte[]](0x27, 0x20, 0xE9, 0x41, 0x0D, 0x0A)          # bytes a text round trip as ASCII would not keep
     [IO.File]::WriteAllBytes($launcher, $odd)
-    function Register-ScheduledTask { throw 'Access is denied' }
     $DailyAt = '08:30'
+    # review of #72: the launcher's read-back fails after the write: the one before is put back, so "nothing changed" holds
+    $realWhl = ${function:Write-HiddenLauncher}
+    function Write-HiddenLauncher([string]$Path, [string]$Line) { [IO.File]::WriteAllText($Path, "half written`r`n", [Text.Encoding]::ASCII); throw "the launcher $Path did not read back as written" }
+    [void](Get-Said)
+    Assert-Code (Invoke-Register) 1 'a launcher that does not read back is a STOP'
+    $said = Get-Said
+    Assert ($said -match 'not registered, nothing changed: the hidden launcher could not be written') "said: $said"
+    Assert ((& $b64 $launcher) -eq [BitConverter]::ToString($odd) -and @(Get-TaskCall 'register').Count -eq 0) 'the launcher put back byte for byte; no task change'
+    Assert ((& $b64 $pj) -eq [BitConverter]::ToString($pjBytes)) 'pinned.json as it was'
+    function Write-HiddenLauncher([string]$Path, [string]$Line) { & $realWhl $Path $Line }
+    function Register-ScheduledTask { throw 'Access is denied' }
     [void](Get-Said)
     Assert-Code (Invoke-Register) 1 'a register that fails is a STOP'
     $said = Get-Said
@@ -1470,6 +1480,10 @@ Test 'a task''s command line read as PowerShell binds it (the hidden-register re
   Assert ($o['#error'] -match '-Repo is given twice') "twice in two spellings: $($o['#error'])"
   $o = Get-CommandOptions ($base + ' -Repo C:\a -Bogus 1') 'update-pc.ps1' $K
   Assert ($o['#error'] -match '-Bogus is not an option of update-pc\.ps1') "unknown: $($o['#error'])"
+  $o = Get-CommandOptions ($base + ' -Repo C:\c -ea Stop -OV x') 'update-pc.ps1' $K
+  Assert (-not $o.ContainsKey('#error') -and $o['ErrorAction'] -eq 'Stop' -and $o['OutVariable'] -eq 'x') "the common parameters' short names (-ea, -ov): $($o['#error'])"
+  $o = Get-CommandOptions ($base + ' -ea Stop -ErrorAction Continue') 'update-pc.ps1' $K
+  Assert ($o['#error'] -match '-ErrorAction is given twice') "-ea and -ErrorAction: $($o['#error'])"
   $o = Get-CommandOptions ($base + ' -D 09:00') 'update-pc.ps1' $K
   Assert ($o['#error'] -match '-D could be any of -DailyAt, -Debug') "ambiguous: $($o['#error'])"
   Assert (-not (Get-CommandOptions ($base + ' -Bogus 1') 'update-pc.ps1').ContainsKey('#error')) 'with no list of names, any name is read'

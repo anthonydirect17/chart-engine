@@ -147,6 +147,9 @@ $script:HandLauncherDir = 'C:\SchwabDesk_bulk\hidden'   # where the hand-made la
 $script:OwnParams = @('Command', 'InstallChartBridge', 'Yes', 'DailyAt', 'TaskName', 'Repo', 'NoRun',
   'Verbose', 'Debug', 'ErrorAction', 'WarningAction', 'InformationAction', 'ErrorVariable', 'WarningVariable', 'InformationVariable',
   'OutVariable', 'OutBuffer', 'PipelineVariable')
+# and the common ones' own short names (-ea Stop binds as -ErrorAction Stop; review of #72)
+$script:OwnAliases = @{ vb = 'Verbose'; db = 'Debug'; ea = 'ErrorAction'; wa = 'WarningAction'; infa = 'InformationAction'; ev = 'ErrorVariable';
+  wv = 'WarningVariable'; iv = 'InformationVariable'; ov = 'OutVariable'; ob = 'OutBuffer'; pv = 'PipelineVariable' }
 $script:FetchWaitSec = 120
 $script:FetchRetrySec = 10
 # 0.3.8: an antivirus (Norton on HOME) can hold the freshly extracted staged.tmp\files.zip for a moment ("Access to the
@@ -2362,6 +2365,7 @@ function Get-CommandOptions([string]$Line, [string]$Leaf, [string[]]$Known = @()
     $name = $m.Groups[1].Value
     if ($Known.Count) {
       $hit = @($Known | Where-Object { $_ -eq $name })
+      if (-not $hit.Count -and $script:OwnAliases.ContainsKey($name) -and $Known -contains $script:OwnAliases[$name]) { $hit = @($script:OwnAliases[$name]) }
       if (-not $hit.Count) { $hit = @($Known | Where-Object { $_.StartsWith($name, [StringComparison]::OrdinalIgnoreCase) }) }
       if ($hit.Count -eq 1) { $name = $hit[0] }
       elseif ($hit.Count -gt 1) { $err += "-$name could be any of -$($hit -join ', -')" }
@@ -2658,12 +2662,18 @@ function Invoke-Register {
   foreach ($n in $keep.notes) { Write-Host "keeping:      $n" }
   try { $times = @(Get-DailyTimes $DailyAt) } catch { return (Write-Verdict $false "not registered: -DailyAt $($DailyAt -join ','): $($_.Exception.Message)") }
   $local = @(Get-DailyLocal $times)
-  # the launcher first (written and read back), then the pin, then the task: a launcher that cannot be written changes
-  # nothing (review N2, 2026-10-23); the launcher names updater\bin\update-pc.ps1, where the pin puts the copy
+  # the launcher first (written and read back), then the task, then the pin (1.39.1; below): a launcher that cannot be
+  # written changes nothing (review N2, 2026-10-23: the one before is put back byte for byte); the launcher names
+  # updater\bin\update-pc.ps1, where the pin puts the copy
   $want = Join-Path $script:P.Bin 'update-pc.ps1'
   $launcher = Get-HiddenLauncherPath
   try { $backup = Save-LauncherBackup $launcher } catch { return (Write-Verdict $false "not registered, nothing changed: the launcher $launcher cannot be read ($($_.Exception.Message))") }
-  try { Write-TaskLauncher $want } catch { return (Write-Verdict $false "not registered, nothing changed: $($_.Exception.Message)") }
+  try { Write-TaskLauncher $want }
+  catch {
+    $why = $_.Exception.Message
+    try { Restore-LauncherBackup $backup } catch { $why += " (the launcher $launcher could not be put back: $($_.Exception.Message))" }   # a read-back that failed wrote it
+    return (Write-Verdict $false "not registered, nothing changed: $why")
+  }
   # 1.39.1 (the hidden-register review): the task first, then the pinned copy and pinned.json, so a register that fails
   # (Access is denied, a busy updater, main that cannot be staged) leaves the pin and its daily times as they were and puts
   # the launcher back byte for byte

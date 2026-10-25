@@ -2526,7 +2526,7 @@ function create(container, options) {
       const ord = h && orders.find(x => x.id === h.id);
       /* the frame after a press or drag of that label ended (a click, Escape, a drop): its row as the press kept it (od.off), so an
          Escape puts it back where it was before the press, never where the drag had it */
-      if (ord) hoverPin = { id: ord.id, off: prevOd && prevOd.id === ord.id ? prevOd.off : h.box.y - lineTop(yOf(orderPrice(ord))) };
+      if (ord) hoverPin = { id: ord.id, off: prevOd && prevOd.id === ord.id ? prevOd.off : h.box.y - lineTop(h.y) };   // against last frame's own line: a scale that moves keeps it on its line
     }
     /* labelFirst beside it only where it does not meet it (its line moved meanwhile): the label under the mouse wins its row */
     const firstPin = labelFirst && hoverPin && labelFirst.id !== hoverPin.id && (() => {

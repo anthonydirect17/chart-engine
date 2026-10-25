@@ -220,6 +220,33 @@ async function run(mode) {
     const ev2 = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
     check(ev2.length === 1 && ev2[0].id === 'n2', 'after the mouse moved off and onto the new ' + kind + '\'s label: a press there drags the new ' + kind + ': ' + JSON.stringify(ev2));
   }
+  /* the review of #72 (HIGH): the hover pin held the label at last frame's screen y, so when the price scale moved under a still
+     mouse (auto-scale on a new high or low, a scroll back in time, a zoom: the first two here) the label left its line and a drag from it landed far
+     from where Anthony aimed. The label under a still mouse keeps its row against its own line: one label alone stays on its line */
+  for (const how of ['a wide bar (auto-scale)', 'ArrowLeft (a scroll back in time)']) {
+    await page.evaluate(avg => { window.__ch.setPosition(null); window.__orders = [{ id: 'k1', side: 'sell', kind: 'stop', price: avg - 3, qty: 1, role: 'stop' }]; window.__ch.setOrders(window.__orders); window.__ev = []; }, S.avg);
+    await page.mouse.move(20, 20); await wait(250);
+    const kb = (await handles()).find(h => h.id === 'k1').box, kx = Math.round(kb.x + kb.w - 8), ky = kb.y + kb.h / 2;
+    await page.mouse.move(kx, ky); await wait(250);                 // resting on the stop's label
+    const y0 = (await handles()).find(h => h.id === 'k1').y;
+    if (how.startsWith('a wide')) await page.evaluate(() => { const b = window.__ch.bars()[window.__ch.bars().length - 1]; window.__ch.update({ t: b.t, o: b.o, h: b.h + 40, l: b.l - 40, c: b.c, v: 100 }); });
+    else { await page.evaluate(() => document.getElementById('c').focus()); await page.keyboard.press('ArrowLeft'); }
+    await wait(400);
+    const k = (await handles()).find(h => h.id === 'k1');
+    const onLine = !!k && Math.abs(k.box.y + k.box.h / 2 - k.y) <= 1.5;
+    check(!!k && Math.abs(k.y - y0) > 3 && onLine, 'the stop label under a still mouse, the scale moved by ' + how + ': its line ' + Math.round(y0) + ' -> ' + (k ? Math.round(k.y) : '?') + ', the label stays on it (' + (k ? Math.round(k.box.y + k.box.h / 2) : '?') + ')');
+    if (how.startsWith('a wide')) {
+      /* a drag from the label where it now is moves the stop by the mouse's distance (24 px up) */
+      await page.evaluate(() => { window.__ev = []; });
+      const gx2 = Math.round(k.box.x + k.box.w - 8), gy2 = k.box.y + k.box.h / 2;
+      await page.mouse.move(gx2, gy2); await wait(80);
+      const want = await page.evaluate(y => window.__ch.yToPrice(y), k.y - 24);
+      await page.mouse.down(); await page.mouse.move(gx2, gy2 - 24, { steps: 4 }); await page.mouse.up(); await wait(150);
+      const mv = (await page.evaluate(() => window.__ev)).filter(e => e.k === 'orderMove');
+      check(mv.length === 1 && mv[0].id === 'k1' && Math.abs(mv[0].price - want) <= 0.25 + 1e-9, 'after the scale moved, a drag from the label moves the stop by the mouse\'s distance: ' + JSON.stringify(mv) + ' (wanted about ' + want.toFixed(2) + ')');
+    }
+    await page.evaluate(() => { window.__ch.reset && window.__ch.reset(); }); await wait(300);
+  }
   await page.close();
 }
 try {

@@ -225,7 +225,7 @@ test('the task starts hidden (Anthony, 2026-10-22): wscript.exe //B on a one-lin
   // review N2: in register the launcher comes first (read back); 1.39.1 (the hidden-register review): then the task, and the
   // pinned copy and pinned.json only after it (Invoke-PinForTask runs register's task before Install-PinnedUpdater)
   const ir = src.slice(src.indexOf('function Invoke-Register'), src.indexOf('function Unregister-HiddenTask'));
-  const order = ['Resolve-TaskOptions (Get-ScheduledTask', 'Save-LauncherBackup $launcher', 'Write-TaskLauncher $want', 'Invoke-PinForTask $DailyAt { Register-HiddenTask $user $want $local', 'Restore-LauncherBackup $backup'].map(t => ir.indexOf(t));
+  const order = ['Resolve-TaskOptions (Get-ScheduledTask', 'Save-LauncherBackup $launcher', 'Write-TaskLauncher $want', 'Invoke-PinForTask $DailyAt { Register-HiddenTask $user $want $local', 'Restore-LauncherBackup $backup'].map((t, i) => (i === 4 ? ir.lastIndexOf(t) : ir.indexOf(t)));   // the last put-back: after the task (one before it too, for the launcher's read-back)
   assert.ok(order.every((v, i) => v > 0 && (i === 0 || v > order[i - 1])), 'keep, launcher kept, launcher, task then pin, put back on failure: ' + order.join(','));
   const pin = src.slice(src.indexOf('function Invoke-PinForTask'), src.indexOf('# ------------------------------------------------------------------------------------------------ hidden start'));
   assert.ok(pin.indexOf('$null = & $Register') > 0 && pin.indexOf('$null = & $Register') < pin.indexOf('Install-PinnedUpdater') && pin.indexOf('Install-PinnedUpdater') < pin.indexOf('Write-JsonAtomic $pj $pin'), 'the task, then the pinned copy, then pinned.json');
