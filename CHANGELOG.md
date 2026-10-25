@@ -67,6 +67,12 @@ always.
     a read that failed (a file another program holds) left `$hadLauncher` set with no text, so the put-back would have written
     an empty launcher over a good one. Now the old launcher is kept as bytes (`Save-LauncherBackup`), a read that fails stops
     the move before anything is written, and the put-back is byte for byte (`Restore-LauncherBackup`; register uses it too).
+  - **8.3 short names** (CI of #72, windows-latest: the new 8.3 test failed): the own-run check said "the task does not run
+    the pinned copy" for a task whose -File names it by its short name. Two causes in the code: the script's file name was
+    matched as `update-pc.ps1` only (its short form `UPDATE~1.PS1` is not), and Test-SamePath relied on GetFullPath
+    expanding short names, which .NET 4.6.2 and later do not. `Get-LongPath` now puts each short part (`RUNNER~1`,
+    `UPDATE~1.PS1`) in its long form, part by part in its parent folder, on both sides of every comparison and for the file
+    name; a path with no `~` (HOME's and WORK's) is returned exactly as given. The test built its path correctly.
   - **Tests** (`test/pc-updater.tests.ps1`): the options (both colon forms, case, a start of a name, twice, unknown,
     ambiguous; the list of names follows the param block); status's task state (Disabled, each result code, never run, another
     state folder); register stubbed: a failed register leaves pinned.json, the copy and the launcher byte for byte, and a good

@@ -1362,6 +1362,11 @@ Test 'Test-SamePath: the same path in either form; two different paths are not' 
   New-Item -ItemType Directory -Force -Path $d | Out-Null
   Assert (Test-SamePath $d ($d + [IO.Path]::DirectorySeparatorChar)) 'a trailing separator'
   Assert (-not (Test-SamePath $d (Join-Path $tmpRoot 'other dir'))) 'two paths'
+  # 1.39.1: Get-LongPath leaves a path with no ~ exactly as given (HOME's and WORK's long paths), and a ~ part that is the
+  # short name of nothing as written
+  foreach ($p in @($d, 'C:\Users\anthony\Documents\NinjaTrader 8\ChartBridge\updater\bin\update-pc.ps1', '')) { Assert ((Get-LongPath $p) -ceq $p) "unchanged: '$p'" }
+  $nx = Join-Path $d 'NOSUCH~1.PS1'
+  Assert ((Get-LongPath $nx).EndsWith('NOSUCH~1.PS1')) "a short name of nothing is kept: $(Get-LongPath $nx)"
   if ($IsWin) {
     $fso = New-Object -ComObject Scripting.FileSystemObject
     $short = $fso.GetFolder($d).ShortPath
@@ -2133,6 +2138,17 @@ if ($IsWin) {
         $script:UpdaterSelf = $long
         $why = Get-OwnRunProblem $t
         Assert ($why -eq '') "a task that names the pinned copy by its short name is the task's own run: '$why'"
+        Assert ((Get-LongPath $shortFile) -eq (Get-LongPath $long) -and (Get-LongPath $shortFile) -notmatch '~') "the short name in its long form: $(Get-LongPath $shortFile)"
+        $who = [pscustomobject]@{ UserId = (Get-CurrentUserName); LogonType = 'Interactive' }
+        $t2 = New-FakeTask $ps (Get-TaskArguments $short $script:P.Repo)      # short folders, the long file name (as register writes it)
+        $t2 | Add-Member -NotePropertyName Principal -NotePropertyValue $who
+        $why = Get-OwnRunProblem $t2
+        Assert ($why -eq '') "short folders, the long file name: the task's own run: '$why'"
+        $t3 = New-FakeTask $ps (Get-TaskArguments (Get-LongPath $long) $script:P.Repo)
+        $t3 | Add-Member -NotePropertyName Principal -NotePropertyValue $who
+        $script:UpdaterSelf = $shortFile                                  # this run started by its short name, the task's by the long one
+        $why = Get-OwnRunProblem $t3
+        Assert ($why -eq '') "this run by its short name, the task's by its long one: '$why'"
       } finally { $script:P = $keepP; $script:UpdaterSelf = $keepSelf }
     }
   }

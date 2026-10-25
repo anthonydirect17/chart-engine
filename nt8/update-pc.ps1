@@ -2350,7 +2350,8 @@ function Get-CommandOptions([string]$Line, [string]$Leaf, [string[]]$Known = @()
   for ($i = 1; $i -lt $t.Count; $i++) { if ($t[$i] -eq '-File') { $f = $i; break } }
   if ($f -lt 0 -or $f + 1 -ge $t.Count) { return $null }
   $script = $t[$f + 1]
-  if ($script -notmatch ('(^|[\\/])' + [regex]::Escape($Leaf) + '$')) { return $null }
+  $named = ('(^|[\\/])' + [regex]::Escape($Leaf) + '$')
+  if ($script -notmatch $named -and (Get-LongPath $script) -notmatch $named) { return $null }   # 1.39.1: or by its 8.3 short name
   $o = @{ '#exe' = $t[0]; '#script' = $script; '#command' = '' }
   $err = @()
   $j = $f + 2
@@ -2407,9 +2408,33 @@ function Test-TaskStart($Task, [string]$Leaf, [scriptblock]$Expected, [string[]]
 
 function Get-HiddenLauncherPath { return (Join-Path $script:P.Bin $script:HiddenLauncherName) }
 
-# The same path: as GetFullPath writes them, or, when both exist, as Windows names them (an 8.3 short name matches its
-# long form)
+# A path with each 8.3 short part (RUNNER~1, UPDATE~1.PS1) put in its long form, as Windows names it; a path with no ~ is
+# returned as given (HOME's and WORK's long paths are never touched), and a part that does not exist is kept as written.
+# GetFullPath does not do this (.NET 4.6.2 and later, and pwsh, leave short names as they are), nor Get-Item's FullName:
+# each part is looked up in its parent (GetFileSystemEntries, whose search pattern matches a short name and returns the
+# long one). 1.39.1, CI of #72: the task's -File named by its short name was not the pinned copy.
+function Get-LongPath([string]$Path) {
+  if (-not $Path -or -not $Path.Contains('~')) { return $Path }
+  try {
+    $full = [IO.Path]::GetFullPath($Path)
+    $root = [IO.Path]::GetPathRoot($full)
+    $cur = $root
+    foreach ($part in @($full.Substring($root.Length).Split([char[]]@('\', '/')) | Where-Object { $_ })) {
+      $next = Join-Path $cur $part
+      if ($part.Contains('~') -and [IO.Directory]::Exists($cur)) {
+        $hit = @([IO.Directory]::GetFileSystemEntries($cur, $part))
+        if ($hit.Count -eq 1) { $next = $hit[0] }
+      }
+      $cur = $next
+    }
+    return $cur
+  } catch { return $Path }
+}
+
+# The same path: as GetFullPath writes them (each 8.3 short part in its long form first, Get-LongPath), or, when both
+# exist, as Windows names them
 function Test-SamePath([string]$A, [string]$B) {
+  $A = Get-LongPath $A; $B = Get-LongPath $B
   if ([IO.Path]::GetFullPath($A).TrimEnd('\', '/') -eq [IO.Path]::GetFullPath($B).TrimEnd('\', '/')) { return $true }
   try {
     if ((Test-Path -LiteralPath $A) -and (Test-Path -LiteralPath $B)) {
