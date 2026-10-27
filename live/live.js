@@ -258,7 +258,7 @@ function presetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').t
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1',
   paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1',
   bracketPresets: 'live-bracket-presets-v1', bracketSel: 'live-bracket-sel-v1', bracketUnit: 'live-bracket-unit-v1', qty: 'live-qty-v1',
-  hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1', scaleLock: 'live-scale-lock-v1' };
+  hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1', scaleLock: 'live-scale-lock-v1', paneRoom: 'live-pane-room-v1' };
 /*
  * The chart signals' settings (G1c), by the NinjaScript files' own names, each kept inside the file's [Range]:
  * AbsorptionTradeCombo per instrument and chart type (Anthony: Range 40 and 1 minute first, every other type the same
@@ -731,6 +731,16 @@ function create(storage) {
       if (on) all[paneId] = true; else delete all[paneId];
       return raw.set(KEYS.scaleLock, all);
     },
+    /** A chart pane's own room right of price, set by dragging its gap (1.39.2), or null: Settings' room applies. */
+    paneRoom(paneId) { const v = paneOk(paneId) ? obj(KEYS.paneRoom)[paneId] : null; return roomOk(v) ? v : null; },
+    setPaneRoom(paneId, px) {
+      if (!paneOk(paneId) || (px !== null && !roomOk(px))) return false;
+      const all = Object.assign(Object.create(null), obj(KEYS.paneRoom));
+      if (px === null) delete all[paneId]; else all[paneId] = px;
+      return raw.set(KEYS.paneRoom, all);
+    },
+    /** Every chart's own room dropped (1.39.2): a room picked in Settings sets every chart to it again. */
+    clearPaneRooms() { return raw.set(KEYS.paneRoom, {}); },
     bracket(root) { return obj(KEYS.bracket)[root]; },
     /** The qty picked last for a root (1.10.0): a whole number 1 to 9, else 1. */
     qty(root) { const v = obj(KEYS.qty)[root]; return Number.isInteger(v) && v >= 1 && v <= 9 ? v : 1; },
@@ -1288,7 +1298,10 @@ function mount(container, options) {
   const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS), options: Object.fromEntries(Object.keys(LP.INDICATOR_OPTIONS).map(id => [id, prefs.indicatorOptions(PANE, id)])) });   // layers: what is drawn; options: every indicator's (1.34.0: the studies' too)
   /* 1.15.0: a host's charts (the workspace) take the room right of 120 px until one is picked */
   const roomOf = s => (prefs.roomSaved() ? s.room : LP.DEFAULT_ROOM_WS);
-  S.room = roomOf(S);
+  /* 1.39.2 (Anthony 2026-10-27: "the others should stay fixed when I am dragging on one chart"): this chart's own room when
+     its gap was dragged, else Settings' */
+  const roomFor = s => { const own = prefs.paneRoom(PANE); return own !== null ? own : roomOf(s); };
+  S.room = roomFor(S);
   const ranges = {};
   for (const r of ROOTS) ranges[r] = prefs.range(r);
   if (VIEW) {                                            // the host's own view: nothing of it is saved here
@@ -2245,7 +2258,7 @@ function mount(container, options) {
   cleanups.push(() => { for (const peer of accountPeers) if (peer.follow === followAccount) accountPeers.delete(peer); });
   // 1.14.0: Glide, Range style, grid lines and the room right of price changed in another tab or the workspace
   listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.settings) refreshSettings(); });
-  listen(window, 'live-settings-changed', () => refreshSettings());   // 1.37.0: another chart in this window set the room
+  listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.paneRoom) refreshSettings(); });   // 1.39.2: Settings dropped the charts' own rooms
   listen(window, 'storage', e => {
     if (e.key !== PREFIX + 'live-account-v1') return;
     try { followAccount(JSON.parse(e.newValue)); } catch (err) { /* not ours */ }
@@ -2851,11 +2864,12 @@ function mount(container, options) {
   /* the price scale lock (1.14.0, review D2): saved per chart, off by default */
   chart.setScaleLock(prefs.scaleLocked(PANE));
   chart.on('scaleLock', v => prefs.setScaleLocked(PANE, v));
-  /* 1.37.0: the room right set by dragging the gap on this chart: saved as Settings' room (Custom), every chart takes it */
+  /* 1.37.0: the room right set by dragging the gap on this chart. 1.39.2 (Anthony 2026-10-27): this chart's own, saved for it;
+     the other charts keep theirs (until then every chart took it, and a daily chart beside a minute chart was pushed off
+     its bars). A room picked in Settings sets every chart to it again. */
   chart.on('room', px => {
     if (!LP.roomOk(px)) return;
-    S.room = px; prefs.setSetting('room', px);
-    try { window.dispatchEvent(new CustomEvent('live-settings-changed', { detail: { room: px } })); } catch (e) { /* an old browser: the others follow at their next refresh */ }
+    S.room = px; prefs.setPaneRoom(PANE, px);
   });
   listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.scaleLock) chart.setScaleLock(prefs.scaleLocked(PANE)); });
   function shortHeader() {
@@ -3862,7 +3876,7 @@ function mount(container, options) {
     if (s.glide !== S.glide) { S.glide = s.glide; chart.setMotion(GLIDE[S.glide]); }
     if (s.rangeMode !== S.rangeMode) { S.rangeMode = s.rangeMode; if (S.tf === 'range') rebuild(); }
     if (s.grid !== S.grid) { S.grid = s.grid; chart.setGrid(S.grid === 'on'); }
-    if (roomOf(s) !== S.room) { S.room = roomOf(s); chart.setRoom(S.room); }
+    if (roomFor(s) !== S.room) { S.room = roomFor(s); chart.setRoom(S.room); }
     if (s.atr !== S.atr) { S.atr = s.atr; readouts(); }
     syncButtons();
     sigRefresh();                                          // the signals' settings and the large-print floors (G1c)

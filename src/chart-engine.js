@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.39.1
+ * chart-engine 1.39.2
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.39.1';
+const VERSION = '1.39.2';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -1343,7 +1343,9 @@ function create(container, options) {
     if (h) { ctx.strokeStyle = h; ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.setLineDash([]); ctx.strokeText(text, x, y); }
     ctx.fillStyle = col; ctx.fillText(text, x, y);
   }
-  const roomNow = () => roomBars(o.room, V.spacing, o.rightOffset);
+  /* 1.39.2: never wider than 80% of the plot, so the last bar always stays on screen (a 600 px room on a narrow daily chart
+     pushed every bar off it, and the price scale had nothing to fit) */
+  const roomNow = () => roomBars(o.room === null || o.room === undefined ? o.room : Math.min(o.room, plotW * 0.8), V.spacing, o.rightOffset);
   const followRight = () => last() + roomNow();
   const sessionOf = t => tradeDay(t, o.session.start);
   const isSessionStart = i => i > 0 && o.barSeconds < DAY && sessionOf(bars[i].t) !== sessionOf(bars[i - 1].t);
@@ -3060,7 +3062,8 @@ function create(container, options) {
       const dx = p.x - drag.x0, dy = p.y - drag.y0;
       if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
       if (drag.zone === 'room') {                                   // 1.37.0: left widens the room, right narrows it; live stays
-        const r = clamp(Math.round(drag.room0 - dx), ROOM_MIN, ROOM_MAX);
+        // 1.39.2: no wider than the room drawn (80% of the plot), so the drag never builds a width it cannot show
+        const r = clamp(Math.round(drag.room0 - dx), ROOM_MIN, Math.max(ROOM_MIN, Math.min(ROOM_MAX, Math.floor(plotW * 0.8))));
         if (r !== o.room) { o.room = r; V.right = followRight(); clampRight(); V.follow = true; }
       } else if (drag.zone === 'plot' || drag.zone === 'pane') {           // the delta pane pans the bars only
         V.right = drag.right0 - dx / V.spacing; clampRight();

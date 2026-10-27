@@ -233,6 +233,8 @@ test('feed: a panel\'s htf request goes out on its instrument\'s line; the answe
 /* ---------------- the engine on a stand-in canvas: the Zone, the tools and the orders, the compact labels, the corner */
 function stub(opts) {
   const ops = [];
+  const SW = (opts && opts.stubWidth) || 1078;                  // 1.39.2: a narrower stand-in canvas when asked
+  if (opts && opts.stubWidth) { opts = Object.assign({}, opts); delete opts.stubWidth; }
   class Path2D { rect() {} moveTo() {} lineTo() {} closePath() {} arc() {} }
   const ctx = new Proxy({}, {
     get(t, k) {
@@ -253,7 +255,7 @@ function stub(opts) {
     addEventListener(type, fn) { this.handlers[type] = fn; }, removeEventListener(type) { delete this.handlers[type]; },
     appendChild(c) { return c; }, remove() {}, setAttribute() {}, hasAttribute() { return false; },
     getContext: () => ctx, focus() {}, setPointerCapture() {},
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1078, height: 626, right: 1078, bottom: 626 }),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: SW, height: 626, right: SW, bottom: 626 }),
   }) - 1];
   let frameFn = null;
   global.document = { createElement: element, getElementById: () => null, head: { appendChild() {} } };
@@ -481,4 +483,49 @@ test('1.34.0: a planned stop and target say their dollars for the entry\'s contr
   S.chart.setOrders(plans(98)); S.frame();
   assert.ok(texts().includes('SL -8t -$12'), 'the stop moved: its ticks and dollars with it: ' + texts().join('|'));
   S.chart.destroy();
+});
+
+// 1.39.2 (Anthony 2026-10-27): a daily chart took a minute chart's 600 px room on a plot narrower than that, every bar went off
+// screen and the price scale had nothing to fit. The room is now never wider than 80% of the plot: the last bar stays in view.
+test('1.39.2: the room right is never wider than 80% of the plot, so the last bar stays on screen', () => {
+  const S = stub();
+  const CANVAS = 1078;                                        // the stand-in canvas's width (the plot is that less the price axis)
+  S.chart.setRoom(120); S.frame(5);
+  assert.ok(Math.abs(S.chart.room().gap - 120) <= 1, 'a room that fits is kept as set');
+  S.chart.setRoom(5000); S.frame(5);
+  const g = S.chart.room();
+  assert.equal(g.px, 5000, 'the room asked for is kept (Settings shows it)');
+  assert.ok(g.gap >= CANVAS * 0.6 && g.gap <= CANVAS * 0.8, 'drawn at 80% of the plot, the last bar on screen: ' + Math.round(g.gap) + ' px');
+  S.chart.setRoom(null); S.frame(5);
+  assert.equal(S.chart.room().px, null, 'no room set: the engine\'s right offset in bars, as before');
+});
+
+test('1.39.2: a chart\'s own room (its gap dragged) is kept for that chart only; Settings\' room clears them all', () => {
+  const s = memStorage(), p = LP.create(s);
+  assert.equal(p.paneRoom('chart-a'), null, 'none until dragged');
+  assert.equal(p.setPaneRoom('chart-a', 360), true);
+  assert.equal(LP.create(s).paneRoom('chart-a'), 360, 'kept for that chart');
+  assert.equal(LP.create(s).paneRoom('chart-b'), null, 'the others have none of their own');
+  assert.equal(p.setPaneRoom('chart-a', 700), false, 'outside 40 to 600: refused');
+  assert.equal(p.setPaneRoom('__proto__', 200), false);
+  p.setPaneRoom('chart-b', 200);
+  p.clearPaneRooms();
+  assert.equal(LP.create(s).paneRoom('chart-a'), null); assert.equal(LP.create(s).paneRoom('chart-b'), null);
+  p.setPaneRoom('chart-a', 300); p.setPaneRoom('chart-a', null);
+  assert.equal(LP.create(s).paneRoom('chart-a'), null, 'null drops it');
+});
+
+test('1.39.2 (review): the gap drag stops at the room drawn (80% of the plot), so dragging back right moves it at once', () => {
+  const S = stub({ stubWidth: 520 });                         // a narrow chart: 80% of its plot is under 600 px
+  S.chart.setRoom(5000); S.frame(5);
+  const plotW = S.chart.room().gap / 0.8;                      // the cap drawn: 80% of the plot
+  S.chart.setRoom(120); S.frame(5);
+  const got = []; S.chart.on('room', px => got.push(px));
+  const x = plotW - 60, y = 300;                               // inside the 120 px gap, left of the price axis
+  S.down(x, y); for (let k = 1; k <= 20; k++) S.move(x - k * 60, y); S.up(x - 1200, y); S.frame(3);
+  const cap = Math.floor(plotW * 0.8);
+  assert.equal(got.length, 1);
+  assert.ok(got[0] <= cap && got[0] >= cap - 1, 'saved at the cap, not past it: ' + got[0] + ' (cap ' + cap + ')');
+  assert.equal(S.chart.room().px, got[0]);
+  assert.ok(cap < 600, 'the case that matters: the cap under the 600 px most (' + cap + ')');
 });

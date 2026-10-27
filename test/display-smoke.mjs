@@ -247,17 +247,21 @@ try {
   await wp.mouse.down(); for (let k = 1; k <= 10; k++) { await wp.mouse.move(sx - k * 10, sy); await wp.waitForTimeout(16); } await wp.mouse.up();
   await wp.waitForTimeout(700);
   const dr = await W(ids => ids.map(id => Math.round(window.workspace.chart(id).room().px)), charts);
-  check(dr.every(r => r === 360) && await W(() => JSON.parse(localStorage.getItem('live-settings-v2')).room === 360), 'the gap dragged 100 px left: 360 px of room on every chart, saved as Settings\' room: ' + dr.join(' '));
+  /* 1.39.2 (Anthony 2026-10-27: "the others should stay fixed when I am dragging on one chart"): only the dragged chart */
+  check(dr[0] === 360 && dr.slice(1).every(r => r === 260) && await W(() => JSON.parse(localStorage.getItem('live-settings-v2')).room === 260 && JSON.parse(localStorage.getItem('live-pane-room-v1'))[Object.keys(JSON.parse(localStorage.getItem('live-pane-room-v1')))[0]] === 360),
+    'the gap dragged 100 px left: 360 px on that chart only, saved for it; the others keep 260, Settings\' room stays 260: ' + dr.join(' '));
   const follow = await W(id => window.workspace.chart(id).room().gap, c0);
   check(Math.abs(follow - 360) <= 1, 'the chart still on live with the new gap (' + Math.round(follow) + ' px from the last bar to the axis)');
   await wp.mouse.move(gb.x + gb.w * 0.3, sy); await wp.mouse.down(); await wp.mouse.move(gb.x + gb.w * 0.3 + 120, sy, { steps: 6 }); await wp.mouse.up(); await wp.waitForTimeout(400);
   await W(id => window.workspace.chart(id).goLive(), c0); await wp.waitForTimeout(900);
   check(Math.abs(await W(id => window.workspace.chart(id).room().gap, c0) - 360) <= 1, 'Jump to live keeps the dragged room (360 px)');
   await wp.click('#wsSet'); await wp.waitForTimeout(200);
-  check(await W(() => document.querySelector('#wsRoom [data-v="custom"]').getAttribute('aria-pressed') === 'true' && document.getElementById('wsRoomPx').value === '360'), 'Settings shows Custom 360 after the drag');
+  check(await W(() => document.querySelector('#wsRoom [data-v="custom"]').getAttribute('aria-pressed') === 'true' && document.getElementById('wsRoomPx').value === '260'), 'Settings still shows Custom 260 after one chart\'s drag');
   await shot(wp, 'room-dragged-360.png');
-  await wp.click('#wsRoom [data-v="80"]');
+  await wp.click('#wsRoom [data-v="80"]'); await wp.waitForTimeout(700);
   check(await W(() => document.getElementById('wsRoomPx').hidden), 'a preset closes the Custom box');
+  const r80 = await W(ids => ids.map(id => Math.round(window.workspace.chart(id).room().px)), charts);
+  check(r80.every(r => r === 80) && await W(() => Object.keys(JSON.parse(localStorage.getItem('live-pane-room-v1') || '{}')).length === 0), '1.39.2: a room picked in Settings sets every chart to it again, the dragged one too: ' + r80.join(' '));
   await wp.keyboard.press('Escape');
 
   // zoom to brackets: a working limit far below the price comes on screen, eased in with the axis re-fit (on the

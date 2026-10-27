@@ -215,8 +215,11 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   width from 40 to 600 px typed in its 64 px box; and on any chart, while it follows live, a drag in the gap between the last
   bar and the price axis sets it (the cursor there is `col-resize`; left widens the room, right narrows it, 40 to 600 px; never
   with Shift or Ctrl, which place orders, nor with a drawing tool armed; an order's label or tag under the mouse still takes the
-  press first). Saved as the presets are, for every chart; Settings then shows Custom with the width; Jump to live and End keep
-  it.
+  press first). Jump to live and End keep it. 1.39.2 (Anthony 2026-10-27: "the others should stay fixed when I am dragging on
+  one chart"): the dragged room is that chart's own, saved for it; the other charts keep theirs, and Settings keeps its width.
+  A room picked in Settings (a preset or Custom) sets every chart to it again, the dragged ones too. The room drawn is never
+  wider than 80% of the plot, so the last bar always stays on screen (a 600 px room on a narrow daily chart had pushed every
+  bar off it and left the price scale nothing to fit).
   Default bar spacing 7 px; zoom range 0.6 to 48 px.
 - **The price scale** fits the candles in view, eased with the 120 ms re-fit. 1.14.0 (Anthony, from WORK: on the smaller
   panels the high ran under the legend): the top keeps the legend's height and 8 px free (8% when that is more, 45% of
