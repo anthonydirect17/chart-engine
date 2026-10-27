@@ -426,6 +426,8 @@ function create(env) {
       /* 1.34.0 (Anthony's ruling on the review, "size it anyway"): a member sized with its room or open risk not known, said quietly */
       inn.filter(x => typeof x.note === 'string' && x.note).map(x => ' · ' + x.account + ': ' + x.note.replace(/ \(.*$/, '')).join('');
   }
+  /** A member out of the entry only because Anthony put it on the group's bench (ChartBridgeGroups.BenchedOut). */
+  const benchedOut = x => !(x.size > 0) && typeof x.out === 'string' && /^benched\b/.test(x.out);
   function groupPreviewIn(m) {
     const members = Array.isArray(m.members) ? m.members.filter(x => x && typeof x.account === 'string') : [];
     if (projAsk && m.cid === projAsk.cid) { groupProj = { key: projAsk.key, name: m.name, root: m.root, members, at: now() }; projAsk = null; env.changed(); return; }
@@ -439,13 +441,16 @@ function create(env) {
       if (q.kind !== 'market') msg.price = q.price;
       if (q.kind === 'stopLimit') msg.limitOffset = 0;
       send(msg);
-      flash('Sent the group entry to ' + m.name + ': ' + members.filter(x => x.size > 0).map(x => x.account + ' ' + x.size).join(', ') + '.', '');
+      const benched = members.filter(x => !(x.size > 0) && benchedOut(x)).map(x => x.account);
+      flash('Sent the group entry to ' + m.name + ': ' + members.filter(x => x.size > 0).map(x => x.account + ' ' + x.size).join(', ') + '.' +
+        (benched.length ? ' On the bench, sat out: ' + benched.join(', ') + '.' : ''), '');
     };
     if (!members.some(x => x.size > 0)) { flash('Not sent: no account of ' + m.name + ' can take it: ' + members.map(x => x.account + ': ' + x.out).join('; ') + '.', 'warn'); return; }
     /* 1.34.0: every account takes it: sent at once (no confirm; the sizes are the ticket's projection); the confirm only when
-       one sits out (ChartBridge still refuses the whole entry if a size changed since) */
+       one sits out (ChartBridge still refuses the whole entry if a size changed since). 1.39.2 (Anthony 2026-10-27, "that
+       account is supposed to just sit out"): an account Anthony put on the bench is no issue: it sits out with no confirm. */
     groupProj = { key: projKey(), name: m.name, root: m.root, members, at: now() };
-    if (members.every(x => x.size > 0)) { send2(); return; }
+    if (members.every(x => x.size > 0 || benchedOut(x))) { send2(); return; }
     if (typeof env.confirmGroup !== 'function' || env.confirmGroup(m, send2, () => flash('Not sent: the group entry was cancelled.', '')) === false) flash('Not sent: the group entry is confirmed in the order ticket\'s window.', 'warn');
   }
   function groupPlacedIn(m) {

@@ -154,6 +154,27 @@ test('1.34.0: every account takes it: sent at once, no confirm; one sits out: th
   assert.equal(R.sent.length, 0, 'nothing sent before Send');
 });
 
+// 1.39.2 (Anthony 2026-10-27): "I moved the account off the group when it hit its max loss ... that account is supposed to just
+// sit out": a benched account is no issue, so no confirm; any other reason to sit out still asks.
+test('1.39.2: an account on the bench sits out with no confirm; another reason still asks', () => {
+  const R = rig();
+  R.core.setArmed(true);
+  R.core.setBracket('NQ', 'stop', 20, true);
+  R.core.sendOrder('buy', 'market', null);
+  const pv = R.sent.pop();
+  R.core.message(pvAll(pv.cid, [['SIM-A', 4], ['SIM-B', 0, 'benched: it sits out new entries (the Multi-Account panel)'], ['SIM-C', 1]]));
+  assert.equal(R.confirm, null, 'benched: no confirm');
+  const go = R.sent.pop();
+  assert.equal(go.type, 'groupOrder'); assert.equal(go.sizes, 'SIM-A:4,SIM-B:0,SIM-C:1');
+  assert.match(R.notes.pop(), /^Sent the group entry to Lucid: SIM-A 4, SIM-C 1\. On the bench, sat out: SIM-B\.$/);
+  R.advance(6000);
+  R.core.sendOrder('sell', 'market', null);
+  const pv2 = R.sent.pop();
+  R.core.message(pvAll(pv2.cid, [['SIM-A', 4], ['SIM-B', 0, 'benched: it sits out new entries (the Multi-Account panel)'], ['SIM-C', 0, 'its daily room is too small']]));
+  assert.ok(R.confirm, 'a benched one and one out for another reason: the confirm');
+  assert.equal(R.sent.length, 0, 'nothing sent before Send');
+});
+
 test('1.34.0: the ticket\'s projected sizes: a quiet preview while Armed (never traded), at most one a second, again after 15 s or a change', () => {
   const R = rig();
   R.core.setBracket('NQ', 'stop', 20, true);

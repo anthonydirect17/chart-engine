@@ -1,5 +1,18 @@
 # Changelog
 
+## chart 1.39.2 (2026-10-27): a benched account sits out with no confirm (page only, no F5)
+
+Page only, no F5: no ChartBridge file changes, so nothing needs a recompile. ChartBridge stays 0.6.9; `minChartBridge` stays
+0.6.2 (COMPAT.json follows the page to 1.39.2).
+
+- **A group entry with an account on the bench goes out at once** (`live/trade.js`; Anthony 2026-10-27: "I moved the account
+  off the group when it hit its max loss ... that account is supposed to just sit out"). Since 1.34.0 the confirm opened
+  whenever any member sat out, and a member Anthony put on the Bench in the Multi-Account panel sits out every entry by design,
+  so every entry asked. Now a member out only because it is benched (ChartBridge's `benched: ...` reason) counts as no issue:
+  when every other member takes the entry it is sent at once, as when all take it, and the note says who sat out ("On the
+  bench, sat out: ..."). Any other reason to sit out (its room too small, not connected, a hedge refused) still opens the
+  confirm, as before. ChartBridge still refuses the whole entry if a size changed since the preview.
+
 ## chart 1.39.1 (2026-10-25): the agreed follow-ups (page only, no F5)
 
 Page only, no F5: no ChartBridge file changes (`nt8/*.cs` are the 0.6.9 files, byte for byte), so nothing needs a recompile.
