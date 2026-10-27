@@ -233,6 +233,8 @@ test('feed: a panel\'s htf request goes out on its instrument\'s line; the answe
 /* ---------------- the engine on a stand-in canvas: the Zone, the tools and the orders, the compact labels, the corner */
 function stub(opts) {
   const ops = [];
+  const SW = (opts && opts.stubWidth) || 1078;                  // 1.39.2: a narrower stand-in canvas when asked
+  if (opts && opts.stubWidth) { opts = Object.assign({}, opts); delete opts.stubWidth; }
   class Path2D { rect() {} moveTo() {} lineTo() {} closePath() {} arc() {} }
   const ctx = new Proxy({}, {
     get(t, k) {
@@ -253,7 +255,7 @@ function stub(opts) {
     addEventListener(type, fn) { this.handlers[type] = fn; }, removeEventListener(type) { delete this.handlers[type]; },
     appendChild(c) { return c; }, remove() {}, setAttribute() {}, hasAttribute() { return false; },
     getContext: () => ctx, focus() {}, setPointerCapture() {},
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1078, height: 626, right: 1078, bottom: 626 }),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: SW, height: 626, right: SW, bottom: 626 }),
   }) - 1];
   let frameFn = null;
   global.document = { createElement: element, getElementById: () => null, head: { appendChild() {} } };
@@ -511,4 +513,19 @@ test('1.39.2: a chart\'s own room (its gap dragged) is kept for that chart only;
   assert.equal(LP.create(s).paneRoom('chart-a'), null); assert.equal(LP.create(s).paneRoom('chart-b'), null);
   p.setPaneRoom('chart-a', 300); p.setPaneRoom('chart-a', null);
   assert.equal(LP.create(s).paneRoom('chart-a'), null, 'null drops it');
+});
+
+test('1.39.2 (review): the gap drag stops at the room drawn (80% of the plot), so dragging back right moves it at once', () => {
+  const S = stub({ stubWidth: 520 });                         // a narrow chart: 80% of its plot is under 600 px
+  S.chart.setRoom(5000); S.frame(5);
+  const plotW = S.chart.room().gap / 0.8;                      // the cap drawn: 80% of the plot
+  S.chart.setRoom(120); S.frame(5);
+  const got = []; S.chart.on('room', px => got.push(px));
+  const x = plotW - 60, y = 300;                               // inside the 120 px gap, left of the price axis
+  S.down(x, y); for (let k = 1; k <= 20; k++) S.move(x - k * 60, y); S.up(x - 1200, y); S.frame(3);
+  const cap = Math.floor(plotW * 0.8);
+  assert.equal(got.length, 1);
+  assert.ok(got[0] <= cap && got[0] >= cap - 1, 'saved at the cap, not past it: ' + got[0] + ' (cap ' + cap + ')');
+  assert.equal(S.chart.room().px, got[0]);
+  assert.ok(cap < 600, 'the case that matters: the cap under the 600 px most (' + cap + ')');
 });

@@ -3062,7 +3062,8 @@ function create(container, options) {
       const dx = p.x - drag.x0, dy = p.y - drag.y0;
       if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
       if (drag.zone === 'room') {                                   // 1.37.0: left widens the room, right narrows it; live stays
-        const r = clamp(Math.round(drag.room0 - dx), ROOM_MIN, ROOM_MAX);
+        // 1.39.2: no wider than the room drawn (80% of the plot), so the drag never builds a width it cannot show
+        const r = clamp(Math.round(drag.room0 - dx), ROOM_MIN, Math.max(ROOM_MIN, Math.min(ROOM_MAX, Math.floor(plotW * 0.8))));
         if (r !== o.room) { o.room = r; V.right = followRight(); clampRight(); V.follow = true; }
       } else if (drag.zone === 'plot' || drag.zone === 'pane') {           // the delta pane pans the bars only
         V.right = drag.right0 - dx / V.spacing; clampRight();

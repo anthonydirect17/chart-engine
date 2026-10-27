@@ -21,7 +21,8 @@ Page only, no F5: no ChartBridge file changes, so nothing needs a recompile. Cha
   or Custom, sets every chart to it again and drops the charts' own (Anthony's pick of the two ways).
 - **The room drawn is never wider than 80% of the plot** (`src/chart-engine.js` `roomNow`): the last bar always stays on
   screen, whatever room is set. The room asked for is kept as set (Settings shows it); only how much of a narrow chart it
-  takes is capped.
+  takes is capped. The gap drag stops at that cap too (the review), so it never saves a width it cannot show and dragging
+  back right moves it at once.
 
 ## chart 1.39.1 (2026-10-25): the agreed follow-ups (page only, no F5)
 
