@@ -3148,6 +3148,7 @@ $('wsRoom').addEventListener('click', e => {
   if (b.dataset.v === 'custom') { roomCustomOpen = true; renderGeneral(); $('wsRoomPx').focus(); $('wsRoomPx').select(); return; }
   if (!LP.ROOMS_WS.includes(+b.dataset.v)) return;
   roomCustomOpen = false;
+  prefs.clearPaneRooms();                                  // 1.39.2: a room picked here sets every chart to it again
   prefs.setSetting('room', +b.dataset.v); renderGeneral();
   for (const v of chartViews()) v.pane.refreshSettings();
 });
@@ -3157,13 +3158,12 @@ $('wsRoomPx').addEventListener('input', e => {
   if (String(e.target.value).trim() === '' || !Number.isInteger(n) || n < LP.ROOM_MIN || n > LP.ROOM_MAX) { e.target.setAttribute('aria-invalid', 'true'); return; }
   e.target.removeAttribute('aria-invalid');
   roomCustomOpen = true;
+  prefs.clearPaneRooms();                                  // 1.39.2: as a preset, every chart to it again
   prefs.setSetting('room', n);
   for (const v of chartViews()) v.pane.refreshSettings();
 });
 $('wsRoomPx').addEventListener('change', e => { e.target.removeAttribute('aria-invalid'); renderGeneral(); });
 $('wsRoomPx').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
-/* a chart's gap dragged (live.js tells every chart in this window): Settings shows the new width if it is open */
-window.addEventListener('live-settings-changed', () => renderGeneral());
 $('wsGlide').addEventListener('click', e => {
   const b = e.target.closest('button[data-v]'); if (!b) return;
   prefs.setSetting('glide', b.dataset.v); renderGeneral();

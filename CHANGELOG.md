@@ -1,6 +1,6 @@
 # Changelog
 
-## chart 1.39.2 (2026-10-27): a benched account sits out with no confirm (page only, no F5)
+## chart 1.39.2 (2026-10-27): a benched account sits out with no confirm; a chart's dragged room is its own (page only, no F5)
 
 Page only, no F5: no ChartBridge file changes, so nothing needs a recompile. ChartBridge stays 0.6.9; `minChartBridge` stays
 0.6.2 (COMPAT.json follows the page to 1.39.2).
@@ -12,6 +12,16 @@ Page only, no F5: no ChartBridge file changes, so nothing needs a recompile. Cha
   when every other member takes the entry it is sent at once, as when all take it, and the note says who sat out ("On the
   bench, sat out: ..."). Any other reason to sit out (its room too small, not connected, a hedge refused) still opens the
   confirm, as before. ChartBridge still refuses the whole entry if a size changed since the preview.
+- **Dragging the room right on one chart no longer moves the others** (`live/live.js`, `live/workspace.js`; Anthony
+  2026-10-27: "when I click and drag my minute chart all the charts move together on the drag ... the others should stay
+  fixed"). Since 1.37.0 a drag in the gap right of the last bar set Settings' room for every chart, so on release every chart
+  following live jumped to it. On his NQ 1 day chart, narrower than the 1 minute chart's new room, every bar went off screen
+  and the price scale stayed on a range around 0 with no candles (it fits only bars in view). Now the dragged room is that
+  chart's own (saved per chart, `live-pane-room-v1`); the others and Settings keep theirs. A room picked in Settings, a preset
+  or Custom, sets every chart to it again and drops the charts' own (Anthony's pick of the two ways).
+- **The room drawn is never wider than 80% of the plot** (`src/chart-engine.js` `roomNow`): the last bar always stays on
+  screen, whatever room is set. The room asked for is kept as set (Settings shows it); only how much of a narrow chart it
+  takes is capped.
 
 ## chart 1.39.1 (2026-10-25): the agreed follow-ups (page only, no F5)
 

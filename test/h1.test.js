@@ -482,3 +482,33 @@ test('1.34.0: a planned stop and target say their dollars for the entry\'s contr
   assert.ok(texts().includes('SL -8t -$12'), 'the stop moved: its ticks and dollars with it: ' + texts().join('|'));
   S.chart.destroy();
 });
+
+// 1.39.2 (Anthony 2026-10-27): a daily chart took a minute chart's 600 px room on a plot narrower than that, every bar went off
+// screen and the price scale had nothing to fit. The room is now never wider than 80% of the plot: the last bar stays in view.
+test('1.39.2: the room right is never wider than 80% of the plot, so the last bar stays on screen', () => {
+  const S = stub();
+  const CANVAS = 1078;                                        // the stand-in canvas's width (the plot is that less the price axis)
+  S.chart.setRoom(120); S.frame(5);
+  assert.ok(Math.abs(S.chart.room().gap - 120) <= 1, 'a room that fits is kept as set');
+  S.chart.setRoom(5000); S.frame(5);
+  const g = S.chart.room();
+  assert.equal(g.px, 5000, 'the room asked for is kept (Settings shows it)');
+  assert.ok(g.gap >= CANVAS * 0.6 && g.gap <= CANVAS * 0.8, 'drawn at 80% of the plot, the last bar on screen: ' + Math.round(g.gap) + ' px');
+  S.chart.setRoom(null); S.frame(5);
+  assert.equal(S.chart.room().px, null, 'no room set: the engine\'s right offset in bars, as before');
+});
+
+test('1.39.2: a chart\'s own room (its gap dragged) is kept for that chart only; Settings\' room clears them all', () => {
+  const s = memStorage(), p = LP.create(s);
+  assert.equal(p.paneRoom('chart-a'), null, 'none until dragged');
+  assert.equal(p.setPaneRoom('chart-a', 360), true);
+  assert.equal(LP.create(s).paneRoom('chart-a'), 360, 'kept for that chart');
+  assert.equal(LP.create(s).paneRoom('chart-b'), null, 'the others have none of their own');
+  assert.equal(p.setPaneRoom('chart-a', 700), false, 'outside 40 to 600: refused');
+  assert.equal(p.setPaneRoom('__proto__', 200), false);
+  p.setPaneRoom('chart-b', 200);
+  p.clearPaneRooms();
+  assert.equal(LP.create(s).paneRoom('chart-a'), null); assert.equal(LP.create(s).paneRoom('chart-b'), null);
+  p.setPaneRoom('chart-a', 300); p.setPaneRoom('chart-a', null);
+  assert.equal(LP.create(s).paneRoom('chart-a'), null, 'null drops it');
+});

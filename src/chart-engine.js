@@ -1343,7 +1343,9 @@ function create(container, options) {
     if (h) { ctx.strokeStyle = h; ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.setLineDash([]); ctx.strokeText(text, x, y); }
     ctx.fillStyle = col; ctx.fillText(text, x, y);
   }
-  const roomNow = () => roomBars(o.room, V.spacing, o.rightOffset);
+  /* 1.39.2: never wider than 80% of the plot, so the last bar always stays on screen (a 600 px room on a narrow daily chart
+     pushed every bar off it, and the price scale had nothing to fit) */
+  const roomNow = () => roomBars(o.room === null || o.room === undefined ? o.room : Math.min(o.room, plotW * 0.8), V.spacing, o.rightOffset);
   const followRight = () => last() + roomNow();
   const sessionOf = t => tradeDay(t, o.session.start);
   const isSessionStart = i => i > 0 && o.barSeconds < DAY && sessionOf(bars[i].t) !== sessionOf(bars[i - 1].t);
