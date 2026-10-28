@@ -1,0 +1,128 @@
+name: runner-check
+# Checks the self-hosted Windows runner on HOMESERVER before any real job moves to it (the HOMESERVER coordinator's
+# plan of 2026-10-28, section 4.3). Lives only on the runner-check branch and runs only when a push to that branch
+# changes .github/runner-check/trigger: never on main, never on a pull request, so the merge rule is untouched.
+# The log shows versions, priority classes, variable NAMES and "denied" / "allowed" / "not found" only: no address,
+# no account name, no value.
+on:
+  push:
+    branches: [runner-check]
+    paths: ['.github/runner-check/trigger']
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: [self-hosted, Windows, homeserver]
+    timeout-minutes: 30
+    steps:
+      - name: Job start (UTC), to compare with the other repos' runs for one job at a time
+        shell: powershell
+        run: "'start ' + (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')"
+
+      - uses: actions/checkout@v4
+
+      - name: Git
+        shell: powershell
+        run: git --version
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python
+        shell: powershell
+        run: python --version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Node 22
+        shell: powershell
+        run: node --version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Node 24
+        shell: powershell
+        run: node --version
+
+      - name: PowerShell 7
+        shell: powershell
+        run: |
+          if (-not (Get-Command pwsh -ErrorAction SilentlyContinue)) { 'pwsh: not found'; exit 1 }
+          pwsh -NoProfile -NonInteractive -Command '"pwsh " + $PSVersionTable.PSVersion.ToString()'
+
+      - name: Git's bash (shell bash must be Git for Windows, not WSL)
+        shell: bash
+        run: |
+          bash --version | head -n 1
+          kernel=$(uname -s)
+          echo "uname: $kernel"
+          case "$kernel" in MINGW*|MSYS*) ;; *) echo "not Git's bash"; exit 1 ;; esac
+
+      - name: Priority (this step and its Runner.Worker must be below normal)
+        shell: powershell
+        run: |
+          $me = Get-Process -Id $PID
+          "this step: $($me.PriorityClass)"
+          $id = $PID; $worker = $null
+          for ($i = 0; $i -lt 10 -and $id; $i++) {
+            $p = Get-CimInstance Win32_Process -Filter "ProcessId = $id"
+            if (-not $p) { break }
+            if ($p.Name -ieq 'Runner.Worker.exe') { $worker = Get-Process -Id $id; break }
+            $id = $p.ParentProcessId
+          }
+          if ($worker) { "Runner.Worker: $($worker.PriorityClass)" } else { 'Runner.Worker: not found among the ancestors' }
+          if ($me.PriorityClass -ne 'BelowNormal' -or -not $worker -or $worker.PriorityClass -ne 'BelowNormal') { exit 1 }
+
+      - name: Environment (names only)
+        shell: powershell
+        run: |
+          $names = @(Get-ChildItem env: | Where-Object { $_.Name -match '^(THEDESK_|HOME_CONTROL_|GOVEE_|RING_)' } |
+                     ForEach-Object { $_.Name } | Sort-Object)
+          "matching names: $($names.Count)"
+          $names | ForEach-Object { "  $_" }
+          if ($names.Count) { exit 1 }
+
+      - name: Folders the runner account must not read
+        shell: powershell
+        run: |
+          $bad = 0
+          foreach ($d in 'C:\TheDesk', 'C:\Apps', 'C:\Handoff', 'C:\MarketData') {
+            try {
+              Get-ChildItem -LiteralPath $d -Force -ErrorAction Stop | Select-Object -First 1 | Out-Null
+              "$d : allowed"; $bad++
+            } catch [System.UnauthorizedAccessException] { "$d : denied" }
+              catch [System.Management.Automation.ItemNotFoundException] { "$d : not found" }
+              catch { if ($_.Exception -is [System.UnauthorizedAccessException] -or $_.CategoryInfo.Category -eq 'PermissionDenied') { "$d : denied" } else { "$d : unclear ($($_.CategoryInfo.Category))"; $bad++ } }
+          }
+          if ($bad) { exit 1 }
+
+      - name: Plant two marker files for the clean-up check (the next job must not find them)
+        shell: powershell
+        run: |
+          $name = "runner-check-${{ github.run_id }}.txt"
+          Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP $name) -Value x
+          Set-Content -LiteralPath (Join-Path $env:TEMP $name) -Value x
+          'planted in RUNNER_TEMP and TEMP'
+
+      - name: Job end (UTC)
+        if: always()
+        shell: powershell
+        run: "'end ' + (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')"
+
+  clean-up:
+    needs: check
+    runs-on: [self-hosted, Windows, homeserver]
+    timeout-minutes: 10
+    steps:
+      - name: The first job's marker files are gone
+        shell: powershell
+        run: |
+          $name = "runner-check-${{ github.run_id }}.txt"
+          $left = 0
+          foreach ($v in 'RUNNER_TEMP', 'TEMP') {
+            $dir = [Environment]::GetEnvironmentVariable($v)
+            if (Test-Path -LiteralPath (Join-Path $dir $name)) { "$v : marker still there"; $left++ } else { "$v : clean" }
+          }
+          if ($left) { exit 1 }
