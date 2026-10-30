@@ -1094,8 +1094,9 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
   day it ends on), the front month the chart uses plus any other contract of that root with fills in that session, the last 5
   sessions not taken yet at the start (the catch-up) and each session from 17:05 New York. Never a session that has not closed.
 - **The request:** `BarsRequest(instrument, from, to)`, 1 tick, `MarketDataType.Last`, the instrument's trading hours,
-  `MergePolicy.DoNotMerge`, from the session open's date (12:00 AM, NinjaTrader's time zone: NinjaTrader gives whole trading days,
-  so the 18:00 open is in it) to the session's close (never past now). Through the 0.3.5 gate as a bars job (`1s <session>
+  `MergePolicy.DoNotMerge`, from the session's open itself (18:00 New York, in NinjaTrader's time zone; Sunday 11-01 build: until
+  then it asked from 12:00 AM of the open's date, and NinjaTrader answered with the whole session before as well) to the session's
+  close (never past now). Through the 0.3.5 gate as a bars job (`1s <session>
   <contract>` in `/diag` `books.gate`), so the same rules hold: queued only when the gate is idle (no window, backfill, last trades
   or page load out or to come), never beside a chart load, and a request NinjaTrader does not answer frees the gate at its limit
   (180 s here; its late answer is dropped). **Only from 16:15 to 18:00 New York on a weekday, and on the weekend while the market is
@@ -1151,11 +1152,81 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
 - **`/diag` `bars.oneSecond`:** `on`, `state`, `roots`, `lastSent` (per contract), `waitingSets`, `waitingParts`, `setAside`,
   `deskHasNo1s`, `gaveUp`, `lastBuild` (trades, seconds, messages, the trades of the answer outside the session that were left out,
   the request's from and to in NinjaTrader's time, the sides' method and counts, the time on NinjaTrader's thread) and `error`.
-  The request starts at the open's date, 12:00 AM: NinjaTrader's answer may hold the session before too (whole trading days); those
-  trades are left out by time and counted in `lastBuild` ("N trades outside the session left out"). A large count on the first run
-  shows NinjaTrader gave the day before as well (harmless: nothing is counted twice).
+  Trades in NinjaTrader's answer outside the session are left out by time and counted in `lastBuild` ("N trades outside the
+  session left out"). Since the request starts at the open (Sunday 11-01 build) that count should be small; a large one shows
+  NinjaTrader still gave the day before (harmless: nothing is counted twice). `lastSent` lists each contract The Desk took a whole
+  set of, MNQ as well as NQ.
 - **The 1-minute bars are unchanged:** the same requests, messages and queue as 0.3.7 to 0.6.8, byte for byte (harness: the same
   session with the 1 second bars off and on gives the same 1-minute message).
+
+### The NQ tick file to The Desk (Sunday 11-01 build)
+
+Anthony's decisions of 2026-10-29: one NQ tick file per session is the only market data kept, and everything is built from it (1
+second bars, 1 minute bars, the evening profile tape, the master day); MNQ trades take their bars from NQ's ticks (no MNQ tick
+file). This release adds; it retires nothing (the 1-minute request, the evening profile export and the 1 second pull stay).
+`nt8/ChartBridgeTicks.cs`. On with `bars = on`; `tickFile = off` in `config.txt` turns only it off; `tickFileMaxMB` (default 2048,
+at least 16) bounds the `ticks/` folder next to `config.txt`.
+
+- **Live capture.** Every NQ trade ChartBridge receives (`OnMarketData`, after the pages, the tape counters and the forming bars
+  took it, in its own `try`) goes on a bounded queue (200,000 trades): one counter and one enqueue, no lock the order lane or the
+  chart feed holds, no file, no clock. A full queue **drops the trade and counts it** (`droppedQueue`); it never waits. A thread of
+  its own (`ChartBridge tick file`, below normal priority) writes the queue every 250 ms to `ticks/<session>_<contract>.raw`, one
+  line a trade, `u,p,v,s,m`: `u` NinjaTrader's time of the trade in UTC ms, `p` price, `v` volume, `s` side (1 buy, -1 sell, 0 none,
+  the live side rule), `m` the side's method (0 none, 2 bidAsk, 3 tickRule). The session is the CME session the trade's New York
+  time is in (18:00 to 17:00, dated the day it ends); a trade in the 17:00 to 18:00 break is left out and counted (`outside`). Over
+  `tickFileMaxMB` a batch is dropped and counted (`droppedDisk`). `<same>.state` starts `run <12 hex>`, `tick <size>`, `contract`,
+  `session`. No request goes to NinjaTrader for the capture, at any hour.
+- **Chunks** (point 3: The Desk builds 1 second bars from them as they land). A second thread (`ChartBridge tick chunks`, below
+  normal) cuts each raw file every 3 minutes, from the last cut to the last whole line, into chunks of at most 20,000 trades, and
+  notes each cut (`cut <seq> <from byte> <to byte> <trades> <lost> <gaps> <bidAsk> <tickRule> <none> .`) in `<same>.state`, so a
+  chunk sent again is read from the same bytes and is the same message. It posts the chunks not taken yet, oldest first, to
+  `deskUrl` + `/api/ticks/chunk` (10 s each, never through a proxy), and notes `sent <seq>`. `400`, `413` or `422`: `aside <seq>`
+  (its trades stay in the raw file; the final pull covers them). `404` (a Desk without the route): every chunk waits, offered again
+  every 30 minutes. Anything else: tried again in 10 seconds. A restart carries on (same run, the next seq).
+
+  ```json
+  {"v":1,"source":"chartbridge","bridge":"0.6.9","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+   "session":"2026-10-30","run":"a1b2c3d4e5f6","seq":12,"count":1834,"volume":2301,
+   "first":1793397600123,"last":1793397779950,"lost":0,"gaps":0,
+   "sides":{"bidAsk":1700,"tickRule":130,"none":4},"cols":["u","p","v","s"],"ticks":[[1793397600123,25000.25,1,1]]}
+  ```
+
+  `lost`: trades dropped (queue or disk) since the chunk before; `gaps`: feed drops while the market was open since the chunk
+  before. The Desk keys a chunk by contract, session, `pc`, `run` and `seq` and ignores one sent again.
+- **The final file** (point 4). On the bars worker, after the pass's 1-minute and 1 second bars and only when the 1 second bars
+  asked nothing that pass, only in the 1 second bars' window (a request starts 16:15 to 17:50 New York on weekdays, on Saturday, and
+  Sunday before 17:50; never in trading hours), for each session with a raw file that has closed and is not done: one
+  `BarsRequest` through the 0.3.5 gate (1 tick, Last, the instrument's trading hours, `DoNotMerge`, 180 s), from the session's
+  open to its close (NinjaTrader's time). The answer is read once on NinjaTrader's thread (sides by the bid and ask stored with each
+  trade, else the tick rule). **The check**, second by second (UTC): `exact` every second has the same trades and volume live and
+  in history; `filled` history has more in some seconds (the live capture missed them: a disconnect, a late start), never fewer;
+  `failed` live has a trade or volume in a second history lacks, or history has none. The history is the master when the check
+  passes. The day is written whole to `ticks/<same>.day.jsonl` (parts of at most 20,000 trades) and sent to `deskUrl` +
+  `/api/ticks/day` in the same window as the 1 second bars' sends; progress in `<same>.day.sent`; `400`, `413` or `422` sets the day
+  aside (`.day.jsonl.refused`). A failed day is sent too, marked `failed`, so The Desk shows it. Done days: `ticks/tickdays.txt`
+  (`<session contract>`, check, stored, packed): never pulled again. A failure is tried again after 15 minutes, 3 times, then not
+  until the next start.
+
+  ```json
+  {"v":1,"source":"chartbridge","bridge":"0.6.9","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+   "session":"2026-10-30","set":"0a1b2c3d4e5f","part":1,"parts":48,"setTicks":951234,"setVolume":1203456,
+   "first":1793397600001,"last":1793480399990,
+   "check":{"status":"filled","liveTicks":950001,"liveVolume":1202001,"histTicks":951234,"histVolume":1203456,
+            "secondsLiveMissed":3,"ticksLiveMissed":1233,"secondsHistShort":0,"ticksHistShort":0,"liveLost":0,"liveGaps":1,
+            "detail":[{"t":1793420000000,"live":0,"hist":12}]},
+   "sides":{"method":"mixed","bidAsk":800000,"tickRule":151234,"none":0},
+   "cols":["u","p","v","s"],"ticks":[[1793397600001,25000.25,1,1]],"complete":true}
+  ```
+- **Deletion.** The raw file and its state are deleted only when the check passed and The Desk's answer to the day's last part says
+  `"stored":true` and `"packed":true`. The packed format is Anthony's open question, so The Desk answers `"packed":false` and the
+  raw is kept; a failed day keeps its raw until Anthony rules. `/diag` `tickFile.rawOld` lists raw files older than 7 days.
+- **Which PC sends** (Anthony 2026-10-28: automatic, WORK wins): every PC with the tick file on captures and sends what it receives
+  under its `pc` name (`config.txt` `pc`, else the Windows computer name). The Desk keeps WORK's and flags the other; it knows WORK
+  only by the name `WORK`.
+- **`/diag` `tickFile`:** `on`, `capturing`, `queue`, `queueMax`, `droppedQueue`, `droppedDisk`, `outside`, `written`,
+  `feedDrops`, `diskMB`, `maxMB`, `files` (per session and contract: `bytes`, `chunks`, `sent`, `aside`, `ageDays`), `lastSent`
+  (per contract: the session and seq of the latest chunk taken), `days` (per session and contract: `check`, `stored`, `packed`),
+  `rawOld`, `rawOldNote`, `dayState`, `lastDay`, `deskHasNoTicks`, `lastError`.
 
 ## Orders (protocol v2, Step 2: trading from the chart)
 

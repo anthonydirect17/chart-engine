@@ -140,6 +140,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeOrders.ResetConfig();
             AllowOrigins = new List<string>();
             ChartBridgeBars.ResetConfig();
+            ChartBridgeTicks.ResetConfig();   // the NQ tick file: on with bars = on unless config.txt has tickFile = off
             ChartBridgeStops.ResetConfig();   // 0.6.6: the stop record follows postFills unless config.txt has postStops
             ChartBridgeOrderRecord.ResetConfig();   // 0.6.9: the order record follows postFills unless config.txt has postOrders
             ChartBridgeSwitches.Reset();   // 0.4.0 accounts: the v3 switches, all ON unless config.txt turns one off (Anthony 2026-10-07)
@@ -176,6 +177,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (ChartBridgeBot.ReadConfig(key, val)) { }    // 0.4.0 bot: bot, botRoot, botLibrary (ChartBridgeBot.cs)
                 else if (ChartBridgeAgents.ReadConfig(key, val)) { }   // 0.5.0 agents: agents = manrae (ChartBridgeAgents.cs)
                 else if (ChartBridgeClock.ReadConfig(key, val)) { }   // 0.5.6: timeServer = time.windows.com, or off (ChartBridgeClock)
+                else if (ChartBridgeTicks.ReadConfig(key, val)) { }   // tickFile = off, tickFileMaxMB (ChartBridgeTicks.cs)
                 else if (ChartBridgeBars.ReadConfig(key, val)) { }   // bars, barsRoots, pc (ChartBridgeBars.cs)
                 else if (ChartBridgeOrders.ReadConfig(key, val)) { }   // trading, tradeAccounts, maxQty.<ROOT>, maxTicksAway, maxBracketTicks, merge, orderTypes, strategies
                 else if (Array.IndexOf(ChartBridgeSwitches.Names, key) >= 0) { }   // accountChecks, cancelFromList: read by ChartBridgeSwitches.Note above
@@ -2235,6 +2237,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
                     StartListening(cts.Token, 0);
                     ChartBridgeBars.Start();   // daily bars to The Desk, when bars = on (its own low-priority thread)
+                    ChartBridgeTicks.Start();  // the NQ tick file, when bars = on and not tickFile = off (two low-priority threads of its own)
                     ChartBridgeCopier.Start();   // 0.4.0 copier: when copier = on (its own thread and 1 s timer); starts stood down
                     try { ChartBridgeBranches.Poll(); } catch (Exception ex) { Log("daily reset error: " + ex.Message); }   // 0.6.3 (audit C1): a 17:00 ET reset missed while off runs now, once every branch is loaded
                     ChartBridgeClock.Start();    // 0.5.6: this PC's clock against a time server, every 5 minutes on its own thread (measures only)
@@ -2264,6 +2267,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeBot.Stop();   // 0.4.0 bot
                 ChartBridgeAgents.Stop();   // 0.5.0 agents
                 ChartBridgeBars.Stop();
+                ChartBridgeTicks.Stop();    // the NQ tick file: capture off, its threads end, a post in flight aborted
                 ChartBridgeCopier.Stop();   // 0.4.0 copier:
                 ChartBridgeClock.Stop();    // 0.5.6: the time check
                 try { if (accountTimer != null) accountTimer.Dispose(); } catch (Exception) { }
@@ -2824,6 +2828,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // 0.4.0: tape timing counters (/diag "tape"), after the trade went out, on their own: never stop a trade (ChartBridgeTape.cs)
                 try { ChartBridgeTape.OnPrint(root, book.Tick, ChartBridgeTime.UtcMs(utc), rx, t, e.Price); }
                 catch (Exception tx) { ChartBridgeTape.Failed(tx); }
+                // the NQ tick file (ChartBridgeTicks.cs): one enqueue on a bounded queue, never a wait (a full queue drops and counts)
+                try { ChartBridgeTicks.OnTrade(root, e.Instrument != null ? e.Instrument.FullName : null, book.Tick, ChartBridgeTime.UtcMs(utc), e.Price, e.Volume, side, method); }
+                catch (Exception) { }
                 HtfOnTrade(root, e.Time, t, e.Price, e.Volume);   // 0.3.7: the forming 4h, 1D and 1W bars, from this trade (no request)
                 ChartBridgeBot.OnTick(json);   // 0.4.0 bot: every live trade to the bot (one read when none is connected)
                 ChartBridgeAgents.OnTick(root, json);   // 0.5.0 agents: every live trade to each agent (its subscribed root came through the seam above)
@@ -4428,6 +4435,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Interlocked.Exchange(ref feedDown, 1);   // a session that starts before the feed is back is not whole
             if (MarketClosedNow()) { Log("data feed: " + why + " while the market is closed; no trade was missed"); return; }   // S-B
+            ChartBridgeTicks.NoteFeedDrop();   // the NQ tick file's next chunk says the capture may have a hole
             HtfFeedDropped(root);   // 0.3.7: the forming higher-timeframe bars miss trades: asked again at the next request
             List<RootBook> list; lock (Books) list = Books.Values.Where(b => root == null || b.Root == root).ToList();
             double et = ChartBridgeTime.EtSeconds(DateTime.UtcNow);
@@ -5707,6 +5715,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"stops\":").Append(ChartBridgeStops.DiagJson());   // 0.6.6: the stop record to The Desk
             b.Append(",\"orderRecord\":").Append(ChartBridgeOrderRecord.DiagJson());   // 0.6.9: the order record to The Desk, and the decision ids
             b.Append(",\"bars\":").Append(ChartBridgeBars.DiagJson());   // 0.3.6: daily 1-minute bars to The Desk
+            b.Append(",\"tickFile\":").Append(ChartBridgeTicks.DiagJson());   // the NQ tick file to The Desk (ChartBridgeTicks.cs)
             b.Append(",\"seams\":").Append(SeamsJson());   // 0.3.3: where each load's backfill met the live trades
             b.Append(",\"historyNotes\":").Append(HistoryNotesJson());   // 0.6.8: the history path's notes (also history.log)
             b.Append(",\"sides\":").Append(SidesJson());

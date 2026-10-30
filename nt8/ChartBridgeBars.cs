@@ -659,7 +659,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             catchUpDone = true;
             waitingForGate = null;
             state = "idle";
-            Plan1s(stopping, nowEt, sessions);   // 0.6.9: then the 1 second bars, never in regular trading hours
+            bool asked1s = Plan1s(stopping, nowEt, sessions);   // 0.6.9: then the 1 second bars, never in regular trading hours
+            if (!asked1s && !stopping()) ChartBridgeTicks.PlanDay(stopping);   // the NQ tick file's final pull: one request a pass at most, the same window
         }
 
         // ---------------------------------------------------------- 0.6.9: the 1 second bars' worker part
@@ -669,15 +670,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static volatile string state1s = "off", lastBuild1s = "", error1s = "";
         public static string Key1s(string key) { return "1s " + key; }   // the retry records' key (never the same as a 1-minute key)
 
-        private static void Plan1s(Func<bool> stopping, DateTime nowEt, List<DateTime> sessions)
+        // True when it asked NinjaTrader (or waits at the gate) this pass: then the tick file's final pull waits for the next pass.
+        private static bool Plan1s(Func<bool> stopping, DateTime nowEt, List<DateTime> sessions)
         {
-            if (!OneSecondOn) { state1s = "off"; return; }
+            if (!OneSecondOn) { state1s = "off"; return false; }
             nowEt = NowEt();   // review of #71 (MEDIUM 2): the pass's 1-minute requests may have taken minutes: the clock now, not the pass's start
-            if (!In1sStartWindow(nowEt)) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend (a request starts by 17:50)"; return; }
+            if (!In1sStartWindow(nowEt)) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend (a request starts by 17:50)"; return false; }
             string[] roots = Roots1s.Where(r => Roots.Contains(r)).ToArray();   // only roots whose 1-minute bars go too (barsRoots)
             foreach (BarsJob j in Wanted(sessions, roots, FillJobs(sessions)))
             {
-                if (stopping()) return;
+                if (stopping()) return true;
                 if (ChartBridgeBars1sQueue.IsDone(j.Key) || ChartBridgeBars1sQueue.IsWaiting(j.Key) || ChartBridgeBars1sQueue.IsRefused(j.Key)) continue;
                 DateTime notBefore;
                 string k = Key1s(j.Key);
@@ -686,12 +688,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (GaveUp.Contains(k)) continue;
                     if (RetryAt.TryGetValue(k, out notBefore) && UtcNow() < notBefore) continue;
                 }
-                if (!In1sStartWindow(NowEt())) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend (a request starts by 17:50)"; return; }   // and again right before it
+                if (!In1sStartWindow(NowEt())) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend (a request starts by 17:50)"; return false; }   // and again right before it
                 Outcome o = Fetch1s(j, stopping);
                 if (o == Outcome.Done) { try { ChartBridgeBars1sQueue.Flush(stopping); } catch (Exception ex) { Note1s("1 second bars send error: " + ex.Message); } }
-                return;   // one a pass
+                return true;   // one a pass
             }
             state1s = "idle";
+            return false;
         }
 
         private static void Note1s(string text) { error1s = text; ChartBridgeServer.Log(text); }
@@ -726,7 +729,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             DateTime nowUtc = UtcNow(), openUtc, closeUtc;
             SessionUtc(j.Session, out openUtc, out closeUtc);
             TimeZoneInfo ntZone = NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo;
-            DateTime fromNt = TimeZoneInfo.ConvertTimeFromUtc(openUtc, ntZone).Date;   // whole trading days from 12:00 AM: the 18:00 open is in it
+            // Sunday 11-01 (item 11): from the session's open itself, NinjaTrader's time. From 12:00 AM of the open's date NinjaTrader gave the
+            // whole session before as well (its whole trading days); the rows are cut to the session by time either way.
+            DateTime fromNt = TimeZoneInfo.ConvertTimeFromUtc(openUtc, ntZone);
             DateTime toNt = TimeZoneInfo.ConvertTimeFromUtc(closeUtc, ntZone);
             DateTime nowNt = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), ntZone);
             if (toNt > nowNt) toNt = nowNt;
