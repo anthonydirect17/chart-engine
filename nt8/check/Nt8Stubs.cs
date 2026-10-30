@@ -183,9 +183,15 @@ namespace NinjaTrader.Cbi
         public Order CreateOrder(Instrument instrument, OrderAction action, OrderType orderType, OrderEntry orderEntry, TimeInForce timeInForce, int quantity,
                                  double limitPrice, double stopPrice, string oco, string name, DateTime gtd, CustomOrder customOrder)
         {
-            return new Order { Account = this, Instrument = instrument, OrderAction = action, OrderType = orderType, Quantity = quantity, LimitPrice = limitPrice,
+            Order made = new Order { Account = this, Instrument = instrument, OrderAction = action, OrderType = orderType, Quantity = quantity, LimitPrice = limitPrice,
                                StopPrice = stopPrice, Oco = oco, Name = name, OrderState = OrderState.Initialized, TimeInForce = timeInForce };
+            Action<Order> h = OnCreate;
+            if (h != null) h(made);
+            return made;
         }
+        // 0.6.10: the harness may report the order the moment it is made, as NinjaTrader does (an OrderUpdate, Initialized,
+        // before CreateOrder returns); null (the default) reports nothing, as before.
+        public Action<Order> OnCreate;
         public void Submit(IEnumerable<Order> orders) { foreach (Order o in orders) { Calls.Add("submit " + o.Name + " " + o.OrderAction + " " + o.OrderType + " " + o.Quantity + " L" + o.LimitPrice + " S" + o.StopPrice + " oco:" + o.Oco); o.OrderState = OrderState.Working; Orders.Add(o); } Broker("submit", orders); }
         public void Change(IEnumerable<Order> orders) { foreach (Order o in orders) Calls.Add("change " + o.Name + " L" + o.LimitPriceChanged + " S" + o.StopPriceChanged + " Q" + o.QuantityChanged); Broker("change", orders); }
         public void Cancel(IEnumerable<Order> orders) { foreach (Order o in orders) Calls.Add("cancel " + o.Name); Broker("cancel", orders); }
