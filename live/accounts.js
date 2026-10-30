@@ -539,6 +539,9 @@ function deskSendLines(diag) {
   const d = diag && typeof diag === 'object' ? diag : null;
   if (!d) return out;
   const n = v => (Number.isInteger(v) && v > 0 ? v : 0);
+  const desk0 = d.desk && typeof d.desk === 'object' ? d.desk : null;
+  /* C-C: postFills is off by default in config.txt (the default stays); only false strictly, never a guess when /diag says nothing */
+  if (desk0 && desk0.postFills === false) out.warn.push('This PC does not send fills to The Desk: its trades are missing from The Desk\'s stats.');
   const file = (x, f) => (x && typeof x.rejectedFile === 'string' && /^[A-Za-z0-9_.-]{1,60}$/.test(x.rejectedFile) ? x.rejectedFile : f);
   const desk = d.desk && typeof d.desk === 'object' ? d.desk : null, rec = d.orderRecord && typeof d.orderRecord === 'object' ? d.orderRecord : null;
   const kept = (x, what, f) => {

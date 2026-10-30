@@ -49,6 +49,9 @@ not list is refused and the page shows the refusal once.
   page reads `/diag` each minute and says how many and where. `test/desk-send.test.js`, `nt8/check/RecordHarness.cs`.
 - **A group's trade tags go only to the members that trade** (C-D, `live/workspace.js` `groupTagMembers`): never a benched member,
   never a copier follower (on or off). `test/group-tags.test.js`.
+- **The Account page says when this PC sends no fills to The Desk** (C-C): `postFills` is off by default in `config.txt` (the default
+  stays); the page reads `/diag` `desk.postFills` and, when it is off, says above the rows "This PC does not send fills to The Desk:
+  its trades are missing from The Desk's stats." `test/desk-send.test.js`.
 - Tests: `test/lifecycle.test.js` (the pure parts, the feed's steps against a fake ChartBridge, the PUT); harness cases in
   `nt8/check/GroupsHarness.cs`, `CopierHarness.cs`, `AccountsHarness.cs` and `AgentHarness.cs`. `nt8/PROTOCOL.md` "The account
   lifecycle (0.6.10)"; `CHART_STYLE.md` for the new controls.

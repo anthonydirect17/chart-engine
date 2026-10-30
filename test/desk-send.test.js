@@ -21,6 +21,14 @@ test('1.40.0 C-B: what The Desk did not store, counted with the file it is kept 
   assert.deepEqual(AC.deskSendLines({ orderRecord: { on: false, rejectedByDesk: 3 } }).warn, [], 'the order record off: nothing about it');
 });
 
+test('1.40.0 C-C: postFills off on this PC: a plain warning first; on, or /diag silent: none (the default is not changed)', () => {
+  assert.deepEqual(AC.deskSendLines({ desk: { postFills: false, rejectedByDesk: 0 } }).warn, ['This PC does not send fills to The Desk: its trades are missing from The Desk\'s stats.']);
+  assert.equal(AC.deskSendLines({ desk: { postFills: false, rejectedByDesk: 1 } }).warn[0], 'This PC does not send fills to The Desk: its trades are missing from The Desk\'s stats.');
+  assert.deepEqual(AC.deskSendLines({ desk: { postFills: true } }).warn, []);
+  assert.deepEqual(AC.deskSendLines({ desk: {} }).warn, [], 'not said: nothing guessed');
+  assert.match(read('nt8/ChartBridge.cs'), /public static bool PostFills = false;/, 'the default stays off');
+});
+
 test('0.6.10 C-B: ChartBridge keeps each item The Desk rejects inside a 200, before the batch leaves the queue', () => {
   const cb = read('nt8/ChartBridge.cs'), rec = read('nt8/ChartBridgeOrderRecord.cs');
   assert.match(cb, /NoteRejected\(text, batch\);[^\n]*\n\s*Remove\(batch\);/);
