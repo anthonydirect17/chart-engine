@@ -2063,7 +2063,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             int n; lock (Sync) n = PendingList.Count;
             return "{\"postFills\":" + (ChartBridgeConfig.PostFills ? "true" : "false") + ",\"deskUrl\":" + CbJson.Str(ChartBridgeConfig.DeskUrl) +
                 ",\"waiting\":" + n + ",\"lastSendFailed\":" + (lastFailed ? "true" : "false") + ",\"lastError\":" + CbJson.Str(lastError) +
-                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + "}";
+                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + ",\"rejectedFile\":\"rejected_fills.jsonl\"}";
         }
 
         private static void Remove(string[] batch)
@@ -2109,9 +2109,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string text;
                     using (HttpWebResponse res = (HttpWebResponse)await call)
                     using (StreamReader r = new StreamReader(res.GetResponseStream(), Encoding.UTF8)) text = r.ReadToEnd();
+                    NoteRejected(text, batch);   // 0.6.10 (C-B): each one The Desk rejected inside its 200, kept before the batch goes
                     Remove(batch);
                     if (batch.Length > 1) batchSize = FullBatch;   // while hunting a bad fill, stay at one per request
-                    NoteRejected(text);
                     lock (Sync) more = PendingList.Count > 0;
                     if (lastFailed) { ChartBridgeServer.Log("The Desk is taking fills again."); lastFailed = false; }
                     lastError = "";   // /diag: no stale error once a send has gone through
@@ -2149,8 +2149,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             lastFailed = true;
         }
 
-        // The Desk answers 200 with a "rejected" list for fills it could not store: say so once per answer.
-        private static void NoteRejected(string text)
+        // The Desk answers 200 with a "rejected" list for fills it could not store: say so once per answer. 0.6.10 (Anthony 2026-10-30,
+        // C-B): each rejected fill is also appended to rejected_fills.jsonl with The Desk's reason, as the 400/422 path keeps a bad one, so
+        // none is dropped unseen; /diag desk.rejectedByDesk counts them and desk.rejectedFile names the file.
+        private static void NoteRejected(string text, string[] batch)
         {
             Match m = RejectedRx.Match(text ?? "");
             if (!m.Success || m.Groups[1].Value.Trim().Length == 0) return;
@@ -2158,7 +2160,32 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (n == 0) return;
             Interlocked.Add(ref rejectedByDesk, n);
             Match why = ReasonRx.Match(m.Groups[1].Value);
-            ChartBridgeServer.Log("The Desk could not store " + n + " fill(s)" + (why.Success ? ", for example: " + why.Groups[1].Value : ""));
+            int kept = KeepRejected(m.Groups[1].Value, batch, SetAsideFile);
+            ChartBridgeServer.Log("The Desk could not store " + n + " fill(s)" + (why.Success ? ", for example: " + why.Groups[1].Value : "") + "; " + kept + " kept in rejected_fills.jsonl with its reason");
+        }
+
+        private static readonly Regex RejectedItemRx = new Regex("\\{(?:[^{}\"]|\"(?:[^\"\\\\]|\\\\.)*\")*\\}");
+        private static readonly Regex IndexRx = new Regex("\"index\"\\s*:\\s*([0-9]+)");
+        // 0.6.10 (C-B): each item of The Desk's "rejected" list ({index, reason, ...}) whose index names an item of the batch sent: that
+        // item, as it was sent, with "desk_reason" (The Desk's words) put first, one line each in file. Returns how many were kept.
+        internal static int KeepRejected(string rejectedList, string[] batch, string file)
+        {
+            List<string> lines = new List<string>();
+            foreach (Match item in RejectedItemRx.Matches(rejectedList ?? ""))
+            {
+                Match ix = IndexRx.Match(item.Value);
+                int i;
+                if (!ix.Success || !int.TryParse(ix.Groups[1].Value, out i) || i < 0 || i >= batch.Length) continue;
+                string sent = batch[i] ?? "";
+                if (!sent.StartsWith("{")) continue;
+                Match why = ReasonRx.Match(item.Value);
+                string reason = why.Success ? Regex.Unescape(why.Groups[1].Value) : "no reason given";
+                lines.Add("{\"desk_reason\":" + CbJson.Str(reason) + (sent.Length > 2 ? "," + sent.Substring(1) : "}"));
+            }
+            if (lines.Count == 0) return 0;
+            try { File.AppendAllLines(file, lines); }
+            catch (Exception ex) { ChartBridgeServer.Log("could not keep the rejected items in " + Path.GetFileName(file) + ": " + ex.Message); return 0; }
+            return lines.Count;
         }
     }
 

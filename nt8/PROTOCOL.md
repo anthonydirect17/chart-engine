@@ -977,7 +977,7 @@ JSON: `version`; `network` (0.3.1: see Network access); `pin` (0.3.2: `{"set": b
 re-anchored; the clock is rechecked every 5 seconds and follows the PC clock when they differ by more
 than 50 ms); `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
 session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`, `lastSendFailed`,
-`lastError`, `setAside`, `rejectedByDesk`); `bars` (0.3.6, see Daily bars to The Desk: `enabled`, `state` (`off`, `starting: ...`, `idle`,
+`lastError`, `setAside`, `rejectedByDesk`, 0.6.10 `rejectedFile`); `bars` (0.3.6, see Daily bars to The Desk: `enabled`, `state` (`off`, `starting: ...`, `idle`,
 `asking NinjaTrader: <session contract>`, `waiting for the gate: <why>`, `waiting: regular trading hours ...`, `waiting:
 NinjaTrader has no price connection`, `stopped`), `waitingForGate` (why the gate is not idle for a bars request, or null),
 `roots`, `lastSent` (the latest session The Desk took, per contract), `waiting` (messages queued in `pending_bars.jsonl`),
@@ -1017,7 +1017,10 @@ With `postFills = true` in `config.txt`, every fill is also sent to The Desk's `
 `copier`, when ChartBridge knows who placed the fill's order; no `by` key otherwise. See "Agent channel".) Fills
 wait in `pending_fills.jsonl` next to `config.txt` until The Desk accepts them, so a restart or The
 Desk being closed loses nothing; The Desk ignores duplicates. A request gives up after 10 seconds; a fill
-The Desk refuses as malformed is set aside in `rejected_fills.jsonl` so it never blocks the queue. Fills from every watched account are
+The Desk refuses as malformed is set aside in `rejected_fills.jsonl` so it never blocks the queue. 0.6.10 (Anthony 2026-10-30, C-B): a fill
+The Desk answers `200` for but lists in its `rejected` list (`{index, reason, ...}`) is appended there too, as it was sent with The
+Desk's words first (`{"desk_reason":"...", ...the fill...}`), before the batch leaves the queue; `/diag` `desk.rejectedByDesk` counts
+them since the start and `desk.rejectedFile` names the file, and the Account page says so (chart 1.40.0). Fills from every watched account are
 sent: The Desk's Accounts menu decides which accounts count. ChartBridge sends no commission (NinjaTrader's
 figure is its own commission template, not what was charged).
 0.6.9: a fill of a group entry's order (its entry or a leg) adds `decision_id` ("d" and 12 hex characters) after `order_id` and
@@ -3893,14 +3896,15 @@ NinjaTrader repeats included).
   past that the oldest are dropped (on the timer; the event thread only drops its own oldest snapshot past 20,000), counted in `/diag`
   and said once. What ChartBridge remembers per order (to tell a change from a repeat): the last 20,000 ended orders, the oldest
   forgotten one at a time, and an order with no end for 7 days is forgotten.
-- **The Desk's answers:** `2xx` takes the batch (the answer's `rejected` list is logged, as for stops), and the next batch may be twice
+- **The Desk's answers:** `2xx` takes the batch (the answer's `rejected` list is logged, as for stops; 0.6.10, C-B: each event in it is
+  also appended to `rejected_orders.jsonl` as sent, The Desk's reason first in `desk_reason`), and the next batch may be twice
   as big (up to 500). `400`, `413` or `422`: the batch is halved until the bad event goes alone, then set aside in
   `rejected_orders.jsonl`. `404` (a Desk without `POST /api/order-events`, today's): every
   event stays (memory and file) and is offered again every 5 minutes (said once), so nothing is lost before The Desk's side ships.
   Anything else: tried again on the next 10 seconds. The Desk stores an event once (`start`, `seq` and `order_id` name it), so a resend
   is safe.
 - **`/diag` `orderRecord`:** `on`, `deskHasNoOrderRecord`, `dropped`, `waiting`, `seen`, `queued`, `sent`, `observeMeanUs` (the event
-  thread's mean cost), `lastSendFailed`, `lastError`, `setAside`, `rejectedByDesk`, `start`, `decisions` (`made`, `ordersNoted`,
+  thread's mean cost), `lastSendFailed`, `lastError`, `setAside`, `rejectedByDesk`, `rejectedFile` (0.6.10), `start`, `decisions` (`made`, `ordersNoted`,
   `kept`).
 - Nothing here places, changes or cancels an order, and nothing the pages get changes.
 

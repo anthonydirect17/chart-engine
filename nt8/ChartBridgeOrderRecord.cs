@@ -498,7 +498,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ",\"seen\":" + Interlocked.Read(ref observed) + ",\"queued\":" + Interlocked.Read(ref queuedEvents) + ",\"sent\":" + Interlocked.Read(ref sent) +
                 ",\"observeMeanUs\":" + CbJson.Num3(ObserveMeanUs()) +
                 ",\"lastSendFailed\":" + (lastFailed ? "true" : "false") + ",\"lastError\":" + CbJson.Str(lastError) +
-                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) +
+                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + ",\"rejectedFile\":\"rejected_orders.jsonl\"" +
                 ",\"start\":" + CbJson.Str(start) + ",\"decisions\":" + ChartBridgeDecisions.DiagJson() + "}";
         }
 
@@ -550,11 +550,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string text;
                     using (HttpWebResponse res = (HttpWebResponse)await call)
                     using (StreamReader r = new StreamReader(res.GetResponseStream(), Encoding.UTF8)) text = r.ReadToEnd();
+                    NoteRejected(text, batch);   // 0.6.10 (C-B): each one The Desk rejected inside its 200, kept before the batch goes
                     Remove(batch);
                     SaveIfDirty();
                     Interlocked.Add(ref sent, batch.Length);
                     batchSize = Math.Min(FullBatch, Math.Max(batch.Length, batchSize) * 2);   // review of #71 (LOW 7): grows back after a refusal
-                    NoteRejected(text);
                     lock (Sync) more = PendingList.Count > 0;
                     if (lastFailed || deskHasNone) ChartBridgeServer.Log("The Desk is taking order events.");
                     lastFailed = false; deskHasNone = false;
@@ -600,7 +600,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             lastFailed = true;
         }
 
-        private static void NoteRejected(string text)
+        // 0.6.10 (Anthony 2026-10-30, C-B): each order event The Desk rejected inside its 200 is appended to rejected_orders.jsonl with
+        // The Desk's reason (as the 400/413/422 path sets one aside), never dropped unseen.
+        private static void NoteRejected(string text, string[] batch)
         {
             Match m = RejectedRx.Match(text ?? "");
             if (!m.Success || m.Groups[1].Value.Trim().Length == 0) return;
@@ -608,7 +610,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (n == 0) return;
             Interlocked.Add(ref rejectedByDesk, n);
             Match why = ReasonRx.Match(m.Groups[1].Value);
-            ChartBridgeServer.Log("The Desk could not store " + n + " order event(s)" + (why.Success ? ", for example: " + why.Groups[1].Value : ""));
+            int kept = ChartBridgeDesk.KeepRejected(m.Groups[1].Value, batch, SetAsideFile);
+            ChartBridgeServer.Log("The Desk could not store " + n + " order event(s)" + (why.Success ? ", for example: " + why.Groups[1].Value : "") + "; " + kept + " kept in rejected_orders.jsonl with its reason");
         }
     }
 }

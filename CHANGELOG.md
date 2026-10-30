@@ -43,6 +43,10 @@ not list is refused and the page shows the refusal once.
   floor now beside The Desk's; a floor lower than ChartBridge's (or with ChartBridge's not known), or one The Desk does not mark as on
   net P&L (`/api/chart-floors` `basis` gross, or none), goes only when Anthony ticks it in the confirm. ChartBridge still refuses a
   minimum below the starting floor. `test/floors-safety.test.js`.
+- **Nothing The Desk rejects inside a 200 answer is dropped unseen** (C-B, ChartBridge 0.6.10): each fill or order event in The
+  Desk's `rejected` list is appended to `rejected_fills.jsonl` or `rejected_orders.jsonl` (next to `config.txt`) as it was sent, with
+  The Desk's reason first (`desk_reason`), as a malformed one already was; `/diag` counts them and names the file, and the Account
+  page reads `/diag` each minute and says how many and where. `test/desk-send.test.js`, `nt8/check/RecordHarness.cs`.
 - Tests: `test/lifecycle.test.js` (the pure parts, the feed's steps against a fake ChartBridge, the PUT); harness cases in
   `nt8/check/GroupsHarness.cs`, `CopierHarness.cs`, `AccountsHarness.cs` and `AgentHarness.cs`. `nt8/PROTOCOL.md` "The account
   lifecycle (0.6.10)"; `CHART_STYLE.md` for the new controls.

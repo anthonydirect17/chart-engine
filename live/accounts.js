@@ -530,6 +530,26 @@ function floorPlan(desk, accounts, rulesOf) {
    kept in this browser: { name: { min, at } }. Once one is set, NinjaTrader's own room to the floor (it never locks, so it
    always differs) is no flag; it stays in the Room's hover. */
 const FIRM_MIN_KEY = 'live-firm-min-v1';
+/* 1.40.0 (Anthony 2026-10-30, C-B and C-C): what ChartBridge's /diag says of sending to The Desk, as plain lines for the Accounts tab:
+   { warn: [text], info: [text] }. diag: /diag's JSON (null: not read). C-C: fills not sent at all (desk.postFills false); C-B: what The
+   Desk refused inside its answers since ChartBridge started (kept in rejected_fills.jsonl and the order record's rejected_orders.jsonl,
+   next to config.txt) and what was set aside as malformed. Never throws. */
+function deskSendLines(diag) {
+  const out = { warn: [], info: [] };
+  const d = diag && typeof diag === 'object' ? diag : null;
+  if (!d) return out;
+  const n = v => (Number.isInteger(v) && v > 0 ? v : 0);
+  const file = (x, f) => (x && typeof x.rejectedFile === 'string' && /^[A-Za-z0-9_.-]{1,60}$/.test(x.rejectedFile) ? x.rejectedFile : f);
+  const desk = d.desk && typeof d.desk === 'object' ? d.desk : null, rec = d.orderRecord && typeof d.orderRecord === 'object' ? d.orderRecord : null;
+  const kept = (x, what, f) => {
+    const r = n(x && x.rejectedByDesk), s = n(x && x.setAside);
+    if (r) out.warn.push(r + ' ' + what + (r === 1 ? '' : 's') + ' The Desk did not store since ChartBridge started: kept with The Desk\'s reason in ' + f + ' (next to config.txt).');
+    if (s) out.warn.push(s + ' ' + what + (s === 1 ? '' : 's') + ' The Desk called malformed: set aside in ' + f + ' (next to config.txt).');
+  };
+  if (desk) kept(desk, 'fill', file(desk, 'rejected_fills.jsonl'));
+  if (rec && rec.on !== false) kept(rec, 'order event', file(rec, 'rejected_orders.jsonl'));
+  return out;
+}
 function cleanFirmMins(raw) {
   let v = raw;
   if (typeof raw === 'string') { try { v = JSON.parse(raw); } catch (e) { v = null; } }
@@ -551,7 +571,7 @@ function ntFloorFlag(a, firmMins) {
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
   accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag,
-  OUTCOMES, OUTCOME_WORD, propRow, lifecycleStep, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
+  deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, lifecycleStep, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -622,6 +642,7 @@ function createFeed(env) {
        lifecycle: name -> { outcome, step, why, tried: Map(step key -> { cid, at, state 'sent' | 'refused' | 'done', why }) } for each
        account The Desk marks Blown or Promoted (the steps ChartBridge is asked once each, their answers) */
     notListed: [], lifecycle: new Map(),
+    diag: null,   // 1.40.0 (C-B, C-C): ChartBridge's /diag, read with The Desk's rows
   };
   let ws = null, tries = 0, timer = 0, seq = 0, started = false, deskTimer = 0, changeQueued = false, stopped = false;
   /* 1.30.0: this browser's storage for the account types' copy and the groups' links (every call wrapped; works without it) */
@@ -858,7 +879,9 @@ function createFeed(env) {
     const limits = deskBase(env.fetch).then(url => { S.deskUrl = url; return env.fetch(url + '/api/chart-accounts', { cache: 'no-store', mode: 'cors', credentials: 'omit' }); })
       .then(r => (r.ok ? r.json() : Promise.reject(new Error('The Desk answered ' + r.status))))
       .then(j => { S.desk = AC.cleanDesk(j); S.deskState = 'ok'; S.deskAt = Date.now(); }, e => { S.deskState = 'The Desk\'s limits could not be read (' + (e && e.message ? e.message : 'not reachable') + ').'; });
-    Promise.all([limits, readTypes()]).then(() => { changed(); if (!stopped) deskTimer = setTimeout(readDesk, DESK_EVERY_MS); });
+    /* 1.40.0 (C-B, C-C): ChartBridge's own /diag with The Desk's rows each minute: what it sends to The Desk, and what The Desk refused */
+    const diag = Promise.resolve().then(() => env.fetch('/diag', { cache: 'no-store' })).then(r => (r.ok ? r.json() : null)).then(j => { S.diag = j && typeof j === 'object' ? j : null; }, () => { /* the last kept */ });
+    Promise.all([limits, readTypes(), diag]).then(() => { changed(); if (!stopped) deskTimer = setTimeout(readDesk, DESK_EVERY_MS); });
   }
   /* 1.30.0: The Desk's account types, now and with the limits every minute; the last good list kept in this browser and shown
      "as of" its time while The Desk is not reachable. Never throws. */
@@ -1489,6 +1512,11 @@ function mount(v, host) {
         return row('out|' + name + '|' + ask.v, `<span role="cell" class="apg-confirm apg-outask">Mark ${esc(name)} ${esc(W)} on The Desk? It leaves its group and the copier and is hidden on this page; its trades, fees and history stay on The Desk. Undo is on The Desk's Prop screen. ` +
           `<button type="button" class="ac-btn apg-yes" data-act="outcome-yes" data-id="${esc(name)}">Mark ${esc(W)}</button><button type="button" class="ac-btn" data-act="outcome-no" data-id="${esc(name)}">Cancel</button></span>`, 'apg-ask');
       };
+      /* 1.40.0 (C-B, C-C): fills not sent to The Desk at all, and what The Desk did not store, from ChartBridge's /diag */
+      const sendBox = () => {
+        const L = AC.deskSendLines(S.diag);
+        return L.warn.length ? `<div class="apg-life apg-send" role="status" aria-label="Sending to The Desk">${L.warn.map(t => `<p class="warn">${esc(t)}</p>`).join('')}</div>` : '';
+      };
       /* 1.40.0: what ChartBridge still has to do for an account marked on The Desk (a refusal shown once, as it came; never sent again) */
       const lifeBox = () => {
         const lines = [];
@@ -1663,7 +1691,7 @@ function mount(v, host) {
         (stale ? `<p class="apg-stalenote" role="status">${esc(staleWords)}</p>` : '') +
         `<div class="apg-acc-top"><button type="button" class="ac-btn apg-alltg" data-act="drawers-all" aria-pressed="${P.allOpen}" title="${P.allOpen ? 'Fold every account\'s settings' : 'Show every account\'s settings (group, type, limits, the firm\'s minimum, a label, Hide) at once'}">${P.allOpen ? 'Fold settings' : 'Settings for every account'}</button>` +
           (firmOn() && canGroup ? `<button type="button" class="ac-btn apg-floorsbtn" data-act="floors-desk" aria-expanded="${!!P.floors}" title="Show every prop account's floor as The Desk has it (its seed from the firm dashboard plus the tracked fills); you confirm once, then each goes to ChartBridge as the firm's minimum">Update floors from The Desk</button>` : '') + '</div>' +
-          floorsPanel() + lifeBox() +
+          floorsPanel() + lifeBox() + sendBox() +
         `<div class="gr apg-g apg-acc-g apg-acc2${stale ? ' apg-stale' : ''}" style="--apg-cols: ${colsCss(widths)}" role="table" aria-label="Accounts${stale ? ' as of ' + esc(hms(S.lostAt)) + ' ET (not connected)' : ''}">` +
         headRow + sections.join('') + '</div>' + notListedSection() +
         (gone.length ? '<h3 class="apg-h">Gone</h3><div class="gr apg-g apg-gone-g" role="table" aria-label="Gone accounts">' + gone.map(a => {
