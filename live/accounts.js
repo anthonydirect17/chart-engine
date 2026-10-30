@@ -162,6 +162,25 @@ function limitText(s) {
   return t + (s.pct !== null && t ? ' (' + Math.round(s.pct * 100) + '% used)' : '');
 }
 
+/**
+ * 1.40.0 (Anthony 2026-10-29, from a screenshot): the Accounts tab's Room cell, both limits on one line, the drawdown room first:
+ * "DD $1,800 · D $647" in whole dollars, the tighter of the two (the less room) marked for amber; one limit alone when only one is
+ * known ("DD $1,000", "D $1,200"); a limit whose room is not known as "DD limit $15,000"; none: "-". The bar under it shows the drawdown
+ * room (its share used, 0 to 10; 'n' when there is no drawdown room). s: limitState's answer. Returns { parts: [{ k: 'dd' | 'd', text,
+ * tight }], text, bar }.
+ */
+function roomParts(s) {
+  const u0 = v => (v < 0 ? '-$' : '$') + fmtNum(Math.round(Math.abs(v)), 0);
+  const parts = [];
+  const one = (k, label, x) => { if (x && x.room !== null && x.room !== undefined) parts.push({ k, text: label + ' ' + u0(x.room), room: x.room }); else if (x && isNum(x.limit) && x.limit > 0) parts.push({ k, text: label + ' limit ' + u0(x.limit), room: null }); };
+  if (s) { one('dd', 'DD', s.dd); one('d', 'D', s.dl); }
+  const known = parts.filter(p => p.room !== null);
+  const tight = known.length === 2 ? (known[1].room < known[0].room ? known[1].k : known[0].k) : null;
+  const out = parts.map(p => ({ k: p.k, text: p.text, tight: p.k === tight }));
+  const dd = s && s.dd && s.dd.pct !== null && s.dd.pct !== undefined ? String(Math.max(0, Math.min(10, Math.round(s.dd.pct * 10)))) : 'n';
+  return { parts: out, text: out.length ? out.map(p => p.text).join(' · ') : '-', bar: dd };
+}
+
 /* ---------------- Today's trades (item 14): flat-to-flat round trips per account and instrument */
 const SESSION = 18 * 3600;
 /** The trading day (from 18:00 ET) of bar time t, as days since 1970; dayText gives its date for The Desk's Review. */
@@ -587,7 +606,7 @@ function ntFloorFlag(a, firmMins) {
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
   accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag,
-  labelRefusal, deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, lifecycleStep, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
+  roomParts, labelRefusal, deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, lifecycleStep, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -1583,16 +1602,6 @@ function mount(v, host) {
          then the Sim accounts (folded); a problem is an amber flag on the name, its reasons in the flag's tooltip */
       const usd0 = v => (isNum(v) ? (v < 0 ? '-$' : '$') + Math.round(Math.abs(v)).toLocaleString('en-US') : '');
       const followerSet = new Set(((S.copier && S.copier.followers) || []).filter(f => f && typeof f.account === 'string').map(f => f.account));
-      const roomShort = s => {
-        if (!s) return '-';
-        if (s.cb) {
-          const cx = s.closer === 'dl' ? s.dl : s.closer === 'dd' ? s.dd : null;
-          if (cx) return usd0(cx.room) + (s.closer === 'dl' ? ' daily' : ' to floor');
-          if (s.tg) return s.tg.left <= 0 ? 'target reached' : usd0(s.tg.left) + ' to target';
-          return '-';
-        }
-        return AC.limitText(s) || '-';
-      };
       /* 1.35.0 (C): "Update floors from The Desk": every prop account's floor as The Desk has it, what would be sent and what is
          skipped and why; Anthony confirms once (Send), then the page sends ChartBridge's firmMinimum for each (it checks each
          again; a refusal shows here and in the Log). Repeatable. */
@@ -1671,10 +1680,14 @@ function mount(v, host) {
         const lab = labelOf(a.name), flags = flagsOf(a), up = a.connection === 'connected', open = P.allOpen || P.drawer === a.name;
         const nameTip = [a.name, a.sim ? 'NinjaTrader Sim account' : '', hero ? 'A seat of ' + hero + ' (the Agent tab): the copier and the bot never trade it' : '',
           stale ? 'Not connected to ChartBridge since ' + hms(S.lostAt) + ' ET: this account\'s connection is not known' : up ? '' : (CONN[a.connection] || a.connection)].filter(Boolean).join('\n');
-        const bucket = s.pct === null || s.pct === undefined ? 'n' : String(Math.max(0, Math.min(10, Math.round(s.pct * 10))));
         const nameCell = `<span role="cell" class="apg-name">` + ci('', stale ? 'apg-dot unk' : up ? 'apg-dot' : 'apg-dot down', stale ? 'Connection not known' : up ? '' : (CONN[a.connection] || a.connection) + ': not connected') +
           ci((lab || a.name) + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', nameTip) + (lab ? ci(a.name, 'mut apg-raw', a.name) : '') + ci(flags.length ? '!' : '', flags.length ? 'apg-flag' : 'apg-flag off', flags.join('\n')) + '</span>';
-        const roomCell = `<span role="cell" class="r apg-room${lvl}">` + ci(roomShort(s), 'apg-rtext', roomTip) + `<span class="apg-track">` + ci('', 'apg-bar apg-b' + bucket + lvl, roomTip) + '</span></span>';
+        /* 1.40.0 (Anthony 2026-10-29): both limits on one line, "DD $1,800 · D $647", the tighter in amber; the bar shows the drawdown room;
+           every figure's source stays in the hover (roomTip) */
+        const rp = AC.roomParts(s);
+        const roomCell = `<span role="cell" class="r apg-room${lvl}"><span class="apg-rtext">` +
+          (rp.parts.length ? rp.parts.map((p, i) => (i ? ci(' · ', 'apg-rsep', roomTip) : '') + ci(p.text, 'apg-rpart' + (p.tight ? ' apg-tight' : ''), roomTip)).join('') : ci('-', 'apg-rpart', roomTip)) +
+          `</span><span class="apg-track">` + ci('', 'apg-bar apg-b' + rp.bar + lvl, roomTip) + '</span></span>';
         const grpText = !grpOn ? '' : !grpKnown ? 'not known' : a.group ? gName(a.group) : 'None';
         const more = `<span role="cell" class="r"><button type="button" class="ac-btn apg-more" data-act="drawer" data-id="${esc(a.name)}" aria-expanded="${open}" aria-label="Settings for ${esc(a.name)}" title="Settings: group, type, limits, the firm's minimum, a label, Hide">⋯</button></span>`;
         const main = row(a.name, nameCell + `${c(AC.fmtUsdPlain(a.balance), 'r')}${c(AC.fmtUsd(a.pnlToday), 'r ' + (a.pnlToday > 0.004 ? 'up' : a.pnlToday < -0.004 ? 'dn' : ''))}${c(pos, 'r')}` +

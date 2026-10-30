@@ -210,6 +210,9 @@
 .apg-life { margin: 0 0 8px; padding: 8px 10px; border: 1px solid #8A6A2A; border-radius: 8px; background: var(--ws-warn-ground, #1C150A); font-size: 12px; }
 .apg-life p { margin: 0 0 6px; }
 .apg-life li { white-space: normal; }
+/* 1.40.0 (Anthony 2026-10-29): the Room cell's two limits on one line, the tighter in amber (red when the whole cell is red) */
+.apg-room:not(.apg-red) .apg-tight { color: var(--ws-warn, #E8B85C); font-weight: 600; }
+.apg-rsep { color: var(--ws-muted); }
 .apg-raw { flex: none; margin-left: 6px; font-size: 11px; }   /* 1.40.0 (C-E): the account's own name beside its label */
 .apg-fltick { font-size: 11px; padding: 0 6px; }
 .apg-fltick.on { border-color: var(--ws-warn, #E8B85C); color: var(--ws-warn, #E8B85C); }

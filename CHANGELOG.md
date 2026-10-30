@@ -55,6 +55,9 @@ not list is refused and the page shows the refusal once.
 - **A label never reads as another account** (C-E, the Accounts tab): a label equal (ignoring case) to another account's label or to
   another account's own name is refused with why, and a row with a label shows the account's own name beside it, not only on hover.
   `test/labels.test.js`.
+- **The Room cell shows both limits on one line** (Anthony 2026-10-29, the Accounts tab): `DD $1,800 · D $647`, the drawdown room
+  first, the tighter of the two in amber; one limit alone when only one exists (`DD $1,000`, `D $1,200`), `-` when none. The bar under it
+  shows the drawdown room; the hover still names each figure's source. `test/room-cell.test.js`.
 - Tests: `test/lifecycle.test.js` (the pure parts, the feed's steps against a fake ChartBridge, the PUT); harness cases in
   `nt8/check/GroupsHarness.cs`, `CopierHarness.cs`, `AccountsHarness.cs` and `AgentHarness.cs`. `nt8/PROTOCOL.md` "The account
   lifecycle (0.6.10)"; `CHART_STYLE.md` for the new controls.

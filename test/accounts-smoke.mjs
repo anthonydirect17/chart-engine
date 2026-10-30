@@ -106,7 +106,8 @@ try {
   // the limit warning: The Desk's trailing drawdown 15,000 and ChartBridge's room 2,500: 83 percent used
   await until(async () => (await rows(page, '.apg-acc-g')).find(r => r.k === 'FUNDED-C' && /apg-amber/.test(r.cls)), 'FUNDED-C amber');
   const fc = (await rows(page, '.apg-acc-g')).find(r => r.k === 'FUNDED-C');
-  check(fc && /83% used/.test(fc.text), 'FUNDED-C amber at 83 percent of the room used (' + (fc && fc.text) + ')');
+  const fcTip = await page.$eval(`${AP} .gr-row[data-k="FUNDED-C"] .apg-rtext [title]`, e => e.title).catch(() => '');
+  check(fc && /DD \$2,500/.test(fc.text) && /AMBER: 83% of the room used/.test(fcTip), 'FUNDED-C amber at 83 percent of the room used, the percent in the hover (1.40.0: the cell shows the rooms only): ' + (fc && fc.text));
   // the chart's warning, on the ticket's account
   await until(() => page.evaluate(() => window.workspace.ticket().held), 'the ticket held');
   await until(() => page.$eval('.ws-panel[data-id="tk"] [data-tk-id="oAcct"]', s => [...s.options].some(o => o.value === 'FUNDED-C')), 'FUNDED-C in the ticket\'s accounts');
@@ -270,8 +271,8 @@ try {
   const grp = await p4.$eval(`${AP} select.apg-grp[data-id="EVAL-A"]`, e => ({ v: e.value, opts: [...e.options].map(o => o.textContent) }));
   check(grp.v === 'g1' && grp.opts.join() === 'None,Lucid,Apex', 'EVAL-A in Lucid; the dropdown offers None and every group (' + JSON.stringify(grp) + ')');
   /* 1.34.0: the row shows the tightest room in whole dollars with a bar; its tooltip every room (daily, floor, target) */
-  const roomA = await p4.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-rtext`, e => ({ text: e.textContent, tip: e.title }));
-  check(/^\$[\d,]+ (daily|to floor)$/.test(roomA.text) && /daily · .* to floor · .* to target/.test(roomA.tip), 'the room from ChartBridge\'s own numbers: the tightest on the row, daily, to floor, to target in its tooltip (' + JSON.stringify(roomA) + ')');
+  const roomA = await p4.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-rtext`, e => ({ text: e.textContent, tip: (e.querySelector('[title]') || {}).title || '', tight: [...e.querySelectorAll('.apg-tight')].map(x => x.textContent) }));
+  check(/^DD \$[\d,]+ · D \$[\d,]+$/.test(roomA.text) && roomA.tight.length === 1 && /daily · .* to floor · .* to target/.test(roomA.tip), '1.40.0: the room from ChartBridge\'s own numbers: both on one line, DD then D, the tighter marked; daily, to floor, to target in its tooltip (' + JSON.stringify(roomA) + ')');
   check(!!(await p4.$(`${AP} .gr-row[data-k="EVAL-A"] .apg-track .apg-bar`)), '1.34.0: a bar of the room used under it');
   check(await p4.$(`${AP} .gr-row[data-k="dr|Sim101"] input[data-act="my-floor"]`) !== null && await p4.$(`${AP} .gr-row[data-k="dr|EVAL-A"] input[data-act="my-floor"]`) === null, 'My floor and My daily only for an account in no group (in its drawer)');
   // G2 (b): putting SIM-F1 in Lucid asks for its highest close once, prefilled
@@ -289,7 +290,7 @@ try {
   await p4.fill(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, '95000');
   await p4.press(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, 'Enter');
   await p4.click(`${AP} .apg-foot`);
-  await until(async () => /to floor/.test(await p4.$eval(`${AP} .gr-row[data-k="Sim101"] .apg-room`, e => e.textContent)), 'Sim101\'s room to its own floor');
+  await until(async () => /^DD \$/.test(await p4.$eval(`${AP} .gr-row[data-k="Sim101"] .apg-room`, e => e.textContent)), 'Sim101\'s room to its own floor');
   // 1.37.0: Settings has no Account groups (1.26.0 to 1.36.0): a group is made, set and deleted on the Multi-Account panel (smoke:multi-account)
   await p4.click('#wsSet');
   check(!(await p4.$('#wsGroupsSec')) && !(await p4.$('#wsGroups')), 'Settings has no Account groups section (the Multi-Account panel has them)');
@@ -360,7 +361,7 @@ try {
   /* 1.35.0 (G): once the firm minimum is set, NinjaTrader's figure (it never locks) is no flag; it stays in the Room's hover */
   const gone = await until(async () => { const t = await p5.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-flag`, e => e.title).catch(() => ''); return !/NinjaTrader shows/.test(t) ? 'gone' : null; }, 'the NinjaTrader flag goes once the minimum is set', 8000);
   check(gone === 'gone', '1.35.0: no "NinjaTrader shows X to the floor" flag once the firm minimum is set');
-  const roomHover = await p5.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-rtext`, e => e.title);
+  const roomHover = await p5.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-rtext [title]`, e => e.title);
   check(/NinjaTrader shows \$1,885\.50 to the floor \(its own trailing figure, which never locks\); the firm minimum \$49,500\.00 was set from this page/.test(roomHover), 'NinjaTrader\'s figure stays in the Room\'s hover: ' + roomHover.split('\n').pop());
   /* 1.35.0 (C): Update floors from The Desk: shown first, nothing sent until Send, then ChartBridge's own firmMinimum */
   const before2 = await control(CL_PORT, 'received');
@@ -449,6 +450,10 @@ try {
   const ask = await until(() => p6.$eval(`${AP} .gr-row[data-k="out|SIM-B|blown"]`, e => e.textContent), 'the in-page confirm');
   check(/^Mark SIM-B Blown on The Desk\? It leaves its group and the copier and is hidden on this page; its trades, fees and history stay on The Desk\./.test(ask || '') && puts.length === 0, '1.40.0: Blown asks first, in the page; nothing sent yet: ' + ask);
   await p6.screenshot({ path: path.join(out, 'accounts-14-blown-ask-1366.png') });
+  /* 1.40.0 (Anthony 2026-10-29): the Room cell, both limits on one line (SIM-C: its own daily and drawdown) */
+  const roomC = await p6.$eval(`${AP} .gr-row[data-k="SIM-C"] .apg-rtext`, e => ({ text: e.textContent, tight: [...e.querySelectorAll('.apg-tight')].map(x => x.textContent), one: e.getBoundingClientRect().height < 24 }));
+  check(/^DD \$[\d,]+ · D \$[\d,]+$/.test(roomC.text) && roomC.tight.length === 1 && roomC.one, '1.40.0: the Room cell: "DD $x · D $y" on one line, the tighter in amber: ' + JSON.stringify(roomC));
+  await p6.locator(`${AP} .apg-acc-g`).screenshot({ path: path.join(out, 'accounts-17-room-cell-1366.png') });
   const g0 = ((await control(LC_PORT, 'received')).groupMsgs || []).length;
   await p6.click(`${AP} button[data-act="outcome-yes"][data-id="SIM-B"]`);
   await until(() => puts.length === 1, 'the PUT to The Desk');
