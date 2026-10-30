@@ -1,5 +1,48 @@
 # Changelog
 
+## ChartBridge 0.6.10 and chart 1.40.0 (2026-11-01): the account lifecycle, Blown and Promoted
+
+Anthony's decisions of 2026-10-30 (D1 to D5, the contract shared with The Desk): a prop eval is marked **Blown** or **Promoted**
+by hand, on The Desk's Prop card or in the account's drawer here; both take it out of its group and the copier and off the chart's
+lists, and its history stays on The Desk. With it, the audit of the accounts NinjaTrader no longer lists (a blown eval the firm
+takes away): ChartBridge accepts remove-only changes for them, never a join. ChartBridge 0.6.10 is a recompile (F5). The page works
+with ChartBridge 0.6.2 or newer (`minChartBridge` stays 0.6.2): with an older one, what ChartBridge cannot do for an account it does
+not list is refused and the page shows the refusal once.
+
+- **Blown and Promoted in the account's drawer** (`live/accounts.js`): shown only for an account The Desk has a prop account for.
+  `/api/chart-accounts` does not say that outright, so the page reads it from the row: an `outcome` already set, an account type
+  (The Desk gives every typed account its Prop card, D5), or a number taken from a linked prop account (`source` `prop`). A click
+  asks first in the page, then sends `PUT /api/accounts/{account}/outcome` to The Desk (as the account type's PUT: `cors`, no
+  credentials). Once marked, a BLOWN or PROMOTED pill; Undo is on The Desk's Prop screen.
+- **ChartBridge brought into line** (the window's feed): for every `/api/chart-accounts` row with an `outcome`, one step at a time,
+  each an existing message: out of its group, its copier follower off, then removed, then hidden. Each step is asked once per
+  outcome; a refusal is shown on the Accounts tab and in the Log and never sent again in a loop; a step ChartBridge would refuse
+  anyway (Hide of an account in a trade, `accountChecks` off) is shown and not sent. Undo changes nothing on ChartBridge (D4: it does
+  not rejoin its group).
+- **Not in NinjaTrader now** (Accounts tab, audit 8): every group member or copier follower ChartBridge does not list, with Remove
+  from group, Turn follower off or Remove follower, Blown and Promoted; and the accounts ChartBridge 0.6.10 keeps that NinjaTrader
+  has not had connected this session (folded), with Hide.
+- **Show says what it does** (audit 5): Show of an account NinjaTrader has not had connected this session no longer vanishes: the
+  note and the tooltip say it is listed once NinjaTrader has it connected, and until then it is under Not in NinjaTrader now
+  (ChartBridge 0.6.10's `notListed`, and a `status` line).
+- **The Multi-Account panel** (audit 6): the chip of a member NinjaTrader does not list says "not in NinjaTrader now" (not "set its
+  type on The Desk first"), is offered no bench move ChartBridge would refuse, and has Remove (out of the group, a second click
+  sends it).
+- **ChartBridge 0.6.10, remove-only for an account NinjaTrader no longer lists:** `accountGroup` with no group for a member that is
+  not listed (audit 1; joining still needs it listed); `copierFollower` off for a follower that is not in NinjaTrader, then Remove as
+  before (audit 2; a copier record of its own part on that account still holds it, until it is done or ChartBridge restarts), so
+  Re-arm no longer counts a dead follower; Hide of an account NinjaTrader does not list is no longer held by what it was last seen
+  with (it comes back by itself, unchecked, if NinjaTrader lists it holding anything); an agent's group with a member not in
+  NinjaTrader is no longer refused (audit 3; the member sits out each trade, the claims by name still apply).
+- **Hide takes a member out of its group** (ChartBridge 0.6.10, audit 4): in the same step, its bench place and its own rules with
+  it, under the groups lock order (`ChangeGate`, `GroupEntryLock`, `PlaceLock`); a failed `groups.txt` write that is undone leaves it
+  in its group and not hidden.
+- **A group preview sizes as the entry places** (ChartBridge 0.6.10, audit 7): a member gate 2 refuses (hidden, not checked, Gone)
+  sits out the preview with that reason.
+- Tests: `test/lifecycle.test.js` (the pure parts, the feed's steps against a fake ChartBridge, the PUT); harness cases in
+  `nt8/check/GroupsHarness.cs`, `CopierHarness.cs`, `AccountsHarness.cs` and `AgentHarness.cs`. `nt8/PROTOCOL.md` "The account
+  lifecycle (0.6.10)"; `CHART_STYLE.md` for the new controls.
+
 ## chart 1.39.2 (2026-10-27): a benched account sits out with no confirm; a chart's dragged room is its own (page only, no F5)
 
 Page only, no F5: no ChartBridge file changes, so nothing needs a recompile. ChartBridge stays 0.6.9; `minChartBridge` stays

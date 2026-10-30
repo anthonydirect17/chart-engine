@@ -75,17 +75,19 @@ function busyWords(a, orders) {
  * The two lanes of group g. S: the feed's state ({ accounts, desk, groups }); orders: the working orders now (every account).
  * Returns { firm, active: [chip], bench: [chip], flat (no member holds or has working anything), risk (the dollars at risk a trade,
  * the active lane summed) }. A chip: { name, member, benched, label (its type on The Desk), notype, room (ChartBridge's room to the
- * floor, null not known), risk (its own dollars at the group's percent, null none), busy (words, '' flat), sim, gone }.
+ * floor, null not known), risk (its own dollars at the group's percent, null none), busy (words, '' flat), sim, gone, missing }.
+ * 1.40.0 (audit 6): missing, a member ChartBridge does not list now (NinjaTrader does not have it this session, or the firm took it
+ * away): it sits out every entry, its type is not asked for (notype false), and it can only leave the group (Remove).
  */
 function lanes(g, S, orders) {
   const accounts = (S && Array.isArray(S.accounts) ? S.accounts : []), desk = S && S.desk instanceof Map ? S.desk : new Map();
   const firm = groupFirm(g, desk), benched = new Set(Array.isArray(g && g.benched) ? g.benched : []);
   const chip = (name, member) => {
     const a = accounts.find(x => x && x.name === name) || null, row = desk.get(name) || null, t = row && row.accountType;
-    const own = !!(a && a.rules && a.rules.own === true && isNum(a.rules.drawdown) && a.rules.drawdown > 0);
+    const own = !!(a && a.rules && a.rules.own === true && isNum(a.rules.drawdown) && a.rules.drawdown > 0), missing = !!member && !a;
     const risk = member && own && g && isNum(g.riskPct) && g.riskPct > 0 ? Math.round(g.riskPct * a.rules.drawdown) / 100 : null;
-    return { name, member, benched: member && benched.has(name), label: t ? (t.name || t.id) : 'no type on The Desk', notype: !t || (member && !own), room: a && isNum(a.roomFloor) ? a.roomFloor : null,
-      risk, busy: busyWords(a, orders), sim: !!(a && a.sim === true), gone: !a || a.state === 'gone' };
+    return { name, member, benched: member && benched.has(name), label: t ? (t.name || t.id) : 'no type on The Desk', notype: !missing && (!t || (member && !own)), room: a && isNum(a.roomFloor) ? a.roomFloor : null,
+      risk, busy: busyWords(a, orders), sim: !!(a && a.sim === true), gone: !a || a.state === 'gone', missing };
   };
   const members = (g && g.members) || [];
   const active = [], bench = [];
@@ -114,9 +116,20 @@ const benchText = (L) => { const n = L.bench.filter(c => c.member).length, o = L
 function moveWhy(c, toActive, groupName) {
   if (!c) return 'That account is not here any more.';
   if (!c.member) return c.name + ' is not in ' + groupName + ': put it in the group on the Accounts tab (Group) first; it joins with its rules from its type on The Desk.';
+  /* 1.40.0 (audit 6): ChartBridge moves no account it cannot see to or from the bench; Remove takes it out of the group */
+  if (c.missing) return c.name + ' is not in NinjaTrader now: it sits out every entry and cannot move between the lanes. Remove takes it out of ' + groupName + '.';
   if (toActive && c.notype) return c.name + ' has no account type on The Desk, so its risk and rules are unknown. Set its type there first (then Apply its rules on the Accounts tab).';
   if (c.busy) return c.name + ' is in a trade or has working orders (' + c.busy + '). It moves once it is flat with no working orders.';
   return '';
+}
+/** 1.40.0 (audit 6): the words on a chip, in order */
+function chipTags(c) {
+  const tags = [];
+  if (c.missing) tags.push('not in NinjaTrader now');
+  else if (c.notype) tags.push('set its type on The Desk first');
+  if (!c.member) tags.push('not in the group: drag or click it in to join');
+  if (c.busy) tags.push('in a trade: ' + c.busy);
+  return tags;
 }
 /** memberBench (ChartBridge 0.6.7): to the bench (true) or back (false) */
 const benchMessage = (account, benched, cid) => Object.assign({ type: 'memberBench' }, cid ? { cid } : {}, { account, benched: !!benched });
@@ -155,7 +168,7 @@ function saveMessage(g, change, groups, cid, bench) {
   return { msg };
 }
 
-return { BENCH_VERSION, verAtLeast, benchOn, usd, firmOfRow, groupFirm, busyWords, lanes, sumText, benchText, moveWhy, benchMessage, parseRisk, nameCheck, saveMessage };
+return { BENCH_VERSION, verAtLeast, benchOn, usd, firmOfRow, groupFirm, busyWords, lanes, sumText, benchText, moveWhy, chipTags, benchMessage, parseRisk, nameCheck, saveMessage };
 });
 
 /* ======================================================================== MultiAccount (browser only) */
@@ -216,6 +229,10 @@ function mount(el, host) {
         const g = groups().find(x => x.id === p.gid);
         if (g && g.members.includes(p.chip)) { P.pending.delete(c); P.chipWhy.delete(p.chip); say(p.chip + ' joined ' + g.name + ' and trades with it from the next entry.'); }
         else if (Date.now() - p.at > 8000) { P.pending.delete(c); say('ChartBridge did not answer for ' + p.chip + ': look again.', true); }
+      } else if (p.leave) {   // 1.40.0: a Remove: done once ChartBridge's groups no longer list it in the group
+        const g = groups().find(x => x.id === p.gid);
+        if (!g || !g.members.includes(p.chip)) { P.pending.delete(c); P.chipWhy.delete(p.chip); say(p.chip + ' is out of ' + (g ? g.name : 'the group') + '.'); }
+        else if (Date.now() - p.at > 8000) { P.pending.delete(c); say('ChartBridge did not answer for ' + p.chip + ': look again.', true); }
       } else if (p.chip && p.gid) {
         const g = groups().find(x => x.id === p.gid), on = g && Array.isArray(g.benched) && g.benched.includes(p.chip);
         if (g && on === p.benched) { P.pending.delete(c); P.chipWhy.delete(p.chip); say(p.chip + (p.benched ? ' is on the bench: it sits out new entries and keeps its rules.' : ' trades with ' + g.name + ' from the next entry.')); }
@@ -238,19 +255,23 @@ function mount(el, host) {
   function chipHtml(c, g) {
     const pend = [...P.pending.values()].some(p => p.chip === c.name);
     const why = P.chipWhy.get(c.name) || '';
-    const locked = (!c.member && c.notype) || (c.member && !!c.busy) || (c.notype && c.benched) || pend || !!(P.join && P.join.plan.account === c.name);   // a benched chip with no type cannot go in; one trading may still go out
-    const tags = [];
-    if (c.notype) tags.push('set its type on The Desk first');
-    if (!c.member) tags.push('not in the group: drag or click it in to join');
-    if (c.busy) tags.push('in a trade: ' + c.busy);
+    const locked = c.missing || (!c.member && c.notype) || (c.member && !!c.busy) || (c.notype && c.benched) || pend || !!(P.join && P.join.plan.account === c.name);   // a benched chip with no type cannot go in; one trading may still go out
+    const tags = MC.chipTags(c);
     if (pend) tags.push('moving...');
     if (why && !pend) tags.push(why);
     const aria = c.name + (c.member ? (c.benched ? ', on the bench' : ', trades with the group') : ', not in the group') + (c.busy ? ', in a trade' : '');
-    return `<button type="button" class="ma-chip${locked ? ' locked' : ''}${c.member && !c.benched ? ' in' : ''}" data-chip="${esc(c.name)}" draggable="${!locked}" aria-label="${esc(aria)}">` +
+    return `<button type="button" class="ma-chip${locked ? ' locked' : ''}${c.member && !c.benched ? ' in' : ''}${c.missing ? ' missing' : ''}" data-chip="${esc(c.name)}" draggable="${!locked}" aria-label="${esc(aria)}">` +
       `<span class="ma-cname"><span class="ma-dot" aria-hidden="true"></span>${esc(c.name)}<span class="ma-mark ${c.sim ? 'sim' : 'live'}">${c.sim ? 'SIM' : 'LIVE'}</span></span>` +
       `<span class="ma-ctype">${esc(c.label)}</span>` +
       `<span class="ma-crow"><span>Room <b>${c.room === null ? 'not known' : esc(MC.usd(c.room))}</b></span><span>Risk <b>${c.risk === null ? 'none' : esc(MC.usd(c.risk))}</b></span></span>` +
       tags.map(t => `<span class="ma-ctag">${esc(t)}</span>`).join('') + '</button>';
+  }
+  /* 1.40.0 (audit 6): under a member NinjaTrader does not list now, Remove (accountGroup with no group; asks with a second click) */
+  function deadHtml(c, g) {
+    if (!c.missing || !c.member) return '';
+    const pend = [...P.pending.values()].some(p => p.chip === c.name), ask = P.removeAsk === c.name;
+    return `<div class="ma-dead" role="group" aria-label="${esc(c.name + ' is not in NinjaTrader now')}"><span>${esc(c.name)} is not in NinjaTrader now.</span>` +
+      `<button type="button" class="ws-btn ma-danger" data-ma="remove" data-name="${esc(c.name)}"${pend || !can() ? ' disabled' : ''} title="${esc('Take ' + c.name + ' out of ' + g.name + ' (ChartBridge 0.6.10 takes a member it cannot see out of its group)')}">${ask ? 'Remove from ' + esc(g.name) + '? Click again' : 'Remove'}</button></div>`;
   }
 
   function render() {
@@ -289,7 +310,7 @@ function mount(el, host) {
         `<button type="button" class="ws-btn primary" data-ma="create">Create</button><button type="button" class="ws-btn" data-ma="create-no">Cancel</button></div>` +
         `<p class="ma-fixed">Name it for the firm; then put that firm's accounts in it on the Accounts tab (Group). Each joins with its rules from its type on The Desk.</p></div>` : '';
       const lane = (kind, chips, head) => `<div class="ma-lane ${kind}" data-lane="${kind}"><div class="ma-lhead">${head}</div><div class="ma-chips">` +
-        (chips.length ? chips.map(c => chipHtml(c, g) + joinHtml(c, g)).join('') : `<div class="ma-empty">${kind === 'in' ? 'No account trades with this group now. Drag one here.' : 'Nothing on the bench.'}</div>`) + '</div></div>';
+        (chips.length ? chips.map(c => chipHtml(c, g) + joinHtml(c, g) + deadHtml(c, g)).join('') : `<div class="ma-empty">${kind === 'in' ? 'No account trades with this group now. Drag one here.' : 'Nothing on the bench.'}</div>`) + '</div></div>';
       const lanes = !g ? '' : `<div class="ma-lanes">` +
         lane('in', L.active, `<span class="ma-lname">Trades with the group</span><span class="ma-lsum">${esc(MC.sumText(L))}</span>`) +
         lane('bench', L.bench, `<span class="ma-lname">Bench</span><span class="ma-lsub">sits out new entries, keeps its rules</span><span class="ma-lsum">${esc(MC.benchText(L))}</span>`) + '</div>';
@@ -333,7 +354,7 @@ function mount(el, host) {
       return;
     }
     const why = MC.moveWhy(c, toActive, g.name);
-    if (why) { P.chipWhy.set(name, why); say(why, true); render(); return; }
+    if (why) { if (!c.missing) P.chipWhy.set(name, why); say(why, true); render(); return; }   // 1.40.0: a missing chip says it already
     const m = MC.benchMessage(name, !toActive, cid());
     if (post(m, { chip: name, gid: g.id, benched: !toActive, what: name + ' did not move' })) { P.chipWhy.delete(name); say('Sent to ChartBridge: ' + name + (toActive ? ' back to trade with ' + g.name : ' to the bench') + '.'); }
     render();
@@ -352,7 +373,16 @@ function mount(el, host) {
     if (chip && body.contains(chip)) { const g = group(), name = chip.dataset.chip, L = g ? MC.lanes(g, S, host.working ? host.working() : []) : null, c = L ? L.active.concat(L.bench).find(x => x.name === name) : null; if (c) move(name, !(c.member && !c.benched)); return; }
     const b = e.target.closest('button[data-ma]'); if (!b || !body.contains(b)) return;
     const g = group(), act = b.dataset.ma;
-    if (act === 'settings') { P.settings = !P.settings; P.creating = false; P.delAsk = false; }
+    if (act !== 'remove') P.removeAsk = '';
+    if (act === 'remove' && g) {   // 1.40.0 (audit 6): a member NinjaTrader does not list now, out of the group (a second click sends it)
+      const name = b.dataset.name;
+      if (P.removeAsk !== name) { P.removeAsk = name; render(); return; }
+      P.removeAsk = '';
+      const c2 = cid();
+      if (can() && F.accountGroup(name, null, '', null, c2)) { P.pending.set(c2, { at: Date.now(), chip: name, gid: g.id, leave: true, what: name + ' was not removed' }); say('Sent to ChartBridge: ' + name + ' out of ' + g.name + '.'); }
+      else say('Not sent: not connected to ChartBridge, or the page is locked.', true);
+    }
+    else if (act === 'settings') { P.settings = !P.settings; P.creating = false; P.delAsk = false; }
     else if (act === 'new') { P.creating = !P.creating; P.settings = false; P.delAsk = false; if (P.creating && !benchNow(g) && !MC.verAtLeast(S.version, MC.BENCH_VERSION)) say('New group needs ChartBridge ' + MC.BENCH_VERSION + ' (a group keeps no rules of its own from then; this PC has ' + (S.version || 'an older one') + ').', true); }
     else if (act === 'create-no') P.creating = false;
     else if (act === 'join-no') { if (P.join) say(P.join.plan.account + ' stays on the bench (not in the group).'); P.join = null; }

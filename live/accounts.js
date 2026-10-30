@@ -277,9 +277,94 @@ function cleanDesk(json) {
       /* 1.33.0: where each prop number came from ("account": set on the account itself on The Desk, which wins over its type) and
          The Desk's seed for a prop account (seed_floor, seed_date, seed_balance), each null when The Desk has none */
       source: r.source && typeof r.source === 'object' && !Array.isArray(r.source) ? Object.fromEntries(['daily_loss_limit', 'trailing_drawdown', 'account_size'].map(k => [k, typeof r.source[k] === 'string' ? r.source[k] : null])) : {},
-      seedFloor: n(r.seed_floor), seedBalance: n(r.seed_balance), seedDate: typeof r.seed_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.seed_date) ? r.seed_date : null });
+      seedFloor: n(r.seed_floor), seedBalance: n(r.seed_balance), seedDate: typeof r.seed_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.seed_date) ? r.seed_date : null,
+      /* 1.40.0 (the account lifecycle, Anthony 2026-10-30): the prop account's outcome on The Desk, 'blown', 'promoted' or null */
+      outcome: OUTCOMES.includes(r.outcome) ? r.outcome : null });
   }
   return out;
+}
+
+/* ---------------- 1.40.0: the account lifecycle (Anthony 2026-10-30, D1 to D5; ChartBridge 0.6.10) */
+const OUTCOMES = ['blown', 'promoted'];
+const OUTCOME_WORD = { blown: 'Blown', promoted: 'Promoted' };
+/**
+ * Whether The Desk has a prop account for this row (the Blown and Promoted buttons show only then). GET /api/chart-accounts does not
+ * say it in so many words; it is read from what the row does say: an outcome already set, an account type (The Desk gives every
+ * account with a type its prop account, D5), or a prop number taken from a linked prop account (source "prop").
+ */
+function propRow(row) {
+  if (!row) return false;
+  if (row.outcome) return true;
+  if (row.accountType) return true;
+  return !!(row.source && Object.values(row.source).includes('prop'));
+}
+/** the group whose members include name (ChartBridge's groups list), or null */
+const groupHolding = (groups, name) => (Array.isArray(groups) ? groups.find(g => g && Array.isArray(g.members) && g.members.includes(name)) || null : null);
+/** the copier's follower row for name (ChartBridge's copier message), or null */
+const followerOf = (copier, name) => (copier && Array.isArray(copier.followers) ? copier.followers.find(f => f && f.account === name) || null : null);
+/**
+ * What ChartBridge still has to do for an account The Desk marks Blown or Promoted, the next step only, in the contract's order:
+ * out of its group, its copier follower off, then removed, then hidden. S: the feed's state (accounts, archived, notListed, groups,
+ * groupsError, copier, switches). Returns { step, why, group } where step is
+ *   'leave' (accountGroup null), 'followerOff' (copierFollower on false), 'followerRemove' (copierFollowerRemove), 'hide'
+ *   (accountArchive): send it; 'wait': not known yet (why); 'blocked': ChartBridge would refuse it now or cannot be asked (why;
+ *   nothing is sent, it is shown); 'done': nothing left (hidden, or ChartBridge does not know the account).
+ */
+function lifecycleStep(name, S) {
+  const st = S || {};
+  if (!Array.isArray(st.groups)) return { step: 'wait', why: 'ChartBridge has not sent its groups yet' };
+  if (st.groupsError) return { step: 'blocked', why: st.groupsError };
+  const g = groupHolding(st.groups, name);
+  if (g) return { step: 'leave', group: g, why: '' };
+  const sw = st.switches || {};
+  if (sw.copier && !st.copier) return { step: 'wait', why: 'ChartBridge has not sent the copier yet' };   // a follower is never hidden blind
+  const f = sw.copier ? followerOf(st.copier, name) : null;
+  if (f && f.on) return { step: 'followerOff', why: '' };
+  if (f) return st.copier.canRemove === true ? { step: 'followerRemove', why: '' } : { step: 'blocked', why: 'removing a copier follower needs ChartBridge 0.6.6 or newer' };
+  if ((st.archived || []).some(a => a && a.name === name)) return { step: 'done', why: '' };
+  const a = (st.accounts || []).find(x => x && x.name === name) || null, unseen = (st.notListed || []).some(x => x && x.name === name);
+  if (!a && !unseen) return { step: 'done', why: '' };   // ChartBridge does not know it: nothing to hide
+  if (!sw.accountChecks) return { step: 'blocked', why: 'Hide needs accountChecks = on in config.txt' };
+  if (a && a.canHide === false) return { step: 'blocked', why: a.hideWhy || 'ChartBridge does not allow Hide for it now' };
+  return { step: 'hide', why: '' };
+}
+/** a step in words, for the Accounts tab and the Log */
+const STEP_WORDS = { leave: 'out of its group', followerOff: 'its copier follower off', followerRemove: 'its copier follower removed', hide: 'hidden' };
+/**
+ * 1.40.0 (audit 8): the accounts NinjaTrader does not list now that ChartBridge still holds: a group member or a copier follower that
+ * is not in ChartBridge's accounts list, and every account ChartBridge 0.6.10 names in notListed (kept in accounts.txt, not
+ * connected this session; a Show of one waits there). Each { name, group ({ id, name }) or null, follower ({ on }) or null, unseen,
+ * hidden }. By name; group members and followers first.
+ */
+function notListedRows(accounts, groups, copier, notListed, archived) {
+  const listed = new Set((accounts || []).filter(a => a && typeof a.name === 'string').map(a => a.name));
+  const hidden = new Set((archived || []).filter(a => a && typeof a.name === 'string').map(a => a.name));
+  const unseen = new Set((notListed || []).filter(a => a && typeof a.name === 'string').map(a => a.name));
+  const names = new Set(unseen);
+  for (const g of Array.isArray(groups) ? groups : []) for (const m of (g && Array.isArray(g.members) ? g.members : [])) if (typeof m === 'string' && !listed.has(m)) names.add(m);
+  for (const f of copier && Array.isArray(copier.followers) ? copier.followers : []) if (f && typeof f.account === 'string' && !listed.has(f.account)) names.add(f.account);
+  const rows = [];
+  for (const name of names) {
+    if (listed.has(name)) continue;
+    const g = groupHolding(groups, name), f = followerOf(copier, name);
+    rows.push({ name, group: g ? { id: g.id, name: g.name } : null, follower: f ? { on: !!f.on } : null, unseen: unseen.has(name), hidden: hidden.has(name) });
+  }
+  const held = r => (r.group || r.follower ? 0 : 1);
+  return rows.sort((x, y) => held(x) - held(y) || (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+}
+/** what such a row is, in words: "in Lucid · copier follower (on)", "not connected this session" */
+function notListedWords(r) {
+  const out = [];
+  if (r.group) out.push('in ' + r.group.name);
+  if (r.follower) out.push('copier follower (' + (r.follower.on ? 'on' : 'off') + ')');
+  if (r.hidden) out.push('hidden');
+  if (!out.length) out.push(r.unseen ? 'not connected this session' : 'not listed');
+  return out.join(' · ');
+}
+/** The PUT body for The Desk's outcome (PUT /api/accounts/{account}/outcome), or { error } */
+function outcomeBody(outcome) {
+  if (outcome !== null && !OUTCOMES.includes(outcome)) return { error: 'The outcome is Blown, Promoted or none.' };
+  return { body: { outcome } };
 }
 /** The Desk's Review of one session (its trade day), on The Desk at `deskUrl` (#/futures/review/<date>). */
 function reviewUrl(deskUrl, day) {
@@ -456,7 +541,8 @@ function ntFloorFlag(a, firmMins) {
 
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
-  accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag };
+  accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag,
+  OUTCOMES, OUTCOME_WORD, propRow, lifecycleStep, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -523,6 +609,10 @@ function createFeed(env) {
     /* 1.31.0 (audit C6): when ChartBridge dropped (ms), until its next accounts list: the rows stay, dimmed and marked as of then;
        hadGroups: ChartBridge sent groups this page session (the Group, Account type and Limits columns stay while not known) */
     lostAt: null, hadGroups: false,
+    /* 1.40.0 (ChartBridge 0.6.10): the accounts accounts.txt keeps that NinjaTrader has not had connected this session (notListed);
+       lifecycle: name -> { outcome, step, why, tried: Map(step key -> { cid, at, state 'sent' | 'refused' | 'done', why }) } for each
+       account The Desk marks Blown or Promoted (the steps ChartBridge is asked once each, their answers) */
+    notListed: [], lifecycle: new Map(),
   };
   let ws = null, tries = 0, timer = 0, seq = 0, started = false, deskTimer = 0, changeQueued = false, stopped = false;
   /* 1.30.0: this browser's storage for the account types' copy and the groups' links (every call wrapped; works without it) */
@@ -530,7 +620,7 @@ function createFeed(env) {
   /* 1.35.0: the firm minimums set from this page (G), and what "Update floors from The Desk" sent this time, by account */
   S.firmMins = AC.cleanFirmMins((() => { try { return store ? store.getItem(AC.FIRM_MIN_KEY) : null; } catch (e) { return null; } })());
   S.firmSent = {};
-  const changed = () => { if (changeQueued) return; changeQueued = true; Promise.resolve().then(() => { changeQueued = false; env.changed(); }); };
+  const changed = () => { if (changeQueued) return; changeQueued = true; Promise.resolve().then(() => { changeQueued = false; lifecycleTick(); env.changed(); }); };
   const log = (text, level) => { if (!text) return; S.log.unshift({ at: Date.now(), text, level: level || '' }); if (S.log.length > LOG_MAX) S.log.length = LOG_MAX; };
   const cid = () => 'ap' + Date.now().toString(36) + '-' + (++seq);
   const mine = new Map();                                 // cid -> what was asked (its refusal goes to the window's note)
@@ -652,6 +742,7 @@ function createFeed(env) {
         S.archived = Array.isArray(m.archived) ? m.archived.filter(a => a && typeof a.name === 'string') : [];
         if (S.got) for (const a of S.archived) if (!was.has(a.name)) log(a.name + ': archived');
         S.accounts = list; S.got = true; S.lostAt = null;
+        S.notListed = Array.isArray(m.notListed) ? m.notListed.filter(a => a && typeof a.name === 'string') : [];   // 1.40.0: ChartBridge 0.6.10
         firmPrune();                                          // review 7: a minimum set under other rules is forgotten
         changed(); return;
       }
@@ -677,6 +768,7 @@ function createFeed(env) {
           const d = firmDone.get(m.cid); firmDone.delete(m.cid);
           if (S.firmMins && S.firmMins[d.name] && S.firmMins[d.name].at === d.at) { firmForget(d.name); S.firmSent[d.name] = 'refused: ' + String(m.reason || '').slice(0, 200); }
         }
+        if (m.cid && lcCids.has(m.cid)) lifecycleAnswer(m.cid, String(m.reason || ''));   // 1.40.0: a lifecycle step's refusal: shown, never retried
         if (m.cid && mine.has(m.cid)) { mine.delete(m.cid); env.note(AC.logText(m), true); }
         /* 1.37.0: the last refusals by cid, for a panel that shows its own reason (the Multi-Account panel's chips) */
         if (typeof m.cid === 'string' && m.cid) { S.rejects.set(m.cid, String(m.reason || '').slice(0, 400)); if (S.rejects.size > 50) S.rejects.delete(S.rejects.keys().next().value); }
@@ -685,6 +777,69 @@ function createFeed(env) {
       case 'status': log(AC.logText(m), m.level === 'error' ? 'error' : m.level === 'warn' ? 'warn' : ''); changed(); return;
       case 'riskAlert': if (typeof m.text === 'string' && m.text) { log(m.text, m.kind === 'dailyLoss' ? 'error' : 'warn'); changed(); } return;   // 1.34.0 (ChartBridge 0.6.6): kept in the page's log too
     }
+  }
+  /* 1.40.0 (the account lifecycle, Anthony 2026-10-30: D2 and D3; nt8/PROTOCOL.md "The account lifecycle (0.6.10)"): for every
+     account The Desk marks Blown or Promoted (its chart-accounts row's outcome), ChartBridge is brought into line one step at a time
+     (AC.lifecycleStep: out of its group, the copier follower off, then removed, then hidden), each step asked once per outcome (a
+     page load asks again once); a refusal is kept and shown on the Accounts tab and in the Log, never sent again in a loop. Each window
+     with The Desk's rows runs it; ChartBridge's own state decides each step, so a second window finds it done. Back to no outcome
+     (Undo on The Desk) forgets it and changes nothing on ChartBridge (D4: it does not rejoin its group). */
+  const lcCids = new Map();   // cid -> { name, key }
+  function lifecycleAnswer(c, why) {
+    const x = lcCids.get(c); lcCids.delete(c);
+    const rec = x && S.lifecycle.get(x.name), t = rec && rec.tried.get(x.key);
+    if (!t) return;
+    if (AC.keptChange(why)) { t.state = 'done'; t.why = why; return; }   // done by ChartBridge, with its warning
+    t.state = 'refused'; t.why = why.slice(0, 400);
+    log(x.name + ' (' + (AC.OUTCOME_WORD[rec.outcome] || rec.outcome) + ' on The Desk): ' + (AC.STEP_WORDS[x.key.split('|')[0]] || x.key) + ' refused by ChartBridge: ' + t.why, 'warn');
+  }
+  let lcBusy = false;
+  function lifecycleTick() {
+    if (lcBusy || env.desk === false) return;
+    lcBusy = true;
+    try {
+      for (const name of [...S.lifecycle.keys()]) { const row = S.desk.get(name); if (!row || !row.outcome) S.lifecycle.delete(name); }   // Undo on The Desk: forgotten
+      if (!S.deskAt || !S.got || S.lostAt !== null || !S.signedIn || !S.enabled || !ws || ws.readyState !== 1) return;
+      for (const [name, row] of S.desk) {
+        if (!row || !row.outcome) continue;
+        let rec = S.lifecycle.get(name);
+        if (!rec || rec.outcome !== row.outcome) { rec = { outcome: row.outcome, step: '', why: '', tried: new Map() }; S.lifecycle.set(name, rec); }
+        const st = AC.lifecycleStep(name, S);
+        rec.step = st.step; rec.why = st.why || '';
+        if (!AC.STEP_WORDS[st.step]) continue;   // done, waiting or blocked: nothing to send
+        const key = st.step + (st.group ? '|' + st.group.id : '');
+        if (rec.tried.has(key)) continue;        // asked once already for this outcome: its answer stands
+        const c = cid();
+        let msg = null;
+        if (st.step === 'leave') msg = { type: 'accountGroup', cid: c, account: name, group: null };
+        else if (st.step === 'followerOff') {
+          const fr = AC.followerRows(S.accounts, S.copier).find(r => r.account === name);
+          const r = fr ? AC.followerMessage(Object.assign({}, fr, { on: false }), c) : { error: 'its follower row is not known' };
+          if (r.error) { rec.tried.set(key, { cid: c, at: Date.now(), state: 'refused', why: r.error }); continue; }
+          msg = r.msg;
+        } else if (st.step === 'followerRemove') msg = { type: 'copierFollowerRemove', cid: c, account: name };
+        else if (st.step === 'hide') msg = { type: 'accountArchive', cid: c, account: name, confirm: true };
+        if (!msg) continue;
+        ws.send(JSON.stringify(msg));
+        lcCids.set(c, { name, key }); if (lcCids.size > 200) lcCids.delete(lcCids.keys().next().value);
+        rec.tried.set(key, { cid: c, at: Date.now(), state: 'sent', why: '' });
+        log(name + ' (' + AC.OUTCOME_WORD[row.outcome] + ' on The Desk): asked ChartBridge for ' + AC.STEP_WORDS[st.step] + (st.group ? ' (' + st.group.name + ')' : ''));
+      }
+    } finally { lcBusy = false; }
+  }
+  /* 1.40.0 (D4): Blown or Promoted from the account's drawer: PUT /api/accounts/{account}/outcome on The Desk (as the account type's
+     PUT: mode cors, credentials omit), then the rows again; the steps follow from the outcome The Desk then gives (the row is marked
+     here at once, so they start now). Resolves { ok } or { ok: false, error }; never rejects. */
+  function setOutcome(name, outcome) {
+    if (env.desk === false) return Promise.resolve({ ok: false, error: 'this window does not read The Desk' });
+    const b = AC.outcomeBody(outcome);
+    if (b.error) return Promise.resolve({ ok: false, error: b.error });
+    return deskBase(env.fetch).then(url => env.fetch(url + '/api/accounts/' + encodeURIComponent(name) + '/outcome', { method: 'PUT', mode: 'cors', credentials: 'omit', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b.body) }))
+      .then(r => {
+        if (r.ok) { const row = S.desk.get(name); if (row) row.outcome = outcome; log(name + ': marked ' + (AC.OUTCOME_WORD[outcome] || 'with no outcome') + ' on The Desk (from this page)'); changed(); readDesk(); return { ok: true }; }
+        return r.json().then(j => j && typeof j.detail === 'string' ? j.detail : '', () => '').then(d => ({ ok: false, error: r.status === 404 ? 'The Desk has no prop account for ' + name + (d ? ' (' + d + ')' : '') : 'The Desk answered ' + r.status + (d ? ': ' + d : '') }));
+      }, e => ({ ok: false, error: 'The Desk is not reachable (' + (e && e.message ? e.message : 'no answer') + ')' }));
   }
   /* The Desk's limits (read only): its address as ChartBridge knows it (/diag desk.deskUrl), then GET /api/chart-accounts
      now and every minute while the feed runs. A failure leaves the last rows and says so in the Accounts tab. */
@@ -764,6 +919,7 @@ function createFeed(env) {
   const limit = name => { const a = account(name); return a ? AC.limitState(a, S.desk.get(name), rulesOf(a)) : null; };
   return {
     S, start, startAny, stop, account, limit, post, groupOf, rulesOf, store, setAccountType, readTypes, joinRefusal, joinPlan, joinWords,   // 1.37.0: the join, shared
+    setOutcome, lifecycleTick,   // 1.40.0: the account lifecycle
     /** 1.30.0: an account's type on The Desk ({ id, firm, name, version, status }) or null */
     typeOf: name => { const d = S.desk.get(name); return d && d.accountType ? d.accountType : null; },
     listen(part) { subs.add(part); return () => subs.delete(part); },
@@ -879,7 +1035,8 @@ function mount(v, host) {
   const q = sel => v.body.querySelector(sel);
   const listEl = q('[data-list]'), footEl = q('[data-foot]');
   const P = { tab: only ? 'cop' : 'acc', key: '', cells: [], props: [], confirm: '', trd: 'trips', offs: new Map(), llPending: new Set(), join: null, rulesEdit: null, apply: '', typePending: new Map(), typeEdit: '', typePick: null, typeFocus: '',
-    drawer: '', simOpen: false, allOpen: false, colDrag: null, colClick: null };   // 1.34.0: the account whose settings drawer is open; the Sim section open; every drawer open
+    drawer: '', simOpen: false, allOpen: false, colDrag: null, colClick: null,
+    outcomeAsk: null, outcomePending: new Set(), nlOpen: false };   // 1.40.0: the Blown or Promoted confirm ({ name, v }), the PUTs on their way, the plain not-listed rows open   // 1.34.0: the account whose settings drawer is open; the Sim section open; every drawer open
   /* 1.34.0 (Anthony 2026-10-20: "make the rows or columns adjustable, so I can click and drag them and make them larger or
      smaller"): the Accounts tab's column widths (px, or null for the default share), kept in this browser; and each account's
      short label, kept in this browser too (the full name on hover) */
@@ -915,7 +1072,28 @@ function mount(v, host) {
     if (a === 'archive') { P.confirm = id; render(); }
     else if (a === 'archive-no') { P.confirm = ''; render(); }
     else if (a === 'archive-yes') { if (P.confirm === id) F.accountArchive(id); P.confirm = ''; render(); }
-    else if (a === 'unarchive') F.accountUnarchive(id);
+    else if (a === 'unarchive') {   // 1.40.0 (audit 5): what Show does, said as it is
+      if (F.accountUnarchive(id)) host.note('Show ' + id + ': sent. It is back in the list, unchecked, once NinjaTrader has it connected this session; until then it is under Not in NinjaTrader now.');
+    }
+    /* 1.40.0 (the account lifecycle, D4): Blown or Promoted asks first (a row of its own, never a browser dialog), then The Desk is told
+       (PUT /api/accounts/{account}/outcome) and ChartBridge is brought into line by the feed (F.lifecycleTick) */
+    else if (a === 'outcome') { P.outcomeAsk = P.outcomeAsk && P.outcomeAsk.name === id && P.outcomeAsk.v === b.dataset.v ? null : { name: id, v: b.dataset.v }; render(); }
+    else if (a === 'outcome-no') { P.outcomeAsk = null; render(); }
+    else if (a === 'outcome-yes') {
+      const ask = P.outcomeAsk; P.outcomeAsk = null;
+      if (!ask || ask.name !== id || P.outcomePending.has(id)) { render(); return; }
+      P.outcomePending.add(id); render();
+      F.setOutcome(id, ask.v).then(r => {
+        P.outcomePending.delete(id);
+        host.note(r.ok ? id + ' marked ' + AC.OUTCOME_WORD[ask.v] + ' on The Desk. ChartBridge takes it out of its group and the copier, then hides it (the Accounts tab shows any step it refuses).' : id + ' not marked ' + AC.OUTCOME_WORD[ask.v] + ': ' + r.error, !r.ok);
+        render();
+      });
+    }
+    /* 1.40.0 (audit 8): an account NinjaTrader does not list now: out of its group, its copier follower off, then removed */
+    else if (a === 'nl-leave') F.accountGroup(id, null);
+    else if (a === 'nl-foff') { const fr = AC.followerRows(S.accounts, S.copier).find(r => r.account === id); if (fr) F.copierFollower(Object.assign({}, fr, { on: false })); }
+    else if (a === 'nl-fremove') F.copierFollowerRemove(id);
+    else if (a === 'nl-toggle') { P.nlOpen = !P.nlOpen; render(); }
     else if (a === 'cancel') F.cancelFromList(id);
     else if (a === 'rearm') F.copierRearm();
     else if (a === 'f-remove') F.copierFollowerRemove(id);   // 1.34.0
@@ -1276,6 +1454,60 @@ function mount(v, host) {
         return row('rules|' + a.name, `<span role="cell" class="apg-confirm apg-rform"><span class="apg-jrules">${esc(a.name)}'s rules${a.group ? ' in ' + esc(gName(a.group)) : ''}:</span>${rulesBoxes(a.name, P.rulesEdit.form)} <button type="button" class="ac-btn apg-yes" data-act="rules-save" data-id="${esc(a.name)}">Save rules</button><button type="button" class="ac-btn" data-act="rules-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
       };
       const canShow = canAct && accounts.some(a => a && 'canHide' in a);   // Show: ChartBridge 0.5.1 and later (its accounts carry canHide)
+      /* 1.40.0 (the account lifecycle, D4): Blown and Promoted, only for an account The Desk has a prop account for (AC.propRow); once
+         marked, the outcome and what ChartBridge still has to do (Undo is on The Desk's Prop screen, Finished) */
+      const outcomeCell = name => {
+        const d = S.desk.get(name);
+        if (!S.deskAt || !AC.propRow(d)) return '';
+        if (d.outcome) return `<span class="apg-outc apg-outc-${esc(d.outcome)}" title="Marked on The Desk. Undo is on The Desk's Prop screen (Finished): the Prop card comes back; the account does not rejoin its group.">${esc(d.outcome.toUpperCase())}</span>`;
+        if (P.outcomePending.has(name)) return '<span class="mut">sending to The Desk...</span>';
+        const can = S.deskState === 'ok';
+        return AC.OUTCOMES.map(v => `<button type="button" class="ac-btn apg-outbtn" data-act="outcome" data-v="${v}" data-id="${esc(name)}" aria-expanded="${!!(P.outcomeAsk && P.outcomeAsk.name === name && P.outcomeAsk.v === v)}"${can ? '' : ' disabled'} title="${esc(can ? (v === 'blown' ? 'The eval is blown: mark it on The Desk (asks first)' : 'The eval passed to funded: mark it on The Desk (asks first); the funded account is a new NinjaTrader account') : 'The Desk is not reachable now')}">${AC.OUTCOME_WORD[v]}</button>`).join('');
+      };
+      const askOutcome = name => {
+        const ask = P.outcomeAsk;
+        if (!ask || ask.name !== name) return '';
+        const W = AC.OUTCOME_WORD[ask.v];
+        return row('out|' + name + '|' + ask.v, `<span role="cell" class="apg-confirm apg-outask">Mark ${esc(name)} ${esc(W)} on The Desk? It leaves its group and the copier and is hidden on this page; its trades, fees and history stay on The Desk. Undo is on The Desk's Prop screen. ` +
+          `<button type="button" class="ac-btn apg-yes" data-act="outcome-yes" data-id="${esc(name)}">Mark ${esc(W)}</button><button type="button" class="ac-btn" data-act="outcome-no" data-id="${esc(name)}">Cancel</button></span>`, 'apg-ask');
+      };
+      /* 1.40.0: what ChartBridge still has to do for an account marked on The Desk (a refusal shown once, as it came; never sent again) */
+      const lifeBox = () => {
+        const lines = [];
+        for (const [name, rec] of S.lifecycle) {
+          const tried = [...rec.tried.entries()], refused = tried.filter(([, t]) => t.state === 'refused');
+          const who = `<b>${esc(labelOf(name) || name)}</b> <span class="mut">(${esc(AC.OUTCOME_WORD[rec.outcome] || rec.outcome)} on The Desk)</span>`;
+          for (const [k, t] of refused) lines.push(`<li class="warn">${who}: ${esc(AC.STEP_WORDS[k.split('|')[0]] || k)} refused by ChartBridge: ${esc(t.why)}</li>`);
+          if (refused.length) continue;
+          if (rec.step === 'blocked') lines.push(`<li class="warn">${who}: not hidden yet: ${esc(rec.why)}</li>`);
+          else if (rec.step === 'wait') lines.push(`<li class="mut">${who}: waiting: ${esc(rec.why)}</li>`);
+          else if (rec.step && rec.step !== 'done') { const t = rec.tried.get(rec.step); lines.push(`<li class="mut">${who}: ${esc(AC.STEP_WORDS[rec.step] || rec.step)}${t && t.state === 'sent' ? ': asked, waiting for ChartBridge' : ''}</li>`); }
+        }
+        return lines.length ? `<div class="apg-life" role="status" aria-label="Accounts marked on The Desk"><p class="apg-fl-head">Marked Blown or Promoted on The Desk: ChartBridge takes each out of its group and the copier, then hides it.</p><ul class="apg-fl-list">${lines.join('')}</ul></div>` : '';
+      };
+      /* 1.40.0 (audit 8): the accounts NinjaTrader does not list now that ChartBridge still holds (a group member, a copier follower),
+         each with what takes it out, and the accounts not connected this session (a Show of one waits here), folded */
+      const notListedSection = () => {
+        const rows = AC.notListedRows(accounts, S.groups, sw.copier ? S.copier : null, S.notListed, S.archived);
+        if (!rows.length) return '';
+        const held = rows.filter(r => r.group || r.follower), plain = rows.filter(r => !r.group && !r.follower);
+        const C = S.copier || {};
+        const nlRow = r => {
+          const btns = [];
+          if (r.group && canGroup) btns.push(`<button type="button" class="ac-btn" data-act="nl-leave" data-id="${esc(r.name)}" title="Take ${esc(r.name)} out of ${esc(r.group.name)} (it is not in NinjaTrader now; it sits out every entry anyway)">Remove from group</button>`);
+          if (r.follower && sw.copier && S.enabled) btns.push(r.follower.on ? `<button type="button" class="ac-btn" data-act="nl-foff" data-id="${esc(r.name)}" title="Turn the copier follower ${esc(r.name)} off (then Remove follower)">Turn follower off</button>`
+            : C.canRemove === true ? `<button type="button" class="ac-btn" data-act="nl-fremove" data-id="${esc(r.name)}" title="Remove ${esc(r.name)} as a copier follower (refused while the copier still holds something there)">Remove follower</button>` : '');
+          if (!r.group && !r.follower && !r.hidden && canAct) btns.push(P.confirm === r.name ? '' : `<button type="button" class="ac-btn apg-hide" data-act="archive" data-id="${esc(r.name)}" title="Hide ${esc(r.name)}: it leaves every list until you Show it; its fills and history stay">Hide</button>`);
+          btns.push(outcomeCell(r.name));
+          const nk = AC.notListedWords(r) + (r.unseen ? '' : '; not in NinjaTrader now');
+          return row('nl|' + r.name, c(labelOf(r.name) || r.name, 'b', r.name) + c(nk, 'mut', nk) + `<span role="cell" class="apg-nlbtns">${btns.filter(Boolean).join('')}</span>`, 'apg-nl') +
+            (P.confirm === r.name ? row('nlask|' + r.name, `<span role="cell" class="apg-confirm">Hide ${esc(r.name)}? It leaves every list until you Show it; its history stays. <button type="button" class="ac-btn apg-yes" data-act="archive-yes" data-id="${esc(r.name)}">Hide</button><button type="button" class="ac-btn" data-act="archive-no" data-id="${esc(r.name)}">Keep</button></span>`, 'apg-ask') : '') +
+            askOutcome(r.name);
+        };
+        return `<h3 class="apg-h" title="Accounts ChartBridge knows that NinjaTrader does not list now (not connected this session, or taken away by the firm)">Not in NinjaTrader now</h3><div class="gr apg-g apg-nl-g" role="table" aria-label="Accounts not in NinjaTrader now">` +
+          held.map(nlRow).join('') +
+          (plain.length ? row('nl-more', `<span role="cell" class="apg-sec">${ci(plain.length + (plain.length === 1 ? ' account' : ' accounts') + ' not connected this session', 'apg-stitle mut')}<button type="button" class="ac-btn apg-simtg" data-act="nl-toggle" aria-expanded="${P.nlOpen}">${P.nlOpen ? 'Fold' : 'Show'}</button></span>`, 'apg-secrow') + (P.nlOpen ? plain.map(nlRow).join('') : '') : '') + '</div>';
+      };
       /* the in-page confirm for Hide, a row of its own under the account's */
       const ask = a => P.confirm !== a.name ? '' : row('ask|' + a.name, `<span role="cell" class="apg-confirm">Hide ${esc(a.name)}? It leaves every list until you Show it; its history stays. <button type="button" class="ac-btn apg-yes" data-act="archive-yes" data-id="${esc(a.name)}">Hide</button><button type="button" class="ac-btn" data-act="archive-no" data-id="${esc(a.name)}">Keep</button></span>`, 'apg-ask');
       /* 1.34.0 (Anthony 2026-10-20: "this accounts tab needs cleaned up, its too messy, too much info in one area"; "I do like to see
@@ -1385,8 +1617,8 @@ function mount(v, host) {
         const labBox = `<input type="text" class="oin apg-ll-in apg-label" data-act="label" data-id="${esc(a.name)}" ${pr({ value: lab })} placeholder="${esc(a.name.slice(0, 12))}" maxlength="24" aria-label="Short label for ${esc(a.name)}" title="A short name shown in place of ${esc(a.name)} on this page (this browser only; empty: the name)">`;
         const hideBtn = canAct && a.canHide === true ? `<button type="button" class="ac-btn apg-hide" data-act="archive" data-id="${esc(a.name)}" title="Hide ${esc(a.name)}: it leaves every list until you Show it; its fills and history stay">Hide</button>` : '';
         const drawer = row('dr|' + a.name, `<span role="cell" class="apg-drawer">` + fld('Group', unrole(grp)) + fld('Account type', unrole(typeCell(a))) + fld('Limits', unrole(lims)) +
-          fld('Firm minimum', firm) + fld('Label', labBox) + fld('', hideBtn) + (flags.length ? `<span class="apg-dflags">${esc(flags.join(' · '))}</span>` : '') + '</span>', 'apg-ask apg-drawerrow');
-        return main + drawer + ask(a) + askJoin(a) + askRules(a) + typeRow(a) + askApply(a);
+          fld('Firm minimum', firm) + fld('Label', labBox) + fld('', hideBtn) + fld('Prop', outcomeCell(a.name)) + (flags.length ? `<span class="apg-dflags">${esc(flags.join(' · '))}</span>` : '') + '</span>', 'apg-ask apg-drawerrow');
+        return main + drawer + ask(a) + askOutcome(a.name) + askJoin(a) + askRules(a) + typeRow(a) + askApply(a);
       };
       /* the sections: each group (its members), then the accounts in no group, then the Sim accounts (folded until opened) */
       const secRow = (k, title, tot, extra) => row('sec|' + k, `<span role="cell" class="apg-sec">` + ci(title, 'apg-stitle') + ci(tot, 'apg-stot') + (extra || '') + '</span>', 'apg-secrow');
@@ -1409,9 +1641,9 @@ function mount(v, host) {
         (stale ? `<p class="apg-stalenote" role="status">${esc(staleWords)}</p>` : '') +
         `<div class="apg-acc-top"><button type="button" class="ac-btn apg-alltg" data-act="drawers-all" aria-pressed="${P.allOpen}" title="${P.allOpen ? 'Fold every account\'s settings' : 'Show every account\'s settings (group, type, limits, the firm\'s minimum, a label, Hide) at once'}">${P.allOpen ? 'Fold settings' : 'Settings for every account'}</button>` +
           (firmOn() && canGroup ? `<button type="button" class="ac-btn apg-floorsbtn" data-act="floors-desk" aria-expanded="${!!P.floors}" title="Show every prop account's floor as The Desk has it (its seed from the firm dashboard plus the tracked fills); you confirm once, then each goes to ChartBridge as the firm's minimum">Update floors from The Desk</button>` : '') + '</div>' +
-          floorsPanel() +
+          floorsPanel() + lifeBox() +
         `<div class="gr apg-g apg-acc-g apg-acc2${stale ? ' apg-stale' : ''}" style="--apg-cols: ${colsCss(widths)}" role="table" aria-label="Accounts${stale ? ' as of ' + esc(hms(S.lostAt)) + ' ET (not connected)' : ''}">` +
-        headRow + sections.join('') + '</div>' +
+        headRow + sections.join('') + '</div>' + notListedSection() +
         (gone.length ? '<h3 class="apg-h">Gone</h3><div class="gr apg-g apg-gone-g" role="table" aria-label="Gone accounts">' + gone.map(a => {
           const asking = P.confirm === a.name;
           const btn = !canAct ? '' : asking
@@ -1422,7 +1654,7 @@ function mount(v, host) {
         }).join('') + '</div>' : '') +
         /* hidden (archived) accounts: Show brings one back, unchecked (ChartBridge 0.5.1) */
         (S.archived.length ? '<h3 class="apg-h">Hidden</h3><div class="gr apg-g apg-arch-g" role="table" aria-label="Hidden accounts">' + S.archived.map(a =>
-          row('a|' + a.name, c(a.name, 'b mut') + (canShow ? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show" data-act="unarchive" data-id="${esc(a.name)}" title="Show ${esc(a.name)}: back in the lists, unchecked">Show</button></span>` : ''), 'apg-arch')).join('') + '</div>' : '');
+          row('a|' + a.name, c(a.name, 'b mut') + (canShow ? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show" data-act="unarchive" data-id="${esc(a.name)}" title="Show ${esc(a.name)}: back in the lists, unchecked, once NinjaTrader has it connected this session (until then under Not in NinjaTrader now)">Show</button></span>` : ''), 'apg-arch')).join('') + '</div>' : '');
       foot = (grpOn ? (S.groupsError ? S.groupsError + ' ' : 'Room: ChartBridge from each group\'s rules or your own limits, NinjaTrader\'s balance and P&L. Groups are made on the Multi-Account panel. ') : '') +
         (S.deskState === 'ok' ? 'Limits: NinjaTrader where it reports them, else The Desk.' : S.deskState === 'not asked' ? 'Limits: NinjaTrader where it reports them.' : S.deskState) +
         (!grpOn ? '' : S.typesState === 'cache' ? ' Account types: The Desk is not reachable; the list as of ' + GroupsCore.asOfText(S.typesAsOf) + '.' : S.typesState === 'none' ? ' Account types: The Desk is not reachable and this browser has no copy.' : '') +

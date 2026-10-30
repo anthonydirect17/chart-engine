@@ -401,6 +401,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (taken != null) { s.Out = taken; continue; }
                 if (a == null) { s.Out = "it is not in NinjaTrader now"; continue; }
                 if (a.Connection == null || a.Connection.Status != ConnectionStatus.Connected) { s.Out = "it is not connected"; continue; }   // 0.6.6: no longer caught by its room not known
+                // 0.6.10 (audit 7): gate 2 as the placement asks it (FindAccount): a hidden, unchecked or Gone member sits out the preview
+                // too, so the preview never sizes a member the entry then refuses
+                if (!AccountTradable(name)) { s.Out = ChartBridgeAccounts.On ? ChartBridgeAccounts.EntryRefusal(name) : "it may not trade from the chart (tradeAccounts in config.txt)"; continue; }
                 ChartBridgeGroups.Numbers n = ChartBridgeGroups.Read(name, a, false);
                 if (n.GroupId != g.Id) { s.Out = "it is not in group " + g.Name + " now"; continue; }
                 // 0.6.7 (Anthony 2026-10-22: the group's fallback rules dropped): sized only from its own rules (its type on The Desk)
@@ -2236,8 +2239,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             if ((why = RulesFrom(m, false, out own)) != null) return why;
             if (ChartBridgeOrders.IsNeverTradable(name)) return name + " is never in a group (Backtest and Playback)";
             Account a = Find(name);
-            if (a == null && !ChartBridgeAccounts.Listed(name)) return "no account " + name;
-            if (a != null) name = a.Name;
+            // 0.6.10 (the account lifecycle, audit 1): leaving is remove-only, so a member NinjaTrader no longer lists (a blown eval
+            // taken off by the firm) can still leave its group; joining still needs the account listed
+            string memberAs = id == null ? MemberName(name) : null;
+            if (a == null && memberAs == null && !ChartBridgeAccounts.Listed(name)) return "no account " + name;
+            if (a != null) name = a.Name; else if (memberAs != null) name = memberAs;
             // 0.6.0 (group trading): a group an agent trades takes no account that is the bot's, the copier's leader or a follower, or
             // another agent's (asked before the order lock: it reads the copier's and the bot's memory)
             if (id != null) { string taken = ChartBridgeAgents.JoinRefusal(name, id); if (taken != null) return taken; }
@@ -2487,6 +2493,57 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // For the harness and the PC: the group id of an account, or null.
         public static string GroupOf(string account) { EnsureLoaded(); lock (Mem) { string id; return account != null && state.Members.TryGetValue(account, out id) ? id : null; } }
+
+        // 0.6.10 (the account lifecycle, Anthony 2026-10-30 D2): Hide (accountArchive) takes a member out of its group (its bench place
+        // and its own rules with it) in the same step, under the groups lock order (ChangeGate, then GroupEntryLock and PlaceLock in
+        // ChangeAndSave), so no group entry is sized or placed with it between the check and the change. hideRefusal is asked under
+        // those locks (flat, not the bot's, the copier's or an agent's; null: it may be hidden); archive marks it hidden once the group
+        // change is in effect (null, or why not). A failed groups.txt write that is undone leaves it in its group and not hidden. Not a
+        // member: hideRefusal and archive alone, still under ChangeGate. groups.txt not readable and the account a member by its last
+        // good copy: refused (the change could not be saved). Returns null, a refusal, or ChangeAndSave's "changed, but ..." warning.
+        internal static string HideAndLeave(string name, Account a, Func<string> hideRefusal, Func<string> archive)
+        {
+            EnsureLoaded();
+            lock (ChangeGate)
+            {
+                bool unreadable;
+                lock (Mem) unreadable = readError != null;
+                string member = MemberName(name), why;
+                if (member == null)
+                {
+                    if ((why = hideRefusal()) != null) return why;
+                    return archive();
+                }
+                if (unreadable) return ReadFailedNow() + "; " + member + " is in a group, so it cannot be hidden (it would leave its group) until groups.txt can be read";
+                string gname = null, archived = null;
+                bool inEffect;
+                string res = ChangeAndSave(true, next =>
+                {
+                    string cur;
+                    if (!next.Members.TryGetValue(member, out cur)) return Unchanged;
+                    string no = hideRefusal();
+                    if (no != null) return no;
+                    gname = next.Groups.ContainsKey(cur) ? next.Groups[cur].Name : cur;
+                    next.Members.Remove(member); next.Own.Remove(member); next.Benched.Remove(member);
+                    return null;
+                }, next => HeldWords(member, a), out inEffect);
+                if (ReferenceEquals(res, Unchanged)) { if ((why = hideRefusal()) != null) return why; return archive(); }
+                if (!inEffect) return res;
+                archived = archive();
+                ForgetHighs(new[] { member });
+                ChartBridgeServer.Log("groups: " + member + " left " + gname + " as it was hidden (by the page)" + (archived != null ? "; not hidden: " + archived : ""));
+                Changed();
+                return archived ?? res;
+            }
+        }
+
+        // 0.6.10 (the account lifecycle): an account that is a member of a group now, as groups.txt spells it, or null.
+        private static string MemberName(string account)
+        {
+            if (string.IsNullOrEmpty(account)) return null;
+            lock (Mem) foreach (string k in state.Members.Keys) if (k.Equals(account, StringComparison.OrdinalIgnoreCase)) return k;
+            return null;
+        }
 
         // 0.6.0 (group trading): a group's members in seat order (by name, ignoring case, as the groups message lists them), or null
         // when there is no such group (or groups.txt could not be read: no group is known then, so an agent on one trades nothing).

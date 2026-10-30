@@ -4437,7 +4437,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // 0.6.0: agentAccount with a group: every member a seat. Refused when the group has no account, when a member is the bot's, the
-        // copier's leader or a follower (on or off), another agent's, Backtest or Playback, or not in NinjaTrader; while this agent has
+        // copier's leader or a follower (on or off), another agent's, or Backtest or Playback (0.6.10: one not in NinjaTrader now sits out); while this agent has
         // a position, a working entry or a proposal; and while a member, or a seat it trades now, holds any position or working order
         // on its roots (as for one account). A member that is not tradable or connected now is taken: it sits out each trade until it is.
         private string SetGroupLocked(string gid, string keep)
@@ -4486,6 +4486,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (!PlainName(m)) return m + " is not an account name ChartBridge can trade";
             string why = AccountProblemFor(m, false);
+            // 0.6.10 (the account lifecycle, audit 3): a member NinjaTrader does not list now does not block the group (it sits out
+            // each trade until it is back, as at entry); the claims by name below still apply to it
+            if (why != null && FindAccount(m) == null && ChartBridgeOrders.Enabled && !ChartBridgeOrders.IsNeverTradable(m)) why = null;
             if (why != null) return why;
             if (string.Equals(m, bot, StringComparison.OrdinalIgnoreCase)) return m + " is the bot's account: an agent never trades it";
             string cw = ChartBridgeAgents.CopierUses(m);

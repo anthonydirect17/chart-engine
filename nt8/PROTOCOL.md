@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -1632,8 +1632,8 @@ its drawdown lock); it is shown, never acted on. Until 0.4.1 Gone cleared the ch
 made an account Gone.
 
 **Hide (archive) and Show (0.5.1).** Only Anthony, on the page, after confirming (`accountArchive` with `confirm: true`).
-Accepted for any account, Gone or not, that is flat with no working orders (as NinjaTrader shows it now, or as ChartBridge
-last saw it this session when NinjaTrader does not list it) and is not the bot's account (`botAccount`; none when the bot is
+Accepted for any account, Gone or not, that is flat with no working orders (as NinjaTrader shows it now; 0.6.10: an account
+NinjaTrader does not list at all is no longer held by what ChartBridge last saw on it, see "The account lifecycle (0.6.10)") and is not the bot's account (`botAccount`; none when the bot is
 on None, 0.5.7), a copier leader or follower (`copier.txt`, the copier on or off), or an agent's chosen account
 (`agent-<id>-account.txt`); otherwise refused with the plain reason ("EVAL-A has a position or working orders: only a flat
 account can be hidden (exits always work)", "Sim101 is the bot's account (the Bot tab): it cannot be hidden"). A file that
@@ -1669,12 +1669,12 @@ Account names appear only in these local files and the local page, never in `/di
 | page to server | fields (no others) | notes |
 |---|---|---|
 | `accountTrade` | `cid` (optional), `account`, `on` (*bool*) | set the checkmark. On is refused for an account that is Gone, archived, not Connected, Backtest or Playback, or with `accountChecks` off; off is always accepted (signed in). After any checkmark change every signed-in page gets `accounts` and `trading` again (its `accounts` list is gate 2 now) |
-| `accountArchive` | `cid` (optional), `account`, `confirm` (*bool*, must be `true`) | Hide. 0.5.1: refused unless the account is flat with no working orders and is not the bot's, a copier leader or follower, or an agent's (until 0.5.0: unless it was Gone) |
-| `accountUnarchive` | `cid` (optional), `account` | Show (0.5.1). Refused for an account that is not archived ("EVAL-A is not archived") or unknown; with `accountChecks` off, refused like the others |
+| `accountArchive` | `cid` (optional), `account`, `confirm` (*bool*, must be `true`) | Hide. 0.5.1: refused unless the account is flat with no working orders and is not the bot's, a copier leader or follower, or an agent's (until 0.5.0: unless it was Gone). 0.6.10: a member of a group leaves it (and its bench place and own rules) in the same step (`HideAndLeave`) |
+| `accountUnarchive` | `cid` (optional), `account` | Show (0.5.1). Refused for an account that is not archived ("EVAL-A is not archived") or unknown; with `accountChecks` off, refused like the others. 0.6.10: an account NinjaTrader has not had connected this session is shown but not listed until it is: a `status` `info` says so and `accounts` carries it in `notListed` |
 
 | server to page | fields | when |
 |---|---|---|
-| `accounts` | `list`: `[account]` (every watched account not archived, by name: 0.5.1, seen Connected this session), `archived`: `[{name, at}]` (UTC ms; every archived account `accounts.txt` keeps, for Show) | to a v3 page from ChartBridge's own origin, signed in or not, right after its `client`; again on every change: at once for a connection, checkmark or Gone change; at most once a second for money and position changes |
+| `accounts` | `list`: `[account]` (every watched account not archived, by name: 0.5.1, seen Connected this session), `archived`: `[{name, at}]` (UTC ms; every archived account `accounts.txt` keeps, for Show), 0.6.10 `notListed`: `[{name, trade, lastConnected}]` (every account `accounts.txt` keeps, not archived, that NinjaTrader has not had connected this session; `trade` its checkmark, `lastConnected` UTC ms or null) | to a v3 page from ChartBridge's own origin, signed in or not, right after its `client`; again on every change: at once for a connection, checkmark or Gone change; at most once a second for money and position changes |
 
 An `account` is `{name, sim, connection, trade, tradable, state, goneWhy, goneSince, balance, pnlToday, realizedToday,
 unrealized, positions, roomDrawdown, roomDrawdownWhy, roomDailyLoss, roomDailyLossWhy, canHide, hideWhy}`:
@@ -2193,7 +2193,7 @@ follower's `qty` again; a scale-out reduces it by the same share.)
 |---|---|---|
 | `copierGet` | `cid` (optional) | answer: `copier` |
 | `copierSet` | `cid` (optional), `leader` (an account name, or `null` for none, 0.4.3), `mode` (`executions` or `orders`) | at least one of the two; refused while the leader has a position or working entry. `null`: no leader, the copier stands down ("No leader is set.") and copies nothing until a leader is set and Re-arm is pressed |
-| `copierFollower` | `cid` (optional), `account`, `on` (*bool*), `qty` (1 to 9), `size` (`micro` or `mini`), `lossLimit` (whole dollars, 1 or more, or `null` for off) | all keys required; saved at once; the leader cannot be a follower |
+| `copierFollower` | `cid` (optional), `account`, `on` (*bool*), `qty` (1 to 9), `size` (`micro` or `mini`), `lossLimit` (whole dollars, 1 or more, or `null` for off) | all keys required; saved at once; the leader cannot be a follower. 0.6.10: `on: false` for a follower NinjaTrader does not list turns it off (its other settings kept, the rest of the message not used), so it can then be removed; on still needs the account |
 | `copierRearm` | `cid` (optional) | refused while the leader is not Connected or 3 or more followers are not |
 
 | server to page | fields | when |
@@ -3257,7 +3257,7 @@ config switch):
 |---|---|---|
 | `groupSave` | `cid` (optional), `group` (optional: the id to change; absent makes a new group), `name` (1 to 30 characters, no tab, unique ignoring case), `noHedge` (bool), `dailyLoss` (0 for none), `drawdown` (more than 0), `drawdownType` (`eod`, `intraday`, `static`), `target` (0 for none), `size` (more than 0, more than `drawdown`), `lockAt` (0 for none; `eod` and `intraday` only, above `size - drawdown`), `consistency` (optional, 0 or absent for none, else a percent above 0 and at most 100), `accountType` (0.6.1, optional: `eval`, `funded` or `-` for not set; absent keeps the group's), `hero` (0.6.1, optional: a build name of 1 to 64 safe characters, or `-` for none; absent keeps the group's) | every field every time (but `accountType` and `hero`): Rename and the No hedging switch send the whole group. Money: plain numbers, at most 2 decimals, at most 100,000,000 |
 | `groupDelete` | `cid` (optional), `group` | its members go to None (personal, their own limits kept) |
-| `accountGroup` | `cid` (optional), `account`, `group` (an id, or `null` for None), `highClose` (optional, more than 0: G2 b, joining a group only) | refused when the move would leave the target group mixed (the account holds the other side, or the group is mixed already, with No hedging on). Joining: both trailing highs start at `highClose`, or without it at the larger of the account size and the balance now (the page always asks, prefilled so) |
+| `accountGroup` | `cid` (optional), `account`, `group` (an id, or `null` for None), `highClose` (optional, more than 0: G2 b, joining a group only) | refused when the move would leave the target group mixed (the account holds the other side, or the group is mixed already, with No hedging on). Joining: both trailing highs start at `highClose`, or without it at the larger of the account size and the balance now (the page always asks, prefilled so). 0.6.10: `group` `null` for a member NinjaTrader does not list is accepted (remove-only); joining still needs the account listed |
 | `accountLimits` | `cid` (optional), `account`, `floor` (0 for none), `dailyLoss` (0 for none) | personal accounts only: refused for an account in a group ("its group's rules apply") |
 
 **ChartBridge to page** (to every v3 page on ChartBridge's own origin, signed in or not, as `accounts`):
@@ -3919,6 +3919,59 @@ share the entry's `CB#` tag) carries it too. Another account's order placed mean
   with the id as without it (harness: the same group entry to 3 made-up accounts with the id off, which is 0.6.8's path, and on). The
   Output window's group entry line ends with `(decision d...)`.
 
+### The account lifecycle (0.6.10)
+
+Anthony 2026-10-30 (D1 to D5): a prop eval is marked **Blown** or **Promoted** by hand, on The Desk's Prop card or in the account's
+drawer on the Account page (chart 1.40.0); nothing is ever marked by itself. Both take the account out of its group; a funded account
+is a new NinjaTrader account, picked up as any new account and put in a group only by Anthony. History stays on The Desk.
+
+**The Desk's side** (TheDesk, built in parallel): `GET /api/chart-accounts` rows gain `outcome` (`"blown"`, `"promoted"` or `null`);
+`PUT /api/accounts/{account}/outcome` with `{"outcome": "blown" | "promoted" | null}` (the guard, CORS and `OPTIONS` of
+`PUT /api/accounts/{account}/account-type`; `{account}` is the NinjaTrader account name; `404` when no prop account has it).
+
+**The page's side** (chart 1.40.0, `live/accounts.js`): the drawer's Blown and Promoted buttons show only for an account The Desk has
+a prop account for. `/api/chart-accounts` does not say that in so many words, so the page reads it from what a row does say: an
+`outcome` already set, an `accountType` (The Desk gives every typed account its prop card, D5), or a number whose `source` is
+`prop`. A click asks first, in the page (no browser dialog), then sends the PUT (mode `cors`, credentials `omit`). For every row with
+an outcome the window's feed brings ChartBridge into line, one step at a time, each the existing message: out of its group
+(`accountGroup` with `group` `null`), its copier follower off (`copierFollower` with `on` `false`, the rest as the row has them),
+then removed (`copierFollowerRemove`), then hidden (`accountArchive`, `confirm` `true`). ChartBridge's own state (`groups`,
+`copier`, `accounts`) decides the next step, so a second window finds it done. Each step is sent at most once per outcome a page load;
+a refusal is kept and shown on the Accounts tab and in the Log, never sent again in a loop; a step ChartBridge would refuse anyway
+(Hide while `canHide` is false, or with `accountChecks` off) is shown and not sent. Back to no outcome (Undo on The Desk) changes
+nothing on ChartBridge (D4: it does not rejoin its group). The Accounts tab also has a **Not in NinjaTrader now** section: every
+group member or copier follower ChartBridge does not list, with Remove from group, Turn follower off or Remove follower, and the
+accounts in `notListed` (folded), each with Hide and, with a prop account, Blown and Promoted. The Multi-Account panel's chip of such
+a member says "not in NinjaTrader now" (not "set its type on The Desk first"), offers no bench move and has Remove (out of the group).
+
+**ChartBridge 0.6.10: remove-only for an account NinjaTrader no longer lists** (never a join):
+
+- `accountGroup` with `group` `null` is accepted for a member that is not listed (by the name `groups.txt` keeps, in any case); the
+  bench place and its own rules go with it. Joining still answers "no account ..." until it is listed.
+- `copierFollower` with `on` `false` turns off a follower that is not in NinjaTrader (its qty, size and loss limit stay); then
+  `copierFollowerRemove` takes it away as before. **Locked** keeps its meaning for an account that is gone: the copier's own record of
+  a copied position, an entry, stop or close that may still fill, a reduce or a wait on that account (memory only, the account object
+  NinjaTrader last gave). While one is there the follower stays ("it can be removed once the copier's part there is flat and done");
+  it clears when that part is done, or with a ChartBridge restart (the copier keeps no such record across one). Removing it is what
+  lets Re-arm count only real followers again.
+- `accountArchive` (Hide) of an account NinjaTrader does not list at all is no longer refused for what ChartBridge last saw on it (a
+  blown eval taken away while it had an order stayed "busy" for good). It is hidden, and the log line says what it was last seen with;
+  if NinjaTrader lists it again holding anything it is listed again at once, unchecked, so its exits work (as since 0.5.1). The bot's,
+  the copier's and an agent's accounts are still refused.
+- `agentAccount` with a group: a member not in NinjaTrader now no longer refuses the group; it sits out each trade until it is back
+  (as at entry). The bot's account, a copier leader or follower and another agent's account are still refused by name.
+
+**Hide leaves the group (0.6.10, `HideAndLeave`).** Hiding a member takes it out of its group (its bench place and its own rules with
+it) in the same step, under the groups lock order (`ChangeGate`, then `GroupEntryLock` and `PlaceLock` in `ChangeAndSave`): Hide's own
+checks (flat, not claimed) are asked under those locks, the membership goes, `groups.txt` is written, and the account is marked hidden
+once that change is in effect. A failed write that is undone leaves it in its group and not hidden. The claims files are read before
+the locks. With `groups.txt` unreadable a member is not hidden (its group change could not be saved); an account in no group is
+hidden as before.
+
+**A group preview sizes as the placement does (0.6.10).** A member that gate 2 refuses (hidden, not checked, or Gone; with
+`accountChecks` off, not in `tradeAccounts`) now sits out the preview with that reason, as the entry then refuses it, so a preview
+never shows a size the placement will not send.
+
 ### Tape timing and new `/diag` counters
 
 The tape counters and the hardening counters are built and documented in "0.4.0 hardening and markets" above (`/diag`
@@ -3946,7 +3999,8 @@ only, never through the tunnel; CORS for `http://localhost:8765` and `http://127
 |---|---|---|
 | `GET`, `PUT /api/chart-strategies` | `{rev, strategies: [{id, name, stop: {ticks, type, limitOffsetTicks}, targets: [{ticks, sharePct}], breakeven: {afterTicks, plusTicks} or null, trail: {startTicks, byTicks, stepTicks} or null, hotkey}]}` | the Order Strategies, at most 24 |
 | `GET`, `PUT /api/chart-hotkeys` | `{rev, keys: {buy, sell, be, close, flattenAll, merge, maximize}, modifiers: {limit, stop}}` | the trading hotkeys (Merge's key is `merge`) |
-| `GET /api/chart-accounts` | `{accounts: [{account, firm, archived, daily_loss_limit, trailing_drawdown, account_size, source}]}` | read only: a prop limit Anthony typed on The Desk, shown only where ChartBridge's `roomDrawdown` or `roomDailyLoss` is null |
+| `GET /api/chart-accounts` | `{accounts: [{account, firm, archived, daily_loss_limit, trailing_drawdown, account_size, source, accountType, outcome}]}` | read only: a prop limit Anthony typed on The Desk, shown only where ChartBridge's `roomDrawdown` or `roomDailyLoss` is null; 1.40.0: `outcome` (`blown`, `promoted` or `null`) starts the account lifecycle (see "The account lifecycle (0.6.10)") |
+| `PUT /api/accounts/{account}/outcome` (chart 1.40.0) | `{outcome: "blown" \| "promoted" \| null}` | the drawer's Blown and Promoted, as the account type's PUT (CORS `PUT`, `OPTIONS`) |
 | `POST`, `GET /api/trade-tags` (chart 1.34.0) | `{tags: [{id, account, root, phase, dim, value, trade_open_ms, at_ms}]}`; CORS `GET, POST` | the Trade tags panel's records (append-only; TheDesk `docs/API.md` "Trade record") |
 
 **From The Desk's strategy to `order.strategy`** (the page converts; ChartBridge takes only the flat form):
