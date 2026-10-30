@@ -489,7 +489,18 @@ const sectionsKeep = (open, change) => JSON.stringify(Object.fromEntries(SETTING
 /** "Collapse all" while any of the shown sections is open, else "Expand all". */
 const sectionsAllLabel = (open, shown) => ((shown || SETTINGS_SECTIONS).some(id => open[id]) ? 'Collapse all' : 'Expand all');
 
-return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS, TYPES, KEYS, DEFAULT_NAME, DEFAULT_FLOORS, RTH_START, RTH_END,
+/**
+ * 1.40.0 (Anthony 2026-10-30, C-D): the members of a group that a trade tag goes to: the group's members in its order, leaving out the
+ * benched ones (they sit out every entry, so a tag is no trade of theirs) and every copier follower (on or off: a group never trades
+ * one). g: ChartBridge's group ({ members, benched }); copier: its copier message (followers), or null.
+ */
+function groupTagMembers(g, copier) {
+  const benched = new Set(g && Array.isArray(g.benched) ? g.benched : []);
+  const followers = new Set(copier && Array.isArray(copier.followers) ? copier.followers.filter(f => f && typeof f.account === 'string').map(f => f.account) : []);
+  return (g && Array.isArray(g.members) ? g.members : []).filter(m => typeof m === 'string' && m && !benched.has(m) && !followers.has(m));
+}
+
+return { groupTagMembers, COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS, TYPES, KEYS, DEFAULT_NAME, DEFAULT_FLOORS, RTH_START, RTH_END,
   SETTINGS_SECTIONS, SECTIONS_CLOSED, sectionsOpen, sectionsKeep, sectionsAllLabel,
   layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
   isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout, LAPTOP_TABS, GAP, GAP_TIGHT, VIEW_KEYS, cleanViewKeys, fmtSpan,
@@ -2497,7 +2508,7 @@ function tagAccounts() {
   if (!a) return [];
   if (!a.startsWith('group:')) return [a];
   const g = AF && Array.isArray(AF.S.groups) ? AF.S.groups.find(x => 'group:' + x.id === a) : null;
-  return g && Array.isArray(g.members) ? g.members.filter(m => typeof m === 'string' && m) : [];
+  return g ? W.groupTagMembers(g, AF.S.copier) : [];   // 1.40.0 (C-D): never a benched member or a copier follower
 }
 function tagLabel() { const a = ticketAccount(); if (!a || !a.startsWith('group:')) return a || 'None'; const g = AF && Array.isArray(AF.S.groups) ? AF.S.groups.find(x => 'group:' + x.id === a) : null; return g ? 'group ' + g.name : a; }
 function tagPosition(acct, r) {

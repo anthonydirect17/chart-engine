@@ -47,6 +47,8 @@ not list is refused and the page shows the refusal once.
   Desk's `rejected` list is appended to `rejected_fills.jsonl` or `rejected_orders.jsonl` (next to `config.txt`) as it was sent, with
   The Desk's reason first (`desk_reason`), as a malformed one already was; `/diag` counts them and names the file, and the Account
   page reads `/diag` each minute and says how many and where. `test/desk-send.test.js`, `nt8/check/RecordHarness.cs`.
+- **A group's trade tags go only to the members that trade** (C-D, `live/workspace.js` `groupTagMembers`): never a benched member,
+  never a copier follower (on or off). `test/group-tags.test.js`.
 - Tests: `test/lifecycle.test.js` (the pure parts, the feed's steps against a fake ChartBridge, the PUT); harness cases in
   `nt8/check/GroupsHarness.cs`, `CopierHarness.cs`, `AccountsHarness.cs` and `AgentHarness.cs`. `nt8/PROTOCOL.md` "The account
   lifecycle (0.6.10)"; `CHART_STYLE.md` for the new controls.
