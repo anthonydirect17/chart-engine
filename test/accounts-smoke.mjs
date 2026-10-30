@@ -61,7 +61,7 @@ const DESK = { accounts: [
 ] };
 /* 1.35.0: The Desk's floors (made-up numbers, sample data): EVAL-A's, one ChartBridge does not list, and The Desk's own skip */
 const FLOORS = { accounts: [
-  { account: 'EVAL-A', prop: 'Sample 50K', floor: 49600, source: 'the firm dashboard on 2026-10-13, then 2 tracked round trips (sample)', note: null },
+  { account: 'EVAL-A', prop: 'Sample 50K', floor: 49600, basis: 'net', source: 'the firm dashboard on 2026-10-13, then 2 tracked round trips (sample)', note: null },
   { account: 'NOPE-X', prop: 'NOPE-X', floor: 48000, source: 'sample' }],
   skipped: [{ account: null, prop: 'Sample 150K', why: 'not linked to a fills account on The Desk\'s Prop screen' }] };
 async function openWs(ctx, port, layout) {

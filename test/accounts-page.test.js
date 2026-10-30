@@ -402,7 +402,8 @@ test('1.35.0: the floors from The Desk: what is sent, and every skip with why', 
   const accounts = [{ name: 'EVAL-A', floor: 47900, rules: { drawdownType: 'eod' } }, { name: 'EVAL-B', rules: null },
     { name: 'EVAL-S', rules: { drawdownType: 'static' } }, { name: 'EVAL-N', rules: { drawdownType: 'eod' } }];
   const plan = AC.floorPlan(desk, accounts, a => a.rules);
-  assert.deepStrictEqual(plan.send, [{ account: 'EVAL-A', label: 'Lucid 50K', floor: 48040.5, now: 47900, source: 'the firm dashboard on 2026-10-13, then 4 tracked round trips', note: '' }]);
+  assert.deepStrictEqual(plan.send, [{ account: 'EVAL-A', label: 'Lucid 50K', floor: 48040.5, now: 47900, source: 'the firm dashboard on 2026-10-13, then 4 tracked round trips', note: '',
+    basis: null, lower: false, tick: 'The Desk does not say whether it is on net P&L' }]);   // 1.40.0 (C-A): no basis: the explicit tick
   assert.deepStrictEqual(plan.skip.map(x => [x.account || x.label, x.why]), [
     ['EVAL-B', 'no firm rules on ChartBridge yet: apply its account type first (in ⋯)'],
     ['SIM-GONE', 'ChartBridge does not list it on this PC'],

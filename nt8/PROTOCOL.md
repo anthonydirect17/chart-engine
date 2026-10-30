@@ -3644,6 +3644,10 @@ Desk (`GET /api/chart-floors`), shows them, and on Anthony's one confirm sends t
 ChartBridge lists with firm rules and a trailing drawdown, 150 ms apart; ChartBridge checks each as above. A `firmMinimum` not
 refused within 3 seconds is kept in the page's browser, and for that account the page no longer flags NinjaTrader's own room to
 the floor (`roomFloorNt`, which never locks); it stays in the Room's hover.
+1.40.0 (Anthony 2026-10-30, C-A): The Desk's floor walks its closed trades, which may be gross or miss fills not sent yet, so the
+box shows ChartBridge's floor now beside each new one, and a floor **lower** than ChartBridge's (or with ChartBridge's not known), or
+one The Desk does not mark as on net P&L (`/api/chart-floors` `basis` `"gross"`, or no `basis`), has its own tick, off: it is sent
+only when Anthony ticks it in that confirm. ChartBridge still refuses a minimum below the starting floor.
 
 **Remove a follower row (WORK 2026-10-20).** An off follower row left from the October copier tests kept its account out of every
 group entry (a follower, on or off, is never a group's or an agent's seat).

@@ -210,6 +210,9 @@
 .apg-life { margin: 0 0 8px; padding: 8px 10px; border: 1px solid #8A6A2A; border-radius: 8px; background: var(--ws-warn-ground, #1C150A); font-size: 12px; }
 .apg-life p { margin: 0 0 6px; }
 .apg-life li { white-space: normal; }
+.apg-fltick { font-size: 11px; padding: 0 6px; }
+.apg-fltick.on { border-color: var(--ws-warn, #E8B85C); color: var(--ws-warn, #E8B85C); }
+.apg-fl-row.apg-fl-needs { white-space: normal; }
 .apg-nl-g .gr-row { grid-template-columns: minmax(64px, 1fr) minmax(0, 1.3fr) minmax(0, 2.6fr); }
 .apg-nl-g .gr-row.apg-ask, .apg-nl-g .gr-row.apg-secrow { grid-template-columns: minmax(0, 1fr); }
 .apg-nlbtns { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 6px; white-space: normal !important; }

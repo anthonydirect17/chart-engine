@@ -39,6 +39,10 @@ not list is refused and the page shows the refusal once.
   in its group and not hidden.
 - **A group preview sizes as the entry places** (ChartBridge 0.6.10, audit 7): a member gate 2 refuses (hidden, not checked, Gone)
   sits out the preview with that reason.
+- **Update floors from The Desk never lowers a floor on its own** (C-A, `live/accounts.js` `floorPlan`): each row shows ChartBridge's
+  floor now beside The Desk's; a floor lower than ChartBridge's (or with ChartBridge's not known), or one The Desk does not mark as on
+  net P&L (`/api/chart-floors` `basis` gross, or none), goes only when Anthony ticks it in the confirm. ChartBridge still refuses a
+  minimum below the starting floor. `test/floors-safety.test.js`.
 - Tests: `test/lifecycle.test.js` (the pure parts, the feed's steps against a fake ChartBridge, the PUT); harness cases in
   `nt8/check/GroupsHarness.cs`, `CopierHarness.cs`, `AccountsHarness.cs` and `AgentHarness.cs`. `nt8/PROTOCOL.md` "The account
   lifecycle (0.6.10)"; `CHART_STYLE.md` for the new controls.

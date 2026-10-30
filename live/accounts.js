@@ -506,8 +506,17 @@ function floorPlan(desk, accounts, rulesOf) {
     const rules = typeof rulesOf === 'function' ? rulesOf(a) : a.rules;
     if (!rules || typeof rules !== 'object') { out.skip.push({ account: r.account, label, why: 'no firm rules on ChartBridge yet: apply its account type first (in ⋯)' }); continue; }
     if (rules.drawdownType === 'static') { out.skip.push({ account: r.account, label, why: 'its drawdown is static on ChartBridge: the floor is fixed' }); continue; }
-    out.send.push({ account: r.account, label, floor: Math.round(r.floor * 100) / 100, now: isNum(a.floor) ? a.floor : null,
-      source: typeof r.source === 'string' ? r.source.slice(0, 200) : '', note: typeof r.note === 'string' ? r.note.slice(0, 200) : '' });
+    /* 1.40.0 (Anthony 2026-10-30, C-A): The Desk's floor walks its closed trades, which may be gross or miss fills not sent yet, so
+       a floor that would go DOWN on ChartBridge (or with ChartBridge's floor not known to compare), and one The Desk does not say is on
+       net P&L (basis "gross", or no basis), goes only when Anthony ticks it in the confirm (tick: the reason) */
+    const floor = Math.round(r.floor * 100) / 100, now = isNum(a.floor) ? a.floor : null, basis = typeof r.basis === 'string' ? r.basis : null;
+    const ticks = [];
+    if (now === null) ticks.push('ChartBridge\'s floor is not known, so it may be lower');
+    else if (floor < now - 0.004) ticks.push('lower than ChartBridge\'s ' + fmtUsdPlain(now));
+    if (basis !== 'net') ticks.push(basis === 'gross' ? 'The Desk worked it out on gross P&L (no commission set)' : 'The Desk does not say whether it is on net P&L');
+    out.send.push({ account: r.account, label, floor, now,
+      source: typeof r.source === 'string' ? r.source.slice(0, 200) : '', note: typeof r.note === 'string' ? r.note.slice(0, 200) : '',
+      basis, lower: now !== null && floor < now - 0.004, tick: ticks.join('; ') });
   }
   for (const k of desk && Array.isArray(desk.skipped) ? desk.skipped : []) {
     if (!k || typeof k.why !== 'string') continue;
@@ -1106,12 +1115,21 @@ function mount(v, host) {
       F.readFloors().then(r => { if (!P.floors) return; P.floors = r.ok ? { state: 'ready', json: r.json } : { state: 'error', error: r.error }; render(); });
     }
     else if (a === 'floors-close') { P.floors = null; render(); }
+    else if (a === 'floor-tick') {   // 1.40.0 (C-A): Anthony's explicit tick for a floor that is lower, or not known to be on net P&L
+      const fl = P.floors; if (!fl || fl.sentAt) return;
+      fl.ticked = fl.ticked || new Set();
+      if (fl.ticked.has(id)) fl.ticked.delete(id); else fl.ticked.add(id);
+      render();
+    }
     else if (a === 'floors-send') {   // the one confirm: each floor as ChartBridge's own firmMinimum, a little apart
       const fl = P.floors; if (!fl || fl.state !== 'ready' || fl.sentAt) return;
       const plan = AC.floorPlan(fl.json, S.accounts, F.rulesOf);
-      fl.sentAt = Date.now(); fl.sentN = plan.send.length;
-      plan.send.forEach((r, i) => setTimeout(() => { if (!F.firmMinimum(r.account, String(r.floor))) S.firmSent[r.account] = 'refused: not sent (not connected to ChartBridge)'; render(); }, i * 150));
-      host.note('Sending ' + plan.send.length + ' floor' + (plan.send.length > 1 ? 's' : '') + ' from The Desk to ChartBridge.');
+      const ticked = fl.ticked || new Set();   // 1.40.0 (C-A): a floor that needs the tick goes only when ticked
+      const go = plan.send.filter(r => !r.tick || ticked.has(r.account));
+      if (!go.length) { host.note('Nothing to send: tick each floor you want sent.', true); return; }
+      fl.sentAt = Date.now(); fl.sentN = go.length;
+      go.forEach((r, i) => setTimeout(() => { if (!F.firmMinimum(r.account, String(r.floor))) S.firmSent[r.account] = 'refused: not sent (not connected to ChartBridge)'; render(); }, i * 150));
+      host.note('Sending ' + go.length + ' floor' + (go.length > 1 ? 's' : '') + ' from The Desk to ChartBridge.');
       render();
     }
     else if (a === 'firm-min-set') {   // 1.34.0 (ChartBridge 0.6.6): the firm's minimum balance seeds the floor
@@ -1539,17 +1557,21 @@ function mount(v, host) {
         const state = n => S.firmSent[n] || '';
         /* review 9: the row's own label on this page first (as the rows below show it), then ChartBridge's name and The Desk's prop name */
         const who = r => { const l = labelOf(r.account); return (l ? `<b>${esc(l)}</b> <span class="mut">${esc(r.account)}</span>` : `<b>${esc(r.account)}</b>`) + (r.label ? ` <span class="mut">· The Desk: ${esc(r.label)}</span>` : ''); };
-        const line = r => `<li class="apg-fl-row">${who(r)}: floor <b class="mono">${esc(AC.fmtUsdPlain(r.floor))}</b>` +
-          ` <span class="mut">ChartBridge now ${r.now === null ? 'not known' : esc(AC.fmtUsdPlain(r.now))}</span>` +
+        const ticked = fl.ticked || new Set();
+        /* 1.40.0 (C-A): a floor that needs Anthony's tick (lower, or not known to be on net P&L) has its own tick, off until he ticks it */
+        const tickBox = r => !r.tick ? '' : `<button type="button" class="ac-btn apg-fltick${ticked.has(r.account) ? ' on' : ''}" data-act="floor-tick" data-id="${esc(r.account)}" aria-pressed="${ticked.has(r.account)}"${fl.sentAt ? ' disabled' : ''} title="${esc('Send this one too: ' + r.tick)}">${ticked.has(r.account) ? '✓ send it' : 'Tick to send'}</button> <span class="warn">${esc(r.tick)}</span> `;
+        const line = r => `<li class="apg-fl-row${r.tick ? ' apg-fl-needs' : ''}">${tickBox(r)}${who(r)}: floor <b class="mono">${esc(AC.fmtUsdPlain(r.floor))}</b>` +
+          ` <span class="${r.lower ? 'warn' : 'mut'}">ChartBridge now ${r.now === null ? 'not known' : esc(AC.fmtUsdPlain(r.now))}</span>` +
           `<span class="mut apg-fl-src" title="${esc(r.source + (r.note ? '. ' + r.note : ''))}"> · ${esc(r.source)}${r.note ? '; ' + esc(r.note) : ''}</span>` +
           (state(r.account) ? ` <span class="${/^refused/.test(state(r.account)) ? 'warn' : 'b'}">${esc(state(r.account) === 'set' ? 'set' : state(r.account) === 'sent' ? 'sent...' : state(r.account))}</span>` : '') + '</li>';
         const skip = r => `<li class="apg-fl-row mut"><b>${esc((r.account && labelOf(r.account)) || r.account || r.label || 'a prop account')}</b>${r.account && labelOf(r.account) ? ' ' + esc(r.account) : ''}${r.account && r.label ? ` · The Desk: ${esc(r.label)}` : ''}: skipped, ${esc(r.why)}</li>`;
+        const goN = plan.send.filter(r => !r.tick || ticked.has(r.account)).length;
         const sent = fl.sentAt ? `<p class="mut">Sent ${fl.sentN} at ${esc(hms(fl.sentAt))} ET; ChartBridge checks each (a refusal shows on its row and in the Log). Read them again to send again.</p>` : '';
         return '<div class="apg-floors" role="region" aria-label="Floors from The Desk">' +
-          `<p class="apg-fl-head">Floors from The Desk (its Prop seeds from the firm dashboard plus the tracked fills). ${fl.sentAt ? '' : plan.send.length ? 'Send them to ChartBridge as each firm\'s minimum?' : 'Nothing to send.'}</p>` +
+          `<p class="apg-fl-head">Floors from The Desk (its Prop seeds from the firm dashboard plus the tracked fills). ${fl.sentAt ? '' : plan.send.length ? 'Send them to ChartBridge as each firm\'s minimum?' + (plan.send.some(r => r.tick) ? ' A floor lower than ChartBridge\'s, or not known to be on net P&L, goes only when you tick it.' : '') : 'Nothing to send.'}</p>` +
           (plan.send.length ? '<ul class="apg-fl-list">' + plan.send.map(line).join('') + '</ul>' : '') +
           (plan.skip.length ? '<ul class="apg-fl-list">' + plan.skip.map(skip).join('') + '</ul>' : '') + sent +
-          '<div class="apg-fl-btns">' + (plan.send.length && !fl.sentAt ? `<button type="button" class="ac-btn apg-yes" data-act="floors-send">Send ${plan.send.length} floor${plan.send.length > 1 ? 's' : ''} to ChartBridge</button>` : '') +
+          '<div class="apg-fl-btns">' + (goN && !fl.sentAt ? `<button type="button" class="ac-btn apg-yes" data-act="floors-send">Send ${goN} floor${goN > 1 ? 's' : ''} to ChartBridge</button>` : '') +
           (fl.sentAt ? '<button type="button" class="ac-btn" data-act="floors-desk-again">Read again</button>' : '') +
           '<button type="button" class="ac-btn" data-act="floors-close">' + (fl.sentAt ? 'Close' : 'Cancel') + '</button></div></div>';
       }
