@@ -124,6 +124,20 @@ try {
     }
     check(/^Group Lucid: SIM-A LONG \d+ @ [0-9.,]+\nSIM-B LONG \d+ @ [0-9.,]+\nSIM-C LONG \d+ @ [0-9.,]+\nSIM-D LONG \d+ @ [0-9.,]+\nLONG \d+ in all @ [0-9.,]+ \(the average\)$/.test(ptip), 'its tooltip lists each account\'s position and the average: ' + JSON.stringify(ptip));
     await p.screenshot({ path: path.join(out, 'group-ticket-position-1366.png') });
+    /* 1.40.0 (Anthony 2026-10-30): one fill mark per group fill on the group's chart, at the members' average, the contracts summed;
+       its hover lists each account's own fill */
+    const gm = await until(async () => { const ms = await p.evaluate(i => window.workspace.chart(i).getMarkers(), cid); const g = ms.filter(m => m.account === 'group' && m.side === 'buy'); return g.length ? g : null; }, 'the group fill mark on the MNQ chart', 8000);
+    const want = gpos.q.reduce((a, b) => a + b, 0);
+    check(gm && gm.length === 1 && gm[0].qty === want && gm[0].members.length === 4 && Math.abs(gm[0].price - gm[0].members.reduce((a, x) => a + x.qty * x.price, 0) / want) < 1e-9,
+      '1.40.0: one mark for the group entry, ' + want + ' contracts at the members\' average: ' + JSON.stringify(gm && gm.map(m => ({ qty: m.qty, price: m.price, n: m.members.length }))));
+    if (gm) {
+      const at = await p.evaluate(([i, t, price]) => { const ch = window.workspace.chart(i), bs = ch.bars(); let k = bs.length - 1; while (k > 0 && bs[k].t > t) k--; return { x: ch.barToX(k), y: ch.priceToY(price) }; }, [cid, gm[0].t, gm[0].price]);
+      const cb = await p.locator('.ws-panel[data-id="' + cid + '"] canvas').first().boundingBox();
+      await p.mouse.move(cb.x + at.x, cb.y + at.y + 3); await wait(300);
+      const ftip = await p.$eval('.ws-panel[data-id="' + cid + '"] canvas', c => c.title);
+      check(/^Group buy \d+ @ [0-9.,]+: SIM-A \d+ @ [0-9.,]+, SIM-B \d+ @ [0-9.,]+, SIM-C \d+ @ [0-9.,]+, SIM-D \d+ @ [0-9.,]+$/.test(ftip), '1.40.0: its hover lists each account\'s own fill: ' + JSON.stringify(ftip));
+      await p.locator('.ws-panel[data-id="' + cid + '"]').screenshot({ path: path.join(out, 'group-chart-fill-marks-1366.png') });
+    }
   }
   if (stopLine) {
     /* the review: measured again right before the hover too (the label moves with the price axis's width) */

@@ -58,6 +58,13 @@ not list is refused and the page shows the refusal once.
 - **The Room cell shows both limits on one line** (Anthony 2026-10-29, the Accounts tab): `DD $1,800 · D $647`, the drawdown room
   first, the tighter of the two in amber; one limit alone when only one exists (`DD $1,000`, `D $1,200`), `-` when none. The bar under it
   shows the drawdown room; the hover still names each figure's source. `test/room-cell.test.js`.
+- **A group's chart shows its fills** (Anthony 2026-10-30, `live/live.js`, `live/order-ticket.js` `groupFillMarks`): with a group as
+  the ticket's account, past entries and exits showed no marks (the chart matched fills to the group's name). Now one mark per group
+  fill, drawn as a single account's (the same Fills switch and open-trade rule): at the members' average price, the contracts summed;
+  its hover lists each account's own fill. The page's fill messages carry no decision id (ChartBridge 0.6.9 kept every page message
+  as it was), so a group fill is the members' fills of one side within 2 s of its first. The group's current members count (benched
+  ones too); an account that has left the group is no longer drawn on the group's chart (its fills stay on its own). A single
+  account's chart is unchanged. `test/group-fill-marks.test.js`, `npm run smoke:group-ticket`.
 - Tests: `test/lifecycle.test.js` (the pure parts, the feed's steps against a fake ChartBridge, the PUT); harness cases in
   `nt8/check/GroupsHarness.cs`, `CopierHarness.cs`, `AccountsHarness.cs` and `AgentHarness.cs`. `nt8/PROTOCOL.md` "The account
   lifecycle (0.6.10)"; `CHART_STYLE.md` for the new controls.

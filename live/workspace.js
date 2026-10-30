@@ -971,7 +971,9 @@ function chartTrade(v) {
   const r = v.panel.root, TR = core.TR, acct = ticketAccount(), on = TR.enabled && !!acct;
   const pos = !on ? null : core.isGroup(acct) ? core.groupPosition(acct, r) : TR.positions.get(acct + '|' + r);   // 1.34.0: a group's combined position
   return { root: r, account: acct, accountShort: accountShort(acct), live: on && ticketArmed() && r === ticketRoot(), orders: on ? core.chartOrders(acct, r) : [],
-    position: pos && pos.qty ? pos : null, pointValue: (instruments[r] || {}).pointValue || 0, qty: ticketQty() };
+    position: pos && pos.qty ? pos : null, pointValue: (instruments[r] || {}).pointValue || 0, qty: ticketQty(),
+    /* 1.40.0: a group's members (benched ones too: their past fills are the group's), for its chart's group fill marks */
+    members: on && core.isGroup(acct) ? ((core.groupOf(acct) || {}).members || []).slice() : null };
 }
 function renderCharts() { for (const v of chartViews()) v.pane.setTrade(chartTrade(v)); }
 function renderOrders() {
