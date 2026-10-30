@@ -530,6 +530,19 @@ function floorPlan(desk, accounts, rulesOf) {
    kept in this browser: { name: { min, at } }. Once one is set, NinjaTrader's own room to the floor (it never locks, so it
    always differs) is no flag; it stays in the Room's hover. */
 const FIRM_MIN_KEY = 'live-firm-min-v1';
+/**
+ * 1.40.0 (Anthony 2026-10-30, C-E): why a short label cannot be given to account name ('' when it can). A label may not be the same,
+ * ignoring case, as another account's label or another account's own name, so a row never reads as another account. labels: { account:
+ * label } as kept in this browser; names: every account name the page knows. An empty label (back to the name) is always fine.
+ */
+function labelRefusal(name, text, labels, names) {
+  const t = String(text === null || text === undefined ? '' : text).trim().slice(0, 24), low = t.toLowerCase();
+  if (!t) return '';
+  const other = (names || []).find(n => typeof n === 'string' && n !== name && n.toLowerCase() === low);
+  if (other) return 'Label "' + t + '" is the name of another account (' + other + '): pick another label.';
+  for (const k of Object.keys(labels || {})) if (k !== name && typeof labels[k] === 'string' && labels[k].trim().toLowerCase() === low) return 'Label "' + t + '" is already ' + k + '\'s label: pick another.';
+  return '';
+}
 /* 1.40.0 (Anthony 2026-10-30, C-B and C-C): what ChartBridge's /diag says of sending to The Desk, as plain lines for the Accounts tab:
    { warn: [text], info: [text] }. diag: /diag's JSON (null: not read). C-C: fills not sent at all (desk.postFills false); C-B: what The
    Desk refused inside its answers since ChartBridge started (kept in rejected_fills.jsonl and the order record's rejected_orders.jsonl,
@@ -574,7 +587,7 @@ function ntFloorFlag(a, firmMins) {
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
   accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag,
-  deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, lifecycleStep, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
+  labelRefusal, deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, lifecycleStep, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -1291,6 +1304,10 @@ function mount(v, host) {
     }
     if (a === 'label') {   // 1.34.0: a short label, this browser only (empty: the account's name)
       const all = labels(), t = el.value.trim().slice(0, 24);
+      /* 1.40.0 (C-E): never another account's label or another account's own name (ignoring case) */
+      const known = S.accounts.map(x => x.name).concat(S.archived.map(x => x.name), (S.notListed || []).map(x => x.name));
+      const no = AC.labelRefusal(el.dataset.id, t, all, known);
+      if (no) { host.note(no, true); el.value = all[el.dataset.id] || ''; return; }
       if (t) all[el.dataset.id] = t; else delete all[el.dataset.id];
       swrite(LABELS_KEY, all); render();
       return;
@@ -1656,7 +1673,7 @@ function mount(v, host) {
           stale ? 'Not connected to ChartBridge since ' + hms(S.lostAt) + ' ET: this account\'s connection is not known' : up ? '' : (CONN[a.connection] || a.connection)].filter(Boolean).join('\n');
         const bucket = s.pct === null || s.pct === undefined ? 'n' : String(Math.max(0, Math.min(10, Math.round(s.pct * 10))));
         const nameCell = `<span role="cell" class="apg-name">` + ci('', stale ? 'apg-dot unk' : up ? 'apg-dot' : 'apg-dot down', stale ? 'Connection not known' : up ? '' : (CONN[a.connection] || a.connection) + ': not connected') +
-          ci((lab || a.name) + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', nameTip) + ci(flags.length ? '!' : '', flags.length ? 'apg-flag' : 'apg-flag off', flags.join('\n')) + '</span>';
+          ci((lab || a.name) + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', nameTip) + (lab ? ci(a.name, 'mut apg-raw', a.name) : '') + ci(flags.length ? '!' : '', flags.length ? 'apg-flag' : 'apg-flag off', flags.join('\n')) + '</span>';
         const roomCell = `<span role="cell" class="r apg-room${lvl}">` + ci(roomShort(s), 'apg-rtext', roomTip) + `<span class="apg-track">` + ci('', 'apg-bar apg-b' + bucket + lvl, roomTip) + '</span></span>';
         const grpText = !grpOn ? '' : !grpKnown ? 'not known' : a.group ? gName(a.group) : 'None';
         const more = `<span role="cell" class="r"><button type="button" class="ac-btn apg-more" data-act="drawer" data-id="${esc(a.name)}" aria-expanded="${open}" aria-label="Settings for ${esc(a.name)}" title="Settings: group, type, limits, the firm's minimum, a label, Hide">⋯</button></span>`;

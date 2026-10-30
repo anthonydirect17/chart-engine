@@ -52,6 +52,9 @@ not list is refused and the page shows the refusal once.
 - **The Account page says when this PC sends no fills to The Desk** (C-C): `postFills` is off by default in `config.txt` (the default
   stays); the page reads `/diag` `desk.postFills` and, when it is off, says above the rows "This PC does not send fills to The Desk:
   its trades are missing from The Desk's stats." `test/desk-send.test.js`.
+- **A label never reads as another account** (C-E, the Accounts tab): a label equal (ignoring case) to another account's label or to
+  another account's own name is refused with why, and a row with a label shows the account's own name beside it, not only on hover.
+  `test/labels.test.js`.
 - Tests: `test/lifecycle.test.js` (the pure parts, the feed's steps against a fake ChartBridge, the PUT); harness cases in
   `nt8/check/GroupsHarness.cs`, `CopierHarness.cs`, `AccountsHarness.cs` and `AgentHarness.cs`. `nt8/PROTOCOL.md` "The account
   lifecycle (0.6.10)"; `CHART_STYLE.md` for the new controls.
