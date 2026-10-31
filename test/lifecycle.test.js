@@ -71,6 +71,22 @@ test('1.40.0: what waits and what is blocked is never sent', () => {
   assert.equal(AC.lifecycleStep('EVAL-A', base({ groups: [], switches: { accountChecks: true, copier: false } })).step, 'hide', 'the copier off: its followers are not known here (ChartBridge refuses Hide of a follower)');
 });
 
+test('1.40.0 (review): out of its group waits until a listed account is flat with no working orders; an unlisted one leaves at once', () => {
+  const pos = AC.lifecycleStep('EVAL-A', base({ accounts: [{ name: 'EVAL-A', canHide: true, positions: [{ root: 'MNQ', qty: 2 }] }] }));
+  assert.deepEqual([pos.step, pos.until, pos.group.id], ['wait', 'flat', 'g1'], 'a Promoted eval still in a group trade stays in the group');
+  assert.equal(pos.why, 'waits until EVAL-A is flat with no working orders, then leaves Lucid');
+  const msg = AC.lifecycleStep('EVAL-A', base({ positions: new Map([['EVAL-A|MNQ', { qty: -1 }]]) }));
+  assert.equal(msg.step, 'wait', 'a position message counts too');
+  assert.equal(AC.lifecycleStep('EVAL-A', base({ positions: new Map([['EVAL-AB|MNQ', { qty: 1 }]]) })).step, 'leave', 'another account\'s position does not');
+  const ord = AC.lifecycleStep('EVAL-A', base({ orders: new Map([['o1', { id: 'o1', account: 'EVAL-A', state: 'working' }]]) }));
+  assert.equal(ord.step, 'wait', 'a working order holds it');
+  assert.equal(AC.lifecycleStep('EVAL-A', base({ orders: [{ id: 'o1', account: 'EVAL-A', state: 'filled' }, { id: 'o2', account: 'SIM-A', state: 'working' }] })).step, 'leave', 'a filled order, or another account\'s working one, does not');
+  assert.equal(AC.lifecycleStep('EVAL-A', base({ accounts: [{ name: 'EVAL-A', positions: [{ root: 'MNQ', qty: 0 }] }] })).step, 'leave', 'flat: it leaves');
+  /* NinjaTrader does not list it: it holds nothing ChartBridge can see, so it leaves at once (a stale position message does not hold it) */
+  const gone = AC.lifecycleStep('EVAL-A', base({ accounts: [], notListed: [{ name: 'EVAL-A' }], positions: new Map([['EVAL-A|MNQ', { qty: 1 }]]) }));
+  assert.equal(gone.step, 'leave');
+});
+
 test('1.40.0 (audit 8): the accounts NinjaTrader does not list now: members and followers first, with what holds them', () => {
   const rows = AC.notListedRows([{ name: 'SIM-A' }], [{ id: 'g1', name: 'Lucid', members: ['SIM-A', 'EVAL-B'] }], { followers: [{ account: 'SIM-F1', on: true }, { account: 'SIM-A', on: false }] },
     [{ name: 'EVAL-C', trade: false }, { name: 'EVAL-B', trade: true }], [{ name: 'EVAL-D', at: 1 }]);
@@ -177,6 +193,37 @@ test('1.40.0: an account marked Blown on The Desk: ChartBridge is asked each ste
     await F.settle();
     assert.equal(F.feed.S.lifecycle.has('EVAL-A'), false);
     assert.equal(F.sent.length, n);
+  } finally { global.WebSocket = G; F.feed.stop(); }
+});
+
+test('1.40.0 (review): a Promoted eval in a group trade stays in its group until flat with no working orders, then leaves by itself', async () => {
+  const rows = [{ account: 'EVAL-A', outcome: 'promoted', accountType: { id: 'lucid-50k', firm: 'Lucid', name: '50K' } }];
+  const F = await loadFeed(() => rows);
+  const G = global.WebSocket; global.WebSocket = F.FakeSocket;
+  try {
+    F.feed.start(['v3']);
+    await F.settle();
+    const s = F.socks[0];
+    s.deliver({ type: 'hello', version: '0.6.10', instruments: [], features: ['v3'] });
+    s.deliver({ type: 'trading', enabled: true, accounts: [], maxQty: {}, switches: ON });
+    s.deliver({ type: 'groups', list: [{ id: 'g1', name: 'Lucid', members: ['EVAL-A', 'SIM-A'] }] });
+    s.deliver({ type: 'copier', canRemove: true, armed: false, leader: null, followers: [] });
+    s.deliver({ type: 'orders', list: [{ id: 'o9', account: 'EVAL-A', root: 'MNQ', state: 'working', role: 'stop' }] });
+    const acct = q => ({ name: 'EVAL-A', sim: false, connection: 'connected', state: 'active', canHide: !q, positions: q ? [{ root: 'MNQ', qty: q }] : [] });
+    s.deliver({ type: 'accounts', list: [acct(2)], archived: [], notListed: [] });
+    await F.settle();
+    const leaves = () => F.sent.filter(m => m.type === 'accountGroup');
+    assert.equal(leaves().length, 0, 'in a group trade: nothing sent, so a group Close or Flatten still covers it');
+    const rec = F.feed.S.lifecycle.get('EVAL-A');
+    assert.deepEqual([rec.step, rec.until], ['wait', 'flat']);
+    assert.match(rec.why, /^waits until EVAL-A is flat with no working orders/);
+    s.deliver({ type: 'accounts', list: [acct(0)], archived: [], notListed: [] });   // flat, its stop still working
+    await F.settle();
+    assert.equal(leaves().length, 0, 'a working order still holds it');
+    s.deliver({ type: 'order', id: 'o9', account: 'EVAL-A', root: 'MNQ', state: 'cancelled' });
+    await F.settle();
+    assert.equal(leaves().length, 1, 'flat with nothing working: it leaves by itself');
+    assert.deepEqual({ ...leaves()[0], cid: 'x' }, { type: 'accountGroup', cid: 'x', account: 'EVAL-A', group: null });
   } finally { global.WebSocket = G; F.feed.stop(); }
 });
 

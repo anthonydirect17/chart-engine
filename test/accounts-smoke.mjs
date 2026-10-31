@@ -470,6 +470,21 @@ try {
   const box = await until(() => p6.$eval(`${AP} .apg-life`, e => /EVAL-A \(Promoted on The Desk\): not hidden yet: EVAL-A has a position or working orders/.test(e.textContent) ? e.textContent : null).catch(() => null), 'EVAL-A\'s refusal shown');
   check(!!box && ((await control(LC_PORT, 'received')).types.accountArchive || 0) === a0, '1.40.0: a step ChartBridge would refuse is shown above the rows, nothing sent: ' + box);
   await p6.screenshot({ path: path.join(out, 'accounts-15-lifecycle-1366.png') });
+  /* 1.40.0 (review): a Promoted eval in a group trade stays in its group (a group Close or Flatten still covers it) until it is flat
+     with no working orders; the box says it waits; once flat it leaves by itself */
+  await control(LC_PORT, 'elsewhere', { account: 'SIM-A', root: 'MNQ', side: 'buy', kind: 'market', qty: 1 });
+  await until(async () => (await v3(LC_PORT)).accounts.list.some(a => a.name === 'SIM-A' && (a.positions || []).some(x => x.qty)), 'SIM-A long 1 MNQ');
+  const ga = ((await control(LC_PORT, 'received')).groupMsgs || []).length;
+  await p6.click(`${AP} button[data-act="drawer"][data-id="SIM-A"]`);
+  await p6.click(`${AP} .gr-row[data-k="dr|SIM-A"] button[data-act="outcome"][data-v="promoted"]`);
+  await p6.click(`${AP} button[data-act="outcome-yes"][data-id="SIM-A"]`);
+  const wbox = await until(() => p6.$eval(`${AP} .apg-life`, e => /SIM-A \(Promoted on The Desk\): out of its group: waits until SIM-A is flat with no working orders/.test(e.textContent) ? e.textContent : null).catch(() => null), 'SIM-A waits until flat');
+  await wait(500);
+  const early = ((await control(LC_PORT, 'received')).groupMsgs || []).slice(ga).filter(m => m.type === 'accountGroup' && m.account === 'SIM-A');
+  check(!!wbox && early.length === 0, '1.40.0: a Promoted member in a trade stays in its group, the box says it waits until flat, nothing sent: ' + wbox);
+  await control(LC_PORT, 'elsewhere', { account: 'SIM-A', root: 'MNQ', side: 'sell', kind: 'market', qty: 1 });
+  const lateA = await until(async () => ((await control(LC_PORT, 'received')).groupMsgs || []).slice(ga).find(m => m.type === 'accountGroup' && m.account === 'SIM-A'), 'SIM-A leaves Lucid once flat');
+  check(lateA && lateA.group === null, '1.40.0: flat again: it leaves its group by itself: ' + JSON.stringify(lateA));
   // the accounts NinjaTrader no longer lists: a member and a follower that is on
   await control(LC_PORT, 'unlist-account', { name: 'SIM-C' });
   await control(LC_PORT, 'unlist-account', { name: 'SIM-F1' });

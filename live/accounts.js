@@ -326,7 +326,7 @@ const followerOf = (copier, name) => (copier && Array.isArray(copier.followers) 
  * out of its group, its copier follower off, then removed, then hidden. S: the feed's state (accounts, archived, notListed, groups,
  * groupsError, copier, switches). Returns { step, why, group } where step is
  *   'leave' (accountGroup null), 'followerOff' (copierFollower on false), 'followerRemove' (copierFollowerRemove), 'hide'
- *   (accountArchive): send it; 'wait': not known yet (why); 'blocked': ChartBridge would refuse it now or cannot be asked (why;
+ *   (accountArchive): send it; 'wait': not known yet, or (until 'flat', with group) a listed account not flat yet (why); 'blocked': ChartBridge would refuse it now or cannot be asked (why;
  *   nothing is sent, it is shown); 'done': nothing left (hidden, or ChartBridge does not know the account).
  */
 function lifecycleStep(name, S) {
@@ -334,7 +334,14 @@ function lifecycleStep(name, S) {
   if (!Array.isArray(st.groups)) return { step: 'wait', why: 'ChartBridge has not sent its groups yet' };
   if (st.groupsError) return { step: 'blocked', why: st.groupsError };
   const g = groupHolding(st.groups, name);
-  if (g) return { step: 'leave', group: g, why: '' };
+  if (g) {
+    /* 1.40.0 (review): an account NinjaTrader lists leaves its group only when it is flat with no working orders (as Hide), so a group
+       Close or Flatten still covers a Promoted eval in a group trade; it leaves by itself once flat. One NinjaTrader does not list
+       holds nothing ChartBridge can see: it leaves at once. */
+    const listed = (st.accounts || []).find(x => x && x.name === name) || null;
+    if (listed && lifecycleBusy(listed, st)) return { step: 'wait', group: g, until: 'flat', why: 'waits until ' + name + ' is flat with no working orders, then leaves ' + g.name };
+    return { step: 'leave', group: g, why: '' };
+  }
   const sw = st.switches || {};
   if (sw.copier && !st.copier) return { step: 'wait', why: 'ChartBridge has not sent the copier yet' };   // a follower is never hidden blind
   const f = sw.copier ? followerOf(st.copier, name) : null;
@@ -346,6 +353,14 @@ function lifecycleStep(name, S) {
   if (!sw.accountChecks) return { step: 'blocked', why: 'Hide needs accountChecks = on in config.txt' };
   if (a && a.canHide === false) return { step: 'blocked', why: a.hideWhy || 'ChartBridge does not allow Hide for it now' };
   return { step: 'hide', why: '' };
+}
+/** 1.40.0 (review): whether a listed account holds a position or has a working order (its own positions, the position messages,
+ *  the working orders; S.positions a Map 'account|root' -> { qty }, S.orders a Map or a list) */
+function lifecycleBusy(a, st) {
+  if ((Array.isArray(a.positions) ? a.positions : []).some(p => p && isNum(p.qty) && p.qty !== 0)) return true;
+  if (st.positions instanceof Map) for (const [k, p] of st.positions) if (k.slice(0, k.lastIndexOf('|')) === a.name && p && p.qty) return true;
+  const orders = st.orders instanceof Map ? [...st.orders.values()] : Array.isArray(st.orders) ? st.orders : [];
+  return orders.some(o => o && o.account === a.name && isWorking(o));
 }
 /** a step in words, for the Accounts tab and the Log */
 const STEP_WORDS = { leave: 'out of its group', followerOff: 'its copier follower off', followerRemove: 'its copier follower removed', hide: 'hidden' };
@@ -870,7 +885,7 @@ function createFeed(env) {
         let rec = S.lifecycle.get(name);
         if (!rec || rec.outcome !== row.outcome) { rec = { outcome: row.outcome, step: '', why: '', tried: new Map() }; S.lifecycle.set(name, rec); }
         const st = AC.lifecycleStep(name, S);
-        rec.step = st.step; rec.why = st.why || '';
+        rec.step = st.step; rec.why = st.why || ''; rec.until = st.until || '';
         if (!AC.STEP_WORDS[st.step]) continue;   // done, waiting or blocked: nothing to send
         const key = st.step + (st.group ? '|' + st.group.id : '');
         if (rec.tried.has(key)) continue;        // asked once already for this outcome: its answer stands
@@ -1565,6 +1580,7 @@ function mount(v, host) {
           for (const [k, t] of refused) lines.push(`<li class="warn">${who}: ${esc(AC.STEP_WORDS[k.split('|')[0]] || k)} refused by ChartBridge: ${esc(t.why)}</li>`);
           if (refused.length) continue;
           if (rec.step === 'blocked') lines.push(`<li class="warn">${who}: not hidden yet: ${esc(rec.why)}</li>`);
+          else if (rec.step === 'wait' && rec.until === 'flat') lines.push(`<li class="mut">${who}: out of its group: waits until ${esc(labelOf(name) || name)} is flat with no working orders</li>`);
           else if (rec.step === 'wait') lines.push(`<li class="mut">${who}: waiting: ${esc(rec.why)}</li>`);
           else if (rec.step && rec.step !== 'done') { const t = rec.tried.get(rec.step); lines.push(`<li class="mut">${who}: ${esc(AC.STEP_WORDS[rec.step] || rec.step)}${t && t.state === 'sent' ? ': asked, waiting for ChartBridge' : ''}</li>`); }
         }
