@@ -2006,7 +2006,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static int sending, batchSize = FullBatch;
         private static bool lastFailed;
         private static string lastError = "";
-        private static long setAside, rejectedByDesk;
+        private static long setAside, rejectedByDesk, keepRejectedFailed;   // 0.6.10 (review): keepRejectedFailed, NoteRejectedSafe
         private static string File_ { get { return Path.Combine(ChartBridgeConfig.Folder, "pending_fills.jsonl"); } }
         private static string SetAsideFile { get { return Path.Combine(ChartBridgeConfig.Folder, "rejected_fills.jsonl"); } }
 
@@ -2063,7 +2063,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             int n; lock (Sync) n = PendingList.Count;
             return "{\"postFills\":" + (ChartBridgeConfig.PostFills ? "true" : "false") + ",\"deskUrl\":" + CbJson.Str(ChartBridgeConfig.DeskUrl) +
                 ",\"waiting\":" + n + ",\"lastSendFailed\":" + (lastFailed ? "true" : "false") + ",\"lastError\":" + CbJson.Str(lastError) +
-                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + "}";
+                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + ",\"rejectedFile\":\"rejected_fills.jsonl\"" +
+                ",\"keepRejectedFailed\":" + Interlocked.Read(ref keepRejectedFailed) + "}";
         }
 
         private static void Remove(string[] batch)
@@ -2109,9 +2110,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string text;
                     using (HttpWebResponse res = (HttpWebResponse)await call)
                     using (StreamReader r = new StreamReader(res.GetResponseStream(), Encoding.UTF8)) text = r.ReadToEnd();
+                    NoteRejectedSafe(text, batch);   // 0.6.10 (C-B): each one The Desk rejected inside its 200, kept before the batch goes (never throws)
                     Remove(batch);
                     if (batch.Length > 1) batchSize = FullBatch;   // while hunting a bad fill, stay at one per request
-                    NoteRejected(text);
                     lock (Sync) more = PendingList.Count > 0;
                     if (lastFailed) { ChartBridgeServer.Log("The Desk is taking fills again."); lastFailed = false; }
                     lastError = "";   // /diag: no stale error once a send has gone through
@@ -2149,8 +2150,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             lastFailed = true;
         }
 
-        // The Desk answers 200 with a "rejected" list for fills it could not store: say so once per answer.
-        private static void NoteRejected(string text)
+        // The Desk answers 200 with a "rejected" list for fills it could not store: say so once per answer. 0.6.10 (Anthony 2026-10-30,
+        // C-B): each rejected fill is also appended to rejected_fills.jsonl with The Desk's reason, as the 400/422 path keeps a bad one, so
+        // none is dropped unseen; /diag desk.rejectedByDesk counts them and desk.rejectedFile names the file.
+        // 0.6.10 (review): the keeping runs before Remove(batch), so it must never throw: an exception in it (The Desk's answer it
+        // cannot read, the file not written; a reason with an odd escape is kept as sent, ReasonText) would land in the send's catch and the batch The Desk already took would be sent again. Logged once per answer and
+        // counted in /diag (desk.keepRejectedFailed); the batch still leaves the queue. True when it ran through.
+        internal static bool NoteRejectedSafe(string text, string[] batch)
+        {
+            try { NoteRejected(text, batch); return true; }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref keepRejectedFailed);
+                try { ChartBridgeServer.Log("could not keep what The Desk rejected in its answer (fills): " + ex.Message + "; what it took is not sent again"); } catch (Exception) { }
+                return false;
+            }
+        }
+
+        private static void NoteRejected(string text, string[] batch)
         {
             Match m = RejectedRx.Match(text ?? "");
             if (!m.Success || m.Groups[1].Value.Trim().Length == 0) return;
@@ -2158,14 +2175,46 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (n == 0) return;
             Interlocked.Add(ref rejectedByDesk, n);
             Match why = ReasonRx.Match(m.Groups[1].Value);
-            ChartBridgeServer.Log("The Desk could not store " + n + " fill(s)" + (why.Success ? ", for example: " + why.Groups[1].Value : ""));
+            int kept = KeepRejected(m.Groups[1].Value, batch, SetAsideFile);
+            ChartBridgeServer.Log("The Desk could not store " + n + " fill(s)" + (why.Success ? ", for example: " + why.Groups[1].Value : "") + "; " + kept + " kept in rejected_fills.jsonl with its reason");
+        }
+
+        private static readonly Regex RejectedItemRx = new Regex("\\{(?:[^{}\"]|\"(?:[^\"\\\\]|\\\\.)*\")*\\}");
+        private static readonly Regex IndexRx = new Regex("\"index\"\\s*:\\s*([0-9]+)");
+        // 0.6.10 (C-B): each item of The Desk's "rejected" list ({index, reason, ...}) whose index names an item of the batch sent: that
+        // item, as it was sent, with "desk_reason" (The Desk's words) put first, one line each in file. Returns how many were kept.
+        internal static int KeepRejected(string rejectedList, string[] batch, string file)
+        {
+            List<string> lines = new List<string>();
+            foreach (Match item in RejectedItemRx.Matches(rejectedList ?? ""))
+            {
+                Match ix = IndexRx.Match(item.Value);
+                int i;
+                if (!ix.Success || !int.TryParse(ix.Groups[1].Value, out i) || i < 0 || i >= batch.Length) continue;
+                string sent = batch[i] ?? "";
+                if (!sent.StartsWith("{")) continue;
+                Match why = ReasonRx.Match(item.Value);
+                string reason = why.Success ? ReasonText(why.Groups[1].Value) : "no reason given";
+                lines.Add("{\"desk_reason\":" + CbJson.Str(reason) + (sent.Length > 2 ? "," + sent.Substring(1) : "}"));
+            }
+            if (lines.Count == 0) return 0;
+            File.AppendAllLines(file, lines);   // 0.6.10 (review): a failed write goes to NoteRejectedSafe (logged, counted in keepRejectedFailed)
+            return lines.Count;
+        }
+
+        // 0.6.10 (review): The Desk's reason as text: JSON's escapes undone; one Regex.Unescape will not read (\q and the like) keeps the raw
+        // text as The Desk sent it, so the rejected item is still kept
+        internal static string ReasonText(string raw)
+        {
+            try { return Regex.Unescape(raw); }
+            catch (ArgumentException) { return raw; }
         }
     }
 
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.6.9";   // 0.6.9: the stats suite's Phase 2 (recording only): 1 second bars to The Desk, the order record (every order type, POST /api/order-events), a decision id on a group entry's orders and fills; 0.6.8: the minute book (minute and tick charts' history up to now from every live trade ChartBridge saw), a hole recorded in /diag and history.log (never shown), 20 s limits on a load's minute history and last trades; 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
+        public const string Version = "0.6.10";   // 0.6.10: the account lifecycle (Anthony 2026-10-30): remove-only changes for an account NinjaTrader no longer lists (leave its group, a copier follower off then removed, Hide with no stale hold), Hide takes a member out of its group in the same step, a member not in NinjaTrader no longer blocks an agent's group, a group preview sizes only the members gate 2 lets trade, the accounts message's notListed; 0.6.9: the stats suite's Phase 2 (recording only): 1 second bars to The Desk, the order record (every order type, POST /api/order-events), a decision id on a group entry's orders and fills; 0.6.8: the minute book (minute and tick charts' history up to now from every live trade ChartBridge saw), a hole recorded in /diag and history.log (never shown), 20 s limits on a load's minute history and last trades; 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;

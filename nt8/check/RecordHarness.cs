@@ -179,7 +179,11 @@ public static class RecordHarness
                     lock (got) got.Add(ctx.Request.Url.AbsolutePath + " " + body);
                     if (!hasRecord || ctx.Request.Url.AbsolutePath != "/api/order-events") { ctx.Response.StatusCode = 404; ctx.Response.Close(); continue; }
                     bool bad = body.Contains("\"order_id\":\"bad\"");
-                    byte[] ans = System.Text.Encoding.UTF8.GetBytes(bad ? "{\"detail\":\"bad\"}" : "{\"received\":1,\"rejected\":[],\"inserted\":1,\"duplicates\":0}");
+                    // 0.6.10 (C-B): an event The Desk takes in a 200 but rejects inside it (index 0 of that batch)
+                    bool inside = body.Contains("\"order_id\":\"desk-no\"");
+                    // 0.6.10 (review): a reason the keeping cannot read (an escape Regex.Unescape refuses): the keeping throws
+                    bool odd = body.Contains("\"order_id\":\"desk-odd\"");
+                    byte[] ans = System.Text.Encoding.UTF8.GetBytes(bad ? "{\"detail\":\"bad\"}" : odd ? "{\"received\":1,\"inserted\":0,\"duplicates\":0,\"rejected\":[{\"index\":0,\"order_id\":\"desk-odd\",\"reason\":\"sample \\q\"}],\"warnings\":[]}" : inside ? "{\"received\":1,\"inserted\":0,\"duplicates\":0,\"rejected\":[{\"index\":0,\"order_id\":\"desk-no\",\"reason\":\"sample: state \\\"weird\\\" is not an order state\"}],\"warnings\":[]}" : "{\"received\":1,\"rejected\":[],\"inserted\":1,\"duplicates\":0}");
                     ctx.Response.StatusCode = bad ? 400 : 200; ctx.Response.OutputStream.Write(ans, 0, ans.Length); ctx.Response.Close();
                 }
             });
@@ -218,6 +222,63 @@ public static class RecordHarness
             for (int i = 0; i < 6; i++) { Order g = new Order { Account = sim, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Limit, Quantity = 1, LimitPrice = 24800 + i, OrderId = "g" + i, OrderState = OrderState.Working }; clock += 1; Update(sim, g); }
             Check(WaitFor(() => { ChartBridgeOrderRecord.Flush(); return ChartBridgeOrderRecord.Waiting() == 0; }, 15000) && ChartBridgeOrderRecord.BatchSize >= 8 && b1 <= 2,
                   "order record (review of #71): after a refusal the batch size grows back (" + b1 + " then " + ChartBridgeOrderRecord.BatchSize + ")");
+            // 0.6.10 (Anthony 2026-10-30, C-B): an event The Desk rejects inside a 200 is kept in rejected_orders.jsonl with its reason
+            File.Delete(aside);
+            lock (typeof(ChartBridgeOrderRecord).GetField("Sync", PS).GetValue(null)) { string x = "{\"v\":1,\"source\":\"nt8\",\"order_id\":\"desk-no\",\"at_ms\":3}"; pl.Add(x); ps.Add(x); }
+            Check(WaitFor(() => { ChartBridgeOrderRecord.Flush(); return ChartBridgeOrderRecord.Waiting() == 0 && File.Exists(aside); }, 15000) &&
+                  File.ReadAllText(aside) == "{\"desk_reason\":\"sample: state \\\"weird\\\" is not an order state\",\"v\":1,\"source\":\"nt8\",\"order_id\":\"desk-no\",\"at_ms\":3}" + Environment.NewLine &&
+                  ChartBridgeOrderRecord.DiagJson().Contains("\"rejectedFile\":\"rejected_orders.jsonl\""),
+                  "0.6.10 (C-B): an event The Desk rejects inside its 200 answer: kept in rejected_orders.jsonl as sent, The Desk's reason first; /diag names the file: " + (File.Exists(aside) ? File.ReadAllText(aside) : "no file"));
+            // 0.6.10 (review): a reason Regex.Unescape will not read (an odd escape): kept all the same, with The Desk's raw text; no failure
+            {
+                File.Delete(aside);
+                lock (typeof(ChartBridgeOrderRecord).GetField("Sync", PS).GetValue(null)) { string x = "{\"v\":1,\"source\":\"nt8\",\"order_id\":\"desk-odd\",\"at_ms\":4}"; pl.Add(x); ps.Add(x); }
+                Check(WaitFor(() => { ChartBridgeOrderRecord.Flush(); return ChartBridgeOrderRecord.Waiting() == 0 && File.Exists(aside); }, 15000) &&
+                      File.ReadAllText(aside) == "{\"desk_reason\":\"sample \\\\q\",\"v\":1,\"source\":\"nt8\",\"order_id\":\"desk-odd\",\"at_ms\":4}" + Environment.NewLine &&
+                      ChartBridgeOrderRecord.DiagJson().Contains("\"keepRejectedFailed\":0"),
+                      "0.6.10 (review): a reason with an escape Regex.Unescape refuses: the event kept with The Desk's raw words, keepRejectedFailed 0: " + (File.Exists(aside) ? File.ReadAllText(aside) : "no file") + " " + ChartBridgeOrderRecord.DiagJson());
+            }
+            // 0.6.10 (review): the keeping throws (rejected_orders.jsonl cannot be written: a folder in its place): the event The Desk took
+            // leaves the queue all the same and is never posted again; /diag counts it in keepRejectedFailed
+            {
+                File.Delete(aside); Directory.CreateDirectory(aside);
+                try
+                {
+                    string x = "{\"v\":1,\"source\":\"nt8\",\"order_id\":\"desk-no\",\"at_ms\":5}";
+                    lock (typeof(ChartBridgeOrderRecord).GetField("Sync", PS).GetValue(null)) { pl.Add(x); ps.Add(x); }
+                    Func<int> posts5 = () => { lock (got) return got.Count(g => g.Contains("\"at_ms\":5")); };
+                    bool gone = WaitFor(() => { ChartBridgeOrderRecord.Flush(); return ChartBridgeOrderRecord.Waiting() == 0 && posts5() >= 1; }, 15000);
+                    for (int i = 0; i < 3; i++) { ChartBridgeOrderRecord.Flush(); Thread.Sleep(150); }
+                    string dj = ChartBridgeOrderRecord.DiagJson();
+                    Check(gone && posts5() == 1 && dj.Contains("\"keepRejectedFailed\":1") && dj.Contains("\"lastSendFailed\":false"),
+                          "0.6.10 (review): the keeping throws (the file cannot be written): the accepted event leaves the queue, posted once only, /diag keepRejectedFailed 1, no send failure: posts " + posts5() + ", " + dj);
+                }
+                finally { Directory.Delete(aside, true); }
+            }
+            // and the fills' path: the same keeping (ChartBridgeDesk.KeepRejected), each index of the batch, the rest left alone
+            {
+                string ff = Path.Combine(ChartBridgeConfig.Folder, "rejected_fills_harness.jsonl");
+                File.Delete(ff);
+                string[] fb = { "{\"exec_id\":\"e1\",\"account\":\"SIM-A\"}", "{\"exec_id\":\"e2\",\"account\":\"SIM-A\"}", "{\"exec_id\":\"e3\",\"account\":\"SIM-A\"}" };
+                int kept = ChartBridgeDesk.KeepRejected("{\"index\":2,\"reason\":\"sample: price {not} a number\",\"exec_id\":\"e3\"},{\"index\":0,\"reason\":\"sample: no qty\",\"exec_id\":\"e1\"},{\"index\":9,\"reason\":\"not in the batch\"}", fb, ff);
+                string[] kl = File.ReadAllLines(ff);
+                Check(kept == 2 && kl.Length == 2 && kl[0] == "{\"desk_reason\":\"sample: price {not} a number\",\"exec_id\":\"e3\",\"account\":\"SIM-A\"}" && kl[1] == "{\"desk_reason\":\"sample: no qty\",\"exec_id\":\"e1\",\"account\":\"SIM-A\"}",
+                      "0.6.10 (C-B): fills rejected inside a 200: each kept by its index with The Desk's reason (braces in a reason too), an index not in the batch skipped: " + string.Join(" | ", kl));
+                Check(ChartBridgeDesk.DiagJson().Contains("\"rejectedFile\":\"rejected_fills.jsonl\""), "0.6.10 (C-B): /diag desk names rejected_fills.jsonl");
+                // 0.6.10 (review): an odd escape in The Desk's reason: kept with its raw words
+                File.Delete(ff);
+                int oddKept = ChartBridgeDesk.KeepRejected("{\"index\":1,\"reason\":\"odd \\q here\"}", fb, ff);
+                Check(oddKept == 1 && File.ReadAllText(ff) == "{\"desk_reason\":\"odd \\\\q here\",\"exec_id\":\"e2\",\"account\":\"SIM-A\"}" + Environment.NewLine && ChartBridgeDesk.ReasonText("a \\\"b\\\"") == "a \"b\"",
+                      "0.6.10 (review): fills: a reason Regex.Unescape refuses is kept as The Desk sent it; a plain JSON escape is still undone: " + File.ReadAllText(ff));
+                File.Delete(ff);
+                // 0.6.10 (review): the fills' keeping never throws out to the send (where Remove(batch) would be skipped and the batch The
+                // Desk took sent again): logged and counted in /diag desk.keepRejectedFailed
+                bool threw = false, ran = true;
+                try { ran = ChartBridgeDesk.NoteRejectedSafe("{\"received\":1,\"rejected\":[{\"index\":0,\"reason\":\"sample\"}]}", null); } catch (Exception) { threw = true; }
+                Check(!threw && !ran && ChartBridgeDesk.DiagJson().Contains("\"keepRejectedFailed\":1"), "0.6.10 (review): fills: the keeping fails (no batch to read): no exception out, /diag desk keepRejectedFailed 1: " + ChartBridgeDesk.DiagJson());
+                Check(ChartBridgeDesk.NoteRejectedSafe("{\"received\":1,\"rejected\":[]}", fb) && ChartBridgeDesk.DiagJson().Contains("\"keepRejectedFailed\":1"), "0.6.10 (review): fills: an answer with nothing rejected runs through, the count unchanged");
+                File.Delete(ff);
+            }
 
             // review of #71 (MEDIUM 3): an id NinjaTrader gives (or changes) after the first event: order_id stays as first seen,
             // nt_order_id is NinjaTrader's id at each event (the one the fills carry)

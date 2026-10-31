@@ -779,6 +779,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return "lossLimit must be whole dollars of 1 or more, or null for off.";
             if (loadFailed) return "copier.txt could not be read at start: the copier's settings cannot change until it can (restart ChartBridge)";
             Account a = Find(name);
+            // 0.6.10 (the account lifecycle, audit 2): a follower NinjaTrader no longer lists (a blown eval the firm took away) can be
+            // turned off, so it can then be removed; remove-only: its other settings stay as they are, and turning one on still needs it
+            if (a == null && on.Groups[1].Value == "false")
+            {
+                string was = null;
+                lock (Lk) { Follower f = FollowerNamed(name); if (f != null) { was = f.Name; f.On = false; f.Skipped = null; } }
+                if (was == null) return "No account " + name + ".";
+                Decision(was, "set", null, "off (NinjaTrader does not list it now; set by the page)");
+                Save();
+                BroadcastState(true);
+                return null;
+            }
             if (a == null || ChartBridgeOrders.IsNeverTradable(a.Name)) return "No account " + name + ".";
             // S1 (Anthony 2026-10-07): a real account may be a follower; its entries still pass every account gate (Eligible).
             if (on.Groups[1].Value == "true" && IsBotAccount(a))   // review 2 finding 3: never the bot's account while the bot is on

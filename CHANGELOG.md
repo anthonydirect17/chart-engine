@@ -1,5 +1,88 @@
 # Changelog
 
+## ChartBridge 0.6.10 and chart 1.40.0 (2026-11-01): the account lifecycle, Blown and Promoted
+
+Anthony's decisions of 2026-10-30 (D1 to D5, the contract shared with The Desk): a prop eval is marked **Blown** or **Promoted**
+by hand, on The Desk's Prop card or in the account's drawer here; both take it out of its group and the copier and off the chart's
+lists, and its history stays on The Desk. With it, the audit of the accounts NinjaTrader no longer lists (a blown eval the firm
+takes away): ChartBridge accepts remove-only changes for them, never a join. ChartBridge 0.6.10 is a recompile (F5). The page works
+with ChartBridge 0.6.2 or newer (`minChartBridge` stays 0.6.2): with an older one, what ChartBridge cannot do for an account it does
+not list is refused and the page shows the refusal once.
+
+- **Blown and Promoted in the account's drawer** (`live/accounts.js`): shown only for an account The Desk has a prop account for.
+  `/api/chart-accounts` does not say that outright, so the page reads it from the row: an `outcome` already set, an account type
+  (The Desk gives every typed account its Prop card, D5), or a number taken from a linked prop account (`source` `prop`). A click
+  asks first in the page, then sends `PUT /api/accounts/{account}/outcome` to The Desk (as the account type's PUT: `cors`, no
+  credentials). Once marked, a BLOWN or PROMOTED pill; Undo is on The Desk's Prop screen.
+- **ChartBridge brought into line** (the window's feed): for every `/api/chart-accounts` row with an `outcome`, one step at a time,
+  each an existing message: out of its group, its copier follower off, then removed, then hidden. Out of its group waits, as Hide
+  does, until an account NinjaTrader lists is flat with no working orders, so a Promoted eval still in a group trade stays in the
+  group and a group Close or Flatten still covers it; the Accounts tab says "waits until <name> is flat with no working orders" and
+  the step goes by itself once it is flat (an account NinjaTrader does not list leaves at once). Each step is asked once per
+  outcome; a refusal is shown on the Accounts tab and in the Log and never sent again in a loop; a step ChartBridge would refuse
+  anyway (Hide of an account in a trade, `accountChecks` off) is shown and not sent. Undo changes nothing on ChartBridge (D4: it does
+  not rejoin its group).
+- **Not in NinjaTrader now** (Accounts tab, audit 8): every group member or copier follower ChartBridge does not list, with Remove
+  from group, Turn follower off or Remove follower, Blown and Promoted; and the accounts ChartBridge 0.6.10 keeps that NinjaTrader
+  has not had connected this session (folded), with Hide.
+- **Show says what it does** (audit 5): Show of an account NinjaTrader has not had connected this session no longer vanishes: the
+  note and the tooltip say it is listed once NinjaTrader has it connected, and until then it is under Not in NinjaTrader now
+  (ChartBridge 0.6.10's `notListed`, and a `status` line).
+- **The Multi-Account panel** (audit 6): the chip of a member NinjaTrader does not list says "not in NinjaTrader now" (not "set its
+  type on The Desk first"), is offered no bench move ChartBridge would refuse, and has Remove (out of the group, a second click
+  sends it). It sits out every entry, so the trading lane's count and dollars at risk leave it out.
+- **ChartBridge 0.6.10, remove-only for an account NinjaTrader no longer lists:** `accountGroup` with no group for a member that is
+  not listed (audit 1; joining still needs it listed); `copierFollower` off for a follower that is not in NinjaTrader, then Remove as
+  before (audit 2; a copier record of its own part on that account still holds it, until it is done or ChartBridge restarts), so
+  Re-arm no longer counts a dead follower; Hide of an account NinjaTrader does not list is no longer held by what it was last seen
+  with (it comes back by itself, unchecked, if NinjaTrader lists it holding anything); an agent's group with a member not in
+  NinjaTrader is no longer refused (audit 3; the member sits out each trade, the claims by name still apply).
+- **Hide takes a member out of its group** (ChartBridge 0.6.10, audit 4): in the same step, its bench place and its own rules with
+  it, under the groups lock order (`ChangeGate`, `GroupEntryLock`, `PlaceLock`); a failed `groups.txt` write that is undone leaves it
+  in its group and not hidden. One kept after a failed write (something traded on it during the write) is checked again: holding
+  anything now, it stays out of its group (as kept) but is not hidden, and the reply says "left its group; not hidden: it is in a
+  trade now; Hide it once flat"; the page asks Hide again by itself once the account is flat (at most 3 times an outcome). Harness
+  cases for both, and for Hide of a member NinjaTrader does not list.
+- **A group preview sizes as the entry places** (ChartBridge 0.6.10, audit 7): a member gate 2 refuses (hidden, not checked, Gone)
+  sits out the preview with that reason.
+- **Update floors from The Desk never lowers a floor on its own** (C-A, `live/accounts.js` `floorPlan`): each row shows ChartBridge's
+  floor now beside The Desk's; a floor lower than ChartBridge's (or with ChartBridge's not known), or one The Desk does not mark as on
+  net P&L (`/api/chart-floors` `basis` gross, or none), goes only when Anthony ticks it in the confirm. ChartBridge still refuses a
+  minimum below the starting floor. `test/floors-safety.test.js`.
+- **Nothing The Desk rejects inside a 200 answer is dropped unseen** (C-B, ChartBridge 0.6.10): each fill or order event in The
+  Desk's `rejected` list is appended to `rejected_fills.jsonl` or `rejected_orders.jsonl` (next to `config.txt`) as it was sent, with
+  The Desk's reason first (`desk_reason`), as a malformed one already was; `/diag` counts them and names the file, and the Account
+  page reads `/diag` each minute and says how many and where. The keeping runs before the batch leaves the queue and never throws
+  out of the send: a failure in it is logged and counted in `/diag` (`desk.keepRejectedFailed`, `orderRecord.keepRejectedFailed`),
+  and the batch The Desk took is never sent again. A reason with an escape the keeping cannot undo is kept as The Desk sent it.
+  `test/desk-send.test.js`, `nt8/check/RecordHarness.cs`.
+- **A group's trade tags go only to the members that trade** (C-D, `live/workspace.js` `groupTagMembers`): never a benched member,
+  never a copier follower (on or off). `test/group-tags.test.js`.
+- **The Desk hears which accounts ChartBridge lists** (Sunday item A, `live/accounts.js` `listedPlan`): so a new account shows on The
+  Desk's Prop > Accounts before its first fill, the page sends `PUT /api/chart-accounts/listed` with the names ChartBridge lists
+  (Sim and Playback left out, at most 200, sorted): once a page load when ChartBridge's accounts arrive, and whenever the list changes
+  (checked each minute with The Desk's rows). Never when the window does not read The Desk or the list is empty; a failure waits for
+  the next minute, and a `404` (an older Desk) stops it for the page load. `test/listed-accounts.test.js`, `npm run smoke:accounts`.
+- **The Account page says when this PC sends no fills to The Desk** (C-C): `postFills` is off by default in `config.txt` (the default
+  stays); the page reads `/diag` `desk.postFills` and, when it is off, says above the rows "This PC does not send fills to The Desk:
+  its trades are missing from The Desk's stats." `test/desk-send.test.js`.
+- **A label never reads as another account** (C-E, the Accounts tab): a label equal (ignoring case) to another account's label or to
+  another account's own name is refused with why, and a row with a label shows the account's own name beside it, not only on hover.
+  `test/labels.test.js`.
+- **The Room cell shows both limits on one line** (Anthony 2026-10-29, the Accounts tab): `DD $1,800 · D $647`, the drawdown room
+  first, the tighter of the two in amber; one limit alone when only one exists (`DD $1,000`, `D $1,200`), `-` when none. The bar under it
+  shows the drawdown room; the hover still names each figure's source. `test/room-cell.test.js`.
+- **A group's chart shows its fills** (Anthony 2026-10-30, `live/live.js`, `live/order-ticket.js` `groupFillMarks`): with a group as
+  the ticket's account, past entries and exits showed no marks (the chart matched fills to the group's name). Now one mark per group
+  fill, drawn as a single account's (the same Fills switch and open-trade rule): at the members' average price, the contracts summed;
+  its hover lists each account's own fill. The page's fill messages carry no decision id (ChartBridge 0.6.9 kept every page message
+  as it was), so a group fill is the members' fills of one side within 2 s of its first. The group's current members count (benched
+  ones too); an account that has left the group is no longer drawn on the group's chart (its fills stay on its own). A single
+  account's chart is unchanged. `test/group-fill-marks.test.js`, `npm run smoke:group-ticket`.
+- Tests: `test/lifecycle.test.js` (the pure parts, the feed's steps against a fake ChartBridge, the PUT); harness cases in
+  `nt8/check/GroupsHarness.cs`, `CopierHarness.cs`, `AccountsHarness.cs` and `AgentHarness.cs`. `nt8/PROTOCOL.md` "The account
+  lifecycle (0.6.10)"; `CHART_STYLE.md` for the new controls.
+
 ## chart 1.39.2 (2026-10-27): a benched account sits out with no confirm; a chart's dragged room is its own (page only, no F5)
 
 Page only, no F5: no ChartBridge file changes, so nothing needs a recompile. ChartBridge stays 0.6.9; `minChartBridge` stays

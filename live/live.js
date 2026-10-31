@@ -2266,9 +2266,15 @@ function mount(container, options) {
   /* Fills of the account picked, on this instrument. With Fills hidden (its switch, a chip or Hide all) past fills go,
      but the open trade never does: its entry fills stay (OrderTicket.openEntryFills, checked against the position its
      host reports), and the position line, working orders and stop and target lines are not indicators at all. */
+  /* 1.40.0 (Anthony 2026-10-30): with a group as the host's account, one mark per group fill (OrderTicket.groupFillMarks: the members'
+     fills of one side within 2 s, at their average price, the contracts summed); the same Fills switch and open-trade rule as one
+     account's; the hover (the chart's tooltip, as a group's order line) lists each account's own fill. A single account's chart is as before. */
+  let groupMarks = [];
   function applyMarkers() {
-    const acc = account();
-    const mine = acc ? [...fills.values()].filter(f => f.root === D.root && f.account === acc) : [];
+    const acc = account(), grp = HOST && /^group:/.test(acc) && Array.isArray(HT.members);
+    const mine = !acc ? [] : grp ? OT.groupFillMarks([...fills.values()].filter(f => f.root === D.root), HT.members, 2)
+      : [...fills.values()].filter(f => f.root === D.root && f.account === acc);
+    groupMarks = grp ? mine : [];
     let list = mine;
     if (!S.layers.fills) {
       const pos = HOST && HT.root === D.root ? HT.position : null;
@@ -2563,7 +2569,7 @@ function mount(container, options) {
      through its TradeCore with every check, or forwards them to the window that has the ticket. The chart itself still
      sends only subscribe, ping and htf. */
   const HOST = opt.trade && typeof opt.trade.place === 'function' && typeof opt.trade.move === 'function' && typeof opt.trade.cancel === 'function' ? opt.trade : null;
-  const HT = { root: '', live: false, account: '', accountShort: '', orders: [], position: null, pointValue: 0, qty: 1 };
+  const HT = { root: '', live: false, account: '', accountShort: '', orders: [], position: null, pointValue: 0, qty: 1, members: null };
   const armedHere = () => HT.live && HT.root === D.root;
 
   /*
@@ -2593,9 +2599,23 @@ function mount(container, options) {
       const h = HOST ? chart.orderHandles().find(x => inR(x.box, pt) || inR(x.tag, pt)) : null;
       const o = h ? HT.orders.find(x => x && x.id === h.id && typeof x.groupTip === 'string') : null;
       const pb = !h && HOST && HT.position && typeof HT.position.groupTip === 'string' ? chart.positionBox() : null;   // 1.34.0: the group's position
-      const tip = o ? o.groupTip : pb && inR(pb, pt) ? HT.position.groupTip : '';
+      const fillTip = o ? '' : groupFillTip(pt);   // 1.40.0: a group fill's members (its small mark first: the position's label is wide)
+      const tip = o ? o.groupTip : fillTip || (pb && inR(pb, pt) ? HT.position.groupTip : '');
       if (cv.title !== tip && (tip || cv.dataset.groupTip)) { cv.title = tip; cv.dataset.groupTip = tip ? '1' : ''; }
     });
+    /* 1.40.0: the group fill mark under the mouse (within 8 px of its tip), its words with each member's fill, or '' */
+    function groupFillTip(pt) {
+      if (!groupMarks.length) return '';
+      const bs = chart.bars();
+      if (!bs.length) return '';
+      const idx = t => { let lo = 0, hi = bs.length - 1; if (t < bs[0].t) return 0; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (bs[mid].t <= t) lo = mid; else hi = mid - 1; } return lo; };
+      const dec = precisionOf(), fmt = p => (+p).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+      for (const m of groupMarks) {
+        const x = chart.barToX(idx(m.t)), y = chart.priceToY(m.price);
+        if (Math.abs(x - pt.x) <= 8 && Math.abs(y - pt.y) <= 10) return OT.groupFillWords(m, fmt);
+      }
+      return '';
+    }
     let press = null;
     host.addEventListener('pointerdown', e => {
       if (e.target !== cv || e.pointerType === 'touch') return;
@@ -2657,6 +2677,7 @@ function mount(container, options) {
     HT.pointValue = +x.pointValue || 0;
     HT.qty = Number.isInteger(x.qty) ? x.qty : 1;
     HT.accountShort = typeof x.accountShort === 'string' ? x.accountShort.slice(0, 40) : '';
+    HT.members = Array.isArray(x.members) ? x.members.filter(m => typeof m === 'string' && m).slice(0, 64) : null;   // 1.40.0: a group's members
     const acct = typeof x.account === 'string' ? x.account : '';
     const acctNew = acct !== HT.account;
     HT.account = acct;
