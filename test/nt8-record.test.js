@@ -34,7 +34,7 @@ test('0.6.9: recording only: the order files and the stop record are the 0.6.8 f
   if (!/public const string Version = "0\.6\.9";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
   const want = {
     'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
-    'ChartBridgeOrders.cs': '67db397ca470ccb1a0bd3624e2b420bd951c18e776fa5ed12e77c7b98139e771',
+    // ChartBridgeOrders.cs: changed for 0.6.10 (the Placing mark, Sunday 11-01 item 10); the record code in it is untouched
     'ChartBridgeCopier.cs': 'dc9ee92ee64c98effc74cc4aa6cc4f5965ba50746c5fbd2c48b795334decaceb',
     'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
     'ChartBridgeAgents.cs': 'e8d50518b699546240e3ab570168e1bb82edd2960951f1cda98d020ee5d5ecf2',

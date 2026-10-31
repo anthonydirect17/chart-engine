@@ -19,6 +19,7 @@
     "smoke:pin": "node test/pin-smoke.mjs",
     "smoke:perf": "node test/perf-smoke.mjs",
     "smoke:ib": "node test/ib-bg-smoke.mjs",
+    "smoke:onh": "node test/onh-smoke.mjs",
     "smoke:vp": "node test/vp-smoke.mjs",
     "smoke:live-first": "node test/live-first-smoke.mjs",
     "smoke:delta": "node test/delta-smoke.mjs",

@@ -266,8 +266,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Sessions:** CME sessions start at 18:00 ET; each start gets a dashed divider and a bold day label.
   Times show in exchange time. Regular hours (9:30 to 16:00) get the lighter ground on bars under
   1 hour. 24/7 markets set the session start to midnight and switch the shading off.
-- **Levels:** full-width lines at 70% opacity (prior-day and overnight dashed 6/4, value area 3/4,
-  prior close dotted 2/3). Name at the right edge of the plot; names within 12 px merge ("VAL · PDL") into one
+- **Levels:** full-width lines at 70% opacity (prior-day dashed 6/4, value area 3/4,
+  prior close dotted 2/3; the overnight high and low are drawn as the IB is, below). Name at the right edge of the plot; names within 12 px merge ("VAL · PDL") into one
   string in the first (highest) level's color.
   Each level gets an outlined tag on the price axis; tags push apart and grid labels hide under them.
   Tags never sit under the last-price tag: levels at or above the last price stack upward from it, the
@@ -275,7 +275,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Initial Balance (1.5.3):** today's high and low of the first hour of regular trading, 9:30:00 up to (not
   including) 10:30:00 New York time, named "IBH" and "IBL", in the level style above (70%, name at the right edge,
   outlined tag) but drawn from the 9:30 bar to the right edge, not across the whole plot (Anthony). The high in the
-  brighter orchid. While forming, long dashes 12/5 (no other level uses them), moving with each new high or low.
+  brighter orchid. While forming, long dashes 12/5 (only the forming IB and the forming ONH / ONL use them), moving with each new high or low.
   From 10:30:00 (by the clock, within half a second, trade or no trade) solid for the rest of the trading day,
   until the 18:00 session start. Before 9:30 nothing is drawn for today.
   - **Data rule:** always the 1-minute bars (the live page's `D.m1`), whatever the view. Every view holds them
@@ -297,6 +297,23 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   - Part of **Levels** since 1.14.0 (Anthony): IBH and IBL are two of the Levels gear's toggles (its own entry and
     "IB" chip retired; its status notes still read "Initial balance not shown: ..."). A pane saved before keeps what
     it showed (`LivePrefs.migrateIb`).
+- **Overnight high and low (ONH, ONL; chart 1.40.0, Sunday 11-01 build):** the high and low of the overnight session,
+  from the session's 18:00 New York start (the evening before; Sunday 18:00 for a Monday) up to (not including) 9:30:00,
+  named "ONH" and "ONL", live then locked exactly as the Initial Balance is: in the overnight color `#7FB2FF` (both
+  lines), 70%, name at the right edge, outlined tag, drawn from the 18:00 bar to the right edge (not across the whole
+  plot). While the overnight session runs, long dashes 12/5, moving with each new high or low; from 9:30:00 (by the
+  clock, within half a second, trade or no trade) solid for the rest of the trading day, until the next 18:00 start,
+  when the next overnight forms from its first trade. Engine: `overnightRange` and `onLines` (`sessionLevels` still
+  reports `onh` / `onl`; the live page and the demo draw them through `onLines` instead of the full-width `levelLines`).
+  - **Data rule:** the IB's: always the 1-minute bars (`D.m1`), whatever the view, so the values are the same on every
+    timeframe, live or after a reload, and a page loaded mid-session has them from NinjaTrader's history. Bar time is
+    the New York wall clock, so the DST Sundays open at 18:00 like any other. A bar across 18:00 or 9:30 is refused.
+  - **Shown only when exact (no line, never a wrong one):** the history must reach back before the session's 18:00
+    start; otherwise nothing is drawn and the status line says so ("Overnight high and low not shown: ...", after the
+    IB's note when both show). Nothing either when ChartBridge reports the data connection down inside the window (its
+    profile's drop), or locked with no trade in the window. Quiet overnight minutes with no trade are normal, so a
+    missing minute is not taken as a hole. No Globex session that trading day (weekends, New Year's Day, Good Friday,
+    Christmas): nothing, no note. NYSE-only holidays (Globex trades, as Thanksgiving) have their overnight, locked at 9:30.
 - **Levels' lines, each its own toggle (1.14.0, Anthony):** the Levels gear lists PDH, PDL, Prior close, ONH, ONL,
   PD VAH, PD VAL, PD POC, IBH and IBL as a row of small toggles (`.ind-tog`, 24 px, 600 11px mono, styled as the chips: on = solid border on `--s3`,
   off = dashed in the quiet grey), all on

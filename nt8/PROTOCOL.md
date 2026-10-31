@@ -1896,6 +1896,17 @@ since the start, and keeps breakeven and trailing going: the pages get `managed`
 move them again, and says so: `managed` with `state` `unmanaged` and a `status` `error` ("MNQ EVAL-A: breakeven and
 trailing could not be resumed after the restart; the stop stays at 24,980.25. Manage it by hand").
 
+**An entry being placed is not a restart (0.6.10, Sunday 11-01 build; WORK's log).** NinjaTrader reports a new order
+the moment `CreateOrder` makes it, before ChartBridge has registered its bracket and strategy. That first report used to
+reach the restart recovery, which found no record and no `managed.txt` line yet and raised a false "Order Strategy entry
+CB#... could not be resumed after the restart" alarm (and a brief `unmanaged` to the page), although the order itself
+was then managed correctly. Now `PlaceOrderLocked` holds a **Placing** mark on the entry's tag from just before
+`CreateOrder` until the order is sent or refused (memory only, under `Sync`); an order event or a bracket lookup for an
+entry still being placed by this run is left alone (`IsPlacing`), and its placement registers it as usual. Every
+ChartBridge entry is covered (Order Strategy, bracket, resting, bot, agent). After a real restart the mark is empty, so an
+entry left from before it is recovered exactly as before, and one that cannot be resumed is still said. Harness:
+`check/StrategiesHarness.cs`, `PlacingNotRestart` (the stand-in account reports the order inside `CreateOrder`).
+
 | server to page | fields | when |
 |---|---|---|
 | `managed` | `id` (the entry's order id), `account`, `root`, `side`, `name` (the strategy's), `strategy` (the flat object as sent), `state` (`waiting` entry not filled, `active`, `resumed`, `unmanaged`, `done`), `pairs`: `[{bucket, qty, fill, stopId, stop, targetId, target, be (*bool*, moved to breakeven), trailing (*bool*)}]`, `best` (price or null), `text` (null, or why) | to signed-in v3 pages after `auth` (every live managed entry), on every change |

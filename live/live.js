@@ -1364,7 +1364,7 @@ function mount(container, options) {
 
   /* ---------------- per-instrument data */
   const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
-    lv: [], lvSrc: null, ib: null, ibKey: '', vp: null, liveFrom: null, delta: null,
+    lv: [], lvSrc: null, ib: null, ibKey: '', on: null, onKey: '', vp: null, liveFrom: null, delta: null,
     // the delta pane (1.7.0): the number of tick backfill trades (the store's trades before the first live one), and the
     // window the current delta was built with ({ from, by, why, journal })
     backfill: 0, deltaCov: null,
@@ -1421,7 +1421,7 @@ function mount(container, options) {
      frame; nothing blanks */
   function resetData(root, keep) {
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
-    D.lv = []; D.lvSrc = null; D.ib = null; D.ibKey = ''; ibNote(null);
+    D.lv = []; D.lvSrc = null; D.ib = null; D.ibKey = ''; D.on = null; D.onKey = ''; ibNote(null);
     D.vp = null; D.liveFrom = null; if (!keep) chart.setProfile(null); vpNote();
     D.window = false; D.table = null; D.sync = null; rangeNote();
     D.backfill = 0; D.deltaCov = null;
@@ -1571,11 +1571,36 @@ function mount(container, options) {
   function updateLevels() {
     if (!D.m1 || !D.m1.bars.length) return;
     const lv = U.sessionLevels(D.m1.bars, { asOf: etNow(), sessionStart: SESSION, tick: D.tick });
+    if (lv) { lv.onh = null; lv.onl = null; }          // ONH and ONL come from updateON: live overnight, locked at 9:30
     D.lvSrc = lv;
     D.lv = U.levelLines(lv, IC);
     D.day = U.tradeDay(etNow(), SESSION);
+    updateON(true);
     updateIB(true);
   }
+
+  /*
+   * The overnight high and low (ONH, ONL), live then locked the way the IB is: the high and low from the session's
+   * 18:00 ET start up to 9:30:00 ET, drawn from 18:00 in the IB's long dashes while they form, moving with each new
+   * high or low, then solid from 9:30:00 (by the clock, within half a second) until the next 18:00. From the 1-minute
+   * bars (D.m1) as the IB, so a page loaded mid-session has them from the history. Nothing is drawn when they cannot be
+   * exact (the history does not reach back to 18:00, or ChartBridge says the data connection was down in the window)
+   * or there is no Globex session (a weekend, New Year's Day, Good Friday, Christmas); the status line says why.
+   * Run from updateLevels, on a trade inside the window that makes a new high or low, and twice a second.
+   */
+  function updateON(force) {
+    if (!D.m1) return;
+    const T = D.table, day = U.tradeDay(etNow(), SESSION);
+    const dropAt = T && T.day === day && T.drop ? T.drop.at : undefined;
+    const on = U.overnightRange(D.m1.bars, { asOf: etNow(), sessionStart: SESSION, barSeconds: 60, dropAt });
+    const key = on.state + '|' + on.high + '|' + on.low + '|' + on.start;
+    D.on = on;
+    if (!force && key === D.onKey) return;
+    D.onKey = key;
+    if (!force) { drawLevels(); ibNote(D.ib); }        // forced from updateLevels: updateIB draws right after
+  }
+  /* Every level line on the chart: the prior session's, ONH and ONL, the IB, as switched on in the Levels gear. */
+  const drawLevels = () => chart.setLevels(levelsOn(D.lv.concat(U.onLines(D.on, IC), U.ibLines(D.ib, IC))));
 
   /*
    * The 1-hour Initial Balance (1.5.3): today's high and low from 9:30:00 up to 10:30:00 ET, "IBH" and "IBL" drawn
@@ -1595,7 +1620,7 @@ function mount(container, options) {
     D.ib = ib;
     if (!force && key === D.ibKey) return;
     D.ibKey = key;
-    chart.setLevels(levelsOn(D.lv.concat(U.ibLines(ib, IC))));
+    drawLevels();
     ibNote(ib);
   }
   /* The level lines switched on in the Levels gear (1.14.0: each line on its own; the IB's two are Levels' too). */
@@ -1606,7 +1631,7 @@ function mount(container, options) {
   function applyIndicatorColors() {
     chart.setTheme(chartIndColors());
     if (D.lvSrc) D.lv = U.levelLines(D.lvSrc, IC);
-    if (D.m1) chart.setLevels(levelsOn(D.lv.concat(U.ibLines(D.ib, IC))));
+    if (D.m1) drawLevels();
     paintColors();
   }
   const IB_NOTES = {
@@ -1615,7 +1640,15 @@ function mount(container, options) {
     inexact: 'Initial balance not shown: the bars do not line up with 9:30 and 10:30 ET.',
     empty: 'Initial balance not shown: no trades yet between 9:30 and 10:30 ET.',
   };
-  /* A quiet note on the status line, only while the IB indicator is on and the IB cannot be shown for a reason. */
+  const ON_NOTES = {
+    uncovered: 'Overnight high and low not shown: the history does not reach back to the 18:00 ET start of this session, so the overnight may be incomplete.',
+    gap: 'Overnight high and low not shown: the data connection was down during the overnight session, so they could be wrong.',
+    inexact: 'Overnight high and low not shown: the bars do not line up with 18:00 and 9:30 ET.',
+    empty: 'Overnight high and low not shown: no trades between 18:00 and 9:30 ET.',
+  };
+  const onShown = () => !!S.layers.levels && !masked('levels') && (S.options.levels.onh !== 'off' || S.options.levels.onl !== 'off');
+  /* A quiet note on the status line, only while the IB indicator is on and the IB cannot be shown for a reason; the
+     overnight high and low's note follows it, while either line is on and they cannot be shown. */
   function ibNote(ib) {
     const el = $('ibNote'); if (!el) return;
     let text = ib && ibShown() ? IB_NOTES[ib.state] || '' : '';
@@ -1623,6 +1656,8 @@ function mount(container, options) {
       const wd = new Date(ib.start * 1000).getUTCDay();
       text = wd === 0 || wd === 6 ? '' : 'Initial balance: no stock market session on ' + U.fmtDate(ib.start) + ' (NYSE holiday).';
     }
+    const onText = D.on && onShown() ? ON_NOTES[D.on.state] || '' : '';
+    if (onText) text = text ? text + ' ' + onText : onText;
     el.textContent = text; el.hidden = !text;
   }
 
@@ -1984,7 +2019,7 @@ function mount(container, options) {
       S.options[id][key] = value;
       if (id === 'vp' && key === 'session') vpBuild();
       if (id === 'vp' && key !== 'session') profileLines();               // the developing POC, VAH and VAL (1.14.0)
-      if (id === 'levels') { if (D.m1) chart.setLevels(levelsOn(D.lv.concat(U.ibLines(D.ib, IC)))); ibNote(D.ib); }
+      if (id === 'levels') { if (D.m1) drawLevels(); ibNote(D.ib); }
       if (id === 'vwap') vwapApply();
       if (id === 'delta' && key === 'show') chart.setDeltaView({ mode: value });   // the same core, drawn the other way
       if (id === 'delta' && key === 'div') sigApply();               // the divergence arrows (G1c)
@@ -2207,6 +2242,7 @@ function mount(container, options) {
     lastTradeAt = now; if (staleSec) syncStale();       // 1.16.0: the stale feed clears with this trade
     if (r1.isNew && U.tradeDay(t, SESSION) !== D.day) updateLevels();
     else if (D.ib && t >= D.ib.start && t < D.ib.end && (D.ib.high === null || p > D.ib.high || p < D.ib.low)) updateIB(false);
+    else if (D.on && D.on.state === 'forming' && t >= D.on.start && t < D.on.end && (D.on.high === null || p > D.on.high || p < D.on.low)) updateON(false);
   }
 
   const TRIM_CAP = 2500000, TRIM_HARD = 8000000;       // trades; 8 million is some 190 MB, far above a busy session
@@ -3844,7 +3880,7 @@ function mount(container, options) {
     $('ticksSeen').textContent = ticksSeen.toLocaleString() + ' live ticks';
     // the clock crossing 9:30, 10:30 or 18:00, with or without trades; also while offline, when minutes missing
     // since the drop hide the IB (a 'gap') rather than leave a stale one up
-    if (D.m1) updateIB(false);
+    if (D.m1) { updateON(false); updateIB(false); }   // and 9:30 locking ONH and ONL
     // the full-session profile moves to the new session at 18:00 ET on the clock on weekday evenings; over a weekend
     // or a holiday it keeps the last session until the next session's first trade, and RTH never moves on the clock
     // (1.6.1, the engine's keep)

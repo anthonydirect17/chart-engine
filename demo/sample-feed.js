@@ -74,7 +74,10 @@ function create(options) {
   const lb = base[base.length - 1];
   base.push({ t: T_LIVE, o: lb.c, h: lb.c, l: lb.c, c: lb.c, v: 0, vw: lb.vw });
 
-  const levels = U.levelLines(U.sessionLevels(base, { asOf: T_LIVE, sessionStart: SESSION, tick: TICK }));
+  // ONH and ONL as the live page draws them (chart 1.40.0): live overnight, locked at 9:30, from the session's 18:00 start
+  const lv = U.sessionLevels(base, { asOf: T_LIVE, sessionStart: SESSION, tick: TICK });
+  if (lv) { lv.onh = null; lv.onl = null; }
+  const levels = U.levelLines(lv).concat(U.onLines(U.overnightRange(base, { asOf: T_LIVE, sessionStart: SESSION, barSeconds: 60 })));
 
   const day0 = Math.floor(T_LIVE / DAY) * DAY;
   const trades = [['09:41', 3, true], ['09:58', 4, true], ['10:12', 3, false], ['10:24', 2, true]].map(([hm, k, win]) => {
