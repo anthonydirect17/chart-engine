@@ -2498,7 +2498,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // and its own rules with it) in the same step, under the groups lock order (ChangeGate, then GroupEntryLock and PlaceLock in
         // ChangeAndSave), so no group entry is sized or placed with it between the check and the change. hideRefusal is asked under
         // those locks (flat, not the bot's, the copier's or an agent's; null: it may be hidden); archive marks it hidden once the group
-        // change is in effect (null, or why not). A failed groups.txt write that is undone leaves it in its group and not hidden. Not a
+        // change is in effect (null, or why not). A failed groups.txt write that is undone leaves it in its group and not hidden; one
+        // kept (something placed during the write) asks hideRefusal again and hides it only if it may still be hidden. Not a
         // member: hideRefusal and archive alone, still under ChangeGate. groups.txt not readable and the account a member by its last
         // good copy: refused (the change could not be saved). Returns null, a refusal, or ChangeAndSave's "changed, but ..." warning.
         internal static string HideAndLeave(string name, Account a, Func<string> hideRefusal, Func<string> archive)
@@ -2529,9 +2530,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }, next => HeldWords(member, a), out inEffect);
                 if (ReferenceEquals(res, Unchanged)) { if ((why = hideRefusal()) != null) return why; return archive(); }
                 if (!inEffect) return res;
-                archived = archive();
+                // 0.6.10 (review): a change kept after a failed write (something was placed on it during the write): asked again before
+                // it is hidden; holding anything now, it stays out of its group (as kept) but is not hidden, and the page hides it once flat
+                string again = res != null ? hideRefusal() : null;
+                if (again != null)
+                {
+                    string held = HeldWords(member, a);
+                    archived = member + " left its group; not hidden: " + (held != null ? "it is in a trade now; Hide it once flat" : again) + " (" + res + ")";
+                }
+                else archived = archive();
                 ForgetHighs(new[] { member });
-                ChartBridgeServer.Log("groups: " + member + " left " + gname + " as it was hidden (by the page)" + (archived != null ? "; not hidden: " + archived : ""));
+                ChartBridgeServer.Log("groups: " + member + " left " + gname + (archived == null ? " as it was hidden (by the page)" : " on a Hide by the page; not hidden: " + archived));
                 Changed();
                 return archived ?? res;
             }

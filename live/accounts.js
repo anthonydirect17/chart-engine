@@ -362,6 +362,10 @@ function lifecycleBusy(a, st) {
   const orders = st.orders instanceof Map ? [...st.orders.values()] : Array.isArray(st.orders) ? st.orders : [];
   return orders.some(o => o && o.account === a.name && isWorking(o));
 }
+/** 1.40.0 (review): a Hide refusal that only means "not flat now" (ChartBridge 0.6.10: "left its group; not hidden: it is in a trade
+ *  now", or Hide's own "only a flat account can be hidden"): the step is asked again once the account is flat, as Hide waits today */
+const flatRetry = why => typeof why === 'string' && /not hidden: it is in a trade now|only a flat account can be hidden/.test(why);
+const FLAT_RETRIES = 3;   // at most this many asks again per outcome, so a refusal can never loop
 /** a step in words, for the Accounts tab and the Log */
 const STEP_WORDS = { leave: 'out of its group', followerOff: 'its copier follower off', followerRemove: 'its copier follower removed', hide: 'hidden' };
 /**
@@ -621,7 +625,7 @@ function ntFloorFlag(a, firmMins) {
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
   accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag,
-  roomParts, labelRefusal, deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, lifecycleStep, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
+  roomParts, labelRefusal, deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, lifecycleStep, lifecycleBusy, flatRetry, FLAT_RETRIES, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -870,6 +874,11 @@ function createFeed(env) {
     const rec = x && S.lifecycle.get(x.name), t = rec && rec.tried.get(x.key);
     if (!t) return;
     if (AC.keptChange(why)) { t.state = 'done'; t.why = why; return; }   // done by ChartBridge, with its warning
+    if (x.key === 'hide' && AC.flatRetry(why) && (rec.flatRetries || 0) < AC.FLAT_RETRIES) {   // 1.40.0 (review): asked again once it is flat
+      rec.flatRetries = (rec.flatRetries || 0) + 1; t.state = 'flat'; t.why = why.slice(0, 400);
+      log(x.name + ' (' + (AC.OUTCOME_WORD[rec.outcome] || rec.outcome) + ' on The Desk): not hidden yet: ' + t.why + '; hidden once it is flat');
+      return;
+    }
     t.state = 'refused'; t.why = why.slice(0, 400);
     log(x.name + ' (' + (AC.OUTCOME_WORD[rec.outcome] || rec.outcome) + ' on The Desk): ' + (AC.STEP_WORDS[x.key.split('|')[0]] || x.key) + ' refused by ChartBridge: ' + t.why, 'warn');
   }
@@ -888,6 +897,12 @@ function createFeed(env) {
         rec.step = st.step; rec.why = st.why || ''; rec.until = st.until || '';
         if (!AC.STEP_WORDS[st.step]) continue;   // done, waiting or blocked: nothing to send
         const key = st.step + (st.group ? '|' + st.group.id : '');
+        const was = rec.tried.get(key);
+        if (was && was.state === 'flat') {      // 1.40.0 (review): not flat at the time: asked again once ChartBridge shows it flat and hideable
+          const a = (S.accounts || []).find(x => x && x.name === name);
+          if (!a || a.canHide !== true || AC.lifecycleBusy(a, S)) continue;
+          rec.tried.delete(key);
+        }
         if (rec.tried.has(key)) continue;        // asked once already for this outcome: its answer stands
         const c = cid();
         let msg = null;
@@ -1582,7 +1597,7 @@ function mount(v, host) {
           if (rec.step === 'blocked') lines.push(`<li class="warn">${who}: not hidden yet: ${esc(rec.why)}</li>`);
           else if (rec.step === 'wait' && rec.until === 'flat') lines.push(`<li class="mut">${who}: out of its group: waits until ${esc(labelOf(name) || name)} is flat with no working orders</li>`);
           else if (rec.step === 'wait') lines.push(`<li class="mut">${who}: waiting: ${esc(rec.why)}</li>`);
-          else if (rec.step && rec.step !== 'done') { const t = rec.tried.get(rec.step); lines.push(`<li class="mut">${who}: ${esc(AC.STEP_WORDS[rec.step] || rec.step)}${t && t.state === 'sent' ? ': asked, waiting for ChartBridge' : ''}</li>`); }
+          else if (rec.step && rec.step !== 'done') { const t = rec.tried.get(rec.step); lines.push(`<li class="mut">${who}: ${esc(AC.STEP_WORDS[rec.step] || rec.step)}${t && t.state === 'sent' ? ': asked, waiting for ChartBridge' : t && t.state === 'flat' ? ': waits until ' + esc(labelOf(name) || name) + ' is flat' : ''}</li>`); }
         }
         return lines.length ? `<div class="apg-life" role="status" aria-label="Accounts marked on The Desk"><p class="apg-fl-head">Marked Blown or Promoted on The Desk: ChartBridge takes each out of its group and the copier, then hides it.</p><ul class="apg-fl-list">${lines.join('')}</ul></div>` : '';
       };

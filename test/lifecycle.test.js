@@ -227,6 +227,44 @@ test('1.40.0 (review): a Promoted eval in a group trade stays in its group until
   } finally { global.WebSocket = G; F.feed.stop(); }
 });
 
+test('1.40.0 (review): Hide refused because the account traded meanwhile is asked again once it is flat, a bounded number of times', async () => {
+  const rows = [{ account: 'EVAL-A', outcome: 'promoted', accountType: { id: 'lucid-50k', firm: 'Lucid', name: '50K' } }];
+  const F = await loadFeed(() => rows);
+  const G = global.WebSocket; global.WebSocket = F.FakeSocket;
+  try {
+    F.feed.start(['v3']);
+    await F.settle();
+    const s = F.socks[0];
+    s.deliver({ type: 'hello', version: '0.6.10', instruments: [], features: ['v3'] });
+    s.deliver({ type: 'trading', enabled: true, accounts: [], maxQty: {}, switches: ON });
+    s.deliver({ type: 'groups', list: [] });
+    s.deliver({ type: 'copier', canRemove: true, armed: false, leader: null, followers: [] });
+    const acct = q => ({ name: 'EVAL-A', sim: false, connection: 'connected', state: 'active', canHide: !q, positions: q ? [{ root: 'MNQ', qty: q }] : [] });
+    s.deliver({ type: 'accounts', list: [acct(0)], archived: [], notListed: [] });
+    await F.settle();
+    const hides = () => F.sent.filter(m => m.type === 'accountArchive');
+    assert.equal(hides().length, 1);
+    s.deliver({ type: 'reject', cid: hides()[0].cid, reason: 'EVAL-A left its group; not hidden: it is in a trade now; Hide it once flat (changed, but groups.txt could not be saved (made up))' });
+    s.deliver({ type: 'accounts', list: [acct(1)], archived: [], notListed: [] });
+    await F.settle();
+    assert.equal(F.feed.S.lifecycle.get('EVAL-A').tried.get('hide').state, 'flat');
+    assert.equal(hides().length, 1, 'in a trade: not asked again yet');
+    assert.ok(F.feed.S.log.some(l => /EVAL-A \(Promoted on The Desk\): not hidden yet: .*hidden once it is flat/.test(l.text)));
+    s.deliver({ type: 'accounts', list: [acct(0)], archived: [], notListed: [] });
+    await F.settle();
+    assert.equal(hides().length, 2, 'flat again: Hide asked again by itself');
+    /* a "not flat" refusal over and over: asked again at most FLAT_RETRIES times, then it stands (never a loop) */
+    for (let i = 0; i < AC.FLAT_RETRIES + 2; i++) {
+      s.deliver({ type: 'reject', cid: hides()[hides().length - 1].cid, reason: 'EVAL-A has a position or working orders: only a flat account can be hidden (exits always work)' });
+      s.deliver({ type: 'accounts', list: [acct(0)], archived: [], notListed: [] });
+      await F.settle();
+    }
+    assert.equal(hides().length, 1 + AC.FLAT_RETRIES);
+    assert.equal(F.feed.S.lifecycle.get('EVAL-A').tried.get('hide').state, 'refused');
+    assert.equal(AC.flatRetry('EVAL-A is agent a1\'s account (the Agent tab): it cannot be hidden'), false, 'any other refusal stands at once');
+  } finally { global.WebSocket = G; F.feed.stop(); }
+});
+
 test('1.40.0: a refused first step is shown once and not sent again; another outcome later asks again', async () => {
   let rows = [{ account: 'EVAL-B', outcome: 'promoted' }];
   const F = await loadFeed(() => rows);

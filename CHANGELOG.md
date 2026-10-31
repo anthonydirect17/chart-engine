@@ -39,8 +39,10 @@ not list is refused and the page shows the refusal once.
   NinjaTrader is no longer refused (audit 3; the member sits out each trade, the claims by name still apply).
 - **Hide takes a member out of its group** (ChartBridge 0.6.10, audit 4): in the same step, its bench place and its own rules with
   it, under the groups lock order (`ChangeGate`, `GroupEntryLock`, `PlaceLock`); a failed `groups.txt` write that is undone leaves it
-  in its group and not hidden; one kept after a failed write (something traded during it) is hidden too, so both steps happen or
-  neither. Harness cases for both, and for Hide of a member NinjaTrader does not list.
+  in its group and not hidden. One kept after a failed write (something traded on it during the write) is checked again: holding
+  anything now, it stays out of its group (as kept) but is not hidden, and the reply says "left its group; not hidden: it is in a
+  trade now; Hide it once flat"; the page asks Hide again by itself once the account is flat (at most 3 times an outcome). Harness
+  cases for both, and for Hide of a member NinjaTrader does not list.
 - **A group preview sizes as the entry places** (ChartBridge 0.6.10, audit 7): a member gate 2 refuses (hidden, not checked, Gone)
   sits out the preview with that reason.
 - **Update floors from The Desk never lowers a floor on its own** (C-A, `live/accounts.js` `floorPlan`): each row shows ChartBridge's

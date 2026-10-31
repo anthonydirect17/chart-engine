@@ -3977,7 +3977,10 @@ it sits out every entry, so the trading lane's count and dollars at risk leave i
 **Hide leaves the group (0.6.10, `HideAndLeave`).** Hiding a member takes it out of its group (its bench place and its own rules with
 it) in the same step, under the groups lock order (`ChangeGate`, then `GroupEntryLock` and `PlaceLock` in `ChangeAndSave`): Hide's own
 checks (flat, not claimed) are asked under those locks, the membership goes, `groups.txt` is written, and the account is marked hidden
-once that change is in effect. A failed write that is undone leaves it in its group and not hidden. The claims files are read before
+once that change is in effect. A failed write that is undone leaves it in its group and not hidden. A change kept after a failed
+write (something was placed on it during the write) has Hide's checks asked again: holding anything now, it is out of its group but
+not hidden, and the reply (a `reject`) says "<account> left its group; not hidden: it is in a trade now; Hide it once flat (...)"; the
+page's lifecycle asks Hide again once the account is flat (chart 1.40.0, at most 3 times an outcome). The claims files are read before
 the locks. With `groups.txt` unreadable a member is not hidden (its group change could not be saved); an account in no group is
 hidden as before.
 

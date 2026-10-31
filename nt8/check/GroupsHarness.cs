@@ -2206,14 +2206,18 @@ public static class GroupsHarness
                 Check(Rejection().Contains("groups.txt could not be saved (the disk is full (made up)); nothing was changed") && ChartBridgeGroups.GroupOf("SIM-A") == "g1" && FileText() == beforeHide &&
                       !accA.Contains("{\"name\":\"SIM-A\",\"at\":") && Entry(accA, "SIM-A") != "",
                       "0.6.10 (review): Hide when groups.txt cannot be written: refused with the write's reason, still in Lucid (memory and file), not hidden: " + Rejection());
-                // something placed on SIM-A during the write (a fill): the change stays in memory (the alarm, saved with the next change),
-                // so HideAndLeave goes on and hides it too: out of Lucid and hidden, both or neither, never one alone
+                // something placed on SIM-A during the write (a fill): the change stays in memory (the alarm, saved with the next change);
+                // asked again, SIM-A is in a trade now, so it is not hidden (Hide waits until it is flat), and the reply says so
                 ChartBridgeGroups.WriteForHarness = () => { Pos(simA, mnq, 1); throw new IOException("the disk is full (made up)"); };
                 Clear(); Acc("accountArchive", HideMsg("SIM-A"));
                 string accK = AccountsNow();
-                Check(Rejection().Contains("changed, but groups.txt could not be saved (the disk is full (made up)): SIM-A is in a trade (+1 MNQ) since the change, so it stays in effect") &&
-                      ChartBridgeGroups.GroupOf("SIM-A") == null && FileText() == beforeHide && accK.Contains("{\"name\":\"SIM-A\",\"at\":"),
-                      "0.6.10 (review): a failed write after SIM-A traded during it: out of Lucid in memory (the file one change behind) and hidden: both steps, said: " + Rejection());
+                Check(Rejection().Contains("SIM-A left its group; not hidden: it is in a trade now; Hide it once flat (changed, but groups.txt could not be saved (the disk is full (made up)): SIM-A is in a trade (+1 MNQ) since the change, so it stays in effect") &&
+                      ChartBridgeGroups.GroupOf("SIM-A") == null && FileText() == beforeHide && !accK.Contains("{\"name\":\"SIM-A\",\"at\":") && Entry(accK, "SIM-A") != "",
+                      "0.6.10 (review): a failed write after SIM-A traded during it: out of Lucid in memory (the file one change behind), not hidden while in a trade, said: " + Rejection());
+                ChartBridgeGroups.WriteForHarness = null;
+                Pos(simA, mnq, 0);
+                Clear(); Acc("accountArchive", HideMsg("SIM-A"));
+                Check(Rejection() == "" && AccountsNow().Contains("{\"name\":\"SIM-A\",\"at\":"), "0.6.10 (review): flat again, Hide hides it: " + Rejection());
             }
             finally { ChartBridgeGroups.WriteForHarness = null; Pos(simA, mnq, 0); }
             Clear(); G("accountGroup", JoinRules("SIM-D", "\"g1\"", "51000", R("50000", "0", "2000", "eod", "50100", "3000", ",\"typeId\":\"made-up-50k\"")));   // a change: groups.txt saved again
