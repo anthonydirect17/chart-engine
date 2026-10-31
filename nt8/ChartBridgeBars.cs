@@ -903,6 +903,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ",\"gaveUp\":" + gaveUp +
                 ",\"lastRequest\":" + CbJson.Str(lastRequest ?? "") +
                 ",\"lastError\":" + CbJson.Str(err) +
+                ",\"pc\":" + CbJson.Str(PcName()) + ",\"pcFrom\":" + CbJson.Str(string.IsNullOrEmpty(Pc) ? "computer name" : "config.txt") +   // Sunday 11-01: the name every Desk message carries (The Desk knows WORK by it), for the install job to check
                 ",\"oneSecond\":" + Diag1sJson() + "}";   // 0.6.9
         }
     }

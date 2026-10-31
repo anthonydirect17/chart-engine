@@ -987,7 +987,8 @@ session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`,
 `asking NinjaTrader: <session contract>`, `waiting for the gate: <why>`, `waiting: regular trading hours ...`, `waiting:
 NinjaTrader has no price connection`, `stopped`), `waitingForGate` (why the gate is not idle for a bars request, or null),
 `roots`, `lastSent` (the latest session The Desk took, per contract), `waiting` (messages queued in `pending_bars.jsonl`),
-`setAside` (since this start), `gaveUp` (sessions not asked again until the next start), `lastRequest`, `lastError`); `pages` (0.3.4, one entry per connected page: `id`, `root`, `ready`, `queued`
+`setAside` (since this start), `gaveUp` (sessions not asked again until the next start), `lastRequest`, `lastError`, and (Sunday 11-01) `pc`: the PC name
+every Desk message carries, with `pcFrom` `config.txt` or `computer name`, so an install job can check `pc = WORK` / `pc = HOME`); `pages` (0.3.4, one entry per connected page: `id`, `root`, `ready`, `queued`
 (entries waiting in its data lane), `orderLaneQueued`, `oldestDataMs` (how long the oldest waiting market data has
 waited, as the 5 s rule counts it)); `seams` (0.3.3, the last 20 subscribes, oldest first; see Backfill and live):
 `client`, `root`, `sub`, `tickHours`, `atUtcMs`, `loadMs` (subscribe to `ready`), `matched` (false: nothing to match the held

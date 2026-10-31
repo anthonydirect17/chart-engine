@@ -1027,6 +1027,12 @@ public static class BarsHarness
                 "S8 Diag: then a 400 and a 200: none queued, 1 set aside, the last session per contract unchanged (2026-09-24 is older), no stale error: " + d);
             string server = (string)Priv("DiagJson");
             Check(server.Contains(",\"bars\":{\"enabled\":true,\"state\":") && server.Contains("\"barsQueued\":0"), "S8 Diag: GET /diag has the bars section, and the gate shows its bars queue");
+            Check(d.Contains(",\"pc\":\"HOME\",\"pcFrom\":\"config.txt\","), "Diag: bars.pc is the name every Desk message carries, from config.txt here (the install job checks pc = WORK / HOME): " + Regex.Match(d, "\"pc\":[^,]*,\"pcFrom\":\"[^\"]*\"").Value);
+            string pcWas = ChartBridgeBars.PcName();
+            ChartBridgeBars.ReadConfig("pc", "");
+            string d0 = Diag();
+            Check(d0.Contains("\"pcFrom\":\"computer name\"") && !d0.Contains("\"pc\":\"HOME\""), "Diag: without pc in config.txt, bars.pc is the Windows computer name and pcFrom says so");
+            ChartBridgeBars.ReadConfig("pc", pcWas);
             connected = false;
             ChartBridgeBars.PlanOnce(null);
             Check(Diag().Contains("\"state\":\"waiting: NinjaTrader has no price connection\""), "S8 Diag: not connected: it says it waits for the price connection");
