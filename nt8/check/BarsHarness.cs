@@ -1221,6 +1221,8 @@ public static class BarsHarness
         {
             d2.Status1s = body => 200;
             ChartBridgeBars.CatchUpSessions = 1;
+            string ls = Regex.Match(Diag(), "\"oneSecond\":\\{[^}]*\"lastSent\":\\{[^}]*\\}").Value;
+            Check(ls.Contains("\"NQ 12-26\":\"none yet\"") && ls.Contains("\"MNQ 12-26\":"), "1s lastSent: every contract the pull covers is listed, \"none yet\" where The Desk has not taken a set (Sunday 11-01): " + ls);
             int m0 = MadeCount();
             for (int i = 0; i < 4; i++) ChartBridgeBars.PlanOnce(null);
             List<string> asked = TicksMade(m0).Select(x => x.Instrument.FullName).ToList();

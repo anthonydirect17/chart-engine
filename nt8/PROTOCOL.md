@@ -1160,8 +1160,9 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
   the request's from and to in NinjaTrader's time, the sides' method and counts, the time on NinjaTrader's thread) and `error`.
   Trades in NinjaTrader's answer outside the session are left out by time and counted in `lastBuild` ("N trades outside the
   session left out"). Since the request starts at the open (Sunday 11-01 build) that count should be small; a large one shows
-  NinjaTrader still gave the day before (harmless: nothing is counted twice). `lastSent` lists each contract The Desk took a whole
-  set of, MNQ as well as NQ.
+  NinjaTrader still gave the day before (harmless: nothing is counted twice). `lastSent` lists every contract the pull covers (the
+  front contract of each of its roots and any contract a pass planned, MNQ as well as NQ): the latest session The Desk took a
+  whole set of, or `"none yet"` (Sunday 11-01, decided 2026-11-01).
 - **The 1-minute bars are unchanged:** the same requests, messages and queue as 0.3.7 to 0.6.8, byte for byte (harness: the same
   session with the 1 second bars off and on gives the same 1-minute message).
 

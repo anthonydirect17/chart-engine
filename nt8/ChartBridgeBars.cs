@@ -182,7 +182,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string[] DefaultRoots() { return new string[] { "NQ", "MNQ", "ES", "MES" }; }
         private static string[] DefaultRoots1s() { return new string[] { "NQ", "MNQ" }; }
 
-        public static void ResetConfig() { Enabled = false; Roots = DefaultRoots(); Pc = ""; oneSecondOff = false; Roots1s = DefaultRoots1s(); }
+        public static void ResetConfig() { Enabled = false; Roots = DefaultRoots(); Pc = ""; oneSecondOff = false; Roots1s = DefaultRoots1s(); lock (Planned1s) Planned1s.Clear(); }
 
         // Called by ChartBridgeConfig.Load; true when the key is one of these.
         public static bool ReadConfig(string key, string val)
@@ -677,7 +677,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             nowEt = NowEt();   // review of #71 (MEDIUM 2): the pass's 1-minute requests may have taken minutes: the clock now, not the pass's start
             if (!In1sStartWindow(nowEt)) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend (a request starts by 17:50)"; return false; }
             string[] roots = Roots1s.Where(r => Roots.Contains(r)).ToArray();   // only roots whose 1-minute bars go too (barsRoots)
-            foreach (BarsJob j in Wanted(sessions, roots, FillJobs(sessions)))
+            List<BarsJob> wanted1s = Wanted(sessions, roots, FillJobs(sessions));
+            lock (Planned1s) { if (Planned1s.Count > 50) Planned1s.Clear(); foreach (BarsJob j in wanted1s) Planned1s.Add(j.Contract); }
+            foreach (BarsJob j in wanted1s)
             {
                 if (stopping()) return true;
                 if (ChartBridgeBars1sQueue.IsDone(j.Key) || ChartBridgeBars1sQueue.IsWaiting(j.Key) || ChartBridgeBars1sQueue.IsRefused(j.Key)) continue;
@@ -776,6 +778,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             return Outcome.Done;
         }
 
+        // Sunday 11-01 (decided 2026-11-01): /diag lastSent lists every contract the 1 second pull covers, "none yet" where The Desk
+        // has not taken a set of it (so a missing MNQ is never mistaken for a fault): the front contract of each of its roots (Roots1s
+        // that are in barsRoots) and every contract a pass planned (a contract with fills too).
+        private static readonly HashSet<string> Planned1s = new HashSet<string>();
+        private static List<string> Covered1s()
+        {
+            List<string> out1 = new List<string>();
+            if (!OneSecondOn) return out1;
+            DateTime today = NowEt().Date;
+            foreach (string r in Roots1s.Where(r => Roots.Contains(r))) out1.Add(FrontContract(r, today));
+            lock (Planned1s) out1.AddRange(Planned1s);
+            return out1;
+        }
+
         public static string Diag1sJson()
         {
             int gaveUp; lock (RetryAt) gaveUp = GaveUp.Count(k => k.StartsWith("1s ", StringComparison.Ordinal));
@@ -784,7 +800,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return "{\"on\":" + (OneSecondOn ? "true" : "false") +
                 ",\"state\":" + CbJson.Str(state1s ?? "") +
                 ",\"roots\":[" + string.Join(",", Roots1s.Select(r => CbJson.Str(r)).ToArray()) + "]" +
-                ",\"lastSent\":" + ChartBridgeBars1sQueue.LastSentJson() +
+                ",\"lastSent\":" + ChartBridgeBars1sQueue.LastSentJson(Covered1s()) +
                 ",\"waitingSets\":" + ChartBridgeBars1sQueue.Waiting() +
                 ",\"waitingParts\":" + ChartBridgeBars1sQueue.WaitingParts() +
                 ",\"setAside\":" + ChartBridgeBars1sQueue.SetAsideCount() +
@@ -1318,14 +1334,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static int WaitingParts() { lock (Sync) return Sets.Sum(s => s.Parts - s.Next); }
         public static long SetAsideCount() { return Interlocked.Read(ref setAside); }
         public static string SendError() { return sendError ?? ""; }
-        public static string LastSentJson()
+        // The latest session The Desk took, per contract; each contract of `covered` The Desk has not taken a set of yet: "none yet".
+        public static string LastSentJson() { return LastSentJson(null); }
+        public static string LastSentJson(IEnumerable<string> covered)
         {
             Dictionary<string, string> last = new Dictionary<string, string>();
+            if (covered != null) foreach (string c in covered) if (!string.IsNullOrEmpty(c)) last[c] = "none yet";
             lock (Sync)
                 foreach (string k in Sent)
                 {
                     string day = k.Substring(0, 10), contract = k.Substring(11), was;
-                    if (!last.TryGetValue(contract, out was) || string.CompareOrdinal(day, was) > 0) last[contract] = day;
+                    if (!last.TryGetValue(contract, out was) || was == "none yet" || string.CompareOrdinal(day, was) > 0) last[contract] = day;
                 }
             return "{" + string.Join(",", last.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => CbJson.Str(kv.Key) + ":" + CbJson.Str(kv.Value)).ToArray()) + "}";
         }
