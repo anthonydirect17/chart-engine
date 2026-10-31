@@ -497,6 +497,10 @@ chart page's order bar did until 1.22.0 (`live/trade.js`), so everything below a
   breakeven and trailing. Build them in **Settings > Order Strategies...**; each can have a key that picks it. The
   ticket shows plainly when ChartBridge manages it, resumed it after a restart, or could not (NOT MANAGED: manage the
   stop by hand).
+  Next release: a **Bar trail** row (instead of Trailing, one trail per strategy): the stop behind the low (long) or high
+  (short) of the last N completed 1 minute bars, an offset in ticks beyond, moved only at a bar close and never loosened.
+  It needs ChartBridge of the next build (an older one refuses it) and a Desk that takes the `barTrail` key (an older one
+  refuses the save, said under the form); see `nt8/PROTOCOL.md`, "The bar trail".
 - **Merge** (`merge`): a Merge button on the ticket and a Merge key. ChartBridge joins the stops and targets of the
   position into one set at the first leg's prices; the ticket shows the result (merged, restored or failed).
 - **Entry types** (`orderTypes`): in Settings pick a Limit key and a Stop key (Shift, Ctrl or Alt). Hold one with Buy

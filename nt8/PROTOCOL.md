@@ -1955,6 +1955,7 @@ what the open position needs.
 | `t1Share`, `t2Share`, `t3Share` | whole percent, 1 to 100 | one per target given, none otherwise; they add up to exactly 100 |
 | `beAfter`, `bePlus` | whole ticks; `beAfter` 1 or more, `bePlus` 0 or more and below `beAfter` | both or neither: after `beAfter` ticks of profit, the stop goes to entry plus `bePlus` |
 | `trailAfter`, `trailBy`, `trailStep` | whole ticks, each 1 or more | all three or none: once `trailAfter` ticks in profit, the stop trails `trailBy` ticks behind the best price, moving only in steps of `trailStep` ticks or more |
+| `barTrail`, `barTrailOffset` (next build) | `barTrail` whole bars, 1 to 50; `barTrailOffset` whole ticks, 0 to 100 | both or neither, and never with `trailAfter` (one trail per strategy): the **bar trail**, the stop behind the lowest low (a long) or the highest high (a short) of the last `barTrail` completed 1 minute bars, `barTrailOffset` ticks beyond it, set only at a bar close (below) |
 
 Every distance is at most `maxBracketTicks` when it is set. A strategy is refused on an order that would reduce the
 position (as a bracket). Refusals name the key ("t2Share must be a whole percent from 1 to 100").
@@ -1980,6 +1981,21 @@ loosens), never to a price at or through the last trade (it waits for the next t
 500 ms (lead's default), always with `change` on the working stop at the broker (a stop-limit keeps its offset). A move
 NinjaTrader rejects leaves the stop where it was and raises a `status` `warn`; it is tried once more on the next eligible
 move, and a second rejection halts moves for that stop (fix1).
+
+**The bar trail** (next build, Anthony's task "Strategy creator: bar trail option"; no spec in Drive, so the conservative
+reading below). ChartBridge builds 1 minute bars per root from the trades it sees, with NinjaTrader's time of each trade,
+closed at the minute (end-inclusive: a trade at 10:04:00 is in the bar ending 10:04, as NinjaTrader and the minute book). A
+bar closes when the first trade of a later minute arrives (a minute with no trade has no bar). The first bar after a start,
+and the forming bar at a feed drop, were seen only in part: they are never used, and a feed drop forgets every bar before it,
+so the trail waits for `barTrail` whole bars again. A late trade (an earlier minute than the forming bar) is left out. At each
+bar close, with at least `barTrail` completed bars, each pair's bar level is the lowest low (a long) or the highest high (a
+short) of the last `barTrail` bars, `barTrailOffset` ticks beyond it, snapped to the tick grid on the loose side; the level
+only ever tightens. The bars may include bars from before the fill. The level is then sent by the same move rules as
+breakeven and trailing: only when tighter than the stop (never loosens), never at or through the last trade (it waits for the
+next trade, at the level the close set), at most one move per 500 ms, one move in flight, a rejection as above. With
+breakeven, the tighter level wins. `managed` says `trailing: true` once the stop is at its bar level. A restart forgets the
+bars (it waits for `barTrail` whole bars again; the stop stays where it is meanwhile). A ChartBridge before this build
+refuses `barTrail` as an unknown key, so nothing is sent with a strategy it cannot run.
 
 **Saved for a restart**: `managed.txt` next to `config.txt`, one line per managed entry, `<tag>\t<strategy as the flat
 JSON object sent>\t<best price per pair>\t<saved UTC ms>` (and `\tmerged` once a Merge ran on it, fix1), written whole through a temp file off NinjaTrader's thread (at
@@ -4137,6 +4153,14 @@ only, never through the tunnel; CORS for `http://localhost:8765` and `http://127
 | `targets[0..2].ticks`, `.sharePct` | `t1`..`t3`, `t1Share`..`t3Share` |
 | `breakeven.afterTicks`, `.plusTicks` | `beAfter`, `bePlus` (both left out for `null`) |
 | `trail.startTicks`, `.byTicks`, `.stepTicks` | `trailAfter`, `trailBy`, `trailStep` (all left out for `null`) |
+| `barTrail.bars`, `.offsetTicks` (next release; the key is absent without a bar trail, never `null`) | `barTrail`, `barTrailOffset` (both left out when absent) |
+
+**The bar trail in The Desk's document (next release, a Desk change needed):** a strategy may carry one more key,
+`barTrail: {bars, offsetTicks}` (bars 1 to 50, offsetTicks 0 to 100), only when it has a bar trail, and never with a
+`trail` that is not `null`. A strategy without a bar trail has no `barTrail` key, so a document with none is exactly what
+The Desk took before. The Desk of the Sunday 11-01 release (`thedesk/chart_settings.py`, exact keys) refuses a strategy with
+the key (400, "unknown or missing keys"); the page says so and keeps the edit. The Desk needs to accept the key with these
+rules before Anthony can save a bar trail.
 
 Copilot's one-key accept and reject are not keys in D2's draft hotkeys document yet (an open item for the lead); until
 they are, the page shows Accept and Reject buttons and `botAnswer` is the same either way.

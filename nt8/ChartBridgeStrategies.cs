@@ -14,6 +14,9 @@
 //   - order.strategy: its strict reading and every rule of its table, refusals naming the key;
 //   - the allocation rule (largest remainder, a tie to the later target, a 0-contract target dropped);
 //   - per fill increment, one stop and target OCO pair per target bucket, named "... k<bucket>";
+//   - the bar trail (next build, Anthony's task "Strategy creator: bar trail option"): the stop behind the low (long) or the
+//     high (short) of the last barTrail completed 1 minute bars, barTrailOffset ticks beyond it, set only when a bar closes;
+//     the bars are ChartBridge's own, built here from the trades it sees (a bar seen only in part is never used);
 //   - breakeven and trailing on ChartBridge's live trades: never loosens, never at or through the last trade, at most one
 //     move per stop per 500 ms, a change on the working stop; a rejected move leaves the stop and raises an error;
 //   - managed.txt (what a restart needs) and the restart: resumed, or every stop left where it is and said so;
@@ -196,11 +199,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             public int[] T = new int[0], Share = new int[0];
             public int BeAfter, BePlus;               // BeAfter 0: no breakeven
             public int TrailAfter, TrailBy, TrailStep; // TrailAfter 0: no trailing
+            public int BarTrail, BarTrailOffset;      // BarTrail 0: no bar trail; else the last BarTrail completed 1 minute bars
             public string Json;                       // the flat object, as sent (keys in the protocol's order)
             public int MaxTarget { get { return T.Length == 0 ? 0 : T.Max(); } }
         }
 
-        private static readonly string[] StrategyKeys = { "name", "stop", "stopLimit", "t1", "t2", "t3", "t1Share", "t2Share", "t3Share", "beAfter", "bePlus", "trailAfter", "trailBy", "trailStep" };
+        private static readonly string[] StrategyKeys = { "name", "stop", "stopLimit", "t1", "t2", "t3", "t1Share", "t2Share", "t3Share", "beAfter", "bePlus", "trailAfter", "trailBy", "trailStep", "barTrail", "barTrailOffset" };
+        public const int BarTrailMax = 50, BarTrailOffsetMax = 100;
         private static readonly Regex StrategyRx = new Regex("\"strategy\"\\s*:\\s*\\{([^{}\\[\\]]*)\\}");
 
         // OnMessage, for an order with strategies on: the strategy object is cut out of the message (as TopLevel cuts the
@@ -302,6 +307,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             why = Ticks(t, "trailStep", 1, false, out r.TrailStep, out hc);
             if (why != null) return why;
             if (!(ha == hb && hb == hc)) return "trailAfter, trailBy and trailStep go together (all three or none)";
+            // the bar trail: barTrail (1 to 50 bars) and barTrailOffset (0 to 100 ticks) together; never with the tick trail
+            int hn = WholeOrNull(t, "barTrail", out r.BarTrail), ho = WholeOrNull(t, "barTrailOffset", out r.BarTrailOffset);
+            if (hn != 0 && (hn != 1 || r.BarTrail < 1 || r.BarTrail > BarTrailMax)) return "barTrail must be a whole number of bars from 1 to " + BarTrailMax;
+            if (ho != 0 && (ho != 1 || r.BarTrailOffset < 0 || r.BarTrailOffset > BarTrailOffsetMax)) return "barTrailOffset must be a whole number of ticks from 0 to " + BarTrailOffsetMax;
+            if ((hn != 0) != (ho != 0)) return "barTrail and barTrailOffset go together (both or neither)";
+            if (hn != 0 && MaxBracketTicks > 0 && r.BarTrailOffset > MaxBracketTicks) return "barTrailOffset must be at most " + MaxBracketTicks + " ticks (maxBracketTicks in config.txt)";
+            if (hn != 0 && ha) return "barTrail and trailAfter are refused together: one trail per strategy";
             r.Json = StrategyJson(r);
             s = r;
             return null;
@@ -314,6 +326,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             for (int k = 0; k < s.T.Length; k++) b.Append(",\"t").Append(k + 1).Append("\":").Append(s.T[k]).Append(",\"t").Append(k + 1).Append("Share\":").Append(s.Share[k]);
             if (s.BeAfter > 0) b.Append(",\"beAfter\":").Append(s.BeAfter).Append(",\"bePlus\":").Append(s.BePlus);
             if (s.TrailAfter > 0) b.Append(",\"trailAfter\":").Append(s.TrailAfter).Append(",\"trailBy\":").Append(s.TrailBy).Append(",\"trailStep\":").Append(s.TrailStep);
+            if (s.BarTrail > 0) b.Append(",\"barTrail\":").Append(s.BarTrail).Append(",\"barTrailOffset\":").Append(s.BarTrailOffset);
             return b.Append('}').ToString();
         }
 
@@ -360,6 +373,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool Be, Trailing, Halted;     // Halted: a second move was rejected; the stop stays and is not moved again
             public int Rejects;                   // fix1: moves NinjaTrader rejected (the first is tried once more on the next eligible move)
             public double LastMoveMs = double.MinValue, Pending, PendingAt;   // Pending: the level a move was sent to (0: none)
+            public double BarLevel;               // the bar trail's level from the last bar close (0: none yet); only ever tightens
         }
 
         private class MEntry
@@ -383,6 +397,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly object StratLock = new object();
         private static readonly Dictionary<string, MEntry> ManagedByTag = new Dictionary<string, MEntry>();
         private static readonly Dictionary<string, double[]> SinceStart = new Dictionary<string, double[]>();   // root -> { high, low } of the trades since the start
+        private static readonly Dictionary<string, TrailBars> BarsByRoot = new Dictionary<string, TrailBars>();   // root -> the bar trail's 1 minute bars
         private static volatile int managedCount;
         public const double MoveGapMs = 500, MoveConfirmMs = 5000;
         public static Func<double> StrategyClock;     // test hook: the clock for the move rules (unused in NinjaTrader)
@@ -600,7 +615,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- breakeven and trailing
         // NoteLast (NinjaTrader's market data thread), for every trade while strategies is on. Cheap: the high and low since
         // the start, and with no managed entry nothing else. A move that is due is sent off this thread.
-        private static void StrategyTrade(string root, double price)
+        // time: NinjaTrader's time of the trade (DateTime ticks), 0 when not known (the bar trail then takes nothing from it).
+        private static void StrategyTrade(string root, double price, long time)
         {
             if (root == null || !(price > 0)) return;
             List<KeyValuePair<MPair, double>> due = null;
@@ -611,7 +627,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 double[] hl;
                 if (!SinceStart.TryGetValue(root, out hl)) SinceStart[root] = new double[] { price, price };
                 else { if (price > hl[0]) hl[0] = price; if (price < hl[1]) hl[1] = price; }
+                TrailBars tb = null;
+                bool barClosed = time > 0 && BarTrade(root, price, time, out tb);
                 if (managedCount == 0) return;
+                if (barClosed) BarClosed(root, tb);
                 foreach (MEntry m in ManagedByTag.Values)
                 {
                     if (m.Root != root || m.S == null || m.Pairs.Count == 0) continue;
@@ -636,6 +655,67 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (StrategyInline) SendMoves(due);
             else ThreadPool.QueueUserWorkItem(delegate { SendMoves(due); });
         }
+
+        // ---------------------------------------------------------- the bar trail's bars (next build)
+        // 1 minute bars per root from the trades ChartBridge sees, closed at the minute (end-inclusive, as NinjaTrader and the
+        // minute book). A bar closes when the first trade of a later minute arrives. The first bar after a start, or after a
+        // feed drop, was seen only in part: it is never used (its high or low could be wrong), and a feed drop forgets every
+        // bar before it. A late trade (an earlier minute than the forming bar) is left out of the bars.
+        private class TrailBars
+        {
+            public long Cur;                      // the close (DateTime ticks) of the bar forming now; 0: none yet
+            public double Hi, Lo;
+            public bool Partial = true;           // the forming bar was joined part way
+            public readonly List<double[]> Done = new List<double[]>();   // completed bars, oldest first: { high, low }, at most BarTrailMax
+        }
+
+        private static long BarCloseOf(long t) { long m = TimeSpan.TicksPerMinute, rem = t % m; return rem == 0 ? t : t - rem + m; }
+
+        // StratLock held. True when this trade closed a whole bar (tb: its root's bars).
+        private static bool BarTrade(string root, double price, long time, out TrailBars tb)
+        {
+            if (!BarsByRoot.TryGetValue(root, out tb)) { tb = new TrailBars(); BarsByRoot[root] = tb; }
+            long k = BarCloseOf(time);
+            if (tb.Cur == 0) { tb.Cur = k; tb.Hi = price; tb.Lo = price; tb.Partial = true; return false; }
+            if (k == tb.Cur) { if (price > tb.Hi) tb.Hi = price; if (price < tb.Lo) tb.Lo = price; return false; }
+            if (k < tb.Cur) return false;         // late: left out
+            bool whole = !tb.Partial;
+            if (whole)
+            {
+                tb.Done.Add(new double[] { tb.Hi, tb.Lo });
+                if (tb.Done.Count > BarTrailMax) tb.Done.RemoveAt(0);
+            }
+            tb.Cur = k; tb.Hi = price; tb.Lo = price; tb.Partial = false;
+            return whole;
+        }
+
+        // A feed drop on root (null: every root): the forming bar is partial and the bars before the drop are forgotten.
+        internal static void BarTrailFeedDropped(string root)
+        {
+            lock (StratLock)
+                foreach (KeyValuePair<string, TrailBars> kv in BarsByRoot)
+                    if (root == null || kv.Key == root) { kv.Value.Done.Clear(); kv.Value.Partial = true; }
+        }
+
+        // StratLock held, at a bar close on root: each bar-trail pair's level, from the last BarTrail completed bars: below their
+        // lowest low (a long) or above their highest high (a short) by BarTrailOffset ticks, on the loose side of the tick grid.
+        // Only ever tightens; with fewer bars than BarTrail, nothing yet. MoveDue sends it, under every rule of a move.
+        private static void BarClosed(string root, TrailBars tb)
+        {
+            foreach (MEntry m in ManagedByTag.Values)
+            {
+                StratParams s = m.S;
+                if (m.Root != root || s == null || s.BarTrail <= 0 || m.Pairs.Count == 0 || tb.Done.Count < s.BarTrail || m.Instrument == null) continue;
+                double tick = m.Instrument.MasterInstrument.TickSize, hi = double.MinValue, lo = double.MaxValue;
+                for (int i = tb.Done.Count - s.BarTrail; i < tb.Done.Count; i++) { hi = Math.Max(hi, tb.Done[i][0]); lo = Math.Min(lo, tb.Done[i][1]); }
+                double level = Snap(m.Buy ? lo - s.BarTrailOffset * tick : hi + s.BarTrailOffset * tick, tick, m.Buy);
+                foreach (MPair p in m.Pairs)
+                    if (p.BarLevel == 0 || Tighter(m.Buy, level, p.BarLevel)) p.BarLevel = level;
+            }
+        }
+
+        // For the harness and /diag: the completed bars the bar trail holds for root.
+        internal static int BarTrailBars(string root) { lock (StratLock) { TrailBars tb; return BarsByRoot.TryGetValue(root ?? "", out tb) ? tb.Done.Count : 0; } }
 
         // StratLock held. The level the pair's stop should go to now, or false. PROTOCOL "Breakeven and trailing":
         //   breakeven: once the best price since the fill is beAfter ticks in profit, the stop to fill plus bePlus, once;
@@ -667,6 +747,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 bool step = (m.Buy ? tr - stopNow : stopNow - tr) >= s.TrailStep * tick - 1e-9;
                 if (step && Tighter(m.Buy, tr, stopNow) && (!have || Tighter(m.Buy, tr, level))) { level = tr; have = true; }
             }
+            // the bar trail: the level the last bar close set (BarClosed), sent once it is tighter than the stop
+            if (s.BarTrail > 0 && p.BarLevel > 0 && Tighter(m.Buy, p.BarLevel, stopNow) && (!have || Tighter(m.Buy, p.BarLevel, level))) { level = p.BarLevel; have = true; }
             if (!have) return false;
             if (m.Buy ? !(level < last - 1e-9) : !(level > last + 1e-9)) return false;   // at or through the last trade: wait
             return Tighter(m.Buy, level, stopNow);   // never loosens
@@ -773,6 +855,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!Tighter(m.Buy, be, stop)) p.Be = true;
             }
             if (s.TrailAfter > 0 && Math.Round((m.Buy ? p.Best - p.Fill : p.Fill - p.Best) / tick, 6) >= s.TrailAfter) p.Trailing = true;
+            if (s.BarTrail > 0 && p.BarLevel > 0 && !Tighter(m.Buy, p.BarLevel, stop)) p.Trailing = true;   // the stop is at its bar trail level
         }
 
         // ---------------------------------------------------------- the managed message
@@ -1171,7 +1254,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static void ClearStrategies()
         {
-            lock (StratLock) { ManagedByTag.Clear(); ManagedLines.Clear(); SinceStart.Clear(); RecentlyDone.Clear(); managedCount = 0; managedReadFailed = false; saveDirty = false; saveFailed = null; lastSaveMs = 0; }
+            lock (StratLock) { ManagedByTag.Clear(); ManagedLines.Clear(); SinceStart.Clear(); BarsByRoot.Clear(); RecentlyDone.Clear(); managedCount = 0; managedReadFailed = false; saveDirty = false; saveFailed = null; lastSaveMs = 0; }
         }
 
         // LoadPlans (a pool thread, at start, before plansLoaded is set): read the lines into memory.

@@ -61,6 +61,7 @@ test('checkWire: the same verdict and the same words as ChartBridge\'s check (te
       const v = pick(nums);
       if (v !== undefined) s[k] = v;
     }
+    if (rnd(5) === 0) { for (const k of ['barTrail', 'barTrailOffset']) { const v = pick(nums); if (v !== undefined) s[k] = v; } }   // next release: the bar trail
     if (rnd(4) === 0) { s.t1 = 8; s.t1Share = 50; s.t2 = 16; s.t2Share = 50; delete s.t3; delete s.t3Share; }
     for (const maxB of [0, 300]) {
       const want = V.checkStrategy(s, maxB), got = OS.checkWire(s, maxB);
@@ -507,4 +508,43 @@ test('the workspace loads order-strategies.js before trade.js, and the install l
   const css = read('live/workspace.css'), block = css.slice(css.indexOf('1.16.0 (ChartBridge 0.4.0): Order Strategies'));
   assert.doesNotMatch(block, /transition\s*:|animation\s*:|@keyframes/);
   assert.doesNotMatch(read('live/order-strategies.js'), /requestAnimationFrame|transition|animate\(/);
+});
+
+/* ---------------- next release: the bar trail (Anthony's task "Strategy creator: bar trail option") */
+test('the bar trail: an optional barTrail { bars, offsetTicks }, never null, never with the tick trail; to ChartBridge as barTrail and barTrailOffset', () => {
+  const bt = strat({ trail: null, barTrail: { bars: 3, offsetTicks: 2 } });
+  assert.equal(OS.checkStrategy(bt, {}), null);
+  assert.deepEqual(OS.toWire(bt), { name: 'Scalp 2', stop: 16, stopLimit: 2, t1: 8, t1Share: 50, t2: 20, t2Share: 50, beAfter: 8, bePlus: 1, barTrail: 3, barTrailOffset: 2 });
+  assert.equal(OS.checkWire(OS.toWire(bt), 0), null);
+  assert.equal(OS.describe(bt), 'Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Bar trail 3 bars +2');
+  assert.equal(OS.describe(strat({ trail: null, barTrail: { bars: 1, offsetTicks: 0 } })), 'Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Bar trail 1 bar');
+  assert.ok(!('barTrail' in OS.toWire(SCALP)) && !('barTrailOffset' in OS.toWire(SCALP)), 'a strategy without it sends neither key');
+  const why = (over) => OS.checkStrategy(strat(Object.assign({ trail: null }, over)), {});
+  assert.deepEqual(why({ barTrail: null }), { field: 'barTrail', text: 'The bar trail needs bars and offset ticks.' }, 'null is refused: no key means no bar trail');
+  assert.deepEqual(why({ barTrail: { bars: 2 } }), { field: 'barTrail', text: 'The bar trail needs bars and offset ticks.' });
+  assert.equal(why({ barTrail: { bars: 0, offsetTicks: 1 } }).field, 'barTrail');
+  assert.equal(why({ barTrail: { bars: 51, offsetTicks: 1 } }).text, 'The bar trail must be a whole number of bars from 1 to 50.');
+  assert.equal(why({ barTrail: { bars: 2.5, offsetTicks: 1 } }).field, 'barTrail');
+  assert.deepEqual(why({ barTrail: { bars: 2, offsetTicks: 101 } }), { field: 'barOffset', text: 'The bar trail\'s offset must be a whole number of ticks from 0 to 100.' });
+  assert.equal(why({ barTrail: { bars: 2, offsetTicks: -1 } }).field, 'barOffset');
+  assert.deepEqual(OS.checkStrategy(strat({ barTrail: { bars: 2, offsetTicks: 1 } }), {}), { field: 'barTrail', text: 'One trail per strategy: Trailing or Bar trail, not both.' });
+  assert.match(OS.checkStrategy(strat({ barTrail: { bars: 2, offsetTicks: 1 }, extra: 1 }), {}).text, /needs exactly/);
+  // a document read with one keeps it; a document without any is as before
+  const doc = OS.cleanStrategiesDoc({ rev: 3, strategies: [bt, strat({ id: 'b', name: 'B', hotkey: null })] });
+  assert.equal(doc.strategies.length, 2);
+  assert.equal(OS.checkStrategiesDoc(doc, null), '');
+  // ChartBridge's words: both or neither, never with trailAfter, maxBracketTicks on the offset
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2 }, 0), 'barTrail and barTrailOffset go together.');
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2, barTrailOffset: 1, trailAfter: 8, trailBy: 4, trailStep: 1 }, 0), 'barTrail and trailAfter are refused together: one trail per strategy.');
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2, barTrailOffset: 40 }, 30), 'barTrailOffset must be at most 30 (maxBracketTicks in config.txt).');
+});
+
+test('the bar trail: the C# reads and refuses it with the same rules (ChartBridgeStrategies.cs)', () => {
+  const cs = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeStrategies.cs'), 'utf8');
+  assert.match(cs, /"trailStep", "barTrail", "barTrailOffset" \};/);
+  assert.match(cs, /public const int BarTrailMax = 50, BarTrailOffsetMax = 100;/);
+  assert.match(cs, /barTrail and trailAfter are refused together: one trail per strategy/);
+  assert.match(cs, /if \(s\.BarTrail > 0 && p\.BarLevel > 0 && Tighter\(m\.Buy, p\.BarLevel, stopNow\)/, 'sent by MoveDue, under every rule of a move');
+  const ws = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
+  assert.match(ws, /if \(sgEl\('btOn'\)\.checked\) s\.barTrail = \{ bars: n\('barTrail'\), offsetTicks: n\('barOffset'\) \};/);
 });

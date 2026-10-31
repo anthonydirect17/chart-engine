@@ -65,7 +65,7 @@ public static class StrategiesHarness
     {
         ChartBridgeOrders.ResetConfig();
         ChartBridgeOrders.ReadConfig("trading", "true");
-        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-S1, SIM-S2, SIM-S3, SIM-S4, SIM-S5, SIM-S6, SIM-S7, SIM-S8, SIM-S9, SIM-T1, SIM-T2, SIM-T3, SIM-T4, SIM-T5, SIM-T6, SIM-T7, SIM-T8, SIM-U1, SIM-U2, SIM-U3, SIM-U4, SIM-U5, SIM-U6, SIM-U7");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-S1, SIM-S2, SIM-S3, SIM-S4, SIM-S5, SIM-S6, SIM-S7, SIM-S8, SIM-S9, SIM-T1, SIM-T2, SIM-T3, SIM-T4, SIM-T5, SIM-T6, SIM-T7, SIM-T8, SIM-U1, SIM-U2, SIM-U3, SIM-U4, SIM-U5, SIM-U6, SIM-U7, SIM-B1, SIM-B2, SIM-B3");
         ChartBridgeOrders.ReadConfig("maxQty.MNQ", "6");
         ChartBridgeSwitches.Note("orderTypes", orderTypes ? "on" : "off");   // integration: ChartBridgeConfig.Load records every v3 switch in ChartBridgeSwitches
         ChartBridgeSwitches.Note("strategies", strategies ? "On" : "off");
@@ -112,6 +112,7 @@ public static class StrategiesHarness
             SavedBeforeSent();   // fix1 (F5)
             DoneRace();          // fix1
             PlacingNotRestart(); // 0.6.10
+            BarTrail();          // next build (after the restarts: its entries stay managed)
             Done();
             Check(!sentV2.Any(m => m.Contains("\"type\":\"managed\"")), "a v2 page never gets a managed message");
         }
@@ -287,6 +288,17 @@ public static class StrategiesHarness
             new[] { "\"name\":\"S\",\"stop\":8,\"trailAfter\":8,\"trailBy\":0,\"trailStep\":1", "trailBy must be a whole number of ticks, 1 or more" },
             new[] { "\"name\":\"S\",\"stop\":8,\"trailAfter\":8,\"trailBy\":4,\"trailStep\":0", "trailStep must be a whole number of ticks, 1 or more" },
             new[] { "\"name\":\"S\",\"stop\":8,\"trail\":8", "unknown key \\\"trail\\\" in strategy" },
+            // next build: the bar trail
+            new[] { "\"name\":\"S\",\"stop\":8,\"barTrail\":2", "barTrail and barTrailOffset go together" },
+            new[] { "\"name\":\"S\",\"stop\":8,\"barTrailOffset\":1", "barTrail and barTrailOffset go together" },
+            new[] { "\"name\":\"S\",\"stop\":8,\"barTrail\":0,\"barTrailOffset\":1", "barTrail must be a whole number of bars from 1 to 50" },
+            new[] { "\"name\":\"S\",\"stop\":8,\"barTrail\":51,\"barTrailOffset\":1", "barTrail must be a whole number of bars from 1 to 50" },
+            new[] { "\"name\":\"S\",\"stop\":8,\"barTrail\":\"2\",\"barTrailOffset\":1", "barTrail must be a whole number of bars" },
+            new[] { "\"name\":\"S\",\"stop\":8,\"barTrail\":2.5,\"barTrailOffset\":1", "barTrail must be a whole number of bars" },
+            new[] { "\"name\":\"S\",\"stop\":8,\"barTrail\":2,\"barTrailOffset\":-1", "barTrailOffset must be a whole number of ticks from 0 to 100" },
+            new[] { "\"name\":\"S\",\"stop\":8,\"barTrail\":2,\"barTrailOffset\":101", "barTrailOffset must be a whole number of ticks from 0 to 100" },
+            new[] { "\"name\":\"S\",\"stop\":8,\"barTrail\":2,\"barTrailOffset\":null", "barTrailOffset must be a whole number of ticks" },
+            new[] { "\"name\":\"S\",\"stop\":8,\"trailAfter\":8,\"trailBy\":4,\"trailStep\":1,\"barTrail\":2,\"barTrailOffset\":1", "barTrail and trailAfter are refused together: one trail per strategy" },
             new[] { "\"name\":\"S\",\"stop\":8,\"stop\":9", "strategy has a key twice" },
         };
         foreach (string[] r in bad)
@@ -437,6 +449,96 @@ public static class StrategiesHarness
               "the stop level already traded: a market exit per bucket (1/2), never a stop through the market: " + string.Join(" | ", legs));
         Check(Error("already passed the stop level"), "and an error says so");
         Trade(25000);
+    }
+
+    // ------------------------------------------------------------ the bar trail (next build)
+    // NinjaTrader's time of a trade (made up): 30 October 2026, h:m:s; the bar trail's bars are 1 minute, end-inclusive.
+    static void TradeAt(int h, int m, int sec, double price) { ChartBridgeOrders.NoteLast("MNQ", price, new DateTime(2026, 10, 30, h, m, sec)); }
+    const string BarTrailS = "\"name\":\"Bar trail\",\"stop\":16,\"t1\":40,\"t1Share\":100,\"barTrail\":2,\"barTrailOffset\":1";
+
+    static void BarTrail()
+    {
+        Config(false, true);
+        ChartBridgeOrders.BarTrailFeedDropped(null);   // start clean: no bar before this case
+        Account a = NewAccount("SIM-B1");
+        TradeAt(10, 0, 30, 25000);                      // the first bar seen (to 10:01) is partial: never used
+        Tick(1000); TradeAt(10, 1, 10, 25000.5);        // bar B (to 10:02) begins; the partial one is not counted
+        Check(ChartBridgeOrders.BarTrailBars("MNQ") == 0, "the first bar after a start is seen only in part: not used");
+        Tick(1000); TradeAt(10, 1, 40, 24999.5);        // bar B: high 25000.5, low 24999.5
+        sent.Clear();
+        Order e = StrategyLong(a, BarTrailS, 25000);
+        Order stop = a.Orders[1];
+        Check(a.Calls[1].Contains(" Sell StopMarket 1 L0 S24996 "), "long 1 at 25000 with a 2 bar trail: stop 24996: " + a.Calls[1]);
+        Check(Managed().Any(m => m.Contains("\"barTrail\":2,\"barTrailOffset\":1")), "the managed message carries the strategy with barTrail and barTrailOffset");
+        int n = a.Calls.Count;
+        Tick(1000); TradeAt(10, 2, 5, 25001);           // closes B: one whole bar, the trail needs two
+        Check(ChartBridgeOrders.BarTrailBars("MNQ") == 1 && a.Calls.Count == n, "one completed bar of two: no move");
+        Tick(1000); TradeAt(10, 2, 30, 25000.75);       // bar C: high 25001, low 25000.75
+        Check(a.Calls.Count == n, "inside a bar: no move");
+        Tick(1000); TradeAt(10, 3, 1, 25002);           // closes C: the lowest low of B and C is 24999.5, less 1 tick: 24999.25
+        Check(a.Calls.Count == n + 1 && a.Calls.Last() == "change " + stop.Name + " L0 S24999.25 Q0", "the bar close: the stop to the lowest low of the last 2 bars less 1 tick (24999.25): " + a.Calls.Last());
+        sent.Clear();
+        Confirm(a, stop, 24999.25);
+        Check(Managed().Any(m => m.Contains("\"stop\":24999.25") && m.Contains("\"trailing\":true")), "confirmed: managed says trailing");
+        Tick(1000); TradeAt(10, 3, 30, 25005);          // bar D: high 25005
+        Tick(1000); TradeAt(10, 4, 0, 25002);           // 10:04:00 exactly is still bar D (end-inclusive): its low 25002
+        Check(a.Calls.Count == n + 1, "a new high inside the bar: no move until the bar closes");
+        Tick(1000); TradeAt(10, 4, 10, 25004.5);        // closes D: lows C 25000.75, D 25002: 25000.5
+        Check(a.Calls.Count == n + 2 && a.Calls.Last() == "change " + stop.Name + " L0 S25000.5 Q0", "the next close: 25000.5 (the lowest low of C and D less 1 tick): " + a.Calls.Last());
+        Confirm(a, stop, 25000.5);
+        Tick(1000); TradeAt(10, 4, 40, 25000.75);       // bar E: low 25000.75
+        Tick(1000); TradeAt(10, 5, 2, 25003);           // closes E: lows D 25002, E 25000.75: 25000.5, the stop already there
+        Check(a.Calls.Count == n + 2, "a level no tighter than the stop: no move (never loosens)");
+        // a feed drop: the bars before it are forgotten, the forming one is partial; nothing moves until two whole bars again
+        ChartBridgeOrders.BarTrailFeedDropped("MNQ");
+        Check(ChartBridgeOrders.BarTrailBars("MNQ") == 0, "a feed drop forgets the bars");
+        Tick(1000); TradeAt(10, 6, 5, 25008);           // closes the partial bar (to 10:06): not counted
+        Tick(1000); TradeAt(10, 7, 5, 25009);           // closes F (to 10:07): one whole bar
+        Check(ChartBridgeOrders.BarTrailBars("MNQ") == 1 && a.Calls.Count == n + 2, "after the drop: one whole bar, no move yet");
+        // never at or through the last trade: G closes with a trade at 25007.5, below the level G's close sets (25007.75)
+        Tick(1000); TradeAt(10, 7, 30, 25008.5);        // bar G: 25009 .. 25008.5
+        Tick(1000); TradeAt(10, 8, 1, 25007.5);         // closes G: lows F 25008, G 25008.5: 25007.75, above this trade (25007.5)
+        Check(a.Calls.Count == n + 2, "a bar level at or through the last trade: it waits for the next trade");
+        Tick(1000); TradeAt(10, 8, 20, 25008);          // above it now: sent (the level set at the close, not a new one)
+        Check(a.Calls.Count == n + 3 && a.Calls.Last() == "change " + stop.Name + " L0 S25007.75 Q0", "the next trade above it: moved to 25007.75: " + a.Calls.Last());
+        Confirm(a, stop, 25007.75);
+        // a trade with no time (the old path) never builds or closes a bar
+        int bars = ChartBridgeOrders.BarTrailBars("MNQ");
+        Tick(1000); Trade(25012);
+        Check(ChartBridgeOrders.BarTrailBars("MNQ") == bars && a.Calls.Count == n + 3, "a trade with no time: no bar and no move");
+        SetPos(a, 0, 0);
+
+        // a short: the highest high of the last 2 bars plus the offset, on the loose side of the grid
+        Account b = NewAccount("SIM-B2");
+        Msg("order", Ord(b.Name, "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1,\"strategy\":{\"name\":\"Bar short\",\"stop\":16,\"t1\":40,\"t1Share\":100,\"barTrail\":2,\"barTrailOffset\":2}"));
+        Order se = b.Orders.Last();
+        Fill(b, se, 1, 25010); SetPos(b, -1, 25010);
+        Order sstop = b.Orders[1];
+        Check(b.Calls[1].Contains(" Buy StopMarket 1 L0 S25014 "), "short 1 at 25010: stop 25014: " + b.Calls[1]);
+        int ns = b.Calls.Count;
+        Tick(1000); TradeAt(10, 8, 50, 25009);          // bar H (to 10:09): 25008 .. 25009 (25008 at 10:08:20 began it)
+        Tick(1000); TradeAt(10, 9, 30, 25008.25);       // closes H; bar I begins
+        Tick(1000); TradeAt(10, 9, 50, 25007);          // bar I: 25007 .. 25008.25
+        Tick(1000); TradeAt(10, 10, 5, 25006);          // closes I: highs H 25009, I 25008.25: 25009 plus 2 ticks 25009.5
+        Check(b.Calls.Count == ns + 1 && b.Calls.Last() == "change " + sstop.Name + " L0 S25009.5 Q0", "a short: the stop to the highest high of the last 2 bars plus 2 ticks (25009.5): " + b.Calls.Last());
+        Confirm(b, sstop, 25009.5);
+        SetPos(b, 0, 0);
+
+        // the bar trail with breakeven: the tighter level wins, and it still never loosens
+        Account c = NewAccount("SIM-B3");
+        Order ce = StrategyLong(c, "\"name\":\"BE bars\",\"stop\":16,\"t1\":40,\"t1Share\":100,\"beAfter\":4,\"bePlus\":2,\"barTrail\":1,\"barTrailOffset\":0", 25006);
+        Order cstop = c.Orders[1];
+        int nc = c.Calls.Count;
+        Tick(1000); TradeAt(10, 10, 40, 25007.25);      // 5 ticks in profit: breakeven plus 2 (25006.5)
+        Check(c.Calls.Count == nc + 1 && c.Calls.Last() == "change " + cstop.Name + " L0 S25006.5 Q0", "breakeven first (25006.5): " + c.Calls.Last());
+        Confirm(c, cstop, 25006.5);
+        Tick(1000); TradeAt(10, 11, 5, 25008);          // closes J (25006 .. 25007.25): its low 25006 is looser than the stop
+        Check(c.Calls.Count == nc + 1, "a bar level below breakeven: no move (never loosens)");
+        Tick(1000); TradeAt(10, 11, 30, 25009);
+        Tick(1000); TradeAt(10, 12, 2, 25009.5);        // closes K (25008 .. 25009): 25008
+        Check(c.Calls.Count == nc + 2 && c.Calls.Last() == "change " + cstop.Name + " L0 S25008 Q0", "then the bar trail, once it is tighter (25008): " + c.Calls.Last());
+        Confirm(c, cstop, 25008);
+        SetPos(c, 0, 0);
     }
 
     // ------------------------------------------------------------ breakeven, then trailing

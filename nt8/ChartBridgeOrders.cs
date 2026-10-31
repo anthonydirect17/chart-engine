@@ -163,10 +163,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- last price per root (gate 5)
         private static readonly Dictionary<string, double[]> Last = new Dictionary<string, double[]>();   // root -> { price, time ms }
-        public static void NoteLast(string root, double price)
+        public static void NoteLast(string root, double price) { NoteLast(root, price, DateTime.MinValue); }
+        // time: NinjaTrader's time of the trade (next build: the bar trail's 1 minute bars); DateTime.MinValue when not known.
+        public static void NoteLast(string root, double price, DateTime time)
         {
             lock (Last) Last[root] = new double[] { price, ChartBridgeTime.NowUtcMs() };
-            if (StrategiesOn) StrategyTrade(root, price);   // 0.4.0 B1: breakeven and trailing (cheap; a move is sent off this thread)
+            if (StrategiesOn) StrategyTrade(root, price, time == DateTime.MinValue ? 0 : time.Ticks);   // 0.4.0 B1: breakeven and trailing (cheap; a move is sent off this thread)
         }
 
         // A last price no older than maxAgeMs. The market exit needs a tick this fresh, so a lagging price feed
