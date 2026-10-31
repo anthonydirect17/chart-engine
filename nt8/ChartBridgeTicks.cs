@@ -434,6 +434,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
         private static int CutLocked()
         {
+            RecountDisk();
             TakeDrops();
             List<KeyFiles> keys; lock (Sync) keys = Keys.Values.ToList();
             int made = 0;
@@ -792,6 +793,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { File.Delete(Path.Combine(Folder, BaseOf(k.Key) + ".day.sent")); } catch (Exception) { }
             lock (Sync) Days[k.Key] = new DayRec { Key = k.Key, Check = chk.Status, Stored = false, Packed = false };
             SaveDays();
+            RecountDisk();
             lastDay = k.Key + ": " + chk.Status + ", live " + chk.LiveTicks + " trades, history " + chk.HistTicks + " (live missed " + chk.TicksLiveMissed + " in " + chk.SecondsLiveMissed +
                       " seconds, history short " + chk.TicksHistShort + " in " + chk.SecondsHistShort + " seconds), " + parts.Count + " parts";
             ChartBridgeServer.Log("the NQ tick file for " + lastDay + (chk.Passed ? "; queued for The Desk" : "; the check FAILED: sent marked failed, the raw file is kept until Anthony rules"));
@@ -909,6 +911,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) { if (!Days.TryGetValue(key, out d)) { d = new DayRec { Key = key, Check = "failed" }; Days[key] = d; } d.Stored = stored; d.Packed = packed; }
             SaveDays();
             try { File.Delete(file); File.Delete(progress); } catch (Exception) { }
+            RecountDisk();
             bool passed = d.Check == "exact" || d.Check == "filled";
             if (stored && packed && passed)
             {
@@ -941,6 +944,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (session != null && contract != null) FilesOf(session, contract, 0, false);
             }
         }
+
+        // diskBytes counts every file of the folder (the raw files, the states and the .day.jsonl files waiting): counted again at
+        // every cut, after a day file is written and after files are deleted; the writer adds what it appends in between.
+        private static void RecountDisk() { Interlocked.Exchange(ref diskBytes, FolderBytes()); }
 
         private static long FolderBytes()
         {

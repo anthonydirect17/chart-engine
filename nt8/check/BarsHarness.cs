@@ -1682,6 +1682,9 @@ public static class BarsHarness
         Check(blocked && w2.Join(10000) && File.ReadAllLines(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.raw")).Length == 2, "one writer: a second writer waits for the first; whole lines only");
     }
 
+    static long TickDisk() { return (long)typeof(ChartBridgeTicks).GetField("diskBytes", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null); }
+    static long FolderSize(string dir) { return Directory.GetFiles(TicksDir(dir)).Sum(f => new FileInfo(f).Length); }
+
     static TickDayBuild HistOf(IEnumerable<TickRec> t) { TickDayBuild h = new TickDayBuild(); foreach (TickRec x in t) { h.Ticks.Add(x); h.BidAsk++; } return h; }
 
     static void TickFileDays(string dir)
@@ -1706,6 +1709,7 @@ public static class BarsHarness
                   parts[0].EndsWith(",\"complete\":true}") && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\tfilled\t0\t0"),
                   "tick days: the history (one trade more) checked against the live capture: filled; written whole as 3 parts with the check: " + parts[0].Substring(0, Math.Min(400, parts[0].Length)));
             Check(ChartBridgeTicks.DaysToPull(EtToUtc(W(2026, 10, 9, 17, 6))).SequenceEqual(new[] { k7, k8 }), "tick days: a day done is not pulled again; the others are, oldest first");
+            Check(TickDisk() == FolderSize(dir) && TickDisk() > new FileInfo(day6).Length, "tick disk: the folder's size counts the .day.jsonl files waiting too: " + TickDisk() + " of " + FolderSize(dir));
             // outside the window nothing goes
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 10, 0));
             Check(ChartBridgeTicks.SendDays(null) == 0 && desk.AllTicks().Count == 0, "tick days: sent only in the 1 second bars' window (not at 10:00 ET)");
@@ -1714,6 +1718,7 @@ public static class BarsHarness
             string raw6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.raw");
             Check(File.Exists(raw6) && !File.Exists(day6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\tfilled\t1\t0") && Logged("the raw file is kept (not packed yet)"),
                   "tick days: The Desk stored it but did not pack it: the raw file is kept (deleted only after the pack)");
+            Check(TickDisk() == FolderSize(dir), "tick disk: counted again once the day file is deleted: " + TickDisk() + " of " + FolderSize(dir));
             // stored and packed: the raw is deleted
             desk.AnswerTicks = body => "{\"ok\":true,\"stored\":true,\"kept\":true,\"packed\":true}";
             ChartBridgeTicks.FinishDay(k7, HistOf(ChartBridgeTicks.ReadAllLive(k7)));

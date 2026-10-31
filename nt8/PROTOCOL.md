@@ -1175,7 +1175,9 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   the live side rule), `m` the side's method (0 none, 2 bidAsk, 3 tickRule). The session is the CME session the trade's New York
   time is in (18:00 to 17:00, dated the day it ends); a trade in the 17:00 to 18:00 break is left out and counted (`outside`). Over
   `tickFileMaxMB` a batch is dropped and counted (`droppedDisk`). `<same>.state` starts `run <12 hex>`, `tick <size>`, `contract`,
-  `session`. No request goes to NinjaTrader for the capture, at any hour.
+  `session`. No request goes to NinjaTrader for the capture, at any hour. The folder's size against `tickFileMaxMB` (`/diag`
+  `diskMB`) counts every file in it, the `.day.jsonl` files waiting to be sent too: counted again at every cut, after a day file is
+  written and after files are deleted.
 - **Chunks** (point 3: The Desk builds 1 second bars from them as they land). A second thread (`ChartBridge tick chunks`, below
   normal) cuts each raw file every 3 minutes, from the last cut to the last whole line, into chunks of at most 20,000 trades, and
   notes each cut (`cut <seq> <from byte> <to byte> <trades> <lost> <gaps> <bidAsk> <tickRule> <none> .`) in `<same>.state`, so a
