@@ -1986,8 +1986,11 @@ move, and a second rejection halts moves for that stop (fix1).
 reading below). ChartBridge builds 1 minute bars per root from the trades it sees, with NinjaTrader's time of each trade,
 closed at the minute (end-inclusive: a trade at 10:04:00 is in the bar ending 10:04, as NinjaTrader and the minute book). A
 bar closes when the first trade of a later minute arrives (a minute with no trade has no bar). The first bar after a start,
-and the forming bar at a feed drop, were seen only in part: they are never used, and a feed drop forgets every bar before it,
-so the trail waits for `barTrail` whole bars again. A late trade (an earlier minute than the forming bar) is left out. At each
+the bar forming at a feed drop, and the first bar after the feed is back (its minute may have begun while the feed was down)
+were seen only in part: they are never used. A feed drop forgets every bar before it and drops a bar level not sent yet, so
+the trail waits for `barTrail` whole bars after the drop. The time is NinjaTrader's time of the trade, in its own time zone (the
+minute book's convention); at a daylight saving change a repeated hour's trades are left out as late and a skipped hour only
+closes a bar early, so it fails safe (and CME is shut at 2 AM on those Sundays). A late trade (an earlier minute than the forming bar) is left out. At each
 bar close, with at least `barTrail` completed bars, each pair's bar level is the lowest low (a long) or the highest high (a
 short) of the last `barTrail` bars, `barTrailOffset` ticks beyond it, snapped to the tick grid on the loose side; the level
 only ever tightens. The bars may include bars from before the fill. The level is then sent by the same move rules as

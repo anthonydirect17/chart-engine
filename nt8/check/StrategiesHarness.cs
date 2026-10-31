@@ -489,18 +489,31 @@ public static class StrategiesHarness
         Tick(1000); TradeAt(10, 4, 40, 25000.75);       // bar E: low 25000.75
         Tick(1000); TradeAt(10, 5, 2, 25003);           // closes E: lows D 25002, E 25000.75: 25000.5, the stop already there
         Check(a.Calls.Count == n + 2, "a level no tighter than the stop: no move (never loosens)");
-        // a feed drop: the bars before it are forgotten, the forming one is partial; nothing moves until two whole bars again
+        // a level a bar close set but could not send yet (at or through the last trade) is dropped by a feed drop
+        Tick(1000); TradeAt(10, 5, 30, 25004);          // bar E2 (from 10:05:02): 25003 .. 25004
+        Tick(1000); TradeAt(10, 6, 1, 25005);           // closes E2: lows E 25000.75, E2 25003: 25000.5, the stop already there
+        Tick(1000); TradeAt(10, 6, 30, 25005.5);        // bar E3: 25005 .. 25005.5
+        Tick(1000); TradeAt(10, 7, 1, 25002.5);         // closes E3: lows E2 25003, E3 25005: 25002.75, above this trade: it waits
+        Check(a.Calls.Count == n + 2, "a level at or through the last trade waits (25002.75 over 25002.5)");
+        // a feed drop: the bars before it are forgotten, no bar is forming, and the waiting level is dropped
         ChartBridgeOrders.BarTrailFeedDropped("MNQ");
         Check(ChartBridgeOrders.BarTrailBars("MNQ") == 0, "a feed drop forgets the bars");
-        Tick(1000); TradeAt(10, 6, 5, 25008);           // closes the partial bar (to 10:06): not counted
-        Tick(1000); TradeAt(10, 7, 5, 25009);           // closes F (to 10:07): one whole bar
-        Check(ChartBridgeOrders.BarTrailBars("MNQ") == 1 && a.Calls.Count == n + 2, "after the drop: one whole bar, no move yet");
+        // review HIGH: the feed is back at 10:08:20, a later minute than the bar forming at the drop, part way into it (10:08:00 to
+        // 10:08:20 missed): that bar is partial, never whole
+        Tick(1000); TradeAt(10, 8, 20, 25009);          // the first trade after the drop: a partial bar (its low may be too high)
+        Check(a.Calls.Count == n + 2, "after a feed drop the waiting level is not sent (it came from bars before the drop)");
+        Tick(1000); TradeAt(10, 8, 45, 25009.5);
+        Tick(1000); TradeAt(10, 9, 5, 25008);           // closes the partial bar: never counted
+        Check(ChartBridgeOrders.BarTrailBars("MNQ") == 0 && a.Calls.Count == n + 2, "review HIGH: the first bar after a feed drop, joined part way into its minute, is never a whole bar");
+        Tick(1000); TradeAt(10, 9, 40, 25008.5);        // bar F (from 10:09:05): 25008 .. 25008.5
+        Tick(1000); TradeAt(10, 10, 5, 25009);           // closes F: one whole bar of two
+        Check(ChartBridgeOrders.BarTrailBars("MNQ") == 1 && a.Calls.Count == n + 2, "after the drop: one whole bar, no move yet (with the partial bar counted it would have moved here)");
         // never at or through the last trade: G closes with a trade at 25007.5, below the level G's close sets (25007.75)
-        Tick(1000); TradeAt(10, 7, 30, 25008.5);        // bar G: 25009 .. 25008.5
-        Tick(1000); TradeAt(10, 8, 1, 25007.5);         // closes G: lows F 25008, G 25008.5: 25007.75, above this trade (25007.5)
+        Tick(1000); TradeAt(10, 10, 30, 25008.5);        // bar G: 25009 .. 25008.5
+        Tick(1000); TradeAt(10, 11, 1, 25007.5);        // closes G: lows F 25008, G 25008.5: 25007.75, above this trade (25007.5)
         Check(a.Calls.Count == n + 2, "a bar level at or through the last trade: it waits for the next trade");
-        Tick(1000); TradeAt(10, 8, 20, 25008);          // above it now: sent (the level set at the close, not a new one)
-        Check(a.Calls.Count == n + 3 && a.Calls.Last() == "change " + stop.Name + " L0 S25007.75 Q0", "the next trade above it: moved to 25007.75: " + a.Calls.Last());
+        Tick(1000); TradeAt(10, 11, 20, 25008);         // above it now: sent (the level set at the close, not a new one)
+        Check(a.Calls.Count == n + 3 && a.Calls.Last() == "change " + stop.Name + " L0 S25007.75 Q0", "the next trade above it: moved to 25007.75 (from whole bars after the drop): " + a.Calls.Last());
         Confirm(a, stop, 25007.75);
         // a trade with no time (the old path) never builds or closes a bar
         int bars = ChartBridgeOrders.BarTrailBars("MNQ");
@@ -516,10 +529,10 @@ public static class StrategiesHarness
         Order sstop = b.Orders[1];
         Check(b.Calls[1].Contains(" Buy StopMarket 1 L0 S25014 "), "short 1 at 25010: stop 25014: " + b.Calls[1]);
         int ns = b.Calls.Count;
-        Tick(1000); TradeAt(10, 8, 50, 25009);          // bar H (to 10:09): 25008 .. 25009 (25008 at 10:08:20 began it)
-        Tick(1000); TradeAt(10, 9, 30, 25008.25);       // closes H; bar I begins
-        Tick(1000); TradeAt(10, 9, 50, 25007);          // bar I: 25007 .. 25008.25
-        Tick(1000); TradeAt(10, 10, 5, 25006);          // closes I: highs H 25009, I 25008.25: 25009 plus 2 ticks 25009.5
+        Tick(1000); TradeAt(10, 11, 50, 25009);         // bar H (to 10:12): 25007.5 .. 25009 (25007.5 at 10:11:01 began it)
+        Tick(1000); TradeAt(10, 12, 30, 25008.25);      // closes H; bar I begins
+        Tick(1000); TradeAt(10, 12, 50, 25007);         // bar I: 25007 .. 25008.25
+        Tick(1000); TradeAt(10, 13, 5, 25006);          // closes I: highs H 25009, I 25008.25: 25009 plus 2 ticks 25009.5
         Check(b.Calls.Count == ns + 1 && b.Calls.Last() == "change " + sstop.Name + " L0 S25009.5 Q0", "a short: the stop to the highest high of the last 2 bars plus 2 ticks (25009.5): " + b.Calls.Last());
         Confirm(b, sstop, 25009.5);
         SetPos(b, 0, 0);
@@ -529,13 +542,13 @@ public static class StrategiesHarness
         Order ce = StrategyLong(c, "\"name\":\"BE bars\",\"stop\":16,\"t1\":40,\"t1Share\":100,\"beAfter\":4,\"bePlus\":2,\"barTrail\":1,\"barTrailOffset\":0", 25006);
         Order cstop = c.Orders[1];
         int nc = c.Calls.Count;
-        Tick(1000); TradeAt(10, 10, 40, 25007.25);      // 5 ticks in profit: breakeven plus 2 (25006.5)
+        Tick(1000); TradeAt(10, 13, 40, 25007.25);      // 5 ticks in profit: breakeven plus 2 (25006.5)
         Check(c.Calls.Count == nc + 1 && c.Calls.Last() == "change " + cstop.Name + " L0 S25006.5 Q0", "breakeven first (25006.5): " + c.Calls.Last());
         Confirm(c, cstop, 25006.5);
-        Tick(1000); TradeAt(10, 11, 5, 25008);          // closes J (25006 .. 25007.25): its low 25006 is looser than the stop
+        Tick(1000); TradeAt(10, 14, 5, 25008);          // closes J (25006 .. 25007.25): its low 25006 is looser than the stop
         Check(c.Calls.Count == nc + 1, "a bar level below breakeven: no move (never loosens)");
-        Tick(1000); TradeAt(10, 11, 30, 25009);
-        Tick(1000); TradeAt(10, 12, 2, 25009.5);        // closes K (25008 .. 25009): 25008
+        Tick(1000); TradeAt(10, 14, 30, 25009);
+        Tick(1000); TradeAt(10, 15, 2, 25009.5);        // closes K (25008 .. 25009): 25008
         Check(c.Calls.Count == nc + 2 && c.Calls.Last() == "change " + cstop.Name + " L0 S25008 Q0", "then the bar trail, once it is tighter (25008): " + c.Calls.Last());
         Confirm(c, cstop, 25008);
         SetPos(c, 0, 0);

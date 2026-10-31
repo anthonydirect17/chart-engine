@@ -669,6 +669,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             public readonly List<double[]> Done = new List<double[]>();   // completed bars, oldest first: { high, low }, at most BarTrailMax
         }
 
+        // t: NinjaTrader's time of the trade (e.Time, its own time zone, the minute book's convention). Minutes line up in any zone
+        // with whole-hour or half-hour offsets. At a DST change the local clock repeats or skips an hour: a trade whose minute is
+        // earlier than the forming bar is left out (late), and a jump ahead only closes the forming bar early. CME is shut at 2 AM
+        // on the Sunday of a change, so no bar is lost; the rule fails safe (fewer bars, never a wrong high or low).
         private static long BarCloseOf(long t) { long m = TimeSpan.TicksPerMinute, rem = t % m; return rem == 0 ? t : t - rem + m; }
 
         // StratLock held. True when this trade closed a whole bar (tb: its root's bars).
@@ -689,12 +693,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             return whole;
         }
 
-        // A feed drop on root (null: every root): the forming bar is partial and the bars before the drop are forgotten.
+        // A feed drop on root (null: every root): the bars before the drop are forgotten and no bar is forming (Cur 0), so the first
+        // trade after the drop starts a partial bar (its minute may have begun while the feed was down: review HIGH). A level a bar
+        // close set and not yet sent (BarLevel) is dropped too: the next one comes from whole bars after the drop.
         internal static void BarTrailFeedDropped(string root)
         {
             lock (StratLock)
+            {
                 foreach (KeyValuePair<string, TrailBars> kv in BarsByRoot)
-                    if (root == null || kv.Key == root) { kv.Value.Done.Clear(); kv.Value.Partial = true; }
+                    if (root == null || kv.Key == root) { kv.Value.Done.Clear(); kv.Value.Cur = 0; kv.Value.Partial = true; }
+                foreach (MEntry m in ManagedByTag.Values)
+                    if (root == null || m.Root == root) foreach (MPair p in m.Pairs) p.BarLevel = 0;
+            }
         }
 
         // StratLock held, at a bar close on root: each bar-trail pair's level, from the last BarTrail completed bars: below their
