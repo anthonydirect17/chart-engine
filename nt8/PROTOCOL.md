@@ -3944,7 +3944,9 @@ a prop account for. `/api/chart-accounts` does not say that in so many words, so
 `outcome` already set, an `accountType` (The Desk gives every typed account its prop card, D5), or a number whose `source` is
 `prop`. A click asks first, in the page (no browser dialog), then sends the PUT (mode `cors`, credentials `omit`). For every row with
 an outcome the window's feed brings ChartBridge into line, one step at a time, each the existing message: out of its group
-(`accountGroup` with `group` `null`), its copier follower off (`copierFollower` with `on` `false`, the rest as the row has them),
+(`accountGroup` with `group` `null`; an account ChartBridge lists leaves only once it is flat with no working orders, as Hide, so a
+group Close or Flatten still covers a Promoted eval in a group trade: until then the Accounts tab says it waits until it is flat, and
+the step goes by itself once it is; one ChartBridge does not list leaves at once), its copier follower off (`copierFollower` with `on` `false`, the rest as the row has them),
 then removed (`copierFollowerRemove`), then hidden (`accountArchive`, `confirm` `true`). ChartBridge's own state (`groups`,
 `copier`, `accounts`) decides the next step, so a second window finds it done. Each step is sent at most once per outcome a page load;
 a refusal is kept and shown on the Accounts tab and in the Log, never sent again in a loop; a step ChartBridge would refuse anyway
@@ -3952,7 +3954,8 @@ a refusal is kept and shown on the Accounts tab and in the Log, never sent again
 nothing on ChartBridge (D4: it does not rejoin its group). The Accounts tab also has a **Not in NinjaTrader now** section: every
 group member or copier follower ChartBridge does not list, with Remove from group, Turn follower off or Remove follower, and the
 accounts in `notListed` (folded), each with Hide and, with a prop account, Blown and Promoted. The Multi-Account panel's chip of such
-a member says "not in NinjaTrader now" (not "set its type on The Desk first"), offers no bench move and has Remove (out of the group).
+a member says "not in NinjaTrader now" (not "set its type on The Desk first"), offers no bench move and has Remove (out of the group);
+it sits out every entry, so the trading lane's count and dollars at risk leave it out.
 
 **ChartBridge 0.6.10: remove-only for an account NinjaTrader no longer lists** (never a join):
 

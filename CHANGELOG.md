@@ -15,7 +15,10 @@ not list is refused and the page shows the refusal once.
   asks first in the page, then sends `PUT /api/accounts/{account}/outcome` to The Desk (as the account type's PUT: `cors`, no
   credentials). Once marked, a BLOWN or PROMOTED pill; Undo is on The Desk's Prop screen.
 - **ChartBridge brought into line** (the window's feed): for every `/api/chart-accounts` row with an `outcome`, one step at a time,
-  each an existing message: out of its group, its copier follower off, then removed, then hidden. Each step is asked once per
+  each an existing message: out of its group, its copier follower off, then removed, then hidden. Out of its group waits, as Hide
+  does, until an account NinjaTrader lists is flat with no working orders, so a Promoted eval still in a group trade stays in the
+  group and a group Close or Flatten still covers it; the Accounts tab says "waits until <name> is flat with no working orders" and
+  the step goes by itself once it is flat (an account NinjaTrader does not list leaves at once). Each step is asked once per
   outcome; a refusal is shown on the Accounts tab and in the Log and never sent again in a loop; a step ChartBridge would refuse
   anyway (Hide of an account in a trade, `accountChecks` off) is shown and not sent. Undo changes nothing on ChartBridge (D4: it does
   not rejoin its group).
@@ -27,7 +30,7 @@ not list is refused and the page shows the refusal once.
   (ChartBridge 0.6.10's `notListed`, and a `status` line).
 - **The Multi-Account panel** (audit 6): the chip of a member NinjaTrader does not list says "not in NinjaTrader now" (not "set its
   type on The Desk first"), is offered no bench move ChartBridge would refuse, and has Remove (out of the group, a second click
-  sends it).
+  sends it). It sits out every entry, so the trading lane's count and dollars at risk leave it out.
 - **ChartBridge 0.6.10, remove-only for an account NinjaTrader no longer lists:** `accountGroup` with no group for a member that is
   not listed (audit 1; joining still needs it listed); `copierFollower` off for a follower that is not in NinjaTrader, then Remove as
   before (audit 2; a copier record of its own part on that account still holds it, until it is done or ChartBridge restarts), so
@@ -36,7 +39,8 @@ not list is refused and the page shows the refusal once.
   NinjaTrader is no longer refused (audit 3; the member sits out each trade, the claims by name still apply).
 - **Hide takes a member out of its group** (ChartBridge 0.6.10, audit 4): in the same step, its bench place and its own rules with
   it, under the groups lock order (`ChangeGate`, `GroupEntryLock`, `PlaceLock`); a failed `groups.txt` write that is undone leaves it
-  in its group and not hidden.
+  in its group and not hidden; one kept after a failed write (something traded during it) is hidden too, so both steps happen or
+  neither. Harness cases for both, and for Hide of a member NinjaTrader does not list.
 - **A group preview sizes as the entry places** (ChartBridge 0.6.10, audit 7): a member gate 2 refuses (hidden, not checked, Gone)
   sits out the preview with that reason.
 - **Update floors from The Desk never lowers a floor on its own** (C-A, `live/accounts.js` `floorPlan`): each row shows ChartBridge's
@@ -46,7 +50,9 @@ not list is refused and the page shows the refusal once.
 - **Nothing The Desk rejects inside a 200 answer is dropped unseen** (C-B, ChartBridge 0.6.10): each fill or order event in The
   Desk's `rejected` list is appended to `rejected_fills.jsonl` or `rejected_orders.jsonl` (next to `config.txt`) as it was sent, with
   The Desk's reason first (`desk_reason`), as a malformed one already was; `/diag` counts them and names the file, and the Account
-  page reads `/diag` each minute and says how many and where. `test/desk-send.test.js`, `nt8/check/RecordHarness.cs`.
+  page reads `/diag` each minute and says how many and where. The keeping runs before the batch leaves the queue and never throws
+  out of the send: a failure in it is logged and counted in `/diag` (`desk.keepRejectedFailed`, `orderRecord.keepRejectedFailed`),
+  and the batch The Desk took is never sent again. `test/desk-send.test.js`, `nt8/check/RecordHarness.cs`.
 - **A group's trade tags go only to the members that trade** (C-D, `live/workspace.js` `groupTagMembers`): never a benched member,
   never a copier follower (on or off). `test/group-tags.test.js`.
 - **The Account page says when this PC sends no fills to The Desk** (C-C): `postFills` is off by default in `config.txt` (the default
