@@ -196,7 +196,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly ConcurrentQueue<long> DropTimes = new ConcurrentQueue<long>();
 
         // ---------------------------------------------------------- the files of one session and contract
-        private class Cut { public int Seq; public long From, To; public int N; public long Lost, Gaps, BidAsk, TickRule, None; }
+        // Carried: a later chunk of a cut that took drops: its gaps (1) is the flag only, not a count (the cut's first chunk has them).
+        private class Cut { public int Seq; public long From, To; public int N; public long Lost, Gaps, BidAsk, TickRule, None; public bool Carried; }
         private class KeyFiles
         {
             public string Key, Session, Contract, Raw, State, Run;
@@ -257,6 +258,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Cut c = new Cut();
                     c.Seq = int.Parse(f[1], Inv); c.From = long.Parse(f[2], Inv); c.To = long.Parse(f[3], Inv); c.N = int.Parse(f[4], Inv);
                     c.Lost = long.Parse(f[5], Inv); c.Gaps = long.Parse(f[6], Inv); c.BidAsk = long.Parse(f[7], Inv); c.TickRule = long.Parse(f[8], Inv); c.None = long.Parse(f[9], Inv);
+                    c.Carried = f[10] == "c";
                     k.Cuts.Add(c); if (c.To > k.CutTo) k.CutTo = c.To;
                 }
                 else if (f[0] == "sent") k.Sent.Add(int.Parse(f[1], Inv));
@@ -446,6 +448,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 long[] tot; lock (Sync) { long[] d = DropsOf(k.Session); tot = new long[] { d[0], d[1] }; }
                 long lost = tot[0] - k.LostSeen, gaps = tot[1] - k.GapsSeen;
                 if (!k.CutThisRun && MayMissBefore(k)) gaps = Math.Max(gaps, 1);
+                // Every chunk of a cut that took drops is flagged (re-review 1): the drop's trades may sit in any of them (a cut of
+                // several chunks: the queue full after a writer stall, a minute of more than ChunkMaxTicks). The first chunk carries
+                // the counts; the others gaps 1, marked carried ("c") in the state so the day's totals count each drop once.
+                bool flagged = lost > 0 || gaps > 0, carried = false;
                 byte[] buf = new byte[len - k.CutTo];
                 using (FileStream fs = new FileStream(k.Raw, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 {
@@ -465,9 +471,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (m == '1' || m == '2') ba++; else if (m == '3') tr++; else no++;
                     n++;
                     pos = baseAt + i + 1;
-                    if (n >= ChunkMaxTicks) { notes.Add(CutLine(k, start, pos, n, lost, gaps, ba, tr, no)); lost = gaps = 0; start = pos; n = 0; ba = tr = no = 0; made++; }
+                    if (n >= ChunkMaxTicks) { notes.Add(CutLine(k, start, pos, n, lost, gaps, ba, tr, no, carried)); lost = 0; gaps = flagged ? 1 : 0; carried = flagged; start = pos; n = 0; ba = tr = no = 0; made++; }
                 }
-                if (n > 0) { notes.Add(CutLine(k, start, pos, n, lost, gaps, ba, tr, no)); lost = gaps = 0; made++; }
+                if (n > 0) { notes.Add(CutLine(k, start, pos, n, lost, gaps, ba, tr, no, carried)); made++; }
                 if (notes.Count > 0)
                 {
                     File.AppendAllLines(k.State, notes);
@@ -477,11 +483,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             return made;
         }
 
-        private static string CutLine(KeyFiles k, long from, long to, int n, long lost, long gaps, long ba, long tr, long no)
+        private static string CutLine(KeyFiles k, long from, long to, int n, long lost, long gaps, long ba, long tr, long no, bool carried)
         {
-            Cut c = new Cut { Seq = k.Cuts.Count + 1, From = from, To = to, N = n, Lost = lost, Gaps = gaps, BidAsk = ba, TickRule = tr, None = no };
+            Cut c = new Cut { Seq = k.Cuts.Count + 1, From = from, To = to, N = n, Lost = lost, Gaps = gaps, BidAsk = ba, TickRule = tr, None = no, Carried = carried };
             lock (Sync) { k.Cuts.Add(c); k.CutTo = to; }
-            return "cut " + c.Seq + " " + from + " " + to + " " + n + " " + lost + " " + gaps + " " + ba + " " + tr + " " + no + " .";
+            return "cut " + c.Seq + " " + from + " " + to + " " + n + " " + lost + " " + gaps + " " + ba + " " + tr + " " + no + (carried ? " c" : " .");
         }
 
         // The chunk's message: the same bytes read again make the same message.
@@ -781,7 +787,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             long liveLost = 0, liveGaps = 0;
             lock (Sync)
             {
-                foreach (Cut c in k.Cuts) { liveLost += c.Lost; liveGaps += c.Gaps; }
+                foreach (Cut c in k.Cuts) if (!c.Carried) { liveLost += c.Lost; liveGaps += c.Gaps; }   // a carried flag is not a second drop
                 long[] d = DropsOf(k.Session); liveLost += Math.Max(0, d[0] - k.LostSeen); liveGaps += Math.Max(0, d[1] - k.GapsSeen);   // not on a chunk yet
             }
             List<string> parts = DayParts(k, hist, chk, liveLost, liveGaps);

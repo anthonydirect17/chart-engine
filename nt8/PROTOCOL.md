@@ -1208,7 +1208,9 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   session (the roll week has two contracts), each at its own next cut: a cut with nothing to cut (the feed still down) takes
   nothing up, so the drop goes on the first chunk after the feed is back. The first chunk of a file after ChartBridge starts says
   `gaps` 1 or more (its counters start at zero, but a restart may have missed trades), unless this run made the file and started
-  before its session opened. The Desk does not vouch from the last trade before a chunk with `lost` or `gaps` to the first trade
+  before its session opened. When one cut makes several chunks (a busy minute, a queue emptied after a stall), every chunk
+  of a cut that took drops is flagged: the first carries `lost` and `gaps`, the others `gaps` 1 (marked carried, `c`, in the
+  state file, so the day's `liveLost` and `liveGaps` count each drop once). The Desk does not vouch from the last trade before a chunk with `lost` or `gaps` to the first trade
   after it. The Desk keys a chunk by contract, session, `pc`, `run` and `seq` and ignores one sent again.
 - **The final file** (point 4). On the bars worker, after the pass's 1-minute and 1 second bars and only when the 1 second bars
   asked nothing that pass, only in the 1 second bars' window (a request starts 16:15 to 17:50 New York on weekdays, on Saturday, and

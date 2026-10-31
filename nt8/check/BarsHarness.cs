@@ -118,6 +118,7 @@ public static class BarsHarness
             TickFileChunks(dir);         // chunks cut once and sent again the same, a restart, 404 and a refusal
             TickFileDrops(dir);          // lost trades and feed drops go to the files of their session at their next cut; a restart says gaps
             TickFileOneCutter(dir);      // the restart race: an old sender never writes a cut after the new one started
+            TickFileCutOfMany(dir);      // re-review 1: a cut of several chunks that took drops flags every one of them
             TickFileDays(dir);           // the final day: the check, the parts, stored, packed, the raw kept or deleted
             TickFileUnstored(dir);       // a day not stored: kept and sent again later (3 times), never deleted before stored
             TickFilePull(dir);           // the final pull through the gate, only in the window, from the open to the close
@@ -1654,6 +1655,36 @@ public static class BarsHarness
             Check(Field1s(ChartBridgeTicks.ChunkJson("2026-10-06 NQ 06-27", 1) ?? "", "gaps") == "1", "tick drops: a file made after its session opened starts with gaps 1");
         }
         finally { ChartBridgeTicks.QueueMax = 200000; }
+    }
+
+    static void TickFileCutOfMany(string dir)
+    {
+        ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 5, 17, 30));   // started before the session opened: no restart flag
+        TickFresh(dir);
+        try
+        {
+            string k = "2026-10-06 NQ 12-26";
+            ChartBridgeTicks.ChunkMaxTicks = 2;
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 30));
+            ChartBridgeTicks.QueueMax = 6;
+            for (int i = 0; i < 7; i++) Feed(W(2026, 10, 6, 9, 30).AddSeconds(i), 25000, 1);   // the 7th is dropped (queue full)
+            ChartBridgeTicks.QueueMax = 200000;
+            ChartBridgeTicks.NoteFeedDrop();
+            ChartBridgeTicks.WriteOnce();
+            int made = ChartBridgeTicks.CutOnce();
+            string[] c = new string[] { ChartBridgeTicks.ChunkJson(k, 1) ?? "", ChartBridgeTicks.ChunkJson(k, 2) ?? "", ChartBridgeTicks.ChunkJson(k, 3) ?? "" };
+            Check(made == 3 && Field1s(c[0], "lost") == "1" && Field1s(c[0], "gaps") == "1" && c.Skip(1).All(x => Field1s(x, "lost") == "0" && Field1s(x, "gaps") == "1"),
+                  "tick drops: one cut of 3 chunks that took drops flags all 3 (the first has the counts, the others gaps 1): " + string.Join(" | ", c.Select(x => Field1s(x, "lost") + "/" + Field1s(x, "gaps")).ToArray()));
+            string[] st = File.ReadAllLines(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.state")).Where(l => l.StartsWith("cut ")).ToArray();
+            Check(st.Length == 3 && st[0].EndsWith(" .") && st[1].EndsWith(" c") && st[2].EndsWith(" c"), "tick drops: the later chunks' flag is marked carried in the state file");
+            Feed(W(2026, 10, 6, 9, 31), 25000, 1); ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k, 4) ?? "", "gaps") == "0", "tick drops: the next cut, with no drop, says gaps 0");
+            TickRestart();   // read back from the state file after a restart
+            ChartBridgeTicks.FinishDay(k, HistOf(ChartBridgeTicks.ReadAllLive(k)));
+            string part = File.ReadAllLines(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.jsonl"))[0];
+            Check(part.Contains("\"liveLost\":1,\"liveGaps\":1,"), "tick drops: the day's liveLost and liveGaps count each drop once (a carried flag is not a second drop): " + Regex.Match(part, "\"liveLost\":\\d+,\"liveGaps\":\\d+").Value);
+        }
+        finally { ChartBridgeTicks.ChunkMaxTicks = 20000; ChartBridgeTicks.QueueMax = 200000; }
     }
 
     static void TickFileOneCutter(string dir)
