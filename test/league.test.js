@@ -100,3 +100,56 @@ test('1.36.0: the decision log shows a rest as a resting order, never as an entr
   assert.equal(rows[2].text, 'rest short at IBL, stop 6 pt, target 15 pt, good until not reported: Sample: retest from below');
   assert.match(rows[1].text, /^cancelled its resting order: Sample/);
 });
+
+test('a past day (?tab=league&day=YYYY-MM-DD): the date checked first; today or no day is the live view; a bad day said plainly', () => {
+  assert.deepEqual(L.checkDay(null, '2026-10-31'), { ok: true, day: null, problem: '' });
+  assert.deepEqual(L.checkDay('', '2026-10-31'), { ok: true, day: null, problem: '' });
+  assert.deepEqual(L.checkDay('2026-10-31', '2026-10-31'), { ok: true, day: null, problem: '' }, 'today is the live view');
+  assert.deepEqual(L.checkDay('2026-10-22', '2026-10-31'), { ok: true, day: '2026-10-22', problem: '' });
+  for (const bad of ['2026-1-22', '22-10-2026', '2026-10-22x', '../x', '2026-10-22T00:00', 'today']) {
+    const c = L.checkDay(bad, '2026-10-31');
+    assert.equal(c.ok, false, bad); assert.equal(c.day, null); assert.match(c.problem, /not a date \(YYYY-MM-DD\)\. Showing today\.$/);
+  }
+  assert.match(L.checkDay('2026-02-30', '2026-10-31').problem, /2026-02-30, which is not a calendar date/);
+  assert.match(L.checkDay('2026-13-01', '2026-10-31').problem, /not a calendar date/);
+  assert.match(L.checkDay('1999-12-31', '2026-10-31').problem, /not a calendar date/);
+  assert.match(L.checkDay('2026-11-02', '2026-10-31').problem, /after today \(2026-10-31 in New York\)/);
+  assert.match(L.checkDay('<b>x</b>', '2026-10-31').problem, /"\?b\?x\?\?b\?"/, 'nothing of the link shown as markup');
+  /* New York's date, not UTC's: 2026-10-31 01:30 UTC is 21:30 on the 30th in New York */
+  assert.equal(L.nyToday(Date.UTC(2026, 9, 31, 1, 30)), '2026-10-30');
+  assert.equal(L.nyToday(Date.UTC(2026, 9, 31, 16, 0)), '2026-10-31');
+});
+
+test('a past day: the live status is left out (it is today\'s, never that day\'s); an empty day says not enough data', () => {
+  const p = L.cleanDay(day, true);
+  assert.equal(p.status, null);
+  assert.equal(p.past, true);
+  assert.equal(p.trades.length, 1, 'the day\'s own trades stay');
+  const seats = L.seatDays(p);
+  assert.ok(seats.every(s => s.line === 'past day: the live status is not kept per day' && s.account === '' && s.flag === ''));
+  assert.equal(L.cleanDay(day).status.date, '2026-10-22', 'the live day keeps its status');
+  assert.equal(L.pastEmpty(p), false);
+  const none = L.cleanDay({ folder: { set: true, ok: true }, date: '2026-10-19', trades: [], open: [], decisions: [] }, true);
+  assert.equal(L.pastEmpty(none), true);
+  assert.equal(L.emptyText('2026-10-19'), 'No league record for 2026-10-19: no paper trade and no decision. Not enough data to show that day.');
+});
+
+test('a past day on the chart: whether the chart\'s history reaches it', () => {
+  const s = (y, m, d, h) => Date.UTC(y, m - 1, d, h) / 1000;
+  const bars = [{ t: s(2026, 10, 26, 18) }, { t: s(2026, 10, 30, 15) }];
+  assert.deepEqual(L.chartReach(bars, '2026-10-22'), { reach: 'before', first: '2026-10-26' });
+  assert.deepEqual(L.chartReach(bars, '2026-10-26'), { reach: 'in', first: '2026-10-26' });
+  assert.deepEqual(L.chartReach(bars, '2026-10-28'), { reach: 'in', first: '2026-10-26' });
+  assert.deepEqual(L.chartReach([], '2026-10-28'), { reach: 'none', first: '' });
+  assert.deepEqual(L.chartReach(bars, 'x'), { reach: 'none', first: '' });
+});
+
+test('a past day: the page wiring (the address, read only, never on the live charts)', () => {
+  const src = read('live/league.js'), ws = read('live/workspace.js');
+  assert.match(src, /'\/api\/chart-league' \+ \(past \? '\?date=' \+ encodeURIComponent\(past\) : ''\)/);
+  assert.match(src, />Back to today<\/button>/);
+  assert.match(src, /'Past day ' \+ past \+ ' · read only'/);
+  assert.match(ws, /leagueView\.openDay\(new URLSearchParams\(location\.search\)\.get\('day'\)\)/);
+  assert.match(ws, /const leagueGhostDay = \(\) => \(leagueView && leagueView\.shown\(\) && leagueView\.liveDay\(\)\) \|\| LG\.day;/);
+  assert.doesNotMatch(ws, /LG\.day = leagueView\.day\(\)/, 'a past day never becomes the faint marks\' day');
+});

@@ -11,7 +11,8 @@
 //   (version + 1; a checked type goes back to not_checked). Made-up firm values and SIM-A style accounts only.
 // Chart 1.35.0: notes on POST /api/trade-tags (dim "note") come back apart under `notes` on GET, as The Desk's; desk.refuseTags
 //   (a function of a record: a reason, or '') refuses records as The Desk's `rejected`; GET /api/chart-floors answers seed.floors
-//   ({accounts, skipped}); GET /api/chart-league answers seed.league (the SAMPLE league day: status, trades, open, decisions).
+//   ({accounts, skipped}); GET /api/chart-league answers seed.league (the SAMPLE league day: status, trades, open, decisions); with ?date=,
+//   desk.leagueDays[date] or that date with no record.
 import http from 'node:http';
 
 /* Chart 1.32.0: a few more firms and plans for the type picker (Firm, Plan, Size), named as The Desk names its types ("<Plan>
@@ -99,8 +100,15 @@ export async function startDesk(port, seed) {
       return desk.floors ? send(200, desk.floors) : send(404, { detail: 'Not Found' });
     }
     if (urlPath === '/api/chart-league' && req.method === 'GET') {
-      desk.log.push({ method: 'GET', which: 'chart-league' });
-      return desk.league ? send(200, desk.league) : send(404, { detail: 'Not Found' });
+      /* ?date=YYYY-MM-DD (The Desk's read_day): desk.leagueDays[date] (SAMPLE), else that date with no record, as The Desk answers */
+      const date = new URLSearchParams(query || '').get('date');
+      desk.log.push({ method: 'GET', which: 'chart-league', date: date || null });
+      if (!desk.league) return send(404, { detail: 'Not Found' });
+      if (date === null) return send(200, desk.league);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return send(400, { detail: 'date must be YYYY-MM-DD' });
+      const past = desk.leagueDays && desk.leagueDays[date];
+      return send(200, past || { shadow: 'SHADOW: no orders', folder: desk.league.folder, status: desk.league.status || null, date,
+        day: { date, closed: false, note: null }, league: desk.league.league || null, trades: [], open: [], decisions: [] });
     }
     if (urlPath === '/api/account-types' && req.method === 'GET') {
       desk.log.push({ method: 'GET', which: 'account-types' });

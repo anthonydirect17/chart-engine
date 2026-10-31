@@ -3609,12 +3609,14 @@ function startLeague() {
   if (!window.LeagueView) return;
   leagueView = window.LeagueView.create({ view: $('lgView'), tab: $('wsLeagueTab'), feed: hub, storagePrefix: PREFIX,
     deskBase: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)), fetch: (u, o) => fetch(u, o),
+    /* a past day in the address (?tab=league&day=YYYY-MM-DD, The Desk's Agent Stats links here), so a reload keeps it */
+    onDay: d => { const u = new URL(location.href); if (d) u.searchParams.set('day', d); else u.searchParams.delete('day'); history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash); },
     onTab: on => {
       document.body.classList.toggle('lg-on', on);
       if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); }
       tabUrl(on ? 'league' : '');
       placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
-      if (!on) { if (leagueView.day()) LG.day = leagueView.day(); if (!LG.busy) leaguePoll(); }   // the faint marks read on by themselves (a read under way schedules the next itself)
+      if (!on) { if (leagueView.liveDay()) LG.day = leagueView.liveDay(); if (!LG.busy) leaguePoll(); }   // never a past day   // the faint marks read on by themselves (a read under way schedules the next itself)
     } });
 }
 /* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk
@@ -3628,7 +3630,7 @@ const LG_TIMEOUT_MS = 10000;                              // one league read wai
 const leagueWanted = () => LG.overlays.size > 0 || [...views.values()].some(v => v.panel.type === 'agents');
 /* review 3: the faint marks draw the League view's day only while it is open (it reads every 15 s); else this poll's (30 s), so
    they never freeze on what the view read last */
-const leagueGhostDay = () => (leagueView && leagueView.shown() && leagueView.day()) || LG.day;
+const leagueGhostDay = () => (leagueView && leagueView.shown() && leagueView.liveDay()) || LG.day;   // a past day shown is never drawn on the live charts
 function setLeagueGhost(id, on) {
   const g = leagueGhosts();
   if (on) g[id] = true; else delete g[id];
@@ -3669,7 +3671,7 @@ const start = () => {
   openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake();
   if (botDesk && new URLSearchParams(location.search).get('tab') === 'bot') botDesk.showTab(true);
   if (agentDesk && new URLSearchParams(location.search).get('tab') === 'agent') agentDesk.showTab(true);
-  if (leagueView && new URLSearchParams(location.search).get('tab') === 'league') leagueView.showTab(true);
+  if (leagueView && new URLSearchParams(location.search).get('tab') === 'league') leagueView.openDay(new URLSearchParams(location.search).get('day'));   // a day checked first: a past one read only
   syncLeagueGhosts();
 };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
