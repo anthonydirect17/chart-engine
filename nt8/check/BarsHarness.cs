@@ -113,6 +113,15 @@ public static class BarsHarness
             OneSecondOldDeskAndRestart(dir);
             OneSecondRefused(dir);
             OneSecondSpeed();
+            TickCheckCases();            // the NQ tick file (Sunday 11-01): the check of the live capture against the history (pure)
+            TickFileCapture(dir);        // the queue's bound (drop and count), NQ only, the raw lines, the break left out
+            TickFileChunks(dir);         // chunks cut once and sent again the same, a restart, 404 and a refusal
+            TickFileDrops(dir);          // lost trades and feed drops go to the files of their session at their next cut; a restart says gaps
+            TickFileOneCutter(dir);      // the restart race: an old sender never writes a cut after the new one started
+            TickFileCutOfMany(dir);      // re-review 1: a cut of several chunks that took drops flags every one of them
+            TickFileDays(dir);           // the final day: the check, the parts, stored, packed, the raw kept or deleted
+            TickFileUnstored(dir);       // a day not stored: kept and sent again later (3 times), never deleted before stored
+            TickFilePull(dir);           // the final pull through the gate, only in the window, from the open to the close
         }
         catch (Exception ex) { Check(false, "bars harness threw: " + ex); }
         finally
@@ -323,6 +332,9 @@ public static class BarsHarness
         public Func<string, int> Status = body => 200;
         public Func<string, int> Status1s = body => 404;   // 0.6.9: POST /api/bars-1s (404: a Desk without it, as today's)
         public readonly List<string> Bodies1s = new List<string>();
+        public Func<string, int> StatusTicks = body => 200;   // the NQ tick file: POST /api/ticks/chunk and /api/ticks/day
+        public Func<string, string> AnswerTicks = body => "{\"ok\":true,\"stored\":true,\"packed\":false}";
+        public readonly List<string> BodiesTicks = new List<string>();
         public int HoldMs;   // answer this late
         public Desk()
         {
@@ -353,6 +365,14 @@ public static class BarsHarness
                                 c.Response.StatusCode = code1; c.Response.OutputStream.Write(b1, 0, b1.Length); c.Response.Close();
                                 return;
                             }
+                            if (c.Request.Url.AbsolutePath.StartsWith("/api/ticks/"))
+                            {
+                                lock (BodiesTicks) BodiesTicks.Add(c.Request.Url.AbsolutePath + " " + body);
+                                int code2 = StatusTicks(body);
+                                byte[] b2 = System.Text.Encoding.UTF8.GetBytes(code2 == 200 ? AnswerTicks(body) : "{\"detail\":\"ticks must be a list\"}");
+                                c.Response.StatusCode = code2; c.Response.OutputStream.Write(b2, 0, b2.Length); c.Response.Close();
+                                return;
+                            }
                             if (c.Request.Url.AbsolutePath != "/api/bars") { c.Response.StatusCode = 404; c.Response.Close(); return; }
                             lock (Bodies) Bodies.Add(body);
                             if (HoldMs > 0) Thread.Sleep(HoldMs);
@@ -370,6 +390,7 @@ public static class BarsHarness
         public int Count { get { lock (Bodies) return Bodies.Count; } }
         public List<string> All() { lock (Bodies) return Bodies.ToList(); }
         public List<string> All1s() { lock (Bodies1s) return Bodies1s.ToList(); }
+        public List<string> AllTicks() { lock (BodiesTicks) return BodiesTicks.ToList(); }
         public void Stop() { try { L.Stop(); L.Close(); } catch (Exception) { } }
     }
 
@@ -1007,6 +1028,12 @@ public static class BarsHarness
                 "S8 Diag: then a 400 and a 200: none queued, 1 set aside, the last session per contract unchanged (2026-09-24 is older), no stale error: " + d);
             string server = (string)Priv("DiagJson");
             Check(server.Contains(",\"bars\":{\"enabled\":true,\"state\":") && server.Contains("\"barsQueued\":0"), "S8 Diag: GET /diag has the bars section, and the gate shows its bars queue");
+            Check(d.Contains(",\"pc\":\"HOME\",\"pcFrom\":\"config.txt\","), "Diag: bars.pc is the name every Desk message carries, from config.txt here (the install job checks pc = WORK / HOME): " + Regex.Match(d, "\"pc\":[^,]*,\"pcFrom\":\"[^\"]*\"").Value);
+            string pcWas = ChartBridgeBars.PcName();
+            ChartBridgeBars.ReadConfig("pc", "");
+            string d0 = Diag();
+            Check(d0.Contains("\"pcFrom\":\"computer name\"") && !d0.Contains("\"pc\":\"HOME\""), "Diag: without pc in config.txt, bars.pc is the Windows computer name and pcFrom says so");
+            ChartBridgeBars.ReadConfig("pc", pcWas);
             connected = false;
             ChartBridgeBars.PlanOnce(null);
             Check(Diag().Contains("\"state\":\"waiting: NinjaTrader has no price connection\""), "S8 Diag: not connected: it says it waits for the price connection");
@@ -1171,8 +1198,8 @@ public static class BarsHarness
             List<BarsRequest> ticks = TicksMade(m0);
             BarsRequest r = ticks.FirstOrDefault();
             Check(ticks.Count == 1 && r.BarsPeriod.Value == 1 && r.BarsPeriod.MarketDataType == MarketDataType.Last && r.MergePolicy == MergePolicy.DoNotMerge && r.TradingHours != null &&
-                  r.Instrument.FullName == "MNQ 12-26" && r.From == D(2026, 9, 29) && r.To == W(2026, 9, 30, 16, 0),
-                  "1s session: one request, 1 tick, Last, DoNotMerge, the trading hours, from the open's date (12:00 AM, NinjaTrader's time) to the close: " + (r == null ? "none" : r.From + " to " + r.To));
+                  r.Instrument.FullName == "MNQ 12-26" && r.From == W(2026, 9, 29, 17, 0) && r.To == W(2026, 9, 30, 16, 0),
+                  "1s session: one request, 1 tick, Last, DoNotMerge, the trading hours, from the open itself (18:00 ET, 17:00 in NinjaTrader's Chicago time; Sunday 11-01 item 11: not the whole session before) to the close: " + (r == null ? "none" : r.From + " to " + r.To));
             List<string> got = desk.All1s();
             List<string> rows = got.SelectMany(Rows1s).ToList();
             int parts = got.Count;
@@ -1191,7 +1218,7 @@ public static class BarsHarness
             ChartBridgeBars1sQueue.Load();
             ChartBridgeBars.PlanOnce(null);
             Check(TicksMade(m1).Count == 0 && desk.All1s().Count == 8, "1s session: the next pass and a restart ask for nothing more");
-            Check(Diag().Contains("\"oneSecond\":{\"on\":true,") && Diag().Contains("\"lastSent\":{\"MNQ 12-26\":\"2026-09-30\"}") && Diag().Contains("11829 seconds, 8 messages, 3 trades outside the session left out (asked 2026-09-29 00:00 to 2026-09-30 16:00 NinjaTrader time), sides mixed"),
+            Check(Diag().Contains("\"oneSecond\":{\"on\":true,") && Diag().Contains("\"lastSent\":{\"MNQ 12-26\":\"2026-09-30\"}") && Diag().Contains("11829 seconds, 8 messages, 3 trades outside the session left out (asked 2026-09-29 17:00 to 2026-09-30 16:00 NinjaTrader time), sides mixed"),
                   "1s session: /diag bars.oneSecond: on, last sent, the last build: " + Regex.Match(Diag(), "\"oneSecond\":\\{.*\\}\\}$").Value);
         }
         finally { desk.Stop(); }
@@ -1201,6 +1228,8 @@ public static class BarsHarness
         {
             d2.Status1s = body => 200;
             ChartBridgeBars.CatchUpSessions = 1;
+            string ls = Regex.Match(Diag(), "\"oneSecond\":\\{[^}]*\"lastSent\":\\{[^}]*\\}").Value;
+            Check(ls.Contains("\"NQ 12-26\":\"none yet\"") && ls.Contains("\"MNQ 12-26\":"), "1s lastSent: every contract the pull covers is listed, \"none yet\" where The Desk has not taken a set (Sunday 11-01): " + ls);
             int m0 = MadeCount();
             for (int i = 0; i < 4; i++) ChartBridgeBars.PlanOnce(null);
             List<string> asked = TicksMade(m0).Select(x => x.Instrument.FullName).ToList();
@@ -1435,5 +1464,411 @@ public static class BarsHarness
         double ms = sw.Elapsed.TotalMilliseconds;
         Console.WriteLine("     (1s build: " + n + " trades into " + r.Rows.Count + " seconds in " + Math.Round(ms) + " ms on the stand-in series, " + Math.Round(ms * 1000.0 / n, 3) + " us a trade)");
         Check(r.Trades == n && r.Rows.Count > 80000 && ms < 3000, "1s speed: 600,000 trades in one pass in " + Math.Round(ms) + " ms (the stand-in; NinjaTrader's own series reads arrays), rows only kept (" + r.Rows.Count + ")");
+    }
+
+    // ------------------------------------------------------------ the NQ tick file (ChartBridgeTicks.cs, Sunday 11-01)
+    static TickRec Tr(long u, double p, long v) { return new TickRec { U = u, P = p, V = v, Contract = "NQ 12-26" }; }
+
+    static void TickCheckCases()
+    {
+        long t0 = 1790719200000L;
+        List<TickRec> live = new List<TickRec> { Tr(t0 + 100, 25000, 1), Tr(t0 + 900, 25000.25, 2), Tr(t0 + 1500, 25000, 1) };
+        TickCheckResult same = TickCheck.Compare(live, live.ToList());
+        Check(same.Status == "exact" && same.LiveTicks == 3 && same.HistTicks == 3 && same.Detail.Count == 0, "tick check: the same trades every second: exact");
+        // the history has the same trades at other milliseconds of the same seconds (NinjaTrader's two clocks): still exact
+        TickCheckResult shifted = TickCheck.Compare(live, new List<TickRec> { Tr(t0 + 5, 25000, 1), Tr(t0 + 990, 25000.25, 2), Tr(t0 + 1001, 25000, 1) });
+        Check(shifted.Status == "exact", "tick check: second by second, not millisecond by millisecond: " + shifted.Status);
+        List<TickRec> more = live.ToList(); more.Add(Tr(t0 + 5000, 25001, 4)); more.Add(Tr(t0 + 5100, 25001, 1));
+        TickCheckResult filled = TickCheck.Compare(live, more);
+        Check(filled.Status == "filled" && filled.SecondsLiveMissed == 1 && filled.TicksLiveMissed == 2 && filled.Detail.Count == 1 && filled.Detail[0][0] == t0 + 5000 && filled.Detail[0][2] == 2,
+              "tick check: history has trades the live capture missed (a disconnect): filled, the second listed: " + filled.Status);
+        TickCheckResult failed = TickCheck.Compare(more, live);
+        Check(failed.Status == "failed" && failed.SecondsHistShort == 1 && failed.TicksHistShort == 2 && !failed.Passed, "tick check: live has trades the history lacks: failed");
+        TickCheckResult vol = TickCheck.Compare(new List<TickRec> { Tr(t0, 25000, 5) }, new List<TickRec> { Tr(t0, 25000, 3) });
+        Check(vol.Status == "failed", "tick check: the same count with less volume in history: failed");
+        Check(TickCheck.Compare(live, new List<TickRec>()).Status == "failed", "tick check: no history at all: failed");
+    }
+
+    static string TicksDir(string dir) { return Path.Combine(dir, "ChartBridge", "ticks"); }
+    static void TickFresh(string dir)
+    {
+        ChartBridgeTicks.Stop();
+        ChartBridgeTicks.ResetConfig();
+        if (Directory.Exists(TicksDir(dir))) Directory.Delete(TicksDir(dir), true);
+        ChartBridgeBars.ReadConfig("bars", "on");
+        ChartBridgeBars.ReadConfig("pc", "WORK");
+        ChartBridgeTicks.Start();   // threads started; stopped at once so the cases drive each step themselves
+        ChartBridgeTicks.Stop();
+        typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, true);
+        ChartBridgeTicks.QueueMax = 200000; ChartBridgeTicks.ChunkMaxTicks = 20000; ChartBridgeTicks.PartMaxTicks = 20000;
+    }
+    static void TickScan() { typeof(ChartBridgeTicks).GetMethod("ScanFolder", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null); }
+    static void TickForget()
+    {
+        ((System.Collections.IDictionary)typeof(ChartBridgeTicks).GetField("Keys", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null)).Clear();
+        typeof(ChartBridgeTicks).GetMethod("LoadDays", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
+    }
+    static void Feed(DateTime etWall, double p, long v) { ChartBridgeTicks.OnTrade("NQ", "NQ 12-26", 0.25, Ms(EtToUtc(etWall)), p, v, 1, ChartBridgeSides.BidAsk); }
+    static string TickDiag() { return ChartBridgeTicks.DiagJson(); }
+
+    static void TickFileCapture(string dir)
+    {
+        TickFresh(dir);
+        ChartBridgeTicks.QueueMax = 5;
+        for (int i = 0; i < 8; i++) Feed(W(2026, 10, 6, 9, 30).AddSeconds(i), 25000 + i * 0.25, 1);
+        ChartBridgeTicks.OnTrade("MNQ", "MNQ 12-26", 0.25, Ms(EtToUtc(W(2026, 10, 6, 9, 31))), 25000, 1, 1, 2);
+        Check(TickDiag().Contains("\"queue\":5,\"queueMax\":5,\"droppedQueue\":3,"), "tick file: a full queue drops and counts, never waits; MNQ is not captured (its bars come from NQ's ticks): " + TickDiag().Substring(0, 120));
+        ChartBridgeTicks.QueueMax = 200000;
+        Feed(W(2026, 10, 6, 17, 30), 25010, 1);   // the 17:00 to 18:00 break: no session
+        Feed(W(2026, 10, 6, 18, 0), 25011, 2);    // 18:00: the next session (dated 2026-10-07)
+        int n = ChartBridgeTicks.WriteOnce();
+        string raw = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.raw"), raw7 = Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.raw");
+        string[] lines = File.Exists(raw) ? File.ReadAllLines(raw) : new string[0];
+        Check(n == 6 && lines.Length == 5 && File.Exists(raw7) && File.ReadAllLines(raw7).Length == 1 && TickDiag().Contains("\"outside\":1,"),
+              "tick file: the writer puts each trade in its session's raw file (18:00 starts the next), the break left out and counted: " + n + " written, " + lines.Length + " lines");
+        Check(lines.Length > 0 && lines[0] == Ms(EtToUtc(W(2026, 10, 6, 9, 30))) + ",25000,1,1,2", "tick file: one line a trade, u (UTC ms), price, volume, side, method: " + (lines.Length > 0 ? lines[0] : ""));
+        string[] state = File.ReadAllLines(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.state"));
+        Check(state.Length == 4 && Regex.IsMatch(state[0], "^run [0-9a-f]{12}$") && state[1] == "tick 0.25", "tick file: the state file starts with the run id and the tick size");
+        // over tickFileMaxMB: the batch is dropped and counted
+        typeof(ChartBridgeTicks).GetField("diskBytes", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, ChartBridgeTicks.MaxBytes + 1);
+        Feed(W(2026, 10, 6, 9, 40), 25000, 1);
+        Check(ChartBridgeTicks.WriteOnce() == 0 && TickDiag().Contains("\"droppedDisk\":1,") && File.ReadAllLines(raw).Length == 5, "tick file: over tickFileMaxMB a batch is dropped and counted, nothing written");
+        typeof(ChartBridgeTicks).GetField("diskBytes", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, 0L);
+        // off: nothing captured
+        ChartBridgeTicks.ReadConfig("tickFile", "off");
+        Check(!ChartBridgeTicks.On, "tick file: tickFile = off turns it off (bars stay on)");
+        ChartBridgeTicks.ResetConfig();
+        ChartBridgeBars.ResetConfig();
+        Check(!ChartBridgeTicks.On, "tick file: off without bars = on");
+    }
+
+    static void TickFileChunks(string dir)
+    {
+        TickFresh(dir);
+        Desk desk = new Desk();
+        string urlWas = ChartBridgeConfig.DeskUrl;
+        ChartBridgeConfig.DeskUrl = desk.Url;
+        ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 10, 0));
+        try
+        {
+            for (int i = 0; i < 5; i++) Feed(W(2026, 10, 6, 9, 30).AddSeconds(i), 25000 + i * 0.25, 1 + i);
+            ChartBridgeTicks.WriteOnce();
+            ChartBridgeTicks.ChunkMaxTicks = 3;
+            int cut = ChartBridgeTicks.CutOnce();
+            string key = "2026-10-06 NQ 12-26";
+            string c1 = ChartBridgeTicks.ChunkJson(key, 1), c1b = ChartBridgeTicks.ChunkJson(key, 1), c2 = ChartBridgeTicks.ChunkJson(key, 2);
+            Check(cut == 2 && c1 == c1b && Field1s(c1, "count") == "3" && Field1s(c2, "count") == "2" && Field1s(c2, "seq") == "2" && Field1s(c1, "pc") == "\"WORK\"" &&
+                  c1.Contains("\"root\":\"NQ\",\"contract\":\"NQ 12-26\",\"tick\":0.25,\"session\":\"2026-10-06\",\"run\":\"") && c1.Contains("\"sides\":{\"bidAsk\":3,\"tickRule\":0,\"none\":0}") &&
+                  c1.Contains("\"cols\":[\"u\",\"p\",\"v\",\"s\"],\"ticks\":[[" + Ms(EtToUtc(W(2026, 10, 6, 9, 30))) + ",25000,1,1],"),
+                  "tick chunks: 5 trades at 3 a chunk are 2 chunks; a chunk read again is byte for byte the same (its byte range is kept): " + c1.Substring(0, Math.Min(300, c1.Length)));
+            Check(ChartBridgeTicks.SendChunks(null) == 2 && desk.AllTicks().Count == 2 && desk.AllTicks()[0].StartsWith("/api/ticks/chunk {") && ChartBridgeTicks.SendChunks(null) == 0,
+                  "tick chunks: both posted to /api/ticks/chunk once; nothing sent again");
+            Check(TickDiag().Contains("\"lastSent\":{\"NQ 12-26\":\"2026-10-06 #2\"}") && TickDiag().Contains("\"chunks\":2,\"sent\":2,\"aside\":0"), "tick chunks: /diag lastSent and the file's counts: " + TickDiag());
+            // a restart: the state file carries on (same run, the next seq)
+            TickForget(); TickScan();
+            Feed(W(2026, 10, 6, 9, 35), 25003, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            string c3 = ChartBridgeTicks.ChunkJson(key, 3);
+            int sent3 = ChartBridgeTicks.SendChunks(null);
+            Check(sent3 == 1 && c3 != null && Field1s(c3, "run") == Field1s(c1, "run") && Field1s(c3, "count") == "1", "tick chunks: after a restart only the new chunk goes, seq 3 of the same run: " + sent3 + " " + (c3 ?? "null") + " " + TickDiag());
+            Check(c3 != null && Field1s(c3, "gaps") == "1", "tick chunks: the first chunk of a file after a restart says gaps 1 (The Desk never vouches across a restart): " + (c3 == null ? "null" : Field1s(c3, "gaps")));
+            // The Desk without the route (404): every chunk waits, offered again after 30 minutes
+            desk.StatusTicks = body => 404;
+            Feed(W(2026, 10, 6, 9, 36), 25003, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(ChartBridgeTicks.SendChunks(null) == 0 && TickDiag().Contains("\"deskHasNoTicks\":true") && desk.AllTicks().Count == 4, "tick chunks: a 404 keeps the chunk and says so");
+            int before = desk.AllTicks().Count;
+            ChartBridgeTicks.SendChunks(null);
+            Check(desk.AllTicks().Count == before, "tick chunks: not offered again within 30 minutes");
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 10, 31));
+            desk.StatusTicks = body => 400;
+            ChartBridgeTicks.SendChunks(null);
+            string[] st = File.ReadAllLines(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.state"));
+            Check(st.Contains("aside 4") && Logged("The Desk refused tick chunk 4 of 2026-10-06 NQ 12-26 (400"), "tick chunks: a refusal sets the chunk aside (its trades stay in the raw file; the final pull covers them)");
+            Check(!desk.AllTicks().Any(b => b.Contains("Sim") || b.Contains("account")), "tick chunks: market data and the PC name only");
+        }
+        finally { desk.Stop(); ChartBridgeConfig.DeskUrl = urlWas; ChartBridgeTicks.ChunkMaxTicks = 20000; }
+    }
+
+    static void FeedC(string contract, DateTime etWall, double p, long v) { ChartBridgeTicks.OnTrade("NQ", contract, 0.25, Ms(EtToUtc(etWall)), p, v, 1, ChartBridgeSides.BidAsk); }
+    static void TickRestart()
+    {
+        ChartBridgeTicks.Start(); ChartBridgeTicks.Stop();
+        typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, true);
+        TickScan();
+    }
+
+    static void TickFileDrops(string dir)
+    {
+        ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 5, 17, 30));   // ChartBridge started before the 2026-10-06 session opened
+        TickFresh(dir);
+        try
+        {
+            string k12 = "2026-10-06 NQ 12-26", k03 = "2026-10-06 NQ 03-27";
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 30), 25000, 1); FeedC("NQ 03-27", W(2026, 10, 6, 9, 30).AddSeconds(1), 25100, 1);
+            ChartBridgeTicks.WriteOnce();
+            Check(ChartBridgeTicks.CutOnce() == 2 && Field1s(ChartBridgeTicks.ChunkJson(k12, 1), "gaps") == "0" && Field1s(ChartBridgeTicks.ChunkJson(k03, 1), "gaps") == "0",
+                  "tick drops: files made by a run that started before the session opened: the first chunks say gaps 0");
+            // a feed drop at 09:31:30 and the feed down until 09:40: the cut in between has nothing to cut and takes nothing up
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 31).AddSeconds(30));
+            ChartBridgeTicks.NoteFeedDrop();
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 34));
+            Check(ChartBridgeTicks.CutOnce() == 0, "tick drops: nothing to cut while the feed is down");
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 41));
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 40), 25001, 1); FeedC("NQ 03-27", W(2026, 10, 6, 9, 40).AddSeconds(2), 25101, 1);
+            ChartBridgeTicks.WriteOnce();
+            string a2 = null, b2 = null;
+            Check(ChartBridgeTicks.CutOnce() == 2 && Field1s(a2 = ChartBridgeTicks.ChunkJson(k12, 2), "gaps") == "1" && Field1s(b2 = ChartBridgeTicks.ChunkJson(k03, 2), "gaps") == "1",
+                  "tick drops: the feed drop goes on the next chunk of EVERY file of its session (the roll week's two contracts), not on a cut with nothing in it: " + Field1s(a2 ?? "", "gaps") + " " + Field1s(b2 ?? "", "gaps"));
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 42), 25002, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k12, 3), "gaps") == "0", "tick drops: taken up once: the chunk after says gaps 0");
+            // a full queue at 09:43 drops a trade: lost goes to the session's files, each at its own next cut
+            ChartBridgeTicks.QueueMax = 1;
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 43), 25003, 1); FeedC("NQ 12-26", W(2026, 10, 6, 9, 43).AddSeconds(1), 25003, 1);
+            ChartBridgeTicks.QueueMax = 200000;
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k12, 4), "lost") == "1" && ChartBridgeTicks.ChunkJson(k03, 3) == null,
+                  "tick drops: a lost trade goes on the next chunk of its session's file that has one; the other file keeps it for its next cut");
+            FeedC("NQ 03-27", W(2026, 10, 6, 9, 44), 25104, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k03, 3), "lost") == "1", "tick drops: ... and the other contract's file takes it at its own next cut");
+            // a drop in the next session does not touch this one
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 18, 30));
+            ChartBridgeTicks.NoteFeedDrop();
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 45), 25005, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k12, 5), "gaps") == "0", "tick drops: a feed drop in the 2026-10-07 session does not go on 2026-10-06's chunks");
+            // a restart mid-session: Start() zeroes its counters, yet the first chunk of each file after it says gaps 1
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 50));
+            TickRestart();
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 50), 25006, 1); FeedC("NQ 03-27", W(2026, 10, 6, 9, 50), 25106, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            string r12 = ChartBridgeTicks.ChunkJson(k12, 6) ?? "", r03 = ChartBridgeTicks.ChunkJson(k03, 4) ?? "";
+            Check(Field1s(r12, "gaps") == "1" && Field1s(r03, "gaps") == "1", "tick drops: after a restart the first chunk of each file says gaps 1, never 0: " + Field1s(r12, "gaps") + " " + Field1s(r03, "gaps"));
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 51), 25007, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k12, 7) ?? "", "gaps") == "0", "tick drops: ... and only the first");
+            // a file this run makes after its session opened (ChartBridge started mid-session): its first chunk says gaps 1 too
+            FeedC("NQ 06-27", W(2026, 10, 6, 9, 52), 25200, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson("2026-10-06 NQ 06-27", 1) ?? "", "gaps") == "1", "tick drops: a file made after its session opened starts with gaps 1");
+        }
+        finally { ChartBridgeTicks.QueueMax = 200000; }
+    }
+
+    static void TickFileCutOfMany(string dir)
+    {
+        ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 5, 17, 30));   // started before the session opened: no restart flag
+        TickFresh(dir);
+        try
+        {
+            string k = "2026-10-06 NQ 12-26";
+            ChartBridgeTicks.ChunkMaxTicks = 2;
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 30));
+            ChartBridgeTicks.QueueMax = 6;
+            for (int i = 0; i < 7; i++) Feed(W(2026, 10, 6, 9, 30).AddSeconds(i), 25000, 1);   // the 7th is dropped (queue full)
+            ChartBridgeTicks.QueueMax = 200000;
+            ChartBridgeTicks.NoteFeedDrop();
+            ChartBridgeTicks.WriteOnce();
+            int made = ChartBridgeTicks.CutOnce();
+            string[] c = new string[] { ChartBridgeTicks.ChunkJson(k, 1) ?? "", ChartBridgeTicks.ChunkJson(k, 2) ?? "", ChartBridgeTicks.ChunkJson(k, 3) ?? "" };
+            Check(made == 3 && Field1s(c[0], "lost") == "1" && Field1s(c[0], "gaps") == "1" && c.Skip(1).All(x => Field1s(x, "lost") == "0" && Field1s(x, "gaps") == "1"),
+                  "tick drops: one cut of 3 chunks that took drops flags all 3 (the first has the counts, the others gaps 1): " + string.Join(" | ", c.Select(x => Field1s(x, "lost") + "/" + Field1s(x, "gaps")).ToArray()));
+            string[] st = File.ReadAllLines(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.state")).Where(l => l.StartsWith("cut ")).ToArray();
+            Check(st.Length == 3 && st[0].EndsWith(" .") && st[1].EndsWith(" c") && st[2].EndsWith(" c"), "tick drops: the later chunks' flag is marked carried in the state file");
+            Feed(W(2026, 10, 6, 9, 31), 25000, 1); ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k, 4) ?? "", "gaps") == "0", "tick drops: the next cut, with no drop, says gaps 0");
+            TickRestart();   // read back from the state file after a restart
+            ChartBridgeTicks.FinishDay(k, HistOf(ChartBridgeTicks.ReadAllLive(k)));
+            string part = File.ReadAllLines(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.jsonl"))[0];
+            Check(part.Contains("\"liveLost\":1,\"liveGaps\":1,"), "tick drops: the day's liveLost and liveGaps count each drop once (a carried flag is not a second drop): " + Regex.Match(part, "\"liveLost\":\\d+,\"liveGaps\":\\d+").Value);
+        }
+        finally { ChartBridgeTicks.ChunkMaxTicks = 20000; ChartBridgeTicks.QueueMax = 200000; }
+    }
+
+    static void TickFileOneCutter(string dir)
+    {
+        ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 10, 0));
+        TickFresh(dir);
+        string state = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.state");
+        FieldInfo genF = typeof(ChartBridgeTicks).GetField("generation", BindingFlags.NonPublic | BindingFlags.Static);
+        MethodInfo cutAs = typeof(ChartBridgeTicks).GetMethod("CutOnce", BindingFlags.NonPublic | BindingFlags.Static, null, new Type[] { typeof(int) }, null);
+        Feed(W(2026, 10, 6, 9, 30), 25000, 1);
+        ChartBridgeTicks.WriteOnce();
+        int old = (int)genF.GetValue(null);
+        TickRestart();   // a new generation: the old sender's thread may still be running
+        Check((int)cutAs.Invoke(null, new object[] { old }) == 0 && !File.ReadAllLines(state).Any(l => l.StartsWith("cut ")),
+              "one cutter: a sender of an earlier generation cuts nothing (no second `cut 1` with other bytes)");
+        Check(ChartBridgeTicks.CutOnce() == 1 && File.ReadAllLines(state).Count(l => l.StartsWith("cut 1 ")) == 1, "one cutter: the current sender cuts it once");
+        // a cut in progress (CutSync held): Start() waits for it before it clears the files
+        object cutSync = typeof(ChartBridgeTicks).GetField("CutSync", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+        Monitor.Enter(cutSync);
+        Thread starter = new Thread(() => { ChartBridgeTicks.Start(); ChartBridgeTicks.Stop(); }) { IsBackground = true };
+        bool waited;
+        try { starter.Start(); waited = !starter.Join(400); }
+        finally { Monitor.Exit(cutSync); }
+        Check(waited && starter.Join(10000), "one cutter: Start() waits for a cut still in progress, then goes on");
+        typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, true);
+        TickScan();
+        // the writer: one at a time
+        object writeSync = typeof(ChartBridgeTicks).GetField("WriteSync", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+        Feed(W(2026, 10, 6, 9, 31), 25001, 1);
+        Monitor.Enter(writeSync);
+        Thread w2 = new Thread(() => ChartBridgeTicks.WriteOnce()) { IsBackground = true };
+        bool blocked;
+        try { w2.Start(); blocked = !w2.Join(300); }
+        finally { Monitor.Exit(writeSync); }
+        Check(blocked && w2.Join(10000) && File.ReadAllLines(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.raw")).Length == 2, "one writer: a second writer waits for the first; whole lines only");
+    }
+
+    static long TickDisk() { return (long)typeof(ChartBridgeTicks).GetField("diskBytes", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null); }
+    static long FolderSize(string dir) { return Directory.GetFiles(TicksDir(dir)).Sum(f => new FileInfo(f).Length); }
+
+    static TickDayBuild HistOf(IEnumerable<TickRec> t) { TickDayBuild h = new TickDayBuild(); foreach (TickRec x in t) { h.Ticks.Add(x); h.BidAsk++; } return h; }
+
+    static void TickFileDays(string dir)
+    {
+        TickFresh(dir);
+        Desk desk = new Desk();
+        string urlWas = ChartBridgeConfig.DeskUrl;
+        ChartBridgeConfig.DeskUrl = desk.Url;
+        try
+        {
+            foreach (int day in new[] { 6, 7, 8 }) for (int i = 0; i < 4; i++) Feed(W(2026, 10, day, 9, 30).AddSeconds(i), 25000 + i * 0.25, 1);
+            ChartBridgeTicks.WriteOnce();
+            TickScan();
+            string k6 = "2026-10-06 NQ 12-26", k7 = "2026-10-07 NQ 12-26", k8 = "2026-10-08 NQ 12-26";
+            ChartBridgeTicks.PartMaxTicks = 2;
+            List<TickRec> live6 = ChartBridgeTicks.ReadAllLive(k6);
+            List<TickRec> hist6 = live6.ToList(); hist6.Add(Tr(Ms(EtToUtc(W(2026, 10, 6, 11, 0))), 25005, 3));   // a trade the live capture missed
+            TickCheckResult r6 = ChartBridgeTicks.FinishDay(k6, HistOf(hist6));
+            string day6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.jsonl");
+            string[] parts = File.ReadAllLines(day6);
+            Check(r6.Status == "filled" && parts.Length == 3 && parts.All(p => Field1s(p, "setTicks") == "5" && Field1s(p, "parts") == "3") && parts[0].Contains("\"check\":{\"status\":\"filled\",\"liveTicks\":4,") &&
+                  parts[0].EndsWith(",\"complete\":true}") && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\tfilled\t0\t0"),
+                  "tick days: the history (one trade more) checked against the live capture: filled; written whole as 3 parts with the check: " + parts[0].Substring(0, Math.Min(400, parts[0].Length)));
+            Check(ChartBridgeTicks.DaysToPull(EtToUtc(W(2026, 10, 9, 17, 6))).SequenceEqual(new[] { k7, k8 }), "tick days: a day done is not pulled again; the others are, oldest first");
+            Check(TickDisk() == FolderSize(dir) && TickDisk() > new FileInfo(day6).Length, "tick disk: the folder's size counts the .day.jsonl files waiting too: " + TickDisk() + " of " + FolderSize(dir));
+            // outside the window nothing goes
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 10, 0));
+            Check(ChartBridgeTicks.SendDays(null) == 0 && desk.AllTicks().Count == 0, "tick days: sent only in the 1 second bars' window (not at 10:00 ET)");
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 16, 30));
+            Check(ChartBridgeTicks.SendDays(null) == 3 && desk.AllTicks().All(b => b.StartsWith("/api/ticks/day {")), "tick days: the 3 parts to /api/ticks/day in the window");
+            string raw6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.raw");
+            Check(File.Exists(raw6) && !File.Exists(day6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\tfilled\t1\t0") && Logged("the raw file is kept (not packed yet)"),
+                  "tick days: The Desk stored it but did not pack it: the raw file is kept (deleted only after the pack)");
+            Check(TickDisk() == FolderSize(dir), "tick disk: counted again once the day file is deleted: " + TickDisk() + " of " + FolderSize(dir));
+            // stored and packed: the raw is deleted
+            desk.AnswerTicks = body => "{\"ok\":true,\"stored\":true,\"kept\":true,\"packed\":true}";
+            ChartBridgeTicks.FinishDay(k7, HistOf(ChartBridgeTicks.ReadAllLive(k7)));
+            ChartBridgeTicks.SendDays(null);
+            Check(!File.Exists(Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.raw")) && !File.Exists(Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.state")) && Lines(dir, "ticks/tickdays.txt").Contains(k7 + "\texact\t1\t1"),
+                  "tick days: checked (exact), stored and packed: the raw file and its state are deleted");
+            // a failed check: sent marked failed, the raw kept even when The Desk says packed
+            List<TickRec> hist8 = ChartBridgeTicks.ReadAllLive(k8).Skip(1).ToList();
+            TickCheckResult r8 = ChartBridgeTicks.FinishDay(k8, HistOf(hist8));
+            ChartBridgeTicks.SendDays(null);
+            Check(r8.Status == "failed" && File.Exists(Path.Combine(TicksDir(dir), "2026-10-08_NQ_12-26.raw")) && desk.AllTicks().Last().Contains("\"check\":{\"status\":\"failed\"") && Logged("the check FAILED"),
+                  "tick days: a failed check is sent marked failed and keeps its raw until Anthony rules");
+            // older than 7 days: listed in /diag
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 16, 16, 30));
+            Check(TickDiag().Contains("\"rawOld\":[\"2026-10-06 NQ 12-26\",\"2026-10-08 NQ 12-26\"]"), "tick days: raw files older than 7 days are flagged in /diag: " + Regex.Match(TickDiag(), "\"rawOld\":\\[[^\\]]*\\]").Value);
+            // a refused part: the day set aside, the raw kept
+            desk.StatusTicks = body => 422;
+            TickForget(); TickScan();
+            Feed(W(2026, 10, 9, 9, 30), 25000, 1); ChartBridgeTicks.WriteOnce(); TickScan();
+            ChartBridgeTicks.FinishDay("2026-10-09 NQ 12-26", HistOf(ChartBridgeTicks.ReadAllLive("2026-10-09 NQ 12-26")));
+            ChartBridgeTicks.SendDays(null);
+            Check(File.Exists(Path.Combine(TicksDir(dir), "2026-10-09_NQ_12-26.day.jsonl.refused")) && File.Exists(Path.Combine(TicksDir(dir), "2026-10-09_NQ_12-26.raw")), "tick days: a refused part sets the day aside; the raw stays");
+        }
+        finally { desk.Stop(); ChartBridgeConfig.DeskUrl = urlWas; ChartBridgeTicks.PartMaxTicks = 20000; }
+    }
+
+    static void TickFileUnstored(string dir)
+    {
+        TickFresh(dir);
+        Desk desk = new Desk();
+        string urlWas = ChartBridgeConfig.DeskUrl;
+        ChartBridgeConfig.DeskUrl = desk.Url;
+        try
+        {
+            desk.AnswerTicks = body => "{\"ok\":true,\"whole\":false,\"stored\":false,\"kept\":null,\"packed\":false}";
+            for (int i = 0; i < 3; i++) Feed(W(2026, 10, 6, 9, 30).AddSeconds(i), 25000, 1);
+            for (int i = 0; i < 3; i++) Feed(W(2026, 10, 7, 9, 30).AddSeconds(i), 25000, 1);
+            ChartBridgeTicks.WriteOnce(); TickScan();
+            string k6 = "2026-10-06 NQ 12-26", k7 = "2026-10-07 NQ 12-26";
+            ChartBridgeTicks.PartMaxTicks = 2;
+            ChartBridgeTicks.FinishDay(k6, HistOf(ChartBridgeTicks.ReadAllLive(k6)));
+            string day6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.jsonl"), sent6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.sent");
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 16, 30));
+            int n1 = ChartBridgeTicks.SendDays(null);
+            Check(n1 == 2 && File.Exists(day6) && !File.Exists(sent6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t0\t0") && Logged("did not store it; the day file is kept and sent again in 15 minutes (try 1 of 3)"),
+                  "tick days: the last part answered without stored true: the day file is KEPT (not deleted), to be sent again from its first part");
+            Check(ChartBridgeTicks.SendDays(null) == 0, "tick days: not sent again at once (15 minutes later)");
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 16, 46));
+            int before = desk.AllTicks().Count;
+            Check(ChartBridgeTicks.SendDays(null) == 2 && desk.AllTicks().Count == before + 2 && desk.AllTicks()[before].Contains("\"part\":1,") && File.Exists(day6),
+                  "tick days: sent again from part 1 after 15 minutes (The Desk ignores the parts it has); not stored: kept again");
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 17, 2));
+            ChartBridgeTicks.SendDays(null);
+            Check(!File.Exists(day6) && File.Exists(day6 + ".unstored") && File.Exists(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.raw")) && TickDiag().Contains("did not store the day, 3 times"),
+                  "tick days: after 3 tries the day is set aside (.unstored, kept), the raw is kept, /diag says so");
+            // stored on the second try: then the day file goes (the raw stays: not packed)
+            ChartBridgeTicks.FinishDay(k7, HistOf(ChartBridgeTicks.ReadAllLive(k7)));
+            string day7 = Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.day.jsonl");
+            ChartBridgeTicks.SendDays(null);
+            Check(File.Exists(day7), "tick days: not stored the first time: kept");
+            desk.AnswerTicks = body => "{\"ok\":true,\"whole\":true,\"stored\":true,\"kept\":true,\"packed\":false}";
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 17, 20));
+            ChartBridgeTicks.SendDays(null);
+            Check(!File.Exists(day7) && File.Exists(Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.raw")) && Lines(dir, "ticks/tickdays.txt").Contains(k7 + "\texact\t1\t0"),
+                  "tick days: stored on the next try: the day file deleted only now; the raw kept (not packed)");
+        }
+        finally { desk.Stop(); ChartBridgeConfig.DeskUrl = urlWas; ChartBridgeTicks.PartMaxTicks = 20000; }
+    }
+
+    static void TickFilePull(string dir)
+    {
+        DateTime now = EtToUtc(W(2026, 10, 6, 17, 6));
+        Desk desk = Fresh(dir, "NQ", now);
+        try
+        {
+            TickFresh(dir);
+            ChartBridgeBars.ReadConfig("bars", "on");
+            ChartBridgeBars.ReadConfig("barsRoots", "NQ");
+            List<DateTime> walls = new List<DateTime>();
+            for (int i = 0; i < 50; i++) walls.Add(W(2026, 10, 6, 9, 30).AddSeconds(i * 7).AddMilliseconds(120));
+            foreach (DateTime w in walls) Feed(w, 25000, 1);
+            ChartBridgeTicks.WriteOnce();
+            answerTicks = r =>
+            {
+                Bars b = new Bars();
+                b.Add(NtOf(W(2026, 10, 5, 12, 0)), 24990, 24990, 24990, 24990, 1); b.Bids.Add(0); b.Asks.Add(0);   // the day before: left out
+                foreach (DateTime w in walls) { b.Add(NtOf(w), 25000, 25000, 25000, 25000, 1); b.Bids.Add(24999.75); b.Asks.Add(25000); }
+                return b;
+            };
+            // 10:00 ET: trading hours, no request at all
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 7, 10, 0));
+            int m0 = MadeCount();
+            Check(!ChartBridgeTicks.PlanDay(null) && TicksMade(m0).Count == 0, "tick pull: never in trading hours (10:00 ET): no request");
+            ChartBridgeBars.UtcNow = () => now;
+            ChartBridgeBars.CatchUpSessions = 1;
+            m0 = MadeCount();
+            ChartBridgeBars.PlanOnce(null);
+            List<BarsRequest> asked = TicksMade(m0);
+            BarsRequest r0 = asked.FirstOrDefault();
+            DateTime ou, cu; ChartBridgeBars.SessionUtc(D(2026, 10, 6), out ou, out cu);
+            TimeZoneInfo z = NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo;
+            Check(asked.Count == 1 && r0.Instrument.FullName == "NQ 12-26" && r0.From == TimeZoneInfo.ConvertTimeFromUtc(ou, z) && r0.To == TimeZoneInfo.ConvertTimeFromUtc(cu, z) && r0.BarsPeriod.BarsPeriodType == BarsPeriodType.Tick,
+                  "tick pull: after the close, one tick request through the gate, from the session's open to its close (NinjaTrader's time): " + (r0 == null ? "none" : r0.From + " to " + r0.To));
+            Check(Lines(dir, "ticks/tickdays.txt").Contains("2026-10-06 NQ 12-26\texact\t0\t0") && File.Exists(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.jsonl")),
+                  "tick pull: the history matches the live capture second by second: exact, queued for The Desk");
+            m0 = MadeCount();
+            ChartBridgeBars.PlanOnce(null);
+            Check(TicksMade(m0).Count == 0, "tick pull: a day done is not asked for again");
+            Check(((string)Priv("DiagJson")).Contains("\"tickFile\":{\"on\":true,"), "tick file: /diag has tickFile");
+        }
+        finally { desk.Stop(); ChartBridgeTicks.Stop(); ChartBridgeTicks.ResetConfig(); typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, false); }
     }
 }

@@ -59,11 +59,11 @@ test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set 
 test('0.6.9: the 1 second bars: NQ and MNQ, through the gate, only 16:15 to 18:00 ET on weekdays and on the weekend, their own path and queue', () => {
   const b = read('ChartBridgeBars.cs');
   assert.match(b, /private static string\[\] DefaultRoots1s\(\) \{ return new string\[\] \{ "NQ", "MNQ" \}; \}/);
-  assert.match(body(b, 'private static void Plan1s('), /nowEt = NowEt\(\);[^\n]*\n\s*if \(!In1sStartWindow\(nowEt\)\) \{ state1s = "waiting: 1 second bars go 16:15 to 18:00 ET/);
-  assert.match(body(b, 'private static void Plan1s('), /if \(!In1sStartWindow\(NowEt\(\)\)\)[^\n]*\n\s*Outcome o = Fetch1s\(j, stopping\);/, 'the clock read again right before a request');
+  assert.match(body(b, 'private static bool Plan1s('), /nowEt = NowEt\(\);[^\n]*\n\s*if \(!In1sStartWindow\(nowEt\)\) \{ state1s = "waiting: 1 second bars go 16:15 to 18:00 ET/);
+  assert.match(body(b, 'private static bool Plan1s('), /if \(!In1sStartWindow\(NowEt\(\)\)\)[^\n]*\n\s*Outcome o = Fetch1s\(j, stopping\);/, 'the clock read again right before a request');
   assert.match(b, /public static TimeSpan StartMargin1s = TimeSpan\.FromMinutes\(10\);/);
   assert.match(body(b, 'public static bool In1sWindow('), /return tod >= new TimeSpan\(16, 15, 0\) && tod < TimeSpan\.FromHours\(18\);/);
-  assert.match(body(b, 'private static void Plan1s('), /return;   \/\/ one a pass/);
+  assert.match(body(b, 'private static bool Plan1s('), /return true;   \/\/ one a pass/);
   assert.match(body(b, 'private static Outcome Fetch1s('), /ChartBridgeServer\.GateBars\("1s " \+ j\.Key, inst, fromNt, toNt, Request1sTimeoutMs, stopping, t, bars => BuildSeconds\(bars, fromMs, toMs\)\)/);
   assert.match(b, /"\/api\/bars-1s"/);
   assert.match(body(b, 'public static void Flush(Func<bool> stopping)\n        {\n            if (!ChartBridgeBars.OneSecondOn)'), /if \(!ChartBridgeBars\.In1sWindow\(/, 'the sends keep the same window');

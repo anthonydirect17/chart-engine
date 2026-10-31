@@ -406,6 +406,9 @@ public static class WindowHarness
             MidSession();
             BackfillWaitsAndRetries();
             GateAfterTimeout();
+            GateLateAtOpen(Et(2026, 9, 29, 18, 5, 0), true);
+            GateLateAtOpen(Et(2026, 9, 29, 9, 28, 0), false);   // re-review 3: 09:28 is inside the quiet time (from 09:25)
+            WindowLateQuietTimes();
             StuckStrandsNothing();
             WindowCap();
             TimeoutRace();
@@ -773,10 +776,72 @@ public static class WindowHarness
         BarsRequest bf = null;
         Check(cb < 0 && !Books().Contains("\"stuck\":\"window") && WaitFor(() => (bf = Find(m0, r => IsTrades(r) && ByDate(r))) != null, 3000),
             "X1: its late answer is dropped at once (not copied: no callback time), and then the queued backfill goes");
+        Check(!Sent().Any(x => x.Contains("\"type\":\"historyLate\"")), "item 12: the late answer at 11:00 ET (inside 09:25 to 16:00): the page is NOT told to load again");
         if (bf != null) bf.Answer(Answer(tape, 0, 800), ErrorCode.NoError);
         WaitFor(() => Books().Contains("\"state\":\"done\""), 3000);
         ChartBridgeServer.BackfillOn = false; ChartBridgeServer.WindowTimeoutMs = 120000; ChartBridgeServer.WindowFirstGuess = 200000;
         ChartBridgeServer.ResetBooks(DateTime.MinValue);
+    }
+
+    // Sunday 11-01, item 12: at the session open (18:05 ET) the window is not answered in time, the page goes live without tick
+    // history; NinjaTrader's late answer frees the gate and the page is told ONCE to load again ("historyLate", its sub); its new
+    // load asks through the gate at once (the failure's retry delay does not hold it back) and gets the trades. A second late
+    // answer within 5 minutes does not tell the page again.
+    static void WindowLateQuietTimes()
+    {
+        Func<int, int, int, bool> q = (d, h, mi) => ChartBridgeServer.InWindowLateQuiet(new DateTime(2026, 9, d, h, mi, 0));
+        Check(!q(29, 9, 24) && q(29, 9, 25) && q(29, 9, 28) && q(29, 15, 59) && !q(29, 16, 0) && !q(29, 18, 5) && !q(26, 9, 28),
+              "item 12: no reload message 09:25 to 16:00 ET on a weekday (5 minutes before the open), any time on the weekend or outside");
+    }
+
+    static void GateLateAtOpen(DateTime t0, bool told)
+    {
+        List<Trade> tape = Walk(t0, 3000, 82, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddMinutes(-10));
+        ChartBridgeServer.BackfillOn = false;
+        int retryWas = ChartBridgeServer.WindowRetryMs;
+        ChartBridgeServer.WindowTimeoutMs = 300; ChartBridgeServer.WindowFirstGuess = 30000; ChartBridgeServer.WindowRetryMs = 600000;
+        try
+        {
+            lock (sent) sent.Clear();
+            int m0 = MadeCount();
+            Sub(client, "811", 2, true);
+            AnswerMinutes(m0);
+            BarsRequest w = null;
+            WaitFor(() => (w = Find(m0, r => IsTrades(r) && ByCount(r))) != null);
+            Live(tape, 0, 300);
+            string at = t0.ToString("HH:mm") + " (NinjaTrader time)";
+            Check(WaitFor(() => Ready(Sent(), "811"), 3000) && Sent().Any(x => x.Contains("Tick history failed")), "item 12: at " + at + " the window is not answered in time: the page goes live without tick history");
+            Check(w != null, "item 12: the window request went out (by count)");
+            if (w == null) return;
+            w.Answer(Answer(tape, 0, 300), ErrorCode.NoError);   // the late answer
+            if (!told)
+            {
+                Thread.Sleep(500);
+                Check(!Sent().Any(x => x.Contains("\"type\":\"historyLate\"")), "item 12: the late answer at " + at + " (09:28 ET, inside 09:25 to 16:00): the page is NOT told to load again");
+                return;
+            }
+            Check(WaitFor(() => Sent().Any(x => x.Contains("{\"type\":\"historyLate\",\"root\":\"MNQ\",\"sub\":811}")), 3000) && Sent().Count(x => x.Contains("\"type\":\"historyLate\"")) == 1,
+                  "item 12: the late answer frees the gate and the page is told once to load again (historyLate, its sub 811)");
+            int m1 = MadeCount();
+            Sub(client, "812", 2, true);   // what the page does on historyLate
+            AnswerMinutes(m1);
+            BarsRequest w2 = null;
+            Check(WaitFor(() => (w2 = Find(m1, r => IsTrades(r) && ByCount(r))) != null, 3000), "item 12: the new load asks NinjaTrader again through the gate at once (the 10 minute retry delay of the failure does not hold it back)");
+            if (w2 == null) return;
+            BarsRequest w2late = w2;
+            Live(tape, 300, 400);
+            Check(WaitFor(() => Ready(Sent(), "812"), 3000), "item 12: ... and goes live (its window not answered in time either)");
+            w2late.Answer(Answer(tape, 0, 400), ErrorCode.NoError);   // late again
+            Thread.Sleep(500);
+            Check(Sent().Count(x => x.Contains("\"type\":\"historyLate\"")) == 1, "item 12: a second late answer within 5 minutes does not tell the page again (no reload loop)");
+        }
+        finally
+        {
+            ChartBridgeServer.WindowTimeoutMs = 120000; ChartBridgeServer.WindowFirstGuess = 200000; ChartBridgeServer.WindowRetryMs = retryWas;
+            ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        }
     }
 
     // S-E: the backfills wait for the feed to be up a while (BackfillStartMs from the first live trade) and go in profileRoots
