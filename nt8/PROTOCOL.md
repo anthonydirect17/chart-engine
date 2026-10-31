@@ -209,7 +209,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
 | `pcClock` | the fields of hello's `pcClock` (0.5.6, see Delay readout): `checked`, then `offsetMs`, `rttMs`, `atUtcMs`, `server`, or `why`, `server` | to every page when a check of this PC's clock answers (every 5 minutes), when it changes to no answer, and when the PC clock steps by more than 250 ms; in the order lane. A page can get one before its `hello` (a page is told from the moment it connects); `hello` then carries the state as it is, and a check that ends while `hello` is built is sent again after it |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page; since 0.3.7 also a refused `htf` or `weekProfile` request (`warn`, "ChartBridge refused a htf message: why") |
-| `historyLate` | `root`, `sub` (0.6.8) | once, when a load that went ready on stand-in history gets NinjaTrader's minute answer after all: the page subscribes again (see The minute book) |
+| `historyLate` | `root`, `sub` (0.6.8) | once, when a load that went ready on stand-in history gets NinjaTrader's minute answer after all: the page subscribes again (see The minute book); also (Sunday 11-01) once when a tick chart load got no tick history because NinjaTrader had not answered and that late answer has freed the gate, outside 09:30 to 16:00 ET (see One unanswered request) |
 | `settlement` | `root`, `p` (null when none is known), `date` (the trading date it settles, `yyyy-MM-dd`) (0.3.7) | when the prior settlement changes: a value for that date comes in, or a new session starts at 18:00 ET and the day before becomes the prior |
 | `htf` | `root`, `tf` (`4h`, `1D`, `1W`), `id` (the request's, or null), `name` (the contract, or null with an error), `bars`: `[[t,o,h,l,c,v], ...]` oldest first, the last one forming, `error` (null, or why there are no bars) (0.3.7) | the answer to an `htf` request |
 | `htfBar` | `root`, `tf`, `bars`: one or two `[t,o,h,l,c,v]` (0.3.7) | while a page has asked for that root and timeframe, at most once a second when its forming bar changed: the forming bar, after the closed bar's final values when a new bar began |
@@ -701,6 +701,12 @@ session waits for NinjaTrader, which has not answered an earlier tick request"),
 its state is back ("queued", or for a retry "failed once (...), asked again in 60 s") and it runs as usual. An answer that
 claimed its request at the time limit has 30 s more to finish its copy; past that it counts as unanswered (one Output line)
 until the copy ends. Minute charts load as usual.
+**Asked again once (Sunday 11-01, item 12).** A Range or seconds load that went live with no tick history because NinjaTrader
+had not answered (its own window timed out, or the gate was stuck on an earlier request; typical at the session open) is told
+once to load again (`historyLate`, its `sub`) when that late answer frees the gate; the page subscribes again and the new load
+asks through the gate as every load does (the failed window's 60 s retry delay does not hold it back). Never from 09:30 to
+16:00 New York on a weekday (a history note says so; a reload loads again as usual), at most once a page and instrument in 5
+minutes, and only a load that is still the page's: no reload loop.
 Orders and Flatten are never affected. `/diag` `gate.stuck` names the request, `stuckSinceUtcMs` says since when, and a
 waiting backfill's `state` starts "waiting:". Only the request that made the gate stuck frees it. Stopping ChartBridge (a
 compile, or closing NinjaTrader) clears the stuck request and marks the gate stopped until the next start: no tick request

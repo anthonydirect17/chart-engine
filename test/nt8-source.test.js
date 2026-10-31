@@ -588,7 +588,7 @@ test('0.3.5: every tick chart gets the served window by count, one request at a 
   assert.match(serve, /else if \(backoff\) none = true;/);
   // review 4 B1: a load never waits on a stuck gate (it goes live with the reason); S4: a gapped window is kept unless the ask can go now
   assert.match(serve, /if \(book\.WindowAsking && stuck == null\) \{ book\.WindowWaiters\.Add\(L\);/);
-  assert.match(serve, /if \(stuck != null\) \{ none = true; if \(L\.Diag != null\) L\.Diag\.Error = StuckNote\(stuck\); \}/);
+  assert.match(serve, /if \(stuck != null\) \{ none = true; if \(L\.Diag != null\) L\.Diag\.Error = StuckNote\(stuck\); NoteWindowLate\(L\); \}/);   // item 12: told once to load again when the late answer frees the gate
   assert.match(serve, /book\.CacheGap && stuck == null && !backoff && !book\.WindowAsking/);
   assert.match(bodyOf(code, 'private static bool ServeFromCache('), /view = book\.Cache\.Snapshot\(\); book\.Cache\.Served\+\+; L\.Client\.Pending\.Clear\(\);/);
   const askw = bodyOf(code, 'private static void AskWindow(');
@@ -632,7 +632,7 @@ test('0.3.5: every tick chart gets the served window by count, one request at a 
   // review 5 (found in its race2 probe): a late answer during the marking never frees the gate before it is marked stuck
   assert.match(code, /private static bool LateAnswer\(GateJob j\) \{ return Interlocked\.CompareExchange\(ref j\.State, 4, 2\) != 2; \}/);
   assert.match(bodyOf(code, 'private static void GateLoop('), /GateTimedOut\(j\);\s*if \(Interlocked\.CompareExchange\(ref j\.State, 3, 2\) != 2\) GateUnstuck\(/);
-  assert.match(askw, /j\.OnStuck = what => WindowFailed\(book, gen, StuckNote\(what\), false\);/);
+  assert.match(askw, /j\.OnStuck = what => WindowFailed\(book, gen, StuckNote\(what\), false, true\);/);   // item 12: waitsOnNt
   assert.ok(!/RequestQuotes/.test(serve + askw + bodyOf(code, 'private static void OnWindowAnswer(') + bodyOf(code, 'private static void FinishWindow(')), 'no quote request for a window');
   // one tick request to NinjaTrader at a time: windows first, a backfill only with nothing else out (no minute tail either)
   const next = bodyOf(code, 'private static GateJob GateNext(');

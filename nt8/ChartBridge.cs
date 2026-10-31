@@ -2889,6 +2889,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool FromKept;                    // re-review B: answered from NinjaTrader's fresh kept answer (no request)
             public DateTime AnsweredNt = DateTime.MaxValue;   // NinjaTrader's clock when its minute answer came
             public int LateSent;                     // "historyLate" sent (once)
+            public int WindowLateSent;               // Sunday 11-01 (item 12): told once to load again after a late tick answer
             public int WaitNoted;                    // re-review C: the first time limit passed with nothing to stand in
             public DateTime HistoryFrom;             // the minute request's start (kept answers are cut to it)
             public CancellationToken Stop;           // ChartBridge's run: a timer or a late answer after a stop does nothing
@@ -3649,7 +3650,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (book.Cache == null)
                 {
                     if (book.WindowAsking && stuck == null) { book.WindowWaiters.Add(L); if (L.Diag != null) L.Diag.Asked = "shared"; return; }   // the same answer
-                    if (stuck != null) { none = true; if (L.Diag != null) L.Diag.Error = StuckNote(stuck); }   // X1, review 4 B1: never waits on it
+                    if (stuck != null) { none = true; if (L.Diag != null) L.Diag.Error = StuckNote(stuck); NoteWindowLate(L); }   // X1, review 4 B1: never waits on it
                     else if (backoff) none = true;
                     else
                     {
@@ -3691,8 +3692,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void AskWindow(RootBook book, Instrument inst, int gen, int count, int round)
         {
             GateJob j = new GateJob { Kind = "window", Root = book.Root, Book = book, TimeoutMs = WindowTimeoutMs };
-            j.OnTimeout = () => WindowFailed(book, gen, "no answer from NinjaTrader in " + (WindowTimeoutMs / 1000) + " s", true);
-            j.OnStuck = what => WindowFailed(book, gen, StuckNote(what), false);   // review 4 B1: never left waiting on a stuck gate
+            j.OnTimeout = () => WindowFailed(book, gen, "no answer from NinjaTrader in " + (WindowTimeoutMs / 1000) + " s", true, true);
+            j.OnStuck = what => WindowFailed(book, gen, StuckNote(what), false, true);   // review 4 B1: never left waiting on a stuck gate
             j.OnDropped = () => WindowFailed(book, gen, "ChartBridge stopped before the request went out", false);   // lf7 N1
             j.Start = done =>
             {
@@ -3773,7 +3774,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // A window that failed: its loads go live with no trades (their charts start from now), and no new ask for a minute.
-        private static void WindowFailed(RootBook book, int gen, string why, bool backoff)
+        private static void WindowFailed(RootBook book, int gen, string why, bool backoff) { WindowFailed(book, gen, why, backoff, false); }
+        // waitsOnNt: it failed because NinjaTrader had not answered a tick request (its own or an earlier one): its loads may be told
+        // to load again once that late answer frees the gate (WindowLateRetry, item 12).
+        private static void WindowFailed(RootBook book, int gen, string why, bool backoff, bool waitsOnNt)
         {
             List<object> waiters;
             lock (book.Sync)
@@ -3788,6 +3792,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (object o in waiters)
             {
                 Load w = (Load)o;
+                if (waitsOnNt) NoteWindowLate(w);
                 if (w.Diag != null) w.Diag.Error = why;
                 if (Current(w)) w.HeadSent.ContinueWith(delegate { FinishWindow(w, null); }, TaskScheduler.Default);
             }
@@ -4039,6 +4044,56 @@ namespace NinjaTrader.NinjaScript.AddOns
             Log(what + ": NinjaTrader answered after it was given up; not used. Tick requests go out again");
             foreach (GateJob b in backfills) BackfillWaits(b.Book, null);   // back to the state they had; they run as usual
             GateKick();
+            WindowLateRetry();   // item 12: the loads that got no tick window meanwhile are told once to load again
+        }
+
+        // Sunday 11-01, item 12 (decided 2026-11-01): a tick chart load whose served window got nothing because NinjaTrader had not
+        // answered a tick request (its own window timed out, or the gate was stuck on an earlier request; typical at the session
+        // open) is told ONCE to load again ("historyLate", as 0.6.8's minute history) when that late answer frees the gate. The new
+        // load asks through the gate as every load does (the failure's retry delay does not hold it back). Never 09:30 to 16:00 New
+        // York time on a weekday (no new tick request in trading hours from this); at most once a page and instrument in
+        // WindowLateGapMs; a load no longer the page's is skipped.
+        public static int WindowLateGapMs = 300000;
+        private static readonly List<Load> WindowLateLoads = new List<Load>();
+        private static readonly Dictionary<string, double> WindowLateAt = new Dictionary<string, double>();
+        private static void NoteWindowLate(Load L)
+        {
+            if (L == null || !L.Window || L.Agent) return;
+            lock (WindowLateLoads) { if (!WindowLateLoads.Contains(L)) WindowLateLoads.Add(L); if (WindowLateLoads.Count > 500) WindowLateLoads.RemoveAt(0); }
+        }
+        public static bool InWindowLateQuiet(DateTime et)
+        {
+            if (et.DayOfWeek == DayOfWeek.Saturday || et.DayOfWeek == DayOfWeek.Sunday) return false;
+            TimeSpan tod = et.TimeOfDay;
+            return tod >= new TimeSpan(9, 30, 0) && tod < new TimeSpan(16, 0, 0);
+        }
+        private static void WindowLateRetry()
+        {
+            List<Load> loads;
+            lock (WindowLateLoads) { loads = new List<Load>(WindowLateLoads); WindowLateLoads.Clear(); }
+            if (loads.Count == 0) return;
+            DateTime et = TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(NowNt()), ChartBridgeTime.Eastern);
+            if (InWindowLateQuiet(et))
+            {
+                foreach (string root in loads.Select(x => x.Root).Distinct()) HistoryNote(root, "the late tick answer freed the gate inside 09:30 to 16:00 ET: tick charts are not told to load again (they load again on a reload)");
+                return;
+            }
+            double now = ChartBridgeTime.NowUtcMs(), was;
+            foreach (Load L in loads)
+            {
+                if (L.Stop.IsCancellationRequested || !Current(L) || Interlocked.Exchange(ref L.WindowLateSent, 1) != 0) continue;
+                string key = L.Client.Id.ToString(CultureInfo.InvariantCulture) + "|" + L.Root;
+                lock (WindowLateAt)
+                {
+                    if (WindowLateAt.TryGetValue(key, out was) && now - was < WindowLateGapMs) { HistoryNote(L.Root, "the late tick answer freed the gate, but the page was told to load again less than " + (WindowLateGapMs / 60000) + " minutes ago: not told again"); continue; }
+                    WindowLateAt[key] = now;
+                    if (WindowLateAt.Count > 500) WindowLateAt.Clear();
+                }
+                RootBook book = BookOf(L.Root, L.Inst);
+                lock (book.Sync) book.WindowFailedMs = -1;   // the failure's retry delay does not hold back the one new ask
+                L.Client.SendData("{\"type\":\"historyLate\",\"root\":" + CbJson.Str(L.Root) + L.SubJson + "}");
+                HistoryNote(L.Root, "NinjaTrader's late tick answer freed the gate: the page that got no tick history was told to load again (once)");
+            }
         }
         // A queued backfill's label while the gate is stuck (review 4 S2; a queued retry too, review 5 S1): it waits, it is not
         // "building"; null: back to the state it had (queued, or failed once and asked again).
@@ -4226,6 +4281,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (GateLock) { GateWindows.Clear(); GateBackfills.Clear(); GateBarJobs.Clear(); GateHtfJobs.Clear(); gateStuck = null; gateStuckJob = null; tailsOut = 0; gateStopped = false; }   // the harness: as after a start
             HtfReset();
             lock (WeekCache) WeekCache.Clear();
+            lock (WindowLateLoads) WindowLateLoads.Clear();
+            lock (WindowLateAt) WindowLateAt.Clear();
             Interlocked.Exchange(ref listeningSinceUtcTicks, listeningSinceUtc.Ticks);
             Interlocked.Exchange(ref feedUpSinceUtcTicks, listeningSinceUtc.Ticks); Interlocked.Exchange(ref feedDown, 0);
             Interlocked.Exchange(ref firstTradeUtcTicks, 0);
