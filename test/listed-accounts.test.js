@@ -99,3 +99,6 @@ test('Sunday A: the feed tells The Desk once when the accounts arrive, again onl
   } finally { global.WebSocket = G; F.feed.stop(); }
 });
 
+test('1.40.0: a name The Desk would refuse (spaces at an end, a control character) is left out, never the whole list', () => {
+  assert.deepEqual(AC.listedNames([{ name: 'EVAL-A' }, { name: 'EVAL-B ' }, { name: ' EVAL-C' }, { name: 'EVAL\u0007D' }]), ['EVAL-A']);
+});

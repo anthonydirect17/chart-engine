@@ -403,7 +403,8 @@ function notListedWords(r) {
    account shows on Prop > Accounts before its first fill. Sim and Playback names are left out; at most 200 names of 1 to 64 characters. */
 const LISTED_MAX = 200;
 const listedNames = accounts => [...new Set((Array.isArray(accounts) ? accounts : []).map(a => (a && typeof a.name === 'string' ? a.name : ''))
-  .filter(n => n.length >= 1 && n.length <= 64 && !/^\s*(sim|playback)/i.test(n)))].sort().slice(0, LISTED_MAX);
+  .filter(n => n.length >= 1 && n.length <= 64 && n === n.trim() && !/[\x00-\x1f\x7f]/.test(n)   // The Desk refuses the whole list for one such name
+    && !/^\s*(sim|playback)/i.test(n)))].sort().slice(0, LISTED_MAX);
 /**
  * Whether to tell The Desk the listed accounts now. st: { desk (env.desk), got (ChartBridge's accounts arrived), accounts, lastKey (the
  * names of the last list The Desk answered 2xx for, joined), stopped (a 404 this page load: an older Desk), busy (one in flight) }.
