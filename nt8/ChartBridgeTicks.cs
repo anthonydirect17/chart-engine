@@ -168,14 +168,32 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Interlocked.Increment(ref queued) > QueueMax)
             {
                 Interlocked.Decrement(ref queued);
-                Interlocked.Increment(ref droppedQueue); Interlocked.Increment(ref lostTotal);
+                Interlocked.Increment(ref droppedQueue);
+                NoteLost((long)Math.Floor(utcMs), (long)Math.Floor(utcMs), 1);   // the drop path only: three more counters, no lock
                 return;
             }
             Queue.Enqueue(new TickRec { U = (long)Math.Floor(utcMs), P = price, V = volume, S = side, M = method, Contract = contract, Tick = tick });
         }
 
-        // A feed drop while the market is open (ChartBridgeServer.FeedDropped): the next chunk says the capture may have a hole.
-        public static void NoteFeedDrop() { if (capturing) Interlocked.Increment(ref feedDrops); }
+        // A feed drop while the market is open (ChartBridgeServer.FeedDropped): the next chunk of every file of the session it falls
+        // in says the capture may have a hole (not the hot path: a feed drop is rare, so its time is read here).
+        public static void NoteFeedDrop()
+        {
+            if (!capturing) return;
+            DropTimes.Enqueue((long)Math.Round(ChartBridgeTime.UtcMs(ChartBridgeBars.UtcNow())));
+            Interlocked.Increment(ref feedDrops);
+        }
+
+        // Trades lost (a full queue, a full disk) between the UTC ms first and last: counted, and the times kept so the drops go to the
+        // session(s) they fall in (TakeDrops).
+        private static void NoteLost(long first, long last, long n)
+        {
+            Interlocked.CompareExchange(ref firstLostU, first, 0);
+            Interlocked.Exchange(ref lastLostU, last);
+            Interlocked.Add(ref lostTotal, n);
+        }
+        private static long firstLostU, lastLostU;
+        private static readonly ConcurrentQueue<long> DropTimes = new ConcurrentQueue<long>();
 
         // ---------------------------------------------------------- the files of one session and contract
         private class Cut { public int Seq; public long From, To; public int N; public long Lost, Gaps, BidAsk, TickRule, None; }
@@ -184,6 +202,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             public string Key, Session, Contract, Raw, State, Run;
             public double Tick = 0.25;
             public long CutTo;
+            public long LostSeen, GapsSeen;   // the session's drops (SessionDrops) already put on a chunk of this file, this run
+            public bool MadeHere, CutThisRun; // the files made by this run; a cut made by this run
             public readonly List<Cut> Cuts = new List<Cut>();
             public readonly HashSet<int> Sent = new HashSet<int>(), Aside = new HashSet<int>();
         }
@@ -215,7 +235,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (make)
                 {
                     Directory.CreateDirectory(Folder);
-                    k.Run = NewId(); k.Tick = tick > 0 ? tick : 0.25;
+                    k.Run = NewId(); k.Tick = tick > 0 ? tick : 0.25; k.MadeHere = true;
                     File.WriteAllLines(k.State, new string[] { "run " + k.Run, "tick " + k.Tick.ToString("R", Inv), "contract " + contract, "session " + session });
                 }
                 else return null;
@@ -255,7 +275,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (batch.Count == 0) return 0;
             if (diskBytes > MaxBytes)
             {
-                Interlocked.Add(ref droppedDisk, batch.Count); Interlocked.Add(ref lostTotal, batch.Count);
+                Interlocked.Add(ref droppedDisk, batch.Count); NoteLost(batch[0].U, batch[batch.Count - 1].U, batch.Count);
                 error = "the ticks folder is over tickFileMaxMB (" + (MaxBytes / 1048576) + " MB): trades are not written";
                 return 0;
             }
@@ -296,7 +316,63 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- 2. chunks
-        private static long lostCut, gapsCut;
+        // Drops go to the session they fall in: per session the running totals {lost, gaps}; each file takes the part it has not put
+        // on a chunk yet (KeyFiles.LostSeen, GapsSeen) at its next cut, and only when that cut is made, so a file with nothing to cut
+        // keeps them for the cut after (a feed down for a while has nothing to cut). Every file of the session takes them (the roll
+        // week has two contracts; a drop is not known to one). lostTaken: the lost trades already given to sessions.
+        private static readonly Dictionary<string, long[]> SessionDrops = new Dictionary<string, long[]>();
+        private static long lostTaken;
+        private static DateTime runStartUtc = DateTime.MinValue;
+
+        // The session a UTC ms falls in, "yyyy-MM-dd", or null in the break or the weekend.
+        public static string SessionOfMs(long u)
+        {
+            DateTime et = TimeZoneInfo.ConvertTimeFromUtc(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMilliseconds(u), ChartBridgeTime.Eastern);
+            DateTime d = ChartBridgeBars.SessionDateOfEt(et);
+            return d == DateTime.MinValue ? null : d.ToString("yyyy-MM-dd", Inv);
+        }
+
+        private static long[] DropsOf(string session)
+        {
+            long[] a;
+            if (!SessionDrops.TryGetValue(session, out a)) { a = new long[2]; SessionDrops[session] = a; }
+            return a;
+        }
+
+        // The drops counted since the last cut, put on their sessions' totals (the sender thread, inside CutOnce).
+        private static void TakeDrops()
+        {
+            long total = Interlocked.Read(ref lostTotal), lost = total - lostTaken;
+            if (lost > 0)
+            {
+                long last = Interlocked.Read(ref lastLostU), first = Interlocked.Exchange(ref firstLostU, 0);
+                if (first == 0) first = last;
+                string a = SessionOfMs(first), b = SessionOfMs(last);
+                lock (Sync)
+                {
+                    if (a != null) DropsOf(a)[0] += lost;
+                    if (b != null && b != a) DropsOf(b)[0] += lost;
+                }
+                lostTaken = total;
+            }
+            long at;
+            while (DropTimes.TryDequeue(out at))
+            {
+                string s = SessionOfMs(at);
+                if (s != null) lock (Sync) DropsOf(s)[1]++;
+            }
+        }
+
+        // A file this run did not make, or made after its session had opened, may miss trades from before this run's first cut: its
+        // first cut this run says gaps 1 or more (a restart is never vouched for; The Desk does not vouch from the chunks before).
+        private static bool MayMissBefore(KeyFiles k)
+        {
+            if (!k.MadeHere) return true;
+            DateTime s;
+            if (!DateTime.TryParseExact(k.Session, "yyyy-MM-dd", Inv, DateTimeStyles.None, out s)) return true;
+            DateTime ou, cu; ChartBridgeBars.SessionUtc(s, out ou, out cu);
+            return runStartUtc > ou;
+        }
 
         // Reads the raw file's bytes [from, to) as trades.
         private static List<TickRec> ReadRange(KeyFiles k, long from, long to)
@@ -342,15 +418,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Cuts the bytes after the last cut, to the last whole line, into chunks of at most ChunkMaxTicks. Public for the harness.
         public static int CutOnce()
         {
+            TakeDrops();
             List<KeyFiles> keys; lock (Sync) keys = Keys.Values.ToList();
-            long lost = Interlocked.Read(ref lostTotal) - lostCut, gaps = Interlocked.Read(ref feedDrops) - gapsCut;
-            lostCut += lost; gapsCut += gaps;
             int made = 0;
             foreach (KeyFiles k in keys)
             {
                 if (!File.Exists(k.Raw)) continue;
                 long len = new FileInfo(k.Raw).Length;
                 if (len <= k.CutTo) continue;
+                long[] tot; lock (Sync) { long[] d = DropsOf(k.Session); tot = new long[] { d[0], d[1] }; }
+                long lost = tot[0] - k.LostSeen, gaps = tot[1] - k.GapsSeen;
+                if (!k.CutThisRun && MayMissBefore(k)) gaps = Math.Max(gaps, 1);
                 byte[] buf = new byte[len - k.CutTo];
                 using (FileStream fs = new FileStream(k.Raw, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 {
@@ -373,7 +451,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (n >= ChunkMaxTicks) { notes.Add(CutLine(k, start, pos, n, lost, gaps, ba, tr, no)); lost = gaps = 0; start = pos; n = 0; ba = tr = no = 0; made++; }
                 }
                 if (n > 0) { notes.Add(CutLine(k, start, pos, n, lost, gaps, ba, tr, no)); lost = gaps = 0; made++; }
-                if (notes.Count > 0) File.AppendAllLines(k.State, notes);
+                if (notes.Count > 0)
+                {
+                    File.AppendAllLines(k.State, notes);
+                    lock (Sync) { k.LostSeen = tot[0]; k.GapsSeen = tot[1]; k.CutThisRun = true; }   // taken up only now a cut is made
+                }
             }
             return made;
         }
@@ -680,7 +762,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<TickRec> live = ReadAllLive(k.Key);
             TickCheckResult chk = TickCheck.Compare(live, hist.Ticks);
             long liveLost = 0, liveGaps = 0;
-            lock (Sync) foreach (Cut c in k.Cuts) { liveLost += c.Lost; liveGaps += c.Gaps; }
+            lock (Sync)
+            {
+                foreach (Cut c in k.Cuts) { liveLost += c.Lost; liveGaps += c.Gaps; }
+                long[] d = DropsOf(k.Session); liveLost += Math.Max(0, d[0] - k.LostSeen); liveGaps += Math.Max(0, d[1] - k.GapsSeen);   // not on a chunk yet
+            }
             List<string> parts = DayParts(k, hist, chk, liveLost, liveGaps);
             string file = Path.Combine(Folder, BaseOf(k.Key) + ".day.jsonl");
             string tmp = file + ".tmp";
@@ -860,8 +946,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 Interlocked.Exchange(ref droppedQueue, 0); Interlocked.Exchange(ref droppedDisk, 0); Interlocked.Exchange(ref outside, 0);
                 Interlocked.Exchange(ref written, 0); Interlocked.Exchange(ref feedDrops, 0); Interlocked.Exchange(ref lostTotal, 0);
-                lostCut = 0; gapsCut = 0; error = ""; lastDay = ""; deskHasNone = false; retryAt = DateTime.MinValue;
-                lock (Sync) { Keys.Clear(); LastSent.Clear(); RetryAtDay.Clear(); TriesDay.Clear(); }
+                lostTaken = 0; Interlocked.Exchange(ref firstLostU, 0); Interlocked.Exchange(ref lastLostU, 0);
+                long ignored; while (DropTimes.TryDequeue(out ignored)) { }
+                runStartUtc = ChartBridgeBars.UtcNow();
+                error = ""; lastDay = ""; deskHasNone = false; retryAt = DateTime.MinValue;
+                lock (Sync) { Keys.Clear(); LastSent.Clear(); RetryAtDay.Clear(); TriesDay.Clear(); SessionDrops.Clear(); }
                 if (!On) { dayState = "off"; return; }
                 dayState = "starting";
                 ManualResetEvent stop = new ManualResetEvent(false);

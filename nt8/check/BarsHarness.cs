@@ -116,6 +116,7 @@ public static class BarsHarness
             TickCheckCases();            // the NQ tick file (Sunday 11-01): the check of the live capture against the history (pure)
             TickFileCapture(dir);        // the queue's bound (drop and count), NQ only, the raw lines, the break left out
             TickFileChunks(dir);         // chunks cut once and sent again the same, a restart, 404 and a refusal
+            TickFileDrops(dir);          // lost trades and feed drops go to the files of their session at their next cut; a restart says gaps
             TickFileDays(dir);           // the final day: the check, the parts, stored, packed, the raw kept or deleted
             TickFilePull(dir);           // the final pull through the gate, only in the window, from the open to the close
         }
@@ -1559,6 +1560,7 @@ public static class BarsHarness
             string c3 = ChartBridgeTicks.ChunkJson(key, 3);
             int sent3 = ChartBridgeTicks.SendChunks(null);
             Check(sent3 == 1 && c3 != null && Field1s(c3, "run") == Field1s(c1, "run") && Field1s(c3, "count") == "1", "tick chunks: after a restart only the new chunk goes, seq 3 of the same run: " + sent3 + " " + (c3 ?? "null") + " " + TickDiag());
+            Check(c3 != null && Field1s(c3, "gaps") == "1", "tick chunks: the first chunk of a file after a restart says gaps 1 (The Desk never vouches across a restart): " + (c3 == null ? "null" : Field1s(c3, "gaps")));
             // The Desk without the route (404): every chunk waits, offered again after 30 minutes
             desk.StatusTicks = body => 404;
             Feed(W(2026, 10, 6, 9, 36), 25003, 1);
@@ -1575,6 +1577,73 @@ public static class BarsHarness
             Check(!desk.AllTicks().Any(b => b.Contains("Sim") || b.Contains("account")), "tick chunks: market data and the PC name only");
         }
         finally { desk.Stop(); ChartBridgeConfig.DeskUrl = urlWas; ChartBridgeTicks.ChunkMaxTicks = 20000; }
+    }
+
+    static void FeedC(string contract, DateTime etWall, double p, long v) { ChartBridgeTicks.OnTrade("NQ", contract, 0.25, Ms(EtToUtc(etWall)), p, v, 1, ChartBridgeSides.BidAsk); }
+    static void TickRestart()
+    {
+        ChartBridgeTicks.Start(); ChartBridgeTicks.Stop();
+        typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, true);
+        TickScan();
+    }
+
+    static void TickFileDrops(string dir)
+    {
+        ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 5, 17, 30));   // ChartBridge started before the 2026-10-06 session opened
+        TickFresh(dir);
+        try
+        {
+            string k12 = "2026-10-06 NQ 12-26", k03 = "2026-10-06 NQ 03-27";
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 30), 25000, 1); FeedC("NQ 03-27", W(2026, 10, 6, 9, 30).AddSeconds(1), 25100, 1);
+            ChartBridgeTicks.WriteOnce();
+            Check(ChartBridgeTicks.CutOnce() == 2 && Field1s(ChartBridgeTicks.ChunkJson(k12, 1), "gaps") == "0" && Field1s(ChartBridgeTicks.ChunkJson(k03, 1), "gaps") == "0",
+                  "tick drops: files made by a run that started before the session opened: the first chunks say gaps 0");
+            // a feed drop at 09:31:30 and the feed down until 09:40: the cut in between has nothing to cut and takes nothing up
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 31).AddSeconds(30));
+            ChartBridgeTicks.NoteFeedDrop();
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 34));
+            Check(ChartBridgeTicks.CutOnce() == 0, "tick drops: nothing to cut while the feed is down");
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 41));
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 40), 25001, 1); FeedC("NQ 03-27", W(2026, 10, 6, 9, 40).AddSeconds(2), 25101, 1);
+            ChartBridgeTicks.WriteOnce();
+            string a2 = null, b2 = null;
+            Check(ChartBridgeTicks.CutOnce() == 2 && Field1s(a2 = ChartBridgeTicks.ChunkJson(k12, 2), "gaps") == "1" && Field1s(b2 = ChartBridgeTicks.ChunkJson(k03, 2), "gaps") == "1",
+                  "tick drops: the feed drop goes on the next chunk of EVERY file of its session (the roll week's two contracts), not on a cut with nothing in it: " + Field1s(a2 ?? "", "gaps") + " " + Field1s(b2 ?? "", "gaps"));
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 42), 25002, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k12, 3), "gaps") == "0", "tick drops: taken up once: the chunk after says gaps 0");
+            // a full queue at 09:43 drops a trade: lost goes to the session's files, each at its own next cut
+            ChartBridgeTicks.QueueMax = 1;
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 43), 25003, 1); FeedC("NQ 12-26", W(2026, 10, 6, 9, 43).AddSeconds(1), 25003, 1);
+            ChartBridgeTicks.QueueMax = 200000;
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k12, 4), "lost") == "1" && ChartBridgeTicks.ChunkJson(k03, 3) == null,
+                  "tick drops: a lost trade goes on the next chunk of its session's file that has one; the other file keeps it for its next cut");
+            FeedC("NQ 03-27", W(2026, 10, 6, 9, 44), 25104, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k03, 3), "lost") == "1", "tick drops: ... and the other contract's file takes it at its own next cut");
+            // a drop in the next session does not touch this one
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 18, 30));
+            ChartBridgeTicks.NoteFeedDrop();
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 45), 25005, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k12, 5), "gaps") == "0", "tick drops: a feed drop in the 2026-10-07 session does not go on 2026-10-06's chunks");
+            // a restart mid-session: Start() zeroes its counters, yet the first chunk of each file after it says gaps 1
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 50));
+            TickRestart();
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 50), 25006, 1); FeedC("NQ 03-27", W(2026, 10, 6, 9, 50), 25106, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            string r12 = ChartBridgeTicks.ChunkJson(k12, 6) ?? "", r03 = ChartBridgeTicks.ChunkJson(k03, 4) ?? "";
+            Check(Field1s(r12, "gaps") == "1" && Field1s(r03, "gaps") == "1", "tick drops: after a restart the first chunk of each file says gaps 1, never 0: " + Field1s(r12, "gaps") + " " + Field1s(r03, "gaps"));
+            FeedC("NQ 12-26", W(2026, 10, 6, 9, 51), 25007, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k12, 7) ?? "", "gaps") == "0", "tick drops: ... and only the first");
+            // a file this run makes after its session opened (ChartBridge started mid-session): its first chunk says gaps 1 too
+            FeedC("NQ 06-27", W(2026, 10, 6, 9, 52), 25200, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson("2026-10-06 NQ 06-27", 1) ?? "", "gaps") == "1", "tick drops: a file made after its session opened starts with gaps 1");
+        }
+        finally { ChartBridgeTicks.QueueMax = 200000; }
     }
 
     static TickDayBuild HistOf(IEnumerable<TickRec> t) { TickDayBuild h = new TickDayBuild(); foreach (TickRec x in t) { h.Ticks.Add(x); h.BidAsk++; } return h; }
