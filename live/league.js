@@ -26,7 +26,7 @@
  *
  * A past day (Anthony's task "League view opens a given past day", for The Desk's Agent Stats day rows): the page's address
  * `?tab=league&day=YYYY-MM-DD` opens the view on that session date, read only. The date is checked first (the form, a real
- * calendar date, not after today in New York; today itself opens the live view); a bad one is said plainly and the live view
+ * calendar date, not after the league's current session date; that date itself opens the live view); a bad one is said plainly and the live view
  * shows. A past day reads GET /api/chart-league?date=<day> (The Desk already takes it) and shows that day's paper trades and
  * decisions under a "Past day" label with a Back to today button. The live status (positions, flags, the spend) is not kept
  * per day, so it is never shown for a past day; a day with no record says so ("not enough data"), never a guess. A past day is
@@ -184,13 +184,32 @@ function spendText(spend) {
 }
 
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-/** Today's date in New York (YYYY-MM-DD) at `now` (ms, default the clock): the league's session date. */
-function nyToday(now) {
+const DAY_MS = 86400000;
+const isoOf = ms => new Date(ms).toISOString().slice(0, 10);
+/* a session date from a calendar date (UTC ms of its midnight) and the time of day (minutes): from 17:00 the next date, and a
+   Saturday or Sunday rolls to Monday (the league's session date, as Bot-Lab manrae.live.session_date) */
+function rollSession(dayMs, minutes) {
+  let t = dayMs + (minutes >= 17 * 60 ? DAY_MS : 0);
+  const wd = new Date(t).getUTCDay();
+  if (wd === 6) t += 2 * DAY_MS; else if (wd === 0) t += DAY_MS;
+  return isoOf(t);
+}
+/** The league's current session date (YYYY-MM-DD) at `now` (ms, default the clock): New York time, from 17:00 the next date,
+    a weekend rolls to Monday. "Today" for a link's day. */
+function sessionToday(now) {
   const d = new Date(isNum(now) ? now : Date.now());
+  let p;
   try {
-    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d).map(x => [x.type, x.value]));
-    return p.year + '-' + p.month + '-' + p.day;
-  } catch (e) { return d.toISOString().slice(0, 10); }
+    p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(d).map(x => [x.type, x.value]));
+  } catch (e) { p = null; }
+  if (!p) return rollSession(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()), d.getUTCHours() * 60 + d.getUTCMinutes());
+  return rollSession(Date.UTC(+p.year, +p.month - 1, +p.day), (+p.hour % 24) * 60 + +p.minute);
+}
+/** The session a chart bar belongs to (t: chart seconds, New York wall time as if UTC): 18:00 opens the next date's session
+    (a bar in the 17:00 break counts with the next one), a weekend rolls to Monday. */
+function sessionOfBar(t) {
+  const dayMs = Math.floor(t / 86400) * DAY_MS;
+  return rollSession(dayMs, Math.floor((t - dayMs / 1000) / 60));
 }
 
 /**
@@ -206,7 +225,7 @@ function checkDay(raw, today) {
   if (!m) return { ok: false, day: null, problem: 'The link asked for the day "' + shown + '", which is not a date (YYYY-MM-DD). Showing today.' };
   const y = +m[1], mo = +m[2], d = +m[3], t = new Date(Date.UTC(y, mo - 1, d));
   if (y < 2000 || t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d) return { ok: false, day: null, problem: 'The link asked for ' + s + ', which is not a calendar date. Showing today.' };
-  if (DATE_RE.test(today || '') && s > today) return { ok: false, day: null, problem: 'The link asked for ' + s + ', which is after today (' + today + ' in New York). Showing today.' };
+  if (DATE_RE.test(today || '') && s > today) return { ok: false, day: null, problem: 'The link asked for ' + s + ', which is after the current session (' + today + '). Showing today.' };
   if (s === today) return { ok: true, day: null, problem: '' };
   return { ok: true, day: s, problem: '' };
 }
@@ -219,13 +238,16 @@ function emptyText(date) {
   return 'No league record for ' + date + ': no paper trade and no decision. Not enough data to show that day.';
 }
 
-/** Whether the chart's bars (oldest first, chart seconds) reach the session date `date`: 'none' (no bars yet), 'before' (the
-    history starts after that day), 'in' (the day is in the history), with the history's first date. */
+/** Whether the chart holds the session `date` (18:00 New York of the day before to 17:00 of the day; bars oldest first, chart
+    seconds): 'none' (no bars yet), 'before' (the history starts after that session), 'missing' (the history spans it but holds
+    no bar of it), 'in' (a bar of that session is there), with the session of the history's first bar. */
 function chartReach(bars, date) {
   const m = DATE_RE.exec(date || '');
   if (!m || !bars || !bars.length) return { reach: 'none', first: '' };
-  const start = Date.UTC(+m[1], +m[2] - 1, +m[3]) / 1000, first = new Date(bars[0].t * 1000).toISOString().slice(0, 10);
-  return { reach: bars[0].t >= start + 86400 ? 'before' : 'in', first };
+  const day = Date.UTC(+m[1], +m[2] - 1, +m[3]) / 1000, start = day - 6 * 3600, end = day + 17 * 3600, first = sessionOfBar(bars[0].t);
+  if (bars[0].t >= end) return { reach: 'before', first };
+  const i = barIndex(bars, start - 1e-6) + 1;               // the first bar at or after the session's open
+  return { reach: i < bars.length && bars[i].t < end ? 'in' : 'missing', first };
 }
 
 /** The charts whose switch is on, from this browser's copy (never throws). */
@@ -237,7 +259,7 @@ function cleanGhosts(raw) {
   return out;
 }
 
-return { SHADOW, SEATS, SEAT, ROOTS, GHOST_KEY, nyToday, checkDay, pastEmpty, emptyText, chartReach, cleanDay, cleanTrade, marksFor, barIndex, decisionRows, seatDays, standingRows, spendText, cleanGhosts };
+return { SHADOW, SEATS, SEAT, ROOTS, GHOST_KEY, sessionToday, sessionOfBar, checkDay, pastEmpty, emptyText, chartReach, cleanDay, cleanTrade, marksFor, barIndex, decisionRows, seatDays, standingRows, spendText, cleanGhosts };
 });
 
 /* ======================================================================== the overlay and the view (browser only) */
@@ -352,7 +374,12 @@ function create(o) {
         if (seq !== S.seq) return;
         const d = C.cleanDay(j, !!past);
         /* a Desk that answered another day than the one asked (one that does not take ?date=): nothing of it is shown as that day */
-        if (past && d.date && d.date !== past) { S.raw = null; S.day = null; S.reach = 'ok'; S.problem = 'The Desk sent the day ' + d.date + ', not ' + past + ': opening a past day needs a Desk that reads ?date=.'; return; }
+        /* review LOW 2: and an answer with no date at all (no folder, no session): its own problem, or said, never shown as the day */
+        if (past && d.date !== past) {
+          S.raw = null; S.day = null; S.reach = 'ok';
+          S.problem = d.date ? 'The Desk sent the day ' + d.date + ', not ' + past + ': opening a past day needs a Desk that reads ?date=.' : (d.problem || 'The Desk sent no day for ' + past + '.');
+          return;
+        }
         S.raw = j; S.day = d; S.problem = d.problem; S.reach = 'ok'; S.at = Date.now();
       },
         e => { if (seq !== S.seq) return; S.reach = 'down'; S.problem = (e && /answered 404/.test(e.message) ? 'The Desk has no league view yet (it needs The Desk of this release).' : 'The Desk is not reachable: ' + (e && e.message ? e.message : 'no answer')) + (S.day ? ' Showing what it last sent.' : ''); })
@@ -366,7 +393,7 @@ function create(o) {
     if (typeof o.onDay === 'function') o.onDay(day);
     return true;
   }
-  const today = () => (typeof o.today === 'function' ? o.today() : C.nyToday());
+  const today = () => (typeof o.today === 'function' ? o.today() : C.sessionToday());   // review LOW 1: the league's session date
   function mountChart() {
     if (S.chart || !window.ChartLive || !o.feed) return;
     S.chart = window.ChartLive.mount(q('[data-k="chart"]'), { feed: o.feed, paneId: 'league', storagePrefix: o.storagePrefix || '', toolbar: false, compact: true,
@@ -395,7 +422,7 @@ function create(o) {
     let cpText = '';
     if (past) {
       const r = C.chartReach(S.chart && S.chart.chart ? S.chart.chart.bars() : null, past);
-      cpText = r.reach === 'in' ? past + ' is in the chart\'s history: drag the chart back to it.' : r.reach === 'before' ? 'The chart\'s history starts ' + r.first + ', after ' + past + ': no marks drawn for that day.' : '';
+      cpText = r.reach === 'in' ? past + ' is in the chart\'s history: drag the chart back to it.' : r.reach === 'missing' ? 'The chart holds no bar of the ' + past + ' session: no marks drawn for it.' : r.reach === 'before' ? 'The chart\'s history starts ' + r.first + ', after ' + past + ': no marks drawn for that day.' : '';
     }
     cp.hidden = !cpText; cp.textContent = cpText;
     /* the chart's bars come after the view opens: look again in a second until they have (no read of The Desk for it) */

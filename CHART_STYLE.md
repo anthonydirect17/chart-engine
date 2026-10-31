@@ -717,7 +717,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   its live edge as always. Each seat's line says the live status is not kept per day; the spend line says the same; the table
   head reads "Seat (as of now)". A day with no paper trade and no decision says, in the amber problem line, "No league record
   for YYYY-MM-DD: no paper trade and no decision. Not enough data to show that day." A day that is not a date, not a calendar
-  date, or after today in New York is said in that line and the live day shows; today itself is the live view.
+  date, or after the league's current session date (New York, from 17:00 the next date, a weekend Monday) is said in that line
+  and the live day shows; the current session's own date is the live view. A session the chart's history spans but holds no
+  bar of says "The chart holds no bar of the YYYY-MM-DD session: no marks drawn for it."
 - **The league's marks (1.35.0):** on an overlay canvas over the chart, drawn after each frame the chart draws (the chart's
   own canvas and look untouched): a hollow circle at a paper fill and a hollow diamond at its exit, 8 px, 1.5 px stroke in the
   seat's color with its letter inside (600 10 px mono); the stop as a dashed line (4 3) and the target as a dotted line (1 3) at

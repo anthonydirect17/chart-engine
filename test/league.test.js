@@ -113,11 +113,27 @@ test('a past day (?tab=league&day=YYYY-MM-DD): the date checked first; today or 
   assert.match(L.checkDay('2026-02-30', '2026-10-31').problem, /2026-02-30, which is not a calendar date/);
   assert.match(L.checkDay('2026-13-01', '2026-10-31').problem, /not a calendar date/);
   assert.match(L.checkDay('1999-12-31', '2026-10-31').problem, /not a calendar date/);
-  assert.match(L.checkDay('2026-11-02', '2026-10-31').problem, /after today \(2026-10-31 in New York\)/);
+  assert.match(L.checkDay('2026-11-03', '2026-11-02').problem, /2026-11-03, which is after the current session \(2026-11-02\)\. Showing today\./);
   assert.match(L.checkDay('<b>x</b>', '2026-10-31').problem, /"\?b\?x\?\?b\?"/, 'nothing of the link shown as markup');
-  /* New York's date, not UTC's: 2026-10-31 01:30 UTC is 21:30 on the 30th in New York */
-  assert.equal(L.nyToday(Date.UTC(2026, 9, 31, 1, 30)), '2026-10-30');
-  assert.equal(L.nyToday(Date.UTC(2026, 9, 31, 16, 0)), '2026-10-31');
+  /* review LOW 1: "today" is the league's session date (manrae.live.session_date): New York time, from 17:00 the next date,
+     a Saturday or Sunday rolls to Monday */
+  const ny = (mo, d, h, mi) => Date.UTC(2026, mo - 1, d, h + 4, mi || 0);   // EDT (UTC-4) until 2026-11-01
+  assert.equal(L.sessionToday(ny(10, 29, 16, 59)), '2026-10-29', 'Thursday 16:59: the Thursday session');
+  assert.equal(L.sessionToday(ny(10, 29, 17, 0)), '2026-10-30', 'Thursday 17:00: the Friday session');
+  assert.equal(L.sessionToday(ny(10, 30, 16, 0)), '2026-10-30');
+  assert.equal(L.sessionToday(ny(10, 30, 17, 30)), '2026-11-02', 'Friday 17:30: the weekend rolls to Monday');
+  assert.equal(L.sessionToday(ny(10, 31, 12, 0)), '2026-11-02', 'Saturday: Monday');
+  assert.equal(L.sessionToday(Date.UTC(2026, 10, 1, 22, 30)), '2026-11-02', 'Sunday 17:30 EST: Monday');
+  /* the session that just closed opens as a past day after 17:00; the current session's date is the live view, never refused */
+  const thu1730 = L.sessionToday(ny(10, 29, 17, 30));
+  assert.deepEqual(L.checkDay('2026-10-29', thu1730), { ok: true, day: '2026-10-29', problem: '' }, 'after 17:00 the session that just closed is a past day');
+  assert.deepEqual(L.checkDay('2026-10-30', thu1730), { ok: true, day: null, problem: '' }, 'the current session (dated tomorrow) is the live view');
+  assert.deepEqual(L.checkDay('2026-10-30', L.sessionToday(ny(10, 31, 12, 0))), { ok: true, day: '2026-10-30', problem: '' }, 'on Saturday Friday is past');
+  /* a bar's session: 18:00 New York opens the next date's session, the weekend rolls to Monday */
+  const at = (mo, d, h) => Date.UTC(2026, mo - 1, d, h) / 1000;   // chart seconds: New York wall time as if UTC
+  assert.equal(L.sessionOfBar(at(10, 29, 9)), '2026-10-29');
+  assert.equal(L.sessionOfBar(at(10, 29, 18)), '2026-10-30');
+  assert.equal(L.sessionOfBar(at(11, 1, 18)), '2026-11-02', 'the Sunday 18:00 open: Monday');
 });
 
 test('a past day: the live status is left out (it is today\'s, never that day\'s); an empty day says not enough data', () => {
@@ -134,12 +150,15 @@ test('a past day: the live status is left out (it is today\'s, never that day\'s
   assert.equal(L.emptyText('2026-10-19'), 'No league record for 2026-10-19: no paper trade and no decision. Not enough data to show that day.');
 });
 
-test('a past day on the chart: whether the chart\'s history reaches it', () => {
+test('a past day on the chart: in the chart only if a bar of that session (18:00 of the day before to 17:00) is there', () => {
   const s = (y, m, d, h) => Date.UTC(y, m - 1, d, h) / 1000;
-  const bars = [{ t: s(2026, 10, 26, 18) }, { t: s(2026, 10, 30, 15) }];
-  assert.deepEqual(L.chartReach(bars, '2026-10-22'), { reach: 'before', first: '2026-10-26' });
-  assert.deepEqual(L.chartReach(bars, '2026-10-26'), { reach: 'in', first: '2026-10-26' });
-  assert.deepEqual(L.chartReach(bars, '2026-10-28'), { reach: 'in', first: '2026-10-26' });
+  const bars = [{ t: s(2026, 10, 26, 18) }, { t: s(2026, 10, 30, 15) }];   // the first bar opens the 10-27 session
+  assert.deepEqual(L.chartReach(bars, '2026-10-22'), { reach: 'before', first: '2026-10-27' });
+  assert.deepEqual(L.chartReach(bars, '2026-10-26'), { reach: 'before', first: '2026-10-27' }, 'review LOW 3: a bar at 18:00 on the 26th is the 27th\'s session, not the 26th\'s');
+  assert.deepEqual(L.chartReach(bars, '2026-10-27'), { reach: 'in', first: '2026-10-27' });
+  assert.deepEqual(L.chartReach(bars, '2026-10-28'), { reach: 'missing', first: '2026-10-27' }, 'no bar of that session in the history');
+  assert.deepEqual(L.chartReach(bars, '2026-10-30'), { reach: 'in', first: '2026-10-27' });
+  assert.deepEqual(L.chartReach([{ t: s(2026, 10, 29, 17) }, { t: s(2026, 10, 29, 18) }], '2026-10-29'), { reach: 'before', first: '2026-10-30' }, 'a bar in the 17:00 break belongs to the next session');
   assert.deepEqual(L.chartReach([], '2026-10-28'), { reach: 'none', first: '' });
   assert.deepEqual(L.chartReach(bars, 'x'), { reach: 'none', first: '' });
 });
@@ -147,6 +166,8 @@ test('a past day on the chart: whether the chart\'s history reaches it', () => {
 test('a past day: the page wiring (the address, read only, never on the live charts)', () => {
   const src = read('live/league.js'), ws = read('live/workspace.js');
   assert.match(src, /'\/api\/chart-league' \+ \(past \? '\?date=' \+ encodeURIComponent\(past\) : ''\)/);
+  assert.match(src, /if \(past && d\.date !== past\)/, 'review LOW 2: an answer with no date, or another date, is never shown as the past day');
+  assert.match(src, /C\.sessionToday\(\)/, 'today is the league\'s session date');
   assert.match(src, />Back to today<\/button>/);
   assert.match(src, /'Past day ' \+ past \+ ' · read only'/);
   assert.match(ws, /leagueView\.openDay\(new URLSearchParams\(location\.search\)\.get\('day'\)\)/);

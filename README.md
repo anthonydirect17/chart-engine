@@ -513,8 +513,11 @@ only: `http://localhost:8765/?tab=league&day=YYYY-MM-DD` (the same on `/live/`).
 day rows link to (The Desk's `#/lab/agents/...`; the chart page is ChartBridge's own page, so the link works on the
 trading PC). The page reads `GET /api/chart-league?date=YYYY-MM-DD` from The Desk (which already takes it).
 
-- The day is checked first: `YYYY-MM-DD`, a real calendar date, not after today in New York. A bad one is said plainly and
-  the live day shows; The Desk is not asked for it. Today itself opens the live view.
+- The day is checked first: `YYYY-MM-DD`, a real calendar date, not after the league's current session date (New York time,
+  from 17:00 the next date, a weekend rolls to Monday). A bad one is said plainly and the live day shows; The Desk is not asked
+  for it. The current session's own date opens the live view; after 17:00 the session that just closed opens as a past day.
+- The chart counts a session as in its history only when it holds a bar of that session (18:00 New York of the day before to
+  17:00 of the day).
 - A past day is labelled "Past day YYYY-MM-DD · read only" with a **Back to today** button; closing the tab drops the day
   from the address, so the next open is the live day. A reload keeps it.
 - It shows that day's paper trades (on the NQ 1 min chart, when its 5-day history reaches the day: drag back to it) and its
