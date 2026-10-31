@@ -1229,11 +1229,14 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
 - **Deletion.** The day file (`.day.jsonl`) is deleted only after The Desk's answer to its last part says `"stored":true`; an
   answer without it keeps the file, and it is sent again from its first part (The Desk ignores the parts it has) 15 minutes later,
   3 times, then set aside (`.day.jsonl.unstored`, kept; `/diag` `lastError` says so). The raw file and its state are deleted only
-  when the check passed and The Desk's answer to the day's last part says `"stored":true` and `"packed":true`. The packed format is Anthony's open question, so The Desk answers `"packed":false` and the
-  raw is kept; a failed day keeps its raw until Anthony rules. `/diag` `tickFile.rawOld` lists raw files older than 7 days.
+  when the check passed and The Desk's answer to the day's last part says `"stored":true` and `"packed":true`. The Desk does not
+  pack: the data caretaker on HOMESERVER (built later) packs each stored day and tells The Desk (`POST /api/ticks/packed`), and
+  only then does The Desk answer `"packed":true` about that day. Until then the raw is kept; a failed day keeps its raw until
+  Anthony rules. `/diag` `tickFile.rawOld` lists raw files older than 7 days.
 - **Which PC sends** (Anthony 2026-10-28: automatic, WORK wins): every PC with the tick file on captures and sends what it receives
-  under its `pc` name (`config.txt` `pc`, else the Windows computer name). The Desk keeps WORK's and flags the other; it knows WORK
-  only by the name `WORK`.
+  under its `pc` name (`config.txt` `pc`, else the Windows computer name). The Desk merges the live rows second by second, WORK's
+  first where WORK has them and the other PC's where WORK has none (so WORK coming up mid-session never takes HOME's earlier
+  seconds away), flags the other PC, and keeps WORK's checked day as the master; it knows WORK only by the name `WORK`.
 - **`/diag` `tickFile`:** `on`, `capturing`, `queue`, `queueMax`, `droppedQueue`, `droppedDisk`, `outside`, `written`,
   `feedDrops`, `diskMB`, `maxMB`, `files` (per session and contract: `bytes`, `chunks`, `sent`, `aside`, `ageDays`), `lastSent`
   (per contract: the session and seq of the latest chunk taken), `days` (per session and contract: `check`, `stored`, `packed`),
