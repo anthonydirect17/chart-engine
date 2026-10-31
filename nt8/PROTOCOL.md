@@ -1226,8 +1226,10 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
    "sides":{"method":"mixed","bidAsk":800000,"tickRule":151234,"none":0},
    "cols":["u","p","v","s"],"ticks":[[1793397600001,25000.25,1,1]],"complete":true}
   ```
-- **Deletion.** The raw file and its state are deleted only when the check passed and The Desk's answer to the day's last part says
-  `"stored":true` and `"packed":true`. The packed format is Anthony's open question, so The Desk answers `"packed":false` and the
+- **Deletion.** The day file (`.day.jsonl`) is deleted only after The Desk's answer to its last part says `"stored":true`; an
+  answer without it keeps the file, and it is sent again from its first part (The Desk ignores the parts it has) 15 minutes later,
+  3 times, then set aside (`.day.jsonl.unstored`, kept; `/diag` `lastError` says so). The raw file and its state are deleted only
+  when the check passed and The Desk's answer to the day's last part says `"stored":true` and `"packed":true`. The packed format is Anthony's open question, so The Desk answers `"packed":false` and the
   raw is kept; a failed day keeps its raw until Anthony rules. `/diag` `tickFile.rawOld` lists raw files older than 7 days.
 - **Which PC sends** (Anthony 2026-10-28: automatic, WORK wins): every PC with the tick file on captures and sends what it receives
   under its `pc` name (`config.txt` `pc`, else the Windows computer name). The Desk keeps WORK's and flags the other; it knows WORK

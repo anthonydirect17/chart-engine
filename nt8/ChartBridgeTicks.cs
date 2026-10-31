@@ -865,6 +865,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!Directory.Exists(Folder)) return 0;
             foreach (string file in Directory.GetFiles(Folder, "*.day.jsonl").OrderBy(x => x, StringComparer.Ordinal))
             {
+                DateTime notBefore;
+                lock (Sync) if (DayAgainAt.TryGetValue(file, out notBefore) && nowUtc < notBefore) continue;   // not stored last time: later
                 string progress = file.Substring(0, file.Length - ".jsonl".Length) + ".sent";
                 List<string> lines = File.ReadAllLines(file).Where(x => x.Trim().Length > 0).ToList();
                 int next = File.Exists(progress) ? File.ReadAllLines(progress).Count(x => x.Trim().Length > 0) : 0;
@@ -905,11 +907,33 @@ namespace NinjaTrader.NinjaScript.AddOns
             return b;
         }
 
+        // A day whose last part was answered without "stored":true is kept and sent again from its first part (The Desk ignores the
+        // parts it has) after RetryMinutes, MaxTries times; then it is set aside (.day.jsonl.unstored, kept) and /diag says so. The day
+        // file is deleted only after "stored":true.
+        private static readonly Dictionary<string, DateTime> DayAgainAt = new Dictionary<string, DateTime>();
+        private static readonly Dictionary<string, int> DayAgainTries = new Dictionary<string, int>();
+
         private static void DayTaken(string key, string file, string progress, bool stored, bool packed)
         {
             DayRec d;
             lock (Sync) { if (!Days.TryGetValue(key, out d)) { d = new DayRec { Key = key, Check = "failed" }; Days[key] = d; } d.Stored = stored; d.Packed = packed; }
             SaveDays();
+            if (!stored)
+            {
+                int tries;
+                lock (Sync) { DayAgainTries.TryGetValue(file, out tries); DayAgainTries[file] = ++tries; DayAgainAt[file] = ChartBridgeBars.UtcNow().AddMinutes(RetryMinutes); }
+                try { File.Delete(progress); } catch (Exception) { }
+                if (tries >= MaxTries)
+                {
+                    try { File.Move(file, file + ".unstored"); } catch (Exception) { }
+                    lock (Sync) { DayAgainAt.Remove(file); DayAgainTries.Remove(file); }
+                    error = key + ": The Desk took every part but did not store the day, " + tries + " times; set aside (" + Path.GetFileName(file) + ".unstored), the raw file is kept";
+                    ChartBridgeServer.Log("the NQ tick file for " + error);
+                }
+                else ChartBridgeServer.Log("The Desk took the NQ tick file for " + key + " but did not store it; the day file is kept and sent again in " + RetryMinutes + " minutes (try " + tries + " of " + MaxTries + "), the raw file is kept");
+                return;
+            }
+            lock (Sync) { DayAgainAt.Remove(file); DayAgainTries.Remove(file); }
             try { File.Delete(file); File.Delete(progress); } catch (Exception) { }
             RecountDisk();
             bool passed = d.Check == "exact" || d.Check == "filled";
@@ -974,7 +998,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 long ignored; while (DropTimes.TryDequeue(out ignored)) { }
                 runStartUtc = ChartBridgeBars.UtcNow();
                 error = ""; lastDay = ""; deskHasNone = false; retryAt = DateTime.MinValue;
-                lock (Sync) { Keys.Clear(); LastSent.Clear(); RetryAtDay.Clear(); TriesDay.Clear(); SessionDrops.Clear(); }
+                lock (Sync) { Keys.Clear(); LastSent.Clear(); RetryAtDay.Clear(); TriesDay.Clear(); SessionDrops.Clear(); DayAgainAt.Clear(); DayAgainTries.Clear(); }
                 if (!On) { dayState = "off"; return; }
                 dayState = "starting";
                 ManualResetEvent stop = new ManualResetEvent(false);

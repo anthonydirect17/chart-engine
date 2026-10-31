@@ -119,6 +119,7 @@ public static class BarsHarness
             TickFileDrops(dir);          // lost trades and feed drops go to the files of their session at their next cut; a restart says gaps
             TickFileOneCutter(dir);      // the restart race: an old sender never writes a cut after the new one started
             TickFileDays(dir);           // the final day: the check, the parts, stored, packed, the raw kept or deleted
+            TickFileUnstored(dir);       // a day not stored: kept and sent again later (3 times), never deleted before stored
             TickFilePull(dir);           // the final pull through the gate, only in the window, from the open to the close
         }
         catch (Exception ex) { Check(false, "bars harness threw: " + ex); }
@@ -1741,6 +1742,49 @@ public static class BarsHarness
             ChartBridgeTicks.FinishDay("2026-10-09 NQ 12-26", HistOf(ChartBridgeTicks.ReadAllLive("2026-10-09 NQ 12-26")));
             ChartBridgeTicks.SendDays(null);
             Check(File.Exists(Path.Combine(TicksDir(dir), "2026-10-09_NQ_12-26.day.jsonl.refused")) && File.Exists(Path.Combine(TicksDir(dir), "2026-10-09_NQ_12-26.raw")), "tick days: a refused part sets the day aside; the raw stays");
+        }
+        finally { desk.Stop(); ChartBridgeConfig.DeskUrl = urlWas; ChartBridgeTicks.PartMaxTicks = 20000; }
+    }
+
+    static void TickFileUnstored(string dir)
+    {
+        TickFresh(dir);
+        Desk desk = new Desk();
+        string urlWas = ChartBridgeConfig.DeskUrl;
+        ChartBridgeConfig.DeskUrl = desk.Url;
+        try
+        {
+            desk.AnswerTicks = body => "{\"ok\":true,\"whole\":false,\"stored\":false,\"kept\":null,\"packed\":false}";
+            for (int i = 0; i < 3; i++) Feed(W(2026, 10, 6, 9, 30).AddSeconds(i), 25000, 1);
+            for (int i = 0; i < 3; i++) Feed(W(2026, 10, 7, 9, 30).AddSeconds(i), 25000, 1);
+            ChartBridgeTicks.WriteOnce(); TickScan();
+            string k6 = "2026-10-06 NQ 12-26", k7 = "2026-10-07 NQ 12-26";
+            ChartBridgeTicks.PartMaxTicks = 2;
+            ChartBridgeTicks.FinishDay(k6, HistOf(ChartBridgeTicks.ReadAllLive(k6)));
+            string day6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.jsonl"), sent6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.sent");
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 16, 30));
+            int n1 = ChartBridgeTicks.SendDays(null);
+            Check(n1 == 2 && File.Exists(day6) && !File.Exists(sent6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t0\t0") && Logged("did not store it; the day file is kept and sent again in 15 minutes (try 1 of 3)"),
+                  "tick days: the last part answered without stored true: the day file is KEPT (not deleted), to be sent again from its first part");
+            Check(ChartBridgeTicks.SendDays(null) == 0, "tick days: not sent again at once (15 minutes later)");
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 16, 46));
+            int before = desk.AllTicks().Count;
+            Check(ChartBridgeTicks.SendDays(null) == 2 && desk.AllTicks().Count == before + 2 && desk.AllTicks()[before].Contains("\"part\":1,") && File.Exists(day6),
+                  "tick days: sent again from part 1 after 15 minutes (The Desk ignores the parts it has); not stored: kept again");
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 17, 2));
+            ChartBridgeTicks.SendDays(null);
+            Check(!File.Exists(day6) && File.Exists(day6 + ".unstored") && File.Exists(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.raw")) && TickDiag().Contains("did not store the day, 3 times"),
+                  "tick days: after 3 tries the day is set aside (.unstored, kept), the raw is kept, /diag says so");
+            // stored on the second try: then the day file goes (the raw stays: not packed)
+            ChartBridgeTicks.FinishDay(k7, HistOf(ChartBridgeTicks.ReadAllLive(k7)));
+            string day7 = Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.day.jsonl");
+            ChartBridgeTicks.SendDays(null);
+            Check(File.Exists(day7), "tick days: not stored the first time: kept");
+            desk.AnswerTicks = body => "{\"ok\":true,\"whole\":true,\"stored\":true,\"kept\":true,\"packed\":false}";
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 17, 20));
+            ChartBridgeTicks.SendDays(null);
+            Check(!File.Exists(day7) && File.Exists(Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.raw")) && Lines(dir, "ticks/tickdays.txt").Contains(k7 + "\texact\t1\t0"),
+                  "tick days: stored on the next try: the day file deleted only now; the raw kept (not packed)");
         }
         finally { desk.Stop(); ChartBridgeConfig.DeskUrl = urlWas; ChartBridgeTicks.PartMaxTicks = 20000; }
     }
