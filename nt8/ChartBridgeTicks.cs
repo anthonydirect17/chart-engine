@@ -266,8 +266,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- the writer
-        // One pass: the queue to the raw files, whole lines. Public for the harness.
-        public static int WriteOnce()
+        // One pass: the queue to the raw files, whole lines. Public for the harness. One writer at a time (an old writer thread
+        // still finishing after a restart and the new one never append to a raw file together).
+        private static readonly object WriteSync = new object();
+        public static int WriteOnce() { lock (WriteSync) return WriteBatch(); }
+        private static int WriteBatch()
         {
             List<TickRec> batch = new List<TickRec>();
             TickRec x;
@@ -416,7 +419,20 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // Cuts the bytes after the last cut, to the last whole line, into chunks of at most ChunkMaxTicks. Public for the harness.
-        public static int CutOnce()
+        // Never two cutters (the restart race): a cut runs under CutSync and only for the current generation; Start() takes CutSync
+        // before it clears the files, so an old sender still cutting finishes first and the new one reads its cuts from the state
+        // files; an old sender that comes later finds another generation and cuts nothing. So `cut <seq>` is written once.
+        private static readonly object CutSync = new object();
+        public static int CutOnce() { return CutOnce(Volatile.Read(ref generation)); }
+        private static int CutOnce(int gen)
+        {
+            lock (CutSync)
+            {
+                if (gen != Volatile.Read(ref generation)) return 0;
+                return CutLocked();
+            }
+        }
+        private static int CutLocked()
         {
             TakeDrops();
             List<KeyFiles> keys; lock (Sync) keys = Keys.Values.ToList();
@@ -943,6 +959,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Stop();
             lock (Gate)
+            lock (CutSync)   // waits for a cut of the old sender still in progress (CutOnce)
             {
                 Interlocked.Exchange(ref droppedQueue, 0); Interlocked.Exchange(ref droppedDisk, 0); Interlocked.Exchange(ref outside, 0);
                 Interlocked.Exchange(ref written, 0); Interlocked.Exchange(ref feedDrops, 0); Interlocked.Exchange(ref lostTotal, 0);
@@ -1003,7 +1020,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (stopping()) return;
                 try
                 {
-                    if (since.ElapsedMilliseconds - lastCut >= ChunkEveryMs) { lastCut = since.ElapsedMilliseconds; ScanFolder(); CutOnce(); }
+                    if (since.ElapsedMilliseconds - lastCut >= ChunkEveryMs) { lastCut = since.ElapsedMilliseconds; ScanFolder(); CutOnce(gen); }
                     SendChunks(stopping);
                     SendDays(stopping);
                 }

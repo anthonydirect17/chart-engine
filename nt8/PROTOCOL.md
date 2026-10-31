@@ -1182,7 +1182,9 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   chunk sent again is read from the same bytes and is the same message. It posts the chunks not taken yet, oldest first, to
   `deskUrl` + `/api/ticks/chunk` (10 s each, never through a proxy), and notes `sent <seq>`. `400`, `413` or `422`: `aside <seq>`
   (its trades stay in the raw file; the final pull covers them). `404` (a Desk without the route): every chunk waits, offered again
-  every 30 minutes. Anything else: tried again in 10 seconds. A restart carries on (same run, the next seq).
+  every 30 minutes. Anything else: tried again in 10 seconds. A restart carries on (same run, the next seq). There is never more
+  than one cutter or writer: a cut is made only by the sender of the current start and under one lock that the start takes before
+  it reads the files again, so a sender of an earlier start still running can never write the same `cut <seq>` with other bytes.
 
   ```json
   {"v":1,"source":"chartbridge","bridge":"0.6.9","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,

@@ -117,6 +117,7 @@ public static class BarsHarness
             TickFileCapture(dir);        // the queue's bound (drop and count), NQ only, the raw lines, the break left out
             TickFileChunks(dir);         // chunks cut once and sent again the same, a restart, 404 and a refusal
             TickFileDrops(dir);          // lost trades and feed drops go to the files of their session at their next cut; a restart says gaps
+            TickFileOneCutter(dir);      // the restart race: an old sender never writes a cut after the new one started
             TickFileDays(dir);           // the final day: the check, the parts, stored, packed, the raw kept or deleted
             TickFilePull(dir);           // the final pull through the gate, only in the window, from the open to the close
         }
@@ -1644,6 +1645,41 @@ public static class BarsHarness
             Check(Field1s(ChartBridgeTicks.ChunkJson("2026-10-06 NQ 06-27", 1) ?? "", "gaps") == "1", "tick drops: a file made after its session opened starts with gaps 1");
         }
         finally { ChartBridgeTicks.QueueMax = 200000; }
+    }
+
+    static void TickFileOneCutter(string dir)
+    {
+        ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 10, 0));
+        TickFresh(dir);
+        string state = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.state");
+        FieldInfo genF = typeof(ChartBridgeTicks).GetField("generation", BindingFlags.NonPublic | BindingFlags.Static);
+        MethodInfo cutAs = typeof(ChartBridgeTicks).GetMethod("CutOnce", BindingFlags.NonPublic | BindingFlags.Static, null, new Type[] { typeof(int) }, null);
+        Feed(W(2026, 10, 6, 9, 30), 25000, 1);
+        ChartBridgeTicks.WriteOnce();
+        int old = (int)genF.GetValue(null);
+        TickRestart();   // a new generation: the old sender's thread may still be running
+        Check((int)cutAs.Invoke(null, new object[] { old }) == 0 && !File.ReadAllLines(state).Any(l => l.StartsWith("cut ")),
+              "one cutter: a sender of an earlier generation cuts nothing (no second `cut 1` with other bytes)");
+        Check(ChartBridgeTicks.CutOnce() == 1 && File.ReadAllLines(state).Count(l => l.StartsWith("cut 1 ")) == 1, "one cutter: the current sender cuts it once");
+        // a cut in progress (CutSync held): Start() waits for it before it clears the files
+        object cutSync = typeof(ChartBridgeTicks).GetField("CutSync", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+        Monitor.Enter(cutSync);
+        Thread starter = new Thread(() => { ChartBridgeTicks.Start(); ChartBridgeTicks.Stop(); }) { IsBackground = true };
+        bool waited;
+        try { starter.Start(); waited = !starter.Join(400); }
+        finally { Monitor.Exit(cutSync); }
+        Check(waited && starter.Join(10000), "one cutter: Start() waits for a cut still in progress, then goes on");
+        typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, true);
+        TickScan();
+        // the writer: one at a time
+        object writeSync = typeof(ChartBridgeTicks).GetField("WriteSync", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+        Feed(W(2026, 10, 6, 9, 31), 25001, 1);
+        Monitor.Enter(writeSync);
+        Thread w2 = new Thread(() => ChartBridgeTicks.WriteOnce()) { IsBackground = true };
+        bool blocked;
+        try { w2.Start(); blocked = !w2.Join(300); }
+        finally { Monitor.Exit(writeSync); }
+        Check(blocked && w2.Join(10000) && File.ReadAllLines(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.raw")).Length == 2, "one writer: a second writer waits for the first; whole lines only");
     }
 
     static TickDayBuild HistOf(IEnumerable<TickRec> t) { TickDayBuild h = new TickDayBuild(); foreach (TickRec x in t) { h.Ticks.Add(x); h.BidAsk++; } return h; }
