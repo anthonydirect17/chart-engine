@@ -2006,7 +2006,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static int sending, batchSize = FullBatch;
         private static bool lastFailed;
         private static string lastError = "";
-        private static long setAside, rejectedByDesk;
+        private static long setAside, rejectedByDesk, keepRejectedFailed;   // 0.6.10 (review): keepRejectedFailed, NoteRejectedSafe
         private static string File_ { get { return Path.Combine(ChartBridgeConfig.Folder, "pending_fills.jsonl"); } }
         private static string SetAsideFile { get { return Path.Combine(ChartBridgeConfig.Folder, "rejected_fills.jsonl"); } }
 
@@ -2063,7 +2063,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             int n; lock (Sync) n = PendingList.Count;
             return "{\"postFills\":" + (ChartBridgeConfig.PostFills ? "true" : "false") + ",\"deskUrl\":" + CbJson.Str(ChartBridgeConfig.DeskUrl) +
                 ",\"waiting\":" + n + ",\"lastSendFailed\":" + (lastFailed ? "true" : "false") + ",\"lastError\":" + CbJson.Str(lastError) +
-                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + ",\"rejectedFile\":\"rejected_fills.jsonl\"}";
+                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + ",\"rejectedFile\":\"rejected_fills.jsonl\"" +
+                ",\"keepRejectedFailed\":" + Interlocked.Read(ref keepRejectedFailed) + "}";
         }
 
         private static void Remove(string[] batch)
@@ -2109,7 +2110,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string text;
                     using (HttpWebResponse res = (HttpWebResponse)await call)
                     using (StreamReader r = new StreamReader(res.GetResponseStream(), Encoding.UTF8)) text = r.ReadToEnd();
-                    NoteRejected(text, batch);   // 0.6.10 (C-B): each one The Desk rejected inside its 200, kept before the batch goes
+                    NoteRejectedSafe(text, batch);   // 0.6.10 (C-B): each one The Desk rejected inside its 200, kept before the batch goes (never throws)
                     Remove(batch);
                     if (batch.Length > 1) batchSize = FullBatch;   // while hunting a bad fill, stay at one per request
                     lock (Sync) more = PendingList.Count > 0;
@@ -2152,6 +2153,20 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The Desk answers 200 with a "rejected" list for fills it could not store: say so once per answer. 0.6.10 (Anthony 2026-10-30,
         // C-B): each rejected fill is also appended to rejected_fills.jsonl with The Desk's reason, as the 400/422 path keeps a bad one, so
         // none is dropped unseen; /diag desk.rejectedByDesk counts them and desk.rejectedFile names the file.
+        // 0.6.10 (review): the keeping runs before Remove(batch), so it must never throw: an exception in it (The Desk's answer, the
+        // file) would land in the send's catch and the batch The Desk already took would be sent again. Logged once per answer and
+        // counted in /diag (desk.keepRejectedFailed); the batch still leaves the queue. True when it ran through.
+        internal static bool NoteRejectedSafe(string text, string[] batch)
+        {
+            try { NoteRejected(text, batch); return true; }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref keepRejectedFailed);
+                try { ChartBridgeServer.Log("could not keep what The Desk rejected in its answer (fills): " + ex.Message + "; what it took is not sent again"); } catch (Exception) { }
+                return false;
+            }
+        }
+
         private static void NoteRejected(string text, string[] batch)
         {
             Match m = RejectedRx.Match(text ?? "");

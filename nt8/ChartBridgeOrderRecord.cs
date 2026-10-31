@@ -379,7 +379,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static volatile bool deskHasNone;
         private static double noDeskUntil;
         public static int Cap = 20000;
-        private static long dropped, setAside, rejectedByDesk, sent;
+        private static long dropped, setAside, rejectedByDesk, sent, keepRejectedFailed;   // 0.6.10 (review): keepRejectedFailed, NoteRejectedSafe
         private static string lastError = "";
         private static string File_ { get { return Path.Combine(ChartBridgeConfig.Folder, "pending_orders.jsonl"); } }
         private static string SetAsideFile { get { return Path.Combine(ChartBridgeConfig.Folder, "rejected_orders.jsonl"); } }
@@ -498,7 +498,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ",\"seen\":" + Interlocked.Read(ref observed) + ",\"queued\":" + Interlocked.Read(ref queuedEvents) + ",\"sent\":" + Interlocked.Read(ref sent) +
                 ",\"observeMeanUs\":" + CbJson.Num3(ObserveMeanUs()) +
                 ",\"lastSendFailed\":" + (lastFailed ? "true" : "false") + ",\"lastError\":" + CbJson.Str(lastError) +
-                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + ",\"rejectedFile\":\"rejected_orders.jsonl\"" +
+                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + ",\"rejectedFile\":\"rejected_orders.jsonl\"" + ",\"keepRejectedFailed\":" + Interlocked.Read(ref keepRejectedFailed) +
                 ",\"start\":" + CbJson.Str(start) + ",\"decisions\":" + ChartBridgeDecisions.DiagJson() + "}";
         }
 
@@ -550,7 +550,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string text;
                     using (HttpWebResponse res = (HttpWebResponse)await call)
                     using (StreamReader r = new StreamReader(res.GetResponseStream(), Encoding.UTF8)) text = r.ReadToEnd();
-                    NoteRejected(text, batch);   // 0.6.10 (C-B): each one The Desk rejected inside its 200, kept before the batch goes
+                    NoteRejectedSafe(text, batch);   // 0.6.10 (C-B): each one The Desk rejected inside its 200, kept before the batch goes (never throws)
                     Remove(batch);
                     SaveIfDirty();
                     Interlocked.Add(ref sent, batch.Length);
@@ -602,6 +602,20 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // 0.6.10 (Anthony 2026-10-30, C-B): each order event The Desk rejected inside its 200 is appended to rejected_orders.jsonl with
         // The Desk's reason (as the 400/413/422 path sets one aside), never dropped unseen.
+        // 0.6.10 (review): the keeping runs before Remove(batch), so it must never throw: an exception in it (The Desk's answer, the
+        // file) would land in the send's catch and the batch The Desk already took would be sent again. Logged once per answer and
+        // counted in /diag (orderRecord.keepRejectedFailed); the batch still leaves the queue. True when it ran through.
+        internal static bool NoteRejectedSafe(string text, string[] batch)
+        {
+            try { NoteRejected(text, batch); return true; }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref keepRejectedFailed);
+                try { ChartBridgeServer.Log("could not keep what The Desk rejected in its answer (order events): " + ex.Message + "; what it took is not sent again"); } catch (Exception) { }
+                return false;
+            }
+        }
+
         private static void NoteRejected(string text, string[] batch)
         {
             Match m = RejectedRx.Match(text ?? "");

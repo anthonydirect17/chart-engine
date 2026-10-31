@@ -31,8 +31,14 @@ test('1.40.0 C-C: postFills off on this PC: a plain warning first; on, or /diag 
 
 test('0.6.10 C-B: ChartBridge keeps each item The Desk rejects inside a 200, before the batch leaves the queue', () => {
   const cb = read('nt8/ChartBridge.cs'), rec = read('nt8/ChartBridgeOrderRecord.cs');
-  assert.match(cb, /NoteRejected\(text, batch\);[^\n]*\n\s*Remove\(batch\);/);
-  assert.match(rec, /NoteRejected\(text, batch\);[^\n]*\n\s*Remove\(batch\);/);
+  assert.match(cb, /NoteRejectedSafe\(text, batch\);[^\n]*\n\s*Remove\(batch\);/);
+  assert.match(rec, /NoteRejectedSafe\(text, batch\);[^\n]*\n\s*Remove\(batch\);/);
+  /* 0.6.10 (review): the keeping can never send the accepted batch again: caught, logged, counted in /diag */
+  for (const src of [cb, rec]) {
+    assert.match(src, /internal static bool NoteRejectedSafe\(string text, string\[\] batch\)\s*\{\s*try \{ NoteRejected\(text, batch\); return true; \}\s*catch \(Exception ex\)\s*\{\s*Interlocked\.Increment\(ref keepRejectedFailed\);/);
+    assert.match(src, /\\"keepRejectedFailed\\":\" \+ Interlocked\.Read\(ref keepRejectedFailed\)/);
+    assert.equal((src.match(/[^e]NoteRejected\(text, batch\)/g) || []).length, 1, 'only NoteRejectedSafe calls NoteRejected');
+  }
   assert.match(cb, /internal static int KeepRejected\(string rejectedList, string\[\] batch, string file\)/);
   assert.match(rec, /ChartBridgeDesk\.KeepRejected\(m\.Groups\[1\]\.Value, batch, SetAsideFile\)/);
   assert.match(cb, /,\\"rejectedFile\\":\\"rejected_fills\.jsonl\\"/);
