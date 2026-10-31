@@ -1,13 +1,15 @@
 # Changelog
 
-## ChartBridge 0.6.10 and chart 1.40.0 (2026-11-01): the account lifecycle, Blown and Promoted
+## ChartBridge 0.6.10 and chart 1.40.0 (2026-11-01): the account lifecycle (Blown and Promoted), ONH and ONL, the NQ tick file
 
 Anthony's decisions of 2026-10-30 (D1 to D5, the contract shared with The Desk): a prop eval is marked **Blown** or **Promoted**
 by hand, on The Desk's Prop card or in the account's drawer here; both take it out of its group and the copier and off the chart's
 lists, and its history stays on The Desk. With it, the audit of the accounts NinjaTrader no longer lists (a blown eval the firm
 takes away): ChartBridge accepts remove-only changes for them, never a join. ChartBridge 0.6.10 is a recompile (F5). The page works
 with ChartBridge 0.6.2 or newer (`minChartBridge` stays 0.6.2): with an older one, what ChartBridge cannot do for an account it does
-not list is refused and the page shows the refusal once.
+not list is refused and the page shows the refusal once. The release also brings the overnight high and low on the chart (ONH and
+ONL), no false restart alarm on a new Order Strategy entry, and the NQ tick file to The Desk (a new add-on file,
+`nt8/ChartBridgeTicks.cs`, listed in `nt8/install-files.json` with the other add-on files, so it goes in AddOns before the F5).
 
 - **Blown and Promoted in the account's drawer** (`live/accounts.js`): shown only for an account The Desk has a prop account for.
   `/api/chart-accounts` does not say that outright, so the page reads it from the row: an `outcome` already set, an account type
@@ -79,6 +81,37 @@ not list is refused and the page shows the refusal once.
   as it was), so a group fill is the members' fills of one side within 2 s of its first. The group's current members count (benched
   ones too); an account that has left the group is no longer drawn on the group's chart (its fills stay on its own). A single
   account's chart is unchanged. `test/group-fill-marks.test.js`, `npm run smoke:group-ticket`.
+- **ONH and ONL, live overnight and locked at 9:30** (chart 1.40.0, `src/chart-engine.js` `overnightRange` and `onLines`,
+  `live/live.js`, the demo): the overnight high and low go live, then lock, the way the IB does. Drawn from the session's 18:00
+  start, from the 1-minute bars on every view: long dashes (12/5) while forming, solid from 9:30:00. No line when the history does
+  not reach back to 18:00, when ChartBridge reports a feed drop in the window, or with no Globex session; the status line says why.
+  `CHART_STYLE.md`, `test/onh.test.js`, `npm run smoke:onh` (screenshots).
+- **No false restart alarm on a new strategy entry** (ChartBridge 0.6.10, `nt8/ChartBridgeOrders.cs`): NinjaTrader reports a new
+  order the moment it is made, before ChartBridge has registered it, so a new Order Strategy entry could raise "could not be resumed
+  after the restart". ChartBridge now holds a Placing mark on the entry's tag from just before the order is made until it is sent or
+  refused, and leaves an entry this run is still placing out of the restart recovery. A real restart still recovers and reports
+  orphaned entries. Harness case `PlacingNotRestart` (`nt8/check/StrategiesHarness.cs`), a `PROTOCOL.md` note. No order is placed,
+  changed or cancelled differently.
+- **The NQ tick file to The Desk** (ChartBridge 0.6.10, new `nt8/ChartBridgeTicks.cs`; Anthony's decisions of 2026-10-29): on with
+  `bars = on` (`tickFile = off` turns only it off, `tickFileMaxMB`, default 2048, bounds the `ticks/` folder). Every NQ trade
+  ChartBridge receives goes on a bounded queue (a full queue drops and counts, never waits) and a thread of its own writes it to a raw
+  file per session and contract; no request to NinjaTrader for this. Every 3 minutes the raw is cut into chunks (the same bytes when
+  sent again) and posted to The Desk's `POST /api/ticks/chunk`. After the close, in the 1 second bars' window and through the gate,
+  one tick request per captured session is checked second by second against the live capture and sent to `POST /api/ticks/day` in
+  parts. The raw is deleted only when the check passed and The Desk says stored and packed; a day The Desk did not store is kept and
+  sent again 15 minutes later, 3 times, then set aside (kept, `/diag` says so). Lost trades and feed drops are flagged on every chunk
+  they touch, after a restart too; there is never more than one cutter or writer after a restart; the folder's size counts the day
+  files waiting. `/diag` `tickFile`. Packing is the data caretaker's on HOMESERVER. `PROTOCOL.md` "The NQ tick file to The Desk",
+  `nt8/check/BarsHarness.cs`, `test/nt8-ticks.test.js`.
+- **The 1 second bars' request starts at the session's open** (ChartBridge 0.6.10, `nt8/ChartBridgeBars.cs`): in NinjaTrader's time,
+  instead of 12:00 AM of the open's date, which NinjaTrader widened to the whole session before.
+- **A tick chart that got no history at the open asks again once** (ChartBridge 0.6.10): a Range or seconds load that went live with
+  no tick history because NinjaTrader had not answered yet is told once to load again (`historyLate`) when that late answer frees
+  the gate. Never from 09:25 to 16:00 New York on a weekday (so a reload can never land just after the open), at most once a page and
+  instrument in 5 minutes, and only for a load that is still the page's. Harness `GateLateAtOpen` (`nt8/check/WindowHarness.cs`).
+- **`/diag` shows what the install jobs check** (ChartBridge 0.6.10): `bars.pc` and `bars.pcFrom`, the PC name every Desk message
+  carries and where it came from (`config.txt` `pc` or the computer name); `bars.oneSecond.lastSent` lists every contract the 1
+  second pull covers, MNQ as well as NQ, with the latest session taken or "none yet".
 - Tests: `test/lifecycle.test.js` (the pure parts, the feed's steps against a fake ChartBridge, the PUT); harness cases in
   `nt8/check/GroupsHarness.cs`, `CopierHarness.cs`, `AccountsHarness.cs` and `AgentHarness.cs`. `nt8/PROTOCOL.md` "The account
   lifecycle (0.6.10)"; `CHART_STYLE.md` for the new controls.

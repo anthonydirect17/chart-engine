@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -209,7 +209,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
 | `pcClock` | the fields of hello's `pcClock` (0.5.6, see Delay readout): `checked`, then `offsetMs`, `rttMs`, `atUtcMs`, `server`, or `why`, `server` | to every page when a check of this PC's clock answers (every 5 minutes), when it changes to no answer, and when the PC clock steps by more than 250 ms; in the order lane. A page can get one before its `hello` (a page is told from the moment it connects); `hello` then carries the state as it is, and a check that ends while `hello` is built is sent again after it |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page; since 0.3.7 also a refused `htf` or `weekProfile` request (`warn`, "ChartBridge refused a htf message: why") |
-| `historyLate` | `root`, `sub` (0.6.8) | once, when a load that went ready on stand-in history gets NinjaTrader's minute answer after all: the page subscribes again (see The minute book); also (Sunday 11-01) once when a tick chart load got no tick history because NinjaTrader had not answered and that late answer has freed the gate, outside 09:25 to 16:00 ET (see One unanswered request) |
+| `historyLate` | `root`, `sub` (0.6.8) | once, when a load that went ready on stand-in history gets NinjaTrader's minute answer after all: the page subscribes again (see The minute book); also (0.6.10) once when a tick chart load got no tick history because NinjaTrader had not answered and that late answer has freed the gate, outside 09:25 to 16:00 ET (see One unanswered request) |
 | `settlement` | `root`, `p` (null when none is known), `date` (the trading date it settles, `yyyy-MM-dd`) (0.3.7) | when the prior settlement changes: a value for that date comes in, or a new session starts at 18:00 ET and the day before becomes the prior |
 | `htf` | `root`, `tf` (`4h`, `1D`, `1W`), `id` (the request's, or null), `name` (the contract, or null with an error), `bars`: `[[t,o,h,l,c,v], ...]` oldest first, the last one forming, `error` (null, or why there are no bars) (0.3.7) | the answer to an `htf` request |
 | `htfBar` | `root`, `tf`, `bars`: one or two `[t,o,h,l,c,v]` (0.3.7) | while a page has asked for that root and timeframe, at most once a second when its forming bar changed: the forming bar, after the closed bar's final values when a new bar began |
@@ -701,7 +701,7 @@ session waits for NinjaTrader, which has not answered an earlier tick request"),
 its state is back ("queued", or for a retry "failed once (...), asked again in 60 s") and it runs as usual. An answer that
 claimed its request at the time limit has 30 s more to finish its copy; past that it counts as unanswered (one Output line)
 until the copy ends. Minute charts load as usual.
-**Asked again once (Sunday 11-01, item 12).** A Range or seconds load that went live with no tick history because NinjaTrader
+**Asked again once (0.6.10, item 12).** A Range or seconds load that went live with no tick history because NinjaTrader
 had not answered (its own window timed out, or the gate was stuck on an earlier request; typical at the session open) is told
 once to load again (`historyLate`, its `sub`) when that late answer frees the gate; the page subscribes again and the new load
 asks through the gate as every load does (the failed window's 60 s retry delay does not hold it back). Never from 09:25 to
@@ -987,7 +987,7 @@ session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`,
 `asking NinjaTrader: <session contract>`, `waiting for the gate: <why>`, `waiting: regular trading hours ...`, `waiting:
 NinjaTrader has no price connection`, `stopped`), `waitingForGate` (why the gate is not idle for a bars request, or null),
 `roots`, `lastSent` (the latest session The Desk took, per contract), `waiting` (messages queued in `pending_bars.jsonl`),
-`setAside` (since this start), `gaveUp` (sessions not asked again until the next start), `lastRequest`, `lastError`, and (Sunday 11-01) `pc`: the PC name
+`setAside` (since this start), `gaveUp` (sessions not asked again until the next start), `lastRequest`, `lastError`, and (0.6.10) `pc`: the PC name
 every Desk message carries, with `pcFrom` `config.txt` or `computer name`, so an install job can check `pc = WORK` / `pc = HOME`); `pages` (0.3.4, one entry per connected page: `id`, `root`, `ready`, `queued`
 (entries waiting in its data lane), `orderLaneQueued`, `oldestDataMs` (how long the oldest waiting market data has
 waited, as the 5 s rule counts it)); `seams` (0.3.3, the last 20 subscribes, oldest first; see Backfill and live):
@@ -1107,7 +1107,7 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
   day it ends on), the front month the chart uses plus any other contract of that root with fills in that session, the last 5
   sessions not taken yet at the start (the catch-up) and each session from 17:05 New York. Never a session that has not closed.
 - **The request:** `BarsRequest(instrument, from, to)`, 1 tick, `MarketDataType.Last`, the instrument's trading hours,
-  `MergePolicy.DoNotMerge`, from the session's open itself (18:00 New York, in NinjaTrader's time zone; Sunday 11-01 build: until
+  `MergePolicy.DoNotMerge`, from the session's open itself (18:00 New York, in NinjaTrader's time zone; 0.6.10: until
   then it asked from 12:00 AM of the open's date, and NinjaTrader answered with the whole session before as well) to the session's
   close (never past now). Through the 0.3.5 gate as a bars job (`1s <session>
   <contract>` in `/diag` `books.gate`), so the same rules hold: queued only when the gate is idle (no window, backfill, last trades
@@ -1166,14 +1166,14 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
   `deskHasNo1s`, `gaveUp`, `lastBuild` (trades, seconds, messages, the trades of the answer outside the session that were left out,
   the request's from and to in NinjaTrader's time, the sides' method and counts, the time on NinjaTrader's thread) and `error`.
   Trades in NinjaTrader's answer outside the session are left out by time and counted in `lastBuild` ("N trades outside the
-  session left out"). Since the request starts at the open (Sunday 11-01 build) that count should be small; a large one shows
+  session left out"). Since the request starts at the open (0.6.10, Sunday 11-01 build) that count should be small; a large one shows
   NinjaTrader still gave the day before (harmless: nothing is counted twice). `lastSent` lists every contract the pull covers (the
   front contract of each of its roots and any contract a pass planned, MNQ as well as NQ): the latest session The Desk took a
-  whole set of, or `"none yet"` (Sunday 11-01, decided 2026-11-01).
+  whole set of, or `"none yet"` (0.6.10, decided 2026-11-01).
 - **The 1-minute bars are unchanged:** the same requests, messages and queue as 0.3.7 to 0.6.8, byte for byte (harness: the same
   session with the 1 second bars off and on gives the same 1-minute message).
 
-### The NQ tick file to The Desk (Sunday 11-01 build)
+### The NQ tick file to The Desk (0.6.10, Sunday 11-01 build)
 
 Anthony's decisions of 2026-10-29: one NQ tick file per session is the only market data kept, and everything is built from it (1
 second bars, 1 minute bars, the evening profile tape, the master day); MNQ trades take their bars from NQ's ticks (no MNQ tick
@@ -1203,7 +1203,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   it reads the files again, so a sender of an earlier start still running can never write the same `cut <seq>` with other bytes.
 
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.9","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.10","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","run":"a1b2c3d4e5f6","seq":12,"count":1834,"volume":2301,
    "first":1793397600123,"last":1793397779950,"lost":0,"gaps":0,
    "sides":{"bidAsk":1700,"tickRule":130,"none":4},"cols":["u","p","v","s"],"ticks":[[1793397600123,25000.25,1,1]]}
@@ -1233,7 +1233,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   until the next start.
 
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.9","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.10","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","set":"0a1b2c3d4e5f","part":1,"parts":48,"setTicks":951234,"setVolume":1203456,
    "first":1793397600001,"last":1793480399990,
    "check":{"status":"filled","liveTicks":950001,"liveVolume":1202001,"histTicks":951234,"histVolume":1203456,

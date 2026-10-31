@@ -44,6 +44,19 @@ test('0.6.9: recording only: the order files and the stop record are the 0.6.8 f
   for (const [f, h] of Object.entries(want)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.8 file');
 });
 
+test('0.6.10: the files this release does not touch are still the 0.6.8 files, byte for byte (while ChartBridge is 0.6.10)', () => {
+  if (!/public const string Version = "0\.6\.10";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
+  // 0.6.10 changed ChartBridgeOrders.cs (the Placing mark), ChartBridgeCopier.cs and ChartBridgeAgents.cs (the account lifecycle);
+  // the order record code is untouched (the 0.6.9 guards above still hold)
+  const want = {
+    'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
+    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
+    'ChartBridgeStrategies.cs': '588a308895185587f795276a0479d41c9ebc1843bd53ad6d7c06c8aa935d386a',
+    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+  };
+  for (const [f, h] of Object.entries(want)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.8 file');
+});
+
 test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set and cleared around it, noted before Submit', () => {
   const g = read('ChartBridgeGroups.cs');
   const loop = body(g, 'private static string GroupPlaceLocked(');
