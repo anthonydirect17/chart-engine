@@ -399,6 +399,28 @@ function notListedWords(r) {
   if (!out.length) out.push(r.unseen ? 'not connected this session' : 'not listed');
   return out.join(' · ');
 }
+/* ---------------- 1.40.0 (Sunday item A): the accounts ChartBridge lists, told to The Desk (PUT /api/chart-accounts/listed) so a new
+   account shows on Prop > Accounts before its first fill. Sim and Playback names are left out; at most 200 names of 1 to 64 characters. */
+const LISTED_MAX = 200;
+const listedNames = accounts => [...new Set((Array.isArray(accounts) ? accounts : []).map(a => (a && typeof a.name === 'string' ? a.name : ''))
+  .filter(n => n.length >= 1 && n.length <= 64 && !/^\s*(sim|playback)/i.test(n)))].sort().slice(0, LISTED_MAX);
+/**
+ * Whether to tell The Desk the listed accounts now. st: { desk (env.desk), got (ChartBridge's accounts arrived), accounts, lastKey (the
+ * names of the last list The Desk answered 2xx for, joined), stopped (a 404 this page load: an older Desk), busy (one in flight) }.
+ * Returns { send: false, why } or { send: true, names, key }.
+ */
+function listedPlan(st) {
+  const x = st || {};
+  if (x.desk === false) return { send: false, why: 'this window does not read The Desk' };
+  if (x.stopped) return { send: false, why: 'The Desk has no listed accounts (404): not asked again this page load' };
+  if (x.busy) return { send: false, why: 'one is on its way' };
+  if (!x.got) return { send: false, why: 'ChartBridge has not sent its accounts yet' };
+  const names = listedNames(x.accounts);
+  if (!names.length) return { send: false, why: 'no accounts to tell' };
+  const key = JSON.stringify(names);
+  if (key === x.lastKey) return { send: false, why: 'The Desk has this list already' };
+  return { send: true, names, key };
+}
 /** The PUT body for The Desk's outcome (PUT /api/accounts/{account}/outcome), or { error } */
 function outcomeBody(outcome) {
   if (outcome !== null && !OUTCOMES.includes(outcome)) return { error: 'The outcome is Blown, Promoted or none.' };
@@ -625,7 +647,7 @@ function ntFloorFlag(a, firmMins) {
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
   accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag,
-  roomParts, labelRefusal, deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, lifecycleStep, lifecycleBusy, flatRetry, FLAT_RETRIES, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
+  roomParts, labelRefusal, deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, listedNames, listedPlan, LISTED_MAX, lifecycleStep, lifecycleBusy, flatRetry, FLAT_RETRIES, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -825,7 +847,9 @@ function createFeed(env) {
         const was = new Set(S.archived.map(a => a.name));
         S.archived = Array.isArray(m.archived) ? m.archived.filter(a => a && typeof a.name === 'string') : [];
         if (S.got) for (const a of S.archived) if (!was.has(a.name)) log(a.name + ': archived');
+        const first = !S.got;
         S.accounts = list; S.got = true; S.lostAt = null;
+        if (first && env.desk !== false) reportListed();   // 1.40.0 (Sunday item A): The Desk hears of them now, not a minute later
         S.notListed = Array.isArray(m.notListed) ? m.notListed.filter(a => a && typeof a.name === 'string') : [];   // 1.40.0: ChartBridge 0.6.10
         firmPrune();                                          // review 7: a minimum set under other rules is forgotten
         changed(); return;
@@ -946,7 +970,21 @@ function createFeed(env) {
       .then(j => { S.desk = AC.cleanDesk(j); S.deskState = 'ok'; S.deskAt = Date.now(); }, e => { S.deskState = 'The Desk\'s limits could not be read (' + (e && e.message ? e.message : 'not reachable') + ').'; });
     /* 1.40.0 (C-B, C-C): ChartBridge's own /diag with The Desk's rows each minute: what it sends to The Desk, and what The Desk refused */
     const diag = Promise.resolve().then(() => env.fetch('/diag', { cache: 'no-store' })).then(r => (r.ok ? r.json() : null)).then(j => { S.diag = j && typeof j === 'object' ? j : null; }, () => { /* the last kept */ });
+    reportListed();
     Promise.all([limits, readTypes(), diag]).then(() => { changed(); if (!stopped) deskTimer = setTimeout(readDesk, DESK_EVERY_MS); });
+  }
+  /* 1.40.0 (Sunday item A): the accounts ChartBridge lists, to The Desk (AC.listedPlan): once a page load and whenever the list
+     changes, each minute with the rows and when ChartBridge's accounts first arrive. A failure is left (asked again only at the next
+     minute); a 404 (an older Desk) stops it for this page load. Never throws. */
+  const listed = { lastKey: '', stopped: false, busy: false };
+  function reportListed() {
+    const plan = AC.listedPlan({ desk: env.desk, got: S.got, accounts: S.accounts, lastKey: listed.lastKey, stopped: listed.stopped || stopped, busy: listed.busy });
+    if (!plan.send) return Promise.resolve(plan);
+    listed.busy = true;
+    return deskBase(env.fetch).then(url => env.fetch(url + '/api/chart-accounts/listed', { method: 'PUT', mode: 'cors', credentials: 'omit', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accounts: plan.names }) }))
+      .then(r => { if (r && r.ok) listed.lastKey = plan.key; else if (r && r.status === 404) listed.stopped = true; }, () => { /* left: the next minute asks again */ })
+      .then(() => { listed.busy = false; return plan; });
   }
   /* 1.30.0: The Desk's account types, now and with the limits every minute; the last good list kept in this browser and shown
      "as of" its time while The Desk is not reachable. Never throws. */
@@ -1016,7 +1054,7 @@ function createFeed(env) {
   const limit = name => { const a = account(name); return a ? AC.limitState(a, S.desk.get(name), rulesOf(a)) : null; };
   return {
     S, start, startAny, stop, account, limit, post, groupOf, rulesOf, store, setAccountType, readTypes, joinRefusal, joinPlan, joinWords,   // 1.37.0: the join, shared
-    setOutcome, lifecycleTick,   // 1.40.0: the account lifecycle
+    setOutcome, lifecycleTick, reportListed,   // 1.40.0: the account lifecycle; Sunday item A: the listed accounts to The Desk
     /** 1.30.0: an account's type on The Desk ({ id, firm, name, version, status }) or null */
     typeOf: name => { const d = S.desk.get(name); return d && d.accountType ? d.accountType : null; },
     listen(part) { subs.add(part); return () => subs.delete(part); },

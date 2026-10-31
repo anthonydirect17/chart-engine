@@ -433,10 +433,24 @@ try {
     outcome.set(name, body.outcome);
     return r.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ account: name, outcome: body.outcome }) });
   });
+  /* Sunday item A: the fake Desk's PUT /api/chart-accounts/listed (with its OPTIONS), as The Desk answers it */
+  const listedPuts = [];
+  await p6.route('http://localhost:8800/api/chart-accounts/listed', r => {
+    if (r.request().method() === 'OPTIONS') return r.fulfill({ status: 204, headers: cors });
+    const body = JSON.parse(r.request().postData() || '{}');
+    listedPuts.push({ method: r.request().method(), body, type: r.request().headers()['content-type'] });
+    return r.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ kept: body.accounts || [], left_out: [] }) });
+  });
   await p6.goto(`http://localhost:${LC_PORT}/live/?layout=Acc`);
   await p6.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p6, TEST_PIN);
   await p6.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
   await until(async () => (await rows(p6, '.apg-acc-g')).some(r => r.k === 'SIM-B'), 'SIM-B on the Accounts tab');
+  const lp = await until(() => listedPuts[0], 'the listed accounts to The Desk');
+  const ln = lp && Array.isArray(lp.body.accounts) ? lp.body.accounts : [];
+  check(lp && lp.method === 'PUT' && /application\/json/.test(lp.type || '') && ln.includes('EVAL-A') && !ln.some(n => /^\s*(sim|playback)/i.test(n)) && ln.join() === ln.slice().sort().join(),
+    'Sunday A: PUT /api/chart-accounts/listed with the accounts ChartBridge lists, Sim and Playback left out, sorted: ' + JSON.stringify(lp && lp.body));
+  await wait(400);
+  check(listedPuts.length === 1, 'Sunday A: sent once (the list unchanged): ' + listedPuts.length);
   await p6.click(`${AP} button[data-act="sim-toggle"]`).catch(() => {});
   // the drawer: Blown and Promoted only for an account with a prop account on The Desk
   await p6.click(`${AP} button[data-act="drawer"][data-id="SIM-B"]`);

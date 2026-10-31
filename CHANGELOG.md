@@ -58,6 +58,11 @@ not list is refused and the page shows the refusal once.
   `test/desk-send.test.js`, `nt8/check/RecordHarness.cs`.
 - **A group's trade tags go only to the members that trade** (C-D, `live/workspace.js` `groupTagMembers`): never a benched member,
   never a copier follower (on or off). `test/group-tags.test.js`.
+- **The Desk hears which accounts ChartBridge lists** (Sunday item A, `live/accounts.js` `listedPlan`): so a new account shows on The
+  Desk's Prop > Accounts before its first fill, the page sends `PUT /api/chart-accounts/listed` with the names ChartBridge lists
+  (Sim and Playback left out, at most 200, sorted): once a page load when ChartBridge's accounts arrive, and whenever the list changes
+  (checked each minute with The Desk's rows). Never when the window does not read The Desk or the list is empty; a failure waits for
+  the next minute, and a `404` (an older Desk) stops it for the page load. `test/listed-accounts.test.js`, `npm run smoke:accounts`.
 - **The Account page says when this PC sends no fills to The Desk** (C-C): `postFills` is off by default in `config.txt` (the default
   stays); the page reads `/diag` `desk.postFills` and, when it is off, says above the rows "This PC does not send fills to The Desk:
   its trades are missing from The Desk's stats." `test/desk-send.test.js`.
