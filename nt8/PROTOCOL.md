@@ -1107,9 +1107,18 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
   day it ends on), the front month the chart uses plus any other contract of that root with fills in that session, the last 5
   sessions not taken yet at the start (the catch-up) and each session from 17:05 New York. Never a session that has not closed.
 - **The request:** `BarsRequest(instrument, from, to)`, 1 tick, `MarketDataType.Last`, the instrument's trading hours,
-  `MergePolicy.DoNotMerge`, from the session's open itself (18:00 New York, in NinjaTrader's time zone; 0.6.10: until
-  then it asked from 12:00 AM of the open's date, and NinjaTrader answered with the whole session before as well) to the session's
-  close (never past now). Through the 0.3.5 gate as a bars job (`1s <session>
+  `MergePolicy.DoNotMerge`, from 12:00 AM of the session's own date in NinjaTrader's time zone (never before the open) to the
+  session's close (never past now). History: until 0.6.10 it asked from 12:00 AM of the open's date; 0.6.10 asked from the open
+  itself (18:00 New York), and NinjaTrader still answered with the whole session before as well, since it turns a by-date
+  request's from into 12:00 AM of its date and answers whole trading days. **Next build (narrow request):** the from is 12:00 AM
+  of the date the session ends on (in Chicago or New York time that is the session's own trading day, which NinjaTrader starts
+  at the 18:00 open), so the answer is the session alone. The answer must still reach the open: when its first trade in the
+  session is more than 10 minutes after the open (`Cover1sMinutes`), or it has none, nothing of it is sent, one Output line says
+  so, and the next pass asks that session from the open itself (the 0.6.10 request), as many times as a failure allows; a
+  restart tries the narrow request first again. `/diag` `bars.oneSecond.lastBuild` says which was asked ("the session's own
+  trading day" or "from the open: the narrow request did not reach it") and how many trades outside the session were left out.
+  `bars.oneSecond.lastSent` lists every contract the pull covers, NQ and MNQ alike (0.6.10), "none yet" until The Desk has
+  taken a set of it. Through the 0.3.5 gate as a bars job (`1s <session>
   <contract>` in `/diag` `books.gate`), so the same rules hold: queued only when the gate is idle (no window, backfill, last trades
   or page load out or to come), never beside a chart load, and a request NinjaTrader does not answer frees the gate at its limit
   (180 s here; its late answer is dropped). **Only from 16:15 to 18:00 New York on a weekday, and on the weekend while the market is
