@@ -461,7 +461,9 @@ try {
   const leave = await until(async () => ((await control(LC_PORT, 'received')).groupMsgs || []).slice(g0).find(m => m.type === 'accountGroup' && m.account === 'SIM-B'), 'SIM-B out of Lucid');
   check(leave && leave.group === null, '1.40.0: then out of its group (accountGroup with no group): ' + JSON.stringify(leave));
   const hid = await until(async () => (await v3(LC_PORT)).accounts.archived.some(a => a.name === 'SIM-B') ? true : null, 'SIM-B hidden');
-  check(hid && !(await rows(p6, '.apg-acc-g')).some(r => r.k === 'SIM-B') && !!(await p6.$(`${AP} .apg-arch-g [data-k="a|SIM-B"]`)), '1.40.0: then hidden: out of the rows, under Hidden');
+  /* the page re-renders after ChartBridge's accounts message: wait for it (review: checked at once, this was flaky) */
+  const shown = hid && await until(async () => !(await rows(p6, '.apg-acc-g')).some(r => r.k === 'SIM-B') && !!(await p6.$(`${AP} .apg-arch-g [data-k="a|SIM-B"]`)), 'SIM-B out of the rows and under Hidden');
+  check(!!shown, '1.40.0: then hidden: out of the rows, under Hidden');
   // a step ChartBridge would refuse (EVAL-A holds a position): shown, nothing sent
   const a0 = ((await control(LC_PORT, 'received')).types.accountArchive || 0);
   await p6.click(`${AP} button[data-act="drawer"][data-id="EVAL-A"]`);
