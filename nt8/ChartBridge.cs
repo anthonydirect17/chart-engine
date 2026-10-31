@@ -140,6 +140,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeOrders.ResetConfig();
             AllowOrigins = new List<string>();
             ChartBridgeBars.ResetConfig();
+            ChartBridgeTicks.ResetConfig();   // the NQ tick file: on with bars = on unless config.txt has tickFile = off
             ChartBridgeStops.ResetConfig();   // 0.6.6: the stop record follows postFills unless config.txt has postStops
             ChartBridgeOrderRecord.ResetConfig();   // 0.6.9: the order record follows postFills unless config.txt has postOrders
             ChartBridgeSwitches.Reset();   // 0.4.0 accounts: the v3 switches, all ON unless config.txt turns one off (Anthony 2026-10-07)
@@ -176,6 +177,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (ChartBridgeBot.ReadConfig(key, val)) { }    // 0.4.0 bot: bot, botRoot, botLibrary (ChartBridgeBot.cs)
                 else if (ChartBridgeAgents.ReadConfig(key, val)) { }   // 0.5.0 agents: agents = manrae (ChartBridgeAgents.cs)
                 else if (ChartBridgeClock.ReadConfig(key, val)) { }   // 0.5.6: timeServer = time.windows.com, or off (ChartBridgeClock)
+                else if (ChartBridgeTicks.ReadConfig(key, val)) { }   // tickFile = off, tickFileMaxMB (ChartBridgeTicks.cs)
                 else if (ChartBridgeBars.ReadConfig(key, val)) { }   // bars, barsRoots, pc (ChartBridgeBars.cs)
                 else if (ChartBridgeOrders.ReadConfig(key, val)) { }   // trading, tradeAccounts, maxQty.<ROOT>, maxTicksAway, maxBracketTicks, merge, orderTypes, strategies
                 else if (Array.IndexOf(ChartBridgeSwitches.Names, key) >= 0) { }   // accountChecks, cancelFromList: read by ChartBridgeSwitches.Note above
@@ -2006,7 +2008,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static int sending, batchSize = FullBatch;
         private static bool lastFailed;
         private static string lastError = "";
-        private static long setAside, rejectedByDesk;
+        private static long setAside, rejectedByDesk, keepRejectedFailed;   // 0.6.10 (review): keepRejectedFailed, NoteRejectedSafe
         private static string File_ { get { return Path.Combine(ChartBridgeConfig.Folder, "pending_fills.jsonl"); } }
         private static string SetAsideFile { get { return Path.Combine(ChartBridgeConfig.Folder, "rejected_fills.jsonl"); } }
 
@@ -2063,7 +2065,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             int n; lock (Sync) n = PendingList.Count;
             return "{\"postFills\":" + (ChartBridgeConfig.PostFills ? "true" : "false") + ",\"deskUrl\":" + CbJson.Str(ChartBridgeConfig.DeskUrl) +
                 ",\"waiting\":" + n + ",\"lastSendFailed\":" + (lastFailed ? "true" : "false") + ",\"lastError\":" + CbJson.Str(lastError) +
-                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + "}";
+                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + ",\"rejectedFile\":\"rejected_fills.jsonl\"" +
+                ",\"keepRejectedFailed\":" + Interlocked.Read(ref keepRejectedFailed) + "}";
         }
 
         private static void Remove(string[] batch)
@@ -2109,9 +2112,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string text;
                     using (HttpWebResponse res = (HttpWebResponse)await call)
                     using (StreamReader r = new StreamReader(res.GetResponseStream(), Encoding.UTF8)) text = r.ReadToEnd();
+                    NoteRejectedSafe(text, batch);   // 0.6.10 (C-B): each one The Desk rejected inside its 200, kept before the batch goes (never throws)
                     Remove(batch);
                     if (batch.Length > 1) batchSize = FullBatch;   // while hunting a bad fill, stay at one per request
-                    NoteRejected(text);
                     lock (Sync) more = PendingList.Count > 0;
                     if (lastFailed) { ChartBridgeServer.Log("The Desk is taking fills again."); lastFailed = false; }
                     lastError = "";   // /diag: no stale error once a send has gone through
@@ -2149,8 +2152,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             lastFailed = true;
         }
 
-        // The Desk answers 200 with a "rejected" list for fills it could not store: say so once per answer.
-        private static void NoteRejected(string text)
+        // The Desk answers 200 with a "rejected" list for fills it could not store: say so once per answer. 0.6.10 (Anthony 2026-10-30,
+        // C-B): each rejected fill is also appended to rejected_fills.jsonl with The Desk's reason, as the 400/422 path keeps a bad one, so
+        // none is dropped unseen; /diag desk.rejectedByDesk counts them and desk.rejectedFile names the file.
+        // 0.6.10 (review): the keeping runs before Remove(batch), so it must never throw: an exception in it (The Desk's answer it
+        // cannot read, the file not written; a reason with an odd escape is kept as sent, ReasonText) would land in the send's catch and the batch The Desk already took would be sent again. Logged once per answer and
+        // counted in /diag (desk.keepRejectedFailed); the batch still leaves the queue. True when it ran through.
+        internal static bool NoteRejectedSafe(string text, string[] batch)
+        {
+            try { NoteRejected(text, batch); return true; }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref keepRejectedFailed);
+                try { ChartBridgeServer.Log("could not keep what The Desk rejected in its answer (fills): " + ex.Message + "; what it took is not sent again"); } catch (Exception) { }
+                return false;
+            }
+        }
+
+        private static void NoteRejected(string text, string[] batch)
         {
             Match m = RejectedRx.Match(text ?? "");
             if (!m.Success || m.Groups[1].Value.Trim().Length == 0) return;
@@ -2158,14 +2177,46 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (n == 0) return;
             Interlocked.Add(ref rejectedByDesk, n);
             Match why = ReasonRx.Match(m.Groups[1].Value);
-            ChartBridgeServer.Log("The Desk could not store " + n + " fill(s)" + (why.Success ? ", for example: " + why.Groups[1].Value : ""));
+            int kept = KeepRejected(m.Groups[1].Value, batch, SetAsideFile);
+            ChartBridgeServer.Log("The Desk could not store " + n + " fill(s)" + (why.Success ? ", for example: " + why.Groups[1].Value : "") + "; " + kept + " kept in rejected_fills.jsonl with its reason");
+        }
+
+        private static readonly Regex RejectedItemRx = new Regex("\\{(?:[^{}\"]|\"(?:[^\"\\\\]|\\\\.)*\")*\\}");
+        private static readonly Regex IndexRx = new Regex("\"index\"\\s*:\\s*([0-9]+)");
+        // 0.6.10 (C-B): each item of The Desk's "rejected" list ({index, reason, ...}) whose index names an item of the batch sent: that
+        // item, as it was sent, with "desk_reason" (The Desk's words) put first, one line each in file. Returns how many were kept.
+        internal static int KeepRejected(string rejectedList, string[] batch, string file)
+        {
+            List<string> lines = new List<string>();
+            foreach (Match item in RejectedItemRx.Matches(rejectedList ?? ""))
+            {
+                Match ix = IndexRx.Match(item.Value);
+                int i;
+                if (!ix.Success || !int.TryParse(ix.Groups[1].Value, out i) || i < 0 || i >= batch.Length) continue;
+                string sent = batch[i] ?? "";
+                if (!sent.StartsWith("{")) continue;
+                Match why = ReasonRx.Match(item.Value);
+                string reason = why.Success ? ReasonText(why.Groups[1].Value) : "no reason given";
+                lines.Add("{\"desk_reason\":" + CbJson.Str(reason) + (sent.Length > 2 ? "," + sent.Substring(1) : "}"));
+            }
+            if (lines.Count == 0) return 0;
+            File.AppendAllLines(file, lines);   // 0.6.10 (review): a failed write goes to NoteRejectedSafe (logged, counted in keepRejectedFailed)
+            return lines.Count;
+        }
+
+        // 0.6.10 (review): The Desk's reason as text: JSON's escapes undone; one Regex.Unescape will not read (\q and the like) keeps the raw
+        // text as The Desk sent it, so the rejected item is still kept
+        internal static string ReasonText(string raw)
+        {
+            try { return Regex.Unescape(raw); }
+            catch (ArgumentException) { return raw; }
         }
     }
 
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.6.9";   // 0.6.9: the stats suite's Phase 2 (recording only): 1 second bars to The Desk, the order record (every order type, POST /api/order-events), a decision id on a group entry's orders and fills; 0.6.8: the minute book (minute and tick charts' history up to now from every live trade ChartBridge saw), a hole recorded in /diag and history.log (never shown), 20 s limits on a load's minute history and last trades; 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
+        public const string Version = "0.6.10";   // 0.6.10: the account lifecycle (Anthony 2026-10-30): remove-only changes for an account NinjaTrader no longer lists (leave its group, a copier follower off then removed, Hide with no stale hold), Hide takes a member out of its group in the same step, a member not in NinjaTrader no longer blocks an agent's group, a group preview sizes only the members gate 2 lets trade, the accounts message's notListed, kept what The Desk rejects inside a 200; also an entry being placed is not a restart (the Placing mark), the NQ tick file to The Desk (ChartBridgeTicks.cs), the 1 second request from the session's open, a tick chart with no history at the open asks again once (historyLate), /diag's pc and every 1 second contract; 0.6.9: the stats suite's Phase 2 (recording only): 1 second bars to The Desk, the order record (every order type, POST /api/order-events), a decision id on a group entry's orders and fills; 0.6.8: the minute book (minute and tick charts' history up to now from every live trade ChartBridge saw), a hole recorded in /diag and history.log (never shown), 20 s limits on a load's minute history and last trades; 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -2235,6 +2286,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
                     StartListening(cts.Token, 0);
                     ChartBridgeBars.Start();   // daily bars to The Desk, when bars = on (its own low-priority thread)
+                    ChartBridgeTicks.Start();  // the NQ tick file, when bars = on and not tickFile = off (two low-priority threads of its own)
                     ChartBridgeCopier.Start();   // 0.4.0 copier: when copier = on (its own thread and 1 s timer); starts stood down
                     try { ChartBridgeBranches.Poll(); } catch (Exception ex) { Log("daily reset error: " + ex.Message); }   // 0.6.3 (audit C1): a 17:00 ET reset missed while off runs now, once every branch is loaded
                     ChartBridgeClock.Start();    // 0.5.6: this PC's clock against a time server, every 5 minutes on its own thread (measures only)
@@ -2264,6 +2316,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeBot.Stop();   // 0.4.0 bot
                 ChartBridgeAgents.Stop();   // 0.5.0 agents
                 ChartBridgeBars.Stop();
+                ChartBridgeTicks.Stop();    // the NQ tick file: capture off, its threads end, a post in flight aborted
                 ChartBridgeCopier.Stop();   // 0.4.0 copier:
                 ChartBridgeClock.Stop();    // 0.5.6: the time check
                 try { if (accountTimer != null) accountTimer.Dispose(); } catch (Exception) { }
@@ -2824,6 +2877,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // 0.4.0: tape timing counters (/diag "tape"), after the trade went out, on their own: never stop a trade (ChartBridgeTape.cs)
                 try { ChartBridgeTape.OnPrint(root, book.Tick, ChartBridgeTime.UtcMs(utc), rx, t, e.Price); }
                 catch (Exception tx) { ChartBridgeTape.Failed(tx); }
+                // the NQ tick file (ChartBridgeTicks.cs): one enqueue on a bounded queue, never a wait (a full queue drops and counts)
+                try { ChartBridgeTicks.OnTrade(root, e.Instrument != null ? e.Instrument.FullName : null, book.Tick, ChartBridgeTime.UtcMs(utc), e.Price, e.Volume, side, method); }
+                catch (Exception) { }
                 HtfOnTrade(root, e.Time, t, e.Price, e.Volume);   // 0.3.7: the forming 4h, 1D and 1W bars, from this trade (no request)
                 ChartBridgeBot.OnTick(json);   // 0.4.0 bot: every live trade to the bot (one read when none is connected)
                 ChartBridgeAgents.OnTick(root, json);   // 0.5.0 agents: every live trade to each agent (its subscribed root came through the seam above)
@@ -2882,6 +2938,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool FromKept;                    // re-review B: answered from NinjaTrader's fresh kept answer (no request)
             public DateTime AnsweredNt = DateTime.MaxValue;   // NinjaTrader's clock when its minute answer came
             public int LateSent;                     // "historyLate" sent (once)
+            public int WindowLateSent;               // Sunday 11-01 (item 12): told once to load again after a late tick answer
             public int WaitNoted;                    // re-review C: the first time limit passed with nothing to stand in
             public DateTime HistoryFrom;             // the minute request's start (kept answers are cut to it)
             public CancellationToken Stop;           // ChartBridge's run: a timer or a late answer after a stop does nothing
@@ -3642,7 +3699,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (book.Cache == null)
                 {
                     if (book.WindowAsking && stuck == null) { book.WindowWaiters.Add(L); if (L.Diag != null) L.Diag.Asked = "shared"; return; }   // the same answer
-                    if (stuck != null) { none = true; if (L.Diag != null) L.Diag.Error = StuckNote(stuck); }   // X1, review 4 B1: never waits on it
+                    if (stuck != null) { none = true; if (L.Diag != null) L.Diag.Error = StuckNote(stuck); NoteWindowLate(L); }   // X1, review 4 B1: never waits on it
                     else if (backoff) none = true;
                     else
                     {
@@ -3684,8 +3741,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void AskWindow(RootBook book, Instrument inst, int gen, int count, int round)
         {
             GateJob j = new GateJob { Kind = "window", Root = book.Root, Book = book, TimeoutMs = WindowTimeoutMs };
-            j.OnTimeout = () => WindowFailed(book, gen, "no answer from NinjaTrader in " + (WindowTimeoutMs / 1000) + " s", true);
-            j.OnStuck = what => WindowFailed(book, gen, StuckNote(what), false);   // review 4 B1: never left waiting on a stuck gate
+            j.OnTimeout = () => WindowFailed(book, gen, "no answer from NinjaTrader in " + (WindowTimeoutMs / 1000) + " s", true, true);
+            j.OnStuck = what => WindowFailed(book, gen, StuckNote(what), false, true);   // review 4 B1: never left waiting on a stuck gate
             j.OnDropped = () => WindowFailed(book, gen, "ChartBridge stopped before the request went out", false);   // lf7 N1
             j.Start = done =>
             {
@@ -3766,7 +3823,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // A window that failed: its loads go live with no trades (their charts start from now), and no new ask for a minute.
-        private static void WindowFailed(RootBook book, int gen, string why, bool backoff)
+        private static void WindowFailed(RootBook book, int gen, string why, bool backoff) { WindowFailed(book, gen, why, backoff, false); }
+        // waitsOnNt: it failed because NinjaTrader had not answered a tick request (its own or an earlier one): its loads may be told
+        // to load again once that late answer frees the gate (WindowLateRetry, item 12).
+        private static void WindowFailed(RootBook book, int gen, string why, bool backoff, bool waitsOnNt)
         {
             List<object> waiters;
             lock (book.Sync)
@@ -3781,6 +3841,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (object o in waiters)
             {
                 Load w = (Load)o;
+                if (waitsOnNt) NoteWindowLate(w);
                 if (w.Diag != null) w.Diag.Error = why;
                 if (Current(w)) w.HeadSent.ContinueWith(delegate { FinishWindow(w, null); }, TaskScheduler.Default);
             }
@@ -4032,6 +4093,57 @@ namespace NinjaTrader.NinjaScript.AddOns
             Log(what + ": NinjaTrader answered after it was given up; not used. Tick requests go out again");
             foreach (GateJob b in backfills) BackfillWaits(b.Book, null);   // back to the state they had; they run as usual
             GateKick();
+            WindowLateRetry();   // item 12: the loads that got no tick window meanwhile are told once to load again
+        }
+
+        // Sunday 11-01, item 12 (decided 2026-11-01): a tick chart load whose served window got nothing because NinjaTrader had not
+        // answered a tick request (its own window timed out, or the gate was stuck on an earlier request; typical at the session
+        // open) is told ONCE to load again ("historyLate", as 0.6.8's minute history) when that late answer frees the gate. The new
+        // load asks through the gate as every load does (the failure's retry delay does not hold it back). Never 09:30 to 16:00 New
+        // York time on a weekday (no new tick request in trading hours from this); at most once a page and instrument in
+        // WindowLateGapMs; a load no longer the page's is skipped. The quiet time starts at 09:25 (5 minutes before the open), so a new ask
+        // can never land just after 09:30.
+        public static int WindowLateGapMs = 300000;
+        private static readonly List<Load> WindowLateLoads = new List<Load>();
+        private static readonly Dictionary<string, double> WindowLateAt = new Dictionary<string, double>();
+        private static void NoteWindowLate(Load L)
+        {
+            if (L == null || !L.Window || L.Agent) return;
+            lock (WindowLateLoads) { if (!WindowLateLoads.Contains(L)) WindowLateLoads.Add(L); if (WindowLateLoads.Count > 500) WindowLateLoads.RemoveAt(0); }
+        }
+        public static bool InWindowLateQuiet(DateTime et)
+        {
+            if (et.DayOfWeek == DayOfWeek.Saturday || et.DayOfWeek == DayOfWeek.Sunday) return false;
+            TimeSpan tod = et.TimeOfDay;
+            return tod >= new TimeSpan(9, 25, 0) && tod < new TimeSpan(16, 0, 0);   // re-review 3: from 09:25, so no ask lands just after 09:30
+        }
+        private static void WindowLateRetry()
+        {
+            List<Load> loads;
+            lock (WindowLateLoads) { loads = new List<Load>(WindowLateLoads); WindowLateLoads.Clear(); }
+            if (loads.Count == 0) return;
+            DateTime et = TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(NowNt()), ChartBridgeTime.Eastern);
+            if (InWindowLateQuiet(et))
+            {
+                foreach (string root in loads.Select(x => x.Root).Distinct()) HistoryNote(root, "the late tick answer freed the gate inside 09:25 to 16:00 ET: tick charts are not told to load again (they load again on a reload)");
+                return;
+            }
+            double now = ChartBridgeTime.NowUtcMs(), was;
+            foreach (Load L in loads)
+            {
+                if (L.Stop.IsCancellationRequested || !Current(L) || Interlocked.Exchange(ref L.WindowLateSent, 1) != 0) continue;
+                string key = L.Client.Id.ToString(CultureInfo.InvariantCulture) + "|" + L.Root;
+                lock (WindowLateAt)
+                {
+                    if (WindowLateAt.TryGetValue(key, out was) && now - was < WindowLateGapMs) { HistoryNote(L.Root, "the late tick answer freed the gate, but the page was told to load again less than " + (WindowLateGapMs / 60000) + " minutes ago: not told again"); continue; }
+                    WindowLateAt[key] = now;
+                    if (WindowLateAt.Count > 500) WindowLateAt.Clear();
+                }
+                RootBook book = BookOf(L.Root, L.Inst);
+                lock (book.Sync) book.WindowFailedMs = -1;   // the failure's retry delay does not hold back the one new ask
+                L.Client.SendData("{\"type\":\"historyLate\",\"root\":" + CbJson.Str(L.Root) + L.SubJson + "}");
+                HistoryNote(L.Root, "NinjaTrader's late tick answer freed the gate: the page that got no tick history was told to load again (once)");
+            }
         }
         // A queued backfill's label while the gate is stuck (review 4 S2; a queued retry too, review 5 S1): it waits, it is not
         // "building"; null: back to the state it had (queued, or failed once and asked again).
@@ -4219,6 +4331,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (GateLock) { GateWindows.Clear(); GateBackfills.Clear(); GateBarJobs.Clear(); GateHtfJobs.Clear(); gateStuck = null; gateStuckJob = null; tailsOut = 0; gateStopped = false; }   // the harness: as after a start
             HtfReset();
             lock (WeekCache) WeekCache.Clear();
+            lock (WindowLateLoads) WindowLateLoads.Clear();
+            lock (WindowLateAt) WindowLateAt.Clear();
             Interlocked.Exchange(ref listeningSinceUtcTicks, listeningSinceUtc.Ticks);
             Interlocked.Exchange(ref feedUpSinceUtcTicks, listeningSinceUtc.Ticks); Interlocked.Exchange(ref feedDown, 0);
             Interlocked.Exchange(ref firstTradeUtcTicks, 0);
@@ -4428,6 +4542,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Interlocked.Exchange(ref feedDown, 1);   // a session that starts before the feed is back is not whole
             if (MarketClosedNow()) { Log("data feed: " + why + " while the market is closed; no trade was missed"); return; }   // S-B
+            ChartBridgeTicks.NoteFeedDrop();   // the NQ tick file's next chunk says the capture may have a hole
             HtfFeedDropped(root);   // 0.3.7: the forming higher-timeframe bars miss trades: asked again at the next request
             List<RootBook> list; lock (Books) list = Books.Values.Where(b => root == null || b.Root == root).ToList();
             double et = ChartBridgeTime.EtSeconds(DateTime.UtcNow);
@@ -5707,6 +5822,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"stops\":").Append(ChartBridgeStops.DiagJson());   // 0.6.6: the stop record to The Desk
             b.Append(",\"orderRecord\":").Append(ChartBridgeOrderRecord.DiagJson());   // 0.6.9: the order record to The Desk, and the decision ids
             b.Append(",\"bars\":").Append(ChartBridgeBars.DiagJson());   // 0.3.6: daily 1-minute bars to The Desk
+            b.Append(",\"tickFile\":").Append(ChartBridgeTicks.DiagJson());   // the NQ tick file to The Desk (ChartBridgeTicks.cs)
             b.Append(",\"seams\":").Append(SeamsJson());   // 0.3.3: where each load's backfill met the live trades
             b.Append(",\"historyNotes\":").Append(HistoryNotesJson());   // 0.6.8: the history path's notes (also history.log)
             b.Append(",\"sides\":").Append(SidesJson());

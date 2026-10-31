@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.39.2
+ * chart-engine 1.40.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.39.2';
+const VERSION = '1.40.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -808,7 +808,8 @@ function initialBalance(data, opts) {
   res.state = locked ? 'locked' : 'forming'; res.high = H; res.low = L;
   return res;
 }
-/* The forming IB's dash: long dashes, unlike the prior-day and overnight 6/4, value area 3/4 and prior close 2/3. */
+/* The forming IB's dash: long dashes, unlike the prior-day 6/4, value area 3/4 and prior close 2/3 (the forming ONH and ONL
+   take it too, as they go live then lock the way the IB does). */
 const IB_FORMING_DASH = [12, 5];
 /**
  * initialBalance() result -> level lines "IBH" and "IBL", drawn from 9:30 (`from`) to the right edge: long dashes
@@ -821,6 +822,74 @@ function ibLines(ib, colors) {
   return [
     { key: 'ibh', name: 'IBH', price: ib.high, color: C.ibHigh, dash, layer: 'ib', from: ib.start, tone: 'high' },
     { key: 'ibl', name: 'IBL', price: ib.low, color: C.ibLow, dash: dash.slice(), layer: 'ib', from: ib.start, tone: 'low' },
+  ];
+}
+
+/* ---------------------------------------------------------------- overnight high and low, live then locked */
+/**
+ * The overnight range of the trading day `opts.asOf` falls in: the high and low of the overnight session, from the
+ * session's 18:00 ET start (`sessionStart`; the evening before, Sunday 18:00 for a Monday) up to (not including)
+ * 9:30:00 ET (`end`, the regular open), live while it forms and locked from 9:30:00, the way initialBalance() goes
+ * live then locks. Same data rules: `data` is sorted, oldest first, bars { t, h, l } of `opts.barSeconds` (60 for
+ * 1-minute bars) or trades [t, price, ...] with barSeconds 0; a bar across 18:00 or 9:30 makes the answer 'inexact'.
+ *
+ * Coverage: the data must reach back before the session's 18:00 start (a bar of an earlier session, or a trade before
+ * it), or `opts.from`, the time from which the data is known complete, must be at or before it; otherwise
+ * 'uncovered' (a page loaded mid-session with too short a history). Quiet minutes with no trade are normal overnight,
+ * so a missing minute is not taken as a hole. `opts.dropAt`, a time the data connection is known to have been down
+ * (ChartBridge's profile drop), inside the window up to now makes the answer 'gap': trades may be missing.
+ *
+ * Returns { state, high, low, start, end }: 'closed' (no CME Globex session that trading day: a weekend, New Year's
+ * Day, Good Friday, Christmas), 'forming' (18:00 to 9:30; high and low so far, null before the first trade),
+ * 'locked' (from 9:30:00 to the next 18:00), 'empty' (locked with no trade in the window), 'uncovered', 'gap' or
+ * 'inexact'. high and low are null in every state but 'forming' and 'locked'.
+ */
+function overnightRange(data, opts) {
+  const o = Object.assign({ sessionStart: 18 * 3600, end: 34200, barSeconds: 60, from: undefined, dropAt: undefined }, opts || {});
+  const list = data || [];
+  const n = list.length;
+  const tick = n && Array.isArray(list[0]);
+  const w = tick ? 0 : o.barSeconds;
+  const tAt = i => tick ? list[i][0] : list[i].t;
+  const asOf = o.asOf !== undefined ? o.asOf : n ? tAt(n - 1) : 0;
+  const day = tradeDay(asOf, o.sessionStart);
+  const start = (day - 1) * DAY + o.sessionStart, end = day * DAY + o.end;
+  const res = { state: 'forming', high: null, low: null, start, end };
+  if (!cmeSessionDay(day)) { res.state = 'closed'; return res; }
+  // first bar ending after 18:00 (bars), or first trade at or after 18:00 (trades)
+  const after = i => w > 0 ? tAt(i) + w > start : tAt(i) >= start;
+  let lo = 0, hi = n;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (after(mid)) hi = mid; else lo = mid + 1; }
+  if (lo < n && tAt(lo) < start) { res.state = 'inexact'; return res; }          // a bar across 18:00
+  const covered = o.from !== undefined ? o.from <= start : lo > 0;
+  if (!covered) { res.state = 'uncovered'; return res; }
+  const upTo = Math.min(asOf, end);
+  if (o.dropAt !== undefined && o.dropAt !== null && o.dropAt >= start && o.dropAt < upTo) { res.state = 'gap'; return res; }
+  let H = -Infinity, L = Infinity;
+  for (let i = lo; i < n; i++) {
+    const t = tAt(i);
+    if (t >= end || t > asOf) break;                                            // nothing from 9:30, or after asOf
+    if (t + w > end) { res.state = 'inexact'; return res; }                     // a bar across 9:30
+    const h = tick ? list[i][1] : list[i].h, l = tick ? list[i][1] : list[i].l;
+    if (h > H) H = h;
+    if (l < L) L = l;
+  }
+  const locked = asOf >= end;
+  if (H === -Infinity) { res.state = locked ? 'empty' : 'forming'; return res; }
+  res.state = locked ? 'locked' : 'forming'; res.high = H; res.low = L;
+  return res;
+}
+/**
+ * overnightRange() result -> level lines "ONH" and "ONL" drawn as IBH and IBL are: from the session's 18:00 start
+ * (`from`) to the right edge, the IB's long dashes 12/5 while forming, solid once locked at 9:30. Both in the
+ * overnight color (`colors.overnight`, else LEVEL_COLORS.overnight).
+ */
+function onLines(on, colors) {
+  if (!on || on.high === null || on.low === null || (on.state !== 'forming' && on.state !== 'locked')) return [];
+  const dash = on.state === 'forming' ? IB_FORMING_DASH.slice() : [], C = levelColors(colors);
+  return [
+    { key: 'onh', name: 'ONH', price: on.high, color: C.overnight, dash, from: on.start },
+    { key: 'onl', name: 'ONL', price: on.low, color: C.overnight, dash: dash.slice(), from: on.start },
   ];
 }
 
@@ -4392,7 +4461,7 @@ return {
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, ibPair, distinct, mix, buildTheme, chromeColors, CHROME_VARS,
     V1_GROUND, groundOf, HOUSE_CHROME,
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
-    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
+    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, overnightRange, onLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, orderLabelShort, positionShort, htfStart, htfEnd, HTF_SECONDS, cornerPlace, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
     roomBars, ROOM_MIN, ROOM_MAX, LINE_SOFT, LABEL_SOFT, fitRange, fmtRemain, barRemain, atr, smaAt, emaAt, bandsAt, rsiAt, smaSeries, emaSeries, bollinger, rsiSeries, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, rthVwapUpdate, vwapAt, PD_POC_DASH,
   },

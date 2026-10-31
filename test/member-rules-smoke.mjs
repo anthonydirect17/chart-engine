@@ -117,8 +117,8 @@ try {
   await p.click(`${AP} [data-act="rules-save"][data-id="SIM-A"]`);
   const sentA = await until(async () => (await groupMsgs(PORT)).find(m => m.type === 'memberRules' && m.account === 'SIM-A'), 'SIM-A\'s memberRules');
   check(sentA && sentA.dailyLoss === 3000 && sentA.size === 150000 && sentA.typeId === 'sample-lucid-150k', 'sent: memberRules with the daily loss changed, the rest as it was: ' + JSON.stringify(sentA));
-  const roomA = await until(async () => { const t = await p.$eval(`${AP} .gr-row[data-k="SIM-A"] .apg-rtext`, e => e.title).catch(() => ''); return /Daily loss: \$3,000\.00 left of \$3,000\.00/.test(t) ? t : null; }, 'SIM-A\'s daily room from its own rules');
-  if (!roomA) console.log('  info: room tip ' + await p.$eval(`${AP} .gr-row[data-k="SIM-A"] .apg-rtext`, e => e.title).catch(() => 'none'));
+  const roomA = await until(async () => { const t = await p.$eval(`${AP} .gr-row[data-k="SIM-A"] .apg-rtext [title]`, e => e.title).catch(() => ''); return /Daily loss: \$3,000\.00 left of \$3,000\.00/.test(t) ? t : null; }, 'SIM-A\'s daily room from its own rules');
+  if (!roomA) console.log('  info: room tip ' + await p.$eval(`${AP} .gr-row[data-k="SIM-A"] .apg-rtext [title]`, e => e.title).catch(() => 'none'));
   check(!!roomA, 'the Room reads the member\'s own daily loss ($3,000 of $3,000): ' + (roomA || '').split('\n').join(' | '));
   await p.screenshot({ path: path.join(out, 'member-rules-accounts-1366.png') });
   /* 6. 1.37.0: the group's risk percent is set on the Multi-Account panel (each chip shows its own dollars; smoke:multi-account), not in

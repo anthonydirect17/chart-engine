@@ -37,7 +37,7 @@ test('1.38.1 (Anthony 2026-10-23): the League chart and the Drone sky are NQ 1 m
 
 test('0.6.8: ChartBridge keeps a minute book per instrument and joins it to NinjaTrader\'s minute answer at one seam', () => {
   const cs = read('nt8/ChartBridge.cs');
-  assert.match(cs, /public const string Version = "0\.6\.[89]";/);   // 0.6.9: the history path unchanged (recording only)
+  assert.match(cs, /public const string Version = "0\.6\.([89]|10)";/);   // 0.6.9: the history path unchanged (recording only); 0.6.10: the account lifecycle (no history change)
   // stamped at the close, end-inclusive, as TailFromTicks and NinjaTrader
   assert.match(cs, /public static long CloseOf\(long t\) \{ long rem = t % Minute; return rem == 0 \? t : t - rem \+ Minute; \}/);
   // fed under the book's lock in OnMarketData, reset on a feed drop

@@ -54,6 +54,20 @@ test('1.37.0 lanes: members by the bench flag, the firm\'s accounts in no group 
   assert.equal(MC.lanes(Object.assign({}, g1, { members: ['SIM-D'], benched: ['SIM-D'] }), S, []).flat, true);
 });
 
+test('1.40.0 (review): the active lane\'s count and dollars leave out a member NinjaTrader does not list (it sits out every entry)', () => {
+  const S2 = Object.assign({}, S, { accounts: S.accounts.filter(a => a.name !== 'SIM-A') });   // SIM-A ($225 at 5%) not in NinjaTrader now
+  const L = MC.lanes(g1, S2, []);
+  assert.deepEqual(L.active.map(c => c.name), ['SIM-A', 'SIM-B', 'SIM-C'], 'its chip still shows in the lane (with Remove)');
+  assert.ok(L.active[0].missing && L.active[0].risk === null);
+  assert.equal(L.trading, 2);
+  assert.equal(L.risk, 100);
+  assert.equal(MC.sumText(L), '2 accounts · $100 at risk a trade');
+  /* sumText counts the chips that trade (L.trading), not every chip in the lane */
+  assert.equal(MC.sumText({ active: [{ missing: true }], trading: 0, risk: 0 }), '0 accounts · $0 at risk a trade');
+  const all = MC.lanes(g1, S, []);
+  assert.equal(all.trading, 3); assert.equal(MC.sumText(all), '3 accounts · $325 at risk a trade');
+});
+
 test('1.37.0 moves: refused (with why) unless a member, typed to go in, and flat with nothing working', () => {
   const L = MC.lanes(g1, S, [{ account: 'SIM-A', state: 'working' }]), c = n => L.active.concat(L.bench).find(x => x.name === n);
   assert.match(MC.moveWhy(c('SIM-B'), false, 'Lucid'), /^SIM-B is in a trade or has working orders \(long 2 MNQ\)\. It moves once it is flat with no working orders\.$/);
@@ -113,7 +127,7 @@ test('1.37.0 the chart: room right Custom (40 to 600 px) and the gap drag, the l
 
 test('ChartBridge 0.6.7: the bench flag, never blocking an exit, the group\'s own rules optional, no hedging always on', () => {
   const g = read('nt8/ChartBridgeGroups.cs'), a = read('nt8/ChartBridgeAgents.cs');
-  assert.match(read('nt8/ChartBridge.cs'), /public const string Version = "0\.6\.[789]";/);   // 0.6.9: recording only
+  assert.match(read('nt8/ChartBridge.cs'), /public const string Version = "0\.6\.([789]|10)";/);   // 0.6.9: recording only; 0.6.10: the account lifecycle
   assert.match(g, /\(p\.Length != 3 && !\(p\.Length == 4 && p\[3\] == "benched"\)\)/, 'a member line may carry benched');
   assert.match(g, /Append\(s\.Benched\.Contains\(kv\.Key\) \? "\\tbenched" : ""\)/, 'written only for a benched member');
   assert.match(g, /if \(g\.Benched\.Contains\(name\)\) \{ s\.Out = BenchedOut; continue; \}/, 'a group entry skips a benched member');

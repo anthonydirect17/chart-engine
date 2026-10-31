@@ -1595,6 +1595,27 @@ public static class CopierHarness
         Check(Rejected("SIM-F4 is not a copier follower."), "0.6.6: removing one that is not a follower: refused");
         sent.Clear(); Msg("copierFollowerRemove", "{\"type\":\"copierFollowerRemove\",\"cid\":\"r\",\"account\":\"SIM-F4\",\"on\":false}");
         Check(Rejected("unknown key"), "0.6.6: copierFollowerRemove takes account only");
+
+        // 0.6.10 (the account lifecycle, audit 2): a follower that is ON and that NinjaTrader no longer lists (a blown eval the firm took
+        // away) can be turned off, then removed; turning it on still needs it; removed, Re-arm no longer counts it
+        sent.Clear(); Msg("copierFollower", Follower("SIM-F4", "true", "2", "micro", "null"));
+        Check(!Rejected(""), "0.6.10: SIM-F4 a follower again, on, 2 micro");
+        Account.All.Remove(f4);
+        try
+        {
+            sent.Clear(); Msg("copierFollower", Follower("SIM-F4", "true", "1", "micro", "null"));
+            Check(Rejected("No account SIM-F4."), "0.6.10: turning ON a follower NinjaTrader does not list: refused as before");
+            sent.Clear(); Msg("copierFollowerRemove", "{\"type\":\"copierFollowerRemove\",\"cid\":\"r\",\"account\":\"SIM-F4\"}");
+            Check(Rejected("SIM-F4 is a copier follower that is on: turn it off first, then remove it."), "0.6.10: removing it while on: refused (off first)");
+            sent.Clear(); Msg("copierFollower", Follower("sim-f4", "false", "1", "micro", "null"));
+            Check(!Rejected("") && State().Contains("{\"account\":\"SIM-F4\"") && State().Contains("\"on\":false") && File.ReadAllText(file).Contains("follower\tSIM-F4\toff\t2\tmicro\t"),
+                  "0.6.10: turned OFF although NinjaTrader does not list it (named in any case); its other settings kept: " + State() + " " + File.ReadAllText(file).Replace("\t", "<TAB>"));
+            sent.Clear(); Msg("copierFollowerRemove", "{\"type\":\"copierFollowerRemove\",\"cid\":\"r\",\"account\":\"SIM-F4\"}");
+            Check(!Rejected("") && !State().Contains("\"account\":\"SIM-F4\"") && !File.ReadAllText(file).Contains("follower\tSIM-F4\t"), "0.6.10: then removed, with nothing of the copier's there: " + State());
+            sent.Clear(); Msg("copierFollower", Follower("SIM-X9", "false", "1", "micro", "null"));
+            Check(Rejected("No account SIM-X9."), "0.6.10: off for an account that is neither listed nor a follower: refused as before");
+        }
+        finally { Account.All.Add(f4); }
     }
 
     // ------------------------------------------------------------ copier.txt, copier.log, a restart

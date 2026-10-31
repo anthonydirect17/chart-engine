@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -209,7 +209,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
 | `pcClock` | the fields of hello's `pcClock` (0.5.6, see Delay readout): `checked`, then `offsetMs`, `rttMs`, `atUtcMs`, `server`, or `why`, `server` | to every page when a check of this PC's clock answers (every 5 minutes), when it changes to no answer, and when the PC clock steps by more than 250 ms; in the order lane. A page can get one before its `hello` (a page is told from the moment it connects); `hello` then carries the state as it is, and a check that ends while `hello` is built is sent again after it |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page; since 0.3.7 also a refused `htf` or `weekProfile` request (`warn`, "ChartBridge refused a htf message: why") |
-| `historyLate` | `root`, `sub` (0.6.8) | once, when a load that went ready on stand-in history gets NinjaTrader's minute answer after all: the page subscribes again (see The minute book) |
+| `historyLate` | `root`, `sub` (0.6.8) | once, when a load that went ready on stand-in history gets NinjaTrader's minute answer after all: the page subscribes again (see The minute book); also (0.6.10) once when a tick chart load got no tick history because NinjaTrader had not answered and that late answer has freed the gate, outside 09:25 to 16:00 ET (see One unanswered request) |
 | `settlement` | `root`, `p` (null when none is known), `date` (the trading date it settles, `yyyy-MM-dd`) (0.3.7) | when the prior settlement changes: a value for that date comes in, or a new session starts at 18:00 ET and the day before becomes the prior |
 | `htf` | `root`, `tf` (`4h`, `1D`, `1W`), `id` (the request's, or null), `name` (the contract, or null with an error), `bars`: `[[t,o,h,l,c,v], ...]` oldest first, the last one forming, `error` (null, or why there are no bars) (0.3.7) | the answer to an `htf` request |
 | `htfBar` | `root`, `tf`, `bars`: one or two `[t,o,h,l,c,v]` (0.3.7) | while a page has asked for that root and timeframe, at most once a second when its forming bar changed: the forming bar, after the closed bar's final values when a new bar began |
@@ -701,6 +701,12 @@ session waits for NinjaTrader, which has not answered an earlier tick request"),
 its state is back ("queued", or for a retry "failed once (...), asked again in 60 s") and it runs as usual. An answer that
 claimed its request at the time limit has 30 s more to finish its copy; past that it counts as unanswered (one Output line)
 until the copy ends. Minute charts load as usual.
+**Asked again once (0.6.10, item 12).** A Range or seconds load that went live with no tick history because NinjaTrader
+had not answered (its own window timed out, or the gate was stuck on an earlier request; typical at the session open) is told
+once to load again (`historyLate`, its `sub`) when that late answer frees the gate; the page subscribes again and the new load
+asks through the gate as every load does (the failed window's 60 s retry delay does not hold it back). Never from 09:25 to
+16:00 New York on a weekday (5 minutes before the open, so no ask lands just after 09:30) (a history note says so; a reload loads again as usual), at most once a page and instrument in 5
+minutes, and only a load that is still the page's: no reload loop.
 Orders and Flatten are never affected. `/diag` `gate.stuck` names the request, `stuckSinceUtcMs` says since when, and a
 waiting backfill's `state` starts "waiting:". Only the request that made the gate stuck frees it. Stopping ChartBridge (a
 compile, or closing NinjaTrader) clears the stuck request and marks the gate stopped until the next start: no tick request
@@ -977,11 +983,12 @@ JSON: `version`; `network` (0.3.1: see Network access); `pin` (0.3.2: `{"set": b
 re-anchored; the clock is rechecked every 5 seconds and follows the PC clock when they differ by more
 than 50 ms); `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
 session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`, `lastSendFailed`,
-`lastError`, `setAside`, `rejectedByDesk`); `bars` (0.3.6, see Daily bars to The Desk: `enabled`, `state` (`off`, `starting: ...`, `idle`,
+`lastError`, `setAside`, `rejectedByDesk`, 0.6.10 `rejectedFile` and `keepRejectedFailed`); `bars` (0.3.6, see Daily bars to The Desk: `enabled`, `state` (`off`, `starting: ...`, `idle`,
 `asking NinjaTrader: <session contract>`, `waiting for the gate: <why>`, `waiting: regular trading hours ...`, `waiting:
 NinjaTrader has no price connection`, `stopped`), `waitingForGate` (why the gate is not idle for a bars request, or null),
 `roots`, `lastSent` (the latest session The Desk took, per contract), `waiting` (messages queued in `pending_bars.jsonl`),
-`setAside` (since this start), `gaveUp` (sessions not asked again until the next start), `lastRequest`, `lastError`); `pages` (0.3.4, one entry per connected page: `id`, `root`, `ready`, `queued`
+`setAside` (since this start), `gaveUp` (sessions not asked again until the next start), `lastRequest`, `lastError`, and (0.6.10) `pc`: the PC name
+every Desk message carries, with `pcFrom` `config.txt` or `computer name`, so an install job can check `pc = WORK` / `pc = HOME`); `pages` (0.3.4, one entry per connected page: `id`, `root`, `ready`, `queued`
 (entries waiting in its data lane), `orderLaneQueued`, `oldestDataMs` (how long the oldest waiting market data has
 waited, as the 5 s rule counts it)); `seams` (0.3.3, the last 20 subscribes, oldest first; see Backfill and live):
 `client`, `root`, `sub`, `tickHours`, `atUtcMs`, `loadMs` (subscribe to `ready`), `matched` (false: nothing to match the held
@@ -1017,7 +1024,13 @@ With `postFills = true` in `config.txt`, every fill is also sent to The Desk's `
 `copier`, when ChartBridge knows who placed the fill's order; no `by` key otherwise. See "Agent channel".) Fills
 wait in `pending_fills.jsonl` next to `config.txt` until The Desk accepts them, so a restart or The
 Desk being closed loses nothing; The Desk ignores duplicates. A request gives up after 10 seconds; a fill
-The Desk refuses as malformed is set aside in `rejected_fills.jsonl` so it never blocks the queue. Fills from every watched account are
+The Desk refuses as malformed is set aside in `rejected_fills.jsonl` so it never blocks the queue. 0.6.10 (Anthony 2026-10-30, C-B): a fill
+The Desk answers `200` for but lists in its `rejected` list (`{index, reason, ...}`) is appended there too, as it was sent with The
+Desk's words first (`{"desk_reason":"...", ...the fill...}`), before the batch leaves the queue; `/diag` `desk.rejectedByDesk` counts
+them since the start and `desk.rejectedFile` names the file, and the Account page says so (chart 1.40.0). The keeping never stops the
+batch The Desk took from leaving the queue: if it fails (an answer it cannot read, the file), it is logged and counted in
+`desk.keepRejectedFailed`, and the batch is never sent again (the same for the order record, `orderRecord.keepRejectedFailed`). A
+reason with an escape ChartBridge cannot undo is kept as The Desk sent it (not counted as a failure). Fills from every watched account are
 sent: The Desk's Accounts menu decides which accounts count. ChartBridge sends no commission (NinjaTrader's
 figure is its own commission template, not what was charged).
 0.6.9: a fill of a group entry's order (its entry or a leg) adds `decision_id` ("d" and 12 hex characters) after `order_id` and
@@ -1094,8 +1107,9 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
   day it ends on), the front month the chart uses plus any other contract of that root with fills in that session, the last 5
   sessions not taken yet at the start (the catch-up) and each session from 17:05 New York. Never a session that has not closed.
 - **The request:** `BarsRequest(instrument, from, to)`, 1 tick, `MarketDataType.Last`, the instrument's trading hours,
-  `MergePolicy.DoNotMerge`, from the session open's date (12:00 AM, NinjaTrader's time zone: NinjaTrader gives whole trading days,
-  so the 18:00 open is in it) to the session's close (never past now). Through the 0.3.5 gate as a bars job (`1s <session>
+  `MergePolicy.DoNotMerge`, from the session's open itself (18:00 New York, in NinjaTrader's time zone; 0.6.10: until
+  then it asked from 12:00 AM of the open's date, and NinjaTrader answered with the whole session before as well) to the session's
+  close (never past now). Through the 0.3.5 gate as a bars job (`1s <session>
   <contract>` in `/diag` `books.gate`), so the same rules hold: queued only when the gate is idle (no window, backfill, last trades
   or page load out or to come), never beside a chart load, and a request NinjaTrader does not answer frees the gate at its limit
   (180 s here; its late answer is dropped). **Only from 16:15 to 18:00 New York on a weekday, and on the weekend while the market is
@@ -1151,11 +1165,98 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
 - **`/diag` `bars.oneSecond`:** `on`, `state`, `roots`, `lastSent` (per contract), `waitingSets`, `waitingParts`, `setAside`,
   `deskHasNo1s`, `gaveUp`, `lastBuild` (trades, seconds, messages, the trades of the answer outside the session that were left out,
   the request's from and to in NinjaTrader's time, the sides' method and counts, the time on NinjaTrader's thread) and `error`.
-  The request starts at the open's date, 12:00 AM: NinjaTrader's answer may hold the session before too (whole trading days); those
-  trades are left out by time and counted in `lastBuild` ("N trades outside the session left out"). A large count on the first run
-  shows NinjaTrader gave the day before as well (harmless: nothing is counted twice).
+  Trades in NinjaTrader's answer outside the session are left out by time and counted in `lastBuild` ("N trades outside the
+  session left out"). Since the request starts at the open (0.6.10, Sunday 11-01 build) that count should be small; a large one shows
+  NinjaTrader still gave the day before (harmless: nothing is counted twice). `lastSent` lists every contract the pull covers (the
+  front contract of each of its roots and any contract a pass planned, MNQ as well as NQ): the latest session The Desk took a
+  whole set of, or `"none yet"` (0.6.10, decided 2026-11-01).
 - **The 1-minute bars are unchanged:** the same requests, messages and queue as 0.3.7 to 0.6.8, byte for byte (harness: the same
   session with the 1 second bars off and on gives the same 1-minute message).
+
+### The NQ tick file to The Desk (0.6.10, Sunday 11-01 build)
+
+Anthony's decisions of 2026-10-29: one NQ tick file per session is the only market data kept, and everything is built from it (1
+second bars, 1 minute bars, the evening profile tape, the master day); MNQ trades take their bars from NQ's ticks (no MNQ tick
+file). This release adds; it retires nothing (the 1-minute request, the evening profile export and the 1 second pull stay).
+`nt8/ChartBridgeTicks.cs`. On with `bars = on`; `tickFile = off` in `config.txt` turns only it off; `tickFileMaxMB` (default 2048,
+at least 16) bounds the `ticks/` folder next to `config.txt`.
+
+- **Live capture.** Every NQ trade ChartBridge receives (`OnMarketData`, after the pages, the tape counters and the forming bars
+  took it, in its own `try`) goes on a bounded queue (200,000 trades): one counter and one enqueue, no lock the order lane or the
+  chart feed holds, no file, no clock. A full queue **drops the trade and counts it** (`droppedQueue`); it never waits. A thread of
+  its own (`ChartBridge tick file`, below normal priority) writes the queue every 250 ms to `ticks/<session>_<contract>.raw`, one
+  line a trade, `u,p,v,s,m`: `u` NinjaTrader's time of the trade in UTC ms, `p` price, `v` volume, `s` side (1 buy, -1 sell, 0 none,
+  the live side rule), `m` the side's method (0 none, 2 bidAsk, 3 tickRule). The session is the CME session the trade's New York
+  time is in (18:00 to 17:00, dated the day it ends); a trade in the 17:00 to 18:00 break is left out and counted (`outside`). Over
+  `tickFileMaxMB` a batch is dropped and counted (`droppedDisk`). `<same>.state` starts `run <12 hex>`, `tick <size>`, `contract`,
+  `session`. No request goes to NinjaTrader for the capture, at any hour. The folder's size against `tickFileMaxMB` (`/diag`
+  `diskMB`) counts every file in it, the `.day.jsonl` files waiting to be sent too: counted again at every cut, after a day file is
+  written and after files are deleted.
+- **Chunks** (point 3: The Desk builds 1 second bars from them as they land). A second thread (`ChartBridge tick chunks`, below
+  normal) cuts each raw file every 3 minutes, from the last cut to the last whole line, into chunks of at most 20,000 trades, and
+  notes each cut (`cut <seq> <from byte> <to byte> <trades> <lost> <gaps> <bidAsk> <tickRule> <none> .`) in `<same>.state`, so a
+  chunk sent again is read from the same bytes and is the same message. It posts the chunks not taken yet, oldest first, to
+  `deskUrl` + `/api/ticks/chunk` (10 s each, never through a proxy), and notes `sent <seq>`. `400`, `413` or `422`: `aside <seq>`
+  (its trades stay in the raw file; the final pull covers them). `404` (a Desk without the route): every chunk waits, offered again
+  every 30 minutes. Anything else: tried again in 10 seconds. A restart carries on (same run, the next seq). There is never more
+  than one cutter or writer: a cut is made only by the sender of the current start and under one lock that the start takes before
+  it reads the files again, so a sender of an earlier start still running can never write the same `cut <seq>` with other bytes.
+
+  ```json
+  {"v":1,"source":"chartbridge","bridge":"0.6.10","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+   "session":"2026-10-30","run":"a1b2c3d4e5f6","seq":12,"count":1834,"volume":2301,
+   "first":1793397600123,"last":1793397779950,"lost":0,"gaps":0,
+   "sides":{"bidAsk":1700,"tickRule":130,"none":4},"cols":["u","p","v","s"],"ticks":[[1793397600123,25000.25,1,1]]}
+  ```
+
+  `lost`: trades dropped (queue or disk) since the chunk before; `gaps`: feed drops while the market was open since the chunk
+  before. Both go to the session they fall in (the dropped trade's time, the feed drop's time) and to **every** file of that
+  session (the roll week has two contracts), each at its own next cut: a cut with nothing to cut (the feed still down) takes
+  nothing up, so the drop goes on the first chunk after the feed is back. The first chunk of a file after ChartBridge starts says
+  `gaps` 1 or more (its counters start at zero, but a restart may have missed trades), unless this run made the file and started
+  before its session opened. When one cut makes several chunks (a busy minute, a queue emptied after a stall), every chunk
+  of a cut that took drops is flagged: the first carries `lost` and `gaps`, the others `gaps` 1 (marked carried, `c`, in the
+  state file, so the day's `liveLost` and `liveGaps` count each drop once). The Desk does not vouch from the last trade before a chunk with `lost` or `gaps` to the first trade
+  after it. The Desk keys a chunk by contract, session, `pc`, `run` and `seq` and ignores one sent again.
+- **The final file** (point 4). On the bars worker, after the pass's 1-minute and 1 second bars and only when the 1 second bars
+  asked nothing that pass, only in the 1 second bars' window (a request starts 16:15 to 17:50 New York on weekdays, on Saturday, and
+  Sunday before 17:50; never in trading hours), for each session with a raw file that has closed and is not done: one
+  `BarsRequest` through the 0.3.5 gate (1 tick, Last, the instrument's trading hours, `DoNotMerge`, 180 s), from the session's
+  open to its close (NinjaTrader's time). The answer is read once on NinjaTrader's thread (sides by the bid and ask stored with each
+  trade, else the tick rule). **The check**, second by second (UTC): `exact` every second has the same trades and volume live and
+  in history; `filled` history has more in some seconds (the live capture missed them: a disconnect, a late start), never fewer;
+  `failed` live has a trade or volume in a second history lacks, or history has none. The history is the master when the check
+  passes. The day is written whole to `ticks/<same>.day.jsonl` (parts of at most 20,000 trades) and sent to `deskUrl` +
+  `/api/ticks/day` in the same window as the 1 second bars' sends; progress in `<same>.day.sent`; `400`, `413` or `422` sets the day
+  aside (`.day.jsonl.refused`). A failed day is sent too, marked `failed`, so The Desk shows it. Done days: `ticks/tickdays.txt`
+  (`<session contract>`, check, stored, packed): never pulled again. A failure is tried again after 15 minutes, 3 times, then not
+  until the next start.
+
+  ```json
+  {"v":1,"source":"chartbridge","bridge":"0.6.10","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+   "session":"2026-10-30","set":"0a1b2c3d4e5f","part":1,"parts":48,"setTicks":951234,"setVolume":1203456,
+   "first":1793397600001,"last":1793480399990,
+   "check":{"status":"filled","liveTicks":950001,"liveVolume":1202001,"histTicks":951234,"histVolume":1203456,
+            "secondsLiveMissed":3,"ticksLiveMissed":1233,"secondsHistShort":0,"ticksHistShort":0,"liveLost":0,"liveGaps":1,
+            "detail":[{"t":1793420000000,"live":0,"hist":12}]},
+   "sides":{"method":"mixed","bidAsk":800000,"tickRule":151234,"none":0},
+   "cols":["u","p","v","s"],"ticks":[[1793397600001,25000.25,1,1]],"complete":true}
+  ```
+- **Deletion.** The day file (`.day.jsonl`) is deleted only after The Desk's answer to its last part says `"stored":true`; an
+  answer without it keeps the file, and it is sent again from its first part (The Desk ignores the parts it has) 15 minutes later,
+  3 times, then set aside (`.day.jsonl.unstored`, kept; `/diag` `lastError` says so). The raw file and its state are deleted only
+  when the check passed and The Desk's answer to the day's last part says `"stored":true` and `"packed":true`. The Desk does not
+  pack: the data caretaker on HOMESERVER (built later) packs each stored day and tells The Desk (`POST /api/ticks/packed`), and
+  only then does The Desk answer `"packed":true` about that day. Until then the raw is kept; a failed day keeps its raw until
+  Anthony rules. `/diag` `tickFile.rawOld` lists raw files older than 7 days.
+- **Which PC sends** (Anthony 2026-10-28: automatic, WORK wins): every PC with the tick file on captures and sends what it receives
+  under its `pc` name (`config.txt` `pc`, else the Windows computer name). The Desk merges the live rows second by second, WORK's
+  first where WORK has them and the other PC's where WORK has none (so WORK coming up mid-session never takes HOME's earlier
+  seconds away), flags the other PC, and keeps WORK's checked day as the master; it knows WORK only by the name `WORK`.
+- **`/diag` `tickFile`:** `on`, `capturing`, `queue`, `queueMax`, `droppedQueue`, `droppedDisk`, `outside`, `written`,
+  `feedDrops`, `diskMB`, `maxMB`, `files` (per session and contract: `bytes`, `chunks`, `sent`, `aside`, `ageDays`), `lastSent`
+  (per contract: the session and seq of the latest chunk taken), `days` (per session and contract: `check`, `stored`, `packed`),
+  `rawOld`, `rawOldNote`, `dayState`, `lastDay`, `deskHasNoTicks`, `lastError`.
 
 ## Orders (protocol v2, Step 2: trading from the chart)
 
@@ -1632,8 +1733,8 @@ its drawdown lock); it is shown, never acted on. Until 0.4.1 Gone cleared the ch
 made an account Gone.
 
 **Hide (archive) and Show (0.5.1).** Only Anthony, on the page, after confirming (`accountArchive` with `confirm: true`).
-Accepted for any account, Gone or not, that is flat with no working orders (as NinjaTrader shows it now, or as ChartBridge
-last saw it this session when NinjaTrader does not list it) and is not the bot's account (`botAccount`; none when the bot is
+Accepted for any account, Gone or not, that is flat with no working orders (as NinjaTrader shows it now; 0.6.10: an account
+NinjaTrader does not list at all is no longer held by what ChartBridge last saw on it, see "The account lifecycle (0.6.10)") and is not the bot's account (`botAccount`; none when the bot is
 on None, 0.5.7), a copier leader or follower (`copier.txt`, the copier on or off), or an agent's chosen account
 (`agent-<id>-account.txt`); otherwise refused with the plain reason ("EVAL-A has a position or working orders: only a flat
 account can be hidden (exits always work)", "Sim101 is the bot's account (the Bot tab): it cannot be hidden"). A file that
@@ -1669,12 +1770,12 @@ Account names appear only in these local files and the local page, never in `/di
 | page to server | fields (no others) | notes |
 |---|---|---|
 | `accountTrade` | `cid` (optional), `account`, `on` (*bool*) | set the checkmark. On is refused for an account that is Gone, archived, not Connected, Backtest or Playback, or with `accountChecks` off; off is always accepted (signed in). After any checkmark change every signed-in page gets `accounts` and `trading` again (its `accounts` list is gate 2 now) |
-| `accountArchive` | `cid` (optional), `account`, `confirm` (*bool*, must be `true`) | Hide. 0.5.1: refused unless the account is flat with no working orders and is not the bot's, a copier leader or follower, or an agent's (until 0.5.0: unless it was Gone) |
-| `accountUnarchive` | `cid` (optional), `account` | Show (0.5.1). Refused for an account that is not archived ("EVAL-A is not archived") or unknown; with `accountChecks` off, refused like the others |
+| `accountArchive` | `cid` (optional), `account`, `confirm` (*bool*, must be `true`) | Hide. 0.5.1: refused unless the account is flat with no working orders and is not the bot's, a copier leader or follower, or an agent's (until 0.5.0: unless it was Gone). 0.6.10: a member of a group leaves it (and its bench place and own rules) in the same step (`HideAndLeave`) |
+| `accountUnarchive` | `cid` (optional), `account` | Show (0.5.1). Refused for an account that is not archived ("EVAL-A is not archived") or unknown; with `accountChecks` off, refused like the others. 0.6.10: an account NinjaTrader has not had connected this session is shown but not listed until it is: a `status` `info` says so and `accounts` carries it in `notListed` |
 
 | server to page | fields | when |
 |---|---|---|
-| `accounts` | `list`: `[account]` (every watched account not archived, by name: 0.5.1, seen Connected this session), `archived`: `[{name, at}]` (UTC ms; every archived account `accounts.txt` keeps, for Show) | to a v3 page from ChartBridge's own origin, signed in or not, right after its `client`; again on every change: at once for a connection, checkmark or Gone change; at most once a second for money and position changes |
+| `accounts` | `list`: `[account]` (every watched account not archived, by name: 0.5.1, seen Connected this session), `archived`: `[{name, at}]` (UTC ms; every archived account `accounts.txt` keeps, for Show), 0.6.10 `notListed`: `[{name, trade, lastConnected}]` (every account `accounts.txt` keeps, not archived, that NinjaTrader has not had connected this session; `trade` its checkmark, `lastConnected` UTC ms or null) | to a v3 page from ChartBridge's own origin, signed in or not, right after its `client`; again on every change: at once for a connection, checkmark or Gone change; at most once a second for money and position changes |
 
 An `account` is `{name, sim, connection, trade, tradable, state, goneWhy, goneSince, balance, pnlToday, realizedToday,
 unrealized, positions, roomDrawdown, roomDrawdownWhy, roomDailyLoss, roomDailyLossWhy, canHide, hideWhy}`:
@@ -1889,6 +1990,17 @@ since the start, and keeps breakeven and trailing going: the pages get `managed`
 (the line or the file is missing or unreadable, or the legs do not match it), it **leaves every stop where it is**, does not
 move them again, and says so: `managed` with `state` `unmanaged` and a `status` `error` ("MNQ EVAL-A: breakeven and
 trailing could not be resumed after the restart; the stop stays at 24,980.25. Manage it by hand").
+
+**An entry being placed is not a restart (0.6.10, Sunday 11-01 build; WORK's log).** NinjaTrader reports a new order
+the moment `CreateOrder` makes it, before ChartBridge has registered its bracket and strategy. That first report used to
+reach the restart recovery, which found no record and no `managed.txt` line yet and raised a false "Order Strategy entry
+CB#... could not be resumed after the restart" alarm (and a brief `unmanaged` to the page), although the order itself
+was then managed correctly. Now `PlaceOrderLocked` holds a **Placing** mark on the entry's tag from just before
+`CreateOrder` until the order is sent or refused (memory only, under `Sync`); an order event or a bracket lookup for an
+entry still being placed by this run is left alone (`IsPlacing`), and its placement registers it as usual. Every
+ChartBridge entry is covered (Order Strategy, bracket, resting, bot, agent). After a real restart the mark is empty, so an
+entry left from before it is recovered exactly as before, and one that cannot be resumed is still said. Harness:
+`check/StrategiesHarness.cs`, `PlacingNotRestart` (the stand-in account reports the order inside `CreateOrder`).
 
 | server to page | fields | when |
 |---|---|---|
@@ -2193,7 +2305,7 @@ follower's `qty` again; a scale-out reduces it by the same share.)
 |---|---|---|
 | `copierGet` | `cid` (optional) | answer: `copier` |
 | `copierSet` | `cid` (optional), `leader` (an account name, or `null` for none, 0.4.3), `mode` (`executions` or `orders`) | at least one of the two; refused while the leader has a position or working entry. `null`: no leader, the copier stands down ("No leader is set.") and copies nothing until a leader is set and Re-arm is pressed |
-| `copierFollower` | `cid` (optional), `account`, `on` (*bool*), `qty` (1 to 9), `size` (`micro` or `mini`), `lossLimit` (whole dollars, 1 or more, or `null` for off) | all keys required; saved at once; the leader cannot be a follower |
+| `copierFollower` | `cid` (optional), `account`, `on` (*bool*), `qty` (1 to 9), `size` (`micro` or `mini`), `lossLimit` (whole dollars, 1 or more, or `null` for off) | all keys required; saved at once; the leader cannot be a follower. 0.6.10: `on: false` for a follower NinjaTrader does not list turns it off (its other settings kept, the rest of the message not used), so it can then be removed; on still needs the account |
 | `copierRearm` | `cid` (optional) | refused while the leader is not Connected or 3 or more followers are not |
 
 | server to page | fields | when |
@@ -3257,7 +3369,7 @@ config switch):
 |---|---|---|
 | `groupSave` | `cid` (optional), `group` (optional: the id to change; absent makes a new group), `name` (1 to 30 characters, no tab, unique ignoring case), `noHedge` (bool), `dailyLoss` (0 for none), `drawdown` (more than 0), `drawdownType` (`eod`, `intraday`, `static`), `target` (0 for none), `size` (more than 0, more than `drawdown`), `lockAt` (0 for none; `eod` and `intraday` only, above `size - drawdown`), `consistency` (optional, 0 or absent for none, else a percent above 0 and at most 100), `accountType` (0.6.1, optional: `eval`, `funded` or `-` for not set; absent keeps the group's), `hero` (0.6.1, optional: a build name of 1 to 64 safe characters, or `-` for none; absent keeps the group's) | every field every time (but `accountType` and `hero`): Rename and the No hedging switch send the whole group. Money: plain numbers, at most 2 decimals, at most 100,000,000 |
 | `groupDelete` | `cid` (optional), `group` | its members go to None (personal, their own limits kept) |
-| `accountGroup` | `cid` (optional), `account`, `group` (an id, or `null` for None), `highClose` (optional, more than 0: G2 b, joining a group only) | refused when the move would leave the target group mixed (the account holds the other side, or the group is mixed already, with No hedging on). Joining: both trailing highs start at `highClose`, or without it at the larger of the account size and the balance now (the page always asks, prefilled so) |
+| `accountGroup` | `cid` (optional), `account`, `group` (an id, or `null` for None), `highClose` (optional, more than 0: G2 b, joining a group only) | refused when the move would leave the target group mixed (the account holds the other side, or the group is mixed already, with No hedging on). Joining: both trailing highs start at `highClose`, or without it at the larger of the account size and the balance now (the page always asks, prefilled so). 0.6.10: `group` `null` for a member NinjaTrader does not list is accepted (remove-only); joining still needs the account listed |
 | `accountLimits` | `cid` (optional), `account`, `floor` (0 for none), `dailyLoss` (0 for none) | personal accounts only: refused for an account in a group ("its group's rules apply") |
 
 **ChartBridge to page** (to every v3 page on ChartBridge's own origin, signed in or not, as `accounts`):
@@ -3644,6 +3756,10 @@ Desk (`GET /api/chart-floors`), shows them, and on Anthony's one confirm sends t
 ChartBridge lists with firm rules and a trailing drawdown, 150 ms apart; ChartBridge checks each as above. A `firmMinimum` not
 refused within 3 seconds is kept in the page's browser, and for that account the page no longer flags NinjaTrader's own room to
 the floor (`roomFloorNt`, which never locks); it stays in the Room's hover.
+1.40.0 (Anthony 2026-10-30, C-A): The Desk's floor walks its closed trades, which may be gross or miss fills not sent yet, so the
+box shows ChartBridge's floor now beside each new one, and a floor **lower** than ChartBridge's (or with ChartBridge's not known), or
+one The Desk does not mark as on net P&L (`/api/chart-floors` `basis` `"gross"`, or no `basis`), has its own tick, off: it is sent
+only when Anthony ticks it in that confirm. ChartBridge still refuses a minimum below the starting floor.
 
 **Remove a follower row (WORK 2026-10-20).** An off follower row left from the October copier tests kept its account out of every
 group entry (a follower, on or off, is never a group's or an agent's seat).
@@ -3889,14 +4005,15 @@ NinjaTrader repeats included).
   past that the oldest are dropped (on the timer; the event thread only drops its own oldest snapshot past 20,000), counted in `/diag`
   and said once. What ChartBridge remembers per order (to tell a change from a repeat): the last 20,000 ended orders, the oldest
   forgotten one at a time, and an order with no end for 7 days is forgotten.
-- **The Desk's answers:** `2xx` takes the batch (the answer's `rejected` list is logged, as for stops), and the next batch may be twice
+- **The Desk's answers:** `2xx` takes the batch (the answer's `rejected` list is logged, as for stops; 0.6.10, C-B: each event in it is
+  also appended to `rejected_orders.jsonl` as sent, The Desk's reason first in `desk_reason`), and the next batch may be twice
   as big (up to 500). `400`, `413` or `422`: the batch is halved until the bad event goes alone, then set aside in
   `rejected_orders.jsonl`. `404` (a Desk without `POST /api/order-events`, today's): every
   event stays (memory and file) and is offered again every 5 minutes (said once), so nothing is lost before The Desk's side ships.
   Anything else: tried again on the next 10 seconds. The Desk stores an event once (`start`, `seq` and `order_id` name it), so a resend
   is safe.
 - **`/diag` `orderRecord`:** `on`, `deskHasNoOrderRecord`, `dropped`, `waiting`, `seen`, `queued`, `sent`, `observeMeanUs` (the event
-  thread's mean cost), `lastSendFailed`, `lastError`, `setAside`, `rejectedByDesk`, `start`, `decisions` (`made`, `ordersNoted`,
+  thread's mean cost), `lastSendFailed`, `lastError`, `setAside`, `rejectedByDesk`, `rejectedFile` and `keepRejectedFailed` (0.6.10), `start`, `decisions` (`made`, `ordersNoted`,
   `kept`).
 - Nothing here places, changes or cancels an order, and nothing the pages get changes.
 
@@ -3918,6 +4035,65 @@ share the entry's `CB#` tag) carries it too. Another account's order placed mean
 - **The orders sent are unchanged:** the entry, its size, name, price, bracket and every message to the page are byte for byte the same
   with the id as without it (harness: the same group entry to 3 made-up accounts with the id off, which is 0.6.8's path, and on). The
   Output window's group entry line ends with `(decision d...)`.
+
+### The account lifecycle (0.6.10)
+
+Anthony 2026-10-30 (D1 to D5): a prop eval is marked **Blown** or **Promoted** by hand, on The Desk's Prop card or in the account's
+drawer on the Account page (chart 1.40.0); nothing is ever marked by itself. Both take the account out of its group; a funded account
+is a new NinjaTrader account, picked up as any new account and put in a group only by Anthony. History stays on The Desk.
+
+**The Desk's side** (TheDesk, built in parallel): `GET /api/chart-accounts` rows gain `outcome` (`"blown"`, `"promoted"` or `null`);
+`PUT /api/accounts/{account}/outcome` with `{"outcome": "blown" | "promoted" | null}` (the guard, CORS and `OPTIONS` of
+`PUT /api/accounts/{account}/account-type`; `{account}` is the NinjaTrader account name; `404` when no prop account has it).
+
+**The page's side** (chart 1.40.0, `live/accounts.js`): the drawer's Blown and Promoted buttons show only for an account The Desk has
+a prop account for. `/api/chart-accounts` does not say that in so many words, so the page reads it from what a row does say: an
+`outcome` already set, an `accountType` (The Desk gives every typed account its prop card, D5), or a number whose `source` is
+`prop`. A click asks first, in the page (no browser dialog), then sends the PUT (mode `cors`, credentials `omit`). For every row with
+an outcome the window's feed brings ChartBridge into line, one step at a time, each the existing message: out of its group
+(`accountGroup` with `group` `null`; an account ChartBridge lists leaves only once it is flat with no working orders, as Hide, so a
+group Close or Flatten still covers a Promoted eval in a group trade: until then the Accounts tab says it waits until it is flat, and
+the step goes by itself once it is; one ChartBridge does not list leaves at once), its copier follower off (`copierFollower` with `on` `false`, the rest as the row has them),
+then removed (`copierFollowerRemove`), then hidden (`accountArchive`, `confirm` `true`). ChartBridge's own state (`groups`,
+`copier`, `accounts`) decides the next step, so a second window finds it done. Each step is sent at most once per outcome a page load;
+a refusal is kept and shown on the Accounts tab and in the Log, never sent again in a loop; a step ChartBridge would refuse anyway
+(Hide while `canHide` is false, or with `accountChecks` off) is shown and not sent. Back to no outcome (Undo on The Desk) changes
+nothing on ChartBridge (D4: it does not rejoin its group). The Accounts tab also has a **Not in NinjaTrader now** section: every
+group member or copier follower ChartBridge does not list, with Remove from group, Turn follower off or Remove follower, and the
+accounts in `notListed` (folded), each with Hide and, with a prop account, Blown and Promoted. The Multi-Account panel's chip of such
+a member says "not in NinjaTrader now" (not "set its type on The Desk first"), offers no bench move and has Remove (out of the group);
+it sits out every entry, so the trading lane's count and dollars at risk leave it out.
+
+**ChartBridge 0.6.10: remove-only for an account NinjaTrader no longer lists** (never a join):
+
+- `accountGroup` with `group` `null` is accepted for a member that is not listed (by the name `groups.txt` keeps, in any case); the
+  bench place and its own rules go with it. Joining still answers "no account ..." until it is listed.
+- `copierFollower` with `on` `false` turns off a follower that is not in NinjaTrader (its qty, size and loss limit stay); then
+  `copierFollowerRemove` takes it away as before. **Locked** keeps its meaning for an account that is gone: the copier's own record of
+  a copied position, an entry, stop or close that may still fill, a reduce or a wait on that account (memory only, the account object
+  NinjaTrader last gave). While one is there the follower stays ("it can be removed once the copier's part there is flat and done");
+  it clears when that part is done, or with a ChartBridge restart (the copier keeps no such record across one). Removing it is what
+  lets Re-arm count only real followers again.
+- `accountArchive` (Hide) of an account NinjaTrader does not list at all is no longer refused for what ChartBridge last saw on it (a
+  blown eval taken away while it had an order stayed "busy" for good). It is hidden, and the log line says what it was last seen with;
+  if NinjaTrader lists it again holding anything it is listed again at once, unchecked, so its exits work (as since 0.5.1). The bot's,
+  the copier's and an agent's accounts are still refused.
+- `agentAccount` with a group: a member not in NinjaTrader now no longer refuses the group; it sits out each trade until it is back
+  (as at entry). The bot's account, a copier leader or follower and another agent's account are still refused by name.
+
+**Hide leaves the group (0.6.10, `HideAndLeave`).** Hiding a member takes it out of its group (its bench place and its own rules with
+it) in the same step, under the groups lock order (`ChangeGate`, then `GroupEntryLock` and `PlaceLock` in `ChangeAndSave`): Hide's own
+checks (flat, not claimed) are asked under those locks, the membership goes, `groups.txt` is written, and the account is marked hidden
+once that change is in effect. A failed write that is undone leaves it in its group and not hidden. A change kept after a failed
+write (something was placed on it during the write) has Hide's checks asked again: holding anything now, it is out of its group but
+not hidden, and the reply (a `reject`) says "<account> left its group; not hidden: it is in a trade now; Hide it once flat (...)"; the
+page's lifecycle asks Hide again once the account is flat (chart 1.40.0, at most 3 times an outcome). The claims files are read before
+the locks. With `groups.txt` unreadable a member is not hidden (its group change could not be saved); an account in no group is
+hidden as before.
+
+**A group preview sizes as the placement does (0.6.10).** A member that gate 2 refuses (hidden, not checked, or Gone; with
+`accountChecks` off, not in `tradeAccounts`) now sits out the preview with that reason, as the entry then refuses it, so a preview
+never shows a size the placement will not send.
 
 ### Tape timing and new `/diag` counters
 
@@ -3946,7 +4122,9 @@ only, never through the tunnel; CORS for `http://localhost:8765` and `http://127
 |---|---|---|
 | `GET`, `PUT /api/chart-strategies` | `{rev, strategies: [{id, name, stop: {ticks, type, limitOffsetTicks}, targets: [{ticks, sharePct}], breakeven: {afterTicks, plusTicks} or null, trail: {startTicks, byTicks, stepTicks} or null, hotkey}]}` | the Order Strategies, at most 24 |
 | `GET`, `PUT /api/chart-hotkeys` | `{rev, keys: {buy, sell, be, close, flattenAll, merge, maximize}, modifiers: {limit, stop}}` | the trading hotkeys (Merge's key is `merge`) |
-| `GET /api/chart-accounts` | `{accounts: [{account, firm, archived, daily_loss_limit, trailing_drawdown, account_size, source}]}` | read only: a prop limit Anthony typed on The Desk, shown only where ChartBridge's `roomDrawdown` or `roomDailyLoss` is null |
+| `GET /api/chart-accounts` | `{accounts: [{account, firm, archived, daily_loss_limit, trailing_drawdown, account_size, source, accountType, outcome}]}` | read only: a prop limit Anthony typed on The Desk, shown only where ChartBridge's `roomDrawdown` or `roomDailyLoss` is null; 1.40.0: `outcome` (`blown`, `promoted` or `null`) starts the account lifecycle (see "The account lifecycle (0.6.10)") |
+| `PUT /api/accounts/{account}/outcome` (chart 1.40.0) | `{outcome: "blown" \| "promoted" \| null}` | the drawer's Blown and Promoted, as the account type's PUT (CORS `PUT`, `OPTIONS`) |
+| `PUT /api/chart-accounts/listed` (chart 1.40.0) | `{accounts: [names]}`; answer `{kept: [...], left_out: [...]}` | the accounts ChartBridge lists, so a new account shows on Prop > Accounts before its first fill: Sim and Playback names left out, at most 200 names of 1 to 64 characters, sorted; once a page load (when ChartBridge's accounts arrive) and whenever the list changes (checked each minute with the rows), as the account type's PUT (mode `cors`, credentials `omit`, `no-store`); a failure is asked again only the next minute, a `404` (an older Desk) stops it for the page load |
 | `POST`, `GET /api/trade-tags` (chart 1.34.0) | `{tags: [{id, account, root, phase, dim, value, trade_open_ms, at_ms}]}`; CORS `GET, POST` | the Trade tags panel's records (append-only; TheDesk `docs/API.md` "Trade record") |
 
 **From The Desk's strategy to `order.strategy`** (the page converts; ChartBridge takes only the flat form):
