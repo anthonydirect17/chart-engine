@@ -253,8 +253,12 @@ try {
   await p.$eval(sel, e => { e.style.width = ''; e.style.justifySelf = ''; });
   /* 1.40.0 (audit 6): a member NinjaTrader no longer lists (the fake's /test/unlist-account, ChartBridge 0.6.10's notListed): its chip
      says so (never "set its type on The Desk first"), offers no bench move, and Remove takes it out of the group (a second click sends it) */
+  const Lb = await lanes(), nb = parseInt(Lb.sumIn, 10);
   await control('unlist-account', { name: 'SIM-C' });
   const dc = await until(async () => { const t = await chip('SIM-C'); return /not in NinjaTrader now/.test(t) ? t : null; }, 'SIM-C says not in NinjaTrader now');
+  /* 1.40.0 (review): it sits out every entry, so the trading lane's count and dollars leave it out */
+  const La = await until(async () => { const l = await lanes(); return parseInt(l.sumIn, 10) === nb - 1 ? l : null; }, 'the lane counts one account fewer');
+  check(Lb.in.includes('SIM-C') && La && La.in.includes('SIM-C') && /at risk a trade$/.test(La.sumIn), '1.40.0: the trading lane leaves the unlisted SIM-C out of its count (its chip stays): ' + JSON.stringify([Lb.sumIn, La && La.sumIn]));
   check(dc && !/set its type on The Desk first/.test(dc) && await p.$eval(`${sel} [data-chip="SIM-C"]`, e => e.classList.contains('missing') && e.getAttribute('draggable') === 'false'), '1.40.0: a member NinjaTrader does not list: "not in NinjaTrader now", not the type, no drag: ' + dc);
   const g0 = (await groupMsgs()).length;
   await p.click(`${sel} [data-chip="SIM-C"]`, { force: true }); await wait(300);

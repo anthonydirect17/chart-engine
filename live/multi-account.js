@@ -73,8 +73,8 @@ function busyWords(a, orders) {
 }
 /**
  * The two lanes of group g. S: the feed's state ({ accounts, desk, groups }); orders: the working orders now (every account).
- * Returns { firm, active: [chip], bench: [chip], flat (no member holds or has working anything), risk (the dollars at risk a trade,
- * the active lane summed) }. A chip: { name, member, benched, label (its type on The Desk), notype, room (ChartBridge's room to the
+ * Returns { firm, active: [chip], bench: [chip], flat (no member holds or has working anything), trading (how many active chips trade:
+ * a missing one is left out), risk (the dollars at risk a trade, the active lane summed, a missing chip left out) }. A chip: { name, member, benched, label (its type on The Desk), notype, room (ChartBridge's room to the
  * floor, null not known), risk (its own dollars at the group's percent, null none), busy (words, '' flat), sim, gone, missing }.
  * 1.40.0 (audit 6): missing, a member ChartBridge does not list now (NinjaTrader does not have it this session, or the firm took it
  * away): it sits out every entry, its type is not asked for (notype false), and it can only leave the group (Remove).
@@ -104,10 +104,12 @@ function lanes(g, S, orders) {
   const byName = (x, y) => x.name.localeCompare(y.name, 'en', { sensitivity: 'base' });
   active.sort(byName); bench.sort((x, y) => (y.member - x.member) || byName(x, y));
   const flat = members.every(m => !busyWords(accounts.find(a => a && a.name === m), orders)) && !(g && g.side);
-  return { firm, active, bench, flat, risk: Math.round(active.reduce((t, c) => t + (c.risk || 0), 0) * 100) / 100 };
+  /* 1.40.0 (review): a member NinjaTrader does not list (missing) sits out every entry, so the lane's count and dollars leave it out */
+  const trading = active.filter(c => !c.missing);
+  return { firm, active, bench, flat, trading: trading.length, risk: Math.round(trading.reduce((t, c) => t + (c.risk || 0), 0) * 100) / 100 };
 }
-/** The active lane's line: "3 accounts · $425 at risk a trade" */
-const sumText = (L) => L.active.length + ' account' + (L.active.length === 1 ? '' : 's') + ' · ' + usd(L.risk) + ' at risk a trade';
+/** The active lane's line: "3 accounts · $425 at risk a trade" (the accounts that trade: a member NinjaTrader does not list is left out) */
+const sumText = (L) => { const n = isNum(L.trading) ? L.trading : L.active.length; return n + ' account' + (n === 1 ? '' : 's') + ' · ' + usd(L.risk) + ' at risk a trade'; };
 const benchText = (L) => { const n = L.bench.filter(c => c.member).length, o = L.bench.length - n; return n + ' sitting out' + (o ? ', ' + o + ' not in the group' : ''); };
 /**
  * Why a chip may not move to the other lane, before anything is sent ('' when it may; ChartBridge checks again and its reason wins).
